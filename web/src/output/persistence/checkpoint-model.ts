@@ -1,3 +1,4 @@
+import { contentIsComplete } from '../../transfer/output/content-availability'
 import { snapshotPortableCatalogPath } from '../../catalog/path-policy'
 import { decodeBase64Url, encodeBase64Url } from '../../crypto/bytes'
 import {
@@ -261,10 +262,7 @@ export function validateCheckpointTransitionSemantics(
 export function fileCheckpointIsComplete(record: FileCheckpointV2): boolean {
   if (record.commitState !== FILE_CHECKPOINT_COMMIT_VERIFIED &&
       record.commitState !== FILE_CHECKPOINT_COMMIT_PUBLISHED) return false
-  if (record.exactSize === 0n) return record.verifiedRanges.length === 0
-  return record.verifiedRanges.length === 1 &&
-    record.verifiedRanges[0]?.start === 0n &&
-    record.verifiedRanges[0]?.end === record.exactSize
+  return contentIsComplete(record.exactSize, record.verifiedRanges)
 }
 
 export function identityBytes(

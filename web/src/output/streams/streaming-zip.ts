@@ -1,3 +1,4 @@
+import { completeZipMember } from '../zip-layout/member'
 import {
   validateSealedZipLayoutPlan,
   type SealedZipLayoutPlanV1,
@@ -88,9 +89,10 @@ export class StreamingZipArchiveWriter implements ZipArchiveWriter {
     try {
       const plan = this.#claimEntry(entry, 'directory')
       await this.#writeMetadata(ZIP_ENCODING_POLICY_V1.encodeLocalHeader(plan))
-      await this.#writeMetadata(ZIP_ENCODING_POLICY_V1.encodeDataDescriptor(plan, 0))
+      const completion = completeZipMember(plan, 0n, 0)
+      await this.#writeMetadata(completion.descriptor)
       this.#assertEntryStreamComplete(plan)
-      await this.#appendCentralRecord(plan, 0)
+      await this.#appendCentralRecord(completion.centralRecord)
       this.#entryIndex += 1
     } catch (error) {
       await this.#failEntry(error, 'ZIP directory output and abort failed')
@@ -377,14 +379,15 @@ export class StreamingZipArchiveWriter implements ZipArchiveWriter {
 
   async #commitMember(plan: ZipEntryPlanV1, crc32: number): Promise<void> {
     if (this.#active === undefined) throw new Error('ZIP member is not active')
-    await this.#writeMetadata(ZIP_ENCODING_POLICY_V1.encodeDataDescriptor(plan, crc32))
+    const payloadBytes = this.#offset - plan.localHeaderOffset - plan.localHeaderBytes
+    const completion = completeZipMember(plan, payloadBytes, crc32)
+    await this.#writeMetadata(completion.descriptor)
     this.#assertEntryStreamComplete(plan)
-    await this.#appendCentralRecord(plan, crc32)
+    await this.#appendCentralRecord(completion.centralRecord)
     this.#entryIndex += 1
   }
 
-  async #appendCentralRecord(plan: ZipEntryPlanV1, crc32: number): Promise<void> {
-    const record = ZIP_ENCODING_POLICY_V1.encodeCentralRecord(plan, crc32)
+  async #appendCentralRecord(record: Uint8Array): Promise<void> {
     this.#centralDirectoryCrc32.update(record)
     await this.#spool.append(record)
   }

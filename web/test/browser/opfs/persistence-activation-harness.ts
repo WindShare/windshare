@@ -1,3 +1,4 @@
+import { interruptReceive } from '../../../src/application/receive/active/interruption'
 import {
   bindReceiveIntent, materializationRouteIdentity, offerArtifacts, reconcileArtifactChoice,
 } from '../../../src/output/planning'
@@ -53,7 +54,7 @@ async function exercise(events: OutputTraceEvent[], settlePermission: () => Prom
     const pauses: string[] = []
     for (const operation of operations) {
       const transfer = new AbortController()
-      operation.interrupt('pause', transfer)
+      interruptReceive(operation, 'pause', transfer)
       const paused = await operation.settleTransferAdmissionFailure(transfer.signal.reason)
       pauses.push(paused.lifecycle.kind)
       await operation.startLifecycleAction('discard', paused.lifecycle)

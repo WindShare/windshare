@@ -1,4 +1,5 @@
 import { snapshotIdentity } from '../../transfer/encoding/canonical'
+import { snapshotTaskCheckpoint, type TaskCheckpoint } from '../origin-private/task-checkpoint/model'
 import {
   RECEIVE_RECORD_LIFECYCLE_STATE,
   receiveOperationRecordPrefix,
@@ -23,6 +24,8 @@ export interface ReceiveOperationTransition {
   readonly operationId: string
   readonly expectedLifecycleGeneration?: bigint
   readonly expectedLeaseId?: string
+  /** The lifecycle and its already-flushed archive cut must commit against the same storage generation. */
+  readonly workspaceCheckpoint?: TaskCheckpoint
   readonly records?: readonly PersistedReceiveRecord[]
   readonly manifestPages?: readonly ManifestPageRecord[]
   readonly handles?: readonly ReceiveOperationHandleRecord[]
@@ -39,6 +42,7 @@ export interface PreparedReceiveOperationTransition {
   readonly operationId: string
   readonly expectedLifecycleGeneration?: bigint
   readonly expectedLeaseId?: string
+  readonly workspaceCheckpoint?: TaskCheckpoint
   readonly records: readonly PersistedReceiveRecord[]
   readonly manifestPages: readonly ManifestPageRecord[]
   readonly handles: readonly ReceiveOperationHandleRecord[]
@@ -83,6 +87,7 @@ export async function prepareReceiveOperationTransition(
   const expectedLeaseId = transition.expectedLeaseId === undefined
     ? undefined
     : snapshotIdentity(transition.expectedLeaseId, 16, 'expected lease ID')
+  const workspaceCheckpoint = prepareWorkspaceCheckpoint(transition, operationId)
 
   const records = [...(transition.records ?? [])]
   if (transition.lifecycle !== undefined) {
@@ -118,6 +123,7 @@ export async function prepareReceiveOperationTransition(
     operationId,
     ...(expectedLifecycleGeneration === undefined ? {} : { expectedLifecycleGeneration }),
     ...(expectedLeaseId === undefined ? {} : { expectedLeaseId }),
+    ...(workspaceCheckpoint === undefined ? {} : { workspaceCheckpoint }),
     records: Object.freeze(validatedRecords),
     manifestPages: Object.freeze(pages),
     handles: Object.freeze(handles),
@@ -214,4 +220,20 @@ function assertNoAggregateRangeAuthority(records: readonly PersistedReceiveRecor
       throw new TypeError('aggregate record cannot own verified ranges')
     }
   }
+}
+
+function prepareWorkspaceCheckpoint(transition: ReceiveOperationTransition, operationId: string): TaskCheckpoint | undefined {
+  const workspaceCheckpoint = transition.workspaceCheckpoint === undefined
+    ? undefined : snapshotTaskCheckpoint(transition.workspaceCheckpoint)
+  if (workspaceCheckpoint !== undefined && (workspaceCheckpoint.object.operationId !== operationId ||
+      transition.lifecycle === undefined || transition.expectedLifecycleGeneration === undefined || transition.expectedLeaseId === undefined)) {
+    throw new TypeError('Archive settlement requires its operation, lifecycle generation and lease')
+  }
+  const state = transition.lifecycle
+  if (workspaceCheckpoint !== undefined && state?.kind === 'resumable-receive' &&
+      (state.payloadKind !== 'workspace-archive' || state.objectId !== workspaceCheckpoint.object.objectId ||
+       state.checkpointGeneration !== workspaceCheckpoint.generation || state.occupiedBytes !== workspaceCheckpoint.physicalLength)) {
+    throw new TypeError('Paused archive lifecycle disagrees with its content checkpoint')
+  }
+  return workspaceCheckpoint
 }

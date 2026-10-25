@@ -1,3 +1,4 @@
+import { receiveInterruptionControls } from '../../../transfer/lifecycle/interruption'
 import { BoundaryFaultError } from '../../../transfer/failure/fault'
 import type { BrowserReceiveOperationLease } from '../../../output/browser/session-lease'
 import {
@@ -56,7 +57,7 @@ import {
 import { handoffRetainedWorkspacePackage, workspacePlanAuthority } from './publication'
 import type { TaskCheckpoint } from '../../../output/origin-private/task-checkpoint/model'
 import { readLifecycle } from '../../../output/workspace/lifecycle/repository'
-import { requireMatchingSingleFileAdmission, requireSameIntent, unavailableRoute } from '../route-contract'
+import { requireMatchingSingleFileAdmission, requireSameIntent } from '../route-contract'
 
 type WorkspaceReceiveContinuation = Extract<
   AuthorityOwnedReceiveOperationContinuation,
@@ -67,7 +68,7 @@ export class WorkspaceReceiveOperation implements BoundReceiveOperation, Executi
   readonly intent: ReceiveIntent
   readonly #lifecycle: ReceiveLifecycleObservation
   readonly #unsubscribeLifecycle: () => void
-  readonly activeControls = Object.freeze(['pause'] as const)
+  readonly activeControls = receiveInterruptionControls('workspace-then-publish')
   readonly initialWorkspaceUsage: WorkspaceUsage
   readonly #window: BrowserReceiveWindow
   readonly #repository: ReceiveOperationRepository
@@ -263,10 +264,6 @@ export class WorkspaceReceiveOperation implements BoundReceiveOperation, Executi
     return this.#transferJobId
   }
 
-  interrupt(control: ActiveReceiveControl, transfer: AbortController): void {
-    if (control !== 'pause') throw unavailableRoute()
-    transfer.abort(new TransferPauseRequestedError())
-  }
 
   async startLifecycleAction(
     action: Exclude<LifecycleUserAction, ActiveReceiveControl>,

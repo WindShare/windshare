@@ -310,7 +310,7 @@ describe('FSA compatible-name route activation', () => {
     expect(repository.compatibleBootstrap?.initialMapping.physicalComponent)
       .toBe(reservation.physicalName)
     expect(ledgerFactoryCalls).toBe(1)
-    expect(ledger.header?.activationState).toBe('pair-ready')
+    expect(ledger.header?.activationState).toBe('report-ready')
     expect(ledger.header?.pair.script.ownershipState).toBe('owned')
     expect(ledger.header?.pair.sidecar.ownershipState).toBe('owned')
     expect(parent.entryNames()).toEqual([
@@ -327,8 +327,8 @@ describe('FSA compatible-name route activation', () => {
       trailingByteLength: 0,
     })
     expect(mutationOrder).toEqual([
-      'file:restore.windshare-idbee5.ps1',
       'file:restore.windshare-idbee5.data',
+      'file:restore.windshare-idbee5.ps1',
     ])
     const repairSummaries: CompatibleNameRepairSummary[] = []
     const repairProjection = result.operation.repairProjection
@@ -341,8 +341,8 @@ describe('FSA compatible-name route activation', () => {
       new AbortController().signal,
     )
     expect(mutationOrder).toEqual([
-      'file:restore.windshare-idbee5.ps1',
       'file:restore.windshare-idbee5.data',
+      'file:restore.windshare-idbee5.ps1',
       'directory:photos.windshare-aaaaaa',
     ])
     expect(ledger.mapping?.commitState).toBe('committed')
@@ -451,9 +451,9 @@ describe('FSA compatible-name route activation', () => {
     if (result.kind !== 'owned-effects') throw new Error('expected owned repair effects')
     expect(result.cause).toBe(pairFailure)
     expect(repository.compatibleBootstrapCommits).toBe(1)
-    expect(parent.entryNames()).toEqual(['restore.windshare-idbee5.ps1'])
+    expect(parent.entryNames()).toEqual([])
     expect(parent.directoryNames()).not.toContain('photos.windshare-aaaaaa')
-    expect(ledger.header?.pair.script.ownershipState).toBe('owned')
+    expect(ledger.header?.pair.script.ownershipState).toBe('claimed')
     expect(ledger.header?.pair.sidecar.ownershipState).toBe('claimed')
     expect(ledger.closeCount).toBe(1)
     await result.authority.settleActivationFailure(result.cause)

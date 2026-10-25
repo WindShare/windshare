@@ -99,10 +99,16 @@
 .detail-sheet .task-details > section[aria-label="Files requiring a new download"] { margin-top: 24px; border-top: 1px solid var(--receiver-rule); padding-top: 16px; }
 .detail-sheet .task-details > section[aria-label="Files requiring a new download"] li { margin-block: 12px; font-size: .8125rem; }
 .detail-sheet .task-details > section[aria-label="Files requiring a new download"] button { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
-.detail-sheet .saving-outcome { padding-bottom: 24px; border-bottom: 1px solid var(--receiver-rule); }
-.detail-sheet .saving-choice + .saving-choice { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--receiver-rule); }
-.detail-sheet .saving-choice p { margin-block: 10px; }
-.detail-sheet .saving-choice > button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; margin-top: 16px; }
+.detail-sheet .saving-outcome { padding-block: 8px 24px; }
+.detail-sheet .saving-outcome h3 { margin-bottom: 12px; font-size: 1rem; letter-spacing: -.015em; }
+.detail-sheet .saving-choice { border: 1px solid var(--receiver-rule); border-radius: 8px; overflow: hidden; }
+.detail-sheet .saving-choice + .saving-choice { margin-top: 16px; }
+.detail-sheet .saving-method-result { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 16px; }
+.detail-sheet .saving-method-result p { flex: 1 1 180px; margin: 0; color: var(--receiver-ink); line-height: 1.5; }
+.detail-sheet .saving-method-result button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; }
+.detail-sheet .saving-method-facts { margin: 0; padding: 12px 16px 12px 32px; border-top: 1px solid var(--receiver-rule); background: var(--receiver-wash); color: var(--receiver-muted); font-size: .8125rem; line-height: 1.6; }
+.detail-sheet .saving-method-facts li + li { margin-top: 8px; }
+.detail-sheet .saving-choice > .action-reason { margin: 0; padding: 12px 16px; }
 .detail-sheet .saving-choice .action-reason { color: var(--receiver-warning); }
 .detail-sheet .saving-recommendation { background: var(--receiver-wash); padding: 14px; }
 .detail-sheet .compatible-name-repair { margin-top: 24px; border-top: 1px solid var(--receiver-rule); padding-top: 20px; font-size: .8125rem; overflow-wrap: anywhere; }

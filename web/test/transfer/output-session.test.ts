@@ -129,7 +129,7 @@ describe('plan-specific output boundary', () => {
       shareInstance: identityText(1),
       fileId: identityText(4),
       fileRevision: identityText(5),
-    }, 4n, [{ start: 2n, end: 4n }, { start: 1n, end: 2n }]))
+    }, 4n, [{ start: 2n, end: 4n }, { start: 1n, end: 2n }], null))
       .toThrow(/sorted, non-overlapping/)
   })
 

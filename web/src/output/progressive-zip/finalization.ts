@@ -1,7 +1,8 @@
+import { completeZipMember } from '../zip-layout/member'
 import type { NativeObjectWrite } from '../origin-private/native-object/write-batch'
 import type { TaskEntry } from '../origin-private/task-checkpoint/model'
 import {
-  checkedZipAdd, encodeZipCentralDirectoryRecord, encodeZipDataDescriptor, encodeZipLocalHeader,
+  checkedZipAdd, encodeZipLocalHeader,
 } from '../zip-layout/policy'
 import { completeZipEntryCrc } from './crc-ranges'
 
@@ -33,8 +34,7 @@ export async function* zipFinalizationBatches(
       throw new Error('ZIP finalization requires complete committed entries')
     }
     const header = encodeZipLocalHeader(plan)
-    const descriptor = encodeZipDataDescriptor(plan, crc)
-    const central = encodeZipCentralDirectoryRecord(plan, crc)
+    const { descriptor, centralRecord: central } = completeZipMember(plan, layout.exactSize, crc)
     const entryBytes = header.byteLength + descriptor.byteLength + central.byteLength
     if (entryBytes > MAX_BATCH_BYTES) throw new RangeError('ZIP entry metadata exceeds the batch bound')
     if (centralRecords.length > 0 &&

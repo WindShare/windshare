@@ -1,3 +1,4 @@
+import { contentReplica } from './content-replica-fixture'
 import { describe, expect, it, vi } from 'vitest'
 import {
   bindOutputFileTransaction,
@@ -321,7 +322,7 @@ function durableRanges(
   ranges: readonly Readonly<{ start: bigint; end: bigint }>[],
   rangeOwnership: OutputFileOwnership = ownership,
 ): VerifiedDurableRanges {
-  return new VerifiedDurableRanges(rangeOwnership, file.source, file.exactSize, ranges)
+  return new VerifiedDurableRanges(rangeOwnership, file.source, file.exactSize, ranges, contentReplica(1n + ranges.reduce((sum, range) => sum + range.end - range.start, 0n)))
 }
 
 function result(

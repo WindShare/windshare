@@ -1,5 +1,5 @@
 import { snapshotIdentity } from '../../transfer/encoding/canonical'
-import type { LifecycleEvent } from '../workspace/lifecycle'
+import type { LifecycleEvent } from '../../transfer/lifecycle/reducer'
 import {
   snapshotRetainedFileSetProgress,
   type ReceiveLifecycleState,

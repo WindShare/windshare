@@ -1,3 +1,4 @@
+import { receiveInterruptionControls } from '../../../transfer/lifecycle/interruption'
 import {
   decideDirectZipMemberResumeV1, DirectZipEpochWriterV1, DirectZipWriterGateError,
   type DirectZipWriterObserver,
@@ -26,7 +27,6 @@ import {
 } from '../../../transfer/direct-zip'
 import { createOutputSessionID, createTransferJobID } from '../../../transfer/intent'
 import {
-  TransferPauseRequestedError,
   type DirectResumableZipExecution,
   type PlanExecutionAuthority,
 } from '../../../transfer/output/session'
@@ -57,7 +57,7 @@ export interface BrowserDirectZipOperationOptions {
   readonly trace?: OutputTraceSource
 }
 
-const RECEIVING_CONTROLS = Object.freeze(['pause'] as const)
+const RECEIVING_CONTROLS = receiveInterruptionControls('direct-resumable-zip')
 const INACTIVE_CONTROLS = Object.freeze([])
 
 export class BrowserDirectZipOperation implements BoundReceiveOperation {
@@ -196,10 +196,6 @@ export class BrowserDirectZipOperation implements BoundReceiveOperation {
     }) as Promise<Extract<ReceiveLifecycleState, { kind: 'needs-attention' }>>,
   }
 
-  interrupt(control: ActiveReceiveControl, transfer: AbortController): void {
-    if (control !== 'pause') throw new TypeError('Direct ZIP only supports pause')
-    transfer.abort(new TransferPauseRequestedError())
-  }
 
   async startLifecycleAction(action: Exclude<LifecycleUserAction, ActiveReceiveControl>): Promise<LifecycleMutation> {
     if (action === 'delete' || action === 'discard') {

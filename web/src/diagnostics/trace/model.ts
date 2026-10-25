@@ -547,6 +547,14 @@ export interface TraceEventPayloadByNameV2 extends ConnectionTracePayloads {
       }>
     | CapacityWaitTransitionPayloadV1
   readonly lifecycle_action_transition: Readonly<{
+    operation_id?: string
+    generation?: string
+    artifact_id?: string
+    checkpoint_id?: string
+    checkpoint_generation?: string
+    task_settlement?: 'continuable' | 'ended' | 'unsettled'
+    retention?: 'continuation' | 'complete_results' | 'delivered_results' | 'browser_handoff' | 'none' | 'reconcile'
+    cleanup?: 'settled' | 'retryable'
     transition: 'started' | 'completed' | 'failed' | 'excluded'
     action:
       | 'pause'

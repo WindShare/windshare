@@ -79,13 +79,7 @@ export function projectReceiverTraceEvent(
     case 'transfer_progress':
       return projectTransferTraceEvent(event)
     case 'lifecycle_action_transition':
-      return observation('lifecycle_action_transition', {
-        transition: event.transition,
-        action: snake(event.action),
-        ...(event.lifecycleKind === undefined
-          ? {}
-          : { lifecycle_state: snake(event.lifecycleKind) }),
-      })
+      return projectLifecycleAction(event)
     case 'receive.inventory.load.started':
       return observation('retained_inventory', { transition: 'load_started' })
     case 'receive.inventory.load.completed':
@@ -572,5 +566,22 @@ function adaptTraceSource<Input>(
       if (observer === undefined) return undefined
       return (event: Input) => observer(project(event))
     },
+  })
+}
+
+function projectLifecycleAction(event: Extract<ReceiverTraceEvent, { name: 'lifecycle_action_transition' }>): TraceEventObservationV2 {
+  return observation('lifecycle_action_transition', {
+    transition: event.transition,
+    action: snake(event.action),
+    ...(event.operationId === undefined ? {} : { operation_id: event.operationId }),
+    ...(event.generation === undefined ? {} : { generation: event.generation.toString() }),
+    ...(event.artifactId === undefined ? {} : { artifact_id: event.artifactId }),
+    ...(event.checkpointId === undefined ? {} : { checkpoint_id: event.checkpointId }),
+    ...(event.checkpointGeneration === undefined ? {} : { checkpoint_generation: event.checkpointGeneration.toString() }),
+    ...(event.settlement === undefined ? {} : { task_settlement: event.settlement.task,
+      retention: snake(event.settlement.retention), cleanup: event.settlement.cleanup }),
+    ...(event.lifecycleKind === undefined
+      ? {}
+      : { lifecycle_state: snake(event.lifecycleKind) }),
   })
 }

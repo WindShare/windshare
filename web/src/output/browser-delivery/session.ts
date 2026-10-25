@@ -1,3 +1,4 @@
+import { fileCheckpointReplica } from '../persistence/content'
 import type { PersistentFileRequest, PersistentFileTransactionPort, PersistentMaterializationPort } from '../persistent-tree/contracts'
 import { fileCheckpointIsComplete } from '../persistence/checkpoint'
 import type { BrowserDeliveryRecordV1, BrowserDeliverySource } from './model'
@@ -379,6 +380,12 @@ class BrowserDeliveryFileTransaction implements PersistentFileTransactionPort {
   get checkpointObjectId() {
     return this.#options.receiving?.checkpointObjectId ?? this.#options.receiving?.ownedObjectId ??
       ('stage' in this.#options.record.state ? this.#options.record.state.stage?.ownedObjectId : undefined) ?? this.ownedObjectId
+  }
+  get contentReplica() {
+    if (this.#options.receiving !== undefined) return this.#options.receiving.contentReplica
+    const state = this.#options.record.state
+    if ('stage' in state && state.stage !== undefined) return fileCheckpointReplica(state.stage, 'browser-origin-private-workspace')
+    return this.#options.target.contentReplica
   }
   get checkpointPolicy() { return this.#options.receiving?.checkpointPolicy ?? this.#options.target.checkpointPolicy ?? { kind: 'disabled' as const } }
   get initialDurableRanges() {

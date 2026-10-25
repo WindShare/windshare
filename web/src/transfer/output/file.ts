@@ -1,3 +1,5 @@
+import { snapshotContentAvailability, type ContentAvailability, type ContentReplica, type OutputSourceIdentity } from './content-availability'
+export type { OutputSourceIdentity } from './content-availability'
 import type { SourceFault } from '../failure/fault'
 import { ByteRangeSet, type ByteRange } from '../../content/geometry'
 import { decodeBase64Url, encodeBase64Url } from '../../crypto/bytes'
@@ -72,10 +74,6 @@ export interface OutputCatalogFileIdentity {
   readonly fileId: string
 }
 
-export interface OutputSourceIdentity extends OutputCatalogFileIdentity {
-  readonly fileRevision: string
-}
-
 export interface OpenedOutputRevision extends OutputSourceIdentity {
   readonly exactSize: bigint
 }
@@ -122,23 +120,28 @@ export interface OutputFile {
 export class VerifiedDurableRanges {
   readonly ownership: OutputFileOwnership
   readonly source: OutputSourceIdentity
-  readonly #ranges: ByteRangeSet
+  readonly availability: ContentAvailability
+  readonly #rangeSet: ByteRangeSet
 
   constructor(
     ownership: OutputFileOwnership,
     source: OutputSourceIdentity,
     fileSize: bigint,
     ranges: readonly ByteRange[],
+    replica: ContentReplica | null,
   ) {
     this.ownership = snapshotOutputOwnership(ownership)
     this.source = snapshotOutputSource(source)
-    this.#ranges = verifiedDurableRangeSet(fileSize, ranges)
+    this.availability = snapshotContentAvailability({ source: this.source, exactSize: fileSize,
+      ranges: verifiedDurableRangeSet(fileSize, ranges).ranges, replica })
+    this.#rangeSet = new ByteRangeSet(fileSize, this.availability.ranges)
+    Object.freeze(this)
   }
 
-  get fileSize(): bigint { return this.#ranges.fileSize }
-  get ranges(): readonly ByteRange[] { return this.#ranges.ranges }
-  covers(range: ByteRange): boolean { return this.#ranges.covers(range) }
-  asRangeSet(): ByteRangeSet { return new ByteRangeSet(this.fileSize, this.ranges) }
+  get fileSize(): bigint { return this.availability.exactSize }
+  get ranges(): readonly ByteRange[] { return this.availability.ranges }
+  covers(range: ByteRange): boolean { return this.#rangeSet.covers(range) }
+  asRangeSet(): ByteRangeSet { return this.#rangeSet }
 }
 
 /** Terminal evidence is deliberately distinct from restart-range evidence. */

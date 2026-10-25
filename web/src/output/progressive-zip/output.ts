@@ -1,3 +1,4 @@
+import { taskEntryContent } from '../origin-private/task-checkpoint/content'
 import {
   outputCapabilities, outputExecutionProfile, outputSessionIdentity,
   snapshotOpenedOutputRevision, snapshotOutputFileRequest, VerifiedDurableRanges,
@@ -113,8 +114,10 @@ export async function createProgressiveZipOutput(input: {
         }
         const durable = async () => {
           const current = await archive.committedEntry(entryId)
-          return new VerifiedDurableRanges(ownership, revision, revision.exactSize, current.ranges)
+          const content = taskEntryContent(current, archive.state)
+          return new VerifiedDurableRanges(ownership, revision, revision.exactSize, content.ranges, content.replica)
         }
+        const content = taskEntryContent(entry, archive.state)
         return {
           revision,
           checkpoint: {
@@ -122,7 +125,7 @@ export async function createProgressiveZipOutput(input: {
             policy: { kind: 'incremental', pendingBytes: ZIP_OBJECT_CHECKPOINT_PENDING_BYTES,
               pendingMilliseconds: ZIP_OBJECT_CHECKPOINT_PENDING_MILLISECONDS },
           },
-          durableRanges: new VerifiedDurableRanges(ownership, revision, revision.exactSize, entry.ranges),
+          durableRanges: new VerifiedDurableRanges(ownership, revision, revision.exactSize, content.ranges, content.replica),
           transaction: {
             writeRange: async (offset, bytes, signal) => {
               signal.throwIfAborted()

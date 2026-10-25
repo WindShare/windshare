@@ -1,3 +1,4 @@
+import { assertWorkspaceCheckpoint } from './task-settlement'
 import {
   FILE_CHECKPOINT_COMMIT_CANDIDATE,
   FILE_CHECKPOINT_PHASE_ACTIVE,
@@ -383,6 +384,7 @@ export async function assertOperationConcurrency(
   transaction: IDBTransaction,
   transition: PreparedReceiveOperationTransition,
 ): Promise<void> {
+  if (transition.workspaceCheckpoint !== undefined) await assertWorkspaceCheckpoint(transaction, transition.workspaceCheckpoint)
   const records = transaction.objectStore(INDEXEDDB_RECEIVE_RECORD_STORE)
   const leases = transaction.objectStore(INDEXEDDB_RECEIVE_LEASE_STORE)
   const [lifecycleValue, leaseValue] = await Promise.all([

@@ -49,6 +49,16 @@ describe('restoration pair namespace allocation', () => {
     expect(claims.get(parent)?.size).toBe(0)
   })
 
+  it('retains an available report when every script candidate is occupied', async () => {
+    const parent = new MemoryDirectory('downloads') as unknown as FileSystemDirectoryHandle
+    const pair = await allocateRestorationPair({
+      ...INPUT, parent, claims: new WeakMap(),
+      membership: { directoryId: directoryId(INPUT.operationId), generation: INPUT.operationId,
+        hasCommittedName: async name => name.endsWith('.ps1') },
+    })
+    expect(pair).toEqual(await compatibleNameRestorationPairCandidate({ ...INPUT, attempt: 0 }))
+  })
+
   it('keeps content retries and pair identity independent and claims scoped to parents', async () => {
     const parent = new MemoryDirectory('downloads') as unknown as FileSystemDirectoryHandle
     const other = new MemoryDirectory('elsewhere') as unknown as FileSystemDirectoryHandle

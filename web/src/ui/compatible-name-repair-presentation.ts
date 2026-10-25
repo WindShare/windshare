@@ -18,7 +18,7 @@ export interface CompatibleNameRepairPresentation {
   readonly replacementCountLabel: string
   readonly logicalPathSample: readonly string[]
   readonly omittedLogicalPathCount: number
-  readonly scriptName: string
+  readonly scriptName: string | null
   readonly sidecarName: string
   readonly placementLabel: string
   readonly runCommand: string | null
@@ -43,7 +43,8 @@ export function presentCompatibleNameRepair(input: Readonly<{
   const actionMode = receiveRepairMode(input.state, summary,
     input.context === 'retained-operation' ? 'retained-operation' : 'live-operation')
   const logicalPathSample = Object.freeze(summary.logicalPathSample.map(path => path.join('/')))
-  const commandAvailable = summary.committedCount > 0 &&
+  const scriptName = summary.pairDisplayNames.script ?? null
+  const commandAvailable = scriptName !== null && summary.committedCount > 0 &&
     (actionMode === 'abnormal-stop-recovery' || actionMode === 'routine-restoration')
   const shortCommand = commandAvailable ? `.\\${summary.pairDisplayNames.script}` : null
   const restorationVisibility = terminal ? 'primary' : 'secondary'
@@ -55,7 +56,7 @@ export function presentCompatibleNameRepair(input: Readonly<{
       summary.committedCount === 1 ? 'replacement' : 'replacements'}`,
     logicalPathSample,
     omittedLogicalPathCount: summary.committedCount - logicalPathSample.length,
-    scriptName: summary.pairDisplayNames.script,
+    scriptName,
     sidecarName: summary.pairDisplayNames.sidecar,
     placementLabel: summary.placement === 'inside-logical-root'
       ? 'Inside the received folder'
@@ -67,8 +68,10 @@ export function presentCompatibleNameRepair(input: Readonly<{
     shortCommand,
     visibility: live || summary.committedCount === 0 ? 'notice' : restorationVisibility,
     actionMode,
-    actionTitle: repairActionTitle(actionMode),
-    actionDescription: repairActionDescription(actionMode),
+    actionTitle: scriptName === null ? 'Original names are recorded' : repairActionTitle(actionMode),
+    actionDescription: scriptName === null
+      ? 'Your files can be saved with compatible names. The mapping report records the original names; an automatic restoration script is unavailable for this download. Keep the report with your files.'
+      : repairActionDescription(actionMode),
   })
 }
 

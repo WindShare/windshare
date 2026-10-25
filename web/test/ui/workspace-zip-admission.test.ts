@@ -1,3 +1,4 @@
+import { interruptReceive } from '../../src/application/receive/active/interruption'
 import { describe, expect, it, vi } from 'vitest'
 import { SelectionPolicy } from '../../src/catalog/selection'
 import * as progressiveBackend from '../../src/output/origin-private/progressive-backend'
@@ -83,7 +84,7 @@ describe('reopened ZIP admission ownership', () => {
     const create = vi.spyOn(progressiveExecution, 'createProgressiveWorkspaceExecution')
       .mockImplementationOnce(async input => {
         const execution = await createExecution(input)
-        runtime.interrupt('pause', controller)
+        interruptReceive(runtime, 'pause', controller)
         return execution
       })
     try {

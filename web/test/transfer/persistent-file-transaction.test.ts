@@ -1,3 +1,4 @@
+import { contentReplica } from './content-replica-fixture'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { PersistentFileTransactionPort } from '../../src/output/persistent-tree/contracts'
@@ -23,6 +24,7 @@ describe('persistent output transaction recovery boundary', () => {
     const lowLevel: PersistentFileTransactionPort = {
       revision: { fileId: 'file', fileRevision: 'revision', exactSize: 4n },
       ownedObjectId: 'owned-file',
+      contentReplica: contentReplica(),
       initialDurableRanges: [{ start: 0n, end: 2n }],
       verifiedRanges: [{ start: 0n, end: 2n }],
       writeRange: () => Promise.reject(cause),

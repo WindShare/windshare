@@ -30,7 +30,9 @@ export function presentTransferResult(
     lines.unshift(`${ordinary.title}.`)
   }
   lines.push(
-    `Saved names remain compatible until the restoration script "${repair.pairDisplayNames.script}" runs.`,
+    repair.pairDisplayNames.script === undefined
+      ? `Original names are recorded in "${repair.pairDisplayNames.sidecar}". The saved files use compatible names.`
+      : `Saved names remain compatible until the restoration script "${repair.pairDisplayNames.script}" runs.`,
   )
 
   if (worker.status === 'Paused' &&

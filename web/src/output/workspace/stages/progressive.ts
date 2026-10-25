@@ -78,7 +78,10 @@ export class WorkspaceProgressiveStages {
       contentWarning: checkpoint.contentWarning ?? null,
       ...(pauseReason === undefined ? {} : { pauseReason }),
     })
-    await this.runtime.commitLifecycle(state, next)
+    await this.runtime.repository.commitTransition({
+      operationId: this.runtime.intent.operationId, expectedLifecycleGeneration: state.generation,
+      expectedLeaseId: this.runtime.leaseId, workspaceCheckpoint: checkpoint, lifecycle: next,
+    })
     this.runtime.emit({
       name: 'receive.materialization.paused', operation_id: this.runtime.intent.operationId,
       receive_intent_digest: this.runtime.intent.digest, resumable_stage: 'receive',
@@ -120,7 +123,7 @@ export class WorkspaceProgressiveStages {
     })
     await this.runtime.repository.commitTransition({
       operationId: this.runtime.intent.operationId, expectedLifecycleGeneration: state.generation,
-      expectedLeaseId: this.runtime.leaseId, lifecycle: next,
+      expectedLeaseId: this.runtime.leaseId, workspaceCheckpoint: checkpoint, lifecycle: next,
       records: [
         await persistedReceiptRecord(receipt),
         await createPersistedReceiveRecord({

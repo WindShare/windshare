@@ -501,6 +501,7 @@ class PersistentMaterializationOutput implements OutputSession {
         ownership,
         opened,
         transaction.initialDurableRanges,
+        transaction.contentReplica,
       )
       return Object.freeze({
         revision: opened,

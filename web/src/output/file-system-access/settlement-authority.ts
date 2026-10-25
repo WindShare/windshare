@@ -14,7 +14,7 @@ import type { FSATerminalMutationKind } from '../browser/mutation-coordination/m
 import {
   reduceReceiveLifecycle,
   type LifecycleEvent,
-} from '../workspace/lifecycle'
+} from '../../transfer/lifecycle/reducer'
 import type { PersistedReceiveRecord } from '../workspace/records'
 import { decodeStoredReceiveLifecycleState, storedReceiveLifecycleState } from '../workspace/state-codec'
 import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'

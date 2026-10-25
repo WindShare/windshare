@@ -24,6 +24,7 @@ import {
 const LEGACY_LEDGER_FORMATS = new Set([
   'compatible-name-ledger/v1',
   'compatible-name-ledger/v2',
+  'compatible-name-ledger/v3',
 ])
 
 // Recognizing an obsolete envelope grants only metadata deletion; its paths,

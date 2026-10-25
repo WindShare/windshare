@@ -2,7 +2,7 @@ import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
 import {
   reduceReceiveLifecycle,
   type LifecycleReducerContext,
-} from '../workspace/lifecycle'
+} from '../../transfer/lifecycle/reducer'
 import {
   validatePersistedReceiveRecord,
   type PersistedReceiveRecord,

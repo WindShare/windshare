@@ -12,7 +12,7 @@ import { ORIGIN_PRIVATE_RAW_FILE_CONTAINER } from '../../src/output/origin-priva
 import { UNKNOWN_SPEED_STAGING_THRESHOLD_BYTES } from '../../src/output/planning/file-receiving-placement'
 import { IndexedDbStagingBudgetStore } from '../../src/output/staging-budget/indexeddb-store'
 import { initialReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
-import { reduceReceiveLifecycle } from '../../src/output/workspace/lifecycle'
+import { reduceReceiveLifecycle } from '../../src/transfer/lifecycle/reducer'
 import { decodeStoredReceiveLifecycleState } from '../../src/output/workspace/state-codec'
 import type { ReceiveIntent } from '../../src/transfer/intent'
 import { EMPTY_TRANSFER_FAILURE_SUMMARY, transferWorkerSettlement } from '../../src/transfer/outcome'

@@ -1,3 +1,4 @@
+import { fileCheckpointReplica } from '../persistence/content'
 import { ByteRangeSet, byteRange } from '../../content/geometry'
 import {
   NATIVE_FILE_CHECKPOINT_PENDING_BYTES, NATIVE_FILE_CHECKPOINT_PENDING_MILLISECONDS,
@@ -150,6 +151,8 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
       input.checkpoint.verifiedRanges,
     )
   }
+
+  get contentReplica() { return fileCheckpointReplica(this.#checkpoint, this.#ownership.backend) }
 
   get initialDurableRanges(): readonly PersistentByteRange[] {
     return this.#initialDurable

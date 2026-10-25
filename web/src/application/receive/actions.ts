@@ -1,3 +1,4 @@
+import type { ReceiveInterruption as ActiveReceiveControl } from '../../transfer/lifecycle/interruption'
 import type { PreservingWriterCapacityPurpose, PreservingWriterCost } from '../../output/persistent-tree/contracts'
 
 export interface WorkspaceUsage {
@@ -19,7 +20,7 @@ export type LifecycleUserAction =
   | 'discard'
   | 'delete'
 
-export type ActiveReceiveControl = Extract<LifecycleUserAction, 'pause' | 'stop'>
+export type { ReceiveInterruption as ActiveReceiveControl } from '../../transfer/lifecycle/interruption'
 
 export type ReceiveSettlementWait = Readonly<{
   readonly operation: ActiveReceiveControl | 'finish'

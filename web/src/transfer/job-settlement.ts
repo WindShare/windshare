@@ -153,7 +153,7 @@ export class TransferJobSettlement {
       BigInt(this.#context.progress.completedFiles),
       this.#context.progress.completedBytes,
     )
-    const lifecycle = abortReason instanceof TransferStopRequestedError
+    const lifecycle = abortReason instanceof TransferStopRequestedError && this.#context.execution()?.planKind === 'direct-tree'
       ? await this.#stop(worker, abortReason)
       : await this.#pause(worker, abortReason, measure, failureTrigger)
     if (this.#context.execution()?.planKind === 'direct-tree') {

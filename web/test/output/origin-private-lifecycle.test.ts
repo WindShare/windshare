@@ -4,7 +4,7 @@ import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
   reduceReceiveLifecycle,
   type LifecycleEvent,
-} from '../../src/output/workspace/lifecycle'
+} from '../../src/transfer/lifecycle/reducer'
 import {
   initialReceiveLifecycleState,
   nextReceiveLifecycleState,

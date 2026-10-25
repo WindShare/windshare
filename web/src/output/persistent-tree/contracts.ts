@@ -297,6 +297,7 @@ export interface ActivatablePersistentMaterializationPort extends PersistentMate
 export interface PersistentFileTransactionPort {
   readonly revision: OpenedFileRevision
   readonly ownedObjectId: string
+  readonly contentReplica: import('../../transfer/output/content-availability').ContentReplica | null
   readonly checkpointPolicy?: import('../../transfer/checkpoint-schedule').AutomaticCheckpointPolicy
   readonly checkpointObjectId?: string
   readonly initialDurableRanges: readonly PersistentByteRange[]

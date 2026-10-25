@@ -366,11 +366,11 @@ export class MemoryCompatibleNameActivationLedger implements CompatibleNameActiv
         ownershipState: 'owned' as const,
       }),
     })
-    const pairReady = pair.script.ownershipState === 'owned' && pair.sidecar.ownershipState === 'owned'
+    const pairReady = pair.sidecar.ownershipState === 'owned'
     this.header = compatibleNameOperationHeaderV1({
       ...header,
       pair,
-      activationState: pairReady ? 'pair-ready' : 'prepared',
+      activationState: pairReady ? 'report-ready' : 'prepared',
     })
     return this.header
   }

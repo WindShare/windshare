@@ -1,3 +1,5 @@
+import { directZipMemberContent } from './content'
+import { reusableContentPrefix } from '../../../transfer/output/content-availability'
 import {
   compareDirectZipEntryPlansV2,
   planDirectZipEntryV2,
@@ -58,6 +60,8 @@ export interface DirectZipMemberRollbackAuthorityV1 {
 }
 
 export interface DirectZipTransferOutputOptionsV1 {
+  readonly shareInstance: string
+  readonly objectId: string
   readonly identity: OutputSessionIdentity
   readonly capabilities: OutputCapabilities
   readonly writer: DirectZipEpochWriterV1
@@ -82,6 +86,7 @@ export class DirectZipTransferOutputV1 implements
   readonly identity: OutputSessionIdentity
   readonly capabilities: OutputCapabilities
   readonly executionProfile = disabledOutputExecutionProfile(1)
+  readonly #contentBinding: Readonly<{ shareInstance: string; objectId: string; backend: string }>
   readonly #pages: Pick<DirectZipWriterPageSink, 'snapshot'>
   readonly #replay: DirectZipReplayAuthorityV1
   readonly #rollback: DirectZipMemberRollbackAuthorityV1
@@ -103,6 +108,7 @@ export class DirectZipTransferOutputV1 implements
 
   constructor(options: DirectZipTransferOutputOptionsV1) {
     this.identity = outputSessionIdentity(options.identity)
+    this.#contentBinding = { shareInstance: options.shareInstance, objectId: options.objectId, backend: this.identity.backend }
     this.capabilities = outputCapabilities(options.capabilities)
     if (this.capabilities.randomWrite || this.capabilities.fileFailureIsolation) {
       throw new TypeError('direct ZIP output exposes contiguous source resume and job-scoped failure isolation')
@@ -208,7 +214,7 @@ export class DirectZipTransferOutputV1 implements
     requireSamePlan(plan, active.plan)
     const resumed = this.#writer.resumeFile(authority)
     if (resumed instanceof DirectZipMemberWriterV1) {
-      return Object.freeze({ plan, writer: resumed, resumeOffset: active.payloadOffset })
+      return Object.freeze({ plan, writer: resumed, resumeOffset: this.#safePrefix(checkpoint) })
     }
     if (resumed.kind !== 'rollback-member') {
       throw new Error('direct ZIP writer returned an invalid resume decision')
@@ -309,7 +315,12 @@ export class DirectZipTransferOutputV1 implements
       throw new Error('direct ZIP checkpoint observation requires candidate replay')
     }
     signal.throwIfAborted()
-    return currentFileSafeOffset(cut.checkpoint)
+    return this.#safePrefix(cut.checkpoint)
+  }
+
+  #safePrefix(checkpoint: DirectZipWriterCheckpointV1): bigint {
+    const content = directZipMemberContent(checkpoint, this.#contentBinding)
+    return content === undefined ? 0n : reusableContentPrefix(content, content.source)
   }
 
   filePayloadReceived(bytes: bigint): void {
@@ -471,9 +482,6 @@ class DirectZipFileTransaction implements DirectZipFileTransactionV1 {
   }
 }
 
-function currentFileSafeOffset(checkpoint: DirectZipWriterCheckpointV1): bigint {
-  return checkpoint.phase === 'inside-member' ? checkpoint.member!.payloadOffset : 0n
-}
 
 function requireStableCut(cut: DirectZipCheckpointCutResultV1): void {
   if (cut.kind === 'replay-required') {

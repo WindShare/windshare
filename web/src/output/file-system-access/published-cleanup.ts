@@ -6,7 +6,7 @@ import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
 import {
   canonicalFrame, canonicalIdentity, canonicalRecord, canonicalU8,
 } from '../../transfer/encoding/canonical'
-import { reduceReceiveLifecycle } from '../workspace/lifecycle'
+import { reduceReceiveLifecycle } from '../../transfer/lifecycle/reducer'
 import {
   createPersistedReceiveRecord, operationRecordId, RECEIVE_RECORD_CLEANUP,
   RECEIVE_RECORD_RECEIPT, validatePersistedReceiveRecord,

@@ -23,7 +23,7 @@ import {
   decodeReceiveLifecycleState,
 } from '../../workspace/state-codec'
 
-export const COMPATIBLE_NAME_LEDGER_FORMAT_VERSION = 'compatible-name-ledger/v3' as const
+export const COMPATIBLE_NAME_LEDGER_FORMAT_VERSION = 'compatible-name-ledger/v4' as const
 export const COMPATIBLE_NAME_PENDING_OUTCOME_FORMAT_VERSION =
   'compatible-name-pending-outcome/v2' as const
 export const MAX_COMPATIBLE_NAME_COMMITTED_MAPPINGS = 1_048_576
@@ -32,7 +32,7 @@ export const MAX_COMPATIBLE_NAME_REPAIR_SUMMARY_PATHS = 8
 const BASE32_TOKEN_PATTERN = /^[a-z2-7]{6}$/u
 
 export type CompatibleNameEntryKind = 'file' | 'directory'
-export type CompatibleNameActivationState = 'prepared' | 'pair-ready' | 'active'
+export type CompatibleNameActivationState = 'prepared' | 'report-ready' | 'active'
 export type CompatibleNameOwnershipState = 'selected' | 'owned'
 export type CompatibleNameCommitState = 'uncommitted' | 'committed'
 export type CompatibleNamePairKind = 'script' | 'sidecar'
@@ -77,7 +77,6 @@ export interface CompatibleNameOperationHeaderV1 {
     logicalName: string
     physicalName: string
   }>
-  readonly templateId: string
   readonly pairPlacement: CompatibleNamePairPlacement
   readonly pair: CompatibleNameRestorationPairV1
   readonly activationState: CompatibleNameActivationState
@@ -136,8 +135,7 @@ export function compatibleNameOperationHeaderV1(
   }
   const pair = compatibleRestorationPair(input.pair)
   const activationState = compatibleActivationState(input.activationState)
-  const pairOwned = pair.script.ownershipState === 'owned' &&
-    pair.sidecar.ownershipState === 'owned'
+  const pairOwned = pair.sidecar.ownershipState === 'owned'
   if ((activationState === 'prepared' && pairOwned) ||
       (activationState !== 'prepared' && !pairOwned)) {
     throw new TypeError('compatible-name activation state disagrees with pair ownership')
@@ -162,7 +160,6 @@ export function compatibleNameOperationHeaderV1(
     primaryToken,
     authorityRef,
     root,
-    templateId: nonEmptyCanonicalText(input.templateId, 'restoration template ID'),
     pairPlacement,
     pair,
     activationState,
@@ -356,7 +353,7 @@ export function compatibleNameRepairSummary(
     committedCount,
     logicalPathSample,
     pairDisplayNames: Object.freeze({
-      script: portableComponent(input.pairDisplayNames.script, 'script display name'),
+      ...(input.pairDisplayNames.script === undefined ? {} : { script: portableComponent(input.pairDisplayNames.script, 'script display name') }),
       sidecar: portableComponent(input.pairDisplayNames.sidecar, 'sidecar display name'),
     }),
     placement: compatiblePairPlacement(input.placement),
@@ -451,7 +448,8 @@ function assertSummaryMatchesPair(
   pair: CompatibleNameOperationHeaderV1['pair'],
 ): void {
   if (summary.placement !== placement ||
-      summary.pairDisplayNames.script !== pair.script.physicalName ||
+      (summary.pairDisplayNames.script !== undefined &&
+       (summary.pairDisplayNames.script !== pair.script.physicalName || pair.script.ownershipState !== 'owned')) ||
       summary.pairDisplayNames.sidecar !== pair.sidecar.physicalName) {
     throw new TypeError('compatible-name repair summary disagrees with its restoration pair')
   }
@@ -472,7 +470,7 @@ function compatiblePairPlacement(value: CompatibleNamePairPlacement): Compatible
 }
 
 function compatibleActivationState(value: CompatibleNameActivationState): CompatibleNameActivationState {
-  if (value !== 'prepared' && value !== 'pair-ready' && value !== 'active') {
+  if (value !== 'prepared' && value !== 'report-ready' && value !== 'active') {
     throw new TypeError('compatible-name activation state is invalid')
   }
   return value

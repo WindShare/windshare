@@ -175,6 +175,7 @@ function transactionPort(transaction: Awaited<ReturnType<PersistentTreeOutputSes
     revision: transaction.revision, ownedObjectId: transaction.ownedObjectId,
     checkpointPolicy: transaction.checkpointPolicy,
     initialDurableRanges: transaction.initialDurableRanges,
+    get contentReplica() { return transaction.contentReplica },
     get verifiedRanges() { return transaction.verifiedRanges },
     writeRange: transaction.writeRange.bind(transaction),
     automaticCheckpoint: transaction.automaticCheckpoint.bind(transaction),

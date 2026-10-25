@@ -6,7 +6,7 @@ import { openFileSystemAccessCompatibleNameCatchUp, reopenFileSystemAccessOutput
 import { catchUpFileSystemAccessCompatibleNames } from '../../src/output/file-system-access/settlement'
 import { decodeCompatibleNameSidecar } from '../../src/output/file-system-access/compatible-name/sidecar-codec'
 import { initialReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
-import { reduceReceiveLifecycle } from '../../src/output/workspace/lifecycle'
+import { reduceReceiveLifecycle } from '../../src/transfer/lifecycle/reducer'
 import { receiveOperationResumeDescriptor } from '../../src/output/resume/descriptor'
 import { ReceiveOperationResumeAuthority } from '../../src/output/resume/authority'
 import { createBrowserReceiveOperationMutationPort } from '../../src/output/resume/reopen-authority'

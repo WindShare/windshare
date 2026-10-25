@@ -10,7 +10,7 @@ import {
   type DirectZipWriterCheckpointV1,
 } from '../writer/index'
 import type { ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
-import { decodeBase64Url, equalBytes } from '../../../crypto/bytes'
+import { decodeBase64Url, encodeBase64Url, equalBytes } from '../../../crypto/bytes'
 import { validateReceiveIntent } from '../../../transfer/intent'
 import type {
   DirectResumableZipExecution,
@@ -102,6 +102,8 @@ export async function createDirectZipExecutionV1(
   })
   const output = new DirectZipTransferOutputV1({
     identity: input.outputIdentity,
+    shareInstance: intent.shareInstance,
+    objectId: encodeBase64Url(input.writer.context.ownershipMarker.ownershipNonce),
     capabilities: {
       durability: input.support.durability,
       randomWrite: false,

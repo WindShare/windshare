@@ -274,6 +274,7 @@ export class PortableSealedZipOutputSession implements PortablePreparedOutput {
         revision,
         revision.exactSize,
         [],
+        null,
       )
       const transaction = observePortableTransaction(
         new PortableZipMemberTransaction({
@@ -544,6 +545,7 @@ class PortableZipMemberTransaction implements OutputFileTransaction {
       this.#revision,
       this.#revision.exactSize,
       [],
+        null,
     )
   }
 

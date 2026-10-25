@@ -3,7 +3,7 @@ import {
   type NeedsAttentionReason,
   type PlanKind,
   type ReceiveLifecycleState,
-} from '../../../transfer/lifecycle/state'
+} from './state'
 import type { LifecycleReduction } from './events'
 
 export function activeLeaseMismatch(state: ReceiveLifecycleState, leaseId: string): boolean {

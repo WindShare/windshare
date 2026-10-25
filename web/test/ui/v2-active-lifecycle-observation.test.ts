@@ -29,7 +29,7 @@ describe('active receive lifecycle observation', () => {
     f.runtime.lifecycleNotifications.publish(f.receiving)
     expect(f.controller.getSnapshot().progress.writtenBytes).toBe(0n)
     expect(f.task()?.headline).toBe('Downloading')
-    expect(f.controller.getSnapshot().output.activeControls).toEqual(['pause', 'stop'])
+    expect(f.controller.getSnapshot().output.activeControls).toEqual(['pause'])
 
     f.joined.connectionChanged({ kind: 'reconnecting', activity: { kind: 'connecting' } })
     expect(f.task()?.headline).toBe('Reconnecting to the sender')
@@ -64,10 +64,9 @@ describe('active receive lifecycle observation', () => {
     const f = await fixture()
     f.runtime.lifecycleNotifications.publish(f.receiving)
     const paused = stableLifecycle(f.receiving, 'resumable-receive')
-    f.runtime.interrupt = (_control, transfer) => {
+    f.run.onInterruption = () => {
       f.runtime.lifecycleNotifications.publish(paused)
       f.run.resolve({ ...paused })
-      transfer.abort(new DOMException('Paused by receiver', 'AbortError'))
     }
     f.controller.performLifecycleAction('pause')
     expect(f.task()?.headline).toBe('Pausing')

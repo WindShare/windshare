@@ -68,6 +68,7 @@ export class SingleFileStreamOutputSession implements OutputSession {
         revision,
         revision.exactSize,
         [],
+        null,
       )
 
       // Acquiring the writer is the first output-authority mutation. Keeping it
@@ -193,6 +194,7 @@ class SingleFileStreamTransaction implements OutputFileTransaction {
         this.#revision,
         this.#revision.exactSize,
         [],
+        null,
       )
     })
   }

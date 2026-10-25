@@ -134,11 +134,11 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
     const scope = this.#rootScope()
     await this.authorize()
     if (this.#binding.reservation.entryKind === 'single-file') {
-      await this.#compatibleNames?.ensurePairReady(undefined)
+      await this.#compatibleNames?.ensureRecoveryReport(undefined)
       return
     }
     if (this.#compatibleNames?.pairPlacement === 'beside-mapped-root') {
-      await this.#compatibleNames.ensurePairReady(undefined)
+      await this.#compatibleNames.ensureRecoveryReport(undefined)
     }
     const pickedParent = this.#authorities.pickedParent()
     await this.#mutations.scheduler.runNamespace([pickedParent.schedulerIdentity], 'create-directory', async () => {
@@ -244,14 +244,14 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
         handle: current,
       })
     })
-    await this.#compatibleNames?.ensurePairReady(this.#root)
+    await this.#compatibleNames?.ensureRecoveryReport(this.#root)
   }
 
   async reopenOwnedRootForCleanup(): Promise<void> {
     const scope = this.#rootScope()
     await this.authorize()
     if (this.#binding.reservation.entryKind === 'single-file') {
-      await this.#compatibleNames?.ensurePairReady(undefined)
+      await this.#compatibleNames?.ensureRecoveryReport(undefined)
       return
     }
     await this.#mutate('settle-operation', async () => {
@@ -295,7 +295,7 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
         handle: current,
       })
     })
-    await this.#compatibleNames?.ensurePairReady(this.#root)
+    await this.#compatibleNames?.ensureRecoveryReport(this.#root)
   }
 
   async ensureDirectory(path: readonly string[]): Promise<PersistentDirectoryMaterialization> {

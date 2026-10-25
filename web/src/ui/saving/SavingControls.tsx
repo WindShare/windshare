@@ -5,14 +5,18 @@ import { DetailSheet } from '../controls/DetailSheet'
 import { ReceiverIcon } from '../receiver-presentation/ReceiverIcon'
 
 function Choice({ choice, choose }: { readonly choice: SavingChoice; readonly choose: (choice: SavingChoice) => void }) {
-  return <div className="saving-choice">
-    <p>{choice.description}</p>
-    {choice.consequences.map(line => <small key={line}>{line}</small>)}
-    <button type="button" disabled={choice.disabledReason !== null} onClick={() => choose(choice)}>
-      <ReceiverIcon name="download" />{choice.label}
-    </button>
-    {choice.disabledReason !== null && <p className="action-reason">{choice.disabledReason}</p>}
-  </div>
+  return <article className="saving-choice">
+    <div className="saving-method-result">
+      <p>{choice.description}</p>
+      <button type="button" disabled={choice.disabledReason !== null} onClick={() => choose(choice)}>
+        <ReceiverIcon name="download" />{choice.label}
+      </button>
+    </div>
+    <ul className="saving-method-facts">
+      {choice.consequences.map(line => <li key={line}>{line}</li>)}
+    </ul>
+    {choice.disabledReason !== null && <p className="action-reason" role="status">{choice.disabledReason}</p>}
+  </article>
 }
 
 export function SavingControls({ model, activation, currentTaskContext, actionLabel, choose, retry, cancel, onIntent }: {

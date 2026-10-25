@@ -136,6 +136,12 @@ export type ControllerWorkflowTraceEvent =
       transition: 'started' | 'completed' | 'failed' | 'excluded'
       action: LifecycleUserAction
       lifecycleKind?: ReceiveLifecycleState['kind']
+      operationId?: string
+      generation?: bigint
+      artifactId?: string
+      checkpointId?: string
+      checkpointGeneration?: bigint
+      settlement?: import('../../../transfer/lifecycle/interruption').ReceiveStorageSettlement
     }>
 
 export type ReceiverExperienceTraceEvent =
