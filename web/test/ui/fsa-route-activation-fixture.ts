@@ -237,10 +237,13 @@ export function classifiedRootRejection(
   expectedKind: 'file' | 'directory',
 ): PathComponentRejectedError {
   return new PathComponentRejectedError({
-    cause: new TypeError('injected native root refusal'),
+    evidence: {
+      kind: 'non-creating-lookup',
+      stage: 'fsa.root.entry.inspect',
+      cause: new TypeError('injected native root refusal'),
+    },
     canonicalComponent: component,
     expectedKind,
-    stage: 'fsa.root.entry.inspect',
   })
 }
 

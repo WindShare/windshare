@@ -10,6 +10,11 @@ export type FileSystemComponentInspectionStage = Extract<
   | 'fsa.file.entry.inspect'
 >
 
+export type FileSystemComponentCreationStage = Extract<
+  PersistentOutputStage,
+  'fsa.directory.entry.create'
+>
+
 export type FileSystemComponentInspectionMode = 'classify-rejection' | 'diagnostic'
 
 export interface FileSystemComponentInspectionInput {
@@ -21,25 +26,42 @@ export interface FileSystemComponentInspectionInput {
   readonly mode: FileSystemComponentInspectionMode
 }
 
+/**
+ * Both forms of evidence share one property: the browser raised the refusal before WindShare
+ * mutated the destination. Non-creating lookups prove it by construction. Chromium's write-path
+ * policy (which blocks the `.git/hooks` directory) is evaluated before the creation touches the
+ * filesystem, so its SecurityError is equally safe to route through compatible-name repair.
+ */
+export type PathComponentRejectionEvidence =
+  | Readonly<{
+      readonly kind: 'non-creating-lookup'
+      readonly stage: FileSystemComponentInspectionStage
+      readonly cause: TypeError
+    }>
+  | Readonly<{
+      readonly kind: 'write-policy-refusal'
+      readonly stage: FileSystemComponentCreationStage
+      readonly cause: DOMException
+    }>
+
 export class PathComponentRejectedError extends Error {
   readonly canonicalComponent: string
   readonly expectedKind: FileSystemComponentKind
-  readonly stage: FileSystemComponentInspectionStage
+  readonly evidenceKind: PathComponentRejectionEvidence['kind']
+  readonly stage: PathComponentRejectionEvidence['stage']
   readonly preMutation = true as const
 
   constructor(input: Readonly<{
-    readonly cause: TypeError
+    readonly evidence: PathComponentRejectionEvidence
     readonly canonicalComponent: string
     readonly expectedKind: FileSystemComponentKind
-    readonly stage: FileSystemComponentInspectionStage
   }>) {
-    super('The browser rejected a non-creating lookup for a canonical path component', {
-      cause: input.cause,
-    })
+    super(rejectionMessage(input.evidence.kind), { cause: input.evidence.cause })
     this.name = 'PathComponentRejectedError'
     this.canonicalComponent = input.canonicalComponent
     this.expectedKind = input.expectedKind
-    this.stage = input.stage
+    this.evidenceKind = input.evidence.kind
+    this.stage = input.evidence.stage
   }
 }
 
@@ -61,10 +83,9 @@ export async function inspectFileSystemComponent(
     if (error instanceof TypeError) {
       if (input.mode === 'diagnostic') throw error
       throw new PathComponentRejectedError({
-        cause: error,
+        evidence: { kind: 'non-creating-lookup', stage: input.stage, cause: error },
         canonicalComponent: component,
         expectedKind: input.expectedKind,
-        stage: input.stage,
       })
     }
     if (errorNamed(error, 'TypeMismatchError')) return 'occupied'
@@ -80,6 +101,38 @@ export async function inspectFileSystemComponent(
     if (errorNamed(error, 'TypeMismatchError')) return 'occupied'
     throw error
   }
+}
+
+/**
+ * Chromium enforces its write-path policy only when a directory is created; programmatic file
+ * creation and writes are unrestricted. A SecurityError from an admitted directory create is
+ * therefore a name refusal, not a permission or ownership failure, and compatible names may absorb
+ * it exactly as they absorb a refused lookup.
+ */
+export function classifyDirectoryCreationRefusal(
+  cause: unknown,
+  canonicalComponent: string,
+): PathComponentRejectedError | undefined {
+  const component = requireCanonicalComponent(canonicalComponent)
+  if (!(cause instanceof DOMException) || cause.name !== 'SecurityError') return undefined
+  return new PathComponentRejectedError({
+    evidence: { kind: 'write-policy-refusal', stage: 'fsa.directory.entry.create', cause },
+    canonicalComponent: component,
+    expectedKind: 'directory',
+  })
+}
+
+/** The lookup stage a descendant repair probes with, independent of how the refusal surfaced. */
+export function descendantInspectionStage(
+  kind: FileSystemComponentKind,
+): Extract<FileSystemComponentInspectionStage, 'fsa.directory.entry.inspect' | 'fsa.file.entry.inspect'> {
+  return kind === 'directory' ? 'fsa.directory.entry.inspect' : 'fsa.file.entry.inspect'
+}
+
+function rejectionMessage(kind: PathComponentRejectionEvidence['kind']): string {
+  return kind === 'non-creating-lookup'
+    ? 'The browser rejected a non-creating lookup for a canonical path component'
+    : 'The browser refused to create a canonical path component under its write-path policy'
 }
 
 function requireCanonicalComponent(component: string): string {
