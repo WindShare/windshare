@@ -4,7 +4,7 @@ import {
   type OutputDiagnosticsPorts,
 } from '../../diagnostics'
 import { snapshotIdentity } from '../../../transfer/encoding/canonical'
-import { reduceReceiveLifecycle, type LifecycleEvent } from '../lifecycle'
+import { reduceReceiveLifecycle, type LifecycleEvent } from '../../../transfer/lifecycle/reducer'
 import type { ReceiveOperationRepository } from '../repository'
 import { decodeStoredReceiveLifecycleState } from '../state-codec'
 import type { ReceiveLifecycleState } from '../../../transfer/lifecycle/state'

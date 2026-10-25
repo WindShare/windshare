@@ -1,3 +1,4 @@
+import { commitOutputTransaction } from '../../../persistence/transaction'
 import {
   INDEXEDDB_BY_OPERATION_INDEX,
   INDEXEDDB_DIRECT_ZIP_CANDIDATE_STORE,
@@ -321,36 +322,36 @@ export class IndexedDbDirectZipCheckpointTransactions {
       fence.leaseId,
       cut.recoveryGate,
     )
-    const transaction = this.#storage.database.transaction([
-      INDEXEDDB_DIRECT_ZIP_CANDIDATE_STORE,
-      INDEXEDDB_DIRECT_ZIP_STATE_STORE,
-      INDEXEDDB_RECEIVE_RECORD_STORE,
-      INDEXEDDB_RECEIVE_LEASE_STORE,
-    ], 'readwrite')
     try {
-      await this.#storage.assertFence(transaction, fence, expectedState)
-      const candidateStore = transaction.objectStore(INDEXEDDB_DIRECT_ZIP_CANDIDATE_STORE)
-      const candidateCount = await requestResult(candidateStore.index(INDEXEDDB_BY_OPERATION_INDEX)
-        .count(IDBKeyRange.only(fence.operationId)))
-      const candidateValue = candidate === undefined
-        ? undefined
-        : await requestResult<unknown>(candidateStore.get(candidate.id))
-      if ((candidate === undefined && candidateCount !== 0) ||
-          (candidate !== undefined &&
-           (candidateCount !== 1 || !sameCandidateRow(candidateValue, candidate)))) {
-        throw new DirectZipJournalConcurrencyError('Direct ZIP recovery candidate changed')
-      }
-      const storedLifecycle = await requestResult<unknown>(transaction
-        .objectStore(INDEXEDDB_RECEIVE_RECORD_STORE).get(lifecycleRecord.id))
-      if (!samePersistedRecordRow(storedLifecycle, currentLifecycleRecord)) {
-        throw new DirectZipJournalConcurrencyError('Direct ZIP lifecycle authority changed')
-      }
-      transaction.objectStore(INDEXEDDB_DIRECT_ZIP_STATE_STORE).put(state)
-      transaction.objectStore(INDEXEDDB_RECEIVE_RECORD_STORE).put(lifecycleRecord)
-      // Explicit owned-target cleanup retires its pending write authority in the
-      // same cut as the cleanup receipt, so startup cannot revive a deleted ZIP.
-      applyRecoveryCandidateDisposition(candidateStore, lifecycle.kind, candidate)
-      await transactionCompletion(transaction)
+      await commitOutputTransaction(this.#storage.database, [
+        INDEXEDDB_DIRECT_ZIP_CANDIDATE_STORE,
+        INDEXEDDB_DIRECT_ZIP_STATE_STORE,
+        INDEXEDDB_RECEIVE_RECORD_STORE,
+        INDEXEDDB_RECEIVE_LEASE_STORE,
+      ], async transaction => {
+        await this.#storage.assertFence(transaction, fence, expectedState)
+        const candidateStore = transaction.objectStore(INDEXEDDB_DIRECT_ZIP_CANDIDATE_STORE)
+        const candidateCount = await requestResult(candidateStore.index(INDEXEDDB_BY_OPERATION_INDEX)
+          .count(IDBKeyRange.only(fence.operationId)))
+        const candidateValue = candidate === undefined
+          ? undefined
+          : await requestResult<unknown>(candidateStore.get(candidate.id))
+        if ((candidate === undefined && candidateCount !== 0) ||
+            (candidate !== undefined &&
+             (candidateCount !== 1 || !sameCandidateRow(candidateValue, candidate)))) {
+          throw new DirectZipJournalConcurrencyError('Direct ZIP recovery candidate changed')
+        }
+        const storedLifecycle = await requestResult<unknown>(transaction
+          .objectStore(INDEXEDDB_RECEIVE_RECORD_STORE).get(lifecycleRecord.id))
+        if (!samePersistedRecordRow(storedLifecycle, currentLifecycleRecord)) {
+          throw new DirectZipJournalConcurrencyError('Direct ZIP lifecycle authority changed')
+        }
+        transaction.objectStore(INDEXEDDB_DIRECT_ZIP_STATE_STORE).put(state)
+        transaction.objectStore(INDEXEDDB_RECEIVE_RECORD_STORE).put(lifecycleRecord)
+        // Explicit owned-target cleanup retires its pending write authority in the
+        // same cut as the cleanup receipt, so startup cannot revive a deleted ZIP.
+        applyRecoveryCandidateDisposition(candidateStore, lifecycle.kind, candidate)
+      })
       this.#storage.emit({
         name: 'direct_zip.journal.recovery_lifecycle_committed',
         operation_id: fence.operationId,
@@ -361,7 +362,6 @@ export class IndexedDbDirectZipCheckpointTransactions {
       })
     } catch (error) {
       this.#storage.failed(fence.operationId, fence.leaseId, candidate?.candidateId, error)
-      abortQuietly(transaction)
       throw error
     }
   }

@@ -373,7 +373,6 @@ test('compatible-name ledger keeps pair ownership and contiguous commits across 
       primaryToken: 'aaaaaa',
       authorityRef,
       root: { logicalName: 'root', physicalName: 'root' },
-      templateId: 'windows-powershell-v1',
       pairPlacement: 'inside-logical-root' as const,
       pair: {
         token: 'aaaaaa',
@@ -513,6 +512,10 @@ test('compatible-name ledger keeps pair ownership and contiguous commits across 
       repairSummary: model.compatibleNameRepairSummary(summaryInput('completed', false)),
     })
     const pendingWasCleared = await ledger.readPendingTerminalOutcome(operation) === undefined
+    const reportOnlySummary = model.compatibleNameRepairSummary({
+      ...summaryInput('completed', false), pairDisplayNames: { sidecar: 'restore.windshare-aaaaaa.data' },
+    })
+    await ledger.persistRepairSummary(operation, reportOnlySummary)
     let terminalSummaryImmutable = false
     try {
       await ledger.persistRepairSummary(
@@ -559,7 +562,7 @@ test('compatible-name ledger keeps pair ownership and contiguous commits across 
           ...bootstrapFor(atomicOperation),
           header: model.compatibleNameOperationHeaderV1({
             ...headerInput(atomicOperation),
-            templateId: 'changed-template-v1',
+            authorityRef: pairScriptObjectId,
           }),
         }),
       })
@@ -592,6 +595,7 @@ test('compatible-name ledger keeps pair ownership and contiguous commits across 
       pendingWasCleared,
       terminalSummaryCount: snapshot?.header.repairSummary?.committedCount,
       terminalSummaryImmutable,
+      reportOnlyAfterReopen: snapshot?.header.repairSummary?.pairDisplayNames.script === undefined,
     }
 
     function deleteDatabase(targetName: string): Promise<void> {
@@ -642,6 +646,7 @@ test('compatible-name ledger keeps pair ownership and contiguous commits across 
     pendingWasCleared: true,
     terminalSummaryCount: 2,
     terminalSummaryImmutable: true,
+    reportOnlyAfterReopen: true,
   })
 })
 
@@ -674,7 +679,6 @@ test('compatible-name ledger scopes mapping and pair claims to physical siblings
         primaryToken: 'aaaaaa',
         authorityRef,
         root: { logicalName: 'root', physicalName: 'root' },
-        templateId: 'windows-powershell-v1',
         pairPlacement: 'inside-logical-root',
         pair: {
           token: 'aaaaaa',

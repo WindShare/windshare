@@ -1,7 +1,7 @@
 import { memoryFSAIdentities } from './fsa-mutation-lock-fixture'
 import { describe, expect, it } from 'vitest'
 
-import { reduceReceiveLifecycle } from '../../src/output/workspace/lifecycle'
+import { reduceReceiveLifecycle } from '../../src/transfer/lifecycle/reducer'
 import { decodeStoredReceiveLifecycleState } from '../../src/output/workspace/state-codec'
 import { directoryId } from '../../src/catalog/model'
 import {

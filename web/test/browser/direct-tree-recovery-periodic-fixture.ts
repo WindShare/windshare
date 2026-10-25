@@ -29,7 +29,7 @@ import { durableCheckpointNamespaceIdentity } from '../../src/output/persistence
 import { scanAllFSAFileCheckpoints } from '../../src/output/file-system-access/checkpoint-repository'
 import { createAutomaticCheckpointAdmissionAuthority } from '../../src/output/persistent-tree/automatic-checkpoint-admission'
 import { createPreservingWriterCapacityAuthority } from '../../src/output/persistent-tree/preserving-writer-capacity'
-import { reduceReceiveLifecycle } from '../../src/output/workspace/lifecycle'
+import { reduceReceiveLifecycle } from '../../src/transfer/lifecycle/reducer'
 import { recoverAbandonedOperation } from '../../src/output/workspace/recovery'
 import { decodeStoredReceiveLifecycleState } from '../../src/output/workspace/state-codec'
 import {

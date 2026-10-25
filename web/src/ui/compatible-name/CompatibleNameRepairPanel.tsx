@@ -22,7 +22,7 @@ export function CompatibleNameRepairPanel(props: {
       {repair.visibility === 'notice' && <p>{repair.actionDescription}</p>}
       {repair.visibility === 'secondary' && (
           <details>
-            <summary>Restore names after stopping</summary>
+            <summary>{repair.scriptName === null ? 'Original name mappings' : 'Restore names after stopping'}</summary>
             <RestorationAction {...props} repair={repair} />
           </details>
         )}
@@ -64,8 +64,8 @@ function RestorationAction(props: {
           <p>{repair.omittedLogicalPathCount} more replacement(s) are not shown.</p>
         )}
         <dl>
-          <dt>Restoration script</dt><dd><code>{repair.scriptName}</code></dd>
-          <dt>Restoration sidecar</dt><dd><code>{repair.sidecarName}</code></dd>
+          {repair.scriptName !== null && <><dt>Restoration script</dt><dd><code>{repair.scriptName}</code></dd></>}
+          <dt>Name mapping report</dt><dd><code>{repair.sidecarName}</code></dd>
           <dt>Location</dt><dd>{repair.placementLabel}</dd>
         </dl>
       </details>

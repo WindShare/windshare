@@ -1,3 +1,4 @@
+import { receiveInterruptionControls } from '../../../transfer/lifecycle/interruption'
 import { IndexedDbReceiveOperationRepository } from '../../../output/browser/indexeddb-repository'
 import { persistPortableDownloadHistory } from '../../../output/resume/operation-history'
 import type { ReceiveOperationDisplay } from '../../../output/workspace/operation-display'
@@ -18,7 +19,7 @@ import {
 } from '../../../output/portable/preparation'
 import type { ResolvedArtifactAction } from '../../../output/planning'
 import { IndexedDbZipCentralDirectorySpool } from '../../../output/streams/zip-spool'
-import { reduceReceiveLifecycle, type LifecycleEvent } from '../../../output/workspace/lifecycle'
+import { reduceReceiveLifecycle, type LifecycleEvent } from '../../../transfer/lifecycle/reducer'
 import { initialReceiveLifecycleState, type ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import { ReceiveLifecycleNotifications, type ReceiveLifecycleListener } from '../../../output/workspace/lifecycle/observation'
 import {
@@ -31,13 +32,11 @@ import {
   type ReceiveIntent,
 } from '../../../transfer/intent'
 import {
-  TransferPauseRequestedError,
   type ExactPreparationEvidence,
   type ExecutionAdmissionResult,
   type PortableExecution,
   type PlanExecutionAuthority,
 } from '../../../transfer/output/session'
-import type { ActiveReceiveControl } from '../../receive/actions'
 import type {
   BoundReceiveOperation,
   LifecycleMutation,
@@ -76,7 +75,7 @@ PortableExecutionLifecycleAuthority,
 ExecutionAdmissionLifecycle {
   readonly intent: ReceiveIntent
   readonly #lifecycleNotifications = new ReceiveLifecycleNotifications()
-  readonly activeControls = Object.freeze(['stop'] as const)
+  readonly activeControls = receiveInterruptionControls('portable-handoff')
   readonly initialWorkspaceUsage = null
   readonly #leaseId = createOperationID()
   readonly #attemptId = createOperationID()
@@ -146,10 +145,6 @@ ExecutionAdmissionLifecycle {
     return this.#attemptId
   }
 
-  interrupt(control: ActiveReceiveControl, transfer: AbortController): void {
-    if (control !== 'stop') throw unavailableRoute()
-    transfer.abort(new TransferPauseRequestedError('Portable receive stopped by receiver'))
-  }
 
   startLifecycleAction(): LifecycleMutation {
     throw unavailableRoute()

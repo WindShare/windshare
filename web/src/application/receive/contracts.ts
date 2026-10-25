@@ -79,9 +79,6 @@ export interface BoundReceiveOperation {
    */
   bindOutputFailures?(failures: OutputFailureSinks | undefined): OutputFailureBindingLease
 
-  /** The implementation translates the product control into its plan-specific stable cut. */
-  interrupt(control: ActiveReceiveControl, transfer: AbortController): void
-
   /** Picker-bearing publication retries must start inside this synchronous call. */
   startLifecycleAction(
     action: Exclude<LifecycleUserAction, ActiveReceiveControl>,

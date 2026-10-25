@@ -1,3 +1,4 @@
+import type { ContentReplica } from '../../transfer/output/content-availability'
 import type { FinalFileCheckpointProof } from '../persistence/journal'
 import type { PersistentFileTransactionPort } from '../persistent-tree/contracts'
 import { PersistentPreservingWriterOpenError } from '../persistent-tree/recovery'
@@ -99,6 +100,7 @@ export class PersistentOutputTransaction implements OutputFileTransaction {
         this.#ownership,
         this.#revision,
         result.durableRanges,
+        this.#transaction.contentReplica,
       ),
     })
   }
@@ -131,6 +133,7 @@ export class PersistentOutputTransaction implements OutputFileTransaction {
       this.#ownership,
       this.#revision,
       await this.#transaction.pause(reason),
+      this.#transaction.contentReplica,
     )
     this.#settle()
     return durable
@@ -153,8 +156,9 @@ export function verifiedPersistentRanges(
   ownership: OutputFileOwnership,
   revision: OpenedOutputRevision,
   ranges: readonly Readonly<{ start: bigint; end: bigint }>[],
+  replica: ContentReplica | null,
 ): VerifiedDurableRanges {
-  return new VerifiedDurableRanges(ownership, revision, revision.exactSize, ranges)
+  return new VerifiedDurableRanges(ownership, revision, revision.exactSize, ranges, replica)
 }
 
 function requireMatchingFinalProof(

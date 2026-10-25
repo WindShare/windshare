@@ -8,7 +8,7 @@ import {
 import { OriginPrivateWorkspaceBudgetOwnershipError } from '../../origin-private/admission-authority'
 import { OriginPrivateWorkspaceRoot } from '../../origin-private/workspace-root'
 import { TargetOwnershipUnknownError } from '../../persistent-tree/errors'
-import { reduceReceiveLifecycle } from '../../workspace/lifecycle'
+import { reduceReceiveLifecycle } from '../../../transfer/lifecycle/reducer'
 import { recoverAbandonedOperation } from '../../workspace/recovery'
 import {
   RECEIVE_RECORD_RECEIPT,

@@ -143,7 +143,6 @@ export class PhysicalPathResolver {
     if (header.operationId !== this.operationId ||
         header.primaryToken !== this.#header.primaryToken ||
         header.authorityRef !== this.#header.authorityRef ||
-        header.templateId !== this.#header.templateId ||
         header.pairPlacement !== this.#header.pairPlacement ||
         header.root.logicalName !== this.#header.root.logicalName ||
         header.root.physicalName !== this.#header.root.physicalName ||
@@ -156,7 +155,7 @@ export class PhysicalPathResolver {
         header.pair.sidecar.physicalName !== this.#header.pair.sidecar.physicalName) {
       throw new TypeError('compatible-name resolver header identity changed')
     }
-    const activationRank = { prepared: 0, 'pair-ready': 1, active: 2 } as const
+    const activationRank = { prepared: 0, 'report-ready': 1, active: 2 } as const
     if (activationRank[header.activationState] < activationRank[this.#header.activationState]) {
       throw new TypeError('compatible-name resolver activation state regressed')
     }

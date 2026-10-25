@@ -22,6 +22,7 @@ export async function openDirectDeliveryFile(
       ...(transaction.checkpointObjectId === undefined ? {} : { checkpointObjectId: transaction.checkpointObjectId }),
       initialDurableRanges: transaction.initialDurableRanges,
       get verifiedRanges() { return transaction.verifiedRanges },
+      get contentReplica() { return transaction.contentReplica },
       writeRange: transaction.writeRange.bind(transaction),
       automaticCheckpoint: transaction.automaticCheckpoint.bind(transaction),
       checkpoint: transaction.checkpoint.bind(transaction),

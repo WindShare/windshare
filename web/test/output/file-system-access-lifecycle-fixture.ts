@@ -40,6 +40,7 @@ import { memoryCheckpointFactory } from './fsa-memory-semantic-repository'
 import type {
   CompatibleNameActivationLedger,
   CompatibleNameRootRepairFactory,
+  CompatibleNameRootRepairPreparationOptions,
 } from '../../src/output/file-system-access/compatible-name/coordinator'
 import {
   compatibleNameMappingV1,
@@ -74,7 +75,7 @@ import {
   type ReceiveOperationRepository,
   type ReceiveOperationTransition,
 } from '../../src/output/workspace/repository'
-import { reduceReceiveLifecycle } from '../../src/output/workspace/lifecycle'
+import { reduceReceiveLifecycle } from '../../src/transfer/lifecycle/reducer'
 import { decodeStoredReceiveLifecycleState } from '../../src/output/workspace/state-codec'
 import { initialReceiveLifecycleState, type ReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
 import {
@@ -352,12 +353,11 @@ export class MemoryCompatibleNameLedger implements CompatibleNameActivationLedge
       ...header.pair,
       [input.pairKind]: Object.freeze({ ...identity, ownershipState: 'owned' as const }),
     })
-    this.header = compatibleNameOperationHeaderV1({
-      ...header,
-      pair,
-      activationState: pair.script.ownershipState === 'owned' &&
-        pair.sidecar.ownershipState === 'owned' ? 'pair-ready' : 'prepared',
-    })
+    let activationState: CompatibleNameOperationHeaderV1['activationState'] = 'prepared'
+    if (pair.sidecar.ownershipState === 'owned') {
+      activationState = header.activationState === 'active' ? 'active' : 'report-ready'
+    }
+    this.header = compatibleNameOperationHeaderV1({ ...header, pair, activationState })
     return this.header
   }
 
@@ -515,6 +515,7 @@ export async function bindTask(input: Readonly<{
   selection?: SelectionSpec
   activate?: boolean
   prepareCompatibleNameRootRepair?: CompatibleNameRootRepairFactory
+  compatibleNamePreparation?: CompatibleNameRootRepairPreparationOptions
   openCompatibleNameLedger?: () => Promise<CompatibleNameActivationLedger>
   stageDiagnostics?: PersistentOutputStageDiagnostics
   diagnostics?: OutputDiagnosticsPorts
@@ -570,7 +571,7 @@ export async function bindTask(input: Readonly<{
     ...(input.openCompatibleNameLedger === undefined
       ? {}
       : {
-          compatibleNamePreparation: {
+          compatibleNamePreparation: input.compatibleNamePreparation ?? {
             platform: 'windows',
             templateProvider: {
               select: () => Object.freeze({

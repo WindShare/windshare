@@ -1,3 +1,4 @@
+import { contentIsComplete } from '../../../transfer/output/content-availability'
 import { snapshotPortableCatalogPath } from '../../../catalog/path-policy'
 import { receiveContentWarningFields, type ReceiveContentWarning } from '../../../transfer/lifecycle/content-warning'
 import { validateZipEntryPlan, type ZipEntryPlanV1 } from '../../zip-layout/policy'
@@ -137,12 +138,7 @@ export function snapshotTaskEntry(value: TaskEntry): TaskEntry {
 export function taskEntryComplete(entry: TaskEntry): boolean {
   if (entry.revisionFailure !== undefined) return false
   const size = entry.revision?.exactSize ?? 0n
-  let end = 0n
-  for (const range of entry.ranges) {
-    if (range.start !== end) return false
-    end = range.end
-  }
-  return end === size
+  return contentIsComplete(size, entry.ranges)
 }
 
 function uint64(value: bigint, label: string): void {

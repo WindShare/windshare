@@ -1,3 +1,4 @@
+import { contentReplica } from './content-replica-fixture'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { FinalFileCheckpointProof } from '../../src/output/persistence/journal'
@@ -714,6 +715,7 @@ class PersistentMaterializationFixture implements PersistentMaterializationPort 
     return Object.freeze({
       revision,
       ownedObjectId,
+      contentReplica: contentReplica(),
       initialDurableRanges: Object.freeze([...checkpointRanges]),
       verifiedRanges: checkpointRanges,
       writeRange: async (offset: bigint, data: Uint8Array, signal?: AbortSignal) => {

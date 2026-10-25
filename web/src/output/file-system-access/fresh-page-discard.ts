@@ -23,7 +23,7 @@ import {
   snapshotIdentity,
   type CanonicalBytes,
 } from '../../transfer/encoding/canonical'
-import { reduceReceiveLifecycle, type LifecycleEvent } from '../workspace/lifecycle'
+import { reduceReceiveLifecycle, type LifecycleEvent } from '../../transfer/lifecycle/reducer'
 import {
   RECEIVE_RECORD_CLEANUP,
   RECEIVE_RECORD_RECEIPT,

@@ -128,7 +128,8 @@ function routeConsequences(offered: OfferedArtifactChoice,
       ]
     case 'workspace-then-publish':
       return [
-        'Retains received content in browser storage. Saving writes an additional exported copy, so allow space for both.',
+        'Suited to long-running downloads: browser storage keeps recoverable progress while receiving.',
+        'Saving the finished result copies it to your destination. Allow time for the copy and enough space for both the retained result and the export.',
         'Saves progress regularly during receiving. Wait for Pause to finish before leaving; after an unexpected exit, resume uses the last verified checkpoint.',
         offered.route.publicationTarget.kind === 'browser-handoff'
           ? 'The browser download starts automatically when allowed. If it does not start, choose Save; the retained copy stays available.'

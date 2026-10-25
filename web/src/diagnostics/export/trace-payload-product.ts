@@ -459,7 +459,8 @@ export function validateReceive(payload: UnknownRecord): void {
 }
 
 export function validateLifecycleAction(payload: UnknownRecord): void {
-  exactKeys(payload, ['transition', 'action'], ['lifecycle_state'],
+  exactKeys(payload, ['transition', 'action'], ['lifecycle_state', 'operation_id', 'generation', 'artifact_id',
+    'checkpoint_id', 'checkpoint_generation', 'task_settlement', 'retention', 'cleanup'],
     'lifecycle_action_transition payload')
   member(payload.transition, ['started', 'completed', 'failed', 'excluded'],
     'lifecycle action transition')
@@ -470,6 +471,17 @@ export function validateLifecycleAction(payload: UnknownRecord): void {
   if (payload.lifecycle_state !== undefined) {
     member(payload.lifecycle_state, LIFECYCLE_STATES, 'lifecycle state')
   }
+  if (payload.operation_id !== undefined) canonicalIdentity(payload.operation_id, 'lifecycle operation')
+  for (const key of ['artifact_id', 'checkpoint_id']) {
+    if (payload[key] !== undefined) canonicalDigest(payload[key], key)
+  }
+  for (const key of ['generation', 'checkpoint_generation']) {
+    if (payload[key] !== undefined) decimalUint64(payload[key], key)
+  }
+  if (payload.task_settlement !== undefined) member(payload.task_settlement, ['continuable', 'ended', 'unsettled'], 'task settlement')
+  if (payload.retention !== undefined) member(payload.retention,
+    ['continuation', 'complete_results', 'delivered_results', 'browser_handoff', 'none', 'reconcile'], 'retention')
+  if (payload.cleanup !== undefined) member(payload.cleanup, ['settled', 'retryable'], 'cleanup')
 }
 
 function validateDownloadConnectivity(payload: UnknownRecord): void {

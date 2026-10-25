@@ -587,7 +587,6 @@ function assertCompatibleNameRepairProgression(
     throw new TypeError('compatible-name repair count cannot move backward')
   }
   if (next.placement !== current.placement ||
-      next.pairDisplayNames.script !== current.pairDisplayNames.script ||
       next.pairDisplayNames.sidecar !== current.pairDisplayNames.sidecar) {
     throw new TypeError('compatible-name restoration identity cannot change')
   }

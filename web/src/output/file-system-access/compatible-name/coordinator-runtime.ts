@@ -1,3 +1,4 @@
+import { selectRestorationTemplate, publishRestorationScript } from './restoration-publication'
 import { snapshotMaterializationRootRelativePath } from '../../../transfer/job/coordinate/direct-tree'
 import {
   descendantInspectionStage,
@@ -33,7 +34,6 @@ import {
   type CompatiblePhysicalChild,
 } from './resolver'
 import {
-  provenRestorationTemplateProvider,
   type RestorationTemplate,
 } from './restoration-template'
 import {
@@ -77,20 +77,21 @@ export class CompatibleNameCoordinator {
   readonly resolver: PhysicalPathResolver
   readonly repairProjection: CompatibleNameRepairProjectionSource
   readonly #ledger: CompatibleNameActivationLedger
-  readonly #template: RestorationTemplate
+  readonly #template: RestorationTemplate | undefined
   readonly #pairHandles: FSACompatibleNamePairHandleRepository
   readonly #rootMapping: CompatibleNameMappingV1 | undefined
   readonly #projection = new DurableCompatibleNameRepairProjection()
   readonly #committedMappings = new Map<number, CompatibleNameMappingV1>()
   #projector: CompatibleNameProjector | undefined
   #repairSummary: CompatibleNameRepairSummary | undefined
-  #pairReadyVerified = false
+  #reportReadyVerified = false
+  #scriptAvailable = false
   #closed = false
 
   private constructor(input: Readonly<{
     ledger: CompatibleNameActivationLedger
     snapshot: CompatibleNameOperationSnapshotV1
-    template: RestorationTemplate
+    template: RestorationTemplate | undefined
     pairHandles: FSACompatibleNamePairHandleRepository
   }>) {
     this.#ledger = input.ledger
@@ -129,7 +130,7 @@ export class CompatibleNameCoordinator {
       })
       await options.mutations.run(
         'create-file',
-        () => coordinator.ensurePairReady(options.prepared.parent),
+        () => coordinator.ensureRecoveryReport(options.prepared.parent),
       )
       return coordinator
     } catch (error) {
@@ -141,7 +142,7 @@ export class CompatibleNameCoordinator {
   static reopen(input: Readonly<{
     ledger: CompatibleNameActivationLedger
     snapshot: CompatibleNameOperationSnapshotV1
-    template: RestorationTemplate
+    template: RestorationTemplate | undefined
     pairHandles: FSACompatibleNamePairHandleRepository
   }>): CompatibleNameCoordinator {
     return new CompatibleNameCoordinator(input)
@@ -156,8 +157,7 @@ export class CompatibleNameCoordinator {
     preparation: CompatibleNameRootRepairPreparationOptions
   }>): Promise<CompatibleNameCoordinator> {
     assertDescendantRejection(input.rejected)
-    const template = (input.preparation.templateProvider ?? provenRestorationTemplateProvider)
-      .select(input.preparation.platform)
+    const template = selectRestorationTemplate(input.preparation)
     const primaryToken = generateCompatibleNamePrimaryToken(input.preparation.randomBits)
     const randomOwnedObjectId = input.preparation.randomOwnedObjectId ?? createOwnedObjectId
     const claims = new WeakMap<FileSystemDirectoryHandle, Set<string>>()
@@ -185,7 +185,6 @@ export class CompatibleNameCoordinator {
         logicalName: input.binding.reservation.logicalReservedName,
         physicalName: input.binding.reservation.physicalName,
       },
-      templateId: template.id,
       pairPlacement: 'inside-logical-root',
       pair: {
         token: pair.token,
@@ -215,7 +214,7 @@ export class CompatibleNameCoordinator {
         pairHandles: input.pairHandles,
       })
       // Descendant activation is entered only through the caller's ordered multi-parent scope.
-      await coordinator.ensurePairReady(input.rejected.pairParent)
+      await coordinator.ensureRecoveryReport(input.rejected.pairParent)
       return coordinator
     } catch (error) {
       ledger.close()
@@ -307,30 +306,26 @@ export class CompatibleNameCoordinator {
     return claimed.physicalComponent
   }
 
-  async ensurePairReady(parent: FileSystemDirectoryHandle): Promise<void> {
+  async ensureRecoveryReport(parent: FileSystemDirectoryHandle): Promise<void> {
     this.#assertOpen()
-    if (this.#pairReadyVerified) return
+    if (this.#reportReadyVerified) return
     const header = this.resolver.header
-    const pairWasAlreadyOwned = header.pair.script.ownershipState === 'owned' &&
-      header.pair.sidecar.ownershipState === 'owned'
+    const reportWasAlreadyOwned = header.pair.sidecar.ownershipState === 'owned'
     const initialSidecarBytes = TEXT_ENCODER.encode(
       encodeCompatibleNameSidecarHeader({
         operationId: header.operationId,
         placement: compatibleNameSidecarPlacement(header.pairPlacement),
       }) + encodeCompatibleNameSidecarFooter({ committedCount: 0, state: 'active' }),
     )
-    await this.#ensureOwnedPairFile(
-      parent,
-      'script',
-      TEXT_ENCODER.encode(this.#template.source),
-    )
     await this.#ensureOwnedPairFile(parent, 'sidecar', initialSidecarBytes)
-    if (!pairWasAlreadyOwned) {
+    if (!reportWasAlreadyOwned) {
       // A newly prepared pair must be pristine before the first target mutation. On reopen, the
       // ownership-verified projector is the authority that truncates or rebuilds a crash-torn tail.
       await this.#validateReopenableSidecar(await this.#openPairFile(parent, 'sidecar'))
     }
-    this.#pairReadyVerified = true
+    this.#scriptAvailable = await publishRestorationScript(this.#template, source =>
+      this.#ensureOwnedPairFile(parent, 'script', TEXT_ENCODER.encode(source)))
+    this.#reportReadyVerified = true
     if (this.resolver.header.activationState === 'active') await this.#ensureProjector(parent)
   }
 
@@ -443,15 +438,19 @@ export class CompatibleNameCoordinator {
     if (committed.length !== 0) {
       return Object.freeze({ kind: 'not-empty', committedCount: committed.length })
     }
-    await this.ensurePairReady(parent)
+    await this.ensureRecoveryReport(parent)
     const verified = new Set<CompatibleNamePairKind>()
     for (const pairKind of ['sidecar', 'script'] as const) {
+      if (this.resolver.header.pair[pairKind].ownershipState !== 'owned') continue
       const current = await this.#openOwnedPairFile(parent, pairKind)
       if (pairKind === 'script') {
-        if (!equalBytes(await readFileBytes(current), TEXT_ENCODER.encode(this.#template.source))) {
+        const bytes = await readFileBytes(current)
+        // An empty owned placeholder may remain after failed publication. Changed scripts stay intact.
+        if (bytes.length !== 0 && (this.#template === undefined ||
+            !equalBytes(bytes, TEXT_ENCODER.encode(this.#template.source)))) {
           throw new DOMException('Compatible-name script changed before cleanup', 'InvalidStateError')
         }
-      } else {
+      } else if (pairKind === 'sidecar') {
         await this.#validateActiveSidecar(current)
       }
       verified.add(pairKind)
@@ -460,9 +459,7 @@ export class CompatibleNameCoordinator {
     const removedHandleIds: string[] = []
     for (const pairKind of ['sidecar', 'script'] as const) {
       const identity = this.resolver.header.pair[pairKind]
-      if (!verified.has(pairKind)) {
-        throw new DOMException('Compatible-name pair verification was lost', 'InvalidStateError')
-      }
+      if (!verified.has(pairKind)) continue
       await parent.removeEntry(identity.physicalName)
       removedObjectIds.push(identity.ownedObjectId)
       removedHandleIds.push(identity.handleId)
@@ -539,6 +536,11 @@ export class CompatibleNameCoordinator {
       throw new DOMException('A claimed compatible-name restoration pair entry is occupied', 'InvalidStateError')
     }
     const created = await parent.getFileHandle(identity.physicalName, { create: true })
+    if (pairKind === 'script') {
+      this.resolver.adoptHeader(await this.#ledger.recordPairOwnership({
+        operationId: this.resolver.operationId, pairKind, handle: created,
+      }))
+    }
     await replaceAndCloseFile(created, initialBytes)
     const reopened = await this.#openPairFile(parent, pairKind)
     if (!await reopened.isSameEntry(created) ||
@@ -641,7 +643,7 @@ export class CompatibleNameCoordinator {
       committedCount: this.#committedMappings.size,
       logicalPathSample,
       pairDisplayNames: {
-        script: header.pair.script.physicalName,
+        ...(this.#scriptAvailable ? { script: header.pair.script.physicalName } : {}),
         sidecar: header.pair.sidecar.physicalName,
       },
       placement: header.pairPlacement,

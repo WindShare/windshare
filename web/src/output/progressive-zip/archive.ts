@@ -1,3 +1,4 @@
+import { zipMemberCoordinates } from '../zip-layout/member'
 import { SourceRevisionChangedError } from '../persistent-tree/errors'
 import { receiveContentWarningFields, snapshotReceiveContentWarning, type ReceiveContentWarning } from '../../transfer/lifecycle/content-warning'
 import type { NativeObjectIO } from '../origin-private/native-object/contracts'
@@ -166,9 +167,7 @@ export class ProgressiveZipArchive {
         }),
       })
       const plan = planZipEntry(normalized, this.#checkpoint.allocatedLength)
-      const payloadOffset = checkedZipAdd(plan.localHeaderOffset, plan.localHeaderBytes)
-      const descriptorOffset = checkedZipAdd(payloadOffset, plan.exactSize)
-      const endOffset = checkedZipAdd(descriptorOffset, plan.descriptorBytes)
+      const { payloadOffset, descriptorOffset, endOffset } = zipMemberCoordinates(plan)
       const entry: TaskEntry = {
         entryId: input.entryId, kind, path: normalized.path, source: input.source,
         ...(input.revision === undefined ? {} : { revision: input.revision }),
@@ -444,7 +443,7 @@ export class ProgressiveZipArchive {
   #trace(event: string, detail: Readonly<Record<string, string | bigint>>): void {
     try {
       this.#input.trace?.(event, { operationId: this.#checkpoint.object.operationId,
-        objectId: this.#checkpoint.object.objectId, ...detail })
+        objectId: this.#checkpoint.object.objectId, checkpointGeneration: this.#checkpoint.generation, ...detail })
     } catch { /* Diagnostics cannot change a committed checkpoint outcome. */ }
   }
 }

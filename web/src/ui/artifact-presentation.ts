@@ -272,11 +272,11 @@ function artifactChoiceDescription(choice: ArtifactChoice): string {
       return 'Creates the named ZIP in the folder you choose. An incomplete target is visible until closing and verification finish; do not move or modify it meanwhile.'
     }
     return choice.recovery === 'workspace-resumable'
-      ? 'Receives every selected item before asking where to save the complete ZIP. Retained progress can continue later.'
+      ? 'Suited to long-running downloads: browser storage preserves recoverable progress. Saving the complete ZIP takes an additional copy, time, and space for both copies.'
       : 'Hands off one complete ZIP only after every selected item succeeds.'
   }
   return choice.recovery === 'workspace-resumable'
-    ? 'Receives the complete file before saving it. Retained progress can continue later.'
+    ? 'Browser storage preserves recoverable progress for long-running downloads. Saving the complete file takes an additional copy, time, and space for both copies.'
     : 'Saves the complete file without publishing an incomplete result.'
 }
 

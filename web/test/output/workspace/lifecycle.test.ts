@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { encodeBase64Url } from '../../../src/crypto/bytes'
 import { canonicalReceiveLifecycleStateBytes, decodeReceiveLifecycleState } from '../../../src/output/workspace/state-codec'
-import { reduceReceiveLifecycle } from '../../../src/output/workspace/lifecycle'
+import { reduceReceiveLifecycle } from '../../../src/transfer/lifecycle/reducer'
 import {
   initialReceiveLifecycleState,
   nextReceiveLifecycleState,

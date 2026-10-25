@@ -1,3 +1,4 @@
+import { commitOutputTransaction } from '../../persistence/transaction'
 import {
   DEFAULT_OUTPUT_DATABASE_NAME,
   INDEXEDDB_OPFS_TASK_STORE,
@@ -108,14 +109,10 @@ export class IndexedDbTaskCheckpointStore implements TaskCheckpointStore {
     const checkpoint = snapshotTaskCheckpoint(input.checkpoint)
     const entries = input.entries.map(snapshotTaskEntry)
     if (!sameValue(checkpoint.object, this.#object)) throw new TypeError('Task checkpoint escaped object ownership')
-    const transaction = this.#database.transaction([
+    await commitOutputTransaction(this.#database, [
       INDEXEDDB_OPFS_TASK_STORE, INDEXEDDB_OPFS_ENTRY_STORE, INDEXEDDB_OPFS_PATH_STORE, INDEXEDDB_OPFS_DIRECTORY_STORE,
       INDEXEDDB_RECEIVE_LEASE_STORE,
-    ], 'readwrite', { durability: 'strict' })
-    const completion = transactionCompletion(transaction)
-    // Handle an abort immediately, including failures before the caller reaches the await below.
-    completion.catch(() => undefined)
-    try {
+    ], async transaction => {
       if (this.#expectedLeaseId !== undefined) {
         const lease = await requestResult<ReceiveOperationLeaseRecord | undefined>(
           transaction.objectStore(INDEXEDDB_RECEIVE_LEASE_STORE).get(receiveOperationLeaseId(this.#object.operationId)),
@@ -134,12 +131,7 @@ export class IndexedDbTaskCheckpointStore implements TaskCheckpointStore {
       await this.#writePins(transaction, input.directoryPins ?? [])
       await this.#writeEntries(transaction, entries, previous?.checkpoint, checkpoint)
       tasks.put({ id: this.#key, checkpoint } satisfies CheckpointRow)
-      await completion
-    } catch (error) {
-      try { transaction.abort() } catch { /* A failed commit may already have aborted. */ }
-      await completion.catch(() => undefined)
-      throw error
-    }
+    })
   }
 
   async #writePins(transaction: IDBTransaction, pins: readonly TaskDirectoryPin[]): Promise<void> {

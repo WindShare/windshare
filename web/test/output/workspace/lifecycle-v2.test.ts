@@ -6,7 +6,7 @@ import {
   decodeDirectZipRecoveryGateV1,
 } from '../../../src/output/direct-zip/journal/recovery-gate'
 import { canonicalRecord } from '../../../src/transfer/encoding/canonical'
-import { reduceReceiveLifecycle } from '../../../src/output/workspace/lifecycle'
+import { reduceReceiveLifecycle } from '../../../src/transfer/lifecycle/reducer'
 import {
   RECEIVE_STATE_AUTHORIZATION_REQUIRED,
   RECEIVE_STATE_DESTINATION_SPACE_REQUIRED,

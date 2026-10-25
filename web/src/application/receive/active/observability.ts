@@ -1,3 +1,4 @@
+import { receiveLifecycleStorageEvidence } from '../../../transfer/lifecycle/interruption'
 import {
   lifecycleFailureFact,
   type FailureFact,
@@ -151,7 +152,7 @@ export class ActiveReceiveObservability {
       name: 'lifecycle_action_transition'
     }>['transition'],
     action: LifecycleUserAction,
-    lifecycleKind?: ReceiveLifecycleState['kind'],
+    lifecycle?: ReceiveLifecycleState,
   ): void {
     const observer = this.#traceSource?.current
     if (observer === undefined) return
@@ -160,7 +161,7 @@ export class ActiveReceiveObservability {
         name: 'lifecycle_action_transition',
         transition,
         action,
-        ...(lifecycleKind === undefined ? {} : { lifecycleKind }),
+        ...(lifecycle === undefined ? {} : receiveLifecycleStorageEvidence(lifecycle)),
       }))
     } catch {
       // Detailed tracing is passive and cannot acquire lifecycle authority.

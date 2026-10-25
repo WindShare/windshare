@@ -1,4 +1,5 @@
 import { ByteRangeSet, byteRange } from '../../content/geometry'
+import { assertContentAvailabilityAdvance, sameContentRevision } from './content-availability'
 import {
   snapshotOpenedOutputRevision,
   MAXIMUM_VERIFIED_DURABLE_RANGES,
@@ -15,7 +16,6 @@ import type {
   OutputFileTransaction,
   OutputSession,
   OutputSessionIdentity,
-  OutputSourceIdentity,
 } from './session'
 
 export interface BoundOutputFileTransaction {
@@ -36,7 +36,7 @@ export function bindOutputFileTransaction(
   try {
     const transaction = ownOutputFileTransaction(begun)
     const revision = snapshotOpenedOutputRevision(begun.revision)
-    if (!sameOutputSource(revision, file.source) || revision.exactSize !== file.exactSize) {
+    if (!sameContentRevision(revision, file.source) || revision.exactSize !== file.exactSize) {
       throw new OutputCheckpointContractError(
         'output transaction opened a different authenticated source revision',
       )
@@ -195,6 +195,7 @@ class SourceBoundOutputTransaction implements OutputFileTransaction {
         'output checkpoint does not equal prior durability plus every accepted pending write',
       )
     }
+    assertContentAvailabilityAdvance(this.#durableRanges.availability, checkpoint.availability)
     this.#durableRanges = checkpoint
     this.#pendingRanges = new ByteRangeSet(this.#file.exactSize, [])
     return Object.freeze({ kind: 'advanced', durable: checkpoint })
@@ -257,6 +258,7 @@ class SourceBoundOutputTransaction implements OutputFileTransaction {
           'output pause did not return the exact forced durable cut',
         )
       }
+      assertContentAvailabilityAdvance(this.#durableRanges.availability, durable.availability)
       this.#durableRanges = durable
       this.#pendingRanges = new ByteRangeSet(this.#file.exactSize, [])
       this.#state = 'paused'
@@ -353,7 +355,7 @@ function requireOutputBinding(
   ownership?: OutputFileOwnership,
 ): VerifiedDurableRanges {
   if (!(durableRanges instanceof VerifiedDurableRanges) ||
-      !sameOutputSource(durableRanges.source, file.source) ||
+      !sameContentRevision(durableRanges.source, file.source) ||
       durableRanges.fileSize !== file.exactSize ||
       durableRanges.ownership.backend !== session.backend ||
       durableRanges.ownership.outputSessionId !== session.outputSessionId ||
@@ -373,7 +375,7 @@ function requireFinalBinding(
   ownership: OutputFileOwnership,
 ): VerifiedFinalOutputFile {
   if (!(proof instanceof VerifiedFinalOutputFile) ||
-      !sameOutputSource(proof.source, file.source) ||
+      !sameContentRevision(proof.source, file.source) ||
       proof.fileSize !== file.exactSize ||
       proof.ownership.backend !== session.backend ||
       proof.ownership.outputSessionId !== session.outputSessionId ||
@@ -403,15 +405,6 @@ function snapshotAcceptedRanges(fileSize: bigint, ranges: readonly import('../..
 
 function hasFunction(value: object, property: string): boolean {
   return typeof Reflect.get(value, property) === 'function'
-}
-
-function sameOutputSource(
-  left: OutputSourceIdentity,
-  right: OutputSourceIdentity,
-): boolean {
-  return left.shareInstance === right.shareInstance &&
-    left.fileId === right.fileId &&
-    left.fileRevision === right.fileRevision
 }
 
 function sameOutputOwnership(

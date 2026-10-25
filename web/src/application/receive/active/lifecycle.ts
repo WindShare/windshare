@@ -1,3 +1,4 @@
+import { interruptReceive } from './interruption'
 import { availableReceiveActions } from '../policy'
 import type { PresentationExclusionReason } from '../../../diagnostics/incident'
 import type { OutputFailureBindingLease } from '../../../output/diagnostics'
@@ -101,7 +102,7 @@ export class ActiveReceiveLifecycle {
         : { outputLease: active.runtime.bindOutputFailures(attempt.outputFailures) }),
     })
     this.#pending = pending
-    this.#observability.emitLifecycleTrace('started', action)
+    this.#observability.emitLifecycleTrace('started', action, lifecycle)
 
     if (action === 'pause' || action === 'stop') {
       this.#interruptReceive(active, action, pending)
@@ -185,7 +186,7 @@ export class ActiveReceiveLifecycle {
     this.#state.updateActiveControls(Object.freeze([]))
     try {
       active.settlementWait.begin(control)
-      active.runtime.interrupt(control, transfer)
+      interruptReceive(active.runtime, control, transfer)
       if (!transfer.signal.aborted) {
         throw new TypeError('receive interruption did not synchronously close the transfer lifetime')
       }
@@ -229,7 +230,7 @@ export class ActiveReceiveLifecycle {
       )
       if (!applied) {
         this.#observability.lifecycleExclusion(pending.attempt, 'stale_replacement')
-        this.#observability.emitLifecycleTrace('excluded', pending.action)
+        this.#observability.emitLifecycleTrace('excluded', pending.action, pending.operation.runtime.lifecycle)
       } else if (mutation.actionOutcome?.kind === 'failed') {
         this.#finishFailure(pending, mutation.actionOutcome.error, false)
         this.#onIdle(pending.operation)
@@ -241,7 +242,7 @@ export class ActiveReceiveLifecycle {
             ? 'user_discarded'
             : 'success',
         )
-        this.#observability.emitLifecycleTrace('completed', pending.action, mutation.lifecycle.kind)
+        this.#observability.emitLifecycleTrace('completed', pending.action, mutation.lifecycle)
       }
     } catch (error) {
       this.#finishFailure(pending, error, false)
@@ -282,7 +283,7 @@ export class ActiveReceiveLifecycle {
     if (trigger !== undefined) {
       this.#observability.lifecycleIncident(pending.attempt, trigger, 'failed')
     }
-    this.#observability.emitLifecycleTrace('failed', pending.action)
+    this.#observability.emitLifecycleTrace('failed', pending.action, pending.operation.runtime.lifecycle)
     try {
       this.#onActionError(error)
     } catch {
@@ -298,7 +299,7 @@ export class ActiveReceiveLifecycle {
   ): void {
     if (clearPending && this.#pending === pending) this.#pending = undefined
     this.#observability.lifecycleExclusion(pending.attempt, reason)
-    this.#observability.emitLifecycleTrace('excluded', pending.action)
+    this.#observability.emitLifecycleTrace('excluded', pending.action, pending.operation.runtime.lifecycle)
     this.#closeAttempt(pending)
   }
 

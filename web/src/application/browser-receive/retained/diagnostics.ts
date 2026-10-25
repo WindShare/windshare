@@ -72,7 +72,6 @@ export function bindRuntimeOutputFailures(
       ? {}
       : { initialWorkspaceUsage: runtime.initialWorkspaceUsage }),
     ...(bindOutputFailures === undefined ? {} : { bindOutputFailures }),
-    interrupt: (control, transfer) => runtime.interrupt(control, transfer),
     startLifecycleAction: (action, lifecycle) =>
       runtime.startLifecycleAction(action, lifecycle),
     resolveWorkspaceUsage: lifecycle => runtime.resolveWorkspaceUsage(lifecycle),

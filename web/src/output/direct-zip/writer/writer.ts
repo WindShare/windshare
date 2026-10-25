@@ -1,3 +1,4 @@
+import { completeZipMember } from '../../zip-layout/member'
 import {
   DirectZipSha256Accumulator,
   chainDirectZipEpochDigestV1,
@@ -383,14 +384,15 @@ export class DirectZipEpochWriterV1 {
         throw new Error('direct ZIP member payload is incomplete')
       }
       const crc32 = new ZipCrc32(member.crc32Accumulator).digest()
+      const completion = completeZipMember(member.plan.zipEntry, member.payloadOffset, crc32)
       try {
         await this.#writeArchive(
-          encodeDirectZipDataDescriptorV2(member.plan, crc32),
+          completion.descriptor,
           'member-descriptor',
         )
         await this.#pages.stageCentral({
           ordinal: member.plan.ordinal,
-          bytes: encodeDirectZipCentralDirectoryRecordV2(member.plan, crc32),
+          bytes: completion.centralRecord,
         })
       } catch (error) {
         await this.#discardUncommitted(error)

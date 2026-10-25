@@ -214,10 +214,10 @@ export function headerWithPairOwnership(
       ownershipState: 'owned' as const,
     }),
   })
-  const activationState = pair.script.ownershipState === 'owned' &&
-      pair.sidecar.ownershipState === 'owned'
-    ? 'pair-ready' as const
-    : 'prepared' as const
+  let activationState: CompatibleNameOperationHeaderV1['activationState'] = 'prepared'
+  if (pair.sidecar.ownershipState === 'owned') {
+    activationState = header.activationState === 'active' ? 'active' : 'report-ready'
+  }
   return replaceHeader(header, { pair, activationState })
 }
 
@@ -272,7 +272,9 @@ export async function assertRepairSummary(
   const committedCount = operation.nextCommitOrdinal - 1
   if (summary.committedCount !== committedCount ||
       summary.placement !== operation.header.pairPlacement ||
-      summary.pairDisplayNames.script !== operation.header.pair.script.physicalName ||
+      (summary.pairDisplayNames.script !== undefined &&
+       (summary.pairDisplayNames.script !== operation.header.pair.script.physicalName ||
+        operation.header.pair.script.ownershipState !== 'owned')) ||
       summary.pairDisplayNames.sidecar !== operation.header.pair.sidecar.physicalName) {
     abortIntegrity(transaction, 'compatible-name repair summary disagrees with ledger truth')
   }
@@ -298,23 +300,21 @@ export async function assertRepairSummary(
   }
 }
 
-export function assertPairReady(
+export function assertMappingPublicationReady(
   transaction: IDBTransaction,
   header: CompatibleNameOperationHeaderV1,
 ): void {
-  if (header.pair.script.ownershipState !== 'owned' ||
-      header.pair.sidecar.ownershipState !== 'owned' || header.activationState !== 'active' ||
+  if (header.pair.sidecar.ownershipState !== 'owned' || header.activationState !== 'active' ||
       header.repairSummary === undefined) {
     abortIntegrity(transaction, 'compatible target cannot commit before its restoration pair')
   }
 }
 
-export function assertPairOwned(
+export function assertRecoveryReportOwned(
   transaction: IDBTransaction,
   header: CompatibleNameOperationHeaderV1,
 ): void {
-  if (header.pair.script.ownershipState !== 'owned' ||
-      header.pair.sidecar.ownershipState !== 'owned' || header.activationState === 'prepared') {
+  if (header.pair.sidecar.ownershipState !== 'owned' || header.activationState === 'prepared') {
     abortIntegrity(transaction, 'compatible target cannot activate before its restoration pair')
   }
 }

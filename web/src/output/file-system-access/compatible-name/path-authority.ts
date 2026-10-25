@@ -37,7 +37,7 @@ import type {
   RestorationTemplateProvider,
 } from './restoration-template'
 import { CompatibleNameCoordinator } from './coordinator-runtime'
-import { selectMatchingTemplate } from './root-repair'
+import { selectRestorationTemplate } from './restoration-publication'
 
 export type CompatibleNameActivationLedger = Pick<
   CompatibleNameLedger,
@@ -83,7 +83,7 @@ export interface CompatibleNameRootRepairRequest {
 
 export interface PreparedCompatibleNameRootRepair {
   readonly bootstrap: CompatibleNameOperationBootstrapV1
-  readonly template: RestorationTemplate
+  readonly template: RestorationTemplate | undefined
   readonly parent: FileSystemDirectoryHandle
   readonly rejection: PathComponentRejectedError
 }
@@ -174,7 +174,7 @@ export class CompatibleNamePathAuthority {
       if (snapshot === undefined) {
         throw new DOMException('Compatible-name header lost its mapping snapshot', 'InvalidStateError')
       }
-      const template = selectMatchingTemplate(options.preparation, snapshot.header.templateId)
+      const template = selectRestorationTemplate(options.preparation)
       const coordinator = CompatibleNameCoordinator.reopen({
         ledger,
         snapshot,
@@ -299,7 +299,7 @@ export class CompatibleNamePathAuthority {
     return physicalName
   }
 
-  async ensurePairReady(root: FileSystemDirectoryHandle | undefined): Promise<void> {
+  async ensureRecoveryReport(root: FileSystemDirectoryHandle | undefined): Promise<void> {
     this.#assertOpen()
     const coordinator = this.#coordinator
     if (coordinator === undefined) return
@@ -343,7 +343,7 @@ export class CompatibleNamePathAuthority {
     await this.#mutations.scheduler.runNamespace(
       [pairParentAuthority.schedulerIdentity],
       'repair-compatible-name',
-      () => coordinator.ensurePairReady(pairParent),
+      () => coordinator.ensureRecoveryReport(pairParent),
     )
   }
 

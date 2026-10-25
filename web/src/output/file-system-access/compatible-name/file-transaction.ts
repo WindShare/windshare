@@ -20,6 +20,7 @@ export function compatibleNameFileTransaction(
     ...(transaction.checkpointObjectId === undefined ? {} : { checkpointObjectId: transaction.checkpointObjectId }),
     get initialDurableRanges() { return transaction.initialDurableRanges },
     get verifiedRanges() { return transaction.verifiedRanges },
+      get contentReplica() { return transaction.contentReplica },
     writeRange: (offset: bigint, data: Uint8Array, signal?: AbortSignal) =>
       transaction.writeRange(offset, data, signal),
     checkpoint: (signal?: AbortSignal) => transaction.checkpoint(signal),

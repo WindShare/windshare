@@ -50,6 +50,80 @@ import {
   startReceiving,
 } from './file-system-access-lifecycle-fixture'
 
+describe('compatible names without an automatic restoration script', () => {
+  it.each(['unavailable-template', 'script-create-refused', 'script-write-refused', 'script-inspection-refused'] as const)(
+    'saves and reopens rejected names with a durable report when %s', async failure => {
+      const parent = new MemoryDirectory('downloads')
+      const repository = new MemoryOperationRepository()
+      const checkpointFactory = memoryCheckpointFactory()
+      const locks = new MemoryLockManager()
+      const ledger = new MemoryCompatibleNameLedger(repository)
+      const compatibleNamePreparation = {
+        platform: 'linux',
+        templateProvider: { select: () => {
+          if (failure === 'unavailable-template') throw new Error('No platform template')
+          return { id: 'windows-powershell-v1' as const, scriptFileExtension: '.ps1' as const, source: '# restore' }
+        } },
+        randomBits: () => 0,
+      }
+      const session = await bindTask({
+        parent, repository, checkpointFactory, locks,
+        artifact: await resultRootArtifact(), operationSeed: 70,
+        openCompatibleNameLedger: async () => ledger, compatibleNamePreparation,
+      })
+      const root = await parent.getDirectoryHandle(session.reservation.physicalName) as unknown as MemoryDirectory
+      root.onEntryLookup = lookup => {
+        if (lookup.name === 'blocked.txt' && !lookup.create) throw new TypeError('Name refused')
+        if (lookup.name.endsWith('.ps1') && (failure === 'script-inspection-refused' ||
+            (failure === 'script-create-refused' && lookup.create))) {
+          throw new DOMException('Script creation refused', 'NotAllowedError')
+        }
+      }
+      if (failure === 'script-write-refused') {
+        const open = root.getFileHandle.bind(root)
+        root.getFileHandle = async (name, options) => {
+          const handle = await open(name, options)
+          if (name.endsWith('.ps1')) (handle as unknown as MemoryFile).setWritableFailure(new Error('Script writer refused'))
+          return handle
+        }
+      }
+      const file = await session.beginFile({
+        materializationRelativePath: ['blocked.txt'],
+        openRevision: async () => ({ fileId: identity(132), fileRevision: identity(133), exactSize: 2n }),
+      })
+      await file.writeRange(0n, Uint8Array.of(4, 2))
+      await file.commit()
+      await compatibleProjectionCaughtUp(session)
+      expect(ledger.header).toMatchObject({
+        activationState: 'active',
+        repairSummary: { committedCount: 1, sidecarSync: 'current' },
+      })
+      expect(ledger.header?.repairSummary?.pairDisplayNames.script).toBeUndefined()
+      const report = decodeCompatibleNameSidecar(await (await compatibleSidecar(root, ledger)).bytes())
+      expect(report.footer?.committedCount).toBe(1)
+      const intent = session.intent
+      await session.close()
+      const reopened = await reopenFileSystemAccessOutput({
+        intent, operationRepository: repository, lockManager: locks,
+        mutationIdentities: memoryFSAIdentities(locks), checkpointRepositoryFactory: checkpointFactory,
+        openCompatibleNameLedger: async () => ledger, compatibleNamePreparation,
+      })
+      const reopenedSummaries: CompatibleNameRepairSummary[] = []
+      const unsubscribe = reopened.repairProjection?.subscribe(summary => reopenedSummaries.push(summary))
+      expect(reopenedSummaries.at(-1)?.pairDisplayNames.script).toBeUndefined()
+      unsubscribe?.()
+      const restored = await reopened.beginFile({
+        materializationRelativePath: ['blocked.txt'],
+        openRevision: async () => ({ fileId: identity(132), fileRevision: identity(133), exactSize: 2n }),
+      })
+      expect(restored.ownedObjectId).toBe(file.ownedObjectId)
+      await restored.close()
+      await reopened.close()
+    },
+  )
+
+})
+
 describe('File System Access compatible-name traversal', () => {
   it('keeps new ordinary sessions ledger-free and reopens them with one header point-read', async () => {
     const parent = new MemoryDirectory('downloads')
@@ -125,7 +199,7 @@ describe('File System Access compatible-name traversal', () => {
     await reopened.close()
   })
 
-  it('reopens a pair-ready cut without publishing a compatible-name notice', async () => {
+  it('reopens a report-ready cut without publishing a compatible-name notice', async () => {
     const parent = new MemoryDirectory('downloads')
     const repository = new MemoryOperationRepository()
     const checkpointFactory = memoryCheckpointFactory()
@@ -160,11 +234,11 @@ describe('File System Access compatible-name traversal', () => {
         exactSize: 1n,
       }),
     })).rejects.toBe(createFailure)
-    expect(ledger.header).toMatchObject({ activationState: 'pair-ready' })
+    expect(ledger.header).toMatchObject({ activationState: 'report-ready' })
     expect(ledger.header?.repairSummary).toBeUndefined()
     const liveSummaries: CompatibleNameRepairSummary[] = []
     const liveProjection = session.repairProjection
-    if (liveProjection === undefined) throw new Error('pair-ready repair source is unavailable')
+    if (liveProjection === undefined) throw new Error('report-ready repair source is unavailable')
     const unsubscribeLive = liveProjection.subscribe(summary => liveSummaries.push(summary))
     expect(liveSummaries).toEqual([])
     unsubscribeLive()
@@ -192,10 +266,10 @@ describe('File System Access compatible-name traversal', () => {
     })
     const reopenedSummaries: CompatibleNameRepairSummary[] = []
     const reopenedProjection = reopened.repairProjection
-    if (reopenedProjection === undefined) throw new Error('pair-ready reopen lost repair authority')
+    if (reopenedProjection === undefined) throw new Error('report-ready reopen lost repair authority')
     const unsubscribeReopened = reopenedProjection.subscribe(summary => reopenedSummaries.push(summary))
     expect(reopenedSummaries).toEqual([])
-    expect(ledger.header).toMatchObject({ activationState: 'pair-ready' })
+    expect(ledger.header).toMatchObject({ activationState: 'report-ready' })
     unsubscribeReopened()
     await reopened.close()
   })

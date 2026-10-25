@@ -50,8 +50,8 @@ import {
   applyCompatibleNameBootstrapTransaction,
   assertCompatibleNameBootstrapTransaction,
   assertMappingCommitsOpen,
-  assertPairOwned,
-  assertPairReady,
+  assertRecoveryReportOwned,
+  assertMappingPublicationReady,
   assertRepairSummary,
   boundedOrdinal,
   compatiblePairKind,
@@ -278,7 +278,7 @@ export class IndexedDbCompatibleNameLedger implements CompatibleNameLedger {
         await transactionCompletion(transaction)
         return operation.header
       }
-      assertPairOwned(transaction, operation.header)
+      assertRecoveryReportOwned(transaction, operation.header)
       await assertRepairSummary(transaction, operation, summary)
       if (operation.nextCommitOrdinal !== 1 || summary.committedCount !== 0 ||
           operation.header.repairSummary !== undefined) {
@@ -313,7 +313,7 @@ export class IndexedDbCompatibleNameLedger implements CompatibleNameLedger {
     ], 'readwrite')
     try {
       const operation = await requireOperationRow(transaction, operationId)
-      assertPairReady(transaction, operation.header)
+      assertMappingPublicationReady(transaction, operation.header)
       assertMappingCommitsOpen(transaction, operation.header)
       const mappings = transaction.objectStore(INDEXEDDB_COMPATIBLE_NAME_MAPPING_STORE)
       const value = await requestResult<unknown>(mappings.get(mappingId))
@@ -350,7 +350,7 @@ export class IndexedDbCompatibleNameLedger implements CompatibleNameLedger {
     ], 'readwrite')
     try {
       const operation = await requireOperationRow(transaction, operationId)
-      assertPairReady(transaction, operation.header)
+      assertMappingPublicationReady(transaction, operation.header)
       assertMappingCommitsOpen(transaction, operation.header)
       const mappings = transaction.objectStore(INDEXEDDB_COMPATIBLE_NAME_MAPPING_STORE)
       const value = await requestResult<unknown>(mappings.get(mappingId))
@@ -508,7 +508,7 @@ export class IndexedDbCompatibleNameLedger implements CompatibleNameLedger {
       const operation = await requireOperationRow(transaction, operationId)
       await assertRepairSummary(transaction, operation, summary)
       if (operation.header.pendingTerminalOutcome === undefined &&
-          !sameValue(operation.header.repairSummary, summary)) {
+          !sameMappingEvidence(operation.header.repairSummary, summary)) {
         abortIntegrity(transaction, 'cleared terminal repair summary is immutable')
       }
       const header = headerWithoutPendingOutcome(operation.header, summary)
@@ -572,6 +572,7 @@ export class IndexedDbCompatibleNameLedger implements CompatibleNameLedger {
       const expectedIdentities = [operation.header.pair.script, operation.header.pair.sidecar] as const
       pairRecords.forEach((record, index) => {
         const identity = expectedIdentities[index]!
+        if (identity.ownershipState === 'claimed' && record === undefined) return
         if (record === undefined || record.id !== identity.handleId ||
             record.operationId !== operation.header.operationId ||
             record.kind !== expectedKinds[index] ||
@@ -613,7 +614,7 @@ export class IndexedDbCompatibleNameLedger implements CompatibleNameLedger {
       await assertRepairSummary(transaction, operation, summary)
       if (operation.header.pendingTerminalOutcome === undefined &&
           isTerminalRepairSummary(operation.header.repairSummary) &&
-          !sameValue(operation.header.repairSummary, summary)) {
+          !sameMappingEvidence(operation.header.repairSummary, summary)) {
         abortIntegrity(transaction, 'final compatible-name repair summary is immutable')
       }
       const header = replaceHeader(operation.header, { repairSummary: summary })
@@ -640,6 +641,15 @@ export class IndexedDbCompatibleNameLedger implements CompatibleNameLedger {
       throw new DOMException('Compatible-name ledger is closed', 'InvalidStateError')
     }
   }
+}
+
+/** Script availability may change independently after the terminal mapping/report cut. */
+function sameMappingEvidence(left: CompatibleNameRepairSummary | undefined, right: CompatibleNameRepairSummary): boolean {
+  if (left === undefined) return false
+  const reportOnly = (summary: CompatibleNameRepairSummary) => ({
+    ...summary, pairDisplayNames: { sidecar: summary.pairDisplayNames.sidecar },
+  })
+  return sameValue(reportOnly(left), reportOnly(right))
 }
 
 export {

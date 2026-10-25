@@ -1,3 +1,5 @@
+import type { TransferStopRequestedError } from '../lifecycle/interruption'
+export { TransferPauseRequestedError, TransferStopRequestedError } from '../lifecycle/interruption'
 import type {
   AuthenticatedGenerationReference,
 } from '../preparation/generation'
@@ -314,21 +316,6 @@ function hasDirectoryPort(execution: PlanExecution): boolean {
   if (!('directories' in execution) || execution.directories === undefined) return false
   return typeof execution.directories.admitDirectory === 'function' &&
     typeof execution.directories.finalizeDirectory === 'function'
-}
-
-export class TransferPauseRequestedError extends Error {
-  constructor(message = 'Transfer paused by receiver', options?: ErrorOptions) {
-    super(message, options)
-    this.name = 'TransferPauseRequestedError'
-  }
-}
-
-/** Stop retains the materialized DirectTree prefix and therefore must never enter Pause cleanup. */
-export class TransferStopRequestedError extends Error {
-  constructor(message = 'Transfer stopped by receiver and partial output retained') {
-    super(message)
-    this.name = 'TransferStopRequestedError'
-  }
 }
 
 export function snapshotDirectoryMaterializationRequest(

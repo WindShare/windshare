@@ -1,3 +1,4 @@
+import { contentReplica } from './content-replica-fixture'
 import type { CatalogClient } from '../../src/catalog/client'
 import type { CommittedDirectory } from '../../src/catalog/page-store'
 import type { CatalogEntry, CatalogPage } from '../../src/catalog/records'
@@ -452,6 +453,7 @@ export function testOutput(events: string[] = [], options: TestOutputOptions = {
         canonicalPath: file.materializationRelativePath,
         ownedFileIdentity: `owned:${file.source.fileId}`,
       })
+      let checkpointGeneration = 1n
       let durable = new ByteRangeSet(file.exactSize, options.initialRanges ?? [])
       let pending = durable.missingFrom(new ByteRangeSet(file.exactSize, options.acceptedRanges ?? durable.ranges))
       events.push('transaction-created')
@@ -466,6 +468,7 @@ export function testOutput(events: string[] = [], options: TestOutputOptions = {
           file.source,
           file.exactSize,
           durable.ranges,
+          contentReplica(checkpointGeneration),
         ),
         transaction: {
           writeRange: async (offset: bigint, data: Uint8Array, writeSignal: AbortSignal) => {
@@ -512,6 +515,7 @@ export function testOutput(events: string[] = [], options: TestOutputOptions = {
                 file.source,
                 file.exactSize,
                 durable.ranges,
+                contentReplica(++checkpointGeneration),
               ),
             })
           },
@@ -541,6 +545,7 @@ export function testOutput(events: string[] = [], options: TestOutputOptions = {
               file.source,
               file.exactSize,
               durable.ranges,
+              contentReplica(++checkpointGeneration),
             )
             pauseEvidence.push(evidence)
             return evidence

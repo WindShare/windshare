@@ -1,5 +1,4 @@
 import { SelectionPolicy } from '../../src/catalog/selection'
-import { TransferPauseRequestedError } from '../../src/transfer/output/session'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ReceiveRuntimeState } from '../../src/application/receive/state'
 import { ActiveReceiveCoordinator } from '../../src/application/receive/active/coordinator'
@@ -20,10 +19,6 @@ async function fixture() {
   const state = new ReceiveRuntimeState()
   const joined = new FakeJoinedShare(true)
   const operation = new FakeBoundRuntime(await retainedWorkspaceIntent(joined))
-  operation.interrupt = (_control, transfer) => {
-    joined.transferRuns.at(-1)!.resolve(stableLifecycle(state.getSnapshot().lifecycle!, 'resumable-receive'))
-    transfer.abort(new TransferPauseRequestedError())
-  }
   const receive = new FakeReceiveComposition(WORKSPACE_ENVIRONMENT)
   const errors: unknown[] = []
   const changed = vi.fn()

@@ -13,6 +13,7 @@ import {
   FILE_ID,
   MANAGED_ENVIRONMENT,
   NO_DESTINATION_ENVIRONMENT,
+  PORTABLE_ENVIRONMENT,
   WORKSPACE_ENVIRONMENT,
   controllerFor,
   deferred,
@@ -55,7 +56,7 @@ describe('v2 receiver active operation orchestration', () => {
     expect(run.intent).toBe(runtime.intent)
     expect(controller.getSnapshot().output.receiveIntent?.digest).toBe(runtime.intent.digest)
     expect(controller.getSnapshot().output.lifecyclePresentation?.actions.map(action => action.kind))
-      .toEqual(['pause', 'stop'])
+      .toEqual([])
 
     run.resolve(next(runtime.lifecycle, {
       kind: 'download-started',
@@ -216,7 +217,7 @@ describe('v2 receiver active operation orchestration', () => {
     expectedKind,
     expectedTitle,
   ) => {
-    const receive = new FakeReceiveComposition(MANAGED_ENVIRONMENT)
+    const receive = new FakeReceiveComposition(control === 'pause' ? WORKSPACE_ENVIRONMENT : PORTABLE_ENVIRONMENT)
     const joined = new FakeJoinedShare(true)
     const controller = controllerFor(joined, receive)
     await startTransfer(controller, joined)
@@ -225,13 +226,14 @@ describe('v2 receiver active operation orchestration', () => {
     const run = joined.transferRuns[0]
     if (runtime === undefined || run === undefined) throw new Error('active receive was not started')
     let inClickStack = true
-    runtime.controlStack = () => inClickStack
+    const interruptions: boolean[] = []
+    run.signal?.addEventListener('abort', () => interruptions.push(inClickStack))
     const durableKindBeforeInterruption = controller.getSnapshot().output.lifecycle?.kind
 
     controller.performLifecycleAction(control)
     inClickStack = false
 
-    expect(runtime.interruptions).toEqual([{ control, inClickStack: true }])
+    expect(interruptions).toEqual([true])
     expect(run.signal?.aborted).toBe(true)
     expect(controller.getSnapshot().output.lifecycle?.kind).toBe(durableKindBeforeInterruption)
     expect(controller.getSnapshot().output.lifecyclePresentation).toMatchObject({

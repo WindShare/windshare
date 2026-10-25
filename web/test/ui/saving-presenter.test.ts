@@ -57,7 +57,6 @@ describe('saving action presenter over eligible offers', () => {
     )
     const result = presentSavingActions({ offers })
     expect(result.primary?.outcome).toBe('original-file')
-    expect(result.primary?.consequences.join(' ')).toContain('additional exported copy')
     expect(result.primary?.consequences.join(' ')).toContain('last verified checkpoint')
     expect(result.primary?.consequences.join(' ')).not.toContain('may lose most progress')
   })
@@ -89,7 +88,6 @@ describe('saving action presenter over eligible offers', () => {
     expect(result.alternatives).toHaveLength(1)
     expect(result.alternatives[0]?.alternatives).toHaveLength(1)
     if (offers.kind === 'artifact-actions') expect(result.primary?.offered.choice.choiceId).toBe(offers.zip?.primary.choice.choiceId)
-    expect(result.alternatives[0]?.primary.consequences.join(' ')).toContain('additional exported copy')
   })
 
   it('explains empty selection and blocks every action with the current admission reason', async () => {

@@ -145,7 +145,6 @@ function summaryFollows(
   next: CompatibleNameRepairSummary,
 ): boolean {
   if (next.committedCount < prior.committedCount || next.placement !== prior.placement ||
-      next.pairDisplayNames.script !== prior.pairDisplayNames.script ||
       next.pairDisplayNames.sidecar !== prior.pairDisplayNames.sidecar) return false
   const priorFooter = prior.latestObservedFooter
   const nextFooter = next.latestObservedFooter

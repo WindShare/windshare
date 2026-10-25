@@ -1,3 +1,4 @@
+import { commitOutputTransaction } from '../../persistence/transaction'
 import type { CompatibleNameOperationBootstrapV1 } from '../../file-system-access/compatible-name/model'
 import {
   prepareReceiveOperationTransition,
@@ -44,6 +45,7 @@ import {
   INDEXEDDB_RECEIVE_LEASE_STORE,
   INDEXEDDB_RECEIVE_MANIFEST_PAGE_STORE,
   INDEXEDDB_RECEIVE_RECORD_STORE,
+  INDEXEDDB_OPFS_TASK_STORE,
   isIndexedDbRecord,
   openIndexedDbCheckpointDatabase,
   requestResult,
@@ -87,16 +89,17 @@ implements ReceiveOperationRepository,
   async commitTransition(transition: ReceiveOperationTransition): Promise<void> {
     this.#assertOpen()
     const prepared = await prepareReceiveOperationTransition(transition)
-    const transaction = this.#database.transaction([
+    await commitOutputTransaction(this.#database, [
       INDEXEDDB_RECEIVE_RECORD_STORE,
       INDEXEDDB_RECEIVE_MANIFEST_PAGE_STORE,
       INDEXEDDB_RECEIVE_HANDLE_STORE,
       INDEXEDDB_RECEIVE_LEASE_STORE,
-    ], 'readwrite')
-    await assertOperationConcurrency(transaction, prepared)
-    await assertOperationMutationOwnership(transaction, prepared)
-    applyOperationTransition(transaction, prepared)
-    await transactionCompletion(transaction)
+      ...(prepared.workspaceCheckpoint === undefined ? [] : [INDEXEDDB_OPFS_TASK_STORE]),
+    ], async transaction => {
+      await assertOperationConcurrency(transaction, prepared)
+      await assertOperationMutationOwnership(transaction, prepared)
+      applyOperationTransition(transaction, prepared)
+    })
     this.#publishCommittedLifecycle(prepared.records)
   }
 

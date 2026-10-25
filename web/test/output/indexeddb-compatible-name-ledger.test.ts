@@ -121,7 +121,7 @@ describe('compatible-name ledger model', () => {
     const operationId = identity(16, 1)
     expect(() => compatibleNameOperationHeaderV1({
       ...operationHeader(operationId),
-      activationState: 'pair-ready',
+      activationState: 'report-ready',
     })).toThrow('pair ownership')
   })
 
@@ -189,7 +189,6 @@ function operationHeader(operationId: string): CompatibleNameOperationHeaderV1 {
     primaryToken: 'aaaaaa',
     authorityRef: identity(32, 2),
     root: { logicalName: 'root', physicalName: 'root' },
-    templateId: 'windows-powershell-v1',
     pairPlacement: 'inside-logical-root',
     pair: {
       token: 'aaaaaa',

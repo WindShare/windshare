@@ -1,3 +1,4 @@
+import { receiveInterruptionControls, TransferPauseRequestedError, TransferStopRequestedError } from '../../src/transfer/lifecycle/interruption'
 import { ReceiveLifecycleNotifications, type ReceiveLifecycleListener } from '../../src/output/workspace/lifecycle/observation'
 import { vi } from 'vitest'
 
@@ -30,6 +31,7 @@ import {
 } from '../../src/output/workspace'
 import {
   createManagedAtomicReservation,
+  createPortableBinding,
   createOriginalFileArtifact,
   createReceiveIntent,
   createSelectionSpec,
@@ -79,6 +81,7 @@ import {
   directZipTarget,
   handoffTarget,
   managedTarget,
+  portableOffer,
   runtimeDirectZipSupport,
   workspaceOffer,
 } from '../output/planning/fixture'
@@ -92,6 +95,7 @@ export const WORKSPACE_ENVIRONMENT = environment({
   targets: [handoffTarget()],
   workspace: workspaceOffer(),
 })
+export const PORTABLE_ENVIRONMENT = environment({ targets: [handoffTarget()], portable: portableOffer() })
 export const NO_DESTINATION_ENVIRONMENT = environment()
 const DIRECT_ZIP_SUPPORT = runtimeDirectZipSupport()
 export const DIRECT_ZIP_ENVIRONMENT = environment({
@@ -233,15 +237,6 @@ export class FakeStartedAuthority implements ArtifactPresentationAuthority {
   }
 }
 
-class FakeTransferControlError extends DOMException {
-  readonly control: ActiveReceiveControl
-
-  constructor(control: ActiveReceiveControl) {
-    super(`${control} requested`, 'AbortError')
-    this.control = control
-  }
-}
-
 export class FakeBoundRuntime implements BoundReceiveOperation {
   readonly lifecycleNotifications = new ReceiveLifecycleNotifications()
   subscribeLifecycle(listener: ReceiveLifecycleListener): () => void {
@@ -252,20 +247,17 @@ export class FakeBoundRuntime implements BoundReceiveOperation {
   readonly transferJobId = identityText(76)
   readonly intent: ReceiveIntent
   readonly lifecycle: ReceiveLifecycleState
-  readonly activeControls: readonly ActiveReceiveControl[] = Object.freeze(['pause', 'stop'])
+  get activeControls(): readonly ActiveReceiveControl[] { return receiveInterruptionControls(this.intent.plan.kind) }
   readonly initialWorkspaceUsage: WorkspaceUsage = Object.freeze({
     ownedBytes: 512n,
     maximumBytes: 4_096n,
   })
-  readonly interruptions: Array<{ control: ActiveReceiveControl; inClickStack: boolean }> = []
   readonly lifecycleActions: Array<{ action: LifecycleUserAction; inClickStack: boolean }> = []
   readonly detachments: unknown[] = []
   readonly admissionFailures: unknown[] = []
   currentOutputFailures: OutputFailureSinks | undefined
   detachFailure: unknown
-  controlStack: () => boolean = () => true
   lifecycleActionStack: () => boolean = () => true
-  lastControl: ActiveReceiveControl | undefined
   admissionSettlementError: unknown
   nextLifecycleAction: (
     action: Exclude<LifecycleUserAction, ActiveReceiveControl>,
@@ -292,12 +284,6 @@ export class FakeBoundRuntime implements BoundReceiveOperation {
     })
   }
 
-  interrupt(control: ActiveReceiveControl, transfer: AbortController): void {
-    this.lastControl = control
-    this.interruptions.push({ control, inClickStack: this.controlStack() })
-    transfer.abort(new FakeTransferControlError(control))
-  }
-
   startLifecycleAction(
     action: Exclude<LifecycleUserAction, ActiveReceiveControl>,
     lifecycle: ReceiveLifecycleState,
@@ -313,7 +299,7 @@ export class FakeBoundRuntime implements BoundReceiveOperation {
   settleTransferAdmissionFailure(reason: unknown): LifecycleMutation {
     this.admissionFailures.push(reason)
     if (this.admissionSettlementError !== undefined) throw this.admissionSettlementError
-    if (this.lastControl === 'pause') {
+    if (reason instanceof TransferPauseRequestedError) {
       return {
         lifecycle: next(this.lifecycle, {
           kind: 'resumable-receive',
@@ -334,7 +320,7 @@ export class FakeBoundRuntime implements BoundReceiveOperation {
     return {
       lifecycle: next(this.lifecycle, {
         kind: 'restart-required',
-        reason: 'direct-atomic-rolled-back',
+        reason: this.intent.plan.kind === 'portable-handoff' ? 'portable-aborted' : 'direct-atomic-rolled-back',
         receiptDigest: identityText(75, 32),
       }),
     }
@@ -512,6 +498,7 @@ export class FakeTransferRun {
   readonly intent: ReceiveIntent
   readonly #result = deferred<TransferJobResult>()
   signal: AbortSignal | undefined
+  onInterruption: ((reason: Error) => void) | undefined
 
   constructor(plans: PlanExecutionAuthority, intent: ReceiveIntent) {
     this.plans = plans
@@ -522,15 +509,16 @@ export class FakeTransferRun {
     this.signal = signal
     signal?.addEventListener('abort', () => {
       const reason = signal.reason
-      if (!(reason instanceof FakeTransferControlError)) {
+      if (!(reason instanceof TransferPauseRequestedError) && !(reason instanceof TransferStopRequestedError)) {
         this.#result.reject(reason)
         return
       }
+      if (this.onInterruption !== undefined) { this.onInterruption(reason); return }
       const lifecycle = initialReceiveLifecycleState({
         operationId: this.intent.operationId,
         receiveIntentDigest: this.intent.digest,
       })
-      this.resolve(reason.control === 'pause'
+      this.resolve(reason instanceof TransferPauseRequestedError
         ? next(lifecycle, {
             kind: 'resumable-receive',
             payloadKind: 'file-set',
@@ -546,7 +534,7 @@ export class FakeTransferRun {
           })
         : next(lifecycle, {
             kind: 'restart-required',
-            reason: 'direct-atomic-rolled-back',
+            reason: this.intent.plan.kind === 'portable-handoff' ? 'portable-aborted' : 'direct-atomic-rolled-back',
             receiptDigest: identityText(75, 32),
           }), reason)
     }, { once: true })
@@ -713,8 +701,11 @@ export async function candidateBindingForTest(
         binding,
       })
     }
-    case 'direct-tree':
     case 'portable-handoff':
+      return { kind: 'portable-binding', portableRouteId: action.route.portable.routeId,
+        handoffTargetRouteId: action.route.handoffTarget.routeId,
+        portable: await createPortableBinding({ operationId: identityText(49), portablePlanId: identityText(50), artifact }) }
+    case 'direct-tree':
       throw new Error(`unsupported test plan ${action.choice.plan.kind}`)
   }
 }

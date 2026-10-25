@@ -2,22 +2,22 @@ import {
   nextReceiveLifecycleState,
   type PlanKind,
   type ReceiveLifecycleState,
-} from '../../transfer/lifecycle/state'
-import type { LifecycleEvent, LifecycleReducerContext, LifecycleReduction } from './lifecycle/events'
+} from './state'
+import type { LifecycleEvent, LifecycleReducerContext, LifecycleReduction } from './events'
 import {
   gateDirectZipRecovery,
   pauseDirectZip,
   resumeDirectZipRecovery,
-} from './lifecycle/recovery'
+} from './recovery'
 import {
   activeLeaseMismatch,
   applied,
   needsAttention,
   requireState,
   requireWorkspaceState,
-} from './lifecycle/transitions'
+} from './transitions'
 
-export type { LifecycleEvent, LifecycleReducerContext, LifecycleReduction } from './lifecycle/events'
+export type { LifecycleEvent, LifecycleReducerContext, LifecycleReduction } from './events'
 
 export function reduceReceiveLifecycle(
   state: ReceiveLifecycleState,
@@ -598,4 +598,4 @@ export type {
   PreparationAdmissionReason,
   ReceiveLifecycleState,
   ReceiveLifecycleStatePayload,
-} from '../../transfer/lifecycle/state'
+} from './state'

@@ -1,3 +1,4 @@
+import { presentCompatibleNameRepair } from '../../src/ui/compatible-name-repair-presentation'
 import { TaskDetails } from '../../src/ui/tasks/TaskView'
 import { presentTask, retainedTaskFacts } from '../../src/ui/tasks'
 import { experienceSnapshot } from './receiver-experience-fixture'
@@ -24,6 +25,18 @@ const TREE = {
 } as ArtifactSpec
 
 describe('compatible-name receiver UI', () => {
+  it('offers the mapping report without a command when no script was published', () => {
+    const complete = summary('completed', false)
+    const repair = presentCompatibleNameRepair({
+      state: receiveLifecycle('published'),
+      summary: { ...complete, pairDisplayNames: { sidecar: complete.pairDisplayNames.sidecar } },
+    })
+    expect(repair.sidecarName).toBe(complete.pairDisplayNames.sidecar)
+    expect(repair.scriptName).toBeNull()
+    expect(repair.runCommand).toBeNull()
+    expect(repair.shortCommand).toBeNull()
+  })
+
   it('renders only an adjusted-name notice during a live receive', () => {
     const lifecycle = receiveLifecycle('receiving')
     const repairSummary = summary('active', false)

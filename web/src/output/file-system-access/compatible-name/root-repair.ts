@@ -29,10 +29,7 @@ import {
   LogicalSiblingNamespaceAuthority,
   PhysicalPathResolver,
 } from './resolver'
-import {
-  provenRestorationTemplateProvider,
-  type RestorationTemplate,
-} from './restoration-template'
+import { selectRestorationTemplate } from './restoration-publication'
 import type {
   CompatibleNameRejectedComponentInput,
   CompatibleNameRootRepairPreparationOptions,
@@ -47,8 +44,7 @@ export async function prepareCompatibleNameRootRepair(
   options: CompatibleNameRootRepairPreparationOptions,
 ): Promise<PreparedCompatibleNameRootRepair> {
   assertRootRejection(input)
-  const template = (options.templateProvider ?? provenRestorationTemplateProvider)
-    .select(options.platform)
+  const template = selectRestorationTemplate(options)
   const primaryToken = generateCompatibleNamePrimaryToken(options.randomBits)
   const randomOwnedObjectId = options.randomOwnedObjectId ?? createOwnedObjectId
   const claims = new WeakMap<FileSystemDirectoryHandle, Set<string>>()
@@ -74,7 +70,6 @@ export async function prepareCompatibleNameRootRepair(
       logicalName: input.logicalReservedName,
       physicalName: rootCandidate.physicalComponent,
     },
-    templateId: template.id,
     pairPlacement,
     pair: {
       token: pairCandidate.token,
@@ -165,18 +160,6 @@ export function pairIdentity(
   })
 }
 
-export function selectMatchingTemplate(
-  options: CompatibleNameRootRepairPreparationOptions,
-  expectedId: string,
-): RestorationTemplate {
-  const template = (options.templateProvider ?? provenRestorationTemplateProvider)
-    .select(options.platform)
-  if (template.id !== expectedId) {
-    throw new DOMException('Compatible-name restoration template changed on reopen', 'InvalidStateError')
-  }
-  return template
-}
-
 function assertRootRejection(input: CompatibleNameRootRepairRequest): void {
   if (!(input.rejection instanceof PathComponentRejectedError) || !input.rejection.preMutation ||
       input.rejection.evidenceKind !== 'non-creating-lookup' ||
@@ -222,7 +205,6 @@ export function assertPreparedSnapshot(
       snapshot.header.authorityRef !== bootstrap.header.authorityRef ||
       snapshot.header.root.logicalName !== bootstrap.header.root.logicalName ||
       snapshot.header.root.physicalName !== bootstrap.header.root.physicalName ||
-      snapshot.header.templateId !== bootstrap.header.templateId ||
       snapshot.header.pairPlacement !== bootstrap.header.pairPlacement ||
       snapshot.header.pair.token !== bootstrap.header.pair.token ||
       snapshot.header.pair.script.physicalName !== bootstrap.header.pair.script.physicalName ||
@@ -254,7 +236,7 @@ function pairHandleId(operationId: string, pairKind: CompatibleNamePairKind): st
   return `${RESTORATION_PAIR_HANDLE_DOMAIN}/${operationId}/${pairKind}`
 }
 
-/** Claim only after both candidates pass the same parent authority and native checks. */
+/** The report is required; script collisions prefer another pair but cannot prevent saving. */
 export async function allocateRestorationPair(input: Readonly<{
   parent: FileSystemDirectoryHandle
   operationId: string
@@ -267,27 +249,29 @@ export async function allocateRestorationPair(input: Readonly<{
     parentClaims = new Set<string>()
     input.claims.set(input.parent, parentClaims)
   }
-  for (let attempt = 0; attempt <= COMPATIBLE_NAME_COLLISION_RETRY_LIMIT; attempt += 1) {
-    const pair = await compatibleNameRestorationPairCandidate({ ...input, attempt })
-    const names = [pair.script, pair.sidecar]
-    let occupied = false
-    for (const component of names) {
-      if (parentClaims.has(catalogNameCollisionKey(component)) ||
-          await input.membership?.hasCommittedName(component) === true) {
-        occupied = true
-        break
-      }
-      if (await inspectFileSystemComponent({
-        verifiedParent: input.parent, component, expectedKind: 'file',
-        stage: 'fsa.file.entry.inspect', mode: 'diagnostic',
-      }) === 'occupied') {
-        occupied = true
-        break
-      }
-    }
-    if (occupied) continue
-    for (const name of names) parentClaims.add(catalogNameCollisionKey(name))
+  const occupied = async (component: string) => parentClaims.has(catalogNameCollisionKey(component)) ||
+    await input.membership?.hasCommittedName(component) === true ||
+    await inspectFileSystemComponent({
+      verifiedParent: input.parent, component, expectedKind: 'file',
+      stage: 'fsa.file.entry.inspect', mode: 'diagnostic',
+    }) === 'occupied'
+  type Pair = Awaited<ReturnType<typeof compatibleNameRestorationPairCandidate>>
+  const claim = (pair: Pair) => {
+    for (const name of [pair.script, pair.sidecar]) parentClaims.add(catalogNameCollisionKey(name))
     return pair
   }
-  throw new DOMException('The restoration pair collision namespace is exhausted', 'InvalidStateError')
+  let reportCandidate: Pair | undefined
+  for (let attempt = 0; attempt <= COMPATIBLE_NAME_COLLISION_RETRY_LIMIT; attempt += 1) {
+    const pair = await compatibleNameRestorationPairCandidate({ ...input, attempt })
+    if (await occupied(pair.sidecar)) continue
+    reportCandidate ??= pair
+    try {
+      if (await occupied(pair.script)) continue
+    } catch {
+      // Some filesystems reject script names. Publication will remain optional and ownership-checked.
+    }
+    return claim(pair)
+  }
+  if (reportCandidate !== undefined) return claim(reportCandidate)
+  throw new DOMException('The restoration report collision namespace is exhausted', 'InvalidStateError')
 }

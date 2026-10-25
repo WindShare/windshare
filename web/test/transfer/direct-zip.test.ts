@@ -1044,6 +1044,7 @@ function transferOutput(
   }
   return new DirectZipTransferOutputV1({
     identity: { backend: 'direct-zip-test', outputSessionId: 'session-1' },
+    shareInstance: 'test-share', objectId: 'test-archive',
     capabilities: {
       durability: 'ProcessRestart',
       randomWrite: false,

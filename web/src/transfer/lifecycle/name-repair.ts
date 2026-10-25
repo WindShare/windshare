@@ -12,7 +12,7 @@ export interface CompatibleNameRepairSummary {
   readonly committedCount: number
   readonly logicalPathSample: readonly (readonly string[])[]
   readonly pairDisplayNames: Readonly<{
-    script: string
+    script?: string
     sidecar: string
   }>
   readonly placement: CompatibleNamePairPlacement

@@ -1,3 +1,4 @@
+import { receiveInterruptionControls } from '../../../transfer/lifecycle/interruption'
 import {
   type BrowserReceiveOperationLease,
 } from '../../../output/browser/session-lease'
@@ -40,8 +41,6 @@ import {
   type ReceiveIntent,
 } from '../../../transfer/intent'
 import {
-  TransferPauseRequestedError,
-  TransferStopRequestedError,
   outputExecutionProfile,
   outputSessionIdentity,
   type PlanExecutionAuthority,
@@ -92,7 +91,7 @@ export class FSAReceiveOperation implements BoundReceiveOperation {
   readonly intent: ReceiveIntent
   readonly #lifecycle: ReceiveLifecycleObservation
   readonly #unsubscribeLifecycle: () => void
-  readonly activeControls = Object.freeze(['pause', 'stop'] as const)
+  readonly activeControls = receiveInterruptionControls('direct-tree')
   readonly initialWorkspaceUsage = null
   readonly repairProjection?: CompatibleNameRepairProjectionSource
   readonly outputProgress?: BrowserFolderDeliveryContext['progress']
@@ -297,17 +296,6 @@ export class FSAReceiveOperation implements BoundReceiveOperation {
     observeBrowserFolderCheckpoint(this.#diagnostics, event)
   }
 
-  interrupt(control: ActiveReceiveControl, transfer: AbortController): void {
-    switch (control) {
-      case 'pause':
-        transfer.abort(new TransferPauseRequestedError())
-        return
-      case 'stop':
-        transfer.abort(new TransferStopRequestedError())
-        return
-      default: throw unavailableRoute()
-    }
-  }
 
   subscribeRepairProjectionActivation(
     listener: (source: CompatibleNameRepairProjectionSource) => void,

@@ -247,7 +247,7 @@ export async function openFileSystemAccessCompatibleNameCatchUp(
     const pairRoot = compatibleNames.pairPlacement === 'inside-logical-root'
       ? await binding.parent.getDirectoryHandle(binding.reservation.physicalName)
       : undefined
-    await compatibleNames.ensurePairReady(pairRoot)
+    await compatibleNames.ensureRecoveryReport(pairRoot)
     checkpoints = await openFSAFileCheckpointRepository(options, intent, binding.reservation)
     const semantic = semanticRepository(checkpoints)
     const materializationBinding = await ledgerBinding(intent, binding)
