@@ -34,10 +34,7 @@ func (a *App) receiveDependencies() engine.ReceiveDependencies {
 }
 
 func (a *App) projectReceiveObservation(o getObservation, event engine.Event) {
-	switch value := event.(type) {
-	case appobs.LossSnapshot:
-		o.reportCumulativeLoss(value.Source, value.Category, value.Reason, value.Count)
-	case appobs.Event:
+	if value, ok := event.(appobs.Event); ok {
 		observeEngineFact(o.runtime, value)
 	}
 }
@@ -87,14 +84,7 @@ func (a *App) reportEngineReceive(result engine.TaskCompletion[engine.ReceiveRes
 	return code
 }
 
-func (o getObservation) reportEngineLoss(value engine.ReceiveObservationLoss) {
-	loss := engine.ReceiveLossSnapshot(value)
-	o.reportCumulativeLoss(loss.Source, loss.Category, loss.Reason, loss.Count)
-}
 func (a *App) reportReceiveTask(result engine.TaskResult[engine.ReceiveResult], observation getObservation) int {
 	observation.runtime.ReportObserverLoss(appobs.ObserverLossEngineObservation, appobs.ObserverLossStreamCapacity, result.Observations.CapacityDropped)
-	for _, loss := range result.Value.ObservationLosses {
-		observation.reportEngineLoss(loss)
-	}
 	return a.reportEngineReceive(result.Completion, observation)
 }

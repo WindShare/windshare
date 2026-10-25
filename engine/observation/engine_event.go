@@ -1,6 +1,8 @@
 package observation
 
-import "time"
+import (
+	time "time"
+)
 
 const maximumEngineTaskIDBytes = 128
 
@@ -23,20 +25,10 @@ const (
 	EngineTaskStarted EngineTaskStage = iota + 1
 	EngineTaskStopping
 	EngineTaskSettled
-	EngineSourceAcquiring
-	EngineSourceAcquired
-	EngineSourceFailed
-	EngineGenerationChanged
-	EngineAdmissionDecision
-	EngineRelayContentClaimed
-	EngineShareReady
-	EngineShareStopping
-	EngineShareClosed
-	EngineSessionRetired
 )
 
 func (stage EngineTaskStage) Name() (string, bool) {
-	names := [...]string{"", "task_started", "task_stopping", "task_settled", "source_acquiring", "source_acquired", "source_failed", "generation_changed", "admission_decision", "relay_content_claimed", "share_ready", "share_stopping", "share_closed", "session_retired"}
+	names := [...]string{"", "task_started", "task_stopping", "task_settled"}
 	if stage == 0 || int(stage) >= len(names) {
 		return "", false
 	}
@@ -99,61 +91,23 @@ func (class EngineFailureClass) valid() bool {
 	}
 }
 
-type EngineAdmissionTrigger string
-
-func (trigger EngineAdmissionTrigger) Name() (string, bool) {
-	switch trigger {
-	case "":
-		return "none", true
-	case "peer_failed", "peer_detached", "relay_only_policy":
-		return string(trigger), true
-	default:
-		return "", false
-	}
-}
-
-type EngineAdmissionTerminalOwner string
-
-func (owner EngineAdmissionTerminalOwner) Name() (string, bool) {
-	switch owner {
-	case "":
-		return "none", true
-	case "none", "lifecycle_close", "peer_session_fatal", "runtime_terminal", "resume_failure", "p2p_unavailable":
-		return string(owner), true
-	default:
-		return "", false
-	}
-}
-
-// EngineTaskSpec correlates application ownership with protocol/output facts.
-// The trace run identifies one client invocation; Task identifies the native
-// operation, including clients that start several operations in the same run.
-
+// EngineTaskSpec describes product lifecycle and retained task settlement.
 type EngineTaskSpec struct {
-	Workflow               Workflow
-	Task                   EngineTaskID
-	At                     time.Time
-	Stage                  EngineTaskStage
-	StopReason             EngineStopReason
-	Outcome                EngineTaskOutcome
-	FailureClass           EngineFailureClass
-	ShareInstance          SharingInstanceID
-	Operation              ReceiveOperationID
-	Job                    TransferJobID
-	Session                ProtocolSessionID
-	PreviousSession        ProtocolSessionID
-	AdmissionTrigger       EngineAdmissionTrigger
-	AdmissionTerminalOwner EngineAdmissionTerminalOwner
-	Failure                Failure
-	CleanupFailure         Failure
+	Workflow       Workflow
+	Task           EngineTaskID
+	At             time.Time
+	Stage          EngineTaskStage
+	StopReason     EngineStopReason
+	Outcome        EngineTaskOutcome
+	FailureClass   EngineFailureClass
+	Failure        Failure
+	CleanupFailure Failure
 }
 
 func (spec EngineTaskSpec) valid() bool {
 	_, stage := spec.Stage.Name()
 	_, reason := spec.StopReason.Name()
-	_, trigger := spec.AdmissionTrigger.Name()
-	_, owner := spec.AdmissionTerminalOwner.Name()
-	if !spec.Workflow.Valid() || !spec.Task.Valid() || !stage || !reason || !trigger || !owner {
+	if !spec.Workflow.Valid() || !spec.Task.Valid() || !stage || !reason {
 		return false
 	}
 	if spec.Stage == EngineTaskSettled {
@@ -172,18 +126,7 @@ func (spec EngineTaskSpec) valid() bool {
 	if spec.Outcome != "" || spec.FailureClass != "" {
 		return false
 	}
-	switch spec.Stage {
-	case EngineSourceAcquiring, EngineSourceAcquired, EngineSourceFailed:
-		return spec.Workflow == WorkflowShare && spec.ShareInstance.Valid()
-	case EngineShareReady, EngineShareStopping, EngineShareClosed:
-		return spec.Workflow == WorkflowShare
-	case EngineSessionRetired:
-		return spec.Workflow == WorkflowShare && spec.Session.Valid()
-	case EngineGenerationChanged, EngineAdmissionDecision, EngineRelayContentClaimed:
-		return spec.Workflow == WorkflowReceive && spec.Session.Valid()
-	default:
-		return true
-	}
+	return !spec.Failure.Valid() && !spec.CleanupFailure.Valid()
 }
 
 type EngineTaskObserved struct{ spec EngineTaskSpec }

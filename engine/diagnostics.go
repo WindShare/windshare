@@ -1,9 +1,7 @@
 package engine
 
 import (
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/liveshare"
-	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine/internal/eventproject"
@@ -25,16 +23,6 @@ func DescribeProgress(operation receivecontract.OperationID, job transfer.Transf
 func DescribeSharingSubject(summary liveshare.SelectedRootSummary) (appobs.SharingSubjectSelected, error) {
 	return eventproject.ProjectSharingSubject(summary)
 }
-func DescribeCapacity(value revisioncapacity.TraceEvent) (appobs.SenderCapacityObserved, error) {
-	return eventproject.ProjectSenderCapacity(value)
-}
-
-func ReceiveLossSnapshot(value ReceiveObservationLoss) appobs.LossSnapshot {
-	return eventproject.ReceiveLoss(value)
-}
-func ShareLossSnapshot(value ShareObservationLoss) appobs.LossSnapshot {
-	return eventproject.ShareLoss(value)
-}
 
 func ObservationLossReason(cause error) appobs.ObserverLossReason {
 	return eventproject.ObserverLossReason(cause)
@@ -54,11 +42,4 @@ func describeSettlement(value task.Settlement) task.Settlement {
 	value.Failure, _ = eventproject.ClassifyError(value.Err)
 	value.CleanupFailure, _ = eventproject.ClassifyError(value.CleanupError)
 	return value
-}
-
-func DescribeProtocolObservation(workflow appobs.Workflow, value sessionruntime.ProtocolObservation) (appobs.ProtocolObservationObserved, error) {
-	return eventproject.ProjectProtocolObservation(workflow, value)
-}
-func DescribeSenderTermination(value sessionruntime.SenderSessionTerminated) (appobs.SenderSessionTerminated, error) {
-	return eventproject.ProjectSenderSessionTerminated(value)
 }

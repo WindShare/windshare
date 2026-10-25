@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/connectivity/relayset"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/engine/internal/task"
@@ -42,7 +43,7 @@ func TestReceivePreparationRetainsCleanupFailureAndJoinsBeforeReturn(t *testing.
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			output := &failedOutputAuthority{mode: test.mode, bindErr: test.bindErr, closeErr: closeErr}
-			request := Request{Capability: link.Link{Suite: link.SuiteSenderAuthenticated}, Connectivity: ConnectivityRelayOnly, Output: OutputFactoryFunc(func(OutputConfig) (OutputAuthority, error) { return output, test.factoryErr }), Destination: t.TempDir(), Diagnostics: true}
+			request := Request{Capability: link.Link{Suite: link.SuiteSenderAuthenticated}, Connectivity: ConnectivityRelayOnly, Output: OutputFactoryFunc(func(OutputConfig) (OutputAuthority, error) { return output, test.factoryErr }), Destination: t.TempDir(), Diagnostics: testDiagnosticSink(t)}
 			dialed := false
 			result := Run(context.Background(), request, Dependencies{ReceiverDial: func(context.Context, relayv2.ReceiverConfig) (relayset.ReceiverConnection, error) {
 				dialed = true
@@ -87,4 +88,14 @@ func TestReceiveCleanupFailureRevokesNominalSuccessAndCancellation(t *testing.T)
 			t.Fatalf("canceled=%v result=%+v err=%v", canceled, result, err)
 		}
 	}
+}
+
+func testDiagnosticSink(t *testing.T) diagnostics.Sink {
+	t.Helper()
+	stream, err := diagnostics.NewStream(256, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { stream.Close() })
+	return stream.Sink()
 }

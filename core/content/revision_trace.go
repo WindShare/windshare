@@ -1,6 +1,8 @@
 package content
 
 import (
+	"strconv"
+
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 )
@@ -98,4 +100,68 @@ func (s *RevisionStore) traceRevisionEvent(event RevisionTrace) {
 	}
 	defer func() { _ = recover() }()
 	s.tracer.TraceRevision(event)
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value RevisionTraceStage) DiagnosticName() string {
+	switch value {
+	case RevisionTraceStageActiveReuse:
+		return "active_reuse"
+	case RevisionTraceStageCleanRelease:
+		return "clean_release"
+	case RevisionTraceStageReopenMatch:
+		return "reopen_match"
+	case RevisionTraceStageMismatchInvalidation:
+		return "mismatch_invalidation"
+	case RevisionTraceStageUnavailableRetry:
+		return "unavailable_retry"
+	case RevisionTraceStageInvalidationRejection:
+		return "invalidation_rejection"
+	case RevisionTraceStageMetadataBudgetStop:
+		return "metadata_budget_stop"
+	case RevisionTraceStageLeaseSettlement:
+		return "lease_settlement"
+	case RevisionTraceStageOpenHandleBound:
+		return "open_handle_bound"
+	case RevisionTraceStageOpenRejected:
+		return "open_rejected"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
+	}
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value RevisionTraceCause) DiagnosticName() string {
+	switch value {
+	case RevisionTraceCauseUnknown:
+		return "none"
+	case RevisionTraceCauseCatalog:
+		return "catalog"
+	case RevisionTraceCauseSourceOpen:
+		return "source_open"
+	case RevisionTraceCauseVerification:
+		return "verification"
+	case RevisionTraceCauseGeometry:
+		return "geometry"
+	case RevisionTraceCauseModifiedTime:
+		return "modified_time"
+	case RevisionTraceCauseActiveRead:
+		return "active_read"
+	case RevisionTraceCausePanic:
+		return "panic"
+	case RevisionTraceCauseKnownInvalidation:
+		return "known_invalidation"
+	case RevisionTraceCauseMetadataBudget:
+		return "metadata_budget"
+	case RevisionTraceCauseRelinquished:
+		return "relinquished"
+	case RevisionTraceCauseUndelivered:
+		return "undelivered"
+	case RevisionTraceCauseDetached:
+		return "detached"
+	case RevisionTraceCauseCapacity:
+		return "capacity"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
+	}
 }

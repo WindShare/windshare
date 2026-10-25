@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/windshare/windshare/core/diagnostics"
+
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
@@ -155,9 +157,9 @@ func New(config Config) (*Engine, error) {
 }
 
 func start[T any](engine *Engine, ctx context.Context, run func(context.Context, task.Control) task.Completion[T]) (*Task[T], error) {
-	return startWorkflow(engine, ctx, 0, run)
+	return startWorkflow(engine, ctx, 0, diagnostics.Sink{}, run)
 }
-func startWorkflow[T any](engine *Engine, ctx context.Context, workflow appobs.Workflow, run func(context.Context, task.Control) task.Completion[T]) (*Task[T], error) {
+func startWorkflow[T any](engine *Engine, ctx context.Context, workflow appobs.Workflow, diagnosticSink diagnostics.Sink, run func(context.Context, task.Control) task.Completion[T]) (*Task[T], error) {
 	if ctx == nil {
 		return nil, errors.New("task context is nil")
 	}
@@ -177,8 +179,10 @@ func startWorkflow[T any](engine *Engine, ctx context.Context, workflow appobs.W
 			return eventproject.Workflow(workflow, value, emit)
 		}
 	}
+	workflowName, _ := workflow.Name()
 	current, err := task.Start(ctx, task.Config[T]{
 		ID: id, Now: engine.config.Now, Random: engine.random,
+		Diagnostics:         diagnosticSink.Bind(diagnostics.Scope{EngineID: engine.identity, TaskID: string(id), Workflow: workflowName}),
 		CleanupTimeout:      engine.config.CleanupTimeout,
 		ObservationCapacity: engine.config.ObservationCapacity,
 		Project:             project,

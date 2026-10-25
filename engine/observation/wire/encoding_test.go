@@ -1,7 +1,6 @@
 package wire_test
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -9,17 +8,6 @@ import (
 	appobs "github.com/windshare/windshare/engine/observation"
 	"github.com/windshare/windshare/engine/observation/wire"
 )
-
-func identityBytes(first byte) []byte {
-	raw := make([]byte, appobs.IdentityBytes)
-	raw[0] = first
-	return raw
-}
-
-func testIdentity(t *testing.T, marker byte) []byte {
-	t.Helper()
-	return bytes.Repeat([]byte{marker}, appobs.IdentityBytes)
-}
 
 func TestEncodeOwnsApplicationMetadataAndRejectsUnknownFacts(t *testing.T) {
 	record, err := wire.Encode(appobs.NewReady())

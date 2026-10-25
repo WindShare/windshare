@@ -1,6 +1,8 @@
 package observation
 
-import transferfault "github.com/windshare/windshare/core/transfer/fault"
+import (
+	transferfault "github.com/windshare/windshare/core/transfer/fault"
+)
 
 func ProjectFault(value transferfault.Fault) (Failure, bool) {
 	if !value.Valid() {

@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	fsobs "github.com/windshare/windshare/adapters/filesystem/diagnostic"
 	"github.com/windshare/windshare/core/diagnosticerror"
 
 	appobs "github.com/windshare/windshare/engine/observation"
@@ -21,13 +20,6 @@ func TestSealedEventPayloadTypesExposeNoOpenEndedOrRawErrorSurface(t *testing.T)
 		reflect.TypeFor[CommandFailed](), reflect.TypeFor[TransferSettled](),
 		reflect.TypeFor[SharingStopped](), reflect.TypeFor[TraceIncomplete](),
 		reflect.TypeFor[appobs.LaneAdopted](),
-		reflect.TypeFor[appobs.RelayLifecycleObserved](), reflect.TypeFor[appobs.WebRTCLifecycleObserved](),
-		reflect.TypeFor[appobs.PeerAttemptObserved](), reflect.TypeFor[appobs.TransferLifecycleObserved](),
-		reflect.TypeFor[fsobs.FilesystemOutputObserved](), reflect.TypeFor[appobs.SenderTerminalSendObserved](),
-		reflect.TypeFor[appobs.SenderSessionTerminated](), reflect.TypeFor[appobs.ProtocolObservationObserved](),
-		reflect.TypeFor[appobs.CatalogStorageObserved](),
-		reflect.TypeFor[appobs.RootPrefetchObserved](),
-		reflect.TypeFor[appobs.SenderCapacityObserved](), reflect.TypeFor[appobs.SenderRevisionObserved](),
 	}
 	seen := make(map[reflect.Type]bool)
 	for _, eventType := range eventTypes {
@@ -42,12 +34,6 @@ func assertSafePayloadType(t *testing.T, value reflect.Type, seen map[reflect.Ty
 	}
 	seen[value] = true
 	if value == reflect.TypeFor[time.Time]() {
-		return
-	}
-	if value == reflect.TypeFor[appobs.ProtocolFact]() {
-		for _, fact := range []reflect.Type{reflect.TypeFor[appobs.ProtocolOperationFact](), reflect.TypeFor[appobs.SenderContentDecisionFact](), reflect.TypeFor[appobs.ResponseSendNotStartedFact](), reflect.TypeFor[appobs.ResponseSendReturnedFact](), reflect.TypeFor[appobs.SendAttemptSettledFact](), reflect.TypeFor[appobs.ReceivedProtocolErrorFact]()} {
-			assertSafePayloadType(t, fact, seen)
-		}
 		return
 	}
 	if value == reflect.TypeFor[error]() {
@@ -78,7 +64,7 @@ func assertSafePayloadType(t *testing.T, value reflect.Type, seen map[reflect.Ty
 				// Rejection evidence has fixed field storage and explicit
 				// aggregate/per-value byte bounds; raw errors are never retained.
 				diagnostic = diagnostic || value == reflect.TypeFor[appobs.ObservationRejection]() ||
-					value == reflect.TypeFor[appobs.RejectionField]() || value == reflect.TypeFor[appobs.SendAttemptCause]()
+					value == reflect.TypeFor[appobs.RejectionField]()
 				if !diagnostic && owner != "DisplayName" && owner != "DisplayPath" && owner != "RelayAuthority" && owner != "CapacityStoreID" && owner != "CapacityShareID" {
 					t.Fatalf("unreviewed string field %s.%s", owner, field.Name)
 				}

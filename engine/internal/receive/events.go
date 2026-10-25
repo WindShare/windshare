@@ -1,19 +1,14 @@
 package receive
 
 import (
-	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/downloadmetrics"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
-	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
-	appobs "github.com/windshare/windshare/engine/observation"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
-	"github.com/windshare/windshare/transport/relayv2"
-	wsrtc "github.com/windshare/windshare/transport/webrtc"
 )
 
 type event struct{}
@@ -67,39 +62,6 @@ type RecoveryObserved struct {
 	event
 	Value relayset.ReceiverRecoveryObservation
 }
-type RelayObserved struct {
-	event
-	Value relayv2.LifecycleTrace
-}
-type WebRTCObserved struct {
-	event
-	Value wsrtc.LifecycleTrace
-}
-type OutputObserved struct {
-	event
-	Value appobs.OutputDiagnostic
-	Err   error
-}
-type TransferObserved struct {
-	event
-	Value transfer.TransferLifecycleTrace
-}
-type ProtocolObserved struct {
-	event
-	Value sessionruntime.ProtocolObservation
-}
-type LaneObserved struct {
-	event
-	Value transferlanes.SettlementSummary
-}
-type NativeObserved struct {
-	event
-	Value nativepeer.Observation
-}
-type PeerDiagnosticObserved struct {
-	event
-	Value v2peer.PeerDiagnosticObservation
-}
 type PeerTerminated struct {
 	event
 	Value     v2peer.ReceiverTerminationTrace
@@ -125,23 +87,23 @@ type LaneAdopted struct {
 	Session protocolsession.ProtocolSessionID
 	Lane    sessionruntime.LaneIdentity
 }
-type ObservationSource uint8
+type ObservationSource string
 
 const (
-	ObservationRelay ObservationSource = iota + 1
-	ObservationWebRTC
-	ObservationLane
-	ObservationNative
-	ObservationProtocol
-	ObservationPeerTermination
-	ObservationPeerDiagnostic
-)
+	ObservationRelay ObservationSource = "relay"
 
-type ObservationLoss struct {
-	event
-	Source ObservationSource
-	Count  uint64
-}
+	ObservationWebRTC ObservationSource = "webrtc"
+
+	ObservationLane ObservationSource = "lane"
+
+	ObservationNative ObservationSource = "native"
+
+	ObservationProtocol ObservationSource = "protocol"
+
+	ObservationPeerTermination ObservationSource = "peer_termination"
+
+	ObservationPeerDiagnostic ObservationSource = "peer_diagnostic"
+)
 
 type AdmissionTrigger = receiverAdmissionTrigger
 type AdmissionTerminalOwner = receiverAdmissionTerminalOwner

@@ -324,3 +324,23 @@ func channelLifecycleTrace(
 		Cause:      lifecycleCause(reason),
 	}
 }
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value LifecycleOperation) DiagnosticName() string {
+	return string(value)
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value LifecycleTransition) DiagnosticName() string {
+	return string(value)
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value LifecycleTerminalState) DiagnosticName() string {
+	return string(value)
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value LifecycleCause) DiagnosticName() string {
+	return string(value)
+}

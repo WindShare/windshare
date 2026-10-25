@@ -1,8 +1,8 @@
 package observation
 
 import (
-	"errors"
-	"time"
+	errors "errors"
+	time "time"
 )
 
 var ErrInvalidProgress = errors.New("engine receive progress is invalid")

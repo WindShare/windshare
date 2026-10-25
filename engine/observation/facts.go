@@ -1,10 +1,10 @@
 package observation
 
 import (
-	"errors"
-	"net"
-	"strings"
-	"unicode/utf8"
+	errors "errors"
+	net "net"
+	strings "strings"
+	utf8 "unicode/utf8"
 )
 
 var ErrInvalidFact = errors.New("engine observation fact is invalid")
@@ -71,10 +71,6 @@ func (authority RelayAuthority) Valid() bool {
 	_, err := NewRelayAuthority(authority.scheme, authority.host, authority.port)
 	return err == nil
 }
-
-// DisplayName and DisplayPath are intentionally human-only values. Their
-// accessors exist for the human renderer; the trace visitor must not read them.
-// Terminal escaping remains the renderer/canvas boundary's responsibility.
 
 type DisplayName struct{ text string }
 

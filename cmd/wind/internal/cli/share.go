@@ -74,9 +74,6 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 	completionContext, cancel := context.WithTimeout(context.Background(), observationCompletionTimeout)
 	observations.reportReaderStatus(appobs.ObserverLossCommandAdapter, reader.Join(completionContext))
 	cancel()
-	for _, loss := range result.Value.ObservationLosses {
-		a.observeEngineShare(observations, engine.ShareLossSnapshot(loss))
-	}
 	if result.Observations.CapacityDropped > 0 {
 		runtime.ReportObserverLoss(appobs.ObserverLossEngineObservation, appobs.ObserverLossStreamCapacity, result.Observations.CapacityDropped)
 	}
@@ -90,7 +87,7 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 func (a *App) engineShareRequest(request shareRequest, runtime *commandRuntime) engine.ShareRequest {
 	return engine.ShareRequest{
 		Source: shareFileSource(request.paths), Relays: slices.Clone(request.relays), ChunkSize: request.chunkSize,
-		Diagnostics: runtime.detailedDiagnosticsEnabled(), TraceLifecycle: runtime.traceRecordingEnabled(),
+		Diagnostics: runtime.diagnosticSink(),
 	}
 }
 

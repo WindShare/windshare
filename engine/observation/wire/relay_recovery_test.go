@@ -38,35 +38,3 @@ func TestRecoveryAndAvailabilityPreserveLifecycleDecisionContext(t *testing.T) {
 		t.Fatalf("availability=%s", encoded)
 	}
 }
-
-func TestNativeHeartbeatTraceReachesCLIProjectionAndEncoding(t *testing.T) {
-	for _, stage := range []appobs.RelayLifecycleStage{appobs.RelayHeartbeatProbe, appobs.RelayHeartbeatAcknowledged, appobs.RelayHeartbeatFailed} {
-		wait, cause := time.Second, appobs.RelayCauseNone
-		expectedWait := `"wait_ms":"1000"`
-		if stage == appobs.RelayHeartbeatProbe {
-			wait = 0
-			expectedWait = `"wait_ms":"0"`
-		}
-		if stage == appobs.RelayHeartbeatFailed {
-			cause = appobs.RelayCauseTransport
-		}
-		event, err := appobs.NewRelayLifecycleObserved(appobs.RelayLifecycleSpec{Workflow: appobs.WorkflowShare,
-			LinkID: 11, SendOperationID: 12, Stage: stage,
-			RetirementSource: appobs.RelayRetirementNone, Cause: cause, DrainCause: appobs.RelayCauseNone,
-			HeartbeatRound: 3, Wait: wait, Timeout: 10 * time.Second,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		record, err := wire.Encode(event)
-		if err != nil {
-			t.Fatal(err)
-		}
-		encoded, _ := json.Marshal(record)
-		for _, expected := range []string{`"heartbeat_round":"3"`, expectedWait, `"timeout_ms":"10000"`, `"link_id":"11"`} {
-			if !strings.Contains(string(encoded), expected) {
-				t.Fatalf("heartbeat lost %s: %s", expected, encoded)
-			}
-		}
-	}
-}

@@ -3,6 +3,8 @@ package v2peer
 import (
 	"math"
 	"sync"
+
+	diag "github.com/windshare/windshare/core/diagnostics"
 )
 
 const (
@@ -107,6 +109,14 @@ func (reporter *peerDiagnosticReporter) completeObservations() ObservationComple
 	}
 	reporter.completed = true
 	reporter.cut = reporter.source.completeObservations()
+	// Stream overflow is counted by its owning producer. Only the other causes
+	// belong here; copying their final totals survives a dropped diagnostic sample.
+	for _, category := range []PeerDiagnosticCategory{PeerDiagnosticSenderAttempt, PeerDiagnosticReceiverTermination} {
+		for _, reason := range []PeerDiagnosticReason{PeerDiagnosticPathCapacity, PeerDiagnosticCleanupResidue} {
+			index, _ := peerDiagnosticIndex(category, reason)
+			reporter.cut.Loss.SourceDropped = saturatingAdd(reporter.cut.Loss.SourceDropped, reporter.totals[index])
+		}
+	}
 	return reporter.cut
 }
 
@@ -138,3 +148,9 @@ func saturatingAdd(current, increment uint64) uint64 {
 	}
 	return current + increment
 }
+
+func (value PeerDiagnosticObservation) DiagnosticRecord() diag.Record {
+	return diag.New(lossEventName, diag.Fields{"source": diag.Text(string(value.Category)), "reason": diag.Text(string(value.Reason)), "cumulative_count": diag.Uint(value.Count)})
+}
+
+const lossEventName = "diagnostic_loss"

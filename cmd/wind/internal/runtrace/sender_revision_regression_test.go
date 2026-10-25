@@ -1,148 +1,78 @@
 package runtrace
 
 import (
+	"bytes"
+	"encoding/json"
+	"math"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
-	appobs "github.com/windshare/windshare/engine/observation"
-	wire "github.com/windshare/windshare/engine/observation/wire"
+	"github.com/windshare/windshare/core/diagnostics"
 )
 
-func TestSenderDecisionPayloadKeepsJoinableDecisionAndProtocolCorrelation(t *testing.T) {
-	session, _ := appobs.NewProtocolSessionID(identityBytes(0x61))
-	operation, _ := appobs.NewProtocolOperationID(identityBytes(0x62))
-	decisionID, _ := appobs.NewCapacityDecisionID("capacity-owner-3-decision-4")
-	decision, _ := appobs.NewSenderCapacityDecision(decisionID)
-	event, err := appobs.NewSenderContentDecisionObserved(appobs.ProtocolObservationContext{ObservedAt: time.Unix(1, 0), Workflow: appobs.WorkflowShare, Role: appobs.ProtocolRoleSender, ProtocolSession: session, ProtocolOperation: operation, RequestKind: appobs.ProtocolMessageOpenRevisions}, decision, appobs.LaneIdentity{}, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record, encodeErr := wire.Encode(event)
-	if err := encodeErr; err != nil {
-		t.Fatal(err)
-	}
-	payload, ok := record.Payload.(wire.SenderContentDecisionPayload)
-	if !ok || payload.ContentDecision == nil || payload.ContentDecision.CapacityDecisionID == nil ||
-		*payload.ContentDecision.CapacityDecisionID != decisionID.Hex() || record.Correlation == nil ||
-		record.Correlation.ProtocolSessionID != wire.EncodeIdentity(session.Bytes()) ||
-		record.Correlation.ProtocolOperationID != wire.EncodeIdentity(operation.Bytes()) {
-		t.Fatalf("sender decision record = %#v", record)
-	}
-}
-
-func TestSenderCapacityAndRevisionPayloadsKeepStableJoinKeys(t *testing.T) {
-	session, _ := appobs.NewProtocolSessionID(identityBytes(0x71))
-	decisionID, _ := appobs.NewCapacityDecisionID("capacity-owner-5-decision-6")
-	revisionID, _ := appobs.NewSenderRevisionID([]byte("revision-one"))
-	scope := appobs.CapacityScopeSnapshot{StableHandleLimit: 2, ActiveLeaseLimit: 2, ActiveLeases: 1}
-	capacityEvent, err := appobs.NewSenderCapacityObserved(appobs.SenderCapacitySpec{
-		StoreID: fixtureCapacityStoreID(t), ShareID: fixtureCapacityShareID(t),
-		Stage: appobs.SenderCapacityAdmissionDenied, Decision: decisionID, Session: session,
-		Revision: revisionID, Process: scope, Share: scope, SessionScope: scope,
-		HasShare: true, HasSessionScope: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	record, encodeErr := wire.Encode(capacityEvent)
-	if err := encodeErr; err != nil {
-		t.Fatal(err)
-	}
-	capacityPayload, ok := record.Payload.(wire.SenderCapacityPayload)
-	if !ok || capacityPayload.DecisionID == nil || *capacityPayload.DecisionID != decisionID.Hex() ||
-		capacityPayload.RevisionID == nil || *capacityPayload.RevisionID != revisionID.Hex() ||
-		record.Correlation == nil || record.Correlation.ProtocolSessionID != wire.EncodeIdentity(session.Bytes()) {
-		t.Fatalf("sender capacity record = %#v", record)
-	}
-
-	lease, _ := appobs.NewRevisionLeaseID(identityBytes(0x72))
-	revisionEvent, err := appobs.NewSenderRevisionObserved(
-		appobs.SenderRevisionLeaseSettlement, appobs.SenderRevisionCauseRelinquished,
-		revisionID, lease, session,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record, encodeErr = wire.Encode(revisionEvent)
-	if err := encodeErr; err != nil {
-		t.Fatal(err)
-	}
-	revisionPayload, ok := record.Payload.(wire.SenderRevisionPayload)
-	if !ok || revisionPayload.LeaseID == nil || *revisionPayload.LeaseID != lease.Hex() ||
-		revisionPayload.RevisionID != revisionID.Hex() || record.Correlation == nil ||
-		record.Correlation.ProtocolSessionID != wire.EncodeIdentity(session.Bytes()) {
-		t.Fatalf("sender revision record = %#v", record)
-	}
-}
-
-func TestRecorderAcceptsSenderCapacityAndRevisionEvents(t *testing.T) {
-	session, _ := appobs.NewProtocolSessionID(identityBytes(0x81))
-	decisionID, _ := appobs.NewCapacityDecisionID("capacity-owner-7-decision-8")
-	revisionID, _ := appobs.NewSenderRevisionID([]byte("revision-two"))
-	scope := appobs.CapacityScopeSnapshot{StableHandleLimit: 2, ActiveLeaseLimit: 2, ActiveLeases: 1}
-	capacityEvent, err := appobs.NewSenderCapacityObserved(appobs.SenderCapacitySpec{
-		StoreID: fixtureCapacityStoreID(t), ShareID: fixtureCapacityShareID(t),
-		Stage: appobs.SenderCapacityAdmissionDenied, Decision: decisionID, Session: session,
-		Revision: revisionID, Process: scope, Share: scope, SessionScope: scope,
-		HasShare: true, HasSessionScope: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	lease, _ := appobs.NewRevisionLeaseID(identityBytes(0x82))
-	revisionEvent, err := appobs.NewSenderRevisionObserved(
-		appobs.SenderRevisionLeaseSettlement, appobs.SenderRevisionCauseRelinquished,
-		revisionID, lease, session,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
+func TestRecorderExportsUnknownSourceEventsWithoutProjection(t *testing.T) {
+	sourceTime := time.Unix(1, 123)
+	source := diagnostics.New("future.source.phase", diagnostics.Fields{
+		"stage": diagnostics.Text("new_stage"), "counter": diagnostics.Uint(math.MaxUint64),
+		"decision_id": diagnostics.Text("capacity-owner-7-decision-8"),
+		"detail":      diagnostics.Object(diagnostics.Fields{"nested": diagnostics.Array(diagnostics.Text("first"), diagnostics.Number(7))}),
+	}).At(sourceTime).Correlate(diagnostics.Fields{"protocol_session_id": diagnostics.Identity([]byte{1, 2}), "protocol_operation_id": diagnostics.Identity([]byte{3, 4}), "lane_id": diagnostics.Number(math.MaxUint32), "lane_epoch": diagnostics.Number(0)})
+	stream, _ := diagnostics.NewStream(1, nil)
+	scope := diagnostics.Scope{EngineID: "engine", TaskID: "engine:7", Workflow: "share"}
+	stream.Sink().Bind(scope).Emit(source)
+	stream.Close()
+	source = <-stream.Records()
 	file := &memoryTraceFile{}
-	recorder := openTestRecorder(
-		t,
-		clievent.CommandShare,
-		Config{},
-		fixedClock(),
-		file,
-		newManualTicker(),
-	)
-	for _, event := range []clievent.Event{capacityEvent, revisionEvent} {
-		if !recorder.Record(event) {
-			t.Fatalf("sender lifecycle event %T was rejected", event)
-		}
+	recorder := openTestRecorder(t, clievent.CommandShare, Config{}, fixedClock(), file, newManualTicker())
+	if !recorder.Record(clievent.Diagnostic{Owner: clievent.CommandShare, Record: source}) {
+		t.Fatal("new event rejected")
 	}
 	status := recorder.Close()
-	if !status.Complete || status.SchemaLimited || status.LifecycleDropped != 0 {
-		t.Fatalf("sender lifecycle events made trace incomplete: %+v", status)
+	if !status.Complete || status.ContractRejected != 0 || status.SchemaLimited {
+		t.Fatalf("trace incomplete: %+v", status)
 	}
 	records := decodeRecords(t, file.Bytes())
-	if len(records) != 3 || records[0].Event != "sender_capacity" ||
-		records[1].Event != "sender_revision" || records[2].Event != "trace_summary" {
-		t.Fatalf("sender lifecycle records = %+v", records)
+	if len(records) != 2 || records[0].Event != source.Name() || records[1].Event != "trace_summary" {
+		t.Fatal(records)
 	}
-}
-
-func identityBytes(first byte) []byte {
-	raw := make([]byte, appobs.IdentityBytes)
-	raw[0] = first
-	return raw
-}
-
-func fixtureCapacityStoreID(t *testing.T) appobs.CapacityStoreID {
-	t.Helper()
-	id, err := appobs.NewCapacityStoreID("store")
-	if err != nil {
+	var decoded struct {
+		Scope       diagnostics.Scope
+		SourceTime  string
+		Payload     json.RawMessage
+		Correlation json.RawMessage
+	}
+	var lines []json.RawMessage
+	decoder := json.NewDecoder(bytes.NewReader(file.Bytes()))
+	for decoder.More() {
+		var line json.RawMessage
+		if err := decoder.Decode(&line); err != nil {
+			t.Fatal(err)
+		}
+		lines = append(lines, line)
+	}
+	// Field tags belong to the export, independent of product wire encoders.
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(lines[0], &envelope); err != nil {
 		t.Fatal(err)
 	}
-	return id
-}
-func fixtureCapacityShareID(t *testing.T) appobs.CapacityShareID {
-	t.Helper()
-	id, err := appobs.NewCapacityShareID("share")
-	if err != nil {
+	if err := json.Unmarshal(envelope["scope"], &decoded.Scope); err != nil {
 		t.Fatal(err)
 	}
-	return id
+	if err := json.Unmarshal(envelope["source_time"], &decoded.SourceTime); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Scope != scope || decoded.SourceTime != sourceTime.UTC().Format(time.RFC3339Nano) {
+		t.Fatal("lost source ownership or time")
+	}
+	for name, value := range map[string]diagnostics.Value{"payload": source.Payload(), "correlation": source.Correlation()} {
+		want, _ := json.Marshal(value)
+		var a, b any
+		json.Unmarshal(want, &a)
+		json.Unmarshal(envelope[name], &b)
+		if !reflect.DeepEqual(a, b) {
+			t.Fatalf("%s altered: %s vs %s", name, want, envelope[name])
+		}
+	}
 }

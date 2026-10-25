@@ -4,6 +4,8 @@ import (
 	"errors"
 	"sync"
 
+	"github.com/windshare/windshare/core/diagnostics"
+
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/connectivity/v2peer"
@@ -15,14 +17,12 @@ import (
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine/internal/task"
-	appobs "github.com/windshare/windshare/engine/observation"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 	wsrtc "github.com/windshare/windshare/transport/webrtc"
 )
 
 const protocolObservationCapacity observationstream.Capacity = 256
-const ()
 
 type observedSource struct {
 	complete func() uint64
@@ -40,7 +40,6 @@ type observationState struct {
 	failure      error
 	failureCode  FailureCode
 	cleanupError error
-	losses       map[ObservationSource]uint64
 }
 type getObservation struct {
 	*observationState
@@ -53,11 +52,14 @@ func newObservation(control task.Control, detailed bool, metrics *downloadmetric
 	if detailed {
 		producer, consumer, _ := observationstream.New[sessionruntime.ProtocolObservation](protocolObservationCapacity)
 		o.protocol = producer
-		o.register(ObservationProtocol, func() uint64 { return producer.Complete().CapacityDropped }, drain(consumer, func(v sessionruntime.ProtocolObservation) { o.emit(ProtocolObserved{Value: v}) }))
+		o.register(ObservationProtocol, func() uint64 { return producer.Complete().CapacityDropped }, drain(consumer, func(v sessionruntime.ProtocolObservation) { o.control.Diagnostics.Record(v) }))
 	}
 	return o
 }
 func (o getObservation) emit(e task.Event) bool {
+	if source, ok := e.(diagnostics.Source); ok {
+		return o.observationState != nil && o.control.Diagnostics.Record(source)
+	}
 	return o.observationState != nil && o.control.Emit != nil && o.control.Emit(e)
 }
 func drain[T any](values <-chan T, emit func(T)) <-chan struct{} {
@@ -141,11 +143,8 @@ func (o getObservation) relayConnected(v v2.RelayEndpoint) { o.emit(RelayConnect
 func (o getObservation) receiverRecovery(v relayset.ReceiverRecoveryObservation) {
 	o.emit(RecoveryObserved{Value: v})
 }
-func (o getObservation) outputDiagnostic(v appobs.OutputDiagnostic, err error) {
-	o.emit(OutputObserved{Value: v, Err: err})
-}
 func (o getObservation) transferLifecycle(v transfer.TransferLifecycleTrace) {
-	o.emit(TransferObserved{Value: v})
+	o.control.Diagnostics.Record(v)
 }
 func (o getObservation) protocolObservations() observationstream.Producer[sessionruntime.ProtocolObservation] {
 	return o.protocol
@@ -178,7 +177,7 @@ func (o getObservation) registerNative(native *nativepeer.NativePeerConnectivity
 	if !o.detailed {
 		return
 	}
-	o.register(ObservationNative, func() uint64 { return native.CompleteObservations().CapacityDropped }, drain(native.Observations(), func(v nativepeer.Observation) { o.emit(NativeObserved{Value: v}) }))
+	o.register(ObservationNative, func() uint64 { return native.CompleteObservations().CapacityDropped }, drain(native.Observations(), func(v nativepeer.Observation) { o.control.Diagnostics.Record(v) }))
 }
 
 type relayObservationSource interface {
@@ -191,7 +190,7 @@ func (o getObservation) registerRelayConnection(c relayObservationSource) {
 	if !o.detailed {
 		return
 	}
-	source := observedSource{kind: ObservationRelay, complete: func() uint64 { return c.CompleteObservations().Loss.CapacityDropped }, done: drain(c.LifecycleTrace(), func(v relayv2.LifecycleTrace) { o.emit(RelayObserved{Value: v}) })}
+	source := observedSource{kind: ObservationRelay, complete: func() uint64 { return c.CompleteObservations().Loss.CapacityDropped }, done: drain(c.LifecycleTrace(), func(v relayv2.LifecycleTrace) { o.control.Diagnostics.Record(v) })}
 	o.mu.Lock()
 	if o.relays == nil {
 		o.relays = make(map[v2.RelayIdentity]observedSource)
@@ -209,13 +208,13 @@ func (o getObservation) registerLaneSet(lanes *transferlanes.Set) {
 	if !o.detailed {
 		return
 	}
-	o.register(ObservationLane, func() uint64 { return lanes.CompleteObservations().Loss.CapacityDropped }, drain(lanes.SettlementObservations(), func(v transferlanes.SettlementSummary) { o.emit(LaneObserved{Value: v}) }))
+	o.register(ObservationLane, func() uint64 { return lanes.CompleteObservations().Loss.CapacityDropped }, drain(lanes.SettlementObservations(), func(v transferlanes.SettlementSummary) { o.control.Diagnostics.Record(v) }))
 }
 func (o getObservation) registerWebRTC(channel *wsrtc.Channel) {
 	if !o.detailed {
 		return
 	}
-	o.register(ObservationWebRTC, func() uint64 { return channel.CompleteObservations().Loss.CapacityDropped }, drain(channel.LifecycleTrace(), func(v wsrtc.LifecycleTrace) { o.emit(WebRTCObserved{Value: v}) }))
+	o.register(ObservationWebRTC, func() uint64 { return channel.CompleteObservations().Loss.CapacityDropped }, drain(channel.LifecycleTrace(), func(v wsrtc.LifecycleTrace) { o.control.Diagnostics.Record(v) }))
 }
 
 type receiverObservationCompleter interface {
@@ -228,14 +227,14 @@ func (o getObservation) registerReceiverFactory(source receiverObservationComple
 	if !o.detailed {
 		return
 	}
-	terminal := drain(source.ReceiverTerminationObservations(), func(v v2peer.ReceiverTerminationTrace) { o.emit(PeerTerminated{Value: v, LocalStop: stop.snapshot()}) })
-	diagnostic := drain(source.PeerDiagnostics(), func(v v2peer.PeerDiagnosticObservation) { o.emit(PeerDiagnosticObserved{Value: v}) })
+	terminal := drain(source.ReceiverTerminationObservations(), func(v v2peer.ReceiverTerminationTrace) { o.peerTerminated(v, stop.snapshot()) })
+	diagnostic := drain(source.PeerDiagnostics(), func(v v2peer.PeerDiagnosticObservation) { o.control.Diagnostics.Record(v) })
 	var completion v2peer.ReceiverObservationCompletion
 	o.register(ObservationPeerTermination, func() uint64 {
 		completion = source.CompleteObservations()
 		return completion.Terminations.Loss.CapacityDropped
 	}, terminal)
-	o.register(ObservationPeerDiagnostic, func() uint64 { return completion.Diagnostics.Loss.CapacityDropped }, diagnostic)
+	o.register(ObservationPeerDiagnostic, func() uint64 { return completion.Diagnostics.Loss.Total() }, diagnostic)
 }
 
 func (o getObservation) admission(decision receiverAdmissionDecision) {
@@ -262,33 +261,7 @@ func (o getObservation) cleanupFailure() error {
 	return o.cleanupError
 }
 func (o getObservation) recordLoss(source ObservationSource, count uint64) {
-	if count == 0 {
-		return
-	}
-	o.mu.Lock()
-	if o.losses == nil {
-		o.losses = make(map[ObservationSource]uint64)
-	}
-	prior := o.losses[source]
-	if count > ^uint64(0)-prior {
-		count = ^uint64(0)
-	} else {
-		count += prior
-	}
-	o.losses[source] = count
-	o.mu.Unlock()
-	o.emit(ObservationLoss{Source: source, Count: count})
-}
-func (o getObservation) lossSnapshot() []ObservationLoss {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	var result []ObservationLoss
-	for _, source := range []ObservationSource{ObservationRelay, ObservationWebRTC, ObservationLane, ObservationNative, ObservationProtocol, ObservationPeerTermination, ObservationPeerDiagnostic} {
-		if count := o.losses[source]; count > 0 {
-			result = append(result, ObservationLoss{Source: source, Count: count})
-		}
-	}
-	return result
+	o.control.Diagnostics.Lost(string(source), count)
 }
 
 func (o getObservation) relayContentClaimed(trigger receiverAdmissionTrigger) {

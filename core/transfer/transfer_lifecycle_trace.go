@@ -3,6 +3,7 @@ package transfer
 import (
 	"context"
 	"errors"
+	"strconv"
 	"time"
 
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -179,4 +180,69 @@ func (r *jobRun) traceRevisionWait(plan plannedFile, event revisionwait.Trace) {
 		trace.Fault = mustSessionFault(fault.ScopeSessionTerminal, fault.SessionTransport)
 	}
 	r.job.trace(trace)
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value TransferLifecycleStage) DiagnosticName() string {
+	switch value {
+	case TransferDiscoveryStarted:
+		return "discovery_started"
+	case TransferGenerationCommitted:
+		return "generation_committed"
+	case TransferDiscoveryCompleted:
+		return "discovery_completed"
+	case TransferAdmissionStarted:
+		return "admission_started"
+	case TransferAdmissionCompleted:
+		return "admission_completed"
+	case TransferDirectoryAdmitted:
+		return "directory_admitted"
+	case TransferDirectoryFinalized:
+		return "directory_finalized"
+	case TransferFileEnqueued:
+		return "file_enqueued"
+	case TransferFileStarted:
+		return "file_started"
+	case TransferFileAdmitted:
+		return "file_admitted"
+	case TransferFileFirstWrite:
+		return "file_first_write"
+	case TransferFileSettled:
+		return "file_settled"
+	case TransferRevisionCleanupSettled:
+		return "revision_cleanup_settled"
+	case TransferCapacityRetryScheduled:
+		return "capacity_retry_scheduled"
+	case TransferCapacityRetryReady:
+		return "capacity_retry_ready"
+	case TransferCapacityRetrySucceeded:
+		return "capacity_retry_succeeded"
+	case TransferCapacityBudgetPaused:
+		return "capacity_budget_paused"
+	case TransferCapacityWaitCanceled:
+		return "capacity_wait_canceled"
+	case TransferCapacityGenerationEnded:
+		return "capacity_generation_ended"
+	case TransferJobSettled:
+		return "job_settled"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
+	}
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value FileSelectionDecision) DiagnosticName() string {
+	if value == 0 {
+		return "none"
+	}
+	switch value {
+	case FileSelectionInherited:
+		return "inherited"
+	case FileSelectionNodeOverride:
+		return "node_override"
+	case FileSelectionCatalogPathTarget:
+		return "catalog_path_target"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
+	}
 }

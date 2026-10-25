@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -369,4 +370,26 @@ func (connectivity prefetchTerminalConnectivity) StopRecovery() {
 
 func (connectivity prefetchTerminalConnectivity) Cleanup(ctx context.Context) error {
 	return connectivity.delegate.Cleanup(ctx)
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value RootPrefetchDecision) DiagnosticName() string {
+	switch value {
+	case RootPrefetchAttemptStarted:
+		return "attempt_started"
+	case RootPrefetchYieldedToDemand:
+		return "yielded_to_demand"
+	case RootPrefetchRetryScheduled:
+		return "retry_scheduled"
+	case RootPrefetchCommitted:
+		return "committed"
+	case RootPrefetchBudgetFailed:
+		return "budget_failed"
+	case RootPrefetchScanFailed:
+		return "scan_failed"
+	case RootPrefetchStopped:
+		return "stopped"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
+	}
 }

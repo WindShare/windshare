@@ -49,7 +49,7 @@ func (a *runner) prepareGetOutput(
 	}
 	authority, err := factory.NewOutputAuthority(getOutputAuthorityConfig{
 
-		Observe: observation.outputDiagnostic,
+		Diagnostics: observation.control.Diagnostics,
 	})
 	if err != nil {
 		if authority != nil {

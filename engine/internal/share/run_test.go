@@ -221,7 +221,7 @@ func TestShareReadinessStartsAdmissionBeforePrefetchAndJoinsBeforeSourceRelease(
 		close(prefetched)
 	}
 	ctx, stop := context.WithCancelCause(context.Background())
-	done := fixtureRun(f, ctx, Request{Diagnostics: true, TraceLifecycle: true})
+	done := fixtureRun(f, ctx, Request{Diagnostics: testDiagnosticSink(t)})
 	ready, err := f.dependencies.Controller.Ready(context.Background())
 	if err != nil || ready.RelayEndpoint.DialURL == "" {
 		t.Fatalf("ready=%+v error=%v", ready, err)

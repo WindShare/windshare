@@ -2,10 +2,11 @@ package sessionruntime
 
 import (
 	"context"
-	"github.com/windshare/windshare/core/session/protocolsession"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
 func TestProtocolErrorContentValidatesOnlyWireMeaning(t *testing.T) {

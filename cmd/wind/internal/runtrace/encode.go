@@ -1,6 +1,8 @@
 package runtrace
 
 import (
+	"time"
+
 	clievent "github.com/windshare/windshare/cmd/wind/internal/clievent"
 	appobs "github.com/windshare/windshare/engine/observation"
 	wire "github.com/windshare/windshare/engine/observation/wire"
@@ -130,7 +132,10 @@ func (enc *cliEncoder) encodePlatformSetupObserved(event clievent.PlatformSetupO
 type cliEncoder struct{ record *RunTraceRecord }
 
 func (enc *cliEncoder) set(event string, correlation *wire.CorrelationV1, payload wire.Payload) {
-	enc.record.Event, enc.record.Correlation, enc.record.Payload = event, correlation, payload
+	enc.record.Event, enc.record.Payload = event, payload
+	if correlation != nil {
+		enc.record.Correlation = correlation
+	}
 }
 func encode(runID runIdentity, metadata entryMetadata, event clievent.Event) (RunTraceRecord, error) {
 	if event == nil {
@@ -148,11 +153,24 @@ func encode(runID runIdentity, metadata entryMetadata, event clievent.Event) (Ru
 		if err != nil {
 			return RunTraceRecord{}, err
 		}
-		record.Event, record.Correlation, record.Payload = encoded.Event, encoded.Correlation, encoded.Payload
+		record.Event, record.Payload = encoded.Event, encoded.Payload
+		if encoded.Correlation != nil {
+			record.Correlation = encoded.Correlation
+		}
 		return record, nil
 	}
 	enc := &cliEncoder{record: &record}
 	switch value := event.(type) {
+	case clievent.Diagnostic:
+		record.Event, record.Payload = value.Record.Name(), value.Record.Payload()
+		if correlation := value.Record.Correlation(); correlation.Present() {
+			record.Correlation = correlation
+		}
+		scope := value.Record.Scope()
+		record.Scope = &scope
+		if observedAt := value.Record.ObservedAt(); !observedAt.IsZero() {
+			record.SourceTime = observedAt.UTC().Format(time.RFC3339Nano)
+		}
 	case clievent.CommandFailed:
 		err = enc.encodeCommandFailed(value)
 	case clievent.TransferSettled:

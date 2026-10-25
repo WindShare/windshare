@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -384,4 +385,44 @@ func traceCatalogStorage(tracer CatalogStorageTracer, event CatalogStorageTrace)
 	// Storage diagnostics must never gain authority over catalog lifecycle.
 	defer func() { _ = recover() }()
 	tracer.TraceCatalogStorage(event)
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value CatalogStorageOperation) DiagnosticName() string {
+	switch value {
+	case CatalogStorageCreating:
+		return "creating"
+	case CatalogStorageCreated:
+		return "created"
+	case CatalogStorageRecovering:
+		return "recovering"
+	case CatalogStorageRecovered:
+		return "recovered"
+	case CatalogStorageBudgetRejected:
+		return "budget_rejected"
+	case CatalogStorageCleaning:
+		return "cleaning"
+	case CatalogStorageCleaned:
+		return "cleaned"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
+	}
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value CatalogStorageCause) DiagnosticName() string {
+	switch value {
+	case CatalogStorageCauseNone:
+		return "none"
+	case CatalogStorageCauseCanceled:
+		return "canceled"
+	case CatalogStorageCauseDeadlineExceeded:
+		return "deadline"
+	case CatalogStorageCauseBudgetExceeded:
+		return "budget"
+	case CatalogStorageCauseUnexpected:
+		return "unexpected"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
+	}
 }

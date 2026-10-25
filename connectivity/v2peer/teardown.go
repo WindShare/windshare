@@ -111,3 +111,8 @@ func (teardown peerTransportTeardown) peerShutdownFailed() bool {
 func (teardown peerTransportTeardown) channelDrainFailed() bool {
 	return teardown.channelDrainError != nil
 }
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value PeerTeardownTransition) DiagnosticName() string {
+	return string(value)
+}

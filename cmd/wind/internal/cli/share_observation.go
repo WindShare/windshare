@@ -30,15 +30,10 @@ type shareObservations struct {
 	observer       shareEventObserver
 	relayMu        sync.RWMutex
 	relayAuthority appobs.RelayAuthority
-	losses         *observationbridge.CumulativeLosses[appobs.LossSource]
 }
 
 func newShareProjection(observer shareEventObserver) *shareObservations {
-	observations := &shareObservations{observer: observer}
-	if preference, ok := observer.(detailedDiagnosticsPreference); ok && preference.detailedDiagnosticsEnabled() {
-		observations.losses = observationbridge.NewCumulativeLosses[appobs.LossSource](observer)
-	}
-	return observations
+	return &shareObservations{observer: observer}
 }
 func (observations *shareObservations) SetRelayAuthority(authority appobs.RelayAuthority) {
 	if observations == nil || !authority.Valid() {
@@ -64,22 +59,6 @@ func (observations *shareObservations) detailedDiagnosticsEnabled() bool {
 	}
 	preference, ok := observations.observer.(detailedDiagnosticsPreference)
 	return ok && preference.detailedDiagnosticsEnabled()
-}
-
-func (observations *shareObservations) reportCumulativeLoss(
-	source appobs.LossSource,
-	category appobs.ObserverLossCategory,
-	reason appobs.ObserverLossReason,
-	cumulative uint64,
-) {
-	if observations == nil || observations.observer == nil {
-		return
-	}
-	if observations.losses != nil {
-		observations.losses.Report(source, category, reason, cumulative)
-		return
-	}
-	observations.observer.ReportObserverLoss(category, reason, cumulative)
 }
 
 func (observations *shareObservations) reportReaderStatus(

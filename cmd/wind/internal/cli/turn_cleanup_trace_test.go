@@ -2,11 +2,15 @@ package cli
 
 import (
 	"encoding/json"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pion/turn/v5"
+	"github.com/windshare/windshare/connectivity/iceconfig"
+	"github.com/windshare/windshare/connectivity/pionpeer"
+	"github.com/windshare/windshare/connectivity/turnroute"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
@@ -26,24 +30,13 @@ func TestTURNCleanupProviderFactsReachCLITraceWithReasonAndResources(t *testing.
 	t.Cleanup(func() { recorder.Close() })
 	for _, outcome := range []connectionpath.CleanupOutcome{connectionpath.CleanupProtocol, connectionpath.CleanupDeadline} {
 		spec := nativeFactSpec(appobs.WorkflowShare, outcome.EventKind())
-		spec.TURN = &appobs.NativeTURNFacts{Provider: "test", Account: "owner", Profile: "primary", Cleanup: outcome, Reason: outcome.Reason(), Resources: &appobs.NativeTURNResources{OpenedSockets: 2, TransportSent: 100, TransportReceived: 50}}
-		event, err := appobs.NewNativeConnectivityObserved(spec)
-		if err != nil {
-			t.Fatal(err)
+		spec.Provider.TURNService = &iceconfig.Identity{Provider: "test", Account: "owner", Profile: "primary"}
+		spec.Provider.TURNCleanup = outcome
+		spec.Provider.TURN = &pionpeer.TURNResourceSnapshot{OpenedSockets: 2, TransportSent: 100, TransportReceived: 50}
+		if !recorder.Record(clievent.Diagnostic{Owner: clievent.CommandShare, Record: spec.DiagnosticRecord()}) {
+			t.Fatal("cleanup source rejected")
 		}
-		if !recorder.Record(event) {
-			t.Fatal("cleanup event rejected by recorder")
-		}
-		invalid := event.Facts()
-		invalid.TURN.Cleanup = 0
-		if _, err := appobs.NewNativeConnectivityObserved(invalid); err == nil {
-			t.Fatal("untyped cleanup accepted")
-		}
-		invalid = event.Facts()
-		invalid.TURN.Reason = "invented"
-		if _, err := appobs.NewNativeConnectivityObserved(invalid); err == nil {
-			t.Fatal("cleanup outcome/reason mismatch accepted")
-		}
+
 	}
 	status := recorder.Close()
 	if !status.Complete || status.LifecycleDropped != 0 {
@@ -101,18 +94,20 @@ func TestTURNRecoveryEvidenceReachesTrace(t *testing.T) {
 	t.Cleanup(func() { recorder.Close() })
 	for _, evidence := range []struct {
 		kind    string
-		binding *appobs.NativeTURNBinding
-		route   *appobs.NativeTURNRoute
+		binding *turn.BindingEvent
+		route   *turnroute.Event
 	}{
-		{"turn_binding", &appobs.NativeTURNBinding{Status: "mismatch", Code: 400, Channel: 0x4000, Allocation: netip.MustParseAddrPort("127.0.0.1:10"), Peer: netip.MustParseAddrPort("127.0.0.1:20")}, nil},
-		{"turn_route", nil, &appobs.NativeTURNRoute{Server: "turn:localhost:3478", Outcome: "started"}},
+		{"turn_binding", &turn.BindingEvent{Status: turn.BindingMismatch, Code: 400, Channel: 0x4000, RelayedAddress: "127.0.0.1:10", PeerAddress: "127.0.0.1:20"}, nil},
+		{"turn_route", nil, &turnroute.Event{Server: "turn:localhost:3478", Outcome: "started"}},
 	} {
 		spec := nativeFactSpec(appobs.WorkflowShare, evidence.kind)
-		spec.TURN = &appobs.NativeTURNFacts{Provider: "test", Account: "owner", Profile: "primary", Resources: &appobs.NativeTURNResources{ActiveSockets: 1}, Binding: evidence.binding, Route: evidence.route}
-		event, err := appobs.NewNativeConnectivityObserved(spec)
-		if err != nil || !recorder.Record(event) {
-			t.Fatalf("recovery evidence rejected: %v", err)
+		spec.Provider.TURNService = &iceconfig.Identity{Provider: "test", Account: "owner", Profile: "primary"}
+		spec.Provider.TURN = &pionpeer.TURNResourceSnapshot{ActiveSockets: 1}
+		spec.Provider.TURNBinding, spec.Provider.TURNRoute = evidence.binding, evidence.route
+		if !recorder.Record(clievent.Diagnostic{Owner: clievent.CommandShare, Record: spec.DiagnosticRecord()}) {
+			t.Fatal("recovery source rejected")
 		}
+
 	}
 	recorder.Close()
 	body, err := os.ReadFile(recorder.Path())

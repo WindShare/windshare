@@ -35,23 +35,6 @@ func TestEveryRelayAndPeerCodeHasAnExplicitSafeMapping(t *testing.T) {
 		t.Fatal("mapped unknown relay code")
 	}
 
-	peerCodes := []v2peer.TypedPeerErrorCode{
-		v2peer.TypedPeerErrorNegotiation, v2peer.TypedPeerErrorTimeout,
-		v2peer.TypedPeerErrorCandidates, v2peer.TypedPeerErrorAdmission,
-		v2peer.TypedPeerErrorPolicy, v2peer.TypedPeerErrorBusy,
-		v2peer.TypedPeerErrorSignaling, v2peer.TypedPeerErrorCancelled,
-		v2peer.TypedPeerErrorStopped, v2peer.TypedPeerErrorUnexpected,
-	}
-	for _, code := range peerCodes {
-		failure, ok := ProjectPeerErrorCode(code)
-		if !ok || !failure.Valid() {
-			t.Fatalf("peer code %q mapping = %+v,%t", code, failure, ok)
-		}
-	}
-	if _, ok := ProjectPeerErrorCode("future-peer-code"); ok {
-		t.Fatal("mapped unknown peer error code")
-	}
-
 	receiverClasses := []v2peer.ReceiverCauseClass{
 		v2peer.ReceiverCauseRuntimeClosed, v2peer.ReceiverCauseConfiguration,
 		v2peer.ReceiverCauseOperationMissing, v2peer.ReceiverCauseNegotiationTimeout,
@@ -70,54 +53,6 @@ func TestEveryRelayAndPeerCodeHasAnExplicitSafeMapping(t *testing.T) {
 	}
 	if _, ok := ProjectReceiverCauseClass("future-class"); ok {
 		t.Fatal("mapped unknown receiver cause class")
-	}
-}
-
-func TestEveryTransportLifecycleCauseHasAnExplicitMappingOrOmission(t *testing.T) {
-	relayCauses := []relayv2.LifecycleCause{
-		relayv2.LifecycleCauseNone, relayv2.LifecycleCauseCanceled,
-		relayv2.LifecycleCauseDeadline, relayv2.LifecycleCauseFrameBounds,
-		relayv2.LifecycleCauseEgressOverflow, relayv2.LifecycleCauseIngressOverflow,
-		relayv2.LifecycleCauseSessionRetired, relayv2.LifecycleCauseProtocol,
-		relayv2.LifecycleCauseClosed, relayv2.LifecycleCauseTransport,
-	}
-	for _, cause := range relayCauses {
-		failure, present := ProjectRelayLifecycleCause(cause)
-		if cause == relayv2.LifecycleCauseNone {
-			if present || failure.Valid() {
-				t.Fatalf("none relay cause produced failure: %+v,%t", failure, present)
-			}
-			continue
-		}
-		if !present || !failure.Valid() {
-			t.Fatalf("relay lifecycle cause %q mapping = %+v,%t", cause, failure, present)
-		}
-	}
-	if _, present := ProjectRelayLifecycleCause("future-relay-cause"); present {
-		t.Fatal("mapped unknown relay lifecycle cause")
-	}
-
-	webRTCCauses := []wsrtc.LifecycleCause{
-		wsrtc.LifecycleCauseNone, wsrtc.LifecycleCauseCanceled,
-		wsrtc.LifecycleCauseDeadline, wsrtc.LifecycleCauseNotOpen,
-		wsrtc.LifecycleCauseNaturalRetirement, wsrtc.LifecycleCauseRemoteClosed,
-		wsrtc.LifecycleCauseTerminalUnacknowledged, wsrtc.LifecycleCausePeerProtocol,
-		wsrtc.LifecycleCauseTransport, wsrtc.LifecycleCauseOther,
-	}
-	for _, cause := range webRTCCauses {
-		failure, present := ProjectWebRTCLifecycleCause(cause)
-		if cause == wsrtc.LifecycleCauseNone {
-			if present || failure.Valid() {
-				t.Fatalf("none WebRTC cause produced failure: %+v,%t", failure, present)
-			}
-			continue
-		}
-		if !present || !failure.Valid() {
-			t.Fatalf("WebRTC lifecycle cause %q mapping = %+v,%t", cause, failure, present)
-		}
-	}
-	if _, present := ProjectWebRTCLifecycleCause("future-webrtc-cause"); present {
-		t.Fatal("mapped unknown WebRTC lifecycle cause")
 	}
 }
 
@@ -172,7 +107,7 @@ func TestEveryTransferFaultCodePreservesClosedDomainScopeAndCode(t *testing.T) {
 			if !ok || context.Code() != value.Code() {
 				t.Fatalf("fault context = %+v,%t want numeric %d", context, ok, value.Code())
 			}
-			normalized, ok := ProjectNormalizedFault(uint8(value.Domain()), uint8(value.Scope()), value.Code())
+			normalized, ok := appobs.ProjectNormalizedFault(uint8(value.Domain()), uint8(value.Scope()), value.Code())
 			if !ok || normalized.Code() != failure.Code() {
 				t.Fatalf("normalized mapping = %+v,%t want %+v", normalized, ok, failure)
 			}
@@ -181,7 +116,7 @@ func TestEveryTransferFaultCodePreservesClosedDomainScopeAndCode(t *testing.T) {
 	if _, ok := ProjectFault(transferfault.Fault{}); ok {
 		t.Fatal("mapped zero fault")
 	}
-	if _, ok := ProjectNormalizedFault(255, 1, 1); ok {
+	if _, ok := appobs.ProjectNormalizedFault(255, 1, 1); ok {
 		t.Fatal("mapped unknown normalized fault domain")
 	}
 }

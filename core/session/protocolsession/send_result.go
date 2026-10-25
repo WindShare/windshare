@@ -3,8 +3,11 @@ package protocolsession
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	diag "github.com/windshare/windshare/core/diagnostics"
 
 	"github.com/windshare/windshare/core/framechannel"
 )
@@ -356,4 +359,139 @@ func (result ResponseSendResult) WithCleanup(cleanup SendCleanupKind) ResponseSe
 	}
 	result.cleanup = cleanup
 	return result
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value ResponseSendEvidence) DiagnosticName() string {
+	switch value {
+	case ResponseSendEvidenceDefinitelyNotSent:
+		return "definitely_not_sent"
+	case ResponseSendEvidenceUncertain:
+		return "uncertain"
+	case ResponseSendEvidenceTransportConfirmed:
+		return "transport_confirmed"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
+	}
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value ResponseSendEnd) DiagnosticName() string {
+	switch value {
+	case ResponseSendEndPreparationFailed:
+		return "preparation_failed"
+	case ResponseSendEndRouteUnavailable:
+		return "route_unavailable"
+	case ResponseSendEndAuthorityUnavailable:
+		return "authority_unavailable"
+	case ResponseSendEndTransportConfirmed:
+		return "transport_confirmed"
+	case ResponseSendEndPolicySuppressed:
+		return "policy_suppressed"
+	case ResponseSendEndCallerCanceled:
+		return "caller_canceled"
+	case ResponseSendEndDeadlineExceeded:
+		return "deadline_exceeded"
+	case ResponseSendEndRuntimeStopped:
+		return "runtime_stopped"
+	case ResponseSendEndRetryDisallowed:
+		return "retry_disallowed"
+	case ResponseSendEndNoUsableLane:
+		return "no_usable_lane"
+	case ResponseSendEndAttemptsExhausted:
+		return "attempts_exhausted"
+	case ResponseSendEndAuthorityLost:
+		return "authority_lost"
+	case ResponseSendEndInvalidReceipt:
+		return "invalid_receipt"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
+	}
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value SendAttemptEnd) DiagnosticName() string {
+	switch value {
+	case SendAttemptEndRejectedBeforeReceipt:
+		return "rejected_before_receipt"
+	case SendAttemptEndSettled:
+		return "settled"
+	case SendAttemptEndWaitingEnded:
+		return "waiting_ended"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
+	}
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value SendCleanupKind) DiagnosticName() string {
+	switch value {
+	case SendCleanupNone:
+		return "none"
+	case SendCleanupRouteReleased:
+		return "route_released"
+	case SendCleanupOperationRetired:
+		return "operation_retired"
+	case SendCleanupFailed:
+		return "failed"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
+	}
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value SendAttemptCauseKind) DiagnosticName() string {
+	switch value {
+	case SendAttemptCauseNone:
+		return "none"
+	case SendAttemptCauseCanceled:
+		return "canceled"
+	case SendAttemptCauseDeadline:
+		return "deadline"
+	case SendAttemptCauseControlQueueFull:
+		return "control_queue_full"
+	case SendAttemptCauseDataQueueFull:
+		return "data_queue_full"
+	case SendAttemptCauseWriterStopped:
+		return "writer_stopped"
+	case SendAttemptCauseWriterTerminal:
+		return "writer_terminal"
+	case SendAttemptCauseTransportFailure:
+		return "transport_failure"
+	case SendAttemptCausePreparationFailure:
+		return "preparation_failure"
+	case SendAttemptCauseAdmissionFailure:
+		return "admission_failure"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
+	}
+}
+
+func (value SendAttemptSnapshot) DiagnosticValue() diag.Value {
+	id, cause := value.Identity(), value.Cause()
+	fields := diag.Fields{
+		"attempt_sequence": diag.Uint(uint64(id.AttemptSequence)),
+		"lane_id":          diag.Number(float64(id.LaneID)), "lane_epoch": diag.Number(float64(id.LaneEpoch)),
+		"policy_admitted": diag.Bool(value.PolicyAdmitted()), "settled": diag.Bool(value.Settled()),
+		"outcome": diag.Text(value.Outcome().DiagnosticName()), "end": diag.Text(value.End().DiagnosticName()),
+		"cause": diag.Object(diag.Fields{"kind": diag.Text(cause.Kind().DiagnosticName()), "detail": diag.Text(cause.Detail()), "truncated": diag.Bool(cause.Truncated())}),
+	}
+	if disposition := value.TransportDisposition(); disposition != 0 {
+		fields["transport_disposition"] = diag.Text(disposition.DiagnosticName())
+	}
+	return diag.Object(fields)
+}
+
+func (value ResponseSendResult) DiagnosticValue() diag.Value {
+	attempts := make([]diag.Value, 0, value.AttemptCount())
+	for index := 0; index < value.AttemptCount(); index++ {
+		attempt, _ := value.Attempt(index)
+		attempts = append(attempts, attempt.DiagnosticValue())
+	}
+	fields := diag.Fields{"started": diag.Bool(value.Started()), "evidence": diag.Text(value.Evidence().DiagnosticName()),
+		"end": diag.Text(value.End().DiagnosticName()), "cleanup": diag.Text(value.Cleanup().DiagnosticName()), "attempts": diag.Array(attempts...)}
+	if pending, ok := value.PendingAttempt(); ok {
+		fields["pending_attempt_sequence"] = diag.Uint(uint64(pending.AttemptSequence))
+	}
+	return diag.Object(fields)
 }

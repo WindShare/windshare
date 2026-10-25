@@ -16,11 +16,8 @@ func TestSourceFailureTraceKeepsThePathAndReasonAtTaskAndCommandBoundaries(t *te
 		t.Fatal(err)
 	}
 	task, _ := appobs.NewEngineTaskID("application:42")
-	identity := make([]byte, appobs.IdentityBytes)
-	identity[0] = 1
-	share, _ := appobs.NewSharingInstanceID(identity)
 	sourceEvent, err := appobs.NewEngineTaskObserved(appobs.EngineTaskSpec{
-		Workflow: appobs.WorkflowShare, Task: task, Stage: appobs.EngineSourceFailed, ShareInstance: share, Failure: failure,
+		Workflow: appobs.WorkflowShare, Task: task, Stage: appobs.EngineTaskSettled, Outcome: appobs.EngineOutcomeFailed, FailureClass: appobs.EngineFailureUsage, Failure: failure,
 	})
 	if err != nil {
 		t.Fatal(err)

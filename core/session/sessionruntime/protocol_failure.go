@@ -1,8 +1,15 @@
 package sessionruntime
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"strconv"
+
+	diag "github.com/windshare/windshare/core/diagnostics"
+
+	"github.com/windshare/windshare/core/session/contentflow"
+
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -145,4 +152,86 @@ func protocolErrorForAuthenticatedReceive(message protocolsession.Message) (Prot
 		return ProtocolErrorContent{}, false
 	}
 	return protocolErrorContent(wire)
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value ProtocolErrorScope) DiagnosticName() string {
+	switch value {
+	case ProtocolErrorDirectory:
+		return "directory"
+	case ProtocolErrorRevision:
+		return "revision"
+	case ProtocolErrorBlock:
+		return "block"
+	case ProtocolErrorPeer:
+		return "peer"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
+	}
+}
+
+func protocolOperationLifecycleCause(cause ProtocolOperationCause) bool {
+	return cause == ProtocolOperationCauseNone || cause == ProtocolOperationCauseCanceled ||
+		cause == ProtocolOperationCauseOperationClosed || cause == ProtocolOperationCauseSuperseded
+}
+
+func mergeProtocolOperationCause(current, next ProtocolOperationCause) ProtocolOperationCause {
+	// A wakeup can arrive before an authenticated fault or failed cleanup.
+	// Preserve the first actual failure instead of letting cancellation mask it.
+	if current == ProtocolOperationCauseNone ||
+		(protocolOperationLifecycleCause(current) && !protocolOperationLifecycleCause(next)) {
+		return next
+	}
+	return current
+}
+
+func protocolOperationCause(err error) ProtocolOperationCause {
+	// Inspect joined components independently: errors.Is on the whole tree would
+	// let a cancellation component erase an unrelated protocol or cleanup fault.
+	// Only canonical lifecycle leaves prove a benign wakeup; an opaque Is match
+	// cannot make a collaborator's own error harmless.
+	switch wrapped := err.(type) { //nolint:errorlint // Inspect one node at a time so every joined fault is classified.
+	case interface{ Unwrap() []error }:
+		cause := ProtocolOperationCauseNone
+		for _, component := range wrapped.Unwrap() {
+			cause = mergeProtocolOperationCause(cause, protocolOperationCause(component))
+		}
+		if cause != ProtocolOperationCauseNone {
+			return cause
+		}
+	case interface{ Unwrap() error }:
+		if inner := wrapped.Unwrap(); inner != nil {
+			return protocolOperationCause(inner)
+		}
+	}
+	switch {
+	case err == nil:
+		return ProtocolOperationCauseNone
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, contentflow.ErrFragmentInactivity),
+		errors.Is(err, contentflow.ErrBlockResponseInactivity):
+		return ProtocolOperationCauseDeadline
+	case err == context.Canceled: //nolint:errorlint // Only the canonical leaf proves an ordinary canceled wait.
+		return ProtocolOperationCauseCanceled
+	case errors.Is(err, ErrRuntimeClosed):
+		return ProtocolOperationCauseRuntimeClosed
+	case errors.Is(err, ErrLaneUnavailable):
+		return ProtocolOperationCauseLaneUnavailable
+	case errors.Is(err, protocolsession.ErrWriterStopped):
+		return ProtocolOperationCauseWriterStopped
+	case err == ErrOperationMissing: //nolint:errorlint // An opaque Is match cannot prove that this operation ended.
+		return ProtocolOperationCauseOperationClosed
+	default:
+		return ProtocolOperationCauseProtocolFailure
+	}
+}
+
+func (value ProtocolErrorContent) DiagnosticValue() diag.Value {
+	if value.IsZero() {
+		return diag.Value{}
+	}
+	fields := diag.Fields{"scope": diag.Text(value.WireScope().DiagnosticName()), "code": diag.Number(float64(value.WireCode())), "retryable": diag.Bool(value.Retryable())}
+	if retry, ok := value.RetryAfterMillis(); ok {
+		fields["retry_after_ms"] = diag.Number(float64(retry))
+	}
+	return diag.Object(fields)
 }

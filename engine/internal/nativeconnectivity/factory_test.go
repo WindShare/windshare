@@ -14,16 +14,15 @@ import (
 func TestSenderObservationModesKeepOrdinaryTransfersQuiet(t *testing.T) {
 	for _, config := range []SenderConfig{
 		{},
-		{TraceLifecycle: true},
+
 		{Diagnostics: true},
-		{TraceLifecycle: true, Diagnostics: true},
 	} {
 		config.Capacity = newTestCapacity(t)
 		factory, err := NewSender(config)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if (factory.SenderAttemptObservations() != nil) != (config.Diagnostics || config.TraceLifecycle) ||
+		if (factory.SenderAttemptObservations() != nil) != config.Diagnostics ||
 			(factory.PeerDiagnostics() != nil) != config.Diagnostics ||
 			(factory.NativeConnectivity().Observations() != nil) != config.Diagnostics {
 			t.Fatalf("observation mode differs from owner: %+v", config)

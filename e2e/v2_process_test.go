@@ -483,7 +483,7 @@ func TestLongV2ProcessTransfersExactPayloadOverPionAfterRelayCut(t *testing.T) {
 	// Recent useful traffic can correctly remain Direct + Relay for a short
 	// transfer. Verify authenticated delivery instead of a presentation window.
 	assertV2UserTraceTransportDiagnostics(t, receiver, "direct", true)
-	records, _ := readV4UserTrace(t, receiver.userTracePath, receiver.userTraceCommand)
+	records, _ := readV5UserTrace(t, receiver.userTracePath, receiver.userTraceCommand)
 	if !hasV2DirectRevisionAfter(t, records, cutCompletedAt) {
 		t.Fatalf("no content revision opened over a delivering direct lane after relay cut at %s", cutCompletedAt.Format(time.RFC3339Nano))
 	}

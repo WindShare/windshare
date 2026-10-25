@@ -10,7 +10,6 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
-	"github.com/windshare/windshare/engine"
 	appobs "github.com/windshare/windshare/engine/observation"
 )
 
@@ -51,42 +50,27 @@ func TestProtocolCommandAssemblyProjectsSourceFactsAndReportsFinalLossOnce(t *te
 				t.Fatal(err)
 			}
 			role := protocolsession.RoleReceiver
-			var project func(sessionruntime.ProtocolObservation)
-			var loss func()
 			if command == clievent.CommandShare {
-				observations := newShareProjection(runtime)
 				role = protocolsession.RoleSender
-				project = func(fact sessionruntime.ProtocolObservation) {
-					projectProtocolFixture(t, app, runtime, command, fact)
-				}
-				loss = func() {
-					observations.reportCumulativeLoss(appobs.LossProtocolQueue, appobs.ObserverLossProtocolOperation, appobs.ObserverLossStreamCapacity, 3)
-				}
-			} else {
-				observations := newGetObservation(runtime)
-				project = func(fact sessionruntime.ProtocolObservation) {
-					projectProtocolFixture(t, app, runtime, command, fact)
-				}
-				loss = func() {
-					observations.reportCumulativeLoss(appobs.LossProtocolQueue, appobs.ObserverLossProtocolOperation, appobs.ObserverLossStreamCapacity, 3)
-				}
 			}
 			fact := protocolAssemblyFact(role)
-			project(fact)
-			loss()
-			loss()
+			runtime.diagnosticSink().Record(fact)
+			runtime.diagnosticSink().Lost("protocol", 3)
 			runtime.Close()
 			var projected int
 			var lost uint64
 			for _, event := range recorder.recorded() {
 				switch event := event.(type) {
-				case appobs.ProtocolObservationObserved:
+				case clievent.Diagnostic:
+					if event.Record.Name() != "protocol_operation" {
+						continue
+					}
 					projected++
-					if clievent.CommandOf(event) != command || !event.ObservedAt().Equal(fact.ObservedAt()) {
+					if clievent.CommandOf(event) != command || !event.Record.ObservedAt().Equal(fact.ObservedAt()) {
 						t.Fatalf("projection changed source context: %+v", event)
 					}
 				case appobs.ObserverLossObserved:
-					if event.Category() == appobs.ObserverLossProtocolOperation && event.Reason() == appobs.ObserverLossStreamCapacity {
+					if event.Category() == appobs.ObserverLossCommandAdapter && event.Reason() == appobs.ObserverLossStreamCapacity {
 						lost += event.Count()
 					}
 				}
@@ -127,18 +111,16 @@ func TestSupersededBlockObservationRetainsTraceWithoutVerboseWarning(t *testing.
 				OperationID: protocolsession.OperationID{byte(index + 2)}, RequestKind: protocolsession.MessageRequestBlocks,
 			},
 		}, sessionruntime.ProtocolOperationObservation{Stage: outcome.stage, Cause: outcome.cause})
-		projectProtocolFixture(t, app, runtime, clievent.CommandGet, fact)
+		runtime.diagnosticSink().Record(fact)
 	}
 	runtime.Close()
-	var causes []appobs.ProtocolOperationCause
+	var causes []string
 	for _, event := range recorder.recorded() {
-		if event, ok := event.(appobs.ProtocolObservationObserved); ok {
-			if fact, ok := event.Fact().(appobs.ProtocolOperationFact); ok {
-				causes = append(causes, fact.Cause())
-			}
+		if event, ok := event.(clievent.Diagnostic); ok && event.Record.Name() == "protocol_operation" {
+			causes = append(causes, event.Record.Payload().Get("cause").Text())
 		}
 	}
-	if len(causes) != 2 || causes[0] != appobs.ProtocolOperationCauseSuperseded || causes[1] != appobs.ProtocolOperationCauseProtocolFailure {
+	if len(causes) != 2 || causes[0] != "superseded" || causes[1] != "protocol_failure" {
 		t.Fatalf("trace lost terminal reasons: %v", causes)
 	}
 	if output := stderr.String(); strings.Count(output, "Protocol operation request blocks failed") != 1 ||
@@ -156,17 +138,5 @@ func TestProtocolAssemblyReportsRejectedFacts(t *testing.T) {
 	(&App{}).observeEngineShare(newShareProjection(emitter), loss)
 	if emitter.lifecycleLoss != 1 {
 		t.Fatalf("rejected facts=%d", emitter.lifecycleLoss)
-	}
-}
-func projectProtocolFixture(t *testing.T, app *App, runtime *commandRuntime, command clievent.Command, fact sessionruntime.ProtocolObservation) {
-	t.Helper()
-	event, err := engine.DescribeProtocolObservation(appobs.Workflow(command), fact)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if command == clievent.CommandShare {
-		app.observeEngineShare(newShareProjection(runtime), event)
-	} else {
-		app.projectReceiveObservation(newGetObservation(runtime), event)
 	}
 }

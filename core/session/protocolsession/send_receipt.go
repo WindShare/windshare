@@ -2,6 +2,7 @@ package protocolsession
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"time"
 
@@ -465,5 +466,19 @@ func (result *deliveryResult) claimSettlementPublicationLocked() settlementPubli
 		value: SendAttemptSettlement{
 			correlation: registration.correlation, observedAt: result.settledAt, attempt: attempt,
 		},
+	}
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value SendOutcome) DiagnosticName() string {
+	switch value {
+	case SendOutcomeUnknown:
+		return "unknown"
+	case SendOutcomeTransportConfirmed:
+		return "transport_confirmed"
+	case SendOutcomeDropped:
+		return "dropped"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
 	}
 }

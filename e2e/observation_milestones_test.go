@@ -104,7 +104,7 @@ func (stream *observationMilestones) next(ctx context.Context) (observationMiles
 					return observationMilestone{}, fmt.Errorf("decode observation: %w", err)
 				}
 				stream.pending = stream.pending[:0]
-				if record.SchemaVersion != wire.SchemaVersion || record.Command != stream.command {
+				if record.SchemaVersion != v5TraceSchemaVersion || record.Command != stream.command {
 					return observationMilestone{}, fmt.Errorf("unexpected observation schema/command: %d/%s", record.SchemaVersion, record.Command)
 				}
 				if stream.summary {
@@ -144,7 +144,10 @@ func (stream *observationMilestones) derive(record observationRecord) (observati
 			fact.name = "sender_ready"
 		}
 	case "peer_attempt":
-		var payload wire.PeerAttemptPayload
+		var payload struct {
+			Stage string
+			Route string
+		}
 		if err := decode(&payload); err != nil {
 			return fact, false, err
 		}
@@ -164,33 +167,32 @@ func (stream *observationMilestones) derive(record observationRecord) (observati
 		if err := decode(&payload); err != nil {
 			return fact, false, err
 		}
-		if record.Command == "share" {
-			switch payload.Stage {
-			case "share_stopping":
-				fact.name, fact.outcome = "sender_stop", testrun.OutcomeStarted
-			case "share_closed":
-				fact.name = "sender_stop"
-				if payload.Failure != nil {
-					fact.outcome = testrun.OutcomeFailed
-				}
-			case "session_retired":
-				fact.name = "sender_session_retired"
-			}
+		if record.Command == "get" && payload.Stage == "task_settled" && !stream.receiveJoined && payload.Outcome == appobs.EngineOutcomeFailed && payload.Failure != nil && payload.Failure.Code == "relay_stopped" {
+			fact.name, fact.outcome = "receiver_join_stopped", testrun.OutcomeFailed
 		}
-		if record.Command == "get" {
-			switch payload.Stage {
-			case "generation_changed":
-				stream.receiveJoined = true
-			case "relay_content_claimed":
-				fact.name = "receiver_relay_content"
-			case "task_settled":
-				// Only settlement before the first admitted generation means
-				// initial join failed; a later stopped session is a different fact.
-				if !stream.receiveJoined && payload.Outcome == appobs.EngineOutcomeFailed && payload.Failure != nil && payload.Failure.Code == "relay_stopped" {
-					fact.name, fact.outcome = "receiver_join_stopped", testrun.OutcomeFailed
-				}
-			}
+	case "share_workflow":
+		var payload struct {
+			Stage   string
+			Failure string
 		}
+		if err := decode(&payload); err != nil {
+			return fact, false, err
+		}
+		switch payload.Stage {
+		case "share_stopping":
+			fact.name, fact.outcome = "sender_stop", testrun.OutcomeStarted
+		case "share_stopped":
+			fact.name = "sender_stop"
+			if payload.Failure != "" {
+				fact.outcome = testrun.OutcomeFailed
+			}
+		case "session_retired":
+			fact.name = "sender_session_retired"
+		}
+	case "receive_generation_changed":
+		stream.receiveJoined = true
+	case "receive_relay_content_claimed":
+		fact.name = "receiver_relay_content"
 	case "relay_recovering":
 		var payload wire.RelayRecoveringPayload
 		if err := decode(&payload); err != nil {

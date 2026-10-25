@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/nativepeer"
+	"github.com/windshare/windshare/connectivity/turnpath"
+
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/core/connectionpath"
 	appobs "github.com/windshare/windshare/engine/observation"
@@ -26,21 +29,11 @@ func TestEveryTURNMilestoneReachesCommandTrace(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(runtime.Close)
-			share, receive := newShareProjection(runtime), newGetObservation(runtime)
-			observe := func(value appobs.NativeConnectivitySpec) {
-				value.Workflow = appobs.Workflow(command)
+			observe := func(value nativepeer.Observation) {
 				if command == clievent.CommandGet {
-					value.Side = "receiver"
+					value.Subject.Side = "receiver"
 				}
-				event, err := appobs.NewNativeConnectivityObserved(value)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if command == clievent.CommandShare {
-					app.observeEngineShare(share, event)
-				} else {
-					app.projectReceiveObservation(receive, event)
-				}
+				runtime.diagnosticSink().Record(value)
 			}
 			for _, milestone := range connectionpath.Milestones() {
 				observe(turnContractObservation(milestone))
@@ -96,86 +89,34 @@ func TestEveryTURNMilestoneReachesCommandTrace(t *testing.T) {
 	}
 }
 
-func TestTURNRejectionKeepsEvidenceAndDoesNotBecomeCapacityLoss(t *testing.T) {
+func TestNewNativeMilestoneReachesTraceWithoutConsumerRegistration(t *testing.T) {
 	var stderr bytes.Buffer
-	app := &App{Stderr: &stderr}
-	path := filepath.Join(t.TempDir(), "rejection.ndjson")
-	runtime, err := app.newCommandRuntime(clievent.CommandShare, testExactTraceOptions(path))
+	path := filepath.Join(t.TempDir(), "future.ndjson")
+	runtime, err := (&App{Stderr: &stderr}).newCommandRuntime(clievent.CommandShare, testExactTraceOptions(path))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(runtime.Close)
-	share := newShareProjection(runtime)
-	rejection := appobs.CaptureObservationRejection(appobs.ObservationRejection{Event: "native_connectivity", Source: "eventproject.ProjectNativeObservation", Stage: "turn_path", Field: "turn.milestone", Rule: "known_enum"}, appobs.RejectedEnum("turn.milestone", 255), appobs.RejectedString("peer_path_id", "02000000000000000000000000000000"), appobs.RejectedString("turn.profile", "primary"))
-	loss, err := appobs.NewObserverLossObserved(appobs.ObserverLossSpec{Workflow: appobs.WorkflowShare, Category: appobs.ObserverLossNativeConnectivity, Reason: appobs.ObserverLossEventContract, Count: 1, Rejection: rejection})
-	if err != nil {
-		t.Fatal(err)
-	}
-	app.observeEngineShare(share, loss)
-	valid, err := appobs.NewNativeConnectivityObserved(turnContractObservation(connectionpath.MilestoneTransportSelection))
-	if err != nil {
-		t.Fatal(err)
-	}
-	app.observeEngineShare(share, valid)
+	runtime.diagnosticSink().Record(nativeFactSpec(appobs.WorkflowShare, "future_source_milestone"))
 	runtime.Close()
-
-	var rejectionSeen, validSeen, summarySeen bool
+	seen := false
 	for _, row := range readTURNContractRows(t, path) {
-		switch row.Event {
-		case "observer_loss":
-			var payload struct {
-				Reason, Count string
-				Rejection     struct {
-					Event       string `json:"source_event"`
-					Source      string `json:"source_location"`
-					Stage       string `json:"source_stage"`
-					Field, Rule string
-					Evidence    []appobs.RejectionField
-				}
-			}
+		if row.Event == "native_connectivity" {
+			var payload struct{ Kind string }
 			if err := json.Unmarshal(row.Payload, &payload); err != nil {
 				t.Fatal(err)
 			}
-			rejection := payload.Rejection
-			evidence := make(map[string]string)
-			for _, field := range rejection.Evidence {
-				evidence[field.Field] = field.Value
-			}
-			if payload.Reason != "event_contract_rejection" || payload.Count != "1" ||
-				rejection.Event != "native_connectivity" || rejection.Source != "eventproject.ProjectNativeObservation" ||
-				rejection.Stage != "turn_path" || rejection.Field != "turn.milestone" || rejection.Rule != "known_enum" ||
-				evidence["turn.milestone"] != "255" || evidence["peer_path_id"] == "" ||
-				evidence["turn.profile"] != "primary" {
-				t.Fatalf("rejection cannot explain the source event: %s", row.Payload)
-			}
-			rejectionSeen = true
-		case "native_connectivity":
-			validSeen = true
-		case "trace_summary":
-			var summary struct {
-				Incomplete bool
-				Rejected   string `json:"contract_rejected"`
-				Dropped    string `json:"lifecycle_dropped"`
-			}
-			if err := json.Unmarshal(row.Payload, &summary); err != nil {
-				t.Fatal(err)
-			}
-			if !summary.Incomplete || summary.Rejected != "1" || summary.Dropped != "0" {
-				t.Fatalf("rejection mixed with capacity loss: %s", row.Payload)
-			}
-			summarySeen = true
+			seen = payload.Kind == "future_source_milestone"
 		}
 	}
-	if !rejectionSeen || !validSeen || !summarySeen || strings.Count(stderr.String(), "Trace is incomplete") != 1 ||
-		!strings.Contains(stderr.String(), "rejected") {
-		t.Fatalf("rejection lost evidence, stopped recording, or lost its warning: %s", stderr.String())
+	if !seen || strings.Contains(stderr.String(), "Trace is incomplete") {
+		t.Fatalf("future source record lost or rejected: %s", stderr.String())
 	}
 }
 
-func turnContractObservation(milestone connectionpath.Milestone) appobs.NativeConnectivitySpec {
+func turnContractObservation(milestone connectionpath.Milestone) nativepeer.Observation {
 	value := nativeFactSpec(appobs.WorkflowShare, "turn_path")
-	value.At = time.Unix(1, 0)
-	value.TURN = &appobs.NativeTURNFacts{Provider: "test", Account: "owner", Profile: "primary", Milestone: milestone, Reason: "contract evidence"}
+	value.Provider = nil
+	value.TURN = &turnpath.Event{At: time.Unix(1, 0), Provider: "test", Account: "owner", Profile: "primary", Milestone: milestone, Reason: "contract evidence"}
 	return value
 }
 

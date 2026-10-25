@@ -12,7 +12,7 @@ type relayCutLane struct {
 	epoch   uint32
 }
 
-func relayCutLaneOf(record v4TraceRecord) (relayCutLane, bool) {
+func relayCutLaneOf(record v5TraceRecord) (relayCutLane, bool) {
 	correlation := record.Correlation
 	if correlation == nil || correlation.ProtocolSessionID == "" ||
 		correlation.LaneID == nil || correlation.LaneEpoch == nil {
@@ -21,14 +21,14 @@ func relayCutLaneOf(record v4TraceRecord) (relayCutLane, bool) {
 	return relayCutLane{correlation.ProtocolSessionID, *correlation.LaneID, *correlation.LaneEpoch}, true
 }
 
-func hasV2DirectRevisionAfter(t *testing.T, records []v4TraceRecord, cutCompletedAt time.Time) bool {
+func hasV2DirectRevisionAfter(t *testing.T, records []v5TraceRecord, cutCompletedAt time.Time) bool {
 	t.Helper()
 	delivering := make(map[relayCutLane]struct{})
 	for _, record := range records {
-		if record.Event != "lane_settlement" || v4TraceStringField(t, record.Payload, "route") != "direct" ||
-			v4TraceDecimalField(t, record.Payload, "delivered_blocks") == 0 ||
-			v4TraceDecimalField(t, record.Payload, "delivered_bytes") == 0 ||
-			v4TraceBoolField(t, record.Payload, "incomplete") {
+		if record.Event != "lane_settlement" || v5TraceStringField(t, record.Payload, "route") != "direct" ||
+			v5TraceDecimalField(t, record.Payload, "delivered_blocks") == 0 ||
+			v5TraceDecimalField(t, record.Payload, "delivered_bytes") == 0 ||
+			v5TraceBoolField(t, record.Payload, "incomplete") {
 			continue
 		}
 		if lane, ok := relayCutLaneOf(record); ok {
@@ -37,18 +37,18 @@ func hasV2DirectRevisionAfter(t *testing.T, records []v4TraceRecord, cutComplete
 	}
 	for _, record := range records {
 		if record.Event != "protocol_operation" ||
-			v4TraceStringField(t, record.Payload, "role") != "receiver" ||
-			v4TraceStringField(t, record.Payload, "stage") != "receiver_completed" ||
-			v4TraceStringField(t, record.Payload, "request_kind") != "open_revisions" ||
-			v4TraceStringField(t, record.Payload, "response_kind") != "open_results" ||
-			v4TraceStringField(t, record.Payload, "cause") != "none" {
+			v5TraceStringField(t, record.Payload, "role") != "receiver" ||
+			v5TraceStringField(t, record.Payload, "stage") != "receiver_completed" ||
+			v5TraceStringField(t, record.Payload, "request_kind") != "open_revisions" ||
+			v5TraceStringField(t, record.Payload, "response_kind") != "open_results" ||
+			v5TraceStringField(t, record.Payload, "cause") != "none" {
 			continue
 		}
 		lane, ok := relayCutLaneOf(record)
 		if _, delivered := delivering[lane]; !ok || !delivered {
 			continue
 		}
-		observedAt, err := time.Parse(time.RFC3339Nano, v4TraceStringField(t, record.Payload, "observed_at"))
+		observedAt, err := time.Parse(time.RFC3339Nano, v5TraceStringField(t, record.Payload, "observed_at"))
 		if err != nil {
 			t.Fatalf("invalid revision observation time: %v", err)
 		}
@@ -66,39 +66,39 @@ func TestRelayCutEvidenceRequiresNewContentAfterCut(t *testing.T) {
 	cut := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
 	for _, test := range []struct {
 		name   string
-		change func([]v4TraceRecord)
+		change func([]v5TraceRecord)
 		want   bool
 	}{
 		{name: "mixed recent traffic with direct delivery", want: true},
-		{name: "revision before cut despite later log delivery", change: func(records []v4TraceRecord) {
+		{name: "revision before cut despite later log delivery", change: func(records []v5TraceRecord) {
 			records[0].Payload["observed_at"] = relayCutString(cut.Add(-time.Second).Format(time.RFC3339Nano))
 		}},
-		{name: "revision at cut", change: func(records []v4TraceRecord) {
+		{name: "revision at cut", change: func(records []v5TraceRecord) {
 			records[0].Payload["observed_at"] = relayCutString(cut.Format(time.RFC3339Nano))
 		}},
-		{name: "only lease cleanup after cut", change: func(records []v4TraceRecord) {
+		{name: "only lease cleanup after cut", change: func(records []v5TraceRecord) {
 			records[0].Payload["request_kind"] = relayCutString("release_lease")
 		}},
-		{name: "revision failed", change: func(records []v4TraceRecord) {
+		{name: "revision failed", change: func(records []v5TraceRecord) {
 			records[0].Payload["stage"] = relayCutString("receiver_failed")
 		}},
-		{name: "relay delivery", change: func(records []v4TraceRecord) {
+		{name: "relay delivery", change: func(records []v5TraceRecord) {
 			records[1].Payload["route"] = relayCutString("relay")
 		}},
-		{name: "direct lane never delivered", change: func(records []v4TraceRecord) {
+		{name: "direct lane never delivered", change: func(records []v5TraceRecord) {
 			records[1].Payload["delivered_bytes"] = relayCutString("0")
 		}},
-		{name: "incomplete delivery evidence", change: func(records []v4TraceRecord) {
+		{name: "incomplete delivery evidence", change: func(records []v5TraceRecord) {
 			records[1].Payload["incomplete"] = json.RawMessage("true")
 		}},
-		{name: "different session", change: func(records []v4TraceRecord) {
+		{name: "different session", change: func(records []v5TraceRecord) {
 			records[0].Correlation.ProtocolSessionID = "other-session"
 		}},
-		{name: "different lane incarnation", change: func(records []v4TraceRecord) {
+		{name: "different lane incarnation", change: func(records []v5TraceRecord) {
 			epoch := uint32(2)
 			records[0].Correlation.LaneEpoch = &epoch
 		}},
-		{name: "missing lane correlation", change: func(records []v4TraceRecord) {
+		{name: "missing lane correlation", change: func(records []v5TraceRecord) {
 			records[0].Correlation = nil
 		}},
 	} {
@@ -114,11 +114,11 @@ func TestRelayCutEvidenceRequiresNewContentAfterCut(t *testing.T) {
 	}
 }
 
-func relayCutEvidenceFixture(observedAt time.Time) []v4TraceRecord {
+func relayCutEvidenceFixture(observedAt time.Time) []v5TraceRecord {
 	id, epoch := uint32(2), uint32(1)
-	correlation := v4TraceCorrelation{ProtocolSessionID: "session", LaneID: &id, LaneEpoch: &epoch}
+	correlation := v5TraceCorrelation{ProtocolSessionID: "session", LaneID: &id, LaneEpoch: &epoch}
 	settlementCorrelation := correlation
-	return []v4TraceRecord{
+	return []v5TraceRecord{
 		{Event: "protocol_operation", Correlation: &correlation, Payload: map[string]json.RawMessage{
 			"role": relayCutString("receiver"), "stage": relayCutString("receiver_completed"),
 			"request_kind": relayCutString("open_revisions"), "response_kind": relayCutString("open_results"),

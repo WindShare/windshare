@@ -23,18 +23,6 @@ type ShareReady struct {
 	SelectedRootSummary liveshare.SelectedRootSummary
 	RelayAuthority      appobs.RelayAuthority
 }
-type ShareObservationLoss = share.ObservationLoss
-type ShareObservationSource = share.ObservationSource
-
-const (
-	ShareLossProtocol       = share.ProtocolObservations
-	ShareLossNative         = share.NativeObservations
-	ShareLossRelay          = share.RelayObservations
-	ShareLossWebRTC         = share.WebRTCObservations
-	ShareLossSenderAttempt  = share.SenderAttempts
-	ShareLossPeerDiagnostic = share.PeerDiagnostics
-)
-
 type ShareTask struct {
 	*Task[ShareResult]
 	controller *share.Controller
@@ -57,11 +45,12 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 	if injected.Peers != nil {
 		dependencies.Peers = func(nativeconnectivity.SenderConfig) (share.Peers, error) { return injected.Peers() }
 	}
-	current, err := startWorkflow(engine, ctx, appobs.WorkflowShare, func(ctx context.Context, control task.Control) task.Completion[share.Result] {
+	current, err := startWorkflow(engine, ctx, appobs.WorkflowShare, request.Diagnostics, func(ctx context.Context, control task.Control) task.Completion[share.Result] {
 		var stopDiscovery func()
 		dependencies.TURN, stopDiscovery = engine.turn.ForShare(ctx, request.Relays)
 		defer stopDiscovery()
 		dependencies.Control = control
+		request.Diagnostics = control.Diagnostics
 		return share.Run(ctx, request, dependencies)
 	})
 	if err != nil {

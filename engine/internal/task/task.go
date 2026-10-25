@@ -7,10 +7,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/windshare/windshare/core/diagnostics"
+
 	"github.com/windshare/windshare/core/observationstream"
 )
 
 type Config[T any] struct {
+	Diagnostics         diagnostics.Sink
 	ID                  ID
 	Now                 func() time.Time
 	Random              io.Reader
@@ -55,7 +58,7 @@ func Start[T any](parent context.Context, config Config[T]) (*Task[T], error) {
 	current.emit(Lifecycle{State: Running})
 	stopParent := context.AfterFunc(parent, func() { current.Stop(Cancelled) })
 	control := Control{
-		ID: config.ID, Now: config.Now, Random: config.Random, Emit: current.emit,
+		ID: config.ID, Now: config.Now, Random: config.Random, Emit: current.emit, Diagnostics: config.Diagnostics,
 		CleanupContext: func() (context.Context, context.CancelFunc) {
 			// Cleanup keeps caller values for tracing but cannot inherit a deadline
 			// or cancellation that caused the task to stop.

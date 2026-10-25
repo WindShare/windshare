@@ -1,6 +1,8 @@
 package observation
 
-import "errors"
+import (
+	errors "errors"
+)
 
 var ErrInvalidFailure = errors.New("engine observation failure is invalid")
 

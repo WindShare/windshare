@@ -1,25 +1,25 @@
 package eventproject
 
 import (
-	"context"
-	"errors"
-	"fmt"
-	"io/fs"
-	"net"
-	"net/url"
-	"reflect"
-	"time"
+	context "context"
+	errors "errors"
+	fmt "fmt"
+	fs "io/fs"
+	net "net"
+	url "net/url"
+	reflect "reflect"
+	time "time"
 
-	"github.com/windshare/windshare/connectivity/relayset"
-	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/transfer"
+	relayset "github.com/windshare/windshare/connectivity/relayset"
+	catalog "github.com/windshare/windshare/core/catalog"
+	transfer "github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
-	"github.com/windshare/windshare/engine/internal/receive"
-	"github.com/windshare/windshare/engine/internal/task"
+	receive "github.com/windshare/windshare/engine/internal/receive"
+	task "github.com/windshare/windshare/engine/internal/task"
 	appobs "github.com/windshare/windshare/engine/observation"
-	"github.com/windshare/windshare/engine/output"
+	output "github.com/windshare/windshare/engine/output"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
-	"github.com/windshare/windshare/transport/relayv2"
+	relayv2 "github.com/windshare/windshare/transport/relayv2"
 	wsrtc "github.com/windshare/windshare/transport/webrtc"
 )
 
@@ -295,6 +295,7 @@ func projectReceiveFailure(value receive.Failure) (appobs.Failure, bool) {
 	}
 	return appobs.Failure{}, false
 }
+
 func ReceiveFailureCode(code receive.FailureCode) (appobs.FailureCode, bool) {
 	switch code {
 	case receive.FailureInvalidInput:
@@ -326,7 +327,4 @@ func ReceiveFailureCode(code receive.FailureCode) (appobs.FailureCode, bool) {
 
 func ProjectFault(value transferfault.Fault) (appobs.Failure, bool) {
 	return appobs.ProjectFault(value)
-}
-func ProjectNormalizedFault(domain uint8, scope uint8, code uint16) (appobs.Failure, bool) {
-	return appobs.ProjectNormalizedFault(domain, scope, code)
 }

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/windshare/windshare/connectivity/pionpeer"
+
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
 	appobs "github.com/windshare/windshare/engine/observation"
@@ -22,19 +24,14 @@ func TestNativeProviderDiagnosticsReachTrace(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { recorder.Close() })
-	session, _ := appobs.NewProtocolSessionID(testShareBytes16(1))
-	path, _ := appobs.NewPeerPathID(testShareBytes16(2))
-	attempt, _ := appobs.NewPeerAttemptID(testShareBytes16(3))
 	for _, scope := range []string{"ice", "turnc"} {
 		for _, severity := range []string{"warning", "error"} {
-			diagnostic := &appobs.NativeProviderDiagnosticFacts{Scope: scope, Severity: severity, Message: "provider diagnostic detail"}
-			event, err := appobs.NewNativeConnectivityObserved(appobs.NativeConnectivitySpec{Workflow: appobs.WorkflowReceive, Session: session, Path: path, Attempt: attempt, AttemptSequence: 4, NetworkGeneration: 5, Profile: "ice-0123abcd", Side: "receiver", Kind: "provider_diagnostic", State: "unknown", Diagnostic: diagnostic})
-			if err != nil {
-				t.Fatal(err)
-			}
+			diagnostic := &pionpeer.Diagnostic{Scope: scope, Severity: severity, Message: "provider diagnostic detail"}
+			source := nativeFactSpec(appobs.WorkflowReceive, "provider_diagnostic")
+			source.Subject.AttemptID, source.Subject.AttemptSequence, source.Subject.NetworkGenerationID, source.Subject.ICEProfileID = [16]byte{3}, 4, 5, "ice-0123abcd"
+			source.Provider.Diagnostic = diagnostic
+			event := clievent.Diagnostic{Owner: clievent.CommandGet, Record: source.DiagnosticRecord()}
 			diagnostic.Message = "changed producer storage"
-			facts := event.Facts()
-			facts.Diagnostic.Message = "changed consumer snapshot"
 			if !recorder.Record(event) {
 				t.Fatal("provider diagnostic rejected by recorder")
 			}
@@ -55,7 +52,7 @@ func TestNativeProviderDiagnosticsReachTrace(t *testing.T) {
 			Payload     struct {
 				Kind, State     string
 				AttemptSequence string `json:"attempt_sequence"`
-				Diagnostic      *appobs.NativeProviderDiagnosticFacts
+				Diagnostic      *pionpeer.Diagnostic
 			}
 		}
 		if err := json.Unmarshal([]byte(line), &record); err != nil {

@@ -1,5 +1,7 @@
 package lanes
 
+import "strconv"
+
 type contentLaneSuspensionPolicy struct {
 	laneID  uint32
 	route   Route
@@ -116,4 +118,18 @@ func (suspension *ContentSuspension) Resume() error {
 	delete(lanes.contentSuspensions, suspension.policy.laneID)
 	lanes.notifyLaneAvailabilityLocked()
 	return nil
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value Route) DiagnosticName() string {
+	switch value {
+	case RouteRelay:
+		return "relay"
+	case RouteDirect:
+		return "direct"
+	case RouteTURN:
+		return "turn"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
+	}
 }

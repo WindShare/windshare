@@ -46,8 +46,8 @@ func TestGetDefaultsToCurrentDirectoryAndBindsItBeforeSessionWork(t *testing.T) 
 	}
 	var events []string
 	app.getOutputFactory = engine.OutputFactoryFunc(func(config engine.OutputConfig) (engine.OutputAuthority, error) {
-		if config.Observe == nil {
-			t.Fatal("missing output observations")
+		if config.Diagnostics.Enabled() {
+			t.Fatal("default command enabled diagnostic encoding")
 		}
 		events = append(events, "construct")
 		return &bindingOnlyGetOutputAuthority{events: &events}, nil

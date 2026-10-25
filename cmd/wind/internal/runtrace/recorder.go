@@ -10,11 +10,10 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	appobs "github.com/windshare/windshare/engine/observation"
-	"github.com/windshare/windshare/engine/observation/wire"
 )
 
 const (
-	SchemaVersion            = wire.SchemaVersion
+	SchemaVersion            = 5
 	DefaultLifecycleCapacity = 256
 	DefaultSampleInterval    = 250 * time.Millisecond
 )

@@ -1,9 +1,7 @@
 package eventproject
 
 import (
-	"github.com/windshare/windshare/engine/internal/receive"
-	"github.com/windshare/windshare/engine/internal/share"
-	"github.com/windshare/windshare/engine/internal/task"
+	task "github.com/windshare/windshare/engine/internal/task"
 	appobs "github.com/windshare/windshare/engine/observation"
 )
 
@@ -14,6 +12,7 @@ func projectTask(workflow appobs.Workflow, envelope task.Observation) (appobs.En
 	}
 	return appobs.NewEngineTaskObserved(spec)
 }
+
 func projectTaskSpec(workflow appobs.Workflow, envelope task.Observation) (appobs.EngineTaskSpec, bool, error) {
 	spec := appobs.EngineTaskSpec{Workflow: workflow, At: envelope.At}
 	switch value := envelope.Event.(type) {
@@ -21,48 +20,6 @@ func projectTaskSpec(workflow appobs.Workflow, envelope task.Observation) (appob
 		if err := projectTaskLifecycle(&spec, value); err != nil {
 			return spec, true, err
 		}
-	case share.Observation:
-		switch value.Milestone {
-		case share.SourceAcquiring:
-			spec.Stage = appobs.EngineSourceAcquiring
-		case share.SourceAcquired:
-			spec.Stage = appobs.EngineSourceAcquired
-		case share.SourceAcquisitionFailed:
-			spec.Stage = appobs.EngineSourceFailed
-		case share.ShareReady:
-			spec.Stage = appobs.EngineShareReady
-		case share.ShareStopping:
-			spec.Stage = appobs.EngineShareStopping
-		case share.ShareStopped:
-			spec.Stage = appobs.EngineShareClosed
-		case share.SessionRetired:
-			spec.Stage = appobs.EngineSessionRetired
-			spec.Session, _ = appobs.NewProtocolSessionID(value.Session[:])
-		default:
-			return spec, false, nil
-		}
-		spec.ShareInstance, _ = appobs.NewSharingInstanceID(value.ShareInstance[:])
-		spec.Failure, _ = ClassifyError(value.Failure)
-	case receive.GenerationChanged:
-		spec.Stage = appobs.EngineGenerationChanged
-		spec.Operation, _ = appobs.NewReceiveOperationID(value.Operation[:])
-		spec.Job, _ = appobs.NewTransferJobID(value.Job[:])
-		spec.Session, _ = appobs.NewProtocolSessionID(value.Current[:])
-		spec.PreviousSession, _ = appobs.NewProtocolSessionID(value.Previous[:])
-	case receive.RelayContentClaimed:
-		spec.Stage = appobs.EngineRelayContentClaimed
-		spec.Operation, _ = appobs.NewReceiveOperationID(value.Operation[:])
-		spec.Job, _ = appobs.NewTransferJobID(value.Job[:])
-		spec.Session, _ = appobs.NewProtocolSessionID(value.Session[:])
-		spec.AdmissionTrigger = appobs.EngineAdmissionTrigger(value.Trigger)
-	case receive.AdmissionObserved:
-		spec.Stage = appobs.EngineAdmissionDecision
-		spec.Operation, _ = appobs.NewReceiveOperationID(value.Operation[:])
-		spec.Job, _ = appobs.NewTransferJobID(value.Job[:])
-		spec.Session, _ = appobs.NewProtocolSessionID(value.Session[:])
-		spec.AdmissionTrigger = appobs.EngineAdmissionTrigger(value.Trigger)
-		spec.AdmissionTerminalOwner = appobs.EngineAdmissionTerminalOwner(value.TerminalOwner)
-		spec.Failure, _ = ClassifyError(value.Cause)
 	default:
 		return spec, false, nil
 	}

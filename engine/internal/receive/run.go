@@ -20,19 +20,19 @@ const getProgressInterval = 500 * time.Millisecond
 
 func Run(ctx context.Context, request Request, deps Dependencies) (completed task.Completion[Result]) {
 	deps = deps.normalized()
+	deps.Control.Diagnostics = request.Diagnostics
 	a := &runner{receiverRecoveryOptions: deps.Recovery, receiverPeerFactory: deps.PeerFactory, receiverDial: deps.ReceiverDial, getOutputFactory: request.Output, control: deps.Control, clock: deps.Clock}
 	a.receiveCapacity = deps.Capacity
 	a.connectivityCapacity = deps.Connectivity
 	input := getRequest{outDir: request.Destination, only: append([]string(nil), request.Only...), link: request.Capability, connectivity: request.Connectivity, waitTimeout: request.WaitTimeout}
 	startedAt := a.clock.Now()
 	metrics := downloadmetrics.Prepare(a.clock.Now)
-	observation := newObservation(deps.Control, request.Diagnostics, metrics)
+	observation := newObservation(deps.Control, deps.Control.Diagnostics.Enabled(), metrics)
 	active := &receiveOperation{runner: a, input: input, observation: observation, metrics: metrics}
 	var settlement *SettlementInput
 	step := stepReady
 	defer func() {
 		cleanupErr := active.close()
-		defer func() { completed.Value.ObservationLosses = observation.lossSnapshot() }()
 		completed.CleanupError = cleanupErr
 		if settlement != nil {
 			settlement.CleanupError = cleanupErr
@@ -69,7 +69,7 @@ func Run(ctx context.Context, request Request, deps Dependencies) (completed tas
 	}
 	observation.emit(GenerationChanged{Current: active.session.runtime.ProtocolSessionID()})
 	nativeConfig := nativepeer.Config{Side: nativepeer.SideReceiver, Now: a.clock.Now}
-	if request.Diagnostics {
+	if deps.Control.Diagnostics.Enabled() {
 		nativeConfig.ObservationCapacity = nativepeer.DefaultObservationCapacity
 	}
 	native, err := deps.Connectivity.NewNative(nativeConfig)

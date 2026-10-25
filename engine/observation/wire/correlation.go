@@ -1,8 +1,8 @@
 package wire
 
 import (
-	"encoding/base64"
-	"errors"
+	base64 "encoding/base64"
+	errors "errors"
 
 	appobs "github.com/windshare/windshare/engine/observation"
 )

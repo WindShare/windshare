@@ -1,10 +1,10 @@
 package observation
 
 import (
-	"encoding/hex"
-	"strconv"
-	"strings"
-	"unicode/utf8"
+	hex "encoding/hex"
+	strconv "strconv"
+	strings "strings"
+	utf8 "unicode/utf8"
 )
 
 const (
@@ -13,10 +13,6 @@ const (
 	maxObservationRejectionFields     = 16
 	maxObservationRejectionBytes      = 4096
 )
-
-// ObservationRejection preserves evidence even when normal event identity or
-// enum contracts reject the source. Association strings deliberately have only
-// format bounds; they must not be mistaken for authenticated correlation.
 
 type ObservationRejection struct {
 	Event            string
@@ -36,9 +32,6 @@ type ObservationRejection struct {
 	omittedBytes  uint64
 }
 
-// RejectionField is a representation of one original operand, not an inferred
-// replacement for the rejected business value.
-
 type RejectionField struct {
 	Field          string
 	Representation string
@@ -46,30 +39,12 @@ type RejectionField struct {
 	omittedBytes   uint64
 }
 
-func RejectedEnum(field string, value uint64) RejectionField {
-	return RejectionField{Field: field, Representation: "enum_number", Value: strconv.FormatUint(value, 10)}
-}
-
 func RejectedUint(field string, value uint64) RejectionField {
 	return RejectionField{Field: field, Representation: "unsigned_decimal", Value: strconv.FormatUint(value, 10)}
 }
 
-func RejectedBool(field string, value bool) RejectionField {
-	return RejectionField{Field: field, Representation: "boolean", Value: strconv.FormatBool(value)}
-}
-
 func RejectedIdentity(field string, value []byte) RejectionField {
 	return rejectedBytes(field, "identity_hex", value)
-}
-
-func RejectedString(field, value string) RejectionField {
-	if !utf8.ValidString(value) {
-		limit := min(len(value), maxObservationRejectionValueBytes/2)
-		result := rejectedBytes(field, "bytes_hex", []byte(value[:limit]))
-		result.omittedBytes = uint64(len(value)-limit) * 2
-		return result
-	}
-	return RejectionField{Field: field, Representation: "string", Value: value}
 }
 
 func rejectedBytes(field, representation string, value []byte) RejectionField {
@@ -80,10 +55,6 @@ func rejectedBytes(field, representation string, value []byte) RejectionField {
 		omittedBytes: uint64(len(value)-limit) * 2,
 	}
 }
-
-// CaptureObservationRejection runs only after rejection. Fixed storage and
-// cloned bounded strings prevent the sample retaining source buffers or growing
-// with source size, while exact omission counts explain incomplete evidence.
 
 func CaptureObservationRejection(context ObservationRejection, fields ...RejectionField) ObservationRejection {
 	context.evidence = [maxObservationRejectionFields]RejectionField{}
@@ -188,67 +159,6 @@ func (value ObservationRejection) Valid() bool {
 	return total <= maxObservationRejectionBytes
 }
 
-// EventContractError names the rejected invariant without retaining a whole
-// event or allocating a diagnostic snapshot on successful validation.
-
-type EventContractError struct {
-	Field string
-	Rule  string
-}
-
-func (err EventContractError) Error() string {
-	return "engine observation: " + err.Field + ": " + err.Rule
-}
-
-func (err EventContractError) Unwrap() error { return ErrInvalidEvent }
-
-type LaneSettlementSpec struct {
-	Session             ProtocolSessionID
-	Route               LaneRoute
-	Lane                LaneIdentity
-	DeliveredBlocks     uint64
-	DeliveredBytes      uint64
-	FailedBlockAttempts uint64
-	ReassignedBlocks    uint64
-	Incomplete          bool
-}
-
-type LaneSettlementObserved struct{ spec LaneSettlementSpec }
-
-func NewLaneSettlementObserved(spec LaneSettlementSpec) (LaneSettlementObserved, error) {
-	_, routeOK := spec.Route.Name()
-	if !spec.Session.Valid() || !spec.Lane.Valid() || !routeOK {
-		return LaneSettlementObserved{}, ErrInvalidEvent
-	}
-	return LaneSettlementObserved{spec: spec}, nil
-}
-
-func (LaneSettlementObserved) EngineEvent() {}
-
-func (LaneSettlementObserved) Workflow() Workflow { return WorkflowReceive }
-
-func (LaneSettlementObserved) Level() Level { return LevelDebug }
-
-func (value LaneSettlementObserved) ProtocolSessionID() ProtocolSessionID { return value.spec.Session }
-
-func (value LaneSettlementObserved) Route() LaneRoute { return value.spec.Route }
-
-func (value LaneSettlementObserved) Lane() LaneIdentity { return value.spec.Lane }
-
-func (value LaneSettlementObserved) DeliveredBlocks() uint64 { return value.spec.DeliveredBlocks }
-
-func (value LaneSettlementObserved) DeliveredBytes() uint64 { return value.spec.DeliveredBytes }
-
-func (value LaneSettlementObserved) FailedBlockAttempts() uint64 {
-	return value.spec.FailedBlockAttempts
-}
-
-func (value LaneSettlementObserved) ReassignedBlocks() uint64 { return value.spec.ReassignedBlocks }
-
-func (value LaneSettlementObserved) Incomplete() bool { return value.spec.Incomplete }
-
-func (value LaneSettlementObserved) Validate() error { return validateLaneSettlementObserved(value) }
-
 type ObserverLossSpec struct {
 	Workflow       Workflow
 	Category       ObserverLossCategory
@@ -293,118 +203,20 @@ func (value ObserverLossObserved) Rejection() (ObservationRejection, bool) {
 
 func (value ObserverLossObserved) Validate() error { return validateObserverLossObserved(value) }
 
-type ReceiverTerminationSpec struct {
-	Operation             ProtocolOperationID
-	HasOperation          bool
-	LocalGeneration       uint64
-	TransitionAuthority   ReceiverTerminalOwner
-	Disposition           ReceiverDisposition
-	TransitionProvenance  ReceiverProvenance
-	ConsequenceProvenance ReceiverProvenance
-	LocalStopReason       ReceiverLocalStopReason
-	DiagnosticsTruncated  bool
-	BenignComponents      []ReceiverBenignComponent
-	RetainedCauseClasses  []ReceiverCauseClass
-	TeardownTransitions   []PeerTeardownTransition
-	PeerShutdownFailed    bool
-	ChannelDrainFailed    bool
+func RejectedEnum(field string, value uint64) RejectionField {
+	return RejectionField{Field: field, Representation: "enum_number", Value: strconv.FormatUint(value, 10)}
 }
 
-type ReceiverTerminationObserved struct{ spec ReceiverTerminationSpec }
+func RejectedBool(field string, value bool) RejectionField {
+	return RejectionField{Field: field, Representation: "boolean", Value: strconv.FormatBool(value)}
+}
 
-func NewReceiverTerminationObserved(spec ReceiverTerminationSpec) (ReceiverTerminationObserved, error) {
-	if !validReceiverTerminationSpec(spec) {
-		return ReceiverTerminationObserved{}, ErrInvalidEvent
+func RejectedString(field, value string) RejectionField {
+	if !utf8.ValidString(value) {
+		limit := min(len(value), maxObservationRejectionValueBytes/2)
+		result := rejectedBytes(field, "bytes_hex", []byte(value[:limit]))
+		result.omittedBytes = uint64(len(value)-limit) * 2
+		return result
 	}
-	spec.BenignComponents = append([]ReceiverBenignComponent(nil), spec.BenignComponents...)
-	spec.RetainedCauseClasses = append([]ReceiverCauseClass(nil), spec.RetainedCauseClasses...)
-	spec.TeardownTransitions = append([]PeerTeardownTransition(nil), spec.TeardownTransitions...)
-	return ReceiverTerminationObserved{spec: spec}, nil
-}
-
-func validReceiverTerminationSpec(spec ReceiverTerminationSpec) bool {
-	_, ownerOK := spec.TransitionAuthority.Name()
-	_, dispositionOK := spec.Disposition.Name()
-	_, transitionOK := spec.TransitionProvenance.Name()
-	_, consequenceOK := spec.ConsequenceProvenance.Name()
-	_, localStopOK := spec.LocalStopReason.Name()
-	if spec.HasOperation != spec.Operation.Valid() || spec.LocalGeneration == 0 || !ownerOK || !dispositionOK || !transitionOK || !consequenceOK || !localStopOK {
-		return false
-	}
-	for _, value := range spec.BenignComponents {
-		if _, ok := value.Name(); !ok {
-			return false
-		}
-	}
-	for _, value := range spec.RetainedCauseClasses {
-		if _, ok := value.Name(); !ok {
-			return false
-		}
-	}
-	for _, value := range spec.TeardownTransitions {
-		if _, ok := value.Name(); !ok {
-			return false
-		}
-	}
-	return true
-}
-
-func (ReceiverTerminationObserved) EngineEvent() {}
-
-func (ReceiverTerminationObserved) Workflow() Workflow { return WorkflowReceive }
-
-func (ReceiverTerminationObserved) Level() Level { return LevelDebug }
-
-func (value ReceiverTerminationObserved) OperationID() (ProtocolOperationID, bool) {
-	return value.spec.Operation, value.spec.HasOperation
-}
-
-func (value ReceiverTerminationObserved) LocalGeneration() uint64 { return value.spec.LocalGeneration }
-
-func (value ReceiverTerminationObserved) TransitionAuthority() ReceiverTerminalOwner {
-	return value.spec.TransitionAuthority
-}
-
-func (value ReceiverTerminationObserved) Disposition() ReceiverDisposition {
-	return value.spec.Disposition
-}
-
-func (value ReceiverTerminationObserved) TransitionProvenance() ReceiverProvenance {
-	return value.spec.TransitionProvenance
-}
-
-func (value ReceiverTerminationObserved) ConsequenceProvenance() ReceiverProvenance {
-	return value.spec.ConsequenceProvenance
-}
-
-func (value ReceiverTerminationObserved) LocalStopReason() ReceiverLocalStopReason {
-	return value.spec.LocalStopReason
-}
-
-func (value ReceiverTerminationObserved) DiagnosticsTruncated() bool {
-	return value.spec.DiagnosticsTruncated
-}
-
-func (value ReceiverTerminationObserved) BenignComponents() []ReceiverBenignComponent {
-	return append([]ReceiverBenignComponent(nil), value.spec.BenignComponents...)
-}
-
-func (value ReceiverTerminationObserved) RetainedCauseClasses() []ReceiverCauseClass {
-	return append([]ReceiverCauseClass(nil), value.spec.RetainedCauseClasses...)
-}
-
-func (value ReceiverTerminationObserved) TeardownTransitions() []PeerTeardownTransition {
-	return append([]PeerTeardownTransition(nil), value.spec.TeardownTransitions...)
-}
-
-func (value ReceiverTerminationObserved) PeerShutdownFailed() bool {
-	return value.spec.PeerShutdownFailed
-}
-
-func (value ReceiverTerminationObserved) ChannelDrainFailed() bool {
-	return value.spec.ChannelDrainFailed
-}
-
-func (value ReceiverTerminationObserved) Validate() error {
-	return validateReceiverTerminationObserved(value)
+	return RejectionField{Field: field, Representation: "string", Value: value}
 }

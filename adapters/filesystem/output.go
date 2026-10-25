@@ -20,7 +20,7 @@ type FilesystemOutput struct {
 }
 
 func (f FilesystemOutput) NewOutputAuthority(c output.Config) (output.Authority, error) {
-	native, err := osfs.NewFilesystemOutputAuthority(osfs.FilesystemOutputAuthorityConfig{RootPath: f.RootPath, CreateRoot: f.CreateRoot, Tracer: traceOutput(c.Observe)})
+	native, err := osfs.NewFilesystemOutputAuthority(osfs.FilesystemOutputAuthorityConfig{RootPath: f.RootPath, CreateRoot: f.CreateRoot, Tracer: traceOutput(c.Diagnostics)})
 	if err != nil {
 		return nil, sealFilesystemOutputFailure(err)
 	}

@@ -43,7 +43,7 @@ func (a *App) runGet(ctx context.Context, args []string) int {
 	if factory == nil {
 		factory = filesystem.FilesystemOutput{RootPath: destination, CreateRoot: true}
 	}
-	task, err := a.application.StartReceive(ctx, engine.ReceiveRequest{Capability: request.link, Only: request.only, Connectivity: request.connectivity, WaitTimeout: request.waitTimeout, Output: factory, Destination: destination, Diagnostics: runtime.detailedDiagnosticsEnabled()})
+	task, err := a.application.StartReceive(ctx, engine.ReceiveRequest{Capability: request.link, Only: request.only, Connectivity: request.connectivity, WaitTimeout: request.waitTimeout, Output: factory, Destination: destination, Diagnostics: runtime.diagnosticSink()})
 	if err != nil {
 		return observation.commandFailure(ExitFailure, err)
 	}

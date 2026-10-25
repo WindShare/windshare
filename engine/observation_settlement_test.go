@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/engine/observation/wire"
 
 	"github.com/windshare/windshare/engine/internal/receive"
@@ -21,7 +22,7 @@ func (unknownDiagnostic) EngineEvent() {}
 func TestDiagnosticFailuresPreserveSuccessfulApplicationSettlement(t *testing.T) {
 	application := newTestEngine(t, Config{ObservationCapacity: 16})
 	pathCause := errors.New("optional peer path failed")
-	current, err := startWorkflow(application, t.Context(), appobs.WorkflowReceive,
+	current, err := startWorkflow(application, t.Context(), appobs.WorkflowReceive, diagnostics.Sink{},
 		func(_ context.Context, control task.Control) task.Completion[int] {
 			control.Emit(receive.Warning{Code: receive.FailurePeerNegotiation, Cause: pathCause})
 			control.Emit(unknownDiagnostic{})

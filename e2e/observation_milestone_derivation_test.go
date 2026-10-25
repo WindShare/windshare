@@ -23,13 +23,13 @@ func TestObservationMilestonesRespectAdmissionAndSettlementSemantics(t *testing.
 		outcome              testrun.Outcome
 	}{
 		{"share published", "share", "ready", wire.EmptyPayload{}, "sender_ready", testrun.OutcomeSucceeded},
-		{"candidate is not admission", "share", "peer_attempt", wire.PeerAttemptPayload{Stage: "datachannel-open"}, "", ""},
-		{"TURN is not direct", "share", "peer_attempt", wire.PeerAttemptPayload{Stage: "admitted", Route: "turn"}, "", ""},
-		{"direct admission", "share", "peer_attempt", wire.PeerAttemptPayload{Stage: "admitted", Route: "direct"}, "sender_direct_lane", testrun.OutcomeSucceeded},
-		{"relay ownership", "get", "engine_task_observed", wire.EngineTaskPayload{Stage: "relay_content_claimed"}, "receiver_relay_content", testrun.OutcomeSucceeded},
-		{"decision is not another claim", "get", "engine_task_observed", wire.EngineTaskPayload{Stage: "admission_decision"}, "", ""},
-		{"cleanup start", "share", "engine_task_observed", wire.EngineTaskPayload{Stage: "share_stopping"}, "sender_stop", testrun.OutcomeStarted},
-		{"cleanup failure", "share", "engine_task_observed", wire.EngineTaskPayload{Stage: "share_closed", Failure: &wire.Failure{Code: "unexpected"}}, "sender_stop", testrun.OutcomeFailed},
+		{"candidate is not admission", "share", "peer_attempt", diagnosticMilestonePayload{Stage: "datachannel-open"}, "", ""},
+		{"TURN is not direct", "share", "peer_attempt", diagnosticMilestonePayload{Stage: "admitted", Route: "turn"}, "", ""},
+		{"direct admission", "share", "peer_attempt", diagnosticMilestonePayload{Stage: "admitted", Route: "direct"}, "sender_direct_lane", testrun.OutcomeSucceeded},
+		{"relay ownership", "get", "receive_relay_content_claimed", diagnosticMilestonePayload{}, "receiver_relay_content", testrun.OutcomeSucceeded},
+		{"decision is not another claim", "get", "receive_admission_decision", diagnosticMilestonePayload{}, "", ""},
+		{"cleanup start", "share", "share_workflow", diagnosticMilestonePayload{Stage: "share_stopping"}, "sender_stop", testrun.OutcomeStarted},
+		{"cleanup failure", "share", "share_workflow", diagnosticMilestonePayload{Stage: "share_stopped", Failure: "unexpected"}, "sender_stop", testrun.OutcomeFailed},
 		{"stopped relay is not terminal until settlement", "get", "warning", wire.WarningPayload{Failure: wire.Failure{Code: "relay_stopped"}}, "", ""},
 		{"exhausted stopped join", "get", "engine_task_observed", wire.EngineTaskPayload{Stage: "task_settled", Outcome: appobs.EngineOutcomeFailed, Failure: &wire.Failure{Code: "relay_stopped"}}, "receiver_join_stopped", testrun.OutcomeFailed},
 		{"initial registration is not recovery", "share", "relay_recovering", wire.RelayRecoveringPayload{State: "succeeded", Details: &wire.RelayRecoveryDetails{Generation: "1"}}, "", ""},
@@ -52,8 +52,8 @@ func TestObservationMilestonesRespectAdmissionAndSettlementSemantics(t *testing.
 }
 
 func TestObservationMilestonesRejectLostOrTruncatedEvidence(t *testing.T) {
-	ready := `{"schema_version":4,"event":"ready","command":"share","payload":{}}`
-	summary := `{"schema_version":4,"event":"trace_summary","command":"share","payload":{"contract_rejected":"0","lifecycle_dropped":"0","writer_failed":false,"flush_failed":false,"schema_limited":false}}`
+	ready := `{"schema_version":5,"event":"ready","command":"share","payload":{}}`
+	summary := `{"schema_version":5,"event":"trace_summary","command":"share","payload":{"contract_rejected":"0","lifecycle_dropped":"0","writer_failed":false,"flush_failed":false,"schema_limited":false}}`
 	for _, test := range []struct {
 		name, data string
 		complete   bool
@@ -96,7 +96,7 @@ func TestObservationMilestonesRejectLostOrTruncatedEvidence(t *testing.T) {
 
 func TestObservationMilestonesDoNotConfuseStoppedSessionWithFailedInitialJoin(t *testing.T) {
 	stream := &observationMilestones{}
-	_, relevant, err := stream.derive(observationRecord{Command: "get", Event: "engine_task_observed", Payload: json.RawMessage(`{"stage":"generation_changed"}`)})
+	_, relevant, err := stream.derive(observationRecord{Command: "get", Event: "receive_generation_changed", Payload: json.RawMessage(`{}`)})
 	if err != nil || relevant {
 		t.Fatalf("generation interpretation: relevant=%v error=%v", relevant, err)
 	}
@@ -104,4 +104,10 @@ func TestObservationMilestonesDoNotConfuseStoppedSessionWithFailedInitialJoin(t 
 	if err != nil || relevant {
 		t.Fatalf("established session reported as failed initial join: relevant=%v error=%v", relevant, err)
 	}
+}
+
+type diagnosticMilestonePayload struct {
+	Stage   string `json:"stage"`
+	Route   string `json:"route"`
+	Failure string `json:"failure"`
 }

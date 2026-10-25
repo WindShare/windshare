@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/windshare/windshare/transport/relayv2"
+
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/observationbridge"
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
@@ -53,7 +55,7 @@ func TestCommandRuntimeFansOutWithSharedClock(t *testing.T) {
 
 	shareOptions := (&App{}).engineShareRequest(shareRequest{}, runtime)
 	if !runtime.detailedDiagnosticsEnabled() ||
-		!shareOptions.Diagnostics || !shareOptions.TraceLifecycle {
+		!shareOptions.Diagnostics.Enabled() {
 		t.Fatal("verbose/trace runtime did not enable detailed diagnostics")
 	}
 	if !runtime.Publish(appobs.NewReady()) {
@@ -84,12 +86,12 @@ func TestCommandRuntimeLeavesProtocolHotPathUnobservedByDefault(t *testing.T) {
 
 	shareOptions := (&App{}).engineShareRequest(shareRequest{}, runtime)
 	if runtime.detailedDiagnosticsEnabled() ||
-		shareOptions.Diagnostics || shareOptions.TraceLifecycle {
+		shareOptions.Diagnostics.Enabled() {
 		t.Fatal("default runtime enabled detailed diagnostics")
 	}
 }
 
-func TestCommandRuntimeSeparatesDetailedAndTraceOnlyObserverAuthority(t *testing.T) {
+func TestCommandRuntimeEnablesDiagnosticsWithoutOpeningUnrequestedTrace(t *testing.T) {
 	tests := []struct {
 		name         string
 		verbose      bool
@@ -129,11 +131,8 @@ func TestCommandRuntimeSeparatesDetailedAndTraceOnlyObserverAuthority(t *testing
 			if opened != test.trace || runtime.traceRecordingEnabled() != test.trace {
 				t.Fatalf("trace opened=%t enabled=%t, want %t", opened, runtime.traceRecordingEnabled(), test.trace)
 			}
-			if runtime.detailedDiagnosticsEnabled() != test.wantDetailed || shareOptions.Diagnostics != test.wantDetailed {
-				t.Fatalf("detailed runtime=%t engine=%t, want %t", runtime.detailedDiagnosticsEnabled(), shareOptions.Diagnostics, test.wantDetailed)
-			}
-			if shareOptions.TraceLifecycle != test.trace {
-				t.Fatalf("engine lifecycle tracing=%t, want %t", shareOptions.TraceLifecycle, test.trace)
+			if runtime.detailedDiagnosticsEnabled() != test.wantDetailed || shareOptions.Diagnostics.Enabled() != test.wantDetailed {
+				t.Fatalf("detailed runtime=%t engine=%t, want %t", runtime.detailedDiagnosticsEnabled(), shareOptions.Diagnostics.Enabled(), test.wantDetailed)
 			}
 		})
 	}
@@ -359,34 +358,26 @@ func TestRelayDropSummaryIsRetainedAndNotDoubleCountedAtCompletion(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	observation := newGetObservation(runtime)
-
-	fact, err := appobs.NewRelayLifecycleObserved(appobs.RelayLifecycleSpec{Workflow: appobs.WorkflowReceive, LinkID: 1, Stage: appobs.RelayTraceDropped, Dropped: 4})
-	if err != nil {
-		t.Fatal(err)
-	}
-	app.projectReceiveObservation(observation, fact)
-	app.projectReceiveObservation(observation, appobs.LossSnapshot{WorkflowKind: appobs.WorkflowReceive, Source: appobs.LossRelayQueue, Category: appobs.ObserverLossRelayLifecycle, Reason: appobs.ObserverLossTraceQueue, Count: 4})
-	app.projectReceiveObservation(observation, appobs.LossSnapshot{WorkflowKind: appobs.WorkflowReceive, Source: appobs.LossRelayQueue, Category: appobs.ObserverLossRelayLifecycle, Reason: appobs.ObserverLossStreamCapacity, Count: 4})
+	sink := runtime.diagnosticSink()
+	sink.Record(relayv2.LifecycleTrace{LinkID: 1, Stage: relayv2.LifecycleTraceDropped, Dropped: 4})
+	sink.Lost("relay", 4)
 	runtime.Close()
-
 	var lifecycleSeen bool
-	var queueLoss, streamLoss uint64
+	var streamLoss uint64
 	for _, event := range recorder.recorded() {
 		switch value := event.(type) {
-		case appobs.RelayLifecycleObserved:
-			lifecycleSeen = value.Stage() == appobs.RelayTraceDropped && value.Dropped() == 4
-		case appobs.ObserverLossObserved:
-			if value.Category() == appobs.ObserverLossRelayLifecycle && value.Reason() == appobs.ObserverLossTraceQueue {
-				queueLoss = saturatingAdd(queueLoss, value.Count())
+		case clievent.Diagnostic:
+			if value.Record.Name() == "relay_lifecycle" {
+				lifecycleSeen = value.Record.Payload().Get("stage").Text() == "trace_dropped" && value.Record.Payload().Get("dropped").Uint() == 4
 			}
-			if value.Category() == appobs.ObserverLossRelayLifecycle && value.Reason() == appobs.ObserverLossStreamCapacity {
-				streamLoss = saturatingAdd(streamLoss, value.Count())
+		case appobs.ObserverLossObserved:
+			if value.Category() == appobs.ObserverLossCommandAdapter && value.Reason() == appobs.ObserverLossStreamCapacity {
+				streamLoss += value.Count()
 			}
 		}
 	}
-	if !lifecycleSeen || queueLoss != 4 || streamLoss != 4 {
-		t.Fatalf("drop lifecycle=%t queue loss=%d stream loss=%d events=%#v", lifecycleSeen, queueLoss, streamLoss, recorder.recorded())
+	if !lifecycleSeen || streamLoss != 4 || recorder.lifecycle != 4 {
+		t.Fatalf("drop lifecycle=%t stream=%d health=%d", lifecycleSeen, streamLoss, recorder.lifecycle)
 	}
 	if strings.Count(stderr.String(), "Trace is incomplete") != 1 || strings.Contains(strings.ToLower(stderr.String()), "unexpected") {
 		t.Fatalf("stderr=%q", stderr.String())

@@ -3,6 +3,7 @@ package revisioncapacity
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -306,4 +307,32 @@ func validateRetryAfter(delay time.Duration) error {
 func cloneSnapshot(snapshot CapacitySnapshot) CapacitySnapshot {
 	snapshot.sessions = append([]ScopeSnapshot(nil), snapshot.sessions...)
 	return snapshot
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value TraceStage) DiagnosticName() string {
+	switch value {
+	case TraceAdmissionGranted:
+		return "admission_granted"
+	case TraceAdmissionDenied:
+		return "admission_denied"
+	case TraceAdmissionCancelled:
+		return "admission_canceled"
+	case TraceReclaimClaimed:
+		return "reclaim_claimed"
+	case TraceReclaimDeclined:
+		return "reclaim_declined"
+	case TraceReclaimCompleted:
+		return "reclaim_completed"
+	case TraceReclaimQuarantined:
+		return "reclaim_quarantined"
+	case TraceIdlePublished:
+		return "idle_published"
+	case TraceIdleWithdrawn:
+		return "idle_withdrawn"
+	case TraceOwnershipQuarantined:
+		return "ownership_quarantined"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
+	}
 }

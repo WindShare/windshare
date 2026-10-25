@@ -73,8 +73,9 @@ func (engine *Engine) StartReceive(ctx context.Context, request ReceiveRequest) 
 		Connectivity: engine.connectivity,
 		Capacity:     engine.receiveCapacity,
 	}
-	current, err := startWorkflow(engine, ctx, appobs.WorkflowReceive, func(ctx context.Context, control task.Control) task.Completion[receive.Result] {
+	current, err := startWorkflow(engine, ctx, appobs.WorkflowReceive, request.Diagnostics, func(ctx context.Context, control task.Control) task.Completion[receive.Result] {
 		dependencies.Control = control
+		request.Diagnostics = control.Diagnostics
 		return receive.Run(ctx, request, dependencies)
 	})
 	if err != nil {
