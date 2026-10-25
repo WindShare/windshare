@@ -124,10 +124,8 @@ describe('artifact product presentation', () => {
       workspace: workspaceOffer(),
       directZipSupport: support,
       zipRecommendationPolicy: {
-        version: 1,
         kind: 'available',
         workspacePeakBytesThreshold: workspaceCostObservation.peakOwnedBytes,
-        policyDigest: identity(89, 32),
       },
     }))
     const zip = requireZipRoutes(requireChoices(presentArtifactOffers(offers)))

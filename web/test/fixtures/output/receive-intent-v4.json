@@ -1,7 +1,7 @@
 {
   "version": 1,
   "kind": "receive-intent-v4",
-  "description": "Receiver-local ReceiveIntentV4 values for portable materialization families. Direct resumable ZIP is intentionally absent because exact reviewed runtime support is receiver-local, not cross-runtime vector authority.",
+  "description": "Browser-owned receive-intent-v4 persistence examples. Updated with the browser codec; not a Go interoperability contract.",
   "cases": [
     {
       "artifact": {

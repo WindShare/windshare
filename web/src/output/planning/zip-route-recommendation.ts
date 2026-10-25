@@ -2,20 +2,8 @@ import type {
   OfferedArtifactChoice,
   WorkspaceCostObservationV1,
   ZipRouteGroup,
-  ZipRouteRecommendationPolicyV1,
+  ZipRouteRecommendationPolicy,
 } from './contracts'
-import { canonicalDigest, canonicalFrame, canonicalRecord, canonicalU64 } from '../../transfer/encoding/canonical'
-
-const RECOMMENDATION_POLICY_DOMAIN = 'windshare/zip-route-recommendation-policy/v1'
-
-export async function zipRouteRecommendationPolicyDigestV1(
-  workspacePeakBytesThreshold: bigint,
-): Promise<string> {
-  return canonicalDigest(canonicalRecord(RECOMMENDATION_POLICY_DOMAIN, 1, [
-    canonicalFrame(canonicalU64(workspacePeakBytesThreshold)),
-  ]))
-}
-
 export interface ZipRouteRecommendationInput {
   readonly direct: OfferedArtifactChoice | null
   readonly workspace: OfferedArtifactChoice | null
@@ -23,7 +11,7 @@ export interface ZipRouteRecommendationInput {
   readonly discoveryComplete: boolean
   readonly discoveredOutputBytes?: bigint
   readonly workspaceCost: WorkspaceCostObservationV1 | null
-  readonly policy: ZipRouteRecommendationPolicyV1
+  readonly policy: ZipRouteRecommendationPolicy
 }
 
 /** Pure ranking cannot create the discovery or authority facts it consumes. */

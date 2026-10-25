@@ -5,23 +5,18 @@ type NameAuthority uint8
 const (
 	NameApplicationChosen NameAuthority = iota + 1
 	NameUserChosen
-	NameBrowserChosen
 )
 
 type ReplacementGuarantee uint8
 
 const (
 	ReplacementAtomicNoReplace ReplacementGuarantee = iota + 1
-	ReplacementCoordinatedNoReplace
-	ReplacementUserAuthorizedReplace
-	ReplacementUnknown
 )
 
 type DeliveryMode uint8
 
 const (
 	DeliveryManagedTarget DeliveryMode = iota + 1
-	DeliveryBrowserHandoff
 )
 
 type TargetVisibility uint8
@@ -29,8 +24,6 @@ type TargetVisibility uint8
 const (
 	TargetHiddenUntilVerifiedPublication TargetVisibility = iota + 1
 	TargetCommittedObjectsVisible
-	TargetUnobservable
-	TargetOperationOwnedIncompleteFileVisible
 )
 
 type ArtifactAvailability uint8
@@ -38,7 +31,6 @@ type ArtifactAvailability uint8
 const (
 	ArtifactVerifiedCompleteOnly ArtifactAvailability = iota + 1
 	ArtifactCommittedObjectsUsable
-	ArtifactHandoffOnly
 )
 
 type CleanupAuthority uint8
@@ -46,18 +38,13 @@ type CleanupAuthority uint8
 const (
 	CleanupRollbackToAbsentBeforePublication CleanupAuthority = iota + 1
 	CleanupNoWholeTargetRollback
-	CleanupOwnershipProofRequired
-	CleanupNoManagedCleanup
 )
 
 type GuaranteeProfile uint8
 
 const (
 	GuaranteeNativeTree GuaranteeProfile = iota + 1
-	GuaranteeFSATree
 	GuaranteeManagedAtomic
-	GuaranteeBrowserHandoff
-	GuaranteeFSAOwnedFile
 )
 
 type GuaranteeSet struct {
@@ -79,15 +66,6 @@ func NativeTreeGuarantees() GuaranteeSet {
 	}
 }
 
-func FSATreeGuarantees() GuaranteeSet {
-	return GuaranteeSet{
-		profile: GuaranteeFSATree, name: NameApplicationChosen,
-		replacement: ReplacementCoordinatedNoReplace, delivery: DeliveryManagedTarget,
-		visibility: TargetCommittedObjectsVisible, availability: ArtifactCommittedObjectsUsable,
-		cleanup: CleanupNoWholeTargetRollback,
-	}
-}
-
 func ManagedAtomicGuarantees(name NameAuthority) (GuaranteeSet, error) {
 	if name != NameApplicationChosen && name != NameUserChosen {
 		return GuaranteeSet{}, ErrInvalidReceiveContract
@@ -100,37 +78,13 @@ func ManagedAtomicGuarantees(name NameAuthority) (GuaranteeSet, error) {
 	}, nil
 }
 
-func BrowserHandoffGuarantees() GuaranteeSet {
-	return GuaranteeSet{
-		profile: GuaranteeBrowserHandoff, name: NameBrowserChosen,
-		replacement: ReplacementUnknown, delivery: DeliveryBrowserHandoff,
-		visibility: TargetUnobservable, availability: ArtifactHandoffOnly,
-		cleanup: CleanupNoManagedCleanup,
-	}
-}
-
-func FSAOwnedFileGuarantees() GuaranteeSet {
-	return GuaranteeSet{
-		profile: GuaranteeFSAOwnedFile, name: NameApplicationChosen,
-		replacement: ReplacementCoordinatedNoReplace, delivery: DeliveryManagedTarget,
-		visibility:   TargetOperationOwnedIncompleteFileVisible,
-		availability: ArtifactVerifiedCompleteOnly, cleanup: CleanupOwnershipProofRequired,
-	}
-}
-
 func (guarantees GuaranteeSet) valid() bool {
 	switch guarantees.profile {
 	case GuaranteeNativeTree:
 		return guarantees == NativeTreeGuarantees()
-	case GuaranteeFSATree:
-		return guarantees == FSATreeGuarantees()
 	case GuaranteeManagedAtomic:
 		expected, err := ManagedAtomicGuarantees(guarantees.name)
 		return err == nil && guarantees == expected
-	case GuaranteeBrowserHandoff:
-		return guarantees == BrowserHandoffGuarantees()
-	case GuaranteeFSAOwnedFile:
-		return guarantees == FSAOwnedFileGuarantees()
 	default:
 		return false
 	}

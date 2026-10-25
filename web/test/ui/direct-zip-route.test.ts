@@ -343,10 +343,8 @@ function facts(): DirectZipRuntimeFactsV1 {
       },
     },
     recommendationPolicy: {
-      version: 1,
       kind: 'available',
       workspacePeakBytesThreshold: 1n,
-      policyDigest: digest,
     },
     automaticEpochPolicy: {
       minimumAdvanceBytes: 1n,

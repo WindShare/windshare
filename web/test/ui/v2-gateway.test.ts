@@ -116,7 +116,6 @@ import {
   environment,
   handoffTarget,
   runtimeDirectZipSupport,
-  identity as planningIdentity,
   workspaceOffer,
 } from '../output/planning/fixture'
 
@@ -315,10 +314,8 @@ describe('v2 joined-share projection authority', () => {
         workspace: workspaceOffer(),
         directZipSupport: runtimeDirectZipSupport(),
         zipRecommendationPolicy: {
-          version: 1,
           kind: 'available',
           workspacePeakBytesThreshold: cost.archiveBytes + cost.durableMetadataBytes,
-          policyDigest: planningIdentity(89, 32),
         },
       }),
     )

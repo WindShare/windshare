@@ -171,7 +171,7 @@ export interface EnvironmentOffers {
   readonly workspace: WorkspaceEnvironmentOffer | null
   readonly portable: PortableEnvironmentOffer | null
   readonly directZipSupport: DirectZipSupportFacts
-  readonly zipRecommendationPolicy: ZipRouteRecommendationPolicyV1
+  readonly zipRecommendationPolicy: ZipRouteRecommendationPolicy
 }
 
 export interface EnvironmentOffersInput {
@@ -179,7 +179,7 @@ export interface EnvironmentOffersInput {
   readonly workspace?: WorkspaceEnvironmentOffer | null
   readonly portable?: PortableEnvironmentOffer | null
   readonly directZipSupport?: DirectZipSupportFacts
-  readonly zipRecommendationPolicy?: ZipRouteRecommendationPolicyV1
+  readonly zipRecommendationPolicy?: ZipRouteRecommendationPolicy
 }
 
 export type ArtifactOperation =
@@ -383,17 +383,14 @@ export interface OfferedArtifactChoice {
   readonly sizeProjection: ArtifactSizeProjection
 }
 
-export type ZipRouteRecommendationPolicyV1 =
+export type ZipRouteRecommendationPolicy =
   | Readonly<{
-      version: 1
       kind: 'available'
       workspacePeakBytesThreshold: bigint
-      policyDigest: string
     }>
   | Readonly<{
-      version: 1
       kind: 'unavailable'
-      reason: 'workspace-threshold-unavailable' | 'policy-digest-unavailable'
+      reason: 'workspace-threshold-unavailable' | 'invalid-workspace-threshold'
     }>
 
 export type ZipRouteRecommendation =

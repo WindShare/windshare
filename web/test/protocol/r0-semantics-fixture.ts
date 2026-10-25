@@ -61,9 +61,10 @@ export interface ReceiveLifecycleSemanticsVector extends SemanticsVector {
   readonly completeArtifactsExclude: readonly 'partial-directory'[]
 }
 
-export const semantics = loadVectorFile(
-  new URL('../../../core/testvectors/v2-semantics.json', import.meta.url),
-).cases as SemanticsVector[]
+export const semantics = [
+  ...loadVectorFile(new URL('../../../core/testvectors/v2-semantics.json', import.meta.url)).cases,
+  ...loadVectorFile(new URL('../fixtures/output/semantics.json', import.meta.url)).cases,
+] as SemanticsVector[]
 
 export function classifyConnectionSize(value: ConnectionSizeCase): string {
   if (BigInt(value.files) >= 30n || BigInt(value.bytes) >= 8n << 20n) {

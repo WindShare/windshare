@@ -25,11 +25,6 @@ export const INDEXEDDB_MATERIALIZATION_LEDGER_ENTRY_STORE = 'materialization-led
 export const INDEXEDDB_MATERIALIZATION_LEDGER_PAGE_STORE = 'materialization-ledger-v1-pages'
 export const INDEXEDDB_MATERIALIZATION_LEDGER_SEAL_STORE = 'materialization-ledger-v1-seals'
 
-const INDEXEDDB_LEGACY_RECEIVE_RECORD_STORE = 'receive-operation-v1-records'
-const INDEXEDDB_LEGACY_RECEIVE_MANIFEST_PAGE_STORE = 'receive-operation-v1-manifest-pages'
-const INDEXEDDB_LEGACY_RECEIVE_HANDLE_STORE = 'receive-operation-v1-handles'
-const INDEXEDDB_LEGACY_RECEIVE_LEASE_STORE = 'receive-operation-v1-leases'
-
 export const INDEXEDDB_BY_OPERATION_INDEX = 'by-operation'
 export const INDEXEDDB_BY_OPERATION_FILE_INDEX = 'by-operation-file'
 export const INDEXEDDB_BY_OPERATION_KIND_INDEX = 'by-operation-kind'
@@ -48,20 +43,16 @@ export const INDEXEDDB_BY_OPERATION_SEAL_PAGE_INDEX = 'by-operation-seal-page'
 export const INDEXEDDB_BY_OPERATION_RECORD_PROOF_INDEX = 'by-operation-record-proof'
 export const INDEXEDDB_BY_OPERATION_SEAL_SEQUENCE_INDEX = 'by-operation-seal-sequence'
 
-export const INDEXEDDB_LEGACY_V5_STORES = Object.freeze([
-  'file-checkpoint-v1-candidates',
-  'file-checkpoint-v1-committed',
-  'file-checkpoint-v1-handles',
-  'file-checkpoint-v1-metadata',
-  'file-checkpoint-v1-cleanup',
-  'paused-task-descriptor-v1',
-  'root-capability-v1',
-  'resume-state-discard-v1',
-] as const)
+export const INDEXEDDB_OPFS_TASK_STORE = 'opfs-task-checkpoints-v1'
+export const INDEXEDDB_OPFS_ENTRY_STORE = 'opfs-task-entries-v1'
+export const INDEXEDDB_OPFS_PATH_STORE = 'opfs-task-paths-v1'
+export const INDEXEDDB_OPFS_DIRECTORY_STORE = 'opfs-task-directories-v1'
+
+export const INDEXEDDB_BY_OBJECT_SEQUENCE_INDEX = 'by-object-sequence'
 
 export interface IndexedDbStoreSchema {
   readonly name: string
-  readonly keyPath: string
+  readonly keyPath: string | readonly string[]
   readonly indexes: readonly Readonly<{
     name: string
     keyPath: string | readonly string[]
@@ -69,65 +60,37 @@ export interface IndexedDbStoreSchema {
   }>[]
 }
 
-export const INDEXEDDB_V6_STORE_SCHEMAS: readonly IndexedDbStoreSchema[] = Object.freeze([
+// This is the current layout, not a history of layouts the browser must emulate.
+export const INDEXEDDB_OUTPUT_STORE_SCHEMAS: readonly IndexedDbStoreSchema[] = Object.freeze([
   storeSchema(INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE, 'id', [
     indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
     indexSchema(INDEXEDDB_BY_OPERATION_FILE_INDEX, ['operationId', 'fileId']),
+    indexSchema(INDEXEDDB_BY_OPERATION_LINEAGE_INDEX, ['operationId', 'lineageId']),
+    indexSchema(INDEXEDDB_BY_OPERATION_OWNED_OBJECT_INDEX, ['operationId', 'ownedObjectId'], true),
+    indexSchema(INDEXEDDB_BY_OPERATION_RECORD_INDEX, ['operationId', 'id']),
+    indexSchema(INDEXEDDB_BY_OPERATION_FILE_RECORD_INDEX, ['operationId', 'fileId', 'id']),
   ]),
   storeSchema(INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE, 'id', [
     indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
     indexSchema(INDEXEDDB_BY_OPERATION_FILE_INDEX, ['operationId', 'fileId']),
+    indexSchema(INDEXEDDB_BY_OPERATION_LINEAGE_INDEX, ['operationId', 'lineageId']),
+    indexSchema(INDEXEDDB_BY_OPERATION_OWNED_OBJECT_INDEX, ['operationId', 'ownedObjectId'], true),
+    indexSchema(INDEXEDDB_BY_OPERATION_RECORD_INDEX, ['operationId', 'id']),
+    indexSchema(INDEXEDDB_BY_OPERATION_FILE_RECORD_INDEX, ['operationId', 'fileId', 'id']),
   ]),
   storeSchema(INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE, 'id', [
     indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
+    indexSchema(INDEXEDDB_BY_OPERATION_OWNED_OBJECT_INDEX, ['operationId', 'ownedObjectId'], true),
   ]),
   storeSchema(INDEXEDDB_FILE_CHECKPOINT_CONTROL_STORE, 'id', [
     indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
     indexSchema(INDEXEDDB_BY_OPERATION_KIND_INDEX, ['operationId', 'kind']),
   ]),
-  storeSchema(INDEXEDDB_LEGACY_RECEIVE_RECORD_STORE, 'id', [
-    indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
-    indexSchema(INDEXEDDB_BY_OPERATION_KIND_INDEX, ['operationId', 'kind']),
-    indexSchema(INDEXEDDB_BY_REOPEN_KEY_INDEX, 'reopenKey'),
-    indexSchema(INDEXEDDB_BY_STATE_INDEX, 'state'),
-  ]),
-  storeSchema(INDEXEDDB_LEGACY_RECEIVE_MANIFEST_PAGE_STORE, 'id', [
-    indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
-    indexSchema(INDEXEDDB_BY_OPERATION_KIND_INDEX, ['operationId', 'kind']),
-  ]),
-  storeSchema(INDEXEDDB_LEGACY_RECEIVE_HANDLE_STORE, 'id', [
-    indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
-    indexSchema(INDEXEDDB_BY_OPERATION_KIND_INDEX, ['operationId', 'kind']),
-  ]),
-  storeSchema(INDEXEDDB_LEGACY_RECEIVE_LEASE_STORE, 'id', [
-    indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
-  ]),
-])
-
-export const INDEXEDDB_V7_STORE_SCHEMAS: readonly IndexedDbStoreSchema[] = Object.freeze(
-  INDEXEDDB_V6_STORE_SCHEMAS.map((schema) => schema.name === INDEXEDDB_LEGACY_RECEIVE_RECORD_STORE
-    ? storeSchema(schema.name, schema.keyPath, [
-        ...schema.indexes,
-        indexSchema(INDEXEDDB_BY_KIND_INDEX, 'kind'),
-      ])
-    : schema),
-)
-
-export const INDEXEDDB_V8_STORE_SCHEMAS: readonly IndexedDbStoreSchema[] = Object.freeze([
-  ...INDEXEDDB_V7_STORE_SCHEMAS,
   storeSchema(INDEXEDDB_COMPATIBLE_NAME_OPERATION_STORE, 'operationId', []),
   storeSchema(INDEXEDDB_COMPATIBLE_NAME_MAPPING_STORE, 'id', [
     indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
     indexSchema(INDEXEDDB_BY_OPERATION_COMMIT_ORDINAL_INDEX, ['operationId', 'commitOrdinal']),
   ]),
-])
-
-export const INDEXEDDB_V9_STORE_SCHEMAS: readonly IndexedDbStoreSchema[] = Object.freeze([
-  ...INDEXEDDB_V8_STORE_SCHEMAS.filter(schema =>
-    schema.name !== INDEXEDDB_LEGACY_RECEIVE_RECORD_STORE &&
-    schema.name !== INDEXEDDB_LEGACY_RECEIVE_MANIFEST_PAGE_STORE &&
-    schema.name !== INDEXEDDB_LEGACY_RECEIVE_HANDLE_STORE &&
-    schema.name !== INDEXEDDB_LEGACY_RECEIVE_LEASE_STORE),
   storeSchema(INDEXEDDB_RECEIVE_RECORD_STORE, 'id', [
     indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
     indexSchema(INDEXEDDB_BY_OPERATION_KIND_INDEX, ['operationId', 'kind']),
@@ -154,286 +117,102 @@ export const INDEXEDDB_V9_STORE_SCHEMAS: readonly IndexedDbStoreSchema[] = Objec
     indexSchema(INDEXEDDB_BY_OPERATION_KIND_INDEX, ['operationId', 'kindByte']),
     indexSchema(INDEXEDDB_BY_KIND_CANDIDATE_INDEX, ['kindByte', 'id']),
   ]),
-  ...[
-    INDEXEDDB_DIRECT_ZIP_LAYOUT_PAGE_STORE,
-    INDEXEDDB_DIRECT_ZIP_CENTRAL_PAGE_STORE,
-    INDEXEDDB_DIRECT_ZIP_EPOCH_PAGE_STORE,
-  ].map(name => storeSchema(name, 'id', [
+  storeSchema(INDEXEDDB_DIRECT_ZIP_LAYOUT_PAGE_STORE, 'id', [
     indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
-    indexSchema(INDEXEDDB_BY_OPERATION_CHAIN_PAGE_INDEX, [
-      'operationId',
-      'chainId',
-      'pageOrdinal',
-    ]),
-  ])),
-])
-
-export const INDEXEDDB_V10_STORE_SCHEMAS: readonly IndexedDbStoreSchema[] = Object.freeze([
-  ...INDEXEDDB_V9_STORE_SCHEMAS.map((schema) => {
-    if (schema.name === INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE ||
-        schema.name === INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE) {
-      return storeSchema(schema.name, schema.keyPath, [
-        ...schema.indexes,
-        indexSchema(INDEXEDDB_BY_OPERATION_LINEAGE_INDEX, ['operationId', 'lineageId']),
-        indexSchema(
-          INDEXEDDB_BY_OPERATION_OWNED_OBJECT_INDEX,
-          ['operationId', 'ownedObjectId'],
-          true,
-        ),
-        indexSchema(INDEXEDDB_BY_OPERATION_RECORD_INDEX, ['operationId', 'id']),
-        indexSchema(INDEXEDDB_BY_OPERATION_FILE_RECORD_INDEX, ['operationId', 'fileId', 'id']),
-      ])
-    }
-    if (schema.name === INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE) {
-      return storeSchema(schema.name, schema.keyPath, [
-        ...schema.indexes,
-        indexSchema(
-          INDEXEDDB_BY_OPERATION_OWNED_OBJECT_INDEX,
-          ['operationId', 'ownedObjectId'],
-          true,
-        ),
-      ])
-    }
-    return schema
-  }),
+    indexSchema(INDEXEDDB_BY_OPERATION_CHAIN_PAGE_INDEX, ['operationId', 'chainId', 'pageOrdinal']),
+  ]),
+  storeSchema(INDEXEDDB_DIRECT_ZIP_CENTRAL_PAGE_STORE, 'id', [
+    indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
+    indexSchema(INDEXEDDB_BY_OPERATION_CHAIN_PAGE_INDEX, ['operationId', 'chainId', 'pageOrdinal']),
+  ]),
+  storeSchema(INDEXEDDB_DIRECT_ZIP_EPOCH_PAGE_STORE, 'id', [
+    indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
+    indexSchema(INDEXEDDB_BY_OPERATION_CHAIN_PAGE_INDEX, ['operationId', 'chainId', 'pageOrdinal']),
+  ]),
   storeSchema(INDEXEDDB_FILE_FINAL_PROOF_STORE, 'proofId', [
     indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
     indexSchema(INDEXEDDB_BY_OPERATION_RECORD_PROOF_INDEX, ['operationId', 'recordId'], true),
   ]),
   storeSchema(INDEXEDDB_MATERIALIZATION_LEDGER_ENTRY_STORE, 'entryId', [
     indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
-    indexSchema(
-      INDEXEDDB_BY_OPERATION_PATH_ORDER_INDEX,
-      ['operationId', 'pathKey', 'entryOrder'],
-      true,
-    ),
+    indexSchema(INDEXEDDB_BY_OPERATION_PATH_ORDER_INDEX, ['operationId', 'pathKey', 'entryOrder'], true),
   ]),
   storeSchema(INDEXEDDB_MATERIALIZATION_LEDGER_PAGE_STORE, 'pageId', [
     indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
-    indexSchema(
-      INDEXEDDB_BY_OPERATION_SEAL_PAGE_INDEX,
-      ['operationId', 'sealId', 'pageOrdinal'],
-      true,
-    ),
+    indexSchema(INDEXEDDB_BY_OPERATION_SEAL_PAGE_INDEX, ['operationId', 'sealId', 'pageOrdinal'], true),
   ]),
   storeSchema(INDEXEDDB_MATERIALIZATION_LEDGER_SEAL_STORE, 'sealId', [
     indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
-    indexSchema(
-      INDEXEDDB_BY_OPERATION_SEAL_SEQUENCE_INDEX,
-      ['operationId', 'sealSequence'],
-      true,
-    ),
+    indexSchema(INDEXEDDB_BY_OPERATION_SEAL_SEQUENCE_INDEX, ['operationId', 'sealSequence'], true),
+  ]),
+  storeSchema(INDEXEDDB_OPFS_TASK_STORE, 'id', []),
+  storeSchema(INDEXEDDB_OPFS_ENTRY_STORE, 'id', [
+    indexSchema(INDEXEDDB_BY_OBJECT_SEQUENCE_INDEX, ['objectKey', 'sequenceKey'], true),
+  ]),
+  storeSchema(INDEXEDDB_OPFS_PATH_STORE, 'id', []),
+  storeSchema(INDEXEDDB_OPFS_DIRECTORY_STORE, 'id', []),
+  storeSchema(INDEXEDDB_BROWSER_SAVE_POLICY_STORE, 'operationId', []),
+  storeSchema(INDEXEDDB_BROWSER_DELIVERY_FILE_STORE, ['operationId', 'fileId'], [
+    indexSchema(INDEXEDDB_BY_OPERATION_FILE_INDEX, ['operationId', 'fileId'], true),
   ]),
 ])
+
+export const INDEXEDDB_OPERATION_STORE_SCHEMAS = INDEXEDDB_OUTPUT_STORE_SCHEMAS.filter(
+  (schema): schema is IndexedDbStoreSchema & { readonly keyPath: string } =>
+    typeof schema.keyPath === 'string' &&
+    (schema.keyPath === 'operationId' ||
+      schema.indexes.some(index => index.name === INDEXEDDB_BY_OPERATION_INDEX)),
+)
 
 export async function openIndexedDbCheckpointDatabase(name: string): Promise<IDBDatabase> {
   if (name.length === 0) throw new TypeError('IndexedDB name must not be empty')
   if (typeof indexedDB === 'undefined') {
     throw new DOMException('IndexedDB output repository is unavailable', 'NotSupportedError')
   }
-  const request = indexedDB.open(name, CHECKPOINT_DATABASE_VERSION)
-  request.addEventListener('upgradeneeded', (event) =>
-    installIndexedDbV12Schema(
-      request.result,
-      request.transaction ?? undefined,
-      event.oldVersion,
-    ))
+  const request = indexedDB.open(name, OUTPUT_DATABASE_VERSION)
+  request.addEventListener('upgradeneeded', event => {
+    if (event.oldVersion !== 0) {
+      request.transaction?.addEventListener('complete', () => console.info({
+        event: 'output.database.schema_reset',
+        database: name,
+        previous_version: event.oldVersion,
+        current_version: OUTPUT_DATABASE_VERSION,
+        disposition: 'incompatible-metadata-discarded',
+      }), { once: true })
+    }
+    installOutputDatabaseSchema(request.result)
+  })
   let blocked = false
   return new Promise<IDBDatabase>((resolve, reject) => {
     request.addEventListener('blocked', () => {
       blocked = true
-      reject(new DOMException(
-        'Output repository upgrade is blocked by another tab',
-        'InvalidStateError',
-      ))
+      reject(new DOMException('Output repository upgrade is blocked by another tab', 'InvalidStateError'))
     }, { once: true })
     request.addEventListener('error', () => reject(request.error), { once: true })
     request.addEventListener('success', () => {
       if (blocked) request.result.close()
-      else resolve(request.result)
+      else {
+        request.result.addEventListener('versionchange', () => request.result.close())
+        resolve(request.result)
+      }
     }, { once: true })
   })
 }
 
-export const INDEXEDDB_OPFS_TASK_STORE = 'opfs-task-checkpoints-v1'
-export const INDEXEDDB_OPFS_ENTRY_STORE = 'opfs-task-entries-v1'
-export const INDEXEDDB_OPFS_PATH_STORE = 'opfs-task-paths-v1'
-export const INDEXEDDB_OPFS_DIRECTORY_STORE = 'opfs-task-directories-v1'
-
-export function installIndexedDbV12Schema(
-  database: IDBDatabase,
-  transaction?: IDBTransaction,
-  oldVersion = OUTPUT_DATABASE_VERSION,
-): void {
-  installIndexedDbV11Schema(database, transaction, oldVersion)
-  installSchemas(database, [
-    storeSchema(INDEXEDDB_BROWSER_SAVE_POLICY_STORE, 'operationId', []),
-  ], transaction)
-  if (!database.objectStoreNames.contains(INDEXEDDB_BROWSER_DELIVERY_FILE_STORE)) {
-    const files = database.createObjectStore(INDEXEDDB_BROWSER_DELIVERY_FILE_STORE, {
-      keyPath: ['operationId', 'fileId'],
+// Called only inside IndexedDB's versionchange transaction. Reopening the current
+// format never enters here. Unknown records cannot grant filesystem authority,
+// so incompatible metadata is discarded without invoking any persisted handle.
+export function installOutputDatabaseSchema(database: IDBDatabase): void {
+  for (const name of Array.from(database.objectStoreNames)) database.deleteObjectStore(name)
+  for (const schema of INDEXEDDB_OUTPUT_STORE_SCHEMAS) {
+    const store = database.createObjectStore(schema.name, {
+      keyPath: typeof schema.keyPath === 'string' ? schema.keyPath : [...schema.keyPath],
     })
-    files.createIndex(INDEXEDDB_BY_OPERATION_FILE_INDEX, ['operationId', 'fileId'], { unique: true })
-  }
-}
-
-export function installIndexedDbV11Schema(
-  database: IDBDatabase,
-  transaction?: IDBTransaction,
-  oldVersion = OUTPUT_DATABASE_VERSION,
-): void {
-  // Version ten's durable authorities remain valid; only older formats need its reset.
-  if (oldVersion < 10) installIndexedDbV10Schema(database, transaction, oldVersion)
-  else installSchemas(database, INDEXEDDB_V10_STORE_SCHEMAS, transaction)
-  installSchemas(database, [
-    storeSchema(INDEXEDDB_OPFS_TASK_STORE, 'id', []),
-    storeSchema(INDEXEDDB_OPFS_ENTRY_STORE, 'id', [
-      indexSchema('by-object-sequence', ['objectKey', 'sequenceKey'], true),
-    ]),
-    storeSchema(INDEXEDDB_OPFS_PATH_STORE, 'id', []),
-    storeSchema(INDEXEDDB_OPFS_DIRECTORY_STORE, 'id', []),
-  ], transaction)
-}
-
-export function installIndexedDbV10Schema(
-  database: IDBDatabase,
-  transaction?: IDBTransaction,
-  oldVersion = OUTPUT_DATABASE_VERSION,
-): void {
-  if (oldVersion <= 0 || oldVersion >= OUTPUT_DATABASE_VERSION) {
-    installSchemas(database, INDEXEDDB_V10_STORE_SCHEMAS, transaction)
-    return
-  }
-  if (transaction === undefined) {
-    throw new DOMException('IndexedDB v10 migration lacks its versionchange transaction', 'InvalidStateError')
-  }
-
-  // Pre-v1 recovery facts cannot be upgraded into atomic proof/ledger authority.
-  // Recreating origin stores prevents corrupt legacy projections from blocking the
-  // new unique indexes. No filesystem capability is opened or invoked here.
-  for (const schema of INDEXEDDB_V9_STORE_SCHEMAS) {
-    if (database.objectStoreNames.contains(schema.name)) database.deleteObjectStore(schema.name)
-  }
-  for (const name of [
-    ...INDEXEDDB_LEGACY_V5_STORES,
-    INDEXEDDB_LEGACY_RECEIVE_RECORD_STORE,
-    INDEXEDDB_LEGACY_RECEIVE_MANIFEST_PAGE_STORE,
-    INDEXEDDB_LEGACY_RECEIVE_HANDLE_STORE,
-    INDEXEDDB_LEGACY_RECEIVE_LEASE_STORE,
-  ]) {
-    if (database.objectStoreNames.contains(name)) database.deleteObjectStore(name)
-  }
-  installSchemas(database, INDEXEDDB_V10_STORE_SCHEMAS, transaction)
-}
-
-export function installIndexedDbV9Schema(
-  database: IDBDatabase,
-  transaction?: IDBTransaction,
-  oldVersion = CHECKPOINT_DATABASE_VERSION,
-): void {
-  installSchemas(database, INDEXEDDB_V9_STORE_SCHEMAS, transaction)
-  if (oldVersion <= 0 || oldVersion >= CHECKPOINT_DATABASE_VERSION) return
-  if (transaction === undefined) {
-    throw new DOMException('IndexedDB v9 migration lacks its versionchange transaction', 'InvalidStateError')
-  }
-
-  // Legacy receive-operation/lifecycle rows cannot authorize a strict V2 reopen. Deleting
-  // their stores makes a mixed decoder impossible while leaving user-visible files intact.
-  for (const name of [
-    INDEXEDDB_LEGACY_RECEIVE_RECORD_STORE,
-    INDEXEDDB_LEGACY_RECEIVE_MANIFEST_PAGE_STORE,
-    INDEXEDDB_LEGACY_RECEIVE_HANDLE_STORE,
-    INDEXEDDB_LEGACY_RECEIVE_LEASE_STORE,
-  ]) {
-    if (database.objectStoreNames.contains(name)) database.deleteObjectStore(name)
-  }
-  for (const name of [
-    INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
-    INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
-    INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE,
-    INDEXEDDB_FILE_CHECKPOINT_CONTROL_STORE,
-    INDEXEDDB_COMPATIBLE_NAME_OPERATION_STORE,
-    INDEXEDDB_COMPATIBLE_NAME_MAPPING_STORE,
-  ]) {
-    if (database.objectStoreNames.contains(name)) transaction.objectStore(name).clear()
-  }
-}
-
-export function installIndexedDbV6Schema(database: IDBDatabase): void {
-  for (const schema of INDEXEDDB_V6_STORE_SCHEMAS) {
-    if (database.objectStoreNames.contains(schema.name)) continue
-    const store = database.createObjectStore(schema.name, { keyPath: schema.keyPath })
     for (const index of schema.indexes) {
-      store.createIndex(index.name, index.keyPath, { unique: index.unique ?? false, multiEntry: false })
-    }
-  }
-}
-
-export function installIndexedDbV7Schema(
-  database: IDBDatabase,
-  transaction?: IDBTransaction,
-): void {
-  for (const schema of INDEXEDDB_V7_STORE_SCHEMAS) {
-    const store = database.objectStoreNames.contains(schema.name)
-      ? transaction?.objectStore(schema.name)
-      : database.createObjectStore(schema.name, { keyPath: schema.keyPath })
-    if (store === undefined) {
-      throw new DOMException('IndexedDB schema upgrade lacks its versionchange transaction', 'InvalidStateError')
-    }
-    for (const index of schema.indexes) {
-      if (!store.indexNames.contains(index.name)) {
-        store.createIndex(index.name, index.keyPath, { unique: index.unique ?? false, multiEntry: false })
-      }
-    }
-  }
-}
-
-export function installIndexedDbV8Schema(
-  database: IDBDatabase,
-  transaction?: IDBTransaction,
-  oldVersion = CHECKPOINT_DATABASE_VERSION,
-): void {
-  for (const schema of INDEXEDDB_V8_STORE_SCHEMAS) {
-    const store = database.objectStoreNames.contains(schema.name)
-      ? transaction?.objectStore(schema.name)
-      : database.createObjectStore(schema.name, { keyPath: schema.keyPath })
-    if (store === undefined) {
-      throw new DOMException('IndexedDB schema upgrade lacks its versionchange transaction', 'InvalidStateError')
-    }
-    for (const index of schema.indexes) {
-      if (!store.indexNames.contains(index.name)) {
-        store.createIndex(index.name, index.keyPath, { unique: index.unique ?? false, multiEntry: false })
-      }
-    }
-  }
-
-  if (oldVersion <= 0 || oldVersion >= CHECKPOINT_DATABASE_VERSION) return
-  if (transaction === undefined) {
-    throw new DOMException('IndexedDB v8 migration lacks its versionchange transaction', 'InvalidStateError')
-  }
-  // ReceiveIntent v1 cannot be reinterpreted under the v2 digest domain. Clearing only
-  // browser metadata leaves the user's already-materialized filesystem entries untouched.
-  for (const schema of INDEXEDDB_V7_STORE_SCHEMAS) {
-    transaction.objectStore(schema.name).clear()
-  }
-}
-
-function installSchemas(
-  database: IDBDatabase,
-  schemas: readonly IndexedDbStoreSchema[],
-  transaction?: IDBTransaction,
-): void {
-  for (const schema of schemas) {
-    const store = database.objectStoreNames.contains(schema.name)
-      ? transaction?.objectStore(schema.name)
-      : database.createObjectStore(schema.name, { keyPath: schema.keyPath })
-    if (store === undefined) {
-      throw new DOMException('IndexedDB schema upgrade lacks its versionchange transaction', 'InvalidStateError')
-    }
-    for (const index of schema.indexes) {
-      if (!store.indexNames.contains(index.name)) {
-        store.createIndex(index.name, index.keyPath, { unique: index.unique ?? false, multiEntry: false })
-      }
+      store.createIndex(index.name, typeof index.keyPath === 'string' ? index.keyPath : [...index.keyPath], {
+        unique: index.unique ?? false,
+        multiEntry: false,
+      })
     }
   }
 }
@@ -459,7 +238,7 @@ export function isIndexedDbRecord(value: unknown): value is Record<string, unkno
 
 function storeSchema(
   name: string,
-  keyPath: string,
+  keyPath: string | readonly string[],
   indexes: readonly IndexedDbStoreSchema['indexes'][number][],
 ): IndexedDbStoreSchema {
   return Object.freeze({ name, keyPath, indexes: Object.freeze(indexes) })

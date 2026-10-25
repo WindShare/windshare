@@ -26,7 +26,7 @@ import {
   type ReceiveLifecycleState,
 } from '../../transfer/lifecycle/state'
 import { decodeStoredReceiveLifecycleState } from '../workspace/state-codec'
-import { readLegacyCompatibleNameStatus } from './indexeddb/compatible-name-legacy-cleanup'
+import { readIncompatibleNameStatus } from './indexeddb/incompatible-name-records'
 import { readSourceRevisionFailures } from '../resume/source-revision-failures'
 import { readProgressiveZipRecoveryRequirement } from '../resume/progressive-checkpoint'
 import { readOriginalFileRecoveryRequirement } from '../resume/original-checkpoint'
@@ -82,8 +82,8 @@ const INVENTORIED_STATE_BYTES = Object.freeze([
 ] as const)
 
 /**
- * Production inventory reads only strict V2 lifecycle records. The v9 migration
- * removes older receive authority before this source can enumerate it.
+ * Recovery reads only the current lifecycle format. Database initialization
+ * discards incompatible metadata before any saved handle can become authority.
  */
 export class IndexedDbReceiveResumeSource implements ReceiveOperationResumeSource {
   readonly #database: IDBDatabase
@@ -218,7 +218,7 @@ export class IndexedDbReceiveResumeSource implements ReceiveOperationResumeSourc
 
   async isCleanupOnly(operationId: string): Promise<boolean> {
     this.#assertOpen()
-    return readLegacyCompatibleNameStatus(this.#database, operationId)
+    return readIncompatibleNameStatus(this.#database, operationId)
   }
 
   async readRecoverySummary(

@@ -40,7 +40,7 @@ import type {
   WorkspacePlanSemantics,
   DirectZipSupportFacts,
   RuntimeDirectZipSupportFacts,
-  ZipRouteRecommendationPolicyV1,
+  ZipRouteRecommendationPolicy,
 } from './contracts'
 
 const MAX_ENVIRONMENT_ROUTE_ID_UTF8_BYTES = 128
@@ -49,8 +49,8 @@ const VALID_ENVIRONMENT_OFFERS = new WeakSet<object>()
 const UNAVAILABLE_DIRECT_ZIP_SUPPORT: DirectZipSupportFacts = Object.freeze({
   kind: 'unavailable', reason: 'runtime-not-installed',
 })
-const UNAVAILABLE_ZIP_RECOMMENDATION_POLICY: ZipRouteRecommendationPolicyV1 = Object.freeze({
-  version: 1, kind: 'unavailable', reason: 'workspace-threshold-unavailable',
+const UNAVAILABLE_ZIP_RECOMMENDATION_POLICY: ZipRouteRecommendationPolicy = Object.freeze({
+  kind: 'unavailable', reason: 'workspace-threshold-unavailable',
 })
 
 const PRECREATED_BROWSER_FILE_FACTS: DestinationGuaranteeFacts = Object.freeze({
@@ -512,23 +512,13 @@ function snapshotDirectZipSupport(input: DirectZipSupportFacts): DirectZipSuppor
 }
 
 function snapshotZipRecommendationPolicy(
-  input: ZipRouteRecommendationPolicyV1,
-): ZipRouteRecommendationPolicyV1 {
-  if (input.version !== 1) throw new TypeError('ZIP recommendation policy version is invalid')
-  if (input.kind === 'unavailable') {
-    if (input.reason !== 'workspace-threshold-unavailable' &&
-        input.reason !== 'policy-digest-unavailable') {
-      throw new TypeError('ZIP recommendation policy unavailability reason is invalid')
-    }
-    return Object.freeze({ ...input })
-  }
+  input: ZipRouteRecommendationPolicy,
+): ZipRouteRecommendationPolicy {
+  if (input.kind === 'unavailable') return Object.freeze({ ...input })
   if (typeof input.workspacePeakBytesThreshold !== 'bigint' || input.workspacePeakBytesThreshold < 0n) {
     throw new RangeError('ZIP recommendation workspace threshold is invalid')
   }
-  return Object.freeze({
-    ...input,
-    policyDigest: requireDigest(input.policyDigest, 'ZIP recommendation policy digest'),
-  })
+  return Object.freeze({ kind: 'available', workspacePeakBytesThreshold: input.workspacePeakBytesThreshold })
 }
 
 export function sameRuntimeDirectZipSupport(

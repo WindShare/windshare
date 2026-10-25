@@ -123,7 +123,7 @@ describe('Direct ZIP runtime admission', () => {
     if (base.kind !== 'available' || withoutRanking.kind !== 'available' ||
         changedPolicy.kind !== 'available') return
     expect(withoutRanking.facts.recommendationPolicy).toEqual({
-      version: 1, kind: 'unavailable', reason: 'workspace-threshold-unavailable',
+      kind: 'unavailable', reason: 'workspace-threshold-unavailable',
     })
     expect(sameRuntimeDirectZipSupport(base.facts.support, withoutRanking.facts.support)).toBe(true)
     expect(changedPolicy.facts.support.capabilityDigest).toBe(base.facts.support.capabilityDigest)
@@ -139,7 +139,7 @@ describe('Direct ZIP runtime admission', () => {
     expect(result.kind).toBe('available')
     if (result.kind !== 'available') return
     expect(result.facts.recommendationPolicy).toEqual({
-      version: 1, kind: 'unavailable', reason: 'policy-digest-unavailable',
+      kind: 'unavailable', reason: 'invalid-workspace-threshold',
     })
   })
 

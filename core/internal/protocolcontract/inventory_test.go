@@ -10,14 +10,6 @@ import (
 
 const vectorInventoryFile = "inventory.txt"
 
-var requiredReceiveVectorFiles = []string{
-	"artifact-choice-v1.json",
-	"directory-admission-v2.json",
-	"file-checkpoint-v2.json",
-	"name-collision-v1.json",
-	"receive-intent-v4.json",
-}
-
 func TestVectorInventoryIsExact(t *testing.T) {
 	inventoryPath := filepath.Join(vectorsDir, vectorInventoryFile)
 	encoded, err := os.ReadFile(inventoryPath)
@@ -36,16 +28,6 @@ func TestVectorInventoryIsExact(t *testing.T) {
 	}
 	if len(slices.Compact(slices.Clone(expected))) != len(expected) {
 		t.Fatalf("%s contains duplicate filenames", inventoryPath)
-	}
-	for _, name := range requiredReceiveVectorFiles {
-		if !slices.Contains(expected, name) {
-			t.Fatalf("%s omits current receive contract %s", inventoryPath, name)
-		}
-	}
-	for _, name := range retiredReceiveVectorFiles {
-		if slices.Contains(expected, name) {
-			t.Fatalf("%s still lists retired receive contract %s", inventoryPath, name)
-		}
 	}
 
 	entries, err := os.ReadDir(vectorsDir)

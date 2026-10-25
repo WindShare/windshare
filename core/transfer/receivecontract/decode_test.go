@@ -70,7 +70,7 @@ func TestCanonicalDecodersRejectMalformedNonCanonicalAndMismatchedImages(t *test
 	unknownPlan := bytes.Clone(planBytes)
 	unknownPlan[len(materializationPlanDomain)+2] = 0xff
 	wrongPreparation := bytes.Clone(planBytes)
-	wrongPreparation[len(wrongPreparation)-1] = byte(PreparationExactArtifact)
+	wrongPreparation[len(wrongPreparation)-1] = 0xff
 	zeroOperation := bytes.Clone(planBytes)
 	operationOffset := bytes.Index(zeroOperation, direct.plan.OperationID().Bytes())
 	if operationOffset < 0 {
@@ -143,9 +143,7 @@ func TestNestedCanonicalDecodersRejectOpenUnionsAndPolicyDrift(t *testing.T) {
 			_, err := decodeDestinationReservation(nil, original)
 			return err
 		},
-		"empty-workspace": func() error { _, err := decodeWorkspaceBinding(nil, original); return err },
-		"empty-portable":  func() error { _, err := decodePortableBinding(nil, original); return err },
-		"empty-path":      func() error { _, err := decodeCanonicalPath(nil); return err },
+		"empty-path": func() error { _, err := decodeCanonicalPath(nil); return err },
 		"missing-path-frame": func() error {
 			_, err := decodeCanonicalPath(uint64Bytes(1))
 			return err
@@ -194,7 +192,7 @@ func TestNestedCanonicalDecodersRejectOpenUnionsAndPolicyDrift(t *testing.T) {
 		t.Fatal("direct plan has no reservation")
 	}
 	wrongRootAuthority := decoderReservationImage(
-		rootReservation, ReservationContainerRoot, AuthorityFSAContainer,
+		rootReservation, ReservationContainerRoot, AuthorityManagedAtomicTarget,
 		NativeTreeGuarantees(), 0, "", "", 0,
 	)
 	unknownReservation := decoderReservationImage(
@@ -225,7 +223,7 @@ func TestNestedCanonicalDecodersRejectOpenUnionsAndPolicyDrift(t *testing.T) {
 		)[:len(rootReservation.CanonicalBytes())],
 		"wrong-guarantee": decoderReservationImage(
 			namedReservation, ReservationNamedContainerEntry, AuthorityNativeContainer,
-			FSATreeGuarantees(), namedReservation.EntryKind(), namedReservation.RequestedName(),
+			GuaranteeSet{}, namedReservation.EntryKind(), namedReservation.RequestedName(),
 			namedReservation.LogicalReservedName(), namedReservation.CollisionIndex(),
 		),
 		"unknown-authority": decoderReservationImage(
@@ -251,33 +249,6 @@ func TestNestedCanonicalDecodersRejectOpenUnionsAndPolicyDrift(t *testing.T) {
 		})
 	}
 
-	fsa := fixture.plans["direct-tree-selection"]
-	fsaReservation, ok := fsa.plan.DestinationReservation()
-	if !ok {
-		t.Fatal("FSA plan has no reservation")
-	}
-	fsaWrongGuarantee := decoderReservationImage(
-		fsaReservation, ReservationNamedContainerEntry, AuthorityFSAContainer,
-		NativeTreeGuarantees(), fsaReservation.EntryKind(), fsaReservation.RequestedName(),
-		fsaReservation.LogicalReservedName(), fsaReservation.CollisionIndex(),
-	)
-	fsaWrongLayout := fsaReservation.CanonicalBytes()
-	fsaWrongLayout[len(fsaWrongLayout)-1] = 0
-	fsaMissingLayout := fsaReservation.CanonicalBytes()
-	layoutFieldBytes := len(frame([]byte{FSAReservedRootLayoutV1}))
-	fsaMissingLayout = fsaMissingLayout[:len(fsaMissingLayout)-layoutFieldBytes]
-	for name, encoded := range map[string][]byte{
-		"wrong-guarantee": fsaWrongGuarantee,
-		"wrong-layout":    fsaWrongLayout,
-		"missing-layout":  fsaMissingLayout,
-	} {
-		t.Run("FSA-reservation-"+name, func(t *testing.T) {
-			if _, err := decodeDestinationReservation(encoded, fsa.artifact); !errors.Is(err, ErrInvalidReceiveContract) {
-				t.Fatalf("decode error=%v", err)
-			}
-		})
-	}
-
 	atomic := fixture.plans["direct-atomic-original"]
 	atomicReservation, ok := atomic.plan.DestinationReservation()
 	if !ok {
@@ -290,45 +261,6 @@ func TestNestedCanonicalDecodersRejectOpenUnionsAndPolicyDrift(t *testing.T) {
 	)
 	if _, err := decodeDestinationReservation(atomicWrongAuthority, atomic.artifact); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatalf("atomic authority error=%v", err)
-	}
-
-	workspace := fixture.plans["workspace-original"]
-	workspaceBinding, ok := workspace.plan.WorkspaceBinding()
-	if !ok {
-		t.Fatal("workspace plan has no binding")
-	}
-	workspaceTrailing := append(workspaceBinding.CanonicalBytes(), 0)
-	workspacePolicy := workspaceBinding.CanonicalBytes()
-	workspacePolicy[len(workspacePolicy)-1] = 0xff
-	for _, encoded := range [][]byte{workspaceTrailing, workspacePolicy} {
-		if _, err := decodeWorkspaceBinding(encoded, workspace.artifact); !errors.Is(err, ErrInvalidReceiveContract) {
-			t.Fatalf("workspace decode error=%v", err)
-		}
-	}
-
-	portable := fixture.plans["portable-original"]
-	portableBinding, ok := portable.plan.PortableBinding()
-	if !ok {
-		t.Fatal("portable plan has no binding")
-	}
-	portableTrailing := append(portableBinding.CanonicalBytes(), 0)
-	portablePolicy := portableBinding.CanonicalBytes()
-	portablePolicy[len(portablePolicy)-1] = 0xff
-	for _, encoded := range [][]byte{portableTrailing, portablePolicy} {
-		if _, err := decodePortableBinding(encoded, portable.artifact); !errors.Is(err, ErrInvalidReceiveContract) {
-			t.Fatalf("portable decode error=%v", err)
-		}
-	}
-
-	workspacePlan := workspace.plan.CanonicalBytes()
-	workspacePlan[len(workspacePlan)-1] = 1 // Former exact-ZIP preparation is not a legal workspace plan.
-	if _, err := DecodeMaterializationPlan(workspacePlan, workspace.artifact); !errors.Is(err, ErrInvalidReceiveContract) {
-		t.Fatalf("workspace preparation error=%v", err)
-	}
-	portablePlan := portable.plan.CanonicalBytes()
-	portablePlan[len(portablePlan)-10] = byte(GuaranteeManagedAtomic)
-	if _, err := DecodeMaterializationPlan(portablePlan, portable.artifact); !errors.Is(err, ErrInvalidReceiveContract) {
-		t.Fatalf("portable route error=%v", err)
 	}
 
 	tooLargePath := uint64Bytes(129)
@@ -362,9 +294,6 @@ func decoderReservationImage(
 		encoded = append(encoded, frame([]byte(reservedName))...)
 		encoded = append(encoded, frame([]byte(reservation.PhysicalName()))...)
 		encoded = append(encoded, frame(uint32Bytes(collisionIndex))...)
-		if authorityKind == AuthorityFSAContainer {
-			encoded = append(encoded, frame([]byte{FSAReservedRootLayoutV1})...)
-		}
 	case ReservationAtomicTarget:
 		encoded = append(encoded, frame([]byte(requestedName))...)
 		encoded = append(encoded, frame([]byte(reservedName))...)
@@ -387,10 +316,7 @@ func newDecoderContractFixture(t *testing.T) decoderContractFixture {
 	t.Helper()
 	operation := mustIdentity(OperationIDFromBytes(contractStable(61)))
 	reservationID := mustIdentity(DestinationReservationIDFromBytes(contractStable(62)))
-	workspaceID := mustIdentity(WorkspaceIDFromBytes(contractStable(63)))
-	portableID := mustIdentity(PortablePlanIDFromBytes(contractStable(64)))
 	authority := mustIdentity(AuthorityRefFromBytes(contractOpaque(65)))
-	repository := mustIdentity(RepositoryRefFromBytes(contractOpaque(66)))
 	file := contractID[catalog.FileID](67)
 	directory := contractID[catalog.DirectoryID](68)
 
@@ -455,8 +381,8 @@ func newDecoderContractFixture(t *testing.T) decoderContractFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	selectionReservation, err := NewFSANamedEntryReservation(
-		operation, reservationID, selectionTree, authority, selectionReserved, selectionReserved, 2,
+	selectionReservation, err := NewNativeNamedEntryReservation(
+		operation, reservationID, selectionTree, authority, selectionReserved, 2,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -472,24 +398,6 @@ func newDecoderContractFixture(t *testing.T) decoderContractFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	target, err := FSAOwnedTargetRefFromBytes(contractOpaque(140))
-	if err != nil {
-		t.Fatal(err)
-	}
-	policies := DirectZipPolicyDigests{
-		ZipEncoding:   mustPolicyDigest(t, contractOpaque(150)),
-		Layout:        mustPolicyDigest(t, contractOpaque(160)),
-		Checkpoint:    mustPolicyDigest(t, contractOpaque(170)),
-		JournalBudget: mustPolicyDigest(t, contractOpaque(180)),
-		Epoch:         mustPolicyDigest(t, contractOpaque(190)),
-	}
-	ownedFile, err := NewFSAOwnedFileBinding(
-		operation, zipSelection, "docs-selection.windshare-YWJjZGVmZ2hpamtsbW5vcA.zip", target, policies,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	directRoot, err := NewDirectTreePlan(catalogTree, rootReservation)
 	if err != nil {
 		t.Fatal(err)
@@ -506,43 +414,6 @@ func newDecoderContractFixture(t *testing.T) decoderContractFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	directZip, err := NewDirectResumableZIPPlan(zipSelection, ownedFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	workspaceOriginalBinding, err := NewWorkspaceBinding(operation, workspaceID, original, repository)
-	if err != nil {
-		t.Fatal(err)
-	}
-	workspaceZipBinding, err := NewWorkspaceBinding(operation, workspaceID, zipComplete, repository)
-	if err != nil {
-		t.Fatal(err)
-	}
-	workspaceOriginal, err := NewWorkspaceThenPublishPlan(original, workspaceOriginalBinding)
-	if err != nil {
-		t.Fatal(err)
-	}
-	workspaceZip, err := NewWorkspaceThenPublishPlan(zipComplete, workspaceZipBinding)
-	if err != nil {
-		t.Fatal(err)
-	}
-	portableOriginalBinding, err := NewPortableBinding(operation, portableID, original)
-	if err != nil {
-		t.Fatal(err)
-	}
-	portableZipBinding, err := NewPortableBinding(operation, portableID, zipSynthetic)
-	if err != nil {
-		t.Fatal(err)
-	}
-	portableOriginal, err := NewPortableHandoffPlan(original, portableOriginalBinding)
-	if err != nil {
-		t.Fatal(err)
-	}
-	portableZip, err := NewPortableHandoffPlan(zipSynthetic, portableZipBinding)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	return decoderContractFixture{
 		artifacts: map[string]ArtifactSpec{
 			"original": original, "tree-single": single, "tree-complete": completeTree,
@@ -555,20 +426,6 @@ func newDecoderContractFixture(t *testing.T) decoderContractFixture {
 			"direct-tree-single":     {single, directSingle},
 			"direct-tree-selection":  {selectionTree, directSelection},
 			"direct-atomic-original": {original, atomicOriginal},
-			"direct-resumable-zip":   {zipSelection, directZip},
-			"workspace-original":     {original, workspaceOriginal},
-			"workspace-zip":          {zipComplete, workspaceZip},
-			"portable-original":      {original, portableOriginal},
-			"portable-zip":           {zipSynthetic, portableZip},
 		},
 	}
-}
-
-func mustPolicyDigest(t *testing.T, raw []byte) PolicyDigest {
-	t.Helper()
-	value, err := PolicyDigestFromBytes(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return value
 }

@@ -2,19 +2,19 @@ import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
   INDEXEDDB_COMPATIBLE_NAME_OPERATION_STORE,
   INDEXEDDB_RECEIVE_RECORD_STORE,
-  INDEXEDDB_V10_STORE_SCHEMAS,
+  INDEXEDDB_OPERATION_STORE_SCHEMAS,
   openIndexedDbCheckpointDatabase,
   requestResult,
   transactionCompletion,
 } from '../../src/output/browser/indexeddb-database'
-import { forgetLegacyCompatibleNameRecord } from '../../src/output/browser/indexeddb/compatible-name-legacy-cleanup'
+import { forgetIncompatibleNameRecord } from '../../src/output/browser/indexeddb/incompatible-name-records'
 import { IndexedDbReceiveResumeSource } from '../../src/output/browser/indexeddb-resume-state'
 import { browserReceiveOperationLockName } from '../../src/output/browser/session-lease'
 import { ReceiveOperationResumeAuthority } from '../../src/output/resume/authority'
 import { initialReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
 import { storedReceiveLifecycleState } from '../../src/output/workspace/state-codec'
 
-export async function probeLegacyCompatibleNameCleanup(databaseName: string) {
+export async function probeIncompatibleNameCleanup(databaseName: string) {
   const operationId = identity(16, 41)
   const foreignId = identity(16, 42)
   const lifecycle = {
@@ -31,9 +31,9 @@ export async function probeLegacyCompatibleNameCleanup(databaseName: string) {
   await writable.close()
   const database = await openIndexedDbCheckpointDatabase(databaseName)
   try {
-    const transaction = database.transaction(INDEXEDDB_V10_STORE_SCHEMAS.map(schema => schema.name), 'readwrite')
+    const transaction = database.transaction(INDEXEDDB_OPERATION_STORE_SCHEMAS.map(schema => schema.name), 'readwrite')
     const complete = transactionCompletion(transaction)
-    for (const schema of INDEXEDDB_V10_STORE_SCHEMAS) {
+    for (const schema of INDEXEDDB_OPERATION_STORE_SCHEMAS) {
       const store = transaction.objectStore(schema.name)
       store.put({ [schema.keyPath]: foreignId, operationId: foreignId })
       store.put({ [schema.keyPath]: operationId, operationId })
@@ -52,25 +52,25 @@ export async function probeLegacyCompatibleNameCleanup(databaseName: string) {
       mutations: {
         resume: async () => { throw new Error('must not resume') },
         cleanup: async () => { throw new Error('must not expire physically') },
-        discard: descriptor => forgetLegacyCompatibleNameRecord(descriptor, { databaseName }),
+        discard: descriptor => forgetIncompatibleNameRecord(descriptor, { databaseName }),
       },
     })
     const inventory = await authority.listResumeState()
     const reference = inventory.operations[0]!
     const continuation = reference.descriptor.continuation
     const stale = { ...reference.descriptor, lifecycle: { ...lifecycle, generation: lifecycle.generation + 1n } }
-    const staleRejected = await forgetLegacyCompatibleNameRecord(stale, { databaseName })
+    const staleRejected = await forgetIncompatibleNameRecord(stale, { databaseName })
       .then(() => false, () => true)
     const busyRejected = await navigator.locks.request(browserReceiveOperationLockName(operationId),
-      () => forgetLegacyCompatibleNameRecord(reference.descriptor, { databaseName })
+      () => forgetIncompatibleNameRecord(reference.descriptor, { databaseName })
         .then(() => false, () => true))
     const result = await authority.discard(reference)
     inventory.close()
     const remainingOperations = (await source.listLifecycleStates()).length
     source.close()
-    const countsTransaction = database.transaction(INDEXEDDB_V10_STORE_SCHEMAS.map(schema => schema.name), 'readonly')
+    const countsTransaction = database.transaction(INDEXEDDB_OPERATION_STORE_SCHEMAS.map(schema => schema.name), 'readonly')
     const countsComplete = transactionCompletion(countsTransaction)
-    const remainingCounts = await Promise.all(INDEXEDDB_V10_STORE_SCHEMAS.map(schema =>
+    const remainingCounts = await Promise.all(INDEXEDDB_OPERATION_STORE_SCHEMAS.map(schema =>
       requestResult(countsTransaction.objectStore(schema.name).count())))
     await countsComplete
     return {

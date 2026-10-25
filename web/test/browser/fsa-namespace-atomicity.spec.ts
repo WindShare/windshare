@@ -781,7 +781,7 @@ test('compatible-name ledger scopes mapping and pair claims to physical siblings
   })
 })
 
-test('IndexedDB v9 closes on versionchange and rejects blocked upgrades without leaking a connection', async ({
+test('IndexedDB closes on versionchange and rejects blocked upgrades without leaking a connection', async ({
   browserName,
   page,
 }) => {
@@ -793,8 +793,8 @@ test('IndexedDB v9 closes on versionchange and rejects blocked upgrades without 
     const ledgerModule = await import(modulePaths.ledger) as
       typeof import('../../src/output/browser/indexeddb-compatible-name-ledger')
     const legacyReceiveLeaseStore = 'receive-operation-v1-leases'
-    const v8 = await openRaw(upgradeName, 8, (database, transaction) => {
-      databaseModule.installIndexedDbV8Schema(database, transaction, 0)
+    const v8 = await openRaw(upgradeName, databaseModule.OUTPUT_DATABASE_VERSION - 1, database => {
+      database.createObjectStore(legacyReceiveLeaseStore, { keyPath: 'id' })
     })
     const write = v8.transaction(legacyReceiveLeaseStore, 'readwrite')
     write.objectStore(legacyReceiveLeaseStore).put({
@@ -831,15 +831,15 @@ test('IndexedDB v9 closes on versionchange and rejects blocked upgrades without 
     laterVersion.close()
     await deleteRaw(upgradeName)
 
-    const blocker = await openRaw(blockedName, 8, (database, transaction) => {
-      databaseModule.installIndexedDbV8Schema(database, transaction, 0)
+    const blocker = await openRaw(blockedName, databaseModule.OUTPUT_DATABASE_VERSION - 1, database => {
+      database.createObjectStore('incompatible-format', { keyPath: 'id' })
     })
     let blockedRejected = false
     await ledgerModule.IndexedDbCompatibleNameLedger.open(blockedName).catch((error: unknown) => {
       blockedRejected = error instanceof DOMException && error.name === 'InvalidStateError'
     })
     blocker.close()
-    // The rejected v9 request still completes later; its blocked flag must close that late connection
+    // The rejected open request still completes later; its blocked flag must close that late connection
     // so a following upgrade can finish without timers or cross-tab cleanup heuristics.
     const afterBlocked = await openRaw(blockedName, databaseModule.CHECKPOINT_DATABASE_VERSION)
     afterBlocked.close()

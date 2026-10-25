@@ -2,112 +2,12 @@ package receivecontract
 
 import (
 	"bytes"
-	"encoding/base64"
 	"errors"
 	"strings"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
 )
-
-func TestArtifactChoiceIdentityFreezesDirectAndWorkspaceZIPChoices(t *testing.T) {
-	tests := []struct {
-		name        string
-		artifact    ArtifactKind
-		plan        MaterializationPlanKind
-		guarantee   GuaranteeProfile
-		preparation PreparationPolicy
-		wantID      string
-	}{
-		{
-			name: "direct-resumable", artifact: ArtifactZipArchive, plan: PlanDirectResumableZIP,
-			guarantee: GuaranteeFSAOwnedFile, preparation: PreparationNone,
-			wantID: "0dkx9vDTzvH7B7a9EUoJBOWLCWgmVwLoFH3jjRmfHFU",
-		},
-		{
-			name: "workspace-browser-handoff", artifact: ArtifactZipArchive, plan: PlanWorkspaceThenPublish,
-			guarantee: GuaranteeBrowserHandoff, preparation: PreparationNone,
-			wantID: "vQj0Uda3oyRmvsZcz2qN0T9-f5m99Lcn0NK-9rS2_-k",
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			identity, err := NewArtifactChoiceIdentity(
-				test.artifact, test.plan, test.guarantee, test.preparation,
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := base64.RawURLEncoding.EncodeToString(identity.ID().Bytes()); got != test.wantID {
-				t.Fatalf("artifact choice ID=%s want=%s", got, test.wantID)
-			}
-			decoded, err := DecodeArtifactChoiceIdentity(identity.CanonicalBytes())
-			if err != nil || decoded.ID() != identity.ID() || decoded.IsZero() {
-				t.Fatalf("decoded identity=%+v error=%v", decoded, err)
-			}
-		})
-	}
-
-	if _, err := NewArtifactChoiceIdentity(
-		ArtifactZipArchive, PlanDirectAtomic, GuaranteeManagedAtomic, PreparationNone,
-	); !errors.Is(err, ErrInvalidReceiveContract) {
-		t.Fatalf("legacy direct-atomic ZIP choice error=%v", err)
-	}
-	legacyDomain := []byte("windshare/artifact-choice/v0\x00\x01")
-	if _, err := DecodeArtifactChoiceIdentity(legacyDomain); !errors.Is(err, ErrInvalidReceiveContract) {
-		t.Fatalf("legacy artifact choice identity error=%v", err)
-	}
-}
-
-func TestFSAOwnedFileBindingRequiresEveryFrozenPolicyDigest(t *testing.T) {
-	operation := mustIdentity(OperationIDFromBytes(contractStable(70)))
-	target := mustIdentity(FSAOwnedTargetRefFromBytes(contractOpaque(71)))
-	directory := contractID[catalog.DirectoryID](72)
-	root, err := NewDirectorySelectionResultRoot(directory, "docs")
-	if err != nil {
-		t.Fatal(err)
-	}
-	archive, err := NewZipArchiveArtifact(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stableName := "docs-selection.windshare-YWJjZGVmZ2hpamtsbW5vcA.zip"
-	if _, err := NewFSAOwnedFileBinding(
-		operation, archive, stableName, target, DirectZipPolicyDigests{},
-	); !errors.Is(err, ErrInvalidReceiveContract) {
-		t.Fatalf("absent policy digests error=%v", err)
-	}
-
-	// These opaque values test structural completeness only; they make no production support claim.
-	policies := DirectZipPolicyDigests{
-		ZipEncoding:   mustIdentity(PolicyDigestFromBytes(contractOpaque(73))),
-		Layout:        mustIdentity(PolicyDigestFromBytes(contractOpaque(74))),
-		Checkpoint:    mustIdentity(PolicyDigestFromBytes(contractOpaque(75))),
-		JournalBudget: mustIdentity(PolicyDigestFromBytes(contractOpaque(76))),
-		Epoch:         mustIdentity(PolicyDigestFromBytes(contractOpaque(77))),
-	}
-	binding, err := NewFSAOwnedFileBinding(operation, archive, stableName, target, policies)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if binding.IsZero() || binding.PolicyDigests() != policies ||
-		binding.Guarantees() != FSAOwnedFileGuarantees() {
-		t.Fatalf("FSA owned-file binding=%+v", binding)
-	}
-	plan, err := NewDirectResumableZIPPlan(archive, binding)
-	if err != nil {
-		t.Fatal(err)
-	}
-	decoded, err := DecodeMaterializationPlan(plan.CanonicalBytes(), archive)
-	if err != nil || decoded.Kind() != PlanDirectResumableZIP {
-		t.Fatalf("decoded direct ZIP plan=%+v error=%v", decoded, err)
-	}
-	if _, err := NewFSAOwnedFileBinding(
-		operation, archive, "docs-selection.zip", target, policies,
-	); !errors.Is(err, ErrInvalidReceiveContract) {
-		t.Fatalf("unstable direct ZIP name error=%v", err)
-	}
-}
 
 func contractID[T ~[16]byte](seed byte) T {
 	var value T
@@ -137,32 +37,28 @@ func mustIdentity[T any](value T, err error) T {
 func TestIdentityValuesRejectMissingAuthorityAndDefendBytes(t *testing.T) {
 	operation := mustIdentity(OperationIDFromBytes(contractStable(1)))
 	reservation := mustIdentity(DestinationReservationIDFromBytes(contractStable(2)))
-	workspace := mustIdentity(WorkspaceIDFromBytes(contractStable(3)))
-	portable := mustIdentity(PortablePlanIDFromBytes(contractStable(4)))
 	authority := mustIdentity(AuthorityRefFromBytes(contractOpaque(5)))
-	repository := mustIdentity(RepositoryRefFromBytes(contractOpaque(6)))
 	artifact := mustIdentity(ArtifactDigestFromBytes(contractOpaque(7)))
 	binding := mustIdentity(BindingDigestFromBytes(contractOpaque(8)))
 	values := [][]byte{
-		operation.Bytes(), reservation.Bytes(), workspace.Bytes(), portable.Bytes(),
-		authority.Bytes(), repository.Bytes(), artifact.Bytes(), binding.Bytes(),
+		operation.Bytes(), reservation.Bytes(),
+		authority.Bytes(), artifact.Bytes(), binding.Bytes(),
 	}
 	for index, value := range values {
 		value[0] ^= 0xff
 		if valuesAgain := [][]byte{
-			operation.Bytes(), reservation.Bytes(), workspace.Bytes(), portable.Bytes(),
-			authority.Bytes(), repository.Bytes(), artifact.Bytes(), binding.Bytes(),
+			operation.Bytes(), reservation.Bytes(),
+			authority.Bytes(), artifact.Bytes(), binding.Bytes(),
 		}; bytes.Equal(value, valuesAgain[index]) {
 			t.Fatalf("identity %d exposed mutable bytes", index)
 		}
 	}
-	if operation.IsZero() || reservation.IsZero() || workspace.IsZero() || portable.IsZero() ||
-		authority.IsZero() || repository.IsZero() || artifact.IsZero() || binding.IsZero() {
+	if operation.IsZero() || reservation.IsZero() ||
+		authority.IsZero() || artifact.IsZero() || binding.IsZero() {
 		t.Fatal("valid identity reported zero")
 	}
 	if !(OperationID{}).IsZero() || !(DestinationReservationID{}).IsZero() ||
-		!(WorkspaceID{}).IsZero() || !(PortablePlanID{}).IsZero() ||
-		!(AuthorityRef{}).IsZero() || !(RepositoryRef{}).IsZero() ||
+		!(AuthorityRef{}).IsZero() ||
 		!(ArtifactDigest{}).IsZero() || !(BindingDigest{}).IsZero() {
 		t.Fatal("zero identity reported valid")
 	}
@@ -176,8 +72,8 @@ func TestIdentityValuesRejectMissingAuthorityAndDefendBytes(t *testing.T) {
 	if _, err := AuthorityRefFromBytes(make([]byte, AuthorityRefBytes)); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatalf("zero authority error=%v", err)
 	}
-	if _, err := RepositoryRefFromBytes(contractOpaque(8)[:AuthorityRefBytes-1]); !errors.Is(err, ErrInvalidReceiveContract) {
-		t.Fatalf("short repository error=%v", err)
+	if _, err := AuthorityRefFromBytes(contractOpaque(8)[:AuthorityRefBytes-1]); !errors.Is(err, ErrInvalidReceiveContract) {
+		t.Fatalf("short authority error=%v", err)
 	}
 	if _, err := ArtifactDigestFromBytes(nil); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatalf("missing artifact digest error=%v", err)
@@ -294,12 +190,8 @@ func TestArtifactVariantsPreserveOneCanonicalLayout(t *testing.T) {
 
 func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 	operation := mustIdentity(OperationIDFromBytes(contractStable(20)))
-	otherOperation := mustIdentity(OperationIDFromBytes(contractStable(21)))
 	reservationID := mustIdentity(DestinationReservationIDFromBytes(contractStable(22)))
 	authority := mustIdentity(AuthorityRefFromBytes(contractOpaque(23)))
-	workspaceID := mustIdentity(WorkspaceIDFromBytes(contractStable(24)))
-	repository := mustIdentity(RepositoryRefFromBytes(contractOpaque(25)))
-	portableID := mustIdentity(PortablePlanIDFromBytes(contractStable(26)))
 	file := contractID[catalog.FileID](27)
 	directory := contractID[catalog.DirectoryID](28)
 	original, _ := NewOriginalFileArtifact(file, "report.txt", "report.txt")
@@ -319,8 +211,8 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	resultName, _ := CollisionName(operation, "docs-selection", 2, false)
-	fsaEntry, err := NewFSANamedEntryReservation(
-		operation, reservationID, tree, authority, resultName, "docs-selection.windshare-abcdef", 2,
+	resultEntry, err := NewNativeNamedEntryReservation(
+		operation, reservationID, tree, authority, resultName, 2,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -342,16 +234,10 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 	if nativeEntry.Kind() != ReservationNamedContainerEntry || nativeEntry.EntryKind() != ContainerEntrySingleFile ||
 		nativeEntry.RequestedName() != "report.txt" || nativeEntry.LogicalReservedName() != singleName ||
 		nativeEntry.PhysicalName() != singleName ||
-		nativeEntry.CollisionIndex() != 1 || fsaEntry.Guarantees() != FSATreeGuarantees() ||
+		nativeEntry.CollisionIndex() != 1 || resultEntry.Guarantees() != NativeTreeGuarantees() ||
 		atomic.Kind() != ReservationAtomicTarget || atomic.RequestedName() != "report.txt" ||
 		atomic.ReservedName() != atomicName || atomic.Guarantees().NameAuthority() != NameUserChosen {
 		t.Fatal("reservation variant fields mismatch")
-	}
-	if layoutVersion, ok := fsaEntry.FSALayoutVersion(); !ok || layoutVersion != FSAReservedRootLayoutV1 {
-		t.Fatalf("FSA reserved-root layout = (%d, %t)", layoutVersion, ok)
-	}
-	if _, ok := nativeEntry.FSALayoutVersion(); ok {
-		t.Fatal("native named entry exposed an FSA layout version")
 	}
 	if atomic.Guarantees().Profile() != GuaranteeManagedAtomic ||
 		atomic.Guarantees().Replacement() != ReplacementAtomicNoReplace ||
@@ -361,11 +247,7 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 		atomic.Guarantees().CleanupAuthority() != CleanupRollbackToAbsentBeforePublication {
 		t.Fatalf("atomic guarantees=%+v", atomic.Guarantees())
 	}
-	if BrowserHandoffGuarantees().Profile() != GuaranteeBrowserHandoff ||
-		BrowserHandoffGuarantees().NameAuthority() != NameBrowserChosen {
-		t.Fatalf("handoff guarantees=%+v", BrowserHandoffGuarantees())
-	}
-	if _, err := ManagedAtomicGuarantees(NameBrowserChosen); !errors.Is(err, ErrInvalidReceiveContract) {
+	if _, err := ManagedAtomicGuarantees(NameAuthority(0xff)); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatalf("invalid managed guarantee error=%v", err)
 	}
 
@@ -376,38 +258,13 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 	if _, err := NewDirectTreePlan(single, nativeEntry); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewDirectTreePlan(tree, fsaEntry); err != nil {
+	if _, err := NewDirectTreePlan(tree, resultEntry); err != nil {
 		t.Fatal(err)
 	}
 	directAtomic, err := NewDirectAtomicPlan(original, atomic)
 	if err != nil {
 		t.Fatal(err)
 	}
-	workspaceOriginal, err := NewWorkspaceBinding(operation, workspaceID, original, repository)
-	if err != nil {
-		t.Fatal(err)
-	}
-	workspaceArchive, err := NewWorkspaceBinding(operation, workspaceID, archive, repository)
-	if err != nil {
-		t.Fatal(err)
-	}
-	workspacePlan, err := NewWorkspaceThenPublishPlan(original, workspaceOriginal)
-	if err != nil {
-		t.Fatal(err)
-	}
-	workspaceZipPlan, err := NewWorkspaceThenPublishPlan(archive, workspaceArchive)
-	if err != nil {
-		t.Fatal(err)
-	}
-	portable, err := NewPortableBinding(operation, portableID, archive)
-	if err != nil {
-		t.Fatal(err)
-	}
-	portablePlan, err := NewPortableHandoffPlan(archive, portable)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	plans := []struct {
 		plan        MaterializationPlan
 		kind        MaterializationPlanKind
@@ -415,9 +272,6 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 	}{
 		{directTree, PlanDirectTree, PreparationNone},
 		{directAtomic, PlanDirectAtomic, PreparationNone},
-		{workspacePlan, PlanWorkspaceThenPublish, PreparationNone},
-		{workspaceZipPlan, PlanWorkspaceThenPublish, PreparationNone},
-		{portablePlan, PlanPortableHandoff, PreparationExactArtifact},
 	}
 	for _, test := range plans {
 		if test.plan.IsZero() || test.plan.Kind() != test.kind || test.plan.Preparation() != test.preparation ||
@@ -429,28 +283,9 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 	if value, ok := directTree.DestinationReservation(); !ok || value.Digest() != nativeRoot.Digest() {
 		t.Fatalf("direct binding=%+v ok=%v", value, ok)
 	}
-	if value, ok := workspacePlan.WorkspaceBinding(); !ok || value.WorkspaceID() != workspaceID ||
-		value.RepositoryRef() != repository || value.OperationID() != operation ||
-		value.ArtifactDigest() != original.Digest() || value.WorkspaceKind() != WorkspaceOriginPrivate ||
-		value.BudgetPolicy() != WorkspaceBudgetV1 || value.RetentionPolicy() != WorkspaceStable24HourV1 ||
-		value.Digest().IsZero() {
-		t.Fatalf("workspace=%+v ok=%v", value, ok)
-	}
-	if value, ok := portablePlan.PortableBinding(); !ok || value.PortablePlanID() != portableID ||
-		value.OperationID() != operation || value.ArtifactDigest() != archive.Digest() ||
-		value.MaximumArtifactBytes() != DefaultPortableArtifactLimit ||
-		value.AssemblyPartBytes() != DefaultPortableAssemblyPartBytes ||
-		value.MaximumParts() != DefaultPortableMaximumParts ||
-		value.ObjectURLLeaseMilliseconds() != BrowserHandoffObjectURLLeaseMillis ||
-		value.Preparation() != PreparationExactArtifact || value.Digest().IsZero() {
-		t.Fatalf("portable=%+v ok=%v", value, ok)
-	}
-	if _, ok := directTree.WorkspaceBinding(); ok {
-		t.Fatal("direct plan exposed workspace binding")
-	}
 	canonical := atomic.CanonicalBytes()
 	canonical[0] ^= 0xff
-	if bytes.Equal(canonical, atomic.CanonicalBytes()) || workspaceOriginal.IsZero() || portable.IsZero() {
+	if bytes.Equal(canonical, atomic.CanonicalBytes()) {
 		t.Fatal("binding canonical storage or validity mismatch")
 	}
 
@@ -471,19 +306,6 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 	}
 	if _, err := NewManagedAtomicReservation(operation, reservationID, archive, authority, NameApplicationChosen, "renamed.zip", "renamed.zip", 0); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatalf("application-named atomic target accepted a foreign artifact name: %v", err)
-	}
-	if _, err := NewWorkspaceBinding(operation, workspaceID, tree, repository); !errors.Is(err, ErrInvalidReceiveContract) {
-		t.Fatalf("tree accepted as workspace artifact: %v", err)
-	}
-	if _, err := NewPortableBinding(operation, portableID, tree); !errors.Is(err, ErrInvalidReceiveContract) {
-		t.Fatalf("tree accepted as portable artifact: %v", err)
-	}
-	foreignWorkspace, _ := NewWorkspaceBinding(otherOperation, workspaceID, original, repository)
-	if _, err := NewWorkspaceThenPublishPlan(archive, foreignWorkspace); !errors.Is(err, ErrInvalidReceiveContract) {
-		t.Fatalf("mismatched workspace accepted: %v", err)
-	}
-	if _, err := NewPortableHandoffPlan(original, portable); !errors.Is(err, ErrInvalidReceiveContract) {
-		t.Fatalf("mismatched portable binding accepted: %v", err)
 	}
 	if _, err := NewDirectAtomicPlan(archive, atomic); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatalf("mismatched atomic reservation accepted: %v", err)

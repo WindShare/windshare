@@ -1,7 +1,7 @@
 {
   "version": 1,
   "kind": "directory-admission-v2",
-  "description": "HMAC-SHA256 DirectoryAdmissionV2 capabilities bound to ReceiveIntentDigest, layout, ancestry, generation, canonical path, and modified time.",
+  "description": "Browser-owned directory-admission-v2 persistence examples. Updated with the browser codec; not a Go interoperability contract.",
   "cases": [
     {
       "directory": {

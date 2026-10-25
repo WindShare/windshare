@@ -136,11 +136,6 @@ const (
 	labelTrafficS2R  = "windshare/v2 traffic/sender-to-receiver"
 )
 
-const (
-	minimumOPFSQuotaReserve      = 512 << 20
-	defaultPortableArtifactLimit = 64 << 20
-)
-
 type vectorFile struct {
 	Version     int    `json:"version"`
 	Kind        string `json:"kind"`
@@ -304,6 +299,7 @@ func buildVectorFiles(t *testing.T) []vectorFile {
 		{Version: 1, Kind: "v2-session", Description: "Canonical v2 relay endpoint/identity, purpose-bound register/resume/stop proofs, relay control-frame and proof refusals, connection probes, route controls, lane admission, X25519 transcript, traffic keys and sender controls.", Cases: sessionCases(t, f, objects)},
 		{Version: 1, Kind: "v2-session-controls", Description: "Independent reachability and TURN session messages, with sender signatures bound to their outer message kinds.", Cases: sessionControlCases(t, f)},
 		{Version: 1, Kind: "v2-fragment", Description: "Authenticated BLOCK_FRAGMENT fixed layout and allocation limits.", Cases: fragmentCases(t, f, objects)},
+		{Version: 1, Kind: "name-collision-v1", Description: "Deterministic collision names preserve extensions when a complete stem scalar fits; otherwise the full name is shortened on UTF-8 scalar boundaries.", Cases: buildNameCollisionVectorCases(t)},
 		{Version: 1, Kind: "v2-semantics", Description: "R0 resource, operation-final, selection/timing, ZIP member, lifecycle and crash-commit state contracts.", Cases: semanticCases(t)},
 	}
 }

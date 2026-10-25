@@ -27,13 +27,13 @@ func TestTransferJobRejectsCompleteOnlyPlanBeforeMaterialization(t *testing.T) {
 		t.Fatal(err)
 	}
 	operation, _ := receivecontract.OperationIDFromBytes(bytes.Repeat([]byte{1}, receivecontract.StableIdentityBytes))
-	workspaceID, _ := receivecontract.WorkspaceIDFromBytes(bytes.Repeat([]byte{2}, receivecontract.StableIdentityBytes))
-	repository, _ := receivecontract.RepositoryRefFromBytes(bytes.Repeat([]byte{3}, receivecontract.AuthorityRefBytes))
-	workspace, err := receivecontract.NewWorkspaceBinding(operation, workspaceID, artifact, repository)
+	reservationID, _ := receivecontract.DestinationReservationIDFromBytes(bytes.Repeat([]byte{2}, receivecontract.StableIdentityBytes))
+	authority, _ := receivecontract.AuthorityRefFromBytes(bytes.Repeat([]byte{3}, receivecontract.AuthorityRefBytes))
+	reservation, err := receivecontract.NewManagedAtomicReservation(operation, reservationID, artifact, authority, receivecontract.NameApplicationChosen, "file.bin", "file.bin", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := receivecontract.NewWorkspaceThenPublishPlan(artifact, workspace)
+	plan, err := receivecontract.NewDirectAtomicPlan(artifact, reservation)
 	if err != nil {
 		t.Fatal(err)
 	}

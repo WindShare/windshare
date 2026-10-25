@@ -5,7 +5,6 @@ import {
   WorkspaceCostObservationAccumulatorV1,
   offerArtifacts,
   recommendZipRoutes,
-  zipRouteRecommendationPolicyDigestV1,
   type ArtifactActionsOffer,
 } from '../../../src/output/planning'
 import {
@@ -22,11 +21,6 @@ import {
 } from './fixture'
 
 describe('ZIP route recommendation policy V1', () => {
-  it('binds the inclusive reviewed workspace peak to its canonical digest', async () => {
-    await expect(zipRouteRecommendationPolicyDigestV1(1_073_744_986n))
-      .resolves.toBe('zHRGRc5-OvZ4Z8U2E1ORwNWnccnf_p35QB8iSXlixqI')
-  })
-
   it('requires runtime authority independently of optional route-ranking policy', async () => {
     const selection = await selectionSpec()
     const actions = requireActions(await offerArtifacts(
@@ -69,10 +63,8 @@ describe('ZIP route recommendation policy V1', () => {
         workspace: workspaceOffer(),
         directZipSupport: runtimeDirectZipSupport(),
         zipRecommendationPolicy: {
-          version: 1,
           kind: 'available',
           workspacePeakBytesThreshold: workspaceCostObservation.peakOwnedBytes,
-          policyDigest: identity(89, 32),
         },
       }),
     ))
@@ -104,10 +96,8 @@ describe('ZIP route recommendation policy V1', () => {
       discoveryComplete: true,
       workspaceCost: workspaceCostObservation,
       policy: {
-        version: 1,
         kind: 'available',
         workspacePeakBytesThreshold: workspaceCostObservation.peakOwnedBytes - 1n,
-        policyDigest: identity(89, 32),
       },
     })?.primary.route.kind).toBe('direct-resumable-zip')
   })
@@ -136,8 +126,8 @@ it('keeps large ZIP64 recommendations available beyond the former workspace limi
 
 it('refines ZIP ranking from discovered whole-output bytes without completing discovery', async () => {
   const selection = await selectionSpec()
-  const policy = { version: 1 as const, kind: 'available' as const,
-    workspacePeakBytesThreshold: 100n, policyDigest: identity(89, 32) }
+  const policy = { kind: 'available' as const,
+    workspacePeakBytesThreshold: 100n }
   const runtime = environment({ targets: [fsaTarget(), directZipTarget(), handoffTarget()],
     workspace: workspaceOffer(), directZipSupport: runtimeDirectZipSupport(), zipRecommendationPolicy: policy })
   const early = requireActions(await offerArtifacts(projection(selection, treeProof(), 10n),

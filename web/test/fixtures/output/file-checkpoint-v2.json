@@ -1,7 +1,7 @@
 {
   "version": 1,
   "kind": "file-checkpoint-v2",
-  "description": "Canonical FileCheckpointV2 records bound to OperationID, ReceiveIntentDigest, materialization binding, owned object identity, reducer state, and verified crash cuts, plus the orthogonal local CheckpointLineageID index.",
+  "description": "Browser-owned file-checkpoint-v2 persistence examples. Updated with the browser codec; not a Go interoperability contract.",
   "cases": [
     {
       "authorityRef": "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX2A",

@@ -100,24 +100,14 @@ func TestOwnershipRejectsMissingUnknownAndTamperedCertification(t *testing.T) {
 	}
 }
 
-func TestMaterializerValuesFenceLegacyFSACoordinates(t *testing.T) {
-	if MaterializerNativeTree != 1 || MaterializerLegacyFSATree != 2 ||
-		MaterializerOriginPrivate != 3 || MaterializerAtomicFile != 4 || MaterializerFSATree != 5 {
-		t.Fatal("materializer encoding changed")
+func TestNativeRepositoryRejectsUnsupportedMaterializers(t *testing.T) {
+	if !MaterializerNativeTree.Valid() {
+		t.Fatal("native materializer is invalid")
 	}
-	for _, kind := range []MaterializerKind{
-		MaterializerNativeTree,
-		MaterializerLegacyFSATree,
-		MaterializerOriginPrivate,
-		MaterializerAtomicFile,
-		MaterializerFSATree,
-	} {
-		if !kind.Valid() {
-			t.Fatalf("known materializer %d is invalid", kind)
+	for _, kind := range []MaterializerKind{0, 2, 3, 4, 5, 255} {
+		if kind.Valid() {
+			t.Fatalf("unsupported materializer %d is valid", kind)
 		}
-	}
-	if MaterializerKind(0).Valid() || MaterializerKind(6).Valid() {
-		t.Fatal("unknown materializer is valid")
 	}
 }
 

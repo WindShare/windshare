@@ -1,3 +1,4 @@
+import { COMPATIBLE_NAME_LEDGER_FORMAT_VERSION } from '../../file-system-access/compatible-name/model'
 import type { ReceiveOperationResumeDescriptor } from '../../resume/descriptor'
 import {
   RECEIVE_RECORD_LIFECYCLE_STATE,
@@ -9,7 +10,7 @@ import {
   INDEXEDDB_BY_OPERATION_INDEX,
   INDEXEDDB_COMPATIBLE_NAME_OPERATION_STORE,
   INDEXEDDB_RECEIVE_RECORD_STORE,
-  INDEXEDDB_V10_STORE_SCHEMAS,
+  INDEXEDDB_OPERATION_STORE_SCHEMAS,
   isIndexedDbRecord,
   openIndexedDbCheckpointDatabase,
   requestResult,
@@ -21,20 +22,14 @@ import {
   type BrowserLockManagerRuntime,
 } from '../session-lease'
 
-const LEGACY_LEDGER_FORMATS = new Set([
-  'compatible-name-ledger/v1',
-  'compatible-name-ledger/v2',
-  'compatible-name-ledger/v3',
-])
-
 // Recognizing an obsolete envelope grants only metadata deletion; its paths,
 // pair identities, and persisted handles never become filesystem authority.
-export function isLegacyCompatibleNameRecord(value: unknown, operationId: string): boolean {
+export function isIncompatibleNameRecord(value: unknown, operationId: string): boolean {
   return isIndexedDbRecord(value) && value.operationId === operationId &&
-    typeof value.formatVersion === 'string' && LEGACY_LEDGER_FORMATS.has(value.formatVersion)
+    typeof value.formatVersion === 'string' && value.formatVersion !== COMPATIBLE_NAME_LEDGER_FORMAT_VERSION
 }
 
-export async function readLegacyCompatibleNameStatus(
+export async function readIncompatibleNameStatus(
   database: IDBDatabase,
   operationId: string,
 ): Promise<boolean> {
@@ -44,10 +39,10 @@ export async function readLegacyCompatibleNameStatus(
     transaction.objectStore(INDEXEDDB_COMPATIBLE_NAME_OPERATION_STORE).get(operationId),
   )
   await completion
-  return isLegacyCompatibleNameRecord(row, operationId)
+  return isIncompatibleNameRecord(row, operationId)
 }
 
-export async function forgetLegacyCompatibleNameRecord(
+export async function forgetIncompatibleNameRecord(
   descriptor: ReceiveOperationResumeDescriptor,
   options: {
     readonly databaseName?: string
@@ -70,7 +65,7 @@ export async function forgetLegacyCompatibleNameRecord(
       const database = await openIndexedDbCheckpointDatabase(options.databaseName ?? DEFAULT_OUTPUT_DATABASE_NAME)
       try {
         const transaction = database.transaction(
-          INDEXEDDB_V10_STORE_SCHEMAS.map(schema => schema.name),
+          INDEXEDDB_OPERATION_STORE_SCHEMAS.map(schema => schema.name),
           'readwrite',
         )
         const completion = transactionCompletion(transaction)
@@ -81,16 +76,16 @@ export async function forgetLegacyCompatibleNameRecord(
             requestResult(transaction.objectStore(INDEXEDDB_RECEIVE_RECORD_STORE)
               .get(operationRecordId(descriptor.operationId, RECEIVE_RECORD_LIFECYCLE_STATE))),
           ])
-          if (!isLegacyCompatibleNameRecord(header, descriptor.operationId) ||
+          if (!isIncompatibleNameRecord(header, descriptor.operationId) ||
               !isIndexedDbRecord(lifecycle) || lifecycle.digest !== expectedLifecycle.digest ||
               lifecycle.lifecycleGeneration !== expectedLifecycle.lifecycleGeneration) {
             throw new DOMException('Saved record changed since inventory was opened', 'InvalidStateError')
           }
           // One transaction removes every operation-scoped row, including handle
           // references, so a crash cannot strand a resumable partial projection.
-          await Promise.all(INDEXEDDB_V10_STORE_SCHEMAS.map(schema => {
+          await Promise.all(INDEXEDDB_OPERATION_STORE_SCHEMAS.map(schema => {
             const store = transaction.objectStore(schema.name)
-            if (schema.name === INDEXEDDB_COMPATIBLE_NAME_OPERATION_STORE) {
+            if (schema.keyPath === 'operationId') {
               return requestResult(store.delete(descriptor.operationId))
             }
             return deleteOperationRows(store, descriptor.operationId)

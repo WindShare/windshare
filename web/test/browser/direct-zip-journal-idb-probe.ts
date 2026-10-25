@@ -14,7 +14,6 @@ import {
   INDEXEDDB_RECEIVE_HANDLE_STORE,
   INDEXEDDB_RECEIVE_LEASE_STORE,
   INDEXEDDB_RECEIVE_RECORD_STORE,
-  installIndexedDbV8Schema,
   openIndexedDbCheckpointDatabase,
   transactionCompletion,
 } from '../../src/output/browser/indexeddb-database'
@@ -170,8 +169,11 @@ export async function probeDirectZipBootstrapAtomicity(databaseName: string) {
 
 export async function probeIndexedDbCurrentMigration(databaseName: string) {
   await deleteDatabase(databaseName)
-  const legacy = await openRawDatabase(databaseName, 8, (database, transaction) => {
-    installIndexedDbV8Schema(database, transaction, 0)
+  const legacy = await openRawDatabase(databaseName, CHECKPOINT_DATABASE_VERSION - 1, database => {
+    for (const name of [...LEGACY_RECEIVE_STORES,
+      INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE, INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
+      INDEXEDDB_COMPATIBLE_NAME_MAPPING_STORE]) database.createObjectStore(name, { keyPath: 'id' })
+    database.createObjectStore(INDEXEDDB_COMPATIBLE_NAME_OPERATION_STORE, { keyPath: 'operationId' })
   })
   for (const name of LEGACY_RECEIVE_STORES) {
     await put(legacy, name, { id: `${name}/sentinel`, operationId: 'legacy' })

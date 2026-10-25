@@ -128,7 +128,7 @@ func TestSelectedDirectoryAnchorDriftIsRejectedBeforeOutputAdmission(t *testing.
 	if !directoryTree || !resultRootArtifact || scopeErr != nil ||
 		resultRoot.SourcePath() != sourcePath ||
 		rootExpectation.Kind() != DirectoryAdmissionDirectoryAnchor ||
-		rootExpectation.DirectoryID() != frozenDirectory || rootExpectation.Path() != "" {
+		rootExpectation.DirectoryID() != frozenDirectory || rootExpectation.Path() != resultRoot.Name() {
 		t.Fatalf("source/materialization coordinates = (source %q, root %q, scope error %v)",
 			resultRoot.SourcePath(), rootExpectation.Path(), scopeErr)
 	}
@@ -304,8 +304,8 @@ func directoryProjectionDriftIntent(
 	if err != nil {
 		t.Fatal(err)
 	}
-	reservation, err := receivecontract.NewFSANamedEntryReservation(
-		operation, reservationID, artifact, authority, resultRoot.Name(), resultRoot.Name(), 0,
+	reservation, err := receivecontract.NewNativeNamedEntryReservation(
+		operation, reservationID, artifact, authority, resultRoot.Name(), 0,
 	)
 	if err != nil {
 		t.Fatal(err)
