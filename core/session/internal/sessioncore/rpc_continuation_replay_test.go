@@ -367,6 +367,16 @@ func TestRPCContinuationDoesNotRetryAdmittedUnknownAcrossLane(t *testing.T) {
 	releaseOnce.Do(func() { close(releaseSend) })
 }
 
+type countingMemoryChannel struct {
+	*memoryChannel
+	sends atomic.Int32
+}
+
+func (channel *countingMemoryChannel) Send(ctx context.Context, frame framechannel.Frame) error {
+	channel.sends.Add(1)
+	return channel.memoryChannel.Send(ctx, frame)
+}
+
 type continuationReplayFixture struct {
 	t                   *testing.T
 	runtime             *Runtime
@@ -375,7 +385,7 @@ type continuationReplayFixture struct {
 	preferred           selectedLane
 	preferredChannel    *memoryChannel
 	replacement         *RuntimeLane
-	replacementChannel  *observedMemoryChannel
+	replacementChannel  *countingMemoryChannel
 	replacementPeer     *memoryChannel
 	replacementEnvelope *protocolsession.EnvelopeOpener
 }
@@ -403,7 +413,7 @@ func newContinuationReplayFixtureWithContinuations(
 	}
 
 	replacementBase, replacementPeer := newMemoryChannelPair()
-	replacementChannel := &observedMemoryChannel{memoryChannel: replacementBase}
+	replacementChannel := &countingMemoryChannel{memoryChannel: replacementBase}
 	replacementIdentity := sessioncontract.LaneIdentity{ID: runtime.initial.ID + 1, Epoch: 1}
 	replacement, err := runtime.lanes.add(
 		replacementIdentity, replacementChannel, permissiveInboundAuthenticator(), false,

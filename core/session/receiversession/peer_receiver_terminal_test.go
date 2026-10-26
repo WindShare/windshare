@@ -537,7 +537,7 @@ func enqueueUnexpectedPeerResponse(t *testing.T, call *sessioncore.Call) {
 	t.Helper()
 	message, err := protocolsession.NewMessage(
 		protocolsession.MessageCatalogResult,
-		operationIDPointer(call.ID()),
+		new(call.ID()),
 		[]byte{0xa0},
 	)
 	if err != nil {

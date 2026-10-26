@@ -114,7 +114,7 @@ func TestBlockReceiverWaitsBehindProductiveRequests(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					message, err := protocolsession.NewMessage(protocolsession.MessageOperationComplete, operationIDPointer(operation.call.ID()), signed)
+					message, err := protocolsession.NewMessage(protocolsession.MessageOperationComplete, new(operation.call.ID()), signed)
 					if err != nil {
 						t.Fatal(err)
 					}

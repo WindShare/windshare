@@ -49,7 +49,7 @@ func TestAmbiguousPeerOfferReplayPrecedesCandidateAcrossLaneMigration(t *testing
 
 			offer := peerReplayBody(t, "offer-with-ambiguous-transport-result")
 			call, err := trackedRequests(receiver.rpc).BeginOn(
-				context.Background(), laneIdentityPointer(runtimeIdentity(receiver)), protocolsession.MessagePeerOffer, offer,
+				context.Background(), new(runtimeIdentity(receiver)), protocolsession.MessagePeerOffer, offer,
 			)
 			if err != nil {
 				t.Fatalf("ambiguous peer offer was rejected locally: %v", err)
@@ -136,7 +136,7 @@ func TestAmbiguousPeerOfferReplaySurvivesRepeatedLaneFailure(t *testing.T) {
 	initialReceiver.failNextSend(false, errors.New("initial peer offer was not delivered"))
 	offer := peerReplayBody(t, "offer-across-two-ambiguous-lanes")
 	call, err := trackedRequests(receiver.rpc).BeginOn(
-		context.Background(), laneIdentityPointer(runtimeIdentity(receiver)), protocolsession.MessagePeerOffer, offer,
+		context.Background(), new(runtimeIdentity(receiver)), protocolsession.MessagePeerOffer, offer,
 	)
 	if err != nil {
 		t.Fatalf("ambiguous peer offer was rejected locally: %v", err)
@@ -250,7 +250,7 @@ func testAmbiguousPeerAnswerExactReplaySurvivesLaneMigration(t *testing.T) {
 	gate := initialSender.gateNextSendResult(errors.New("peer answer accepted before disconnect"))
 
 	call, err := trackedRequests(receiver.rpc).BeginOn(
-		context.Background(), laneIdentityPointer(runtimeIdentity(receiver)), protocolsession.MessagePeerOffer, peerReplayBody(t, "offer"),
+		context.Background(), new(runtimeIdentity(receiver)), protocolsession.MessagePeerOffer, peerReplayBody(t, "offer"),
 	)
 	if err != nil {
 		t.Fatal(err)

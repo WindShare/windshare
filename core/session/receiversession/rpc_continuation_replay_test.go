@@ -5,11 +5,7 @@ import (
 	"crypto/sha256"
 
 	"github.com/windshare/windshare/core/session/protocolsession"
-
-	"time"
 )
-
-const continuationReplayTestTimeout = time.Second
 
 type continuationReplayClassifier struct{}
 

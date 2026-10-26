@@ -57,16 +57,6 @@ func connectVerticalPair(
 	return result.runtime, receiver
 }
 
-func newMemoryChannel(t *testing.T) *memoryChannel {
-	t.Helper()
-	channel, peer := newMemoryChannelPair()
-	t.Cleanup(func() {
-		_ = channel.Close()
-		_ = peer.Close()
-	})
-	return channel
-}
-
 type verticalFixture struct {
 	share            catalog.ShareInstance
 	syntheticRoot    catalog.DirectoryID

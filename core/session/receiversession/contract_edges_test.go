@@ -283,7 +283,7 @@ func TestReceiverPeerOperationRejectsMalformedAndCrossScopeFinals(t *testing.T) 
 	t.Run("unexpected response kind", func(t *testing.T) {
 		operation := openTestPeerOperation(t, receiver)
 		message, err := protocolsession.NewMessage(
-			protocolsession.MessageCatalogResult, operationIDPointer(operation.call.ID()), []byte{1},
+			protocolsession.MessageCatalogResult, new(operation.call.ID()), []byte{1},
 		)
 		if err != nil {
 			t.Fatal(err)

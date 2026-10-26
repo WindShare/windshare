@@ -114,7 +114,7 @@ func TestMissingBlockCompletionRequiresAuthenticatedCarrierMigration(t *testing.
 				if err != nil {
 					t.Fatal(err)
 				}
-				message, err := protocolsession.NewMessage(protocolsession.MessageOperationComplete, operationIDPointer(call.ID()), signed)
+				message, err := protocolsession.NewMessage(protocolsession.MessageOperationComplete, new(call.ID()), signed)
 				if err != nil {
 					t.Fatal(err)
 				}

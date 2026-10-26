@@ -3,7 +3,6 @@ package receiversession
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -63,17 +62,4 @@ func testReceiverPeerOperationLateTerminateCannotCrossSameIDGeneration(t *testin
 	if generationB.IsActive() {
 		t.Fatal("generation B retained authority after termination")
 	}
-}
-
-func issuedOperationID(prefix byte, counter uint64) protocolsession.OperationID {
-	return issuedOperationIDWithPrefix([8]byte{
-		prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix,
-	}, counter)
-}
-
-func issuedOperationIDWithPrefix(prefix [8]byte, counter uint64) protocolsession.OperationID {
-	var identity protocolsession.OperationID
-	copy(identity[:8], prefix[:])
-	binary.BigEndian.PutUint64(identity[8:], counter)
-	return identity
 }

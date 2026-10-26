@@ -15,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -383,6 +384,10 @@ completed:
 }
 
 func TestSenderResignsAmbiguousFinalForSurvivingLane(t *testing.T) {
+	synctest.Test(t, testSenderResignsAmbiguousFinalForSurvivingLane)
+}
+
+func testSenderResignsAmbiguousFinalForSurvivingLane(t *testing.T) {
 	fixture := newVerticalFixture(t)
 	sender, receiver, relaySenderChannel, _ := connectObservedVerticalPair(
 		t, fixture.senderFactory, fixture.receiverFactory,
@@ -402,6 +407,8 @@ func TestSenderResignsAmbiguousFinalForSurvivingLane(t *testing.T) {
 	requestSendsBefore := peerReceiverChannel.sends.Load()
 	responseSendsBefore := peerSenderChannel.sends.Load()
 	gate := peerSenderChannel.gateNextSendResult(errors.New("peer accepted final before disconnect"))
+	releaseFailure := sync.OnceFunc(func() { close(gate.release) })
+	defer releaseFailure()
 	call, err := trackedRequests(receiver.rpc).BeginOn(context.Background(), &peer, protocolsession.MessageOpenRevisions, body)
 	if err != nil {
 		t.Fatal(err)
@@ -412,7 +419,6 @@ func TestSenderResignsAmbiguousFinalForSurvivingLane(t *testing.T) {
 		receiver.rpc.End(call)
 		t.Fatal("sender did not enter the gated final send")
 	}
-	close(gate.release)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	message, err := receiver.rpc.Await(ctx, call)
@@ -426,12 +432,19 @@ func TestSenderResignsAmbiguousFinalForSurvivingLane(t *testing.T) {
 		t.Fatalf("final response kind=%d operation=%x", message.Kind(), operationID)
 	}
 	receiver.rpc.End(call)
-	waitSessionCondition(t, "failed sender transport closed", func() bool { return peerSenderChannel.State() == framechannel.Closed })
+	// Accept the original final before releasing its ambiguous send result.
+	// Closing the failed lane precedes replay, so drain both the retry and its
+	// receiver authentication before checking the surviving lane's outcome.
+	releaseFailure()
+	synctest.Wait()
+	if peerSenderChannel.State() != framechannel.Closed {
+		t.Fatal("failed sender transport remained open")
+	}
 	if peerReceiverChannel.sends.Load() != requestSendsBefore+1 {
 		t.Fatalf("receiver sent request %d times", peerReceiverChannel.sends.Load()-requestSendsBefore)
 	}
 	if peerSenderChannel.sends.Load() != responseSendsBefore+1 ||
-		relaySenderChannel.sends.Load() <= relaySendsBefore {
+		relaySenderChannel.sends.Load() != relaySendsBefore+1 {
 		t.Fatalf(
 			"final attempts peer=%d relay delta=%d",
 			peerSenderChannel.sends.Load()-responseSendsBefore,
