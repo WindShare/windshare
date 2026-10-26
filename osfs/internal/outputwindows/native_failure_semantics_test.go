@@ -10,6 +10,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
+	"github.com/windshare/windshare/osfs/internal/outputprobe"
 	"golang.org/x/sys/windows"
 )
 
@@ -425,90 +426,6 @@ func TestWindowsNativeMutationsRejectCollisionsAndForeignAuthorities(t *testing.
 	}
 }
 
-func TestWindowsProbeCleanupRejectsMismatchedNativeIdentities(t *testing.T) {
-	if err := (*windowsOutputProbe)(nil).cleanup(); err != nil {
-		t.Fatalf("cleanup nil probe: %v", err)
-	}
-	if err := (&windowsOutputProbe{}).cleanup(); err != nil {
-		t.Fatalf("cleanup incomplete probe: %v", err)
-	}
-	if err := (*windowsOutputProbeLeftover)(nil).close(); err != nil {
-		t.Fatalf("close nil leftover: %v", err)
-	}
-
-	platform := openWindowsTestPlatform(t)
-	defer platform.Close()
-	root := platform.Root()
-	const probeName = "cleanup-probe"
-	probeDirectory, err := root.CreatePrivateDirectory(probeName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer probeDirectory.Close()
-	stage, err := probeDirectory.CreatePrivateFile("stage")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer stage.Close()
-	otherFile, err := probeDirectory.CreatePrivateFile("other")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer otherFile.Close()
-	expectedDirectory, err := probeDirectory.CreatePrivateDirectory("candidate")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer expectedDirectory.Close()
-	otherDirectory, err := probeDirectory.CreatePrivateDirectory("other-directory")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer otherDirectory.Close()
-
-	probe := &windowsOutputProbe{directory: probeDirectory}
-	if err := probe.cleanupEntries(); err != nil {
-		t.Fatalf("cleanup absent entries: %v", err)
-	}
-	if err := probe.removeKnownRegular("absent", otherFile); err != nil {
-		t.Fatalf("remove absent regular entry: %v", err)
-	}
-	if err := probe.removeKnownRegular("stage", nil); !errors.Is(err, errWindowsOutputUnsafe) {
-		t.Fatalf("remove regular entry without identity = %v", err)
-	}
-	if err := probe.removeKnownRegular("stage", otherFile); !errors.Is(err, errWindowsOutputUnsafe) {
-		t.Fatalf("remove regular entry through different identity = %v", err)
-	}
-	if err := probe.removeKnownDirectory("absent-directory", otherDirectory); err != nil {
-		t.Fatalf("remove absent directory: %v", err)
-	}
-	if err := probe.removeKnownDirectory("candidate", nil); !errors.Is(err, errWindowsOutputUnsafe) {
-		t.Fatalf("remove directory without identity = %v", err)
-	}
-	if err := probe.removeKnownDirectory("candidate", otherDirectory); !errors.Is(err, errWindowsOutputUnsafe) {
-		t.Fatalf("remove directory through different identity = %v", err)
-	}
-
-	if err := probeDirectory.RemoveRegularLink("stage", stage); err != nil {
-		t.Fatal(err)
-	}
-	if err := probeDirectory.RemoveRegularLink("other", otherFile); err != nil {
-		t.Fatal(err)
-	}
-	if err := probeDirectory.RemoveDirectory("candidate", expectedDirectory); err != nil {
-		t.Fatal(err)
-	}
-	if err := probeDirectory.RemoveDirectory("other-directory", otherDirectory); err != nil {
-		t.Fatal(err)
-	}
-	if err := errors.Join(stage.Close(), otherFile.Close(), expectedDirectory.Close(), otherDirectory.Close()); err != nil {
-		t.Fatal(err)
-	}
-	if err := root.RemoveDirectory(probeName, probeDirectory); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestWindowsPlatformAdmissionAndClosedAuthoritiesFailExact(t *testing.T) {
 	nativeInspector := nativeWindowsObjectInspector{}
 	if platform, err := openWindowsOutputPlatformWithInspectors("", nativeInspector, nativeWindowsVolumeInspector{}); platform != nil || err == nil {
@@ -614,8 +531,8 @@ func TestWindowsProbeLeftoverRejectsAmbiguousNativeCuts(t *testing.T) {
 			platform := openWindowsTestPlatform(t)
 			defer platform.Close()
 			root := platform.Root()
-			probeName := windowsOutputProbePrefix + fmt.Sprintf(
-				"%0*x", windowsOutputProbeRandomBytes*2, index+1,
+			probeName := outputprobe.NamePrefix + fmt.Sprintf(
+				"%0*x", outputprobe.RandomBytes*2, index+1,
 			)
 			probe, err := root.CreatePrivateDirectory(probeName)
 			if err != nil {
@@ -625,10 +542,10 @@ func TestWindowsProbeLeftoverRejectsAmbiguousNativeCuts(t *testing.T) {
 			if err := probe.Close(); err != nil {
 				t.Fatal(err)
 			}
-			leftover, err := root.inspectOutputProbeLeftover(probeName)
+			leftover, err := outputprobe.Inspect(&windowsOutputDirectory{native: root}, probeName, outputprobe.WindowsNTFS)
 			if err == nil || leftover != nil {
 				if leftover != nil {
-					_ = leftover.close()
+					_ = leftover.Close()
 				}
 				t.Fatalf("ambiguous probe cut = leftover %v error %v", leftover, err)
 			}

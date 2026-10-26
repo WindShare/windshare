@@ -13,6 +13,7 @@ import (
 
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
+	"github.com/windshare/windshare/osfs/internal/outputprobe"
 	"golang.org/x/sys/unix"
 )
 
@@ -31,90 +32,15 @@ const (
 	linuxTestACLExecute      = uint16(0x01)
 )
 
-func TestLinuxDestinationCapabilityEvidenceRemainsOrthogonal(t *testing.T) {
-	const failureText = "fact unavailable"
-	tests := []struct {
-		name   string
-		set    func(*linuxCapabilityProbeResults, error)
-		fact   func(outputcap.DestinationCapabilities) outputcap.CapabilityEvidence
-		reason outputcap.CapabilityReason
-	}{
-		{
-			name: "safe publish",
-			set:  func(results *linuxCapabilityProbeResults, err error) { results.safePublish = err },
-			fact: func(capabilities outputcap.DestinationCapabilities) outputcap.CapabilityEvidence {
-				return capabilities.SafePublish()
-			},
-			reason: outputcap.CapabilityReasonUnsafePublication,
-		},
-		{
-			name: "operation recovery",
-			set:  func(results *linuxCapabilityProbeResults, err error) { results.operationRecovery = err },
-			fact: func(capabilities outputcap.DestinationCapabilities) outputcap.CapabilityEvidence {
-				return capabilities.OperationRecovery()
-			},
-			reason: outputcap.CapabilityReasonUnverifiableOperationRecovery,
-		},
-		{
-			name: "range recovery",
-			set:  func(results *linuxCapabilityProbeResults, err error) { results.rangeRecovery = err },
-			fact: func(capabilities outputcap.DestinationCapabilities) outputcap.CapabilityEvidence {
-				return capabilities.RangeRecovery()
-			},
-			reason: outputcap.CapabilityReasonUnverifiableRangeRecovery,
-		},
-		{
-			name: "crash cleanup",
-			set:  func(results *linuxCapabilityProbeResults, err error) { results.crashCleanup = err },
-			fact: func(capabilities outputcap.DestinationCapabilities) outputcap.CapabilityEvidence {
-				return capabilities.CrashCleanup()
-			},
-			reason: outputcap.CapabilityReasonUnverifiableCrashCleanup,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			var results linuxCapabilityProbeResults
-			test.set(&results, errors.New(failureText))
-			capabilities, err := linuxDestinationCapabilitiesFromResults(results)
-			if err != nil {
-				t.Fatal(err)
-			}
-			evidence := []outputcap.CapabilityEvidence{
-				capabilities.SafePublish(), capabilities.OperationRecovery(),
-				capabilities.RangeRecovery(), capabilities.CrashCleanup(),
-			}
-			unsupported := 0
-			for _, current := range evidence {
-				if !current.Supported() {
-					unsupported++
-				}
-			}
-			got := test.fact(capabilities)
-			if unsupported != 1 || got.Supported() || got.Reason() != test.reason {
-				t.Fatalf("unsupported=%d fact=%+v, want one unsupported reason %v",
-					unsupported, got, test.reason)
-			}
-		})
-	}
-
-	results := linuxCapabilityProbeResults{
-		safePublish: linuxUnsafe("probe safe publish", "contradictory namespace", nil),
-	}
-	if _, err := linuxDestinationCapabilitiesFromResults(results); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
-		t.Fatalf("unsafe proof contradiction was reduced to a capability fact: %v", err)
-	}
-}
-
 func TestLinuxCapabilityProbeRequiresAnonymousStageForSafePublish(t *testing.T) {
 	platform, rootPath := newLinuxAdapterTestPlatform(t)
 	root := platform.root
-	probeName := linuxOutputProbePrefix + "6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b"
+	probeName := outputprobe.NamePrefix + "6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b"
 	probeDirectory, err := root.native.createPrivateDirectoryExact(probeName, linuxOutputDirectoryMode)
 	if err != nil {
 		t.Fatal(err)
 	}
-	probe := linuxOutputProbe{root: root.native, rootName: probeName, directory: probeDirectory}
+	probe := outputprobe.NewWorkspace(root, probeName, &linuxDirectory{native: probeDirectory})
 	originalOpenat2 := root.native.system.openat2
 	root.native.system.openat2 = func(fd int, name string, how *unix.OpenHow) (int, error) {
 		if how.Flags&uint64(unix.O_TMPFILE) == uint64(unix.O_TMPFILE) {
@@ -122,18 +48,18 @@ func TestLinuxCapabilityProbeRequiresAnonymousStageForSafePublish(t *testing.T) 
 		}
 		return originalOpenat2(fd, name, how)
 	}
-	results, probeErr := probe.runCapabilityFacts()
+	results, probeErr := root.native.runCapabilityFacts(probe)
 	root.native.system.openat2 = originalOpenat2
 	if probeErr != nil {
 		t.Fatal(probeErr)
 	}
-	if !errors.Is(results.safePublish, errLinuxOutputUnsupported) || results.operationRecovery != nil || results.rangeRecovery != nil {
+	if !errors.Is(results.SafePublish, errLinuxOutputUnsupported) || results.OperationRecovery != nil || results.RangeRecovery != nil {
 		t.Fatalf("O_TMPFILE failure did not preserve the stage dependency: %+v", results)
 	}
-	if !errors.Is(results.crashCleanup, errLinuxOutputUnsupported) {
-		t.Fatalf("O_TMPFILE failure crash-cleanup evidence=%v", results.crashCleanup)
+	if !errors.Is(results.CrashCleanup, errLinuxOutputUnsupported) {
+		t.Fatalf("O_TMPFILE failure crash-cleanup evidence=%v", results.CrashCleanup)
 	}
-	if err := probe.cleanup(); err != nil {
+	if err := probe.Cleanup(); err != nil {
 		t.Fatal(err)
 	}
 	entries, err := os.ReadDir(rootPath)

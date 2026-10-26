@@ -1,6 +1,6 @@
-// Package outputprobe validates native feature-probe leftovers against the
-// deterministic process-restart cuts that the certified filesystems can
-// produce.
+// Package outputprobe owns native feature proofs and exact-object cleanup.
+// Platforms supply live outputcap handles and their certified probe profile;
+// native locking and restart enrollment remain platform-owned.
 package outputprobe
 
 import (
