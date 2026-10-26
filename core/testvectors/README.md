@@ -1,9 +1,13 @@
-# Shared runtime contracts
+# Cross-runtime contracts
 
-This directory contains contracts implemented by multiple runtimes: wire messages,
-sealed sender objects, capability links, canonical paths and shared scheduling or
-naming algorithms. Go generates the protocol vectors; TypeScript and Rust consume
-the relevant cases through their own implementations.
+This directory contains interoperability contracts: wire messages, sealed sender
+objects, capability links, canonical paths, naming and diagnostic identities.
+Go generates protocol vectors; TypeScript and Rust consume the relevant cases.
+
+Scheduling and retry policies belong to each receiver. Their regressions live in
+`core/transfer/lanescheduling/` and `web/test/content/`, without requiring identical
+forecasts or timing. Authentication, revision identity and the meaning of completed
+or recoverable output remain correctness requirements in every runtime.
 
 Browser output bindings, persistence records and UI policies belong to `web/`.
 Their fixtures live in `web/test/fixtures/output/`; native checkpoint behavior is
@@ -22,8 +26,6 @@ Web consumers run under `make web`; Rust consumers run under `make rust`.
   shared by Go, TypeScript and Rust.
 - `diagnostic-correlation-v1.json`: protocol/session/path/lane identities and their
   canonical diagnostic projections.
-- `content-scheduling-v1.json`: shared delivery estimates, evidence age, read-ahead
-  and frontier rescue decisions. Host scheduling and resource ownership stay local.
 - `name-collision-v1.json`: deterministic suffixes, extension preservation and UTF-8
   truncation at component limits.
 - Signaling, TURN, portable-path and envelope fixtures cover their shared codecs

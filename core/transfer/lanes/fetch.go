@@ -10,7 +10,7 @@ import (
 	"github.com/windshare/windshare/core/transfer/lanescheduling"
 )
 
-// The host's wake cadence is separate from the shared rescue eligibility rule.
+// The wake cadence trades native scheduler overhead against rescue latency.
 const rescuePollInterval = 100 * time.Millisecond
 
 type laneResult struct {

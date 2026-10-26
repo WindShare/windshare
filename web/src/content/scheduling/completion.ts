@@ -1,3 +1,5 @@
+// These forecasts guide browser admission without establishing authenticity or
+// durable output. Their timing is a local policy, not an interoperability contract.
 export const INITIAL_BLOCK_MILLISECONDS = 250
 export const MINIMUM_SAMPLE_MILLISECONDS = 1
 export const EVIDENCE_LIFETIME_MILLISECONDS = 1000

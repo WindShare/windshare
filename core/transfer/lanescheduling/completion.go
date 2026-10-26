@@ -1,3 +1,6 @@
+// Package lanescheduling implements the Go receiver's local delivery policy.
+// Forecasts, read-ahead admission and rescue timing can evolve independently of
+// other receivers; they grant no content authenticity or resumable progress.
 package lanescheduling
 
 import "time"
