@@ -103,7 +103,7 @@ sender-signature domain. Body schema versions evolve independently.
 |---|---|---|
 | Link, keys, sender objects | `core/link`, `core/internal/keyderiv`, `core/senderobject` | `web/src/crypto` |
 | Catalog and content | `core/catalog`, `core/content`, `core/session/{catalogflow,contentflow}` | `web/src/catalog`, `web/src/content` |
-| Session, envelope, lanes | `core/session/protocolsession`, `core/session/sessionruntime` | `web/src/session` |
+| Session, envelope, lanes | `core/session/protocolsession`, `core/session/sendersession`, `core/session/receiversession` | `web/src/session` |
 | Peer signaling | `connectivity/v2signal`, `core/session/peerslot` | `web/src/connectivity`, `web/src/session/peer-slots` |
 | Relay protocol | `relay/protocol/v2`, `relay-rust/crates/relay-core`, `transport/relayv2` | `web/src/transport` |
 

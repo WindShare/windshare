@@ -21,7 +21,9 @@ import (
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessionobs "github.com/windshare/windshare/core/session/observation"
+	sendersession "github.com/windshare/windshare/core/session/sendersession"
 )
 
 const (
@@ -58,11 +60,11 @@ type RegistrationMaterial struct {
 }
 
 type RuntimeFactoryConfig struct {
-	TerminalConnectivity    sessionruntime.TerminalConnectivity
-	PeerHandlers            sessionruntime.SenderPeerHandlerFactory
-	TerminalSendObserver    sessionruntime.SenderTerminalSendObserver
-	SessionTerminalObserver sessionruntime.SenderSessionTerminalObserver
-	ProtocolObservations    observationstream.Producer[sessionruntime.ProtocolObservation]
+	TerminalConnectivity    sendersession.TerminalConnectivity
+	PeerHandlers            sendersession.PeerHandlerFactory
+	TerminalSendObserver    sessionobs.SenderTerminalSendObserver
+	SessionTerminalObserver sessionobs.SenderSessionTerminalObserver
+	ProtocolObservations    observationstream.Producer[sessionobs.ProtocolObservation]
 }
 
 type senderRevisionIdentityDeriver interface {
@@ -543,13 +545,13 @@ func (sender *PreparedSender) StartRootPrefetch() {
 	access.StartRootPrefetch()
 }
 
-func (sender *PreparedSender) NewRuntimeFactory(config RuntimeFactoryConfig) (*sessionruntime.SenderFactory, error) {
+func (sender *PreparedSender) NewRuntimeFactory(config RuntimeFactoryConfig) (*sendersession.Factory, error) {
 	sender.mu.Lock()
 	defer sender.mu.Unlock()
 	if sender.closed || sender.runtimeFactory != nil || config.TerminalConnectivity == nil || config.PeerHandlers == nil {
 		return nil, errors.New("live share sender runtime factory is unavailable")
 	}
-	contentFactory := sessionruntime.SenderContentFactoryFunc(func(sessionID protocolsession.ProtocolSessionID) (*contentflow.SenderService, error) {
+	contentFactory := sendersession.ContentFactoryFunc(func(sessionID protocolsession.ProtocolSessionID) (*contentflow.SenderService, error) {
 		sessionCapacity, err := sender.revisionStore.RegisterSession(revisioncapacity.SessionConfig{
 			SessionID: revisioncapacity.SessionID(base64.RawURLEncoding.EncodeToString(sessionID.Bytes())),
 			Limits:    revisioncapacity.DefaultSessionLimits(),
@@ -565,7 +567,7 @@ func (sender *PreparedSender) NewRuntimeFactory(config RuntimeFactoryConfig) (*s
 		}
 		return service, nil
 	})
-	factory, err := sessionruntime.NewSenderFactory(sessionruntime.SenderFactoryConfig{
+	factory, err := sendersession.NewFactory(sendersession.FactoryConfig{
 		ShareInstance: sender.descriptor.ShareInstance(), SessionAuthKey: sender.sessionAuthKey,
 		SenderPrivateKey: sender.privateKey, Catalog: sender.catalogAccess, Content: contentFactory,
 		Peers:                   config.PeerHandlers,

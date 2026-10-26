@@ -9,24 +9,25 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessionobs "github.com/windshare/windshare/core/session/observation"
 	appobs "github.com/windshare/windshare/engine/observation"
 )
 
-func protocolAssemblyFact(role protocolsession.Role) sessionruntime.ProtocolObservation {
-	context := sessionruntime.ProtocolObservationContext{
+func protocolAssemblyFact(role protocolsession.Role) sessionobs.ProtocolObservation {
+	context := sessionobs.ProtocolObservationContext{
 		ObservedAt: time.Unix(12, 345),
-		Correlation: sessionruntime.ProtocolObservationCorrelation{
+		Correlation: sessionobs.ProtocolObservationCorrelation{
 			Role: role, ProtocolSessionID: protocolsession.ProtocolSessionID{1},
 			OperationID: protocolsession.OperationID{2}, RequestKind: protocolsession.MessageListChildren,
 		},
 	}
-	stage := sessionruntime.ProtocolOperationReceiverFailed
-	cause := sessionruntime.ProtocolOperationCauseCanceled
+	stage := sessionobs.ProtocolOperationReceiverFailed
+	cause := sessionobs.ProtocolOperationCauseCanceled
 	if role == protocolsession.RoleSender {
-		stage, cause = sessionruntime.ProtocolOperationSenderRequestReceived, sessionruntime.ProtocolOperationCauseNone
+		stage, cause = sessionobs.ProtocolOperationSenderRequestReceived, sessionobs.ProtocolOperationCauseNone
 	}
-	return sessionruntime.NewProtocolOperationObservation(context, sessionruntime.ProtocolOperationObservation{
+	return sessionobs.NewProtocolOperationObservation(context, sessionobs.ProtocolOperationObservation{
 		Stage: stage, Cause: cause,
 	})
 }
@@ -98,19 +99,19 @@ func TestSupersededBlockObservationRetainsTraceWithoutVerboseWarning(t *testing.
 		t.Fatal(err)
 	}
 	for index, outcome := range []struct {
-		stage sessionruntime.ProtocolOperationStage
-		cause sessionruntime.ProtocolOperationCause
+		stage sessionobs.ProtocolOperationStage
+		cause sessionobs.ProtocolOperationCause
 	}{
-		{sessionruntime.ProtocolOperationReceiverEnded, sessionruntime.ProtocolOperationCauseSuperseded},
-		{sessionruntime.ProtocolOperationReceiverFailed, sessionruntime.ProtocolOperationCauseProtocolFailure},
+		{sessionobs.ProtocolOperationReceiverEnded, sessionobs.ProtocolOperationCauseSuperseded},
+		{sessionobs.ProtocolOperationReceiverFailed, sessionobs.ProtocolOperationCauseProtocolFailure},
 	} {
-		fact := sessionruntime.NewProtocolOperationObservation(sessionruntime.ProtocolObservationContext{
+		fact := sessionobs.NewProtocolOperationObservation(sessionobs.ProtocolObservationContext{
 			ObservedAt: time.Unix(12, 345),
-			Correlation: sessionruntime.ProtocolObservationCorrelation{
+			Correlation: sessionobs.ProtocolObservationCorrelation{
 				Role: protocolsession.RoleReceiver, ProtocolSessionID: protocolsession.ProtocolSessionID{1},
 				OperationID: protocolsession.OperationID{byte(index + 2)}, RequestKind: protocolsession.MessageRequestBlocks,
 			},
-		}, sessionruntime.ProtocolOperationObservation{Stage: outcome.stage, Cause: outcome.cause})
+		}, sessionobs.ProtocolOperationObservation{Stage: outcome.stage, Cause: outcome.cause})
 		runtime.diagnosticSink().Record(fact)
 	}
 	runtime.Close()

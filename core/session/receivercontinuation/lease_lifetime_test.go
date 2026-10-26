@@ -8,7 +8,8 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/content"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	"github.com/windshare/windshare/core/transfer"
 )
 
@@ -17,7 +18,7 @@ func TestLongDownloadCrossesLeaseLifetimesWithoutReplacingSession(t *testing.T) 
 		f := newFixture(t)
 		runtime, _ := f.connect()
 		sessionID := runtime.ProtocolSessionID()
-		continuation, err := New(context.Background(), runtime, func(context.Context, *sessionruntime.ReceiverRuntime) (*sessionruntime.ReceiverRuntime, error) {
+		continuation, err := New(context.Background(), runtime, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
 			t.Error("lease expiry must not reconnect a healthy session")
 			return nil, ErrReplacement
 		})

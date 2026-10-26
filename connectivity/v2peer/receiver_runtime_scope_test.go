@@ -21,7 +21,9 @@ import (
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
@@ -36,7 +38,7 @@ const (
 )
 
 type receiverRuntimeScopeConnectResult struct {
-	runtime *sessionruntime.ReceiverRuntime
+	runtime *receiversession.Runtime
 	err     error
 }
 
@@ -310,7 +312,7 @@ func TestReceiverRuntimeCrossScopeOperationErrorIsRemoteSessionUnsafe(t *testing
 	if !errors.Is(outcome.RetainedCause(), protocolsession.ErrInvalidOperationFailure) {
 		t.Fatalf("receiver retained cause=%v", outcome.RetainedCause())
 	}
-	var remoteFailure sessionruntime.RemoteOperationError
+	var remoteFailure receiversession.RemoteOperationError
 	if !errors.As(outcome.RetainedCause(), &remoteFailure) {
 		t.Fatalf("receiver retained cause omitted immutable remote diagnostic: %v", outcome.RetainedCause())
 	}
@@ -320,8 +322,8 @@ func TestReceiverRuntimeCrossScopeOperationErrorIsRemoteSessionUnsafe(t *testing
 		failureSnapshot.Message() != receiverRuntimeScopeFailureMessage {
 		t.Fatalf("receiver remote diagnostic=%+v", failureSnapshot)
 	}
-	remoteFailure = sessionruntime.RemoteOperationError{}
-	var repeatedRemoteFailure sessionruntime.RemoteOperationError
+	remoteFailure = receiversession.RemoteOperationError{}
+	var repeatedRemoteFailure receiversession.RemoteOperationError
 	if !errors.As(receiverAttempt.Outcome().RetainedCause(), &repeatedRemoteFailure) ||
 		repeatedRemoteFailure.Failure() != failureSnapshot {
 		t.Fatalf("receiver remote diagnostic changed after detached copy replacement: %+v", repeatedRemoteFailure)
@@ -337,7 +339,7 @@ func TestReceiverRuntimeCrossScopeOperationErrorIsRemoteSessionUnsafe(t *testing
 		t.Fatal("cross-scope failure published a ready peer lane")
 	default:
 	}
-	if lane, ok := receiverAttempt.Lane(); ok || lane != (sessionruntime.LaneIdentity{}) {
+	if lane, ok := receiverAttempt.Lane(); ok || lane != (sessioncontract.LaneIdentity{}) {
 		t.Fatalf("cross-scope failure adopted lane=%+v present=%t", lane, ok)
 	}
 

@@ -12,7 +12,9 @@ import (
 	"github.com/windshare/windshare/core/downloadmetrics"
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
+	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/transfer"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
@@ -36,7 +38,7 @@ type observationState struct {
 	mu           sync.Mutex
 	sources      []observedSource
 	relays       map[v2.RelayIdentity]observedSource
-	protocol     observationstream.Producer[sessionruntime.ProtocolObservation]
+	protocol     observationstream.Producer[sessionobs.ProtocolObservation]
 	failure      error
 	failureCode  FailureCode
 	cleanupError error
@@ -50,9 +52,9 @@ type getObservation struct {
 func newObservation(control task.Control, detailed bool, metrics *downloadmetrics.Metrics) getObservation {
 	o := getObservation{observationState: &observationState{control: control, detailed: detailed, metrics: metrics}}
 	if detailed {
-		producer, consumer, _ := observationstream.New[sessionruntime.ProtocolObservation](protocolObservationCapacity)
+		producer, consumer, _ := observationstream.New[sessionobs.ProtocolObservation](protocolObservationCapacity)
 		o.protocol = producer
-		o.register(ObservationProtocol, func() uint64 { return producer.Complete().CapacityDropped }, drain(consumer, func(v sessionruntime.ProtocolObservation) { o.control.Diagnostics.Record(v) }))
+		o.register(ObservationProtocol, func() uint64 { return producer.Complete().CapacityDropped }, drain(consumer, func(v sessionobs.ProtocolObservation) { o.control.Diagnostics.Record(v) }))
 	}
 	return o
 }
@@ -146,7 +148,7 @@ func (o getObservation) receiverRecovery(v relayset.ReceiverRecoveryObservation)
 func (o getObservation) transferLifecycle(v transfer.TransferLifecycleTrace) {
 	o.control.Diagnostics.Record(v)
 }
-func (o getObservation) protocolObservations() observationstream.Producer[sessionruntime.ProtocolObservation] {
+func (o getObservation) protocolObservations() observationstream.Producer[sessionobs.ProtocolObservation] {
 	return o.protocol
 }
 func (o getObservation) relayObservationCapacity() int {
@@ -170,7 +172,7 @@ func (o getObservation) progress(operation receivecontract.OperationID, job tran
 }
 func (o getObservation) contentPath(path ContentPath) { o.emit(ContentPathObserved{Path: path}) }
 func (o getObservation) fallback(code FailureCode)    { o.emit(FallbackObserved{Code: code}) }
-func (o getObservation) laneAdopted(session protocolsession.ProtocolSessionID, lane sessionruntime.LaneIdentity) {
+func (o getObservation) laneAdopted(session protocolsession.ProtocolSessionID, lane sessioncontract.LaneIdentity) {
 	o.emit(LaneAdopted{Session: session, Lane: lane})
 }
 func (o getObservation) registerNative(native *nativepeer.NativePeerConnectivity) {

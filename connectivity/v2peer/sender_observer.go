@@ -8,7 +8,9 @@ import (
 
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
+	sendersession "github.com/windshare/windshare/core/session/sendersession"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
@@ -121,7 +123,7 @@ type SenderAttemptObservation struct {
 	DeadlineMillis       uint64
 	CandidateCounts      *SenderCandidateCounts
 	GrantOperationID     protocolsession.OperationID
-	Lane                 *sessionruntime.LaneIdentity
+	Lane                 *sessioncontract.LaneIdentity
 	Route                transferlanes.Route
 	AdmissionDisposition SenderAdmissionDisposition
 	ResponseDelivery     SenderResponseDelivery
@@ -143,7 +145,7 @@ type senderAttemptRecorder struct {
 	terminal               SenderAttemptStage
 	lastCounts             SenderCandidateCounts
 	grantOperationID       protocolsession.OperationID
-	lane                   *sessionruntime.LaneIdentity
+	lane                   *sessioncontract.LaneIdentity
 	laneHelloPending       bool
 	admissionExpiryPending bool
 	lastCompletedStage     SenderAttemptStage
@@ -301,7 +303,7 @@ func (recorder *senderAttemptRecorder) emitPhaseDeadlineExpiredLocked(phase Peer
 
 func (recorder *senderAttemptRecorder) laneHelloAuthenticated(
 	operation protocolsession.OperationID,
-	lane sessionruntime.LaneIdentity,
+	lane sessioncontract.LaneIdentity,
 ) {
 	if recorder == nil || operation.IsZero() || lane.ID == 0 || lane.Epoch == 0 {
 		return
@@ -352,7 +354,7 @@ func (recorder *senderAttemptRecorder) flushAdmissionDeadlineExpired() {
 }
 
 func (recorder *senderAttemptRecorder) admissionSettled(
-	result sessionruntime.SenderPeerAdmissionResult,
+	result sendersession.PeerAdmissionResult,
 	counts SenderCandidateCounts,
 ) {
 	if recorder == nil || !result.SettlementBegan {
@@ -364,9 +366,9 @@ func (recorder *senderAttemptRecorder) admissionSettled(
 		Lane:             &result.Lane,
 	}
 	switch result.Disposition {
-	case sessionruntime.SenderPeerAdmissionAccepted:
+	case sendersession.PeerAdmissionAccepted:
 		evidence.AdmissionDisposition = SenderAdmissionAccepted
-	case sessionruntime.SenderPeerAdmissionRejected:
+	case sendersession.PeerAdmissionRejected:
 		evidence.AdmissionDisposition = SenderAdmissionRejected
 		evidence.Rejection = &SenderLaneRejection{
 			Code:             result.Rejection.Code,
@@ -376,9 +378,9 @@ func (recorder *senderAttemptRecorder) admissionSettled(
 		return
 	}
 	switch result.ResponseDelivery {
-	case sessionruntime.SenderPeerResponseDeliveryFailed:
+	case sendersession.PeerResponseDeliveryFailed:
 		evidence.ResponseDelivery = SenderResponseDeliveryFailed
-	case sessionruntime.SenderPeerResponseDelivered:
+	case sendersession.PeerResponseDelivered:
 		evidence.ResponseDelivery = SenderResponseDelivered
 	default:
 		return
@@ -474,7 +476,7 @@ func senderFailureCarriesCandidateCounts(failedAt SenderAttemptStage) bool {
 		failedAt != SenderAttemptAnswerCreated
 }
 
-func cloneLane(lane *sessionruntime.LaneIdentity) *sessionruntime.LaneIdentity {
+func cloneLane(lane *sessioncontract.LaneIdentity) *sessioncontract.LaneIdentity {
 	if lane == nil {
 		return nil
 	}

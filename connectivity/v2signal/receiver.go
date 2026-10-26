@@ -2,7 +2,7 @@ package v2signal
 
 import "github.com/windshare/windshare/core/session/protocolsession"
 
-// ReceiverControlValidator is injected into sessionruntime by a Go receiver
+// ReceiverControlValidator is injected into receiversession by a Go receiver
 // that enables peer connectivity. Signatures remain core-owned while this
 // transport module owns the typed SDP/ICE schema, avoiding either import cycle.
 type ReceiverControlValidator struct {

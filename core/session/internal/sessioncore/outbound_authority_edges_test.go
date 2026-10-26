@@ -1,0 +1,296 @@
+package sessioncore
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	sessioncontract "github.com/windshare/windshare/core/session"
+	sessionobs "github.com/windshare/windshare/core/session/observation"
+	"github.com/windshare/windshare/core/session/protocolsession"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func TestOutboundTransactionRequiresExactLiveGenerationAuthority(t *testing.T) {
+	t.Run("missing operation permit", func(t *testing.T) {
+		runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
+		operationID := id16[protocolsession.OperationID](131)
+		route := runtime.routes.reserve(operationID, runtime.initial)
+		if route == nil {
+			t.Fatal("reserve operation route")
+		}
+		ctx := bindOutboundRoute(context.Background(), operationID, route)
+
+		if _, err := beginOutboundTransaction(runtime, ctx, operationID); !errors.Is(err, sessioncontract.ErrOperationMissing) {
+			t.Fatalf("permit-less transaction error=%v", err)
+		}
+		if runtime.routes.current(operationID) != route {
+			t.Fatal("rejected transaction consumed route authority")
+		}
+	})
+
+	t.Run("missing generation", func(t *testing.T) {
+		runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
+		operationID := id16[protocolsession.OperationID](132)
+		request, err := protocolsession.NewMessage(
+			protocolsession.MessageRequestBlocks,
+			&operationID,
+			[]byte{0xa1, 0x00, 0x01},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fullContext, route := testOutboundOperationContext(t, runtime, runtime.initial, request)
+		permit, ok := protocolsession.OutboundOperationPermitFromContext(fullContext, operationID)
+		if !ok {
+			t.Fatal("fixture did not expose operation permit")
+		}
+		ctx := bindOutboundRoute(context.Background(), operationID, route)
+		ctx = protocolsession.WithOutboundOperationPermit(ctx, permit)
+
+		if _, err := beginOutboundTransaction(runtime, ctx, operationID); !errors.Is(err, sessioncontract.ErrOperationMissing) {
+			t.Fatalf("generation-less transaction error=%v", err)
+		}
+		if runtime.operations.ActiveCount() != 1 || runtime.routes.current(operationID) != route {
+			t.Fatal("generation-less transaction mutated live operation authority")
+		}
+	})
+
+	t.Run("expired generation", func(t *testing.T) {
+		var nanos atomic.Int64
+		nanos.Store(time.Unix(30_000, 0).UnixNano())
+		now := func() time.Time { return time.Unix(0, nanos.Load()) }
+		runtime, _ := newUnstartedRuntimeWithPolicy(
+			t,
+			protocolsession.RoleSender,
+			protocolsession.OperationLimits{MaxActive: 2, MaxTracked: 2},
+			now,
+		)
+		operationID := id16[protocolsession.OperationID](133)
+		request, err := protocolsession.NewMessage(
+			protocolsession.MessageRequestBlocks,
+			&operationID,
+			[]byte{0xa1, 0x00, 0x01},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, route := testOutboundOperationContext(t, runtime, runtime.initial, request)
+		generation, ok := protocolsession.OperationGenerationFromContext(ctx, operationID)
+		if !ok {
+			t.Fatal("fixture did not expose operation generation")
+		}
+		if err := runtime.operations.CancelGeneration(generation); err != nil {
+			t.Fatal(err)
+		}
+		nanos.Add((protocolsession.OperationTombstoneLifetime + time.Nanosecond).Nanoseconds())
+		if runtime.operations.TombstoneCount() != 0 {
+			t.Fatal("expired generation retained a tombstone")
+		}
+
+		if _, err := beginOutboundTransaction(runtime, ctx, operationID); !errors.Is(err, protocolsession.ErrUnknownOperation) {
+			t.Fatalf("expired-generation transaction error=%v", err)
+		}
+		// Reading the route under the send lock proves failed lease acquisition
+		// released serialization without weakening the route-state assertion.
+		route.sendMu.Lock()
+		preferredAfterFailure := route.preferred
+		route.sendMu.Unlock()
+		if !preferredAfterFailure.Valid(true) {
+			t.Fatal("failed lease acquisition erased the synchronized route")
+		}
+		if runtime.routes.current(operationID) != route {
+			t.Fatal("stale generation consumed the route owned by cleanup")
+		}
+	})
+}
+
+func TestOutboundTransactionFailClosesReplayAuthorityContractViolations(t *testing.T) {
+	tests := []struct {
+		name       string
+		completion protocolsession.SendCompletion
+		attemptErr error
+	}{
+		{
+			name:       "admitted response omitted replay permit",
+			completion: protocolsession.SendCompletion{Admitted: true},
+		},
+		{
+			name:       "writer rejected replay-less settlement",
+			completion: protocolsession.SendCompletion{Settled: true},
+			attemptErr: protocolsession.ErrOutboundReplayPermit,
+		},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
+			operationID := id16[protocolsession.OperationID](byte(134 + index))
+			request, err := protocolsession.NewMessage(
+				protocolsession.MessageRequestBlocks,
+				&operationID,
+				[]byte{0xa1, 0x00, 0x01},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, _ := testOutboundOperationContext(t, runtime, runtime.initial, request)
+			transaction, err := beginOutboundTransaction(runtime, ctx, operationID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			authorityErr := transaction.admissionAuthorityError(
+				test.completion,
+				protocolsession.OutboundReplayPermit{},
+				test.attemptErr,
+			)
+			transaction.Close()
+
+			if !errors.Is(authorityErr, errOutboundReplayAuthority) {
+				t.Fatalf("authority contract error=%v", authorityErr)
+			}
+			select {
+			case <-runtime.ctx.Done():
+			default:
+				t.Fatal("missing replay authority did not fail-close the runtime")
+			}
+			if !runtime.operations.Terminated() || runtime.routes.len() != 0 {
+				t.Fatalf("terminal=%t routes=%d", runtime.operations.Terminated(), runtime.routes.len())
+			}
+		})
+	}
+}
+
+func TestResponseReplayAuthorityRejectionBeforeReceiptFailsRuntime(t *testing.T) {
+	for _, response := range []struct {
+		name    string
+		request protocolsession.MessageKind
+		kind    protocolsession.MessageKind
+	}{
+		{"final response", protocolsession.MessageRequestBlocks, protocolsession.MessageOperationComplete},
+		{"peer continuation", protocolsession.MessagePeerOffer, protocolsession.MessagePeerCandidate},
+	} {
+		for _, rejection := range []struct {
+			name string
+			err  error
+		}{
+			{"direct", protocolsession.ErrOutboundReplayPermit},
+			{"wrapped", fmt.Errorf("writer admission: %w", protocolsession.ErrOutboundReplayPermit)},
+		} {
+			t.Run(response.name+"/"+rejection.name, func(t *testing.T) {
+				runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
+				recorder := newProtocolTraceRecorder(runtime)
+				operationID := id16[protocolsession.OperationID](138)
+				request, err := protocolsession.NewMessage(response.request, &operationID, []byte{0xf6})
+				if err != nil {
+					t.Fatal(err)
+				}
+				ctx, _ := testOutboundOperationContext(t, runtime, runtime.initial, request)
+				attempts := 0
+				result, err := (Responses{runtime: runtime}).executeResponse(
+					ctx, response.kind, operationID, sessionobs.ProtocolErrorContent{},
+					func(*outboundTransaction) (outboundLaneAttempt, error) {
+						return func(selectedLane, protocolsession.OutboundReplayPermit) (protocolsession.SendReceipt, error) {
+							attempts++
+							// A writer-policy invariant violation can reject continuation
+							// admission before receipt ownership exists.
+							return protocolsession.SendReceipt{}, rejection.err
+						}, nil
+					},
+				)
+				attempt, ok := result.Attempt(0)
+				if !ok || attempts != 1 || result.AttemptCount() != 1 ||
+					attempt.End() != protocolsession.SendAttemptEndRejectedBeforeReceipt || attempt.Settled() ||
+					attempt.PolicyAdmitted() || attempt.Outcome() != protocolsession.SendOutcomeDropped ||
+					attempt.TransportDisposition() != 0 ||
+					result.Evidence() != protocolsession.ResponseSendEvidenceDefinitelyNotSent {
+					t.Fatalf("rejection facts changed: attempts=%d result=%+v attempt=%+v", attempts, result, attempt)
+				}
+				identity := attempt.Identity()
+				if identity.ResponseSequence == 0 || identity.AttemptSequence != 1 ||
+					identity.LaneID != runtime.initial.ID || identity.LaneEpoch != runtime.initial.Epoch ||
+					attempt.Cause().Kind() != protocolsession.SendAttemptCauseAdmissionFailure ||
+					attempt.Cause().Detail() != rejection.err.Error() || attempt.Cause().Truncated() {
+					t.Fatalf("rejection identity or cause changed: attempt=%+v", attempt)
+				}
+				if _, pending := result.PendingAttempt(); pending {
+					t.Fatal("receipt-less rejection retained a pending receipt")
+				}
+				facts := recorder.facts()
+				if len(facts) != 1 {
+					t.Fatalf("rejection observations=%v", facts)
+				}
+				returned, ok := facts[0].(sessionobs.ResponseSendReturned)
+				if !ok || returned.Result() != result || returned.ResponseSequence() != identity.ResponseSequence {
+					t.Fatalf("returned observation lost rejection facts: fact=%+v result=%+v", facts[0], result)
+				}
+				if result.End() != protocolsession.ResponseSendEndAuthorityLost ||
+					!errors.Is(err, rejection.err) || !errors.Is(err, errOutboundReplayAuthority) ||
+					runtime.ctx.Err() == nil || !errors.Is(runtime.Err(), errOutboundReplayAuthority) ||
+					!runtime.operations.Terminated() || runtime.routes.len() != 0 || runtime.operations.ActiveCount() != 0 {
+					t.Fatalf("authority rejection did not fail-close: result=%+v err=%v runtimeErr=%v terminal=%t routes=%d active=%d",
+						result, err, runtime.Err(), runtime.operations.Terminated(), runtime.routes.len(), runtime.operations.ActiveCount())
+				}
+			})
+		}
+	}
+}
+
+func TestAbandonOutboundOperationUsesReservedCancellationCapacity(t *testing.T) {
+	runtime, _ := newUnstartedRuntimeWithPolicy(
+		t,
+		protocolsession.RoleSender,
+		protocolsession.OperationLimits{MaxActive: 4, MaxTracked: 2},
+		nil,
+	)
+	targetID := id16[protocolsession.OperationID](136)
+	target, err := protocolsession.NewMessage(
+		protocolsession.MessageRequestBlocks,
+		&targetID,
+		[]byte{0xa1, 0x00, 0x01},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetContext, route := testOutboundOperationContext(t, runtime, runtime.initial, target)
+	targetGeneration, ok := protocolsession.OperationGenerationFromContext(targetContext, targetID)
+	if !ok {
+		t.Fatal("target generation missing")
+	}
+
+	fillerID := id16[protocolsession.OperationID](137)
+	filler, err := protocolsession.NewMessage(
+		protocolsession.MessageRequestBlocks,
+		&fillerID,
+		[]byte{0xa1, 0x00, 0x02},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fillerAdmission, err := runtime.operations.ObserveInbound(
+		protocolsession.DirectionReceiverToSender,
+		filler,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.operations.CancelGeneration(fillerAdmission.Generation); err != nil {
+		t.Fatal(err)
+	}
+
+	abandonErr := runtime.abandonOutboundOperation(targetID, route, targetGeneration)
+	if abandonErr != nil {
+		t.Fatalf("abandon error=%v", abandonErr)
+	}
+	select {
+	case <-runtime.ctx.Done():
+		t.Fatal("reserved cancellation ended the runtime")
+	default:
+	}
+	if runtime.operations.Terminated() || runtime.routes.len() != 0 || runtime.operations.TombstoneCount() != 2 {
+		t.Fatalf("terminal=%t routes=%d", runtime.operations.Terminated(), runtime.routes.len())
+	}
+	if err := runtime.abandonBoundOutboundOperation(context.Background(), targetID); !errors.Is(err, sessioncontract.ErrOperationMissing) {
+		t.Fatalf("unbound abandonment error=%v", err)
+	}
+}

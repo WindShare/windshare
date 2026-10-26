@@ -287,7 +287,8 @@ func packagePolicyViolations(scope graphScope, pkg listedPackage) []string {
 				repositoryModulePath,
 			)}
 		}
-		return coreDirectImportViolations(scope, pkg.Imports)
+		return append(coreDirectImportViolations(scope, pkg.Imports),
+			sessionDependencyViolations(scope, logicalImportPath, pkg.Imports)...)
 	}
 
 	if family, ok := matchingFamily(pkg.ImportPath, prohibitedPackageCapabilities); ok {

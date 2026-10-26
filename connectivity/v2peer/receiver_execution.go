@@ -10,7 +10,8 @@ import (
 	"github.com/windshare/windshare/connectivity/v2peer/internal/candidatewriter"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 )
 
 type receiverExecutionResult struct {
@@ -499,9 +500,9 @@ func (execution *receiverExecution) startAttachment() error {
 	execution.attempt.phaseContext = phaseContext
 	execution.children.Go(func() {
 		grant, err := execution.attempt.lanes.RequestLane(phaseContext, 0)
-		admission := sessionruntime.ReceiverLaneAdmissionResult{
-			Disposition:      sessionruntime.ReceiverLaneAdmissionUnverified,
-			LaneInstallation: sessionruntime.ReceiverLaneInstallationNotAttempted,
+		admission := receiversession.LaneAdmissionResult{
+			Disposition:      receiversession.LaneAdmissionUnverified,
+			LaneInstallation: receiversession.LaneInstallationNotAttempted,
 		}
 		if err == nil {
 			if !execution.attempt.transport.consume() {

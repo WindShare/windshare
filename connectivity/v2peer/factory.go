@@ -13,7 +13,8 @@ import (
 	"github.com/windshare/windshare/connectivity/turnpath"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sendersession "github.com/windshare/windshare/core/session/sendersession"
 	transportwebrtc "github.com/windshare/windshare/transport/webrtc"
 )
 
@@ -235,8 +236,8 @@ func (factory *Factory) PeerDiagnostics() <-chan PeerDiagnosticObservation {
 }
 
 func (factory *Factory) NewSenderPeerHandler(
-	session sessionruntime.SenderPeerSession,
-) (sessionruntime.SenderPeerHandler, error) {
+	session sendersession.PeerSession,
+) (sendersession.PeerHandler, error) {
 	if factory == nil || session == nil || session.ShareInstance().IsZero() || session.ProtocolSessionID().IsZero() {
 		return nil, ErrConfig
 	}
@@ -348,7 +349,7 @@ type peerOperation struct {
 
 type senderHandler struct {
 	factory *Factory
-	session sessionruntime.SenderPeerSession
+	session sendersession.PeerSession
 	events  chan handlerEvent
 	inboxMu sync.Mutex
 	closed  bool
@@ -593,8 +594,8 @@ func (handler *senderHandler) handleRunEvent(ctx context.Context, event handlerE
 	return nil
 }
 
-var _ sessionruntime.SenderPeerHandlerFactory = (*Factory)(nil)
-var _ sessionruntime.SenderPeerHandler = (*senderHandler)(nil)
+var _ sendersession.PeerHandlerFactory = (*Factory)(nil)
+var _ sendersession.PeerHandler = (*senderHandler)(nil)
 
 func (factory *Factory) ClassifyPeerAttemptContinuation(kind protocolsession.MessageKind, body []byte) (protocolsession.PeerAttemptBinding, bool, error) {
 	return (v2signal.OperationContinuationClassifier{}).ClassifyPeerAttemptContinuation(kind, body)

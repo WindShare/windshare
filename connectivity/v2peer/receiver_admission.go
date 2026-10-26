@@ -7,7 +7,9 @@ import (
 	pion "github.com/pion/webrtc/v4"
 
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
@@ -58,35 +60,35 @@ func (settlement receiverAdmissionSettlement) authenticated() bool {
 }
 
 func receiverAttachmentSettlement(
-	grant sessionruntime.LaneAttachmentGrant,
-	admission sessionruntime.ReceiverLaneAdmissionResult,
+	grant sessioncontract.LaneAttachmentGrant,
+	admission receiversession.LaneAdmissionResult,
 	err error,
 ) (receiverAdmissionSettlement, error) {
 	identityMatches := admission.GrantOperationID == grant.OperationID &&
-		admission.Lane == (sessionruntime.LaneIdentity{ID: grant.LaneID, Epoch: grant.LaneEpoch}) &&
+		admission.Lane == (sessioncontract.LaneIdentity{ID: grant.LaneID, Epoch: grant.LaneEpoch}) &&
 		!admission.GrantOperationID.IsZero()
 	noRejection := admission.Rejection == (protocolsession.LaneRejection{})
 	switch admission.Disposition {
-	case sessionruntime.ReceiverLaneAdmissionAccepted:
+	case receiversession.LaneAdmissionAccepted:
 		if identityMatches && noRejection {
 			switch {
-			case admission.LaneInstallation == sessionruntime.ReceiverLaneInstalled && err == nil:
+			case admission.LaneInstallation == receiversession.LaneInstalled && err == nil:
 				return receiverAdmissionInstalled, nil
-			case admission.LaneInstallation == sessionruntime.ReceiverLaneInstallationFailed && err != nil:
+			case admission.LaneInstallation == receiversession.LaneInstallationFailed && err != nil:
 				return receiverAdmissionAcceptedInstallationFailed, err
 			}
 		}
-	case sessionruntime.ReceiverLaneAdmissionRejected:
-		var rejected *sessionruntime.LaneRejectedError
+	case receiversession.LaneAdmissionRejected:
+		var rejected *sessioncontract.LaneRejectedError
 		if identityMatches && validReceiverLaneRejection(admission.Rejection) &&
-			admission.LaneInstallation == sessionruntime.ReceiverLaneInstallationNotAttempted &&
+			admission.LaneInstallation == receiversession.LaneInstallationNotAttempted &&
 			errors.As(err, &rejected) && rejected.Rejection == admission.Rejection {
 			return receiverAdmissionRejected, err
 		}
-	case sessionruntime.ReceiverLaneAdmissionUnverified:
-		if admission.GrantOperationID.IsZero() && admission.Lane == (sessionruntime.LaneIdentity{}) &&
+	case receiversession.LaneAdmissionUnverified:
+		if admission.GrantOperationID.IsZero() && admission.Lane == (sessioncontract.LaneIdentity{}) &&
 			noRejection &&
-			admission.LaneInstallation == sessionruntime.ReceiverLaneInstallationNotAttempted && err != nil {
+			admission.LaneInstallation == receiversession.LaneInstallationNotAttempted && err != nil {
 			return receiverAdmissionUnverified, err
 		}
 	}

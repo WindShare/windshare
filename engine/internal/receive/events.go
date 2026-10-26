@@ -5,7 +5,8 @@ import (
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/downloadmetrics"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
@@ -85,7 +86,7 @@ type FallbackObserved struct {
 type LaneAdopted struct {
 	event
 	Session protocolsession.ProtocolSessionID
-	Lane    sessionruntime.LaneIdentity
+	Lane    sessioncontract.LaneIdentity
 }
 type ObservationSource string
 

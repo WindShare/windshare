@@ -11,7 +11,8 @@ import (
 	"github.com/windshare/windshare/connectivity/v2peer/peerset"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/liveshare"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	"github.com/windshare/windshare/core/transfer"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
@@ -141,7 +142,7 @@ type getReceiverSession struct {
 	relays     *relayset.Receiver
 	connection relayset.ReceiverConnection
 	prepared   *liveshare.PreparedReceiver
-	runtime    *sessionruntime.ReceiverRuntime
+	runtime    *receiversession.Runtime
 }
 
 func (session *getReceiverSession) Close() {
@@ -166,7 +167,7 @@ func (session *getReceiverSession) Close() {
 type getTransferExecution struct {
 	contentReady chan struct{}
 	paths        *receiverContentPaths
-	runtime      *sessionruntime.ReceiverRuntime
+	runtime      *receiversession.Runtime
 	admission    receiverContentAdmission
 	monitorDone  <-chan struct{}
 	peer         *activeReceiverPeer
@@ -213,7 +214,7 @@ func (execution *getTransferExecution) SettleAdmission() {
 	})
 }
 
-func (a *runner) prepareGetConnectivity(ctx context.Context, request getRequest, output getOutputPreparation, runtime *sessionruntime.ReceiverRuntime, observation getObservation, options receiverPeerOptions) (*getTransferExecution, stepOutcome) {
+func (a *runner) prepareGetConnectivity(ctx context.Context, request getRequest, output getOutputPreparation, runtime *receiversession.Runtime, observation getObservation, options receiverPeerOptions) (*getTransferExecution, stepOutcome) {
 	connectivity, err := request.connectivity.receiverPlan()
 	if err != nil {
 		return nil, observation.failCode(stepInvalidRequest, FailureInvalidInput)
@@ -322,7 +323,7 @@ func (a *runner) finishGetTransfer(ctx context.Context, request getRequest, outp
 
 func (a *runner) buildGetTransferJob(
 	ctx context.Context,
-	runtime *sessionruntime.ReceiverRuntime,
+	runtime *receiversession.Runtime,
 	output getOutputPreparation,
 	rules transfer.SelectionRules,
 	observation getObservation,

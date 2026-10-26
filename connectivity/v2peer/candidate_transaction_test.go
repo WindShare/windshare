@@ -22,7 +22,10 @@ import (
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
+	sendersession "github.com/windshare/windshare/core/session/sendersession"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
@@ -121,9 +124,9 @@ func (channel *candidateTransactionChannel) Close() error {
 
 type candidateRuntimeHarness struct {
 	ctx               context.Context
-	factory           *sessionruntime.SenderFactory
-	receiver          *sessionruntime.ReceiverRuntime
-	sender            *sessionruntime.SenderRuntime
+	factory           *sendersession.Factory
+	receiver          *receiversession.Runtime
+	sender            *sendersession.Runtime
 	senderPeer        *testPeerConnection
 	initialSenderLane *candidateTransactionChannel
 }
@@ -181,7 +184,7 @@ func newCandidateRuntimeHarness(t *testing.T, maxCandidates int) *candidateRunti
 		}),
 	})
 	runtimeFactory, err := preparedSender.NewRuntimeFactory(liveshare.RuntimeFactoryConfig{
-		TerminalConnectivity: sessionruntime.TerminalConnectivityFuncs{
+		TerminalConnectivity: sendersession.TerminalConnectivityFuncs{
 			CleanupFunc: func(context.Context) error { return nil },
 		},
 		PeerHandlers: senderPeerFactory,
@@ -194,7 +197,7 @@ func newCandidateRuntimeHarness(t *testing.T, maxCandidates int) *candidateRunti
 	handshakeContext, cancelHandshake := context.WithTimeout(ctx, candidateRuntimeHandshakeTimeout)
 	defer cancelHandshake()
 	type acceptedRuntime struct {
-		runtime *sessionruntime.SenderRuntime
+		runtime *sendersession.Runtime
 		err     error
 	}
 	accepted := make(chan acceptedRuntime, 1)
@@ -264,13 +267,13 @@ func TestSenderCandidateDeliveredUnknownMigratesThroughAuthenticatedReceiverOnce
 	}
 	replacementSenderLane, replacementReceiverLane := newCandidateTransactionChannelPair()
 	attached := make(chan struct {
-		identity sessionruntime.LaneIdentity
+		identity sessioncontract.LaneIdentity
 		err      error
 	}, 1)
 	go func() {
 		identity, attachErr := runtimeFactory.Attach(ctx, replacementSenderLane)
 		attached <- struct {
-			identity sessionruntime.LaneIdentity
+			identity sessioncontract.LaneIdentity
 			err      error
 		}{identity: identity, err: attachErr}
 	}()

@@ -18,7 +18,8 @@ import (
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sendersession "github.com/windshare/windshare/core/session/sendersession"
 	"github.com/windshare/windshare/engine/internal/nativeconnectivity"
 	"github.com/windshare/windshare/engine/internal/task"
 	"github.com/windshare/windshare/engine/relayprofile"
@@ -61,7 +62,7 @@ type Prepared interface {
 }
 
 type SessionFactory interface {
-	AdmitChannel(context.Context, protocolsession.FrameChannel) (sessionruntime.SenderChannelAdmission, error)
+	AdmitChannel(context.Context, protocolsession.FrameChannel) (sendersession.ChannelAdmission, error)
 	// Stop freezes admission before returning and joins terminal work on success.
 	// An expired wait must remain joinable through a subsequent Stop call.
 	Stop(context.Context, string) error
@@ -77,7 +78,7 @@ type Relays interface {
 }
 
 type Peers interface {
-	sessionruntime.SenderPeerHandlerFactory
+	sendersession.PeerHandlerFactory
 	Close(context.Context) error
 }
 

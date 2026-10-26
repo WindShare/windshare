@@ -17,7 +17,9 @@ import (
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
+	sendersession "github.com/windshare/windshare/core/session/sendersession"
 	"github.com/windshare/windshare/internal/testloopback"
 	"github.com/windshare/windshare/internal/testrun"
 	transportwebrtc "github.com/windshare/windshare/transport/webrtc"
@@ -319,7 +321,7 @@ type integrationPeerIngress struct {
 
 type integrationPeerTrackedHandler struct {
 	ingress *integrationPeerIngress
-	handler sessionruntime.SenderPeerHandler
+	handler sendersession.PeerHandler
 }
 
 func (handler integrationPeerTrackedHandler) HandleMessage(
@@ -341,7 +343,7 @@ func (handler integrationPeerTrackedHandler) HandleMessage(
 }
 
 type integrationPeerCancelHandler struct {
-	handler sessionruntime.SenderPeerHandler
+	handler sendersession.PeerHandler
 }
 
 func (handler integrationPeerCancelHandler) HandleMessage(
@@ -357,7 +359,7 @@ func (handler integrationPeerCancelHandler) HandleMessage(
 
 func newIntegrationPeerIngress(
 	classifier protocolsession.OperationContinuationClassifier,
-	handler sessionruntime.SenderPeerHandler,
+	handler sendersession.PeerHandler,
 ) (*integrationPeerIngress, error) {
 	table, err := protocolsession.NewOperationTableWithContinuations(
 		protocolsession.OperationLimits{MaxActive: 4, MaxTracked: 4},
@@ -469,7 +471,7 @@ type integrationPeerSession struct {
 	channel protocolsession.FrameChannel
 	failure error
 	answer  chan struct{}
-	admit   chan sessionruntime.LaneIdentity
+	admit   chan sessioncontract.LaneIdentity
 }
 
 func (session *integrationPeerSession) ShareInstance() catalog.ShareInstance { return session.share }
@@ -526,12 +528,12 @@ func (session *integrationPeerSession) FailPeerOperation(
 func (session *integrationPeerSession) AdmitPeerChannel(
 	ctx context.Context,
 	channel protocolsession.FrameChannel,
-	control sessionruntime.SenderPeerAdmissionControl,
-) (result sessionruntime.SenderPeerAdmissionResult, err error) {
-	result = sessionruntime.SenderPeerAdmissionResult{
-		Disposition:      sessionruntime.SenderPeerAdmissionSilentClose,
-		ResponseDelivery: sessionruntime.SenderPeerResponseNotAttempted,
-		LaneAttachment:   sessionruntime.SenderPeerLaneAttachmentNotAttempted,
+	control sendersession.PeerAdmissionControl,
+) (result sendersession.PeerAdmissionResult, err error) {
+	result = sendersession.PeerAdmissionResult{
+		Disposition:      sendersession.PeerAdmissionSilentClose,
+		ResponseDelivery: sendersession.PeerResponseNotAttempted,
+		LaneAttachment:   sendersession.PeerLaneAttachmentNotAttempted,
 	}
 	transferred := false
 	defer func() {
@@ -559,16 +561,16 @@ func (session *integrationPeerSession) AdmitPeerChannel(
 			return result, errors.New("peer FrameChannel changed binary frame delivery")
 		}
 	}
-	lane := sessionruntime.LaneIdentity{ID: 17, Epoch: 3}
+	lane := sessioncontract.LaneIdentity{ID: 17, Epoch: 3}
 	grantOperation := integrationOperationID(0x7e)
 	if !control.BeginAuthenticatedSettlement(grantOperation, lane) {
 		return result, context.Canceled
 	}
-	result = sessionruntime.SenderPeerAdmissionResult{
+	result = sendersession.PeerAdmissionResult{
 		SettlementBegan: true, GrantOperationID: grantOperation, Lane: lane,
-		Disposition:      sessionruntime.SenderPeerAdmissionAccepted,
-		ResponseDelivery: sessionruntime.SenderPeerResponseDelivered,
-		LaneAttachment:   sessionruntime.SenderPeerLaneAttached,
+		Disposition:      sendersession.PeerAdmissionAccepted,
+		ResponseDelivery: sendersession.PeerResponseDelivered,
+		LaneAttachment:   sendersession.PeerLaneAttached,
 	}
 	session.mu.Lock()
 	session.channel = channel
@@ -615,7 +617,7 @@ func TestV2PeerSenderNegotiatesRealPionDataChannel(t *testing.T) {
 	copy(binding.AttemptID[:], bytes.Repeat([]byte{5}, v2signal.IdentityBytes))
 	session := &integrationPeerSession{
 		share: share, sessionID: sessionID, offerer: offerer, binding: binding, operation: protocolOperation,
-		answer: make(chan struct{}), admit: make(chan sessionruntime.LaneIdentity, 1),
+		answer: make(chan struct{}), admit: make(chan sessioncontract.LaneIdentity, 1),
 	}
 	factory, err := v2peer.NewFactory(v2peer.Config{
 		Native:        newCapacityNative(t),
@@ -824,7 +826,7 @@ func TestV2PeerSenderNegotiatesRealPionDataChannel(t *testing.T) {
 		nil,
 		laneAdoptionEvidenceStartFailureReason,
 	)
-	var admittedLane sessionruntime.LaneIdentity
+	var admittedLane sessioncontract.LaneIdentity
 	select {
 	case admittedLane = <-session.admit:
 		if admittedLane.ID != 17 || admittedLane.Epoch != 3 {

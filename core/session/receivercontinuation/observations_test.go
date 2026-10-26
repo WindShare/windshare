@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/windshare/windshare/core/session/sessionruntime"
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
@@ -12,7 +12,7 @@ func TestSchedulingObservationsFollowReplacementAndOwnerLifetime(t *testing.T) {
 	f := newFixture(t)
 	first, channel := f.connect()
 	next, _ := f.connect()
-	s, err := New(t.Context(), first, func(context.Context, *sessionruntime.ReceiverRuntime) (*sessionruntime.ReceiverRuntime, error) {
+	s, err := New(t.Context(), first, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
 		return next, nil
 	})
 	if err != nil {
@@ -25,7 +25,7 @@ func TestSchedulingObservationsFollowReplacementAndOwnerLifetime(t *testing.T) {
 	releaseSecond := s.ObserveRemainingWork(func() transferlanes.RemainingWork {
 		return transferlanes.RemainingWork{Bytes: 200, Known: true}
 	})
-	assertRemaining := func(runtime *sessionruntime.ReceiverRuntime, bytes uint64, known bool) {
+	assertRemaining := func(runtime *receiversession.Runtime, bytes uint64, known bool) {
 		t.Helper()
 		demand := runtime.LaneSet().SchedulingDemand()
 		if demand.RemainingBytes != bytes || demand.RemainingKnown != known {

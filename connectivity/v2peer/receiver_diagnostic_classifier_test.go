@@ -10,7 +10,8 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 )
 
@@ -42,13 +43,13 @@ func TestReceiverResidualClassifierDoesNotReintroduceFilteredWrappedLeaf(t *test
 	genuineFailure := errors.New("wrapped cleanup conflict")
 	cause := fmt.Errorf(
 		"terminate exact peer operation: %w",
-		errors.Join(sessionruntime.ErrOperationMissing, genuineFailure),
+		errors.Join(sessioncontract.ErrOperationMissing, genuineFailure),
 	)
 	classified := classifyReceiverCause(cause, receiverCausePolicy{
 		operationMissing: ReceiverBenignRemoteOperationMissing,
 	})
 	if !errors.Is(classified.retained, genuineFailure) ||
-		errors.Is(classified.retained, sessionruntime.ErrOperationMissing) ||
+		errors.Is(classified.retained, sessioncontract.ErrOperationMissing) ||
 		!strings.HasPrefix(classified.retained.Error(), "terminate exact peer operation:") ||
 		!containsReceiverBenignCause(classified.benign, ReceiverBenignRemoteOperationMissing) {
 		t.Fatalf("wrapped mixed classification=%+v", classified)
@@ -492,7 +493,7 @@ func TestReceiverTerminationTraceContainsSafeCorrelationAndClassification(t *tes
 
 func TestReceiverAttemptLateSameIDCloseCannotCancelReplacementObject(t *testing.T) {
 	first, firstOperation := newReceiverShutdownHarness(t, true)
-	firstOperation.remoteError <- sessionruntime.ErrOperationMissing
+	firstOperation.remoteError <- sessioncontract.ErrOperationMissing
 	receiveTest(t, firstOperation.remoteTerminal)
 
 	second, secondOperation := newReceiverShutdownHarness(t, false)

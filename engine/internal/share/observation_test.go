@@ -7,7 +7,8 @@ import (
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/observationstream"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/engine/internal/task"
 	wsrtc "github.com/windshare/windshare/transport/webrtc"
 )
@@ -38,10 +39,10 @@ func TestShareProtocolAndTerminalObservationAuthorityFollowsRequest(t *testing.T
 func TestShareFinalObservationCutWaitsForRuntimeAndPreservesUpstreamLoss(t *testing.T) {
 	f := newShareFixture(t)
 	f.factory.entered, f.factory.release = make(chan struct{}), make(chan struct{})
-	var producer observationstream.Producer[sessionruntime.ProtocolObservation]
+	var producer observationstream.Producer[sessionobs.ProtocolObservation]
 	f.prepared.observeRuntime = func(config liveshare.RuntimeFactoryConfig) { producer = config.ProtocolObservations }
 	f.factory.observeStop = func() {
-		producer.TryPublish(sessionruntime.ProtocolOperationObservation{})
+		producer.TryPublish(sessionobs.ProtocolOperationObservation{})
 		producer.RecordDropped(2)
 	}
 	ctx, stop := context.WithCancelCause(context.Background())
@@ -52,7 +53,7 @@ func TestShareFinalObservationCutWaitsForRuntimeAndPreservesUpstreamLoss(t *test
 	}
 	stop(task.ErrShareStopped)
 	<-f.factory.entered
-	if !producer.TryPublish(sessionruntime.ProtocolOperationObservation{}) {
+	if !producer.TryPublish(sessionobs.ProtocolOperationObservation{}) {
 		t.Fatal("runtime observation authority was cut before join")
 	}
 	close(f.factory.release)
@@ -60,7 +61,7 @@ func TestShareFinalObservationCutWaitsForRuntimeAndPreservesUpstreamLoss(t *test
 	if result.Err != nil || result.CleanupError != nil {
 		t.Fatalf("result=%+v", result)
 	}
-	if producer.TryPublish(sessionruntime.ProtocolOperationObservation{}) {
+	if producer.TryPublish(sessionobs.ProtocolOperationObservation{}) {
 		t.Fatal("completed share retained observation admission")
 	}
 	var protocols int

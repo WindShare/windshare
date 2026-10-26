@@ -8,7 +8,9 @@ import (
 
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/liveshare"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
+	sendersession "github.com/windshare/windshare/core/session/sendersession"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/internal/testrun"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
@@ -64,7 +66,7 @@ func TestReceiverFirstUsableSessionRecoversWithFreeOrReassignedLane(t *testing.T
 		t.Fatal("blocked candidate prevented the first independent lane")
 	}
 	initial := share.waitAdmission(t, ctx, primary)
-	if initial.Kind != sessionruntime.SenderChannelNewProtocolSession {
+	if initial.Kind != sendersession.ChannelNewProtocolSession {
 		t.Fatal("primary did not establish a new authenticated session")
 	}
 	sessionID := runtime.ProtocolSessionID()
@@ -73,7 +75,7 @@ func TestReceiverFirstUsableSessionRecoversWithFreeOrReassignedLane(t *testing.T
 	close(release)
 	additional := waitRelaysetEvent(t, ctx, connected)
 	attached := share.waitAdmission(t, ctx, additional)
-	if additional == primary || attached.Kind != sessionruntime.SenderChannelAttachedLane || runtime.LaneSet().Len() != 2 {
+	if additional == primary || attached.Kind != sendersession.ChannelAttachedLane || runtime.LaneSet().Len() != 2 {
 		t.Fatal("additional relay did not join the winning session")
 	}
 
@@ -87,8 +89,8 @@ func TestReceiverFirstUsableSessionRecoversWithFreeOrReassignedLane(t *testing.T
 			t.Fatalf("additional lane %v was never published", oldLane)
 		}
 		trace.RequireRecord(t, "relay_loss_injected", testrun.OutcomeSucceeded, struct {
-			Failure string                      `json:"failure"`
-			Lane    sessionruntime.LaneIdentity `json:"lane"`
+			Failure string                       `json:"failure"`
+			Lane    sessioncontract.LaneIdentity `json:"lane"`
 		}{failure, oldLane})
 		if failure == "channel" {
 			err = previous.Channel().Close()
@@ -136,7 +138,7 @@ func TestReceiverFirstUsableSessionRecoversWithFreeOrReassignedLane(t *testing.T
 		close(resume)
 		additional = waitRelaysetEvent(t, ctx, connected)
 		attached = share.waitAdmission(t, ctx, additional)
-		if attached.Kind != sessionruntime.SenderChannelAttachedLane {
+		if attached.Kind != sendersession.ChannelAttachedLane {
 			t.Fatalf("recovery did not attach to the existing session: %+v", attached)
 		}
 		if index == 0 && (attached.Lane.ID != oldLane.ID || attached.Lane.Epoch != oldLane.Epoch+1) {
@@ -215,7 +217,7 @@ func TestReceiverInitiallyFailedRelayRecoversWithoutReplacingHealthyGeneration(t
 		t.Fatal(err)
 	}
 	sessionID := runtime.ProtocolSessionID()
-	var initial sessionruntime.LaneIdentity
+	var initial sessioncontract.LaneIdentity
 	initial.ID, initial.Epoch = runtime.LaneIdentity()
 	for range 2 {
 		waitRelaysetEvent(t, ctx, connected)

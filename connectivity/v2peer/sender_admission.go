@@ -9,7 +9,9 @@ import (
 	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
+	sendersession "github.com/windshare/windshare/core/session/sendersession"
 	"github.com/windshare/windshare/core/session/turncontrol"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
@@ -42,7 +44,7 @@ func (attempt *peerAttempt) beginAdmission(
 }
 
 func (attempt *peerAttempt) resolveAdmission(
-	result sessionruntime.SenderPeerAdmissionResult,
+	result sendersession.PeerAdmissionResult,
 	err error,
 ) {
 	attempt.admissionMu.Lock()
@@ -253,9 +255,9 @@ func (execution *attemptExecution) acceptAdmission(
 ) (bool, bool, error) {
 	result := event.admission
 	admitted := event.err == nil &&
-		result.Disposition == sessionruntime.SenderPeerAdmissionAccepted &&
-		result.ResponseDelivery == sessionruntime.SenderPeerResponseDelivered &&
-		result.LaneAttachment == sessionruntime.SenderPeerLaneAttached &&
+		result.Disposition == sendersession.PeerAdmissionAccepted &&
+		result.ResponseDelivery == sendersession.PeerResponseDelivered &&
+		result.LaneAttachment == sendersession.PeerLaneAttached &&
 		result.Lane.ID != 0 && result.Lane.Epoch != 0
 	if !execution.attempt.phases.settleSenderAdmission(result.SettlementBegan, admitted) {
 		return false, false, nil
@@ -270,7 +272,7 @@ func (execution *attemptExecution) acceptAdmission(
 		execution.attempt.recorder.admissionSettled(result, execution.candidateCounts())
 	}
 	switch result.Disposition {
-	case sessionruntime.SenderPeerAdmissionRejected:
+	case sendersession.PeerAdmissionRejected:
 		if result.Rejection.Code == 0 {
 			return true, false, errors.Join(
 				errChannelAdmission,
@@ -279,14 +281,14 @@ func (execution *attemptExecution) acceptAdmission(
 			)
 		}
 		return true, false, errors.Join(
-			&sessionruntime.LaneRejectedError{Rejection: result.Rejection},
+			&sessioncontract.LaneRejectedError{Rejection: result.Rejection},
 			event.err,
 		)
-	case sessionruntime.SenderPeerAdmissionAccepted:
+	case sendersession.PeerAdmissionAccepted:
 		if !admitted {
 			return true, false, errors.Join(errChannelAdmission, event.err)
 		}
-	case sessionruntime.SenderPeerAdmissionSilentClose:
+	case sendersession.PeerAdmissionSilentClose:
 		if result.SettlementBegan {
 			return true, false, errors.Join(
 				errChannelAdmission,
@@ -365,15 +367,15 @@ func (attempt *peerAttempt) awaitOpenAndAdmit(
 		kind: attemptDataChannelOpen, admissionContext: phaseContext,
 	})
 	if !channel.consume() {
-		attempt.resolveAdmission(sessionruntime.SenderPeerAdmissionResult{}, ErrProtocol)
+		attempt.resolveAdmission(sendersession.PeerAdmissionResult{}, ErrProtocol)
 		return
 	}
 	result, err := attempt.config.session.AdmitPeerChannel(
 		admissionContext,
 		channel,
-		sessionruntime.SenderPeerAdmissionControlFunc(func(
+		sendersession.PeerAdmissionControlFunc(func(
 			operationID protocolsession.OperationID,
-			lane sessionruntime.LaneIdentity,
+			lane sessioncontract.LaneIdentity,
 		) bool {
 			if !attempt.phases.beginAuthenticatedSettlement() {
 				return false

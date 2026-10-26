@@ -4,7 +4,9 @@ import (
 	"context"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 )
 
 func (s *Session) OpenDirectoryPages(ctx context.Context, id catalog.DirectoryID) (catalog.DirectoryPageCursor, error) {
@@ -18,7 +20,7 @@ func (s *Session) OpenDirectoryPages(ctx context.Context, id catalog.DirectoryID
 type directoryCursor struct {
 	owner      *Session
 	directory  catalog.DirectoryID
-	runtime    *sessionruntime.ReceiverRuntime
+	runtime    *receiversession.Runtime
 	cursor     catalog.DirectoryPageCursor
 	count      uint32
 	commitment catalog.PageCommitment
@@ -46,7 +48,7 @@ func (c *directoryCursor) open(ctx context.Context) error {
 }
 func (c *directoryCursor) Next(ctx context.Context) (catalog.CatalogPage, bool, error) {
 	if c.closed {
-		return catalog.CatalogPage{}, false, sessionruntime.ErrRuntimeClosed
+		return catalog.CatalogPage{}, false, sessioncontract.ErrRuntimeClosed
 	}
 	for {
 		page, ok, err := c.cursor.Next(ctx)

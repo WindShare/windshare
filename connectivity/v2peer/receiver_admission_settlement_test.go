@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 )
 
 var errReceiverLaneInstallation = errors.New("receiver lane installation failed after authenticated acceptance")
@@ -26,21 +28,21 @@ func newAcceptedInstallationFailureGate() *acceptedInstallationFailureGate {
 
 func (gate *acceptedInstallationFailureGate) attach(
 	ctx context.Context,
-	grant sessionruntime.LaneAttachmentGrant,
+	grant sessioncontract.LaneAttachmentGrant,
 	channel protocolsession.FrameChannel,
-) (sessionruntime.ReceiverLaneAdmissionResult, error) {
+) (receiversession.LaneAdmissionResult, error) {
 	close(gate.accepted)
 	<-ctx.Done()
 	close(gate.contextDone)
 	<-gate.release
 	_ = channel.Close()
-	return sessionruntime.ReceiverLaneAdmissionResult{
+	return receiversession.LaneAdmissionResult{
 		GrantOperationID: grant.OperationID,
-		Lane: sessionruntime.LaneIdentity{
+		Lane: sessioncontract.LaneIdentity{
 			ID: grant.LaneID, Epoch: grant.LaneEpoch,
 		},
-		Disposition:      sessionruntime.ReceiverLaneAdmissionAccepted,
-		LaneInstallation: sessionruntime.ReceiverLaneInstallationFailed,
+		Disposition:      receiversession.LaneAdmissionAccepted,
+		LaneInstallation: receiversession.LaneInstallationFailed,
 	}, errReceiverLaneInstallation
 }
 
@@ -86,29 +88,29 @@ func TestReceiverAcceptedInstallationFailureWinsLifecycleCancellation(t *testing
 }
 
 func TestReceiverAttachmentSettlementCannotMintAuthorityFromInconsistentResult(t *testing.T) {
-	grant := sessionruntime.LaneAttachmentGrant{
+	grant := sessioncontract.LaneAttachmentGrant{
 		LaneID: 7, LaneEpoch: 3, OperationID: testOperationID(90),
 	}
-	accepted := sessionruntime.ReceiverLaneAdmissionResult{
+	accepted := receiversession.LaneAdmissionResult{
 		GrantOperationID: grant.OperationID,
-		Lane:             sessionruntime.LaneIdentity{ID: grant.LaneID, Epoch: grant.LaneEpoch},
-		Disposition:      sessionruntime.ReceiverLaneAdmissionAccepted,
-		LaneInstallation: sessionruntime.ReceiverLaneInstallationFailed,
+		Lane:             sessioncontract.LaneIdentity{ID: grant.LaneID, Epoch: grant.LaneEpoch},
+		Disposition:      receiversession.LaneAdmissionAccepted,
+		LaneInstallation: receiversession.LaneInstallationFailed,
 	}
-	for name, admission := range map[string]sessionruntime.ReceiverLaneAdmissionResult{
-		"wrong grant operation": func() sessionruntime.ReceiverLaneAdmissionResult {
+	for name, admission := range map[string]receiversession.LaneAdmissionResult{
+		"wrong grant operation": func() receiversession.LaneAdmissionResult {
 			value := accepted
 			value.GrantOperationID = testOperationID(91)
 			return value
 		}(),
-		"accepted with rejection": func() sessionruntime.ReceiverLaneAdmissionResult {
+		"accepted with rejection": func() receiversession.LaneAdmissionResult {
 			value := accepted
 			value.Rejection = protocolsession.LaneRejection{Code: protocolsession.LaneRejectStopping}
 			return value
 		}(),
-		"claims installed with error": func() sessionruntime.ReceiverLaneAdmissionResult {
+		"claims installed with error": func() receiversession.LaneAdmissionResult {
 			value := accepted
-			value.LaneInstallation = sessionruntime.ReceiverLaneInstalled
+			value.LaneInstallation = receiversession.LaneInstalled
 			return value
 		}(),
 	} {

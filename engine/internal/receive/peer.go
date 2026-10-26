@@ -11,7 +11,9 @@ import (
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/connectivity/v2peer/peerset"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	"github.com/windshare/windshare/core/transfer"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
@@ -254,7 +256,7 @@ func beginReceiverPlanning(
 type receiverPeerAttempt interface {
 	Ready() <-chan struct{}
 	Done() <-chan struct{}
-	Lane() (sessionruntime.LaneIdentity, bool)
+	Lane() (sessioncontract.LaneIdentity, bool)
 	Err() error
 	Outcome() receiverPeerMonitorOutcome
 	Close() error
@@ -277,7 +279,7 @@ type receiverPeerMonitorOutcome struct {
 type receiverPeerStarter interface {
 	Start(
 		context.Context,
-		*sessionruntime.ReceiverRuntime,
+		*receiversession.Runtime,
 	) (receiverPeerAttempt, error)
 }
 
@@ -296,7 +298,7 @@ type receiverPeerFactoryAdapter struct {
 
 func (adapter receiverPeerFactoryAdapter) Start(
 	ctx context.Context,
-	runtime *sessionruntime.ReceiverRuntime,
+	runtime *receiversession.Runtime,
 ) (receiverPeerAttempt, error) {
 	signaling, err := v2peer.NewRuntimeReceiverSignaling(runtime)
 	if err != nil {
@@ -388,7 +390,7 @@ func (peer *activeReceiverPeer) CloseWithReason(reason ReceiverLocalStopReason) 
 
 func (a *runner) startReceiverPeer(
 	ctx context.Context,
-	runtime *sessionruntime.ReceiverRuntime,
+	runtime *receiversession.Runtime,
 	observation getObservation,
 	observe func(receiverPeerSignal),
 	localStop *receiverLocalStop,
@@ -495,11 +497,11 @@ func (adapter receiverPeerSetAdapter) SetDemand(demand peerset.Demand) error {
 	return adapter.path.SetDemand(demand)
 }
 
-func (a *receiverPeerSetAdapter) Ready() <-chan struct{}                    { return a.path.Ready() }
-func (a *receiverPeerSetAdapter) Done() <-chan struct{}                     { return a.path.Done() }
-func (a *receiverPeerSetAdapter) Lane() (sessionruntime.LaneIdentity, bool) { return a.path.Lane() }
-func (a *receiverPeerSetAdapter) Err() error                                { return a.path.Err() }
-func (a *receiverPeerSetAdapter) Close() error                              { return a.path.Close() }
+func (a *receiverPeerSetAdapter) Ready() <-chan struct{}                     { return a.path.Ready() }
+func (a *receiverPeerSetAdapter) Done() <-chan struct{}                      { return a.path.Done() }
+func (a *receiverPeerSetAdapter) Lane() (sessioncontract.LaneIdentity, bool) { return a.path.Lane() }
+func (a *receiverPeerSetAdapter) Err() error                                 { return a.path.Err() }
+func (a *receiverPeerSetAdapter) Close() error                               { return a.path.Close() }
 func (a *receiverPeerSetAdapter) Outcome() receiverPeerMonitorOutcome {
 	result := a.path.Result()
 	disposition := receiverPeerFallbackAllowed

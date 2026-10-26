@@ -12,7 +12,9 @@ import (
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 )
 
 type receiverScriptedTerminalOperation struct {
@@ -499,7 +501,7 @@ func TestReceiverPreOperationNegotiationTimeoutUsesTypedLocalDecision(t *testing
 }
 
 func TestReceiverPreOperationRuntimeStoppingIsUnavailable(t *testing.T) {
-	runtimeSignaling, err := NewRuntimeReceiverSignaling(&sessionruntime.ReceiverRuntime{})
+	runtimeSignaling, err := NewRuntimeReceiverSignaling(&receiversession.Runtime{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -521,7 +523,7 @@ func TestReceiverPreOperationRuntimeStoppingIsUnavailable(t *testing.T) {
 		ReceiverProvenanceRuntimeStopping,
 		ReceiverDispositionSessionUnavailable,
 	)
-	if !errors.Is(outcome.RetainedCause(), sessionruntime.ErrRuntimeClosed) ||
+	if !errors.Is(outcome.RetainedCause(), sessioncontract.ErrRuntimeClosed) ||
 		errors.Is(outcome.RetainedCause(), ErrProtocol) || outcome.RequiresSessionClose() {
 		t.Fatalf("runtime-stopping diagnostics=%v outcome=%+v", outcome.RetainedCause(), outcome)
 	}
@@ -603,19 +605,19 @@ func TestReceiverPreOperationInvalidAdapterShapesUseContractProvenance(t *testin
 }
 
 func TestReceiverCoreProvenanceMappingIsOneToOne(t *testing.T) {
-	for core, want := range map[sessionruntime.ReceiverPeerTerminalProvenance]ReceiverTerminalProvenance{
-		sessionruntime.ReceiverPeerProvenanceLocalExplicitStop:           ReceiverProvenanceLocalExplicitStop,
-		sessionruntime.ReceiverPeerProvenanceLocalContextEnded:           ReceiverProvenanceLocalContextEnded,
-		sessionruntime.ReceiverPeerProvenanceLocalOperationContract:      ReceiverProvenanceLocalOperationContract,
-		sessionruntime.ReceiverPeerProvenanceRemoteOperationRejected:     ReceiverProvenanceRemoteOperationRejected,
-		sessionruntime.ReceiverPeerProvenanceRemoteUnknownControl:        ReceiverProvenanceRemoteUnknownControl,
-		sessionruntime.ReceiverPeerProvenanceRemoteControlMalformed:      ReceiverProvenanceRemoteControlMalformed,
-		sessionruntime.ReceiverPeerProvenanceRemoteFailureMalformed:      ReceiverProvenanceRemoteFailureMalformed,
-		sessionruntime.ReceiverPeerProvenanceRemoteFailureScopeViolation: ReceiverProvenanceRemoteFailureScopeViolation,
-		sessionruntime.ReceiverPeerProvenanceRemoteAnswerConflict:        ReceiverProvenanceAuthenticatedSecondAnswer,
-		sessionruntime.ReceiverPeerProvenanceRemoteFinalConflict:         ReceiverProvenanceAuthenticatedFinalConflict,
-		sessionruntime.ReceiverPeerProvenanceRemoteContinuationViolation: ReceiverProvenanceAuthenticatedContinuationViolation,
-		sessionruntime.ReceiverPeerProvenanceRuntimeStopping:             ReceiverProvenanceRuntimeStopping,
+	for core, want := range map[receiversession.PeerTerminalProvenance]ReceiverTerminalProvenance{
+		receiversession.PeerProvenanceLocalExplicitStop:           ReceiverProvenanceLocalExplicitStop,
+		receiversession.PeerProvenanceLocalContextEnded:           ReceiverProvenanceLocalContextEnded,
+		receiversession.PeerProvenanceLocalOperationContract:      ReceiverProvenanceLocalOperationContract,
+		receiversession.PeerProvenanceRemoteOperationRejected:     ReceiverProvenanceRemoteOperationRejected,
+		receiversession.PeerProvenanceRemoteUnknownControl:        ReceiverProvenanceRemoteUnknownControl,
+		receiversession.PeerProvenanceRemoteControlMalformed:      ReceiverProvenanceRemoteControlMalformed,
+		receiversession.PeerProvenanceRemoteFailureMalformed:      ReceiverProvenanceRemoteFailureMalformed,
+		receiversession.PeerProvenanceRemoteFailureScopeViolation: ReceiverProvenanceRemoteFailureScopeViolation,
+		receiversession.PeerProvenanceRemoteAnswerConflict:        ReceiverProvenanceAuthenticatedSecondAnswer,
+		receiversession.PeerProvenanceRemoteFinalConflict:         ReceiverProvenanceAuthenticatedFinalConflict,
+		receiversession.PeerProvenanceRemoteContinuationViolation: ReceiverProvenanceAuthenticatedContinuationViolation,
+		receiversession.PeerProvenanceRuntimeStopping:             ReceiverProvenanceRuntimeStopping,
 	} {
 		got, ok := receiverProvenanceFromCore(core)
 		if !ok || got != want {

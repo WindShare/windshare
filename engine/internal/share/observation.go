@@ -14,7 +14,9 @@ import (
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessionobs "github.com/windshare/windshare/core/session/observation"
+	sendersession "github.com/windshare/windshare/core/session/sendersession"
 	"github.com/windshare/windshare/engine/internal/task"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
@@ -75,7 +77,7 @@ func (Observation) EngineEvent() {}
 type observations struct {
 	control    task.Control
 	detailed   bool
-	protocol   observationstream.Producer[sessionruntime.ProtocolObservation]
+	protocol   observationstream.Producer[sessionobs.ProtocolObservation]
 	mu         sync.Mutex
 	completers []func()
 	losses     map[ObservationSource]uint64
@@ -86,9 +88,9 @@ func newObservations(control task.Control, request Request) *observations {
 	control.Diagnostics = request.Diagnostics
 	o := &observations{control: control, detailed: control.Diagnostics.Enabled()}
 	if o.detailed {
-		producer, consumer, _ := observationstream.New[sessionruntime.ProtocolObservation](protocolObservationCapacity)
+		producer, consumer, _ := observationstream.New[sessionobs.ProtocolObservation](protocolObservationCapacity)
 		o.protocol = producer
-		readObservations(o, consumer, func(value sessionruntime.ProtocolObservation) { o.control.Diagnostics.Record(value) })
+		readObservations(o, consumer, func(value sessionobs.ProtocolObservation) { o.control.Diagnostics.Record(value) })
 	}
 	return o
 }
@@ -128,14 +130,14 @@ func (o *observations) TraceRootPrefetch(value liveshare.RootPrefetchTrace) {
 func (o *observations) TraceRevision(value content.RevisionTrace) {
 	o.control.Diagnostics.Record(value)
 }
-func (o *observations) ObserveSenderTerminalSend(value sessionruntime.SenderTerminalSendObserved) {
+func (o *observations) ObserveSenderTerminalSend(value sessionobs.SenderTerminalSendObserved) {
 	o.control.Diagnostics.Record(value)
 }
-func (o *observations) ObserveSenderSessionTerminated(value sessionruntime.SenderSessionTerminated) {
+func (o *observations) ObserveSenderSessionTerminated(value sessionobs.SenderSessionTerminated) {
 	o.control.Diagnostics.Record(value)
 }
 
-func (o *observations) runtimeConfig(relays Relays, peers sessionruntime.SenderPeerHandlerFactory) liveshare.RuntimeFactoryConfig {
+func (o *observations) runtimeConfig(relays Relays, peers sendersession.PeerHandlerFactory) liveshare.RuntimeFactoryConfig {
 	config := liveshare.RuntimeFactoryConfig{TerminalConnectivity: relays, PeerHandlers: peers, ProtocolObservations: o.protocol}
 	if o.detailed {
 		config.TerminalSendObserver, config.SessionTerminalObserver = o, o

@@ -23,7 +23,8 @@ import (
 	"github.com/windshare/windshare/core/senderauth"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sendersession "github.com/windshare/windshare/core/session/sendersession"
 	"github.com/windshare/windshare/core/transfer"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
@@ -156,13 +157,13 @@ func TestLiveShareFacadeTransfersProgressiveDirectoryToDurableOutput(t *testing.
 	}
 	senderChannel, receiverChannel := newFacadeChannelPair()
 	accepted := make(chan struct {
-		runtime *sessionruntime.SenderRuntime
+		runtime *sendersession.Runtime
 		err     error
 	}, 1)
 	go func() {
 		runtime, err := factory.Accept(context.Background(), senderChannel)
 		accepted <- struct {
-			runtime *sessionruntime.SenderRuntime
+			runtime *sendersession.Runtime
 			err     error
 		}{runtime: runtime, err: err}
 	}()
@@ -317,11 +318,11 @@ func (testSenderPeerHandler) Run(ctx context.Context) error {
 	return ctx.Err()
 }
 
-func testRuntimeFactoryConfig(terminal sessionruntime.TerminalConnectivity) RuntimeFactoryConfig {
+func testRuntimeFactoryConfig(terminal sendersession.TerminalConnectivity) RuntimeFactoryConfig {
 	return RuntimeFactoryConfig{
 		TerminalConnectivity: terminal,
-		PeerHandlers: sessionruntime.SenderPeerHandlerFactoryFunc(
-			func(sessionruntime.SenderPeerSession) (sessionruntime.SenderPeerHandler, error) {
+		PeerHandlers: sendersession.PeerHandlerFactoryFunc(
+			func(sendersession.PeerSession) (sendersession.PeerHandler, error) {
 				return testSenderPeerHandler{}, nil
 			},
 		),

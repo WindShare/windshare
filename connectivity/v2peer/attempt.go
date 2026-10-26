@@ -13,7 +13,9 @@ import (
 	"github.com/windshare/windshare/connectivity/v2peer/internal/candidatewriter"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
+	sendersession "github.com/windshare/windshare/core/session/sendersession"
 )
 
 const (
@@ -51,7 +53,7 @@ type peerAttemptConfig struct {
 	turn       *turnpath.Sender
 	turnLease  *turnpath.AuthorizedPath
 	factory    *Factory
-	session    sessionruntime.SenderPeerSession
+	session    sendersession.PeerSession
 	operation  protocolsession.OperationID
 	generation protocolsession.OperationGeneration
 	offer      v2signal.Offer
@@ -75,8 +77,8 @@ type attemptEvent struct {
 	kind             attemptEventKind
 	candidate        v2signal.Candidate
 	channel          PeerDataChannel
-	lane             sessionruntime.LaneIdentity
-	admission        sessionruntime.SenderPeerAdmissionResult
+	lane             sessioncontract.LaneIdentity
+	admission        sendersession.PeerAdmissionResult
 	err              error
 	completed        chan struct{}
 	admissionContext context.Context

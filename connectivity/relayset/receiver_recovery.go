@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/windshare/windshare/core/session/sessionruntime"
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
@@ -250,7 +250,7 @@ func (recovery *ReceiverRecovery) observeRetry(endpoints []string, phase Receive
 	}
 }
 
-func (recovery *ReceiverRecovery) observe(endpoint string, attempt uint32, phase ReceiverRecoveryPhase, delay time.Duration, runtime *sessionruntime.ReceiverRuntime, err error) {
+func (recovery *ReceiverRecovery) observe(endpoint string, attempt uint32, phase ReceiverRecoveryPhase, delay time.Duration, runtime *receiversession.Runtime, err error) {
 	recovery.mu.Lock()
 	if phase == ReceiverRecoveryConnected {
 		recovery.generations[endpoint]++

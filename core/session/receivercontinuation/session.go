@@ -10,7 +10,9 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/downloadmetrics"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/revisionwait"
@@ -18,7 +20,7 @@ import (
 
 var ErrReplacement = errors.New("receiver replacement violates authenticated session continuity")
 
-type Replace func(context.Context, *sessionruntime.ReceiverRuntime) (*sessionruntime.ReceiverRuntime, error)
+type Replace func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error)
 
 // Session owns the one replacement flight shared by discovery, revision, range,
 // and quota-wait consumers. Output transactions belong to the unchanged job.
@@ -27,7 +29,7 @@ type Session struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 	mu              sync.Mutex
-	current         *sessionruntime.ReceiverRuntime
+	current         *receiversession.Runtime
 	replace         Replace
 	flight          chan struct{}
 	failure         error
@@ -35,7 +37,7 @@ type Session struct {
 	remaining       map[*remainingObservation]func()
 }
 
-func New(ctx context.Context, current *sessionruntime.ReceiverRuntime, replace Replace) (*Session, error) {
+func New(ctx context.Context, current *receiversession.Runtime, replace Replace) (*Session, error) {
 	if ctx == nil || current == nil || replace == nil {
 		return nil, ErrReplacement
 	}
@@ -48,7 +50,7 @@ func (s *Session) BindDownloadMetrics(metrics *downloadmetrics.Metrics) {
 	defer s.mu.Unlock()
 	s.downloadMetrics = metrics
 }
-func (s *Session) recoverContent(ctx context.Context, previous *sessionruntime.ReceiverRuntime) error {
+func (s *Session) recoverContent(ctx context.Context, previous *receiversession.Runtime) error {
 	s.mu.Lock()
 	metrics := s.downloadMetrics
 	s.mu.Unlock()
@@ -58,7 +60,7 @@ func (s *Session) recoverContent(ctx context.Context, previous *sessionruntime.R
 	return s.recover(ctx, previous)
 }
 
-func (s *Session) Runtime() *sessionruntime.ReceiverRuntime {
+func (s *Session) Runtime() *receiversession.Runtime {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.current
@@ -79,7 +81,7 @@ func (s *Session) Close() {
 	s.mu.Unlock()
 }
 
-func (s *Session) recover(ctx context.Context, previous *sessionruntime.ReceiverRuntime) error {
+func (s *Session) recover(ctx context.Context, previous *receiversession.Runtime) error {
 	s.mu.Lock()
 	if s.current != previous {
 		s.mu.Unlock()
@@ -92,7 +94,7 @@ func (s *Session) recover(ctx context.Context, previous *sessionruntime.Receiver
 	}
 	if !previous.PathsExhausted() {
 		s.mu.Unlock()
-		return sessionruntime.ErrRuntimeClosed
+		return sessioncontract.ErrRuntimeClosed
 	}
 	if s.flight == nil {
 		s.flight = make(chan struct{})
@@ -113,7 +115,7 @@ func (s *Session) recover(ctx context.Context, previous *sessionruntime.Receiver
 	return nil
 }
 
-func (s *Session) replaceGeneration(previous *sessionruntime.ReceiverRuntime, flight chan struct{}) {
+func (s *Session) replaceGeneration(previous *receiversession.Runtime, flight chan struct{}) {
 	next, err := s.replace(s.ctx, previous)
 	if err == nil && (next == nil || next.ProtocolSessionID().Equal(previous.ProtocolSessionID()) ||
 		next.Descriptor().ShareInstance() != previous.Descriptor().ShareInstance() ||

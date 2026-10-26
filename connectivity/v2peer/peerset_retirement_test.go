@@ -3,7 +3,8 @@ package v2peer
 import (
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	"testing"
 )
 
@@ -58,7 +59,7 @@ func TestReceiverRecoveryScopeUsesSealedDecisionAndFailsClosed(t *testing.T) {
 }
 
 func TestReceiverImportsCoreSessionRejectionAuthority(t *testing.T) {
-	provenance, ok := receiverProvenanceFromCore(sessionruntime.ReceiverPeerProvenanceRemoteSessionRejected)
+	provenance, ok := receiverProvenanceFromCore(receiversession.PeerProvenanceRemoteSessionRejected)
 	if !ok || provenance != ReceiverProvenanceRemoteSessionRejected {
 		t.Fatal("lost sealed session rejection")
 	}

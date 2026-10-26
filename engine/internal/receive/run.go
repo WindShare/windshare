@@ -11,7 +11,8 @@ import (
 	"github.com/windshare/windshare/core/downloadmetrics"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/session/receivercontinuation"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/engine/internal/task"
 )
@@ -147,7 +148,7 @@ func (a *runner) runTransferJob(ctx context.Context, job *transfer.TransferJob, 
 		}
 	}
 }
-func receiverTerminationErrors(runtime *sessionruntime.ReceiverRuntime, connection relayset.ReceiverConnection) (runtimeErr, connectionErr error) {
+func receiverTerminationErrors(runtime *receiversession.Runtime, connection relayset.ReceiverConnection) (runtimeErr, connectionErr error) {
 	if runtime != nil {
 		runtimeErr = runtime.Err()
 	}

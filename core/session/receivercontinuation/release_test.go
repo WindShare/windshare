@@ -11,7 +11,8 @@ import (
 
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/internal/testoutputroot"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
@@ -48,19 +49,19 @@ func TestReleaseRevisionUsesWinningTermination(t *testing.T) {
 	protocolFailure := errors.New("authenticated share identity rejected during release")
 	for _, test := range []struct {
 		name    string
-		settle  func(*sessionruntime.ReceiverRuntime, *pipeChannel, *releaseResponseGate)
+		settle  func(*receiversession.Runtime, *pipeChannel, *releaseResponseGate)
 		wantErr bool
 	}{
-		{"acknowledged", func(_ *sessionruntime.ReceiverRuntime, _ *pipeChannel, gate *releaseResponseGate) {
+		{"acknowledged", func(_ *receiversession.Runtime, _ *pipeChannel, gate *releaseResponseGate) {
 			close(gate.proceed)
 		}, false},
-		{"paths_exhausted", func(_ *sessionruntime.ReceiverRuntime, wire *pipeChannel, _ *releaseResponseGate) {
+		{"paths_exhausted", func(_ *receiversession.Runtime, wire *pipeChannel, _ *releaseResponseGate) {
 			_ = wire.Close()
 		}, false},
-		{"protocol_rejected", func(runtime *sessionruntime.ReceiverRuntime, _ *pipeChannel, _ *releaseResponseGate) {
+		{"protocol_rejected", func(runtime *receiversession.Runtime, _ *pipeChannel, _ *releaseResponseGate) {
 			runtime.RejectShareIdentity(protocolFailure)
 		}, true},
-		{"caller_closed", func(runtime *sessionruntime.ReceiverRuntime, _ *pipeChannel, _ *releaseResponseGate) {
+		{"caller_closed", func(runtime *receiversession.Runtime, _ *pipeChannel, _ *releaseResponseGate) {
 			runtime.Close()
 		}, true},
 	} {
@@ -69,7 +70,7 @@ func TestReleaseRevisionUsesWinningTermination(t *testing.T) {
 			sender, wire := newPipe()
 			gate := newReleaseResponseGate(sender)
 			runtime := f.connectChannels(gate, wire)
-			continuation, err := New(t.Context(), runtime, func(context.Context, *sessionruntime.ReceiverRuntime) (*sessionruntime.ReceiverRuntime, error) {
+			continuation, err := New(t.Context(), runtime, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
 				t.Error("releasing a finished lease must not reconnect")
 				return nil, ErrReplacement
 			})
@@ -134,7 +135,7 @@ func TestPublishedTransferCompletesAfterReleaseAcknowledgementLoss(t *testing.T)
 	sender, wire := newPipe()
 	gate := newReleaseResponseGate(sender)
 	runtime := f.connectChannels(gate, wire)
-	continuation, err := New(t.Context(), runtime, func(context.Context, *sessionruntime.ReceiverRuntime) (*sessionruntime.ReceiverRuntime, error) {
+	continuation, err := New(t.Context(), runtime, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
 		t.Error("published output must not require a new connection for lease cleanup")
 		return nil, ErrReplacement
 	})
