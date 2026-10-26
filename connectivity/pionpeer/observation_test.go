@@ -1,6 +1,7 @@
 package pionpeer
 
 import (
+	"fmt"
 	"net/netip"
 	"sync"
 	"testing"
@@ -15,7 +16,9 @@ func TestCandidateFactsPreserveMappedProvenanceAndActualMilestones(t *testing.T)
 	defer authority.Close()
 	lease := testLease(t, authority, 1, "127.0.0.1")
 	local := lease.Endpoints()[0]
-	external := netip.MustParseAddrPort("203.0.113.1:45678")
+	// Port-preserving mappings must stay distinguishable from host candidates,
+	// regardless of which candidate the concurrent gatherers publish last.
+	external := netip.AddrPortFrom(netip.MustParseAddr("203.0.113.1"), local.Port())
 	var mu sync.Mutex
 	var events []Event
 	request := AttemptConfig{ProtocolSessionID: lease.SessionID(), NetworkGenerationID: 1, PeerPathID: lease.PathID(), SocketLease: lease, MappedEndpoints: []MappedEndpoint{{Local: local, External: external}},
@@ -31,12 +34,20 @@ func TestCandidateFactsPreserveMappedProvenanceAndActualMilestones(t *testing.T)
 		t.Fatal(err)
 	}
 	complete := make(chan struct{})
-	var advertised string
+	var advertised, host string
 	connection.OnICECandidate(func(candidate *pion.ICECandidate) {
 		if candidate == nil {
 			close(complete)
-		} else if candidate.Port == external.Port() {
+			return
+		}
+		if candidate.Protocol != pion.ICEProtocolUDP {
+			return
+		}
+		if candidate.Typ == pion.ICECandidateTypeSrflx && candidate.Address == external.Addr().String() && candidate.Port == external.Port() {
 			advertised = candidate.ToJSON().Candidate
+		}
+		if candidate.Typ == pion.ICECandidateTypeHost && candidate.Address == local.Addr().String() && candidate.Port == local.Port() {
+			host = candidate.ToJSON().Candidate
 		}
 	})
 	offer, err := connection.CreateOffer(nil)
@@ -48,16 +59,19 @@ func TestCandidateFactsPreserveMappedProvenanceAndActualMilestones(t *testing.T)
 	}
 	await(t, complete)
 	if !connection.IsMappedCandidate(advertised) {
-		t.Fatal("frozen mapping not recognized")
+		t.Fatalf("frozen mapping not recognized: local=%s external=%s advertised=%q", local, external, advertised)
+	}
+	if host == "" || connection.IsMappedCandidate(host) {
+		t.Fatalf("host candidate missing or acquired mapping provenance: %q", host)
 	}
 	if connection.IsMappedCandidate("garbage") {
 		t.Fatal("malformed candidate has provenance")
 	}
-	ordinary := "candidate:1 1 udp 1 203.0.113.1 45678 typ srflx raddr 127.0.0.2 rport 1"
+	ordinary := fmt.Sprintf("candidate:1 1 udp 1 %s %d typ srflx raddr 127.0.0.2 rport %d", external.Addr(), external.Port(), local.Port())
 	if connection.IsMappedCandidate(ordinary) {
 		t.Fatal("srflx syntax acquired mapping provenance")
 	}
-	connection.observeSelectedPair(&pion.ICECandidatePair{Local: &pion.ICECandidate{Protocol: pion.ICEProtocolUDP, Typ: pion.ICECandidateTypeHost, Address: "127.0.0.1", Port: local.Port()}, Remote: &pion.ICECandidate{Protocol: pion.ICEProtocolUDP, Typ: pion.ICECandidateTypeSrflx, Address: "203.0.113.1", Port: 45678}})
+	connection.observeSelectedPair(&pion.ICECandidatePair{Local: &pion.ICECandidate{Protocol: pion.ICEProtocolUDP, Typ: pion.ICECandidateTypeHost, Address: "127.0.0.1", Port: local.Port()}, Remote: &pion.ICECandidate{Protocol: pion.ICEProtocolUDP, Typ: pion.ICECandidateTypeSrflx, Address: external.Addr().String(), Port: external.Port()}})
 	_ = connection.Close()
 	mu.Lock()
 	defer mu.Unlock()

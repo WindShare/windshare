@@ -133,7 +133,9 @@ jobs:
       - name: Install frozen web dependencies
         run: pnpm -C web install --frozen-lockfile
       - name: Install Chromium runtime
-        run: pnpm -C web exec playwright install --with-deps chromium
+        uses: ./.github/actions/setup-browser
+        with:
+          browsers: chromium
       - name: Run progressive catalog paging
         run: pnpm -C web test:browser:progressive
 
@@ -163,7 +165,9 @@ jobs:
       - name: Install frozen web dependencies
         run: pnpm -C web install --frozen-lockfile
       - name: Install Chromium runtime
-        run: pnpm -C web exec playwright install --with-deps chromium
+        uses: ./.github/actions/setup-browser
+        with:
+          browsers: chromium
       - name: Prepare managed TURN Worker
         run: |
           rustup target add wasm32-unknown-unknown
@@ -202,7 +206,9 @@ jobs:
       - name: Install frozen web dependencies
         run: pnpm -C web install --frozen-lockfile
       - name: Install Chromium runtime
-        run: pnpm -C web exec playwright install --with-deps chromium
+        uses: ./.github/actions/setup-browser
+        with:
+          browsers: chromium
       - name: Run D1/D2 Pion interop
         run: pnpm -C web test:browser:interop
 
@@ -232,7 +238,9 @@ jobs:
       - name: Install frozen web dependencies
         run: pnpm -C web install --frozen-lockfile
       - name: Install Firefox and WebKit runtimes
-        run: pnpm -C web exec playwright install --with-deps firefox webkit
+        uses: ./.github/actions/setup-browser
+        with:
+          browsers: firefox webkit
       - name: Run cross-browser product scenarios
         run: pnpm -C web test:browser:cross
       - name: Run Firefox and WebKit component contracts
@@ -265,7 +273,9 @@ jobs:
       - name: Install frozen web dependencies
         run: pnpm -C web install --frozen-lockfile
       - name: Install Chromium runtime
-        run: pnpm -C web exec playwright install --with-deps chromium
+        uses: ./.github/actions/setup-browser
+        with:
+          browsers: chromium
       - name: Run Chromium periodic component contracts
         run: pnpm -C web test:browser:contract:periodic
 
