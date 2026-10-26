@@ -211,13 +211,9 @@ jobs:
         run: make vectors
 
   rust:
-    name: Rust relay (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: Rust relay (ubuntu-latest)
+    runs-on: ubuntu-latest
     timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -228,6 +224,11 @@ jobs:
           cache-dependency-path: go.sum
       - name: Install stable Rust and validation components
         run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy --component llvm-tools-preview --target wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: relay-rust -> .target
+          cache-bin: false
+          cmd-format: rustup run stable {0}
       - uses: actions/setup-node@v7
         with:
           node-version: lts/*
@@ -239,6 +240,31 @@ jobs:
           fallback: none
       - name: Check the Rust workspace and Wasm core
         run: make rust
+
+  rust-windows:
+    name: Rust relay (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Prepare Rust native relay toolchain
+        run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: relay-rust -> .target
+          cache-bin: false
+          cmd-format: rustup run stable {0}
+      # Linux owns workspace lint, coverage, and Wasm; Windows keeps native I/O
+      # and process lifecycle coverage without rebuilding those artifacts.
+      - name: Test the native Windows relay
+        working-directory: relay-rust
+        run: rustup run stable cargo test -p windshare-relay-native --locked
 
   web:
     name: Web application
