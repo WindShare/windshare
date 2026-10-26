@@ -29,6 +29,14 @@ export interface HotSwitchLaneObservation {
   readonly route: 'application-relay' | 'direct' | 'turn'
 }
 
+export function sameLaneIdentity(
+  left: Pick<HotSwitchLaneObservation, 'laneId' | 'laneEpoch'>,
+  right: Pick<HotSwitchLaneObservation, 'laneId' | 'laneEpoch'>,
+): boolean {
+  // Logical slots are reused after detachment, so admission identity includes the epoch.
+  return left.laneId === right.laneId && left.laneEpoch === right.laneEpoch
+}
+
 export interface ObservedTransferFailure {
   readonly kind: 'directory' | 'file'
   readonly id: string

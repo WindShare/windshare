@@ -1,4 +1,8 @@
-import type { HotSwitchPageEvent } from './hot-switch-contract'
+import {
+  sameLaneIdentity,
+  type HotSwitchLaneObservation,
+  type HotSwitchPageEvent,
+} from './hot-switch-contract'
 
 const EVENT_TIMEOUT_MILLISECONDS = 30_000
 const MAXIMUM_RETAINED_EVENTS = 1_024
@@ -62,6 +66,22 @@ export class NetworkEventLog {
       }
       this.#waiters.add(waiter)
     })
+  }
+
+  waitForLaneDispatch(
+    lane: HotSwitchLaneObservation,
+    afterSequence: number,
+  ): Promise<MatchingEvent<'dispatch'>> {
+    // A route can keep carrying traffic on its predecessor during renewal.
+    // Match the admission as well as the cut boundary so that valid traffic
+    // cannot be mistaken for proof that the replacement is carrying content.
+    return this.waitFor(
+      'dispatch',
+      (event) => sameLaneIdentity(event.observation, lane) &&
+        event.observation.route === lane.route &&
+        event.observation.dispatchSequence > afterSequence,
+      `${lane.route} lane ${lane.laneId}/${lane.laneEpoch} dispatch after ${afterSequence}`,
+    )
   }
 
   latestDispatchSequence(): number {

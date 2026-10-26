@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 
 import { expect, test } from '@playwright/test'
 
-import { HOT_SWITCH_TRANSFER_BLOCKS } from './fixtures/hot-switch-contract'
+import { HOT_SWITCH_TRANSFER_BLOCKS, sameLaneIdentity } from './fixtures/hot-switch-contract'
 import {
   releasePageOutput,
   sealPageRelayCut,
@@ -108,24 +108,32 @@ test('discovers deployment TURN and renews native/browser paths after applicatio
     await sealPageRelayCut(page)
     const cut = await events.waitFor('relay-ineligible', () => true, 'relay ineligibility')
     await expect.poll(() => events.snapshot().some((event) => event.kind === 'lane-admitted' &&
-      event.observation.route === 'turn' && event.observation.laneId !== lane.observation.laneId),
+      event.observation.route === 'turn' && !sameLaneIdentity(event.observation, lane.observation)),
     { timeout: 45_000, message: 'fresh TURN credentials must be admitted through the surviving authenticated lane' }).toBe(true)
     const replacement = events.snapshot().find((event) => event.kind === 'lane-admitted' &&
-      event.observation.route === 'turn' && event.observation.laneId !== lane.observation.laneId)
+      event.observation.route === 'turn' && !sameLaneIdentity(event.observation, lane.observation))
     if (replacement?.kind !== 'lane-admitted') throw new Error('TURN replacement was not observed')
-    await events.waitFor('lane-detached', (event) => event.observation.laneId === lane.observation.laneId, 'old TURN allocation retirement')
+    const retirement = await events.waitFor(
+      'lane-detached',
+      (event) => sameLaneIdentity(event.observation, lane.observation),
+      'old TURN allocation retirement',
+    )
     await releasePageOutput(page)
 
-    const peerDispatch = await events.waitFor(
-      'dispatch',
-      (event) => event.observation.route === 'turn' &&
-        event.observation.dispatchSequence > cut.dispatchSequenceBoundary,
-      'post-cut TURN dispatch',
+    const peerDispatch = await events.waitForLaneDispatch(
+      replacement.observation,
+      cut.dispatchSequenceBoundary,
     )
     const delivery = await events.waitFor('delivery', () => true, 'TURN delivery terminal')
     const runtime = await events.waitFor('runtime-settled', () => true, 'TURN runtime settlement')
     expect(runtime.error).toBeUndefined()
-    expect(events.snapshot().filter((event) =>
+    const observed = events.snapshot()
+    const retirementIndex = observed.indexOf(retirement)
+    expect(observed.indexOf(replacement)).toBeLessThan(retirementIndex)
+    expect(observed.slice(retirementIndex + 1).filter((event) =>
+      event.kind === 'dispatch' && sameLaneIdentity(event.observation, lane.observation),
+    )).toEqual([])
+    expect(observed.filter((event) =>
       event.kind === 'dispatch' &&
       event.observation.route === 'application-relay' &&
       event.observation.dispatchSequence > cut.dispatchSequenceBoundary,
