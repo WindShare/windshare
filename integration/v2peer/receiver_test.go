@@ -431,8 +431,8 @@ type receiverIntegrationLanes struct {
 func (lanes receiverIntegrationLanes) RequestLane(
 	context.Context,
 	uint32,
-) (sessioncontract.LaneAttachmentGrant, error) {
-	return sessioncontract.LaneAttachmentGrant{
+) (protocolsession.LaneGrant, error) {
+	return protocolsession.LaneGrant{
 		LaneID: lanes.lane.ID, LaneEpoch: lanes.lane.Epoch,
 		OperationID: integrationOperationID(0x42),
 	}, nil
@@ -440,7 +440,7 @@ func (lanes receiverIntegrationLanes) RequestLane(
 
 func (lanes receiverIntegrationLanes) AttachLane(
 	ctx context.Context,
-	grant sessioncontract.LaneAttachmentGrant,
+	grant protocolsession.LaneGrant,
 	channel protocolsession.FrameChannel,
 	_ transferlanes.Route,
 ) (receiversession.LaneAdmissionResult, error) {
@@ -467,18 +467,18 @@ type receiverControlledLanes struct {
 func (lanes receiverControlledLanes) RequestLane(
 	ctx context.Context,
 	_ uint32,
-) (sessioncontract.LaneAttachmentGrant, error) {
+) (protocolsession.LaneGrant, error) {
 	if lanes.requestStarted != nil {
 		close(lanes.requestStarted)
 	}
 	if lanes.grantRelease != nil {
 		select {
 		case <-ctx.Done():
-			return sessioncontract.LaneAttachmentGrant{}, ctx.Err()
+			return protocolsession.LaneGrant{}, ctx.Err()
 		case <-lanes.grantRelease:
 		}
 	}
-	return sessioncontract.LaneAttachmentGrant{
+	return protocolsession.LaneGrant{
 		LaneID:      lanes.lane.ID,
 		LaneEpoch:   lanes.lane.Epoch,
 		OperationID: lanes.grantOperation,
@@ -487,7 +487,7 @@ func (lanes receiverControlledLanes) RequestLane(
 
 func (lanes receiverControlledLanes) AttachLane(
 	ctx context.Context,
-	grant sessioncontract.LaneAttachmentGrant,
+	grant protocolsession.LaneGrant,
 	channel protocolsession.FrameChannel,
 	_ transferlanes.Route,
 ) (admission receiversession.LaneAdmissionResult, err error) {

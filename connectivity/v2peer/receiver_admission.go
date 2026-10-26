@@ -60,7 +60,7 @@ func (settlement receiverAdmissionSettlement) authenticated() bool {
 }
 
 func receiverAttachmentSettlement(
-	grant sessioncontract.LaneAttachmentGrant,
+	grant protocolsession.LaneGrant,
 	admission receiversession.LaneAdmissionResult,
 	err error,
 ) (receiverAdmissionSettlement, error) {

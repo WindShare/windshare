@@ -110,7 +110,7 @@ func TestSenderQueuesSuppressCanceledGenerationBeforeWorkPublication(t *testing.
 		t.Fatal("canceled catalog request reached its service queue")
 	}
 
-	laneBody, _ := sessioncore.EncodeLaneAttachRequest(0)
+	laneBody, _ := protocolsession.EncodeLaneAttachRequest(0)
 	laneRequest := operationMessageForTest(t, protocolsession.MessageLaneAttach, operationID, laneBody)
 	laneHandler := newLaneGrantHandler(nil, &sessioncore.Responses{}, nil)
 	if err := laneHandler.HandleMessage(canceledSenderIngress(t, laneRequest), laneRequest); err != nil {

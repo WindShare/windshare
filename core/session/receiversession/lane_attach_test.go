@@ -1012,7 +1012,7 @@ func attachObservedLane(
 	factory *sendersession.Factory,
 	receiver *Runtime,
 	requestedLaneID uint32,
-) (sessioncontract.LaneIdentity, *observedMemoryChannel, *observedMemoryChannel, sessioncontract.LaneAttachmentGrant) {
+) (sessioncontract.LaneIdentity, *observedMemoryChannel, *observedMemoryChannel, protocolsession.LaneGrant) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -1034,7 +1034,7 @@ func attachGrantedLane(
 	t *testing.T,
 	factory *sendersession.Factory,
 	receiver *Runtime,
-	grant sessioncontract.LaneAttachmentGrant,
+	grant protocolsession.LaneGrant,
 ) (sessioncontract.LaneIdentity, error, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -1047,7 +1047,7 @@ func attachGrantedLaneWithChannels(
 	ctx context.Context,
 	factory *sendersession.Factory,
 	receiver *Runtime,
-	grant sessioncontract.LaneAttachmentGrant,
+	grant protocolsession.LaneGrant,
 	senderChannel *observedMemoryChannel,
 	receiverChannel *observedMemoryChannel,
 ) (sessioncontract.LaneIdentity, error, error) {

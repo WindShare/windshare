@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/fxamacker/cbor/v2"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/senderauth"
 )
@@ -36,12 +37,121 @@ const (
 	laneRejectDomain = "windshare/v2 lane-reject\x00"
 )
 
+const (
+	laneAttachBodyVersion     = uint64(1)
+	laneAttachRequestMode     = uint64(0)
+	laneAttachGrantMode       = uint64(1)
+	laneAttachRequestFields   = 3
+	laneAttachGrantFields     = 5
+	laneAttachMaxNestedLevels = 4
+	laneAttachMaxMapPairs     = 16
+)
+
+var laneAttachDecMode = func() cbor.DecMode {
+	mode, err := cbor.DecOptions{
+		DupMapKey:       cbor.DupMapKeyEnforcedAPF,
+		IndefLength:     cbor.IndefLengthForbidden,
+		TagsMd:          cbor.TagsForbidden,
+		MaxNestedLevels: laneAttachMaxNestedLevels,
+		MaxMapPairs:     laneAttachMaxMapPairs,
+	}.DecMode()
+	if err != nil {
+		panic(err)
+	}
+	return mode
+}()
+
 var (
 	ErrLaneInput     = errors.New("protocol session lane input is invalid")
 	ErrLaneMalformed = errors.New("protocol session lane frame is malformed")
 	ErrLaneProof     = errors.New("protocol session lane proof is invalid")
 	ErrLaneSignature = errors.New("protocol session lane signature is invalid")
 )
+
+type LaneAttachRequest struct {
+	RequestedLaneID uint32
+}
+
+// LaneGrant carries the protocol authorization for one channel attachment.
+// OperationID is bound by the enclosing message; expiry remains private to the
+// sender's registry because it is not conveyed to the receiver.
+type LaneGrant struct {
+	LaneID      uint32
+	LaneEpoch   uint32
+	OperationID OperationID
+	AttachNonce [LaneAttachNonceBytes]byte
+}
+
+func EncodeLaneAttachRequest(requestedLaneID uint32) ([]byte, error) {
+	return EncodeBody(map[uint64]any{
+		0: laneAttachBodyVersion,
+		1: laneAttachRequestMode,
+		2: uint64(requestedLaneID),
+	})
+}
+
+func DecodeLaneAttachRequest(encoded []byte) (LaneAttachRequest, error) {
+	fields, err := decodeLaneAttachBody(encoded, laneAttachRequestFields)
+	if err != nil || fields[0] != laneAttachBodyVersion || fields[1] != laneAttachRequestMode {
+		return LaneAttachRequest{}, errors.Join(ErrLaneMalformed, err)
+	}
+	requested, ok := fields[2].(uint64)
+	if !ok || requested > uint64(^uint32(0)) {
+		return LaneAttachRequest{}, ErrLaneMalformed
+	}
+	return LaneAttachRequest{RequestedLaneID: uint32(requested)}, nil
+}
+
+func EncodeLaneGrant(grant LaneGrant) ([]byte, error) {
+	if grant.OperationID.IsZero() {
+		return nil, ErrInvalidOperationID
+	}
+	if grant.LaneID == 0 || grant.LaneEpoch == 0 || !laneNonzero(grant.AttachNonce[:]) {
+		return nil, ErrLaneInput
+	}
+	return EncodeBody(map[uint64]any{
+		0: laneAttachBodyVersion,
+		1: laneAttachGrantMode,
+		2: uint64(grant.LaneID),
+		3: uint64(grant.LaneEpoch),
+		4: grant.AttachNonce[:],
+	})
+}
+
+func DecodeLaneGrant(encoded []byte, operationID OperationID) (LaneGrant, error) {
+	if operationID.IsZero() {
+		return LaneGrant{}, ErrInvalidOperationID
+	}
+	fields, err := decodeLaneAttachBody(encoded, laneAttachGrantFields)
+	if err != nil || fields[0] != laneAttachBodyVersion || fields[1] != laneAttachGrantMode {
+		return LaneGrant{}, errors.Join(ErrLaneMalformed, err)
+	}
+	laneID, laneOK := fields[2].(uint64)
+	epoch, epochOK := fields[3].(uint64)
+	nonce, nonceOK := fields[4].([]byte)
+	if !laneOK || !epochOK || !nonceOK || laneID == 0 || laneID > uint64(^uint32(0)) ||
+		epoch == 0 || epoch > uint64(^uint32(0)) || len(nonce) != LaneAttachNonceBytes || !laneNonzero(nonce) {
+		return LaneGrant{}, ErrLaneMalformed
+	}
+	grant := LaneGrant{LaneID: uint32(laneID), LaneEpoch: uint32(epoch), OperationID: operationID}
+	copy(grant.AttachNonce[:], nonce)
+	return grant, nil
+}
+
+func decodeLaneAttachBody(encoded []byte, fieldCount int) (map[uint64]any, error) {
+	var fields map[uint64]any
+	if err := laneAttachDecMode.Unmarshal(encoded, &fields); err != nil || len(fields) != fieldCount {
+		return nil, errors.Join(ErrLaneMalformed, err)
+	}
+	canonical, err := EncodeBody(fields)
+	if err != nil {
+		return nil, errors.Join(ErrLaneMalformed, err)
+	}
+	if !bytes.Equal(canonical, encoded) {
+		return nil, errors.Join(ErrLaneMalformed, ErrNonCanonicalMessage)
+	}
+	return fields, nil
+}
 
 type LaneHello struct {
 	encoded     [LaneHelloBytes]byte

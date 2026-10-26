@@ -80,7 +80,7 @@ func TestLaneAttachmentBoundarySilentlyClosesUntrustedFailures(t *testing.T) {
 	if _, err := (*Runtime)(nil).RequestLane(context.Background(), 0); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
 		t.Fatalf("nil lane request error = %v", err)
 	}
-	if _, err := receiver.AttachLane(context.Background(), sessioncontract.LaneAttachmentGrant{}, newMemoryChannel(t), transferlanes.RouteDirect); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	if _, err := receiver.AttachLane(context.Background(), protocolsession.LaneGrant{}, newMemoryChannel(t), transferlanes.RouteDirect); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
 		t.Fatalf("invalid lane grant error = %v", err)
 	}
 
@@ -256,7 +256,7 @@ func permissiveInboundAuthenticator() protocolsession.InboundMessageAuthenticato
 	)
 }
 
-func mustRequestLane(t *testing.T, runtime *Runtime) sessioncontract.LaneAttachmentGrant {
+func mustRequestLane(t *testing.T, runtime *Runtime) protocolsession.LaneGrant {
 	t.Helper()
 	grant, err := runtime.RequestLane(context.Background(), 0)
 	if err != nil {
@@ -265,7 +265,7 @@ func mustRequestLane(t *testing.T, runtime *Runtime) sessioncontract.LaneAttachm
 	return grant
 }
 
-func laneHelloForGrant(t *testing.T, runtime *Runtime, grant sessioncontract.LaneAttachmentGrant) []byte {
+func laneHelloForGrant(t *testing.T, runtime *Runtime, grant protocolsession.LaneGrant) []byte {
 	t.Helper()
 	hello, err := runtime.core.NewLaneHello(grant)
 	if err != nil {

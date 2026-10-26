@@ -28,7 +28,7 @@ func newAcceptedInstallationFailureGate() *acceptedInstallationFailureGate {
 
 func (gate *acceptedInstallationFailureGate) attach(
 	ctx context.Context,
-	grant sessioncontract.LaneAttachmentGrant,
+	grant protocolsession.LaneGrant,
 	channel protocolsession.FrameChannel,
 ) (receiversession.LaneAdmissionResult, error) {
 	close(gate.accepted)
@@ -88,7 +88,7 @@ func TestReceiverAcceptedInstallationFailureWinsLifecycleCancellation(t *testing
 }
 
 func TestReceiverAttachmentSettlementCannotMintAuthorityFromInconsistentResult(t *testing.T) {
-	grant := sessioncontract.LaneAttachmentGrant{
+	grant := protocolsession.LaneGrant{
 		LaneID: 7, LaneEpoch: 3, OperationID: testOperationID(90),
 	}
 	accepted := receiversession.LaneAdmissionResult{

@@ -453,7 +453,7 @@ type receiverTestLanes struct {
 	requestRelease   <-chan struct{}
 	attach           func(
 		context.Context,
-		sessioncontract.LaneAttachmentGrant,
+		protocolsession.LaneGrant,
 		protocolsession.FrameChannel,
 	) (receiversession.LaneAdmissionResult, error)
 }
@@ -469,27 +469,27 @@ func newReceiverTestLanes() *receiverTestLanes {
 func (lanes *receiverTestLanes) RequestLane(
 	ctx context.Context,
 	requested uint32,
-) (sessioncontract.LaneAttachmentGrant, error) {
+) (protocolsession.LaneGrant, error) {
 	select {
 	case <-ctx.Done():
-		return sessioncontract.LaneAttachmentGrant{}, ctx.Err()
+		return protocolsession.LaneGrant{}, ctx.Err()
 	case lanes.requested <- requested:
 	}
 	if lanes.requestRelease != nil {
 		select {
 		case <-ctx.Done():
-			return sessioncontract.LaneAttachmentGrant{}, ctx.Err()
+			return protocolsession.LaneGrant{}, ctx.Err()
 		case <-lanes.requestRelease:
 		}
 	}
-	return sessioncontract.LaneAttachmentGrant{
+	return protocolsession.LaneGrant{
 		LaneID: lanes.lane.ID, LaneEpoch: lanes.lane.Epoch, OperationID: testOperationID(152),
 	}, lanes.err
 }
 
 func (lanes *receiverTestLanes) AttachLane(
 	ctx context.Context,
-	grant sessioncontract.LaneAttachmentGrant,
+	grant protocolsession.LaneGrant,
 	channel protocolsession.FrameChannel,
 	_ transferlanes.Route,
 ) (receiversession.LaneAdmissionResult, error) {

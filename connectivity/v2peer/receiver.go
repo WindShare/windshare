@@ -52,10 +52,10 @@ func (function ReceiverPeerConnectionFactoryFunc) NewReceiverPeerConnection(
 }
 
 type ReceiverLaneSession interface {
-	RequestLane(context.Context, uint32) (sessioncontract.LaneAttachmentGrant, error)
+	RequestLane(context.Context, uint32) (protocolsession.LaneGrant, error)
 	AttachLane(
 		context.Context,
-		sessioncontract.LaneAttachmentGrant,
+		protocolsession.LaneGrant,
 		protocolsession.FrameChannel,
 		transferlanes.Route,
 	) (receiversession.LaneAdmissionResult, error)
@@ -419,7 +419,7 @@ type receiverEvent struct {
 	candidate v2signal.Candidate
 	control   ReceiverControl
 	terminal  ReceiverSignalingTermination
-	grant     sessioncontract.LaneAttachmentGrant
+	grant     protocolsession.LaneGrant
 	admission receiversession.LaneAdmissionResult
 	err       error
 }

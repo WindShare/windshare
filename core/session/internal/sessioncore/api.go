@@ -84,7 +84,7 @@ func (runtime *Runtime) InstallLane(identity sessioncontract.LaneIdentity, chann
 	})
 	return err
 }
-func (runtime *Runtime) NewLaneHello(grant sessioncontract.LaneAttachmentGrant) (protocolsession.LaneHello, error) {
+func (runtime *Runtime) NewLaneHello(grant protocolsession.LaneGrant) (protocolsession.LaneHello, error) {
 	return protocolsession.NewLaneHello(runtime.share, runtime.sessionID, grant.LaneID, grant.LaneEpoch, grant.OperationID, grant.AttachNonce[:], runtime.keys.ReceiverToSender())
 }
 func (runtime *Runtime) NewLaneNonce() ([]byte, error) {
@@ -162,7 +162,5 @@ func (call *Call) Close()                       { call.close() }
 func (owner *TerminalOwner) Finish(runtime *Runtime, outcome OperationOutcome) {
 	owner.finish(runtime, outcome)
 }
-
-func (request LaneAttachRequest) RequestedLaneID() uint32 { return request.requestedLaneID }
 
 func (runtime *Runtime) Close() { runtime.close() }

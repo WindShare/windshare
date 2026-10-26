@@ -148,6 +148,8 @@ func validateSenderControlSemantic(
 ) error {
 	var err error
 	switch kind {
+	case MessageLaneAttach:
+		_, err = DecodeLaneGrant(semantic, operationID)
 	case MessageOperationError:
 		_, err = DecodeOperationFailure(semantic)
 	case MessageScanProgress:

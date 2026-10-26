@@ -10,6 +10,9 @@ import (
 
 type laneControlVector struct {
 	Name                 string `json:"name"`
+	AttachNonceB64       string `json:"attachNonceB64"`
+	AttachedLaneID       uint32 `json:"attachedLaneId"`
+	AttachedLaneEpoch    uint32 `json:"attachedLaneEpoch"`
 	GrantLaneEpoch       uint32 `json:"grantLaneEpoch"`
 	GrantLaneID          uint32 `json:"grantLaneId"`
 	GrantOperationIDB64  string `json:"grantOperationIdB64"`
