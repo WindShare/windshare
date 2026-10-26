@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"io/fs"
 	"reflect"
 	"slices"
 	"testing"
@@ -262,8 +263,8 @@ func TestWorkspaceCloseNeverDeletesInspectedObjects(t *testing.T) {
 	if err := (*Workspace)(nil).Cleanup(); err != nil {
 		t.Fatal(err)
 	}
-	if err := (&Workspace{}).Cleanup(); err != nil {
-		t.Fatal(err)
+	if err := (&Workspace{}).Cleanup(); !errors.Is(err, fs.ErrClosed) {
+		t.Fatalf("uninitialized workspace cleanup error=%v", err)
 	}
 	if err := (*Workspace)(nil).Close(); err != nil {
 		t.Fatal(err)
