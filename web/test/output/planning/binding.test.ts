@@ -72,7 +72,7 @@ describe('receive intent binding', () => {
           targetRouteId: 'managed',
           reservation: await createManagedAtomicReservation({
             operationId: identity(23), reservationId: identity(24), artifact: directAtomic.artifact,
-            authorityRef: identity(25, 32), nameAuthority: 'application-chosen',
+            authorityRef: identity(25, 32), nameChooser: 'application-chosen',
             requestedName: 'report.txt', reservedName: 'report.txt', collisionIndex: 0,
           }),
         },
@@ -176,7 +176,7 @@ describe('receive intent binding', () => {
     const action = await resolvedAction(selection, environment({ targets: [managedTarget()] }))
     const reservation = await createManagedAtomicReservation({
       operationId: identity(40), reservationId: identity(41), artifact: action.artifact,
-      authorityRef: identity(42, 32), nameAuthority: 'application-chosen',
+      authorityRef: identity(42, 32), nameChooser: 'application-chosen',
       requestedName: 'report.txt', reservedName: 'report.txt', collisionIndex: 0,
     })
     const candidate = { kind: 'destination-reservation' as const, targetRouteId: 'managed', reservation }
@@ -283,7 +283,7 @@ describe('receive intent binding', () => {
     }
     const reservation = await createManagedAtomicReservation({
       operationId: identity(70), reservationId: identity(71), artifact: action.artifact,
-      authorityRef: identity(72, 32), nameAuthority: 'user-chosen',
+      authorityRef: identity(72, 32), nameChooser: 'user-chosen',
       requestedName: 'report.txt', reservedName: 'report.txt', collisionIndex: 0,
     })
 

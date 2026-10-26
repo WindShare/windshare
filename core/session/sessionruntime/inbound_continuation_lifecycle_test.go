@@ -77,7 +77,7 @@ func TestInboundRetiredPeerCandidateUsesOperationAuthorityWithoutResponseRoute(t
 			}
 
 			// Removing a physical-route check must not bypass the retained
-			// continuation authority's semantic validation.
+			// continuation contract's semantic validation.
 			malformed := operationMessageForTest(t, protocolsession.MessagePeerCandidate, id, []byte{0xa0})
 			if _, err := inbound.RouteInbound(context.Background(), malformed); !errors.Is(err, protocolsession.ErrInvalidMessage) {
 				t.Fatalf("invalid late candidate = %v", err)

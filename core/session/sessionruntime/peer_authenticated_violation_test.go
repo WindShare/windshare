@@ -239,9 +239,9 @@ func TestReceiverPeerAuthenticatedViolationEvidenceCodes(t *testing.T) {
 			ReceiverPeerDiagnosticRemoteFinalConflict,
 		},
 		{
-			protocolsession.AuthenticatedOperationViolationContinuationAuthority,
-			ReceiverPeerProvenanceRemoteContinuationAuthorityViolation,
-			ReceiverPeerDiagnosticRemoteContinuationAuthorityViolation,
+			protocolsession.AuthenticatedOperationViolationContinuationContract,
+			ReceiverPeerProvenanceRemoteContinuationViolation,
+			ReceiverPeerDiagnosticRemoteContinuationViolation,
 		},
 	}
 	for _, test := range tests {

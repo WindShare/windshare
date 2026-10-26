@@ -65,7 +65,7 @@ func assertSafePayloadType(t *testing.T, value reflect.Type, seen map[reflect.Ty
 				// aggregate/per-value byte bounds; raw errors are never retained.
 				diagnostic = diagnostic || value == reflect.TypeFor[appobs.ObservationRejection]() ||
 					value == reflect.TypeFor[appobs.RejectionField]()
-				if !diagnostic && owner != "DisplayName" && owner != "DisplayPath" && owner != "RelayAuthority" && owner != "CapacityStoreID" && owner != "CapacityShareID" {
+				if !diagnostic && owner != "DisplayName" && owner != "DisplayPath" && owner != "RelayOrigin" && owner != "CapacityStoreID" && owner != "CapacityShareID" {
 					t.Fatalf("unreviewed string field %s.%s", owner, field.Name)
 				}
 			}

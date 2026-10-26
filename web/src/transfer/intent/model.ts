@@ -149,7 +149,8 @@ export type ArtifactKind = ArtifactSpec['kind']
 export type MaterializationKind = MaterializationPlan['kind']
 export type PreparationPolicy = 'none' | 'exact-zip' | 'exact-artifact'
 
-export type NameAuthority = 'application-chosen' | 'user-chosen' | 'browser-chosen'
+/** Choosing a name does not authorize replacement or cleanup of existing objects. */
+export type NameChooser = 'application-chosen' | 'user-chosen' | 'browser-chosen'
 export type ReplacementGuarantee =
   | 'atomic-no-replace'
   | 'coordinated-no-replace'
@@ -165,7 +166,8 @@ export type ArtifactAvailability =
   | 'verified-complete-only'
   | 'committed-objects-usable'
   | 'handoff-only'
-export type CleanupAuthority =
+/** Cleanup scope and proof requirements; execution still needs live storage authority. */
+export type CleanupContract =
   | 'rollback-to-absent-before-publication'
   | 'no-whole-target-rollback'
   | 'ownership-proof-required'
@@ -179,12 +181,12 @@ export type GuaranteeProfile =
 
 export interface GuaranteeSet {
   readonly profile: GuaranteeProfile
-  readonly nameAuthority: NameAuthority
+  readonly nameChooser: NameChooser
   readonly replacement: ReplacementGuarantee
   readonly delivery: DeliveryMode
   readonly targetVisibility: TargetVisibility
   readonly artifactAvailability: ArtifactAvailability
-  readonly cleanupAuthority: CleanupAuthority
+  readonly cleanupContract: CleanupContract
 }
 
 interface DestinationReservationBase extends CanonicalDigestValue {

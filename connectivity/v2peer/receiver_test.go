@@ -684,7 +684,7 @@ func TestReceiverAttemptRequiresCandidateLimitEqualToOperationAuthority(t *testi
 				t.Fatal("receiver did not reject a candidate-limit mismatch")
 			}
 			if err := harness.attempt.Err(); !errors.Is(err, ErrConfig) ||
-				!errors.Is(err, protocolsession.ErrContinuationAuthority) {
+				!errors.Is(err, protocolsession.ErrContinuationContract) {
 				t.Fatalf("candidate-limit mismatch error = %v", err)
 			}
 			if calls := harness.operation.cancelCalls.Load(); calls != 1 {
@@ -737,7 +737,7 @@ func TestReceiverAttemptCloseCannotInvalidateAuthorityValidation(t *testing.T) {
 	}
 	outcome := harness.attempt.Outcome()
 	if outcome.TransitionAuthority() != ReceiverTerminalLocal || !outcome.LocallyCanceled() ||
-		errors.Is(outcome.RetainedCause(), protocolsession.ErrContinuationAuthority) {
+		errors.Is(outcome.RetainedCause(), protocolsession.ErrContinuationContract) {
 		t.Fatalf("authority-validation Close outcome=%+v", outcome)
 	}
 }
@@ -771,7 +771,7 @@ func TestReceiverAttemptRuntimeShutdownDuringAuthorityValidationStaysRuntimeOwne
 		outcome.ConsequenceProvenance() != ReceiverProvenanceRuntimeStopping ||
 		!errors.Is(outcome.RetainedCause(), sessionruntime.ErrRuntimeClosed) ||
 		errors.Is(outcome.RetainedCause(), ErrConfig) ||
-		errors.Is(outcome.RetainedCause(), protocolsession.ErrContinuationAuthority) ||
+		errors.Is(outcome.RetainedCause(), protocolsession.ErrContinuationContract) ||
 		outcome.HasRetainedCauseClass(ReceiverCauseConfiguration) ||
 		!outcome.HasRetainedCauseClass(ReceiverCauseRuntimeClosed) {
 		t.Fatalf("runtime/authority interleaving outcome=%+v", outcome)

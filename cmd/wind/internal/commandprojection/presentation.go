@@ -30,8 +30,8 @@ func mustFailure(code appobs.FailureCode) appobs.Failure {
 func projectFileOutcomes(value transfer.FileOutcomeSummary) appobs.FileOutcomes {
 	return engine.DescribeFileOutcomes(value)
 }
-func NormalizeRelayAuthority(raw string) (appobs.RelayAuthority, error) {
-	return engine.NormalizeRelayAuthority(raw)
+func NormalizeRelayOrigin(raw string) (appobs.RelayOrigin, error) {
+	return engine.NormalizeRelayOrigin(raw)
 }
 func SealFilesystemOutputFailure(value osfs.FilesystemOutputDiagnostic) (error, bool) {
 	return filesystem.SealFilesystemOutputFailure(value)

@@ -14,15 +14,15 @@ import (
 
 const (
 	OutputRootBindingBytes         = sha256.Size
-	DestinationAuthorityIDBytes    = sha256.Size
+	DestinationBindingIDBytes      = sha256.Size
 	MaxRootIdentityClaimBytes      = 256
 	MaxNamespaceIdentityClaimBytes = 256
-	DestinationAuthorityIDDomainV1 = "windshare/destination-authority-id/v1"
+	DestinationBindingIDDomainV1   = "windshare/destination-authority-id/v1"
 )
 
 var (
-	ErrInvalidRootBinding            = errors.New("osfs: output root binding is invalid")
-	ErrInvalidDestinationAuthorityID = errors.New("osfs: destination authority identity is invalid")
+	ErrInvalidRootBinding          = errors.New("osfs: output root binding is invalid")
+	ErrInvalidDestinationBindingID = errors.New("osfs: destination binding identity is invalid")
 )
 
 type CertificationID = checkpointmodel.CertificationID
@@ -88,70 +88,72 @@ func (binding OutputRootBinding) IsZero() bool {
 	return binding.certification == "" && binding.digest == ([OutputRootBindingBytes]byte{})
 }
 
-// DestinationAuthorityID identifies a retained destination binding. Recoverable
+// DestinationBindingID identifies a retained destination binding. Recoverable
 // bindings derive it from restart-stable native objects; process bindings derive
 // it from a fresh nonce and cannot use it to reopen a previous operation.
-type DestinationAuthorityID [DestinationAuthorityIDBytes]byte
+// Domain separators belong to this encoding: renaming the type must not change
+// which retained binding the same native objects identify.
+type DestinationBindingID [DestinationBindingIDBytes]byte
 
-func NewDestinationAuthorityID(
+func NewDestinationBindingID(
 	rootIdentity []byte,
 	namespaceIdentity []byte,
-) (DestinationAuthorityID, error) {
+) (DestinationBindingID, error) {
 	if len(rootIdentity) == 0 || len(rootIdentity) > MaxRootIdentityClaimBytes ||
 		len(namespaceIdentity) == 0 || len(namespaceIdentity) > MaxNamespaceIdentityClaimBytes {
-		return DestinationAuthorityID{}, ErrInvalidDestinationAuthorityID
+		return DestinationBindingID{}, ErrInvalidDestinationBindingID
 	}
 	hash := sha256.New()
-	writeRootBindingClaim(hash, []byte(DestinationAuthorityIDDomainV1))
+	writeRootBindingClaim(hash, []byte(DestinationBindingIDDomainV1))
 	writeRootBindingClaim(hash, rootIdentity)
 	writeRootBindingClaim(hash, namespaceIdentity)
-	var id DestinationAuthorityID
+	var id DestinationBindingID
 	copy(id[:], hash.Sum(nil))
 	if id.IsZero() {
-		return DestinationAuthorityID{}, ErrInvalidDestinationAuthorityID
+		return DestinationBindingID{}, ErrInvalidDestinationBindingID
 	}
 	return id, nil
 }
 
-// NewProcessDestinationAuthorityID allocates an identity that cannot be recreated
+// NewProcessDestinationBindingID allocates an identity that cannot be recreated
 // from a path or stale private files. The retained root handle remains authority.
-func NewProcessDestinationAuthorityID(nonce []byte) (DestinationAuthorityID, error) {
-	if len(nonce) != DestinationAuthorityIDBytes {
-		return DestinationAuthorityID{}, ErrInvalidDestinationAuthorityID
+func NewProcessDestinationBindingID(nonce []byte) (DestinationBindingID, error) {
+	if len(nonce) != DestinationBindingIDBytes {
+		return DestinationBindingID{}, ErrInvalidDestinationBindingID
 	}
-	var zero [DestinationAuthorityIDBytes]byte
+	var zero [DestinationBindingIDBytes]byte
 	if string(nonce) == string(zero[:]) {
-		return DestinationAuthorityID{}, ErrInvalidDestinationAuthorityID
+		return DestinationBindingID{}, ErrInvalidDestinationBindingID
 	}
 	hash := sha256.New()
 	writeRootBindingClaim(hash, []byte("windshare/process-destination-authority-id/v1"))
 	writeRootBindingClaim(hash, nonce)
-	return DestinationAuthorityIDFromBytes(hash.Sum(nil))
+	return DestinationBindingIDFromBytes(hash.Sum(nil))
 }
 
-func DestinationAuthorityIDFromBytes(raw []byte) (DestinationAuthorityID, error) {
-	if len(raw) != DestinationAuthorityIDBytes {
-		return DestinationAuthorityID{}, ErrInvalidDestinationAuthorityID
+func DestinationBindingIDFromBytes(raw []byte) (DestinationBindingID, error) {
+	if len(raw) != DestinationBindingIDBytes {
+		return DestinationBindingID{}, ErrInvalidDestinationBindingID
 	}
-	var id DestinationAuthorityID
+	var id DestinationBindingID
 	copy(id[:], raw)
 	if id.IsZero() {
-		return DestinationAuthorityID{}, ErrInvalidDestinationAuthorityID
+		return DestinationBindingID{}, ErrInvalidDestinationBindingID
 	}
 	return id, nil
 }
 
-func (id DestinationAuthorityID) Bytes() []byte  { return append([]byte(nil), id[:]...) }
-func (id DestinationAuthorityID) String() string { return hex.EncodeToString(id[:]) }
-func (id DestinationAuthorityID) IsZero() bool   { return id == DestinationAuthorityID{} }
+func (id DestinationBindingID) Bytes() []byte  { return append([]byte(nil), id[:]...) }
+func (id DestinationBindingID) String() string { return hex.EncodeToString(id[:]) }
+func (id DestinationBindingID) IsZero() bool   { return id == DestinationBindingID{} }
 
-func (id DestinationAuthorityID) AuthorityRef() (receivecontract.AuthorityRef, error) {
+func (id DestinationBindingID) AuthorityRef() (receivecontract.AuthorityRef, error) {
 	if id.IsZero() {
-		return receivecontract.AuthorityRef{}, ErrInvalidDestinationAuthorityID
+		return receivecontract.AuthorityRef{}, ErrInvalidDestinationBindingID
 	}
 	authority, err := receivecontract.AuthorityRefFromBytes(id[:])
 	if err != nil {
-		return receivecontract.AuthorityRef{}, errors.Join(ErrInvalidDestinationAuthorityID, err)
+		return receivecontract.AuthorityRef{}, errors.Join(ErrInvalidDestinationBindingID, err)
 	}
 	return authority, nil
 }

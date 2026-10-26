@@ -56,12 +56,12 @@ func TestFallbackUsesUserFacingPathNames(t *testing.T) {
 }
 
 func TestFailedRelayRecoveryRemainsAWarningWhenRedirected(t *testing.T) {
-	authority, err := appobs.NewRelayAuthority(appobs.RelayWSS, "relay.example", 443)
+	origin, err := appobs.NewRelayOrigin(appobs.RelayWSS, "relay.example", 443)
 	if err != nil {
 		t.Fatal(err)
 	}
 	event, err := clievent.NewRelayRecovering(
-		clievent.CommandGet, authority, 2, appobs.RelayRecoveryFailed,
+		clievent.CommandGet, origin, 2, appobs.RelayRecoveryFailed,
 		mustFailure(t, appobs.FailureRelayTransport),
 	)
 	if err != nil {

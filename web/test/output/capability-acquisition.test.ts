@@ -26,12 +26,12 @@ describe('browser output capability adapters', () => {
       hardMaximumOutputBytes: null,
       legalProfile: 'fsa-tree',
       guarantees: {
-        nameAuthority: 'application-chosen',
+        nameChooser: 'application-chosen',
         replacement: 'coordinated-no-replace',
         delivery: 'managed-target',
         targetVisibility: 'committed-objects-visible',
         artifactAvailability: 'committed-objects-usable',
-        cleanupAuthority: 'no-whole-target-rollback',
+        cleanupContract: 'no-whole-target-rollback',
       },
     })
     expect(snapshot.offers.targets).toEqual([snapshot.fsaParent])

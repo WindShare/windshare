@@ -2,19 +2,19 @@ package clievent
 
 import appobs "github.com/windshare/windshare/engine/observation"
 
-func NewRelayConnected(command Command, authority appobs.RelayAuthority) (appobs.RelayConnected, error) {
-	value, err := appobs.NewRelayConnected(WorkflowForCommand(command), authority)
+func NewRelayConnected(command Command, origin appobs.RelayOrigin) (appobs.RelayConnected, error) {
+	value, err := appobs.NewRelayConnected(WorkflowForCommand(command), origin)
 	return value, err
 }
 
 func NewRelayRecovering(
 	command Command,
-	authority appobs.RelayAuthority,
+	origin appobs.RelayOrigin,
 	attempt uint32,
 	state appobs.RelayRecoveryState,
 	failure appobs.Failure,
 ) (appobs.RelayRecovering, error) {
-	value, err := appobs.NewRelayRecovering(WorkflowForCommand(command), authority, attempt, state, failure)
+	value, err := appobs.NewRelayRecovering(WorkflowForCommand(command), origin, attempt, state, failure)
 	return value, err
 }
 
@@ -38,8 +38,8 @@ func NewLaneAdopted(
 	return value, err
 }
 
-func NewRelayRecoveryObservation(command Command, authority appobs.RelayAuthority, attempt uint32, state appobs.RelayRecoveryState, failure appobs.Failure, details appobs.RelayRecoveryDetails) (appobs.RelayRecovering, error) {
-	value, err := appobs.NewRelayRecoveryObservation(WorkflowForCommand(command), authority, attempt, state, failure, details)
+func NewRelayRecoveryObservation(command Command, origin appobs.RelayOrigin, attempt uint32, state appobs.RelayRecoveryState, failure appobs.Failure, details appobs.RelayRecoveryDetails) (appobs.RelayRecovering, error) {
+	value, err := appobs.NewRelayRecoveryObservation(WorkflowForCommand(command), origin, attempt, state, failure, details)
 	return value, err
 }
 

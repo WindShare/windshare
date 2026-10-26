@@ -19,7 +19,7 @@ func TestOperationAuthorityQueriesRemainGenerationScoped(t *testing.T) {
 
 	table, admission, _ := operationAuthorityAdmission(t, OperationLimits{MaxActive: 2, MaxTracked: 2})
 	if maximum, ok := admission.Generation.MaximumContinuations(); ok || maximum != 0 {
-		t.Fatalf("generation without continuation authority = (%d, %t)", maximum, ok)
+		t.Fatalf("generation without continuation contract = (%d, %t)", maximum, ok)
 	}
 	admission.Generation.authority.continuations = &operationContinuationState{maximum: 7}
 	if maximum, ok := admission.Generation.MaximumContinuations(); !ok || maximum != 7 {

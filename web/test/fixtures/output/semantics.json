@@ -119,7 +119,7 @@
           "artifact": "zip-archive",
           "artifactAvailability": "verified-complete-only",
           "binding": "fsa-owned-file",
-          "cleanupAuthority": "ownership-proof-required",
+          "cleanupContract": "ownership-proof-required",
           "completion": "verified-complete-only",
           "guaranteeProfiles": [
             "fsa-owned-file"

@@ -1,70 +1,70 @@
 import {
   type GuaranteeSet,
-  type NameAuthority,
+  type NameChooser,
 } from '../model'
 
 export function nativeTreeGuarantees(): GuaranteeSet {
   return guaranteeSet({
     profile: 'native-tree',
-    nameAuthority: 'application-chosen',
+    nameChooser: 'application-chosen',
     replacement: 'atomic-no-replace',
     delivery: 'managed-target',
     targetVisibility: 'committed-objects-visible',
     artifactAvailability: 'committed-objects-usable',
-    cleanupAuthority: 'no-whole-target-rollback',
+    cleanupContract: 'no-whole-target-rollback',
   })
 }
 
 export function fsaTreeGuarantees(): GuaranteeSet {
   return guaranteeSet({
     profile: 'fsa-tree',
-    nameAuthority: 'application-chosen',
+    nameChooser: 'application-chosen',
     replacement: 'coordinated-no-replace',
     delivery: 'managed-target',
     targetVisibility: 'committed-objects-visible',
     artifactAvailability: 'committed-objects-usable',
-    cleanupAuthority: 'no-whole-target-rollback',
+    cleanupContract: 'no-whole-target-rollback',
   })
 }
 
 export function managedAtomicGuarantees(
-  nameAuthority: 'application-chosen' | 'user-chosen',
+  nameChooser: 'application-chosen' | 'user-chosen',
 ): GuaranteeSet {
-  if (nameAuthority !== 'application-chosen' && nameAuthority !== 'user-chosen') {
-    throw new TypeError('managed atomic name authority is invalid')
+  if (nameChooser !== 'application-chosen' && nameChooser !== 'user-chosen') {
+    throw new TypeError('managed atomic name chooser is invalid')
   }
   return guaranteeSet({
     profile: 'managed-atomic',
-    nameAuthority,
+    nameChooser,
     replacement: 'atomic-no-replace',
     delivery: 'managed-target',
     targetVisibility: 'hidden-until-verified-publication',
     artifactAvailability: 'verified-complete-only',
-    cleanupAuthority: 'rollback-to-absent-before-publication',
+    cleanupContract: 'rollback-to-absent-before-publication',
   })
 }
 
 export function browserHandoffGuarantees(): GuaranteeSet {
   return guaranteeSet({
     profile: 'browser-handoff',
-    nameAuthority: 'browser-chosen',
+    nameChooser: 'browser-chosen',
     replacement: 'unknown',
     delivery: 'browser-handoff',
     targetVisibility: 'unobservable',
     artifactAvailability: 'handoff-only',
-    cleanupAuthority: 'no-managed-cleanup',
+    cleanupContract: 'no-managed-cleanup',
   })
 }
 
 export function fsaOwnedFileGuarantees(): GuaranteeSet & Readonly<{ profile: 'fsa-owned-file' }> {
   return guaranteeSet({
     profile: 'fsa-owned-file',
-    nameAuthority: 'application-chosen',
+    nameChooser: 'application-chosen',
     replacement: 'coordinated-no-replace',
     delivery: 'managed-target',
     targetVisibility: 'operation-owned-incomplete-file-visible',
     artifactAvailability: 'verified-complete-only',
-    cleanupAuthority: 'ownership-proof-required',
+    cleanupContract: 'ownership-proof-required',
   }) as GuaranteeSet & Readonly<{ profile: 'fsa-owned-file' }>
 }
 
@@ -82,7 +82,7 @@ export function snapshotGuarantees(input: GuaranteeSet): GuaranteeSet {
       expected = fsaTreeGuarantees()
       break
     case 'managed-atomic':
-      expected = managedAtomicGuarantees(managedNameAuthority(input.nameAuthority))
+      expected = managedAtomicGuarantees(managedNameChooser(input.nameChooser))
       break
     case 'browser-handoff':
       expected = browserHandoffGuarantees()
@@ -99,19 +99,19 @@ export function snapshotGuarantees(input: GuaranteeSet): GuaranteeSet {
 
 export function sameGuarantees(left: GuaranteeSet, right: GuaranteeSet): boolean {
   return left.profile === right.profile &&
-    left.nameAuthority === right.nameAuthority &&
+    left.nameChooser === right.nameChooser &&
     left.replacement === right.replacement &&
     left.delivery === right.delivery &&
     left.targetVisibility === right.targetVisibility &&
     left.artifactAvailability === right.artifactAvailability &&
-    left.cleanupAuthority === right.cleanupAuthority
+    left.cleanupContract === right.cleanupContract
 }
 
-export function managedNameAuthority(
-  value: NameAuthority,
+export function managedNameChooser(
+  value: NameChooser,
 ): 'application-chosen' | 'user-chosen' {
   if (value !== 'application-chosen' && value !== 'user-chosen') {
-    throw new TypeError('managed atomic name authority is invalid')
+    throw new TypeError('managed atomic name chooser is invalid')
   }
   return value
 }

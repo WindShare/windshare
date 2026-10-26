@@ -17,7 +17,7 @@ type defensiveContinuationClassifier struct {
 func (classifier defensiveContinuationClassifier) BeginOperationContinuation(
 	MessageKind,
 	[]byte,
-) (OperationContinuationAuthority, bool, error) {
+) (OperationContinuationContract, bool, error) {
 	return nil, false, nil
 }
 
@@ -29,20 +29,20 @@ func (classifier defensiveContinuationClassifier) ClassifyUnboundOperationContin
 }
 
 func TestOperationContinuationRejectsInvalidStateBeforeReplayAdmission(t *testing.T) {
-	if _, err := newOperationContinuationState(nil); !errors.Is(err, ErrContinuationAuthority) {
-		t.Fatalf("nil continuation authority error = %v", err)
+	if _, err := newOperationContinuationState(nil); !errors.Is(err, ErrContinuationContract) {
+		t.Fatalf("nil continuation contract error = %v", err)
 	}
-	if _, err := newOperationContinuationState(testContinuationAuthority{binding: 1}); !errors.Is(err, ErrContinuationAuthority) {
+	if _, err := newOperationContinuationState(testContinuationContract{binding: 1}); !errors.Is(err, ErrContinuationContract) {
 		t.Fatalf("zero continuation limit error = %v", err)
 	}
 
 	var nilState *operationContinuationState
 	if _, tracked, err := nilState.classify(DirectionReceiverToSender, Message{}); tracked ||
-		!errors.Is(err, ErrContinuationAuthority) {
+		!errors.Is(err, ErrContinuationContract) {
 		t.Fatalf("nil continuation state classification = tracked %t, err %v", tracked, err)
 	}
 
-	state, err := newOperationContinuationState(testContinuationAuthority{binding: 1, maximum: 1})
+	state, err := newOperationContinuationState(testContinuationContract{binding: 1, maximum: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestOperationContinuationSettlementCannotMutateForeignReplayState(t *testin
 	})
 
 	t.Run("foreign-overflow-record", func(t *testing.T) {
-		state, err := newOperationContinuationState(testContinuationAuthority{binding: 1, maximum: 1})
+		state, err := newOperationContinuationState(testContinuationContract{binding: 1, maximum: 1})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -90,7 +90,7 @@ func TestOperationContinuationSettlementCannotMutateForeignReplayState(t *testin
 	})
 
 	t.Run("overflow-rollback", func(t *testing.T) {
-		state, err := newOperationContinuationState(testContinuationAuthority{binding: 1, maximum: 1})
+		state, err := newOperationContinuationState(testContinuationContract{binding: 1, maximum: 1})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -113,7 +113,7 @@ func TestOperationContinuationSettlementCannotMutateForeignReplayState(t *testin
 	})
 
 	t.Run("foreign-bounded-record", func(t *testing.T) {
-		state, err := newOperationContinuationState(testContinuationAuthority{binding: 1, maximum: 1})
+		state, err := newOperationContinuationState(testContinuationContract{binding: 1, maximum: 1})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -142,7 +142,7 @@ func TestReplayContinuationAdmissionPreservesPendingAndOverflowSemantics(t *test
 	}
 	newFixture := func(t *testing.T, value string) fixture {
 		t.Helper()
-		state, err := newOperationContinuationState(testContinuationAuthority{binding: 23, maximum: 1})
+		state, err := newOperationContinuationState(testContinuationContract{binding: 23, maximum: 1})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -246,9 +246,9 @@ func TestReplayContinuationAdmissionPreservesPendingAndOverflowSemantics(t *test
 	})
 }
 
-func TestContinuationAuthorityFailuresRecordOnlyAuthenticatedSenderTraffic(t *testing.T) {
+func TestContinuationContractFailuresRecordOnlyAuthenticatedSenderTraffic(t *testing.T) {
 	t.Run("active", func(t *testing.T) {
-		state, err := newOperationContinuationState(testContinuationAuthority{binding: 31, maximum: 1})
+		state, err := newOperationContinuationState(testContinuationContract{binding: 31, maximum: 1})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -259,13 +259,13 @@ func TestContinuationAuthorityFailuresRecordOnlyAuthenticatedSenderTraffic(t *te
 		); reservation != nil || drop || !errors.Is(err, errTestContinuationBinding) {
 			t.Fatalf("active authority failure = reservation %v, drop %t, err %v", reservation, drop, err)
 		}
-		if authority.authenticatedViolation.code != AuthenticatedOperationViolationContinuationAuthority {
+		if authority.authenticatedViolation.code != AuthenticatedOperationViolationContinuationContract {
 			t.Fatalf("active authenticated violation = %+v", authority.authenticatedViolation)
 		}
 	})
 
 	t.Run("late", func(t *testing.T) {
-		state, err := newOperationContinuationState(testContinuationAuthority{binding: 33, maximum: 1})
+		state, err := newOperationContinuationState(testContinuationContract{binding: 33, maximum: 1})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -276,13 +276,13 @@ func TestContinuationAuthorityFailuresRecordOnlyAuthenticatedSenderTraffic(t *te
 		); !tracked || !errors.Is(err, errTestContinuationBinding) {
 			t.Fatalf("late authority failure = tracked %t, err %v", tracked, err)
 		}
-		if authority.authenticatedViolation.code != AuthenticatedOperationViolationContinuationAuthority {
+		if authority.authenticatedViolation.code != AuthenticatedOperationViolationContinuationContract {
 			t.Fatalf("late authenticated violation = %+v", authority.authenticatedViolation)
 		}
 	})
 
 	t.Run("active-overflow-pending", func(t *testing.T) {
-		state, err := newOperationContinuationState(testContinuationAuthority{binding: 35, maximum: 1})
+		state, err := newOperationContinuationState(testContinuationContract{binding: 35, maximum: 1})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -326,7 +326,7 @@ func TestUnboundLateContinuationRejectsUnauthenticatedOrConflictingScope(t *test
 		); !tracked || !errors.Is(err, errDefensiveContinuationClassification) {
 			t.Fatalf("classifier error = tracked %t, err %v", tracked, err)
 		}
-		if authority.authenticatedViolation.code != AuthenticatedOperationViolationContinuationAuthority {
+		if authority.authenticatedViolation.code != AuthenticatedOperationViolationContinuationContract {
 			t.Fatalf("classifier authenticated violation = %+v", authority.authenticatedViolation)
 		}
 	})
@@ -336,7 +336,7 @@ func TestUnboundLateContinuationRejectsUnauthenticatedOrConflictingScope(t *test
 		message := testContinuationCandidate(t, operationID, 42, "candidate")
 		if tracked, err := table.acceptUnboundLateContinuationLocked(
 			&operationAuthority{}, DirectionReceiverToSender, message,
-		); !tracked || !errors.Is(err, ErrContinuationAuthority) {
+		); !tracked || !errors.Is(err, ErrContinuationContract) {
 			t.Fatalf("zero scope = tracked %t, err %v", tracked, err)
 		}
 	})
@@ -352,7 +352,7 @@ func TestUnboundLateContinuationRejectsUnauthenticatedOrConflictingScope(t *test
 		); !tracked || !errors.Is(err, ErrConflictingContinuation) {
 			t.Fatalf("conflicting scope = tracked %t, err %v", tracked, err)
 		}
-		if authority.authenticatedViolation.code != AuthenticatedOperationViolationContinuationAuthority {
+		if authority.authenticatedViolation.code != AuthenticatedOperationViolationContinuationContract {
 			t.Fatalf("conflicting authenticated violation = %+v", authority.authenticatedViolation)
 		}
 	})

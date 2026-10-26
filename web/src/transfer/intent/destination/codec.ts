@@ -1,10 +1,10 @@
 import { concat, frame } from '../canonical'
 import {
   type ArtifactAvailability,
-  type CleanupAuthority,
+  type CleanupContract,
   type DestinationReservation,
   type GuaranteeSet,
-  type NameAuthority,
+  type NameChooser,
   type ReplacementGuarantee,
   type TargetVisibility,
 } from '../model'
@@ -12,12 +12,12 @@ import {
 export function canonicalGuarantees(value: GuaranteeSet): Uint8Array<ArrayBuffer> {
   return concat([
     frame(Uint8Array.of(guaranteeProfileByte(value.profile))),
-    frame(Uint8Array.of(nameAuthorityByte(value.nameAuthority))),
+    frame(Uint8Array.of(nameChooserByte(value.nameChooser))),
     frame(Uint8Array.of(replacementGuaranteeByte(value.replacement))),
     frame(Uint8Array.of(value.delivery === 'managed-target' ? 1 : 2)),
     frame(Uint8Array.of(targetVisibilityByte(value.targetVisibility))),
     frame(Uint8Array.of(artifactAvailabilityByte(value.artifactAvailability))),
-    frame(Uint8Array.of(cleanupAuthorityByte(value.cleanupAuthority))),
+    frame(Uint8Array.of(cleanupContractByte(value.cleanupContract))),
   ])
 }
 
@@ -37,7 +37,7 @@ export function authorityKindByte(value: DestinationReservation['authorityKind']
   }
 }
 
-function nameAuthorityByte(value: NameAuthority): number {
+function nameChooserByte(value: NameChooser): number {
   switch (value) {
     case 'application-chosen': return 1
     case 'user-chosen': return 2
@@ -81,7 +81,7 @@ function artifactAvailabilityByte(value: ArtifactAvailability): number {
   }
 }
 
-function cleanupAuthorityByte(value: CleanupAuthority): number {
+function cleanupContractByte(value: CleanupContract): number {
   switch (value) {
     case 'rollback-to-absent-before-publication': return 1
     case 'no-whole-target-rollback': return 2

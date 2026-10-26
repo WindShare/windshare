@@ -11,10 +11,10 @@ import (
 )
 
 func TestRecoveryAndAvailabilityPreserveLifecycleDecisionContext(t *testing.T) {
-	authority, _ := appobs.NewRelayAuthority(appobs.RelayWSS, "relay.example", 443)
+	origin, _ := appobs.NewRelayOrigin(appobs.RelayWSS, "relay.example", 443)
 	identity, _ := appobs.NewSharingInstanceID([]byte("share-instance-1"))
 	session, _ := appobs.NewProtocolSessionID([]byte("relay-session-01"))
-	event, err := appobs.NewRelayRecoveryObservation(appobs.WorkflowShare, authority, 8, appobs.RelayRecoveryWaiting, appobs.Failure{}, appobs.RelayRecoveryDetails{ShareInstance: identity, Generation: 7, Slow: true, Resume: true, NextDelay: 30 * time.Second, ProtocolSessionID: session})
+	event, err := appobs.NewRelayRecoveryObservation(appobs.WorkflowShare, origin, 8, appobs.RelayRecoveryWaiting, appobs.Failure{}, appobs.RelayRecoveryDetails{ShareInstance: identity, Generation: 7, Slow: true, Resume: true, NextDelay: 30 * time.Second, ProtocolSessionID: session})
 	if err != nil {
 		t.Fatal(err)
 	}

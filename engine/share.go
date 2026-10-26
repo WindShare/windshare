@@ -21,7 +21,7 @@ type ShareResult = share.Result
 type ShareReady struct {
 	Capability          link.Link
 	SelectedRootSummary liveshare.SelectedRootSummary
-	RelayAuthority      appobs.RelayAuthority
+	RelayOrigin         appobs.RelayOrigin
 }
 type ShareTask struct {
 	*Task[ShareResult]
@@ -68,11 +68,11 @@ func (current *ShareTask) Ready(ctx context.Context) (ShareReady, error) {
 	if err != nil {
 		return ShareReady{}, err
 	}
-	authority, err := eventproject.RelayAuthority(value.RelayEndpoint)
+	origin, err := eventproject.RelayOrigin(value.RelayEndpoint)
 	if err != nil {
 		return ShareReady{}, err
 	}
-	return ShareReady{Capability: value.Capability, SelectedRootSummary: value.SelectedRootSummary, RelayAuthority: authority}, nil
+	return ShareReady{Capability: value.Capability, SelectedRootSummary: value.SelectedRootSummary, RelayOrigin: origin}, nil
 }
 
 func (current *ShareTask) StopShare() { current.current.Stop(task.ShareStopped) }

@@ -2,8 +2,8 @@ package v2signal
 
 import "github.com/windshare/windshare/core/session/protocolsession"
 
-func (authority peerContinuationAuthority) PeerAttemptBinding() protocolsession.PeerAttemptBinding {
-	return protocolBinding(authority.binding)
+func (contract peerContinuationContract) PeerAttemptBinding() protocolsession.PeerAttemptBinding {
+	return protocolBinding(contract.binding)
 }
 
 func protocolBinding(binding Binding) protocolsession.PeerAttemptBinding {

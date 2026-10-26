@@ -54,12 +54,12 @@ func projectSessionCorrelation(
 	)
 }
 
-func projectRelayAuthority(authority appobs.RelayAuthority) (RelayAuthority, error) {
-	scheme, err := nameOf(authority.Scheme())
-	if err != nil || !authority.Valid() {
-		return RelayAuthority{}, errInvalidSchemaEvent
+func projectRelayOrigin(origin appobs.RelayOrigin) (RelayOrigin, error) {
+	scheme, err := nameOf(origin.Scheme())
+	if err != nil || !origin.Valid() {
+		return RelayOrigin{}, errInvalidSchemaEvent
 	}
-	return RelayAuthority{Scheme: scheme, Host: authority.Host(), Port: authority.Port()}, nil
+	return RelayOrigin{Scheme: scheme, Host: origin.Host(), Port: origin.Port()}, nil
 }
 
 func EncodeFailure(failure appobs.Failure) (Failure, error) {
@@ -152,11 +152,11 @@ func (enc *encoder) encodeSharingSubjectSelected(event appobs.SharingSubjectSele
 }
 
 func (enc *encoder) encodeRelayConnected(event appobs.RelayConnected) error {
-	authority, err := projectRelayAuthority(event.Authority())
+	origin, err := projectRelayOrigin(event.Origin())
 	if err != nil {
 		return err
 	}
-	enc.set("relay_connected", nil, RelayConnectedPayload{RelayAuthority: authority})
+	enc.set("relay_connected", nil, RelayConnectedPayload{RelayOrigin: origin})
 	return nil
 }
 
@@ -166,7 +166,7 @@ func (enc *encoder) encodeRelayAvailability(event appobs.RelayAvailability) erro
 }
 
 func (enc *encoder) encodeRelayRecovering(event appobs.RelayRecovering) error {
-	authority, err := projectRelayAuthority(event.Authority())
+	origin, err := projectRelayOrigin(event.Origin())
 	if err != nil {
 		return err
 	}
@@ -175,7 +175,7 @@ func (enc *encoder) encodeRelayRecovering(event appobs.RelayRecovering) error {
 		return err
 	}
 	payload := RelayRecoveringPayload{
-		RelayAuthority: authority, Attempt: event.Attempt(), State: state,
+		RelayOrigin: origin, Attempt: event.Attempt(), State: state,
 	}
 	if failure, ok := event.Failure(); ok {
 		projected, projectErr := EncodeFailure(failure)

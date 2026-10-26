@@ -37,7 +37,7 @@ export interface AuthorityAcquiredDecision {
   readonly name: 'receive.authority.acquired'
   readonly operation_id_present: false
   readonly authority_kind: 'fsa-container'
-  readonly name_authority: 'application-chosen'
+  readonly name_chooser: 'application-chosen'
   readonly replacement_guarantee: 'coordinated-no-replace'
   readonly delivery_mode: 'managed-target'
   readonly commit_visibility: 'prefix-visible'

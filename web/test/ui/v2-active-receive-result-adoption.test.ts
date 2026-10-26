@@ -339,8 +339,8 @@ async function preparedOutput(): Promise<Readonly<{
     sourcePath: 'report.txt',
     suggestedName: offered.suggestedName ?? 'report.txt',
   })
-  const nameAuthority = offered.route.target.guarantees.nameAuthority
-  if (nameAuthority === 'browser-chosen') {
+  const nameChooser = offered.route.target.guarantees.nameChooser
+  if (nameChooser === 'browser-chosen') {
     throw new Error('managed result-adoption fixture requires an application-owned name')
   }
   const reservation = await createManagedAtomicReservation({
@@ -348,7 +348,7 @@ async function preparedOutput(): Promise<Readonly<{
     reservationId: identity(11),
     artifact,
     authorityRef: identity(12, 32),
-    nameAuthority,
+    nameChooser,
     requestedName: offered.suggestedName ?? 'report.txt',
     reservedName: offered.suggestedName ?? 'report.txt',
     collisionIndex: 0,

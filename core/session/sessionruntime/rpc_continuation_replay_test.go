@@ -494,7 +494,7 @@ type continuationReplayClassifier struct{}
 func (continuationReplayClassifier) BeginOperationContinuation(
 	kind protocolsession.MessageKind,
 	body []byte,
-) (protocolsession.OperationContinuationAuthority, bool, error) {
+) (protocolsession.OperationContinuationContract, bool, error) {
 	if kind != protocolsession.MessagePeerOffer {
 		return nil, false, nil
 	}

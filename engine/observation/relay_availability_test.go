@@ -29,8 +29,8 @@ func TestRelayAvailabilityAndRecoveryContracts(t *testing.T) {
 			t.Fatalf("invalid availability accepted: %+v", args)
 		}
 	}
-	authority, _ := NewRelayAuthority(RelayWSS, "relay.example", 443)
-	event, err := NewRelayRecoveryObservation(WorkflowShare, authority, 2, RelayRecoveryWaiting, Failure{}, RelayRecoveryDetails{Generation: 3, Slow: true, NextDelay: time.Second})
+	origin, _ := NewRelayOrigin(RelayWSS, "relay.example", 443)
+	event, err := NewRelayRecoveryObservation(WorkflowShare, origin, 2, RelayRecoveryWaiting, Failure{}, RelayRecoveryDetails{Generation: 3, Slow: true, NextDelay: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,10 +38,10 @@ func TestRelayAvailabilityAndRecoveryContracts(t *testing.T) {
 	if !ok || !details.Slow || details.Generation != 3 || event.Validate() != nil {
 		t.Fatal("recovery decision context lost")
 	}
-	if _, err := NewRelayRecoveryObservation(WorkflowShare, authority, 0, RelayRecoveryWaiting, Failure{}, RelayRecoveryDetails{}); err == nil {
+	if _, err := NewRelayRecoveryObservation(WorkflowShare, origin, 0, RelayRecoveryWaiting, Failure{}, RelayRecoveryDetails{}); err == nil {
 		t.Fatal("invalid attempt accepted")
 	}
-	if _, err := NewRelayRecoveryObservation(WorkflowShare, authority, 1, RelayRecoveryWaiting, Failure{}, RelayRecoveryDetails{NextDelay: -time.Second}); err == nil {
+	if _, err := NewRelayRecoveryObservation(WorkflowShare, origin, 1, RelayRecoveryWaiting, Failure{}, RelayRecoveryDetails{NextDelay: -time.Second}); err == nil {
 		t.Fatal("negative wait accepted")
 	}
 }

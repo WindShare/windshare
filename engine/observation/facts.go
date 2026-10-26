@@ -27,20 +27,21 @@ func (scheme RelayScheme) Name() (string, bool) {
 	}
 }
 
-type RelayAuthority struct {
+// Origins omit routes and credentials so observations cannot become dial endpoints.
+type RelayOrigin struct {
 	scheme RelayScheme
 	host   string
 	port   uint16
 }
 
-func NewRelayAuthority(scheme RelayScheme, host string, port uint16) (RelayAuthority, error) {
+func NewRelayOrigin(scheme RelayScheme, host string, port uint16) (RelayOrigin, error) {
 	if _, ok := scheme.Name(); !ok || host == "" || port == 0 || !utf8.ValidString(host) ||
 		host != strings.ToLower(host) || strings.ContainsAny(host, "/?#@[]") {
-		return RelayAuthority{}, ErrInvalidFact
+		return RelayOrigin{}, ErrInvalidFact
 	}
 	for _, character := range host {
 		if character <= 0x20 || character == 0x7f {
-			return RelayAuthority{}, ErrInvalidFact
+			return RelayOrigin{}, ErrInvalidFact
 		}
 	}
 	// The domain normalizer permits ASCII DNS names and canonical IP literals.
@@ -49,26 +50,26 @@ func NewRelayAuthority(scheme RelayScheme, host string, port uint16) (RelayAutho
 	if ip := net.ParseIP(host); ip == nil {
 		for label := range strings.SplitSeq(strings.TrimSuffix(host, "."), ".") {
 			if label == "" {
-				return RelayAuthority{}, ErrInvalidFact
+				return RelayOrigin{}, ErrInvalidFact
 			}
 			for _, character := range label {
 				if character != '-' && (character < 'a' || character > 'z') && (character < '0' || character > '9') {
-					return RelayAuthority{}, ErrInvalidFact
+					return RelayOrigin{}, ErrInvalidFact
 				}
 			}
 		}
 	}
-	return RelayAuthority{scheme: scheme, host: host, port: port}, nil
+	return RelayOrigin{scheme: scheme, host: host, port: port}, nil
 }
 
-func (authority RelayAuthority) Scheme() RelayScheme { return authority.scheme }
+func (origin RelayOrigin) Scheme() RelayScheme { return origin.scheme }
 
-func (authority RelayAuthority) Host() string { return authority.host }
+func (origin RelayOrigin) Host() string { return origin.host }
 
-func (authority RelayAuthority) Port() uint16 { return authority.port }
+func (origin RelayOrigin) Port() uint16 { return origin.port }
 
-func (authority RelayAuthority) Valid() bool {
-	_, err := NewRelayAuthority(authority.scheme, authority.host, authority.port)
+func (origin RelayOrigin) Valid() bool {
+	_, err := NewRelayOrigin(origin.scheme, origin.host, origin.port)
 	return err == nil
 }
 

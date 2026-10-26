@@ -29,14 +29,14 @@ var (
 // Binding keeps display location separate from native authority. The path helps
 // users locate output but cannot be used to authorize reopening or mutation.
 type Binding struct {
-	id           outputcap.DestinationAuthorityID
+	id           outputcap.DestinationBindingID
 	authorityRef receivecontract.AuthorityRef
 	capabilities outputcap.DestinationCapabilities
 	displayPath  string
 }
 
 func NewBinding(
-	id outputcap.DestinationAuthorityID,
+	id outputcap.DestinationBindingID,
 	capabilities outputcap.DestinationCapabilities,
 	displayPath string,
 ) (Binding, error) {
@@ -54,7 +54,7 @@ func NewBinding(
 	}, nil
 }
 
-func (binding Binding) ID() outputcap.DestinationAuthorityID            { return binding.id }
+func (binding Binding) ID() outputcap.DestinationBindingID              { return binding.id }
 func (binding Binding) AuthorityRef() receivecontract.AuthorityRef      { return binding.authorityRef }
 func (binding Binding) Capabilities() outputcap.DestinationCapabilities { return binding.capabilities }
 func (binding Binding) ExecutionMode() (outputcap.ExecutionMode, error) {
@@ -466,7 +466,7 @@ func bindIdentityClaims(
 func validateIdentityClaims(rootClaim, controlClaim []byte) ([]byte, []byte, error) {
 	if len(rootClaim) == 0 || len(rootClaim) > outputcap.MaxRootIdentityClaimBytes ||
 		len(controlClaim) == 0 || len(controlClaim) > outputcap.MaxNamespaceIdentityClaimBytes {
-		return nil, nil, outputcap.ErrInvalidDestinationAuthorityID
+		return nil, nil, outputcap.ErrInvalidDestinationBindingID
 	}
 	return rootClaim, controlClaim, nil
 }
@@ -505,15 +505,15 @@ func closeCloser(closer io.Closer) error {
 	return closer.Close()
 }
 
-func processDestinationID(random io.Reader) (outputcap.DestinationAuthorityID, error) {
+func processDestinationBindingID(random io.Reader) (outputcap.DestinationBindingID, error) {
 	if random == nil {
 		random = rand.Reader
 	}
-	var nonce [outputcap.DestinationAuthorityIDBytes]byte
+	var nonce [outputcap.DestinationBindingIDBytes]byte
 	if _, err := io.ReadFull(random, nonce[:]); err != nil {
-		return outputcap.DestinationAuthorityID{}, err
+		return outputcap.DestinationBindingID{}, err
 	}
-	return outputcap.NewProcessDestinationAuthorityID(nonce[:])
+	return outputcap.NewProcessDestinationBindingID(nonce[:])
 }
 
 func bindProcessDestination(
@@ -525,7 +525,7 @@ func bindProcessDestination(
 	if err := validateNativeMethodSets(root, nil, capabilities); err != nil {
 		return nil, err
 	}
-	id, err := processDestinationID(config.ProcessNonceSource)
+	id, err := processDestinationBindingID(config.ProcessNonceSource)
 	if err != nil {
 		return nil, err
 	}
@@ -541,17 +541,17 @@ func bindDestinationIdentity(
 	capabilities outputcap.DestinationCapabilities,
 	root outputcap.Directory,
 	control outputcap.Directory,
-) (outputcap.DestinationAuthorityID, error) {
+) (outputcap.DestinationBindingID, error) {
 	if !capabilities.OperationRecovery().Supported() {
 		// Cleanup proves its own bounded private namespace. A missing operation
 		// identity must not prevent that independent cleanup lifecycle from working.
-		return processDestinationID(config.ProcessNonceSource)
+		return processDestinationBindingID(config.ProcessNonceSource)
 	}
 	rootClaim, controlClaim, err := bindIdentityClaims(root, control)
 	if err != nil {
-		return outputcap.DestinationAuthorityID{}, err
+		return outputcap.DestinationBindingID{}, err
 	}
-	return outputcap.NewDestinationAuthorityID(rootClaim, controlClaim)
+	return outputcap.NewDestinationBindingID(rootClaim, controlClaim)
 }
 
 // A root witness transfers to BoundDestination only after its placement guard

@@ -232,7 +232,7 @@ export async function receiveIntentFixture(input: {
         reservationId: createDestinationReservationID(),
         artifact,
         authorityRef: digestIdentity(42),
-        nameAuthority: 'application-chosen',
+        nameChooser: 'application-chosen',
         requestedName,
         reservedName: requestedName,
         collisionIndex: 0,

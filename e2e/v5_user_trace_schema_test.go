@@ -105,7 +105,7 @@ func v5TraceObjectField(name string, object *v5TraceObjectSchema, optional bool)
 }
 
 func buildV5TracePayloadSchemas() map[string]*v5TraceObjectSchema {
-	relayAuthority := v5TraceSchema(
+	relayOrigin := v5TraceSchema(
 		v5TraceFields(v5TraceString, "scheme", "host"),
 		v5TraceFields(v5TraceInteger, "port"),
 	)
@@ -160,13 +160,13 @@ func buildV5TracePayloadSchemas() map[string]*v5TraceObjectSchema {
 			v5TraceFields(v5TraceDecimal, "selected_items"),
 			v5TraceOptionalFields(v5TraceDecimal, "file_bytes"),
 		),
-		"relay_connected": v5TraceSchema(v5TraceObjectField("relay_authority", relayAuthority, false)),
+		"relay_connected": v5TraceSchema(v5TraceObjectField("relay_origin", relayOrigin, false)),
 		"relay_availability": v5TraceSchema(
 			v5TraceFields(v5TraceInteger, "available", "total", "terminal"),
 			v5TraceFields(v5TraceBool, "ever_ready"),
 		),
 		"relay_recovering": v5TraceSchema(
-			v5TraceObjectField("relay_authority", relayAuthority, false),
+			v5TraceObjectField("relay_origin", relayOrigin, false),
 			v5TraceFields(v5TraceInteger, "attempt"),
 			v5TraceFields(v5TraceString, "state"),
 			v5TraceObjectField("failure", failure, true),

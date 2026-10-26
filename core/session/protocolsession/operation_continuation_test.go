@@ -32,7 +32,7 @@ func (classifier testContinuationClassifier) ClassifyUnboundOperationContinuatio
 func (classifier testContinuationClassifier) BeginOperationContinuation(
 	requestKind MessageKind,
 	canonicalRequestBody []byte,
-) (OperationContinuationAuthority, bool, error) {
+) (OperationContinuationContract, bool, error) {
 	if requestKind != MessagePeerOffer {
 		return nil, false, nil
 	}
@@ -40,15 +40,15 @@ func (classifier testContinuationClassifier) BeginOperationContinuation(
 	if err != nil {
 		return nil, true, err
 	}
-	return testContinuationAuthority{binding: binding, maximum: classifier.maximum}, true, nil
+	return testContinuationContract{binding: binding, maximum: classifier.maximum}, true, nil
 }
 
-type testContinuationAuthority struct {
+type testContinuationContract struct {
 	binding byte
 	maximum int
 }
 
-func (authority testContinuationAuthority) ClassifyOperationContinuation(
+func (contract testContinuationContract) ClassifyOperationContinuation(
 	kind MessageKind,
 	canonicalBody []byte,
 ) ([sha256.Size]byte, bool, error) {
@@ -59,16 +59,16 @@ func (authority testContinuationAuthority) ClassifyOperationContinuation(
 	if err != nil {
 		return [sha256.Size]byte{}, true, err
 	}
-	if binding != authority.binding {
+	if binding != contract.binding {
 		return [sha256.Size]byte{}, true, errTestContinuationBinding
 	}
 	return sha256.Sum256(canonicalBody), true, nil
 }
 
-func (authority testContinuationAuthority) MaximumContinuations() int { return authority.maximum }
+func (contract testContinuationContract) MaximumContinuations() int { return contract.maximum }
 
-func (authority testContinuationAuthority) OperationContinuationScope() OperationContinuationScope {
-	return testContinuationScope(authority.binding)
+func (contract testContinuationContract) OperationContinuationScope() OperationContinuationScope {
+	return testContinuationScope(contract.binding)
 }
 
 func testContinuationScope(binding byte) OperationContinuationScope {

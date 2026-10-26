@@ -121,7 +121,7 @@ describe('FSA namespace and persisted parent authority', () => {
       delivery: 'managed-target',
       targetVisibility: 'committed-objects-visible',
       artifactAvailability: 'committed-objects-usable',
-      cleanupAuthority: 'no-whole-target-rollback',
+      cleanupContract: 'no-whole-target-rollback',
     })
     expect(repository.transitions).toHaveLength(1)
     expect(repository.transitions[0]).toMatchObject({ operationId: intent.operationId })

@@ -102,7 +102,7 @@ func TestVerboseProtocolWarningUsesOutcomeInsteadOfCancellationCause(t *testing.
 
 func rendererEvents(t *testing.T) []visibilityExpectation {
 	t.Helper()
-	authority, err := appobs.NewRelayAuthority(appobs.RelayWSS, "relay.example", 443)
+	origin, err := appobs.NewRelayOrigin(appobs.RelayWSS, "relay.example", 443)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,12 +114,12 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 	if err != nil {
 		t.Fatal(err)
 	}
-	relayConnected, err := clievent.NewRelayConnected(clievent.CommandShare, authority)
+	relayConnected, err := clievent.NewRelayConnected(clievent.CommandShare, origin)
 	if err != nil {
 		t.Fatal(err)
 	}
 	relayRecovering, err := clievent.NewRelayRecovering(
-		clievent.CommandGet, authority, 1, appobs.RelayRecoveryStarted, appobs.Failure{},
+		clievent.CommandGet, origin, 1, appobs.RelayRecoveryStarted, appobs.Failure{},
 	)
 	if err != nil {
 		t.Fatal(err)

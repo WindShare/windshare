@@ -10,7 +10,7 @@ import (
 )
 
 func TestBindingSeparatesDisplayPathFromDestinationAuthority(t *testing.T) {
-	id, err := outputcap.DestinationAuthorityIDFromBytes(bytes.Repeat([]byte{0x31}, 32))
+	id, err := outputcap.DestinationBindingIDFromBytes(bytes.Repeat([]byte{0x31}, 32))
 	if err != nil {
 		t.Fatal(err)
 	}

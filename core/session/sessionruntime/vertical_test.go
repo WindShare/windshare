@@ -1051,7 +1051,7 @@ type verticalBoundPeerFactory struct {
 	rejected []byte
 }
 
-func (factory verticalBoundPeerFactory) BeginOperationContinuation(kind protocolsession.MessageKind, body []byte) (protocolsession.OperationContinuationAuthority, bool, error) {
+func (factory verticalBoundPeerFactory) BeginOperationContinuation(kind protocolsession.MessageKind, body []byte) (protocolsession.OperationContinuationContract, bool, error) {
 	if kind != protocolsession.MessagePeerOffer || !bytes.Equal(body, factory.rejected) {
 		return nil, false, nil
 	}
@@ -1059,7 +1059,7 @@ func (factory verticalBoundPeerFactory) BeginOperationContinuation(kind protocol
 }
 
 type verticalBoundPeerAuthority struct {
-	testReceiverPeerContinuationAuthority
+	testReceiverPeerContinuationContract
 }
 
 func (verticalBoundPeerAuthority) PeerAttemptBinding() protocolsession.PeerAttemptBinding {

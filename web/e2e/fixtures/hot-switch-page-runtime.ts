@@ -269,7 +269,7 @@ async function bindDirectAtomicOperation(
     reservationId: modules.intent.createDestinationReservationID(),
     artifact: action.artifact,
     authorityRef: randomAuthorityReference(),
-    nameAuthority: 'application-chosen',
+    nameChooser: 'application-chosen',
     requestedName: suggestedName,
     reservedName: suggestedName,
     collisionIndex: 0,

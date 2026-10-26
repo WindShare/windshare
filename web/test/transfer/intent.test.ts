@@ -162,7 +162,7 @@ describe('ReceiveIntent canonical authority', () => {
       reservationId,
       artifact: original,
       authorityRef,
-      nameAuthority: 'user-chosen',
+      nameChooser: 'user-chosen',
       requestedName: 'report.txt',
       reservedName: 'report.txt',
       collisionIndex: 0,
@@ -243,12 +243,12 @@ describe('ReceiveIntent canonical authority', () => {
     expect(receiveContract.COLLISION_SUFFIX_HEX_CHARS).toBe(10)
     expect(nativeTreeGuarantees()).toEqual({
       profile: 'native-tree',
-      nameAuthority: 'application-chosen',
+      nameChooser: 'application-chosen',
       replacement: 'atomic-no-replace',
       delivery: 'managed-target',
       targetVisibility: 'committed-objects-visible',
       artifactAvailability: 'committed-objects-usable',
-      cleanupAuthority: 'no-whole-target-rollback',
+      cleanupContract: 'no-whole-target-rollback',
     })
     expect(fsaTreeGuarantees().replacement).toBe('coordinated-no-replace')
     expect(managedAtomicGuarantees('user-chosen').targetVisibility).toBe(
@@ -307,7 +307,7 @@ describe('ReceiveIntent canonical authority', () => {
       reservationId: identity(62),
       artifact,
       authorityRef: identity(63, 32),
-      nameAuthority: 'application-chosen',
+      nameChooser: 'application-chosen',
       requestedName: 'report.txt',
       reservedName: 'report.txt',
       collisionIndex: 0,
@@ -368,7 +368,7 @@ describe('ReceiveIntent canonical authority', () => {
       )],
       ['unsorted selection rules', swapNodeSelectionRules(directBytes)],
       ['zero operation identity', zeroDirectOperationIdentity(directBytes)],
-      ['wrong managed guarantee', mutateManagedGuaranteeNameAuthority(directBytes, 3)],
+      ['wrong managed guarantee', mutateManagedGuaranteeNameChooser(directBytes, 3)],
       ['artifact and plan mismatch', malformedReceiveIntentEnvelope(
         selectionSpec.canonicalBytes,
         otherArtifact.canonicalBytes,
@@ -465,7 +465,7 @@ describe('ReceiveIntent input integrity', () => {
       reservationId: identity(42),
       artifact,
       authorityRef: identity(43, 32),
-      nameAuthority: 'application-chosen',
+      nameChooser: 'application-chosen',
       requestedName: 'report.txt',
       reservedName: 'report.txt',
       collisionIndex: 0,
@@ -625,7 +625,7 @@ function zeroDirectOperationIdentity(value: Uint8Array): Uint8Array {
   return mutated
 }
 
-function mutateManagedGuaranteeNameAuthority(value: Uint8Array, byte: number): Uint8Array {
+function mutateManagedGuaranteeNameChooser(value: Uint8Array, byte: number): Uint8Array {
   const binding = planBinding(value)
   let offset = binding.payloadOffset +
     recordFieldsOffset(DESTINATION_RESERVATION_TEST_DOMAIN) + 1
@@ -634,8 +634,8 @@ function mutateManagedGuaranteeNameAuthority(value: Uint8Array, byte: number): U
   }
   const guarantees = locateFrame(value, offset)
   const profile = locateFrame(value, guarantees.payloadOffset)
-  const nameAuthority = locateFrame(value, profile.nextOffset)
-  return mutateByte(value, nameAuthority.payloadOffset, byte)
+  const nameChooser = locateFrame(value, profile.nextOffset)
+  return mutateByte(value, nameChooser.payloadOffset, byte)
 }
 
 function mutatePortableArtifactLimit(value: Uint8Array): Uint8Array {

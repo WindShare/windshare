@@ -109,13 +109,13 @@ func (a *App) publishEngineShare(ready engine.ShareReady, presentation shareLink
 	if err := publishShareCapability(a.Stdout, payload); err != nil {
 		return errors.Join(errShareCapabilityOutput, err)
 	}
-	authority := ready.RelayAuthority
-	observations.SetRelayAuthority(authority)
+	origin := ready.RelayOrigin
+	observations.SetRelayOrigin(origin)
 	subject, err := commandprojection.ProjectSharingSubject(ready.SelectedRootSummary)
 	if err != nil {
 		return err
 	}
-	connected, err := clievent.NewRelayConnected(clievent.CommandShare, authority)
+	connected, err := clievent.NewRelayConnected(clievent.CommandShare, origin)
 	if err != nil {
 		return err
 	}

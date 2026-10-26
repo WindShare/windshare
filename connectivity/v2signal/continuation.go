@@ -18,7 +18,7 @@ var ErrContinuationLimit = errors.New("v2 peer continuation limit is invalid")
 const peerContinuationScopeDomain = "windshare/v2 peer-continuation-scope\x00"
 
 // OperationContinuationClassifier is the transport-schema half of core's
-// generation authority. It decodes only canonical suite-02 signaling values;
+// generation contract. It decodes only canonical suite-02 signaling values;
 // replay ownership and lifecycle remain in protocolsession.
 type OperationContinuationClassifier struct {
 	MaximumCandidates int
@@ -44,7 +44,7 @@ func (classifier OperationContinuationClassifier) ClassifyUnboundOperationContin
 func (classifier OperationContinuationClassifier) BeginOperationContinuation(
 	requestKind protocolsession.MessageKind,
 	canonicalRequestBody []byte,
-) (protocolsession.OperationContinuationAuthority, bool, error) {
+) (protocolsession.OperationContinuationContract, bool, error) {
 	if requestKind != protocolsession.MessagePeerOffer {
 		return nil, false, nil
 	}
@@ -56,7 +56,7 @@ func (classifier OperationContinuationClassifier) BeginOperationContinuation(
 	if err != nil {
 		return nil, true, err
 	}
-	return peerContinuationAuthority{binding: offer.Binding, maximum: maximum}, true, nil
+	return peerContinuationContract{binding: offer.Binding, maximum: maximum}, true, nil
 }
 
 func (classifier OperationContinuationClassifier) maximumCandidates() (int, error) {
@@ -70,12 +70,12 @@ func (classifier OperationContinuationClassifier) maximumCandidates() (int, erro
 	return maximum, nil
 }
 
-type peerContinuationAuthority struct {
+type peerContinuationContract struct {
 	binding Binding
 	maximum int
 }
 
-func (authority peerContinuationAuthority) ClassifyOperationContinuation(
+func (contract peerContinuationContract) ClassifyOperationContinuation(
 	kind protocolsession.MessageKind,
 	canonicalBody []byte,
 ) ([sha256.Size]byte, bool, error) {
@@ -86,7 +86,7 @@ func (authority peerContinuationAuthority) ClassifyOperationContinuation(
 	if err != nil {
 		return [sha256.Size]byte{}, true, err
 	}
-	if err := authority.binding.RequireSame(candidate.Binding); err != nil {
+	if err := contract.binding.RequireSame(candidate.Binding); err != nil {
 		return [sha256.Size]byte{}, true, err
 	}
 	canonical, err := EncodeCandidate(candidate)
@@ -96,12 +96,12 @@ func (authority peerContinuationAuthority) ClassifyOperationContinuation(
 	return sha256.Sum256(canonical), true, nil
 }
 
-func (authority peerContinuationAuthority) MaximumContinuations() int {
-	return authority.maximum
+func (contract peerContinuationContract) MaximumContinuations() int {
+	return contract.maximum
 }
 
-func (authority peerContinuationAuthority) OperationContinuationScope() protocolsession.OperationContinuationScope {
-	return peerContinuationScope(authority.binding)
+func (contract peerContinuationContract) OperationContinuationScope() protocolsession.OperationContinuationScope {
+	return peerContinuationScope(contract.binding)
 }
 
 func peerContinuationScope(binding Binding) protocolsession.OperationContinuationScope {
@@ -118,4 +118,4 @@ func peerContinuationScope(binding Binding) protocolsession.OperationContinuatio
 }
 
 var _ protocolsession.OperationContinuationClassifier = OperationContinuationClassifier{}
-var _ protocolsession.OperationContinuationAuthority = peerContinuationAuthority{}
+var _ protocolsession.OperationContinuationContract = peerContinuationContract{}
