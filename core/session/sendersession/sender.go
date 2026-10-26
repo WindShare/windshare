@@ -13,6 +13,7 @@ import (
 	sessioncontract "github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
+	"github.com/windshare/windshare/core/session/internal/admissiongate"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -132,12 +133,10 @@ type Factory struct {
 	terminalTimeout      time.Duration
 	terminalObserver     *senderTerminalObservers
 	protocolObservations observationstream.Producer[sessionobs.ProtocolObservation]
-	admissionContext     context.Context
-	cancelAdmissions     context.CancelFunc
 
 	mu           sync.Mutex
 	stopping     bool
-	admissions   sync.WaitGroup
+	admissions   admissiongate.Gate
 	sessions     map[protocolsession.ProtocolSessionID]*Runtime
 	terminalDone chan struct{}
 	terminalErr  error
@@ -175,7 +174,6 @@ func NewFactory(config FactoryConfig) (*Factory, error) {
 			}
 		})
 	}
-	admissionContext, cancelAdmissions := context.WithCancel(context.Background())
 	return &Factory{
 		share: config.ShareInstance, authKey: append([]byte(nil), config.SessionAuthKey...),
 		privateKey: append(ed25519.PrivateKey(nil), config.SenderPrivateKey...),
@@ -188,8 +186,7 @@ func NewFactory(config FactoryConfig) (*Factory, error) {
 			config.SessionTerminalObserver,
 		),
 		protocolObservations: config.ProtocolObservations,
-		admissionContext:     admissionContext, cancelAdmissions: cancelAdmissions,
-		sessions: make(map[protocolsession.ProtocolSessionID]*Runtime), terminalDone: make(chan struct{}),
+		sessions:             make(map[protocolsession.ProtocolSessionID]*Runtime), terminalDone: make(chan struct{}),
 	}, nil
 }
 
@@ -264,29 +261,10 @@ func (factory *Factory) Accept(ctx context.Context, channel protocolsession.Fram
 func (factory *Factory) beginAdmission(
 	caller context.Context,
 ) (context.Context, func(), bool) {
-	if caller == nil {
+	if factory == nil {
 		return nil, nil, false
 	}
-	factory.mu.Lock()
-	if factory.stopping {
-		factory.mu.Unlock()
-		return nil, nil, false
-	}
-	// Add and the terminal transition share this lock, so the terminal goroutine
-	// can never begin Wait concurrently with a newly admitted handshake.
-	factory.admissions.Add(1)
-	lifecycle := factory.admissionContext
-	factory.mu.Unlock()
-	ctx, cancel := context.WithCancel(caller)
-	stopLifecycle := context.AfterFunc(lifecycle, cancel)
-	var once sync.Once
-	return ctx, func() {
-		once.Do(func() {
-			stopLifecycle()
-			cancel()
-			factory.admissions.Done()
-		})
-	}, true
+	return factory.admissions.Begin(caller)
 }
 
 func (factory *Factory) acceptClient(

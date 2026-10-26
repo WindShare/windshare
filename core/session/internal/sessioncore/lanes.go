@@ -177,16 +177,19 @@ func (router laneInboundRouter) InboundDirection() protocolsession.Direction {
 type runtimeLanes struct {
 	runtime *Runtime
 
-	mu            sync.Mutex
-	active        map[uint32]*RuntimeLane
-	epochs        map[uint32]uint32
-	order         []uint32
-	next          uint64
-	started       bool
-	stopping      bool
-	wait          sync.WaitGroup
-	onDetach      func(sessioncontract.LaneIdentity)
-	queuedContent func(sessioncontract.LaneIdentity) time.Duration
+	mu     sync.Mutex
+	active map[uint32]*RuntimeLane
+	// Lane IDs are reusable logical slots, bounded by the issuing LaneRegistry.
+	// Retaining their epochs and order across physical detach rejects stale owners
+	// and keeps replacement channels selectable without appending duplicate slots.
+	latestEpochByID map[uint32]uint32
+	logicalOrder    []uint32
+	nextSlot        uint64
+	started         bool
+	stopping        bool
+	wait            sync.WaitGroup
+	onDetach        func(sessioncontract.LaneIdentity)
+	queuedContent   func(sessioncontract.LaneIdentity) time.Duration
 
 	terminalMu       sync.Mutex
 	terminalAdmitted bool
@@ -194,9 +197,9 @@ type runtimeLanes struct {
 
 func newRuntimeLanes(runtime *Runtime) *runtimeLanes {
 	return &runtimeLanes{
-		runtime: runtime,
-		active:  make(map[uint32]*RuntimeLane),
-		epochs:  make(map[uint32]uint32),
+		runtime:         runtime,
+		active:          make(map[uint32]*RuntimeLane),
+		latestEpochByID: make(map[uint32]uint32),
 	}
 }
 
@@ -234,7 +237,7 @@ func (lanes *runtimeLanes) addWithAdmission(
 	case lanes.active[identity.ID].usableLocked():
 		rejection = ErrLaneUnavailable
 	}
-	previous, seen := lanes.epochs[identity.ID]
+	previous, seen := lanes.latestEpochByID[identity.ID]
 	if rejection == nil && seen && identity.Epoch <= previous {
 		rejection = ErrLaneStale
 	}
@@ -248,9 +251,9 @@ func (lanes *runtimeLanes) addWithAdmission(
 	}
 	lane.requests = requestlane.New(requestlane.InitialResponse)
 	lanes.active[identity.ID] = lane
-	lanes.epochs[identity.ID] = identity.Epoch
+	lanes.latestEpochByID[identity.ID] = identity.Epoch
 	if !seen {
-		lanes.order = append(lanes.order, identity.ID)
+		lanes.logicalOrder = append(lanes.logicalOrder, identity.ID)
 	}
 	if admit != nil {
 		if err := admit(lane); err != nil {
@@ -517,13 +520,13 @@ func (lanes *runtimeLanes) selectLaneLocked(
 		}
 		return lane.selected(), nil
 	}
-	if len(lanes.order) == 0 {
+	if len(lanes.logicalOrder) == 0 {
 		return selectedLane{}, ErrLaneUnavailable
 	}
-	for scanned := 0; scanned < len(lanes.order); scanned++ {
-		index := int(lanes.next % uint64(len(lanes.order)))
-		lanes.next++
-		lane := lanes.active[lanes.order[index]]
+	for scanned := 0; scanned < len(lanes.logicalOrder); scanned++ {
+		index := int(lanes.nextSlot % uint64(len(lanes.logicalOrder)))
+		lanes.nextSlot++
+		lane := lanes.active[lanes.logicalOrder[index]]
 		if lane.usableLocked() {
 			if _, blocked := excluded[lane.identity]; blocked {
 				continue
@@ -600,7 +603,7 @@ func (lanes *runtimeLanes) snapshot() []selectedLane {
 	lanes.mu.Lock()
 	defer lanes.mu.Unlock()
 	result := make([]selectedLane, 0, len(lanes.active))
-	for _, id := range lanes.order {
+	for _, id := range lanes.logicalOrder {
 		lane := lanes.active[id]
 		if lane.usableLocked() {
 			result = append(result, lane.selected())

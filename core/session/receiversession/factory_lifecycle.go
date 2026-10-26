@@ -3,28 +3,19 @@ package receiversession
 import (
 	"context"
 	"github.com/windshare/windshare/core/catalog"
-	"sync"
 )
 
 // BeginClose seals the admission boundary before returning. Existing runtimes
 // remain independent owners of their derived keys and resource leases.
 func (factory *Factory) BeginClose() {
-	if factory == nil {
+	if factory == nil || !factory.admissions.Seal() {
 		return
 	}
-	factory.mu.Lock()
-	if factory.closing {
-		factory.mu.Unlock()
-		return
-	}
-	factory.closing = true
-	factory.cancelAdmissions()
-	factory.mu.Unlock()
 	go factory.finishClose()
 }
 
 func (factory *Factory) finishClose() {
-	factory.admissions.Wait()
+	factory.admissions.Close()
 	factory.mu.Lock()
 	clear(factory.authKey)
 	factory.authKey = nil
@@ -36,8 +27,6 @@ func (factory *Factory) finishClose() {
 	factory.shareReassembly = nil
 	factory.plaintextProcess = nil
 	factory.random = nil
-	factory.admissionContext = nil
-	factory.cancelAdmissions = nil
 	factory.instances = nil
 	factory.catalogProgress = nil
 	factory.semantic = nil
@@ -65,26 +54,8 @@ func (factory *Factory) Close() {
 func (factory *Factory) beginAdmission(
 	caller context.Context,
 ) (context.Context, func(), bool) {
-	if caller == nil || factory == nil {
+	if factory == nil {
 		return nil, nil, false
 	}
-	factory.mu.Lock()
-	if factory.closing {
-		factory.mu.Unlock()
-		return nil, nil, false
-	}
-	// Add shares the close transition lock so Wait cannot race a late handshake.
-	factory.admissions.Add(1)
-	lifecycle := factory.admissionContext
-	factory.mu.Unlock()
-	ctx, cancel := context.WithCancel(caller)
-	stopLifecycle := context.AfterFunc(lifecycle, cancel)
-	var once sync.Once
-	return ctx, func() {
-		once.Do(func() {
-			stopLifecycle()
-			cancel()
-			factory.admissions.Done()
-		})
-	}, true
+	return factory.admissions.Begin(caller)
 }

@@ -348,7 +348,6 @@ func TestSenderFactoryStopJoinsForcedRuntimeCleanupBeforeSecretsAndConnectivity(
 		fixture.senderFactory.random != nil || fixture.senderFactory.laneIDs != nil ||
 		fixture.senderFactory.now != nil || fixture.senderFactory.terminalConnectivity != nil ||
 		fixture.senderFactory.terminalObserver != nil ||
-		fixture.senderFactory.admissionContext != nil || fixture.senderFactory.cancelAdmissions != nil ||
 		fixture.senderFactory.sessions != nil
 	fixture.senderFactory.mu.Unlock()
 	if retainedDependencies {

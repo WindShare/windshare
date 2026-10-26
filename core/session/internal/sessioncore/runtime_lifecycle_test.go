@@ -103,7 +103,7 @@ func TestUnstartedRuntimeRollsBackLaneAuthorityAndOwnedChannels(t *testing.T) {
 	if _, err := empty.selectLane(nil); !errors.Is(err, ErrLaneUnavailable) {
 		t.Fatalf("empty lane selection error = %v", err)
 	}
-	empty.order = []uint32{91}
+	empty.logicalOrder = []uint32{91}
 	if _, err := empty.selectLane(nil); !errors.Is(err, ErrLaneUnavailable) {
 		t.Fatalf("inactive lane-order error = %v", err)
 	}
