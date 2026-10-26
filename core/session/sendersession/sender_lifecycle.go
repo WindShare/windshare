@@ -130,14 +130,14 @@ func (runtime *Runtime) BeginStop(ctx context.Context, message string) error {
 		runtime.stopMu.Unlock()
 		return sessioncontract.ErrRuntimeClosed
 	}
-	claim := runtime.core.ClaimTermination(sessioncore.RuntimeTerminationGracefulStop)
+	claim := runtime.core.ClaimTermination(sessioncore.TerminationGracefulStop)
 	runtime.stopStarted = true
 	runtime.stopDone = make(chan struct{})
 	runtime.lanesRegistry.Stop()
 	runtime.stopMu.Unlock()
 	// Claiming before fanout makes graceful stop the immutable root even when a
 	// receipt failure or concurrent lane retirement follows.
-	runtime.core.PublishTermination(claim)
+	claim.Publish()
 	go runtime.runStop(ctx, normalized)
 	return nil
 }
@@ -220,11 +220,12 @@ func (runtime *Runtime) BeginClose() {
 		return
 	}
 	runtime.stopMu.Lock()
-	claim := runtime.core.ClaimTermination(sessioncore.RuntimeTerminationForcedClose)
+	claim := runtime.core.ClaimTermination(sessioncore.TerminationForcedClose)
 	runtime.closeStarted = true
 	runtime.stopMu.Unlock()
 	runtime.lanesRegistry.Stop()
-	runtime.core.CompleteTermination(claim, true)
+	runtime.core.CancelLifetime()
+	claim.Publish()
 }
 
 func (runtime *Runtime) WaitClosed() {

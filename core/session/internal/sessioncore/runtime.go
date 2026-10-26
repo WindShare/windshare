@@ -2,8 +2,6 @@ package sessioncore
 
 import (
 	"context"
-	"crypto/ed25519"
-	"errors"
 	"fmt"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/observationstream"
@@ -13,7 +11,6 @@ import (
 	"github.com/windshare/windshare/core/session/requestlane"
 	"io"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -29,28 +26,24 @@ func (reader *LockedReader) Read(destination []byte) (int, error) {
 }
 
 type Runtime struct {
-	responseSequence        atomic.Uint64
-	receiptObservations     observationstream.Producer[protocolsession.SendAttemptSettlement]
-	receiptObservationsDone chan struct{}
-	peerPathControls        sessionControlHandler
-	turnControls            sessionControlHandler
-	share                   catalog.ShareInstance
-	role                    protocolsession.Role
-	sessionID               protocolsession.ProtocolSessionID
-	initial                 sessioncontract.LaneIdentity
-	keys                    protocolsession.SessionKeys
-	random                  io.Reader
-	operations              *protocolsession.OperationTable
-	router                  *protocolsession.RoleRouter
-	lanes                   *runtimeLanes
-	routes                  *operationLaneRoutes
-	now                     func() time.Time
-	protocolObservations    observationstream.Producer[sessionobs.ProtocolObservation]
-	sessionTerminalObserver sessionobs.SenderSessionTerminalObserver
-	termination             runtimeTerminationArbiter
+	peerPathControls     sessionControlHandler
+	turnControls         sessionControlHandler
+	share                catalog.ShareInstance
+	role                 protocolsession.Role
+	sessionID            protocolsession.ProtocolSessionID
+	initial              sessioncontract.LaneIdentity
+	keys                 protocolsession.SessionKeys
+	random               io.Reader
+	operations           *protocolsession.OperationTable
+	router               *protocolsession.RoleRouter
+	lanes                *runtimeLanes
+	routes               *operationLaneRoutes
+	now                  func() time.Time
+	protocolObservations observationstream.Producer[sessionobs.ProtocolObservation]
+	terminationObserver  TerminationObserver
+	termination          runtimeTerminationArbiter
 
 	ctx             context.Context
-	cancel          context.CancelFunc
 	cancelLifecycle context.CancelFunc
 	done            chan struct{}
 	work            sync.WaitGroup
@@ -68,21 +61,21 @@ type Runtime struct {
 }
 
 type Config struct {
-	InitialRequestTiming    *requestlane.Lane
-	Share                   catalog.ShareInstance
-	Role                    protocolsession.Role
-	Keys                    protocolsession.SessionKeys
-	LaneID                  uint32
-	LaneEpoch               uint32
-	Channel                 protocolsession.FrameChannel
-	Random                  io.Reader
-	Authenticator           protocolsession.InboundMessageAuthenticator
-	Continuations           protocolsession.OperationContinuationClassifier
-	OperationLimits         protocolsession.OperationLimits
-	RouterLimits            protocolsession.RouterLimits
-	Now                     func() time.Time
-	ProtocolObservations    observationstream.Producer[sessionobs.ProtocolObservation]
-	SessionTerminalObserver sessionobs.SenderSessionTerminalObserver
+	InitialRequestTiming *requestlane.Lane
+	Share                catalog.ShareInstance
+	Role                 protocolsession.Role
+	Keys                 protocolsession.SessionKeys
+	LaneID               uint32
+	LaneEpoch            uint32
+	Channel              protocolsession.FrameChannel
+	Random               io.Reader
+	Authenticator        protocolsession.InboundMessageAuthenticator
+	Continuations        protocolsession.OperationContinuationClassifier
+	OperationLimits      protocolsession.OperationLimits
+	RouterLimits         protocolsession.RouterLimits
+	Now                  func() time.Time
+	ProtocolObservations observationstream.Producer[sessionobs.ProtocolObservation]
+	TerminationObserver  TerminationObserver
 }
 
 func New(config Config) (*Runtime, error) {
@@ -116,13 +109,13 @@ func New(config Config) (*Runtime, error) {
 		share: config.Share, role: config.Role, sessionID: config.Keys.ProtocolSessionID(),
 		initial: sessioncontract.LaneIdentity{ID: config.LaneID, Epoch: config.LaneEpoch}, keys: config.Keys,
 		random: config.Random, operations: operations, router: router,
-		routes:                  newOperationLaneRoutes(),
-		now:                     config.Now,
-		protocolObservations:    config.ProtocolObservations,
-		sessionTerminalObserver: config.SessionTerminalObserver,
-		ctx:                     ctx,
-		cancelLifecycle:         cancelLifecycle,
-		done:                    make(chan struct{}),
+		routes:               newOperationLaneRoutes(),
+		now:                  config.Now,
+		protocolObservations: config.ProtocolObservations,
+		terminationObserver:  config.TerminationObserver,
+		ctx:                  ctx,
+		cancelLifecycle:      cancelLifecycle,
+		done:                 make(chan struct{}),
 	}
 	for kind, handler := range map[protocolsession.MessageKind]*sessionControlHandler{
 		protocolsession.MessagePeerPathControl: &runtime.peerPathControls,
@@ -134,9 +127,6 @@ func New(config Config) (*Runtime, error) {
 			return nil, err
 		}
 	}
-	// Legacy package-local cancellation sites fail closed through the arbiter.
-	// Causal owners use the explicit trigger methods below.
-	runtime.cancel = func() { runtime.terminate(runtimeTerminationFailed) }
 	runtime.lanes = newRuntimeLanes(runtime)
 	if _, err := runtime.lanes.add(runtime.initial, config.Channel, config.Authenticator, true); err != nil {
 		cancelLifecycle()
@@ -146,7 +136,6 @@ func New(config Config) (*Runtime, error) {
 	if config.InitialRequestTiming != nil {
 		runtime.lanes.active[runtime.initial.ID].requests = config.InitialRequestTiming
 	}
-	runtime.startReceiptObservations()
 	return runtime, nil
 }
 
@@ -188,7 +177,7 @@ func (runtime *Runtime) start(additional ...Component) {
 			}
 			// A component has no independent normal terminal state. Even a cancellation
 			// error is unexpected while the shared context is live and must keep its cause.
-			runtime.terminateWithFailure(runtimeTerminationFailed, err, component.Source)
+			runtime.terminateWithFailure(TerminationFailed, err, component.Source)
 		}()
 	}
 	runtime.lanes.start()
@@ -208,7 +197,7 @@ func (runtime *Runtime) abortBeforeStart() {
 	if runtime == nil {
 		return
 	}
-	runtime.cancel()
+	runtime.terminate(TerminationFailed)
 	runtime.closeExternalAdmissions()
 	runtime.lanes.abort()
 	runtime.finish()
@@ -227,7 +216,6 @@ func (runtime *Runtime) finish() {
 		for _, finalize := range finalizers {
 			finalize()
 		}
-		runtime.finishReceiptObservations()
 		runtime.keys.Destroy()
 		close(runtime.done)
 	})
@@ -312,7 +300,7 @@ func (runtime *Runtime) close() {
 
 func (runtime *Runtime) beginClose() {
 	if runtime != nil {
-		runtime.terminate(RuntimeTerminationForcedClose)
+		runtime.terminate(TerminationForcedClose)
 	}
 }
 
@@ -359,112 +347,4 @@ func (runtime *Runtime) ProtocolSessionID() protocolsession.ProtocolSessionID {
 
 func (runtime *Runtime) LaneIdentity() (uint32, uint32) {
 	return runtime.initial.ID, runtime.initial.Epoch
-}
-
-func (runtime *Runtime) senderControlBase(lane sessioncontract.LaneIdentity) protocolsession.ControlBinding {
-	return protocolsession.ControlBinding{
-		ShareInstance: runtime.share, ProtocolSessionID: runtime.sessionID,
-		LaneID: lane.ID, LaneEpoch: lane.Epoch,
-		Direction: protocolsession.DirectionSenderToReceiver,
-	}
-}
-
-type Responses struct {
-	runtime    *Runtime
-	privateKey ed25519.PrivateKey
-	observer   sessionobs.SenderTerminalSendObserver
-}
-
-func (outbound Responses) sendControl(
-	ctx context.Context,
-	kind protocolsession.MessageKind,
-	operationID protocolsession.OperationID,
-	body []byte,
-) (protocolsession.ResponseSendResult, error) {
-	return outbound.executeResponse(ctx, kind, operationID, sessionobs.ProtocolErrorForResponse(kind, body), func(transaction *outboundTransaction) (outboundLaneAttempt, error) {
-		prepared, err := protocolsession.PrepareSenderControl(outbound.privateKey, outbound.runtime.senderControlBase(transaction.lane.identity), kind, &operationID, body)
-		if err != nil {
-			return nil, err
-		}
-		initial := transaction.lane.identity
-		return func(lane selectedLane, permit protocolsession.OutboundReplayPermit) (protocolsession.SendReceipt, error) {
-			control := prepared
-			if lane.identity != initial {
-				var prepareErr error
-				control, prepareErr = protocolsession.PrepareSenderControl(outbound.privateKey, outbound.runtime.senderControlBase(lane.identity), kind, &operationID, body)
-				if prepareErr != nil {
-					return protocolsession.SendReceipt{}, prepareErr
-				}
-			}
-			if !permit.IsZero() {
-				return lane.writer.TrySenderControlReplay(control, permit)
-			}
-			return lane.writer.TryAuthorizedSenderControl(control, transaction.authority)
-		}, nil
-	})
-}
-
-// Preparation establishes immutable message inputs before the first writer
-// attempt, so malformed input never becomes a fabricated receipt.
-type responsePreparation func(*outboundTransaction) (outboundLaneAttempt, error)
-
-func (outbound Responses) executeResponse(ctx context.Context, kind protocolsession.MessageKind, operationID protocolsession.OperationID, content sessionobs.ProtocolErrorContent, prepare responsePreparation) (protocolsession.ResponseSendResult, error) {
-	runtime := outbound.runtime
-	sequence := runtime.responseSequence.Add(1)
-	requestKind := protocolsession.MessageKind(0)
-	if route, err := outboundRoute(ctx, operationID); err == nil {
-		requestKind = route.requestKind
-	}
-	transaction, err := beginOutboundTransaction(runtime, ctx, operationID)
-	final := senderResponseFinal(kind)
-	if err != nil {
-		end := protocolsession.ResponseSendEndPreparationFailed
-		if errors.Is(err, ErrLaneUnavailable) {
-			end = protocolsession.ResponseSendEndRouteUnavailable
-		} else if errors.Is(err, sessioncontract.ErrOperationMissing) {
-			end = protocolsession.ResponseSendEndAuthorityUnavailable
-		}
-		result, _ := protocolsession.NewResponseSendNotStarted(end)
-		if final {
-			cleanupErr := runtime.abandonBoundOutboundOperation(ctx, operationID)
-			result = withOutboundCleanup(result, cleanupErr)
-			err = errors.Join(err, cleanupErr)
-		}
-		runtime.traceResponseResult(operationID, requestKind, kind, sequence, content, result)
-		return result, err
-	}
-	transaction.responseSequence = sequence
-	transaction.responseKind = kind
-	attempt, prepareErr := prepare(transaction)
-	var result protocolsession.ResponseSendResult
-	if prepareErr != nil {
-		result, _ = protocolsession.NewResponseSendNotStarted(protocolsession.ResponseSendEndPreparationFailed)
-		err = prepareErr
-	} else {
-		result, err = transaction.Run(ctx, attempt)
-	}
-	// Resource retirement is independent of physical evidence. A cleanup error
-	// cannot turn transport confirmation into proof that a peer owns no resource.
-	if final && err == nil && result.Evidence() == protocolsession.ResponseSendEvidenceTransportConfirmed {
-		runtime.routes.releaseRoute(operationID, transaction.route)
-		result = result.WithCleanup(protocolsession.SendCleanupRouteReleased)
-	} else if final || ctx.Err() != nil || runtime.ctx.Err() != nil {
-		cleanupErr := runtime.abandonOutboundOperation(operationID, transaction.route, transaction.generation)
-		result = withOutboundCleanup(result, cleanupErr)
-		err = errors.Join(err, cleanupErr)
-	}
-	transaction.Close()
-	runtime.traceResponseResult(operationID, transaction.route.requestKind, kind, sequence, content, result)
-	return result, err
-}
-
-func withOutboundCleanup(result protocolsession.ResponseSendResult, err error) protocolsession.ResponseSendResult {
-	if err != nil {
-		return result.WithCleanup(protocolsession.SendCleanupFailed)
-	}
-	return result.WithCleanup(protocolsession.SendCleanupOperationRetired)
-}
-
-func (outbound Responses) SendControl(ctx context.Context, kind protocolsession.MessageKind, operationID protocolsession.OperationID, body []byte) (protocolsession.ResponseSendResult, error) {
-	return outbound.sendControl(ctx, kind, operationID, body)
 }

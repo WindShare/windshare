@@ -14,7 +14,7 @@ import (
 
 type laneGrantHandler struct {
 	registry *protocolsession.LaneRegistry
-	outbound sessioncore.Responses
+	outbound *sessioncore.Responses
 	random   io.Reader
 	queue    chan laneGrantOperation
 	queueMu  sync.Mutex
@@ -28,7 +28,7 @@ type laneGrantOperation struct {
 
 func newLaneGrantHandler(
 	registry *protocolsession.LaneRegistry,
-	outbound sessioncore.Responses,
+	outbound *sessioncore.Responses,
 	random io.Reader,
 ) *laneGrantHandler {
 	return &laneGrantHandler{

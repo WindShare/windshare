@@ -2,7 +2,6 @@ package sessioncore
 
 import (
 	"context"
-	"crypto/ed25519"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/framechannel"
 	sessioncontract "github.com/windshare/windshare/core/session"
@@ -17,9 +16,6 @@ import (
 func NewLockedReader(reader io.Reader) *LockedReader { return &LockedReader{reader: reader} }
 func HandOff(channel protocolsession.FrameChannel, receive <-chan framechannel.Frame) *HandedOffChannel {
 	return &HandedOffChannel{FrameChannel: channel, receive: receive}
-}
-func NewResponses(runtime *Runtime, privateKey ed25519.PrivateKey, observer sessionobs.SenderTerminalSendObserver) Responses {
-	return Responses{runtime: runtime, privateKey: privateKey, observer: observer}
 }
 func (runtime *Runtime) ShareInstance() catalog.ShareInstance { return runtime.share }
 func (runtime *Runtime) Now() time.Time                       { return runtime.now() }
@@ -38,24 +34,17 @@ func (runtime *Runtime) FailProtocol(err error) {
 	_ = runtime.router.TerminateLocal()
 	runtime.terminateRuntimeFailed(err)
 }
-func (runtime *Runtime) FailOperationAuthority() error           { return runtime.failRPCOperationAuthority() }
-func (runtime *Runtime) BeginClose()                             { runtime.beginClose() }
-func (runtime *Runtime) WaitClosed()                             { runtime.waitClosed() }
-func (runtime *Runtime) Terminate(cause runtimeTerminationCause) { runtime.terminate(cause) }
-func (runtime *Runtime) ClaimTermination(cause runtimeTerminationCause) runtimeTerminationClaim {
+func (runtime *Runtime) FailOperationAuthority() error { return runtime.failRPCOperationAuthority() }
+func (runtime *Runtime) BeginClose()                   { runtime.beginClose() }
+func (runtime *Runtime) WaitClosed()                   { runtime.waitClosed() }
+func (runtime *Runtime) ClaimTermination(cause TerminationCause) TerminationClaim {
 	return runtime.claimTermination(cause)
-}
-func (runtime *Runtime) PublishTermination(claim runtimeTerminationClaim) {
-	runtime.publishTermination(claim)
-}
-func (runtime *Runtime) CompleteTermination(claim runtimeTerminationClaim, cancel bool) {
-	runtime.completeTermination(claim, cancel)
 }
 func (runtime *Runtime) CancelLifetime() { runtime.cancelContext() }
 func (runtime *Runtime) PathsExhausted() bool {
 	runtime.termination.mu.Lock()
 	defer runtime.termination.mu.Unlock()
-	return runtime.termination.claimed && runtime.termination.cause == RuntimeTerminationPathsExhausted
+	return runtime.termination.claimed && runtime.termination.cause == TerminationPathsExhausted
 }
 func (runtime *Runtime) HasUsableLanes() bool { return runtime.lanes.hasUsable() }
 func (runtime *Runtime) DetachLane(identity sessioncontract.LaneIdentity) bool {
@@ -109,7 +98,7 @@ func (runtime *Runtime) Observe(event sessionobs.ProtocolObservation) {
 	runtime.protocolObservations.TryPublish(event)
 }
 
-func (outbound Responses) SendTerminalAll(ctx context.Context, body []byte) error {
+func (outbound *Responses) SendTerminalAll(ctx context.Context, body []byte) error {
 	return outbound.sendTerminalAll(ctx, body)
 }
 
@@ -174,6 +163,6 @@ func (owner *TerminalOwner) Finish(runtime *Runtime, outcome OperationOutcome) {
 	owner.finish(runtime, outcome)
 }
 
-func (request laneAttachRequest) RequestedLaneID() uint32 { return request.requestedLaneID }
+func (request LaneAttachRequest) RequestedLaneID() uint32 { return request.requestedLaneID }
 
 func (runtime *Runtime) Close() { runtime.close() }

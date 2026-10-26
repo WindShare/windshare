@@ -327,8 +327,8 @@ func (factory *Factory) acceptClient(
 		),
 		Continuations:   factory.peers,
 		OperationLimits: factory.operationLimits, RouterLimits: factory.routerLimits, Now: factory.now,
-		ProtocolObservations:    factory.protocolObservations,
-		SessionTerminalObserver: factory.terminalObserver.sessionObserver(),
+		ProtocolObservations: factory.protocolObservations,
+		TerminationObserver:  factory.terminalObserver.sessionObserver(),
 	})
 	if err != nil {
 		keys.Destroy()
@@ -348,7 +348,10 @@ func (factory *Factory) acceptClient(
 		return nil, err
 	}
 	contentTransferred = true
-	outbound := sessioncore.NewResponses(wire, factory.privateKey, factory.terminalObserver.sendObserver())
+	outbound, err := newResponses(wire, factory.privateKey, factory.terminalObserver.sendObserver(), factory.protocolObservations)
+	if err != nil {
+		return nil, err
+	}
 	laneRegistry, err := protocolsession.NewLaneRegistry(protocolsession.LaneRegistryConfig{
 		ShareInstance: factory.share, ProtocolSessionID: sessionID,
 		ReceiverToSender: keys.ReceiverToSender(), SenderSigningKey: factory.privateKey,
@@ -405,7 +408,7 @@ func (factory *Factory) acceptClient(
 	factory.mu.Lock()
 	if factory.stopping {
 		factory.mu.Unlock()
-		wire.Terminate(sessioncore.RuntimeTerminationForcedClose)
+		wire.BeginClose()
 		return nil, sessioncontract.ErrRuntimeClosed
 	}
 	factory.sessions[sessionID] = sender
@@ -461,7 +464,7 @@ func (factory *Factory) completeSenderHandshake(
 type Runtime struct {
 	lifecycle      lifecycle
 	core           *sessioncore.Runtime
-	outbound       sessioncore.Responses
+	outbound       *sessioncore.Responses
 	lanesRegistry  *protocolsession.LaneRegistry
 	catalogHandler *catalogHandler
 	contentHandler *contentflow.SenderHandler

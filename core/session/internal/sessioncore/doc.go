@@ -1,2 +1,4 @@
-// Package sessioncore owns encrypted lanes, exact-generation request and response routing, and session lifetime. Role packages compose this kernel without sharing their business services.
+// Package sessioncore owns encrypted lanes, exact-generation operation routing,
+// and role-neutral session termination. Role packages supply control preparation
+// and own role-specific diagnostic workers without sharing business services.
 package sessioncore

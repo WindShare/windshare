@@ -11,7 +11,6 @@ import (
 	"github.com/windshare/windshare/core/framechannel"
 	sessioncontract "github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
-	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"testing"
 	"time"
@@ -203,15 +202,15 @@ func TestRuntimeComponentFailureCancelsPhysicalLaneBeforeFinish(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runtime, initialChannel := newUnstartedRuntime(t, protocolsession.RoleSender)
-			observed := make(chan sessionobs.SenderSessionTerminated, 1)
-			runtime.sessionTerminalObserver = sessionobs.SenderSessionTerminalObserverFunc(func(event sessionobs.SenderSessionTerminated) { observed <- event })
+			observed := make(chan Termination, 1)
+			runtime.terminationObserver = TerminationObserverFunc(func(event Termination) { observed <- event })
 			runtime.start(Component{RuntimeFailureSourcePeer, func(context.Context) error { return test.err }})
 			select {
 			case <-runtime.Done():
 			case <-time.After(time.Second):
 				t.Fatal("runtime did not finish after a component failure")
 			}
-			event := awaitSenderSessionTermination(t, observed)
+			event := awaitTermination(t, observed)
 			nodes := event.Failure.Nodes()
 			if !event.Failure.Present() || event.Failure.Source() != "peer" ||
 				(test.err == nil && len(nodes) != 0) ||

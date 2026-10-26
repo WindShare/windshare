@@ -43,6 +43,7 @@ type outboundLaneAttempt func(
 ) (protocolsession.SendReceipt, error)
 
 type outboundTransaction struct {
+	responses        *Responses
 	runtime          *Runtime
 	operationID      protocolsession.OperationID
 	route            *operationLaneRoute
@@ -55,10 +56,11 @@ type outboundTransaction struct {
 }
 
 func beginOutboundTransaction(
-	runtime *Runtime,
+	responses *Responses,
 	ctx context.Context,
 	operationID protocolsession.OperationID,
 ) (*outboundTransaction, error) {
+	runtime := responses.runtime
 	route, err := outboundRoute(ctx, operationID)
 	if err != nil {
 		return nil, err
@@ -84,7 +86,7 @@ func beginOutboundTransaction(
 		return nil, err
 	}
 	return &outboundTransaction{
-		runtime: runtime, operationID: operationID, route: route, lane: lane,
+		runtime: runtime, responses: responses, operationID: operationID, route: route, lane: lane,
 		authority: authority, generation: generation, lease: lease,
 	}, nil
 }
@@ -107,11 +109,11 @@ func (transaction *outboundTransaction) retainPendingAttempt(
 		receipt.ReleaseLeaseOnSettlement(transaction.lease)
 		transaction.lease = nil
 	}
-	if transaction.runtime.protocolOperationTracingEnabled() {
+	if !transaction.responses.settlements.IsZero() {
 		receipt.ObserveSettlement(protocolsession.SendAttemptCorrelation{
 			ProtocolSessionID: transaction.runtime.sessionID, OperationID: transaction.operationID,
 			RequestKind: transaction.route.requestKind, ResponseKind: transaction.responseKind, Identity: id,
-		}, transaction.runtime.receiptObservations)
+		}, transaction.responses.settlements)
 	}
 }
 
@@ -145,7 +147,7 @@ func (transaction *outboundTransaction) Run(
 	attempt outboundLaneAttempt,
 ) (protocolsession.ResponseSendResult, error) {
 	if transaction.responseSequence == 0 {
-		transaction.responseSequence = transaction.runtime.responseSequence.Add(1)
+		transaction.responseSequence = transaction.responses.sequence.Add(1)
 	}
 	excluded := make(map[sessioncontract.LaneIdentity]struct{}, protocolsession.DefaultMaxLogicalLanes)
 	var permit protocolsession.OutboundReplayPermit

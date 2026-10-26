@@ -13,7 +13,7 @@ import (
 
 type catalogHandler struct {
 	service  *catalogflow.AddressedSenderService
-	outbound sessioncore.Responses
+	outbound *sessioncore.Responses
 	queue    chan catalogOperation
 	workers  chan struct{}
 
@@ -42,7 +42,7 @@ func catalogKey(ctx context.Context, id protocolsession.OperationID) (catalogOpe
 	return catalogOperationKey{id: id, generation: generation}, true
 }
 
-func newCatalogHandler(service *catalogflow.AddressedSenderService, outbound sessioncore.Responses) *catalogHandler {
+func newCatalogHandler(service *catalogflow.AddressedSenderService, outbound *sessioncore.Responses) *catalogHandler {
 	return &catalogHandler{
 		service: service, outbound: outbound, queue: make(chan catalogOperation, 256),
 		workers: make(chan struct{}, catalogflow.MaxConcurrentDirectoryLoads),

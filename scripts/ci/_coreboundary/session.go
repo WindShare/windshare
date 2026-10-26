@@ -14,7 +14,8 @@ func sessionDependencyViolations(scope graphScope, importer string, imports []st
 	var forbidden []string
 	switch {
 	case inPathFamily(importer, kernel):
-		forbidden = []string{sender, receiver, session + "/receivercontinuation", coreImportPath + "/transfer", coreImportPath + "/liveshare"}
+		// Signing keys belong to the role owner; the kernel accepts preparation capability.
+		forbidden = []string{"crypto/ed25519", sender, receiver, session + "/receivercontinuation", coreImportPath + "/transfer", coreImportPath + "/liveshare"}
 	case inPathFamily(importer, sender):
 		forbidden = []string{receiver, session + "/receivercontinuation", coreImportPath + "/liveshare"}
 	case inPathFamily(importer, receiver):

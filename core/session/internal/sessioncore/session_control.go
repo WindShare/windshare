@@ -51,7 +51,7 @@ func (handler *sessionControlHandler) HandleMessage(ctx context.Context, message
 	return callback(ctx, bytes.Clone(body))
 }
 
-func (outbound Responses) SendSessionControl(ctx context.Context, kind protocolsession.MessageKind, body []byte) error {
+func (outbound *Responses) SendSessionControl(ctx context.Context, kind protocolsession.MessageKind, body []byte) error {
 	if outbound.runtime == nil || ctx == nil {
 		return sessioncontract.ErrRuntimeConfig
 	}
@@ -62,7 +62,7 @@ func (outbound Responses) SendSessionControl(ctx context.Context, kind protocols
 	if err != nil {
 		return err
 	}
-	prepared, err := protocolsession.PrepareSenderControl(outbound.privateKey, outbound.runtime.senderControlBase(lane.identity), kind, nil, body)
+	prepared, err := outbound.prepareControl(outbound.controlBinding(lane.identity), kind, nil, body)
 	if err != nil {
 		return err
 	}
