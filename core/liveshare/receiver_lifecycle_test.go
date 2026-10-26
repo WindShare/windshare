@@ -12,7 +12,8 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	framechannel "github.com/windshare/windshare/core/framechannel"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
@@ -77,7 +78,7 @@ func TestPreparedReceiverConcurrentCloseJoinsConnectAdmissionBeforeSecretTeardow
 	if _, err := receiver.Connect(context.Background(), receiverChannel, transferlanes.RouteRelay); !errors.Is(err, errReceiverClosed) {
 		t.Fatalf("facade Connect after Close error=%v", err)
 	}
-	if _, err := factory.Connect(context.Background(), receiverChannel, transferlanes.RouteRelay); !errors.Is(err, sessionruntime.ErrRuntimeClosed) {
+	if _, err := factory.Connect(context.Background(), receiverChannel, transferlanes.RouteRelay); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
 		t.Fatalf("factory Connect after facade Close error=%v", err)
 	}
 }

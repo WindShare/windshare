@@ -13,7 +13,9 @@ import (
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
@@ -287,11 +289,11 @@ func TestReceiverInitialPublicationRejectsConcurrentIdentityChange(t *testing.T)
 	}
 	// The candidate completed authentication before the competing descriptor
 	// arrived. Publication must still consult the share's current authority.
-	candidate := &sessionruntime.ReceiverRuntime{}
+	candidate := &receiversession.Runtime{}
 	if err := recovery.validateDescriptor([]byte{2}); !errors.Is(err, ErrReceiverShareChanged) {
 		t.Fatal(err)
 	}
-	var lane sessionruntime.LaneIdentity
+	var lane sessioncontract.LaneIdentity
 	if err := receiver.publishInitial(context.Background(), candidate, nil, nil, &lane); !errors.Is(err, ErrReceiverShareChanged) || receiver.current() != nil {
 		t.Fatal(err)
 	}

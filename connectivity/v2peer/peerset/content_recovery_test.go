@@ -13,19 +13,20 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/transfer/fault"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 type recoveringAttempt struct {
 	*fakeAttempt
-	identity sessionruntime.LaneIdentity
+	identity sessioncontract.LaneIdentity
 	retire   sync.Once
 	onClose  func()
 }
 
-func (attempt *recoveringAttempt) Lane() (sessionruntime.LaneIdentity, bool) {
+func (attempt *recoveringAttempt) Lane() (sessioncontract.LaneIdentity, bool) {
 	return attempt.identity, attempt.identity.ID != 0
 }
 
@@ -42,7 +43,7 @@ func (attempt *recoveringAttempt) Close() error {
 type recoveryLaneOwner struct{ lanes *transferlanes.Set }
 
 func (owner recoveryLaneOwner) LaneSet() *transferlanes.Set { return owner.lanes }
-func (owner recoveryLaneOwner) DetachLane(identity sessionruntime.LaneIdentity) bool {
+func (owner recoveryLaneOwner) DetachLane(identity sessioncontract.LaneIdentity) bool {
 	return owner.lanes.Remove(transferlanes.Identity(identity))
 }
 
@@ -61,7 +62,7 @@ func TestAttemptClosureRetiresAdmissionThatWonCancellationRace(t *testing.T) {
 	path := &Path{config: PathConfig{Content: recoveryLaneOwner{lanes}}}
 	attempt := &recoveringAttempt{fakeAttempt: newAttempt()}
 	attempt.onClose = func() {
-		attempt.identity = sessionruntime.LaneIdentity{ID: 2, Epoch: 1}
+		attempt.identity = sessioncontract.LaneIdentity{ID: 2, Epoch: 1}
 		err := lanes.Add(transferlanes.Identity(attempt.identity), transferlanes.RouteDirect,
 			recoveryBlockSource(func(context.Context, transferlanes.Demand) (records.BlockRecord, error) {
 				t.Error("late admission served content after its owner stopped")
@@ -111,7 +112,7 @@ func TestExhaustedContentRecoversWithoutThroughputGrowth(t *testing.T) {
 				if binding.AttemptSequence > 1 && lanes.Len() != 0 {
 					t.Error("replacement began before retiring the admitted data transport")
 				}
-				identity := sessionruntime.LaneIdentity{ID: 2, Epoch: uint32(binding.AttemptSequence)}
+				identity := sessioncontract.LaneIdentity{ID: 2, Epoch: uint32(binding.AttemptSequence)}
 				attempt := &recoveringAttempt{fakeAttempt: newAttempt(), identity: identity}
 				attempt.onClose = func() {
 					if path.recoverContentGeneration(transferlanes.Identity(identity)) {

@@ -10,7 +10,8 @@ import (
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sendersession "github.com/windshare/windshare/core/session/sendersession"
 )
 
 type senderObservationCollector struct {
@@ -67,31 +68,31 @@ type closingAdmissionTestSession struct {
 func (session *closingAdmissionTestSession) AdmitPeerChannel(
 	_ context.Context,
 	channel protocolsession.FrameChannel,
-	control sessionruntime.SenderPeerAdmissionControl,
-) (sessionruntime.SenderPeerAdmissionResult, error) {
+	control sendersession.PeerAdmissionControl,
+) (sendersession.PeerAdmissionResult, error) {
 	session.admissions <- receiverObservedChannel(channel)
 	grantOperation := testOperationID(249)
 	if !control.BeginAuthenticatedSettlement(grantOperation, session.lane) {
 		_ = channel.Close()
-		return sessionruntime.SenderPeerAdmissionResult{
-			Disposition:      sessionruntime.SenderPeerAdmissionSilentClose,
-			ResponseDelivery: sessionruntime.SenderPeerResponseNotAttempted,
-			LaneAttachment:   sessionruntime.SenderPeerLaneAttachmentNotAttempted,
+		return sendersession.PeerAdmissionResult{
+			Disposition:      sendersession.PeerAdmissionSilentClose,
+			ResponseDelivery: sendersession.PeerResponseNotAttempted,
+			LaneAttachment:   sendersession.PeerLaneAttachmentNotAttempted,
 		}, context.Canceled
 	}
 	if err := channel.Close(); err != nil {
-		return sessionruntime.SenderPeerAdmissionResult{
+		return sendersession.PeerAdmissionResult{
 			SettlementBegan: true, GrantOperationID: grantOperation, Lane: session.lane,
-			Disposition:      sessionruntime.SenderPeerAdmissionAccepted,
-			ResponseDelivery: sessionruntime.SenderPeerResponseDelivered,
-			LaneAttachment:   sessionruntime.SenderPeerLaneAttachmentFailed,
+			Disposition:      sendersession.PeerAdmissionAccepted,
+			ResponseDelivery: sendersession.PeerResponseDelivered,
+			LaneAttachment:   sendersession.PeerLaneAttachmentFailed,
 		}, err
 	}
-	return sessionruntime.SenderPeerAdmissionResult{
+	return sendersession.PeerAdmissionResult{
 		SettlementBegan: true, GrantOperationID: grantOperation, Lane: session.lane,
-		Disposition:      sessionruntime.SenderPeerAdmissionAccepted,
-		ResponseDelivery: sessionruntime.SenderPeerResponseDelivered,
-		LaneAttachment:   sessionruntime.SenderPeerLaneAttached,
+		Disposition:      sendersession.PeerAdmissionAccepted,
+		ResponseDelivery: sendersession.PeerResponseDelivered,
+		LaneAttachment:   sendersession.PeerLaneAttached,
 	}, nil
 }
 
@@ -646,10 +647,10 @@ func TestSenderAttemptObservationProjectsAuthenticatedRejectionSettlement(t *tes
 	recorder.complete(SenderAttemptAnswerSent, SenderCandidateCounts{}, SenderAttemptObservation{})
 	recorder.dataChannelOpened(SenderCandidateCounts{})
 	recorder.laneHelloAuthenticated(grantOperation, session.lane)
-	recorder.admissionSettled(sessionruntime.SenderPeerAdmissionResult{
+	recorder.admissionSettled(sendersession.PeerAdmissionResult{
 		SettlementBegan: true, GrantOperationID: grantOperation, Lane: session.lane,
-		Disposition:      sessionruntime.SenderPeerAdmissionRejected,
-		ResponseDelivery: sessionruntime.SenderPeerResponseDelivered,
+		Disposition:      sendersession.PeerAdmissionRejected,
+		ResponseDelivery: sendersession.PeerResponseDelivered,
 		Rejection: protocolsession.LaneRejection{
 			Code: protocolsession.LaneRejectAdmissionLimited, RetryAfter: 7 * time.Second,
 		},
@@ -725,7 +726,7 @@ func TestSenderAttemptRecorderAllowsOnlyOneTerminalAtEveryBoundary(t *testing.T)
 func startSenderTestRuntime(
 	t *testing.T,
 	factory *Factory,
-	session sessionruntime.SenderPeerSession,
+	session sendersession.PeerSession,
 ) (*senderHandler, context.Context, context.CancelFunc, <-chan error) {
 	t.Helper()
 	interfaceHandler, err := factory.NewSenderPeerHandler(session)

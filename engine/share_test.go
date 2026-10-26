@@ -10,7 +10,8 @@ import (
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sendersession "github.com/windshare/windshare/core/session/sendersession"
 	"github.com/windshare/windshare/engine/relayprofile"
 )
 
@@ -118,8 +119,8 @@ func (prepared *preparedFacadeShare) Close() error { prepared.closed.Store(true)
 
 type facadeSessionFactory struct{ prepared *preparedFacadeShare }
 
-func (facadeSessionFactory) AdmitChannel(context.Context, protocolsession.FrameChannel) (sessionruntime.SenderChannelAdmission, error) {
-	return sessionruntime.SenderChannelAdmission{}, errors.New("unexpected session")
+func (facadeSessionFactory) AdmitChannel(context.Context, protocolsession.FrameChannel) (sendersession.ChannelAdmission, error) {
+	return sendersession.ChannelAdmission{}, errors.New("unexpected session")
 }
 func (factory facadeSessionFactory) Stop(context.Context, string) error {
 	factory.prepared.sessionClosed.Store(true)
@@ -142,7 +143,7 @@ func (*facadeRelays) StopRecovery()                   {}
 func (*facadeRelays) Cleanup(context.Context) error   { return nil }
 
 type facadePeers struct {
-	sessionruntime.SenderPeerHandlerFactoryFunc
+	sendersession.PeerHandlerFactoryFunc
 	closed atomic.Bool
 }
 

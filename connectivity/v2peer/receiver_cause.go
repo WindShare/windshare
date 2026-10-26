@@ -8,7 +8,9 @@ import (
 	"strings"
 
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 )
 
@@ -30,7 +32,7 @@ var (
 	receiverTrustedWrapType      = reflect.TypeOf(fmt.Errorf("receiver structural wrapper: %w", errReceiverStructuralProbe))
 	receiverTrustedMultiWrapType = reflect.TypeOf(fmt.Errorf("receiver structural wrappers: %w %w", errReceiverStructuralProbe, errReceiverStructuralProbe))
 	receiverBoundaryFailureType  = reflect.TypeFor[*transferfault.BoundaryError]()
-	receiverRemoteFailureType    = reflect.TypeFor[sessionruntime.RemoteOperationError]()
+	receiverRemoteFailureType    = reflect.TypeFor[receiversession.RemoteOperationError]()
 	receiverSafeDiagnosticType   = reflect.TypeFor[*receiverSafeDiagnosticError]()
 	receiverOwnedJoinType        = reflect.TypeFor[*receiverOwnedJoinError]()
 )
@@ -178,7 +180,7 @@ func classifyReceiverCauseBoundary(
 			complete: true,
 		}, true
 	}
-	if isExactReceiverSentinel(cause, sessionruntime.ErrOperationMissing) && policy.operationMissing != "" {
+	if isExactReceiverSentinel(cause, sessioncontract.ErrOperationMissing) && policy.operationMissing != "" {
 		return receiverCauseClassification{
 			benign:   []ReceiverBenignCause{policy.operationMissing},
 			complete: true,
@@ -460,7 +462,7 @@ func receiverClassifiedCause(classification receiverCauseClassification) error {
 		case ReceiverBenignContextCanceled:
 			components = append(components, context.Canceled)
 		case ReceiverBenignLocalOperationMissing, ReceiverBenignRemoteOperationMissing:
-			components = append(components, sessionruntime.ErrOperationMissing)
+			components = append(components, sessioncontract.ErrOperationMissing)
 		}
 	}
 	return joinReceiverResiduals(components)
@@ -508,11 +510,11 @@ func ReceiverCauseClasses(cause error) []ReceiverCauseClass {
 
 func directReceiverCauseClass(cause error) (ReceiverCauseClass, bool) {
 	switch {
-	case isExactReceiverSentinel(cause, sessionruntime.ErrRuntimeClosed):
+	case isExactReceiverSentinel(cause, sessioncontract.ErrRuntimeClosed):
 		return ReceiverCauseRuntimeClosed, true
 	case isExactReceiverSentinel(cause, ErrConfig):
 		return ReceiverCauseConfiguration, true
-	case isExactReceiverSentinel(cause, sessionruntime.ErrOperationMissing):
+	case isExactReceiverSentinel(cause, sessioncontract.ErrOperationMissing):
 		return ReceiverCauseOperationMissing, true
 	case isExactReceiverSentinel(cause, ErrPeerNegotiationTimeout):
 		return ReceiverCauseNegotiationTimeout, true

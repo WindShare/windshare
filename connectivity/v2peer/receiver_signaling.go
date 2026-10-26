@@ -5,7 +5,9 @@ import (
 	"errors"
 
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 )
 
 type receiverSignalingOperationToken struct{ marker byte }
@@ -187,10 +189,10 @@ func newReceiverSignalingOpenFailure(
 }
 
 type RuntimeReceiverSignaling struct {
-	runtime *sessionruntime.ReceiverRuntime
+	runtime *receiversession.Runtime
 }
 
-func NewRuntimeReceiverSignaling(runtime *sessionruntime.ReceiverRuntime) (*RuntimeReceiverSignaling, error) {
+func NewRuntimeReceiverSignaling(runtime *receiversession.Runtime) (*RuntimeReceiverSignaling, error) {
 	if runtime == nil {
 		return nil, ErrConfig
 	}
@@ -227,7 +229,7 @@ func (signaling *RuntimeReceiverSignaling) OpenPeerOperation(
 }
 
 type runtimeReceiverOperation struct {
-	operation *sessionruntime.ReceiverPeerOperation
+	operation *receiversession.PeerOperation
 	binding   ReceiverSignalingOperationBinding
 }
 
@@ -271,8 +273,8 @@ func (operation runtimeReceiverOperation) Terminate(
 
 func receiverSignalingTerminationFromCore(
 	binding ReceiverSignalingOperationBinding,
-	operation *sessionruntime.ReceiverPeerOperation,
-	termination sessionruntime.ReceiverPeerTermination,
+	operation *receiversession.PeerOperation,
+	termination receiversession.PeerTermination,
 ) ReceiverSignalingTermination {
 	if !binding.valid() || operation == nil || !operation.OwnsTermination(termination) {
 		return receiverSignalingAdapterFailure(binding, nil)
@@ -284,7 +286,7 @@ func receiverSignalingTerminationFromCore(
 	if decision.transitionProvenance == ReceiverProvenanceRemoteOperationRejected {
 		decision.recoveryScope = protocolsession.PeerFailurePathTerminal
 		for _, diagnostic := range termination.Diagnostics().Components() {
-			if diagnostic.Code() == sessionruntime.ReceiverPeerDiagnosticRemoteOperationRejected {
+			if diagnostic.Code() == receiversession.PeerDiagnosticRemoteOperationRejected {
 				if failure, ok := diagnostic.RemoteFailure(); ok {
 					decision.recoveryScope = protocolsession.PeerFailureScope(failure.Code())
 				}
@@ -319,7 +321,7 @@ func receiverSignalingAdapterFailure(
 }
 
 func receiverDecisionFromCoreTermination(
-	termination sessionruntime.ReceiverPeerTermination,
+	termination receiversession.PeerTermination,
 ) (receiverAttemptDecision, bool) {
 	owner, ownerOK := receiverTerminalOwner(termination.Authority())
 	transition, transitionOK := receiverProvenanceFromCore(termination.TransitionProvenance())
@@ -335,14 +337,14 @@ func receiverDecisionFromCoreTermination(
 }
 
 func receiverTerminalOwner(
-	authority sessionruntime.ReceiverPeerTerminalAuthority,
+	authority receiversession.PeerTerminalAuthority,
 ) (ReceiverTerminalOwner, bool) {
 	switch authority {
-	case sessionruntime.ReceiverPeerTerminalAuthorityLocal:
+	case receiversession.PeerTerminalAuthorityLocal:
 		return ReceiverTerminalLocal, true
-	case sessionruntime.ReceiverPeerTerminalAuthorityRemote:
+	case receiversession.PeerTerminalAuthorityRemote:
 		return ReceiverTerminalRemote, true
-	case sessionruntime.ReceiverPeerTerminalAuthorityRuntime:
+	case receiversession.PeerTerminalAuthorityRuntime:
 		return ReceiverTerminalRuntime, true
 	default:
 		return ReceiverTerminalUnbound, false
@@ -350,14 +352,14 @@ func receiverTerminalOwner(
 }
 
 func receiverDispositionFromCore(
-	severity sessionruntime.ReceiverPeerTerminalSeverity,
+	severity receiversession.PeerTerminalSeverity,
 ) (ReceiverAttemptDisposition, bool) {
 	switch severity {
-	case sessionruntime.ReceiverPeerTerminalOperationOnly:
+	case receiversession.PeerTerminalOperationOnly:
 		return ReceiverDispositionFallbackAllowed, true
-	case sessionruntime.ReceiverPeerTerminalSessionUnavailable:
+	case receiversession.PeerTerminalSessionUnavailable:
 		return ReceiverDispositionSessionUnavailable, true
-	case sessionruntime.ReceiverPeerTerminalSessionUnsafe:
+	case receiversession.PeerTerminalSessionUnsafe:
 		return ReceiverDispositionSessionUnsafe, true
 	default:
 		return "", false
@@ -365,34 +367,34 @@ func receiverDispositionFromCore(
 }
 
 func receiverProvenanceFromCore(
-	provenance sessionruntime.ReceiverPeerTerminalProvenance,
+	provenance receiversession.PeerTerminalProvenance,
 ) (ReceiverTerminalProvenance, bool) {
 	switch provenance {
-	case sessionruntime.ReceiverPeerProvenanceLocalExplicitStop:
+	case receiversession.PeerProvenanceLocalExplicitStop:
 		return ReceiverProvenanceLocalExplicitStop, true
-	case sessionruntime.ReceiverPeerProvenanceLocalContextEnded:
+	case receiversession.PeerProvenanceLocalContextEnded:
 		return ReceiverProvenanceLocalContextEnded, true
-	case sessionruntime.ReceiverPeerProvenanceLocalOperationContract:
+	case receiversession.PeerProvenanceLocalOperationContract:
 		return ReceiverProvenanceLocalOperationContract, true
-	case sessionruntime.ReceiverPeerProvenanceRemoteOperationRejected:
+	case receiversession.PeerProvenanceRemoteOperationRejected:
 		return ReceiverProvenanceRemoteOperationRejected, true
-	case sessionruntime.ReceiverPeerProvenanceRemoteSessionRejected:
+	case receiversession.PeerProvenanceRemoteSessionRejected:
 		return ReceiverProvenanceRemoteSessionRejected, true
-	case sessionruntime.ReceiverPeerProvenanceRemoteUnknownControl:
+	case receiversession.PeerProvenanceRemoteUnknownControl:
 		return ReceiverProvenanceRemoteUnknownControl, true
-	case sessionruntime.ReceiverPeerProvenanceRemoteControlMalformed:
+	case receiversession.PeerProvenanceRemoteControlMalformed:
 		return ReceiverProvenanceRemoteControlMalformed, true
-	case sessionruntime.ReceiverPeerProvenanceRemoteFailureMalformed:
+	case receiversession.PeerProvenanceRemoteFailureMalformed:
 		return ReceiverProvenanceRemoteFailureMalformed, true
-	case sessionruntime.ReceiverPeerProvenanceRemoteFailureScopeViolation:
+	case receiversession.PeerProvenanceRemoteFailureScopeViolation:
 		return ReceiverProvenanceRemoteFailureScopeViolation, true
-	case sessionruntime.ReceiverPeerProvenanceRemoteAnswerConflict:
+	case receiversession.PeerProvenanceRemoteAnswerConflict:
 		return ReceiverProvenanceAuthenticatedSecondAnswer, true
-	case sessionruntime.ReceiverPeerProvenanceRemoteFinalConflict:
+	case receiversession.PeerProvenanceRemoteFinalConflict:
 		return ReceiverProvenanceAuthenticatedFinalConflict, true
-	case sessionruntime.ReceiverPeerProvenanceRemoteContinuationViolation:
+	case receiversession.PeerProvenanceRemoteContinuationViolation:
 		return ReceiverProvenanceAuthenticatedContinuationViolation, true
-	case sessionruntime.ReceiverPeerProvenanceRuntimeStopping:
+	case receiversession.PeerProvenanceRuntimeStopping:
 		return ReceiverProvenanceRuntimeStopping, true
 	default:
 		return ReceiverProvenanceUnbound, false
@@ -400,43 +402,43 @@ func receiverProvenanceFromCore(
 }
 
 func receiverCoreTerminalDiagnostics(
-	snapshot sessionruntime.ReceiverPeerDiagnosticSnapshot,
+	snapshot receiversession.PeerDiagnosticSnapshot,
 ) (error, bool) {
 	causes := make([]error, 0, len(snapshot.Components())+1)
 	for _, diagnostic := range snapshot.Components() {
 		switch diagnostic.Code() {
-		case sessionruntime.ReceiverPeerDiagnosticOpaqueFailure,
-			sessionruntime.ReceiverPeerDiagnosticCleanupFailed:
+		case receiversession.PeerDiagnosticOpaqueFailure,
+			receiversession.PeerDiagnosticCleanupFailed:
 			causes = append(causes, errReceiverOpaqueCause)
-		case sessionruntime.ReceiverPeerDiagnosticContextCanceled:
+		case receiversession.PeerDiagnosticContextCanceled:
 			causes = append(causes, context.Canceled)
-		case sessionruntime.ReceiverPeerDiagnosticOperationMissing:
-			causes = append(causes, sessionruntime.ErrOperationMissing)
-		case sessionruntime.ReceiverPeerDiagnosticRuntimeClosed:
-			causes = append(causes, sessionruntime.ErrRuntimeClosed)
-		case sessionruntime.ReceiverPeerDiagnosticOperationOverflow:
-			causes = append(causes, sessionruntime.ErrOperationOverflow)
-		case sessionruntime.ReceiverPeerDiagnosticUnknownControl:
+		case receiversession.PeerDiagnosticOperationMissing:
+			causes = append(causes, sessioncontract.ErrOperationMissing)
+		case receiversession.PeerDiagnosticRuntimeClosed:
+			causes = append(causes, sessioncontract.ErrRuntimeClosed)
+		case receiversession.PeerDiagnosticOperationOverflow:
+			causes = append(causes, sessioncontract.ErrOperationOverflow)
+		case receiversession.PeerDiagnosticUnknownControl:
 			causes = append(causes, protocolsession.ErrUnknownMessageKind)
-		case sessionruntime.ReceiverPeerDiagnosticControlMalformed:
+		case receiversession.PeerDiagnosticControlMalformed:
 			causes = append(causes, protocolsession.ErrControlSemantic)
-		case sessionruntime.ReceiverPeerDiagnosticRemoteOperationRejected:
+		case receiversession.PeerDiagnosticRemoteOperationRejected:
 			if failure, ok := diagnostic.RemoteFailure(); ok {
-				causes = append(causes, sessionruntime.NewRemoteOperationError(failure))
+				causes = append(causes, receiversession.NewRemoteOperationError(failure))
 			}
-		case sessionruntime.ReceiverPeerDiagnosticRemoteFailureMalformed:
+		case receiversession.PeerDiagnosticRemoteFailureMalformed:
 			causes = append(causes, protocolsession.ErrInvalidOperationFailure)
-		case sessionruntime.ReceiverPeerDiagnosticRemoteFailureScopeViolation:
+		case receiversession.PeerDiagnosticRemoteFailureScopeViolation:
 			causes = append(causes, protocolsession.ErrInvalidOperationFailure)
 			if failure, ok := diagnostic.RemoteFailure(); ok {
-				causes = append(causes, sessionruntime.NewRemoteOperationError(failure))
+				causes = append(causes, receiversession.NewRemoteOperationError(failure))
 			}
-		case sessionruntime.ReceiverPeerDiagnosticRemoteAnswerConflict,
-			sessionruntime.ReceiverPeerDiagnosticRemoteFinalConflict:
+		case receiversession.PeerDiagnosticRemoteAnswerConflict,
+			receiversession.PeerDiagnosticRemoteFinalConflict:
 			causes = append(causes, protocolsession.ErrAuthenticatedOperationViolation)
-		case sessionruntime.ReceiverPeerDiagnosticRemoteContinuationViolation:
+		case receiversession.PeerDiagnosticRemoteContinuationViolation:
 			causes = append(causes, protocolsession.ErrConflictingContinuation)
-		case sessionruntime.ReceiverPeerDiagnosticTruncated:
+		case receiversession.PeerDiagnosticTruncated:
 			causes = append(causes, errReceiverOpaqueCause)
 		default:
 			causes = append(causes, errReceiverOpaqueCause)

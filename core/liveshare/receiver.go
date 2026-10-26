@@ -17,7 +17,9 @@ import (
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessionobs "github.com/windshare/windshare/core/session/observation"
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
@@ -29,9 +31,9 @@ type ReceiverConfig struct {
 	Capability                        link.Link
 	DescriptorObject                  []byte
 	Random                            io.Reader
-	CatalogProgress                   sessionruntime.CatalogScanProgressObserver
-	PeerControls                      sessionruntime.ReceiverPeerSemantics
-	ProtocolObservations              observationstream.Producer[sessionruntime.ProtocolObservation]
+	CatalogProgress                   receiversession.CatalogScanProgressObserver
+	PeerControls                      receiversession.PeerSemantics
+	ProtocolObservations              observationstream.Producer[sessionobs.ProtocolObservation]
 	LaneSettlementObservationCapacity transferlanes.SettlementObservationCapacity
 }
 
@@ -39,7 +41,7 @@ type PreparedReceiver struct {
 	mu sync.Mutex
 
 	descriptor catalog.ShareDescriptor
-	factory    *sessionruntime.ReceiverFactory
+	factory    *receiversession.Factory
 	resources  *receiverRuntimeResources
 	closed     bool
 	closeDone  chan struct{}
@@ -116,7 +118,7 @@ func PrepareReceiver(config ReceiverConfig) (*PreparedReceiver, error) {
 	}
 	authKey := sessionAuthKey.Bytes()
 	sessionAuthKey.Destroy()
-	factory, err := sessionruntime.NewReceiverFactory(sessionruntime.ReceiverFactoryConfig{
+	factory, err := receiversession.NewFactory(receiversession.FactoryConfig{
 		ContentRoutePolicy: config.ContentRoutePolicy,
 		Descriptor:         descriptor, SessionAuthKey: authKey, Sender: sender,
 		CatalogVerifier: verifier, RecordOpener: opener,
@@ -145,7 +147,7 @@ func (receiver *PreparedReceiver) Descriptor() catalog.ShareDescriptor {
 	return receiver.descriptor
 }
 
-func (receiver *PreparedReceiver) Connect(ctx context.Context, channel framechannel.Channel, route transferlanes.Route) (*sessionruntime.ReceiverRuntime, error) {
+func (receiver *PreparedReceiver) Connect(ctx context.Context, channel framechannel.Channel, route transferlanes.Route) (*receiversession.Runtime, error) {
 	receiver.mu.Lock()
 	if receiver.closed {
 		receiver.mu.Unlock()
@@ -192,7 +194,7 @@ func (receiver *PreparedReceiver) BeginClose() {
 }
 
 func (receiver *PreparedReceiver) finishClose(
-	factory *sessionruntime.ReceiverFactory,
+	factory *receiversession.Factory,
 	resources *receiverRuntimeResources,
 	done chan struct{},
 ) {
@@ -242,7 +244,7 @@ func newReceiverRuntimeResources(
 }
 
 func (resources *receiverRuntimeResources) AcquireReceiverRuntimeResources() (
-	sessionruntime.ReceiverRuntimeResourceLease,
+	receiversession.RuntimeResourceLease,
 	error,
 ) {
 	resources.mu.Lock()

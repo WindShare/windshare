@@ -13,7 +13,9 @@ import (
 	"github.com/windshare/windshare/connectivity/v2signal"
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	transportwebrtc "github.com/windshare/windshare/transport/webrtc"
 )
@@ -446,68 +448,68 @@ type receiverTestLanes struct {
 	requested        chan uint32
 	attachments      chan protocolsession.FrameChannel
 	ownedAttachments chan protocolsession.FrameChannel
-	lane             sessionruntime.LaneIdentity
+	lane             sessioncontract.LaneIdentity
 	err              error
 	requestRelease   <-chan struct{}
 	attach           func(
 		context.Context,
-		sessionruntime.LaneAttachmentGrant,
+		sessioncontract.LaneAttachmentGrant,
 		protocolsession.FrameChannel,
-	) (sessionruntime.ReceiverLaneAdmissionResult, error)
+	) (receiversession.LaneAdmissionResult, error)
 }
 
 func newReceiverTestLanes() *receiverTestLanes {
 	return &receiverTestLanes{
 		requested: make(chan uint32, 4), attachments: make(chan protocolsession.FrameChannel, 4),
 		ownedAttachments: make(chan protocolsession.FrameChannel, 4),
-		lane:             sessionruntime.LaneIdentity{ID: 17, Epoch: 4},
+		lane:             sessioncontract.LaneIdentity{ID: 17, Epoch: 4},
 	}
 }
 
 func (lanes *receiverTestLanes) RequestLane(
 	ctx context.Context,
 	requested uint32,
-) (sessionruntime.LaneAttachmentGrant, error) {
+) (sessioncontract.LaneAttachmentGrant, error) {
 	select {
 	case <-ctx.Done():
-		return sessionruntime.LaneAttachmentGrant{}, ctx.Err()
+		return sessioncontract.LaneAttachmentGrant{}, ctx.Err()
 	case lanes.requested <- requested:
 	}
 	if lanes.requestRelease != nil {
 		select {
 		case <-ctx.Done():
-			return sessionruntime.LaneAttachmentGrant{}, ctx.Err()
+			return sessioncontract.LaneAttachmentGrant{}, ctx.Err()
 		case <-lanes.requestRelease:
 		}
 	}
-	return sessionruntime.LaneAttachmentGrant{
+	return sessioncontract.LaneAttachmentGrant{
 		LaneID: lanes.lane.ID, LaneEpoch: lanes.lane.Epoch, OperationID: testOperationID(152),
 	}, lanes.err
 }
 
 func (lanes *receiverTestLanes) AttachLane(
 	ctx context.Context,
-	grant sessionruntime.LaneAttachmentGrant,
+	grant sessioncontract.LaneAttachmentGrant,
 	channel protocolsession.FrameChannel,
 	_ transferlanes.Route,
-) (sessionruntime.ReceiverLaneAdmissionResult, error) {
+) (receiversession.LaneAdmissionResult, error) {
 	if lanes.attach != nil {
 		return lanes.attach(ctx, grant, channel)
 	}
 	select {
 	case <-ctx.Done():
-		return sessionruntime.ReceiverLaneAdmissionResult{
-			Disposition:      sessionruntime.ReceiverLaneAdmissionUnverified,
-			LaneInstallation: sessionruntime.ReceiverLaneInstallationNotAttempted,
+		return receiversession.LaneAdmissionResult{
+			Disposition:      receiversession.LaneAdmissionUnverified,
+			LaneInstallation: receiversession.LaneInstallationNotAttempted,
 		}, ctx.Err()
 	case lanes.attachments <- receiverObservedChannel(channel):
 		lanes.ownedAttachments <- channel
 	}
-	return sessionruntime.ReceiverLaneAdmissionResult{
+	return receiversession.LaneAdmissionResult{
 		GrantOperationID: grant.OperationID,
 		Lane:             lanes.lane,
-		Disposition:      sessionruntime.ReceiverLaneAdmissionAccepted,
-		LaneInstallation: sessionruntime.ReceiverLaneInstalled,
+		Disposition:      receiversession.LaneAdmissionAccepted,
+		LaneInstallation: receiversession.LaneInstalled,
 	}, lanes.err
 }
 
@@ -759,7 +761,7 @@ func TestReceiverAttemptRuntimeShutdownDuringAuthorityValidationStaysRuntimeOwne
 	receiveTest(t, maximumEntered)
 	operation.finishTermination(
 		ReceiverTerminalRuntime,
-		sessionruntime.ErrRuntimeClosed,
+		sessioncontract.ErrRuntimeClosed,
 	)
 	close(releaseMaximum)
 	receiveTest(t, harness.attempt.Done())
@@ -769,7 +771,7 @@ func TestReceiverAttemptRuntimeShutdownDuringAuthorityValidationStaysRuntimeOwne
 		outcome.Disposition() != ReceiverDispositionSessionUnavailable ||
 		outcome.TransitionProvenance() != ReceiverProvenanceRuntimeStopping ||
 		outcome.ConsequenceProvenance() != ReceiverProvenanceRuntimeStopping ||
-		!errors.Is(outcome.RetainedCause(), sessionruntime.ErrRuntimeClosed) ||
+		!errors.Is(outcome.RetainedCause(), sessioncontract.ErrRuntimeClosed) ||
 		errors.Is(outcome.RetainedCause(), ErrConfig) ||
 		errors.Is(outcome.RetainedCause(), protocolsession.ErrContinuationContract) ||
 		outcome.HasRetainedCauseClass(ReceiverCauseConfiguration) ||
@@ -803,7 +805,7 @@ func TestReceiverAttemptTerminatesZeroIDOperation(t *testing.T) {
 
 func TestReceiverAttemptDoesNotApplyTerminalBenignPolicyToWorkflowFailure(t *testing.T) {
 	harness := newReceiverHarness(t, func(_ *ReceiverFactoryConfig, signaling *receiverTestSignaling) {
-		signaling.operation.(*receiverTestOperation).sendCandidateError = sessionruntime.ErrOperationMissing
+		signaling.operation.(*receiverTestOperation).sendCandidateError = sessioncontract.ErrOperationMissing
 	})
 	harness.peer.emitCandidate(&pion.ICECandidate{
 		Foundation: "workflow", Priority: 1, Address: "127.0.0.1", Protocol: pion.ICEProtocolUDP,
@@ -813,7 +815,7 @@ func TestReceiverAttemptDoesNotApplyTerminalBenignPolicyToWorkflowFailure(t *tes
 
 	outcome := harness.attempt.Outcome()
 	if outcome.TransitionAuthority() != ReceiverTerminalLocal ||
-		!errors.Is(outcome.RetainedCause(), sessionruntime.ErrOperationMissing) ||
+		!errors.Is(outcome.RetainedCause(), sessioncontract.ErrOperationMissing) ||
 		outcome.TransitionProvenance() != ReceiverProvenanceLocalExplicitStop ||
 		outcome.Disposition() != ReceiverDispositionFallbackAllowed ||
 		!outcome.LocallyCanceled() {

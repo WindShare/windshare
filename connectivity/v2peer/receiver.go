@@ -16,7 +16,9 @@ import (
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/peerslot"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	transportwebrtc "github.com/windshare/windshare/transport/webrtc"
 )
@@ -50,13 +52,13 @@ func (function ReceiverPeerConnectionFactoryFunc) NewReceiverPeerConnection(
 }
 
 type ReceiverLaneSession interface {
-	RequestLane(context.Context, uint32) (sessionruntime.LaneAttachmentGrant, error)
+	RequestLane(context.Context, uint32) (sessioncontract.LaneAttachmentGrant, error)
 	AttachLane(
 		context.Context,
-		sessionruntime.LaneAttachmentGrant,
+		sessioncontract.LaneAttachmentGrant,
 		protocolsession.FrameChannel,
 		transferlanes.Route,
-	) (sessionruntime.ReceiverLaneAdmissionResult, error)
+	) (receiversession.LaneAdmissionResult, error)
 }
 
 const (
@@ -212,7 +214,7 @@ type ReceiverAttempt struct {
 	resultMu sync.Mutex
 	result   error
 	outcome  ReceiverAttemptOutcome
-	lane     sessionruntime.LaneIdentity
+	lane     sessioncontract.LaneIdentity
 
 	signalingMu       sync.Mutex
 	operation         *receiverBoundSignalingOperation
@@ -350,9 +352,9 @@ func readReceiverSignalID[T ~[v2signal.IdentityBytes]byte](source io.Reader) (T,
 func (attempt *ReceiverAttempt) Ready() <-chan struct{} { return attempt.ready }
 func (attempt *ReceiverAttempt) Done() <-chan struct{}  { return attempt.done }
 
-func (attempt *ReceiverAttempt) Lane() (sessionruntime.LaneIdentity, bool) {
+func (attempt *ReceiverAttempt) Lane() (sessioncontract.LaneIdentity, bool) {
 	if attempt == nil {
-		return sessionruntime.LaneIdentity{}, false
+		return sessioncontract.LaneIdentity{}, false
 	}
 	attempt.resultMu.Lock()
 	defer attempt.resultMu.Unlock()
@@ -417,8 +419,8 @@ type receiverEvent struct {
 	candidate v2signal.Candidate
 	control   ReceiverControl
 	terminal  ReceiverSignalingTermination
-	grant     sessionruntime.LaneAttachmentGrant
-	admission sessionruntime.ReceiverLaneAdmissionResult
+	grant     sessioncontract.LaneAttachmentGrant
+	admission receiversession.LaneAdmissionResult
 	err       error
 }
 

@@ -7,7 +7,8 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
@@ -55,7 +56,7 @@ func TestDomainIdentityBridgesPreserveFullWidthsAndSemanticTypes(t *testing.T) {
 	if _, err := ReceiveOperationID(receivecontract.OperationID{}); err == nil {
 		t.Fatal("accepted zero receive operation")
 	}
-	lane, err := LaneIdentity(sessionruntime.LaneIdentity{ID: 4, Epoch: 0})
+	lane, err := LaneIdentity(sessioncontract.LaneIdentity{ID: 4, Epoch: 0})
 	if err != nil || lane.ID() != 4 || lane.Epoch() != 0 {
 		t.Fatalf("lane bridge = %+v err=%v", lane, err)
 	}

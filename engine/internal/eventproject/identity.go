@@ -4,7 +4,8 @@ import (
 	errors "errors"
 
 	protocolsession "github.com/windshare/windshare/core/session/protocolsession"
-	sessionruntime "github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
 	transfer "github.com/windshare/windshare/core/transfer"
 	receivecontract "github.com/windshare/windshare/core/transfer/receivecontract"
 	appobs "github.com/windshare/windshare/engine/observation"
@@ -114,7 +115,7 @@ func TransferJobID(value transfer.TransferJobID) (appobs.TransferJobID, error) {
 	return result, nil
 }
 
-func LaneIdentity(value sessionruntime.LaneIdentity) (appobs.LaneIdentity, error) {
+func LaneIdentity(value sessioncontract.LaneIdentity) (appobs.LaneIdentity, error) {
 	result, err := appobs.NewLaneIdentity(value.ID, value.Epoch)
 	if err != nil {
 		return appobs.LaneIdentity{}, ProjectionError{

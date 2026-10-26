@@ -11,7 +11,8 @@ import (
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/peerslot"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
 )
 
 type testTimer struct {
@@ -78,8 +79,8 @@ func newAttempt() *fakeAttempt {
 }
 func (a *fakeAttempt) Ready() <-chan struct{} { return a.ready }
 func (a *fakeAttempt) Done() <-chan struct{}  { return a.done }
-func (a *fakeAttempt) Lane() (sessionruntime.LaneIdentity, bool) {
-	return sessionruntime.LaneIdentity{ID: 2, Epoch: 1}, true
+func (a *fakeAttempt) Lane() (sessioncontract.LaneIdentity, bool) {
+	return sessioncontract.LaneIdentity{ID: 2, Epoch: 1}, true
 }
 func (a *fakeAttempt) Outcome() v2peer.ReceiverAttemptOutcome { return v2peer.ReceiverAttemptOutcome{} }
 func (a *fakeAttempt) Err() error                             { return nil }

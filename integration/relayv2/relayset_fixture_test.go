@@ -16,7 +16,10 @@ import (
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
+	sendersession "github.com/windshare/windshare/core/session/sendersession"
 	"github.com/windshare/windshare/internal/testrelaynative"
 	"github.com/windshare/windshare/internal/testrun"
 	"github.com/windshare/windshare/internal/testscenario"
@@ -88,11 +91,11 @@ func (relaysetPeer) Cancel(context.Context, protocolsession.OperationID) error  
 func (relaysetPeer) Run(ctx context.Context) error                                { <-ctx.Done(); return ctx.Err() }
 
 type relaysetAdmission struct {
-	Endpoint string                           `json:"endpoint"`
-	Session  v2.RelaySessionID                `json:"relay_session_id"`
-	Lane     sessionruntime.LaneIdentity      `json:"lane"`
-	Kind     sessionruntime.SenderChannelKind `json:"kind"`
-	Err      error                            `json:"-"`
+	Endpoint string                       `json:"endpoint"`
+	Session  v2.RelaySessionID            `json:"relay_session_id"`
+	Lane     sessioncontract.LaneIdentity `json:"lane"`
+	Kind     sendersession.ChannelKind    `json:"kind"`
+	Err      error                        `json:"-"`
 }
 
 type relaysetShare struct {
@@ -143,7 +146,7 @@ func prepareRelaysetShare(t *testing.T, ctx context.Context, trace *testscenario
 	}
 	factory, err := sender.NewRuntimeFactory(liveshare.RuntimeFactoryConfig{
 		TerminalConnectivity: relaysetTerminal{},
-		PeerHandlers: sessionruntime.SenderPeerHandlerFactoryFunc(func(sessionruntime.SenderPeerSession) (sessionruntime.SenderPeerHandler, error) {
+		PeerHandlers: sendersession.PeerHandlerFactoryFunc(func(sendersession.PeerSession) (sendersession.PeerHandler, error) {
 			return relaysetPeer{}, nil
 		}),
 	})
@@ -273,7 +276,7 @@ func (clock *relaysetClock) Wait(ctx context.Context, delay time.Duration) error
 	return nil
 }
 
-func requireRelaysetLive(t *testing.T, runtime *sessionruntime.ReceiverRuntime, connection relayset.ReceiverConnection, lane sessionruntime.LaneIdentity) {
+func requireRelaysetLive(t *testing.T, runtime *receiversession.Runtime, connection relayset.ReceiverConnection, lane sessioncontract.LaneIdentity) {
 	t.Helper()
 	done, live := runtime.LaneDone(lane)
 	if !live {

@@ -6,13 +6,14 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	"github.com/windshare/windshare/core/transfer"
 )
 
 type revisionLease struct {
 	mu      sync.Mutex
-	runtime *sessionruntime.ReceiverRuntime
+	runtime *receiversession.Runtime
 	opened  transfer.OpenedRevision
 }
 
@@ -146,7 +147,7 @@ func (s *remainingSink) WriteRange(ctx context.Context, offset uint64, data []by
 	return nil
 }
 
-func (binding *revisionLease) refresh(ctx context.Context, runtime *sessionruntime.ReceiverRuntime, descriptor content.FileRevisionDescriptor) error {
+func (binding *revisionLease) refresh(ctx context.Context, runtime *receiversession.Runtime, descriptor content.FileRevisionDescriptor) error {
 	if binding.runtime == runtime {
 		return nil
 	}

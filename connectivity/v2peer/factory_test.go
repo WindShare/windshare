@@ -14,7 +14,9 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
+	sendersession "github.com/windshare/windshare/core/session/sendersession"
 )
 
 const peerTestTimeout = 2 * time.Second
@@ -38,7 +40,7 @@ type testPeerSession struct {
 	failures        chan capturedFailure
 	admissions      chan protocolsession.FrameChannel
 	ownedAdmissions chan protocolsession.FrameChannel
-	lane            sessionruntime.LaneIdentity
+	lane            sessioncontract.LaneIdentity
 	admitErr        error
 }
 
@@ -52,7 +54,7 @@ func newTestPeerSession(seed byte) *testPeerSession {
 		controls: make(chan capturedControl, 16), failures: make(chan capturedFailure, 16),
 		admissions:      make(chan protocolsession.FrameChannel, 4),
 		ownedAdmissions: make(chan protocolsession.FrameChannel, 4),
-		lane:            sessionruntime.LaneIdentity{ID: 9, Epoch: 2},
+		lane:            sessioncontract.LaneIdentity{ID: 9, Epoch: 2},
 	}
 }
 
@@ -142,8 +144,8 @@ func (session *testPeerSession) FailPeerOperation(
 func (session *testPeerSession) AdmitPeerChannel(
 	_ context.Context,
 	channel protocolsession.FrameChannel,
-	control sessionruntime.SenderPeerAdmissionControl,
-) (sessionruntime.SenderPeerAdmissionResult, error) {
+	control sendersession.PeerAdmissionControl,
+) (sendersession.PeerAdmissionResult, error) {
 	observed := channel
 	if owner, ok := channel.(*ownedPeerDataChannel); ok {
 		observed = owner.PeerDataChannel
@@ -152,26 +154,26 @@ func (session *testPeerSession) AdmitPeerChannel(
 	session.ownedAdmissions <- channel
 	if session.admitErr != nil {
 		_ = channel.Close()
-		return sessionruntime.SenderPeerAdmissionResult{
-			Disposition:      sessionruntime.SenderPeerAdmissionSilentClose,
-			ResponseDelivery: sessionruntime.SenderPeerResponseNotAttempted,
-			LaneAttachment:   sessionruntime.SenderPeerLaneAttachmentNotAttempted,
+		return sendersession.PeerAdmissionResult{
+			Disposition:      sendersession.PeerAdmissionSilentClose,
+			ResponseDelivery: sendersession.PeerResponseNotAttempted,
+			LaneAttachment:   sendersession.PeerLaneAttachmentNotAttempted,
 		}, session.admitErr
 	}
 	grantOperation := testOperationID(250)
 	if !control.BeginAuthenticatedSettlement(grantOperation, session.lane) {
 		_ = channel.Close()
-		return sessionruntime.SenderPeerAdmissionResult{
-			Disposition:      sessionruntime.SenderPeerAdmissionSilentClose,
-			ResponseDelivery: sessionruntime.SenderPeerResponseNotAttempted,
-			LaneAttachment:   sessionruntime.SenderPeerLaneAttachmentNotAttempted,
+		return sendersession.PeerAdmissionResult{
+			Disposition:      sendersession.PeerAdmissionSilentClose,
+			ResponseDelivery: sendersession.PeerResponseNotAttempted,
+			LaneAttachment:   sendersession.PeerLaneAttachmentNotAttempted,
 		}, context.Canceled
 	}
-	return sessionruntime.SenderPeerAdmissionResult{
+	return sendersession.PeerAdmissionResult{
 		SettlementBegan: true, GrantOperationID: grantOperation, Lane: session.lane,
-		Disposition:      sessionruntime.SenderPeerAdmissionAccepted,
-		ResponseDelivery: sessionruntime.SenderPeerResponseDelivered,
-		LaneAttachment:   sessionruntime.SenderPeerLaneAttached,
+		Disposition:      sendersession.PeerAdmissionAccepted,
+		ResponseDelivery: sendersession.PeerResponseDelivered,
+		LaneAttachment:   sendersession.PeerLaneAttached,
 	}, nil
 }
 

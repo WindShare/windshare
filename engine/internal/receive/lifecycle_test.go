@@ -11,7 +11,8 @@ import (
 
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/link"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/engine/internal/task"
 )
 
@@ -99,7 +100,7 @@ func TestDetachedReceiveObserverPreservesExecutionAndDurableSourceLoss(t *testin
 			close(entered)
 			<-release
 			for range int(protocolObservationCapacity) + 1 {
-				observation.protocol.TryPublish(sessionruntime.ProtocolOperationObservation{})
+				observation.protocol.TryPublish(sessionobs.ProtocolOperationObservation{})
 			}
 			observation.protocol.RecordDropped(5)
 			observation.complete()

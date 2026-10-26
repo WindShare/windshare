@@ -8,7 +8,8 @@ import (
 	"github.com/windshare/windshare/connectivity/v2peer/peerset"
 	"github.com/windshare/windshare/core/downloadmetrics"
 	"github.com/windshare/windshare/core/session/receivercontinuation"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	"github.com/windshare/windshare/core/transfer"
 )
 
@@ -54,7 +55,7 @@ func (g *receiveOperation) close() error {
 	return cleanupErr
 }
 
-func (g *receiveOperation) replace(ctx context.Context, _ *sessionruntime.ReceiverRuntime) (*sessionruntime.ReceiverRuntime, error) {
+func (g *receiveOperation) replace(ctx context.Context, _ *receiversession.Runtime) (*receiversession.Runtime, error) {
 	g.mu.Lock()
 	oldSession, oldExecution := g.session, g.execution
 	g.mu.Unlock()

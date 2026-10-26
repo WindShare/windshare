@@ -10,7 +10,8 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/session/catalogflow"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sendersession "github.com/windshare/windshare/core/session/sendersession"
 )
 
 const rootPrefetchBudgetName = "live-share-root-prefetch"
@@ -360,7 +361,7 @@ func (source receiverPriorityCatalogSource) LoadPage(
 
 type prefetchTerminalConnectivity struct {
 	prefetch *senderCatalogAccess
-	delegate sessionruntime.TerminalConnectivity
+	delegate sendersession.TerminalConnectivity
 }
 
 func (connectivity prefetchTerminalConnectivity) StopRecovery() {

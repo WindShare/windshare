@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/core/session/sessionruntime"
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 )
 
 func TestReceiverAttemptPublishedGraphsAreImmutableOwnedSnapshots(t *testing.T) {
@@ -53,8 +53,8 @@ func TestReceiverAttemptPublishedGraphsAreImmutableOwnedSnapshots(t *testing.T) 
 
 func TestReceiverAttemptRemoteDiagnosticSnapshotsAreDetached(t *testing.T) {
 	harness, operation := newReceiverShutdownHarness(t, false)
-	want := sessionruntime.RemoteOperationFailureSnapshot{}
-	remote := sessionruntime.NewRemoteOperationError(want)
+	want := receiversession.RemoteOperationFailureSnapshot{}
+	remote := receiversession.NewRemoteOperationError(want)
 	original := errors.Join(remote, ErrProtocol)
 	operation.terminateCause = original
 
@@ -62,18 +62,18 @@ func TestReceiverAttemptRemoteDiagnosticSnapshotsAreDetached(t *testing.T) {
 		t.Fatal("remote diagnostic setup Close unexpectedly succeeded")
 	}
 	outcome := harness.attempt.Outcome()
-	var first sessionruntime.RemoteOperationError
+	var first receiversession.RemoteOperationError
 	if !errors.As(outcome.RetainedCause(), &first) || first.Failure() != want {
 		t.Fatalf("first remote diagnostic snapshot=%+v cause=%v", first, outcome.RetainedCause())
 	}
-	first = sessionruntime.RemoteOperationError{}
+	first = receiversession.RemoteOperationError{}
 	mutateReceiverExposedChildren(t, original, context.Canceled)
 
-	var second sessionruntime.RemoteOperationError
+	var second receiversession.RemoteOperationError
 	if !errors.As(harness.attempt.Outcome().RetainedCause(), &second) || second.Failure() != want {
 		t.Fatalf("second remote diagnostic snapshot=%+v first=%+v", second, first)
 	}
-	var fromErr sessionruntime.RemoteOperationError
+	var fromErr receiversession.RemoteOperationError
 	if !errors.As(harness.attempt.Err(), &fromErr) || fromErr.Failure() != want {
 		t.Fatalf("Err remote diagnostic snapshot=%+v", fromErr)
 	}
@@ -87,7 +87,7 @@ func TestReceiverAttemptRemoteDiagnosticSnapshotsAreDetached(t *testing.T) {
 			published := harness.attempt.Outcome()
 			mutateReceiverExposedChildren(t, published.Cause(), context.Canceled)
 			mutateReceiverExposedChildren(t, published.RetainedCause(), context.Canceled)
-			var detached sessionruntime.RemoteOperationError
+			var detached receiversession.RemoteOperationError
 			if !errors.As(published.RetainedCause(), &detached) {
 				t.Errorf("concurrent remote diagnostic missing from %v", published.RetainedCause())
 				return
@@ -98,7 +98,7 @@ func TestReceiverAttemptRemoteDiagnosticSnapshotsAreDetached(t *testing.T) {
 		}()
 	}
 	readers.Wait()
-	var final sessionruntime.RemoteOperationError
+	var final receiversession.RemoteOperationError
 	if !errors.As(harness.attempt.Close(), &final) || final.Failure() != want {
 		t.Fatalf("final remote diagnostic snapshot=%+v", final)
 	}

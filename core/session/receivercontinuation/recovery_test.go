@@ -12,7 +12,9 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/revisionwait"
@@ -22,7 +24,7 @@ func TestInterruptedRangeRetainsOnlyAuthenticatedDeliveredIntervals(t *testing.T
 	f := newFixture(t)
 	runtime, channel := f.connect()
 	var count atomic.Int32
-	s, _ := New(context.Background(), runtime, func(context.Context, *sessionruntime.ReceiverRuntime) (*sessionruntime.ReceiverRuntime, error) {
+	s, _ := New(context.Background(), runtime, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
 		count.Add(1)
 		next, _ := f.connect()
 		return next, nil
@@ -84,7 +86,7 @@ func TestInterruptedRangeRetainsOnlyAuthenticatedDeliveredIntervals(t *testing.T
 func TestReplacementRevisionDriftRejectsRetainedProgress(t *testing.T) {
 	f := newFixture(t, true)
 	runtime, wire := f.connect()
-	s, err := New(context.Background(), runtime, func(context.Context, *sessionruntime.ReceiverRuntime) (*sessionruntime.ReceiverRuntime, error) {
+	s, err := New(context.Background(), runtime, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
 		wire.sender.Close()
 		replacement := f.filename + ".replacement"
 		if writeErr := os.WriteFile(replacement, []byte("changed revision after network loss"), 0600); writeErr != nil {
@@ -173,7 +175,7 @@ func TestConcurrentRecoveryJoinsOneFlightAndRejectsReusedSession(t *testing.T) {
 	runtime, channel := f.connect()
 	entered, release := make(chan struct{}), make(chan struct{})
 	var count atomic.Int32
-	s, _ := New(context.Background(), runtime, func(context.Context, *sessionruntime.ReceiverRuntime) (*sessionruntime.ReceiverRuntime, error) {
+	s, _ := New(context.Background(), runtime, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
 		count.Add(1)
 		close(entered)
 		<-release
@@ -206,7 +208,7 @@ func TestConcurrentRecoveryJoinsOneFlightAndRejectsReusedSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	bad, wire := f.connect()
-	rejected, _ := New(context.Background(), bad, func(context.Context, *sessionruntime.ReceiverRuntime) (*sessionruntime.ReceiverRuntime, error) {
+	rejected, _ := New(context.Background(), bad, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
 		return bad, nil
 	})
 	defer rejected.Close()
@@ -223,14 +225,14 @@ func TestConcurrentRecoveryJoinsOneFlightAndRejectsReusedSession(t *testing.T) {
 type failedCursor struct{}
 
 func (failedCursor) Next(context.Context) (catalog.CatalogPage, bool, error) {
-	return catalog.CatalogPage{}, false, sessionruntime.ErrRuntimeClosed
+	return catalog.CatalogPage{}, false, sessioncontract.ErrRuntimeClosed
 }
 func (failedCursor) Close() error { return nil }
 
 func TestCatalogReplayPreservesCommitmentAndGenerationFence(t *testing.T) {
 	f := newFixture(t)
 	runtime, wire := f.connect()
-	s, _ := New(context.Background(), runtime, func(context.Context, *sessionruntime.ReceiverRuntime) (*sessionruntime.ReceiverRuntime, error) {
+	s, _ := New(context.Background(), runtime, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
 		next, _ := f.connect()
 		return next, nil
 	})
@@ -261,7 +263,7 @@ func TestCatalogReplayPreservesCommitmentAndGenerationFence(t *testing.T) {
 	if err = cursor.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err = cursor.Next(context.Background()); !errors.Is(err, sessionruntime.ErrRuntimeClosed) {
+	if _, _, err = cursor.Next(context.Background()); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
 		t.Fatal(err)
 	}
 	change, err := s.WaitForChange(context.Background(), original)
@@ -309,7 +311,7 @@ func TestFenceRecoveryCancellationJoinsReplacementOwner(t *testing.T) {
 	f := newFixture(t)
 	runtime, wire := f.connect()
 	entered := make(chan struct{})
-	s, _ := New(context.Background(), runtime, func(ctx context.Context, _ *sessionruntime.ReceiverRuntime) (*sessionruntime.ReceiverRuntime, error) {
+	s, _ := New(context.Background(), runtime, func(ctx context.Context, _ *receiversession.Runtime) (*receiversession.Runtime, error) {
 		close(entered)
 		<-ctx.Done()
 		return nil, ctx.Err()

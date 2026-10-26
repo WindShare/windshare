@@ -20,7 +20,9 @@ import (
 	"github.com/windshare/windshare/core/internal/testoutputroot"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
+	sendersession "github.com/windshare/windshare/core/session/sendersession"
 	"github.com/windshare/windshare/core/transfer"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
@@ -31,7 +33,7 @@ import (
 type fixture struct {
 	t        *testing.T
 	sender   *liveshare.PreparedSender
-	factory  *sessionruntime.SenderFactory
+	factory  *sendersession.Factory
 	filename string
 	payload  []byte
 }
@@ -65,19 +67,19 @@ func newFixture(t *testing.T, directory ...bool) *fixture {
 			t.Error(err)
 		}
 	})
-	factory, err := sender.NewRuntimeFactory(liveshare.RuntimeFactoryConfig{TerminalConnectivity: terminal{}, PeerHandlers: sessionruntime.SenderPeerHandlerFactoryFunc(func(sessionruntime.SenderPeerSession) (sessionruntime.SenderPeerHandler, error) { return peer{}, nil })})
+	factory, err := sender.NewRuntimeFactory(liveshare.RuntimeFactoryConfig{TerminalConnectivity: terminal{}, PeerHandlers: sendersession.PeerHandlerFactoryFunc(func(sendersession.PeerSession) (sendersession.PeerHandler, error) { return peer{}, nil })})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return &fixture{t: t, sender: sender, factory: factory, filename: filename, payload: payload}
 }
-func (f *fixture) connect() (*sessionruntime.ReceiverRuntime, *pipeChannel) {
+func (f *fixture) connect() (*receiversession.Runtime, *pipeChannel) {
 	f.t.Helper()
 	a, b := newPipe()
 	return f.connectChannels(a, b), b
 }
 
-func (f *fixture) connectChannels(senderChannel framechannel.Channel, receiverChannel *pipeChannel) *sessionruntime.ReceiverRuntime {
+func (f *fixture) connectChannels(senderChannel framechannel.Channel, receiverChannel *pipeChannel) *receiversession.Runtime {
 	f.t.Helper()
 	prepared, err := liveshare.PrepareReceiver(liveshare.ReceiverConfig{Capacity: testReceiveCapacity(f.t), Capability: f.sender.Capability(), DescriptorObject: f.sender.Registration().Descriptor})
 	if err != nil {
@@ -121,7 +123,7 @@ type pipe struct {
 type pipeChannel struct {
 	pipe   *pipe
 	index  int
-	sender *sessionruntime.SenderRuntime
+	sender *sendersession.Runtime
 }
 
 func newPipe() (*pipeChannel, *pipeChannel) {
@@ -170,7 +172,7 @@ func TestTransferKeepsOutputAndConfirmedProgressAcrossFreshSession(t *testing.T)
 	f := newFixture(t)
 	runtime, channel := f.connect()
 	var replacements atomic.Int32
-	continuation, err := New(context.Background(), runtime, func(context.Context, *sessionruntime.ReceiverRuntime) (*sessionruntime.ReceiverRuntime, error) {
+	continuation, err := New(context.Background(), runtime, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
 		replacements.Add(1)
 		next, _ := f.connect()
 		return next, nil
@@ -328,7 +330,7 @@ func TestContinuationRequiresWinningNetworkRetirementAndFreshIdentity(t *testing
 	f := newFixture(t)
 	runtime, _ := f.connect()
 	called := false
-	s, err := New(context.Background(), runtime, func(context.Context, *sessionruntime.ReceiverRuntime) (*sessionruntime.ReceiverRuntime, error) {
+	s, err := New(context.Background(), runtime, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
 		called = true
 		return runtime, nil
 	})

@@ -16,7 +16,10 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sessioncontract "github.com/windshare/windshare/core/session"
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
+	sendersession "github.com/windshare/windshare/core/session/sendersession"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/internal/testloopback"
 	"github.com/windshare/windshare/internal/testrun"
@@ -182,12 +185,12 @@ func (signaling receiverIntegrationSignaling) OpenPeerOperation(
 }
 
 type receiverIntegrationAdmissionOutcome struct {
-	result sessionruntime.SenderPeerAdmissionResult
+	result sendersession.PeerAdmissionResult
 	err    error
 }
 
 type receiverIntegrationAdmissionScript struct {
-	lane               sessionruntime.LaneIdentity
+	lane               sessioncontract.LaneIdentity
 	grantOperation     protocolsession.OperationID
 	laneHello          framechannel.Frame
 	response           framechannel.Frame
@@ -203,7 +206,7 @@ type receiverIntegrationSenderSession struct {
 	share     catalog.ShareInstance
 	sessionID protocolsession.ProtocolSessionID
 	operation *receiverIntegrationOperation
-	lane      sessionruntime.LaneIdentity
+	lane      sessioncontract.LaneIdentity
 	channels  chan protocolsession.FrameChannel
 
 	operationMu      sync.RWMutex
@@ -271,20 +274,20 @@ func (session *receiverIntegrationSenderSession) FailPeerOperation(
 func (session *receiverIntegrationSenderSession) AdmitPeerChannel(
 	ctx context.Context,
 	channel protocolsession.FrameChannel,
-	control sessionruntime.SenderPeerAdmissionControl,
-) (result sessionruntime.SenderPeerAdmissionResult, err error) {
+	control sendersession.PeerAdmissionControl,
+) (result sendersession.PeerAdmissionResult, err error) {
 	if session.admissionScripts != nil {
 		select {
 		case <-ctx.Done():
-			return sessionruntime.SenderPeerAdmissionResult{}, ctx.Err()
+			return sendersession.PeerAdmissionResult{}, ctx.Err()
 		case script := <-session.admissionScripts:
 			return session.admitScriptedPeerChannel(ctx, channel, control, script)
 		}
 	}
-	result = sessionruntime.SenderPeerAdmissionResult{
-		Disposition:      sessionruntime.SenderPeerAdmissionSilentClose,
-		ResponseDelivery: sessionruntime.SenderPeerResponseNotAttempted,
-		LaneAttachment:   sessionruntime.SenderPeerLaneAttachmentNotAttempted,
+	result = sendersession.PeerAdmissionResult{
+		Disposition:      sendersession.PeerAdmissionSilentClose,
+		ResponseDelivery: sendersession.PeerResponseNotAttempted,
+		LaneAttachment:   sendersession.PeerLaneAttachmentNotAttempted,
 	}
 	transferred := false
 	defer func() {
@@ -305,11 +308,11 @@ func (session *receiverIntegrationSenderSession) AdmitPeerChannel(
 	if !control.BeginAuthenticatedSettlement(grantOperation, session.lane) {
 		return result, context.Canceled
 	}
-	result = sessionruntime.SenderPeerAdmissionResult{
+	result = sendersession.PeerAdmissionResult{
 		SettlementBegan: true, GrantOperationID: grantOperation, Lane: session.lane,
-		Disposition:      sessionruntime.SenderPeerAdmissionAccepted,
-		ResponseDelivery: sessionruntime.SenderPeerResponseDelivered,
-		LaneAttachment:   sessionruntime.SenderPeerLaneAttached,
+		Disposition:      sendersession.PeerAdmissionAccepted,
+		ResponseDelivery: sendersession.PeerResponseDelivered,
+		LaneAttachment:   sendersession.PeerLaneAttached,
 	}
 	select {
 	case <-ctx.Done():
@@ -323,13 +326,13 @@ func (session *receiverIntegrationSenderSession) AdmitPeerChannel(
 func (session *receiverIntegrationSenderSession) admitScriptedPeerChannel(
 	ctx context.Context,
 	channel protocolsession.FrameChannel,
-	control sessionruntime.SenderPeerAdmissionControl,
+	control sendersession.PeerAdmissionControl,
 	script receiverIntegrationAdmissionScript,
-) (result sessionruntime.SenderPeerAdmissionResult, err error) {
-	result = sessionruntime.SenderPeerAdmissionResult{
-		Disposition:      sessionruntime.SenderPeerAdmissionSilentClose,
-		ResponseDelivery: sessionruntime.SenderPeerResponseNotAttempted,
-		LaneAttachment:   sessionruntime.SenderPeerLaneAttachmentNotAttempted,
+) (result sendersession.PeerAdmissionResult, err error) {
+	result = sendersession.PeerAdmissionResult{
+		Disposition:      sendersession.PeerAdmissionSilentClose,
+		ResponseDelivery: sendersession.PeerResponseNotAttempted,
+		LaneAttachment:   sendersession.PeerLaneAttachmentNotAttempted,
 	}
 	transferred := false
 	defer func() {
@@ -382,14 +385,14 @@ func (session *receiverIntegrationSenderSession) admitScriptedPeerChannel(
 		}
 	}
 	if script.rejection != nil {
-		result = sessionruntime.SenderPeerAdmissionResult{
+		result = sendersession.PeerAdmissionResult{
 			SettlementBegan: true, GrantOperationID: script.grantOperation, Lane: script.lane,
-			Disposition:      sessionruntime.SenderPeerAdmissionRejected,
+			Disposition:      sendersession.PeerAdmissionRejected,
 			Rejection:        *script.rejection,
-			ResponseDelivery: sessionruntime.SenderPeerResponseDelivered,
-			LaneAttachment:   sessionruntime.SenderPeerLaneAttachmentNotAttempted,
+			ResponseDelivery: sendersession.PeerResponseDelivered,
+			LaneAttachment:   sendersession.PeerLaneAttachmentNotAttempted,
 		}
-		err = &sessionruntime.LaneRejectedError{Rejection: *script.rejection}
+		err = &sessioncontract.LaneRejectedError{Rejection: *script.rejection}
 		publishOutcome(receiverIntegrationAdmissionOutcome{result: result, err: err})
 		return result, err
 	}
@@ -398,21 +401,21 @@ func (session *receiverIntegrationSenderSession) admitScriptedPeerChannel(
 		err = channel.Send(sendContext, script.response)
 		cancel()
 		if err != nil {
-			result = sessionruntime.SenderPeerAdmissionResult{
+			result = sendersession.PeerAdmissionResult{
 				SettlementBegan: true, GrantOperationID: script.grantOperation, Lane: script.lane,
-				Disposition:      sessionruntime.SenderPeerAdmissionAccepted,
-				ResponseDelivery: sessionruntime.SenderPeerResponseDeliveryFailed,
-				LaneAttachment:   sessionruntime.SenderPeerLaneAttachmentNotAttempted,
+				Disposition:      sendersession.PeerAdmissionAccepted,
+				ResponseDelivery: sendersession.PeerResponseDeliveryFailed,
+				LaneAttachment:   sendersession.PeerLaneAttachmentNotAttempted,
 			}
 			publishOutcome(receiverIntegrationAdmissionOutcome{result: result, err: err})
 			return result, err
 		}
 	}
-	result = sessionruntime.SenderPeerAdmissionResult{
+	result = sendersession.PeerAdmissionResult{
 		SettlementBegan: true, GrantOperationID: script.grantOperation, Lane: script.lane,
-		Disposition:      sessionruntime.SenderPeerAdmissionAccepted,
-		ResponseDelivery: sessionruntime.SenderPeerResponseDelivered,
-		LaneAttachment:   sessionruntime.SenderPeerLaneAttached,
+		Disposition:      sendersession.PeerAdmissionAccepted,
+		ResponseDelivery: sendersession.PeerResponseDelivered,
+		LaneAttachment:   sendersession.PeerLaneAttached,
 	}
 	session.channels <- channel
 	transferred = true
@@ -421,15 +424,15 @@ func (session *receiverIntegrationSenderSession) admitScriptedPeerChannel(
 }
 
 type receiverIntegrationLanes struct {
-	lane     sessionruntime.LaneIdentity
+	lane     sessioncontract.LaneIdentity
 	channels chan protocolsession.FrameChannel
 }
 
 func (lanes receiverIntegrationLanes) RequestLane(
 	context.Context,
 	uint32,
-) (sessionruntime.LaneAttachmentGrant, error) {
-	return sessionruntime.LaneAttachmentGrant{
+) (sessioncontract.LaneAttachmentGrant, error) {
+	return sessioncontract.LaneAttachmentGrant{
 		LaneID: lanes.lane.ID, LaneEpoch: lanes.lane.Epoch,
 		OperationID: integrationOperationID(0x42),
 	}, nil
@@ -437,10 +440,10 @@ func (lanes receiverIntegrationLanes) RequestLane(
 
 func (lanes receiverIntegrationLanes) AttachLane(
 	ctx context.Context,
-	grant sessionruntime.LaneAttachmentGrant,
+	grant sessioncontract.LaneAttachmentGrant,
 	channel protocolsession.FrameChannel,
 	_ transferlanes.Route,
-) (sessionruntime.ReceiverLaneAdmissionResult, error) {
+) (receiversession.LaneAdmissionResult, error) {
 	select {
 	case <-ctx.Done():
 		return receiverUnverifiedLaneAdmission(), ctx.Err()
@@ -450,7 +453,7 @@ func (lanes receiverIntegrationLanes) AttachLane(
 }
 
 type receiverControlledLanes struct {
-	lane           sessionruntime.LaneIdentity
+	lane           sessioncontract.LaneIdentity
 	grantOperation protocolsession.OperationID
 	grantRelease   <-chan struct{}
 	requestStarted chan struct{}
@@ -464,18 +467,18 @@ type receiverControlledLanes struct {
 func (lanes receiverControlledLanes) RequestLane(
 	ctx context.Context,
 	_ uint32,
-) (sessionruntime.LaneAttachmentGrant, error) {
+) (sessioncontract.LaneAttachmentGrant, error) {
 	if lanes.requestStarted != nil {
 		close(lanes.requestStarted)
 	}
 	if lanes.grantRelease != nil {
 		select {
 		case <-ctx.Done():
-			return sessionruntime.LaneAttachmentGrant{}, ctx.Err()
+			return sessioncontract.LaneAttachmentGrant{}, ctx.Err()
 		case <-lanes.grantRelease:
 		}
 	}
-	return sessionruntime.LaneAttachmentGrant{
+	return sessioncontract.LaneAttachmentGrant{
 		LaneID:      lanes.lane.ID,
 		LaneEpoch:   lanes.lane.Epoch,
 		OperationID: lanes.grantOperation,
@@ -484,10 +487,10 @@ func (lanes receiverControlledLanes) RequestLane(
 
 func (lanes receiverControlledLanes) AttachLane(
 	ctx context.Context,
-	grant sessionruntime.LaneAttachmentGrant,
+	grant sessioncontract.LaneAttachmentGrant,
 	channel protocolsession.FrameChannel,
 	_ transferlanes.Route,
-) (admission sessionruntime.ReceiverLaneAdmissionResult, err error) {
+) (admission receiversession.LaneAdmissionResult, err error) {
 	transferred := false
 	defer func() {
 		if !transferred {
@@ -508,13 +511,13 @@ func (lanes receiverControlledLanes) AttachLane(
 			return receiverUnverifiedLaneAdmission(), ctx.Err()
 		case outcome := <-lanes.laneOutcome:
 			if outcome.err != nil {
-				if outcome.result.Disposition == sessionruntime.SenderPeerAdmissionRejected {
-					return sessionruntime.ReceiverLaneAdmissionResult{
+				if outcome.result.Disposition == sendersession.PeerAdmissionRejected {
+					return receiversession.LaneAdmissionResult{
 						GrantOperationID: outcome.result.GrantOperationID,
 						Lane:             outcome.result.Lane,
-						Disposition:      sessionruntime.ReceiverLaneAdmissionRejected,
+						Disposition:      receiversession.LaneAdmissionRejected,
 						Rejection:        outcome.result.Rejection,
-						LaneInstallation: sessionruntime.ReceiverLaneInstallationNotAttempted,
+						LaneInstallation: receiversession.LaneInstallationNotAttempted,
 					}, outcome.err
 				}
 				return receiverUnverifiedLaneAdmission(), outcome.err
@@ -544,22 +547,22 @@ func (lanes receiverControlledLanes) AttachLane(
 	return receiverInstalledLaneAdmission(grant.OperationID, lanes.lane), nil
 }
 
-func receiverUnverifiedLaneAdmission() sessionruntime.ReceiverLaneAdmissionResult {
-	return sessionruntime.ReceiverLaneAdmissionResult{
-		Disposition:      sessionruntime.ReceiverLaneAdmissionUnverified,
-		LaneInstallation: sessionruntime.ReceiverLaneInstallationNotAttempted,
+func receiverUnverifiedLaneAdmission() receiversession.LaneAdmissionResult {
+	return receiversession.LaneAdmissionResult{
+		Disposition:      receiversession.LaneAdmissionUnverified,
+		LaneInstallation: receiversession.LaneInstallationNotAttempted,
 	}
 }
 
 func receiverInstalledLaneAdmission(
 	operationID protocolsession.OperationID,
-	lane sessionruntime.LaneIdentity,
-) sessionruntime.ReceiverLaneAdmissionResult {
-	return sessionruntime.ReceiverLaneAdmissionResult{
+	lane sessioncontract.LaneIdentity,
+) receiversession.LaneAdmissionResult {
+	return receiversession.LaneAdmissionResult{
 		GrantOperationID: operationID,
 		Lane:             lane,
-		Disposition:      sessionruntime.ReceiverLaneAdmissionAccepted,
-		LaneInstallation: sessionruntime.ReceiverLaneInstalled,
+		Disposition:      receiversession.LaneAdmissionAccepted,
+		LaneInstallation: receiversession.LaneInstalled,
 	}
 }
 
@@ -583,7 +586,7 @@ func TestV2PeerReceiverAndSenderFactoriesInteroperateOverRealPion(t *testing.T) 
 	sessionID, _ := protocolsession.ProtocolSessionIDFromBytes(
 		bytes.Repeat([]byte{0x32}, protocolsession.IdentityBytes),
 	)
-	lane := sessionruntime.LaneIdentity{ID: 23, Epoch: 5}
+	lane := sessioncontract.LaneIdentity{ID: 23, Epoch: 5}
 	signalingOperation := newReceiverIntegrationOperation(integrationOperationID(0x33))
 	senderSession := &receiverIntegrationSenderSession{
 		share: share, sessionID: sessionID, operation: signalingOperation, lane: lane,
@@ -874,7 +877,7 @@ func TestV2PeerRealPionPhaseGatesPreserveExpiryAndReplacement(t *testing.T) {
 		t.Fatalf("create controlled receiver factory: %v", err)
 	}
 
-	firstLane := sessionruntime.LaneIdentity{ID: 41, Epoch: 1}
+	firstLane := sessioncontract.LaneIdentity{ID: 41, Epoch: 1}
 	firstGrantOperation := integrationOperationID(0x55)
 	firstGrantRelease := make(chan struct{})
 	firstGrantRequested := make(chan struct{})
@@ -977,9 +980,9 @@ func TestV2PeerRealPionPhaseGatesPreserveExpiryAndReplacement(t *testing.T) {
 	close(firstSettlementRelease)
 
 	firstOutcome := receiveIntegrationAdmissionOutcome(t, firstObservedOutcome)
-	var senderRejected *sessionruntime.LaneRejectedError
+	var senderRejected *sessioncontract.LaneRejectedError
 	if !firstOutcome.result.SettlementBegan ||
-		firstOutcome.result.Disposition != sessionruntime.SenderPeerAdmissionRejected ||
+		firstOutcome.result.Disposition != sendersession.PeerAdmissionRejected ||
 		firstOutcome.result.Rejection != grantExpired ||
 		!errors.As(firstOutcome.err, &senderRejected) ||
 		senderRejected.Rejection != grantExpired {
@@ -1025,7 +1028,7 @@ func TestV2PeerRealPionPhaseGatesPreserveExpiryAndReplacement(t *testing.T) {
 
 	senderDataChannels.scripts <- integrationDataChannelScript{}
 	receiverDataChannels.scripts <- integrationDataChannelScript{}
-	secondLane := sessionruntime.LaneIdentity{ID: 42, Epoch: 2}
+	secondLane := sessioncontract.LaneIdentity{ID: 42, Epoch: 2}
 	secondGrantOperation := integrationOperationID(0x56)
 	secondLaneHello := framechannel.Frame("replacement-lane-hello")
 	secondResponse := framechannel.Frame("replacement-lane-accepted")
@@ -1088,8 +1091,8 @@ func TestV2PeerRealPionPhaseGatesPreserveExpiryAndReplacement(t *testing.T) {
 	receiveIntegrationSignal(t, "replacement authenticated settlement", secondSettlementBegan)
 	secondOutcome := receiveIntegrationAdmissionOutcome(t, secondObservedOutcome)
 	if secondOutcome.err != nil ||
-		secondOutcome.result.Disposition != sessionruntime.SenderPeerAdmissionAccepted ||
-		secondOutcome.result.LaneAttachment != sessionruntime.SenderPeerLaneAttached {
+		secondOutcome.result.Disposition != sendersession.PeerAdmissionAccepted ||
+		secondOutcome.result.LaneAttachment != sendersession.PeerLaneAttached {
 		t.Fatalf("replacement sender admission = %#v, error=%v", secondOutcome.result, secondOutcome.err)
 	}
 	receiveIntegrationSignal(t, "replacement receiver readiness", secondAttempt.Ready())

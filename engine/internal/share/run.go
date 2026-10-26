@@ -7,7 +7,8 @@ import (
 
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/liveshare"
-	"github.com/windshare/windshare/core/session/sessionruntime"
+
+	sendersession "github.com/windshare/windshare/core/session/sendersession"
 	"github.com/windshare/windshare/engine/internal/nativeconnectivity"
 	"github.com/windshare/windshare/engine/internal/task"
 	"github.com/windshare/windshare/engine/relayprofile"
@@ -259,7 +260,7 @@ func startSessionServer(ctx context.Context, factory SessionFactory, relays Rela
 					_ = channel.Close()
 					return
 				}
-				if admission.Kind == sessionruntime.SenderChannelAttachedLane {
+				if admission.Kind == sendersession.ChannelAttachedLane {
 					return
 				}
 				if admission.Session == nil {
