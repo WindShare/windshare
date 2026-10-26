@@ -12,6 +12,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
+	"github.com/windshare/windshare/osfs/internal/outputprobe"
 	"golang.org/x/sys/unix"
 )
 
@@ -174,7 +175,7 @@ func TestLinuxTmpfsSupportsProcessOutputWithoutClaimingRestartRecovery(t *testin
 
 	// An old process's names do not grant ownership to this process, even when
 	// their spelling resembles a probe namespace.
-	leftoverName := linuxOutputProbePrefix + "11111111111111111111111111111111"
+	leftoverName := outputprobe.NamePrefix + "11111111111111111111111111111111"
 	leftover := filepath.Join(rootPath, leftoverName)
 	if err := os.Mkdir(leftover, 0o700); err != nil {
 		t.Fatal(err)

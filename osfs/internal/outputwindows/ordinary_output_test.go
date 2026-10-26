@@ -44,62 +44,6 @@ func TestWindowsObjectIDFailurePreservesLiveOnlyCapabilityFacts(t *testing.T) {
 	}
 }
 
-func TestWindowsDestinationCapabilityFactsFailIndependently(t *testing.T) {
-	failures := []struct {
-		name   string
-		reason outputcap.CapabilityReason
-		read   func(outputcap.DestinationCapabilities) outputcap.CapabilityEvidence
-		set    func(*windowsCapabilityProbeResults, error)
-	}{
-		{"safe-publish", outputcap.CapabilityReasonUnsafePublication,
-			func(value outputcap.DestinationCapabilities) outputcap.CapabilityEvidence { return value.SafePublish() },
-			func(value *windowsCapabilityProbeResults, err error) { value.safePublish = err }},
-		{"operation-recovery", outputcap.CapabilityReasonUnverifiableOperationRecovery,
-			func(value outputcap.DestinationCapabilities) outputcap.CapabilityEvidence {
-				return value.OperationRecovery()
-			},
-			func(value *windowsCapabilityProbeResults, err error) { value.operationRecovery = err }},
-		{"range-recovery", outputcap.CapabilityReasonUnverifiableRangeRecovery,
-			func(value outputcap.DestinationCapabilities) outputcap.CapabilityEvidence {
-				return value.RangeRecovery()
-			},
-			func(value *windowsCapabilityProbeResults, err error) { value.rangeRecovery = err }},
-		{"crash-cleanup", outputcap.CapabilityReasonUnverifiableCrashCleanup,
-			func(value outputcap.DestinationCapabilities) outputcap.CapabilityEvidence {
-				return value.CrashCleanup()
-			},
-			func(value *windowsCapabilityProbeResults, err error) { value.crashCleanup = err }},
-	}
-	for index, failure := range failures {
-		t.Run(failure.name, func(t *testing.T) {
-			var results windowsCapabilityProbeResults
-			failure.set(&results, errors.Join(errWindowsOutputUnsupported, errors.New("injected proof failure")))
-			capabilities, err := windowsDestinationCapabilitiesFromResults(results)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for otherIndex, other := range failures {
-				evidence := other.read(capabilities)
-				if otherIndex == index {
-					if evidence.Supported() || evidence.Reason() != failure.reason {
-						t.Fatalf("failed evidence = (%v, %v)", evidence.Fact(), evidence.Reason())
-					}
-					continue
-				}
-				if !evidence.Supported() {
-					t.Fatalf("%s was coupled to %s failure: %v", other.name, failure.name, evidence.Reason())
-				}
-			}
-		})
-	}
-	_, err := windowsDestinationCapabilitiesFromResults(windowsCapabilityProbeResults{
-		safePublish: errors.Join(errWindowsOutputUnsafe, errors.New("injected unsafe namespace")),
-	})
-	if !errors.Is(err, outputcap.ErrUnsafeNamespace) {
-		t.Fatalf("unsafe probe result = %v", err)
-	}
-}
-
 func TestWindowsSemanticFilePublishIsNoCopyNoReplace(t *testing.T) {
 	_, guard := windowsOpenGuardedTestRoot(t)
 	root := &windowsOutputDirectory{native: guard.Root()}

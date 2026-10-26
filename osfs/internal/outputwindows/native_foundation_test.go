@@ -13,6 +13,7 @@ import (
 	"unsafe"
 
 	"github.com/windshare/windshare/osfs/internal/outputcap"
+	"github.com/windshare/windshare/osfs/internal/outputprobe"
 	"golang.org/x/sys/windows"
 )
 
@@ -580,7 +581,7 @@ func TestWindowsRecoverableFeatureProbeExercisesAndCleansNativeNamespace(t *test
 	}
 	defer guard.Close()
 	root := guard.Root()
-	nonce := bytes.Repeat([]byte{0x5a}, windowsOutputProbeRandomBytes)
+	nonce := bytes.Repeat([]byte{0x5a}, outputprobe.RandomBytes)
 	if err := root.probeRecoverableFeaturesWithRandom(bytes.NewReader(nonce)); err != nil {
 		t.Fatal(err)
 	}
@@ -686,12 +687,12 @@ func TestWindowsProbeCleanupStopsAtFirstUnverifiedCut(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	probe := windowsOutputProbe{
-		root: platform.root, rootName: probeName, directory: directory, rootPresent: true,
-		stage: stage, anchor: anchor, publication: publication,
-		stageMayExist: true, anchorMayExist: true, publicationMayExist: true,
-	}
-	if err := probe.cleanup(); !errors.Is(err, errWindowsOutputUnsafe) {
+	probe := outputprobe.NewWorkspace(&windowsOutputDirectory{native: platform.root}, probeName,
+		&windowsOutputDirectory{native: directory})
+	probe.KeepFile("stage", newWindowsOutputObservedFile(stage, true))
+	probe.KeepFile("anchor", newWindowsOutputObservedFile(anchor, true))
+	probe.KeepFile("publication", newWindowsOutputObservedFile(publication, true))
+	if err := probe.Cleanup(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("cleanup mismatch error = %v", err)
 	}
 

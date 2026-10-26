@@ -5,6 +5,8 @@ package outputwindows
 import (
 	"bytes"
 	"errors"
+	"github.com/windshare/windshare/osfs/internal/outputcap"
+	"github.com/windshare/windshare/osfs/internal/outputprobe"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -39,7 +41,7 @@ func TestCoverageC4WindowsProbeRecoversExactRestartLeftover(t *testing.T) {
 
 	// Injected entropy fixes the fresh probe name so this test covers recovery,
 	// the mutex lifetime, and the normal feature proof without timing or chance.
-	nonce := bytes.Repeat([]byte{0x5c}, windowsOutputProbeRandomBytes)
+	nonce := bytes.Repeat([]byte{0x5c}, outputprobe.RandomBytes)
 	if err := root.probeRecoverableFeaturesWithRandom(bytes.NewReader(nonce)); err != nil {
 		t.Fatal(err)
 	}
@@ -101,8 +103,8 @@ func TestCoverageC4WindowsProbeRecoveryPreservesWrongKindRoot(t *testing.T) {
 }
 
 func TestCoverageC4WindowsProbeRecoveryPreservesUnownedState(t *testing.T) {
-	invalidCharacterName := windowsOutputProbePrefix + "gggggggggggggggggggggggggggggggg"
-	if windowsCanonicalProbeName(invalidCharacterName) {
+	invalidCharacterName := outputprobe.NamePrefix + "gggggggggggggggggggggggggggggggg"
+	if outputprobe.CanonicalName(invalidCharacterName) {
 		t.Fatal("probe name with non-hex nonce was canonical")
 	}
 	for _, test := range []struct {
@@ -163,22 +165,28 @@ func TestCoverageC4WindowsProbeRemovalStopsAtIdentityReplacement(t *testing.T) {
 		name      string
 		probeName string
 		build     func(*testing.T, *windowsDirectory, string)
-		replace   func(*testing.T, *windowsOutputProbeLeftover)
+		replace   func(*testing.T, *outputprobe.Workspace, *windowsDirectory, string)
 		preserved string
 	}{
 		{
 			name:      "regular link",
 			probeName: ".windshare-output.probe-33333333333333333333333333333333",
 			build:     coverageC4BuildCompleteProbeLeftover,
-			replace: func(t *testing.T, leftover *windowsOutputProbeLeftover) {
-				if err := leftover.directory.RemoveRegularLink("stage", leftover.regular["stage"]); err != nil {
-					t.Fatal(err)
-				}
-				foreign, err := leftover.directory.CreatePrivateFile("stage")
+			replace: func(t *testing.T, leftover *outputprobe.Workspace, root *windowsDirectory, name string) {
+				directory := leftover.Directory().(*windowsOutputDirectory).native
+				original, err := directory.OpenPrivateFile("stage")
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := errors.Join(foreign.Truncate(1), foreign.Close(), leftover.directory.Sync()); err != nil {
+				defer original.Close()
+				if err := directory.RemoveRegularLink("stage", original); err != nil {
+					t.Fatal(err)
+				}
+				foreign, err := leftover.Directory().(*windowsOutputDirectory).native.CreatePrivateFile("stage")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := errors.Join(foreign.Truncate(1), foreign.Close(), leftover.Directory().(*windowsOutputDirectory).native.Sync()); err != nil {
 					t.Fatal(err)
 				}
 			},
@@ -201,11 +209,17 @@ func TestCoverageC4WindowsProbeRemovalStopsAtIdentityReplacement(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			replace: func(t *testing.T, leftover *windowsOutputProbeLeftover) {
-				if err := leftover.directory.RemoveDirectory("candidate", leftover.directories["candidate"]); err != nil {
+			replace: func(t *testing.T, leftover *outputprobe.Workspace, root *windowsDirectory, name string) {
+				directory := leftover.Directory().(*windowsOutputDirectory).native
+				original, err := directory.OpenPrivateDirectory("candidate")
+				if err != nil {
 					t.Fatal(err)
 				}
-				foreign, err := leftover.directory.CreatePrivateDirectory("candidate")
+				defer original.Close()
+				if err := directory.RemoveDirectory("candidate", original); err != nil {
+					t.Fatal(err)
+				}
+				foreign, err := leftover.Directory().(*windowsOutputDirectory).native.CreatePrivateDirectory("candidate")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -227,11 +241,11 @@ func TestCoverageC4WindowsProbeRemovalStopsAtIdentityReplacement(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			replace: func(t *testing.T, leftover *windowsOutputProbeLeftover) {
-				if err := leftover.root.RemoveDirectory(leftover.name, leftover.directory); err != nil {
+			replace: func(t *testing.T, leftover *outputprobe.Workspace, root *windowsDirectory, name string) {
+				if err := root.RemoveDirectory(name, leftover.Directory().(*windowsOutputDirectory).native); err != nil {
 					t.Fatal(err)
 				}
-				foreign, err := leftover.root.CreatePrivateDirectory(leftover.name)
+				foreign, err := root.CreatePrivateDirectory(name)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -251,16 +265,16 @@ func TestCoverageC4WindowsProbeRemovalStopsAtIdentityReplacement(t *testing.T) {
 			defer guard.Close()
 			root := guard.Root()
 			test.build(t, root, test.probeName)
-			leftover, err := root.inspectOutputProbeLeftover(test.probeName)
+			leftover, err := outputprobe.Inspect(&windowsOutputDirectory{native: root}, test.probeName, outputprobe.WindowsNTFS)
 			if err != nil {
 				t.Fatal(err)
 			}
-			test.replace(t, leftover)
-			if err := leftover.remove(); !errors.Is(err, errWindowsOutputUnsafe) {
-				_ = leftover.close()
+			test.replace(t, leftover, root, test.probeName)
+			if err := leftover.Cleanup(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
+				_ = leftover.Close()
 				t.Fatalf("replacement removal error = %v", err)
 			}
-			if err := leftover.close(); err != nil {
+			if err := leftover.Close(); err != nil {
 				t.Fatal(err)
 			}
 			preservedPath := filepath.Join(root.path, test.probeName, test.preserved)

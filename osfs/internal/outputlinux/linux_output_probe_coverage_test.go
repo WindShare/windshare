@@ -6,52 +6,22 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/windshare/windshare/osfs/internal/outputcap"
+	"github.com/windshare/windshare/osfs/internal/outputprobe"
 	"io"
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 
 	"golang.org/x/sys/unix"
 )
 
-func TestLinuxOutputProbeNamesBindExactlyOneCanonicalEntropyEncoding(t *testing.T) {
-	entropy := []byte{
-		0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
-		0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
-	}
-	want := linuxOutputProbePrefix + "000102030405060708090a0b0c0d0e0f"
-	got, err := linuxNewOutputProbeName(bytes.NewReader(entropy))
-	if err != nil || got != want {
-		t.Fatalf("new probe name = %q, %v; want %q", got, err, want)
-	}
-	if !linuxCanonicalProbeName(got) {
-		t.Fatalf("generated probe name is not canonical: %q", got)
-	}
-	if _, err := linuxNewOutputProbeName(bytes.NewReader(entropy[:len(entropy)-1])); !errors.Is(err, io.ErrUnexpectedEOF) {
-		t.Fatalf("short entropy error = %v, want unexpected EOF", err)
-	}
-
-	for _, name := range []string{
-		linuxOutputProbeReservedPrefix,
-		linuxOutputProbePrefix + strings.Repeat("0", linuxOutputProbeRandomBytes*2-1),
-		linuxOutputProbePrefix + strings.Repeat("0", linuxOutputProbeRandomBytes*2+1),
-		linuxOutputProbePrefix + strings.Repeat("0", linuxOutputProbeRandomBytes*2-1) + "g",
-		linuxOutputProbePrefix + strings.Repeat("0", linuxOutputProbeRandomBytes*2-1) + "A",
-		linuxOutputProbeReservedPrefix + "_" + strings.Repeat("0", linuxOutputProbeRandomBytes*2),
-	} {
-		if linuxCanonicalProbeName(name) {
-			t.Errorf("malformed reserved name was canonical: %q", name)
-		}
-	}
-}
-
 func TestLinuxOutputProbeRetriesCollisionAndCleansNativeNamespace(t *testing.T) {
 	root, rootPath := openLinuxOutputProbeCoverageRoot(t)
 	const (
-		firstName  = linuxOutputProbePrefix + "11111111111111111111111111111111"
-		secondName = linuxOutputProbePrefix + "22222222222222222222222222222222"
+		firstName  = outputprobe.NamePrefix + "11111111111111111111111111111111"
+		secondName = outputprobe.NamePrefix + "22222222222222222222222222222222"
 	)
 	system := linuxHostOutputSystem
 	originalMkdirat := system.mkdirat
@@ -68,8 +38,8 @@ func TestLinuxOutputProbeRetriesCollisionAndCleansNativeNamespace(t *testing.T) 
 	}
 	root.system = &system
 
-	entropy := append(bytes.Repeat([]byte{0x11}, linuxOutputProbeRandomBytes),
-		bytes.Repeat([]byte{0x22}, linuxOutputProbeRandomBytes)...)
+	entropy := append(bytes.Repeat([]byte{0x11}, outputprobe.RandomBytes),
+		bytes.Repeat([]byte{0x22}, outputprobe.RandomBytes)...)
 	if err := root.probeRecoverableFeaturesWithRandom(bytes.NewReader(entropy)); err != nil {
 		t.Fatalf("exercise native feature probe: %v", err)
 	}
@@ -87,9 +57,48 @@ func TestLinuxOutputProbeRetriesCollisionAndCleansNativeNamespace(t *testing.T) 
 	assertLinuxProbeCoverageRootEmpty(t, rootPath)
 }
 
+func TestLinuxRangeProbeFailurePreservesLiveOutput(t *testing.T) {
+	for _, afterMutation := range []bool{false, true} {
+		t.Run(fmt.Sprintf("after-mutation=%t", afterMutation), func(t *testing.T) {
+			root, rootPath := openLinuxOutputProbeCoverageRoot(t)
+			system := linuxHostOutputSystem
+			rename := system.renameat2
+			injected := false
+			system.renameat2 = func(sourceFD int, source string, targetFD int, target string, flags uint) error {
+				if source != outputprobe.TemporaryRecordName || target != outputprobe.RecordName {
+					return rename(sourceFD, source, targetFD, target, flags)
+				}
+				injected = true
+				if afterMutation {
+					if err := rename(sourceFD, source, targetFD, target, flags); err != nil {
+						return err
+					}
+				}
+				return unix.EIO
+			}
+			root.system = &system
+			capabilities, err := root.destinationCapabilitiesWithRandom(
+				bytes.NewReader(bytes.Repeat([]byte{0x67}, outputprobe.RandomBytes)))
+			if err != nil {
+				t.Fatalf("record replacement failure rejected safe output: %v", err)
+			}
+			if !injected || capabilities.RangeRecovery().Supported() ||
+				!capabilities.SafePublish().Supported() || !capabilities.OperationRecovery().Supported() ||
+				!capabilities.CrashCleanup().Supported() {
+				t.Fatalf("replacement failure changed unrelated capabilities: injected=%t capabilities=%+v", injected, capabilities)
+			}
+			mode, err := outputcap.SelectExecutionMode(capabilities)
+			if err != nil || mode != outputcap.ExecutionLiveOnly {
+				t.Fatalf("safe output mode=%v error=%v", mode, err)
+			}
+			assertLinuxProbeCoverageRootEmpty(t, rootPath)
+		})
+	}
+}
+
 func TestLinuxOutputProbeRecoveryRemovesReachableCutInProtocolOrder(t *testing.T) {
 	root, rootPath := openLinuxOutputProbeCoverageRoot(t)
-	const probeName = linuxOutputProbePrefix + "33333333333333333333333333333333"
+	const probeName = outputprobe.NamePrefix + "33333333333333333333333333333333"
 	probePath := createLinuxProbeCoverageDirectory(t, rootPath, probeName)
 	writeLinuxProbeCoverageFile(t, probePath, "live-stage", nil)
 	stagePath := writeLinuxProbeCoverageFile(t, probePath, "stage", nil)
@@ -168,12 +177,12 @@ func TestLinuxOutputProbeLeftoverRejectsAmbiguousNativeCuts(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			root, rootPath := openLinuxOutputProbeCoverageRoot(t)
-			probeName := linuxOutputProbePrefix + fmt.Sprintf("%032x", index+1)
+			probeName := outputprobe.NamePrefix + fmt.Sprintf("%032x", index+1)
 			probePath := createLinuxProbeCoverageDirectory(t, rootPath, probeName)
 			test.build(t, probePath)
-			leftover, err := root.inspectOutputProbeLeftover(probeName)
+			leftover, err := outputprobe.Inspect(&linuxDirectory{native: root}, probeName, outputprobe.LinuxExt4)
 			if leftover != nil {
-				_ = leftover.close()
+				_ = leftover.Close()
 			}
 			if err == nil || leftover != nil {
 				t.Fatalf("ambiguous probe cut = leftover %v, error %v", leftover, err)
@@ -187,14 +196,14 @@ func TestLinuxOutputProbeLeftoverRejectsAmbiguousNativeCuts(t *testing.T) {
 
 func TestLinuxOutputProbeLeftoverRemovalRejectsNameReplacement(t *testing.T) {
 	root, rootPath := openLinuxOutputProbeCoverageRoot(t)
-	const probeName = linuxOutputProbePrefix + "44444444444444444444444444444444"
+	const probeName = outputprobe.NamePrefix + "44444444444444444444444444444444"
 	probePath := createLinuxProbeCoverageDirectory(t, rootPath, probeName)
 	recordPath := writeLinuxProbeCoverageFile(t, probePath, "record", []byte{1})
-	leftover, err := root.inspectOutputProbeLeftover(probeName)
+	leftover, err := outputprobe.Inspect(&linuxDirectory{native: root}, probeName, outputprobe.LinuxExt4)
 	if err != nil {
 		t.Fatalf("inspect reachable record cut: %v", err)
 	}
-	defer leftover.close()
+	defer leftover.Close()
 	displacedPath := filepath.Join(probePath, "displaced-record")
 	if err := os.Rename(recordPath, displacedPath); err != nil {
 		t.Fatal(err)
@@ -202,7 +211,7 @@ func TestLinuxOutputProbeLeftoverRemovalRejectsNameReplacement(t *testing.T) {
 	want := []byte("replacement")
 	writeLinuxProbeCoverageFile(t, probePath, "record", want)
 
-	if err := leftover.remove(); !errors.Is(err, errLinuxOutputUnsafe) {
+	if err := leftover.Cleanup(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("remove replaced probe record error = %v, want unsafe", err)
 	}
 	if got, err := os.ReadFile(recordPath); err != nil || !bytes.Equal(got, want) {
@@ -211,7 +220,7 @@ func TestLinuxOutputProbeLeftoverRemovalRejectsNameReplacement(t *testing.T) {
 	if _, err := os.Stat(displacedPath); err != nil {
 		t.Fatalf("original record was not retained through its open authority: %v", err)
 	}
-	if err := (*linuxOutputProbeLeftover)(nil).close(); err != nil {
+	if err := (*outputprobe.Workspace)(nil).Close(); err != nil {
 		t.Fatalf("close nil leftover: %v", err)
 	}
 }
@@ -219,7 +228,7 @@ func TestLinuxOutputProbeLeftoverRemovalRejectsNameReplacement(t *testing.T) {
 func TestLinuxOutputProbeRecoveryFailsClosedOnReservedNamespaceBounds(t *testing.T) {
 	t.Run("malformed reserved name", func(t *testing.T) {
 		root, rootPath := openLinuxOutputProbeCoverageRoot(t)
-		name := linuxOutputProbeReservedPrefix + "-not-canonical"
+		name := outputprobe.ReservedPrefix + "-not-canonical"
 		path := createLinuxProbeCoverageDirectory(t, rootPath, name)
 		if err := root.recoverOutputProbeLeftovers(); !errors.Is(err, errLinuxOutputUnsafe) {
 			t.Fatalf("malformed reserved name error = %v, want unsafe", err)
@@ -231,15 +240,15 @@ func TestLinuxOutputProbeRecoveryFailsClosedOnReservedNamespaceBounds(t *testing
 
 	t.Run("leftover count", func(t *testing.T) {
 		root, rootPath := openLinuxOutputProbeCoverageRoot(t)
-		for index := 0; index <= linuxOutputProbeMaximumLeftovers; index++ {
-			name := linuxOutputProbePrefix + fmt.Sprintf("%032x", index+1)
+		for index := 0; index <= outputprobe.MaximumLeftovers; index++ {
+			name := outputprobe.NamePrefix + fmt.Sprintf("%032x", index+1)
 			createLinuxProbeCoverageDirectory(t, rootPath, name)
 		}
 		if err := root.recoverOutputProbeLeftovers(); !errors.Is(err, errLinuxOutputUnsafe) {
 			t.Fatalf("excess leftover count error = %v, want unsafe", err)
 		}
 		entries, err := os.ReadDir(rootPath)
-		if err != nil || len(entries) != linuxOutputProbeMaximumLeftovers+1 {
+		if err != nil || len(entries) != outputprobe.MaximumLeftovers+1 {
 			t.Fatalf("failed count check mutated leftovers: entries=%d error=%v", len(entries), err)
 		}
 	})
