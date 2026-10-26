@@ -82,7 +82,7 @@ func TestCatalogTransportRejectsHostileOperationResponses(t *testing.T) {
 	runCatalogTransportSynctest(t, "malformed signed wrapper is session failure", func(t *testing.T) {
 		harness := newBlockedCatalogFetch(t, context.Background())
 		message, err := protocolsession.NewMessage(
-			protocolsession.MessageScanProgress, operationIDPointer(harness.call.ID()), []byte{1},
+			protocolsession.MessageScanProgress, new(harness.call.ID()), []byte{1},
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -119,7 +119,7 @@ func TestCatalogTransportRejectsHostileOperationResponses(t *testing.T) {
 		enqueueCallResponse(harness.call, progress)
 		enqueueCallResponse(harness.call, progress)
 		unexpected, err := protocolsession.NewMessage(
-			protocolsession.MessageOpenResults, operationIDPointer(harness.call.ID()), []byte{1},
+			protocolsession.MessageOpenResults, new(harness.call.ID()), []byte{1},
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -133,7 +133,7 @@ func TestCatalogTransportRejectsHostileOperationResponses(t *testing.T) {
 	runCatalogTransportSynctest(t, "malformed operation error is session failure", func(t *testing.T) {
 		harness := newBlockedCatalogFetch(t, context.Background())
 		message, err := protocolsession.NewMessage(
-			protocolsession.MessageOperationError, operationIDPointer(harness.call.ID()), []byte{1},
+			protocolsession.MessageOperationError, new(harness.call.ID()), []byte{1},
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -170,7 +170,7 @@ func TestCatalogTransportRejectsHostileOperationResponses(t *testing.T) {
 	runCatalogTransportSynctest(t, "malformed catalog result wrapper is rejected", func(t *testing.T) {
 		harness := newBlockedCatalogFetch(t, context.Background())
 		message, err := protocolsession.NewMessage(
-			protocolsession.MessageCatalogResult, operationIDPointer(harness.call.ID()), []byte{1},
+			protocolsession.MessageCatalogResult, new(harness.call.ID()), []byte{1},
 		)
 		if err != nil {
 			t.Fatal(err)

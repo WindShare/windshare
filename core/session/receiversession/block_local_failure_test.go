@@ -287,12 +287,12 @@ func TestBlockLocalFailuresCancelExactOperationAndPreserveSibling(t *testing.T) 
 		name        string
 		want        error
 		failOpening bool
-		inject      func(*testing.T, *Runtime, context.Context, *sessioncore.Call)
+		inject      func(*testing.T, *sessioncore.Call)
 	}{
 		{
 			name: "malformed authenticated fragment",
 			want: contentflow.ErrFragmentMalformed,
-			inject: func(t *testing.T, receiver *Runtime, senderContext context.Context, call *sessioncore.Call) {
+			inject: func(t *testing.T, call *sessioncore.Call) {
 				fragments, err := contentflow.FragmentRecord(
 					call.ID(), bytes.Repeat([]byte{1}, contentflow.MaxFragmentPayloadBytes+1),
 				)
@@ -301,30 +301,30 @@ func TestBlockLocalFailuresCancelExactOperationAndPreserveSibling(t *testing.T) 
 				}
 				plaintext := fragments[0].Body()
 				plaintext[48] ^= 0x80
-				sendInjectedBlockFragment(t, receiver, senderContext, decodeInjectedFragment(t, plaintext))
+				sendInjectedBlockFragment(t, call, decodeInjectedFragment(t, plaintext))
 			},
 		},
 		{
 			name: "conflicting authenticated fragment",
 			want: contentflow.ErrFragmentConflict,
-			inject: func(t *testing.T, receiver *Runtime, senderContext context.Context, call *sessioncore.Call) {
+			inject: func(t *testing.T, call *sessioncore.Call) {
 				fragments, err := contentflow.FragmentRecord(
 					call.ID(), bytes.Repeat([]byte{2}, contentflow.MaxFragmentPayloadBytes+1),
 				)
 				if err != nil {
 					t.Fatal(err)
 				}
-				sendInjectedBlockFragment(t, receiver, senderContext, fragments[0])
+				sendInjectedBlockFragment(t, call, fragments[0])
 				plaintext := fragments[0].Body()
 				plaintext[len(plaintext)-1] ^= 0xff
-				sendInjectedBlockFragment(t, receiver, senderContext, decodeInjectedFragment(t, plaintext))
+				sendInjectedBlockFragment(t, call, decodeInjectedFragment(t, plaintext))
 			},
 		},
 		{
 			name:        "OpenBlock failure after nonfinal fragment",
 			want:        localOpenFailure,
 			failOpening: true,
-			inject: func(t *testing.T, receiver *Runtime, senderContext context.Context, call *sessioncore.Call) {
+			inject: func(t *testing.T, call *sessioncore.Call) {
 				fragments, err := contentflow.FragmentRecord(
 					call.ID(), bytes.Repeat([]byte{3}, contentflow.MaxFragmentPayloadBytes+1),
 				)
@@ -332,7 +332,7 @@ func TestBlockLocalFailuresCancelExactOperationAndPreserveSibling(t *testing.T) 
 					t.Fatalf("two-fragment record: count=%d error=%v", len(fragments), err)
 				}
 				for _, fragment := range fragments {
-					sendInjectedBlockFragment(t, receiver, senderContext, fragment)
+					sendInjectedBlockFragment(t, call, fragment)
 				}
 			},
 		},
@@ -391,7 +391,7 @@ func TestBlockLocalFailuresCancelExactOperationAndPreserveSibling(t *testing.T) 
 					protocolsession.MessageRequestBlocks,
 				)
 				pair.beginReceiverFrameAudit()
-				test.inject(t, pair.receiver, senderContext, operation.call)
+				test.inject(t, operation.call)
 				select {
 				case err := <-result:
 					if !errors.Is(err, test.want) {
@@ -432,14 +432,12 @@ func TestBlockLocalFailuresCancelExactOperationAndPreserveSibling(t *testing.T) 
 
 func sendInjectedBlockFragment(
 	t *testing.T,
-	receiver *Runtime,
-	senderContext context.Context,
+	call *sessioncore.Call,
 	message protocolsession.Message,
 ) {
 	t.Helper()
-	call := onlyActiveCall(t, receiver.rpc)
 	if err := deliverCallResponse(call, message); err != nil {
-		t.Fatalf("send authenticated block fault over the session lane: %v", err)
+		t.Fatalf("inject authenticated block response: %v", err)
 	}
 }
 

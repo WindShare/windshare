@@ -257,7 +257,7 @@ func TestBlockProtocolTraceRejectsMalformedFinalResponse(t *testing.T) {
 		go func() { _, err := fixture.lane.FetchBlock(context.Background(), fixture.demand, nil); done <- err }()
 		synctest.Wait()
 		call := onlyActiveCall(t, fixture.lane.rpc)
-		message, err := protocolsession.NewMessage(protocolsession.MessageOperationComplete, operationIDPointer(call.ID()), []byte{0xa0})
+		message, err := protocolsession.NewMessage(protocolsession.MessageOperationComplete, new(call.ID()), []byte{0xa0})
 		if err != nil {
 			t.Fatal(err)
 		}

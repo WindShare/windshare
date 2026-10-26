@@ -29,9 +29,6 @@ func testCore(runtime *sessioncore.Runtime) *coreFixture {
 	}
 	return fixture.(*coreFixture)
 }
-func laneIdentityPointer(identity sessioncontract.LaneIdentity) *sessioncontract.LaneIdentity {
-	return &identity
-}
 func startReceiverPeerWriter(t *testing.T, runtime *sessioncore.Runtime) {
 	t.Helper()
 	fixture := testCore(runtime)
@@ -41,9 +38,6 @@ func startReceiverPeerWriter(t *testing.T, runtime *sessioncore.Runtime) {
 	fixture.started = true
 	runtime.Start()
 	t.Cleanup(runtime.Close)
-}
-func closeReceiverLane(runtime *sessioncore.Runtime) {
-	runtime.DetachLane(runtimeIdentity(runtime))
 }
 func receiverRequestContext(call *sessioncore.Call) context.Context {
 	generation, _ := call.OperationAuthority()

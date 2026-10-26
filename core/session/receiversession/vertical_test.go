@@ -1092,7 +1092,6 @@ func checkedSender(t testing.TB, publicKey []byte) *senderauth.Verifier {
 	return sender
 }
 
-func operationIDPointer(id protocolsession.OperationID) *protocolsession.OperationID { return &id }
 func (fixture *verticalFixture) rebuildSender(t *testing.T) {
 	t.Helper()
 	var err error
