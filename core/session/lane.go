@@ -5,16 +5,6 @@ import (
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
-// LaneAttachmentGrant is the receiver-visible signed grant content. Expiry is
-// intentionally absent because it is sender-local admission authority and is
-// not carried by the wire body.
-type LaneAttachmentGrant struct {
-	LaneID      uint32
-	LaneEpoch   uint32
-	OperationID protocolsession.OperationID
-	AttachNonce [protocolsession.LaneAttachNonceBytes]byte
-}
-
 // LaneRejectedError is safe to expose only after WS2N's sender signature has
 // been verified against the exact LaneHello digest.
 type LaneRejectedError struct {

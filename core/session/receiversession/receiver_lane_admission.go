@@ -44,7 +44,7 @@ func unverifiedReceiverLaneAdmission() LaneAdmissionResult {
 	}
 }
 
-func receiverLaneSettlement(grant sessioncontract.LaneAttachmentGrant) LaneAdmissionResult {
+func receiverLaneSettlement(grant protocolsession.LaneGrant) LaneAdmissionResult {
 	return LaneAdmissionResult{
 		GrantOperationID: grant.OperationID,
 		Lane:             sessioncontract.LaneIdentity{ID: grant.LaneID, Epoch: grant.LaneEpoch},
@@ -66,7 +66,7 @@ func (runtime *Runtime) LaneDone(identity sessioncontract.LaneIdentity) (<-chan 
 // runtime lane that will close it on exact detachment or session termination.
 func (runtime *Runtime) AttachLane(
 	ctx context.Context,
-	grant sessioncontract.LaneAttachmentGrant,
+	grant protocolsession.LaneGrant,
 	channel protocolsession.FrameChannel,
 	route transferlanes.Route,
 ) (LaneAdmissionResult, error) {

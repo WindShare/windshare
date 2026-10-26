@@ -4,7 +4,6 @@ import (
 	"context"
 	sessioncontract "github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
-	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -13,34 +12,34 @@ import (
 func (runtime *Runtime) RequestLane(
 	ctx context.Context,
 	requestedLaneID uint32,
-) (sessioncontract.LaneAttachmentGrant, error) {
+) (protocolsession.LaneGrant, error) {
 	if runtime == nil {
-		return sessioncontract.LaneAttachmentGrant{}, sessioncontract.ErrRuntimeClosed
+		return protocolsession.LaneGrant{}, sessioncontract.ErrRuntimeClosed
 	}
-	body, err := sessioncore.EncodeLaneAttachRequest(requestedLaneID)
+	body, err := protocolsession.EncodeLaneAttachRequest(requestedLaneID)
 	if err != nil {
-		return sessioncontract.LaneAttachmentGrant{}, err
+		return protocolsession.LaneGrant{}, err
 	}
 	call, err := runtime.rpc.Begin(ctx, protocolsession.MessageLaneAttach, body)
 	if err != nil {
-		return sessioncontract.LaneAttachmentGrant{}, err
+		return protocolsession.LaneGrant{}, err
 	}
 	defer func() { _ = runtime.rpc.CancelAndEnd(call, contentflow.CancelReasonOutputAbort) }()
 	message, err := runtime.rpc.Await(ctx, call)
 	if err != nil {
-		return sessioncontract.LaneAttachmentGrant{}, err
+		return protocolsession.LaneGrant{}, err
 	}
 	if message.Kind() == protocolsession.MessageOperationError {
-		return sessioncontract.LaneAttachmentGrant{}, remoteOperationError(message)
+		return protocolsession.LaneGrant{}, remoteOperationError(message)
 	}
 	if message.Kind() != protocolsession.MessageLaneAttach {
-		return sessioncontract.LaneAttachmentGrant{}, sessioncontract.ErrOperationMissing
+		return protocolsession.LaneGrant{}, sessioncontract.ErrOperationMissing
 	}
 	unsigned, err := protocolsession.SenderControlSemanticBody(message)
 	if err != nil {
-		return sessioncontract.LaneAttachmentGrant{}, err
+		return protocolsession.LaneGrant{}, err
 	}
-	return sessioncore.DecodeLaneGrant(unsigned, call.ID())
+	return protocolsession.DecodeLaneGrant(unsigned, call.ID())
 }
 
 func (runtime *Runtime) DetachLane(identity sessioncontract.LaneIdentity) bool {

@@ -58,7 +58,7 @@ func TestServiceHandlersEnforceBoundedQueuesAndSharedDirectoryFailureSchema(t *t
 	terminal, _ := protocolsession.NewMessage(protocolsession.MessageSessionTerminal, nil, body)
 	operationID := id16[protocolsession.OperationID](81)
 	list, _ := protocolsession.NewMessage(protocolsession.MessageListChildren, &operationID, body)
-	laneBody, _ := sessioncore.EncodeLaneAttachRequest(0)
+	laneBody, _ := protocolsession.EncodeLaneAttachRequest(0)
 	laneRequest, _ := protocolsession.NewMessage(protocolsession.MessageLaneAttach, &operationID, laneBody)
 
 	catalogHandler := newCatalogHandler(nil, &sessioncore.Responses{})

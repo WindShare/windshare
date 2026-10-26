@@ -25,16 +25,9 @@ var (
 	ErrLaneSettlementUnclaimed = errors.New("protocol session authenticated lane settlement was not claimed")
 )
 
-type LaneGrant struct {
-	LaneID      uint32
-	LaneEpoch   uint32
-	OperationID OperationID
-	AttachNonce [LaneAttachNonceBytes]byte
-	ExpiresAt   time.Time
-}
-
 type laneGrantState struct {
 	grant      LaneGrant
+	expiresAt  time.Time
 	consumedAt time.Time
 }
 
@@ -124,9 +117,9 @@ func (r *LaneRegistry) IssueGrant(requestedLaneID uint32, operationID OperationI
 		return LaneGrant{}, err
 	}
 	r.nextEpoch++
-	grant := LaneGrant{LaneID: laneID, LaneEpoch: r.nextEpoch, OperationID: operationID, ExpiresAt: now.Add(LaneGrantTTL)}
+	grant := LaneGrant{LaneID: laneID, LaneEpoch: r.nextEpoch, OperationID: operationID}
 	copy(grant.AttachNonce[:], attachNonce)
-	r.grants[operationID] = laneGrantState{grant: grant}
+	r.grants[operationID] = laneGrantState{grant: grant, expiresAt: now.Add(LaneGrantTTL)}
 	return grant, nil
 }
 
@@ -193,7 +186,7 @@ func (r *LaneRegistry) availableLaneID(now time.Time) uint32 {
 		reserved := false
 		for _, state := range r.grants {
 			if state.grant.LaneID == laneID && state.consumedAt.IsZero() &&
-				state.grant.LaneEpoch > lane.lastEpoch && now.Before(state.grant.ExpiresAt) {
+				state.grant.LaneEpoch > lane.lastEpoch && now.Before(state.expiresAt) {
 				reserved = true
 				break
 			}
@@ -332,7 +325,7 @@ func (r *LaneRegistry) AdmitCandidate(
 	if !state.consumedAt.IsZero() {
 		return reject(LaneRejectGrantConsumed, 0)
 	}
-	if !now.Before(grant.ExpiresAt) {
+	if !now.Before(state.expiresAt) {
 		return reject(LaneRejectGrantExpired, 0)
 	}
 	lane := r.lanes[grant.LaneID]
@@ -438,7 +431,7 @@ func (r *LaneRegistry) finishSettlementLocked() {
 
 func (r *LaneRegistry) cleanup(now time.Time) {
 	for operationID, state := range r.grants {
-		retainedUntil := state.grant.ExpiresAt.Add(LaneGrantTombstoneTTL)
+		retainedUntil := state.expiresAt.Add(LaneGrantTombstoneTTL)
 		if !state.consumedAt.IsZero() {
 			retainedUntil = state.consumedAt.Add(LaneGrantTombstoneTTL)
 		}

@@ -105,7 +105,7 @@ func (handler *laneGrantHandler) stopAndDrain() {
 }
 
 func (handler *laneGrantHandler) process(ctx context.Context, message protocolsession.Message) error {
-	request, err := sessioncore.DecodeLaneAttachRequest(message.Body())
+	request, err := protocolsession.DecodeLaneAttachRequest(message.Body())
 	if err != nil {
 		return err
 	}
@@ -117,7 +117,7 @@ func (handler *laneGrantHandler) process(ctx context.Context, message protocolse
 	if err != nil {
 		return err
 	}
-	grant, err := handler.registry.IssueGrant(request.RequestedLaneID(), operationID, nonce)
+	grant, err := handler.registry.IssueGrant(request.RequestedLaneID, operationID, nonce)
 	if err != nil {
 		return err
 	}
@@ -127,7 +127,7 @@ func (handler *laneGrantHandler) process(ctx context.Context, message protocolse
 			handler.registry.RevokeGrant(grant)
 		}
 	}()
-	body, err := sessioncore.EncodeLaneGrant(grant)
+	body, err := protocolsession.EncodeLaneGrant(grant)
 	if err != nil {
 		return err
 	}

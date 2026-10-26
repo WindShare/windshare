@@ -53,13 +53,6 @@ func newReceiverSenderControlValidator(
 				return contentflow.ValidateLeaseResult(semantic)
 			},
 		},
-		protocolsession.SenderControlSemanticRule{
-			Kind: protocolsession.MessageLaneAttach,
-			Validate: func(_ protocolsession.MessageKind, operationID protocolsession.OperationID, semantic []byte) error {
-				_, err := sessioncore.DecodeLaneGrant(semantic, operationID)
-				return err
-			},
-		},
 		protocolsession.SenderControlSemanticRule{Kind: protocolsession.MessagePeerAnswer, Validate: validatePeer},
 		protocolsession.SenderControlSemanticRule{Kind: protocolsession.MessagePeerCandidate, Validate: validatePeer},
 	)
