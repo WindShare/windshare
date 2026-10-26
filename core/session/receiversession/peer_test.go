@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sendersession"
@@ -32,7 +32,7 @@ func TestReceiverPeerOperationClosedStateIsInert(t *testing.T) {
 	if closed.OperationID() != call.ID() {
 		t.Fatal("closed peer operation changed its exact identity")
 	}
-	if _, err := closed.SendCandidate(context.Background(), nil); !errors.Is(err, sessioncontract.ErrOperationMissing) {
+	if _, err := closed.SendCandidate(context.Background(), nil); !errors.Is(err, session.ErrOperationMissing) {
 		t.Fatalf("closed peer candidate error = %v", err)
 	}
 	result := closed.Receive(context.Background())

@@ -19,7 +19,7 @@ import (
 	"github.com/windshare/windshare/connectivity/v2peer/peerset"
 	"github.com/windshare/windshare/connectivity/v2signal"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 )
 
 const capacityTestTimeout = 5 * time.Second
@@ -186,8 +186,8 @@ type capacityAttempt struct {
 
 func (*capacityAttempt) Ready() <-chan struct{}  { return nil }
 func (a *capacityAttempt) Done() <-chan struct{} { return a.done }
-func (*capacityAttempt) Lane() (sessioncontract.LaneIdentity, bool) {
-	return sessioncontract.LaneIdentity{}, false
+func (*capacityAttempt) Lane() (session.LaneIdentity, bool) {
+	return session.LaneIdentity{}, false
 }
 func (*capacityAttempt) Outcome() v2peer.ReceiverAttemptOutcome {
 	return v2peer.ReceiverAttemptOutcome{}

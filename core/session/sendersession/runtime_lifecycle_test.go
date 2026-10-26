@@ -7,7 +7,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"github.com/windshare/windshare/core/catalog"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
@@ -76,7 +76,7 @@ func TestServiceHandlersEnforceBoundedQueuesAndSharedDirectoryFailureSchema(t *t
 	}
 
 	laneHandler := newLaneGrantHandler(nil, &sessioncore.Responses{}, edgeErrorReader{})
-	if err := laneHandler.HandleMessage(context.Background(), terminal); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	if err := laneHandler.HandleMessage(context.Background(), terminal); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("lane wrong-kind error = %v", err)
 	}
 	laneContext := senderIngressContext(t, laneRequest)
@@ -85,7 +85,7 @@ func TestServiceHandlersEnforceBoundedQueuesAndSharedDirectoryFailureSchema(t *t
 			t.Fatal(err)
 		}
 	}
-	if err := laneHandler.HandleMessage(laneContext, laneRequest); !errors.Is(err, sessioncontract.ErrOperationOverflow) {
+	if err := laneHandler.HandleMessage(laneContext, laneRequest); !errors.Is(err, session.ErrOperationOverflow) {
 		t.Fatalf("lane queue overflow error = %v", err)
 	}
 	malformedHandler := newLaneGrantHandler(nil, &sessioncore.Responses{}, edgeErrorReader{})
@@ -109,7 +109,7 @@ func TestServiceHandlersEnforceBoundedQueuesAndSharedDirectoryFailureSchema(t *t
 		t.Fatal("catalog operation cancellation lost duplicate authority")
 	}
 	catalogHandler.remove(cancelKey)
-	if err := (cancelMux{catalog: catalogHandler}).HandleMessage(context.Background(), terminal); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	if err := (cancelMux{catalog: catalogHandler}).HandleMessage(context.Background(), terminal); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("cancel without operation error = %v", err)
 	}
 

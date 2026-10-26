@@ -3,17 +3,17 @@ package sendersession
 import (
 	"context"
 	"errors"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"golang.org/x/text/unicode/norm"
 	"unicode/utf8"
 )
 
 func (factory *Factory) Stop(ctx context.Context, message string) error {
 	if factory == nil {
-		return sessioncontract.ErrRuntimeClosed
+		return session.ErrRuntimeClosed
 	}
 	if ctx == nil {
-		return sessioncontract.ErrRuntimeConfig
+		return session.ErrRuntimeConfig
 	}
 	if err := factory.BeginStop(message); err != nil {
 		return err
@@ -31,7 +31,7 @@ func (factory *Factory) Stop(ctx context.Context, message string) error {
 // connectivity cleanup to reenter BeginStop without deadlocking its caller.
 func (factory *Factory) BeginStop(message string) error {
 	if factory == nil {
-		return sessioncontract.ErrRuntimeClosed
+		return session.ErrRuntimeClosed
 	}
 	factory.mu.Lock()
 	if factory.stopping {
@@ -59,8 +59,8 @@ func normalizeTerminalMessage(message string) (string, error) {
 	if message == "" {
 		message = "Sender stopped"
 	}
-	if !utf8.ValidString(message) || !norm.NFC.IsNormalString(message) || len(message) > sessioncontract.MaximumTerminalMessageBytes {
-		return "", sessioncontract.ErrRuntimeConfig
+	if !utf8.ValidString(message) || !norm.NFC.IsNormalString(message) || len(message) > session.MaximumTerminalMessageBytes {
+		return "", session.ErrRuntimeConfig
 	}
 	return message, nil
 }
@@ -120,9 +120,9 @@ func (factory *Factory) runTerminal(message string) {
 	close(factory.terminalDone)
 }
 
-func stopFactorySession(ctx context.Context, session *Runtime, message string) error {
-	err := session.BeginStop(ctx, message)
-	if errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+func stopFactorySession(ctx context.Context, runtime *Runtime, message string) error {
+	err := runtime.BeginStop(ctx, message)
+	if errors.Is(err, session.ErrRuntimeClosed) {
 		// The factory map tracks composite resource borrowers, so a naturally
 		// ended runtime may remain present after it has lost terminal authority.
 		// The force-close join below owns its cleanup; its prior session error is
@@ -132,5 +132,5 @@ func stopFactorySession(ctx context.Context, session *Runtime, message string) e
 	if err != nil {
 		return err
 	}
-	return session.WaitStopped(ctx)
+	return runtime.WaitStopped(ctx)
 }

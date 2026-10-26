@@ -6,7 +6,7 @@ import (
 
 	"github.com/windshare/windshare/core/diagnosticerror"
 	"github.com/windshare/windshare/core/framechannel"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -62,7 +62,7 @@ func TestTerminalSendObserverPanicCannotEscape(t *testing.T) {
 	})
 	observeSenderTerminalSend(observer, sessioncore.TerminalSendObservation{
 		ProtocolSessionID: id16[protocolsession.ProtocolSessionID](32),
-		Lane:              sessioncontract.LaneIdentity{ID: 1},
+		Lane:              session.LaneIdentity{ID: 1},
 		Settled:           true, Outcome: protocolsession.SendOutcomeDropped, TransportDisposition: framechannel.SendAccepted,
 	})
 	if observations != 1 {

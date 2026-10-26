@@ -23,7 +23,7 @@ import (
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	sendersession "github.com/windshare/windshare/core/session/sendersession"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
@@ -267,13 +267,13 @@ func TestSenderCandidateDeliveredUnknownMigratesThroughAuthenticatedReceiverOnce
 	}
 	replacementSenderLane, replacementReceiverLane := newCandidateTransactionChannelPair()
 	attached := make(chan struct {
-		identity sessioncontract.LaneIdentity
+		identity session.LaneIdentity
 		err      error
 	}, 1)
 	go func() {
 		identity, attachErr := runtimeFactory.Attach(ctx, replacementSenderLane)
 		attached <- struct {
-			identity sessioncontract.LaneIdentity
+			identity session.LaneIdentity
 			err      error
 		}{identity: identity, err: attachErr}
 	}()

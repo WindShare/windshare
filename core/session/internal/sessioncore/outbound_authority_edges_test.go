@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"sync/atomic"
@@ -22,7 +22,7 @@ func TestOutboundTransactionRequiresExactLiveGenerationAuthority(t *testing.T) {
 		}
 		ctx := bindOutboundRoute(context.Background(), operationID, route)
 
-		if _, err := beginOutboundTransaction(&Responses{runtime: runtime}, ctx, operationID); !errors.Is(err, sessioncontract.ErrOperationMissing) {
+		if _, err := beginOutboundTransaction(&Responses{runtime: runtime}, ctx, operationID); !errors.Is(err, session.ErrOperationMissing) {
 			t.Fatalf("permit-less transaction error=%v", err)
 		}
 		if runtime.routes.current(operationID) != route {
@@ -49,7 +49,7 @@ func TestOutboundTransactionRequiresExactLiveGenerationAuthority(t *testing.T) {
 		ctx := bindOutboundRoute(context.Background(), operationID, route)
 		ctx = protocolsession.WithOutboundOperationPermit(ctx, permit)
 
-		if _, err := beginOutboundTransaction(&Responses{runtime: runtime}, ctx, operationID); !errors.Is(err, sessioncontract.ErrOperationMissing) {
+		if _, err := beginOutboundTransaction(&Responses{runtime: runtime}, ctx, operationID); !errors.Is(err, session.ErrOperationMissing) {
 			t.Fatalf("generation-less transaction error=%v", err)
 		}
 		if runtime.operations.ActiveCount() != 1 || runtime.routes.current(operationID) != route {
@@ -290,7 +290,7 @@ func TestAbandonOutboundOperationUsesReservedCancellationCapacity(t *testing.T) 
 	if runtime.operations.Terminated() || runtime.routes.len() != 0 || runtime.operations.TombstoneCount() != 2 {
 		t.Fatalf("terminal=%t routes=%d", runtime.operations.Terminated(), runtime.routes.len())
 	}
-	if err := runtime.abandonBoundOutboundOperation(context.Background(), targetID); !errors.Is(err, sessioncontract.ErrOperationMissing) {
+	if err := runtime.abandonBoundOutboundOperation(context.Background(), targetID); !errors.Is(err, session.ErrOperationMissing) {
 		t.Fatalf("unbound abandonment error=%v", err)
 	}
 }

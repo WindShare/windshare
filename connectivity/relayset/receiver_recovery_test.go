@@ -14,7 +14,7 @@ import (
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
@@ -293,7 +293,7 @@ func TestReceiverInitialPublicationRejectsConcurrentIdentityChange(t *testing.T)
 	if err := recovery.validateDescriptor([]byte{2}); !errors.Is(err, ErrReceiverShareChanged) {
 		t.Fatal(err)
 	}
-	var lane sessioncontract.LaneIdentity
+	var lane session.LaneIdentity
 	if err := receiver.publishInitial(context.Background(), candidate, nil, nil, &lane); !errors.Is(err, ErrReceiverShareChanged) || receiver.current() != nil {
 		t.Fatal(err)
 	}

@@ -2,7 +2,7 @@ package receiversession
 
 import (
 	"context"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
@@ -14,7 +14,7 @@ func (runtime *Runtime) RequestLane(
 	requestedLaneID uint32,
 ) (protocolsession.LaneGrant, error) {
 	if runtime == nil {
-		return protocolsession.LaneGrant{}, sessioncontract.ErrRuntimeClosed
+		return protocolsession.LaneGrant{}, session.ErrRuntimeClosed
 	}
 	body, err := protocolsession.EncodeLaneAttachRequest(requestedLaneID)
 	if err != nil {
@@ -33,7 +33,7 @@ func (runtime *Runtime) RequestLane(
 		return protocolsession.LaneGrant{}, remoteOperationError(message)
 	}
 	if message.Kind() != protocolsession.MessageLaneAttach {
-		return protocolsession.LaneGrant{}, sessioncontract.ErrOperationMissing
+		return protocolsession.LaneGrant{}, session.ErrOperationMissing
 	}
 	unsigned, err := protocolsession.SenderControlSemanticBody(message)
 	if err != nil {
@@ -42,7 +42,7 @@ func (runtime *Runtime) RequestLane(
 	return protocolsession.DecodeLaneGrant(unsigned, call.ID())
 }
 
-func (runtime *Runtime) DetachLane(identity sessioncontract.LaneIdentity) bool {
+func (runtime *Runtime) DetachLane(identity session.LaneIdentity) bool {
 	return runtime != nil && runtime.core.DetachLane(identity)
 }
 

@@ -13,7 +13,7 @@ import (
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/transfer"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
@@ -172,7 +172,7 @@ func (o getObservation) progress(operation receivecontract.OperationID, job tran
 }
 func (o getObservation) contentPath(path ContentPath) { o.emit(ContentPathObserved{Path: path}) }
 func (o getObservation) fallback(code FailureCode)    { o.emit(FallbackObserved{Code: code}) }
-func (o getObservation) laneAdopted(session protocolsession.ProtocolSessionID, lane sessioncontract.LaneIdentity) {
+func (o getObservation) laneAdopted(session protocolsession.ProtocolSessionID, lane session.LaneIdentity) {
 	o.emit(LaneAdopted{Session: session, Lane: lane})
 }
 func (o getObservation) registerNative(native *nativepeer.NativePeerConnectivity) {

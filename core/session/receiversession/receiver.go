@@ -14,7 +14,7 @@ import (
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/senderauth"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/internal/admissiongate"
@@ -43,7 +43,7 @@ type InstanceSourceFunc func() (protocolsession.ReceiverInstanceID, error)
 
 func (function InstanceSourceFunc) NewReceiverInstanceID() (protocolsession.ReceiverInstanceID, error) {
 	if function == nil {
-		return protocolsession.ReceiverInstanceID{}, sessioncontract.ErrRuntimeConfig
+		return protocolsession.ReceiverInstanceID{}, session.ErrRuntimeConfig
 	}
 	return function()
 }
@@ -120,7 +120,7 @@ func NewFactory(config FactoryConfig) (*Factory, error) {
 		!ed25519.PublicKey(config.Descriptor.SenderPublicKey()).Equal(config.Sender.PublicKey()) ||
 		config.CatalogVerifier == nil || config.RecordOpener == nil ||
 		config.ReassemblyProcess == nil || config.ReassemblyShare == nil || config.PlaintextProcess == nil {
-		return nil, sessioncontract.ErrRuntimeConfig
+		return nil, session.ErrRuntimeConfig
 	}
 	if config.Random == nil {
 		config.Random = rand.Reader
@@ -143,7 +143,7 @@ func NewFactory(config FactoryConfig) (*Factory, error) {
 	}
 	semantic, err := newReceiverSenderControlValidator(config.PeerControls)
 	if err != nil {
-		return nil, errors.Join(sessioncontract.ErrRuntimeConfig, err)
+		return nil, errors.Join(session.ErrRuntimeConfig, err)
 	}
 	return &Factory{
 		requests: func(runtime *sessioncore.Runtime, random io.Reader) requestClient {
@@ -168,11 +168,11 @@ func NewFactory(config FactoryConfig) (*Factory, error) {
 
 func (factory *Factory) Connect(ctx context.Context, channel protocolsession.FrameChannel, route transferlanes.Route) (result *Runtime, resultErr error) {
 	if factory == nil || channel == nil || ctx == nil {
-		return nil, sessioncontract.ErrRuntimeConfig
+		return nil, session.ErrRuntimeConfig
 	}
 	admissionContext, endAdmission, ok := factory.beginAdmission(ctx)
 	if !ok {
-		return nil, sessioncontract.ErrRuntimeClosed
+		return nil, session.ErrRuntimeClosed
 	}
 	defer endAdmission()
 	ctx = admissionContext
@@ -306,7 +306,7 @@ func (factory *Factory) Connect(ctx context.Context, channel protocolsession.Fra
 type receiverHandshake struct {
 	responseTime  time.Duration
 	keys          protocolsession.SessionKeys
-	lane          sessioncontract.LaneIdentity
+	lane          session.LaneIdentity
 	receive       <-chan framechannel.Frame
 	authenticator *protocolsession.SenderControlAuthenticator
 }
@@ -318,25 +318,25 @@ func (factory *Factory) completeReceiverHandshake(
 	receive := channel.Recv()
 	receiverPrivate, err := ecdh.X25519().GenerateKey(factory.random)
 	if err != nil {
-		return receiverHandshake{}, errors.Join(sessioncontract.ErrHandshake, err)
+		return receiverHandshake{}, errors.Join(session.ErrHandshake, err)
 	}
 	receiverNonce := make([]byte, protocolsession.HandshakeNonceBytes)
 	if _, err := io.ReadFull(factory.random, receiverNonce); err != nil {
-		return receiverHandshake{}, errors.Join(sessioncontract.ErrHandshake, err)
+		return receiverHandshake{}, errors.Join(session.ErrHandshake, err)
 	}
 	receiverID, err := factory.instances.NewReceiverInstanceID()
 	if err != nil || receiverID.IsZero() {
-		return receiverHandshake{}, errors.Join(sessioncontract.ErrHandshake, err)
+		return receiverHandshake{}, errors.Join(session.ErrHandshake, err)
 	}
 	client, err := protocolsession.NewClientHello(
 		factory.descriptor.ShareInstance(), receiverID, receiverNonce, receiverPrivate.PublicKey(), factory.authKey,
 	)
 	if err != nil {
-		return receiverHandshake{}, errors.Join(sessioncontract.ErrHandshake, err)
+		return receiverHandshake{}, errors.Join(session.ErrHandshake, err)
 	}
 	started := factory.now()
 	if err := channel.Send(ctx, framechannel.Frame(client.Encoded())); err != nil {
-		return receiverHandshake{}, errors.Join(sessioncontract.ErrHandshake, err)
+		return receiverHandshake{}, errors.Join(session.ErrHandshake, err)
 	}
 	serverBytes, err := sessioncore.ReceiveHandshake(ctx, receive)
 	if err != nil {
@@ -344,14 +344,14 @@ func (factory *Factory) completeReceiverHandshake(
 	}
 	server, err := protocolsession.ParseServerHello(serverBytes, client, factory.sender)
 	if err != nil {
-		return receiverHandshake{}, sessionProtocolBoundaryError(errors.Join(sessioncontract.ErrHandshake, err))
+		return receiverHandshake{}, sessionProtocolBoundaryError(errors.Join(session.ErrHandshake, err))
 	}
 	responseTime := factory.now().Sub(started)
 	keys, err := protocolsession.DeriveReceiverSession(receiverPrivate, factory.authKey, client, server)
 	if err != nil {
-		return receiverHandshake{}, sessionProtocolBoundaryError(errors.Join(sessioncontract.ErrHandshake, err))
+		return receiverHandshake{}, sessionProtocolBoundaryError(errors.Join(session.ErrHandshake, err))
 	}
-	lane := sessioncontract.LaneIdentity{ID: server.InitialLaneID(), Epoch: server.InitialLaneEpoch()}
+	lane := session.LaneIdentity{ID: server.InitialLaneID(), Epoch: server.InitialLaneEpoch()}
 	base := protocolsession.ControlBinding{
 		ShareInstance: factory.descriptor.ShareInstance(), ProtocolSessionID: keys.ProtocolSessionID(),
 		LaneID: lane.ID, LaneEpoch: lane.Epoch, Direction: protocolsession.DirectionSenderToReceiver,
@@ -375,7 +375,7 @@ func (factory *Factory) acquireRuntimeResources() (RuntimeResourceLease, error) 
 		return nil, err
 	}
 	if lease == nil {
-		return nil, sessioncontract.ErrRuntimeConfig
+		return nil, session.ErrRuntimeConfig
 	}
 	return lease, nil
 }
@@ -402,9 +402,9 @@ type Runtime struct {
 
 func (runtime *Runtime) startReceiver() {
 	// Both registries retain the runtime-lane then content-lane lock order.
-	runtime.core.ConfigureLanes(func(identity sessioncontract.LaneIdentity) time.Duration {
+	runtime.core.ConfigureLanes(func(identity session.LaneIdentity) time.Duration {
 		return runtime.laneSet.EstimateQueuedContent(transferlanes.Identity{ID: identity.ID, Epoch: identity.Epoch})
-	}, func(identity sessioncontract.LaneIdentity) {
+	}, func(identity session.LaneIdentity) {
 		runtime.laneSet.Remove(transferlanes.Identity{ID: identity.ID, Epoch: identity.Epoch})
 	})
 	runtime.core.Start()

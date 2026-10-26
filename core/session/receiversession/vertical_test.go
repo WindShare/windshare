@@ -14,7 +14,7 @@ import (
 	"github.com/windshare/windshare/core/internal/keyderiv"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/senderauth"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -191,7 +191,7 @@ func TestDescriptorObjectBootstrapAndFactoryValidation(t *testing.T) {
 	}
 	bad := fixture.receiverConfig
 	bad.Sender = checkedSender(t, ed25519.NewKeyFromSeed(bytes.Repeat([]byte{9}, ed25519.SeedSize)).Public().(ed25519.PublicKey))
-	if _, err := NewFactory(bad); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	if _, err := NewFactory(bad); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("bad receiver factory error = %v", err)
 	}
 }
@@ -391,7 +391,7 @@ func TestCompositeRuntimeMultiReceiverStopAndAccessors(t *testing.T) {
 			t.Fatalf("receiver %d did not observe ordered stop", index)
 		}
 	}
-	if _, err := fixture.senderFactory.Accept(context.Background(), newMemoryChannel(t)); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	if _, err := fixture.senderFactory.Accept(context.Background(), newMemoryChannel(t)); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("accept after stop error = %v", err)
 	}
 }
@@ -825,7 +825,7 @@ func (handler *verticalPeerHandler) HandleMessage(
 ) error {
 	operation, ok := message.OperationID()
 	if !ok {
-		return sessioncontract.ErrRuntimeConfig
+		return session.ErrRuntimeConfig
 	}
 	switch message.Kind() {
 	case protocolsession.MessagePeerOffer:
@@ -847,7 +847,7 @@ func (handler *verticalPeerHandler) HandleMessage(
 		handler.remoteCandidates <- message
 		return nil
 	default:
-		return sessioncontract.ErrRuntimeConfig
+		return session.ErrRuntimeConfig
 	}
 }
 

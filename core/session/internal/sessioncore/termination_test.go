@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"strings"
 	"sync"
@@ -116,7 +116,7 @@ func TestTerminationLastLaneRetirementClaimsBeforeCompletion(t *testing.T) {
 
 func TestTerminationSurvivingLanePreventsSessionTermination(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
-	replacementIdentity := sessioncontract.LaneIdentity{ID: 2, Epoch: 1}
+	replacementIdentity := session.LaneIdentity{ID: 2, Epoch: 1}
 	if _, err := runtime.lanes.add(
 		replacementIdentity,
 		newMemoryChannel(t),

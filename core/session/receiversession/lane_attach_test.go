@@ -6,7 +6,7 @@ import (
 	"errors"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/framechannel"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sendersession"
@@ -35,7 +35,7 @@ func TestAttachedFrameChannelsRunDistinctBlocksInParallelAndFanOutTerminal(t *te
 		t.Fatalf("attached identities = %+v and %+v", first, second)
 	}
 	initialID, initialEpoch := receiver.LaneIdentity()
-	initial := sessioncontract.LaneIdentity{ID: initialID, Epoch: initialEpoch}
+	initial := session.LaneIdentity{ID: initialID, Epoch: initialEpoch}
 	if !receiver.DetachLane(initial) || !sender.DetachLane(initial) {
 		t.Fatal("initial lane did not detach on both peers")
 	}
@@ -196,11 +196,11 @@ func TestLaneDetachRaceBurnsEpochAndReplayGetsSignedRejection(t *testing.T) {
 	}
 
 	_, receiverErr, senderErr := attachGrantedLane(t, fixture.senderFactory, receiver, grant)
-	var receiverRejection *sessioncontract.LaneRejectedError
+	var receiverRejection *session.LaneRejectedError
 	if !errors.As(receiverErr, &receiverRejection) || receiverRejection.Rejection.Code != protocolsession.LaneRejectGrantConsumed {
 		t.Fatalf("receiver replay rejection = %v", receiverErr)
 	}
-	var senderRejection *sessioncontract.LaneRejectedError
+	var senderRejection *session.LaneRejectedError
 	if !errors.As(senderErr, &senderRejection) || senderRejection.Rejection.Code != protocolsession.LaneRejectGrantConsumed {
 		t.Fatalf("sender replay rejection = %v", senderErr)
 	}
@@ -226,7 +226,7 @@ func TestCancelOnOneLaneStopsOperationStartedOnAnotherLane(t *testing.T) {
 	first, _, firstReceiverChannel, _ := attachObservedLane(t, fixture.senderFactory, receiver, 0)
 	second, _, secondReceiverChannel, _ := attachObservedLane(t, fixture.senderFactory, receiver, 0)
 	initialID, initialEpoch := receiver.LaneIdentity()
-	initial := sessioncontract.LaneIdentity{ID: initialID, Epoch: initialEpoch}
+	initial := session.LaneIdentity{ID: initialID, Epoch: initialEpoch}
 	if !receiver.DetachLane(initial) || !sender.DetachLane(initial) {
 		t.Fatal("initial lane did not detach")
 	}
@@ -465,13 +465,13 @@ func TestSenderStopRejectsAfterCoreClosure(t *testing.T) {
 	defer sender.Close()
 	defer receiver.Close()
 	laneID, laneEpoch := receiver.LaneIdentity()
-	identity := sessioncontract.LaneIdentity{ID: laneID, Epoch: laneEpoch}
+	identity := session.LaneIdentity{ID: laneID, Epoch: laneEpoch}
 	if !receiver.DetachLane(identity) || !sender.DetachLane(identity) {
 		t.Fatal("initial lane did not detach")
 	}
 	first := sender.Stop(context.Background(), "no lane")
 	second := sender.Stop(context.Background(), "different caller")
-	if !errors.Is(first, sessioncontract.ErrRuntimeClosed) || !errors.Is(second, sessioncontract.ErrRuntimeClosed) {
+	if !errors.Is(first, session.ErrRuntimeClosed) || !errors.Is(second, session.ErrRuntimeClosed) {
 		t.Fatalf("post-close stop errors = %v / %v", first, second)
 	}
 }
@@ -555,7 +555,7 @@ func TestAdmitChannelSeparatesLaneRecoveryFromProtocolSessionReplacement(t *test
 	if err := mismatchedPeer.Send(context.Background(), framechannel.Frame(mismatchedHello)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fixture.senderFactory.AdmitChannel(context.Background(), mismatchedSender); !errors.Is(err, sessioncontract.ErrHandshake) {
+	if _, err := fixture.senderFactory.AdmitChannel(context.Background(), mismatchedSender); !errors.Is(err, session.ErrHandshake) {
 		t.Fatalf("ShareInstance-mismatched lane error = %v", err)
 	}
 	if mismatchedSender.State() != framechannel.Closed {
@@ -596,7 +596,7 @@ func TestAdmitChannelSeparatesLaneRecoveryFromProtocolSessionReplacement(t *test
 	if err := stalePeer.Send(context.Background(), framechannel.Frame(staleHello)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fixture.senderFactory.AdmitChannel(context.Background(), staleSender); !errors.Is(err, sessioncontract.ErrHandshake) {
+	if _, err := fixture.senderFactory.AdmitChannel(context.Background(), staleSender); !errors.Is(err, session.ErrHandshake) {
 		t.Fatalf("retired-session lane error = %v", err)
 	}
 	if staleSender.State() != framechannel.Closed {
@@ -639,7 +639,7 @@ func TestAdmitChannelSeparatesLaneRecoveryFromProtocolSessionReplacement(t *test
 		t.Fatal(err)
 	}
 	stoppedCandidate, stoppedPeer := newMemoryChannelPair()
-	if _, err := fixture.senderFactory.AdmitChannel(context.Background(), stoppedCandidate); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	if _, err := fixture.senderFactory.AdmitChannel(context.Background(), stoppedCandidate); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("post-stop recovery admission error = %v", err)
 	}
 	_ = stoppedCandidate.Close()
@@ -683,7 +683,7 @@ func TestForgedLaneProofIsSilentAndDoesNotConsumeGrant(t *testing.T) {
 	if err := receiverChannel.Send(context.Background(), framechannel.Frame(forged)); err != nil {
 		t.Fatal(err)
 	}
-	if err := <-result; !errors.Is(err, sessioncontract.ErrHandshake) {
+	if err := <-result; !errors.Is(err, session.ErrHandshake) {
 		t.Fatalf("forged attach error = %v", err)
 	}
 	select {
@@ -719,10 +719,10 @@ func TestAdmitPeerChannelSettlementGatePrecedesGrantAndSignedResponse(t *testing
 			candidate,
 			sendersession.PeerAdmissionControlFunc(func(
 				operationID protocolsession.OperationID,
-				lane sessioncontract.LaneIdentity,
+				lane session.LaneIdentity,
 			) bool {
 				if operationID != grant.OperationID ||
-					lane != (sessioncontract.LaneIdentity{ID: grant.LaneID, Epoch: grant.LaneEpoch}) {
+					lane != (session.LaneIdentity{ID: grant.LaneID, Epoch: grant.LaneEpoch}) {
 					t.Errorf("settlement identity = %x/%+v", operationID, lane)
 				}
 				return false
@@ -740,7 +740,7 @@ func TestAdmitPeerChannelSettlementGatePrecedesGrantAndSignedResponse(t *testing
 	if !errors.Is(settled.err, protocolsession.ErrLaneSettlementUnclaimed) ||
 		settled.admission.SettlementBegan ||
 		settled.admission.GrantOperationID != grant.OperationID ||
-		settled.admission.Lane != (sessioncontract.LaneIdentity{ID: grant.LaneID, Epoch: grant.LaneEpoch}) ||
+		settled.admission.Lane != (session.LaneIdentity{ID: grant.LaneID, Epoch: grant.LaneEpoch}) ||
 		settled.admission.Disposition != sendersession.PeerAdmissionSilentClose ||
 		settled.admission.ResponseDelivery != sendersession.PeerResponseNotAttempted ||
 		settled.admission.LaneAttachment != sendersession.PeerLaneAttachmentNotAttempted {
@@ -753,7 +753,7 @@ func TestAdmitPeerChannelSettlementGatePrecedesGrantAndSignedResponse(t *testing
 
 	identity, receiverErr, senderErr := attachGrantedLane(t, fixture.senderFactory, receiver, grant)
 	if receiverErr != nil || senderErr != nil ||
-		identity != (sessioncontract.LaneIdentity{ID: grant.LaneID, Epoch: grant.LaneEpoch}) {
+		identity != (session.LaneIdentity{ID: grant.LaneID, Epoch: grant.LaneEpoch}) {
 		t.Fatalf("grant changed by declined settlement = %+v, %v/%v", identity, receiverErr, senderErr)
 	}
 }
@@ -779,7 +779,7 @@ func TestAdmitPeerChannelPreservesAuthenticatedSettlementAcrossCancellation(t *t
 		admission, err := sender.AdmitPeerChannel(
 			ctx,
 			candidate,
-			sendersession.PeerAdmissionControlFunc(func(protocolsession.OperationID, sessioncontract.LaneIdentity) bool {
+			sendersession.PeerAdmissionControlFunc(func(protocolsession.OperationID, session.LaneIdentity) bool {
 				close(gateEntered)
 				<-releaseGate
 				return true
@@ -855,7 +855,7 @@ func TestAdmitPeerChannelResponseFailureRetainsAuthenticatedRejection(t *testing
 		t.Fatal(err)
 	}
 	settled := <-result
-	var rejected *sessioncontract.LaneRejectedError
+	var rejected *session.LaneRejectedError
 	if !errors.Is(settled.err, wantSendErr) || !errors.As(settled.err, &rejected) ||
 		rejected.Rejection.Code != protocolsession.LaneRejectAdmissionLimited ||
 		rejected.Rejection.RetryAfter != time.Second ||
@@ -874,7 +874,7 @@ func TestAdmitPeerChannelResponseFailureRetainsAuthenticatedRejection(t *testing
 }
 
 var allowSenderPeerSettlement = sendersession.PeerAdmissionControlFunc(
-	func(protocolsession.OperationID, sessioncontract.LaneIdentity) bool { return true },
+	func(protocolsession.OperationID, session.LaneIdentity) bool { return true },
 )
 
 type countingAdmissionChannel struct {
@@ -1012,7 +1012,7 @@ func attachObservedLane(
 	factory *sendersession.Factory,
 	receiver *Runtime,
 	requestedLaneID uint32,
-) (sessioncontract.LaneIdentity, *observedMemoryChannel, *observedMemoryChannel, protocolsession.LaneGrant) {
+) (session.LaneIdentity, *observedMemoryChannel, *observedMemoryChannel, protocolsession.LaneGrant) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -1035,7 +1035,7 @@ func attachGrantedLane(
 	factory *sendersession.Factory,
 	receiver *Runtime,
 	grant protocolsession.LaneGrant,
-) (sessioncontract.LaneIdentity, error, error) {
+) (session.LaneIdentity, error, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -1050,22 +1050,22 @@ func attachGrantedLaneWithChannels(
 	grant protocolsession.LaneGrant,
 	senderChannel *observedMemoryChannel,
 	receiverChannel *observedMemoryChannel,
-) (sessioncontract.LaneIdentity, error, error) {
+) (session.LaneIdentity, error, error) {
 	senderResult := make(chan struct {
-		identity sessioncontract.LaneIdentity
+		identity session.LaneIdentity
 		err      error
 	}, 1)
 	go func() {
 		identity, err := factory.Attach(ctx, senderChannel)
 		senderResult <- struct {
-			identity sessioncontract.LaneIdentity
+			identity session.LaneIdentity
 			err      error
 		}{identity: identity, err: err}
 	}()
 	receiverAdmission, receiverErr := receiver.AttachLane(ctx, grant, receiverChannel, transferlanes.RouteDirect)
 	senderAttached := <-senderResult
 	if receiverErr == nil && senderAttached.err == nil && receiverAdmission.Lane != senderAttached.identity {
-		return sessioncontract.LaneIdentity{}, errors.New("lane identities differ"), nil
+		return session.LaneIdentity{}, errors.New("lane identities differ"), nil
 	}
 	return receiverAdmission.Lane, receiverErr, senderAttached.err
 }

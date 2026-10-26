@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"testing"
@@ -19,9 +19,9 @@ func TestProtocolOperationCauseRetainsJoinedFaults(t *testing.T) {
 	}{
 		{"canceled cleanup", errors.Join(context.Canceled, errors.New("cleanup failed")), sessionobs.ProtocolOperationCauseProtocolFailure},
 		{"wrapped canceled cleanup", fmt.Errorf("operation: %w", errors.Join(errors.New("cleanup failed"), context.Canceled)), sessionobs.ProtocolOperationCauseProtocolFailure},
-		{"canceled runtime", errors.Join(context.Canceled, sessioncontract.ErrRuntimeClosed), sessionobs.ProtocolOperationCauseRuntimeClosed},
+		{"canceled runtime", errors.Join(context.Canceled, session.ErrRuntimeClosed), sessionobs.ProtocolOperationCauseRuntimeClosed},
 		{"canceled deadline", errors.Join(context.Canceled, context.DeadlineExceeded), sessionobs.ProtocolOperationCauseDeadline},
-		{"unproven missing authority", sessioncontract.ErrOperationMissing, sessionobs.ProtocolOperationCauseOperationClosed},
+		{"unproven missing authority", session.ErrOperationMissing, sessionobs.ProtocolOperationCauseOperationClosed},
 		{"opaque cancellation match", cancellationMatchingBlockFault{}, sessionobs.ProtocolOperationCauseProtocolFailure},
 	} {
 		t.Run(test.name, func(t *testing.T) {

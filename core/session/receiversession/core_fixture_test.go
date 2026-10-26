@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
@@ -44,9 +44,9 @@ func receiverRequestContext(call *sessioncore.Call) context.Context {
 	return protocolsession.WithOperationGeneration(context.Background(), generation)
 }
 
-func runtimeIdentity(runtime interface{ LaneIdentity() (uint32, uint32) }) sessioncontract.LaneIdentity {
+func runtimeIdentity(runtime interface{ LaneIdentity() (uint32, uint32) }) session.LaneIdentity {
 	id, epoch := runtime.LaneIdentity()
-	return sessioncontract.LaneIdentity{ID: id, Epoch: epoch}
+	return session.LaneIdentity{ID: id, Epoch: epoch}
 }
 
 type switchableReader struct {
@@ -114,7 +114,7 @@ func stopTestCore(runtime *sessioncore.Runtime) {
 		runtime.AbortBeforeStart()
 	}
 }
-func sendTestMessageOnLane(t *testing.T, runtime *sessioncore.Runtime, lane sessioncontract.LaneIdentity, message protocolsession.Message) {
+func sendTestMessageOnLane(t *testing.T, runtime *sessioncore.Runtime, lane session.LaneIdentity, message protocolsession.Message) {
 	t.Helper()
 	fixture := testCore(runtime)
 	peer := fixture.peer

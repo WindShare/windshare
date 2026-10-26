@@ -15,7 +15,7 @@ import (
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	sendersession "github.com/windshare/windshare/core/session/sendersession"
 	"github.com/windshare/windshare/engine/internal/nativeconnectivity"
 	"github.com/windshare/windshare/engine/internal/task"
@@ -165,7 +165,7 @@ type testSessionFactory struct {
 }
 
 func (*testSessionFactory) AdmitChannel(context.Context, protocolsession.FrameChannel) (sendersession.ChannelAdmission, error) {
-	return sendersession.ChannelAdmission{}, sessioncontract.ErrRuntimeClosed
+	return sendersession.ChannelAdmission{}, session.ErrRuntimeClosed
 }
 func (f *testSessionFactory) Stop(ctx context.Context, _ string) error {
 	f.once.Do(func() {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/windshare/windshare/core/framechannel"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sendersession"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
@@ -69,7 +69,7 @@ func TestRuntimeCloseCancelsAndJoinsExternalLaneHandshakes(t *testing.T) {
 			admission, err := sender.AdmitPeerChannel(
 				context.Background(),
 				candidate,
-				sendersession.PeerAdmissionControlFunc(func(protocolsession.OperationID, sessioncontract.LaneIdentity) bool {
+				sendersession.PeerAdmissionControlFunc(func(protocolsession.OperationID, session.LaneIdentity) bool {
 					close(settlementEntered)
 					<-releaseSettlement
 					return true
@@ -98,7 +98,7 @@ func TestRuntimeCloseCancelsAndJoinsExternalLaneHandshakes(t *testing.T) {
 		close(releaseSettlement)
 		<-responseGate.started
 		settled := <-admissionResult
-		var rejected *sessioncontract.LaneRejectedError
+		var rejected *session.LaneRejectedError
 		if !errors.As(settled.err, &rejected) ||
 			rejected.Rejection.Code != protocolsession.LaneRejectStopping ||
 			!settled.admission.SettlementBegan ||

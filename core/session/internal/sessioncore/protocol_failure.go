@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -29,14 +29,14 @@ func RequestProvenNotDelivered(err error) bool {
 
 func newRPCRequestSendError(outcome protocolsession.SendOutcome, admitted bool, cause error) error {
 	if cause == nil {
-		cause = sessioncontract.ErrRuntimeClosed
+		cause = session.ErrRuntimeClosed
 	}
 	return &rpcRequestSendError{outcome: outcome, admitted: admitted, cause: cause}
 }
 
 func rpcDeliveryError(runtime *Runtime, notDelivered error, cause error) error {
 	if runtime.ctx.Err() != nil {
-		return errors.Join(notDelivered, cause, sessioncontract.ErrRuntimeClosed, runtime.Err())
+		return errors.Join(notDelivered, cause, session.ErrRuntimeClosed, runtime.Err())
 	}
 	return errors.Join(notDelivered, cause)
 }
@@ -89,13 +89,13 @@ func protocolOperationCause(err error) sessionobs.ProtocolOperationCause {
 		return sessionobs.ProtocolOperationCauseDeadline
 	case err == context.Canceled: //nolint:errorlint // Only the canonical leaf proves an ordinary canceled wait.
 		return sessionobs.ProtocolOperationCauseCanceled
-	case errors.Is(err, sessioncontract.ErrRuntimeClosed):
+	case errors.Is(err, session.ErrRuntimeClosed):
 		return sessionobs.ProtocolOperationCauseRuntimeClosed
 	case errors.Is(err, ErrLaneUnavailable):
 		return sessionobs.ProtocolOperationCauseLaneUnavailable
 	case errors.Is(err, protocolsession.ErrWriterStopped):
 		return sessionobs.ProtocolOperationCauseWriterStopped
-	case err == sessioncontract.ErrOperationMissing: //nolint:errorlint // An opaque Is match cannot prove that this operation ended.
+	case err == session.ErrOperationMissing: //nolint:errorlint // An opaque Is match cannot prove that this operation ended.
 		return sessionobs.ProtocolOperationCauseOperationClosed
 	default:
 		return sessionobs.ProtocolOperationCauseProtocolFailure

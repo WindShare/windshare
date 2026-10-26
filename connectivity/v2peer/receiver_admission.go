@@ -8,7 +8,7 @@ import (
 
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
@@ -65,7 +65,7 @@ func receiverAttachmentSettlement(
 	err error,
 ) (receiverAdmissionSettlement, error) {
 	identityMatches := admission.GrantOperationID == grant.OperationID &&
-		admission.Lane == (sessioncontract.LaneIdentity{ID: grant.LaneID, Epoch: grant.LaneEpoch}) &&
+		admission.Lane == (session.LaneIdentity{ID: grant.LaneID, Epoch: grant.LaneEpoch}) &&
 		!admission.GrantOperationID.IsZero()
 	noRejection := admission.Rejection == (protocolsession.LaneRejection{})
 	switch admission.Disposition {
@@ -79,14 +79,14 @@ func receiverAttachmentSettlement(
 			}
 		}
 	case receiversession.LaneAdmissionRejected:
-		var rejected *sessioncontract.LaneRejectedError
+		var rejected *session.LaneRejectedError
 		if identityMatches && validReceiverLaneRejection(admission.Rejection) &&
 			admission.LaneInstallation == receiversession.LaneInstallationNotAttempted &&
 			errors.As(err, &rejected) && rejected.Rejection == admission.Rejection {
 			return receiverAdmissionRejected, err
 		}
 	case receiversession.LaneAdmissionUnverified:
-		if admission.GrantOperationID.IsZero() && admission.Lane == (sessioncontract.LaneIdentity{}) &&
+		if admission.GrantOperationID.IsZero() && admission.Lane == (session.LaneIdentity{}) &&
 			noRejection &&
 			admission.LaneInstallation == receiversession.LaneInstallationNotAttempted && err != nil {
 			return receiverAdmissionUnverified, err

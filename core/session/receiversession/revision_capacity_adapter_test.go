@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -149,7 +149,7 @@ func TestReceiverRevisionWaitFenceEndsWithFixedRuntime(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("fixed runtime end did not wake capacity wait fence")
 	}
-	if _, _, err := newReceiverRevisionWait(nil); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	if _, _, err := newReceiverRevisionWait(nil); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("nil runtime wait config error=%v", err)
 	}
 }

@@ -3,7 +3,7 @@ package sessioncore
 import (
 	"context"
 	"github.com/windshare/windshare/core/framechannel"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"io"
 	"sync"
@@ -71,7 +71,7 @@ func ReadNonzeroLaneNonce(source io.Reader, size int) ([]byte, error) {
 			return value, nil
 		}
 	}
-	return nil, sessioncontract.ErrRuntimeConfig
+	return nil, session.ErrRuntimeConfig
 }
 
 func nonzeroBytes(value []byte) bool {

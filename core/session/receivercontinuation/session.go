@@ -11,7 +11,7 @@ import (
 	"github.com/windshare/windshare/core/downloadmetrics"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
@@ -94,7 +94,7 @@ func (s *Session) recover(ctx context.Context, previous *receiversession.Runtime
 	}
 	if !previous.PathsExhausted() {
 		s.mu.Unlock()
-		return sessioncontract.ErrRuntimeClosed
+		return session.ErrRuntimeClosed
 	}
 	if s.flight == nil {
 		s.flight = make(chan struct{})

@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -40,7 +40,7 @@ func newOperationCall(
 	}
 }
 
-func (call *Call) setProtocolTraceLane(lane sessioncontract.LaneIdentity, usable uint32) {
+func (call *Call) setProtocolTraceLane(lane session.LaneIdentity, usable uint32) {
 	if call == nil {
 		return
 	}

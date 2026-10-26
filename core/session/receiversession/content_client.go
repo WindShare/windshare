@@ -6,7 +6,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
@@ -120,7 +120,7 @@ func (client *receiverRevisionClient) OpenRevision(
 		return revisionaccess.Lease{}, remoteRevisionOperationError(message)
 	}
 	if message.Kind() != protocolsession.MessageOpenResults {
-		return revisionaccess.Lease{}, sessioncontract.ErrOperationMissing
+		return revisionaccess.Lease{}, session.ErrOperationMissing
 	}
 	unsigned, err := protocolsession.SenderControlSemanticBody(message)
 	if err != nil {
@@ -128,7 +128,7 @@ func (client *receiverRevisionClient) OpenRevision(
 	}
 	results, err := contentflow.DecodeOpenResults(unsigned, []catalog.FileID{fileID})
 	if err != nil || len(results) != 1 {
-		return revisionaccess.Lease{}, errors.Join(sessioncontract.ErrOperationMissing, err)
+		return revisionaccess.Lease{}, errors.Join(session.ErrOperationMissing, err)
 	}
 	if results[0].Failure != nil {
 		return revisionaccess.Lease{}, &RemoteRevisionError{
@@ -159,7 +159,7 @@ func (client *receiverRevisionClient) OpenRevision(
 	if client.closed {
 		client.mu.Unlock()
 		state.close()
-		return revisionaccess.Lease{}, client.compensateRemoteLease(ctx, state.id, sessioncontract.ErrRuntimeClosed)
+		return revisionaccess.Lease{}, client.compensateRemoteLease(ctx, state.id, session.ErrRuntimeClosed)
 	}
 	if client.leases[state.id] != nil {
 		client.mu.Unlock()
@@ -180,12 +180,12 @@ func (client *receiverRevisionClient) beginExternalOperation(
 	ctx context.Context,
 ) (context.Context, requestClient, func(), error) {
 	if client == nil {
-		return nil, nil, nil, sessioncontract.ErrRuntimeClosed
+		return nil, nil, nil, session.ErrRuntimeClosed
 	}
 	client.mu.Lock()
 	if client.closed || client.rpc == nil {
 		client.mu.Unlock()
-		return nil, nil, nil, sessioncontract.ErrRuntimeClosed
+		return nil, nil, nil, session.ErrRuntimeClosed
 	}
 	rpc := client.rpc
 	client.mu.Unlock()
@@ -198,7 +198,7 @@ func (client *receiverRevisionClient) beginExternalOperation(
 	client.mu.Unlock()
 	if closed {
 		endAdmission()
-		return nil, nil, nil, sessioncontract.ErrRuntimeClosed
+		return nil, nil, nil, session.ErrRuntimeClosed
 	}
 	return operationContext, rpc, endAdmission, nil
 }
@@ -208,7 +208,7 @@ func (client *receiverRevisionClient) operationLifecycleError(ctx context.Contex
 	closed := client.closed
 	client.mu.Unlock()
 	if closed || client.rpc.Runtime().Lifetime().Err() != nil {
-		return errors.Join(sessioncontract.ErrRuntimeClosed, ctx.Err())
+		return errors.Join(session.ErrRuntimeClosed, ctx.Err())
 	}
 	return ctx.Err()
 }
@@ -274,7 +274,7 @@ func (client *receiverRevisionClient) ReleaseRevision(ctx context.Context, lease
 	client.mu.Lock()
 	if client.closed {
 		client.mu.Unlock()
-		return sessioncontract.ErrRuntimeClosed
+		return session.ErrRuntimeClosed
 	}
 	state := client.leases[leaseID]
 	delete(client.leases, leaseID)
@@ -303,7 +303,7 @@ func (client *receiverRevisionClient) releaseRemoteLease(ctx context.Context, le
 		return remoteRevisionOperationError(message)
 	}
 	if message.Kind() != protocolsession.MessageOperationComplete {
-		return sessioncontract.ErrOperationMissing
+		return session.ErrOperationMissing
 	}
 	unsigned, err := protocolsession.SenderControlSemanticBody(message)
 	if err != nil {
@@ -311,7 +311,7 @@ func (client *receiverRevisionClient) releaseRemoteLease(ctx context.Context, le
 	}
 	count, err := contentflow.DecodeOperationComplete(unsigned)
 	if err != nil || count != 0 {
-		return errors.Join(sessioncontract.ErrOperationMissing, err)
+		return errors.Join(session.ErrOperationMissing, err)
 	}
 	return nil
 }
@@ -352,7 +352,7 @@ func (client *receiverRevisionClient) renew(ctx context.Context, leaseID content
 		return contentflow.RemoteLease{}, remoteRevisionOperationError(message)
 	}
 	if message.Kind() != protocolsession.MessageLeaseResult {
-		return contentflow.RemoteLease{}, sessioncontract.ErrOperationMissing
+		return contentflow.RemoteLease{}, session.ErrOperationMissing
 	}
 	unsigned, err := protocolsession.SenderControlSemanticBody(message)
 	if err != nil {
@@ -366,7 +366,7 @@ func (client *receiverRevisionClient) leaseError(leaseID content.LeaseID) error 
 	state := client.leases[leaseID]
 	client.mu.Unlock()
 	if state == nil {
-		return sessioncontract.ErrRuntimeClosed
+		return session.ErrRuntimeClosed
 	}
 	return state.Err()
 }
@@ -414,7 +414,7 @@ func (client *receiverRevisionClient) close() {
 }
 
 type receiverBlockLane struct {
-	identity                  sessioncontract.LaneIdentity
+	identity                  session.LaneIdentity
 	rpc                       requestClient
 	assembler                 *contentflow.Assembler
 	opener                    RecordOpener
@@ -547,7 +547,7 @@ func (operation *receiverBlockOperation) receive(
 			return operation.complete(message, record)
 		default:
 			operation.call.RecordTraceCause(sessionobs.ProtocolOperationCauseProtocolFailure)
-			return records.BlockRecord{}, sessioncontract.ErrOperationMissing
+			return records.BlockRecord{}, session.ErrOperationMissing
 		}
 	}
 }

@@ -3,20 +3,20 @@ package sendersession
 import (
 	"context"
 	"errors"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 
 	"testing"
 )
 
 func TestSenderLifecycleRejectsMissingReceiverAndContextAuthority(t *testing.T) {
 	var nilRuntime *Runtime
-	if err := nilRuntime.Stop(context.Background(), "stop"); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	if err := nilRuntime.Stop(context.Background(), "stop"); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("nil runtime stop error=%v", err)
 	}
-	if err := nilRuntime.BeginStop(context.Background(), "stop"); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	if err := nilRuntime.BeginStop(context.Background(), "stop"); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("nil runtime begin-stop error=%v", err)
 	}
-	if err := nilRuntime.WaitStopped(context.Background()); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	if err := nilRuntime.WaitStopped(context.Background()); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("nil runtime wait-stop error=%v", err)
 	}
 	nilRuntime.BeginClose()
@@ -26,24 +26,24 @@ func TestSenderLifecycleRejectsMissingReceiverAndContextAuthority(t *testing.T) 
 	// A named nil context is deliberate invalid-input evidence; production
 	// lifecycle calls must always carry caller-owned cancellation authority.
 	var missingContext context.Context
-	if err := runtime.Stop(missingContext, "stop"); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	if err := runtime.Stop(missingContext, "stop"); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("nil stop context error=%v", err)
 	}
-	if err := runtime.BeginStop(missingContext, "stop"); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	if err := runtime.BeginStop(missingContext, "stop"); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("nil begin-stop context error=%v", err)
 	}
-	if err := runtime.WaitStopped(missingContext); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	if err := runtime.WaitStopped(missingContext); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("nil wait-stop context error=%v", err)
 	}
 
 	var nilFactory *Factory
-	if err := nilFactory.Stop(context.Background(), "stop"); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	if err := nilFactory.Stop(context.Background(), "stop"); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("nil factory stop error=%v", err)
 	}
-	if err := nilFactory.BeginStop("stop"); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	if err := nilFactory.BeginStop("stop"); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("nil factory begin-stop error=%v", err)
 	}
-	if err := (&Factory{}).Stop(missingContext, "stop"); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	if err := (&Factory{}).Stop(missingContext, "stop"); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("nil factory stop context error=%v", err)
 	}
 	if normalized, err := normalizeTerminalMessage(""); err != nil || normalized != "Sender stopped" {
@@ -100,7 +100,7 @@ func TestStopFactorySessionPreservesRuntimeAfterMessageValidationFailure(t *test
 	defer sender.Close()
 	defer receiver.Close()
 
-	if err := stopFactorySession(context.Background(), sender, "e\u0301"); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	if err := stopFactorySession(context.Background(), sender, "e\u0301"); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("invalid factory terminal message error=%v", err)
 	}
 	select {

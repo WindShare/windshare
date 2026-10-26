@@ -14,7 +14,7 @@ import (
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	transportwebrtc "github.com/windshare/windshare/transport/webrtc"
@@ -448,7 +448,7 @@ type receiverTestLanes struct {
 	requested        chan uint32
 	attachments      chan protocolsession.FrameChannel
 	ownedAttachments chan protocolsession.FrameChannel
-	lane             sessioncontract.LaneIdentity
+	lane             session.LaneIdentity
 	err              error
 	requestRelease   <-chan struct{}
 	attach           func(
@@ -462,7 +462,7 @@ func newReceiverTestLanes() *receiverTestLanes {
 	return &receiverTestLanes{
 		requested: make(chan uint32, 4), attachments: make(chan protocolsession.FrameChannel, 4),
 		ownedAttachments: make(chan protocolsession.FrameChannel, 4),
-		lane:             sessioncontract.LaneIdentity{ID: 17, Epoch: 4},
+		lane:             session.LaneIdentity{ID: 17, Epoch: 4},
 	}
 }
 
@@ -761,7 +761,7 @@ func TestReceiverAttemptRuntimeShutdownDuringAuthorityValidationStaysRuntimeOwne
 	receiveTest(t, maximumEntered)
 	operation.finishTermination(
 		ReceiverTerminalRuntime,
-		sessioncontract.ErrRuntimeClosed,
+		session.ErrRuntimeClosed,
 	)
 	close(releaseMaximum)
 	receiveTest(t, harness.attempt.Done())
@@ -771,7 +771,7 @@ func TestReceiverAttemptRuntimeShutdownDuringAuthorityValidationStaysRuntimeOwne
 		outcome.Disposition() != ReceiverDispositionSessionUnavailable ||
 		outcome.TransitionProvenance() != ReceiverProvenanceRuntimeStopping ||
 		outcome.ConsequenceProvenance() != ReceiverProvenanceRuntimeStopping ||
-		!errors.Is(outcome.RetainedCause(), sessioncontract.ErrRuntimeClosed) ||
+		!errors.Is(outcome.RetainedCause(), session.ErrRuntimeClosed) ||
 		errors.Is(outcome.RetainedCause(), ErrConfig) ||
 		errors.Is(outcome.RetainedCause(), protocolsession.ErrContinuationContract) ||
 		outcome.HasRetainedCauseClass(ReceiverCauseConfiguration) ||
@@ -805,7 +805,7 @@ func TestReceiverAttemptTerminatesZeroIDOperation(t *testing.T) {
 
 func TestReceiverAttemptDoesNotApplyTerminalBenignPolicyToWorkflowFailure(t *testing.T) {
 	harness := newReceiverHarness(t, func(_ *ReceiverFactoryConfig, signaling *receiverTestSignaling) {
-		signaling.operation.(*receiverTestOperation).sendCandidateError = sessioncontract.ErrOperationMissing
+		signaling.operation.(*receiverTestOperation).sendCandidateError = session.ErrOperationMissing
 	})
 	harness.peer.emitCandidate(&pion.ICECandidate{
 		Foundation: "workflow", Priority: 1, Address: "127.0.0.1", Protocol: pion.ICEProtocolUDP,
@@ -815,7 +815,7 @@ func TestReceiverAttemptDoesNotApplyTerminalBenignPolicyToWorkflowFailure(t *tes
 
 	outcome := harness.attempt.Outcome()
 	if outcome.TransitionAuthority() != ReceiverTerminalLocal ||
-		!errors.Is(outcome.RetainedCause(), sessioncontract.ErrOperationMissing) ||
+		!errors.Is(outcome.RetainedCause(), session.ErrOperationMissing) ||
 		outcome.TransitionProvenance() != ReceiverProvenanceLocalExplicitStop ||
 		outcome.Disposition() != ReceiverDispositionFallbackAllowed ||
 		!outcome.LocallyCanceled() {

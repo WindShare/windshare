@@ -1,7 +1,7 @@
 package sessioncore
 
 import (
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/requestlane"
 	"time"
@@ -10,7 +10,7 @@ import (
 // Selection and reservation share the registry lock, so concurrent callers see
 // each other's pending work and no request can reserve an already detached lane.
 func (lanes *runtimeLanes) selectRequestLane(
-	preferred *sessioncontract.LaneIdentity, kind protocolsession.MessageKind,
+	preferred *session.LaneIdentity, kind protocolsession.MessageKind,
 ) (selectedLane, *requestlane.Reservation, requestlane.Estimate, error) {
 	if preferred != nil || !requestlane.Managed(kind) {
 		selected, err := lanes.selectLane(preferred)
@@ -19,7 +19,7 @@ func (lanes *runtimeLanes) selectRequestLane(
 	lanes.mu.Lock()
 	defer lanes.mu.Unlock()
 	if lanes.stopping || lanes.runtime.ctx.Err() != nil {
-		return selectedLane{}, nil, requestlane.Estimate{}, sessioncontract.ErrRuntimeClosed
+		return selectedLane{}, nil, requestlane.Estimate{}, session.ErrRuntimeClosed
 	}
 	now := lanes.runtime.now()
 	var best *RuntimeLane

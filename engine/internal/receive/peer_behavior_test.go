@@ -8,7 +8,7 @@ import (
 
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
@@ -57,7 +57,7 @@ func TestReceiverPeerDispositionOwnsSessionClosure(t *testing.T) {
 func TestReceiverPeerReadyDetachAndCloseJoin(t *testing.T) {
 	observation, events := newTestObservation(t)
 	attempt := newCLIReceiverPeerAttempt()
-	attempt.lane = sessioncontract.LaneIdentity{ID: 2, Epoch: 1}
+	attempt.lane = session.LaneIdentity{ID: 2, Epoch: 1}
 	signals := make(chan receiverPeerSignal, 2)
 	done := make(chan struct{})
 	stop := &receiverLocalStop{}

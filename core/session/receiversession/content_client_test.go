@@ -7,7 +7,7 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/framechannel"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -94,7 +94,7 @@ func TestReceiverBlockLaneRetiresAnInactiveOperationBeforeReassignment(t *testin
 func TestReceiverBlockLaneMarksOnlyPreAdmissionFailureReassignable(t *testing.T) {
 	fixture := newBlockProtocolFixture(t, false)
 	lane, demand := fixture.lane, fixture.demand
-	lane.identity = sessioncontract.LaneIdentity{ID: runtimeIdentity(fixture.runtime).ID + 1, Epoch: 1}
+	lane.identity = session.LaneIdentity{ID: runtimeIdentity(fixture.runtime).ID + 1, Epoch: 1}
 	_, err := lane.FetchBlock(context.Background(), demand, nil)
 	capabilityType := reflect.TypeOf(transferlanes.NewDemandNotAdmitted(sessioncore.ErrLaneUnavailable))
 	if reflect.TypeOf(err) != capabilityType || !errors.Is(err, sessioncore.ErrLaneUnavailable) {
@@ -159,7 +159,7 @@ func TestReceiverBlockLaneUnknownSendDoesNotRetryAfterCallerDeadline(t *testing.
 	base, peer := newMemoryChannelPair()
 	t.Cleanup(func() { _ = peer.Close() })
 	channel := &uncertainReceiverRequestChannel{memoryChannel: base}
-	identity := sessioncontract.LaneIdentity{ID: runtimeIdentity(runtime).ID + 1, Epoch: 1}
+	identity := session.LaneIdentity{ID: runtimeIdentity(runtime).ID + 1, Epoch: 1}
 	if err := runtime.InstallLane(identity, channel, permissiveInboundAuthenticator(), nil, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestReceiverBlockLaneProvenDropReassignsDemand(t *testing.T) {
 		lease: {id: lease},
 	}}
 	blockLane := &receiverBlockLane{
-		identity: sessioncontract.LaneIdentity{ID: runtimeIdentity(runtime).ID + 1, Epoch: 1},
+		identity: session.LaneIdentity{ID: runtimeIdentity(runtime).ID + 1, Epoch: 1},
 		rpc:      newTestRequests(runtime, &deterministicReader{next: 78}), revisions: revisions,
 		assembler: newBlockProtocolFixture(t, false).lane.assembler,
 	}

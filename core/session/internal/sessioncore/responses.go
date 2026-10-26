@@ -4,14 +4,14 @@ import (
 	"context"
 	"errors"
 	"github.com/windshare/windshare/core/observationstream"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"sync/atomic"
 )
 
-func (outbound *Responses) controlBinding(lane sessioncontract.LaneIdentity) protocolsession.ControlBinding {
+func (outbound *Responses) controlBinding(lane session.LaneIdentity) protocolsession.ControlBinding {
 	runtime := outbound.runtime
 	return protocolsession.ControlBinding{
 		ShareInstance: runtime.share, ProtocolSessionID: runtime.sessionID,
@@ -98,7 +98,7 @@ func (outbound *Responses) executeResponse(ctx context.Context, kind protocolses
 		end := protocolsession.ResponseSendEndPreparationFailed
 		if errors.Is(err, ErrLaneUnavailable) {
 			end = protocolsession.ResponseSendEndRouteUnavailable
-		} else if errors.Is(err, sessioncontract.ErrOperationMissing) {
+		} else if errors.Is(err, session.ErrOperationMissing) {
 			end = protocolsession.ResponseSendEndAuthorityUnavailable
 		}
 		result, _ := protocolsession.NewResponseSendNotStarted(end)
@@ -149,7 +149,7 @@ func (outbound *Responses) SendControl(ctx context.Context, kind protocolsession
 func (outbound *Responses) SendFragment(ctx context.Context, message protocolsession.Message) error {
 	operationID, ok := message.OperationID()
 	if !ok {
-		return sessioncontract.ErrOperationMissing
+		return session.ErrOperationMissing
 	}
 	_, err := outbound.executeResponse(ctx, message.Kind(), operationID, sessionobs.ProtocolErrorContent{}, func(transaction *outboundTransaction) (outboundLaneAttempt, error) {
 		return func(lane selectedLane, permit protocolsession.OutboundReplayPermit) (protocolsession.SendReceipt, error) {

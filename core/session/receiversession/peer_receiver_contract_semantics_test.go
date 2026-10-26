@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"testing"
@@ -89,7 +89,7 @@ func TestReceiverPeerCandidateAndReceiveStateTransitionsFailClosed(t *testing.T)
 		fixture.operation.receiving = true
 		fixture.operation.mu.Unlock()
 		call, terminal, err := fixture.operation.beginReceive()
-		if call != nil || terminal != nil || !errors.Is(err, sessioncontract.ErrOperationOverflow) {
+		if call != nil || terminal != nil || !errors.Is(err, session.ErrOperationOverflow) {
 			t.Fatalf("concurrent begin call=%+v terminal=%+v error=%v", call, terminal, err)
 		}
 		fixture.operation.mu.Lock()
@@ -113,7 +113,7 @@ func TestReceiverPeerEvidenceClassificationPreservesOwnershipScope(t *testing.T)
 	var nilOperation *PeerOperation
 	nilOperation.observeAuthenticatedOperationViolation(protocolsession.AuthenticatedOperationViolation{})
 
-	runtimeEvidence := fixture.operation.classifyReceiveError(context.Background(), sessioncontract.ErrRuntimeClosed)
+	runtimeEvidence := fixture.operation.classifyReceiveError(context.Background(), session.ErrRuntimeClosed)
 	if runtimeEvidence.transition.authority != PeerTerminalAuthorityRuntime ||
 		runtimeEvidence.transition.provenance != PeerProvenanceRuntimeStopping {
 		t.Fatalf("runtime evidence=%+v", runtimeEvidence)
@@ -151,9 +151,9 @@ func TestReceiverPeerEvidenceClassificationPreservesOwnershipScope(t *testing.T)
 		cause error
 		code  PeerDiagnosticCode
 	}{
-		{cause: sessioncontract.ErrOperationMissing, code: PeerDiagnosticOperationMissing},
-		{cause: sessioncontract.ErrRuntimeClosed, code: PeerDiagnosticRuntimeClosed},
-		{cause: sessioncontract.ErrOperationOverflow, code: PeerDiagnosticOperationOverflow},
+		{cause: session.ErrOperationMissing, code: PeerDiagnosticOperationMissing},
+		{cause: session.ErrRuntimeClosed, code: PeerDiagnosticRuntimeClosed},
+		{cause: session.ErrOperationOverflow, code: PeerDiagnosticOperationOverflow},
 		{cause: protocolsession.ErrUnknownMessageKind, code: PeerDiagnosticUnknownControl},
 	} {
 		diagnostic := receiverPeerDiagnosticForCause(testCase.cause, PeerDiagnosticOpaqueFailure)

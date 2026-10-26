@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/windshare/windshare/core/framechannel"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -98,9 +98,9 @@ func TestSenderFactoryInvalidTerminalDoesNotCommitStopBeforeValidRetry(t *testin
 	for _, invalid := range []string{
 		string([]byte{0xff}),
 		"e\u0301",
-		strings.Repeat("x", sessioncontract.MaximumTerminalMessageBytes+1),
+		strings.Repeat("x", session.MaximumTerminalMessageBytes+1),
 	} {
-		if err := fixture.senderFactory.Stop(context.Background(), invalid); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+		if err := fixture.senderFactory.Stop(context.Background(), invalid); !errors.Is(err, session.ErrRuntimeConfig) {
 			t.Fatalf("invalid terminal message error=%v", err)
 		}
 		fixture.senderFactory.mu.Lock()
@@ -383,7 +383,7 @@ func TestSenderRuntimeCompositeTrackingOutlivesCoreUntilTerminalWorkerReturns(t 
 			t.Fatal("factory dropped signing-key borrower at core completion")
 		}
 		closedRuntime := &Runtime{lifecycle: testLifecycle{ctx: ctx, done: coreDone}}
-		if err := closedRuntime.BeginStop(context.Background(), "late stop"); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+		if err := closedRuntime.BeginStop(context.Background(), "late stop"); !errors.Is(err, session.ErrRuntimeClosed) {
 			t.Fatalf("BeginStop after core closure error=%v", err)
 		}
 		close(runtime.stopDone)
@@ -512,7 +512,7 @@ func TestSenderFactoryStopTreatsTransportRetirementBeforePhysicalAdmissionAsNatu
 		t.Fatal("transport retirement did not reach the receive-publication barrier")
 	}
 	id, epoch := sender.LaneIdentity()
-	initial := sessioncontract.LaneIdentity{ID: id, Epoch: epoch}
+	initial := session.LaneIdentity{ID: id, Epoch: epoch}
 	_, tracked := sender.core.LaneDone(initial)
 	closing := !sender.core.HasUsableLanes()
 	writerAccepting := sender.core.HasUsableLanes()
@@ -575,7 +575,7 @@ func TestSenderFactoryStopTreatsLastLaneDetachBeforeTerminalAdmissionAsComplete(
 	}
 	sender := acceptedResult.runtime
 
-	releaseRegistry := func(identity sessioncontract.LaneIdentity) { sender.lanesRegistry.Release(identity.ID, identity.Epoch) }
+	releaseRegistry := func(identity session.LaneIdentity) { sender.lanesRegistry.Release(identity.ID, identity.Epoch) }
 	detachEntered := make(chan struct{})
 	detachRelease := make(chan struct{})
 	released := false
@@ -584,7 +584,7 @@ func TestSenderFactoryStopTreatsLastLaneDetachBeforeTerminalAdmissionAsComplete(
 			close(detachRelease)
 		}
 	}()
-	sender.core.ConfigureLanes(nil, func(identity sessioncontract.LaneIdentity) {
+	sender.core.ConfigureLanes(nil, func(identity session.LaneIdentity) {
 		close(detachEntered)
 		<-detachRelease
 		if releaseRegistry != nil {

@@ -2,7 +2,7 @@ package sessioncore
 
 import (
 	"errors"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"testing"
 )
@@ -12,9 +12,9 @@ func TestLogicalLaneSlotRemainsSelectableAcrossPhysicalReplacement(t *testing.T)
 		t.Run(retirement, func(t *testing.T) {
 			runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 			lanes := runtime.lanes
-			excluded := map[sessioncontract.LaneIdentity]struct{}{runtime.initial: {}}
+			excluded := map[session.LaneIdentity]struct{}{runtime.initial: {}}
 			const replacements = protocolsession.DefaultMaxLogicalLanes * 3
-			identity := sessioncontract.LaneIdentity{ID: runtime.initial.ID + 1}
+			identity := session.LaneIdentity{ID: runtime.initial.ID + 1}
 			for epoch := uint32(1); epoch <= replacements; epoch++ {
 				identity.Epoch = epoch
 				channel, peer := newMemoryChannelPair()

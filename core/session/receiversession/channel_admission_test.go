@@ -3,7 +3,7 @@ package receiversession
 import (
 	"context"
 	"errors"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sendersession"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
@@ -71,7 +71,7 @@ func TestProvisionalTransportRequiresAuthenticatedSessionAdmission(t *testing.T)
 		if err := peer.Send(t.Context(), []byte("arbitrary traffic")); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := fixture.senderFactory.AdmitChannel(t.Context(), channel); !errors.Is(err, sessioncontract.ErrHandshake) {
+		if _, err := fixture.senderFactory.AdmitChannel(t.Context(), channel); !errors.Is(err, session.ErrHandshake) {
 			t.Fatal(err)
 		}
 		if channel.confirmations.Load() != 0 {

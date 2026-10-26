@@ -3,7 +3,7 @@ package receiversession
 import (
 	"context"
 	"errors"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
@@ -16,7 +16,7 @@ func (runtime *Runtime) OpenPeerOperation(
 ) (*PeerOperation, error) {
 	if runtime == nil || runtime.core == nil || runtime.rpc == nil ||
 		runtime.rpc.Runtime() != runtime.core {
-		return nil, sessioncontract.ErrRuntimeClosed
+		return nil, session.ErrRuntimeClosed
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -29,7 +29,7 @@ func (runtime *Runtime) OpenPeerOperation(
 	if !hasContinuationLimit {
 		cleanupErr := runtime.rpc.CancelAndEnd(call, contentflow.CancelReasonOutputAbort)
 		if runtime.Lifetime().Err() != nil {
-			return nil, errors.Join(sessioncontract.ErrRuntimeClosed, runtime.Err(), cleanupErr)
+			return nil, errors.Join(session.ErrRuntimeClosed, runtime.Err(), cleanupErr)
 		}
 		return nil, errors.Join(runtime.core.FailOperationAuthority(), cleanupErr)
 	}
@@ -42,7 +42,7 @@ func (runtime *Runtime) OpenPeerOperation(
 	if err := call.BindOperationObserver(peerOperationObserver{operation}); err != nil {
 		cleanupErr := runtime.rpc.CancelAndEnd(call, contentflow.CancelReasonOutputAbort)
 		if runtime.Lifetime().Err() != nil {
-			return nil, errors.Join(sessioncontract.ErrRuntimeClosed, runtime.Err(), err, cleanupErr)
+			return nil, errors.Join(session.ErrRuntimeClosed, runtime.Err(), err, cleanupErr)
 		}
 		return nil, errors.Join(runtime.core.FailOperationAuthority(), err, cleanupErr)
 	}
@@ -204,11 +204,11 @@ func (operation *PeerOperation) beginReceive() (
 	}
 	if operation.closed || operation.call == nil {
 		operation.mu.Unlock()
-		return nil, nil, sessioncontract.ErrOperationMissing
+		return nil, nil, session.ErrOperationMissing
 	}
 	if operation.receiving {
 		operation.mu.Unlock()
-		return nil, nil, sessioncontract.ErrOperationOverflow
+		return nil, nil, session.ErrOperationOverflow
 	}
 	operation.receiving = true
 	call := operation.call
@@ -329,7 +329,7 @@ func (operation *PeerOperation) claimTerminal(
 	if evidence.transition.authority == receiverPeerTerminalAuthorityInvalid {
 		evidence = receiverPeerLocalEvidence(
 			PeerProvenanceLocalOperationContract,
-			sessioncontract.ErrOperationMissing,
+			session.ErrOperationMissing,
 		)
 	}
 	operation.terminalTransition = evidence.transition
@@ -495,12 +495,12 @@ func validReceiverPeerConsequence(consequence receiverPeerTerminalConsequence) b
 
 func (operation *PeerOperation) activeCall() (*sessioncore.Call, error) {
 	if operation == nil || operation.rpc == nil || operation.rpc.Runtime() == nil {
-		return nil, sessioncontract.ErrRuntimeClosed
+		return nil, session.ErrRuntimeClosed
 	}
 	operation.mu.Lock()
 	defer operation.mu.Unlock()
 	if operation.closed || operation.call == nil {
-		return nil, sessioncontract.ErrOperationMissing
+		return nil, session.ErrOperationMissing
 	}
 	return operation.call, nil
 }

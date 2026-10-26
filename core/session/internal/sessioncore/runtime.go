@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/observationstream"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/requestlane"
@@ -31,7 +31,7 @@ type Runtime struct {
 	share                catalog.ShareInstance
 	role                 protocolsession.Role
 	sessionID            protocolsession.ProtocolSessionID
-	initial              sessioncontract.LaneIdentity
+	initial              session.LaneIdentity
 	keys                 protocolsession.SessionKeys
 	random               io.Reader
 	operations           *protocolsession.OperationTable
@@ -81,11 +81,11 @@ type Config struct {
 func New(config Config) (*Runtime, error) {
 	if config.Share.IsZero() || config.Keys.ProtocolSessionID().IsZero() || config.LaneID == 0 ||
 		config.Channel == nil || config.Random == nil || config.Authenticator == nil {
-		return nil, sessioncontract.ErrRuntimeConfig
+		return nil, session.ErrRuntimeConfig
 	}
 	if config.OperationLimits == (protocolsession.OperationLimits{}) {
 		config.OperationLimits = protocolsession.OperationLimits{
-			MaxActive: sessioncontract.DefaultActiveOperations, MaxTracked: sessioncontract.DefaultTrackedOperations,
+			MaxActive: session.DefaultActiveOperations, MaxTracked: session.DefaultTrackedOperations,
 		}
 	}
 	if config.RouterLimits == (protocolsession.RouterLimits{}) {
@@ -107,7 +107,7 @@ func New(config Config) (*Runtime, error) {
 	ctx, cancelLifecycle := context.WithCancel(context.Background())
 	runtime := &Runtime{
 		share: config.Share, role: config.Role, sessionID: config.Keys.ProtocolSessionID(),
-		initial: sessioncontract.LaneIdentity{ID: config.LaneID, Epoch: config.LaneEpoch}, keys: config.Keys,
+		initial: session.LaneIdentity{ID: config.LaneID, Epoch: config.LaneEpoch}, keys: config.Keys,
 		random: config.Random, operations: operations, router: router,
 		routes:               newOperationLaneRoutes(),
 		now:                  config.Now,
@@ -225,12 +225,12 @@ func (runtime *Runtime) beginExternalAdmission(
 	caller context.Context,
 ) (context.Context, func(), error) {
 	if runtime == nil || caller == nil {
-		return nil, nil, sessioncontract.ErrRuntimeConfig
+		return nil, nil, session.ErrRuntimeConfig
 	}
 	runtime.externalMu.Lock()
 	if runtime.externalClosing || runtime.ctx.Err() != nil {
 		runtime.externalMu.Unlock()
-		return nil, nil, sessioncontract.ErrRuntimeClosed
+		return nil, nil, session.ErrRuntimeClosed
 	}
 	runtime.externalAdmissions.Add(1)
 	lifecycle := runtime.ctx
@@ -259,12 +259,12 @@ func (runtime *Runtime) closeExternalAdmissions() {
 
 func (runtime *Runtime) addFinalizer(finalize func()) error {
 	if runtime == nil || finalize == nil {
-		return sessioncontract.ErrRuntimeConfig
+		return session.ErrRuntimeConfig
 	}
 	runtime.finalizeMu.Lock()
 	defer runtime.finalizeMu.Unlock()
 	if runtime.finalizing {
-		return sessioncontract.ErrRuntimeClosed
+		return session.ErrRuntimeClosed
 	}
 	runtime.finalizers = append(runtime.finalizers, finalize)
 	return nil
@@ -313,7 +313,7 @@ func (runtime *Runtime) waitClosed() {
 
 func (runtime *Runtime) Err() error {
 	if runtime == nil {
-		return sessioncontract.ErrRuntimeClosed
+		return session.ErrRuntimeClosed
 	}
 	runtime.errMu.Lock()
 	defer runtime.errMu.Unlock()

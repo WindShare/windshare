@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"testing"
@@ -23,7 +23,7 @@ func TestPeerContinuationMigratesOnlyAfterOriginalLaneLoss(t *testing.T) {
 	if selected, err := rpc.continuationLane(call); err != nil || selected.identity != runtime.initial {
 		t.Fatalf("live original continuation lane = %+v, %v", selected, err)
 	}
-	other := sessioncontract.LaneIdentity{ID: runtime.initial.ID + 1, Epoch: 1}
+	other := session.LaneIdentity{ID: runtime.initial.ID + 1, Epoch: 1}
 	if _, err := runtime.lanes.add(
 		other, newMemoryChannel(t), permissiveInboundAuthenticator(), false,
 	); err != nil {
@@ -38,13 +38,13 @@ func TestPeerContinuationMigratesOnlyAfterOriginalLaneLoss(t *testing.T) {
 
 	if _, err := rpc.sendContinuation(
 		context.Background(), nil, protocolsession.MessagePeerCandidate, nil,
-	); !errors.Is(err, sessioncontract.ErrOperationMissing) {
+	); !errors.Is(err, session.ErrOperationMissing) {
 		t.Fatalf("nil continuation call error = %v", err)
 	}
 	inactive := &Call{id: id16[protocolsession.OperationID](81)}
 	if _, err := rpc.sendContinuation(
 		context.Background(), inactive, protocolsession.MessagePeerCandidate, nil,
-	); !errors.Is(err, sessioncontract.ErrOperationMissing) {
+	); !errors.Is(err, session.ErrOperationMissing) {
 		t.Fatalf("inactive continuation call error = %v", err)
 	}
 	if _, err := rpc.sendContinuation(
@@ -183,7 +183,7 @@ func TestRPCContinuationRetractsPendingPreTransportTimeout(t *testing.T) {
 	if outcome, err := rpc.sendContinuation(
 		ctx, call, protocolsession.MessagePeerCandidate, []byte{0xf6},
 	); outcome != protocolsession.SendOutcomeDropped || !errors.Is(err, context.DeadlineExceeded) ||
-		errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+		errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("stalled continuation = outcome %d, error %v", outcome, err)
 	}
 }
@@ -193,7 +193,7 @@ func TestRPCAdmitCancellationRejectsInvalidAuthority(t *testing.T) {
 	t.Cleanup(runtime.abortBeforeStart)
 	rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{11}, protocolsession.IdentityBytes)))
 	for _, call := range []*Call{nil, {}, {id: id16[protocolsession.OperationID](85)}} {
-		if err := rpc.admitCancellation(call, contentflow.CancelReasonTimeout); !errors.Is(err, sessioncontract.ErrOperationMissing) {
+		if err := rpc.admitCancellation(call, contentflow.CancelReasonTimeout); !errors.Is(err, session.ErrOperationMissing) {
 			t.Fatalf("invalid cancellation authority error = %v", err)
 		}
 	}

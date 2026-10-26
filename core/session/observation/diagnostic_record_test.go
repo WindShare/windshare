@@ -6,7 +6,7 @@ import (
 	"errors"
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/framechannel"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/requestlane"
@@ -25,7 +25,7 @@ func TestDiagnosticPreservesDeadlineAndSchedulingContext(t *testing.T) {
 	for _, phase := range []contentflow.BlockReceivePhase{contentflow.BlockAwaitingFirstFragment, contentflow.BlockReceivingFragments, "future_wait_phase"} {
 		source := NewProtocolOperationObservation(ctx, ProtocolOperationObservation{
 			Stage: ProtocolOperationReceiverFailed, Cause: ProtocolOperationCauseDeadline,
-			Lane: sessioncontract.LaneIdentity{ID: 3, Epoch: 2}, HasLane: true, HasDeadline: true, DeadlineRemainingMillis: 17,
+			Lane: session.LaneIdentity{ID: 3, Epoch: 2}, HasLane: true, HasDeadline: true, DeadlineRemainingMillis: 17,
 			HasSend: true, SendSettled: true, SendAdmitted: true, SendOutcome: protocolsession.SendOutcomeUnknown,
 			HasResponse: true, ResponseKind: protocolsession.MessageOperationError, ResponseCount: math.MaxUint64,
 			BlockWait:         contentflow.BlockWaitTimeout{Phase: phase, Waited: 35 * time.Second, QueueProgress: 12},
@@ -101,7 +101,7 @@ func TestDiagnosticRetainsAuthenticatedErrorAndNotStartedDistinction(t *testing.
 	}
 	notStarted := NewResponseSendNotStarted(ctx, 1, protocolsession.MessageOperationError, content, result).DiagnosticRecord()
 	ctx.Correlation.Role = protocolsession.RoleReceiver
-	received := NewReceivedProtocolError(ctx, content, sessioncontract.LaneIdentity{ID: 9, Epoch: 4}).DiagnosticRecord()
+	received := NewReceivedProtocolError(ctx, content, session.LaneIdentity{ID: 9, Epoch: 4}).DiagnosticRecord()
 	for _, record := range []diagnostics.Record{notStarted, received} {
 		p := record.Payload().Get("protocol_error")
 		if p.Get("code").Uint() != 0x3008 || !p.Get("retryable").Bool() || p.Get("retry_after_ms").Uint() != 125 {
@@ -117,7 +117,7 @@ func TestDiagnosticRetainsAuthenticatedErrorAndNotStartedDistinction(t *testing.
 func TestDiagnosticDecisionKeepsCanonicalJoinKey(t *testing.T) {
 	ctx := diagnosticContext()
 	decision := contentflow.SenderDecisionTrace{Stage: contentflow.SenderDecisionCapacityBusy, OperationID: ctx.Correlation.OperationID, RequestKind: ctx.Correlation.RequestKind, CapacityDecisionID: "store-17-decision-5"}
-	record := NewSenderContentDecision(ctx, decision, sessioncontract.LaneIdentity{}, false).DiagnosticRecord()
+	record := NewSenderContentDecision(ctx, decision, session.LaneIdentity{}, false).DiagnosticRecord()
 	if record.Payload().Get("content_decision").Get("capacity_decision_id").Text() != string(decision.CapacityDecisionID) ||
 		record.Correlation().Get("protocol_session_id").Text() != diagnostics.Identity(ctx.Correlation.ProtocolSessionID[:]).Text() {
 		t.Fatal("source join keys changed")

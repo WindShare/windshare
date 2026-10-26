@@ -14,7 +14,7 @@ import (
 	"github.com/windshare/windshare/core/session/peerslot"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
@@ -37,7 +37,7 @@ func (t systemTimer) Stop()                        { t.Timer.Stop() }
 type Attempt interface {
 	Ready() <-chan struct{}
 	Done() <-chan struct{}
-	Lane() (sessioncontract.LaneIdentity, bool)
+	Lane() (session.LaneIdentity, bool)
 	Outcome() v2peer.ReceiverAttemptOutcome
 	Err() error
 	Close() error
@@ -77,7 +77,7 @@ type PeerPathControlSession interface {
 // ending negotiation alone cannot retire an admitted lane.
 type ContentLaneOwner interface {
 	LaneSet() *transferlanes.Set
-	DetachLane(sessioncontract.LaneIdentity) bool
+	DetachLane(session.LaneIdentity) bool
 }
 
 type PathConfig struct {
@@ -210,7 +210,7 @@ type Path struct {
 	slot              *peerslot.Lease
 	current           Attempt
 	binding           v2signal.Binding
-	lane              sessioncontract.LaneIdentity
+	lane              session.LaneIdentity
 	result            Result
 	wake              chan struct{}
 	done, ready       chan struct{}
@@ -237,15 +237,15 @@ func (p *Path) SetDemand(demand Demand) error {
 func (p *Path) currentDemand() Demand  { p.mu.Lock(); defer p.mu.Unlock(); return p.demand }
 func (p *Path) Ready() <-chan struct{} { return p.ready }
 func (p *Path) Done() <-chan struct{}  { return p.done }
-func (p *Path) Lane() (sessioncontract.LaneIdentity, bool) {
+func (p *Path) Lane() (session.LaneIdentity, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.current == nil || p.lane.ID == 0 {
-		return sessioncontract.LaneIdentity{}, false
+		return session.LaneIdentity{}, false
 	}
 	select {
 	case <-p.current.Done():
-		return sessioncontract.LaneIdentity{}, false
+		return session.LaneIdentity{}, false
 	default:
 		return p.lane, true
 	}

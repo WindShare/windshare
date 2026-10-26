@@ -6,7 +6,7 @@ import (
 	"errors"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/framechannel"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
@@ -95,7 +95,7 @@ func TestReceiverIdentityRejectionPreservesProtocolFailureThroughCleanup(t *test
 		func() error { return dependencies.classifyAccess(context.Background(), context.Canceled) },
 		func() error { return dependencies.classifySource(context.Background(), transfer.ErrBrokerClosed) },
 		func() error {
-			return dependencies.classifyCatalog(context.Background(), sessioncontract.ErrRuntimeClosed)
+			return dependencies.classifyCatalog(context.Background(), session.ErrRuntimeClosed)
 		},
 		func() error {
 			return dependencies.classifySource(context.Background(), sessionTransportBoundaryError(transferlanes.ErrClosed))

@@ -3,7 +3,7 @@ package sessioncore
 import (
 	"context"
 	"errors"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"sync/atomic"
 	"testing"
@@ -48,7 +48,7 @@ func TestOperationCandidateGateRechecksCancellationAfterOwnershipTransfer(t *tes
 	t.Run("runtime cancellation", func(t *testing.T) {
 		call := &Call{}
 		lifetime := newSecondObservationCanceledContext()
-		if _, err := call.acquireCandidateSend(context.Background(), lifetime); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+		if _, err := call.acquireCandidateSend(context.Background(), lifetime); !errors.Is(err, session.ErrRuntimeClosed) {
 			t.Fatalf("post-acquisition runtime cancellation error=%v", err)
 		}
 		assertCandidateGateReusable(t, call)
@@ -65,18 +65,18 @@ func assertCandidateGateReusable(t *testing.T, call *Call) {
 }
 
 func TestOperationCallClosedStateRejectsEveryAuthorityMutation(t *testing.T) {
-	if _, err := (*Call)(nil).acquireCandidateSend(context.Background(), context.Background()); !errors.Is(err, sessioncontract.ErrOperationMissing) {
+	if _, err := (*Call)(nil).acquireCandidateSend(context.Background(), context.Background()); !errors.Is(err, session.ErrOperationMissing) {
 		t.Fatalf("nil candidate call error=%v", err)
 	}
 	// A named nil value keeps this deliberate invalid-input contract distinct from
 	// production call sites, which must always propagate an owned context.
 	var missingContext context.Context
-	if _, err := (&Call{}).acquireCandidateSend(missingContext, context.Background()); !errors.Is(err, sessioncontract.ErrOperationMissing) {
+	if _, err := (&Call{}).acquireCandidateSend(missingContext, context.Background()); !errors.Is(err, session.ErrOperationMissing) {
 		t.Fatalf("nil candidate context error=%v", err)
 	}
 
 	call := &Call{closed: true}
-	if _, err := call.acquireCandidateSend(context.Background(), context.Background()); !errors.Is(err, sessioncontract.ErrOperationMissing) {
+	if _, err := call.acquireCandidateSend(context.Background(), context.Background()); !errors.Is(err, session.ErrOperationMissing) {
 		t.Fatalf("closed candidate call error=%v", err)
 	}
 	done := call.doneChannel()
@@ -94,7 +94,7 @@ func TestOperationCallClosedStateRejectsEveryAuthorityMutation(t *testing.T) {
 	if call.setRequestReplay(protocolsession.Message{}, protocolsession.OutboundReplayPermit{}) {
 		t.Fatal("closed call accepted replay authority")
 	}
-	if err := call.queueRequestReplay(nil); !errors.Is(err, sessioncontract.ErrOperationMissing) {
+	if err := call.queueRequestReplay(nil); !errors.Is(err, session.ErrOperationMissing) {
 		t.Fatalf("closed replay queue error=%v", err)
 	}
 

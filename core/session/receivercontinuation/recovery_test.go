@@ -13,7 +13,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
@@ -225,7 +225,7 @@ func TestConcurrentRecoveryJoinsOneFlightAndRejectsReusedSession(t *testing.T) {
 type failedCursor struct{}
 
 func (failedCursor) Next(context.Context) (catalog.CatalogPage, bool, error) {
-	return catalog.CatalogPage{}, false, sessioncontract.ErrRuntimeClosed
+	return catalog.CatalogPage{}, false, session.ErrRuntimeClosed
 }
 func (failedCursor) Close() error { return nil }
 
@@ -263,7 +263,7 @@ func TestCatalogReplayPreservesCommitmentAndGenerationFence(t *testing.T) {
 	if err = cursor.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err = cursor.Next(context.Background()); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	if _, _, err = cursor.Next(context.Background()); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatal(err)
 	}
 	change, err := s.WaitForChange(context.Background(), original)

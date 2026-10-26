@@ -7,7 +7,7 @@ import (
 
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
 )
 
@@ -38,7 +38,7 @@ func (gate *acceptedInstallationFailureGate) attach(
 	_ = channel.Close()
 	return receiversession.LaneAdmissionResult{
 		GrantOperationID: grant.OperationID,
-		Lane: sessioncontract.LaneIdentity{
+		Lane: session.LaneIdentity{
 			ID: grant.LaneID, Epoch: grant.LaneEpoch,
 		},
 		Disposition:      receiversession.LaneAdmissionAccepted,
@@ -93,7 +93,7 @@ func TestReceiverAttachmentSettlementCannotMintAuthorityFromInconsistentResult(t
 	}
 	accepted := receiversession.LaneAdmissionResult{
 		GrantOperationID: grant.OperationID,
-		Lane:             sessioncontract.LaneIdentity{ID: grant.LaneID, Epoch: grant.LaneEpoch},
+		Lane:             session.LaneIdentity{ID: grant.LaneID, Epoch: grant.LaneEpoch},
 		Disposition:      receiversession.LaneAdmissionAccepted,
 		LaneInstallation: receiversession.LaneInstallationFailed,
 	}

@@ -13,7 +13,7 @@ import (
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
 )
 
@@ -523,7 +523,7 @@ func TestReceiverPreOperationRuntimeStoppingIsUnavailable(t *testing.T) {
 		ReceiverProvenanceRuntimeStopping,
 		ReceiverDispositionSessionUnavailable,
 	)
-	if !errors.Is(outcome.RetainedCause(), sessioncontract.ErrRuntimeClosed) ||
+	if !errors.Is(outcome.RetainedCause(), session.ErrRuntimeClosed) ||
 		errors.Is(outcome.RetainedCause(), ErrProtocol) || outcome.RequiresSessionClose() {
 		t.Fatalf("runtime-stopping diagnostics=%v outcome=%+v", outcome.RetainedCause(), outcome)
 	}

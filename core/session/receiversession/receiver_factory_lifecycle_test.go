@@ -3,7 +3,7 @@ package receiversession
 import (
 	"context"
 	"errors"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"sync"
 	"sync/atomic"
@@ -105,7 +105,7 @@ func TestReceiverFactoryCloseCancelsAndJoinsConnectAdmissions(t *testing.T) {
 	if retainedAuthKey != nil {
 		t.Fatal("closed factory retained its authentication key slice")
 	}
-	if _, err := factory.Connect(context.Background(), newMemoryChannel(t), transferlanes.RouteRelay); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	if _, err := factory.Connect(context.Background(), newMemoryChannel(t), transferlanes.RouteRelay); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("Connect after Close error=%v", err)
 	}
 	if acquisitions.Load() != 1 {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/framechannel"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -47,11 +47,11 @@ func (runtime *Runtime) PathsExhausted() bool {
 	return runtime.termination.claimed && runtime.termination.cause == TerminationPathsExhausted
 }
 func (runtime *Runtime) HasUsableLanes() bool { return runtime.lanes.hasUsable() }
-func (runtime *Runtime) DetachLane(identity sessioncontract.LaneIdentity) bool {
+func (runtime *Runtime) DetachLane(identity session.LaneIdentity) bool {
 	return runtime.lanes.detach(identity)
 }
 func (runtime *Runtime) AttachedLanes() int { return runtime.lanes.len() }
-func (runtime *Runtime) LaneDone(identity sessioncontract.LaneIdentity) (<-chan struct{}, bool) {
+func (runtime *Runtime) LaneDone(identity session.LaneIdentity) (<-chan struct{}, bool) {
 	runtime.lanes.mu.Lock()
 	defer runtime.lanes.mu.Unlock()
 	lane := runtime.lanes.active[identity.ID]
@@ -63,7 +63,7 @@ func (runtime *Runtime) LaneDone(identity sessioncontract.LaneIdentity) (<-chan 
 
 // ConfigureLanes binds role dependencies before Start. Registry callbacks preserve
 // runtime-lane then content-lane lock order and never transfer registry ownership.
-func (runtime *Runtime) ConfigureLanes(queued func(sessioncontract.LaneIdentity) time.Duration, detached func(sessioncontract.LaneIdentity)) {
+func (runtime *Runtime) ConfigureLanes(queued func(session.LaneIdentity) time.Duration, detached func(session.LaneIdentity)) {
 	runtime.lanes.mu.Lock()
 	defer runtime.lanes.mu.Unlock()
 	runtime.lanes.queuedContent = queued
@@ -72,7 +72,7 @@ func (runtime *Runtime) ConfigureLanes(queued func(sessioncontract.LaneIdentity)
 
 // InstallLane publishes both protocol and role ownership under the same registry
 // lock. A failed role admission cannot leave a protocol-only lane visible.
-func (runtime *Runtime) InstallLane(identity sessioncontract.LaneIdentity, channel protocolsession.FrameChannel, authenticator protocolsession.InboundMessageAuthenticator, requests *requestlane.Lane, admit func() error) error {
+func (runtime *Runtime) InstallLane(identity session.LaneIdentity, channel protocolsession.FrameChannel, authenticator protocolsession.InboundMessageAuthenticator, requests *requestlane.Lane, admit func() error) error {
 	_, err := runtime.lanes.addWithAdmission(identity, channel, authenticator, false, func(lane *RuntimeLane) error {
 		if requests != nil {
 			lane.requests = requests
@@ -123,7 +123,7 @@ func (client *Requests) Begin(ctx context.Context, kind protocolsession.MessageK
 func (client *Requests) PrepareCall(ctx context.Context, kind protocolsession.MessageKind, body []byte) (*Call, protocolsession.Message, error) {
 	return client.prepareCall(ctx, kind, body)
 }
-func (client *Requests) BeginCall(ctx context.Context, lane *sessioncontract.LaneIdentity, call *Call, message protocolsession.Message) error {
+func (client *Requests) BeginCall(ctx context.Context, lane *session.LaneIdentity, call *Call, message protocolsession.Message) error {
 	return client.beginCall(ctx, lane, call, message)
 }
 func (client *Requests) Await(ctx context.Context, call *Call) (protocolsession.Message, error) {
@@ -147,7 +147,7 @@ func (call *Call) ContinuationLimit() (int, bool)  { return call.continuationLim
 func (call *Call) OperationAuthority() (protocolsession.OperationGeneration, protocolsession.OutboundOperationPermit) {
 	return call.operationAuthority()
 }
-func (call *Call) LastResponseLane() sessioncontract.LaneIdentity {
+func (call *Call) LastResponseLane() session.LaneIdentity {
 	call.stateMu.Lock()
 	defer call.stateMu.Unlock()
 	return call.lastResponseLane

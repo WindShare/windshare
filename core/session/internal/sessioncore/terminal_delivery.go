@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/windshare/windshare/core/framechannel"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -12,7 +12,7 @@ import (
 // replay authority. Role observers cannot participate in send settlement.
 type TerminalSendObservation struct {
 	ProtocolSessionID    protocolsession.ProtocolSessionID
-	Lane                 sessioncontract.LaneIdentity
+	Lane                 session.LaneIdentity
 	Settled              bool
 	Outcome              protocolsession.SendOutcome
 	TransportDisposition framechannel.SendDisposition
@@ -54,11 +54,11 @@ func (outbound *Responses) sendTerminalRecipients(
 		return callerContext.Err()
 	}
 	type terminalReceipt struct {
-		lane    sessioncontract.LaneIdentity
+		lane    session.LaneIdentity
 		receipt protocolsession.SendReceipt
 	}
 	type terminalCompletion struct {
-		lane       sessioncontract.LaneIdentity
+		lane       session.LaneIdentity
 		completion protocolsession.SendCompletion
 	}
 	receipts := make([]terminalReceipt, 0, len(lanes))

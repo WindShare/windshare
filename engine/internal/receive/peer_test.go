@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/transfer"
 )
 
@@ -16,7 +16,7 @@ type cliReceiverPeerAttempt struct {
 	closeOnce sync.Once
 	err       error
 	outcome   receiverPeerMonitorOutcome
-	lane      sessioncontract.LaneIdentity
+	lane      session.LaneIdentity
 }
 
 func newCLIReceiverPeerAttempt() *cliReceiverPeerAttempt {
@@ -29,7 +29,7 @@ func (attempt *cliReceiverPeerAttempt) Err() error             { return attempt.
 func (attempt *cliReceiverPeerAttempt) Outcome() receiverPeerMonitorOutcome {
 	return attempt.outcome
 }
-func (attempt *cliReceiverPeerAttempt) Lane() (sessioncontract.LaneIdentity, bool) {
+func (attempt *cliReceiverPeerAttempt) Lane() (session.LaneIdentity, bool) {
 	return attempt.lane, attempt.lane.ID != 0 && attempt.lane.Epoch != 0
 }
 func (attempt *cliReceiverPeerAttempt) Close() error {

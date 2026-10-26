@@ -22,7 +22,7 @@ import (
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
@@ -339,7 +339,7 @@ func TestReceiverRuntimeCrossScopeOperationErrorIsRemoteSessionUnsafe(t *testing
 		t.Fatal("cross-scope failure published a ready peer lane")
 	default:
 	}
-	if lane, ok := receiverAttempt.Lane(); ok || lane != (sessioncontract.LaneIdentity{}) {
+	if lane, ok := receiverAttempt.Lane(); ok || lane != (session.LaneIdentity{}) {
 		t.Fatalf("cross-scope failure adopted lane=%+v present=%t", lane, ok)
 	}
 

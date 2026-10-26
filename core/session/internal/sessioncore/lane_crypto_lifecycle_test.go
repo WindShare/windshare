@@ -2,7 +2,7 @@ package sessioncore
 
 import (
 	"errors"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"sync"
 	"testing"
@@ -74,7 +74,7 @@ func TestRejectedLaneCloseMayReenterRegistryInspection(t *testing.T) {
 	result := make(chan error, 1)
 	go func() {
 		_, err := runtime.lanes.add(
-			sessioncontract.LaneIdentity{ID: 2, Epoch: 1},
+			session.LaneIdentity{ID: 2, Epoch: 1},
 			channel,
 			permissiveInboundAuthenticator(),
 			false,
@@ -83,7 +83,7 @@ func TestRejectedLaneCloseMayReenterRegistryInspection(t *testing.T) {
 	}()
 	select {
 	case err := <-result:
-		if !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+		if !errors.Is(err, session.ErrRuntimeClosed) {
 			t.Fatalf("rejected lane error = %v", err)
 		}
 	case <-time.After(time.Second):
@@ -105,7 +105,7 @@ func TestNaturalLaneDetachReleasesRetainedLaneReferences(t *testing.T) {
 	secondaryChannel, secondaryPeer := newMemoryChannelPair()
 	t.Cleanup(func() { _ = secondaryPeer.Close() })
 	if _, err := runtime.lanes.add(
-		sessioncontract.LaneIdentity{ID: 2, Epoch: 1},
+		session.LaneIdentity{ID: 2, Epoch: 1},
 		secondaryChannel,
 		permissiveInboundAuthenticator(),
 		false,
@@ -138,14 +138,14 @@ func TestNaturalLaneDetachReleasesRetainedLaneReferences(t *testing.T) {
 func TestUnstartedLaneDetachSynchronouslyReleasesOwnedDependencies(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 	detachCalls := 0
-	var detachedIdentity sessioncontract.LaneIdentity
-	runtime.lanes.setDetachHook(func(identity sessioncontract.LaneIdentity) {
+	var detachedIdentity session.LaneIdentity
+	runtime.lanes.setDetachHook(func(identity session.LaneIdentity) {
 		detachCalls++
 		detachedIdentity = identity
 	})
 	channel, peer := newMemoryChannelPair()
 	t.Cleanup(func() { _ = peer.Close() })
-	identity := sessioncontract.LaneIdentity{ID: runtime.initial.ID + 1, Epoch: 1}
+	identity := session.LaneIdentity{ID: runtime.initial.ID + 1, Epoch: 1}
 	lane, err := runtime.lanes.add(
 		identity, channel, permissiveInboundAuthenticator(), false,
 	)
@@ -198,8 +198,8 @@ func TestUnstartedLastLaneDetachPublishesHookAndCancelsRuntime(t *testing.T) {
 		t.Fatal("initial unstarted lane is missing")
 	}
 	detachCalls := 0
-	var detachedIdentity sessioncontract.LaneIdentity
-	runtime.lanes.setDetachHook(func(identity sessioncontract.LaneIdentity) {
+	var detachedIdentity session.LaneIdentity
+	runtime.lanes.setDetachHook(func(identity session.LaneIdentity) {
 		detachCalls++
 		detachedIdentity = identity
 	})

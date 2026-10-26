@@ -12,7 +12,7 @@ import (
 	"github.com/windshare/windshare/connectivity/v2peer/peerset"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	"github.com/windshare/windshare/core/transfer"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
@@ -256,7 +256,7 @@ func beginReceiverPlanning(
 type receiverPeerAttempt interface {
 	Ready() <-chan struct{}
 	Done() <-chan struct{}
-	Lane() (sessioncontract.LaneIdentity, bool)
+	Lane() (session.LaneIdentity, bool)
 	Err() error
 	Outcome() receiverPeerMonitorOutcome
 	Close() error
@@ -497,11 +497,11 @@ func (adapter receiverPeerSetAdapter) SetDemand(demand peerset.Demand) error {
 	return adapter.path.SetDemand(demand)
 }
 
-func (a *receiverPeerSetAdapter) Ready() <-chan struct{}                     { return a.path.Ready() }
-func (a *receiverPeerSetAdapter) Done() <-chan struct{}                      { return a.path.Done() }
-func (a *receiverPeerSetAdapter) Lane() (sessioncontract.LaneIdentity, bool) { return a.path.Lane() }
-func (a *receiverPeerSetAdapter) Err() error                                 { return a.path.Err() }
-func (a *receiverPeerSetAdapter) Close() error                               { return a.path.Close() }
+func (a *receiverPeerSetAdapter) Ready() <-chan struct{}             { return a.path.Ready() }
+func (a *receiverPeerSetAdapter) Done() <-chan struct{}              { return a.path.Done() }
+func (a *receiverPeerSetAdapter) Lane() (session.LaneIdentity, bool) { return a.path.Lane() }
+func (a *receiverPeerSetAdapter) Err() error                         { return a.path.Err() }
+func (a *receiverPeerSetAdapter) Close() error                       { return a.path.Close() }
 func (a *receiverPeerSetAdapter) Outcome() receiverPeerMonitorOutcome {
 	result := a.path.Result()
 	disposition := receiverPeerFallbackAllowed

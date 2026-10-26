@@ -5,7 +5,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
 )
 
@@ -48,7 +48,7 @@ func (c *directoryCursor) open(ctx context.Context) error {
 }
 func (c *directoryCursor) Next(ctx context.Context) (catalog.CatalogPage, bool, error) {
 	if c.closed {
-		return catalog.CatalogPage{}, false, sessioncontract.ErrRuntimeClosed
+		return catalog.CatalogPage{}, false, session.ErrRuntimeClosed
 	}
 	for {
 		page, ok, err := c.cursor.Next(ctx)

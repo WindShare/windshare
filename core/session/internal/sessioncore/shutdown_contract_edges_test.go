@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"testing"
 )
@@ -17,7 +17,7 @@ func TestTerminalFanoutPreservesCallerCancellationBeforeAdmission(t *testing.T) 
 	}
 	stopWriterBeforeAdmission(t, lane.writer)
 	body, err := protocolsession.EncodeSessionTerminal(protocolsession.SessionTerminal{
-		Code: sessioncontract.SessionStoppedCode, Message: "stop",
+		Code: session.SessionStoppedCode, Message: "stop",
 	})
 	if err != nil {
 		t.Fatal(err)

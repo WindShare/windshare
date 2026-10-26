@@ -18,7 +18,7 @@ import (
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	sendersession "github.com/windshare/windshare/core/session/sendersession"
 	"github.com/windshare/windshare/internal/testloopback"
 	"github.com/windshare/windshare/internal/testrun"
@@ -471,42 +471,42 @@ type integrationPeerSession struct {
 	channel protocolsession.FrameChannel
 	failure error
 	answer  chan struct{}
-	admit   chan sessioncontract.LaneIdentity
+	admit   chan session.LaneIdentity
 }
 
-func (session *integrationPeerSession) ShareInstance() catalog.ShareInstance { return session.share }
-func (session *integrationPeerSession) ProtocolSessionID() protocolsession.ProtocolSessionID {
-	return session.sessionID
+func (peer *integrationPeerSession) ShareInstance() catalog.ShareInstance { return peer.share }
+func (peer *integrationPeerSession) ProtocolSessionID() protocolsession.ProtocolSessionID {
+	return peer.sessionID
 }
-func (session *integrationPeerSession) SendPeerControl(
+func (peer *integrationPeerSession) SendPeerControl(
 	_ context.Context,
 	kind protocolsession.MessageKind,
 	operation protocolsession.OperationID,
 	body []byte,
 ) (protocolsession.OperationDisposition, error) {
-	if operation != session.operation {
+	if operation != peer.operation {
 		return protocolsession.OperationDrop, errors.New("sender changed the peer operation identity")
 	}
 	switch kind {
 	case protocolsession.MessagePeerAnswer:
 		answer, err := v2signal.DecodeAnswer(body)
-		if err != nil || answer.Binding != session.binding {
+		if err != nil || answer.Binding != peer.binding {
 			return protocolsession.OperationDrop, errors.Join(errors.New("sender answer changed the signaling binding"), err)
 		}
-		if err := session.offerer.SetRemoteDescription(pion.SessionDescription{
+		if err := peer.offerer.SetRemoteDescription(pion.SessionDescription{
 			Type: pion.SDPTypeAnswer,
 			SDP:  answer.SDP,
 		}); err != nil {
 			return protocolsession.OperationDeliver, err
 		}
-		close(session.answer)
+		close(peer.answer)
 		return protocolsession.OperationDeliver, nil
 	case protocolsession.MessagePeerCandidate:
 		candidate, err := v2signal.DecodeCandidate(body)
-		if err != nil || candidate.Binding != session.binding {
+		if err != nil || candidate.Binding != peer.binding {
 			return protocolsession.OperationDrop, errors.Join(errors.New("sender candidate changed the signaling binding"), err)
 		}
-		return protocolsession.OperationDeliver, session.offerer.AddICECandidate(pion.ICECandidateInit{
+		return protocolsession.OperationDeliver, peer.offerer.AddICECandidate(pion.ICECandidateInit{
 			Candidate: candidate.Candidate, SDPMid: candidate.SDPMid,
 			SDPMLineIndex: candidate.SDPMLineIndex, UsernameFragment: candidate.UsernameFragment,
 		})
@@ -514,18 +514,18 @@ func (session *integrationPeerSession) SendPeerControl(
 		return protocolsession.OperationDrop, fmt.Errorf("unexpected peer control kind %d", kind)
 	}
 }
-func (session *integrationPeerSession) FailPeerOperation(
+func (peer *integrationPeerSession) FailPeerOperation(
 	_ context.Context,
 	_ protocolsession.OperationID,
 	_ uint16,
 	message string,
 ) error {
-	session.mu.Lock()
-	session.failure = errors.New(message)
-	session.mu.Unlock()
+	peer.mu.Lock()
+	peer.failure = errors.New(message)
+	peer.mu.Unlock()
 	return nil
 }
-func (session *integrationPeerSession) AdmitPeerChannel(
+func (peer *integrationPeerSession) AdmitPeerChannel(
 	ctx context.Context,
 	channel protocolsession.FrameChannel,
 	control sendersession.PeerAdmissionControl,
@@ -561,7 +561,7 @@ func (session *integrationPeerSession) AdmitPeerChannel(
 			return result, errors.New("peer FrameChannel changed binary frame delivery")
 		}
 	}
-	lane := sessioncontract.LaneIdentity{ID: 17, Epoch: 3}
+	lane := session.LaneIdentity{ID: 17, Epoch: 3}
 	grantOperation := integrationOperationID(0x7e)
 	if !control.BeginAuthenticatedSettlement(grantOperation, lane) {
 		return result, context.Canceled
@@ -572,10 +572,10 @@ func (session *integrationPeerSession) AdmitPeerChannel(
 		ResponseDelivery: sendersession.PeerResponseDelivered,
 		LaneAttachment:   sendersession.PeerLaneAttached,
 	}
-	session.mu.Lock()
-	session.channel = channel
-	session.mu.Unlock()
-	session.admit <- lane
+	peer.mu.Lock()
+	peer.channel = channel
+	peer.mu.Unlock()
+	peer.admit <- lane
 	transferred = true
 	return result, nil
 }
@@ -615,9 +615,9 @@ func TestV2PeerSenderNegotiatesRealPionDataChannel(t *testing.T) {
 	binding := v2signal.Binding{AttemptSequence: 1}
 	copy(binding.PeerPathID[:], bytes.Repeat([]byte{4}, v2signal.IdentityBytes))
 	copy(binding.AttemptID[:], bytes.Repeat([]byte{5}, v2signal.IdentityBytes))
-	session := &integrationPeerSession{
+	peer := &integrationPeerSession{
 		share: share, sessionID: sessionID, offerer: offerer, binding: binding, operation: protocolOperation,
-		answer: make(chan struct{}), admit: make(chan sessioncontract.LaneIdentity, 1),
+		answer: make(chan struct{}), admit: make(chan session.LaneIdentity, 1),
 	}
 	factory, err := v2peer.NewFactory(v2peer.Config{
 		Native:        newCapacityNative(t),
@@ -632,7 +632,7 @@ func TestV2PeerSenderNegotiatesRealPionDataChannel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create sender peer factory: %v", err)
 	}
-	handler, err := factory.NewSenderPeerHandler(session)
+	handler, err := factory.NewSenderPeerHandler(peer)
 	if err != nil {
 		t.Fatalf("create sender peer handler: %v", err)
 	}
@@ -766,7 +766,7 @@ func TestV2PeerSenderNegotiatesRealPionDataChannel(t *testing.T) {
 	close(startForwarding)
 
 	select {
-	case <-session.answer:
+	case <-peer.answer:
 	case <-time.After(v2PeerIntegrationTimeout):
 		failIntegrationPhase(
 			t,
@@ -826,9 +826,9 @@ func TestV2PeerSenderNegotiatesRealPionDataChannel(t *testing.T) {
 		nil,
 		laneAdoptionEvidenceStartFailureReason,
 	)
-	var admittedLane sessioncontract.LaneIdentity
+	var admittedLane session.LaneIdentity
 	select {
-	case admittedLane = <-session.admit:
+	case admittedLane = <-peer.admit:
 		if admittedLane.ID != 17 || admittedLane.Epoch != 3 {
 			failIntegrationPhase(
 				t,
@@ -859,9 +859,9 @@ func TestV2PeerSenderNegotiatesRealPionDataChannel(t *testing.T) {
 	case <-time.After(v2PeerIntegrationTimeout):
 		t.Fatal("browser frame exchange did not stop")
 	}
-	session.mu.Lock()
-	failure := session.failure
-	session.mu.Unlock()
+	peer.mu.Lock()
+	failure := peer.failure
+	peer.mu.Unlock()
 	if failure != nil {
 		t.Fatalf("sender reported peer failure: %v", failure)
 	}

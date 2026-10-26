@@ -11,7 +11,7 @@ import (
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 )
 
 type recoveryWave struct {
@@ -325,7 +325,7 @@ func (p *Path) executeStart(start Starter, binding v2signal.Binding, opportunity
 		// observation during Close must not restart the next generation.
 		p.current = nil
 		p.binding = v2signal.Binding{}
-		p.lane = sessioncontract.LaneIdentity{}
+		p.lane = session.LaneIdentity{}
 		p.restartCause = nil
 		p.mu.Unlock()
 		p.closeAttempt(attempt)
