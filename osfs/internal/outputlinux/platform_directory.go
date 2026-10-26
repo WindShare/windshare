@@ -298,13 +298,15 @@ func (directory *linuxDirectory) CreateFile(name string, private bool, size int6
 	if private {
 		permissions = linuxOutputStateFileMode
 	}
-	created, err := directory.native.createRegularFileExactWithAuthority(name, permissions, size, private)
+	// Reserve the origin before creation: losing it after the file is installed
+	// would discard the only handle that proves cleanup ownership.
+	parent, err := directory.native.Duplicate()
 	if err != nil {
 		return nil, linuxError(err)
 	}
-	parent, err := directory.native.Duplicate()
+	created, err := parent.createRegularFileExactWithAuthority(name, permissions, size, private)
 	if err != nil {
-		return nil, linuxError(errors.Join(err, created.close()))
+		return nil, linuxError(errors.Join(err, parent.close()))
 	}
 	return &linuxMutableFile{state: &linuxFileState{
 		native: created, private: private,

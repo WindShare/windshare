@@ -111,6 +111,12 @@ func TestProbeCleanupStopsAtForeignReplacement(t *testing.T) {
 	if slices.Contains(root.system.events, "remove-file:anchor") {
 		t.Fatal("cleanup continued after its first unverified cut")
 	}
+	if err := Recover(root, probeTestNames(root), WindowsNTFS); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
+		t.Fatalf("restart must retain the foreign-replacement evidence: %v", err)
+	}
+	if len(directory.object.files) != 3 || directory.object.files[StageName] != foreign {
+		t.Fatal("restart adopted the replacement after cleanup")
+	}
 	assertProbeHandlesReleased(t, root)
 }
 
