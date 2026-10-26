@@ -17,6 +17,7 @@ import (
 	sessioncontract "github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
+	"github.com/windshare/windshare/core/session/internal/admissiongate"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -95,8 +96,6 @@ type Factory struct {
 	shareReassembly                   *contentflow.ReassemblyAccount
 	plaintextProcess                  *transfer.PlaintextBudget
 	random                            *sessioncore.LockedReader
-	admissionContext                  context.Context
-	cancelAdmissions                  context.CancelFunc
 	instances                         InstanceSource
 	catalogProgress                   CatalogScanProgressObserver
 	semantic                          protocolsession.SenderControlSemanticValidator
@@ -110,8 +109,7 @@ type Factory struct {
 	laneSettlementObservationCapacity transferlanes.SettlementObservationCapacity
 
 	mu         sync.Mutex
-	closing    bool
-	admissions sync.WaitGroup
+	admissions admissiongate.Gate
 	closeDone  chan struct{}
 }
 
@@ -147,7 +145,6 @@ func NewFactory(config FactoryConfig) (*Factory, error) {
 	if err != nil {
 		return nil, errors.Join(sessioncontract.ErrRuntimeConfig, err)
 	}
-	admissionContext, cancelAdmissions := context.WithCancel(context.Background())
 	return &Factory{
 		requests: func(runtime *sessioncore.Runtime, random io.Reader) requestClient {
 			return sessioncore.NewRequests(runtime, random)
@@ -157,7 +154,6 @@ func NewFactory(config FactoryConfig) (*Factory, error) {
 		verifier: config.CatalogVerifier, opener: config.RecordOpener,
 		processReassembly: config.ReassemblyProcess, shareReassembly: config.ReassemblyShare,
 		plaintextProcess: config.PlaintextProcess, random: lockedRandom,
-		admissionContext: admissionContext, cancelAdmissions: cancelAdmissions,
 		instances:          config.ReceiverInstances,
 		contentRoutePolicy: config.ContentRoutePolicy,
 		catalogProgress:    config.CatalogProgress, semantic: semantic, peerSemantics: config.PeerControls,

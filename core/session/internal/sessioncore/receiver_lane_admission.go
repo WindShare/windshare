@@ -24,7 +24,7 @@ func (lanes *runtimeLanes) selectRequestLane(
 	now := lanes.runtime.now()
 	var best *RuntimeLane
 	var estimate requestlane.Estimate
-	for _, id := range lanes.order {
+	for _, id := range lanes.logicalOrder {
 		lane := lanes.active[id]
 		if !lane.usableLocked() {
 			continue

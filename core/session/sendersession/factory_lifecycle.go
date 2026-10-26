@@ -49,7 +49,7 @@ func (factory *Factory) BeginStop(message string) error {
 		return nil
 	}
 	factory.stopping = true
-	factory.cancelAdmissions()
+	factory.admissions.Seal()
 	factory.mu.Unlock()
 	go factory.runTerminal(normalized)
 	return nil
@@ -67,7 +67,7 @@ func normalizeTerminalMessage(message string) (string, error) {
 
 func (factory *Factory) runTerminal(message string) {
 	factory.terminalConnectivity.StopRecovery()
-	factory.admissions.Wait()
+	factory.admissions.Close()
 	factory.mu.Lock()
 	sessions := make([]*Runtime, 0, len(factory.sessions))
 	for _, session := range factory.sessions {
@@ -114,8 +114,6 @@ func (factory *Factory) runTerminal(message string) {
 	factory.now = nil
 	factory.terminalConnectivity = nil
 	factory.terminalObserver = nil
-	factory.admissionContext = nil
-	factory.cancelAdmissions = nil
 	factory.sessions = nil
 	factory.mu.Unlock()
 	factory.terminalErr = combined
