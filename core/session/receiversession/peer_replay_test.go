@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/windshare/windshare/core/framechannel"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sendersession"
@@ -393,7 +393,7 @@ func (handler *peerReplayHandler) HandleMessage(
 ) error {
 	operationID, ok := message.OperationID()
 	if !ok {
-		return sessioncontract.ErrOperationMissing
+		return session.ErrOperationMissing
 	}
 	handler.events <- peerReplayEvent{kind: message.Kind(), operationID: operationID}
 	if message.Kind() == protocolsession.MessagePeerOffer && handler.answer != nil {
@@ -453,7 +453,7 @@ func attachAmbiguousPeerReplayLane(
 	t *testing.T,
 	factory *sendersession.Factory,
 	receiver *Runtime,
-) (sessioncontract.LaneIdentity, *ambiguousObservedChannel) {
+) (session.LaneIdentity, *ambiguousObservedChannel) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -464,13 +464,13 @@ func attachAmbiguousPeerReplayLane(
 	senderChannel, receiverBase := newObservedChannelPair()
 	receiverChannel := &ambiguousObservedChannel{observedMemoryChannel: receiverBase}
 	senderResult := make(chan struct {
-		identity sessioncontract.LaneIdentity
+		identity session.LaneIdentity
 		err      error
 	}, 1)
 	go func() {
 		identity, attachErr := factory.Attach(ctx, senderChannel)
 		senderResult <- struct {
-			identity sessioncontract.LaneIdentity
+			identity session.LaneIdentity
 			err      error
 		}{identity: identity, err: attachErr}
 	}()

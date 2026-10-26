@@ -5,7 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"testing"
@@ -20,7 +20,7 @@ func TestResponseWithoutLaneAndMalformedFailureReleaseRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	sender.lanes.detach(identity)
-	if err := outbound.SendFragment(context.Background(), fragments[0]); !errors.Is(err, sessioncontract.ErrOperationMissing) {
+	if err := outbound.SendFragment(context.Background(), fragments[0]); !errors.Is(err, session.ErrOperationMissing) {
 		t.Fatalf("fragment without lane error = %v", err)
 	}
 	invalidFailureID := id16[protocolsession.OperationID](76)

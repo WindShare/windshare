@@ -9,7 +9,7 @@ import (
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/liveshare"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	sendersession "github.com/windshare/windshare/core/session/sendersession"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/internal/testrun"
@@ -89,8 +89,8 @@ func TestReceiverFirstUsableSessionRecoversWithFreeOrReassignedLane(t *testing.T
 			t.Fatalf("additional lane %v was never published", oldLane)
 		}
 		trace.RequireRecord(t, "relay_loss_injected", testrun.OutcomeSucceeded, struct {
-			Failure string                       `json:"failure"`
-			Lane    sessioncontract.LaneIdentity `json:"lane"`
+			Failure string               `json:"failure"`
+			Lane    session.LaneIdentity `json:"lane"`
 		}{failure, oldLane})
 		if failure == "channel" {
 			err = previous.Channel().Close()
@@ -217,7 +217,7 @@ func TestReceiverInitiallyFailedRelayRecoversWithoutReplacingHealthyGeneration(t
 		t.Fatal(err)
 	}
 	sessionID := runtime.ProtocolSessionID()
-	var initial sessioncontract.LaneIdentity
+	var initial session.LaneIdentity
 	initial.ID, initial.Epoch = runtime.LaneIdentity()
 	for range 2 {
 		waitRelaysetEvent(t, ctx, connected)

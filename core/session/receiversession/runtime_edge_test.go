@@ -8,7 +8,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/framechannel"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
 
@@ -35,16 +35,16 @@ func TestRuntimeDependencyAdaptersAndStableErrors(t *testing.T) {
 		t.Fatalf("connectivity adapters = %d/%d, %v", stopped.Load(), cleaned.Load(), err)
 	}
 	sendersession.TerminalConnectivityFuncs{}.StopRecovery()
-	if err := (sendersession.TerminalConnectivityFuncs{}).Cleanup(context.Background()); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	if err := (sendersession.TerminalConnectivityFuncs{}).Cleanup(context.Background()); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("nil cleanup error = %v", err)
 	}
-	if _, err := (sendersession.ContentFactoryFunc(nil)).NewSenderContentService(id16[protocolsession.ProtocolSessionID](1)); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	if _, err := (sendersession.ContentFactoryFunc(nil)).NewSenderContentService(id16[protocolsession.ProtocolSessionID](1)); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("nil content factory error = %v", err)
 	}
-	if _, err := (sendersession.InitialLaneIDSourceFunc(nil)).NextInitialLaneID(); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	if _, err := (sendersession.InitialLaneIDSourceFunc(nil)).NextInitialLaneID(); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("nil lane source error = %v", err)
 	}
-	if _, err := (InstanceSourceFunc(nil)).NewReceiverInstanceID(); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	if _, err := (InstanceSourceFunc(nil)).NewReceiverInstanceID(); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("nil receiver source error = %v", err)
 	}
 
@@ -62,20 +62,20 @@ func TestRuntimeDependencyAdaptersAndStableErrors(t *testing.T) {
 		t.Fatal("lease close did not cancel its in-flight renew authority")
 	}
 	if (&RemoteRevisionError{}).Error() == "" || (RemoteOperationError{}).Error() == "" ||
-		(&sessioncontract.LaneRejectedError{}).Error() == "" {
+		(&session.LaneRejectedError{}).Error() == "" {
 		t.Fatal("typed remote errors lost stable diagnostics")
 	}
 
-	if (*Runtime)(nil).DetachLane(sessioncontract.LaneIdentity{}) || (*sendersession.Runtime)(nil).DetachLane(sessioncontract.LaneIdentity{}) ||
+	if (*Runtime)(nil).DetachLane(session.LaneIdentity{}) || (*sendersession.Runtime)(nil).DetachLane(session.LaneIdentity{}) ||
 		(*Runtime)(nil).AttachedLanes() != 0 || (*sendersession.Runtime)(nil).AttachedLanes() != 0 {
 		t.Fatal("nil lane accessors were not inert")
 	}
 	(*Runtime)(nil).Close()
 	(*sendersession.Runtime)(nil).Close()
-	if err := (*sendersession.Runtime)(nil).Stop(context.Background(), "stop"); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	if err := (*sendersession.Runtime)(nil).Stop(context.Background(), "stop"); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("nil sender stop error = %v", err)
 	}
-	if err := (*sendersession.Factory)(nil).Stop(context.Background(), "stop"); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	if err := (*sendersession.Factory)(nil).Stop(context.Background(), "stop"); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("nil factory stop error = %v", err)
 	}
 }
@@ -111,7 +111,7 @@ func TestFactoryDefaultsValidationAndHandshakeFailures(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			config := baseSender
 			mutate(&config)
-			if _, err := sendersession.NewFactory(config); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+			if _, err := sendersession.NewFactory(config); !errors.Is(err, session.ErrRuntimeConfig) {
 				t.Fatalf("factory error = %v", err)
 			}
 		})
@@ -126,26 +126,26 @@ func TestFactoryDefaultsValidationAndHandshakeFailures(t *testing.T) {
 	}
 	badReceiver := fixture.receiverConfig
 	badReceiver.SessionAuthKey = nil
-	if _, err := NewFactory(badReceiver); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	if _, err := NewFactory(badReceiver); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("invalid receiver error = %v", err)
 	}
-	if _, err := (*Factory)(nil).Connect(context.Background(), newMemoryChannel(t), transferlanes.RouteRelay); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	if _, err := (*Factory)(nil).Connect(context.Background(), newMemoryChannel(t), transferlanes.RouteRelay); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("nil receiver connect error = %v", err)
 	}
-	if _, err := fixture.receiverFactory.Connect(context.Background(), nil, transferlanes.RouteRelay); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	if _, err := fixture.receiverFactory.Connect(context.Background(), nil, transferlanes.RouteRelay); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("nil receiver channel error = %v", err)
 	}
-	if _, err := (*sendersession.Factory)(nil).Accept(context.Background(), newMemoryChannel(t)); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	if _, err := (*sendersession.Factory)(nil).Accept(context.Background(), newMemoryChannel(t)); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("nil sender accept error = %v", err)
 	}
-	if _, err := fixture.senderFactory.Accept(context.Background(), nil); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	if _, err := fixture.senderFactory.Accept(context.Background(), nil); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("nil sender channel error = %v", err)
 	}
 
 	randomFailure := fixture.receiverConfig
 	randomFailure.Random = edgeErrorReader{}
 	randomFactory, _ := NewFactory(randomFailure)
-	if _, err := randomFactory.Connect(context.Background(), newMemoryChannel(t), transferlanes.RouteRelay); !errors.Is(err, sessioncontract.ErrHandshake) {
+	if _, err := randomFactory.Connect(context.Background(), newMemoryChannel(t), transferlanes.RouteRelay); !errors.Is(err, session.ErrHandshake) {
 		t.Fatalf("receiver random error = %v", err)
 	}
 	instanceFailure := fixture.receiverConfig
@@ -153,7 +153,7 @@ func TestFactoryDefaultsValidationAndHandshakeFailures(t *testing.T) {
 		return protocolsession.ReceiverInstanceID{}, io.ErrUnexpectedEOF
 	})
 	instanceFactory, _ := NewFactory(instanceFailure)
-	if _, err := instanceFactory.Connect(context.Background(), newMemoryChannel(t), transferlanes.RouteRelay); !errors.Is(err, sessioncontract.ErrHandshake) {
+	if _, err := instanceFactory.Connect(context.Background(), newMemoryChannel(t), transferlanes.RouteRelay); !errors.Is(err, session.ErrHandshake) {
 		t.Fatalf("receiver identity error = %v", err)
 	}
 	zeroInstance := fixture.receiverConfig
@@ -161,14 +161,14 @@ func TestFactoryDefaultsValidationAndHandshakeFailures(t *testing.T) {
 		return protocolsession.ReceiverInstanceID{}, nil
 	})
 	zeroFactory, _ := NewFactory(zeroInstance)
-	if _, err := zeroFactory.Connect(context.Background(), newMemoryChannel(t), transferlanes.RouteRelay); !errors.Is(err, sessioncontract.ErrHandshake) {
+	if _, err := zeroFactory.Connect(context.Background(), newMemoryChannel(t), transferlanes.RouteRelay); !errors.Is(err, session.ErrHandshake) {
 		t.Fatalf("zero receiver identity error = %v", err)
 	}
 
 	closed, closedPeer := newMemoryChannelPair()
 	_ = closed.Close()
 	t.Cleanup(func() { _ = closedPeer.Close() })
-	if _, err := fixture.receiverFactory.Connect(context.Background(), closed, transferlanes.RouteRelay); !errors.Is(err, sessioncontract.ErrHandshake) {
+	if _, err := fixture.receiverFactory.Connect(context.Background(), closed, transferlanes.RouteRelay); !errors.Is(err, session.ErrHandshake) {
 		t.Fatalf("receiver send error = %v", err)
 	}
 	invalidServer, invalidClient := newMemoryChannelPair()
@@ -176,7 +176,7 @@ func TestFactoryDefaultsValidationAndHandshakeFailures(t *testing.T) {
 		<-invalidServer.Recv()
 		_ = invalidServer.Send(context.Background(), framechannel.Frame{1})
 	}()
-	if _, err := fixture.receiverFactory.Connect(context.Background(), invalidClient, transferlanes.RouteRelay); !errors.Is(err, sessioncontract.ErrHandshake) {
+	if _, err := fixture.receiverFactory.Connect(context.Background(), invalidClient, transferlanes.RouteRelay); !errors.Is(err, session.ErrHandshake) {
 		t.Fatalf("invalid server hello error = %v", err)
 	}
 	_ = invalidServer.Close()
@@ -189,7 +189,7 @@ func TestFactoryDefaultsValidationAndHandshakeFailures(t *testing.T) {
 	}
 	malformedSender, malformedPeer := newMemoryChannelPair()
 	_ = malformedPeer.Send(context.Background(), framechannel.Frame{1})
-	if _, err := fixture.senderFactory.Accept(context.Background(), malformedSender); !errors.Is(err, sessioncontract.ErrHandshake) {
+	if _, err := fixture.senderFactory.Accept(context.Background(), malformedSender); !errors.Is(err, session.ErrHandshake) {
 		t.Fatalf("malformed client hello error = %v", err)
 	}
 	_ = malformedSender.Close()
@@ -216,7 +216,7 @@ func TestReceiverRevisionFailureAndDuplicateLeasePaths(t *testing.T) {
 	if err := receiver.ReleaseRevision(context.Background(), unknownLease); err != nil {
 		t.Fatalf("idempotent unknown release = %v", err)
 	}
-	if err := receiver.revisions.leaseError(unknownLease); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	if err := receiver.revisions.leaseError(unknownLease); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("unknown lease state error = %v", err)
 	}
 	first, err := receiver.OpenRevision(context.Background(), fixture.fileID)

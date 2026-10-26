@@ -17,7 +17,7 @@ import (
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	sendersession "github.com/windshare/windshare/core/session/sendersession"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
@@ -190,7 +190,7 @@ type receiverIntegrationAdmissionOutcome struct {
 }
 
 type receiverIntegrationAdmissionScript struct {
-	lane               sessioncontract.LaneIdentity
+	lane               session.LaneIdentity
 	grantOperation     protocolsession.OperationID
 	laneHello          framechannel.Frame
 	response           framechannel.Frame
@@ -206,7 +206,7 @@ type receiverIntegrationSenderSession struct {
 	share     catalog.ShareInstance
 	sessionID protocolsession.ProtocolSessionID
 	operation *receiverIntegrationOperation
-	lane      sessioncontract.LaneIdentity
+	lane      session.LaneIdentity
 	channels  chan protocolsession.FrameChannel
 
 	operationMu      sync.RWMutex
@@ -214,32 +214,32 @@ type receiverIntegrationSenderSession struct {
 	admissionScripts chan receiverIntegrationAdmissionScript
 }
 
-func (session *receiverIntegrationSenderSession) ShareInstance() catalog.ShareInstance {
-	return session.share
+func (peer *receiverIntegrationSenderSession) ShareInstance() catalog.ShareInstance {
+	return peer.share
 }
 
-func (session *receiverIntegrationSenderSession) ProtocolSessionID() protocolsession.ProtocolSessionID {
-	return session.sessionID
+func (peer *receiverIntegrationSenderSession) ProtocolSessionID() protocolsession.ProtocolSessionID {
+	return peer.sessionID
 }
 
-func (session *receiverIntegrationSenderSession) receiverOperation(
+func (peer *receiverIntegrationSenderSession) receiverOperation(
 	operationID protocolsession.OperationID,
 ) *receiverIntegrationOperation {
-	session.operationMu.RLock()
-	defer session.operationMu.RUnlock()
-	if session.operation != nil && session.operation.id == operationID {
-		return session.operation
+	peer.operationMu.RLock()
+	defer peer.operationMu.RUnlock()
+	if peer.operation != nil && peer.operation.id == operationID {
+		return peer.operation
 	}
-	return session.operations[operationID]
+	return peer.operations[operationID]
 }
 
-func (session *receiverIntegrationSenderSession) SendPeerControl(
+func (peer *receiverIntegrationSenderSession) SendPeerControl(
 	ctx context.Context,
 	kind protocolsession.MessageKind,
 	operation protocolsession.OperationID,
 	body []byte,
 ) (protocolsession.OperationDisposition, error) {
-	target := session.receiverOperation(operation)
+	target := peer.receiverOperation(operation)
 	if target == nil {
 		return protocolsession.OperationDrop, errors.New("sender changed the receiver peer operation identity")
 	}
@@ -253,13 +253,13 @@ func (session *receiverIntegrationSenderSession) SendPeerControl(
 	}
 }
 
-func (session *receiverIntegrationSenderSession) FailPeerOperation(
+func (peer *receiverIntegrationSenderSession) FailPeerOperation(
 	ctx context.Context,
 	operation protocolsession.OperationID,
 	_ uint16,
 	message string,
 ) error {
-	target := session.receiverOperation(operation)
+	target := peer.receiverOperation(operation)
 	if target == nil {
 		return errors.New("sender failed a different peer operation")
 	}
@@ -271,17 +271,17 @@ func (session *receiverIntegrationSenderSession) FailPeerOperation(
 	}
 }
 
-func (session *receiverIntegrationSenderSession) AdmitPeerChannel(
+func (peer *receiverIntegrationSenderSession) AdmitPeerChannel(
 	ctx context.Context,
 	channel protocolsession.FrameChannel,
 	control sendersession.PeerAdmissionControl,
 ) (result sendersession.PeerAdmissionResult, err error) {
-	if session.admissionScripts != nil {
+	if peer.admissionScripts != nil {
 		select {
 		case <-ctx.Done():
 			return sendersession.PeerAdmissionResult{}, ctx.Err()
-		case script := <-session.admissionScripts:
-			return session.admitScriptedPeerChannel(ctx, channel, control, script)
+		case script := <-peer.admissionScripts:
+			return peer.admitScriptedPeerChannel(ctx, channel, control, script)
 		}
 	}
 	result = sendersession.PeerAdmissionResult{
@@ -305,11 +305,11 @@ func (session *receiverIntegrationSenderSession) AdmitPeerChannel(
 	case <-opened.Opened():
 	}
 	grantOperation := integrationOperationID(0x7d)
-	if !control.BeginAuthenticatedSettlement(grantOperation, session.lane) {
+	if !control.BeginAuthenticatedSettlement(grantOperation, peer.lane) {
 		return result, context.Canceled
 	}
 	result = sendersession.PeerAdmissionResult{
-		SettlementBegan: true, GrantOperationID: grantOperation, Lane: session.lane,
+		SettlementBegan: true, GrantOperationID: grantOperation, Lane: peer.lane,
 		Disposition:      sendersession.PeerAdmissionAccepted,
 		ResponseDelivery: sendersession.PeerResponseDelivered,
 		LaneAttachment:   sendersession.PeerLaneAttached,
@@ -317,13 +317,13 @@ func (session *receiverIntegrationSenderSession) AdmitPeerChannel(
 	select {
 	case <-ctx.Done():
 		return result, ctx.Err()
-	case session.channels <- channel:
+	case peer.channels <- channel:
 		transferred = true
 		return result, nil
 	}
 }
 
-func (session *receiverIntegrationSenderSession) admitScriptedPeerChannel(
+func (peer *receiverIntegrationSenderSession) admitScriptedPeerChannel(
 	ctx context.Context,
 	channel protocolsession.FrameChannel,
 	control sendersession.PeerAdmissionControl,
@@ -392,7 +392,7 @@ func (session *receiverIntegrationSenderSession) admitScriptedPeerChannel(
 			ResponseDelivery: sendersession.PeerResponseDelivered,
 			LaneAttachment:   sendersession.PeerLaneAttachmentNotAttempted,
 		}
-		err = &sessioncontract.LaneRejectedError{Rejection: *script.rejection}
+		err = &session.LaneRejectedError{Rejection: *script.rejection}
 		publishOutcome(receiverIntegrationAdmissionOutcome{result: result, err: err})
 		return result, err
 	}
@@ -417,14 +417,14 @@ func (session *receiverIntegrationSenderSession) admitScriptedPeerChannel(
 		ResponseDelivery: sendersession.PeerResponseDelivered,
 		LaneAttachment:   sendersession.PeerLaneAttached,
 	}
-	session.channels <- channel
+	peer.channels <- channel
 	transferred = true
 	publishOutcome(receiverIntegrationAdmissionOutcome{result: result})
 	return result, nil
 }
 
 type receiverIntegrationLanes struct {
-	lane     sessioncontract.LaneIdentity
+	lane     session.LaneIdentity
 	channels chan protocolsession.FrameChannel
 }
 
@@ -453,7 +453,7 @@ func (lanes receiverIntegrationLanes) AttachLane(
 }
 
 type receiverControlledLanes struct {
-	lane           sessioncontract.LaneIdentity
+	lane           session.LaneIdentity
 	grantOperation protocolsession.OperationID
 	grantRelease   <-chan struct{}
 	requestStarted chan struct{}
@@ -556,7 +556,7 @@ func receiverUnverifiedLaneAdmission() receiversession.LaneAdmissionResult {
 
 func receiverInstalledLaneAdmission(
 	operationID protocolsession.OperationID,
-	lane sessioncontract.LaneIdentity,
+	lane session.LaneIdentity,
 ) receiversession.LaneAdmissionResult {
 	return receiversession.LaneAdmissionResult{
 		GrantOperationID: operationID,
@@ -586,7 +586,7 @@ func TestV2PeerReceiverAndSenderFactoriesInteroperateOverRealPion(t *testing.T) 
 	sessionID, _ := protocolsession.ProtocolSessionIDFromBytes(
 		bytes.Repeat([]byte{0x32}, protocolsession.IdentityBytes),
 	)
-	lane := sessioncontract.LaneIdentity{ID: 23, Epoch: 5}
+	lane := session.LaneIdentity{ID: 23, Epoch: 5}
 	signalingOperation := newReceiverIntegrationOperation(integrationOperationID(0x33))
 	senderSession := &receiverIntegrationSenderSession{
 		share: share, sessionID: sessionID, operation: signalingOperation, lane: lane,
@@ -877,7 +877,7 @@ func TestV2PeerRealPionPhaseGatesPreserveExpiryAndReplacement(t *testing.T) {
 		t.Fatalf("create controlled receiver factory: %v", err)
 	}
 
-	firstLane := sessioncontract.LaneIdentity{ID: 41, Epoch: 1}
+	firstLane := session.LaneIdentity{ID: 41, Epoch: 1}
 	firstGrantOperation := integrationOperationID(0x55)
 	firstGrantRelease := make(chan struct{})
 	firstGrantRequested := make(chan struct{})
@@ -980,7 +980,7 @@ func TestV2PeerRealPionPhaseGatesPreserveExpiryAndReplacement(t *testing.T) {
 	close(firstSettlementRelease)
 
 	firstOutcome := receiveIntegrationAdmissionOutcome(t, firstObservedOutcome)
-	var senderRejected *sessioncontract.LaneRejectedError
+	var senderRejected *session.LaneRejectedError
 	if !firstOutcome.result.SettlementBegan ||
 		firstOutcome.result.Disposition != sendersession.PeerAdmissionRejected ||
 		firstOutcome.result.Rejection != grantExpired ||
@@ -1028,7 +1028,7 @@ func TestV2PeerRealPionPhaseGatesPreserveExpiryAndReplacement(t *testing.T) {
 
 	senderDataChannels.scripts <- integrationDataChannelScript{}
 	receiverDataChannels.scripts <- integrationDataChannelScript{}
-	secondLane := sessioncontract.LaneIdentity{ID: 42, Epoch: 2}
+	secondLane := session.LaneIdentity{ID: 42, Epoch: 2}
 	secondGrantOperation := integrationOperationID(0x56)
 	secondLaneHello := framechannel.Frame("replacement-lane-hello")
 	secondResponse := framechannel.Frame("replacement-lane-accepted")

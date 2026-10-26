@@ -1,7 +1,7 @@
 package sessioncore
 
 import (
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/requestlane"
 	"testing"
@@ -15,7 +15,7 @@ func TestRequestReservationCleanupDoesNotUpdateReplacementEpoch(t *testing.T) {
 	kind := protocolsession.MessageReleaseLease
 	channel, peer := newMemoryChannelPair()
 	t.Cleanup(func() { _ = peer.Close() })
-	identity := sessioncontract.LaneIdentity{ID: 2, Epoch: 1}
+	identity := session.LaneIdentity{ID: 2, Epoch: 1}
 	old, err := runtime.lanes.add(identity, channel, permissiveInboundAuthenticator(), false)
 	if err != nil {
 		t.Fatal(err)
@@ -54,7 +54,7 @@ func TestControlSelectionAccountsForCongestionAndExactLaneAuthority(t *testing.T
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 	secondChannel, peer := newMemoryChannelPair()
 	t.Cleanup(func() { _ = peer.Close() })
-	second := sessioncontract.LaneIdentity{ID: 2, Epoch: 1}
+	second := session.LaneIdentity{ID: 2, Epoch: 1}
 	if _, err := runtime.lanes.add(second, secondChannel, permissiveInboundAuthenticator(), false); err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestControlSelectionAccountsForCongestionAndExactLaneAuthority(t *testing.T
 	}
 	otherReservation.Abandon()
 	reservation.Abandon()
-	runtime.lanes.queuedContent = func(id sessioncontract.LaneIdentity) time.Duration {
+	runtime.lanes.queuedContent = func(id session.LaneIdentity) time.Duration {
 		if id == runtime.initial {
 			return time.Second
 		}

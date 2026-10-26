@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -15,7 +15,7 @@ func TestReadNonzeroLaneNonceRetriesZeroRandomness(t *testing.T) {
 	if err != nil || !bytes.Equal(nonce, bytes.Repeat([]byte{2}, protocolsession.LaneAttachNonceBytes)) {
 		t.Fatalf("retried nonce = %x, %v", nonce, err)
 	}
-	if _, err := ReadNonzeroLaneNonce(bytes.NewReader(make([]byte, laneNonceAttempts)), 1); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	if _, err := ReadNonzeroLaneNonce(bytes.NewReader(make([]byte, laneNonceAttempts)), 1); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("zero nonce source error = %v", err)
 	}
 }

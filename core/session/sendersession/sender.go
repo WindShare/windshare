@@ -10,7 +10,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/observationstream"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/internal/admissiongate"
@@ -50,7 +50,7 @@ func (functions TerminalConnectivityFuncs) StopRecovery() {
 
 func (functions TerminalConnectivityFuncs) Cleanup(ctx context.Context) error {
 	if functions.CleanupFunc == nil {
-		return sessioncontract.ErrRuntimeConfig
+		return session.ErrRuntimeConfig
 	}
 	return functions.CleanupFunc(ctx)
 }
@@ -65,7 +65,7 @@ func (function ContentFactoryFunc) NewSenderContentService(
 	sessionID protocolsession.ProtocolSessionID,
 ) (*contentflow.SenderService, error) {
 	if function == nil || sessionID.IsZero() {
-		return nil, sessioncontract.ErrRuntimeConfig
+		return nil, session.ErrRuntimeConfig
 	}
 	return function(sessionID)
 }
@@ -78,7 +78,7 @@ type CatalogFactoryFunc func() (*catalogflow.AddressedSenderService, error)
 
 func (function CatalogFactoryFunc) NewSenderCatalogService() (*catalogflow.AddressedSenderService, error) {
 	if function == nil {
-		return nil, sessioncontract.ErrRuntimeConfig
+		return nil, session.ErrRuntimeConfig
 	}
 	return function()
 }
@@ -91,7 +91,7 @@ type InitialLaneIDSourceFunc func() (uint32, error)
 
 func (function InitialLaneIDSourceFunc) NextInitialLaneID() (uint32, error) {
 	if function == nil {
-		return 0, sessioncontract.ErrRuntimeConfig
+		return 0, session.ErrRuntimeConfig
 	}
 	return function()
 }
@@ -149,7 +149,7 @@ func NewFactory(config FactoryConfig) (*Factory, error) {
 		len(config.SenderPrivateKey) != ed25519.PrivateKeySize || config.Catalog == nil || config.Content == nil ||
 		config.Peers == nil ||
 		config.TerminalConnectivity == nil || config.TerminalTimeout < 0 {
-		return nil, sessioncontract.ErrRuntimeConfig
+		return nil, session.ErrRuntimeConfig
 	}
 	if config.TerminalTimeout == 0 {
 		config.TerminalTimeout = DefaultTerminalCleanupTimeout
@@ -159,7 +159,7 @@ func NewFactory(config FactoryConfig) (*Factory, error) {
 	}
 	if config.ReplayGuard == nil {
 		var err error
-		config.ReplayGuard, err = protocolsession.NewClientHelloReplayGuard(sessioncontract.DefaultTrackedOperations, config.Now)
+		config.ReplayGuard, err = protocolsession.NewClientHelloReplayGuard(session.DefaultTrackedOperations, config.Now)
 		if err != nil {
 			return nil, err
 		}
@@ -200,7 +200,7 @@ const (
 type ChannelAdmission struct {
 	Kind    ChannelKind
 	Session *Runtime
-	Lane    sessioncontract.LaneIdentity
+	Lane    session.LaneIdentity
 }
 
 // AdmitChannel owns the first-frame dispatch boundary for opaque relay and P2P
@@ -213,11 +213,11 @@ func (factory *Factory) AdmitChannel(
 	channel protocolsession.FrameChannel,
 ) (ChannelAdmission, error) {
 	if factory == nil || channel == nil || ctx == nil {
-		return ChannelAdmission{}, sessioncontract.ErrRuntimeConfig
+		return ChannelAdmission{}, session.ErrRuntimeConfig
 	}
 	admissionContext, endAdmission, ok := factory.beginAdmission(ctx)
 	if !ok {
-		return ChannelAdmission{}, sessioncontract.ErrRuntimeClosed
+		return ChannelAdmission{}, session.ErrRuntimeClosed
 	}
 	defer endAdmission()
 	ctx = admissionContext
@@ -242,11 +242,11 @@ func (factory *Factory) AdmitChannel(
 
 func (factory *Factory) Accept(ctx context.Context, channel protocolsession.FrameChannel) (*Runtime, error) {
 	if factory == nil || channel == nil || ctx == nil {
-		return nil, sessioncontract.ErrRuntimeConfig
+		return nil, session.ErrRuntimeConfig
 	}
 	admissionContext, endAdmission, ok := factory.beginAdmission(ctx)
 	if !ok {
-		return nil, sessioncontract.ErrRuntimeClosed
+		return nil, session.ErrRuntimeClosed
 	}
 	defer endAdmission()
 	ctx = admissionContext
@@ -281,12 +281,12 @@ func (factory *Factory) acceptClient(
 	catalogService, err := factory.catalog.NewSenderCatalogService()
 	if err != nil || catalogService == nil {
 		keys.Destroy()
-		return nil, errors.Join(sessioncontract.ErrRuntimeConfig, err)
+		return nil, errors.Join(session.ErrRuntimeConfig, err)
 	}
 	contentService, err := factory.content.NewSenderContentService(sessionID)
 	if err != nil || contentService == nil {
 		keys.Destroy()
-		return nil, errors.Join(sessioncontract.ErrRuntimeConfig, err)
+		return nil, errors.Join(session.ErrRuntimeConfig, err)
 	}
 	contentTransferred := false
 	defer func() {
@@ -348,7 +348,7 @@ func (factory *Factory) acceptClient(
 		Service: contentService, Outbound: outbound,
 		DecisionTracer: contentflow.SenderDecisionTraceFunc(func(decision contentflow.SenderDecisionTrace) {
 			if wire.TracingEnabled() {
-				wire.Observe(sessionobs.NewSenderContentDecision(wire.ObservationContext(decision.OperationID, decision.RequestKind), decision, sessioncontract.LaneIdentity{}, false))
+				wire.Observe(sessionobs.NewSenderContentDecision(wire.ObservationContext(decision.OperationID, decision.RequestKind), decision, session.LaneIdentity{}, false))
 			}
 		}),
 	})
@@ -372,12 +372,12 @@ func (factory *Factory) acceptClient(
 	registryTransferred = true
 	peerHandler, err := factory.peers.NewSenderPeerHandler(senderPeerSession{runtime: sender, outbound: outbound})
 	if err != nil || peerHandler == nil {
-		return nil, errors.Join(sessioncontract.ErrRuntimeConfig, err)
+		return nil, errors.Join(session.ErrRuntimeConfig, err)
 	}
 	if err := registerSenderHandlers(wire, catalogHandler, contentHandler, laneHandler, peerHandler); err != nil {
 		return nil, err
 	}
-	wire.ConfigureLanes(nil, func(identity sessioncontract.LaneIdentity) {
+	wire.ConfigureLanes(nil, func(identity session.LaneIdentity) {
 		laneRegistry.Release(identity.ID, identity.Epoch)
 	})
 	if err := sessioncore.ConfirmChannelAdmission(ctx, channel); err != nil {
@@ -387,7 +387,7 @@ func (factory *Factory) acceptClient(
 	if factory.stopping {
 		factory.mu.Unlock()
 		wire.BeginClose()
-		return nil, sessioncontract.ErrRuntimeClosed
+		return nil, session.ErrRuntimeClosed
 	}
 	factory.sessions[sessionID] = sender
 	factory.mu.Unlock()
@@ -409,32 +409,32 @@ func (factory *Factory) completeSenderHandshake(
 ) (protocolsession.SessionKeys, uint32, error) {
 	client, err := factory.replay.AcceptClientHello(clientBytes, factory.share, factory.authKey)
 	if err != nil {
-		return protocolsession.SessionKeys{}, 0, errors.Join(sessioncontract.ErrHandshake, err)
+		return protocolsession.SessionKeys{}, 0, errors.Join(session.ErrHandshake, err)
 	}
 	senderPrivate, err := ecdh.X25519().GenerateKey(factory.random)
 	if err != nil {
-		return protocolsession.SessionKeys{}, 0, errors.Join(sessioncontract.ErrHandshake, err)
+		return protocolsession.SessionKeys{}, 0, errors.Join(session.ErrHandshake, err)
 	}
 	senderNonce := make([]byte, protocolsession.HandshakeNonceBytes)
 	if _, err := io.ReadFull(factory.random, senderNonce); err != nil {
-		return protocolsession.SessionKeys{}, 0, errors.Join(sessioncontract.ErrHandshake, err)
+		return protocolsession.SessionKeys{}, 0, errors.Join(session.ErrHandshake, err)
 	}
 	laneID, err := factory.laneIDs.NextInitialLaneID()
 	if err != nil || laneID == 0 {
-		return protocolsession.SessionKeys{}, 0, errors.Join(sessioncontract.ErrHandshake, err)
+		return protocolsession.SessionKeys{}, 0, errors.Join(session.ErrHandshake, err)
 	}
 	server, err := protocolsession.NewServerHello(
 		client, senderNonce, senderPrivate.PublicKey(), laneID, factory.privateKey,
 	)
 	if err != nil {
-		return protocolsession.SessionKeys{}, 0, errors.Join(sessioncontract.ErrHandshake, err)
+		return protocolsession.SessionKeys{}, 0, errors.Join(session.ErrHandshake, err)
 	}
 	if err := channel.Send(ctx, framechannel.Frame(server.Encoded())); err != nil {
-		return protocolsession.SessionKeys{}, 0, errors.Join(sessioncontract.ErrHandshake, err)
+		return protocolsession.SessionKeys{}, 0, errors.Join(session.ErrHandshake, err)
 	}
 	keys, err := protocolsession.DeriveSenderSession(senderPrivate, factory.authKey, client, server)
 	if err != nil {
-		return protocolsession.SessionKeys{}, 0, errors.Join(sessioncontract.ErrHandshake, err)
+		return protocolsession.SessionKeys{}, 0, errors.Join(session.ErrHandshake, err)
 	}
 	return keys, laneID, nil
 }

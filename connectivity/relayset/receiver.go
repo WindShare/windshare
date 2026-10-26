@@ -10,7 +10,7 @@ import (
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
@@ -204,7 +204,7 @@ func (receiver *Receiver) Close() {
 func (receiver *Receiver) run(url string) {
 	defer receiver.workers.Done()
 	initial := true
-	var lane sessioncontract.LaneIdentity
+	var lane session.LaneIdentity
 	recovery := receiver.config.recovery
 	started := receiver.config.Clock.Now()
 	for failures := uint32(0); receiver.attemptError(receiver.ctx) == nil; failures++ {
@@ -273,7 +273,7 @@ func (receiver *Receiver) current() *receiversession.Runtime {
 
 var closedReceiverLane = func() <-chan struct{} { done := make(chan struct{}); close(done); return done }()
 
-func (receiver *Receiver) admit(ctx context.Context, connection ReceiverConnection, lane *sessioncontract.LaneIdentity) error {
+func (receiver *Receiver) admit(ctx context.Context, connection ReceiverConnection, lane *session.LaneIdentity) error {
 	config := receiver.config.Receiver
 	config.DescriptorObject = connection.Descriptor()
 	prepared, err := liveshare.PrepareReceiver(config)
@@ -319,12 +319,12 @@ func (receiver *Receiver) attemptError(ctx context.Context) error {
 		return err
 	}
 	if runtime := receiver.current(); runtime != nil && runtime.Stopping() {
-		return sessioncontract.ErrRuntimeClosed
+		return session.ErrRuntimeClosed
 	}
 	return nil
 }
 
-func (receiver *Receiver) connectAttempt(ctx context.Context, url string, lane *sessioncontract.LaneIdentity) (ReceiverConnection, error) {
+func (receiver *Receiver) connectAttempt(ctx context.Context, url string, lane *session.LaneIdentity) (ReceiverConnection, error) {
 	if err := receiver.attemptError(ctx); err != nil {
 		return nil, err
 	}
@@ -347,7 +347,7 @@ func (receiver *Receiver) dial(ctx context.Context, url string) (ReceiverConnect
 	return receiver.config.Dial(ctx, relayv2.ReceiverConfig{RelayBaseURL: url, ShareID: receiver.shareID, Dial: receiver.config.DialOptions})
 }
 
-func (receiver *Receiver) connectInitial(ctx context.Context, prepared *liveshare.PreparedReceiver, connection ReceiverConnection, lane *sessioncontract.LaneIdentity) error {
+func (receiver *Receiver) connectInitial(ctx context.Context, prepared *liveshare.PreparedReceiver, connection ReceiverConnection, lane *session.LaneIdentity) error {
 	candidate, connectErr := prepared.Connect(ctx, connection.Channel(), transferlanes.RouteRelay)
 	if connectErr != nil {
 		prepared.Close()
@@ -364,7 +364,7 @@ func (receiver *Receiver) connectInitial(ctx context.Context, prepared *liveshar
 	return nil
 }
 
-func (receiver *Receiver) publishInitial(ctx context.Context, candidate *receiversession.Runtime, prepared *liveshare.PreparedReceiver, connection ReceiverConnection, lane *sessioncontract.LaneIdentity) error {
+func (receiver *Receiver) publishInitial(ctx context.Context, candidate *receiversession.Runtime, prepared *liveshare.PreparedReceiver, connection ReceiverConnection, lane *session.LaneIdentity) error {
 	// An authenticated contradiction can race a still-running handshake. Hold
 	// identity authority through publication so rejection either prevents this
 	// generation or observes and terminates the published runtime.
@@ -388,7 +388,7 @@ func (receiver *Receiver) publishInitial(ctx context.Context, candidate *receive
 		return errors.New("initial relay handshake superseded")
 	}
 	if candidate.Stopping() {
-		return errors.Join(sessioncontract.ErrRuntimeClosed, candidate.Err())
+		return errors.Join(session.ErrRuntimeClosed, candidate.Err())
 	}
 	// Relay waits and dials belong to this session's live authority. Done is a
 	// later cleanup boundary and cannot authorize retries during finalization.
@@ -421,7 +421,7 @@ func (receiver *Receiver) finishInitial(url string, err error) {
 		close(receiver.ready)
 	}
 }
-func (receiver *Receiver) waitLane(connection ReceiverConnection, lane sessioncontract.LaneIdentity) {
+func (receiver *Receiver) waitLane(connection ReceiverConnection, lane session.LaneIdentity) {
 	receiver.mu.Lock()
 	runtime := receiver.runtime
 	receiver.mu.Unlock()

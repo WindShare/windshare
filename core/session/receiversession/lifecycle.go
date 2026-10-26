@@ -2,7 +2,7 @@ package receiversession
 
 import (
 	"context"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -21,7 +21,7 @@ type lifecycle interface {
 // the role boundary. The core's lane registry and operation ownership stay private.
 func (runtime *Runtime) Err() error {
 	if runtime == nil || runtime.lifecycle == nil {
-		return sessioncontract.ErrRuntimeClosed
+		return session.ErrRuntimeClosed
 	}
 	return runtime.lifecycle.Err()
 }

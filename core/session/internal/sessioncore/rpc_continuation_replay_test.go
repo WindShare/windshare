@@ -6,7 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"github.com/windshare/windshare/core/framechannel"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"sync"
 	"sync/atomic"
@@ -414,7 +414,7 @@ func newContinuationReplayFixtureWithContinuations(
 
 	replacementBase, replacementPeer := newMemoryChannelPair()
 	replacementChannel := &countingMemoryChannel{memoryChannel: replacementBase}
-	replacementIdentity := sessioncontract.LaneIdentity{ID: runtime.initial.ID + 1, Epoch: 1}
+	replacementIdentity := session.LaneIdentity{ID: runtime.initial.ID + 1, Epoch: 1}
 	replacement, err := runtime.lanes.add(
 		replacementIdentity, replacementChannel, permissiveInboundAuthenticator(), false,
 	)

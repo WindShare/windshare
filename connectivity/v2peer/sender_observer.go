@@ -9,7 +9,7 @@ import (
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	sendersession "github.com/windshare/windshare/core/session/sendersession"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
@@ -123,7 +123,7 @@ type SenderAttemptObservation struct {
 	DeadlineMillis       uint64
 	CandidateCounts      *SenderCandidateCounts
 	GrantOperationID     protocolsession.OperationID
-	Lane                 *sessioncontract.LaneIdentity
+	Lane                 *session.LaneIdentity
 	Route                transferlanes.Route
 	AdmissionDisposition SenderAdmissionDisposition
 	ResponseDelivery     SenderResponseDelivery
@@ -145,7 +145,7 @@ type senderAttemptRecorder struct {
 	terminal               SenderAttemptStage
 	lastCounts             SenderCandidateCounts
 	grantOperationID       protocolsession.OperationID
-	lane                   *sessioncontract.LaneIdentity
+	lane                   *session.LaneIdentity
 	laneHelloPending       bool
 	admissionExpiryPending bool
 	lastCompletedStage     SenderAttemptStage
@@ -303,7 +303,7 @@ func (recorder *senderAttemptRecorder) emitPhaseDeadlineExpiredLocked(phase Peer
 
 func (recorder *senderAttemptRecorder) laneHelloAuthenticated(
 	operation protocolsession.OperationID,
-	lane sessioncontract.LaneIdentity,
+	lane session.LaneIdentity,
 ) {
 	if recorder == nil || operation.IsZero() || lane.ID == 0 || lane.Epoch == 0 {
 		return
@@ -476,7 +476,7 @@ func senderFailureCarriesCandidateCounts(failedAt SenderAttemptStage) bool {
 		failedAt != SenderAttemptAnswerCreated
 }
 
-func cloneLane(lane *sessioncontract.LaneIdentity) *sessioncontract.LaneIdentity {
+func cloneLane(lane *session.LaneIdentity) *session.LaneIdentity {
 	if lane == nil {
 		return nil
 	}

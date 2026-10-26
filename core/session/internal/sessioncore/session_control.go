@@ -3,7 +3,7 @@ package sessioncore
 import (
 	"bytes"
 	"context"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"sync"
 )
@@ -53,7 +53,7 @@ func (handler *sessionControlHandler) HandleMessage(ctx context.Context, message
 
 func (outbound *Responses) SendSessionControl(ctx context.Context, kind protocolsession.MessageKind, body []byte) error {
 	if outbound.runtime == nil || ctx == nil {
-		return sessioncontract.ErrRuntimeConfig
+		return session.ErrRuntimeConfig
 	}
 	if err := protocolsession.ValidateSessionControlBody(kind, body); err != nil {
 		return err
@@ -76,7 +76,7 @@ func (outbound *Responses) SendSessionControl(ctx context.Context, kind protocol
 
 func (runtime *Runtime) SendSessionControl(ctx context.Context, kind protocolsession.MessageKind, body []byte) error {
 	if runtime == nil || ctx == nil {
-		return sessioncontract.ErrRuntimeConfig
+		return session.ErrRuntimeConfig
 	}
 	if err := protocolsession.ValidateSessionControlBody(kind, body); err != nil {
 		return err

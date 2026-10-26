@@ -5,7 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"testing"
@@ -22,7 +22,7 @@ func (sealer failingTerminalSealer) Seal([]byte) (protocolsession.SealedEnvelope
 
 func TestDeliveredTerminalPreservesCallerAndHardAdmissionFailures(t *testing.T) {
 	body, err := protocolsession.EncodeSessionTerminal(protocolsession.SessionTerminal{
-		Code: sessioncontract.SessionStoppedCode, Message: "share cancelled",
+		Code: session.SessionStoppedCode, Message: "share cancelled",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -46,7 +46,7 @@ func TestDeliveredTerminalPreservesCallerAndHardAdmissionFailures(t *testing.T) 
 		sender.start()
 		t.Cleanup(sender.close)
 		outbound := &Responses{runtime: sender, controlPreparer: testControlPreparer(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, ed25519.SeedSize)))}
-		recipients := append([]selectedLane{{identity: sessioncontract.LaneIdentity{}}}, sender.lanes.snapshot()...)
+		recipients := append([]selectedLane{{identity: session.LaneIdentity{}}}, sender.lanes.snapshot()...)
 		err := outbound.sendTerminalRecipients(
 			context.Background(), body, recipients,
 		)
@@ -74,7 +74,7 @@ func TestDeliveredTerminalPreservesCallerAndHardAdmissionFailures(t *testing.T) 
 		go func() { writerResult <- failedWriter.Run(context.Background()) }()
 		recipients := append(
 			[]selectedLane{{
-				identity: sessioncontract.LaneIdentity{ID: 99, Epoch: 1},
+				identity: session.LaneIdentity{ID: 99, Epoch: 1},
 				channel:  failedChannel,
 				writer:   failedWriter,
 				done:     failedWriter.Done(),

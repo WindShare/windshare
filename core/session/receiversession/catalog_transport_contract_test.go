@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/windshare/windshare/core/catalog"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -19,7 +19,7 @@ import (
 func TestCatalogProgressObserverFailureStaysOperationLocal(t *testing.T) {
 	if err := (CatalogScanProgressObserverFunc(nil)).ObserveCatalogScanProgress(
 		context.Background(), CatalogScanProgress{},
-	); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("nil catalog progress observer error = %v", err)
 	}
 	fixture := newVerticalFixture(t)
@@ -125,7 +125,7 @@ func TestCatalogTransportRejectsHostileOperationResponses(t *testing.T) {
 			t.Fatal(err)
 		}
 		enqueueCallResponse(harness.call, unexpected)
-		if err := harness.wait(); !errors.Is(err, sessioncontract.ErrOperationMissing) {
+		if err := harness.wait(); !errors.Is(err, session.ErrOperationMissing) {
 			t.Fatalf("unexpected catalog final error = %v", err)
 		}
 	})

@@ -3,7 +3,7 @@ package sendersession
 import (
 	"context"
 	"github.com/windshare/windshare/core/catalog"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
@@ -12,14 +12,14 @@ import (
 // admission-waiting to admission-settling. Core calls it only after WS2A has
 // authenticated and before it consumes/rejects a grant or sends signed evidence.
 type PeerAdmissionControl interface {
-	BeginAuthenticatedSettlement(protocolsession.OperationID, sessioncontract.LaneIdentity) bool
+	BeginAuthenticatedSettlement(protocolsession.OperationID, session.LaneIdentity) bool
 }
 
-type PeerAdmissionControlFunc func(protocolsession.OperationID, sessioncontract.LaneIdentity) bool
+type PeerAdmissionControlFunc func(protocolsession.OperationID, session.LaneIdentity) bool
 
 func (function PeerAdmissionControlFunc) BeginAuthenticatedSettlement(
 	operationID protocolsession.OperationID,
-	lane sessioncontract.LaneIdentity,
+	lane session.LaneIdentity,
 ) bool {
 	return function != nil && function(operationID, lane)
 }
@@ -55,7 +55,7 @@ const (
 type PeerAdmissionResult struct {
 	SettlementBegan  bool
 	GrantOperationID protocolsession.OperationID
-	Lane             sessioncontract.LaneIdentity
+	Lane             session.LaneIdentity
 	Disposition      PeerAdmissionDisposition
 	Rejection        protocolsession.LaneRejection
 	ResponseDelivery PeerResponseDelivery
@@ -112,12 +112,12 @@ type PeerHandlerFactory interface {
 type PeerHandlerFactoryFunc func(PeerSession) (PeerHandler, error)
 
 func (function PeerHandlerFactoryFunc) NewSenderPeerHandler(
-	session PeerSession,
+	peer PeerSession,
 ) (PeerHandler, error) {
 	if function == nil {
-		return nil, sessioncontract.ErrRuntimeConfig
+		return nil, session.ErrRuntimeConfig
 	}
-	return function(session)
+	return function(peer)
 }
 
 func (function PeerHandlerFactoryFunc) BeginOperationContinuation(
@@ -125,7 +125,7 @@ func (function PeerHandlerFactoryFunc) BeginOperationContinuation(
 	[]byte,
 ) (protocolsession.OperationContinuationContract, bool, error) {
 	if function == nil {
-		return nil, false, sessioncontract.ErrRuntimeConfig
+		return nil, false, session.ErrRuntimeConfig
 	}
 	// This adapter is intended for handlers that reject or never receive peer
 	// operations. Schema-owning production providers must supply a real authority.
@@ -137,7 +137,7 @@ func (function PeerHandlerFactoryFunc) ClassifyUnboundOperationContinuation(
 	[]byte,
 ) (protocolsession.OperationContinuationScope, bool, error) {
 	if function == nil {
-		return protocolsession.OperationContinuationScope{}, false, sessioncontract.ErrRuntimeConfig
+		return protocolsession.OperationContinuationScope{}, false, session.ErrRuntimeConfig
 	}
 	return protocolsession.OperationContinuationScope{}, false, nil
 }
@@ -147,69 +147,69 @@ type senderPeerSession struct {
 	outbound *sessioncore.Responses
 }
 
-func (session senderPeerSession) ShareInstance() catalog.ShareInstance {
-	if session.runtime == nil {
+func (peer senderPeerSession) ShareInstance() catalog.ShareInstance {
+	if peer.runtime == nil {
 		return catalog.ShareInstance{}
 	}
-	return session.runtime.core.ShareInstance()
+	return peer.runtime.core.ShareInstance()
 }
 
-func (session senderPeerSession) ProtocolSessionID() protocolsession.ProtocolSessionID {
-	if session.runtime == nil {
+func (peer senderPeerSession) ProtocolSessionID() protocolsession.ProtocolSessionID {
+	if peer.runtime == nil {
 		return protocolsession.ProtocolSessionID{}
 	}
-	return session.runtime.ProtocolSessionID()
+	return peer.runtime.ProtocolSessionID()
 }
 
-func (session senderPeerSession) SendPeerControl(
+func (peer senderPeerSession) SendPeerControl(
 	ctx context.Context,
 	kind protocolsession.MessageKind,
 	operationID protocolsession.OperationID,
 	body []byte,
 ) (protocolsession.OperationDisposition, error) {
-	if session.runtime == nil || operationID.IsZero() ||
+	if peer.runtime == nil || operationID.IsZero() ||
 		(kind != protocolsession.MessagePeerAnswer && kind != protocolsession.MessagePeerCandidate) {
-		return protocolsession.OperationDrop, sessioncontract.ErrRuntimeConfig
+		return protocolsession.OperationDrop, session.ErrRuntimeConfig
 	}
-	outcome, err := session.outbound.SendControl(ctx, kind, operationID, body)
+	outcome, err := peer.outbound.SendControl(ctx, kind, operationID, body)
 	if outcome.Evidence() == protocolsession.ResponseSendEvidenceDefinitelyNotSent {
 		return protocolsession.OperationDrop, err
 	}
 	return protocolsession.OperationDeliver, err
 }
 
-func (session senderPeerSession) AdmitPeerChannel(
+func (peer senderPeerSession) AdmitPeerChannel(
 	ctx context.Context,
 	channel protocolsession.FrameChannel,
 	control PeerAdmissionControl,
 ) (PeerAdmissionResult, error) {
-	if session.runtime == nil {
+	if peer.runtime == nil {
 		if channel != nil {
 			_ = channel.Close()
 		}
-		return silentSenderPeerAdmission(), sessioncontract.ErrRuntimeClosed
+		return silentSenderPeerAdmission(), session.ErrRuntimeClosed
 	}
-	return session.runtime.AdmitPeerChannel(ctx, channel, control)
+	return peer.runtime.AdmitPeerChannel(ctx, channel, control)
 }
 
-func (session senderPeerSession) FailPeerOperation(
+func (peer senderPeerSession) FailPeerOperation(
 	ctx context.Context,
 	operationID protocolsession.OperationID,
 	code uint16,
 	message string,
 ) error {
-	if session.runtime == nil || operationID.IsZero() {
-		return sessioncontract.ErrRuntimeConfig
+	if peer.runtime == nil || operationID.IsZero() {
+		return session.ErrRuntimeConfig
 	}
 	generation, ok := protocolsession.OperationGenerationFromContext(ctx, operationID)
 	if !ok {
-		return sessioncontract.ErrOperationMissing
+		return session.ErrOperationMissing
 	}
 	binding, ok := generation.PeerAttemptBinding()
 	if !ok {
-		return sessioncontract.ErrOperationMissing
+		return session.ErrOperationMissing
 	}
-	return session.outbound.SendOperationError(ctx, operationID, protocolsession.OperationFailure{
+	return peer.outbound.SendOperationError(ctx, operationID, protocolsession.OperationFailure{
 		Scope: protocolsession.OperationScopePeer, Code: code, Message: message, PeerAttempt: &binding,
 	})
 }

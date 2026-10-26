@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"io"
@@ -25,7 +25,7 @@ func TestRPCClientBoundsLifecycleAndCancellation(t *testing.T) {
 	defer receiver.rpc.Close()
 	body, _ := protocolsession.EncodeBody(map[uint64]any{0: uint64(1)})
 	terminal, _ := protocolsession.NewMessage(protocolsession.MessageSessionTerminal, nil, body)
-	if err := receiver.rpc.HandleMessage(context.Background(), terminal); !errors.Is(err, sessioncontract.ErrOperationMissing) {
+	if err := receiver.rpc.HandleMessage(context.Background(), terminal); !errors.Is(err, session.ErrOperationMissing) {
 		t.Fatalf("message without operation error = %v", err)
 	}
 	missingID := id16[protocolsession.OperationID](71)
@@ -46,7 +46,7 @@ func TestRPCClientBoundsLifecycleAndCancellation(t *testing.T) {
 	if err := receiver.rpc.HandleMessage(responseContext, missing); err != nil {
 		t.Fatal(err)
 	}
-	if err := receiver.rpc.HandleMessage(responseContext, missing); !errors.Is(err, sessioncontract.ErrOperationOverflow) {
+	if err := receiver.rpc.HandleMessage(responseContext, missing); !errors.Is(err, session.ErrOperationOverflow) {
 		t.Fatalf("response overflow error = %v", err)
 	}
 	wrong := &Call{id: missingID, messages: make(chan operationResponse, 1)}
@@ -64,7 +64,7 @@ func TestRPCClientBoundsLifecycleAndCancellation(t *testing.T) {
 		t.Fatalf("operation ID source error = %v", err)
 	}
 	zeroIDs := NewRequests(runtime, bytes.NewReader(make([]byte, protocolsession.IdentityBytes*4)))
-	if _, err := zeroIDs.Begin(context.Background(), protocolsession.MessageListChildren, body); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	if _, err := zeroIDs.Begin(context.Background(), protocolsession.MessageListChildren, body); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("zero operation IDs error = %v", err)
 	}
 	invalidMessage := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{7}, protocolsession.IdentityBytes)))
@@ -74,18 +74,18 @@ func TestRPCClientBoundsLifecycleAndCancellation(t *testing.T) {
 	duplicate := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{8}, protocolsession.IdentityBytes)))
 	duplicateID := issuedOperationID(8, 1)
 	duplicate.calls[duplicateID] = &Call{id: duplicateID}
-	if _, err := duplicate.Begin(context.Background(), protocolsession.MessageListChildren, body); !errors.Is(err, sessioncontract.ErrOperationMissing) {
+	if _, err := duplicate.Begin(context.Background(), protocolsession.MessageListChildren, body); !errors.Is(err, session.ErrOperationMissing) {
 		t.Fatalf("duplicate local operation error = %v", err)
 	}
 	if err := receiver.rpc.register(receiver.router); err == nil {
 		t.Fatal("duplicate router registration was accepted")
 	}
-	if err := receiver.rpc.admitCancellation(nil, contentflow.CancelReasonUser); !errors.Is(err, sessioncontract.ErrOperationMissing) {
+	if err := receiver.rpc.admitCancellation(nil, contentflow.CancelReasonUser); !errors.Is(err, session.ErrOperationMissing) {
 		t.Fatalf("nil cancellation call error = %v", err)
 	}
 	if err := receiver.rpc.admitCancellation(
 		&Call{id: missingID}, contentflow.CancelReason(0),
-	); !errors.Is(err, sessioncontract.ErrOperationMissing) {
+	); !errors.Is(err, session.ErrOperationMissing) {
 		t.Fatalf("missing cancellation authority error = %v", err)
 	}
 
@@ -104,7 +104,7 @@ func TestRPCClientBoundsLifecycleAndCancellation(t *testing.T) {
 
 	doneCall := &Call{messages: make(chan operationResponse)}
 	runtime.close()
-	if _, err := receiver.rpc.Await(context.Background(), doneCall); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	if _, err := receiver.rpc.Await(context.Background(), doneCall); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("await closed runtime = %v", err)
 	}
 }

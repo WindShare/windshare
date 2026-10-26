@@ -1,7 +1,7 @@
 package sessionobs
 
 import (
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -36,7 +36,7 @@ const (
 // below this boundary so production logs cannot leak share content or keys.
 type SenderTerminalSendObserved struct {
 	ProtocolSessionID    protocolsession.ProtocolSessionID
-	Lane                 sessioncontract.LaneIdentity
+	Lane                 session.LaneIdentity
 	Settled              bool
 	TransportDisposition SenderTerminalSendTransportDisposition
 	Outcome              SenderTerminalSendOutcome

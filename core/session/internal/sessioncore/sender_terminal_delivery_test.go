@@ -5,7 +5,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"github.com/windshare/windshare/core/framechannel"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"sync"
 	"testing"
@@ -44,7 +44,7 @@ func TestEmptyTerminalFanoutHonorsCallerCancellation(t *testing.T) {
 
 func TestTerminalPreAdmissionWriterStopRequiresNoUsableReplacement(t *testing.T) {
 	body, err := protocolsession.EncodeSessionTerminal(protocolsession.SessionTerminal{
-		Code: sessioncontract.SessionStoppedCode, Message: "share cancelled",
+		Code: session.SessionStoppedCode, Message: "share cancelled",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestTerminalPreAdmissionWriterStopRequiresNoUsableReplacement(t *testing.T)
 			if test.addReplacement {
 				replacement := newMemoryChannel(t)
 				if _, err := runtime.lanes.add(
-					sessioncontract.LaneIdentity{ID: 2, Epoch: 1}, replacement, permissiveInboundAuthenticator(), false,
+					session.LaneIdentity{ID: 2, Epoch: 1}, replacement, permissiveInboundAuthenticator(), false,
 				); err != nil {
 					t.Fatalf("add usable replacement: %v", err)
 				}
@@ -113,7 +113,7 @@ func TestTerminalPreAdmissionWriterStopRequiresNoUsableReplacement(t *testing.T)
 
 func TestTerminalPostAdmissionWriterStopRequiresNoUsableReplacement(t *testing.T) {
 	body, err := protocolsession.EncodeSessionTerminal(protocolsession.SessionTerminal{
-		Code: sessioncontract.SessionStoppedCode, Message: "share cancelled",
+		Code: session.SessionStoppedCode, Message: "share cancelled",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -141,7 +141,7 @@ func TestTerminalPostAdmissionWriterStopRequiresNoUsableReplacement(t *testing.T
 				if test.addReplacement {
 					replacement := newMemoryChannel(t)
 					if _, err := runtime.lanes.add(
-						sessioncontract.LaneIdentity{ID: 2, Epoch: 1}, replacement, permissiveInboundAuthenticator(), false,
+						session.LaneIdentity{ID: 2, Epoch: 1}, replacement, permissiveInboundAuthenticator(), false,
 					); err != nil {
 						t.Fatalf("add usable replacement: %v", err)
 					}
@@ -186,7 +186,7 @@ func TestTerminalPostAdmissionWriterStopRequiresNoUsableReplacement(t *testing.T
 
 func TestTerminalClaimRejectedByLaneCancellationRequiresNoUsableReplacement(t *testing.T) {
 	body, err := protocolsession.EncodeSessionTerminal(protocolsession.SessionTerminal{
-		Code: sessioncontract.SessionStoppedCode, Message: "share cancelled",
+		Code: session.SessionStoppedCode, Message: "share cancelled",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -210,7 +210,7 @@ func TestTerminalClaimRejectedByLaneCancellationRequiresNoUsableReplacement(t *t
 				channel := &terminalCancellationRejectionChannel{
 					FrameChannel: newMemoryChannel(t), entered: make(chan struct{}),
 				}
-				identity := sessioncontract.LaneIdentity{ID: 2, Epoch: 1}
+				identity := session.LaneIdentity{ID: 2, Epoch: 1}
 				if _, err := runtime.lanes.add(
 					identity, channel, permissiveInboundAuthenticator(), false,
 				); err != nil {
@@ -225,7 +225,7 @@ func TestTerminalClaimRejectedByLaneCancellationRequiresNoUsableReplacement(t *t
 				}
 				if test.addReplacement {
 					if _, err := runtime.lanes.add(
-						sessioncontract.LaneIdentity{ID: 3, Epoch: 1}, newMemoryChannel(t),
+						session.LaneIdentity{ID: 3, Epoch: 1}, newMemoryChannel(t),
 						permissiveInboundAuthenticator(), false,
 					); err != nil {
 						t.Fatalf("add usable replacement: %v", err)

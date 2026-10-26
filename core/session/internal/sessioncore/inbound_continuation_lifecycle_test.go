@@ -5,7 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"testing"
 )
@@ -58,7 +58,7 @@ func TestInboundRetiredPeerCandidateUsesOperationAuthorityWithoutResponseRoute(t
 
 			// A candidate admitted by the remote writer before the final can arrive
 			// after the response route is gone, including on another physical lane.
-			for _, lane := range []sessioncontract.LaneIdentity{runtime.initial, {ID: runtime.initial.ID + 1, Epoch: 1}} {
+			for _, lane := range []session.LaneIdentity{runtime.initial, {ID: runtime.initial.ID + 1, Epoch: 1}} {
 				candidate := operationMessageForTest(t, protocolsession.MessagePeerCandidate, id, []byte{0xf6})
 				disposition, err := (laneInboundRouter{runtime: runtime, identity: lane}).RouteInbound(context.Background(), candidate)
 				if err != nil || disposition != protocolsession.OperationDrop {

@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/windshare/windshare/core/content"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -63,7 +63,7 @@ func TestReceiverRuntimeResourceLeaseCoversFailureAndSuccessLifecycles(t *testin
 			if name == "acquire failure" && !errors.Is(err, wantAcquireErr) {
 				t.Fatalf("resource acquisition error = %v", err)
 			}
-			if name == "nil lease" && !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+			if name == "nil lease" && !errors.Is(err, session.ErrRuntimeConfig) {
 				t.Fatalf("nil resource lease error = %v", err)
 			}
 		})
@@ -101,7 +101,7 @@ func TestReceiverRuntimeResourceLeaseCoversFailureAndSuccessLifecycles(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := failureFactory.Connect(context.Background(), newMemoryChannel(t), transferlanes.RouteRelay); !errors.Is(err, sessioncontract.ErrHandshake) {
+	if _, err := failureFactory.Connect(context.Background(), newMemoryChannel(t), transferlanes.RouteRelay); !errors.Is(err, session.ErrHandshake) {
 		t.Fatalf("handshake failure with resource lease = %v", err)
 	}
 	if failedLease.releases.Load() != 1 {
@@ -235,14 +235,14 @@ func TestReceiverConnectPropagatesDefaultIdentityEntropyAndHandshakeCancellation
 }
 
 func TestReceiverPeerOperationRejectsMalformedAndCrossScopeFinals(t *testing.T) {
-	if _, err := (*Runtime)(nil).OpenPeerOperation(context.Background(), nil); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	if _, err := (*Runtime)(nil).OpenPeerOperation(context.Background(), nil); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("nil receiver peer operation error = %v", err)
 	}
 	var nilOperation *PeerOperation
 	if !nilOperation.OperationID().IsZero() {
 		t.Fatal("nil peer operation exposed an identity")
 	}
-	if _, err := nilOperation.SendCandidate(context.Background(), nil); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	if _, err := nilOperation.SendCandidate(context.Background(), nil); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("nil peer candidate error = %v", err)
 	}
 	nilReceive := nilOperation.Receive(context.Background())
@@ -613,19 +613,19 @@ func (handler *trackedSenderPeerHandler) HandleMessage(
 ) error {
 	operationID, ok := message.OperationID()
 	if !ok {
-		return sessioncontract.ErrRuntimeConfig
+		return session.ErrRuntimeConfig
 	}
 	if message.Kind() == protocolsession.MessagePeerCandidate {
 		return nil
 	}
 	if message.Kind() != protocolsession.MessagePeerOffer {
-		return sessioncontract.ErrRuntimeConfig
+		return session.ErrRuntimeConfig
 	}
 	attempt := &trackedSenderPeerAttempt{done: make(chan struct{})}
 	handler.mu.Lock()
 	if handler.stopping || handler.attempts[operationID] != nil {
 		handler.mu.Unlock()
-		return sessioncontract.ErrRuntimeClosed
+		return session.ErrRuntimeClosed
 	}
 	handler.offerCount++
 	offerIndex := handler.offerCount

@@ -3,7 +3,7 @@ package receiversession
 import (
 	"context"
 	"errors"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"testing"
 	"time"
@@ -23,13 +23,13 @@ func TestAttachLaneRetainsAuthenticatedAcceptanceWhenInstallationFails(t *testin
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	senderResult := make(chan struct {
-		identity sessioncontract.LaneIdentity
+		identity session.LaneIdentity
 		err      error
 	}, 1)
 	go func() {
 		identity, err := fixture.senderFactory.Attach(ctx, senderChannel)
 		senderResult <- struct {
-			identity sessioncontract.LaneIdentity
+			identity session.LaneIdentity
 			err      error
 		}{identity: identity, err: err}
 	}()
@@ -39,7 +39,7 @@ func TestAttachLaneRetainsAuthenticatedAcceptanceWhenInstallationFails(t *testin
 		t.Fatalf("receiver installation error = %v", err)
 	}
 	if admission.GrantOperationID != grant.OperationID ||
-		admission.Lane != (sessioncontract.LaneIdentity{ID: grant.LaneID, Epoch: grant.LaneEpoch}) ||
+		admission.Lane != (session.LaneIdentity{ID: grant.LaneID, Epoch: grant.LaneEpoch}) ||
 		admission.Disposition != LaneAdmissionAccepted ||
 		admission.LaneInstallation != LaneInstallationFailed {
 		t.Fatalf("accepted installation failure = %+v", admission)

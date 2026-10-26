@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"sync"
@@ -28,7 +28,7 @@ func TestConcurrentSameIDRequestsAdmitExactlyOneRouteAuthority(t *testing.T) {
 	}
 	secondBase, secondPeer := newMemoryChannelPair()
 	t.Cleanup(func() { _ = secondPeer.Close() })
-	secondIdentity := sessioncontract.LaneIdentity{ID: runtime.initial.ID + 1, Epoch: 1}
+	secondIdentity := session.LaneIdentity{ID: runtime.initial.ID + 1, Epoch: 1}
 	if _, err := runtime.lanes.add(
 		secondIdentity, secondBase, permissiveInboundAuthenticator(), false,
 	); err != nil {
@@ -44,7 +44,7 @@ func TestConcurrentSameIDRequestsAdmitExactlyOneRouteAuthority(t *testing.T) {
 	start := make(chan struct{})
 	results := make(chan result, 2)
 	var wait sync.WaitGroup
-	for _, identity := range []sessioncontract.LaneIdentity{runtime.initial, secondIdentity} {
+	for _, identity := range []session.LaneIdentity{runtime.initial, secondIdentity} {
 		wait.Go(func() {
 			<-start
 			disposition, err := (laneInboundRouter{
@@ -183,7 +183,7 @@ func testForcedHostileSameIDReuseRejectsDelayedOldRouteContext(t *testing.T) {
 		Scope:   contentflow.RevisionErrorScope,
 		Code:    contentflow.RevisionCodeUnreadable,
 		Message: "stale handler failure",
-	}); !errors.Is(err, sessioncontract.ErrOperationMissing) {
+	}); !errors.Is(err, session.ErrOperationMissing) {
 		t.Fatalf("delayed old generation error = %v", err)
 	}
 	if runtime.routes.current(operationID) != newRoute || runtime.operations.ActiveCount() != 1 {

@@ -3,7 +3,7 @@ package receiversession
 import (
 	"context"
 	"errors"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/sendersession"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"testing"
@@ -34,7 +34,7 @@ func TestAdmitPeerChannelCannotRouteAProofIntoSiblingProtocolSession(t *testing.
 	if _, err := firstReceiver.AttachLane(wrongContext, grant, wrongReceiverChannel, transferlanes.RouteDirect); err == nil {
 		t.Fatal("receiver attached a peer lane through a sibling ProtocolSession")
 	}
-	if err := <-wrongResult; !errors.Is(err, sessioncontract.ErrHandshake) {
+	if err := <-wrongResult; !errors.Is(err, session.ErrHandshake) {
 		t.Fatalf("sibling peer admission error = %v", err)
 	}
 

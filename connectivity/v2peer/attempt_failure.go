@@ -10,7 +10,7 @@ import (
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 )
 
 func (attempt *peerAttempt) deliverFailure(
@@ -69,7 +69,7 @@ func attemptFailure(result, primary error, operationCanceled bool) (failure Send
 	defer func() { failure.Termination = senderAttemptTermination(primary, operationCanceled) }()
 	// Authenticated admission owns the decision even when the receiver cancels
 	// its signaling operation while the rejected channel is still draining.
-	if _, rejected := errors.AsType[*sessioncontract.LaneRejectedError](primary); rejected {
+	if _, rejected := errors.AsType[*session.LaneRejectedError](primary); rejected {
 		return SenderAttemptFailure{
 			Scope: AttemptFailureScopeAttempt, TypedPeerErrorCode: TypedPeerErrorAdmission,
 			Message: peerAdmissionFailureMessage,
@@ -119,7 +119,7 @@ func senderAttemptTermination(cause error, operationCanceled bool) SenderAttempt
 	case errors.Is(cause, errChannelAdmission):
 		reason = "admission_failure"
 	}
-	if _, rejected := errors.AsType[*sessioncontract.LaneRejectedError](cause); rejected {
+	if _, rejected := errors.AsType[*session.LaneRejectedError](cause); rejected {
 		initiator, reason = "local", "lane_rejected"
 	}
 	return SenderAttemptTermination{Initiator: initiator, Cause: reason}

@@ -17,7 +17,7 @@ import (
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	sendersession "github.com/windshare/windshare/core/session/sendersession"
 	"github.com/windshare/windshare/internal/testrelaynative"
@@ -91,11 +91,11 @@ func (relaysetPeer) Cancel(context.Context, protocolsession.OperationID) error  
 func (relaysetPeer) Run(ctx context.Context) error                                { <-ctx.Done(); return ctx.Err() }
 
 type relaysetAdmission struct {
-	Endpoint string                       `json:"endpoint"`
-	Session  v2.RelaySessionID            `json:"relay_session_id"`
-	Lane     sessioncontract.LaneIdentity `json:"lane"`
-	Kind     sendersession.ChannelKind    `json:"kind"`
-	Err      error                        `json:"-"`
+	Endpoint string                    `json:"endpoint"`
+	Session  v2.RelaySessionID         `json:"relay_session_id"`
+	Lane     session.LaneIdentity      `json:"lane"`
+	Kind     sendersession.ChannelKind `json:"kind"`
+	Err      error                     `json:"-"`
 }
 
 type relaysetShare struct {
@@ -276,7 +276,7 @@ func (clock *relaysetClock) Wait(ctx context.Context, delay time.Duration) error
 	return nil
 }
 
-func requireRelaysetLive(t *testing.T, runtime *receiversession.Runtime, connection relayset.ReceiverConnection, lane sessioncontract.LaneIdentity) {
+func requireRelaysetLive(t *testing.T, runtime *receiversession.Runtime, connection relayset.ReceiverConnection, lane session.LaneIdentity) {
 	t.Helper()
 	done, live := runtime.LaneDone(lane)
 	if !live {

@@ -5,7 +5,7 @@ import (
 	"context"
 	"errors"
 	"github.com/windshare/windshare/core/observationstream"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -16,18 +16,18 @@ import (
 
 type operationLaneRoute struct {
 	sendMu      sync.Mutex
-	preferred   sessioncontract.LaneIdentity
+	preferred   session.LaneIdentity
 	requestKind protocolsession.MessageKind
 	request     []byte
 }
 
 func (routes *operationLaneRoutes) reserveRequest(
 	operationID protocolsession.OperationID,
-	lane sessioncontract.LaneIdentity,
+	lane session.LaneIdentity,
 	message protocolsession.Message,
 ) (*operationLaneRoute, bool, error) {
 	if routes == nil || operationID.IsZero() || !lane.Valid(true) {
-		return nil, false, sessioncontract.ErrOperationMissing
+		return nil, false, session.ErrOperationMissing
 	}
 	encoded, err := protocolsession.EncodeMessage(message)
 	if err != nil {
@@ -70,30 +70,30 @@ func bindOutboundRoute(
 
 func outboundRoute(ctx context.Context, operationID protocolsession.OperationID) (*operationLaneRoute, error) {
 	if ctx == nil || operationID.IsZero() {
-		return nil, sessioncontract.ErrOperationMissing
+		return nil, session.ErrOperationMissing
 	}
 	binding, ok := ctx.Value(outboundRouteContextKey{}).(outboundRouteBinding)
 	if !ok || binding.operationID != operationID || binding.route == nil {
-		return nil, sessioncontract.ErrOperationMissing
+		return nil, session.ErrOperationMissing
 	}
 	return binding.route, nil
 }
 
 type authenticatedReceiveContext struct {
-	lane       sessioncontract.LaneIdentity
+	lane       session.LaneIdentity
 	observedAt time.Time
 }
 
-func bindInboundLane(ctx context.Context, lane sessioncontract.LaneIdentity, observedAt time.Time) context.Context {
+func bindInboundLane(ctx context.Context, lane session.LaneIdentity, observedAt time.Time) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	return context.WithValue(ctx, inboundLaneContextKey{}, authenticatedReceiveContext{lane: lane, observedAt: observedAt})
 }
 
-func inboundLane(ctx context.Context) (sessioncontract.LaneIdentity, bool) {
+func inboundLane(ctx context.Context) (session.LaneIdentity, bool) {
 	if ctx == nil {
-		return sessioncontract.LaneIdentity{}, false
+		return session.LaneIdentity{}, false
 	}
 	source, ok := ctx.Value(inboundLaneContextKey{}).(authenticatedReceiveContext)
 	return source.lane, ok && source.lane.Valid(true)
@@ -110,7 +110,7 @@ func newOperationLaneRoutes() *operationLaneRoutes {
 
 func (routes *operationLaneRoutes) reserve(
 	operationID protocolsession.OperationID,
-	lane sessioncontract.LaneIdentity,
+	lane session.LaneIdentity,
 ) *operationLaneRoute {
 	if routes == nil || operationID.IsZero() || !lane.Valid(true) {
 		return nil
@@ -131,7 +131,7 @@ func (routes *operationLaneRoutes) beginSend(
 	route *operationLaneRoute,
 ) (*operationLaneRoute, selectedLane, error) {
 	if routes == nil || route == nil || operationID.IsZero() {
-		return nil, selectedLane{}, sessioncontract.ErrOperationMissing
+		return nil, selectedLane{}, session.ErrOperationMissing
 	}
 	route.sendMu.Lock()
 	lane, err := routes.resolveRoute(lanes, operationID, route)
@@ -159,7 +159,7 @@ func (routes *operationLaneRoutes) resolveRoute(
 	routes.mu.Lock()
 	defer routes.mu.Unlock()
 	if routes.routes[operationID] != route {
-		return selectedLane{}, sessioncontract.ErrOperationMissing
+		return selectedLane{}, session.ErrOperationMissing
 	}
 	lane, err := lanes.selectLane(&route.preferred)
 	if err == nil || !errors.Is(err, ErrLaneUnavailable) {
@@ -177,12 +177,12 @@ func (routes *operationLaneRoutes) migrate(
 	lanes *runtimeLanes,
 	operationID protocolsession.OperationID,
 	route *operationLaneRoute,
-	excluded map[sessioncontract.LaneIdentity]struct{},
+	excluded map[session.LaneIdentity]struct{},
 ) (selectedLane, error) {
 	routes.mu.Lock()
 	defer routes.mu.Unlock()
 	if routes.routes[operationID] != route {
-		return selectedLane{}, sessioncontract.ErrOperationMissing
+		return selectedLane{}, session.ErrOperationMissing
 	}
 	if _, failed := excluded[route.preferred]; !failed {
 		lane, err := lanes.selectLane(&route.preferred)
@@ -218,12 +218,12 @@ func (routes *operationLaneRoutes) retireRoute(
 	retire func() error,
 ) error {
 	if routes == nil || route == nil || retire == nil {
-		return sessioncontract.ErrOperationMissing
+		return session.ErrOperationMissing
 	}
 	routes.mu.Lock()
 	defer routes.mu.Unlock()
 	if routes.routes[operationID] != route {
-		return sessioncontract.ErrOperationMissing
+		return session.ErrOperationMissing
 	}
 	// The association remains visible until the operation table has recorded its
 	// tombstone, so a same-ID reservation cannot slip between delete and retire.
@@ -254,9 +254,9 @@ type Call struct {
 	id               protocolsession.OperationID
 	messages         chan operationResponse
 	laneMu           sync.Mutex
-	lane             sessioncontract.LaneIdentity
+	lane             session.LaneIdentity
 	stateMu          sync.Mutex
-	lastResponseLane sessioncontract.LaneIdentity
+	lastResponseLane session.LaneIdentity
 	closed           bool
 	done             chan struct{}
 	candidateSend    chan struct{}
@@ -318,12 +318,12 @@ func (call *Call) observeAuthenticatedOperationViolation(
 
 func (call *Call) BindOperationObserver(operation OperationObserver) error {
 	if call == nil || operation == nil {
-		return sessioncontract.ErrOperationMissing
+		return session.ErrOperationMissing
 	}
 	call.stateMu.Lock()
 	if call.peerOperation != nil {
 		call.stateMu.Unlock()
-		return sessioncontract.ErrOperationMissing
+		return session.ErrOperationMissing
 	}
 	// The same owner receives authenticated violations and settles observation.
 	// RPC sink closure only wakes Receive; its joined termination decides whether
@@ -358,12 +358,12 @@ func (call *Call) acquireCandidateSend(
 	lifetime context.Context,
 ) (func(), error) {
 	if call == nil || ctx == nil || lifetime == nil {
-		return nil, sessioncontract.ErrOperationMissing
+		return nil, session.ErrOperationMissing
 	}
 	call.stateMu.Lock()
 	if call.closed {
 		call.stateMu.Unlock()
-		return nil, sessioncontract.ErrOperationMissing
+		return nil, session.ErrOperationMissing
 	}
 	if call.candidateSend == nil {
 		call.candidateSend = make(chan struct{}, 1)
@@ -380,9 +380,9 @@ func (call *Call) acquireCandidateSend(
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-lifetime.Done():
-		return nil, sessioncontract.ErrRuntimeClosed
+		return nil, session.ErrRuntimeClosed
 	case <-done:
-		return nil, sessioncontract.ErrOperationMissing
+		return nil, session.ErrOperationMissing
 	case <-gate:
 	}
 	var once sync.Once
@@ -393,10 +393,10 @@ func (call *Call) acquireCandidateSend(
 		return nil, ctx.Err()
 	case <-lifetime.Done():
 		release()
-		return nil, sessioncontract.ErrRuntimeClosed
+		return nil, session.ErrRuntimeClosed
 	case <-done:
 		release()
-		return nil, sessioncontract.ErrOperationMissing
+		return nil, session.ErrOperationMissing
 	default:
 		return release, nil
 	}
@@ -428,7 +428,7 @@ type authenticatedFailureSource struct {
 	observations      observationstream.Producer[sessionobs.ProtocolObservation]
 	observedAt        time.Time
 	protocolSessionID protocolsession.ProtocolSessionID
-	lane              sessioncontract.LaneIdentity
+	lane              session.LaneIdentity
 	hasLane           bool
 }
 
@@ -451,7 +451,7 @@ func (call *Call) enqueueLocked(response operationResponse) error {
 	case call.messages <- response:
 		return nil
 	default:
-		return sessioncontract.ErrOperationOverflow
+		return session.ErrOperationOverflow
 	}
 }
 
@@ -566,7 +566,7 @@ func (call *Call) queueRequestReplay(writer *protocolsession.SessionWriter) erro
 	call.stateMu.Lock()
 	defer call.stateMu.Unlock()
 	if call.closed {
-		return sessioncontract.ErrOperationMissing
+		return session.ErrOperationMissing
 	}
 	if call.replay.IsZero() {
 		return nil

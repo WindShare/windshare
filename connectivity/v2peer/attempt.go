@@ -14,7 +14,7 @@ import (
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	sendersession "github.com/windshare/windshare/core/session/sendersession"
 )
 
@@ -77,7 +77,7 @@ type attemptEvent struct {
 	kind             attemptEventKind
 	candidate        v2signal.Candidate
 	channel          PeerDataChannel
-	lane             sessioncontract.LaneIdentity
+	lane             session.LaneIdentity
 	admission        sendersession.PeerAdmissionResult
 	err              error
 	completed        chan struct{}

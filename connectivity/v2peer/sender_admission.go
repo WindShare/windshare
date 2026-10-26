@@ -10,7 +10,7 @@ import (
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	sendersession "github.com/windshare/windshare/core/session/sendersession"
 	"github.com/windshare/windshare/core/session/turncontrol"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
@@ -281,7 +281,7 @@ func (execution *attemptExecution) acceptAdmission(
 			)
 		}
 		return true, false, errors.Join(
-			&sessioncontract.LaneRejectedError{Rejection: result.Rejection},
+			&session.LaneRejectedError{Rejection: result.Rejection},
 			event.err,
 		)
 	case sendersession.PeerAdmissionAccepted:
@@ -375,7 +375,7 @@ func (attempt *peerAttempt) awaitOpenAndAdmit(
 		channel,
 		sendersession.PeerAdmissionControlFunc(func(
 			operationID protocolsession.OperationID,
-			lane sessioncontract.LaneIdentity,
+			lane session.LaneIdentity,
 		) bool {
 			if !attempt.phases.beginAuthenticatedSettlement() {
 				return false

@@ -5,7 +5,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"github.com/windshare/windshare/core/observationstream"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -81,7 +81,7 @@ func TestResponseCleanupFailurePreservesConfirmedEvidence(t *testing.T) {
 			return receipt, nil
 		}, nil
 	})
-	if !errors.Is(err, sessioncontract.ErrOperationMissing) || result.Evidence() != protocolsession.ResponseSendEvidenceTransportConfirmed ||
+	if !errors.Is(err, session.ErrOperationMissing) || result.Evidence() != protocolsession.ResponseSendEvidenceTransportConfirmed ||
 		result.Cleanup() != protocolsession.SendCleanupFailed {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -100,7 +100,7 @@ func TestPendingResponseAndLateSettlementRemainIndependent(t *testing.T) {
 		base, peer := newMemoryChannelPair()
 		defer peer.Close()
 		channel := &blockingRuntimeLaneChannel{memoryChannel: base, started: make(chan struct{}), release: make(chan struct{})}
-		identity := sessioncontract.LaneIdentity{ID: 2, Epoch: 7}
+		identity := session.LaneIdentity{ID: 2, Epoch: 7}
 		lane, err := runtime.lanes.add(identity, channel, permissiveInboundAuthenticator(), false)
 		if err != nil {
 			t.Fatal(err)
@@ -164,7 +164,7 @@ func TestInvalidLaterReceiptCannotProveWholeResponseNotSent(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
 	secondBase, peer := newMemoryChannelPair()
 	defer peer.Close()
-	if _, err := runtime.lanes.add(sessioncontract.LaneIdentity{ID: 2, Epoch: 1}, secondBase, permissiveInboundAuthenticator(), false); err != nil {
+	if _, err := runtime.lanes.add(session.LaneIdentity{ID: 2, Epoch: 1}, secondBase, permissiveInboundAuthenticator(), false); err != nil {
 		t.Fatal(err)
 	}
 	id := id16[protocolsession.OperationID](143)
@@ -223,7 +223,7 @@ func TestResponsePolicySuppressionPreservesEarlierUncertaintyAndCause(t *testing
 	recorder := newProtocolTraceRecorder(runtime)
 	base, peer := newMemoryChannelPair()
 	defer peer.Close()
-	firstIdentity := sessioncontract.LaneIdentity{ID: 2, Epoch: 3}
+	firstIdentity := session.LaneIdentity{ID: 2, Epoch: 3}
 	physicalErr := errors.New("first transport lost acceptance acknowledgment")
 	first, err := runtime.lanes.add(firstIdentity, &failingRuntimeLaneChannel{memoryChannel: base, err: physicalErr}, permissiveInboundAuthenticator(), false)
 	if err != nil {

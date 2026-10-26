@@ -4,7 +4,7 @@ import (
 	"crypto/ed25519"
 
 	"github.com/windshare/windshare/core/observationstream"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -28,7 +28,7 @@ func newResponses(
 	output observationstream.Producer[sessionobs.ProtocolObservation],
 ) (*sessioncore.Responses, error) {
 	if runtime == nil {
-		return nil, sessioncontract.ErrRuntimeConfig
+		return nil, session.ErrRuntimeConfig
 	}
 	observations := newResponseObservations(output)
 	config := sessioncore.ResponseConfig{ControlPreparer: responseSigner{privateKey: key}}

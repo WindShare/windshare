@@ -6,7 +6,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer"
@@ -69,7 +69,7 @@ func TestOpenRevisionCompensatesLocallyMalformedDescriptorIdentity(t *testing.T)
 
 func TestContentClientRejectsMissingAndZeroLeaseAuthorityLocally(t *testing.T) {
 	var nilClient *receiverRevisionClient
-	if _, _, _, err := nilClient.beginExternalOperation(context.Background()); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	if _, _, _, err := nilClient.beginExternalOperation(context.Background()); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("nil revision client admission error=%v", err)
 	}
 	nilClient.stop()
@@ -80,7 +80,7 @@ func TestContentClientRejectsMissingAndZeroLeaseAuthorityLocally(t *testing.T) {
 	}
 	if _, err := lane.FetchBlock(context.Background(), transferlanes.Demand{
 		LeaseID: id16[content.LeaseID](141),
-	}, nil); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	}, nil); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("unknown local lease demand error=%v", err)
 	}
 

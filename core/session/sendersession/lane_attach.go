@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/windshare/windshare/core/framechannel"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"io"
@@ -42,15 +42,15 @@ func (handler *laneGrantHandler) HandleMessage(ctx context.Context, message prot
 		return err
 	}
 	if message.Kind() != protocolsession.MessageLaneAttach {
-		return sessioncontract.ErrRuntimeConfig
+		return session.ErrRuntimeConfig
 	}
 	operationID, ok := message.OperationID()
 	if !ok {
-		return sessioncontract.ErrOperationMissing
+		return session.ErrOperationMissing
 	}
 	generation, ok := protocolsession.OperationGenerationFromContext(ctx, operationID)
 	if !ok || generation.IsZero() {
-		return sessioncontract.ErrOperationMissing
+		return session.ErrOperationMissing
 	}
 	if !generation.IsActive() {
 		return nil
@@ -61,13 +61,13 @@ func (handler *laneGrantHandler) HandleMessage(ctx context.Context, message prot
 		return err
 	}
 	if handler.stopping {
-		return sessioncontract.ErrRuntimeClosed
+		return session.ErrRuntimeClosed
 	}
 	select {
 	case handler.queue <- laneGrantOperation{ctx: ctx, message: message}:
 		return nil
 	default:
-		return sessioncontract.ErrOperationOverflow
+		return session.ErrOperationOverflow
 	}
 }
 
@@ -111,7 +111,7 @@ func (handler *laneGrantHandler) process(ctx context.Context, message protocolse
 	}
 	operationID, ok := message.OperationID()
 	if !ok {
-		return sessioncontract.ErrRuntimeConfig
+		return session.ErrRuntimeConfig
 	}
 	nonce, err := sessioncore.ReadNonzeroLaneNonce(handler.random, protocolsession.LaneAttachNonceBytes)
 	if err != nil {
@@ -144,12 +144,12 @@ func (handler *laneGrantHandler) process(ctx context.Context, message protocolse
 func (factory *Factory) Attach(
 	ctx context.Context,
 	channel protocolsession.FrameChannel,
-) (sessioncontract.LaneIdentity, error) {
+) (session.LaneIdentity, error) {
 	if factory == nil || channel == nil || ctx == nil {
 		if channel != nil {
 			_ = channel.Close()
 		}
-		return sessioncontract.LaneIdentity{}, sessioncontract.ErrRuntimeConfig
+		return session.LaneIdentity{}, session.ErrRuntimeConfig
 	}
 	owner := sessioncore.NewCandidate(channel)
 	transferred := false
@@ -160,17 +160,17 @@ func (factory *Factory) Attach(
 	}()
 	admissionContext, endAdmission, ok := factory.beginAdmission(ctx)
 	if !ok {
-		return sessioncontract.LaneIdentity{}, sessioncontract.ErrRuntimeClosed
+		return session.LaneIdentity{}, session.ErrRuntimeClosed
 	}
 	defer endAdmission()
 	ctx = admissionContext
 	encoded, err := sessioncore.ReceiveHandshake(ctx, owner.Recv())
 	if err != nil {
-		return sessioncontract.LaneIdentity{}, err
+		return session.LaneIdentity{}, err
 	}
 	identity, err := factory.attachCandidate(ctx, owner, owner.Recv(), encoded)
 	if err != nil {
-		return sessioncontract.LaneIdentity{}, err
+		return session.LaneIdentity{}, err
 	}
 	transferred = true
 	return identity, nil
@@ -189,7 +189,7 @@ func (runtime *Runtime) AdmitPeerChannel(
 		if channel != nil {
 			_ = channel.Close()
 		}
-		return silentSenderPeerAdmission(), sessioncontract.ErrRuntimeConfig
+		return silentSenderPeerAdmission(), session.ErrRuntimeConfig
 	}
 	owner := sessioncore.NewCandidate(channel)
 	transferred := false
@@ -199,7 +199,7 @@ func (runtime *Runtime) AdmitPeerChannel(
 		}
 	}()
 	if control == nil {
-		return silentSenderPeerAdmission(), sessioncontract.ErrRuntimeConfig
+		return silentSenderPeerAdmission(), session.ErrRuntimeConfig
 	}
 	admissionContext, endAdmission, err := runtime.core.BeginExternalAdmission(ctx)
 	if err != nil {
@@ -213,7 +213,7 @@ func (runtime *Runtime) AdmitPeerChannel(
 	}
 	share, sessionID, err := protocolsession.UntrustedLaneHelloRoute(encoded)
 	if err != nil || share != runtime.core.ShareInstance() || sessionID != runtime.ProtocolSessionID() || !runtime.core.HasUsableLanes() {
-		return silentSenderPeerAdmission(), errors.Join(sessioncontract.ErrHandshake, err)
+		return silentSenderPeerAdmission(), errors.Join(session.ErrHandshake, err)
 	}
 	result, err := runtime.acceptCandidate(ctx, owner, encoded, control)
 	transferred = result.LaneAttachment == PeerLaneAttached
@@ -225,7 +225,7 @@ func (factory *Factory) attachCandidate(
 	channel protocolsession.FrameChannel,
 	receive <-chan framechannel.Frame,
 	encoded []byte,
-) (sessioncontract.LaneIdentity, error) {
+) (session.LaneIdentity, error) {
 	owner := sessioncore.NewCandidateWithReceive(channel, receive)
 	transferred := false
 	defer func() {
@@ -235,7 +235,7 @@ func (factory *Factory) attachCandidate(
 	}()
 	result, err := factory.settleCandidate(ctx, owner, encoded)
 	if err != nil {
-		return sessioncontract.LaneIdentity{}, err
+		return session.LaneIdentity{}, err
 	}
 	transferred = result.LaneAttachment == PeerLaneAttached
 	return result.Lane, nil
@@ -248,14 +248,14 @@ func (factory *Factory) settleCandidate(
 ) (PeerAdmissionResult, error) {
 	share, sessionID, err := protocolsession.UntrustedLaneHelloRoute(encoded)
 	if err != nil || share != factory.share {
-		return silentSenderPeerAdmission(), errors.Join(sessioncontract.ErrHandshake, err)
+		return silentSenderPeerAdmission(), errors.Join(session.ErrHandshake, err)
 	}
 	factory.mu.Lock()
 	runtime := factory.sessions[sessionID]
 	stopping := factory.stopping
 	factory.mu.Unlock()
 	if runtime == nil || stopping || !runtime.core.HasUsableLanes() {
-		return silentSenderPeerAdmission(), sessioncontract.ErrHandshake
+		return silentSenderPeerAdmission(), session.ErrHandshake
 	}
 	admissionContext, endAdmission, err := runtime.core.BeginExternalAdmission(ctx)
 	if err != nil {
@@ -264,7 +264,7 @@ func (factory *Factory) settleCandidate(
 	defer endAdmission()
 	return runtime.acceptCandidate(
 		admissionContext, channel, encoded,
-		PeerAdmissionControlFunc(func(protocolsession.OperationID, sessioncontract.LaneIdentity) bool {
+		PeerAdmissionControlFunc(func(protocolsession.OperationID, session.LaneIdentity) bool {
 			return admissionContext.Err() == nil
 		}),
 	)
@@ -300,13 +300,13 @@ func (runtime *Runtime) acceptCandidate(
 			}
 			return control.BeginAuthenticatedSettlement(
 				operationID,
-				sessioncontract.LaneIdentity{ID: lane.LaneID, Epoch: lane.LaneEpoch},
+				session.LaneIdentity{ID: lane.LaneID, Epoch: lane.LaneEpoch},
 			)
 		}),
 	)
 	result := senderPeerAdmissionFromRegistry(admission)
 	if admission.Disposition == protocolsession.LaneAdmissionSilentClose || err != nil {
-		return result, errors.Join(sessioncontract.ErrHandshake, err)
+		return result, errors.Join(session.ErrHandshake, err)
 	}
 	if sendErr := channel.Send(ctx, framechannel.Frame(admission.Response)); sendErr != nil {
 		result.ResponseDelivery = PeerResponseDeliveryFailed
@@ -314,15 +314,15 @@ func (runtime *Runtime) acceptCandidate(
 			runtime.lanesRegistry.Release(admission.LaneID, admission.LaneEpoch)
 		}
 		if admission.Disposition == protocolsession.LaneAdmissionRejected {
-			return result, errors.Join(&sessioncontract.LaneRejectedError{Rejection: admission.Rejection}, sendErr)
+			return result, errors.Join(&session.LaneRejectedError{Rejection: admission.Rejection}, sendErr)
 		}
 		return result, sendErr
 	}
 	result.ResponseDelivery = PeerResponseDelivered
 	if admission.Disposition == protocolsession.LaneAdmissionRejected {
-		return result, &sessioncontract.LaneRejectedError{Rejection: admission.Rejection}
+		return result, &session.LaneRejectedError{Rejection: admission.Rejection}
 	}
-	identity := sessioncontract.LaneIdentity{ID: admission.LaneID, Epoch: admission.LaneEpoch}
+	identity := session.LaneIdentity{ID: admission.LaneID, Epoch: admission.LaneEpoch}
 	authenticator := protocolsession.InboundMessageAuthenticatorFunc(
 		func(uint64, protocolsession.Message) (protocolsession.InboundAuthenticationResult, error) {
 			return protocolsession.InboundAuthenticationResult{}, nil
@@ -347,7 +347,7 @@ func senderPeerAdmissionFromRegistry(admission protocolsession.LaneAdmission) Pe
 	result := silentSenderPeerAdmission()
 	result.SettlementBegan = admission.SettlementBegan
 	result.GrantOperationID = admission.OperationID
-	result.Lane = sessioncontract.LaneIdentity{ID: admission.LaneID, Epoch: admission.LaneEpoch}
+	result.Lane = session.LaneIdentity{ID: admission.LaneID, Epoch: admission.LaneEpoch}
 	result.Rejection = admission.Rejection
 	switch admission.Disposition {
 	case protocolsession.LaneAdmissionAccepted:
@@ -358,7 +358,7 @@ func senderPeerAdmissionFromRegistry(admission protocolsession.LaneAdmission) Pe
 	return result
 }
 
-func (runtime *Runtime) DetachLane(identity sessioncontract.LaneIdentity) bool {
+func (runtime *Runtime) DetachLane(identity session.LaneIdentity) bool {
 	return runtime != nil && runtime.core.DetachLane(identity)
 }
 

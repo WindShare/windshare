@@ -12,7 +12,7 @@ import (
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 )
 
 func TestSenderAttemptTerminalTypedCodeTable(t *testing.T) {
@@ -57,7 +57,7 @@ func TestSenderAttemptTerminalTypedCodeTable(t *testing.T) {
 		},
 		{
 			name: "rejection owns cancellation", result: context.Canceled,
-			primary:           &sessioncontract.LaneRejectedError{Rejection: protocolsession.LaneRejection{Code: protocolsession.LaneRejectAdmissionLimited}},
+			primary:           &session.LaneRejectedError{Rejection: protocolsession.LaneRejection{Code: protocolsession.LaneRejectAdmissionLimited}},
 			operationCanceled: true, wantCode: TypedPeerErrorAdmission, wantScope: AttemptFailureScopeAttempt,
 		},
 		{

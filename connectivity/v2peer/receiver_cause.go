@@ -9,7 +9,7 @@ import (
 
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 )
@@ -180,7 +180,7 @@ func classifyReceiverCauseBoundary(
 			complete: true,
 		}, true
 	}
-	if isExactReceiverSentinel(cause, sessioncontract.ErrOperationMissing) && policy.operationMissing != "" {
+	if isExactReceiverSentinel(cause, session.ErrOperationMissing) && policy.operationMissing != "" {
 		return receiverCauseClassification{
 			benign:   []ReceiverBenignCause{policy.operationMissing},
 			complete: true,
@@ -462,7 +462,7 @@ func receiverClassifiedCause(classification receiverCauseClassification) error {
 		case ReceiverBenignContextCanceled:
 			components = append(components, context.Canceled)
 		case ReceiverBenignLocalOperationMissing, ReceiverBenignRemoteOperationMissing:
-			components = append(components, sessioncontract.ErrOperationMissing)
+			components = append(components, session.ErrOperationMissing)
 		}
 	}
 	return joinReceiverResiduals(components)
@@ -510,11 +510,11 @@ func ReceiverCauseClasses(cause error) []ReceiverCauseClass {
 
 func directReceiverCauseClass(cause error) (ReceiverCauseClass, bool) {
 	switch {
-	case isExactReceiverSentinel(cause, sessioncontract.ErrRuntimeClosed):
+	case isExactReceiverSentinel(cause, session.ErrRuntimeClosed):
 		return ReceiverCauseRuntimeClosed, true
 	case isExactReceiverSentinel(cause, ErrConfig):
 		return ReceiverCauseConfiguration, true
-	case isExactReceiverSentinel(cause, sessioncontract.ErrOperationMissing):
+	case isExactReceiverSentinel(cause, session.ErrOperationMissing):
 		return ReceiverCauseOperationMissing, true
 	case isExactReceiverSentinel(cause, ErrPeerNegotiationTimeout):
 		return ReceiverCauseNegotiationTimeout, true

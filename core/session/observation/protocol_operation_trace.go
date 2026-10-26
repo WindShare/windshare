@@ -2,7 +2,7 @@ package sessionobs
 
 import (
 	"github.com/windshare/windshare/core/diagnostics"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/requestlane"
@@ -36,7 +36,7 @@ type ProtocolOperationObservation struct {
 	RequestKind             protocolsession.MessageKind
 	ResponseKind            protocolsession.MessageKind
 	HasResponse             bool
-	Lane                    sessioncontract.LaneIdentity
+	Lane                    session.LaneIdentity
 	HasLane                 bool
 	HasSend                 bool
 	SendSettled             bool
@@ -139,31 +139,31 @@ func (fact SendAttemptSettled) Attempt() protocolsession.SendAttemptSnapshot { r
 type ReceivedProtocolError struct {
 	ObservationContext
 	content ProtocolErrorContent
-	lane    sessioncontract.LaneIdentity
+	lane    session.LaneIdentity
 }
 
-func NewReceivedProtocolError(ctx ProtocolObservationContext, content ProtocolErrorContent, lane sessioncontract.LaneIdentity) ReceivedProtocolError {
+func NewReceivedProtocolError(ctx ProtocolObservationContext, content ProtocolErrorContent, lane session.LaneIdentity) ReceivedProtocolError {
 	return ReceivedProtocolError{ObservationContext{ctx}, content, lane}
 }
 
 func (fact ReceivedProtocolError) Content() ProtocolErrorContent { return fact.content }
 
-func (fact ReceivedProtocolError) Lane() sessioncontract.LaneIdentity { return fact.lane }
+func (fact ReceivedProtocolError) Lane() session.LaneIdentity { return fact.lane }
 
 type SenderContentDecision struct {
 	ObservationContext
 	decision contentflow.SenderDecisionTrace
-	lane     sessioncontract.LaneIdentity
+	lane     session.LaneIdentity
 	hasLane  bool
 }
 
-func NewSenderContentDecision(ctx ProtocolObservationContext, decision contentflow.SenderDecisionTrace, lane sessioncontract.LaneIdentity, hasLane bool) SenderContentDecision {
+func NewSenderContentDecision(ctx ProtocolObservationContext, decision contentflow.SenderDecisionTrace, lane session.LaneIdentity, hasLane bool) SenderContentDecision {
 	return SenderContentDecision{ObservationContext{ctx}, decision, lane, hasLane}
 }
 
 func (fact SenderContentDecision) Decision() contentflow.SenderDecisionTrace { return fact.decision }
 
-func (fact SenderContentDecision) Lane() (sessioncontract.LaneIdentity, bool) {
+func (fact SenderContentDecision) Lane() (session.LaneIdentity, bool) {
 	return fact.lane, fact.hasLane
 }
 
@@ -227,7 +227,7 @@ func protocolDiagnosticFields(value interface {
 
 func protocolDiagnosticCorrelation(value interface {
 	Correlation() ProtocolObservationCorrelation
-}, lane sessioncontract.LaneIdentity) diagnostics.Fields {
+}, lane session.LaneIdentity) diagnostics.Fields {
 	c := value.Correlation()
 	fields := diagnostics.Fields{"protocol_session_id": diagnostics.Identity(c.ProtocolSessionID[:]), "protocol_operation_id": diagnostics.Identity(c.OperationID[:])}
 	if lane.ID != 0 {
@@ -271,7 +271,7 @@ func (value responseSendObservation) diagnosticRecord(name string) diagnostics.R
 	fields := protocolDiagnosticFields(value)
 	fields["response_sequence"], fields["response_kind"] = diagnostics.Uint(value.ResponseSequence()), diagnostics.Text(value.ResponseKind().DiagnosticName())
 	fields["protocol_error"], fields["response_result"] = value.Content().DiagnosticValue(), value.Result().DiagnosticValue()
-	return diagnostics.New(name, fields).At(value.ObservedAt()).Correlate(protocolDiagnosticCorrelation(value, sessioncontract.LaneIdentity{}))
+	return diagnostics.New(name, fields).At(value.ObservedAt()).Correlate(protocolDiagnosticCorrelation(value, session.LaneIdentity{}))
 }
 
 func (value ResponseSendNotStarted) DiagnosticRecord() diagnostics.Record {
@@ -287,7 +287,7 @@ func (value SendAttemptSettled) DiagnosticRecord() diagnostics.Record {
 	id := value.Attempt().Identity()
 	fields["response_sequence"], fields["response_kind"] = diagnostics.Uint(id.ResponseSequence), diagnostics.Text(value.ResponseKind().DiagnosticName())
 	fields["attempt"] = value.Attempt().DiagnosticValue()
-	return diagnostics.New(sendAttemptEventName, fields).At(value.ObservedAt()).Correlate(protocolDiagnosticCorrelation(value, sessioncontract.LaneIdentity{ID: id.LaneID, Epoch: id.LaneEpoch}))
+	return diagnostics.New(sendAttemptEventName, fields).At(value.ObservedAt()).Correlate(protocolDiagnosticCorrelation(value, session.LaneIdentity{ID: id.LaneID, Epoch: id.LaneEpoch}))
 }
 
 func (value ReceivedProtocolError) DiagnosticRecord() diagnostics.Record {

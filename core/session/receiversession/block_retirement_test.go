@@ -6,7 +6,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"github.com/windshare/windshare/core/content"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
@@ -36,7 +36,7 @@ func testBlockRecoveredWhenRetiredCarrierLosesAcceptedFragments(t *testing.T) {
 	_, lostCarrier, _, _ := attachObservedLane(t, fixture.senderFactory, receiver, 0)
 	attachObservedLane(t, fixture.senderFactory, receiver, 0)
 	initialID, initialEpoch := receiver.LaneIdentity()
-	initial := sessioncontract.LaneIdentity{ID: initialID, Epoch: initialEpoch}
+	initial := session.LaneIdentity{ID: initialID, Epoch: initialEpoch}
 	if !receiver.DetachLane(initial) || !sender.DetachLane(initial) {
 		t.Fatal("initial carrier did not detach")
 	}
@@ -125,7 +125,7 @@ func TestMissingBlockCompletionRequiresAuthenticatedCarrierMigration(t *testing.
 				if retry != test.wantRetry {
 					t.Fatalf("retry=%v want=%v: %v", retry, test.wantRetry, err)
 				}
-				if !test.wantRetry && !errors.Is(err, sessioncontract.ErrOperationMissing) {
+				if !test.wantRetry && !errors.Is(err, session.ErrOperationMissing) {
 					t.Fatalf("protocol error changed: %v", err)
 				}
 				assertRequestsRetired(t, fixture.lane.rpc)

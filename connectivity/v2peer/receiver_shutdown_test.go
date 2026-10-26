@@ -11,7 +11,7 @@ import (
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 )
 
 const concurrentReceiverCloses = 32
@@ -347,7 +347,7 @@ func TestReceiverAttemptShutdownUnblocksChannelBeforeJoiningDrain(t *testing.T) 
 
 func TestReceiverAttemptRemoteTerminalStillJoinsNormalChannelDrain(t *testing.T) {
 	harness := newReceiverTeardownGateHarness(t)
-	harness.operation.remoteError <- sessioncontract.ErrOperationMissing
+	harness.operation.remoteError <- session.ErrOperationMissing
 
 	assertReceiverTeardownReachedDrainAfterPeerShutdown(t, harness)
 	harness.gates.releaseDrain()
@@ -357,7 +357,7 @@ func TestReceiverAttemptRemoteTerminalStillJoinsNormalChannelDrain(t *testing.T)
 	}
 	outcome := harness.attempt.Outcome()
 	if outcome.TransitionAuthority() != ReceiverTerminalRemote || outcome.RetainedCause() != nil ||
-		!errors.Is(outcome.Cause(), sessioncontract.ErrOperationMissing) {
+		!errors.Is(outcome.Cause(), session.ErrOperationMissing) {
 		t.Fatalf("sealed remote teardown outcome=%+v", outcome)
 	}
 	assertReceiverTeardownTrace(t, receiveTest(t, harness.traces))
@@ -365,14 +365,14 @@ func TestReceiverAttemptRemoteTerminalStillJoinsNormalChannelDrain(t *testing.T)
 
 func TestReceiverAttemptRemoteFinalOperationMissingIsBenign(t *testing.T) {
 	harness, operation := newReceiverShutdownHarness(t, false)
-	operation.remoteError <- sessioncontract.ErrOperationMissing
+	operation.remoteError <- session.ErrOperationMissing
 	receiveTest(t, harness.attempt.Done())
 	if err := harness.attempt.Close(); err != nil {
 		t.Fatalf("idempotent Close after remote retirement: %v", err)
 	}
 	outcome := harness.attempt.Outcome()
 	if outcome.TransitionAuthority() != ReceiverTerminalRemote || outcome.RetainedCause() != nil ||
-		!errors.Is(outcome.Cause(), sessioncontract.ErrOperationMissing) {
+		!errors.Is(outcome.Cause(), session.ErrOperationMissing) {
 		t.Fatalf("remote retirement outcome=%+v", outcome)
 	}
 	if calls := operation.terminateCalls.Load(); calls != 1 {
@@ -382,14 +382,14 @@ func TestReceiverAttemptRemoteFinalOperationMissingIsBenign(t *testing.T) {
 
 func TestReceiverAttemptLocalOperationMissingIsBenignOnlyForLocalOwner(t *testing.T) {
 	harness, operation := newReceiverShutdownHarness(t, false)
-	operation.terminateCause = sessioncontract.ErrOperationMissing
+	operation.terminateCause = session.ErrOperationMissing
 
 	if err := harness.attempt.Close(); err != nil {
 		t.Fatalf("local exact-operation retirement: %v", err)
 	}
 	outcome := harness.attempt.Outcome()
 	if outcome.TransitionAuthority() != ReceiverTerminalLocal || !outcome.LocallyCanceled() ||
-		!errors.Is(outcome.Cause(), sessioncontract.ErrOperationMissing) ||
+		!errors.Is(outcome.Cause(), session.ErrOperationMissing) ||
 		!containsReceiverBenignCause(outcome.BenignComponents(), ReceiverBenignLocalOperationMissing) {
 		t.Fatalf("local operation-missing outcome=%+v", outcome)
 	}
@@ -398,16 +398,16 @@ func TestReceiverAttemptLocalOperationMissingIsBenignOnlyForLocalOwner(t *testin
 func TestReceiverAttemptRuntimeTerminationIsRetained(t *testing.T) {
 	harness, operation := newReceiverShutdownHarness(t, false)
 	operation.remoteDecision = receiverTestDecision(ReceiverTerminalRuntime)
-	operation.remoteError <- sessioncontract.ErrRuntimeClosed
+	operation.remoteError <- session.ErrRuntimeClosed
 	receiveTest(t, harness.attempt.Done())
 
-	if err := harness.attempt.Close(); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	if err := harness.attempt.Close(); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("runtime termination residual=%v", err)
 	}
 	outcome := harness.attempt.Outcome()
 	if outcome.TransitionAuthority() != ReceiverTerminalRuntime ||
 		outcome.Disposition() != ReceiverDispositionSessionUnavailable || outcome.LocallyCanceled() ||
-		!errors.Is(outcome.RetainedCause(), sessioncontract.ErrRuntimeClosed) ||
+		!errors.Is(outcome.RetainedCause(), session.ErrRuntimeClosed) ||
 		len(outcome.BenignComponents()) != 0 {
 		t.Fatalf("runtime termination outcome=%+v", outcome)
 	}
@@ -464,16 +464,16 @@ func TestReceiverAttemptJoinedCancellationRetainsFailure(t *testing.T) {
 func TestReceiverAttemptJoinedRemoteMissingRetainsConflict(t *testing.T) {
 	harness, operation := newReceiverShutdownHarness(t, false)
 	genuineConflict := errors.New("remote final conflicted with retained signaling state")
-	operation.remoteError <- errors.Join(sessioncontract.ErrOperationMissing, genuineConflict)
+	operation.remoteError <- errors.Join(session.ErrOperationMissing, genuineConflict)
 	receiveTest(t, harness.attempt.Done())
 
 	err := harness.attempt.Close()
-	if !errors.Is(err, genuineConflict) || errors.Is(err, sessioncontract.ErrOperationMissing) {
+	if !errors.Is(err, genuineConflict) || errors.Is(err, session.ErrOperationMissing) {
 		t.Fatalf("Close residual=%v, want only genuine remote conflict", err)
 	}
 	outcome := harness.attempt.Outcome()
 	if outcome.TransitionAuthority() != ReceiverTerminalRemote ||
-		!errors.Is(outcome.Cause(), sessioncontract.ErrOperationMissing) ||
+		!errors.Is(outcome.Cause(), session.ErrOperationMissing) ||
 		!errors.Is(outcome.RetainedCause(), genuineConflict) {
 		t.Fatalf("joined remote final outcome=%+v", outcome)
 	}
@@ -484,7 +484,7 @@ func TestReceiverAttemptConcurrentLocalCloseAndRemoteFinalRetainsLosingCause(t *
 	remoteFailure := errors.New("remote final failed after local shutdown began")
 	localCleanupFailure := errors.New("losing local termination cleanup failed")
 	operation.terminateCause = localCleanupFailure
-	operation.remoteError <- errors.Join(sessioncontract.ErrOperationMissing, remoteFailure)
+	operation.remoteError <- errors.Join(session.ErrOperationMissing, remoteFailure)
 	receiveTest(t, operation.remoteTerminal)
 
 	closed := make(chan error, 1)

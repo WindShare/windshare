@@ -6,7 +6,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"github.com/windshare/windshare/core/observationstream"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -133,7 +133,7 @@ func TestSenderProtocolOperationTraceCorrelatesRequestAndResponse(t *testing.T) 
 		protocolsession.MessageHandlerFunc(func(ctx context.Context, message protocolsession.Message) error {
 			id, ok := message.OperationID()
 			if !ok {
-				return sessioncontract.ErrOperationMissing
+				return session.ErrOperationMissing
 			}
 			_, sendErr := outbound.SendControl(
 				ctx, protocolsession.MessageOperationComplete, id, responseBody,
@@ -214,7 +214,7 @@ func TestSenderProtocolOperationTraceCapturesFailureSendSettlement(t *testing.T)
 		protocolsession.MessageHandlerFunc(func(ctx context.Context, message protocolsession.Message) error {
 			id, ok := message.OperationID()
 			if !ok {
-				return sessioncontract.ErrOperationMissing
+				return session.ErrOperationMissing
 			}
 			_, sendErr := outbound.SendControl(
 				ctx,
@@ -366,7 +366,7 @@ func TestProtocolOperationTraceCapturesAuthenticatedReceivedFailureAtSource(t *t
 		response.Kind() != protocolsession.MessageOperationError {
 		t.Fatalf("await authenticated failure: kind=%d error=%v", response.Kind(), err)
 	}
-	call.setProtocolTraceLane(sessioncontract.LaneIdentity{ID: 9, Epoch: 4}, 1)
+	call.setProtocolTraceLane(session.LaneIdentity{ID: 9, Epoch: 4}, 1)
 	rpc.end(call)
 
 	facts := recorder.facts()
@@ -390,7 +390,7 @@ func TestProtocolOperationTraceCorrelatesLaneGrantWithoutAuthenticatedBody(t *te
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 	recorder := newProtocolTraceRecorder(runtime)
 	operationID := id16[protocolsession.OperationID](0x7a)
-	lane := sessioncontract.LaneIdentity{ID: 7, Epoch: 2}
+	lane := session.LaneIdentity{ID: 7, Epoch: 2}
 	runtime.traceProtocolOperation(sessionobs.ProtocolOperationObservation{
 		Stage: sessionobs.ProtocolOperationReceiverCompleted, OperationID: operationID,
 		RequestKind: protocolsession.MessageLaneAttach, ResponseKind: protocolsession.MessageLaneAttach,

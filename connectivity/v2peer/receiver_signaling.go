@@ -6,7 +6,7 @@ import (
 
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
 )
 
@@ -413,11 +413,11 @@ func receiverCoreTerminalDiagnostics(
 		case receiversession.PeerDiagnosticContextCanceled:
 			causes = append(causes, context.Canceled)
 		case receiversession.PeerDiagnosticOperationMissing:
-			causes = append(causes, sessioncontract.ErrOperationMissing)
+			causes = append(causes, session.ErrOperationMissing)
 		case receiversession.PeerDiagnosticRuntimeClosed:
-			causes = append(causes, sessioncontract.ErrRuntimeClosed)
+			causes = append(causes, session.ErrRuntimeClosed)
 		case receiversession.PeerDiagnosticOperationOverflow:
-			causes = append(causes, sessioncontract.ErrOperationOverflow)
+			causes = append(causes, session.ErrOperationOverflow)
 		case receiversession.PeerDiagnosticUnknownControl:
 			causes = append(causes, protocolsession.ErrUnknownMessageKind)
 		case receiversession.PeerDiagnosticControlMalformed:

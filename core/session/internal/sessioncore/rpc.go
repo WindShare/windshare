@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/requestlane"
@@ -35,7 +35,7 @@ type operationIDSource struct {
 
 func (source *operationIDSource) New() (protocolsession.OperationID, error) {
 	if source == nil || source.random == nil {
-		return protocolsession.OperationID{}, sessioncontract.ErrRuntimeConfig
+		return protocolsession.OperationID{}, session.ErrRuntimeConfig
 	}
 	source.mu.Lock()
 	defer source.mu.Unlock()
@@ -50,7 +50,7 @@ func (source *operationIDSource) New() (protocolsession.OperationID, error) {
 			}
 		}
 		if !source.initialized {
-			return protocolsession.OperationID{}, sessioncontract.ErrRuntimeConfig
+			return protocolsession.OperationID{}, session.ErrRuntimeConfig
 		}
 	}
 	if source.exhausted {
@@ -87,7 +87,7 @@ type Requests struct {
 type operationResponse struct {
 	message    protocolsession.Message
 	generation protocolsession.OperationGeneration
-	lane       sessioncontract.LaneIdentity
+	lane       session.LaneIdentity
 }
 
 func NewRequests(runtime *Runtime, random io.Reader) *Requests {
@@ -100,7 +100,7 @@ func NewRequests(runtime *Runtime, random io.Reader) *Requests {
 func (client *Requests) HandleMessage(ctx context.Context, message protocolsession.Message) error {
 	id, ok := message.OperationID()
 	if !ok {
-		return sessioncontract.ErrOperationMissing
+		return session.ErrOperationMissing
 	}
 	client.mu.Lock()
 	call := client.calls[id]
@@ -157,7 +157,7 @@ func (client *Requests) begin(
 
 func (client *Requests) beginOn(
 	ctx context.Context,
-	lane *sessioncontract.LaneIdentity,
+	lane *session.LaneIdentity,
 	kind protocolsession.MessageKind,
 	body []byte,
 ) (*Call, error) {
@@ -194,7 +194,7 @@ func (client *Requests) prepareCall(
 // before admission or sending can race cancellation and runtime shutdown.
 func (client *Requests) beginCall(
 	ctx context.Context,
-	lane *sessioncontract.LaneIdentity,
+	lane *session.LaneIdentity,
 	call *Call,
 	message protocolsession.Message,
 ) error {
@@ -202,15 +202,15 @@ func (client *Requests) beginCall(
 	client.mu.Lock()
 	if client.closed {
 		client.mu.Unlock()
-		call.recordProtocolTraceFailure(sessioncontract.ErrRuntimeClosed)
+		call.recordProtocolTraceFailure(session.ErrRuntimeClosed)
 		client.end(call)
-		return sessioncontract.ErrRuntimeClosed
+		return session.ErrRuntimeClosed
 	}
 	if client.calls[id] != nil {
 		client.mu.Unlock()
-		call.recordProtocolTraceFailure(sessioncontract.ErrOperationMissing)
+		call.recordProtocolTraceFailure(session.ErrOperationMissing)
 		client.end(call)
-		return sessioncontract.ErrOperationMissing
+		return session.ErrOperationMissing
 	}
 	client.calls[id] = call
 	client.mu.Unlock()
@@ -230,11 +230,11 @@ func (client *Requests) beginCall(
 		)
 	}
 	if exactAuthority && !call.setAuthority(completion.Generation, completion.Operation) {
-		call.recordProtocolTraceFailure(sessioncontract.ErrRuntimeClosed)
+		call.recordProtocolTraceFailure(session.ErrRuntimeClosed)
 		client.end(call)
 		return newRPCRequestSendError(
 			outcome, true,
-			rpcDeliveryError(client.runtime, errRequestNotDelivered, sessioncontract.ErrRuntimeClosed),
+			rpcDeliveryError(client.runtime, errRequestNotDelivered, session.ErrRuntimeClosed),
 		)
 	}
 	if err == nil && outcome == protocolsession.SendOutcomeTransportConfirmed {
@@ -272,7 +272,7 @@ func (client *Requests) beginCall(
 	}
 	call.recordProtocolTraceCleanup(cleanupErr)
 	if client.runtime.ctx.Err() != nil {
-		call.recordProtocolTraceFailure(sessioncontract.ErrRuntimeClosed)
+		call.recordProtocolTraceFailure(session.ErrRuntimeClosed)
 	}
 	client.end(call)
 	return newRPCRequestSendError(
@@ -283,7 +283,7 @@ func (client *Requests) beginCall(
 
 func (client *Requests) sendRequest(
 	ctx context.Context,
-	lane *sessioncontract.LaneIdentity,
+	lane *session.LaneIdentity,
 	call *Call,
 	message protocolsession.Message,
 ) protocolsession.SendCompletion {
@@ -296,7 +296,7 @@ func (client *Requests) sendRequest(
 			return protocolsession.SendCompletion{Settled: true, Outcome: protocolsession.SendOutcomeDropped, Err: err}
 		}
 		if reservation != nil && !call.requests.Reserve(reservation, estimate) {
-			return protocolsession.SendCompletion{Settled: true, Outcome: protocolsession.SendOutcomeDropped, Err: sessioncontract.ErrRuntimeClosed}
+			return protocolsession.SendCompletion{Settled: true, Outcome: protocolsession.SendOutcomeDropped, Err: session.ErrRuntimeClosed}
 		}
 		var usableAtSelection uint32
 		if call.traceEnabled {
@@ -330,7 +330,7 @@ func (client *Requests) sendContinuation(
 	body []byte,
 ) (protocolsession.SendOutcome, error) {
 	if call == nil || call.id.IsZero() {
-		return protocolsession.SendOutcomeDropped, sessioncontract.ErrOperationMissing
+		return protocolsession.SendOutcomeDropped, session.ErrOperationMissing
 	}
 	if kind == protocolsession.MessagePeerCandidate {
 		release, err := call.acquireCandidateSend(ctx, client.runtime.ctx)
@@ -343,7 +343,7 @@ func (client *Requests) sendContinuation(
 	active := client.calls[call.id] == call
 	client.mu.Unlock()
 	if !active {
-		return protocolsession.SendOutcomeDropped, sessioncontract.ErrOperationMissing
+		return protocolsession.SendOutcomeDropped, session.ErrOperationMissing
 	}
 	message, err := protocolsession.NewMessage(kind, &call.id, body)
 	if err != nil {
@@ -384,7 +384,7 @@ func (client *Requests) sendContinuationAttempt(
 	}
 	_, authority := call.operationAuthority()
 	if authority.IsZero() {
-		return continuationAttemptResult{outcome: protocolsession.SendOutcomeDropped, err: sessioncontract.ErrOperationMissing}
+		return continuationAttemptResult{outcome: protocolsession.SendOutcomeDropped, err: session.ErrOperationMissing}
 	}
 	receipt, err := selected.writer.TryAuthorizedControl(message, authority)
 	if err != nil {
@@ -508,7 +508,7 @@ func (client *Requests) Close() {
 	clear(client.calls)
 	client.mu.Unlock()
 	for _, call := range calls {
-		call.recordProtocolTraceFailure(sessioncontract.ErrRuntimeClosed)
+		call.recordProtocolTraceFailure(session.ErrRuntimeClosed)
 		if client.runtime != nil && client.runtime.protocolOperationTracingEnabled() {
 			if event, ok := call.protocolOperationTrace(client.runtime.now()); ok {
 				client.runtime.traceProtocolOperation(event)
@@ -548,10 +548,10 @@ func (client *Requests) awaitCall(
 	cancelOnContext bool,
 ) (protocolsession.Message, error) {
 	if client == nil || client.runtime == nil {
-		return protocolsession.Message{}, sessioncontract.ErrRuntimeClosed
+		return protocolsession.Message{}, session.ErrRuntimeClosed
 	}
 	if call == nil {
-		return protocolsession.Message{}, sessioncontract.ErrOperationMissing
+		return protocolsession.Message{}, session.ErrOperationMissing
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -571,11 +571,11 @@ func (client *Requests) awaitCall(
 			call.recordProtocolTraceCleanup(cleanupErr)
 			return protocolsession.Message{}, errors.Join(ctx.Err(), cleanupErr)
 		case <-client.runtime.Done():
-			call.recordProtocolTraceFailure(sessioncontract.ErrRuntimeClosed)
-			return protocolsession.Message{}, errors.Join(sessioncontract.ErrRuntimeClosed, client.runtime.Err())
+			call.recordProtocolTraceFailure(session.ErrRuntimeClosed)
+			return protocolsession.Message{}, errors.Join(session.ErrRuntimeClosed, client.runtime.Err())
 		case <-done:
-			call.recordProtocolTraceFailure(sessioncontract.ErrOperationMissing)
-			return protocolsession.Message{}, sessioncontract.ErrOperationMissing
+			call.recordProtocolTraceFailure(session.ErrOperationMissing)
+			return protocolsession.Message{}, session.ErrOperationMissing
 		case response := <-call.messages:
 			expected, _ := call.operationAuthority()
 			if expected.Same(response.generation) {
@@ -593,14 +593,14 @@ func (client *Requests) admitCancellation(
 	reason contentflow.CancelReason,
 ) error {
 	if client == nil || client.runtime == nil {
-		return sessioncontract.ErrRuntimeClosed
+		return session.ErrRuntimeClosed
 	}
 	if call == nil {
-		return sessioncontract.ErrOperationMissing
+		return session.ErrOperationMissing
 	}
 	generation, authority := call.operationAuthority()
 	if generation.IsZero() || authority.IsZero() {
-		return sessioncontract.ErrOperationMissing
+		return session.ErrOperationMissing
 	}
 	body, err := contentflow.EncodeCancelReason(reason)
 	if err != nil {

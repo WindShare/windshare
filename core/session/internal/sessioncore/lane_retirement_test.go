@@ -1,7 +1,7 @@
 package sessioncore
 
 import (
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"sync"
 	"testing"
@@ -16,12 +16,12 @@ func TestRuntimeCompletionStillJoinsRetiredLaneDrain(t *testing.T) {
 	unblock := sync.OnceFunc(func() { close(releaseDrain) })
 	defer unblock()
 	channel := &reentrantLaneCloseChannel{FrameChannel: base, onClose: func() { <-releaseDrain }}
-	lane, err := runtime.lanes.add(sessioncontract.LaneIdentity{ID: 2, Epoch: 1}, channel, permissiveInboundAuthenticator(), false)
+	lane, err := runtime.lanes.add(session.LaneIdentity{ID: 2, Epoch: 1}, channel, permissiveInboundAuthenticator(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	retired := make(chan struct{})
-	runtime.lanes.setDetachHook(func(identity sessioncontract.LaneIdentity) {
+	runtime.lanes.setDetachHook(func(identity session.LaneIdentity) {
 		if identity == lane.identity {
 			close(retired)
 		}

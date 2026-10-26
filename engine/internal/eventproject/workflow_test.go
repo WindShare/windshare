@@ -7,7 +7,7 @@ import (
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/engine/internal/receive"
 	"github.com/windshare/windshare/engine/internal/share"
 	"github.com/windshare/windshare/engine/internal/task"
@@ -44,12 +44,12 @@ func TestWorkflowRetainsConnectionSummaryAndPublisherBackpressure(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	session := protocolsession.ProtocolSessionID{1}
+	sessionID := protocolsession.ProtocolSessionID{1}
 	for _, source := range []task.Event{
 		receive.RelayConnected{Endpoint: endpoint},
 		receive.ContentPathObserved{Path: receive.ContentPathDirectAndRelay},
 		receive.FallbackObserved{Code: receive.FailurePeerNegotiation},
-		receive.LaneAdopted{Session: session, Lane: sessioncontract.LaneIdentity{ID: 7, Epoch: 2}},
+		receive.LaneAdopted{Session: sessionID, Lane: session.LaneIdentity{ID: 7, Epoch: 2}},
 		receive.Warning{Code: receive.FailurePeerNegotiation},
 	} {
 		var published task.Event
@@ -79,7 +79,7 @@ func TestWorkflowRetainsConnectionSummaryAndPublisherBackpressure(t *testing.T) 
 				t.Fatal("fallback direction changed")
 			}
 		case appobs.LaneAdopted:
-			want, _ := LaneIdentity(sessioncontract.LaneIdentity{ID: 7, Epoch: 2})
+			want, _ := LaneIdentity(session.LaneIdentity{ID: 7, Epoch: 2})
 			if value.Lane() != want {
 				t.Fatal("lane incarnation changed")
 			}

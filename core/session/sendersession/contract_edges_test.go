@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/windshare/windshare/core/catalog"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -127,21 +127,21 @@ func TestSenderPeerSessionRejectsMissingAuthorityAndExposesExactIdentity(t *test
 	if _, err := empty.SendPeerControl(
 		context.Background(), protocolsession.MessagePeerAnswer,
 		protocolsession.OperationID{}, nil,
-	); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("empty peer control error = %v", err)
 	}
 	if _, err := empty.AdmitPeerChannel(
 		context.Background(), nil, allowSenderPeerSettlement,
-	); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("empty peer admission error = %v", err)
 	}
 	if err := empty.FailPeerOperation(
 		context.Background(), protocolsession.OperationID{},
 		protocolsession.PeerOperationCodeNegotiation, "missing",
-	); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("empty peer failure error = %v", err)
 	}
-	if _, err := (PeerHandlerFactoryFunc(nil)).NewSenderPeerHandler(empty); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	if _, err := (PeerHandlerFactoryFunc(nil)).NewSenderPeerHandler(empty); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("nil peer handler factory error = %v", err)
 	}
 

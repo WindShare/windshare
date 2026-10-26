@@ -17,7 +17,7 @@ import (
 	"github.com/windshare/windshare/core/session/peerslot"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	transportwebrtc "github.com/windshare/windshare/transport/webrtc"
@@ -214,7 +214,7 @@ type ReceiverAttempt struct {
 	resultMu sync.Mutex
 	result   error
 	outcome  ReceiverAttemptOutcome
-	lane     sessioncontract.LaneIdentity
+	lane     session.LaneIdentity
 
 	signalingMu       sync.Mutex
 	operation         *receiverBoundSignalingOperation
@@ -352,9 +352,9 @@ func readReceiverSignalID[T ~[v2signal.IdentityBytes]byte](source io.Reader) (T,
 func (attempt *ReceiverAttempt) Ready() <-chan struct{} { return attempt.ready }
 func (attempt *ReceiverAttempt) Done() <-chan struct{}  { return attempt.done }
 
-func (attempt *ReceiverAttempt) Lane() (sessioncontract.LaneIdentity, bool) {
+func (attempt *ReceiverAttempt) Lane() (session.LaneIdentity, bool) {
 	if attempt == nil {
-		return sessioncontract.LaneIdentity{}, false
+		return session.LaneIdentity{}, false
 	}
 	attempt.resultMu.Lock()
 	defer attempt.resultMu.Unlock()

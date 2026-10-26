@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -54,7 +54,7 @@ func (client *trackedRequestClient) PrepareCall(ctx context.Context, kind protoc
 	client.remember(call)
 	return call, message, err
 }
-func (client *trackedRequestClient) BeginCall(ctx context.Context, lane *sessioncontract.LaneIdentity, call *sessioncore.Call, message protocolsession.Message) error {
+func (client *trackedRequestClient) BeginCall(ctx context.Context, lane *session.LaneIdentity, call *sessioncore.Call, message protocolsession.Message) error {
 	err := client.Requests.BeginCall(ctx, lane, call, message)
 	if err != nil {
 		// Rejected admission retires the call inside Requests, bypassing this
@@ -63,7 +63,7 @@ func (client *trackedRequestClient) BeginCall(ctx context.Context, lane *session
 	}
 	return err
 }
-func (client *trackedRequestClient) BeginOn(ctx context.Context, lane *sessioncontract.LaneIdentity, kind protocolsession.MessageKind, body []byte) (*sessioncore.Call, error) {
+func (client *trackedRequestClient) BeginOn(ctx context.Context, lane *session.LaneIdentity, kind protocolsession.MessageKind, body []byte) (*sessioncore.Call, error) {
 	call, message, err := client.PrepareCall(ctx, kind, body)
 	if err != nil {
 		return nil, err
@@ -132,7 +132,7 @@ func enqueueCallResponse(call *sessioncore.Call, message protocolsession.Message
 func deliverCallResponse(call *sessioncore.Call, message protocolsession.Message) error {
 	client, ok := requestFixtures.Load(call)
 	if !ok {
-		return sessioncontract.ErrOperationMissing
+		return session.ErrOperationMissing
 	}
 	generation, _ := call.OperationAuthority()
 	return client.(*trackedRequestClient).HandleMessage(protocolsession.WithOperationGeneration(context.Background(), generation), message)

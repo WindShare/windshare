@@ -3,7 +3,7 @@ package receiversession
 import (
 	"context"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -18,7 +18,7 @@ type requestClient interface {
 	HandleMessage(context.Context, protocolsession.Message) error
 	Begin(context.Context, protocolsession.MessageKind, []byte) (*sessioncore.Call, error)
 	PrepareCall(context.Context, protocolsession.MessageKind, []byte) (*sessioncore.Call, protocolsession.Message, error)
-	BeginCall(context.Context, *sessioncontract.LaneIdentity, *sessioncore.Call, protocolsession.Message) error
+	BeginCall(context.Context, *session.LaneIdentity, *sessioncore.Call, protocolsession.Message) error
 	Await(context.Context, *sessioncore.Call) (protocolsession.Message, error)
 	AwaitPeer(context.Context, *sessioncore.Call) (protocolsession.Message, error)
 	AwaitCall(context.Context, *sessioncore.Call, bool) (protocolsession.Message, error)

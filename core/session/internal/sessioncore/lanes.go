@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/requestlane"
@@ -19,7 +19,7 @@ var (
 
 type RuntimeLane struct {
 	requests *requestlane.Lane
-	identity sessioncontract.LaneIdentity
+	identity session.LaneIdentity
 	channel  protocolsession.FrameChannel
 	writer   *protocolsession.SessionWriter
 	pump     *protocolsession.ProtocolPump
@@ -42,7 +42,7 @@ type RuntimeLane struct {
 // after selection; callers retain these concrete dependencies long enough to
 // observe a stopped writer or closed channel instead of racing a nil reference.
 type selectedLane struct {
-	identity sessioncontract.LaneIdentity
+	identity session.LaneIdentity
 	channel  protocolsession.FrameChannel
 	writer   *protocolsession.SessionWriter
 	done     <-chan struct{}
@@ -120,7 +120,7 @@ func (policy runtimeLanePolicy) OutboundDirection() protocolsession.Direction {
 
 type laneInboundRouter struct {
 	runtime  *Runtime
-	identity sessioncontract.LaneIdentity
+	identity session.LaneIdentity
 }
 
 func (router laneInboundRouter) RouteInbound(
@@ -188,8 +188,8 @@ type runtimeLanes struct {
 	started         bool
 	stopping        bool
 	wait            sync.WaitGroup
-	onDetach        func(sessioncontract.LaneIdentity)
-	queuedContent   func(sessioncontract.LaneIdentity) time.Duration
+	onDetach        func(session.LaneIdentity)
+	queuedContent   func(session.LaneIdentity) time.Duration
 
 	terminalMu       sync.Mutex
 	terminalAdmitted bool
@@ -204,7 +204,7 @@ func newRuntimeLanes(runtime *Runtime) *runtimeLanes {
 }
 
 func (lanes *runtimeLanes) add(
-	identity sessioncontract.LaneIdentity,
+	identity session.LaneIdentity,
 	channel protocolsession.FrameChannel,
 	authenticator protocolsession.InboundMessageAuthenticator,
 	initial bool,
@@ -213,14 +213,14 @@ func (lanes *runtimeLanes) add(
 }
 
 func (lanes *runtimeLanes) addWithAdmission(
-	identity sessioncontract.LaneIdentity,
+	identity session.LaneIdentity,
 	channel protocolsession.FrameChannel,
 	authenticator protocolsession.InboundMessageAuthenticator,
 	initial bool,
 	admit func(*RuntimeLane) error,
 ) (*RuntimeLane, error) {
 	if lanes == nil || !identity.Valid(initial) || channel == nil || authenticator == nil {
-		return nil, sessioncontract.ErrRuntimeConfig
+		return nil, session.ErrRuntimeConfig
 	}
 	lane, err := lanes.build(identity, channel, authenticator)
 	if err != nil {
@@ -231,9 +231,9 @@ func (lanes *runtimeLanes) addWithAdmission(
 	var rejection error
 	switch {
 	case lanes.stopping:
-		rejection = sessioncontract.ErrRuntimeClosed
+		rejection = session.ErrRuntimeClosed
 	case !initial && !lanes.hasUsableLocked():
-		rejection = sessioncontract.ErrRuntimeClosed
+		rejection = session.ErrRuntimeClosed
 	case lanes.active[identity.ID].usableLocked():
 		rejection = ErrLaneUnavailable
 	}
@@ -272,7 +272,7 @@ func (lanes *runtimeLanes) addWithAdmission(
 }
 
 func (lanes *runtimeLanes) build(
-	identity sessioncontract.LaneIdentity,
+	identity session.LaneIdentity,
 	channel protocolsession.FrameChannel,
 	authenticator protocolsession.InboundMessageAuthenticator,
 ) (*RuntimeLane, error) {
@@ -484,13 +484,13 @@ func (lanes *runtimeLanes) usableCount() uint32 {
 	return count
 }
 
-func (lanes *runtimeLanes) setDetachHook(hook func(sessioncontract.LaneIdentity)) {
+func (lanes *runtimeLanes) setDetachHook(hook func(session.LaneIdentity)) {
 	lanes.mu.Lock()
 	lanes.onDetach = hook
 	lanes.mu.Unlock()
 }
 
-func (lanes *runtimeLanes) selectLane(preferred *sessioncontract.LaneIdentity) (selectedLane, error) {
+func (lanes *runtimeLanes) selectLane(preferred *session.LaneIdentity) (selectedLane, error) {
 	if preferred != nil {
 		lanes.mu.Lock()
 		defer lanes.mu.Unlock()
@@ -499,18 +499,18 @@ func (lanes *runtimeLanes) selectLane(preferred *sessioncontract.LaneIdentity) (
 	return lanes.selectLaneExcluding(nil)
 }
 
-func (lanes *runtimeLanes) selectLaneExcluding(excluded map[sessioncontract.LaneIdentity]struct{}) (selectedLane, error) {
+func (lanes *runtimeLanes) selectLaneExcluding(excluded map[session.LaneIdentity]struct{}) (selectedLane, error) {
 	lanes.mu.Lock()
 	defer lanes.mu.Unlock()
 	return lanes.selectLaneLocked(nil, excluded)
 }
 
 func (lanes *runtimeLanes) selectLaneLocked(
-	preferred *sessioncontract.LaneIdentity,
-	excluded map[sessioncontract.LaneIdentity]struct{},
+	preferred *session.LaneIdentity,
+	excluded map[session.LaneIdentity]struct{},
 ) (selectedLane, error) {
 	if lanes.stopping || lanes.runtime.ctx.Err() != nil {
-		return selectedLane{}, sessioncontract.ErrRuntimeClosed
+		return selectedLane{}, session.ErrRuntimeClosed
 	}
 	if preferred != nil {
 		lane := lanes.active[preferred.ID]
@@ -555,7 +555,7 @@ func (lanes *runtimeLanes) markSelectedClosing(selected selectedLane) {
 	lanes.mu.Unlock()
 }
 
-func (lanes *runtimeLanes) detach(identity sessioncontract.LaneIdentity) bool {
+func (lanes *runtimeLanes) detach(identity session.LaneIdentity) bool {
 	lanes.mu.Lock()
 	lane := lanes.active[identity.ID]
 	if lane == nil || lane.identity != identity || lane.closing {

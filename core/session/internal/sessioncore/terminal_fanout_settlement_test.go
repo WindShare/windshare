@@ -5,7 +5,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"github.com/windshare/windshare/core/framechannel"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"io"
 	"testing"
@@ -35,7 +35,7 @@ func TestTerminalFanoutWaitsForReceiptsAfterLifecycleCancellation(t *testing.T) 
 			synctest.Test(t, func(t *testing.T) {
 				runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
 				body, err := protocolsession.EncodeSessionTerminal(protocolsession.SessionTerminal{
-					Code: sessioncontract.SessionStoppedCode, Message: "stop",
+					Code: session.SessionStoppedCode, Message: "stop",
 				})
 				if err != nil {
 					t.Fatal(err)
@@ -47,7 +47,7 @@ func TestTerminalFanoutWaitsForReceiptsAfterLifecycleCancellation(t *testing.T) 
 				recipients := make([]selectedLane, 0, len(channels))
 				for index, channel := range channels {
 					lane, err := runtime.lanes.add(
-						sessioncontract.LaneIdentity{ID: uint32(index + 2), Epoch: 1}, channel, permissiveInboundAuthenticator(), false,
+						session.LaneIdentity{ID: uint32(index + 2), Epoch: 1}, channel, permissiveInboundAuthenticator(), false,
 					)
 					if err != nil {
 						t.Fatal(err)

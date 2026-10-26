@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"testing"
@@ -456,7 +456,7 @@ func TestReceiverPeerInvalidValuesFailClosed(t *testing.T) {
 	// These calls intentionally exercise the public fail-closed contract without
 	// manufacturing context authority that an invalid receiver cannot own.
 	var missingContext context.Context
-	if _, err := (&Runtime{}).OpenPeerOperation(missingContext, nil); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	if _, err := (&Runtime{}).OpenPeerOperation(missingContext, nil); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("invalid receiver runtime open error = %v", err)
 	}
 	for name, operation := range map[string]*PeerOperation{
@@ -474,7 +474,7 @@ func TestReceiverPeerInvalidValuesFailClosed(t *testing.T) {
 			if _, ok := operation.MaximumContinuations(); ok {
 				t.Fatal("invalid peer operation exposed a continuation budget")
 			}
-			if _, err := operation.SendCandidate(missingContext, nil); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+			if _, err := operation.SendCandidate(missingContext, nil); !errors.Is(err, session.ErrRuntimeClosed) {
 				t.Fatalf("invalid peer candidate error = %v", err)
 			}
 			if control, ok := operation.Receive(missingContext).Control(); ok {

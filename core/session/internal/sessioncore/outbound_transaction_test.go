@@ -5,7 +5,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"github.com/windshare/windshare/core/framechannel"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"sync"
@@ -82,7 +82,7 @@ func TestSenderControlTransactionAggregatesAttemptsAndDrainsAuthority(t *testing
 			}
 			firstBase, firstPeer := newMemoryChannelPair()
 			t.Cleanup(func() { _ = firstPeer.Close() })
-			firstIdentity := sessioncontract.LaneIdentity{ID: runtime.initial.ID + 1, Epoch: 1}
+			firstIdentity := session.LaneIdentity{ID: runtime.initial.ID + 1, Epoch: 1}
 			first, err := runtime.lanes.add(
 				firstIdentity,
 				&failingRuntimeLaneChannel{memoryChannel: firstBase, err: errors.New("physical send is uncertain")},
@@ -148,7 +148,7 @@ func TestSenderControlTransactionAggregatesAttemptsAndDrainsAuthority(t *testing
 					t.Fatalf("attempts lost lane or failure evidence: first=%+v last=%+v", firstAttempt, lastAttempt)
 				}
 			}
-			if errors.Is(sendErr, sessioncontract.ErrRuntimeClosed) {
+			if errors.Is(sendErr, session.ErrRuntimeClosed) {
 				t.Fatalf("live-session attempt exhaustion was misclassified as runtime closure: %v", sendErr)
 			}
 			if runtime.routes.len() != 0 || runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 1 {
@@ -177,7 +177,7 @@ func TestOutboundTransactionAttemptsExactlyEveryFullLaneIdentityOnce(t *testing.
 	for laneIndex := 1; laneIndex < protocolsession.DefaultMaxLogicalLanes; laneIndex++ {
 		base, peer := newMemoryChannelPair()
 		t.Cleanup(func() { _ = peer.Close() })
-		identity := sessioncontract.LaneIdentity{
+		identity := session.LaneIdentity{
 			ID:    uint32(laneIndex + 1),
 			Epoch: uint32(protocolsession.DefaultMaxLogicalLanes + laneIndex),
 		}
@@ -212,7 +212,7 @@ func TestOutboundTransactionAttemptsExactlyEveryFullLaneIdentityOnce(t *testing.
 		}
 	}()
 
-	attempted := make([]sessioncontract.LaneIdentity, 0, protocolsession.DefaultMaxLogicalLanes)
+	attempted := make([]session.LaneIdentity, 0, protocolsession.DefaultMaxLogicalLanes)
 	outcome, runErr := transaction.Run(operationContext, func(
 		lane selectedLane,
 		_ protocolsession.OutboundReplayPermit,
@@ -234,7 +234,7 @@ func TestOutboundTransactionAttemptsExactlyEveryFullLaneIdentityOnce(t *testing.
 	if len(attempted) != protocolsession.DefaultMaxLogicalLanes {
 		t.Fatalf("physical attempts=%d, want %d", len(attempted), protocolsession.DefaultMaxLogicalLanes)
 	}
-	seen := make(map[sessioncontract.LaneIdentity]int, protocolsession.DefaultMaxLogicalLanes)
+	seen := make(map[session.LaneIdentity]int, protocolsession.DefaultMaxLogicalLanes)
 	for _, identity := range attempted {
 		seen[identity]++
 		if seen[identity] != 1 {
@@ -308,7 +308,7 @@ func TestFragmentFailureRetainsRouteUntilOperationErrorDrainsAuthority(t *testin
 	initial, _ := runtime.lanes.selectLane(&runtime.initial)
 	firstBase, firstPeer := newMemoryChannelPair()
 	t.Cleanup(func() { _ = firstPeer.Close() })
-	firstIdentity := sessioncontract.LaneIdentity{ID: runtime.initial.ID + 1, Epoch: 1}
+	firstIdentity := session.LaneIdentity{ID: runtime.initial.ID + 1, Epoch: 1}
 	first, err := runtime.lanes.add(
 		firstIdentity,
 		&failingRuntimeLaneChannel{memoryChannel: firstBase, err: errors.New("fragment acceptance unknown")},
@@ -360,13 +360,13 @@ func TestUnsettledCallerCancelDoesNotMigrateOrTerminateSession(t *testing.T) {
 	blockedChannel := &blockingRuntimeLaneChannel{
 		memoryChannel: blockedBase, started: make(chan struct{}), release: make(chan struct{}),
 	}
-	blockedIdentity := sessioncontract.LaneIdentity{ID: runtime.initial.ID + 1, Epoch: 1}
+	blockedIdentity := session.LaneIdentity{ID: runtime.initial.ID + 1, Epoch: 1}
 	blocked, err := runtime.lanes.add(blockedIdentity, blockedChannel, permissiveInboundAuthenticator(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fallbackChannel := &countingRuntimeLaneChannel{memoryChannel: fallbackBase}
-	fallbackIdentity := sessioncontract.LaneIdentity{ID: runtime.initial.ID + 2, Epoch: 1}
+	fallbackIdentity := session.LaneIdentity{ID: runtime.initial.ID + 2, Epoch: 1}
 	fallback, err := runtime.lanes.add(fallbackIdentity, fallbackChannel, permissiveInboundAuthenticator(), false)
 	if err != nil {
 		t.Fatal(err)
@@ -399,7 +399,7 @@ func TestUnsettledCallerCancelDoesNotMigrateOrTerminateSession(t *testing.T) {
 		t.Fatalf("inbound cancel disposition=%d error=%v", disposition, err)
 	}
 	cancelSend()
-	if err := <-sendDone; !errors.Is(err, context.Canceled) || errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	if err := <-sendDone; !errors.Is(err, context.Canceled) || errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("cancelled transaction error=%v", err)
 	}
 	if fallbackChannel.sends.Load() != 0 {
@@ -474,7 +474,7 @@ func TestSettledUnknownWithoutReplayAuthorityFailClosesSession(t *testing.T) {
 func testOutboundOperationContext(
 	t *testing.T,
 	runtime *Runtime,
-	identity sessioncontract.LaneIdentity,
+	identity session.LaneIdentity,
 	request protocolsession.Message,
 ) (context.Context, *operationLaneRoute) {
 	t.Helper()

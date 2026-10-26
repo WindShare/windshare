@@ -1,4 +1,4 @@
-package sessioncontract
+package session
 
 import (
 	"errors"

@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"reflect"
@@ -295,7 +295,7 @@ func (operation *PeerOperation) classifyReceiveError(
 	hasTransition := operation.terminalTransition.authority != receiverPeerTerminalAuthorityInvalid
 	operation.mu.Unlock()
 	runtimeTrigger := err
-	if hasTransition && isExactReceiverPeerCause(err, sessioncontract.ErrOperationMissing) {
+	if hasTransition && isExactReceiverPeerCause(err, session.ErrOperationMissing) {
 		// An established owner closes the exact response sink to wake Receive. A
 		// concurrent runtime stop remains relevant, but that synthetic wakeup does not.
 		runtimeTrigger = nil
@@ -306,12 +306,12 @@ func (operation *PeerOperation) classifyReceiveError(
 		// wakeup to the caller during that intentional shutdown window.
 		return evidence
 	}
-	if hasTransition && isExactReceiverPeerCause(err, sessioncontract.ErrOperationMissing) {
+	if hasTransition && isExactReceiverPeerCause(err, session.ErrOperationMissing) {
 		// Closing the exact call is only the wakeup for an already-owned terminal
 		// transition; it is not a second failure cause.
 		return receiverPeerTerminalEvidence{}
 	}
-	if isExactReceiverPeerCause(err, sessioncontract.ErrRuntimeClosed) {
+	if isExactReceiverPeerCause(err, session.ErrRuntimeClosed) {
 		return receiverPeerRuntimeEvidence(err)
 	}
 	if ctx != nil && ctx.Err() != nil && isExactReceiverPeerCause(err, ctx.Err()) {
@@ -405,11 +405,11 @@ func receiverPeerDiagnosticForCause(
 		return PeerDiagnostic{}
 	case isExactReceiverPeerCause(cause, context.Canceled):
 		return receiverPeerDiagnostic(PeerDiagnosticContextCanceled)
-	case isExactReceiverPeerCause(cause, sessioncontract.ErrOperationMissing):
+	case isExactReceiverPeerCause(cause, session.ErrOperationMissing):
 		return receiverPeerDiagnostic(PeerDiagnosticOperationMissing)
-	case isExactReceiverPeerCause(cause, sessioncontract.ErrRuntimeClosed):
+	case isExactReceiverPeerCause(cause, session.ErrRuntimeClosed):
 		return receiverPeerDiagnostic(PeerDiagnosticRuntimeClosed)
-	case isExactReceiverPeerCause(cause, sessioncontract.ErrOperationOverflow):
+	case isExactReceiverPeerCause(cause, session.ErrOperationOverflow):
 		return receiverPeerDiagnostic(PeerDiagnosticOperationOverflow)
 	case isExactReceiverPeerCause(cause, protocolsession.ErrUnknownMessageKind):
 		return receiverPeerDiagnostic(PeerDiagnosticUnknownControl)

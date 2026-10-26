@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
@@ -29,7 +29,7 @@ func TestRequestTrackingReleasesRejectedPreparedCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	missingLane := sessioncontract.LaneIdentity{ID: runtimeIdentity(runtime).ID + 1, Epoch: 1}
+	missingLane := session.LaneIdentity{ID: runtimeIdentity(runtime).ID + 1, Epoch: 1}
 	if err := rpc.BeginCall(t.Context(), &missingLane, call, message); !errors.Is(err, sessioncore.ErrLaneUnavailable) ||
 		!sessioncore.RequestProvenNotDelivered(err) {
 		t.Fatalf("missing-lane admission=%v", err)
@@ -40,7 +40,7 @@ func TestRequestTrackingReleasesRejectedPreparedCall(t *testing.T) {
 	const retirementTimeout = time.Second
 	ctx, cancel := context.WithTimeout(t.Context(), retirementTimeout)
 	defer cancel()
-	if _, err := rpc.Requests.AwaitCall(ctx, call, false); !errors.Is(err, sessioncontract.ErrOperationMissing) {
+	if _, err := rpc.Requests.AwaitCall(ctx, call, false); !errors.Is(err, session.ErrOperationMissing) {
 		t.Fatalf("rejected call was not closed by the core: %v", err)
 	}
 	generation, authority := call.OperationAuthority()

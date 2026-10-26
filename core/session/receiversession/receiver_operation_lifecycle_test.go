@@ -7,7 +7,7 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/senderauth"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/transfer"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
@@ -291,9 +291,9 @@ func TestReceiverTransferDependenciesPromoteClosedRuntimeToSessionFailure(t *tes
 	release()
 	assertReceiverTransferSessionFailure(t, "catalog", catalogErr, catalogflow.ErrClientClosed)
 	_, revisionErr := dependencies.OpenRevision(context.Background(), fixture.fileID)
-	assertReceiverTransferSessionFailure(t, "revision open", revisionErr, sessioncontract.ErrRuntimeClosed)
+	assertReceiverTransferSessionFailure(t, "revision open", revisionErr, session.ErrRuntimeClosed)
 	releaseErr := dependencies.ReleaseRevision(context.Background(), opened.Handle)
-	assertReceiverTransferSessionFailure(t, "revision release", releaseErr, sessioncontract.ErrRuntimeClosed)
+	assertReceiverTransferSessionFailure(t, "revision release", releaseErr, session.ErrRuntimeClosed)
 	blockErr := dependencies.ReadRange(
 		context.Background(), opened.Handle, opened.Descriptor,
 		content.Range{Offset: 0, End: 1},
@@ -304,7 +304,7 @@ func TestReceiverTransferDependenciesPromoteClosedRuntimeToSessionFailure(t *tes
 
 func assertReceiverTransferSessionFailure(t *testing.T, name string, err, componentErr error) {
 	t.Helper()
-	if !errors.Is(err, componentErr) || !errors.Is(err, sessioncontract.ErrRuntimeClosed) ||
+	if !errors.Is(err, componentErr) || !errors.Is(err, session.ErrRuntimeClosed) ||
 		!isSessionTerminalBoundaryForTest(err) {
 		t.Fatalf("closed %s error = %v, want component, runtime-closed, and session-failure identities", name, err)
 	}
@@ -468,7 +468,7 @@ func TestReceiverCloseJoinsRevisionOpenerBeforeResourceRelease(t *testing.T) {
 		if _, openErr := receiver.OpenRevision(
 			context.Background(),
 			fixture.fileID,
-		); !errors.Is(openErr, sessioncontract.ErrRuntimeClosed) {
+		); !errors.Is(openErr, session.ErrRuntimeClosed) {
 			t.Fatalf("revision open admitted after BeginClose: %v", openErr)
 		}
 		if opener.calls.Load() != 1 {
@@ -477,13 +477,13 @@ func TestReceiverCloseJoinsRevisionOpenerBeforeResourceRelease(t *testing.T) {
 		if releaseErr := receiver.ReleaseRevision(
 			context.Background(),
 			fixture.contentStore.lease.ID(),
-		); !errors.Is(releaseErr, sessioncontract.ErrRuntimeClosed) {
+		); !errors.Is(releaseErr, session.ErrRuntimeClosed) {
 			t.Fatalf("revision release admitted after BeginClose: %v", releaseErr)
 		}
 
 		gate.unblock()
 		synctest.Wait()
-		if openErr := <-openDone; !errors.Is(openErr, sessioncontract.ErrRuntimeClosed) {
+		if openErr := <-openDone; !errors.Is(openErr, session.ErrRuntimeClosed) {
 			t.Fatalf("in-flight revision open after close = %v", openErr)
 		}
 		<-resourceLease.released
@@ -522,12 +522,12 @@ func assertReceiverBorrowedGraphReleased(
 	}
 	if _, err := receiver.OpenRevision(
 		context.Background(), catalog.FileID{},
-	); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("post-close revision open error = %v", err)
 	}
 	if err := receiver.ReleaseRevision(
 		context.Background(), content.LeaseID{},
-	); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("post-close revision release error = %v", err)
 	}
 }

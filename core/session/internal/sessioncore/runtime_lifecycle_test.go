@@ -9,7 +9,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/framechannel"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"testing"
@@ -46,14 +46,14 @@ func TestUnstartedRuntimeRollsBackLaneAuthorityAndOwnedChannels(t *testing.T) {
 	runtime, initialChannel := newUnstartedRuntime(t, protocolsession.RoleSender)
 	(*Runtime)(nil).abortBeforeStart()
 	(*Runtime)(nil).close()
-	if !errors.Is((*Runtime)(nil).Err(), sessioncontract.ErrRuntimeClosed) {
+	if !errors.Is((*Runtime)(nil).Err(), session.ErrRuntimeClosed) {
 		t.Fatal("nil runtime did not report a closed authority")
 	}
 
 	authenticator := permissiveInboundAuthenticator()
 	duplicate, duplicatePeer := newMemoryChannelPair()
 	t.Cleanup(func() { _ = duplicatePeer.Close() })
-	if _, err := runtime.lanes.add(sessioncontract.LaneIdentity{ID: runtime.initial.ID, Epoch: 1}, duplicate, authenticator, false); !errors.Is(err, ErrLaneUnavailable) {
+	if _, err := runtime.lanes.add(session.LaneIdentity{ID: runtime.initial.ID, Epoch: 1}, duplicate, authenticator, false); !errors.Is(err, ErrLaneUnavailable) {
 		t.Fatalf("duplicate active lane error = %v", err)
 	}
 	if duplicate.State() != framechannel.Closed {
@@ -62,7 +62,7 @@ func TestUnstartedRuntimeRollsBackLaneAuthorityAndOwnedChannels(t *testing.T) {
 
 	fresh, freshPeer := newMemoryChannelPair()
 	t.Cleanup(func() { _ = freshPeer.Close() })
-	identity := sessioncontract.LaneIdentity{ID: 2, Epoch: 2}
+	identity := session.LaneIdentity{ID: 2, Epoch: 2}
 	if _, err := runtime.lanes.add(identity, fresh, authenticator, false); err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestUnstartedRuntimeRollsBackLaneAuthorityAndOwnedChannels(t *testing.T) {
 	}
 	stale, stalePeer := newMemoryChannelPair()
 	t.Cleanup(func() { _ = stalePeer.Close() })
-	if _, err := runtime.lanes.add(sessioncontract.LaneIdentity{ID: identity.ID, Epoch: 1}, stale, authenticator, false); !errors.Is(err, ErrLaneStale) {
+	if _, err := runtime.lanes.add(session.LaneIdentity{ID: identity.ID, Epoch: 1}, stale, authenticator, false); !errors.Is(err, ErrLaneStale) {
 		t.Fatalf("stale lane error = %v", err)
 	}
 
@@ -79,7 +79,7 @@ func TestUnstartedRuntimeRollsBackLaneAuthorityAndOwnedChannels(t *testing.T) {
 	rolledBack, rolledBackPeer := newMemoryChannelPair()
 	t.Cleanup(func() { _ = rolledBackPeer.Close() })
 	if _, err := runtime.lanes.addWithAdmission(
-		sessioncontract.LaneIdentity{ID: 3, Epoch: 1}, rolledBack, authenticator, false,
+		session.LaneIdentity{ID: 3, Epoch: 1}, rolledBack, authenticator, false,
 		func(*RuntimeLane) error { return admissionFailure },
 	); !errors.Is(err, admissionFailure) {
 		t.Fatalf("admission rollback error = %v", err)
@@ -107,7 +107,7 @@ func TestUnstartedRuntimeRollsBackLaneAuthorityAndOwnedChannels(t *testing.T) {
 	if _, err := empty.selectLane(nil); !errors.Is(err, ErrLaneUnavailable) {
 		t.Fatalf("inactive lane-order error = %v", err)
 	}
-	missing := sessioncontract.LaneIdentity{ID: 91, Epoch: 1}
+	missing := session.LaneIdentity{ID: 91, Epoch: 1}
 	if _, err := empty.selectLane(&missing); !errors.Is(err, ErrLaneUnavailable) {
 		t.Fatalf("missing preferred lane error = %v", err)
 	}
@@ -116,12 +116,12 @@ func TestUnstartedRuntimeRollsBackLaneAuthorityAndOwnedChannels(t *testing.T) {
 	empty.started = false
 	empty.stopping = true
 	empty.start()
-	if _, err := empty.selectLane(nil); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	if _, err := empty.selectLane(nil); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("stopping lane selection error = %v", err)
 	}
 	stopping, stoppingPeer := newMemoryChannelPair()
 	t.Cleanup(func() { _ = stoppingPeer.Close() })
-	if _, err := empty.add(sessioncontract.LaneIdentity{ID: 92, Epoch: 1}, stopping, authenticator, false); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	if _, err := empty.add(session.LaneIdentity{ID: 92, Epoch: 1}, stopping, authenticator, false); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("stopping lane admission error = %v", err)
 	}
 	if stopping.State() != framechannel.Closed {
@@ -232,9 +232,9 @@ func TestOperationLaneRoutesPreserveFirstPhysicalAuthorityUntilFinal(t *testing.
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
 	routes := newOperationLaneRoutes()
 	operationID := id16[protocolsession.OperationID](61)
-	other := sessioncontract.LaneIdentity{ID: runtime.initial.ID + 1, Epoch: 1}
+	other := session.LaneIdentity{ID: runtime.initial.ID + 1, Epoch: 1}
 	if routes.reserve(protocolsession.OperationID{}, runtime.initial) != nil ||
-		routes.reserve(operationID, sessioncontract.LaneIdentity{}) != nil {
+		routes.reserve(operationID, session.LaneIdentity{}) != nil {
 		t.Fatal("route accepted a zero operation or lane identity")
 	}
 	route := routes.reserve(operationID, runtime.initial)
@@ -333,7 +333,7 @@ func TestOperationLaneRouteCannotReviveAPathWithoutASurvivingLane(t *testing.T) 
 }
 
 func TestRuntimeLaneConstructionRejectsInvalidCryptographicDependencies(t *testing.T) {
-	identity := sessioncontract.LaneIdentity{ID: 2, Epoch: 1}
+	identity := session.LaneIdentity{ID: 2, Epoch: 1}
 	t.Run("invalid runtime role", func(t *testing.T) {
 		runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 		t.Cleanup(runtime.abortBeforeStart)
@@ -371,7 +371,7 @@ func TestRuntimeLaneConstructionRejectsInvalidCryptographicDependencies(t *testi
 		}
 	})
 	var nilLanes *runtimeLanes
-	if _, err := nilLanes.addWithAdmission(identity, nil, nil, false, nil); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	if _, err := nilLanes.addWithAdmission(identity, nil, nil, false, nil); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("nil lane registry error = %v", err)
 	}
 }

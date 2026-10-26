@@ -2,7 +2,7 @@ package receiversession
 
 import (
 	"context"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -16,7 +16,7 @@ func (runtime *Runtime) SendTURNControl(ctx context.Context, body []byte) error 
 
 func (runtime *Runtime) sendSessionControl(ctx context.Context, kind protocolsession.MessageKind, body []byte) error {
 	if runtime == nil {
-		return sessioncontract.ErrRuntimeConfig
+		return session.ErrRuntimeConfig
 	}
 	return runtime.core.SendSessionControl(ctx, kind, body)
 }

@@ -9,7 +9,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/observationstream"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
@@ -27,22 +27,22 @@ func TestLaneAttachmentBoundarySilentlyClosesUntrustedFailures(t *testing.T) {
 	random := &switchableReader{reader: fixture.senderConfig.Random}
 	fixture.senderConfig.Random = random
 	fixture.rebuildSender(t)
-	if _, err := (*sendersession.Factory)(nil).Attach(context.Background(), newMemoryChannel(t)); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	if _, err := (*sendersession.Factory)(nil).Attach(context.Background(), newMemoryChannel(t)); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("nil attach factory error = %v", err)
 	}
-	if _, err := fixture.senderFactory.Attach(context.Background(), nil); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	if _, err := fixture.senderFactory.Attach(context.Background(), nil); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("nil attach channel error = %v", err)
 	}
 
 	closed, closedPeer := newMemoryChannelPair()
 	_ = closed.Close()
 	t.Cleanup(func() { _ = closedPeer.Close() })
-	if _, err := fixture.senderFactory.Attach(context.Background(), closed); !errors.Is(err, sessioncontract.ErrHandshake) {
+	if _, err := fixture.senderFactory.Attach(context.Background(), closed); !errors.Is(err, session.ErrHandshake) {
 		t.Fatalf("closed candidate error = %v", err)
 	}
 	malformed, malformedPeer := newMemoryChannelPair()
 	_ = malformedPeer.Send(context.Background(), framechannel.Frame{1})
-	if _, err := fixture.senderFactory.Attach(context.Background(), malformed); !errors.Is(err, sessioncontract.ErrHandshake) {
+	if _, err := fixture.senderFactory.Attach(context.Background(), malformed); !errors.Is(err, session.ErrHandshake) {
 		t.Fatalf("malformed candidate error = %v", err)
 	}
 	if malformed.State() != framechannel.Closed {
@@ -66,7 +66,7 @@ func TestLaneAttachmentBoundarySilentlyClosesUntrustedFailures(t *testing.T) {
 	}
 	unknown, unknownPeer := newMemoryChannelPair()
 	_ = unknownPeer.Send(context.Background(), framechannel.Frame(unknownHello.Encoded()))
-	if _, err := fixture.senderFactory.Attach(context.Background(), unknown); !errors.Is(err, sessioncontract.ErrHandshake) {
+	if _, err := fixture.senderFactory.Attach(context.Background(), unknown); !errors.Is(err, session.ErrHandshake) {
 		t.Fatalf("unknown session candidate error = %v", err)
 	}
 	if unknown.State() != framechannel.Closed {
@@ -77,10 +77,10 @@ func TestLaneAttachmentBoundarySilentlyClosesUntrustedFailures(t *testing.T) {
 	sender, receiver := connectVerticalPair(t, fixture.senderFactory, fixture.receiverFactory)
 	defer sender.Close()
 	defer receiver.Close()
-	if _, err := (*Runtime)(nil).RequestLane(context.Background(), 0); !errors.Is(err, sessioncontract.ErrRuntimeClosed) {
+	if _, err := (*Runtime)(nil).RequestLane(context.Background(), 0); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("nil lane request error = %v", err)
 	}
-	if _, err := receiver.AttachLane(context.Background(), protocolsession.LaneGrant{}, newMemoryChannel(t), transferlanes.RouteDirect); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	if _, err := receiver.AttachLane(context.Background(), protocolsession.LaneGrant{}, newMemoryChannel(t), transferlanes.RouteDirect); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("invalid lane grant error = %v", err)
 	}
 
@@ -90,7 +90,7 @@ func TestLaneAttachmentBoundarySilentlyClosesUntrustedFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, receiverErr, senderErr := attachGrantedLane(t, fixture.senderFactory, receiver, duplicateGrant)
-	var receiverRejection, senderRejection *sessioncontract.LaneRejectedError
+	var receiverRejection, senderRejection *session.LaneRejectedError
 	if !errors.As(receiverErr, &receiverRejection) || !errors.As(senderErr, &senderRejection) ||
 		receiverRejection.Rejection.Code != protocolsession.LaneRejectAdmissionLimited ||
 		senderRejection.Rejection.Code != protocolsession.LaneRejectAdmissionLimited {
@@ -156,12 +156,12 @@ func TestLaneAttachmentBoundarySilentlyClosesUntrustedFailures(t *testing.T) {
 	}
 	_ = randomFailurePeer.Close()
 
-	for _, invalid := range []string{string([]byte{0xff}), "e\u0301", strings.Repeat("x", sessioncontract.MaximumTerminalMessageBytes+1)} {
-		if err := sender.Stop(context.Background(), invalid); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
+	for _, invalid := range []string{string([]byte{0xff}), "e\u0301", strings.Repeat("x", session.MaximumTerminalMessageBytes+1)} {
+		if err := sender.Stop(context.Background(), invalid); !errors.Is(err, session.ErrRuntimeConfig) {
 			t.Fatalf("invalid terminal message error = %v", err)
 		}
 	}
-	identity := sessioncontract.LaneIdentity{ID: initialID, Epoch: initialEpoch}
+	identity := session.LaneIdentity{ID: initialID, Epoch: initialEpoch}
 	if !receiver.DetachLane(identity) || !sender.DetachLane(identity) {
 		t.Fatal("initial lane did not detach")
 	}

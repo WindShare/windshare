@@ -3,7 +3,7 @@ package sendersession
 import (
 	"context"
 	"errors"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -22,14 +22,14 @@ type cancelMux struct {
 func (mux cancelMux) HandleMessage(ctx context.Context, message protocolsession.Message) error {
 	operationID, ok := message.OperationID()
 	if !ok {
-		return sessioncontract.ErrRuntimeConfig
+		return session.ErrRuntimeConfig
 	}
 	if _, err := contentflow.DecodeCancelReason(message.Body()); err != nil {
 		return err
 	}
 	generation, ok := protocolsession.OperationGenerationFromContext(ctx, operationID)
 	if !ok {
-		return sessioncontract.ErrOperationMissing
+		return session.ErrOperationMissing
 	}
 	requestKind, ok := generation.RequestKind()
 	if !ok {
@@ -48,7 +48,7 @@ func (mux cancelMux) HandleMessage(ctx context.Context, message protocolsession.
 	case protocolsession.MessageLaneAttach:
 		return nil
 	default:
-		return sessioncontract.ErrRuntimeConfig
+		return session.ErrRuntimeConfig
 	}
 }
 
@@ -89,10 +89,10 @@ func registerSenderHandlers(
 
 func (runtime *Runtime) Stop(ctx context.Context, message string) error {
 	if runtime == nil {
-		return sessioncontract.ErrRuntimeClosed
+		return session.ErrRuntimeClosed
 	}
 	if ctx == nil {
-		return sessioncontract.ErrRuntimeConfig
+		return session.ErrRuntimeConfig
 	}
 	if err := runtime.BeginStop(ctx, message); err != nil {
 		return err
@@ -102,10 +102,10 @@ func (runtime *Runtime) Stop(ctx context.Context, message string) error {
 
 func (runtime *Runtime) BeginStop(ctx context.Context, message string) error {
 	if runtime == nil {
-		return sessioncontract.ErrRuntimeClosed
+		return session.ErrRuntimeClosed
 	}
 	if ctx == nil {
-		return sessioncontract.ErrRuntimeConfig
+		return session.ErrRuntimeConfig
 	}
 	runtime.stopMu.Lock()
 	if runtime.stopStarted {
@@ -114,7 +114,7 @@ func (runtime *Runtime) BeginStop(ctx context.Context, message string) error {
 	}
 	if runtime.closeStarted || runtime.Lifetime().Err() != nil {
 		runtime.stopMu.Unlock()
-		return sessioncontract.ErrRuntimeClosed
+		return session.ErrRuntimeClosed
 	}
 	runtime.stopMu.Unlock()
 	normalized, err := normalizeTerminalMessage(message)
@@ -128,7 +128,7 @@ func (runtime *Runtime) BeginStop(ctx context.Context, message string) error {
 	}
 	if runtime.closeStarted || runtime.Lifetime().Err() != nil {
 		runtime.stopMu.Unlock()
-		return sessioncontract.ErrRuntimeClosed
+		return session.ErrRuntimeClosed
 	}
 	claim := runtime.core.ClaimTermination(sessioncore.TerminationGracefulStop)
 	runtime.stopStarted = true
@@ -151,7 +151,7 @@ func (runtime *Runtime) runStop(
 	runtime.stopMu.Unlock()
 	defer close(stopDone)
 	body, err := protocolsession.EncodeSessionTerminal(protocolsession.SessionTerminal{
-		Code: sessioncontract.SessionStoppedCode, Message: message,
+		Code: session.SessionStoppedCode, Message: message,
 	})
 	if err == nil {
 		err = runtime.outbound.SendTerminalAll(callerContext, body)
@@ -167,10 +167,10 @@ func (runtime *Runtime) runStop(
 
 func (runtime *Runtime) WaitStopped(ctx context.Context) error {
 	if runtime == nil {
-		return sessioncontract.ErrRuntimeClosed
+		return session.ErrRuntimeClosed
 	}
 	if ctx == nil {
-		return sessioncontract.ErrRuntimeConfig
+		return session.ErrRuntimeConfig
 	}
 	runtime.stopMu.Lock()
 	started, stopDone := runtime.stopStarted, runtime.stopDone

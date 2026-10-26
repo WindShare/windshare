@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/windshare/windshare/core/content"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
@@ -67,11 +67,11 @@ func beginOutboundTransaction(
 	}
 	authority, ok := protocolsession.OutboundOperationPermitFromContext(ctx, operationID)
 	if !ok {
-		return nil, sessioncontract.ErrOperationMissing
+		return nil, session.ErrOperationMissing
 	}
 	generation, ok := protocolsession.OperationGenerationFromContext(ctx, operationID)
 	if !ok || !generation.Same(authority.Generation()) {
-		return nil, sessioncontract.ErrOperationMissing
+		return nil, session.ErrOperationMissing
 	}
 	route, lane, err := runtime.routes.beginSend(runtime.lanes, operationID, route)
 	if err != nil {
@@ -149,7 +149,7 @@ func (transaction *outboundTransaction) Run(
 	if transaction.responseSequence == 0 {
 		transaction.responseSequence = transaction.responses.sequence.Add(1)
 	}
-	excluded := make(map[sessioncontract.LaneIdentity]struct{}, protocolsession.DefaultMaxLogicalLanes)
+	excluded := make(map[session.LaneIdentity]struct{}, protocolsession.DefaultMaxLogicalLanes)
 	var permit protocolsession.OutboundReplayPermit
 	var combined error
 	var history [protocolsession.DefaultMaxLogicalLanes]protocolsession.SendAttemptSnapshot
@@ -219,7 +219,7 @@ func (transaction *outboundTransaction) interruption(ctx context.Context) (proto
 	// Runtime shutdown takes precedence because it ends every caller's ability
 	// to retry, even when this caller's wait was also canceled.
 	if transaction.runtime.ctx.Err() != nil {
-		return protocolsession.ResponseSendEndRuntimeStopped, errors.Join(sessioncontract.ErrRuntimeClosed, transaction.runtime.Err())
+		return protocolsession.ResponseSendEndRuntimeStopped, errors.Join(session.ErrRuntimeClosed, transaction.runtime.Err())
 	}
 	if err := ctx.Err(); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
@@ -272,7 +272,7 @@ func (runtime *Runtime) abandonOutboundOperation(
 	err := runtime.routes.retireRoute(operationID, route, func() error {
 		return runtime.operations.CancelGeneration(generation)
 	})
-	if err == nil || errors.Is(err, sessioncontract.ErrOperationMissing) {
+	if err == nil || errors.Is(err, session.ErrOperationMissing) {
 		return err
 	}
 	// Without a cancellation tombstone the active operation could retain a slot
@@ -300,8 +300,8 @@ func (runtime *Runtime) abandonBoundOutboundOperation(
 		// session after releasing the route instead of leaking ambiguous authority.
 		runtime.routes.releaseRoute(operationID, route)
 		_ = runtime.router.TerminateLocal()
-		runtime.terminateRuntimeFailed(sessioncontract.ErrOperationMissing)
-		return sessioncontract.ErrOperationMissing
+		runtime.terminateRuntimeFailed(session.ErrOperationMissing)
+		return session.ErrOperationMissing
 	}
 	return runtime.abandonOutboundOperation(operationID, route, generation)
 }

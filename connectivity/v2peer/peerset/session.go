@@ -11,7 +11,7 @@ import (
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/turncontrol"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
@@ -185,7 +185,7 @@ func (s *ReceiverSession) SetDemand(demand Demand) error {
 }
 func (s *ReceiverSession) Ready() <-chan struct{} { return s.ready }
 func (s *ReceiverSession) Done() <-chan struct{}  { return s.done }
-func (s *ReceiverSession) Lane() (sessioncontract.LaneIdentity, bool) {
+func (s *ReceiverSession) Lane() (session.LaneIdentity, bool) {
 	s.owner.mu.Lock()
 	defer s.owner.mu.Unlock()
 	for _, path := range s.owner.paths {
@@ -193,7 +193,7 @@ func (s *ReceiverSession) Lane() (sessioncontract.LaneIdentity, bool) {
 			return lane, true
 		}
 	}
-	return sessioncontract.LaneIdentity{}, false
+	return session.LaneIdentity{}, false
 }
 func (s *ReceiverSession) Result() Result { s.mu.Lock(); defer s.mu.Unlock(); return s.result }
 func (s *ReceiverSession) Err() error     { return s.Result().Cause }

@@ -3,7 +3,7 @@ package receiversession
 import (
 	"context"
 	"github.com/windshare/windshare/core/framechannel"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/requestlane"
@@ -31,7 +31,7 @@ const (
 // exact candidate owner cannot subsequently enter both receiver lane registries.
 type LaneAdmissionResult struct {
 	GrantOperationID protocolsession.OperationID
-	Lane             sessioncontract.LaneIdentity
+	Lane             session.LaneIdentity
 	Disposition      LaneAdmissionDisposition
 	Rejection        protocolsession.LaneRejection
 	LaneInstallation LaneInstallation
@@ -47,14 +47,14 @@ func unverifiedReceiverLaneAdmission() LaneAdmissionResult {
 func receiverLaneSettlement(grant protocolsession.LaneGrant) LaneAdmissionResult {
 	return LaneAdmissionResult{
 		GrantOperationID: grant.OperationID,
-		Lane:             sessioncontract.LaneIdentity{ID: grant.LaneID, Epoch: grant.LaneEpoch},
+		Lane:             session.LaneIdentity{ID: grant.LaneID, Epoch: grant.LaneEpoch},
 		LaneInstallation: LaneInstallationNotAttempted,
 	}
 }
 
 // LaneDone identifies exact admitted ownership without consuming transport
 // frames. Connectivity can recover one retired relay while other lanes remain.
-func (runtime *Runtime) LaneDone(identity sessioncontract.LaneIdentity) (<-chan struct{}, bool) {
+func (runtime *Runtime) LaneDone(identity session.LaneIdentity) (<-chan struct{}, bool) {
 	if runtime == nil || runtime.core == nil {
 		return nil, false
 	}
@@ -76,7 +76,7 @@ func (runtime *Runtime) AttachLane(
 		if channel != nil {
 			_ = channel.Close()
 		}
-		return unverified, sessioncontract.ErrRuntimeConfig
+		return unverified, session.ErrRuntimeConfig
 	}
 	owner := sessioncore.NewCandidate(channel)
 	transferred := false
@@ -110,7 +110,7 @@ func (runtime *Runtime) AttachLane(
 		}
 		settlement.Disposition = LaneAdmissionRejected
 		settlement.Rejection = rejection
-		return settlement, &sessioncontract.LaneRejectedError{Rejection: rejection}
+		return settlement, &session.LaneRejectedError{Rejection: rejection}
 	}
 	if _, err := protocolsession.ParseLaneAccept(response, hello, runtime.sender); err != nil {
 		return unverified, err

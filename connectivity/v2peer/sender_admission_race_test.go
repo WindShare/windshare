@@ -11,7 +11,7 @@ import (
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	sendersession "github.com/windshare/windshare/core/session/sendersession"
 )
 
@@ -24,14 +24,14 @@ type controlledAdmissionSession struct {
 	rejection         *protocolsession.LaneRejection
 }
 
-func (session *controlledAdmissionSession) AdmitPeerChannel(
+func (peer *controlledAdmissionSession) AdmitPeerChannel(
 	ctx context.Context,
 	channel protocolsession.FrameChannel,
 	control sendersession.PeerAdmissionControl,
 ) (sendersession.PeerAdmissionResult, error) {
-	session.admissions <- channel
+	peer.admissions <- channel
 	grantOperation := testOperationID(248)
-	if !control.BeginAuthenticatedSettlement(grantOperation, session.lane) {
+	if !control.BeginAuthenticatedSettlement(grantOperation, peer.lane) {
 		_ = channel.Close()
 		return sendersession.PeerAdmissionResult{
 			Disposition:      sendersession.PeerAdmissionSilentClose,
@@ -39,24 +39,24 @@ func (session *controlledAdmissionSession) AdmitPeerChannel(
 			LaneAttachment:   sendersession.PeerLaneAttachmentNotAttempted,
 		}, context.Canceled
 	}
-	close(session.entered)
+	close(peer.entered)
 	go func() {
 		<-ctx.Done()
-		session.contextCancelOnce.Do(func() { close(session.contextCanceled) })
+		peer.contextCancelOnce.Do(func() { close(peer.contextCanceled) })
 	}()
-	<-session.release
-	if session.rejection != nil {
+	<-peer.release
+	if peer.rejection != nil {
 		_ = channel.Close()
 		return sendersession.PeerAdmissionResult{
-			SettlementBegan: true, GrantOperationID: grantOperation, Lane: session.lane,
+			SettlementBegan: true, GrantOperationID: grantOperation, Lane: peer.lane,
 			Disposition:      sendersession.PeerAdmissionRejected,
-			Rejection:        *session.rejection,
+			Rejection:        *peer.rejection,
 			ResponseDelivery: sendersession.PeerResponseDelivered,
 			LaneAttachment:   sendersession.PeerLaneAttachmentNotAttempted,
-		}, &sessioncontract.LaneRejectedError{Rejection: *session.rejection}
+		}, &session.LaneRejectedError{Rejection: *peer.rejection}
 	}
 	return sendersession.PeerAdmissionResult{
-		SettlementBegan: true, GrantOperationID: grantOperation, Lane: session.lane,
+		SettlementBegan: true, GrantOperationID: grantOperation, Lane: peer.lane,
 		Disposition:      sendersession.PeerAdmissionAccepted,
 		ResponseDelivery: sendersession.PeerResponseDelivered,
 		LaneAttachment:   sendersession.PeerLaneAttached,
@@ -229,7 +229,7 @@ func TestAuthenticatedLaneRejectionWinsAdmissionTimeout(t *testing.T) {
 	close(harness.session.release)
 	receiveTest(t, harness.admissionDone)
 	actual := receiveTest(t, result)
-	var rejected *sessioncontract.LaneRejectedError
+	var rejected *session.LaneRejectedError
 	if !errors.As(actual, &rejected) || rejected.Rejection != rejection {
 		t.Fatalf("authenticated rejection = %#v, error=%v", rejected, actual)
 	}

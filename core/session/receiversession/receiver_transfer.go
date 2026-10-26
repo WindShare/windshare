@@ -6,7 +6,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
@@ -55,7 +55,7 @@ func newReceiverRevisionWait(
 	runtime *Runtime,
 ) (revisionwait.GenerationToken, *revisionwait.Config, error) {
 	if runtime == nil || runtime.core == nil || runtime.Lifetime() == nil {
-		return revisionwait.GenerationToken{}, nil, sessioncontract.ErrRuntimeClosed
+		return revisionwait.GenerationToken{}, nil, session.ErrRuntimeClosed
 	}
 	generation, err := revisionwait.GenerationTokenFromBytes(runtime.ProtocolSessionID().Bytes())
 	if err != nil {
@@ -78,7 +78,7 @@ func (runtime *Runtime) ResolveOrdinaryOutputShape(
 	tracer ordinaryoutput.ShapeTracer,
 ) (ordinaryoutput.ShapeDecision, error) {
 	if runtime == nil || runtime.core == nil || runtime.catalog == nil {
-		return ordinaryoutput.ShapeDecision{}, sessioncontract.ErrRuntimeClosed
+		return ordinaryoutput.ShapeDecision{}, session.ErrRuntimeClosed
 	}
 	if ctx == nil {
 		return ordinaryoutput.ShapeDecision{}, ordinaryoutput.ErrInvalidShapeResolution
@@ -340,7 +340,7 @@ func (dependencies receiverTransferDependencies) classifyBoundary(
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
-	if errors.Is(err, sessioncontract.ErrRuntimeClosed) || runtime == nil || runtime.core == nil {
+	if errors.Is(err, session.ErrRuntimeClosed) || runtime == nil || runtime.core == nil {
 		return sessionTransportBoundaryError(err)
 	}
 	return classify(err)
@@ -349,7 +349,7 @@ func (dependencies receiverTransferDependencies) classifyBoundary(
 func receiverTerminalBoundaryError(runtime *Runtime, err error) error {
 	cause := runtime.Err()
 	if cause == nil {
-		cause = sessioncontract.ErrRuntimeClosed
+		cause = session.ErrRuntimeClosed
 	}
 	var boundary *transferfault.BoundaryError
 	if errors.As(cause, &boundary) && boundary != nil &&
@@ -376,7 +376,7 @@ func (observe CatalogScanProgressObserverFunc) ObserveCatalogScanProgress(
 	progress CatalogScanProgress,
 ) error {
 	if observe == nil {
-		return sessioncontract.ErrRuntimeConfig
+		return session.ErrRuntimeConfig
 	}
 	return observe(ctx, progress)
 }
@@ -434,7 +434,7 @@ func (transport rpcCatalogTransport) FetchPage(ctx context.Context, request cata
 			}
 			return catalogflow.DecodeCatalogResult(unsigned)
 		default:
-			return nil, sessioncontract.ErrOperationMissing
+			return nil, session.ErrOperationMissing
 		}
 	}
 }
@@ -501,7 +501,7 @@ func (dependencies receiverTransferDependencies) classifyAccess(ctx context.Cont
 	}
 	if ctx.Err() == nil && (errors.Is(err, revisionaccess.ErrClosed) ||
 		errors.Is(err, context.Canceled) && dependencies.runtime.Lifetime().Err() != nil) {
-		return receiverTerminalBoundaryError(dependencies.runtime, errors.Join(sessioncontract.ErrRuntimeClosed, err))
+		return receiverTerminalBoundaryError(dependencies.runtime, errors.Join(session.ErrRuntimeClosed, err))
 	}
 	return dependencies.classifySource(ctx, err)
 }
@@ -515,7 +515,7 @@ func (operation *receiverBlockOperation) complete(message protocolsession.Messag
 	}
 	count, err := contentflow.DecodeOperationComplete(unsigned)
 	if err != nil || count != 1 {
-		return operation.rejectCompletion(errors.Join(sessioncontract.ErrOperationMissing, err))
+		return operation.rejectCompletion(errors.Join(session.ErrOperationMissing, err))
 	}
 	if record.DataLength() == 0 {
 		carrier := operation.call.LastResponseLane()
@@ -526,7 +526,7 @@ func (operation *receiverBlockOperation) complete(message protocolsession.Messag
 			operation.call.RecordTraceCause(sessionobs.ProtocolOperationCauseLaneUnavailable)
 			return operation.reassignAfterRetirement(sessioncore.ErrLaneUnavailable, contentflow.CancelReasonOutputAbort)
 		}
-		return operation.rejectCompletion(sessioncontract.ErrOperationMissing)
+		return operation.rejectCompletion(session.ErrOperationMissing)
 	}
 	if err := operation.lane.assembler.CompleteOperation(operation.call.ID()); err != nil {
 		return operation.rejectCompletion(err)

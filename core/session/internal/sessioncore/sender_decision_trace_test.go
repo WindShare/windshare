@@ -3,7 +3,7 @@ package sessioncore
 import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -17,7 +17,7 @@ func TestSenderContentDecisionPreservesCorrelationAndHotPathFacts(t *testing.T) 
 		{Stage: contentflow.SenderDecisionBlockLeaseReleased, OperationID: protocolsession.OperationID{2}, RequestKind: protocolsession.MessageRequestBlocks, LeaseID: content.LeaseID{3}},
 		{Stage: contentflow.SenderDecisionCapacityBusy, OperationID: protocolsession.OperationID{4}, RequestKind: protocolsession.MessageOpenRevisions, CapacityDecisionID: revisioncapacity.CapacityDecisionID("capacity-owner-1-decision-2")},
 	} {
-		fact := sessionobs.NewSenderContentDecision(runtime.observationContext(decision.OperationID, decision.RequestKind), decision, sessioncontract.LaneIdentity{}, false)
+		fact := sessionobs.NewSenderContentDecision(runtime.observationContext(decision.OperationID, decision.RequestKind), decision, session.LaneIdentity{}, false)
 		runtime.protocolObservations.TryPublish(fact)
 	}
 	facts := recorder.facts()

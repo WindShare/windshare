@@ -15,7 +15,7 @@ import (
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	sendersession "github.com/windshare/windshare/core/session/sendersession"
 )
 
@@ -40,7 +40,7 @@ type testPeerSession struct {
 	failures        chan capturedFailure
 	admissions      chan protocolsession.FrameChannel
 	ownedAdmissions chan protocolsession.FrameChannel
-	lane            sessioncontract.LaneIdentity
+	lane            session.LaneIdentity
 	admitErr        error
 }
 
@@ -54,7 +54,7 @@ func newTestPeerSession(seed byte) *testPeerSession {
 		controls: make(chan capturedControl, 16), failures: make(chan capturedFailure, 16),
 		admissions:      make(chan protocolsession.FrameChannel, 4),
 		ownedAdmissions: make(chan protocolsession.FrameChannel, 4),
-		lane:            sessioncontract.LaneIdentity{ID: 9, Epoch: 2},
+		lane:            session.LaneIdentity{ID: 9, Epoch: 2},
 	}
 }
 

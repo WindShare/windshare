@@ -3,7 +3,7 @@ package sessioncore
 import (
 	"context"
 	"github.com/windshare/windshare/core/framechannel"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -33,7 +33,7 @@ func ReceiveHandshake(ctx context.Context, receive <-chan framechannel.Frame) ([
 		return nil, ctx.Err()
 	case frame, ok := <-receive:
 		if !ok || len(frame) == 0 {
-			return nil, sessioncontract.ErrHandshake
+			return nil, session.ErrHandshake
 		}
 		return append([]byte(nil), frame...), nil
 	}
