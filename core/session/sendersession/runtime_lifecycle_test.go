@@ -19,7 +19,7 @@ import (
 
 func TestRuntimeCleanCloseDrainsFullServiceQueue(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
-	handler := newCatalogHandler(nil, sessioncore.Responses{})
+	handler := newCatalogHandler(nil, &sessioncore.Responses{})
 	for range cap(handler.queue) {
 		// Zero generations model work already invalidated by the same terminal
 		// transition; Run must suppress it without touching the closed service.
@@ -61,7 +61,7 @@ func TestServiceHandlersEnforceBoundedQueuesAndSharedDirectoryFailureSchema(t *t
 	laneBody, _ := sessioncore.EncodeLaneAttachRequest(0)
 	laneRequest, _ := protocolsession.NewMessage(protocolsession.MessageLaneAttach, &operationID, laneBody)
 
-	catalogHandler := newCatalogHandler(nil, sessioncore.Responses{})
+	catalogHandler := newCatalogHandler(nil, &sessioncore.Responses{})
 	if err := catalogHandler.HandleMessage(context.Background(), terminal); !errors.Is(err, contentflow.ErrUnexpectedMessage) {
 		t.Fatalf("catalog wrong-kind error = %v", err)
 	}
@@ -75,7 +75,7 @@ func TestServiceHandlersEnforceBoundedQueuesAndSharedDirectoryFailureSchema(t *t
 		t.Fatalf("catalog queue overflow error = %v", err)
 	}
 
-	laneHandler := newLaneGrantHandler(nil, sessioncore.Responses{}, edgeErrorReader{})
+	laneHandler := newLaneGrantHandler(nil, &sessioncore.Responses{}, edgeErrorReader{})
 	if err := laneHandler.HandleMessage(context.Background(), terminal); !errors.Is(err, sessioncontract.ErrRuntimeConfig) {
 		t.Fatalf("lane wrong-kind error = %v", err)
 	}
@@ -88,7 +88,7 @@ func TestServiceHandlersEnforceBoundedQueuesAndSharedDirectoryFailureSchema(t *t
 	if err := laneHandler.HandleMessage(laneContext, laneRequest); !errors.Is(err, sessioncontract.ErrOperationOverflow) {
 		t.Fatalf("lane queue overflow error = %v", err)
 	}
-	malformedHandler := newLaneGrantHandler(nil, sessioncore.Responses{}, edgeErrorReader{})
+	malformedHandler := newLaneGrantHandler(nil, &sessioncore.Responses{}, edgeErrorReader{})
 	malformed, _ := protocolsession.NewMessage(protocolsession.MessageLaneAttach, &operationID, body)
 	if err := malformedHandler.HandleMessage(senderIngressContext(t, malformed), malformed); err != nil {
 		t.Fatal(err)

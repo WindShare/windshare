@@ -54,7 +54,7 @@ func TestRegisterSenderHandlersPropagatesEveryOwnershipConflict(t *testing.T) {
 }
 
 func TestCatalogHandlerSuppressesDuplicateWorkAndCancelsQueuedOperations(t *testing.T) {
-	handler := newCatalogHandler(nil, sessioncore.Responses{})
+	handler := newCatalogHandler(nil, &sessioncore.Responses{})
 	for range cap(handler.workers) {
 		handler.workers <- struct{}{}
 	}

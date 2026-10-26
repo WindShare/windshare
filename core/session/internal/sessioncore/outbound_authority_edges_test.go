@@ -22,7 +22,7 @@ func TestOutboundTransactionRequiresExactLiveGenerationAuthority(t *testing.T) {
 		}
 		ctx := bindOutboundRoute(context.Background(), operationID, route)
 
-		if _, err := beginOutboundTransaction(runtime, ctx, operationID); !errors.Is(err, sessioncontract.ErrOperationMissing) {
+		if _, err := beginOutboundTransaction(&Responses{runtime: runtime}, ctx, operationID); !errors.Is(err, sessioncontract.ErrOperationMissing) {
 			t.Fatalf("permit-less transaction error=%v", err)
 		}
 		if runtime.routes.current(operationID) != route {
@@ -49,7 +49,7 @@ func TestOutboundTransactionRequiresExactLiveGenerationAuthority(t *testing.T) {
 		ctx := bindOutboundRoute(context.Background(), operationID, route)
 		ctx = protocolsession.WithOutboundOperationPermit(ctx, permit)
 
-		if _, err := beginOutboundTransaction(runtime, ctx, operationID); !errors.Is(err, sessioncontract.ErrOperationMissing) {
+		if _, err := beginOutboundTransaction(&Responses{runtime: runtime}, ctx, operationID); !errors.Is(err, sessioncontract.ErrOperationMissing) {
 			t.Fatalf("generation-less transaction error=%v", err)
 		}
 		if runtime.operations.ActiveCount() != 1 || runtime.routes.current(operationID) != route {
@@ -89,7 +89,7 @@ func TestOutboundTransactionRequiresExactLiveGenerationAuthority(t *testing.T) {
 			t.Fatal("expired generation retained a tombstone")
 		}
 
-		if _, err := beginOutboundTransaction(runtime, ctx, operationID); !errors.Is(err, protocolsession.ErrUnknownOperation) {
+		if _, err := beginOutboundTransaction(&Responses{runtime: runtime}, ctx, operationID); !errors.Is(err, protocolsession.ErrUnknownOperation) {
 			t.Fatalf("expired-generation transaction error=%v", err)
 		}
 		// Reading the route under the send lock proves failed lease acquisition
@@ -135,7 +135,7 @@ func TestOutboundTransactionFailClosesReplayAuthorityContractViolations(t *testi
 				t.Fatal(err)
 			}
 			ctx, _ := testOutboundOperationContext(t, runtime, runtime.initial, request)
-			transaction, err := beginOutboundTransaction(runtime, ctx, operationID)
+			transaction, err := beginOutboundTransaction(&Responses{runtime: runtime}, ctx, operationID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -187,7 +187,7 @@ func TestResponseReplayAuthorityRejectionBeforeReceiptFailsRuntime(t *testing.T)
 				}
 				ctx, _ := testOutboundOperationContext(t, runtime, runtime.initial, request)
 				attempts := 0
-				result, err := (Responses{runtime: runtime}).executeResponse(
+				result, err := (&Responses{runtime: runtime}).executeResponse(
 					ctx, response.kind, operationID, sessionobs.ProtocolErrorContent{},
 					func(*outboundTransaction) (outboundLaneAttempt, error) {
 						return func(selectedLane, protocolsession.OutboundReplayPermit) (protocolsession.SendReceipt, error) {

@@ -3,157 +3,33 @@ package sessioncore
 import (
 	"context"
 	"errors"
-	"github.com/windshare/windshare/core/diagnosticerror"
 	"github.com/windshare/windshare/core/framechannel"
 	sessioncontract "github.com/windshare/windshare/core/session"
-	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"sync"
 )
 
-type runtimeTerminationCause uint8
-
-const (
-	RuntimeTerminationGracefulStop runtimeTerminationCause = iota + 1
-	RuntimeTerminationForcedClose
-	runtimeTerminationPeerTerminal
-	RuntimeTerminationPathsExhausted
-	runtimeTerminationFailed
-)
-
-func (cause runtimeTerminationCause) senderTerminalPair() (
-	sessionobs.SenderSessionTerminalTrigger,
-	sessionobs.SenderSessionTerminalProvenance,
-	bool,
-) {
-	switch cause {
-	case RuntimeTerminationGracefulStop:
-		return sessionobs.SenderSessionTerminalTriggerGracefulStop, sessionobs.SenderSessionTerminalProvenanceNormalStop, true
-	case RuntimeTerminationForcedClose:
-		return sessionobs.SenderSessionTerminalTriggerForcedClose, sessionobs.SenderSessionTerminalProvenanceCallerStop, true
-	case runtimeTerminationPeerTerminal:
-		return sessionobs.SenderSessionTerminalTriggerPeerTerminal, sessionobs.SenderSessionTerminalProvenanceRemoteClose, true
-	case RuntimeTerminationPathsExhausted:
-		return sessionobs.SenderSessionTerminalTriggerPathsExhausted, sessionobs.SenderSessionTerminalProvenanceLaneRetirement, true
-	case runtimeTerminationFailed:
-		return sessionobs.SenderSessionTerminalTriggerRuntimeFailed, sessionobs.SenderSessionTerminalProvenanceLocalFault, true
-	default:
-		return "", "", false
-	}
+// TerminalSendObservation carries only physical evidence, never operation or
+// replay authority. Role observers cannot participate in send settlement.
+type TerminalSendObservation struct {
+	ProtocolSessionID    protocolsession.ProtocolSessionID
+	Lane                 sessioncontract.LaneIdentity
+	Settled              bool
+	Outcome              protocolsession.SendOutcome
+	TransportDisposition framechannel.SendDisposition
+	NaturallyRetired     bool
 }
 
-type runtimeTerminationClaim struct {
-	cause   runtimeTerminationCause
-	won     bool
-	failure diagnosticerror.Snapshot
-}
-
-type runtimeTerminationArbiter struct {
-	mu      sync.Mutex
-	claimed bool
-	cause   runtimeTerminationCause
-}
-
-func (arbiter *runtimeTerminationArbiter) claim(cause runtimeTerminationCause) runtimeTerminationClaim {
-	if arbiter == nil {
-		return runtimeTerminationClaim{}
-	}
-	if _, _, valid := cause.senderTerminalPair(); !valid {
-		return runtimeTerminationClaim{}
-	}
-	arbiter.mu.Lock()
-	defer arbiter.mu.Unlock()
-	if arbiter.claimed {
-		return runtimeTerminationClaim{}
-	}
-	arbiter.claimed = true
-	arbiter.cause = cause
-	return runtimeTerminationClaim{cause: cause, won: true}
-}
-
-func (runtime *Runtime) claimTermination(cause runtimeTerminationCause) runtimeTerminationClaim {
-	if runtime == nil {
-		return runtimeTerminationClaim{}
-	}
-	return runtime.termination.claim(cause)
-}
-
-func (runtime *Runtime) publishTermination(claim runtimeTerminationClaim) {
-	if runtime == nil || !claim.won || runtime.sessionTerminalObserver == nil {
+func (outbound *Responses) observeTerminal(event TerminalSendObservation) {
+	if outbound.terminalObserver == nil {
 		return
 	}
-	trigger, provenance, valid := claim.cause.senderTerminalPair()
-	if !valid {
-		return
-	}
-	terminated := sessionobs.SenderSessionTerminated{
-		ProtocolSessionID: runtime.sessionID,
-		Trigger:           trigger,
-		Provenance:        provenance,
-		Failure:           claim.failure,
-	}
-	if !terminated.Valid() {
-		return
-	}
-	// Diagnostics must remain outside lifecycle authority. A faulty observer can
-	// lose its evidence, but it cannot alter cancellation, settlement, or cleanup.
 	func() {
 		defer func() { _ = recover() }()
-		runtime.sessionTerminalObserver.ObserveSenderSessionTerminated(terminated)
+		outbound.terminalObserver(event)
 	}()
 }
 
-func (runtime *Runtime) cancelContext() {
-	if runtime != nil && runtime.cancelLifecycle != nil {
-		runtime.cancelLifecycle()
-	}
-}
-
-func (runtime *Runtime) completeTermination(
-	claim runtimeTerminationClaim,
-	cancel bool,
-) {
-	if cancel {
-		runtime.cancelContext()
-	}
-	runtime.publishTermination(claim)
-}
-
-func (runtime *Runtime) terminate(cause runtimeTerminationCause) {
-	if runtime == nil {
-		return
-	}
-	if cause == runtimeTerminationFailed {
-		runtime.terminateWithFailure(cause, runtime.Err(), runtimeFailureSourceRuntime)
-		return
-	}
-	claim := runtime.claimTermination(cause)
-	runtime.completeTermination(claim, true)
-}
-
-func (runtime *Runtime) terminateRuntimeFailed(err error) {
-	runtime.terminateWithFailure(runtimeTerminationFailed, err, runtimeFailureSourceRuntime)
-}
-
-func (runtime *Runtime) terminateWithFailure(
-	cause runtimeTerminationCause, err error, source FailureSource,
-) {
-	if runtime == nil {
-		return
-	}
-	claim := runtime.claimTermination(cause)
-	if err != nil {
-		runtime.recordError(err)
-	}
-	// Cancellation cannot depend on error inspection or a diagnostic consumer.
-	runtime.cancelContext()
-	if claim.won && runtime.sessionTerminalObserver != nil {
-		claim.failure = diagnosticerror.Capture(err, string(source))
-	}
-	runtime.publishTermination(claim)
-}
-
-func (outbound Responses) sendTerminalAll(
+func (outbound *Responses) sendTerminalAll(
 	callerContext context.Context,
 	body []byte,
 ) error {
@@ -164,7 +40,7 @@ func (outbound Responses) sendTerminalAll(
 	)
 }
 
-func (outbound Responses) sendTerminalRecipients(
+func (outbound *Responses) sendTerminalRecipients(
 	callerContext context.Context,
 	body []byte,
 	lanes []selectedLane,
@@ -190,9 +66,8 @@ func (outbound Responses) sendTerminalRecipients(
 	var hardAdmissionError error
 	onlyStoppedBeforeAdmission := true
 	for _, lane := range lanes {
-		prepared, err := protocolsession.PrepareSenderControl(
-			outbound.privateKey,
-			outbound.runtime.senderControlBase(lane.identity),
+		prepared, err := outbound.prepareControl(
+			outbound.controlBinding(lane.identity),
 			protocolsession.MessageSessionTerminal,
 			nil,
 			body,
@@ -237,13 +112,11 @@ func (outbound Responses) sendTerminalRecipients(
 	for _, settled := range completions {
 		completion := settled.completion
 		naturallyRetired := terminalCompletionNaturallyRetired(completion, noUsableReplacement)
-		observeSenderTerminalSend(
-			outbound.observer,
-			outbound.runtime.sessionID,
-			settled.lane,
-			completion,
-			naturallyRetired,
-		)
+		outbound.observeTerminal(TerminalSendObservation{
+			ProtocolSessionID: outbound.runtime.sessionID,
+			Lane:              settled.lane, Settled: completion.Settled, Outcome: completion.Outcome,
+			TransportDisposition: completion.TransportDisposition, NaturallyRetired: naturallyRetired,
+		})
 		if naturallyRetired {
 			// An admitted receipt can settle after channel retirement or while its
 			// owning writer publishes last-lane completion. Neither path reached the

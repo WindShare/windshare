@@ -38,7 +38,7 @@ func TestInboundRetiredPeerCandidateUsesOperationAuthorityWithoutResponseRoute(t
 			}
 			body := []byte{0xf6}
 			if terminal == protocolsession.MessageOperationError {
-				binding := runtime.senderControlBase(runtime.initial)
+				binding := (&Responses{runtime: runtime}).controlBinding(runtime.initial)
 				binding.Sequence, binding.MessageKind = 1, terminal
 				binding.OperationID, binding.HasOperationID = id, true
 				var err error

@@ -1,6 +1,7 @@
 package sendersession
 
 import (
+	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
 )
 
@@ -26,9 +27,40 @@ func (observers *senderTerminalObservers) sendObserver() sessionobs.SenderTermin
 	return observers.send
 }
 
-func (observers *senderTerminalObservers) sessionObserver() sessionobs.SenderSessionTerminalObserver {
-	if observers == nil {
+func (observers *senderTerminalObservers) sessionObserver() sessioncore.TerminationObserver {
+	if observers == nil || observers.session == nil {
 		return nil
 	}
-	return observers.session
+	return observers
+}
+
+func (observers *senderTerminalObservers) ObserveTermination(event sessioncore.Termination) {
+	trigger, provenance, valid := senderTerminalPair(event.Cause)
+	if !valid {
+		return
+	}
+	observers.session.ObserveSenderSessionTerminated(sessionobs.SenderSessionTerminated{
+		ProtocolSessionID: event.ProtocolSessionID, Trigger: trigger, Provenance: provenance, Failure: event.Failure,
+	})
+}
+
+func senderTerminalPair(cause sessioncore.TerminationCause) (
+	sessionobs.SenderSessionTerminalTrigger,
+	sessionobs.SenderSessionTerminalProvenance,
+	bool,
+) {
+	switch cause {
+	case sessioncore.TerminationGracefulStop:
+		return sessionobs.SenderSessionTerminalTriggerGracefulStop, sessionobs.SenderSessionTerminalProvenanceNormalStop, true
+	case sessioncore.TerminationForcedClose:
+		return sessionobs.SenderSessionTerminalTriggerForcedClose, sessionobs.SenderSessionTerminalProvenanceCallerStop, true
+	case sessioncore.TerminationPeerTerminal:
+		return sessionobs.SenderSessionTerminalTriggerPeerTerminal, sessionobs.SenderSessionTerminalProvenanceRemoteClose, true
+	case sessioncore.TerminationPathsExhausted:
+		return sessionobs.SenderSessionTerminalTriggerPathsExhausted, sessionobs.SenderSessionTerminalProvenanceLaneRetirement, true
+	case sessioncore.TerminationFailed:
+		return sessionobs.SenderSessionTerminalTriggerRuntimeFailed, sessionobs.SenderSessionTerminalProvenanceLocalFault, true
+	default:
+		return "", "", false
+	}
 }

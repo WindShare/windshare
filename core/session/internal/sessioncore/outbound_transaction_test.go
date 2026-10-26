@@ -116,9 +116,9 @@ func TestSenderControlTransactionAggregatesAttemptsAndDrainsAuthority(t *testing
 			)
 			operationContext, _ := testOutboundOperationContext(t, runtime, firstIdentity, request)
 			body, _ := contentflow.EncodeOperationComplete(1)
-			outbound := Responses{
-				runtime:    runtime,
-				privateKey: ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)),
+			outbound := &Responses{
+				runtime:         runtime,
+				controlPreparer: testControlPreparer(ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))),
 			}
 			outcome, sendErr := outbound.SendControl(
 				operationContext, protocolsession.MessageOperationComplete, operationID, body,
@@ -201,7 +201,7 @@ func TestOutboundTransactionAttemptsExactlyEveryFullLaneIdentityOnce(t *testing.
 		t.Fatal(err)
 	}
 	operationContext, _ := testOutboundOperationContext(t, runtime, runtime.initial, request)
-	transaction, err := beginOutboundTransaction(runtime, operationContext, operationID)
+	transaction, err := beginOutboundTransaction(&Responses{runtime: runtime}, operationContext, operationID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,9 +328,9 @@ func TestFragmentFailureRetainsRouteUntilOperationErrorDrainsAuthority(t *testin
 	)
 	operationContext, _ := testOutboundOperationContext(t, runtime, firstIdentity, request)
 	fragments, _ := contentflow.FragmentRecord(operationID, []byte("record"))
-	outbound := Responses{
-		runtime:    runtime,
-		privateKey: ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)),
+	outbound := &Responses{
+		runtime:         runtime,
+		controlPreparer: testControlPreparer(ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))),
 	}
 	if err := outbound.SendFragment(operationContext, fragments[0]); err == nil {
 		t.Fatal("all-lane fragment failure unexpectedly succeeded")
@@ -386,7 +386,7 @@ func TestUnsettledCallerCancelDoesNotMigrateOrTerminateSession(t *testing.T) {
 	)
 	operationContext, _ := testOutboundOperationContext(t, runtime, blockedIdentity, request)
 	fragments, _ := contentflow.FragmentRecord(operationID, []byte("record"))
-	outbound := Responses{runtime: runtime}
+	outbound := &Responses{runtime: runtime}
 	sendContext, cancelSend := context.WithCancel(operationContext)
 	sendDone := make(chan error, 1)
 	go func() { sendDone <- outbound.SendFragment(sendContext, fragments[0]) }()
@@ -423,7 +423,7 @@ func TestUnsettledCallerCancelDoesNotMigrateOrTerminateSession(t *testing.T) {
 		t.Fatalf("second operation fragment: %v", err)
 	}
 	completeBody, _ := contentflow.EncodeOperationComplete(1)
-	outbound.privateKey = ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+	outbound.controlPreparer = testControlPreparer(ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)))
 	if outcome, err := outbound.SendControl(
 		secondContext, protocolsession.MessageOperationComplete, secondOperation, completeBody,
 	); err != nil || outcome.Evidence() != protocolsession.ResponseSendEvidenceTransportConfirmed {
@@ -446,7 +446,7 @@ func TestSettledUnknownWithoutReplayAuthorityFailClosesSession(t *testing.T) {
 	)
 	operationContext, _ := testOutboundOperationContext(t, runtime, runtime.initial, request)
 	transaction, err := beginOutboundTransaction(
-		runtime, operationContext, operationID,
+		&Responses{runtime: runtime}, operationContext, operationID,
 	)
 	if err != nil {
 		t.Fatal(err)

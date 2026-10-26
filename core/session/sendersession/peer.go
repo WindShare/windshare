@@ -144,7 +144,7 @@ func (function PeerHandlerFactoryFunc) ClassifyUnboundOperationContinuation(
 
 type senderPeerSession struct {
 	runtime  *Runtime
-	outbound sessioncore.Responses
+	outbound *sessioncore.Responses
 }
 
 func (session senderPeerSession) ShareInstance() catalog.ShareInstance {

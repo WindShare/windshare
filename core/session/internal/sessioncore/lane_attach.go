@@ -34,7 +34,7 @@ var laneAttachDecMode = func() cbor.DecMode {
 	return mode
 }()
 
-type laneAttachRequest struct{ requestedLaneID uint32 }
+type LaneAttachRequest struct{ requestedLaneID uint32 }
 
 func EncodeLaneAttachRequest(requestedLaneID uint32) ([]byte, error) {
 	return protocolsession.EncodeBody(map[uint64]any{
@@ -44,16 +44,16 @@ func EncodeLaneAttachRequest(requestedLaneID uint32) ([]byte, error) {
 	})
 }
 
-func DecodeLaneAttachRequest(encoded []byte) (laneAttachRequest, error) {
+func DecodeLaneAttachRequest(encoded []byte) (LaneAttachRequest, error) {
 	fields, err := decodeLaneAttachBody(encoded, 3)
 	if err != nil || fields[0] != laneAttachBodyVersion || fields[1] != laneAttachRequestMode {
-		return laneAttachRequest{}, errors.Join(sessioncontract.ErrRuntimeConfig, err)
+		return LaneAttachRequest{}, errors.Join(sessioncontract.ErrRuntimeConfig, err)
 	}
 	requested, ok := fields[2].(uint64)
 	if !ok || requested > uint64(^uint32(0)) {
-		return laneAttachRequest{}, sessioncontract.ErrRuntimeConfig
+		return LaneAttachRequest{}, sessioncontract.ErrRuntimeConfig
 	}
-	return laneAttachRequest{requestedLaneID: uint32(requested)}, nil
+	return LaneAttachRequest{requestedLaneID: uint32(requested)}, nil
 }
 
 func EncodeLaneGrant(grant protocolsession.LaneGrant) ([]byte, error) {

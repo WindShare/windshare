@@ -6,7 +6,6 @@ import (
 	"errors"
 	"github.com/windshare/windshare/core/framechannel"
 	sessioncontract "github.com/windshare/windshare/core/session"
-	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"sync"
 	"testing"
@@ -31,7 +30,7 @@ func (channel *terminalCancellationRejectionChannel) SendTerminal(
 func TestEmptyTerminalFanoutHonorsCallerCancellation(t *testing.T) {
 	runtime := &Runtime{}
 	runtime.lanes = newRuntimeLanes(runtime)
-	outbound := Responses{runtime: runtime}
+	outbound := &Responses{runtime: runtime}
 
 	if err := outbound.sendTerminalAll(context.Background(), nil); err != nil {
 		t.Fatalf("empty terminal fanout failed: %v", err)
@@ -98,7 +97,7 @@ func TestTerminalPreAdmissionWriterStopRequiresNoUsableReplacement(t *testing.T)
 				t.Fatalf("stopped-writer authority: usable=%v snapshot=%+v selected=%+v err=%v",
 					usable, current, selected, selectErr)
 			}
-			err := (Responses{runtime: runtime, privateKey: privateKey}).sendTerminalRecipients(
+			err := (&Responses{runtime: runtime, controlPreparer: testControlPreparer(privateKey)}).sendTerminalRecipients(
 				context.Background(), body, recipients,
 			)
 			if test.wantError {
@@ -124,12 +123,12 @@ func TestTerminalPostAdmissionWriterStopRequiresNoUsableReplacement(t *testing.T
 		name           string
 		addReplacement bool
 		wantError      bool
-		wantDecision   sessionobs.SenderTerminalSendDecision
+		wantRetired    bool
 	}{
-		{name: "last writer retires", wantDecision: sessionobs.SenderTerminalSendDecisionNaturalRetirement},
+		{name: "last writer retires", wantRetired: true},
 		{
 			name: "usable replacement remains", addReplacement: true, wantError: true,
-			wantDecision: sessionobs.SenderTerminalSendDecisionFailed,
+			wantRetired: false,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -147,14 +146,12 @@ func TestTerminalPostAdmissionWriterStopRequiresNoUsableReplacement(t *testing.T
 						t.Fatalf("add usable replacement: %v", err)
 					}
 				}
-				observed := make(chan sessionobs.SenderTerminalSendObserved, 1)
+				observed := make(chan TerminalSendObservation, 1)
 				result := make(chan error, 1)
 				go func() {
-					result <- (Responses{
-						runtime: runtime, privateKey: privateKey,
-						observer: sessionobs.SenderTerminalSendObserverFunc(
-							func(observation sessionobs.SenderTerminalSendObserved) { observed <- observation },
-						),
+					result <- (&Responses{
+						runtime: runtime, controlPreparer: testControlPreparer(privateKey),
+						terminalObserver: func(observation TerminalSendObservation) { observed <- observation },
 					}).sendTerminalRecipients(
 						context.Background(), body, recipients,
 					)
@@ -177,9 +174,9 @@ func TestTerminalPostAdmissionWriterStopRequiresNoUsableReplacement(t *testing.T
 					t.Fatalf("naturally retired receipt failed terminal fanout: %v", terminalErr)
 				}
 				observation := <-observed
-				if observation.TransportDisposition != sessionobs.SenderTerminalSendTransportNotReached ||
-					observation.Outcome != sessionobs.SenderTerminalSendOutcomeDropped ||
-					observation.Decision != test.wantDecision {
+				if observation.TransportDisposition != 0 ||
+					observation.Outcome != protocolsession.SendOutcomeDropped ||
+					observation.NaturallyRetired != test.wantRetired {
 					t.Fatalf("post-admission retirement observation=%+v", observation)
 				}
 			})
@@ -199,12 +196,12 @@ func TestTerminalClaimRejectedByLaneCancellationRequiresNoUsableReplacement(t *t
 		name           string
 		addReplacement bool
 		wantError      bool
-		wantDecision   sessionobs.SenderTerminalSendDecision
+		wantRetired    bool
 	}{
-		{name: "last lane cancellation", wantDecision: sessionobs.SenderTerminalSendDecisionNaturalRetirement},
+		{name: "last lane cancellation", wantRetired: true},
 		{
 			name: "usable replacement remains", addReplacement: true, wantError: true,
-			wantDecision: sessionobs.SenderTerminalSendDecisionFailed,
+			wantRetired: false,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -235,14 +232,12 @@ func TestTerminalClaimRejectedByLaneCancellationRequiresNoUsableReplacement(t *t
 					}
 				}
 
-				observed := make(chan sessionobs.SenderTerminalSendObserved, 1)
+				observed := make(chan TerminalSendObservation, 1)
 				terminalResult := make(chan error, 1)
 				go func() {
-					terminalResult <- (Responses{
-						runtime: runtime, privateKey: privateKey,
-						observer: sessionobs.SenderTerminalSendObserverFunc(
-							func(observation sessionobs.SenderTerminalSendObserved) { observed <- observation },
-						),
+					terminalResult <- (&Responses{
+						runtime: runtime, controlPreparer: testControlPreparer(privateKey),
+						terminalObserver: func(observation TerminalSendObservation) { observed <- observation },
 					}).sendTerminalRecipients(
 						context.Background(), body, recipients,
 					)
@@ -273,9 +268,9 @@ func TestTerminalClaimRejectedByLaneCancellationRequiresNoUsableReplacement(t *t
 				}
 				observation := <-observed
 				if !observation.Settled ||
-					observation.TransportDisposition != sessionobs.SenderTerminalSendTransportRejected ||
-					observation.Outcome != sessionobs.SenderTerminalSendOutcomeDropped ||
-					observation.Decision != test.wantDecision {
+					observation.TransportDisposition != framechannel.SendRejected ||
+					observation.Outcome != protocolsession.SendOutcomeDropped ||
+					observation.NaturallyRetired != test.wantRetired {
 					t.Fatalf("cancellation rejection observation=%+v", observation)
 				}
 			})

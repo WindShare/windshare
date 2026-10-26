@@ -102,7 +102,7 @@ func TestSenderQueuesSuppressCanceledGenerationBeforeWorkPublication(t *testing.
 	catalogRequest := operationMessageForTest(
 		t, protocolsession.MessageListChildren, operationID, []byte{1},
 	)
-	catalogHandler := newCatalogHandler(nil, sessioncore.Responses{})
+	catalogHandler := newCatalogHandler(nil, &sessioncore.Responses{})
 	if err := catalogHandler.HandleMessage(canceledSenderIngress(t, catalogRequest), catalogRequest); err != nil {
 		t.Fatalf("catalog stale request: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestSenderQueuesSuppressCanceledGenerationBeforeWorkPublication(t *testing.
 
 	laneBody, _ := sessioncore.EncodeLaneAttachRequest(0)
 	laneRequest := operationMessageForTest(t, protocolsession.MessageLaneAttach, operationID, laneBody)
-	laneHandler := newLaneGrantHandler(nil, sessioncore.Responses{}, nil)
+	laneHandler := newLaneGrantHandler(nil, &sessioncore.Responses{}, nil)
 	if err := laneHandler.HandleMessage(canceledSenderIngress(t, laneRequest), laneRequest); err != nil {
 		t.Fatalf("lane stale request: %v", err)
 	}

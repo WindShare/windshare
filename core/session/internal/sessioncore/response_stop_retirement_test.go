@@ -28,7 +28,7 @@ func TestSenderStopDuringResponseRetirement(t *testing.T) {
 				sender, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
 				sender.start()
 				t.Cleanup(sender.close)
-				outbound := NewResponses(sender, ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, ed25519.SeedSize)), nil)
+				outbound := NewResponses(sender, ResponseConfig{ControlPreparer: testControlPreparer(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, ed25519.SeedSize)))})
 				// Keep the operation owner alive through stop so finalization cannot
 				// clear its route before the delayed response retires it.
 				_, release, err := sender.beginExternalAdmission(t.Context())
@@ -44,7 +44,7 @@ func TestSenderStopDuringResponseRetirement(t *testing.T) {
 				ctx, _ := testOutboundOperationContext(t, sender, sender.initial, request)
 				stop := func() {
 					_ = sender.router.TerminateLocal()
-					sender.terminate(RuntimeTerminationGracefulStop)
+					sender.terminate(TerminationGracefulStop)
 					<-sender.Lifetime().Done()
 					if !sender.operations.Terminated() {
 						t.Fatal("stop did not revoke operation authority")

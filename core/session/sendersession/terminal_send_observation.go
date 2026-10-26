@@ -1,42 +1,39 @@
-package sessioncore
+package sendersession
 
 import (
 	"github.com/windshare/windshare/core/framechannel"
-	sessioncontract "github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
 func observeSenderTerminalSend(
 	observer sessionobs.SenderTerminalSendObserver,
-	sessionID protocolsession.ProtocolSessionID,
-	lane sessioncontract.LaneIdentity,
-	completion protocolsession.SendCompletion,
-	naturallyRetired bool,
+	event sessioncore.TerminalSendObservation,
 ) {
 	if observer == nil {
 		return
 	}
 	observation := sessionobs.SenderTerminalSendObserved{
-		ProtocolSessionID: sessionID,
-		Lane:              lane,
-		Settled:           completion.Settled,
+		ProtocolSessionID: event.ProtocolSessionID,
+		Lane:              event.Lane,
+		Settled:           event.Settled,
 		Decision:          sessionobs.SenderTerminalSendDecisionFailed,
 	}
 	switch {
-	case !completion.Settled:
+	case !event.Settled:
 		observation.TransportDisposition = sessionobs.SenderTerminalSendTransportUnsettled
-	case completion.TransportDisposition == framechannel.SendRetired:
+	case event.TransportDisposition == framechannel.SendRetired:
 		observation.TransportDisposition = sessionobs.SenderTerminalSendTransportRetired
 		observation.Decision = sessionobs.SenderTerminalSendDecisionNaturalRetirement
-	case completion.TransportDisposition == framechannel.SendRejected:
+	case event.TransportDisposition == framechannel.SendRejected:
 		observation.TransportDisposition = sessionobs.SenderTerminalSendTransportRejected
-	case completion.TransportDisposition == framechannel.SendAccepted:
+	case event.TransportDisposition == framechannel.SendAccepted:
 		observation.TransportDisposition = sessionobs.SenderTerminalSendTransportAccepted
 	default:
 		observation.TransportDisposition = sessionobs.SenderTerminalSendTransportNotReached
 	}
-	switch completion.Outcome {
+	switch event.Outcome {
 	case protocolsession.SendOutcomeTransportConfirmed:
 		observation.Outcome = sessionobs.SenderTerminalSendOutcomeDelivered
 		observation.Decision = sessionobs.SenderTerminalSendDecisionDelivered
@@ -45,7 +42,7 @@ func observeSenderTerminalSend(
 	case protocolsession.SendOutcomeUnknown:
 		observation.Outcome = sessionobs.SenderTerminalSendOutcomeUnknown
 	}
-	if naturallyRetired && observation.Decision != sessionobs.SenderTerminalSendDecisionDelivered {
+	if event.NaturallyRetired && observation.Decision != sessionobs.SenderTerminalSendDecisionDelivered {
 		observation.Decision = sessionobs.SenderTerminalSendDecisionNaturalRetirement
 	}
 	// Terminal-send evidence is diagnostic consequence data. Observer failures

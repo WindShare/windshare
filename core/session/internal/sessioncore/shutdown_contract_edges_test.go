@@ -24,9 +24,9 @@ func TestTerminalFanoutPreservesCallerCancellationBeforeAdmission(t *testing.T) 
 	}
 	callerContext, cancelCaller := context.WithCancel(context.Background())
 	cancelCaller()
-	outbound := Responses{
-		runtime:    runtime,
-		privateKey: ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)),
+	outbound := &Responses{
+		runtime:         runtime,
+		controlPreparer: testControlPreparer(ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))),
 	}
 	err = outbound.sendTerminalRecipients(
 		callerContext,

@@ -94,8 +94,8 @@ func TestConcurrentSameIDRequestsAdmitExactlyOneRouteAuthority(t *testing.T) {
 	writerContext, stopWriter := context.WithCancel(context.Background())
 	writerDone := make(chan error, 1)
 	go func() { writerDone <- lane.writer.Run(writerContext) }()
-	outbound := Responses{
-		runtime: runtime, privateKey: ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)),
+	outbound := &Responses{
+		runtime: runtime, controlPreparer: testControlPreparer(ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))),
 	}
 	outcome, err := outbound.SendControl(
 		operationContext,
@@ -157,8 +157,8 @@ func testForcedHostileSameIDReuseRejectsDelayedOldRouteContext(t *testing.T) {
 	}
 	oldRoute := runtime.routes.current(operationID)
 	oldContext := dispatchTestOperationContext(t, runtime, handlerContexts)
-	outbound := Responses{
-		runtime: runtime, privateKey: ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)),
+	outbound := &Responses{
+		runtime: runtime, controlPreparer: testControlPreparer(ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))),
 	}
 	if outcome, err := outbound.SendControl(
 		oldContext, protocolsession.MessageOpenResults, operationID, body,

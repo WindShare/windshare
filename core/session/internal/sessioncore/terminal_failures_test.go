@@ -31,7 +31,7 @@ func TestDeliveredTerminalPreservesCallerAndHardAdmissionFailures(t *testing.T) 
 		sender, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
 		sender.start()
 		t.Cleanup(sender.close)
-		outbound := Responses{runtime: sender, privateKey: ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, ed25519.SeedSize))}
+		outbound := &Responses{runtime: sender, controlPreparer: testControlPreparer(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, ed25519.SeedSize)))}
 		callerContext, cancelCaller := context.WithCancel(context.Background())
 		cancelCaller()
 		err := outbound.sendTerminalRecipients(
@@ -45,7 +45,7 @@ func TestDeliveredTerminalPreservesCallerAndHardAdmissionFailures(t *testing.T) 
 		sender, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
 		sender.start()
 		t.Cleanup(sender.close)
-		outbound := Responses{runtime: sender, privateKey: ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, ed25519.SeedSize))}
+		outbound := &Responses{runtime: sender, controlPreparer: testControlPreparer(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, ed25519.SeedSize)))}
 		recipients := append([]selectedLane{{identity: sessioncontract.LaneIdentity{}}}, sender.lanes.snapshot()...)
 		err := outbound.sendTerminalRecipients(
 			context.Background(), body, recipients,
@@ -58,7 +58,7 @@ func TestDeliveredTerminalPreservesCallerAndHardAdmissionFailures(t *testing.T) 
 		sender, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
 		sender.start()
 		t.Cleanup(sender.close)
-		outbound := Responses{runtime: sender, privateKey: ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, ed25519.SeedSize))}
+		outbound := &Responses{runtime: sender, controlPreparer: testControlPreparer(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, ed25519.SeedSize)))}
 		policyRuntime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
 		failedChannel := newMemoryChannel(t)
 		sealErr := errors.New("terminal seal failed")

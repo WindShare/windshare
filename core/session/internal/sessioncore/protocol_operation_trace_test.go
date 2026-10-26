@@ -123,7 +123,7 @@ func TestSenderProtocolOperationTraceCorrelatesRequestAndResponse(t *testing.T) 
 		t.Fatal(err)
 	}
 	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x72}, ed25519.SeedSize))
-	outbound := Responses{runtime: runtime, privateKey: privateKey}
+	outbound := &Responses{runtime: runtime, controlPreparer: testControlPreparer(privateKey)}
 	responseBody, err := contentflow.EncodeOperationComplete(0)
 	if err != nil {
 		t.Fatal(err)
@@ -198,7 +198,7 @@ func TestSenderProtocolOperationTraceCapturesFailureSendSettlement(t *testing.T)
 		t.Fatal(err)
 	}
 	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x77}, ed25519.SeedSize))
-	outbound := Responses{runtime: runtime, privateKey: privateKey}
+	outbound := &Responses{runtime: runtime, controlPreparer: testControlPreparer(privateKey)}
 	failureBody, err := protocolsession.EncodeOperationFailure(protocolsession.OperationFailure{
 		Scope:      protocolsession.OperationScopeRevision,
 		Code:       0x3008,
@@ -326,7 +326,7 @@ func TestProtocolOperationTraceCapturesAuthenticatedReceivedFailureAtSource(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding := runtime.senderControlBase(runtime.initial)
+	binding := (&Responses{runtime: runtime}).controlBinding(runtime.initial)
 	binding.Sequence = 1
 	binding.MessageKind = protocolsession.MessageOperationError
 	binding.OperationID = call.id

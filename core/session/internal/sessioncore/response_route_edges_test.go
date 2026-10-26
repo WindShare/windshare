@@ -14,7 +14,7 @@ import (
 func TestResponseWithoutLaneAndMalformedFailureReleaseRoute(t *testing.T) {
 	sender, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
 	identity := sender.initial
-	outbound := NewResponses(sender, ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, ed25519.SeedSize)), nil)
+	outbound := NewResponses(sender, ResponseConfig{ControlPreparer: testControlPreparer(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, ed25519.SeedSize)))})
 	fragments, err := contentflow.FragmentRecord(id16[protocolsession.OperationID](77), []byte{1})
 	if err != nil {
 		t.Fatal(err)

@@ -12,6 +12,8 @@ func TestSessionDependenciesFollowOwnership(t *testing.T) {
 		{session + "/receiversession", session + "/sendersession", true},
 		{session + "/internal/sessioncore", session + "/receiversession", true},
 		{session + "/internal/sessioncore", coreImportPath + "/transfer", true},
+		{session + "/internal/sessioncore", "crypto/ed25519", true},
+		{session + "/sendersession", "crypto/ed25519", false},
 		{session + "/observation", session + "/internal/sessioncore", true},
 		{session, session + "/sendersession", true},
 		{session + "/sendersession", session + "/internal/sessioncore", false},

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"github.com/windshare/windshare/core/observationstream"
 	sessioncontract "github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
@@ -22,7 +23,7 @@ func TestResponsePreparationFailureOwnsNoAttempt(t *testing.T) {
 			id := id16[protocolsession.OperationID](140)
 			request, _ := protocolsession.NewMessage(protocolsession.MessageReleaseLease, &id, []byte{0xa0})
 			ctx, _ := testOutboundOperationContext(t, runtime, runtime.initial, request)
-			outbound := Responses{runtime: runtime}
+			outbound := &Responses{runtime: runtime}
 			if mode == "authority" {
 				ctx = context.Background()
 			}
@@ -64,7 +65,7 @@ func TestResponseCleanupFailurePreservesConfirmedEvidence(t *testing.T) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	fragments, _ := contentflow.FragmentRecord(id, []byte("record"))
-	outbound := Responses{runtime: runtime}
+	outbound := &Responses{runtime: runtime}
 	result, err := outbound.executeResponse(ctx, fragments[0].Kind(), id, sessionobs.ProtocolErrorContent{}, func(transaction *outboundTransaction) (outboundLaneAttempt, error) {
 		return func(lane selectedLane, _ protocolsession.OutboundReplayPermit) (protocolsession.SendReceipt, error) {
 			receipt, err := lane.writer.TryAuthorizedData(fragments[0], transaction.authority)
@@ -94,7 +95,8 @@ func TestPendingResponseAndLateSettlementRemainIndependent(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
 		recorder := newProtocolTraceRecorder(runtime)
-		runtime.startReceiptObservations()
+		settlements, settledEvents, _ := observationstream.New[protocolsession.SendAttemptSettlement](1)
+		defer settlements.Complete()
 		base, peer := newMemoryChannelPair()
 		defer peer.Close()
 		channel := &blockingRuntimeLaneChannel{memoryChannel: base, started: make(chan struct{}), release: make(chan struct{})}
@@ -111,7 +113,7 @@ func TestPendingResponseAndLateSettlementRemainIndependent(t *testing.T) {
 		ctx, _ := testOutboundOperationContext(t, runtime, identity, request)
 		ctx, cancel := context.WithCancel(ctx)
 		fragments, _ := contentflow.FragmentRecord(id, []byte("record"))
-		outbound := Responses{runtime: runtime}
+		outbound := &Responses{runtime: runtime, settlements: settlements}
 		sent := make(chan error, 1)
 		go func() { sent <- outbound.SendFragment(ctx, fragments[0]) }()
 		<-channel.started
@@ -134,10 +136,15 @@ func TestPendingResponseAndLateSettlementRemainIndependent(t *testing.T) {
 		close(channel.release)
 		synctest.Wait()
 		facts = recorder.facts()
-		if len(facts) != 2 {
-			t.Fatalf("settlement facts=%v", facts)
+		if len(facts) != 1 {
+			t.Fatalf("settlement rewrote returned facts=%v", facts)
 		}
-		settled := facts[1].(sessionobs.SendAttemptSettled)
+		settled := <-settledEvents
+		correlation := settled.Correlation()
+		if correlation.ProtocolSessionID != runtime.sessionID || correlation.OperationID != id ||
+			correlation.RequestKind != request.Kind() || correlation.ResponseKind != fragments[0].Kind() {
+			t.Fatalf("settlement correlation=%+v", correlation)
+		}
 		if settled.Attempt().Identity() != pending || settled.Attempt().Outcome() != protocolsession.SendOutcomeTransportConfirmed ||
 			!settled.Attempt().Settled() || !settled.ObservedAt().After(returned.ObservedAt()) ||
 			returned.Result() != before {
@@ -147,7 +154,7 @@ func TestPendingResponseAndLateSettlementRemainIndependent(t *testing.T) {
 		<-done
 		runtime.abortBeforeStart()
 		completion := recorder.producer.Complete()
-		if completion.Enqueued != 2 || completion.CapacityDropped != 0 {
+		if completion.Enqueued != 1 || completion.CapacityDropped != 0 {
 			t.Fatalf("completion=%+v", completion)
 		}
 	})
@@ -163,7 +170,7 @@ func TestInvalidLaterReceiptCannotProveWholeResponseNotSent(t *testing.T) {
 	id := id16[protocolsession.OperationID](143)
 	request, _ := protocolsession.NewMessage(protocolsession.MessageRequestBlocks, &id, []byte{0xa0})
 	ctx, _ := testOutboundOperationContext(t, runtime, runtime.initial, request)
-	transaction, err := beginOutboundTransaction(runtime, ctx, id)
+	transaction, err := beginOutboundTransaction(&Responses{runtime: runtime}, ctx, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +199,7 @@ func TestResponseSequencesDistinguishStreamingResponses(t *testing.T) {
 	id := id16[protocolsession.OperationID](144)
 	request, _ := protocolsession.NewMessage(protocolsession.MessageRequestBlocks, &id, []byte{0xa0})
 	ctx, _ := testOutboundOperationContext(t, runtime, runtime.initial, request)
-	outbound := Responses{runtime: runtime, privateKey: ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))}
+	outbound := &Responses{runtime: runtime, controlPreparer: testControlPreparer(ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)))}
 	fragments, _ := contentflow.FragmentRecord(id, []byte("record"))
 	for range 2 {
 		_, _ = outbound.executeResponse(ctx, fragments[0].Kind(), id, sessionobs.ProtocolErrorContent{}, func(*outboundTransaction) (outboundLaneAttempt, error) {
@@ -232,7 +239,7 @@ func TestResponsePolicySuppressionPreservesEarlierUncertaintyAndCause(t *testing
 	request, _ := protocolsession.NewMessage(protocolsession.MessageRequestBlocks, &id, []byte{0xa0})
 	ctx, _ := testOutboundOperationContext(t, runtime, firstIdentity, request)
 	fragments, _ := contentflow.FragmentRecord(id, []byte("record"))
-	outbound := Responses{runtime: runtime}
+	outbound := &Responses{runtime: runtime}
 	result, err := outbound.executeResponse(ctx, fragments[0].Kind(), id, sessionobs.ProtocolErrorContent{}, func(transaction *outboundTransaction) (outboundLaneAttempt, error) {
 		return func(lane selectedLane, permit protocolsession.OutboundReplayPermit) (protocolsession.SendReceipt, error) {
 			if permit.IsZero() {

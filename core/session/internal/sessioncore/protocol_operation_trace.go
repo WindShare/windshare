@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/windshare/windshare/core/observationstream"
 	sessioncontract "github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
@@ -232,54 +231,6 @@ func retainProtocolOperationObservation(event sessionobs.ProtocolOperationObserv
 		return true
 	}
 	return event.RequestKind != protocolsession.MessageRequestBlocks
-}
-
-func (runtime *Runtime) traceResponseResult(operationID protocolsession.OperationID, requestKind, responseKind protocolsession.MessageKind, sequence uint64, content sessionobs.ProtocolErrorContent, result protocolsession.ResponseSendResult) {
-	if !runtime.protocolOperationTracingEnabled() {
-		return
-	}
-	ctx := runtime.observationContext(operationID, requestKind)
-	if !result.Started() && !result.IsZero() {
-		runtime.protocolObservations.TryPublish(sessionobs.NewResponseSendNotStarted(ctx, sequence, responseKind, content, result))
-		return
-	}
-	if result.AttemptCount() > 1 || result.Evidence() != protocolsession.ResponseSendEvidenceTransportConfirmed ||
-		result.Cleanup() == protocolsession.SendCleanupFailed || result.End() != protocolsession.ResponseSendEndTransportConfirmed ||
-		!content.IsZero() || (requestKind != protocolsession.MessageRequestBlocks && senderResponseFinal(responseKind)) {
-		runtime.protocolObservations.TryPublish(sessionobs.NewResponseSendReturned(ctx, sequence, responseKind, content, result))
-	}
-}
-
-const receiptObservationCapacity observationstream.Capacity = 64
-
-func (runtime *Runtime) startReceiptObservations() {
-	if !runtime.protocolOperationTracingEnabled() {
-		return
-	}
-	producer, consumer, _ := observationstream.New[protocolsession.SendAttemptSettlement](receiptObservationCapacity)
-	runtime.receiptObservations = producer
-	runtime.receiptObservationsDone = make(chan struct{})
-	output := runtime.protocolObservations
-	done := runtime.receiptObservationsDone
-	go func() {
-		defer close(done)
-		for settled := range consumer {
-			correlation := settled.Correlation()
-			ctx := sessionobs.ProtocolObservationContext{Correlation: sessionobs.ProtocolObservationCorrelation{
-				Role: protocolsession.RoleSender, ProtocolSessionID: correlation.ProtocolSessionID,
-				OperationID: correlation.OperationID, RequestKind: correlation.RequestKind}, ObservedAt: settled.ObservedAt()}
-			output.TryPublish(sessionobs.NewSendAttemptSettled(ctx, correlation.ResponseKind, settled.Attempt()))
-		}
-	}()
-}
-
-func (runtime *Runtime) finishReceiptObservations() {
-	if runtime.receiptObservationsDone == nil {
-		return
-	}
-	completion := runtime.receiptObservations.Complete()
-	<-runtime.receiptObservationsDone
-	runtime.protocolObservations.RecordDropped(completion.CapacityDropped)
 }
 
 func remainingDeadlineMillis(ctx context.Context, now time.Time) (uint64, bool) {

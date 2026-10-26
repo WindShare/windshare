@@ -62,8 +62,8 @@ func TestTerminalFanoutWaitsForReceiptsAfterLifecycleCancellation(t *testing.T) 
 				callerContext, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				go func() {
-					result <- (Responses{
-						runtime: runtime, privateKey: ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)),
+					result <- (&Responses{
+						runtime: runtime, controlPreparer: testControlPreparer(ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))),
 					}).sendTerminalRecipients(callerContext, body, recipients)
 				}()
 				for _, channel := range channels {
