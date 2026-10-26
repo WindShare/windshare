@@ -62,21 +62,6 @@ func (runtime *Runtime) reconcileLocalCancel(
 	return err
 }
 
-func ProtocolOperationLifecycleCause(cause sessionobs.ProtocolOperationCause) bool {
-	return cause == sessionobs.ProtocolOperationCauseNone || cause == sessionobs.ProtocolOperationCauseCanceled ||
-		cause == sessionobs.ProtocolOperationCauseOperationClosed || cause == sessionobs.ProtocolOperationCauseSuperseded
-}
-
-func MergeProtocolOperationCause(current, next sessionobs.ProtocolOperationCause) sessionobs.ProtocolOperationCause {
-	// A wakeup can arrive before an authenticated fault or failed cleanup.
-	// Preserve the first actual failure instead of letting cancellation mask it.
-	if current == sessionobs.ProtocolOperationCauseNone ||
-		(ProtocolOperationLifecycleCause(current) && !ProtocolOperationLifecycleCause(next)) {
-		return next
-	}
-	return current
-}
-
 func protocolOperationCause(err error) sessionobs.ProtocolOperationCause {
 	// Inspect joined components independently: errors.Is on the whole tree would
 	// let a cancellation component erase an unrelated protocol or cleanup fault.
@@ -86,7 +71,7 @@ func protocolOperationCause(err error) sessionobs.ProtocolOperationCause {
 	case interface{ Unwrap() []error }:
 		cause := sessionobs.ProtocolOperationCauseNone
 		for _, component := range wrapped.Unwrap() {
-			cause = MergeProtocolOperationCause(cause, protocolOperationCause(component))
+			cause = cause.Merge(protocolOperationCause(component))
 		}
 		if cause != sessionobs.ProtocolOperationCauseNone {
 			return cause
