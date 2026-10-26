@@ -314,19 +314,10 @@ func (directory *linuxOutputDirectory) createRegularFileExactWithAuthority(
 		access:  linuxOutputFileMutable,
 	}
 	committed := false
-	authorityFixed := false
 	defer func() {
-		if committed {
-			return
+		if !committed {
+			resultErr = errors.Join(resultErr, directory.rollbackCreatedFile(name, created), created.close())
 		}
-		var rollbackErr error
-		if authorityFixed {
-			// The created handle remains live while the parent reopens the name and
-			// compares identities, so inode reuse or a concurrent replacement can
-			// only make rollback fail closed.
-			rollbackErr = directory.unlinkRegularFile(name, created)
-		}
-		resultErr = errors.Join(resultErr, rollbackErr, created.close())
 	}()
 	identity, err := linuxVerifyOpenObject(directory.system, fd, directory.binding)
 	if err != nil {
@@ -336,7 +327,6 @@ func (directory *linuxOutputDirectory) createRegularFileExactWithAuthority(
 		return nil, linuxUnsafe(operation, "exclusive create did not produce a regular file", nil)
 	}
 	created.object = identity.identity
-	authorityFixed = true
 	if private {
 		if err := created.setExactMode(permissions); err != nil {
 			return nil, err

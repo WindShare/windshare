@@ -2,6 +2,7 @@ package outputprobe
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 
 	"github.com/windshare/windshare/osfs/internal/outputcap"
@@ -83,7 +84,7 @@ func (workspace *Workspace) cleanupEntries() error {
 			continue
 		}
 		if err := workspace.removeFile(name, witnesses); err != nil {
-			return err
+			return fmt.Errorf("clean probe %q file %q: %w", workspace.name, name, err)
 		}
 		delete(workspace.files, name)
 	}
@@ -93,7 +94,7 @@ func (workspace *Workspace) cleanupEntries() error {
 			continue
 		}
 		if err := workspace.removeDirectory(name, witnesses); err != nil {
-			return err
+			return fmt.Errorf("clean probe %q directory %q: %w", workspace.name, name, err)
 		}
 		delete(workspace.directories, name)
 	}
@@ -149,8 +150,9 @@ func (workspace *Workspace) removeDirectory(name string, witnesses []*retainedDi
 }
 
 // Clear ends one independent capability proof before another reuses its names.
-// Cleanup always stops at the first unverified mutation; later artifacts retain
-// the reachable recovery cut instead of being partially dismantled.
+// Stopping on I/O failure preserves the recovery cut. On identity mismatch it
+// preserves evidence of foreign replacement: removing the other links could
+// make the replacement look like an owned creation prefix on the next restart.
 func (workspace *Workspace) Clear() error {
 	if err := workspace.requireOpen(); err != nil {
 		return err

@@ -330,6 +330,10 @@ type Directory interface {
 	InstallDirectoryNoReplace(candidate Directory, name string) (Directory, error)
 	RemoveDirectory(name string, expected Directory) error
 
+	// CreateFile exclusively creates and initializes an exact-sized file.
+	// Providers own rollback until success. If rollback cannot be completed,
+	// a nil file does not prove that the name is absent; callers must not infer
+	// cleanup authority by reopening it or dismantle dependent recovery state.
 	CreateFile(name string, private bool, size int64) (MutableFile, error)
 	OpenObservedFile(name string, private bool) (ObservedFile, error)
 	OpenRecoveryDurabilityFile(name string, private bool) (RecoveryDurabilityFile, error)

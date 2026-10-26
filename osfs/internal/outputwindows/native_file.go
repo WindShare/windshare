@@ -256,6 +256,10 @@ func (directory *windowsDirectory) openFile(
 	descriptor *windows.SECURITY_DESCRIPTOR,
 	private bool,
 ) (*windowsFile, bool, error) {
+	if disposition == windows.FILE_CREATE {
+		file, err := directory.createFile(relative, access, descriptor, private, 0)
+		return file, err == nil, err
+	}
 	if err := directory.usable(); err != nil {
 		return nil, false, err
 	}
@@ -269,9 +273,6 @@ func (directory *windowsDirectory) openFile(
 	)
 	runtime.KeepAlive(descriptor)
 	if err != nil {
-		if disposition == windows.FILE_CREATE {
-			return nil, false, windowsNativeNoReplaceFailure("open output file", relative, err)
-		}
 		return nil, false, windowsNativeOperationFailure("open output file", relative, err)
 	}
 	wrapped := os.NewFile(uintptr(handle), relative)

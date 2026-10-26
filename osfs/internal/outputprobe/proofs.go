@@ -45,8 +45,17 @@ func (workspace *Workspace) SafePublish(profile Profile) error {
 }
 
 func (workspace *Workspace) createFile(name string, size int64) (*retainedFile, error) {
+	// A failed create can leave an entry even without returning a handle. Keep
+	// its place in cleanup ordering: an unowned record.tmp must not outlive the
+	// old record merely because no creation witness reached this workspace.
+	if _, exists := workspace.files[name]; !exists {
+		workspace.files[name] = nil
+	}
 	file, err := workspace.directory.CreateFile(name, true, size)
 	if file == nil {
+		if err == nil {
+			err = unsafe("create probe file "+name, errors.New("creation returned no file"))
+		}
 		return nil, err
 	}
 	witness := workspace.retainFile(name, file)

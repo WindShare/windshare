@@ -165,6 +165,9 @@ func (directory *probeTestDirectory) CreateFile(name string, _ bool, size int64)
 	}
 	object := &probeTestFileObject{size: uint64(size)}
 	directory.object.files[name] = object
+	if err := directory.system.event("created-file:" + name); err != nil {
+		return nil, err
+	}
 	return directory.openFile(name, object), nil
 }
 

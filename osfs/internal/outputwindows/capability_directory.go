@@ -259,28 +259,9 @@ func (directory *windowsOutputDirectory) CreateFile(name string, private bool, s
 	if directory == nil || directory.native == nil || size < 0 {
 		return nil, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: invalid Windows file creation authority or size"))
 	}
-	var native *windowsFile
-	var err error
-	if private {
-		native, err = directory.native.CreatePrivateFile(name)
-	} else {
-		native, _, err = directory.native.openFile(
-			name, windows.FILE_CREATE, windowsPrivateFileAccess(), nil, false,
-		)
-	}
+	native, err := directory.native.createExactFile(name, private, size)
 	if err != nil {
 		return nil, windowsOutputError(err)
-	}
-	if err := native.Truncate(size); err != nil {
-		removeErr := directory.native.RemoveRegularLink(name, native)
-		return nil, windowsOutputError(errors.Join(err, removeErr, native.Close()))
-	}
-	actual, err := native.Size()
-	if err != nil || actual != uint64(size) {
-		removeErr := directory.native.RemoveRegularLink(name, native)
-		return nil, windowsOutputError(errors.Join(
-			errors.New("osfs: Windows file creation did not install the exact size"), err, removeErr, native.Close(),
-		))
 	}
 	return newWindowsOutputMutableFile(native, private), nil
 }
