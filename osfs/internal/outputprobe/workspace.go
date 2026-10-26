@@ -8,8 +8,7 @@ import (
 )
 
 type retainedFile struct {
-	file   outputcap.FileIdentity
-	closed bool
+	file outputcap.FileIdentity
 }
 
 type retainedDirectory struct {
@@ -37,14 +36,30 @@ func NewWorkspace(root outputcap.Directory, name string, directory outputcap.Dir
 	}
 }
 
+// Directory borrows the live directory; it is nil after Close or Cleanup.
 func (workspace *Workspace) Directory() outputcap.Directory { return workspace.directory }
 
-// KeepFile transfers the original creation witness even when installation
-// returned an error. Reopening a name alone cannot prove cleanup ownership.
-func (workspace *Workspace) KeepFile(name string, file outputcap.FileIdentity) {
+func (workspace *Workspace) requireOpen() error {
+	if workspace == nil || workspace.directory == nil {
+		return fs.ErrClosed
+	}
+	return nil
+}
+
+// KeepFile consumes the original creation witness even when installation
+// returned an error. A closed workspace releases it instead of retaining it:
+// reopening a name alone cannot restore cleanup ownership.
+func (workspace *Workspace) KeepFile(name string, file outputcap.FileIdentity) error {
+	if err := workspace.requireOpen(); err != nil {
+		if file != nil {
+			err = errors.Join(err, file.Close())
+		}
+		return err
+	}
 	if file != nil {
 		workspace.retainFile(name, file)
 	}
+	return nil
 }
 
 func (workspace *Workspace) retainFile(name string, file outputcap.FileIdentity) *retainedFile {
@@ -61,7 +76,7 @@ func (workspace *Workspace) retainDirectory(name string, directory outputcap.Dir
 	return witness
 }
 
-func (workspace *Workspace) CleanupEntries() error {
+func (workspace *Workspace) cleanupEntries() error {
 	for _, name := range fileRemovalOrder {
 		witnesses, exists := workspace.files[name]
 		if !exists {
@@ -95,9 +110,6 @@ func (workspace *Workspace) removeFile(name string, witnesses []*retainedFile) (
 	}
 	defer func() { resultErr = errors.Join(resultErr, current.Close()) }()
 	for _, witness := range witnesses {
-		if witness.closed {
-			continue
-		}
 		same, err := current.SameFile(witness.file)
 		if err != nil {
 			return err
@@ -140,40 +152,44 @@ func (workspace *Workspace) removeDirectory(name string, witnesses []*retainedDi
 // Cleanup always stops at the first unverified mutation; later artifacts retain
 // the reachable recovery cut instead of being partially dismantled.
 func (workspace *Workspace) Clear() error {
-	if err := workspace.CleanupEntries(); err != nil {
+	if err := workspace.requireOpen(); err != nil {
+		return err
+	}
+	if err := workspace.cleanupEntries(); err != nil {
 		return err
 	}
 	return workspace.closeChildren()
 }
 
-func (workspace *Workspace) Cleanup() error {
+// Cleanup attempts deletion once and closes the workspace even on failure.
+// Closed handles do not prove deletion: subsequent calls return fs.ErrClosed.
+// Recover must inspect leftovers again before a new cleanup attempt.
+func (workspace *Workspace) Cleanup() (resultErr error) {
 	if workspace == nil {
 		return nil
 	}
-	if workspace.directory == nil {
-		return workspace.closeChildren()
+	if err := workspace.requireOpen(); err != nil {
+		return err
 	}
+	defer func() { resultErr = errors.Join(resultErr, workspace.Close()) }()
 	if err := workspace.Clear(); err != nil {
-		return errors.Join(err, workspace.Close())
+		return err
 	}
 	if workspace.root != nil {
 		if err := workspace.root.RemoveDirectory(workspace.name, workspace.directory); err != nil {
-			return errors.Join(err, workspace.Close())
+			return err
 		}
 		if err := workspace.root.Sync(); err != nil {
-			return errors.Join(err, workspace.Close())
+			return err
 		}
 	}
-	return workspace.Close()
+	return nil
 }
 
 func (workspace *Workspace) closeChildren() error {
 	var result error
 	for _, witness := range workspace.ownedFiles {
-		if !witness.closed {
-			result = errors.Join(result, witness.file.Close())
-			witness.closed = true
-		}
+		result = errors.Join(result, witness.file.Close())
 	}
 	for _, witness := range workspace.ownedDirectories {
 		result = errors.Join(result, witness.directory.Close())
@@ -184,6 +200,7 @@ func (workspace *Workspace) closeChildren() error {
 }
 
 // Close releases inspection/creation handles without authorizing any deletion.
+// It is safe to repeat; all operations requiring live witnesses then return fs.ErrClosed.
 func (workspace *Workspace) Close() error {
 	if workspace == nil {
 		return nil
@@ -193,5 +210,7 @@ func (workspace *Workspace) Close() error {
 		err = errors.Join(err, workspace.directory.Close())
 		workspace.directory = nil
 	}
+	workspace.files = nil
+	workspace.directories = nil
 	return err
 }

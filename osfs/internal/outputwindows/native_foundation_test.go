@@ -689,9 +689,13 @@ func TestWindowsProbeCleanupStopsAtFirstUnverifiedCut(t *testing.T) {
 
 	probe := outputprobe.NewWorkspace(&windowsOutputDirectory{native: platform.root}, probeName,
 		&windowsOutputDirectory{native: directory})
-	probe.KeepFile("stage", newWindowsOutputObservedFile(stage, true))
-	probe.KeepFile("anchor", newWindowsOutputObservedFile(anchor, true))
-	probe.KeepFile("publication", newWindowsOutputObservedFile(publication, true))
+	if err := errors.Join(
+		probe.KeepFile("stage", newWindowsOutputObservedFile(stage, true)),
+		probe.KeepFile("anchor", newWindowsOutputObservedFile(anchor, true)),
+		probe.KeepFile("publication", newWindowsOutputObservedFile(publication, true)),
+	); err != nil {
+		t.Fatal(err)
+	}
 	if err := probe.Cleanup(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("cleanup mismatch error = %v", err)
 	}

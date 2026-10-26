@@ -12,6 +12,9 @@ const (
 )
 
 func (workspace *Workspace) SafePublish(profile Profile) error {
+	if err := workspace.requireOpen(); err != nil {
+		return err
+	}
 	var size int64
 	switch profile {
 	case LinuxExt4:
@@ -71,6 +74,9 @@ func (workspace *Workspace) link(source *retainedFile, name string) (*retainedFi
 }
 
 func (workspace *Workspace) RangeRecovery() error {
+	if err := workspace.requireOpen(); err != nil {
+		return err
+	}
 	if _, err := workspace.createFile(RecordName, 0); err != nil {
 		return err
 	}
@@ -102,6 +108,9 @@ func (workspace *Workspace) RangeRecovery() error {
 }
 
 func (workspace *Workspace) OperationRecovery() error {
+	if err := workspace.requireOpen(); err != nil {
+		return err
+	}
 	candidate, err := workspace.directory.CreateDirectory(CandidateName, true)
 	if err != nil {
 		return err
@@ -149,6 +158,9 @@ func (workspace *Workspace) VerifyFiles() error {
 }
 
 func (workspace *Workspace) VerifyFile(name string, private bool) error {
+	if err := workspace.requireOpen(); err != nil {
+		return err
+	}
 	witnesses := workspace.files[name]
 	if len(witnesses) == 0 {
 		return unsafe("probe cleanup identity", errors.New("required probe witness is absent"))

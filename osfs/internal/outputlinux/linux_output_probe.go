@@ -109,7 +109,7 @@ func (root *linuxOutputDirectory) probePublicProfileStage(workspace *outputprobe
 	// would test different permissions from the file that the user receives.
 	directory := &linuxDirectory{native: root}
 	file, err := directory.CreateProcessStage(workspace.Directory(), outputprobe.PublicStageName, 0)
-	workspace.KeepFile(outputprobe.PublicStageName, file)
+	err = errors.Join(err, workspace.KeepFile(outputprobe.PublicStageName, file))
 	if err != nil {
 		return linuxError(linuxUnsupported("probe public-profile stage", "anonymous stage installation is unavailable", err))
 	}
