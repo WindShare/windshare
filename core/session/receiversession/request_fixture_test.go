@@ -47,14 +47,21 @@ func (client *trackedRequestClient) remember(call *sessioncore.Call) {
 	requestFixtures.Store(call, client)
 }
 func (client *trackedRequestClient) Begin(ctx context.Context, kind protocolsession.MessageKind, body []byte) (*sessioncore.Call, error) {
-	call, err := client.Requests.Begin(ctx, kind, body)
-	client.remember(call)
-	return call, err
+	return client.BeginOn(ctx, nil, kind, body)
 }
 func (client *trackedRequestClient) PrepareCall(ctx context.Context, kind protocolsession.MessageKind, body []byte) (*sessioncore.Call, protocolsession.Message, error) {
 	call, message, err := client.Requests.PrepareCall(ctx, kind, body)
 	client.remember(call)
 	return call, message, err
+}
+func (client *trackedRequestClient) BeginCall(ctx context.Context, lane *sessioncontract.LaneIdentity, call *sessioncore.Call, message protocolsession.Message) error {
+	err := client.Requests.BeginCall(ctx, lane, call, message)
+	if err != nil {
+		// Rejected admission retires the call inside Requests, bypassing this
+		// spy's End method. All request entry points share this ownership boundary.
+		client.forget(call)
+	}
+	return err
 }
 func (client *trackedRequestClient) BeginOn(ctx context.Context, lane *sessioncontract.LaneIdentity, kind protocolsession.MessageKind, body []byte) (*sessioncore.Call, error) {
 	call, message, err := client.PrepareCall(ctx, kind, body)
@@ -62,7 +69,6 @@ func (client *trackedRequestClient) BeginOn(ctx context.Context, lane *sessionco
 		return nil, err
 	}
 	if err = client.BeginCall(ctx, lane, call, message); err != nil {
-		client.forget(call)
 		return nil, err
 	}
 	return call, nil
