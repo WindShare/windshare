@@ -85,7 +85,8 @@ Coverage is gated on the core and non-core totals and on each package, with no p
 | Static analysis | Hygiene, source-size checks, workflow lint, Go lint, and gopls. |
 | Non-core Go | Vet, production build, short race tests, and coverage. |
 | Core Go | Vet, short race tests, coverage, and protocol vectors. |
-| Rust relay (Linux and Windows) | The same `make rust` gate on both hosts. |
+| Rust relay (Linux) | Full `make rust` gate. |
+| Rust relay (Windows) | `cargo test -p windshare-relay-native --locked`: native unit and process integration tests, without workspace coverage or Wasm builds. |
 | Web | Lint, build, and unit tests. |
 | Go E2E | The critical sender/relay/receiver process test. |
 | Chromium | Relay smoke, sustained native-size block bursts, and short browser contracts. |
