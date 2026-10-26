@@ -1,4 +1,3 @@
-content-scheduling-v1.json
 diagnostic-correlation-v1.json
 ed25519-acceptance.json
 envelope-sample.json

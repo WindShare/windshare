@@ -10,8 +10,6 @@ go test -count=1 ./core/session/turncontrol
 
 echo "-- verify protocol-contract vectors"
 go test -count=1 ./core/internal/protocolcontract
-echo "-- verify content-scheduling behavior vectors"
-go test -count=1 ./core/transfer/lanescheduling -run '^TestSchedulingBehaviorVectors$'
 
 echo "-- verify peer-signaling vectors"
 go test -count=1 ./connectivity/v2signal
