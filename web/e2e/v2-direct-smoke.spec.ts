@@ -184,9 +184,10 @@ test('receives and recovers downloads through the real sender and relay', async 
     if (joined === null) throw new Error('Shared protocol correlation disappeared after observation')
     expect(joined.correlation.protocolSessionId).toMatch(BASE64URL_IDENTITY_PATTERN)
     expect(joined.correlation.protocolOperationId).toMatch(BASE64URL_IDENTITY_PATTERN)
-    expect(joined.browser).toMatchObject({ schemaVersion: 2, event: 'protocol_operation' })
+    // Each exporter owns its envelope version. Cross-runtime reconstruction
+    // depends on shared protocol identities and request kinds, not version parity.
+    expect(joined.browser).toMatchObject({ event: 'protocol_operation' })
     expect(joined.sender).toMatchObject({
-      schemaVersion: 4,
       event: 'protocol_operation',
       command: 'share',
     })
@@ -310,7 +311,6 @@ interface ProtocolCorrelationView {
 }
 
 interface ProtocolEnvelopeView {
-  readonly schemaVersion: number
   readonly event: 'protocol_operation'
   readonly runtimeRunId: string
   readonly command?: string
@@ -382,7 +382,6 @@ function protocolEnvelope(value: unknown): ProtocolEnvelopeView | null {
     return null
   }
   return Object.freeze({
-    schemaVersion: candidate.schema_version,
     event: 'protocol_operation',
     runtimeRunId: candidate.runtime_run_id,
     ...(candidate.command === undefined ? {} : { command: candidate.command }),

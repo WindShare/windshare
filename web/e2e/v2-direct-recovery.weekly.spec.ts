@@ -182,11 +182,9 @@ test('recovers authenticated Chromium peer traffic without interrupting relay', 
     // One page turn supplies concurrent demand so the allocator can sample the
     // recovered peer before the local relay completes the first new request.
     await advancePageOutput(page, 2)
-    const recoveredPeerDispatch = await events.waitFor(
-      'dispatch',
-      (event) => event.observation.route === 'direct' &&
-        event.observation.dispatchSequence > recoveredTrafficBoundary,
-      'authenticated peer traffic after recovery',
+    const recoveredPeerDispatch = await events.waitForLaneDispatch(
+      recoveredLane.observation,
+      recoveredTrafficBoundary,
     )
     expect(recoveredPeerDispatch.observation).toMatchObject({
       laneId: recoveredLane.observation.laneId,
