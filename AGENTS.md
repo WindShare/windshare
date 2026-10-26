@@ -53,9 +53,10 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 │   ├── link/, senderobject/      Capability links and sealed transport-neutral objects
 │   ├── catalog/                  Committed directory generations/pages, durable storage/recovery
 │   ├── content/                  File revisions, ranges, leases/capacity, keys, authenticated records
-│   ├── session/                  Authenticated protocol engine, catalog/content flows, TURN controls, sender/receiver runtime
+│   ├── session/                  Shared contracts, sendersession/receiversession runtimes, catalog/content flows, TURN controls
 │   ├── framechannel/             Transport-neutral frame contract
 │   ├── observationstream/        Bounded producer-owned observation queues
+│   ├── diagnostics/              Source-owned diagnostic records and injected sinks
 │   ├── transfer/                 Receive contracts/discovery, jobs, lane scheduling, output settlement
 │   ├── liveshare/                Runtime assembly and injected file-source ownership
 │   ├── testvectors/              Canonical Go↔TypeScript contract vectors
@@ -63,7 +64,7 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 ├── osfs/                         Native file sources, filesystem output, checkpoints/recovery
 ├── adapters/filesystem/          Native output/recovery assembly and provider diagnostics
 ├── engine/                       Shared native application API, tasks, observations, aggregate budgets
-│   ├── observation/              Application observation and diagnostic contracts
+│   ├── observation/              Typed product observation contracts
 │   ├── output/, recovery/        Platform-neutral destination and recovery inventory ports
 │   ├── relayconfig/, relaysetup/  Saved relay/frontend settings, discovery, device enrollment, and installation
 │   ├── turn/                     TURN settings, status, and observation contracts
@@ -91,7 +92,7 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 │   └── crates/relay-cloudflare/  Worker/DO host, access console, credential management, and managed TURN
 ├── web/                          React/TypeScript landing portal and browser receiver
 │   ├── src/crypto/, protocol/    Suite-02 links/key hierarchy, sealed-object auth, canonical CBOR/text
-│   ├── src/contracts/, session/  Browser FrameChannel contract and ProtocolSession runtime
+│   ├── src/contracts/, session/  Browser FrameChannel contract and ReceiverSessionRuntime
 │   ├── src/catalog/, content/    Progressive catalog, revisions/ranges, leases, lane scheduling
 │   ├── src/unicode/              Pinned Unicode 15 path normalization and case folding
 │   ├── src/transport/            Relay/WebRTC channels and frame adapters
