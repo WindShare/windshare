@@ -29,11 +29,11 @@ func TestShareReadyEventsPreserveHumanMilestoneOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	authority, err := appobs.NewRelayAuthority(appobs.RelayWSS, "relay.example", 443)
+	origin, err := appobs.NewRelayOrigin(appobs.RelayWSS, "relay.example", 443)
 	if err != nil {
 		t.Fatal(err)
 	}
-	connected, err := clievent.NewRelayConnected(clievent.CommandShare, authority)
+	connected, err := clievent.NewRelayConnected(clievent.CommandShare, origin)
 	if err != nil {
 		t.Fatal(err)
 	}

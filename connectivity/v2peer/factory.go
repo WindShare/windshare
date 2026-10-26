@@ -280,23 +280,23 @@ func (factory *Factory) CompleteObservations() SenderObservationCompletion {
 func (factory *Factory) BeginOperationContinuation(
 	requestKind protocolsession.MessageKind,
 	canonicalRequestBody []byte,
-) (protocolsession.OperationContinuationAuthority, bool, error) {
+) (protocolsession.OperationContinuationContract, bool, error) {
 	if factory == nil {
 		return nil, false, ErrConfig
 	}
 	classifier := v2signal.OperationContinuationClassifier{
 		MaximumCandidates: factory.maxCandidates,
 	}
-	authority, tracked, err := classifier.BeginOperationContinuation(requestKind, canonicalRequestBody)
+	contract, tracked, err := classifier.BeginOperationContinuation(requestKind, canonicalRequestBody)
 	if err == nil || requestKind != protocolsession.MessagePeerOffer {
-		return authority, tracked, err
+		return contract, tracked, err
 	}
 	binding, recovered := recoverOfferBinding(canonicalRequestBody)
 	if !recovered {
-		return authority, tracked, err
+		return contract, tracked, err
 	}
 	// OperationTable must admit the generation before the sender handler can
-	// publish its rejection. Rebuilding only the continuation authority from a
+	// publish its rejection. Rebuilding only the continuation contract from a
 	// canonical placeholder preserves v2signal's single binding/scope owner while
 	// leaving the malformed original body for the handler to reject and observe.
 	placeholder, encodeErr := v2signal.EncodeOffer(v2signal.Offer{

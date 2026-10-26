@@ -27,30 +27,30 @@ type detailedDiagnosticsPreference interface {
 }
 
 type shareObservations struct {
-	observer       shareEventObserver
-	relayMu        sync.RWMutex
-	relayAuthority appobs.RelayAuthority
+	observer    shareEventObserver
+	relayMu     sync.RWMutex
+	relayOrigin appobs.RelayOrigin
 }
 
 func newShareProjection(observer shareEventObserver) *shareObservations {
 	return &shareObservations{observer: observer}
 }
-func (observations *shareObservations) SetRelayAuthority(authority appobs.RelayAuthority) {
-	if observations == nil || !authority.Valid() {
+func (observations *shareObservations) SetRelayOrigin(origin appobs.RelayOrigin) {
+	if observations == nil || !origin.Valid() {
 		return
 	}
 	observations.relayMu.Lock()
-	observations.relayAuthority = authority
+	observations.relayOrigin = origin
 	observations.relayMu.Unlock()
 }
 
-func (observations *shareObservations) RelayAuthority() appobs.RelayAuthority {
+func (observations *shareObservations) RelayOrigin() appobs.RelayOrigin {
 	if observations == nil {
-		return appobs.RelayAuthority{}
+		return appobs.RelayOrigin{}
 	}
 	observations.relayMu.RLock()
 	defer observations.relayMu.RUnlock()
-	return observations.relayAuthority
+	return observations.relayOrigin
 }
 
 func (observations *shareObservations) detailedDiagnosticsEnabled() bool {

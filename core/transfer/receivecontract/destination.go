@@ -106,7 +106,7 @@ func NewManagedAtomicReservation(
 	id DestinationReservationID,
 	artifact ArtifactSpec,
 	authority AuthorityRef,
-	nameAuthority NameAuthority,
+	nameChooser NameChooser,
 	requestedName, reservedName string,
 	collisionIndex uint32,
 ) (DestinationReservation, error) {
@@ -114,11 +114,11 @@ func NewManagedAtomicReservation(
 	if !ok {
 		return DestinationReservation{}, ErrInvalidReceiveContract
 	}
-	if nameAuthority == NameApplicationChosen && requestedName != artifactName {
+	if nameChooser == NameApplicationChosen && requestedName != artifactName {
 		return DestinationReservation{}, ErrInvalidReceiveContract
 	}
 	expected, err := CollisionName(operation, requestedName, collisionIndex, true)
-	guarantees, guaranteeErr := ManagedAtomicGuarantees(nameAuthority)
+	guarantees, guaranteeErr := ManagedAtomicGuarantees(nameChooser)
 	if err != nil || guaranteeErr != nil || reservedName != expected {
 		return DestinationReservation{}, ErrInvalidReceiveContract
 	}

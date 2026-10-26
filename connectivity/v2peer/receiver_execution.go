@@ -196,7 +196,7 @@ func (execution *receiverExecution) openSignaling() receiverWorkflowResult {
 	} else {
 		maximumContinuations, authorityOK := operation.MaximumContinuations()
 		if !authorityOK || execution.attempt.factory.maxCandidates != maximumContinuations {
-			validationErr = errors.Join(validationErr, ErrConfig, protocolsession.ErrContinuationAuthority)
+			validationErr = errors.Join(validationErr, ErrConfig, protocolsession.ErrContinuationContract)
 		}
 	}
 	if validationErr != nil {

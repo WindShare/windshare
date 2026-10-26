@@ -54,7 +54,7 @@ const (
 	ReceiverPeerProvenanceRemoteFailureScopeViolation
 	ReceiverPeerProvenanceRemoteAnswerConflict
 	ReceiverPeerProvenanceRemoteFinalConflict
-	ReceiverPeerProvenanceRemoteContinuationAuthorityViolation
+	ReceiverPeerProvenanceRemoteContinuationViolation
 	ReceiverPeerProvenanceRuntimeStopping
 	ReceiverPeerProvenanceRemoteSessionRejected
 )
@@ -74,7 +74,7 @@ const (
 	ReceiverPeerDiagnosticRemoteFailureScopeViolation
 	ReceiverPeerDiagnosticRemoteAnswerConflict
 	ReceiverPeerDiagnosticRemoteFinalConflict
-	ReceiverPeerDiagnosticRemoteContinuationAuthorityViolation
+	ReceiverPeerDiagnosticRemoteContinuationViolation
 	ReceiverPeerDiagnosticCleanupFailed
 	ReceiverPeerDiagnosticTruncated
 )
@@ -540,7 +540,7 @@ func (function SenderPeerHandlerFactoryFunc) NewSenderPeerHandler(
 func (function SenderPeerHandlerFactoryFunc) BeginOperationContinuation(
 	protocolsession.MessageKind,
 	[]byte,
-) (protocolsession.OperationContinuationAuthority, bool, error) {
+) (protocolsession.OperationContinuationContract, bool, error) {
 	if function == nil {
 		return nil, false, ErrRuntimeConfig
 	}

@@ -175,7 +175,7 @@ describe('R0 scheduling, recovery, and lifecycle contract', () => {
           completion: 'verified-complete-only',
           targetVisibility: 'operation-owned-incomplete-file-visible',
           artifactAvailability: 'verified-complete-only',
-          cleanupAuthority: 'ownership-proof-required',
+          cleanupContract: 'ownership-proof-required',
         },
         {
           artifact: 'original-file',

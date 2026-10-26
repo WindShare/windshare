@@ -39,15 +39,15 @@ func (value SharingSubjectSelected) Subject() SharingSubject { return value.subj
 func (value SharingSubjectSelected) Validate() error { return validateSharingSubjectSelected(value) }
 
 type RelayConnected struct {
-	workflow  Workflow
-	authority RelayAuthority
+	workflow Workflow
+	origin   RelayOrigin
 }
 
-func NewRelayConnected(workflow Workflow, authority RelayAuthority) (RelayConnected, error) {
-	if !workflow.Valid() || !authority.Valid() {
+func NewRelayConnected(workflow Workflow, origin RelayOrigin) (RelayConnected, error) {
+	if !workflow.Valid() || !origin.Valid() {
 		return RelayConnected{}, ErrInvalidEvent
 	}
-	return RelayConnected{workflow: workflow, authority: authority}, nil
+	return RelayConnected{workflow: workflow, origin: origin}, nil
 }
 
 func (RelayConnected) EngineEvent() {}
@@ -56,7 +56,7 @@ func (value RelayConnected) Workflow() Workflow { return value.workflow }
 
 func (RelayConnected) Level() Level { return LevelInfo }
 
-func (value RelayConnected) Authority() RelayAuthority { return value.authority }
+func (value RelayConnected) Origin() RelayOrigin { return value.origin }
 
 func (value RelayConnected) Validate() error { return validateRelayConnected(value) }
 
@@ -86,7 +86,7 @@ func (state RelayRecoveryState) Name() (string, bool) {
 
 type RelayRecovering struct {
 	workflow   Workflow
-	authority  RelayAuthority
+	origin     RelayOrigin
 	attempt    uint32
 	state      RelayRecoveryState
 	failure    Failure
@@ -97,19 +97,19 @@ type RelayRecovering struct {
 
 func NewRelayRecovering(
 	workflow Workflow,
-	authority RelayAuthority,
+	origin RelayOrigin,
 	attempt uint32,
 	state RelayRecoveryState,
 	failure Failure,
 ) (RelayRecovering, error) {
 	_, stateOK := state.Name()
 	hasFailure := failure.Valid()
-	if !workflow.Valid() || !authority.Valid() || attempt == 0 || !stateOK ||
+	if !workflow.Valid() || !origin.Valid() || attempt == 0 || !stateOK ||
 		(state == RelayRecoveryFailed) != hasFailure {
 		return RelayRecovering{}, ErrInvalidEvent
 	}
 	return RelayRecovering{
-		workflow: workflow, authority: authority, attempt: attempt,
+		workflow: workflow, origin: origin, attempt: attempt,
 		state: state, failure: failure, hasFailure: hasFailure,
 	}, nil
 }
@@ -125,7 +125,7 @@ func (value RelayRecovering) Level() Level {
 	return LevelInfo
 }
 
-func (value RelayRecovering) Authority() RelayAuthority { return value.authority }
+func (value RelayRecovering) Origin() RelayOrigin { return value.origin }
 
 func (value RelayRecovering) Attempt() uint32 { return value.attempt }
 
@@ -326,8 +326,8 @@ func (id SharingInstanceID) Bytes() []byte { return id.value.bytes() }
 
 func (id SharingInstanceID) Valid() bool { return id.value.valid() }
 
-func NewRelayRecoveryObservation(workflow Workflow, authority RelayAuthority, attempt uint32, state RelayRecoveryState, failure Failure, details RelayRecoveryDetails) (RelayRecovering, error) {
-	event, err := NewRelayRecovering(workflow, authority, attempt, state, failure)
+func NewRelayRecoveryObservation(workflow Workflow, origin RelayOrigin, attempt uint32, state RelayRecoveryState, failure Failure, details RelayRecoveryDetails) (RelayRecovering, error) {
+	event, err := NewRelayRecovering(workflow, origin, attempt, state, failure)
 	if err != nil || details.NextDelay < 0 {
 		return RelayRecovering{}, ErrInvalidEvent
 	}

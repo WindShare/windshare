@@ -47,7 +47,7 @@ const (
 	ReceiverProvenanceAuthenticatedFinalConflict            ReceiverTerminalProvenance = "authenticated_final_conflict"
 	ReceiverProvenanceAuthenticatedAnswerBindingMismatch    ReceiverTerminalProvenance = "authenticated_answer_binding_mismatch"
 	ReceiverProvenanceAuthenticatedCandidateBindingMismatch ReceiverTerminalProvenance = "authenticated_candidate_binding_mismatch"
-	ReceiverProvenanceAuthenticatedContinuationAuthority    ReceiverTerminalProvenance = "authenticated_continuation_authority_violation"
+	ReceiverProvenanceAuthenticatedContinuationViolation    ReceiverTerminalProvenance = "authenticated_continuation_violation"
 )
 
 func receiverTimeoutProvenance(phase PeerAttemptPhase) ReceiverTerminalProvenance {
@@ -120,7 +120,7 @@ func validReceiverBoundDecision(decision receiverAttemptDecision) bool {
 			ReceiverProvenanceRemoteFailureScopeViolation,
 			ReceiverProvenanceAuthenticatedSecondAnswer,
 			ReceiverProvenanceAuthenticatedFinalConflict,
-			ReceiverProvenanceAuthenticatedContinuationAuthority:
+			ReceiverProvenanceAuthenticatedContinuationViolation:
 		default:
 			return false
 		}
@@ -158,7 +158,7 @@ func validReceiverBoundDecision(decision receiverAttemptDecision) bool {
 			ReceiverProvenanceAuthenticatedFinalConflict,
 			ReceiverProvenanceAuthenticatedAnswerBindingMismatch,
 			ReceiverProvenanceAuthenticatedCandidateBindingMismatch,
-			ReceiverProvenanceAuthenticatedContinuationAuthority:
+			ReceiverProvenanceAuthenticatedContinuationViolation:
 			return true
 		}
 	}

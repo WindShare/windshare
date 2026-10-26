@@ -85,9 +85,9 @@ func receiverPeerAuthenticatedViolationEvidence(
 	case protocolsession.AuthenticatedOperationViolationConflictingFinal:
 		provenance = ReceiverPeerProvenanceRemoteFinalConflict
 		diagnostic = ReceiverPeerDiagnosticRemoteFinalConflict
-	case protocolsession.AuthenticatedOperationViolationContinuationAuthority:
-		provenance = ReceiverPeerProvenanceRemoteContinuationAuthorityViolation
-		diagnostic = ReceiverPeerDiagnosticRemoteContinuationAuthorityViolation
+	case protocolsession.AuthenticatedOperationViolationContinuationContract:
+		provenance = ReceiverPeerProvenanceRemoteContinuationViolation
+		diagnostic = ReceiverPeerDiagnosticRemoteContinuationViolation
 	default:
 		return receiverPeerTerminalEvidence{}, false
 	}
@@ -458,7 +458,7 @@ func validReceiverPeerTransition(transition receiverPeerTerminalTransition) bool
 			ReceiverPeerProvenanceRemoteFailureScopeViolation,
 			ReceiverPeerProvenanceRemoteAnswerConflict,
 			ReceiverPeerProvenanceRemoteFinalConflict,
-			ReceiverPeerProvenanceRemoteContinuationAuthorityViolation:
+			ReceiverPeerProvenanceRemoteContinuationViolation:
 			return true
 		}
 	case ReceiverPeerTerminalAuthorityRuntime:
@@ -486,7 +486,7 @@ func validReceiverPeerConsequence(consequence receiverPeerTerminalConsequence) b
 			consequence.provenance == ReceiverPeerProvenanceRemoteFailureScopeViolation ||
 			consequence.provenance == ReceiverPeerProvenanceRemoteAnswerConflict ||
 			consequence.provenance == ReceiverPeerProvenanceRemoteFinalConflict ||
-			consequence.provenance == ReceiverPeerProvenanceRemoteContinuationAuthorityViolation
+			consequence.provenance == ReceiverPeerProvenanceRemoteContinuationViolation
 	}
 	return false
 }

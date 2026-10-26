@@ -32,7 +32,7 @@ import {
   fsaTreeGuarantees,
   fsaOwnedFileGuarantees,
   managedAtomicGuarantees,
-  managedNameAuthority,
+  managedNameChooser,
   nativeTreeGuarantees,
   sameGuarantees,
 } from './destination'
@@ -383,7 +383,7 @@ async function decodeAtomicTargetReservationBytes(
   }
   return createManagedAtomicReservation({
     ...common,
-    nameAuthority: managedNameAuthority(common.guarantees.nameAuthority),
+    nameChooser: managedNameChooser(common.guarantees.nameChooser),
     requestedName,
     reservedName,
     collisionIndex,

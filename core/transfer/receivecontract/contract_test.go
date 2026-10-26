@@ -236,7 +236,7 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 		nativeEntry.PhysicalName() != singleName ||
 		nativeEntry.CollisionIndex() != 1 || resultEntry.Guarantees() != NativeTreeGuarantees() ||
 		atomic.Kind() != ReservationAtomicTarget || atomic.RequestedName() != "report.txt" ||
-		atomic.ReservedName() != atomicName || atomic.Guarantees().NameAuthority() != NameUserChosen {
+		atomic.ReservedName() != atomicName || atomic.Guarantees().NameChooser() != NameUserChosen {
 		t.Fatal("reservation variant fields mismatch")
 	}
 	if atomic.Guarantees().Profile() != GuaranteeManagedAtomic ||
@@ -244,10 +244,10 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 		atomic.Guarantees().Delivery() != DeliveryManagedTarget ||
 		atomic.Guarantees().TargetVisibility() != TargetHiddenUntilVerifiedPublication ||
 		atomic.Guarantees().ArtifactAvailability() != ArtifactVerifiedCompleteOnly ||
-		atomic.Guarantees().CleanupAuthority() != CleanupRollbackToAbsentBeforePublication {
+		atomic.Guarantees().CleanupContract() != CleanupRollbackToAbsentBeforePublication {
 		t.Fatalf("atomic guarantees=%+v", atomic.Guarantees())
 	}
-	if _, err := ManagedAtomicGuarantees(NameAuthority(0xff)); !errors.Is(err, ErrInvalidReceiveContract) {
+	if _, err := ManagedAtomicGuarantees(NameChooser(0xff)); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatalf("invalid managed guarantee error=%v", err)
 	}
 

@@ -48,7 +48,7 @@ func bindTestProcessDestination(t *testing.T, platform *destinationPlatform, non
 	platform.capabilities, _ = outputcap.NewDestinationCapabilities(supported, unsupported, unsupported, unsupported)
 	bound, err := BindDestination(BindConfig{
 		Platform: &processDestinationPlatform{platform}, DisplayPath: filepath.Clean(t.TempDir()),
-		ProcessNonceSource: bytes.NewReader(bytes.Repeat([]byte{nonce}, outputcap.DestinationAuthorityIDBytes)),
+		ProcessNonceSource: bytes.NewReader(bytes.Repeat([]byte{nonce}, outputcap.DestinationBindingIDBytes)),
 	})
 	if err != nil {
 		t.Fatal(err)

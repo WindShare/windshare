@@ -65,9 +65,9 @@ func TestWorkflowRetainsConnectionSummaryAndPublisherBackpressure(t *testing.T) 
 		}
 		switch value := published.(type) {
 		case appobs.RelayConnected:
-			want, _ := RelayAuthority(endpoint)
-			if value.Authority() != want {
-				t.Fatal("relay authority changed")
+			want, _ := RelayOrigin(endpoint)
+			if value.Origin() != want {
+				t.Fatal("relay origin changed")
 			}
 		case appobs.ContentPathSelected:
 			if value.Path() != appobs.ContentPathDirectAndRelay {

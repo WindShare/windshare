@@ -94,12 +94,12 @@ export function directZipTarget(routeId = 'direct-zip'): EnvironmentTargetOfferI
 
 export function managedTarget(
   routeId = 'managed',
-  nameAuthority: 'application-chosen' | 'user-chosen' = 'application-chosen',
+  nameChooser: 'application-chosen' | 'user-chosen' = 'application-chosen',
 ): EnvironmentTargetOfferInput {
   return {
     routeId,
     kind: 'managed-atomic-file-target',
-    guarantees: guaranteeFacts(managedAtomicGuarantees(nameAuthority)),
+    guarantees: guaranteeFacts(managedAtomicGuarantees(nameChooser)),
     persistence: 'operation-scoped',
     hardMaximumOutputBytes: null,
   }
@@ -123,12 +123,12 @@ export function precreatedBrowserFileTarget(routeId = 'save-picker'): Environmen
     routeId,
     kind: 'precreated-browser-file',
     guarantees: {
-      nameAuthority: 'user-chosen',
+      nameChooser: 'user-chosen',
       replacement: 'unknown',
       delivery: 'managed-target',
       targetVisibility: 'unobservable',
       artifactAvailability: 'verified-complete-only',
-      cleanupAuthority: 'no-managed-cleanup',
+      cleanupContract: 'no-managed-cleanup',
     },
     persistence: 'operation-scoped',
     hardMaximumOutputBytes: null,
@@ -239,11 +239,11 @@ export const COMPLETE_DISCOVERY: DiscoveryState = Object.freeze({ kind: 'complet
 
 function guaranteeFacts(input: DestinationGuaranteeFacts): DestinationGuaranteeFacts {
   return {
-    nameAuthority: input.nameAuthority,
+    nameChooser: input.nameChooser,
     replacement: input.replacement,
     delivery: input.delivery,
     targetVisibility: input.targetVisibility,
     artifactAvailability: input.artifactAvailability,
-    cleanupAuthority: input.cleanupAuthority,
+    cleanupContract: input.cleanupContract,
   }
 }

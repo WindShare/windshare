@@ -1,6 +1,6 @@
 package wire
 
-type RelayAuthority struct {
+type RelayOrigin struct {
 	Scheme string `json:"scheme"`
 	Host   string `json:"host"`
 	Port   uint16 `json:"port"`
@@ -60,7 +60,7 @@ type SharingSubjectPayload struct {
 func (SharingSubjectPayload) ObservationPayload() {}
 
 type RelayConnectedPayload struct {
-	RelayAuthority RelayAuthority `json:"relay_authority"`
+	RelayOrigin RelayOrigin `json:"relay_origin"`
 }
 
 type RelayAvailabilityPayload struct {
@@ -75,11 +75,11 @@ func (RelayAvailabilityPayload) ObservationPayload() {}
 func (RelayConnectedPayload) ObservationPayload() {}
 
 type RelayRecoveringPayload struct {
-	RelayAuthority RelayAuthority        `json:"relay_authority"`
-	Attempt        uint32                `json:"attempt"`
-	State          string                `json:"state"`
-	Failure        *Failure              `json:"failure,omitempty"`
-	Details        *RelayRecoveryDetails `json:"details,omitempty"`
+	RelayOrigin RelayOrigin           `json:"relay_origin"`
+	Attempt     uint32                `json:"attempt"`
+	State       string                `json:"state"`
+	Failure     *Failure              `json:"failure,omitempty"`
+	Details     *RelayRecoveryDetails `json:"details,omitempty"`
 }
 
 type RelayRecoveryDetails struct {

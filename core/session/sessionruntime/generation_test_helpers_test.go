@@ -54,11 +54,11 @@ type testReceiverPeerSemantics struct {
 func (semantics testReceiverPeerSemantics) BeginOperationContinuation(
 	kind protocolsession.MessageKind,
 	_ []byte,
-) (protocolsession.OperationContinuationAuthority, bool, error) {
+) (protocolsession.OperationContinuationContract, bool, error) {
 	if kind != protocolsession.MessagePeerOffer {
 		return nil, false, nil
 	}
-	return testReceiverPeerContinuationAuthority{}, true, nil
+	return testReceiverPeerContinuationContract{}, true, nil
 }
 
 func (semantics testReceiverPeerSemantics) ClassifyUnboundOperationContinuation(
@@ -71,9 +71,9 @@ func (semantics testReceiverPeerSemantics) ClassifyUnboundOperationContinuation(
 	return testReceiverPeerContinuationScope(), true, nil
 }
 
-type testReceiverPeerContinuationAuthority struct{}
+type testReceiverPeerContinuationContract struct{}
 
-func (testReceiverPeerContinuationAuthority) ClassifyOperationContinuation(
+func (testReceiverPeerContinuationContract) ClassifyOperationContinuation(
 	kind protocolsession.MessageKind,
 	body []byte,
 ) ([sha256.Size]byte, bool, error) {
@@ -83,11 +83,11 @@ func (testReceiverPeerContinuationAuthority) ClassifyOperationContinuation(
 	return sha256.Sum256(body), true, nil
 }
 
-func (testReceiverPeerContinuationAuthority) OperationContinuationScope() protocolsession.OperationContinuationScope {
+func (testReceiverPeerContinuationContract) OperationContinuationScope() protocolsession.OperationContinuationScope {
 	return testReceiverPeerContinuationScope()
 }
 
-func (testReceiverPeerContinuationAuthority) MaximumContinuations() int { return 4 }
+func (testReceiverPeerContinuationContract) MaximumContinuations() int { return 4 }
 
 func testReceiverPeerContinuationScope() protocolsession.OperationContinuationScope {
 	return protocolsession.OperationContinuationScope(sha256.Sum256([]byte("receiver-peer-test")))

@@ -549,7 +549,7 @@ func TestCommandRuntimeShareReadyAndStopSurviveObserverSaturation(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	authority, err := appobs.NewRelayAuthority(appobs.RelayWSS, "relay.example", 443)
+	authority, err := appobs.NewRelayOrigin(appobs.RelayWSS, "relay.example", 443)
 	if err != nil {
 		t.Fatal(err)
 	}

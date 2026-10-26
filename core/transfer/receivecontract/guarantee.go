@@ -1,9 +1,10 @@
 package receivecontract
 
-type NameAuthority uint8
+// Choosing a name does not grant permission to replace an existing object.
+type NameChooser uint8
 
 const (
-	NameApplicationChosen NameAuthority = iota + 1
+	NameApplicationChosen NameChooser = iota + 1
 	NameUserChosen
 )
 
@@ -33,10 +34,12 @@ const (
 	ArtifactCommittedObjectsUsable
 )
 
-type CleanupAuthority uint8
+// Cleanup limits describe the rollback boundary; deleting objects still requires
+// the output provider to verify its live control over them.
+type CleanupContract uint8
 
 const (
-	CleanupRollbackToAbsentBeforePublication CleanupAuthority = iota + 1
+	CleanupRollbackToAbsentBeforePublication CleanupContract = iota + 1
 	CleanupNoWholeTargetRollback
 )
 
@@ -48,33 +51,33 @@ const (
 )
 
 type GuaranteeSet struct {
-	profile      GuaranteeProfile
-	name         NameAuthority
-	replacement  ReplacementGuarantee
-	delivery     DeliveryMode
-	visibility   TargetVisibility
-	availability ArtifactAvailability
-	cleanup      CleanupAuthority
+	profile         GuaranteeProfile
+	nameChooser     NameChooser
+	replacement     ReplacementGuarantee
+	delivery        DeliveryMode
+	visibility      TargetVisibility
+	availability    ArtifactAvailability
+	cleanupContract CleanupContract
 }
 
 func NativeTreeGuarantees() GuaranteeSet {
 	return GuaranteeSet{
-		profile: GuaranteeNativeTree, name: NameApplicationChosen,
+		profile: GuaranteeNativeTree, nameChooser: NameApplicationChosen,
 		replacement: ReplacementAtomicNoReplace, delivery: DeliveryManagedTarget,
 		visibility: TargetCommittedObjectsVisible, availability: ArtifactCommittedObjectsUsable,
-		cleanup: CleanupNoWholeTargetRollback,
+		cleanupContract: CleanupNoWholeTargetRollback,
 	}
 }
 
-func ManagedAtomicGuarantees(name NameAuthority) (GuaranteeSet, error) {
-	if name != NameApplicationChosen && name != NameUserChosen {
+func ManagedAtomicGuarantees(nameChooser NameChooser) (GuaranteeSet, error) {
+	if nameChooser != NameApplicationChosen && nameChooser != NameUserChosen {
 		return GuaranteeSet{}, ErrInvalidReceiveContract
 	}
 	return GuaranteeSet{
-		profile: GuaranteeManagedAtomic, name: name,
+		profile: GuaranteeManagedAtomic, nameChooser: nameChooser,
 		replacement: ReplacementAtomicNoReplace, delivery: DeliveryManagedTarget,
 		visibility: TargetHiddenUntilVerifiedPublication, availability: ArtifactVerifiedCompleteOnly,
-		cleanup: CleanupRollbackToAbsentBeforePublication,
+		cleanupContract: CleanupRollbackToAbsentBeforePublication,
 	}, nil
 }
 
@@ -83,7 +86,7 @@ func (guarantees GuaranteeSet) valid() bool {
 	case GuaranteeNativeTree:
 		return guarantees == NativeTreeGuarantees()
 	case GuaranteeManagedAtomic:
-		expected, err := ManagedAtomicGuarantees(guarantees.name)
+		expected, err := ManagedAtomicGuarantees(guarantees.nameChooser)
 		return err == nil && guarantees == expected
 	default:
 		return false
@@ -93,20 +96,20 @@ func (guarantees GuaranteeSet) valid() bool {
 func (guarantees GuaranteeSet) canonicalBytes() []byte {
 	return append(append(append(append(append(append(
 		frame([]byte{byte(guarantees.profile)}),
-		frame([]byte{byte(guarantees.name)})...),
+		frame([]byte{byte(guarantees.nameChooser)})...),
 		frame([]byte{byte(guarantees.replacement)})...),
 		frame([]byte{byte(guarantees.delivery)})...),
 		frame([]byte{byte(guarantees.visibility)})...),
 		frame([]byte{byte(guarantees.availability)})...),
-		frame([]byte{byte(guarantees.cleanup)})...)
+		frame([]byte{byte(guarantees.cleanupContract)})...)
 }
 
 func (guarantees GuaranteeSet) Profile() GuaranteeProfile          { return guarantees.profile }
-func (guarantees GuaranteeSet) NameAuthority() NameAuthority       { return guarantees.name }
+func (guarantees GuaranteeSet) NameChooser() NameChooser           { return guarantees.nameChooser }
 func (guarantees GuaranteeSet) Replacement() ReplacementGuarantee  { return guarantees.replacement }
 func (guarantees GuaranteeSet) Delivery() DeliveryMode             { return guarantees.delivery }
 func (guarantees GuaranteeSet) TargetVisibility() TargetVisibility { return guarantees.visibility }
 func (guarantees GuaranteeSet) ArtifactAvailability() ArtifactAvailability {
 	return guarantees.availability
 }
-func (guarantees GuaranteeSet) CleanupAuthority() CleanupAuthority { return guarantees.cleanup }
+func (guarantees GuaranteeSet) CleanupContract() CleanupContract { return guarantees.cleanupContract }

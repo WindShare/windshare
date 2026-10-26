@@ -310,7 +310,7 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 		appobs.FaultOutput, appobs.FaultFileLocal, 1,
 	))
 	faultFailure := mustValue(appobs.NewFaultFailure(appobs.FailureOutputStateIO, fault))
-	authority := mustValue(appobs.NewRelayAuthority(
+	origin := mustValue(appobs.NewRelayOrigin(
 		appobs.RelayWSS, "relay.example", 443,
 	))
 	receiveOperation := mustValue(appobs.NewReceiveOperationID(testIdentity(t, 0x11)))
@@ -353,9 +353,9 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 	return []clievent.Event{
 		appobs.NewReady(),
 		mustValue(appobs.NewSharingSubjectSelected(subject)),
-		mustValue(clievent.NewRelayConnected(clievent.CommandShare, authority)),
+		mustValue(clievent.NewRelayConnected(clievent.CommandShare, origin)),
 		mustValue(clievent.NewRelayRecovering(
-			clievent.CommandGet, authority, 2, appobs.RelayRecoveryFailed, retryFailure,
+			clievent.CommandGet, origin, 2, appobs.RelayRecoveryFailed, retryFailure,
 		)),
 		mustValue(appobs.NewContentPathSelected(appobs.ContentPathDirect)),
 		mustValue(clievent.NewFallback(

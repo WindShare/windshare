@@ -239,7 +239,7 @@ func decodeDestinationReservation(encoded []byte, artifact ArtifactSpec) (Destin
 			return DestinationReservation{}, ErrInvalidReceiveContract
 		}
 		reservation, err = NewManagedAtomicReservation(
-			operation, id, artifact, authority, guarantees.NameAuthority(),
+			operation, id, artifact, authority, guarantees.NameChooser(),
 			string(requestedRaw), string(reservedRaw), collisionIndex,
 		)
 	default:
@@ -296,7 +296,7 @@ func decodeGuaranteeSet(encoded []byte) (GuaranteeSet, error) {
 	candidates := []GuaranteeSet{
 		NativeTreeGuarantees(),
 	}
-	for _, name := range []NameAuthority{NameApplicationChosen, NameUserChosen} {
+	for _, name := range []NameChooser{NameApplicationChosen, NameUserChosen} {
 		managed, err := ManagedAtomicGuarantees(name)
 		if err != nil {
 			return GuaranteeSet{}, ErrInvalidReceiveContract

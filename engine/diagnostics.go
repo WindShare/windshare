@@ -13,8 +13,8 @@ import (
 // output or publishing a link. Task results already carry this normalized fact.
 func DescribeFailure(cause error) (appobs.Failure, bool) { return eventproject.ClassifyError(cause) }
 
-func NormalizeRelayAuthority(raw string) (appobs.RelayAuthority, error) {
-	return eventproject.NormalizeRelayAuthority(raw)
+func NormalizeRelayOrigin(raw string) (appobs.RelayOrigin, error) {
+	return eventproject.NormalizeRelayOrigin(raw)
 }
 
 func DescribeProgress(operation receivecontract.OperationID, job transfer.TransferJobID, snapshot transfer.ReceiveProgressSnapshot, capacityVisible bool) (appobs.TransferProgress, error) {

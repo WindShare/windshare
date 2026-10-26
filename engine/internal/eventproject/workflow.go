@@ -51,11 +51,11 @@ func (p workflowProjection) observe(envelope task.Observation) bool {
 	case receive.Warning:
 		return p.emit(appobs.NewWarning(p.workflow, receiveWarning(value.Code, value.Cause)))
 	case receive.RelayConnected:
-		authority, err := RelayAuthority(value.Endpoint)
+		origin, err := RelayOrigin(value.Endpoint)
 		if err != nil {
 			return p.emit(nil, err)
 		}
-		return p.emit(appobs.NewRelayConnected(p.workflow, authority))
+		return p.emit(appobs.NewRelayConnected(p.workflow, origin))
 	case receive.RecoveryObserved:
 		event, relevant, err := projectReceiverRecovery(value.Value)
 		if !relevant {

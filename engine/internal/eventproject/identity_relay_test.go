@@ -61,22 +61,22 @@ func TestDomainIdentityBridgesPreserveFullWidthsAndSemanticTypes(t *testing.T) {
 	}
 }
 
-func TestRelayAuthorityProjectionRetainsOnlyCanonicalAuthority(t *testing.T) {
+func TestRelayOriginProjectionRetainsOnlyCanonicalOrigin(t *testing.T) {
 	const token = "QUERY-TOKEN-CANARY"
 	const path = "provider/private/base"
 	raw := "HTTPS://Relay.Example:443/" + path + "?auth=" + token
-	authority, err := NormalizeRelayAuthority(raw)
+	origin, err := NormalizeRelayOrigin(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	scheme, ok := authority.Scheme().Name()
-	if !ok || scheme != "wss" || authority.Host() != "relay.example" || authority.Port() != 443 {
-		t.Fatalf("authority = scheme=%q host=%q port=%d", scheme, authority.Host(), authority.Port())
+	scheme, ok := origin.Scheme().Name()
+	if !ok || scheme != "wss" || origin.Host() != "relay.example" || origin.Port() != 443 {
+		t.Fatalf("origin = scheme=%q host=%q port=%d", scheme, origin.Host(), origin.Port())
 	}
-	projection := fmt.Sprintf("%#v", authority)
+	projection := fmt.Sprintf("%#v", origin)
 	for _, forbidden := range []string{token, path, "auth=", "/v2/ws"} {
 		if strings.Contains(projection, forbidden) {
-			t.Fatalf("authority retained forbidden relay URL material %q: %s", forbidden, projection)
+			t.Fatalf("origin retained forbidden relay URL material %q: %s", forbidden, projection)
 		}
 	}
 
@@ -84,12 +84,12 @@ func TestRelayAuthorityProjectionRetainsOnlyCanonicalAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ipv6, err := RelayAuthority(endpoint)
+	ipv6, err := RelayOrigin(endpoint)
 	if err != nil || ipv6.Host() != "2001:db8::1" || ipv6.Port() != 8080 {
-		t.Fatalf("IPv6 authority = %+v err=%v", ipv6, err)
+		t.Fatalf("IPv6 origin = %+v err=%v", ipv6, err)
 	}
 	endpoint.IdentityURL += "/mutated"
-	if _, err := RelayAuthority(endpoint); err == nil {
+	if _, err := RelayOrigin(endpoint); err == nil {
 		t.Fatal("accepted caller-mutated normalized endpoint")
 	}
 }

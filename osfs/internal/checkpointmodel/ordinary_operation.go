@@ -33,17 +33,17 @@ type ActiveOperationKey [sha256.Size]byte
 
 func NewActiveOperationKey(
 	selection transfer.SelectionSpecDigest,
-	destinationAuthorityID receivecontract.AuthorityRef,
+	destinationBindingID receivecontract.AuthorityRef,
 	policyVersion uint8,
 ) (ActiveOperationKey, error) {
-	if selection.IsZero() || destinationAuthorityID.IsZero() || policyVersion == 0 {
+	if selection.IsZero() || destinationBindingID.IsZero() || policyVersion == 0 {
 		return ActiveOperationKey{}, ErrInvalidOrdinaryOperation
 	}
 	hash := sha256.New()
 	_, _ = hash.Write([]byte(ActiveOperationKeyDomainV1))
 	_, _ = hash.Write([]byte{0, ActiveOperationKeyV1})
 	writeOrdinaryFrame(hash, selection.Bytes())
-	writeOrdinaryFrame(hash, destinationAuthorityID.Bytes())
+	writeOrdinaryFrame(hash, destinationBindingID.Bytes())
 	writeOrdinaryFrame(hash, []byte{policyVersion})
 	var key ActiveOperationKey
 	copy(key[:], hash.Sum(nil))
@@ -52,9 +52,9 @@ func NewActiveOperationKey(
 
 func NewActiveOperationKeyV1(
 	selection transfer.SelectionSpecDigest,
-	destinationAuthorityID receivecontract.AuthorityRef,
+	destinationBindingID receivecontract.AuthorityRef,
 ) (ActiveOperationKey, error) {
-	return NewActiveOperationKey(selection, destinationAuthorityID, ordinaryoutput.OrdinaryOutputPolicyVersion)
+	return NewActiveOperationKey(selection, destinationBindingID, ordinaryoutput.OrdinaryOutputPolicyVersion)
 }
 
 func ActiveOperationKeyFromBytes(raw []byte) (ActiveOperationKey, error) {

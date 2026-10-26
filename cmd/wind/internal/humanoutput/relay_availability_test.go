@@ -12,7 +12,7 @@ import (
 
 func TestDefaultRelayOutputDistinguishesJoinAvailabilityAndShowsRecovery(t *testing.T) {
 	harness := newRenderHarness(t, terminalcanvas.Capabilities{}, false)
-	authority, _ := appobs.NewRelayAuthority(appobs.RelayWSS, "relay.example", 443)
+	origin, _ := appobs.NewRelayOrigin(appobs.RelayWSS, "relay.example", 443)
 	for _, state := range []struct {
 		available, total, terminal uint32
 		ever                       bool
@@ -23,7 +23,7 @@ func TestDefaultRelayOutputDistinguishesJoinAvailabilityAndShowsRecovery(t *test
 		}
 	}
 	for _, state := range []appobs.RelayRecoveryState{appobs.RelayRecoveryWaiting, appobs.RelayRecoverySucceeded} {
-		event, _ := clievent.NewRelayRecoveryObservation(clievent.CommandShare, authority, 70, state, appobs.Failure{}, appobs.RelayRecoveryDetails{Generation: 2, Slow: true, Resume: true, NextDelay: time.Second})
+		event, _ := clievent.NewRelayRecoveryObservation(clievent.CommandShare, origin, 70, state, appobs.Failure{}, appobs.RelayRecoveryDetails{Generation: 2, Slow: true, Resume: true, NextDelay: time.Second})
 		if err := harness.renderer.Render(event); err != nil {
 			t.Fatal(err)
 		}

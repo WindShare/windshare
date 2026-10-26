@@ -177,7 +177,7 @@ const (
 	AuthenticatedOperationViolationMalformedPeerControl
 	AuthenticatedOperationViolationConflictingPeerAnswer
 	AuthenticatedOperationViolationConflictingFinal
-	AuthenticatedOperationViolationContinuationAuthority
+	AuthenticatedOperationViolationContinuationContract
 )
 
 type AuthenticatedOperationViolation struct {
@@ -190,7 +190,7 @@ func (violation AuthenticatedOperationViolation) Code() AuthenticatedOperationVi
 
 func (violation AuthenticatedOperationViolation) valid() bool {
 	return violation.code >= AuthenticatedOperationViolationMalformedFailure &&
-		violation.code <= AuthenticatedOperationViolationContinuationAuthority
+		violation.code <= AuthenticatedOperationViolationContinuationContract
 }
 
 // NewAuthenticatedOperationViolation constructs a verified violation value.
@@ -483,7 +483,7 @@ func (table *OperationTable) bindPreemptivelyCancelledRequestLocked(
 	}
 	if !deferredContinuationMatches(tombstone.authority, authority) {
 		tombstone.authority.recordSenderOperationViolationLocked(
-			direction, AuthenticatedOperationViolationContinuationAuthority,
+			direction, AuthenticatedOperationViolationContinuationContract,
 		)
 		return OperationDrop, ErrConflictingContinuation
 	}

@@ -12,33 +12,33 @@ import (
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
-func NormalizeRelayAuthority(raw string) (appobs.RelayAuthority, error) {
+func NormalizeRelayOrigin(raw string) (appobs.RelayOrigin, error) {
 	endpoint, err := v2.NormalizeRelayEndpoint(raw)
 	if err != nil {
-		return appobs.RelayAuthority{}, ErrInvalidProjection
+		return appobs.RelayOrigin{}, ErrInvalidProjection
 	}
-	return RelayAuthority(endpoint)
+	return RelayOrigin(endpoint)
 }
 
-func RelayAuthority(endpoint v2.RelayEndpoint) (appobs.RelayAuthority, error) {
+func RelayOrigin(endpoint v2.RelayEndpoint) (appobs.RelayOrigin, error) {
 	// Re-normalization proves that the exported endpoint struct was not assembled
-	// or mutated by a caller. Only authority components survive this boundary.
+	// or mutated by a caller. Only origin components survive this boundary.
 	dial, err := url.Parse(endpoint.DialURL)
 	if err != nil || !strings.HasSuffix(dial.Path, v2.WebSocketPath) {
-		return appobs.RelayAuthority{}, ErrInvalidProjection
+		return appobs.RelayOrigin{}, ErrInvalidProjection
 	}
 	base := *dial
 	base.Path = strings.TrimSuffix(base.Path, v2.WebSocketPath)
 	if base.RawPath != "" {
 		if !strings.HasSuffix(base.RawPath, v2.WebSocketPath) {
-			return appobs.RelayAuthority{}, ErrInvalidProjection
+			return appobs.RelayOrigin{}, ErrInvalidProjection
 		}
 		base.RawPath = strings.TrimSuffix(base.RawPath, v2.WebSocketPath)
 	}
 	normalized, err := v2.NormalizeRelayEndpoint(base.String())
 	if err != nil || normalized.DialURL != endpoint.DialURL ||
 		normalized.IdentityURL != endpoint.IdentityURL || normalized.Identity != endpoint.Identity {
-		return appobs.RelayAuthority{}, ErrInvalidProjection
+		return appobs.RelayOrigin{}, ErrInvalidProjection
 	}
 	parsed := dial
 	var scheme appobs.RelayScheme
@@ -48,7 +48,7 @@ func RelayAuthority(endpoint v2.RelayEndpoint) (appobs.RelayAuthority, error) {
 	case "wss":
 		scheme = appobs.RelayWSS
 	default:
-		return appobs.RelayAuthority{}, ErrInvalidProjection
+		return appobs.RelayOrigin{}, ErrInvalidProjection
 	}
 	port := parsed.Port()
 	if port == "" {
@@ -60,17 +60,17 @@ func RelayAuthority(endpoint v2.RelayEndpoint) (appobs.RelayAuthority, error) {
 	}
 	value, err := strconv.ParseUint(port, 10, 16)
 	if err != nil || value == 0 {
-		return appobs.RelayAuthority{}, ErrInvalidProjection
+		return appobs.RelayOrigin{}, ErrInvalidProjection
 	}
-	authority, err := appobs.NewRelayAuthority(scheme, parsed.Hostname(), uint16(value))
+	origin, err := appobs.NewRelayOrigin(scheme, parsed.Hostname(), uint16(value))
 	if err != nil {
-		return appobs.RelayAuthority{}, ErrInvalidProjection
+		return appobs.RelayOrigin{}, ErrInvalidProjection
 	}
-	return authority, nil
+	return origin, nil
 }
 
 func projectSenderRecovery(value share.RelayRecovery) (appobs.RelayRecovering, error) {
-	authority, err := RelayAuthority(value.Endpoint)
+	origin, err := RelayOrigin(value.Endpoint)
 	if err != nil {
 		return appobs.RelayRecovering{}, err
 	}
@@ -96,12 +96,12 @@ func projectSenderRecovery(value share.RelayRecovery) (appobs.RelayRecovering, e
 		}
 	}
 	instance, _ := appobs.NewSharingInstanceID(attempt.ShareInstance[:])
-	return appobs.NewRelayRecoveryObservation(appobs.WorkflowShare, authority, attempt.Number, state, failure,
+	return appobs.NewRelayRecoveryObservation(appobs.WorkflowShare, origin, attempt.Number, state, failure,
 		appobs.RelayRecoveryDetails{ShareInstance: instance, Generation: attempt.Generation, Slow: attempt.Slow, Resume: attempt.Resume, Terminal: attempt.Terminal, NextDelay: attempt.NextDelay})
 }
 
 func projectReceiverRecovery(value relayset.ReceiverRecoveryObservation) (appobs.RelayRecovering, bool, error) {
-	authority, err := NormalizeRelayAuthority(value.Endpoint)
+	origin, err := NormalizeRelayOrigin(value.Endpoint)
 	if err != nil {
 		return appobs.RelayRecovering{}, true, err
 	}
@@ -130,6 +130,6 @@ func projectReceiverRecovery(value relayset.ReceiverRecoveryObservation) (appobs
 	if value.ProtocolSessionID != ([16]byte{}) {
 		details.ProtocolSessionID, _ = appobs.NewProtocolSessionID(value.ProtocolSessionID[:])
 	}
-	event, err := appobs.NewRelayRecoveryObservation(appobs.WorkflowReceive, authority, value.Attempt, state, failure, details)
+	event, err := appobs.NewRelayRecoveryObservation(appobs.WorkflowReceive, origin, value.Attempt, state, failure, details)
 	return event, true, err
 }

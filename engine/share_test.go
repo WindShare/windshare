@@ -34,7 +34,7 @@ func TestShareReadinessAndFinalizationUseDurableAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	ready, err := current.Ready(context.Background())
-	if err != nil || !ready.RelayAuthority.Valid() {
+	if err != nil || !ready.RelayOrigin.Valid() {
 		t.Fatalf("ready = %+v, %v", ready, err)
 	}
 	select {
@@ -55,7 +55,7 @@ func TestShareReadinessAndFinalizationUseDurableAuthority(t *testing.T) {
 		t.Fatal("test did not exercise an undrained stream")
 	}
 	// The ready value outlives the observation queue and task shutdown.
-	if again, err := current.Ready(context.Background()); err != nil || again.RelayAuthority != ready.RelayAuthority {
+	if again, err := current.Ready(context.Background()); err != nil || again.RelayOrigin != ready.RelayOrigin {
 		t.Fatalf("durable ready = %+v, %v", again, err)
 	}
 }

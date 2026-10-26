@@ -344,7 +344,7 @@ func validAuthenticatedOperationViolationCode(
 		protocolsession.AuthenticatedOperationViolationMalformedPeerControl,
 		protocolsession.AuthenticatedOperationViolationConflictingPeerAnswer,
 		protocolsession.AuthenticatedOperationViolationConflictingFinal,
-		protocolsession.AuthenticatedOperationViolationContinuationAuthority:
+		protocolsession.AuthenticatedOperationViolationContinuationContract:
 		return true
 	default:
 		return false

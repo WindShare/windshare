@@ -140,7 +140,7 @@ describe('DirectoryAdmission v2 binding', () => {
       reservationId: identity(61),
       artifact: original,
       authorityRef: identity(62, 32),
-      nameAuthority: 'application-chosen',
+      nameChooser: 'application-chosen',
       requestedName: 'report.txt',
       reservedName: 'report.txt',
       collisionIndex: 0,

@@ -12,7 +12,7 @@ type ReceiverControlValidator struct {
 func (validator ReceiverControlValidator) BeginOperationContinuation(
 	requestKind protocolsession.MessageKind,
 	canonicalRequestBody []byte,
-) (protocolsession.OperationContinuationAuthority, bool, error) {
+) (protocolsession.OperationContinuationContract, bool, error) {
 	return OperationContinuationClassifier(validator).BeginOperationContinuation(
 		requestKind,
 		canonicalRequestBody,

@@ -33,9 +33,9 @@
           "authorityRef": "gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8",
           "guarantees": {
             "artifactAvailability": "committed-objects-usable",
-            "cleanupAuthority": "no-whole-target-rollback",
+            "cleanupContract": "no-whole-target-rollback",
             "delivery": "managed-target",
-            "nameAuthority": "application-chosen",
+            "nameChooser": "application-chosen",
             "profile": "native-tree",
             "replacement": "atomic-no-replace",
             "targetVisibility": "committed-objects-visible"
@@ -102,9 +102,9 @@
           "fsaLayoutVersion": 1,
           "guarantees": {
             "artifactAvailability": "committed-objects-usable",
-            "cleanupAuthority": "no-whole-target-rollback",
+            "cleanupContract": "no-whole-target-rollback",
             "delivery": "managed-target",
-            "nameAuthority": "application-chosen",
+            "nameChooser": "application-chosen",
             "profile": "fsa-tree",
             "replacement": "coordinated-no-replace",
             "targetVisibility": "committed-objects-visible"
@@ -172,9 +172,9 @@
           "fsaLayoutVersion": 1,
           "guarantees": {
             "artifactAvailability": "committed-objects-usable",
-            "cleanupAuthority": "no-whole-target-rollback",
+            "cleanupContract": "no-whole-target-rollback",
             "delivery": "managed-target",
-            "nameAuthority": "application-chosen",
+            "nameChooser": "application-chosen",
             "profile": "fsa-tree",
             "replacement": "coordinated-no-replace",
             "targetVisibility": "committed-objects-visible"
@@ -239,9 +239,9 @@
           "collisionIndex": 0,
           "guarantees": {
             "artifactAvailability": "verified-complete-only",
-            "cleanupAuthority": "rollback-to-absent-before-publication",
+            "cleanupContract": "rollback-to-absent-before-publication",
             "delivery": "managed-target",
-            "nameAuthority": "application-chosen",
+            "nameChooser": "application-chosen",
             "profile": "managed-atomic",
             "replacement": "atomic-no-replace",
             "targetVisibility": "hidden-until-verified-publication"

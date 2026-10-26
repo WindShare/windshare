@@ -54,12 +54,12 @@ const UNAVAILABLE_ZIP_RECOMMENDATION_POLICY: ZipRouteRecommendationPolicy = Obje
 })
 
 const PRECREATED_BROWSER_FILE_FACTS: DestinationGuaranteeFacts = Object.freeze({
-  nameAuthority: 'user-chosen',
+  nameChooser: 'user-chosen',
   replacement: 'unknown',
   delivery: 'managed-target',
   targetVisibility: 'unobservable',
   artifactAvailability: 'verified-complete-only',
-  cleanupAuthority: 'no-managed-cleanup',
+  cleanupContract: 'no-managed-cleanup',
 })
 
 export function legalGuaranteeProfile(
@@ -134,12 +134,12 @@ export function sameGuaranteeFacts(
   left: DestinationGuaranteeFacts,
   right: DestinationGuaranteeFacts,
 ): boolean {
-  return left.nameAuthority === right.nameAuthority &&
+  return left.nameChooser === right.nameChooser &&
     left.replacement === right.replacement &&
     left.delivery === right.delivery &&
     left.targetVisibility === right.targetVisibility &&
     left.artifactAvailability === right.artifactAvailability &&
-    left.cleanupAuthority === right.cleanupAuthority
+    left.cleanupContract === right.cleanupContract
 }
 
 export function sameTargetSemantics(
@@ -399,20 +399,20 @@ function snapshotPortable(input: PortableEnvironmentOffer): PortableEnvironmentO
 }
 
 function isManagedAtomicFacts(facts: DestinationGuaranteeFacts): boolean {
-  if (facts.nameAuthority !== 'application-chosen' && facts.nameAuthority !== 'user-chosen') {
+  if (facts.nameChooser !== 'application-chosen' && facts.nameChooser !== 'user-chosen') {
     return false
   }
-  return sameGuaranteeFacts(facts, managedAtomicGuarantees(facts.nameAuthority))
+  return sameGuaranteeFacts(facts, managedAtomicGuarantees(facts.nameChooser))
 }
 
 function snapshotGuaranteeFacts(input: DestinationGuaranteeFacts): DestinationGuaranteeFacts {
   const snapshot = {
-    nameAuthority: input.nameAuthority,
+    nameChooser: input.nameChooser,
     replacement: input.replacement,
     delivery: input.delivery,
     targetVisibility: input.targetVisibility,
     artifactAvailability: input.artifactAvailability,
-    cleanupAuthority: input.cleanupAuthority,
+    cleanupContract: input.cleanupContract,
   } as const
   for (const value of Object.values(snapshot)) {
     if (typeof value !== 'string') throw new TypeError('destination guarantee facts are invalid')

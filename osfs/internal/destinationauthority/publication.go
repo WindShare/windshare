@@ -17,7 +17,7 @@ type LiveCleanupStageParent interface {
 
 // PublishFileNoReplace is intentionally root-level. Descendant publication is
 // delegated to a separately retained directory authority; neither path text nor
-// DestinationAuthorityID can substitute for that handle.
+// DestinationBindingID can substitute for that handle.
 func (authority *BoundDestination) PublishFileNoReplace(
 	source outputcap.FileIdentity,
 	name string,

@@ -1,4 +1,23 @@
-# Resource ownership
+# Glossary
+
+## Resource control
+
+| Term | Meaning |
+|---|---|
+| Authority | Control over specified resources or operations within an explicit scope and lifetime. |
+| Owner | The component responsible for a resource's lifecycle, including release. |
+| ID / reference | Identifies a resource or binding; possession alone grants no control. |
+| Binding | Associates an operation or destination with specific objects and constraints. |
+| Relay origin | Canonical scheme, host, and effective port; excludes route paths and credentials. |
+| Name chooser | The actor that selects the output name: application, user, or browser. |
+| Cleanup contract | Supported rollback scope and required ownership evidence; execution still needs live authority. |
+| Continuation contract | Immutable request binding, validation rules, and limits for subsequent messages; replay state has its own owner. |
+
+Use these specific terms for facts and constraints. Reserve `Authority` for
+control, qualified by its domain. URI authority retains its protocol meaning.
+A destination binding ID or display path cannot replace a verified live handle.
+
+## Capacity ownership
 
 | Term | Meaning |
 |---|---|

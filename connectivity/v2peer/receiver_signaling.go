@@ -390,8 +390,8 @@ func receiverProvenanceFromCore(
 		return ReceiverProvenanceAuthenticatedSecondAnswer, true
 	case sessionruntime.ReceiverPeerProvenanceRemoteFinalConflict:
 		return ReceiverProvenanceAuthenticatedFinalConflict, true
-	case sessionruntime.ReceiverPeerProvenanceRemoteContinuationAuthorityViolation:
-		return ReceiverProvenanceAuthenticatedContinuationAuthority, true
+	case sessionruntime.ReceiverPeerProvenanceRemoteContinuationViolation:
+		return ReceiverProvenanceAuthenticatedContinuationViolation, true
 	case sessionruntime.ReceiverPeerProvenanceRuntimeStopping:
 		return ReceiverProvenanceRuntimeStopping, true
 	default:
@@ -434,7 +434,7 @@ func receiverCoreTerminalDiagnostics(
 		case sessionruntime.ReceiverPeerDiagnosticRemoteAnswerConflict,
 			sessionruntime.ReceiverPeerDiagnosticRemoteFinalConflict:
 			causes = append(causes, protocolsession.ErrAuthenticatedOperationViolation)
-		case sessionruntime.ReceiverPeerDiagnosticRemoteContinuationAuthorityViolation:
+		case sessionruntime.ReceiverPeerDiagnosticRemoteContinuationViolation:
 			causes = append(causes, protocolsession.ErrConflictingContinuation)
 		case sessionruntime.ReceiverPeerDiagnosticTruncated:
 			causes = append(causes, errReceiverOpaqueCause)

@@ -25,16 +25,16 @@ import type {
 export function reservationCreated(
   reservation: NamedContainerEntryReservation,
 ): Extract<FSAReservationTraceEvent, { name: 'receive.reservation.created' }> {
-  const nameAuthority = reservation.guarantees.nameAuthority
-  if (nameAuthority !== 'application-chosen' && nameAuthority !== 'user-chosen') {
-    throw new TypeError('FSA reservation name authority is invalid')
+  const nameChooser = reservation.guarantees.nameChooser
+  if (nameChooser !== 'application-chosen' && nameChooser !== 'user-chosen') {
+    throw new TypeError('FSA reservation name chooser is invalid')
   }
   return Object.freeze({
     name: 'receive.reservation.created',
     operation_id: reservation.operationId,
     reservation_kind: 'named-container-entry',
     collision_index: reservation.collisionIndex,
-    name_authority: nameAuthority,
+    name_chooser: nameChooser,
     replacement_guarantee: 'coordinated-no-replace',
     delivery_mode: 'managed-target',
     commit_visibility: 'prefix-visible',

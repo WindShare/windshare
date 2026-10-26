@@ -126,7 +126,7 @@ export type FSAReservationTraceEvent =
       operation_id: string
       reservation_kind: 'named-container-entry'
       collision_index: number
-      name_authority: 'application-chosen' | 'user-chosen'
+      name_chooser: 'application-chosen' | 'user-chosen'
       replacement_guarantee: 'coordinated-no-replace'
       delivery_mode: 'managed-target'
       commit_visibility: 'prefix-visible'

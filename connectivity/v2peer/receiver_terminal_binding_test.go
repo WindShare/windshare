@@ -112,9 +112,9 @@ func receiverBoundTestTermination(
 func receiverUnsafeContinuationDecision() receiverAttemptDecision {
 	return receiverAttemptDecision{
 		transitionOwner:       ReceiverTerminalRemote,
-		transitionProvenance:  ReceiverProvenanceAuthenticatedContinuationAuthority,
+		transitionProvenance:  ReceiverProvenanceAuthenticatedContinuationViolation,
 		disposition:           ReceiverDispositionSessionUnsafe,
-		consequenceProvenance: ReceiverProvenanceAuthenticatedContinuationAuthority,
+		consequenceProvenance: ReceiverProvenanceAuthenticatedContinuationViolation,
 	}
 }
 
@@ -133,7 +133,7 @@ func TestReceiverTerminationMergeIsMonotonicInBothOrders(t *testing.T) {
 		{
 			name:            "unsafe receive then weaker terminate",
 			receiveDecision: unsafe, terminateDecision: weak,
-			wantTransition: ReceiverProvenanceAuthenticatedContinuationAuthority,
+			wantTransition: ReceiverProvenanceAuthenticatedContinuationViolation,
 		},
 		{
 			name:            "weaker receive then unsafe terminate",
@@ -157,7 +157,7 @@ func TestReceiverTerminationMergeIsMonotonicInBothOrders(t *testing.T) {
 			outcome := harness.attempt.Outcome()
 			if outcome.TransitionProvenance() != test.wantTransition ||
 				outcome.Disposition() != ReceiverDispositionSessionUnsafe ||
-				outcome.ConsequenceProvenance() != ReceiverProvenanceAuthenticatedContinuationAuthority ||
+				outcome.ConsequenceProvenance() != ReceiverProvenanceAuthenticatedContinuationViolation ||
 				!outcome.RequiresSessionClose() {
 				t.Fatalf("monotonic termination outcome=%+v", outcome)
 			}
@@ -192,7 +192,7 @@ func TestReceiverTerminationPublicationWaitsForReceiveImport(t *testing.T) {
 		t.Fatalf("exact termination close: %v", err)
 	}
 	if outcome := harness.attempt.Outcome(); outcome.Disposition() != ReceiverDispositionSessionUnsafe ||
-		outcome.ConsequenceProvenance() != ReceiverProvenanceAuthenticatedContinuationAuthority {
+		outcome.ConsequenceProvenance() != ReceiverProvenanceAuthenticatedContinuationViolation {
 		t.Fatalf("receive import lost unsafe consequence: %+v", outcome)
 	}
 }
@@ -212,7 +212,7 @@ func TestReceiverInvalidLateTerminationCannotDowngradeUnsafe(t *testing.T) {
 
 	outcome := harness.attempt.Outcome()
 	if outcome.Disposition() != ReceiverDispositionSessionUnsafe ||
-		outcome.ConsequenceProvenance() != ReceiverProvenanceAuthenticatedContinuationAuthority ||
+		outcome.ConsequenceProvenance() != ReceiverProvenanceAuthenticatedContinuationViolation ||
 		!errors.Is(outcome.RetainedCause(), ErrProtocol) {
 		t.Fatalf("invalid late terminal downgraded outcome=%+v retained=%v", outcome, outcome.RetainedCause())
 	}
@@ -604,26 +604,26 @@ func TestReceiverPreOperationInvalidAdapterShapesUseContractProvenance(t *testin
 
 func TestReceiverCoreProvenanceMappingIsOneToOne(t *testing.T) {
 	for core, want := range map[sessionruntime.ReceiverPeerTerminalProvenance]ReceiverTerminalProvenance{
-		sessionruntime.ReceiverPeerProvenanceLocalExplicitStop:                    ReceiverProvenanceLocalExplicitStop,
-		sessionruntime.ReceiverPeerProvenanceLocalContextEnded:                    ReceiverProvenanceLocalContextEnded,
-		sessionruntime.ReceiverPeerProvenanceLocalOperationContract:               ReceiverProvenanceLocalOperationContract,
-		sessionruntime.ReceiverPeerProvenanceRemoteOperationRejected:              ReceiverProvenanceRemoteOperationRejected,
-		sessionruntime.ReceiverPeerProvenanceRemoteUnknownControl:                 ReceiverProvenanceRemoteUnknownControl,
-		sessionruntime.ReceiverPeerProvenanceRemoteControlMalformed:               ReceiverProvenanceRemoteControlMalformed,
-		sessionruntime.ReceiverPeerProvenanceRemoteFailureMalformed:               ReceiverProvenanceRemoteFailureMalformed,
-		sessionruntime.ReceiverPeerProvenanceRemoteFailureScopeViolation:          ReceiverProvenanceRemoteFailureScopeViolation,
-		sessionruntime.ReceiverPeerProvenanceRemoteAnswerConflict:                 ReceiverProvenanceAuthenticatedSecondAnswer,
-		sessionruntime.ReceiverPeerProvenanceRemoteFinalConflict:                  ReceiverProvenanceAuthenticatedFinalConflict,
-		sessionruntime.ReceiverPeerProvenanceRemoteContinuationAuthorityViolation: ReceiverProvenanceAuthenticatedContinuationAuthority,
-		sessionruntime.ReceiverPeerProvenanceRuntimeStopping:                      ReceiverProvenanceRuntimeStopping,
+		sessionruntime.ReceiverPeerProvenanceLocalExplicitStop:           ReceiverProvenanceLocalExplicitStop,
+		sessionruntime.ReceiverPeerProvenanceLocalContextEnded:           ReceiverProvenanceLocalContextEnded,
+		sessionruntime.ReceiverPeerProvenanceLocalOperationContract:      ReceiverProvenanceLocalOperationContract,
+		sessionruntime.ReceiverPeerProvenanceRemoteOperationRejected:     ReceiverProvenanceRemoteOperationRejected,
+		sessionruntime.ReceiverPeerProvenanceRemoteUnknownControl:        ReceiverProvenanceRemoteUnknownControl,
+		sessionruntime.ReceiverPeerProvenanceRemoteControlMalformed:      ReceiverProvenanceRemoteControlMalformed,
+		sessionruntime.ReceiverPeerProvenanceRemoteFailureMalformed:      ReceiverProvenanceRemoteFailureMalformed,
+		sessionruntime.ReceiverPeerProvenanceRemoteFailureScopeViolation: ReceiverProvenanceRemoteFailureScopeViolation,
+		sessionruntime.ReceiverPeerProvenanceRemoteAnswerConflict:        ReceiverProvenanceAuthenticatedSecondAnswer,
+		sessionruntime.ReceiverPeerProvenanceRemoteFinalConflict:         ReceiverProvenanceAuthenticatedFinalConflict,
+		sessionruntime.ReceiverPeerProvenanceRemoteContinuationViolation: ReceiverProvenanceAuthenticatedContinuationViolation,
+		sessionruntime.ReceiverPeerProvenanceRuntimeStopping:             ReceiverProvenanceRuntimeStopping,
 	} {
 		got, ok := receiverProvenanceFromCore(core)
 		if !ok || got != want {
 			t.Fatalf("core provenance %v mapped to %v, %t; want %v", core, got, ok, want)
 		}
 	}
-	if ReceiverProvenanceAuthenticatedContinuationAuthority ==
+	if ReceiverProvenanceAuthenticatedContinuationViolation ==
 		ReceiverProvenanceAuthenticatedCandidateBindingMismatch {
-		t.Fatal("continuation authority collapsed into candidate binding provenance")
+		t.Fatal("continuation contract collapsed into candidate binding provenance")
 	}
 }

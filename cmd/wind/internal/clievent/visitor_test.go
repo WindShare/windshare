@@ -9,11 +9,11 @@ import (
 
 func TestApplicationFactsAndCommandResultsValidate(t *testing.T) {
 	failure, _ := appobs.NewFailure(appobs.FailureRelayTransport)
-	authority, _ := appobs.NewRelayAuthority(appobs.RelayWSS, "relay.example", 443)
+	origin, _ := appobs.NewRelayOrigin(appobs.RelayWSS, "relay.example", 443)
 	subject, _ := appobs.NewDirectorySubject(appobs.NewDisplayName("photos"))
 	subjectEvent, _ := appobs.NewSharingSubjectSelected(subject)
-	relayConnected, _ := NewRelayConnected(CommandGet, authority)
-	recovery, _ := NewRelayRecovering(CommandShare, authority, 1, appobs.RelayRecoveryStarted, appobs.Failure{})
+	relayConnected, _ := NewRelayConnected(CommandGet, origin)
+	recovery, _ := NewRelayRecovering(CommandShare, origin, 1, appobs.RelayRecoveryStarted, appobs.Failure{})
 	path, _ := appobs.NewContentPathSelected(appobs.ContentPathDirect)
 	fallback, _ := NewFallback(CommandGet, appobs.TransportWebRTC, appobs.TransportRelay, failure)
 	receiveID, _ := appobs.NewReceiveOperationID(bytes16(1))

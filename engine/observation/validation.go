@@ -12,7 +12,7 @@ func validateSharingSubjectSelected(value SharingSubjectSelected) error {
 }
 
 func validateRelayConnected(value RelayConnected) error {
-	if !value.workflow.Valid() || !value.authority.Valid() {
+	if !value.workflow.Valid() || !value.origin.Valid() {
 		return ErrInvalidEvent
 	}
 	return nil
@@ -20,7 +20,7 @@ func validateRelayConnected(value RelayConnected) error {
 
 func validateRelayRecovering(value RelayRecovering) error {
 	_, stateOK := value.state.Name()
-	if !value.workflow.Valid() || !value.authority.Valid() ||
+	if !value.workflow.Valid() || !value.origin.Valid() ||
 		value.attempt == 0 || !stateOK ||
 		(value.state == RelayRecoveryFailed) != (value.hasFailure && value.failure.Valid()) {
 		return ErrInvalidEvent

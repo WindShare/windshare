@@ -11,19 +11,19 @@ import (
 const MaximumOperationContinuations = 1_024
 
 var (
-	ErrContinuationAuthority   = errors.New("protocolsession: operation continuation authority is invalid")
-	ErrConflictingContinuation = errors.New("protocolsession: operation continuation conflicts with its authority")
+	ErrContinuationContract    = errors.New("protocolsession: operation continuation contract is invalid")
+	ErrConflictingContinuation = errors.New("protocolsession: operation continuation conflicts with its contract")
 	ErrContinuationPending     = errors.New("protocolsession: operation continuation admission is still pending")
 )
 
-// OperationContinuationClassifier creates the immutable semantic authority for
+// OperationContinuationClassifier creates the immutable continuation contract for
 // one request generation. The protocol core owns replay state; an injected
 // schema owner only decodes the opaque request and continuation bodies.
 type OperationContinuationClassifier interface {
 	BeginOperationContinuation(
 		requestKind MessageKind,
 		canonicalRequestBody []byte,
-	) (OperationContinuationAuthority, bool, error)
+	) (OperationContinuationContract, bool, error)
 	ClassifyUnboundOperationContinuation(
 		kind MessageKind,
 		canonicalBody []byte,
@@ -32,11 +32,11 @@ type OperationContinuationClassifier interface {
 
 type OperationContinuationScope [sha256.Size]byte
 
-// OperationContinuationAuthority validates a continuation against the request
+// OperationContinuationContract validates a continuation against the request
 // that created it and returns its canonical semantic fingerprint. Implementations
-// must be immutable: one authority is shared by the active operation and its
+// must be immutable: one contract is shared by the active operation and its
 // tombstone and can be called while either lifecycle state is current.
-type OperationContinuationAuthority interface {
+type OperationContinuationContract interface {
 	ClassifyOperationContinuation(
 		kind MessageKind,
 		canonicalBody []byte,
@@ -63,25 +63,25 @@ type operationContinuationDirection struct {
 }
 
 type operationContinuationState struct {
-	authority  OperationContinuationAuthority
+	contract   OperationContinuationContract
 	scope      OperationContinuationScope
 	maximum    int
 	directions map[Direction]*operationContinuationDirection
 }
 
 func newOperationContinuationState(
-	authority OperationContinuationAuthority,
+	contract OperationContinuationContract,
 ) (*operationContinuationState, error) {
-	if authority == nil {
-		return nil, ErrContinuationAuthority
+	if contract == nil {
+		return nil, ErrContinuationContract
 	}
-	maximum := authority.MaximumContinuations()
-	scope := authority.OperationContinuationScope()
+	maximum := contract.MaximumContinuations()
+	scope := contract.OperationContinuationScope()
 	if maximum <= 0 || maximum > MaximumOperationContinuations || scope == (OperationContinuationScope{}) {
-		return nil, ErrContinuationAuthority
+		return nil, ErrContinuationContract
 	}
 	return &operationContinuationState{
-		authority: authority, scope: scope, maximum: maximum,
+		contract: contract, scope: scope, maximum: maximum,
 		directions: make(map[Direction]*operationContinuationDirection, 2),
 	}, nil
 }
@@ -103,14 +103,14 @@ func (state *operationContinuationState) classify(
 	direction Direction,
 	message Message,
 ) (operationContinuationKey, bool, error) {
-	if state == nil || state.authority == nil {
-		return operationContinuationKey{}, false, ErrContinuationAuthority
+	if state == nil || state.contract == nil {
+		return operationContinuationKey{}, false, ErrContinuationContract
 	}
 	body, err := operationContinuationSemanticBody(direction, message)
 	if err != nil {
 		return operationContinuationKey{}, false, err
 	}
-	fingerprint, tracked, err := state.authority.ClassifyOperationContinuation(message.kind, body)
+	fingerprint, tracked, err := state.contract.ClassifyOperationContinuation(message.kind, body)
 	if err != nil || !tracked {
 		return operationContinuationKey{}, tracked, err
 	}
@@ -217,7 +217,7 @@ func (table *OperationTable) reserveActiveContinuationLocked(
 	if err != nil || !tracked {
 		if err != nil && tracked {
 			authority.recordSenderOperationViolationLocked(
-				direction, AuthenticatedOperationViolationContinuationAuthority,
+				direction, AuthenticatedOperationViolationContinuationContract,
 			)
 		}
 		return nil, false, err
@@ -307,7 +307,7 @@ func (table *OperationTable) acceptLateContinuationLocked(
 	if err != nil || !tracked {
 		if err != nil && tracked {
 			authority.recordSenderOperationViolationLocked(
-				direction, AuthenticatedOperationViolationContinuationAuthority,
+				direction, AuthenticatedOperationViolationContinuationContract,
 			)
 		}
 		return tracked, err
@@ -335,17 +335,17 @@ func (table *OperationTable) acceptUnboundLateContinuationLocked(
 	if err != nil || !tracked {
 		if err != nil && tracked {
 			authority.recordSenderOperationViolationLocked(
-				direction, AuthenticatedOperationViolationContinuationAuthority,
+				direction, AuthenticatedOperationViolationContinuationContract,
 			)
 		}
 		return tracked, err
 	}
 	if scope == (OperationContinuationScope{}) {
-		return true, ErrContinuationAuthority
+		return true, ErrContinuationContract
 	}
 	if authority.hasDeferredContinuationScope && authority.deferredContinuationScope != scope {
 		authority.recordSenderOperationViolationLocked(
-			direction, AuthenticatedOperationViolationContinuationAuthority,
+			direction, AuthenticatedOperationViolationContinuationContract,
 		)
 		return true, ErrConflictingContinuation
 	}
@@ -413,7 +413,7 @@ func operationPeerAttempt(authority *operationAuthority) (PeerAttemptBinding, bo
 	if authority == nil || authority.continuations == nil {
 		return PeerAttemptBinding{}, false
 	}
-	owner, ok := authority.continuations.authority.(peerAttemptAuthority)
+	owner, ok := authority.continuations.contract.(peerAttemptAuthority)
 	if !ok {
 		return PeerAttemptBinding{}, false
 	}
@@ -437,7 +437,7 @@ func (table *OperationTable) admitPeerAttemptLocked(authority *operationAuthorit
 		return nil
 	}
 	if !binding.valid() {
-		return ErrContinuationAuthority
+		return ErrContinuationContract
 	}
 	slot := table.peerSlots[binding.PeerSlot]
 	if slot == nil {
@@ -502,7 +502,7 @@ func (table *OperationTable) validatePeerAttemptLocked(authority *operationAutho
 		err = ErrConflictingContinuation
 	}
 	if err != nil {
-		authority.recordSenderOperationViolationLocked(direction, AuthenticatedOperationViolationContinuationAuthority)
+		authority.recordSenderOperationViolationLocked(direction, AuthenticatedOperationViolationContinuationContract)
 	}
 	return err
 }

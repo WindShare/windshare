@@ -212,7 +212,7 @@ func TestRPCContinuationRetractsPendingPreTransportTimeout(t *testing.T) {
 	offer, _ := protocolsession.NewMessage(protocolsession.MessagePeerOffer, &call.id, []byte{0xf6})
 	admission, err := runtime.router.AdmitOutbound(offer, protocolsession.OutboundOperationPermit{})
 	if err != nil || !call.setAuthority(admission.Generation, admission.Operation) {
-		t.Fatalf("seed continuation authority: %v", err)
+		t.Fatalf("seed continuation contract: %v", err)
 	}
 	rpc.calls[call.id] = call
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)

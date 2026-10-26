@@ -19,7 +19,7 @@ func testPeerSlot(t *testing.T) *peerslot.Lease {
 	return slot
 }
 
-func TestPhysicalPathReplacementPreservesSessionContinuationAuthority(t *testing.T) {
+func TestPhysicalPathReplacementPreservesSessionContinuationContract(t *testing.T) {
 	clock := newClock()
 	owner, _ := newTestPeerSet(t, Config{Clock: clock})
 	table, err := protocolsession.NewOperationTableWithContinuations(

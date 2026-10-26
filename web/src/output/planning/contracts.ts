@@ -4,11 +4,11 @@ import type {
   ArtifactChoiceIdentity,
   ArtifactSpec,
   AvailableDirectZipPolicyDigests,
-  CleanupAuthority,
+  CleanupContract,
   DeliveryMode,
   GuaranteeProfile,
   MaterializationPlan,
-  NameAuthority,
+  NameChooser,
   ReplacementGuarantee,
   TargetVisibility,
 } from '../../transfer/intent'
@@ -29,12 +29,12 @@ export type {
 }
 
 export interface DestinationGuaranteeFacts {
-  readonly nameAuthority: NameAuthority
+  readonly nameChooser: NameChooser
   readonly replacement: ReplacementGuarantee
   readonly delivery: DeliveryMode
   readonly targetVisibility: TargetVisibility
   readonly artifactAvailability: ArtifactAvailability
-  readonly cleanupAuthority: CleanupAuthority
+  readonly cleanupContract: CleanupContract
 }
 
 interface EnvironmentTargetOfferBase<

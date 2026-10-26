@@ -548,13 +548,13 @@ async function destinationReservation(
     }
     case 'atomic-target': {
       const guarantees = requiredRecord(input.guarantees, 'atomic guarantees')
-      const nameAuthority = requiredString(guarantees.nameAuthority, 'atomic name authority')
-      if (nameAuthority !== 'application-chosen' && nameAuthority !== 'user-chosen') {
+      const nameChooser = requiredString(guarantees.nameChooser, 'atomic name authority')
+      if (nameChooser !== 'application-chosen' && nameChooser !== 'user-chosen') {
         throw new Error('atomic name authority is invalid')
       }
       return createManagedAtomicReservation({
         ...base,
-        nameAuthority,
+        nameChooser,
         requestedName: requiredString(input.requestedName, 'requested name'),
         reservedName: requiredString(input.reservedName, 'reserved name'),
         collisionIndex: requiredNumber(input.collisionIndex, 'collision index'),

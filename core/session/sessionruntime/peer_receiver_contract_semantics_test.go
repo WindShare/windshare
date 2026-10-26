@@ -9,7 +9,7 @@ import (
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
-func TestReceiverPeerOpenNormalizesNilContextAndRequiresContinuationAuthority(t *testing.T) {
+func TestReceiverPeerOpenNormalizesNilContextAndRequiresContinuationContract(t *testing.T) {
 	t.Run("nil context", func(t *testing.T) {
 		runtime, _ := newUnstartedRuntimeWithContinuations(
 			t,

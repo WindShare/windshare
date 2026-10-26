@@ -63,7 +63,7 @@ import {
   fsaOwnedFileGuarantees,
   fsaTreeGuarantees,
   managedAtomicGuarantees,
-  managedNameAuthority,
+  managedNameChooser,
   nativeTreeGuarantees,
   sameGuarantees,
   snapshotGuarantees,
@@ -76,7 +76,7 @@ export {
   fsaOwnedFileGuarantees,
   fsaTreeGuarantees,
   managedAtomicGuarantees,
-  managedNameAuthority,
+  managedNameChooser,
   nativeTreeGuarantees,
   reservationKindByte,
   sameGuarantees,
@@ -227,7 +227,7 @@ export async function createManagedAtomicReservation(input: {
   readonly reservationId: string
   readonly artifact: ArtifactSpec
   readonly authorityRef: string
-  readonly nameAuthority: 'application-chosen' | 'user-chosen'
+  readonly nameChooser: 'application-chosen' | 'user-chosen'
   readonly requestedName: string
   readonly reservedName: string
   readonly collisionIndex: number
@@ -235,7 +235,7 @@ export async function createManagedAtomicReservation(input: {
   const artifact = await validateArtifactSpec(input.artifact)
   const artifactName = completeArtifactName(artifact)
   const requestedName = requireResultName(input.requestedName)
-  if (input.nameAuthority === 'application-chosen' && requestedName !== artifactName) {
+  if (input.nameChooser === 'application-chosen' && requestedName !== artifactName) {
     throw new TypeError('application-chosen atomic target must use the artifact name')
   }
   const reservedName = requireResultName(input.reservedName)
@@ -253,7 +253,7 @@ export async function createManagedAtomicReservation(input: {
     artifact,
     authorityKind: 'managed-atomic-target',
     authorityRef: input.authorityRef,
-    guarantees: managedAtomicGuarantees(input.nameAuthority),
+    guarantees: managedAtomicGuarantees(input.nameChooser),
     requestedName,
     reservedName,
     collisionIndex: input.collisionIndex,
@@ -433,7 +433,7 @@ export async function validateDestinationReservation(
         reservationId: input.reservationId,
         artifact,
         authorityRef: input.authorityRef,
-        nameAuthority: managedNameAuthority(input.guarantees.nameAuthority),
+        nameChooser: managedNameChooser(input.guarantees.nameChooser),
         requestedName: input.requestedName,
         reservedName: input.reservedName,
         collisionIndex: input.collisionIndex,

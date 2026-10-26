@@ -659,7 +659,7 @@ export async function candidateBindingForTest(
         reservationId: identityText(41),
         artifact,
         authorityRef: identityText(42, 32),
-        nameAuthority: action.route.target.guarantees.nameAuthority as
+        nameChooser: action.route.target.guarantees.nameChooser as
           'application-chosen' | 'user-chosen',
         requestedName: suggestedName ?? FILE_ENTRY.name,
         reservedName: suggestedName ?? FILE_ENTRY.name,

@@ -42,7 +42,7 @@ func formatRelayRecovery(event appobs.RelayRecovering, symbols Symbols) terminal
 	state := eventName(event.State())
 	message := "Relay recovery attempt " + strconv.FormatUint(uint64(event.Attempt()), 10) + " " + state + "."
 	if details, ok := event.Details(); ok {
-		relay := event.Authority().Host() + ":" + strconv.FormatUint(uint64(event.Authority().Port()), 10)
+		relay := event.Origin().Host() + ":" + strconv.FormatUint(uint64(event.Origin().Port()), 10)
 		switch event.State() {
 		case appobs.RelayRecoverySucceeded:
 			message = "Relay connection restored: " + relay + "."
