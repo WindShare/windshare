@@ -86,7 +86,7 @@ func (call *Call) recordProtocolTraceCleanup(err error) {
 	cause := protocolOperationCause(err)
 	// Cleanup is synchronous and owns no cancelable wait. A lifecycle-shaped
 	// error here is a failed transition, not evidence of an ordinary wakeup.
-	if cause != sessionobs.ProtocolOperationCauseNone && ProtocolOperationLifecycleCause(cause) {
+	if cause != sessionobs.ProtocolOperationCauseNone && cause.IsLifecycle() {
 		cause = sessionobs.ProtocolOperationCauseProtocolFailure
 	}
 	call.recordProtocolTraceCause(cause)
@@ -100,7 +100,7 @@ func (call *Call) recordProtocolTraceCause(cause sessionobs.ProtocolOperationCau
 		return
 	}
 	call.stateMu.Lock()
-	call.traceCause = MergeProtocolOperationCause(call.traceCause, cause)
+	call.traceCause = call.traceCause.Merge(cause)
 	call.stateMu.Unlock()
 }
 
@@ -163,17 +163,17 @@ func (call *Call) protocolOperationTerminationTrace(now time.Time, owner *Termin
 	stage, cause := sessionobs.ProtocolOperationReceiverEnded, call.traceCause
 	switch {
 	case owner != nil:
-		stage, cause = outcome.Stage, MergeProtocolOperationCause(cause, outcome.Cause)
+		stage, cause = outcome.Stage, cause.Merge(outcome.Cause)
 		// Supersession owns a canceled block wait, not missing RPC authority.
 		// Peer owners can separately prove an ordinary operation-closed wakeup.
 		if outcome.Cause == sessionobs.ProtocolOperationCauseSuperseded && cause == sessionobs.ProtocolOperationCauseOperationClosed {
 			stage = sessionobs.ProtocolOperationReceiverFailed
 		}
-		if stage == sessionobs.ProtocolOperationReceiverEnded && ProtocolOperationLifecycleCause(cause) && outcome.Cause != sessionobs.ProtocolOperationCauseNone {
+		if stage == sessionobs.ProtocolOperationReceiverEnded && cause.IsLifecycle() && outcome.Cause != sessionobs.ProtocolOperationCauseNone {
 			cause = outcome.Cause
 		}
 		if (stage == sessionobs.ProtocolOperationReceiverCompleted && cause != sessionobs.ProtocolOperationCauseNone) ||
-			(stage == sessionobs.ProtocolOperationReceiverEnded && !ProtocolOperationLifecycleCause(cause)) {
+			(stage == sessionobs.ProtocolOperationReceiverEnded && !cause.IsLifecycle()) {
 			stage = sessionobs.ProtocolOperationReceiverFailed
 		}
 		if stage == sessionobs.ProtocolOperationReceiverFailed && cause == sessionobs.ProtocolOperationCauseNone {

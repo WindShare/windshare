@@ -1,9 +1,6 @@
 package receiversession
 
-import (
-	"github.com/windshare/windshare/core/session/internal/sessioncore"
-	sessionobs "github.com/windshare/windshare/core/session/observation"
-)
+import sessionobs "github.com/windshare/windshare/core/session/observation"
 
 // Local ownership alone cannot make a joined fault benign. The operation's
 // immutable terminal diagnostics and the RPC evidence must both agree before a
@@ -18,7 +15,7 @@ func receiverPeerProtocolOutcome(termination PeerTermination, cause sessionobs.P
 		if termination.Severity() == PeerTerminalSessionUnavailable {
 			failure = sessionobs.ProtocolOperationCauseRuntimeClosed
 		}
-		cause = sessioncore.MergeProtocolOperationCause(cause, failure)
+		cause = cause.Merge(failure)
 	}
 	for _, diagnostic := range termination.diagnostics.components[:termination.diagnostics.count] {
 		component := sessionobs.ProtocolOperationCauseProtocolFailure
@@ -30,9 +27,9 @@ func receiverPeerProtocolOutcome(termination PeerTermination, cause sessionobs.P
 		case PeerDiagnosticRuntimeClosed:
 			component = sessionobs.ProtocolOperationCauseRuntimeClosed
 		}
-		cause = sessioncore.MergeProtocolOperationCause(cause, component)
+		cause = cause.Merge(component)
 	}
-	if localStop && sessioncore.ProtocolOperationLifecycleCause(cause) {
+	if localStop && cause.IsLifecycle() {
 		return sessionobs.ProtocolOperationReceiverEnded, cause
 	}
 	return sessionobs.ProtocolOperationReceiverFailed, cause

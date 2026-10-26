@@ -485,7 +485,7 @@ func (call *Call) traceAuthenticatedFailure(
 			sessionobs.ProtocolObservationContext{Correlation: sessionobs.ProtocolObservationCorrelation{Role: protocolsession.RoleReceiver, ProtocolSessionID: source.protocolSessionID, OperationID: call.id, RequestKind: call.requestKind}, ObservedAt: source.observedAt},
 			content, source.lane))
 	}
-	call.traceCause = MergeProtocolOperationCause(call.traceCause, sessionobs.ProtocolOperationCauseProtocolFailure)
+	call.traceCause = call.traceCause.Merge(sessionobs.ProtocolOperationCauseProtocolFailure)
 }
 
 func (call *Call) close() {
