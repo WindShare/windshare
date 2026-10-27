@@ -115,4 +115,47 @@ SOURCES
   diff -u "$fixture_root/vendor.before" "$fixture_root/sources.list.d/vendor.list"
   if use_fallback_ubuntu_mirror "$fixture_root"; then fail 'same mirror can be retried indefinitely'; fi
   echo 'PASS: both APT formats preserve repository identity and unrelated sources'
+
+  # Reproduce the runner's local mirror list, including repeated references from
+  # both source formats. Recovery must change the actual origin exactly once.
+  mirror_list="$fixture_root/apt-mirrors.txt"
+  printf '%s\t%s\n' 'http://azure.archive.ubuntu.com/ubuntu/' 'priority:1 type:deb' >"$mirror_list"
+  cat >>"$mirror_list" <<'MIRRORS'
+https://archive.ubuntu.com/ubuntu/	priority:2
+http://security.ubuntu.com/ubuntu/
+https://packages.microsoft.com/repos/azure-cli/
+MIRRORS
+  printf 'deb mirror+file:%s noble main\n' "$mirror_list" >"$fixture_root/sources.list"
+  cat >"$fixture_root/sources.list.d/ubuntu.sources" <<SOURCES
+Types: deb
+URIs: mirror+file:$mirror_list
+Suites: noble noble-updates noble-backports
+Components: main universe
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+SOURCES
+  cp "$fixture_root/sources.list" "$fixture_root/source.before"
+  cp "$fixture_root/sources.list.d/ubuntu.sources" "$fixture_root/deb822.before"
+  printf '%s\n' 'http://azure.archive.ubuntu.com/ubuntu/' >"$fixture_root/unreferenced-mirrors.txt"
+  printf '# deb mirror+file:%s noble main\n' "$fixture_root/unreferenced-mirrors.txt" >>"$fixture_root/sources.list.d/vendor.list"
+  cp "$fixture_root/unreferenced-mirrors.txt" "$fixture_root/unreferenced.before"
+
+  rewritten_files=0
+  sudo() {
+    [[ "$1" == sed ]] || fail 'unexpected mirror mutation'
+    rewritten_files=$(($# - 4))
+    "$@"
+  }
+  use_fallback_ubuntu_mirror "$fixture_root"
+  [[ "$rewritten_files" == 1 ]] || fail 'shared mirror list was not deduplicated'
+  diff -u "$mirror_list" - <<'MIRRORS'
+http://archive.ubuntu.com/ubuntu/	priority:1 type:deb
+https://archive.ubuntu.com/ubuntu/	priority:2
+http://security.ubuntu.com/ubuntu/
+https://packages.microsoft.com/repos/azure-cli/
+MIRRORS
+  diff -u "$fixture_root/source.before" "$fixture_root/sources.list"
+  diff -u "$fixture_root/deb822.before" "$fixture_root/sources.list.d/ubuntu.sources"
+  diff -u "$fixture_root/unreferenced.before" "$fixture_root/unreferenced-mirrors.txt"
+  if use_fallback_ubuntu_mirror "$fixture_root"; then fail 'mirror list fallback can be retried indefinitely'; fi
+  echo 'PASS: referenced local mirror lists preserve APT identity, priorities, and unrelated origins'
 )

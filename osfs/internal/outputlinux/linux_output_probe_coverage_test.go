@@ -57,7 +57,7 @@ func TestLinuxOutputProbeRetriesCollisionAndCleansNativeNamespace(t *testing.T) 
 	assertLinuxProbeCoverageRootEmpty(t, rootPath)
 }
 
-func TestLinuxRangeProbeFailurePreservesLiveOutput(t *testing.T) {
+func TestLinuxRangeProbeIOFailureRequiresRetryWithoutDowngrading(t *testing.T) {
 	for _, afterMutation := range []bool{false, true} {
 		t.Run(fmt.Sprintf("after-mutation=%t", afterMutation), func(t *testing.T) {
 			root, rootPath := openLinuxOutputProbeCoverageRoot(t)
@@ -79,17 +79,22 @@ func TestLinuxRangeProbeFailurePreservesLiveOutput(t *testing.T) {
 			root.system = &system
 			capabilities, err := root.destinationCapabilitiesWithRandom(
 				bytes.NewReader(bytes.Repeat([]byte{0x67}, outputprobe.RandomBytes)))
-			if err != nil {
-				t.Fatalf("record replacement failure rejected safe output: %v", err)
+			if !injected || !errors.Is(err, unix.EIO) || capabilities.Valid() {
+				t.Fatalf("I/O failure became a capability decision: injected=%t capabilities=%+v error=%v", injected, capabilities, err)
 			}
-			if !injected || capabilities.RangeRecovery().Supported() ||
-				!capabilities.SafePublish().Supported() || !capabilities.OperationRecovery().Supported() ||
-				!capabilities.CrashCleanup().Supported() {
-				t.Fatalf("replacement failure changed unrelated capabilities: injected=%t capabilities=%+v", injected, capabilities)
+			assertLinuxProbeCoverageRootEmpty(t, rootPath)
+
+			// A transient failure cannot downgrade an operation with existing
+			// progress. A successful retry must restore the full capability proof.
+			system.renameat2 = rename
+			capabilities, err = root.destinationCapabilitiesWithRandom(
+				bytes.NewReader(bytes.Repeat([]byte{0x67}, outputprobe.RandomBytes)))
+			if err != nil {
+				t.Fatal(err)
 			}
 			mode, err := outputcap.SelectExecutionMode(capabilities)
-			if err != nil || mode != outputcap.ExecutionLiveOnly {
-				t.Fatalf("safe output mode=%v error=%v", mode, err)
+			if err != nil || mode != outputcap.ExecutionResumable {
+				t.Fatalf("retried output mode=%v error=%v", mode, err)
 			}
 			assertLinuxProbeCoverageRootEmpty(t, rootPath)
 		})

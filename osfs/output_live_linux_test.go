@@ -49,8 +49,8 @@ func TestLinuxTmpfsPublicOutputPublishesWithoutRecoveryAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	transaction, durable, ok := start.Transaction()
-	if !ok || !durable.Ranges().IsEmpty() {
+	transaction, progress, ok := start.Transaction()
+	if !ok || progress.Retention() != transfer.RangesInProcess || !progress.Ranges().IsEmpty() {
 		t.Fatalf("unexpected file admission=%+v", start)
 	}
 	if _, err := os.Stat(filepath.Join(resultRoot, "download.bin")); !errors.Is(err, os.ErrNotExist) {
@@ -62,14 +62,28 @@ func TestLinuxTmpfsPublicOutputPublishesWithoutRecoveryAuthority(t *testing.T) {
 	if err := transaction.WriteRange(context.Background(), 0, payload); err != nil {
 		t.Fatal(err)
 	}
-	if checkpoint, err := transaction.Checkpoint(context.Background()); err != nil || !checkpoint.Ranges().IsEmpty() {
-		t.Fatalf("process output claimed restart ranges: %+v error=%v", checkpoint, err)
+	checkpoint, err := transaction.Checkpoint(context.Background())
+	if err != nil || checkpoint.Retention() != transfer.RangesInProcess ||
+		checkpoint.Binding() != transaction.Binding() ||
+		!transfer.RangesCoverFile(uint64(len(payload)), checkpoint.Ranges()) {
+		t.Fatalf("process output lost its scoped progress: %+v error=%v", checkpoint, err)
 	}
 	if settlement, err := transaction.Commit(context.Background()); err != nil || settlement.Kind() != transfer.FilePublished {
 		t.Fatalf("live publication=%v error=%v", settlement.Kind(), err)
 	}
-	if names := linuxPublicLiveStageNames(t, root); len(names) != 0 {
-		t.Fatalf("committed file retained process stage: %v", names)
+	// The operation retains an identity witness for later attempts. Publication
+	// must add a name for the same data object, without making a second copy.
+	names := linuxPublicLiveStageNames(t, root)
+	if len(names) != 1 {
+		t.Fatalf("published file lost its process witness: %v", names)
+	}
+	stageInfo, err := os.Stat(filepath.Join(root, names[0], "partial"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalInfo, err := os.Stat(filepath.Join(resultRoot, "download.bin"))
+	if err != nil || !os.SameFile(stageInfo, finalInfo) {
+		t.Fatalf("publication changed the owned data object: %v", err)
 	}
 
 	// Install a collision after admission so the final no-replace primitive,
@@ -122,7 +136,7 @@ func TestLinuxTmpfsPublicOutputPublishesWithoutRecoveryAuthority(t *testing.T) {
 	}
 }
 
-func TestLinuxTmpfsPublicOutputPauseCleansCurrentProcessStage(t *testing.T) {
+func TestLinuxTmpfsPublicOutputPauseRetainsStageUntilOperationClose(t *testing.T) {
 	t.Parallel()
 	root := linuxPublicTmpfsRoot(t)
 	authority, intent, session, rootAdmission := openLinuxPublicLiveOperation(t, root, nil)
@@ -145,11 +159,14 @@ func TestLinuxTmpfsPublicOutputPauseCleansCurrentProcessStage(t *testing.T) {
 	if _, err := session.PauseTree(context.Background(), transfer.JobPauseInterrupted); err != nil {
 		t.Fatal(err)
 	}
+	if names := linuxPublicLiveStageNames(t, root); len(names) != 1 {
+		t.Fatalf("paused operation lost its retryable stage: %v", names)
+	}
 	if err := authority.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if names := linuxPublicLiveStageNames(t, root); len(names) != 0 {
-		t.Fatalf("graceful pause retained owned stages: %v", names)
+		t.Fatalf("operation exit retained owned stages: %v", names)
 	}
 	if _, err := os.Stat(filepath.Join(resultRoot, "partial.bin")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("paused partial was published: %v", err)

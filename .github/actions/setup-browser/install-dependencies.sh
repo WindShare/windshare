@@ -9,6 +9,7 @@ readonly DPKG_RECOVERY_TIMEOUT_SECONDS=30
 readonly APT_DIRECTORY=/etc/apt
 readonly AZURE_UBUNTU_MIRROR_PATTERN='(https?://)azure\.archive\.ubuntu\.com/ubuntu(/?)([[:space:]]|$)'
 readonly UBUNTU_MIRROR_REPLACEMENT='\1archive.ubuntu.com/ubuntu\2\3'
+readonly LOCAL_MIRROR_LIST_URI_PATTERN='mirror\+file:/[^[:space:]#]+'
 
 configure_apt_downloads() {
   sudo tee "$APT_DIRECTORY/apt.conf.d/80windshare-browser" >/dev/null <<APT
@@ -19,12 +20,24 @@ APT
 }
 
 use_fallback_ubuntu_mirror() {
-  local apt_directory="$1" source
-  local sources=()
-  # Match only the runner's Ubuntu archive; preserve suites, signing keys,
-  # security updates and third-party repositories in both APT source formats.
+  local apt_directory="$1" source mirror_uri
+  local candidates=() sources=()
+  local -A seen=()
   for source in "$apt_directory/sources.list" "$apt_directory"/sources.list.d/*.list "$apt_directory"/sources.list.d/*.sources; do
-    if [[ -f "$source" ]] && grep -Eq "$AZURE_UBUNTU_MIRROR_PATTERN" "$source"; then
+    [[ -f "$source" ]] || continue
+    candidates+=("$source")
+    # Hosted runners also use mirror+file: indirection. The selected download
+    # origin lives in that list, while suites and signing keys stay in the source.
+    while IFS= read -r mirror_uri; do
+      candidates+=("${mirror_uri#mirror+file:}")
+    done < <(sed '/^[[:space:]]*#/d' "$source" | grep -Eo "$LOCAL_MIRROR_LIST_URI_PATTERN" || true)
+  done
+  # Match only Ubuntu's Azure archive, preserving mirror priorities, security
+  # updates and third-party repositories. Unreferenced lists are not authority.
+  for source in "${candidates[@]}"; do
+    [[ -f "$source" && -z "${seen[$source]+present}" ]] || continue
+    seen["$source"]=1
+    if grep -Eq "$AZURE_UBUNTU_MIRROR_PATTERN" "$source"; then
       sources+=("$source")
     fi
   done
@@ -33,7 +46,7 @@ use_fallback_ubuntu_mirror() {
     return 1
   fi
   sudo sed -E -i "s#$AZURE_UBUNTU_MIRROR_PATTERN#$UBUNTU_MIRROR_REPLACEMENT#g" "${sources[@]}" || return $?
-  echo 'browser-setup phase=mirror-fallback outcome=selected mirror=archive.ubuntu.com'
+  printf 'browser-setup phase=mirror-fallback outcome=selected mirror=archive.ubuntu.com source_files=%s\n' "${#sources[@]}"
 }
 
 run_bounded_dependency_command() {
