@@ -9,7 +9,6 @@ import json
 import os
 from pathlib import Path
 import platform
-import plistlib
 import selectors
 import shutil
 import signal
@@ -20,7 +19,7 @@ import time
 import traceback
 
 from native import (
-    DIRECTORY_FLAGS, FULL_FSYNC, identity, mutation_observation, open_directory,
+    DIRECTORY_FLAGS, FULL_FSYNC, filesystem, identity, mutation_observation, open_directory,
     open_file, rename_exclusive, volume_capabilities, volume_uuid, write_at,
 )
 from process_probe import BLOCKED_EXIT, BUSY_EXIT, CHUNK_BYTES, FILE_BYTES, payload
@@ -84,16 +83,11 @@ def killed_writer(path, cut):
 def environment(path):
     root = open_directory(path)
     try:
-        raw = subprocess.check_output(
-            ["diskutil", "info", "-plist", str(path)], timeout=PROCESS_TIMEOUT_SECONDS,
-        )
-        disk = plistlib.loads(raw)
         return {
             "system": platform.platform(), "architecture": platform.machine(),
             "python": sys.version, "runner_image": os.environ.get("ImageOS"),
             "runner_image_version": os.environ.get("ImageVersion"),
-            "filesystem": disk.get("FilesystemType"),
-            "filesystem_personality": disk.get("FilesystemName"),
+            **filesystem(root),
             "volume_uuid": volume_uuid(root), "root_identity": identity(root),
             "capabilities": volume_capabilities(root),
         }
