@@ -133,7 +133,7 @@ def recover(path):
         return {
             "same_object": same, "reused_bytes": len(covered) * CHUNK_BYTES,
             "written_bytes": FILE_BYTES - len(covered) * CHUNK_BYTES,
-            "sha256": digest, "writer_pid": os.getpid(),
+            "sha256": digest, "recovery_pid": os.getpid(),
         }
     finally:
         if fd is not None:

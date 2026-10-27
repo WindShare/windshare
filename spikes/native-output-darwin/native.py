@@ -62,17 +62,17 @@ def checked(result):
         raise OSError(code, os.strerror(code))
 
 
-def attributes(fd, *, common=0, volume=0, extended=0):
-    request = AttributeList(5, 0, common | ATTR_RETURNED, volume, 0, 0, extended)
+def attributes(fd, *, common=0, volume=0, options=0):
+    request = AttributeList(5, 0, common | ATTR_RETURNED, volume, 0, 0, 0)
     buffer = ctypes.create_string_buffer(ATTRIBUTE_BUFFER_BYTES)
     checked(libc.fgetattrlist(
         fd, ctypes.byref(request), buffer, len(buffer),
-        EXTENDED_ATTRIBUTES if extended else 0,
+        options,
     ))
-    size, got_common, got_volume, _, _, got_extended = struct.unpack_from("=6I", buffer)
+    size, got_common, got_volume, _, _, _ = struct.unpack_from("=6I", buffer)
     if not ATTRIBUTE_HEADER_BYTES <= size <= len(buffer):
         raise ValueError("invalid attribute response length")
-    if common & got_common != common or extended & got_extended != extended:
+    if common & got_common != common:
         raise OSError(errno.ENOTSUP, "requested object attribute was not returned")
     wanted_volume = volume & ~ATTR_VOLUME_INFO
     if wanted_volume & got_volume != wanted_volume:
@@ -138,7 +138,11 @@ def volume_capabilities(fd):
 def mutation_observation(fd):
     stat = os.fstat(fd)
     try:
-        generation, = struct.unpack("=I", attributes(fd, extended=ATTR_WRITE_GENERATION))
+        # GEN_COUNT stays in commonattr; the option distinguishes its reused bit
+        # from the obsolete named-attribute count. It is not a forkattr bit.
+        generation, = struct.unpack("=I", attributes(
+            fd, common=ATTR_WRITE_GENERATION, options=EXTENDED_ATTRIBUTES,
+        ))
         generation_error = None
     except OSError as error:
         generation, generation_error = None, error.errno

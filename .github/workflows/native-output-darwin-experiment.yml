@@ -5,7 +5,8 @@ on:
   push:
     paths:
       - ".github/workflows/native-output-darwin-experiment.yml"
-      - "spikes/native-output-darwin/**"
+      - "spikes/native-output-darwin/*.py"
+      - "spikes/native-output-darwin/*.go"
 
 permissions:
   contents: read
