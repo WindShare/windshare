@@ -16,7 +16,7 @@ type linuxPlacementHost struct {
 	protect         func(string, os.FileMode) error
 }
 
-func newCertifiedPlacement(t testing.TB) string {
+func newNativePlacement(t testing.TB) string {
 	t.Helper()
 	placement, err := provisionLinuxPlacement(linuxPlacementHost{
 		homeDirectory:   os.UserHomeDir,

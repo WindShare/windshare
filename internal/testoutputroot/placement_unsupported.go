@@ -1,4 +1,4 @@
-//go:build !linux && !windows
+//go:build !linux && !windows && !darwin
 
 package testoutputroot
 
@@ -7,8 +7,8 @@ import (
 	"testing"
 )
 
-func newCertifiedPlacement(t testing.TB) string {
+func newNativePlacement(t testing.TB) string {
 	t.Helper()
-	t.Fatalf("certified durable-output test roots are unsupported on %s", runtime.GOOS)
+	t.Fatalf("native durable-output test roots are unsupported on %s", runtime.GOOS)
 	return ""
 }

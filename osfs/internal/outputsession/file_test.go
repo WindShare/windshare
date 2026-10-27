@@ -29,7 +29,7 @@ func TestFileBeginCoalescesExecutorButNeverSharesActiveTransaction(t *testing.T)
 			engine.last = transaction
 			engine.mu.Unlock()
 			return FileBeginObservation{
-				Cut: MutationStable, Transaction: transaction, Durable: transaction.emptyCheckpoint,
+				Cut: MutationStable, Transaction: transaction, Progress: transaction.emptyCheckpoint,
 			}, nil
 		}
 		config.Trace = TraceSinkFunc(func(event TraceEvent) {
@@ -478,6 +478,9 @@ func TestFileTraceMilestonesIdentifyFirstWriteAndCollision(t *testing.T) {
 	for _, event := range events {
 		switch {
 		case event.Operation == OperationFirstWrite:
+			if event.WriteOffset != 0 || event.WriteLength != 1 {
+				t.Fatalf("missing affected write range: %+v", event)
+			}
 			firstWrites++
 		case event.Operation == OperationWriteRange:
 			laterWrites++

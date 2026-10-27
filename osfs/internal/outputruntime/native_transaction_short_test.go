@@ -253,7 +253,7 @@ func TestPublishedOrdinaryFileRestoresDeliveryReceiptAndPreservesUserEdits(t *te
 			if reopened.transaction != nil || reopened.settlement.Kind() != transfer.FilePreviouslyPublished {
 				t.Fatalf("reopened published file = transaction %T settlement %d", reopened.transaction, reopened.settlement.Kind())
 			}
-			if _, verified := reopened.settlement.VerifiedCheckpoint(); verified {
+			if _, verified := reopened.settlement.VerifiedProgress(); verified {
 				t.Fatal("historical delivery exposed a verified checkpoint")
 			}
 			if _, transferred := reopened.settlement.PublicationProvenance(); transferred {

@@ -20,7 +20,7 @@ func TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment(t *testin
 		runWindowsNativeProbeMutexChild(t)
 		return
 	}
-	requireUnprivilegedWindowsNTFSCertification(t)
+	requireUnprivilegedWindowsNTFSIdentityScheme(t)
 
 	root := t.TempDir()
 	platform, err := openWindowsOutputPlatform(root)

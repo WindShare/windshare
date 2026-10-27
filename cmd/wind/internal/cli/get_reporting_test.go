@@ -374,7 +374,7 @@ func TestGetLiveOnlyWarningExplainsRecoveryWithoutReportingUnsafeOutput(t *testi
 	(getObservation{runtime: runtime}).warningCode(appobs.FailureOutputRecoveryUnavailable)
 	runtime.Close()
 	output := stderr.String()
-	if !strings.Contains(output, "without restart recovery") || !strings.Contains(output, "unfinished files") ||
+	if !strings.Contains(output, "retry only while") || !strings.Contains(output, "unfinished progress") ||
 		strings.Contains(output, "could not be updated safely") {
 		t.Fatalf("live-only warning=%q", output)
 	}

@@ -48,9 +48,6 @@ func (g *receiveOperation) close() error {
 		cleanupErr = errors.Join(cleanupErr, g.options.native.Close(cleanupCtx))
 		cancel()
 	}
-	if g.output.authority != nil {
-		cleanupErr = errors.Join(cleanupErr, g.output.authority.Close())
-	}
 	g.observation.complete()
 	return cleanupErr
 }

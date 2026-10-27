@@ -23,7 +23,7 @@ func projectFilesystemOutputTrace(event outputruntime.FilesystemOutputTrace) Fil
 		ReceiveIntentDigest:     event.ReceiveIntentDigest,
 		ReceiveOperationID:      event.ReceiveOperationID,
 		SessionID:               event.SessionID,
-		Certification:           projectCertification(event.Certification),
+		IdentityScheme:          projectIdentityScheme(event.IdentityScheme),
 		NativeLockScope:         projectNativeLockScope(event.NativeLockScope),
 		NativeLockMilestone:     projectNativeLockMilestone(event.NativeLockMilestone),
 		RootOpenDisposition:     projectRootOpenDisposition(event.RootOpenDisposition),
@@ -33,20 +33,22 @@ func projectFilesystemOutputTrace(event outputruntime.FilesystemOutputTrace) Fil
 		CheckpointDecision:      projectCheckpointDecision(event.CheckpointDecision),
 		OperationID:             event.OperationID,
 		ClaimID:                 event.ClaimID,
-		FaultDomain:             event.FaultDomain,
-		NormalizedFaultScope:    event.NormalizedFaultScope,
-		NormalizedFaultCode:     event.NormalizedFaultCode,
-		NodeClaimCount:          event.NodeClaimCount,
-		DirectoryClaimCount:     event.DirectoryClaimCount,
-		FileClaimCount:          event.FileClaimCount,
-		ActiveFileClaimCount:    event.ActiveFileClaimCount,
-		ReservedFileSlotCount:   event.ReservedFileSlotCount,
-		DirectoryMetadataBytes:  event.DirectoryMetadataBytes,
-		CheckpointRecordCount:   event.CheckpointRecordCount,
-		FailureStage:            projectFilesystemFailureStage(event.FailureStage),
-		ReconciliationStep:      projectFilesystemReconciliationStep(event.ReconciliationStep),
-		NativeErrorClass:        projectFilesystemNativeErrorClass(event.NativeErrorClass),
-		Failed:                  event.Failed,
+		WriteOffset:             event.WriteOffset, WriteLength: event.WriteLength,
+		CheckpointAttentionCode: event.CheckpointAttentionCode, CheckpointAttentionCount: event.CheckpointAttentionCount,
+		FaultDomain:            event.FaultDomain,
+		NormalizedFaultScope:   event.NormalizedFaultScope,
+		NormalizedFaultCode:    event.NormalizedFaultCode,
+		NodeClaimCount:         event.NodeClaimCount,
+		DirectoryClaimCount:    event.DirectoryClaimCount,
+		FileClaimCount:         event.FileClaimCount,
+		ActiveFileClaimCount:   event.ActiveFileClaimCount,
+		ReservedFileSlotCount:  event.ReservedFileSlotCount,
+		DirectoryMetadataBytes: event.DirectoryMetadataBytes,
+		CheckpointRecordCount:  event.CheckpointRecordCount,
+		FailureStage:           projectFilesystemFailureStage(event.FailureStage),
+		ReconciliationStep:     projectFilesystemReconciliationStep(event.ReconciliationStep),
+		NativeErrorClass:       projectFilesystemNativeErrorClass(event.NativeErrorClass),
+		Failed:                 event.Failed,
 	}
 }
 
@@ -161,6 +163,8 @@ func projectFilesystemOutputStateReason(
 		return FilesystemOutputStateLeaseOwnershipUnknown
 	case outputruntime.FilesystemOutputStateOperationOwnershipUnknown:
 		return FilesystemOutputStateOperationOwnershipUnknown
+	case outputruntime.FilesystemOutputStateRecoveryUnavailable:
+		return FilesystemOutputStateRecoveryUnavailable
 	case outputruntime.FilesystemOutputStateCleanupUncertain:
 		return FilesystemOutputStateCleanupUncertain
 	default:
@@ -170,8 +174,8 @@ func projectFilesystemOutputStateReason(
 
 func projectTraceOperation(value outputruntime.FilesystemOutputTraceOperation) FilesystemOutputTraceOperation {
 	switch value {
-	case outputruntime.TraceFilesystemCertified:
-		return TraceFilesystemCertified
+	case outputruntime.TraceFilesystemIdentityEvidence:
+		return TraceFilesystemIdentityEvidence
 	case outputruntime.TraceFeatureProbeCompleted:
 		return TraceFeatureProbeCompleted
 	case outputruntime.TraceCheckpointNamespaceOpened:
@@ -317,12 +321,14 @@ func projectRuntimeDecision(
 	}
 }
 
-func projectCertification(value outputruntime.FilesystemOutputCertificationID) FilesystemOutputCertificationID {
+func projectIdentityScheme(value outputruntime.FilesystemOutputIdentitySchemeID) FilesystemOutputIdentitySchemeID {
 	switch value {
-	case outputruntime.FilesystemOutputCertificationLinuxExt4ProcessRestart:
-		return FilesystemOutputCertificationLinuxExt4ProcessRestart
-	case outputruntime.FilesystemOutputCertificationWindowsNTFSProcessRestart:
-		return FilesystemOutputCertificationWindowsNTFSProcessRestart
+	case outputruntime.FilesystemOutputIdentitySchemeLinuxHandleV2:
+		return FilesystemOutputIdentitySchemeLinuxHandleV2
+	case outputruntime.FilesystemOutputIdentitySchemeWindowsObjectIDV1:
+		return FilesystemOutputIdentitySchemeWindowsObjectIDV1
+	case outputruntime.FilesystemOutputIdentitySchemeDarwinObjectIDV1:
+		return FilesystemOutputIdentitySchemeDarwinObjectIDV1
 	default:
 		return ""
 	}

@@ -121,7 +121,7 @@ $outputWindowsSelector = @($requiredSelectors | Where-Object {
 if ($coreSelector.Count -ne 1 -or
     $outputWindowsSelector.Count -ne 1 -or
     (Get-WindowsNativeRequiredTestExpression -TestNames $coreSelector[0].TestNames) -cne
-        '^(TestWindowsNTFSNativeCertification|TestWindowsNTFSProcessRestartRecovery|TestWindowsNTFSRetainedCandidateListAndReopen)$' -or
+        '^(TestWindowsNTFSNativeIdentityScheme|TestWindowsNTFSProcessRestartRecovery|TestWindowsNTFSRetainedCandidateListAndReopen)$' -or
     (Get-WindowsNativeRequiredTestExpression -TestNames $outputWindowsSelector[0].TestNames) -cne
         '^(TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment|TestWindowsRecoveryDurabilityOrdinaryStageSync)$') {
     throw 'required native tests are not bound to their owning package selectors'
@@ -636,8 +636,8 @@ $passingEvents = @($requiredTests | ForEach-Object {
     [pscustomobject]@{ Action = 'pass'; Test = $_; Package = 'example/osfs' }
 }) + [pscustomobject]@{ Action = 'pass'; Package = 'example/osfs' }
 $jsonEvents = @(ConvertFrom-WindowsNativeTestJSONLines -Lines @(
-    '{"Action":"run","Test":"TestWindowsNTFSNativeCertification"}',
-    '{"Action":"pass","Test":"TestWindowsNTFSNativeCertification"}',
+    '{"Action":"run","Test":"TestWindowsNTFSNativeIdentityScheme"}',
+    '{"Action":"pass","Test":"TestWindowsNTFSNativeIdentityScheme"}',
     '{"Action":"run","Test":"TestWindowsNTFSProcessRestartRecovery"}',
     '{"Action":"pass","Test":"TestWindowsNTFSProcessRestartRecovery"}',
     '{"Action":"run","Test":"TestWindowsNTFSRetainedCandidateListAndReopen"}',

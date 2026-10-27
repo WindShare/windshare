@@ -71,7 +71,7 @@ func (root *windowsDirectory) probeDestinationCapabilitiesWithRandom(
 func runWindowsCapabilityFacts(workspace *outputprobe.Workspace) (results outputprobe.Results) {
 	// NTFS's cleanup proof retains the linked files and installed record from
 	// these steps. The shared algorithms own all mutation and cleanup ordering.
-	results.SafePublish = workspace.SafePublish(outputprobe.WindowsNTFS)
+	results.SafePublish = workspace.SafePublish(outputprobe.SizedDataLinks)
 	if results.SafePublish != nil {
 		results.OperationRecovery = windowsProbeDependencyFailure("safe publication", results.SafePublish)
 		results.RangeRecovery = windowsProbeDependencyFailure("safe publication", results.SafePublish)

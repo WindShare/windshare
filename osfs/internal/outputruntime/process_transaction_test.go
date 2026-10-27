@@ -23,8 +23,8 @@ func (*processOnlyRuntimePlatform) DestinationCapabilities() (outputcap.Destinat
 func (*processOnlyRuntimePlatform) LiveCleanupNativeProfile() checkpointmodel.LiveCleanupNativeProfile {
 	panic("process-only runtime requested restart profile")
 }
-func (*processOnlyRuntimePlatform) Certification() outputcap.CertificationID {
-	panic("process-only runtime requested restart certification")
+func (*processOnlyRuntimePlatform) IdentityScheme() outputcap.IdentitySchemeID {
+	panic("process-only runtime requested restart identityScheme")
 }
 func (*processOnlyRuntimePlatform) RootBinding() (outputcap.OutputRootBinding, error) {
 	panic("process-only runtime requested restart binding")
@@ -57,7 +57,7 @@ func TestProcessOnlyTransactionPublishesAndPreservesStalePrivateState(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if durable.Ranges().Len() != 0 || checkpoint.Ranges().Len() != 0 {
+	if durable.Ranges().Len() != 0 || checkpoint.Ranges().Len() != 1 || checkpoint.Retention() != transfer.RangesInProcess {
 		t.Fatal("process ranges became restart-authoritative")
 	}
 	settlement, err := transaction.Commit(context.Background())
@@ -87,7 +87,7 @@ func TestProcessOnlyTransactionPublishesAndPreservesStalePrivateState(t *testing
 	}
 }
 
-func TestProcessOnlyTransactionPauseDeletesOnlyCurrentStage(t *testing.T) {
+func TestProcessOnlyTransactionExitDeletesOnlyCurrentStage(t *testing.T) {
 	root := newRuntimeTestRootSpec(t).path
 	fixture := openLiveTransactionWithPlatform(t, root, 0xC1, false, func(base outputcap.Platform) outputcap.Platform {
 		return &processOnlyRuntimePlatform{Platform: base}

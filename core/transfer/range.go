@@ -351,13 +351,13 @@ func (r *jobRun) transferMissingRanges(
 	transaction FileTransaction,
 	progress *fileTransferProgress,
 ) (bool, error) {
-	durableOutput := r.output.Capabilities().Durability != DurabilityNone
-	if progress == nil || progress.durable != durableOutput {
+	retainedOutput := progress != nil && progress.retainsRanges
+	if progress == nil {
 		return false, r.settleFailedFile(
 			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0, progress,
 		)
 	}
-	if !durableOutput && !progress.trusted.Ranges().IsEmpty() {
+	if !retainedOutput && !progress.trusted.Ranges().IsEmpty() {
 		return false, r.settleFailedFile(
 			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0, progress,
 		)
@@ -386,7 +386,7 @@ func (r *jobRun) transferMissingRanges(
 				((offset/chunk)+uint64(defaultFileReadWindowBlocks))*chunk,
 			)
 			requested := content.Range{Offset: offset, End: next}
-			if !durableOutput && requested.Offset != progress.transientEnd {
+			if !retainedOutput && requested.Offset != progress.transientEnd {
 				return false, r.settleFailedFile(
 					ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0, progress,
 				)
@@ -405,7 +405,7 @@ func (r *jobRun) transferMissingRanges(
 		}
 	}
 	complete := RangesCoverFile(opened.Descriptor.ExactSize(), progress.trusted.Ranges())
-	if !durableOutput {
+	if !retainedOutput {
 		complete = progress.transientEnd == opened.Descriptor.ExactSize()
 	}
 	if !complete {
@@ -473,26 +473,26 @@ func (r *jobRun) transferRequestedRange(
 
 func checkpointExactlyAdvances(
 	transaction FileTransaction,
-	prior VerifiedDurableRanges,
+	prior VerifiedRanges,
 	requested content.Range,
-	next VerifiedDurableRanges,
+	next VerifiedRanges,
 ) bool {
 	requestedSet, err := content.NewRangeSet([]content.Range{requested})
 	if err != nil {
 		return false
 	}
 	expected, err := MergeRanges(prior.Ranges(), requestedSet)
-	return err == nil && next.Binding() == transaction.Binding() &&
+	return err == nil && next.Binding() == transaction.Binding() && next.Retention() == prior.Retention() &&
 		next.CheckpointGeneration() > prior.CheckpointGeneration() &&
 		exactRangeSetsEqual(next.Ranges(), expected)
 }
 
 func checkpointAcknowledgesTransientWrite(
 	transaction FileTransaction,
-	prior VerifiedDurableRanges,
-	next VerifiedDurableRanges,
+	prior VerifiedRanges,
+	next VerifiedRanges,
 ) bool {
-	return next.Binding() == transaction.Binding() && next.Ranges().IsEmpty() &&
+	return next.Binding() == transaction.Binding() && next.Retention() == RangesTransient && prior.Retention() == RangesTransient && next.Ranges().IsEmpty() &&
 		next.CheckpointGeneration() > prior.CheckpointGeneration()
 }
 

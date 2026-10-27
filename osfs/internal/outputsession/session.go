@@ -73,7 +73,7 @@ type fileTransactionOperation struct {
 	done       chan struct{}
 	action     transactionAction
 	argument   uint8
-	checkpoint transfer.VerifiedDurableRanges
+	checkpoint transfer.VerifiedRanges
 	settlement transfer.FileSettlement
 	err        error
 }
@@ -367,7 +367,7 @@ func (session *Session) traceLocked(
 }
 
 func (session *Session) emit(event TraceEvent) {
-	if session != nil && session.trace != nil {
+	if session != nil && session.trace != nil && event.Operation != 0 {
 		session.trace.RecordOutputSessionTrace(event)
 	}
 }

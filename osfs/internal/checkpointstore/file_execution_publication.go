@@ -40,11 +40,11 @@ func (store *FileExecutionStore) applyRetirementLocked(
 	var operationErr error
 	switch step {
 	case fileexecution.RetirementRemoveStage:
-		operationErr = removeOwnedEntry(store.repository.stages, object, ownedStageSuffix, !store.profile.Valid())
+		operationErr = removeOwnedEntry(store.repository.stages, object, ownedStageSuffix, store.stagePolicy == PrivateStage)
 	case fileexecution.RetirementSyncStageNamespace:
 		operationErr = syncOwnedEntryNamespace(store.repository.stages, object)
 	case fileexecution.RetirementRemoveAnchor:
-		operationErr = removeOwnedEntry(store.repository.anchors, object, ownedAnchorSuffix, !store.profile.Valid())
+		operationErr = removeOwnedEntry(store.repository.anchors, object, ownedAnchorSuffix, store.stagePolicy == PrivateStage)
 	case fileexecution.RetirementSyncAnchorNamespace:
 		operationErr = syncOwnedEntryNamespace(store.repository.anchors, object)
 	default:
@@ -74,7 +74,7 @@ func (files *candidateDurabilityFiles) close() error {
 func (store *FileExecutionStore) openCandidateDurabilityLocked(
 	record checkpointmodel.Record,
 ) (*candidateDurabilityFiles, fileexecution.OwnedObservation, error) {
-	privateProfile := !store.profile.Valid()
+	privateProfile := store.stagePolicy == PrivateStage
 	stage := openRecoveryOwnedDataFile(
 		store.repository.stages, record.OwnedObjectID(), ownedStageSuffix, privateProfile,
 	)
@@ -158,7 +158,7 @@ func (store *FileExecutionStore) FinalMatchesOwned(
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	anchor := observeOwnedDataFile(
-		store.repository.anchors, object, ownedAnchorSuffix, !store.profile.Valid(),
+		store.repository.anchors, object, ownedAnchorSuffix, store.stagePolicy == PrivateStage,
 	)
 	if anchor.state != privateEntryReady || anchor.file == nil {
 		return false, errors.Join(

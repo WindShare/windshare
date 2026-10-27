@@ -208,10 +208,20 @@ func (binding MaterializedFileBinding) valid() bool {
 	return binding.target.valid() && !binding.objectIdentity.IsZero()
 }
 
-// VerifiedDurableRanges records authenticated, persisted writes. Reusing private
-// staged ranges assumes no external edits; it does not certify the current bytes
-// of an editable public file or stand in for a historical delivery receipt.
-type VerifiedDurableRanges struct {
+// RangeRetention states which authority can reuse authenticated bytes. A live
+// handle and a restart checkpoint are different proofs, even after file Sync.
+type RangeRetention uint8
+
+const (
+	RangesTransient RangeRetention = iota + 1
+	RangesInProcess
+	RangesAfterRestart
+)
+
+// VerifiedRanges binds progress to its object, revision, and retention scope.
+// It never certifies the current bytes of an externally editable public file.
+type VerifiedRanges struct {
+	retention            RangeRetention
 	binding              MaterializedFileBinding
 	checkpointGeneration CheckpointGeneration
 	ranges               content.RangeSet
@@ -219,33 +229,48 @@ type VerifiedDurableRanges struct {
 
 type CheckpointGeneration uint64
 
-func VerifyDurableRanges(
+func VerifyRestartRanges(
 	binding MaterializedFileBinding,
 	checkpointGeneration CheckpointGeneration,
 	ranges content.RangeSet,
-) (VerifiedDurableRanges, error) {
+) (VerifiedRanges, error) {
+	return verifyRanges(binding, checkpointGeneration, ranges, RangesAfterRestart)
+}
+
+func VerifyProcessRanges(binding MaterializedFileBinding, generation CheckpointGeneration, ranges content.RangeSet) (VerifiedRanges, error) {
+	return verifyRanges(binding, generation, ranges, RangesInProcess)
+}
+
+// AcknowledgeTransientWrite advances a stream without granting readback authority.
+func AcknowledgeTransientWrite(binding MaterializedFileBinding, generation CheckpointGeneration) (VerifiedRanges, error) {
+	return verifyRanges(binding, generation, content.RangeSet{}, RangesTransient)
+}
+
+func verifyRanges(binding MaterializedFileBinding, checkpointGeneration CheckpointGeneration, ranges content.RangeSet, retention RangeRetention) (VerifiedRanges, error) {
 	if !binding.valid() {
-		return VerifiedDurableRanges{}, ErrInvalidOutputBinding
+		return VerifiedRanges{}, ErrInvalidOutputBinding
 	}
 	validated, err := content.NewRangeSet(ranges.Ranges())
 	if err != nil {
-		return VerifiedDurableRanges{}, err
+		return VerifiedRanges{}, err
 	}
 	for _, current := range validated.Ranges() {
 		if current.End > binding.ExactSize() {
-			return VerifiedDurableRanges{}, ErrInvalidOutputBinding
+			return VerifiedRanges{}, ErrInvalidOutputBinding
 		}
 	}
-	return VerifiedDurableRanges{
-		binding: binding, checkpointGeneration: checkpointGeneration, ranges: validated,
+	return VerifiedRanges{
+		binding: binding, checkpointGeneration: checkpointGeneration, ranges: validated, retention: retention,
 	}, nil
 }
 
-func (r VerifiedDurableRanges) Binding() MaterializedFileBinding { return r.binding }
-func (r VerifiedDurableRanges) CheckpointGeneration() CheckpointGeneration {
+func (r VerifiedRanges) Retention() RangeRetention { return r.retention }
+
+func (r VerifiedRanges) Binding() MaterializedFileBinding { return r.binding }
+func (r VerifiedRanges) CheckpointGeneration() CheckpointGeneration {
 	return r.checkpointGeneration
 }
-func (r VerifiedDurableRanges) Ranges() content.RangeSet {
+func (r VerifiedRanges) Ranges() content.RangeSet {
 	clone, _ := content.NewRangeSet(r.ranges.Ranges())
 	return clone
 }
@@ -431,7 +456,7 @@ func validateOpenedPlanFile(
 func validateOutputTransaction(
 	target FileMaterializationTarget,
 	transaction FileTransaction,
-	durable VerifiedDurableRanges,
+	durable VerifiedRanges,
 ) error {
 	if transaction == nil {
 		return outputContractFault(nil)

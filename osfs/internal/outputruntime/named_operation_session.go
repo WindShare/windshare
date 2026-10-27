@@ -6,7 +6,6 @@ import (
 	"io"
 	"sync"
 
-	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
@@ -32,6 +31,7 @@ type operationOutputResources struct {
 	repository  *checkpointstore.Repository
 	store       *checkpointstore.FileExecutionStore
 	lifecycle   *ordinaryLifecycleRecorder
+	completed   bool
 }
 
 func (resources *operationOutputResources) ReleaseOutputSession(context.Context) error {
@@ -50,16 +50,32 @@ func (resources *operationOutputResources) ReleaseOutputSession(context.Context)
 		if resources.authority != nil && resources.operation != nil {
 			resources.authority.mu.Lock()
 			if resources.authority.operation == resources.operation {
-				resources.authority.operation = nil
-				resources.authority.stage = authorityStageLookupStopped
+				resources.operation.opened = false
+				resources.operation.reopened = true
+				if resources.completed {
+					resources.authority.operation = nil
+					resources.authority.stage = authorityStageLookupStopped
+				}
 			}
 			resources.authority.mu.Unlock()
-			resources.err = errors.Join(resources.err, resources.operation.close())
+			if resources.completed {
+				resources.err = errors.Join(resources.err, resources.operation.close())
+			}
 		}
 		resources.operation = nil
 		resources.authority = nil
 	})
 	return resources.err
+}
+
+func (resources *operationOutputResources) RecordTreeSettlement(ctx context.Context, kind transfer.DirectTreeSettlementKind, outcome transfer.DirectTreeOutcome, snapshot outputsession.TreeSettlementSnapshot) error {
+	if resources.lifecycle != nil {
+		if err := resources.lifecycle.RecordTreeSettlement(ctx, kind, outcome, snapshot); err != nil {
+			return err
+		}
+	}
+	resources.completed = kind == transfer.DirectTreeSettlementSuccess
+	return nil
 }
 
 func (authority *Authority) openNamedOperation(
@@ -116,7 +132,7 @@ func (authority *Authority) openNamedOperation(
 		Intent: intent, SessionID: sessionID, Capabilities: capabilities, ReceiptSecret: secret[:],
 		Locator: directories, Destinations: binder, Directories: directories,
 		Files: files, Resources: resources,
-		Lifecycle: ordinaryLifecycleInterface(resources.lifecycle),
+		Lifecycle: resources,
 		Trace:     authority.outputSessionRuntimeTrace(),
 	})
 	if err != nil {
@@ -142,8 +158,11 @@ func (authority *Authority) namedFileExecutor(
 		if err != nil {
 			return nil, nil, nil, runtimeDependencyError("bind live-only file destinations", err)
 		}
+		if operation.liveFiles == nil {
+			operation.liveFiles = &fileexecution.LiveFiles{}
+		}
 		return &liveFileExecutor{
-			runtime: authority, authority: authority.destination,
+			files: operation.liveFiles, runtime: authority, authority: authority.destination,
 			intent: operation.intent, sessionID: sessionID,
 			directories: fileAuthority, random: authority.random,
 		}, nil, nil, nil
@@ -165,21 +184,20 @@ func (authority *Authority) namedFileExecutor(
 	if err != nil {
 		return nil, nil, nil, checkpointRuntimeError(context.Background(), "open ordinary file repository", err)
 	}
-	storeFactory := checkpointstore.NewFreshFileExecutionStoreWithProfile
+	storeFactory := checkpointstore.NewFreshFileExecutionStoreWithStagePolicy
 	if operation.reopened {
-		storeFactory = checkpointstore.NewFileExecutionStoreWithProfile
+		storeFactory = checkpointstore.NewFileExecutionStoreWithStagePolicy
 	}
-	store, err := storeFactory(&repository, authority.destination.LiveCleanupProfile())
-	var repositoryAttention bool
+	store, err := storeFactory(&repository, checkpointstore.InheritFinalParent)
+	var attention []checkpointstore.Attention
 	if operation.reopened {
 		var recordCount uint64
 		if store != nil {
 			recordCount = store.RecordCount()
-			_, attention := store.LineageSnapshot()
-			repositoryAttention = len(attention) != 0
+			_, attention = store.LineageSnapshot()
 		}
 		authority.traceCheckpointReconciled(
-			operation.intent, sessionID, recordCount, repositoryAttention, err,
+			operation.intent, sessionID, recordCount, attention, err,
 		)
 	}
 	if err != nil {
@@ -189,7 +207,7 @@ func (authority *Authority) namedFileExecutor(
 		)
 		return nil, nil, nil, freezeFilesystemOutputFailure(primary, repository.Close())
 	}
-	if repositoryAttention {
+	if checkpointstore.RecoveryBlocked(attention) {
 		// Opaque repository evidence cannot grant mutation authority even when
 		// authenticated siblings reconcile cleanly.
 		attentionErr := requireOperationAttention(
@@ -295,8 +313,8 @@ func (recorder *ordinaryLifecycleRecorder) RecordTreeSettlement(
 		// Product results never imply lost operation authority. They retain the
 		// active row so a later invocation reuses the frozen destination name.
 	case transfer.DirectTreeSettlementFailed:
-		event = checkpointmodel.OrdinaryLifecycleRequireAttention
-		reason = checkpointmodel.OrdinaryReasonOperationOwnershipUnknown
+		// File checkpoints already isolate ambiguous objects. A failed attempt
+		// cannot revoke independently retained operation and sibling authority.
 	default:
 		return transfer.ErrInvalidOutputSettlement
 	}
@@ -376,6 +394,7 @@ func (recorder *ordinaryLifecycleRecorder) cleanupTerminal(ctx context.Context) 
 }
 
 type liveFileExecutor struct {
+	files       *fileexecution.LiveFiles
 	runtime     *Authority
 	authority   *destinationauthority.BoundDestination
 	intent      transfer.ReceiveIntent
@@ -398,52 +417,39 @@ func (executor *liveFileExecutor) BeginFile(
 	if err != nil {
 		return outputsession.FileBeginObservation{Cut: outputsession.MutationNoChange}, err
 	}
-	final, err := destination.ObserveFinalPresence(ctx)
-	if err != nil {
-		return outputsession.FileBeginObservation{Cut: outputsession.MutationNoChange}, errors.Join(err, destination.Close())
-	}
-	if final.Condition() != fileexecution.FinalAbsent {
-		settlement, settlementErr := transfer.NewCollisionFileSettlement(file.Target())
-		return outputsession.FileBeginObservation{
-			Cut: outputsession.MutationStable, Settlement: settlement,
-		}, errors.Join(settlementErr, destination.Close())
-	}
-	owned, cleanup, err := executor.createOwnedStage(ctx, destination, file.ExpectedSize())
-	if err != nil {
-		return outputsession.FileBeginObservation{Cut: outputsession.MutationAmbiguous}, errors.Join(err, destination.Close())
-	}
-	transaction, err := fileexecution.NewLivePartialFileTransaction(
-		file, destination, owned,
-		func(current *fileexecution.LiveOwnedFile) error {
-			err := cleanup(current)
-			decision := FilesystemOutputRuntimeSucceeded
-			if err != nil {
-				decision = FilesystemOutputRuntimeCleanupPending
-			}
-			executor.runtime.trace(FilesystemOutputTrace{
-				Operation:           TraceRuntimeDecision,
-				ReceiveIntentDigest: executor.intent.Digest(),
-				ReceiveOperationID:  executor.intent.OperationID(),
-				SessionID:           executor.sessionID,
-				RuntimeComponent:    FilesystemOutputRuntimeCheckpoint,
-				RuntimeOperation:    FilesystemOutputRuntimeCleanup,
-				RuntimeDecision:     decision,
-				Failed:              err != nil,
-			})
-			return err
-		},
-	)
-	if err != nil {
-		return outputsession.FileBeginObservation{Cut: outputsession.MutationAmbiguous}, errors.Join(err, owned.Close(), destination.Close())
-	}
-	empty, _ := content.NewRangeSet(nil)
-	durable, err := transfer.VerifyDurableRanges(transaction.Binding(), 0, empty)
-	if err != nil {
-		return outputsession.FileBeginObservation{Cut: outputsession.MutationAmbiguous}, err
-	}
-	return outputsession.FileBeginObservation{
-		Cut: outputsession.MutationStable, Transaction: fileTransactionAdapter{transaction: transaction}, Durable: durable,
-	}, nil
+	start, err := executor.files.Begin(ctx, file, destination, func() (*fileexecution.PartialFileTransaction, error) {
+		owned, cleanup, err := executor.createOwnedStage(ctx, destination, file.ExpectedSize())
+		if err != nil {
+			return nil, errors.Join(err, destination.Close())
+		}
+		transaction, err := fileexecution.NewLivePartialFileTransaction(
+			file, destination, owned,
+			func(current *fileexecution.LiveOwnedFile) error {
+				err := cleanup(current)
+				decision := FilesystemOutputRuntimeSucceeded
+				if err != nil {
+					decision = FilesystemOutputRuntimeCleanupPending
+				}
+				executor.runtime.trace(FilesystemOutputTrace{
+					Operation:           TraceRuntimeDecision,
+					ReceiveIntentDigest: executor.intent.Digest(),
+					ReceiveOperationID:  executor.intent.OperationID(),
+					SessionID:           executor.sessionID,
+					RuntimeComponent:    FilesystemOutputRuntimeCheckpoint,
+					RuntimeOperation:    FilesystemOutputRuntimeCleanup,
+					RuntimeDecision:     decision,
+					Failed:              err != nil,
+				})
+				return err
+			},
+		)
+		if err != nil {
+			return nil, errors.Join(err, owned.Close(), destination.Close())
+		}
+		return transaction, nil
+
+	})
+	return observeFileStart(start, err)
 }
 
 func newOutputSessionID(random io.Reader) (transfer.OutputSessionID, error) {
@@ -469,7 +475,7 @@ func operationSessionCapabilities(
 	}
 	durability := transfer.DurabilityNone
 	if operation.mode == outputcap.ExecutionResumable {
-		durability = transfer.DurabilityProcessRestart
+		durability = operation.authority.destination.RecoveryDurability()
 	}
 	return transfer.NewDirectTreeCapabilities(transfer.DirectTreeCapabilities{
 		Durability: durability, RandomWrite: true,

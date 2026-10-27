@@ -29,7 +29,7 @@ func openRepositoryFixture(
 	fixture := ordinaryRegistryFixture(t, fill)
 	ownership, err := checkpointmodel.NewOwnership(checkpointmodel.OwnershipSpec{
 		Materializer:        checkpointmodel.MaterializerNativeTree,
-		Certification:       checkpointmodel.CertificationWindowsNTFSProcessRestart,
+		IdentityScheme:      checkpointmodel.IdentitySchemeWindowsObjectIDV1,
 		AuthorityRef:        fixture.reservation.AuthorityRef().Bytes(),
 		RootOpenDisposition: checkpointmodel.CallerProvidedContainer,
 	})

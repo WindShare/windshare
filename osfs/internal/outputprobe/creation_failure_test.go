@@ -9,7 +9,7 @@ import (
 )
 
 func TestProbeFailedCreateWithoutWitnessPreservesRecoveryCut(t *testing.T) {
-	for _, profile := range []Profile{LinuxExt4, WindowsNTFS} {
+	for _, profile := range []Profile{EmptyDataLinks, SizedDataLinks} {
 		for _, name := range []string{StageName, RecordName, TemporaryRecordName} {
 			t.Run(fmt.Sprintf("%d/%s", profile, name), func(t *testing.T) {
 				root := newProbeTestRoot()
@@ -56,7 +56,7 @@ func TestProbeRejectedCreateDoesNotPreventCleanup(t *testing.T) {
 	root := newProbeTestRoot()
 	workspace := newProbeTestWorkspace(t, root, 1)
 	root.system.fault = "create-file:" + StageName
-	if err := workspace.SafePublish(WindowsNTFS); !errors.Is(err, errInjected) {
+	if err := workspace.SafePublish(SizedDataLinks); !errors.Is(err, errInjected) {
 		t.Fatalf("creation error=%v", err)
 	}
 	if err := workspace.Cleanup(); err != nil {

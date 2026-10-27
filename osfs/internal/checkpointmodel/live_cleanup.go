@@ -35,7 +35,7 @@ func (state LiveCleanupTicketState) Valid() bool {
 }
 
 // LiveCleanupNativeProfile is intentionally narrower than restart-recovery
-// certification: a live-only ticket proves only cleanup semantics.
+// identityScheme: a live-only ticket proves only cleanup semantics.
 type LiveCleanupNativeProfile uint8
 
 const (

@@ -53,31 +53,33 @@ func (transaction *guardedTransaction) WriteRange(
 		writeArgument = 1
 	}
 	entry, operation, _, event, err := transaction.reserve(operationID, actionWrite, writeArgument)
-	if err != nil {
-		transaction.session.emit(event)
-		return err
+	if err == nil {
+		cut, executeErr := transaction.executor.WriteRange(ctx, offset, data)
+		event, err = transaction.finishNonterminal(ctx, operationID, entry, operation, cut, executeErr, transfer.VerifiedRanges{})
 	}
-	cut, executeErr := transaction.executor.WriteRange(ctx, offset, data)
-	return transaction.finishNonterminal(ctx, operationID, entry, operation, cut, executeErr, transfer.VerifiedDurableRanges{})
+	event.WriteOffset, event.WriteLength = offset, uint64(len(data))
+	transaction.session.emit(event)
+	return err
 }
 
 func (transaction *guardedTransaction) Checkpoint(
 	ctx context.Context,
-) (transfer.VerifiedDurableRanges, error) {
+) (transfer.VerifiedRanges, error) {
 	lease, operationID, err := transaction.begin(ctx)
 	if err != nil {
-		return transfer.VerifiedDurableRanges{}, err
+		return transfer.VerifiedRanges{}, err
 	}
 	defer lease.release()
 	entry, operation, _, event, err := transaction.reserve(operationID, actionCheckpoint, 0)
 	if err != nil {
 		transaction.session.emit(event)
-		return transfer.VerifiedDurableRanges{}, err
+		return transfer.VerifiedRanges{}, err
 	}
 	checkpoint, cut, executeErr := transaction.executor.Checkpoint(ctx)
-	err = transaction.finishNonterminal(ctx, operationID, entry, operation, cut, executeErr, checkpoint)
+	event, err = transaction.finishNonterminal(ctx, operationID, entry, operation, cut, executeErr, checkpoint)
+	transaction.session.emit(event)
 	if err != nil {
-		return transfer.VerifiedDurableRanges{}, err
+		return transfer.VerifiedRanges{}, err
 	}
 	return checkpoint, nil
 }
@@ -198,8 +200,8 @@ func (transaction *guardedTransaction) finishNonterminal(
 	operation *fileTransactionOperation,
 	cut MutationCut,
 	executeErr error,
-	checkpoint transfer.VerifiedDurableRanges,
-) error {
+	checkpoint transfer.VerifiedRanges,
+) (TraceEvent, error) {
 	session := transaction.session
 	if executeErr == nil && cut != MutationStable {
 		cut, executeErr = MutationAmbiguous, ErrExecutorContract
@@ -217,7 +219,7 @@ func (transaction *guardedTransaction) finishNonterminal(
 	if session.fileClaims[entry.claim.id] != entry || entry.operation != operation || entry.state != fileActive {
 		err := session.markInvariantFailureLocked()
 		session.mu.Unlock()
-		return err
+		return TraceEvent{}, err
 	}
 	entry.operation = nil
 	decision := TraceActive
@@ -243,8 +245,7 @@ func (transaction *guardedTransaction) finishNonterminal(
 	event := session.traceLocked(operationID, traceOperation, decision, entry.claim.id,
 		ClaimFile, ClaimActive, ClaimActive, value)
 	session.mu.Unlock()
-	session.emit(event)
-	return executeErr
+	return event, executeErr
 }
 
 func (transaction *guardedTransaction) terminalOperation(

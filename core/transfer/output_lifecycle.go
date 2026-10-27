@@ -42,7 +42,7 @@ type FileSettlement struct {
 	target           FileMaterializationTarget
 	binding          MaterializedFileBinding
 	hasBinding       bool
-	checkpoint       VerifiedDurableRanges
+	checkpoint       VerifiedRanges
 	hasCheckpoint    bool
 	stateRef         MaterializationStateRef
 	itemBlockReason  ItemBlockReason
@@ -158,7 +158,7 @@ func NewTransientPublishedFileSettlement(binding MaterializedFileBinding) (FileS
 
 func NewVerifiedFileSettlement(
 	kind FileSettlementKind,
-	checkpoint VerifiedDurableRanges,
+	checkpoint VerifiedRanges,
 ) (FileSettlement, error) {
 	if kind != FilePublished && kind != FilePaused && kind != FileItemBlocked ||
 		!checkpoint.Binding().valid() {
@@ -178,7 +178,7 @@ func NewVerifiedFileSettlement(
 	return settlement, nil
 }
 
-func (s FileSettlement) VerifiedCheckpoint() (VerifiedDurableRanges, bool) {
+func (s FileSettlement) VerifiedProgress() (VerifiedRanges, bool) {
 	return s.checkpoint, s.hasCheckpoint
 }
 
@@ -301,14 +301,14 @@ func (settlement FileSettlement) validWithoutWarnings() bool {
 			!settlement.stateRef.IsZero() || settlement.itemBlockReason != 0 {
 			return false
 		}
-		checkpoint, durable := settlement.VerifiedCheckpoint()
+		checkpoint, durable := settlement.VerifiedProgress()
 		return !durable || checkpoint.Binding() == binding &&
 			RangesCoverFile(checkpoint.Binding().ExactSize(), checkpoint.Ranges())
 	case FilePaused:
 		if settlement.provenance != 0 {
 			return false
 		}
-		checkpoint, ok := settlement.VerifiedCheckpoint()
+		checkpoint, ok := settlement.VerifiedProgress()
 		binding, bound := settlement.MaterializedBinding()
 		if !ok || !bound || !binding.valid() || checkpoint.Binding() != binding ||
 			settlement.target != binding.Target() || !settlement.stateRef.IsZero() || settlement.itemBlockReason != 0 {
@@ -345,21 +345,21 @@ func (settlement FileSettlement) matchesBinding(binding MaterializedFileBinding)
 	}
 	switch settlement.Kind() {
 	case FilePublished:
-		if checkpoint, durable := settlement.VerifiedCheckpoint(); durable {
+		if checkpoint, durable := settlement.VerifiedProgress(); durable {
 			return checkpoint.Binding() == binding
 		}
 		settledBinding, ok := settlement.MaterializedBinding()
 		return ok && settledBinding == binding
 	case FilePaused:
-		checkpoint, _ := settlement.VerifiedCheckpoint()
+		checkpoint, _ := settlement.VerifiedProgress()
 		return checkpoint.Binding() == binding
 	case FileItemBlocked:
-		if checkpoint, durable := settlement.VerifiedCheckpoint(); durable {
+		if checkpoint, durable := settlement.VerifiedProgress(); durable {
 			return checkpoint.Binding() == binding
 		}
 		settledBinding, ok := settlement.MaterializedBinding()
 		return ok && settledBinding == binding
-	case FilePreviouslyPublished, FileFailed:
+	case FilePreviouslyPublished, FileFailed, FileCollision:
 		settledBinding, ok := settlement.MaterializedBinding()
 		return ok && settledBinding == binding
 	default:
@@ -377,8 +377,8 @@ func (settlement FileSettlement) matchesCommittedOutput(
 	if settlement.Kind() != FilePublished {
 		return true
 	}
-	_, durablePublication := settlement.VerifiedCheckpoint()
-	return durablePublication == (capabilities.Durability != DurabilityNone)
+	progress, verified := settlement.VerifiedProgress()
+	return (verified && progress.Retention() == RangesAfterRestart) == (capabilities.Durability != DurabilityNone)
 }
 
 type FilePauseReason uint8
@@ -453,7 +453,7 @@ func (kind DirectTreeSettlementKind) valid() bool {
 type FileTransaction interface {
 	Binding() MaterializedFileBinding
 	WriteRange(context.Context, uint64, []byte) error
-	Checkpoint(context.Context) (VerifiedDurableRanges, error)
+	Checkpoint(context.Context) (VerifiedRanges, error)
 	Commit(context.Context) (FileSettlement, error)
 	Pause(context.Context, FilePauseReason) (FileSettlement, error)
 	Retire(context.Context, FileRetireReason) (FileSettlement, error)
@@ -473,11 +473,11 @@ const (
 type FileStart struct {
 	kind        fileStartKind
 	transaction FileTransaction
-	durable     VerifiedDurableRanges
+	durable     VerifiedRanges
 	settlement  FileSettlement
 }
 
-func NewFileTransactionStart(transaction FileTransaction, durable VerifiedDurableRanges) (FileStart, error) {
+func NewFileTransactionStart(transaction FileTransaction, durable VerifiedRanges) (FileStart, error) {
 	if transaction == nil || !transaction.Binding().valid() || durable.Binding() != transaction.Binding() {
 		return FileStart{}, ErrInvalidOutputSettlement
 	}
@@ -487,7 +487,7 @@ func NewFileTransactionStart(transaction FileTransaction, durable VerifiedDurabl
 func NewFileSettlementStart(settlement FileSettlement) (FileStart, error) {
 	switch settlement.Kind() {
 	case FilePublished, FilePreviouslyPublished, FileCollision, FileItemBlocked, FileFailed:
-		_, durablePublication := settlement.VerifiedCheckpoint()
+		_, durablePublication := settlement.VerifiedProgress()
 		if !settlement.valid() || settlement.Kind() == FilePublished && !durablePublication {
 			return FileStart{}, ErrInvalidOutputSettlement
 		}
@@ -497,9 +497,9 @@ func NewFileSettlementStart(settlement FileSettlement) (FileStart, error) {
 	}
 }
 
-func (start FileStart) Transaction() (FileTransaction, VerifiedDurableRanges, bool) {
+func (start FileStart) Transaction() (FileTransaction, VerifiedRanges, bool) {
 	if start.kind != fileStartTransaction || start.transaction == nil {
-		return nil, VerifiedDurableRanges{}, false
+		return nil, VerifiedRanges{}, false
 	}
 	return start.transaction, start.durable, true
 }

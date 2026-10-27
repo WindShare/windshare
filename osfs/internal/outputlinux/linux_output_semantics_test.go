@@ -322,14 +322,14 @@ func TestLinuxLiveCleanupTicketCreatesAndRemovesOnlyExactStage(t *testing.T) {
 	if size, sizeErr := stage.Size(); sizeErr != nil || size != ticket.ExactSize() {
 		t.Fatalf("stage size=%d error=%v", size, sizeErr)
 	}
-	facts, err := stage.(*linuxMutableFile).state.native.currentIdentity()
+	facts, err := stage.(*linuxMutableFile).State.native.currentIdentity()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if facts.mode&linuxOutputPermissionMask == linuxOutputStateFileMode ||
-		stage.(*linuxMutableFile).state.native.requireExactPermissions {
+		stage.(*linuxMutableFile).State.native.requireExactPermissions {
 		t.Fatalf("stage inherited private mode/profile: mode=%o exact=%t",
-			facts.mode&linuxOutputPermissionMask, stage.(*linuxMutableFile).state.native.requireExactPermissions)
+			facts.mode&linuxOutputPermissionMask, stage.(*linuxMutableFile).State.native.requireExactPermissions)
 	}
 
 	if err := root.CreateLiveCleanupStage(control, ticket); !errors.Is(err, outputcap.ErrNamespaceCollision) {
@@ -520,8 +520,8 @@ func TestLinuxLiveCleanupPreservesUnknownReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	displacedName := "displaced-stage"
-	if err := owned.(*linuxMutableFile).state.origin.parent.renameRegularFile(
-		ticket.StageName(), owned.(*linuxMutableFile).state.native,
+	if err := owned.(*linuxMutableFile).State.origin.parent.renameRegularFile(
+		ticket.StageName(), owned.(*linuxMutableFile).State.native,
 		control.native, displacedName, linuxRenameReplace,
 	); err != nil {
 		t.Fatal(err)

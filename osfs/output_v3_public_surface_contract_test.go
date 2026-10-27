@@ -152,7 +152,7 @@ func TestFilesystemOutputForbiddenSurfaceIsAbsent(t *testing.T) {
 		"OutputSessionIDGenerator":          {},
 		"CheckpointIdentityEqual":           {},
 		"RecoverFileCheckpoint":             {},
-		"SelectVerifiedCheckpoint":          {},
+		"SelectVerifiedProgress":            {},
 		"ValidateCheckpointTransition":      {},
 	}
 	packageDirectory := outputPackageDirectory(t)

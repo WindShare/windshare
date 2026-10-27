@@ -17,8 +17,8 @@ type processDestinationPlatform struct{ *destinationPlatform }
 func (*processDestinationPlatform) LiveCleanupNativeProfile() checkpointmodel.LiveCleanupNativeProfile {
 	panic("process destination requested a restart profile")
 }
-func (*processDestinationPlatform) Certification() outputcap.CertificationID {
-	panic("process destination requested a restart certification")
+func (*processDestinationPlatform) IdentityScheme() outputcap.IdentitySchemeID {
+	panic("process destination requested a restart identityScheme")
 }
 func (platform *processDestinationPlatform) AcquirePublicOperationGuard() (outputcap.PublicOperationGuard, error) {
 	return &destinationGuard{root: &processDestinationDirectory{destinationDirectory: &destinationDirectory{

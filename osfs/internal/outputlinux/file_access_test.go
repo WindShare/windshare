@@ -44,7 +44,7 @@ func TestLinuxRecoveryDurabilityUsesMinimumSyncableMode(t *testing.T) {
 	defer recovery.Close()
 
 	concrete := recovery.(*linuxRecoveryDurabilityFile)
-	flags, err := unix.FcntlInt(uintptr(concrete.state.native.fd), unix.F_GETFL, 0)
+	flags, err := unix.FcntlInt(uintptr(concrete.State.native.fd), unix.F_GETFL, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -13,31 +13,31 @@ import (
 )
 
 const (
-	windowsNTFSNativeCertificationProfile = "windows-ntfs"
+	windowsNTFSNativeIdentitySchemeProfile = "windows-ntfs"
 	// Keep the probe namespace explicit at the root-native boundary so recovery
 	// recognizes this bounded pre-cleanup artifact.
 	windowsNativeOutputProbePrefix = ".windshare-output.probe-"
 )
 
-func TestWindowsNTFSNativeCertification(t *testing.T) {
-	requireUnprivilegedWindowsNTFSCertification(t)
+func TestWindowsNTFSNativeIdentityScheme(t *testing.T) {
+	requireUnprivilegedWindowsNTFSIdentityScheme(t)
 	platform := openCertifiedNativeOutputForTest(
 		t,
 		t.TempDir(),
-		windowsNTFSNativeCertificationProfile,
-		outputcap.CertificationWindowsNTFSProcessRestart,
+		windowsNTFSNativeIdentitySchemeProfile,
+		outputcap.IdentitySchemeWindowsObjectIDV1,
 	)
 	if err := platform.Close(); err != nil {
-		t.Fatalf("close Windows/NTFS certification authority: %v", err)
+		t.Fatalf("close Windows/NTFS identityScheme authority: %v", err)
 	}
 }
 
 func TestWindowsNTFSProcessRestartRecovery(t *testing.T) {
-	requireUnprivilegedWindowsNTFSCertification(t)
+	requireUnprivilegedWindowsNTFSIdentityScheme(t)
 	runNativeOutputProcessRestartRecoveryTest(
 		t,
-		windowsNTFSNativeCertificationProfile,
-		outputcap.CertificationWindowsNTFSProcessRestart,
+		windowsNTFSNativeIdentitySchemeProfile,
+		outputcap.IdentitySchemeWindowsObjectIDV1,
 		windowsNativeOutputProbePrefix+"27182818284590452353602874713526",
 		1,
 	)
@@ -46,29 +46,29 @@ func TestWindowsNTFSProcessRestartRecovery(t *testing.T) {
 	// hard-link states to zero-length data objects.
 	runNativeOutputProcessRestartRecoveryTest(
 		t,
-		windowsNTFSNativeCertificationProfile,
-		outputcap.CertificationWindowsNTFSProcessRestart,
+		windowsNTFSNativeIdentitySchemeProfile,
+		outputcap.IdentitySchemeWindowsObjectIDV1,
 		windowsNativeOutputProbePrefix+"27182818284590452353602874713526",
 		0,
 	)
 }
 
-func requireUnprivilegedWindowsNTFSCertification(t *testing.T) {
+func requireUnprivilegedWindowsNTFSIdentityScheme(t *testing.T) {
 	t.Helper()
 	if !windows.GetCurrentProcessToken().IsElevated() {
 		return
 	}
-	if os.Getenv(nativeOutputCertificationProfileEnvironment) == windowsNTFSNativeCertificationProfile {
-		t.Fatal("required Windows/NTFS certification must run as an ordinary non-elevated receiver")
+	if os.Getenv(nativeOutputIdentitySchemeProfileEnvironment) == windowsNTFSNativeIdentitySchemeProfile {
+		t.Fatal("required Windows/NTFS identityScheme must run as an ordinary non-elevated receiver")
 	}
-	t.Skip("Windows/NTFS native certification is meaningful only as an ordinary receiver")
+	t.Skip("Windows/NTFS native identityScheme is meaningful only as an ordinary receiver")
 }
 
 func TestWindowsNTFSCreatesMissingRootThroughCertifiedHandles(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "first", "second")
 	platform, err := openNativeOutputPlatform(target, true)
 	if err != nil {
-		nativeOutputCertificationFailure(t, windowsNTFSNativeCertificationProfile,
+		nativeOutputIdentitySchemeFailure(t, windowsNTFSNativeIdentitySchemeProfile,
 			"create missing Windows/NTFS root through certified handles", err)
 		return
 	}
@@ -77,10 +77,10 @@ func TestWindowsNTFSCreatesMissingRootThroughCertifiedHandles(t *testing.T) {
 			t.Errorf("close handle-created Windows/NTFS root: %v", err)
 		}
 	}()
-	if err := platform.ProbeRecoverableFeatures(); err != nil {
+	if err := platform.(nativeOutputEvidencePlatform).ProbeRecoverableFeatures(); err != nil {
 		t.Fatalf("prepare persistent Windows/NTFS root identity: %v", err)
 	}
-	if binding, err := platform.RootBinding(); err != nil || binding.IsZero() {
+	if binding, err := platform.(nativeOutputEvidencePlatform).RootBinding(); err != nil || binding.IsZero() {
 		t.Fatalf("bind handle-created Windows/NTFS root: zero=%t err=%v", binding.IsZero(), err)
 	}
 }
@@ -101,6 +101,6 @@ func TestWindowsRootCreationDoesNotTraverseReparseAncestor(t *testing.T) {
 		t.Fatal("root creation traversed a reparse ancestor")
 	}
 	if _, statErr := os.Lstat(unexpected); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("reparse target was mutated before certification: %v", statErr)
+		t.Fatalf("reparse target was mutated before identityScheme: %v", statErr)
 	}
 }

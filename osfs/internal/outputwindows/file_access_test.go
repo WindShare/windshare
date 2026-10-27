@@ -14,7 +14,7 @@ import (
 )
 
 func TestWindowsRecoveryDurabilityOrdinaryStageSync(t *testing.T) {
-	requireUnprivilegedWindowsNTFSCertification(t)
+	requireUnprivilegedWindowsNTFSIdentityScheme(t)
 	_, guard := windowsOpenGuardedTestRoot(t)
 	root := &windowsOutputDirectory{native: guard.Root()}
 

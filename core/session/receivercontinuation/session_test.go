@@ -291,18 +291,21 @@ func (s *singleFileSession) BeginFile(ctx context.Context, file transfer.Materia
 	if !ok {
 		return transfer.FileStart{}, errors.New("expected fresh file")
 	}
+	initial, err = transfer.AcknowledgeTransientWrite(transaction.Binding(), initial.CheckpointGeneration())
+	if err != nil {
+		return transfer.FileStart{}, err
+	}
 	return transfer.NewFileTransactionStart(&transientFileTransaction{FileTransaction: transaction}, initial)
 }
 
 type transientFileTransaction struct{ transfer.FileTransaction }
 
-func (f *transientFileTransaction) Checkpoint(ctx context.Context) (transfer.VerifiedDurableRanges, error) {
+func (f *transientFileTransaction) Checkpoint(ctx context.Context) (transfer.VerifiedRanges, error) {
 	checkpoint, err := f.FileTransaction.Checkpoint(ctx)
 	if err != nil {
-		return transfer.VerifiedDurableRanges{}, err
+		return transfer.VerifiedRanges{}, err
 	}
-	empty, _ := content.NewRangeSet(nil)
-	return transfer.VerifyDurableRanges(f.Binding(), checkpoint.CheckpointGeneration(), empty)
+	return transfer.AcknowledgeTransientWrite(f.Binding(), checkpoint.CheckpointGeneration())
 }
 func (f *transientFileTransaction) Commit(ctx context.Context) (transfer.FileSettlement, error) {
 	if _, err := f.FileTransaction.Commit(ctx); err != nil {

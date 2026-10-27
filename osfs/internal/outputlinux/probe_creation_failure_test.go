@@ -29,7 +29,7 @@ func TestLinuxProbeRollbackFailurePreservesRestartCut(t *testing.T) {
 	}
 	workspace := outputprobe.NewWorkspace(rootCapability, name, directory)
 	defer workspace.Close()
-	if err := workspace.SafePublish(outputprobe.LinuxExt4); err != nil {
+	if err := workspace.SafePublish(outputprobe.EmptyDataLinks); err != nil {
 		t.Fatal(err)
 	}
 	openat2, fsync, unlinkat := system.openat2, system.fsync, system.unlinkat
@@ -69,7 +69,7 @@ func TestLinuxProbeRollbackFailurePreservesRestartCut(t *testing.T) {
 			t.Fatalf("cleanup lost the restart cut at %s: %v", entry, err)
 		}
 	}
-	if err := outputprobe.Recover(rootCapability, []string{name}, outputprobe.LinuxExt4); err != nil {
+	if err := outputprobe.Recover(rootCapability, []string{name}, outputprobe.EmptyDataLinks); err != nil {
 		t.Fatalf("restart recovery after transient create and rollback failures: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(rootPath, name)); !os.IsNotExist(err) {

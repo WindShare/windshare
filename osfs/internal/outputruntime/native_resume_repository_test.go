@@ -26,7 +26,7 @@ type ordinaryResumeSessionFixture struct {
 	session     transfer.DirectTreeSession
 	intent      transfer.ReceiveIntent
 	transaction transfer.FileTransaction
-	durable     transfer.VerifiedDurableRanges
+	durable     transfer.VerifiedRanges
 	settlement  transfer.FileSettlement
 	finalPath   string
 }
@@ -429,7 +429,7 @@ func TestNativeResumeCollisionRemainsResumableAndRetriesSameOperation(t *testing
 	if provenance, ok := settlement.PublicationProvenance(); !ok || provenance != transfer.FileResumed {
 		t.Fatalf("private-stage retry provenance = (%d, %t)", provenance, ok)
 	}
-	if checkpoint, verified := settlement.VerifiedCheckpoint(); !verified ||
+	if checkpoint, verified := settlement.VerifiedProgress(); !verified ||
 		!transfer.RangesCoverFile(4, checkpoint.Ranges()) {
 		t.Fatal("private-stage retry lost its authenticated range progress")
 	}
@@ -673,8 +673,10 @@ func retainUnobservableCheckpointCandidate(
 		t.Fatal("candidate intent omitted destination reservation")
 	}
 	ownership, err := checkpointmodel.NewOwnership(checkpointmodel.OwnershipSpec{
-		Materializer:        checkpointmodel.MaterializerNativeTree,
-		Certification:       platform.Certification(),
+		Materializer: checkpointmodel.MaterializerNativeTree,
+		IdentityScheme: platform.(interface {
+			IdentityScheme() outputcap.IdentitySchemeID
+		}).IdentityScheme(),
 		AuthorityRef:        reservation.AuthorityRef().Bytes(),
 		RootOpenDisposition: platform.RootOpenDisposition(),
 	})
@@ -691,8 +693,8 @@ func retainUnobservableCheckpointCandidate(
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := checkpointstore.NewFileExecutionStoreWithProfile(
-		&repository, checkpointmodel.LiveCleanupLinuxExt4V1,
+	store, err := checkpointstore.NewFileExecutionStoreWithStagePolicy(
+		&repository, checkpointstore.InheritFinalParent,
 	)
 	if err != nil {
 		t.Fatal(err)

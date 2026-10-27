@@ -149,12 +149,12 @@ func TestCoverageC4WindowsRootBindingSurvivesRestartWithoutCreationInference(t *
 		_ = first.Close()
 		t.Fatalf("existing root disposition = %q", got)
 	}
-	firstBinding, err := first.RootBinding()
+	firstBinding, err := first.(*windowsOutputPlatform).RootBinding()
 	if err != nil {
 		_ = first.Close()
 		t.Fatal(err)
 	}
-	if firstBinding.IsZero() || firstBinding.Certification() != outputcap.CertificationWindowsNTFSProcessRestart {
+	if firstBinding.IsZero() || firstBinding.IdentityScheme() != outputcap.IdentitySchemeWindowsObjectIDV1 {
 		_ = first.Close()
 		t.Fatalf("first root binding = %#v", firstBinding)
 	}
@@ -194,7 +194,7 @@ func TestCoverageC4WindowsRootBindingSurvivesRestartWithoutCreationInference(t *
 	if got := restarted.RootOpenDisposition(); got != outputcap.CallerProvidedContainer {
 		t.Fatalf("restart inferred root creation from existence: %q", got)
 	}
-	restartedBinding, err := restarted.RootBinding()
+	restartedBinding, err := restarted.(*windowsOutputPlatform).RootBinding()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,7 @@ func TestCoverageC4WindowsPrivatePublicationIsNoReplaceAcrossGuardedRestart(t *t
 		_ = platform.Close()
 		t.Fatalf("created private root disposition = %q", got)
 	}
-	firstBinding, err := platform.RootBinding()
+	firstBinding, err := platform.(*windowsOutputPlatform).RootBinding()
 	if err != nil {
 		_ = platform.Close()
 		t.Fatal(err)
@@ -348,7 +348,7 @@ func TestCoverageC4WindowsPrivatePublicationIsNoReplaceAcrossGuardedRestart(t *t
 	if got := restarted.RootOpenDisposition(); got != outputcap.CallerProvidedContainer {
 		t.Fatalf("restarted private root disposition = %q", got)
 	}
-	restartedBinding, err := restarted.RootBinding()
+	restartedBinding, err := restarted.(*windowsOutputPlatform).RootBinding()
 	if err != nil {
 		t.Fatal(err)
 	}

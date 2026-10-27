@@ -4,6 +4,7 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
+	"github.com/windshare/windshare/osfs/internal/checkpointstore"
 	"github.com/windshare/windshare/osfs/internal/directoryauthority"
 	"github.com/windshare/windshare/osfs/internal/fileexecution"
 	"github.com/windshare/windshare/osfs/internal/outputsession"
@@ -13,7 +14,7 @@ func (authority *Authority) traceCheckpointReconciled(
 	intent transfer.ReceiveIntent,
 	sessionID transfer.OutputSessionID,
 	recordCount uint64,
-	repositoryAttention bool,
+	attention []checkpointstore.Attention,
 	reconciliationErr error,
 ) {
 	if authority == nil || intent.IsZero() {
@@ -29,6 +30,13 @@ func (authority *Authority) traceCheckpointReconciled(
 		RuntimeDecision:       FilesystemOutputRuntimeReconciled,
 		CheckpointRecordCount: recordCount,
 	}
+	event.CheckpointAttentionCount = uint64(len(attention))
+	for _, item := range attention {
+		event.CheckpointAttentionCode = string(item.Code())
+		if item.BlocksRecovery() {
+			break
+		}
+	}
 	if reconciliationErr != nil {
 		diagnostic := filesystemOutputDiagnostic(
 			FilesystemOutputFailureCheckpointReconciliation,
@@ -42,7 +50,7 @@ func (authority *Authority) traceCheckpointReconciled(
 		event.NormalizedFaultScope = diagnostic.NormalizedScope
 		event.NormalizedFaultCode = diagnostic.NormalizedCode
 		event.Failed = true
-	} else if repositoryAttention {
+	} else if checkpointstore.RecoveryBlocked(attention) {
 		// Repository attention proves neither a path nor a lineage. Report only
 		// the closed aggregate decision so unsafe names never cross the trace boundary.
 		event.RuntimeDecision = FilesystemOutputRuntimeNeedsAttention
@@ -64,6 +72,7 @@ func (authority *Authority) outputSessionRuntimeTrace() outputsession.TraceSink 
 			RuntimeOperation: runtimeSessionOperation(event.Operation),
 			RuntimeDecision:  decision,
 			OperationID:      event.OperationID, ClaimID: uint64(event.ClaimID),
+			WriteOffset: event.WriteOffset, WriteLength: event.WriteLength,
 			NodeClaimCount: event.NodeClaims, DirectoryClaimCount: event.DirectoryClaims,
 			FileClaimCount: event.FileClaims, ActiveFileClaimCount: event.ActiveFileClaims,
 			ReservedFileSlotCount:  event.ReservedFileSlots,

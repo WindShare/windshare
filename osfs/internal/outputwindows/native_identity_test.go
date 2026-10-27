@@ -276,7 +276,7 @@ func TestWindowsAdapterAuthoritiesFailClosedAfterClose(t *testing.T) {
 	platform := &windowsOutputPlatform{}
 	directory := &windowsOutputDirectory{}
 	entry := &windowsOutputEntryRef{}
-	file := &windowsOutputMutableFile{state: &windowsOutputFileState{}}
+	file := &windowsOutputMutableFile{State: &windowsOutputFileState{}}
 	lock := &windowsOutputLock{}
 
 	checks := []struct {
@@ -337,7 +337,7 @@ func TestWindowsAdapterAuthoritiesFailClosedAfterClose(t *testing.T) {
 		t.Fatalf("idempotent close = %v", err)
 	}
 	closed := newWindowsOutputLock(nil)
-	if closed.File() != nil || closed.file.state.native != nil || !closed.file.state.borrowed {
+	if closed.File() != nil || closed.file.State.native != nil || !closed.file.State.borrowed {
 		t.Fatal("empty native lock exposed a non-live file authority")
 	}
 	live := newWindowsOutputLock(&windowsStableLock{file: &windowsFile{}})

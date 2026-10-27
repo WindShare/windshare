@@ -11,12 +11,12 @@ import (
 )
 
 const (
-	linuxNativeTestTempPattern                  = ".windshare-outputlinux-test-*"
-	nativeOutputCertificationProfileEnvironment = "WINDSHARE_REQUIRE_NATIVE_OUTPUT_CERTIFICATION"
-	linuxExt4NativeCertificationProfile         = "linux-ext4"
-	linuxNativeFixtureEnvironment               = "WINDSHARE_LINUX_NATIVE_FIXTURE"
-	linuxNativeFixtureVersion                   = "loop-ext4-v1"
-	linuxNativeFixtureTempEnvironment           = "WINDSHARE_LINUX_NATIVE_TEMP_ROOT"
+	linuxNativeTestTempPattern                   = ".windshare-outputlinux-test-*"
+	nativeOutputIdentitySchemeProfileEnvironment = "WINDSHARE_REQUIRE_NATIVE_OUTPUT_CERTIFICATION"
+	linuxExt4NativeIdentitySchemeProfile         = "linux-ext4"
+	linuxNativeFixtureEnvironment                = "WINDSHARE_LINUX_NATIVE_FIXTURE"
+	linuxNativeFixtureVersion                    = "loop-ext4-v1"
+	linuxNativeFixtureTempEnvironment            = "WINDSHARE_LINUX_NATIVE_TEMP_ROOT"
 )
 
 func TestMain(testingMain *testing.M) {
@@ -50,10 +50,10 @@ func TestMain(testingMain *testing.M) {
 }
 
 func linuxNativeTestTempRoot() (string, bool, error) {
-	profile := os.Getenv(nativeOutputCertificationProfileEnvironment)
+	profile := os.Getenv(nativeOutputIdentitySchemeProfileEnvironment)
 	fixture := os.Getenv(linuxNativeFixtureEnvironment)
-	if profile == linuxExt4NativeCertificationProfile || fixture != "" {
-		if profile != linuxExt4NativeCertificationProfile || fixture != linuxNativeFixtureVersion {
+	if profile == linuxExt4NativeIdentitySchemeProfile || fixture != "" {
+		if profile != linuxExt4NativeIdentitySchemeProfile || fixture != linuxNativeFixtureVersion {
 			return "", false, fmt.Errorf("required profile and native fixture marker disagree")
 		}
 		candidate := os.Getenv(linuxNativeFixtureTempEnvironment)
@@ -88,13 +88,13 @@ func linuxNativeTestTempRoot() (string, bool, error) {
 	return testTemp, true, nil
 }
 
-func requireUnprivilegedLinuxExt4Certification(t *testing.T) {
+func requireUnprivilegedLinuxExt4IdentityScheme(t *testing.T) {
 	t.Helper()
 	if os.Geteuid() != 0 {
 		return
 	}
-	if os.Getenv(nativeOutputCertificationProfileEnvironment) == linuxExt4NativeCertificationProfile {
-		t.Fatal("required Linux/ext4 certification must run as an ordinary unprivileged receiver")
+	if os.Getenv(nativeOutputIdentitySchemeProfileEnvironment) == linuxExt4NativeIdentitySchemeProfile {
+		t.Fatal("required Linux/ext4 identityScheme must run as an ordinary unprivileged receiver")
 	}
-	t.Skip("Linux/ext4 native certification is meaningful only as an unprivileged receiver")
+	t.Skip("Linux/ext4 native identityScheme is meaningful only as an unprivileged receiver")
 }

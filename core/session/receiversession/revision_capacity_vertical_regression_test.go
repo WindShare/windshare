@@ -617,11 +617,7 @@ func (output *syntheticCapacityOutput) BeginFile(
 	if err != nil {
 		return transfer.FileStart{}, err
 	}
-	empty, err := content.NewRangeSet(nil)
-	if err != nil {
-		return transfer.FileStart{}, err
-	}
-	durable, err := transfer.VerifyDurableRanges(binding, 1, empty)
+	durable, err := transfer.AcknowledgeTransientWrite(binding, 1)
 	if err != nil {
 		return transfer.FileStart{}, err
 	}
@@ -685,12 +681,8 @@ func (transaction *syntheticCapacityFileTransaction) WriteRange(
 
 func (transaction *syntheticCapacityFileTransaction) Checkpoint(
 	context.Context,
-) (transfer.VerifiedDurableRanges, error) {
-	empty, err := content.NewRangeSet(nil)
-	if err != nil {
-		return transfer.VerifiedDurableRanges{}, err
-	}
-	return transfer.VerifyDurableRanges(transaction.binding, 2, empty)
+) (transfer.VerifiedRanges, error) {
+	return transfer.AcknowledgeTransientWrite(transaction.binding, 2)
 }
 
 func (transaction *syntheticCapacityFileTransaction) Commit(
@@ -714,11 +706,7 @@ func (transaction *syntheticCapacityFileTransaction) Pause(
 	context.Context,
 	transfer.FilePauseReason,
 ) (transfer.FileSettlement, error) {
-	empty, err := content.NewRangeSet(nil)
-	if err != nil {
-		return transfer.FileSettlement{}, err
-	}
-	checkpoint, err := transfer.VerifyDurableRanges(transaction.binding, 2, empty)
+	checkpoint, err := transfer.AcknowledgeTransientWrite(transaction.binding, 2)
 	if err != nil {
 		return transfer.FileSettlement{}, err
 	}

@@ -24,13 +24,17 @@ func (adapter fileExecutionAdapter) BeginFile(
 			fileexecution.ErrInvalidConfiguration
 	}
 	start, err := adapter.engine.BeginFile(ctx, claim.File(), claim.DestinationPath())
+	return observeFileStart(start, err)
+}
+
+func observeFileStart(start transfer.FileStart, err error) (outputsession.FileBeginObservation, error) {
 	if err != nil {
 		return outputsession.FileBeginObservation{Cut: executionMutationCut(err)}, err
 	}
 	if transaction, durable, active := start.Transaction(); active {
 		return outputsession.FileBeginObservation{
 			Cut: outputsession.MutationStable, Transaction: fileTransactionAdapter{transaction: transaction},
-			Durable: durable,
+			Progress: durable,
 		}, nil
 	}
 	settlement, settled := start.ImmediateSettlement()
@@ -61,7 +65,7 @@ func (adapter fileTransactionAdapter) WriteRange(
 
 func (adapter fileTransactionAdapter) Checkpoint(
 	ctx context.Context,
-) (transfer.VerifiedDurableRanges, outputsession.MutationCut, error) {
+) (transfer.VerifiedRanges, outputsession.MutationCut, error) {
 	checkpoint, err := adapter.transaction.Checkpoint(ctx)
 	return checkpoint, successfulOrExecutionCut(err), err
 }

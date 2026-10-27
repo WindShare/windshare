@@ -1,0 +1,84 @@
+name: Native output semantics
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-output-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: Native output (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    env:
+      GOTOOLCHAIN: local
+      GOWORK: "off"
+      CGO_ENABLED: "0"
+      CARGO_TARGET_DIR: ${{ github.workspace }}/relay-rust/.target
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+          cache-dependency-path: go.sum
+      - name: Verify native output and recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/native-output-evidence"
+          {
+            sw_vers
+            uname -a
+            go version
+            df "$RUNNER_TEMP"
+            diskutil info "$(df "$RUNNER_TEMP" | tail -1 | awk '{print $1}')"
+          } > "$RUNNER_TEMP/native-output-evidence/environment.txt"
+          go test -short -count=1 -v ./osfs/... ./adapters/filesystem ./core/transfer/... ./engine/internal/receive ./cmd/wind/internal/cli \
+            2>&1 | tee "$RUNNER_TEMP/native-output-evidence/tests.log"
+      - name: Prepare Rust native relay toolchain
+        run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: relay-rust -> .target
+          cache-bin: false
+          cmd-format: rustup run stable {0}
+      - name: Verify CLI file, folder, and process-restart downloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          go build -o "$RUNNER_TEMP/wind-native" ./cmd/wind
+          rustup run stable cargo build --manifest-path relay-rust/Cargo.toml --locked \
+            -p windshare-relay-native --bin relay-native
+          python3 scripts/ci/native-output/macos/cli.py \
+            --wind "$RUNNER_TEMP/wind-native" --relay "$CARGO_TARGET_DIR/debug/relay-native" \
+            --evidence "$RUNNER_TEMP/native-output-evidence" \
+            2>&1 | tee "$RUNNER_TEMP/native-output-evidence/cli.log"
+      - name: Build Darwin CLI architectures
+        shell: bash
+        run: |
+          set -euo pipefail
+          for arch in arm64 amd64; do
+            GOARCH="$arch" go build -o "$RUNNER_TEMP/wind-$arch" ./cmd/wind
+            file "$RUNNER_TEMP/wind-$arch"
+          done
+      - name: Preserve native evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-output-${{ matrix.runner }}
+          path: ${{ runner.temp }}/native-output-evidence
+          if-no-files-found: error
+          retention-days: 14

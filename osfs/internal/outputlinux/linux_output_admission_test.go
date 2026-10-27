@@ -42,7 +42,7 @@ func TestLinuxRuntimeAdmissionDoesNotRequireRestartIdentity(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			system := linuxCertificationTestSystem(linuxExt4SuperMagic, "ext4", linuxTestDeviceMajor, true)
+			system := linuxIdentitySchemeTestSystem(linuxExt4SuperMagic, "ext4", linuxTestDeviceMajor, true)
 			system.openat2 = func(int, string, *unix.OpenHow) (int, error) { return 10, nil }
 			system.close = func(int) error { return nil }
 			system.faccessat2 = func(int, string, uint32, int) error { return nil }
@@ -64,7 +64,7 @@ func TestLinuxRuntimeAdmissionDoesNotRequireRestartIdentity(t *testing.T) {
 	}
 }
 
-func TestLinuxRuntimeAdmissionPreservesCertificationAndRejectsContradictions(t *testing.T) {
+func TestLinuxRuntimeAdmissionPreservesIdentitySchemeAndRejectsContradictions(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
 		name            string
@@ -119,8 +119,8 @@ func TestLinuxRuntimeAdmissionPreservesCertificationAndRejectsContradictions(t *
 			}
 			if test.wantCertificate {
 				platform := &linuxPlatform{root: &linuxDirectory{native: root}}
-				if platform.Certification() != outputcap.CertificationLinuxExt4ProcessRestart {
-					t.Fatalf("lost exact ext4 certificate: %v", platform.Certification())
+				if platform.IdentityScheme() != outputcap.IdentitySchemeLinuxHandleV2 {
+					t.Fatalf("lost exact ext4 certificate: %v", platform.IdentityScheme())
 				}
 				if _, err := platform.RootBinding(); err != nil {
 					t.Fatal(err)
@@ -138,7 +138,7 @@ func TestLinuxRuntimeAdmissionRejectsUnfixedNamespaces(t *testing.T) {
 	} {
 		t.Run(filesystem, func(t *testing.T) {
 			t.Parallel()
-			system := linuxCertificationTestSystem(linuxExt4SuperMagic, filesystem, linuxTestDeviceMajor, true)
+			system := linuxIdentitySchemeTestSystem(linuxExt4SuperMagic, filesystem, linuxTestDeviceMajor, true)
 			if _, err := linuxBindOutputFD(&system, 10); !errors.Is(err, errLinuxOutputUnsupported) {
 				t.Fatalf("admitted %s namespace: %v", filesystem, err)
 			}
@@ -148,7 +148,7 @@ func TestLinuxRuntimeAdmissionRejectsUnfixedNamespaces(t *testing.T) {
 
 func TestLinuxRuntimeBindingStillRejectsMountChangesAndUnknownDirectoryPolicies(t *testing.T) {
 	t.Parallel()
-	system := linuxCertificationTestSystem(unix.TMPFS_MAGIC, "tmpfs", linuxTestDeviceMajor, true)
+	system := linuxIdentitySchemeTestSystem(unix.TMPFS_MAGIC, "tmpfs", linuxTestDeviceMajor, true)
 	system.getFlags = func(int) (uint32, error) { return 0, unix.ENOTTY }
 	binding, err := linuxBindOutputFD(&system, 10)
 	if err != nil {
@@ -161,7 +161,7 @@ func TestLinuxRuntimeBindingStillRejectsMountChangesAndUnknownDirectoryPolicies(
 	if _, err := linuxVerifyOpenObject(&system, 10, binding); !errors.Is(err, errLinuxOutputUnsafe) {
 		t.Fatalf("filesystem replacement accepted: %v", err)
 	}
-	system = linuxCertificationTestSystem(linuxExt4SuperMagic, "ext4", linuxTestDeviceMajor, true)
+	system = linuxIdentitySchemeTestSystem(linuxExt4SuperMagic, "ext4", linuxTestDeviceMajor, true)
 	system.getFlags = func(int) (uint32, error) { return 0, unix.ENOTTY }
 	if _, err := linuxBindOutputFD(&system, 10); !errors.Is(err, errLinuxOutputUnsupported) {
 		t.Fatalf("unknown directory flags accepted: %v", err)
@@ -418,7 +418,7 @@ func newLinuxTmpfsOutputPlatform(t *testing.T) (*linuxPlatform, string) {
 
 func assertLinuxProcessOnlyPlatform(t *testing.T, platform *linuxPlatform) {
 	t.Helper()
-	if platform.Certification() != "" || platform.Durability() != transfer.DurabilityNone ||
+	if platform.IdentityScheme() != "" || platform.Durability() != transfer.DurabilityNone ||
 		platform.LiveCleanupNativeProfile() != 0 {
 		t.Fatal("process-only platform advertised certified persistence")
 	}

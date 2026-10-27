@@ -17,8 +17,8 @@ func (workspace *Workspace) SafePublish(profile Profile) error {
 	}
 	var size int64
 	switch profile {
-	case LinuxExt4:
-	case WindowsNTFS:
+	case EmptyDataLinks:
+	case SizedDataLinks:
 		size = sizedDataLinkSize
 	default:
 		return unsupported("probe safe publication", errors.New("unknown probe profile"))

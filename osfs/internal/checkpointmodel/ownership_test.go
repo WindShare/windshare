@@ -10,7 +10,7 @@ func TestOwnershipRoundTripBindsRootDisposition(t *testing.T) {
 	for _, disposition := range []RootOpenDisposition{CallerProvidedContainer, AuthorityCreatedRoot} {
 		t.Run(string(disposition), func(t *testing.T) {
 			ownership, err := NewOwnership(OwnershipSpec{
-				Materializer: MaterializerNativeTree, Certification: CertificationWindowsNTFSProcessRestart,
+				Materializer: MaterializerNativeTree, IdentityScheme: IdentitySchemeWindowsObjectIDV1,
 				AuthorityRef:        bytes.Repeat([]byte{0x41}, 32),
 				RootOpenDisposition: disposition,
 			})
@@ -25,7 +25,7 @@ func TestOwnershipRoundTripBindsRootDisposition(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if restored != ownership || restored.Certification() != CertificationWindowsNTFSProcessRestart ||
+			if restored != ownership || restored.IdentityScheme() != IdentitySchemeWindowsObjectIDV1 ||
 				restored.RootOpenDisposition() != disposition ||
 				!bytes.Equal(restored.CanonicalBytes(), ownership.CanonicalBytes()) {
 				t.Fatal("ownership round trip changed the certified binding")
@@ -34,9 +34,9 @@ func TestOwnershipRoundTripBindsRootDisposition(t *testing.T) {
 	}
 }
 
-func TestOwnershipRejectsMissingUnknownAndTamperedCertification(t *testing.T) {
+func TestOwnershipRejectsMissingUnknownAndTamperedIdentityScheme(t *testing.T) {
 	valid, err := NewOwnership(OwnershipSpec{
-		Materializer: MaterializerNativeTree, Certification: CertificationLinuxExt4ProcessRestart,
+		Materializer: MaterializerNativeTree, IdentityScheme: IdentitySchemeLinuxHandleV2,
 		AuthorityRef:        bytes.Repeat([]byte{0x51}, 32),
 		RootOpenDisposition: CallerProvidedContainer,
 	})
@@ -44,25 +44,25 @@ func TestOwnershipRejectsMissingUnknownAndTamperedCertification(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := NewOwnership(OwnershipSpec{
-		Materializer: MaterializerNativeTree, Certification: CertificationLinuxExt4ProcessRestart,
+		Materializer: MaterializerNativeTree, IdentityScheme: IdentitySchemeLinuxHandleV2,
 		AuthorityRef:        bytes.Repeat([]byte{0x51}, 32),
 		RootOpenDisposition: "future-value",
 	}); !errors.Is(err, ErrInvalidOwnership) {
 		t.Fatalf("unknown disposition error = %v", err)
 	}
 	if _, err := NewOwnership(OwnershipSpec{
-		Materializer: MaterializerNativeTree, Certification: CertificationLinuxExt4ProcessRestart,
+		Materializer: MaterializerNativeTree, IdentityScheme: IdentitySchemeLinuxHandleV2,
 		AuthorityRef:        bytes.Repeat([]byte{0x51}, 31),
 		RootOpenDisposition: CallerProvidedContainer,
 	}); !errors.Is(err, ErrInvalidOwnership) {
 		t.Fatalf("short authority reference error = %v", err)
 	}
 	if _, err := NewOwnership(OwnershipSpec{
-		Materializer: MaterializerNativeTree, Certification: "future-certification",
+		Materializer: MaterializerNativeTree, IdentityScheme: "future-identityScheme",
 		AuthorityRef:        bytes.Repeat([]byte{0x51}, 32),
 		RootOpenDisposition: CallerProvidedContainer,
 	}); !errors.Is(err, ErrInvalidOwnership) {
-		t.Fatalf("unknown certification error = %v", err)
+		t.Fatalf("unknown identityScheme error = %v", err)
 	}
 	encoded, err := EncodeOwnership(valid)
 	if err != nil {
@@ -83,20 +83,20 @@ func TestOwnershipRejectsMissingUnknownAndTamperedCertification(t *testing.T) {
 	if _, err := DecodeOwnership(legacy); !errors.Is(err, ErrInvalidOwnership) {
 		t.Fatalf("pre-disposition ownership error = %v", err)
 	}
-	// Certification is an independent restart proof, not a value inferred from
+	// IdentityScheme is an independent restart proof, not a value inferred from
 	// the backend or root identity. The earlier field set is not dual-read.
-	var preCertification bytes.Buffer
-	writeOwnershipString(&preCertification, ownershipDomain)
-	writeOwnershipString(&preCertification, OwnershipMarker)
-	writeOwnershipString(&preCertification, NamespaceName)
-	preCertification.WriteByte(byte(valid.MaterializerKind()))
-	_, _ = preCertification.Write(valid.AuthorityRef().Bytes())
-	writeOwnershipString(&preCertification, string(valid.RootOpenDisposition()))
-	legacyPayload = preCertification.Bytes()
+	var preIdentityScheme bytes.Buffer
+	writeOwnershipString(&preIdentityScheme, ownershipDomain)
+	writeOwnershipString(&preIdentityScheme, OwnershipMarker)
+	writeOwnershipString(&preIdentityScheme, NamespaceName)
+	preIdentityScheme.WriteByte(byte(valid.MaterializerKind()))
+	_, _ = preIdentityScheme.Write(valid.AuthorityRef().Bytes())
+	writeOwnershipString(&preIdentityScheme, string(valid.RootOpenDisposition()))
+	legacyPayload = preIdentityScheme.Bytes()
 	legacyChecksum = ownershipChecksum(legacyPayload)
 	legacy = append(append([]byte(nil), legacyPayload...), legacyChecksum[:]...)
 	if _, err := DecodeOwnership(legacy); !errors.Is(err, ErrInvalidOwnership) {
-		t.Fatalf("pre-certification ownership error = %v", err)
+		t.Fatalf("pre-identityScheme ownership error = %v", err)
 	}
 }
 
