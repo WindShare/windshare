@@ -1,0 +1,254 @@
+{
+  "cases": [
+    {
+      "elapsed_seconds": 0.025,
+      "evidence": {
+        "blocks_after": 8,
+        "blocks_before": 8,
+        "file_and_directory_fsync": true,
+        "full_fsync_errno": null,
+        "identity": {
+          "created": [
+            1793080724,
+            306552166
+          ],
+          "file_id": 3573212,
+          "volume_uuid": "995baa35-fc3b-4105-b6d9-d45d24a66deb"
+        },
+        "links": 2,
+        "mutation": {
+          "ctime_ns": 1793080724307122541,
+          "mtime_ns": 1793080724306596999,
+          "stat_generation": 0,
+          "write_generation": 2,
+          "write_generation_errno": null
+        }
+      },
+      "operation": "identity-publication",
+      "status": "passed"
+    },
+    {
+      "elapsed_seconds": 0.001,
+      "evidence": {
+        "after_mtime_restore": {
+          "ctime_ns": 1793080724332462749,
+          "mtime_ns": 1793080724332058749,
+          "stat_generation": 0,
+          "write_generation": 3,
+          "write_generation_errno": null
+        },
+        "after_write": {
+          "ctime_ns": 1793080724332378583,
+          "mtime_ns": 1793080724332378583,
+          "stat_generation": 0,
+          "write_generation": 3,
+          "write_generation_errno": null
+        },
+        "before": {
+          "ctime_ns": 1793080724332058749,
+          "mtime_ns": 1793080724332058749,
+          "stat_generation": 0,
+          "write_generation": 2,
+          "write_generation_errno": null
+        },
+        "same_size_write_detected_despite_restored_mtime": true,
+        "stable_identity": true
+      },
+      "operation": "mutation-counters",
+      "status": "passed"
+    },
+    {
+      "elapsed_seconds": 0.002,
+      "evidence": {
+        "collision_kinds": [
+          "file",
+          "directory",
+          "symlink"
+        ],
+        "directory_no_replace": true,
+        "retry_reused_stage": true
+      },
+      "operation": "publication-collisions",
+      "status": "passed"
+    },
+    {
+      "elapsed_seconds": 0.008,
+      "evidence": {
+        "contenders": 12,
+        "losers_retained": 11,
+        "winners": 1
+      },
+      "operation": "concurrent-publication",
+      "status": "passed"
+    },
+    {
+      "elapsed_seconds": 0.001,
+      "evidence": {
+        "case_sensitive": false,
+        "old_handle_stays_on_old_root": true,
+        "root_replacement_detected": true,
+        "symlink_errno": 20
+      },
+      "operation": "placement-and-names",
+      "status": "passed"
+    },
+    {
+      "elapsed_seconds": 0.115,
+      "evidence": {
+        "released_after_sigkill": true,
+        "second_process_blocked": true
+      },
+      "operation": "process-lock",
+      "status": "passed"
+    },
+    {
+      "elapsed_seconds": 0.096,
+      "evidence": {
+        "cut": "data-synced",
+        "killed_pid": 7690,
+        "recovery_pid": 7691,
+        "reused_bytes": 65536,
+        "same_object": true,
+        "sha256": "3154db767e6e03e2cc38ff0ec70e18f10f87475177e475ca9c38997256675256",
+        "written_bytes": 2031616
+      },
+      "operation": "restart-data-synced",
+      "status": "passed"
+    },
+    {
+      "elapsed_seconds": 0.08,
+      "evidence": {
+        "cut": "checkpoint-staged",
+        "killed_pid": 7692,
+        "recovery_pid": 7693,
+        "reused_bytes": 65536,
+        "same_object": true,
+        "sha256": "3154db767e6e03e2cc38ff0ec70e18f10f87475177e475ca9c38997256675256",
+        "written_bytes": 2031616
+      },
+      "operation": "restart-checkpoint-staged",
+      "status": "passed"
+    },
+    {
+      "elapsed_seconds": 0.08,
+      "evidence": {
+        "cut": "checkpoint-installed",
+        "killed_pid": 7694,
+        "recovery_pid": 7695,
+        "reused_bytes": 131072,
+        "same_object": true,
+        "sha256": "3154db767e6e03e2cc38ff0ec70e18f10f87475177e475ca9c38997256675256",
+        "written_bytes": 1966080
+      },
+      "operation": "restart-checkpoint-installed",
+      "status": "passed"
+    },
+    {
+      "elapsed_seconds": 0.076,
+      "evidence": {
+        "cut": "published-before-settlement",
+        "killed_pid": 7696,
+        "recovery_pid": 7697,
+        "reused_bytes": 2097152,
+        "same_object": true,
+        "sha256": "3154db767e6e03e2cc38ff0ec70e18f10f87475177e475ca9c38997256675256",
+        "written_bytes": 0
+      },
+      "operation": "restart-published-before-settlement",
+      "status": "passed"
+    },
+    {
+      "elapsed_seconds": 0.075,
+      "evidence": {
+        "existing_bytes_untouched": true,
+        "rejected": "file-replaced"
+      },
+      "operation": "reject-file",
+      "status": "passed"
+    },
+    {
+      "elapsed_seconds": 0.073,
+      "evidence": {
+        "existing_bytes_untouched": true,
+        "rejected": "root-replaced"
+      },
+      "operation": "reject-root",
+      "status": "passed"
+    },
+    {
+      "elapsed_seconds": 0.085,
+      "evidence": {
+        "existing_bytes_untouched": true,
+        "rejected": "revision-or-schema"
+      },
+      "operation": "reject-revision",
+      "status": "passed"
+    },
+    {
+      "elapsed_seconds": 0.079,
+      "evidence": {
+        "existing_bytes_untouched": true,
+        "rejected": "recorded-bytes-changed"
+      },
+      "operation": "reject-content",
+      "status": "passed"
+    }
+  ],
+  "environment": {
+    "architecture": "arm64",
+    "capabilities": {
+      "case_sensitive": {
+        "supported": false,
+        "valid": true
+      },
+      "exclusive_rename": {
+        "supported": true,
+        "valid": true
+      },
+      "flock": {
+        "supported": true,
+        "valid": true
+      },
+      "hard_links": {
+        "supported": true,
+        "valid": true
+      },
+      "object_ids_64bit": {
+        "supported": true,
+        "valid": true
+      },
+      "path_from_id_nonrecycled": {
+        "supported": true,
+        "valid": true
+      },
+      "persistent_object_ids": {
+        "supported": true,
+        "valid": true
+      },
+      "write_generation_count": {
+        "supported": true,
+        "valid": true
+      }
+    },
+    "filesystem": "apfs",
+    "mount_point": "/System/Volumes/Data",
+    "python": "3.14.7 (main, Aug  5 2026, 10:29:49) [Clang 17.0.0 (clang-1700.6.4.2)]",
+    "root_identity": {
+      "created": [
+        1793080724,
+        284373291
+      ],
+      "file_id": 3573210,
+      "volume_uuid": "995baa35-fc3b-4105-b6d9-d45d24a66deb"
+    },
+    "runner_image": "macos15",
+    "runner_image_version": "20260907.0337.1",
+    "runtime_fsid": [
+      16777228,
+      26
+    ],
+    "system": "macOS-15.7.9-arm64-arm-64bit-Mach-O",
+    "volume_uuid": "995baa35-fc3b-4105-b6d9-d45d24a66deb"
+  },
+  "scope": "native primitives and process death; not power loss or product certification"
+}
