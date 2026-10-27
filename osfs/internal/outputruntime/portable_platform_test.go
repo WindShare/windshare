@@ -37,7 +37,7 @@ type runtimeTestRootSpec struct {
 }
 
 // The portable model keeps ordinary path-level test corruption visible while
-// replacing native certification, fixed-handle, and sync costs with explicit
+// replacing native identityScheme, fixed-handle, and sync costs with explicit
 // identities and locks. That lets the runtime's recovery policy stay in short
 // tests without pretending the double proves platform durability.
 type portableRuntimeFilesystem struct {
@@ -195,17 +195,17 @@ func (platform *portableRuntimePlatform) RootBinding() (outputcap.OutputRootBind
 		platform.filesystem.objectID(platform.rootInfo),
 	)
 	return outputcap.NewOutputRootBinding(
-		platform.Certification(),
+		platform.IdentityScheme(),
 		[]byte("portable-test-volume"),
 		identity,
 	)
 }
 
-func (*portableRuntimePlatform) Certification() outputcap.CertificationID {
-	// The runtime state codec accepts only production certification IDs. The
+func (*portableRuntimePlatform) IdentityScheme() outputcap.IdentitySchemeID {
+	// The runtime state codec accepts only production identityScheme IDs. The
 	// portable double reuses one valid ID solely to exercise codec/state policy;
-	// native certification itself remains owned by the long tests.
-	return outputcap.CertificationLinuxExt4ProcessRestart
+	// native identityScheme itself remains owned by the long tests.
+	return outputcap.IdentitySchemeLinuxHandleV2
 }
 
 func (*portableRuntimePlatform) Durability() transfer.DurabilityLevel {

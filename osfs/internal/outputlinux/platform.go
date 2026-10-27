@@ -12,6 +12,7 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
+	"github.com/windshare/windshare/osfs/internal/outputfile"
 )
 
 type linuxPlatform struct {
@@ -41,17 +42,11 @@ type linuxFileState struct {
 	borrowed bool
 }
 
-type linuxObservedFile struct {
-	state *linuxFileState
-}
+type linuxObservedFile = outputfile.Observed[*linuxFileState]
 
-type linuxRecoveryDurabilityFile struct {
-	state *linuxFileState
-}
+type linuxRecoveryDurabilityFile = outputfile.Recovery[*linuxFileState]
 
-type linuxMutableFile struct {
-	state *linuxFileState
-}
+type linuxMutableFile = outputfile.Mutable[*linuxFileState]
 
 type linuxLock struct {
 	native *linuxOutputStableLock
@@ -194,12 +189,12 @@ func (platform *linuxPlatform) AcquirePublicOperationGuard() (outputcap.PublicOp
 	return &linuxOutputPublicOperationGuard{root: root}, nil
 }
 
-func (platform *linuxPlatform) Certification() outputcap.CertificationID {
+func (platform *linuxPlatform) IdentityScheme() outputcap.IdentitySchemeID {
 	if platform == nil || platform.root == nil || platform.root.native == nil ||
 		platform.root.native.binding.restart == nil {
 		return ""
 	}
-	return outputcap.CertificationLinuxExt4ProcessRestart
+	return outputcap.IdentitySchemeLinuxHandleV2
 }
 
 func (platform *linuxPlatform) RootBinding() (outputcap.OutputRootBinding, error) {
@@ -242,19 +237,19 @@ func (platform *linuxPlatform) RootBinding() (outputcap.OutputRootBinding, error
 	if err != nil {
 		return outputcap.OutputRootBinding{}, linuxError(err)
 	}
-	rootBinding, err := outputcap.NewOutputRootBinding(platform.Certification(), volume, object)
+	rootBinding, err := outputcap.NewOutputRootBinding(platform.IdentityScheme(), volume, object)
 	return rootBinding, linuxError(err)
 }
 
 func (platform *linuxPlatform) Durability() transfer.DurabilityLevel {
-	if platform.Certification() == "" {
+	if platform.IdentityScheme() == "" {
 		return transfer.DurabilityNone
 	}
 	return transfer.DurabilityProcessRestart
 }
 
 func (platform *linuxPlatform) LiveCleanupNativeProfile() checkpointmodel.LiveCleanupNativeProfile {
-	if platform.Certification() == "" {
+	if platform.IdentityScheme() == "" {
 		return 0
 	}
 	return checkpointmodel.LiveCleanupLinuxExt4V1

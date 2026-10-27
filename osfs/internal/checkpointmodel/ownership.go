@@ -18,13 +18,14 @@ const (
 	CallerProvidedContainer RootOpenDisposition = "caller-provided-container"
 	AuthorityCreatedRoot    RootOpenDisposition = "authority-created-root"
 
-	CertificationLinuxExt4ProcessRestart   CertificationID = "linux/ext4/process-restart/v2"
-	CertificationWindowsNTFSProcessRestart CertificationID = "windows/ntfs/process-restart/v1"
+	IdentitySchemeLinuxHandleV2     IdentitySchemeID = "linux/ext4/handle/v2"
+	IdentitySchemeWindowsObjectIDV1 IdentitySchemeID = "windows/ntfs/object-id/v1"
+	IdentitySchemeDarwinObjectIDV1  IdentitySchemeID = "darwin/apfs/object-id/v1"
 
-	ownershipDomain           = "windshare/file-checkpoint-ownership/v2"
-	maximumMarkerBytes        = 128
-	maximumNamespaceBytes     = 256
-	maximumCertificationBytes = 128
+	ownershipDomain            = "windshare/file-checkpoint-ownership/v2"
+	maximumMarkerBytes         = 128
+	maximumNamespaceBytes      = 256
+	maximumIdentitySchemeBytes = 128
 )
 
 var (
@@ -43,19 +44,19 @@ func (kind MaterializerKind) Valid() bool {
 	return kind == MaterializerNativeTree
 }
 
-type CertificationID string
+type IdentitySchemeID string
 
-func NewCertificationID(value string) (CertificationID, error) {
-	certification := CertificationID(value)
-	switch certification {
-	case CertificationLinuxExt4ProcessRestart, CertificationWindowsNTFSProcessRestart:
-		return certification, nil
+func NewIdentitySchemeID(value string) (IdentitySchemeID, error) {
+	identityScheme := IdentitySchemeID(value)
+	switch identityScheme {
+	case IdentitySchemeLinuxHandleV2, IdentitySchemeWindowsObjectIDV1, IdentitySchemeDarwinObjectIDV1:
+		return identityScheme, nil
 	default:
-		return "", fmt.Errorf("%w: filesystem certification ID", ErrInvalidOwnership)
+		return "", fmt.Errorf("%w: filesystem identityScheme ID", ErrInvalidOwnership)
 	}
 }
 
-// RootOpenDisposition is a certification fact used by native adapters. It is
+// RootOpenDisposition is a identityScheme fact used by native adapters. It is
 // not destination naming authority and never replaces the opaque AuthorityRef.
 type RootOpenDisposition string
 
@@ -65,7 +66,7 @@ func (disposition RootOpenDisposition) Valid() bool {
 
 type OwnershipSpec struct {
 	Materializer        MaterializerKind
-	Certification       CertificationID
+	IdentityScheme      IdentitySchemeID
 	AuthorityRef        []byte
 	RootOpenDisposition RootOpenDisposition
 }
@@ -75,26 +76,26 @@ type OwnershipSpec struct {
 // cross-operation mutation.
 type Ownership struct {
 	materializer        MaterializerKind
-	certification       CertificationID
+	identityScheme      IdentitySchemeID
 	authorityRef        receivecontract.AuthorityRef
 	rootOpenDisposition RootOpenDisposition
 }
 
 func NewOwnership(spec OwnershipSpec) (Ownership, error) {
-	certification, certificationErr := NewCertificationID(string(spec.Certification))
+	identityScheme, identitySchemeErr := NewIdentitySchemeID(string(spec.IdentityScheme))
 	authority, authorityErr := receivecontract.AuthorityRefFromBytes(spec.AuthorityRef)
-	if !spec.Materializer.Valid() || certificationErr != nil || authorityErr != nil ||
+	if !spec.Materializer.Valid() || identitySchemeErr != nil || authorityErr != nil ||
 		!spec.RootOpenDisposition.Valid() {
-		return Ownership{}, errors.Join(ErrInvalidOwnership, certificationErr, authorityErr)
+		return Ownership{}, errors.Join(ErrInvalidOwnership, identitySchemeErr, authorityErr)
 	}
 	return Ownership{
-		materializer: spec.Materializer, certification: certification,
+		materializer: spec.Materializer, identityScheme: identityScheme,
 		authorityRef: authority, rootOpenDisposition: spec.RootOpenDisposition,
 	}, nil
 }
 
 func (ownership Ownership) MaterializerKind() MaterializerKind         { return ownership.materializer }
-func (ownership Ownership) Certification() CertificationID             { return ownership.certification }
+func (ownership Ownership) IdentityScheme() IdentitySchemeID           { return ownership.identityScheme }
 func (ownership Ownership) AuthorityRef() receivecontract.AuthorityRef { return ownership.authorityRef }
 func (ownership Ownership) RootOpenDisposition() RootOpenDisposition {
 	return ownership.rootOpenDisposition
@@ -102,7 +103,7 @@ func (ownership Ownership) RootOpenDisposition() RootOpenDisposition {
 
 func (ownership Ownership) Valid() bool {
 	rebuilt, err := NewOwnership(OwnershipSpec{
-		Materializer: ownership.materializer, Certification: ownership.certification,
+		Materializer: ownership.materializer, IdentityScheme: ownership.identityScheme,
 		AuthorityRef: ownership.authorityRef.Bytes(), RootOpenDisposition: ownership.rootOpenDisposition,
 	})
 	return err == nil && rebuilt == ownership
@@ -117,7 +118,7 @@ func (ownership Ownership) CanonicalBytes() []byte {
 	writeOwnershipString(&encoded, OwnershipMarker)
 	writeOwnershipString(&encoded, NamespaceName)
 	encoded.WriteByte(byte(ownership.materializer))
-	writeOwnershipString(&encoded, string(ownership.certification))
+	writeOwnershipString(&encoded, string(ownership.identityScheme))
 	_, _ = encoded.Write(ownership.authorityRef.Bytes())
 	writeOwnershipString(&encoded, string(ownership.rootOpenDisposition))
 	return encoded.Bytes()
@@ -159,7 +160,7 @@ func DecodeOwnership(encoded []byte) (Ownership, error) {
 	if err != nil {
 		return Ownership{}, err
 	}
-	certification, err := cursor.string(maximumCertificationBytes)
+	identityScheme, err := cursor.string(maximumIdentitySchemeBytes)
 	if err != nil {
 		return Ownership{}, err
 	}
@@ -172,7 +173,7 @@ func DecodeOwnership(encoded []byte) (Ownership, error) {
 		return Ownership{}, ErrInvalidOwnership
 	}
 	ownership, err := NewOwnership(OwnershipSpec{
-		Materializer: MaterializerKind(materializer), Certification: CertificationID(certification),
+		Materializer: MaterializerKind(materializer), IdentityScheme: IdentitySchemeID(identityScheme),
 		AuthorityRef: authority, RootOpenDisposition: RootOpenDisposition(disposition),
 	})
 	if err != nil {

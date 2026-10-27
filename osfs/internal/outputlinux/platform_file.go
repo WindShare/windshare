@@ -29,15 +29,15 @@ func linuxFileStateFrom(file outputcap.FileIdentity) (*linuxFileState, bool) {
 	switch file := file.(type) {
 	case *linuxObservedFile:
 		if file != nil {
-			return file.state, file.state != nil
+			return file.State, file.State != nil
 		}
 	case *linuxRecoveryDurabilityFile:
 		if file != nil {
-			return file.state, file.state != nil
+			return file.State, file.State != nil
 		}
 	case *linuxMutableFile:
 		if file != nil {
-			return file.state, file.state != nil
+			return file.State, file.State != nil
 		}
 	}
 	return nil, false
@@ -88,128 +88,38 @@ func linuxFileSync(state *linuxFileState) error {
 	return linuxError(state.native.sync())
 }
 
-func (file *linuxObservedFile) ReadAt(destination []byte, offset int64) (int, error) {
-	if file == nil || file.state == nil || file.state.native == nil {
+func (state *linuxFileState) Close() error          { return linuxFileClose(state) }
+func (state *linuxFileState) Size() (uint64, error) { return linuxFileSize(state) }
+func (state *linuxFileState) SameFile(other outputcap.FileIdentity) (bool, error) {
+	return linuxSameFile(state, other)
+}
+func (state *linuxFileState) Sync() error { return linuxFileSync(state) }
+func (state *linuxFileState) ReadAt(data []byte, offset int64) (int, error) {
+	if state == nil || state.native == nil {
 		return 0, linuxFileClosedError()
 	}
-	count, err := file.state.native.ReadAt(destination, offset)
+	count, err := state.native.ReadAt(data, offset)
 	return count, linuxError(err)
 }
-
-func (file *linuxObservedFile) Close() error {
-	if file == nil {
-		return nil
-	}
-	return linuxFileClose(file.state)
-}
-
-func (file *linuxObservedFile) Size() (uint64, error) {
-	if file == nil {
+func (state *linuxFileState) WriteAt(data []byte, offset int64) (int, error) {
+	if state == nil || state.native == nil {
 		return 0, linuxFileClosedError()
 	}
-	return linuxFileSize(file.state)
+	count, err := state.native.WriteAt(data, offset)
+	return count, linuxError(err)
 }
-
-func (file *linuxObservedFile) MetadataMatches(size uint64, modified catalog.ModifiedTime) (bool, error) {
-	if file == nil || file.state == nil || file.state.native == nil {
+func (state *linuxFileState) SetModifiedTime(modified catalog.ModifiedTime) error {
+	if state == nil || state.native == nil {
+		return linuxFileClosedError()
+	}
+	return linuxError(state.native.setModifiedTime(modified))
+}
+func (state *linuxFileState) MetadataMatches(size uint64, modified catalog.ModifiedTime) (bool, error) {
+	if state == nil || state.native == nil {
 		return false, linuxFileClosedError()
 	}
-	matches, err := file.state.native.metadataMatches(size, modified)
+	matches, err := state.native.metadataMatches(size, modified)
 	return matches, linuxError(err)
-}
-
-func (file *linuxObservedFile) SameFile(other outputcap.FileIdentity) (bool, error) {
-	if file == nil {
-		return false, linuxFileClosedError()
-	}
-	return linuxSameFile(file.state, other)
-}
-
-func (file *linuxRecoveryDurabilityFile) Close() error {
-	if file == nil {
-		return nil
-	}
-	return linuxFileClose(file.state)
-}
-
-func (file *linuxRecoveryDurabilityFile) Size() (uint64, error) {
-	if file == nil {
-		return 0, linuxFileClosedError()
-	}
-	return linuxFileSize(file.state)
-}
-
-func (file *linuxRecoveryDurabilityFile) SameFile(other outputcap.FileIdentity) (bool, error) {
-	if file == nil {
-		return false, linuxFileClosedError()
-	}
-	return linuxSameFile(file.state, other)
-}
-
-func (file *linuxRecoveryDurabilityFile) Sync() error {
-	if file == nil {
-		return linuxFileClosedError()
-	}
-	return linuxFileSync(file.state)
-}
-
-func (file *linuxMutableFile) ReadAt(destination []byte, offset int64) (int, error) {
-	if file == nil || file.state == nil || file.state.native == nil {
-		return 0, linuxFileClosedError()
-	}
-	count, err := file.state.native.ReadAt(destination, offset)
-	return count, linuxError(err)
-}
-
-func (file *linuxMutableFile) WriteAt(source []byte, offset int64) (int, error) {
-	if file == nil || file.state == nil || file.state.native == nil {
-		return 0, linuxFileClosedError()
-	}
-	count, err := file.state.native.WriteAt(source, offset)
-	return count, linuxError(err)
-}
-
-func (file *linuxMutableFile) Close() error {
-	if file == nil {
-		return nil
-	}
-	return linuxFileClose(file.state)
-}
-
-func (file *linuxMutableFile) Sync() error {
-	if file == nil {
-		return linuxFileClosedError()
-	}
-	return linuxFileSync(file.state)
-}
-
-func (file *linuxMutableFile) Size() (uint64, error) {
-	if file == nil {
-		return 0, linuxFileClosedError()
-	}
-	return linuxFileSize(file.state)
-}
-
-func (file *linuxMutableFile) SetModifiedTime(modified catalog.ModifiedTime) error {
-	if file == nil || file.state == nil || file.state.native == nil {
-		return linuxFileClosedError()
-	}
-	return linuxError(file.state.native.setModifiedTime(modified))
-}
-
-func (file *linuxMutableFile) MetadataMatches(size uint64, modified catalog.ModifiedTime) (bool, error) {
-	if file == nil || file.state == nil || file.state.native == nil {
-		return false, linuxFileClosedError()
-	}
-	matches, err := file.state.native.metadataMatches(size, modified)
-	return matches, linuxError(err)
-}
-
-func (file *linuxMutableFile) SameFile(other outputcap.FileIdentity) (bool, error) {
-	if file == nil {
-		return false, linuxFileClosedError()
-	}
-	return linuxSameFile(file.state, other)
 }
 
 func newLinuxLock(lock *linuxOutputStableLock) *linuxLock {
@@ -217,12 +127,12 @@ func newLinuxLock(lock *linuxOutputStableLock) *linuxLock {
 	if lock != nil {
 		state.native = lock.file
 	}
-	return &linuxLock{native: lock, file: &linuxMutableFile{state: state}}
+	return &linuxLock{native: lock, file: &linuxMutableFile{State: state}}
 }
 
 func (lock *linuxLock) File() outputcap.MutableFile {
-	if lock == nil || lock.native == nil || lock.file == nil || lock.file.state == nil ||
-		lock.file.state.native == nil {
+	if lock == nil || lock.native == nil || lock.file == nil || lock.file.State == nil ||
+		lock.file.State.native == nil {
 		return nil
 	}
 	return lock.file
@@ -234,8 +144,8 @@ func (lock *linuxLock) Close() error {
 	}
 	err := lock.native.Close()
 	lock.native = nil
-	if lock.file != nil && lock.file.state != nil {
-		lock.file.state.native = nil
+	if lock.file != nil && lock.file.State != nil {
+		lock.file.State.native = nil
 	}
 	return linuxError(err)
 }

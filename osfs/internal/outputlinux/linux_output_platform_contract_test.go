@@ -21,7 +21,7 @@ import (
 // The adapter contract tests use real directory/file descriptors, while the
 // binding fields are supplied by a deterministic statx shim. This keeps the
 // namespace and handle lifecycle testable on CI volumes such as overlayfs, which
-// are intentionally not admitted as production ext4 certification roots.
+// are intentionally not admitted as production ext4 identityScheme roots.
 const (
 	linuxAdapterTestMountID     = uint64(0x51a7)
 	linuxAdapterTestDeviceMajor = uint32(8)
@@ -115,8 +115,8 @@ func TestLinuxPlatformAdapterLifecycle(t *testing.T) {
 	if root == nil {
 		t.Fatal("platform returned a nil root")
 	}
-	if platform.Certification() != outputcap.CertificationLinuxExt4ProcessRestart {
-		t.Fatalf("certification = %q", platform.Certification())
+	if platform.IdentityScheme() != outputcap.IdentitySchemeLinuxHandleV2 {
+		t.Fatalf("identityScheme = %q", platform.IdentityScheme())
 	}
 	if platform.Durability() != transfer.DurabilityProcessRestart {
 		t.Fatalf("durability = %v", platform.Durability())
@@ -144,8 +144,8 @@ func TestLinuxPlatformAdapterLifecycle(t *testing.T) {
 	}
 
 	binding, err := platform.RootBinding()
-	if err != nil || binding.IsZero() || binding.Certification() != outputcap.CertificationLinuxExt4ProcessRestart {
-		t.Fatalf("root binding zero=%t certification=%q error=%v", binding.IsZero(), binding.Certification(), err)
+	if err != nil || binding.IsZero() || binding.IdentityScheme() != outputcap.IdentitySchemeLinuxHandleV2 {
+		t.Fatalf("root binding zero=%t identityScheme=%q error=%v", binding.IsZero(), binding.IdentityScheme(), err)
 	}
 	repeated, err := platform.RootBinding()
 	if err != nil || repeated != binding {
@@ -695,20 +695,20 @@ func TestLinuxLockStableFileErrorBranches(t *testing.T) {
 	defer file.Close()
 	v3File := file.(*linuxMutableFile)
 
-	origFlock := v3File.state.native.system.flock
-	defer func() { v3File.state.native.system.flock = origFlock }()
+	origFlock := v3File.State.native.system.flock
+	defer func() { v3File.State.native.system.flock = origFlock }()
 
-	v3File.state.native.system.flock = func(int, int) error { return unix.ENOSYS }
-	if _, err := linuxLockStableFile(v3File.state.native); !errors.Is(err, errLinuxOutputUnsupported) {
+	v3File.State.native.system.flock = func(int, int) error { return unix.ENOSYS }
+	if _, err := linuxLockStableFile(v3File.State.native); !errors.Is(err, errLinuxOutputUnsupported) {
 		t.Fatalf("enosys lock error=%v", err)
 	}
 
-	v3File.state.native.system.flock = func(int, int) error { return errors.New("flock io error") }
-	if _, err := linuxLockStableFile(v3File.state.native); err == nil {
+	v3File.State.native.system.flock = func(int, int) error { return errors.New("flock io error") }
+	if _, err := linuxLockStableFile(v3File.State.native); err == nil {
 		t.Fatal("expected error for general flock failure")
 	}
 
-	readOnlyFile := *v3File.state.native
+	readOnlyFile := *v3File.State.native
 	readOnlyFile.access = linuxOutputFileObserved
 	if _, err := linuxLockStableFile(&readOnlyFile); err == nil {
 		t.Fatal("expected error for read-only file lock")

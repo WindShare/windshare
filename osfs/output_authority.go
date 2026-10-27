@@ -18,11 +18,11 @@ var (
 	ErrPathTooLong = pathfailure.ErrTooLong
 )
 
-type FilesystemOutputCertificationID string
+type FilesystemOutputIdentitySchemeID string
 
 const (
-	FilesystemOutputCertificationLinuxExt4ProcessRestart   FilesystemOutputCertificationID = "linux/ext4/process-restart/v2"
-	FilesystemOutputCertificationWindowsNTFSProcessRestart FilesystemOutputCertificationID = "windows/ntfs/process-restart/v1"
+	FilesystemOutputIdentitySchemeLinuxHandleV2     FilesystemOutputIdentitySchemeID = "linux/ext4/handle/v2"
+	FilesystemOutputIdentitySchemeWindowsObjectIDV1 FilesystemOutputIdentitySchemeID = "windows/ntfs/object-id/v1"
 )
 
 type FilesystemResumeRoot struct {
@@ -377,7 +377,7 @@ type FilesystemOutputTrace struct {
 	ReceiveIntentDigest     transfer.ReceiveIntentDigest
 	ReceiveOperationID      receivecontract.OperationID
 	SessionID               transfer.OutputSessionID
-	Certification           FilesystemOutputCertificationID
+	IdentityScheme          FilesystemOutputIdentitySchemeID
 	NativeLockScope         FilesystemOutputNativeLockScope
 	NativeLockMilestone     FilesystemOutputNativeLockMilestone
 	RootOpenDisposition     FilesystemOutputRootDisposition

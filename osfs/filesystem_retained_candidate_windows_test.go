@@ -5,6 +5,6 @@ package osfs
 import "testing"
 
 func TestWindowsNTFSRetainedCandidateListAndReopen(t *testing.T) {
-	requireUnprivilegedWindowsNTFSCertification(t)
+	requireUnprivilegedWindowsNTFSIdentityScheme(t)
 	runRetainedCandidateFacadeProof(t)
 }

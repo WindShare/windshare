@@ -1,4 +1,4 @@
-//go:build windows || linux
+//go:build windows || linux || darwin
 
 package osfs
 
@@ -271,7 +271,7 @@ func retainSemanticCandidate(
 	t.Helper()
 	repository, profile, closeRepository := openRetainedCandidateRepository(t, root, intent)
 	defer closeRepository()
-	store, err := checkpointstore.NewFileExecutionStoreWithProfile(repository, profile)
+	store, err := checkpointstore.NewFileExecutionStoreWithStagePolicy(repository, profile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +333,7 @@ func openRetainedCandidateRepository(
 	t *testing.T,
 	root string,
 	intent transfer.ReceiveIntent,
-) (*checkpointstore.Repository, checkpointmodel.LiveCleanupNativeProfile, func()) {
+) (*checkpointstore.Repository, checkpointstore.StagePolicy, func()) {
 	t.Helper()
 	platform, err := openNativeOutputPlatform(root, false)
 	if err != nil {
@@ -368,8 +368,10 @@ func openRetainedCandidateRepository(
 		t.Fatalf("unexpected retained-candidate entry kind %d", reservation.EntryKind())
 	}
 	ownership, err := checkpointmodel.NewOwnership(checkpointmodel.OwnershipSpec{
-		Materializer:        checkpointmodel.MaterializerNativeTree,
-		Certification:       platform.Certification(),
+		Materializer: checkpointmodel.MaterializerNativeTree,
+		IdentityScheme: platform.(interface {
+			IdentityScheme() outputcap.IdentitySchemeID
+		}).IdentityScheme(),
 		AuthorityRef:        reservation.AuthorityRef().Bytes(),
 		RootOpenDisposition: disposition,
 	})
@@ -391,15 +393,19 @@ func openRetainedCandidateRepository(
 		t.Fatal(err)
 	}
 	repository := &repositoryValue
-	var profile checkpointmodel.LiveCleanupNativeProfile
-	switch platform.Certification() {
-	case outputcap.CertificationWindowsNTFSProcessRestart:
-		profile = checkpointmodel.LiveCleanupWindowsNTFSV1
-	case outputcap.CertificationLinuxExt4ProcessRestart:
-		profile = checkpointmodel.LiveCleanupLinuxExt4V1
+	var profile checkpointstore.StagePolicy
+	switch platform.(interface {
+		IdentityScheme() outputcap.IdentitySchemeID
+	}).IdentityScheme() {
+	case outputcap.IdentitySchemeWindowsObjectIDV1:
+		profile = checkpointstore.InheritFinalParent
+	case outputcap.IdentitySchemeLinuxHandleV2, outputcap.IdentitySchemeDarwinObjectIDV1:
+		profile = checkpointstore.InheritFinalParent
 	default:
 		_ = errors.Join(repository.Close(), lease.Close(), registry.Close(), control.Close(), platform.Close())
-		t.Fatalf("unexpected retained-candidate certification %q", platform.Certification())
+		t.Fatalf("unexpected retained-candidate identityScheme %q", platform.(interface {
+			IdentityScheme() outputcap.IdentitySchemeID
+		}).IdentityScheme())
 	}
 	closeRepository := func() {
 		if closeErr := errors.Join(

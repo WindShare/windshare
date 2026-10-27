@@ -108,7 +108,7 @@ func TestWindowsNTFSPrivateDirectoryCreateSurvivesRealProcessKillAtEveryCut(t *t
 		runWindowsPrivateCreateCrashChild(t)
 		return
 	}
-	requireUnprivilegedWindowsNTFSCertification(t)
+	requireUnprivilegedWindowsNTFSIdentityScheme(t)
 	for _, cut := range windowsPrivateDirectoryCreateCuts() {
 		t.Run(cut.String(), func(t *testing.T) {
 			base := t.TempDir()

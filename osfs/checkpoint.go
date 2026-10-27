@@ -36,7 +36,7 @@ type (
 	FileCheckpointQuarantineOrigin    = checkpointmodel.QuarantineOrigin
 	FileCheckpointRetirementReason    = checkpointmodel.RetirementReason
 	FileCheckpointMaterializerKind    = checkpointmodel.MaterializerKind
-	FileCheckpointCertification       = checkpointmodel.CertificationID
+	FileCheckpointIdentityScheme      = checkpointmodel.IdentitySchemeID
 	FileCheckpointRootOpenDisposition = checkpointmodel.RootOpenDisposition
 )
 
@@ -59,8 +59,8 @@ const (
 	FileCheckpointCallerProvidedContainer = checkpointmodel.CallerProvidedContainer
 	FileCheckpointAuthorityCreatedRoot    = checkpointmodel.AuthorityCreatedRoot
 
-	FileCheckpointCertificationLinuxExt4ProcessRestart   = checkpointmodel.CertificationLinuxExt4ProcessRestart
-	FileCheckpointCertificationWindowsNTFSProcessRestart = checkpointmodel.CertificationWindowsNTFSProcessRestart
+	FileCheckpointIdentitySchemeLinuxHandleV2     = checkpointmodel.IdentitySchemeLinuxHandleV2
+	FileCheckpointIdentitySchemeWindowsObjectIDV1 = checkpointmodel.IdentitySchemeWindowsObjectIDV1
 )
 
 type FileCheckpointSpec struct {
@@ -189,7 +189,7 @@ func (checkpoint FileCheckpointV2) Checksum() FileCheckpointChecksum {
 
 type FileCheckpointOwnershipSpec struct {
 	Materializer        FileCheckpointMaterializerKind
-	Certification       FileCheckpointCertification
+	IdentityScheme      FileCheckpointIdentityScheme
 	AuthorityRef        []byte
 	RootOpenDisposition FileCheckpointRootOpenDisposition
 }
@@ -198,7 +198,7 @@ type FileCheckpointOwnership struct{ ownership checkpointmodel.Ownership }
 
 func NewFileCheckpointOwnership(spec FileCheckpointOwnershipSpec) (FileCheckpointOwnership, error) {
 	ownership, err := checkpointmodel.NewOwnership(checkpointmodel.OwnershipSpec{
-		Materializer: spec.Materializer, Certification: spec.Certification,
+		Materializer: spec.Materializer, IdentityScheme: spec.IdentityScheme,
 		AuthorityRef: spec.AuthorityRef, RootOpenDisposition: spec.RootOpenDisposition,
 	})
 	if err != nil {
@@ -224,8 +224,8 @@ func (ownership FileCheckpointOwnership) CanonicalBytes() []byte {
 func (ownership FileCheckpointOwnership) MaterializerKind() FileCheckpointMaterializerKind {
 	return ownership.ownership.MaterializerKind()
 }
-func (ownership FileCheckpointOwnership) Certification() FileCheckpointCertification {
-	return ownership.ownership.Certification()
+func (ownership FileCheckpointOwnership) IdentityScheme() FileCheckpointIdentityScheme {
+	return ownership.ownership.IdentityScheme()
 }
 func (ownership FileCheckpointOwnership) AuthorityRef() receivecontract.AuthorityRef {
 	return ownership.ownership.AuthorityRef()

@@ -8,7 +8,6 @@ import (
 	"errors"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 )
 
@@ -198,8 +197,7 @@ func SelectExecutionMode(capabilities DestinationCapabilities) (ExecutionMode, e
 	if !capabilities.safePublish.Supported() {
 		return 0, ErrOrdinaryOutputUnsupported
 	}
-	if capabilities.operationRecovery.Supported() && capabilities.rangeRecovery.Supported() &&
-		capabilities.crashCleanup.Supported() {
+	if capabilities.operationRecovery.Supported() && capabilities.rangeRecovery.Supported() {
 		return ExecutionResumable, nil
 	}
 	return ExecutionLiveOnly, nil
@@ -240,7 +238,7 @@ var (
 	ErrInvalidDestinationCapabilities = errors.New("osfs: destination capabilities are invalid")
 	ErrOrdinaryOutputUnsupported      = errors.New("osfs: ordinary output is unsupported by the destination")
 	// ErrRecoverableOutputUnsupported reports that the native filesystem cannot
-	// satisfy the certified resumable-output contract.
+	// establish restart identity and checkpoint ordering.
 	ErrRecoverableOutputUnsupported = errors.New("osfs: recoverable native output is unsupported")
 	// ErrUnsafeNamespace reports that the output namespace cannot safely retain
 	// resumable state or receive file content.
@@ -290,10 +288,6 @@ type Platform interface {
 	Root() Directory
 	RootOpenDisposition() RootOpenDisposition
 	AcquirePublicOperationGuard() (PublicOperationGuard, error)
-	RootBinding() (OutputRootBinding, error)
-	Certification() CertificationID
-	Durability() transfer.DurabilityLevel
-	ProbeRecoverableFeatures() error
 	ValidateModifiedTime(catalog.ModifiedTime) error
 	CanonicalLocatorKey(string) (string, error)
 	CanonicalComponentKey(string) (string, error)
@@ -309,7 +303,7 @@ type PublicOperationGuard interface {
 }
 
 // Directory is a live, fixed-handle directory capability. Restart-stable
-// ownership is bound at platform certification boundaries rather than exposed as
+// ownership is bound at platform identityScheme boundaries rather than exposed as
 // a second, path-like authority on each directory handle.
 type Directory interface {
 	Close() error

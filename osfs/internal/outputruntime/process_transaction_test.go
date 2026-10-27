@@ -23,8 +23,8 @@ func (*processOnlyRuntimePlatform) DestinationCapabilities() (outputcap.Destinat
 func (*processOnlyRuntimePlatform) LiveCleanupNativeProfile() checkpointmodel.LiveCleanupNativeProfile {
 	panic("process-only runtime requested restart profile")
 }
-func (*processOnlyRuntimePlatform) Certification() outputcap.CertificationID {
-	panic("process-only runtime requested restart certification")
+func (*processOnlyRuntimePlatform) IdentityScheme() outputcap.IdentitySchemeID {
+	panic("process-only runtime requested restart identityScheme")
 }
 func (*processOnlyRuntimePlatform) RootBinding() (outputcap.OutputRootBinding, error) {
 	panic("process-only runtime requested restart binding")

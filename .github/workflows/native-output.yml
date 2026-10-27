@@ -1,0 +1,82 @@
+name: Native output semantics
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/native-output.yml"
+      - "osfs/**"
+      - "adapters/filesystem/**"
+      - "core/transfer/**"
+      - "engine/output/**"
+      - "engine/recovery/**"
+      - "go.mod"
+      - "go.sum"
+  pull_request:
+    paths:
+      - ".github/workflows/native-output.yml"
+      - "osfs/**"
+      - "adapters/filesystem/**"
+      - "core/transfer/**"
+      - "engine/output/**"
+      - "engine/recovery/**"
+      - "go.mod"
+      - "go.sum"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-output-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: Native output (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    env:
+      GOTOOLCHAIN: local
+      GOWORK: "off"
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Verify native output and recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/native-output-evidence"
+          {
+            sw_vers
+            uname -a
+            go version
+            diskutil info "$RUNNER_TEMP"
+          } > "$RUNNER_TEMP/native-output-evidence/environment.txt"
+          go test -short -count=1 -v ./osfs/... ./adapters/filesystem ./core/transfer/... \
+            2>&1 | tee "$RUNNER_TEMP/native-output-evidence/tests.log"
+      - name: Build Darwin CLI architectures
+        shell: bash
+        run: |
+          set -euo pipefail
+          for arch in arm64 amd64; do
+            GOARCH="$arch" go build -o "$RUNNER_TEMP/wind-$arch" ./cmd/wind
+            file "$RUNNER_TEMP/wind-$arch"
+          done
+      - name: Preserve native evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-output-${{ matrix.runner }}
+          path: ${{ runner.temp }}/native-output-evidence
+          if-no-files-found: error
+          retention-days: 14

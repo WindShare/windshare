@@ -43,8 +43,8 @@ func TestWindowsOutputPlatformClosedSurfaceRejectsOperations(t *testing.T) {
 
 func TestWindowsOutputPlatformStaticContractAndCanonicalWrappers(t *testing.T) {
 	platform := &windowsOutputPlatform{}
-	if got := platform.Certification(); got != outputcap.CertificationWindowsNTFSProcessRestart {
-		t.Fatalf("certification = %v", got)
+	if got := platform.IdentityScheme(); got != outputcap.IdentitySchemeWindowsObjectIDV1 {
+		t.Fatalf("identityScheme = %v", got)
 	}
 	if got := platform.Durability(); got != transfer.DurabilityProcessRestart {
 		t.Fatalf("durability = %v", got)
@@ -334,7 +334,7 @@ func TestWindowsOutputFileLiveSurfacePreservesPinnedAuthorityThroughSettlement(t
 	if err := file.Close(); err != nil {
 		t.Fatalf("close unlinked file: %v", err)
 	}
-	if file.state.native != nil {
+	if file.State.native != nil {
 		t.Fatal("closed wrapper retained native authority")
 	}
 	if err := file.Close(); err != nil {

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
@@ -115,6 +116,16 @@ func destinationFacts(
 	if err != nil || !capabilities.Valid() {
 		return outputcap.DestinationCapabilities{}, 0, errors.Join(ErrInvalidConfiguration, err)
 	}
+	if capabilities.OperationRecovery().Supported() || capabilities.RangeRecovery().Supported() {
+		evidence, ok := config.Platform.(recoveryEvidenceSource)
+		if !ok {
+			return outputcap.DestinationCapabilities{}, 0, ErrInvalidConfiguration
+		}
+		if _, err := outputcap.NewIdentitySchemeID(string(evidence.IdentityScheme())); err != nil ||
+			evidence.Durability() < transfer.DurabilityProcessRestart || evidence.Durability() > transfer.DurabilityPowerLoss {
+			return outputcap.DestinationCapabilities{}, 0, errors.Join(ErrInvalidConfiguration, err)
+		}
+	}
 	if !capabilities.CrashCleanup().Supported() {
 		return capabilities, 0, nil
 	}
@@ -158,7 +169,7 @@ func BindDestination(config BindConfig) (_ *BoundDestination, resultErr error) {
 		resultErr = finishDestinationBinding(guard, rootWitness, guardClosed, resultErr)
 	}()
 
-	if !capabilities.CrashCleanup().Supported() {
+	if !capabilities.CrashCleanup().Supported() && !capabilities.OperationRecovery().Supported() {
 		bound, err := bindProcessDestination(config, capabilities, root, rootWitness)
 		if err != nil {
 			return nil, err
@@ -194,31 +205,15 @@ func BindDestination(config BindConfig) (_ *BoundDestination, resultErr error) {
 		}
 	}
 
-	journal, err := config.OpenLiveCleanupJournal(control)
-	if err != nil || !journal.valid() {
-		return nil, errors.Join(ErrInvalidConfiguration, err)
-	}
-	defer func() {
-		if resultErr != nil {
-			resultErr = errors.Join(resultErr, journal.Close())
-		}
-	}()
-	proof, err := openExactPrivateDirectory(control, checkpointmodel.LiveCleanupNamespaceV1)
+	journal, proof, capabilities, err := bindCleanup(config, control, root, capabilities, profile)
 	if err != nil {
 		return nil, err
 	}
 	defer func() {
 		if resultErr != nil {
-			resultErr = errors.Join(resultErr, proof.Close())
+			resultErr = errors.Join(resultErr, journal.Close(), closeDirectory(proof))
 		}
 	}()
-	if err := validateNativeMethodSets(root, proof, capabilities); err != nil {
-		return nil, err
-	}
-	capabilities, err = reconcileLiveCleanup(journal.journal, proof, capabilities, profile)
-	if err != nil {
-		return nil, err
-	}
 	binding, err := NewBinding(id, capabilities, config.DisplayPath)
 	if err != nil {
 		return nil, err
@@ -294,7 +289,7 @@ func (authority *BoundDestination) FileCheckpointOwnership(
 	}
 	return checkpointmodel.NewOwnership(checkpointmodel.OwnershipSpec{
 		Materializer:        checkpointmodel.MaterializerNativeTree,
-		Certification:       authority.platform.Certification(),
+		IdentityScheme:      authority.platform.(recoveryEvidenceSource).IdentityScheme(),
 		AuthorityRef:        authority.binding.AuthorityRef().Bytes(),
 		RootOpenDisposition: disposition,
 	})

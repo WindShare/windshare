@@ -338,7 +338,7 @@ func TestWindowsGuardedDirectoryProvenanceSurvivesEveryReopenLane(t *testing.T) 
 	assertWindowsDirectoryProvenance(t, "reopened public directory", reopened, false)
 	reopenedNative := reopened.(*windowsOutputDirectory).native
 	if _, err := reopenedNative.identityClaim(); !errors.Is(err, errWindowsOutputUnsafe) {
-		t.Fatalf("fresh public reopen inherited prepared identity state: %v", err)
+		t.Fatalf("fresh public reopen inherited prepared identity State: %v", err)
 	}
 	reopenedClaim, err := reopenedNative.prepareIdentityClaim()
 	if err != nil || !bytes.Equal(createdClaim, reopenedClaim) {
@@ -360,7 +360,7 @@ func TestWindowsGuardedDirectoryProvenanceSurvivesEveryReopenLane(t *testing.T) 
 	assertWindowsDirectoryProvenance(t, "pinned public reopen", pinned, false)
 	pinnedNative := pinned.(*windowsOutputDirectory).native
 	if _, err := pinnedNative.identityClaim(); !errors.Is(err, errWindowsOutputUnsafe) {
-		t.Fatalf("pinned public reopen inherited prepared identity state: %v", err)
+		t.Fatalf("pinned public reopen inherited prepared identity State: %v", err)
 	}
 	pinnedClaim, err := pinnedNative.prepareIdentityClaim()
 	if err != nil || !bytes.Equal(createdClaim, pinnedClaim) {

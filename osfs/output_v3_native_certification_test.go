@@ -1,4 +1,4 @@
-//go:build linux || windows
+//go:build linux || windows || darwin
 
 package osfs
 
@@ -18,43 +18,48 @@ import (
 )
 
 const (
-	nativeOutputCertificationProfileEnvironment = "WINDSHARE_REQUIRE_NATIVE_OUTPUT_CERTIFICATION"
-	nativeOutputCrashChildProfileEnvironment    = "WINDSHARE_NATIVE_OUTPUT_CRASH_CHILD_PROFILE"
-	nativeOutputCrashScenarioEnvironment        = "WINDSHARE_NATIVE_OUTPUT_CRASH_SCENARIO"
-	nativeOutputCrashRootEnvironment            = "WINDSHARE_NATIVE_OUTPUT_CRASH_ROOT"
-	nativeOutputCrashReadyEnvironment           = "WINDSHARE_NATIVE_OUTPUT_CRASH_READY"
-	nativeOutputCrashProbeNameEnvironment       = "WINDSHARE_NATIVE_OUTPUT_CRASH_PROBE_NAME"
-	nativeOutputCrashStageSizeEnvironment       = "WINDSHARE_NATIVE_OUTPUT_CRASH_STAGE_SIZE"
-	nativeOutputCrashReadyTimeout               = 20 * time.Second
-	nativeOutputCrashPollInterval               = 10 * time.Millisecond
-	nativeOutputCrashChildMaximumWait           = 5 * time.Minute
-	nativeOutputCrashScenarioProbe              = "probe-stage"
+	nativeOutputIdentitySchemeProfileEnvironment = "WINDSHARE_REQUIRE_NATIVE_OUTPUT_CERTIFICATION"
+	nativeOutputCrashChildProfileEnvironment     = "WINDSHARE_NATIVE_OUTPUT_CRASH_CHILD_PROFILE"
+	nativeOutputCrashScenarioEnvironment         = "WINDSHARE_NATIVE_OUTPUT_CRASH_SCENARIO"
+	nativeOutputCrashRootEnvironment             = "WINDSHARE_NATIVE_OUTPUT_CRASH_ROOT"
+	nativeOutputCrashReadyEnvironment            = "WINDSHARE_NATIVE_OUTPUT_CRASH_READY"
+	nativeOutputCrashProbeNameEnvironment        = "WINDSHARE_NATIVE_OUTPUT_CRASH_PROBE_NAME"
+	nativeOutputCrashStageSizeEnvironment        = "WINDSHARE_NATIVE_OUTPUT_CRASH_STAGE_SIZE"
+	nativeOutputCrashReadyTimeout                = 20 * time.Second
+	nativeOutputCrashPollInterval                = 10 * time.Millisecond
+	nativeOutputCrashChildMaximumWait            = 5 * time.Minute
+	nativeOutputCrashScenarioProbe               = "probe-stage"
 )
 
 func openCertifiedNativeOutputForTest(
 	t *testing.T,
 	root string,
 	profile string,
-	expectedCertification outputcap.CertificationID,
-) outputcap.Platform {
+	expectedIdentityScheme outputcap.IdentitySchemeID,
+) nativeOutputEvidencePlatform {
 	t.Helper()
-	platform, err := openNativeOutputPlatform(root, false)
+	base, err := openNativeOutputPlatform(root, false)
 	if err != nil {
-		nativeOutputCertificationFailure(t, profile, "open certified output root", err)
+		nativeOutputIdentitySchemeFailure(t, profile, "open certified output root", err)
 		return nil
+	}
+	platform, ok := base.(nativeOutputEvidencePlatform)
+	if !ok {
+		_ = base.Close()
+		t.Fatal("native restart evidence unavailable")
 	}
 	fail := func(operation string, cause error) {
 		t.Helper()
 		closeErr := platform.Close()
-		nativeOutputCertificationFailure(t, profile, operation, errors.Join(cause, closeErr))
+		nativeOutputIdentitySchemeFailure(t, profile, operation, errors.Join(cause, closeErr))
 	}
-	if platform.Certification() == "" {
-		fail("identify native certification", outputcap.ErrRecoverableOutputUnsupported)
+	if platform.IdentityScheme() == "" {
+		fail("identify native identityScheme", outputcap.ErrRecoverableOutputUnsupported)
 		return nil
 	}
-	if platform.Certification() != expectedCertification {
-		fail("identify native certification", fmt.Errorf(
-			"got %q, want %q", platform.Certification(), expectedCertification,
+	if platform.IdentityScheme() != expectedIdentityScheme {
+		fail("identify native identityScheme", fmt.Errorf(
+			"got %q, want %q", platform.IdentityScheme(), expectedIdentityScheme,
 		))
 		return nil
 	}
@@ -69,9 +74,9 @@ func openCertifiedNativeOutputForTest(
 		return nil
 	}
 	binding, err := platform.RootBinding()
-	if err != nil || binding.IsZero() || binding.Certification() != expectedCertification {
+	if err != nil || binding.IsZero() || binding.IdentityScheme() != expectedIdentityScheme {
 		fail("bind certified output root", errors.Join(err, fmt.Errorf(
-			"zero=%t certification=%q", binding.IsZero(), binding.Certification(),
+			"zero=%t identityScheme=%q", binding.IsZero(), binding.IdentityScheme(),
 		)))
 		return nil
 	}
@@ -85,9 +90,9 @@ func openCertifiedNativeOutputForTest(
 	return platform
 }
 
-func nativeOutputCertificationFailure(t *testing.T, profile, operation string, err error) {
+func nativeOutputIdentitySchemeFailure(t *testing.T, profile, operation string, err error) {
 	t.Helper()
-	if os.Getenv(nativeOutputCertificationProfileEnvironment) == profile ||
+	if os.Getenv(nativeOutputIdentitySchemeProfileEnvironment) == profile ||
 		!errors.Is(err, outputcap.ErrRecoverableOutputUnsupported) {
 		t.Fatalf("%s for required %s profile: %v", operation, profile, err)
 	}
@@ -97,14 +102,14 @@ func nativeOutputCertificationFailure(t *testing.T, profile, operation string, e
 func runNativeOutputProcessRestartRecoveryTest(
 	t *testing.T,
 	profile string,
-	expectedCertification outputcap.CertificationID,
+	expectedIdentityScheme outputcap.IdentitySchemeID,
 	probeName string,
 	stageSize int64,
 ) {
 	t.Helper()
 	if os.Getenv(nativeOutputCrashChildProfileEnvironment) == profile &&
 		os.Getenv(nativeOutputCrashScenarioEnvironment) == nativeOutputCrashScenarioProbe {
-		runNativeOutputCrashChild(t, profile, expectedCertification)
+		runNativeOutputCrashChild(t, profile, expectedIdentityScheme)
 		return
 	}
 	if os.Getenv(nativeOutputCrashChildProfileEnvironment) == profile {
@@ -116,7 +121,7 @@ func runNativeOutputProcessRestartRecoveryTest(
 	if err := os.Mkdir(root, 0o700); err != nil {
 		t.Fatalf("create native output test root: %v", err)
 	}
-	preflight := openCertifiedNativeOutputForTest(t, root, profile, expectedCertification)
+	preflight := openCertifiedNativeOutputForTest(t, root, profile, expectedIdentityScheme)
 	if err := preflight.Close(); err != nil {
 		t.Fatalf("close native output preflight authority: %v", err)
 	}
@@ -131,7 +136,7 @@ func runNativeOutputProcessRestartRecoveryTest(
 		nativeOutputCrashStageSizeEnvironment + "=" + strconv.FormatInt(stageSize, 10),
 	})
 
-	recovered := openCertifiedNativeOutputForTest(t, root, profile, expectedCertification)
+	recovered := openCertifiedNativeOutputForTest(t, root, profile, expectedIdentityScheme)
 	defer func() {
 		if err := recovered.Close(); err != nil {
 			t.Errorf("close recovered native output authority: %v", err)
@@ -202,7 +207,7 @@ func killNativeOutputChildAfterReady(t *testing.T, readyPath string, environment
 func runNativeOutputCrashChild(
 	t *testing.T,
 	profile string,
-	expectedCertification outputcap.CertificationID,
+	expectedIdentityScheme outputcap.IdentitySchemeID,
 ) {
 	t.Helper()
 	root := os.Getenv(nativeOutputCrashRootEnvironment)
@@ -212,7 +217,7 @@ func runNativeOutputCrashChild(
 	if err != nil || root == "" || readyPath == "" || probeName == "" || stageSize < 0 {
 		t.Fatalf("native output crash-child parameters are invalid: %v", err)
 	}
-	platform := openCertifiedNativeOutputForTest(t, root, profile, expectedCertification)
+	platform := openCertifiedNativeOutputForTest(t, root, profile, expectedIdentityScheme)
 	directory, err := platform.Root().CreateDirectory(probeName, true)
 	if err != nil {
 		t.Fatalf("create native probe crash cut: %v", err)
@@ -236,4 +241,13 @@ func signalNativeOutputCrashCut(t *testing.T, readyPath string) {
 	if err := os.WriteFile(readyPath, []byte("ready\n"), 0o600); err != nil {
 		t.Fatalf("signal native output crash cut: %v", err)
 	}
+}
+
+// Tests ask for restart evidence explicitly; live consumers use Platform alone.
+type nativeOutputEvidencePlatform interface {
+	outputcap.Platform
+	IdentityScheme() outputcap.IdentitySchemeID
+	Durability() transfer.DurabilityLevel
+	RootBinding() (outputcap.OutputRootBinding, error)
+	ProbeRecoverableFeatures() error
 }

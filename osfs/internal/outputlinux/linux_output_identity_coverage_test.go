@@ -44,7 +44,7 @@ func TestLinuxIdentityCoverageSeparatesLiveHandleAndRestartEvidence(t *testing.T
 		t.Fatal("live identity accepted a mount-ID-domain change")
 	}
 	if !live.sameInodeObject(legacy) {
-		t.Fatal("certification could not compare one pinned inode across legacy and unique mount-ID domains")
+		t.Fatal("identityScheme could not compare one pinned inode across legacy and unique mount-ID domains")
 	}
 	for name, mutate := range map[string]func(*linuxOpenHandleIdentity){
 		"device major": func(identity *linuxOpenHandleIdentity) { identity.deviceMajor++ },
@@ -187,7 +187,7 @@ func TestLinuxIdentityCoverageStatxRestartFailureBoundaries(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			system := linuxCertificationTestSystem(
+			system := linuxIdentitySchemeTestSystem(
 				linuxExt4SuperMagic, "ext4", linuxTestDeviceMajor, true,
 			)
 			original := system.statx
@@ -219,7 +219,7 @@ func TestLinuxIdentityCoverageStatxRestartFailureBoundaries(t *testing.T) {
 }
 
 func TestLinuxIdentityCoverageStatxProviderUsesReadOnlyObservationForBothModes(t *testing.T) {
-	system := linuxCertificationTestSystem(
+	system := linuxIdentitySchemeTestSystem(
 		linuxExt4SuperMagic, "ext4", linuxTestDeviceMajor, true,
 	)
 	provider := linuxStatxBirthTimeRestartIdentityProvider{}
@@ -368,15 +368,15 @@ func TestLinuxIdentityCoverageReadOpenHandleFactsErrorTaxonomy(t *testing.T) {
 	}
 }
 
-func TestLinuxIdentityCoverageCertificationUsesRecoveryIdentity(t *testing.T) {
+func TestLinuxIdentityCoverageIdentitySchemeUsesRecoveryIdentity(t *testing.T) {
 	t.Run("recovery read only", func(t *testing.T) {
-		system := linuxCertificationTestSystem(
+		system := linuxIdentitySchemeTestSystem(
 			linuxExt4SuperMagic, "ext4", linuxTestDeviceMajor, true,
 		)
 		readCalls := 0
 		system.restartIdentity = linuxIdentityCoverageProvider{
 			prepare: func(*linuxOutputSystem, int, linuxMountIdentity) (linuxDirectoryRestartIdentity, error) {
-				t.Fatal("filesystem certification attempted enrollment")
+				t.Fatal("filesystem identityScheme attempted enrollment")
 				return linuxDirectoryRestartIdentity{}, nil
 			},
 			read: func(_ *linuxOutputSystem, _ int, mount linuxMountIdentity) (linuxDirectoryRestartIdentity, error) {
@@ -389,13 +389,13 @@ func TestLinuxIdentityCoverageCertificationUsesRecoveryIdentity(t *testing.T) {
 			t.Fatalf("certify output identity: %v", err)
 		}
 		if readCalls != 1 || !binding.restart.rootIdentity.matchesHandle(binding.rootObject) {
-			t.Fatalf("certification did not retain one recovery observation: reads=%d binding=%+v",
+			t.Fatalf("identityScheme did not retain one recovery observation: reads=%d binding=%+v",
 				readCalls, binding)
 		}
 	})
 
 	t.Run("restart identity differs from live root", func(t *testing.T) {
-		system := linuxCertificationTestSystem(
+		system := linuxIdentitySchemeTestSystem(
 			linuxExt4SuperMagic, "ext4", linuxTestDeviceMajor, true,
 		)
 		system.restartIdentity = linuxIdentityCoverageProvider{
@@ -409,12 +409,12 @@ func TestLinuxIdentityCoverageCertificationUsesRecoveryIdentity(t *testing.T) {
 			},
 		}
 		if _, err := linuxCertifyExt4OutputFD(&system, 31); !errors.Is(err, errLinuxOutputUnsafe) {
-			t.Fatalf("certification accepted mismatched restart identity: %v", err)
+			t.Fatalf("identityScheme accepted mismatched restart identity: %v", err)
 		}
 	})
 
 	t.Run("root swapped between mount ID observations", func(t *testing.T) {
-		system := linuxCertificationTestSystem(
+		system := linuxIdentitySchemeTestSystem(
 			linuxExt4SuperMagic, "ext4", linuxTestDeviceMajor, true,
 		)
 		original := system.statx
@@ -428,12 +428,12 @@ func TestLinuxIdentityCoverageCertificationUsesRecoveryIdentity(t *testing.T) {
 			return nil
 		}
 		if _, err := linuxCertifyExt4OutputFD(&system, 31); !errors.Is(err, errLinuxOutputUnsafe) {
-			t.Fatalf("certification accepted a root swap: %v", err)
+			t.Fatalf("identityScheme accepted a root swap: %v", err)
 		}
 	})
 
 	t.Run("provider failure remains attributable", func(t *testing.T) {
-		system := linuxCertificationTestSystem(
+		system := linuxIdentitySchemeTestSystem(
 			linuxExt4SuperMagic, "ext4", linuxTestDeviceMajor, true,
 		)
 		failure := errors.New("restart identity read failed")
@@ -446,7 +446,7 @@ func TestLinuxIdentityCoverageCertificationUsesRecoveryIdentity(t *testing.T) {
 			},
 		}
 		if _, err := linuxCertifyExt4OutputFD(&system, 31); !errors.Is(err, failure) {
-			t.Fatalf("certification lost provider failure: %v", err)
+			t.Fatalf("identityScheme lost provider failure: %v", err)
 		}
 	})
 }

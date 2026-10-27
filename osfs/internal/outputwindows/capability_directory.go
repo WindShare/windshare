@@ -271,7 +271,7 @@ func (directory *windowsOutputDirectory) OpenObservedFile(name string, private b
 	if err != nil {
 		return nil, err
 	}
-	return &windowsOutputObservedFile{state: state}, nil
+	return &windowsOutputObservedFile{State: state}, nil
 }
 
 func (directory *windowsOutputDirectory) OpenRecoveryDurabilityFile(
@@ -282,7 +282,7 @@ func (directory *windowsOutputDirectory) OpenRecoveryDurabilityFile(
 	if err != nil {
 		return nil, err
 	}
-	return &windowsOutputRecoveryDurabilityFile{state: state}, nil
+	return &windowsOutputRecoveryDurabilityFile{State: state}, nil
 }
 
 func (directory *windowsOutputDirectory) OpenMutableFile(name string, private bool) (outputcap.MutableFile, error) {
@@ -290,7 +290,7 @@ func (directory *windowsOutputDirectory) OpenMutableFile(name string, private bo
 	if err != nil {
 		return nil, err
 	}
-	return &windowsOutputMutableFile{state: state}, nil
+	return &windowsOutputMutableFile{State: state}, nil
 }
 
 func (directory *windowsOutputDirectory) openFileState(

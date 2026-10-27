@@ -15,7 +15,7 @@ import (
 )
 
 // Linux rejects an absolute pathname whose terminating NUL would exceed
-// PATH_MAX before any component-wise, handle-relative certification can begin.
+// PATH_MAX before any component-wise, handle-relative identityScheme can begin.
 const linuxMaximumAbsolutePathBytes = 4096
 
 const (

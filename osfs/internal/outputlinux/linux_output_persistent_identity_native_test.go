@@ -36,12 +36,12 @@ type linuxNativeRestartObservation struct {
 }
 
 func TestLinuxExt4RestartIdentityRejectsForcedInodeReuse(t *testing.T) {
-	if os.Getenv(nativeOutputCertificationProfileEnvironment) == "" {
+	if os.Getenv(nativeOutputIdentitySchemeProfileEnvironment) == "" {
 		t.Skip("forced ext4 inode reuse runs only in the required native fixture")
 	}
-	requireUnprivilegedLinuxExt4Certification(t)
+	requireUnprivilegedLinuxExt4IdentityScheme(t)
 	if os.Getenv(linuxNativeFixtureEnvironment) != linuxNativeFixtureVersion {
-		t.Fatal("required Linux/ext4 certification is outside the loop-ext4 fixture")
+		t.Fatal("required Linux/ext4 identityScheme is outside the loop-ext4 fixture")
 	}
 	reuseRoot := os.Getenv(linuxNativeReuseRootEnvironment)
 	if !filepath.IsAbs(reuseRoot) || filepath.Clean(reuseRoot) != reuseRoot {
@@ -119,7 +119,7 @@ func TestLinuxExt4RestartIdentityRejectsForcedInodeReuse(t *testing.T) {
 				cycle, observed.Inode, initial.Inode)
 		}
 		// ext4 birth time has finite timestamp granularity, so rapid inode reuse may
-		// repeat it. Certification binds the complete restart claim, including the
+		// repeat it. IdentityScheme binds the complete restart claim, including the
 		// nonzero inode generation when the kernel exposes it; requiring btime alone
 		// to be unique would reject a stronger composite identity for the wrong reason.
 		if observed.BirthSeconds == previous.BirthSeconds &&

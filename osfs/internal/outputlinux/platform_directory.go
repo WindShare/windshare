@@ -308,7 +308,7 @@ func (directory *linuxDirectory) CreateFile(name string, private bool, size int6
 	if err != nil {
 		return nil, linuxError(errors.Join(err, parent.close()))
 	}
-	return &linuxMutableFile{state: &linuxFileState{
+	return &linuxMutableFile{State: &linuxFileState{
 		native: created, private: private,
 		origin: &linuxFileOrigin{parent: parent, name: name},
 	}}, nil
@@ -319,7 +319,7 @@ func (directory *linuxDirectory) OpenObservedFile(name string, private bool) (ou
 	if err != nil {
 		return nil, err
 	}
-	return &linuxObservedFile{state: state}, nil
+	return &linuxObservedFile{State: state}, nil
 }
 
 func (directory *linuxDirectory) OpenRecoveryDurabilityFile(
@@ -330,7 +330,7 @@ func (directory *linuxDirectory) OpenRecoveryDurabilityFile(
 	if err != nil {
 		return nil, err
 	}
-	return &linuxRecoveryDurabilityFile{state: state}, nil
+	return &linuxRecoveryDurabilityFile{State: state}, nil
 }
 
 func (directory *linuxDirectory) OpenMutableFile(name string, private bool) (outputcap.MutableFile, error) {
@@ -338,7 +338,7 @@ func (directory *linuxDirectory) OpenMutableFile(name string, private bool) (out
 	if err != nil {
 		return nil, err
 	}
-	return &linuxMutableFile{state: state}, nil
+	return &linuxMutableFile{State: state}, nil
 }
 
 func (directory *linuxDirectory) openFileState(
@@ -416,7 +416,7 @@ func (directory *linuxDirectory) LinkFileNoReplace(
 	if err != nil {
 		return nil, err
 	}
-	return &linuxObservedFile{state: state}, nil
+	return &linuxObservedFile{State: state}, nil
 }
 
 func (directory *linuxDirectory) bindFileState(
@@ -472,7 +472,7 @@ func (directory *linuxDirectory) CreateProcessStage(
 	if created == nil {
 		return nil, linuxError(errors.Join(createErr, parent.close()))
 	}
-	file := &linuxMutableFile{state: &linuxFileState{
+	file := &linuxMutableFile{State: &linuxFileState{
 		native: created,
 		origin: &linuxFileOrigin{parent: parent, name: name},
 	}}

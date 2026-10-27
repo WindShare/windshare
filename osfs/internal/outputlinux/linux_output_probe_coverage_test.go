@@ -256,7 +256,7 @@ func TestLinuxOutputProbeRecoveryFailsClosedOnReservedNamespaceBounds(t *testing
 
 func openLinuxOutputProbeCoverageRoot(t *testing.T) (*linuxOutputDirectory, string) {
 	t.Helper()
-	requireUnprivilegedLinuxExt4Certification(t)
+	requireUnprivilegedLinuxExt4IdentityScheme(t)
 	rootPath := t.TempDir()
 	root, err := linuxOpenExt4OutputRoot(rootPath, &linuxHostOutputSystem)
 	if err != nil {

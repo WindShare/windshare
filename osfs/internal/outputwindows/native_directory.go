@@ -95,13 +95,13 @@ func openWindowsOutputPlatformWithAuthority(
 		}
 	}
 	if err == nil {
-		// This handle anchors the certification lifetime. Descendants and guards
+		// This handle anchors the identityScheme lifetime. Descendants and guards
 		// still prove their own volume identity; reopening a root certifies anew.
 		volumeFacts, volumeErr := volumes.InspectVolume(handle)
 		if volumeErr != nil {
 			err = windowsFailure("inspect output volume", absolute, errWindowsOutputUnsupported, volumeErr)
 		} else {
-			err = validateWindowsVolumeCertification(volumeFacts)
+			err = validateWindowsVolumeIdentityScheme(volumeFacts)
 		}
 	}
 	if err != nil {

@@ -179,7 +179,7 @@ func validateWindowsExternalPlacement(
 	)
 }
 
-func validateWindowsVolumeCertification(facts windowsVolumeFacts) error {
+func validateWindowsVolumeIdentityScheme(facts windowsVolumeFacts) error {
 	switch {
 	case !strings.EqualFold(facts.filesystem, windowsOutputFilesystem):
 		return windowsFailure("certify output filesystem", facts.path, errWindowsOutputUnsupported,

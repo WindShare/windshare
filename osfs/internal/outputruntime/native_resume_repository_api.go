@@ -404,8 +404,8 @@ func (lease *NativeResumeLease) ensureFileStoreLocked() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	store, err := checkpointstore.NewFileExecutionStoreWithProfile(
-		&repository, lease.runtime.destination.LiveCleanupProfile(),
+	store, err := checkpointstore.NewFileExecutionStoreWithStagePolicy(
+		&repository, checkpointstore.InheritFinalParent,
 	)
 	var recordCount uint64
 	var repositoryAttention bool

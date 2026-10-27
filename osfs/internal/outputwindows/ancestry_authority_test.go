@@ -146,7 +146,7 @@ func TestWindowsExternalPlacementDoesNotApplyOutputLookupPolicy(t *testing.T) {
 	facts := validWindowsObjectFacts()
 	facts.caseSensitive = true
 	if err := validateWindowsRootShape(facts); !errors.Is(err, errWindowsOutputUnsupported) {
-		t.Fatalf("case-sensitive output-root certification = %v", err)
+		t.Fatalf("case-sensitive output-root identityScheme = %v", err)
 	}
 	if err := validateWindowsExternalPlacement(facts, facts.object.volume); err != nil {
 		t.Fatalf("case-sensitive external placement was rejected: %v", err)

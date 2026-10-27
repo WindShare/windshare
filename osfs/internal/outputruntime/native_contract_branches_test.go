@@ -185,12 +185,12 @@ func TestNativeIdentityAndAdapterBranchesRemainFailClosed(t *testing.T) {
 	if err := validateOutputCreateAuthority(createAuthorityFailureDirectory{err: failure}); !errors.Is(err, failure) {
 		t.Fatalf("create validator failure = %v", err)
 	}
-	if filesystemOutputCertificationFromState(outputcap.CertificationLinuxExt4ProcessRestart) !=
-		FilesystemOutputCertificationLinuxExt4ProcessRestart ||
-		filesystemOutputCertificationFromState(outputcap.CertificationWindowsNTFSProcessRestart) !=
-			FilesystemOutputCertificationWindowsNTFSProcessRestart ||
-		filesystemOutputCertificationFromState(outputcap.CertificationID("")) != "" {
-		t.Fatal("filesystem certification projection changed")
+	if filesystemOutputIdentitySchemeFromState(outputcap.IdentitySchemeLinuxHandleV2) !=
+		FilesystemOutputIdentitySchemeLinuxHandleV2 ||
+		filesystemOutputIdentitySchemeFromState(outputcap.IdentitySchemeWindowsObjectIDV1) !=
+			FilesystemOutputIdentitySchemeWindowsObjectIDV1 ||
+		filesystemOutputIdentitySchemeFromState(outputcap.IdentitySchemeID("")) != "" {
+		t.Fatal("filesystem identityScheme projection changed")
 	}
 	var traces []FilesystemOutputTrace
 	FilesystemOutputTraceFunc(func(event FilesystemOutputTrace) {

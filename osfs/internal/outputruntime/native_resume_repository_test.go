@@ -673,8 +673,10 @@ func retainUnobservableCheckpointCandidate(
 		t.Fatal("candidate intent omitted destination reservation")
 	}
 	ownership, err := checkpointmodel.NewOwnership(checkpointmodel.OwnershipSpec{
-		Materializer:        checkpointmodel.MaterializerNativeTree,
-		Certification:       platform.Certification(),
+		Materializer: checkpointmodel.MaterializerNativeTree,
+		IdentityScheme: platform.(interface {
+			IdentityScheme() outputcap.IdentitySchemeID
+		}).IdentityScheme(),
 		AuthorityRef:        reservation.AuthorityRef().Bytes(),
 		RootOpenDisposition: platform.RootOpenDisposition(),
 	})
@@ -691,8 +693,8 @@ func retainUnobservableCheckpointCandidate(
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := checkpointstore.NewFileExecutionStoreWithProfile(
-		&repository, checkpointmodel.LiveCleanupLinuxExt4V1,
+	store, err := checkpointstore.NewFileExecutionStoreWithStagePolicy(
+		&repository, checkpointstore.InheritFinalParent,
 	)
 	if err != nil {
 		t.Fatal(err)

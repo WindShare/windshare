@@ -49,10 +49,10 @@ func TestMain(m *testing.M) {
 }
 
 func linuxNativeTestTempRoot() (string, bool, error) {
-	profile := os.Getenv(nativeOutputCertificationProfileEnvironment)
+	profile := os.Getenv(nativeOutputIdentitySchemeProfileEnvironment)
 	fixture := os.Getenv(linuxNativeFixtureEnvironment)
-	if profile == linuxExt4NativeCertificationProfile || fixture != "" {
-		if profile != linuxExt4NativeCertificationProfile || fixture != linuxNativeFixtureVersion {
+	if profile == linuxExt4NativeIdentitySchemeProfile || fixture != "" {
+		if profile != linuxExt4NativeIdentitySchemeProfile || fixture != linuxNativeFixtureVersion {
 			return "", false, fmt.Errorf("required profile and native fixture marker disagree")
 		}
 		candidate := os.Getenv(linuxNativeFixtureTempEnvironment)
