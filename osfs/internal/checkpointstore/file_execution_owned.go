@@ -285,7 +285,7 @@ func (store *FileExecutionStore) createOwnedStage(
 ) (outputcap.MutableFile, bool, error) {
 	if store.stagePolicy == PrivateStage {
 		// Synthetic stores retain the private constructor for isolated unit tests;
-		// production composition always supplies a certified ordinary profile.
+		// production composition always inherits the final parent permissions.
 		stage, err := stageDirectory.CreateFile(stageName, true, int64(exactSize))
 		return stage, err == nil && stage != nil, err
 	}

@@ -3,10 +3,12 @@ package cli
 import (
 	"bufio"
 	"context"
-	"golang.org/x/term"
+	"errors"
 	"io"
 	"strings"
 	"time"
+
+	"golang.org/x/term"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
@@ -148,7 +150,7 @@ func (a *App) receivePauseHandler() func(context.Context, engine.ReceivePause) (
 				return engine.ReceiveRecoveryExit, ctx.Err()
 			case response := <-answered:
 				if response.err != nil {
-					if response.err == io.EOF {
+					if errors.Is(response.err, io.EOF) {
 						return engine.ReceiveRecoveryExit, nil
 					}
 					return engine.ReceiveRecoveryExit, response.err

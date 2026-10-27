@@ -9,7 +9,7 @@ import (
 
 func (value FilesystemOutputTraceOperation) DiagnosticName() string {
 	names := [...]string{
-		"", "certified", "feature_probe_completed", "checkpoint_namespace_opened", "native_lock",
+		"", "identity_evidence", "feature_probe_completed", "checkpoint_namespace_opened", "native_lock",
 		"session_opened", "checkpoint_reconciled", "runtime_decision",
 	}
 	if int(value) >= len(names) {
@@ -62,7 +62,7 @@ func (value FilesystemOutputNativeLockMilestone) DiagnosticName() string {
 func (v FilesystemOutputTrace) DiagnosticRecord() diagnostics.Record {
 	f := diagnostics.Fields{
 		"operation":             diagnostics.Text(v.Operation.DiagnosticName()),
-		"identityScheme":        diagnostics.Text(string(v.IdentityScheme)),
+		"identity_scheme":       diagnostics.Text(string(v.IdentityScheme)),
 		"root_disposition":      diagnostics.Text(string(v.RootOpenDisposition)),
 		"runtime_component":     diagnostics.Text(v.RuntimeComponent.DiagnosticName()),
 		"runtime_operation":     diagnostics.Text(v.RuntimeOperation.DiagnosticName()),

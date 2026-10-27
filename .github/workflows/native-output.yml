@@ -10,6 +10,8 @@ on:
       - "core/transfer/**"
       - "engine/internal/receive/**"
       - "cmd/wind/internal/cli/**"
+      - "internal/testoutputroot/**"
+      - "e2e/**"
       - "engine/output/**"
       - "engine/recovery/**"
       - "go.mod"
@@ -22,6 +24,8 @@ on:
       - "core/transfer/**"
       - "engine/internal/receive/**"
       - "cmd/wind/internal/cli/**"
+      - "internal/testoutputroot/**"
+      - "e2e/**"
       - "engine/output/**"
       - "engine/recovery/**"
       - "go.mod"
@@ -42,7 +46,7 @@ jobs:
       matrix:
         runner: [macos-15, macos-15-intel]
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       GOTOOLCHAIN: local
       GOWORK: "off"
@@ -69,6 +73,15 @@ jobs:
           } > "$RUNNER_TEMP/native-output-evidence/environment.txt"
           go test -short -count=1 -v ./osfs/... ./adapters/filesystem ./core/transfer/... ./engine/internal/receive ./cmd/wind/internal/cli \
             2>&1 | tee "$RUNNER_TEMP/native-output-evidence/tests.log"
+      - name: Prepare Rust native relay toolchain
+        run: rustup toolchain install stable --profile minimal
+      - name: Verify CLI file, folder, and process-restart downloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -count=1 -timeout=10m -v ./e2e \
+            -run '^(TestUserTraceCriticalSenderRelayReceiver|TestLongV2ProcessResumesDurableOutputAfterReceiverCrash)$' \
+            2>&1 | tee "$RUNNER_TEMP/native-output-evidence/cli.log"
       - name: Build Darwin CLI architectures
         shell: bash
         run: |

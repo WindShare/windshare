@@ -41,6 +41,7 @@ Correlate events across the session using:
 - `relay_recovering`: Per-relay attempt state and failure; sender details include connection generation, fast/slow waiting, resume/publication mode, terminal disposition, and next delay.
 - `relay_lifecycle`: Connection and channel transitions, including heartbeat probe, acknowledgement, and failure with round, timeout, and elapsed wait (round trip for an acknowledgement, inbound silence for a failure).
 - `filesystem_output`: Output ownership, `runtime_component`, `runtime_operation`, `runtime_decision`, `failure_stage` and `native_error_class`; `capabilities.mode` distinguishes live-only and restart-resumable output.
+- `receive.output_recovery_decision`: Operation identity, retry/discard/exit choice, recovery reason, output mode, and verified bytes across attempts.
 
 `Trace is incomplete` reports diagnostic loss, independently of transfer results.
 `trace_summary` separates `contract_rejected` from `lifecycle_dropped`, write/flush failures,

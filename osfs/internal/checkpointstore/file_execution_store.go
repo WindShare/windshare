@@ -44,7 +44,7 @@ var (
 )
 
 func NewFileExecutionStore(repository *Repository) (*FileExecutionStore, error) {
-	return NewFileExecutionStoreWithStagePolicy(repository, 0)
+	return NewFileExecutionStoreWithStagePolicy(repository, PrivateStage)
 }
 
 func NewFileExecutionStoreWithStagePolicy(
@@ -58,7 +58,7 @@ func NewFileExecutionStoreWithStagePolicy(
 // valid only for a newly published ordinary operation whose private namespace
 // cannot contain an earlier file record.
 func NewFreshFileExecutionStore(repository *Repository) (*FileExecutionStore, error) {
-	return NewFreshFileExecutionStoreWithStagePolicy(repository, 0)
+	return NewFreshFileExecutionStoreWithStagePolicy(repository, PrivateStage)
 }
 
 func NewFreshFileExecutionStoreWithStagePolicy(
@@ -73,7 +73,7 @@ func newFileExecutionStore(
 	stagePolicy StagePolicy,
 	reconcile bool,
 ) (*FileExecutionStore, error) {
-	if repository == nil || repository.records == nil || repository.anchors == nil ||
+	if stagePolicy > InheritFinalParent || repository == nil || repository.records == nil || repository.anchors == nil ||
 		repository.stages == nil || repository.authority == nil {
 		return nil, transfer.ErrInvalidOutputBinding
 	}

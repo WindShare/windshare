@@ -57,63 +57,11 @@ func (files *LiveFiles) Begin(
 	key := file.Target().Locator().Digest()
 	previous := files.files[key]
 	if previous != nil {
-		previous.mu.Lock()
-		defer previous.mu.Unlock()
-		if !previous.closed {
-			return transfer.FileStart{}, errors.Join(ErrTransactionClosed, destination.Close())
+		next, start, err := reopenLiveFile(ctx, file, destination, parent, previous)
+		if next != nil {
+			files.files[key], retained = next, true
 		}
-		if previous.binding.Descriptor() != file.Descriptor() {
-			return blockedLiveStart(file.Target(), transfer.ItemBlockRevisionConflict, destination)
-		}
-		if previous.file == nil {
-			return blockedLiveStart(file.Target(), transfer.ItemBlockOwnedObjectUnknown, destination)
-		}
-		same, compareErr := previous.parent.SameDirectory(parent)
-		if compareErr != nil {
-			return transfer.FileStart{}, errors.Join(collaboratorError(ctx, compareErr), destination.Close())
-		}
-		if !same {
-			return blockedLiveStart(file.Target(), transfer.ItemBlockOwnershipUnknown, destination)
-		}
-		binding, err := transfer.BindFileMaterializationTarget(file.Target(), previous.binding.ObjectIdentity())
-		if err != nil {
-			return transfer.FileStart{}, errors.Join(err, destination.Close())
-		}
-		next := &livePartialFileStrategy{
-			materialization: file, destination: destination, file: previous.file,
-			binding: binding, cleanup: previous.cleanup, written: previous.written,
-			generation: previous.generation, published: previous.published, parent: parent,
-		}
-		// Old attempt references remain closed; only this new binding can mutate.
-		_ = previous.destination.Close()
-		_ = previous.parent.Close()
-		previous.file, previous.destination, previous.parent = nil, nil, nil
-		files.files[key], retained = next, true
-		if next.published {
-			next.closed = true
-			expected, err := NewFinalExpectation(binding.ObjectIdentity(), binding.ExactSize())
-			if err != nil {
-				return transfer.FileStart{}, err
-			}
-			final, err := settlePublication(ctx, destination, next.file, expected, false)
-			if err != nil {
-				return transfer.FileStart{}, collaboratorError(ctx, err)
-			}
-			if final.Condition() != FinalOwnedAtExpectedSize {
-				return blockedLiveStart(file.Target(), transfer.ItemBlockPublicationAmbiguous, destination)
-			}
-			settled, err := transfer.NewPreviouslyPublishedFileSettlement(binding)
-			return settlementStart(settled, err)
-		}
-		transaction, err := WrapPartialFileTransaction(next)
-		if err != nil {
-			return transfer.FileStart{}, err
-		}
-		progress, err := transfer.VerifyProcessRanges(binding, next.generation, next.written)
-		if err != nil {
-			return transfer.FileStart{}, err
-		}
-		return transfer.NewFileTransactionStart(transaction, progress)
+		return start, err
 	}
 	final, err := destination.ObserveFinalPresence(ctx)
 	if err != nil {
@@ -140,6 +88,79 @@ func (files *LiveFiles) Begin(
 	}
 	files.files[key], retained = state, true
 	progress, err := transfer.VerifyProcessRanges(transaction.Binding(), 0, state.written)
+	if err != nil {
+		return transfer.FileStart{}, err
+	}
+	return transfer.NewFileTransactionStart(transaction, progress)
+}
+
+// Rebinding transfers both handles together so a retry cannot combine old data
+// evidence with a replacement parent reached through the same path.
+func reopenLiveFile(
+	ctx context.Context, file transfer.MaterializationFile, destination FileDestination,
+	parent outputcap.Directory, previous *livePartialFileStrategy,
+) (*livePartialFileStrategy, transfer.FileStart, error) {
+	previous.mu.Lock()
+	defer previous.mu.Unlock()
+	blocked := func(reason transfer.ItemBlockReason) (*livePartialFileStrategy, transfer.FileStart, error) {
+		start, err := blockedLiveStart(file.Target(), reason, destination)
+		return nil, start, err
+	}
+	if !previous.closed {
+		return nil, transfer.FileStart{}, errors.Join(ErrTransactionClosed, destination.Close())
+	}
+	if previous.binding.Descriptor() != file.Descriptor() {
+		return blocked(transfer.ItemBlockRevisionConflict)
+	}
+	if previous.file == nil {
+		return blocked(transfer.ItemBlockOwnedObjectUnknown)
+	}
+	same, err := previous.parent.SameDirectory(parent)
+	if err != nil {
+		return nil, transfer.FileStart{}, errors.Join(collaboratorError(ctx, err), destination.Close())
+	}
+	if !same {
+		return blocked(transfer.ItemBlockOwnershipUnknown)
+	}
+	binding, err := transfer.BindFileMaterializationTarget(file.Target(), previous.binding.ObjectIdentity())
+	if err != nil {
+		return nil, transfer.FileStart{}, errors.Join(err, destination.Close())
+	}
+	next := &livePartialFileStrategy{
+		materialization: file, destination: destination, file: previous.file,
+		binding: binding, cleanup: previous.cleanup, written: previous.written,
+		generation: previous.generation, published: previous.published, parent: parent,
+	}
+	// Old attempt references remain closed; only this new binding can mutate.
+	_ = previous.destination.Close()
+	_ = previous.parent.Close()
+	previous.file, previous.destination, previous.parent = nil, nil, nil
+	start, err := next.retainedStart(ctx)
+	return next, start, err
+}
+
+func (state *livePartialFileStrategy) retainedStart(ctx context.Context) (transfer.FileStart, error) {
+	if state.published {
+		state.closed = true
+		expected, err := NewFinalExpectation(state.binding.ObjectIdentity(), state.binding.ExactSize())
+		if err != nil {
+			return transfer.FileStart{}, err
+		}
+		final, err := settlePublication(ctx, state.destination, state.file, expected, false)
+		if err != nil {
+			return transfer.FileStart{}, collaboratorError(ctx, err)
+		}
+		if final.Condition() != FinalOwnedAtExpectedSize {
+			return blockedLiveStart(state.materialization.Target(), transfer.ItemBlockPublicationAmbiguous, state.destination)
+		}
+		settled, err := transfer.NewPreviouslyPublishedFileSettlement(state.binding)
+		return settlementStart(settled, err)
+	}
+	transaction, err := WrapPartialFileTransaction(state)
+	if err != nil {
+		return transfer.FileStart{}, err
+	}
+	progress, err := transfer.VerifyProcessRanges(state.binding, state.generation, state.written)
 	if err != nil {
 		return transfer.FileStart{}, err
 	}
