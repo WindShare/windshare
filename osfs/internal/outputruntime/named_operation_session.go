@@ -189,16 +189,15 @@ func (authority *Authority) namedFileExecutor(
 		storeFactory = checkpointstore.NewFileExecutionStoreWithStagePolicy
 	}
 	store, err := storeFactory(&repository, checkpointstore.InheritFinalParent)
-	var repositoryAttention bool
+	var attention []checkpointstore.Attention
 	if operation.reopened {
 		var recordCount uint64
 		if store != nil {
 			recordCount = store.RecordCount()
-			_, attention := store.LineageSnapshot()
-			repositoryAttention = len(attention) != 0
+			_, attention = store.LineageSnapshot()
 		}
 		authority.traceCheckpointReconciled(
-			operation.intent, sessionID, recordCount, repositoryAttention, err,
+			operation.intent, sessionID, recordCount, attention, err,
 		)
 	}
 	if err != nil {
@@ -208,7 +207,7 @@ func (authority *Authority) namedFileExecutor(
 		)
 		return nil, nil, nil, freezeFilesystemOutputFailure(primary, repository.Close())
 	}
-	if repositoryAttention {
+	if checkpointstore.RecoveryBlocked(attention) {
 		// Opaque repository evidence cannot grant mutation authority even when
 		// authenticated siblings reconcile cleanly.
 		attentionErr := requireOperationAttention(

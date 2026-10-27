@@ -33,7 +33,7 @@ func ordinaryResumeItems(
 	}
 	// Reconciliation attention has no authenticated lineage or safe path. Keep
 	// it out of item inventory and let the operation lease close ownership.
-	return items, len(attention) != 0, nil
+	return items, checkpointstore.RecoveryBlocked(attention), nil
 }
 
 func ordinaryResumeLineageItem(

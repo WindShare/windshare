@@ -80,6 +80,14 @@ func (v FilesystemOutputTrace) DiagnosticRecord() diagnostics.Record {
 		"reserved_file_slot_count": diagnostics.Uint(v.ReservedFileSlotCount), "directory_metadata_bytes": diagnostics.Uint(v.DirectoryMetadataBytes),
 		"checkpoint_record_count": diagnostics.Uint(v.CheckpointRecordCount),
 	}
+	if v.RuntimeOperation == FilesystemOutputRuntimeWriteRange || v.RuntimeOperation == FilesystemOutputRuntimeFirstWrite {
+		f["write_offset"] = diagnostics.Uint(v.WriteOffset)
+		f["write_length"] = diagnostics.Uint(v.WriteLength)
+	}
+	if v.CheckpointAttentionCount != 0 {
+		f["checkpoint_attention_code"] = diagnostics.Text(v.CheckpointAttentionCode)
+		f["checkpoint_attention_count"] = diagnostics.Uint(v.CheckpointAttentionCount)
+	}
 	if v.Failed {
 		f["fault"] = diagnostics.Object(diagnostics.Fields{"domain": diagnostics.Number(float64(v.FaultDomain)), "scope": diagnostics.Number(float64(v.NormalizedFaultScope)), "code": diagnostics.Number(float64(v.NormalizedFaultCode))})
 	}

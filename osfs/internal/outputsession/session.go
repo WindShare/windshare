@@ -367,7 +367,7 @@ func (session *Session) traceLocked(
 }
 
 func (session *Session) emit(event TraceEvent) {
-	if session != nil && session.trace != nil {
+	if session != nil && session.trace != nil && event.Operation != 0 {
 		session.trace.RecordOutputSessionTrace(event)
 	}
 }
