@@ -42,6 +42,11 @@ type testPeerSession struct {
 	ownedAdmissions chan protocolsession.FrameChannel
 	lane            session.LaneIdentity
 	admitErr        error
+
+	sessionControlMu   sync.Mutex
+	pathControlHandler func(context.Context, []byte) error
+	turnControlHandler func(context.Context, []byte) error
+	sessionControls    chan capturedControl
 }
 
 func newTestPeerSession(seed byte) *testPeerSession {
@@ -55,6 +60,7 @@ func newTestPeerSession(seed byte) *testPeerSession {
 		admissions:      make(chan protocolsession.FrameChannel, 4),
 		ownedAdmissions: make(chan protocolsession.FrameChannel, 4),
 		lane:            session.LaneIdentity{ID: 9, Epoch: 2},
+		sessionControls: make(chan capturedControl, peerTestSessionControlCapacity),
 	}
 }
 

@@ -461,6 +461,7 @@ func (ingress *integrationPeerIngress) Close() {
 }
 
 type integrationPeerSession struct {
+	integrationSessionControls
 	share     catalog.ShareInstance
 	sessionID protocolsession.ProtocolSessionID
 	offerer   *pion.PeerConnection
