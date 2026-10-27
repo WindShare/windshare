@@ -688,3 +688,29 @@ func liveCleanupTicketFixture(t *testing.T, fill byte) checkpointmodel.LiveClean
 	}
 	return ticket
 }
+
+func TestReadOnlyInventoryCannotHideAdmissionBeforeOperationRecord(t *testing.T) {
+	control := newMemoryDirectory()
+	registry, err := OpenOperationRegistry(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Close()
+	fixture := ordinaryRegistryFixture(t, 0x91)
+	admission, _, err := registry.BeginActive(fixture.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admission.Close()
+	if err := admission.PrepareCandidate(fixture.intent.OperationID()); err != nil {
+		t.Fatal(err)
+	}
+	page, err := ReadOperationPage(control, OperationPageCursor{}, MaximumOrdinaryOperationPageSizeV1)
+	if err != nil || !page.Unknown() || len(page.Records()) != 0 {
+		t.Fatalf("incomplete admission disappeared: %+v %v", page, err)
+	}
+	lookup, err := registry.lookupAdmissionCandidate(fixture.key)
+	if err != nil || lookup.State() != ActiveLookupNeedsAttention {
+		t.Fatalf("read-only inventory mutated candidate: %v %v", lookup.State(), err)
+	}
+}

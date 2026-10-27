@@ -8,7 +8,7 @@ import (
 const outputDirectoryName = "output"
 
 // Fixture keeps cleanup ownership with testing.TB while leaving the output
-// directory absent so the production authority must create and certify it.
+// directory absent so the production authority must create and verify it.
 type Fixture struct {
 	RootPath   string
 	CreateRoot bool
@@ -16,7 +16,7 @@ type Fixture struct {
 
 func New(t testing.TB) Fixture {
 	t.Helper()
-	placement := newCertifiedPlacement(t)
+	placement := newNativePlacement(t)
 	return Fixture{
 		RootPath:   filepath.Join(placement, outputDirectoryName),
 		CreateRoot: true,

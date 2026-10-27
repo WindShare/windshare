@@ -75,13 +75,16 @@ wind get <link> [-o <directory>] [--only <path>]... [--key <key>] [--connectivit
 ## Resume
 
 ```text
+wind resume retry -o <directory> [--only <path>]... <link>
 wind resume list -o <directory>
 wind resume discard -o <directory> --item <N>
 ```
 
-- Rerunning a compatible `wind get` in the same `-o` directory reuses staged checkpoints and verified byte progress.
-- `resume list` reports destination-owned recovery state (`incomplete`, `resumable`, `cleanup-pending`, `needs-attention`) and item-blocked entries.
-- `resume discard` re-lists the inventory and, after interactive terminal confirmation, removes the selected unfinished operation while preserving published and unrecognized files.
+- `get` automatically reopens matching progress. `resume retry` uses the same pipeline but refuses to start a new download when no operation matches.
+- Interactive failures show affected paths and offer retry, discard, or exit. Retry keeps the operation and verified ranges. Ctrl+C exits; unattended runs report their retention outcome without prompting.
+- Restart checkpoints survive exit where supported. Live-only destinations warn before transfer: unfinished progress survives retries only while the process stays open. See [native output](native-output.md).
+- `resume list` shows recovery state and blocked items. Capability loss keeps existing operations visible as `needs-attention` with `recovery-unavailable`.
+- `resume discard` re-lists the inventory and confirms the selected operation before removing proven-owned unfinished state. Published and unrecognized files remain.
 
 ## Diagnostics
 

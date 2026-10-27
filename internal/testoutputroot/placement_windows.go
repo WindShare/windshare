@@ -10,7 +10,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func newCertifiedPlacement(t testing.TB) string {
+func newNativePlacement(t testing.TB) string {
 	t.Helper()
 	placement := t.TempDir()
 	if err := protectWindowsPlacement(placement); err != nil {

@@ -104,6 +104,8 @@ STOP across `full` → `relay-only` → `full` updates, then deletes its Workers
 Local SQLite/API and Go protocol access tests run with `npm run test:access` in
 `relay-rust/crates/relay-cloudflare`; they require no Cloudflare account.
 
+The [native output workflow](../.github/workflows/native-output.yml) additionally runs shared filesystem/recovery suites on macOS arm64 and amd64, records APFS and OS evidence, tests abrupt process-restart recovery, and builds both Darwin CLI architectures.
+
 ## Weekly CI
 
 [Weekly Product Stability](../.github/workflows/weekly.yml) runs every Sunday at 04:23 UTC and can also be started manually. It contains:
