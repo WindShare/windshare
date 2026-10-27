@@ -299,7 +299,7 @@ func (session *Session) commitFileBegin(
 	)
 	if observation.Transaction != nil {
 		binding := observation.Transaction.Binding()
-		if binding.Target() != entry.claim.file.Target() || observation.Durable.Binding() != binding ||
+		if binding.Target() != entry.claim.file.Target() || observation.Progress.Binding() != binding ||
 			observation.Settlement.Kind() != 0 {
 			return transfer.FileStart{}, session.failFileBegin(
 				ctx, operationID, entry, MutationAmbiguous, ErrExecutorContract,
@@ -309,7 +309,7 @@ func (session *Session) commitFileBegin(
 			session: session, claimID: entry.claim.id, executor: observation.Transaction, binding: binding,
 		}
 		var err error
-		start, err = transfer.NewFileTransactionStart(transaction, observation.Durable)
+		start, err = transfer.NewFileTransactionStart(transaction, observation.Progress)
 		if err != nil {
 			return transfer.FileStart{}, session.failFileBegin(
 				ctx, operationID, entry, MutationAmbiguous, err,
@@ -319,7 +319,7 @@ func (session *Session) commitFileBegin(
 		var err error
 		start, err = transfer.NewFileSettlementStart(observation.Settlement)
 		if err != nil || observation.Settlement.Target() != entry.claim.file.Target() ||
-			observation.Durable.Binding() != (transfer.MaterializedFileBinding{}) {
+			observation.Progress.Binding() != (transfer.MaterializedFileBinding{}) {
 			return transfer.FileStart{}, session.failFileBegin(
 				ctx, operationID, entry, MutationAmbiguous, executorContractError(err),
 			)

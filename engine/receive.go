@@ -8,7 +8,33 @@ import (
 	appobs "github.com/windshare/windshare/engine/observation"
 )
 
+type ReceivePause = receive.Pause
+type ReceiveRecoveryAction = receive.RecoveryAction
+type ReceiveRecoveryReason = receive.RecoveryReason
+type ReceiveRecoveryOutcome = receive.RecoveryOutcome
+
+const (
+	ReceiveRecoveryExit                 = receive.RecoveryExit
+	ReceiveRecoveryRetry                = receive.RecoveryRetry
+	ReceiveRecoveryDiscard              = receive.RecoveryDiscard
+	ReceiveRecoveryTemporaryFailure     = receive.RecoveryTemporaryFailure
+	ReceiveRecoveryCollision            = receive.RecoveryCollision
+	ReceiveRecoveryOwnershipUnknown     = receive.RecoveryOwnershipUnknown
+	ReceiveRecoveryRevisionChanged      = receive.RecoveryRevisionChanged
+	ReceiveRecoveryNotNeeded            = receive.RecoveryNotNeeded
+	ReceiveRecoveryCheckpointsRetained  = receive.RecoveryCheckpointsRetained
+	ReceiveRecoveryLiveProgressReleased = receive.RecoveryLiveProgressReleased
+	ReceiveRecoveryDiscarded            = receive.RecoveryDiscarded
+)
+
 type ReceiveRequest = receive.Request
+type ReceiveOutputAdmission = receive.OutputAdmission
+
+const (
+	ReceiveCreateOrResume = receive.OutputCreateOrResume
+	ReceiveResumeExisting = receive.OutputResumeExisting
+)
+
 type ReceiveResult = receive.Result
 type ReceiveSettlementInput = receive.SettlementInput
 type ReceiveFailure = receive.Failure

@@ -144,7 +144,7 @@ if grep -Fq '"Action":"skip"' "$events" || grep -Fq '"Action":"fail"' "$events";
 fi
 for required_test in \
   TestLinuxExt4RestartIdentityRejectsForcedInodeReuse \
-  TestLinuxExt4NativeCertification \
+  TestLinuxExt4NativeIdentityScheme \
   TestLinuxExt4ProcessRestartRecovery; do
   if [ "$(grep -Ec "\"Action\":\"pass\".*\"Test\":\"${required_test}\"" "$events")" -ne 1 ]; then
     echo "required native test did not report exactly one PASS: $required_test" >&2

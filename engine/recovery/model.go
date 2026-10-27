@@ -7,6 +7,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine/internal/task"
+	"github.com/windshare/windshare/engine/output"
 )
 
 var ErrContract = errors.New("recovery authority violated its contract")
@@ -67,25 +68,17 @@ func (reason BlockedReason) String() string {
 	}
 }
 
-type AttentionReason string
+type AttentionReason = output.AttentionReason
 
 const (
-	AttentionNone        AttentionReason = ""
-	AttentionDestination AttentionReason = "destination-ownership-unknown"
-	AttentionRegistry    AttentionReason = "registry-ownership-unknown"
-	AttentionLease       AttentionReason = "lease-ownership-unknown"
-	AttentionOperation   AttentionReason = "operation-ownership-unknown"
-	AttentionCleanup     AttentionReason = "cleanup-uncertain"
+	AttentionRecoveryUnavailable = output.AttentionRecoveryUnavailable
+	AttentionNone                = output.AttentionNone
+	AttentionDestination         = output.AttentionDestination
+	AttentionRegistry            = output.AttentionRegistry
+	AttentionLease               = output.AttentionLease
+	AttentionOperation           = output.AttentionOperation
+	AttentionCleanup             = output.AttentionCleanup
 )
-
-func (reason AttentionReason) Valid() bool {
-	switch reason {
-	case AttentionDestination, AttentionRegistry, AttentionLease, AttentionOperation, AttentionCleanup:
-		return true
-	default:
-		return false
-	}
-}
 
 type BlockedItem struct {
 	ArtifactPath string

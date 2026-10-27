@@ -16,7 +16,7 @@ func TestPortableOutputDestinationIsOnlyAnOpaqueDisplayLabel(t *testing.T) {
 	}
 	var events []string
 	authority := &layoutRecordingGetOutputAuthority{selection: selection, events: &events}
-	admitted, err := resolveGetOutputOperation(context.Background(), authority, &fixedGetShapeResolver{decision: decision}, selection)
+	admitted, err := resolveGetOutputOperation(context.Background(), authority, &fixedGetShapeResolver{decision: decision}, selection, OutputCreateOrResume)
 	if err != nil {
 		t.Fatal(err)
 	}

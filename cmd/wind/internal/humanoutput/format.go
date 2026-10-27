@@ -171,7 +171,7 @@ func failureMessage(failure appobs.Failure) string {
 	case appobs.MessageOutputFailed:
 		message = "The destination could not be updated safely."
 	case appobs.MessageOutputRecoveryUnavailable:
-		message = "Downloading without restart recovery. Keep WindShare running; an unexpected exit may leave unfinished files."
+		message = "This destination supports retry only while WindShare stays open. Exiting discards unfinished progress; completed files stay."
 	case appobs.MessageCheckpointFailed:
 		message = "The recovery checkpoint could not be updated safely."
 	case appobs.MessagePublicationFailed:

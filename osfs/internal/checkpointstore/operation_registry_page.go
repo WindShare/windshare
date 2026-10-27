@@ -55,6 +55,82 @@ func (registry *OperationRegistry) PageOperations(
 	if !registry.valid() || maximum <= 0 || maximum > MaximumOrdinaryOperationPageSizeV1 {
 		return OperationPage{}, transfer.ErrInvalidOutputBinding
 	}
+	return registry.pageOperations(cursor, maximum)
+}
+
+// ReadOperationPage observes existing records without locks, repairs, or creation.
+// Its results describe blocked inventory and never grant mutation authority.
+func ReadOperationPage(control outputcap.Directory, cursor OperationPageCursor, maximum int) (OperationPage, error) {
+	root, err := openExistingDirectory(control, OrdinaryRegistryDirectoryV1)
+	if err != nil {
+		return OperationPage{}, err
+	}
+	operations, err := openExistingDirectory(root, ordinaryOperationsDirectory)
+	if errors.Is(err, fs.ErrNotExist) {
+		return OperationPage{unknown: true}, root.Close()
+	}
+	if err != nil {
+		return OperationPage{}, errors.Join(err, root.Close())
+	}
+	reader := OperationRegistry{operations: operations}
+	page, err := reader.pageOperations(cursor, maximum)
+	if err == nil && cursor.IsZero() {
+		unknown, candidateErr := reader.unknownAdmissionCandidates(root)
+		page.unknown = page.unknown || unknown
+		err = candidateErr
+	}
+	return page, errors.Join(err, operations.Close(), root.Close())
+}
+
+func (registry *OperationRegistry) unknownAdmissionCandidates(root outputcap.Directory) (unknown bool, resultErr error) {
+	candidates, err := openExistingDirectory(root, ordinaryCandidatesDirectory)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, candidates.Close()) }()
+	names, err := candidates.Names(MaximumOrdinaryOperationRecordsV1)
+	if err != nil {
+		return false, err
+	}
+	for _, name := range names {
+		dir, err := openExistingDirectory(candidates, name)
+		if err != nil {
+			return false, err
+		}
+		encoded, readErr := ReadFile(dir, ordinaryAdmissionCandidateFile)
+		closeErr := dir.Close()
+		if errors.Is(readErr, fs.ErrNotExist) && closeErr == nil {
+			continue
+		}
+		if readErr != nil || closeErr != nil {
+			return false, errors.Join(readErr, closeErr)
+		}
+		candidate, err := checkpointmodel.DecodeOrdinaryAdmissionCandidate(encoded)
+		if err != nil || name != activeKeyName(candidate.ActiveOperationKey()) {
+			return true, nil
+		}
+		record, _, err := registry.readOperation(candidate.OperationID())
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) || ErrorCodeFor(err) != ErrorStateIO {
+				return true, nil
+			}
+			return false, err
+		}
+		if record.ActiveOperationKey() != candidate.ActiveOperationKey() {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (registry *OperationRegistry) pageOperations(cursor OperationPageCursor, maximum int) (OperationPage, error) {
+	if registry.operations == nil || maximum <= 0 || maximum > MaximumOrdinaryOperationPageSizeV1 {
+		return OperationPage{}, transfer.ErrInvalidOutputBinding
+	}
+
 	// Names is deliberately bounded per call. The native API has no cursor, so
 	// callers page the sorted prefix; operation cardinality is bounded by the
 	// explicit request rather than by file-checkpoint count.
@@ -84,6 +160,9 @@ func (registry *OperationRegistry) PageOperations(
 		}
 		record, _, readErr := registry.readOperation(operation)
 		if readErr != nil {
+			if ErrorCodeFor(readErr) == ErrorStateIO && !errors.Is(readErr, fs.ErrNotExist) {
+				return OperationPage{}, readErr
+			}
 			page.unknown = true
 			continue
 		}

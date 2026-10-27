@@ -8,6 +8,8 @@ on:
       - "osfs/**"
       - "adapters/filesystem/**"
       - "core/transfer/**"
+      - "engine/internal/receive/**"
+      - "cmd/wind/internal/cli/**"
       - "engine/output/**"
       - "engine/recovery/**"
       - "go.mod"
@@ -18,6 +20,8 @@ on:
       - "osfs/**"
       - "adapters/filesystem/**"
       - "core/transfer/**"
+      - "engine/internal/receive/**"
+      - "cmd/wind/internal/cli/**"
       - "engine/output/**"
       - "engine/recovery/**"
       - "go.mod"
@@ -63,7 +67,7 @@ jobs:
             df "$RUNNER_TEMP"
             diskutil info "$(df "$RUNNER_TEMP" | tail -1 | awk '{print $1}')"
           } > "$RUNNER_TEMP/native-output-evidence/environment.txt"
-          go test -short -count=1 -v ./osfs/... ./adapters/filesystem ./core/transfer/... \
+          go test -short -count=1 -v ./osfs/... ./adapters/filesystem ./core/transfer/... ./engine/internal/receive ./cmd/wind/internal/cli \
             2>&1 | tee "$RUNNER_TEMP/native-output-evidence/tests.log"
       - name: Build Darwin CLI architectures
         shell: bash

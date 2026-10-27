@@ -97,4 +97,4 @@ run_native_test_binary() {
 # in one mounted fixture preserves the inode-reuse evidence while respecting
 # package ownership.
 run_native_test_binary /test/outputlinux.test '^TestLinuxExt4RestartIdentityRejectsForcedInodeReuse$'
-run_native_test_binary /test/osfs.test '^(TestLinuxExt4NativeCertification|TestLinuxExt4ProcessRestartRecovery)$'
+run_native_test_binary /test/osfs.test '^(TestLinuxExt4NativeIdentityScheme|TestLinuxExt4ProcessRestartRecovery)$'

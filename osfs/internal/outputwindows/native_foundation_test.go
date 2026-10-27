@@ -123,11 +123,12 @@ func TestWindowsIdentitySchemePrecedesAnyResumeMutation(t *testing.T) {
 		return facts, nil
 	})
 	platform, err := openWindowsOutputPlatformWithInspectors(root, nativeWindowsObjectInspector{}, volumes)
-	if platform != nil || !errors.Is(err, errWindowsOutputUnsupported) {
-		if platform != nil {
-			_ = platform.Close()
-		}
-		t.Fatalf("platform=%v error=%v", platform, err)
+	if err != nil || platform == nil {
+		t.Fatalf("live platform=%v error=%v", platform, err)
+	}
+	defer platform.Close()
+	if platform.Durability() != 0 {
+		t.Fatal("live admission invented restart durability")
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil || len(entries) != 0 {
@@ -710,5 +711,20 @@ func TestWindowsProbeCleanupStopsAtFirstUnverifiedCut(t *testing.T) {
 		if observeErr != nil || !exact || kind != outputcap.EntryRegularFile {
 			t.Errorf("entry %q after failed first cut: kind=%v exact=%t error=%v", name, kind, exact, observeErr)
 		}
+	}
+}
+
+func TestWindowsLiveAdmissionUsesPrimitivesIndependentlyOfRestartScheme(t *testing.T) {
+	facts := validWindowsVolumeFacts()
+	facts.filesystem = "another-filesystem"
+	if err := validateWindowsVolumeLiveCapabilities(facts); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateWindowsVolumeIdentityScheme(facts); !errors.Is(err, errWindowsOutputUnsupported) {
+		t.Fatalf("restart evidence: %v", err)
+	}
+	facts.flags &^= windows.FILE_SUPPORTS_HARD_LINKS
+	if err := validateWindowsVolumeLiveCapabilities(facts); !errors.Is(err, errWindowsOutputUnsupported) {
+		t.Fatalf("unsafe publication admitted: %v", err)
 	}
 }

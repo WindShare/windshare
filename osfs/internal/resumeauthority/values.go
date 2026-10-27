@@ -28,10 +28,11 @@ const (
 	OperationCleanupPending
 	OperationNeedsAttention
 	OperationDiscarded
+	OperationRecoveryUnavailable
 )
 
 func (state OperationState) Valid() bool {
-	return state >= OperationIncomplete && state <= OperationDiscarded
+	return state >= OperationIncomplete && state <= OperationRecoveryUnavailable
 }
 
 func (state OperationState) String() string {
@@ -44,6 +45,8 @@ func (state OperationState) String() string {
 		return "cleanup-pending"
 	case OperationNeedsAttention:
 		return "operation-needs-attention"
+	case OperationRecoveryUnavailable:
+		return "recovery-unavailable"
 	case OperationDiscarded:
 		return "discarded"
 	default:
@@ -154,7 +157,8 @@ func (item Item) Valid() bool {
 }
 
 type Header struct {
-	record checkpointmodel.OrdinaryOperationRecord
+	unavailable bool
+	record      checkpointmodel.OrdinaryOperationRecord
 }
 
 func NewHeader(record checkpointmodel.OrdinaryOperationRecord) (Header, error) {
@@ -165,6 +169,14 @@ func NewHeader(record checkpointmodel.OrdinaryOperationRecord) (Header, error) {
 		return Header{}, errors.Join(ErrInvalidContract, err)
 	}
 	return Header{record: record}, nil
+}
+
+func NewUnavailableHeader(record checkpointmodel.OrdinaryOperationRecord) (Header, error) {
+	header, err := NewHeader(record)
+	if err == nil {
+		header.unavailable = true
+	}
+	return header, err
 }
 
 func (header Header) Record() checkpointmodel.OrdinaryOperationRecord { return header.record }
@@ -252,7 +264,7 @@ func newSummary(
 	if state == OperationNeedsAttention && !record.ClosedReason().IsAttentionReason() {
 		return Summary{}, ErrInvalidContract
 	}
-	if state != OperationNeedsAttention && record.ClosedReason().IsAttentionReason() &&
+	if state != OperationNeedsAttention && state != OperationRecoveryUnavailable && record.ClosedReason().IsAttentionReason() &&
 		record.Lifecycle() != checkpointmodel.OrdinaryOperationDiscarded {
 		return Summary{}, ErrInvalidContract
 	}
@@ -275,7 +287,7 @@ func (summary Summary) Busy() bool    { return summary.busy }
 func (summary Summary) Valid() bool {
 	return !summary.operationID.IsZero() && !summary.intent.IsZero() && summary.generation > 0 &&
 		summary.state.Valid() && (!summary.reason.IsAttentionReason() ||
-		summary.state == OperationNeedsAttention || summary.state == OperationDiscarded)
+		summary.state == OperationNeedsAttention || summary.state == OperationDiscarded || summary.state == OperationRecoveryUnavailable)
 }
 
 type ListStatus uint8
@@ -301,7 +313,7 @@ func newInventory(summaries []Summary, unknown bool) Inventory {
 		status = ListNeedsAttention
 	}
 	for _, summary := range canonical {
-		if summary.state == OperationNeedsAttention {
+		if summary.state == OperationNeedsAttention || summary.state == OperationRecoveryUnavailable {
 			status = ListNeedsAttention
 			break
 		}

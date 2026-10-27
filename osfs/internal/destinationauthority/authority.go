@@ -86,6 +86,7 @@ type BoundDestination struct {
 	mu sync.RWMutex
 
 	binding     Binding
+	durability  transfer.DurabilityLevel
 	platform    outputcap.Platform
 	rootWitness outputcap.Directory
 	control     outputcap.Directory
@@ -223,8 +224,12 @@ func BindDestination(config BindConfig) (_ *BoundDestination, resultErr error) {
 		return nil, err
 	}
 	guardClosed = true
+	durability := transfer.DurabilityNone
+	if capabilities.OperationRecovery().Supported() && capabilities.RangeRecovery().Supported() {
+		durability = config.Platform.(recoveryEvidenceSource).Durability()
+	}
 	return &BoundDestination{
-		binding: binding, platform: config.Platform, rootWitness: rootWitness,
+		binding: binding, durability: durability, platform: config.Platform, rootWitness: rootWitness,
 		control: control, proof: proof, journal: journal, controlUse: controlUse,
 		recycler: config.RecyclePrivateState, profile: profile,
 	}, nil
@@ -270,7 +275,20 @@ func (authority *BoundDestination) Binding() Binding {
 	return authority.binding
 }
 
-// FileCheckpointOwnership projects the certified root facts needed by the
+// RecoveryDurability is the evidence captured at binding, independent of cleanup.
+func (authority *BoundDestination) RecoveryDurability() transfer.DurabilityLevel {
+	if authority == nil {
+		return transfer.DurabilityNone
+	}
+	authority.mu.RLock()
+	defer authority.mu.RUnlock()
+	if authority.closed {
+		return transfer.DurabilityNone
+	}
+	return authority.durability
+}
+
+// FileCheckpointOwnership projects the native root facts needed by the
 // unchanged FileCheckpointV2 binding without exposing native handles.
 func (authority *BoundDestination) FileCheckpointOwnership(
 	disposition outputcap.RootOpenDisposition,
@@ -564,4 +582,19 @@ func finishDestinationBinding(
 		bindErr = errors.Join(bindErr, witness.Close())
 	}
 	return bindErr
+}
+
+// InspectControl borrows existing private metadata without creating a namespace.
+// Callers may report unavailable recovery but cannot infer a fresh destination.
+func (authority *BoundDestination) InspectControl(inspect func(outputcap.Directory) error) error {
+	if inspect == nil {
+		return ErrInvalidConfiguration
+	}
+	return authority.withGuardedRoot(func(root outputcap.Directory) error {
+		control, err := root.OpenDirectory(controlDirectoryName, true)
+		if err != nil {
+			return err
+		}
+		return errors.Join(inspect(control), control.Close())
+	})
 }

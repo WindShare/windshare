@@ -22,8 +22,8 @@ func (*retireRecordingTransaction) WriteRange(context.Context, uint64, []byte) e
 	return nil
 }
 
-func (*retireRecordingTransaction) Checkpoint(context.Context) (transfer.VerifiedDurableRanges, error) {
-	return transfer.VerifiedDurableRanges{}, nil
+func (*retireRecordingTransaction) Checkpoint(context.Context) (transfer.VerifiedRanges, error) {
+	return transfer.VerifiedRanges{}, nil
 }
 
 func (*retireRecordingTransaction) Commit(context.Context) (transfer.FileSettlement, error) {

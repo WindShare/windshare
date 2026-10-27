@@ -38,6 +38,7 @@ type FilesystemOutputIdentitySchemeID string
 const (
 	FilesystemOutputIdentitySchemeLinuxHandleV2     FilesystemOutputIdentitySchemeID = "linux/ext4/handle/v2"
 	FilesystemOutputIdentitySchemeWindowsObjectIDV1 FilesystemOutputIdentitySchemeID = "windows/ntfs/object-id/v1"
+	FilesystemOutputIdentitySchemeDarwinObjectIDV1  FilesystemOutputIdentitySchemeID = "darwin/apfs/object-id/v1"
 )
 
 func filesystemOutputIdentitySchemeFromState(identityScheme outputcap.IdentitySchemeID) FilesystemOutputIdentitySchemeID {
@@ -46,6 +47,8 @@ func filesystemOutputIdentitySchemeFromState(identityScheme outputcap.IdentitySc
 		return FilesystemOutputIdentitySchemeLinuxHandleV2
 	case outputcap.IdentitySchemeWindowsObjectIDV1:
 		return FilesystemOutputIdentitySchemeWindowsObjectIDV1
+	case outputcap.IdentitySchemeDarwinObjectIDV1:
+		return FilesystemOutputIdentitySchemeDarwinObjectIDV1
 	default:
 		return ""
 	}

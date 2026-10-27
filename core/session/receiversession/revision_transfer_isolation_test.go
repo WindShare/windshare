@@ -224,7 +224,7 @@ func (output *revisionTransferOutput) BeginFile(
 		return transfer.FileStart{}, err
 	}
 	empty, _ := content.NewRangeSet(nil)
-	checkpoint, err := transfer.VerifyDurableRanges(binding, 1, empty)
+	checkpoint, err := transfer.VerifyRestartRanges(binding, 1, empty)
 	if err != nil {
 		return transfer.FileStart{}, err
 	}
@@ -257,7 +257,7 @@ func (output *revisionTransferOutput) FinalizeTree(
 type revisionTransferTransaction struct {
 	output     *revisionTransferOutput
 	binding    transfer.MaterializedFileBinding
-	checkpoint transfer.VerifiedDurableRanges
+	checkpoint transfer.VerifiedRanges
 }
 
 func (transaction *revisionTransferTransaction) Binding() transfer.MaterializedFileBinding {
@@ -277,7 +277,7 @@ func (transaction *revisionTransferTransaction) WriteRange(
 	if err != nil {
 		return err
 	}
-	transaction.checkpoint, err = transfer.VerifyDurableRanges(
+	transaction.checkpoint, err = transfer.VerifyRestartRanges(
 		transaction.binding, transaction.checkpoint.CheckpointGeneration()+1, merged,
 	)
 	return err
@@ -285,7 +285,7 @@ func (transaction *revisionTransferTransaction) WriteRange(
 
 func (transaction *revisionTransferTransaction) Checkpoint(
 	context.Context,
-) (transfer.VerifiedDurableRanges, error) {
+) (transfer.VerifiedRanges, error) {
 	return transaction.checkpoint, nil
 }
 
@@ -560,7 +560,7 @@ func runContentTransferIsolationCase(
 		t.Fatalf("file fault=%v drift=%v; want source fault=%v drift=%t",
 			result.Files[0].Fault, result.SourceDriftFault, wantFault, wantSourceDrift)
 	}
-	checkpoint, hasCheckpoint := result.Files[0].Settlement.VerifiedCheckpoint()
+	checkpoint, hasCheckpoint := result.Files[0].Settlement.VerifiedProgress()
 	switch wantSettlement {
 	case transfer.FilePaused:
 		if output.filePauses != 1 || output.fileRetirements != 0 || !hasCheckpoint ||

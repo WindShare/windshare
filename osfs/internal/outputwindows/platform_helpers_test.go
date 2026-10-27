@@ -42,7 +42,7 @@ func TestWindowsOutputPlatformClosedSurfaceRejectsOperations(t *testing.T) {
 }
 
 func TestWindowsOutputPlatformStaticContractAndCanonicalWrappers(t *testing.T) {
-	platform := &windowsOutputPlatform{}
+	platform := &windowsOutputPlatform{native: &nativeOutputPlatform{durability: windowsOutputProcessRestart}}
 	if got := platform.IdentityScheme(); got != outputcap.IdentitySchemeWindowsObjectIDV1 {
 		t.Fatalf("identityScheme = %v", got)
 	}

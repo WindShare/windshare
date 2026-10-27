@@ -19,13 +19,13 @@ import (
 
 const getProgressInterval = 500 * time.Millisecond
 
-func Run(ctx context.Context, request Request, deps Dependencies) (completed task.Completion[Result]) {
+func runAttempt(ctx context.Context, request Request, deps Dependencies, retained *getOutputPreparation) (completed task.Completion[Result]) {
 	deps = deps.normalized()
 	deps.Control.Diagnostics = request.Diagnostics
 	a := &runner{receiverRecoveryOptions: deps.Recovery, receiverPeerFactory: deps.PeerFactory, receiverDial: deps.ReceiverDial, getOutputFactory: request.Output, control: deps.Control, clock: deps.Clock}
 	a.receiveCapacity = deps.Capacity
 	a.connectivityCapacity = deps.Connectivity
-	input := getRequest{outDir: request.Destination, only: append([]string(nil), request.Only...), link: request.Capability, connectivity: request.Connectivity, waitTimeout: request.WaitTimeout}
+	input := getRequest{admission: request.Admission, outDir: request.Destination, only: append([]string(nil), request.Only...), link: request.Capability, connectivity: request.Connectivity, waitTimeout: request.WaitTimeout}
 	startedAt := a.clock.Now()
 	metrics := downloadmetrics.Prepare(a.clock.Now)
 	observation := newObservation(deps.Control, deps.Control.Diagnostics.Enabled(), metrics)
@@ -52,7 +52,7 @@ func Run(ctx context.Context, request Request, deps Dependencies) (completed tas
 		completed.Value.Elapsed = max(a.clock.Now().Sub(startedAt), 0)
 		completed.Value.Connectivity = metrics.Snapshot(true)
 	}()
-	if request.Capability.Suite != link.SuiteSenderAuthenticated || request.WaitTimeout < 0 {
+	if request.Capability.Suite != link.SuiteSenderAuthenticated || request.WaitTimeout < 0 || request.Admission > OutputResumeExisting {
 		step = observation.failCode(stepInvalidRequest, FailureInvalidInput)
 		return
 	}
@@ -60,10 +60,15 @@ func Run(ctx context.Context, request Request, deps Dependencies) (completed tas
 		step = observation.fail(stepInvalidRequest, err)
 		return
 	}
-	active.output, step = a.prepareGetOutput(ctx, input, observation)
-	if step != stepReady {
-		return
+	if retained.authority == nil {
+		*retained, step = a.prepareGetOutput(ctx, input, observation)
+		if step != stepReady {
+			return
+		}
 	}
+	active.output = *retained
+	active.output.contentReady = make(chan struct{})
+	active.output.paths = newReceiverContentPaths(observation)
 	active.session, step = a.connectGetReceiver(ctx, input, observation)
 	if step != stepReady {
 		return

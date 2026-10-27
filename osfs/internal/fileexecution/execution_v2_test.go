@@ -981,7 +981,7 @@ func TestBeginExistingReducesTerminalAndRecoveryCuts(t *testing.T) {
 				t.Fatalf("settlement = (%d, %t), want %d", settlement.Kind(), ok, test.want)
 			}
 			if test.want == transfer.FilePreviouslyPublished {
-				if _, verified := settlement.VerifiedCheckpoint(); verified {
+				if _, verified := settlement.VerifiedProgress(); verified {
 					t.Fatal("historical publication exposed current range proof")
 				}
 				if _, provenance := settlement.PublicationProvenance(); provenance {

@@ -235,7 +235,10 @@ func (guard *windowsOutputPublicOperationGuard) Close() error {
 	return windowsOutputError(err)
 }
 
-func (*windowsOutputPlatform) IdentityScheme() outputcap.IdentitySchemeID {
+func (platform *windowsOutputPlatform) IdentityScheme() outputcap.IdentitySchemeID {
+	if platform == nil || platform.native == nil || platform.native.Durability() != windowsOutputProcessRestart {
+		return ""
+	}
 	return outputcap.IdentitySchemeWindowsObjectIDV1
 }
 
@@ -305,7 +308,10 @@ func (platform *windowsOutputPlatform) RootBinding() (
 	return binding, windowsOutputError(err)
 }
 
-func (*windowsOutputPlatform) Durability() transfer.DurabilityLevel {
+func (platform *windowsOutputPlatform) Durability() transfer.DurabilityLevel {
+	if platform.IdentityScheme() == "" {
+		return transfer.DurabilityNone
+	}
 	return transfer.DurabilityProcessRestart
 }
 
@@ -332,7 +338,15 @@ func (platform *windowsOutputPlatform) DestinationCapabilities() (
 		return outputcap.DestinationCapabilities{}, windowsOutputError(err)
 	}
 	defer func() { resultErr = errors.Join(resultErr, windowsOutputError(guard.Close())) }()
-	return guard.Root().destinationCapabilities()
+	capabilities, err := guard.Root().destinationCapabilities()
+	if err != nil || platform.IdentityScheme() != "" {
+		return capabilities, err
+	}
+	unsupported, err := outputcap.UnsupportedCapability(outputcap.CapabilityReasonUnsupportedFilesystem)
+	if err != nil {
+		return outputcap.DestinationCapabilities{}, err
+	}
+	return outputcap.NewDestinationCapabilities(capabilities.SafePublish(), unsupported, unsupported, unsupported)
 }
 
 func (platform *windowsOutputPlatform) ProbeRecoverableFeatures() error {

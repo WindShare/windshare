@@ -482,7 +482,7 @@ func (r *jobRun) acceptTransactionFileSettlement(
 	settlement FileSettlement,
 ) error {
 	if progress == nil {
-		if _, hasCheckpoint := settlement.VerifiedCheckpoint(); hasCheckpoint {
+		if _, hasCheckpoint := settlement.VerifiedProgress(); hasCheckpoint {
 			return outputContractFault(nil)
 		}
 	} else {

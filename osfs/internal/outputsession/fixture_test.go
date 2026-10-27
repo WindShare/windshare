@@ -135,7 +135,7 @@ func (engine *fakeFileEngine) BeginFile(
 	engine.last = transaction
 	engine.mu.Unlock()
 	return FileBeginObservation{
-		Cut: MutationStable, Transaction: transaction, Durable: transaction.emptyCheckpoint,
+		Cut: MutationStable, Transaction: transaction, Progress: transaction.emptyCheckpoint,
 	}, nil
 }
 
@@ -152,10 +152,10 @@ func testContext() context.Context {
 type fakeTransactionExecutor struct {
 	mu              sync.Mutex
 	binding         transfer.MaterializedFileBinding
-	emptyCheckpoint transfer.VerifiedDurableRanges
-	fullCheckpoint  transfer.VerifiedDurableRanges
+	emptyCheckpoint transfer.VerifiedRanges
+	fullCheckpoint  transfer.VerifiedRanges
 	write           func(context.Context, uint64, []byte) (MutationCut, error)
-	checkpoint      func(context.Context) (transfer.VerifiedDurableRanges, MutationCut, error)
+	checkpoint      func(context.Context) (transfer.VerifiedRanges, MutationCut, error)
 	commit          func(context.Context) (transfer.FileSettlement, MutationCut, error)
 	pause           func(context.Context, transfer.FilePauseReason) (transfer.FileSettlement, MutationCut, error)
 	retire          func(context.Context, transfer.FileRetireReason) (transfer.FileSettlement, MutationCut, error)
@@ -184,7 +184,7 @@ func newFakeTransaction(t *testing.T, target transfer.FileMaterializationTarget)
 	if err != nil {
 		t.Fatal(err)
 	}
-	emptyCheckpoint, err := transfer.VerifyDurableRanges(binding, 1, empty)
+	emptyCheckpoint, err := transfer.VerifyRestartRanges(binding, 1, empty)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func newFakeTransaction(t *testing.T, target transfer.FileMaterializationTarget)
 			t.Fatal(err)
 		}
 	}
-	fullCheckpoint, err := transfer.VerifyDurableRanges(binding, 2, fullRanges)
+	fullCheckpoint, err := transfer.VerifyRestartRanges(binding, 2, fullRanges)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +225,7 @@ func (transaction *fakeTransactionExecutor) WriteRange(
 
 func (transaction *fakeTransactionExecutor) Checkpoint(
 	ctx context.Context,
-) (transfer.VerifiedDurableRanges, MutationCut, error) {
+) (transfer.VerifiedRanges, MutationCut, error) {
 	transaction.mu.Lock()
 	transaction.checkpointCalls++
 	operation := transaction.checkpoint

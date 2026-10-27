@@ -26,7 +26,7 @@ type ordinaryResumeSessionFixture struct {
 	session     transfer.DirectTreeSession
 	intent      transfer.ReceiveIntent
 	transaction transfer.FileTransaction
-	durable     transfer.VerifiedDurableRanges
+	durable     transfer.VerifiedRanges
 	settlement  transfer.FileSettlement
 	finalPath   string
 }
@@ -429,7 +429,7 @@ func TestNativeResumeCollisionRemainsResumableAndRetriesSameOperation(t *testing
 	if provenance, ok := settlement.PublicationProvenance(); !ok || provenance != transfer.FileResumed {
 		t.Fatalf("private-stage retry provenance = (%d, %t)", provenance, ok)
 	}
-	if checkpoint, verified := settlement.VerifiedCheckpoint(); !verified ||
+	if checkpoint, verified := settlement.VerifiedProgress(); !verified ||
 		!transfer.RangesCoverFile(4, checkpoint.Ranges()) {
 		t.Fatal("private-stage retry lost its authenticated range progress")
 	}
