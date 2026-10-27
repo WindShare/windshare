@@ -172,8 +172,8 @@ func projectFilesystemOutputStateReason(
 
 func projectTraceOperation(value outputruntime.FilesystemOutputTraceOperation) FilesystemOutputTraceOperation {
 	switch value {
-	case outputruntime.TraceFilesystemCertified:
-		return TraceFilesystemCertified
+	case outputruntime.TraceFilesystemIdentityEvidence:
+		return TraceFilesystemIdentityEvidence
 	case outputruntime.TraceFeatureProbeCompleted:
 		return TraceFeatureProbeCompleted
 	case outputruntime.TraceCheckpointNamespaceOpened:
