@@ -305,8 +305,8 @@ jobs:
       - name: Run the critical sender, relay, and receiver path once
         run: make e2e
 
-  browser-chromium:
-    name: Chromium relay smoke and short browser contracts
+  browser-smoke:
+    name: Chromium relay smoke
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -320,6 +320,11 @@ jobs:
           cache-dependency-path: go.sum
       - name: Prepare Rust native relay toolchain
         run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: relay-rust -> .target
+          cache-bin: false
+          cmd-format: rustup run stable {0}
       - uses: pnpm/action-setup@v6
         with:
           version: latest
@@ -334,8 +339,33 @@ jobs:
         uses: ./.github/actions/setup-browser
         with:
           browsers: chromium
-      - name: Run Chromium relay smoke and short browser contracts once
-        run: make browser
+      - name: Run Chromium relay smoke once
+        run: pnpm -C web run test:browser:smoke
+
+  browser-contracts:
+    name: Chromium short browser contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+        with:
+          version: latest
+      - uses: actions/setup-node@v7
+        with:
+          node-version: latest
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Install frozen Web dependencies
+        run: pnpm -C web install --frozen-lockfile
+      - name: Install the Chromium runtime
+        uses: ./.github/actions/setup-browser
+        with:
+          browsers: chromium
+      - name: Run Chromium short browser contracts once
+        run: pnpm -C web run test:browser:contract:short
 
   windows-native:
     name: Native Windows build, vet, and short tests

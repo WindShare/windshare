@@ -1,5 +1,5 @@
-name: Set up Playwright browsers
-description: Install browser runtimes with bounded, retryable APT downloads.
+name: Set up headless Playwright browsers
+description: Install headless browser runtimes with bounded Ubuntu mirror recovery.
 
 inputs:
   browsers:
@@ -9,20 +9,21 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Bound system dependency downloads
+    - name: Install browser system dependencies
       shell: bash
+      env:
+        PLAYWRIGHT_BROWSERS: ${{ inputs.browsers }}
+        BROWSER_SETUP_DIRECTORY: ${{ github.action_path }}
       run: |
-        # A stalled mirror must release the job's budget for another download
-        # attempt and the browser tests. Playwright invokes APT through sudo.
-        sudo tee /etc/apt/apt.conf.d/80windshare-browser >/dev/null <<'APT'
-        Acquire::http::Timeout "30";
-        Acquire::https::Timeout "30";
-        Acquire::Retries "3";
-        APT
-    - name: Install Playwright runtimes and system dependencies
+        read -r -a browsers <<< "$PLAYWRIGHT_BROWSERS"
+        bash "$BROWSER_SETUP_DIRECTORY/install-dependencies.sh" "${browsers[@]}"
+    - name: Install headless browser runtimes
       shell: bash
       env:
         PLAYWRIGHT_BROWSERS: ${{ inputs.browsers }}
       run: |
         read -r -a browsers <<< "$PLAYWRIGHT_BROWSERS"
-        pnpm -C web exec playwright install --with-deps "${browsers[@]}"
+        readonly BROWSER_DOWNLOAD_TIMEOUT_SECONDS=180
+        readonly BROWSER_DOWNLOAD_KILL_GRACE_SECONDS=10
+        timeout --kill-after="${BROWSER_DOWNLOAD_KILL_GRACE_SECONDS}s" "${BROWSER_DOWNLOAD_TIMEOUT_SECONDS}s" \
+          pnpm -C web exec playwright install --only-shell "${browsers[@]}"
