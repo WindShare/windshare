@@ -2,6 +2,9 @@ package checkpointstore
 
 import (
 	"bytes"
+	"errors"
+	"github.com/windshare/windshare/osfs/internal/outputcap"
+	"io/fs"
 	"testing"
 )
 
@@ -62,5 +65,32 @@ func TestRecordInstallationPreservesInterruptedImages(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+	}
+}
+
+type candidateCloseFailure struct {
+	outputcap.MutableFile
+	err error
+}
+
+func (file candidateCloseFailure) Close() error { return file.err }
+
+func TestOccupiedCandidateDoesNotSwallowCloseFailure(t *testing.T) {
+	base := newMemoryDirectory()
+	image := []byte("next-image")
+	candidate := TemporaryName("record.state", image, 0)
+	writeMemoryFile(t, base, candidate, []byte("unfinished-image"))
+	failure := errors.New("candidate close I/O failure")
+	directory := &faultDirectory{
+		Directory: base,
+		createFile: func(string, bool, int64) (outputcap.MutableFile, error) {
+			return candidateCloseFailure{err: failure}, outputcap.ErrNamespaceCollision
+		},
+	}
+	if err := InstallCreate(directory, "record.state", image); !errors.Is(err, failure) {
+		t.Fatalf("candidate close failure was hidden: %v", err)
+	}
+	if _, err := ReadFile(base, "record.state"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("failed installation changed target: %v", err)
 	}
 }
