@@ -1,0 +1,70 @@
+name: Native output Darwin experiment
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/native-output-darwin-experiment.yml"
+      - "spikes/native-output-darwin/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-output-darwin-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: APFS primitives (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    env:
+      GOTOOLCHAIN: local
+      GOWORK: "off"
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Record runner and test native process boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/native-output-evidence"
+          {
+            sw_vers
+            uname -a
+            go version
+            python3 --version
+          } | tee "$RUNNER_TEMP/native-output-evidence/environment.txt"
+          python3 spikes/native-output-darwin/probe.py \
+            --root "$RUNNER_TEMP/native-output-probe" \
+            --output "$RUNNER_TEMP/native-output-evidence/probe.json" \
+            2>&1 | tee "$RUNNER_TEMP/native-output-evidence/probe.log"
+      - name: Verify Go bindings and native CLI build
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/native-output-evidence"
+          go test -count=1 -v ./spikes/native-output-darwin \
+            2>&1 | tee "$RUNNER_TEMP/native-output-evidence/go-test.log"
+          go build -o "$RUNNER_TEMP/wind" ./cmd/wind
+          file "$RUNNER_TEMP/wind" | tee "$RUNNER_TEMP/native-output-evidence/build.txt"
+      - name: Preserve experimental evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-output-${{ matrix.runner }}
+          path: ${{ runner.temp }}/native-output-evidence
+          if-no-files-found: error
+          retention-days: 14
