@@ -3,6 +3,7 @@
 import ctypes
 import errno
 import os
+import platform
 import struct
 import uuid
 
@@ -79,10 +80,35 @@ def attributes(fd, *, common=0, volume=0, extended=0):
     return buffer.raw[ATTRIBUTE_HEADER_BYTES:size]
 
 
+class FilesystemStat(ctypes.Structure):
+    # Mirrors the statfs64 ABI used by the pinned Go Darwin bindings.
+    _fields_ = [
+        ("block_size", ctypes.c_uint32), ("io_size", ctypes.c_int32),
+        ("blocks", ctypes.c_uint64), ("free", ctypes.c_uint64),
+        ("available", ctypes.c_uint64), ("files", ctypes.c_uint64),
+        ("free_files", ctypes.c_uint64), ("fsid", ctypes.c_int32 * 2),
+        ("owner", ctypes.c_uint32), ("type", ctypes.c_uint32),
+        ("flags", ctypes.c_uint32), ("subtype", ctypes.c_uint32),
+        ("type_name", ctypes.c_char * 16), ("mount", ctypes.c_char * 1024),
+        ("device", ctypes.c_char * 1024), ("extended_flags", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32 * 7),
+    ]
+
+
+def filesystem(fd):
+    call = libc.fstatfs if platform.machine() == "arm64" else libc.fstatfs64
+    call.argtypes = [ctypes.c_int, ctypes.POINTER(FilesystemStat)]
+    call.restype = ctypes.c_int
+    stat = FilesystemStat()
+    checked(call(fd, ctypes.byref(stat)))
+    return {"filesystem": stat.type_name.decode(), "mount_point": os.fsdecode(stat.mount),
+            "runtime_fsid": list(stat.fsid)}
+
+
 def volume_uuid(fd):
     value = attributes(fd, volume=ATTR_VOLUME_INFO | ATTR_VOLUME_UUID)
-    if len(value) != 16:
-        raise ValueError("unexpected volume UUID size")
+    if len(value) != 16 or not any(value):
+        raise ValueError("missing or malformed volume UUID")
     return str(uuid.UUID(bytes=value))
 
 
