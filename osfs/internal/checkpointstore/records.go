@@ -26,7 +26,19 @@ const (
 	candidateReadAttempts    = installationAttempts
 )
 
-var errCandidateOccupied = errors.New("checkpoint installation candidate is not reusable")
+type candidateOccupiedError struct{ cause error }
+
+func (err candidateOccupiedError) Error() string {
+	return "checkpoint candidate occupied: " + err.cause.Error()
+}
+func (err candidateOccupiedError) Unwrap() error { return err.cause }
+
+func candidateSlotOccupied(err error) bool {
+	// Only a pure occupancy result permits moving to another slot. A joined
+	// close or observation failure still has to reach the caller for retry.
+	_, occupied := err.(candidateOccupiedError)
+	return occupied
+}
 
 func ValidShard(name string) bool {
 	if len(name) != 2 {
@@ -202,7 +214,7 @@ func InstallCreate(directory outputcap.Directory, name string, encoded []byte) e
 	}
 	for attempt := range installationAttempts {
 		temporary, temporaryName, err := prepareInstallationCandidate(directory, name, encoded, attempt)
-		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, errCandidateOccupied) {
+		if errors.Is(err, fs.ErrNotExist) || candidateSlotOccupied(err) {
 			// A collision can disappear before it is opened. Advancing to the next
 			// deterministic slot preserves idempotence without trusting the race.
 			continue
@@ -338,7 +350,7 @@ func InstallReplace(directory outputcap.Directory, name string, previous, next [
 	}
 	for attempt := range installationAttempts {
 		temporary, temporaryName, createErr := prepareInstallationCandidate(directory, name, next, attempt)
-		if errors.Is(createErr, fs.ErrNotExist) || errors.Is(createErr, errCandidateOccupied) {
+		if errors.Is(createErr, fs.ErrNotExist) || candidateSlotOccupied(createErr) {
 			continue
 		}
 		if createErr != nil {
@@ -423,7 +435,7 @@ func reconcileExactCandidates(directory outputcap.Directory, target string, enco
 		if !exact || kind != outputcap.EntryRegularFile {
 			continue
 		}
-		if err := RemoveExactTemporary(directory, name, encoded); err != nil && !errors.Is(err, errCandidateOccupied) {
+		if err := RemoveExactTemporary(directory, name, encoded); err != nil && !candidateSlotOccupied(err) {
 			return err
 		}
 	}
@@ -443,7 +455,7 @@ func openExactTemporary(
 		return nil, fs.ErrNotExist
 	}
 	if !exact || kind != outputcap.EntryRegularFile {
-		return nil, errors.Join(errCandidateOccupied, outputcap.ErrUnsafeNamespace)
+		return nil, candidateOccupiedError{outputcap.ErrUnsafeNamespace}
 	}
 	var lastObserved []byte
 	for range candidateReadAttempts {
@@ -463,7 +475,7 @@ func openExactTemporary(
 			if err := closeFile(file); err != nil {
 				return nil, err
 			}
-			return nil, errors.Join(errCandidateOccupied, checkpointmodel.ErrRecordBinding)
+			return nil, candidateOccupiedError{checkpointmodel.ErrRecordBinding}
 		}
 		actual, readErr := readBoundedFile(file)
 		if readErr != nil {
@@ -484,11 +496,11 @@ func openExactTemporary(
 		// inexact image is never adopted or removed, even after a process crash.
 		runtime.Gosched()
 	}
-	mismatchErr := errors.Join(errCandidateOccupied, checkpointmodel.ErrRecordBinding)
+	mismatchErr := checkpointmodel.ErrRecordBinding
 	if candidateWriteInFlight(lastObserved, expected) {
-		return nil, errors.Join(outputcap.ErrNamespaceLockBusy, mismatchErr)
+		return nil, candidateOccupiedError{errors.Join(outputcap.ErrNamespaceLockBusy, mismatchErr)}
 	}
-	return nil, mismatchErr
+	return nil, candidateOccupiedError{mismatchErr}
 }
 
 func candidateWriteInFlight(actual, expected []byte) bool {
