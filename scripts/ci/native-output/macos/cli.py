@@ -152,7 +152,15 @@ def verify_downloads(processes, wind, relay_binary, root, evidence):
     inventory, inventory_output = processes.start("resume-list", [
         wind, "resume", "list", "-o", str(output),
     ])
-    processes.wait(inventory)
+    try:
+        processes.wait(inventory)
+    except RuntimeError:
+        environment = dict(os.environ, WINDSHARE_NATIVE_CRASH_DIAGNOSTIC_ROOT=str(output))
+        with (evidence / "inventory-diagnostic.log").open("w") as diagnostic:
+            subprocess.run(["go", "test", "-count=1", "-v", "./osfs/internal/outputruntime",
+                            "-run", "^TestNativeCrashInventoryDiagnostic$"],
+                           env=environment, stdout=diagnostic, stderr=subprocess.STDOUT, timeout=60)
+        raise
     inventory_text = inventory_output.read_text()
     assert 'operations=1 registry_unknown=false' in inventory_text, inventory_text
     assert 'state="resumable"' in inventory_text or 'state="incomplete"' in inventory_text, inventory_text
