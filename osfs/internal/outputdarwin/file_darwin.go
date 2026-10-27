@@ -49,7 +49,7 @@ func (state *fileState) verify() error {
 	if err := unix.Fstat(int(state.file.Fd()), &stat); err != nil {
 		return nativeError(err)
 	}
-	if identity(stat) != state.object || state.object.kind != unix.S_IFREG || stat.Nlink == 0 {
+	if identity(stat) != state.object || state.object.kind != unix.S_IFREG {
 		return outputcap.ErrUnsafeNamespace
 	}
 	if state.private && (stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o077 != 0) {
