@@ -33,10 +33,16 @@ const (
 
 // Operation couples immutable intent with the authority that can open it.
 // It does not expose a filesystem path or a provider-specific operation handle.
+type OperationControl interface {
+	RetryAvailable() bool
+	Discard(context.Context) error
+}
+
 type Operation struct {
 	Intent       transfer.ReceiveIntent
 	Mode         Mode
 	Materializer transfer.DirectTreeMaterializer
+	Control      OperationControl
 	// Destination is an optional provider-owned display label, never output authority.
 	Destination         string
 	DestinationAdjusted bool
@@ -49,7 +55,16 @@ func (o Operation) Valid() bool {
 type Reservation interface {
 	Create(context.Context, receivecontract.ArtifactSpec) (Operation, error)
 }
+
+// AttentionError preserves an admission reason through application settlement.
+type AttentionError struct{ Reason AttentionReason }
+
+func (err *AttentionError) Error() string {
+	return "retained output needs attention: " + string(err.Reason)
+}
+
 type Lookup struct {
+	Attention   AttentionReason
 	Kind        LookupKind
 	Operation   Operation
 	Reservation Reservation

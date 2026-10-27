@@ -76,7 +76,7 @@ func TestFreshFileExecutionStoreCleanupRejectsUncertainOrCanceledAuthority(t *te
 		_ = lease.Close()
 		_ = namespace.Close()
 	})
-	store, err := NewFreshFileExecutionStoreWithProfile(&repository, checkpointmodel.LiveCleanupWindowsNTFSV1)
+	store, err := NewFreshFileExecutionStoreWithStagePolicy(&repository, InheritFinalParent)
 	if err != nil {
 		t.Fatal(err)
 	}

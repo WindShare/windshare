@@ -18,11 +18,12 @@ var (
 	ErrPathTooLong = pathfailure.ErrTooLong
 )
 
-type FilesystemOutputCertificationID string
+type FilesystemOutputIdentitySchemeID string
 
 const (
-	FilesystemOutputCertificationLinuxExt4ProcessRestart   FilesystemOutputCertificationID = "linux/ext4/process-restart/v2"
-	FilesystemOutputCertificationWindowsNTFSProcessRestart FilesystemOutputCertificationID = "windows/ntfs/process-restart/v1"
+	FilesystemOutputIdentitySchemeLinuxHandleV2     FilesystemOutputIdentitySchemeID = "linux/ext4/handle/v2"
+	FilesystemOutputIdentitySchemeWindowsObjectIDV1 FilesystemOutputIdentitySchemeID = "windows/ntfs/object-id/v1"
+	FilesystemOutputIdentitySchemeDarwinObjectIDV1  FilesystemOutputIdentitySchemeID = "darwin/apfs/object-id/v1"
 )
 
 type FilesystemResumeRoot struct {
@@ -145,11 +146,12 @@ const (
 	FilesystemOutputStateLeaseOwnershipUnknown
 	FilesystemOutputStateOperationOwnershipUnknown
 	FilesystemOutputStateCleanupUncertain
+	FilesystemOutputStateRecoveryUnavailable
 )
 
 func (reason FilesystemOutputStateReason) Valid() bool {
 	return reason >= FilesystemOutputStateReasonNone &&
-		reason <= FilesystemOutputStateCleanupUncertain
+		reason <= FilesystemOutputStateRecoveryUnavailable
 }
 
 func (reason FilesystemOutputStateReason) String() string {
@@ -164,6 +166,8 @@ func (reason FilesystemOutputStateReason) String() string {
 		return "lease-ownership-unknown"
 	case FilesystemOutputStateOperationOwnershipUnknown:
 		return "operation-ownership-unknown"
+	case FilesystemOutputStateRecoveryUnavailable:
+		return "recovery-unavailable"
 	case FilesystemOutputStateCleanupUncertain:
 		return "cleanup-uncertain"
 	default:
@@ -263,7 +267,7 @@ func FilesystemOutputFailureForStage(err error, stage FilesystemOutputFailureSta
 type FilesystemOutputTraceOperation uint8
 
 const (
-	TraceFilesystemCertified FilesystemOutputTraceOperation = iota + 1
+	TraceFilesystemIdentityEvidence FilesystemOutputTraceOperation = iota + 1
 	TraceFeatureProbeCompleted
 	TraceCheckpointNamespaceOpened
 	TraceNativeLock
@@ -371,36 +375,40 @@ type FilesystemOutputExecutionModeFact = outputcap.ExecutionMode
 // FilesystemOutputTrace projects native capability decisions and milestones.
 // These observations carry no handles or durable recovery authority.
 type FilesystemOutputTrace struct {
-	Operation               FilesystemOutputTraceOperation
-	DestinationCapabilities FilesystemOutputDestinationCapabilities
-	ExecutionMode           FilesystemOutputExecutionModeFact
-	ReceiveIntentDigest     transfer.ReceiveIntentDigest
-	ReceiveOperationID      receivecontract.OperationID
-	SessionID               transfer.OutputSessionID
-	Certification           FilesystemOutputCertificationID
-	NativeLockScope         FilesystemOutputNativeLockScope
-	NativeLockMilestone     FilesystemOutputNativeLockMilestone
-	RootOpenDisposition     FilesystemOutputRootDisposition
-	RuntimeComponent        FilesystemOutputRuntimeComponent
-	RuntimeOperation        FilesystemOutputRuntimeOperation
-	RuntimeDecision         FilesystemOutputRuntimeDecision
-	CheckpointDecision      FilesystemCheckpointDecision
-	OperationID             uint64
-	ClaimID                 uint64
-	FaultDomain             uint8
-	NormalizedFaultScope    uint8
-	NormalizedFaultCode     uint16
-	NodeClaimCount          uint64
-	DirectoryClaimCount     uint64
-	FileClaimCount          uint64
-	ActiveFileClaimCount    uint64
-	ReservedFileSlotCount   uint64
-	DirectoryMetadataBytes  uint64
-	CheckpointRecordCount   uint64
-	FailureStage            FilesystemOutputFailureStage
-	ReconciliationStep      FilesystemCheckpointReconciliationStep
-	NativeErrorClass        FilesystemNativeErrorClass
-	Failed                  bool
+	Operation                FilesystemOutputTraceOperation
+	DestinationCapabilities  FilesystemOutputDestinationCapabilities
+	ExecutionMode            FilesystemOutputExecutionModeFact
+	ReceiveIntentDigest      transfer.ReceiveIntentDigest
+	ReceiveOperationID       receivecontract.OperationID
+	SessionID                transfer.OutputSessionID
+	IdentityScheme           FilesystemOutputIdentitySchemeID
+	NativeLockScope          FilesystemOutputNativeLockScope
+	NativeLockMilestone      FilesystemOutputNativeLockMilestone
+	RootOpenDisposition      FilesystemOutputRootDisposition
+	RuntimeComponent         FilesystemOutputRuntimeComponent
+	RuntimeOperation         FilesystemOutputRuntimeOperation
+	RuntimeDecision          FilesystemOutputRuntimeDecision
+	CheckpointDecision       FilesystemCheckpointDecision
+	OperationID              uint64
+	ClaimID                  uint64
+	WriteOffset              uint64
+	WriteLength              uint64
+	CheckpointAttentionCode  string
+	CheckpointAttentionCount uint64
+	FaultDomain              uint8
+	NormalizedFaultScope     uint8
+	NormalizedFaultCode      uint16
+	NodeClaimCount           uint64
+	DirectoryClaimCount      uint64
+	FileClaimCount           uint64
+	ActiveFileClaimCount     uint64
+	ReservedFileSlotCount    uint64
+	DirectoryMetadataBytes   uint64
+	CheckpointRecordCount    uint64
+	FailureStage             FilesystemOutputFailureStage
+	ReconciliationStep       FilesystemCheckpointReconciliationStep
+	NativeErrorClass         FilesystemNativeErrorClass
+	Failed                   bool
 }
 
 type FilesystemOutputTracer interface {
@@ -496,6 +504,17 @@ func (operation FilesystemOutputOperation) ExecutionMode() FilesystemOutputExecu
 		return FilesystemOutputExecutionMode{}
 	}
 	return FilesystemOutputExecutionMode{mode: operation.operation.ExecutionMode()}
+}
+
+func (operation FilesystemOutputOperation) RetryAvailable() bool {
+	return operation.operation != nil && operation.operation.RetryAvailable()
+}
+
+func (operation FilesystemOutputOperation) Discard(ctx context.Context) error {
+	if operation.operation == nil {
+		return transfer.ErrInvalidOutputBinding
+	}
+	return operation.operation.Discard(ctx)
 }
 
 type NativeDirectTreeReservationKind uint8

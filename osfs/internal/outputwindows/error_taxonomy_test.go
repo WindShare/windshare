@@ -246,7 +246,7 @@ func TestWindowsRealNativeMutationFailuresRemainOperational(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer readOnly.Close()
-	wrappedReadOnly := &windowsOutputObservedFile{state: &windowsOutputFileState{
+	wrappedReadOnly := &windowsOutputObservedFile{State: &windowsOutputFileState{
 		native: readOnly, private: true, borrowed: true,
 	}}
 
@@ -298,11 +298,11 @@ func TestWindowsRealNativeMutationFailuresRemainOperational(t *testing.T) {
 	)
 	requireWindowsRawOperationalError(t, windowsRemoveHandle(readOnly.handle()), windows.ERROR_ACCESS_DENIED)
 	requireWindowsRawOperationalError(t,
-		root.AtomicReplacePrivateFile(readOnly, "denied-replacement.state"),
+		root.AtomicReplacePrivateFile(readOnly, "denied-replacement.State"),
 		windows.ERROR_ACCESS_DENIED,
 	)
 	requireWindowsRawOperationalError(t,
-		wrapper.ReplacePrivateFile(wrappedReadOnly, "denied-wrapper-replacement.state"),
+		wrapper.ReplacePrivateFile(wrappedReadOnly, "denied-wrapper-replacement.State"),
 		windows.ERROR_ACCESS_DENIED,
 	)
 

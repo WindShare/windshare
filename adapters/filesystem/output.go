@@ -8,11 +8,12 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine/output"
+	"github.com/windshare/windshare/engine/recovery"
 	"github.com/windshare/windshare/osfs"
 )
 
 // FilesystemOutput adapts one caller-selected container to receive authority.
-// Certification happens in the workflow, after clients have initialized their
+// Destination binding happens after clients have initialized their
 // own presentation resources, and before any remote session is established.
 type FilesystemOutput struct {
 	RootPath   string
@@ -66,6 +67,9 @@ func (a *filesystemOutputAuthority) LookupActive(ctx context.Context, s transfer
 		return output.Lookup{}, sealFilesystemOutputFailure(err)
 	}
 	lookup := output.Lookup{}
+	if reason := recovery.AttentionReason(native.StateReason().String()); reason.Valid() {
+		lookup.Attention = reason
+	}
 	switch native.Kind() {
 	case osfs.FilesystemOutputLookupMiss:
 		lookup.Kind = output.OutputLookupMiss
@@ -138,5 +142,5 @@ func filesystemOperation(authority nativeFilesystemOutputAuthority, native osfs.
 	if reservation.Kind() == receivecontract.ReservationNamedContainerEntry {
 		destination = filepath.Join(rootPath, reservation.PhysicalName())
 	}
-	return output.Operation{Intent: intent, Mode: mode, Materializer: filesystemMaterializer{authority: authority, operation: native}, Destination: destination, DestinationAdjusted: reservation.CollisionIndex() > 0}, nil
+	return output.Operation{Intent: intent, Mode: mode, Control: native, Materializer: filesystemMaterializer{authority: authority, operation: native}, Destination: destination, DestinationAdjusted: reservation.CollisionIndex() > 0}, nil
 }

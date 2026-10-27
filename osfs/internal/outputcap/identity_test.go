@@ -9,17 +9,17 @@ import (
 )
 
 func TestOutputRootBindingOwnsCanonicalCertifiedIdentity(t *testing.T) {
-	certification, err := NewCertificationID(string(CertificationLinuxExt4ProcessRestart))
+	identityScheme, err := NewIdentitySchemeID(string(IdentitySchemeLinuxHandleV2))
 	if err != nil {
 		t.Fatal(err)
 	}
 	volume := []byte("volume")
 	object := []byte("root-object")
-	binding, err := NewOutputRootBinding(certification, volume, object)
+	binding, err := NewOutputRootBinding(identityScheme, volume, object)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if binding.IsZero() || binding.Certification() != certification ||
+	if binding.IsZero() || binding.IdentityScheme() != identityScheme ||
 		len(binding.Bytes()) != OutputRootBindingBytes || binding.String() != hex.EncodeToString(binding.Bytes()) {
 		t.Fatalf("root binding = %+v", binding)
 	}
@@ -32,13 +32,13 @@ func TestOutputRootBindingOwnsCanonicalCertifiedIdentity(t *testing.T) {
 		t.Fatal("root binding exposed caller-owned byte storage")
 	}
 	repeated, err := NewOutputRootBinding(
-		certification, []byte("volume"), []byte("root-object"),
+		identityScheme, []byte("volume"), []byte("root-object"),
 	)
 	if err != nil || repeated != binding {
 		t.Fatalf("repeated root binding = %+v, %v", repeated, err)
 	}
 	different, err := NewOutputRootBinding(
-		certification, []byte("volume"), []byte("other-object"),
+		identityScheme, []byte("volume"), []byte("other-object"),
 	)
 	if err != nil || different == binding {
 		t.Fatalf("different root binding = %+v, %v", different, err)
@@ -51,38 +51,38 @@ func TestOutputRootBindingOwnsCanonicalCertifiedIdentity(t *testing.T) {
 func TestOutputRootBindingRejectsIncompleteOrOversizedClaims(t *testing.T) {
 	oversized := []byte(strings.Repeat("x", MaxRootIdentityClaimBytes+1))
 	for name, test := range map[string]struct {
-		certification CertificationID
-		volume        []byte
-		object        []byte
+		identityScheme IdentitySchemeID
+		volume         []byte
+		object         []byte
 	}{
-		"missing certification": {volume: []byte("volume"), object: []byte("object")},
+		"missing identityScheme": {volume: []byte("volume"), object: []byte("object")},
 		"missing volume": {
-			certification: CertificationLinuxExt4ProcessRestart,
-			object:        []byte("object"),
+			identityScheme: IdentitySchemeLinuxHandleV2,
+			object:         []byte("object"),
 		},
 		"oversized volume": {
-			certification: CertificationLinuxExt4ProcessRestart,
-			volume:        oversized,
-			object:        []byte("object"),
+			identityScheme: IdentitySchemeLinuxHandleV2,
+			volume:         oversized,
+			object:         []byte("object"),
 		},
 		"missing object": {
-			certification: CertificationLinuxExt4ProcessRestart,
-			volume:        []byte("volume"),
+			identityScheme: IdentitySchemeLinuxHandleV2,
+			volume:         []byte("volume"),
 		},
 		"oversized object": {
-			certification: CertificationLinuxExt4ProcessRestart,
-			volume:        []byte("volume"),
-			object:        oversized,
+			identityScheme: IdentitySchemeLinuxHandleV2,
+			volume:         []byte("volume"),
+			object:         oversized,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := NewOutputRootBinding(test.certification, test.volume, test.object); !errors.Is(err, ErrInvalidRootBinding) {
+			if _, err := NewOutputRootBinding(test.identityScheme, test.volume, test.object); !errors.Is(err, ErrInvalidRootBinding) {
 				t.Fatalf("root binding error = %v", err)
 			}
 		})
 	}
-	if _, err := NewCertificationID("future-certification"); err == nil {
-		t.Fatal("unknown certification was accepted")
+	if _, err := NewIdentitySchemeID("future-identityScheme"); err == nil {
+		t.Fatal("unknown identityScheme was accepted")
 	}
 }
 

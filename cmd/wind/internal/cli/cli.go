@@ -61,6 +61,9 @@ const usageText = `Usage:
   ` + commandmeta.Name + ` config import <file|-> [--front-url <url>] [-v|--verbose]
       Validate and replace sharing defaults. --front-url saves the website address; '-' reads JSON from stdin.
 
+  ` + commandmeta.Name + ` resume retry -o <directory> [--only <path>] <link>
+      Continue an existing download with its original link and selection.
+
   ` + commandmeta.Name + ` resume list -o <directory>
       List destination-owned incomplete, resumable, cleanup-pending, and attention state.
       Locally ambiguous children are reported as item-blocked.

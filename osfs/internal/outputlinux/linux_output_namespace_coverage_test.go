@@ -293,7 +293,7 @@ func newLinuxNamespaceCoverageHarness(t *testing.T) *linuxNamespaceCoverageHarne
 	harness := &linuxNamespaceCoverageHarness{path: path}
 	system := linuxHostOutputSystem
 	// The namespace primitives remain real kernel operations. Virtualizing only
-	// certification facts keeps these tests unprivileged and independent of the
+	// identityScheme facts keeps these tests unprivileged and independent of the
 	// filesystem that backs a GitHub runner's temporary directory.
 	system.statx = linuxNamespaceCoverageStatx
 	harness.baseStatx = system.statx

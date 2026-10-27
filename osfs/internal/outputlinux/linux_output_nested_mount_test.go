@@ -13,7 +13,7 @@ import (
 )
 
 func TestLinuxDirectoryOpenRejectsNestedMountIdentity(t *testing.T) {
-	requireUnprivilegedLinuxExt4Certification(t)
+	requireUnprivilegedLinuxExt4IdentityScheme(t)
 	rootPath := t.TempDir()
 	if err := os.Mkdir(filepath.Join(rootPath, "nested"), linuxOutputDirectoryMode); err != nil {
 		t.Fatal(err)

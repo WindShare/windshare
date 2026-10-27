@@ -115,7 +115,7 @@ func projectOperationState(state osfs.ResumeOperationState) (recovery.OperationS
 		return recovery.OperationResumable, nil
 	case osfs.ResumeOperationCleanupPending:
 		return recovery.OperationCleanupPending, nil
-	case osfs.ResumeOperationNeedsAttention:
+	case osfs.ResumeOperationRecoveryUnavailable, osfs.ResumeOperationNeedsAttention:
 		return recovery.OperationNeedsAttention, nil
 	default:
 		// Terminal cleanup leaves no resumable operation to list.

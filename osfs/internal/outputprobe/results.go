@@ -36,8 +36,12 @@ func (results Results) Capabilities() (outputcap.DestinationCapabilities, error)
 			evidence[index] = outputcap.SupportedCapability()
 		case errors.Is(fact.err, outputcap.ErrUnsafeNamespace):
 			return outputcap.DestinationCapabilities{}, fact.err
-		default:
+		case errors.Is(fact.err, outputcap.ErrRecoverableOutputUnsupported), errors.Is(fact.err, outputcap.ErrOrdinaryOutputUnsupported):
 			evidence[index], _ = outputcap.UnsupportedCapability(fact.reason)
+		default:
+			// I/O failure says nothing about capability support. Retrying it must
+			// not start a fresh operation over existing progress.
+			return outputcap.DestinationCapabilities{}, fact.err
 		}
 	}
 	return outputcap.NewDestinationCapabilities(evidence[0], evidence[1], evidence[2], evidence[3])

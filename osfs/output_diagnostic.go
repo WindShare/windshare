@@ -9,7 +9,7 @@ import (
 
 func (value FilesystemOutputTraceOperation) DiagnosticName() string {
 	names := [...]string{
-		"", "certified", "feature_probe_completed", "checkpoint_namespace_opened", "native_lock",
+		"", "identity_evidence", "feature_probe_completed", "checkpoint_namespace_opened", "native_lock",
 		"session_opened", "checkpoint_reconciled", "runtime_decision",
 	}
 	if int(value) >= len(names) {
@@ -62,7 +62,7 @@ func (value FilesystemOutputNativeLockMilestone) DiagnosticName() string {
 func (v FilesystemOutputTrace) DiagnosticRecord() diagnostics.Record {
 	f := diagnostics.Fields{
 		"operation":             diagnostics.Text(v.Operation.DiagnosticName()),
-		"certification":         diagnostics.Text(string(v.Certification)),
+		"identity_scheme":       diagnostics.Text(string(v.IdentityScheme)),
 		"root_disposition":      diagnostics.Text(string(v.RootOpenDisposition)),
 		"runtime_component":     diagnostics.Text(v.RuntimeComponent.DiagnosticName()),
 		"runtime_operation":     diagnostics.Text(v.RuntimeOperation.DiagnosticName()),
@@ -79,6 +79,14 @@ func (v FilesystemOutputTrace) DiagnosticRecord() diagnostics.Record {
 		"file_claim_count": diagnostics.Uint(v.FileClaimCount), "active_file_claim_count": diagnostics.Uint(v.ActiveFileClaimCount),
 		"reserved_file_slot_count": diagnostics.Uint(v.ReservedFileSlotCount), "directory_metadata_bytes": diagnostics.Uint(v.DirectoryMetadataBytes),
 		"checkpoint_record_count": diagnostics.Uint(v.CheckpointRecordCount),
+	}
+	if v.RuntimeOperation == FilesystemOutputRuntimeWriteRange || v.RuntimeOperation == FilesystemOutputRuntimeFirstWrite {
+		f["write_offset"] = diagnostics.Uint(v.WriteOffset)
+		f["write_length"] = diagnostics.Uint(v.WriteLength)
+	}
+	if v.CheckpointAttentionCount != 0 {
+		f["checkpoint_attention_code"] = diagnostics.Text(v.CheckpointAttentionCode)
+		f["checkpoint_attention_count"] = diagnostics.Uint(v.CheckpointAttentionCount)
 	}
 	if v.Failed {
 		f["fault"] = diagnostics.Object(diagnostics.Fields{"domain": diagnostics.Number(float64(v.FaultDomain)), "scope": diagnostics.Number(float64(v.NormalizedFaultScope)), "code": diagnostics.Number(float64(v.NormalizedFaultCode))})

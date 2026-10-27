@@ -17,7 +17,7 @@ import (
 type FilesystemOutputTraceOperation uint8
 
 const (
-	TraceFilesystemCertified FilesystemOutputTraceOperation = iota + 1
+	TraceFilesystemIdentityEvidence FilesystemOutputTraceOperation = iota + 1
 	TraceFeatureProbeCompleted
 	TraceCheckpointNamespaceOpened
 	TraceNativeLock
@@ -33,19 +33,22 @@ const (
 	FilesystemOutputAuthorityCreatedRoot    FilesystemOutputRootDisposition = "authority-created-root"
 )
 
-type FilesystemOutputCertificationID string
+type FilesystemOutputIdentitySchemeID string
 
 const (
-	FilesystemOutputCertificationLinuxExt4ProcessRestart   FilesystemOutputCertificationID = "linux/ext4/process-restart/v2"
-	FilesystemOutputCertificationWindowsNTFSProcessRestart FilesystemOutputCertificationID = "windows/ntfs/process-restart/v1"
+	FilesystemOutputIdentitySchemeLinuxHandleV2     FilesystemOutputIdentitySchemeID = "linux/ext4/handle/v2"
+	FilesystemOutputIdentitySchemeWindowsObjectIDV1 FilesystemOutputIdentitySchemeID = "windows/ntfs/object-id/v1"
+	FilesystemOutputIdentitySchemeDarwinObjectIDV1  FilesystemOutputIdentitySchemeID = "darwin/apfs/object-id/v1"
 )
 
-func filesystemOutputCertificationFromState(certification outputcap.CertificationID) FilesystemOutputCertificationID {
-	switch certification {
-	case outputcap.CertificationLinuxExt4ProcessRestart:
-		return FilesystemOutputCertificationLinuxExt4ProcessRestart
-	case outputcap.CertificationWindowsNTFSProcessRestart:
-		return FilesystemOutputCertificationWindowsNTFSProcessRestart
+func filesystemOutputIdentitySchemeFromState(identityScheme outputcap.IdentitySchemeID) FilesystemOutputIdentitySchemeID {
+	switch identityScheme {
+	case outputcap.IdentitySchemeLinuxHandleV2:
+		return FilesystemOutputIdentitySchemeLinuxHandleV2
+	case outputcap.IdentitySchemeWindowsObjectIDV1:
+		return FilesystemOutputIdentitySchemeWindowsObjectIDV1
+	case outputcap.IdentitySchemeDarwinObjectIDV1:
+		return FilesystemOutputIdentitySchemeDarwinObjectIDV1
 	default:
 		return ""
 	}
@@ -135,36 +138,40 @@ const (
 )
 
 type FilesystemOutputTrace struct {
-	Operation               FilesystemOutputTraceOperation
-	DestinationCapabilities outputcap.DestinationCapabilities
-	ExecutionMode           outputcap.ExecutionMode
-	ReceiveIntentDigest     transfer.ReceiveIntentDigest
-	ReceiveOperationID      receivecontract.OperationID
-	SessionID               transfer.OutputSessionID
-	Certification           FilesystemOutputCertificationID
-	NativeLockScope         FilesystemOutputNativeLockScope
-	NativeLockMilestone     FilesystemOutputNativeLockMilestone
-	RootOpenDisposition     FilesystemOutputRootDisposition
-	RuntimeComponent        FilesystemOutputRuntimeComponent
-	RuntimeOperation        FilesystemOutputRuntimeOperation
-	RuntimeDecision         FilesystemOutputRuntimeDecision
-	CheckpointDecision      FilesystemCheckpointDecision
-	OperationID             uint64
-	ClaimID                 uint64
-	FaultDomain             uint8
-	NormalizedFaultScope    uint8
-	NormalizedFaultCode     uint16
-	NodeClaimCount          uint64
-	DirectoryClaimCount     uint64
-	FileClaimCount          uint64
-	ActiveFileClaimCount    uint64
-	ReservedFileSlotCount   uint64
-	DirectoryMetadataBytes  uint64
-	CheckpointRecordCount   uint64
-	FailureStage            FilesystemOutputFailureStage
-	ReconciliationStep      FilesystemCheckpointReconciliationStep
-	NativeErrorClass        FilesystemNativeErrorClass
-	Failed                  bool
+	Operation                FilesystemOutputTraceOperation
+	DestinationCapabilities  outputcap.DestinationCapabilities
+	ExecutionMode            outputcap.ExecutionMode
+	ReceiveIntentDigest      transfer.ReceiveIntentDigest
+	ReceiveOperationID       receivecontract.OperationID
+	SessionID                transfer.OutputSessionID
+	IdentityScheme           FilesystemOutputIdentitySchemeID
+	NativeLockScope          FilesystemOutputNativeLockScope
+	NativeLockMilestone      FilesystemOutputNativeLockMilestone
+	RootOpenDisposition      FilesystemOutputRootDisposition
+	RuntimeComponent         FilesystemOutputRuntimeComponent
+	RuntimeOperation         FilesystemOutputRuntimeOperation
+	RuntimeDecision          FilesystemOutputRuntimeDecision
+	CheckpointDecision       FilesystemCheckpointDecision
+	OperationID              uint64
+	ClaimID                  uint64
+	WriteOffset              uint64
+	WriteLength              uint64
+	CheckpointAttentionCode  string
+	CheckpointAttentionCount uint64
+	FaultDomain              uint8
+	NormalizedFaultScope     uint8
+	NormalizedFaultCode      uint16
+	NodeClaimCount           uint64
+	DirectoryClaimCount      uint64
+	FileClaimCount           uint64
+	ActiveFileClaimCount     uint64
+	ReservedFileSlotCount    uint64
+	DirectoryMetadataBytes   uint64
+	CheckpointRecordCount    uint64
+	FailureStage             FilesystemOutputFailureStage
+	ReconciliationStep       FilesystemCheckpointReconciliationStep
+	NativeErrorClass         FilesystemNativeErrorClass
+	Failed                   bool
 }
 
 type FilesystemOutputTracer interface {

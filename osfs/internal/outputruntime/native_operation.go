@@ -12,6 +12,7 @@ import (
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/osfs/internal/checkpointstore"
 	"github.com/windshare/windshare/osfs/internal/destinationauthority"
+	"github.com/windshare/windshare/osfs/internal/fileexecution"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
@@ -27,6 +28,7 @@ type Operation struct {
 	reopened  bool
 	opened    bool
 	closed    bool
+	liveFiles *fileexecution.LiveFiles
 }
 
 func (operation *Operation) ReceiveIntent() (transfer.ReceiveIntent, bool) {
@@ -51,8 +53,12 @@ func (operation *Operation) close() error {
 	// The public capability closes before releasing operation/name ownership, so
 	// another admission cannot observe a half-owned operation.
 	var err error
+	if operation.liveFiles != nil {
+		err = operation.liveFiles.Close()
+		operation.liveFiles = nil
+	}
 	if operation.topLevel != nil {
-		err = operation.topLevel.Close()
+		err = errors.Join(err, operation.topLevel.Close())
 		operation.topLevel = nil
 	}
 	if operation.lease != nil {
@@ -87,6 +93,14 @@ func (authority *Authority) LookupActive(
 		return ActiveLookup{}, err
 	}
 	if authority.mode == outputcap.ExecutionLiveOnly {
+		blocked, inspectErr := authority.retainedSelectionBlocked(selection)
+		if inspectErr != nil {
+			return ActiveLookup{}, inspectErr
+		}
+		if blocked {
+			authority.stage = authorityStageLookupStopped
+			return ActiveLookup{authority: authority, kind: ActiveLookupNeedsAttention, stateReason: FilesystemOutputStateRecoveryUnavailable}, nil
+		}
 		claimer, err := newVolatileReservationClaimer(authority.binding.AuthorityRef())
 		if err != nil {
 			return ActiveLookup{}, err

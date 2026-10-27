@@ -28,7 +28,7 @@ func (inspect windowsVolumeInspectorFunc) InspectVolume(handle windows.Handle) (
 	return inspect(handle)
 }
 
-func TestWindowsVolumeCertificationIsScopedToOpenRoot(t *testing.T) {
+func TestWindowsVolumeIdentitySchemeIsScopedToOpenRoot(t *testing.T) {
 	path := windowsNativeTestTempDir(t)
 	volumeInspections := 0
 	volumes := windowsVolumeInspectorFunc(func(handle windows.Handle) (windowsVolumeFacts, error) {
@@ -45,7 +45,7 @@ func TestWindowsVolumeCertificationIsScopedToOpenRoot(t *testing.T) {
 	}
 
 	// Probe, ancestry, publication and cleanup all exercise the real native
-	// object inspector. Their work must not repeat root volume certification.
+	// object inspector. Their work must not repeat root volume identityScheme.
 	guard, err := platform.acquirePublicOperationGuard()
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +94,7 @@ func TestWindowsVolumeCertificationIsScopedToOpenRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	if volumeInspections != 1 {
-		t.Fatalf("ordinary output work repeated volume certification: %d inspections", volumeInspections)
+		t.Fatalf("ordinary output work repeated volume identityScheme: %d inspections", volumeInspections)
 	}
 	if err := errors.Join(other.Close(), anchor.Close(), stage.Close(), directory.Close(), guard.Close(), platform.Close()); err != nil {
 		t.Fatal(err)
@@ -105,7 +105,7 @@ func TestWindowsVolumeCertificationIsScopedToOpenRoot(t *testing.T) {
 	}
 	defer reopened.Close()
 	if volumeInspections != 2 {
-		t.Fatalf("reopened root reused stale certification: %d inspections", volumeInspections)
+		t.Fatalf("reopened root reused stale identityScheme: %d inspections", volumeInspections)
 	}
 }
 

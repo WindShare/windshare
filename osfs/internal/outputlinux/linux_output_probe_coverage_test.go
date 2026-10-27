@@ -180,7 +180,7 @@ func TestLinuxOutputProbeLeftoverRejectsAmbiguousNativeCuts(t *testing.T) {
 			probeName := outputprobe.NamePrefix + fmt.Sprintf("%032x", index+1)
 			probePath := createLinuxProbeCoverageDirectory(t, rootPath, probeName)
 			test.build(t, probePath)
-			leftover, err := outputprobe.Inspect(&linuxDirectory{native: root}, probeName, outputprobe.LinuxExt4)
+			leftover, err := outputprobe.Inspect(&linuxDirectory{native: root}, probeName, outputprobe.EmptyDataLinks)
 			if leftover != nil {
 				_ = leftover.Close()
 			}
@@ -199,7 +199,7 @@ func TestLinuxOutputProbeLeftoverRemovalRejectsNameReplacement(t *testing.T) {
 	const probeName = outputprobe.NamePrefix + "44444444444444444444444444444444"
 	probePath := createLinuxProbeCoverageDirectory(t, rootPath, probeName)
 	recordPath := writeLinuxProbeCoverageFile(t, probePath, "record", []byte{1})
-	leftover, err := outputprobe.Inspect(&linuxDirectory{native: root}, probeName, outputprobe.LinuxExt4)
+	leftover, err := outputprobe.Inspect(&linuxDirectory{native: root}, probeName, outputprobe.EmptyDataLinks)
 	if err != nil {
 		t.Fatalf("inspect reachable record cut: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestLinuxOutputProbeRecoveryFailsClosedOnReservedNamespaceBounds(t *testing
 
 func openLinuxOutputProbeCoverageRoot(t *testing.T) (*linuxOutputDirectory, string) {
 	t.Helper()
-	requireUnprivilegedLinuxExt4Certification(t)
+	requireUnprivilegedLinuxExt4IdentityScheme(t)
 	rootPath := t.TempDir()
 	root, err := linuxOpenExt4OutputRoot(rootPath, &linuxHostOutputSystem)
 	if err != nil {

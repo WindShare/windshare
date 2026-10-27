@@ -50,7 +50,7 @@ func TestCapabilityEvidenceRemainsOrthogonal(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var results Results
-			test.set(&results, errors.New(failureText))
+			test.set(&results, errors.Join(outputcap.ErrRecoverableOutputUnsupported, errors.New(failureText)))
 			capabilities, err := results.Capabilities()
 			if err != nil {
 				t.Fatal(err)
@@ -78,5 +78,15 @@ func TestCapabilityEvidenceRemainsOrthogonal(t *testing.T) {
 	}
 	if _, err := results.Capabilities(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("unsafe proof contradiction was reduced to a capability fact: %v", err)
+	}
+}
+
+func TestTransientProbeFailureDoesNotBecomeUnsupported(t *testing.T) {
+	failure := errors.New("temporary I/O failure")
+	for _, result := range []Results{{SafePublish: failure}, {OperationRecovery: failure}, {RangeRecovery: failure}, {CrashCleanup: failure}} {
+		capabilities, err := result.Capabilities()
+		if !errors.Is(err, failure) || capabilities.Valid() {
+			t.Fatalf("transient probe = %+v, %v", capabilities, err)
+		}
 	}
 }

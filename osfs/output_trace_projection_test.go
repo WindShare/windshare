@@ -13,7 +13,7 @@ func TestOutputTraceProjectionMapsEveryRuntimeEnum(t *testing.T) {
 		value outputruntime.FilesystemOutputTraceOperation
 		want  FilesystemOutputTraceOperation
 	}{
-		{outputruntime.TraceFilesystemCertified, TraceFilesystemCertified},
+		{outputruntime.TraceFilesystemIdentityEvidence, TraceFilesystemIdentityEvidence},
 		{outputruntime.TraceFeatureProbeCompleted, TraceFeatureProbeCompleted},
 		{outputruntime.TraceCheckpointNamespaceOpened, TraceCheckpointNamespaceOpened},
 		{outputruntime.TraceNativeLock, TraceNativeLock},
@@ -133,16 +133,16 @@ func TestOutputTraceProjectionMapsEveryRuntimeEnum(t *testing.T) {
 		}
 	}
 
-	certifications := []struct {
-		value outputruntime.FilesystemOutputCertificationID
-		want  FilesystemOutputCertificationID
+	identitySchemes := []struct {
+		value outputruntime.FilesystemOutputIdentitySchemeID
+		want  FilesystemOutputIdentitySchemeID
 	}{
-		{outputruntime.FilesystemOutputCertificationLinuxExt4ProcessRestart, FilesystemOutputCertificationLinuxExt4ProcessRestart},
-		{outputruntime.FilesystemOutputCertificationWindowsNTFSProcessRestart, FilesystemOutputCertificationWindowsNTFSProcessRestart},
+		{outputruntime.FilesystemOutputIdentitySchemeLinuxHandleV2, FilesystemOutputIdentitySchemeLinuxHandleV2},
+		{outputruntime.FilesystemOutputIdentitySchemeWindowsObjectIDV1, FilesystemOutputIdentitySchemeWindowsObjectIDV1},
 	}
-	for _, test := range certifications {
-		if actual := projectCertification(test.value); actual != test.want {
-			t.Fatalf("certification %q projected as %q, want %q", test.value, actual, test.want)
+	for _, test := range identitySchemes {
+		if actual := projectIdentityScheme(test.value); actual != test.want {
+			t.Fatalf("identityScheme %q projected as %q, want %q", test.value, actual, test.want)
 		}
 	}
 
@@ -233,7 +233,7 @@ func TestOutputTraceProjectionMapsEveryRuntimeEnum(t *testing.T) {
 	if projectTraceOperation(255) != 0 || projectRootOpenDisposition("unknown") != "" ||
 		projectRuntimeComponent(255) != 0 || projectRuntimeOperation(255) != 0 ||
 		projectRuntimeDecision(255) != 0 || projectCheckpointDecision(255) != 0 ||
-		projectCertification("unknown") != "" ||
+		projectIdentityScheme("unknown") != "" ||
 		projectNativeLockScope(255) != 0 || projectNativeLockMilestone(255) != 0 ||
 		projectFilesystemFailureStage(255) != 0 ||
 		projectFilesystemReconciliationStep(255) != 0 ||
@@ -249,7 +249,7 @@ func TestOutputTraceProjectionCopiesNativeRuntimePayload(t *testing.T) {
 		ReceiveIntentDigest:    transfer.ReceiveIntentDigest{1},
 		ReceiveOperationID:     receivecontract.OperationID{15},
 		SessionID:              transfer.OutputSessionID{2},
-		Certification:          outputruntime.FilesystemOutputCertificationLinuxExt4ProcessRestart,
+		IdentityScheme:         outputruntime.FilesystemOutputIdentitySchemeLinuxHandleV2,
 		NativeLockScope:        outputruntime.FilesystemOutputNativeLockSession,
 		NativeLockMilestone:    outputruntime.FilesystemOutputNativeLockAcquired,
 		RootOpenDisposition:    outputruntime.FilesystemOutputAuthorityCreatedRoot,
@@ -279,7 +279,7 @@ func TestOutputTraceProjectionCopiesNativeRuntimePayload(t *testing.T) {
 		ReceiveIntentDigest:    event.ReceiveIntentDigest,
 		ReceiveOperationID:     event.ReceiveOperationID,
 		SessionID:              event.SessionID,
-		Certification:          FilesystemOutputCertificationLinuxExt4ProcessRestart,
+		IdentityScheme:         FilesystemOutputIdentitySchemeLinuxHandleV2,
 		NativeLockScope:        FilesystemOutputNativeLockSession,
 		NativeLockMilestone:    FilesystemOutputNativeLockAcquired,
 		RootOpenDisposition:    FilesystemOutputAuthorityCreatedRoot,

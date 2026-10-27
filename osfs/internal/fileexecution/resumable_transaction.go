@@ -69,7 +69,7 @@ func (transaction *resumablePartialFileTransaction) writeRangeLocked(ctx context
 		return fileContractError(err)
 	}
 	written, writeErr := transaction.file.WriteAt(data, int64(offset))
-	if written != len(data) {
+	if written != len(data) || writeErr != nil {
 		if writeErr == nil {
 			writeErr = io.ErrShortWrite
 		}
@@ -82,9 +82,9 @@ func (transaction *resumablePartialFileTransaction) writeRangeLocked(ctx context
 	return nil
 }
 
-func (transaction *resumablePartialFileTransaction) Checkpoint(ctx context.Context) (transfer.VerifiedDurableRanges, error) {
+func (transaction *resumablePartialFileTransaction) Checkpoint(ctx context.Context) (transfer.VerifiedRanges, error) {
 	if transaction == nil || transaction.engine == nil {
-		return transfer.VerifiedDurableRanges{}, fileContractError(ErrInvalidConfiguration)
+		return transfer.VerifiedRanges{}, fileContractError(ErrInvalidConfiguration)
 	}
 	sequence := transaction.engine.nextSequence()
 	transaction.mu.Lock()
@@ -98,31 +98,31 @@ func (transaction *resumablePartialFileTransaction) Checkpoint(ctx context.Conte
 	return checkpoint, err
 }
 
-func (transaction *resumablePartialFileTransaction) checkpointLocked(ctx context.Context) (transfer.VerifiedDurableRanges, error) {
+func (transaction *resumablePartialFileTransaction) checkpointLocked(ctx context.Context) (transfer.VerifiedRanges, error) {
 	if err := transaction.validateOpen(ctx); err != nil {
-		return transfer.VerifiedDurableRanges{}, err
+		return transfer.VerifiedRanges{}, err
 	}
 	if transaction.pending.IsEmpty() {
 		return durableRanges(transaction.binding, transaction.record)
 	}
 	if err := transaction.file.Sync(); err != nil {
-		return transfer.VerifiedDurableRanges{}, collaboratorError(ctx, err)
+		return transfer.VerifiedRanges{}, collaboratorError(ctx, err)
 	}
 	verified, err := contentRanges(transaction.record)
 	if err != nil {
-		return transfer.VerifiedDurableRanges{}, fileContractError(err)
+		return transfer.VerifiedRanges{}, fileContractError(err)
 	}
 	merged, err := transfer.MergeRanges(verified, transaction.pending)
 	if err != nil {
-		return transfer.VerifiedDurableRanges{}, fileContractError(err)
+		return transfer.VerifiedRanges{}, fileContractError(err)
 	}
 	next, err := checkpointmodel.AdvanceDurableRanges(transaction.record, checkpointRanges(merged))
 	if err != nil {
-		return transfer.VerifiedDurableRanges{}, fileContractError(err)
+		return transfer.VerifiedRanges{}, fileContractError(err)
 	}
 	previous := transaction.record
 	if _, err := transaction.engine.storeRecord(ctx, &previous, next); err != nil {
-		return transfer.VerifiedDurableRanges{}, err
+		return transfer.VerifiedRanges{}, err
 	}
 	transaction.record = next
 	transaction.pending, _ = content.NewRangeSet(nil)
@@ -196,7 +196,12 @@ func (transaction *resumablePartialFileTransaction) publishFromDurableState(
 		return transfer.FileSettlement{}, fileContractError(err)
 	}
 	final, err := settlePublication(ctx, transaction.destination, transaction.file, expectation, retry)
-	if err != nil || !final.valid() {
+	if err != nil {
+		// An interrupted observation or flush proves neither success nor lost
+		// ownership. Retain the publishing record and reconcile it on retry.
+		return transfer.FileSettlement{}, collaboratorError(ctx, err)
+	}
+	if !final.valid() {
 		return transaction.quarantineAndSettleLocked(ctx, checkpointmodel.QuarantinePublicationHistory)
 	}
 	if final.Condition() == FinalCollision {
@@ -296,6 +301,12 @@ func (transaction *resumablePartialFileTransaction) Pause(
 func (transaction *resumablePartialFileTransaction) pauseLocked(
 	ctx context.Context,
 ) (transfer.FileSettlement, error) {
+	if transaction.record.Phase() == checkpointmodel.PhasePublishing && transaction.state == transactionOpen {
+		// Publication already has a complete durable record. Do not erase that
+		// ordering cut when its namespace observation or flush was interrupted.
+		settlement, err := verifiedSettlement(transfer.FilePaused, transaction.binding, transaction.record)
+		return settlement, joinFailures(ctx, err, transaction.closeResourcesLocked(ctx))
+	}
 	if _, err := transaction.checkpointLocked(ctx); err != nil {
 		return transfer.FileSettlement{}, err
 	}

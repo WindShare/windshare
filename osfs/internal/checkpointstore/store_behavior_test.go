@@ -160,11 +160,14 @@ func TestRecordStoreResumesOnlyExactDeterministicCandidates(t *testing.T) {
 		candidate := TemporaryName("record.state", expected, 0)
 		writeMemoryFile(t, directory, candidate, []byte("foreign-image"))
 
-		if err := InstallCreate(directory, "record.state", expected); !errors.Is(err, checkpointmodel.ErrRecordBinding) {
-			t.Fatalf("mismatched candidate error = %v", err)
+		if err := InstallCreate(directory, "record.state", expected); err != nil {
+			t.Fatalf("independent candidate installation = %v", err)
 		}
-		if _, err := ReadFile(directory, "record.state"); !errors.Is(err, fs.ErrNotExist) {
-			t.Fatalf("mismatched candidate installed target: %v", err)
+		if actual, err := ReadFile(directory, "record.state"); err != nil || !bytes.Equal(actual, expected) {
+			t.Fatalf("installed target = %q, %v", actual, err)
+		}
+		if actual, err := ReadFile(directory, candidate); err != nil || string(actual) != "foreign-image" {
+			t.Fatalf("unowned candidate changed = %q, %v", actual, err)
 		}
 	})
 }
@@ -274,7 +277,7 @@ func TestOwnershipMarkerRejectsAmbiguousInstallCuts(t *testing.T) {
 	failure := errors.New("marker operation failed")
 	ownership, err := checkpointmodel.NewOwnership(checkpointmodel.OwnershipSpec{
 		Materializer:        checkpointmodel.MaterializerNativeTree,
-		Certification:       checkpointmodel.CertificationWindowsNTFSProcessRestart,
+		IdentityScheme:      checkpointmodel.IdentitySchemeWindowsObjectIDV1,
 		AuthorityRef:        bytes.Repeat([]byte{0x81}, receivecontract.AuthorityRefBytes),
 		RootOpenDisposition: checkpointmodel.CallerProvidedContainer,
 	})

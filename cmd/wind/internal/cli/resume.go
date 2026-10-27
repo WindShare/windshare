@@ -2,11 +2,15 @@ package cli
 
 import (
 	"context"
+	"github.com/windshare/windshare/engine"
 
 	"github.com/windshare/windshare/cmd/wind/internal/resumecommand"
 )
 
 func (a *App) runResume(ctx context.Context, args []string) int {
+	if len(args) > 0 && args[0] == "retry" {
+		return a.runReceive(ctx, args[1:], engine.ReceiveResumeExisting)
+	}
 	terminal := a.terminalOutput()
 	serializedTerminal := completeLineCanvasWriter{canvas: terminal.canvas}
 	runner := resumecommand.NewFilesystemRunner(resumecommand.FilesystemConfig{

@@ -401,3 +401,7 @@ jobs:
           . ./scripts/ci/windows/go-package-sets.ps1
           $packages = Get-WindShareGoPackageSet -Set all
           go test -short -count=1 $packages
+
+  macos-native:
+    name: Native macOS output and recovery
+    uses: ./.github/workflows/native-output.yml

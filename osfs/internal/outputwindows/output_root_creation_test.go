@@ -190,7 +190,7 @@ func TestWindowsPrivatePublicationRootFailureRemovesOwnedTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := filepath.Join(parentPath, ".guard-uploads")
-	injected := errors.New("injected post-certification failure")
+	injected := errors.New("injected post-identityScheme failure")
 	observer := windowsOutputRootCreateObserverFunc(func(
 		_ string,
 		cut windowsOutputRootCreateCut,

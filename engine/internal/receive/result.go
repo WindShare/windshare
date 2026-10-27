@@ -3,6 +3,8 @@ package receive
 import (
 	"errors"
 	"fmt"
+	"github.com/windshare/windshare/engine/output"
+	"github.com/windshare/windshare/engine/recovery"
 	"time"
 
 	"github.com/windshare/windshare/core/downloadmetrics"
@@ -55,6 +57,8 @@ func (failure Failure) Error() string {
 func (failure Failure) Unwrap() error { return failure.Cause }
 
 type Result struct {
+	OutputAttention     recovery.AttentionReason
+	Recovery            RecoveryOutcome
 	Transfer            transfer.JobResult
 	Operation           receivecontract.OperationID
 	Job                 transfer.TransferJobID
@@ -90,7 +94,11 @@ func settlePreparationFailure(step stepOutcome, failure Failure, contextErr, cle
 		failure = Failure{Cause: cleanupErr}
 		class = task.FailureLocal
 	}
-	return task.Completion[Result]{Settlement: task.Settlement{
+	value := Result{}
+	if attention, ok := errors.AsType[*output.AttentionError](cause); ok {
+		value.OutputAttention = attention.Reason
+	}
+	return task.Completion[Result]{Value: value, Settlement: task.Settlement{
 		Outcome: task.OutcomeFailed, FailureClass: class,
 		Err: errors.Join(failure, cause), CleanupError: cleanupErr,
 	}}

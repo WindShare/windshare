@@ -73,12 +73,18 @@ func (repository *NativeResumeRepository) Page(
 	defer func() {
 		resultErr = freezeFilesystemOutputFailure(resultErr, runtime.Close())
 	}()
-	if !mode.Resumable() || runtime.registry == nil {
-		return resumeauthority.NewPage(nil, resumeauthority.PageCursor{}, false)
-	}
-
 	pageCursor := checkpointstore.NewOperationPageCursor(cursor.After())
-	page, err := runtime.registry.PageOperations(pageCursor, maximum)
+	var page checkpointstore.OperationPage
+	unavailable := !mode.Resumable() || runtime.registry == nil
+	if unavailable {
+		err = runtime.destination.InspectControl(func(control outputcap.Directory) error {
+			var readErr error
+			page, readErr = checkpointstore.ReadOperationPage(control, pageCursor, maximum)
+			return readErr
+		})
+	} else {
+		page, err = runtime.registry.PageOperations(pageCursor, maximum)
+	}
 	if err != nil {
 		return resumeauthority.Page{}, diagnoseFilesystemOutputFailure(
 			FilesystemOutputFailureInventoryPaging, nativeResumeError(err),
@@ -86,7 +92,11 @@ func (repository *NativeResumeRepository) Page(
 	}
 	headers := make([]resumeauthority.Header, 0, len(page.Records()))
 	for _, record := range page.Records() {
-		header, headerErr := resumeauthority.NewHeader(record)
+		constructor := resumeauthority.NewHeader
+		if unavailable {
+			constructor = resumeauthority.NewUnavailableHeader
+		}
+		header, headerErr := constructor(record)
 		if headerErr != nil {
 			return resumeauthority.Page{}, headerErr
 		}
@@ -131,7 +141,7 @@ func (repository *NativeResumeRepository) Acquire(
 		}
 	}()
 	if !mode.Resumable() || runtime.registry == nil {
-		return nil, fs.ErrNotExist
+		return nil, outputcap.ErrRecoverableOutputUnsupported
 	}
 	lease, err := runtime.registry.AcquireOperationLease(operation)
 	if err != nil {
@@ -251,6 +261,9 @@ func (lease *NativeResumeLease) Snapshot(
 		return resumeauthority.NewSnapshot(lease.header, nil)
 	}
 	if err := lease.ensureTopLevelLocked(); err != nil {
+		if !nativeResumeUncertain(err) {
+			return resumeauthority.Snapshot{}, nativeResumeError(err)
+		}
 		if record.Lifecycle() == checkpointmodel.OrdinaryOperationActive {
 			if _, transitionErr := lease.transitionLocked(
 				checkpointmodel.OrdinaryLifecycleRequireAttention,
@@ -404,18 +417,17 @@ func (lease *NativeResumeLease) ensureFileStoreLocked() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	store, err := checkpointstore.NewFileExecutionStoreWithProfile(
-		&repository, lease.runtime.destination.LiveCleanupProfile(),
+	store, err := checkpointstore.NewFileExecutionStoreWithStagePolicy(
+		&repository, checkpointstore.InheritFinalParent,
 	)
 	var recordCount uint64
-	var repositoryAttention bool
+	var attention []checkpointstore.Attention
 	if store != nil {
 		recordCount = store.RecordCount()
-		_, attention := store.LineageSnapshot()
-		repositoryAttention = len(attention) != 0
+		_, attention = store.LineageSnapshot()
 	}
 	lease.runtime.traceCheckpointReconciled(
-		intent, transfer.OutputSessionID{}, recordCount, repositoryAttention, err,
+		intent, transfer.OutputSessionID{}, recordCount, attention, err,
 	)
 	if err != nil {
 		primary := diagnoseFilesystemOutputFailure(

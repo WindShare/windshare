@@ -10,6 +10,7 @@ import (
 	"slices"
 
 	"github.com/windshare/windshare/osfs/internal/outputcap"
+	"github.com/windshare/windshare/osfs/internal/outputfile"
 	"golang.org/x/sys/windows"
 )
 
@@ -39,17 +40,11 @@ type windowsOutputFileState struct {
 	borrowed bool
 }
 
-type windowsOutputObservedFile struct {
-	state *windowsOutputFileState
-}
+type windowsOutputObservedFile = outputfile.Observed[*windowsOutputFileState]
 
-type windowsOutputRecoveryDurabilityFile struct {
-	state *windowsOutputFileState
-}
+type windowsOutputRecoveryDurabilityFile = outputfile.Recovery[*windowsOutputFileState]
 
-type windowsOutputMutableFile struct {
-	state *windowsOutputFileState
-}
+type windowsOutputMutableFile = outputfile.Mutable[*windowsOutputFileState]
 
 type windowsOutputLock struct {
 	native *windowsStableLock

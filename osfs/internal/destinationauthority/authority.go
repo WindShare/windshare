@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
@@ -85,6 +86,7 @@ type BoundDestination struct {
 	mu sync.RWMutex
 
 	binding     Binding
+	durability  transfer.DurabilityLevel
 	platform    outputcap.Platform
 	rootWitness outputcap.Directory
 	control     outputcap.Directory
@@ -114,6 +116,16 @@ func destinationFacts(
 	capabilities, err := capabilitySource.DestinationCapabilities()
 	if err != nil || !capabilities.Valid() {
 		return outputcap.DestinationCapabilities{}, 0, errors.Join(ErrInvalidConfiguration, err)
+	}
+	if capabilities.OperationRecovery().Supported() || capabilities.RangeRecovery().Supported() {
+		evidence, ok := config.Platform.(recoveryEvidenceSource)
+		if !ok {
+			return outputcap.DestinationCapabilities{}, 0, ErrInvalidConfiguration
+		}
+		if _, err := outputcap.NewIdentitySchemeID(string(evidence.IdentityScheme())); err != nil ||
+			evidence.Durability() < transfer.DurabilityProcessRestart || evidence.Durability() > transfer.DurabilityPowerLoss {
+			return outputcap.DestinationCapabilities{}, 0, errors.Join(ErrInvalidConfiguration, err)
+		}
 	}
 	if !capabilities.CrashCleanup().Supported() {
 		return capabilities, 0, nil
@@ -158,7 +170,7 @@ func BindDestination(config BindConfig) (_ *BoundDestination, resultErr error) {
 		resultErr = finishDestinationBinding(guard, rootWitness, guardClosed, resultErr)
 	}()
 
-	if !capabilities.CrashCleanup().Supported() {
+	if !capabilities.CrashCleanup().Supported() && !capabilities.OperationRecovery().Supported() {
 		bound, err := bindProcessDestination(config, capabilities, root, rootWitness)
 		if err != nil {
 			return nil, err
@@ -194,31 +206,15 @@ func BindDestination(config BindConfig) (_ *BoundDestination, resultErr error) {
 		}
 	}
 
-	journal, err := config.OpenLiveCleanupJournal(control)
-	if err != nil || !journal.valid() {
-		return nil, errors.Join(ErrInvalidConfiguration, err)
-	}
-	defer func() {
-		if resultErr != nil {
-			resultErr = errors.Join(resultErr, journal.Close())
-		}
-	}()
-	proof, err := openExactPrivateDirectory(control, checkpointmodel.LiveCleanupNamespaceV1)
+	journal, proof, capabilities, err := bindCleanup(config, control, root, capabilities, profile)
 	if err != nil {
 		return nil, err
 	}
 	defer func() {
 		if resultErr != nil {
-			resultErr = errors.Join(resultErr, proof.Close())
+			resultErr = errors.Join(resultErr, journal.Close(), closeDirectory(proof))
 		}
 	}()
-	if err := validateNativeMethodSets(root, proof, capabilities); err != nil {
-		return nil, err
-	}
-	capabilities, err = reconcileLiveCleanup(journal.journal, proof, capabilities, profile)
-	if err != nil {
-		return nil, err
-	}
 	binding, err := NewBinding(id, capabilities, config.DisplayPath)
 	if err != nil {
 		return nil, err
@@ -228,8 +224,12 @@ func BindDestination(config BindConfig) (_ *BoundDestination, resultErr error) {
 		return nil, err
 	}
 	guardClosed = true
+	durability := transfer.DurabilityNone
+	if capabilities.OperationRecovery().Supported() && capabilities.RangeRecovery().Supported() {
+		durability = config.Platform.(recoveryEvidenceSource).Durability()
+	}
 	return &BoundDestination{
-		binding: binding, platform: config.Platform, rootWitness: rootWitness,
+		binding: binding, durability: durability, platform: config.Platform, rootWitness: rootWitness,
 		control: control, proof: proof, journal: journal, controlUse: controlUse,
 		recycler: config.RecyclePrivateState, profile: profile,
 	}, nil
@@ -275,7 +275,20 @@ func (authority *BoundDestination) Binding() Binding {
 	return authority.binding
 }
 
-// FileCheckpointOwnership projects the certified root facts needed by the
+// RecoveryDurability is the evidence captured at binding, independent of cleanup.
+func (authority *BoundDestination) RecoveryDurability() transfer.DurabilityLevel {
+	if authority == nil {
+		return transfer.DurabilityNone
+	}
+	authority.mu.RLock()
+	defer authority.mu.RUnlock()
+	if authority.closed {
+		return transfer.DurabilityNone
+	}
+	return authority.durability
+}
+
+// FileCheckpointOwnership projects the native root facts needed by the
 // unchanged FileCheckpointV2 binding without exposing native handles.
 func (authority *BoundDestination) FileCheckpointOwnership(
 	disposition outputcap.RootOpenDisposition,
@@ -294,7 +307,7 @@ func (authority *BoundDestination) FileCheckpointOwnership(
 	}
 	return checkpointmodel.NewOwnership(checkpointmodel.OwnershipSpec{
 		Materializer:        checkpointmodel.MaterializerNativeTree,
-		Certification:       authority.platform.Certification(),
+		IdentityScheme:      authority.platform.(recoveryEvidenceSource).IdentityScheme(),
 		AuthorityRef:        authority.binding.AuthorityRef().Bytes(),
 		RootOpenDisposition: disposition,
 	})
@@ -569,4 +582,19 @@ func finishDestinationBinding(
 		bindErr = errors.Join(bindErr, witness.Close())
 	}
 	return bindErr
+}
+
+// InspectControl borrows existing private metadata without creating a namespace.
+// Callers may report unavailable recovery but cannot infer a fresh destination.
+func (authority *BoundDestination) InspectControl(inspect func(outputcap.Directory) error) error {
+	if inspect == nil {
+		return ErrInvalidConfiguration
+	}
+	return authority.withGuardedRoot(func(root outputcap.Directory) error {
+		control, err := root.OpenDirectory(controlDirectoryName, true)
+		if err != nil {
+			return err
+		}
+		return errors.Join(inspect(control), control.Close())
+	})
 }

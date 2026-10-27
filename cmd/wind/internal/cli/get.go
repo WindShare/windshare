@@ -25,6 +25,10 @@ type getRequest struct {
 }
 
 func (a *App) runGet(ctx context.Context, args []string) int {
+	return a.runReceive(ctx, args, engine.ReceiveCreateOrResume)
+}
+
+func (a *App) runReceive(ctx context.Context, args []string, admission engine.ReceiveOutputAdmission) int {
 	request, parsed := a.parseGetRequest(args)
 	if parsed != requestParseReady {
 		return parsed.exitCode()
@@ -43,7 +47,7 @@ func (a *App) runGet(ctx context.Context, args []string) int {
 	if factory == nil {
 		factory = filesystem.FilesystemOutput{RootPath: destination, CreateRoot: true}
 	}
-	task, err := a.application.StartReceive(ctx, engine.ReceiveRequest{Capability: request.link, Only: request.only, Connectivity: request.connectivity, WaitTimeout: request.waitTimeout, Output: factory, Destination: destination, Diagnostics: runtime.diagnosticSink()})
+	task, err := a.application.StartReceive(ctx, engine.ReceiveRequest{Admission: admission, Capability: request.link, Only: request.only, Connectivity: request.connectivity, WaitTimeout: request.waitTimeout, Output: factory, Destination: destination, Diagnostics: runtime.diagnosticSink(), OnPause: a.receivePauseHandler()})
 	if err != nil {
 		return observation.commandFailure(ExitFailure, err)
 	}

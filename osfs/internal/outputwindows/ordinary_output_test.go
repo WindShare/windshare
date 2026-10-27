@@ -433,7 +433,7 @@ func TestWindowsLiveStageCreateSurvivesRealProcessKillAtEveryCut(t *testing.T) {
 		runWindowsLiveStageCrashChild(t)
 		return
 	}
-	requireUnprivilegedWindowsNTFSCertification(t)
+	requireUnprivilegedWindowsNTFSIdentityScheme(t)
 	for _, cut := range []windowsLiveStageCreateCut{
 		windowsLiveStageCutTemporaryCreated,
 		windowsLiveStageCutInstalled,
@@ -699,7 +699,7 @@ func TestWindowsRootIdentityClaimSurvivesSameFilesystemRename(t *testing.T) {
 }
 
 func TestWindowsPublicRootRejectsReparseAndFileAncestors(t *testing.T) {
-	requireUnprivilegedWindowsNTFSCertification(t)
+	requireUnprivilegedWindowsNTFSIdentityScheme(t)
 	parent := windowsNativeTestTempDir(t)
 	target := filepath.Join(parent, "target")
 	if err := os.Mkdir(target, 0o700); err != nil {

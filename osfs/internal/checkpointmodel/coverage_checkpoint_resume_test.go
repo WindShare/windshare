@@ -15,7 +15,7 @@ func TestCertifiedBindingKeepsRepositoryAndRecordAuthorityDistinct(t *testing.T)
 	record := mustCanonicalRecord(t, spec)
 	ownership, err := NewOwnership(OwnershipSpec{
 		Materializer:        spec.MaterializerKind,
-		Certification:       CertificationLinuxExt4ProcessRestart,
+		IdentityScheme:      IdentitySchemeLinuxHandleV2,
 		AuthorityRef:        spec.AuthorityRef,
 		RootOpenDisposition: AuthorityCreatedRoot,
 	})
@@ -32,7 +32,7 @@ func TestCertifiedBindingKeepsRepositoryAndRecordAuthorityDistinct(t *testing.T)
 	if binding.Ownership() != ownership || binding.OperationID() != spec.OperationID ||
 		binding.ReceiveIntentDigest() != spec.ReceiveIntentDigest ||
 		binding.MaterializationBindingDigest() != spec.MaterializationBindingDigest ||
-		binding.Ownership().Certification() != CertificationLinuxExt4ProcessRestart ||
+		binding.Ownership().IdentityScheme() != IdentitySchemeLinuxHandleV2 ||
 		binding.Ownership().RootOpenDisposition() != AuthorityCreatedRoot {
 		t.Fatal("binding lost certified repository ownership")
 	}
@@ -76,7 +76,7 @@ func TestCertifiedBindingKeepsRepositoryAndRecordAuthorityDistinct(t *testing.T)
 func TestOwnershipDecoderRejectsAuthenticatedUnknownRootDisposition(t *testing.T) {
 	ownership, err := NewOwnership(OwnershipSpec{
 		Materializer:        MaterializerNativeTree,
-		Certification:       CertificationWindowsNTFSProcessRestart,
+		IdentityScheme:      IdentitySchemeWindowsObjectIDV1,
 		AuthorityRef:        bytes.Repeat([]byte{0x91}, sha256.Size),
 		RootOpenDisposition: CallerProvidedContainer,
 	})
@@ -90,7 +90,7 @@ func TestOwnershipDecoderRejectsAuthenticatedUnknownRootDisposition(t *testing.T
 	writeOwnershipString(&payload, OwnershipMarker)
 	writeOwnershipString(&payload, NamespaceName)
 	payload.WriteByte(byte(ownership.MaterializerKind()))
-	writeOwnershipString(&payload, string(ownership.Certification()))
+	writeOwnershipString(&payload, string(ownership.IdentityScheme()))
 	_, _ = payload.Write(ownership.AuthorityRef().Bytes())
 	writeOwnershipString(&payload, "future-root-disposition")
 	checksum := ownershipChecksum(payload.Bytes())

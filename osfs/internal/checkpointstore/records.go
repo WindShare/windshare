@@ -26,6 +26,20 @@ const (
 	candidateReadAttempts    = installationAttempts
 )
 
+type candidateOccupiedError struct{ cause error }
+
+func (err candidateOccupiedError) Error() string {
+	return "checkpoint candidate occupied: " + err.cause.Error()
+}
+func (err candidateOccupiedError) Unwrap() error { return err.cause }
+
+func candidateSlotOccupied(err error) bool {
+	// Only a pure occupancy result permits moving to another slot. A joined
+	// close or observation failure still has to reach the caller for retry.
+	_, occupied := err.(candidateOccupiedError) //nolint:errorlint // Joined I/O failures must not become an occupied-slot decision.
+	return occupied
+}
+
 func ValidShard(name string) bool {
 	if len(name) != 2 {
 		return false
@@ -200,7 +214,7 @@ func InstallCreate(directory outputcap.Directory, name string, encoded []byte) e
 	}
 	for attempt := range installationAttempts {
 		temporary, temporaryName, err := prepareInstallationCandidate(directory, name, encoded, attempt)
-		if errors.Is(err, fs.ErrNotExist) {
+		if errors.Is(err, fs.ErrNotExist) || candidateSlotOccupied(err) {
 			// A collision can disappear before it is opened. Advancing to the next
 			// deterministic slot preserves idempotence without trusting the race.
 			continue
@@ -336,7 +350,7 @@ func InstallReplace(directory outputcap.Directory, name string, previous, next [
 	}
 	for attempt := range installationAttempts {
 		temporary, temporaryName, createErr := prepareInstallationCandidate(directory, name, next, attempt)
-		if errors.Is(createErr, fs.ErrNotExist) {
+		if errors.Is(createErr, fs.ErrNotExist) || candidateSlotOccupied(createErr) {
 			continue
 		}
 		if createErr != nil {
@@ -404,7 +418,7 @@ func InstallReplaceStrict(directory outputcap.Directory, name string, previous, 
 
 // reconcileExactCandidates removes only deterministic names whose exact image
 // is already installed at the fixed target. Foreign names and foreign bytes are
-// preserved and fail closed for explicit attention.
+// preserved. Cleanup uncertainty cannot revoke the installed target image.
 func reconcileExactCandidates(directory outputcap.Directory, target string, encoded []byte) error {
 	if directory == nil || target == "" || len(encoded) == 0 || len(encoded) > maxRepositoryRecordBytes {
 		return checkpointmodel.ErrInvalidRecord
@@ -419,9 +433,9 @@ func reconcileExactCandidates(directory outputcap.Directory, target string, enco
 			continue
 		}
 		if !exact || kind != outputcap.EntryRegularFile {
-			return outputcap.ErrUnsafeNamespace
+			continue
 		}
-		if err := RemoveExactTemporary(directory, name, encoded); err != nil {
+		if err := RemoveExactTemporary(directory, name, encoded); err != nil && !candidateSlotOccupied(err) {
 			return err
 		}
 	}
@@ -433,7 +447,16 @@ func openExactTemporary(
 	name string,
 	expected []byte,
 ) (outputcap.MutableFile, error) {
-	var mismatchErr error
+	kind, exact, err := directory.ClassifyExactEntry(name)
+	if err != nil {
+		return nil, err
+	}
+	if kind == outputcap.EntryAbsent {
+		return nil, fs.ErrNotExist
+	}
+	if !exact || kind != outputcap.EntryRegularFile {
+		return nil, candidateOccupiedError{outputcap.ErrUnsafeNamespace}
+	}
 	var lastObserved []byte
 	for range candidateReadAttempts {
 		file, err := directory.OpenMutableFile(name, true)
@@ -444,13 +467,20 @@ func openExactTemporary(
 			}
 			return nil, errors.Join(err, closeErr)
 		}
+		size, err := file.Size()
+		if err != nil {
+			return nil, errors.Join(err, closeFile(file))
+		}
+		if size == 0 || size > maxRepositoryRecordBytes {
+			if err := closeFile(file); err != nil {
+				return nil, err
+			}
+			return nil, candidateOccupiedError{checkpointmodel.ErrRecordBinding}
+		}
 		actual, readErr := readBoundedFile(file)
 		if readErr != nil {
 			closeErr := closeFile(file)
 			if candidateContention(readErr) {
-				// Windows can admit the handle and still reject the first read while
-				// the creating writer owns the candidate. That is contention, not
-				// evidence that the deterministic image is corrupt.
 				return nil, errors.Join(outputcap.ErrNamespaceLockBusy, readErr, closeErr)
 			}
 			return nil, errors.Join(checkpointmodel.ErrRecordBinding, readErr, closeErr)
@@ -459,19 +489,18 @@ func openExactTemporary(
 			return file, nil
 		}
 		lastObserved = actual
-		mismatchErr = checkpointmodel.ErrRecordBinding
 		if closeErr := closeFile(file); closeErr != nil {
-			return nil, errors.Join(mismatchErr, closeErr)
+			return nil, errors.Join(checkpointmodel.ErrRecordBinding, closeErr)
 		}
-		// CreatePrivateFile exposes the correctly named, pre-sized entry before
-		// its first write. Yielding lets that owner finish without trusting an
-		// image that remains inexact across the bounded observation window.
+		// Concurrent bootstrap writers can expose the name before writing. An
+		// inexact image is never adopted or removed, even after a process crash.
 		runtime.Gosched()
 	}
+	mismatchErr := checkpointmodel.ErrRecordBinding
 	if candidateWriteInFlight(lastObserved, expected) {
-		return nil, errors.Join(outputcap.ErrNamespaceLockBusy, mismatchErr)
+		return nil, candidateOccupiedError{errors.Join(outputcap.ErrNamespaceLockBusy, mismatchErr)}
 	}
-	return nil, mismatchErr
+	return nil, candidateOccupiedError{mismatchErr}
 }
 
 func candidateWriteInFlight(actual, expected []byte) bool {

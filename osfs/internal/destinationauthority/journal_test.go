@@ -139,7 +139,7 @@ func TestCleanupProofNegativeDowngradesOnlyCrashCleanup(t *testing.T) {
 			result.RangeRecovery() != supported || result.CrashCleanup().Reason() != test.reason {
 			t.Fatalf("result=%+v err=%v", result, err)
 		}
-		if mode, err := outputcap.SelectExecutionMode(result); err != nil || mode != outputcap.ExecutionLiveOnly {
+		if mode, err := outputcap.SelectExecutionMode(result); err != nil || mode != outputcap.ExecutionResumable {
 			t.Fatalf("mode error=%v", err)
 		}
 	}
@@ -337,4 +337,49 @@ func cleanupTicket(t *testing.T, state checkpointmodel.LiveCleanupTicketState, g
 		t.Fatal(err)
 	}
 	return ticket
+}
+
+func TestCleanupJournalUncertaintyDoesNotEraseRecoveryEvidence(t *testing.T) {
+	supported := outputcap.SupportedCapability()
+	capabilities, _ := outputcap.NewDestinationCapabilities(supported, supported, supported, supported)
+	temporary := errors.New("temporary journal read failure")
+	for _, failure := range []error{ErrCleanupOwnershipUnknown, temporary} {
+		platform := newDestinationPlatform()
+		config := BindConfig{OpenLiveCleanupJournal: func(outputcap.Directory) (LiveCleanupJournalHandle, error) {
+			return LiveCleanupJournalHandle{}, failure
+		}}
+		_, _, facts, err := bindCleanup(config, nil, platform.Root(), capabilities, platform.profile)
+		if failure == temporary {
+			if !errors.Is(err, temporary) {
+				t.Fatalf("temporary I/O became permanent capability loss: %v", err)
+			}
+		} else if err != nil || !facts.OperationRecovery().Supported() || !facts.RangeRecovery().Supported() || facts.CrashCleanup().Supported() {
+			t.Fatalf("cleanup uncertainty revoked recovery: %+v %v", facts, err)
+		}
+	}
+}
+
+func TestCleanupProofUncertaintyDoesNotEraseRecoveryEvidence(t *testing.T) {
+	supported := outputcap.SupportedCapability()
+	capabilities, _ := outputcap.NewDestinationCapabilities(supported, supported, supported, supported)
+	temporary := errors.New("temporary proof read failure")
+	for _, failure := range []error{nil, outputcap.ErrUnsafeNamespace, temporary} {
+		platform := newDestinationPlatform()
+		journal := &cleanupJournalFake{snapshot: LiveCleanupSnapshot{State: LiveCleanupScanComplete}}
+		config := BindConfig{OpenLiveCleanupJournal: func(outputcap.Directory) (LiveCleanupJournalHandle, error) {
+			return NewLiveCleanupJournalHandle(journal)
+		}}
+		control := &cleanupProofDirectory{Directory: platform.Root(), kind: outputcap.EntryRegularFile, exact: true, classifyErr: failure}
+		handle, proof, facts, err := bindCleanup(config, control, platform.Root(), capabilities, platform.profile)
+		if errors.Is(failure, temporary) {
+			if !errors.Is(err, temporary) {
+				t.Fatalf("temporary proof I/O became permanent capability loss: %v", err)
+			}
+		} else if err != nil || !facts.OperationRecovery().Supported() || !facts.RangeRecovery().Supported() || facts.CrashCleanup().Supported() {
+			t.Fatalf("cleanup proof uncertainty revoked recovery: %+v %v", facts, err)
+		}
+		if handle.valid() || proof != nil || control.removeCalls != 0 || len(journal.deleted) != 0 {
+			t.Fatal("uncertain cleanup retained authority or removed unknown state")
+		}
+	}
 }

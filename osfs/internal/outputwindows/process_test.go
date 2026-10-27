@@ -21,10 +21,10 @@ const (
 	nativeOutputCrashChildMaximumWait = 5 * time.Minute
 )
 
-func requireUnprivilegedWindowsNTFSCertification(t *testing.T) {
+func requireUnprivilegedWindowsNTFSIdentityScheme(t *testing.T) {
 	t.Helper()
 	if windows.GetCurrentProcessToken().IsElevated() {
-		t.Skip("Windows/NTFS native certification is meaningful only as an ordinary receiver")
+		t.Skip("Windows/NTFS native identityScheme is meaningful only as an ordinary receiver")
 	}
 }
 

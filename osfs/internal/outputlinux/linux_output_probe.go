@@ -68,7 +68,7 @@ func (root *linuxOutputDirectory) probeDestinationCapabilitiesWithRandom(
 
 func (root *linuxOutputDirectory) runCapabilityFacts(workspace *outputprobe.Workspace) (results outputprobe.Results, resultErr error) {
 	if root.binding.restart == nil {
-		results.SafePublish = workspace.SafePublish(outputprobe.LinuxExt4)
+		results.SafePublish = workspace.SafePublish(outputprobe.EmptyDataLinks)
 		if err := workspace.Clear(); err != nil {
 			return results, errors.Join(outputcap.ErrUnsafeNamespace, err)
 		}
@@ -87,7 +87,7 @@ func (root *linuxOutputDirectory) runCapabilityFacts(workspace *outputprobe.Work
 		probe func() error
 		set   func(error)
 	}{
-		{func() error { return workspace.SafePublish(outputprobe.LinuxExt4) }, func(err error) { results.SafePublish = err }},
+		{func() error { return workspace.SafePublish(outputprobe.EmptyDataLinks) }, func(err error) { results.SafePublish = err }},
 		{workspace.RangeRecovery, func(err error) { results.RangeRecovery = err }},
 		{workspace.OperationRecovery, func(err error) { results.OperationRecovery = err }},
 		{func() error { return root.probePublicProfileStage(workspace) }, func(err error) {

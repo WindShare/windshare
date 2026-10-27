@@ -10,7 +10,7 @@ import (
 )
 
 func TestLinuxOpenReportsExactRootDisposition(t *testing.T) {
-	requireUnprivilegedLinuxExt4Certification(t)
+	requireUnprivilegedLinuxExt4IdentityScheme(t)
 	base := t.TempDir()
 
 	existing, err := Open(base, true)

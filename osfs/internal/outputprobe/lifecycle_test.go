@@ -26,7 +26,7 @@ func TestClosedWorkspaceRejectsOperationsUntilRecovery(t *testing.T) {
 			root := newProbeTestRoot()
 			workspace := newProbeTestWorkspace(t, root, 1)
 			if test.populated {
-				if err := workspace.SafePublish(WindowsNTFS); err != nil {
+				if err := workspace.SafePublish(SizedDataLinks); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -53,7 +53,7 @@ func TestClosedWorkspaceRejectsOperationsUntilRecovery(t *testing.T) {
 			}{
 				{"clear", workspace.Clear},
 				{"cleanup", workspace.Cleanup},
-				{"safe-publish", func() error { return workspace.SafePublish(WindowsNTFS) }},
+				{"safe-publish", func() error { return workspace.SafePublish(SizedDataLinks) }},
 				{"range-recovery", workspace.RangeRecovery},
 				{"operation-recovery", workspace.OperationRecovery},
 				{"verify-files", workspace.VerifyFiles},
@@ -81,7 +81,7 @@ func TestClosedWorkspaceRejectsOperationsUntilRecovery(t *testing.T) {
 			}
 			assertProbeHandlesReleased(t, root)
 
-			if err := Recover(root, probeTestNames(root), WindowsNTFS); err != nil {
+			if err := Recover(root, probeTestNames(root), SizedDataLinks); err != nil {
 				t.Fatalf("fresh inspection could not recover leftovers: %v", err)
 			}
 			if len(root.object.directories) != 0 {
@@ -95,7 +95,7 @@ func TestClosedWorkspaceRejectsOperationsUntilRecovery(t *testing.T) {
 func TestClearRetainsLiveWitnessesForRetryAndReuse(t *testing.T) {
 	root := newProbeTestRoot()
 	workspace := newProbeTestWorkspace(t, root, 1)
-	if err := workspace.SafePublish(LinuxExt4); err != nil {
+	if err := workspace.SafePublish(EmptyDataLinks); err != nil {
 		t.Fatal(err)
 	}
 	root.system.fault = "remove-file:stage"
@@ -108,7 +108,7 @@ func TestClearRetainsLiveWitnessesForRetryAndReuse(t *testing.T) {
 	if err := workspace.Clear(); err != nil {
 		t.Fatalf("empty live workspace could not be cleared: %v", err)
 	}
-	if err := workspace.SafePublish(LinuxExt4); err != nil {
+	if err := workspace.SafePublish(EmptyDataLinks); err != nil {
 		t.Fatalf("cleared workspace could not reuse probe names: %v", err)
 	}
 	if err := workspace.Cleanup(); err != nil {

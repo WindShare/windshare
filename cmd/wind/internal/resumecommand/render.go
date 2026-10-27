@@ -12,6 +12,8 @@ type textRenderer struct{}
 
 func (textRenderer) Usage() string {
 	return "Usage:\n" +
+		"  " + commandmeta.Name + " resume retry -o <directory> [--only <path>] <link>\n" +
+		"      Continue the matching retained download; never create a new one.\n\n" +
 		"  " + commandmeta.Name + " resume list -o <directory>\n" +
 		"      List unfinished operations owned by that output directory.\n\n" +
 		"  " + commandmeta.Name + " resume discard -o <directory> --item <N>\n" +

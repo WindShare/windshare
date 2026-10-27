@@ -25,31 +25,32 @@ var (
 	ErrInvalidDestinationBindingID = errors.New("osfs: destination binding identity is invalid")
 )
 
-type CertificationID = checkpointmodel.CertificationID
+type IdentitySchemeID = checkpointmodel.IdentitySchemeID
 
 const (
-	CertificationLinuxExt4ProcessRestart   = checkpointmodel.CertificationLinuxExt4ProcessRestart
-	CertificationWindowsNTFSProcessRestart = checkpointmodel.CertificationWindowsNTFSProcessRestart
+	IdentitySchemeLinuxHandleV2     = checkpointmodel.IdentitySchemeLinuxHandleV2
+	IdentitySchemeWindowsObjectIDV1 = checkpointmodel.IdentitySchemeWindowsObjectIDV1
+	IdentitySchemeDarwinObjectIDV1  = checkpointmodel.IdentitySchemeDarwinObjectIDV1
 )
 
-func NewCertificationID(value string) (CertificationID, error) {
-	return checkpointmodel.NewCertificationID(value)
+func NewIdentitySchemeID(value string) (IdentitySchemeID, error) {
+	return checkpointmodel.NewIdentitySchemeID(value)
 }
 
 // OutputRootBinding commits to both the certified volume and the current root
 // object. Keeping the opaque claims out of durable state prevents a copied
 // native identifier from becoming filesystem authority after restart.
 type OutputRootBinding struct {
-	certification CertificationID
-	digest        [OutputRootBindingBytes]byte
+	identityScheme IdentitySchemeID
+	digest         [OutputRootBindingBytes]byte
 }
 
 func NewOutputRootBinding(
-	certification CertificationID,
+	identityScheme IdentitySchemeID,
 	volumeIdentity []byte,
 	objectIdentity []byte,
 ) (OutputRootBinding, error) {
-	validated, err := NewCertificationID(string(certification))
+	validated, err := NewIdentitySchemeID(string(identityScheme))
 	if err != nil || len(volumeIdentity) == 0 || len(volumeIdentity) > MaxRootIdentityClaimBytes ||
 		len(objectIdentity) == 0 || len(objectIdentity) > MaxRootIdentityClaimBytes {
 		return OutputRootBinding{}, fmt.Errorf("%w: native identity claims", ErrInvalidRootBinding)
@@ -64,7 +65,7 @@ func NewOutputRootBinding(
 	if digest == ([OutputRootBindingBytes]byte{}) {
 		return OutputRootBinding{}, fmt.Errorf("%w: zero digest", ErrInvalidRootBinding)
 	}
-	return OutputRootBinding{certification: validated, digest: digest}, nil
+	return OutputRootBinding{identityScheme: validated, digest: digest}, nil
 }
 
 func writeRootBindingClaim(destination io.Writer, value []byte) {
@@ -74,7 +75,7 @@ func writeRootBindingClaim(destination io.Writer, value []byte) {
 	_, _ = destination.Write(value)
 }
 
-func (binding OutputRootBinding) Certification() CertificationID { return binding.certification }
+func (binding OutputRootBinding) IdentityScheme() IdentitySchemeID { return binding.identityScheme }
 
 func (binding OutputRootBinding) Bytes() []byte {
 	return append([]byte(nil), binding.digest[:]...)
@@ -85,7 +86,7 @@ func (binding OutputRootBinding) String() string {
 }
 
 func (binding OutputRootBinding) IsZero() bool {
-	return binding.certification == "" && binding.digest == ([OutputRootBindingBytes]byte{})
+	return binding.identityScheme == "" && binding.digest == ([OutputRootBindingBytes]byte{})
 }
 
 // DestinationBindingID identifies a retained destination binding. Recoverable

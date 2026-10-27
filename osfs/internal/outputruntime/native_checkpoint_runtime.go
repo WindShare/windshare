@@ -16,6 +16,9 @@ func openNativeLiveCleanupJournal(
 ) (destinationauthority.LiveCleanupJournalHandle, error) {
 	journal, err := checkpointstore.OpenLiveCleanupJournal(control)
 	if err != nil {
+		if code := checkpointstore.ErrorCodeFor(err); code == checkpointstore.ErrorCorruptRecord || code == checkpointstore.ErrorOwnershipMismatch || code == checkpointstore.ErrorUnsafeInstall {
+			err = errors.Join(destinationauthority.ErrCleanupOwnershipUnknown, err)
+		}
 		return destinationauthority.LiveCleanupJournalHandle{}, err
 	}
 	handle, err := destinationauthority.NewLiveCleanupJournalHandle(&journal)

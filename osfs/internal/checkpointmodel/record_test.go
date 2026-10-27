@@ -124,7 +124,7 @@ func ownershipForRecord(t *testing.T, spec RecordSpec) Ownership {
 	t.Helper()
 	ownership, err := NewOwnership(OwnershipSpec{
 		Materializer:        spec.MaterializerKind,
-		Certification:       CertificationWindowsNTFSProcessRestart,
+		IdentityScheme:      IdentitySchemeWindowsObjectIDV1,
 		AuthorityRef:        spec.AuthorityRef,
 		RootOpenDisposition: CallerProvidedContainer,
 	})

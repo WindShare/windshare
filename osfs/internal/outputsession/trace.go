@@ -63,6 +63,8 @@ type TraceEvent struct {
 	OperationID            uint64
 	Operation              OperationKind
 	Decision               TraceDecision
+	WriteOffset            uint64
+	WriteLength            uint64
 	ClaimID                ClaimID
 	ClaimKind              ClaimKind
 	From                   ClaimState

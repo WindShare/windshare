@@ -17,6 +17,11 @@ import (
 )
 
 func TestTransferJobUsesCatalogClientBrokerAndSparseFileLocalResume(t *testing.T) {
+	t.Run("restart ranges", func(t *testing.T) { runSparseFileLocalResume(t, false) })
+	t.Run("retained live ranges", func(t *testing.T) { runSparseFileLocalResume(t, true) })
+}
+
+func runSparseFileLocalResume(t *testing.T, inProcess bool) {
 	share := transferID[catalog.ShareInstance](1)
 	root := transferID[catalog.DirectoryID](2)
 	directory := transferID[catalog.DirectoryID](3)
@@ -56,6 +61,11 @@ func TestTransferJobUsesCatalogClientBrokerAndSparseFileLocalResume(t *testing.T
 	}
 	defer broker.Close()
 	output := newJobOutput(share)
+	if inProcess {
+		capabilities := output.Capabilities()
+		capabilities.Durability = DurabilityNone
+		output.capabilitiesOverride, output.inProcess = &capabilities, true
+	}
 	firstBlock, _ := content.NewRangeSet([]content.Range{{Offset: 0, End: chunk}})
 	output.durable["a.bin"] = firstBlock
 	rules, _ := NewSelectionRules(true, nil)

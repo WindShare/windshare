@@ -1,5 +1,5 @@
 // Package outputprobe owns native feature proofs and exact-object cleanup.
-// Platforms supply live outputcap handles and their certified probe profile;
+// Platforms supply live outputcap handles and their data-link probe shape;
 // native locking and restart enrollment remain platform-owned.
 package outputprobe
 
@@ -8,14 +8,14 @@ import (
 	"fmt"
 )
 
-// Profile selects the native data-link shape used by a certified output probe.
+// Profile selects the native data-link shape used by an output probe.
 type Profile uint8
 
 const (
-	// LinuxExt4 validates the zero-length link shape used by the ext4 probe.
-	LinuxExt4 Profile = iota + 1
-	// WindowsNTFS validates the one-byte hard-link shape used by the NTFS probe.
-	WindowsNTFS
+	// EmptyDataLinks validates the zero-length links and optional public-stage evidence.
+	EmptyDataLinks Profile = iota + 1
+	// SizedDataLinks validates the one-byte hard links without public-stage evidence.
+	SizedDataLinks
 )
 
 type observedFile struct {
@@ -169,13 +169,13 @@ func (observation Observation) dataCut(profile Profile) (dataCut, error) {
 	}
 
 	switch profile {
-	case LinuxExt4:
+	case EmptyDataLinks:
 		if (observation.stage.present && observation.stage.size != 0) ||
 			(observation.anchor.present && observation.anchor.size != 0) ||
 			(observation.publication.present && observation.publication.size != 0) {
 			return 0, errors.New("linux probe data link has an invalid size")
 		}
-	case WindowsNTFS:
+	case SizedDataLinks:
 		if observation.stage.present && observation.stage.size > 1 {
 			return 0, errors.New("windows probe stage has an invalid size")
 		}

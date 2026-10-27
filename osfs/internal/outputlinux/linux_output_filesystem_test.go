@@ -62,7 +62,7 @@ func TestLinuxFindMountInfoRejectsAmbiguityAndMalformedInput(t *testing.T) {
 	}
 }
 
-func TestLinuxCertificationAcceptsOnlyExplicitExt4Mount(t *testing.T) {
+func TestLinuxIdentitySchemeAcceptsOnlyExplicitExt4Mount(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name             string
@@ -115,7 +115,7 @@ func TestLinuxCertificationAcceptsOnlyExplicitExt4Mount(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			system := linuxCertificationTestSystem(
+			system := linuxIdentitySchemeTestSystem(
 				test.filesystemMagic,
 				test.mountType,
 				test.mountDeviceMajor,
@@ -143,7 +143,7 @@ func TestLinuxCertificationAcceptsOnlyExplicitExt4Mount(t *testing.T) {
 
 func TestLinuxRejectedFilesystemClosesRootBeforeMutation(t *testing.T) {
 	t.Parallel()
-	system := linuxCertificationTestSystem(
+	system := linuxIdentitySchemeTestSystem(
 		unix.TMPFS_MAGIC,
 		"tmpfs",
 		linuxTestDeviceMajor,
@@ -174,7 +174,7 @@ func TestLinuxRejectedFilesystemClosesRootBeforeMutation(t *testing.T) {
 	}
 }
 
-func TestLinuxCertificationRequiresRestartIdentityAndByteExactDirectories(t *testing.T) {
+func TestLinuxIdentitySchemeRequiresRestartIdentityAndByteExactDirectories(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name   string
@@ -265,7 +265,7 @@ func TestLinuxCertificationRequiresRestartIdentityAndByteExactDirectories(t *tes
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			system := linuxCertificationTestSystem(
+			system := linuxIdentitySchemeTestSystem(
 				linuxExt4SuperMagic, "ext4", linuxTestDeviceMajor, true,
 			)
 			test.mutate(&system)
@@ -275,7 +275,7 @@ func TestLinuxCertificationRequiresRestartIdentityAndByteExactDirectories(t *tes
 	}
 }
 
-func TestLinuxCertificationTreatsGenerationAsOptionalEvidence(t *testing.T) {
+func TestLinuxIdentitySchemeTreatsGenerationAsOptionalEvidence(t *testing.T) {
 	t.Parallel()
 	tests := map[string]func(*linuxOutputSystem){
 		"provider unavailable": func(system *linuxOutputSystem) { system.getVersion = nil },
@@ -289,7 +289,7 @@ func TestLinuxCertificationTreatsGenerationAsOptionalEvidence(t *testing.T) {
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			system := linuxCertificationTestSystem(
+			system := linuxIdentitySchemeTestSystem(
 				linuxExt4SuperMagic, "ext4", linuxTestDeviceMajor, true,
 			)
 			mutate(&system)
@@ -495,26 +495,26 @@ func TestLinuxNativeNamespaceLifecycle(t *testing.T) {
 		t.Fatalf("anchor/final relation: same=%v err=%v", same, err)
 	}
 
-	oldRecord, err := control.createPrivateRegularFileExact("file.state", linuxOutputStateFileMode, 1)
+	oldRecord, err := control.createPrivateRegularFileExact("file.State", linuxOutputStateFileMode, 1)
 	if err != nil {
 		t.Fatalf("create old state record: %v", err)
 	}
 	t.Cleanup(func() { _ = oldRecord.close() })
-	newRecord, err := control.createPrivateRegularFileExact("file.state.tmp", linuxOutputStateFileMode, 2)
+	newRecord, err := control.createPrivateRegularFileExact("file.State.tmp", linuxOutputStateFileMode, 2)
 	if err != nil {
 		t.Fatalf("create new state record: %v", err)
 	}
 	t.Cleanup(func() { _ = newRecord.close() })
 	if err := control.renameRegularFile(
-		"file.state.tmp",
+		"file.State.tmp",
 		newRecord,
 		control,
-		"file.state",
+		"file.State",
 		linuxRenameReplace,
 	); err != nil {
 		t.Fatalf("replace state record: %v", err)
 	}
-	reopenedRecord, err := control.openRegularFileExact("file.state", linuxOutputFileObserved, linuxOutputStateFileMode)
+	reopenedRecord, err := control.openRegularFileExact("file.State", linuxOutputFileObserved, linuxOutputStateFileMode)
 	if err != nil {
 		t.Fatalf("open replaced state record: %v", err)
 	}
@@ -536,7 +536,7 @@ func TestLinuxNativeNamespaceLifecycle(t *testing.T) {
 	if err := control.unlinkRegularFile("object.anchor", anchor); err != nil {
 		t.Fatalf("unlink anchor: %v", err)
 	}
-	if err := control.unlinkRegularFile("file.state", newRecord); err != nil {
+	if err := control.unlinkRegularFile("file.State", newRecord); err != nil {
 		t.Fatalf("unlink state record: %v", err)
 	}
 	if err := root.unlinkDirectory(".windshare-output", control); err != nil {
@@ -644,7 +644,7 @@ func TestLinuxFailedDirectoryCreateWithoutPinRetainsReplacement(t *testing.T) {
 	}
 }
 
-func linuxCertificationTestSystem(
+func linuxIdentitySchemeTestSystem(
 	filesystemMagic int64,
 	mountType string,
 	mountDeviceMajor uint32,
@@ -716,7 +716,7 @@ func assertLinuxUnsafe(t *testing.T, err error) {
 	}
 }
 
-// Certification fixtures deliberately retain the strict ext4-only entrance.
+// IdentityScheme fixtures deliberately retain the strict ext4-only entrance.
 // Production opens runtime authority first and enrolls restart support separately.
 func linuxOpenExt4OutputRoot(path string, system *linuxOutputSystem) (*linuxOutputDirectory, error) {
 	const operation = "open output root"

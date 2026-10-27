@@ -84,7 +84,7 @@ func TestFileCheckpointOwnershipUsesMaterializerAndOpaqueAuthority(t *testing.T)
 	authority := bytes.Repeat([]byte{0x31}, receivecontract.AuthorityRefBytes)
 	ownership, err := NewFileCheckpointOwnership(FileCheckpointOwnershipSpec{
 		Materializer:        FileCheckpointMaterializerNativeTree,
-		Certification:       FileCheckpointCertificationWindowsNTFSProcessRestart,
+		IdentityScheme:      FileCheckpointIdentitySchemeWindowsObjectIDV1,
 		AuthorityRef:        authority,
 		RootOpenDisposition: FileCheckpointCallerProvidedContainer,
 	})
@@ -98,7 +98,7 @@ func TestFileCheckpointOwnershipUsesMaterializerAndOpaqueAuthority(t *testing.T)
 	restored, err := DecodeFileCheckpointOwnership(encoded)
 	if err != nil || !restored.Valid() || len(restored.CanonicalBytes()) == 0 ||
 		restored.MaterializerKind() != FileCheckpointMaterializerNativeTree ||
-		restored.Certification() != FileCheckpointCertificationWindowsNTFSProcessRestart ||
+		restored.IdentityScheme() != FileCheckpointIdentitySchemeWindowsObjectIDV1 ||
 		!bytes.Equal(restored.AuthorityRef().Bytes(), authority) ||
 		restored.RootOpenDisposition() != FileCheckpointCallerProvidedContainer {
 		t.Fatalf("ownership round trip = (%+v, %v)", restored, err)

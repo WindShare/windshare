@@ -39,8 +39,8 @@ func validWindowsVolumeFacts() windowsVolumeFacts {
 	}
 }
 
-func TestWindowsCertificationIsNTFSLocalAndFailClosed(t *testing.T) {
-	if err := validateWindowsVolumeCertification(validWindowsVolumeFacts()); err != nil {
+func TestWindowsIdentitySchemeIsNTFSLocalAndFailClosed(t *testing.T) {
+	if err := validateWindowsVolumeIdentityScheme(validWindowsVolumeFacts()); err != nil {
 		t.Fatalf("valid NTFS facts: %v", err)
 	}
 	for _, test := range []struct {
@@ -58,7 +58,7 @@ func TestWindowsCertificationIsNTFSLocalAndFailClosed(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			facts := validWindowsVolumeFacts()
 			test.mutate(&facts)
-			err := validateWindowsVolumeCertification(facts)
+			err := validateWindowsVolumeIdentityScheme(facts)
 			if !errors.Is(err, errWindowsOutputUnsupported) {
 				t.Fatalf("error=%v", err)
 			}
@@ -115,7 +115,7 @@ func TestWindowsCurrentObjectIdentityCannotBeEncodedAsOwnership(t *testing.T) {
 	}
 }
 
-func TestWindowsCertificationPrecedesAnyResumeMutation(t *testing.T) {
+func TestWindowsIdentitySchemePrecedesAnyResumeMutation(t *testing.T) {
 	root := t.TempDir()
 	volumes := windowsVolumeInspectorFunc(func(windows.Handle) (windowsVolumeFacts, error) {
 		facts := validWindowsVolumeFacts()
@@ -123,11 +123,12 @@ func TestWindowsCertificationPrecedesAnyResumeMutation(t *testing.T) {
 		return facts, nil
 	})
 	platform, err := openWindowsOutputPlatformWithInspectors(root, nativeWindowsObjectInspector{}, volumes)
-	if platform != nil || !errors.Is(err, errWindowsOutputUnsupported) {
-		if platform != nil {
-			_ = platform.Close()
-		}
-		t.Fatalf("platform=%v error=%v", platform, err)
+	if err != nil || platform == nil {
+		t.Fatalf("live platform=%v error=%v", platform, err)
+	}
+	defer platform.Close()
+	if platform.Durability() != 0 {
+		t.Fatal("live admission invented restart durability")
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil || len(entries) != 0 {
@@ -141,7 +142,7 @@ func TestWindowsRelativeNamesRejectAliasesAndEscapes(t *testing.T) {
 		leaf bool
 	}{
 		{path: "sessions/00/session", leaf: false},
-		{path: "header.state", leaf: true},
+		{path: "header.State", leaf: true},
 	}
 	for _, test := range valid {
 		if _, err := windowsRelativePath(test.path, test.leaf); err != nil {
@@ -159,7 +160,7 @@ func TestWindowsRelativeNamesRejectAliasesAndEscapes(t *testing.T) {
 		{path: "record:stream", leaf: true},
 		{path: "NUL.txt", leaf: true},
 		{path: "COM\u00b9", leaf: true},
-		{path: "wild*.state", leaf: true},
+		{path: "wild*.State", leaf: true},
 		{path: "session./header", leaf: false},
 		{path: "session /header", leaf: false},
 		{path: "nested/name", leaf: true},
@@ -281,7 +282,7 @@ func TestWindowsPrivateNamespaceRejectsCaseAliasesAtEveryLevel(t *testing.T) {
 
 func TestWindowsLinkRenameBufferUsesPinnedParent(t *testing.T) {
 	const root windows.Handle = 123
-	buffer, err := windowsLinkRenameBuffer(windows.FILE_RENAME_REPLACE_IF_EXISTS, root, "header.state")
+	buffer, err := windowsLinkRenameBuffer(windows.FILE_RENAME_REPLACE_IF_EXISTS, root, "header.State")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,11 +290,11 @@ func TestWindowsLinkRenameBufferUsesPinnedParent(t *testing.T) {
 	if information.Flags != windows.FILE_RENAME_REPLACE_IF_EXISTS || information.RootDirectory != root {
 		t.Fatalf("information=%+v", information)
 	}
-	if information.FileNameLength != uint32(len([]rune("header.state"))*2) {
+	if information.FileNameLength != uint32(len([]rune("header.State"))*2) {
 		t.Fatalf("filename bytes=%d", information.FileNameLength)
 	}
 	name := windows.UTF16ToString(unsafe.Slice(&information.FileName[0], int(information.FileNameLength/2)))
-	if name != "header.state" {
+	if name != "header.State" {
 		t.Fatalf("name=%q", name)
 	}
 }
@@ -406,7 +407,7 @@ func TestWindowsAtomicPrivateStateReplacement(t *testing.T) {
 		if err := file.Sync(); err != nil {
 			t.Fatal(err)
 		}
-		if err := control.AtomicReplacePrivateFile(file, "header.state"); err != nil {
+		if err := control.AtomicReplacePrivateFile(file, "header.State"); err != nil {
 			t.Fatal(err)
 		}
 		if err := control.Sync(); err != nil {
@@ -416,7 +417,7 @@ func TestWindowsAtomicPrivateStateReplacement(t *testing.T) {
 	install("header.1.tmp", []byte("generation one"))
 	install("header.2.tmp", []byte("generation two"))
 
-	state, err := control.OpenPrivateFile("header.state")
+	state, err := control.OpenPrivateFile("header.State")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -710,5 +711,20 @@ func TestWindowsProbeCleanupStopsAtFirstUnverifiedCut(t *testing.T) {
 		if observeErr != nil || !exact || kind != outputcap.EntryRegularFile {
 			t.Errorf("entry %q after failed first cut: kind=%v exact=%t error=%v", name, kind, exact, observeErr)
 		}
+	}
+}
+
+func TestWindowsLiveAdmissionUsesPrimitivesIndependentlyOfRestartScheme(t *testing.T) {
+	facts := validWindowsVolumeFacts()
+	facts.filesystem = "another-filesystem"
+	if err := validateWindowsVolumeLiveCapabilities(facts); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateWindowsVolumeIdentityScheme(facts); !errors.Is(err, errWindowsOutputUnsupported) {
+		t.Fatalf("restart evidence: %v", err)
+	}
+	facts.flags &^= windows.FILE_SUPPORTS_HARD_LINKS
+	if err := validateWindowsVolumeLiveCapabilities(facts); !errors.Is(err, errWindowsOutputUnsupported) {
+		t.Fatalf("unsafe publication admitted: %v", err)
 	}
 }

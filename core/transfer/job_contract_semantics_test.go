@@ -100,7 +100,7 @@ func TestTransferJobDirectTreeSessionAndFileValidatorsFailClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherCheckpoint, err := VerifyDurableRanges(otherBinding, checkpoint.CheckpointGeneration(), checkpoint.Ranges())
+	otherCheckpoint, err := VerifyRestartRanges(otherBinding, checkpoint.CheckpointGeneration(), checkpoint.Ranges())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -469,7 +469,7 @@ func immediateSettlementJobRun(share catalog.ShareInstance, revisions RevisionCl
 func immediateDirectTreeSettlements(
 	t *testing.T,
 	binding MaterializedFileBinding,
-	checkpoint VerifiedDurableRanges,
+	checkpoint VerifiedRanges,
 ) map[string]FileSettlement {
 	t.Helper()
 	published, err := NewVerifiedFileSettlement(FilePublished, checkpoint)

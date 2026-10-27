@@ -18,6 +18,14 @@ const (
 	ownedStageSuffix  = ".stage"
 )
 
+// StagePolicy describes permission inheritance independently from crash cleanup.
+type StagePolicy uint8
+
+const (
+	PrivateStage StagePolicy = iota
+	InheritFinalParent
+)
+
 // FileExecutionStore binds the native file engine to the physical checkpoint
 // repository. Its logical authority state is shared through the operation
 // lease, so separate adapters cannot both observe an absent lineage and install
@@ -25,9 +33,9 @@ const (
 type FileExecutionStore struct {
 	mu sync.Mutex
 
-	repository *Repository
-	profile    checkpointmodel.LiveCleanupNativeProfile
-	authority  *fileExecutionAuthority
+	repository  *Repository
+	stagePolicy StagePolicy
+	authority   *fileExecutionAuthority
 }
 
 var (
@@ -36,41 +44,41 @@ var (
 )
 
 func NewFileExecutionStore(repository *Repository) (*FileExecutionStore, error) {
-	return NewFileExecutionStoreWithProfile(repository, 0)
+	return NewFileExecutionStoreWithStagePolicy(repository, PrivateStage)
 }
 
-func NewFileExecutionStoreWithProfile(
+func NewFileExecutionStoreWithStagePolicy(
 	repository *Repository,
-	profile checkpointmodel.LiveCleanupNativeProfile,
+	stagePolicy StagePolicy,
 ) (*FileExecutionStore, error) {
-	return newFileExecutionStore(repository, profile, true)
+	return newFileExecutionStore(repository, stagePolicy, true)
 }
 
 // NewFreshFileExecutionStore deliberately skips repository enumeration. It is
 // valid only for a newly published ordinary operation whose private namespace
 // cannot contain an earlier file record.
 func NewFreshFileExecutionStore(repository *Repository) (*FileExecutionStore, error) {
-	return NewFreshFileExecutionStoreWithProfile(repository, 0)
+	return NewFreshFileExecutionStoreWithStagePolicy(repository, PrivateStage)
 }
 
-func NewFreshFileExecutionStoreWithProfile(
+func NewFreshFileExecutionStoreWithStagePolicy(
 	repository *Repository,
-	profile checkpointmodel.LiveCleanupNativeProfile,
+	stagePolicy StagePolicy,
 ) (*FileExecutionStore, error) {
-	return newFileExecutionStore(repository, profile, false)
+	return newFileExecutionStore(repository, stagePolicy, false)
 }
 
 func newFileExecutionStore(
 	repository *Repository,
-	profile checkpointmodel.LiveCleanupNativeProfile,
+	stagePolicy StagePolicy,
 	reconcile bool,
 ) (*FileExecutionStore, error) {
-	if repository == nil || repository.records == nil || repository.anchors == nil ||
+	if stagePolicy > InheritFinalParent || repository == nil || repository.records == nil || repository.anchors == nil ||
 		repository.stages == nil || repository.authority == nil {
 		return nil, transfer.ErrInvalidOutputBinding
 	}
 	store := &FileExecutionStore{
-		repository: repository, profile: profile, authority: repository.authority,
+		repository: repository, stagePolicy: stagePolicy, authority: repository.authority,
 	}
 	store.authority.mu.Lock()
 	defer store.authority.mu.Unlock()
@@ -138,9 +146,6 @@ func (store *FileExecutionStore) CleanupOwned(ctx context.Context) error {
 	if err := store.authority.requireSettled(); err != nil {
 		return codedError(ErrorStateIO, "cleanup unsettled ordinary file state", err)
 	}
-	if len(store.authority.attention) != 0 {
-		return codedError(ErrorUnsafeInstall, "cleanup ordinary file state", checkpointmodel.ErrRecordRecovery)
-	}
 	records := make([]checkpointmodel.Record, 0, len(store.authority.physical))
 	for _, record := range store.authority.physical {
 		records = append(records, record)
@@ -152,6 +157,11 @@ func (store *FileExecutionStore) CleanupOwned(ctx context.Context) error {
 		if err := store.cleanupBatch(ctx, records[start:end], retiredObjects); err != nil {
 			return repositoryError("cleanup ordinary file state", err)
 		}
+	}
+	// Unknown auxiliary objects survive, but do not retain independently owned
+	// data after the user has discarded the operation.
+	if len(store.authority.attention) != 0 {
+		return codedError(ErrorUnsafeInstall, "cleanup ordinary file state", checkpointmodel.ErrRecordRecovery)
 	}
 	return nil
 }

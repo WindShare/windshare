@@ -13,7 +13,7 @@ import (
 func TestOwnershipInspectionAuthenticatesCandidatesAndClassifiesContention(t *testing.T) {
 	ownership, err := checkpointmodel.NewOwnership(checkpointmodel.OwnershipSpec{
 		Materializer:        checkpointmodel.MaterializerNativeTree,
-		Certification:       checkpointmodel.CertificationWindowsNTFSProcessRestart,
+		IdentityScheme:      checkpointmodel.IdentitySchemeWindowsObjectIDV1,
 		AuthorityRef:        bytes.Repeat([]byte{0x92}, receivecontract.AuthorityRefBytes),
 		RootOpenDisposition: checkpointmodel.CallerProvidedContainer,
 	})

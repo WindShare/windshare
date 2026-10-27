@@ -127,11 +127,12 @@ const (
 	FilesystemOutputStateLeaseOwnershipUnknown
 	FilesystemOutputStateOperationOwnershipUnknown
 	FilesystemOutputStateCleanupUncertain
+	FilesystemOutputStateRecoveryUnavailable
 )
 
 func (reason FilesystemOutputStateReason) Valid() bool {
 	return reason >= FilesystemOutputStateReasonNone &&
-		reason <= FilesystemOutputStateCleanupUncertain
+		reason <= FilesystemOutputStateRecoveryUnavailable
 }
 
 func (reason FilesystemOutputStateReason) String() string {
@@ -146,6 +147,8 @@ func (reason FilesystemOutputStateReason) String() string {
 		return "lease_ownership_unknown"
 	case FilesystemOutputStateOperationOwnershipUnknown:
 		return "operation_ownership_unknown"
+	case FilesystemOutputStateRecoveryUnavailable:
+		return "recovery_unavailable"
 	case FilesystemOutputStateCleanupUncertain:
 		return "cleanup_uncertain"
 	default:

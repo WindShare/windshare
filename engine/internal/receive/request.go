@@ -23,7 +23,15 @@ var ErrMissingOutputFactory = errors.New("receive output factory is required")
 
 // Request binds one destination authority to a selection. Reconnection never
 // reacquires it: its reservation and authenticated progress belong to the task.
+type OutputAdmission uint8
+
+const (
+	OutputCreateOrResume OutputAdmission = iota
+	OutputResumeExisting
+)
+
 type Request struct {
+	Admission    OutputAdmission
 	Capability   link.Link
 	Only         []string
 	Connectivity ConnectivityPolicy
@@ -31,6 +39,7 @@ type Request struct {
 	Output       OutputFactory
 	Destination  string
 	Diagnostics  diagnostics.Sink
+	OnPause      func(context.Context, Pause) (RecoveryAction, error)
 }
 
 type Clock interface {
@@ -80,6 +89,7 @@ func (d Dependencies) normalized() Dependencies {
 }
 
 type getRequest struct {
+	admission    OutputAdmission
 	outDir       string
 	only         []string
 	link         link.Link
