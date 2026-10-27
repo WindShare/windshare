@@ -1,0 +1,22 @@
+{
+  "run_url": "https://github.com/WindShare/windshare/actions/runs/40458323644",
+  "tested_commit": "8eda26ae1d95cbf7e0808f7ed8e669a1d6098881",
+  "run_created_at": "2026-10-27T05:58:09Z",
+  "conclusion": "success",
+  "jobs": [
+    {
+      "name": "APFS primitives (macos-15)",
+      "url": "https://github.com/WindShare/windshare/actions/runs/40458323644/job/122036752739",
+      "conclusion": "success"
+    },
+    {
+      "name": "APFS primitives (macos-15-intel)",
+      "url": "https://github.com/WindShare/windshare/actions/runs/40458323644/job/122036752931",
+      "conclusion": "success"
+    }
+  ],
+  "local_checks": [
+    "make workflow-lint",
+    "make sloc"
+  ]
+}

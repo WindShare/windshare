@@ -1,0 +1,6 @@
+ProductName:		macOS
+ProductVersion:		15.7.9
+BuildVersion:		24G830
+Darwin iad01-ar515-dbd11ba9-923e-4c2b-b601-35397df709a0-6A15D71D5E04.local 24.6.0 Darwin Kernel Version 24.6.0: Tue Jul 21 20:50:07 PDT 2026; root:xnu-11417.140.69.711.44~1/RELEASE_X86_64 x86_64
+go version go1.26.5 darwin/amd64
+Python 3.14.7

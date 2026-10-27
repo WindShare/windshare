@@ -1,0 +1,5 @@
+=== RUN   TestGoNativeOutputPrimitives
+    go_binding_darwin_test.go:78: same inode=12888390319 generation=0 links=2 blocks=8; Go/libSystem calls passed
+--- PASS: TestGoNativeOutputPrimitives (0.00s)
+PASS
+ok  	github.com/windshare/windshare/spikes/native-output-darwin	0.017s
