@@ -7,17 +7,41 @@ interface NodePoint {
   origin: THREE.Vector3
 }
 
-interface PulsePacket {
+interface ActiveEdge {
+  from: number
+  to: number
+  alpha: number
+}
+
+interface SignalPulse {
   fromNode: number
   toNode: number
   progress: number
   speed: number
-  mesh: THREE.Mesh
+  active: boolean
 }
 
 const BOUND_X = 260
 const BOUND_Y = 160
 const BOUND_Z = 120
+const CAMERA_FOV = 60
+const CAMERA_Z = 220
+const FOG_COLOR = 0x070c09
+const FOG_DENSITY = 0.0018
+
+const MOBILE_BREAKPOINT = 768
+const DESKTOP_NODE_COUNT = 54
+const MOBILE_NODE_COUNT = 32
+const DESKTOP_MAX_DISTANCE = 75
+const MOBILE_MAX_DISTANCE = 65
+const DESKTOP_PULSE_COUNT = 14
+const MOBILE_PULSE_COUNT = 7
+
+const NODE_POINT_SIZE = 7.5
+const PULSE_POINT_SIZE = 7.2
+const PULSE_TRAIL_SEGMENTS = 5
+const PULSE_TRAIL_LENGTH = 0.24
+const TEXTURE_SIZE = 128
 
 function cryptoRandom(): number {
   const arr = new Uint32Array(1)
@@ -25,20 +49,61 @@ function cryptoRandom(): number {
   return (arr[0] ?? 0) / 0xffffffff
 }
 
+/**
+ * Prevents additive primitives from writing 1.0 into the WebGL canvas alpha channel,
+ * which would otherwise cause the browser compositor to darken the CSS hero gradient.
+ */
+function applyAdditiveGlowBlending(material: THREE.Material) {
+  material.transparent = true
+  material.depthWrite = false
+  material.blending = THREE.CustomBlending
+  material.blendEquation = THREE.AddEquation
+  material.blendSrc = THREE.SrcAlphaFactor
+  material.blendDst = THREE.OneFactor
+  material.blendEquationAlpha = THREE.AddEquation
+  material.blendSrcAlpha = THREE.ZeroFactor
+  material.blendDstAlpha = THREE.OneFactor
+}
+
 function createCircleTexture(): THREE.CanvasTexture {
   const canvas = document.createElement('canvas')
-  canvas.width = 64
-  canvas.height = 64
+  canvas.width = TEXTURE_SIZE
+  canvas.height = TEXTURE_SIZE
   const ctx = canvas.getContext('2d')
   if (ctx) {
-    const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32)
+    const half = TEXTURE_SIZE / 2
+    const gradient = ctx.createRadialGradient(half, half, 0, half, half, half)
     gradient.addColorStop(0, 'rgba(52, 211, 153, 1)')
     gradient.addColorStop(0.35, 'rgba(16, 185, 129, 0.7)')
     gradient.addColorStop(0.7, 'rgba(6, 182, 212, 0.25)')
     gradient.addColorStop(1, 'rgba(0, 0, 0, 0)')
     ctx.fillStyle = gradient
     ctx.beginPath()
-    ctx.arc(32, 32, 32, 0, Math.PI * 2)
+    ctx.arc(half, half, half, 0, Math.PI * 2)
+    ctx.fill()
+  }
+  return new THREE.CanvasTexture(canvas)
+}
+
+/**
+ * Uses a sky-blue radial bokeh gradient (#e0f2fe -> #38bdf8 -> #0284c7) so pulse orbs
+ * keep the blue color distinction while rendering with soft optical diffusion.
+ */
+function createPulseGlowTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas')
+  canvas.width = TEXTURE_SIZE
+  canvas.height = TEXTURE_SIZE
+  const ctx = canvas.getContext('2d')
+  if (ctx) {
+    const half = TEXTURE_SIZE / 2
+    const gradient = ctx.createRadialGradient(half, half, 0, half, half, half)
+    gradient.addColorStop(0, 'rgba(224, 242, 254, 1)')
+    gradient.addColorStop(0.35, 'rgba(56, 189, 248, 0.82)')
+    gradient.addColorStop(0.7, 'rgba(2, 132, 199, 0.3)')
+    gradient.addColorStop(1, 'rgba(0, 0, 0, 0)')
+    ctx.fillStyle = gradient
+    ctx.beginPath()
+    ctx.arc(half, half, half, 0, Math.PI * 2)
     ctx.fill()
   }
   return new THREE.CanvasTexture(canvas)
@@ -92,9 +157,9 @@ function updateMeshLines(
   maxDist: number,
   linePositions: Float32Array,
   lineColors: Float32Array,
-): { lineCount: number; activePairs: [number, number][] } {
+): { lineCount: number; activeEdges: ActiveEdge[] } {
   let lineIndex = 0
-  const activePairs: [number, number][] = []
+  const activeEdges: ActiveEdge[] = []
 
   for (let i = 0; i < nodes.length; i++) {
     const nodeI = nodes[i]
@@ -106,9 +171,9 @@ function updateMeshLines(
 
       const dist = nodeI.position.distanceTo(nodeJ.position)
       if (dist < maxDist) {
-        activePairs.push([i, j])
-
         const alpha = 1 - dist / maxDist
+        activeEdges.push({ from: i, to: j, alpha })
+
         const i6 = lineIndex * 6
 
         linePositions[i6] = nodeI.position.x
@@ -130,39 +195,151 @@ function updateMeshLines(
     }
   }
 
-  return { lineCount: lineIndex, activePairs }
+  return { lineCount: lineIndex, activeEdges }
 }
 
-function updatePulsePackets(
-  pulses: PulsePacket[],
-  nodes: NodePoint[],
-  activePairs: [number, number][],
+function edgeKey(a: number, b: number): number {
+  return a < b ? a * 1024 + b : b * 1024 + a
+}
+
+function collectSpawnCandidates(pulses: SignalPulse[], activeEdges: ActiveEdge[]): ActiveEdge[] {
+  const occupied = new Set<number>()
+  for (const pulse of pulses) {
+    if (pulse.active) occupied.add(edgeKey(pulse.fromNode, pulse.toNode))
+  }
+  return activeEdges.filter((e) => e.alpha >= 0.2 && !occupied.has(edgeKey(e.from, e.to)))
+}
+
+function advanceOrSpawnPulse(
+  pulse: SignalPulse,
+  spawnCandidates: ActiveEdge[],
   delta: number,
 ) {
-  if (activePairs.length === 0) return
-
-  for (let p = 0; p < pulses.length; p++) {
-    const pulse = pulses[p]
-    if (!pulse) continue
-
+  if (pulse.active) {
     pulse.progress += pulse.speed * (delta * 60)
-
-    if (pulse.progress >= 1 || pulse.mesh.visible === false) {
-      const pair = activePairs[Math.floor(cryptoRandom() * activePairs.length)]
-      if (pair && pair[0] !== undefined && pair[1] !== undefined) {
-        pulse.fromNode = pair[0]
-        pulse.toNode = pair[1]
-        pulse.progress = 0
-        pulse.mesh.visible = true
-      }
+    if (pulse.progress >= 1) {
+      pulse.active = false
     }
+  }
+
+  if (pulse.active || spawnCandidates.length === 0) return
+
+  const pickIndex = Math.floor(cryptoRandom() * spawnCandidates.length)
+  const chosen = spawnCandidates.splice(pickIndex, 1)[0]
+  if (!chosen) return
+
+  const reverse = cryptoRandom() > 0.5
+  pulse.fromNode = reverse ? chosen.to : chosen.from
+  pulse.toNode = reverse ? chosen.from : chosen.to
+  pulse.progress = pulse.progress < 0 ? 0.15 + cryptoRandom() * 0.7 : 0
+  pulse.speed = 0.0045 + cryptoRandom() * 0.006
+  pulse.active = true
+}
+
+function writePulseTrailAndHead(
+  fromPos: THREE.Vector3,
+  toPos: THREE.Vector3,
+  headT: number,
+  envelope: number,
+  trailPositions: Float32Array,
+  trailColors: Float32Array,
+  trailOffset: number,
+  headPositions: Float32Array,
+  headColors: Float32Array,
+  headIndex: number,
+): number {
+  const ax = fromPos.x
+  const ay = fromPos.y
+  const az = fromPos.z
+  const dx = toPos.x - ax
+  const dy = toPos.y - ay
+  const dz = toPos.z - az
+  const tailT = Math.max(0, headT - PULSE_TRAIL_LENGTH)
+
+  for (let s = 0; s < PULSE_TRAIL_SEGMENTS; s++) {
+    const frac0 = s / PULSE_TRAIL_SEGMENTS
+    const frac1 = (s + 1) / PULSE_TRAIL_SEGMENTS
+    const t0 = tailT + (headT - tailT) * frac0
+    const t1 = tailT + (headT - tailT) * frac1
+    const c0 = frac0 * frac0 * envelope * 0.65
+    const c1 = frac1 * frac1 * envelope * 0.65
+
+    const base = (trailOffset + s) * 6
+    trailPositions[base] = ax + dx * t0
+    trailPositions[base + 1] = ay + dy * t0
+    trailPositions[base + 2] = az + dz * t0
+    trailPositions[base + 3] = ax + dx * t1
+    trailPositions[base + 4] = ay + dy * t1
+    trailPositions[base + 5] = az + dz * t1
+
+    trailColors[base] = 0.08 * c0
+    trailColors[base + 1] = 0.62 * c0
+    trailColors[base + 2] = 0.94 * c0
+    trailColors[base + 3] = 0.22 * c1
+    trailColors[base + 4] = 0.78 * c1
+    trailColors[base + 5] = 0.99 * c1
+  }
+
+  const h3 = headIndex * 3
+  headPositions[h3] = ax + dx * headT
+  headPositions[h3 + 1] = ay + dy * headT
+  headPositions[h3 + 2] = az + dz * headT
+
+  const headIntensity = envelope * 0.95
+  headColors[h3] = 0.35 * headIntensity
+  headColors[h3 + 1] = 0.82 * headIntensity
+  headColors[h3 + 2] = 1.0 * headIntensity
+
+  return trailOffset + PULSE_TRAIL_SEGMENTS
+}
+
+function updateSignalPulses(
+  pulses: SignalPulse[],
+  nodes: NodePoint[],
+  activeEdges: ActiveEdge[],
+  maxDist: number,
+  trailPositions: Float32Array,
+  trailColors: Float32Array,
+  headPositions: Float32Array,
+  headColors: Float32Array,
+  delta: number,
+): { trailSegmentCount: number; headCount: number } {
+  const spawnCandidates = collectSpawnCandidates(pulses, activeEdges)
+  let trailSegmentCount = 0
+  let headCount = 0
+
+  for (const pulse of pulses) {
+    advanceOrSpawnPulse(pulse, spawnCandidates, delta)
+    if (!pulse.active) continue
 
     const fromNode = nodes[pulse.fromNode]
     const toNode = nodes[pulse.toNode]
-    if (fromNode && toNode) {
-      pulse.mesh.position.lerpVectors(fromNode.position, toNode.position, pulse.progress)
+    const dist = fromNode && toNode ? fromNode.position.distanceTo(toNode.position) : maxDist
+    if (!fromNode || !toNode || dist >= maxDist) {
+      pulse.active = false
+      continue
     }
+
+    const edgeAlpha = Math.sqrt(1 - dist / maxDist)
+    const envelope = Math.sin(pulse.progress * Math.PI) * edgeAlpha
+    if (envelope <= 0.01) continue
+
+    trailSegmentCount = writePulseTrailAndHead(
+      fromNode.position,
+      toNode.position,
+      pulse.progress,
+      envelope,
+      trailPositions,
+      trailColors,
+      trailSegmentCount,
+      headPositions,
+      headColors,
+      headCount,
+    )
+    headCount++
   }
+
+  return { trailSegmentCount, headCount }
 }
 
 export function P2PMeshBackground() {
@@ -175,15 +352,15 @@ export function P2PMeshBackground() {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
 
     const scene = new THREE.Scene()
-    scene.fog = new THREE.FogExp2(0x070c09, 0.0018)
+    scene.fog = new THREE.FogExp2(FOG_COLOR, FOG_DENSITY)
 
     const camera = new THREE.PerspectiveCamera(
-      60,
+      CAMERA_FOV,
       container.clientWidth / Math.max(container.clientHeight, 1),
       0.1,
       1000,
     )
-    camera.position.z = 220
+    camera.position.z = CAMERA_Z
 
     let renderer: THREE.WebGLRenderer | null = null
     try {
@@ -201,23 +378,22 @@ export function P2PMeshBackground() {
     renderer.setClearColor(0x000000, 0)
     container.appendChild(renderer.domElement)
 
-    const nodeCount = window.innerWidth < 768 ? 32 : 54
-    const maxDistance = window.innerWidth < 768 ? 65 : 75
-    const { nodes, nodePositions } = createNodePoints(nodeCount)
+    const isMobile = window.innerWidth < MOBILE_BREAKPOINT
+    const nodeCount = isMobile ? MOBILE_NODE_COUNT : DESKTOP_NODE_COUNT
+    const maxDistance = isMobile ? MOBILE_MAX_DISTANCE : DESKTOP_MAX_DISTANCE
+    const maxPulses = isMobile ? MOBILE_PULSE_COUNT : DESKTOP_PULSE_COUNT
 
+    const { nodes, nodePositions } = createNodePoints(nodeCount)
     const pointsPosAttr = new THREE.BufferAttribute(nodePositions, 3).setUsage(THREE.DynamicDrawUsage)
     const pointsGeometry = new THREE.BufferGeometry()
     pointsGeometry.setAttribute('position', pointsPosAttr)
 
     const particleTexture = createCircleTexture()
     const pointsMaterial = new THREE.PointsMaterial({
-      size: 7.5,
+      size: NODE_POINT_SIZE,
       map: particleTexture,
-      transparent: true,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
     })
-
+    applyAdditiveGlowBlending(pointsMaterial)
     scene.add(new THREE.Points(pointsGeometry, pointsMaterial))
 
     const maxLines = (nodeCount * (nodeCount - 1)) / 2
@@ -225,45 +401,50 @@ export function P2PMeshBackground() {
     const lineColors = new Float32Array(maxLines * 6)
     const linePosAttr = new THREE.BufferAttribute(linePositions, 3).setUsage(THREE.DynamicDrawUsage)
     const lineColorAttr = new THREE.BufferAttribute(lineColors, 3).setUsage(THREE.DynamicDrawUsage)
-
     const lineGeometry = new THREE.BufferGeometry()
     lineGeometry.setAttribute('position', linePosAttr)
     lineGeometry.setAttribute('color', lineColorAttr)
 
-    const lineSegments = new THREE.LineSegments(
-      lineGeometry,
-      new THREE.LineBasicMaterial({
-        vertexColors: true,
-        transparent: true,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      }),
-    )
-    scene.add(lineSegments)
-
-    const pulseGeometry = new THREE.SphereGeometry(1.2, 8, 8)
-    const pulseMaterial = new THREE.MeshBasicMaterial({
-      color: 0x38bdf8,
-      transparent: true,
-      opacity: 0.85,
-      blending: THREE.AdditiveBlending,
+    const lineMaterial = new THREE.LineBasicMaterial({
+      vertexColors: true,
+      fog: false,
     })
+    applyAdditiveGlowBlending(lineMaterial)
+    scene.add(new THREE.LineSegments(lineGeometry, lineMaterial))
 
-    const pulses: PulsePacket[] = []
-    const maxPulses = window.innerWidth < 768 ? 8 : 16
+    const maxTrailSegments = maxPulses * PULSE_TRAIL_SEGMENTS
+    const trailPositions = new Float32Array(maxTrailSegments * 6)
+    const trailColors = new Float32Array(maxTrailSegments * 6)
+    const trailPosAttr = new THREE.BufferAttribute(trailPositions, 3).setUsage(THREE.DynamicDrawUsage)
+    const trailColorAttr = new THREE.BufferAttribute(trailColors, 3).setUsage(THREE.DynamicDrawUsage)
+    const trailGeometry = new THREE.BufferGeometry()
+    trailGeometry.setAttribute('position', trailPosAttr)
+    trailGeometry.setAttribute('color', trailColorAttr)
+    scene.add(new THREE.LineSegments(trailGeometry, lineMaterial))
 
-    for (let i = 0; i < maxPulses; i++) {
-      const mesh = new THREE.Mesh(pulseGeometry, pulseMaterial)
-      mesh.visible = false
-      scene.add(mesh)
-      pulses.push({
-        fromNode: 0,
-        toNode: 1,
-        progress: cryptoRandom(),
-        speed: 0.004 + cryptoRandom() * 0.007,
-        mesh,
-      })
-    }
+    const pulseTexture = createPulseGlowTexture()
+    const headPositions = new Float32Array(maxPulses * 3)
+    const headColors = new Float32Array(maxPulses * 3)
+    const headPosAttr = new THREE.BufferAttribute(headPositions, 3).setUsage(THREE.DynamicDrawUsage)
+    const headColorAttr = new THREE.BufferAttribute(headColors, 3).setUsage(THREE.DynamicDrawUsage)
+    const headGeometry = new THREE.BufferGeometry()
+    headGeometry.setAttribute('position', headPosAttr)
+    headGeometry.setAttribute('color', headColorAttr)
+    const headMaterial = new THREE.PointsMaterial({
+      size: PULSE_POINT_SIZE,
+      map: pulseTexture,
+      vertexColors: true,
+    })
+    applyAdditiveGlowBlending(headMaterial)
+    scene.add(new THREE.Points(headGeometry, headMaterial))
+
+    const pulses: SignalPulse[] = Array.from({ length: maxPulses }, () => ({
+      fromNode: 0,
+      toNode: 1,
+      progress: -1,
+      speed: 0.005,
+      active: false,
+    }))
 
     let targetMouseX = 0
     let targetMouseY = 0
@@ -313,12 +494,29 @@ export function P2PMeshBackground() {
       updateNodePhysics(nodes, pointsPosAttr.array as Float32Array, delta)
       pointsPosAttr.needsUpdate = true
 
-      const { lineCount, activePairs } = updateMeshLines(nodes, maxDistance, linePositions, lineColors)
+      const { lineCount, activeEdges } = updateMeshLines(nodes, maxDistance, linePositions, lineColors)
       lineGeometry.setDrawRange(0, lineCount * 2)
       linePosAttr.needsUpdate = true
       lineColorAttr.needsUpdate = true
 
-      updatePulsePackets(pulses, nodes, activePairs, delta)
+      const { trailSegmentCount, headCount } = updateSignalPulses(
+        pulses,
+        nodes,
+        activeEdges,
+        maxDistance,
+        trailPositions,
+        trailColors,
+        headPositions,
+        headColors,
+        delta,
+      )
+      trailGeometry.setDrawRange(0, trailSegmentCount * 2)
+      trailPosAttr.needsUpdate = true
+      trailColorAttr.needsUpdate = true
+
+      headGeometry.setDrawRange(0, headCount)
+      headPosAttr.needsUpdate = true
+      headColorAttr.needsUpdate = true
 
       renderer.render(scene, camera)
     }
@@ -334,10 +532,12 @@ export function P2PMeshBackground() {
       pointsGeometry.dispose()
       pointsMaterial.dispose()
       particleTexture.dispose()
+      pulseTexture.dispose()
       lineGeometry.dispose()
-      lineSegments.geometry.dispose()
-      pulseGeometry.dispose()
-      pulseMaterial.dispose()
+      lineMaterial.dispose()
+      trailGeometry.dispose()
+      headGeometry.dispose()
+      headMaterial.dispose()
 
       if (renderer) {
         renderer.dispose()
