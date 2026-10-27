@@ -113,6 +113,8 @@ def relay_ready(path):
 
 
 def verify_downloads(processes, wind, relay_binary, root, evidence):
+    with (evidence / "cli-filesystem.txt").open("w") as environment:
+        subprocess.run(["df", str(root)], stdout=environment, check=True)
     relay, ready = processes.start("relay", [
         relay_binary, "--listen", "127.0.0.1:0", "--database", str(root / "relay.sqlite"),
         "--stun-udp", "127.0.0.1:0", "--stun-admin", "127.0.0.1:0",
@@ -125,6 +127,7 @@ def verify_downloads(processes, wind, relay_binary, root, evidence):
     output = root / "single-output"
     receiver, _ = processes.start("single-get", [
         wind, "get", link, "-o", str(output), "--connectivity", "relay-only",
+        "--trace", str(evidence / "single-get.ndjson"),
     ])
     processes.wait(receiver)
     assert digest(source) == digest(output / source.name), "single-file content mismatch"
@@ -138,6 +141,7 @@ def verify_downloads(processes, wind, relay_binary, root, evidence):
     output = root / "folder-output"
     receiver, _ = processes.start("interrupted-get", [
         wind, "get", link, "-o", str(output), "--connectivity", "relay-only",
+        "--trace", str(evidence / "interrupted-get.ndjson"),
     ])
     first = output / tree.name / "first.bin"
     await_value(receiver, lambda: first.is_file() and first.stat().st_size == FIRST_FILE_BYTES,
