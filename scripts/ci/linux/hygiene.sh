@@ -44,6 +44,9 @@ node --test scripts/ci/gopls/*.test.mjs
 echo "-- Cloudflare deployment lifecycle"
 node --test scripts/deploy/cloudflare/*.test.mjs
 
+echo "-- Browser dependency installation recovery"
+bash .github/actions/setup-browser/install-dependencies.tests.sh
+
 echo "-- Browser FSA reviewed support artifact syntax"
 while IFS= read -r -d '' script; do
   node --check "$script"

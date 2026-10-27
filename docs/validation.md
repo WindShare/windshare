@@ -89,7 +89,8 @@ Coverage is gated on the core and non-core totals and on each package, with no p
 | Rust relay (Windows) | `cargo test -p windshare-relay-native --locked`: native unit and process integration tests, without workspace coverage or Wasm builds. |
 | Web | Lint, build, and unit tests. |
 | Go E2E | The critical sender/relay/receiver process test. |
-| Chromium | Relay smoke, sustained native-size block bursts, and short browser contracts. |
+| Chromium relay smoke | Relay smoke, sustained native-size block bursts, and session isolation. |
+| Chromium browser contracts | Short component contracts, independently of native toolchains and smoke tests. |
 | Windows | Native build, vet, short tests, and compatible-name restoration checks. |
 
 The opt-in [Cloudflare deployment workflow](deploy/cloudflare-relay.md) runs independently
