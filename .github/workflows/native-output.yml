@@ -76,7 +76,7 @@ jobs:
           done
       - name: Preserve native evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: native-output-${{ matrix.runner }}
           path: ${{ runner.temp }}/native-output-evidence
