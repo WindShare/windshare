@@ -12,7 +12,7 @@ import (
 )
 
 // FilesystemOutput adapts one caller-selected container to receive authority.
-// Certification happens in the workflow, after clients have initialized their
+// IdentityScheme happens in the workflow, after clients have initialized their
 // own presentation resources, and before any remote session is established.
 type FilesystemOutput struct {
 	RootPath   string

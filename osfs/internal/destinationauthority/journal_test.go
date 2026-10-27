@@ -139,7 +139,7 @@ func TestCleanupProofNegativeDowngradesOnlyCrashCleanup(t *testing.T) {
 			result.RangeRecovery() != supported || result.CrashCleanup().Reason() != test.reason {
 			t.Fatalf("result=%+v err=%v", result, err)
 		}
-		if mode, err := outputcap.SelectExecutionMode(result); err != nil || mode != outputcap.ExecutionLiveOnly {
+		if mode, err := outputcap.SelectExecutionMode(result); err != nil || mode != outputcap.ExecutionResumable {
 			t.Fatalf("mode error=%v", err)
 		}
 	}

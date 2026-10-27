@@ -23,7 +23,7 @@ func projectFilesystemOutputTrace(event outputruntime.FilesystemOutputTrace) Fil
 		ReceiveIntentDigest:     event.ReceiveIntentDigest,
 		ReceiveOperationID:      event.ReceiveOperationID,
 		SessionID:               event.SessionID,
-		Certification:           projectCertification(event.Certification),
+		IdentityScheme:          projectIdentityScheme(event.IdentityScheme),
 		NativeLockScope:         projectNativeLockScope(event.NativeLockScope),
 		NativeLockMilestone:     projectNativeLockMilestone(event.NativeLockMilestone),
 		RootOpenDisposition:     projectRootOpenDisposition(event.RootOpenDisposition),
@@ -317,12 +317,12 @@ func projectRuntimeDecision(
 	}
 }
 
-func projectCertification(value outputruntime.FilesystemOutputCertificationID) FilesystemOutputCertificationID {
+func projectIdentityScheme(value outputruntime.FilesystemOutputIdentitySchemeID) FilesystemOutputIdentitySchemeID {
 	switch value {
-	case outputruntime.FilesystemOutputCertificationLinuxExt4ProcessRestart:
-		return FilesystemOutputCertificationLinuxExt4ProcessRestart
-	case outputruntime.FilesystemOutputCertificationWindowsNTFSProcessRestart:
-		return FilesystemOutputCertificationWindowsNTFSProcessRestart
+	case outputruntime.FilesystemOutputIdentitySchemeLinuxHandleV2:
+		return FilesystemOutputIdentitySchemeLinuxHandleV2
+	case outputruntime.FilesystemOutputIdentitySchemeWindowsObjectIDV1:
+		return FilesystemOutputIdentitySchemeWindowsObjectIDV1
 	default:
 		return ""
 	}

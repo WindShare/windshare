@@ -62,7 +62,7 @@ func (value FilesystemOutputNativeLockMilestone) DiagnosticName() string {
 func (v FilesystemOutputTrace) DiagnosticRecord() diagnostics.Record {
 	f := diagnostics.Fields{
 		"operation":             diagnostics.Text(v.Operation.DiagnosticName()),
-		"certification":         diagnostics.Text(string(v.Certification)),
+		"identityScheme":        diagnostics.Text(string(v.IdentityScheme)),
 		"root_disposition":      diagnostics.Text(string(v.RootOpenDisposition)),
 		"runtime_component":     diagnostics.Text(v.RuntimeComponent.DiagnosticName()),
 		"runtime_operation":     diagnostics.Text(v.RuntimeOperation.DiagnosticName()),

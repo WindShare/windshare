@@ -4,11 +4,11 @@ package osfs
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"syscall"
 
 	"github.com/windshare/windshare/osfs/internal/outputcap"
+	"github.com/windshare/windshare/osfs/internal/outputdarwin"
 )
 
 func platformMutationToken(file *os.File) (posixMutationToken, error) {
@@ -27,6 +27,6 @@ func platformMutationToken(file *os.File) (posixMutationToken, error) {
 	}, nil
 }
 
-func openNativeOutputPlatform(_ string, _ bool) (outputcap.Platform, error) {
-	return nil, fmt.Errorf("%w: certified only on Linux/ext4 and Windows/local-NTFS", outputcap.ErrRecoverableOutputUnsupported)
+func openNativeOutputPlatform(path string, create bool) (outputcap.Platform, error) {
+	return outputdarwin.Open(path, create)
 }

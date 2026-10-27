@@ -18,6 +18,14 @@ const (
 	ownedStageSuffix  = ".stage"
 )
 
+// StagePolicy describes permission inheritance independently from crash cleanup.
+type StagePolicy uint8
+
+const (
+	PrivateStage StagePolicy = iota
+	InheritFinalParent
+)
+
 // FileExecutionStore binds the native file engine to the physical checkpoint
 // repository. Its logical authority state is shared through the operation
 // lease, so separate adapters cannot both observe an absent lineage and install
@@ -25,9 +33,9 @@ const (
 type FileExecutionStore struct {
 	mu sync.Mutex
 
-	repository *Repository
-	profile    checkpointmodel.LiveCleanupNativeProfile
-	authority  *fileExecutionAuthority
+	repository  *Repository
+	stagePolicy StagePolicy
+	authority   *fileExecutionAuthority
 }
 
 var (
@@ -36,33 +44,33 @@ var (
 )
 
 func NewFileExecutionStore(repository *Repository) (*FileExecutionStore, error) {
-	return NewFileExecutionStoreWithProfile(repository, 0)
+	return NewFileExecutionStoreWithStagePolicy(repository, 0)
 }
 
-func NewFileExecutionStoreWithProfile(
+func NewFileExecutionStoreWithStagePolicy(
 	repository *Repository,
-	profile checkpointmodel.LiveCleanupNativeProfile,
+	stagePolicy StagePolicy,
 ) (*FileExecutionStore, error) {
-	return newFileExecutionStore(repository, profile, true)
+	return newFileExecutionStore(repository, stagePolicy, true)
 }
 
 // NewFreshFileExecutionStore deliberately skips repository enumeration. It is
 // valid only for a newly published ordinary operation whose private namespace
 // cannot contain an earlier file record.
 func NewFreshFileExecutionStore(repository *Repository) (*FileExecutionStore, error) {
-	return NewFreshFileExecutionStoreWithProfile(repository, 0)
+	return NewFreshFileExecutionStoreWithStagePolicy(repository, 0)
 }
 
-func NewFreshFileExecutionStoreWithProfile(
+func NewFreshFileExecutionStoreWithStagePolicy(
 	repository *Repository,
-	profile checkpointmodel.LiveCleanupNativeProfile,
+	stagePolicy StagePolicy,
 ) (*FileExecutionStore, error) {
-	return newFileExecutionStore(repository, profile, false)
+	return newFileExecutionStore(repository, stagePolicy, false)
 }
 
 func newFileExecutionStore(
 	repository *Repository,
-	profile checkpointmodel.LiveCleanupNativeProfile,
+	stagePolicy StagePolicy,
 	reconcile bool,
 ) (*FileExecutionStore, error) {
 	if repository == nil || repository.records == nil || repository.anchors == nil ||
@@ -70,7 +78,7 @@ func newFileExecutionStore(
 		return nil, transfer.ErrInvalidOutputBinding
 	}
 	store := &FileExecutionStore{
-		repository: repository, profile: profile, authority: repository.authority,
+		repository: repository, stagePolicy: stagePolicy, authority: repository.authority,
 	}
 	store.authority.mu.Lock()
 	defer store.authority.mu.Unlock()

@@ -33,19 +33,19 @@ const (
 	FilesystemOutputAuthorityCreatedRoot    FilesystemOutputRootDisposition = "authority-created-root"
 )
 
-type FilesystemOutputCertificationID string
+type FilesystemOutputIdentitySchemeID string
 
 const (
-	FilesystemOutputCertificationLinuxExt4ProcessRestart   FilesystemOutputCertificationID = "linux/ext4/process-restart/v2"
-	FilesystemOutputCertificationWindowsNTFSProcessRestart FilesystemOutputCertificationID = "windows/ntfs/process-restart/v1"
+	FilesystemOutputIdentitySchemeLinuxHandleV2     FilesystemOutputIdentitySchemeID = "linux/ext4/handle/v2"
+	FilesystemOutputIdentitySchemeWindowsObjectIDV1 FilesystemOutputIdentitySchemeID = "windows/ntfs/object-id/v1"
 )
 
-func filesystemOutputCertificationFromState(certification outputcap.CertificationID) FilesystemOutputCertificationID {
-	switch certification {
-	case outputcap.CertificationLinuxExt4ProcessRestart:
-		return FilesystemOutputCertificationLinuxExt4ProcessRestart
-	case outputcap.CertificationWindowsNTFSProcessRestart:
-		return FilesystemOutputCertificationWindowsNTFSProcessRestart
+func filesystemOutputIdentitySchemeFromState(identityScheme outputcap.IdentitySchemeID) FilesystemOutputIdentitySchemeID {
+	switch identityScheme {
+	case outputcap.IdentitySchemeLinuxHandleV2:
+		return FilesystemOutputIdentitySchemeLinuxHandleV2
+	case outputcap.IdentitySchemeWindowsObjectIDV1:
+		return FilesystemOutputIdentitySchemeWindowsObjectIDV1
 	default:
 		return ""
 	}
@@ -141,7 +141,7 @@ type FilesystemOutputTrace struct {
 	ReceiveIntentDigest     transfer.ReceiveIntentDigest
 	ReceiveOperationID      receivecontract.OperationID
 	SessionID               transfer.OutputSessionID
-	Certification           FilesystemOutputCertificationID
+	IdentityScheme          FilesystemOutputIdentitySchemeID
 	NativeLockScope         FilesystemOutputNativeLockScope
 	NativeLockMilestone     FilesystemOutputNativeLockMilestone
 	RootOpenDisposition     FilesystemOutputRootDisposition

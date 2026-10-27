@@ -188,7 +188,7 @@ func (store *FileExecutionStore) CreateOwnedFile(
 	defer func() {
 		resultErr = fileOutputBoundaryError(ctx, transferfault.ScopeFileLocal, resultErr)
 	}()
-	if store == nil || ctx == nil || store.profile.Valid() && destination == nil || object.IsZero() || exactSize > catalog.MaxFileSize {
+	if store == nil || ctx == nil || store.stagePolicy == InheritFinalParent && destination == nil || object.IsZero() || exactSize > catalog.MaxFileSize {
 		return nil, fileexecution.OwnedObservation{}, transfer.ErrInvalidOutputBinding
 	}
 	if err := ctx.Err(); err != nil {
@@ -283,7 +283,7 @@ func (store *FileExecutionStore) createOwnedStage(
 	stageName string,
 	exactSize uint64,
 ) (outputcap.MutableFile, bool, error) {
-	if !store.profile.Valid() {
+	if store.stagePolicy == PrivateStage {
 		// Synthetic stores retain the private constructor for isolated unit tests;
 		// production composition always supplies a certified ordinary profile.
 		stage, err := stageDirectory.CreateFile(stageName, true, int64(exactSize))
@@ -380,7 +380,7 @@ func (store *FileExecutionStore) openObservedOwnedLocked(
 	exactSize uint64,
 	validateSize bool,
 ) (observedOwnedFiles, fileexecution.OwnedObservation, error) {
-	privateProfile := !store.profile.Valid()
+	privateProfile := store.stagePolicy == PrivateStage
 	stage := observeOwnedDataFile(store.repository.stages, object, ownedStageSuffix, privateProfile)
 	anchor := observeOwnedDataFile(store.repository.anchors, object, ownedAnchorSuffix, privateProfile)
 	condition, comparisonErr := classifyOwnedObservation(stage, anchor, exactSize, validateSize)
@@ -407,7 +407,7 @@ func (store *FileExecutionStore) openMutableOwnedLocked(
 	exactSize uint64,
 	validateSize bool,
 ) (fileexecution.OwnedFile, fileexecution.OwnedObservation, error) {
-	privateProfile := !store.profile.Valid()
+	privateProfile := store.stagePolicy == PrivateStage
 	stage := openMutableOwnedDataFile(store.repository.stages, object, ownedStageSuffix, privateProfile)
 	anchor := observeOwnedDataFile(store.repository.anchors, object, ownedAnchorSuffix, privateProfile)
 	condition, comparisonErr := classifyOwnedObservation(stage, anchor, exactSize, validateSize)

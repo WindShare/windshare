@@ -77,8 +77,8 @@ func (platform *destinationPlatform) AcquirePublicOperationGuard() (outputcap.Pu
 func (*destinationPlatform) RootBinding() (outputcap.OutputRootBinding, error) {
 	return outputcap.OutputRootBinding{}, errDestinationFake
 }
-func (*destinationPlatform) Certification() outputcap.CertificationID {
-	return outputcap.CertificationWindowsNTFSProcessRestart
+func (*destinationPlatform) IdentityScheme() outputcap.IdentitySchemeID {
+	return outputcap.IdentitySchemeWindowsObjectIDV1
 }
 func (*destinationPlatform) Durability() transfer.DurabilityLevel {
 	return transfer.DurabilityProcessRestart

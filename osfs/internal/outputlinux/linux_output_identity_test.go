@@ -13,7 +13,7 @@ import (
 
 func TestLinuxOpenHandleFactsDoNotConsumeRestartEvidence(t *testing.T) {
 	t.Parallel()
-	system := linuxCertificationTestSystem(
+	system := linuxIdentitySchemeTestSystem(
 		linuxExt4SuperMagic, "ext4", linuxTestDeviceMajor, true,
 	)
 	system.getVersion = func(int) (uint32, error) {
@@ -37,7 +37,7 @@ func TestLinuxStatxRestartIdentityRequiresReturnedBirthAndMountMasks(t *testing.
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			system := linuxCertificationTestSystem(
+			system := linuxIdentitySchemeTestSystem(
 				linuxExt4SuperMagic, "ext4", linuxTestDeviceMajor, true,
 			)
 			original := system.statx
@@ -61,7 +61,7 @@ func TestLinuxStatxRestartIdentityRequiresReturnedBirthAndMountMasks(t *testing.
 
 func TestLinuxRestartIdentityAcceptsZeroBirthTimeAndZeroGeneration(t *testing.T) {
 	t.Parallel()
-	system := linuxCertificationTestSystem(
+	system := linuxIdentitySchemeTestSystem(
 		linuxExt4SuperMagic, "ext4", linuxTestDeviceMajor, true,
 	)
 	original := system.statx

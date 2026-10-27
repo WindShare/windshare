@@ -12,48 +12,48 @@ import (
 	"github.com/windshare/windshare/osfs/internal/outputlinux"
 )
 
-const linuxExt4NativeCertificationProfile = "linux-ext4"
+const linuxExt4NativeIdentitySchemeProfile = "linux-ext4"
 
-func TestLinuxExt4NativeCertification(t *testing.T) {
-	requireUnprivilegedLinuxExt4Certification(t)
+func TestLinuxExt4NativeIdentityScheme(t *testing.T) {
+	requireUnprivilegedLinuxExt4IdentityScheme(t)
 	platform := openCertifiedNativeOutputForTest(
 		t,
 		t.TempDir(),
-		linuxExt4NativeCertificationProfile,
-		outputcap.CertificationLinuxExt4ProcessRestart,
+		linuxExt4NativeIdentitySchemeProfile,
+		outputcap.IdentitySchemeLinuxHandleV2,
 	)
 	if err := platform.Close(); err != nil {
-		t.Fatalf("close Linux/ext4 certification authority: %v", err)
+		t.Fatalf("close Linux/ext4 identityScheme authority: %v", err)
 	}
 }
 
 func TestLinuxExt4ProcessRestartRecovery(t *testing.T) {
-	requireUnprivilegedLinuxExt4Certification(t)
+	requireUnprivilegedLinuxExt4IdentityScheme(t)
 	runNativeOutputProcessRestartRecoveryTest(
 		t,
-		linuxExt4NativeCertificationProfile,
-		outputcap.CertificationLinuxExt4ProcessRestart,
+		linuxExt4NativeIdentitySchemeProfile,
+		outputcap.IdentitySchemeLinuxHandleV2,
 		outputlinux.ProbeNamePrefix+"31415926535897932384626433832795",
 		0,
 	)
 }
 
-func requireUnprivilegedLinuxExt4Certification(t *testing.T) {
+func requireUnprivilegedLinuxExt4IdentityScheme(t *testing.T) {
 	t.Helper()
 	if os.Geteuid() != 0 {
 		return
 	}
-	if os.Getenv(nativeOutputCertificationProfileEnvironment) == linuxExt4NativeCertificationProfile {
-		t.Fatal("required Linux/ext4 certification must run as an ordinary unprivileged receiver")
+	if os.Getenv(nativeOutputIdentitySchemeProfileEnvironment) == linuxExt4NativeIdentitySchemeProfile {
+		t.Fatal("required Linux/ext4 identityScheme must run as an ordinary unprivileged receiver")
 	}
-	t.Skip("Linux/ext4 native certification is meaningful only as an unprivileged receiver")
+	t.Skip("Linux/ext4 native identityScheme is meaningful only as an unprivileged receiver")
 }
 
 func TestLinuxExt4CreatesMissingRootThroughCertifiedHandles(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "first", "second")
 	platform, err := openNativeOutputPlatform(target, true)
 	if err != nil {
-		nativeOutputCertificationFailure(t, linuxExt4NativeCertificationProfile,
+		nativeOutputIdentitySchemeFailure(t, linuxExt4NativeIdentitySchemeProfile,
 			"create missing Linux/ext4 root through certified handles", err)
 		return
 	}
@@ -62,8 +62,8 @@ func TestLinuxExt4CreatesMissingRootThroughCertifiedHandles(t *testing.T) {
 			t.Errorf("close handle-created Linux/ext4 root: %v", err)
 		}
 	}()
-	if binding, err := platform.RootBinding(); err != nil || binding.IsZero() {
-		nativeOutputCertificationFailure(t, linuxExt4NativeCertificationProfile,
+	if binding, err := platform.(nativeOutputEvidencePlatform).RootBinding(); err != nil || binding.IsZero() {
+		nativeOutputIdentitySchemeFailure(t, linuxExt4NativeIdentitySchemeProfile,
 			"bind handle-created Linux/ext4 root", err)
 	}
 }
@@ -84,18 +84,18 @@ func TestLinuxRootCreationDoesNotTraverseSymlinkAncestor(t *testing.T) {
 		t.Fatal("root creation traversed a symlink ancestor")
 	}
 	if _, statErr := os.Lstat(unexpected); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("symlink target was mutated before certification: %v", statErr)
+		t.Fatalf("symlink target was mutated before identityScheme: %v", statErr)
 	}
 }
 
 func TestLinuxExt4PinnedRemovalIsHandleBound(t *testing.T) {
-	requireUnprivilegedLinuxExt4Certification(t)
+	requireUnprivilegedLinuxExt4IdentityScheme(t)
 	rootPath := t.TempDir()
 	platform := openCertifiedNativeOutputForTest(
 		t,
 		rootPath,
-		linuxExt4NativeCertificationProfile,
-		outputcap.CertificationLinuxExt4ProcessRestart,
+		linuxExt4NativeIdentitySchemeProfile,
+		outputcap.IdentitySchemeLinuxHandleV2,
 	)
 	defer platform.Close()
 	root := platform.Root()

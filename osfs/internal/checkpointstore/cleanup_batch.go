@@ -166,7 +166,7 @@ func (store *FileExecutionStore) cleanupBatch(
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if err := phase.namespace.removeOwned(object, phase.suffix, !store.profile.Valid()); err != nil {
+			if err := phase.namespace.removeOwned(object, phase.suffix, store.stagePolicy == PrivateStage); err != nil {
 				return err
 			}
 		}

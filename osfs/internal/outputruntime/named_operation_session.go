@@ -165,11 +165,11 @@ func (authority *Authority) namedFileExecutor(
 	if err != nil {
 		return nil, nil, nil, checkpointRuntimeError(context.Background(), "open ordinary file repository", err)
 	}
-	storeFactory := checkpointstore.NewFreshFileExecutionStoreWithProfile
+	storeFactory := checkpointstore.NewFreshFileExecutionStoreWithStagePolicy
 	if operation.reopened {
-		storeFactory = checkpointstore.NewFileExecutionStoreWithProfile
+		storeFactory = checkpointstore.NewFileExecutionStoreWithStagePolicy
 	}
-	store, err := storeFactory(&repository, authority.destination.LiveCleanupProfile())
+	store, err := storeFactory(&repository, checkpointstore.InheritFinalParent)
 	var repositoryAttention bool
 	if operation.reopened {
 		var recordCount uint64

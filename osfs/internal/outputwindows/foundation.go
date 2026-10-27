@@ -235,8 +235,8 @@ func (guard *windowsOutputPublicOperationGuard) Close() error {
 	return windowsOutputError(err)
 }
 
-func (*windowsOutputPlatform) Certification() outputcap.CertificationID {
-	return outputcap.CertificationWindowsNTFSProcessRestart
+func (*windowsOutputPlatform) IdentityScheme() outputcap.IdentitySchemeID {
+	return outputcap.IdentitySchemeWindowsObjectIDV1
 }
 
 func (platform *windowsOutputPlatform) RootBinding() (
@@ -301,7 +301,7 @@ func (platform *windowsOutputPlatform) RootBinding() (
 	object := make([]byte, len("windows/ntfs/directory-object/v2")+len(objectID))
 	copy(object, "windows/ntfs/directory-object/v2")
 	copy(object[len("windows/ntfs/directory-object/v2"):], objectID[:])
-	binding, err := outputcap.NewOutputRootBinding(platform.Certification(), volume, object)
+	binding, err := outputcap.NewOutputRootBinding(platform.IdentityScheme(), volume, object)
 	return binding, windowsOutputError(err)
 }
 
