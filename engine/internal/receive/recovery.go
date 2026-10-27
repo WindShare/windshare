@@ -3,6 +3,7 @@ package receive
 import (
 	"context"
 	"errors"
+	"slices"
 
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/transfer"
@@ -47,12 +48,7 @@ type Pause struct {
 }
 
 func (pause Pause) Allows(action RecoveryAction) bool {
-	for _, allowed := range pause.Actions {
-		if action == allowed {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(pause.Actions, action)
 }
 
 func Run(ctx context.Context, request Request, deps Dependencies) task.Completion[Result] {

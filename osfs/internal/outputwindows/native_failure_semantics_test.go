@@ -542,7 +542,7 @@ func TestWindowsProbeLeftoverRejectsAmbiguousNativeCuts(t *testing.T) {
 			if err := probe.Close(); err != nil {
 				t.Fatal(err)
 			}
-			leftover, err := outputprobe.Inspect(&windowsOutputDirectory{native: root}, probeName, outputprobe.WindowsNTFS)
+			leftover, err := outputprobe.Inspect(&windowsOutputDirectory{native: root}, probeName, outputprobe.SizedDataLinks)
 			if err == nil || leftover != nil {
 				if leftover != nil {
 					_ = leftover.Close()

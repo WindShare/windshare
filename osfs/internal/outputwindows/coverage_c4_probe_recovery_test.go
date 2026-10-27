@@ -265,7 +265,7 @@ func TestCoverageC4WindowsProbeRemovalStopsAtIdentityReplacement(t *testing.T) {
 			defer guard.Close()
 			root := guard.Root()
 			test.build(t, root, test.probeName)
-			leftover, err := outputprobe.Inspect(&windowsOutputDirectory{native: root}, test.probeName, outputprobe.WindowsNTFS)
+			leftover, err := outputprobe.Inspect(&windowsOutputDirectory{native: root}, test.probeName, outputprobe.SizedDataLinks)
 			if err != nil {
 				t.Fatal(err)
 			}

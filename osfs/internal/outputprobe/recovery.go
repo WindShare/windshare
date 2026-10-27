@@ -49,7 +49,7 @@ func Inspect(root outputcap.Directory, name string, profile Profile) (_ *Workspa
 		}
 	}()
 	maximumEntries := len(fileRemovalOrder) + len(directoryRemovalOrder)
-	if profile != LinuxExt4 {
+	if profile != EmptyDataLinks {
 		maximumEntries--
 	}
 	names, err := directory.Names(maximumEntries)
@@ -88,7 +88,7 @@ func (inspection *leftoverInspection) inspectEntry(entry string) error {
 
 func (inspection *leftoverInspection) inspectFile(entry string) error {
 	public := entry == PublicStageName
-	if public && inspection.profile != LinuxExt4 {
+	if public && inspection.profile != EmptyDataLinks {
 		return fmt.Errorf("unexpected probe entry %q", entry)
 	}
 	file, err := inspection.workspace.directory.OpenObservedFile(entry, !public)
