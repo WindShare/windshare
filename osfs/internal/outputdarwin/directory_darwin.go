@@ -19,11 +19,10 @@ type objectIdentity struct {
 	device int32
 	inode  uint64
 	kind   uint16
-	birth  unix.Timespec
 }
 
 func identity(stat unix.Stat_t) objectIdentity {
-	return objectIdentity{device: stat.Dev, inode: stat.Ino, kind: stat.Mode & unix.S_IFMT, birth: stat.Btim}
+	return objectIdentity{device: stat.Dev, inode: stat.Ino, kind: stat.Mode & unix.S_IFMT}
 }
 
 type directory struct {
@@ -259,13 +258,11 @@ func (dir *directory) PersistentDirectoryIdentityClaim() ([]byte, error) {
 	if len(fileID) != 8 || binary.LittleEndian.Uint64(fileID) != dir.object.inode {
 		return nil, outputcap.ErrUnsafeNamespace
 	}
-	// Birth time is additive replacement evidence. Content-generation counters
-	// are deliberately absent: ordinary writes must never change object identity.
+	// APFS advertises non-recycled persistent file IDs. Creation time is writable
+	// metadata on Darwin, so it cannot participate in an object identity claim.
 	const domain = "darwin/apfs/directory-object/v1"
 	claim := append([]byte(domain), dir.volume.uuid[:]...)
 	claim = binary.BigEndian.AppendUint64(claim, dir.object.inode)
-	claim = binary.BigEndian.AppendUint64(claim, uint64(dir.object.birth.Sec))
-	claim = binary.BigEndian.AppendUint64(claim, uint64(dir.object.birth.Nsec))
 	return claim, nil
 }
 func (dir *directory) PreparePersistentDirectoryIdentityClaim() ([]byte, error) {

@@ -267,7 +267,7 @@ func FilesystemOutputFailureForStage(err error, stage FilesystemOutputFailureSta
 type FilesystemOutputTraceOperation uint8
 
 const (
-	TraceFilesystemCertified FilesystemOutputTraceOperation = iota + 1
+	TraceFilesystemIdentityEvidence FilesystemOutputTraceOperation = iota + 1
 	TraceFeatureProbeCompleted
 	TraceCheckpointNamespaceOpened
 	TraceNativeLock

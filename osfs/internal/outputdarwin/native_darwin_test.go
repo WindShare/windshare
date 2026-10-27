@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 	"golang.org/x/sys/unix"
 )
@@ -139,5 +140,59 @@ func TestAPFSPrivateModeDoesNotOverrideACLGrants(t *testing.T) {
 	}
 	if err := private.(*directory).verify(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("private ACL grant admitted: %v", err)
+	}
+}
+
+func TestAPFSRestoringMetadataKeepsObjectIdentity(t *testing.T) {
+	platform, err := Open(t.TempDir(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer platform.Close()
+	before, err := platform.RootBinding()
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := platform.root.CreateFile("payload", false, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	witness, err := platform.root.OpenObservedFile("payload", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer witness.Close()
+	modified, err := catalog.NewModifiedTime(1, 123456789, catalog.TimePrecisionNanoseconds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, _ := stateFrom(file)
+	var old, current unix.Stat_t
+	if err := unix.Fstat(int(state.file.Fd()), &old); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.SetModifiedTime(modified); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Fstat(int(state.file.Fd()), &current); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("restore mtime: inode=%d birth_before=%v birth_after=%v", old.Ino, old.Btim, current.Btim)
+	if old.Ino != current.Ino || current.Mtim.Sec != modified.Seconds() || current.Mtim.Nsec != int64(modified.Nanoseconds()) {
+		t.Fatalf("mtime restoration changed the object or lost precision: %+v", current)
+	}
+	if same, err := file.SameFile(witness); err != nil || !same {
+		t.Fatalf("metadata restoration revoked a pinned file: same=%t err=%v", same, err)
+	}
+	if err := file.Sync(); err != nil {
+		t.Fatalf("metadata restoration blocked data-before-checkpoint flush: %v", err)
+	}
+	if err := platform.root.SetModifiedTime(modified); err != nil {
+		t.Fatal(err)
+	}
+	after, err := platform.RootBinding()
+	if err != nil || before != after {
+		t.Fatalf("metadata restoration changed persistent directory identity: %v", err)
 	}
 }

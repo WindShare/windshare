@@ -13,7 +13,7 @@ func TestOutputTraceProjectionMapsEveryRuntimeEnum(t *testing.T) {
 		value outputruntime.FilesystemOutputTraceOperation
 		want  FilesystemOutputTraceOperation
 	}{
-		{outputruntime.TraceFilesystemCertified, TraceFilesystemCertified},
+		{outputruntime.TraceFilesystemIdentityEvidence, TraceFilesystemIdentityEvidence},
 		{outputruntime.TraceFeatureProbeCompleted, TraceFeatureProbeCompleted},
 		{outputruntime.TraceCheckpointNamespaceOpened, TraceCheckpointNamespaceOpened},
 		{outputruntime.TraceNativeLock, TraceNativeLock},
