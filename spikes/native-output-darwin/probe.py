@@ -135,6 +135,34 @@ def identity_and_publication(path):
         os.close(root)
 
 
+def mutation_counters(path):
+    root = open_directory(path)
+    fd = open_file(root, "data", os.O_CREAT | os.O_EXCL | os.O_RDWR)
+    try:
+        write_at(fd, b"a" * CHUNK_BYTES)
+        os.fsync(fd)
+        original = identity(fd)
+        before = mutation_observation(fd)
+        require(before["write_generation"] not in (None, 0), "no usable write generation")
+        write_at(fd, b"b" * CHUNK_BYTES)
+        os.fsync(fd)
+        changed = mutation_observation(fd)
+        require(changed["write_generation"] not in (None, 0, before["write_generation"]),
+                "same-size overwrite was not detected")
+        os.utime(fd, ns=(os.fstat(fd).st_atime_ns, before["mtime_ns"]))
+        os.fsync(fd)
+        restored = mutation_observation(fd)
+        require(identity(fd) == original, "ordinary content write changed object identity")
+        require(restored["mtime_ns"] == before["mtime_ns"], "mtime restoration failed")
+        require(restored["write_generation"] == changed["write_generation"],
+                "metadata-only change altered the content generation")
+        return {"before": before, "after_write": changed, "after_mtime_restore": restored,
+                "stable_identity": True, "same_size_write_detected_despite_restored_mtime": True}
+    finally:
+        os.close(fd)
+        os.close(root)
+
+
 def publication_collisions(path):
     root = open_directory(path)
     try:
@@ -285,7 +313,7 @@ def restart(path, cut):
     expected_hash = hashlib.sha256(b"".join(
         payload(offset, CHUNK_BYTES) for offset in range(0, FILE_BYTES, CHUNK_BYTES)
     )).hexdigest()
-    require(result["writer_pid"] != writer, "recovery reused writer process state")
+    require(result["recovery_pid"] != writer, "recovery reused writer process state")
     require(result["reused_bytes"] == expected, "recovery inferred progress beyond the installed checkpoint")
     require(result["written_bytes"] == FILE_BYTES - expected, "recovery rewrote verified ranges")
     require(result["same_object"] and result["sha256"] == expected_hash, "recovery changed identity or bytes")
@@ -334,6 +362,7 @@ def main():
     require(report["environment"]["filesystem"] == "apfs", "experiment requires an observed APFS volume")
     cases = [
         ("identity-publication", identity_and_publication),
+        ("mutation-counters", mutation_counters),
         ("publication-collisions", publication_collisions),
         ("concurrent-publication", concurrent_publication),
         ("placement-and-names", placement_and_names),
