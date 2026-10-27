@@ -29,6 +29,7 @@
 ### Validation
 
 - `make <gate>` or `make check` or `make ci-parallel`. Local gates use installed prerequisites.
+- `make sloc` (sloc-guard per-file line limit).
 - See `docs/validation.md` for ownership and release details.
 
 ### 其他
@@ -37,7 +38,7 @@
 - 新增测试如果没有合理的理由，就不能导致本地测试运行时间大幅增加。
 - UI 不需要脆弱且无意义的测试，例如固定文案、CSS 类名、锁死 HTML 结构等类似行为。
 - 当前产品正在开发阶段，一个使用者都没有、没有线上兼容，没有任何负担。
-- 如果需要做产品决策，可以从用户使用体验升级/降级角度出发，是否为了低频场景大幅牺牲高频场景体验？或者查看 `docs\clarifications\原始需求.md`。
+- 如果需要做产品决策，可以从用户使用体验升级/降级角度出发，是否为了低频场景大幅牺牲高频场景体验？或者查看 `docs/clarifications/原始需求.md`。
 - 日志与 trace 设计，不考虑任何严格脱敏，方便开发者 debug。
 
 ## Project Overview
