@@ -15,7 +15,10 @@ func TestSessionControlsRouteIndependentlyWithoutNegotiation(t *testing.T) {
 	sender, receiver := connectVerticalPair(t, fixture.senderFactory, fixture.receiverFactory)
 	defer sender.Close()
 	defer receiver.Close()
-	senderSession := senderPeerSession{runtime: sender, outbound: sender.outbound}
+	// A wrapper must retain both control families through the public contract.
+	senderSession := struct{ PeerSession }{
+		PeerSession: senderPeerSession{runtime: sender, outbound: sender.outbound},
+	}
 	type receivedControl struct {
 		kind protocolsession.MessageKind
 		body []byte

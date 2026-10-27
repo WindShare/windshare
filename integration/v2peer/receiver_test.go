@@ -203,6 +203,7 @@ type receiverIntegrationAdmissionScript struct {
 }
 
 type receiverIntegrationSenderSession struct {
+	integrationSessionControls
 	share     catalog.ShareInstance
 	sessionID protocolsession.ProtocolSessionID
 	operation *receiverIntegrationOperation
