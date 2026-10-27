@@ -11,7 +11,7 @@ on:
       - "engine/internal/receive/**"
       - "cmd/wind/internal/cli/**"
       - "internal/testoutputroot/**"
-      - "e2e/**"
+      - "scripts/ci/native-output/macos/**"
       - "engine/output/**"
       - "engine/recovery/**"
       - "go.mod"
@@ -25,7 +25,7 @@ on:
       - "engine/internal/receive/**"
       - "cmd/wind/internal/cli/**"
       - "internal/testoutputroot/**"
-      - "e2e/**"
+      - "scripts/ci/native-output/macos/**"
       - "engine/output/**"
       - "engine/recovery/**"
       - "go.mod"
@@ -79,8 +79,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          go test -count=1 -timeout=10m -v ./e2e \
-            -run '^(TestUserTraceCriticalSenderRelayReceiver|TestLongV2ProcessResumesDurableOutputAfterReceiverCrash)$' \
+          go build -o "$RUNNER_TEMP/wind-native" ./cmd/wind
+          rustup run stable cargo build --manifest-path relay-rust/Cargo.toml --locked \
+            -p windshare-relay-native --bin relay-native
+          python3 scripts/ci/native-output/macos/cli.py \
+            --wind "$RUNNER_TEMP/wind-native" --relay "$PWD/relay-rust/target/debug/relay-native" \
+            --evidence "$RUNNER_TEMP/native-output-evidence" \
             2>&1 | tee "$RUNNER_TEMP/native-output-evidence/cli.log"
       - name: Build Darwin CLI architectures
         shell: bash

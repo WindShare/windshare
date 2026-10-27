@@ -12,8 +12,8 @@ func TestOutputV3ProbeCutAcceptsEveryReachablePhase(t *testing.T) {
 		profile Profile
 		count   int
 	}{
-		{name: "linux-ext4", profile: LinuxExt4, count: 37},
-		{name: "windows-ntfs", profile: WindowsNTFS, count: 38},
+		{name: "linux-ext4", profile: EmptyDataLinks, count: 37},
+		{name: "windows-ntfs", profile: SizedDataLinks, count: 38},
 	}
 	for _, profile := range profiles {
 		t.Run(profile.name, func(t *testing.T) {
@@ -27,7 +27,7 @@ func TestOutputV3ProbeCutAcceptsEveryReachablePhase(t *testing.T) {
 				probeCutData(profile.profile, dataAnchor),
 			}
 			observations := append([]Observation(nil), allData...)
-			if profile.profile == WindowsNTFS {
+			if profile.profile == SizedDataLinks {
 				zeroStage := probeCutData(profile.profile, dataStage)
 				zeroStage.stage.size = 0
 				observations = append(observations, zeroStage)
@@ -83,14 +83,14 @@ func TestOutputV3ProbeCutRejectsImpossibleOrAmbiguousPhases(t *testing.T) {
 		name    string
 		profile Profile
 	}{
-		{name: "linux-ext4", profile: LinuxExt4},
-		{name: "windows-ntfs", profile: WindowsNTFS},
+		{name: "linux-ext4", profile: EmptyDataLinks},
+		{name: "windows-ntfs", profile: SizedDataLinks},
 	}
 	for _, profile := range profiles {
 		t.Run(profile.name, func(t *testing.T) {
 			t.Parallel()
 			bytes := uint64(0)
-			if profile.profile == WindowsNTFS {
+			if profile.profile == SizedDataLinks {
 				bytes = 1
 			}
 			forbidden := map[string]Observation{
@@ -144,19 +144,19 @@ func TestOutputV3ProbeCutRejectsImpossibleOrAmbiguousPhases(t *testing.T) {
 		})
 	}
 
-	windowsZeroLinkedStage := probeCutData(WindowsNTFS, dataStageAnchor)
+	windowsZeroLinkedStage := probeCutData(SizedDataLinks, dataStageAnchor)
 	windowsZeroLinkedStage.stage.size = 0
-	if err := Validate(WindowsNTFS, windowsZeroLinkedStage); err == nil {
+	if err := Validate(SizedDataLinks, windowsZeroLinkedStage); err == nil {
 		t.Error("Windows zero-length stage was accepted after hard-link creation")
 	}
-	windowsZeroAnchor := probeCutData(WindowsNTFS, dataAnchor)
+	windowsZeroAnchor := probeCutData(SizedDataLinks, dataAnchor)
 	windowsZeroAnchor.anchor.size = 0
-	if err := Validate(WindowsNTFS, windowsZeroAnchor); err == nil {
+	if err := Validate(SizedDataLinks, windowsZeroAnchor); err == nil {
 		t.Error("Windows zero-length anchor was accepted")
 	}
-	linuxNonzeroStage := probeCutData(LinuxExt4, dataStage)
+	linuxNonzeroStage := probeCutData(EmptyDataLinks, dataStage)
 	linuxNonzeroStage.stage.size = 1
-	if err := Validate(LinuxExt4, linuxNonzeroStage); err == nil {
+	if err := Validate(EmptyDataLinks, linuxNonzeroStage); err == nil {
 		t.Error("Linux nonzero probe stage was accepted")
 	}
 	if err := Validate(0, Observation{}); err == nil {
@@ -169,7 +169,7 @@ func probeCutData(
 	cut dataCut,
 ) Observation {
 	bytes := uint64(0)
-	if profile == WindowsNTFS {
+	if profile == SizedDataLinks {
 		bytes = 1
 	}
 	file := observedFile{present: true, size: bytes}

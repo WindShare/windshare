@@ -176,5 +176,5 @@ func (root *windowsDirectory) recoverOutputProbeLeftovers() error {
 	if err != nil {
 		return err
 	}
-	return windowsProbeError(outputprobe.Recover(&windowsOutputDirectory{native: root}, names, outputprobe.WindowsNTFS))
+	return windowsProbeError(outputprobe.Recover(&windowsOutputDirectory{native: root}, names, outputprobe.SizedDataLinks))
 }

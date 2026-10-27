@@ -32,7 +32,7 @@ func TestWindowsProbeCreationVerificationFailureRollsBack(t *testing.T) {
 			)
 			defer workspace.Close()
 			if target == outputprobe.TemporaryRecordName {
-				if err := workspace.SafePublish(outputprobe.WindowsNTFS); err != nil {
+				if err := workspace.SafePublish(outputprobe.SizedDataLinks); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -52,7 +52,7 @@ func TestWindowsProbeCreationVerificationFailureRollsBack(t *testing.T) {
 			})
 			var proofErr error
 			if target == outputprobe.StageName {
-				proofErr = workspace.SafePublish(outputprobe.WindowsNTFS)
+				proofErr = workspace.SafePublish(outputprobe.SizedDataLinks)
 			} else {
 				proofErr = workspace.RangeRecovery()
 			}

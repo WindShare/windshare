@@ -94,9 +94,8 @@ func settlePreparationFailure(step stepOutcome, failure Failure, contextErr, cle
 		failure = Failure{Cause: cleanupErr}
 		class = task.FailureLocal
 	}
-	var attention *output.AttentionError
 	value := Result{}
-	if errors.As(cause, &attention) {
+	if attention, ok := errors.AsType[*output.AttentionError](cause); ok {
 		value.OutputAttention = attention.Reason
 	}
 	return task.Completion[Result]{Value: value, Settlement: task.Settlement{

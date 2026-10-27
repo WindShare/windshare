@@ -29,7 +29,7 @@ const (
 func validateACL(fd int, private bool) error {
 	request := unix.Attrlist{Bitmapcount: attributeBitmapCount, Commonattr: unix.ATTR_CMN_EXTENDED_SECURITY}
 	buffer := make([]byte, attributeBufferBytes)
-	_, _, errno := unix.Syscall6(unix.SYS_FGETATTRLIST, uintptr(fd), uintptr(unsafe.Pointer(&request)),
+	_, _, errno := libSystemCall6(fgetattrlistAddress, uintptr(fd), uintptr(unsafe.Pointer(&request)),
 		uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)), 0, 0)
 	runtime.KeepAlive(&request)
 	runtime.KeepAlive(buffer)

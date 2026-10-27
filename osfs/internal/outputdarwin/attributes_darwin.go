@@ -32,7 +32,7 @@ func attributes(fd int, common, volume uint32) ([]byte, error) {
 	request := unix.Attrlist{Bitmapcount: attributeBitmapCount,
 		Commonattr: common | unix.ATTR_CMN_RETURNED_ATTRS, Volattr: volume}
 	buffer := make([]byte, attributeBufferBytes)
-	_, _, errno := unix.Syscall6(unix.SYS_FGETATTRLIST, uintptr(fd), uintptr(unsafe.Pointer(&request)),
+	_, _, errno := libSystemCall6(fgetattrlistAddress, uintptr(fd), uintptr(unsafe.Pointer(&request)),
 		uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)), 0, 0)
 	runtime.KeepAlive(&request)
 	runtime.KeepAlive(buffer)
@@ -121,7 +121,7 @@ func setModifiedTime(fd int, modified catalog.ModifiedTime) error {
 	}
 	request := unix.Attrlist{Bitmapcount: attributeBitmapCount, Commonattr: unix.ATTR_CMN_MODTIME}
 	value := [2]int64{modified.Seconds(), int64(modified.Nanoseconds())}
-	_, _, errno := unix.Syscall6(unix.SYS_FSETATTRLIST, uintptr(fd), uintptr(unsafe.Pointer(&request)),
+	_, _, errno := libSystemCall6(fsetattrlistAddress, uintptr(fd), uintptr(unsafe.Pointer(&request)),
 		uintptr(unsafe.Pointer(&value)), unsafe.Sizeof(value), 0, 0)
 	runtime.KeepAlive(&request)
 	runtime.KeepAlive(&value)

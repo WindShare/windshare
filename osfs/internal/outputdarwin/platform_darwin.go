@@ -75,7 +75,7 @@ func openRoot(path string, create bool) (*directory, bool, error) {
 	if err != nil {
 		return nil, false, nativeError(err)
 	}
-	for _, component := range strings.Split(strings.TrimPrefix(physical, "/"), "/") {
+	for component := range strings.SplitSeq(strings.TrimPrefix(physical, "/"), "/") {
 		if component == "" {
 			continue
 		}
@@ -187,7 +187,7 @@ func (platform *Platform) DestinationCapabilities() (result outputcap.Destinatio
 	}
 	defer func() { resultErr = errors.Join(resultErr, workspace.Cleanup()) }()
 	facts := outputprobe.Results{CrashCleanup: outputcap.ErrRecoverableOutputUnsupported}
-	facts.SafePublish = workspace.SafePublish(outputprobe.LinuxExt4)
+	facts.SafePublish = workspace.SafePublish(outputprobe.EmptyDataLinks)
 	if err := workspace.Clear(); err != nil {
 		return result, err
 	}

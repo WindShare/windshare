@@ -28,7 +28,7 @@ func TestWindowsProbeCleanupProofRevalidatesPrivateParent(t *testing.T) {
 		}
 	})
 	for _, proof := range []func() error{
-		func() error { return workspace.SafePublish(outputprobe.WindowsNTFS) },
+		func() error { return workspace.SafePublish(outputprobe.SizedDataLinks) },
 		workspace.RangeRecovery, workspace.OperationRecovery,
 	} {
 		if err := proof(); err != nil {

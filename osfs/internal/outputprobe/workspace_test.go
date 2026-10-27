@@ -30,7 +30,7 @@ func assertProbeHandlesReleased(t *testing.T, root *probeTestDirectory) {
 }
 
 func TestSharedProbeExercisesBothNativeLayouts(t *testing.T) {
-	for _, profile := range []Profile{LinuxExt4, WindowsNTFS} {
+	for _, profile := range []Profile{EmptyDataLinks, SizedDataLinks} {
 		t.Run(probeTestName(int(profile)), func(t *testing.T) {
 			root := newProbeTestRoot()
 			workspace := newProbeTestWorkspace(t, root, 1)
@@ -76,7 +76,7 @@ func TestProbeCleanupRetainsWitnessAcrossPartialMutations(t *testing.T) {
 			case "installed-directory:installed":
 				err = workspace.OperationRecovery()
 			default:
-				err = workspace.SafePublish(WindowsNTFS)
+				err = workspace.SafePublish(SizedDataLinks)
 			}
 			if !errors.Is(err, errInjected) {
 				t.Fatalf("proof error=%v", err)
@@ -95,7 +95,7 @@ func TestProbeCleanupRetainsWitnessAcrossPartialMutations(t *testing.T) {
 func TestProbeCleanupStopsAtForeignReplacement(t *testing.T) {
 	root := newProbeTestRoot()
 	workspace := newProbeTestWorkspace(t, root, 1)
-	if err := workspace.SafePublish(WindowsNTFS); err != nil {
+	if err := workspace.SafePublish(SizedDataLinks); err != nil {
 		t.Fatal(err)
 	}
 	directory := workspace.Directory().(*probeTestDirectory)
@@ -111,7 +111,7 @@ func TestProbeCleanupStopsAtForeignReplacement(t *testing.T) {
 	if slices.Contains(root.system.events, "remove-file:anchor") {
 		t.Fatal("cleanup continued after its first unverified cut")
 	}
-	if err := Recover(root, probeTestNames(root), WindowsNTFS); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
+	if err := Recover(root, probeTestNames(root), SizedDataLinks); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("restart must retain the foreign-replacement evidence: %v", err)
 	}
 	if len(directory.object.files) != 3 || directory.object.files[StageName] != foreign {
@@ -123,7 +123,7 @@ func TestProbeCleanupStopsAtForeignReplacement(t *testing.T) {
 func TestProbeCleanupStopsAtFailedMutation(t *testing.T) {
 	root := newProbeTestRoot()
 	workspace := newProbeTestWorkspace(t, root, 1)
-	if err := workspace.SafePublish(WindowsNTFS); err != nil {
+	if err := workspace.SafePublish(SizedDataLinks); err != nil {
 		t.Fatal(err)
 	}
 	root.system.fault = "remove-file:stage"
@@ -135,7 +135,7 @@ func TestProbeCleanupStopsAtFailedMutation(t *testing.T) {
 		t.Fatal("later cleanup entries were removed")
 	}
 	assertProbeHandlesReleased(t, root)
-	if err := Recover(root, probeTestNames(root), WindowsNTFS); err != nil {
+	if err := Recover(root, probeTestNames(root), SizedDataLinks); err != nil {
 		t.Fatal(err)
 	}
 	assertProbeHandlesReleased(t, root)
@@ -173,7 +173,7 @@ func TestRangeProbeCleansOriginalAfterReplacementRejected(t *testing.T) {
 func TestRecoveryValidatesEveryLeftoverBeforeDeletion(t *testing.T) {
 	root := newProbeTestRoot()
 	first := newProbeTestWorkspace(t, root, 1)
-	if err := first.SafePublish(WindowsNTFS); err != nil {
+	if err := first.SafePublish(SizedDataLinks); err != nil {
 		t.Fatal(err)
 	}
 	second := newProbeTestWorkspace(t, root, 2)
@@ -182,7 +182,7 @@ func TestRecoveryValidatesEveryLeftoverBeforeDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := probeTestNames(root)
-	if err := Recover(root, before, WindowsNTFS); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
+	if err := Recover(root, before, SizedDataLinks); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("foreign leftover error=%v", err)
 	}
 	if !reflect.DeepEqual(probeTestNames(root), before) || len(root.object.directories[before[0]].files) != 3 {
@@ -196,7 +196,7 @@ func TestRecoveryBoundsAndNamesRejectWithoutMutation(t *testing.T) {
 		{ReservedPrefix}, {NamePrefix + "not-canonical"}, make([]string, MaximumLeftovers+1),
 	} {
 		root := newProbeTestRoot()
-		if err := Recover(root, names, LinuxExt4); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
+		if err := Recover(root, names, EmptyDataLinks); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 			t.Fatalf("recovery error=%v", err)
 		}
 		if len(root.system.events) != 0 {
@@ -215,7 +215,7 @@ func TestRecoveryRejectsDifferentObjectsAtDataLinkNames(t *testing.T) {
 	if err := workspace.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := Recover(root, probeTestNames(root), WindowsNTFS); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
+	if err := Recover(root, probeTestNames(root), SizedDataLinks); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("mismatched link error=%v", err)
 	}
 	if len(directory.object.files) != 2 {
@@ -257,7 +257,7 @@ func TestProbeAllocationNeverAdoptsCollision(t *testing.T) {
 func TestWorkspaceCloseNeverDeletesInspectedObjects(t *testing.T) {
 	root := newProbeTestRoot()
 	workspace := newProbeTestWorkspace(t, root, 1)
-	if err := workspace.SafePublish(WindowsNTFS); err != nil {
+	if err := workspace.SafePublish(SizedDataLinks); err != nil {
 		t.Fatal(err)
 	}
 	if err := workspace.Close(); err != nil {

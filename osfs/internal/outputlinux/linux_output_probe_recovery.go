@@ -69,5 +69,5 @@ func (root *linuxOutputDirectory) recoverOutputProbeLeftovers() error {
 	if err != nil {
 		return err
 	}
-	return linuxProbeError(outputprobe.Recover(&linuxDirectory{native: root}, names, outputprobe.LinuxExt4))
+	return linuxProbeError(outputprobe.Recover(&linuxDirectory{native: root}, names, outputprobe.EmptyDataLinks))
 }
