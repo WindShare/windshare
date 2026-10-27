@@ -13,7 +13,7 @@ import (
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
-func TestLiveCollisionRetiresJournaledStage(t *testing.T) {
+func TestLiveCollisionRetainsJournaledStageForRetry(t *testing.T) {
 	fixture := newExecutionFixture(t, 4)
 	native := &liveTransactionFile{data: make([]byte, 4)}
 	object, err := checkpointmodel.ObjectIDFromBytes(
@@ -56,7 +56,7 @@ func TestLiveCollisionRetiresJournaledStage(t *testing.T) {
 	if err != nil || settlement.Kind() != transfer.FileCollision {
 		t.Fatalf("collision settlement = %d, %v", settlement.Kind(), err)
 	}
-	if cleanupCalls != 1 || !native.closed || !destination.closed {
+	if cleanupCalls != 0 || native.closed || destination.closed {
 		t.Fatalf("collision cleanup = calls %d file %v destination %v", cleanupCalls, native.closed, destination.closed)
 	}
 }
@@ -164,6 +164,7 @@ func newLiveTransactionForTest(
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = transaction.strategy.(*livePartialFileStrategy).close(true) })
 	return transaction, native, cleanupCalls
 }
 
@@ -186,7 +187,7 @@ func TestLivePartialTransactionCheckpointsOnlyInProcessAndPausesCleanly(t *testi
 		t.Fatalf("out-of-range live write = %v", err)
 	}
 	checkpoint, err := transaction.Checkpoint(context.Background())
-	if err != nil || checkpoint.CheckpointGeneration() != 1 || len(checkpoint.Ranges().Ranges()) != 0 {
+	if err != nil || checkpoint.CheckpointGeneration() != 1 || len(checkpoint.Ranges().Ranges()) != 1 || checkpoint.Retention() != transfer.RangesInProcess {
 		t.Fatalf("live checkpoint = (generation %d ranges %+v, %v)",
 			checkpoint.CheckpointGeneration(), checkpoint.Ranges().Ranges(), err)
 	}
@@ -197,7 +198,7 @@ func TestLivePartialTransactionCheckpointsOnlyInProcessAndPausesCleanly(t *testi
 	if err != nil || settlement.Kind() != transfer.FilePaused {
 		t.Fatalf("live pause = (%d, %v)", settlement.Kind(), err)
 	}
-	if *cleanupCalls != 1 || !native.closed || !destination.closed {
+	if *cleanupCalls != 0 || native.closed || destination.closed {
 		t.Fatalf("live pause cleanup = (%d, file %t, destination %t)", *cleanupCalls, native.closed, destination.closed)
 	}
 	if _, err := transaction.Checkpoint(context.Background()); !errors.Is(err, ErrTransactionClosed) {
@@ -227,7 +228,7 @@ func TestLivePartialTransactionPublishesWithBestEffortMetadataWarning(t *testing
 	if len(warnings) != 1 || warnings[0].Kind() != MetadataModifiedTimeWarning {
 		t.Fatalf("live metadata warnings = %+v", warnings)
 	}
-	if *cleanupCalls != 1 || !native.closed || !destination.closed {
+	if *cleanupCalls != 0 || native.closed || destination.closed {
 		t.Fatalf("live publish cleanup = (%d, file %t, destination %t)", *cleanupCalls, native.closed, destination.closed)
 	}
 }
@@ -236,8 +237,8 @@ func TestLivePartialTransactionRetireAndCheckpointFailuresStayItemLocal(t *testi
 	destination := &memoryDestination{final: FinalAbsent}
 	transaction, native, cleanupCalls := newLiveTransactionForTest(t, 4, destination)
 	native.syncErr = errors.New("stage sync failed")
-	if _, err := transaction.Checkpoint(context.Background()); err == nil {
-		t.Fatal("live checkpoint ignored stage sync failure")
+	if _, err := transaction.Checkpoint(context.Background()); err != nil {
+		t.Fatal("process-local checkpoint must not require restart durability")
 	}
 	native.syncErr = nil
 	strategy := transaction.strategy.(*livePartialFileStrategy)
@@ -309,7 +310,7 @@ func TestLivePartialTransactionClassifiesEveryPublicationCut(t *testing.T) {
 			reference, reason, blocked := settlement.ItemBlock()
 			if err != nil || settlement.Kind() != transfer.FileItemBlocked || !blocked ||
 				reference.IsZero() || reason != transfer.ItemBlockPublicationAmbiguous ||
-				*cleanupCalls != 0 || !native.closed || !destination.closed {
+				*cleanupCalls != 0 || native.closed || destination.closed {
 				t.Fatalf("publication cut = (kind %d blocked %t reason %d cleanup %d file %t destination %t, %v)",
 					settlement.Kind(), blocked, reason, *cleanupCalls, native.closed, destination.closed, err)
 			}
@@ -337,7 +338,7 @@ func TestLivePartialTransactionCleanupDebtCannotRetractStableResults(t *testing.
 			t.Fatal(err)
 		}
 		settlement, err := transaction.Commit(context.Background())
-		if err != nil || settlement.Kind() != transfer.FilePublished || *cleanupCalls != 1 {
+		if err != nil || settlement.Kind() != transfer.FilePublished || *cleanupCalls != 0 {
 			t.Fatalf("published cleanup debt = (kind %d cleanup %d, %v)", settlement.Kind(), *cleanupCalls, err)
 		}
 	})

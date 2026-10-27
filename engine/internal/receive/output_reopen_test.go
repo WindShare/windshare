@@ -1,4 +1,4 @@
-//go:build windows || linux
+//go:build windows || linux || darwin
 
 package receive
 
@@ -141,7 +141,7 @@ func TestResolveGetOutputOperationReopensBeforeShapeAndRefusesConcurrentLease(t 
 
 	firstAuthority := openAuthority()
 	firstResolver := &fixedGetShapeResolver{decision: decision}
-	first, err := resolveGetOutputOperation(ctx, firstAuthority, firstResolver, selection)
+	first, err := resolveGetOutputOperation(ctx, firstAuthority, firstResolver, selection, OutputCreateOrResume)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestResolveGetOutputOperationReopensBeforeShapeAndRefusesConcurrentLease(t 
 
 	activeAuthority := openAuthority()
 	reopenResolver := &fixedGetShapeResolver{err: errors.New("active reopen must not resolve shape")}
-	reopened, err := resolveGetOutputOperation(ctx, activeAuthority, reopenResolver, selection)
+	reopened, err := resolveGetOutputOperation(ctx, activeAuthority, reopenResolver, selection, OutputCreateOrResume)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestResolveGetOutputOperationReopensBeforeShapeAndRefusesConcurrentLease(t 
 
 	contendingAuthority := openAuthority()
 	contendingResolver := &fixedGetShapeResolver{err: errors.New("lease contention must not resolve shape")}
-	_, err = resolveGetOutputOperation(ctx, contendingAuthority, contendingResolver, selection)
+	_, err = resolveGetOutputOperation(ctx, contendingAuthority, contendingResolver, selection, OutputCreateOrResume)
 	if !errors.Is(err, errGetOutputOperationAlreadyRunning) || contendingResolver.calls != 0 {
 		t.Fatalf("contending error=%v shape_calls=%d", err, contendingResolver.calls)
 	}
@@ -184,8 +184,7 @@ func TestResolveGetOutputOperationReopensBeforeShapeAndRefusesConcurrentLease(t 
 	differentAuthority := openAuthority()
 	differentResolver := &fixedGetShapeResolver{decision: decision}
 	different, err := resolveGetOutputOperation(
-		ctx, differentAuthority, differentResolver, differentSelection,
-	)
+		ctx, differentAuthority, differentResolver, differentSelection, OutputCreateOrResume)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +203,7 @@ func TestResolveGetOutputOperationReopensBeforeShapeAndRefusesConcurrentLease(t 
 
 	finalAuthority := openAuthority()
 	finalResolver := &fixedGetShapeResolver{err: errors.New("final reopen must not resolve shape")}
-	final, err := resolveGetOutputOperation(ctx, finalAuthority, finalResolver, selection)
+	final, err := resolveGetOutputOperation(ctx, finalAuthority, finalResolver, selection, OutputCreateOrResume)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,8 +279,7 @@ func newCLICertifiedOutputTestRoot(t *testing.T) string {
 func TestResolveGetOutputOperationRejectsMissingAuthorityOrSelection(t *testing.T) {
 	resolver := &fixedGetShapeResolver{}
 	if _, err := resolveGetOutputOperation(
-		context.Background(), nil, resolver, transfer.SelectionSpec{},
-	); !errors.Is(err, errGetOutputReservationContract) {
+		context.Background(), nil, resolver, transfer.SelectionSpec{}, OutputCreateOrResume); !errors.Is(err, errGetOutputReservationContract) {
 		t.Fatalf("error=%v", err)
 	}
 }
@@ -304,8 +302,7 @@ func TestResolveGetOutputOperationStopsOnOwnedLookupStateBeforeShape(t *testing.
 				context.Background(),
 				fixedLookupGetOutputAuthority{lookup: getOutputLookup{Kind: test.kind}},
 				resolver,
-				selection,
-			)
+				selection, OutputCreateOrResume)
 			if !errors.Is(err, test.want) || resolver.calls != 0 {
 				t.Fatalf("error=%v shape_calls=%d", err, resolver.calls)
 			}
@@ -354,8 +351,7 @@ func TestResolveGetOutputOperationComposesAllOrdinaryLayouts(t *testing.T) {
 			authority := &layoutRecordingGetOutputAuthority{selection: selection, events: &events}
 			resolver := &fixedGetShapeResolver{decision: test.decision, events: &events}
 			_, err := resolveGetOutputOperation(
-				context.Background(), authority, resolver, selection,
-			)
+				context.Background(), authority, resolver, selection, OutputCreateOrResume)
 			if err != nil {
 				t.Fatal(err)
 			}

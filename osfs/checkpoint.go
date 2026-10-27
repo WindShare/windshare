@@ -61,6 +61,7 @@ const (
 
 	FileCheckpointIdentitySchemeLinuxHandleV2     = checkpointmodel.IdentitySchemeLinuxHandleV2
 	FileCheckpointIdentitySchemeWindowsObjectIDV1 = checkpointmodel.IdentitySchemeWindowsObjectIDV1
+	FileCheckpointIdentitySchemeDarwinObjectIDV1  = checkpointmodel.IdentitySchemeDarwinObjectIDV1
 )
 
 type FileCheckpointSpec struct {

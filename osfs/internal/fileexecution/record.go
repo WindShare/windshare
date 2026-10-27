@@ -176,12 +176,12 @@ func outputBinding(
 func durableRanges(
 	binding transfer.MaterializedFileBinding,
 	record checkpointmodel.Record,
-) (transfer.VerifiedDurableRanges, error) {
+) (transfer.VerifiedRanges, error) {
 	ranges, err := contentRanges(record)
 	if err != nil {
-		return transfer.VerifiedDurableRanges{}, err
+		return transfer.VerifiedRanges{}, err
 	}
-	return transfer.VerifyDurableRanges(
+	return transfer.VerifyRestartRanges(
 		binding, transfer.CheckpointGeneration(record.CheckpointGeneration()), ranges,
 	)
 }

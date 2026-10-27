@@ -52,8 +52,11 @@ func (state *fileState) verify() error {
 	if identity(stat) != state.object || state.object.kind != unix.S_IFREG {
 		return outputcap.ErrUnsafeNamespace
 	}
-	if state.private && (stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o077 != 0) {
-		return outputcap.ErrUnsafeNamespace
+	if state.private {
+		if stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o077 != 0 {
+			return outputcap.ErrUnsafeNamespace
+		}
+		return validateACL(int(state.file.Fd()), true)
 	}
 	return nil
 }
@@ -131,7 +134,7 @@ func (state *fileState) MetadataMatches(size uint64, value catalog.ModifiedTime)
 		(!value.Present() || stat.Mtim.Sec == value.Seconds() && stat.Mtim.Nsec == int64(value.Nanoseconds())), nil
 }
 
-func (dir *directory) openFile(name string, private bool, flags int) (*fileState, error) {
+func (dir *directory) openFile(name string, private bool, flags int) (_ *fileState, resultErr error) {
 	if err := errors.Join(dir.verify(), validComponent(name)); err != nil {
 		return nil, err
 	}
@@ -144,21 +147,32 @@ func (dir *directory) openFile(name string, private bool, flags int) (*fileState
 		return nil, nativeError(err)
 	}
 	state := &fileState{file: os.NewFile(uintptr(fd), name), name: name, private: private}
+	defer func() {
+		if resultErr == nil {
+			return
+		}
+		if flags&unix.O_EXCL != 0 && state.object.kind == unix.S_IFREG {
+			// Rollback uses the created handle, even if private-ACL validation failed.
+			state.private = false
+			resultErr = errors.Join(resultErr, dir.RemoveFile(name, &mutableFile{State: state}))
+		}
+		resultErr = errors.Join(resultErr, state.Close())
+	}()
 	var stat unix.Stat_t
 	if err := unix.Fstat(fd, &stat); err != nil {
-		return nil, errors.Join(nativeError(err), state.Close())
+		return nil, nativeError(err)
 	}
 	state.object = identity(stat)
 	parent, err := dir.Duplicate()
 	if err != nil {
-		return nil, errors.Join(err, state.Close())
+		return nil, err
 	}
 	state.parent = parent.(*directory)
 	if state.object.device != dir.volume.device {
-		return nil, errors.Join(outputcap.ErrUnsafeNamespace, state.Close())
+		return nil, outputcap.ErrUnsafeNamespace
 	}
 	if err := state.verify(); err != nil {
-		return nil, errors.Join(err, state.Close())
+		return nil, err
 	}
 	return state, nil
 }

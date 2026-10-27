@@ -161,6 +161,8 @@ func projectFilesystemOutputStateReason(
 		return FilesystemOutputStateLeaseOwnershipUnknown
 	case outputruntime.FilesystemOutputStateOperationOwnershipUnknown:
 		return FilesystemOutputStateOperationOwnershipUnknown
+	case outputruntime.FilesystemOutputStateRecoveryUnavailable:
+		return FilesystemOutputStateRecoveryUnavailable
 	case outputruntime.FilesystemOutputStateCleanupUncertain:
 		return FilesystemOutputStateCleanupUncertain
 	default:
@@ -323,6 +325,8 @@ func projectIdentityScheme(value outputruntime.FilesystemOutputIdentitySchemeID)
 		return FilesystemOutputIdentitySchemeLinuxHandleV2
 	case outputruntime.FilesystemOutputIdentitySchemeWindowsObjectIDV1:
 		return FilesystemOutputIdentitySchemeWindowsObjectIDV1
+	case outputruntime.FilesystemOutputIdentitySchemeDarwinObjectIDV1:
+		return FilesystemOutputIdentitySchemeDarwinObjectIDV1
 	default:
 		return ""
 	}

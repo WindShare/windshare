@@ -99,7 +99,7 @@ assert_contains "$certifier" 'sudo -n unshare --mount --propagation private --fo
 assert_contains "$certifier" 'bash "$script_root/root-worker.sh"'
 assert_contains "$certifier" '.windshare-preserve-native-fixture'
 assert_contains "$certifier" 'TestLinuxExt4RestartIdentityRejectsForcedInodeReuse'
-assert_contains "$certifier" 'TestLinuxExt4NativeCertification'
+assert_contains "$certifier" 'TestLinuxExt4NativeIdentityScheme'
 assert_contains "$certifier" 'TestLinuxExt4ProcessRestartRecovery'
 assert_contains "$certifier" '"Action":"skip"'
 assert_contains "$certifier" '"Action":"fail"'

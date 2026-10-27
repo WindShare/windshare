@@ -77,8 +77,11 @@ func (dir *directory) verify() error {
 	if identity(stat) != dir.object || stat.Nlink == 0 {
 		return outputcap.ErrUnsafeNamespace
 	}
-	if dir.private && (stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o077 != 0) {
-		return outputcap.ErrUnsafeNamespace
+	if dir.private {
+		if stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o077 != 0 {
+			return outputcap.ErrUnsafeNamespace
+		}
+		return validateACL(dir.fd(), true)
 	}
 	return nil
 }
@@ -93,7 +96,7 @@ func (dir *directory) ValidateCreateAuthority() error {
 	if stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o022 != 0 || stat.Mode&0o300 != 0o300 {
 		return outputcap.ErrUnsafeNamespace
 	}
-	return nil
+	return validateACL(dir.fd(), dir.private)
 }
 func (dir *directory) ValidateMetadataAuthority() error { return dir.ValidateCreateAuthority() }
 func (dir *directory) Close() error {
@@ -213,11 +216,17 @@ func (dir *directory) CreateDirectory(name string, private bool) (outputcap.Dire
 	if err := unix.Mkdirat(dir.fd(), name, mode); err != nil {
 		return nil, nativeError(err)
 	}
-	created, err := dir.OpenDirectory(name, private)
+	created, err := dir.OpenDirectory(name, false)
 	if err != nil {
 		return nil, err
 	}
-	return created, nil
+	child := created.(*directory)
+	child.private = private
+	if err := child.verify(); err != nil {
+		child.private = false
+		return nil, errors.Join(err, dir.RemoveDirectory(name, child), child.Close())
+	}
+	return child, nil
 }
 func (dir *directory) SameDirectory(other outputcap.Directory) (bool, error) {
 	right, ok := other.(*directory)

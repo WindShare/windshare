@@ -17,6 +17,7 @@ import (
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
+	"github.com/windshare/windshare/engine/output"
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
@@ -24,10 +25,13 @@ var (
 	errGetOutputOperationAlreadyRunning = errors.New("get output operation is already running")
 	errGetOutputOperationNeedsAttention = errors.New("get output operation needs attention")
 	errGetOutputOperationAmbiguous      = errors.New("get output operation ownership is ambiguous")
+	ErrRetainedOutputMissing            = errors.New("no retained download matches this link and selection")
 	errGetOutputReservationContract     = errors.New("get output operation reservation violated its contract")
 )
 
 type getOutputPreparation struct {
+	admission    OutputAdmission
+	operation    *getOutputOperation
 	contentReady chan struct{}
 	paths        *receiverContentPaths
 	authority    getOutputAuthority
@@ -73,7 +77,7 @@ func (a *runner) prepareGetOutput(
 		return getOutputPreparation{}, observation.fail(stepLocalFailure, errors.Join(errGetOutputAdapterContract, closeErr))
 	}
 	return getOutputPreparation{
-		authority: authority, mode: mode, displayRoot: outputRoot,
+		authority: authority, mode: mode, displayRoot: outputRoot, operation: new(getOutputOperation), admission: request.admission,
 		contentReady: make(chan struct{}), paths: newReceiverContentPaths(observation),
 	}, stepReady
 }
@@ -339,7 +343,18 @@ func (a *runner) buildGetTransferJob(
 	if len(overrides) != 0 {
 		dependencies = overrides[0]
 	}
-	admission, err := resolveGetOutputOperation(ctx, output.authority, dependencies, selection)
+	var admission getOutputAdmission
+	if output.operation != nil && output.operation.Valid() {
+		admission.operation = *output.operation
+		if admission.operation.Intent.SelectionSpec().Digest() != selection.Digest() {
+			err = transfer.ErrInvalidOutputBinding
+		}
+	} else {
+		admission, err = resolveGetOutputOperation(ctx, output.authority, dependencies, selection, output.admission)
+		if err == nil && output.operation != nil {
+			*output.operation = admission.operation
+		}
+	}
 	if err != nil {
 		return nil, getOutputOperation{}, "", false, reportGetOutputAdmissionFailure(observation, err)
 	}
@@ -401,6 +416,7 @@ func resolveGetOutputOperation(
 	authority getOutputAuthority,
 	resolver getShapeResolver,
 	selection transfer.SelectionSpec,
+	policy OutputAdmission,
 ) (getOutputAdmission, error) {
 	if ctx == nil || authority == nil || resolver == nil || selection.IsZero() {
 		return getOutputAdmission{}, errGetOutputReservationContract
@@ -415,6 +431,9 @@ func resolveGetOutputOperation(
 	var operation getOutputOperation
 	switch lookup.Kind {
 	case getOutputLookupMiss:
+		if policy == OutputResumeExisting {
+			return getOutputAdmission{}, ErrRetainedOutputMissing
+		}
 		decision, resolveErr := resolver.ResolveOrdinaryOutputShape(
 			ctx, selection, ordinaryoutput.DefaultShapeProbeBudgetV1, nil,
 		)
@@ -434,7 +453,7 @@ func resolveGetOutputOperation(
 	case getOutputLookupAlreadyRunning:
 		return getOutputAdmission{}, errGetOutputOperationAlreadyRunning
 	case getOutputLookupNeedsAttention:
-		return getOutputAdmission{}, errGetOutputOperationNeedsAttention
+		return getOutputAdmission{}, errors.Join(errGetOutputOperationNeedsAttention, &output.AttentionError{Reason: lookup.Attention})
 	case getOutputLookupAmbiguous:
 		return getOutputAdmission{}, errGetOutputOperationAmbiguous
 	default:
@@ -453,6 +472,7 @@ func resolveGetOutputOperation(
 }
 
 func reportGetOutputAdmissionFailure(observation getObservation, err error) stepOutcome {
+	observation.fail(stepLocalFailure, err)
 	switch {
 	case errors.Is(err, errGetOutputOperationAlreadyRunning):
 		return observation.failCode(stepLocalFailure, FailureOutputFileAlreadyActive)

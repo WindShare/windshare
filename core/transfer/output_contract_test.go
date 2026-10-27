@@ -33,7 +33,7 @@ func TestFileStartAndSettlementPayloadsAreChecked(t *testing.T) {
 		t.Fatalf("unbound retirement error=%v", err)
 	}
 	partialRanges, _ := content.NewRangeSet([]content.Range{{Offset: 0, End: 1}})
-	partial, _ := VerifyDurableRanges(binding, 1, partialRanges)
+	partial, _ := VerifyRestartRanges(binding, 1, partialRanges)
 	if _, err := NewVerifiedFileSettlement(FilePublished, partial); !errors.Is(err, ErrInvalidOutputSettlement) {
 		t.Fatalf("partial published settlement error=%v", err)
 	}
@@ -41,7 +41,7 @@ func TestFileStartAndSettlementPayloadsAreChecked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if checkpoint, ok := paused.VerifiedCheckpoint(); !ok || checkpoint.CheckpointGeneration() != 1 {
+	if checkpoint, ok := paused.VerifiedProgress(); !ok || checkpoint.CheckpointGeneration() != 1 {
 		t.Fatalf("paused checkpoint=(%+v,%v)", checkpoint, ok)
 	}
 	if _, err := NewFileSettlementStart(paused); !errors.Is(err, ErrInvalidOutputSettlement) {
@@ -343,7 +343,7 @@ func immediatePublishedSettlement(
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkpoint, err := VerifyDurableRanges(binding, 1, ranges)
+	checkpoint, err := VerifyRestartRanges(binding, 1, ranges)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -666,7 +666,7 @@ func TestFileTransferProgressRejectsUnrelatedSettlementCheckpointCoverage(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	initial, err := VerifyDurableRanges(binding, 0, empty)
+	initial, err := VerifyRestartRanges(binding, 0, empty)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -679,7 +679,7 @@ func TestFileTransferProgressRejectsUnrelatedSettlementCheckpointCoverage(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	future, err := VerifyDurableRanges(binding, 1, unrelated)
+	future, err := VerifyRestartRanges(binding, 1, unrelated)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -724,7 +724,7 @@ func TestTransferLifecycleFirstWriteRequiresNewDurableContent(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				checkpoint, err := VerifyDurableRanges(binding, 1, full)
+				checkpoint, err := VerifyRestartRanges(binding, 1, full)
 				if err != nil {
 					t.Fatal(err)
 				}

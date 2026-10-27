@@ -172,7 +172,7 @@ func TestSuccessfulExecutorResultsMustCarryReplayAuthority(t *testing.T) {
 				transaction := newFakeTransaction(t, claim.File().Target())
 				settlement, err := transfer.NewCollisionFileSettlement(claim.File().Target())
 				return FileBeginObservation{
-					Cut: MutationStable, Durable: transaction.emptyCheckpoint, Settlement: settlement,
+					Cut: MutationStable, Progress: transaction.emptyCheckpoint, Settlement: settlement,
 				}, err
 			}
 		})
@@ -216,8 +216,8 @@ func TestTransactionResultsMustAuthorizeRetryOrSettlement(t *testing.T) {
 		transaction, _, _ := start.Transaction()
 		fixture.files.transaction().checkpoint = func(
 			context.Context,
-		) (transfer.VerifiedDurableRanges, MutationCut, error) {
-			return transfer.VerifiedDurableRanges{}, MutationStable, nil
+		) (transfer.VerifiedRanges, MutationCut, error) {
+			return transfer.VerifiedRanges{}, MutationStable, nil
 		}
 		if _, err := transaction.Checkpoint(context.Background()); !errors.Is(err, ErrMutationAmbiguous) || !errors.Is(err, ErrExecutorContract) {
 			t.Fatalf("invalid checkpoint binding error=%v", err)
@@ -275,7 +275,7 @@ func TestCoalescedBeginCancellationDoesNotCancelTransactionOwner(t *testing.T) {
 			engine.last = transaction
 			engine.mu.Unlock()
 			return FileBeginObservation{
-				Cut: MutationStable, Transaction: transaction, Durable: transaction.emptyCheckpoint,
+				Cut: MutationStable, Transaction: transaction, Progress: transaction.emptyCheckpoint,
 			}, nil
 		}
 		config.Trace = TraceSinkFunc(func(event TraceEvent) {

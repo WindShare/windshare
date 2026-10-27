@@ -350,6 +350,7 @@ func newTestTransferJob(t *testing.T, config testTransferJobConfig) (*TransferJo
 }
 
 type jobOutput struct {
+	inProcess                bool
 	mu                       sync.Mutex
 	share                    catalog.ShareInstance
 	session                  OutputSessionID
@@ -531,7 +532,7 @@ func (o *jobOutput) BeginFile(_ context.Context, file MaterializationFile) (File
 	transaction := &jobFileTransaction{output: o, binding: binding, durable: durable, generation: 1, script: script}
 	o.transactions[artifactPath] = transaction
 	o.mu.Unlock()
-	verified, err := VerifyDurableRanges(binding, 1, durable)
+	verified, err := o.verifyRanges(binding, 1, durable)
 	if err != nil {
 		return FileStart{}, err
 	}
@@ -629,30 +630,27 @@ func (t *jobFileTransaction) WriteRange(_ context.Context, offset uint64, data [
 	return err
 }
 
-func (t *jobFileTransaction) Checkpoint(context.Context) (VerifiedDurableRanges, error) {
+func (t *jobFileTransaction) Checkpoint(context.Context) (VerifiedRanges, error) {
 	if t.script.checkpointErr != nil {
-		return VerifiedDurableRanges{}, t.script.checkpointErr
+		return VerifiedRanges{}, t.script.checkpointErr
 	}
 	pending := t.pending
 	merged, err := MergeRanges(t.durable, pending)
 	if err != nil {
-		return VerifiedDurableRanges{}, err
+		return VerifiedRanges{}, err
 	}
 	t.transient, err = MergeRanges(t.transient, pending)
 	if err != nil {
-		return VerifiedDurableRanges{}, err
+		return VerifiedRanges{}, err
 	}
-	if t.output.Capabilities().Durability == DurabilityNone {
-		empty, emptyErr := content.NewRangeSet(nil)
-		if emptyErr != nil {
-			return VerifiedDurableRanges{}, emptyErr
-		}
-		t.durable, t.pending = empty, content.RangeSet{}
+	if t.output.Capabilities().Durability == DurabilityNone && !t.output.inProcess {
+
+		t.durable, t.pending = content.RangeSet{}, content.RangeSet{}
 		t.generation++
 		if t.script.checkpointErrAfterAccept != nil {
-			return VerifiedDurableRanges{}, t.script.checkpointErrAfterAccept
+			return VerifiedRanges{}, t.script.checkpointErrAfterAccept
 		}
-		return VerifyDurableRanges(t.binding, t.generation, empty)
+		return AcknowledgeTransientWrite(t.binding, t.generation)
 	}
 	t.durable, t.pending = merged, content.RangeSet{}
 	t.generation++
@@ -660,23 +658,23 @@ func (t *jobFileTransaction) Checkpoint(context.Context) (VerifiedDurableRanges,
 	t.output.durable[t.binding.Locator().CanonicalPath()] = merged
 	t.output.mu.Unlock()
 	if t.script.checkpointErrAfterAccept != nil {
-		return VerifiedDurableRanges{}, t.script.checkpointErrAfterAccept
+		return VerifiedRanges{}, t.script.checkpointErrAfterAccept
 	}
 	if t.script.omitCheckpoint {
 		empty, _ := content.NewRangeSet(nil)
-		return VerifyDurableRanges(t.binding, t.generation, empty)
+		return t.output.verifyRanges(t.binding, t.generation, empty)
 	}
 	if t.script.dropPriorRanges {
-		return VerifyDurableRanges(t.binding, t.generation, pending)
+		return t.output.verifyRanges(t.binding, t.generation, pending)
 	}
 	if !t.script.checkpointExtra.IsEmpty() {
 		claimed, mergeErr := MergeRanges(merged, t.script.checkpointExtra)
 		if mergeErr != nil {
-			return VerifiedDurableRanges{}, mergeErr
+			return VerifiedRanges{}, mergeErr
 		}
-		return VerifyDurableRanges(t.binding, t.generation, claimed)
+		return t.output.verifyRanges(t.binding, t.generation, claimed)
 	}
-	return VerifyDurableRanges(t.binding, t.generation, merged)
+	return t.output.verifyRanges(t.binding, t.generation, merged)
 }
 
 func (t *jobFileTransaction) Commit(context.Context) (FileSettlement, error) {
@@ -688,7 +686,7 @@ func (t *jobFileTransaction) Commit(context.Context) (FileSettlement, error) {
 		return *t.script.commitResult, nil
 	}
 	completed := t.durable
-	if t.output.Capabilities().Durability == DurabilityNone {
+	if t.output.Capabilities().Durability == DurabilityNone && !t.output.inProcess {
 		completed = t.transient
 	}
 	if !RangesCoverFile(t.binding.ExactSize(), completed) {
@@ -699,10 +697,10 @@ func (t *jobFileTransaction) Commit(context.Context) (FileSettlement, error) {
 	if kind == 0 {
 		kind = FilePublished
 	}
-	if kind == FilePublished && t.output.Capabilities().Durability == DurabilityNone {
+	if kind == FilePublished && t.output.Capabilities().Durability == DurabilityNone && !t.output.inProcess {
 		return NewTransientPublishedFileSettlement(t.binding)
 	}
-	checkpoint, err := VerifyDurableRanges(t.binding, t.generation, t.durable)
+	checkpoint, err := t.output.verifyRanges(t.binding, t.generation, t.durable)
 	if err != nil {
 		return FileSettlement{}, err
 	}
@@ -725,7 +723,7 @@ func (t *jobFileTransaction) Pause(ctx context.Context, reason FilePauseReason) 
 	if kind == 0 {
 		kind = FilePaused
 	}
-	checkpoint, err := VerifyDurableRanges(t.binding, t.generation, t.durable)
+	checkpoint, err := t.output.verifyRanges(t.binding, t.generation, t.durable)
 	if err != nil {
 		return FileSettlement{}, err
 	}
@@ -748,7 +746,7 @@ func (t *jobFileTransaction) Retire(_ context.Context, reason FileRetireReason) 
 	if kind == 0 {
 		kind = FileFailed
 	}
-	checkpoint, err := VerifyDurableRanges(t.binding, t.generation, t.durable)
+	checkpoint, err := t.output.verifyRanges(t.binding, t.generation, t.durable)
 	if err != nil {
 		return FileSettlement{}, err
 	}
@@ -758,7 +756,7 @@ func (t *jobFileTransaction) Retire(_ context.Context, reason FileRetireReason) 
 func newJobFileSettlement(
 	binding MaterializedFileBinding,
 	kind FileSettlementKind,
-	checkpoint VerifiedDurableRanges,
+	checkpoint VerifiedRanges,
 ) (FileSettlement, error) {
 	switch kind {
 	case FilePublished, FilePaused:
@@ -787,4 +785,14 @@ type jobBrokerReader struct{ broker *BlockBroker }
 
 func (r jobBrokerReader) ReadRange(ctx context.Context, handle RevisionHandle, descriptor content.FileRevisionDescriptor, requested content.Range, sink RangeSink) error {
 	return r.broker.ReadRange(ctx, content.LeaseID(handle), descriptor, requested, sink)
+}
+
+func (o *jobOutput) verifyRanges(binding MaterializedFileBinding, generation CheckpointGeneration, ranges content.RangeSet) (VerifiedRanges, error) {
+	if o.inProcess {
+		return VerifyProcessRanges(binding, generation, ranges)
+	}
+	if o.Capabilities().Durability == DurabilityNone {
+		return AcknowledgeTransientWrite(binding, generation)
+	}
+	return VerifyRestartRanges(binding, generation, ranges)
 }

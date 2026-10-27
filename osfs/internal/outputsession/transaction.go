@@ -58,26 +58,26 @@ func (transaction *guardedTransaction) WriteRange(
 		return err
 	}
 	cut, executeErr := transaction.executor.WriteRange(ctx, offset, data)
-	return transaction.finishNonterminal(ctx, operationID, entry, operation, cut, executeErr, transfer.VerifiedDurableRanges{})
+	return transaction.finishNonterminal(ctx, operationID, entry, operation, cut, executeErr, transfer.VerifiedRanges{})
 }
 
 func (transaction *guardedTransaction) Checkpoint(
 	ctx context.Context,
-) (transfer.VerifiedDurableRanges, error) {
+) (transfer.VerifiedRanges, error) {
 	lease, operationID, err := transaction.begin(ctx)
 	if err != nil {
-		return transfer.VerifiedDurableRanges{}, err
+		return transfer.VerifiedRanges{}, err
 	}
 	defer lease.release()
 	entry, operation, _, event, err := transaction.reserve(operationID, actionCheckpoint, 0)
 	if err != nil {
 		transaction.session.emit(event)
-		return transfer.VerifiedDurableRanges{}, err
+		return transfer.VerifiedRanges{}, err
 	}
 	checkpoint, cut, executeErr := transaction.executor.Checkpoint(ctx)
 	err = transaction.finishNonterminal(ctx, operationID, entry, operation, cut, executeErr, checkpoint)
 	if err != nil {
-		return transfer.VerifiedDurableRanges{}, err
+		return transfer.VerifiedRanges{}, err
 	}
 	return checkpoint, nil
 }
@@ -198,7 +198,7 @@ func (transaction *guardedTransaction) finishNonterminal(
 	operation *fileTransactionOperation,
 	cut MutationCut,
 	executeErr error,
-	checkpoint transfer.VerifiedDurableRanges,
+	checkpoint transfer.VerifiedRanges,
 ) error {
 	session := transaction.session
 	if executeErr == nil && cut != MutationStable {

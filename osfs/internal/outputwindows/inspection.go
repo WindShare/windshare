@@ -180,24 +180,28 @@ func validateWindowsExternalPlacement(
 }
 
 func validateWindowsVolumeIdentityScheme(facts windowsVolumeFacts) error {
+	if err := validateWindowsVolumeLiveCapabilities(facts); err != nil {
+		return err
+	}
+	if !strings.EqualFold(facts.filesystem, windowsOutputFilesystem) || facts.driveType != windows.DRIVE_FIXED {
+		return windowsFailure("inspect restart identity evidence", facts.path, errWindowsOutputUnsupported,
+			fmt.Errorf("no restart identity contract for filesystem %q on drive type %d", facts.filesystem, facts.driveType))
+	}
+	return nil
+}
+
+func validateWindowsVolumeLiveCapabilities(facts windowsVolumeFacts) error {
 	switch {
-	case !strings.EqualFold(facts.filesystem, windowsOutputFilesystem):
-		return windowsFailure("certify output filesystem", facts.path, errWindowsOutputUnsupported,
-			fmt.Errorf("filesystem %q is not NTFS", facts.filesystem))
 	case strings.HasPrefix(strings.TrimPrefix(facts.path, `\\?\`), `UNC\`):
-		return windowsFailure("certify output filesystem", facts.path, errWindowsOutputUnsupported,
-			errors.New("network filesystems are not certified"))
-	case facts.driveType != windows.DRIVE_FIXED:
-		return windowsFailure("certify output filesystem", facts.path, errWindowsOutputUnsupported,
-			fmt.Errorf("drive type %d is not a certified fixed disk", facts.driveType))
+		return windowsFailure("inspect live output filesystem", facts.path, errWindowsOutputUnsupported, errors.New("remote namespace semantics are unavailable"))
 	case facts.flags&windows.FILE_SUPPORTS_HARD_LINKS == 0:
-		return windowsFailure("certify output filesystem", facts.path, errWindowsOutputUnsupported,
+		return windowsFailure("inspect live output filesystem", facts.path, errWindowsOutputUnsupported,
 			errors.New("volume does not report regular-file hard-link support"))
 	case facts.flags&windows.FILE_PERSISTENT_ACLS == 0:
-		return windowsFailure("certify output filesystem", facts.path, errWindowsOutputUnsupported,
+		return windowsFailure("inspect live output filesystem", facts.path, errWindowsOutputUnsupported,
 			errors.New("volume does not report persistent ACL support"))
 	case facts.flags&windowsFileSupportsPOSIXSemantics == 0:
-		return windowsFailure("certify output filesystem", facts.path, errWindowsOutputUnsupported,
+		return windowsFailure("inspect live output filesystem", facts.path, errWindowsOutputUnsupported,
 			errors.New("volume does not report handle-bound rename/unlink support"))
 	default:
 		return nil

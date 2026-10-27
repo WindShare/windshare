@@ -13,7 +13,7 @@ import (
 func TestOutputSettlementSumTypesRejectMalformedStates(t *testing.T) {
 	binding, checkpoint := outputLifecycleFixture(t)
 
-	if _, err := NewVerifiedFileSettlement(FilePublished, VerifiedDurableRanges{}); !errors.Is(err, ErrInvalidOutputSettlement) {
+	if _, err := NewVerifiedFileSettlement(FilePublished, VerifiedRanges{}); !errors.Is(err, ErrInvalidOutputSettlement) {
 		t.Fatalf("published settlement without a binding error = %v", err)
 	}
 	if _, err := NewMaterializationStateRef(OutputSessionID{}, binding.Locator().Digest()); !errors.Is(err, ErrInvalidOutputSettlement) {
@@ -82,7 +82,7 @@ func TestHistoricalDeliveryCannotBecomeContentOrCommitEvidence(t *testing.T) {
 	if _, _, transaction := start.Transaction(); transaction {
 		t.Fatal("historical delivery exposed a writable transaction")
 	}
-	if _, verified := receipt.VerifiedCheckpoint(); verified {
+	if _, verified := receipt.VerifiedProgress(); verified {
 		t.Fatal("historical delivery exposed current content proof")
 	}
 	if _, provenance := receipt.PublicationProvenance(); provenance {
@@ -272,7 +272,7 @@ func TestPublishedSettlementWarningsProvenanceAndDestinationCoordinatesAreExplic
 	}
 }
 
-func outputLifecycleFixture(t *testing.T) (MaterializedFileBinding, VerifiedDurableRanges) {
+func outputLifecycleFixture(t *testing.T) (MaterializedFileBinding, VerifiedRanges) {
 	t.Helper()
 	descriptor := transferDescriptor(t, 1)
 	locator, err := NewPathMaterializationLocator("file.bin")
@@ -294,7 +294,7 @@ func outputLifecycleFixture(t *testing.T) (MaterializedFileBinding, VerifiedDura
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkpoint, err := VerifyDurableRanges(binding, 1, ranges)
+	checkpoint, err := VerifyRestartRanges(binding, 1, ranges)
 	if err != nil {
 		t.Fatal(err)
 	}

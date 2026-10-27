@@ -94,14 +94,15 @@ func openWindowsOutputPlatformWithAuthority(
 			err = windowsFailure("inspect output root", absolute, errWindowsOutputUnsupported, shapeErr)
 		}
 	}
+	var volumeFacts windowsVolumeFacts
 	if err == nil {
-		// This handle anchors the identityScheme lifetime. Descendants and guards
-		// still prove their own volume identity; reopening a root certifies anew.
-		volumeFacts, volumeErr := volumes.InspectVolume(handle)
+		// Live mutation needs actual native primitives; restart identity is separate.
+		var volumeErr error
+		volumeFacts, volumeErr = volumes.InspectVolume(handle)
 		if volumeErr != nil {
 			err = windowsFailure("inspect output volume", absolute, errWindowsOutputUnsupported, volumeErr)
 		} else {
-			err = validateWindowsVolumeIdentityScheme(volumeFacts)
+			err = validateWindowsVolumeLiveCapabilities(volumeFacts)
 		}
 	}
 	if err != nil {
@@ -118,8 +119,12 @@ func openWindowsOutputPlatformWithAuthority(
 		ancestryAuthority: windowsNativeAncestryAuthorityVerifier{},
 		enumerate:         &sync.Mutex{}, placementGuard: true,
 	}
+	durability := windowsOutputDurability(0)
+	if validateWindowsVolumeIdentityScheme(volumeFacts) == nil {
+		durability = windowsOutputProcessRestart
+	}
 	return &nativeOutputPlatform{
-		root: root, inspector: inspector, policy: policy, durability: windowsOutputProcessRestart,
+		root: root, inspector: inspector, policy: policy, durability: durability,
 	}, nil
 }
 

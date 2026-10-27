@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -117,5 +118,26 @@ func TestAPFSIdentityPublicationAndPlacement(t *testing.T) {
 	if guard, err := platform.AcquirePublicOperationGuard(); err == nil {
 		_ = guard.Close()
 		t.Fatal("replacement root acquired public authority")
+	}
+}
+
+func TestAPFSPrivateModeDoesNotOverrideACLGrants(t *testing.T) {
+	root := t.TempDir()
+	platform, err := Open(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer platform.Close()
+	private, err := platform.root.CreateDirectory("private", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer private.Close()
+	path := filepath.Join(root, "private")
+	if out, err := exec.Command("/bin/chmod", "+a", "everyone allow read,write", path).CombinedOutput(); err != nil {
+		t.Fatalf("set ACL: %v %s", err, out)
+	}
+	if err := private.(*directory).verify(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
+		t.Fatalf("private ACL grant admitted: %v", err)
 	}
 }

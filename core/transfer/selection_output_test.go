@@ -195,12 +195,12 @@ func TestMaterializationBindingsDurableRangesAndCapabilities(t *testing.T) {
 		t.Fatal(err)
 	}
 	ranges, _ := content.NewRangeSet([]content.Range{{Offset: 0, End: 10}})
-	verified, err := VerifyDurableRanges(binding, 4, ranges)
+	verified, err := VerifyRestartRanges(binding, 4, ranges)
 	if err != nil || verified.Binding() != binding || verified.CheckpointGeneration() != 4 || !rangesEqual(verified.Ranges(), ranges) {
 		t.Fatalf("verified=%+v err=%v", verified, err)
 	}
 	outside, _ := content.NewRangeSet([]content.Range{{Offset: 0, End: descriptor.ExactSize() + 1}})
-	if _, err := VerifyDurableRanges(binding, 0, outside); !errors.Is(err, ErrInvalidOutputBinding) {
+	if _, err := VerifyRestartRanges(binding, 0, outside); !errors.Is(err, ErrInvalidOutputBinding) {
 		t.Fatalf("outside durable error=%v", err)
 	}
 	if _, err := NewPathMaterializationLocator("../escape"); err == nil {
@@ -265,7 +265,7 @@ func TestOutputIdentityLocatorAndErrorValidationBranches(t *testing.T) {
 	if _, err := NewMaterializedFileBinding(OutputSessionID{}, descriptor, handle, object); err == nil {
 		t.Fatal("binding without an opened DirectTree session accepted")
 	}
-	if _, err := VerifyDurableRanges(MaterializedFileBinding{}, 0, content.RangeSet{}); err == nil {
+	if _, err := VerifyRestartRanges(MaterializedFileBinding{}, 0, content.RangeSet{}); err == nil {
 		t.Fatal("durable ranges without binding accepted")
 	}
 	empty, err := MergeRanges()

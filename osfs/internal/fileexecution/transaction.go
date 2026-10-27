@@ -10,6 +10,7 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
+	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
 type transactionState uint8
@@ -65,6 +66,8 @@ type livePartialFileStrategy struct {
 	written    content.RangeSet
 	generation transfer.CheckpointGeneration
 	closed     bool
+	published  bool
+	parent     outputcap.Directory
 	warnings   []MetadataWarning
 }
 
@@ -110,9 +113,9 @@ func (transaction *PartialFileTransaction) WriteRange(ctx context.Context, offse
 	return transaction.strategy.WriteRange(ctx, offset, data)
 }
 
-func (transaction *PartialFileTransaction) Checkpoint(ctx context.Context) (transfer.VerifiedDurableRanges, error) {
+func (transaction *PartialFileTransaction) Checkpoint(ctx context.Context) (transfer.VerifiedRanges, error) {
 	if transaction == nil || transaction.strategy == nil {
-		return transfer.VerifiedDurableRanges{}, fileContractError(ErrTransactionClosed)
+		return transfer.VerifiedRanges{}, fileContractError(ErrTransactionClosed)
 	}
 	return transaction.strategy.Checkpoint(ctx)
 }
@@ -204,7 +207,7 @@ func (transaction *livePartialFileStrategy) WriteRange(ctx context.Context, offs
 		return fileContractError(err)
 	}
 	written, writeErr := transaction.file.WriteAt(data, int64(offset))
-	if written != len(data) {
+	if written != len(data) || writeErr != nil {
 		if writeErr == nil {
 			writeErr = io.ErrShortWrite
 		}
@@ -216,7 +219,7 @@ func (transaction *livePartialFileStrategy) WriteRange(ctx context.Context, offs
 
 func (transaction *livePartialFileStrategy) Checkpoint(
 	ctx context.Context,
-) (transfer.VerifiedDurableRanges, error) {
+) (transfer.VerifiedRanges, error) {
 	transaction.mu.Lock()
 	defer transaction.mu.Unlock()
 	return transaction.checkpointLocked(ctx)
@@ -224,21 +227,15 @@ func (transaction *livePartialFileStrategy) Checkpoint(
 
 func (transaction *livePartialFileStrategy) checkpointLocked(
 	ctx context.Context,
-) (transfer.VerifiedDurableRanges, error) {
+) (transfer.VerifiedRanges, error) {
 	if err := transaction.validateOpen(ctx); err != nil {
-		return transfer.VerifiedDurableRanges{}, err
-	}
-	if err := transaction.file.Sync(); err != nil {
-		return transfer.VerifiedDurableRanges{}, collaboratorError(ctx, err)
+		return transfer.VerifiedRanges{}, err
 	}
 	if transaction.generation == ^transfer.CheckpointGeneration(0) {
-		return transfer.VerifiedDurableRanges{}, fileContractError(ErrCheckpointBinding)
+		return transfer.VerifiedRanges{}, fileContractError(ErrCheckpointBinding)
 	}
 	transaction.generation++
-	// Live-only generations order in-process checkpoints, but empty ranges ensure
-	// no later process can mistake that ordering evidence for restart have-state.
-	empty, _ := content.NewRangeSet(nil)
-	return transfer.VerifyDurableRanges(transaction.binding, transaction.generation, empty)
+	return transfer.VerifyProcessRanges(transaction.binding, transaction.generation, transaction.written)
 }
 
 func (transaction *livePartialFileStrategy) Commit(ctx context.Context) (transfer.FileSettlement, error) {
@@ -274,19 +271,21 @@ func (transaction *livePartialFileStrategy) Commit(ctx context.Context) (transfe
 			_ = transaction.close(false)
 			return transfer.FileSettlement{}, settlementErr
 		}
-		if cleanupErr := transaction.close(true); cleanupErr != nil {
-			return itemBlockedSettlement(transaction.binding, transfer.ItemBlockRetirementUncertain)
-		}
+		transaction.closed = true
 		return settlement, nil
 	}
 	if final.Condition() != FinalOwnedAtExpectedSize {
 		return transaction.blockPublicationLocked()
 	}
-	settlement, err := transfer.NewTransientPublishedFileSettlement(transaction.binding)
+	progress, err := transfer.VerifyProcessRanges(transaction.binding, transaction.generation, transaction.written)
+	if err != nil {
+		return transfer.FileSettlement{}, err
+	}
+	settlement, err := transfer.NewVerifiedFileSettlement(transfer.FilePublished, progress)
 	if err == nil {
 		settlement, err = settlement.WithMetadataWarnings(settlementMetadataWarnings(transaction.warnings))
 	}
-	_ = transaction.close(true)
+	transaction.closed, transaction.published = true, true
 	return settlement, err
 }
 
@@ -294,10 +293,9 @@ func (transaction *livePartialFileStrategy) blockPublicationLocked() (transfer.F
 	settlement, err := itemBlockedSettlement(
 		transaction.binding, transfer.ItemBlockPublicationAmbiguous,
 	)
-	// The stage is the only evidence left after uncertain publication. Its
-	// lifecycle may support authenticated restart cleanup; otherwise it remains
-	// an untouched leftover. Closing handles never authorizes reopening by name.
-	_ = transaction.close(false)
+	// The operation retains the exact stage so a later attempt can reconcile
+	// publication without inventing ownership from a path or downloading again.
+	transaction.closed = true
 	return settlement, err
 }
 
@@ -322,9 +320,7 @@ func (transaction *livePartialFileStrategy) Pause(
 		_ = transaction.close(false)
 		return transfer.FileSettlement{}, err
 	}
-	if cleanupErr := transaction.close(true); cleanupErr != nil {
-		return itemBlockedSettlement(transaction.binding, transfer.ItemBlockRetirementUncertain)
-	}
+	transaction.closed = true
 	return settlement, nil
 }
 
@@ -359,7 +355,7 @@ func (transaction *livePartialFileStrategy) validateOpen(ctx context.Context) er
 }
 
 func (transaction *livePartialFileStrategy) close(remove bool) error {
-	if transaction.closed {
+	if transaction.file == nil {
 		return nil
 	}
 	transaction.closed = true
@@ -370,7 +366,10 @@ func (transaction *livePartialFileStrategy) close(remove bool) error {
 	// Handle release cannot retract a stable settlement. Cleanup failure remains
 	// separate so callers can surface blocked items while retaining uncertain
 	// leftovers for the lifecycle that actually owns them.
-	_ = errors.Join(transaction.file.Close(), transaction.destination.Close())
-	transaction.file, transaction.destination = nil, nil
-	return cleanupErr
+	closeErr := errors.Join(transaction.file.Close(), transaction.destination.Close())
+	if transaction.parent != nil {
+		closeErr = errors.Join(closeErr, transaction.parent.Close())
+	}
+	transaction.file, transaction.destination, transaction.parent = nil, nil, nil
+	return errors.Join(cleanupErr, closeErr)
 }

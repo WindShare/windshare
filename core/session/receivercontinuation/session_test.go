@@ -296,13 +296,13 @@ func (s *singleFileSession) BeginFile(ctx context.Context, file transfer.Materia
 
 type transientFileTransaction struct{ transfer.FileTransaction }
 
-func (f *transientFileTransaction) Checkpoint(ctx context.Context) (transfer.VerifiedDurableRanges, error) {
+func (f *transientFileTransaction) Checkpoint(ctx context.Context) (transfer.VerifiedRanges, error) {
 	checkpoint, err := f.FileTransaction.Checkpoint(ctx)
 	if err != nil {
-		return transfer.VerifiedDurableRanges{}, err
+		return transfer.VerifiedRanges{}, err
 	}
 	empty, _ := content.NewRangeSet(nil)
-	return transfer.VerifyDurableRanges(f.Binding(), checkpoint.CheckpointGeneration(), empty)
+	return transfer.VerifyRestartRanges(f.Binding(), checkpoint.CheckpointGeneration(), empty)
 }
 func (f *transientFileTransaction) Commit(ctx context.Context) (transfer.FileSettlement, error) {
 	if _, err := f.FileTransaction.Commit(ctx); err != nil {

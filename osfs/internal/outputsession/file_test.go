@@ -29,7 +29,7 @@ func TestFileBeginCoalescesExecutorButNeverSharesActiveTransaction(t *testing.T)
 			engine.last = transaction
 			engine.mu.Unlock()
 			return FileBeginObservation{
-				Cut: MutationStable, Transaction: transaction, Durable: transaction.emptyCheckpoint,
+				Cut: MutationStable, Transaction: transaction, Progress: transaction.emptyCheckpoint,
 			}, nil
 		}
 		config.Trace = TraceSinkFunc(func(event TraceEvent) {

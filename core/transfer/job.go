@@ -553,7 +553,7 @@ func (r *jobRun) transferPlannedFile(ctx context.Context, plan plannedFile) erro
 			r.traceFileLifecycle(TransferFileAdmitted, plan, contractFailure)
 			return r.rejectImmediateSettlement(ctx, plan, opened, settlement, contractFailure)
 		}
-		if checkpoint, ok := settlement.VerifiedCheckpoint(); ok {
+		if checkpoint, ok := settlement.VerifiedProgress(); ok {
 			recovered, exact := rangeSetByteCount(checkpoint.Ranges())
 			if !exact || recovered > plan.expectedSize {
 				contractFailure := outputContractFault(ErrOutputContract)

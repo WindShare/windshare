@@ -327,27 +327,27 @@ func rangeSetByteCount(ranges content.RangeSet) (uint64, bool) {
 // unconfirmed write. The operation tracker therefore never becomes a second
 // file/range manifest.
 type fileTransferProgress struct {
-	durable      bool
-	trusted      VerifiedDurableRanges
-	pending      content.Range
-	hasPending   bool
-	transientEnd uint64
+	retainsRanges bool
+	trusted       VerifiedRanges
+	pending       content.Range
+	hasPending    bool
+	transientEnd  uint64
 }
 
 func newFileTransferProgress(
 	transaction FileTransaction,
-	checkpoint VerifiedDurableRanges,
-	durable bool,
+	checkpoint VerifiedRanges,
+	restart bool,
 ) (fileTransferProgress, uint64, bool) {
 	if transaction == nil || checkpoint.Binding() != transaction.Binding() ||
-		(!durable && !checkpoint.Ranges().IsEmpty()) {
+		((checkpoint.Retention() == RangesAfterRestart) != restart) {
 		return fileTransferProgress{}, 0, false
 	}
 	bytes, exact := rangeSetByteCount(checkpoint.Ranges())
 	if !exact || bytes > transaction.Binding().ExactSize() {
 		return fileTransferProgress{}, 0, false
 	}
-	return fileTransferProgress{durable: durable, trusted: checkpoint}, bytes, true
+	return fileTransferProgress{retainsRanges: checkpoint.Retention() != RangesTransient, trusted: checkpoint}, bytes, true
 }
 
 func (progress *fileTransferProgress) beginPending(requested content.Range) bool {
@@ -361,13 +361,13 @@ func (progress *fileTransferProgress) beginPending(requested content.Range) bool
 
 func (progress *fileTransferProgress) acknowledge(
 	transaction FileTransaction,
-	next VerifiedDurableRanges,
+	next VerifiedRanges,
 ) (uint64, bool) {
 	if progress == nil || !progress.hasPending {
 		return 0, false
 	}
 	valid := checkpointExactlyAdvances(transaction, progress.trusted, progress.pending, next)
-	if !progress.durable {
+	if !progress.retainsRanges {
 		valid = checkpointAcknowledgesTransientWrite(transaction, progress.trusted, next)
 	}
 	if !valid {
@@ -380,11 +380,11 @@ func (progress *fileTransferProgress) reconcileSettlement(
 	transaction FileTransaction,
 	settlement FileSettlement,
 ) (uint64, bool) {
-	checkpoint, hasCheckpoint := settlement.VerifiedCheckpoint()
+	checkpoint, hasCheckpoint := settlement.VerifiedProgress()
 	if !hasCheckpoint {
 		return 0, true
 	}
-	if transaction == nil || checkpoint.Binding() != transaction.Binding() {
+	if transaction == nil || checkpoint.Binding() != transaction.Binding() || checkpoint.Retention() != progress.trusted.Retention() {
 		return 0, false
 	}
 	if progress.hasPending {
@@ -407,9 +407,9 @@ func (progress *fileTransferProgress) reconcileSettlement(
 	return 0, true
 }
 
-func (progress *fileTransferProgress) acceptPending(next VerifiedDurableRanges) uint64 {
+func (progress *fileTransferProgress) acceptPending(next VerifiedRanges) uint64 {
 	delta := progress.pending.Length()
-	if !progress.durable {
+	if !progress.retainsRanges {
 		progress.transientEnd = progress.pending.End
 	}
 	progress.trusted = next

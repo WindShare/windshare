@@ -96,7 +96,7 @@ func TestLongNativeOrdinaryRestartReusesPublishedFile(t *testing.T) {
 	if reopened.transaction != nil || reopened.settlement.Kind() != transfer.FilePreviouslyPublished {
 		t.Fatalf("published file reopened as transaction=%t settlement=%d", reopened.transaction != nil, reopened.settlement.Kind())
 	}
-	if _, verified := reopened.settlement.VerifiedCheckpoint(); verified {
+	if _, verified := reopened.settlement.VerifiedProgress(); verified {
 		t.Fatal("delivery receipt exposed a verified checkpoint")
 	}
 	actual, err := os.ReadFile(reopened.finalPath)
@@ -115,7 +115,7 @@ func TestLongNativeOrdinaryRestartReusesPublishedFile(t *testing.T) {
 
 func assertSingleDurableRange(
 	t *testing.T,
-	durable transfer.VerifiedDurableRanges,
+	durable transfer.VerifiedRanges,
 	want content.Range,
 ) {
 	t.Helper()

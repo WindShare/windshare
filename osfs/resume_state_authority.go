@@ -20,6 +20,7 @@ const (
 	ResumeOperationCleanupPending
 	ResumeOperationNeedsAttention
 	ResumeOperationDiscarded
+	ResumeOperationRecoveryUnavailable
 )
 
 func (state ResumeOperationState) String() string {
@@ -122,6 +123,8 @@ func (summary ResumeStateSummary) StateGeneration() uint64 {
 }
 func (summary ResumeStateSummary) NeedsAttentionReason() FilesystemOutputStateReason {
 	switch summary.State() {
+	case ResumeOperationRecoveryUnavailable:
+		return FilesystemOutputStateRecoveryUnavailable
 	case ResumeOperationNeedsAttention, ResumeOperationCleanupPending:
 		return projectResumeStateReason(summary.inner.NeedsAttentionReason())
 	default:

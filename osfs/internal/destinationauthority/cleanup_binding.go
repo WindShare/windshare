@@ -6,6 +6,8 @@ import (
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
+var ErrCleanupOwnershipUnknown = errors.New("cleanup ownership is unknown")
+
 // Unknown cleanup entries do not revoke a separately authenticated operation
 // registry. They remain untouched while normal recovery retains its authority.
 func bindCleanup(config BindConfig, control, root outputcap.Directory,
@@ -16,6 +18,11 @@ func bindCleanup(config BindConfig, control, root outputcap.Directory,
 		return journal, nil, result, validateNativeMethodSets(root, nil, capabilities)
 	}
 	journal, resultErr = config.OpenLiveCleanupJournal(control)
+	if errors.Is(resultErr, ErrCleanupOwnershipUnknown) || errors.Is(resultErr, outputcap.ErrUnsafeNamespace) {
+		result, resultErr = downgradedCleanupCapabilities(capabilities, outputcap.CapabilityReasonCleanupOwnershipUnknown)
+		resultErr = errors.Join(resultErr, journal.Close())
+		return
+	}
 	if resultErr != nil || !journal.valid() {
 		return journal, nil, result, errors.Join(ErrInvalidConfiguration, resultErr, journal.Close())
 	}

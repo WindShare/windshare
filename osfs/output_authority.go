@@ -23,6 +23,7 @@ type FilesystemOutputIdentitySchemeID string
 const (
 	FilesystemOutputIdentitySchemeLinuxHandleV2     FilesystemOutputIdentitySchemeID = "linux/ext4/handle/v2"
 	FilesystemOutputIdentitySchemeWindowsObjectIDV1 FilesystemOutputIdentitySchemeID = "windows/ntfs/object-id/v1"
+	FilesystemOutputIdentitySchemeDarwinObjectIDV1  FilesystemOutputIdentitySchemeID = "darwin/apfs/object-id/v1"
 )
 
 type FilesystemResumeRoot struct {
@@ -145,11 +146,12 @@ const (
 	FilesystemOutputStateLeaseOwnershipUnknown
 	FilesystemOutputStateOperationOwnershipUnknown
 	FilesystemOutputStateCleanupUncertain
+	FilesystemOutputStateRecoveryUnavailable
 )
 
 func (reason FilesystemOutputStateReason) Valid() bool {
 	return reason >= FilesystemOutputStateReasonNone &&
-		reason <= FilesystemOutputStateCleanupUncertain
+		reason <= FilesystemOutputStateRecoveryUnavailable
 }
 
 func (reason FilesystemOutputStateReason) String() string {
@@ -164,6 +166,8 @@ func (reason FilesystemOutputStateReason) String() string {
 		return "lease-ownership-unknown"
 	case FilesystemOutputStateOperationOwnershipUnknown:
 		return "operation-ownership-unknown"
+	case FilesystemOutputStateRecoveryUnavailable:
+		return "recovery-unavailable"
 	case FilesystemOutputStateCleanupUncertain:
 		return "cleanup-uncertain"
 	default:
@@ -496,6 +500,17 @@ func (operation FilesystemOutputOperation) ExecutionMode() FilesystemOutputExecu
 		return FilesystemOutputExecutionMode{}
 	}
 	return FilesystemOutputExecutionMode{mode: operation.operation.ExecutionMode()}
+}
+
+func (operation FilesystemOutputOperation) RetryAvailable() bool {
+	return operation.operation != nil && operation.operation.RetryAvailable()
+}
+
+func (operation FilesystemOutputOperation) Discard(ctx context.Context) error {
+	if operation.operation == nil {
+		return transfer.ErrInvalidOutputBinding
+	}
+	return operation.operation.Discard(ctx)
 }
 
 type NativeDirectTreeReservationKind uint8

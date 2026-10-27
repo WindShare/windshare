@@ -214,11 +214,29 @@ func TestPartialFileTransactionFaultBoundariesDoNotInventDurability(t *testing.T
 			}
 			configure(transaction, destination)
 			settlement, err := transaction.Commit(context.Background())
-			if err != nil || settlement.Kind() != transfer.FileItemBlocked ||
-				repository.record.Phase() != checkpointmodel.PhaseQuarantined ||
-				repository.record.QuarantineReason() != checkpointmodel.QuarantinePublicationHistory {
-				t.Fatalf("faulted commit = (kind %d phase %d reason %d, %v)",
-					settlement.Kind(), repository.record.Phase(), repository.record.QuarantineReason(), err)
+			if !errors.Is(err, operationErr) || settlement.Kind() != 0 || repository.record.Phase() != checkpointmodel.PhasePublishing {
+				t.Fatalf("faulted commit = (kind %d phase %d, %v)", settlement.Kind(), repository.record.Phase(), err)
+			}
+			if _, err := transaction.Pause(context.Background(), transfer.FilePauseInterrupted); err != nil {
+				t.Fatal(err)
+			}
+			destination.publishErr, destination.syncErr = nil, nil
+			fixture := newExecutionFixture(t, 4)
+			recovered := newFixtureEngine(t, fixture, repository, transaction.engine.platform.(*memoryPlatform), destination, nil)
+			start, err := recovered.BeginFile(context.Background(), fixture.file, fixture.destination)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resumed, progress, ok := start.Transaction(); ok {
+				if !transfer.RangesCoverFile(4, progress.Ranges()) {
+					t.Fatal("publication failure lost verified ranges")
+				}
+				settlement, err = resumed.Commit(context.Background())
+			} else {
+				settlement, _ = start.ImmediateSettlement()
+			}
+			if err != nil || (settlement.Kind() != transfer.FilePublished && settlement.Kind() != transfer.FilePreviouslyPublished) {
+				t.Fatalf("retry = (%v, %v)", settlement.Kind(), err)
 			}
 		})
 	}

@@ -81,6 +81,10 @@ func (authority *Authority) listOperation(
 	ctx context.Context,
 	header Header,
 ) (summary Summary, unknown bool, resultErr error) {
+	if header.unavailable {
+		summary, err := newSummary(header, OperationRecoveryUnavailable, nil, false)
+		return summary, false, err
+	}
 	lease, err := authority.store.Acquire(ctx, header.Record().OperationID())
 	if errors.Is(err, ErrBusy) {
 		summary, reduceErr := ReduceHeader(header, true)

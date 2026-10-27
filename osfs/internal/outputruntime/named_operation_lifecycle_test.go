@@ -152,7 +152,7 @@ func TestOrdinaryLifecycleRecorderSeparatesCommandOutcomeFromDurableCleanup(t *t
 	}
 }
 
-func TestOrdinaryLifecycleRecorderQuarantinesOperationWideFailure(t *testing.T) {
+func TestOrdinaryLifecycleRecorderPreservesOperationAfterFailedAttempt(t *testing.T) {
 	fixture := openOrdinaryLifecycleFixture(t, 0xe1)
 	defer fixture.close(t)
 	if err := fixture.recorder.RecordTreeSettlement(
@@ -162,8 +162,8 @@ func TestOrdinaryLifecycleRecorderQuarantinesOperationWideFailure(t *testing.T) 
 		t.Fatal(err)
 	}
 	record := fixture.operation.lease.Record()
-	if record.Lifecycle() != checkpointmodel.OrdinaryOperationNeedsAttention ||
-		record.ClosedReason() != checkpointmodel.OrdinaryReasonOperationOwnershipUnknown {
+	if record.Lifecycle() != checkpointmodel.OrdinaryOperationActive ||
+		record.ClosedReason() != checkpointmodel.OrdinaryReasonNone {
 		t.Fatalf("operation failure lifecycle = (%d, %d)", record.Lifecycle(), record.ClosedReason())
 	}
 }
