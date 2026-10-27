@@ -60,7 +60,8 @@ jobs:
             sw_vers
             uname -a
             go version
-            diskutil info "$RUNNER_TEMP"
+            df "$RUNNER_TEMP"
+            diskutil info "$(df "$RUNNER_TEMP" | tail -1 | awk '{print $1}')"
           } > "$RUNNER_TEMP/native-output-evidence/environment.txt"
           go test -short -count=1 -v ./osfs/... ./adapters/filesystem ./core/transfer/... \
             2>&1 | tee "$RUNNER_TEMP/native-output-evidence/tests.log"
