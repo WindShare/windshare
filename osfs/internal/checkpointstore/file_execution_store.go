@@ -146,9 +146,6 @@ func (store *FileExecutionStore) CleanupOwned(ctx context.Context) error {
 	if err := store.authority.requireSettled(); err != nil {
 		return codedError(ErrorStateIO, "cleanup unsettled ordinary file state", err)
 	}
-	if len(store.authority.attention) != 0 {
-		return codedError(ErrorUnsafeInstall, "cleanup ordinary file state", checkpointmodel.ErrRecordRecovery)
-	}
 	records := make([]checkpointmodel.Record, 0, len(store.authority.physical))
 	for _, record := range store.authority.physical {
 		records = append(records, record)
@@ -160,6 +157,11 @@ func (store *FileExecutionStore) CleanupOwned(ctx context.Context) error {
 		if err := store.cleanupBatch(ctx, records[start:end], retiredObjects); err != nil {
 			return repositoryError("cleanup ordinary file state", err)
 		}
+	}
+	// Unknown auxiliary objects survive, but do not retain independently owned
+	// data after the user has discarded the operation.
+	if len(store.authority.attention) != 0 {
+		return codedError(ErrorUnsafeInstall, "cleanup ordinary file state", checkpointmodel.ErrRecordRecovery)
 	}
 	return nil
 }

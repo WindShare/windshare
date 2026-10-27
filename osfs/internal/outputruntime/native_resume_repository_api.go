@@ -421,14 +421,13 @@ func (lease *NativeResumeLease) ensureFileStoreLocked() (bool, error) {
 		&repository, checkpointstore.InheritFinalParent,
 	)
 	var recordCount uint64
-	var repositoryAttention bool
+	var attention []checkpointstore.Attention
 	if store != nil {
 		recordCount = store.RecordCount()
-		_, attention := store.LineageSnapshot()
-		repositoryAttention = len(attention) != 0
+		_, attention = store.LineageSnapshot()
 	}
 	lease.runtime.traceCheckpointReconciled(
-		intent, transfer.OutputSessionID{}, recordCount, repositoryAttention, err,
+		intent, transfer.OutputSessionID{}, recordCount, attention, err,
 	)
 	if err != nil {
 		primary := diagnoseFilesystemOutputFailure(

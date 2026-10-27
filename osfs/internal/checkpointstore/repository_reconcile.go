@@ -45,6 +45,17 @@ type Attention struct {
 
 func (attention Attention) Code() AttentionCode { return attention.code }
 
+// Uninstalled images never grant range authority. An interrupted write can leave
+// one unreadable without changing the independently validated fixed record.
+// Keep that object for cleanup attention; it cannot veto recovery of siblings.
+func (attention Attention) BlocksRecovery() bool {
+	return attention.code != AttentionInvalidCandidate
+}
+
+func RecoveryBlocked(attention []Attention) bool {
+	return slices.ContainsFunc(attention, Attention.BlocksRecovery)
+}
+
 // Reference is a stable diagnostic correlation token, not an internal name or
 // user-visible path. Unknown directory contents must not become a logging leak.
 func (attention Attention) Reference() string { return attention.reference }
