@@ -22,7 +22,7 @@ export const zh: typeof en = {
   eyebrow: '一点轻盈，让彼此更近。',
   titleFirst: '文件在你手里。',
   titleSecond: '分享，如风而至。',
-  subtitleFirst: '无需上传云端秒出任意文件分享链接',
+  subtitleFirst: '无需上传云端，秒出任意文件分享链接',
   subtitleSecond: '对方打开浏览器，即可浏览、预览和下载。',
   assurancePrivate: '端到端加密',
   assuranceInstant: '无需预上传',

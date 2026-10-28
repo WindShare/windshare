@@ -20,7 +20,7 @@ export const en = {
   eyebrow: 'A little breeze. A closer connection.',
   titleFirst: 'Your files.',
   titleSecond: 'Free as a breeze.',
-  subtitleFirst: 'Skip the upload. Send a link.',
+  subtitleFirst: 'No cloud upload. Get a share link for any file in seconds.',
   subtitleSecond: 'They can browse, preview, and download in their browser.',
   assurancePrivate: 'End-to-end encrypted',
   assuranceInstant: 'No pre-upload',
