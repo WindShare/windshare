@@ -90,7 +90,7 @@ func bindRecyclingDestination(
 	recycler PrivateStateRecycler,
 ) *BoundDestination {
 	t.Helper()
-	journal := &destinationJournal{snapshot: LiveCleanupSnapshot{State: LiveCleanupScanComplete}}
+	journal := &destinationJournal{snapshot: LiveCleanupBatch{State: LiveCleanupBatchComplete}}
 	authority, err := BindDestination(BindConfig{
 		Platform:               platform,
 		DisplayPath:            filepath.Clean(t.TempDir()),

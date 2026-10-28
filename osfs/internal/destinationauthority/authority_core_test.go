@@ -133,9 +133,9 @@ func TestBoundDestinationRejectsReplacedRootAndLiveOnlyRegistry(t *testing.T) {
 }
 
 func TestBindDestinationDowngradesOnlyCleanupOnBoundedNegativeProof(t *testing.T) {
-	for _, state := range []LiveCleanupScanState{LiveCleanupScanOverflow, LiveCleanupScanUnknown} {
+	for _, state := range []LiveCleanupBatchState{LiveCleanupBatchUnverifiable} {
 		platform := newDestinationPlatform()
-		authority := bindFakeDestination(t, platform, &destinationJournal{snapshot: LiveCleanupSnapshot{State: state}})
+		authority := bindFakeDestination(t, platform, &destinationJournal{snapshot: LiveCleanupBatch{State: state}})
 		facts := authority.Binding().Capabilities()
 		if !facts.SafePublish().Supported() || !facts.OperationRecovery().Supported() ||
 			!facts.RangeRecovery().Supported() || facts.CrashCleanup().Supported() {
@@ -452,10 +452,10 @@ func TestLiveCleanupStageUsesExactParentAndReconcilesInterruptedCuts(t *testing.
 				t.Fatalf("interrupted create = (stage %T ticket %+v, %v)",
 					stage, journal.tickets[ticket.StageName()], err)
 			}
-			journal.snapshot = LiveCleanupSnapshot{
-				State: LiveCleanupScanComplete, Tickets: []checkpointmodel.LiveCleanupTicket{ticket},
+			journal.snapshot = LiveCleanupBatch{
+				State: LiveCleanupBatchComplete, Tickets: []checkpointmodel.LiveCleanupTicket{ticket},
 			}
-			capabilities, err := reconcileLiveCleanup(
+			capabilities, _, err := reconcileLiveCleanup(
 				journal, authority.proof, platform.capabilities, platform.profile,
 			)
 			if err != nil || !capabilities.CrashCleanup().Supported() {
@@ -478,7 +478,7 @@ func bindFakeDestination(
 ) *BoundDestination {
 	t.Helper()
 	if journal.snapshot.State == 0 {
-		journal.snapshot.State = LiveCleanupScanComplete
+		journal.snapshot.State = LiveCleanupBatchComplete
 	}
 	authority, err := BindDestination(BindConfig{
 		Platform: platform, DisplayPath: filepath.Clean(t.TempDir()),

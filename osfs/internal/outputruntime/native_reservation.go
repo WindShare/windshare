@@ -90,10 +90,15 @@ func (authority *Authority) BindDestination(
 	authority.mode = mode
 	authority.registry = registry
 	authority.stage = authorityStageBound
+	cleanup := destination.LiveCleanupProgress()
 	authority.trace(FilesystemOutputTrace{
 		Operation: TraceRuntimeDecision, RuntimeComponent: FilesystemOutputRuntimeSession,
 		RuntimeOperation: FilesystemOutputRuntimeAdmitDestination, RuntimeDecision: FilesystemOutputRuntimeAdmitted,
 		DestinationCapabilities: binding.Capabilities(), ExecutionMode: mode,
+		DestinationBindingID:            binding.ID(),
+		LiveCleanupTicketCount:          cleanup.InspectedTickets,
+		LiveCleanupReclaimedTicketCount: cleanup.ReclaimedTickets,
+		LiveCleanupHasMore:              cleanup.More,
 	})
 	return ExecutionMode{mode: mode}, nil
 }

@@ -9,7 +9,7 @@ import (
 )
 
 type cleanupJournalFake struct {
-	snapshot   LiveCleanupSnapshot
+	snapshot   LiveCleanupBatch
 	err        error
 	replaceErr error
 	deleteErr  error
@@ -18,7 +18,7 @@ type cleanupJournalFake struct {
 	deleted    []checkpointmodel.LiveCleanupTicket
 }
 
-func (journal *cleanupJournalFake) Snapshot(int) (LiveCleanupSnapshot, error) {
+func (journal *cleanupJournalFake) ReadBatch(int) (LiveCleanupBatch, error) {
 	return journal.snapshot, journal.err
 }
 func (*cleanupJournalFake) Create(checkpointmodel.LiveCleanupTicket) error { return nil }
@@ -125,14 +125,13 @@ func TestCleanupProofNegativeDowngradesOnlyCrashCleanup(t *testing.T) {
 	supported := outputcap.SupportedCapability()
 	capabilities, _ := outputcap.NewDestinationCapabilities(supported, supported, supported, supported)
 	for _, test := range []struct {
-		state  LiveCleanupScanState
+		state  LiveCleanupBatchState
 		reason outputcap.CapabilityReason
 	}{
-		{LiveCleanupScanOverflow, outputcap.CapabilityReasonCleanupJournalOverflow},
-		{LiveCleanupScanUnknown, outputcap.CapabilityReasonCleanupOwnershipUnknown},
+		{LiveCleanupBatchUnverifiable, outputcap.CapabilityReasonCleanupOwnershipUnknown},
 	} {
-		journal := &cleanupJournalFake{snapshot: LiveCleanupSnapshot{State: test.state}}
-		result, err := reconcileLiveCleanup(
+		journal := &cleanupJournalFake{snapshot: LiveCleanupBatch{State: test.state}}
+		result, _, err := reconcileLiveCleanup(
 			journal, &cleanupProofDirectory{}, capabilities, checkpointmodel.LiveCleanupWindowsNTFSV1,
 		)
 		if err != nil || result.SafePublish() != supported || result.OperationRecovery() != supported ||
@@ -192,7 +191,7 @@ func TestCleanupJournalLifecycleAndCapabilityReducerFailures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := reconcileLiveCleanup(
+	if got, _, err := reconcileLiveCleanup(
 		&cleanupJournalFake{err: errors.New("must not scan")},
 		&cleanupProofDirectory{}, noCleanup, checkpointmodel.LiveCleanupWindowsNTFSV1,
 	); err != nil || got != noCleanup {
@@ -201,14 +200,14 @@ func TestCleanupJournalLifecycleAndCapabilityReducerFailures(t *testing.T) {
 
 	capabilities, _ := outputcap.NewDestinationCapabilities(supported, supported, supported, supported)
 	snapshotFailure := errors.New("snapshot failed")
-	if _, err := reconcileLiveCleanup(
+	if _, _, err := reconcileLiveCleanup(
 		&cleanupJournalFake{err: snapshotFailure},
 		&cleanupProofDirectory{}, capabilities, checkpointmodel.LiveCleanupWindowsNTFSV1,
 	); !errors.Is(err, snapshotFailure) {
 		t.Fatalf("snapshot failure = %v", err)
 	}
-	if _, err := reconcileLiveCleanup(
-		&cleanupJournalFake{snapshot: LiveCleanupSnapshot{State: LiveCleanupScanState(0xff)}},
+	if _, _, err := reconcileLiveCleanup(
+		&cleanupJournalFake{snapshot: LiveCleanupBatch{State: LiveCleanupBatchState(0xff)}},
 		&cleanupProofDirectory{}, capabilities, checkpointmodel.LiveCleanupWindowsNTFSV1,
 	); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("unknown scan state = %v", err)
@@ -222,9 +221,9 @@ func TestCleanupJournalLifecycleAndCapabilityReducerFailures(t *testing.T) {
 			if name == "wrong-profile" {
 				profile = checkpointmodel.LiveCleanupLinuxExt4V1
 			}
-			got, err := reconcileLiveCleanup(
-				&cleanupJournalFake{snapshot: LiveCleanupSnapshot{
-					State: LiveCleanupScanComplete, Tickets: tickets,
+			got, _, err := reconcileLiveCleanup(
+				&cleanupJournalFake{snapshot: LiveCleanupBatch{
+					State: LiveCleanupBatchComplete, Tickets: tickets,
 				}},
 				&cleanupProofDirectory{}, capabilities, profile,
 			)
@@ -235,15 +234,15 @@ func TestCleanupJournalLifecycleAndCapabilityReducerFailures(t *testing.T) {
 	}
 	created := cleanupTicket(t, checkpointmodel.LiveCleanupStageCreated, 2)
 	classifyFailure := errors.New("classification failed")
-	if _, err := reconcileLiveCleanup(
-		&cleanupJournalFake{snapshot: LiveCleanupSnapshot{State: LiveCleanupScanComplete, Tickets: []checkpointmodel.LiveCleanupTicket{created}}},
+	if _, _, err := reconcileLiveCleanup(
+		&cleanupJournalFake{snapshot: LiveCleanupBatch{State: LiveCleanupBatchComplete, Tickets: []checkpointmodel.LiveCleanupTicket{created}}},
 		&cleanupProofDirectory{classifyErr: classifyFailure},
 		capabilities, checkpointmodel.LiveCleanupWindowsNTFSV1,
 	); !errors.Is(err, classifyFailure) {
 		t.Fatalf("ticket reconciliation failure = %v", err)
 	}
-	got, err := reconcileLiveCleanup(
-		&cleanupJournalFake{snapshot: LiveCleanupSnapshot{State: LiveCleanupScanComplete, Tickets: []checkpointmodel.LiveCleanupTicket{created}}},
+	got, _, err := reconcileLiveCleanup(
+		&cleanupJournalFake{snapshot: LiveCleanupBatch{State: LiveCleanupBatchComplete, Tickets: []checkpointmodel.LiveCleanupTicket{created}}},
 		&cleanupProofDirectory{kind: outputcap.EntryRegularFile, exact: false},
 		capabilities, checkpointmodel.LiveCleanupWindowsNTFSV1,
 	)
@@ -348,7 +347,7 @@ func TestCleanupJournalUncertaintyDoesNotEraseRecoveryEvidence(t *testing.T) {
 		config := BindConfig{OpenLiveCleanupJournal: func(outputcap.Directory) (LiveCleanupJournalHandle, error) {
 			return LiveCleanupJournalHandle{}, failure
 		}}
-		_, _, facts, err := bindCleanup(config, nil, platform.Root(), capabilities, platform.profile)
+		_, _, facts, _, err := bindCleanup(config, nil, platform.Root(), capabilities, platform.profile)
 		if failure == temporary {
 			if !errors.Is(err, temporary) {
 				t.Fatalf("temporary I/O became permanent capability loss: %v", err)
@@ -365,12 +364,12 @@ func TestCleanupProofUncertaintyDoesNotEraseRecoveryEvidence(t *testing.T) {
 	temporary := errors.New("temporary proof read failure")
 	for _, failure := range []error{nil, outputcap.ErrUnsafeNamespace, temporary} {
 		platform := newDestinationPlatform()
-		journal := &cleanupJournalFake{snapshot: LiveCleanupSnapshot{State: LiveCleanupScanComplete}}
+		journal := &cleanupJournalFake{snapshot: LiveCleanupBatch{State: LiveCleanupBatchComplete}}
 		config := BindConfig{OpenLiveCleanupJournal: func(outputcap.Directory) (LiveCleanupJournalHandle, error) {
 			return NewLiveCleanupJournalHandle(journal)
 		}}
 		control := &cleanupProofDirectory{Directory: platform.Root(), kind: outputcap.EntryRegularFile, exact: true, classifyErr: failure}
-		handle, proof, facts, err := bindCleanup(config, control, platform.Root(), capabilities, platform.profile)
+		handle, proof, facts, _, err := bindCleanup(config, control, platform.Root(), capabilities, platform.profile)
 		if errors.Is(failure, temporary) {
 			if !errors.Is(err, temporary) {
 				t.Fatalf("temporary proof I/O became permanent capability loss: %v", err)

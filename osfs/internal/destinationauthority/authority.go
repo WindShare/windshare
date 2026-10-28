@@ -85,18 +85,19 @@ type BindConfig struct {
 type BoundDestination struct {
 	mu sync.RWMutex
 
-	binding     Binding
-	durability  transfer.DurabilityLevel
-	platform    outputcap.Platform
-	rootWitness outputcap.Directory
-	control     outputcap.Directory
-	proof       outputcap.Directory
-	journal     LiveCleanupJournalHandle
-	resumable   io.Closer
-	controlUse  *controlUseLease
-	recycler    PrivateStateRecycler
-	profile     checkpointmodel.LiveCleanupNativeProfile
-	closed      bool
+	binding         Binding
+	durability      transfer.DurabilityLevel
+	platform        outputcap.Platform
+	rootWitness     outputcap.Directory
+	control         outputcap.Directory
+	proof           outputcap.Directory
+	journal         LiveCleanupJournalHandle
+	cleanupProgress LiveCleanupProgress
+	resumable       io.Closer
+	controlUse      *controlUseLease
+	recycler        PrivateStateRecycler
+	profile         checkpointmodel.LiveCleanupNativeProfile
+	closed          bool
 }
 
 func destinationFacts(
@@ -206,7 +207,7 @@ func BindDestination(config BindConfig) (_ *BoundDestination, resultErr error) {
 		}
 	}
 
-	journal, proof, capabilities, err := bindCleanup(config, control, root, capabilities, profile)
+	journal, proof, capabilities, cleanupProgress, err := bindCleanup(config, control, root, capabilities, profile)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +232,8 @@ func BindDestination(config BindConfig) (_ *BoundDestination, resultErr error) {
 	return &BoundDestination{
 		binding: binding, durability: durability, platform: config.Platform, rootWitness: rootWitness,
 		control: control, proof: proof, journal: journal, controlUse: controlUse,
-		recycler: config.RecyclePrivateState, profile: profile,
+		cleanupProgress: cleanupProgress,
+		recycler:        config.RecyclePrivateState, profile: profile,
 	}, nil
 }
 

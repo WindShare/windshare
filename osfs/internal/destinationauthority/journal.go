@@ -9,21 +9,29 @@ import (
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
-type LiveCleanupScanState uint8
+type LiveCleanupBatchState uint8
 
 const (
-	LiveCleanupScanComplete LiveCleanupScanState = iota + 1
-	LiveCleanupScanOverflow
-	LiveCleanupScanUnknown
+	LiveCleanupBatchComplete LiveCleanupBatchState = iota + 1
+	LiveCleanupBatchPartial
+	LiveCleanupBatchUnverifiable
 )
 
-type LiveCleanupSnapshot struct {
-	State   LiveCleanupScanState
+type LiveCleanupBatch struct {
+	State   LiveCleanupBatchState
 	Tickets []checkpointmodel.LiveCleanupTicket
 }
 
+// LiveCleanupProgress describes only the bounded work performed at this bind.
+// More means deferred work, never a loss of cleanup ownership or capability.
+type LiveCleanupProgress struct {
+	InspectedTickets uint64
+	ReclaimedTickets uint64
+	More             bool
+}
+
 type LiveCleanupJournal interface {
-	Snapshot(maximumTickets int) (LiveCleanupSnapshot, error)
+	ReadBatch(maximumTickets int) (LiveCleanupBatch, error)
 	Create(checkpointmodel.LiveCleanupTicket) error
 	Replace(checkpointmodel.LiveCleanupTicket, checkpointmodel.LiveCleanupTicket) error
 	Delete(checkpointmodel.LiveCleanupTicket) error
@@ -59,39 +67,52 @@ func reconcileLiveCleanup(
 	proof outputcap.Directory,
 	capabilities outputcap.DestinationCapabilities,
 	profile checkpointmodel.LiveCleanupNativeProfile,
-) (outputcap.DestinationCapabilities, error) {
+) (result outputcap.DestinationCapabilities, progress LiveCleanupProgress, resultErr error) {
+	result = capabilities
 	if !capabilities.CrashCleanup().Supported() {
-		return capabilities, nil
+		return
 	}
-	snapshot, err := journal.Snapshot(int(ordinaryoutput.MaximumLiveCleanupTicketsV1))
+	snapshot, err := journal.ReadBatch(int(ordinaryoutput.MaximumLiveCleanupTicketsPerBindV1))
 	if err != nil {
-		return outputcap.DestinationCapabilities{}, err
+		return outputcap.DestinationCapabilities{}, progress, err
 	}
 	switch snapshot.State {
-	case LiveCleanupScanOverflow:
-		return downgradedCleanupCapabilities(capabilities, outputcap.CapabilityReasonCleanupJournalOverflow)
-	case LiveCleanupScanUnknown:
-		return downgradedCleanupCapabilities(capabilities, outputcap.CapabilityReasonCleanupOwnershipUnknown)
-	case LiveCleanupScanComplete:
+	case LiveCleanupBatchPartial:
+		if len(snapshot.Tickets) != int(ordinaryoutput.MaximumLiveCleanupTicketsPerBindV1) {
+			return outputcap.DestinationCapabilities{}, progress, ErrInvalidConfiguration
+		}
+		progress.More = true
+	case LiveCleanupBatchUnverifiable:
+		result, resultErr = downgradedCleanupCapabilities(capabilities, outputcap.CapabilityReasonCleanupOwnershipUnknown)
+		return
+	case LiveCleanupBatchComplete:
 	default:
-		return outputcap.DestinationCapabilities{}, ErrInvalidConfiguration
+		return outputcap.DestinationCapabilities{}, progress, ErrInvalidConfiguration
 	}
-	if len(snapshot.Tickets) > int(ordinaryoutput.MaximumLiveCleanupTicketsV1) {
-		return downgradedCleanupCapabilities(capabilities, outputcap.CapabilityReasonCleanupJournalOverflow)
+	if len(snapshot.Tickets) > int(ordinaryoutput.MaximumLiveCleanupTicketsPerBindV1) {
+		return outputcap.DestinationCapabilities{}, progress, ErrInvalidConfiguration
 	}
 	for _, ticket := range snapshot.Tickets {
+		progress.InspectedTickets++
 		if !ticket.Valid() || ticket.Profile() != profile {
-			return downgradedCleanupCapabilities(capabilities, outputcap.CapabilityReasonCleanupOwnershipUnknown)
+			result, resultErr = downgradedCleanupCapabilities(capabilities, outputcap.CapabilityReasonCleanupOwnershipUnknown)
+			return
 		}
 		proved, reconcileErr := reconcileLiveCleanupTicket(journal, proof, ticket)
 		if reconcileErr != nil {
-			return outputcap.DestinationCapabilities{}, reconcileErr
+			return outputcap.DestinationCapabilities{}, progress, reconcileErr
 		}
 		if !proved {
-			return downgradedCleanupCapabilities(capabilities, outputcap.CapabilityReasonCleanupOwnershipUnknown)
+			result, resultErr = downgradedCleanupCapabilities(capabilities, outputcap.CapabilityReasonCleanupOwnershipUnknown)
+			return
 		}
+		progress.ReclaimedTickets++
 	}
-	return capabilities, nil
+	return
+}
+
+func (authority *BoundDestination) LiveCleanupProgress() LiveCleanupProgress {
+	return authority.cleanupProgress
 }
 
 func reconcileLiveCleanupTicket(

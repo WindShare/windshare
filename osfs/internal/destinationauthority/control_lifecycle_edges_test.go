@@ -52,7 +52,7 @@ func TestControlLifecycleRetriesAnUnlockedNonceCollision(t *testing.T) {
 		bytes.Repeat([]byte{0x81}, controlParticipantNonceBytes),
 		bytes.Repeat([]byte{0x82}, controlParticipantNonceBytes)...,
 	)
-	journal := &destinationJournal{snapshot: LiveCleanupSnapshot{State: LiveCleanupScanComplete}}
+	journal := &destinationJournal{snapshot: LiveCleanupBatch{State: LiveCleanupBatchComplete}}
 	restarted, err := BindDestination(BindConfig{
 		Platform:               platform,
 		DisplayPath:            filepath.Clean(t.TempDir()),
@@ -83,7 +83,7 @@ func TestControlLifecycleRejectsMalformedParticipantBeforeJoining(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	journal := &destinationJournal{snapshot: LiveCleanupSnapshot{State: LiveCleanupScanComplete}}
+	journal := &destinationJournal{snapshot: LiveCleanupBatch{State: LiveCleanupBatchComplete}}
 	_, err = BindDestination(BindConfig{
 		Platform:               platform,
 		DisplayPath:            filepath.Clean(t.TempDir()),
