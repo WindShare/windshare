@@ -223,6 +223,22 @@ func (directory *fakeDirectory) Names(limit int) ([]string, error) {
 	return names, nil
 }
 
+func (directory *fakeDirectory) ReadNameBatch(limit int) (outputcap.DirectoryNameBatch, error) {
+	directory.platform.mu.Lock()
+	defer directory.platform.mu.Unlock()
+	if limit < 0 {
+		return outputcap.DirectoryNameBatch{}, ErrParentSnapshotUnavailable
+	}
+	names := make([]string, 0, min(limit, len(directory.node.entries)))
+	for name := range directory.node.entries {
+		if len(names) == limit {
+			return outputcap.DirectoryNameBatch{Names: names, HasMore: true}, nil
+		}
+		names = append(names, name)
+	}
+	return outputcap.DirectoryNameBatch{Names: names}, nil
+}
+
 func (directory *fakeDirectory) ObserveEntry(name string) (outputcap.EntryKind, error) {
 	kind, _, err := directory.ClassifyExactEntry(name)
 	return kind, err

@@ -206,7 +206,7 @@ func TestCleanupJournalDoesNotRequireOperationIdentityEnrollment(t *testing.T) {
 	supported := outputcap.SupportedCapability()
 	unsupported, _ := outputcap.UnsupportedCapability(outputcap.CapabilityReasonUnverifiableOperationRecovery)
 	platform.capabilities, _ = outputcap.NewDestinationCapabilities(supported, unsupported, unsupported, supported)
-	journal := &destinationJournal{snapshot: LiveCleanupSnapshot{State: LiveCleanupScanComplete}}
+	journal := &destinationJournal{snapshot: LiveCleanupBatch{State: LiveCleanupBatchComplete}}
 	bound, err := BindDestination(BindConfig{
 		Platform:    &processCleanupDestinationPlatform{&processDestinationPlatform{platform}},
 		DisplayPath: filepath.Clean(t.TempDir()), OpenLiveCleanupJournal: fakeJournalOpener(journal),

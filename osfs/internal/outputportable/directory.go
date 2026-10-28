@@ -98,22 +98,34 @@ func (d *directory) Sync() error {
 	return syncDirectory(d.handle)
 }
 func (d *directory) Names(limit int) ([]string, error) {
-	if limit < 0 {
-		return nil, outputcap.ErrUnsafeNamespace
+	batch, err := d.ReadNameBatch(limit)
+	if err == nil && batch.HasMore {
+		err = outputcap.ErrUnsafeNamespace
 	}
-	f, err := d.root.Open(".")
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	return batch.Names, nil
+}
+
+func (d *directory) ReadNameBatch(limit int) (outputcap.DirectoryNameBatch, error) {
+	if limit < 0 {
+		return outputcap.DirectoryNameBatch{}, outputcap.ErrUnsafeNamespace
+	}
+	if err := d.validate(); err != nil {
+		return outputcap.DirectoryNameBatch{}, err
+	}
+	f, err := d.root.Open(".")
+	if err != nil {
+		return outputcap.DirectoryNameBatch{}, err
+	}
 	names, err := f.Readdirnames(limit + 1)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, err
+	if errors.Is(err, io.EOF) {
+		err = nil
 	}
-	if len(names) > limit {
-		return nil, outputcap.ErrUnsafeNamespace
-	}
-	return names, nil
+	return outputcap.DirectoryNameBatch{
+		Names: names[:min(limit, len(names))], HasMore: len(names) > limit,
+	}, errors.Join(err, f.Close())
 }
 func kind(info os.FileInfo) outputcap.EntryKind {
 	if info == nil {

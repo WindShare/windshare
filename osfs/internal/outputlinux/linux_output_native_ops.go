@@ -77,67 +77,95 @@ func (directory *linuxOutputDirectory) namesWithPrefix(prefix string, limit int)
 func (directory *linuxOutputDirectory) namesMatching(
 	limit int,
 	include func(string) bool,
-) (_ []string, resultErr error) {
+) ([]string, error) {
+	batch, err := directory.readNameBatch(limit, include)
+	if err == nil && batch.HasMore {
+		err = linuxUnsafe("enumerate output directory", "directory exceeds its declared entry bound", nil)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return batch.Names, nil
+}
+
+func (directory *linuxOutputDirectory) readNameBatch(
+	limit int,
+	include func(string) bool,
+) (_ outputcap.DirectoryNameBatch, resultErr error) {
 	const operation = "enumerate output directory"
 	if limit < 0 || include == nil {
-		return nil, linuxUnsafe(operation, "enumeration bound or filter is invalid", nil)
+		return outputcap.DirectoryNameBatch{}, linuxUnsafe(operation, "enumeration bound or filter is invalid", nil)
 	}
 	if err := directory.verifyHandle(); err != nil {
-		return nil, err
+		return outputcap.DirectoryNameBatch{}, err
 	}
 	// Reopening "." from the fixed handle creates an independent directory
 	// cursor. dup(2) would share the cursor and make repeated recovery scans
 	// depend on earlier enumeration.
 	fd, err := directory.openRelative(".", unix.O_RDONLY|unix.O_DIRECTORY, 0)
 	if err != nil {
-		return nil, err
+		return outputcap.DirectoryNameBatch{}, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, directory.system.close(fd)) }()
 	identity, err := linuxVerifyOpenObject(directory.system, fd, directory.binding)
 	if err != nil {
-		return nil, err
+		return outputcap.DirectoryNameBatch{}, err
 	}
 	if identity.identity.kind != unix.S_IFDIR || !identity.matches(directory.object) {
-		return nil, linuxUnsafe(operation, "enumeration cursor does not identify the fixed directory", nil)
+		return outputcap.DirectoryNameBatch{}, linuxUnsafe(operation, "enumeration cursor does not identify the fixed directory", nil)
 	}
+	batch, err := directory.readNamesFromCursor(fd, limit, include)
+	if err != nil {
+		return outputcap.DirectoryNameBatch{}, err
+	}
+	if err := directory.verifyHandle(); err != nil {
+		return outputcap.DirectoryNameBatch{}, err
+	}
+	return batch, nil
+}
 
+func (directory *linuxOutputDirectory) readNamesFromCursor(
+	fd, limit int,
+	include func(string) bool,
+) (outputcap.DirectoryNameBatch, error) {
+	const operation = "enumerate output directory"
 	buffer := make([]byte, linuxOutputDirectoryReadBufferBytes)
 	names := make([]string, 0, min(limit, 16))
+	hasMore := false
+scan:
 	for {
 		count, readErr := directory.system.readDirent(fd, buffer)
 		if readErr != nil {
 			if errors.Is(readErr, unix.ENOSYS) || errors.Is(readErr, unix.EOPNOTSUPP) {
-				return nil, linuxUnsupported(operation, "handle-relative directory enumeration is unavailable", readErr)
+				return outputcap.DirectoryNameBatch{}, linuxUnsupported(operation, "handle-relative directory enumeration is unavailable", readErr)
 			}
-			return nil, fmt.Errorf("%s: %w", operation, readErr)
+			return outputcap.DirectoryNameBatch{}, fmt.Errorf("%s: %w", operation, readErr)
 		}
 		if count == 0 {
 			break
 		}
 		consumed, _, batch := unix.ParseDirent(buffer[:count], -1, nil)
 		if consumed != count {
-			return nil, linuxUnsafe(operation, "kernel returned a malformed directory entry stream", nil)
+			return outputcap.DirectoryNameBatch{}, linuxUnsafe(operation, "kernel returned a malformed directory entry stream", nil)
 		}
 		for _, name := range batch {
 			if !include(name) {
 				continue
 			}
 			if len(names) == limit {
-				return nil, linuxUnsafe(operation, "directory exceeds its declared entry bound", nil)
+				hasMore = true
+				break scan
 			}
 			names = append(names, name)
 		}
 	}
-	if err := directory.verifyHandle(); err != nil {
-		return nil, err
-	}
 	sort.Strings(names)
 	for index := 1; index < len(names); index++ {
 		if names[index-1] == names[index] {
-			return nil, linuxUnsafe(operation, "directory enumeration returned a duplicate name", nil)
+			return outputcap.DirectoryNameBatch{}, linuxUnsafe(operation, "directory enumeration returned a duplicate name", nil)
 		}
 	}
-	return names, nil
+	return outputcap.DirectoryNameBatch{Names: names, HasMore: hasMore}, nil
 }
 
 func (directory *linuxOutputDirectory) observeEntry(name string) (outputcap.EntryKind, error) {

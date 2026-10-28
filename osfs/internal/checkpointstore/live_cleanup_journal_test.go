@@ -8,6 +8,7 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/osfs/internal/destinationauthority"
+	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
 func newTestLiveCleanupTicket(nonce byte, gen uint64, state checkpointmodel.LiveCleanupTicketState) checkpointmodel.LiveCleanupTicket {
@@ -22,6 +23,39 @@ func newTestLiveCleanupTicket(nonce byte, gen uint64, state checkpointmodel.Live
 		panic(err)
 	}
 	return ticket
+}
+
+type liveCleanupBatchDirectory struct {
+	outputcap.Directory
+	batch outputcap.DirectoryNameBatch
+	err   error
+}
+
+func (directory liveCleanupBatchDirectory) ReadNameBatch(int) (outputcap.DirectoryNameBatch, error) {
+	return directory.batch, directory.err
+}
+
+func TestLiveCleanupBatchDistinguishesNamespaceUncertaintyFromIO(t *testing.T) {
+	ioFailure := errors.New("journal enumeration unavailable")
+	for _, test := range []struct {
+		name      string
+		directory liveCleanupBatchDirectory
+		wantErr   error
+		wantState destinationauthority.LiveCleanupBatchState
+	}{
+		{"unverifiable", liveCleanupBatchDirectory{err: outputcap.ErrUnsafeNamespace}, nil, destinationauthority.LiveCleanupBatchUnverifiable},
+		{"io failure", liveCleanupBatchDirectory{err: ioFailure}, ioFailure, 0},
+		{"oversized batch", liveCleanupBatchDirectory{batch: outputcap.DirectoryNameBatch{Names: []string{"one", "two"}}}, transfer.ErrInvalidOutputBinding, 0},
+		{"no progress", liveCleanupBatchDirectory{batch: outputcap.DirectoryNameBatch{HasMore: true}}, transfer.ErrInvalidOutputBinding, 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			journal := LiveCleanupJournal{tickets: test.directory}
+			batch, err := journal.ReadBatch(1)
+			if !errors.Is(err, test.wantErr) || batch.State != test.wantState {
+				t.Fatalf("batch=%+v err=%v", batch, err)
+			}
+		})
+	}
 }
 
 func TestLiveCleanupJournalLifecycleAndOperations(t *testing.T) {
@@ -41,7 +75,7 @@ func TestLiveCleanupJournalLifecycleAndOperations(t *testing.T) {
 	if err := nilJournal.Close(); err != nil {
 		t.Fatalf("close nil journal: %v", err)
 	}
-	if _, err := nilJournal.Snapshot(10); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+	if _, err := nilJournal.ReadBatch(10); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
 		t.Fatalf("snapshot nil journal error = %v", err)
 	}
 	if err := nilJournal.Create(newTestLiveCleanupTicket(1, 1, checkpointmodel.LiveCleanupTicketCommitted)); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
@@ -68,8 +102,8 @@ func TestLiveCleanupJournalLifecycleAndOperations(t *testing.T) {
 	}
 
 	// Snapshot returns ticket1
-	snapshot, err := journal.Snapshot(10)
-	if err != nil || snapshot.State != destinationauthority.LiveCleanupScanComplete || len(snapshot.Tickets) != 1 {
+	snapshot, err := journal.ReadBatch(10)
+	if err != nil || snapshot.State != destinationauthority.LiveCleanupBatchComplete || len(snapshot.Tickets) != 1 {
 		t.Fatalf("snapshot = (%+v, %v)", snapshot, err)
 	}
 
@@ -88,8 +122,8 @@ func TestLiveCleanupJournalLifecycleAndOperations(t *testing.T) {
 	}
 
 	// Snapshot reflects replaced ticket
-	snapshot, err = journal.Snapshot(10)
-	if err != nil || snapshot.State != destinationauthority.LiveCleanupScanComplete || len(snapshot.Tickets) != 1 ||
+	snapshot, err = journal.ReadBatch(10)
+	if err != nil || snapshot.State != destinationauthority.LiveCleanupBatchComplete || len(snapshot.Tickets) != 1 ||
 		snapshot.Tickets[0].State() != checkpointmodel.LiveCleanupStageCreated {
 		t.Fatalf("snapshot after replace = (%+v, %v)", snapshot, err)
 	}
@@ -104,8 +138,8 @@ func TestLiveCleanupJournalLifecycleAndOperations(t *testing.T) {
 	}
 
 	// Snapshot is now empty
-	snapshot, err = journal.Snapshot(10)
-	if err != nil || snapshot.State != destinationauthority.LiveCleanupScanComplete || len(snapshot.Tickets) != 0 {
+	snapshot, err = journal.ReadBatch(10)
+	if err != nil || snapshot.State != destinationauthority.LiveCleanupBatchComplete || len(snapshot.Tickets) != 0 {
 		t.Fatalf("empty snapshot = (%+v, %v)", snapshot, err)
 	}
 
@@ -114,7 +148,7 @@ func TestLiveCleanupJournalLifecycleAndOperations(t *testing.T) {
 	}
 }
 
-func TestLiveCleanupJournalSnapshotEdgeCases(t *testing.T) {
+func TestLiveCleanupJournalBatchEdgeCases(t *testing.T) {
 	control := newMemoryDirectory()
 	journal, err := OpenLiveCleanupJournal(control)
 	if err != nil {
@@ -123,11 +157,11 @@ func TestLiveCleanupJournalSnapshotEdgeCases(t *testing.T) {
 	defer func() { _ = journal.Close() }()
 
 	// Invalid max tickets
-	if _, err := journal.Snapshot(0); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+	if _, err := journal.ReadBatch(0); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
 		t.Fatalf("snapshot with 0 max tickets error = %v", err)
 	}
 
-	// Overflow when tickets exceed maxTickets
+	// The budget limits this batch, not the number of recoverable tickets.
 	t1 := newTestLiveCleanupTicket(0x01, 1, checkpointmodel.LiveCleanupTicketCommitted)
 	t2 := newTestLiveCleanupTicket(0x02, 1, checkpointmodel.LiveCleanupTicketCommitted)
 	if err := journal.Create(t1); err != nil {
@@ -136,16 +170,16 @@ func TestLiveCleanupJournalSnapshotEdgeCases(t *testing.T) {
 	if err := journal.Create(t2); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := journal.Snapshot(1)
-	if err != nil || snapshot.State != destinationauthority.LiveCleanupScanOverflow {
-		t.Fatalf("overflow snapshot = (%+v, %v)", snapshot, err)
+	snapshot, err := journal.ReadBatch(1)
+	if err != nil || snapshot.State != destinationauthority.LiveCleanupBatchPartial || len(snapshot.Tickets) != 1 {
+		t.Fatalf("partial batch = (%+v, %v)", snapshot, err)
 	}
 
 	// Invalid ticket name in tickets directory
 	ticketsDir := journal.tickets.(*memoryDirectory)
 	ticketsDir.files["invalid-ticket-name"] = &memoryFileData{bytes: []byte("invalid")}
-	snapshot, err = journal.Snapshot(10)
-	if err != nil || snapshot.State != destinationauthority.LiveCleanupScanUnknown {
+	snapshot, err = journal.ReadBatch(10)
+	if err != nil || snapshot.State != destinationauthority.LiveCleanupBatchUnverifiable {
 		t.Fatalf("invalid name snapshot = (%+v, %v)", snapshot, err)
 	}
 	delete(ticketsDir.files, "invalid-ticket-name")
@@ -153,8 +187,8 @@ func TestLiveCleanupJournalSnapshotEdgeCases(t *testing.T) {
 	// Corrupt content in ticket file
 	corruptName := liveCleanupTicketName(newTestLiveCleanupTicket(0x03, 1, checkpointmodel.LiveCleanupTicketCommitted))
 	ticketsDir.files[corruptName] = &memoryFileData{bytes: []byte("corrupt-bytes")}
-	snapshot, err = journal.Snapshot(10)
-	if err != nil || snapshot.State != destinationauthority.LiveCleanupScanUnknown {
+	snapshot, err = journal.ReadBatch(10)
+	if err != nil || snapshot.State != destinationauthority.LiveCleanupBatchUnverifiable {
 		t.Fatalf("corrupt content snapshot = (%+v, %v)", snapshot, err)
 	}
 	delete(ticketsDir.files, corruptName)
@@ -167,8 +201,8 @@ func TestLiveCleanupJournalSnapshotEdgeCases(t *testing.T) {
 	}
 	wrongName := liveCleanupTicketName(newTestLiveCleanupTicket(0x05, 1, checkpointmodel.LiveCleanupTicketCommitted))
 	ticketsDir.files[wrongName] = &memoryFileData{bytes: encoded}
-	snapshot, err = journal.Snapshot(10)
-	if err != nil || snapshot.State != destinationauthority.LiveCleanupScanUnknown {
+	snapshot, err = journal.ReadBatch(10)
+	if err != nil || snapshot.State != destinationauthority.LiveCleanupBatchUnverifiable {
 		t.Fatalf("mismatched name snapshot = (%+v, %v)", snapshot, err)
 	}
 	delete(ticketsDir.files, wrongName)

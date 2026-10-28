@@ -78,6 +78,14 @@ func (directory *linuxDirectory) Names(limit int) ([]string, error) {
 	return names, linuxError(err)
 }
 
+func (directory *linuxDirectory) ReadNameBatch(limit int) (outputcap.DirectoryNameBatch, error) {
+	if directory == nil || directory.native == nil {
+		return outputcap.DirectoryNameBatch{}, outputcap.ErrUnsafeNamespace
+	}
+	batch, err := directory.native.readNameBatch(limit, func(string) bool { return true })
+	return batch, linuxError(err)
+}
+
 func (directory *linuxDirectory) ObserveEntry(name string) (outputcap.EntryKind, error) {
 	if directory == nil || directory.native == nil {
 		return outputcap.EntryAbsent, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Linux directory authority is closed"))
