@@ -56,3 +56,12 @@ func TestFileExecutionAdapterRetiresThroughTheUnifiedTransaction(t *testing.T) {
 			settlement.Kind(), cut, transaction.reason, err)
 	}
 }
+
+func (transaction *retireRecordingTransaction) Accept(ctx context.Context) (transfer.FileProgress, error) {
+	checkpoint, err := transaction.Checkpoint(ctx)
+	if err != nil {
+		return transfer.FileProgress{}, err
+	}
+	progress, err := transfer.ProgressFromCheckpoint(checkpoint)
+	return progress, err
+}

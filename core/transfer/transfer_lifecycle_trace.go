@@ -3,6 +3,7 @@ package transfer
 import (
 	"context"
 	"errors"
+	"github.com/windshare/windshare/core/catalog"
 	"strconv"
 	"time"
 
@@ -36,6 +37,7 @@ const (
 	TransferCapacityWaitCanceled
 	TransferCapacityGenerationEnded
 	TransferJobSettled
+	TransferDeliverySkipped
 )
 
 // FileSelectionDecision records the authenticated rule that admitted a file
@@ -52,6 +54,7 @@ const (
 // ReceiveOperationID, ReceiveIntentDigest, and TransferJobID correlate stable authority
 // and one run without exposing catalog identities, names, or plaintext paths.
 type TransferLifecycleTrace struct {
+	FileID                catalog.FileID
 	Stage                 TransferLifecycleStage
 	ReceiveOperationID    receivecontract.OperationID
 	PlanKind              receivecontract.MaterializationPlanKind
@@ -133,6 +136,7 @@ func traceTransferLifecycle(tracer TransferLifecycleTracer, event TransferLifecy
 func (r *jobRun) traceFileLifecycle(stage TransferLifecycleStage, plan plannedFile, failure error) {
 	r.job.trace(TransferLifecycleTrace{
 		Stage: stage, OutputSessionID: r.output.SessionID(),
+		FileID:        plan.file,
 		FileSelection: plan.selectionDecision,
 		Fault:         failurestate.FaultOf(failure),
 		Interruption:  closedInterruption(failure),
@@ -185,6 +189,8 @@ func (r *jobRun) traceRevisionWait(plan plannedFile, event revisionwait.Trace) {
 // DiagnosticName belongs to the source vocabulary; recorders accept new values.
 func (value TransferLifecycleStage) DiagnosticName() string {
 	switch value {
+	case TransferDeliverySkipped:
+		return "delivery_skipped"
 	case TransferDiscoveryStarted:
 		return "discovery_started"
 	case TransferGenerationCommitted:

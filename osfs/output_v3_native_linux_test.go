@@ -51,7 +51,7 @@ func requireUnprivilegedLinuxExt4IdentityScheme(t *testing.T) {
 
 func TestLinuxExt4CreatesMissingRootThroughCertifiedHandles(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "first", "second")
-	platform, err := openNativeOutputPlatform(target, true)
+	platform, err := openStrongNativeOutputPlatform(target, true)
 	if err != nil {
 		nativeOutputIdentitySchemeFailure(t, linuxExt4NativeIdentitySchemeProfile,
 			"create missing Linux/ext4 root through certified handles", err)
@@ -76,7 +76,7 @@ func TestLinuxRootCreationDoesNotTraverseSymlinkAncestor(t *testing.T) {
 		t.Skipf("create Linux symlink adversary: %v", err)
 	}
 	unexpected := filepath.Join(outside, "must-not-exist")
-	platform, err := openNativeOutputPlatform(filepath.Join(alias, "must-not-exist"), true)
+	platform, err := openStrongNativeOutputPlatform(filepath.Join(alias, "must-not-exist"), true)
 	if platform != nil {
 		_ = platform.Close()
 	}
@@ -198,4 +198,8 @@ func TestLinuxExt4PinnedRemovalIsHandleBound(t *testing.T) {
 	if got, err := os.ReadFile(targetPath); err != nil || string(got) != "target" {
 		t.Fatalf("opaque removal followed or mutated its target: content=%q error=%v", got, err)
 	}
+}
+
+func openStrongNativeOutputPlatform(path string, create bool) (outputcap.Platform, error) {
+	return outputlinux.Open(path, create)
 }

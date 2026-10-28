@@ -189,6 +189,7 @@ type FileTransactionExecutor interface {
 	Binding() transfer.MaterializedFileBinding
 	WriteRange(context.Context, uint64, []byte) (MutationCut, error)
 	Checkpoint(context.Context) (transfer.VerifiedRanges, MutationCut, error)
+	Accept(context.Context) (transfer.FileProgress, MutationCut, error)
 	Commit(context.Context) (transfer.FileSettlement, MutationCut, error)
 	Pause(context.Context, transfer.FilePauseReason) (transfer.FileSettlement, MutationCut, error)
 	Retire(context.Context, transfer.FileRetireReason) (transfer.FileSettlement, MutationCut, error)

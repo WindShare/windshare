@@ -719,3 +719,12 @@ func (transaction *syntheticCapacityFileTransaction) Retire(
 ) (transfer.FileSettlement, error) {
 	return transfer.NewFailedFileSettlement(transaction.binding)
 }
+
+func (transaction *syntheticCapacityFileTransaction) Accept(ctx context.Context) (transfer.FileProgress, error) {
+	checkpoint, err := transaction.Checkpoint(ctx)
+	if err != nil {
+		return transfer.FileProgress{}, err
+	}
+	progress, err := transfer.ProgressFromCheckpoint(checkpoint)
+	return progress, err
+}

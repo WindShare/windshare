@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"github.com/windshare/windshare/core/catalog"
 	"io"
 	"sync/atomic"
+	"time"
 
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
@@ -23,6 +25,27 @@ type Engine struct {
 	random      io.Reader
 	trace       TraceSink
 	sequence    atomic.Uint64
+	now         func() time.Time
+	afterFunc   func(time.Duration, func()) CheckpointTimer
+}
+
+func (engine *Engine) LookupDelivery(ctx context.Context, file catalog.FileID, path string) (transfer.HistoricalDelivery, bool, error) {
+	history, ok := engine.checkpoints.(interface {
+		LookupDeliveredRecord(context.Context, checkpointmodel.CheckpointLineageSpec) (checkpointmodel.Record, bool, error)
+	})
+	if !ok {
+		return transfer.HistoricalDelivery{}, false, nil
+	}
+	ownership := engine.binding.Ownership()
+	record, found, err := history.LookupDeliveredRecord(ctx, checkpointmodel.CheckpointLineageSpec{
+		OperationID: engine.intent.OperationID(), ReceiveIntentDigest: engine.intent.Digest(),
+		MaterializationBindingDigest: engine.intent.BindingDigest(), FileID: file, CanonicalPath: path,
+		MaterializerKind: ownership.MaterializerKind(), AuthorityRef: ownership.AuthorityRef(),
+	})
+	if err != nil || !found {
+		return transfer.HistoricalDelivery{}, false, err
+	}
+	return transfer.HistoricalDelivery{OperationID: record.OperationID(), FileID: record.FileID(), FileRevision: record.FileRevision(), MaterializationPath: record.CanonicalPath(), Size: record.ExactSize()}, true, nil
 }
 
 func New(config Config) (*Engine, error) {
@@ -45,10 +68,18 @@ func New(config Config) (*Engine, error) {
 	if randomSource == nil {
 		randomSource = rand.Reader
 	}
+	now := config.Clock
+	if now == nil {
+		now = time.Now
+	}
+	afterFunc := config.AfterFunc
+	if afterFunc == nil {
+		afterFunc = func(delay time.Duration, flush func()) CheckpointTimer { return time.AfterFunc(delay, flush) }
+	}
 	return &Engine{
 		intent: config.Intent, binding: binding, sessionID: config.SessionID,
 		directories: config.Directories, platform: config.Platform,
-		checkpoints: config.Checkpoints, random: randomSource, trace: config.Trace,
+		checkpoints: config.Checkpoints, random: randomSource, trace: config.Trace, now: now, afterFunc: afterFunc,
 	}, nil
 }
 
@@ -83,7 +114,7 @@ func (engine *Engine) BeginFile(
 	if !resolution.valid() {
 		return transfer.FileStart{}, joinFailures(ctx, checkpointBindingError(ErrPortContract), closeDestination(destination))
 	}
-	engine.emit(engine.checkpointDecisionTrace(sequence, resolution.Decision()))
+	engine.emit(engine.checkpointDecisionTrace(sequence, resolution.Decision(), file.Descriptor().FileID()))
 	sequence = engine.nextSequence()
 	return engine.beginResolved(ctx, sequence, file, key, destination, resolution)
 }
@@ -214,7 +245,8 @@ func (engine *Engine) newResumablePartialFileTransaction(
 	return &resumablePartialFileTransaction{
 		engine: engine, materialization: file, destination: destination, file: ownedFile,
 		binding: binding, record: record, pending: pending, state: transactionOpen,
-		resumed: len(resumed) == 1 && resumed[0],
+		resumed:            len(resumed) == 1 && resumed[0],
+		acceptedGeneration: transfer.CheckpointGeneration(record.CheckpointGeneration()), lastCheckpoint: engine.now(),
 	}
 }
 
@@ -243,6 +275,9 @@ func (engine *Engine) storeRecord(
 ) (bool, error) {
 	if ctx == nil || !next.Valid() || !engine.binding.Matches(next, next.RecordID()) ||
 		previous == nil || !previous.Valid() || previous.RecordID() != next.RecordID() {
+		return false, checkpointBindingError(ErrCheckpointBinding)
+	}
+	if !checkpointmodel.IdentityEqual(*previous, next) {
 		return false, checkpointBindingError(ErrCheckpointBinding)
 	}
 	observation, operationErr := engine.checkpoints.Replace(ctx, *previous, next)

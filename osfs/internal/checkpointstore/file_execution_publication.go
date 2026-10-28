@@ -40,11 +40,11 @@ func (store *FileExecutionStore) applyRetirementLocked(
 	var operationErr error
 	switch step {
 	case fileexecution.RetirementRemoveStage:
-		operationErr = removeOwnedEntry(store.repository.stages, object, ownedStageSuffix, store.stagePolicy == PrivateStage)
+		operationErr = store.removeOwnedEntry(store.repository.stages, object, ownedStageSuffix)
 	case fileexecution.RetirementSyncStageNamespace:
 		operationErr = syncOwnedEntryNamespace(store.repository.stages, object)
 	case fileexecution.RetirementRemoveAnchor:
-		operationErr = removeOwnedEntry(store.repository.anchors, object, ownedAnchorSuffix, store.stagePolicy == PrivateStage)
+		operationErr = store.removeOwnedEntry(store.repository.anchors, object, ownedAnchorSuffix)
 	case fileexecution.RetirementSyncAnchorNamespace:
 		operationErr = syncOwnedEntryNamespace(store.repository.anchors, object)
 	default:
@@ -137,9 +137,8 @@ func (store *FileExecutionStore) candidateDurable(record checkpointmodel.Record)
 	return true, nil
 }
 
-// FinalMatchesOwned compares a public file against the exact protected-name anchor.
-// Published checkpoints intentionally retain that same-object anchor after retiring the
-// writable stage, so identity remains provable across process restarts.
+// FinalMatchesOwned reconciles interrupted publication using the retained object
+// witness. A durable delivery receipt no longer depends on this comparison.
 func (store *FileExecutionStore) FinalMatchesOwned(
 	ctx context.Context,
 	object checkpointmodel.ObjectID,
@@ -169,9 +168,8 @@ func (store *FileExecutionStore) FinalMatchesOwned(
 	return same, errors.Join(compareErr, anchor.file.Close(), anchor.directory.Close())
 }
 
-// PublishOwnedNoReplace links the protected-name ordinary-profile anchor into
-// one already-guarded public parent. The caller still performs post-link path
-// and metadata reconciliation.
+// PublishOwnedNoReplace exposes the same data object through a move or a native
+// hard link. The caller still reconciles placement before recording delivery.
 func (store *FileExecutionStore) PublishOwnedNoReplace(
 	ctx context.Context,
 	object checkpointmodel.ObjectID,
@@ -194,40 +192,19 @@ func (store *FileExecutionStore) PublishOwnedNoReplace(
 	if err != nil || observation.Condition() != fileexecution.OwnedReady || files.anchor == nil {
 		return nil, errors.Join(err, files.close(), outputcap.ErrUnsafeNamespace)
 	}
-	linked, linkErr := parent.LinkFileNoReplace(files.anchor, name)
-	return linked, errors.Join(linkErr, files.close())
+	var linkedFile outputcap.ObservedFile
+	var linkErr error
+	if _, portable := files.stage.(recoveryMetadataSource); portable {
+		linkedFile, linkErr = publishRecoveryStage(parent, files.stage, name)
+	} else {
+		linkedFile, linkErr = parent.LinkFileNoReplace(files.anchor, name)
+	}
+	return linkedFile, errors.Join(linkErr, files.close())
 }
 
-func removeOwnedEntry(
-	root outputcap.Directory,
-	object checkpointmodel.ObjectID,
-	suffix string,
-	privateProfile bool,
-) error {
-	shard, name := ownedObjectLocation(object, suffix)
-	directory, err := OpenShard(root, shard, false)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	kind, exact, classifyErr := directory.ClassifyExactEntry(name)
-	if classifyErr != nil || !exact {
-		return errors.Join(classifyErr, outputcap.ErrUnsafeNamespace, directory.Close())
-	}
-	if kind == outputcap.EntryAbsent {
-		return directory.Close()
-	}
-	if kind != outputcap.EntryRegularFile {
-		return errors.Join(outputcap.ErrUnsafeNamespace, directory.Close())
-	}
-	file, openErr := directory.OpenObservedFile(name, privateProfile)
-	if openErr != nil || file == nil {
-		return errors.Join(openErr, outputcap.ErrUnsafeNamespace, closeFile(file), directory.Close())
-	}
-	removeErr := directory.RemoveFile(name, file)
-	return errors.Join(removeErr, file.Close(), directory.Close())
+func (store *FileExecutionStore) removeOwnedEntry(root outputcap.Directory, object checkpointmodel.ObjectID, suffix string) error {
+	namespace := newCleanupNamespace(root)
+	return errors.Join(store.removeOwned(namespace, object, suffix), namespace.close())
 }
 
 func syncOwnedEntryNamespace(root outputcap.Directory, object checkpointmodel.ObjectID) error {

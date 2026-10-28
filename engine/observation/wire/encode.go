@@ -121,6 +121,7 @@ func EncodeProgress(snapshot appobs.ProgressSnapshot) (ProgressPayload, error) {
 		VerifiedBytes:            decimal(snapshot.VerifiedBytes()),
 		PreviouslyPublishedBytes: decimal(snapshot.PreviouslyPublishedBytes()),
 		NewlyVerifiedBytes:       decimal(snapshot.NewlyVerifiedBytes()),
+		RestartReusableBytes:     decimal(snapshot.RestartReusableBytes()),
 		FileOutcomes:             EncodeFileOutcomes(snapshot.FileOutcomes()),
 		CapacityWait: CapacityWait{
 			ActiveWaiters:     decimal(uint64(snapshot.CapacityActiveWaiters())),

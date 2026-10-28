@@ -109,9 +109,9 @@ func TestCheckpointLineageIsOrthogonalToPhysicalRevisionAndProgress(t *testing.T
 		changeRecordID bool
 		mutate         func(*RecordSpec)
 	}{
-		"revision": {true, func(spec *RecordSpec) { spec.FileRevision = changedRevision }},
-		"size":     {true, func(spec *RecordSpec) { spec.ExactSize = 96 }},
-		"owned object": {true, func(spec *RecordSpec) {
+		"revision": {false, func(spec *RecordSpec) { spec.FileRevision = changedRevision }},
+		"size":     {false, func(spec *RecordSpec) { spec.ExactSize = 96 }},
+		"owned object": {false, func(spec *RecordSpec) {
 			spec.OwnedObjectID = bytes.Repeat([]byte{0x52}, sha256.Size)
 		}},
 		"ranges": {false, func(spec *RecordSpec) {

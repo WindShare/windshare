@@ -76,7 +76,11 @@ func (authority *Authority) LookupActive(
 	ctx context.Context,
 	selection transfer.SelectionSpec,
 ) (ActiveLookup, error) {
-	if authority == nil || ctx == nil || selection.IsZero() {
+	return authority.SelectOperation(ctx, selection, receivecontract.AutomaticOperation())
+}
+
+func (authority *Authority) SelectOperation(ctx context.Context, selection transfer.SelectionSpec, selector receivecontract.OperationSelection) (ActiveLookup, error) {
+	if authority == nil || ctx == nil || selection.IsZero() || !selector.Valid() {
 		return ActiveLookup{}, transfer.ErrInvalidOutputBinding
 	}
 	if err := ctx.Err(); err != nil {
@@ -92,27 +96,28 @@ func (authority *Authority) LookupActive(
 	if err != nil {
 		return ActiveLookup{}, err
 	}
-	if authority.mode == outputcap.ExecutionLiveOnly {
-		blocked, inspectErr := authority.retainedSelectionBlocked(selection)
-		if inspectErr != nil {
-			return ActiveLookup{}, inspectErr
-		}
-		if blocked {
-			authority.stage = authorityStageLookupStopped
-			return ActiveLookup{authority: authority, kind: ActiveLookupNeedsAttention, stateReason: FilesystemOutputStateRecoveryUnavailable}, nil
-		}
-		claimer, err := newVolatileReservationClaimer(authority.binding.AuthorityRef())
+	var operationID receivecontract.OperationID
+	if selector.Kind() == receivecontract.OperationRedownload {
+		operationID, err = newOperationID(authority.random)
 		if err != nil {
 			return ActiveLookup{}, err
 		}
-		admission := &heldAdmission{key: key, selection: selection, volatile: claimer}
-		authority.admission, authority.stage = admission, authorityStageLookupHeld
-		return ActiveLookup{authority: authority, kind: ActiveLookupMiss, admission: admission}, nil
+		key = checkpointmodel.IsolatedOperationKey(operationID)
+	}
+	if authority.mode == outputcap.ExecutionLiveOnly {
+		return authority.selectLiveOperationLocked(selection, selector, key, operationID)
 	}
 	if authority.mode != outputcap.ExecutionResumable || authority.registry == nil {
 		return ActiveLookup{}, transfer.ErrInvalidOutputBinding
 	}
-	activeAdmission, registryLookup, err := authority.registry.BeginActive(key)
+	var activeAdmission checkpointstore.ActiveAdmission
+	var registryLookup checkpointstore.ActiveLookup
+	if selector.Kind() == receivecontract.OperationByID {
+		registryLookup, err = authority.registry.LookupOperation(selector.ID())
+		key = registryLookup.Record().ActiveOperationKey()
+	} else {
+		activeAdmission, registryLookup, err = authority.registry.BeginActive(key)
+	}
 	if err != nil {
 		return ActiveLookup{}, diagnoseFilesystemOutputFailure(
 			FilesystemOutputFailureActiveLookup,
@@ -122,7 +127,7 @@ func (authority *Authority) LookupActive(
 	switch registryLookup.State() {
 	case checkpointstore.ActiveLookupNone:
 		admission := &heldAdmission{
-			key: key, selection: selection, durable: &activeAdmission,
+			key: key, selection: selection, durable: &activeAdmission, operationID: operationID,
 		}
 		authority.admission, authority.stage = admission, authorityStageLookupHeld
 		return ActiveLookup{authority: authority, kind: ActiveLookupMiss, admission: admission}, nil
@@ -163,6 +168,27 @@ func (authority *Authority) LookupActive(
 	}
 }
 
+func (authority *Authority) selectLiveOperationLocked(selection transfer.SelectionSpec, selector receivecontract.OperationSelection, key checkpointmodel.ActiveOperationKey, operationID receivecontract.OperationID) (ActiveLookup, error) {
+	if selector.Kind() == receivecontract.OperationByID {
+		return ActiveLookup{}, transfer.ErrInvalidOutputBinding
+	}
+	blocked, err := authority.retainedSelectionBlocked(selection)
+	if err != nil {
+		return ActiveLookup{}, err
+	}
+	if blocked {
+		authority.stage = authorityStageLookupStopped
+		return ActiveLookup{authority: authority, kind: ActiveLookupNeedsAttention, stateReason: FilesystemOutputStateRecoveryUnavailable}, nil
+	}
+	claimer, err := newVolatileReservationClaimer(authority.binding.AuthorityRef())
+	if err != nil {
+		return ActiveLookup{}, err
+	}
+	admission := &heldAdmission{key: key, selection: selection, volatile: claimer, operationID: operationID}
+	authority.admission, authority.stage = admission, authorityStageLookupHeld
+	return ActiveLookup{authority: authority, kind: ActiveLookupMiss, admission: admission}, nil
+}
+
 func (authority *Authority) reopenOperationLocked(
 	ctx context.Context,
 	selection transfer.SelectionSpec,
@@ -181,7 +207,12 @@ func (authority *Authority) reopenOperationLocked(
 	if err == nil {
 		reservation, direct = intent.MaterializationPlan().DestinationReservation()
 	}
-	if err != nil || !direct || !sameSelection(intent.SelectionSpec(), selection) ||
+	// Choosing an ID with the wrong link or selection is a request error, not
+	// evidence that the retained operation lost ownership of its destination.
+	if err == nil && !sameSelection(intent.SelectionSpec(), selection) {
+		return nil, 0, errors.Join(transfer.ErrInvalidOutputBinding, lease.Close())
+	}
+	if err != nil || !direct ||
 		!validNamedReservation(reservation, intent.ArtifactSpec(), authority.binding) ||
 		!proof.Valid() || record.ReservationClaim().Token() != [sha256.Size]byte(proof.Claim().Token) ||
 		record.ReservationClaim().Generation() != proof.Claim().Generation {
@@ -262,9 +293,13 @@ func (authority *Authority) CreateOperation(
 		!validNamedArtifact(artifact) {
 		return nil, transfer.ErrInvalidOutputBinding
 	}
-	operationID, err := newOperationID(authority.random)
-	if err != nil {
-		return nil, err
+	operationID := lookup.admission.operationID
+	if operationID.IsZero() {
+		var err error
+		operationID, err = newOperationID(authority.random)
+		if err != nil {
+			return nil, err
+		}
 	}
 	reservationID, err := newReservationID(authority.random)
 	if err != nil {
@@ -492,7 +527,7 @@ func (operation *Operation) validate(authority *Authority) error {
 	key, err := checkpointmodel.NewActiveOperationKeyV1(
 		operation.intent.SelectionSpec().Digest(), authority.binding.AuthorityRef(),
 	)
-	if err != nil || key != operation.key {
+	if err != nil || key != operation.key && checkpointmodel.IsolatedOperationKey(operation.intent.OperationID()) != operation.key {
 		return errors.Join(transfer.ErrInvalidOutputBinding, err)
 	}
 	switch operation.mode {

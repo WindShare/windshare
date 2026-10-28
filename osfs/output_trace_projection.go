@@ -22,6 +22,7 @@ func projectFilesystemOutputTrace(event outputruntime.FilesystemOutputTrace) Fil
 		ExecutionMode:           event.ExecutionMode,
 		ReceiveIntentDigest:     event.ReceiveIntentDigest,
 		ReceiveOperationID:      event.ReceiveOperationID,
+		FileID:                  event.FileID,
 		SessionID:               event.SessionID,
 		IdentityScheme:          projectIdentityScheme(event.IdentityScheme),
 		NativeLockScope:         projectNativeLockScope(event.NativeLockScope),

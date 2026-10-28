@@ -243,7 +243,11 @@ func TestCandidateReconciliationFreezesFirstFailureAndRetainsCandidate(t *testin
 			failure := reconciliationNativeFailure{class: outputcap.NativeErrorAccessDenied}
 			test.configure(repository, candidate, failure)
 
-			_, err := NewFileExecutionStore(repository)
+			store, err := NewFileExecutionStore(repository)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = repository.Reconcile(store.candidateDurable)
 			if err == nil {
 				t.Fatal("candidate reconciliation unexpectedly succeeded")
 			}

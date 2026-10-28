@@ -3,6 +3,7 @@ package receive
 import (
 	"context"
 	"errors"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"testing"
 
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
@@ -16,7 +17,7 @@ func TestPortableOutputDestinationIsOnlyAnOpaqueDisplayLabel(t *testing.T) {
 	}
 	var events []string
 	authority := &layoutRecordingGetOutputAuthority{selection: selection, events: &events}
-	admitted, err := resolveGetOutputOperation(context.Background(), authority, &fixedGetShapeResolver{decision: decision}, selection, OutputCreateOrResume)
+	admitted, err := resolveGetOutputOperation(context.Background(), authority, &fixedGetShapeResolver{decision: decision}, selection, OutputCreateOrResume, receivecontract.OperationID{})
 	if err != nil {
 		t.Fatal(err)
 	}

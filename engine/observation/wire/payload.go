@@ -47,6 +47,7 @@ type ProgressPayload struct {
 	PreviouslyPublishedBytes string       `json:"previously_published_bytes"`
 	VerifiedBytes            string       `json:"verified_bytes"`
 	NewlyVerifiedBytes       string       `json:"newly_verified_bytes"`
+	RestartReusableBytes     string       `json:"restart_reusable_bytes"`
 	FileOutcomes             FileOutcomes `json:"file_outcomes"`
 	CapacityWait             CapacityWait `json:"capacity_wait"`
 }

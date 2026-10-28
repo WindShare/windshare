@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -12,10 +13,13 @@ import (
 	"github.com/windshare/windshare/adapters/filesystem"
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/core/link"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine"
 )
 
 type getRequest struct {
+	redownload   bool
+	operationID  receivecontract.OperationID
 	outDir       string
 	only         []string
 	link         link.Link
@@ -33,6 +37,17 @@ func (a *App) runReceive(ctx context.Context, args []string, admission engine.Re
 	if parsed != requestParseReady {
 		return parsed.exitCode()
 	}
+	if request.redownload {
+		if admission == engine.ReceiveResumeExisting || !request.operationID.IsZero() {
+			a.writeCompleteLine("get: --redownload cannot select a retained operation")
+			return ExitUsage
+		}
+		admission = engine.ReceiveRedownload
+	}
+	if !request.operationID.IsZero() && admission != engine.ReceiveResumeExisting {
+		a.writeCompleteLine("get: --operation is available with resume retry")
+		return ExitUsage
+	}
 	runtime, err := a.newCommandRuntime(clievent.CommandGet, request.observation)
 	if err != nil {
 		return ExitFailure
@@ -47,7 +62,7 @@ func (a *App) runReceive(ctx context.Context, args []string, admission engine.Re
 	if factory == nil {
 		factory = filesystem.FilesystemOutput{RootPath: destination, CreateRoot: true}
 	}
-	task, err := a.application.StartReceive(ctx, engine.ReceiveRequest{Admission: admission, Capability: request.link, Only: request.only, Connectivity: request.connectivity, WaitTimeout: request.waitTimeout, Output: factory, Destination: destination, Diagnostics: runtime.diagnosticSink(), OnPause: a.receivePauseHandler()})
+	task, err := a.application.StartReceive(ctx, engine.ReceiveRequest{Admission: admission, OperationID: request.operationID, Capability: request.link, Only: request.only, Connectivity: request.connectivity, WaitTimeout: request.waitTimeout, Output: factory, Destination: destination, Diagnostics: runtime.diagnosticSink(), OnPause: a.receivePauseHandler()})
 	if err != nil {
 		return observation.commandFailure(ExitFailure, err)
 	}
@@ -75,6 +90,8 @@ func (a *App) parseGetRequest(args []string) (getRequest, requestParseOutcome) {
 		return getRequest{}, requestParseInternalFailure
 	}
 	outDir := flags.String("o", ".", "output directory")
+	redownload := flags.Bool("redownload", false, "start a separate download in a new reserved destination; retain the original task")
+	operation := flags.String("operation", "", "resume retry: retained operation ID")
 	waitTimeout := flags.Duration("wait-timeout", 0, "maximum wait for initial connection or each reconnection (0: initial 10s, reconnection unlimited)")
 	keyString := flags.String("key", "", "separate key string when the link has no fragment")
 	connectivityName := flags.String(
@@ -100,6 +117,17 @@ func (a *App) parseGetRequest(args []string) (getRequest, requestParseOutcome) {
 		a.writeCompleteLine("get: exactly one link argument is required")
 		return getRequest{}, requestParseUsageFailure
 	}
+	var operationID receivecontract.OperationID
+	if *operation != "" {
+		raw, err := hex.DecodeString(*operation)
+		if err == nil {
+			operationID, err = receivecontract.OperationIDFromBytes(raw)
+		}
+		if err != nil {
+			a.writeCompleteLine("get: invalid operation ID")
+			return getRequest{}, requestParseUsageFailure
+		}
+	}
 	connectivity, err := engine.ParseConnectivityPolicy(*connectivityName)
 	if err != nil {
 		a.writeCompleteLine("get: connectivity must be auto, relay-only, or p2p-only")
@@ -115,6 +143,7 @@ func (a *App) parseGetRequest(args []string) (getRequest, requestParseOutcome) {
 		return getRequest{}, requestParseUsageFailure
 	}
 	return getRequest{
+		redownload: *redownload, operationID: operationID,
 		outDir: *outDir, only: append([]string(nil), only...), link: capability, connectivity: connectivity,
 		observation: observation, waitTimeout: *waitTimeout,
 	}, requestParseReady

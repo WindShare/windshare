@@ -37,10 +37,13 @@ type ReceiveProgressSnapshot struct {
 	PreviouslyPublishedBytes uint64
 	VerifiedBytes            uint64
 	NewlyVerifiedBytes       uint64
-	FileOutcomes             FileOutcomeSummary
-	CapacityWait             revisionwait.Snapshot
-	Discovery                DiscoveryStatus
-	CountersExact            bool
+	// RestartReusableBytes counts the last observed persisted partial ranges.
+	// Delivered files are accounted for separately and no longer retain partials.
+	RestartReusableBytes uint64
+	FileOutcomes         FileOutcomeSummary
+	CapacityWait         revisionwait.Snapshot
+	Discovery            DiscoveryStatus
+	CountersExact        bool
 }
 
 // CompletedBytes includes historical delivery without presenting it as verified
@@ -130,22 +133,35 @@ func (tracker *receiveProgressTracker) addNewlyVerified(bytes uint64) {
 	tracker.publishLocked()
 }
 
+func (tracker *receiveProgressTracker) replaceRestartReusable(previous, next uint64) {
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	if tracker.snapshot.RestartReusableBytes < previous {
+		tracker.snapshot.CountersExact = false
+		return
+	}
+	tracker.snapshot.RestartReusableBytes -= previous
+	tracker.snapshot.RestartReusableBytes, tracker.snapshot.CountersExact = saturatingAdd(tracker.snapshot.RestartReusableBytes, next, tracker.snapshot.CountersExact)
+	tracker.publishLocked()
+}
+
 func (tracker *receiveProgressTracker) acceptFileSettlement(
 	settlement FileSettlement,
 	expectedSize uint64,
 ) {
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
+	tracker.acceptFileSettlementLocked(settlement, expectedSize)
+}
+
+func (tracker *receiveProgressTracker) acceptFileSettlementLocked(settlement FileSettlement, expectedSize uint64) {
 	outcomes := &tracker.snapshot.FileOutcomes
 	switch settlement.Kind() {
 	case FilePublished, FilePreviouslyPublished:
 		if settlement.Kind() == FilePreviouslyPublished {
-			outcomes.PreviouslyPublishedFiles, tracker.snapshot.CountersExact = saturatingAdd(
-				outcomes.PreviouslyPublishedFiles, 1, tracker.snapshot.CountersExact,
-			)
-			tracker.snapshot.PreviouslyPublishedBytes, tracker.snapshot.CountersExact = saturatingAdd(
-				tracker.snapshot.PreviouslyPublishedBytes, expectedSize, tracker.snapshot.CountersExact,
-			)
+			tracker.recordHistoricalDeliveryLocked(expectedSize)
+		} else {
+			tracker.recordPublicationLocked(expectedSize)
 		}
 		if provenance, ok := settlement.PublicationProvenance(); ok {
 			switch provenance {
@@ -159,12 +175,6 @@ func (tracker *receiveProgressTracker) acceptFileSettlement(
 				)
 			}
 		}
-		tracker.snapshot.PublishedFiles, tracker.snapshot.CountersExact = saturatingAdd(
-			tracker.snapshot.PublishedFiles, 1, tracker.snapshot.CountersExact,
-		)
-		tracker.snapshot.PublishedBytes, tracker.snapshot.CountersExact = saturatingAdd(
-			tracker.snapshot.PublishedBytes, expectedSize, tracker.snapshot.CountersExact,
-		)
 	case FilePaused:
 		outcomes.PausedFiles, tracker.snapshot.CountersExact = saturatingAdd(
 			outcomes.PausedFiles, 1, tracker.snapshot.CountersExact,
@@ -209,6 +219,42 @@ func (tracker *receiveProgressTracker) acceptFileSettlement(
 	}
 	tracker.validateExactLocked()
 	tracker.publishLocked()
+}
+
+func (tracker *receiveProgressTracker) acceptHistoricalDelivery(delivery HistoricalDelivery, discoveredSize uint64) {
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	// Discovery may now advertise a different revision. Progress describes the
+	// historical work fulfilled by this task, without opening that new revision.
+	if tracker.snapshot.DiscoveredBytes >= discoveredSize {
+		tracker.snapshot.DiscoveredBytes -= discoveredSize
+		tracker.snapshot.DiscoveredBytes, tracker.snapshot.CountersExact = saturatingAdd(tracker.snapshot.DiscoveredBytes, delivery.Size, tracker.snapshot.CountersExact)
+	} else {
+		tracker.snapshot.CountersExact = false
+	}
+	tracker.recordHistoricalDeliveryLocked(delivery.Size)
+	tracker.validateExactLocked()
+	tracker.publishLocked()
+}
+
+func (tracker *receiveProgressTracker) recordHistoricalDeliveryLocked(size uint64) {
+	outcomes := &tracker.snapshot.FileOutcomes
+	outcomes.PreviouslyPublishedFiles, tracker.snapshot.CountersExact = saturatingAdd(
+		outcomes.PreviouslyPublishedFiles, 1, tracker.snapshot.CountersExact,
+	)
+	tracker.snapshot.PreviouslyPublishedBytes, tracker.snapshot.CountersExact = saturatingAdd(
+		tracker.snapshot.PreviouslyPublishedBytes, size, tracker.snapshot.CountersExact,
+	)
+	tracker.recordPublicationLocked(size)
+}
+
+func (tracker *receiveProgressTracker) recordPublicationLocked(size uint64) {
+	tracker.snapshot.PublishedFiles, tracker.snapshot.CountersExact = saturatingAdd(
+		tracker.snapshot.PublishedFiles, 1, tracker.snapshot.CountersExact,
+	)
+	tracker.snapshot.PublishedBytes, tracker.snapshot.CountersExact = saturatingAdd(
+		tracker.snapshot.PublishedBytes, size, tracker.snapshot.CountersExact,
+	)
 }
 
 func (tracker *receiveProgressTracker) setRevisionWait(snapshot revisionwait.Snapshot) {
@@ -327,11 +373,13 @@ func rangeSetByteCount(ranges content.RangeSet) (uint64, bool) {
 // unconfirmed write. The operation tracker therefore never becomes a second
 // file/range manifest.
 type fileTransferProgress struct {
-	retainsRanges bool
-	trusted       VerifiedRanges
-	pending       content.Range
-	hasPending    bool
-	transientEnd  uint64
+	persisted      VerifiedRanges
+	persistedBytes uint64
+	retainsRanges  bool
+	trusted        VerifiedRanges
+	pending        content.Range
+	hasPending     bool
+	transientEnd   uint64
 }
 
 func newFileTransferProgress(
@@ -347,7 +395,34 @@ func newFileTransferProgress(
 	if !exact || bytes > transaction.Binding().ExactSize() {
 		return fileTransferProgress{}, 0, false
 	}
-	return fileTransferProgress{retainsRanges: checkpoint.Retention() != RangesTransient, trusted: checkpoint}, bytes, true
+	progress := fileTransferProgress{retainsRanges: checkpoint.Retention() != RangesTransient, trusted: checkpoint}
+	if restart {
+		progress.persisted, progress.persistedBytes = checkpoint, bytes
+	}
+	return progress, bytes, true
+}
+
+func (progress *fileTransferProgress) observePersistence(value FileProgress) (uint64, bool) {
+	persisted, ok := value.Persisted()
+	if !ok {
+		return 0, progress.persisted.retention == 0
+	}
+	if _, err := NewFileProgress(value.Accepted(), persisted); err != nil {
+		return 0, false
+	}
+	if progress.persisted.retention != 0 &&
+		(persisted.CheckpointGeneration() < progress.persisted.CheckpointGeneration() ||
+			!rangesContain(persisted.Ranges(), progress.persisted.Ranges()) ||
+			persisted.CheckpointGeneration() == progress.persisted.CheckpointGeneration() && !exactRangeSetsEqual(persisted.Ranges(), progress.persisted.Ranges())) {
+		return 0, false
+	}
+	bytes, exact := rangeSetByteCount(persisted.Ranges())
+	if !exact || bytes < progress.persistedBytes {
+		return 0, false
+	}
+	delta := bytes - progress.persistedBytes
+	progress.persisted, progress.persistedBytes = persisted, bytes
+	return delta, true
 }
 
 func (progress *fileTransferProgress) beginPending(requested content.Range) bool {
@@ -384,7 +459,9 @@ func (progress *fileTransferProgress) reconcileSettlement(
 	if !hasCheckpoint {
 		return 0, true
 	}
-	if transaction == nil || checkpoint.Binding() != transaction.Binding() || checkpoint.Retention() != progress.trusted.Retention() {
+	if transaction == nil || checkpoint.Binding() != transaction.Binding() ||
+		(checkpoint.Retention() != progress.trusted.Retention() &&
+			(checkpoint.Retention() != RangesAfterRestart || progress.trusted.Retention() != RangesInProcess)) {
 		return 0, false
 	}
 	if progress.hasPending {
@@ -397,10 +474,17 @@ func (progress *fileTransferProgress) reconcileSettlement(
 			progress.hasPending = false
 			return 0, true
 		}
-		return progress.acknowledge(transaction, checkpoint)
+		// Terminal persistence may use a different generation from in-process
+		// acknowledgements. Coverage, not the two independent clocks, decides it.
+		requested, _ := content.NewRangeSet([]content.Range{progress.pending})
+		expected, mergeErr := MergeRanges(progress.trusted.Ranges(), requested)
+		if mergeErr == nil && exactRangeSetsEqual(checkpoint.Ranges(), expected) {
+			return progress.acceptPending(checkpoint), true
+		}
+		return 0, false
 	}
 	if !exactRangeSetsEqual(checkpoint.Ranges(), progress.trusted.Ranges()) ||
-		checkpoint.CheckpointGeneration() < progress.trusted.CheckpointGeneration() {
+		(checkpoint.Retention() == progress.trusted.Retention() && checkpoint.CheckpointGeneration() < progress.trusted.CheckpointGeneration()) {
 		return 0, false
 	}
 	progress.trusted = checkpoint

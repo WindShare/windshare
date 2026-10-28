@@ -8,13 +8,14 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/osfs/internal/checkpointstore"
 	"github.com/windshare/windshare/osfs/internal/resumeauthority"
 )
 
-func TestNativeResumeRestartProjectsRevisionConflictWithoutMovingRanges(t *testing.T) {
+func TestNativeResumeCannotReplaceLogicalFileWithAnotherRevision(t *testing.T) {
 	root := newRuntimeTestRootSpec(t).path
 	fixture := openOrdinaryResumeSession(t, root, 0xc1, 4)
 	if err := fixture.transaction.WriteRange(context.Background(), 0, []byte("ab")); err != nil {
@@ -62,8 +63,8 @@ func TestNativeResumeRestartProjectsRevisionConflictWithoutMovingRanges(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lease.repository.Create(conflict); err != nil {
-		t.Fatal(err)
+	if _, err := lease.repository.Create(conflict); err == nil {
+		t.Fatal("a second revision replaced the logical file checkpoint")
 	}
 	if err := lease.Close(); err != nil {
 		t.Fatal(err)
@@ -80,40 +81,13 @@ func TestNativeResumeRestartProjectsRevisionConflictWithoutMovingRanges(t *testi
 		t.Fatal(err)
 	}
 	items := snapshot.Items()
-	if len(items) != 1 || items[0].State() != resumeauthority.ItemBlocked ||
-		items[0].BlockReason() != resumeauthority.ItemBlockRevisionConflict {
+	if len(items) != 1 || items[0].State() != resumeauthority.ItemResumable {
 		t.Fatalf("restart items = %+v", items)
 	}
-	summary, err := resumeauthority.ReduceRecovery(snapshot)
-	if err != nil || summary.State() != resumeauthority.OperationIncomplete ||
-		summary.State() == resumeauthority.OperationNeedsAttention {
-		t.Fatalf("restart summary = (%s, %v)", summary.State(), err)
-	}
-
-	slots, attention := restarted.store.LineageSnapshot()
-	if len(attention) != 0 || len(slots) != 1 ||
-		slots[0].Decision() != checkpointmodel.CheckpointLineageDecisionRevisionConflict {
-		t.Fatalf("restart lineage = (slots %+v, attention %+v)", slots, attention)
-	}
-	if _, selected := slots[0].Record(); selected {
-		t.Fatal("revision conflict granted selected range authority")
-	}
-	physical := slots[0].PhysicalRecords()
-	if len(physical) != 2 {
-		t.Fatalf("physical conflict evidence = %d records", len(physical))
-	}
-	foundOriginal := false
-	for _, record := range physical {
-		if record.RecordID() == original.RecordID() {
-			foundOriginal = slices.Equal(record.VerifiedRanges(), original.VerifiedRanges())
-		}
-	}
-	if !foundOriginal {
-		t.Fatal("restart moved or discarded the original verified ranges")
-	}
-	if summary.Items()[0].BlockReason() != resumeauthority.ItemBlockRevisionConflict ||
-		summary.Items()[0].State() != resumeauthority.ItemBlocked {
-		t.Fatal("revision conflict did not remain an item-local settlement")
+	restored, err := restarted.repository.Reopen(original.RecordID())
+	if err != nil || restored.FileRevision() != original.FileRevision() ||
+		!slices.Equal(restored.VerifiedRanges(), original.VerifiedRanges()) {
+		t.Fatalf("original partial changed: %+v, %v", restored, err)
 	}
 }
 
@@ -183,7 +157,7 @@ func TestNativeResumeRepositoryAttentionClosesOperationWithoutInventingAnItem(t 
 	}
 }
 
-func TestNativeReopenRejectsRepositoryAttentionBeforeOutputSession(t *testing.T) {
+func TestNativeReopenDefersUnrelatedRepositoryInventory(t *testing.T) {
 	root := newRuntimeTestRootSpec(t).path
 	fixture := openOrdinaryResumeSession(t, root, 0x4e, 4)
 	pauseOrdinaryResumeFixture(t, fixture)
@@ -203,16 +177,18 @@ func TestNativeReopenRejectsRepositoryAttentionBeforeOutputSession(t *testing.T)
 	if err != nil || lookup.Kind() != ActiveLookupReopened {
 		t.Fatalf("attention lookup = kind %d err %v", lookup.Kind(), err)
 	}
-	if _, err := authority.OpenOperation(context.Background(), lookup.Operation()); err == nil {
-		t.Fatal("repository attention admitted a mutable output session")
+	session, err := authority.OpenOperation(context.Background(), lookup.Operation())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.PauseTree(context.Background(), transfer.JobPauseInterrupted); err != nil {
+		t.Fatal(err)
 	}
 	if err := authority.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 1 || !events[0].Failed ||
-		events[0].RuntimeDecision != FilesystemOutputRuntimeNeedsAttention ||
-		events[0].SessionID.IsZero() {
-		t.Fatalf("reopen repository attention trace = %+v", events)
+	if len(events) != 0 {
+		t.Fatalf("ordinary reopen enumerated unrelated checkpoints: %+v", events)
 	}
 
 	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform, nil)
@@ -291,7 +267,7 @@ func TestOrdinaryResumeItemReducesEveryDurableFilePhase(t *testing.T) {
 		{
 			name: "published without exact final", phase: checkpointmodel.PhasePublished,
 			commit: checkpointmodel.CommitPublished, ranges: base.VerifiedRanges(),
-			want: resumeauthority.ItemBlocked, block: resumeauthority.ItemBlockPublicationUnknown,
+			want: resumeauthority.ItemPublished,
 		},
 		{
 			name: "retired isolated failure", phase: checkpointmodel.PhaseRetired,

@@ -596,3 +596,12 @@ func runContentTransferIsolationCase(
 		t.Fatalf("operation failure lost remote diagnostic: %+v", result.Files[0])
 	}
 }
+
+func (transaction *revisionTransferTransaction) Accept(ctx context.Context) (transfer.FileProgress, error) {
+	checkpoint, err := transaction.Checkpoint(ctx)
+	if err != nil {
+		return transfer.FileProgress{}, err
+	}
+	progress, err := transfer.ProgressFromCheckpoint(checkpoint)
+	return progress, err
+}

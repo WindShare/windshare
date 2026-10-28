@@ -5,6 +5,7 @@ package fileexecution
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
@@ -395,4 +396,6 @@ type Config struct {
 	Checkpoints CheckpointRepository
 	Random      io.Reader
 	Trace       TraceSink
+	Clock       func() time.Time
+	AfterFunc   func(time.Duration, func()) CheckpointTimer
 }

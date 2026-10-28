@@ -84,6 +84,26 @@ func (transaction *guardedTransaction) Checkpoint(
 	return checkpoint, nil
 }
 
+func (transaction *guardedTransaction) Accept(ctx context.Context) (transfer.FileProgress, error) {
+	lease, operationID, err := transaction.begin(ctx)
+	if err != nil {
+		return transfer.FileProgress{}, err
+	}
+	defer lease.release()
+	entry, operation, _, event, err := transaction.reserve(operationID, actionCheckpoint, 0)
+	if err != nil {
+		transaction.session.emit(event)
+		return transfer.FileProgress{}, err
+	}
+	progress, cut, executeErr := transaction.executor.Accept(ctx)
+	event, err = transaction.finishNonterminal(ctx, operationID, entry, operation, cut, executeErr, progress.Accepted())
+	transaction.session.emit(event)
+	if err != nil {
+		return transfer.FileProgress{}, err
+	}
+	return progress, nil
+}
+
 func (transaction *guardedTransaction) Commit(
 	ctx context.Context,
 ) (transfer.FileSettlement, error) {

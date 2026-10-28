@@ -194,35 +194,12 @@ func (authority *Authority) namedFileExecutor(
 		storeFactory = checkpointstore.NewFileExecutionStoreWithStagePolicy
 	}
 	store, err := storeFactory(&repository, checkpointstore.InheritFinalParent)
-	var attention []checkpointstore.Attention
-	if operation.reopened {
-		var recordCount uint64
-		if store != nil {
-			recordCount = store.RecordCount()
-			_, attention = store.LineageSnapshot()
-		}
-		authority.traceCheckpointReconciled(
-			operation.intent, sessionID, recordCount, attention, err,
-		)
-	}
 	if err != nil {
 		primary := diagnoseFilesystemOutputFailure(
 			FilesystemOutputFailureCheckpointReconciliation,
 			checkpointRuntimeError(context.Background(), "reconcile ordinary file repository", err),
 		)
 		return nil, nil, nil, freezeFilesystemOutputFailure(primary, repository.Close())
-	}
-	if checkpointstore.RecoveryBlocked(attention) {
-		// Opaque repository evidence cannot grant mutation authority even when
-		// authenticated siblings reconcile cleanly.
-		attentionErr := requireOperationAttention(
-			operation.lease, checkpointmodel.OrdinaryReasonOperationOwnershipUnknown,
-		)
-		primary := runtimeOutputError(
-			context.Background(), transferfault.OutputOwnership,
-			"reject ordinary file repository attention", ErrNativeResumeOwnershipUnknown,
-		)
-		return nil, nil, nil, errors.Join(primary, attentionErr, repository.Close())
 	}
 	fileAuthority, err := directoryauthority.NewFileAuthority(directories, store, sessionID)
 	if err != nil {

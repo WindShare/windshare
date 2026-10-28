@@ -33,6 +33,7 @@ type ReceiveOutputAdmission = receive.OutputAdmission
 const (
 	ReceiveCreateOrResume = receive.OutputCreateOrResume
 	ReceiveResumeExisting = receive.OutputResumeExisting
+	ReceiveRedownload     = receive.OutputRedownload
 )
 
 type ReceiveResult = receive.Result

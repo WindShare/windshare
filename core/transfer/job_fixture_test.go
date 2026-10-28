@@ -796,3 +796,12 @@ func (o *jobOutput) verifyRanges(binding MaterializedFileBinding, generation Che
 	}
 	return VerifyRestartRanges(binding, generation, ranges)
 }
+
+func (transaction *jobFileTransaction) Accept(ctx context.Context) (FileProgress, error) {
+	checkpoint, err := transaction.Checkpoint(ctx)
+	if err != nil {
+		return FileProgress{}, err
+	}
+	progress, err := ProgressFromCheckpoint(checkpoint)
+	return progress, err
+}

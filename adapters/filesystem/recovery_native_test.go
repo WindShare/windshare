@@ -167,7 +167,7 @@ func createNativeResumeOperation(
 	if err != nil || !mode.Resumable() {
 		t.Fatalf("destination mode = (%+v, %v)", mode, err)
 	}
-	lookup, err := output.LookupActive(ctx, selection)
+	lookup, err := output.SelectOperation(ctx, selection, receivecontract.AutomaticOperation())
 	if err != nil || lookup.Kind() != osfs.FilesystemOutputLookupMiss {
 		t.Fatalf("active lookup = (%d, %v)", lookup.Kind(), err)
 	}

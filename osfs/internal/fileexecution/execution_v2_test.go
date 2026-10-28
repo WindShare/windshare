@@ -490,8 +490,8 @@ func TestDirectTreeFileCheckpointIsTheOnlyRangeAuthority(t *testing.T) {
 		repository.record.VerifiedRanges()[0] != (checkpointmodel.Range{Offset: 0, End: 8}) {
 		t.Fatalf("published checkpoint = phase %d ranges %#v", repository.record.Phase(), repository.record.VerifiedRanges())
 	}
-	if len(platform.retirements) != 0 {
-		t.Fatalf("published witness was retired before operation settlement: %v", platform.retirements)
+	if len(platform.retirements) != 4 {
+		t.Fatalf("durable receipt did not release private objects: %v", platform.retirements)
 	}
 	if len(traces) == 0 {
 		t.Fatal("execution emitted no structured milestones")

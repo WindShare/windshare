@@ -3,6 +3,7 @@ package receive
 import (
 	"context"
 	"errors"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"testing"
 
 	"github.com/windshare/windshare/connectivity/relayset"
@@ -22,7 +23,7 @@ type failedOutputAuthority struct {
 func (a *failedOutputAuthority) BindDestination(context.Context) (OutputMode, error) {
 	return a.mode, a.bindErr
 }
-func (a *failedOutputAuthority) LookupActive(context.Context, transfer.SelectionSpec) (OutputLookup, error) {
+func (a *failedOutputAuthority) SelectOperation(context.Context, transfer.SelectionSpec, receivecontract.OperationSelection) (OutputLookup, error) {
 	panic("failed preparation performed selection")
 }
 func (a *failedOutputAuthority) Close() error { a.closed++; return a.closeErr }

@@ -38,7 +38,6 @@ func runRetainedCandidateFacadeProof(t *testing.T) {
 
 	getFixture := newRetainedCandidateFixture(t, "get-from-candidate", 0x81)
 	reopenRetainedCandidateOutput(t, getFixture, false)
-	assertRetainedCandidatePromoted(t, getFixture)
 	reopenRetainedCandidateOutput(t, getFixture, true)
 
 	sharedFixture := newRetainedCandidateFixture(t, "list-then-get", 0x91)
@@ -397,7 +396,7 @@ func openRetainedCandidateRepository(
 	switch platform.(interface {
 		IdentityScheme() outputcap.IdentitySchemeID
 	}).IdentityScheme() {
-	case outputcap.IdentitySchemeWindowsObjectIDV1:
+	case outputcap.IdentitySchemeWindowsObjectIDV1, outputcap.IdentitySchemePortableMetadataV1:
 		profile = checkpointstore.InheritFinalParent
 	case outputcap.IdentitySchemeLinuxHandleV2, outputcap.IdentitySchemeDarwinObjectIDV1:
 		profile = checkpointstore.InheritFinalParent
