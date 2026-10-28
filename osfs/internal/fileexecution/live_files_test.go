@@ -275,7 +275,7 @@ func TestLiveFilesCleanupDebtKeepsOwnershipButNotCompletionHostage(t *testing.T)
 func TestLiveFilesUnfinishedCapacityPausesWithoutDiscardingProgress(t *testing.T) {
 	test := newLiveFilesTest(t)
 	var first transfer.FileTransaction
-	for index := 0; index < maximumUnsettledLiveFiles; index++ {
+	for index := range maximumUnsettledLiveFiles {
 		transaction, _, _ := test.begin(t, index)
 		if index == 0 {
 			first = transaction

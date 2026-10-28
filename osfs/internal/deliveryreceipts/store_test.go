@@ -64,7 +64,7 @@ func TestReceiptsSpillAndMergeWithoutLosingHistoryOrGrowingMemory(t *testing.T) 
 		return file, nil
 	}
 	const count = maximumMemoryReceipts*9 + 1
-	for index := 0; index < count; index++ {
+	for index := range count {
 		value := receiptEntry(index)
 		if err := store.Record(value.key, value.receipt); err != nil {
 			t.Fatal(err)
@@ -76,7 +76,7 @@ func TestReceiptsSpillAndMergeWithoutLosingHistoryOrGrowingMemory(t *testing.T) 
 			t.Fatal("small operation allocated scratch storage")
 		}
 	}
-	for index := 0; index < count; index++ {
+	for index := range count {
 		value := receiptEntry(index)
 		receipt, found, err := store.Lookup(value.key)
 		if err != nil || !found || receipt != value.receipt {
@@ -131,7 +131,7 @@ func TestReceiptFlushFailuresPreserveAcknowledgedHistory(t *testing.T) {
 			if failureKind == "merge-create" || failureKind == "merge-read" {
 				count *= 2
 			}
-			for index := 0; index < count; index++ {
+			for index := range count {
 				value := receiptEntry(index)
 				if err := store.Record(value.key, value.receipt); err != nil {
 					t.Fatal(err)
@@ -161,7 +161,7 @@ func TestReceiptFlushFailuresPreserveAcknowledgedHistory(t *testing.T) {
 				files = append(files, file)
 				return file, nil
 			}
-			for index := 0; index < count; index++ {
+			for index := range count {
 				value := receiptEntry(index)
 				actual, found, err := store.Lookup(value.key)
 				if err != nil || !found || actual != value.receipt {
