@@ -97,6 +97,9 @@ func TestRuntimeTraceVocabularyProjectsEveryLifecycleMilestone(t *testing.T) {
 		{fileexecution.TracePause, FilesystemOutputRuntimePauseFile},
 		{fileexecution.TraceRetire, FilesystemOutputRuntimeRetireFile},
 		{fileexecution.TraceItemBlocked, FilesystemOutputRuntimeQuarantineFile},
+		{fileexecution.TraceDeliveryReceipt, FilesystemOutputRuntimeDeliveryReceipt},
+		{fileexecution.TraceReleaseLiveFile, FilesystemOutputRuntimeReleaseLiveFile},
+		{fileexecution.TraceLiveRetention, FilesystemOutputRuntimeLiveRetention},
 		{0, 0},
 	}
 	for _, test := range fileOperations {

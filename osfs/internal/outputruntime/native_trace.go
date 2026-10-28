@@ -103,11 +103,12 @@ func (authority *Authority) fileRuntimeTrace() fileexecution.TraceSink {
 		projected := FilesystemOutputTrace{
 			Operation: TraceRuntimeDecision, ReceiveIntentDigest: event.IntentDigest,
 			ReceiveOperationID: event.OperationID, SessionID: event.SessionID,
-			RuntimeComponent:   FilesystemOutputRuntimeFile,
-			RuntimeOperation:   runtimeFileOperation(event.Operation),
-			RuntimeDecision:    runtimeFileDecision(event.Outcome),
-			CheckpointDecision: runtimeCheckpointDecision(event.Decision),
-			OperationID:        event.Sequence,
+			RuntimeComponent:      FilesystemOutputRuntimeFile,
+			RuntimeOperation:      runtimeFileOperation(event.Operation),
+			RuntimeDecision:       runtimeFileDecision(event.Outcome),
+			CheckpointDecision:    runtimeCheckpointDecision(event.Decision),
+			OperationID:           event.Sequence,
+			RetainedLiveFileCount: event.RetainedLiveFiles,
 		}
 		applyRuntimeFault(&projected, event.Fault)
 		authority.trace(projected)
@@ -249,6 +250,12 @@ func runtimeFileOperation(operation fileexecution.TraceOperation) FilesystemOutp
 		return FilesystemOutputRuntimeRetireFile
 	case fileexecution.TraceItemBlocked:
 		return FilesystemOutputRuntimeQuarantineFile
+	case fileexecution.TraceDeliveryReceipt:
+		return FilesystemOutputRuntimeDeliveryReceipt
+	case fileexecution.TraceReleaseLiveFile:
+		return FilesystemOutputRuntimeReleaseLiveFile
+	case fileexecution.TraceLiveRetention:
+		return FilesystemOutputRuntimeLiveRetention
 	default:
 		return 0
 	}
