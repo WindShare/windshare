@@ -237,12 +237,8 @@ func TestFileExecutionStoreRejectsAmbiguousIndexAndMissingInstall(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.authority.add(conflicting); err != nil {
-		t.Fatalf("retain conflicting authority = %v", err)
-	}
-	slots, _ := store.LineageSnapshot()
-	if len(slots) != 1 || slots[0].Decision() != checkpointmodel.CheckpointLineageDecisionOwnershipConflict {
-		t.Fatalf("conflicting authority decision = %+v", slots)
+	if err := store.authority.add(conflicting); !errors.Is(err, checkpointmodel.ErrRecordBinding) {
+		t.Fatalf("conflicting record replaced fixed authority: %v", err)
 	}
 
 	canceled, cancel := context.WithCancel(context.Background())
@@ -904,4 +900,13 @@ func TestCandidateRecoveryClassifiesExactNamespaceAndReadHazards(t *testing.T) {
 		result.Attention()[0].Code() != AttentionInvalidCandidate {
 		t.Fatalf("foreign candidate attention = %+v", result.Attention())
 	}
+}
+
+func removeOwnedEntry(root outputcap.Directory, object checkpointmodel.ObjectID, suffix string, private bool) error {
+	policy := InheritFinalParent
+	if private {
+		policy = PrivateStage
+	}
+	store := &FileExecutionStore{repository: &Repository{anchors: newMemoryDirectory()}, stagePolicy: policy}
+	return store.removeOwnedEntry(root, object, suffix)
 }

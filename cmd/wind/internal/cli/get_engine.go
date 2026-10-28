@@ -71,7 +71,8 @@ func (a *App) reportEngineReceive(result engine.TaskCompletion[engine.ReceiveRes
 	}
 	switch result.Value.Recovery {
 	case engine.ReceiveRecoveryCheckpointsRetained:
-		a.writeCompleteLine("Download paused; verified checkpoints are retained. Retry with the same link and selection, or inspect with wind resume list -o <directory>.")
+		a.writeCompleteLine("Download paused; saved partials: %d bytes. Previously delivered: %d files (%d bytes).", result.Value.Transfer.Progress.RestartReusableBytes, result.Value.Transfer.Progress.FileOutcomes.PreviouslyPublishedFiles, result.Value.Transfer.Progress.PreviouslyPublishedBytes)
+		a.writeCompleteLine("Retry with wind resume retry --operation %x and the same link, output directory, and selection.", result.Value.Operation.Bytes())
 	case engine.ReceiveRecoveryLiveProgressReleased:
 		a.writeCompleteLine("Download stopped; unfinished progress could not be retained after exit.")
 	case engine.ReceiveRecoveryDiscarded:
@@ -129,7 +130,7 @@ func (a *App) receivePauseHandler() func(context.Context, engine.ReceivePause) (
 		case engine.ReceiveRecoveryRevisionChanged:
 			reason = "a changed source revision; prior verified progress remains isolated"
 		}
-		a.writeCompleteLine("Download paused: %s. Verified: %d bytes.", reason, pause.Transfer.Progress.VerifiedBytes)
+		a.writeCompleteLine("Download paused: %s. Saved partials: %d bytes. Previously delivered: %d files (%d bytes).", reason, pause.Transfer.Progress.RestartReusableBytes, pause.Transfer.Progress.FileOutcomes.PreviouslyPublishedFiles, pause.Transfer.Progress.PreviouslyPublishedBytes)
 		a.reportBlockedReceiveItems(pause.Transfer)
 		if pause.Mode == engine.OutputLiveOnly {
 			a.writeCompleteLine("Exit releases unfinished progress on this destination.")

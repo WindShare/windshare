@@ -3,6 +3,7 @@ package receive
 import (
 	"context"
 	"errors"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"testing"
 
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
@@ -49,7 +50,7 @@ func TestReceiveAttemptLifetimeKeepsOneOperationUntilDecision(t *testing.T) {
 			}
 			events := []string{}
 			source := &layoutRecordingGetOutputAuthority{selection: selection, events: &events}
-			admission, err := resolveGetOutputOperation(context.Background(), source, &fixedGetShapeResolver{decision: decision, events: &events}, selection, OutputCreateOrResume)
+			admission, err := resolveGetOutputOperation(context.Background(), source, &fixedGetShapeResolver{decision: decision, events: &events}, selection, OutputCreateOrResume, receivecontract.OperationID{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -101,7 +102,7 @@ func TestExplicitResumeNeverCreatesMissingOperation(t *testing.T) {
 	events := []string{}
 	authority := &layoutRecordingGetOutputAuthority{selection: selection, events: &events}
 	resolver := &fixedGetShapeResolver{}
-	_, err := resolveGetOutputOperation(context.Background(), authority, resolver, selection, OutputResumeExisting)
+	_, err := resolveGetOutputOperation(context.Background(), authority, resolver, selection, OutputResumeExisting, receivecontract.OperationID{})
 	if !errors.Is(err, ErrRetainedOutputMissing) || resolver.calls != 0 || len(events) != 1 {
 		t.Fatalf("missing resume: %v events=%v shape=%d", err, events, resolver.calls)
 	}

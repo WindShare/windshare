@@ -3,6 +3,7 @@ package outputruntime
 import (
 	"context"
 	"crypto/rand"
+	"github.com/windshare/windshare/core/catalog"
 	"io"
 	"sync"
 	"time"
@@ -141,6 +142,7 @@ const (
 )
 
 type FilesystemOutputTrace struct {
+	FileID                   catalog.FileID
 	Operation                FilesystemOutputTraceOperation
 	DestinationCapabilities  outputcap.DestinationCapabilities
 	ExecutionMode            outputcap.ExecutionMode

@@ -19,6 +19,7 @@ func ProjectProgress(
 		PublishedFiles: value.PublishedFiles, PublishedBytes: value.PublishedBytes,
 		VerifiedBytes: value.VerifiedBytes, NewlyVerifiedBytes: value.NewlyVerifiedBytes,
 		PreviouslyPublishedBytes: value.PreviouslyPublishedBytes,
+		RestartReusableBytes:     value.RestartReusableBytes,
 		FileOutcomes:             FileOutcomes(value.FileOutcomes), Discovery: discovery,
 		CapacityActiveWaiters:   value.CapacityWait.ActiveWaiters,
 		CapacityAccumulatedWait: value.CapacityWait.AccumulatedWait,

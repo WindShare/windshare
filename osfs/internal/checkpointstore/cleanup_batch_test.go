@@ -127,6 +127,8 @@ func TestCleanupBatchPreservesRecoveryBarriers(t *testing.T) {
 					if err := store.CleanupOwned(context.Background()); !errors.Is(err, errFileExecutionAuthorityUnsettled) {
 						t.Fatalf("ambiguous record deletion remained writable: %v", err)
 					}
+					// A new lease starts a new authority; reopening an adapter on the failed lease cannot clear uncertainty.
+					store.repository.authority = newFileExecutionAuthority()
 					store, err = NewFileExecutionStore(store.repository)
 					if err != nil {
 						t.Fatal(err)

@@ -29,7 +29,7 @@ type failingNativeAuthority struct {
 func (a failingNativeAuthority) BindDestination(context.Context) (osfs.FilesystemOutputExecutionMode, error) {
 	return osfs.FilesystemOutputExecutionMode{}, a.cause
 }
-func (a failingNativeAuthority) LookupActive(context.Context, transfer.SelectionSpec) (osfs.FilesystemOutputLookup, error) {
+func (a failingNativeAuthority) SelectOperation(context.Context, transfer.SelectionSpec, receivecontract.OperationSelection) (osfs.FilesystemOutputLookup, error) {
 	return osfs.FilesystemOutputLookup{}, a.cause
 }
 func (a failingNativeAuthority) CreateOperation(context.Context, osfs.FilesystemOutputLookup, receivecontract.ArtifactSpec) (osfs.FilesystemOutputOperation, error) {
@@ -62,7 +62,7 @@ func TestFilesystemAdapterSealsNativeDiagnosticWithoutReplacingCause(t *testing.
 	operations := []func() error{
 		func() error { _, err := authority.BindDestination(context.Background()); return err },
 		func() error {
-			_, err := authority.LookupActive(context.Background(), transfer.SelectionSpec{})
+			_, err := authority.SelectOperation(context.Background(), transfer.SelectionSpec{}, receivecontract.AutomaticOperation())
 			return err
 		},
 		func() error {

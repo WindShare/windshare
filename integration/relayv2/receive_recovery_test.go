@@ -48,9 +48,9 @@ type countedAuthority struct {
 	afterWrite       func()
 }
 
-func (a countedAuthority) LookupActive(ctx context.Context, s transfer.SelectionSpec) (engine.OutputLookup, error) {
+func (a countedAuthority) SelectOperation(ctx context.Context, s transfer.SelectionSpec, selector receivecontract.OperationSelection) (engine.OutputLookup, error) {
 	a.lookups.Add(1)
-	lookup, err := a.OutputAuthority.LookupActive(ctx, s)
+	lookup, err := a.OutputAuthority.SelectOperation(ctx, s, selector)
 	if lookup.Reservation != nil {
 		lookup.Reservation = countedReservation{lookup.Reservation, a.creates, a.afterWrite}
 	}

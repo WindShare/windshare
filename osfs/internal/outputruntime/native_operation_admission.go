@@ -51,11 +51,12 @@ func (lookup ActiveLookup) Operation() *Operation {
 }
 
 type heldAdmission struct {
-	key       checkpointmodel.ActiveOperationKey
-	selection transfer.SelectionSpec
-	durable   *checkpointstore.ActiveAdmission
-	volatile  *volatileReservationClaimer
-	operation receivecontract.OperationID
+	operationID receivecontract.OperationID
+	key         checkpointmodel.ActiveOperationKey
+	selection   transfer.SelectionSpec
+	durable     *checkpointstore.ActiveAdmission
+	volatile    *volatileReservationClaimer
+	operation   receivecontract.OperationID
 }
 
 func (admission *heldAdmission) prepare(operation receivecontract.OperationID) error {

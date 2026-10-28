@@ -188,9 +188,9 @@ func TestFileExecutionAuthorityRetriesAndRemovalKeepIndexesAtomic(t *testing.T) 
 	if err := authority.remove(next); !errors.Is(err, checkpointmodel.ErrRecordBinding) {
 		t.Fatalf("repeated removal = %v", err)
 	}
-	if len(authority.physical) != 0 || len(authority.lineages) != 0 || len(authority.objects) != 0 {
-		t.Fatalf("exact removal retained indexes: physical=%d lineages=%d objects=%d",
-			len(authority.physical), len(authority.lineages), len(authority.objects))
+	if len(authority.physical) != 0 || len(authority.objects) != 0 {
+		t.Fatalf("exact removal retained indexes: physical=%d objects=%d",
+			len(authority.physical), len(authority.objects))
 	}
 
 	var nilAuthority *fileExecutionAuthority

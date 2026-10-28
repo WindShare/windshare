@@ -53,7 +53,7 @@ Optional `managed_turn_policies` and manual `turn` sections live in the same fil
 ## Download
 
 ```text
-wind get <link> [-o <directory>] [--only <path>]... [--key <key>] [--connectivity auto|relay-only|p2p-only] [--wait-timeout <duration>]
+wind get <link> [-o <directory>] [--only <path>]... [--redownload] [--key <key>] [--connectivity auto|relay-only|p2p-only] [--wait-timeout <duration>]
 ```
 
 - Joins the share, resolves the selected catalog paths (`--only`, repeatable), and writes the result under `-o` (default `.`). A bare link uses `--key` or prompts for the key on stdin.
@@ -75,14 +75,15 @@ wind get <link> [-o <directory>] [--only <path>]... [--key <key>] [--connectivit
 ## Resume
 
 ```text
-wind resume retry -o <directory> [--only <path>]... <link>
+wind resume retry -o <directory> [--operation <id>] [--only <path>]... <link>
 wind resume list -o <directory>
 wind resume discard -o <directory> --item <N>
 ```
 
 - `get` automatically reopens matching progress. `resume retry` uses the same pipeline but refuses to start a new download when no operation matches.
 - Interactive failures show affected paths and offer retry, discard, or exit. Retry keeps the operation and verified ranges. Ctrl+C exits; unattended runs report their retention outcome without prompting.
-- Restart checkpoints survive exit where supported. Live-only destinations warn before transfer: unfinished progress survives retries only while the process stays open. See [native output](native-output.md).
+- `get --redownload` starts a separate task in a collision-safe destination. The original task and its automatic continuation remain intact; `resume retry --operation <id>` selects either task.
+- Delivered files stay completed within a task even after being moved or deleted. Saved partials resume only when their source revision matches. Checkpoints survive normal exit; a crash may lose the latest unsaved ranges. See [native output](native-output.md).
 - `resume list` shows recovery state and blocked items. Capability loss keeps existing operations visible as `needs-attention` with `recovery-unavailable`.
 - `resume discard` re-lists the inventory and confirms the selected operation before removing proven-owned unfinished state. Published and unrecognized files remain.
 

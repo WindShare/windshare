@@ -25,7 +25,7 @@ func runAttempt(ctx context.Context, request Request, deps Dependencies, retaine
 	a := &runner{receiverRecoveryOptions: deps.Recovery, receiverPeerFactory: deps.PeerFactory, receiverDial: deps.ReceiverDial, getOutputFactory: request.Output, control: deps.Control, clock: deps.Clock}
 	a.receiveCapacity = deps.Capacity
 	a.connectivityCapacity = deps.Connectivity
-	input := getRequest{admission: request.Admission, outDir: request.Destination, only: append([]string(nil), request.Only...), link: request.Capability, connectivity: request.Connectivity, waitTimeout: request.WaitTimeout}
+	input := getRequest{admission: request.Admission, operationID: request.OperationID, outDir: request.Destination, only: append([]string(nil), request.Only...), link: request.Capability, connectivity: request.Connectivity, waitTimeout: request.WaitTimeout}
 	startedAt := a.clock.Now()
 	metrics := downloadmetrics.Prepare(a.clock.Now)
 	observation := newObservation(deps.Control, deps.Control.Diagnostics.Enabled(), metrics)
@@ -52,7 +52,7 @@ func runAttempt(ctx context.Context, request Request, deps Dependencies, retaine
 		completed.Value.Elapsed = max(a.clock.Now().Sub(startedAt), 0)
 		completed.Value.Connectivity = metrics.Snapshot(true)
 	}()
-	if request.Capability.Suite != link.SuiteSenderAuthenticated || request.WaitTimeout < 0 || request.Admission > OutputResumeExisting {
+	if request.Capability.Suite != link.SuiteSenderAuthenticated || request.WaitTimeout < 0 || request.Admission > OutputRedownload || !request.OperationID.IsZero() && request.Admission != OutputResumeExisting {
 		step = observation.failCode(stepInvalidRequest, FailureInvalidInput)
 		return
 	}

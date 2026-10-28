@@ -517,6 +517,9 @@ func discoveryCompletionFault(
 }
 
 func (r *jobRun) transferPlannedFile(ctx context.Context, plan plannedFile) error {
+	if handled, err := r.skipDeliveredFile(ctx, plan); handled || err != nil {
+		return err
+	}
 	opened, ready, err := r.openSelectedRevision(ctx, plan)
 	if err != nil || !ready {
 		return err
@@ -586,6 +589,7 @@ func (r *jobRun) transferPlannedFile(ctx context.Context, plan plannedFile) erro
 		)
 	}
 	r.job.progress.addRecoveredVerified(recovered)
+	r.job.progress.replaceRestartReusable(0, fileProgress.persistedBytes)
 	r.traceFileLifecycle(TransferFileAdmitted, plan, nil)
 	completed, err := r.transferMissingRanges(ctx, plan, opened, transaction, &fileProgress)
 	if err != nil || !completed {

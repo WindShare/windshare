@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/diagnostics"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/link"
@@ -28,10 +29,12 @@ type OutputAdmission uint8
 const (
 	OutputCreateOrResume OutputAdmission = iota
 	OutputResumeExisting
+	OutputRedownload
 )
 
 type Request struct {
 	Admission    OutputAdmission
+	OperationID  receivecontract.OperationID
 	Capability   link.Link
 	Only         []string
 	Connectivity ConnectivityPolicy
@@ -90,6 +93,7 @@ func (d Dependencies) normalized() Dependencies {
 
 type getRequest struct {
 	admission    OutputAdmission
+	operationID  receivecontract.OperationID
 	outDir       string
 	only         []string
 	link         link.Link

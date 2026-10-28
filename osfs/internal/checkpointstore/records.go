@@ -18,7 +18,7 @@ import (
 
 const (
 	// The ordinary operation envelope is the largest record installed through
-	// this engine; FileCheckpointV2 remains below the same explicit bound.
+	// this engine; file checkpoints remain below the same explicit bound.
 	maxRepositoryRecordBytes = checkpointmodel.MaximumOrdinaryOperationRecordBytesV1
 	ShardLimit               = checkpointmodel.CheckpointShardBuckets + 1
 	EntryLimit               = checkpointmodel.MaxCheckpointRecordsPerOperation + 1
@@ -265,7 +265,7 @@ func installCreatedCandidate(
 	temporaryName string,
 	temporary outputcap.MutableFile,
 ) error {
-	target, linkErr := directory.LinkFileNoReplace(temporary, targetName)
+	target, linkErr := installFileNoReplace(directory, temporary, targetName)
 	if errors.Is(linkErr, outputcap.ErrNamespaceCollision) {
 		return errors.Join(closeFile(target),
 			settleCreateCollision(directory, targetName, encoded, temporaryName, temporary))

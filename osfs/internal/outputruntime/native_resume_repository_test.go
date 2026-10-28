@@ -774,13 +774,8 @@ func TestCheckpointReconciliationTraceIsTerminalAndOncePerAttempt(t *testing.T) 
 				}
 			}),
 		)
-		if len(events) != 1 || events[0].Failed ||
-			events[0].RuntimeComponent != FilesystemOutputRuntimeCheckpoint ||
-			events[0].RuntimeOperation != FilesystemOutputRuntimeReconcileCheckpoints ||
-			events[0].RuntimeDecision != FilesystemOutputRuntimeReconciled ||
-			events[0].ReceiveOperationID != reopened.intent.OperationID() ||
-			events[0].SessionID.IsZero() {
-			t.Fatalf("get reconciliation events = %+v", events)
+		if len(events) != 0 {
+			t.Fatalf("ordinary reopen enumerated checkpoints: %+v", events)
 		}
 		pauseOrdinaryResumeFixture(t, reopened)
 	})
@@ -825,7 +820,7 @@ func TestCheckpointReconciliationTraceIsTerminalAndOncePerAttempt(t *testing.T) 
 	})
 }
 
-func TestCheckpointReconciliationFailureTraceIsTerminalAndOnceForBothPaths(t *testing.T) {
+func TestExplicitInventoryTracesFailureDeferredByOrdinaryReopen(t *testing.T) {
 	root := newRuntimeTestRootSpec(t).path
 	initial := openOrdinaryResumeSession(t, root, 0xb1, 4)
 	pauseOrdinaryResumeFixture(t, initial)
@@ -845,13 +840,19 @@ func TestCheckpointReconciliationFailureTraceIsTerminalAndOnceForBothPaths(t *te
 	if err != nil || lookup.Kind() != ActiveLookupReopened {
 		t.Fatalf("get failure lookup = (%d, %v)", lookup.Kind(), err)
 	}
-	if _, err := authority.OpenOperation(context.Background(), lookup.Operation()); err == nil {
-		t.Fatal("get reopen accepted an unobservable checkpoint candidate")
+	session, err := authority.OpenOperation(context.Background(), lookup.Operation())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.PauseTree(context.Background(), transfer.JobPauseInterrupted); err != nil {
+		t.Fatal(err)
 	}
 	if err := authority.Close(); err != nil {
 		t.Fatal(err)
 	}
-	assertFailedCheckpointReconciliationTrace(t, "get", getEvents, initial.intent, false)
+	if len(getEvents) != 0 {
+		t.Fatalf("ordinary reopen enumerated checkpoints: %+v", getEvents)
+	}
 
 	var resumeEvents []FilesystemOutputTrace
 	repository, err := NewNativeResumeRepository(

@@ -8,7 +8,7 @@ import (
 	"syscall"
 
 	"github.com/windshare/windshare/osfs/internal/outputcap"
-	"github.com/windshare/windshare/osfs/internal/outputdarwin"
+	"github.com/windshare/windshare/osfs/internal/outputportable"
 )
 
 func platformMutationToken(file *os.File) (posixMutationToken, error) {
@@ -28,5 +28,5 @@ func platformMutationToken(file *os.File) (posixMutationToken, error) {
 }
 
 func openNativeOutputPlatform(path string, create bool) (outputcap.Platform, error) {
-	return outputdarwin.Open(path, create)
+	return outputportable.Open(path, create)
 }

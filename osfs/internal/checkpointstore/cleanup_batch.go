@@ -72,7 +72,7 @@ func (namespace *cleanupNamespace) close() error {
 	return result
 }
 
-func (namespace *cleanupNamespace) removeOwned(object checkpointmodel.ObjectID, suffix string, private bool) error {
+func (store *FileExecutionStore) removeOwned(namespace *cleanupNamespace, object checkpointmodel.ObjectID, suffix string) error {
 	shardName, name := ownedObjectLocation(object, suffix)
 	directory, err := namespace.shard(shardName)
 	if err != nil || directory == nil {
@@ -88,9 +88,12 @@ func (namespace *cleanupNamespace) removeOwned(object checkpointmodel.ObjectID, 
 	if kind != outputcap.EntryRegularFile {
 		return outputcap.ErrUnsafeNamespace
 	}
-	file, err := directory.OpenObservedFile(name, private)
+	file, err := directory.OpenObservedFile(name, store.stagePolicy == PrivateStage)
 	if err != nil || file == nil {
 		return errors.Join(err, outputcap.ErrUnsafeNamespace, closeFile(file))
+	}
+	if err := store.verifyOwnedRemoval(object, suffix, file); err != nil {
+		return errors.Join(err, file.Close())
 	}
 	removeErr := directory.RemoveFile(name, file)
 	closeErr := file.Close()
@@ -166,7 +169,7 @@ func (store *FileExecutionStore) cleanupBatch(
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if err := phase.namespace.removeOwned(object, phase.suffix, store.stagePolicy == PrivateStage); err != nil {
+			if err := store.removeOwned(phase.namespace, object, phase.suffix); err != nil {
 				return err
 			}
 		}
