@@ -1,0 +1,47 @@
+.portal-hero { position: relative; padding: 60px 0 0; }
+.portal-hero-layout { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr); gap: 64px; align-items: center; }
+.portal-hero-copy { position: relative; min-width: 0; animation: portal-arrive 560ms var(--portal-ease) both; }
+.portal-eyebrow { display: flex; align-items: center; gap: 10px; margin: 0 0 22px; color: var(--portal-accent); font-size: 12px; font-weight: 550; letter-spacing: .05em; }
+.portal-eyebrow > span { width: 24px; height: 1px; background: var(--portal-accent); }
+.portal-hero h1 { margin: 0; font-size: clamp(38px, 4.3vw, 60px); line-height: 1.27; font-weight: 650; letter-spacing: -.05em; text-wrap: balance; }
+.portal-hero h1 > span { color: var(--portal-accent); }
+.portal-hero-subtitle { margin: 20px 0 0; font-size: 15px; line-height: 1.85; color: var(--portal-muted); }
+.portal-hero-assurances { display: flex; align-items: center; gap: 18px; margin-top: 20px; flex-wrap: wrap; }
+.portal-hero-assurances > span { display: inline-flex; align-items: center; gap: 6px; color: var(--portal-muted); font-size: 11px; }
+.portal-hero-assurances svg { color: var(--portal-accent); }
+.portal-console-area { min-width: 0; }
+/* Fixed download dialogs stay outside transformed animation ancestors. */
+.portal-console-card { animation: portal-arrive 640ms 90ms var(--portal-ease) backwards; }
+.portal-console-caption { display: flex; align-items: center; justify-content: space-between; margin: 0 4px 14px; color: var(--portal-dim); font-size: 11px; }
+.portal-downloads-utility { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 13px; }
+.portal-downloads-utility > span { padding-left: 14px; border-left: 1px solid var(--portal-border); color: var(--portal-dim); font-size: 11px; }
+.portal-downloads-utility .downloads-entry { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 8px 4px; color: var(--portal-muted); border: 0; background: transparent; border-radius: 4px; font-family: inherit; font-size: 12px; cursor: pointer; transition: color 160ms; }
+.portal-downloads-utility .downloads-entry:hover { color: var(--portal-accent); }
+.portal-hero-footnote { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-top: 40px; padding: 18px 0; color: var(--portal-dim); border-top: 1px solid var(--portal-border-soft); font-size: 12px; }
+.portal-hero-footnote a { display: inline-flex; align-items: center; gap: 9px; min-height: 44px; color: var(--portal-muted); text-decoration: none; }
+.portal-hero-footnote a:hover { color: var(--portal-accent); }
+
+@media (max-width: 1100px) {
+  .portal-hero-layout { gap: 36px; }
+  .portal-hero { padding-top: 48px; }
+  .portal-hero h1 { font-size: 4.3vw; }
+}
+@media (max-width: 900px) {
+  .portal-hero-layout { grid-template-columns: 1fr; max-width: 620px; margin-inline: auto; gap: 34px; }
+  .portal-hero h1 { font-size: clamp(34px, 6.2vw, 48px); padding-inline-end: 130px; }
+  .portal-hero-footnote { margin-top: 34px; }
+  .portal-console-area { width: 100%; }
+}
+@media (max-width: 600px) {
+  .portal-hero { padding-top: 32px; }
+  .portal-eyebrow { margin-bottom: 18px; font-size: 10px; }
+  .portal-hero h1 { padding-inline-end: 78px; font-size: clamp(24px, 7.4vw, 34px); line-height: 1.36; letter-spacing: -.06em; }
+  .portal-hero-subtitle { margin-top: 18px; font-size: 13px; }
+  .portal-hero-assurances { gap: 12px; margin-top: 18px; }
+  .portal-hero-assurances > span { font-size: 10px; gap: 5px; }
+  .portal-hero-layout { gap: 28px; }
+  .portal-hero-footnote { margin-top: 24px; padding: 12px 0; font-size: 10px; }
+  .portal-downloads-utility { gap: 10px; }
+  .portal-downloads-utility > span { padding-left: 10px; font-size: 10px; }
+}
+@media (max-width: 360px) { .portal-downloads-utility > span { display: none; } }

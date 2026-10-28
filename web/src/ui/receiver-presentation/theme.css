@@ -25,8 +25,7 @@
   --receiver-backdrop: light-dark(#182b2259, #00000099);
   --receiver-highlight: light-dark(#ffffff88, #ffffff44);
 }
-.receiver-shell { color-scheme: light dark; }
-.portal-root { color-scheme: dark; }
+.receiver-shell, .portal-root { color-scheme: inherit; }
 .receiver-shell,
 .detail-sheet {
   color: var(--receiver-ink);

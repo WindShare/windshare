@@ -1,0 +1,44 @@
+.portal-brand-scene { --spirit-look-x: 0px; --spirit-look-y: 0px; position: relative; width: min(100%, 480px); height: 202px; margin: 24px 0 0; }
+.portal-spirit-halo { position: absolute; top: 15px; left: calc(50% - 78px); width: 156px; height: 156px; border-radius: 50%; background: var(--portal-halo); }
+.portal-breeze-lines { position: absolute; inset: 0; width: 100%; height: 180px; stroke: var(--portal-border-strong); stroke-width: 1; }
+.portal-breeze-travel { stroke: var(--portal-accent); stroke-width: 1.5; stroke-dasharray: 20 470; animation: portal-breeze-flow 8s linear infinite; }
+.portal-share-chip, .portal-browser-chip { position: absolute; display: flex; align-items: center; gap: 8px; padding: 13px 15px; border: 1px solid var(--portal-border); border-radius: 12px; background: var(--portal-surface); color: var(--portal-accent); box-shadow: 0 4px 10px var(--portal-shadow); font-size: 11px; }
+.portal-share-chip { top: 60px; left: 1px; transform: rotate(-7deg); animation: portal-paper-drift 8s ease-in-out infinite; }
+.portal-browser-chip { right: 0; top: 56px; transform: rotate(6deg); animation: portal-paper-drift 8s -4s ease-in-out infinite reverse; }
+.portal-mascot-parallax { position: absolute; top: 0; left: calc(50% - 88px); transform: translate(var(--spirit-look-x), var(--spirit-look-y)); transition: transform 500ms var(--portal-ease); z-index: 1; }
+.portal-mascot-button { display: block; width: 176px; height: 176px; border: 0; border-radius: 50%; padding: 0; background: none; cursor: pointer; }
+.portal-spirit-float { display: block; animation: portal-spirit-float 6s ease-in-out infinite; }
+.portal-mascot-button img { width: 100%; height: auto; transition: filter 250ms; }
+.portal-mascot-button:hover img { filter: drop-shadow(0 3px 0 var(--portal-shadow)); }
+.portal-spirit-shadow { position: absolute; top: 168px; left: calc(50% - 37px); width: 74px; height: 7px; border-radius: 50%; background: var(--portal-border); opacity: .65; animation: portal-spirit-shadow 6s ease-in-out infinite; }
+.portal-brand-scene figcaption { position: absolute; bottom: 0; left: 0; width: 100%; display: flex; align-items: center; justify-content: center; gap: 7px; color: var(--portal-dim); font-size: 10px; }
+.portal-greeting { position: absolute; z-index: 2; top: -12px; left: 50%; transform: translateX(-50%); width: max-content; max-width: 230px; padding: 8px 12px; border: 1px solid var(--portal-border-strong); border-radius: 12px 12px 12px 3px; background: var(--portal-surface); color: var(--portal-text); font-size: 11px; opacity: 0; pointer-events: none; transition: opacity 180ms; }
+.portal-brand-scene[data-greeting="true"] .portal-greeting { opacity: 1; }
+.portal-brand-scene[data-greeting="true"] .portal-mascot-button img { animation: portal-spirit-hello 650ms var(--portal-ease); }
+/* A quiet page should also be cheap: pause ambient motion offscreen or in a hidden tab. */
+.portal-brand-scene[data-active="false"] * { animation-play-state: paused; }
+
+@keyframes portal-spirit-float { 0%,100% { transform: translateY(0) rotate(-2deg); } 50% { transform: translateY(-7px) rotate(2deg); } }
+@keyframes portal-paper-drift { 50% { translate: 0 -4px; } }
+@keyframes portal-spirit-shadow { 50% { transform: scaleX(.84); opacity: .35; } }
+@keyframes portal-breeze-flow { to { stroke-dashoffset: -490; } }
+@keyframes portal-spirit-hello { 0%,100% { transform: rotate(0); } 30% { transform: rotate(-10deg) translateY(-5px); } 65% { transform: rotate(7deg); } }
+
+@media (max-width: 1100px) {
+  .portal-share-chip, .portal-browser-chip { padding: 12px 10px; font-size: 10px; gap: 5px; }
+  .portal-share-chip svg, .portal-browser-chip svg { width: 18px; }
+}
+@media (max-width: 900px) {
+  .portal-brand-scene { position: absolute; top: 30px; right: -8px; width: 128px; height: 128px; margin: 0; }
+  .portal-brand-scene > :not(.portal-mascot-parallax, .portal-greeting) { display: none; }
+  .portal-mascot-parallax { left: 0; }
+  .portal-mascot-button { width: 128px; height: 128px; }
+  .portal-greeting { left: auto; right: 0; transform: none; top: -10px; max-width: 220px; }
+}
+@media (max-width: 600px) {
+  .portal-brand-scene { top: 35px; right: -6px; width: 86px; height: 86px; }
+  .portal-mascot-button { width: 86px; height: 86px; }
+  .portal-greeting { top: -22px; max-width: 190px; font-size: 10px; }
+}
+@media (prefers-reduced-motion: reduce) { .portal-mascot-parallax { transform: none; } }
+:root[data-motion="reduced"] .portal-mascot-parallax { transform: none; }
