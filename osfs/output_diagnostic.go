@@ -25,7 +25,7 @@ func (value FilesystemOutputRuntimeComponent) DiagnosticName() string {
 	return names[value]
 }
 func (value FilesystemOutputRuntimeOperation) DiagnosticName() string {
-	names := [...]string{"", "open_direct_tree", "acquire_operation_lease", "reconcile_checkpoints", "admit_directory", "finalize_directory", "begin_file", "write_range", "checkpoint_file", "commit_file", "pause_file", "retire_file", "pause_tree", "finalize_tree", "materialize_directory", "create_owned_file", "recover_file", "publish_file", "quarantine_file", "admit_destination", "first_write", "cleanup"}
+	names := [...]string{"", "open_direct_tree", "acquire_operation_lease", "reconcile_checkpoints", "admit_directory", "finalize_directory", "begin_file", "write_range", "checkpoint_file", "commit_file", "pause_file", "retire_file", "pause_tree", "finalize_tree", "materialize_directory", "create_owned_file", "recover_file", "publish_file", "quarantine_file", "admit_destination", "first_write", "cleanup", "delivery_receipt", "release_live_file", "live_retention"}
 	if int(value) >= len(names) {
 		return "unknown_" + strconv.FormatUint(uint64(value), 10)
 	}
@@ -78,7 +78,8 @@ func (v FilesystemOutputTrace) DiagnosticRecord() diagnostics.Record {
 		"node_claim_count":    diagnostics.Uint(v.NodeClaimCount), "directory_claim_count": diagnostics.Uint(v.DirectoryClaimCount),
 		"file_claim_count": diagnostics.Uint(v.FileClaimCount), "active_file_claim_count": diagnostics.Uint(v.ActiveFileClaimCount),
 		"reserved_file_slot_count": diagnostics.Uint(v.ReservedFileSlotCount), "directory_metadata_bytes": diagnostics.Uint(v.DirectoryMetadataBytes),
-		"checkpoint_record_count": diagnostics.Uint(v.CheckpointRecordCount),
+		"checkpoint_record_count":  diagnostics.Uint(v.CheckpointRecordCount),
+		"retained_live_file_count": diagnostics.Uint(v.RetainedLiveFileCount),
 	}
 	if v.RuntimeOperation == FilesystemOutputRuntimeWriteRange || v.RuntimeOperation == FilesystemOutputRuntimeFirstWrite {
 		f["write_offset"] = diagnostics.Uint(v.WriteOffset)

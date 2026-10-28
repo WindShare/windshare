@@ -53,6 +53,15 @@ func settlementMetadataWarnings(warnings []MetadataWarning) []transfer.FileMetad
 	return result
 }
 
+type liveFileState uint8
+
+const (
+	liveFileOpen liveFileState = iota + 1
+	liveFileSuspended
+	liveFileDelivered
+	liveFileReleased
+)
+
 // livePartialFileStrategy uses the admitted stage lifecycle for cleanup while
 // keeping all range progress scoped to its retained native file.
 type livePartialFileStrategy struct {
@@ -65,8 +74,7 @@ type livePartialFileStrategy struct {
 	mu         sync.Mutex
 	written    content.RangeSet
 	generation transfer.CheckpointGeneration
-	closed     bool
-	published  bool
+	state      liveFileState
 	parent     outputcap.Directory
 	warnings   []MetadataWarning
 }
@@ -163,7 +171,7 @@ func NewLivePartialFileTransaction(
 	ranges, _ := content.NewRangeSet(nil)
 	strategy := &livePartialFileStrategy{
 		materialization: file, destination: destination, file: owned,
-		binding: binding, cleanup: cleanup, written: ranges,
+		binding: binding, cleanup: cleanup, written: ranges, state: liveFileOpen,
 	}
 	return WrapPartialFileTransaction(strategy)
 }
@@ -271,7 +279,7 @@ func (transaction *livePartialFileStrategy) Commit(ctx context.Context) (transfe
 			_ = transaction.close(false)
 			return transfer.FileSettlement{}, settlementErr
 		}
-		transaction.closed = true
+		transaction.state = liveFileSuspended
 		return settlement, nil
 	}
 	if final.Condition() != FinalOwnedAtExpectedSize {
@@ -285,7 +293,7 @@ func (transaction *livePartialFileStrategy) Commit(ctx context.Context) (transfe
 	if err == nil {
 		settlement, err = settlement.WithMetadataWarnings(settlementMetadataWarnings(transaction.warnings))
 	}
-	transaction.closed, transaction.published = true, true
+	transaction.state = liveFileDelivered
 	return settlement, err
 }
 
@@ -295,7 +303,7 @@ func (transaction *livePartialFileStrategy) blockPublicationLocked() (transfer.F
 	)
 	// The operation retains the exact stage so a later attempt can reconcile
 	// publication without inventing ownership from a path or downloading again.
-	transaction.closed = true
+	transaction.state = liveFileSuspended
 	return settlement, err
 }
 
@@ -320,7 +328,7 @@ func (transaction *livePartialFileStrategy) Pause(
 		_ = transaction.close(false)
 		return transfer.FileSettlement{}, err
 	}
-	transaction.closed = true
+	transaction.state = liveFileSuspended
 	return settlement, nil
 }
 
@@ -348,7 +356,7 @@ func (transaction *livePartialFileStrategy) Retire(
 }
 
 func (transaction *livePartialFileStrategy) validateOpen(ctx context.Context) error {
-	if transaction == nil || ctx == nil || transaction.closed || transaction.file == nil || transaction.destination == nil {
+	if transaction == nil || ctx == nil || transaction.state != liveFileOpen || transaction.file == nil || transaction.destination == nil {
 		return fileContractError(ErrTransactionClosed)
 	}
 	return ctx.Err()
@@ -358,7 +366,7 @@ func (transaction *livePartialFileStrategy) close(remove bool) error {
 	if transaction.file == nil {
 		return nil
 	}
-	transaction.closed = true
+	transaction.state = liveFileReleased
 	var cleanupErr error
 	if remove {
 		cleanupErr = transaction.cleanup(transaction.file)
