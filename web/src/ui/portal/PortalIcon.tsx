@@ -2,6 +2,7 @@ const paths = {
   sun: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm0-6v2m0 16v2M2 12h2m16 0h2M5 5l1 1m12 12 1 1M5 19l1-1M18 6l1-1',
   moon: 'M20.5 14A9 9 0 0 1 10 3.5 9 9 0 1 0 20.5 14Z',
   arrow: 'M5 12h14m-5-5 5 5-5 5',
+  chevronDown: 'm6 9 6 6 6-6',
   download: 'M12 3v12m-5-5 5 5 5-5M5 16v4h14v-4',
   terminal: 'm4 5 6 6-6 6m9 2h7',
   monitor: 'M4 3h16a1 1 0 0 1 1 1v12H3V4a1 1 0 0 1 1-1ZM8 21h8m-4-5v5',

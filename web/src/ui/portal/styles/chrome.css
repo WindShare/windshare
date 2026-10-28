@@ -1,11 +1,12 @@
 .portal-header {
+  --portal-header-height: 84px;
   position: sticky;
   top: 0;
   z-index: 20;
   border-bottom: 1px solid var(--portal-border-soft);
   background: var(--portal-header);
 }
-.portal-header-inner { display: flex; align-items: center; justify-content: space-between; gap: 24px; min-height: 84px; }
+.portal-header-inner { display: flex; align-items: center; justify-content: space-between; gap: 24px; min-height: var(--portal-header-height); }
 .portal-brand { display: inline-flex; align-items: center; gap: 10px; color: var(--portal-text); text-decoration: none; font-size: 21px; font-weight: 650; letter-spacing: -.6px; }
 .portal-brand img { transition: transform 240ms var(--portal-ease); }
 .portal-brand:hover img { transform: rotate(-7deg); }
@@ -15,11 +16,8 @@
 .portal-header-actions { display: flex; align-items: center; gap: 12px; }
 .portal-repository-link { font-size: 12px; gap: 8px; }
 .portal-open-source { padding-left: 8px; border-left: 1px solid var(--portal-border); color: var(--portal-dim); font-size: 11px; }
-.portal-mobile-nav { display: none; position: relative; }
-.portal-mobile-nav summary { display: grid; place-items: center; width: 44px; height: 44px; border: 1px solid var(--portal-border); border-radius: 8px; cursor: pointer; list-style: none; }
-.portal-mobile-nav summary::-webkit-details-marker { display: none; }
-.portal-mobile-nav[open] summary { background: var(--portal-surface-raised); color: var(--portal-accent); }
-.portal-mobile-links { position: absolute; top: calc(100% + 12px); right: 0; width: min(280px, calc(100vw - 40px)); padding: 8px; border: 1px solid var(--portal-border); border-radius: 10px; background: var(--portal-surface); box-shadow: 0 12px 24px var(--portal-shadow); }
+.portal-mobile-nav { display: none; }
+.portal-mobile-nav > .portal-popover-panel { padding: 8px; }
 .portal-mobile-links a { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; padding: 10px 12px; color: var(--portal-text); text-decoration: none; font-size: 14px; border-radius: 6px; }
 .portal-mobile-links a:hover { background: var(--portal-surface-raised); }
 
@@ -42,7 +40,7 @@
 @media (max-width: 900px) {
   .portal-nav { display: none; }
   .portal-mobile-nav { display: block; }
-  .portal-header-inner { min-height: 74px; }
+  .portal-header { --portal-header-height: 74px; }
 }
 @media (max-width: 600px) {
   .portal-brand { font-size: 19px; gap: 7px; }
