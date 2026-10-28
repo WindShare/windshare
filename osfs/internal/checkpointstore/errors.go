@@ -307,9 +307,36 @@ func classifyError(err error) ErrorCode {
 	}
 }
 
-// ErrorCodeFor projects raw provider failures into checkpointstore's closed
-// storage vocabulary. Resume authority maps this value into policy without
-// inspecting platform-specific error strings.
+// ErrorCodeFor preserves the classification supplied by an immediate storage
+// boundary. Reclassifying its diagnostic cause could turn record corruption
+// into a destination-wide I/O failure, or hide an explicitly reported I/O fault.
+// Only failures without a direct classification use provider-cause inference.
 func ErrorCodeFor(err error) ErrorCode {
+	if existing, ok := admitExactError[*Error](err); ok {
+		if code := existing.Code(); code.Valid() {
+			return code
+		}
+		return ErrorStateIO
+	}
+	if existing, ok := admitExactError[*transferfault.BoundaryError](err); ok {
+		code, checkpoint := existing.Fault().CheckpointCode()
+		if !checkpoint {
+			return ErrorStateIO
+		}
+		switch code {
+		case transferfault.CheckpointBusy:
+			return ErrorBusy
+		case transferfault.CheckpointCorruptRecord:
+			return ErrorCorruptRecord
+		case transferfault.CheckpointUnsafeInstall:
+			return ErrorUnsafeInstall
+		case transferfault.CheckpointOwnershipMismatch:
+			return ErrorOwnershipMismatch
+		case transferfault.CheckpointStateIO:
+			return ErrorStateIO
+		default:
+			return ErrorStateIO
+		}
+	}
 	return classifyError(err)
 }
