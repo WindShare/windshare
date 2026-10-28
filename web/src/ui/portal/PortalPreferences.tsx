@@ -35,11 +35,6 @@ export function PortalPreferences() {
           <span><PortalIcon name={option.icon} size={18} />{t[option.value]}</span>
         </label>)}</div>
       </fieldset>
-      <label className="portal-motion-control"><span>{t.reduceMotion}</span>
-        <input type="checkbox" checked={preferences.motion === 'reduced'}
-          onChange={event => preferences.update({ motion: event.target.checked ? 'reduced' : 'system' })} />
-      </label>
-      <p>{t.motionHint}</p>
     </div>
   </details>
 }

@@ -64,5 +64,12 @@ body:has(.portal-root) { min-width: 0; }
   .portal-root :where(section[id], .portal-console-card) { scroll-margin-top: 90px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .portal-root *, .portal-root *::before, .portal-root *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  /* Children inherit the root's intermediate theme colors unless its transition is also disabled. */
+  :is(.portal-root, .portal-root *),
+  :is(.portal-root, .portal-root *)::before,
+  :is(.portal-root, .portal-root *)::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
 }

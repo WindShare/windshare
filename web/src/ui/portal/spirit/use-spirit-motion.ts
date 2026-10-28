@@ -1,12 +1,10 @@
 import { useEffect, useRef } from 'react'
-import { usePreferences } from '../../preferences/use-preferences'
 import { createSpiritMotion, pointerPose, type SpiritPose } from './motion'
 
 const MILLISECONDS_PER_SECOND = 1000
 const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)'
 
 export function useSpiritMotion() {
-  const { motion: motionPreference } = usePreferences()
   const scene = useRef<HTMLElement>(null)
   const mascot = useRef<HTMLButtonElement>(null)
 
@@ -19,7 +17,7 @@ export function useSpiritMotion() {
     let visible = false
     let frame: number | null = null
     let lastTime = 0
-    const available = () => visible && !document.hidden && !reducedMotion.matches && motionPreference !== 'reduced'
+    const available = () => visible && !document.hidden && !reducedMotion.matches
     const paint = (pose: SpiritPose) => {
       element.style.setProperty('--spirit-x', `${pose.x}px`)
       element.style.setProperty('--spirit-y', `${pose.y}px`)
@@ -94,7 +92,7 @@ export function useSpiritMotion() {
       window.removeEventListener('scroll', release, true)
       reset()
     }
-  }, [motionPreference])
+  }, [])
 
   return { scene, mascot }
 }

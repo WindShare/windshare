@@ -17,8 +17,6 @@ export const zh: typeof en = {
   system: '跟随系统',
   light: '亮色',
   dark: '暗色',
-  reduceMotion: '减少动画',
-  motionHint: '始终尊重系统的减少动态效果设置。',
   eyebrow: '一点轻盈，让彼此更近。',
   titleFirst: '文件在你手里。',
   titleSecond: '分享，如风而至。',

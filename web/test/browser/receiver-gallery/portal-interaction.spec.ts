@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('windshare.ui.preferences',
-    JSON.stringify({ language: 'zh-CN', appearance: 'system', motion: 'system' })))
+    JSON.stringify({ language: 'zh-CN', appearance: 'system' })))
 })
 
 test('keyboard tabs preserve a receive draft and keep one tab in the tab order', async ({ page }) => {

@@ -37,26 +37,32 @@ test('system appearance updates live while an explicit choice persists and style
   await expect.poll(foreground).toBe(dark)
 })
 
-test('motion preference stops animation while the mascot remains interactive', async ({ page }) => {
+test('system reduced motion disables transitions and animations while keeping the mascot interactive', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'no-preference' })
   await page.goto('/')
-  const runningAnimations = () => page.evaluate(() => document.getAnimations().filter(animation => {
-    const target = (animation.effect as KeyframeEffect | null)?.target
-    return target instanceof Element && target.closest('main') && animation.playState === 'running'
-  }).length)
+  const runningAnimations = () => page.evaluate(() =>
+    document.getAnimations().filter(animation => animation.playState === 'running').length)
   await expect.poll(runningAnimations).toBeGreaterThan(0)
-  await page.getByLabel('Appearance & language').click()
-  await page.getByRole('checkbox', { name: 'Reduce motion' }).check()
+  await page.emulateMedia({ reducedMotion: 'reduce' })
   await expect.poll(runningAnimations).toBe(0)
-  await page.keyboard.press('Escape')
+  // Idle transitions still run on the next interaction; include ancestors of the main landmark.
+  await expect.poll(() => page.evaluate(() => {
+    for (const element of document.querySelectorAll('*')) {
+      for (const pseudo of [null, '::before', '::after']) {
+        const style = getComputedStyle(element, pseudo)
+        if (style.animationName !== 'none' || style.transitionDuration.split(',').some(duration => parseFloat(duration) !== 0)) {
+          return { tag: element.tagName, pseudo, animation: style.animationName, transition: style.transitionDuration }
+        }
+      }
+    }
+    return null
+  })).toBeNull()
   const mascot = page.getByRole('figure').getByRole('button')
   await mascot.click()
   await expect(mascot).toBeFocused()
   await expect.poll(runningAnimations).toBe(0)
-  await page.getByLabel('Appearance & language').click()
-  await page.emulateMedia({ reducedMotion: 'reduce' })
-  await page.getByRole('checkbox', { name: 'Reduce motion' }).uncheck()
-  await expect.poll(runningAnimations).toBe(0)
+  await page.emulateMedia({ reducedMotion: 'no-preference' })
+  await expect.poll(runningAnimations).toBeGreaterThan(0)
 })
 
 test('both languages keep navigation and settings within narrow viewports', async ({ page }) => {

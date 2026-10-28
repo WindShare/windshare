@@ -15,8 +15,6 @@ export const en = {
   system: 'System',
   light: 'Light',
   dark: 'Dark',
-  reduceMotion: 'Reduce motion',
-  motionHint: 'Your system motion preference is always respected.',
   eyebrow: 'A little breeze. A closer connection.',
   titleFirst: 'Your files.',
   titleSecond: 'Free as a breeze.',
