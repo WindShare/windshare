@@ -9,12 +9,12 @@ import (
 func TestOrdinaryOutputPolicyV1IsFrozen(t *testing.T) {
 	if OrdinaryOutputPolicyVersion != 1 ||
 		MaximumResultNameReservationAttemptsV1 != 32 ||
-		MaximumLiveCleanupTicketsV1 != 256 {
+		MaximumLiveCleanupTicketsPerBindV1 != 256 {
 		t.Fatalf(
 			"policy version/limits = %d/%d/%d",
 			OrdinaryOutputPolicyVersion,
 			MaximumResultNameReservationAttemptsV1,
-			MaximumLiveCleanupTicketsV1,
+			MaximumLiveCleanupTicketsPerBindV1,
 		)
 	}
 	budget := DefaultShapeProbeBudgetV1

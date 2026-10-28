@@ -52,7 +52,6 @@ const (
 	CapabilityReasonUnverifiableOperationRecovery
 	CapabilityReasonUnverifiableRangeRecovery
 	CapabilityReasonUnverifiableCrashCleanup
-	CapabilityReasonCleanupJournalOverflow
 	CapabilityReasonCleanupOwnershipUnknown
 )
 
@@ -82,8 +81,6 @@ func (reason CapabilityReason) String() string {
 		return "range-recovery-unverifiable"
 	case CapabilityReasonUnverifiableCrashCleanup:
 		return "crash-cleanup-unverifiable"
-	case CapabilityReasonCleanupJournalOverflow:
-		return "cleanup-journal-overflow"
 	case CapabilityReasonCleanupOwnershipUnknown:
 		return "cleanup-ownership-unknown"
 	default:
@@ -309,7 +306,10 @@ type Directory interface {
 	Close() error
 	Duplicate() (Directory, error)
 	Sync() error
+	// Names requires a complete enumeration within the limit. ReadNameBatch
+	// permits a larger namespace while bounding the returned work.
 	Names(limit int) ([]string, error)
+	ReadNameBatch(limit int) (DirectoryNameBatch, error)
 	ObserveEntry(name string) (EntryKind, error)
 	ClassifyExactEntry(name string) (EntryKind, bool, error)
 	OpenEntry(name string) (CurrentEntryReference, error)
@@ -336,6 +336,14 @@ type Directory interface {
 	ReplacePrivateFile(source FileIdentity, name string) error
 	RemoveFile(name string, expected FileIdentity) error
 	AcquireLock(name string, existingOnly bool) (Lock, bool, error)
+}
+
+// DirectoryNameBatch starts at the beginning of a fresh handle-relative scan.
+// Removing returned entries advances subsequent batches without persisting a
+// filesystem cursor. Names are locators; each mutation still requires ownership.
+type DirectoryNameBatch struct {
+	Names   []string
+	HasMore bool
 }
 
 // PublicEntryNamesValidator lets a native directory resolve a complete

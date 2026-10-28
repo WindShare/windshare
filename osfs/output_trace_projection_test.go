@@ -5,6 +5,7 @@ import (
 
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
+	"github.com/windshare/windshare/osfs/internal/outputcap"
 	"github.com/windshare/windshare/osfs/internal/outputruntime"
 )
 
@@ -274,6 +275,10 @@ func TestOutputTraceProjectionCopiesNativeRuntimePayload(t *testing.T) {
 		CheckpointRecordCount:             14,
 		CheckpointReclaimedCandidateCount: 2,
 		RetainedLiveFileCount:             15,
+		DestinationBindingID:              outputcap.DestinationBindingID{16},
+		LiveCleanupTicketCount:            256,
+		LiveCleanupReclaimedTicketCount:   255,
+		LiveCleanupHasMore:                true,
 		FailureStage:                      outputruntime.FilesystemOutputFailureNativeDurability,
 		ReconciliationStep:                outputruntime.FilesystemCheckpointStageDurability,
 		NativeErrorClass:                  outputruntime.FilesystemNativeErrorAccessDenied,
@@ -306,6 +311,10 @@ func TestOutputTraceProjectionCopiesNativeRuntimePayload(t *testing.T) {
 		CheckpointRecordCount:             14,
 		CheckpointReclaimedCandidateCount: 2,
 		RetainedLiveFileCount:             15,
+		DestinationBindingID:              event.DestinationBindingID,
+		LiveCleanupTicketCount:            event.LiveCleanupTicketCount,
+		LiveCleanupReclaimedTicketCount:   event.LiveCleanupReclaimedTicketCount,
+		LiveCleanupHasMore:                event.LiveCleanupHasMore,
 		FailureStage:                      FilesystemOutputFailureNativeDurability,
 		ReconciliationStep:                FilesystemCheckpointStageDurability,
 		NativeErrorClass:                  FilesystemNativeErrorAccessDenied,

@@ -10,6 +10,8 @@ Scheduling uses accepted ranges. Restart-reusable progress includes only persist
 
 `get` automatically continues a matching task. `get --redownload` reserves a separate, collision-safe destination and leaves the original continuation target intact; both tasks may occupy disk space. `resume retry --operation <id>` selects either task. Changed revisions and uncertain partials block only affected files. Task-owned checkpoint write remnants are reclaimed automatically; discard also removes owned unfinished data, preserving published or unrecognized files.
 
+Live-only files release their stages on delivery. On supported roots, crash cleanup drains a bounded batch at each destination bind; a backlog does not disable cleanup. Unrecognized objects are preserved.
+
 Shared owners: `destinationauthority` (reservations), `outputruntime` (task lifetime), `outputsession` (attempt settlement), `fileexecution` (file lifecycle), `checkpointstore` (records), and `resumeauthority` (inventory and discard). Strong native identity adapters remain available as optional evidence.
 
 See [CLI recovery](cli.md#resume) and [validation](validation.md).

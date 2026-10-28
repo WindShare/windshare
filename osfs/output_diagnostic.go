@@ -88,6 +88,11 @@ func (v FilesystemOutputTrace) DiagnosticRecord() diagnostics.Record {
 	if v.CheckpointReclaimedCandidateCount != 0 {
 		f["checkpoint_reclaimed_candidate_count"] = diagnostics.Uint(v.CheckpointReclaimedCandidateCount)
 	}
+	if v.RuntimeOperation == FilesystemOutputRuntimeAdmitDestination {
+		f["live_cleanup_ticket_count"] = diagnostics.Uint(v.LiveCleanupTicketCount)
+		f["live_cleanup_reclaimed_ticket_count"] = diagnostics.Uint(v.LiveCleanupReclaimedTicketCount)
+		f["live_cleanup_has_more"] = diagnostics.Bool(v.LiveCleanupHasMore)
+	}
 	if v.CheckpointAttentionCount != 0 {
 		f["checkpoint_attention_code"] = diagnostics.Text(v.CheckpointAttentionCode)
 		f["checkpoint_attention_count"] = diagnostics.Uint(v.CheckpointAttentionCount)
@@ -106,6 +111,9 @@ func (v FilesystemOutputTrace) DiagnosticRecord() diagnostics.Record {
 		})
 	}
 	correlation := diagnostics.Fields{}
+	if !v.DestinationBindingID.IsZero() {
+		correlation["destination_binding_id"] = diagnostics.Identity(v.DestinationBindingID.Bytes())
+	}
 	if !v.FileID.IsZero() {
 		correlation["file_id"] = diagnostics.Identity(v.FileID.Bytes())
 	}

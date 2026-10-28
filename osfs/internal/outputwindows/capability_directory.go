@@ -76,6 +76,14 @@ func (directory *windowsOutputDirectory) Names(limit int) ([]string, error) {
 	return names, windowsOutputError(err)
 }
 
+func (directory *windowsOutputDirectory) ReadNameBatch(limit int) (outputcap.DirectoryNameBatch, error) {
+	if directory == nil || directory.native == nil {
+		return outputcap.DirectoryNameBatch{}, outputcap.ErrUnsafeNamespace
+	}
+	batch, err := directory.native.readNameBatch(limit, func(string) bool { return true })
+	return batch, windowsOutputError(err)
+}
+
 func (directory *windowsOutputDirectory) ObserveEntry(name string) (outputcap.EntryKind, error) {
 	if directory == nil || directory.native == nil {
 		return outputcap.EntryAbsent, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows directory authority is closed"))

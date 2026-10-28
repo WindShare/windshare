@@ -99,20 +99,35 @@ func (directory *windowsDirectory) namesMatching(
 	limit int,
 	include func(string) bool,
 ) ([]string, error) {
+	batch, err := directory.readNameBatch(limit, include)
+	if err == nil && batch.HasMore {
+		err = windowsFailure("enumerate output directory", directory.path, errWindowsOutputUnsafe,
+			errors.New("directory exceeds its declared entry bound"))
+	}
+	if err != nil {
+		return nil, err
+	}
+	return batch.Names, nil
+}
+
+func (directory *windowsDirectory) readNameBatch(
+	limit int,
+	include func(string) bool,
+) (outputcap.DirectoryNameBatch, error) {
 	const operation = "enumerate output directory"
 	if limit < 0 || include == nil {
-		return nil, windowsFailure(operation, "", errWindowsOutputUnsafe,
+		return outputcap.DirectoryNameBatch{}, windowsFailure(operation, "", errWindowsOutputUnsafe,
 			errors.New("enumeration bound or filter is invalid"))
 	}
 	if err := directory.usable(); err != nil {
-		return nil, err
+		return outputcap.DirectoryNameBatch{}, err
 	}
 	if err := directory.verify(false); err != nil {
-		return nil, err
+		return outputcap.DirectoryNameBatch{}, err
 	}
 
 	if directory.enumerate == nil {
-		return nil, windowsFailure(operation, directory.path, errWindowsOutputUnsafe,
+		return outputcap.DirectoryNameBatch{}, windowsFailure(operation, directory.path, errWindowsOutputUnsafe,
 			errors.New("directory enumeration authority is absent"))
 	}
 	directory.enumerate.Lock()
@@ -120,6 +135,8 @@ func (directory *windowsDirectory) namesMatching(
 	names := make([]string, 0, min(limit, 16))
 	restart := uintptr(1)
 	buffer := make([]byte, windowsDirectoryReadBufferBytes)
+	hasMore := false
+scan:
 	for {
 		var status windows.IO_STATUS_BLOCK
 		rawStatus, _, _ := windowsNtQueryDirectoryFile.Call(
@@ -141,40 +158,40 @@ func (directory *windowsDirectory) namesMatching(
 			break
 		}
 		if nativeStatus != 0 {
-			return nil, windowsNativeOperationFailure(operation, directory.path, nativeStatus.Errno())
+			return outputcap.DirectoryNameBatch{}, windowsNativeOperationFailure(operation, directory.path, nativeStatus.Errno())
 		}
 		used := int(status.Information)
 		if used <= 0 || used > len(buffer) {
-			return nil, windowsFailure(operation, directory.path, errWindowsOutputUnsafe,
+			return outputcap.DirectoryNameBatch{}, windowsFailure(operation, directory.path, errWindowsOutputUnsafe,
 				errors.New("directory query returned an invalid byte count"))
 		}
 		batch, err := windowsParseDirectoryNames(buffer[:used])
 		if err != nil {
-			return nil, windowsFailure(operation, directory.path, errWindowsOutputUnsafe, err)
+			return outputcap.DirectoryNameBatch{}, windowsFailure(operation, directory.path, errWindowsOutputUnsafe, err)
 		}
 		for _, name := range batch {
 			if !include(name) {
 				continue
 			}
 			if len(names) == limit {
-				return nil, windowsFailure(operation, directory.path, errWindowsOutputUnsafe,
-					errors.New("directory exceeds its declared entry bound"))
+				hasMore = true
+				break scan
 			}
 			names = append(names, name)
 		}
 		restart = 0
 	}
 	if err := directory.verify(false); err != nil {
-		return nil, err
+		return outputcap.DirectoryNameBatch{}, err
 	}
 	sort.Strings(names)
 	for index := 1; index < len(names); index++ {
 		if stringsEqualFoldExact(names[index-1], names[index]) {
-			return nil, windowsFailure(operation, directory.path, errWindowsOutputUnsafe,
+			return outputcap.DirectoryNameBatch{}, windowsFailure(operation, directory.path, errWindowsOutputUnsafe,
 				errors.New("directory enumeration returned platform-equivalent duplicate names"))
 		}
 	}
-	return names, nil
+	return outputcap.DirectoryNameBatch{Names: names, HasMore: hasMore}, nil
 }
 
 func windowsParseDirectoryNames(buffer []byte) ([]string, error) {

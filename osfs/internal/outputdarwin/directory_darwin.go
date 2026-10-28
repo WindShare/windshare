@@ -130,22 +130,29 @@ func (dir *directory) Sync() error {
 	return dir.file.Sync()
 }
 func (dir *directory) Names(limit int) ([]string, error) {
+	batch, err := dir.ReadNameBatch(limit)
+	if batch.HasMore {
+		err = errors.Join(err, outputcap.ErrUnsafeNamespace)
+	}
+	return batch.Names, err
+}
+
+func (dir *directory) ReadNameBatch(limit int) (outputcap.DirectoryNameBatch, error) {
 	if limit < 0 {
-		return nil, outputcap.ErrUnsafeNamespace
+		return outputcap.DirectoryNameBatch{}, outputcap.ErrUnsafeNamespace
 	}
 	copy, err := dir.Duplicate()
 	if err != nil {
-		return nil, err
+		return outputcap.DirectoryNameBatch{}, err
 	}
 	names, readErr := copy.(*directory).file.Readdirnames(limit + 1)
 	closeErr := copy.Close()
 	if errors.Is(readErr, io.EOF) {
 		readErr = nil
 	}
-	if len(names) > limit {
-		readErr = errors.Join(readErr, outputcap.ErrUnsafeNamespace)
-	}
-	return names, errors.Join(readErr, closeErr)
+	return outputcap.DirectoryNameBatch{
+		Names: names[:min(len(names), limit)], HasMore: len(names) > limit,
+	}, errors.Join(readErr, closeErr)
 }
 func entryKind(mode uint16) outputcap.EntryKind {
 	switch mode & unix.S_IFMT {

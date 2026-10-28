@@ -160,6 +160,20 @@ func (directory *destinationDirectory) Names(limit int) ([]string, error) {
 	}
 	return names, nil
 }
+
+func (directory *destinationDirectory) ReadNameBatch(limit int) (outputcap.DirectoryNameBatch, error) {
+	if limit < 0 {
+		return outputcap.DirectoryNameBatch{}, errDestinationFake
+	}
+	names := make([]string, 0, min(limit, len(directory.node.entries)))
+	for name := range directory.node.entries {
+		if len(names) == limit {
+			return outputcap.DirectoryNameBatch{Names: names, HasMore: true}, nil
+		}
+		names = append(names, name)
+	}
+	return outputcap.DirectoryNameBatch{Names: names}, nil
+}
 func (directory *destinationDirectory) ObserveEntry(name string) (outputcap.EntryKind, error) {
 	kind, _, err := directory.ClassifyExactEntry(name)
 	return kind, err
@@ -414,7 +428,7 @@ func (lock *destinationLock) Close() error {
 }
 
 type destinationJournal struct {
-	snapshot    LiveCleanupSnapshot
+	snapshot    LiveCleanupBatch
 	tickets     map[string]checkpointmodel.LiveCleanupTicket
 	closed      bool
 	order       *[]string
@@ -424,7 +438,7 @@ type destinationJournal struct {
 	deleteErr   error
 }
 
-func (journal *destinationJournal) Snapshot(int) (LiveCleanupSnapshot, error) {
+func (journal *destinationJournal) ReadBatch(int) (LiveCleanupBatch, error) {
 	return journal.snapshot, journal.snapshotErr
 }
 func (journal *destinationJournal) Create(ticket checkpointmodel.LiveCleanupTicket) error {
