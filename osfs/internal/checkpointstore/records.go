@@ -2,14 +2,11 @@ package checkpointstore
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"runtime"
-	"strconv"
 
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
@@ -62,27 +59,6 @@ func OpenShard(parent outputcap.Directory, shard string, create bool) (outputcap
 		return openOrCreateDirectory(parent, shard)
 	}
 	return openExistingDirectory(parent, shard)
-}
-
-func TemporaryName(name string, encoded []byte, attempt int) string {
-	hash := sha256.Sum256(append([]byte(name+"\x00"), encoded...))
-	return ".candidate-" + hex.EncodeToString(hash[:8]) + "-" + strconv.Itoa(attempt)
-}
-
-func IsTemporaryName(name string) bool {
-	return len(name) > len(".candidate-") && name[:len(".candidate-")] == ".candidate-"
-}
-
-// MatchesTemporaryName authenticates an installation candidate by both its
-// deterministic name and exact image. A prefix match alone is never ownership
-// evidence and must not authorize reconciliation.
-func MatchesTemporaryName(candidate, target string, encoded []byte) bool {
-	for attempt := range installationAttempts {
-		if candidate == TemporaryName(target, encoded, attempt) {
-			return true
-		}
-	}
-	return false
 }
 
 func WriteFile(file outputcap.MutableFile, encoded []byte) error {
@@ -192,6 +168,11 @@ func RemoveExactTemporary(directory outputcap.Directory, name string, expected [
 }
 
 func InstallCreate(directory outputcap.Directory, name string, encoded []byte) error {
+	return (recordInstaller{directory: directory, candidates: sharedCandidates}).create(name, encoded)
+}
+
+func (installer recordInstaller) create(name string, encoded []byte) error {
+	directory := installer.directory
 	if directory == nil || name == "" || len(encoded) == 0 || len(encoded) > maxRepositoryRecordBytes {
 		return checkpointmodel.ErrInvalidRecord
 	}
@@ -200,7 +181,7 @@ func InstallCreate(directory outputcap.Directory, name string, encoded []byte) e
 	case err == nil && bytes.Equal(installed, encoded):
 		// A retry can observe the rename from a failed namespace sync. Exact
 		// bytes alone do not make this invocation a durability receipt.
-		return errors.Join(directory.Sync(), reconcileExactCandidates(directory, name, encoded))
+		return errors.Join(directory.Sync(), installer.reconcileExactCandidates(name, encoded))
 	case err == nil:
 		return checkpointmodel.ErrRecordBinding
 	case errors.Is(err, fs.ErrNotExist):
@@ -213,7 +194,7 @@ func InstallCreate(directory outputcap.Directory, name string, encoded []byte) e
 		return err
 	}
 	for attempt := range installationAttempts {
-		temporary, temporaryName, err := prepareInstallationCandidate(directory, name, encoded, attempt)
+		temporary, temporaryName, err := installer.prepareCandidate(name, encoded, attempt)
 		if errors.Is(err, fs.ErrNotExist) || candidateSlotOccupied(err) {
 			// A collision can disappear before it is opened. Advancing to the next
 			// deterministic slot preserves idempotence without trusting the race.
@@ -222,18 +203,18 @@ func InstallCreate(directory outputcap.Directory, name string, encoded []byte) e
 		if err != nil {
 			return err
 		}
-		return installCreatedCandidate(directory, name, encoded, temporaryName, temporary)
+		return installer.installCreatedCandidate(name, encoded, temporaryName, temporary)
 	}
 	return fmt.Errorf("%w: checkpoint temporary allocation exhausted", outputcap.ErrUnsafeNamespace)
 }
 
-func prepareInstallationCandidate(
-	directory outputcap.Directory,
+func (installer recordInstaller) prepareCandidate(
 	targetName string,
 	encoded []byte,
 	attempt int,
 ) (outputcap.MutableFile, string, error) {
-	temporaryName := TemporaryName(targetName, encoded, attempt)
+	directory := installer.directory
+	temporaryName := installer.candidates.name(targetName, encoded, attempt)
 	temporary, err := directory.CreateFile(temporaryName, true, int64(len(encoded)))
 	if errors.Is(err, outputcap.ErrNamespaceCollision) {
 		closeErr := closeFile(temporary)
@@ -258,17 +239,17 @@ func prepareInstallationCandidate(
 	return temporary, temporaryName, nil
 }
 
-func installCreatedCandidate(
-	directory outputcap.Directory,
+func (installer recordInstaller) installCreatedCandidate(
 	targetName string,
 	encoded []byte,
 	temporaryName string,
 	temporary outputcap.MutableFile,
 ) error {
+	directory := installer.directory
 	target, linkErr := installFileNoReplace(directory, temporary, targetName)
 	if errors.Is(linkErr, outputcap.ErrNamespaceCollision) {
 		return errors.Join(closeFile(target),
-			settleCreateCollision(directory, targetName, encoded, temporaryName, temporary))
+			installer.settleCreateCollision(targetName, encoded, temporaryName, temporary))
 	}
 	if errors.Is(linkErr, fs.ErrNotExist) || candidateContention(linkErr) {
 		return errors.Join(
@@ -281,20 +262,20 @@ func installCreatedCandidate(
 	if linkErr != nil {
 		return errors.Join(linkErr, closeFile(target), RemoveTemporary(directory, temporaryName, temporary))
 	}
-	return verifyCreatedTarget(directory, targetName, encoded, temporaryName, temporary, target)
+	return installer.verifyCreatedTarget(targetName, encoded, temporaryName, temporary, target)
 }
 
-func settleCreateCollision(
-	directory outputcap.Directory,
+func (installer recordInstaller) settleCreateCollision(
 	targetName string,
 	encoded []byte,
 	temporaryName string,
 	temporary outputcap.MutableFile,
 ) error {
+	directory := installer.directory
 	cleanupErr := RemoveTemporary(directory, temporaryName, temporary)
 	existing, readErr := ReadFile(directory, targetName)
 	if readErr == nil && bytes.Equal(existing, encoded) {
-		return errors.Join(cleanupErr, reconcileExactCandidates(directory, targetName, encoded))
+		return errors.Join(cleanupErr, installer.reconcileExactCandidates(targetName, encoded))
 	}
 	if candidateContention(readErr) {
 		return errors.Join(outputcap.ErrNamespaceLockBusy, readErr, cleanupErr)
@@ -302,14 +283,14 @@ func settleCreateCollision(
 	return errors.Join(checkpointmodel.ErrRecordBinding, readErr, cleanupErr)
 }
 
-func verifyCreatedTarget(
-	directory outputcap.Directory,
+func (installer recordInstaller) verifyCreatedTarget(
 	targetName string,
 	encoded []byte,
 	temporaryName string,
 	temporary outputcap.MutableFile,
 	target outputcap.ObservedFile,
 ) error {
+	directory := installer.directory
 	closeTargetErr := closeFile(target)
 	syncErr := directory.Sync()
 	actual, readErr := ReadFile(directory, targetName)
@@ -321,7 +302,7 @@ func verifyCreatedTarget(
 	}
 	if readErr == nil && bytes.Equal(actual, encoded) {
 		return errors.Join(closeTargetErr, syncErr, cleanupErr,
-			reconcileExactCandidates(directory, targetName, encoded))
+			installer.reconcileExactCandidates(targetName, encoded))
 	}
 	return errors.Join(
 		outputcap.ErrUnsafeNamespace,
@@ -334,6 +315,11 @@ func verifyCreatedTarget(
 }
 
 func InstallReplace(directory outputcap.Directory, name string, previous, next []byte) error {
+	return (recordInstaller{directory: directory, candidates: sharedCandidates}).replace(name, previous, next)
+}
+
+func (installer recordInstaller) replace(name string, previous, next []byte) error {
+	directory := installer.directory
 	if directory == nil || name == "" || len(previous) == 0 || len(previous) > maxRepositoryRecordBytes ||
 		len(next) == 0 || len(next) > maxRepositoryRecordBytes {
 		return checkpointmodel.ErrInvalidRecord
@@ -343,13 +329,13 @@ func InstallReplace(directory outputcap.Directory, name string, previous, next [
 		return err
 	}
 	if bytes.Equal(current, next) {
-		return errors.Join(directory.Sync(), reconcileExactCandidates(directory, name, next))
+		return errors.Join(directory.Sync(), installer.reconcileExactCandidates(name, next))
 	}
 	if !bytes.Equal(current, previous) {
 		return checkpointmodel.ErrRecordBinding
 	}
 	for attempt := range installationAttempts {
-		temporary, temporaryName, createErr := prepareInstallationCandidate(directory, name, next, attempt)
+		temporary, temporaryName, createErr := installer.prepareCandidate(name, next, attempt)
 		if errors.Is(createErr, fs.ErrNotExist) || candidateSlotOccupied(createErr) {
 			continue
 		}
@@ -362,7 +348,7 @@ func InstallReplace(directory outputcap.Directory, name string, previous, next [
 		current, readErr := ReadFile(directory, name)
 		if readErr == nil && bytes.Equal(current, next) {
 			return errors.Join(RemoveTemporary(directory, temporaryName, temporary),
-				reconcileExactCandidates(directory, name, next))
+				installer.reconcileExactCandidates(name, next))
 		}
 		if readErr != nil || !bytes.Equal(current, previous) {
 			return errors.Join(checkpointmodel.ErrRecordBinding, readErr,
@@ -378,7 +364,7 @@ func InstallReplace(directory outputcap.Directory, name string, previous, next [
 			// this authenticated image.
 			closeErr = closeFile(temporary)
 			return errors.Join(replaceErr, syncErr, closeErr,
-				reconcileExactCandidates(directory, name, next))
+				installer.reconcileExactCandidates(name, next))
 		}
 		if replaceErr == nil {
 			closeErr = closeFile(temporary)
@@ -419,12 +405,13 @@ func InstallReplaceStrict(directory outputcap.Directory, name string, previous, 
 // reconcileExactCandidates removes only deterministic names whose exact image
 // is already installed at the fixed target. Foreign names and foreign bytes are
 // preserved. Cleanup uncertainty cannot revoke the installed target image.
-func reconcileExactCandidates(directory outputcap.Directory, target string, encoded []byte) error {
+func (installer recordInstaller) reconcileExactCandidates(target string, encoded []byte) error {
+	directory := installer.directory
 	if directory == nil || target == "" || len(encoded) == 0 || len(encoded) > maxRepositoryRecordBytes {
 		return checkpointmodel.ErrInvalidRecord
 	}
 	for attempt := range installationAttempts {
-		name := TemporaryName(target, encoded, attempt)
+		name := installer.candidates.name(target, encoded, attempt)
 		kind, exact, err := directory.ClassifyExactEntry(name)
 		if err != nil {
 			return err
@@ -492,8 +479,9 @@ func openExactTemporary(
 		if closeErr := closeFile(file); closeErr != nil {
 			return nil, errors.Join(checkpointmodel.ErrRecordBinding, closeErr)
 		}
-		// Concurrent bootstrap writers can expose the name before writing. An
-		// inexact image is never adopted or removed, even after a process crash.
+		// Concurrent bootstrap writers can expose the name before writing. This
+		// installer cannot adopt an inexact slot; only operation reconciliation
+		// holds the independent ownership needed to reclaim an interrupted image.
 		runtime.Gosched()
 	}
 	mismatchErr := checkpointmodel.ErrRecordBinding

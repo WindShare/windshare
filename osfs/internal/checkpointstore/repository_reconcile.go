@@ -47,7 +47,8 @@ func (attention Attention) Code() AttentionCode { return attention.code }
 
 // Uninstalled images never grant range authority. An interrupted write can leave
 // one unreadable without changing the independently validated fixed record.
-// Keep that object for cleanup attention; it cannot veto recovery of siblings.
+// Owned interrupted images are reclaimed. Unrecognized objects remain visible
+// to cleanup without vetoing recovery of independently validated siblings.
 func (attention Attention) BlocksRecovery() bool {
 	return attention.code != AttentionInvalidCandidate
 }
@@ -61,9 +62,12 @@ func RecoveryBlocked(attention []Attention) bool {
 func (attention Attention) Reference() string { return attention.reference }
 
 type Snapshot struct {
-	records   []checkpointmodel.Record
-	attention []Attention
+	records             []checkpointmodel.Record
+	attention           []Attention
+	reclaimedCandidates uint64
 }
+
+func (snapshot Snapshot) ReclaimedCandidateCount() uint64 { return snapshot.reclaimedCandidates }
 
 func (snapshot Snapshot) Records() []checkpointmodel.Record {
 	return slices.Clone(snapshot.records)
@@ -295,7 +299,7 @@ func (repository *Repository) appendReconciledShardRecords(
 	}
 	slices.Sort(stableNames)
 	for _, name := range stableNames {
-		loaded, err := reconcileCandidateRecord(shard, name, stable[name], witness)
+		loaded, err := repository.reconcileCandidateRecord(shard, name, stable[name], witness)
 		if err != nil {
 			return err
 		}
@@ -309,7 +313,7 @@ func (repository *Repository) appendReconciledShardRecords(
 	return nil
 }
 
-func reconcileCandidateRecord(
+func (repository *Repository) reconcileCandidateRecord(
 	shard outputcap.Directory,
 	name string,
 	loaded storedRecord,
@@ -343,7 +347,7 @@ func reconcileCandidateRecord(
 			reconciliationError(ReconciliationRecordPromotion, err),
 		)
 	}
-	if err := InstallReplace(shard, name, loaded.encoded, promotedEncoded); err != nil {
+	if err := repository.installer(shard).replace(name, loaded.encoded, promotedEncoded); err != nil {
 		return storedRecord{}, repositoryError(
 			"install promoted checkpoint",
 			reconciliationError(ReconciliationRecordPromotion, err),
@@ -403,25 +407,18 @@ func (repository *Repository) reconcileCandidate(
 		// every exact duplicate. Absence already satisfies that cleanup decision.
 		return nil
 	}
-	if !exact || kind != outputcap.EntryRegularFile {
+	candidates := repository.installer(shard).candidates
+	if !exact || kind != outputcap.EntryRegularFile || !candidates.owns(name) {
 		result.attention = append(result.attention, newAttention(AttentionInvalidCandidate, shardName, name))
 		return nil
 	}
-	encoded, err := ReadFile(shard, name)
-	if err != nil {
-		if errors.Is(err, outputcap.ErrUnsafeNamespace) {
-			result.attention = append(result.attention, newAttention(AttentionInvalidCandidate, shardName, name))
-			return nil
-		}
-		return repositoryError("read checkpoint candidate", err)
+	loaded, err := repository.loadCandidateImage(shard, shardName, name, result)
+	if err != nil || !loaded.record.Valid() {
+		return err
 	}
-	candidate, err := checkpointmodel.DecodeRecord(encoded)
-	if err != nil {
-		result.attention = append(result.attention, newAttention(AttentionInvalidCandidate, shardName, name))
-		return nil
-	}
+	candidate, encoded := loaded.record, loaded.encoded
 	targetShard, targetName := recordLocation(candidate.RecordID())
-	if targetShard != shardName || !MatchesTemporaryName(name, targetName, encoded) ||
+	if targetShard != shardName || !candidates.matches(name, targetName, encoded) ||
 		!repository.binding.Matches(candidate, candidate.RecordID()) {
 		result.attention = append(result.attention, newAttention(AttentionInvalidCandidate, shardName, name))
 		return nil
@@ -436,7 +433,7 @@ func (repository *Repository) reconcileCandidate(
 			result.attention = append(result.attention, newAttention(AttentionOrphanedCandidate, shardName, name))
 			return nil
 		}
-		if err := InstallCreate(shard, targetName, encoded); err != nil {
+		if err := repository.installer(shard).create(targetName, encoded); err != nil {
 			return repositoryError("install initial checkpoint candidate", err)
 		}
 		stable[targetName] = storedRecord{record: candidate, encoded: encoded}
@@ -444,7 +441,7 @@ func (repository *Repository) reconcileCandidate(
 		return nil
 	}
 	if bytes.Equal(current.encoded, encoded) {
-		if err := InstallCreate(shard, targetName, encoded); err != nil {
+		if err := repository.installer(shard).create(targetName, encoded); err != nil {
 			return repositoryError("settle duplicate checkpoint candidate", err)
 		}
 		return nil
@@ -466,7 +463,7 @@ func (repository *Repository) reconcileCandidate(
 		result.attention = append(result.attention, newAttention(AttentionConflictingCandidate, shardName, name))
 		return nil
 	}
-	if err := InstallReplace(shard, targetName, current.encoded, encoded); err != nil {
+	if err := repository.installer(shard).replace(targetName, current.encoded, encoded); err != nil {
 		return repositoryError("install checkpoint candidate", err)
 	}
 	stable[targetName] = storedRecord{record: candidate, encoded: encoded}

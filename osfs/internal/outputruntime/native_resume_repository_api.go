@@ -427,7 +427,7 @@ func (lease *NativeResumeLease) ensureFileStoreLocked() (bool, error) {
 		recordCount = store.RecordCount()
 	}
 	lease.runtime.traceCheckpointReconciled(
-		intent, transfer.OutputSessionID{}, recordCount, attention, err,
+		intent, transfer.OutputSessionID{}, recordCount, store.ReclaimedCandidateCount(), attention, err,
 	)
 	if err != nil {
 		primary := diagnoseFilesystemOutputFailure(
