@@ -1,6 +1,7 @@
 package checkpointstore
 
 import (
+	"errors"
 	"io"
 	"io/fs"
 	"slices"
@@ -211,6 +212,16 @@ func (directory *memoryDirectory) Names(limit int) ([]string, error) {
 		names = names[:limit]
 	}
 	return names, nil
+}
+
+func (directory *memoryDirectory) ReadNameBatch(limit int) (outputcap.DirectoryNameBatch, error) {
+	names, err := directory.Names(limit + 1)
+	if err != nil || limit < 0 {
+		return outputcap.DirectoryNameBatch{}, errors.Join(err, outputcap.ErrUnsafeNamespace)
+	}
+	return outputcap.DirectoryNameBatch{
+		Names: names[:min(limit, len(names))], HasMore: len(names) > limit,
+	}, nil
 }
 
 func (directory *memoryDirectory) ObserveEntry(name string) (outputcap.EntryKind, error) {

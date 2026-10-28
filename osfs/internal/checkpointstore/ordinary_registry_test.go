@@ -553,7 +553,7 @@ func TestOperationRegistryAdmissionCandidateRollbackAndAttentionAreExact(t *test
 	}
 }
 
-func TestLiveCleanupJournalBoundedSnapshotAndCompareGeneration(t *testing.T) {
+func TestLiveCleanupJournalBoundedBatchAndCompareGeneration(t *testing.T) {
 	control := newMemoryDirectory()
 	journal, err := OpenLiveCleanupJournal(control)
 	if err != nil {
@@ -568,10 +568,10 @@ func TestLiveCleanupJournalBoundedSnapshotAndCompareGeneration(t *testing.T) {
 	if err := journal.Create(second); err != nil {
 		t.Fatal(err)
 	}
-	if snapshot, err := journal.Snapshot(1); err != nil || snapshot.State != destinationauthority.LiveCleanupScanOverflow || len(snapshot.Tickets) != 0 {
-		t.Fatalf("overflow snapshot = %+v, %v", snapshot, err)
+	if snapshot, err := journal.ReadBatch(1); err != nil || snapshot.State != destinationauthority.LiveCleanupBatchPartial || len(snapshot.Tickets) != 1 {
+		t.Fatalf("partial batch = %+v, %v", snapshot, err)
 	}
-	if snapshot, err := journal.Snapshot(2); err != nil || snapshot.State != destinationauthority.LiveCleanupScanComplete || len(snapshot.Tickets) != 2 {
+	if snapshot, err := journal.ReadBatch(2); err != nil || snapshot.State != destinationauthority.LiveCleanupBatchComplete || len(snapshot.Tickets) != 2 {
 		t.Fatalf("complete snapshot = %+v, %v", snapshot, err)
 	}
 	if syncs := directorySyncCalls(journal.tickets.(*memoryDirectory)); syncs < 2 {
@@ -595,7 +595,7 @@ func TestLiveCleanupJournalBoundedSnapshotAndCompareGeneration(t *testing.T) {
 	}
 
 	journal.tickets.(*memoryDirectory).files["opaque"] = &memoryFileData{bytes: []byte("opaque")}
-	if snapshot, err := journal.Snapshot(2); err != nil || snapshot.State != destinationauthority.LiveCleanupScanUnknown {
+	if snapshot, err := journal.ReadBatch(2); err != nil || snapshot.State != destinationauthority.LiveCleanupBatchUnverifiable {
 		t.Fatalf("unknown snapshot = %+v, %v", snapshot, err)
 	}
 	if _, err := ReadFile(journal.tickets, "opaque"); err != nil {

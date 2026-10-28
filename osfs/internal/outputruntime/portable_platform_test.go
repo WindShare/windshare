@@ -355,6 +355,16 @@ func (directory *portableRuntimeDirectory) Names(limit int) ([]string, error) {
 	return names, nil
 }
 
+func (directory *portableRuntimeDirectory) ReadNameBatch(limit int) (outputcap.DirectoryNameBatch, error) {
+	if limit < 0 {
+		return outputcap.DirectoryNameBatch{}, outputcap.ErrUnsafeNamespace
+	}
+	names, err := directory.Names(limit + 1)
+	return outputcap.DirectoryNameBatch{
+		Names: names[:min(limit, len(names))], HasMore: len(names) > limit,
+	}, err
+}
+
 func (directory *portableRuntimeDirectory) ObserveEntry(name string) (outputcap.EntryKind, error) {
 	kind, _, err := directory.ClassifyExactEntry(name)
 	return kind, err

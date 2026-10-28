@@ -14,10 +14,10 @@ var ErrCleanupOwnershipUnknown = errors.New("cleanup ownership is unknown")
 // registry. They remain untouched while normal recovery retains its authority.
 func bindCleanup(config BindConfig, control, root outputcap.Directory,
 	capabilities outputcap.DestinationCapabilities, profile checkpointmodel.LiveCleanupNativeProfile,
-) (journal LiveCleanupJournalHandle, proof outputcap.Directory, result outputcap.DestinationCapabilities, resultErr error) {
+) (journal LiveCleanupJournalHandle, proof outputcap.Directory, result outputcap.DestinationCapabilities, progress LiveCleanupProgress, resultErr error) {
 	result = capabilities
 	if !capabilities.CrashCleanup().Supported() {
-		return journal, nil, result, validateNativeMethodSets(root, nil, capabilities)
+		return journal, nil, result, progress, validateNativeMethodSets(root, nil, capabilities)
 	}
 	defer func() {
 		uncertain := errors.Is(resultErr, ErrCleanupOwnershipUnknown) || errors.Is(resultErr, outputcap.ErrUnsafeNamespace)
@@ -45,7 +45,7 @@ func bindCleanup(config BindConfig, control, root outputcap.Directory,
 	if resultErr != nil {
 		return
 	}
-	result, resultErr = reconcileLiveCleanup(journal.journal, proof, capabilities, profile)
+	result, progress, resultErr = reconcileLiveCleanup(journal.journal, proof, capabilities, profile)
 	return
 }
 

@@ -23,7 +23,7 @@ type LiveCleanupJournal struct {
 
 // OpenLiveCleanupJournal owns control/cleanup-v1/tickets. The cleanup-v1 parent
 // remains the proof namespace for stage objects; separating its ticket child is
-// why Snapshot never mistakes an ordinary-profile stage for unknown metadata.
+// why ReadBatch never mistakes an ordinary-profile stage for unknown metadata.
 func OpenLiveCleanupJournal(control outputcap.Directory) (journal LiveCleanupJournal, resultErr error) {
 	if control == nil {
 		return LiveCleanupJournal{}, transfer.ErrInvalidOutputBinding
@@ -56,40 +56,43 @@ func (journal *LiveCleanupJournal) Close() error {
 	return repositoryError("close live cleanup journal", err)
 }
 
-func (journal *LiveCleanupJournal) Snapshot(
+func (journal *LiveCleanupJournal) ReadBatch(
 	maximumTickets int,
-) (destinationauthority.LiveCleanupSnapshot, error) {
+) (destinationauthority.LiveCleanupBatch, error) {
 	if journal == nil || journal.tickets == nil || maximumTickets <= 0 {
-		return destinationauthority.LiveCleanupSnapshot{}, transfer.ErrInvalidOutputBinding
+		return destinationauthority.LiveCleanupBatch{}, transfer.ErrInvalidOutputBinding
 	}
-	// The maximum+1 request is the overflow witness. The capability reports a
-	// bounded-namespace refusal as unsafe; other failures remain operational
-	// errors because calling them overflow would hide a broken proof store.
-	names, err := journal.tickets.Names(maximumTickets + 1)
+	// A batch is a work budget, not an ownership test on the whole journal.
+	// Deleting reconciled tickets lets the next binding advance from the start.
+	batch, err := journal.tickets.ReadNameBatch(maximumTickets)
 	if err != nil {
 		if errors.Is(err, outputcap.ErrUnsafeNamespace) {
-			return destinationauthority.LiveCleanupSnapshot{State: destinationauthority.LiveCleanupScanOverflow}, nil
+			return destinationauthority.LiveCleanupBatch{State: destinationauthority.LiveCleanupBatchUnverifiable}, nil
 		}
-		return destinationauthority.LiveCleanupSnapshot{}, repositoryError("snapshot live cleanup journal", err)
+		return destinationauthority.LiveCleanupBatch{}, repositoryError("read live cleanup journal batch", err)
 	}
-	if len(names) > maximumTickets {
-		return destinationauthority.LiveCleanupSnapshot{State: destinationauthority.LiveCleanupScanOverflow}, nil
+	if len(batch.Names) > maximumTickets || (batch.HasMore && len(batch.Names) != maximumTickets) {
+		return destinationauthority.LiveCleanupBatch{}, transfer.ErrInvalidOutputBinding
 	}
+	names := batch.Names
 	slices.Sort(names)
-	snapshot := destinationauthority.LiveCleanupSnapshot{State: destinationauthority.LiveCleanupScanComplete}
+	snapshot := destinationauthority.LiveCleanupBatch{State: destinationauthority.LiveCleanupBatchComplete}
+	if batch.HasMore {
+		snapshot.State = destinationauthority.LiveCleanupBatchPartial
+	}
 	seen := make(map[string]struct{}, len(names))
 	for _, name := range names {
 		if !validLiveCleanupTicketName(name) {
-			return destinationauthority.LiveCleanupSnapshot{State: destinationauthority.LiveCleanupScanUnknown}, nil
+			return destinationauthority.LiveCleanupBatch{State: destinationauthority.LiveCleanupBatchUnverifiable}, nil
 		}
 		encoded, readErr := ReadFile(journal.tickets, name)
 		ticket, decodeErr := checkpointmodel.DecodeLiveCleanupTicket(encoded)
 		if readErr != nil || decodeErr != nil || liveCleanupTicketName(ticket) != name {
-			return destinationauthority.LiveCleanupSnapshot{State: destinationauthority.LiveCleanupScanUnknown}, nil
+			return destinationauthority.LiveCleanupBatch{State: destinationauthority.LiveCleanupBatchUnverifiable}, nil
 		}
 		nonceKey := string(ticket.Nonce())
 		if _, duplicate := seen[nonceKey]; duplicate {
-			return destinationauthority.LiveCleanupSnapshot{State: destinationauthority.LiveCleanupScanUnknown}, nil
+			return destinationauthority.LiveCleanupBatch{State: destinationauthority.LiveCleanupBatchUnverifiable}, nil
 		}
 		seen[nonceKey] = struct{}{}
 		snapshot.Tickets = append(snapshot.Tickets, ticket)

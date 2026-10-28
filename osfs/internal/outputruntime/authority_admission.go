@@ -145,6 +145,10 @@ type FilesystemOutputTrace struct {
 	FileID                            catalog.FileID
 	Operation                         FilesystemOutputTraceOperation
 	DestinationCapabilities           outputcap.DestinationCapabilities
+	DestinationBindingID              outputcap.DestinationBindingID
+	LiveCleanupTicketCount            uint64
+	LiveCleanupReclaimedTicketCount   uint64
+	LiveCleanupHasMore                bool
 	ExecutionMode                     outputcap.ExecutionMode
 	ReceiveIntentDigest               transfer.ReceiveIntentDigest
 	ReceiveOperationID                receivecontract.OperationID
