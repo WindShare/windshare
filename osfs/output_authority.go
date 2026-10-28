@@ -316,6 +316,9 @@ const (
 	FilesystemOutputRuntimeAdmitDestination
 	FilesystemOutputRuntimeFirstWrite
 	FilesystemOutputRuntimeCleanup
+	FilesystemOutputRuntimeDeliveryReceipt
+	FilesystemOutputRuntimeReleaseLiveFile
+	FilesystemOutputRuntimeLiveRetention
 )
 
 type FilesystemOutputRuntimeDecision uint8
@@ -405,6 +408,7 @@ type FilesystemOutputTrace struct {
 	ReservedFileSlotCount    uint64
 	DirectoryMetadataBytes   uint64
 	CheckpointRecordCount    uint64
+	RetainedLiveFileCount    uint64
 	FailureStage             FilesystemOutputFailureStage
 	ReconciliationStep       FilesystemCheckpointReconciliationStep
 	NativeErrorClass         FilesystemNativeErrorClass
