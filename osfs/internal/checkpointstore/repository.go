@@ -26,6 +26,7 @@ type Repository struct {
 	stages      outputcap.Directory
 	binding     checkpointmodel.Binding
 	authority   *fileExecutionAuthority
+	lease       *OperationRegistryLease
 }
 
 // OpenOrdinaryFileRepository binds the unchanged FileCheckpointV2 codec to one
@@ -71,7 +72,7 @@ func OpenOrdinaryFileRepository(
 	}
 	return Repository{
 		operation: operation, checkpoints: checkpoints, records: records,
-		anchors: anchors, stages: stages, binding: binding, authority: lease.files,
+		anchors: anchors, stages: stages, binding: binding, authority: lease.files, lease: lease,
 	}, nil
 }
 
@@ -160,7 +161,7 @@ func (repository *Repository) Create(record checkpointmodel.Record) (checkpointm
 	if err != nil {
 		return checkpointmodel.Record{}, repositoryError("open created record shard", err)
 	}
-	installErr := InstallCreate(shard, recordName, encoded)
+	installErr := repository.installer(shard).create(recordName, encoded)
 	if err := repositoryError("create checkpoint record", errors.Join(installErr, shard.Close())); err != nil {
 		return checkpointmodel.Record{}, err
 	}
@@ -193,7 +194,7 @@ func (repository *Repository) Replace(previous, next checkpointmodel.Record) (ch
 	if err != nil {
 		return checkpointmodel.Record{}, repositoryError("open replacement record shard", err)
 	}
-	installErr := InstallReplace(shard, recordName, previousEncoded, nextEncoded)
+	installErr := repository.installer(shard).replace(recordName, previousEncoded, nextEncoded)
 	if err := repositoryError("replace checkpoint record", errors.Join(installErr, shard.Close())); err != nil {
 		return checkpointmodel.Record{}, err
 	}

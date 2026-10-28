@@ -258,14 +258,15 @@ func (recorder *ordinaryLifecycleRecorder) traceCleanup(
 	}
 	intent := recorder.operation.intent
 	recorder.operation.authority.trace(FilesystemOutputTrace{
-		Operation:           TraceRuntimeDecision,
-		ReceiveIntentDigest: intent.Digest(),
-		ReceiveOperationID:  intent.OperationID(),
-		SessionID:           recorder.sessionID,
-		RuntimeComponent:    FilesystemOutputRuntimeCheckpoint,
-		RuntimeOperation:    FilesystemOutputRuntimeCleanup,
-		RuntimeDecision:     decision,
-		Failed:              failed,
+		Operation:                         TraceRuntimeDecision,
+		ReceiveIntentDigest:               intent.Digest(),
+		ReceiveOperationID:                intent.OperationID(),
+		SessionID:                         recorder.sessionID,
+		RuntimeComponent:                  FilesystemOutputRuntimeCheckpoint,
+		RuntimeOperation:                  FilesystemOutputRuntimeCleanup,
+		CheckpointReclaimedCandidateCount: recorder.store.ReclaimedCandidateCount(),
+		RuntimeDecision:                   decision,
+		Failed:                            failed,
 	})
 }
 
@@ -344,9 +345,9 @@ func (recorder *ordinaryLifecycleRecorder) cleanupTerminal(ctx context.Context) 
 		// An unlink that reached the parent but failed its sync is durability
 		// uncertain, not a license to recreate the deleted row. After a crash the
 		// filesystem exposes either the completed row for retry or no private state.
+		recorder.traceCleanup(FilesystemOutputRuntimeSucceeded, false)
 		recorder.store = nil
 		recorder.repository = nil
-		recorder.traceCleanup(FilesystemOutputRuntimeSucceeded, false)
 		return nil
 	}
 	previous := recorder.operation.lease.Record()
