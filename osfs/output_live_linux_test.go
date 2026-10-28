@@ -56,8 +56,20 @@ func TestLinuxTmpfsPublicOutputPublishesWithoutRecoveryAuthority(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(resultRoot, "download.bin")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("unverified content acquired a public name: %v", err)
 	}
-	if names := linuxPublicLiveStageNames(t, root); len(names) != 1 {
+	names := linuxPublicLiveStageNames(t, root)
+	if len(names) != 1 {
 		t.Fatalf("active process stage count=%d", len(names))
+	}
+	// A test-owned handle pins the original object while production releases its
+	// stage. Identity comparison must still detect an accidental publication copy.
+	witness, err := os.Open(filepath.Join(root, names[0], "partial"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer witness.Close()
+	stageInfo, err := witness.Stat()
+	if err != nil {
+		t.Fatal(err)
 	}
 	if err := transaction.WriteRange(context.Background(), 0, payload); err != nil {
 		t.Fatal(err)
@@ -71,15 +83,8 @@ func TestLinuxTmpfsPublicOutputPublishesWithoutRecoveryAuthority(t *testing.T) {
 	if settlement, err := transaction.Commit(context.Background()); err != nil || settlement.Kind() != transfer.FilePublished {
 		t.Fatalf("live publication=%v error=%v", settlement.Kind(), err)
 	}
-	// The operation retains an identity witness for later attempts. Publication
-	// must add a name for the same data object, without making a second copy.
-	names := linuxPublicLiveStageNames(t, root)
-	if len(names) != 1 {
-		t.Fatalf("published file lost its process witness: %v", names)
-	}
-	stageInfo, err := os.Stat(filepath.Join(root, names[0], "partial"))
-	if err != nil {
-		t.Fatal(err)
+	if names := linuxPublicLiveStageNames(t, root); len(names) != 0 {
+		t.Fatalf("published file retained its private process stage: %v", names)
 	}
 	finalInfo, err := os.Stat(filepath.Join(resultRoot, "download.bin"))
 	if err != nil || !os.SameFile(stageInfo, finalInfo) {
