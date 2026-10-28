@@ -12,6 +12,7 @@ import (
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/osfs/internal/checkpointstore"
+	"github.com/windshare/windshare/osfs/internal/deliveryreceipts"
 	"github.com/windshare/windshare/osfs/internal/destinationauthority"
 	"github.com/windshare/windshare/osfs/internal/directoryauthority"
 	"github.com/windshare/windshare/osfs/internal/fileexecution"
@@ -159,7 +160,11 @@ func (authority *Authority) namedFileExecutor(
 			return nil, nil, nil, runtimeDependencyError("bind live-only file destinations", err)
 		}
 		if operation.liveFiles == nil {
-			operation.liveFiles = &fileexecution.LiveFiles{}
+			receipts := deliveryreceipts.New()
+			operation.liveFiles, err = fileexecution.NewLiveFiles(receipts, operation.intent, authority.fileRuntimeTrace())
+			if err != nil {
+				return nil, nil, nil, errors.Join(err, receipts.Close())
+			}
 		}
 		return &liveFileExecutor{
 			files: operation.liveFiles, runtime: authority, authority: authority.destination,

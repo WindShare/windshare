@@ -80,6 +80,9 @@ func TestOutputTraceProjectionMapsEveryRuntimeEnum(t *testing.T) {
 		{outputruntime.FilesystemOutputRuntimeAdmitDestination, FilesystemOutputRuntimeAdmitDestination},
 		{outputruntime.FilesystemOutputRuntimeFirstWrite, FilesystemOutputRuntimeFirstWrite},
 		{outputruntime.FilesystemOutputRuntimeCleanup, FilesystemOutputRuntimeCleanup},
+		{outputruntime.FilesystemOutputRuntimeDeliveryReceipt, FilesystemOutputRuntimeDeliveryReceipt},
+		{outputruntime.FilesystemOutputRuntimeReleaseLiveFile, FilesystemOutputRuntimeReleaseLiveFile},
+		{outputruntime.FilesystemOutputRuntimeLiveRetention, FilesystemOutputRuntimeLiveRetention},
 	}
 	for _, test := range runtimeOperations {
 		if actual := projectRuntimeOperation(test.value); actual != test.want {
@@ -269,6 +272,7 @@ func TestOutputTraceProjectionCopiesNativeRuntimePayload(t *testing.T) {
 		ReservedFileSlotCount:  12,
 		DirectoryMetadataBytes: 13,
 		CheckpointRecordCount:  14,
+		RetainedLiveFileCount:  15,
 		FailureStage:           outputruntime.FilesystemOutputFailureNativeDurability,
 		ReconciliationStep:     outputruntime.FilesystemCheckpointStageDurability,
 		NativeErrorClass:       outputruntime.FilesystemNativeErrorAccessDenied,
@@ -299,6 +303,7 @@ func TestOutputTraceProjectionCopiesNativeRuntimePayload(t *testing.T) {
 		ReservedFileSlotCount:  12,
 		DirectoryMetadataBytes: 13,
 		CheckpointRecordCount:  14,
+		RetainedLiveFileCount:  15,
 		FailureStage:           FilesystemOutputFailureNativeDurability,
 		ReconciliationStep:     FilesystemCheckpointStageDurability,
 		NativeErrorClass:       FilesystemNativeErrorAccessDenied,

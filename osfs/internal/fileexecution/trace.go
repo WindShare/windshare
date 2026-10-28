@@ -21,6 +21,9 @@ const (
 	TracePause
 	TraceRetire
 	TraceItemBlocked
+	TraceDeliveryReceipt
+	TraceReleaseLiveFile
+	TraceLiveRetention
 )
 
 type TraceOutcome uint8
@@ -37,16 +40,17 @@ const (
 // Stable operation identity plus a per-engine sequence reconstructs control flow
 // without making diagnostics a source of filesystem authority.
 type TraceEvent struct {
-	OperationID  receivecontract.OperationID
-	IntentDigest transfer.ReceiveIntentDigest
-	SessionID    transfer.OutputSessionID
-	Sequence     uint64
-	Operation    TraceOperation
-	Outcome      TraceOutcome
-	Previous     checkpointmodel.Phase
-	Next         checkpointmodel.Phase
-	Decision     checkpointmodel.CheckpointLineageDecision
-	Fault        fault.Fault
+	OperationID       receivecontract.OperationID
+	IntentDigest      transfer.ReceiveIntentDigest
+	SessionID         transfer.OutputSessionID
+	Sequence          uint64
+	Operation         TraceOperation
+	Outcome           TraceOutcome
+	Previous          checkpointmodel.Phase
+	Next              checkpointmodel.Phase
+	Decision          checkpointmodel.CheckpointLineageDecision
+	Fault             fault.Fault
+	RetainedLiveFiles uint64
 }
 
 type TraceSink interface{ TraceFileExecution(TraceEvent) }

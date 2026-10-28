@@ -45,6 +45,7 @@ func projectFilesystemOutputTrace(event outputruntime.FilesystemOutputTrace) Fil
 		ReservedFileSlotCount:  event.ReservedFileSlotCount,
 		DirectoryMetadataBytes: event.DirectoryMetadataBytes,
 		CheckpointRecordCount:  event.CheckpointRecordCount,
+		RetainedLiveFileCount:  event.RetainedLiveFileCount,
 		FailureStage:           projectFilesystemFailureStage(event.FailureStage),
 		ReconciliationStep:     projectFilesystemReconciliationStep(event.ReconciliationStep),
 		NativeErrorClass:       projectFilesystemNativeErrorClass(event.NativeErrorClass),
@@ -269,6 +270,12 @@ func projectRuntimeOperation(
 		return FilesystemOutputRuntimeFirstWrite
 	case outputruntime.FilesystemOutputRuntimeCleanup:
 		return FilesystemOutputRuntimeCleanup
+	case outputruntime.FilesystemOutputRuntimeDeliveryReceipt:
+		return FilesystemOutputRuntimeDeliveryReceipt
+	case outputruntime.FilesystemOutputRuntimeReleaseLiveFile:
+		return FilesystemOutputRuntimeReleaseLiveFile
+	case outputruntime.FilesystemOutputRuntimeLiveRetention:
+		return FilesystemOutputRuntimeLiveRetention
 	default:
 		return 0
 	}
