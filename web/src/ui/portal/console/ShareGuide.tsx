@@ -56,26 +56,3 @@ export function ShareGuide() {
     </div>
   )
 }
-
-export function ClientDownloads() {
-  const t = usePortalCopy()
-  return (
-    <div className="portal-client-downloads">
-      <div className="portal-panel-heading">
-        <h2>{t.clientsTitle}</h2>
-        <p>{t.clientsDescription}</p>
-      </div>
-      <a className="portal-client-option" href={PORTAL_LINKS.releases} target="_blank" rel="noopener noreferrer">
-        <PortalIcon name="monitor" size={23} />
-        <span><strong>Windows / Linux</strong><small>{t.releases}</small></span>
-        <PortalIcon name="arrow" size={18} />
-      </a>
-      <a className="portal-client-option" href={PORTAL_LINKS.installation} target="_blank" rel="noopener noreferrer">
-        <PortalIcon name="terminal" size={23} />
-        <span><strong>{t.sourceBuild}</strong><small>{t.sourceDescription}</small></span>
-        <PortalIcon name="arrow" size={18} />
-      </a>
-      <div className="portal-privacy-note"><PortalIcon name="github" size={15} /><span>{t.sourceNote}</span></div>
-    </div>
-  )
-}
