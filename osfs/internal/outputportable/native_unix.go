@@ -5,12 +5,13 @@ package outputportable
 import (
 	"encoding/binary"
 	"errors"
-	"github.com/windshare/windshare/osfs/internal/outputcap"
-	"golang.org/x/sys/unix"
 	"io/fs"
 	"os"
 	"syscall"
 	"time"
+
+	"github.com/windshare/windshare/osfs/internal/outputcap"
+	"golang.org/x/sys/unix"
 )
 
 func metadataStamp(f *os.File) ([]byte, error) {
@@ -22,7 +23,7 @@ func metadataStamp(f *os.File) ([]byte, error) {
 	if !ok {
 		return nil, outputcap.ErrUnsafeNamespace
 	}
-	stamp := binary.LittleEndian.AppendUint64(nil, uint64(stat.Dev))
+	stamp := binary.LittleEndian.AppendUint64(nil, deviceID(stat))
 	return binary.LittleEndian.AppendUint64(stamp, stat.Ino), nil
 }
 func openDirectoryHandle(root *os.Root) (*os.File, error) { return root.Open(".") }
