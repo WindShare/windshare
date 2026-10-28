@@ -1,4 +1,4 @@
-import { WindShareMark } from '../brand/WindShareMark'
+import { SpiritArtwork } from './spirit/SpiritArtwork'
 import { PortalIcon } from './PortalIcon'
 import { usePortalCopy } from './locales/use-portal-copy'
 import { useSpiritMotion } from './spirit/use-spirit-motion'
@@ -17,7 +17,7 @@ export function BrandScene() {
     <div className="portal-browser-chip" aria-hidden="true"><PortalIcon name="monitor" size={23} /><span>{t.routeBrowser}</span></div>
     <button ref={mascot} type="button" className="portal-mascot-button" aria-label={t.mascotLabel}>
       <span className="portal-spirit-response">
-        <span className="portal-spirit-float"><WindShareMark size={176} /></span>
+        <span className="portal-spirit-float"><SpiritArtwork size={176} /></span>
       </span>
     </button>
     <span className="portal-spirit-shadow" aria-hidden="true" />
