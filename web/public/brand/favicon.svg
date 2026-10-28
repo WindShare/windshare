@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="50 35 422 422" fill="none">
+  <title>WindShare</title>
+  <!-- Tight framing and heavier details keep the spirit legible in 16px browser tabs. -->
+  <path
+    d="M187 382
+       C128 387 83 360 62 317
+       C94 329 124 322 143 300
+       C112 298 90 280 82 253
+       C105 267 128 263 145 247
+       C120 208 146 160 190 156
+       C187 116 217 85 256 91
+       C277 60 321 58 348 85
+       C368 105 373 131 364 153
+       C413 159 449 196 449 243
+       C470 274 460 314 432 336
+       C431 378 394 410 351 401
+       C327 431 285 434 258 411
+       C228 424 198 410 187 382Z"
+    fill="#9CE8C4" stroke="#173F35" stroke-width="18" stroke-linejoin="round"
+  />
+  <path
+    d="M178 271
+       C176 225 213 190 257 192
+       C290 171 337 180 360 211
+       C395 219 419 253 413 289
+       C407 336 362 369 308 368
+       C244 374 187 343 180 301
+       C178 291 177 281 178 271Z"
+    fill="#FFFBEF"
+  />
+  <path
+    d="M224 158C210 137 220 113 241 107C264 100 286 115 286 134C286 148 273 156 262 149"
+    stroke="#173F35" stroke-width="12" stroke-linecap="round"
+  />
+  <g transform="rotate(-7 300 276)">
+    <g fill="#173F35">
+      <ellipse cx="258" cy="264" rx="11" ry="15"/>
+      <ellipse cx="342" cy="264" rx="11" ry="15"/>
+    </g>
+    <path d="M285 284Q300 302 315 284" stroke="#173F35" stroke-width="11" stroke-linecap="round"/>
+  </g>
+</svg>
