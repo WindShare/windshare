@@ -1,37 +1,48 @@
+import { useRef } from 'react'
 import { WindShareMark } from '../brand/WindShareMark'
-import { PORTAL_SECTIONS } from './navigation'
+import { PortalIcon } from './PortalIcon'
+import { PortalPreferences } from './PortalPreferences'
+import { PORTAL_LINKS, PORTAL_SECTIONS } from './navigation'
+import { usePortalCopy } from './locales/use-portal-copy'
 
-export function PortalHeader() {
+export function PortalHeader({ onShare }: { readonly onShare: () => void }) {
+  const t = usePortalCopy()
+  const menu = useRef<HTMLDetailsElement>(null)
+  const links = Object.values(PORTAL_SECTIONS)
+  const navigate = (id: string) => {
+    if (id === PORTAL_SECTIONS.cli.id) onShare()
+    if (menu.current) menu.current.open = false
+  }
+
   return (
     <header className="portal-header">
-      <div className="portal-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <a href="/" className="portal-brand" aria-label="WindShare 首页">
-          <WindShareMark size={44} />
-          <span className="portal-brand-title">WindShare</span>
-          <span className="portal-status-badge">
-            <span className="portal-status-dot" aria-hidden="true" />
-            E2EE Suite-02
-          </span>
+      <div className="portal-container portal-header-inner">
+        <a href="/" className="portal-brand" aria-label={t.home}>
+          <WindShareMark size={38} /><span>WindShare</span>
         </a>
-
-        <nav className="portal-nav" aria-label="主要导航">
-          {Object.values(PORTAL_SECTIONS).map(section => (
-            <a key={section.id} href={`#${section.id}`}>{section.label}</a>
-          ))}
+        <nav className="portal-nav" aria-label={t.nav}>
+          {links.map(section => <a key={section.id} href={`#${section.id}`}
+            onClick={() => navigate(section.id)}>{t[section.labelKey]}</a>)}
         </nav>
-
-        <a
-          href="https://github.com"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="portal-btn-github"
-          aria-label="查看 GitHub 开源仓库"
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12Z" />
-          </svg>
-          <span>开源仓库</span>
-        </a>
+        <div className="portal-header-actions">
+          <a href={PORTAL_LINKS.repository} target="_blank" rel="noopener noreferrer"
+            className="portal-button portal-repository-link" aria-label={t.repository}>
+            <PortalIcon name="github" size={17} /><span>GitHub</span>
+          </a>
+          <PortalPreferences />
+          <details ref={menu} className="portal-mobile-nav" name="portal-header-menu" onKeyDown={event => {
+            if (event.key === 'Escape' && menu.current?.open) {
+              menu.current.open = false
+              menu.current.querySelector('summary')?.focus()
+            }
+          }}>
+            <summary aria-label={t.openNav}><PortalIcon name="menu" /></summary>
+            <nav className="portal-mobile-links" aria-label={t.mobileNav}>
+              {links.map(section => <a key={section.id} href={`#${section.id}`}
+                onClick={() => navigate(section.id)}>{t[section.labelKey]}<PortalIcon name="arrow" size={16} /></a>)}
+            </nav>
+          </details>
+        </div>
       </div>
     </header>
   )

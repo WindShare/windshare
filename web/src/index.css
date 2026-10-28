@@ -1,6 +1,8 @@
+@import './ui/preferences/appearance.css';
+
 :root {
-  color: #15231d;
-  background: #edf3ee;
+  color: light-dark(#173f35, #edf6ee);
+  background: light-dark(#f8f9f3, #0d1915);
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;

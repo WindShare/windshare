@@ -3,27 +3,32 @@ import { capture, galleryEvidence, GALLERY_PATH, showScenario } from './assertio
 
 const MINIMUM_TOUCH_TARGET_HEIGHT = 44
 
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('windshare.ui.preferences',
+    JSON.stringify({ language: 'zh-CN', appearance: 'dark', motion: 'system' })))
+})
+
 test('download records remain reachable across viewport sizes and console tabs', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: 'light' })
   await page.goto(GALLERY_PATH)
   await showScenario(page, 'portal')
-  for (const width of [1440, 900, 390]) {
+  for (const width of [1440, 900, 390, 320]) {
     await page.setViewportSize({ width, height: 1000 })
     const trigger = page.getByRole('button', { name: /^下载记录/ })
     await expect(trigger).toBeVisible()
     await expect(trigger).toBeEnabled()
     const entry = (await trigger.boundingBox())!
     expect(entry.height).toBeGreaterThanOrEqual(MINIMUM_TOUCH_TARGET_HEIGHT)
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
     await capture(page, 'portal-entry-' + width)
   }
-  for (const name of ['CLI 命令行分享', '桌面客户端', '极速接收 (Receive)']) {
-    await page.getByRole('tab', { name, exact: true }).click()
+  for (const tab of await page.getByRole('tab').all()) {
+    await tab.click()
     await expect(page.getByRole('button', { name: /^下载记录/ })).toBeVisible()
   }
 })
 
-test('portal Downloads and nested confirmations stay dark and return focus without changing task ownership', async ({ page }) => {
+test('explicit dark preference applies to Downloads and nested confirmations without changing task ownership', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: 'light' })
   await page.goto(GALLERY_PATH)
   await showScenario(page, 'portal')

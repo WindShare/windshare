@@ -1,4 +1,4 @@
-.diagnostics-surface { color-scheme: light dark; color: var(--receiver-ink); font: 14px/1.5 system-ui, sans-serif; }
+.diagnostics-surface { color-scheme: inherit; color: var(--receiver-ink); font: 14px/1.5 system-ui, sans-serif; }
 .diagnostics-bar {
   position: sticky;
   top: 0;
