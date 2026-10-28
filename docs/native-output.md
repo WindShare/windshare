@@ -8,7 +8,7 @@ Partials are reused only for the same task and source revision, after checking t
 
 Scheduling uses accepted ranges. Restart-reusable progress includes only persisted unfinished ranges; it excludes historical deliveries. Data is synced before checkpoint metadata. Checkpoints flush after 8 MiB of unsaved data at a range boundary, after two seconds while idle, and at pause, normal exit, and completion. Ordinary continuation loads file records on demand with a bounded cache. Publication moves the same data object without a final copy.
 
-`get` automatically continues a matching task. `get --redownload` reserves a separate, collision-safe destination and leaves the original continuation target intact; both tasks may occupy disk space. `resume retry --operation <id>` selects either task. Changed revisions and uncertain partials block only affected files. Discard removes proven-owned unfinished state and leaves published or unrecognized files alone.
+`get` automatically continues a matching task. `get --redownload` reserves a separate, collision-safe destination and leaves the original continuation target intact; both tasks may occupy disk space. `resume retry --operation <id>` selects either task. Changed revisions and uncertain partials block only affected files. Task-owned checkpoint write remnants are reclaimed automatically; discard also removes owned unfinished data, preserving published or unrecognized files.
 
 Shared owners: `destinationauthority` (reservations), `outputruntime` (task lifetime), `outputsession` (attempt settlement), `fileexecution` (file lifecycle), `checkpointstore` (records), and `resumeauthority` (inventory and discard). Strong native identity adapters remain available as optional evidence.
 

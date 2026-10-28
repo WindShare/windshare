@@ -13,7 +13,7 @@ import (
 func (authority *Authority) traceCheckpointReconciled(
 	intent transfer.ReceiveIntent,
 	sessionID transfer.OutputSessionID,
-	recordCount uint64,
+	recordCount, reclaimedCandidates uint64,
 	attention []checkpointstore.Attention,
 	reconciliationErr error,
 ) {
@@ -21,14 +21,15 @@ func (authority *Authority) traceCheckpointReconciled(
 		return
 	}
 	event := FilesystemOutputTrace{
-		Operation:             TraceCheckpointReconciled,
-		ReceiveIntentDigest:   intent.Digest(),
-		ReceiveOperationID:    intent.OperationID(),
-		SessionID:             sessionID,
-		RuntimeComponent:      FilesystemOutputRuntimeCheckpoint,
-		RuntimeOperation:      FilesystemOutputRuntimeReconcileCheckpoints,
-		RuntimeDecision:       FilesystemOutputRuntimeReconciled,
-		CheckpointRecordCount: recordCount,
+		Operation:                         TraceCheckpointReconciled,
+		ReceiveIntentDigest:               intent.Digest(),
+		ReceiveOperationID:                intent.OperationID(),
+		SessionID:                         sessionID,
+		RuntimeComponent:                  FilesystemOutputRuntimeCheckpoint,
+		RuntimeOperation:                  FilesystemOutputRuntimeReconcileCheckpoints,
+		RuntimeDecision:                   FilesystemOutputRuntimeReconciled,
+		CheckpointRecordCount:             recordCount,
+		CheckpointReclaimedCandidateCount: reclaimedCandidates,
 	}
 	event.CheckpointAttentionCount = uint64(len(attention))
 	for _, item := range attention {

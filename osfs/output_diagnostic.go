@@ -85,6 +85,9 @@ func (v FilesystemOutputTrace) DiagnosticRecord() diagnostics.Record {
 		f["write_offset"] = diagnostics.Uint(v.WriteOffset)
 		f["write_length"] = diagnostics.Uint(v.WriteLength)
 	}
+	if v.CheckpointReclaimedCandidateCount != 0 {
+		f["checkpoint_reclaimed_candidate_count"] = diagnostics.Uint(v.CheckpointReclaimedCandidateCount)
+	}
 	if v.CheckpointAttentionCount != 0 {
 		f["checkpoint_attention_code"] = diagnostics.Text(v.CheckpointAttentionCode)
 		f["checkpoint_attention_count"] = diagnostics.Uint(v.CheckpointAttentionCount)

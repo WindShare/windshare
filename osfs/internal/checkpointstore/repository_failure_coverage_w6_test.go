@@ -396,12 +396,12 @@ func TestRepositoryReconcilePreservesEveryUntrustedImageAsAttention(t *testing.T
 
 	loaded := storedRecord{record: record, encoded: record.CanonicalBytes()}
 	witnessFailure := errors.New("durability unknown")
-	if _, err := reconcileCandidateRecord(shard, recordName, loaded, func(checkpointmodel.Record) (bool, error) {
+	if _, err := repository.reconcileCandidateRecord(shard, recordName, loaded, func(checkpointmodel.Record) (bool, error) {
 		return false, witnessFailure
 	}); !errors.Is(err, witnessFailure) {
 		t.Fatalf("candidate witness error = %v", err)
 	}
-	retained, err := reconcileCandidateRecord(shard, recordName, loaded, func(checkpointmodel.Record) (bool, error) {
+	retained, err := repository.reconcileCandidateRecord(shard, recordName, loaded, func(checkpointmodel.Record) (bool, error) {
 		return false, nil
 	})
 	if err != nil || retained.record.RecordID() != record.RecordID() {
@@ -491,7 +491,7 @@ func TestCreateCollisionSettlesOnlyAnExactAuthenticatedTarget(t *testing.T) {
 			}
 			temporaryName := TemporaryName(targetName, expected, 0)
 			temporary := install(t, directory, temporaryName, expected)
-			err := settleCreateCollision(directory, targetName, expected, temporaryName, temporary)
+			err := (recordInstaller{directory: directory, candidates: sharedCandidates}).settleCreateCollision(targetName, expected, temporaryName, temporary)
 			if name == "exact target" {
 				if err != nil {
 					t.Fatal(err)
@@ -614,7 +614,7 @@ func TestCandidateRecoverySeparatesOrphansConflictsAndInitialCrashCuts(t *testin
 				t.Fatal(err)
 			}
 		}
-		temporaryName := TemporaryName(targetName, encoded, 0)
+		temporaryName := OperationTemporaryName(repository.binding.OperationID(), targetName, encoded, 0)
 		if err := InstallCreate(shard, temporaryName, encoded); err != nil {
 			t.Fatal(err)
 		}
@@ -755,7 +755,7 @@ func TestCandidateRecoveryClassifiesExactNamespaceAndReadHazards(t *testing.T) {
 		t.Fatal(err)
 	}
 	shardName, targetName := recordLocation(record.RecordID())
-	candidateName := TemporaryName(targetName, encoded, 0)
+	candidateName := OperationTemporaryName(repository.binding.OperationID(), targetName, encoded, 0)
 
 	run := func(
 		t *testing.T,
@@ -880,7 +880,7 @@ func TestCandidateRecoveryClassifiesExactNamespaceAndReadHazards(t *testing.T) {
 		t.Fatal(err)
 	}
 	foreignShard, foreignTarget := recordLocation(foreign.RecordID())
-	foreignName := TemporaryName(foreignTarget, foreignEncoded, 0)
+	foreignName := OperationTemporaryName(record.OperationID(), foreignTarget, foreignEncoded, 0)
 	directory := newMemoryDirectory()
 	if err := InstallCreate(directory, foreignName, foreignEncoded); err != nil {
 		t.Fatal(err)
