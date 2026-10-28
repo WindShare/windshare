@@ -17,7 +17,6 @@ export const browserPreferences = createPreferencesStore(
 function applyPreferences(preferences: UIPreferences): void {
   document.documentElement.lang = preferences.language
   document.documentElement.dataset.appearance = preferences.appearance
-  document.documentElement.dataset.motion = preferences.motion
 }
 
 if (typeof document !== 'undefined') {

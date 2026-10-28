@@ -3,7 +3,7 @@ import { createPreferencesStore, parsePreferences } from '../../src/ui/preferenc
 
 describe('UI preferences', () => {
   it('chooses a supported language without overriding the first browser preference', () => {
-    expect(parsePreferences(null, ['zh-HK', 'en'])).toEqual({ language: 'zh-CN', appearance: 'system', motion: 'system' })
+    expect(parsePreferences(null, ['zh-HK', 'en'])).toEqual({ language: 'zh-CN', appearance: 'system' })
     expect(parsePreferences(null, ['en-US', 'zh-CN']).language).toBe('en')
     expect(parsePreferences(null, ['fr-FR']).language).toBe('en')
     expect(parsePreferences(null, []).language).toBe('en')
@@ -11,12 +11,12 @@ describe('UI preferences', () => {
 
   it('recovers from malformed storage and validates saved fields independently', () => {
     for (const raw of ['{broken', 'null', '[]', '42', '"dark"']) {
-      expect(parsePreferences(raw, ['zh-CN'])).toEqual({ language: 'zh-CN', appearance: 'system', motion: 'system' })
+      expect(parsePreferences(raw, ['zh-CN'])).toEqual({ language: 'zh-CN', appearance: 'system' })
     }
-    expect(parsePreferences(JSON.stringify({ language: 'en', appearance: 'sepia', motion: 'reduced' }), ['zh-CN']))
-      .toEqual({ language: 'en', appearance: 'system', motion: 'reduced' })
+    expect(parsePreferences(JSON.stringify({ language: 'en', appearance: 'sepia' }), ['zh-CN']))
+      .toEqual({ language: 'en', appearance: 'system' })
     expect(parsePreferences(JSON.stringify({ language: 'invalid', appearance: 'dark' }), ['en']))
-      .toEqual({ language: 'en', appearance: 'dark', motion: 'system' })
+      .toEqual({ language: 'en', appearance: 'dark' })
   })
 
   it('merges local changes, notifies subscribers, and persists the complete preference', () => {
@@ -27,9 +27,9 @@ describe('UI preferences', () => {
     store.update({ appearance: 'dark' })
     store.update({ language: 'zh-CN' })
     expect(notify).toHaveBeenCalledTimes(2)
-    expect(persist).toHaveBeenLastCalledWith({ language: 'zh-CN', appearance: 'dark', motion: 'system' })
+    expect(persist).toHaveBeenLastCalledWith({ language: 'zh-CN', appearance: 'dark' })
     unsubscribe()
-    store.update({ motion: 'reduced' })
+    store.update({ appearance: 'light' })
     expect(notify).toHaveBeenCalledTimes(2)
   })
 

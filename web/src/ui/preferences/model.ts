@@ -1,11 +1,9 @@
 export type Language = 'zh-CN' | 'en'
 export type Appearance = 'system' | 'light' | 'dark'
-export type MotionPreference = 'system' | 'reduced'
 
 export interface UIPreferences {
   readonly language: Language
   readonly appearance: Appearance
-  readonly motion: MotionPreference
 }
 
 export const PREFERENCES_KEY = 'windshare.ui.preferences'
@@ -24,7 +22,6 @@ export function parsePreferences(raw: string | null, languages: readonly string[
   return {
     language,
     appearance: saved.appearance === 'light' || saved.appearance === 'dark' ? saved.appearance : 'system',
-    motion: saved.motion === 'reduced' ? 'reduced' : 'system',
   }
 }
 
@@ -32,7 +29,7 @@ export function createPreferencesStore(initial: UIPreferences, persist: (next: U
   let snapshot = initial
   const listeners = new Set<() => void>()
   const replace = (next: UIPreferences) => {
-    if (next.language === snapshot.language && next.appearance === snapshot.appearance && next.motion === snapshot.motion) return
+    if (next.language === snapshot.language && next.appearance === snapshot.appearance) return
     snapshot = next
     for (const listener of listeners) listener()
   }

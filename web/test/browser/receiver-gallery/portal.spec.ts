@@ -5,7 +5,7 @@ const MINIMUM_TOUCH_TARGET_HEIGHT = 44
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('windshare.ui.preferences',
-    JSON.stringify({ language: 'zh-CN', appearance: 'dark', motion: 'system' })))
+    JSON.stringify({ language: 'zh-CN', appearance: 'dark' })))
 })
 
 test('download records remain reachable across viewport sizes and console tabs', async ({ page }) => {

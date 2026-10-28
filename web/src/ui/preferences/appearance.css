@@ -1,11 +1,3 @@
 :root { color-scheme: light dark; }
 :root[data-appearance="light"] { color-scheme: light; }
 :root[data-appearance="dark"] { color-scheme: dark; }
-
-:root[data-motion="reduced"] .portal-root *,
-:root[data-motion="reduced"] .portal-root *::before,
-:root[data-motion="reduced"] .portal-root *::after {
-  animation: none !important;
-  transition: none !important;
-  scroll-behavior: auto !important;
-}
