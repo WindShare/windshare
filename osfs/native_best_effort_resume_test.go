@@ -87,8 +87,12 @@ func TestPortableResumeKeepsDeliveryAfterPublicFileMoves(t *testing.T) {
 }
 
 func TestPortableResumeAcceptsMtimeDriftAndFlushesPause(t *testing.T) {
+	runPortableResumeAcceptsMtimeDriftAndFlushesPause(t, t.TempDir())
+}
+
+func runPortableResumeAcceptsMtimeDriftAndFlushesPause(t *testing.T, root string) {
+	t.Helper()
 	ctx := context.Background()
-	root := t.TempDir()
 	a, op, intent := openPublicOrdinaryOperation(t, root, 0x51)
 	s, err := a.OpenOperation(ctx, op)
 	if err != nil {

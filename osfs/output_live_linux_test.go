@@ -19,10 +19,11 @@ import (
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
+	"github.com/windshare/windshare/osfs/internal/outputruntime"
 	"golang.org/x/sys/unix"
 )
 
-func TestLinuxTmpfsPublicOutputPublishesWithoutRecoveryAuthority(t *testing.T) {
+func TestLinuxTmpfsNativeAdapterPublishesWithoutRecoveryAuthority(t *testing.T) {
 	t.Parallel()
 	root := linuxPublicTmpfsRoot(t)
 	stale := filepath.Join(root, ".windshare-output")
@@ -141,7 +142,7 @@ func TestLinuxTmpfsPublicOutputPublishesWithoutRecoveryAuthority(t *testing.T) {
 	}
 }
 
-func TestLinuxTmpfsPublicOutputPauseRetainsStageUntilOperationClose(t *testing.T) {
+func TestLinuxTmpfsNativeAdapterPauseRetainsStageUntilOperationClose(t *testing.T) {
 	t.Parallel()
 	root := linuxPublicTmpfsRoot(t)
 	authority, intent, session, rootAdmission := openLinuxPublicLiveOperation(t, root, nil)
@@ -181,7 +182,7 @@ func TestLinuxTmpfsPublicOutputPauseRetainsStageUntilOperationClose(t *testing.T
 	}
 }
 
-func TestLinuxTmpfsPublicOutputDoesNotAdoptPreviousProcessStage(t *testing.T) {
+func TestLinuxTmpfsNativeAdapterDoesNotAdoptPreviousProcessStage(t *testing.T) {
 	const childRootEnvironment = "WINDSHARE_TMPFS_PROCESS_STAGE_ROOT"
 	if root := os.Getenv(childRootEnvironment); root != "" {
 		_, intent, session, admission := openLinuxPublicLiveOperation(t, root, nil)
@@ -219,7 +220,7 @@ func TestLinuxTmpfsPublicOutputDoesNotAdoptPreviousProcessStage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{RootPath: root})
+	reopened, err := newLinuxNativeOutputAuthority(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +276,7 @@ func openLinuxPublicLiveOperation(
 ) (*FilesystemOutputAuthority, transfer.ReceiveIntent, transfer.DirectTreeSession, transfer.DirectoryAdmission) {
 	t.Helper()
 	ctx := context.Background()
-	authority, err := NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{RootPath: root, Tracer: tracer})
+	authority, err := newLinuxNativeOutputAuthority(root, tracer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,4 +335,20 @@ func openLinuxPublicLiveOperation(
 		t.Fatal(err)
 	}
 	return authority, intent, session, admission
+}
+
+// The optional native adapter still needs live-only coverage independently of
+// the default portable adapter, which retains process-restart state on tmpfs.
+func newLinuxNativeOutputAuthority(root string, tracer FilesystemOutputTracer) (*FilesystemOutputAuthority, error) {
+	var projected outputruntime.FilesystemOutputTracer
+	if tracer != nil {
+		projected = outputRuntimeTracer{target: tracer}
+	}
+	authority, err := outputruntime.New(outputruntime.Config{
+		RootPath: root, Tracer: projected, PlatformFactory: openStrongNativeOutputPlatform,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &FilesystemOutputAuthority{authority: authority}, nil
 }
