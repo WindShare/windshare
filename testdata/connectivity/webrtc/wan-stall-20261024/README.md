@@ -77,7 +77,7 @@ First repair permanent route waiting and completed-file settlement. Then connect
 
 ## Reproduction
 
-Use installed Go/Rust/Python dependencies, the existing LAN SSH settings in `.tmp/webrtc-preflight-20261023/lab.json`, and a configured public SSH profile. Choose fresh build and suite names; the drivers refuse to overwrite ledgers. Edit case interface names to match the target hosts.
+Use installed Go/Rust/Python dependencies, the existing LAN SSH settings in `.tmp/webrtc-preflight-20261023/lab.json`, and a configured public SSH profile. Choose fresh build and suite names; they resolve to `.tmp/<name>_stignore` (Syncthing-ignored), and the drivers refuse to overwrite ledgers. Edit case interface names to match the target hosts.
 
 ```powershell
 $env:WS_ADAPTIVE_BUILD = 'wan-research-new'

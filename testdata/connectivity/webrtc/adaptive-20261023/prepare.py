@@ -5,9 +5,13 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from experiment_paths import experiment_directory
 
 ROOT = Path(__file__).resolve().parents[4]
-BUILD = ROOT / ".tmp" / os.environ.get("WS_ADAPTIVE_BUILD", "webrtc-adaptive-20261023")
+BUILD = experiment_directory(ROOT, os.environ.get("WS_ADAPTIVE_BUILD", "webrtc-adaptive-20261023"))
 SNAPSHOT = BUILD / "snapshot"
 FIXTURE_BYTES = 256 * 1024 * 1024
 FIXTURE_CHUNK_BYTES = 1024 * 1024

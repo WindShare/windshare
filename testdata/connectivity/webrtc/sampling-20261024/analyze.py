@@ -7,9 +7,10 @@ import statistics
 import sys
 
 ROOT = Path(__file__).resolve().parents[4]
-BUILD = ROOT / '.tmp' / os.environ.get('WS_ADAPTIVE_BUILD', 'webrtc-sampling-stress-20261024')
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from evidence_export import write_public
+from experiment_paths import experiment_directory
+BUILD = experiment_directory(ROOT, os.environ.get('WS_ADAPTIVE_BUILD', 'webrtc-sampling-stress-20261024'))
 
 
 def sha(path):

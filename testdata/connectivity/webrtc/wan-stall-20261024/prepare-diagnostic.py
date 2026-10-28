@@ -6,6 +6,10 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from experiment_paths import experiment_directory
 
 ROOT = Path(__file__).resolve().parents[4]
 HERE = Path(__file__).parent
@@ -18,9 +22,9 @@ def main():
     parser.add_argument("--interface-filter", action="store_true")
     parser.add_argument("--socket-buffer", action="store_true")
     args = parser.parse_args()
-    base = ROOT / ".tmp" / args.base
+    base = experiment_directory(ROOT, args.base)
     snapshot = base / "snapshot"
-    build = ROOT / ".tmp" / args.name
+    build = experiment_directory(ROOT, args.name)
     build.mkdir()
     overlays = build / "overlays"
     overlays.mkdir()

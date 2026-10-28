@@ -9,6 +9,8 @@ import time
 from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[4]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from experiment_paths import experiment_directory
 spec = importlib.util.spec_from_file_location("native_lab", ROOT / "testdata/connectivity/webrtc/adaptive-20261023/cross-host.py")
 lab = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(lab)
@@ -25,7 +27,7 @@ def main():
     parser.add_argument("--lan-interface", default="")
     parser.add_argument("--same-host", action="store_true")
     args = parser.parse_args()
-    build = ROOT / ".tmp" / args.build
+    build = experiment_directory(ROOT, args.build)
     study = build / f"linux-cross-{args.sender}-{time.time_ns()}"
     study.mkdir()
     fixture = (build / "fixture.bin").read_bytes()[:args.size_mib * 1048576]

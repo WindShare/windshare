@@ -13,7 +13,8 @@ ROOT = Path(__file__).resolve().parents[4]
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE.parent))
 from evidence_export import write_public
-BUILD = ROOT / ".tmp" / os.environ.get("WS_ADAPTIVE_BUILD", "webrtc-bottleneck-20261024-baseline")
+from experiment_paths import experiment_directory, experiment_label
+BUILD = experiment_directory(ROOT, os.environ.get("WS_ADAPTIVE_BUILD", "webrtc-bottleneck-20261024-baseline"))
 
 def read(path):
     return json.loads(path.read_text(encoding="utf-8"))
@@ -137,7 +138,7 @@ results = {
         "invalidControl": sum(r["classification"] == "invalid-control" for r in runs),
         "diagnostic": sum(r["classification"] == "diagnostic" for r in runs),
         "sameHost": sum(r["topology"] != "lan-isolated" for r in runs)},
-    "build": {"name": BUILD.name, "revision": sources["revision"], "sourceManifest": identity(BUILD / "sources.json"),
+    "build": {"name": experiment_label(BUILD.name), "revision": sources["revision"], "sourceManifest": identity(BUILD / "sources.json"),
         "fileCount": len(sources["files"]), "binaries": read(BUILD / "binaries.json"),
         "sourceChangesSinceFreeze": source_changes,
         "gitIndexUnchanged": hashlib.sha256((ROOT / ".git/index").read_bytes()).hexdigest() == sources["indexSHA256"],

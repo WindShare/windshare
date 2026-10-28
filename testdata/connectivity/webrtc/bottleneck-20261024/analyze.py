@@ -7,7 +7,9 @@ import statistics
 import sys
 
 ROOT = Path(__file__).resolve().parents[4]
-BUILD = ROOT / ".tmp" / os.environ.get("WS_ADAPTIVE_BUILD", "webrtc-bottleneck-20261024-baseline")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from experiment_paths import experiment_directory
+BUILD = experiment_directory(ROOT, os.environ.get("WS_ADAPTIVE_BUILD", "webrtc-bottleneck-20261024-baseline"))
 
 def quantile(values, fraction):
     return sorted(values)[min(len(values) - 1, math.floor((len(values) - 1) * fraction))] if values else None

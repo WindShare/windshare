@@ -5,10 +5,11 @@ import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { fileURLToPath } from 'node:url'
+import { experimentDirectory } from '../experiment-paths.mjs'
 
 const root = fileURLToPath(new URL('../../../../', import.meta.url))
 const build = process.env.WS_ADAPTIVE_BUILD ?? 'webrtc-bottleneck-20261024-baseline'
-const directory = path.join(root, '.tmp', build)
+const directory = experimentDirectory(root, build)
 const suite = process.argv[2]
 const configuration = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'))
 const cases = Array.isArray(configuration) ? configuration : configuration[suite]

@@ -5,6 +5,10 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from experiment_paths import experiment_directory
 
 ROOT = Path(__file__).resolve().parents[4]
 HERE = Path(__file__).parent
@@ -15,7 +19,7 @@ def main():
     parser.add_argument("--build", required=True)
     parser.add_argument("--name", default="route-exhaustion")
     args = parser.parse_args()
-    build = ROOT / ".tmp" / args.build
+    build = experiment_directory(ROOT, args.build)
     snapshot = build / "snapshot"
     output = build / args.name
     output.mkdir()

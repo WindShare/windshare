@@ -6,10 +6,11 @@ import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { experimentDirectory } from '../experiment-paths.mjs'
 
 const root = fileURLToPath(new URL('../../../../', import.meta.url))
 const build = process.env.WS_ADAPTIVE_BUILD ?? 'webrtc-adaptive-20261023-final'
-const directory = path.join(root, '.tmp', build)
+const directory = experimentDirectory(root, build)
 const suite = process.argv[2] ?? 'large'
 const ledgerPath = path.join(directory, suite + '-ledger.json')
 assert(!fs.existsSync(ledgerPath), 'Use a new suite name instead of overwriting evidence')

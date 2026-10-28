@@ -35,7 +35,7 @@ An earlier public run exposed a real retirement bug: a migrated final could outl
 
 Published JSON passes through [the evidence exporter](../evidence_export.py): lab addresses, local paths, credentials, raw logs and connection identifiers are removed or aliased. Measurements and hashes are preserved; measurement-time hashes refer to private originals under ignored `.tmp`, and some artifact paths are anonymized.
 
-Use `WS_ADAPTIVE_BUILD` to select a fresh `.tmp` directory. `prepare.py` freezes sources and builds Windows binaries; cross-compile the same snapshot for `binaries/wind-linux`. The harness requires the lab SSH settings in `.tmp/webrtc-preflight-20261023/lab.json`, existing pinned browser dependencies, and the archived fixture/control binaries identified in `controls.mjs`.
+Use `WS_ADAPTIVE_BUILD` to select a fresh experiment; it resolves to `.tmp/<name>_stignore`, which Syncthing ignores. `prepare.py` freezes sources and builds Windows binaries; cross-compile the same snapshot for `binaries/wind-linux`. The harness requires the lab SSH settings in `.tmp/webrtc-preflight-20261023/lab.json`, existing pinned browser dependencies, and the archived fixture/control binaries identified in `controls.mjs`.
 
 - `matrix.mjs large` runs four interleaved 256 MiB pairs; `confirmation` runs the final workflow checks. `workflows` provides the longer comparison matrix.
 - `controls.mjs` repeats the archived cached controls alongside the complete product.

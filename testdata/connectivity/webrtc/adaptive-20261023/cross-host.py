@@ -20,6 +20,8 @@ import time
 from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[4]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from experiment_paths import experiment_directory
 sys.path.insert(0, str(ROOT / '.tmp/throughput/python-deps'))
 import paramiko
 
@@ -171,7 +173,7 @@ def main():
     args = parser.parse_args()
     if args.deadline_seconds <= 0 or args.block_size <= 0:
         parser.error('Deadline and block size must be positive')
-    build = ROOT / '.tmp' / args.build
+    build = experiment_directory(ROOT, args.build)
     windows_binary = Path(os.environ.get('WS_STUDY_WINDOWS_BINARY', build / 'binaries/wind.exe'))
     study = build / ('native-' + args.endpoint + '-' + args.direction + '-' + str(time.time_ns()))
     study.mkdir()

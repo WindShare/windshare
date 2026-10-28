@@ -10,6 +10,7 @@ sys.path.insert(0, str(HERE))
 from analyze import diagnostic_summary, events, reference
 sys.path.insert(0, str(HERE.parent))
 from evidence_export import write_public
+from experiment_paths import experiment_directory
 
 
 def main():
@@ -20,7 +21,7 @@ def main():
     args = parser.parse_args()
     result = {"runs": [], "ledgers": []}
     for name in args.builds:
-        build = ROOT / ".tmp" / name
+        build = experiment_directory(ROOT, name)
         cases = {}
         socket_path = build / "linux-udp-sockets.ndjson"
         socket_samples = events(socket_path)
@@ -79,14 +80,14 @@ def main():
                                       "unfinishedBytes": s["demand"]["UnfinishedBytes"]} for s in samples],
                         "lastTen": samples[-10:]})
             result["runs"].append(row)
-    proof_build = ROOT / ".tmp" / (args.proof_build or args.builds[0])
+    proof_build = experiment_directory(ROOT, args.proof_build or args.builds[0])
     result["reproduction"] = {path.parent.name: {
         "source": reference(path), "fixture": reference(path.parent / "route_exhaustion_test.go"),
         "results": json.loads(path.read_text())}
         for path in sorted(proof_build.glob("route-exhaustion*/results.json"))}
     result["networkInventory"] = [reference(path) for name in args.builds
         for filename in ["windows-network.json", "remote-inventory.json", "receive-buffer-inventory.json"]
-        if (path := ROOT / ".tmp" / name / filename).exists()]
+        if (path := experiment_directory(ROOT, name) / filename).exists()]
     write_public(args.output, result)
     print(json.dumps({"runs": len(result["runs"]), "output": str(args.output)}))
 
