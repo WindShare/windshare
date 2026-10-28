@@ -3,7 +3,8 @@ import type { ReceiverController } from '../../controller'
 import { PortalIcon } from '../PortalIcon'
 import { usePortalCopy } from '../locales/use-portal-copy'
 import { ReceiveForm } from './ReceiveForm'
-import { ClientDownloads, ShareGuide } from './ShareGuide'
+import { ClientDownloads } from './ClientDownloads'
+import { ShareGuide } from './ShareGuide'
 import { CONSOLE_TABS, type PortalTab } from './tabs'
 
 export function ShareConsole({ controller, activeTab, onTabChange }: {
@@ -35,12 +36,15 @@ export function ShareConsole({ controller, activeTab, onTabChange }: {
           <PortalIcon name={tab.icon} size={17} /><span>{t[tab.label]}</span>
         </button>)}
       </div>
-      {CONSOLE_TABS.map(tab => <div key={tab.id} role="tabpanel" className="portal-tab-panel"
-        id={`portal-panel-${tab.id}`} aria-labelledby={`portal-tab-${tab.id}`} hidden={activeTab !== tab.id}>
-        {tab.id === 'receive' && <ReceiveForm controller={controller} />}
-        {tab.id === 'cli' && <ShareGuide />}
-        {tab.id === 'download' && <ClientDownloads />}
-      </div>)}
+      <div className="portal-console-panels">
+        {CONSOLE_TABS.map(tab => <div key={tab.id} role="tabpanel" className="portal-tab-panel"
+          id={`portal-panel-${tab.id}`} aria-labelledby={`portal-tab-${tab.id}`}
+          aria-hidden={activeTab !== tab.id} inert={activeTab !== tab.id}>
+          {tab.id === 'receive' && <ReceiveForm controller={controller} />}
+          {tab.id === 'cli' && <ShareGuide />}
+          {tab.id === 'download' && <ClientDownloads />}
+        </div>)}
+      </div>
     </div>
   )
 }
