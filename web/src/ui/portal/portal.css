@@ -3,6 +3,7 @@
 @import './styles/console.css';
 @import './styles/sections.css';
 @import './styles/brand-scene.css';
+@import './styles/popover.css';
 @import './styles/preferences.css';
 
 .portal-root {

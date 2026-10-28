@@ -2,16 +2,17 @@ import { useRef } from 'react'
 import { WindShareMark } from '../brand/WindShareMark'
 import { PortalIcon } from './PortalIcon'
 import { PortalPreferences } from './PortalPreferences'
+import { PortalPopover } from './PortalPopover'
 import { PORTAL_LINKS, PORTAL_SECTIONS } from './navigation'
 import { usePortalCopy } from './locales/use-portal-copy'
 
 export function PortalHeader({ onShare }: { readonly onShare: () => void }) {
   const t = usePortalCopy()
-  const menu = useRef<HTMLDetailsElement>(null)
+  const menu = useRef<HTMLDivElement>(null)
   const links = Object.values(PORTAL_SECTIONS)
   const navigate = (id: string) => {
     if (id === PORTAL_SECTIONS.cli.id) onShare()
-    if (menu.current) menu.current.open = false
+    menu.current?.hidePopover()
   }
 
   return (
@@ -30,18 +31,12 @@ export function PortalHeader({ onShare }: { readonly onShare: () => void }) {
             <PortalIcon name="github" size={17} /><span>GitHub</span>
           </a>
           <PortalPreferences />
-          <details ref={menu} className="portal-mobile-nav" name="portal-header-menu" onKeyDown={event => {
-            if (event.key === 'Escape' && menu.current?.open) {
-              menu.current.open = false
-              menu.current.querySelector('summary')?.focus()
-            }
-          }}>
-            <summary aria-label={t.openNav}><PortalIcon name="menu" /></summary>
+          <PortalPopover className="portal-mobile-nav" label={t.openNav} icon="menu" panelRef={menu}>
             <nav className="portal-mobile-links" aria-label={t.mobileNav}>
               {links.map(section => <a key={section.id} href={`#${section.id}`}
                 onClick={() => navigate(section.id)}>{t[section.labelKey]}<PortalIcon name="arrow" size={16} /></a>)}
             </nav>
-          </details>
+          </PortalPopover>
         </div>
       </div>
     </header>

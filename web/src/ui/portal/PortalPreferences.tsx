@@ -1,9 +1,13 @@
-import { useRef } from 'react'
+import { useId } from 'react'
 import { usePreferences } from '../preferences/use-preferences'
 import type { Appearance, Language } from '../preferences/model'
 import { PortalIcon, type PortalIconName } from './PortalIcon'
+import { PortalPopover } from './PortalPopover'
 import { usePortalCopy } from './locales/use-portal-copy'
 
+const LANGUAGES: readonly { value: Language; label: string }[] = [
+  { value: 'zh-CN', label: '简体中文' }, { value: 'en', label: 'English' },
+]
 const APPEARANCES: readonly { value: Appearance; icon: PortalIconName }[] = [
   { value: 'system', icon: 'monitor' }, { value: 'light', icon: 'sun' }, { value: 'dark', icon: 'moon' },
 ]
@@ -11,30 +15,28 @@ const APPEARANCES: readonly { value: Appearance; icon: PortalIconName }[] = [
 export function PortalPreferences() {
   const preferences = usePreferences()
   const t = usePortalCopy()
-  const menu = useRef<HTMLDetailsElement>(null)
+  const languageId = useId()
 
-  return <details className="portal-preferences" ref={menu} name="portal-header-menu" onKeyDown={event => {
-    if (event.key === 'Escape' && menu.current?.open) {
-      menu.current.open = false
-      menu.current.querySelector('summary')?.focus()
-    }
-  }}>
-    <summary aria-label={t.preferences} title={t.preferences}><PortalIcon name="globe" size={19} /></summary>
-    <div className="portal-preferences-panel">
-      <label className="portal-language-control"><span>{t.language}</span>
-        <select aria-label={t.language} value={preferences.language}
+  return <PortalPopover className="portal-preferences" label={t.preferences} icon="globe">
+    <div className="portal-language-control">
+      <label htmlFor={languageId}>{t.language}</label>
+      <span className="portal-language-select">
+        <select id={languageId} value={preferences.language}
           onChange={event => preferences.update({ language: event.target.value as Language })}>
-          <option value="zh-CN">简体中文</option><option value="en">English</option>
+          {LANGUAGES.map(option => <option key={option.value} value={option.value} lang={option.value}>
+            {option.label}
+          </option>)}
         </select>
-      </label>
-      <fieldset className="portal-appearance-options"><legend>{t.appearance}</legend>
-        <div>{APPEARANCES.map(option => <label key={option.value}>
-          <input type="radio" name="portal-appearance" value={option.value}
-            checked={preferences.appearance === option.value}
-            onChange={() => preferences.update({ appearance: option.value })} />
-          <span><PortalIcon name={option.icon} size={18} />{t[option.value]}</span>
-        </label>)}</div>
-      </fieldset>
+        <PortalIcon name="chevronDown" size={14} />
+      </span>
     </div>
-  </details>
+    <fieldset className="portal-appearance-options"><legend>{t.appearance}</legend>
+      <div>{APPEARANCES.map(option => <label key={option.value}>
+        <input type="radio" name="portal-appearance" value={option.value}
+          checked={preferences.appearance === option.value}
+          onChange={() => preferences.update({ appearance: option.value })} />
+        <span><PortalIcon name={option.icon} size={18} />{t[option.value]}</span>
+      </label>)}</div>
+    </fieldset>
+  </PortalPopover>
 }

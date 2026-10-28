@@ -1,0 +1,48 @@
+.portal-popover {
+  --portal-popover-width: 288px;
+  --portal-popover-gutter: 20px;
+  --portal-popover-gap: 10px;
+}
+.portal-popover-trigger {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--portal-border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--portal-muted);
+  cursor: pointer;
+  transition: color 160ms, background-color 160ms, border-color 160ms;
+}
+.portal-popover-trigger:hover,
+.portal-popover:has(> :popover-open) > .portal-popover-trigger {
+  border-color: var(--portal-border-strong);
+  background: var(--portal-wash);
+  color: var(--portal-accent);
+}
+.portal-popover-trigger:active { background: var(--portal-border); }
+.portal-popover-panel {
+  position: fixed;
+  position-anchor: auto;
+  inset: auto;
+  top: calc(anchor(bottom) + var(--portal-popover-gap));
+  /* Clamp to the viewport when the language trigger sits beside mobile navigation. */
+  right: clamp(var(--portal-popover-gutter), anchor(right), calc(100% - var(--portal-popover-width) - var(--portal-popover-gutter)));
+  width: min(var(--portal-popover-width), calc(100% - 2 * var(--portal-popover-gutter)));
+  max-height: calc(100dvh - var(--portal-header-height) - 2 * var(--portal-popover-gap));
+  margin: 0;
+  padding: 12px;
+  overflow-y: auto;
+  border: 1px solid var(--portal-border-soft);
+  border-radius: 16px;
+  background: var(--portal-surface);
+  color: var(--portal-text);
+  box-shadow: 0 4px 10px var(--portal-shadow), 0 16px 32px var(--portal-shadow);
+}
+.portal-popover-panel:popover-open { animation: portal-popover-arrive 160ms var(--portal-ease); }
+@keyframes portal-popover-arrive {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
