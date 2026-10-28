@@ -2,6 +2,7 @@ package outputruntime
 
 import (
 	"context"
+	"github.com/windshare/windshare/core/catalog"
 
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/fault"
@@ -10,6 +11,10 @@ import (
 )
 
 type fileExecutionAdapter struct{ engine *fileexecution.Engine }
+
+func (adapter fileExecutionAdapter) LookupDelivery(ctx context.Context, file catalog.FileID, path string) (transfer.HistoricalDelivery, bool, error) {
+	return adapter.engine.LookupDelivery(ctx, file, path)
+}
 
 func newFileExecutionAdapter(engine *fileexecution.Engine) fileExecutionAdapter {
 	return fileExecutionAdapter{engine: engine}
@@ -68,6 +73,11 @@ func (adapter fileTransactionAdapter) Checkpoint(
 ) (transfer.VerifiedRanges, outputsession.MutationCut, error) {
 	checkpoint, err := adapter.transaction.Checkpoint(ctx)
 	return checkpoint, successfulOrExecutionCut(err), err
+}
+
+func (adapter fileTransactionAdapter) Accept(ctx context.Context) (transfer.FileProgress, outputsession.MutationCut, error) {
+	progress, err := adapter.transaction.Accept(ctx)
+	return progress, successfulOrExecutionCut(err), err
 }
 
 func (adapter fileTransactionAdapter) Commit(

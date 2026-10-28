@@ -102,7 +102,7 @@ func (authority *Authority) fileRuntimeTrace() fileexecution.TraceSink {
 	return fileexecution.TraceSinkFunc(func(event fileexecution.TraceEvent) {
 		projected := FilesystemOutputTrace{
 			Operation: TraceRuntimeDecision, ReceiveIntentDigest: event.IntentDigest,
-			ReceiveOperationID: event.OperationID, SessionID: event.SessionID,
+			ReceiveOperationID: event.OperationID, SessionID: event.SessionID, FileID: event.FileID,
 			RuntimeComponent:      FilesystemOutputRuntimeFile,
 			RuntimeOperation:      runtimeFileOperation(event.Operation),
 			RuntimeDecision:       runtimeFileDecision(event.Outcome),

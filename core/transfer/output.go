@@ -1,6 +1,7 @@
 package transfer
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"slices"
@@ -10,6 +11,28 @@ import (
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
+
+// HistoricalDelivery belongs to a logical file in one operation. It conveys no
+// authority over the public path or over any bytes that happen to exist there.
+type HistoricalDelivery struct {
+	OperationID         receivecontract.OperationID
+	FileID              catalog.FileID
+	FileRevision        content.FileRevision
+	MaterializationPath string
+	Size                uint64
+}
+
+func (delivery HistoricalDelivery) Valid() bool {
+	canonical, err := catalog.CanonicalPath(delivery.MaterializationPath)
+	return err == nil && canonical == delivery.MaterializationPath && canonical != "" &&
+		!delivery.OperationID.IsZero() && !delivery.FileID.IsZero() && !delivery.FileRevision.IsZero() && delivery.Size <= catalog.MaxFileSize
+}
+
+// DeliveryHistory is queried before source revision acquisition. Revision drift
+// may block partial reuse, but cannot revoke a delivery the task already made.
+type DeliveryHistory interface {
+	LookupDelivery(context.Context, catalog.FileID, string) (HistoricalDelivery, bool, error)
+}
 
 const (
 	OutputSessionIdentityBytes = catalog.IdentityBytes
@@ -273,6 +296,38 @@ func (r VerifiedRanges) CheckpointGeneration() CheckpointGeneration {
 func (r VerifiedRanges) Ranges() content.RangeSet {
 	clone, _ := content.NewRangeSet(r.ranges.Ranges())
 	return clone
+}
+
+// FileProgress separates scheduling acknowledgement from restart persistence.
+// Accepted bytes need not have reached stable storage; only Persisted may be
+// reused by a new process. Neither claim proves immunity to later local edits.
+type FileProgress struct {
+	accepted  VerifiedRanges
+	persisted VerifiedRanges
+}
+
+func NewFileProgress(accepted, persisted VerifiedRanges) (FileProgress, error) {
+	if !accepted.binding.valid() || accepted.retention < RangesTransient || accepted.retention > RangesAfterRestart {
+		return FileProgress{}, ErrInvalidOutputBinding
+	}
+	if persisted.retention != 0 && (persisted.retention != RangesAfterRestart ||
+		persisted.binding != accepted.binding || !rangesContain(accepted.ranges, persisted.ranges)) {
+		return FileProgress{}, ErrInvalidOutputBinding
+	}
+	return FileProgress{accepted: accepted, persisted: persisted}, nil
+}
+
+func ProgressFromCheckpoint(checkpoint VerifiedRanges) (FileProgress, error) {
+	persisted := VerifiedRanges{}
+	if checkpoint.Retention() == RangesAfterRestart {
+		persisted = checkpoint
+	}
+	return NewFileProgress(checkpoint, persisted)
+}
+
+func (progress FileProgress) Accepted() VerifiedRanges { return progress.accepted }
+func (progress FileProgress) Persisted() (VerifiedRanges, bool) {
+	return progress.persisted, progress.persisted.retention == RangesAfterRestart
 }
 
 func MergeRanges(sets ...content.RangeSet) (content.RangeSet, error) {

@@ -36,7 +36,7 @@ func reduceOrdinaryResumeRecord(
 	}
 	switch record.Phase() {
 	case checkpointmodel.PhasePublished:
-		return reducePublishedResumeRecord(final)
+		return ordinaryResumeState(resumeauthority.ItemPublished)
 	case checkpointmodel.PhasePublishing:
 		return reducePublishingResumeRecord(owned, final)
 	case checkpointmodel.PhaseReserved, checkpointmodel.PhaseActive, checkpointmodel.PhasePaused:
@@ -46,15 +46,6 @@ func reduceOrdinaryResumeRecord(
 	default:
 		return ordinaryResumeBlock(resumeauthority.ItemBlockCheckpointInvalid)
 	}
-}
-
-func reducePublishedResumeRecord(
-	final fileexecution.FinalObservation,
-) ordinaryResumeDecision {
-	if final.Condition() == fileexecution.FinalOwnedAtExpectedSize {
-		return ordinaryResumeState(resumeauthority.ItemPublished)
-	}
-	return ordinaryResumeBlock(resumeauthority.ItemBlockPublicationUnknown)
 }
 
 func reducePublishingResumeRecord(

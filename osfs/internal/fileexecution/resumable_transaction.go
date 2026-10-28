@@ -34,7 +34,7 @@ func (transaction *resumablePartialFileTransaction) WriteRange(ctx context.Conte
 	err := transaction.writeRangeLocked(ctx, offset, data)
 	next := transaction.record.Phase()
 	transaction.mu.Unlock()
-	transaction.engine.emit(transaction.engine.traceEvent(
+	transaction.engine.emit(transaction.traceEvent(
 		sequence, TraceWriteRange, traceOutcomeForError(err), previous, next, traceFault(err),
 	))
 	return err
@@ -79,54 +79,10 @@ func (transaction *resumablePartialFileTransaction) writeRangeLocked(ctx context
 		return collaboratorError(ctx, writeErr)
 	}
 	transaction.pending = pending
+	if transaction.flushTimer == nil {
+		transaction.flushTimer = transaction.engine.afterFunc(CheckpointInterval, transaction.flushOnDeadline)
+	}
 	return nil
-}
-
-func (transaction *resumablePartialFileTransaction) Checkpoint(ctx context.Context) (transfer.VerifiedRanges, error) {
-	if transaction == nil || transaction.engine == nil {
-		return transfer.VerifiedRanges{}, fileContractError(ErrInvalidConfiguration)
-	}
-	sequence := transaction.engine.nextSequence()
-	transaction.mu.Lock()
-	previous := transaction.record.Phase()
-	checkpoint, err := transaction.checkpointLocked(ctx)
-	next := transaction.record.Phase()
-	transaction.mu.Unlock()
-	transaction.engine.emit(transaction.engine.traceEvent(
-		sequence, TraceCheckpoint, traceOutcomeForError(err), previous, next, traceFault(err),
-	))
-	return checkpoint, err
-}
-
-func (transaction *resumablePartialFileTransaction) checkpointLocked(ctx context.Context) (transfer.VerifiedRanges, error) {
-	if err := transaction.validateOpen(ctx); err != nil {
-		return transfer.VerifiedRanges{}, err
-	}
-	if transaction.pending.IsEmpty() {
-		return durableRanges(transaction.binding, transaction.record)
-	}
-	if err := transaction.file.Sync(); err != nil {
-		return transfer.VerifiedRanges{}, collaboratorError(ctx, err)
-	}
-	verified, err := contentRanges(transaction.record)
-	if err != nil {
-		return transfer.VerifiedRanges{}, fileContractError(err)
-	}
-	merged, err := transfer.MergeRanges(verified, transaction.pending)
-	if err != nil {
-		return transfer.VerifiedRanges{}, fileContractError(err)
-	}
-	next, err := checkpointmodel.AdvanceDurableRanges(transaction.record, checkpointRanges(merged))
-	if err != nil {
-		return transfer.VerifiedRanges{}, fileContractError(err)
-	}
-	previous := transaction.record
-	if _, err := transaction.engine.storeRecord(ctx, &previous, next); err != nil {
-		return transfer.VerifiedRanges{}, err
-	}
-	transaction.record = next
-	transaction.pending, _ = content.NewRangeSet(nil)
-	return durableRanges(transaction.binding, next)
 }
 
 func (transaction *resumablePartialFileTransaction) Commit(ctx context.Context) (transfer.FileSettlement, error) {
@@ -138,11 +94,15 @@ func (transaction *resumablePartialFileTransaction) Commit(ctx context.Context) 
 	previous := transaction.record.Phase()
 	settlement, err := transaction.commitLocked(ctx)
 	next := transaction.record.Phase()
+	cleanupErr := transaction.receiptCleanupErr
 	transaction.mu.Unlock()
-	transaction.engine.emit(transaction.engine.traceEvent(
+	transaction.engine.emit(transaction.traceEvent(
 		sequence, traceOperationForSettlement(TracePublish, settlement, err),
 		traceOutcomeForSettlement(settlement, err), previous, next, traceFault(err),
 	))
+	if next == checkpointmodel.PhasePublished {
+		transaction.traceReceipt(cleanupErr)
+	}
 	return settlement, err
 }
 
@@ -179,7 +139,12 @@ func (transaction *resumablePartialFileTransaction) commitLocked(ctx context.Con
 func (transaction *resumablePartialFileTransaction) recoverPublication(ctx context.Context, retry bool) (transfer.FileStart, error) {
 	transaction.mu.Lock()
 	settlement, err := transaction.publishFromDurableState(ctx, retry)
+	published := transaction.record.Phase() == checkpointmodel.PhasePublished
+	cleanupErr := transaction.receiptCleanupErr
 	transaction.mu.Unlock()
+	if published {
+		transaction.traceReceipt(cleanupErr)
+	}
 	return settlementStart(settlement, err)
 }
 
@@ -232,6 +197,13 @@ func (transaction *resumablePartialFileTransaction) publishFromDurableState(
 		return transfer.FileSettlement{}, err
 	}
 	transaction.record = published
+	// The durable terminal record is the receipt. Private anchors can now be
+	// released without making later continuation depend on the public path.
+	cleanupErr := transaction.closeFileLocked(ctx)
+	if cleanupErr == nil {
+		cleanupErr = transaction.cleanupOwned(ctx)
+	}
+	transaction.receiptCleanupErr = cleanupErr
 	// A final found after restart establishes past delivery only. Keep normal
 	// resume fast rather than rereading public bytes that users may have edited.
 	if !retry {
@@ -250,9 +222,7 @@ func (transaction *resumablePartialFileTransaction) publishFromDurableState(
 	if err == nil {
 		settlement, err = settlement.WithMetadataWarnings(settlementMetadataWarnings(transaction.warnings))
 	}
-	// The published checkpoint and exact stage/anchor witness remain until the
-	// operation settles. Terminal cleanup owns their retirement and records
-	// cleanup-pending without retracting this already-durable final.
+	// Cleanup failure retains the receipt; operation cleanup can retry later.
 	_ = transaction.closeResourcesLocked(ctx)
 	return settlement, err
 }
@@ -291,7 +261,7 @@ func (transaction *resumablePartialFileTransaction) Pause(
 	settlement, err := transaction.pauseLocked(ctx)
 	next := transaction.record.Phase()
 	transaction.mu.Unlock()
-	transaction.engine.emit(transaction.engine.traceEvent(
+	transaction.engine.emit(transaction.traceEvent(
 		sequence, traceOperationForSettlement(TracePause, settlement, err),
 		traceOutcomeForSettlement(settlement, err), previous, next, traceFault(err),
 	))
@@ -308,7 +278,7 @@ func (transaction *resumablePartialFileTransaction) pauseLocked(
 		return settlement, joinFailures(ctx, err, transaction.closeResourcesLocked(ctx))
 	}
 	if _, err := transaction.checkpointLocked(ctx); err != nil {
-		return transfer.FileSettlement{}, err
+		return transfer.FileSettlement{}, joinFailures(ctx, err, transaction.closeResourcesLocked(ctx))
 	}
 	next, err := pauseRecord(transaction.record)
 	if err != nil {
@@ -346,7 +316,7 @@ func (transaction *resumablePartialFileTransaction) Retire(
 	settlement, err := transaction.retireLocked(ctx, retirement)
 	next := transaction.record.Phase()
 	transaction.mu.Unlock()
-	transaction.engine.emit(transaction.engine.traceEvent(
+	transaction.engine.emit(transaction.traceEvent(
 		sequence, traceOperationForSettlement(TraceRetire, settlement, err),
 		traceOutcomeForSettlement(settlement, err), previous, next, traceFault(err),
 	))
@@ -399,6 +369,9 @@ func (transaction *resumablePartialFileTransaction) validateOpen(ctx context.Con
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if transaction.flushFailure != nil {
+		return transaction.flushFailure
+	}
 	if transaction.state != transactionOpen || transaction.engine == nil || transaction.file == nil ||
 		transaction.destination == nil || transaction.record.Phase() != checkpointmodel.PhaseActive ||
 		transaction.record.CommitState() != checkpointmodel.CommitVerified {
@@ -421,6 +394,10 @@ func (transaction *resumablePartialFileTransaction) cleanupOwned(ctx context.Con
 }
 
 func (transaction *resumablePartialFileTransaction) closeFileLocked(ctx context.Context) error {
+	if transaction.flushTimer != nil {
+		transaction.flushTimer.Stop()
+		transaction.flushTimer = nil
+	}
 	err := collaboratorError(ctx, closeOwnedFile(transaction.file))
 	transaction.file = nil
 	return err

@@ -242,7 +242,7 @@ func (store *FileExecutionStore) CreateOwnedFile(
 			errors.Join(err, stage.Close(), stageDirectory.Close(), anchorDirectory.Close()),
 		)
 	}
-	anchor, linkErr := anchorDirectory.LinkFileNoReplace(stage, anchorName)
+	anchor, linkErr := createRecoveryWitness(anchorDirectory, stage, anchorName)
 	if linkErr == nil && anchor == nil {
 		linkErr = outputcap.ErrUnsafeNamespace
 	}
@@ -533,7 +533,7 @@ func classifyOwnedObservation(
 	if stage.file == nil || anchor.file == nil {
 		return fileexecution.OwnedStageUnsafe, outputcap.ErrUnsafeNamespace
 	}
-	same, err := stage.file.SameFile(anchor.file)
+	same, err := matchesRecoveryWitness(stage.file, anchor.file)
 	if err != nil {
 		return fileexecution.OwnedStageUnsafe, err
 	}
@@ -556,8 +556,11 @@ func sameExactOwnedFiles(stage, anchor outputcap.FileIdentity, exactSize uint64)
 	if stage == nil || anchor == nil {
 		return false, outputcap.ErrUnsafeNamespace
 	}
-	same, sameErr := stage.SameFile(anchor)
+	same, sameErr := matchesRecoveryWitness(stage, anchor)
 	stageSize, stageErr := stage.Size()
+	if _, portable := stage.(recoveryMetadataSource); portable {
+		return same && stageSize == exactSize, errors.Join(sameErr, stageErr)
+	}
 	anchorSize, anchorErr := anchor.Size()
 	if sameErr != nil || stageErr != nil || anchorErr != nil {
 		return false, errors.Join(sameErr, stageErr, anchorErr)

@@ -20,7 +20,7 @@ func (destination *fileDestination) WithPublication(
 	operation func(fileexecution.FilePublication) error,
 ) error {
 	object, err := checkpointmodel.ObjectIDFromBytes(expectation.ObjectIdentity().Bytes())
-	if err != nil || owned == nil || owned.ObjectID() != object || operation == nil {
+	if err != nil || owned != nil && owned.ObjectID() != object || owned == nil && destination.objects == nil || operation == nil {
 		return directoryBoundaryError(ctx, errors.Join(ErrInvalidClaim, err))
 	}
 	_, err = destination.withParent(ctx, func(parent outputcap.Directory) (fileexecution.FinalObservation, error) {
@@ -103,6 +103,12 @@ func (publication *filePublication) PublishNoReplace(ctx context.Context) (filee
 			return fileexecution.FinalObservation{}, ErrInvalidClaim
 		}
 		return destination.observeFinalAgainstFile(parent, source.NativeFile(), expectation)
+	}
+	// A moved stage can disappear before its delivery receipt is recorded.
+	// Recovery may observe and sync that final without a writable source, but
+	// absence of the final does not grant authority to create it again.
+	if owned == nil {
+		return fileexecution.FinalObservation{}, ErrInvalidClaim
 	}
 	var linked outputcap.ObservedFile
 	var publishErr error

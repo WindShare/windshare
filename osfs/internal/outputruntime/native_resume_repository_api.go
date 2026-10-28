@@ -423,8 +423,8 @@ func (lease *NativeResumeLease) ensureFileStoreLocked() (bool, error) {
 	var recordCount uint64
 	var attention []checkpointstore.Attention
 	if store != nil {
+		_, attention, err = store.Inventory()
 		recordCount = store.RecordCount()
-		_, attention = store.LineageSnapshot()
 	}
 	lease.runtime.traceCheckpointReconciled(
 		intent, transfer.OutputSessionID{}, recordCount, attention, err,

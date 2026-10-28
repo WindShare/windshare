@@ -38,7 +38,7 @@ func openCertifiedNativeOutputForTest(
 	expectedIdentityScheme outputcap.IdentitySchemeID,
 ) nativeOutputEvidencePlatform {
 	t.Helper()
-	base, err := openNativeOutputPlatform(root, false)
+	base, err := openStrongNativeOutputPlatform(root, false)
 	if err != nil {
 		nativeOutputIdentitySchemeFailure(t, profile, "open certified output root", err)
 		return nil

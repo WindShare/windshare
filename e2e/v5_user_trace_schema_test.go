@@ -137,7 +137,7 @@ func buildV5TracePayloadSchemas() map[string]*v5TraceObjectSchema {
 		v5TraceFields(
 			v5TraceDecimal,
 			"discovered_files", "discovered_bytes", "published_files", "published_bytes",
-			"verified_bytes", "newly_verified_bytes", "previously_published_bytes",
+			"verified_bytes", "newly_verified_bytes", "previously_published_bytes", "restart_reusable_bytes",
 		),
 		v5TraceObjectField("file_outcomes", fileOutcomes, false),
 		v5TraceObjectField("capacity_wait", capacityWait, false),

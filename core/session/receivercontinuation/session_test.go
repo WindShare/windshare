@@ -379,3 +379,12 @@ func sourceBoundarySenderConfig(paths []string, config liveshare.SenderConfig) l
 	}
 	return config
 }
+
+func (transaction *transientFileTransaction) Accept(ctx context.Context) (transfer.FileProgress, error) {
+	checkpoint, err := transaction.Checkpoint(ctx)
+	if err != nil {
+		return transfer.FileProgress{}, err
+	}
+	progress, err := transfer.ProgressFromCheckpoint(checkpoint)
+	return progress, err
+}

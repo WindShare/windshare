@@ -85,7 +85,7 @@ func (lookup Lookup) Valid() bool {
 
 type Authority interface {
 	BindDestination(context.Context) (Mode, error)
-	LookupActive(context.Context, transfer.SelectionSpec) (Lookup, error)
+	SelectOperation(context.Context, transfer.SelectionSpec, receivecontract.OperationSelection) (Lookup, error)
 	Close() error
 }
 type Config struct {

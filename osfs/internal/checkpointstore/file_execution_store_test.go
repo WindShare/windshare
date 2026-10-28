@@ -103,6 +103,9 @@ func TestFileExecutionStoreOwnsCheckpointAndObjectLifecycle(t *testing.T) {
 	if err != nil || reconciled.RecordCount() != 1 {
 		t.Fatalf("reconciled store = (%d, %v)", reconciled.RecordCount(), err)
 	}
+	if _, err := repository.Reconcile(reconciled.candidateDurable); err != nil {
+		t.Fatal(err)
+	}
 	promoted, err := repository.Reopen(record.RecordID())
 	if err != nil {
 		t.Fatal(err)
@@ -143,6 +146,9 @@ func TestFileExecutionStoreOwnsCheckpointAndObjectLifecycle(t *testing.T) {
 	reconciled, err = NewFileExecutionStore(&repository)
 	if err != nil {
 		t.Fatalf("range candidate crash recovery = %v", err)
+	}
+	if _, err := repository.Reconcile(reconciled.candidateDurable); err != nil {
+		t.Fatal(err)
 	}
 	recovered, err := repository.Reopen(record.RecordID())
 	recoveredRanges := recovered.VerifiedRanges()

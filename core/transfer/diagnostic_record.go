@@ -16,6 +16,9 @@ func (v TransferLifecycleTrace) DiagnosticRecord() diag.Record {
 	if v.ItemBlockReason != 0 {
 		f["item_block_reason"] = diag.Text(v.ItemBlockReason.DiagnosticName())
 	}
+	if !v.FileID.IsZero() {
+		f["file_id"] = diag.Identity(v.FileID.Bytes())
+	}
 	c := diag.Fields{"protocol_session_id": diag.Identity(v.ProtocolSessionID[:]),
 		"receive_operation_id": diag.Identity(v.ReceiveOperationID.Bytes()), "transfer_job_id": diag.Identity(v.TransferJobID.Bytes())}
 	if !v.ReceiveIntentDigest.IsZero() {
@@ -47,8 +50,9 @@ func (v ReceiveProgressSnapshot) DiagnosticValue() diag.Value {
 		"discovered_files": diag.Uint(v.DiscoveredFiles), "discovered_bytes": diag.Uint(v.DiscoveredBytes),
 		"published_files": diag.Uint(v.PublishedFiles), "published_bytes": diag.Uint(v.PublishedBytes),
 		"verified_bytes": diag.Uint(v.VerifiedBytes), "previously_published_bytes": diag.Uint(v.PreviouslyPublishedBytes),
-		"newly_verified_bytes": diag.Uint(v.NewlyVerifiedBytes),
-		"file_outcomes":        v.FileOutcomes.DiagnosticValue(),
+		"newly_verified_bytes":   diag.Uint(v.NewlyVerifiedBytes),
+		"restart_reusable_bytes": diag.Uint(v.RestartReusableBytes),
+		"file_outcomes":          v.FileOutcomes.DiagnosticValue(),
 		"capacity_wait": diag.Object(diag.Fields{"active_waiters": diag.Number(float64(v.CapacityWait.ActiveWaiters)),
 			"active_since":        diag.Text(v.CapacityWait.ActiveSince.Format(time.RFC3339Nano)),
 			"visible_after":       diag.Text(v.CapacityWait.VisibleAfter.Format(time.RFC3339Nano)),

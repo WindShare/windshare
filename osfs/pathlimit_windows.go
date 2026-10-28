@@ -5,7 +5,7 @@ import (
 	"syscall"
 
 	"github.com/windshare/windshare/osfs/internal/outputcap"
-	"github.com/windshare/windshare/osfs/internal/outputwindows"
+	"github.com/windshare/windshare/osfs/internal/outputportable"
 )
 
 func isReparsePoint(information fs.FileInfo) bool {
@@ -20,5 +20,5 @@ func isReparsePoint(information fs.FileInfo) bool {
 }
 
 func openNativeOutputPlatform(path string, create bool) (outputcap.Platform, error) {
-	return outputwindows.Open(path, create)
+	return outputportable.Open(path, create)
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io/fs"
 	"slices"
 	"sync"
 
@@ -86,18 +87,94 @@ func newFileExecutionStore(
 		if len(store.authority.physical) != 0 || len(store.authority.attention) != 0 {
 			return nil, codedError(ErrorUnsafeInstall, "open fresh file execution store", checkpointmodel.ErrRecordBinding)
 		}
+		store.authority.inventoryComplete = true
 		return store, nil
 	}
-	snapshot, err := repository.Reconcile(store.candidateDurable)
-	if err != nil {
-		return nil, err
-	}
-	// Physical candidate/committed reconciliation is complete before any logical
-	// grouping. Corrupt and foreign images remain bounded inert attention.
-	if err := store.authority.rebuild(snapshot.Records(), snapshot.Attention()); err != nil {
-		return nil, codedError(ErrorCorruptRecord, "index reconciled file checkpoints", err)
-	}
 	return store, nil
+}
+
+const maximumCachedFileRecords = 256
+
+// The task lease excludes other writers. A bounded read-through cache avoids
+// rebuilding a directory-wide manifest before the first resumed range.
+func (store *FileExecutionStore) loadLineageLocked(spec checkpointmodel.CheckpointLineageSpec) (checkpointmodel.Record, bool, error) {
+	if err := store.authority.requireSettled(); err != nil {
+		return checkpointmodel.Record{}, false, err
+	}
+	id, err := checkpointmodel.DeriveCheckpointLineageID(spec)
+	if err != nil {
+		return checkpointmodel.Record{}, false, err
+	}
+	if record, found := store.authority.physical[checkpointmodel.RecordID(id)]; found {
+		return record, true, nil
+	}
+	if len(store.authority.physical) >= maximumCachedFileRecords {
+		if err := store.authority.rebuild(nil, nil); err != nil {
+			return checkpointmodel.Record{}, false, err
+		}
+		store.authority.inventoryComplete = false
+	}
+	record, err := store.repository.Reopen(checkpointmodel.RecordID(id))
+	if errors.Is(err, fs.ErrNotExist) {
+		return checkpointmodel.Record{}, false, nil
+	}
+	if err != nil {
+		return checkpointmodel.Record{}, false, err
+	}
+	actual, err := record.CheckpointLineageSpec()
+	if err != nil || !checkpointmodel.SameCheckpointLineageSpec(actual, spec) {
+		return checkpointmodel.Record{}, false, checkpointmodel.ErrRecordBinding
+	}
+	if err := store.authority.add(record); err != nil {
+		return checkpointmodel.Record{}, false, err
+	}
+	return record, true, nil
+}
+
+func (store *FileExecutionStore) LookupDeliveredRecord(ctx context.Context, spec checkpointmodel.CheckpointLineageSpec) (checkpointmodel.Record, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return checkpointmodel.Record{}, false, err
+	}
+	store.authority.mu.Lock()
+	defer store.authority.mu.Unlock()
+	record, found, err := store.loadLineageLocked(spec)
+	if ErrorCodeFor(err) == ErrorCorruptRecord {
+		return checkpointmodel.Record{}, false, nil
+	}
+	if err != nil {
+		return checkpointmodel.Record{}, false, err
+	}
+	return record, found && record.Phase() == checkpointmodel.PhasePublished && record.CommitState() == checkpointmodel.CommitPublished, nil
+}
+
+func (store *FileExecutionStore) inventoryLocked() error {
+	if err := store.authority.requireSettled(); err != nil {
+		return err
+	}
+	if store.authority.inventoryComplete {
+		return nil
+	}
+	snapshot, err := store.repository.Reconcile(func(record checkpointmodel.Record) (bool, error) {
+		if _, active := store.authority.physical[record.RecordID()]; active {
+			return false, nil
+		}
+		return store.candidateDurable(record)
+	})
+	if err != nil {
+		return err
+	}
+	for _, record := range snapshot.Records() {
+		if cached, found := store.authority.physical[record.RecordID()]; found &&
+			!bytes.Equal(cached.CanonicalBytes(), record.CanonicalBytes()) {
+			store.authority.markUnsettled()
+			return checkpointmodel.ErrRecordBinding
+		}
+	}
+	if err := store.authority.rebuild(snapshot.Records(), snapshot.Attention()); err != nil {
+		return err
+	}
+	store.authority.inventoryComplete = true
+	return nil
 }
 
 // Snapshot retains the physical inventory for exact cleanup and low-level
@@ -109,6 +186,9 @@ func (store *FileExecutionStore) Snapshot() (records []checkpointmodel.Record, a
 	}
 	store.authority.mu.Lock()
 	defer store.authority.mu.Unlock()
+	if err := store.inventoryLocked(); err != nil {
+		return nil, []Attention{{code: AttentionCorruptRecord}}
+	}
 	records = make([]checkpointmodel.Record, 0, len(store.authority.physical))
 	for _, record := range store.authority.physical {
 		records = append(records, record)
@@ -121,12 +201,25 @@ func (store *FileExecutionStore) LineageSnapshot() (
 	slots []FileExecutionLineageSlot,
 	attention []Attention,
 ) {
+	slots, attention, err := store.Inventory()
+	if err != nil {
+		return nil, []Attention{{code: AttentionCorruptRecord}}
+	}
+	return slots, attention
+}
+
+// Inventory is reserved for explicit management and cleanup. Ordinary transfer
+// loads each logical file on demand, so unrelated state cannot delay its start.
+func (store *FileExecutionStore) Inventory() ([]FileExecutionLineageSlot, []Attention, error) {
 	if store == nil || store.authority == nil {
-		return nil, nil
+		return nil, nil, transfer.ErrInvalidOutputBinding
 	}
 	store.authority.mu.Lock()
 	defer store.authority.mu.Unlock()
-	return store.authority.lineageSnapshot(), slices.Clone(store.authority.attention)
+	if err := store.inventoryLocked(); err != nil {
+		return nil, nil, err
+	}
+	return store.authority.lineageSnapshot(), slices.Clone(store.authority.attention), nil
 }
 
 // CleanupOwned retires every authenticated physical record, including records
@@ -141,6 +234,9 @@ func (store *FileExecutionStore) CleanupOwned(ctx context.Context) error {
 	}
 	store.authority.mu.Lock()
 	defer store.authority.mu.Unlock()
+	if err := store.inventoryLocked(); err != nil {
+		return err
+	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if err := store.authority.requireSettled(); err != nil {
@@ -193,6 +289,12 @@ func (store *FileExecutionStore) Lookup(
 	}
 	store.authority.mu.Lock()
 	defer store.authority.mu.Unlock()
+	if _, _, err := store.loadLineageLocked(spec); err != nil {
+		if ErrorCodeFor(err) == ErrorCorruptRecord {
+			return fileexecution.ResolveCheckpoint(checkpointmodel.CheckpointLineageDecisionInvalid, checkpointmodel.Record{})
+		}
+		return fileexecution.CheckpointResolution{}, err
+	}
 	decision, record, err := store.authority.classify(spec, key.CheckpointLineageRequest())
 	if err != nil {
 		if errors.Is(err, errFileExecutionAuthorityUnsettled) {
@@ -258,6 +360,9 @@ func (store *FileExecutionStore) installInitial(
 	}
 	store.authority.mu.Lock()
 	defer store.authority.mu.Unlock()
+	if _, _, err := store.loadLineageLocked(spec); err != nil {
+		return fileexecution.InitialCheckpointObservation{}, err
+	}
 	decision, selected, err := store.authority.classify(spec, request)
 	if err != nil {
 		return fileexecution.InitialCheckpointObservation{}, initialAuthorityError(err)
@@ -347,6 +452,9 @@ func (store *FileExecutionStore) Replace(
 	}
 	store.authority.mu.Lock()
 	defer store.authority.mu.Unlock()
+	if _, _, err := store.loadLineageLocked(spec); err != nil {
+		return fileexecution.CheckpointObservation{}, err
+	}
 	decision, selected, err := store.authority.classify(spec, checkpointmodel.CheckpointLineageRequest{
 		FileRevision: previous.FileRevision(), ExactSize: previous.ExactSize(),
 	})

@@ -32,6 +32,10 @@ func (engine *Engine) beginExisting(
 		return recovery.failStart(ctx, err)
 	}
 	recovery.binding = binding
+	if record.Phase() == checkpointmodel.PhasePublished && record.CommitState() == checkpointmodel.CommitPublished {
+		settlement, err := transfer.NewPreviouslyPublishedFileSettlement(binding)
+		return engine.terminalStart(ctx, destination, nil, settlement, err)
+	}
 	ownedFile, owned, openErr := engine.platform.OpenOwnedFile(
 		ctx, record.OwnedObjectID(), record.ExactSize(), existingRecordWritable(record),
 	)

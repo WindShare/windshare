@@ -555,3 +555,12 @@ func (fixture testFixture) outputFile(
 	}
 	return file
 }
+
+func (transaction *fakeTransactionExecutor) Accept(ctx context.Context) (transfer.FileProgress, MutationCut, error) {
+	checkpoint, cut, err := transaction.Checkpoint(ctx)
+	if err != nil {
+		return transfer.FileProgress{}, cut, err
+	}
+	progress, err := transfer.ProgressFromCheckpoint(checkpoint)
+	return progress, cut, err
+}

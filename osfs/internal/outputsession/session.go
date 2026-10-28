@@ -170,6 +170,18 @@ type Session struct {
 
 var _ transfer.DirectTreeSession = (*Session)(nil)
 
+func (session *Session) LookupDelivery(ctx context.Context, file catalog.FileID, path string) (transfer.HistoricalDelivery, bool, error) {
+	lease, _, err := session.beginOperation()
+	if err != nil {
+		return transfer.HistoricalDelivery{}, false, err
+	}
+	defer lease.release()
+	if history, ok := session.files.(transfer.DeliveryHistory); ok {
+		return history.LookupDelivery(ctx, file, path)
+	}
+	return transfer.HistoricalDelivery{}, false, nil
+}
+
 func New(config Config) (*Session, error) {
 	scope, limits, err := config.validate()
 	if err != nil {

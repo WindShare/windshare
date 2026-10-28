@@ -255,7 +255,7 @@ func validateNativeMethodSets(
 		if _, ok := proof.(liveCleanupStageRemover); !ok {
 			return errors.Join(ErrInvalidConfiguration, errors.New("live-cleanup stage removal is unavailable"))
 		}
-	} else if capabilities.SafePublish().Supported() {
+	} else if capabilities.SafePublish().Supported() && !capabilities.OperationRecovery().Supported() {
 		if _, ok := root.(processStageCreator); !ok {
 			return errors.Join(ErrInvalidConfiguration, errors.New("process-owned stage creation is unavailable"))
 		}

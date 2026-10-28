@@ -31,6 +31,7 @@ var (
 
 type getOutputPreparation struct {
 	admission    OutputAdmission
+	operationID  receivecontract.OperationID
 	operation    *getOutputOperation
 	contentReady chan struct{}
 	paths        *receiverContentPaths
@@ -77,7 +78,7 @@ func (a *runner) prepareGetOutput(
 		return getOutputPreparation{}, observation.fail(stepLocalFailure, errors.Join(errGetOutputAdapterContract, closeErr))
 	}
 	return getOutputPreparation{
-		authority: authority, mode: mode, displayRoot: outputRoot, operation: new(getOutputOperation), admission: request.admission,
+		authority: authority, mode: mode, displayRoot: outputRoot, operation: new(getOutputOperation), admission: request.admission, operationID: request.operationID,
 		contentReady: make(chan struct{}), paths: newReceiverContentPaths(observation),
 	}, stepReady
 }
@@ -350,7 +351,7 @@ func (a *runner) buildGetTransferJob(
 			err = transfer.ErrInvalidOutputBinding
 		}
 	} else {
-		admission, err = resolveGetOutputOperation(ctx, output.authority, dependencies, selection, output.admission)
+		admission, err = resolveGetOutputOperation(ctx, output.authority, dependencies, selection, output.admission, output.operationID)
 		if err == nil && output.operation != nil {
 			*output.operation = admission.operation
 		}
@@ -417,11 +418,22 @@ func resolveGetOutputOperation(
 	resolver getShapeResolver,
 	selection transfer.SelectionSpec,
 	policy OutputAdmission,
+	operationID receivecontract.OperationID,
 ) (getOutputAdmission, error) {
 	if ctx == nil || authority == nil || resolver == nil || selection.IsZero() {
 		return getOutputAdmission{}, errGetOutputReservationContract
 	}
-	lookup, err := authority.LookupActive(ctx, selection)
+	selector := receivecontract.AutomaticOperation()
+	if policy == OutputRedownload {
+		selector = receivecontract.RedownloadOperation()
+	}
+	if !operationID.IsZero() {
+		if policy != OutputResumeExisting {
+			return getOutputAdmission{}, errGetOutputReservationContract
+		}
+		selector, _ = receivecontract.SelectOperationID(operationID)
+	}
+	lookup, err := authority.SelectOperation(ctx, selection, selector)
 	if err != nil {
 		return getOutputAdmission{}, err
 	}

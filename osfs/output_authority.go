@@ -3,6 +3,7 @@ package osfs
 import (
 	"context"
 	"errors"
+	"github.com/windshare/windshare/core/catalog"
 
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
@@ -378,6 +379,7 @@ type FilesystemOutputExecutionModeFact = outputcap.ExecutionMode
 // FilesystemOutputTrace projects native capability decisions and milestones.
 // These observations carry no handles or durable recovery authority.
 type FilesystemOutputTrace struct {
+	FileID                   catalog.FileID
 	Operation                FilesystemOutputTraceOperation
 	DestinationCapabilities  FilesystemOutputDestinationCapabilities
 	ExecutionMode            FilesystemOutputExecutionModeFact
@@ -567,10 +569,14 @@ func (authority *FilesystemOutputAuthority) LookupActive(
 	ctx context.Context,
 	selection transfer.SelectionSpec,
 ) (FilesystemOutputLookup, error) {
+	return authority.SelectOperation(ctx, selection, receivecontract.AutomaticOperation())
+}
+
+func (authority *FilesystemOutputAuthority) SelectOperation(ctx context.Context, selection transfer.SelectionSpec, selector receivecontract.OperationSelection) (FilesystemOutputLookup, error) {
 	if authority == nil || authority.authority == nil {
 		return FilesystemOutputLookup{}, transfer.ErrInvalidOutputBinding
 	}
-	lookup, err := authority.authority.LookupActive(ctx, selection)
+	lookup, err := authority.authority.SelectOperation(ctx, selection, selector)
 	return FilesystemOutputLookup{lookup: lookup}, outputruntime.DiagnoseFilesystemOutputFailure(
 		outputruntime.FilesystemOutputFailureActiveLookup, err,
 	)

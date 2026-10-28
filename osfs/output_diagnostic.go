@@ -103,6 +103,9 @@ func (v FilesystemOutputTrace) DiagnosticRecord() diagnostics.Record {
 		})
 	}
 	correlation := diagnostics.Fields{}
+	if !v.FileID.IsZero() {
+		correlation["file_id"] = diagnostics.Identity(v.FileID.Bytes())
+	}
 	if !v.ReceiveOperationID.IsZero() {
 		correlation["receive_operation_id"] = diagnostics.Identity(v.ReceiveOperationID.Bytes())
 	}

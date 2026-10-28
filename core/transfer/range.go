@@ -454,20 +454,25 @@ func (r *jobRun) transferRequestedRange(
 			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0, progress,
 		)
 	}
-	checkpoint, rawCheckpointErr := transaction.Checkpoint(ctx)
+	acknowledgement, rawCheckpointErr := transaction.Accept(ctx)
 	err = normalizeOutputBoundary(ctx, rawCheckpointErr)
 	if err != nil {
 		return false, r.settleFailedFile(
 			ctx, plan, opened, transaction, FailureFileOutput, err, 0, progress,
 		)
 	}
-	delta, valid := progress.acknowledge(transaction, checkpoint)
-	if !valid {
+	checkpoint := acknowledgement.Accepted()
+	nextProgress := *progress
+	persistedDelta, persistenceValid := nextProgress.observePersistence(acknowledgement)
+	delta, valid := nextProgress.acknowledge(transaction, checkpoint)
+	if !valid || !persistenceValid {
 		return false, r.settleFailedFile(
 			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0, progress,
 		)
 	}
+	*progress = nextProgress
 	r.job.progress.addNewlyVerified(delta)
+	r.job.progress.replaceRestartReusable(0, persistedDelta)
 	return true, nil
 }
 
@@ -482,7 +487,8 @@ func checkpointExactlyAdvances(
 		return false
 	}
 	expected, err := MergeRanges(prior.Ranges(), requestedSet)
-	return err == nil && next.Binding() == transaction.Binding() && next.Retention() == prior.Retention() &&
+	return err == nil && next.Binding() == transaction.Binding() &&
+		(next.Retention() == prior.Retention() || prior.Retention() == RangesAfterRestart && next.Retention() == RangesInProcess) &&
 		next.CheckpointGeneration() > prior.CheckpointGeneration() &&
 		exactRangeSetsEqual(next.Ranges(), expected)
 }

@@ -3,6 +3,7 @@ package fileexecution
 import (
 	"errors"
 
+	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
@@ -36,10 +37,10 @@ const (
 	TraceNeedsAttention
 )
 
-// TraceEvent deliberately excludes paths, file IDs, handles, and raw errors.
-// Stable operation identity plus a per-engine sequence reconstructs control flow
+// Task and logical file identities correlate recovery decisions across restarts
 // without making diagnostics a source of filesystem authority.
 type TraceEvent struct {
+	FileID            catalog.FileID
 	OperationID       receivecontract.OperationID
 	IntentDigest      transfer.ReceiveIntentDigest
 	SessionID         transfer.OutputSessionID
@@ -94,6 +95,7 @@ func (engine *Engine) traceEvent(
 func (engine *Engine) checkpointDecisionTrace(
 	sequence uint64,
 	decision checkpointmodel.CheckpointLineageDecision,
+	file catalog.FileID,
 ) TraceEvent {
 	outcome := TraceReconciled
 	if decision == checkpointmodel.CheckpointLineageDecisionAbsent {
@@ -101,6 +103,7 @@ func (engine *Engine) checkpointDecisionTrace(
 	}
 	event := engine.traceEvent(sequence, TraceCheckpoint, outcome, 0, 0, fault.Fault{})
 	event.Decision = decision
+	event.FileID = file
 	return event
 }
 
@@ -142,4 +145,14 @@ func traceOperationForSettlement(
 		return TraceItemBlocked
 	}
 	return operation
+}
+
+func (transaction *resumablePartialFileTransaction) traceEvent(sequence uint64, operation TraceOperation, outcome TraceOutcome, previous, next checkpointmodel.Phase, value fault.Fault) TraceEvent {
+	event := transaction.engine.traceEvent(sequence, operation, outcome, previous, next, value)
+	event.FileID = transaction.binding.FileID()
+	return event
+}
+func (transaction *resumablePartialFileTransaction) traceReceipt(err error) {
+	transaction.engine.emit(transaction.traceEvent(transaction.engine.nextSequence(), TraceDeliveryReceipt,
+		traceOutcomeForError(err), checkpointmodel.PhasePublished, checkpointmodel.PhasePublished, traceFault(err)))
 }

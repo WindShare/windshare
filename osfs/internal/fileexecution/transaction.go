@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 	"sync"
+	"time"
 
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
@@ -27,12 +28,17 @@ type resumablePartialFileTransaction struct {
 	file            OwnedFile
 	binding         transfer.MaterializedFileBinding
 
-	mu       sync.Mutex
-	record   checkpointmodel.Record
-	pending  content.RangeSet
-	state    transactionState
-	resumed  bool
-	warnings []MetadataWarning
+	mu                 sync.Mutex
+	record             checkpointmodel.Record
+	pending            content.RangeSet
+	state              transactionState
+	resumed            bool
+	warnings           []MetadataWarning
+	acceptedGeneration transfer.CheckpointGeneration
+	lastCheckpoint     time.Time
+	flushTimer         CheckpointTimer
+	flushFailure       error
+	receiptCleanupErr  error
 }
 
 type MetadataWarningKind uint8
@@ -126,6 +132,21 @@ func (transaction *PartialFileTransaction) Checkpoint(ctx context.Context) (tran
 		return transfer.VerifiedRanges{}, fileContractError(ErrTransactionClosed)
 	}
 	return transaction.strategy.Checkpoint(ctx)
+}
+
+func (transaction *PartialFileTransaction) Accept(ctx context.Context) (transfer.FileProgress, error) {
+	if transaction == nil || transaction.strategy == nil {
+		return transfer.FileProgress{}, fileContractError(ErrTransactionClosed)
+	}
+	return transaction.strategy.Accept(ctx)
+}
+
+func (transaction *livePartialFileStrategy) Accept(ctx context.Context) (transfer.FileProgress, error) {
+	checkpoint, err := transaction.Checkpoint(ctx)
+	if err != nil {
+		return transfer.FileProgress{}, err
+	}
+	return transfer.ProgressFromCheckpoint(checkpoint)
 }
 
 func (transaction *PartialFileTransaction) Commit(ctx context.Context) (transfer.FileSettlement, error) {

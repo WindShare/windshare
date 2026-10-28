@@ -95,7 +95,7 @@ func validateCheckpointCut(previous, next Record) error {
 	return nil
 }
 
-// ValidLifecycleTransition is the pure v2 phase reducer used by temporary
+// ValidLifecycleTransition is the pure phase reducer used by temporary
 // runtime projections. It does not grant persistence or filesystem authority.
 func ValidLifecycleTransition(
 	previousPhase Phase,
@@ -133,10 +133,8 @@ func ValidLifecycleTransition(
 	case PhasePublishing:
 		return nextPhase == PhasePaused || nextPhase == PhasePublished ||
 			nextPhase == PhaseRetired || nextPhase == PhaseQuarantined
-	case PhasePublished, PhaseRetired:
-		// Terminal file results remain authoritative, but later exact-object or
-		// final observations may expose item-local cleanup/publication uncertainty.
-		// Quarantine records that debt without reopening mutation authority.
+	case PhaseRetired:
+		// Unfinished-object cleanup may still reveal uncertain ownership.
 		return nextPhase == PhaseQuarantined
 	default:
 		return false
