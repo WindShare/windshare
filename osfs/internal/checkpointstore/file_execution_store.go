@@ -173,6 +173,7 @@ func (store *FileExecutionStore) inventoryLocked() error {
 	if err := store.authority.rebuild(snapshot.Records(), snapshot.Attention()); err != nil {
 		return err
 	}
+	store.authority.reclaimedCandidates += snapshot.ReclaimedCandidateCount()
 	store.authority.inventoryComplete = true
 	return nil
 }
@@ -260,6 +261,15 @@ func (store *FileExecutionStore) CleanupOwned(ctx context.Context) error {
 		return codedError(ErrorUnsafeInstall, "cleanup ordinary file state", checkpointmodel.ErrRecordRecovery)
 	}
 	return nil
+}
+
+func (store *FileExecutionStore) ReclaimedCandidateCount() uint64 {
+	if store == nil || store.authority == nil {
+		return 0
+	}
+	store.authority.mu.Lock()
+	defer store.authority.mu.Unlock()
+	return store.authority.reclaimedCandidates
 }
 
 func (store *FileExecutionStore) RecordCount() uint64 {

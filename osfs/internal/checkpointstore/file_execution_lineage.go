@@ -16,12 +16,13 @@ var errFileExecutionAuthorityUnsettled = errors.New("file checkpoint authority h
 // cannot create competing physical records or transfer saved ranges between them.
 // The operation lease excludes processes; this mutex serializes local adapters.
 type fileExecutionAuthority struct {
-	mu          sync.Mutex
-	physical    map[checkpointmodel.RecordID]checkpointmodel.Record
-	objects     map[checkpointmodel.ObjectID]map[checkpointmodel.RecordID]struct{}
-	attention   []Attention
-	recordLimit int
-	unsettled   bool
+	mu                  sync.Mutex
+	physical            map[checkpointmodel.RecordID]checkpointmodel.Record
+	objects             map[checkpointmodel.ObjectID]map[checkpointmodel.RecordID]struct{}
+	attention           []Attention
+	reclaimedCandidates uint64
+	recordLimit         int
+	unsettled           bool
 	// Adapters share the cache, so eviction must invalidate every inventory view.
 	inventoryComplete bool
 }
