@@ -1,4 +1,4 @@
-.portal-brand-scene { --spirit-x: 0px; --spirit-y: 0px; --spirit-tilt: 0deg; position: relative; width: min(100%, 480px); height: 202px; margin: 24px 0 0; }
+.portal-brand-scene { --spirit-x: 0px; --spirit-y: 0px; --spirit-tilt: 0deg; --spirit-eye-openness: 1; --spirit-smile: 0; position: relative; width: min(100%, 480px); height: 202px; margin: 24px 0 0; }
 .portal-spirit-halo { position: absolute; top: 15px; left: calc(50% - 78px); width: 156px; height: 156px; border-radius: 50%; background: var(--portal-halo); }
 .portal-breeze-lines { position: absolute; inset: 0; width: 100%; height: 180px; stroke: var(--portal-border-strong); stroke-width: 1; }
 .portal-breeze-travel { stroke: var(--portal-accent); stroke-width: 1.5; stroke-dasharray: 20 470; animation: portal-breeze-flow 8s linear infinite; }
@@ -9,9 +9,11 @@
 /* Keep hit testing still while response and ambient motion compose on separate layers. */
 .portal-spirit-response { display: block; pointer-events: none; transform: translate(var(--spirit-x), var(--spirit-y)) rotate(var(--spirit-tilt)); }
 .portal-spirit-float { display: block; animation: portal-spirit-float 6s ease-in-out infinite; }
-.portal-mascot-button img { display: block; width: 100%; height: auto; transition: filter 150ms, scale 120ms; }
-.portal-mascot-button:active img { scale: .96; }
-.portal-mascot-button:is(:hover, :focus-visible) img { filter: drop-shadow(0 3px 0 var(--portal-shadow)); }
+.portal-spirit-artwork { display: block; width: 100%; height: auto; transition: filter 150ms, scale 120ms; }
+.portal-mascot-button:active .portal-spirit-artwork { scale: .96; }
+.portal-mascot-button:is(:hover, :focus-visible) .portal-spirit-artwork { filter: drop-shadow(0 3px 0 var(--portal-shadow)); }
+.portal-spirit-open-eyes { transform-box: fill-box; transform-origin: center; transform: scaleY(var(--spirit-eye-openness)); opacity: calc(1 - var(--spirit-smile)); }
+.portal-spirit-smile-eyes { opacity: var(--spirit-smile); }
 .portal-spirit-shadow { position: absolute; top: 168px; left: calc(50% - 37px); width: 74px; height: 7px; border-radius: 50%; background: var(--portal-border); opacity: .65; translate: var(--spirit-x) 0; animation: portal-spirit-shadow 6s ease-in-out infinite; }
 .portal-brand-scene figcaption { position: absolute; bottom: 0; left: 0; width: 100%; display: flex; align-items: center; justify-content: center; gap: 7px; color: var(--portal-dim); font-size: 10px; }
 /* A quiet page should also be cheap: pause ambient motion offscreen or in a hidden tab. */
@@ -37,6 +39,8 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .portal-spirit-response { transform: none; }
+  .portal-spirit-open-eyes { transform: none; opacity: 1; }
+  .portal-spirit-smile-eyes { opacity: 0; }
   .portal-spirit-shadow { translate: none; }
-  .portal-mascot-button:active img { scale: none; }
+  .portal-mascot-button:active .portal-spirit-artwork { scale: none; }
 }

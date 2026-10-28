@@ -1,4 +1,3 @@
-const ATTENTION_DURATION_MS = 420
 const FOLLOW_RESPONSE = 22
 const REST_RESPONSE = 10
 const HORIZONTAL_TRAVEL_RATIO = 0.09
@@ -22,10 +21,9 @@ interface SpiritBounds {
   readonly height: number
 }
 
-type Attention = { readonly kind: 'rest' } | {
+type SpringDrive = { readonly kind: 'rest' } | {
   readonly kind: 'following'
   readonly target: SpiritPose
-  readonly until: number
 }
 
 const REST_POSE: SpiritPose = { x: 0, y: 0, tilt: 0 }
@@ -55,30 +53,29 @@ function advanceAxis(position: number, velocity: number, target: number, seconds
 export function createSpiritMotion() {
   let pose = REST_POSE
   let velocity = REST_POSE
-  let attention: Attention = { kind: 'rest' }
+  let drive: SpringDrive = { kind: 'rest' }
 
   return {
-    follow(target: SpiritPose, now: number) {
-      attention = { kind: 'following', target, until: now + ATTENTION_DURATION_MS }
+    follow(target: SpiritPose) {
+      drive = { kind: 'following', target }
     },
     release() {
-      attention = { kind: 'rest' }
+      drive = { kind: 'rest' }
     },
     tap() {
-      attention = { kind: 'rest' }
+      drive = { kind: 'rest' }
       // Account for displacement so repeated taps cannot ratchet the artwork away from home.
       velocity = { x: 0, y: TAP_LIFT_SPEED - REST_RESPONSE * pose.y, tilt: TAP_TILT_SPEED - REST_RESPONSE * pose.tilt }
     },
     reset() {
       pose = REST_POSE
       velocity = REST_POSE
-      attention = { kind: 'rest' }
+      drive = { kind: 'rest' }
       return pose
     },
-    advance(seconds: number, now: number) {
-      if (attention.kind === 'following' && now >= attention.until) attention = { kind: 'rest' }
-      const following = attention.kind === 'following'
-      const target = attention.kind === 'following' ? attention.target : REST_POSE
+    advance(seconds: number) {
+      const following = drive.kind === 'following'
+      const target = drive.kind === 'following' ? drive.target : REST_POSE
       const response = following ? FOLLOW_RESPONSE : REST_RESPONSE
       const x = advanceAxis(pose.x, velocity.x, target.x, seconds, response)
       const y = advanceAxis(pose.y, velocity.y, target.y, seconds, response)

@@ -5,12 +5,19 @@ async function center(element: Locator) {
   return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 }
 }
 
-test('the spirit follows promptly, keeps a stable hit target, and rests under a stationary pointer', async ({ page }) => {
+async function face(artwork: Locator) {
+  return artwork.evaluate(element => {
+    const style = getComputedStyle(element)
+    return { openness: Number(style.getPropertyValue('--spirit-eye-openness')), smile: Number(style.getPropertyValue('--spirit-smile')) }
+  })
+}
+
+test('the spirit follows promptly, acknowledges a pause, and returns to its stable hit target', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'no-preference' })
   await page.clock.install()
   await page.goto('/')
   const button = page.getByRole('figure').getByRole('button')
-  const artwork = button.locator('img')
+  const artwork = button.getByRole('img', { includeHidden: true })
   await expect(button).toBeVisible()
   await button.click({ trial: true })
   const bounds = (await button.boundingBox())!
@@ -20,7 +27,10 @@ test('the spirit follows promptly, keeps a stable hit target, and rests under a 
   expect((await center(artwork)).x - home.x).toBeGreaterThan(3)
   expect((await center(artwork)).x - home.x).toBeLessThan(bounds.width / 4)
   expect(await button.boundingBox()).toEqual(bounds)
+  await page.clock.runFor(330)
+  expect((await face(artwork)).openness).toBeLessThan(0.3)
   await page.clock.runFor(2000)
+  expect(await face(artwork)).toEqual({ openness: 1, smile: 0 })
   expect(Math.abs((await center(artwork)).x - home.x)).toBeLessThan(0.1)
   expect(await button.boundingBox()).toEqual(bounds)
 })
@@ -30,7 +40,7 @@ test('keyboard play respects reduced motion, including a live preference change'
   await page.clock.install()
   await page.goto('/')
   const button = page.getByRole('figure').getByRole('button')
-  const artwork = button.locator('img')
+  const artwork = button.getByRole('img', { includeHidden: true })
   await expect(button).toBeVisible()
   await button.click({ trial: true })
   const home = await center(button)
@@ -38,6 +48,7 @@ test('keyboard play respects reduced motion, including a live preference change'
   await page.keyboard.press('Enter')
   await page.clock.runFor(100)
   expect((await center(artwork)).y).toBeLessThan(home.y - 4)
+  expect((await face(artwork)).smile).toBeGreaterThan(0.95)
   await expect(button).toBeFocused()
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.clock.runFor(100)
@@ -46,6 +57,7 @@ test('keyboard play respects reduced motion, including a live preference change'
   await page.keyboard.press('Enter')
   await page.clock.runFor(1000)
   expect(await artwork.boundingBox()).toEqual(resting)
+  expect(await face(artwork)).toEqual({ openness: 1, smile: 0 })
   await expect(button).toBeFocused()
 })
 
@@ -57,13 +69,14 @@ test.describe('touch interaction', () => {
     await page.clock.install()
     await page.goto('/')
     const button = page.getByRole('figure').getByRole('button')
-    const artwork = button.locator('img')
+    const artwork = button.getByRole('img', { includeHidden: true })
     await expect(button).toBeVisible()
     await button.click({ trial: true })
     const home = await center(button)
     await button.tap()
     await page.clock.runFor(100)
     expect((await center(artwork)).y).toBeLessThan(home.y - 4)
+    expect((await face(artwork)).smile).toBeGreaterThan(0.95)
     await page.clock.runFor(2000)
     expect(Math.abs((await center(artwork)).x - home.x)).toBeLessThan(0.1)
     expect(await center(button)).toEqual(home)

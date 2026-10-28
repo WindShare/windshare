@@ -2,35 +2,31 @@ import { describe, expect, it } from 'vitest'
 import { createSpiritMotion, pointerPose } from '../../src/ui/portal/spirit/motion'
 
 const STEP_SECONDS = 1 / 120
-const STEP_MILLISECONDS = 1000 * STEP_SECONDS
 
-function settle(motion: ReturnType<typeof createSpiritMotion>, from = 0) {
-  let now = from + STEP_MILLISECONDS
-  let frame = motion.advance(STEP_SECONDS, now)
-  for (let count = 0; frame.moving && count < 300; count++) {
-    now += STEP_MILLISECONDS
-    frame = motion.advance(STEP_SECONDS, now)
-  }
+function settle(motion: ReturnType<typeof createSpiritMotion>) {
+  let frame = motion.advance(STEP_SECONDS)
+  for (let count = 0; frame.moving && count < 300; count++) frame = motion.advance(STEP_SECONDS)
   return frame
 }
 
 describe('wind spirit motion', () => {
-  it('responds promptly, then returns home even if the pointer never leaves', () => {
+  it('responds promptly and settles when released', () => {
     const motion = createSpiritMotion()
-    motion.follow({ x: 12, y: -6, tilt: 4 }, 0)
-    const response = motion.advance(0.1, 100)
+    motion.follow({ x: 12, y: -6, tilt: 4 })
+    const response = motion.advance(0.1)
     expect(response.pose.x).toBeGreaterThan(6)
     expect(response.pose.x).toBeLessThan(12)
     expect(response.pose.y).toBeLessThan(-3)
-    expect(settle(motion, 100)).toEqual({ pose: { x: 0, y: 0, tilt: 0 }, moving: false })
+    motion.release()
+    expect(settle(motion)).toEqual({ pose: { x: 0, y: 0, tilt: 0 }, moving: false })
   })
 
   it('preserves the response across refresh rates', () => {
     const poses = [30, 60, 120].map(fps => {
       const motion = createSpiritMotion()
-      motion.follow({ x: 12, y: -6, tilt: 4 }, 0)
-      let frame = motion.advance(0, 0)
-      for (let step = 1; step <= fps / 5; step++) frame = motion.advance(1 / fps, step * 1000 / fps)
+      motion.follow({ x: 12, y: -6, tilt: 4 })
+      let frame = motion.advance(0)
+      for (let step = 1; step <= fps / 5; step++) frame = motion.advance(1 / fps)
       return frame.pose
     })
     const reference = poses[0]!
@@ -41,25 +37,25 @@ describe('wind spirit motion', () => {
     }
   })
 
-  it('releases attention immediately on leaving and can clear motion on suspension', () => {
+  it('releases immediately and can clear motion on suspension', () => {
     const motion = createSpiritMotion()
-    motion.follow({ x: 12, y: 0, tilt: 4 }, 0)
-    motion.advance(0.1, 100)
+    motion.follow({ x: 12, y: 0, tilt: 4 })
+    motion.advance(0.1)
     motion.release()
-    expect(motion.advance(0.2, 300).pose.x).toBeLessThan(6)
+    expect(motion.advance(0.2).pose.x).toBeLessThan(6)
     expect(motion.reset()).toEqual({ x: 0, y: 0, tilt: 0 })
-    expect(motion.advance(60, 60_300).moving).toBe(false)
+    expect(motion.advance(60).moving).toBe(false)
   })
 
   it('keeps repeated taps bounded and settles without queued animations', () => {
     const motion = createSpiritMotion()
     for (let count = 0; count < 100; count++) {
       motion.tap()
-      const frame = motion.advance(STEP_SECONDS, count * STEP_MILLISECONDS)
+      const frame = motion.advance(STEP_SECONDS)
       expect(Math.abs(frame.pose.y)).toBeLessThan(30)
       expect(Math.abs(frame.pose.tilt)).toBeLessThan(12)
     }
-    expect(settle(motion, 1000).moving).toBe(false)
+    expect(settle(motion).moving).toBe(false)
   })
 
   it('scales travel with the artwork and bounds distant pointers', () => {

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
-import { createSpiritMotion, pointerPose, type SpiritPose } from './motion'
+import { createSpiritBehavior, type SpiritFrame } from './behavior'
+import { pointerPose } from './motion'
 
 const MILLISECONDS_PER_SECOND = 1000
 const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)'
@@ -12,57 +13,76 @@ export function useSpiritMotion() {
     const element = scene.current
     const button = mascot.current
     if (!element || !button) return
-    const motion = createSpiritMotion()
+    const behavior = createSpiritBehavior(Math.random)
     const reducedMotion = window.matchMedia(REDUCED_MOTION_QUERY)
     let visible = false
+    let active = false
     let frame: number | null = null
+    let idleTimer: number | null = null
     let lastTime = 0
-    const available = () => visible && !document.hidden && !reducedMotion.matches
-    const paint = (pose: SpiritPose) => {
+    const paint = ({ pose, face }: SpiritFrame) => {
       element.style.setProperty('--spirit-x', `${pose.x}px`)
       element.style.setProperty('--spirit-y', `${pose.y}px`)
       element.style.setProperty('--spirit-tilt', `${pose.tilt}deg`)
+      element.style.setProperty('--spirit-eye-openness', String(face.openness))
+      element.style.setProperty('--spirit-smile', String(face.smile))
+    }
+    const clearIdleTimer = () => {
+      if (idleTimer !== null) window.clearTimeout(idleTimer)
+      idleTimer = null
     }
     const tick = (now: number) => {
       frame = null
       const elapsed = Math.max(0, now - lastTime) / MILLISECONDS_PER_SECOND
-      const next = motion.advance(elapsed, now)
+      const next = behavior.advance(elapsed, now)
       lastTime = now
-      paint(next.pose)
-      if (next.moving) frame = window.requestAnimationFrame(tick)
+      paint(next)
+      if (next.animating) frame = window.requestAnimationFrame(tick)
+      else if (next.wakeAt !== null) {
+        // Quiet intervals need one deadline, not a continuously running animation loop.
+        idleTimer = window.setTimeout(wake, Math.max(0, next.wakeAt - performance.now()))
+      }
     }
     const wake = () => {
-      if (frame !== null || !available()) return
+      clearIdleTimer()
+      if (frame !== null || !active) return
       lastTime = performance.now()
       frame = window.requestAnimationFrame(tick)
     }
     const reset = () => {
       if (frame !== null) window.cancelAnimationFrame(frame)
       frame = null
-      paint(motion.reset())
+      clearIdleTimer()
+      paint(behavior.suspend())
     }
     const updateAvailability = () => {
-      element.dataset.active = String(available())
-      if (!available()) reset()
+      const available = visible && !document.hidden && !reducedMotion.matches
+      if (active === available) return
+      active = available
+      element.dataset.active = String(active)
+      reset()
+      if (active) {
+        behavior.resume(performance.now())
+        wake()
+      }
     }
     const follow = (event: PointerEvent) => {
-      if (event.pointerType !== 'mouse' || !available()) return
+      if (event.pointerType !== 'mouse' || !active) return
       if (event.buttons !== 0) {
-        motion.release()
+        behavior.release()
         return
       }
-      // Measure the stationary hit target, never the animated artwork, to prevent
-      // motion feeding back into pointer geometry or making the button evade a click.
-      motion.follow(pointerPose(event.clientX, event.clientY, button.getBoundingClientRect()), performance.now())
+      // Measure the stationary hit target so animated artwork cannot evade a click.
+      behavior.follow(pointerPose(event.clientX, event.clientY, button.getBoundingClientRect()), performance.now())
       wake()
     }
     const release = () => {
-      motion.release()
+      behavior.release()
       wake()
     }
     const tap = () => {
-      if (!available()) return
-      motion.tap()
+      if (!active) return
+      behavior.tap(performance.now())
       wake()
     }
     const observer = new IntersectionObserver(entries => {
