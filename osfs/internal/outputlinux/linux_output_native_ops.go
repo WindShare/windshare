@@ -114,7 +114,21 @@ func (directory *linuxOutputDirectory) readNameBatch(
 	if identity.identity.kind != unix.S_IFDIR || !identity.matches(directory.object) {
 		return outputcap.DirectoryNameBatch{}, linuxUnsafe(operation, "enumeration cursor does not identify the fixed directory", nil)
 	}
+	batch, err := directory.readNamesFromCursor(fd, limit, include)
+	if err != nil {
+		return outputcap.DirectoryNameBatch{}, err
+	}
+	if err := directory.verifyHandle(); err != nil {
+		return outputcap.DirectoryNameBatch{}, err
+	}
+	return batch, nil
+}
 
+func (directory *linuxOutputDirectory) readNamesFromCursor(
+	fd, limit int,
+	include func(string) bool,
+) (outputcap.DirectoryNameBatch, error) {
+	const operation = "enumerate output directory"
 	buffer := make([]byte, linuxOutputDirectoryReadBufferBytes)
 	names := make([]string, 0, min(limit, 16))
 	hasMore := false
@@ -144,9 +158,6 @@ scan:
 			}
 			names = append(names, name)
 		}
-	}
-	if err := directory.verifyHandle(); err != nil {
-		return outputcap.DirectoryNameBatch{}, err
 	}
 	sort.Strings(names)
 	for index := 1; index < len(names); index++ {
