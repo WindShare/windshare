@@ -1,5 +1,16 @@
 import { expect, test, type Locator } from '@playwright/test'
 
+const CLOCK_INSTALL_TIME = new Date('2026-01-01T00:00:00Z')
+const CLOCK_PAUSE_TIME = new Date('2026-01-01T01:00:00Z')
+
+test.beforeEach(async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference' })
+  await page.clock.install({ time: CLOCK_INSTALL_TIME })
+  // Freeze before navigation so startup and driver latency cannot advance expressions.
+  await page.clock.pauseAt(CLOCK_PAUSE_TIME)
+  await page.goto('/')
+})
+
 async function center(element: Locator) {
   const bounds = (await element.boundingBox())!
   return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 }
@@ -13,9 +24,6 @@ async function face(artwork: Locator) {
 }
 
 test('the spirit follows promptly, acknowledges a pause, and returns to its stable hit target', async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: 'no-preference' })
-  await page.clock.install()
-  await page.goto('/')
   const button = page.getByRole('figure').getByRole('button')
   const artwork = button.getByRole('img', { includeHidden: true })
   await expect(button).toBeVisible()
@@ -36,9 +44,6 @@ test('the spirit follows promptly, acknowledges a pause, and returns to its stab
 })
 
 test('keyboard play respects reduced motion, including a live preference change', async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: 'no-preference' })
-  await page.clock.install()
-  await page.goto('/')
   const button = page.getByRole('figure').getByRole('button')
   const artwork = button.getByRole('img', { includeHidden: true })
   await expect(button).toBeVisible()
@@ -65,9 +70,6 @@ test.describe('touch interaction', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true })
 
   test('taps give bounded feedback without following touch movements', async ({ page }) => {
-    await page.emulateMedia({ reducedMotion: 'no-preference' })
-    await page.clock.install()
-    await page.goto('/')
     const button = page.getByRole('figure').getByRole('button')
     const artwork = button.getByRole('img', { includeHidden: true })
     await expect(button).toBeVisible()
