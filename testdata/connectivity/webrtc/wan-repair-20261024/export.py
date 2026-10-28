@@ -9,6 +9,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from evidence_export import write_public
+from experiment_paths import experiment_directory
 
 
 def digest(path):
@@ -56,10 +57,10 @@ def changed_sources():
 
 
 def export_build(name, sources):
-    build = ROOT / ".tmp" / name
+    build = experiment_directory(ROOT, name)
     identity_path = build / "identity.json"
     identity = read(identity_path)
-    base = ROOT / ".tmp" / identity["base"]
+    base = experiment_directory(ROOT, identity["base"])
     manifest = read(base / "sources.json")
     ledger_path = build / "recovery-ledger.json"
     ledger = read(ledger_path)

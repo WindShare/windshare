@@ -3,9 +3,10 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { join } from 'node:path'
+import { experimentDirectory } from '../experiment-paths.mjs'
 
 const root = fileURLToPath(new URL('../../../../', import.meta.url))
-const directory = join(root, '.tmp', process.env.WS_ADAPTIVE_BUILD ?? 'webrtc-bottleneck-20261024-baseline')
+const directory = experimentDirectory(root, process.env.WS_ADAPTIVE_BUILD ?? 'webrtc-bottleneck-20261024-baseline')
 const snapshot = join(directory, 'snapshot')
 const config = {
   paths: Number(process.env.WS_BOTTLENECK_PATHS ?? 0),

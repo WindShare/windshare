@@ -10,6 +10,8 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[4]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from experiment_paths import experiment_directory
 HARNESS = ROOT / "testdata/connectivity/webrtc/adaptive-20261023/cross-host.py"
 
 
@@ -20,7 +22,7 @@ def main():
     parser.add_argument("--name", required=True)
     parser.add_argument("--public-endpoint", required=True)
     args = parser.parse_args()
-    build = ROOT / ".tmp" / args.build
+    build = experiment_directory(ROOT, args.build)
     ledger_path = build / (args.name + "-ledger.json")
     if ledger_path.exists():
         raise FileExistsError(ledger_path)

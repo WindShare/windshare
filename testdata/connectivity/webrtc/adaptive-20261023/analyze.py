@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[4]
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 from evidence_export import write_public
+from experiment_paths import experiment_label
 FINAL = 'webrtc-adaptive-20261023-settled'
 
 def read(path):
@@ -129,11 +130,11 @@ def main():
         source = build / 'sources.json'
         if not source.exists(): continue
         manifest = read(source)
-        entry = {'name': build.name, 'sources': reference(source), 'revision': manifest['revision'],
+        entry = {'name': experiment_label(build.name), 'sources': reference(source), 'revision': manifest['revision'],
             'diagnostic': manifest.get('diagnostic'),
             'binaries': read(build / 'binaries.json') if (build / 'binaries.json').exists() else {},
             'fixture': manifest['fixture'], 'matrices': [], 'native': [], 'turn': []}
-        if build.name == FINAL:
+        if experiment_label(build.name) == FINAL:
             entry['workingSourceMismatches'] = [file for file, expected in manifest['files'].items()
                 if file != 'docs/plans/webrtc-throughput.md' and sha(ROOT / file) != expected]
             assert not entry['workingSourceMismatches'], entry['workingSourceMismatches']

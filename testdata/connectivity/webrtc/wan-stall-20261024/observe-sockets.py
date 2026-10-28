@@ -2,6 +2,7 @@ import argparse
 import importlib.util
 import json
 from pathlib import Path
+import sys
 import time
 
 parser = argparse.ArgumentParser(description="Sample only study-owned Linux UDP sockets")
@@ -9,7 +10,9 @@ parser.add_argument("--build", required=True)
 parser.add_argument("--ledger", required=True)
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[4]
-build = root / ".tmp" / args.build
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from experiment_paths import experiment_directory
+build = experiment_directory(root, args.build)
 spec = importlib.util.spec_from_file_location("lab", root / "testdata/connectivity/webrtc/adaptive-20261023/cross-host.py")
 lab = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(lab)

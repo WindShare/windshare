@@ -5,11 +5,13 @@ import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { fileURLToPath } from 'node:url'
+import { experimentDirectory } from '../experiment-paths.mjs'
 
 const root = fileURLToPath(new URL('../../../../', import.meta.url))
-const build = path.join(root, '.tmp', process.env.WS_ADAPTIVE_BUILD ?? 'webrtc-adaptive-20261023-verified')
+const buildName = process.env.WS_ADAPTIVE_BUILD ?? 'webrtc-adaptive-20261023-verified'
+const build = experimentDirectory(root, buildName)
 const historical = path.join(root, '.tmp/webrtc-load-recheck-20261023')
-const work = path.join(root, '.tmp', 'webrtc-adaptive-controls-' + Date.now())
+const work = experimentDirectory(root, 'webrtc-adaptive-controls-' + Date.now())
 fs.mkdirSync(work)
 const fixture = path.join(root, '.tmp/webrtc-wan-20261021/payload-long.bin')
 const sha = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
@@ -18,7 +20,7 @@ assert.equal(sha(path.join(historical, 'decoder.js')), '300b2280bf4e0201b713b151
 assert.equal(sha(fixture), 'b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af')
 for (const file of ['probe.exe', 'decoder.js', 'run.cjs', 'remote.py']) fs.copyFileSync(path.join(historical, file), path.join(work, file))
 const lab = JSON.parse(fs.readFileSync(path.join(root, '.tmp/webrtc-preflight-20261023/lab.json')))
-const env = { ...process.env, ...lab, WS_RESEARCH_OUTPUT: 'opfs', WS_RESEARCH_TRACE: 'off', WS_RESEARCH_ISOLATE_BROWSER_DNS: '1', WS_RESEARCH_FIXTURE: fixture, WS_ADAPTIVE_ARM: 'adaptive', WS_ADAPTIVE_FAULT: 'none', WS_PREFLIGHT_WORKFLOW: 'file', WS_PREFLIGHT_RECEIVERS: '1' }
+const env = { ...process.env, ...lab, WS_ADAPTIVE_BUILD: buildName, WS_RESEARCH_OUTPUT: 'opfs', WS_RESEARCH_TRACE: 'off', WS_RESEARCH_ISOLATE_BROWSER_DNS: '1', WS_RESEARCH_FIXTURE: fixture, WS_ADAPTIVE_ARM: 'adaptive', WS_ADAPTIVE_FAULT: 'none', WS_PREFLIGHT_WORKFLOW: 'file', WS_PREFLIGHT_RECEIVERS: '1' }
 const ledger = { scope: 'Archived paced four-PC cached encrypted input to authenticated memory, interleaved with current demand-driven complete product output to OPFS. Same source bytes. Different connection and output policies; this is a historical control, not an isolated estimate of pipeline overhead.', fixture: { bytes: fs.statSync(fixture).size, sha256: sha(fixture) }, harness: Object.fromEntries(['probe.exe', 'decoder.js', 'run.cjs', 'remote.py'].map(file => [file, sha(path.join(work, file))])), runs: [] }
 const save = () => fs.writeFileSync(path.join(work, 'ledger.json'), JSON.stringify(ledger, null, 2))
 for (let repetition = 1; repetition <= 4; repetition++) {

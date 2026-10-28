@@ -10,6 +10,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from evidence_export import write_public
+from experiment_paths import experiment_directory
 
 BENCHMARK_NETWORK = ipaddress.ip_network("198.18.0.0/15")
 
@@ -98,7 +99,7 @@ def main():
     args = parser.parse_args()
     evidence = {"builds": [], "runs": []}
     for name in args.builds:
-        build = ROOT / ".tmp" / name
+        build = experiment_directory(ROOT, name)
         identity = {"name": name}
         for filename in ["sources.json", "binaries.json", "identity.json"]:
             if (build / filename).exists():

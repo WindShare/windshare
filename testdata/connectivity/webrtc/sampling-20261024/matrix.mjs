@@ -5,10 +5,11 @@ import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { fileURLToPath } from 'node:url'
+import { experimentDirectory } from '../experiment-paths.mjs'
 
 const root = fileURLToPath(new URL('../../../../', import.meta.url))
 const build = process.env.WS_ADAPTIVE_BUILD ?? 'webrtc-sampling-stress-20261024'
-const directory = path.join(root, '.tmp', build)
+const directory = experimentDirectory(root, build)
 const suite = process.argv[2]
 const configuration = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'))
 const cases = Array.isArray(configuration) ? configuration : configuration[suite]
@@ -23,7 +24,7 @@ for (let index = 0; index < cases.length; index++) {
   const config = cases[index]
   const label = suite + '-' + index + '-' + (config.name ?? 'case')
   const runBuild = config.build ?? build
-  const runDirectory = path.join(root, '.tmp', runBuild)
+  const runDirectory = experimentDirectory(root, runBuild)
   const row = { ...config, build: runBuild, label, startedMs: Date.now(), sourcesSHA256: sha(path.join(runDirectory, 'sources.json')) }
   ledger.runs.push(row); save()
   const log = fs.openSync(path.join(directory, label + '.log'), 'w')

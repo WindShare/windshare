@@ -4,13 +4,16 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import time
 
 spec = importlib.util.spec_from_file_location('cross_host', Path(__file__).with_name('cross-host.py'))
 host = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(host)
 ROOT = host.ROOT
-build = ROOT / '.tmp' / os.environ.get('WS_ADAPTIVE_BUILD', 'webrtc-adaptive-20261023-verified')
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from experiment_paths import experiment_directory
+build = experiment_directory(ROOT, os.environ.get('WS_ADAPTIVE_BUILD', 'webrtc-adaptive-20261023-verified'))
 directory = build / ('public-turn-' + str(time.time_ns()))
 directory.mkdir()
 external_config = os.environ.get('WS_STUDY_TURN_CONFIG')

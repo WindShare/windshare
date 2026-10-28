@@ -5,9 +5,13 @@ import os
 from pathlib import Path
 import statistics
 import subprocess
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from experiment_paths import experiment_directory
 
 ROOT = Path(__file__).resolve().parents[4]
-BUILD = ROOT / ".tmp" / os.environ.get("WS_ADAPTIVE_BUILD", "webrtc-bottleneck-20261024-baseline")
+BUILD = experiment_directory(ROOT, os.environ.get("WS_ADAPTIVE_BUILD", "webrtc-bottleneck-20261024-baseline"))
 
 def percentile(values, fraction):
     return sorted(values)[int((len(values) - 1) * fraction)] if values else None

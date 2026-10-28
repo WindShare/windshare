@@ -4,9 +4,10 @@ import { createHash } from 'node:crypto'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { join } from 'node:path'
 import { extendWorkflow } from '../preflight-20261023/workflows.mjs'
+import { experimentDirectory } from '../experiment-paths.mjs'
 
 const root = fileURLToPath(new URL('../../../../', import.meta.url))
-const directory = join(root, '.tmp', process.env.WS_ADAPTIVE_BUILD ?? 'webrtc-adaptive-20261023')
+const directory = experimentDirectory(root, process.env.WS_ADAPTIVE_BUILD ?? 'webrtc-adaptive-20261023')
 const snapshot = join(directory, 'snapshot')
 const config = {
   arm: process.env.WS_ADAPTIVE_ARM ?? 'adaptive',
