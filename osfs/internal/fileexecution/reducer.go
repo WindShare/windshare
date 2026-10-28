@@ -38,6 +38,9 @@ func ReduceRecovery(
 	if !record.Valid() {
 		return RecoveryDecision{}, ErrCheckpointBinding
 	}
+	if record.Phase() == checkpointmodel.PhasePublished && record.CommitState() == checkpointmodel.CommitPublished {
+		return RecoveryDecision{action: RecoveryReturnPublished}, nil
+	}
 	if record.Phase() == checkpointmodel.PhaseQuarantined {
 		if record.CommitState() != checkpointmodel.CommitQuarantined {
 			return RecoveryDecision{}, ErrCheckpointBinding
@@ -56,8 +59,6 @@ func ReduceRecovery(
 		return reduceWritableRecovery(record, owned, final)
 	case checkpointmodel.PhasePublishing:
 		return reducePublishingRecovery(record, owned, final, complete)
-	case checkpointmodel.PhasePublished:
-		return reducePublishedRecovery(record, owned, final)
 	case checkpointmodel.PhaseRetired:
 		return reduceRetiredRecovery(record, owned, final)
 	default:
@@ -126,26 +127,6 @@ func reducePublishingRecovery(
 	default:
 		return RecoveryDecision{}, ErrInvalidObservation
 	}
-}
-
-func reducePublishedRecovery(
-	record checkpointmodel.Record,
-	owned OwnedObservation,
-	final FinalObservation,
-) (RecoveryDecision, error) {
-	if record.CommitState() != checkpointmodel.CommitPublished {
-		return RecoveryDecision{}, ErrCheckpointBinding
-	}
-	if final.Condition() == FinalOwnedAtExpectedSize {
-		if cleanupCondition(owned.Condition()) {
-			return RecoveryDecision{action: RecoveryReturnPublished}, nil
-		}
-		return recoveryQuarantine(ownedQuarantineReason(owned.Condition())), nil
-	}
-	if final.Condition() == FinalUnsafe {
-		return recoveryQuarantine(checkpointmodel.QuarantineFinalUnsafe), nil
-	}
-	return recoveryQuarantine(checkpointmodel.QuarantineFinalMismatch), nil
 }
 
 func reduceRetiredRecovery(

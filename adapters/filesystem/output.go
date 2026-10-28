@@ -34,7 +34,7 @@ func (f FilesystemOutput) NewOutputAuthority(c output.Config) (output.Authority,
 
 type nativeFilesystemOutputAuthority interface {
 	BindDestination(context.Context) (osfs.FilesystemOutputExecutionMode, error)
-	LookupActive(context.Context, transfer.SelectionSpec) (osfs.FilesystemOutputLookup, error)
+	SelectOperation(context.Context, transfer.SelectionSpec, receivecontract.OperationSelection) (osfs.FilesystemOutputLookup, error)
 	CreateOperation(context.Context, osfs.FilesystemOutputLookup, receivecontract.ArtifactSpec) (osfs.FilesystemOutputOperation, error)
 	OpenOperation(context.Context, osfs.FilesystemOutputOperation) (transfer.DirectTreeSession, error)
 	Close() error
@@ -61,8 +61,8 @@ func (a *filesystemOutputAuthority) BindDestination(ctx context.Context) (output
 	}
 	return outputMode(mode)
 }
-func (a *filesystemOutputAuthority) LookupActive(ctx context.Context, s transfer.SelectionSpec) (output.Lookup, error) {
-	native, err := a.native.LookupActive(ctx, s)
+func (a *filesystemOutputAuthority) SelectOperation(ctx context.Context, s transfer.SelectionSpec, selector receivecontract.OperationSelection) (output.Lookup, error) {
+	native, err := a.native.SelectOperation(ctx, s, selector)
 	if err != nil {
 		return output.Lookup{}, sealFilesystemOutputFailure(err)
 	}

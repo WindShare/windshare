@@ -51,11 +51,6 @@ func TestOrdinaryResumeReducerFailsClosedAcrossIncompleteObservations(t *testing
 			want: ordinaryResumeBlock(resumeauthority.ItemBlockCheckpointInvalid),
 		},
 		{
-			name: "published exact final",
-			got:  reducePublishedResumeRecord(finalExact),
-			want: ordinaryResumeState(resumeauthority.ItemPublished),
-		},
-		{
 			name: "publishing exact final",
 			got:  reducePublishingResumeRecord(ownedAbsent, finalExact),
 			want: ordinaryResumeState(resumeauthority.ItemPublished),

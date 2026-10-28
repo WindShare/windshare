@@ -465,7 +465,7 @@ func (policy lifecyclePolicy) retireReason() FileRetireReason {
 func (r *jobRun) traceFileSettlement(plan plannedFile, settlement FileSettlement, failure error) {
 	_, itemBlockReason, _ := settlement.ItemBlock()
 	r.job.trace(TransferLifecycleTrace{
-		Stage: TransferFileSettled, OutputSessionID: r.output.SessionID(),
+		Stage: TransferFileSettled, OutputSessionID: r.output.SessionID(), FileID: plan.file,
 		FileSelection:   plan.selectionDecision,
 		FileSettlement:  settlement.Kind(),
 		ItemBlockReason: itemBlockReason,
@@ -481,11 +481,11 @@ func (r *jobRun) acceptTransactionFileSettlement(
 	progress *fileTransferProgress,
 	settlement FileSettlement,
 ) error {
-	if progress == nil {
-		if _, hasCheckpoint := settlement.VerifiedProgress(); hasCheckpoint {
-			return outputContractFault(nil)
-		}
-	} else {
+	if _, hasCheckpoint := settlement.VerifiedProgress(); progress == nil && hasCheckpoint {
+		return outputContractFault(nil)
+	}
+	if progress != nil {
+		priorPersisted := progress.persistedBytes
 		delta, valid := progress.reconcileSettlement(transaction, settlement)
 		if !valid {
 			return outputContractFault(nil)
@@ -493,9 +493,43 @@ func (r *jobRun) acceptTransactionFileSettlement(
 		if delta != 0 {
 			r.job.progress.addNewlyVerified(delta)
 		}
+		retained := uint64(0)
+		if checkpoint, ok := settlement.VerifiedProgress(); ok && checkpoint.Retention() == RangesAfterRestart && (settlement.Kind() == FilePaused || settlement.Kind() == FileCollision) {
+			retained, _ = rangeSetByteCount(checkpoint.Ranges())
+		}
+		r.job.progress.replaceRestartReusable(priorPersisted, retained)
 	}
 	// Outcome and publication counters move together before lifecycle emission,
 	// preventing observers from seeing a settled file with stale progress.
 	r.job.progress.acceptFileSettlement(settlement, plan.expectedSize)
 	return nil
+}
+
+// A receipt satisfies this task before opening the current source revision.
+// Lookup failures use the same file-local isolation as ordinary file admission.
+func (r *jobRun) skipDeliveredFile(ctx context.Context, plan plannedFile) (bool, error) {
+	history, ok := r.output.(DeliveryHistory)
+	if !ok {
+		return false, nil
+	}
+	delivery, found, err := history.LookupDelivery(ctx, plan.file, plan.materializationRelativePath.String())
+	err = normalizeOutputBoundary(ctx, err)
+	if err == nil && found && (!delivery.Valid() || delivery.OperationID != r.job.intent.OperationID() || delivery.FileID != plan.file || delivery.MaterializationPath != plan.materializationRelativePath.String()) {
+		err = outputContractFault(ErrOutputContract)
+	}
+	if err != nil {
+		r.recordFileFailure(FileJobFailure{FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput, Cause: err})
+		r.traceFileLifecycle(TransferFileAdmitted, plan, err)
+		policy := lifecyclePolicyFor(err)
+		if policy.jobTerminal() || policy.outputRequiresJobPause(r.output.Capabilities()) {
+			return true, err
+		}
+		return true, nil
+	}
+	if !found {
+		return false, nil
+	}
+	r.job.progress.acceptHistoricalDelivery(delivery, plan.expectedSize)
+	r.traceFileLifecycle(TransferDeliverySkipped, plan, nil)
+	return true, nil
 }

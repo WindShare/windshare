@@ -381,6 +381,27 @@ func (registry *OperationRegistry) lookupActiveLocked(
 		!validActiveIndexDigest(indexDigest, record, encoded) {
 		return ActiveLookup{state: ActiveLookupAmbiguous}, nil
 	}
+	return registry.lookupOperationRecord(record)
+}
+
+// LookupOperation takes the same exact lease as automatic continuation without
+// inspecting or replacing the selection's automatic match.
+func (registry *OperationRegistry) LookupOperation(operation receivecontract.OperationID) (ActiveLookup, error) {
+	if !registry.valid() || operation.IsZero() {
+		return ActiveLookup{}, transfer.ErrInvalidOutputBinding
+	}
+	record, _, err := registry.readOperation(operation)
+	if err != nil {
+		return ActiveLookup{}, err
+	}
+	if !record.Lifecycle().ParticipatesInActiveLookup() {
+		return ActiveLookup{}, fs.ErrNotExist
+	}
+	return registry.lookupOperationRecord(record)
+}
+
+func (registry *OperationRegistry) lookupOperationRecord(record checkpointmodel.OrdinaryOperationRecord) (ActiveLookup, error) {
+	operation := record.OperationID()
 	if record.Lifecycle() == checkpointmodel.OrdinaryOperationNeedsAttention {
 		proof, proofErr := registry.recoveryProof(record)
 		if proofErr != nil {

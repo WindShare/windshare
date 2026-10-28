@@ -1,18 +1,15 @@
 # Native output
 
-Native downloads share one output and recovery pipeline across Windows, Linux, and macOS. The actual destination determines the strongest available mode.
+Windows, Linux, and macOS share one best-effort resume lifecycle. Ordinary Go files retain partial data and checksummed checkpoints; narrow native adapters provide task exclusion and atomic no-replace publication. Recovery does not require hard links, filesystem-specific object IDs, or extended attributes.
 
-| Mode | Progress lifetime | Publication |
-|---|---|---|
-| Restart recovery | Verified checkpoints survive process termination | Atomic no-replace publication of the staged file |
-| Live-only | Verified ranges and handles survive attempts within one process | The same no-replace publication; unfinished stages are released on exit |
+Continuation skips files already delivered by that task, even if their public copies were moved, deleted, replaced, or the source changed. A durable delivery receipt records history, not current file presence. Receipts outlive private-object cleanup and remain until the task completes or is explicitly discarded. Interrupted publication without a receipt is reconciled for that file.
 
-Restart identity currently has versioned evidence for local ext4 on Linux, fixed NTFS on Windows, and local APFS on macOS. These provide **process-restart**, not power-loss, guarantees. Other destinations may use live-only output when their native primitives pass the required probes. Missing cleanup evidence does not disable independently established recovery.
+Partials are reused only for the same task and source revision, after checking type, size, recorded metadata, and range bounds. Mtime alone does not invalidate progress. This avoids full-file rereads, but cannot detect every external modification of staged bytes. Guarantees cover process restart, not power loss.
 
-`get` and `resume retry` reuse the operation's reservation, staged file, and verified ranges. Publication creates another name for the same data object; it does not copy the file. Temporary I/O errors retain evidence for retry. Incomplete checkpoint installation images remain untouched without revoking valid checkpoints. Collisions and uncertain ownership block affected items; unknown objects are never deleted. Lost recovery capability keeps prior operations visible and prevents silent duplicate downloads.
+Scheduling uses accepted ranges. Restart-reusable progress includes only persisted unfinished ranges; it excludes historical deliveries. Data is synced before checkpoint metadata. Checkpoints flush after 8 MiB of unsaved data at a range boundary, after two seconds while idle, and at pause, normal exit, and completion. Ordinary continuation loads file records on demand with a bounded cache. Publication moves the same data object without a final copy.
 
-The shared owners are `destinationauthority` (bound destination and reservations), `outputruntime` (operation lifetime), `outputsession` (attempt settlement), `fileexecution` (range/checkpoint/publication lifecycle), `checkpointstore` (durable records), and `resumeauthority` (inventory and discard). Native adapters supply handles, identity, permissions, locking, and atomic namespace operations. Core progress explicitly distinguishes transient writes, retained process-local ranges, and restart checkpoints.
+`get` automatically continues a matching task. `get --redownload` reserves a separate, collision-safe destination and leaves the original continuation target intact; both tasks may occupy disk space. `resume retry --operation <id>` selects either task. Changed revisions and uncertain partials block only affected files. Discard removes proven-owned unfinished state and leaves published or unrecognized files alone.
 
-Live-only retains at most 4,096 unfinished or cleanup-pending file objects. Successful delivery releases native handles; historical delivery receipts use bounded memory with anonymous scratch spill and expire on process exit. Restart mode stores bounded records on disk. Published files remain when unfinished output is discarded.
+Shared owners: `destinationauthority` (reservations), `outputruntime` (task lifetime), `outputsession` (attempt settlement), `fileexecution` (file lifecycle), `checkpointstore` (records), and `resumeauthority` (inventory and discard). Strong native identity adapters remain available as optional evidence.
 
-[Verified CI run](https://github.com/WindShare/windshare/actions/runs/40472469916): macOS 15.7.9 on arm64 and amd64, with actual download directories on APFS. Both runners passed file/folder CLI downloads, SIGKILL recovery, native semantic suites, and both Darwin builds. Ordinary CI runs the reusable [workflow](../.github/workflows/native-output.yml), which retains OS/filesystem evidence and traces. See [validation](validation.md) and [CLI recovery](cli.md#resume).
+See [CLI recovery](cli.md#resume) and [validation](validation.md).

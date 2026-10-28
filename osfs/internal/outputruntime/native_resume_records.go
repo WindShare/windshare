@@ -77,6 +77,9 @@ func ordinaryResumeRecordItem(
 	store *checkpointstore.FileExecutionStore,
 	record checkpointmodel.Record,
 ) (resumeauthority.Item, error) {
+	if record.Phase() == checkpointmodel.PhasePublished && record.CommitState() == checkpointmodel.CommitPublished {
+		return ordinaryResumeState(resumeauthority.ItemPublished).item(record)
+	}
 	ownedFile, owned, ownedErr := store.OpenOwnedFile(
 		ctx, record.OwnedObjectID(), record.ExactSize(), false,
 	)

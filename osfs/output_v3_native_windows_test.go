@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/osfs/internal/outputcap"
+	"github.com/windshare/windshare/osfs/internal/outputwindows"
 	"golang.org/x/sys/windows"
 )
 
@@ -66,7 +67,7 @@ func requireUnprivilegedWindowsNTFSIdentityScheme(t *testing.T) {
 
 func TestWindowsNTFSCreatesMissingRootThroughCertifiedHandles(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "first", "second")
-	platform, err := openNativeOutputPlatform(target, true)
+	platform, err := openStrongNativeOutputPlatform(target, true)
 	if err != nil {
 		nativeOutputIdentitySchemeFailure(t, windowsNTFSNativeIdentitySchemeProfile,
 			"create missing Windows/NTFS root through certified handles", err)
@@ -93,7 +94,7 @@ func TestWindowsRootCreationDoesNotTraverseReparseAncestor(t *testing.T) {
 		t.Skipf("create Windows reparse adversary: %v", err)
 	}
 	unexpected := filepath.Join(outside, "must-not-exist")
-	platform, err := openNativeOutputPlatform(filepath.Join(alias, "must-not-exist"), true)
+	platform, err := openStrongNativeOutputPlatform(filepath.Join(alias, "must-not-exist"), true)
 	if platform != nil {
 		_ = platform.Close()
 	}
@@ -103,4 +104,8 @@ func TestWindowsRootCreationDoesNotTraverseReparseAncestor(t *testing.T) {
 	if _, statErr := os.Lstat(unexpected); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("reparse target was mutated before identityScheme: %v", statErr)
 	}
+}
+
+func openStrongNativeOutputPlatform(path string, create bool) (outputcap.Platform, error) {
+	return outputwindows.Open(path, create)
 }

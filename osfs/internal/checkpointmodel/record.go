@@ -18,11 +18,11 @@ import (
 )
 
 const (
-	SchemaVersion uint8 = 2
+	SchemaVersion uint8 = 3
 
-	recordDomain         = "windshare/file-checkpoint-record/v2"
-	recordChecksumDomain = "windshare/file-checkpoint-checksum/v2"
-	recordMagic          = "WSFCPV2\x00"
+	recordDomain         = "windshare/file-checkpoint-record/v3"
+	recordChecksumDomain = "windshare/file-checkpoint-checksum/v3"
+	recordMagic          = "WSFCPV3\x00"
 
 	maximumPathBytes = catalog.MaxPathBytes
 	maximumRanges    = 16_384
@@ -33,14 +33,14 @@ const (
 )
 
 var (
-	ErrInvalidRecord        = errors.New("file checkpoint v2 is invalid")
-	ErrRecordChecksum       = errors.New("file checkpoint v2 checksum is invalid")
-	ErrRecordNonCanonical   = errors.New("file checkpoint v2 encoding is not canonical")
-	ErrRecordGeneration     = errors.New("file checkpoint v2 generation is invalid")
-	ErrRecordBinding        = errors.New("file checkpoint v2 binding is invalid")
-	ErrRecordObjectConflict = errors.New("file checkpoint v2 output object has multiple owners")
-	ErrRecordRecovery       = errors.New("file checkpoint v2 has no verified committed record")
-	ErrRecordCrashBoundary  = errors.New("file checkpoint v2 crash cut is not recoverable")
+	ErrInvalidRecord        = errors.New("file checkpoint v3 is invalid")
+	ErrRecordChecksum       = errors.New("file checkpoint v3 checksum is invalid")
+	ErrRecordNonCanonical   = errors.New("file checkpoint v3 encoding is not canonical")
+	ErrRecordGeneration     = errors.New("file checkpoint v3 generation is invalid")
+	ErrRecordBinding        = errors.New("file checkpoint v3 binding is invalid")
+	ErrRecordObjectConflict = errors.New("file checkpoint v3 output object has multiple owners")
+	ErrRecordRecovery       = errors.New("file checkpoint v3 has no verified committed record")
+	ErrRecordCrashBoundary  = errors.New("file checkpoint v3 crash cut is not recoverable")
 )
 
 type (
@@ -518,23 +518,14 @@ func (record Record) validate() error {
 }
 
 func (record Record) derivedRecordID() RecordID {
-	hash := sha256.New()
-	writeRecordPrefix(hash)
-	writeRecordFrame(hash, []byte(record.ownershipMarker))
-	writeRecordFrame(hash, []byte(record.namespace))
-	writeRecordFrame(hash, record.operationID.Bytes())
-	writeRecordFrame(hash, record.receiveIntentDigest.Bytes())
-	writeRecordFrame(hash, record.materializationBindingDigest.Bytes())
-	writeRecordFrame(hash, record.fileID.Bytes())
-	writeRecordFrame(hash, record.fileRevision.Bytes())
-	writeRecordFrame(hash, canonicalPathBytes(record.canonicalPath))
-	writeRecordFramedU64(hash, record.exactSize)
-	writeRecordFrame(hash, []byte{byte(record.materializerKind)})
-	writeRecordFrame(hash, record.authorityRef.Bytes())
-	writeRecordFrame(hash, record.ownedObjectID[:])
-	var result RecordID
-	copy(result[:], hash.Sum(nil))
-	return result
+	// One logical file has one lifecycle in a task. Revision and object identity
+	// are immutable contents of that lifecycle, not a second lookup namespace.
+	id, _ := DeriveCheckpointLineageID(CheckpointLineageSpec{
+		OperationID: record.operationID, ReceiveIntentDigest: record.receiveIntentDigest,
+		MaterializationBindingDigest: record.materializationBindingDigest, FileID: record.fileID,
+		CanonicalPath: record.canonicalPath, MaterializerKind: record.materializerKind, AuthorityRef: record.authorityRef,
+	})
+	return RecordID(id)
 }
 
 func (record Record) canonicalPayload() []byte {

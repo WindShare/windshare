@@ -453,6 +453,7 @@ func (kind DirectTreeSettlementKind) valid() bool {
 type FileTransaction interface {
 	Binding() MaterializedFileBinding
 	WriteRange(context.Context, uint64, []byte) error
+	Accept(context.Context) (FileProgress, error)
 	Checkpoint(context.Context) (VerifiedRanges, error)
 	Commit(context.Context) (FileSettlement, error)
 	Pause(context.Context, FilePauseReason) (FileSettlement, error)

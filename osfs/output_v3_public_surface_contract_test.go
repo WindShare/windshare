@@ -28,7 +28,7 @@ func TestFilesystemOutputAuthorityExportsOnlyIntentionalSurface(t *testing.T) {
 	for method := range authorityType.Methods() {
 		methods = append(methods, method.Name)
 	}
-	if want := []string{"BindDestination", "Close", "CreateOperation", "LookupActive", "OpenDirectTree", "OpenOperation", "ReserveDirectTree"}; !slices.Equal(methods, want) {
+	if want := []string{"BindDestination", "Close", "CreateOperation", "LookupActive", "OpenDirectTree", "OpenOperation", "ReserveDirectTree", "SelectOperation"}; !slices.Equal(methods, want) {
 		t.Fatalf("public filesystem output-authority methods = %v, want %v", methods, want)
 	}
 

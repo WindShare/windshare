@@ -43,13 +43,10 @@ func TestFileExecutionAuthorityClassifiesPhysicalLineageEvidence(t *testing.T) {
 		"exact": {[]checkpointmodel.Record{base}, checkpointmodel.CheckpointLineageRequest{
 			FileRevision: base.FileRevision(), ExactSize: base.ExactSize(),
 		}, checkpointmodel.CheckpointLineageDecisionExact},
-		"revision conflict": {[]checkpointmodel.Record{base, revisionConflict}, checkpointmodel.CheckpointLineageRequest{
+		"revision conflict": {[]checkpointmodel.Record{revisionConflict}, checkpointmodel.CheckpointLineageRequest{
 			FileRevision: base.FileRevision(), ExactSize: base.ExactSize(),
 		}, checkpointmodel.CheckpointLineageDecisionRevisionConflict},
-		"ownership conflict": {[]checkpointmodel.Record{base, ownershipConflict}, checkpointmodel.CheckpointLineageRequest{
-			FileRevision: base.FileRevision(), ExactSize: base.ExactSize(),
-		}, checkpointmodel.CheckpointLineageDecisionOwnershipConflict},
-		"invalid size": {[]checkpointmodel.Record{base, invalid}, checkpointmodel.CheckpointLineageRequest{
+		"invalid size": {[]checkpointmodel.Record{invalid}, checkpointmodel.CheckpointLineageRequest{
 			FileRevision: base.FileRevision(), ExactSize: base.ExactSize(),
 		}, checkpointmodel.CheckpointLineageDecisionInvalid},
 	} {
@@ -72,6 +69,9 @@ func TestFileExecutionAuthorityClassifiesPhysicalLineageEvidence(t *testing.T) {
 		})
 	}
 
+	if err := newFileExecutionAuthority().rebuild([]checkpointmodel.Record{base, ownershipConflict}, nil); !errors.Is(err, checkpointmodel.ErrRecordBinding) {
+		t.Fatal("two physical owners occupied one logical record")
+	}
 	authority := newFileExecutionAuthority()
 	if err := authority.rebuild([]checkpointmodel.Record{base, crossLineage}, nil); err != nil {
 		t.Fatal(err)
@@ -292,23 +292,21 @@ func TestRevisionConflictNeverMovesPhysicalVerifiedRanges(t *testing.T) {
 		revision: &revision, ranges: &secondRanges,
 	})
 	authority := newFileExecutionAuthority()
-	if err := authority.rebuild([]checkpointmodel.Record{first, second}, nil); err != nil {
+	if err := authority.add(first); err != nil {
 		t.Fatal(err)
 	}
-	slots := authority.lineageSnapshot()
-	if len(slots) != 1 || slots[0].Decision() != checkpointmodel.CheckpointLineageDecisionRevisionConflict {
-		t.Fatalf("revision slot = %+v", slots)
+	spec, _ := first.CheckpointLineageSpec()
+	decision, selected, err := authority.classify(spec, checkpointmodel.CheckpointLineageRequest{FileRevision: second.FileRevision(), ExactSize: second.ExactSize()})
+	if err != nil || decision != checkpointmodel.CheckpointLineageDecisionRevisionConflict || selected.Valid() {
+		t.Fatalf("conflict granted ranges: %v %v", decision, err)
 	}
-	physical := slots[0].PhysicalRecords()
-	want := map[checkpointmodel.RecordID][]checkpointmodel.Range{
-		first.RecordID(): first.VerifiedRanges(), second.RecordID(): second.VerifiedRanges(),
+	if err := authority.add(second); !errors.Is(err, checkpointmodel.ErrRecordBinding) {
+		t.Fatal("new revision occupied the old checkpoint location")
 	}
-	for _, record := range physical {
-		if !slices.Equal(record.VerifiedRanges(), want[record.RecordID()]) {
-			t.Fatalf("record %x ranges moved: got=%v want=%v",
-				record.RecordID(), record.VerifiedRanges(), want[record.RecordID()])
-		}
+	if !slices.Equal(authority.physical[first.RecordID()].VerifiedRanges(), first.VerifiedRanges()) {
+		t.Fatal("original ranges changed")
 	}
+
 }
 
 type recordVariant struct {

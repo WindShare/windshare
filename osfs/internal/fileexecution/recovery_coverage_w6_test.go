@@ -84,7 +84,7 @@ func TestRecoveryReducerSeparatesDefiniteTamperFromUnknownOwnership(t *testing.T
 		{"active owned unsafe", active, OwnedStageUnsafe, FinalAbsent, RecoveryInstallQuarantine, checkpointmodel.QuarantineStageUnsafe},
 		{"publishing missing owned", publishing, OwnedStageMissing, FinalAbsent, RecoveryInstallQuarantine, checkpointmodel.QuarantineStageMissing},
 		{"publishing final unsafe", publishing, OwnedReady, FinalUnsafe, RecoveryInstallQuarantine, checkpointmodel.QuarantineFinalUnsafe},
-		{"published mismatch", published, OwnedReady, FinalCollision, RecoveryInstallQuarantine, checkpointmodel.QuarantineFinalMismatch},
+		{"published mismatch", published, OwnedReady, FinalCollision, RecoveryReturnPublished, 0},
 		{"retired ownership unknown", retired, OwnedObjectCollision, FinalAbsent, RecoveryInstallQuarantine, checkpointmodel.QuarantineOutputObjectDuplicate},
 		{"retired final unsafe", retired, OwnedAbsent, FinalUnsafe, RecoveryInstallQuarantine, checkpointmodel.QuarantineFinalUnsafe},
 	}

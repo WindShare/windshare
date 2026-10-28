@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"sync/atomic"
 	"testing"
 
@@ -20,7 +21,7 @@ func (admissionOutput) BindDestination(context.Context) (OutputMode, error) {
 	return OutputLiveOnly, nil
 }
 
-func (admissionOutput) LookupActive(context.Context, transfer.SelectionSpec) (OutputLookup, error) {
+func (admissionOutput) SelectOperation(context.Context, transfer.SelectionSpec, receivecontract.OperationSelection) (OutputLookup, error) {
 	return OutputLookup{}, errors.New("live output cannot reopen")
 }
 

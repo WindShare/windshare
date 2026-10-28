@@ -31,6 +31,15 @@ var ErrInvalidOrdinaryOperation = errors.New("ordinary operation record is inval
 
 type ActiveOperationKey [sha256.Size]byte
 
+// IsolatedOperationKey gives explicit redownloads their own admission namespace.
+// Automatic matching remains owned by the original selection/destination key.
+func IsolatedOperationKey(operation receivecontract.OperationID) ActiveOperationKey {
+	if operation.IsZero() {
+		return ActiveOperationKey{}
+	}
+	return sha256.Sum256(append([]byte("windshare/explicit-operation/v1\x00"), operation.Bytes()...))
+}
+
 func NewActiveOperationKey(
 	selection transfer.SelectionSpecDigest,
 	destinationBindingID receivecontract.AuthorityRef,

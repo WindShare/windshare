@@ -48,12 +48,7 @@ func TestFileExecutionStoreReplaceDurablyAdvancesExactLineage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := checkpointmodel.AdvanceGeneration(
-		previous,
-		[]checkpointmodel.Range{{Offset: 0, End: 8}},
-		checkpointmodel.PhaseActive,
-		checkpointmodel.CommitCandidate,
-	)
+	next, err := checkpointmodel.AdvanceDurableRanges(previous, []checkpointmodel.Range{{Offset: 0, End: 8}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,9 +115,9 @@ func TestFileExecutionAuthorityReplaceRejectsMissingOrChangedBinding(t *testing.
 		if err := authority.replace(previous, next); !errors.Is(err, checkpointmodel.ErrRecordBinding) {
 			t.Fatalf("replace missing previous error = %v, want %v", err, checkpointmodel.ErrRecordBinding)
 		}
-		if len(authority.physical) != 0 || len(authority.lineages) != 0 || len(authority.objects) != 0 {
-			t.Fatalf("missing replacement mutated authority: physical=%d lineages=%d objects=%d",
-				len(authority.physical), len(authority.lineages), len(authority.objects))
+		if len(authority.physical) != 0 || len(authority.objects) != 0 {
+			t.Fatalf("missing replacement mutated authority: physical=%d objects=%d",
+				len(authority.physical), len(authority.objects))
 		}
 	})
 

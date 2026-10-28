@@ -34,6 +34,7 @@ type ProgressSpec struct {
 	PreviouslyPublishedBytes uint64
 	VerifiedBytes            uint64
 	NewlyVerifiedBytes       uint64
+	RestartReusableBytes     uint64
 	FileOutcomes             FileOutcomes
 	// Capacity pressure is receiver scheduling state, not file settlement, so it
 	// must remain outside the exact counter relationships above.
@@ -53,6 +54,7 @@ type ProgressSnapshot struct {
 	previouslyPublishedBytes uint64
 	verifiedBytes            uint64
 	newlyVerifiedBytes       uint64
+	restartReusableBytes     uint64
 	fileOutcomes             FileOutcomes
 	capacityActiveWaiters    uint32
 	capacityAccumulatedWait  time.Duration
@@ -76,6 +78,7 @@ func NewProgressSnapshot(spec ProgressSpec) (ProgressSnapshot, error) {
 		completedBytes, completedOverflow := checkedAdd(spec.VerifiedBytes, spec.PreviouslyPublishedBytes)
 		if overflow || publishedOverflow || completedOverflow || !ValidExactItemBlockCounts(spec.FileOutcomes) ||
 			spec.NewlyVerifiedBytes > spec.VerifiedBytes ||
+			spec.RestartReusableBytes > spec.VerifiedBytes ||
 			completedBytes > spec.DiscoveredBytes ||
 			spec.PreviouslyPublishedBytes > spec.PublishedBytes ||
 			spec.PublishedBytes > completedBytes ||
@@ -88,6 +91,7 @@ func NewProgressSnapshot(spec ProgressSpec) (ProgressSnapshot, error) {
 		discoveredFiles: spec.DiscoveredFiles, discoveredBytes: spec.DiscoveredBytes,
 		publishedFiles: spec.PublishedFiles, publishedBytes: spec.PublishedBytes,
 		verifiedBytes: spec.VerifiedBytes, newlyVerifiedBytes: spec.NewlyVerifiedBytes,
+		restartReusableBytes:     spec.RestartReusableBytes,
 		previouslyPublishedBytes: spec.PreviouslyPublishedBytes,
 		fileOutcomes:             spec.FileOutcomes,
 		capacityActiveWaiters:    spec.CapacityActiveWaiters,
@@ -134,6 +138,8 @@ func (snapshot ProgressSnapshot) VerifiedBytes() uint64 { return snapshot.verifi
 
 func (snapshot ProgressSnapshot) NewlyVerifiedBytes() uint64 { return snapshot.newlyVerifiedBytes }
 
+func (snapshot ProgressSnapshot) RestartReusableBytes() uint64 { return snapshot.restartReusableBytes }
+
 func (snapshot ProgressSnapshot) FileOutcomes() FileOutcomes { return snapshot.fileOutcomes }
 
 func (snapshot ProgressSnapshot) CapacityActiveWaiters() uint32 {
@@ -159,6 +165,7 @@ func (snapshot ProgressSnapshot) Valid() bool {
 		DiscoveredFiles: snapshot.discoveredFiles, DiscoveredBytes: snapshot.discoveredBytes,
 		PublishedFiles: snapshot.publishedFiles, PublishedBytes: snapshot.publishedBytes,
 		VerifiedBytes: snapshot.verifiedBytes, NewlyVerifiedBytes: snapshot.newlyVerifiedBytes,
+		RestartReusableBytes:     snapshot.restartReusableBytes,
 		PreviouslyPublishedBytes: snapshot.previouslyPublishedBytes,
 		FileOutcomes:             snapshot.fileOutcomes,
 		CapacityActiveWaiters:    snapshot.capacityActiveWaiters,
