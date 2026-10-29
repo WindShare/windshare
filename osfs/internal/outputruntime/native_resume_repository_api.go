@@ -381,6 +381,9 @@ func (lease *NativeResumeLease) Cleanup(
 		lease.repository = nil
 		lease.store = nil
 	}
+	if err := lease.retireTopLevelIdentityLocked(); err != nil {
+		return nativeResumeCleanupFailure(err)
+	}
 	if err := lease.operation.DeleteTerminal(); err != nil {
 		if lease.operation.Deleted() {
 			return resumeauthority.CleanupComplete, nativeResumeError(err)
