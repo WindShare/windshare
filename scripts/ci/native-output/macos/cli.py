@@ -125,6 +125,8 @@ def verify_downloads(processes, wind, relay_binary, root, evidence):
     write_payload(source, HASH_BLOCK_BYTES)
     link = share(processes, wind, source, endpoint, "single-share")
     output = root / "single-output"
+    output.mkdir()
+    output.chmod(0o775)
     receiver, _ = processes.start("single-get", [
         wind, "get", link, "-o", str(output), "--connectivity", "relay-only",
         "--trace", str(evidence / "single-get.ndjson"),
@@ -139,6 +141,8 @@ def verify_downloads(processes, wind, relay_binary, root, evidence):
     write_payload(tree / "nested" / "tail.bin", TAIL_FILE_BYTES)
     link = share(processes, wind, tree, endpoint, "folder-share")
     output = root / "folder-output"
+    output.mkdir()
+    output.chmod(0o775)
     receiver, _ = processes.start("interrupted-get", [
         wind, "get", link, "-o", str(output), "--connectivity", "relay-only",
         "--trace", str(evidence / "interrupted-get.ndjson"),
