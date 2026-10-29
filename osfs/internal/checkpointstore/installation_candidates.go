@@ -84,6 +84,30 @@ type recordInstaller struct {
 	candidates candidateNamespace
 }
 
+// A physical image can prove cleanup ownership without proving resumable
+// progress. Keep its exact name so retiring the fixed record cannot orphan the
+// independent evidence carried by an authenticated temporary image.
+type checkpointImage struct {
+	record checkpointmodel.Record
+	name   string
+}
+
+func fixedCheckpointImage(record checkpointmodel.Record) checkpointImage {
+	_, name := recordLocation(record.RecordID())
+	return checkpointImage{record: record, name: name}
+}
+
+func (image checkpointImage) reference() string {
+	shard, _ := recordLocation(image.record.RecordID())
+	return attentionReference(shard, image.name)
+}
+
+func (snapshot *Snapshot) retainCandidate(record checkpointmodel.Record, name string, code AttentionCode) {
+	image := checkpointImage{record: record, name: name}
+	snapshot.candidates = append(snapshot.candidates, image)
+	snapshot.attention = append(snapshot.attention, Attention{code: code, reference: image.reference()})
+}
+
 func (repository *Repository) installer(directory outputcap.Directory) recordInstaller {
 	return recordInstaller{directory: directory, candidates: operationCandidates(repository.binding.OperationID())}
 }

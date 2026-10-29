@@ -19,6 +19,7 @@ type fileExecutionAuthority struct {
 	mu                  sync.Mutex
 	physical            map[checkpointmodel.RecordID]checkpointmodel.Record
 	objects             map[checkpointmodel.ObjectID]map[checkpointmodel.RecordID]struct{}
+	candidates          map[string]checkpointImage
 	attention           []Attention
 	reclaimedCandidates uint64
 	recordLimit         int
@@ -31,7 +32,11 @@ func newFileExecutionAuthority() *fileExecutionAuthority {
 	return newFileExecutionAuthorityWithRecordLimit(checkpointmodel.MaxCheckpointRecordsPerOperation)
 }
 func newFileExecutionAuthorityWithRecordLimit(limit int) *fileExecutionAuthority {
-	return &fileExecutionAuthority{physical: make(map[checkpointmodel.RecordID]checkpointmodel.Record), objects: make(map[checkpointmodel.ObjectID]map[checkpointmodel.RecordID]struct{}), recordLimit: limit}
+	return &fileExecutionAuthority{
+		physical:   make(map[checkpointmodel.RecordID]checkpointmodel.Record),
+		objects:    make(map[checkpointmodel.ObjectID]map[checkpointmodel.RecordID]struct{}),
+		candidates: make(map[string]checkpointImage), recordLimit: limit,
+	}
 }
 func (a *fileExecutionAuthority) rebuild(records []checkpointmodel.Record, attention []Attention) error {
 	if a == nil || a.recordLimit <= 0 {
@@ -47,6 +52,7 @@ func (a *fileExecutionAuthority) rebuild(records []checkpointmodel.Record, atten
 		}
 	}
 	a.physical, a.objects = next.physical, next.objects
+	a.candidates = next.candidates
 	a.attention = slices.Clone(attention)
 	a.unsettled = false
 	return nil
@@ -133,6 +139,20 @@ func (a *fileExecutionAuthority) remove(r checkpointmodel.Record) error {
 	if len(claims) == 0 {
 		delete(a.objects, r.OwnedObjectID())
 	}
+	return nil
+}
+
+func (a *fileExecutionAuthority) removeImage(image checkpointImage) error {
+	if !IsTemporaryName(image.name) {
+		return a.remove(image.record)
+	}
+	reference := image.reference()
+	current, found := a.candidates[reference]
+	if !found || !bytes.Equal(current.record.CanonicalBytes(), image.record.CanonicalBytes()) {
+		return checkpointmodel.ErrRecordBinding
+	}
+	delete(a.candidates, reference)
+	a.reclaimedCandidates++
 	return nil
 }
 func (a *fileExecutionAuthority) classify(spec checkpointmodel.CheckpointLineageSpec, request checkpointmodel.CheckpointLineageRequest) (checkpointmodel.CheckpointLineageDecision, checkpointmodel.Record, error) {
