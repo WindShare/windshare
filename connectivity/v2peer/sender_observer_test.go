@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	pion "github.com/pion/webrtc/v4"
@@ -157,6 +158,10 @@ func mustTestFactoryWithSenderCollector(
 }
 
 func TestSenderAttemptObservationEmitsExactSuccessfulLifecycle(t *testing.T) {
+	synctest.Test(t, testSenderAttemptObservationEmitsExactSuccessfulLifecycle)
+}
+
+func testSenderAttemptObservationEmitsExactSuccessfulLifecycle(t *testing.T) {
 	peer := newTestPeerConnection()
 	channel := newTestPeerChannel()
 	channel.opened = make(chan struct{})
@@ -194,12 +199,13 @@ func TestSenderAttemptObservationEmitsExactSuccessfulLifecycle(t *testing.T) {
 	receiveTest(t, session.controls)
 
 	peer.emitDataChannel(&pion.DataChannel{})
+	synctest.Wait()
 	select {
 	case admission := <-session.admissions:
 		t.Fatalf("channel admitted before Opened completed: %T", admission)
-	case <-time.After(25 * time.Millisecond):
+	default:
 	}
-	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) >= 5 })
+	assertPeerState(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) >= 5 })
 	if observations := collector.forAttempt(binding.AttemptID); len(observations) != 5 {
 		t.Fatalf("pre-open observations = %#v", observations)
 	}
@@ -208,7 +214,7 @@ func TestSenderAttemptObservationEmitsExactSuccessfulLifecycle(t *testing.T) {
 		t.Fatalf("admitted channel = %T, want injected channel", admitted)
 	}
 	admittedOwner := receiveTest(t, session.ownedAdmissions)
-	waitForTest(t, func() bool {
+	assertPeerState(t, func() bool {
 		observed := collector.forAttempt(binding.AttemptID)
 		return len(observed) != 0 && (observed[len(observed)-1].Stage == SenderAttemptAdmitted ||
 			observed[len(observed)-1].Stage == SenderAttemptFailed)
@@ -280,13 +286,13 @@ func TestSenderAttemptObservationEmitsExactSuccessfulLifecycle(t *testing.T) {
 	}
 	receiveTest(t, peer.closed)
 	operationKey := testPeerOperationFromContext(t, operationContext, operation)
-	waitForTest(t, func() bool {
+	assertPeerState(t, func() bool {
 		handler.mu.Lock()
 		defer handler.mu.Unlock()
 		_, retired := handler.retiredOperations[operationKey]
 		return retired
 	})
-	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 10 })
+	assertPeerState(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 10 })
 	select {
 	case failure := <-session.failures:
 		t.Fatalf("normal post-admission close emitted failure %#v", failure)
@@ -312,6 +318,10 @@ func TestSenderAttemptObservationEmitsExactSuccessfulLifecycle(t *testing.T) {
 }
 
 func TestSenderAttemptObservationImmediateCloseHasOneSafeTerminal(t *testing.T) {
+	synctest.Test(t, testSenderAttemptObservationImmediateCloseHasOneSafeTerminal)
+}
+
+func testSenderAttemptObservationImmediateCloseHasOneSafeTerminal(t *testing.T) {
 	collector := &senderObservationCollector{}
 	peer := newTestPeerConnection()
 	channel := newTestPeerChannel()
@@ -332,7 +342,7 @@ func TestSenderAttemptObservationImmediateCloseHasOneSafeTerminal(t *testing.T) 
 	peer.emitDataChannel(&pion.DataChannel{})
 	receiveTest(t, baseSession.admissions)
 	receiveTest(t, peer.closed)
-	waitForTest(t, func() bool {
+	assertPeerState(t, func() bool {
 		observed := collector.forAttempt(binding.AttemptID)
 		return len(observed) != 0 && (observed[len(observed)-1].Stage == SenderAttemptAdmitted ||
 			observed[len(observed)-1].Stage == SenderAttemptFailed)
@@ -412,6 +422,10 @@ func TestSenderAttemptObservationRedactsNegotiationFailureText(t *testing.T) {
 }
 
 func TestSenderAttemptObservationPreservesTypedAdmissionFailure(t *testing.T) {
+	synctest.Test(t, testSenderAttemptObservationPreservesTypedAdmissionFailure)
+}
+
+func testSenderAttemptObservationPreservesTypedAdmissionFailure(t *testing.T) {
 	collector := &senderObservationCollector{}
 	peer := newTestPeerConnection()
 	channel := newTestPeerChannel()
@@ -437,7 +451,7 @@ func TestSenderAttemptObservationPreservesTypedAdmissionFailure(t *testing.T) {
 		t.Fatalf("admission wire failure = %#v", wireFailure)
 	}
 	receiveTest(t, peer.closed)
-	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 8 })
+	assertPeerState(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 8 })
 	observed := collector.forAttempt(binding.AttemptID)
 	terminal := observed[len(observed)-1]
 	if terminal.Stage != SenderAttemptFailed || terminal.Failure == nil ||
@@ -470,48 +484,56 @@ func TestSenderAttemptObservationClassifiesCancellationAndRuntimeStop(t *testing
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			collector := &senderObservationCollector{}
-			peer := newTestPeerConnection()
-			factory := mustTestFactoryWithSenderCollector(t, collector, Config{
-				PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) {
-					return peer, nil
-				}),
+			synctest.Test(t, func(t *testing.T) {
+
+				collector := &senderObservationCollector{}
+				peer := newTestPeerConnection()
+				factory := mustTestFactoryWithSenderCollector(t, collector, Config{
+					PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) {
+						return peer, nil
+					}),
+				})
+				session := newTestPeerSession(81)
+				handler, ctx, cancel, runDone := startSenderTestRuntime(t, factory, session)
+				operation, binding, operationContext := sendSenderTestOffer(t, handler, ctx, 82)
+				receiveTest(t, peer.remote)
+				receiveTest(t, session.controls)
+				if test.cancelRun {
+					cancel()
+					if err := receiveTest(t, runDone); !errors.Is(err, context.Canceled) {
+						t.Fatalf("runtime stop = %v", err)
+					}
+				} else {
+					if err := handler.Cancel(operationContext, operation); err != nil {
+						t.Fatalf("cancel operation: %v", err)
+					}
+					stopSenderTestRuntime(t, cancel, runDone)
+				}
+				assertPeerState(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 6 })
+				observed := collector.forAttempt(binding.AttemptID)
+				failed := observed[len(observed)-1]
+				if failed.Stage != SenderAttemptFailed || failed.Failure == nil ||
+					failed.Failure.FailedAtStage != SenderAttemptDataChannelOpen ||
+					failed.Failure.Scope != test.scope || failed.Failure.TypedPeerErrorCode != test.code ||
+					failed.Failure.Message != "" || failed.Failure.Operation != nil {
+					t.Fatalf("classified failure = %#v", failed)
+				}
+				select {
+				case failure := <-session.failures:
+					t.Fatalf("cancellation emitted operation failure %#v", failure)
+				default:
+				}
+
 			})
-			session := newTestPeerSession(81)
-			handler, ctx, cancel, runDone := startSenderTestRuntime(t, factory, session)
-			operation, binding, operationContext := sendSenderTestOffer(t, handler, ctx, 82)
-			receiveTest(t, peer.remote)
-			receiveTest(t, session.controls)
-			if test.cancelRun {
-				cancel()
-				if err := receiveTest(t, runDone); !errors.Is(err, context.Canceled) {
-					t.Fatalf("runtime stop = %v", err)
-				}
-			} else {
-				if err := handler.Cancel(operationContext, operation); err != nil {
-					t.Fatalf("cancel operation: %v", err)
-				}
-				stopSenderTestRuntime(t, cancel, runDone)
-			}
-			waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 6 })
-			observed := collector.forAttempt(binding.AttemptID)
-			failed := observed[len(observed)-1]
-			if failed.Stage != SenderAttemptFailed || failed.Failure == nil ||
-				failed.Failure.FailedAtStage != SenderAttemptDataChannelOpen ||
-				failed.Failure.Scope != test.scope || failed.Failure.TypedPeerErrorCode != test.code ||
-				failed.Failure.Message != "" || failed.Failure.Operation != nil {
-				t.Fatalf("classified failure = %#v", failed)
-			}
-			select {
-			case failure := <-session.failures:
-				t.Fatalf("cancellation emitted operation failure %#v", failure)
-			default:
-			}
 		})
 	}
 }
 
 func TestSenderAttemptObservationRejectsCapacityWithCompleteAttemptStream(t *testing.T) {
+	synctest.Test(t, testSenderAttemptObservationRejectsCapacityWithCompleteAttemptStream)
+}
+
+func testSenderAttemptObservationRejectsCapacityWithCompleteAttemptStream(t *testing.T) {
 	collector := &senderObservationCollector{}
 	peer := newTestPeerConnection()
 	clock := newManualTestClock(time.Unix(8_000, 0))
@@ -530,7 +552,7 @@ func TestSenderAttemptObservationRejectsCapacityWithCompleteAttemptStream(t *tes
 	receiveTest(t, session.controls)
 	rejectedOperation, rejectedBinding, rejectedContext := sendSenderTestOffer(t, handler, ctx, 94)
 	receiveTest(t, session.failures)
-	waitForTest(t, func() bool { return len(collector.forAttempt(rejectedBinding.AttemptID)) == 2 })
+	assertPeerState(t, func() bool { return len(collector.forAttempt(rejectedBinding.AttemptID)) == 2 })
 	rejected := collector.forAttempt(rejectedBinding.AttemptID)
 	if rejected[0].Stage != SenderAttemptStarted || rejected[1].Stage != SenderAttemptFailed ||
 		rejected[1].Failure == nil ||
@@ -590,6 +612,10 @@ func TestSenderLocalCandidatePruningPreservesAttempt(t *testing.T) {
 }
 
 func TestSenderAttemptObservationTreatsRetiredCandidateAsAttemptCancellation(t *testing.T) {
+	synctest.Test(t, testSenderAttemptObservationTreatsRetiredCandidateAsAttemptCancellation)
+}
+
+func testSenderAttemptObservationTreatsRetiredCandidateAsAttemptCancellation(t *testing.T) {
 	collector := &senderObservationCollector{}
 	peer := newTestPeerConnection()
 	factory := mustTestFactoryWithSenderCollector(t, collector, Config{
@@ -612,7 +638,7 @@ func TestSenderAttemptObservationTreatsRetiredCandidateAsAttemptCancellation(t *
 	})
 	receiveTest(t, session.candidateCalls)
 	receiveTest(t, peer.closed)
-	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 6 })
+	assertPeerState(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 6 })
 	observed := collector.forAttempt(binding.AttemptID)
 	terminal := observed[len(observed)-1]
 	if terminal.Stage != SenderAttemptFailed || terminal.Failure == nil ||
@@ -632,6 +658,10 @@ func TestSenderAttemptObservationTreatsRetiredCandidateAsAttemptCancellation(t *
 }
 
 func TestSenderAttemptObservationProjectsAuthenticatedRejectionSettlement(t *testing.T) {
+	synctest.Test(t, testSenderAttemptObservationProjectsAuthenticatedRejectionSettlement)
+}
+
+func testSenderAttemptObservationProjectsAuthenticatedRejectionSettlement(t *testing.T) {
 	collector := &senderObservationCollector{}
 	factory := mustTestFactoryWithSenderCollector(t, collector, Config{})
 	session := newTestPeerSession(121)
@@ -660,7 +690,7 @@ func TestSenderAttemptObservationProjectsAuthenticatedRejectionSettlement(t *tes
 		Message: "private provider text",
 	})
 
-	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 10 })
+	assertPeerState(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 10 })
 	observed := collector.forAttempt(binding.AttemptID)
 	settled := observed[8]
 	if settled.Stage != SenderAttemptAdmissionResponseSettled ||
@@ -693,32 +723,36 @@ func TestSenderAttemptRecorderAllowsOnlyOneTerminalAtEveryBoundary(t *testing.T)
 	}
 	for failedIndex := 1; failedIndex < len(stages); failedIndex++ {
 		t.Run(string(stages[failedIndex]), func(t *testing.T) {
-			collector := &senderObservationCollector{}
-			factory := mustTestFactoryWithSenderCollector(t, collector, Config{})
-			session := newTestPeerSession(byte(100 + failedIndex))
-			binding := testBinding(byte(110 + failedIndex))
-			recorder := newSenderAttemptRecorder(factory, session.sessionID, binding)
-			for index := 0; index < failedIndex; index++ {
-				recorder.complete(stages[index], SenderCandidateCounts{}, nil, nil)
-			}
-			recorder.fail(SenderAttemptFailure{
-				Scope: AttemptFailureScopeAttempt, TypedPeerErrorCode: TypedPeerErrorUnexpected,
-				Message: peerUnexpectedFailureMessage,
+			synctest.Test(t, func(t *testing.T) {
+
+				collector := &senderObservationCollector{}
+				factory := mustTestFactoryWithSenderCollector(t, collector, Config{})
+				session := newTestPeerSession(byte(100 + failedIndex))
+				binding := testBinding(byte(110 + failedIndex))
+				recorder := newSenderAttemptRecorder(factory, session.sessionID, binding)
+				for index := 0; index < failedIndex; index++ {
+					recorder.complete(stages[index], SenderCandidateCounts{}, nil, nil)
+				}
+				recorder.fail(SenderAttemptFailure{
+					Scope: AttemptFailureScopeAttempt, TypedPeerErrorCode: TypedPeerErrorUnexpected,
+					Message: peerUnexpectedFailureMessage,
+				})
+				recorder.fail(SenderAttemptFailure{
+					Scope: AttemptFailureScopeSession, TypedPeerErrorCode: TypedPeerErrorStopped,
+					Message: peerRuntimeStoppedMessage,
+				})
+				recorder.complete(stages[failedIndex], SenderCandidateCounts{}, nil, nil)
+				assertPeerState(t, func() bool {
+					return len(collector.forAttempt(binding.AttemptID)) == failedIndex+1
+				})
+				observed := collector.forAttempt(binding.AttemptID)
+				if len(observed) != failedIndex+1 || observed[len(observed)-1].Stage != SenderAttemptFailed ||
+					observed[len(observed)-1].Failure == nil ||
+					observed[len(observed)-1].Failure.FailedAtStage != stages[failedIndex] {
+					t.Fatalf("terminal observations = %#v", observed)
+				}
+
 			})
-			recorder.fail(SenderAttemptFailure{
-				Scope: AttemptFailureScopeSession, TypedPeerErrorCode: TypedPeerErrorStopped,
-				Message: peerRuntimeStoppedMessage,
-			})
-			recorder.complete(stages[failedIndex], SenderCandidateCounts{}, nil, nil)
-			waitForTest(t, func() bool {
-				return len(collector.forAttempt(binding.AttemptID)) == failedIndex+1
-			})
-			observed := collector.forAttempt(binding.AttemptID)
-			if len(observed) != failedIndex+1 || observed[len(observed)-1].Stage != SenderAttemptFailed ||
-				observed[len(observed)-1].Failure == nil ||
-				observed[len(observed)-1].Failure.FailedAtStage != stages[failedIndex] {
-				t.Fatalf("terminal observations = %#v", observed)
-			}
 		})
 	}
 }

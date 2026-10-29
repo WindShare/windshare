@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -452,6 +453,10 @@ func TestRevisionInvalidationCancelsActiveCachedDelivery(t *testing.T) {
 }
 
 func TestSharedBlockCacheIsolatesConsumerCancellationAndInvalidation(t *testing.T) {
+	synctest.Test(t, testSharedBlockCacheIsolatesConsumerCancellationAndInvalidation)
+}
+
+func testSharedBlockCacheIsolatesConsumerCancellationAndInvalidation(t *testing.T) {
 	descriptor := flowDescriptor(t, uint64(catalog.MinChunkSize)*2)
 	process, _ := NewProcessCacheBudget(uint64(catalog.MinChunkSize) * 4)
 	cache, _ := NewSharedBlockCache(descriptor.ShareInstance(), uint64(catalog.MinChunkSize)*2, process)
@@ -480,18 +485,12 @@ func TestSharedBlockCacheIsolatesConsumerCancellationAndInvalidation(t *testing.
 	<-started
 	secondResult := make(chan []byte, 1)
 	go func() { object, _ := cache.Get(context.Background(), key, loader); secondResult <- object }()
-	deadline := time.Now().Add(time.Second)
-	for {
-		cache.mu.Lock()
-		joined := cache.inflight[key] != nil && cache.inflight[key].waiters == 2
-		cache.mu.Unlock()
-		if joined {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("second cache consumer did not join the shared load")
-		}
-		time.Sleep(time.Millisecond)
+	synctest.Wait()
+	cache.mu.Lock()
+	joined := cache.inflight[key] != nil && cache.inflight[key].waiters == 2
+	cache.mu.Unlock()
+	if !joined {
+		t.Fatal("second cache consumer did not join the shared load")
 	}
 	cancelFirst()
 	if err := <-firstResult; !errors.Is(err, context.Canceled) {

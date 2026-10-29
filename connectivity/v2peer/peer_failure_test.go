@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"testing/synctest"
 
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/core/framechannel"
@@ -45,83 +46,87 @@ func TestSenderPeerFailureRetiresAdmittedChannelAfterEventLoopExit(t *testing.T)
 			name = "event loop already stopped"
 		}
 		t.Run(name, func(t *testing.T) {
-			peer := newTestPeerConnection()
-			channel := newTestPeerChannel()
-			session := newTestPeerSession(13)
-			factory := mustTestFactory(t, Config{})
-			attempt := newPeerAttempt(peerAttemptConfig{
-				factory: factory, session: session,
-				offer: v2signalOffer(testBinding(101)),
-			})
-			ctx, cancel := context.WithCancelCause(context.Background())
-			attempt.cancel = cancel
-			phaseContext, err := attempt.phases.beginNegotiation(ctx)
-			if err != nil {
-				t.Fatal(err)
-			}
-			execution := newAttemptExecution(attempt, ctx, peer)
-			execution.phaseContext = phaseContext
-			execution.registerCallbacks()
-			if err := execution.startDataChannel(channel); err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() {
-				cancel(context.Canceled)
-				_ = execution.transport.Close()
-				execution.children.Wait()
-			})
-			result := make(chan error, 1)
-			go func() { result <- execution.runEvents() }()
-			owner := receiveTest(t, session.ownedAdmissions)
-			waitForTest(t, func() bool { return attempt.attached.Load() })
+			synctest.Test(t, func(t *testing.T) {
 
-			peer.mu.Lock()
-			stateChanged := peer.onState
-			peer.mu.Unlock()
-			stateChanged(pion.PeerConnectionStateDisconnected)
-			stateChanged(pion.PeerConnectionStateConnected)
-			if channel.State() != framechannel.Open {
-				t.Fatal("transient disconnection retired an admitted channel")
-			}
+				peer := newTestPeerConnection()
+				channel := newTestPeerChannel()
+				session := newTestPeerSession(13)
+				factory := mustTestFactory(t, Config{})
+				attempt := newPeerAttempt(peerAttemptConfig{
+					factory: factory, session: session,
+					offer: v2signalOffer(testBinding(101)),
+				})
+				ctx, cancel := context.WithCancelCause(context.Background())
+				attempt.cancel = cancel
+				phaseContext, err := attempt.phases.beginNegotiation(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				execution := newAttemptExecution(attempt, ctx, peer)
+				execution.phaseContext = phaseContext
+				execution.registerCallbacks()
+				if err := execution.startDataChannel(channel); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					cancel(context.Canceled)
+					_ = execution.transport.Close()
+					execution.children.Wait()
+				})
+				result := make(chan error, 1)
+				go func() { result <- execution.runEvents() }()
+				owner := receiveTest(t, session.ownedAdmissions)
+				assertPeerState(t, func() bool { return attempt.attached.Load() })
 
-			// Core owns physical Close after the receive side retires. The peer
-			// failure must wake that owner without depending on an attempt event.
-			coreClosed := make(chan error, 1)
-			go func() {
-				<-owner.Recv()
-				coreClosed <- owner.Close()
-			}()
-			cleanup := make(chan error, 1)
-			if stopLoop {
-				cancel(context.Canceled)
-				err := receiveTest(t, result)
-				go func() { cleanup <- execution.close(err) }()
-			}
-			stateChanged(pion.PeerConnectionStateFailed)
-			if !stopLoop {
-				err := receiveTest(t, result)
-				go func() { cleanup <- execution.close(err) }()
-			}
-			if err := receiveTest(t, cleanup); err != nil {
-				t.Fatalf("attempt cleanup: %v", err)
-			}
-			if err := receiveTest(t, coreClosed); err != nil {
-				t.Fatalf("core channel cleanup: %v", err)
-			}
-			if !errors.Is(channel.Err(), errPeerConnectionFailed) ||
-				peer.closeCalls.Load() != 1 || channel.closeCalls.Load() != 1 {
-				t.Fatalf("retirement cause=%v peer closes=%d channel closes=%d",
-					channel.Err(), peer.closeCalls.Load(), channel.closeCalls.Load())
-			}
-			if !attempt.attached.Load() {
-				t.Fatal("transport failure rewrote successful admission")
-			}
-			attempt.finish(ctx, errPeerConnectionFailed, nil, false)
-			select {
-			case failure := <-session.failures:
-				t.Fatalf("admitted lane emitted negotiation failure: %+v", failure)
-			default:
-			}
+				peer.mu.Lock()
+				stateChanged := peer.onState
+				peer.mu.Unlock()
+				stateChanged(pion.PeerConnectionStateDisconnected)
+				stateChanged(pion.PeerConnectionStateConnected)
+				if channel.State() != framechannel.Open {
+					t.Fatal("transient disconnection retired an admitted channel")
+				}
+
+				// Core owns physical Close after the receive side retires. The peer
+				// failure must wake that owner without depending on an attempt event.
+				coreClosed := make(chan error, 1)
+				go func() {
+					<-owner.Recv()
+					coreClosed <- owner.Close()
+				}()
+				cleanup := make(chan error, 1)
+				if stopLoop {
+					cancel(context.Canceled)
+					err := receiveTest(t, result)
+					go func() { cleanup <- execution.close(err) }()
+				}
+				stateChanged(pion.PeerConnectionStateFailed)
+				if !stopLoop {
+					err := receiveTest(t, result)
+					go func() { cleanup <- execution.close(err) }()
+				}
+				if err := receiveTest(t, cleanup); err != nil {
+					t.Fatalf("attempt cleanup: %v", err)
+				}
+				if err := receiveTest(t, coreClosed); err != nil {
+					t.Fatalf("core channel cleanup: %v", err)
+				}
+				if !errors.Is(channel.Err(), errPeerConnectionFailed) ||
+					peer.closeCalls.Load() != 1 || channel.closeCalls.Load() != 1 {
+					t.Fatalf("retirement cause=%v peer closes=%d channel closes=%d",
+						channel.Err(), peer.closeCalls.Load(), channel.closeCalls.Load())
+				}
+				if !attempt.attached.Load() {
+					t.Fatal("transport failure rewrote successful admission")
+				}
+				attempt.finish(ctx, errPeerConnectionFailed, nil, false)
+				select {
+				case failure := <-session.failures:
+					t.Fatalf("admitted lane emitted negotiation failure: %+v", failure)
+				default:
+				}
+
+			})
 		})
 	}
 }
