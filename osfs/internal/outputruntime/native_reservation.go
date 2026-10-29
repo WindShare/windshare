@@ -168,7 +168,7 @@ func (authority *Authority) reserveNativeDirectTree(
 	var operation *Operation
 	kind := NativeDirectTreeReopened
 	switch lookup.Kind() {
-	case ActiveLookupMiss:
+	case ActiveLookupCreateReady:
 		bounded, err := receivecontract.NewResultRootDirectoryTree(
 			receivecontract.NewSyntheticSelectionResultRoot(),
 		)

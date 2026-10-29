@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 	"unsafe"
 
@@ -71,9 +72,11 @@ func openWindowsPath(path string, flags int, directory bool) (*os.File, error) {
 // Process-restart retention does not promise a Windows directory fsync barrier.
 // Flushed candidate files and atomic replacement bound an interrupted update.
 func syncDirectory(*os.File) error { return nil }
-func setFileTimes(f *file, t time.Time) error {
+func setFileModifiedTime(handle *os.File, t time.Time) error {
 	stamp := windows.NsecToFiletime(t.UnixNano())
-	return windows.SetFileTime(windows.Handle(f.handle.Fd()), nil, nil, &stamp)
+	err := windows.SetFileTime(windows.Handle(handle.Fd()), nil, nil, &stamp)
+	runtime.KeepAlive(handle)
+	return err
 }
 func lockFile(f *os.File) (func() error, error) {
 	overlap := new(windows.Overlapped)

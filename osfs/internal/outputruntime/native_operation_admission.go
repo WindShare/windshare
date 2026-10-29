@@ -13,7 +13,8 @@ import (
 type ActiveLookupKind uint8
 
 const (
-	ActiveLookupMiss ActiveLookupKind = iota + 1
+	ActiveLookupCreateReady ActiveLookupKind = iota + 1
+	ActiveLookupNotFound
 	ActiveLookupReopened
 	ActiveLookupAlreadyRunning
 	ActiveLookupNeedsAttention
@@ -21,11 +22,12 @@ const (
 )
 
 func (kind ActiveLookupKind) Valid() bool {
-	return kind >= ActiveLookupMiss && kind <= ActiveLookupAmbiguous
+	return kind >= ActiveLookupCreateReady && kind <= ActiveLookupAmbiguous
 }
 
-// ActiveLookup is an opaque continuation. A miss retains admission authority;
-// a reopened result retains the exact operation lease and top-level capability.
+// ActiveLookup is an opaque continuation. Only CreateReady retains admission
+// authority; NotFound cannot create a replacement for an explicitly selected ID.
+// A reopened result retains the exact operation lease and top-level capability.
 type ActiveLookup struct {
 	authority   *Authority
 	kind        ActiveLookupKind

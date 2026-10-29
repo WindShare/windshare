@@ -442,7 +442,12 @@ func resolveGetOutputOperation(
 	}
 	var operation getOutputOperation
 	switch lookup.Kind {
-	case getOutputLookupMiss:
+	case getOutputLookupNotFound:
+		if selector.Kind() != receivecontract.OperationByID {
+			return getOutputAdmission{}, errGetOutputReservationContract
+		}
+		return getOutputAdmission{}, ErrRetainedOutputMissing
+	case getOutputLookupCreateReady:
 		if policy == OutputResumeExisting {
 			return getOutputAdmission{}, ErrRetainedOutputMissing
 		}

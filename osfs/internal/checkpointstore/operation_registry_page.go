@@ -181,6 +181,15 @@ func (registry *OperationRegistry) readOperation(
 	if err != nil {
 		return checkpointmodel.OrdinaryOperationRecord{}, nil, repositoryError("open ordinary operation", err)
 	}
+	return readAndCloseOperation(directory, operation)
+}
+
+// The caller owns absence at the operation-directory boundary. Missing files
+// inside an existing operation are storage failures, not an absent selection.
+func readAndCloseOperation(
+	directory outputcap.Directory,
+	operation receivecontract.OperationID,
+) (checkpointmodel.OrdinaryOperationRecord, []byte, error) {
 	encoded, readErr := ReadFile(directory, ordinaryOperationRecordFile)
 	closeErr := directory.Close()
 	if readErr != nil || closeErr != nil {

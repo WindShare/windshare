@@ -153,7 +153,7 @@ func openOrdinaryResumeFileWithTracer(
 		}
 		operation = lookup.Operation()
 	} else {
-		if lookup.Kind() != ActiveLookupMiss {
+		if lookup.Kind() != ActiveLookupCreateReady {
 			t.Fatalf("lookup = %d", lookup.Kind())
 		}
 		operation, err = authority.CreateOperation(context.Background(), lookup, artifact)

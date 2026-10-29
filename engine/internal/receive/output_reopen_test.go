@@ -62,7 +62,7 @@ func (authority *layoutRecordingGetOutputAuthority) SelectOperation(
 	transfer.SelectionSpec, receivecontract.OperationSelection,
 ) (getOutputLookup, error) {
 	*authority.events = append(*authority.events, "lookup")
-	return getOutputLookup{Kind: getOutputLookupMiss, Reservation: authority}, nil
+	return getOutputLookup{Kind: getOutputLookupCreateReady, Reservation: authority}, nil
 }
 
 func (authority *layoutRecordingGetOutputAuthority) Create(
@@ -149,7 +149,7 @@ func TestResolveGetOutputOperationReopensBeforeShapeAndRefusesConcurrentLease(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.lookup != getOutputLookupMiss || firstResolver.calls != 1 || firstAdjusted || firstDestination == "" {
+	if first.lookup != getOutputLookupCreateReady || firstResolver.calls != 1 || firstAdjusted || firstDestination == "" {
 		t.Fatalf("first admission=%+v shape_calls=%d", first, firstResolver.calls)
 	}
 	if err := firstAuthority.Close(); err != nil {
@@ -192,7 +192,7 @@ func TestResolveGetOutputOperationReopensBeforeShapeAndRefusesConcurrentLease(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if different.lookup != getOutputLookupMiss || differentResolver.calls != 1 ||
+	if different.lookup != getOutputLookupCreateReady || differentResolver.calls != 1 ||
 		different.operation.Intent.OperationID() == first.operation.Intent.OperationID() ||
 		!differentAdjusted || differentDestination == firstDestination {
 		t.Fatalf("different admission=%+v shape_calls=%d", different, differentResolver.calls)
