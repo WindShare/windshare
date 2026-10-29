@@ -121,7 +121,7 @@ $portableSelector = @($requiredSelectors | Where-Object {
 if ($coreSelector.Count -ne 1 -or
     $portableSelector.Count -ne 1 -or
     (Get-WindowsNativeRequiredTestExpression -TestNames $coreSelector[0].TestNames) -cne
-        '^(TestNativeOutputDestinationCapabilities|TestNativeOutputProcessRestartKeepsRanges|TestNativeOutputRetainedCandidateListAndReopen)$' -or
+        '^(TestNativeOutputDestinationCapabilities|TestNativeOutputProcessRestartKeepsRanges|TestNativeOutputRetainedCandidateListAndReopen|TestNativeLiveOutputPublishesWithoutRecoveryAuthority)$' -or
     (Get-WindowsNativeRequiredTestExpression -TestNames $portableSelector[0].TestNames) -cne
         '^(TestTaskLockIsProcessExclusiveAndRecoversAfterExit|TestOrdinaryFilesPublishWithoutLinksAndNeverOverwrite|TestWindowsModifiedTimePreservesNativePrecisionAndHandleIdentity)$') {
     throw 'required native tests are not bound to their owning package selectors'
@@ -642,6 +642,8 @@ $jsonEvents = @(ConvertFrom-WindowsNativeTestJSONLines -Lines @(
     '{"Action":"pass","Test":"TestNativeOutputProcessRestartKeepsRanges"}',
     '{"Action":"run","Test":"TestNativeOutputRetainedCandidateListAndReopen"}',
     '{"Action":"pass","Test":"TestNativeOutputRetainedCandidateListAndReopen"}',
+    '{"Action":"run","Test":"TestNativeLiveOutputPublishesWithoutRecoveryAuthority"}',
+    '{"Action":"pass","Test":"TestNativeLiveOutputPublishesWithoutRecoveryAuthority"}',
     '{"Action":"run","Test":"TestTaskLockIsProcessExclusiveAndRecoversAfterExit"}',
     '{"Action":"pass","Test":"TestTaskLockIsProcessExclusiveAndRecoversAfterExit"}',
     '{"Action":"run","Test":"TestOrdinaryFilesPublishWithoutLinksAndNeverOverwrite"}',

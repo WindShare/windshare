@@ -81,4 +81,4 @@ run_native_test_binary() {
 # No procfs or device nodes: timestamps and child-process locks must work on
 # the opened files, independently of an ambient /proc or /dev namespace.
 run_native_test_binary /test/outputportable.test '^(TestTaskLockIsProcessExclusiveAndRecoversAfterExit|TestOrdinaryFilesPublishWithoutLinksAndNeverOverwrite|TestSetModifiedTimePreservesNanosecondsAccessTimeAndHandleIdentity)$'
-run_native_test_binary /test/osfs.test '^(TestNativeOutputDestinationCapabilities|TestNativeOutputProcessRestartKeepsRanges|TestNativeOutputRetainedCandidateListAndReopen)$'
+run_native_test_binary /test/osfs.test '^(TestNativeOutputDestinationCapabilities|TestNativeOutputProcessRestartKeepsRanges|TestNativeOutputRetainedCandidateListAndReopen|TestNativeLiveOutputPublishesWithoutRecoveryAuthority)$'
