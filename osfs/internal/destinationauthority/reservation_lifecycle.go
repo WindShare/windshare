@@ -152,11 +152,13 @@ func reserveSingleFileCandidate(
 	candidate topLevelReservationCandidate,
 ) (*TopLevelReservation, bool, error) {
 	kind, exact, err := root.ClassifyExactEntry(candidate.physicalName)
-	if err != nil || !exact {
+	if err != nil || (kind == outputcap.EntryAbsent && !exact) {
 		return nil, false, errors.Join(
 			ErrReservationIndeterminate, err, closeReservationClaimHandle(candidate.handle),
 		)
 	}
+	// An existing alias occupies the candidate just as an exact spelling does.
+	// Only absence needs an exact proof before retaining a logical reservation.
 	if kind != outputcap.EntryAbsent {
 		if err := rollbackReservationClaim(candidate.handle); err != nil {
 			return nil, false, errors.Join(ErrReservationIndeterminate, err)
