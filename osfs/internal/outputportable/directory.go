@@ -269,17 +269,17 @@ func (d *directory) SetModifiedTime(modified catalog.ModifiedTime) error {
 		return err
 	}
 	t := time.Unix(modified.Seconds(), int64(modified.Nanoseconds()))
-	return d.root.Chtimes(".", t, t)
+	return setDirectoryTimes(d, t)
 }
 func (d *directory) PersistentDirectoryIdentityClaim() ([]byte, error) {
 	if err := d.validate(); err != nil {
 		return nil, err
 	}
-	stamp, err := metadataStamp(d.handle)
+	stamp, err := directoryRecoveryStamp(d.handle)
 	if err != nil {
 		return nil, err
 	}
-	hash := sha256.Sum256(bytes.Join([][]byte{[]byte("windshare/portable-directory/v1"), stamp}, []byte{0}))
+	hash := sha256.Sum256(bytes.Join([][]byte{[]byte("windshare/portable-directory-creation/v1"), stamp}, []byte{0}))
 	return hash[:], nil
 }
 func (d *directory) PreparePersistentDirectoryIdentityClaim() ([]byte, error) {

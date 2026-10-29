@@ -3,7 +3,6 @@
 package outputportable
 
 import (
-	"encoding/binary"
 	"errors"
 	"io/fs"
 	"os"
@@ -16,17 +15,22 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func metadataStamp(f *os.File) ([]byte, error) {
+func directoryRecoveryStamp(f *os.File) ([]byte, error) {
 	var info windows.ByHandleFileInformation
 	if err := windows.GetFileInformationByHandle(windows.Handle(f.Fd()), &info); err != nil {
 		return nil, err
 	}
-	stamp := binary.LittleEndian.AppendUint32(nil, info.VolumeSerialNumber)
-	stamp = binary.LittleEndian.AppendUint32(stamp, info.FileIndexHigh)
-	stamp = binary.LittleEndian.AppendUint32(stamp, info.FileIndexLow)
-	stamp = binary.LittleEndian.AppendUint32(stamp, info.CreationTime.HighDateTime)
-	return binary.LittleEndian.AppendUint32(stamp, info.CreationTime.LowDateTime), nil
+	return windowsCreationStamp(info)
 }
+func windowsCreationStamp(info windows.ByHandleFileInformation) ([]byte, error) {
+	const ticksPerSecond = uint64(10_000_000)
+	const windowsEpochSeconds = int64(11_644_473_600)
+	ticks := uint64(info.CreationTime.HighDateTime)<<32 | uint64(info.CreationTime.LowDateTime)
+	return creationStamp(int64(ticks/ticksPerSecond)-windowsEpochSeconds, int64(ticks%ticksPerSecond)*100)
+}
+
+func setDirectoryTimes(d *directory, t time.Time) error { return d.root.Chtimes(".", t, t) }
+
 func openDirectoryHandle(root *os.Root) (*os.File, error) {
 	return openWindowsPath(root.Name(), os.O_RDONLY, true)
 }

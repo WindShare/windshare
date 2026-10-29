@@ -185,7 +185,7 @@ func (transaction *resumablePartialFileTransaction) publishFromDurableState(
 	if final.Condition() == FinalUnsafe {
 		return transaction.quarantineAndSettleLocked(ctx, checkpointmodel.QuarantineFinalUnsafe)
 	}
-	if final.Condition() != FinalOwnedAtExpectedSize {
+	if final.Condition() != FinalMatchesPublication {
 		return transaction.quarantineAndSettleLocked(ctx, checkpointmodel.QuarantinePublicationHistory)
 	}
 	published, err := publishedRecord(transaction.record)

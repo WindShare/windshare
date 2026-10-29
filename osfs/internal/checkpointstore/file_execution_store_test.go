@@ -165,7 +165,7 @@ func TestFileExecutionStoreOwnsCheckpointAndObjectLifecycle(t *testing.T) {
 	if err != nil || final == nil {
 		t.Fatalf("publish owned = (%T, %v)", final, err)
 	}
-	if matched, err := reconciled.FinalMatchesOwned(
+	if matched, err := reconciled.FinalMatchesPublication(
 		context.Background(), object, record.ExactSize(), final,
 	); err != nil || !matched {
 		t.Fatalf("compare published owned file = (%t, %v)", matched, err)
@@ -191,7 +191,7 @@ func TestFileExecutionStoreOwnsCheckpointAndObjectLifecycle(t *testing.T) {
 			t.Fatalf("retirement step %d = (%d, %v), want %d", expected.step, observation.Condition(), err, expected.want)
 		}
 		if expected.step == fileexecution.RetirementSyncStageNamespace {
-			matched, compareErr := reconciled.FinalMatchesOwned(
+			matched, compareErr := reconciled.FinalMatchesPublication(
 				context.Background(), object, record.ExactSize(), final,
 			)
 			if compareErr != nil || !matched {
@@ -199,7 +199,7 @@ func TestFileExecutionStoreOwnsCheckpointAndObjectLifecycle(t *testing.T) {
 			}
 		}
 	}
-	if matched, err := reconciled.FinalMatchesOwned(
+	if matched, err := reconciled.FinalMatchesPublication(
 		context.Background(), object, record.ExactSize(), final,
 	); err != nil || matched {
 		t.Fatalf("comparison after anchor retirement = (%t, %v)", matched, err)
@@ -246,7 +246,7 @@ func TestFileExecutionStoreRejectsInvalidAndCanceledAuthority(t *testing.T) {
 	if _, err := store.ApplyRetirement(canceled, object, fileexecution.RetirementRemoveStage); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled retirement = %v", err)
 	}
-	if _, err := store.FinalMatchesOwned(canceled, object, 1, &memoryFile{}); !errors.Is(err, context.Canceled) {
+	if _, err := store.FinalMatchesPublication(canceled, object, 1, &memoryFile{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled comparison = %v", err)
 	}
 	if _, err := store.PublishOwnedNoReplace(canceled, object, 1, newMemoryDirectory(), "final"); !errors.Is(err, context.Canceled) {

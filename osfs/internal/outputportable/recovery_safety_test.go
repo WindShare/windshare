@@ -1,7 +1,6 @@
 package outputportable
 
 import (
-	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -46,7 +45,7 @@ func TestTaskLockExcludesAnotherOpenAndReleasesForRestart(t *testing.T) {
 	if capabilities, err := first.(*Platform).DestinationCapabilities(); err != nil || !capabilities.RangeRecovery().Supported() || !capabilities.OperationRecovery().Supported() {
 		t.Fatalf("ordinary files cannot retain progress: %v", err)
 	}
-	if first.(*Platform).IdentityScheme() != outputcap.IdentitySchemePortableMetadataV1 || first.RootOpenDisposition() != outputcap.AuthorityCreatedRoot {
+	if first.(*Platform).IdentityScheme() != outputcap.IdentitySchemePortableWitnessV1 || first.RootOpenDisposition() != outputcap.AuthorityCreatedRoot {
 		t.Fatal("portable identity was not admitted")
 	}
 	guard, err := first.AcquirePublicOperationGuard()
@@ -78,7 +77,7 @@ func TestRecoveryMetadataIgnoresMtimeAndCleanupRejectsReplacement(t *testing.T) 
 	if err := original.Sync(); err != nil {
 		t.Fatal(err)
 	}
-	stamp, err := original.(*file).RecoveryMetadata()
+	stamp, err := original.(*file).CreateRecoveryWitness()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,8 +88,8 @@ func TestRecoveryMetadataIgnoresMtimeAndCleanupRejectsReplacement(t *testing.T) 
 	if err := original.SetModifiedTime(modified); err != nil {
 		t.Fatal(err)
 	}
-	later, err := original.(*file).RecoveryMetadata()
-	if err != nil || !bytes.Equal(stamp, later) {
+	matches, err := original.(*file).BindRecoveryWitness(stamp)
+	if err != nil || !matches {
 		t.Fatal("mtime revoked recovery identity")
 	}
 	observed, err := d.OpenObservedFile("partial", true)
@@ -99,6 +98,9 @@ func TestRecoveryMetadataIgnoresMtimeAndCleanupRejectsReplacement(t *testing.T) 
 	}
 	if same, err := original.SameFile(observed); err != nil || !same {
 		t.Fatal("ordinary reopen changed identity")
+	}
+	if matched, err := observed.(*file).BindRecoveryWitness(stamp); err != nil || !matched {
+		t.Fatalf("reopened partial lost its token: %v %v", matched, err)
 	}
 	if size, err := observed.Size(); err != nil || size != 4 {
 		t.Fatalf("size %d %v", size, err)

@@ -1,49 +1,48 @@
 package checkpointstore
 
 import (
-	"bytes"
-	"crypto/sha256"
-	"encoding/binary"
 	"errors"
 
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
+	"github.com/windshare/windshare/osfs/internal/recoverywitness"
 )
 
-const recoveryWitnessDomain = "windshare/partial-metadata/v1\x00"
-const maximumRecoveryMetadataBytes = 256
+type portableWitnessFile interface{ BindRecoveryWitness([]byte) (bool, error) }
+type witnessCreator interface{ CreateRecoveryWitness() ([]byte, error) }
+type witnessRemoval interface{ RecoveryRemovalAllowed([]byte) (bool, error) }
+type witnessPublisher interface {
+	PrepareRecoveryPublication([]byte) ([]byte, error)
+	StripRecoveryWitness([]byte) error
+}
 
-type recoveryMetadataSource interface{ RecoveryMetadata() ([]byte, error) }
-
-func encodedRecoveryWitness(source outputcap.FileIdentity) ([]byte, error) {
-	metadata, ok := source.(recoveryMetadataSource)
+func readRecoveryWitness(file outputcap.FileIdentity) ([]byte, error) {
+	reader, ok := file.(outputcap.ObservedFile)
 	if !ok {
 		return nil, outputcap.ErrUnsafeNamespace
 	}
-	stamp, err := metadata.RecoveryMetadata()
-	if err != nil {
+	size, err := file.Size()
+	if err != nil || size != uint64(recoverywitness.EncodedSize) {
+		return nil, errors.Join(outputcap.ErrUnsafeNamespace, err)
+	}
+	encoded := make([]byte, recoverywitness.EncodedSize)
+	if _, err := reader.ReadAt(encoded, 0); err != nil {
 		return nil, err
 	}
-	if len(stamp) == 0 || len(stamp) > maximumRecoveryMetadataBytes {
-		return nil, outputcap.ErrUnsafeNamespace
+	if _, err := recoverywitness.Decode(encoded); err != nil {
+		return nil, errors.Join(outputcap.ErrUnsafeNamespace, err)
 	}
-	size, err := source.Size()
-	if err != nil {
-		return nil, err
-	}
-	encoded := append([]byte(recoveryWitnessDomain), stamp...)
-	encoded = binary.BigEndian.AppendUint64(encoded, size)
-	checksum := sha256.Sum256(encoded)
-	return append(encoded, checksum[:]...), nil
+	return encoded, nil
 }
 
-// Native anchors can supply stronger evidence, but are not a prerequisite for
-// retaining a partial on filesystems that only support ordinary Go file I/O.
+// The portable witness is carried by the object itself. A sidecar records the
+// expected token but cannot confer ownership on a replacement at the same path.
 func createRecoveryWitness(directory outputcap.Directory, stage outputcap.FileIdentity, name string) (outputcap.ObservedFile, error) {
-	if _, portable := stage.(recoveryMetadataSource); !portable {
+	creator, portable := stage.(witnessCreator)
+	if !portable {
 		return directory.LinkFileNoReplace(stage, name)
 	}
-	encoded, err := encodedRecoveryWitness(stage)
+	encoded, err := creator.CreateRecoveryWitness()
 	if err != nil {
 		return nil, err
 	}
@@ -54,27 +53,47 @@ func createRecoveryWitness(directory outputcap.Directory, stage outputcap.FileId
 }
 
 func matchesRecoveryWitness(stage, anchor outputcap.FileIdentity) (bool, error) {
-	if _, portable := stage.(recoveryMetadataSource); !portable {
+	portable, ok := stage.(portableWitnessFile)
+	if !ok {
 		return stage.SameFile(anchor)
 	}
-	reader, ok := anchor.(outputcap.ObservedFile)
+	encoded, err := readRecoveryWitness(anchor)
+	if err != nil {
+		return false, err
+	}
+	return portable.BindRecoveryWitness(encoded)
+}
+
+func (store *FileExecutionStore) preparePortablePublication(object checkpointmodel.ObjectID, stage outputcap.FileIdentity) error {
+	publisher, ok := stage.(witnessPublisher)
 	if !ok {
-		return false, outputcap.ErrUnsafeNamespace
+		return outputcap.ErrUnsafeNamespace
 	}
-	expected, err := encodedRecoveryWitness(stage)
+	anchor := observeOwnedDataFile(store.repository.anchors, object, ownedAnchorSuffix, true)
+	if anchor.state != privateEntryReady || anchor.file == nil {
+		return errors.Join(outputcap.ErrUnsafeNamespace, anchorObservationError(anchor), closeFile(anchor.file), closeDirectory(anchor.directory))
+	}
+	previous, err := readRecoveryWitness(anchor.file)
+	err = errors.Join(err, anchor.file.Close(), anchor.directory.Close())
 	if err != nil {
-		return false, err
+		return err
 	}
-	size, err := anchor.Size()
+	next, err := publisher.PrepareRecoveryPublication(previous)
 	if err != nil {
-		return false, err
+		return err
 	}
-	if size != uint64(len(expected)) {
-		return false, nil
+	shard, name := ownedObjectLocation(object, ownedAnchorSuffix)
+	directory, err := OpenShard(store.repository.anchors, shard, false)
+	if err != nil {
+		return err
 	}
-	actual := make([]byte, len(expected))
-	_, err = reader.ReadAt(actual, 0)
-	return err == nil && bytes.Equal(actual, expected), err
+	err = errors.Join(InstallReplace(directory, name, previous, next), directory.Close())
+	if err != nil {
+		return err
+	}
+	// Persist reconciliation evidence before removing the private trailer. A
+	// restart can then finish a staged or published file without native IDs.
+	return publisher.StripRecoveryWitness(next)
 }
 
 type noReplacePublisher interface {
@@ -120,43 +139,29 @@ func publishRecoveryStage(parent outputcap.Directory, stage outputcap.FileIdenti
 	return final, nil
 }
 
-// Ordinary private paths do not establish deletion authority by themselves.
-// Reopened data must still match its recorded metadata; auxiliary witnesses must
-// retain their checked encoding even after the stage has been removed.
+// Deletion requires the embedded object token. Matching publication samples
+// only permits delivery reconciliation, never deletion of a trailerless file.
 func (store *FileExecutionStore) verifyOwnedRemoval(object checkpointmodel.ObjectID, suffix string, file outputcap.ObservedFile) (err error) {
-	if _, portable := file.(recoveryMetadataSource); !portable {
+	removal, portable := file.(witnessRemoval)
+	if !portable {
 		return nil
 	}
 	if suffix == ownedAnchorSuffix {
-		return validateRecoveryWitness(file)
+		_, err := readRecoveryWitness(file)
+		return err
 	}
 	anchor := observeOwnedDataFile(store.repository.anchors, object, ownedAnchorSuffix, true)
 	defer func() { err = errors.Join(err, closeFile(anchor.file), closeDirectory(anchor.directory)) }()
 	if anchor.state != privateEntryReady || anchor.file == nil {
 		return errors.Join(outputcap.ErrUnsafeNamespace, anchorObservationError(anchor))
 	}
-	matched, err := matchesRecoveryWitness(file, anchor.file)
-	if err != nil || !matched {
-		return errors.Join(outputcap.ErrUnsafeNamespace, err)
-	}
-	return nil
-}
-
-func validateRecoveryWitness(file outputcap.ObservedFile) error {
-	size, err := file.Size()
-	minimum := len(recoveryWitnessDomain) + 1 + 8 + sha256.Size
-	maximum := len(recoveryWitnessDomain) + maximumRecoveryMetadataBytes + 8 + sha256.Size
-	if err != nil || size < uint64(minimum) || size > uint64(maximum) {
-		return errors.Join(outputcap.ErrUnsafeNamespace, err)
-	}
-	encoded := make([]byte, int(size))
-	if _, err := file.ReadAt(encoded, 0); err != nil {
+	encoded, err := readRecoveryWitness(anchor.file)
+	if err != nil {
 		return err
 	}
-	body := encoded[:len(encoded)-sha256.Size]
-	checksum := sha256.Sum256(body)
-	if !bytes.HasPrefix(body, []byte(recoveryWitnessDomain)) || !bytes.Equal(encoded[len(body):], checksum[:]) {
-		return outputcap.ErrUnsafeNamespace
+	matched, err := removal.RecoveryRemovalAllowed(encoded)
+	if err != nil || !matched {
+		return errors.Join(outputcap.ErrUnsafeNamespace, err)
 	}
 	return nil
 }
