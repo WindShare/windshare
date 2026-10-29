@@ -119,8 +119,19 @@ func renameHandle(handle windows.Handle, parent *directory, name string, replace
 	if errors.Is(err, windows.ERROR_ALREADY_EXISTS) || errors.Is(err, windows.ERROR_FILE_EXISTS) {
 		return errors.Join(fs.ErrExist, err)
 	}
+	if !replace {
+		return noReplaceError(err)
+	}
 	return err
 }
+
+func noReplaceError(err error) error {
+	if errors.Is(err, windows.ERROR_NOT_SUPPORTED) || errors.Is(err, windows.ERROR_INVALID_FUNCTION) || errors.Is(err, windows.ERROR_CALL_NOT_IMPLEMENTED) {
+		return errors.Join(outputcap.ErrOrdinaryOutputUnsupported, err)
+	}
+	return err
+}
+
 func renameFile(from *file, to *directory, name string, replace bool) error {
 	opened, err := openFileAt(from.parent, from.name, os.O_RDWR, 0)
 	if err != nil {

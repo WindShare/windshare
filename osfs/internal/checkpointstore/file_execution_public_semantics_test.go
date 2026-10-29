@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 )
 
@@ -140,12 +141,10 @@ func TestFileExecutionStoreRejectsConflictedAndUnsettledReplacementAuthority(t *
 		slots != nil || attention != nil {
 		t.Fatalf("unsettled Inventory() = (%+v, %+v, %v), want original error without corruption", slots, attention, inventoryErr)
 	}
-	if _, lookupErr := store.Lookup(context.Background(), key); ErrorCodeFor(lookupErr) != ErrorStateIO {
-		t.Fatalf("unsettled Lookup() = %v, want state I/O", lookupErr)
-	}
-	if _, replaceErr := store.Replace(context.Background(), previous, next); ErrorCodeFor(replaceErr) != ErrorStateIO {
-		t.Fatalf("unsettled Replace() = %v, want state I/O", replaceErr)
-	}
+	_, lookupErr := store.Lookup(context.Background(), key)
+	assertCheckpointBoundary(t, lookupErr, transferfault.CheckpointStateIO)
+	_, replaceErr = store.Replace(context.Background(), previous, next)
+	assertCheckpointBoundary(t, replaceErr, transferfault.CheckpointStateIO)
 	durable, err := repository.Reopen(previous.RecordID())
 	if err != nil || !bytes.Equal(durable.CanonicalBytes(), previous.CanonicalBytes()) {
 		t.Fatalf("rejected replacements changed durable authority: record=%+v err=%v", durable, err)

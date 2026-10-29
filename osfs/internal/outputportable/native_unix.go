@@ -51,6 +51,16 @@ func lockFile(f *os.File) (func() error, error) {
 	}
 	return func() error { return unix.Flock(int(f.Fd()), unix.LOCK_UN) }, nil
 }
+
+// Normalize only the flagged syscall result: a rejected flag has not published
+// anything, whereas transport or storage errors can leave the result uncertain.
+func noReplaceError(err error) error {
+	if errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.ENOTSUP) {
+		return errors.Join(outputcap.ErrOrdinaryOutputUnsupported, err)
+	}
+	return err
+}
+
 func renameFile(from *file, to *directory, name string, replace bool) error {
 	current, err := from.parent.root.Lstat(from.name)
 	expected, statErr := from.handle.Stat()

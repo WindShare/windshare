@@ -191,15 +191,20 @@ func TestCheckpointBoundaryNormalizationPreservesControlAndClosedAuthority(t *te
 		t.Fatal("provider failure normalization returned nil")
 	}
 
-	for name, cause := range map[string]error{
-		"unsupported filesystem": outputcap.ErrRecoverableOutputUnsupported,
-		"namespace lock":         outputcap.ErrNamespaceLockBusy,
+	for name, test := range map[string]struct {
+		cause error
+		code  transferfault.OutputCode
+	}{
+		"unsupported publication": {outputcap.ErrOrdinaryOutputUnsupported, transferfault.OutputUnsupportedFilesystem},
+		"unsupported recovery":    {outputcap.ErrRecoverableOutputUnsupported, transferfault.OutputUnsupportedFilesystem},
+		"namespace lock":          {outputcap.ErrNamespaceLockBusy, transferfault.OutputOwnership},
 	} {
 		t.Run(name, func(t *testing.T) {
-			err := fileOutputBoundaryErrorWithoutContext(transferfault.ScopeOutputPause, cause)
-			var boundary *transferfault.BoundaryError
-			if !errors.As(err, &boundary) || !boundary.Fault().Valid() || !errors.Is(err, cause) {
-				t.Fatalf("file output boundary = %#v", err)
+			err := fileOutputBoundaryErrorWithoutContext(transferfault.ScopeOutputPause, test.cause)
+			value, valid := transferfault.NormalizeBoundaryError(err).Fault()
+			code, output := value.OutputCode()
+			if !valid || !output || code != test.code || value.Scope() != transferfault.ScopeOutputPause || !errors.Is(err, test.cause) {
+				t.Fatalf("file output boundary = %s from %v, want output-pause/%s", value, err, test.code)
 			}
 		})
 	}

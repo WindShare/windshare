@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer"
@@ -16,8 +17,10 @@ import (
 )
 
 type Platform struct {
-	root        *directory
-	disposition outputcap.RootOpenDisposition
+	root         *directory
+	disposition  outputcap.RootOpenDisposition
+	mu           sync.Mutex
+	capabilities outputcap.DestinationCapabilities
 }
 
 func Open(path string, create bool) (outputcap.Platform, error) {
@@ -45,16 +48,18 @@ func (platform *Platform) Root() outputcap.Directory { return platform.root }
 func (platform *Platform) RootOpenDisposition() outputcap.RootOpenDisposition {
 	return platform.disposition
 }
-func (platform *Platform) Close() error { return platform.root.Close() }
+func (platform *Platform) Close() error {
+	platform.mu.Lock()
+	defer platform.mu.Unlock()
+	return platform.root.Close()
+}
 func (*Platform) IdentityScheme() outputcap.IdentitySchemeID {
 	return outputcap.IdentitySchemePortableMetadataV1
 }
 func (*Platform) Durability() transfer.DurabilityLevel            { return transfer.DurabilityProcessRestart }
 func (*Platform) ValidateModifiedTime(catalog.ModifiedTime) error { return nil }
-func (*Platform) DestinationCapabilities() (outputcap.DestinationCapabilities, error) {
-	supported := outputcap.SupportedCapability()
-	cleanup, _ := outputcap.UnsupportedCapability(outputcap.CapabilityReasonUnverifiableCrashCleanup)
-	return outputcap.NewDestinationCapabilities(supported, supported, supported, cleanup)
+func (platform *Platform) DestinationCapabilities() (outputcap.DestinationCapabilities, error) {
+	return platform.destinationCapabilities(probeDestinationCapabilities)
 }
 func (platform *Platform) AcquirePublicOperationGuard() (outputcap.PublicOperationGuard, error) {
 	root, err := platform.root.Duplicate()
