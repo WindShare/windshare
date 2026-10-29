@@ -102,6 +102,7 @@ assert_contains "$certifier" 'TestTaskLockIsProcessExclusiveAndRecoversAfterExit
 assert_contains "$certifier" 'TestNativeOutputDestinationCapabilities'
 assert_contains "$certifier" 'TestNativeOutputProcessRestartKeepsRanges'
 assert_contains "$certifier" 'TestNativeOutputRetainedCandidateListAndReopen'
+assert_contains "$certifier" 'TestNativeLiveOutputPublishesWithoutRecoveryAuthority'
 assert_contains "$certifier" 'TestSetModifiedTimePreservesNanosecondsAccessTimeAndHandleIdentity'
 assert_contains "$certifier" '"Action":"skip"'
 assert_contains "$certifier" '"Action":"fail"'
