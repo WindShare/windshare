@@ -58,7 +58,7 @@ type reservationIdentityDirectory struct {
 	sync    error
 }
 
-func (directory reservationIdentityDirectory) PreparePersistentDirectoryIdentityClaim() ([]byte, error) {
+func (directory reservationIdentityDirectory) CreateRecoveryIdentity() ([]byte, error) {
 	return append([]byte(nil), directory.claim...), directory.prepare
 }
 func (directory reservationIdentityDirectory) Sync() error { return directory.sync }
@@ -256,14 +256,14 @@ func TestPersistentIdentityAndExactOpenRejectWeakNativeEvidence(t *testing.T) {
 	if _, err := preparePersistentIdentityClaim(withoutEnrollment); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("missing identity enrollment = %v", err)
 	}
-	if _, err := readPersistentIdentityClaim(withoutEnrollment); !errors.Is(err, ErrInvalidConfiguration) {
+	if _, err := readPersistentIdentityClaim(withoutEnrollment, []byte("expected")); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("missing identity recovery = %v", err)
 	}
 	invalid := reservationIdentityDirectory{Directory: base}
 	if _, err := preparePersistentIdentityClaim(invalid); !errors.Is(err, ErrReservationIndeterminate) {
 		t.Fatalf("empty prepared identity = %v", err)
 	}
-	if _, err := readPersistentIdentityClaim(invalid); !errors.Is(err, ErrReservationIndeterminate) {
+	if _, err := readPersistentIdentityClaim(invalid, []byte("expected")); !errors.Is(err, ErrReservationIndeterminate) {
 		t.Fatalf("empty recovered identity = %v", err)
 	}
 	syncFailure := reservationIdentityDirectory{
@@ -297,3 +297,8 @@ func requestReservation(t *testing.T, request ReservationRequest) receivecontrac
 	defer reserved.Close()
 	return reserved.CanonicalReservation()
 }
+
+func (directory reservationIdentityDirectory) MatchesRecoveryIdentity(expected []byte) (bool, error) {
+	return string(directory.claim) == string(expected), directory.prepare
+}
+func (reservationIdentityDirectory) RetireRecoveryIdentity([]byte) error { return nil }

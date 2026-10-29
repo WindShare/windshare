@@ -1,8 +1,6 @@
 package outputportable
 
 import (
-	"bytes"
-	"crypto/sha256"
 	"errors"
 	"io"
 	"io/fs"
@@ -270,20 +268,6 @@ func (d *directory) SetModifiedTime(modified catalog.ModifiedTime) error {
 	}
 	t := time.Unix(modified.Seconds(), int64(modified.Nanoseconds()))
 	return setDirectoryTimes(d, t)
-}
-func (d *directory) PersistentDirectoryIdentityClaim() ([]byte, error) {
-	if err := d.validate(); err != nil {
-		return nil, err
-	}
-	stamp, err := directoryRecoveryStamp(d.handle)
-	if err != nil {
-		return nil, err
-	}
-	hash := sha256.Sum256(bytes.Join([][]byte{[]byte("windshare/portable-directory-creation/v1"), stamp}, []byte{0}))
-	return hash[:], nil
-}
-func (d *directory) PreparePersistentDirectoryIdentityClaim() ([]byte, error) {
-	return d.PersistentDirectoryIdentityClaim()
 }
 func mapCollision(err error) error {
 	if errors.Is(err, fs.ErrExist) {

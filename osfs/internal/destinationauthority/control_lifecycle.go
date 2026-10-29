@@ -272,13 +272,14 @@ func (authority *BoundDestination) recycleControlState() (resultErr error) {
 	if sameErr != nil || !same {
 		return errors.Join(ErrRetainedRootChanged, sameErr, abortControlUse(authority.control, authority.controlUse))
 	}
-	return authority.controlUse.releaseAndRecycle(root, authority.control, authority.recycler)
+	return authority.controlUse.releaseAndRecycle(root, authority.control, authority.recycler, authority.retireDestinationIdentity)
 }
 
 func (lease *controlUseLease) releaseAndRecycle(
 	root outputcap.Directory,
 	control outputcap.Directory,
 	recycler PrivateStateRecycler,
+	retireIdentity func(outputcap.Directory) error,
 ) (resultErr error) {
 	if lease == nil || lease.participant == nil || recycler == nil {
 		return nil
@@ -316,6 +317,11 @@ func (lease *controlUseLease) releaseAndRecycle(
 	eligible, err := recycler(control)
 	if err != nil || !eligible {
 		return err
+	}
+	if retireIdentity != nil {
+		if err := retireIdentity(control); err != nil {
+			return err
+		}
 	}
 	if clean, err := controlContainsOnlyLifecycle(control); err != nil || !clean {
 		return err

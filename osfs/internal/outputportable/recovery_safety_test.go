@@ -144,9 +144,12 @@ func TestDirectoryEvidenceRejectsRebindingAndEscapedPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer child.Close()
-	claim, err := child.(*directory).PersistentDirectoryIdentityClaim()
+	claim, err := child.(*directory).CreateRecoveryIdentity()
 	if err != nil || len(claim) == 0 {
-		t.Fatal("missing metadata claim")
+		t.Fatal("missing recovery claim")
+	}
+	if err := child.(*directory).RetireRecoveryIdentity(claim); err != nil {
+		t.Fatal(err)
 	}
 	entry, err := d.OpenEntry("nested")
 	if err != nil {

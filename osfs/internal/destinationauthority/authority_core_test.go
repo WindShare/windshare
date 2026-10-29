@@ -550,14 +550,6 @@ func resultRootArtifact(t *testing.T) receivecontract.ArtifactSpec {
 
 type identityOnlyDirectory struct{ outputcap.Directory }
 
-func (directory identityOnlyDirectory) PersistentDirectoryIdentityClaim() ([]byte, error) {
-	return directory.Directory.(outputcap.PersistentDirectoryIdentity).PersistentDirectoryIdentityClaim()
-}
-
-func (directory identityOnlyDirectory) PreparePersistentDirectoryIdentityClaim() ([]byte, error) {
-	return directory.Directory.(outputcap.PersistentDirectoryIdentityPreparer).PreparePersistentDirectoryIdentityClaim()
-}
-
 type destinationPlatformWithoutNative struct{ *destinationPlatform }
 
 func (platform *destinationPlatformWithoutNative) AcquirePublicOperationGuard() (outputcap.PublicOperationGuard, error) {
