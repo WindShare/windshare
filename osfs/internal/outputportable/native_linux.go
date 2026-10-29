@@ -32,7 +32,7 @@ func directoryRecoveryStamp(f *os.File) ([]byte, error) {
 		if err := unix.Fstat(int(f.Fd()), &current); err != nil {
 			return nil, err
 		}
-		stamp := binary.BigEndian.AppendUint64([]byte("memory-directory/v1"), uint64(current.Dev))
+		stamp := binary.BigEndian.AppendUint64([]byte("memory-directory/v1"), current.Dev)
 		return binary.BigEndian.AppendUint64(stamp, current.Ino), nil
 	}
 	return linuxCreationStamp(stat)
