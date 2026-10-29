@@ -14,7 +14,7 @@ import (
 
 type fileState struct {
 	file     *os.File
-	parent   *directory
+	parent   *directoryHandle
 	name     string
 	object   objectIdentity
 	private  bool
@@ -163,11 +163,11 @@ func (dir *directory) openFile(name string, private bool, flags int) (_ *fileSta
 		return nil, nativeError(err)
 	}
 	state.object = identity(stat)
-	parent, err := dir.Duplicate()
+	parent, err := dir.directoryHandle.duplicate()
 	if err != nil {
 		return nil, err
 	}
-	state.parent = parent.(*directory)
+	state.parent = parent
 	if state.object.device != dir.volume.device {
 		return nil, outputcap.ErrUnsafeNamespace
 	}

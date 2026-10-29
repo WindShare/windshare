@@ -200,6 +200,10 @@ func SelectExecutionMode(capabilities DestinationCapabilities) (ExecutionMode, e
 	return ExecutionLiveOnly, nil
 }
 
+// PublishNoReplaceOutcome describes publication, independently of its error.
+// A zero outcome with an error proves no namespace change succeeded. Once a
+// name may be visible, failures must report Indeterminate and preserve recovery
+// evidence instead of authorizing rollback.
 type PublishNoReplaceOutcome uint8
 
 const (

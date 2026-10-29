@@ -31,18 +31,30 @@ func (state *fileState) verifyOrigin() error {
 	return nil
 }
 
+func (dir *directory) linkFileEntryNoReplace(source outputcap.FileIdentity, name string) error {
+	state, ok := stateFrom(source)
+	if !ok {
+		return outputcap.ErrUnsafeNamespace
+	}
+	if err := errors.Join(dir.ValidateCreateAuthority(), validComponent(name), state.verifyOrigin()); err != nil {
+		return err
+	}
+	// Keep the mutation boundary separate from opening and validating its result:
+	// only failures before a successful linkat prove the public name was not added.
+	return nativeError(unix.Linkat(state.parent.fd(), state.name, dir.fd(), name, 0))
+}
+
 func (dir *directory) LinkFileNoReplace(source outputcap.FileIdentity, name string) (outputcap.ObservedFile, error) {
+	if err := dir.linkFileEntryNoReplace(source, name); err != nil {
+		return nil, err
+	}
+	return dir.openLinkedFile(source, name)
+}
+
+func (dir *directory) openLinkedFile(source outputcap.FileIdentity, name string) (outputcap.ObservedFile, error) {
 	state, ok := stateFrom(source)
 	if !ok {
 		return nil, outputcap.ErrUnsafeNamespace
-	}
-	if err := errors.Join(dir.ValidateCreateAuthority(), validComponent(name), state.verifyOrigin()); err != nil {
-		return nil, err
-	}
-	// linkat is atomic no-replace, and preserves both the original inode and its
-	// allocation. The protected source namespace is pinned throughout.
-	if err := unix.Linkat(state.parent.fd(), state.name, dir.fd(), name, 0); err != nil {
-		return nil, nativeError(err)
 	}
 	linked, err := dir.OpenObservedFile(name, state.private)
 	if err != nil {
@@ -88,30 +100,11 @@ func (dir *directory) RemoveFile(name string, expected outputcap.FileIdentity) e
 	return nativeError(unix.Unlinkat(dir.fd(), name, 0))
 }
 func (dir *directory) PublishFileNoReplace(source outputcap.FileIdentity, name string) (outputcap.PublishNoReplaceOutcome, error) {
-	published, err := dir.LinkFileNoReplace(source, name)
-	if errors.Is(err, outputcap.ErrNamespaceCollision) {
-		return outputcap.PublishNoReplaceCollision, nil
-	}
-	if err != nil {
-		return outputcap.PublishNoReplaceIndeterminate, err
-	}
-	if err := errors.Join(published.Close(), dir.Sync()); err != nil {
-		return outputcap.PublishNoReplaceIndeterminate, err
-	}
-	return outputcap.PublishNoReplaceCommitted, nil
+	return publishFileNoReplace(dir, source, name)
 }
+
 func (dir *directory) ReservePublicDirectoryNoReplace(name string) (outputcap.Directory, outputcap.PublishNoReplaceOutcome, error) {
-	created, err := dir.CreateDirectory(name, false)
-	if errors.Is(err, outputcap.ErrNamespaceCollision) {
-		return nil, outputcap.PublishNoReplaceCollision, nil
-	}
-	if err != nil {
-		return nil, outputcap.PublishNoReplaceIndeterminate, err
-	}
-	if err := errors.Join(created.Sync(), dir.Sync()); err != nil {
-		return nil, outputcap.PublishNoReplaceIndeterminate, errors.Join(err, created.Close())
-	}
-	return created, outputcap.PublishNoReplaceCommitted, nil
+	return reservePublicDirectoryNoReplace(dir, name)
 }
 
 func (dir *directory) CreateOrdinaryOutputStage(stageDirectory outputcap.Directory, name string, size uint64) error {
