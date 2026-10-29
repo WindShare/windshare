@@ -100,18 +100,18 @@ const maximumCachedFileRecords = 256
 // rebuilding a directory-wide manifest before the first resumed range.
 func (store *FileExecutionStore) loadLineageLocked(spec checkpointmodel.CheckpointLineageSpec) (checkpointmodel.Record, bool, error) {
 	if err := store.authority.requireSettled(); err != nil {
-		return checkpointmodel.Record{}, false, err
+		return checkpointmodel.Record{}, false, lineageAuthorityError("load file checkpoint authority", err)
 	}
 	id, err := checkpointmodel.DeriveCheckpointLineageID(spec)
 	if err != nil {
-		return checkpointmodel.Record{}, false, err
+		return checkpointmodel.Record{}, false, dependencyBoundaryError("derive loaded checkpoint lineage", err)
 	}
 	if record, found := store.authority.physical[checkpointmodel.RecordID(id)]; found {
 		return record, true, nil
 	}
 	if len(store.authority.physical) >= maximumCachedFileRecords {
 		if err := store.authority.rebuild(nil, nil); err != nil {
-			return checkpointmodel.Record{}, false, err
+			return checkpointmodel.Record{}, false, lineageAuthorityError("evict file checkpoint cache", err)
 		}
 		store.authority.inventoryComplete = false
 	}
@@ -124,10 +124,10 @@ func (store *FileExecutionStore) loadLineageLocked(spec checkpointmodel.Checkpoi
 	}
 	actual, err := record.CheckpointLineageSpec()
 	if err != nil || !checkpointmodel.SameCheckpointLineageSpec(actual, spec) {
-		return checkpointmodel.Record{}, false, checkpointmodel.ErrRecordBinding
+		return checkpointmodel.Record{}, false, lineageAuthorityError("bind loaded checkpoint lineage", checkpointmodel.ErrRecordBinding)
 	}
 	if err := store.authority.add(record); err != nil {
-		return checkpointmodel.Record{}, false, err
+		return checkpointmodel.Record{}, false, lineageAuthorityError("cache loaded checkpoint lineage", err)
 	}
 	return record, true, nil
 }
@@ -305,12 +305,11 @@ func (store *FileExecutionStore) Lookup(
 	}
 	decision, record, err := store.authority.classify(spec, key.CheckpointLineageRequest())
 	if err != nil {
-		if errors.Is(err, errFileExecutionAuthorityUnsettled) {
-			return fileexecution.CheckpointResolution{}, codedError(
-				ErrorStateIO, "classify unsettled file checkpoint authority", err,
-			)
+		err = lineageAuthorityError("classify file checkpoint lineage", err)
+		if ErrorCodeFor(err) == ErrorCorruptRecord {
+			return fileexecution.ResolveCheckpoint(checkpointmodel.CheckpointLineageDecisionInvalid, checkpointmodel.Record{})
 		}
-		return fileexecution.CheckpointResolution{}, codedError(ErrorCorruptRecord, "classify file checkpoint lineage", err)
+		return fileexecution.CheckpointResolution{}, err
 	}
 	if decision == checkpointmodel.CheckpointLineageDecisionExact && !checkpointKeyMatchesRecord(key, record) {
 		return fileexecution.CheckpointResolution{}, codedError(
@@ -433,10 +432,8 @@ func initialAuthorityError(err error) error {
 	case errors.Is(err, fileexecution.ErrCheckpointObjectClaimed),
 		errors.Is(err, fileexecution.ErrCheckpointRecordCapacity):
 		return err
-	case errors.Is(err, errFileExecutionAuthorityUnsettled):
-		return codedError(ErrorStateIO, "admit initial checkpoint through unsettled authority", err)
 	default:
-		return codedError(ErrorCorruptRecord, "admit initial file checkpoint", err)
+		return lineageAuthorityError("admit initial file checkpoint", err)
 	}
 }
 
