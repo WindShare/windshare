@@ -133,13 +133,13 @@ func (dir *directory) RemoveDirectory(name string, expected outputcap.Directory)
 }
 func (dir *directory) InstallDirectoryNoReplace(candidate outputcap.Directory, name string) (outputcap.Directory, error) {
 	source, ok := candidate.(*directory)
-	if !ok || source.parent == nil {
+	if !ok || source == nil || source.origin == nil {
 		return nil, outputcap.ErrUnsafeNamespace
 	}
 	if err := errors.Join(dir.ValidateCreateAuthority(), source.verify(), validComponent(name)); err != nil {
 		return nil, err
 	}
-	current, err := source.parent.OpenDirectory(source.name, source.private)
+	current, err := source.origin.parent.openDirectory(source.origin.name, source.private)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +148,7 @@ func (dir *directory) InstallDirectoryNoReplace(candidate outputcap.Directory, n
 	if compareErr != nil || closeErr != nil || !same {
 		return nil, errors.Join(outputcap.ErrUnsafeNamespace, compareErr, closeErr)
 	}
-	if err := unix.RenameatxNp(source.parent.fd(), source.name, dir.fd(), name, unix.RENAME_EXCL|unix.RENAME_NOFOLLOW_ANY); err != nil {
+	if err := unix.RenameatxNp(source.origin.parent.fd(), source.origin.name, dir.fd(), name, unix.RENAME_EXCL|unix.RENAME_NOFOLLOW_ANY); err != nil {
 		return nil, nativeError(err)
 	}
 	opened, err := dir.OpenDirectory(name, source.private)
