@@ -179,7 +179,7 @@ func TestPrivateDirectoryIsolatesInheritedACLWithoutChangingPublicPolicy(t *test
 	existing, err := platform.root.OpenDirectory("existing-control", true)
 	if existing != nil {
 		_ = existing.Close()
-		t.Fatal("permissive ACL admitted an existing private directory")
+		t.Fatalf("rejected private directory returned a non-nil capability: %v", err)
 	}
 	if !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("existing private ACL was not rejected: %v", err)
