@@ -27,7 +27,7 @@ func TestOrdinaryResumeReducerFailsClosedAcrossIncompleteObservations(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	finalExact, err := fileexecution.ObserveFinal(fileexecution.FinalOwnedAtExpectedSize)
+	finalExact, err := fileexecution.ObserveFinal(fileexecution.FinalMatchesPublication)
 	if err != nil {
 		t.Fatal(err)
 	}

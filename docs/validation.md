@@ -92,6 +92,7 @@ Coverage is gated on the core and non-core totals and on each package, with no p
 | Chromium relay smoke | Relay smoke, sustained native-size block bursts, and session isolation. |
 | Chromium browser contracts | Short component contracts, independently of native toolchains and smoke tests. |
 | Windows | Native build, vet, short tests, and compatible-name restoration checks. |
+| FAT/exFAT (Linux) | Disposable image remounts verify partial reuse, publication, and owned cleanup after native IDs change. |
 | macOS (arm64 and amd64) | Shared output/recovery suites, APFS evidence, CLI file/folder downloads, SIGKILL recovery, and both Darwin builds. |
 
 The opt-in [Cloudflare deployment workflow](deploy/cloudflare-relay.md) runs independently

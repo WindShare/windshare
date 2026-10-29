@@ -27,7 +27,7 @@ func TestPublicationCapabilityExpiresBeforeReturningToCaller(t *testing.T) {
 					if final, err := publication.Observe(ctx); err != nil || final.Condition() != fileexecution.FinalAbsent {
 						t.Fatalf("before publication = %v, %v", final.Condition(), err)
 					}
-					if final, err := publication.PublishNoReplace(ctx); err != nil || final.Condition() != fileexecution.FinalOwnedAtExpectedSize {
+					if final, err := publication.PublishNoReplace(ctx); err != nil || final.Condition() != fileexecution.FinalMatchesPublication {
 						t.Fatalf("publication = %v, %v", final.Condition(), err)
 					}
 					return publication.Sync(ctx)

@@ -159,7 +159,7 @@ func (engine *Engine) beginNew(
 	switch final.Condition() {
 	case FinalAbsent:
 		return engine.beginInitialCheckpoint(ctx, sequence, file, key, destination)
-	case FinalCollision, FinalOwnedAtExpectedSize:
+	case FinalCollision, FinalMatchesPublication:
 		settlement, settlementErr := transfer.NewCollisionFileSettlement(file.Target())
 		return settlementStart(settlement, joinFailures(ctx, settlementErr, closeDestination(destination)))
 	default:

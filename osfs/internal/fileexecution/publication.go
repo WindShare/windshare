@@ -30,7 +30,7 @@ func settlePublication(
 		if !final.valid() {
 			return ErrInvalidObservation
 		}
-		if final.Condition() == FinalOwnedAtExpectedSize {
+		if final.Condition() == FinalMatchesPublication {
 			return publication.Sync(ctx)
 		}
 		return nil
