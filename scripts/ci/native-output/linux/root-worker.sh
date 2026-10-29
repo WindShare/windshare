@@ -2,14 +2,14 @@
 set -euo pipefail
 
 if [ "$#" -ne 6 ]; then
-  echo "usage: root-worker.sh <loop-device> <mountpoint> <osfs-test-binary> <outputlinux-test-binary> <uid> <gid>" >&2
+  echo "usage: root-worker.sh <loop-device> <mountpoint> <osfs-test-binary> <outputportable-test-binary> <uid> <gid>" >&2
   exit 2
 fi
 
 loop_device="$1"
 mountpoint_path="$2"
 osfs_test_binary="$3"
-outputlinux_test_binary="$4"
+outputportable_test_binary="$4"
 receiver_uid="$5"
 receiver_gid="$6"
 
@@ -25,24 +25,19 @@ if [[ ! "$loop_device" =~ ^/dev/loop[0-9]+$ ]] ||
 fi
 if [ ! -d "$mountpoint_path" ] || [ -L "$mountpoint_path" ] ||
    [ ! -f "$osfs_test_binary" ] || [ -L "$osfs_test_binary" ] ||
-   [ ! -f "$outputlinux_test_binary" ] || [ -L "$outputlinux_test_binary" ]; then
+   [ ! -f "$outputportable_test_binary" ] || [ -L "$outputportable_test_binary" ]; then
   echo "Linux native root worker requires no-follow fixture paths" >&2
   exit 2
 fi
 mountpoint_path="$(cd -- "$mountpoint_path" && pwd -P)"
 osfs_test_binary="$(cd -- "$(dirname -- "$osfs_test_binary")" && pwd -P)/$(basename -- "$osfs_test_binary")"
-outputlinux_test_binary="$(cd -- "$(dirname -- "$outputlinux_test_binary")" && pwd -P)/$(basename -- "$outputlinux_test_binary")"
+outputportable_test_binary="$(cd -- "$(dirname -- "$outputportable_test_binary")" && pwd -P)/$(basename -- "$outputportable_test_binary")"
 
-proc_mounted=false
 root_mounted=false
 cleanup() {
   local status="$?"
   trap - EXIT INT TERM
   set +e
-  if [ "$proc_mounted" = true ]; then
-    umount -- "$mountpoint_path/proc"
-    [ "$?" -eq 0 ] || status=1
-  fi
   if [ "$root_mounted" = true ]; then
     if ! sync -f "$mountpoint_path"; then
       status=1
@@ -59,17 +54,12 @@ trap 'exit 143' TERM
 mount -t ext4 -o nodev,nosuid -- "$loop_device" "$mountpoint_path"
 root_mounted=true
 install -d -o 0 -g 0 -m 0755 -- \
-  "$mountpoint_path/proc" \
   "$mountpoint_path/test"
 install -o 0 -g 0 -m 0555 -- "$osfs_test_binary" "$mountpoint_path/test/osfs.test"
-install -o 0 -g 0 -m 0555 -- "$outputlinux_test_binary" "$mountpoint_path/test/outputlinux.test"
+install -o 0 -g 0 -m 0555 -- "$outputportable_test_binary" "$mountpoint_path/test/outputportable.test"
 install -d -o "$receiver_uid" -g "$receiver_gid" -m 0700 -- \
   "$mountpoint_path/receiver" \
-  "$mountpoint_path/receiver/test-temp" \
-  "$mountpoint_path/receiver/reuse" \
-  "$mountpoint_path/receiver/reuse/fillers"
-mount -t proc -o nodev,nosuid,noexec -- proc "$mountpoint_path/proc"
-proc_mounted=true
+  "$mountpoint_path/receiver/test-temp"
 
 umask 0022
 run_native_test_binary() {
@@ -77,10 +67,6 @@ run_native_test_binary() {
   local test_pattern="$2"
 
   TMPDIR=/receiver/test-temp \
-  WINDSHARE_REQUIRE_NATIVE_OUTPUT_CERTIFICATION=linux-ext4 \
-  WINDSHARE_LINUX_NATIVE_FIXTURE=loop-ext4-v1 \
-  WINDSHARE_LINUX_NATIVE_TEMP_ROOT=/receiver/test-temp \
-  WINDSHARE_LINUX_NATIVE_REUSE_ROOT=/receiver/reuse \
     chroot \
       --userspec="$receiver_uid:$receiver_gid" \
       --groups="$receiver_gid" \
@@ -92,9 +78,7 @@ run_native_test_binary() {
         -test.run="$test_pattern"
 }
 
-# The moved identity test is compiled from internal/outputlinux; the two
-# broader filesystem certification tests remain in osfs. Running both binaries
-# in one mounted fixture preserves the inode-reuse evidence while respecting
-# package ownership.
-run_native_test_binary /test/outputlinux.test '^TestLinuxExt4RestartIdentityRejectsForcedInodeReuse$'
-run_native_test_binary /test/osfs.test '^(TestLinuxExt4NativeIdentityScheme|TestLinuxExt4ProcessRestartRecovery)$'
+# No procfs or device nodes: timestamps and child-process locks must work on
+# the opened files, independently of an ambient /proc or /dev namespace.
+run_native_test_binary /test/outputportable.test '^(TestTaskLockIsProcessExclusiveAndRecoversAfterExit|TestOrdinaryFilesPublishWithoutLinksAndNeverOverwrite|TestSetModifiedTimePreservesNanosecondsAccessTimeAndHandleIdentity)$'
+run_native_test_binary /test/osfs.test '^(TestNativeOutputDestinationCapabilities|TestNativeOutputProcessRestartKeepsRanges|TestNativeOutputRetainedCandidateListAndReopen)$'

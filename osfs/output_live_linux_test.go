@@ -23,7 +23,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func TestLinuxTmpfsNativeAdapterPublishesWithoutRecoveryAuthority(t *testing.T) {
+func TestLinuxLiveOutputPublishesWithoutRecoveryAuthority(t *testing.T) {
 	t.Parallel()
 	root := linuxPublicTmpfsRoot(t)
 	stale := filepath.Join(root, ".windshare-output")
@@ -142,7 +142,7 @@ func TestLinuxTmpfsNativeAdapterPublishesWithoutRecoveryAuthority(t *testing.T) 
 	}
 }
 
-func TestLinuxTmpfsNativeAdapterPauseRetainsStageUntilOperationClose(t *testing.T) {
+func TestLinuxLiveOutputPauseRetainsStageUntilOperationClose(t *testing.T) {
 	t.Parallel()
 	root := linuxPublicTmpfsRoot(t)
 	authority, intent, session, rootAdmission := openLinuxPublicLiveOperation(t, root, nil)
@@ -182,7 +182,7 @@ func TestLinuxTmpfsNativeAdapterPauseRetainsStageUntilOperationClose(t *testing.
 	}
 }
 
-func TestLinuxTmpfsNativeAdapterDoesNotAdoptPreviousProcessStage(t *testing.T) {
+func TestLinuxLiveOutputDoesNotAdoptPreviousProcessStage(t *testing.T) {
 	const childRootEnvironment = "WINDSHARE_TMPFS_PROCESS_STAGE_ROOT"
 	if root := os.Getenv(childRootEnvironment); root != "" {
 		_, intent, session, admission := openLinuxPublicLiveOperation(t, root, nil)
@@ -220,7 +220,7 @@ func TestLinuxTmpfsNativeAdapterDoesNotAdoptPreviousProcessStage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := newLinuxNativeOutputAuthority(root, nil)
+	reopened, err := newLinuxLiveOutputAuthority(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func openLinuxPublicLiveOperation(
 ) (*FilesystemOutputAuthority, transfer.ReceiveIntent, transfer.DirectTreeSession, transfer.DirectoryAdmission) {
 	t.Helper()
 	ctx := context.Background()
-	authority, err := newLinuxNativeOutputAuthority(root, tracer)
+	authority, err := newLinuxLiveOutputAuthority(root, tracer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +286,7 @@ func openLinuxPublicLiveOperation(
 		}
 	})
 	if mode, err := authority.BindDestination(ctx); err != nil || !mode.Valid() || !mode.LiveOnly() || mode.Resumable() {
-		t.Fatalf("tmpfs failed public live admission: mode=%+v error=%v", mode, err)
+		t.Fatalf("destination failed live admission: mode=%+v error=%v", mode, err)
 	}
 	rules, err := transfer.NewSelectionRules(true, nil)
 	if err != nil {
@@ -337,18 +337,47 @@ func openLinuxPublicLiveOperation(
 	return authority, intent, session, admission
 }
 
-// The optional native adapter still needs live-only coverage independently of
-// the default portable adapter, which retains process-restart state on tmpfs.
-func newLinuxNativeOutputAuthority(root string, tracer FilesystemOutputTracer) (*FilesystemOutputAuthority, error) {
+// Tmpfs supports portable restart recovery. Inject only capability loss so these
+// fallback contracts still exercise the production file operations and runtime.
+func newLinuxLiveOutputAuthority(root string, tracer FilesystemOutputTracer) (*FilesystemOutputAuthority, error) {
 	var projected outputruntime.FilesystemOutputTracer
 	if tracer != nil {
 		projected = outputRuntimeTracer{target: tracer}
 	}
 	authority, err := outputruntime.New(outputruntime.Config{
-		RootPath: root, Tracer: projected, PlatformFactory: openStrongNativeOutputPlatform,
+		RootPath: root, Tracer: projected, PlatformFactory: openLinuxLiveOnlyPlatform,
 	})
 	if err != nil {
 		return nil, err
 	}
 	return &FilesystemOutputAuthority{authority: authority}, nil
+}
+
+type linuxLiveOnlyPlatform struct {
+	outputcap.Platform
+	capabilities outputcap.DestinationCapabilities
+}
+
+func (platform linuxLiveOnlyPlatform) DestinationCapabilities() (outputcap.DestinationCapabilities, error) {
+	return platform.capabilities, nil
+}
+
+func openLinuxLiveOnlyPlatform(path string, create bool) (outputcap.Platform, error) {
+	platform, err := openNativeOutputPlatform(path, create)
+	if err != nil {
+		return nil, err
+	}
+	source := platform.(interface {
+		DestinationCapabilities() (outputcap.DestinationCapabilities, error)
+	})
+	facts, err := source.DestinationCapabilities()
+	if err != nil {
+		return nil, errors.Join(err, platform.Close())
+	}
+	unsupported, _ := outputcap.UnsupportedCapability(outputcap.CapabilityReasonUnsupportedFilesystem)
+	capabilities, err := outputcap.NewDestinationCapabilities(facts.SafePublish(), unsupported, unsupported, unsupported)
+	if err != nil {
+		return nil, errors.Join(err, platform.Close())
+	}
+	return linuxLiveOnlyPlatform{Platform: platform, capabilities: capabilities}, nil
 }

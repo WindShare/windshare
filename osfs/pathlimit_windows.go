@@ -3,9 +3,6 @@ package osfs
 import (
 	"io/fs"
 	"syscall"
-
-	"github.com/windshare/windshare/osfs/internal/outputcap"
-	"github.com/windshare/windshare/osfs/internal/outputportable"
 )
 
 func isReparsePoint(information fs.FileInfo) bool {
@@ -17,8 +14,4 @@ func isReparsePoint(information fs.FileInfo) bool {
 	// boundary on Windows.
 	native, ok := information.Sys().(*syscall.Win32FileAttributeData)
 	return ok && native.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-func openNativeOutputPlatform(path string, create bool) (outputcap.Platform, error) {
-	return outputportable.Open(path, create)
 }

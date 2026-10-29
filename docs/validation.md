@@ -83,7 +83,7 @@ Coverage is gated on the core and non-core totals and on each package, with no p
 | Job | Runs |
 |---|---|
 | Static analysis | Hygiene, source-size checks, workflow lint, Go lint, and gopls. |
-| Non-core Go | Vet, production build, short race tests, and coverage. |
+| Non-core Go | Vet, production build, short race tests, coverage, and production output on the release ext4 fixture. |
 | Core Go | Vet, short race tests, coverage, and protocol vectors. |
 | Rust relay (Linux) | Full `make rust` gate. |
 | Rust relay (Windows) | `cargo test -p windshare-relay-native --locked`: native unit and process integration tests, without workspace coverage or Wasm builds. |
@@ -113,7 +113,7 @@ CI calls the reusable [native output workflow](../.github/workflows/native-outpu
 
 - Linux and Windows integration tests;
 - named long-running Go E2E and catalog tests;
-- Linux and Windows durable-output tests;
+- Linux and Windows output and process-restart tests;
 - progressive catalog, direct/TURN switching, and browser/Pion interoperability scenarios;
 - Firefox and WebKit product scenarios and component contracts (including native-size relay bursts), and periodic Chromium component contracts;
 - Windows browser and process smoke tests;
@@ -123,7 +123,7 @@ CI calls the reusable [native output workflow](../.github/workflows/native-outpu
 
 [Source and Binary Release](../.github/workflows/release.yml) is started manually with an exact commit SHA and a root `vX.Y.Z` version. Resolution runs on the default branch and binds the version to a default-branch revision.
 
-Linux (ext4) and Windows (NTFS) jobs reconstruct the deterministic source bundle, including pinned Pion nested modules, licenses, manifest, and patches, then run the build, vet, vulnerability, test, and native-output gates. The `wsrelay` asset is built from Rust with a static C runtime; Linux needs the stable `x86_64-unknown-linux-musl` target and `musl-gcc`. After comparing the source bundles byte for byte, the workflow creates the immutable version tag and publishes source and `wind`/`wsrelay` binary ZIPs with SHA-256 checksums.
+Linux (ext4) and Windows (NTFS) jobs reconstruct the deterministic source bundle, including pinned Pion nested modules, licenses, manifest, and patches, then run the build, vet, vulnerability, test, and production-output gates. These exercise the shared output backend and public recovery factory, including process-exit lock release, no-copy publication, timestamps, and preserved download progress. The `wsrelay` asset is built from Rust with a static C runtime; Linux needs the stable `x86_64-unknown-linux-musl` target and `musl-gcc`. After comparing the source bundles byte for byte, the workflow creates the immutable version tag and publishes source and `wind`/`wsrelay` binary ZIPs with SHA-256 checksums.
 
 Local release scripts validate and package but never publish. See [installation](installation.md) for the supported clone, source-bundle, and binary paths.
 

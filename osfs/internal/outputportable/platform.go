@@ -1,5 +1,5 @@
 // Package outputportable supplies best-effort restart storage using Go files.
-// Native adapters are limited to exclusion and no-replace namespace operations.
+// Platform-specific files supply filesystem primitives within this shared backend.
 package outputportable
 
 import (
