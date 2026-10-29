@@ -175,10 +175,11 @@ func TestPrivateDirectoryIsolatesInheritedACLWithoutChangingPublicPolicy(t *test
 	if err := os.Mkdir(existingPath, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	setFixtureACL(t, existingPath, "everyone allow read,write")
 	existing, err := platform.root.OpenDirectory("existing-control", true)
 	if existing != nil {
 		_ = existing.Close()
-		t.Fatal("inherited ACL admitted an existing private directory")
+		t.Fatal("permissive ACL admitted an existing private directory")
 	}
 	if !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("existing private ACL was not rejected: %v", err)
@@ -190,6 +191,26 @@ func TestPrivateDirectoryIsolatesInheritedACLWithoutChangingPublicPolicy(t *test
 	defer ordinary.Close()
 	if err := validatePrivateACL(ordinary.(*directory).fd()); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("opening existing state silently repaired its ACL: %v", err)
+	}
+}
+
+func TestPrivateInitializationPreservesUnexpectedChildren(t *testing.T) {
+	path := t.TempDir()
+	platform := openAuthorityFixture(t, path)
+	pending, err := platform.root.CreateDirectory("pending", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pending.Close()
+	foreign := filepath.Join(path, "pending", "foreign")
+	if err := os.WriteFile(foreign, []byte("foreign"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := pending.(*directory).establishPrivateAuthority(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
+		t.Fatalf("populated directory acquired private authority: %v", err)
+	}
+	if data, err := os.ReadFile(foreign); err != nil || string(data) != "foreign" {
+		t.Fatalf("private initialization changed unknown state: %q %v", data, err)
 	}
 }
 

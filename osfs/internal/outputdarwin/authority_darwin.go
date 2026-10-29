@@ -22,6 +22,20 @@ func (dir *directory) ValidateCreateAuthority() error {
 }
 
 func (dir *directory) ValidateMetadataAuthority() error {
+	if err := dir.verify(); err != nil {
+		return err
+	}
+	var stat unix.Stat_t
+	if err := unix.Fstat(dir.fd(), &stat); err != nil {
+		return nativeError(err)
+	}
+	// Source timestamps belong only on receiver-owned directories. Generic
+	// write-attributes access may also be granted on a shared container.
+	if stat.Uid != uint32(os.Geteuid()) {
+		return fmt.Errorf("osfs: Darwin directory device=%d inode=%d metadata owner=%d differs from effective user=%d: %w",
+			dir.object.device, dir.object.inode, stat.Uid, os.Geteuid(),
+			errors.Join(outputcap.ErrUnsafeNamespace, unix.EPERM))
+	}
 	return dir.validateAccess("metadata", writeAttributesAccess)
 }
 
