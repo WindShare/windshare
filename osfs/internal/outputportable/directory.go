@@ -151,7 +151,14 @@ func (d *directory) ObserveEntry(name string) (outputcap.EntryKind, error) {
 }
 func (d *directory) ClassifyExactEntry(name string) (outputcap.EntryKind, bool, error) {
 	k, err := d.ObserveEntry(name)
-	return k, err == nil, err
+	if err != nil || k == outputcap.EntryAbsent || k == outputcap.EntryOther {
+		return k, err == nil, err
+	}
+	// Reusing a directory through a case or short-name alias would merge source
+	// trees. Ask the opened object for its spelling instead of guessing the
+	// parent filesystem's Unicode equivalence relation.
+	actual, err := entrySpelling(d, name)
+	return k, err == nil && exactEntrySpelling(name, actual), err
 }
 
 type entry struct {

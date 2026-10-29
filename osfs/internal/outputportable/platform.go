@@ -7,8 +7,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"sync"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -73,19 +71,20 @@ type guard struct{ root outputcap.Directory }
 
 func (g *guard) Root() outputcap.Directory { return g.root }
 func (g *guard) Close() error              { return g.root.Close() }
+
+// These keys identify spellings, not filesystem equivalence classes. The catalog
+// already excludes portable sibling collisions. Native lookup and no-replace
+// publication must decide aliases; OS-wide casing tables can merge distinct names.
 func (*Platform) CanonicalLocatorKey(path string) (string, error) {
 	canonical, err := catalog.CanonicalPath(path)
 	if err != nil || canonical != path {
 		return "", outputcap.ErrUnsafeNamespace
 	}
-	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
-		canonical = strings.ToLower(canonical)
-	}
 	return canonical, nil
 }
-func (platform *Platform) CanonicalComponentKey(name string) (string, error) {
+func (*Platform) CanonicalComponentKey(name string) (string, error) {
 	if err := validName(name); err != nil {
 		return "", err
 	}
-	return platform.CanonicalLocatorKey(name)
+	return name, nil
 }
