@@ -69,15 +69,10 @@ func (a *App) reportEngineReceive(result engine.TaskCompletion[engine.ReceiveRes
 	if result.Outcome != engine.OutcomeSuccess {
 		a.reportBlockedReceiveItems(result.Value.Transfer)
 	}
-	switch result.Value.Recovery {
-	case engine.ReceiveRecoveryCheckpointsRetained:
-		a.writeCompleteLine("Download paused; saved partials: %d bytes. Previously delivered: %d files (%d bytes).", result.Value.Transfer.Progress.RestartReusableBytes, result.Value.Transfer.Progress.FileOutcomes.PreviouslyPublishedFiles, result.Value.Transfer.Progress.PreviouslyPublishedBytes)
-		a.writeCompleteLine("Retry with wind resume retry --operation %x and the same link, output directory, and selection.", result.Value.Operation.Bytes())
-	case engine.ReceiveRecoveryLiveProgressReleased:
-		a.writeCompleteLine("Download stopped; unfinished progress could not be retained after exit.")
-	case engine.ReceiveRecoveryDiscarded:
-		a.writeCompleteLine("Unfinished owned output was discarded; completed files were kept.")
+	if result.Failure.Code() == appobs.FailureRetainedOutputMissing {
+		a.writeCompleteLine("Searched output directory: %q. Check -o, --only, and --operation, or use wind get to start a download.", result.Value.Destination)
 	}
+	a.reportReceiveRecovery(result.Value)
 	if result.Value.Job.IsZero() {
 		failure := result.Failure
 		exit, _ := getEventExit(code)
@@ -113,6 +108,63 @@ func (a *App) reportReceiveTask(result engine.TaskResult[engine.ReceiveResult], 
 	return a.reportEngineReceive(result.Completion, observation)
 }
 
+func (a *App) reportReceiveRecovery(result engine.ReceiveResult) {
+	recovery := result.Recovery
+	switch recovery.Retention {
+	case engine.ReceiveRetentionCheckpoints:
+		a.writeCompleteLine("Saved partials: %d bytes. Previously delivered: %d files (%d bytes).", result.Transfer.Progress.RestartReusableBytes, result.Transfer.Progress.FileOutcomes.PreviouslyPublishedFiles, result.Transfer.Progress.PreviouslyPublishedBytes)
+	case engine.ReceiveRetentionLiveReleased:
+		a.writeCompleteLine("Download stopped; unfinished progress could not be retained after exit.")
+	case engine.ReceiveRetentionDiscarded:
+		a.writeCompleteLine("Unfinished owned output was discarded; completed files were kept.")
+		return
+	}
+	switch recovery.Reason {
+	case engine.ReceiveRecoverySelectionMissing:
+		a.writeCompleteLine("Correct --only and run wind get with the intended selection.")
+	case engine.ReceiveRecoveryInvalidRequest:
+		a.writeCompleteLine("Correct the request before starting another download.")
+	case engine.ReceiveRecoveryNeedsInspection:
+		a.writeCompleteLine("Inspect the reported failure before retrying.")
+	default:
+		if recovery.Retention == engine.ReceiveRetentionCheckpoints && recovery.Reason.Retryable() {
+			a.writeCompleteLine("Retry with wind resume retry -o <original-directory> --operation %x and the same link and selection.", result.Operation.Bytes())
+		}
+	}
+}
+
+func receiveRecoveryChoices(pause engine.ReceivePause) (string, string) {
+	var choices, keys []string
+	for _, option := range []struct {
+		action     engine.ReceiveRecoveryAction
+		label, key string
+	}{
+		{engine.ReceiveRecoveryRetry, "retry", "r"},
+		{engine.ReceiveRecoveryDiscard, "discard unfinished output", "d"},
+		{engine.ReceiveRecoveryExit, "exit", "e"},
+	} {
+		if pause.Allows(option.action) {
+			choices, keys = append(choices, option.label), append(keys, option.key)
+		}
+	}
+	return strings.Join(choices, ", "), strings.Join(keys, "/")
+}
+
+func parseReceiveRecoveryAction(pause engine.ReceivePause, input string) (engine.ReceiveRecoveryAction, bool) {
+	var action engine.ReceiveRecoveryAction
+	switch strings.ToLower(strings.TrimSpace(input)) {
+	case "r", "retry":
+		action = engine.ReceiveRecoveryRetry
+	case "d", "discard":
+		action = engine.ReceiveRecoveryDiscard
+	case "e", "exit", "":
+		action = engine.ReceiveRecoveryExit
+	default:
+		return 0, false
+	}
+	return action, pause.Allows(action)
+}
+
 func (a *App) receivePauseHandler() func(context.Context, engine.ReceivePause) (engine.ReceiveRecoveryAction, error) {
 	input, inputOK := a.Stdin.(interface{ Fd() uintptr })
 	output, outputOK := a.Stderr.(interface{ Fd() uintptr })
@@ -121,7 +173,7 @@ func (a *App) receivePauseHandler() func(context.Context, engine.ReceivePause) (
 	}
 	reader := bufio.NewReader(a.Stdin)
 	return func(ctx context.Context, pause engine.ReceivePause) (engine.ReceiveRecoveryAction, error) {
-		reason := "a temporary transfer or output failure"
+		reason := "a transfer or output failure"
 		switch pause.Reason {
 		case engine.ReceiveRecoveryCollision:
 			reason = "a destination collision; move the conflicting entry before retrying"
@@ -139,7 +191,8 @@ func (a *App) receivePauseHandler() func(context.Context, engine.ReceivePause) (
 			if err := ctx.Err(); err != nil {
 				return engine.ReceiveRecoveryExit, err
 			}
-			a.writeCompleteLine("Choose retry, discard unfinished output, or exit [r/d/e]:")
+			choices, keys := receiveRecoveryChoices(pause)
+			a.writeCompleteLine("Choose %s [%s]:", choices, keys)
 			type answer struct {
 				line string
 				err  error
@@ -156,13 +209,8 @@ func (a *App) receivePauseHandler() func(context.Context, engine.ReceivePause) (
 					}
 					return engine.ReceiveRecoveryExit, response.err
 				}
-				switch strings.ToLower(strings.TrimSpace(response.line)) {
-				case "r", "retry":
-					return engine.ReceiveRecoveryRetry, nil
-				case "d", "discard":
-					return engine.ReceiveRecoveryDiscard, nil
-				case "e", "exit", "":
-					return engine.ReceiveRecoveryExit, nil
+				if action, allowed := parseReceiveRecoveryAction(pause, response.line); allowed {
+					return action, nil
 				}
 			}
 		}

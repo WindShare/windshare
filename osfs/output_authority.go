@@ -517,8 +517,8 @@ func (operation FilesystemOutputOperation) ExecutionMode() FilesystemOutputExecu
 	return FilesystemOutputExecutionMode{mode: operation.operation.ExecutionMode()}
 }
 
-func (operation FilesystemOutputOperation) RetryAvailable() bool {
-	return operation.operation != nil && operation.operation.RetryAvailable()
+func (operation FilesystemOutputOperation) CanStartAttempt() bool {
+	return operation.operation != nil && operation.operation.CanStartAttempt()
 }
 
 func (operation FilesystemOutputOperation) Discard(ctx context.Context) error {

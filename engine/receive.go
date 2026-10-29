@@ -12,19 +12,23 @@ type ReceivePause = receive.Pause
 type ReceiveRecoveryAction = receive.RecoveryAction
 type ReceiveRecoveryReason = receive.RecoveryReason
 type ReceiveRecoveryOutcome = receive.RecoveryOutcome
+type ReceiveProgressRetention = receive.ProgressRetention
 
 const (
-	ReceiveRecoveryExit                 = receive.RecoveryExit
-	ReceiveRecoveryRetry                = receive.RecoveryRetry
-	ReceiveRecoveryDiscard              = receive.RecoveryDiscard
-	ReceiveRecoveryTemporaryFailure     = receive.RecoveryTemporaryFailure
-	ReceiveRecoveryCollision            = receive.RecoveryCollision
-	ReceiveRecoveryOwnershipUnknown     = receive.RecoveryOwnershipUnknown
-	ReceiveRecoveryRevisionChanged      = receive.RecoveryRevisionChanged
-	ReceiveRecoveryNotNeeded            = receive.RecoveryNotNeeded
-	ReceiveRecoveryCheckpointsRetained  = receive.RecoveryCheckpointsRetained
-	ReceiveRecoveryLiveProgressReleased = receive.RecoveryLiveProgressReleased
-	ReceiveRecoveryDiscarded            = receive.RecoveryDiscarded
+	ReceiveRecoveryExit             = receive.RecoveryExit
+	ReceiveRecoveryRetry            = receive.RecoveryRetry
+	ReceiveRecoveryDiscard          = receive.RecoveryDiscard
+	ReceiveRecoveryTransferFailure  = receive.RecoveryTransferFailure
+	ReceiveRecoveryCollision        = receive.RecoveryCollision
+	ReceiveRecoveryOwnershipUnknown = receive.RecoveryOwnershipUnknown
+	ReceiveRecoveryRevisionChanged  = receive.RecoveryRevisionChanged
+	ReceiveRecoverySelectionMissing = receive.RecoverySelectionMissing
+	ReceiveRecoveryInvalidRequest   = receive.RecoveryInvalidRequest
+	ReceiveRecoveryNeedsInspection  = receive.RecoveryNeedsInspection
+	ReceiveRetentionNone            = receive.RetentionNone
+	ReceiveRetentionCheckpoints     = receive.RetentionCheckpoints
+	ReceiveRetentionLiveReleased    = receive.RetentionLiveReleased
+	ReceiveRetentionDiscarded       = receive.RetentionDiscarded
 )
 
 type ReceiveRequest = receive.Request

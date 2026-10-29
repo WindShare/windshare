@@ -236,7 +236,7 @@ func TestGetCapabilityInputStaysLocalAndUnambiguous(t *testing.T) {
 
 	t.Run("invalid link has a stable typed usage diagnostic", func(t *testing.T) {
 		app, _, stderr := newSemanticTestApp(strings.NewReader(""))
-		if _, parse := app.parseGetRequest([]string{"not-a-link"}); parse != requestParseUsageFailure {
+		if _, parse := app.parseReceiveRequest(receiveGet, []string{"not-a-link"}); parse != requestParseUsageFailure {
 			t.Fatalf("parse=%d want=%d", parse, requestParseUsageFailure)
 		}
 		if stderr.String() != "get: "+invalidCapabilityDiagnostic+"\n" {
@@ -260,7 +260,7 @@ func TestGetCapabilityInputStaysLocalAndUnambiguous(t *testing.T) {
 		}
 		for _, args := range [][]string{{full}, {bare, "--key", key}} {
 			app, _, stderr := newSemanticTestApp(strings.NewReader(""))
-			request, parse := app.parseGetRequest(args)
+			request, parse := app.parseReceiveRequest(receiveGet, args)
 			if parse != requestParseReady || !reflect.DeepEqual(request.link.Relays, []string{"https://relay.example"}) {
 				t.Fatalf("parse=%d relays=%v stderr=%q", parse, request.link.Relays, stderr.String())
 			}

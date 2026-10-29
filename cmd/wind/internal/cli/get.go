@@ -17,8 +17,16 @@ import (
 	"github.com/windshare/windshare/engine"
 )
 
-type getRequest struct {
-	redownload   bool
+type receiveCommand string
+
+const (
+	receiveGet                    receiveCommand = "get"
+	receiveResumeRetry            receiveCommand = "resume retry"
+	defaultReceiveOutputDirectory                = "."
+)
+
+type receiveRequest struct {
+	admission    engine.ReceiveOutputAdmission
 	operationID  receivecontract.OperationID
 	outDir       string
 	only         []string
@@ -29,24 +37,13 @@ type getRequest struct {
 }
 
 func (a *App) runGet(ctx context.Context, args []string) int {
-	return a.runReceive(ctx, args, engine.ReceiveCreateOrResume)
+	return a.runReceive(ctx, receiveGet, args)
 }
 
-func (a *App) runReceive(ctx context.Context, args []string, admission engine.ReceiveOutputAdmission) int {
-	request, parsed := a.parseGetRequest(args)
+func (a *App) runReceive(ctx context.Context, command receiveCommand, args []string) int {
+	request, parsed := a.parseReceiveRequest(command, args)
 	if parsed != requestParseReady {
 		return parsed.exitCode()
-	}
-	if request.redownload {
-		if admission == engine.ReceiveResumeExisting || !request.operationID.IsZero() {
-			a.writeCompleteLine("get: --redownload cannot select a retained operation")
-			return ExitUsage
-		}
-		admission = engine.ReceiveRedownload
-	}
-	if !request.operationID.IsZero() && admission != engine.ReceiveResumeExisting {
-		a.writeCompleteLine("get: --operation is available with resume retry")
-		return ExitUsage
 	}
 	runtime, err := a.newCommandRuntime(clievent.CommandGet, request.observation)
 	if err != nil {
@@ -62,7 +59,7 @@ func (a *App) runReceive(ctx context.Context, args []string, admission engine.Re
 	if factory == nil {
 		factory = filesystem.FilesystemOutput{RootPath: destination, CreateRoot: true}
 	}
-	task, err := a.application.StartReceive(ctx, engine.ReceiveRequest{Admission: admission, OperationID: request.operationID, Capability: request.link, Only: request.only, Connectivity: request.connectivity, WaitTimeout: request.waitTimeout, Output: factory, Destination: destination, Diagnostics: runtime.diagnosticSink(), OnPause: a.receivePauseHandler()})
+	task, err := a.application.StartReceive(ctx, engine.ReceiveRequest{Admission: request.admission, OperationID: request.operationID, Capability: request.link, Only: request.only, Connectivity: request.connectivity, WaitTimeout: request.waitTimeout, Output: factory, Destination: destination, Diagnostics: runtime.diagnosticSink(), OnPause: a.receivePauseHandler()})
 	if err != nil {
 		return observation.commandFailure(ExitFailure, err)
 	}
@@ -82,16 +79,33 @@ const (
 	missingCapabilityKeyDiagnostic = "key string is required"
 )
 
-func (a *App) parseGetRequest(args []string) (getRequest, requestParseOutcome) {
-	flags := a.newFlagSet("get")
+func (a *App) parseReceiveRequest(command receiveCommand, args []string) (receiveRequest, requestParseOutcome) {
+	name := string(command)
+	flags := a.newFlagSet(name)
+	admission := engine.ReceiveCreateOrResume
+	var redownload bool
+	var operation string
+	// The commands share transfer options, but expose only the operation choices
+	// their contracts allow. Retry can never silently become a new download.
+	switch command {
+	case receiveGet:
+		flags.BoolVar(&redownload, "redownload", false, "start a separate download in a new reserved destination; retain the original task")
+	case receiveResumeRetry:
+		admission = engine.ReceiveResumeExisting
+		flags.StringVar(&operation, "operation", "", "retained operation ID")
+	default:
+		return receiveRequest{}, requestParseInternalFailure
+	}
 	var observation observationOptions
 	if err := bindObservationOptions(flags, &observation); err != nil {
-		a.writeCompleteLine("get: observation options are unavailable")
-		return getRequest{}, requestParseInternalFailure
+		a.writeCompleteLine("%s: observation options are unavailable", name)
+		return receiveRequest{}, requestParseInternalFailure
 	}
-	outDir := flags.String("o", ".", "output directory")
-	redownload := flags.Bool("redownload", false, "start a separate download in a new reserved destination; retain the original task")
-	operation := flags.String("operation", "", "resume retry: retained operation ID")
+	outputHelp := "output directory"
+	if command == receiveResumeRetry {
+		outputHelp = "directory to search for saved downloads"
+	}
+	outDir := flags.String("o", defaultReceiveOutputDirectory, outputHelp)
 	waitTimeout := flags.Duration("wait-timeout", 0, "maximum wait for initial connection or each reconnection (0: initial 10s, reconnection unlimited)")
 	keyString := flags.String("key", "", "separate key string when the link has no fragment")
 	connectivityName := flags.String(
@@ -102,48 +116,55 @@ func (a *App) parseGetRequest(args []string) (getRequest, requestParseOutcome) {
 	var only repeatedFlag
 	flags.Var(&only, "only", "download only this catalog path; repeatable, directories include descendants")
 	positional, flagParse := parseInterleaved(flags, args)
-	if parse := a.projectFlagParse("get", flags, "get [options] <link>", flagParse); parse != requestParseReady {
-		return getRequest{}, parse
+	if parse := a.projectFlagParse(name, flags, name+" [options] <link>", flagParse); parse != requestParseReady {
+		return receiveRequest{}, parse
 	}
 	if err := observation.validate(); err != nil {
-		a.writeCompleteLine("get: %s", observationOptionDiagnostic(err))
-		return getRequest{}, requestParseUsageFailure
+		a.writeCompleteLine("%s: %s", name, observationOptionDiagnostic(err))
+		return receiveRequest{}, requestParseUsageFailure
+	}
+	if *outDir == "" {
+		a.writeCompleteLine("%s: -o must name an output directory", name)
+		return receiveRequest{}, requestParseUsageFailure
 	}
 	if *waitTimeout < 0 {
-		a.writeCompleteLine("get: wait-timeout must not be negative")
-		return getRequest{}, requestParseUsageFailure
+		a.writeCompleteLine("%s: wait-timeout must not be negative", name)
+		return receiveRequest{}, requestParseUsageFailure
 	}
 	if len(positional) != 1 {
-		a.writeCompleteLine("get: exactly one link argument is required")
-		return getRequest{}, requestParseUsageFailure
+		a.writeCompleteLine("%s: exactly one link argument is required", name)
+		return receiveRequest{}, requestParseUsageFailure
 	}
 	var operationID receivecontract.OperationID
-	if *operation != "" {
-		raw, err := hex.DecodeString(*operation)
+	if operation != "" {
+		raw, err := hex.DecodeString(operation)
 		if err == nil {
 			operationID, err = receivecontract.OperationIDFromBytes(raw)
 		}
 		if err != nil {
-			a.writeCompleteLine("get: invalid operation ID")
-			return getRequest{}, requestParseUsageFailure
+			a.writeCompleteLine("%s: invalid operation ID", name)
+			return receiveRequest{}, requestParseUsageFailure
 		}
 	}
 	connectivity, err := engine.ParseConnectivityPolicy(*connectivityName)
 	if err != nil {
-		a.writeCompleteLine("get: connectivity must be auto, relay-only, or p2p-only")
-		return getRequest{}, requestParseUsageFailure
+		a.writeCompleteLine("%s: connectivity must be auto, relay-only, or p2p-only", name)
+		return receiveRequest{}, requestParseUsageFailure
 	}
 	capability, err := a.resolveLink(positional[0], *keyString)
 	if err != nil {
 		if errors.Is(err, engine.ErrReceiveKeyRequired) {
-			a.writeCompleteLine("get: %s", missingCapabilityKeyDiagnostic)
+			a.writeCompleteLine("%s: %s", name, missingCapabilityKeyDiagnostic)
 		} else {
-			a.writeCompleteLine("get: %s", invalidCapabilityDiagnostic)
+			a.writeCompleteLine("%s: %s", name, invalidCapabilityDiagnostic)
 		}
-		return getRequest{}, requestParseUsageFailure
+		return receiveRequest{}, requestParseUsageFailure
 	}
-	return getRequest{
-		redownload: *redownload, operationID: operationID,
+	if redownload {
+		admission = engine.ReceiveRedownload
+	}
+	return receiveRequest{
+		admission: admission, operationID: operationID,
 		outDir: *outDir, only: append([]string(nil), only...), link: capability, connectivity: connectivity,
 		observation: observation, waitTimeout: *waitTimeout,
 	}, requestParseReady

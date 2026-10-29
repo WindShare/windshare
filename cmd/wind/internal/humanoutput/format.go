@@ -137,6 +137,8 @@ func failureMessage(failure appobs.Failure) string {
 		message = "The share link or key is invalid."
 	case appobs.MessageSelectionMissing:
 		message = "The selected content was not found."
+	case appobs.MessageRetainedOutputMissing:
+		message = "No saved download matches this resume request."
 	case appobs.MessageRelayRejected:
 		message = "The relay rejected the request."
 	case appobs.MessageRelayUnavailable:

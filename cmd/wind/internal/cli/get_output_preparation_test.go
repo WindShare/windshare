@@ -40,7 +40,7 @@ func TestGetDefaultsToCurrentDirectoryAndBindsItBeforeSessionWork(t *testing.T) 
 	}
 	var stderr bytes.Buffer
 	app := &App{Stderr: &stderr}
-	request, parsed := app.parseGetRequest([]string{encoded})
+	request, parsed := app.parseReceiveRequest(receiveGet, []string{encoded})
 	if parsed != requestParseReady || request.outDir != "." {
 		t.Fatalf("request=%+v parsed=%v", request, parsed)
 	}

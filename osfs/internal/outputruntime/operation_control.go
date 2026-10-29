@@ -9,7 +9,7 @@ import (
 	"github.com/windshare/windshare/osfs/internal/resumeauthority"
 )
 
-func (operation *Operation) RetryAvailable() bool {
+func (operation *Operation) CanStartAttempt() bool {
 	if operation == nil || operation.authority == nil {
 		return false
 	}
@@ -20,7 +20,7 @@ func (operation *Operation) RetryAvailable() bool {
 }
 
 func (operation *Operation) Discard(ctx context.Context) error {
-	if ctx == nil || !operation.RetryAvailable() {
+	if ctx == nil || !operation.CanStartAttempt() {
 		return transfer.ErrInvalidOutputBinding
 	}
 	if err := ctx.Err(); err != nil {

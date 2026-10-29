@@ -7,6 +7,7 @@ import (
 
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/transfer"
+	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine/internal/task"
 )
@@ -22,20 +23,41 @@ const (
 type RecoveryReason uint8
 
 const (
-	RecoveryTemporaryFailure RecoveryReason = iota + 1
+	RecoveryTransferFailure RecoveryReason = iota + 1
 	RecoveryCollision
 	RecoveryOwnershipUnknown
 	RecoveryRevisionChanged
+	RecoverySelectionMissing
+	RecoveryInvalidRequest
+	RecoveryNeedsInspection
 )
 
-type RecoveryOutcome uint8
+// Retryable describes replaying the same request, possibly after repairing its
+// environment. Output ownership separately decides whether another attempt can start.
+func (reason RecoveryReason) Retryable() bool {
+	switch reason {
+	case RecoveryTransferFailure, RecoveryCollision, RecoveryOwnershipUnknown, RecoveryRevisionChanged:
+		return true
+	default:
+		return false
+	}
+}
+
+type ProgressRetention uint8
 
 const (
-	RecoveryNotNeeded RecoveryOutcome = iota
-	RecoveryCheckpointsRetained
-	RecoveryLiveProgressReleased
-	RecoveryDiscarded
+	RetentionNone ProgressRetention = iota
+	RetentionCheckpoints
+	RetentionLiveReleased
+	RetentionDiscarded
 )
+
+// Retention is independent of the next step: an invalid selection can coexist
+// with completed files and reusable partials that must remain owned and intact.
+type RecoveryOutcome struct {
+	Retention ProgressRetention
+	Reason    RecoveryReason
+}
 
 // Pause is a settled attempt while the operation still owns its output. The
 // decision port is optional; unattended callers always get an explicit result.
@@ -69,27 +91,36 @@ func runOperation(ctx context.Context, request Request, deps Dependencies, attem
 			completed.Err = errors.Join(completed.Err, err)
 			completed.CleanupError = errors.Join(completed.CleanupError, err)
 			completed.Outcome, completed.FailureClass = task.OutcomeFailed, task.FailureLocal
+			completed.Value.Recovery.Reason = RecoveryNeedsInspection
 		}
 	}()
-	for {
+	for attemptNumber := uint64(1); ; attemptNumber++ {
 		completed = attempt(ctx, request, deps, &retained)
-		if completed.Outcome == task.OutcomeSuccess {
+		if completed.Outcome == task.OutcomeSuccess || retained.operation == nil || !retained.operation.Valid() {
 			return
 		}
-		if retained.operation != nil && retained.operation.Valid() && retained.mode == OutputResumable {
-			completed.Value.Recovery = RecoveryCheckpointsRetained
-		} else if retained.operation != nil && retained.operation.Valid() && retained.mode == OutputLiveOnly {
-			completed.Value.Recovery = RecoveryLiveProgressReleased
-		}
-		if ctx.Err() != nil || request.OnPause == nil || retained.operation == nil || !retained.operation.Valid() {
-			return
+		completed.Value.Operation = retained.operation.Intent.OperationID()
+		switch retained.mode {
+		case OutputResumable:
+			completed.Value.Recovery.Retention = RetentionCheckpoints
+		case OutputLiveOnly:
+			completed.Value.Recovery.Retention = RetentionLiveReleased
 		}
 		control := retained.operation.Control
-		if control == nil || !control.RetryAvailable() {
+		attemptAvailable := control != nil && control.CanStartAttempt()
+		retryAllowed := completed.Value.Recovery.Reason.Retryable() && attemptAvailable
+		deps.Control.Diagnostics.Emit(diagnostics.New("receive.output_recovery_evaluated", diagnostics.Fields{
+			"operation": diagnostics.Identity(completed.Value.Operation.Bytes()), "attempt": diagnostics.Uint(attemptNumber),
+			"failure_class":     diagnostics.Uint(uint64(completed.FailureClass)),
+			"reason":            diagnostics.Uint(uint64(completed.Value.Recovery.Reason)),
+			"retention":         diagnostics.Uint(uint64(completed.Value.Recovery.Retention)),
+			"attempt_available": diagnostics.Bool(attemptAvailable), "retry_allowed": diagnostics.Bool(retryAllowed),
+		}))
+		if ctx.Err() != nil || request.OnPause == nil || !retryAllowed {
 			return
 		}
-		paused := Pause{Operation: retained.operation.Intent.OperationID(), Mode: retained.mode,
-			Reason: recoveryReason(completed.Value.Transfer), Actions: []RecoveryAction{RecoveryRetry, RecoveryDiscard, RecoveryExit},
+		paused := Pause{Operation: completed.Value.Operation, Mode: retained.mode,
+			Reason: completed.Value.Recovery.Reason, Actions: []RecoveryAction{RecoveryRetry, RecoveryDiscard, RecoveryExit},
 			Transfer: completed.Value.Transfer}
 		action, err := request.OnPause(ctx, paused)
 		if ctx.Err() != nil {
@@ -113,15 +144,37 @@ func runOperation(ctx context.Context, request Request, deps Dependencies, attem
 			if err := control.Discard(ctx); err != nil {
 				completed.Err = errors.Join(completed.Err, err)
 				completed.FailureClass = task.FailureLocal
+				completed.Value.Recovery.Reason = RecoveryNeedsInspection
 			} else {
-				completed.Value.Recovery = RecoveryDiscarded
+				completed.Value.Recovery.Retention = RetentionDiscarded
 			}
 			return
 		}
 	}
 }
 
-func recoveryReason(result transfer.JobResult) RecoveryReason {
+func recoveryReason(class task.FailureClass, failure Failure, result transfer.JobResult, cleanupErr error) RecoveryReason {
+	if cleanupErr != nil {
+		return RecoveryNeedsInspection
+	}
+	// Missing selections require a new request even when a simultaneous source
+	// fault took precedence in the terminal error.
+	if provesMissingSelection(result) || failure.Local == LocalSelectionMissing {
+		return RecoverySelectionMissing
+	}
+	if class == task.FailureUsage || failure.Code == FailureInvalidInput {
+		return RecoveryInvalidRequest
+	}
+	switch failure.Code {
+	case FailureOutputContract, FailurePeerConfiguration:
+		return RecoveryNeedsInspection
+	}
+	if code, ok := failure.Fault.OutputCode(); ok && code == transferfault.OutputContract {
+		return RecoveryNeedsInspection
+	}
+	if code, ok := failure.Fault.SessionCode(); ok && code == transferfault.SessionDependencyContract {
+		return RecoveryNeedsInspection
+	}
 	outcomes := result.Progress.FileOutcomes
 	switch {
 	case outcomes.RevisionConflictFiles != 0:
@@ -131,6 +184,6 @@ func recoveryReason(result transfer.JobResult) RecoveryReason {
 	case outcomes.CollisionFiles != 0:
 		return RecoveryCollision
 	default:
-		return RecoveryTemporaryFailure
+		return RecoveryTransferFailure
 	}
 }
