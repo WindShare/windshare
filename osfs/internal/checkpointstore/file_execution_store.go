@@ -182,39 +182,10 @@ func (store *FileExecutionStore) inventoryLocked() error {
 	return nil
 }
 
-// Snapshot retains the physical inventory for exact cleanup and low-level
-// diagnostics. Logical consumers must use LineageSnapshot so conflicts never
-// acquire range authority through iteration order.
-func (store *FileExecutionStore) Snapshot() (records []checkpointmodel.Record, attention []Attention) {
-	if store == nil || store.authority == nil {
-		return nil, nil
-	}
-	store.authority.mu.Lock()
-	defer store.authority.mu.Unlock()
-	if err := store.inventoryLocked(); err != nil {
-		return nil, []Attention{{code: AttentionCorruptRecord}}
-	}
-	records = make([]checkpointmodel.Record, 0, len(store.authority.physical))
-	for _, record := range store.authority.physical {
-		records = append(records, record)
-	}
-	slices.SortFunc(records, compareRecordID)
-	return records, slices.Clone(store.authority.attention)
-}
-
-func (store *FileExecutionStore) LineageSnapshot() (
-	slots []FileExecutionLineageSlot,
-	attention []Attention,
-) {
-	slots, attention, err := store.Inventory()
-	if err != nil {
-		return nil, []Attention{{code: AttentionCorruptRecord}}
-	}
-	return slots, attention
-}
-
 // Inventory is reserved for explicit management and cleanup. Ordinary transfer
 // loads each logical file on demand, so unrelated state cannot delay its start.
+// Attention describes observed repository anomalies; a failed inventory returns
+// an error because an incomplete observation cannot establish record corruption.
 func (store *FileExecutionStore) Inventory() ([]FileExecutionLineageSlot, []Attention, error) {
 	if store == nil || store.authority == nil {
 		return nil, nil, transfer.ErrInvalidOutputBinding

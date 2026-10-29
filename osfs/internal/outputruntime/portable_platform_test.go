@@ -43,10 +43,11 @@ type runtimeTestRootSpec struct {
 type portableRuntimeFilesystem struct {
 	root string
 
-	mu         sync.Mutex
-	nextObject uint64
-	objects    []portableRuntimeObject
-	locks      map[uint64]bool
+	mu                sync.Mutex
+	nextObject        uint64
+	objects           []portableRuntimeObject
+	locks             map[uint64]bool
+	enumerationErrors map[string]error
 }
 
 type portableRuntimeObject struct {
@@ -339,6 +340,12 @@ func (directory *portableRuntimeDirectory) Names(limit int) ([]string, error) {
 	path, err := directory.currentPath()
 	if err != nil {
 		return nil, err
+	}
+	directory.filesystem.mu.Lock()
+	enumerationErr := directory.filesystem.enumerationErrors[path]
+	directory.filesystem.mu.Unlock()
+	if enumerationErr != nil {
+		return nil, enumerationErr
 	}
 	entries, err := os.ReadDir(path)
 	if err != nil {

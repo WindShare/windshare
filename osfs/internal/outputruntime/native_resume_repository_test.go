@@ -621,16 +621,20 @@ func TestNativeResumeRepositoryAndItemGuardsRejectUntrustedInputs(t *testing.T) 
 	if _, err := lease.Snapshot(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	records, _ := lease.store.Snapshot()
-	if len(records) != 1 {
-		t.Fatalf("resume records = %d", len(records))
+	slots, attention, err := lease.store.Inventory()
+	if err != nil || len(slots) != 1 || len(attention) != 0 {
+		t.Fatalf("resume inventory = (%+v, %+v, %v)", slots, attention, err)
 	}
-	item, err := blockedPublicationItem(records[0])
+	record, exact := slots[0].Record()
+	if !exact {
+		t.Fatal("resume record has no exact lineage")
+	}
+	item, err := blockedPublicationItem(record)
 	if err != nil || item.State() != resumeauthority.ItemBlocked ||
 		item.BlockReason() != resumeauthority.ItemBlockPublicationUnknown {
 		t.Fatalf("publication mismatch item = (%+v, %v)", item, err)
 	}
-	item, err = blockedOwnedItem(records[0], fileexecution.OwnedObservation{})
+	item, err = blockedOwnedItem(record, fileexecution.OwnedObservation{})
 	if err != nil || item.BlockReason() != resumeauthority.ItemBlockOwnedObjectUnknown {
 		t.Fatalf("owned item = (%+v, %v)", item, err)
 	}
@@ -699,11 +703,14 @@ func retainUnobservableCheckpointCandidate(
 	if err != nil {
 		t.Fatal(err)
 	}
-	records, _ := store.Snapshot()
-	if len(records) != 1 {
-		t.Fatalf("candidate source records = %d, want 1", len(records))
+	slots, attention, err := store.Inventory()
+	if err != nil || len(slots) != 1 || len(attention) != 0 {
+		t.Fatalf("candidate source inventory = (%+v, %+v, %v)", slots, attention, err)
 	}
-	stable := records[0]
+	stable, exact := slots[0].Record()
+	if !exact {
+		t.Fatal("candidate source has no exact lineage")
+	}
 	active, err := checkpointmodel.AdvanceState(
 		stable,
 		stable.StateGeneration()+1,
