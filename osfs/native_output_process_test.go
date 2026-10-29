@@ -1,6 +1,6 @@
-//go:build windows
+//go:build windows || linux || darwin
 
-package outputwindows
+package osfs
 
 import (
 	"bytes"
@@ -9,8 +9,6 @@ import (
 	"os/exec"
 	"testing"
 	"time"
-
-	"golang.org/x/sys/windows"
 )
 
 const (
@@ -21,16 +19,11 @@ const (
 	nativeOutputCrashChildMaximumWait = 5 * time.Minute
 )
 
-func requireUnprivilegedWindowsNTFSIdentityScheme(t *testing.T) {
-	t.Helper()
-	if windows.GetCurrentProcessToken().IsElevated() {
-		t.Skip("Windows/NTFS native identityScheme is meaningful only as an ordinary receiver")
-	}
-}
-
 func killNativeOutputChildAfterReady(t *testing.T, readyPath string, environment []string) {
 	t.Helper()
 	command := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$", "-test.count=1")
+	// The Linux native chroot intentionally has no device nodes. An EOF-backed
+	// pipe keeps os/exec from opening /dev/null before it starts the crash child.
 	command.Stdin = bytes.NewReader(nil)
 	command.Env = append(os.Environ(), environment...)
 	var childOutput bytes.Buffer
@@ -53,7 +46,8 @@ func killNativeOutputChildAfterReady(t *testing.T, readyPath string, environment
 	ticker := time.NewTicker(nativeOutputCrashPollInterval)
 	defer deadline.Stop()
 	defer ticker.Stop()
-	for {
+	ready := false
+	for !ready {
 		select {
 		case err := <-waited:
 			childRunning = false
@@ -62,27 +56,30 @@ func killNativeOutputChildAfterReady(t *testing.T, readyPath string, environment
 			t.Fatalf("native output crash child did not persist its cut within %s\n%s",
 				nativeOutputCrashReadyTimeout, childOutput.String())
 		case <-ticker.C:
-			if _, err := os.Stat(readyPath); err == nil {
-				if err := command.Process.Kill(); err != nil {
-					t.Fatalf("kill native output crash child: %v", err)
-				}
-				if err := <-waited; err == nil {
-					childRunning = false
-					t.Fatal("native output crash child exited successfully instead of being terminated")
-				}
-				childRunning = false
-				return
-			} else if !errors.Is(err, os.ErrNotExist) {
+			_, err := os.Stat(readyPath)
+			switch {
+			case err == nil:
+				ready = true
+			case errors.Is(err, os.ErrNotExist):
+			default:
 				t.Fatalf("inspect native output crash-child marker: %v", err)
 			}
 		}
 	}
+	if err := command.Process.Kill(); err != nil {
+		t.Fatalf("kill native output crash child: %v", err)
+	}
+	if err := <-waited; err == nil {
+		childRunning = false
+		t.Fatal("native output crash child exited successfully instead of being terminated")
+	}
+	childRunning = false
 }
 
 func signalNativeOutputCrashCut(t *testing.T, readyPath string) {
 	t.Helper()
-	// The marker lives outside the output root, so it cannot make an
-	// unpersisted output cut appear recoverable.
+	// The marker is outside the output root; it only coordinates the parent
+	// process and cannot make an unpersisted output cut appear recoverable.
 	if err := os.WriteFile(readyPath, []byte("ready\n"), 0o600); err != nil {
 		t.Fatalf("signal native output crash cut: %v", err)
 	}

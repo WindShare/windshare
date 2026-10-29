@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 
-# Linux native certification walks from the filesystem root, so choosing a
-# private leaf beneath /tmp cannot repair unsafe sticky ancestry. Release gates
-# instead allocate beside the checkout after proving the complete path.
+# Release artifacts need an owned private workspace. Output semantics are
+# verified separately on the mounted ext4 fixture, not inferred from ancestry.
 
 windshare_linux_physical_directory() {
   local directory="$1"
@@ -13,16 +12,12 @@ windshare_linux_physical_directory() {
   (cd -- "$directory" && pwd -P)
 }
 
-windshare_linux_assert_ext4_ancestry() {
+windshare_linux_assert_release_parent() {
   local candidate="$1"
   local label="$2"
   local receiver_uid
   local resolved
-  local current
-  local owner_uid
   local mode
-  local mode_value
-  local filesystem_magic
 
   if [ "$(uname -s)" != "Linux" ]; then
     echo "$label is meaningful only on Linux" >&2
@@ -30,48 +25,19 @@ windshare_linux_assert_ext4_ancestry() {
   fi
   receiver_uid="$(id -u)"
   if [ "$receiver_uid" -eq 0 ]; then
-    echo "$label must be owned and exercised by an unprivileged receiver" >&2
+    echo "$label must be exercised by an unprivileged receiver" >&2
     return 1
   fi
   resolved="$(windshare_linux_physical_directory "$candidate")" || return 1
-  owner_uid="$(stat -c '%u' -- "$resolved")" || return 1
-  if [ "$owner_uid" -ne "$receiver_uid" ]; then
+  if [ "$(stat -c '%u' -- "$resolved")" -ne "$receiver_uid" ]; then
     echo "$label is not owned by the receiver: $resolved" >&2
     return 1
   fi
-
-  current="$resolved"
-  while :; do
-    if [ ! -d "$current" ] || [ -L "$current" ]; then
-      echo "$label ancestry is not a no-follow directory: $current" >&2
-      return 1
-    fi
-    owner_uid="$(stat -c '%u' -- "$current")" || return 1
-    if [ "$owner_uid" -ne 0 ] && [ "$owner_uid" -ne "$receiver_uid" ]; then
-      echo "$label ancestry is owned by another unprivileged user: $current" >&2
-      return 1
-    fi
-    mode="$(stat -c '%a' -- "$current")" || return 1
-    if [[ ! "$mode" =~ ^[0-7]{3,4}$ ]]; then
-      echo "$label ancestry has an unparseable mode at $current: $mode" >&2
-      return 1
-    fi
-    mode_value=$((8#$mode))
-    if (( (mode_value & 0022) != 0 )); then
-      echo "$label ancestry grants group/other write authority: $current ($mode)" >&2
-      return 1
-    fi
-    filesystem_magic="$(stat -f -c '%t' -- "$current")" || return 1
-    if [ "${filesystem_magic,,}" != "ef53" ]; then
-      echo "$label ancestry is not ext4 at $current (magic $filesystem_magic)" >&2
-      return 1
-    fi
-    if [ "$current" = "/" ]; then
-      break
-    fi
-    current="$(dirname -- "$current")"
-  done
-
+  mode="$(stat -c '%a' -- "$resolved")" || return 1
+  if [[ ! "$mode" =~ ^[0-7]{3,4}$ ]] || (( (8#$mode & 0022) != 0 )); then
+    echo "$label grants group/other write authority: $resolved ($mode)" >&2
+    return 1
+  fi
   printf '%s\n' "$resolved"
 }
 
@@ -122,12 +88,12 @@ windshare_linux_remove_release_root() {
     echo "refusing to remove a Linux native fixture with unproven loop detachment: $candidate" >&2
     return 1
   fi
-  windshare_linux_assert_ext4_ancestry \
+  windshare_linux_assert_release_parent \
     "$expected_parent" "Linux release cleanup parent" >/dev/null || return 1
   resolved_candidate="$(
     windshare_linux_assert_owned_release_root "$candidate" "$expected_parent"
   )" || return 1
-  windshare_linux_assert_ext4_ancestry \
+  windshare_linux_assert_release_parent \
     "$resolved_candidate" "Linux release cleanup root" >/dev/null || return 1
   rm -rf -- "$resolved_candidate"
 }
@@ -141,7 +107,7 @@ windshare_linux_prepare_release_environment() {
 
   workspace_root="$(dirname -- "$repository_root")"
   workspace_root="$(
-    windshare_linux_assert_ext4_ancestry "$workspace_root" "Linux release workspace"
+    windshare_linux_assert_release_parent "$workspace_root" "Linux release workspace"
   )" || return 1
   unresolved_release_root="$(
     mktemp -d "$workspace_root/.windshare-release.XXXXXXXX"
@@ -156,7 +122,7 @@ windshare_linux_prepare_release_environment() {
     windshare_linux_remove_release_root "$unresolved_release_root" "$workspace_root" || true
     return 1
   }
-  if ! windshare_linux_assert_ext4_ancestry "$release_root" "Linux release temp root" >/dev/null; then
+  if ! windshare_linux_assert_release_parent "$release_root" "Linux release temp root" >/dev/null; then
     windshare_linux_remove_release_root "$release_root" "$workspace_root" || true
     return 1
   fi

@@ -28,9 +28,7 @@ type retainedCandidateFixture struct {
 	fileSeed  byte
 }
 
-func runRetainedCandidateFacadeProof(t *testing.T) {
-	t.Helper()
-
+func TestNativeOutputRetainedCandidateListAndReopen(t *testing.T) {
 	listFixture := newRetainedCandidateFixture(t, "list-from-candidate", 0x71)
 	listResume := listRetainedCandidate(t, listFixture)
 	assertRetainedCandidatePromoted(t, listFixture)

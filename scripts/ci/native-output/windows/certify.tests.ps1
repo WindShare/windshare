@@ -115,19 +115,19 @@ if ($requiredSelectors.Count -ne 2) {
 $coreSelector = @($requiredSelectors | Where-Object {
     $_.PackageArgument -ceq './osfs'
 })
-$outputWindowsSelector = @($requiredSelectors | Where-Object {
-    $_.PackageArgument -ceq './osfs/internal/outputwindows'
+$portableSelector = @($requiredSelectors | Where-Object {
+    $_.PackageArgument -ceq './osfs/internal/outputportable'
 })
 if ($coreSelector.Count -ne 1 -or
-    $outputWindowsSelector.Count -ne 1 -or
+    $portableSelector.Count -ne 1 -or
     (Get-WindowsNativeRequiredTestExpression -TestNames $coreSelector[0].TestNames) -cne
-        '^(TestWindowsNTFSNativeIdentityScheme|TestWindowsNTFSProcessRestartRecovery|TestWindowsNTFSRetainedCandidateListAndReopen)$' -or
-    (Get-WindowsNativeRequiredTestExpression -TestNames $outputWindowsSelector[0].TestNames) -cne
-        '^(TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment|TestWindowsRecoveryDurabilityOrdinaryStageSync)$') {
+        '^(TestNativeOutputDestinationCapabilities|TestNativeOutputProcessRestartKeepsRanges|TestNativeOutputRetainedCandidateListAndReopen|TestNativeLiveOutputPublishesWithoutRecoveryAuthority)$' -or
+    (Get-WindowsNativeRequiredTestExpression -TestNames $portableSelector[0].TestNames) -cne
+        '^(TestTaskLockIsProcessExclusiveAndRecoversAfterExit|TestOrdinaryFilesPublishWithoutLinksAndNeverOverwrite|TestWindowsModifiedTimePreservesNativePrecisionAndHandleIdentity)$') {
     throw 'required native tests are not bound to their owning package selectors'
 }
 $requiredTests = @($requiredSelectors | ForEach-Object { $_.TestNames })
-$mutexTestName = 'TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment'
+$lockTestName = 'TestTaskLockIsProcessExclusiveAndRecoversAfterExit'
 
 $profilePolicySID = 'S-1-5-21-4000000001-4000000002-4000000003-4000000004'
 $profileDeleteCodes = [Collections.Generic.Queue[int]]::new()
@@ -636,16 +636,20 @@ $passingEvents = @($requiredTests | ForEach-Object {
     [pscustomobject]@{ Action = 'pass'; Test = $_; Package = 'example/osfs' }
 }) + [pscustomobject]@{ Action = 'pass'; Package = 'example/osfs' }
 $jsonEvents = @(ConvertFrom-WindowsNativeTestJSONLines -Lines @(
-    '{"Action":"run","Test":"TestWindowsNTFSNativeIdentityScheme"}',
-    '{"Action":"pass","Test":"TestWindowsNTFSNativeIdentityScheme"}',
-    '{"Action":"run","Test":"TestWindowsNTFSProcessRestartRecovery"}',
-    '{"Action":"pass","Test":"TestWindowsNTFSProcessRestartRecovery"}',
-    '{"Action":"run","Test":"TestWindowsNTFSRetainedCandidateListAndReopen"}',
-    '{"Action":"pass","Test":"TestWindowsNTFSRetainedCandidateListAndReopen"}',
-    '{"Action":"run","Test":"TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment"}',
-    '{"Action":"pass","Test":"TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment"}',
-    '{"Action":"run","Test":"TestWindowsRecoveryDurabilityOrdinaryStageSync"}',
-    '{"Action":"pass","Test":"TestWindowsRecoveryDurabilityOrdinaryStageSync"}'
+    '{"Action":"run","Test":"TestNativeOutputDestinationCapabilities"}',
+    '{"Action":"pass","Test":"TestNativeOutputDestinationCapabilities"}',
+    '{"Action":"run","Test":"TestNativeOutputProcessRestartKeepsRanges"}',
+    '{"Action":"pass","Test":"TestNativeOutputProcessRestartKeepsRanges"}',
+    '{"Action":"run","Test":"TestNativeOutputRetainedCandidateListAndReopen"}',
+    '{"Action":"pass","Test":"TestNativeOutputRetainedCandidateListAndReopen"}',
+    '{"Action":"run","Test":"TestNativeLiveOutputPublishesWithoutRecoveryAuthority"}',
+    '{"Action":"pass","Test":"TestNativeLiveOutputPublishesWithoutRecoveryAuthority"}',
+    '{"Action":"run","Test":"TestTaskLockIsProcessExclusiveAndRecoversAfterExit"}',
+    '{"Action":"pass","Test":"TestTaskLockIsProcessExclusiveAndRecoversAfterExit"}',
+    '{"Action":"run","Test":"TestOrdinaryFilesPublishWithoutLinksAndNeverOverwrite"}',
+    '{"Action":"pass","Test":"TestOrdinaryFilesPublishWithoutLinksAndNeverOverwrite"}',
+    '{"Action":"run","Test":"TestWindowsModifiedTimePreservesNativePrecisionAndHandleIdentity"}',
+    '{"Action":"pass","Test":"TestWindowsModifiedTimePreservesNativePrecisionAndHandleIdentity"}'
 ))
 Assert-WindowsNativeTestEvents -ExitCode 0 -Events $jsonEvents -RequiredTests $requiredTests
 Assert-Throws 'invalid JSON event' {
@@ -673,46 +677,46 @@ Assert-Throws 'package skip' {
     }
     Assert-WindowsNativeTestEvents -ExitCode 0 -Events $events -RequiredTests $requiredTests
 }
-Assert-Throws 'missing mutex evidence' {
+Assert-Throws 'missing lock evidence' {
     $events = @($passingEvents | Where-Object {
         $testProperty = $_.PSObject.Properties['Test']
         $testName = if ($null -eq $testProperty) { '' } else { [string]$testProperty.Value }
-        $testName -cne $mutexTestName
+        $testName -cne $lockTestName
     })
     Assert-WindowsNativeTestEvents -ExitCode 0 -Events $events -RequiredTests $requiredTests
 }
-Assert-Throws 'missing mutex top-level run' {
+Assert-Throws 'missing lock top-level run' {
     $events = @($passingEvents | Where-Object {
         $testProperty = $_.PSObject.Properties['Test']
         $testName = if ($null -eq $testProperty) { '' } else { [string]$testProperty.Value }
-        -not ($_.Action -ceq 'run' -and $testName -ceq $mutexTestName)
+        -not ($_.Action -ceq 'run' -and $testName -ceq $lockTestName)
     })
     Assert-WindowsNativeTestEvents -ExitCode 0 -Events $events -RequiredTests $requiredTests
 }
-Assert-Throws 'missing mutex top-level pass' {
+Assert-Throws 'missing lock top-level pass' {
     $events = @($passingEvents | Where-Object {
         $testProperty = $_.PSObject.Properties['Test']
         $testName = if ($null -eq $testProperty) { '' } else { [string]$testProperty.Value }
-        -not ($_.Action -ceq 'pass' -and $testName -ceq $mutexTestName)
+        -not ($_.Action -ceq 'pass' -and $testName -ceq $lockTestName)
     })
     Assert-WindowsNativeTestEvents -ExitCode 0 -Events $events -RequiredTests $requiredTests
 }
-Assert-Throws 'skipped mutex test' {
+Assert-Throws 'skipped lock test' {
     $events = @($passingEvents) + [pscustomobject]@{
         Action = 'skip'
-        Test = $mutexTestName
+        Test = $lockTestName
         Package = 'example/osfs'
     }
     Assert-WindowsNativeTestEvents -ExitCode 0 -Events $events -RequiredTests $requiredTests
 }
-Assert-Throws 'failed mutex test' {
+Assert-Throws 'failed lock test' {
     $events = @($passingEvents | Where-Object {
         $testProperty = $_.PSObject.Properties['Test']
         $testName = if ($null -eq $testProperty) { '' } else { [string]$testProperty.Value }
-        -not ($_.Action -ceq 'pass' -and $testName -ceq $mutexTestName)
+        -not ($_.Action -ceq 'pass' -and $testName -ceq $lockTestName)
     }) + [pscustomobject]@{
         Action = 'fail'
-        Test = $mutexTestName
+        Test = $lockTestName
         Package = 'example/osfs'
     }
     Assert-WindowsNativeTestEvents -ExitCode 0 -Events $events -RequiredTests $requiredTests
@@ -728,16 +732,16 @@ Assert-Throws 'missing top-level pass' {
 Assert-Throws 'empty JSON event stream' {
     Assert-WindowsNativeTestEvents -ExitCode 0 -Events @() -RequiredTests $requiredTests
 }
-Assert-ThrowsContaining 'zero-test package selector' 'selector ran zero tests: package=./osfs/internal/outputwindows' {
+Assert-ThrowsContaining 'zero-test package selector' 'selector ran zero tests: package=./osfs/internal/outputportable' {
     Assert-WindowsNativeTestEvents `
         -ExitCode 0 `
         -Events @(
-            [pscustomobject]@{ Action = 'start'; Package = 'example/outputwindows' },
-            [pscustomobject]@{ Action = 'pass'; Package = 'example/outputwindows' }
+            [pscustomobject]@{ Action = 'start'; Package = 'example/outputportable' },
+            [pscustomobject]@{ Action = 'pass'; Package = 'example/outputportable' }
         ) `
-        -RequiredTests @('TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment') `
-        -SelectorPackage './osfs/internal/outputwindows' `
-        -SelectorExpression '^(TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment)$'
+        -RequiredTests @('TestTaskLockIsProcessExclusiveAndRecoversAfterExit') `
+        -SelectorPackage './osfs/internal/outputportable' `
+        -SelectorExpression '^(TestTaskLockIsProcessExclusiveAndRecoversAfterExit)$'
 }
 
 

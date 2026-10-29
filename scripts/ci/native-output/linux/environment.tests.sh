@@ -52,7 +52,7 @@ case "$TMPDIR" in
 esac
 windshare_linux_assert_private_directory "$release_root" "test certification root"
 windshare_linux_assert_private_directory "$TMPDIR" "test TMPDIR"
-windshare_linux_assert_ext4_ancestry "$TMPDIR" "test TMPDIR" >/dev/null
+windshare_linux_assert_release_parent "$TMPDIR" "test TMPDIR" >/dev/null
 
 probe="$(mktemp -d "$TMPDIR/contract.XXXXXXXX")"
 windshare_linux_assert_private_directory "$probe" "mktemp child"
@@ -61,7 +61,7 @@ rmdir -- "$probe"
 unsafe_base="$WINDSHARE_LINUX_RELEASE_TEMP_PARENT/.windshare-linux-unsafe.$BASHPID"
 install -d -m 0700 -- "$unsafe_base"
 chmod 0770 -- "$unsafe_base"
-if windshare_linux_assert_ext4_ancestry "$unsafe_base" "unsafe-mode fixture" >/dev/null 2>&1; then
+if windshare_linux_assert_release_parent "$unsafe_base" "unsafe-mode fixture" >/dev/null 2>&1; then
   fail "group-writable ancestry passed validation"
 fi
 chmod 0700 -- "$unsafe_base"
@@ -93,19 +93,22 @@ echo "-- Linux loop-ext4 certification contract"
 certifier="scripts/ci/native-output/linux/certify.sh"
 root_worker="scripts/ci/native-output/linux/root-worker.sh"
 assert_contains "$certifier" 'compile_static_test_binary ./osfs "$osfs_test_binary"'
-assert_contains "$certifier" 'compile_static_test_binary ./osfs/internal/outputlinux "$outputlinux_test_binary"'
-assert_contains "$certifier" 'mkfs.ext4 -q -F -N 1024 -I 256 -m 0'
+assert_contains "$certifier" 'compile_static_test_binary ./osfs/internal/outputportable "$outputportable_test_binary"'
+assert_contains "$certifier" 'mkfs.ext4 -q -F -I 256 -m 0'
 assert_contains "$certifier" 'sudo -n unshare --mount --propagation private --fork --kill-child'
 assert_contains "$certifier" 'bash "$script_root/root-worker.sh"'
 assert_contains "$certifier" '.windshare-preserve-native-fixture'
-assert_contains "$certifier" 'TestLinuxExt4RestartIdentityRejectsForcedInodeReuse'
-assert_contains "$certifier" 'TestLinuxExt4NativeIdentityScheme'
-assert_contains "$certifier" 'TestLinuxExt4ProcessRestartRecovery'
+assert_contains "$certifier" 'TestTaskLockIsProcessExclusiveAndRecoversAfterExit'
+assert_contains "$certifier" 'TestNativeOutputDestinationCapabilities'
+assert_contains "$certifier" 'TestNativeOutputProcessRestartKeepsRanges'
+assert_contains "$certifier" 'TestNativeOutputRetainedCandidateListAndReopen'
+assert_contains "$certifier" 'TestNativeLiveOutputPublishesWithoutRecoveryAuthority'
+assert_contains "$certifier" 'TestSetModifiedTimePreservesNanosecondsAccessTimeAndHandleIdentity'
 assert_contains "$certifier" '"Action":"skip"'
 assert_contains "$certifier" '"Action":"fail"'
-assert_contains "$root_worker" 'WINDSHARE_LINUX_NATIVE_FIXTURE=loop-ext4-v1'
+assert_contains "$root_worker" 'TMPDIR=/receiver/test-temp'
 assert_contains "$root_worker" '--userspec="$receiver_uid:$receiver_gid"'
 assert_contains "$root_worker" '/test/osfs.test'
-assert_contains "$root_worker" '/test/outputlinux.test'
+assert_contains "$root_worker" '/test/outputportable.test'
 
 echo "Linux native-output environment tests: PASS"

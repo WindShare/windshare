@@ -1,4 +1,4 @@
-//go:build linux
+//go:build windows || linux || darwin
 
 package osfs
 
@@ -20,12 +20,11 @@ import (
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 	"github.com/windshare/windshare/osfs/internal/outputruntime"
-	"golang.org/x/sys/unix"
 )
 
-func TestLinuxTmpfsNativeAdapterPublishesWithoutRecoveryAuthority(t *testing.T) {
+func TestNativeLiveOutputPublishesWithoutRecoveryAuthority(t *testing.T) {
 	t.Parallel()
-	root := linuxPublicTmpfsRoot(t)
+	root := t.TempDir()
 	stale := filepath.Join(root, ".windshare-output")
 	if err := os.Mkdir(stale, 0o700); err != nil {
 		t.Fatal(err)
@@ -42,7 +41,7 @@ func TestLinuxTmpfsNativeAdapterPublishesWithoutRecoveryAuthority(t *testing.T) 
 			capabilities = event.DestinationCapabilities
 		}
 	})
-	authority, intent, session, rootAdmission := openLinuxPublicLiveOperation(t, root, trace)
+	authority, intent, session, rootAdmission := openPublicLiveOperation(t, root, trace)
 	resultRoot := nativeDirectTreeResultRoot(t, root, intent)
 	payload := []byte("native live output")
 	file := nativeDirectTreeTestFile(t, session, intent, 0x41, "download.bin", uint64(len(payload)), rootAdmission)
@@ -57,21 +56,22 @@ func TestLinuxTmpfsNativeAdapterPublishesWithoutRecoveryAuthority(t *testing.T) 
 	if _, err := os.Stat(filepath.Join(resultRoot, "download.bin")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("unverified content acquired a public name: %v", err)
 	}
-	names := linuxPublicLiveStageNames(t, root)
+	names := publicLiveStageNames(t, root)
 	if len(names) != 1 {
 		t.Fatalf("active process stage count=%d", len(names))
 	}
 	// A test-owned handle pins the original object while production releases its
 	// stage. Identity comparison must still detect an accidental publication copy.
-	witness, err := os.Open(filepath.Join(root, names[0], "partial"))
+	witnessPlatform, err := openNativeOutputPlatform(filepath.Join(root, names[0]), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer witnessPlatform.Close()
+	witness, err := witnessPlatform.Root().OpenObservedFile("partial", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer witness.Close()
-	stageInfo, err := witness.Stat()
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err := transaction.WriteRange(context.Background(), 0, payload); err != nil {
 		t.Fatal(err)
 	}
@@ -84,12 +84,21 @@ func TestLinuxTmpfsNativeAdapterPublishesWithoutRecoveryAuthority(t *testing.T) 
 	if settlement, err := transaction.Commit(context.Background()); err != nil || settlement.Kind() != transfer.FilePublished {
 		t.Fatalf("live publication=%v error=%v", settlement.Kind(), err)
 	}
-	if names := linuxPublicLiveStageNames(t, root); len(names) != 0 {
+	if names := publicLiveStageNames(t, root); len(names) != 0 {
 		t.Fatalf("published file retained its private process stage: %v", names)
 	}
-	finalInfo, err := os.Stat(filepath.Join(resultRoot, "download.bin"))
-	if err != nil || !os.SameFile(stageInfo, finalInfo) {
-		t.Fatalf("publication changed the owned data object: %v", err)
+	finalPlatform, err := openNativeOutputPlatform(resultRoot, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer finalPlatform.Close()
+	delivered, err := finalPlatform.Root().OpenObservedFile("download.bin", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer delivered.Close()
+	if same, err := witness.SameFile(delivered); err != nil || !same {
+		t.Fatalf("publication changed the owned data object: same=%t err=%v", same, err)
 	}
 
 	// Install a collision after admission so the final no-replace primitive,
@@ -131,7 +140,7 @@ func TestLinuxTmpfsNativeAdapterPublishesWithoutRecoveryAuthority(t *testing.T) 
 	if got, err := os.ReadFile(filepath.Join(stale, "foreign")); err != nil || string(got) != "untouched" {
 		t.Fatalf("uncertified stale control changed=%q error=%v", got, err)
 	}
-	if names := linuxPublicLiveStageNames(t, root); len(names) != 0 {
+	if names := publicLiveStageNames(t, root); len(names) != 0 {
 		t.Fatalf("settlement left live stage directories: %v", names)
 	}
 	traceMu.Lock()
@@ -142,10 +151,10 @@ func TestLinuxTmpfsNativeAdapterPublishesWithoutRecoveryAuthority(t *testing.T) 
 	}
 }
 
-func TestLinuxTmpfsNativeAdapterPauseRetainsStageUntilOperationClose(t *testing.T) {
+func TestNativeLiveOutputPauseRetainsStageUntilOperationClose(t *testing.T) {
 	t.Parallel()
-	root := linuxPublicTmpfsRoot(t)
-	authority, intent, session, rootAdmission := openLinuxPublicLiveOperation(t, root, nil)
+	root := t.TempDir()
+	authority, intent, session, rootAdmission := openPublicLiveOperation(t, root, nil)
 	resultRoot := nativeDirectTreeResultRoot(t, root, intent)
 	file := nativeDirectTreeTestFile(t, session, intent, 0x51, "partial.bin", 8, rootAdmission)
 	start, err := session.BeginFile(context.Background(), file)
@@ -165,13 +174,13 @@ func TestLinuxTmpfsNativeAdapterPauseRetainsStageUntilOperationClose(t *testing.
 	if _, err := session.PauseTree(context.Background(), transfer.JobPauseInterrupted); err != nil {
 		t.Fatal(err)
 	}
-	if names := linuxPublicLiveStageNames(t, root); len(names) != 1 {
+	if names := publicLiveStageNames(t, root); len(names) != 1 {
 		t.Fatalf("paused operation lost its retryable stage: %v", names)
 	}
 	if err := authority.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if names := linuxPublicLiveStageNames(t, root); len(names) != 0 {
+	if names := publicLiveStageNames(t, root); len(names) != 0 {
 		t.Fatalf("operation exit retained owned stages: %v", names)
 	}
 	if _, err := os.Stat(filepath.Join(resultRoot, "partial.bin")); !errors.Is(err, os.ErrNotExist) {
@@ -182,10 +191,10 @@ func TestLinuxTmpfsNativeAdapterPauseRetainsStageUntilOperationClose(t *testing.
 	}
 }
 
-func TestLinuxTmpfsNativeAdapterDoesNotAdoptPreviousProcessStage(t *testing.T) {
-	const childRootEnvironment = "WINDSHARE_TMPFS_PROCESS_STAGE_ROOT"
+func TestNativeLiveOutputDoesNotAdoptPreviousProcessStage(t *testing.T) {
+	const childRootEnvironment = "WINDSHARE_LIVE_PROCESS_STAGE_ROOT"
 	if root := os.Getenv(childRootEnvironment); root != "" {
-		_, intent, session, admission := openLinuxPublicLiveOperation(t, root, nil)
+		_, intent, session, admission := openPublicLiveOperation(t, root, nil)
 		file := nativeDirectTreeTestFile(t, session, intent, 0x61, "interrupted.bin", 8, admission)
 		start, err := session.BeginFile(context.Background(), file)
 		if err != nil {
@@ -203,7 +212,7 @@ func TestLinuxTmpfsNativeAdapterDoesNotAdoptPreviousProcessStage(t *testing.T) {
 		os.Exit(0)
 	}
 	t.Parallel()
-	root := linuxPublicTmpfsRoot(t)
+	root := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	child := exec.CommandContext(ctx, os.Args[0], "-test.run=^"+t.Name()+"$")
@@ -211,7 +220,7 @@ func TestLinuxTmpfsNativeAdapterDoesNotAdoptPreviousProcessStage(t *testing.T) {
 	if output, err := child.CombinedOutput(); err != nil {
 		t.Fatalf("process-stage child failed: %v\n%s", err, output)
 	}
-	before := linuxPublicLiveStageNames(t, root)
+	before := publicLiveStageNames(t, root)
 	if len(before) != 1 {
 		t.Fatalf("abrupt exit stage count=%d", len(before))
 	}
@@ -220,7 +229,7 @@ func TestLinuxTmpfsNativeAdapterDoesNotAdoptPreviousProcessStage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := newLinuxNativeOutputAuthority(root, nil)
+	reopened, err := newLiveOutputAuthority(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +237,7 @@ func TestLinuxTmpfsNativeAdapterDoesNotAdoptPreviousProcessStage(t *testing.T) {
 	if mode, err := reopened.BindDestination(context.Background()); err != nil || !mode.LiveOnly() {
 		t.Fatalf("reopened process-only root: mode=%+v error=%v", mode, err)
 	}
-	if after := linuxPublicLiveStageNames(t, root); !slices.Equal(after, before) {
+	if after := publicLiveStageNames(t, root); !slices.Equal(after, before) {
 		t.Fatalf("rebind adopted old stages: before=%v after=%v", before, after)
 	}
 	if contentAfter, err := os.ReadFile(path); err != nil || string(contentAfter) != string(contentBefore) {
@@ -236,26 +245,7 @@ func TestLinuxTmpfsNativeAdapterDoesNotAdoptPreviousProcessStage(t *testing.T) {
 	}
 }
 
-func linuxPublicTmpfsRoot(t *testing.T) string {
-	t.Helper()
-	const tmpfsRoot = "/dev/shm"
-	var filesystem unix.Statfs_t
-	if err := unix.Statfs(tmpfsRoot, &filesystem); err != nil || filesystem.Type != unix.TMPFS_MAGIC {
-		t.Skipf("native tmpfs fixture unavailable: %v", err)
-	}
-	root, err := os.MkdirTemp(tmpfsRoot, "windshare-public-live-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := os.RemoveAll(root); err != nil {
-			t.Error(err)
-		}
-	})
-	return root
-}
-
-func linuxPublicLiveStageNames(t *testing.T, root string) []string {
+func publicLiveStageNames(t *testing.T, root string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -271,12 +261,12 @@ func linuxPublicLiveStageNames(t *testing.T, root string) []string {
 	return names
 }
 
-func openLinuxPublicLiveOperation(
+func openPublicLiveOperation(
 	t *testing.T, root string, tracer FilesystemOutputTracer,
 ) (*FilesystemOutputAuthority, transfer.ReceiveIntent, transfer.DirectTreeSession, transfer.DirectoryAdmission) {
 	t.Helper()
 	ctx := context.Background()
-	authority, err := newLinuxNativeOutputAuthority(root, tracer)
+	authority, err := newLiveOutputAuthority(root, tracer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +276,7 @@ func openLinuxPublicLiveOperation(
 		}
 	})
 	if mode, err := authority.BindDestination(ctx); err != nil || !mode.Valid() || !mode.LiveOnly() || mode.Resumable() {
-		t.Fatalf("tmpfs failed public live admission: mode=%+v error=%v", mode, err)
+		t.Fatalf("destination failed live admission: mode=%+v error=%v", mode, err)
 	}
 	rules, err := transfer.NewSelectionRules(true, nil)
 	if err != nil {
@@ -337,18 +327,47 @@ func openLinuxPublicLiveOperation(
 	return authority, intent, session, admission
 }
 
-// The optional native adapter still needs live-only coverage independently of
-// the default portable adapter, which retains process-restart state on tmpfs.
-func newLinuxNativeOutputAuthority(root string, tracer FilesystemOutputTracer) (*FilesystemOutputAuthority, error) {
+// Loss of recovery must not revoke proven publication. Inject only capability
+// loss so these contracts exercise the production file operations on every host.
+func newLiveOutputAuthority(root string, tracer FilesystemOutputTracer) (*FilesystemOutputAuthority, error) {
 	var projected outputruntime.FilesystemOutputTracer
 	if tracer != nil {
 		projected = outputRuntimeTracer{target: tracer}
 	}
 	authority, err := outputruntime.New(outputruntime.Config{
-		RootPath: root, Tracer: projected, PlatformFactory: openStrongNativeOutputPlatform,
+		RootPath: root, Tracer: projected, PlatformFactory: openLiveOnlyPlatform,
 	})
 	if err != nil {
 		return nil, err
 	}
 	return &FilesystemOutputAuthority{authority: authority}, nil
+}
+
+type liveOnlyPlatform struct {
+	outputcap.Platform
+	capabilities outputcap.DestinationCapabilities
+}
+
+func (platform liveOnlyPlatform) DestinationCapabilities() (outputcap.DestinationCapabilities, error) {
+	return platform.capabilities, nil
+}
+
+func openLiveOnlyPlatform(path string, create bool) (outputcap.Platform, error) {
+	platform, err := openNativeOutputPlatform(path, create)
+	if err != nil {
+		return nil, err
+	}
+	source := platform.(interface {
+		DestinationCapabilities() (outputcap.DestinationCapabilities, error)
+	})
+	facts, err := source.DestinationCapabilities()
+	if err != nil {
+		return nil, errors.Join(err, platform.Close())
+	}
+	unsupported, _ := outputcap.UnsupportedCapability(outputcap.CapabilityReasonUnsupportedFilesystem)
+	capabilities, err := outputcap.NewDestinationCapabilities(facts.SafePublish(), unsupported, unsupported, unsupported)
+	if err != nil {
+		return nil, errors.Join(err, platform.Close())
+	}
+	return liveOnlyPlatform{Platform: platform, capabilities: capabilities}, nil
 }

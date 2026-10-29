@@ -5,16 +5,18 @@ $script:RequiredWindowsNativeTestSelectors = @(
     [pscustomobject]@{
         PackageArgument = './osfs'
         TestNames = @(
-            'TestWindowsNTFSNativeCertification',
-            'TestWindowsNTFSProcessRestartRecovery',
-            'TestWindowsNTFSRetainedCandidateListAndReopen'
+            'TestNativeOutputDestinationCapabilities',
+            'TestNativeOutputProcessRestartKeepsRanges',
+            'TestNativeOutputRetainedCandidateListAndReopen',
+            'TestNativeLiveOutputPublishesWithoutRecoveryAuthority'
         )
     },
     [pscustomobject]@{
-        PackageArgument = './osfs/internal/outputwindows'
+        PackageArgument = './osfs/internal/outputportable'
         TestNames = @(
-            'TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment',
-            'TestWindowsRecoveryDurabilityOrdinaryStageSync'
+            'TestTaskLockIsProcessExclusiveAndRecoversAfterExit',
+            'TestOrdinaryFilesPublishWithoutLinksAndNeverOverwrite',
+            'TestWindowsModifiedTimePreservesNativePrecisionAndHandleIdentity'
         )
     }
 )
