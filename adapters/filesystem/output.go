@@ -71,9 +71,11 @@ func (a *filesystemOutputAuthority) SelectOperation(ctx context.Context, s trans
 		lookup.Attention = reason
 	}
 	switch native.Kind() {
-	case osfs.FilesystemOutputLookupMiss:
-		lookup.Kind = output.OutputLookupMiss
+	case osfs.FilesystemOutputLookupCreateReady:
+		lookup.Kind = output.OutputLookupCreateReady
 		lookup.Reservation = filesystemReservation{authority: a.native, lookup: native, rootPath: a.rootPath}
+	case osfs.FilesystemOutputLookupNotFound:
+		lookup.Kind = output.OutputLookupNotFound
 	case osfs.FilesystemOutputLookupReopened:
 		lookup.Kind = output.OutputLookupReopened
 		lookup.Operation, err = filesystemOperation(a.native, native.Operation(), a.rootPath)

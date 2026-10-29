@@ -91,7 +91,7 @@ func TestNativeIdentityAndAdapterBranchesRemainFailClosed(t *testing.T) {
 		(ExecutionMode{}).Valid() {
 		t.Fatal("execution mode validity changed")
 	}
-	for kind := ActiveLookupMiss; kind <= ActiveLookupAmbiguous; kind++ {
+	for kind := ActiveLookupCreateReady; kind <= ActiveLookupAmbiguous; kind++ {
 		if !kind.Valid() {
 			t.Fatalf("lookup kind %d is invalid", kind)
 		}
@@ -110,7 +110,7 @@ func TestNativeIdentityAndAdapterBranchesRemainFailClosed(t *testing.T) {
 		executionMutationCut(transferfault.Wrap(ambiguous, errors.New("uncertain publish"))) != outputsession.MutationAmbiguous {
 		t.Fatal("file execution mutation cut changed")
 	}
-	if operation := (ActiveLookup{kind: ActiveLookupMiss}).Operation(); operation != nil {
+	if operation := (ActiveLookup{kind: ActiveLookupCreateReady}).Operation(); operation != nil {
 		t.Fatalf("miss exposed operation %T", operation)
 	}
 	if err := (&Operation{}).close(); err != nil {

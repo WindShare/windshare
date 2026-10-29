@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"os"
 	"syscall"
-	"time"
 
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 	"golang.org/x/sys/unix"
@@ -36,10 +35,6 @@ func syncDirectory(f *os.File) error {
 		return nil
 	}
 	return err
-}
-func setFileTimes(f *file, t time.Time) error {
-	times := []unix.Timeval{unix.NsecToTimeval(t.UnixNano()), unix.NsecToTimeval(t.UnixNano())}
-	return unix.Futimes(int(f.handle.Fd()), times)
 }
 func lockFile(f *os.File) (func() error, error) {
 	err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)

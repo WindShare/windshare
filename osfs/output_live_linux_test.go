@@ -298,7 +298,7 @@ func openLinuxPublicLiveOperation(
 		t.Fatal(err)
 	}
 	lookup, err := authority.LookupActive(ctx, selection)
-	if err != nil || lookup.Kind() != FilesystemOutputLookupMiss {
+	if err != nil || lookup.Kind() != FilesystemOutputLookupCreateReady {
 		t.Fatalf("lookup=%+v error=%v", lookup, err)
 	}
 	artifact, err := receivecontract.NewResultRootDirectoryTree(receivecontract.NewSyntheticSelectionResultRoot())

@@ -126,11 +126,15 @@ func (authority *Authority) SelectOperation(ctx context.Context, selection trans
 	}
 	switch registryLookup.State() {
 	case checkpointstore.ActiveLookupNone:
+		if selector.Kind() == receivecontract.OperationByID {
+			authority.stage = authorityStageLookupStopped
+			return ActiveLookup{authority: authority, kind: ActiveLookupNotFound}, nil
+		}
 		admission := &heldAdmission{
 			key: key, selection: selection, durable: &activeAdmission, operationID: operationID,
 		}
 		authority.admission, authority.stage = admission, authorityStageLookupHeld
-		return ActiveLookup{authority: authority, kind: ActiveLookupMiss, admission: admission}, nil
+		return ActiveLookup{authority: authority, kind: ActiveLookupCreateReady, admission: admission}, nil
 	case checkpointstore.ActiveLookupReopenable:
 		operation, stateReason, err := authority.reopenOperationLocked(ctx, selection, key, &registryLookup)
 		if err != nil {
@@ -186,7 +190,7 @@ func (authority *Authority) selectLiveOperationLocked(selection transfer.Selecti
 	}
 	admission := &heldAdmission{key: key, selection: selection, volatile: claimer, operationID: operationID}
 	authority.admission, authority.stage = admission, authorityStageLookupHeld
-	return ActiveLookup{authority: authority, kind: ActiveLookupMiss, admission: admission}, nil
+	return ActiveLookup{authority: authority, kind: ActiveLookupCreateReady, admission: admission}, nil
 }
 
 func (authority *Authority) reopenOperationLocked(
@@ -288,7 +292,7 @@ func (authority *Authority) CreateOperation(
 	authority.mu.Lock()
 	defer authority.mu.Unlock()
 	if authority.closed || authority.stage != authorityStageLookupHeld ||
-		lookup.authority != authority || lookup.kind != ActiveLookupMiss ||
+		lookup.authority != authority || lookup.kind != ActiveLookupCreateReady ||
 		lookup.admission == nil || lookup.admission != authority.admission ||
 		!validNamedArtifact(artifact) {
 		return nil, transfer.ErrInvalidOutputBinding

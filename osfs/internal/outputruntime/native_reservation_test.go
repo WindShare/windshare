@@ -47,7 +47,7 @@ func TestStagedAuthorityCreatesAndExactlyReopensNamedOperation(t *testing.T) {
 				t.Fatalf("bind mode = (%+v, %v)", mode, err)
 			}
 			lookup, err := first.LookupActive(context.Background(), selection)
-			if err != nil || lookup.Kind() != ActiveLookupMiss {
+			if err != nil || lookup.Kind() != ActiveLookupCreateReady {
 				t.Fatalf("initial lookup = (%d, %v)", lookup.Kind(), err)
 			}
 			operation, err := first.CreateOperation(context.Background(), lookup, artifact)
@@ -390,7 +390,7 @@ func TestStagedAuthorityLiveOnlyNeverOpensOperationRegistry(t *testing.T) {
 		t.Fatal(err)
 	}
 	lookup, err := authority.LookupActive(context.Background(), selection)
-	if err != nil || lookup.Kind() != ActiveLookupMiss {
+	if err != nil || lookup.Kind() != ActiveLookupCreateReady {
 		t.Fatalf("live lookup = (%d, %v)", lookup.Kind(), err)
 	}
 	operation, err := authority.CreateOperation(context.Background(), lookup, artifact)
