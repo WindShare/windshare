@@ -91,10 +91,8 @@ func (binding OutputRootBinding) IsZero() bool {
 }
 
 // DestinationBindingID identifies a retained destination binding. Recoverable
-// bindings derive it from restart-stable native objects; process bindings derive
+// bindings derive it from a durable namespace witness; process bindings derive
 // it from a fresh nonce and cannot use it to reopen a previous operation.
-// Domain separators belong to this encoding: renaming the type must not change
-// which retained binding the same native objects identify.
 type DestinationBindingID [DestinationBindingIDBytes]byte
 
 func NewDestinationBindingID(

@@ -1009,3 +1009,26 @@ var (
 	_ outputcap.MutableFile                = (*portableRuntimeFile)(nil)
 	_ io.ReaderAt                          = (*portableRuntimeFile)(nil)
 )
+
+func (platform *portableRuntimePlatform) BindDestinationIdentity(control outputcap.Directory) (outputcap.DestinationBindingID, error) {
+	rootClaim, err := platform.Root().(*portableRuntimeDirectory).PersistentDirectoryIdentityClaim()
+	if err != nil {
+		return outputcap.DestinationBindingID{}, err
+	}
+	controlClaim, err := control.(*portableRuntimeDirectory).PersistentDirectoryIdentityClaim()
+	if err != nil {
+		return outputcap.DestinationBindingID{}, err
+	}
+	return outputcap.NewDestinationBindingID(rootClaim, controlClaim)
+}
+func (*portableRuntimePlatform) RetireDestinationIdentity(outputcap.Directory, outputcap.DestinationBindingID) error {
+	return nil
+}
+func (directory *portableRuntimeDirectory) CreateRecoveryIdentity() ([]byte, error) {
+	return directory.PersistentDirectoryIdentityClaim()
+}
+func (directory *portableRuntimeDirectory) MatchesRecoveryIdentity(expected []byte) (bool, error) {
+	actual, err := directory.PersistentDirectoryIdentityClaim()
+	return string(actual) == string(expected), err
+}
+func (*portableRuntimeDirectory) RetireRecoveryIdentity([]byte) error { return nil }

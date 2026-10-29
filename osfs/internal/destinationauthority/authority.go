@@ -194,7 +194,7 @@ func BindDestination(config BindConfig) (_ *BoundDestination, resultErr error) {
 			resultErr = errors.Join(resultErr, abortControlUse(control, controlUse), control.Close())
 		}
 	}()
-	id, err := bindDestinationIdentity(config, capabilities, root, control)
+	id, err := bindDestinationIdentity(config, capabilities, control)
 	if err != nil {
 		return nil, err
 	}
@@ -455,37 +455,6 @@ func openExactPrivateDirectory(parent outputcap.Directory, name string) (outputc
 	return opened, nil
 }
 
-func bindIdentityClaims(
-	root outputcap.Directory,
-	control outputcap.Directory,
-) ([]byte, []byte, error) {
-	rootPreparer, rootOK := root.(outputcap.PersistentDirectoryIdentityPreparer)
-	controlPreparer, controlOK := control.(outputcap.PersistentDirectoryIdentityPreparer)
-	if !rootOK || !controlOK {
-		return nil, nil, errors.Join(
-			ErrInvalidConfiguration,
-			errors.New("persistent destination identity is unavailable"),
-		)
-	}
-	// Native Object-ID state is deliberately handle-local. Rehydrating it is
-	// idempotent and lets a fresh process compare the same durable identity;
-	// later authenticated registry binding still rejects copied or replaced roots.
-	rootClaim, rootErr := rootPreparer.PreparePersistentDirectoryIdentityClaim()
-	controlClaim, controlErr := controlPreparer.PreparePersistentDirectoryIdentityClaim()
-	if rootErr != nil || controlErr != nil {
-		return nil, nil, errors.Join(rootErr, controlErr)
-	}
-	return validateIdentityClaims(rootClaim, controlClaim)
-}
-
-func validateIdentityClaims(rootClaim, controlClaim []byte) ([]byte, []byte, error) {
-	if len(rootClaim) == 0 || len(rootClaim) > outputcap.MaxRootIdentityClaimBytes ||
-		len(controlClaim) == 0 || len(controlClaim) > outputcap.MaxNamespaceIdentityClaimBytes {
-		return nil, nil, outputcap.ErrInvalidDestinationBindingID
-	}
-	return rootClaim, controlClaim, nil
-}
-
 func downgradedCleanupCapabilities(
 	capabilities outputcap.DestinationCapabilities,
 	reason outputcap.CapabilityReason,
@@ -554,7 +523,6 @@ func bindProcessDestination(
 func bindDestinationIdentity(
 	config BindConfig,
 	capabilities outputcap.DestinationCapabilities,
-	root outputcap.Directory,
 	control outputcap.Directory,
 ) (outputcap.DestinationBindingID, error) {
 	if !capabilities.OperationRecovery().Supported() {
@@ -562,11 +530,11 @@ func bindDestinationIdentity(
 		// identity must not prevent that independent cleanup lifecycle from working.
 		return processDestinationBindingID(config.ProcessNonceSource)
 	}
-	rootClaim, controlClaim, err := bindIdentityClaims(root, control)
-	if err != nil {
-		return outputcap.DestinationBindingID{}, err
+	provider, ok := config.Platform.(destinationIdentityProvider)
+	if !ok {
+		return outputcap.DestinationBindingID{}, ErrInvalidConfiguration
 	}
-	return outputcap.NewDestinationBindingID(rootClaim, controlClaim)
+	return provider.BindDestinationIdentity(control)
 }
 
 // A root witness transfers to BoundDestination only after its placement guard

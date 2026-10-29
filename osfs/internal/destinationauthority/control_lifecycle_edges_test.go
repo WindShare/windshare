@@ -365,7 +365,7 @@ func TestControlLifecycleReleaseFailureBoundaries(t *testing.T) {
 		root := newDestinationDirectoryNode(newDestinationPlatform())
 		control := newDestinationDirectoryNode(newDestinationPlatform())
 		lease := &controlUseLease{participantName: "unused", participant: &lifecycleFaultLock{}}
-		if err := lease.releaseAndRecycle(root, control, recycleFakePrivateState); !errors.Is(err, ErrControlNamespaceChanged) {
+		if err := lease.releaseAndRecycle(root, control, recycleFakePrivateState, nil); !errors.Is(err, ErrControlNamespaceChanged) {
 			t.Fatalf("release without lifecycle = %v", err)
 		}
 	})
@@ -378,14 +378,14 @@ func TestControlLifecycleReleaseFailureBoundaries(t *testing.T) {
 			t.Fatal(err)
 		}
 		lease := &controlUseLease{participantName: "unused", participant: &lifecycleFaultLock{}}
-		if err := lease.releaseAndRecycle(root, control, recycleFakePrivateState); !errors.Is(err, ErrControlNamespaceChanged) {
+		if err := lease.releaseAndRecycle(root, control, recycleFakePrivateState, nil); !errors.Is(err, ErrControlNamespaceChanged) {
 			t.Fatalf("release without participants = %v", err)
 		}
 	})
 
 	t.Run("nil release is inert", func(t *testing.T) {
 		var lease *controlUseLease
-		if err := lease.releaseAndRecycle(nil, nil, nil); err != nil {
+		if err := lease.releaseAndRecycle(nil, nil, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	})

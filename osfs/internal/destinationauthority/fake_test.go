@@ -534,3 +534,26 @@ func (closer orderedCloser) Close() error {
 	*closer.order = append(*closer.order, "resumable")
 	return nil
 }
+
+func (platform *destinationPlatform) BindDestinationIdentity(control outputcap.Directory) (outputcap.DestinationBindingID, error) {
+	rootClaim, err := platform.Root().(*destinationDirectory).PersistentDirectoryIdentityClaim()
+	if err != nil {
+		return outputcap.DestinationBindingID{}, err
+	}
+	controlClaim, err := control.(*destinationDirectory).PersistentDirectoryIdentityClaim()
+	if err != nil {
+		return outputcap.DestinationBindingID{}, err
+	}
+	return outputcap.NewDestinationBindingID(rootClaim, controlClaim)
+}
+func (*destinationPlatform) RetireDestinationIdentity(outputcap.Directory, outputcap.DestinationBindingID) error {
+	return nil
+}
+func (directory *destinationDirectory) CreateRecoveryIdentity() ([]byte, error) {
+	return directory.PreparePersistentDirectoryIdentityClaim()
+}
+func (directory *destinationDirectory) MatchesRecoveryIdentity(expected []byte) (bool, error) {
+	actual, err := directory.PersistentDirectoryIdentityClaim()
+	return string(actual) == string(expected), err
+}
+func (*destinationDirectory) RetireRecoveryIdentity([]byte) error { return nil }

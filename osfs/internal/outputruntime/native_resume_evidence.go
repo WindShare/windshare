@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io/fs"
 
+	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/osfs/internal/checkpointstore"
 	"github.com/windshare/windshare/osfs/internal/destinationauthority"
@@ -83,4 +84,27 @@ func nativeResumeUncertain(err error) bool {
 	default:
 		return false
 	}
+}
+func (lease *NativeResumeLease) retireTopLevelIdentityLocked() error {
+	record := lease.operation.Record()
+	proof, err := lease.runtime.registry.RecoveryProof(record)
+	if errors.Is(err, fs.ErrNotExist) {
+		// Terminal deletion retires the witness before releasing its claim. A
+		// missing claim is therefore an already-passed cleanup cut.
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	intent, err := record.VerifyIntent(transfer.DecodeReceiveIntent)
+	if err != nil {
+		return err
+	}
+	reservation, ok := intent.MaterializationPlan().DestinationReservation()
+	if !ok || !proof.Valid() {
+		return ErrNativeResumeOwnershipUnknown
+	}
+	return lease.runtime.destination.RetireReservationIdentity(destinationauthority.ExpectedReservation{
+		Reservation: reservation, PersistentIdentityClaim: proof.PersistentIdentity(), MetadataClaim: proof.Claim(),
+	})
 }

@@ -306,7 +306,7 @@ func (authority *BoundDestination) ReopenTopLevel(
 		if openErr != nil {
 			return openErr
 		}
-		claim, claimErr := readPersistentIdentityClaim(directory)
+		claim, claimErr := readPersistentIdentityClaim(directory, expected.PersistentIdentityClaim)
 		if claimErr != nil || !slices.Equal(claim, expected.PersistentIdentityClaim) {
 			return errors.Join(ErrReservationIndeterminate, claimErr, directory.Close())
 		}
@@ -396,11 +396,11 @@ func artifactReservationShape(
 }
 
 func preparePersistentIdentityClaim(directory outputcap.Directory) ([]byte, error) {
-	preparer, ok := directory.(outputcap.PersistentDirectoryIdentityPreparer)
+	provider, ok := directory.(directoryIdentityProvider)
 	if !ok {
-		return nil, errors.Join(ErrInvalidConfiguration, errors.New("persistent directory identity enrollment is unavailable"))
+		return nil, errors.Join(ErrInvalidConfiguration, errors.New("directory recovery identity enrollment is unavailable"))
 	}
-	claim, err := preparer.PreparePersistentDirectoryIdentityClaim()
+	claim, err := provider.CreateRecoveryIdentity()
 	if err != nil || !validPersistentIdentityClaim(claim) {
 		return nil, errors.Join(ErrReservationIndeterminate, err)
 	}
@@ -410,22 +410,16 @@ func preparePersistentIdentityClaim(directory outputcap.Directory) ([]byte, erro
 	return slices.Clone(claim), nil
 }
 
-func readPersistentIdentityClaim(directory outputcap.Directory) ([]byte, error) {
-	preparer, ok := directory.(outputcap.PersistentDirectoryIdentityPreparer)
-	if !ok {
-		return nil, errors.Join(
-			ErrInvalidConfiguration,
-			errors.New("persistent directory identity recovery is unavailable"),
-		)
+func readPersistentIdentityClaim(directory outputcap.Directory, expected []byte) ([]byte, error) {
+	provider, ok := directory.(directoryIdentityProvider)
+	if !ok || !validPersistentIdentityClaim(expected) {
+		return nil, ErrInvalidConfiguration
 	}
-	// A fresh native handle has no trusted in-memory identity cache. The
-	// idempotent native prepare operation rehydrates the durable Object ID; the
-	// stored claim comparison below remains the authority decision.
-	claim, err := preparer.PreparePersistentDirectoryIdentityClaim()
-	if err != nil || !validPersistentIdentityClaim(claim) {
+	matches, err := provider.MatchesRecoveryIdentity(expected)
+	if err != nil || !matches {
 		return nil, errors.Join(ErrReservationIndeterminate, err)
 	}
-	return slices.Clone(claim), nil
+	return slices.Clone(expected), nil
 }
 
 func validPersistentIdentityClaim(claim []byte) bool {

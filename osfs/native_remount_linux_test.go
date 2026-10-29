@@ -15,7 +15,7 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 )
 
-// The CI harness unmounts a disposable FAT/exFAT image between the two processes.
+// The CI harness unmounts a disposable FAT/exFAT image between process phases.
 // Ordinary short tests skip this test rather than requiring mount privileges.
 func TestPortableFilesystemRemount(t *testing.T) {
 	root := os.Getenv("WINDSHARE_REMOUNT_ROOT")
@@ -30,7 +30,9 @@ func TestPortableFilesystemRemount(t *testing.T) {
 			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 				t.Fatal("image fixture already exists")
 			}
-			pausedPortableFileAt(t, path, 8)
+			_, intent := pausedPortableFileAt(t, path, 8)
+			mutateRemountDirectory(t, path)
+			mutateRemountDirectory(t, nativeDirectTreeResultRoot(t, path, intent))
 		}
 		identity := remountIdentity(t, onlyPortableStage(t, filepath.Join(root, "resume")))
 		encoded, err := json.Marshal(identity)
@@ -57,6 +59,8 @@ func TestPortableFilesystemRemount(t *testing.T) {
 		for _, action := range []string{"resume", "discard"} {
 			t.Run(action, func(t *testing.T) { recoverRemountedOperation(t, filepath.Join(root, action), action) })
 		}
+	case "finish":
+		recoverRemountedOperation(t, filepath.Join(root, "resume"), "finish")
 	default:
 		t.Fatalf("unknown remount test phase %q", phase)
 	}
@@ -95,7 +99,7 @@ func recoverRemountedOperation(t *testing.T, root, action string) {
 	}
 	lookup, err := authority.LookupActive(ctx, selection)
 	if err != nil || lookup.Kind() != FilesystemOutputLookupReopened {
-		t.Fatalf("lost operation after remount: %v", err)
+		t.Fatalf("lost operation after remount: kind=%v reason=%v error=%v", lookup.Kind(), lookup.StateReason(), err)
 	}
 	intent, ok := lookup.Operation().ReceiveIntent()
 	if !ok {
@@ -117,6 +121,7 @@ func recoverRemountedOperation(t *testing.T, root, action string) {
 		if _, err := os.Stat(stage); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("owned partial remains: %v", err)
 		}
+		assertRemountRetirement(t, root, nativeDirectTreeResultRoot(t, root, intent), false)
 		return
 	}
 	session, err := authority.OpenOperation(ctx, lookup.Operation())
@@ -128,6 +133,23 @@ func recoverRemountedOperation(t *testing.T, root, action string) {
 	start, err := session.BeginFile(ctx, file)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if action == "finish" {
+		settlement, ok := start.ImmediateSettlement()
+		if !ok || settlement.Kind() != transfer.FilePreviouslyPublished {
+			t.Fatalf("second remount lost delivery history: %v", start)
+		}
+		if _, err := session.FinalizeDirectory(ctx, admission); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := session.FinalizeTree(ctx, transfer.DirectTreeOutcomeSuccess); err != nil {
+			t.Fatal(err)
+		}
+		if err := authority.Close(); err != nil {
+			t.Fatal(err)
+		}
+		assertRemountRetirement(t, root, nativeDirectTreeResultRoot(t, root, intent), true)
+		return
 	}
 	tx, ranges, ok := start.Transaction()
 	if !ok || len(ranges.Ranges().Ranges()) != 1 || ranges.Ranges().Ranges()[0].End != 4 {

@@ -1,7 +1,6 @@
 package outputportable
 
 import (
-	"bytes"
 	"errors"
 	"io"
 	"os"
@@ -162,9 +161,9 @@ func TestDefinitePublicationFailureCanRestoreLiveOwnership(t *testing.T) {
 	}
 }
 
-func TestDirectoryCreationEvidenceSurvivesSourceMtime(t *testing.T) {
+func TestDirectoryRecoveryIdentitySurvivesSourceMtime(t *testing.T) {
 	directory, _, _ := newWitnessFile(t)
-	before, err := directory.PersistentDirectoryIdentityClaim()
+	before, err := directory.CreateRecoveryIdentity()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,8 +174,8 @@ func TestDirectoryCreationEvidenceSurvivesSourceMtime(t *testing.T) {
 	if err := directory.SetModifiedTime(modified); err != nil {
 		t.Fatal(err)
 	}
-	after, err := directory.PersistentDirectoryIdentityClaim()
-	if err != nil || !bytes.Equal(before, after) {
+	matched, err := directory.MatchesRecoveryIdentity(before)
+	if err != nil || !matched {
 		t.Fatal("directory mtime revoked recovery evidence")
 	}
 }
