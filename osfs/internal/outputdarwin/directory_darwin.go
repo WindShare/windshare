@@ -80,24 +80,10 @@ func (dir *directory) verify() error {
 		if stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o077 != 0 {
 			return outputcap.ErrUnsafeNamespace
 		}
-		return validateACL(dir.fd(), true)
+		return validatePrivateACL(dir.fd())
 	}
 	return nil
 }
-func (dir *directory) ValidateCreateAuthority() error {
-	if err := dir.verify(); err != nil {
-		return err
-	}
-	var stat unix.Stat_t
-	if err := unix.Fstat(dir.fd(), &stat); err != nil {
-		return nativeError(err)
-	}
-	if stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o022 != 0 || stat.Mode&0o300 != 0o300 {
-		return outputcap.ErrUnsafeNamespace
-	}
-	return validateACL(dir.fd(), dir.private)
-}
-func (dir *directory) ValidateMetadataAuthority() error { return dir.ValidateCreateAuthority() }
 func (dir *directory) Close() error {
 	if dir == nil {
 		return nil
@@ -121,7 +107,11 @@ func (dir *directory) Duplicate() (outputcap.Directory, error) {
 	if err != nil {
 		return nil, nativeError(err)
 	}
-	return newDirectory(fd, dir.volume, dir.parent, dir.name, dir.private)
+	copy, err := newDirectory(fd, dir.volume, dir.parent, dir.name, dir.private)
+	if err != nil {
+		return nil, err
+	}
+	return copy, nil
 }
 func (dir *directory) Sync() error {
 	if err := dir.verify(); err != nil {
@@ -209,7 +199,11 @@ func (dir *directory) OpenDirectory(name string, private bool) (outputcap.Direct
 	if err != nil {
 		return nil, nativeError(err)
 	}
-	return newDirectory(fd, dir.volume, dir, name, private)
+	child, err := newDirectory(fd, dir.volume, dir, name, private)
+	if err != nil {
+		return nil, err
+	}
+	return child, nil
 }
 func (dir *directory) CreateDirectory(name string, private bool) (outputcap.Directory, error) {
 	if err := errors.Join(dir.ValidateCreateAuthority(), validComponent(name)); err != nil {
@@ -227,10 +221,11 @@ func (dir *directory) CreateDirectory(name string, private bool) (outputcap.Dire
 		return nil, err
 	}
 	child := created.(*directory)
-	child.private = private
-	if err := child.verify(); err != nil {
-		child.private = false
-		return nil, errors.Join(err, dir.RemoveDirectory(name, child), child.Close())
+	if private {
+		if err := child.establishPrivateAuthority(); err != nil {
+			child.private = false
+			return nil, errors.Join(err, dir.RemoveDirectory(name, child), child.Close())
+		}
 	}
 	return child, nil
 }

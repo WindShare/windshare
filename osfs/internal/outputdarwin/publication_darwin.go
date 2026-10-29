@@ -3,8 +3,6 @@
 package outputdarwin
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"math"
 	"os"
@@ -116,42 +114,6 @@ func (dir *directory) ReservePublicDirectoryNoReplace(name string) (outputcap.Di
 	return created, outputcap.PublishNoReplaceCommitted, nil
 }
 
-const temporaryStageNonceBytes = 16
-
-func (dir *directory) CreateProcessStage(stageDirectory outputcap.Directory, name string, size int64) (outputcap.MutableFile, error) {
-	stage, ok := stageDirectory.(*directory)
-	if !ok || !stage.private || size < 0 {
-		return nil, outputcap.ErrUnsafeNamespace
-	}
-	if err := errors.Join(dir.ValidateCreateAuthority(), stage.ValidateCreateAuthority(), validComponent(name)); err != nil {
-		return nil, err
-	}
-	var nonce [temporaryStageNonceBytes]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
-		return nil, err
-	}
-	temporary := ".windshare-stage-" + hex.EncodeToString(nonce[:])
-	file, err := dir.CreateFile(temporary, false, 0)
-	if err != nil {
-		return nil, err
-	}
-	state, _ := stateFrom(file)
-	// Inherit final-parent permissions before moving the empty inode under the
-	// private stage directory. No downloaded content is exposed during creation.
-	if err := unix.RenameatxNp(dir.fd(), temporary, stage.fd(), name, unix.RENAME_EXCL|unix.RENAME_NOFOLLOW_ANY); err != nil {
-		return nil, errors.Join(nativeError(err), dir.RemoveFile(temporary, file), file.Close())
-	}
-	parent, err := stage.Duplicate()
-	if err != nil {
-		return nil, errors.Join(err, stage.RemoveFile(name, file), file.Close())
-	}
-	_ = state.parent.Close()
-	state.parent, state.name = parent.(*directory), name
-	if err := state.file.Truncate(size); err != nil {
-		return nil, errors.Join(err, stage.RemoveFile(name, file), file.Close())
-	}
-	return file, nil
-}
 func (dir *directory) CreateOrdinaryOutputStage(stageDirectory outputcap.Directory, name string, size uint64) error {
 	if size > math.MaxInt64 {
 		return outputcap.ErrUnsafeNamespace
