@@ -94,7 +94,7 @@ func recoverRemountedOperation(t *testing.T, root, action string) {
 		t.Fatal(err)
 	}
 	lookup, err := authority.LookupActive(ctx, selection)
-	if err != nil || lookup.Kind() == FilesystemOutputLookupMiss {
+	if err != nil || lookup.Kind() != FilesystemOutputLookupReopened {
 		t.Fatalf("lost operation after remount: %v", err)
 	}
 	intent, ok := lookup.Operation().ReceiveIntent()
