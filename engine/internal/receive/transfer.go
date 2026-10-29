@@ -486,6 +486,8 @@ func resolveGetOutputOperation(
 func reportGetOutputAdmissionFailure(observation getObservation, err error) stepOutcome {
 	observation.fail(stepLocalFailure, err)
 	switch {
+	case errors.Is(err, ErrRetainedOutputMissing):
+		return observation.failCode(stepLocalFailure, FailureRetainedOutputMissing)
 	case errors.Is(err, errGetOutputOperationAlreadyRunning):
 		return observation.failCode(stepLocalFailure, FailureOutputFileAlreadyActive)
 	case errors.Is(err, errGetOutputOperationNeedsAttention):
