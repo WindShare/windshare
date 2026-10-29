@@ -36,3 +36,6 @@ run_phase create
 sudo umount "$mount_dir"
 mount_image
 run_phase recover
+sudo umount "$mount_dir"
+mount_image
+run_phase finish

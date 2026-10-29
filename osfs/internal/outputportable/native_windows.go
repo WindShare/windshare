@@ -15,20 +15,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func directoryRecoveryStamp(f *os.File) ([]byte, error) {
-	var info windows.ByHandleFileInformation
-	if err := windows.GetFileInformationByHandle(windows.Handle(f.Fd()), &info); err != nil {
-		return nil, err
-	}
-	return windowsCreationStamp(info)
-}
-func windowsCreationStamp(info windows.ByHandleFileInformation) ([]byte, error) {
-	const ticksPerSecond = uint64(10_000_000)
-	const windowsEpochSeconds = int64(11_644_473_600)
-	ticks := uint64(info.CreationTime.HighDateTime)<<32 | uint64(info.CreationTime.LowDateTime)
-	return creationStamp(int64(ticks/ticksPerSecond)-windowsEpochSeconds, int64(ticks%ticksPerSecond)*100)
-}
-
 func setDirectoryTimes(d *directory, t time.Time) error { return d.root.Chtimes(".", t, t) }
 
 func openDirectoryHandle(root *os.Root) (*os.File, error) {

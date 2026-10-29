@@ -339,6 +339,9 @@ func (recorder *ordinaryLifecycleRecorder) cleanupTerminal(ctx context.Context) 
 		cleanupErr = recorder.repository.Close()
 	}
 	if cleanupErr == nil {
+		cleanupErr = recorder.operation.topLevel.RetireRecoveryIdentity()
+	}
+	if cleanupErr == nil {
 		cleanupErr = recorder.operation.lease.DeleteTerminal()
 	}
 	if cleanupErr == nil || recorder.operation.lease.Deleted() {

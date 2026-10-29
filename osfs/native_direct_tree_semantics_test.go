@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -247,7 +248,8 @@ func nativeDirectTreePublicNames(t *testing.T, root string) []string {
 	}
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if entry.Name() != ".windshare-output" {
+		privateIdentity := strings.HasPrefix(entry.Name(), ".wsresume-") && strings.HasSuffix(entry.Name(), ".identity")
+		if entry.Name() != ".windshare-output" && !privateIdentity {
 			names = append(names, entry.Name())
 		}
 	}
