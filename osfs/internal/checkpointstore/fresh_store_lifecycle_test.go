@@ -24,8 +24,8 @@ func TestFreshFileExecutionStoreIndexesOnlyCurrentOperationAndCleansExactState(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if records, attention := store.Snapshot(); len(records) != 0 || len(attention) != 0 {
-		t.Fatalf("fresh snapshot = (%d records, %d attention)", len(records), len(attention))
+	if slots, attention, err := store.Inventory(); err != nil || len(slots) != 0 || len(attention) != 0 {
+		t.Fatalf("fresh inventory = (%d slots, %d attention, %v)", len(slots), len(attention), err)
 	}
 	record := checkpointRecordFixture(t, ownership, intent, 0xb3)
 	object := record.OwnedObjectID()
@@ -46,12 +46,13 @@ func TestFreshFileExecutionStoreIndexesOnlyCurrentOperationAndCleansExactState(t
 	if _, err := store.installInitialRecord(ctx, record); err != nil {
 		t.Fatal(err)
 	}
-	records, attention := store.Snapshot()
-	if len(records) != 1 || records[0].RecordID() != record.RecordID() || len(attention) != 0 {
-		t.Fatalf("current-operation snapshot = (%+v, %+v)", records, attention)
+	slots, attention, err := store.Inventory()
+	if err != nil || len(slots) != 1 || len(attention) != 0 {
+		t.Fatalf("current-operation inventory = (%+v, %+v, %v)", slots, attention, err)
 	}
-	if records, _ := store.Snapshot(); len(records) != 1 {
-		t.Fatalf("checkpoint authority disappeared before cleanup: %+v", records)
+	selected, exact := slots[0].Record()
+	if !exact || selected.RecordID() != record.RecordID() {
+		t.Fatalf("checkpoint authority changed before cleanup: exact=%t record=%+v", exact, selected)
 	}
 	if err := store.CleanupOwned(ctx); err != nil {
 		t.Fatal(err)
@@ -90,8 +91,9 @@ func TestFreshFileExecutionStoreCleanupRejectsUncertainOrCanceledAuthority(t *te
 		t.Fatalf("uncertain cleanup = %v", err)
 	}
 	var nilStore *FileExecutionStore
-	if records, attention := nilStore.Snapshot(); records != nil || attention != nil {
-		t.Fatalf("nil snapshot = (%+v, %+v)", records, attention)
+	if slots, attention, err := nilStore.Inventory(); !errors.Is(err, transfer.ErrInvalidOutputBinding) ||
+		slots != nil || attention != nil {
+		t.Fatalf("nil inventory = (%+v, %+v, %v)", slots, attention, err)
 	}
 	if err := nilStore.CleanupOwned(context.Background()); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
 		t.Fatalf("nil cleanup = %v", err)

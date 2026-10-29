@@ -72,9 +72,9 @@ func TestFileExecutionStoreReplaceDurablyAdvancesExactLineage(t *testing.T) {
 			resolution.Decision(), exact, selected, err)
 	}
 
-	slots, attention := store.LineageSnapshot()
-	if len(slots) != 1 || len(attention) != 0 {
-		t.Fatalf("LineageSnapshot() sizes = (%d, %d), want (1, 0)", len(slots), len(attention))
+	slots, attention, err := store.Inventory()
+	if err != nil || len(slots) != 1 || len(attention) != 0 {
+		t.Fatalf("Inventory() = (%d slots, %d attention, %v), want (1, 0, nil)", len(slots), len(attention), err)
 	}
 	selected, exact = slots[0].Record()
 	physical := slots[0].PhysicalRecords()
@@ -83,7 +83,7 @@ func TestFileExecutionStoreReplaceDurablyAdvancesExactLineage(t *testing.T) {
 		!bytes.Equal(selected.CanonicalBytes(), next.CanonicalBytes()) || len(physical) != 1 ||
 		!bytes.Equal(physical[0].CanonicalBytes(), next.CanonicalBytes()) ||
 		bytes.Equal(physical[0].CanonicalBytes(), previous.CanonicalBytes()) {
-		t.Fatalf("LineageSnapshot() retained stale authority: decision=%s path=%q exact=%t selected=%+v physical=%+v",
+		t.Fatalf("Inventory() retained stale authority: decision=%s path=%q exact=%t selected=%+v physical=%+v",
 			slots[0].Decision(), slots[0].CanonicalPath(), exact, selected, physical)
 	}
 }
