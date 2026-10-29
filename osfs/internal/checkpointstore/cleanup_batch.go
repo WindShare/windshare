@@ -107,12 +107,12 @@ func (store *FileExecutionStore) removeOwned(namespace *cleanupNamespace, object
 	return nil
 }
 
-func (namespace *cleanupNamespace) removeRecord(record checkpointmodel.Record) error {
-	expected, err := checkpointmodel.EncodeRecord(record)
+func (namespace *cleanupNamespace) removeImage(image checkpointImage) error {
+	expected, err := checkpointmodel.EncodeRecord(image.record)
 	if err != nil {
 		return err
 	}
-	shardName, name := recordLocation(record.RecordID())
+	shardName, _ := recordLocation(image.record.RecordID())
 	directory, err := namespace.shard(shardName)
 	if err != nil {
 		return err
@@ -120,7 +120,7 @@ func (namespace *cleanupNamespace) removeRecord(record checkpointmodel.Record) e
 	if directory == nil {
 		return fs.ErrNotExist
 	}
-	file, err := directory.OpenObservedFile(name, true)
+	file, err := directory.OpenObservedFile(image.name, true)
 	if err != nil {
 		return errors.Join(err, closeFile(file))
 	}
@@ -128,7 +128,7 @@ func (namespace *cleanupNamespace) removeRecord(record checkpointmodel.Record) e
 	if readErr != nil || !bytes.Equal(actual, expected) {
 		return errors.Join(checkpointmodel.ErrRecordBinding, readErr, closeFile(file))
 	}
-	return errors.Join(directory.RemoveFile(name, file), file.Close())
+	return errors.Join(directory.RemoveFile(image.name, file), file.Close())
 }
 
 // cleanupBatch keeps the same recovery ordering as individual retirement:
@@ -137,7 +137,7 @@ func (namespace *cleanupNamespace) removeRecord(record checkpointmodel.Record) e
 // ownership evidence instead of acknowledging a partially retired batch.
 func (store *FileExecutionStore) cleanupBatch(
 	ctx context.Context,
-	records []checkpointmodel.Record,
+	images []checkpointImage,
 	retired map[checkpointmodel.ObjectID]struct{},
 ) (resultErr error) {
 	stages := newCleanupNamespace(store.repository.stages)
@@ -150,10 +150,10 @@ func (store *FileExecutionStore) cleanupBatch(
 			store.authority.markUnsettled()
 		}
 	}()
-	objects := make([]checkpointmodel.ObjectID, 0, len(records))
+	objects := make([]checkpointmodel.ObjectID, 0, len(images))
 	seen := make(map[checkpointmodel.ObjectID]struct{})
-	for _, record := range records {
-		object := record.OwnedObjectID()
+	for _, image := range images {
+		object := image.record.OwnedObjectID()
 		_, alreadyRetired := retired[object]
 		_, duplicate := seen[object]
 		if !alreadyRetired && !duplicate {
@@ -180,12 +180,12 @@ func (store *FileExecutionStore) cleanupBatch(
 	for _, object := range objects {
 		retired[object] = struct{}{}
 	}
-	for _, record := range records {
+	for _, image := range images {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		recordsTouched = true
-		if err := recordNamespace.removeRecord(record); err != nil {
+		if err := recordNamespace.removeImage(image); err != nil {
 			return err
 		}
 	}
@@ -193,8 +193,8 @@ func (store *FileExecutionStore) cleanupBatch(
 		store.authority.markUnsettled()
 		return err
 	}
-	for _, record := range records {
-		if err := store.authority.remove(record); err != nil {
+	for _, image := range images {
+		if err := store.authority.removeImage(image); err != nil {
 			store.authority.markUnsettled()
 			return codedError(ErrorCorruptRecord, "remove file checkpoint authority", err)
 		}
