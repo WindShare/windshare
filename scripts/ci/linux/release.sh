@@ -47,10 +47,6 @@ if [ "$native_profile" = "linux-ext4" ] && [ "$host_kernel" != "Linux" ]; then
   echo "the linux-ext4 release profile requires a Linux host" >&2
   exit 2
 fi
-unset WINDSHARE_REQUIRE_NATIVE_OUTPUT_CERTIFICATION
-unset WINDSHARE_LINUX_NATIVE_FIXTURE
-unset WINDSHARE_LINUX_NATIVE_TEMP_ROOT
-unset WINDSHARE_LINUX_NATIVE_REUSE_ROOT
 
 # The extracted osfs suite legitimately approaches Go's 10-minute default on
 # hosted runners. The workflow job remains the outer hang bound; this package
