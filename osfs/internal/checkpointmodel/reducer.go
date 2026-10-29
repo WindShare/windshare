@@ -16,6 +16,19 @@ func IdentityEqual(left, right Record) bool {
 		left.ownedObjectID == right.ownedObjectID
 }
 
+// SupersedesCheckpoint recognizes progress already covered by an installed
+// record. Unlike a replacement transition, this can span several generations:
+// lazy recovery may advance while an uninstalled image remains in its slot.
+// It grants no authority to install a record or discard a publication receipt.
+func SupersedesCheckpoint(installed, candidate Record) bool {
+	return installed.Valid() && candidate.Valid() && Committed(installed) &&
+		(candidate.commitState == CommitCandidate || candidate.commitState == CommitVerified) &&
+		IdentityEqual(installed, candidate) &&
+		installed.stateGeneration >= candidate.stateGeneration &&
+		installed.checkpointGeneration >= candidate.checkpointGeneration &&
+		rangesContain(installed.verifiedRanges, candidate.verifiedRanges)
+}
+
 // ValidateTransition prevents stale writers from changing immutable identity,
 // regressing generations, or shrinking already verified ranges.
 func ValidateTransition(previous, next Record) error {

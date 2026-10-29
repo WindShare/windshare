@@ -17,7 +17,12 @@ import (
 
 func TestNativeInterruptedCheckpointCleanupCompletesAndDiscards(t *testing.T) {
 	for _, action := range []string{"complete", "discard-partial", "discard-published"} {
-		for _, shape := range []string{"empty", "truncated", "zero-padded"} {
+		for _, shape := range []string{"empty", "truncated", "zero-padded", "complete"} {
+			// A complete successor becomes obsolete only after lazy resume advances
+			// past it. Immediate discard may instead adopt that valid successor.
+			if action == "discard-partial" && shape == "complete" {
+				continue
+			}
 			t.Run(action+"/"+shape, func(t *testing.T) {
 				ctx := context.Background()
 				root := newRuntimeTestRootSpec(t).path
@@ -128,15 +133,20 @@ func interruptNativeCheckpointImage(t *testing.T, root, shape string) string {
 		if err != nil {
 			return err
 		}
-		next, err := checkpointmodel.AdvanceDurableRanges(previous, []checkpointmodel.Range{{Offset: 0, End: previous.ExactSize()}})
+		next, err := checkpointmodel.AdvanceDurableRanges(previous, previous.VerifiedRanges())
 		if err != nil {
 			return err
 		}
-		encoded = next.CanonicalBytes()
+		encoded, err = checkpointmodel.EncodeRecord(next)
+		if err != nil {
+			return err
+		}
 		candidate = filepath.Join(filepath.Dir(path),
 			checkpointstore.OperationTemporaryName(next.OperationID(), entry.Name(), encoded, 0))
 		var interrupted []byte
 		switch shape {
+		case "complete":
+			interrupted = encoded
 		case "truncated":
 			interrupted = encoded[:len(encoded)/2]
 		case "zero-padded":
