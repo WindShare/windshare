@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	framechannel "github.com/windshare/windshare/core/framechannel"
@@ -655,6 +656,10 @@ func TestRoleRouterSustainedControlStillAdvancesData(t *testing.T) {
 }
 
 func TestRoleRouterHasOnePrioritySchedulerOwner(t *testing.T) {
+	synctest.Test(t, testRoleRouterHasOnePrioritySchedulerOwner)
+}
+
+func testRoleRouterHasOnePrioritySchedulerOwner(t *testing.T) {
 	table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTracked: 2}, nil)
 	router, _ := NewRoleRouter(RoleReceiver, table)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -663,10 +668,7 @@ func TestRoleRouterHasOnePrioritySchedulerOwner(t *testing.T) {
 		_, err := router.Next(ctx)
 		done <- err
 	}()
-	deadline := time.Now().Add(time.Second)
-	for !router.nextActive.Load() && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
+	synctest.Wait()
 	if !router.nextActive.Load() {
 		t.Fatal("first router consumer did not start")
 	}

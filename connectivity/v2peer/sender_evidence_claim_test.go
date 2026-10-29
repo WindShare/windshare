@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
@@ -12,6 +13,10 @@ import (
 )
 
 func TestSenderRecoverableOfferRejectionTerminalizesIdentityOnceForSession(t *testing.T) {
+	synctest.Test(t, testSenderRecoverableOfferRejectionTerminalizesIdentityOnceForSession)
+}
+
+func testSenderRecoverableOfferRejectionTerminalizesIdentityOnceForSession(t *testing.T) {
 	collector := &senderObservationCollector{}
 	clock := newManualTestClock(time.Unix(9_000, 0))
 	factory := mustTestFactoryWithSenderCollector(t, collector, Config{
@@ -33,7 +38,7 @@ func TestSenderRecoverableOfferRejectionTerminalizesIdentityOnceForSession(t *te
 	if failure := receiveTest(t, session.failures); failure.operation != operation {
 		t.Fatalf("first rejection = %#v", failure)
 	}
-	waitForTest(t, func() bool {
+	assertPeerState(t, func() bool {
 		return senderAttemptReachedTerminal(collector.forAttempt(binding.AttemptID), SenderAttemptFailed)
 	})
 	terminal := collector.forAttempt(binding.AttemptID)[1]
@@ -155,53 +160,61 @@ func TestSenderCanceledBeforeEnqueueStillTerminalizesFirstBinding(t *testing.T) 
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			collector := &senderObservationCollector{}
-			factory := mustTestFactoryWithSenderCollector(t, collector, Config{})
-			handler := newDirectTestHandler(t, factory, newTestPeerSession(128))
-			runtimeContext := context.Background()
-			if test.stopRuntime {
-				var cancelRuntime context.CancelFunc
-				runtimeContext, cancelRuntime = context.WithCancel(context.Background())
-				cancelRuntime()
-			}
-			handler.mu.Lock()
-			handler.runtimeContext = runtimeContext
-			handler.mu.Unlock()
+			synctest.Test(t, func(t *testing.T) {
 
-			operation := testOperationID(129)
-			binding := testBinding(130)
-			body, err := v2signal.EncodeOffer(v2signal.Offer{Binding: binding, SDP: "v=0\r\n"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			message := testMessage(t, protocolsession.MessagePeerOffer, operation, body)
-			callerContext, cancelCaller := context.WithCancel(context.Background())
-			messageContext := testPeerMessageContext(t, callerContext, message)
-			cancelCaller()
+				collector := &senderObservationCollector{}
+				factory := mustTestFactoryWithSenderCollector(t, collector, Config{})
+				handler := newDirectTestHandler(t, factory, newTestPeerSession(128))
+				runtimeContext := context.Background()
+				if test.stopRuntime {
+					var cancelRuntime context.CancelFunc
+					runtimeContext, cancelRuntime = context.WithCancel(context.Background())
+					cancelRuntime()
+				}
+				handler.mu.Lock()
+				handler.runtimeContext = runtimeContext
+				handler.mu.Unlock()
 
-			if err := handler.HandleMessage(messageContext, message); !errors.Is(err, context.Canceled) {
-				t.Fatalf("canceled enqueue error = %v", err)
-			}
-			waitForTest(t, func() bool {
-				return senderAttemptReachedTerminal(collector.forAttempt(binding.AttemptID), SenderAttemptFailed)
+				operation := testOperationID(129)
+				binding := testBinding(130)
+				body, err := v2signal.EncodeOffer(v2signal.Offer{Binding: binding, SDP: "v=0\r\n"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				message := testMessage(t, protocolsession.MessagePeerOffer, operation, body)
+				callerContext, cancelCaller := context.WithCancel(context.Background())
+				messageContext := testPeerMessageContext(t, callerContext, message)
+				cancelCaller()
+
+				if err := handler.HandleMessage(messageContext, message); !errors.Is(err, context.Canceled) {
+					t.Fatalf("canceled enqueue error = %v", err)
+				}
+				assertPeerState(t, func() bool {
+					return senderAttemptReachedTerminal(collector.forAttempt(binding.AttemptID), SenderAttemptFailed)
+				})
+				assertUnstartedSenderTerminal(
+					t,
+					collector.forAttempt(binding.AttemptID),
+					test.wantScope,
+					test.wantCode,
+				)
+				if err := handler.HandleMessage(messageContext, message); !errors.Is(err, context.Canceled) {
+					t.Fatalf("canceled replay error = %v", err)
+				}
+				if observations := collector.forAttempt(binding.AttemptID); len(observations) != 2 {
+					t.Fatalf("canceled enqueue replay restarted evidence: %#v", observations)
+				}
+
 			})
-			assertUnstartedSenderTerminal(
-				t,
-				collector.forAttempt(binding.AttemptID),
-				test.wantScope,
-				test.wantCode,
-			)
-			if err := handler.HandleMessage(messageContext, message); !errors.Is(err, context.Canceled) {
-				t.Fatalf("canceled replay error = %v", err)
-			}
-			if observations := collector.forAttempt(binding.AttemptID); len(observations) != 2 {
-				t.Fatalf("canceled enqueue replay restarted evidence: %#v", observations)
-			}
 		})
 	}
 }
 
 func TestSenderShutdownTerminalizesQueuedOfferBeforeClaimsRelease(t *testing.T) {
+	synctest.Test(t, testSenderShutdownTerminalizesQueuedOfferBeforeClaimsRelease)
+}
+
+func testSenderShutdownTerminalizesQueuedOfferBeforeClaimsRelease(t *testing.T) {
 	collector := &senderObservationCollector{}
 	factory := mustTestFactoryWithSenderCollector(t, collector, Config{})
 	handler := newDirectTestHandler(t, factory, newTestPeerSession(131))
@@ -220,7 +233,7 @@ func TestSenderShutdownTerminalizesQueuedOfferBeforeClaimsRelease(t *testing.T) 
 	}
 
 	handler.stopAll()
-	waitForTest(t, func() bool {
+	assertPeerState(t, func() bool {
 		return senderAttemptReachedTerminal(collector.forAttempt(binding.AttemptID), SenderAttemptFailed)
 	})
 	assertUnstartedSenderTerminal(
@@ -235,6 +248,10 @@ func TestSenderShutdownTerminalizesQueuedOfferBeforeClaimsRelease(t *testing.T) 
 }
 
 func TestSenderShutdownWaitsForAdmittedIngressBeforeReleasingClaims(t *testing.T) {
+	synctest.Test(t, testSenderShutdownWaitsForAdmittedIngressBeforeReleasingClaims)
+}
+
+func testSenderShutdownWaitsForAdmittedIngressBeforeReleasingClaims(t *testing.T) {
 	collector := &senderObservationCollector{}
 	factory := mustTestFactoryWithSenderCollector(t, collector, Config{})
 	handler := newDirectTestHandler(t, factory, newTestPeerSession(134))
@@ -255,7 +272,7 @@ func TestSenderShutdownWaitsForAdmittedIngressBeforeReleasingClaims(t *testing.T
 		handler.stopAll()
 		close(stopDone)
 	}()
-	waitForTest(t, func() bool {
+	assertPeerState(t, func() bool {
 		handler.inboxMu.Lock()
 		defer handler.inboxMu.Unlock()
 		return handler.closed
@@ -271,7 +288,7 @@ func TestSenderShutdownWaitsForAdmittedIngressBeforeReleasingClaims(t *testing.T
 	}
 	handler.ingress.Done()
 	receiveTest(t, stopDone)
-	waitForTest(t, func() bool {
+	assertPeerState(t, func() bool {
 		return senderAttemptReachedTerminal(collector.forAttempt(binding.AttemptID), SenderAttemptFailed)
 	})
 	assertUnstartedSenderTerminal(
@@ -293,6 +310,10 @@ func TestSenderShutdownWaitsForAdmittedIngressBeforeReleasingClaims(t *testing.T
 }
 
 func TestSenderDistinctBindingRejectionIsNotSuppressedByActiveOperation(t *testing.T) {
+	synctest.Test(t, testSenderDistinctBindingRejectionIsNotSuppressedByActiveOperation)
+}
+
+func testSenderDistinctBindingRejectionIsNotSuppressedByActiveOperation(t *testing.T) {
 	collector := &senderObservationCollector{}
 	factory := mustTestFactoryWithSenderCollector(t, collector, Config{})
 	handler := newDirectTestHandler(t, factory, newTestPeerSession(137))
@@ -317,7 +338,7 @@ func TestSenderDistinctBindingRejectionIsNotSuppressedByActiveOperation(t *testi
 	if err := handler.terminalizeUnstartedOffer(event, senderAttemptCancelledFailure()); err != nil {
 		t.Fatalf("distinct binding rejection: %v", err)
 	}
-	waitForTest(t, func() bool {
+	assertPeerState(t, func() bool {
 		return senderAttemptReachedTerminal(collector.forAttempt(rejectedBinding.AttemptID), SenderAttemptFailed)
 	})
 	assertUnstartedSenderTerminal(

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -401,6 +402,10 @@ func TestRevisionStoreCrossShareReclaimsExpiredIdleWithoutVictimActivity(t *test
 }
 
 func TestRevisionStoreClaimedReactivationFailureRepublishesOwnedHandle(t *testing.T) {
+	synctest.Test(t, testRevisionStoreClaimedReactivationFailureRepublishesOwnedHandle)
+}
+
+func testRevisionStoreClaimedReactivationFailureRepublishesOwnedHandle(t *testing.T) {
 	clock := &testClock{now: time.Unix(100, 0)}
 	tracer := &claimReactivationTrace{
 		claimed: make(chan struct{}), allowClaim: make(chan struct{}),
@@ -459,21 +464,13 @@ func TestRevisionStoreClaimedReactivationFailureRepublishesOwnedHandle(t *testin
 		_, openErr := victimStore.OpenRevision(context.Background(), victimID, victimSession)
 		victimResult <- openErr
 	}()
-	deadline := time.After(2 * time.Second)
-	for {
-		victimStore.mu.Lock()
-		revision := victimStore.revisions[victimID]
-		waitingForClaim := revision != nil && revision.admissionDone != nil && revision.idleToken == ""
-		victimStore.mu.Unlock()
-		if waitingForClaim {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatal("victim reactivation did not withdraw the claimed generation")
-		default:
-			time.Sleep(time.Millisecond)
-		}
+	synctest.Wait()
+	victimStore.mu.Lock()
+	revision := victimStore.revisions[victimID]
+	waitingForClaim := revision != nil && revision.admissionDone != nil && revision.idleToken == ""
+	victimStore.mu.Unlock()
+	if !waitingForClaim {
+		t.Fatal("victim reactivation did not withdraw the claimed generation")
 	}
 	close(tracer.allowClaim)
 	select {

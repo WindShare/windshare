@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	pion "github.com/pion/webrtc/v4"
@@ -46,6 +47,10 @@ func TestInboundProtocolFailuresCloseTheChannel(t *testing.T) {
 }
 
 func TestTerminalCancellationOwnsAndClosesLifecycle(t *testing.T) {
+	synctest.Test(t, testTerminalCancellationOwnsAndClosesLifecycle)
+}
+
+func testTerminalCancellationOwnsAndClosesLifecycle(t *testing.T) {
 	flow := flowControlProfile{lowWaterBytes: 10, highWaterBytes: 20}
 	fake, channel := openFakeChannel(t, flow)
 	fake.setBuffered(flow.highWaterBytes)
@@ -367,6 +372,10 @@ func TestTerminalAckAdmissionCannotBeOvertakenByTermination(t *testing.T) {
 }
 
 func TestRemoteTerminalIntentWakesSaturatedOrdinarySend(t *testing.T) {
+	synctest.Test(t, testRemoteTerminalIntentWakesSaturatedOrdinarySend)
+}
+
+func testRemoteTerminalIntentWakesSaturatedOrdinarySend(t *testing.T) {
 	flow := flowControlProfile{lowWaterBytes: 10, highWaterBytes: 20}
 	fake, channel := openFakeChannel(t, flow)
 	fake.setBuffered(flow.highWaterBytes)
@@ -383,30 +392,21 @@ func TestRemoteTerminalIntentWakesSaturatedOrdinarySend(t *testing.T) {
 		t.Fatalf("remote terminal = %x", got)
 	}
 
-	wokeBeforeCapacity := false
+	synctest.Wait()
 	var sendErr error
 	select {
-	case err := <-sendResult:
-		wokeBeforeCapacity = err != nil
-		sendErr = err
-	case <-time.After(50 * time.Millisecond):
-	}
-	fake.setBuffered(flow.lowWaterBytes)
-	fake.fireLow()
-	if !wokeBeforeCapacity {
-		sendErr = receiveError(t, sendResult)
-		if sendErr == nil {
-			t.Fatal("ordinary Send succeeded after remote terminal intent")
-		}
+	case sendErr = <-sendResult:
+	default:
+		t.Fatal("remote terminal intent did not wake the saturated ordinary Send")
 	}
 	if disposition := framechannel.SendDispositionOf(sendErr); disposition != framechannel.SendRetired {
 		t.Fatalf("ordinary send after remote terminal disposition=%d error=%v", disposition, sendErr)
 	}
+	// The ordinary send must retire before capacity is released for the terminal acknowledgement.
+	fake.setBuffered(flow.lowWaterBytes)
+	fake.fireLow()
 	if err := receiveError(t, terminalResult); err != nil {
 		t.Fatalf("deliver remote terminal: %v", err)
-	}
-	if !wokeBeforeCapacity {
-		t.Fatal("remote terminal intent did not wake the saturated ordinary Send")
 	}
 }
 
@@ -647,6 +647,10 @@ func TestPhysicalTerminationBeforeRemoteAckRemainsFailure(t *testing.T) {
 }
 
 func TestCloseCannotOvertakeObservedRemoteTerminal(t *testing.T) {
+	synctest.Test(t, testCloseCannotOvertakeObservedRemoteTerminal)
+}
+
+func testCloseCannotOvertakeObservedRemoteTerminal(t *testing.T) {
 	fake, channel := openFakeChannel(t, defaultFlowControl)
 	for index := range receiveQueueFrames {
 		fake.deliverBinary(framechannel.Frame{byte(index + 1)})
