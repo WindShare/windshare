@@ -168,7 +168,7 @@ func createNativeResumeOperation(
 		t.Fatalf("destination mode = (%+v, %v)", mode, err)
 	}
 	lookup, err := output.SelectOperation(ctx, selection, receivecontract.AutomaticOperation())
-	if err != nil || lookup.Kind() != osfs.FilesystemOutputLookupMiss {
+	if err != nil || lookup.Kind() != osfs.FilesystemOutputLookupCreateReady {
 		t.Fatalf("active lookup = (%d, %v)", lookup.Kind(), err)
 	}
 	artifact, err := receivecontract.NewResultRootDirectoryTree(

@@ -68,7 +68,7 @@ func openLiveTransactionWithPlatform(
 		t.Fatalf("live bind = (%+v, %v)", mode, err)
 	}
 	lookup, err := authority.LookupActive(ctx, selection)
-	if err != nil || lookup.Kind() != ActiveLookupMiss {
+	if err != nil || lookup.Kind() != ActiveLookupCreateReady {
 		t.Fatalf("live lookup = (%d, %v)", lookup.Kind(), err)
 	}
 	operation, err := authority.CreateOperation(ctx, lookup, artifact)
