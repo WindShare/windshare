@@ -64,6 +64,7 @@ func (attention Attention) Reference() string { return attention.reference }
 type Snapshot struct {
 	records             []checkpointmodel.Record
 	attention           []Attention
+	candidates          []checkpointImage
 	reclaimedCandidates uint64
 }
 
@@ -426,11 +427,11 @@ func (repository *Repository) reconcileCandidate(
 	current, found := stable[targetName]
 	if !found {
 		if _, targetOccupied := occupied[targetName]; targetOccupied {
-			result.attention = append(result.attention, newAttention(AttentionConflictingCandidate, shardName, name))
+			result.retainCandidate(candidate, name, AttentionConflictingCandidate)
 			return nil
 		}
 		if !checkpointmodel.InitialCandidate(candidate) {
-			result.attention = append(result.attention, newAttention(AttentionOrphanedCandidate, shardName, name))
+			result.retainCandidate(candidate, name, AttentionOrphanedCandidate)
 			return nil
 		}
 		if err := repository.installer(shard).create(targetName, encoded); err != nil {
@@ -446,10 +447,11 @@ func (repository *Repository) reconcileCandidate(
 		}
 		return nil
 	}
-	if candidate.CommitState() == checkpointmodel.CommitCandidate &&
-		checkpointmodel.Committed(current.record) &&
-		(checkpointmodel.ValidateTransition(candidate, current.record) == nil ||
-			checkpointmodel.ValidateTransition(current.record, candidate) == nil) {
+	if checkpointmodel.SupersedesCheckpoint(current.record, candidate) ||
+		candidate.CommitState() == checkpointmodel.CommitCandidate &&
+			checkpointmodel.Committed(current.record) &&
+			(checkpointmodel.ValidateTransition(candidate, current.record) == nil ||
+				checkpointmodel.ValidateTransition(current.record, candidate) == nil) {
 		// The fixed target remains the authority until replacement. A valid
 		// unlinked write-ahead image may be either the predecessor of an already
 		// promoted target or its next candidate; neither can grant have-state by
@@ -457,10 +459,11 @@ func (repository *Repository) reconcileCandidate(
 		if err := RemoveExactTemporary(shard, name, encoded); err != nil {
 			return repositoryError("remove superseded checkpoint candidate", err)
 		}
+		result.reclaimedCandidates++
 		return nil
 	}
 	if !checkpointmodel.Committed(candidate) || checkpointmodel.ValidateTransition(current.record, candidate) != nil {
-		result.attention = append(result.attention, newAttention(AttentionConflictingCandidate, shardName, name))
+		result.retainCandidate(candidate, name, AttentionConflictingCandidate)
 		return nil
 	}
 	if err := repository.installer(shard).replace(targetName, current.encoded, encoded); err != nil {
@@ -471,13 +474,17 @@ func (repository *Repository) reconcileCandidate(
 }
 
 func newAttention(code AttentionCode, shard, name string) Attention {
+	return Attention{code: code, reference: attentionReference(shard, name)}
+}
+
+func attentionReference(shard, name string) string {
 	hash := sha256.New()
 	_, _ = hash.Write([]byte(attentionDomain))
 	_, _ = hash.Write([]byte{0})
 	_, _ = hash.Write([]byte(shard))
 	_, _ = hash.Write([]byte{0})
 	_, _ = hash.Write([]byte(name))
-	return Attention{code: code, reference: hex.EncodeToString(hash.Sum(nil))}
+	return hex.EncodeToString(hash.Sum(nil))
 }
 
 func recordLocation(recordID checkpointmodel.RecordID) (string, string) {

@@ -6,12 +6,14 @@ import (
 	"errors"
 	"io/fs"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/osfs/internal/fileexecution"
+	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
 const (
@@ -52,7 +54,7 @@ func NewFileExecutionStoreWithStagePolicy(
 	repository *Repository,
 	stagePolicy StagePolicy,
 ) (*FileExecutionStore, error) {
-	return newFileExecutionStore(repository, stagePolicy, true)
+	return newFileExecutionStore(repository, stagePolicy)
 }
 
 // NewFreshFileExecutionStore deliberately skips repository enumeration. It is
@@ -66,31 +68,30 @@ func NewFreshFileExecutionStoreWithStagePolicy(
 	repository *Repository,
 	stagePolicy StagePolicy,
 ) (*FileExecutionStore, error) {
-	return newFileExecutionStore(repository, stagePolicy, false)
+	store, err := newFileExecutionStore(repository, stagePolicy)
+	if err != nil {
+		return nil, err
+	}
+	store.authority.mu.Lock()
+	defer store.authority.mu.Unlock()
+	if len(store.authority.physical) != 0 || len(store.authority.attention) != 0 {
+		return nil, codedError(ErrorUnsafeInstall, "open fresh file execution store", checkpointmodel.ErrRecordBinding)
+	}
+	store.authority.inventoryComplete = true
+	return store, nil
 }
 
 func newFileExecutionStore(
 	repository *Repository,
 	stagePolicy StagePolicy,
-	reconcile bool,
 ) (*FileExecutionStore, error) {
 	if stagePolicy > InheritFinalParent || repository == nil || repository.records == nil || repository.anchors == nil ||
 		repository.stages == nil || repository.authority == nil {
 		return nil, transfer.ErrInvalidOutputBinding
 	}
-	store := &FileExecutionStore{
+	return &FileExecutionStore{
 		repository: repository, stagePolicy: stagePolicy, authority: repository.authority,
-	}
-	store.authority.mu.Lock()
-	defer store.authority.mu.Unlock()
-	if !reconcile {
-		if len(store.authority.physical) != 0 || len(store.authority.attention) != 0 {
-			return nil, codedError(ErrorUnsafeInstall, "open fresh file execution store", checkpointmodel.ErrRecordBinding)
-		}
-		store.authority.inventoryComplete = true
-		return store, nil
-	}
-	return store, nil
+	}, nil
 }
 
 const maximumCachedFileRecords = 256
@@ -173,6 +174,9 @@ func (store *FileExecutionStore) inventoryLocked() error {
 	if err := store.authority.rebuild(snapshot.Records(), snapshot.Attention()); err != nil {
 		return err
 	}
+	for _, image := range snapshot.candidates {
+		store.authority.candidates[image.reference()] = image
+	}
 	store.authority.reclaimedCandidates += snapshot.ReclaimedCandidateCount()
 	store.authority.inventoryComplete = true
 	return nil
@@ -224,8 +228,9 @@ func (store *FileExecutionStore) Inventory() ([]FileExecutionLineageSlot, []Atte
 }
 
 // CleanupOwned retires every authenticated physical record, including records
-// in conflict slots. Shared object claims are retired once and records are never
-// discarded merely to manufacture a selected lineage.
+// in conflict slots and uninstalled images that cannot authorize recovery.
+// Shared object claims are retired once; each image survives until its owned
+// data is durably removed, regardless of the fixed record's generation.
 func (store *FileExecutionStore) CleanupOwned(ctx context.Context) error {
 	if store == nil || store.authority == nil || ctx == nil {
 		return transfer.ErrInvalidOutputBinding
@@ -243,22 +248,44 @@ func (store *FileExecutionStore) CleanupOwned(ctx context.Context) error {
 	if err := store.authority.requireSettled(); err != nil {
 		return codedError(ErrorStateIO, "cleanup unsettled ordinary file state", err)
 	}
-	records := make([]checkpointmodel.Record, 0, len(store.authority.physical))
+	images := make([]checkpointImage, 0, len(store.authority.physical)+len(store.authority.candidates))
 	for _, record := range store.authority.physical {
-		records = append(records, record)
+		images = append(images, fixedCheckpointImage(record))
 	}
-	slices.SortFunc(records, compareRecordID)
-	retiredObjects := make(map[checkpointmodel.ObjectID]struct{})
-	for start := 0; start < len(records); start += maximumCleanupBatchRecords {
-		end := min(start+maximumCleanupBatchRecords, len(records))
-		if err := store.cleanupBatch(ctx, records[start:end], retiredObjects); err != nil {
-			return repositoryError("cleanup ordinary file state", err)
+	candidateReferences := make(map[string]struct{}, len(store.authority.candidates))
+	for reference, image := range store.authority.candidates {
+		images = append(images, image)
+		candidateReferences[reference] = struct{}{}
+	}
+	slices.SortFunc(images, func(left, right checkpointImage) int {
+		if order := compareRecordID(left.record, right.record); order != 0 {
+			return order
 		}
+		return strings.Compare(left.name, right.name)
+	})
+	retiredObjects := make(map[checkpointmodel.ObjectID]struct{})
+	var cleanupErr error
+	for start := 0; start < len(images); start += maximumCleanupBatchRecords {
+		end := min(start+maximumCleanupBatchRecords, len(images))
+		if err := store.cleanupBatch(ctx, images[start:end], retiredObjects); err != nil {
+			cleanupErr = repositoryError("cleanup ordinary file state", err)
+			break
+		}
+	}
+	// Remove resolved diagnostics once per cleanup, including completed batches
+	// before a failure. Scanning attention per image would make recovery quadratic.
+	store.authority.attention = slices.DeleteFunc(store.authority.attention, func(attention Attention) bool {
+		_, known := candidateReferences[attention.Reference()]
+		_, retained := store.authority.candidates[attention.Reference()]
+		return known && !retained
+	})
+	if cleanupErr != nil {
+		return cleanupErr
 	}
 	// Unknown auxiliary objects survive, but do not retain independently owned
 	// data after the user has discarded the operation.
 	if len(store.authority.attention) != 0 {
-		return codedError(ErrorUnsafeInstall, "cleanup ordinary file state", checkpointmodel.ErrRecordRecovery)
+		return codedError(ErrorUnsafeInstall, "cleanup ordinary file state", outputcap.ErrUnsafeNamespace)
 	}
 	return nil
 }
