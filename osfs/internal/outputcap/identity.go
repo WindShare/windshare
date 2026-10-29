@@ -28,10 +28,10 @@ var (
 type IdentitySchemeID = checkpointmodel.IdentitySchemeID
 
 const (
-	IdentitySchemeLinuxHandleV2      = checkpointmodel.IdentitySchemeLinuxHandleV2
-	IdentitySchemeWindowsObjectIDV1  = checkpointmodel.IdentitySchemeWindowsObjectIDV1
-	IdentitySchemeDarwinObjectIDV1   = checkpointmodel.IdentitySchemeDarwinObjectIDV1
-	IdentitySchemePortableMetadataV1 = checkpointmodel.IdentitySchemePortableMetadataV1
+	IdentitySchemeLinuxHandleV2     = checkpointmodel.IdentitySchemeLinuxHandleV2
+	IdentitySchemeWindowsObjectIDV1 = checkpointmodel.IdentitySchemeWindowsObjectIDV1
+	IdentitySchemeDarwinObjectIDV1  = checkpointmodel.IdentitySchemeDarwinObjectIDV1
+	IdentitySchemePortableWitnessV1 = checkpointmodel.IdentitySchemePortableWitnessV1
 )
 
 func NewIdentitySchemeID(value string) (IdentitySchemeID, error) {

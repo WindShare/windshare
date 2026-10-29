@@ -15,8 +15,12 @@ import (
 
 func pausedPortableFile(t *testing.T, size uint64) (string, transfer.ReceiveIntent) {
 	t.Helper()
+	return pausedPortableFileAt(t, t.TempDir(), size)
+}
+
+func pausedPortableFileAt(t *testing.T, root string, size uint64) (string, transfer.ReceiveIntent) {
+	t.Helper()
 	ctx := context.Background()
-	root := t.TempDir()
 	authority, operation, intent := openPublicOrdinaryOperation(t, root, 0x61)
 	session, err := authority.OpenOperation(ctx, operation)
 	if err != nil {
@@ -93,11 +97,22 @@ func TestPortablePublicationCrashReconcilesWithoutWritableStage(t *testing.T) {
 			if _, err := repository.Replace(previous, publishing); err != nil {
 				t.Fatal(err)
 			}
-			closeRepository()
 			final := filepath.Join(nativeDirectTreeResultRoot(t, root, intent), "file.bin")
-			if err := os.Rename(onlyPortableStage(t, root), final); err != nil {
+			platform, err := openNativeOutputPlatform(filepath.Dir(final), false)
+			if err != nil {
 				t.Fatal(err)
 			}
+			published, publishErr := store.PublishOwnedNoReplace(ctx, publishing.OwnedObjectID(), 4, platform.Root(), "file.bin")
+			if publishErr != nil {
+				t.Fatal(publishErr)
+			}
+			if err := published.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := platform.Close(); err != nil {
+				t.Fatal(err)
+			}
+			closeRepository()
 			if replaced {
 				if err := os.Rename(final, final+".moved"); err != nil {
 					t.Fatal(err)

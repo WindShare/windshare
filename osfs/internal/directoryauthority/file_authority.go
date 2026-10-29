@@ -15,7 +15,7 @@ import (
 // checkpoint namespace. Directory authority receives only exact comparison and
 // no-replace publication operations for an already-bound object ID.
 type OwnedObjectAuthority interface {
-	FinalMatchesOwned(context.Context, checkpointmodel.ObjectID, uint64, outputcap.FileIdentity) (bool, error)
+	FinalMatchesPublication(context.Context, checkpointmodel.ObjectID, uint64, outputcap.FileIdentity) (bool, error)
 	PublishOwnedNoReplace(
 		context.Context,
 		checkpointmodel.ObjectID,
@@ -249,7 +249,7 @@ func (destination *fileDestination) observeFinalAgainstFile(
 	if !same || size != expectation.ExactSize() {
 		return finalObservationWithClose(fileexecution.FinalCollision, final)
 	}
-	return finalObservationWithClose(fileexecution.FinalOwnedAtExpectedSize, final)
+	return finalObservationWithClose(fileexecution.FinalMatchesPublication, final)
 }
 
 func (destination *fileDestination) observeFinalAtParent(
@@ -275,19 +275,18 @@ func (destination *fileDestination) observeFinalAtParent(
 	if err != nil || final == nil {
 		return fileexecution.FinalObservation{}, errors.Join(err, outputcap.ErrUnsafeNamespace, closeRuntimeFile(final))
 	}
-	owned, compareErr := destination.objects.FinalMatchesOwned(
+	matches, compareErr := destination.objects.FinalMatchesPublication(
 		ctx, object, expectation.ExactSize(), final,
 	)
 	if compareErr != nil {
 		return fileexecution.FinalObservation{}, errors.Join(compareErr, final.Close())
 	}
-	if !owned {
+	if !matches {
 		return finalObservationWithClose(fileexecution.FinalCollision, final)
 	}
-	// Identity and size establish only the retained object witness, not current
-	// content integrity. Recovery uses it with publication history, avoiding a
-	// full rescan of completed files; mtime is not a content proof either.
-	return finalObservationWithClose(fileexecution.FinalOwnedAtExpectedSize, final)
+	// Publication evidence reconciles delivery history without a full rescan.
+	// It does not prove current content integrity or authorize deleting final.
+	return finalObservationWithClose(fileexecution.FinalMatchesPublication, final)
 }
 
 func finalObservationWithClose(

@@ -303,7 +303,7 @@ func (transaction *livePartialFileStrategy) Commit(ctx context.Context) (transfe
 		transaction.state = liveFileSuspended
 		return settlement, nil
 	}
-	if final.Condition() != FinalOwnedAtExpectedSize {
+	if final.Condition() != FinalMatchesPublication {
 		return transaction.blockPublicationLocked()
 	}
 	progress, err := transfer.VerifyProcessRanges(transaction.binding, transaction.generation, transaction.written)

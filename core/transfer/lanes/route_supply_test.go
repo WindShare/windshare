@@ -145,40 +145,64 @@ func TestRouteSupplyOwnsReplacementWait(t *testing.T) {
 	}
 }
 
-func TestRouteSupplyEndsBeforeFirstAdmission(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		lanes, err := New(Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](63)})
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer lanes.Close()
-		supply, err := lanes.ExpectRoute(RouteDirect)
-		if err != nil {
-			t.Fatal(err)
-		}
-		demand := validDemand(t, transferDescriptor(t, 1), 0)
-		done := make(chan error, 1)
-		go func() {
-			_, err := lanes.Fetch(context.Background(), Request{Demand: demand, Validate: validateTransferRecord(demand)})
-			done <- err
-		}()
-		synctest.Wait()
-		select {
-		case err := <-done:
-			t.Fatalf("ended before route owner: %v", err)
-		default:
-		}
-		supply.Close()
-		synctest.Wait()
-		select {
-		case err := <-done:
-			if !errors.Is(err, ErrNoContentRoute) {
-				t.Fatalf("route result=%v", err)
-			}
-		default:
-			t.Fatal("missing initial lane outlived its route owner")
-		}
-	})
+func TestRouteSupplyOwnsInitialWait(t *testing.T) {
+	for _, transition := range []string{"owner ends", "caller cancels", "set stops", "lane arrives"} {
+		t.Run(transition, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				lanes := newBoundaryLaneSet(t, 63)
+				// An empty set may wait only while a connectivity owner promises a
+				// permitted route; without this capability it is already exhausted.
+				supply, err := lanes.ExpectRoute(RouteDirect)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer supply.Close()
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				descriptor := transferDescriptor(t, 1)
+				demand := validDemand(t, descriptor, 0)
+				done := make(chan error, 1)
+				go func() {
+					_, err := lanes.Fetch(ctx, Request{Demand: demand, Validate: validateTransferRecord(demand)})
+					done <- err
+				}()
+				synctest.Wait()
+				select {
+				case err := <-done:
+					t.Fatalf("fetch ended before route transition: %v", err)
+				default:
+				}
+
+				var wantErr error
+				switch transition {
+				case "owner ends":
+					supply.Close()
+					wantErr = ErrNoContentRoute
+				case "caller cancels":
+					cancel()
+					wantErr = context.Canceled
+				case "set stops":
+					lanes.Stop()
+					wantErr = ErrClosed
+				case "lane arrives":
+					record := transferRecord(t, descriptor, 0)
+					if err := lanes.Add(Identity{ID: 1, Epoch: 1}, RouteDirect,
+						laneFunction(func(context.Context, Demand) (records.BlockRecord, error) { return record, nil })); err != nil {
+						t.Fatal(err)
+					}
+				}
+				synctest.Wait()
+				select {
+				case err := <-done:
+					if !errors.Is(err, wantErr) {
+						t.Fatalf("route transition result = %v, want %v", err, wantErr)
+					}
+				default:
+					t.Fatal("route transition did not resolve queued demand")
+				}
+			})
+		})
+	}
 }
 
 func TestConsumerBackpressureDoesNotRequestPathRecovery(t *testing.T) {
