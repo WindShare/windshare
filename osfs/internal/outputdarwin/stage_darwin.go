@@ -107,5 +107,22 @@ func applyPublicFileProfile(state *fileState, profile publicFileProfile) error {
 	if stat.Gid != profile.group {
 		group = &profile.group
 	}
+	currentSecurity, err := readSecurity(int(state.file.Fd()))
+	if err != nil {
+		return err
+	}
+	// Preserve ordinary ACL-free output without imposing an ACL-setting
+	// capability. The common profile already matches and needs no mutation.
+	if !hasSecurityACL(profile.security) && !hasSecurityACL(currentSecurity) {
+		if group != nil {
+			if err := unix.Fchown(int(state.file.Fd()), -1, int(*group)); err != nil {
+				return nativeError(err)
+			}
+		}
+		if uint32(stat.Mode)&filePermissionBits != profile.mode {
+			return nativeError(unix.Fchmod(int(state.file.Fd()), profile.mode))
+		}
+		return nil
+	}
 	return setSecurityAttributes(int(state.file.Fd()), profile.mode, group, profile.security)
 }

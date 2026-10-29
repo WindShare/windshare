@@ -84,10 +84,19 @@ func readSecurity(fd int) ([]byte, error) {
 	return security, nil
 }
 
+func hasSecurityACL(security []byte) bool {
+	return len(security) != 0 && binary.LittleEndian.Uint32(security[aclCountOffset:]) != aclNoEntries
+}
+
 func setPrivateDirectorySecurity(fd int) error {
 	inherited, err := readSecurity(fd)
 	if err != nil {
 		return err
+	}
+	// An ACL-free filesystem need not implement ACL mutation to protect a
+	// private directory. Fchmod also repairs any restrictive creation umask.
+	if !hasSecurityACL(inherited) {
+		return nativeError(unix.Fchmod(fd, privateDirectoryMode))
 	}
 	flags := uint32(aclNoInherit)
 	if len(inherited) != 0 {
