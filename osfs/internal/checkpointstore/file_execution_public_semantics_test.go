@@ -136,6 +136,10 @@ func TestFileExecutionStoreRejectsConflictedAndUnsettledReplacementAuthority(t *
 	// An ambiguous durability result freezes the shared operation authority. No
 	// adapter may classify or replace through it until restart reconciliation.
 	store.authority.markUnsettled()
+	if slots, attention, inventoryErr := store.Inventory(); !errors.Is(inventoryErr, errFileExecutionAuthorityUnsettled) ||
+		slots != nil || attention != nil {
+		t.Fatalf("unsettled Inventory() = (%+v, %+v, %v), want original error without corruption", slots, attention, inventoryErr)
+	}
 	if _, lookupErr := store.Lookup(context.Background(), key); ErrorCodeFor(lookupErr) != ErrorStateIO {
 		t.Fatalf("unsettled Lookup() = %v, want state I/O", lookupErr)
 	}

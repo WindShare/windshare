@@ -274,11 +274,14 @@ func retainSemanticCandidate(
 	if err != nil {
 		t.Fatal(err)
 	}
-	records, _ := store.Snapshot()
-	if len(records) != 1 {
-		t.Fatalf("retained candidate record count = %d, want 1", len(records))
+	slots, attention, err := store.Inventory()
+	if err != nil || len(slots) != 1 || len(attention) != 0 {
+		t.Fatalf("retained candidate inventory = (%+v, %+v, %v)", slots, attention, err)
 	}
-	stable := records[0]
+	stable, exact := slots[0].Record()
+	if !exact {
+		t.Fatal("retained candidate has no exact lineage")
+	}
 	active, err := checkpointmodel.AdvanceState(
 		stable,
 		stable.StateGeneration()+1,

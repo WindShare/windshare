@@ -169,9 +169,10 @@ func TestInitialAdmissionRejectsProspectiveClaimsBeforePersistence(t *testing.T)
 		if store.RecordCount() != 1 {
 			t.Fatalf("record count after object rejection = %d", store.RecordCount())
 		}
-		slots, _ := store.LineageSnapshot()
-		if len(slots) != 1 || slots[0].Decision() != checkpointmodel.CheckpointLineageDecisionExact {
-			t.Fatalf("object rejection poisoned lineage inventory: %+v", slots)
+		slots, attention, err := store.Inventory()
+		if err != nil || len(attention) != 0 || len(slots) != 1 ||
+			slots[0].Decision() != checkpointmodel.CheckpointLineageDecisionExact {
+			t.Fatalf("object rejection poisoned lineage inventory: slots=%+v attention=%+v err=%v", slots, attention, err)
 		}
 	})
 
@@ -253,9 +254,12 @@ func TestInitialCandidateWithoutObjectRemainsExactAcrossReconciliation(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	slots, attention := restarted.LineageSnapshot()
+	slots, attention, err := restarted.Inventory()
+	if err != nil || len(slots) != 1 || len(attention) != 0 {
+		t.Fatalf("restart inventory = (%d slots, %d attention, %v)", len(slots), len(attention), err)
+	}
 	selected, exact := slots[0].Record()
-	if len(slots) != 1 || len(attention) != 0 || !exact ||
+	if !exact ||
 		selected.RecordID() != candidate.RecordID() || selected.CommitState() != checkpointmodel.CommitCandidate {
 		t.Fatalf("restart candidate = (slots=%d attention=%d exact=%t record=%+v)",
 			len(slots), len(attention), exact, selected)

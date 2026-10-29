@@ -38,11 +38,14 @@ func TestNativeResumeCannotReplaceLogicalFileWithAnotherRevision(t *testing.T) {
 	if _, err := lease.Snapshot(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	records, _ := lease.store.Snapshot()
-	if len(records) != 1 || len(records[0].VerifiedRanges()) == 0 {
-		t.Fatalf("partial checkpoint records = %+v", records)
+	slots, attention, err := lease.store.Inventory()
+	if err != nil || len(slots) != 1 || len(attention) != 0 {
+		t.Fatalf("partial checkpoint inventory = (%+v, %+v, %v)", slots, attention, err)
 	}
-	original := records[0]
+	original, exact := slots[0].Record()
+	if !exact || len(original.VerifiedRanges()) == 0 {
+		t.Fatalf("partial checkpoint = (exact=%t, %+v)", exact, original)
+	}
 	conflictingRevision := incrementalTestIdentity16[content.FileRevision](0xf1)
 	conflict, err := checkpointmodel.NewRecord(checkpointmodel.RecordSpec{
 		OperationID:                  original.OperationID(),
@@ -235,11 +238,14 @@ func TestOrdinaryResumeItemReducesEveryDurableFilePhase(t *testing.T) {
 	if _, err := lease.Snapshot(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	records, _ := lease.store.Snapshot()
-	if len(records) != 1 {
-		t.Fatalf("resume records = %d", len(records))
+	slots, attention, err := lease.store.Inventory()
+	if err != nil || len(slots) != 1 || len(attention) != 0 {
+		t.Fatalf("resume inventory = (%+v, %+v, %v)", slots, attention, err)
 	}
-	base := records[0]
+	base, exact := slots[0].Record()
+	if !exact {
+		t.Fatal("resume record has no exact lineage")
+	}
 	missingObjectBytes := base.OwnedObjectID().Bytes()
 	missingObjectBytes[0] ^= 0xff
 	missingObject, err := checkpointmodel.ObjectIDFromBytes(missingObjectBytes)
