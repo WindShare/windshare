@@ -165,9 +165,15 @@ func (d *directory) PublishFileNoReplace(source outputcap.FileIdentity, name str
 	if _, err := d.child(name); err != nil {
 		return 0, err
 	}
-	err := renameFile(f, d, name, false)
+	return publicationResult(renameFile(f, d, name, false))
+}
+
+func publicationResult(err error) (outputcap.PublishNoReplaceOutcome, error) {
 	if errors.Is(err, fs.ErrExist) {
 		return outputcap.PublishNoReplaceCollision, nil
+	}
+	if errors.Is(err, outputcap.ErrOrdinaryOutputUnsupported) {
+		return 0, err
 	}
 	if err != nil {
 		return outputcap.PublishNoReplaceIndeterminate, err
