@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -73,6 +74,10 @@ func newBrokerFixture(t *testing.T, blocks uint64, lane transferlanes.BlockSourc
 }
 
 func TestBlockBrokerSingleflightCancellationAndReceiverIsolation(t *testing.T) {
+	synctest.Test(t, testBlockBrokerSingleflightCancellationAndReceiverIsolation)
+}
+
+func testBlockBrokerSingleflightCancellationAndReceiverIsolation(t *testing.T) {
 	descriptor := transferDescriptor(t, 1)
 	lane := &countingLane{
 		records: map[uint64]records.BlockRecord{0: transferRecord(t, descriptor, 0)},
@@ -87,19 +92,13 @@ func TestBlockBrokerSingleflightCancellationAndReceiverIsolation(t *testing.T) {
 	<-lane.started
 	second := make(chan []byte, 1)
 	go func() { data, _ := broker.GetBlock(context.Background(), lease, descriptor, 0); second <- data }()
-	deadline := time.Now().Add(time.Second)
 	key := blockKey{file: descriptor.FileID(), revision: descriptor.FileRevision(), index: 0}
-	for {
-		broker.mu.Lock()
-		joined := broker.inflight[key] != nil && broker.inflight[key].waiters == 2
-		broker.mu.Unlock()
-		if joined {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("second broker consumer did not join")
-		}
-		time.Sleep(time.Millisecond)
+	synctest.Wait()
+	broker.mu.Lock()
+	joined := broker.inflight[key] != nil && broker.inflight[key].waiters == 2
+	broker.mu.Unlock()
+	if !joined {
+		t.Fatal("second broker consumer did not join")
 	}
 	cancelFirst()
 	if err := <-first; !errors.Is(err, context.Canceled) {

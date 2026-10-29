@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -45,21 +46,11 @@ func TestPreparedSenderStartsRootPrefetchOnlyAtReadyBoundary(t *testing.T) {
 	}
 
 	sender.StartRootPrefetch()
-	deadline := time.Now().Add(3 * time.Second)
-	var committed catalog.CommittedDirectory
-	for {
-		if current, found, loadErr := sender.catalogStore.Directory(context.Background(), directory); loadErr != nil {
-			t.Fatal(loadErr)
-		} else if found {
-			committed = current
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("post-ready root prefetch did not commit the direct-child generation")
-		}
-		time.Sleep(time.Millisecond)
-	}
 	event := awaitRootPrefetchDecision(t, traces, RootPrefetchCommitted)
+	committed, found, err := sender.catalogStore.Directory(context.Background(), directory)
+	if err != nil || !found {
+		t.Fatalf("committed root prefetch directory: found=%v err=%v", found, err)
+	}
 	if event.ShareInstance != sender.descriptor.ShareInstance() || event.DirectoryID != directory ||
 		event.Generation != committed.Generation() || event.Attempt != 1 ||
 		event.EntryCount != committed.EntryCount() || event.OmittedCount != committed.OmittedCount() {
@@ -69,6 +60,10 @@ func TestPreparedSenderStartsRootPrefetchOnlyAtReadyBoundary(t *testing.T) {
 }
 
 func TestRootPrefetchYieldsToReceiverDemandAndResumes(t *testing.T) {
+	synctest.Test(t, testRootPrefetchYieldsToReceiverDemandAndResumes)
+}
+
+func testRootPrefetchYieldsToReceiverDemandAndResumes(t *testing.T) {
 	listing := &blockingCatalogListing{calls: make(chan catalogListingCall, 4)}
 	traces := make(chan RootPrefetchTrace, 8)
 	budget, err := catalog.NewBudgetAccount("test-root-prefetch", catalog.DefaultSessionBudgetLimits())
@@ -97,10 +92,11 @@ func TestRootPrefetchYieldsToReceiverDemandAndResumes(t *testing.T) {
 	}
 	releaseDemand := access.beginReceiverDemand()
 	awaitCatalogListingFinish(t, first.finished)
+	synctest.Wait()
 	select {
 	case call := <-listing.calls:
 		t.Fatalf("prefetch ran during receiver demand for %x", call.directory)
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
 
 	releaseDemand()

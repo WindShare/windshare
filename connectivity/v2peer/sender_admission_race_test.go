@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	pion "github.com/pion/webrtc/v4"
@@ -159,59 +160,63 @@ func TestSuccessfulAdmissionWinsEveryCompetingTerminalBoundary(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			harness := newAdmissionBoundaryHarness(t)
-			result := test.start(harness)
+			synctest.Test(t, func(t *testing.T) {
 
-			// The competitor has reached the arbiter and canceled only the
-			// in-flight admission context. Releasing after this acknowledgement
-			// makes the boundary order deterministic instead of scheduler-timed.
-			receiveTest(t, harness.session.contextCanceled)
-			close(harness.session.release)
-			receiveTest(t, harness.admissionDone)
-			waitForTest(t, func() bool { return harness.attempt.attached.Load() })
-			if stopped := harness.execution.ctx.Err() != nil; stopped != test.lifetimeStops {
-				t.Fatalf("attempt lifetime stopped=%t, want %t", stopped, test.lifetimeStops)
-			}
-			if test.closeAfterWin {
-				harness.attempt.push(attemptEvent{kind: attemptChannelDone})
-			}
+				harness := newAdmissionBoundaryHarness(t)
+				result := test.start(harness)
 
-			actual := receiveTest(t, result)
-			matchesError := errors.Is(actual.err, test.wantErr) ||
-				(test.alternateErr != nil && errors.Is(actual.err, test.alternateErr))
-			if actual.done != test.wantDone || !matchesError {
-				t.Fatalf("boundary result = %#v, want done=%t err=%v", actual, test.wantDone, test.wantErr)
-			}
-			waitForTest(t, func() bool {
-				return senderAttemptReachedTerminal(
-					harness.collector.forAttempt(harness.attempt.binding().AttemptID),
-					SenderAttemptAdmitted,
+				// The competitor has reached the arbiter and canceled only the
+				// in-flight admission context. Releasing after this acknowledgement
+				// makes the boundary order deterministic instead of scheduler-timed.
+				receiveTest(t, harness.session.contextCanceled)
+				close(harness.session.release)
+				receiveTest(t, harness.admissionDone)
+				assertPeerState(t, func() bool { return harness.attempt.attached.Load() })
+				if stopped := harness.execution.ctx.Err() != nil; stopped != test.lifetimeStops {
+					t.Fatalf("attempt lifetime stopped=%t, want %t", stopped, test.lifetimeStops)
+				}
+				if test.closeAfterWin {
+					harness.attempt.push(attemptEvent{kind: attemptChannelDone})
+				}
+
+				actual := receiveTest(t, result)
+				matchesError := errors.Is(actual.err, test.wantErr) ||
+					(test.alternateErr != nil && errors.Is(actual.err, test.alternateErr))
+				if actual.done != test.wantDone || !matchesError {
+					t.Fatalf("boundary result = %#v, want done=%t err=%v", actual, test.wantDone, test.wantErr)
+				}
+				assertPeerState(t, func() bool {
+					return senderAttemptReachedTerminal(
+						harness.collector.forAttempt(harness.attempt.binding().AttemptID),
+						SenderAttemptAdmitted,
+					)
+				})
+				observations := harness.collector.forAttempt(harness.attempt.binding().AttemptID)
+				wantStages := successfulSenderAttemptStages
+				if len(observations) == len(successfulSenderAttemptStages)+1 {
+					wantStages = append(
+						append([]SenderAttemptStage{}, successfulSenderAttemptStages[:8]...),
+						append([]SenderAttemptStage{SenderAttemptAdmissionDeadlineExpired}, successfulSenderAttemptStages[8:]...)...,
+					)
+				}
+				assertSenderAttemptStages(t, observations, wantStages)
+				if observations[len(observations)-1].Stage != SenderAttemptAdmitted {
+					t.Fatalf("admission terminal was overwritten: %#v", observations)
+				}
+				observedCount := len(observations)
+				harness.attempt.finish(
+					context.Background(), actual.err, nil, harness.execution.operationCanceled,
 				)
+				if observations = harness.collector.forAttempt(harness.attempt.binding().AttemptID); len(observations) != observedCount {
+					t.Fatalf("finish appended a post-admission terminal: %#v", observations)
+				}
+				select {
+				case failure := <-harness.session.failures:
+					t.Fatalf("admitted boundary emitted operation failure %#v", failure)
+				default:
+				}
+
 			})
-			observations := harness.collector.forAttempt(harness.attempt.binding().AttemptID)
-			wantStages := successfulSenderAttemptStages
-			if len(observations) == len(successfulSenderAttemptStages)+1 {
-				wantStages = append(
-					append([]SenderAttemptStage{}, successfulSenderAttemptStages[:8]...),
-					append([]SenderAttemptStage{SenderAttemptAdmissionDeadlineExpired}, successfulSenderAttemptStages[8:]...)...,
-				)
-			}
-			assertSenderAttemptStages(t, observations, wantStages)
-			if observations[len(observations)-1].Stage != SenderAttemptAdmitted {
-				t.Fatalf("admission terminal was overwritten: %#v", observations)
-			}
-			observedCount := len(observations)
-			harness.attempt.finish(
-				context.Background(), actual.err, nil, harness.execution.operationCanceled,
-			)
-			if observations = harness.collector.forAttempt(harness.attempt.binding().AttemptID); len(observations) != observedCount {
-				t.Fatalf("finish appended a post-admission terminal: %#v", observations)
-			}
-			select {
-			case failure := <-harness.session.failures:
-				t.Fatalf("admitted boundary emitted operation failure %#v", failure)
-			default:
-			}
 		})
 	}
 }

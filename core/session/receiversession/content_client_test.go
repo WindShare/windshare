@@ -19,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -111,7 +112,8 @@ func TestReceiverBlockLaneMarksOnlyPreAdmissionFailureReassignable(t *testing.T)
 
 type uncertainReceiverRequestChannel struct {
 	*memoryChannel
-	sends atomic.Int32
+	sends      atomic.Int32
+	settleSend <-chan struct{}
 }
 
 func (channel *uncertainReceiverRequestChannel) Send(ctx context.Context, frame framechannel.Frame) error {
@@ -119,6 +121,7 @@ func (channel *uncertainReceiverRequestChannel) Send(ctx context.Context, frame 
 	if err := channel.memoryChannel.Send(ctx, frame); err != nil {
 		return err
 	}
+	<-channel.settleSend
 	return io.ErrUnexpectedEOF
 }
 
@@ -155,10 +158,16 @@ func (lane *signalingReceiverBlockLane) FetchBlock(
 }
 
 func TestReceiverBlockLaneUnknownSendDoesNotRetryAfterCallerDeadline(t *testing.T) {
+	synctest.Test(t, testReceiverBlockLaneUnknownSendDoesNotRetryAfterCallerDeadline)
+}
+
+func testReceiverBlockLaneUnknownSendDoesNotRetryAfterCallerDeadline(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 	base, peer := newMemoryChannelPair()
 	t.Cleanup(func() { _ = peer.Close() })
-	channel := &uncertainReceiverRequestChannel{memoryChannel: base}
+	settleSend := make(chan struct{})
+	releaseSend := sync.OnceFunc(func() { close(settleSend) })
+	channel := &uncertainReceiverRequestChannel{memoryChannel: base, settleSend: settleSend}
 	identity := session.LaneIdentity{ID: runtimeIdentity(runtime).ID + 1, Epoch: 1}
 	if err := runtime.InstallLane(identity, channel, permissiveInboundAuthenticator(), nil, nil); err != nil {
 		t.Fatal(err)
@@ -222,20 +231,52 @@ func TestReceiverBlockLaneUnknownSendDoesNotRetryAfterCallerDeadline(t *testing.
 		t.Fatal(err)
 	}
 	defer broker.Close()
+	defer releaseSend()
 	// This boundary checks reconciliation after the caller leaves. A longer
 	// live demand may explicitly admit one bounded speculative content rescue.
 	const callerDeadline = 50 * time.Millisecond
 	ctx, cancel := context.WithTimeout(context.Background(), callerDeadline)
 	defer cancel()
-	_, fetchErr := broker.GetBlock(ctx, lease, descriptor, 0)
-	if fetchErr == nil || reflect.TypeOf(fetchErr) == reflect.TypeOf(transferlanes.NewDemandNotAdmitted(nil)) {
+	result := make(chan error, 1)
+	go func() {
+		_, err := broker.GetBlock(ctx, lease, descriptor, 0)
+		result <- err
+	}()
+	synctest.Wait()
+	if channel.sends.Load() != 1 || fallback.calls.Load() != 0 {
+		t.Fatalf("pending request sends=%d fallback calls=%d", channel.sends.Load(), fallback.calls.Load())
+	}
+	time.Sleep(callerDeadline - time.Nanosecond)
+	synctest.Wait()
+	if len(result) != 0 {
+		t.Fatalf("unknown send stopped waiting before the caller deadline: %v (sends=%d fallback=%d)", <-result, channel.sends.Load(), fallback.calls.Load())
+	}
+	time.Sleep(time.Nanosecond)
+	synctest.Wait()
+	fetchErr := <-result
+	if !errors.Is(fetchErr, context.DeadlineExceeded) {
+		t.Fatalf("caller deadline error=%v", fetchErr)
+	}
+	if reflect.TypeOf(fetchErr) == reflect.TypeOf(transferlanes.NewDemandNotAdmitted(nil)) {
 		t.Fatalf("unknown transport result=%v", fetchErr)
 	}
+	// Keep the ambiguous send pending beyond the rescue cadence after its caller leaves.
+	const postDeadlineObservation = time.Second
+	time.Sleep(postDeadlineObservation)
+	synctest.Wait()
+	if channel.sends.Load() != 1 || fallback.calls.Load() != 0 {
+		t.Fatalf("pending reconciliation sends=%d fallback calls=%d", channel.sends.Load(), fallback.calls.Load())
+	}
+	releaseSend()
+	synctest.Wait()
 	select {
 	case <-signalingLane.done:
 	case <-time.After(time.Second):
 		t.Fatal("receiver block lane did not finish unknown-send reconciliation")
 	}
+	// Reconciliation must not restart canceled demand on a later timer wakeup.
+	time.Sleep(postDeadlineObservation)
+	synctest.Wait()
 	if channel.sends.Load() != 1 || fallback.calls.Load() != 0 {
 		t.Fatalf("request sends=%d fallback calls=%d", channel.sends.Load(), fallback.calls.Load())
 	}

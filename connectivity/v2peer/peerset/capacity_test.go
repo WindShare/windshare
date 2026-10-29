@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"testing/synctest"
 
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/turncapacity"
@@ -47,6 +48,10 @@ func TestPeerSetRequiresExplicitAttemptCapacity(t *testing.T) {
 }
 
 func TestCapacityExplorationRetainsAnOrdinaryOpportunity(t *testing.T) {
+	synctest.Test(t, testCapacityExplorationRetainsAnOrdinaryOpportunity)
+}
+
+func testCapacityExplorationRetainsAnOrdinaryOpportunity(t *testing.T) {
 	capacity, err := NewCapacity(2)
 	if err != nil {
 		t.Fatal(err)
@@ -61,7 +66,7 @@ func TestCapacityExplorationRetainsAnOrdinaryOpportunity(t *testing.T) {
 	}
 	queued := make(chan func(), 1)
 	go func() { release, _ := capacity.acquire(context.Background()); queued <- release }()
-	waitQueue(t, capacity, 1)
+	assertCapacityQueueLength(t, capacity, 1)
 
 	// Cleanup paths can race, but they share only the exploratory slot's claim.
 	var cleanup sync.WaitGroup

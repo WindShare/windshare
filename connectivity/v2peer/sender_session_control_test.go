@@ -5,6 +5,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/connectivity/iceconfig"
@@ -86,104 +87,108 @@ func TestSenderSessionControlsSurvivePeerSessionWrapper(t *testing.T) {
 			name = "with TURN service"
 		}
 		t.Run(name, func(t *testing.T) {
-			accounts := &sessionControlAccounts{requests: make(chan turnpath.Subject, 1)}
-			config := Config{}
-			if withTURN {
-				config.TURN = accounts
-			}
-			factory, err := newTestSenderFactory(t, config)
-			if err != nil {
-				t.Fatal(err)
-			}
-			session := newTestPeerSession(1)
-			// Embedding only the public contract reproduces an ordinary decorator.
-			wrapped := struct{ sendersession.PeerSession }{PeerSession: session}
-			_, ctx, cancel, done := startSenderTestRuntime(t, factory, wrapped)
-			stop := sync.OnceFunc(func() { stopSenderTestRuntime(t, cancel, done) })
-			t.Cleanup(stop)
-			waitForTest(t, func() bool {
-				path, turn := session.sessionControlHandlers()
-				return path != nil && turn != nil
-			})
-			pathHandler, turnHandler := session.sessionControlHandlers()
-			path := protocolsession.PeerPathControl{
-				PeerPathID: [16]byte{1}, NetworkGenerationID: [16]byte{2},
-				ControlSequence: 1, Kind: protocolsession.PeerPathDemand,
-				ValidFor: nativepeer.ControlLifetime,
-			}
-			applyPath := func() {
-				t.Helper()
-				body, encodeErr := protocolsession.EncodePeerPathControl(path)
-				if encodeErr != nil {
-					t.Fatal(encodeErr)
-				}
-				if handleErr := pathHandler(ctx, body); handleErr != nil {
-					t.Fatal(handleErr)
-				}
-			}
-			applyPath()
-			path.Kind, path.ControlSequence, path.ValidFor = protocolsession.PeerPathRevoke, 2, 0
-			applyPath()
-			if !factory.native.Retired([16]byte(session.sessionID), v2signal.PeerPathID(path.PeerPathID)) {
-				t.Fatal("wrapped path controls did not retire the native path")
-			}
+			synctest.Test(t, func(t *testing.T) {
 
-			if withTURN {
-				receiveTURN := func() turncontrol.Message {
-					t.Helper()
-					control := receiveTest(t, session.sessionControls)
-					if control.kind != protocolsession.MessageTURNControl {
-						t.Fatalf("TURN response used control family %v", control.kind)
-					}
-					message, decodeErr := turncontrol.Decode(control.body)
-					if decodeErr != nil {
-						t.Fatal(decodeErr)
-					}
-					if message.Header().SessionID != [16]byte(session.sessionID) {
-						t.Fatal("TURN response changed the session identity")
-					}
-					return message
+				accounts := &sessionControlAccounts{requests: make(chan turnpath.Subject, 1)}
+				config := Config{}
+				if withTURN {
+					config.TURN = accounts
 				}
-				message := receiveTURN()
-				available, ok := message.(turncontrol.Available)
-				if !ok || len(available.Profiles) != 1 || available.Profiles[0] != peerTestTURNProfile {
-					t.Fatalf("TURN inventory = %#v", message)
+				factory, err := newTestSenderFactory(t, config)
+				if err != nil {
+					t.Fatal(err)
 				}
-				select {
-				case <-accounts.requests:
-					t.Fatal("registering TURN controls acquired credentials before demand")
-				default:
-				}
-				demand, encodeErr := turncontrol.Encode(turncontrol.Demand{
-					Authority: available.Authority, HoldFor: time.Minute,
+				session := newTestPeerSession(1)
+				// Embedding only the public contract reproduces an ordinary decorator.
+				wrapped := struct{ sendersession.PeerSession }{PeerSession: session}
+				_, ctx, cancel, done := startSenderTestRuntime(t, factory, wrapped)
+				stop := sync.OnceFunc(func() { stopSenderTestRuntime(t, cancel, done) })
+				t.Cleanup(stop)
+				assertPeerState(t, func() bool {
+					path, turn := session.sessionControlHandlers()
+					return path != nil && turn != nil
 				})
-				if encodeErr != nil {
-					t.Fatal(encodeErr)
+				pathHandler, turnHandler := session.sessionControlHandlers()
+				path := protocolsession.PeerPathControl{
+					PeerPathID: [16]byte{1}, NetworkGenerationID: [16]byte{2},
+					ControlSequence: 1, Kind: protocolsession.PeerPathDemand,
+					ValidFor: nativepeer.ControlLifetime,
 				}
-				if handleErr := turnHandler(ctx, demand); handleErr != nil {
-					t.Fatal(handleErr)
+				applyPath := func() {
+					t.Helper()
+					body, encodeErr := protocolsession.EncodePeerPathControl(path)
+					if encodeErr != nil {
+						t.Fatal(encodeErr)
+					}
+					if handleErr := pathHandler(ctx, body); handleErr != nil {
+						t.Fatal(handleErr)
+					}
 				}
-				request := receiveTest(t, accounts.requests)
-				if request.SessionID != [16]byte(session.sessionID) || request.PathID == ([16]byte{}) {
-					t.Fatalf("TURN acquisition lost its session/path authority: %+v", request)
+				applyPath()
+				path.Kind, path.ControlSequence, path.ValidFor = protocolsession.PeerPathRevoke, 2, 0
+				applyPath()
+				if !factory.native.Retired([16]byte(session.sessionID), v2signal.PeerPathID(path.PeerPathID)) {
+					t.Fatal("wrapped path controls did not retire the native path")
 				}
-				message = receiveTURN()
-				if unavailable, ok := message.(turncontrol.Unavailable); !ok || unavailable.Profile != peerTestTURNProfile {
-					t.Fatalf("TURN demand response = %#v", message)
-				}
-			}
 
-			stop()
-			if path, turn := session.sessionControlHandlers(); path != nil || turn != nil {
-				t.Fatal("sender shutdown retained session control handlers")
-			}
-			if !withTURN {
-				select {
-				case control := <-session.sessionControls:
-					t.Fatalf("unconfigured session sent a control: %+v", control)
-				default:
+				if withTURN {
+					receiveTURN := func() turncontrol.Message {
+						t.Helper()
+						control := receiveTest(t, session.sessionControls)
+						if control.kind != protocolsession.MessageTURNControl {
+							t.Fatalf("TURN response used control family %v", control.kind)
+						}
+						message, decodeErr := turncontrol.Decode(control.body)
+						if decodeErr != nil {
+							t.Fatal(decodeErr)
+						}
+						if message.Header().SessionID != [16]byte(session.sessionID) {
+							t.Fatal("TURN response changed the session identity")
+						}
+						return message
+					}
+					message := receiveTURN()
+					available, ok := message.(turncontrol.Available)
+					if !ok || len(available.Profiles) != 1 || available.Profiles[0] != peerTestTURNProfile {
+						t.Fatalf("TURN inventory = %#v", message)
+					}
+					select {
+					case <-accounts.requests:
+						t.Fatal("registering TURN controls acquired credentials before demand")
+					default:
+					}
+					demand, encodeErr := turncontrol.Encode(turncontrol.Demand{
+						Authority: available.Authority, HoldFor: time.Minute,
+					})
+					if encodeErr != nil {
+						t.Fatal(encodeErr)
+					}
+					if handleErr := turnHandler(ctx, demand); handleErr != nil {
+						t.Fatal(handleErr)
+					}
+					request := receiveTest(t, accounts.requests)
+					if request.SessionID != [16]byte(session.sessionID) || request.PathID == ([16]byte{}) {
+						t.Fatalf("TURN acquisition lost its session/path authority: %+v", request)
+					}
+					message = receiveTURN()
+					if unavailable, ok := message.(turncontrol.Unavailable); !ok || unavailable.Profile != peerTestTURNProfile {
+						t.Fatalf("TURN demand response = %#v", message)
+					}
 				}
-			}
+
+				stop()
+				if path, turn := session.sessionControlHandlers(); path != nil || turn != nil {
+					t.Fatal("sender shutdown retained session control handlers")
+				}
+				if !withTURN {
+					select {
+					case control := <-session.sessionControls:
+						t.Fatalf("unconfigured session sent a control: %+v", control)
+					default:
+					}
+				}
+
+			})
 		})
 	}
 }

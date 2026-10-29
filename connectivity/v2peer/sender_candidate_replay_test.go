@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"testing/synctest"
 
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/v2signal"
@@ -69,7 +70,7 @@ func newSenderCandidateHarness(t *testing.T, maxCandidates int) *senderCandidate
 	receiveTest(t, peer.remote)
 	receiveTest(t, session.controls)
 	var attempt *peerAttempt
-	waitForTest(t, func() bool {
+	assertPeerState(t, func() bool {
 		handler.mu.Lock()
 		attempt = handler.attempts[operationKey]
 		handler.mu.Unlock()
@@ -130,6 +131,10 @@ func testCandidate(t *testing.T, binding v2signal.Binding, seed int) (v2signal.C
 }
 
 func TestSenderCandidateDistinctBodiesEnforceLeafBudget(t *testing.T) {
+	synctest.Test(t, testSenderCandidateDistinctBodiesEnforceLeafBudget)
+}
+
+func testSenderCandidateDistinctBodiesEnforceLeafBudget(t *testing.T) {
 	harness := newSenderCandidateHarness(t, 2)
 	first, firstBody := testCandidate(t, harness.binding, 101)
 	second, secondBody := testCandidate(t, harness.binding, 102)
@@ -157,7 +162,7 @@ func TestSenderCandidateDistinctBodiesEnforceLeafBudget(t *testing.T) {
 		t.Fatalf("over-budget candidate reached Pion: %#v", overflow)
 	default:
 	}
-	waitForTest(t, harness.candidateOperationReleased)
+	assertPeerState(t, harness.candidateOperationReleased)
 }
 
 func TestSenderCandidateBindingAndDecodeConflictsRemainOperationErrors(t *testing.T) {
@@ -179,20 +184,24 @@ func TestSenderCandidateBindingAndDecodeConflictsRemainOperationErrors(t *testin
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			harness := newSenderCandidateHarness(t, 1)
-			if err := harness.sendCandidate(t, test.body(t, harness.binding)); err != nil {
-				t.Fatalf("enqueue candidate conflict: %v", err)
-			}
-			failure := receiveTest(t, harness.session.failures)
-			if failure.operation != harness.operation || failure.code != protocolsession.PeerOperationCodeCandidates {
-				t.Fatalf("candidate conflict failure=%#v", failure)
-			}
-			receiveTest(t, harness.peer.closed)
-			select {
-			case added := <-harness.peer.added:
-				t.Fatalf("candidate conflict reached Pion: %#v", added)
-			default:
-			}
+			synctest.Test(t, func(t *testing.T) {
+
+				harness := newSenderCandidateHarness(t, 1)
+				if err := harness.sendCandidate(t, test.body(t, harness.binding)); err != nil {
+					t.Fatalf("enqueue candidate conflict: %v", err)
+				}
+				failure := receiveTest(t, harness.session.failures)
+				if failure.operation != harness.operation || failure.code != protocolsession.PeerOperationCodeCandidates {
+					t.Fatalf("candidate conflict failure=%#v", failure)
+				}
+				receiveTest(t, harness.peer.closed)
+				select {
+				case added := <-harness.peer.added:
+					t.Fatalf("candidate conflict reached Pion: %#v", added)
+				default:
+				}
+
+			})
 		})
 	}
 }
