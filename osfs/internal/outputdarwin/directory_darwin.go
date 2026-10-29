@@ -80,24 +80,10 @@ func (dir *directory) verify() error {
 		if stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o077 != 0 {
 			return outputcap.ErrUnsafeNamespace
 		}
-		return validateACL(dir.fd(), true)
+		return validatePrivateACL(dir.fd())
 	}
 	return nil
 }
-func (dir *directory) ValidateCreateAuthority() error {
-	if err := dir.verify(); err != nil {
-		return err
-	}
-	var stat unix.Stat_t
-	if err := unix.Fstat(dir.fd(), &stat); err != nil {
-		return nativeError(err)
-	}
-	if stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o022 != 0 || stat.Mode&0o300 != 0o300 {
-		return outputcap.ErrUnsafeNamespace
-	}
-	return validateACL(dir.fd(), dir.private)
-}
-func (dir *directory) ValidateMetadataAuthority() error { return dir.ValidateCreateAuthority() }
 func (dir *directory) Close() error {
 	if dir == nil {
 		return nil
@@ -227,10 +213,11 @@ func (dir *directory) CreateDirectory(name string, private bool) (outputcap.Dire
 		return nil, err
 	}
 	child := created.(*directory)
-	child.private = private
-	if err := child.verify(); err != nil {
-		child.private = false
-		return nil, errors.Join(err, dir.RemoveDirectory(name, child), child.Close())
+	if private {
+		if err := child.establishPrivateAuthority(); err != nil {
+			child.private = false
+			return nil, errors.Join(err, dir.RemoveDirectory(name, child), child.Close())
+		}
 	}
 	return child, nil
 }

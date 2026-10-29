@@ -56,7 +56,7 @@ func (state *fileState) verify() error {
 		if stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o077 != 0 {
 			return outputcap.ErrUnsafeNamespace
 		}
-		return validateACL(int(state.file.Fd()), true)
+		return validatePrivateACL(int(state.file.Fd()))
 	}
 	return nil
 }
