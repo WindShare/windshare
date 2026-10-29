@@ -61,7 +61,7 @@ func (f *file) SetModifiedTime(modified catalog.ModifiedTime) error {
 		return nil
 	}
 	t := time.Unix(modified.Seconds(), int64(modified.Nanoseconds()))
-	return setFileTimes(f, t)
+	return setFileModifiedTime(f.handle, t)
 }
 
 // Mtime is excluded: writes after a saved checkpoint legitimately change it.

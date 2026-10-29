@@ -71,7 +71,7 @@ func openPublicOrdinaryOperation(
 		t.Fatal(err)
 	}
 	lookup, err := authority.LookupActive(context.Background(), selection)
-	if err != nil || lookup.Kind() != FilesystemOutputLookupMiss {
+	if err != nil || lookup.Kind() != FilesystemOutputLookupCreateReady {
 		t.Fatalf("active lookup = (%d, %v)", lookup.Kind(), err)
 	}
 	artifact, err := receivecontract.NewResultRootDirectoryTree(

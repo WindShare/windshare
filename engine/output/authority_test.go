@@ -22,7 +22,9 @@ func TestLookupCannotClaimReopenedWorkWithoutAnOutputOperation(t *testing.T) {
 		t.Fatal("output mode rejected")
 	}
 	for _, invalid := range []Lookup{
-		{Kind: OutputLookupMiss},
+		{Kind: OutputLookupCreateReady},
+		{Kind: OutputLookupNotFound, Reservation: reservationFixture{}},
+		{Kind: OutputLookupAlreadyRunning, Reservation: reservationFixture{}},
 		{Kind: OutputLookupReopened},
 		{Kind: 255, Reservation: reservationFixture{}},
 	} {
@@ -31,7 +33,8 @@ func TestLookupCannotClaimReopenedWorkWithoutAnOutputOperation(t *testing.T) {
 		}
 	}
 	for _, valid := range []Lookup{
-		{Kind: OutputLookupMiss, Reservation: reservationFixture{}},
+		{Kind: OutputLookupCreateReady, Reservation: reservationFixture{}},
+		{Kind: OutputLookupNotFound},
 		{Kind: OutputLookupAlreadyRunning},
 		{Kind: OutputLookupNeedsAttention},
 		{Kind: OutputLookupAmbiguous},

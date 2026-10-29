@@ -390,12 +390,19 @@ func (registry *OperationRegistry) LookupOperation(operation receivecontract.Ope
 	if !registry.valid() || operation.IsZero() {
 		return ActiveLookup{}, transfer.ErrInvalidOutputBinding
 	}
-	record, _, err := registry.readOperation(operation)
+	directory, err := openExistingDirectory(registry.operations, operationNamespaceName(operation))
+	if errors.Is(err, fs.ErrNotExist) {
+		return ActiveLookup{state: ActiveLookupNone}, nil
+	}
+	if err != nil {
+		return ActiveLookup{}, repositoryError("open selected ordinary operation", err)
+	}
+	record, _, err := readAndCloseOperation(directory, operation)
 	if err != nil {
 		return ActiveLookup{}, err
 	}
 	if !record.Lifecycle().ParticipatesInActiveLookup() {
-		return ActiveLookup{}, fs.ErrNotExist
+		return ActiveLookup{state: ActiveLookupNone}, nil
 	}
 	return registry.lookupOperationRecord(record)
 }

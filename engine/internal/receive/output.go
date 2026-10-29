@@ -22,7 +22,8 @@ type OutputFactory = output.Factory
 const (
 	OutputResumable            = output.OutputResumable
 	OutputLiveOnly             = output.OutputLiveOnly
-	OutputLookupMiss           = output.OutputLookupMiss
+	OutputLookupCreateReady    = output.OutputLookupCreateReady
+	OutputLookupNotFound       = output.OutputLookupNotFound
 	OutputLookupReopened       = output.OutputLookupReopened
 	OutputLookupAlreadyRunning = output.OutputLookupAlreadyRunning
 	OutputLookupNeedsAttention = output.OutputLookupNeedsAttention
@@ -40,7 +41,8 @@ type getOutputAuthorityFactory = OutputFactory
 const (
 	getOutputResumable            = OutputResumable
 	getOutputLiveOnly             = OutputLiveOnly
-	getOutputLookupMiss           = OutputLookupMiss
+	getOutputLookupCreateReady    = OutputLookupCreateReady
+	getOutputLookupNotFound       = OutputLookupNotFound
 	getOutputLookupReopened       = OutputLookupReopened
 	getOutputLookupAlreadyRunning = OutputLookupAlreadyRunning
 	getOutputLookupNeedsAttention = OutputLookupNeedsAttention

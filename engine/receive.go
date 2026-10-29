@@ -73,7 +73,8 @@ const (
 	ReceivePeerLocalStop             = receive.PeerLocalStop
 	OutputResumable                  = receive.OutputResumable
 	OutputLiveOnly                   = receive.OutputLiveOnly
-	OutputLookupMiss                 = receive.OutputLookupMiss
+	OutputLookupCreateReady          = receive.OutputLookupCreateReady
+	OutputLookupNotFound             = receive.OutputLookupNotFound
 	OutputLookupReopened             = receive.OutputLookupReopened
 	OutputLookupAlreadyRunning       = receive.OutputLookupAlreadyRunning
 	OutputLookupNeedsAttention       = receive.OutputLookupNeedsAttention

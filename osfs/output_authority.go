@@ -463,7 +463,8 @@ func (mode FilesystemOutputExecutionMode) Valid() bool     { return mode.mode.Va
 type FilesystemOutputLookupKind uint8
 
 const (
-	FilesystemOutputLookupMiss FilesystemOutputLookupKind = iota + 1
+	FilesystemOutputLookupCreateReady FilesystemOutputLookupKind = iota + 1
+	FilesystemOutputLookupNotFound
 	FilesystemOutputLookupReopened
 	FilesystemOutputLookupAlreadyRunning
 	FilesystemOutputLookupNeedsAttention
@@ -476,8 +477,10 @@ type FilesystemOutputLookup struct {
 
 func (lookup FilesystemOutputLookup) Kind() FilesystemOutputLookupKind {
 	switch lookup.lookup.Kind() {
-	case outputruntime.ActiveLookupMiss:
-		return FilesystemOutputLookupMiss
+	case outputruntime.ActiveLookupCreateReady:
+		return FilesystemOutputLookupCreateReady
+	case outputruntime.ActiveLookupNotFound:
+		return FilesystemOutputLookupNotFound
 	case outputruntime.ActiveLookupReopened:
 		return FilesystemOutputLookupReopened
 	case outputruntime.ActiveLookupAlreadyRunning:

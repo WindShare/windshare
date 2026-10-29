@@ -21,10 +21,13 @@ const (
 
 func (mode Mode) Valid() bool { return mode == OutputResumable || mode == OutputLiveOnly }
 
+// A missing explicit selection cannot acquire permission to create a new
+// download. Only CreateReady carries that reservation authority.
 type LookupKind uint8
 
 const (
-	OutputLookupMiss LookupKind = iota + 1
+	OutputLookupCreateReady LookupKind = iota + 1
+	OutputLookupNotFound
 	OutputLookupReopened
 	OutputLookupAlreadyRunning
 	OutputLookupNeedsAttention
@@ -73,12 +76,12 @@ type Lookup struct {
 
 func (lookup Lookup) Valid() bool {
 	switch lookup.Kind {
-	case OutputLookupMiss:
+	case OutputLookupCreateReady:
 		return !lookup.Operation.Valid() && lookup.Reservation != nil
-	case OutputLookupAlreadyRunning, OutputLookupNeedsAttention, OutputLookupAmbiguous:
-		return !lookup.Operation.Valid()
+	case OutputLookupNotFound, OutputLookupAlreadyRunning, OutputLookupNeedsAttention, OutputLookupAmbiguous:
+		return !lookup.Operation.Valid() && lookup.Reservation == nil
 	case OutputLookupReopened:
-		return lookup.Operation.Valid()
+		return lookup.Operation.Valid() && lookup.Reservation == nil
 	default:
 		return false
 	}
