@@ -5,6 +5,7 @@ package outputportable
 import (
 	"errors"
 	"path/filepath"
+	"runtime"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -22,9 +23,13 @@ func entrySpelling(parent *directory, name string) (spelling string, resultErr e
 	}
 	defer func() { resultErr = errors.Join(resultErr, unix.Close(fd)) }()
 	var buffer [darwinPathBufferBytes]byte
-	_, _, errno := unix.Syscall(unix.SYS_FCNTL, uintptr(fd), unix.F_GETPATH, uintptr(unsafe.Pointer(&buffer[0])))
-	if errno != 0 {
-		return "", errno
+	// FcntlInt uses libSystem; pin the buffer while its pointer travels as an integer.
+	var pinned runtime.Pinner
+	pinned.Pin(&buffer[0])
+	defer pinned.Unpin()
+	_, err = unix.FcntlInt(uintptr(fd), unix.F_GETPATH, int(uintptr(unsafe.Pointer(&buffer[0]))))
+	if err != nil {
+		return "", err
 	}
 	return filepath.Base(unix.ByteSliceToString(buffer[:])), nil
 }
