@@ -107,7 +107,11 @@ func (dir *directory) Duplicate() (outputcap.Directory, error) {
 	if err != nil {
 		return nil, nativeError(err)
 	}
-	return newDirectory(fd, dir.volume, dir.parent, dir.name, dir.private)
+	copy, err := newDirectory(fd, dir.volume, dir.parent, dir.name, dir.private)
+	if err != nil {
+		return nil, err
+	}
+	return copy, nil
 }
 func (dir *directory) Sync() error {
 	if err := dir.verify(); err != nil {
@@ -195,7 +199,11 @@ func (dir *directory) OpenDirectory(name string, private bool) (outputcap.Direct
 	if err != nil {
 		return nil, nativeError(err)
 	}
-	return newDirectory(fd, dir.volume, dir, name, private)
+	child, err := newDirectory(fd, dir.volume, dir, name, private)
+	if err != nil {
+		return nil, err
+	}
+	return child, nil
 }
 func (dir *directory) CreateDirectory(name string, private bool) (outputcap.Directory, error) {
 	if err := errors.Join(dir.ValidateCreateAuthority(), validComponent(name)); err != nil {
