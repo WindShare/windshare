@@ -393,7 +393,7 @@ func (publication memoryPublication) PublishNoReplace(ctx context.Context) (Fina
 	}
 	condition := destination.publish
 	if condition == 0 {
-		condition = FinalOwnedAtExpectedSize
+		condition = FinalMatchesPublication
 	}
 	destination.final = condition
 	observation, _ := ObserveFinal(condition)
@@ -838,8 +838,8 @@ func TestRecoveryReducerCoversClosedOwnershipOutcomes(t *testing.T) {
 		"paused":               {paused, owned(OwnedReady), final(FinalAbsent), RecoveryActivate},
 		"publishing-retry":     {publishing, owned(OwnedReady), final(FinalAbsent), RecoveryRetryPublication},
 		"publishing-collision": {publishing, owned(OwnedReady), final(FinalCollision), RecoveryReturnCollision},
-		"publishing-complete":  {publishing, owned(OwnedReady), final(FinalOwnedAtExpectedSize), RecoveryCompletePublication},
-		"published":            {published, owned(OwnedStageMissing), final(FinalOwnedAtExpectedSize), RecoveryReturnPublished},
+		"publishing-complete":  {publishing, owned(OwnedReady), final(FinalMatchesPublication), RecoveryCompletePublication},
+		"published":            {published, owned(OwnedStageMissing), final(FinalMatchesPublication), RecoveryReturnPublished},
 		"retired":              {retired, owned(OwnedAbsent), final(FinalAbsent), RecoveryReturnRetired},
 		"quarantined":          {quarantined, owned(OwnedReady), final(FinalAbsent), RecoveryReturnQuarantined},
 		"unknown":              {active, owned(OwnedReady), final(FinalUnsafe), RecoveryInstallQuarantine},
@@ -959,9 +959,9 @@ func TestBeginExistingReducesTerminalAndRecoveryCuts(t *testing.T) {
 		final  FinalCondition
 		want   transfer.FileSettlementKind
 	}{
-		"complete-publication":  {publishing, OwnedReady, FinalOwnedAtExpectedSize, transfer.FilePreviouslyPublished},
+		"complete-publication":  {publishing, OwnedReady, FinalMatchesPublication, transfer.FilePreviouslyPublished},
 		"publication-collision": {publishing, OwnedReady, FinalCollision, transfer.FileCollision},
-		"published":             {published, OwnedStageMissing, FinalOwnedAtExpectedSize, transfer.FilePreviouslyPublished},
+		"published":             {published, OwnedStageMissing, FinalMatchesPublication, transfer.FilePreviouslyPublished},
 		"retired":               {retired, OwnedAbsent, FinalAbsent, transfer.FileFailed},
 		"quarantined":           {quarantined, OwnedReady, FinalAbsent, transfer.FileItemBlocked},
 	} {

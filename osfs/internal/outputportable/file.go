@@ -8,12 +8,15 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
+	"github.com/windshare/windshare/osfs/internal/recoverywitness"
 )
 
 type file struct {
-	handle *os.File
-	parent *directory
-	name   string
+	handle        *os.File
+	parent        *directory
+	name          string
+	recovery      *recoverywitness.Witness
+	strippedOwned bool
 }
 
 func (f *file) Close() error {
@@ -24,10 +27,22 @@ func (f *file) Close() error {
 	f.handle = nil
 	return err
 }
-func (f *file) ReadAt(p []byte, off int64) (int, error)  { return f.handle.ReadAt(p, off) }
-func (f *file) WriteAt(p []byte, off int64) (int, error) { return f.handle.WriteAt(p, off) }
-func (f *file) Sync() error                              { return f.handle.Sync() }
+func (f *file) ReadAt(p []byte, off int64) (int, error) { return f.recoveryRead(p, off) }
+func (f *file) WriteAt(p []byte, off int64) (int, error) {
+	if f.recovery != nil && (off < 0 || uint64(off) > f.recovery.Size() || uint64(len(p)) > f.recovery.Size()-uint64(off)) {
+		return 0, outputcap.ErrUnsafeNamespace
+	}
+	return f.handle.WriteAt(p, off)
+}
+func (f *file) Sync() error { return f.handle.Sync() }
 func (f *file) Size() (uint64, error) {
+	size, err := f.physicalSize()
+	if err == nil && f.recovery != nil && size == f.recovery.Size()+uint64(recoverywitness.TrailerSize) {
+		return f.recovery.Size(), nil
+	}
+	return size, err
+}
+func (f *file) physicalSize() (uint64, error) {
 	info, err := f.handle.Stat()
 	if err != nil {
 		return 0, err
@@ -51,8 +66,9 @@ func (f *file) MetadataMatches(size uint64, modified catalog.ModifiedTime) (bool
 	if err != nil {
 		return false, err
 	}
-	if !info.Mode().IsRegular() || uint64(info.Size()) != size {
-		return false, nil
+	actual, err := f.Size()
+	if err != nil || !info.Mode().IsRegular() || actual != size {
+		return false, err
 	}
 	return !modified.Present() || info.ModTime().Equal(time.Unix(modified.Seconds(), int64(modified.Nanoseconds()))), nil
 }
@@ -63,10 +79,6 @@ func (f *file) SetModifiedTime(modified catalog.ModifiedTime) error {
 	t := time.Unix(modified.Seconds(), int64(modified.Nanoseconds()))
 	return setFileModifiedTime(f.handle, t)
 }
-
-// Mtime is excluded: writes after a saved checkpoint legitimately change it.
-// The stamp is best-effort metadata evidence, never an assertion about content.
-func (f *file) RecoveryMetadata() ([]byte, error) { return metadataStamp(f.handle) }
 
 func (d *directory) openFile(name string, flags int, mode fs.FileMode) (*file, error) {
 	if _, err := d.child(name); err != nil {

@@ -52,7 +52,7 @@ func (platform *Platform) Close() error {
 	return platform.root.Close()
 }
 func (*Platform) IdentityScheme() outputcap.IdentitySchemeID {
-	return outputcap.IdentitySchemePortableMetadataV1
+	return outputcap.IdentitySchemePortableWitnessV1
 }
 func (*Platform) Durability() transfer.DurabilityLevel            { return transfer.DurabilityProcessRestart }
 func (*Platform) ValidateModifiedTime(catalog.ModifiedTime) error { return nil }

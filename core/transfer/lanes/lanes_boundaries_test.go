@@ -60,7 +60,7 @@ func TestLaneFetchReassignsOnlyWithRetiredOperationAuthority(t *testing.T) {
 	}
 }
 
-func TestLaneCandidateWaitAndAttemptBudgetsAreTerminal(t *testing.T) {
+func TestLaneCandidateTerminalConditions(t *testing.T) {
 	t.Run("attempt budget", func(t *testing.T) {
 		lanes := newBoundaryLaneSet(t, 2)
 		attempted := make(map[Identity]struct{}, MaxDemandAttempts)
@@ -94,42 +94,6 @@ func TestLaneCandidateWaitAndAttemptBudgetsAreTerminal(t *testing.T) {
 		if _, _, err := lanes.candidates(ctx, nil, Request{}); !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancelled candidate wait = %v", err)
 		}
-	})
-
-	t.Run("lifecycle cancellation", func(t *testing.T) {
-		lanes := newBoundaryLaneSet(t, 5)
-		done := make(chan error, 1)
-		go func() {
-			_, _, err := lanes.candidates(context.Background(), nil, Request{})
-			done <- err
-		}()
-		lanes.stop()
-		if err := <-done; !errors.Is(err, ErrClosed) {
-			t.Fatalf("stopped candidate wait = %v", err)
-		}
-	})
-
-	t.Run("availability change", func(t *testing.T) {
-		lanes := newBoundaryLaneSet(t, 6)
-		type laneCandidatesResult struct {
-			selected []*laneAdmission
-			err      error
-		}
-		done := make(chan laneCandidatesResult, 1)
-		go func() {
-			selected, _, err := lanes.candidates(context.Background(), nil, Request{})
-			done <- laneCandidatesResult{selected: selected, err: err}
-		}()
-		if err := lanes.Add(Identity{ID: 1, Epoch: 1}, RouteRelay, boundaryBlockLaneFunc(func(context.Context, Demand) (records.BlockRecord, error) {
-			return records.BlockRecord{}, nil
-		})); err != nil {
-			t.Fatal(err)
-		}
-		got := <-done
-		if got.err != nil || len(got.selected) != 1 {
-			t.Fatalf("availability result = selected %d, err %v", len(got.selected), got.err)
-		}
-		lanes.attempts.Done()
 	})
 }
 

@@ -397,7 +397,7 @@ func openRetainedCandidateRepository(
 	switch platform.(interface {
 		IdentityScheme() outputcap.IdentitySchemeID
 	}).IdentityScheme() {
-	case outputcap.IdentitySchemeWindowsObjectIDV1, outputcap.IdentitySchemePortableMetadataV1:
+	case outputcap.IdentitySchemeWindowsObjectIDV1, outputcap.IdentitySchemePortableWitnessV1:
 		profile = checkpointstore.InheritFinalParent
 	case outputcap.IdentitySchemeLinuxHandleV2, outputcap.IdentitySchemeDarwinObjectIDV1:
 		profile = checkpointstore.InheritFinalParent
