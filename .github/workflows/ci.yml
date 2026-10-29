@@ -170,6 +170,15 @@ jobs:
         run: >-
           go-test-coverage --config=.testcoverage.yml
           --profile="$RUNNER_TEMP/root.cover.out"
+      - name: Verify production output on the release ext4 fixture
+        run: |
+          bash scripts/ci/native-output/linux/environment.tests.sh
+          source scripts/ci/native-output/linux/environment.sh
+          windshare_linux_prepare_release_environment "$PWD"
+          trap windshare_linux_cleanup_release_environment EXIT
+          WINDSHARE_GO_EXECUTABLE="$(command -v go)"
+          export WINDSHARE_GO_EXECUTABLE
+          bash scripts/ci/native-output/linux/certify.sh "$PWD" "$WINDSHARE_LINUX_RELEASE_TEMP_ROOT"
 
   go-core:
     name: Core Go packages and protocol vectors
@@ -380,6 +389,8 @@ jobs:
           go-version: stable
           check-latest: true
           cache-dependency-path: go.sum
+      - name: Verify Windows output release selectors
+        run: ./scripts/ci/native-output/windows/certify.tests.ps1
       - name: Vet the native Windows source set
         run: make vet
       - name: Build the native Windows source set

@@ -226,7 +226,6 @@ foreach ($name in @('GOOS', 'GOARCH', 'CGO_ENABLED', 'GOEXPERIMENT')) {
         Remove-Item -LiteralPath "Env:$name"
     }
 }
-$env:WINDSHARE_REQUIRE_NATIVE_OUTPUT_CERTIFICATION = 'windows-ntfs'
 
 $reportedGoRootOutput = @(& $resolvedGoExecutable env GOROOT)
 $reportedGoRootExitCode = $LASTEXITCODE

@@ -43,7 +43,7 @@ if [ -e "$native_root" ] || [ -L "$native_root" ]; then
 fi
 install -d -m 0700 -- "$native_root"
 osfs_test_binary="$native_root/osfs.test"
-outputlinux_test_binary="$native_root/outputlinux.test"
+outputportable_test_binary="$native_root/outputportable.test"
 image="$native_root/ext4.img"
 mountpoint_path="$native_root/mount"
 events="$native_root/events.json"
@@ -61,16 +61,15 @@ compile_static_test_binary() {
   fi
 }
 
-# The restart-identity contract lives with the Linux adapter package. Keep it
-# in its native package rather than copying the test into osfs, so the release
-# fixture executes the same package boundary that production code uses.
+# Exercise the public receive/recovery factory and the shared backend it opens.
+# Strong inode identities are not part of best-effort recovery.
 echo "-- compile static Linux native certification binaries"
 compile_static_test_binary ./osfs "$osfs_test_binary"
-compile_static_test_binary ./osfs/internal/outputlinux "$outputlinux_test_binary"
+compile_static_test_binary ./osfs/internal/outputportable "$outputportable_test_binary"
 
-echo "-- construct deterministic tiny-inode ext4 fixture"
+echo "-- construct ext4 output fixture"
 truncate -s 128M -- "$image"
-mkfs.ext4 -q -F -N 1024 -I 256 -m 0 \
+mkfs.ext4 -q -F -I 256 -m 0 \
   -E lazy_itable_init=0,lazy_journal_init=0 \
   -U random "$image"
 
@@ -121,14 +120,14 @@ if [[ ! "$loop_device" =~ ^/dev/loop[0-9]+$ ]]; then
   exit 1
 fi
 
-echo "-- required loop-ext4 inode-reuse and process-restart certification"
+echo "-- required loop-ext4 publication and process-restart semantics"
 set +e
 timeout --signal=TERM --kill-after=30s 25m \
   sudo -n unshare --mount --propagation private --fork --kill-child \
     bash "$script_root/root-worker.sh" \
-      "$loop_device" "$mountpoint_path" "$osfs_test_binary" "$outputlinux_test_binary" \
+      "$loop_device" "$mountpoint_path" "$osfs_test_binary" "$outputportable_test_binary" \
       "$(id -u)" "$(id -g)" \
-  | "$WINDSHARE_GO_EXECUTABLE" tool test2json -t -p github.com/windshare/windshare/osfs \
+  | "$WINDSHARE_GO_EXECUTABLE" tool test2json -t \
   | tee "$events"
 pipeline_status=("${PIPESTATUS[@]}")
 set -e
@@ -143,9 +142,13 @@ if grep -Fq '"Action":"skip"' "$events" || grep -Fq '"Action":"fail"' "$events";
   exit 1
 fi
 for required_test in \
-  TestLinuxExt4RestartIdentityRejectsForcedInodeReuse \
-  TestLinuxExt4NativeIdentityScheme \
-  TestLinuxExt4ProcessRestartRecovery; do
+  TestNativeOutputDestinationCapabilities \
+  TestNativeOutputProcessRestartKeepsRanges \
+  TestNativeOutputRetainedCandidateListAndReopen \
+  TestNativeLiveOutputPublishesWithoutRecoveryAuthority \
+  TestTaskLockIsProcessExclusiveAndRecoversAfterExit \
+  TestOrdinaryFilesPublishWithoutLinksAndNeverOverwrite \
+  TestSetModifiedTimePreservesNanosecondsAccessTimeAndHandleIdentity; do
   if [ "$(grep -Ec "\"Action\":\"pass\".*\"Test\":\"${required_test}\"" "$events")" -ne 1 ]; then
     echo "required native test did not report exactly one PASS: $required_test" >&2
     exit 1

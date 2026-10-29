@@ -192,6 +192,13 @@ func publicationResult(err error) (outputcap.PublishNoReplaceOutcome, error) {
 	}
 	return outputcap.PublishNoReplaceCommitted, nil
 }
+
+// Live-only stages retain their creation handle because they have no restart
+// witness with which to reopen a file after an interrupted attempt.
+func (*directory) CreateProcessStage(stage outputcap.Directory, name string, size int64) (outputcap.MutableFile, error) {
+	return stage.CreateFile(name, false, size)
+}
+
 func (d *directory) CreateOrdinaryOutputStage(stage outputcap.Directory, name string, size uint64) error {
 	f, err := stage.CreateFile(name, false, int64(size))
 	if err != nil {

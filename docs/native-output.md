@@ -12,6 +12,6 @@ Scheduling uses accepted ranges. Restart-reusable progress includes only persist
 
 Live-only files release their stages on delivery. On supported roots, crash cleanup drains a bounded batch at each destination bind; a backlog does not disable cleanup. Unrecognized objects are preserved.
 
-Shared owners: `destinationauthority` (reservations), `outputruntime` (task lifetime), `outputsession` (attempt settlement), `fileexecution` (file lifecycle), `checkpointstore` (records), and `resumeauthority` (inventory and discard). Strong native identity adapters remain available as optional evidence.
+Shared owners: `destinationauthority` (reservations), `outputruntime` (task lifetime), `outputsession` (attempt settlement), `fileexecution` (file lifecycle), `checkpointstore` (records), and `resumeauthority` (inventory and discard). The production backend is `outputportable`; platform-specific files supply native primitives within that shared implementation.
 
 See [CLI recovery](cli.md#resume) and [validation](validation.md).
