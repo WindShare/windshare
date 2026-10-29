@@ -273,7 +273,8 @@ func (store *FileExecutionStore) CreateOwnedFile(
 		)
 	}
 	observation, _ = fileexecution.NewOwnedObservation(object, fileexecution.OwnedReady)
-	return &nativeOwnedFile{object: object, stage: stage, anchor: anchor}, observation, closeErr
+	retainedAnchor, anchorCloseErr := retainNativeAnchor(stage, anchor)
+	return &nativeOwnedFile{object: object, stage: stage, anchor: retainedAnchor}, observation, errors.Join(closeErr, anchorCloseErr)
 }
 
 func (store *FileExecutionStore) createOwnedStage(
@@ -421,8 +422,18 @@ func (store *FileExecutionStore) openMutableOwnedLocked(
 			closeFile(stage.file), closeFile(anchor.file), closeDirectoriesErr,
 		)
 	}
-	return &nativeOwnedFile{object: object, stage: mutable, anchor: observedAnchor}, observation,
-		errors.Join(comparisonErr, observationErr, closeDirectoriesErr)
+	retainedAnchor, anchorCloseErr := retainNativeAnchor(mutable, observedAnchor)
+	return &nativeOwnedFile{object: object, stage: mutable, anchor: retainedAnchor}, observation,
+		errors.Join(comparisonErr, observationErr, closeDirectoriesErr, anchorCloseErr)
+}
+
+func retainNativeAnchor(stage outputcap.FileIdentity, anchor outputcap.ObservedFile) (outputcap.ObservedFile, error) {
+	if _, portable := stage.(portableWitnessFile); portable {
+		// Portable anchors are records, not hard links. Holding an old record open
+		// would prevent its atomic replacement on Windows during publication.
+		return nil, anchor.Close()
+	}
+	return anchor, nil
 }
 
 type ownedFileOpener func(outputcap.Directory, string, bool) (outputcap.FileIdentity, error)
@@ -558,7 +569,7 @@ func sameExactOwnedFiles(stage, anchor outputcap.FileIdentity, exactSize uint64)
 	}
 	same, sameErr := matchesRecoveryWitness(stage, anchor)
 	stageSize, stageErr := stage.Size()
-	if _, portable := stage.(recoveryMetadataSource); portable {
+	if _, portable := stage.(portableWitnessFile); portable {
 		return same && stageSize == exactSize, errors.Join(sameErr, stageErr)
 	}
 	anchorSize, anchorErr := anchor.Size()

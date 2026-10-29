@@ -265,7 +265,7 @@ func newFileAuthorityObjects(platform *fileAuthorityPlatform) *fileAuthorityObje
 	}
 }
 
-func (objects *fileAuthorityObjects) FinalMatchesOwned(
+func (objects *fileAuthorityObjects) FinalMatchesPublication(
 	_ context.Context,
 	object checkpointmodel.ObjectID,
 	exactSize uint64,
@@ -672,14 +672,14 @@ func TestFileAuthorityProvesOwnedIdentityAndSizeWithoutDisplayMetadata(t *testin
 	fixture.platform.finalPolicy.metadataMatches = false
 	fixture.platform.finalPolicy.metadataErr = errors.New("display metadata unavailable")
 	observed, err = fixture.destination.ObserveFinal(context.Background(), fixture.expectation)
-	if err != nil || observed.Condition() != fileexecution.FinalOwnedAtExpectedSize {
+	if err != nil || observed.Condition() != fileexecution.FinalMatchesPublication {
 		t.Fatalf("owned final condition=%v error=%v", observed.Condition(), err)
 	}
 
 	fixture.platform.finalPolicy.metadataMatches = true
 	fixture.platform.finalPolicy.metadataErr = nil
 	observed, err = fixture.destination.ObserveFinal(context.Background(), fixture.expectation)
-	if err != nil || observed.Condition() != fileexecution.FinalOwnedAtExpectedSize {
+	if err != nil || observed.Condition() != fileexecution.FinalMatchesPublication {
 		t.Fatalf("exact final condition=%v error=%v", observed.Condition(), err)
 	}
 	fixture.objects.mu.Lock()
@@ -717,7 +717,7 @@ func TestFileAuthorityPublishesNoReplaceAndReconcilesTheLiveFinal(t *testing.T) 
 		fixture.objects.publishMutates = true
 		owned := &fileAuthorityOwnedFile{object: fixture.object}
 		observed, err := publishForTest(fixture.destination, context.Background(), owned, fixture.expectation)
-		if err != nil || observed.Condition() != fileexecution.FinalOwnedAtExpectedSize {
+		if err != nil || observed.Condition() != fileexecution.FinalMatchesPublication {
 			t.Fatalf("published condition=%v error=%v", observed.Condition(), err)
 		}
 		fixture.objects.mu.Lock()
@@ -770,7 +770,7 @@ func TestFileAuthorityPublishesNoReplaceAndReconcilesTheLiveFinal(t *testing.T) 
 			&fileAuthorityOwnedFile{object: fixture.object},
 			fixture.expectation,
 		)
-		if observed.Condition() != fileexecution.FinalOwnedAtExpectedSize ||
+		if observed.Condition() != fileexecution.FinalMatchesPublication ||
 			!errors.Is(err, fixture.objects.publishErr) {
 			t.Fatalf("reconciled condition=%v error=%v", observed.Condition(), err)
 		}
@@ -786,7 +786,7 @@ func TestFileAuthorityPublishesNoReplaceAndReconcilesTheLiveFinal(t *testing.T) 
 			&fileAuthorityOwnedFile{object: fixture.object},
 			fixture.expectation,
 		)
-		if observed.Condition() != fileexecution.FinalOwnedAtExpectedSize || !errors.Is(err, errClose) {
+		if observed.Condition() != fileexecution.FinalMatchesPublication || !errors.Is(err, errClose) {
 			t.Fatalf("linked close condition=%v error=%v", observed.Condition(), err)
 		}
 	})
@@ -903,17 +903,17 @@ func TestLiveFileAuthorityPublishesOnlyTheRetainedStageIdentity(t *testing.T) {
 	observed, err := publishForTest(fixture.destination,
 		context.Background(), owned, fixture.expectation,
 	)
-	if err != nil || observed.Condition() != fileexecution.FinalOwnedAtExpectedSize {
+	if err != nil || observed.Condition() != fileexecution.FinalMatchesPublication {
 		t.Fatalf("live publish = (%v, %v)", observed.Condition(), err)
 	}
 	if observed, err = observePublicationForTest(destination,
 		context.Background(), owned, fixture.expectation,
-	); err != nil || observed.Condition() != fileexecution.FinalOwnedAtExpectedSize {
+	); err != nil || observed.Condition() != fileexecution.FinalMatchesPublication {
 		t.Fatalf("published owned final = (%v, %v)", observed.Condition(), err)
 	}
 	if observed, err = publishForTest(fixture.destination,
 		context.Background(), owned, fixture.expectation,
-	); err != nil || observed.Condition() != fileexecution.FinalOwnedAtExpectedSize {
+	); err != nil || observed.Condition() != fileexecution.FinalMatchesPublication {
 		t.Fatalf("idempotent live publish = (%v, %v)", observed.Condition(), err)
 	}
 	if observed, err = fixture.destination.ObserveFinalPresence(context.Background()); err != nil ||

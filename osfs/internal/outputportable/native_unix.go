@@ -3,7 +3,6 @@
 package outputportable
 
 import (
-	"encoding/binary"
 	"errors"
 	"io/fs"
 	"os"
@@ -13,18 +12,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func metadataStamp(f *os.File) ([]byte, error) {
-	info, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return nil, outputcap.ErrUnsafeNamespace
-	}
-	stamp := binary.LittleEndian.AppendUint64(nil, deviceID(stat))
-	return binary.LittleEndian.AppendUint64(stamp, stat.Ino), nil
-}
 func openDirectoryHandle(root *os.Root) (*os.File, error) { return root.Open(".") }
 func openFileAt(d *directory, name string, flags int, mode fs.FileMode) (*os.File, error) {
 	return d.root.OpenFile(name, flags, mode)

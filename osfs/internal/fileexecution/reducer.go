@@ -94,7 +94,7 @@ func reduceWritableRecovery(
 		// our checkpoint. Keeping the verified record writable lets the same
 		// operation continue as soon as the foreign final is removed.
 		return RecoveryDecision{action: RecoveryReturnCollision}, nil
-	case FinalOwnedAtExpectedSize:
+	case FinalMatchesPublication:
 		return recoveryQuarantine(checkpointmodel.QuarantinePublicationHistory), nil
 	case FinalUnsafe:
 		return recoveryQuarantine(checkpointmodel.QuarantineFinalUnsafe), nil
@@ -120,7 +120,7 @@ func reducePublishingRecovery(
 		return recoveryQuarantine(ownedQuarantineReason(owned.Condition())), nil
 	case FinalCollision:
 		return RecoveryDecision{action: RecoveryReturnCollision}, nil
-	case FinalOwnedAtExpectedSize:
+	case FinalMatchesPublication:
 		return RecoveryDecision{action: RecoveryCompletePublication}, nil
 	case FinalUnsafe:
 		return recoveryQuarantine(checkpointmodel.QuarantineFinalUnsafe), nil

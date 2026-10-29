@@ -199,7 +199,7 @@ const (
 	FinalAbsent FinalCondition = iota + 1
 	FinalCollision
 	// Object identity and length are not authentication of current bytes.
-	FinalOwnedAtExpectedSize
+	FinalMatchesPublication
 	FinalUnsafe
 )
 

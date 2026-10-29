@@ -12,6 +12,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  portable-remount:
+    name: Portable recovery (${{ matrix.filesystem }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        filesystem: [vfat, exfat]
+    env:
+      GOTOOLCHAIN: local
+      GOWORK: "off"
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache-dependency-path: go.sum
+      - name: Install disposable image formatters
+        run: sudo apt-get update && sudo apt-get install -y dosfstools exfatprogs
+      - name: Verify recovery across filesystem remount
+        env:
+          TEST_FILESYSTEM: ${{ matrix.filesystem }}
+        run: bash scripts/ci/native-output/remount.sh "$TEST_FILESYSTEM"
   macos:
     name: Native output (${{ matrix.runner }})
     strategy:

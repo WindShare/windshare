@@ -137,9 +137,9 @@ func (store *FileExecutionStore) candidateDurable(record checkpointmodel.Record)
 	return true, nil
 }
 
-// FinalMatchesOwned reconciles interrupted publication using the retained object
-// witness. A durable delivery receipt no longer depends on this comparison.
-func (store *FileExecutionStore) FinalMatchesOwned(
+// FinalMatchesPublication reconciles interrupted publication using retained
+// evidence, without granting deletion authority. Durable receipts bypass it.
+func (store *FileExecutionStore) FinalMatchesPublication(
 	ctx context.Context,
 	object checkpointmodel.ObjectID,
 	exactSize uint64,
@@ -164,7 +164,19 @@ func (store *FileExecutionStore) FinalMatchesOwned(
 			anchorObservationError(anchor), closeFile(anchor.file), closeDirectory(anchor.directory),
 		)
 	}
-	same, compareErr := sameExactOwnedFiles(final, anchor.file, exactSize)
+	var same bool
+	var compareErr error
+	if portable, ok := final.(interface{ MatchesPublishedRecoveryWitness([]byte) (bool, error) }); ok {
+		var encoded []byte
+		encoded, compareErr = readRecoveryWitness(anchor.file)
+		if compareErr == nil {
+			same, compareErr = portable.MatchesPublishedRecoveryWitness(encoded)
+		}
+		size, sizeErr := final.Size()
+		same, compareErr = same && size == exactSize, errors.Join(compareErr, sizeErr)
+	} else {
+		same, compareErr = sameExactOwnedFiles(final, anchor.file, exactSize)
+	}
 	return same, errors.Join(compareErr, anchor.file.Close(), anchor.directory.Close())
 }
 
@@ -188,18 +200,28 @@ func (store *FileExecutionStore) PublishOwnedNoReplace(
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	files, observation, err := store.openObservedOwnedLocked(object, exactSize, true)
-	if err != nil || observation.Condition() != fileexecution.OwnedReady || files.anchor == nil {
-		return nil, errors.Join(err, files.close(), outputcap.ErrUnsafeNamespace)
+	owned, observation, err := store.openMutableOwnedLocked(object, exactSize, true)
+	files, ok := owned.(*nativeOwnedFile)
+	if err != nil || observation.Condition() != fileexecution.OwnedReady || !ok {
+		if owned != nil {
+			err = errors.Join(err, owned.Close())
+		}
+		return nil, errors.Join(err, outputcap.ErrUnsafeNamespace)
 	}
-	var linkedFile outputcap.ObservedFile
-	var linkErr error
-	if _, portable := files.stage.(recoveryMetadataSource); portable {
-		linkedFile, linkErr = publishRecoveryStage(parent, files.stage, name)
-	} else {
-		linkedFile, linkErr = parent.LinkFileNoReplace(files.anchor, name)
+	if _, portable := files.stage.(portableWitnessFile); !portable {
+		linkedFile, linkErr := parent.LinkFileNoReplace(files.anchor, name)
+		return linkedFile, errors.Join(linkErr, files.Close())
 	}
-	return linkedFile, errors.Join(linkErr, files.close())
+	if err := store.preparePortablePublication(object, files.stage); err != nil {
+		return nil, errors.Join(err, files.Close())
+	}
+	linkedFile, linkErr := publishRecoveryStage(parent, files.stage, name)
+	if errors.Is(linkErr, outputcap.ErrNamespaceCollision) || errors.Is(linkErr, outputcap.ErrOrdinaryOutputUnsupported) {
+		if restorer, ok := files.stage.(interface{ RestoreRecoveryWitness() error }); ok {
+			linkErr = errors.Join(linkErr, restorer.RestoreRecoveryWitness())
+		}
+	}
+	return linkedFile, errors.Join(linkErr, files.Close())
 }
 
 func (store *FileExecutionStore) removeOwnedEntry(root outputcap.Directory, object checkpointmodel.ObjectID, suffix string) error {

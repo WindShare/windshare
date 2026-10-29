@@ -137,7 +137,7 @@ func observeOrdinaryResumeFinalLeaf(
 	if err != nil || !unchanged {
 		return finalObservation(fileexecution.FinalUnsafe, err)
 	}
-	matches, err := store.FinalMatchesOwned(
+	matches, err := store.FinalMatchesPublication(
 		ctx, record.OwnedObjectID(), record.ExactSize(), final,
 	)
 	if err != nil {
@@ -150,7 +150,7 @@ func observeOrdinaryResumeFinalLeaf(
 	if !matches {
 		return finalObservation(fileexecution.FinalCollision, nil)
 	}
-	return finalObservation(fileexecution.FinalOwnedAtExpectedSize, nil)
+	return finalObservation(fileexecution.FinalMatchesPublication, nil)
 }
 
 func closeOrdinaryResumeDirectories(opened []outputcap.Directory) error {
