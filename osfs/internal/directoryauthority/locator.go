@@ -38,8 +38,8 @@ func (authority *Authority) canonicalLocator(path string) (locatorKey, error) {
 	if err != nil || firstKey == "" {
 		return locatorKey{}, errors.Join(ErrInvalidLocator, err)
 	}
-	// Prefix reservation also protects probe/bootstrap names below the control
-	// namespace and compares both operands through the platform's exact key rule.
+	// Catalog validation already protects portable aliases of the reserved root.
+	// Keep the provider spelling check as well for its private namespace names.
 	if strings.HasPrefix(firstKey, authority.reservedKey) {
 		return locatorKey{}, errors.Join(ErrInvalidLocator, outputfault.ErrReservedPath)
 	}

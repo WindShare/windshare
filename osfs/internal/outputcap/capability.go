@@ -290,6 +290,9 @@ type Platform interface {
 	RootOpenDisposition() RootOpenDisposition
 	AcquirePublicOperationGuard() (PublicOperationGuard, error)
 	ValidateModifiedTime(catalog.ModifiedTime) error
+	// Keys are pure admission indexes, not evidence about an external namespace.
+	// Directory lookup and no-replace mutation remain authoritative for aliases
+	// and names introduced by other operations.
 	CanonicalLocatorKey(string) (string, error)
 	CanonicalComponentKey(string) (string, error)
 	Close() error
