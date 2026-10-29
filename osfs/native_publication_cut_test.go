@@ -78,11 +78,14 @@ func TestPortablePublicationCrashReconcilesWithoutWritableStage(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			records, attention := store.Snapshot()
-			if len(records) != 1 || len(attention) != 0 {
-				t.Fatal("missing checkpoint")
+			slots, attention, err := store.Inventory()
+			if err != nil || len(slots) != 1 || len(attention) != 0 {
+				t.Fatalf("checkpoint inventory = (%+v, %+v, %v)", slots, attention, err)
 			}
-			previous := records[0]
+			previous, exact := slots[0].Record()
+			if !exact {
+				t.Fatal("checkpoint has no exact lineage")
+			}
 			publishing, err := checkpointmodel.AdvanceState(previous, previous.StateGeneration()+1, checkpointmodel.PhasePublishing, checkpointmodel.CommitVerified, 0, 0, 0)
 			if err != nil {
 				t.Fatal(err)

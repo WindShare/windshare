@@ -19,7 +19,10 @@ func ordinaryResumeItems(
 	if ctx == nil || topLevel == nil || store == nil {
 		return nil, false, resumeauthority.ErrInvalidContract
 	}
-	slots, attention := store.LineageSnapshot()
+	slots, attention, err := store.Inventory()
+	if err != nil {
+		return nil, false, err
+	}
 	items := make([]resumeauthority.Item, 0, len(slots))
 	for _, slot := range slots {
 		if err := ctx.Err(); err != nil {

@@ -98,14 +98,18 @@ func TestInterruptedCheckpointCleanupConvergesAcrossReopen(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				_, attention, err := store.Inventory()
+				slots, attention, err := store.Inventory()
 				if err != nil || len(attention) != 0 || store.ReclaimedCandidateCount() != 1 {
 					t.Fatalf("interrupted inventory = attention:%+v reclaimed:%d err:%v", attention, store.ReclaimedCandidateCount(), err)
 				}
-				records, _ := store.Snapshot()
-				if initial && len(records) != 0 ||
-					!initial && (len(records) != 1 || !bytes.Equal(records[0].CanonicalBytes(), stable.CanonicalBytes())) {
+				if initial && len(slots) != 0 || !initial && len(slots) != 1 {
 					t.Fatal("incomplete candidate granted authority or changed its predecessor")
+				}
+				if !initial {
+					selected, exact := slots[0].Record()
+					if !exact || !bytes.Equal(selected.CanonicalBytes(), stable.CanonicalBytes()) {
+						t.Fatal("incomplete candidate changed its predecessor")
+					}
 				}
 				if err := store.CleanupOwned(context.Background()); err != nil {
 					t.Fatal(err)
