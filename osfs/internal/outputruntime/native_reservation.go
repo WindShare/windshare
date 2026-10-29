@@ -56,7 +56,11 @@ func (authority *Authority) BindDestination(
 		ProcessNonceSource:     authority.random,
 	})
 	if err != nil {
-		return ExecutionMode{}, runtimeOutputError(ctx, transferfault.OutputOwnership, "bind destination authority", errors.Join(err, platform.Close()))
+		code := transferfault.OutputOwnership
+		if errors.Is(err, outputcap.ErrOrdinaryOutputUnsupported) {
+			code = transferfault.OutputUnsupportedFilesystem
+		}
+		return ExecutionMode{}, runtimeOutputError(ctx, code, "bind destination authority", errors.Join(err, platform.Close()))
 	}
 	binding := destination.Binding()
 	mode, err := binding.ExecutionMode()

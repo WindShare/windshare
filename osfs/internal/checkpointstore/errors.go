@@ -9,6 +9,7 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
+	"github.com/windshare/windshare/osfs/internal/fileexecution"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
@@ -222,6 +223,19 @@ func checkpointBoundaryError(code ErrorCode, operation string, cause error) erro
 	return transferfault.Wrap(value, native)
 }
 
+// Loading and classifying the same lineage must hand off the same fault, even
+// when the read-through cache reaches an authority check before the classifier.
+func lineageAuthorityError(operation string, cause error) error {
+	if errors.Is(cause, errFileExecutionAuthorityUnsettled) {
+		return codedError(ErrorStateIO, operation, cause)
+	}
+	if errors.Is(cause, fileexecution.ErrCheckpointRecordCapacity) {
+		value, _ := transferfault.NewOutput(transferfault.ScopeOutputPause, transferfault.OutputResourceBudget)
+		return transferfault.Wrap(value, fmt.Errorf("%s: %w", operation, cause))
+	}
+	return codedError(ErrorCorruptRecord, operation, cause)
+}
+
 func dependencyBoundaryError(operation string, cause error) error {
 	return transferfault.Wrap(
 		transferfault.DependencyContractFault(),
@@ -258,7 +272,7 @@ func fileOutputBoundaryErrorWithoutContext(scope transferfault.Scope, cause erro
 	case errors.Is(cause, transfer.ErrInvalidOutputBinding),
 		errors.Is(cause, transfer.ErrInvalidOutputSettlement):
 		value = transferfault.DependencyContractFault()
-	case errors.Is(cause, outputcap.ErrRecoverableOutputUnsupported):
+	case errors.Is(cause, outputcap.ErrOrdinaryOutputUnsupported), errors.Is(cause, outputcap.ErrRecoverableOutputUnsupported):
 		value, _ = transferfault.NewOutput(transferfault.ScopeOutputPause, transferfault.OutputUnsupportedFilesystem)
 	case errors.Is(cause, outputcap.ErrUnsafeNamespace), errors.Is(cause, outputcap.ErrNamespaceCollision):
 		value, _ = transferfault.NewOutput(transferfault.ScopeOutputPause, transferfault.OutputNamespaceUnsafe)
