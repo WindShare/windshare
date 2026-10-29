@@ -15,7 +15,7 @@ func TestClosedEnumRegistriesNameEveryDeclaredValue(t *testing.T) {
 		{"transport", int(TransportRelay), int(TransportWebRTC), func(value int) (string, bool) { return Transport(value).Name() }},
 		{"content path", int(ContentPathRelay), int(ContentPathDirectAndRelay), func(value int) (string, bool) { return ContentPath(value).Name() }},
 		{"discovery", int(DiscoveryOpen), int(DiscoveryFailed), func(value int) (string, bool) { return DiscoveryStatus(value).Name() }},
-		{"message key", int(MessageUnexpected), int(MessageOutputRecoveryUnavailable), func(value int) (string, bool) { return SafeMessageKey(value).Name() }},
+		{"message key", int(MessageUnexpected), int(MessageRetainedOutputMissing), func(value int) (string, bool) { return SafeMessageKey(value).Name() }},
 		{"fault domain", int(FaultSource), int(FaultCheckpoint), func(value int) (string, bool) { return FaultDomain(value).Name() }},
 		{"fault scope", int(FaultFileLocal), int(FaultSessionTerminal), func(value int) (string, bool) { return FaultScope(value).Name() }},
 		{"relay scheme", int(RelayWS), int(RelayWSS), func(value int) (string, bool) { return RelayScheme(value).Name() }},

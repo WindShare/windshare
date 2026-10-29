@@ -94,7 +94,7 @@ func settlePreparationFailure(step stepOutcome, failure Failure, contextErr, cle
 		failure = Failure{Cause: cleanupErr}
 		class = task.FailureLocal
 	}
-	value := Result{}
+	value := Result{Recovery: RecoveryOutcome{Reason: recoveryReason(class, failure, transfer.JobResult{}, cleanupErr)}}
 	if attention, ok := errors.AsType[*output.AttentionError](cause); ok {
 		value.OutputAttention = attention.Reason
 	}
@@ -147,7 +147,9 @@ func Settle(input SettlementInput) (task.Completion[Result], error) {
 	if outcome != task.OutcomeSuccess {
 		// The typed reason keeps application precedence while the error tree retains
 		// diagnostic causes that may not have decided the user-visible outcome.
-		result.Err = errors.Join(resultFailure(input, class), input.diagnosticCauses())
+		failure := resultFailure(input, class)
+		result.Value.Recovery.Reason = recoveryReason(class, failure, r, input.CleanupError)
+		result.Err = errors.Join(failure, input.diagnosticCauses())
 	}
 	return result, nil
 }

@@ -34,7 +34,8 @@ const (
 // Operation couples immutable intent with the authority that can open it.
 // It does not expose a filesystem path or a provider-specific operation handle.
 type OperationControl interface {
-	RetryAvailable() bool
+	// CanStartAttempt reports released output resources, not whether replaying a failed request is useful.
+	CanStartAttempt() bool
 	Discard(context.Context) error
 }
 

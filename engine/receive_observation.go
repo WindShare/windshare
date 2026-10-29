@@ -16,6 +16,7 @@ const (
 	ReceiveFailureOutputNeedsAttention      = receive.FailureOutputNeedsAttention
 	ReceiveFailureOutputOwnership           = receive.FailureOutputOwnership
 	ReceiveFailureOutputRecoveryUnavailable = receive.FailureOutputRecoveryUnavailable
+	ReceiveFailureRetainedOutputMissing     = receive.FailureRetainedOutputMissing
 	ReceiveFailurePeerConfiguration         = receive.FailurePeerConfiguration
 	ReceiveFailurePeerNegotiation           = receive.FailurePeerNegotiation
 	ReceiveFailurePeerProtocol              = receive.FailurePeerProtocol

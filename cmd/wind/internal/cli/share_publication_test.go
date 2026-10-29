@@ -91,7 +91,7 @@ func TestPublishedLinksPreserveCapabilityAndResolveRelays(t *testing.T) {
 						args = append(args, "--key", strings.TrimPrefix(lines[1], "Key: "))
 					}
 					app, _, stderr := newSemanticTestApp(strings.NewReader(""))
-					request, outcome := app.parseGetRequest(args)
+					request, outcome := app.parseReceiveRequest(receiveGet, args)
 					want := capability
 					want.Relays = test.wantRelays
 					if outcome != requestParseReady || !reflect.DeepEqual(request.link, want) {

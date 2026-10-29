@@ -44,7 +44,7 @@ func TestGetRequestRejectsRetiredSuite(t *testing.T) {
 	)
 	encoded := "http://localhost:5173/" + shareID + "#" + retiredKey
 	app := testApp("")
-	if _, outcome := app.parseGetRequest([]string{encoded}); outcome != requestParseUsageFailure {
+	if _, outcome := app.parseReceiveRequest(receiveGet, []string{encoded}); outcome != requestParseUsageFailure {
 		t.Fatalf("retired suite parse outcome = %d", outcome)
 	}
 }

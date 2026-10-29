@@ -32,26 +32,7 @@ func runAttempt(ctx context.Context, request Request, deps Dependencies, retaine
 	active := &receiveOperation{runner: a, input: input, observation: observation, metrics: metrics}
 	var settlement *SettlementInput
 	step := stepReady
-	defer func() {
-		cleanupErr := active.close()
-		completed.CleanupError = cleanupErr
-		if settlement != nil {
-			settlement.CleanupError = cleanupErr
-			settlement.Elapsed = max(a.clock.Now().Sub(startedAt), 0)
-			settlement.Connectivity = metrics.Snapshot(true)
-			value, err := Settle(*settlement)
-			if err != nil {
-				completed.Settlement = task.Settlement{Outcome: task.OutcomeFailed, FailureClass: task.FailureLocal,
-					Err: errors.Join(Failure{Cause: err}, settlement.diagnosticCauses()), CleanupError: cleanupErr}
-			} else {
-				completed = value
-			}
-			return
-		}
-		completed = settlePreparationFailure(step, observation.failureSnapshot(), ctx.Err(), cleanupErr)
-		completed.Value.Elapsed = max(a.clock.Now().Sub(startedAt), 0)
-		completed.Value.Connectivity = metrics.Snapshot(true)
-	}()
+	defer func() { completed = active.settleAttempt(ctx, settlement, step, startedAt) }()
 	if request.Capability.Suite != link.SuiteSenderAuthenticated || request.WaitTimeout < 0 || request.Admission > OutputRedownload || !request.OperationID.IsZero() && request.Admission != OutputResumeExisting {
 		step = observation.failCode(stepInvalidRequest, FailureInvalidInput)
 		return
@@ -112,6 +93,30 @@ func runAttempt(ctx context.Context, request Request, deps Dependencies, retaine
 	active.execution.CloseWithReason(getSettlementStopReason(ctx.Err(), admissionErr, runtimeErr, connectionErr))
 	settlement = &SettlementInput{Result: result, AdmissionError: admissionErr, RuntimeError: runtimeErr, ConnectionError: connectionErr, ContextError: ctx.Err(), Destination: prepared.destination, DestinationAdjusted: prepared.destinationAdjusted, Operation: prepared.job.ReceiveIntent().OperationID(), Job: prepared.job.JobID()}
 	return
+}
+
+// Teardown participates in settlement, so recovery advice must include its
+// outcome rather than being decided while an attempt still owns resources.
+func (active *receiveOperation) settleAttempt(ctx context.Context, settlement *SettlementInput, step stepOutcome, startedAt time.Time) task.Completion[Result] {
+	cleanupErr := active.close()
+	elapsed := max(active.runner.clock.Now().Sub(startedAt), 0)
+	connectivity := active.metrics.Snapshot(true)
+	if settlement != nil {
+		settlement.CleanupError = cleanupErr
+		settlement.Elapsed = elapsed
+		settlement.Connectivity = connectivity
+		completed, err := Settle(*settlement)
+		if err != nil {
+			return task.Completion[Result]{Settlement: task.Settlement{Outcome: task.OutcomeFailed, FailureClass: task.FailureLocal,
+				Err: errors.Join(Failure{Cause: err}, settlement.diagnosticCauses()), CleanupError: cleanupErr}}
+		}
+		return completed
+	}
+	completed := settlePreparationFailure(step, active.observation.failureSnapshot(), ctx.Err(), cleanupErr)
+	completed.Value.Destination = active.input.outDir
+	completed.Value.Elapsed = elapsed
+	completed.Value.Connectivity = connectivity
+	return completed
 }
 
 func selectionRules(requested []string) (transfer.SelectionRules, error) {

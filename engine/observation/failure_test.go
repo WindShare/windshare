@@ -24,7 +24,7 @@ func TestSourcePathFailureRejectsUnrelatedContext(t *testing.T) {
 }
 
 func TestFailureRegistryIsClosedAndComplete(t *testing.T) {
-	for code := FailureUnexpected; code <= FailureOutputRecoveryUnavailable; code++ {
+	for code := FailureUnexpected; code <= FailureRetainedOutputMissing; code++ {
 		name, nameOK := code.Name()
 		key, keyOK := code.MessageKey()
 		keyName, keyNameOK := key.Name()
@@ -36,7 +36,7 @@ func TestFailureRegistryIsClosedAndComplete(t *testing.T) {
 	if _, err := NewFailure(0); err == nil {
 		t.Fatal("accepted zero failure code")
 	}
-	if _, err := NewFailure(FailureOutputRecoveryUnavailable + 1); err == nil {
+	if _, err := NewFailure(FailureRetainedOutputMissing + 1); err == nil {
 		t.Fatal("accepted unknown failure code")
 	}
 }
