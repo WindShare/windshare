@@ -17,8 +17,8 @@ type retainedAttemptAuthority struct {
 	discards int
 }
 
-func (authority *retainedAttemptAuthority) Close() error         { authority.closes++; return nil }
-func (authority *retainedAttemptAuthority) RetryAvailable() bool { return authority.closes == 0 }
+func (authority *retainedAttemptAuthority) Close() error          { authority.closes++; return nil }
+func (authority *retainedAttemptAuthority) CanStartAttempt() bool { return authority.closes == 0 }
 func (authority *retainedAttemptAuthority) Discard(context.Context) error {
 	authority.discards++
 	return nil
@@ -32,15 +32,15 @@ func TestReceiveAttemptLifetimeKeepsOneOperationUntilDecision(t *testing.T) {
 		cancel     bool
 		unattended bool
 		attempts   int
-		outcome    RecoveryOutcome
+		outcome    ProgressRetention
 		discarded  int
 	}{
-		{"retry", OutputLiveOnly, RecoveryRetry, false, false, 2, RecoveryNotNeeded, 0},
-		{"discard", OutputResumable, RecoveryDiscard, false, false, 1, RecoveryDiscarded, 1},
-		{"exit restart", OutputResumable, RecoveryExit, false, false, 1, RecoveryCheckpointsRetained, 0},
-		{"exit live", OutputLiveOnly, RecoveryExit, false, false, 1, RecoveryLiveProgressReleased, 0},
-		{"cancel", OutputResumable, RecoveryRetry, true, false, 1, RecoveryCheckpointsRetained, 0},
-		{"unattended", OutputLiveOnly, RecoveryRetry, false, true, 1, RecoveryLiveProgressReleased, 0},
+		{"retry", OutputLiveOnly, RecoveryRetry, false, false, 2, RetentionNone, 0},
+		{"discard", OutputResumable, RecoveryDiscard, false, false, 1, RetentionDiscarded, 1},
+		{"exit restart", OutputResumable, RecoveryExit, false, false, 1, RetentionCheckpoints, 0},
+		{"exit live", OutputLiveOnly, RecoveryExit, false, false, 1, RetentionLiveReleased, 0},
+		{"cancel", OutputResumable, RecoveryRetry, true, false, 1, RetentionCheckpoints, 0},
+		{"unattended", OutputLiveOnly, RecoveryRetry, false, true, 1, RetentionLiveReleased, 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			selection := getReopenSelection(t, true, nil)
@@ -77,14 +77,14 @@ func TestReceiveAttemptLifetimeKeepsOneOperationUntilDecision(t *testing.T) {
 					if test.cancel {
 						cancel()
 					}
-					return task.Completion[Result]{Settlement: task.Settlement{Outcome: task.OutcomeFailed, FailureClass: task.FailureLocal}}
+					return settlePreparationFailure(stepLocalFailure, Failure{}, nil, nil)
 				}
 				if retained.operation != &operation || authority.closes != 0 {
 					t.Fatal("retry replaced or released output authority")
 				}
 				return task.Completion[Result]{Settlement: task.Settlement{Outcome: task.OutcomeSuccess}}
 			})
-			if attempts != test.attempts || result.Value.Recovery != test.outcome || authority.closes != 1 || authority.discards != test.discarded {
+			if attempts != test.attempts || result.Value.Recovery.Retention != test.outcome || authority.closes != 1 || authority.discards != test.discarded {
 				t.Fatalf("attempts=%d recovery=%v close=%d discard=%d", attempts, result.Value.Recovery, authority.closes, authority.discards)
 			}
 			if (test.cancel || test.unattended) && decisions != 0 {
@@ -105,6 +105,13 @@ func TestExplicitResumeNeverCreatesMissingOperation(t *testing.T) {
 	_, err := resolveGetOutputOperation(context.Background(), authority, resolver, selection, OutputResumeExisting, receivecontract.OperationID{})
 	if !errors.Is(err, ErrRetainedOutputMissing) || resolver.calls != 0 || len(events) != 1 {
 		t.Fatalf("missing resume: %v events=%v shape=%d", err, events, resolver.calls)
+	}
+	observation, _ := newTestObservation(t)
+	step := reportGetOutputAdmissionFailure(observation, err)
+	completed := settlePreparationFailure(step, observation.failureSnapshot(), nil, nil)
+	failure, ok := errors.AsType[Failure](completed.Err)
+	if !ok || failure.Code != FailureRetainedOutputMissing || completed.FailureClass != task.FailureLocal || !errors.Is(completed.Err, ErrRetainedOutputMissing) {
+		t.Fatalf("resume admission lost its refusal reason: %+v", completed)
 	}
 }
 

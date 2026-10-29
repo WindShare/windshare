@@ -61,7 +61,7 @@ const usageText = `Usage:
   ` + commandmeta.Name + ` config import <file|-> [--front-url <url>] [-v|--verbose]
       Validate and replace sharing defaults. --front-url saves the website address; '-' reads JSON from stdin.
 
-  ` + commandmeta.Name + ` resume retry -o <directory> [--only <path>] <link>
+  ` + commandmeta.Name + ` resume retry [-o <directory>] [--only <path>] <link>
       Continue an existing download with its original link and selection.
 
   ` + commandmeta.Name + ` resume list -o <directory>

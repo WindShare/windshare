@@ -75,13 +75,13 @@ wind get <link> [-o <directory>] [--only <path>]... [--redownload] [--key <key>]
 ## Resume
 
 ```text
-wind resume retry -o <directory> [--operation <id>] [--only <path>]... <link>
+wind resume retry [-o <directory>] [--operation <id>] [--only <path>]... <link>
 wind resume list -o <directory>
 wind resume discard -o <directory> --item <N>
 ```
 
-- `get` automatically reopens matching progress. `resume retry` uses the same pipeline but refuses to start a new download when no operation matches.
-- Interactive failures show affected paths and offer retry, discard, or exit. Retry keeps the operation and verified ranges. Ctrl+C exits; unattended runs report their retention outcome without prompting.
+- `get` automatically reopens matching progress. `resume retry` searches `-o` (default `.`) for the same link and selection, optionally choosing `--operation`, and refuses to start a new download when no operation matches.
+- Recoverable interactive failures offer retry, discard, or exit. Retry keeps the operation and verified ranges. Invalid selections require correcting `--only`; completed files and saved partials remain intact. Ctrl+C exits; unattended runs report retained progress and the appropriate next step without prompting.
 - `get --redownload` starts a separate task in a collision-safe destination. The original task and its automatic continuation remain intact; `resume retry --operation <id>` selects either task.
 - Delivered files stay completed within a task even after being moved or deleted. Saved partials resume only when their source revision matches. Checkpoints survive normal exit; a crash may lose the latest unsaved ranges. See [native output](native-output.md).
 - `resume list` shows recovery state and blocked items. Capability loss keeps existing operations visible as `needs-attention` with `recovery-unavailable`.

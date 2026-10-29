@@ -46,7 +46,7 @@ func TestLiveOperationRetainsRangesAcrossPauseAndPublicationCollision(t *testing
 			if _, err := fixture.session.PauseTree(ctx, transfer.JobPauseInterrupted); err != nil {
 				t.Fatal(err)
 			}
-			if !operation.RetryAvailable() {
+			if !operation.CanStartAttempt() {
 				t.Fatal("settled attempt lost operation authority")
 			}
 			if collision {

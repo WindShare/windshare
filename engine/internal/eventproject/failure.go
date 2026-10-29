@@ -310,6 +310,8 @@ func ReceiveFailureCode(code receive.FailureCode) (appobs.FailureCode, bool) {
 		return appobs.FailureOutputOwnership, true
 	case receive.FailureOutputRecoveryUnavailable:
 		return appobs.FailureOutputRecoveryUnavailable, true
+	case receive.FailureRetainedOutputMissing:
+		return appobs.FailureRetainedOutputMissing, true
 	case receive.FailurePeerConfiguration:
 		return appobs.FailurePeerConfiguration, true
 	case receive.FailurePeerNegotiation:
