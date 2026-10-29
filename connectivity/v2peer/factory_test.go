@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	pion "github.com/pion/webrtc/v4"
@@ -317,6 +318,10 @@ func (channel *testPeerChannel) Err() error {
 }
 
 func TestSenderHandlerAnswersCandidatesAndAdmitsPeerChannel(t *testing.T) {
+	synctest.Test(t, testSenderHandlerAnswersCandidatesAndAdmitsPeerChannel)
+}
+
+func testSenderHandlerAnswersCandidatesAndAdmitsPeerChannel(t *testing.T) {
 	peer := newTestPeerConnection()
 	peer.localSDP = "v=0\r\ns=authoritative-local-answer\r\n"
 	channel := newTestPeerChannel()
@@ -393,7 +398,7 @@ func TestSenderHandlerAnswersCandidatesAndAdmitsPeerChannel(t *testing.T) {
 		t.Fatalf("close peer channel: %v", err)
 	}
 	receiveTest(t, peer.closed)
-	waitForTest(t, func() bool {
+	assertPeerState(t, func() bool {
 		handler.mu.Lock()
 		defer handler.mu.Unlock()
 		_, retired := handler.retiredOperations[operationKey]
@@ -494,6 +499,10 @@ func TestSenderHandlerRetainsBindingAcrossCompletionAndCancelUntilExpiry(t *test
 }
 
 func TestSenderHandlerCapacityFailureEndsOnlyRejectedOperation(t *testing.T) {
+	synctest.Test(t, testSenderHandlerCapacityFailureEndsOnlyRejectedOperation)
+}
+
+func testSenderHandlerCapacityFailureEndsOnlyRejectedOperation(t *testing.T) {
 	peer := newTestPeerConnection()
 	factory := mustTestFactory(t, Config{
 		PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) {
@@ -549,7 +558,7 @@ func TestSenderHandlerCapacityFailureEndsOnlyRejectedOperation(t *testing.T) {
 	if err := handler.Cancel(firstContext, firstOperation); err != nil {
 		t.Fatalf("cancel first attempt: %v", err)
 	}
-	waitForTest(t, func() bool {
+	assertPeerState(t, func() bool {
 		handler.mu.Lock()
 		defer handler.mu.Unlock()
 		return handler.attempts[firstKey] == nil
@@ -579,6 +588,10 @@ func TestSenderHandlerCapacityFailureEndsOnlyRejectedOperation(t *testing.T) {
 }
 
 func TestSenderHandlerQueueOverflowTombstonesRejectedOfferBinding(t *testing.T) {
+	synctest.Test(t, testSenderHandlerQueueOverflowTombstonesRejectedOfferBinding)
+}
+
+func testSenderHandlerQueueOverflowTombstonesRejectedOfferBinding(t *testing.T) {
 	collector := &senderObservationCollector{}
 	factory := mustTestFactoryWithSenderCollector(t, collector, Config{
 		PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) {
@@ -603,7 +616,7 @@ func TestSenderHandlerQueueOverflowTombstonesRejectedOfferBinding(t *testing.T) 
 	if failure.operation != operation || failure.code != protocolsession.PeerOperationCodeNegotiation {
 		t.Fatalf("overflow failure = %#v", failure)
 	}
-	waitForTest(t, func() bool {
+	assertPeerState(t, func() bool {
 		return senderAttemptReachedTerminal(collector.forAttempt(binding.AttemptID), SenderAttemptFailed)
 	})
 	assertUnstartedSenderTerminal(
@@ -623,6 +636,10 @@ func TestSenderHandlerQueueOverflowTombstonesRejectedOfferBinding(t *testing.T) 
 }
 
 func TestSenderHandlerTerminalizesOfferCanceledBeforePublication(t *testing.T) {
+	synctest.Test(t, testSenderHandlerTerminalizesOfferCanceledBeforePublication)
+}
+
+func testSenderHandlerTerminalizesOfferCanceledBeforePublication(t *testing.T) {
 	collector := &senderObservationCollector{}
 	factory := mustTestFactoryWithSenderCollector(t, collector, Config{})
 	handler := newDirectTestHandler(t, factory, newTestPeerSession(27))
@@ -650,7 +667,7 @@ func TestSenderHandlerTerminalizesOfferCanceledBeforePublication(t *testing.T) {
 	if len(handler.events) != 0 {
 		t.Fatal("canceled peer offer reached the negotiation queue")
 	}
-	waitForTest(t, func() bool {
+	assertPeerState(t, func() bool {
 		return senderAttemptReachedTerminal(collector.forAttempt(binding.AttemptID), SenderAttemptFailed)
 	})
 	assertUnstartedSenderTerminal(
@@ -801,6 +818,10 @@ func TestSenderHandlerBoundsTimeoutAndCandidateFlood(t *testing.T) {
 }
 
 func TestSenderHandlerCancellationKeepsAnAdmittedLaneUntilPhysicalClose(t *testing.T) {
+	synctest.Test(t, testSenderHandlerCancellationKeepsAnAdmittedLaneUntilPhysicalClose)
+}
+
+func testSenderHandlerCancellationKeepsAnAdmittedLaneUntilPhysicalClose(t *testing.T) {
 	peer := newTestPeerConnection()
 	channel := newTestPeerChannel()
 	factory := mustTestFactory(t, Config{
@@ -832,7 +853,7 @@ func TestSenderHandlerCancellationKeepsAnAdmittedLaneUntilPhysicalClose(t *testi
 	receiveTest(t, session.admissions)
 	admittedOwner := receiveTest(t, session.ownedAdmissions)
 	var attempt *peerAttempt
-	waitForTest(t, func() bool {
+	assertPeerState(t, func() bool {
 		handler.mu.Lock()
 		attempt = handler.attempts[operationKey]
 		handler.mu.Unlock()
@@ -995,20 +1016,10 @@ func receiveTest[T any](t *testing.T, channel <-chan T) T {
 	}
 }
 
-func waitForTest(t *testing.T, condition func() bool) {
+func assertPeerState(t *testing.T, condition func() bool) {
 	t.Helper()
-	deadline := time.NewTimer(peerTestTimeout)
-	defer deadline.Stop()
-	ticker := time.NewTicker(time.Millisecond)
-	defer ticker.Stop()
-	for {
-		if condition() {
-			return
-		}
-		select {
-		case <-deadline.C:
-			t.Fatal("timed out waiting for peer state")
-		case <-ticker.C:
-		}
+	synctest.Wait()
+	if !condition() {
+		t.Fatal("peer state did not settle after pending work completed")
 	}
 }

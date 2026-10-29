@@ -8,6 +8,7 @@ import (
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -127,17 +128,39 @@ func TestRPCBeginRollsBackEveryPreDeliveryFailure(t *testing.T) {
 		}
 	})
 	t.Run("pre-transport timeout", func(t *testing.T) {
-		runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-		t.Cleanup(runtime.abortBeforeStart)
-		rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{8}, protocolsession.IdentityBytes)))
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-		defer cancel()
-		if _, err := rpc.begin(ctx, protocolsession.MessagePeerOffer, canonicalBody); !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("pre-transport timeout error = %v", err)
-		}
-		if len(rpc.calls) != 0 {
-			t.Fatal("timed-out RPC retained its response sink")
-		}
+		synctest.Test(t, func(t *testing.T) {
+			runtime, channel := newUnstartedRuntime(t, protocolsession.RoleReceiver)
+			rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{8}, protocolsession.IdentityBytes)))
+			const deadline = 20 * time.Millisecond
+			ctx, cancel := context.WithTimeout(t.Context(), deadline)
+			defer cancel()
+			result := make(chan error, 1)
+			go func() {
+				_, err := rpc.begin(ctx, protocolsession.MessagePeerOffer, canonicalBody)
+				result <- err
+			}()
+			synctest.Wait()
+			rpc.mu.Lock()
+			pendingCalls := len(rpc.calls)
+			rpc.mu.Unlock()
+			if pendingCalls != 1 {
+				t.Fatal("RPC did not register its pending response sink")
+			}
+			time.Sleep(deadline - time.Nanosecond)
+			synctest.Wait()
+			if len(result) != 0 {
+				t.Fatal("RPC returned before its deadline")
+			}
+			time.Sleep(time.Nanosecond)
+			synctest.Wait()
+			if err := <-result; !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("pre-transport timeout error = %v", err)
+			}
+			if len(rpc.calls) != 0 {
+				t.Fatal("timed-out RPC retained its response sink")
+			}
+			assertTimedOutRPCNeverReachesTransport(t, runtime, channel)
+		})
 	})
 }
 
@@ -165,7 +188,11 @@ func TestRPCContinuationRejectsStoppedPhysicalWriter(t *testing.T) {
 }
 
 func TestRPCContinuationRetractsPendingPreTransportTimeout(t *testing.T) {
-	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
+	synctest.Test(t, testRPCContinuationRetractsPendingPreTransportTimeout)
+}
+
+func testRPCContinuationRetractsPendingPreTransportTimeout(t *testing.T) {
+	runtime, channel := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 	t.Cleanup(runtime.abortBeforeStart)
 	rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{10}, protocolsession.IdentityBytes)))
 	call := &Call{
@@ -178,14 +205,28 @@ func TestRPCContinuationRetractsPendingPreTransportTimeout(t *testing.T) {
 		t.Fatalf("seed continuation contract: %v", err)
 	}
 	rpc.calls[call.id] = call
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	const deadline = 20 * time.Millisecond
+	ctx, cancel := context.WithTimeout(t.Context(), deadline)
 	defer cancel()
-	if outcome, err := rpc.sendContinuation(
-		ctx, call, protocolsession.MessagePeerCandidate, []byte{0xf6},
-	); outcome != protocolsession.SendOutcomeDropped || !errors.Is(err, context.DeadlineExceeded) ||
-		errors.Is(err, session.ErrRuntimeClosed) {
-		t.Fatalf("stalled continuation = outcome %d, error %v", outcome, err)
+	result := make(chan continuationAttemptResult, 1)
+	go func() {
+		outcome, err := rpc.sendContinuation(ctx, call, protocolsession.MessagePeerCandidate, []byte{0xf6})
+		result <- continuationAttemptResult{outcome: outcome, err: err}
+	}()
+	synctest.Wait()
+	time.Sleep(deadline - time.Nanosecond)
+	synctest.Wait()
+	if len(result) != 0 {
+		t.Fatal("continuation returned before its deadline")
 	}
+	time.Sleep(time.Nanosecond)
+	synctest.Wait()
+	got := <-result
+	if got.outcome != protocolsession.SendOutcomeDropped || !errors.Is(got.err, context.DeadlineExceeded) ||
+		errors.Is(got.err, session.ErrRuntimeClosed) {
+		t.Fatalf("stalled continuation = outcome %d, error %v", got.outcome, got.err)
+	}
+	assertTimedOutRPCNeverReachesTransport(t, runtime, channel)
 }
 
 func TestRPCAdmitCancellationRejectsInvalidAuthority(t *testing.T) {
@@ -226,5 +267,32 @@ func TestDroppedPeerCancelRetiresLocallyActiveOperation(t *testing.T) {
 	if operations.ActiveCount() != 0 || operations.TombstoneCount() != 1 {
 		t.Fatalf("dropped cancel lifecycle = active %d, tombstones %d",
 			operations.ActiveCount(), operations.TombstoneCount())
+	}
+}
+
+// Starting the writer after expiry proves the queued send was retracted, rather
+// than only proving that its caller stopped waiting for delivery.
+func assertTimedOutRPCNeverReachesTransport(t *testing.T, runtime *Runtime, channel *memoryChannel) {
+	t.Helper()
+	lane, err := runtime.lanes.selectLane(&runtime.initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- lane.writer.Run(ctx) }()
+	synctest.Wait()
+	select {
+	case err := <-done:
+		t.Fatalf("writer stopped before the expired-send check: %v", err)
+	default:
+	}
+	if frames := len(channel.pipe.inbox[1-channel.index]); frames != 0 {
+		t.Fatalf("expired RPC transmitted %d frames", frames)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("stop writer after expired-send check: %v", err)
 	}
 }

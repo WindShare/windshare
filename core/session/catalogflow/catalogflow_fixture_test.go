@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -61,17 +62,17 @@ func (t *cancellingTransport) FetchPage(ctx context.Context, _ ListRequest) ([]b
 	return nil, ctx.Err()
 }
 
-func waitForWaiters(t *testing.T, client *Client, directory catalog.DirectoryID, count int) {
+func assertWaiterCount(t *testing.T, client *Client, directory catalog.DirectoryID, count int) {
 	t.Helper()
-	for {
-		client.mu.Lock()
-		call := client.inflight[directory]
-		ready := call != nil && call.waiters == count
-		client.mu.Unlock()
-		if ready {
-			return
-		}
-		time.Sleep(time.Millisecond)
+	synctest.Wait()
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	call := client.inflight[directory]
+	if call == nil {
+		t.Fatal("directory has no shared fetch")
+	}
+	if call.waiters != count {
+		t.Fatalf("shared fetch waiters=%d, want %d", call.waiters, count)
 	}
 }
 
