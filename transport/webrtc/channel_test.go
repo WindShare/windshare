@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	pion "github.com/pion/webrtc/v4"
@@ -467,6 +468,10 @@ func TestMessageAdmissionSerializesOpenReconciliation(t *testing.T) {
 }
 
 func TestFlowControlRejectsStaleAndCoalescedWakes(t *testing.T) {
+	synctest.Test(t, testFlowControlRejectsStaleAndCoalescedWakes)
+}
+
+func testFlowControlRejectsStaleAndCoalescedWakes(t *testing.T) {
 	flow := flowControlProfile{lowWaterBytes: 10, highWaterBytes: 20}
 	fake, channel := openFakeChannel(t, flow)
 	fake.setBuffered(flow.highWaterBytes)
@@ -497,6 +502,10 @@ func TestFlowControlRejectsStaleAndCoalescedWakes(t *testing.T) {
 }
 
 func TestFlowControlSerializesConcurrentWakeups(t *testing.T) {
+	synctest.Test(t, testFlowControlSerializesConcurrentWakeups)
+}
+
+func testFlowControlSerializesConcurrentWakeups(t *testing.T) {
 	flow := flowControlProfile{lowWaterBytes: 10, highWaterBytes: 20}
 	fake, channel := openFakeChannel(t, flow)
 	fake.sendIncrement = flow.highWaterBytes

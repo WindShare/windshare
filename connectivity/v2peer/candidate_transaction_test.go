@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/core/session/contentflow"
@@ -222,6 +223,10 @@ func newCandidateRuntimeHarness(t *testing.T, maxCandidates int) *candidateRunti
 }
 
 func TestSenderCandidateDeliveredUnknownMigratesThroughAuthenticatedReceiverOnce(t *testing.T) {
+	synctest.Test(t, testSenderCandidateDeliveredUnknownMigratesThroughAuthenticatedReceiverOnce)
+}
+
+func testSenderCandidateDeliveredUnknownMigratesThroughAuthenticatedReceiverOnce(t *testing.T) {
 	harness := newCandidateRuntimeHarness(t, 2)
 	ctx, runtimeFactory, receiverRuntime := harness.ctx, harness.factory, harness.receiver
 	senderPeer, initialSenderLane := harness.senderPeer, harness.initialSenderLane
@@ -302,7 +307,7 @@ func TestSenderCandidateDeliveredUnknownMigratesThroughAuthenticatedReceiverOnce
 	if added := receiveTest(t, receiverPeer.added); added.Candidate != wantCandidate {
 		t.Fatalf("receiver Pion candidate=%#v, want %q", added, wantCandidate)
 	}
-	waitForTest(t, func() bool {
+	assertPeerState(t, func() bool {
 		return initialSenderLane.deliveredFailures.Load() == 1 &&
 			replacementSenderLane.sends.Load() == replacementBaseline+1
 	})
@@ -315,7 +320,7 @@ func TestSenderCandidateDeliveredUnknownMigratesThroughAuthenticatedReceiverOnce
 	if added := receiveTest(t, receiverPeer.added); added.Candidate != wantBarrier {
 		t.Fatalf("receiver Pion barrier candidate=%#v, want %q", added, wantBarrier)
 	}
-	waitForTest(t, func() bool {
+	assertPeerState(t, func() bool {
 		return replacementSenderLane.sends.Load() == replacementBaseline+2
 	})
 

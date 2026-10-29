@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"testing/synctest"
 
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/v2signal"
@@ -78,6 +79,10 @@ func TestReceiverAdmissionProgressesWhileCandidateSendIsBlocked(t *testing.T) {
 }
 
 func TestSenderAdmissionProgressesWhileCandidateSendIsBlocked(t *testing.T) {
+	synctest.Test(t, testSenderAdmissionProgressesWhileCandidateSendIsBlocked)
+}
+
+func testSenderAdmissionProgressesWhileCandidateSendIsBlocked(t *testing.T) {
 	peer := newTestPeerConnection()
 	channel := newTestPeerChannel()
 	session := &blockedCandidateSession{
@@ -125,7 +130,7 @@ func TestSenderAdmissionProgressesWhileCandidateSendIsBlocked(t *testing.T) {
 	if admitted := receiveTest(t, session.admissions); admitted != channel {
 		t.Fatal("admission did not receive the open direct channel")
 	}
-	waitForTest(t, attempt.attached.Load)
+	assertPeerState(t, attempt.attached.Load)
 	ctx, cancel := context.WithTimeout(context.Background(), peerTestTimeout)
 	defer cancel()
 	if err := attempt.cancelOperation(ctx); err != nil {

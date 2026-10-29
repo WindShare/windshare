@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/connectivity/v2peer"
@@ -136,6 +137,10 @@ func TestAttemptCountRemainsBoundedWhenSetupFailsImmediately(t *testing.T) {
 }
 
 func TestCapacityFIFOAndCanceledWaitersReleaseOnlyOwnSlot(t *testing.T) {
+	synctest.Test(t, testCapacityFIFOAndCanceledWaitersReleaseOnlyOwnSlot)
+}
+
+func testCapacityFIFOAndCanceledWaitersReleaseOnlyOwnSlot(t *testing.T) {
 	capacity, _ := NewCapacity(1)
 	first, err := capacity.acquire(context.Background())
 	if err != nil {
@@ -144,10 +149,10 @@ func TestCapacityFIFOAndCanceledWaitersReleaseOnlyOwnSlot(t *testing.T) {
 	secondCtx, cancel := context.WithCancel(context.Background())
 	second := make(chan error, 1)
 	go func() { _, err := capacity.acquire(secondCtx); second <- err }()
-	waitQueue(t, capacity, 1)
+	assertCapacityQueueLength(t, capacity, 1)
 	third := make(chan func(), 1)
 	go func() { release, _ := capacity.acquire(context.Background()); third <- release }()
-	waitQueue(t, capacity, 2)
+	assertCapacityQueueLength(t, capacity, 2)
 	cancel()
 	if !errors.Is(receive(t, second), context.Canceled) {
 		t.Fatal("cancel not propagated")
@@ -162,22 +167,14 @@ func TestCapacityFIFOAndCanceledWaitersReleaseOnlyOwnSlot(t *testing.T) {
 		t.Fatal("slot leaked")
 	}
 }
-func waitQueue(t *testing.T, c *Capacity, n int) {
+func assertCapacityQueueLength(t *testing.T, c *Capacity, n int) {
 	t.Helper()
-	deadline := time.After(time.Second)
-	for {
-		c.mu.Lock()
-		count := len(c.queue)
-		c.mu.Unlock()
-		if count == n {
-			return
-		}
-		select {
-		case <-deadline:
-			t.Fatal("waiter not queued")
-		default:
-			time.Sleep(time.Millisecond)
-		}
+	synctest.Wait()
+	c.mu.Lock()
+	length := len(c.queue)
+	c.mu.Unlock()
+	if length != n {
+		t.Fatalf("capacity queue length=%d, want %d", length, n)
 	}
 }
 
