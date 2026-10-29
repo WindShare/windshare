@@ -3,8 +3,8 @@ package revisioncapacity
 import (
 	"context"
 	"errors"
-	"runtime"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -133,6 +133,10 @@ func TestCancellationDuringCloseReleasesTerminalVictimWithoutTransfer(t *testing
 }
 
 func TestStoreCloseWaitsForReclaimCallbackBeforeUnregistering(t *testing.T) {
+	synctest.Test(t, testStoreCloseWaitsForReclaimCallbackBeforeUnregistering)
+}
+
+func testStoreCloseWaitsForReclaimCallbackBeforeUnregistering(t *testing.T) {
 	processLimits := CapacityLimits{StableHandles: 1, ActiveLeases: 8}
 	shareLimits := CapacityLimits{StableHandles: 4, ActiveLeases: 8}
 	owner := newTestOwner(t, processLimits)
@@ -162,7 +166,7 @@ func TestStoreCloseWaitsForReclaimCallbackBeforeUnregistering(t *testing.T) {
 	<-entered
 	storeCloseResult := make(chan error, 1)
 	go func() { storeCloseResult <- victim.Close() }()
-	waitForStoreClosing(t, victim)
+	assertStoreClosing(t, victim)
 	select {
 	case err := <-storeCloseResult:
 		t.Fatalf("store unregistered before reclaim callback completed: %v", err)
@@ -304,16 +308,13 @@ func publishSingleIdle(t *testing.T, store *StoreRegistration, session *SessionR
 	return stable
 }
 
-func waitForStoreClosing(t *testing.T, store *StoreRegistration) {
+func assertStoreClosing(t *testing.T, store *StoreRegistration) {
 	t.Helper()
-	for range 10_000 {
-		store.coordinator.mu.Lock()
-		closing := store.state.closing
-		store.coordinator.mu.Unlock()
-		if closing {
-			return
-		}
-		runtime.Gosched()
+	synctest.Wait()
+	store.coordinator.mu.Lock()
+	closing := store.state.closing
+	store.coordinator.mu.Unlock()
+	if !closing {
+		t.Fatal("store close did not enter closing state")
 	}
-	t.Fatal("store close did not enter closing state")
 }

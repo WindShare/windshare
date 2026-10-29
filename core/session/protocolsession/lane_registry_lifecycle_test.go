@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"errors"
-	"runtime"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -109,6 +109,10 @@ func TestLaneRegistryCloseClearsSensitiveAndAdmissionState(t *testing.T) {
 }
 
 func TestLaneRegistryCloseJoinsAuthenticatedSettlementBeforeSecretDestruction(t *testing.T) {
+	synctest.Test(t, testLaneRegistryCloseJoinsAuthenticatedSettlementBeforeSecretDestruction)
+}
+
+func testLaneRegistryCloseJoinsAuthenticatedSettlementBeforeSecretDestruction(t *testing.T) {
 	now := time.Unix(400, 0)
 	registry, share, session, traffic, privateKey := newLifecycleLaneRegistry(t, &now)
 	operationID := testOperationID(180)
@@ -143,14 +147,13 @@ func TestLaneRegistryCloseJoinsAuthenticatedSettlementBeforeSecretDestruction(t 
 		registry.Close()
 		close(closeDone)
 	}()
-	for {
-		registry.mu.Lock()
-		closing := registry.closing
-		registry.mu.Unlock()
-		if closing {
-			break
-		}
-		runtime.Gosched()
+	synctest.Wait()
+	registry.mu.Lock()
+	closing := registry.closing
+	secretsRetained := len(registry.senderSigningKey) == len(privateKey) && registry.receiverToSender.valid
+	registry.mu.Unlock()
+	if !closing || !secretsRetained {
+		t.Fatalf("blocked close: closing=%v secrets retained=%v", closing, secretsRetained)
 	}
 	select {
 	case <-closeDone:

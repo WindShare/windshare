@@ -5,6 +5,7 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	pion "github.com/pion/webrtc/v4"
@@ -99,19 +100,21 @@ func receiveLifecycleTrace(t *testing.T, events <-chan LifecycleTrace) Lifecycle
 
 func assertNoResult(t *testing.T, result <-chan error, message string) {
 	t.Helper()
+	synctest.Wait()
 	select {
 	case err := <-result:
 		t.Fatalf("%s: %v", message, err)
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
 }
 
 func assertNoSendResult(t *testing.T, result <-chan concurrentSendResult, message string) {
 	t.Helper()
+	synctest.Wait()
 	select {
 	case got := <-result:
 		t.Fatalf("%s: marker=0x%x err=%v", message, got.marker, got.err)
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
 }
 

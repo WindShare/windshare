@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"testing/synctest"
 
 	"github.com/windshare/windshare/core/catalog"
 )
@@ -212,6 +213,10 @@ func TestClientCompletedPersistentWaiterWinsCancellation(t *testing.T) {
 	}
 }
 func TestClientCancelsSharedFetchOnlyAfterLastWaiterLeaves(t *testing.T) {
+	synctest.Test(t, testClientCancelsSharedFetchOnlyAfterLastWaiterLeaves)
+}
+
+func testClientCancelsSharedFetchOnlyAfterLastWaiterLeaves(t *testing.T) {
 	instance := shareInstance(t, 22)
 	directory := directoryID(t, 23)
 	transport := &cancellingTransport{started: make(chan struct{}), cancelled: make(chan struct{})}
@@ -234,11 +239,12 @@ func TestClientCancelsSharedFetchOnlyAfterLastWaiterLeaves(t *testing.T) {
 		_, loadErr := client.LoadDirectory(secondContext, directory)
 		secondDone <- loadErr
 	}()
-	waitForWaiters(t, client, directory, 2)
+	assertWaiterCount(t, client, directory, 2)
 	cancelFirst()
 	if err := <-firstDone; !errors.Is(err, context.Canceled) {
 		t.Fatalf("first waiter error = %v", err)
 	}
+	synctest.Wait()
 	select {
 	case <-transport.cancelled:
 		t.Fatal("shared fetch was cancelled while another waiter remained")
@@ -252,6 +258,10 @@ func TestClientCancelsSharedFetchOnlyAfterLastWaiterLeaves(t *testing.T) {
 }
 
 func TestClientCanceledAcquireDoesNotStealSurvivingLease(t *testing.T) {
+	synctest.Test(t, testClientCanceledAcquireDoesNotStealSurvivingLease)
+}
+
+func testClientCanceledAcquireDoesNotStealSurvivingLease(t *testing.T) {
 	instance := shareInstance(t, 59)
 	directory := directoryID(t, 60)
 	want := onePageSnapshot(t, instance, directory, 61, "shared")
@@ -298,7 +308,7 @@ func TestClientCanceledAcquireDoesNotStealSurvivingLease(t *testing.T) {
 		snapshot, release, err := client.AcquireDirectory(context.Background(), directory)
 		secondDone <- acquireResult{snapshot: snapshot, release: release, err: err}
 	}()
-	waitForWaiters(t, client, directory, 2)
+	assertWaiterCount(t, client, directory, 2)
 	cancelFirst()
 	first := <-firstDone
 	first.release()

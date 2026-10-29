@@ -3,8 +3,8 @@ package turncapacity
 import (
 	"context"
 	"errors"
-	"runtime"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/connectivity/iceconfig"
@@ -34,24 +34,22 @@ func reserveTURN(t *testing.T, owner *Owner, request Request) *Reservation {
 	return reservation
 }
 
-func awaitTURNQueue(t *testing.T, capacity *Pool, count int) {
+func assertTURNQueueLength(t *testing.T, capacity *Pool, count int) {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for {
-		capacity.mu.Lock()
-		length := len(capacity.queue)
-		capacity.mu.Unlock()
-		if length == count {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("TURN queue = %d, want %d", length, count)
-		}
-		runtime.Gosched()
+	synctest.Wait()
+	capacity.mu.Lock()
+	length := len(capacity.queue)
+	capacity.mu.Unlock()
+	if length != count {
+		t.Fatalf("capacity queue length=%d, want %d", length, count)
 	}
 }
 
 func TestTURNCapacityFullProcessReplacesWithoutTakingOrdinaryCapacity(t *testing.T) {
+	synctest.Test(t, testTURNCapacityFullProcessReplacesWithoutTakingOrdinaryCapacity)
+}
+
+func testTURNCapacityFullProcessReplacesWithoutTakingOrdinaryCapacity(t *testing.T) {
 	capacity := NewPool()
 	owner := capacity.NewOwner()
 	var ordinary []*Reservation
@@ -67,7 +65,7 @@ func TestTURNCapacityFullProcessReplacesWithoutTakingOrdinaryCapacity(t *testing
 	pending := make(chan *Reservation, 1)
 	failures := make(chan error, 1)
 	go func() { lease, err := owner.Acquire(ctx, turnRequest(41, 2, 4)); pending <- lease; failures <- err }()
-	awaitTURNQueue(t, capacity, 1)
+	assertTURNQueueLength(t, capacity, 1)
 	ordinary[0].Close()
 	next := await(t, pending)
 	if err := await(t, failures); err != nil {
@@ -94,6 +92,10 @@ func TestTURNCapacityFullProcessReplacesWithoutTakingOrdinaryCapacity(t *testing
 }
 
 func TestTURNCapacityQueuedCancellationAndPredecessorValidation(t *testing.T) {
+	synctest.Test(t, testTURNCapacityQueuedCancellationAndPredecessorValidation)
+}
+
+func testTURNCapacityQueuedCancellationAndPredecessorValidation(t *testing.T) {
 	capacity := NewPool()
 	owner := capacity.NewOwner()
 	for i := range MaximumConnections {
@@ -107,12 +109,12 @@ func TestTURNCapacityQueuedCancellationAndPredecessorValidation(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		result := make(chan error, 1)
 		go func() { lease, err := owner.Acquire(ctx, request); lease.Close(); result <- err }()
-		awaitTURNQueue(t, capacity, 1)
+		assertTURNQueueLength(t, capacity, 1)
 		cancel()
 		if err := await(t, result); !errors.Is(err, context.Canceled) {
 			t.Fatal(err)
 		}
-		awaitTURNQueue(t, capacity, 0)
+		assertTURNQueueLength(t, capacity, 0)
 	}
 	wrongService := turnRequest(40, 1, 1)
 	wrongService.Service.Profile = "other"
@@ -138,6 +140,10 @@ func TestTURNCapacitySeparatesLocalOwnersOfTheSameSession(t *testing.T) {
 }
 
 func TestTURNCapacityHandoffAdmitsBothLocalEndpointsAtFullCapacity(t *testing.T) {
+	synctest.Test(t, testTURNCapacityHandoffAdmitsBothLocalEndpointsAtFullCapacity)
+}
+
+func testTURNCapacityHandoffAdmitsBothLocalEndpointsAtFullCapacity(t *testing.T) {
 	capacity := NewPool()
 	left, right := capacity.NewOwner(), capacity.NewOwner()
 	leftOld := reserveTURN(t, left, turnRequest(1, 0, 4))
@@ -154,9 +160,9 @@ func TestTURNCapacityHandoffAdmitsBothLocalEndpointsAtFullCapacity(t *testing.T)
 	pending := make(chan *Reservation, 1)
 	failures := make(chan error, 1)
 	go func() { lease, err := left.Acquire(ctx, turnRequest(41, 2, 4)); pending <- lease; failures <- err }()
-	awaitTURNQueue(t, capacity, 1)
+	assertTURNQueueLength(t, capacity, 1)
 	leftOld.Close()
-	awaitTURNQueue(t, capacity, 1)
+	assertTURNQueueLength(t, capacity, 1)
 	if leftNext.predecessor != nil || rightNext.predecessor != rightOld || capacity.replacements != 1 {
 		t.Fatal("partial endpoint settlement released the shared handoff")
 	}
