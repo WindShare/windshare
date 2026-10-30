@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -138,72 +139,99 @@ func TestRecorderPropagatesSinkFailure(t *testing.T) {
 }
 
 func TestEventSinkFuncRetiresStalledDirectCallback(t *testing.T) {
-	entered := make(chan struct{}, 1)
-	release := make(chan struct{})
-	defer close(release)
-	sink := EventSinkFunc(func(Event) error {
+	synctest.Test(t, func(t *testing.T) {
+		entered := make(chan struct{}, 1)
+		release := make(chan struct{})
+		defer close(release)
+		sink := EventSinkFunc(func(Event) error {
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
+			<-release
+			return nil
+		})
+		startedAt := time.Now()
+		if err := sink.WriteEvent(Event{}); !errors.Is(err, ErrEventDeliveryTimeout) {
+			t.Fatalf("direct sink error = %v, want delivery timeout", err)
+		}
 		select {
-		case entered <- struct{}{}:
+		case <-entered:
+		default:
+			t.Fatal("direct sink callback was not invoked")
+		}
+		if elapsed := time.Since(startedAt); elapsed != EventAdapterCallTimeout {
+			t.Fatalf("direct sink timed out after %s, want %s", elapsed, EventAdapterCallTimeout)
+		}
+		startedAt = time.Now()
+		if err := sink.WriteEvent(Event{}); !errors.Is(err, ErrEventDeliveryTimeout) {
+			t.Fatalf("retired direct sink error = %v, want retained timeout", err)
+		}
+		if elapsed := time.Since(startedAt); elapsed != 0 {
+			t.Fatalf("retired direct sink was invoked again for %s", elapsed)
+		}
+		select {
+		case <-entered:
+			t.Fatal("retired direct sink callback was invoked again")
 		default:
 		}
-		<-release
-		return nil
 	})
-	if err := sink.WriteEvent(Event{}); !errors.Is(err, ErrEventDeliveryTimeout) {
-		t.Fatalf("direct sink error = %v, want delivery timeout", err)
-	}
-	select {
-	case <-entered:
-	default:
-		t.Fatal("direct sink callback was not invoked")
-	}
-	startedAt := time.Now()
-	if err := sink.WriteEvent(Event{}); !errors.Is(err, ErrEventDeliveryTimeout) {
-		t.Fatalf("retired direct sink error = %v, want retained timeout", err)
-	}
-	if elapsed := time.Since(startedAt); elapsed > 100*time.Millisecond {
-		t.Fatalf("retired direct sink was invoked again for %s", elapsed)
-	}
-	select {
-	case <-entered:
-		t.Fatal("retired direct sink callback was invoked again")
-	default:
-	}
 }
 
 func TestEventSinkFuncTimeoutIncludesQueueWait(t *testing.T) {
-	firstEntered := make(chan struct{})
-	releaseFirst := make(chan struct{})
-	releaseSecond := make(chan struct{})
-	defer close(releaseSecond)
-	calls := 0
-	sink := EventSinkFunc(func(Event) error {
-		calls++
-		if calls == 1 {
-			close(firstEntered)
-			<-releaseFirst
+	synctest.Test(t, func(t *testing.T) {
+		firstEntered := make(chan struct{})
+		releaseFirst := make(chan struct{})
+		unblockFirst := sync.OnceFunc(func() { close(releaseFirst) })
+		defer unblockFirst()
+		releaseSecond := make(chan struct{})
+		defer close(releaseSecond)
+		calls := 0
+		sink := EventSinkFunc(func(Event) error {
+			calls++
+			if calls == 1 {
+				close(firstEntered)
+				<-releaseFirst
+				return nil
+			}
+			<-releaseSecond
 			return nil
+		})
+		firstResult := make(chan error, 1)
+		go func() { firstResult <- sink.WriteEvent(Event{}) }()
+		<-firstEntered
+		secondResult := make(chan error, 1)
+		startedAt := time.Now()
+		go func() { secondResult <- sink.WriteEvent(Event{}) }()
+		// The second call must consume its deadline while queued, before its callback starts.
+		synctest.Wait()
+		if calls != 1 {
+			t.Fatalf("callbacks before release = %d, want 1", calls)
 		}
-		<-releaseSecond
-		return nil
+		const queueWait = EventAdapterCallTimeout / 2
+		synctest.Sleep(queueWait)
+		unblockFirst()
+		if err := <-firstResult; err != nil {
+			t.Fatalf("first direct sink call = %v", err)
+		}
+		synctest.Wait()
+		if calls != 2 {
+			t.Fatalf("callbacks after release = %d, want 2", calls)
+		}
+		synctest.Sleep(EventAdapterCallTimeout - queueWait - time.Nanosecond)
+		select {
+		case err := <-secondResult:
+			t.Fatalf("queued call completed before its deadline: %v", err)
+		default:
+		}
+		synctest.Sleep(time.Nanosecond)
+		if err := <-secondResult; !errors.Is(err, ErrEventDeliveryTimeout) {
+			t.Fatalf("queued direct sink call = %v, want timeout", err)
+		}
+		if elapsed := time.Since(startedAt); elapsed != EventAdapterCallTimeout {
+			t.Fatalf("queued direct sink exceeded its call-local deadline: %s", elapsed)
+		}
 	})
-	firstResult := make(chan error, 1)
-	go func() { firstResult <- sink.WriteEvent(Event{}) }()
-	<-firstEntered
-	secondResult := make(chan error, 1)
-	startedAt := time.Now()
-	go func() { secondResult <- sink.WriteEvent(Event{}) }()
-	time.Sleep(700 * time.Millisecond)
-	close(releaseFirst)
-	if err := <-firstResult; err != nil {
-		t.Fatalf("first direct sink call = %v", err)
-	}
-	if err := <-secondResult; !errors.Is(err, ErrEventDeliveryTimeout) {
-		t.Fatalf("queued direct sink call = %v, want timeout", err)
-	}
-	if elapsed := time.Since(startedAt); elapsed > EventAdapterCallTimeout+300*time.Millisecond {
-		t.Fatalf("queued direct sink exceeded its call-local deadline: %s", elapsed)
-	}
 }
 
 func TestRecorderDoesNotEvaluateSinkErrorOutsideBoundary(t *testing.T) {
@@ -488,31 +516,33 @@ func TestJSONLineSinkBoundsStalledAndPanickingWriters(t *testing.T) {
 		Component: "component", Milestone: "milestone", Outcome: string(OutcomeStarted),
 	}
 	t.Run("stall", func(t *testing.T) {
-		writer := &stalledWriter{entered: make(chan struct{}, 1), release: make(chan struct{})}
-		defer close(writer.release)
-		sink, err := NewJSONLineSink(writer)
-		if err != nil {
-			t.Fatal(err)
-		}
-		startedAt := time.Now()
-		if err := sink.WriteEvent(valid); !errors.Is(err, ErrEventDeliveryTimeout) {
-			t.Fatalf("stalled writer error = %v, want delivery timeout", err)
-		}
-		if elapsed := time.Since(startedAt); elapsed > EventWriterCallTimeout+time.Second {
-			t.Fatalf("stalled writer call took %s", elapsed)
-		}
-		select {
-		case <-writer.entered:
-		default:
-			t.Fatal("stalled writer was not invoked")
-		}
-		startedAt = time.Now()
-		if err := sink.WriteEvent(valid); !errors.Is(err, ErrEventDeliveryTimeout) {
-			t.Fatalf("retired writer error = %v, want retained timeout", err)
-		}
-		if elapsed := time.Since(startedAt); elapsed > 100*time.Millisecond {
-			t.Fatalf("retired writer was invoked again for %s", elapsed)
-		}
+		synctest.Test(t, func(t *testing.T) {
+			writer := &stalledWriter{entered: make(chan struct{}, 1), release: make(chan struct{})}
+			defer close(writer.release)
+			sink, err := NewJSONLineSink(writer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			startedAt := time.Now()
+			if err := sink.WriteEvent(valid); !errors.Is(err, ErrEventDeliveryTimeout) {
+				t.Fatalf("stalled writer error = %v, want delivery timeout", err)
+			}
+			if elapsed := time.Since(startedAt); elapsed != EventWriterCallTimeout {
+				t.Fatalf("stalled writer call took %s", elapsed)
+			}
+			select {
+			case <-writer.entered:
+			default:
+				t.Fatal("stalled writer was not invoked")
+			}
+			startedAt = time.Now()
+			if err := sink.WriteEvent(valid); !errors.Is(err, ErrEventDeliveryTimeout) {
+				t.Fatalf("retired writer error = %v, want retained timeout", err)
+			}
+			if elapsed := time.Since(startedAt); elapsed != 0 {
+				t.Fatalf("retired writer was invoked again for %s", elapsed)
+			}
+		})
 	})
 
 	t.Run("panic", func(t *testing.T) {
@@ -527,49 +557,59 @@ func TestJSONLineSinkBoundsStalledAndPanickingWriters(t *testing.T) {
 }
 
 func TestRecorderRetainsAuthoritativeJournalWhenSinkStalls(t *testing.T) {
-	operation, err := NewOperation("run-1", "operation-1", "scenario")
-	if err != nil {
-		t.Fatal(err)
-	}
-	entered := make(chan struct{}, 1)
-	release := make(chan struct{})
-	defer close(release)
-	recorder, err := NewRecorder(operation, "component", EventSinkFunc(func(Event) error {
+	synctest.Test(t, func(t *testing.T) {
+		operation, err := NewOperation("run-1", "operation-1", "scenario")
+		if err != nil {
+			t.Fatal(err)
+		}
+		entered := make(chan struct{}, 1)
+		release := make(chan struct{})
+		defer close(release)
+		recorder, err := NewRecorder(operation, "component", EventSinkFunc(func(Event) error {
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
+			<-release
+			return nil
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		startedAt := time.Now()
+		if err := recorder.Record("first_record", OutcomeSucceeded, map[string]bool{"ready": true}); !errors.Is(err, ErrEventDeliveryTimeout) {
+			t.Fatalf("first record error = %v, want delivery timeout", err)
+		}
 		select {
-		case entered <- struct{}{}:
+		case <-entered:
+		default:
+			t.Fatal("stalled sink was not invoked")
+		}
+		if elapsed := time.Since(startedAt); elapsed != EventAdapterCallTimeout {
+			t.Fatalf("stalled sink timed out after %s, want %s", elapsed, EventAdapterCallTimeout)
+		}
+		startedAt = time.Now()
+		if err := recorder.Record("second_record", OutcomeFailed, nil); !errors.Is(err, ErrEventDeliveryTimeout) {
+			t.Fatalf("second record error = %v, want retained delivery timeout", err)
+		}
+		if elapsed := time.Since(startedAt); elapsed != 0 {
+			t.Fatalf("retired sink delayed the next journal record by %s", elapsed)
+		}
+		select {
+		case <-entered:
+			t.Fatal("retired recorder invoked the stalled sink again")
 		default:
 		}
-		<-release
-		return nil
-	}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := recorder.Record("first_record", OutcomeSucceeded, map[string]bool{"ready": true}); !errors.Is(err, ErrEventDeliveryTimeout) {
-		t.Fatalf("first record error = %v, want delivery timeout", err)
-	}
-	select {
-	case <-entered:
-	default:
-		t.Fatal("stalled sink was not invoked")
-	}
-	if err := recorder.Record("second_record", OutcomeFailed, nil); !errors.Is(err, ErrEventDeliveryTimeout) {
-		t.Fatalf("second record error = %v, want retained delivery timeout", err)
-	}
-	select {
-	case <-entered:
-		t.Fatal("retired recorder invoked the stalled sink again")
-	default:
-	}
 
-	events := recorder.Events()
-	if len(events) != 2 || events[0].Milestone != "first_record" || events[1].Milestone != "second_record" {
-		t.Fatalf("authoritative journal = %#v", events)
-	}
-	events[0].Payload[0] = 'x'
-	if bytes.Equal(events[0].Payload, recorder.Events()[0].Payload) {
-		t.Fatal("journal snapshot exposed mutable payload storage")
-	}
+		events := recorder.Events()
+		if len(events) != 2 || events[0].Milestone != "first_record" || events[1].Milestone != "second_record" {
+			t.Fatalf("authoritative journal = %#v", events)
+		}
+		events[0].Payload[0] = 'x'
+		if bytes.Equal(events[0].Payload, recorder.Events()[0].Payload) {
+			t.Fatal("journal snapshot exposed mutable payload storage")
+		}
+	})
 }
 
 func TestRecorderBoundsAuthoritativeJournal(t *testing.T) {
@@ -600,47 +640,49 @@ func TestRecorderRetiresCallerPayloadBoundaryWithoutRetiringJournal(t *testing.T
 		t.Fatal(err)
 	}
 	t.Run("stall", func(t *testing.T) {
-		recorder, err := NewRecorder(operation, "component", eventDiscardSink{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		release := make(chan struct{})
-		defer close(release)
-		entered := make(chan struct{}, 2)
-		startedAt := time.Now()
-		if err := recorder.Record(
-			"stalled_payload",
-			OutcomeSucceeded,
-			stalledPayloadMarshaler{entered: entered, release: release},
-		); !errors.Is(err, ErrEventPayloadTimeout) {
-			t.Fatalf("stalled payload error = %v, want encoding timeout", err)
-		}
-		if elapsed := time.Since(startedAt); elapsed > EventPayloadCallTimeout+time.Second {
-			t.Fatalf("stalled payload encoding took %s", elapsed)
-		}
-		select {
-		case <-entered:
-		default:
-			t.Fatal("stalled payload marshaler was not invoked")
-		}
-		startedAt = time.Now()
-		if err := recorder.Record("second_payload", OutcomeSucceeded, map[string]bool{"ready": true}); !errors.Is(err, ErrEventPayloadTimeout) {
-			t.Fatalf("retired payload error = %v, want retained timeout", err)
-		}
-		if elapsed := time.Since(startedAt); elapsed > 100*time.Millisecond {
-			t.Fatalf("retired payload boundary retried for %s", elapsed)
-		}
-		select {
-		case <-entered:
-			t.Fatal("retired payload boundary invoked another marshaler")
-		default:
-		}
-		if err := recorder.RecordEncoded("framework_payload", OutcomeSucceeded, json.RawMessage(`{"ready":true}`)); err != nil {
-			t.Fatalf("retired caller payload boundary blocked encoded evidence: %v", err)
-		}
-		if events := recorder.Events(); len(events) != 1 || events[0].Milestone != "framework_payload" {
-			t.Fatalf("journal after stalled payload = %#v", events)
-		}
+		synctest.Test(t, func(t *testing.T) {
+			recorder, err := NewRecorder(operation, "component", eventDiscardSink{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			release := make(chan struct{})
+			defer close(release)
+			entered := make(chan struct{}, 2)
+			startedAt := time.Now()
+			if err := recorder.Record(
+				"stalled_payload",
+				OutcomeSucceeded,
+				stalledPayloadMarshaler{entered: entered, release: release},
+			); !errors.Is(err, ErrEventPayloadTimeout) {
+				t.Fatalf("stalled payload error = %v, want encoding timeout", err)
+			}
+			if elapsed := time.Since(startedAt); elapsed != EventPayloadCallTimeout {
+				t.Fatalf("stalled payload encoding took %s", elapsed)
+			}
+			select {
+			case <-entered:
+			default:
+				t.Fatal("stalled payload marshaler was not invoked")
+			}
+			startedAt = time.Now()
+			if err := recorder.Record("second_payload", OutcomeSucceeded, stalledPayloadMarshaler{entered: entered, release: release}); !errors.Is(err, ErrEventPayloadTimeout) {
+				t.Fatalf("retired payload error = %v, want retained timeout", err)
+			}
+			if elapsed := time.Since(startedAt); elapsed != 0 {
+				t.Fatalf("retired payload boundary retried for %s", elapsed)
+			}
+			select {
+			case <-entered:
+				t.Fatal("retired payload boundary invoked another marshaler")
+			default:
+			}
+			if err := recorder.RecordEncoded("framework_payload", OutcomeSucceeded, json.RawMessage(`{"ready":true}`)); err != nil {
+				t.Fatalf("retired caller payload boundary blocked encoded evidence: %v", err)
+			}
+			if events := recorder.Events(); len(events) != 1 || events[0].Milestone != "framework_payload" {
+				t.Fatalf("journal after stalled payload = %#v", events)
+			}
+		})
 	})
 
 	t.Run("panic", func(t *testing.T) {
