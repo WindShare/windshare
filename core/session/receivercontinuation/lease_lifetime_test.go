@@ -5,7 +5,6 @@ import (
 	"context"
 	"testing"
 	"testing/synctest"
-	"time"
 
 	"github.com/windshare/windshare/core/content"
 
@@ -55,8 +54,7 @@ func TestLongDownloadCrossesLeaseLifetimesWithoutReplacingSession(t *testing.T) 
 			offset = end
 			if offset < opened.Descriptor.ExactSize() {
 				// The first failed renewal occurs within the final TTL before the cap.
-				time.Sleep(content.MaxLeaseLifetime - content.LeaseTTL + content.LeaseRenewWindow)
-				synctest.Wait()
+				synctest.Sleep(content.MaxLeaseLifetime - content.LeaseTTL + content.LeaseRenewWindow)
 			}
 		}
 		if !bytes.Equal(downloaded, f.payload) {

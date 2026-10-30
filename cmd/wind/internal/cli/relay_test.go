@@ -21,8 +21,8 @@ import (
 func TestRelayCommandsInstallThroughEngineWithoutAdministratorAuthority(t *testing.T) {
 	for _, operation := range []string{"add", "onboard"} {
 		t.Run(operation, func(t *testing.T) {
-			var relayURL string
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			const relayURL = "https://relay.example"
+			server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				if request.Header.Get("Authorization") != "" || request.Header.Get("Cookie") != "" {
 					t.Error("client setup sent administrator authority")
 				}
@@ -52,8 +52,6 @@ func TestRelayCommandsInstallThroughEngineWithoutAdministratorAuthority(t *testi
 					t.Error(err)
 				}
 			}))
-			defer server.Close()
-			relayURL = server.URL
 			store := relayconfig.FileStore{Path: filepath.Join(t.TempDir(), "config.json")}
 			initial := relayconfig.Config{FrontURL: "https://chosen.example",
 				Profiles:     []relayprofile.Candidate{{PublicURL: "https://public.example"}},
