@@ -8,7 +8,7 @@ import (
 	"slices"
 )
 
-func (a *Agent) gatherProviderTCPEndpoints(ctx context.Context) {
+func (a *Agent) gatherProviderTCPEndpoints(ctx context.Context, generation uint64, localUfrag string) {
 	for _, endpoint := range a.providerConfig.MappedTCPEndpoints {
 		if ctx.Err() != nil {
 			return
@@ -20,7 +20,7 @@ func (a *Agent) gatherProviderTCPEndpoints(ctx context.Context) {
 		if !slices.Contains(a.networkTypes, network) {
 			continue
 		}
-		conn, err := a.providerConfig.TCPMappedMux.GetConnForEndpoint(a.localUfrag, endpoint.Local)
+		conn, err := a.providerConfig.TCPMappedMux.GetConnForEndpoint(localUfrag, endpoint.Local)
 		if err != nil {
 			a.log.Warnf("mapped TCP endpoint socket: %v", err)
 			continue
@@ -34,7 +34,7 @@ func (a *Agent) gatherProviderTCPEndpoints(ctx context.Context) {
 			a.log.Warnf("mapped TCP endpoint candidate: %v", err)
 			continue
 		}
-		if err = a.addCandidate(ctx, candidate, conn); err != nil {
+		if err = a.addCandidate(ctx, candidate, conn, &generation, false); err != nil {
 			_ = conn.Close()
 			a.log.Warnf("mapped TCP endpoint admission: %v", err)
 		}

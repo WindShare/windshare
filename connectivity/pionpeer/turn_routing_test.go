@@ -6,7 +6,7 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/pion/transport/v4"
+	"github.com/pion/transport/v5"
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/socketauthority"
 	"github.com/windshare/windshare/connectivity/turnroute"

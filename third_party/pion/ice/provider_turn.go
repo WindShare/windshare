@@ -14,7 +14,7 @@ import (
 	"github.com/pion/dtls/v3"
 	"github.com/pion/ice/v4/internal/fakenet"
 	"github.com/pion/stun/v4"
-	"github.com/pion/transport/v4"
+	"github.com/pion/transport/v5"
 	"github.com/pion/turn/v5"
 )
 
@@ -37,7 +37,7 @@ type TURNAllocation struct {
 // releases the attempt before returning. Callers reserve capacity before dialing.
 type TURNRouteAttempt func(context.Context, TURNRoute, func()) *TURNAllocation
 
-func (a *Agent) gatherTURNRoute(ctx context.Context, route TURNRoute, release func()) *TURNAllocation {
+func (a *Agent) gatherTURNRoute(ctx context.Context, route TURNRoute, release func(), generation uint64) *TURNAllocation {
 	transferred := false
 	defer func() {
 		if !transferred {
@@ -213,13 +213,14 @@ func (a *Agent) gatherTURNRoute(ctx context.Context, route TURNRoute, release fu
 	}
 
 	client, err := factory(&turn.ClientConfig{
-		TURNServerAddr: turnServerAddr,
-		Conn:           locConn,
-		Username:       url.Username,
-		Password:       url.Password,
-		LoggerFactory:  a.loggerFactory,
-		OnBindingEvent: a.providerConfig.OnTURNBinding,
-		Net:            routeNet,
+		TURNServerAddr:         turnServerAddr,
+		Conn:                   locConn,
+		Username:               url.Username,
+		Password:               url.Password,
+		LoggerFactory:          a.loggerFactory,
+		OnBindingEvent:         a.providerConfig.OnTURNBinding,
+		Net:                    routeNet,
+		RequestedAddressFamily: requestedRelayAddressFamily(relayNetworkTypesForConfiguredCandidates(a.networkTypes)),
 	})
 	if err != nil {
 		closeConnAndLog(locConn, a.log, "failed to create new TURN client %s %s", turnServerAddr, err)
@@ -262,7 +263,7 @@ func (a *Agent) gatherTURNRoute(ctx context.Context, route TURNRoute, release fu
 
 	// Relay allocations currently produce UDP relay endpoints regardless of
 	// whether the TURN control connection uses UDP/TCP/TLS/DTLS.
-	a.addRelayCandidates(ctx, relayEndpoint{
+	a.addRelayCandidates(ctx, generation, relayEndpoint{
 		network:   udp,
 		address:   rAddr.IP,
 		port:      rAddr.Port,

@@ -4,7 +4,7 @@ import (
 	"context"
 	"net"
 
-	"github.com/pion/transport/v4"
+	"github.com/pion/transport/v5"
 )
 
 type turnDialContext struct {

@@ -12,7 +12,7 @@ import (
 
 	"github.com/pion/ice/v4"
 	"github.com/pion/logging"
-	"github.com/pion/transport/v4/vnet"
+	"github.com/pion/transport/v5/vnet"
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/core/framechannel"
 )

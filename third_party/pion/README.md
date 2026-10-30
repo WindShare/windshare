@@ -1,7 +1,7 @@
 # Pinned Pion provider adaptation
 
-WindShare carries source projections of Pion ICE v4.4.2, WebRTC v4.2.20, TURN v5.1.0
-and SCTP v1.11.1. Exact
+WindShare carries source projections of Pion ICE v4.4.8, WebRTC v4.2.26, TURN v5.1.3
+and SCTP v1.12.0. Exact
 upstream commits, Go checksums and file hashes are in `manifest.json`; upstream
 MIT licenses and SPDX notices remain beside the sources. These nested dependency
 modules are separate from WindShare's single production Go module and coverage set.
@@ -18,10 +18,12 @@ The narrow patches in `patches/` add:
 - Base-address ordering composed with ICE-TCP direction preferences before candidate
   admission and signaling, including dynamic active TCP; repeated candidates keep unique scores.
 - Explicit STUN cache-bypassing refresh; upstream owns response transaction validation.
-- Context cancellation preserved through local-endpoint gathering and idle STUN refresh.
-- Complete universal UDP mux initialization before its socket reader starts.
-- Cancellable TURN allocation transactions and allocation deletion before closing
-  their control transport, including rejected candidates.
+- Mapped candidates and TURN routes retain their gathering generation; stale
+  results release their sockets instead of entering a newer generation.
+- Idle STUN refresh interrupts blocked writes immediately before socket handoff,
+  without inheriting the shared mux's cancellation grace period.
+- Upstream context-aware TURN allocation with blocked-write cancellation and
+  allocation deletion before closing the control transport, including rejected candidates.
 - Bounded per-candidate STUN writers keep TURN permission round trips outside the
   ICE task loop; obsolete checks are discarded and shutdown joins the writers.
 - Channel binding expiry, bounded transient retries with stable channel numbers,
@@ -49,7 +51,7 @@ Reproduce it from checksum-verified upstream modules in a temporary directory:
 
 ```sh
 go run ./scripts/ci/_piondeps -reproduce
-go test -race github.com/pion/sctp github.com/pion/turn/v5/internal/client ./connectivity/socketauthority ./transport/webrtc/provider
+go test -race github.com/pion/ice/v4 github.com/pion/sctp github.com/pion/turn/v5/internal/client ./connectivity/socketauthority ./connectivity/pionpeer ./transport/webrtc
 ```
 
 Reproduction reads the module cache and applies patches only to temporary copies.

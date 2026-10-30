@@ -1,5 +1,3 @@
-diff --git a/binding_event.go b/binding_event.go
-new file mode 100644
 --- /dev/null
 +++ b/binding_event.go
 @@ -0,0 +1,18 @@
@@ -21,10 +19,9 @@ new file mode 100644
 +	BindingExpired   = client.BindingExpired
 +	BindingExhausted = client.BindingExhausted
 +)
-diff --git a/client.go b/client.go
 --- a/client.go
 +++ b/client.go
-@@ -47,6 +47,7 @@
+@@ -48,6 +48,7 @@
  	Conn           net.PacketConn // Listening socket (net.PacketConn)
  	Net            transport.Net
  	LoggerFactory  logging.LoggerFactory
@@ -32,7 +29,7 @@ diff --git a/client.go b/client.go
  
  	// PermissionTimeout sets the refresh interval of permissions. Defaults to 2 minutes.
  	PermissionRefreshInterval time.Duration
-@@ -96,6 +97,7 @@
+@@ -97,6 +98,7 @@
  	permissionRefreshInterval time.Duration
  	bindingRefreshInterval    time.Duration
  	bindingCheckInterval      time.Duration
@@ -40,7 +37,7 @@ diff --git a/client.go b/client.go
  }
  
  // inferAddressFamilyFromConn attempts to determine the address
-@@ -248,6 +250,7 @@
+@@ -249,6 +251,7 @@
  		requestedAddressFamily:    requestedAddressFamily,
  		permissionRefreshInterval: config.PermissionRefreshInterval,
  		bindingRefreshInterval:    config.bindingRefreshInterval,
@@ -48,260 +45,17 @@ diff --git a/client.go b/client.go
  		bindingCheckInterval:      config.bindingCheckInterval,
  	}
  
-@@ -473,108 +476,6 @@
- 	return relayed, lifetime, nonce, reservationToken, nil
- }
- 
--// Allocate sends a TURN allocation request to the given transport address.
--func (c *Client) Allocate() (net.PacketConn, error) {
--	if err := c.allocTryLock.Lock(); err != nil {
--		return nil, fmt.Errorf("%w: %s", errOneAllocateOnly, err.Error())
--	}
--	defer c.allocTryLock.Unlock()
--
--	relayedConn := c.relayedUDPConn()
--	if relayedConn != nil {
--		return nil, fmt.Errorf("%w: %s", errAlreadyAllocated, relayedConn.LocalAddr().String())
--	}
--
--	relayed, lifetime, nonce, reservationToken, err := c.sendAllocateRequest(proto.ProtoUDP)
--	if err != nil {
--		return nil, err
--	}
--
--	relayedAddr := &net.UDPAddr{
--		IP:   relayed.IP,
--		Port: relayed.Port,
--	}
--
--	relayedConn = client.NewUDPConn(&client.AllocationConfig{
--		Client:                    c,
--		RelayedAddr:               relayedAddr,
--		ServerAddr:                c.turnServerAddr,
--		Realm:                     c.realm,
--		Username:                  c.username,
--		Integrity:                 c.integrity,
--		Nonce:                     nonce,
--		Lifetime:                  lifetime.Duration,
--		Net:                       c.net,
--		Log:                       c.log,
--		PermissionRefreshInterval: c.permissionRefreshInterval,
--		BindingRefreshInterval:    c.bindingRefreshInterval,
--		BindingCheckInterval:      c.bindingCheckInterval,
--	})
--	c.setRelayedUDPConn(relayedConn)
--	c.setReservationToken(reservationToken)
--
--	return relayedConn, nil
--}
--
--// AllocateTCP creates a new TCP allocation at the TURN server.
--func (c *Client) AllocateTCP() (*client.TCPAllocation, error) {
--	if err := c.allocTryLock.Lock(); err != nil {
--		return nil, fmt.Errorf("%w: %s", errOneAllocateOnly, err.Error())
--	}
--	defer c.allocTryLock.Unlock()
--
--	allocation := c.getTCPAllocation()
--	if allocation != nil {
--		return nil, fmt.Errorf("%w: %s", errAlreadyAllocated, allocation.Addr())
--	}
--
--	relayed, lifetime, nonce, reservationToken, err := c.sendAllocateRequest(proto.ProtoTCP)
--	if err != nil {
--		return nil, err
--	}
--
--	relayedAddr := &net.TCPAddr{
--		IP:   relayed.IP,
--		Port: relayed.Port,
--	}
--
--	allocation = client.NewTCPAllocation(&client.AllocationConfig{
--		Client:      c,
--		RelayedAddr: relayedAddr,
--		ServerAddr:  c.turnServerAddr,
--		Realm:       c.realm,
--		Username:    c.username,
--		Integrity:   c.integrity,
--		Nonce:       nonce,
--		Lifetime:    lifetime.Duration,
--		Net:         c.net,
--		Log:         c.log,
--	})
--
--	c.setTCPAllocation(allocation)
--	c.setReservationToken(reservationToken)
--
--	return allocation, nil
--}
--
--// CreatePermission Issues a CreatePermission request for the supplied addresses
--// as described in https://datatracker.ietf.org/doc/html/rfc5766#section-9
--func (c *Client) CreatePermission(addrs ...net.Addr) error {
--	if conn := c.relayedUDPConn(); conn != nil {
--		if err := conn.CreatePermissions(addrs...); err != nil {
--			return err
--		}
--	}
--
--	if allocation := c.getTCPAllocation(); allocation != nil {
--		if err := allocation.CreatePermissions(addrs...); err != nil {
--			return err
--		}
--	}
--
--	return nil
--}
--
- // PerformTransaction performs STUN transaction.
- func (c *Client) PerformTransaction(msg *stun.Message, to net.Addr, ignoreResult bool) (client.TransactionResult,
- 	error,
-@@ -613,13 +514,6 @@
- 	}
- 
- 	return res, nil
--}
--
--// OnDeallocated is called when de-allocation of relay address has been complete.
--// (Called by UDPConn).
--func (c *Client) OnDeallocated(net.Addr) {
--	c.setRelayedUDPConn(nil)
--	c.setTCPAllocation(nil)
- }
- 
- // HandleInbound handles data received.
-diff --git a/client_allocation.go b/client_allocation.go
-new file mode 100644
---- /dev/null
-+++ b/client_allocation.go
-@@ -0,0 +1,122 @@
-+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
-+// SPDX-License-Identifier: MIT
-+
-+package turn
-+
-+import (
-+	"fmt"
-+	"net"
-+
-+	"github.com/pion/turn/v5/internal/client"
-+	"github.com/pion/turn/v5/internal/proto"
-+)
-+
-+// Allocate sends a TURN allocation request to the given transport address.
-+func (c *Client) Allocate() (net.PacketConn, error) {
-+	if err := c.allocTryLock.Lock(); err != nil {
-+		return nil, fmt.Errorf("%w: %s", errOneAllocateOnly, err.Error())
-+	}
-+	defer c.allocTryLock.Unlock()
-+
-+	relayedConn := c.relayedUDPConn()
-+	if relayedConn != nil {
-+		return nil, fmt.Errorf("%w: %s", errAlreadyAllocated, relayedConn.LocalAddr().String())
-+	}
-+
-+	relayed, lifetime, nonce, reservationToken, err := c.sendAllocateRequest(proto.ProtoUDP)
-+	if err != nil {
-+		return nil, err
-+	}
-+
-+	relayedAddr := &net.UDPAddr{
-+		IP:   relayed.IP,
-+		Port: relayed.Port,
-+	}
-+
-+	relayedConn = client.NewUDPConn(&client.AllocationConfig{
-+		Client:                    c,
-+		RelayedAddr:               relayedAddr,
-+		ServerAddr:                c.turnServerAddr,
-+		Realm:                     c.realm,
-+		Username:                  c.username,
-+		Integrity:                 c.integrity,
-+		Nonce:                     nonce,
-+		Lifetime:                  lifetime.Duration,
-+		Net:                       c.net,
-+		Log:                       c.log,
-+		PermissionRefreshInterval: c.permissionRefreshInterval,
-+		BindingRefreshInterval:    c.bindingRefreshInterval,
+@@ -512,6 +515,7 @@
+ 		PermissionRefreshInterval: c.permissionRefreshInterval,
+ 		BindingRefreshInterval:    c.bindingRefreshInterval,
+ 		BindingCheckInterval:      c.bindingCheckInterval,
 +		OnBindingEvent:            c.onBindingEvent,
-+		BindingCheckInterval:      c.bindingCheckInterval,
-+	})
-+	c.setRelayedUDPConn(relayedConn)
-+	c.setReservationToken(reservationToken)
-+
-+	return relayedConn, nil
-+}
-+
-+// AllocateTCP creates a new TCP allocation at the TURN server.
-+func (c *Client) AllocateTCP() (*client.TCPAllocation, error) {
-+	if err := c.allocTryLock.Lock(); err != nil {
-+		return nil, fmt.Errorf("%w: %s", errOneAllocateOnly, err.Error())
-+	}
-+	defer c.allocTryLock.Unlock()
-+
-+	allocation := c.getTCPAllocation()
-+	if allocation != nil {
-+		return nil, fmt.Errorf("%w: %s", errAlreadyAllocated, allocation.Addr())
-+	}
-+
-+	relayed, lifetime, nonce, reservationToken, err := c.sendAllocateRequest(proto.ProtoTCP)
-+	if err != nil {
-+		return nil, err
-+	}
-+
-+	relayedAddr := &net.TCPAddr{
-+		IP:   relayed.IP,
-+		Port: relayed.Port,
-+	}
-+
-+	allocation = client.NewTCPAllocation(&client.AllocationConfig{
-+		Client:      c,
-+		RelayedAddr: relayedAddr,
-+		ServerAddr:  c.turnServerAddr,
-+		Realm:       c.realm,
-+		Username:    c.username,
-+		Integrity:   c.integrity,
-+		Nonce:       nonce,
-+		Lifetime:    lifetime.Duration,
-+		Net:         c.net,
-+		Log:         c.log,
-+	})
-+
-+	c.setTCPAllocation(allocation)
-+	c.setReservationToken(reservationToken)
-+
-+	return allocation, nil
-+}
-+
-+// CreatePermission Issues a CreatePermission request for the supplied addresses
-+// as described in https://datatracker.ietf.org/doc/html/rfc5766#section-9
-+func (c *Client) CreatePermission(addrs ...net.Addr) error {
-+	if conn := c.relayedUDPConn(); conn != nil {
-+		if err := conn.CreatePermissions(addrs...); err != nil {
-+			return err
-+		}
-+	}
-+
-+	if allocation := c.getTCPAllocation(); allocation != nil {
-+		if err := allocation.CreatePermissions(addrs...); err != nil {
-+			return err
-+		}
-+	}
-+
-+	return nil
-+}
-+
-+// OnDeallocated is called when de-allocation of relay address has been complete.
-+// (Called by UDPConn).
-+func (c *Client) OnDeallocated(net.Addr) {
-+	c.setRelayedUDPConn(nil)
-+	c.setTCPAllocation(nil)
-+}
-diff --git a/internal/client/allocation.go b/internal/client/allocation.go
+ 	})
+ 	c.setRelayedUDPConn(relayedConn)
+ 	c.setReservationToken(reservationToken)
 --- a/internal/client/allocation.go
 +++ b/internal/client/allocation.go
-@@ -31,6 +31,7 @@
+@@ -32,6 +32,7 @@
  	PermissionRefreshInterval time.Duration
  	BindingRefreshInterval    time.Duration
  	BindingCheckInterval      time.Duration
@@ -309,7 +63,6 @@ diff --git a/internal/client/allocation.go b/internal/client/allocation.go
  }
  
  type allocation struct {
-diff --git a/internal/client/binding.go b/internal/client/binding.go
 --- a/internal/client/binding.go
 +++ b/internal/client/binding.go
 @@ -29,6 +29,7 @@
@@ -364,8 +117,6 @@ diff --git a/internal/client/binding.go b/internal/client/binding.go
  	}
  
  	mgr.chanMap[b.number] = b
-diff --git a/internal/client/binding_recovery.go b/internal/client/binding_recovery.go
-new file mode 100644
 --- /dev/null
 +++ b/internal/client/binding_recovery.go
 @@ -0,0 +1,109 @@
@@ -478,8 +229,6 @@ new file mode 100644
 +	bound.muBind.Unlock()
 +	c.observeBinding(bound, status, code)
 +}
-diff --git a/internal/client/binding_recovery_test.go b/internal/client/binding_recovery_test.go
-new file mode 100644
 --- /dev/null
 +++ b/internal/client/binding_recovery_test.go
 @@ -0,0 +1,110 @@
@@ -593,10 +342,9 @@ new file mode 100644
 +		t.Fatal("duplicate mapping retained")
 +	}
 +}
-diff --git a/internal/client/udp_conn.go b/internal/client/udp_conn.go
 --- a/internal/client/udp_conn.go
 +++ b/internal/client/udp_conn.go
-@@ -45,6 +45,7 @@
+@@ -46,6 +46,7 @@
  	closeCh                chan struct{}     // Thread-safe
  	closeMutex             sync.Mutex        // Thread-safe
  	bindingRefreshInterval time.Duration     // Read-only
@@ -604,7 +352,7 @@ diff --git a/internal/client/udp_conn.go b/internal/client/udp_conn.go
  	allocation
  }
  
-@@ -55,6 +56,7 @@
+@@ -56,6 +57,7 @@
  		readCh:                 make(chan *inboundData, maxReadQueueSize),
  		closeCh:                make(chan struct{}),
  		bindingRefreshInterval: defaultBindingRefreshInterval,
@@ -612,7 +360,7 @@ diff --git a/internal/client/udp_conn.go b/internal/client/udp_conn.go
  		allocation: allocation{
  			client:      config.Client,
  			relayedAddr: config.RelayedAddr,
-@@ -227,6 +229,7 @@
+@@ -228,6 +230,7 @@
  	if !ok {
  		bound = c.bindingMgr.create(addr)
  	}
@@ -620,7 +368,7 @@ diff --git a/internal/client/udp_conn.go b/internal/client/udp_conn.go
  
  	//nolint:nestif
  	if !bound.ok() {
-@@ -440,9 +443,16 @@
+@@ -469,9 +472,16 @@
  	// Block only callers with the same binding until
  	// the binding transaction has been complete
  	bound.muBind.Lock()
@@ -639,7 +387,7 @@ diff --git a/internal/client/udp_conn.go b/internal/client/udp_conn.go
  	if !ok {
  		return
  	}
-@@ -454,6 +464,10 @@
+@@ -483,6 +493,10 @@
  
  func (c *UDPConn) startBinding(bound *binding) (bindingState, bool) {
  	startState := bound.state()
@@ -650,7 +398,7 @@ diff --git a/internal/client/udp_conn.go b/internal/client/udp_conn.go
  	switch {
  	case startState == bindingStateIdle || startState == bindingStateUnknown:
  		bound.setState(bindingStateRequest)
-@@ -481,69 +495,13 @@
+@@ -510,69 +524,13 @@
  		return
  	}
  
@@ -725,7 +473,7 @@ diff --git a/internal/client/udp_conn.go b/internal/client/udp_conn.go
  }
  
  func (c *UDPConn) bind(bound *binding) error {
-@@ -591,10 +549,8 @@
+@@ -620,10 +578,8 @@
  		c.setNonceFromMsg(res)
  
  		return errTryAgain
