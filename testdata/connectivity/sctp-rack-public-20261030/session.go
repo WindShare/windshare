@@ -55,7 +55,7 @@ func send(ctx context.Context, o options, r *recorder, w *wireConn, f *faults) (
 	readDone := make(chan error, 1)
 	go func() {
 		buf := make([]byte, 65536)
-		for seq := 0; seq < total; seq++ {
+		for seq := range total {
 			n, _, err := stream.ReadSCTP(buf)
 			if err != nil {
 				readDone <- err
@@ -84,7 +84,7 @@ func send(ctx context.Context, o options, r *recorder, w *wireConn, f *faults) (
 			return ctx.Err()
 		}
 	}
-	for seq := 0; seq < warmupMessages; seq++ {
+	for seq := range warmupMessages {
 		if err = write(seq); err != nil {
 			return nil, cleanup, err
 		}

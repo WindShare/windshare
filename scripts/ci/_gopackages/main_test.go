@@ -198,6 +198,8 @@ func TestValidateModuleLayoutAllowsOnlyReviewedModuleBoundaries(t *testing.T) {
 		"internal/perfevidence/go.sum",
 		"spikes/webrtc/go.mod",
 		"spikes/webrtc/go.sum",
+		"testdata/connectivity/sctp-rack-public-20261030/go.mod",
+		"testdata\\connectivity\\sctp-rack-public-20261030\\go.sum",
 		"third_party/pion/ice/go.mod",
 		"third_party/pion/ice/go.sum",
 		"third_party/pion/webrtc/go.mod",
@@ -227,6 +229,24 @@ func TestValidateModuleLayoutRejectsUnownedMetadataAndRetiredCoreRequirement(t *
 			metadataPaths: []string{"go.mod", "future/go.mod"},
 			rootGoMod:     validRootGoMod(),
 			wantDetail:    `unapproved module or workspace metadata "future/go.mod"`,
+		},
+		{
+			name:          "unreviewed evidence module",
+			metadataPaths: []string{"go.mod", "testdata/connectivity/future/go.mod"},
+			rootGoMod:     validRootGoMod(),
+			wantDetail:    `unapproved module or workspace metadata "testdata/connectivity/future/go.mod"`,
+		},
+		{
+			name:          "nested evidence module",
+			metadataPaths: []string{"go.mod", "testdata/connectivity/sctp-rack-public-20261030/nested/go.mod"},
+			rootGoMod:     validRootGoMod(),
+			wantDetail:    `unapproved module or workspace metadata "testdata/connectivity/sctp-rack-public-20261030/nested/go.mod"`,
+		},
+		{
+			name:          "evidence workspace file",
+			metadataPaths: []string{"go.mod", "testdata/connectivity/sctp-rack-public-20261030/go.work"},
+			rootGoMod:     validRootGoMod(),
+			wantDetail:    `unapproved module or workspace metadata "testdata/connectivity/sctp-rack-public-20261030/go.work"`,
 		},
 		{
 			name:          "workspace file",
