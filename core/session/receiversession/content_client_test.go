@@ -246,13 +246,11 @@ func testReceiverBlockLaneUnknownSendDoesNotRetryAfterCallerDeadline(t *testing.
 	if channel.sends.Load() != 1 || fallback.calls.Load() != 0 {
 		t.Fatalf("pending request sends=%d fallback calls=%d", channel.sends.Load(), fallback.calls.Load())
 	}
-	time.Sleep(callerDeadline - time.Nanosecond)
-	synctest.Wait()
+	synctest.Sleep(callerDeadline - time.Nanosecond)
 	if len(result) != 0 {
 		t.Fatalf("unknown send stopped waiting before the caller deadline: %v (sends=%d fallback=%d)", <-result, channel.sends.Load(), fallback.calls.Load())
 	}
-	time.Sleep(time.Nanosecond)
-	synctest.Wait()
+	synctest.Sleep(time.Nanosecond)
 	fetchErr := <-result
 	if !errors.Is(fetchErr, context.DeadlineExceeded) {
 		t.Fatalf("caller deadline error=%v", fetchErr)
@@ -262,8 +260,7 @@ func testReceiverBlockLaneUnknownSendDoesNotRetryAfterCallerDeadline(t *testing.
 	}
 	// Keep the ambiguous send pending beyond the rescue cadence after its caller leaves.
 	const postDeadlineObservation = time.Second
-	time.Sleep(postDeadlineObservation)
-	synctest.Wait()
+	synctest.Sleep(postDeadlineObservation)
 	if channel.sends.Load() != 1 || fallback.calls.Load() != 0 {
 		t.Fatalf("pending reconciliation sends=%d fallback calls=%d", channel.sends.Load(), fallback.calls.Load())
 	}
@@ -275,8 +272,7 @@ func testReceiverBlockLaneUnknownSendDoesNotRetryAfterCallerDeadline(t *testing.
 		t.Fatal("receiver block lane did not finish unknown-send reconciliation")
 	}
 	// Reconciliation must not restart canceled demand on a later timer wakeup.
-	time.Sleep(postDeadlineObservation)
-	synctest.Wait()
+	synctest.Sleep(postDeadlineObservation)
 	if channel.sends.Load() != 1 || fallback.calls.Load() != 0 {
 		t.Fatalf("request sends=%d fallback calls=%d", channel.sends.Load(), fallback.calls.Load())
 	}

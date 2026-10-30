@@ -41,20 +41,21 @@ func TestCandidateRejectsAmbiguousAddressesAndInvalidHeaderValues(t *testing.T) 
 
 func TestRegistrationCredentialCannotFollowRedirect(t *testing.T) {
 	requests := make(chan string, 2)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
 		case requests <- r.Header.Get("Authorization"):
 		default:
 		}
 		http.Redirect(w, r, "/other-deployment/v2/ws", http.StatusTemporaryRedirect)
 	}))
-	defer server.Close()
 	config := newSenderRelayTestConfig(t, nil, nil, nil)
-	config.Candidate = Candidate{PublicURL: server.URL, AccessKey: "bound-token"}
+	config.Candidate = Candidate{PublicURL: "https://relay.example", AccessKey: "bound-token"}
+	dial := config.Candidate.registrationDialOptions(0, false)
+	dial.HTTPClient.Transport = server.Client().Transport
 	_, err := relayv2.DialSender(t.Context(), relayv2.SenderConfig{
 		RelayBaseURL: config.Candidate.PublicURL, Init: config.Fresh, SenderPrivateKey: config.PrivateKey,
 		ResumeToken: config.ResumeToken, Descriptor: config.Descriptor,
-		Dial: config.Candidate.registrationDialOptions(0, false),
+		Dial: dial,
 	})
 	if err == nil {
 		t.Fatal("redirect accepted")
