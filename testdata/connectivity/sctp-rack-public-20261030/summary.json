@@ -1,0 +1,489 @@
+{
+  "baseline": "6ec762ebc1106ae8c5ce1a69208a98dfcfdddaaf",
+  "go": "1.27.3",
+  "final_successful_runs": 102,
+  "metric": "Milliseconds from the last deliberately dropped target transmission to the next target transmission.",
+  "scope": "Controlled loss recovery; no general throughput claim.",
+  "aggregate": [
+    {
+      "environment": "final-windows",
+      "case": "data-chunks",
+      "variant": "upstream",
+      "runs": 2,
+      "t3_timeouts": 2,
+      "recovery_ms": {
+        "min": 971.6519999999999,
+        "median": 973.6645000000001,
+        "max": 975.6770000000001
+      }
+    },
+    {
+      "environment": "final-windows",
+      "case": "data-chunks",
+      "variant": "repaired",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "recovery_ms": {
+        "min": 24.682999999999993,
+        "median": 27.01899999999999,
+        "max": 29.35499999999999
+      }
+    },
+    {
+      "environment": "final-windows",
+      "case": "double-loss",
+      "variant": "upstream",
+      "runs": 5,
+      "t3_timeouts": 5,
+      "recovery_ms": {
+        "min": 971.3399999999999,
+        "median": 975.087,
+        "max": 975.6699999999998
+      }
+    },
+    {
+      "environment": "final-windows",
+      "case": "double-loss",
+      "variant": "repaired",
+      "runs": 5,
+      "t3_timeouts": 0,
+      "recovery_ms": {
+        "min": 20.888000000000005,
+        "median": 21.519000000000005,
+        "max": 28.710000000000008
+      }
+    },
+    {
+      "environment": "final-windows",
+      "case": "fragmented",
+      "variant": "upstream",
+      "runs": 2,
+      "t3_timeouts": 2,
+      "recovery_ms": {
+        "min": 975.3149999999999,
+        "median": 975.3965,
+        "max": 975.478
+      }
+    },
+    {
+      "environment": "final-windows",
+      "case": "fragmented",
+      "variant": "repaired",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "recovery_ms": {
+        "min": 28.306999999999988,
+        "median": 28.750500000000002,
+        "max": 29.194000000000017
+      }
+    },
+    {
+      "environment": "final-windows",
+      "case": "late-original",
+      "variant": "upstream",
+      "runs": 3,
+      "t3_timeouts": 0,
+      "recovery_ms": null
+    },
+    {
+      "environment": "final-windows",
+      "case": "late-original",
+      "variant": "repaired",
+      "runs": 3,
+      "t3_timeouts": 0,
+      "recovery_ms": null
+    },
+    {
+      "environment": "final-windows",
+      "case": "no-loss",
+      "variant": "upstream",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "recovery_ms": null
+    },
+    {
+      "environment": "final-windows",
+      "case": "no-loss",
+      "variant": "repaired",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "recovery_ms": null
+    },
+    {
+      "environment": "final-windows",
+      "case": "reordering",
+      "variant": "upstream",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "recovery_ms": null
+    },
+    {
+      "environment": "final-windows",
+      "case": "reordering",
+      "variant": "repaired",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "recovery_ms": null
+    },
+    {
+      "environment": "final-windows",
+      "case": "rtt-50ms",
+      "variant": "upstream",
+      "runs": 2,
+      "t3_timeouts": 2,
+      "recovery_ms": {
+        "min": 937.318,
+        "median": 941.358,
+        "max": 945.398
+      }
+    },
+    {
+      "environment": "final-windows",
+      "case": "rtt-50ms",
+      "variant": "repaired",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "recovery_ms": {
+        "min": 50.96199999999999,
+        "median": 51.232,
+        "max": 51.50200000000001
+      }
+    },
+    {
+      "environment": "final-windows",
+      "case": "short-flight",
+      "variant": "upstream",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "recovery_ms": {
+        "min": 201.812,
+        "median": 214.78150000000002,
+        "max": 227.75100000000003
+      }
+    },
+    {
+      "environment": "final-windows",
+      "case": "short-flight",
+      "variant": "repaired",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "recovery_ms": {
+        "min": 20.814999999999998,
+        "median": 25.570999999999998,
+        "max": 30.326999999999998
+      }
+    },
+    {
+      "environment": "final-windows",
+      "case": "single-loss",
+      "variant": "upstream",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "recovery_ms": {
+        "min": 28.831000000000017,
+        "median": 29.233500000000014,
+        "max": 29.63600000000001
+      }
+    },
+    {
+      "environment": "final-windows",
+      "case": "single-loss",
+      "variant": "repaired",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "recovery_ms": {
+        "min": 24.905,
+        "median": 24.969500000000004,
+        "max": 25.034000000000006
+      }
+    },
+    {
+      "environment": "final-windows",
+      "case": "tail",
+      "variant": "upstream",
+      "runs": 2,
+      "t3_timeouts": 2,
+      "recovery_ms": {
+        "min": 689.49,
+        "median": 689.8565000000001,
+        "max": 690.2230000000001
+      }
+    },
+    {
+      "environment": "final-windows",
+      "case": "tail",
+      "variant": "repaired",
+      "runs": 2,
+      "t3_timeouts": 2,
+      "recovery_ms": {
+        "min": 747.271,
+        "median": 747.544,
+        "max": 747.817
+      }
+    },
+    {
+      "environment": "final-windows",
+      "case": "triple-loss",
+      "variant": "upstream",
+      "runs": 2,
+      "t3_timeouts": 4,
+      "recovery_ms": {
+        "min": 2000.05,
+        "median": 2000.165,
+        "max": 2000.2800000000002
+      }
+    },
+    {
+      "environment": "final-windows",
+      "case": "triple-loss",
+      "variant": "repaired",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "recovery_ms": {
+        "min": 21.27600000000001,
+        "median": 22.927499999999995,
+        "max": 24.57899999999998
+      }
+    },
+    {
+      "environment": "final-linux",
+      "case": "data-chunks",
+      "variant": "upstream",
+      "runs": 2,
+      "t3_timeouts": 2,
+      "recovery_ms": {
+        "min": 970.9760000000001,
+        "median": 972.5035000000001,
+        "max": 974.0310000000002
+      }
+    },
+    {
+      "environment": "final-linux",
+      "case": "data-chunks",
+      "variant": "repaired",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "recovery_ms": {
+        "min": 21.507999999999996,
+        "median": 24.525,
+        "max": 27.542
+      }
+    },
+    {
+      "environment": "final-linux",
+      "case": "double-loss",
+      "variant": "upstream",
+      "runs": 5,
+      "t3_timeouts": 5,
+      "recovery_ms": {
+        "min": 969.81,
+        "median": 974.1949999999999,
+        "max": 974.439
+      }
+    },
+    {
+      "environment": "final-linux",
+      "case": "double-loss",
+      "variant": "repaired",
+      "runs": 5,
+      "t3_timeouts": 0,
+      "recovery_ms": {
+        "min": 20.78099999999999,
+        "median": 27.996999999999986,
+        "max": 31.85300000000001
+      }
+    },
+    {
+      "environment": "final-linux",
+      "case": "fragmented",
+      "variant": "upstream",
+      "runs": 2,
+      "t3_timeouts": 2,
+      "recovery_ms": {
+        "min": 967.532,
+        "median": 973.3985,
+        "max": 979.2650000000001
+      }
+    },
+    {
+      "environment": "final-linux",
+      "case": "fragmented",
+      "variant": "repaired",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "recovery_ms": {
+        "min": 21.659999999999997,
+        "median": 22.874499999999998,
+        "max": 24.089
+      }
+    },
+    {
+      "environment": "final-linux",
+      "case": "late-original",
+      "variant": "upstream",
+      "runs": 3,
+      "t3_timeouts": 0,
+      "recovery_ms": null
+    },
+    {
+      "environment": "final-linux",
+      "case": "late-original",
+      "variant": "repaired",
+      "runs": 3,
+      "t3_timeouts": 0,
+      "recovery_ms": null
+    },
+    {
+      "environment": "final-linux",
+      "case": "no-loss",
+      "variant": "upstream",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "recovery_ms": null
+    },
+    {
+      "environment": "final-linux",
+      "case": "no-loss",
+      "variant": "repaired",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "recovery_ms": null
+    },
+    {
+      "environment": "final-linux",
+      "case": "reordering",
+      "variant": "upstream",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "recovery_ms": null
+    },
+    {
+      "environment": "final-linux",
+      "case": "reordering",
+      "variant": "repaired",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "recovery_ms": null
+    },
+    {
+      "environment": "final-linux",
+      "case": "rtt-50ms",
+      "variant": "upstream",
+      "runs": 2,
+      "t3_timeouts": 2,
+      "recovery_ms": {
+        "min": 935.9569999999999,
+        "median": 939.9509999999999,
+        "max": 943.9449999999999
+      }
+    },
+    {
+      "environment": "final-linux",
+      "case": "rtt-50ms",
+      "variant": "repaired",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "recovery_ms": {
+        "min": 52.64099999999999,
+        "median": 61.020499999999984,
+        "max": 69.39999999999998
+      }
+    },
+    {
+      "environment": "final-linux",
+      "case": "tail",
+      "variant": "upstream",
+      "runs": 2,
+      "t3_timeouts": 2,
+      "recovery_ms": {
+        "min": 746.1690000000001,
+        "median": 746.75,
+        "max": 747.3309999999999
+      }
+    },
+    {
+      "environment": "final-linux",
+      "case": "tail",
+      "variant": "repaired",
+      "runs": 2,
+      "t3_timeouts": 2,
+      "recovery_ms": {
+        "min": 746.3230000000001,
+        "median": 747.7080000000001,
+        "max": 749.093
+      }
+    },
+    {
+      "environment": "final-linux",
+      "case": "triple-loss",
+      "variant": "upstream",
+      "runs": 2,
+      "t3_timeouts": 4,
+      "recovery_ms": {
+        "min": 1999.9969999999998,
+        "median": 2000.3379999999997,
+        "max": 2000.6789999999999
+      }
+    },
+    {
+      "environment": "final-linux",
+      "case": "triple-loss",
+      "variant": "repaired",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "recovery_ms": {
+        "min": 21.801999999999992,
+        "median": 22.9195,
+        "max": 24.037000000000006
+      }
+    },
+    {
+      "environment": "lan-v3",
+      "case": "double-loss",
+      "variant": "upstream",
+      "runs": 3,
+      "t3_timeouts": 3,
+      "recovery_ms": {
+        "min": 966.488,
+        "median": 967.435,
+        "max": 973.019
+      }
+    },
+    {
+      "environment": "lan-v3",
+      "case": "double-loss",
+      "variant": "repaired",
+      "runs": 3,
+      "t3_timeouts": 0,
+      "recovery_ms": {
+        "min": 32.59299999999996,
+        "median": 33.10300000000001,
+        "max": 55.90900000000002
+      }
+    }
+  ],
+  "sources_sha256": {
+    "build.ps1": "bd318754f7562808d67d0282bfd503a7ab2bb7cc15c413ed844dbe481a33ef5f",
+    "candidate.patch": "4eac81e6719f2067d1143f2a4a30861e4d40d47d47da28bade06318585a26587",
+    "faults.go": "89db3561b68ce473c2300defaea4b106bec553055f6622c4a437bf5e91dcb333",
+    "go.mod": "18bf5eb554b90d40299edda50837e990e2c1b5f10c27ba17cb1d0f2a96940928",
+    "go.sum": "407565ceba0bdf0a2a3314f472d39cdb171b49fca8d59b7a138237860f1f3890",
+    "main.go": "ddda991acd5f5d6b2ead425e4edcf853323ed18c9a0fd9c326686084d02938b0",
+    "network.go": "e98b6a792afea2118e54e55e5885ce01ed7078251cec04ae07059c443e957d05",
+    "packet.go": "69fdb5cdbf1fb4913c7dd867fdb86506362471fad245a0a77a11b355ab9adb11",
+    "run_lan.py": "ac716f2701c3726801cbe9759d08ee2ec8d1d28f60f44723dc5680f123c56e41",
+    "run_matrix.py": "6a6b9d840fe5eed132c3f5ef79ee911ff9dcf002d3c142774b84fb8bacef83ab",
+    "session.go": "77253ab02c7142317422140ae5f583b19e0e7829b440620aa86a4fe04a6970ae",
+    "summarize.py": "77778d8aa3ba3b452c3077f7800f1d8eb6c64e33fb30d21887d0954a812cd78b",
+    "trace.go": "d54e1fe4aab744eacd9089da49ac42ec40fcff78a7001c6137e9c62e1c030e0d"
+  },
+  "current_binaries_sha256": {
+    "repaired-linux": "227ec3a85b2103316eab4530306929d36e140ba3e8680d0e6ac24586bae63977",
+    "repaired-race.exe": "28dde5d044dac1283a8416b23688b22e9b46d697c09bf596bf202918ac764b11",
+    "repaired.exe": "abda8c33c31058305a4ada8d5616e7ae1436680c222ec9ebfb120ea59c3bab1b",
+    "scan-only-linux": "e2f1bd486014362836be7c2af4481acdc1401a1557eec1c1933f5e1ea87e58a6",
+    "scan-only.exe": "fd218c88819c4d5223999d3b60979eaab156262ba13d0fd87424261b09734094",
+    "upstream-linux": "f6f6345a06db7efb0d3ab5d08fc9f47a256f92864c3b43dad0f4d1ccbdda4d75",
+    "upstream.exe": "8d6908688a022be3501b366c3344627d71945ccf317ea6af93ba950d754f1bd9"
+  }
+}

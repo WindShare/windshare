@@ -1,0 +1,215 @@
+diff --git a/association.go b/association.go
+index 663ddfd..78ffd89 100644
+--- a/association.go
++++ b/association.go
+@@ -2972,7 +2972,7 @@ func (a *Association) processSelectiveAck(selectiveAckChunk *chunkSelectiveAck)
+ 
+ 			// RFC 8985 (RACK) sec 5.2: RACK.segment is the most recently sent
+ 			// segment that has been delivered, including retransmissions.
+-			if chunkPayload.since.After(newestDeliveredSendTime) {
++			if a.rackAcknowledgedTransmissionValid(chunkPayload, now) && chunkPayload.since.After(newestDeliveredSendTime) {
+ 				newestDeliveredSendTime = chunkPayload.since
+ 				newestDeliveredOrigTSN = chunkPayload.tsn
+ 				deliveredFound = true
+@@ -3012,7 +3012,7 @@ func (a *Association) processSelectiveAck(selectiveAckChunk *chunkSelectiveAck)
+ 
+ 				a.measureRTT(chunkPayload, now)
+ 
+-				if chunkPayload.since.After(newestDeliveredSendTime) {
++				if a.rackAcknowledgedTransmissionValid(chunkPayload, now) && chunkPayload.since.After(newestDeliveredSendTime) {
+ 					newestDeliveredSendTime = chunkPayload.since
+ 					newestDeliveredOrigTSN = chunkPayload.tsn
+ 					deliveredFound = true
+@@ -3028,6 +3028,17 @@ func (a *Association) processSelectiveAck(selectiveAckChunk *chunkSelectiveAck)
+ 	return bytesAckedPerStream, htna, newestDeliveredSendTime, newestDeliveredOrigTSN, deliveredFound, nil
+ }
+ 
++// A late ACK may acknowledge an earlier copy rather than the latest retry.
++// RFC 8985 section 6.2 uses minimum RTT to reject implausibly early retry ACKs.
++// This delivery-evidence check is separate from Karn's rule for RTT sampling.
++func (a *Association) rackAcknowledgedTransmissionValid(chunk *chunkPayloadData, now time.Time) bool {
++	if chunk.nSent == 1 {
++		return true
++	}
++
++	return a.rackMinRTT > 0 && !now.Before(chunk.since.Add(a.rackMinRTT))
++}
++
+ // measureRTT applies RFC 9260 section 6.3.1 C4/C5: sample once per round trip
+ // and exclude retransmitted DATA (Karn's algorithm). The caller holds the lock.
+ func (a *Association) measureRTT(c *chunkPayloadData, now time.Time) {
+@@ -4920,15 +4931,14 @@ func (a *Association) onRackAfterSACK( // nolint:gocognit,cyclop,gocyclo
+ 				continue
+ 			}
+ 
+-			if chunk.retransmit || chunk.nSent > 1 {
+-				// Either already scheduled for retransmit or not an original send:
+-				// skip but keep in list in case it's still outstanding.
++			if chunk.retransmit {
++				// Already queued work must not be scheduled twice.
+ 				chunk = next
+ 
+ 				continue
+ 			}
+ 
+-			// Ordered by original send time. If this one is too new,
++			// Ordered by most recent transmission time. If this one is too new,
+ 			// all later ones are even newer -> short-circuit.
+ 			if !chunk.since.Add(a.rackReoWnd).Before(a.rackDeliveredTime) {
+ 				break
+@@ -5041,7 +5051,7 @@ func (a *Association) onRackTimeoutLocked() { //nolint:cyclop
+ 
+ 			continue
+ 		}
+-		if chunk.retransmit || chunk.nSent > 1 {
++		if chunk.retransmit {
+ 			chunk = next
+ 
+ 			continue
+diff --git a/association_rack_retransmission_test.go b/association_rack_retransmission_test.go
+new file mode 100644
+index 0000000..382f7d4
+--- /dev/null
++++ b/association_rack_retransmission_test.go
+@@ -0,0 +1,141 @@
++// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
++// SPDX-License-Identifier: MIT
++
++//go:build !js
++
++package sctp
++
++import (
++	"testing"
++	"time"
++
++	"github.com/stretchr/testify/require"
++)
++
++func newRackRetransmissionTestAssociation(t *testing.T) *Association {
++	t.Helper()
++	association := newRackTestAssoc(t)
++	t.Cleanup(func() {
++		association.lock.Lock()
++		defer association.lock.Unlock()
++		// No reader or real socket was started; only the timer lifecycle needs teardown.
++		association.setState(closed)
++		association.closeAllTimers()
++		association.closeWriteLoopOnce.Do(func() { close(association.closeWriteLoopCh) })
++	})
++
++	return association
++}
++
++func TestRACKLostRetransmission(t *testing.T) {
++	for _, trigger := range []string{"sack", "timer"} {
++		for _, test := range []struct {
++			name                           string
++			sends                          uint32
++			age                            time.Duration
++			queued, acked, abandoned, want bool
++		}{
++			{"original", 1, 100 * time.Millisecond, false, false, false, true},
++			{"retry", 2, 100 * time.Millisecond, false, false, false, true},
++			{"repeated-retry", 3, 100 * time.Millisecond, false, false, false, true},
++			{"recent-retry", 2, 5 * time.Millisecond, false, false, false, false},
++			{"already-queued", 2, 100 * time.Millisecond, true, false, false, true},
++			{"already-acked", 2, 100 * time.Millisecond, false, true, false, false},
++			{"abandoned", 2, 100 * time.Millisecond, false, false, true, false},
++		} {
++			t.Run(trigger+"/"+test.name, func(t *testing.T) {
++				association := newRackRetransmissionTestAssociation(t)
++				association.lock.Lock()
++				defer association.lock.Unlock()
++				now := time.Now()
++				association.rackReorderingSeen = true
++				association.rackReoWnd = 10 * time.Millisecond
++				association.rackMinRTT = 40 * time.Millisecond
++				chunk := mkChunk(100, now.Add(-test.age))
++				chunk.nSent, chunk.retransmit, chunk.acked = test.sends, test.queued, test.acked
++				if test.abandoned {
++					chunk.setAbandoned(true)
++					chunk.setAllInflight()
++				}
++				association.inflightQueue.pushNoCheck(chunk)
++				association.rackInsert(chunk)
++				delivered := now.Add(-50 * time.Millisecond)
++				if trigger == "sack" {
++					association.onRackAfterSACK(true, delivered, 101, &chunkSelectiveAck{})
++				} else {
++					association.rackDeliveredTime = delivered
++					association.onRackTimeoutLocked()
++				}
++				require.Equal(t, test.want, chunk.retransmit)
++			})
++		}
++	}
++}
++
++func TestRACKRetransmissionDeliveryEvidence(t *testing.T) {
++	for _, selective := range []bool{false, true} {
++		for _, test := range []struct {
++			name        string
++			sends       uint32
++			minRTT, age time.Duration
++			valid       bool
++		}{
++			{"original", 1, 40 * time.Millisecond, time.Millisecond, true},
++			{"ambiguous-retry", 2, 40 * time.Millisecond, time.Millisecond, false},
++			{"credible-retry", 2, 40 * time.Millisecond, 2 * time.Second, true},
++			{"ambiguous-repeated-retry", 3, 40 * time.Millisecond, time.Millisecond, false},
++			{"credible-repeated-retry", 3, 40 * time.Millisecond, 2 * time.Second, true},
++			{"retry-without-rtt", 2, 0, 2 * time.Second, false},
++		} {
++			mode := "/cumulative"
++			if selective {
++				mode = "/selective"
++			}
++			t.Run(test.name+mode, func(t *testing.T) {
++				association := newRackRetransmissionTestAssociation(t)
++				association.lock.Lock()
++				defer association.lock.Unlock()
++				association.rackMinRTT = test.minRTT
++				association.rackReorderingSeen = true
++				association.rackReoWnd = 10 * time.Millisecond
++				now := time.Now()
++				retryTSN, otherTSN := uint32(100), uint32(101)
++				if selective {
++					retryTSN, otherTSN = otherTSN, retryTSN
++				}
++				retry := mkChunk(retryTSN, now.Add(-test.age))
++				retry.nSent = test.sends
++				other := mkChunk(otherTSN, now.Add(-3*time.Second))
++				if selective {
++					association.inflightQueue.pushNoCheck(other)
++					association.inflightQueue.pushNoCheck(retry)
++				} else {
++					association.inflightQueue.pushNoCheck(retry)
++					association.inflightQueue.pushNoCheck(other)
++				}
++				association.rackInsert(other)
++				association.rackInsert(retry)
++				sack := &chunkSelectiveAck{cumulativeTSNAck: 100, advertisedReceiverWindowCredit: 1024 * 1024}
++				if selective {
++					sack.cumulativeTSNAck = 99
++					sack.gapAckBlocks = []gapAckBlock{{start: 2, end: 2}}
++				}
++				previousSRTT := association.SRTT()
++				require.NoError(t, association.handleSack(sack))
++				require.Equal(t, test.valid, !association.rackDeliveredTime.IsZero())
++				require.Equal(t, test.valid, other.retransmit)
++				// Timing ambiguity must not discard a valid delivery acknowledgement.
++				acknowledged, found := association.inflightQueue.get(retryTSN)
++				if selective {
++					require.True(t, found)
++					require.True(t, acknowledged.acked)
++				} else {
++					require.False(t, found)
++				}
++				if test.sends > 1 {
++					require.Equal(t, previousSRTT, association.SRTT(), "Karn's rule still excludes retries from RTT samples")
++				}
++			})
++		}
++	}
++}
