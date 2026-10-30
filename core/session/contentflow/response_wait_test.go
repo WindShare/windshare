@@ -65,8 +65,7 @@ func TestBlockResponseWaitDoesNotBorrowUnrelatedProgress(t *testing.T) {
 				}
 				time.Sleep(10 * time.Second)
 				productive.Progress()
-				time.Sleep(5 * time.Second)
-				synctest.Wait()
+				synctest.Sleep(5 * time.Second)
 				var failure *BlockWaitTimeout
 				if !errors.As(context.Cause(wait.Context()), &failure) || !errors.Is(failure, cause) ||
 					failure.Phase != phase || failure.QueueProgress != 0 {
@@ -89,8 +88,7 @@ func TestBlockResponseWaitExpiresAfterQueueStopsProgressing(t *testing.T) {
 		time.Sleep(10 * time.Second)
 		earlier.Progress()
 		earlier.Close()
-		time.Sleep(15 * time.Second)
-		synctest.Wait()
+		synctest.Sleep(15 * time.Second)
 		var failure *BlockWaitTimeout
 		if !errors.As(context.Cause(wait.Context()), &failure) ||
 			failure.Phase != BlockAwaitingFirstFragment || failure.QueueProgress != 1 ||
@@ -111,8 +109,7 @@ func TestBlockResponseWaitHonorsCancellationAndDoesNotReviveExpiry(t *testing.T)
 		wait := queue.Begin(ctx, FragmentInactivityTimeout)
 		cancel()
 		wait.Progress()
-		time.Sleep(FragmentInactivityTimeout)
-		synctest.Wait()
+		synctest.Sleep(FragmentInactivityTimeout)
 		if !errors.Is(context.Cause(wait.Context()), context.Canceled) {
 			t.Fatal("caller cancellation was overwritten")
 		}
@@ -122,8 +119,7 @@ func TestBlockResponseWaitHonorsCancellationAndDoesNotReviveExpiry(t *testing.T)
 		defer earlier.Close()
 		expired := queue.Begin(t.Context(), FragmentInactivityTimeout)
 		defer expired.Close()
-		time.Sleep(FragmentInactivityTimeout)
-		synctest.Wait()
+		synctest.Sleep(FragmentInactivityTimeout)
 		expired.Progress()
 		earlier.Progress()
 		if !errors.Is(context.Cause(expired.Context()), ErrBlockResponseInactivity) {

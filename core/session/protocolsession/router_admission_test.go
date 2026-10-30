@@ -76,8 +76,7 @@ func TestRouterDeferredRequestPromotesAtRetentionExpiry(t *testing.T) {
 			t.Fatal("deferred request acquired an unreserved slot")
 		default:
 		}
-		time.Sleep(OperationTombstoneLifetime)
-		synctest.Wait()
+		synctest.Sleep(OperationTombstoneLifetime)
 		event := <-done
 		if event.operationID != second || !event.generation.IsActive() || table.Terminated() {
 			t.Fatal("request did not resume in the same session")

@@ -49,8 +49,7 @@ func TestOperationCapacityWaitsForExpiryWithoutTraffic(t *testing.T) {
 			t.Fatalf("capacity available before expiry: %v", err)
 		default:
 		}
-		time.Sleep(OperationTombstoneLifetime)
-		synctest.Wait()
+		synctest.Sleep(OperationTombstoneLifetime)
 		if err := <-done; err != nil {
 			t.Fatal(err)
 		}
@@ -105,8 +104,7 @@ func TestOperationCapacityHonorsPinnedRetentionRefresh(t *testing.T) {
 			t.Fatalf("pin refresh did not retain the late-arrival window: %v", err)
 		default:
 		}
-		time.Sleep(OperationTombstoneLifetime)
-		synctest.Wait()
+		synctest.Sleep(OperationTombstoneLifetime)
 		if err := <-done; err != nil {
 			t.Fatal(err)
 		}

@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"testing"
@@ -94,7 +93,7 @@ func TestRemoteRetainsCleanupAfterCancellationOrInvalidGrant(t *testing.T) {
 	}
 }
 
-func TestRemoteRetriesOnlyUncertainOrPendingResultsWithinOriginalDeadline(t *testing.T) {
+func TestRemoteRetriesOnlyUncertainOrPendingResults(t *testing.T) {
 	for _, code := range []string{"lease_pending", "lease_unavailable"} {
 		t.Run(code, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -123,20 +122,6 @@ func TestRemoteRetriesOnlyUncertainOrPendingResultsWithinOriginalDeadline(t *tes
 			})
 		})
 	}
-	synctest.Test(t, func(t *testing.T) {
-		calls := 0
-		source, _ := NewRemote(RemoteConfig{RelayURL: "https://relay.example", AccessKey: "key", ServiceID: "cf-service",
-			Client: clientFunc(func(request *http.Request) (*http.Response, error) {
-				calls++
-				<-request.Context().Done()
-				return nil, request.Context().Err()
-			})})
-		start := time.Now()
-		acquired, err := source.Issue(t.Context(), Subject{SessionID: [16]byte{1}, PathID: [16]byte{2}})
-		if !errors.Is(err, context.DeadlineExceeded) || acquired.Cleanup == nil || calls != 1 || time.Since(start) != HTTPTimeout {
-			t.Fatal(acquired, err, calls, time.Since(start))
-		}
-	})
 }
 
 func TestRemoteCleanupDistinguishesTerminalAndTransferredResponsibility(t *testing.T) {

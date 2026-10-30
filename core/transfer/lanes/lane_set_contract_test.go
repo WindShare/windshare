@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -15,6 +16,7 @@ import (
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/internal/failurestate"
+	"github.com/windshare/windshare/core/transfer/lanescheduling"
 )
 
 func transferID[T ~[16]byte](value byte) T {
@@ -73,38 +75,64 @@ func validateTransferRecord(demand Demand) func(records.BlockRecord) error {
 }
 
 func TestLaneSetRacesOneWinnerAndCancelsLateLane(t *testing.T) {
-	descriptor := transferDescriptor(t, 1)
-	demand := validDemand(t, descriptor, 0)
-	lanes, err := New(Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](5)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lanes.Close()
-	slowStarted := make(chan struct{})
-	slowCancelled := make(chan struct{})
-	if err := lanes.Add(Identity{ID: 1}, RouteRelay, laneFunction(func(ctx context.Context, _ Demand) (records.BlockRecord, error) {
-		close(slowStarted)
-		<-ctx.Done()
-		close(slowCancelled)
-		return records.BlockRecord{}, ctx.Err()
-	})); err != nil {
-		t.Fatal(err)
-	}
-	if err := lanes.Add(Identity{ID: 2}, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
+	synctest.Test(t, func(t *testing.T) {
+		descriptor := transferDescriptor(t, 1)
+		demand := validDemand(t, descriptor, 0)
+		lanes, err := New(Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](5)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lanes.Close()
+		slowStarted := make(chan struct{})
+		slowCancelled := make(chan struct{})
+		if err := lanes.Add(Identity{ID: 1}, RouteRelay, laneFunction(func(ctx context.Context, _ Demand) (records.BlockRecord, error) {
+			close(slowStarted)
+			<-ctx.Done()
+			close(slowCancelled)
+			return records.BlockRecord{}, ctx.Err()
+		})); err != nil {
+			t.Fatal(err)
+		}
+		if err := lanes.Add(Identity{ID: 2}, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
+			<-slowStarted
+			return transferRecord(t, descriptor, 0), nil
+		})); err != nil {
+			t.Fatal(err)
+		}
+		type fetchResult struct {
+			record Block
+			err    error
+		}
+		result := make(chan fetchResult, 1)
+		go func() {
+			record, err := lanes.Fetch(t.Context(), Request{Demand: demand, Validate: validateTransferRecord(demand)})
+			result <- fetchResult{record: record, err: err}
+		}()
 		<-slowStarted
-		return transferRecord(t, descriptor, 0), nil
-	})); err != nil {
-		t.Fatal(err)
-	}
-	record, err := lanes.Fetch(context.Background(), Request{Demand: demand, Validate: validateTransferRecord(demand)})
-	if err != nil || record.LocalBlockIndex() != 0 {
-		t.Fatalf("winner=%+v err=%v", record, err)
-	}
-	select {
-	case <-slowCancelled:
-	case <-time.After(time.Second):
-		t.Fatal("late racing lane was not cancelled")
-	}
+		const rescueDelay = lanescheduling.HedgeDelayFactor * lanescheduling.InitialBlockTime
+		synctest.Sleep(rescueDelay - time.Nanosecond)
+		select {
+		case got := <-result:
+			t.Fatalf("unmeasured alternative raced before the rescue deadline: %v", got.err)
+		default:
+		}
+		synctest.Sleep(time.Nanosecond)
+		var got fetchResult
+		select {
+		case got = <-result:
+		default:
+			t.Fatal("overdue demand was not rescued")
+		}
+		record, err := got.record, got.err
+		if err != nil || record.LocalBlockIndex() != 0 {
+			t.Fatalf("winner=%+v err=%v", record, err)
+		}
+		select {
+		case <-slowCancelled:
+		default:
+			t.Fatal("late racing lane was not cancelled")
+		}
+	})
 }
 
 func TestLaneSetExplorationFailureHotSwitchAndEpochReplacement(t *testing.T) {
@@ -238,56 +266,70 @@ func TestLaneSetRejectsHostileWinnerAndBoundsDynamicLanes(t *testing.T) {
 }
 
 func TestLaneSetSuspendsRelayContentUntilAnotherLaneArrives(t *testing.T) {
-	descriptor := transferDescriptor(t, 1)
-	demand := validDemand(t, descriptor, 0)
-	lanes, err := New(Config{
-		ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](34),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lanes.Close()
-
-	relayIdentity := Identity{ID: 1, Epoch: 1}
-	var relayCalls atomic.Int32
-	if err := lanes.Add(relayIdentity, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
-		relayCalls.Add(1)
-		return transferRecord(t, descriptor, 0), nil
-	})); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := lanes.SuspendContent(relayIdentity); err != nil {
-		t.Fatal(err)
-	}
-
-	type fetchResult struct {
-		record records.BlockRecord
-		err    error
-	}
-	result := make(chan fetchResult, 1)
-	go func() {
-		record, fetchErr := lanes.Fetch(context.Background(), Request{Demand: demand, Validate: validateTransferRecord(demand)})
-		result <- fetchResult{record: record.BlockRecord, err: fetchErr}
-	}()
-
-	var peerCalls atomic.Int32
-	if err := lanes.Add(Identity{ID: 2, Epoch: 1}, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
-		peerCalls.Add(1)
-		return transferRecord(t, descriptor, 0), nil
-	})); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case fetched := <-result:
-		if fetched.err != nil || fetched.record.LocalBlockIndex() != 0 {
-			t.Fatalf("fetch = %+v, %v", fetched.record, fetched.err)
+	synctest.Test(t, func(t *testing.T) {
+		descriptor := transferDescriptor(t, 1)
+		demand := validDemand(t, descriptor, 0)
+		lanes, err := New(Config{
+			ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](34),
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("new lane did not wake the blocked fetch")
-	}
-	if relayCalls.Load() != 0 || peerCalls.Load() != 1 {
-		t.Fatalf("content calls relay=%d peer=%d", relayCalls.Load(), peerCalls.Load())
-	}
+		defer lanes.Close()
+
+		relayIdentity := Identity{ID: 1, Epoch: 1}
+		var relayCalls atomic.Int32
+		if err := lanes.Add(relayIdentity, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
+			relayCalls.Add(1)
+			return transferRecord(t, descriptor, 0), nil
+		})); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := lanes.SuspendContent(relayIdentity); err != nil {
+			t.Fatal(err)
+		}
+
+		type fetchResult struct {
+			record records.BlockRecord
+			err    error
+		}
+		result := make(chan fetchResult, 1)
+		go func() {
+			record, fetchErr := lanes.Fetch(context.Background(), Request{Demand: demand, Validate: validateTransferRecord(demand)})
+			result <- fetchResult{record: record.BlockRecord, err: fetchErr}
+		}()
+
+		// Establish that Fetch is waiting on lane availability before publishing the wakeup.
+		synctest.Wait()
+		select {
+		case fetched := <-result:
+			t.Fatalf("fetch completed while its only lane was suspended: %v", fetched.err)
+		default:
+		}
+		if relayCalls.Load() != 0 {
+			t.Fatal("suspended relay received content")
+		}
+
+		var peerCalls atomic.Int32
+		if err := lanes.Add(Identity{ID: 2, Epoch: 1}, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
+			peerCalls.Add(1)
+			return transferRecord(t, descriptor, 0), nil
+		})); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		select {
+		case fetched := <-result:
+			if fetched.err != nil || fetched.record.LocalBlockIndex() != 0 {
+				t.Fatalf("fetch = %+v, %v", fetched.record, fetched.err)
+			}
+		default:
+			t.Fatal("new lane did not wake the blocked fetch")
+		}
+		if relayCalls.Load() != 0 || peerCalls.Load() != 1 {
+			t.Fatalf("content calls relay=%d peer=%d", relayCalls.Load(), peerCalls.Load())
+		}
+	})
 }
 
 func TestLaneSetReassignsCurrentDemandWhenSuspendedRelayResumes(t *testing.T) {
