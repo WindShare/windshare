@@ -43,6 +43,8 @@ type DTLSTransport struct {
 	remoteCertificate     []byte
 	state                 DTLSTransportState
 	srtpProtectionProfile srtp.ProtectionProfile
+	localCryptexMode      srtp.CryptexMode // outbound (send) Cryptex mode
+	remoteCryptexMode     srtp.CryptexMode // inbound (receive) Cryptex mode
 
 	onStateChangeHandler   func(DTLSTransportState)
 	internalOnCloseHandler func()
@@ -53,6 +55,8 @@ type DTLSTransport struct {
 	srtpEndpoint, srtcpEndpoint *mux.Endpoint
 	simulcastStreams            []simulcastStreamPair
 	srtpReady                   chan struct{}
+	srtpWanted                  bool // media was negotiated, guarded by lock
+	srtpCanStart                bool // DTLS is connected, guarded by lock
 
 	dtlsMatcher mux.MatchFunc
 
@@ -156,6 +160,9 @@ func (t *DTLSTransport) State() DTLSTransportState {
 // WriteRTCP sends a user provided RTCP packet to the connected peer. If no peer is connected the
 // packet is discarded.
 func (t *DTLSTransport) WriteRTCP(pkts []rtcp.Packet) (int, error) {
+	if err := t.wantSRTP(); err != nil {
+		return 0, err
+	}
 	raw, err := rtcp.Marshal(pkts)
 	if err != nil {
 		return 0, err
@@ -203,12 +210,40 @@ func (t *DTLSTransport) GetRemoteCertificate() []byte {
 	return t.remoteCertificate
 }
 
-func (t *DTLSTransport) startSRTP() error {
+// wantSRTP starts the SRTP sessions now, or once DTLS connects. It is called
+// when a negotiation brings media.
+func (t *DTLSTransport) wantSRTP() error {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+	if t.srtpWanted {
+		return nil
+	}
+	t.srtpWanted = true
+	if !t.srtpCanStart {
+		return nil
+	}
+
+	return t.startSRTP()
+}
+
+// startSRTP requires the caller holds the lock.
+func (t *DTLSTransport) startSRTP() error { //nolint:cyclop
 	srtpConfig := &srtp.Config{
 		Profile:       t.srtpProtectionProfile,
 		BufferFactory: t.api.settingEngine.BufferFactory,
 		LoggerFactory: t.api.settingEngine.LoggerFactory,
 	}
+
+	// RFC 9335 Section 4: a=cryptex declares the advertising endpoint's own receive support, so the
+	// outbound (local, what we send) and inbound (remote, what we accept receiving) modes may differ
+	// when the offer/answer exchange was asymmetric.
+	if t.localCryptexMode == srtp.CryptexModeEnabled || t.localCryptexMode == srtp.CryptexModeRequired {
+		srtpConfig.LocalOptions = append(srtpConfig.LocalOptions, srtp.Cryptex(t.localCryptexMode))
+	}
+	if t.remoteCryptexMode == srtp.CryptexModeEnabled || t.remoteCryptexMode == srtp.CryptexModeRequired {
+		srtpConfig.RemoteOptions = append(srtpConfig.RemoteOptions, srtp.Cryptex(t.remoteCryptexMode))
+	}
+
 	if t.api.settingEngine.replayProtection.SRTP != nil {
 		srtpConfig.RemoteOptions = append(
 			srtpConfig.RemoteOptions,
@@ -585,7 +620,14 @@ func (t *DTLSTransport) completeStart(dtlsConn *dtls.Conn) error {
 	t.conn = dtlsConn
 	t.onStateChange(DTLSTransportStateConnected)
 
-	return t.startSRTP()
+	// SRTP starts once media is negotiated, so a connection with only data
+	// channels runs no SRTP sessions.
+	t.srtpCanStart = true
+	if t.srtpWanted {
+		return t.startSRTP()
+	}
+
+	return nil
 }
 
 func (t *DTLSTransport) failStart(err error) error {
@@ -694,6 +736,9 @@ func (t *DTLSTransport) streamsForSSRC(
 	ssrc SSRC,
 	streamInfo interceptor.StreamInfo,
 ) (*streamsForSSRCResult, error) {
+	if err := t.wantSRTP(); err != nil {
+		return nil, err
+	}
 	srtpSession, err := t.getSRTPSession()
 	if err != nil {
 		return nil, err
@@ -732,4 +777,91 @@ func (t *DTLSTransport) streamsForSSRC(
 		rtcpReadStream:            rtcpReadStream,
 		rtcpInterceptor:           rtcpInterceptor,
 	}, nil
+}
+
+func (t *DTLSTransport) getLocalCryptexMode() srtp.CryptexMode {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
+	return t.localCryptexMode
+}
+
+func (t *DTLSTransport) setLocalCryptexMode(mode srtp.CryptexMode) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	t.localCryptexMode = mode
+}
+
+func (t *DTLSTransport) getRemoteCryptexMode() srtp.CryptexMode {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
+	return t.remoteCryptexMode
+}
+
+func (t *DTLSTransport) setRemoteCryptexMode(mode srtp.CryptexMode) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	t.remoteCryptexMode = mode
+}
+
+// updateCryptexModes applies localMode/remoteMode to the respective direction of the
+// already-started SRTP session, if any, and updates the bookkeeping used by
+// getLocalCryptexMode/getRemoteCryptexMode. SRTCP is unaffected by Cryptex mode and is not updated.
+func (t *DTLSTransport) updateCryptexModes(localMode, remoteMode srtp.CryptexMode) error {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	srtpSession, err := t.getSRTPSession()
+	sessionStarted := err == nil && srtpSession != nil
+
+	if localMode != t.localCryptexMode {
+		if sessionStarted {
+			if err := srtpSession.UpdateLocalOptions(srtp.Cryptex(localMode)); err != nil {
+				return err
+			}
+		}
+		t.localCryptexMode = localMode
+	}
+
+	if remoteMode != t.remoteCryptexMode {
+		if sessionStarted {
+			if err := srtpSession.UpdateRemoteOptions(srtp.Cryptex(remoteMode)); err != nil {
+				return err
+			}
+		}
+		t.remoteCryptexMode = remoteMode
+	}
+
+	return nil
+}
+
+// rtpHeaderEncryptionNegotiated reports if RFC 9335 RTP Header Extension Encryption ("Cryptex")
+// has been negotiated and is enabled for this transceiver.
+func (t *DTLSTransport) rtpHeaderEncryptionNegotiated() bool {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
+	return t.localCryptexMode == srtp.CryptexModeEnabled || t.localCryptexMode == srtp.CryptexModeRequired
+}
+
+func (t *DTLSTransport) collectStats(collector *statsReportCollector) {
+	collector.Collecting()
+	stats := t.iceTransport.Stats()
+
+	t.lock.RLock()
+	stats.DTLSState = t.state
+	if t.conn != nil {
+		// Pion WebRTC@v4 only negotiates DTLS 1.2.
+		stats.TLSVersion = "FEFD"
+		stats.SRTPCipher = t.srtpProtectionProfile.String()
+		if state, ok := t.conn.ConnectionState(); ok {
+			stats.DTLSCipher = dtls.CipherSuiteName(state.CipherSuiteID)
+		}
+	}
+	t.lock.RUnlock()
+
+	collector.Collect(stats.ID, stats)
 }

@@ -17,9 +17,10 @@ exclude = [
   "**/dist/**",
   "trash/**",
   # Exact upstream source projection is separately hash/patch verified in hygiene.
-  # WindShare provider wrappers and tests remain under normal source limits.
+  # Native adapters in connectivity/ and transport/ remain under normal source limits.
   "third_party/pion/ice/**",
   "third_party/pion/webrtc/**",
+  "third_party/pion/turn/**",
   "third_party/pion/sctp/**",
 ]
 

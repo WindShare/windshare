@@ -2,8 +2,10 @@
   "kind": "local-tcp-capability",
   "platform": "win32",
   "pion": {
-    "ice": "v4.4.2",
-    "webrtc": "v4.2.20"
+    "ice": "v4.4.8",
+    "webrtc": "v4.2.26",
+    "turn": "v5.1.3",
+    "sctp": "v1.12.0"
   },
   "outcomes": [
     {
@@ -13,14 +15,14 @@
       "mapped": false,
       "status": "supported",
       "payload": "tcp-proof:authenticated-payload",
-      "baseEndpoint": "127.0.0.1:62593",
+      "baseEndpoint": "127.0.0.1:59044",
       "pair": {
         "localAddress": "127.0.0.1",
-        "localPort": 62593,
+        "localPort": 59044,
         "localType": "host",
         "protocol": "tcp",
         "remoteAddress": "127.0.0.1",
-        "remotePort": 51945,
+        "remotePort": 58621,
         "remoteType": "prflx"
       }
     },

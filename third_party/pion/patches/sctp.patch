@@ -1,6 +1,6 @@
 --- a/association.go
 +++ b/association.go
-@@ -2770,7 +2770,7 @@
+@@ -2993,7 +2993,7 @@
  
  			// RFC 8985 (RACK) sec 5.2: RACK.segment is the most recently sent
  			// segment that has been delivered, including retransmissions.
@@ -9,7 +9,7 @@
  				newestDeliveredSendTime = chunkPayload.since
  				newestDeliveredOrigTSN = chunkPayload.tsn
  				deliveredFound = true
-@@ -2825,7 +2825,7 @@
+@@ -3047,7 +3047,7 @@
  					}
  				}
  
@@ -18,7 +18,7 @@
  					newestDeliveredSendTime = chunkPayload.since
  					newestDeliveredOrigTSN = chunkPayload.tsn
  					deliveredFound = true
-@@ -4671,15 +4671,14 @@
+@@ -4935,15 +4935,14 @@
  				continue
  			}
  
@@ -37,7 +37,7 @@
  			// all later ones are even newer -> short-circuit.
  			if !chunk.since.Add(a.rackReoWnd).Before(a.rackDeliveredTime) {
  				break
-@@ -4792,7 +4791,7 @@
+@@ -5056,7 +5055,7 @@
  
  			continue
  		}
@@ -46,7 +46,7 @@
  			chunk = next
  
  			continue
-@@ -5157,3 +5156,13 @@
+@@ -5421,3 +5420,13 @@
  
  	return init.marshal()
  }

@@ -1,8 +1,6 @@
-diff --git a/icecandidate.go b/icecandidate.go
-index 17182a0..593c7cb 100644
 --- a/icecandidate.go
 +++ b/icecandidate.go
-@@ -100,6 +100,7 @@ func (c ICECandidate) ToICE() (cand ice.Candidate, err error) {
+@@ -100,6 +100,7 @@
  		cand, err = ice.NewCandidateHost(&config)
  	case ICECandidateTypeSrflx:
  		config := ice.CandidateServerReflexiveConfig{
@@ -10,11 +8,9 @@ index 17182a0..593c7cb 100644
  			CandidateID: candidateID,
  			Network:     c.Protocol.String(),
  			Address:     c.Address,
-diff --git a/icegatherer.go b/icegatherer.go
-index c5c5ecc..815ab78 100644
 --- a/icegatherer.go
 +++ b/icegatherer.go
-@@ -256,6 +256,7 @@ func (g *ICEGatherer) baseAgentOptions(mDNSMode ice.MulticastDNSMode) []ice.Agen
+@@ -260,6 +260,7 @@
  		ice.WithMulticastDNSMode(mDNSMode),
  		ice.WithTCPMux(g.api.settingEngine.iceTCPMux),
  		ice.WithUDPMux(g.api.settingEngine.iceUDPMux),
@@ -22,9 +18,6 @@ index c5c5ecc..815ab78 100644
  		ice.WithProxyDialer(g.api.settingEngine.iceProxyDialer),
  		ice.WithBindingRequestHandler(g.api.settingEngine.iceBindingRequestHandler),
  	}
-diff --git a/provider_config.go b/provider_config.go
-new file mode 100644
-index 0000000..688558b
 --- /dev/null
 +++ b/provider_config.go
 @@ -0,0 +1,19 @@
@@ -47,11 +40,9 @@ index 0000000..688558b
 +	config.MappedTCPEndpoints = slices.Clone(config.MappedTCPEndpoints)
 +	e.iceProviderConfig = config
 +}
-diff --git a/settingengine.go b/settingengine.go
-index 65e7c28..c4e3415 100644
 --- a/settingengine.go
 +++ b/settingengine.go
-@@ -104,6 +104,7 @@ type SettingEngine struct {
+@@ -104,6 +104,7 @@
  	LoggerFactory                             logging.LoggerFactory
  	iceTCPMux                                 ice.TCPMux
  	iceUDPMux                                 ice.UDPMux

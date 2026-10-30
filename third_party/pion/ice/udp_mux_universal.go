@@ -15,7 +15,7 @@ import (
 	stunx "github.com/pion/ice/v4/internal/stun"
 	"github.com/pion/logging"
 	"github.com/pion/stun/v4"
-	"github.com/pion/transport/v4"
+	"github.com/pion/transport/v5"
 )
 
 // UniversalUDPMux allows multiple connections to go over a single UDP port for
@@ -89,8 +89,6 @@ func NewUniversalUDPMuxDefault(params UniversalUDPMuxParams) *UniversalUDPMuxDef
 		UDPConn: mux.params.UDPConn,
 		Net:     mux.params.Net,
 	}
-	// The wrapper uses the embedded mutex while processing queued STUN packets.
-	// Publish the complete mux before starting any reads from the owned socket.
 	mux.UDPMuxDefault = newUDPMuxDefault(udpMuxParams)
 	go mux.connWorker()
 
@@ -257,6 +255,21 @@ func (m *UniversalUDPMuxDefault) RefreshXORMappedAddr(ctx context.Context, serve
 	if !serverAddr.IsValid() {
 		return nil, errInvalidAddress
 	}
+	// Idle refresh owns this socket exclusively. The shared mux's cancellation
+	// grace would delay handing it to the next agent, so interrupt this write
+	// immediately and join the callback before returning the socket to its owner.
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	aborted := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		_ = m.abortWrite()
+		close(aborted)
+	})
+	defer func() {
+		if !stop() {
+			<-aborted
+		}
+	}()
 	m.mu.Lock()
 	delete(m.xorMappedMap, canonicalAddrPort(serverAddr))
 	m.mu.Unlock()

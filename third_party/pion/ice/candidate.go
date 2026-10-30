@@ -100,6 +100,7 @@ type Candidate interface {
 	writeTo(raw []byte, dst Candidate) (int, error)
 	writeSTUN(raw []byte, dst Candidate) error
 	setPriority(uint32)
+	prflxPriority() uint32
 	priorityForAgent(*Agent) uint32
 
 	replaceRemoteCandidateCacheValues(oldRemote, newRemote Candidate)

@@ -76,8 +76,8 @@ func WithProviderConfig(config ProviderConfig) AgentOption {
 	}
 }
 
-func (a *Agent) gatherProviderEndpoints(ctx context.Context) {
-	a.gatherProviderTCPEndpoints(ctx)
+func (a *Agent) gatherProviderEndpoints(ctx context.Context, generation uint64, localUfrag string) {
+	a.gatherProviderTCPEndpoints(ctx, generation, localUfrag)
 	for _, endpoint := range a.providerConfig.MappedUDPEndpoints {
 		if ctx.Err() != nil {
 			return
@@ -92,7 +92,7 @@ func (a *Agent) gatherProviderEndpoints(ctx context.Context) {
 		}
 		// A separate mux reference allows candidate disposal without closing either
 		// the physical endpoint or another local candidate's reference.
-		conn, err := a.providerConfig.SrflxMux.GetConnForURL(a.localUfrag, "mapping:"+endpoint.External.String(), local)
+		conn, err := a.providerConfig.SrflxMux.GetConnForURL(localUfrag, "mapping:"+endpoint.External.String(), local)
 		if err != nil {
 			a.log.Warnf("mapped endpoint socket: %v", err)
 			continue
@@ -106,7 +106,7 @@ func (a *Agent) gatherProviderEndpoints(ctx context.Context) {
 			a.log.Warnf("mapped endpoint candidate: %v", err)
 			continue
 		}
-		if err = a.addCandidate(ctx, candidate, conn); err != nil {
+		if err = a.addCandidate(ctx, candidate, conn, &generation, false); err != nil {
 			_ = conn.Close()
 			a.log.Warnf("mapped endpoint admission: %v", err)
 		}
