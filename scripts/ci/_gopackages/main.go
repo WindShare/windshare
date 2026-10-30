@@ -39,6 +39,10 @@ var approvedModuleMetadataPaths = map[string]struct{}{
 	"internal/perfevidence/go.sum": {},
 	"spikes/webrtc/go.mod":         {},
 	"spikes/webrtc/go.sum":         {},
+	// The public-API reproducer pins its upstream baseline independently of the
+	// production graph; source diagnostics cover it and its README owns execution.
+	"testdata/connectivity/sctp-rack-public-20261030/go.mod": {},
+	"testdata/connectivity/sctp-rack-public-20261030/go.sum": {},
 	// Pinned upstream dependency projections are owned by _piondeps and its
 	// reproducible patch gate; WindShare wrappers remain in the root sets.
 	"third_party/pion/ice/go.mod":    {},

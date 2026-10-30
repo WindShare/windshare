@@ -56,11 +56,11 @@ func parsePacket(p []byte) (packetView, error) {
 				return v, fmt.Errorf("truncated SACK blocks")
 			}
 			s := sackChunk{Cumulative: binary.BigEndian.Uint32(c[4:8])}
-			for i := 0; i < gaps; i++ {
+			for i := range gaps {
 				pos := 16 + 4*i
 				s.Gaps = append(s.Gaps, [2]uint16{binary.BigEndian.Uint16(c[pos : pos+2]), binary.BigEndian.Uint16(c[pos+2 : pos+4])})
 			}
-			for i := 0; i < dups; i++ {
+			for i := range dups {
 				pos := 16 + 4*(gaps+i)
 				s.Duplicates = append(s.Duplicates, binary.BigEndian.Uint32(c[pos:pos+4]))
 			}
