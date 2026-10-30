@@ -1,0 +1,7 @@
+.build/
+__pycache__/
+repair.mod
+repair.sum
+scan.mod
+scan.sum
+results/

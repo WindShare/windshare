@@ -1,0 +1,510 @@
+{
+  "baseline": "6ec762ebc1106ae8c5ce1a69208a98dfcfdddaaf",
+  "runs": 96,
+  "metric": "Milliseconds from original target send to first non-dropped target send; excludes delivery and ACK latency.",
+  "scope": "One unfragmented final message after warmup; unchanged SCTP defaults; nominal RTTs 20 and 50 ms.",
+  "aggregate": [
+    {
+      "environment": "tail-followup-windows",
+      "delay": "10ms",
+      "drops": 0,
+      "variant": "upstream",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 0,
+      "sender_t3_timeouts": 0,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": null
+    },
+    {
+      "environment": "tail-followup-windows",
+      "delay": "10ms",
+      "drops": 0,
+      "variant": "repaired",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 0,
+      "sender_t3_timeouts": 0,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": null
+    },
+    {
+      "environment": "tail-followup-windows",
+      "delay": "10ms",
+      "drops": 1,
+      "variant": "upstream",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 3,
+      "sender_t3_timeouts": 0,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": [
+        250.07999999999998,
+        309.452
+      ]
+    },
+    {
+      "environment": "tail-followup-windows",
+      "delay": "10ms",
+      "drops": 1,
+      "variant": "repaired",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 3,
+      "sender_t3_timeouts": 0,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": [
+        249.90200000000002,
+        253.512
+      ]
+    },
+    {
+      "environment": "tail-followup-windows",
+      "delay": "10ms",
+      "drops": 2,
+      "variant": "upstream",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 3,
+      "sender_t3_timeouts": 3,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": [
+        1000.084,
+        1000.261
+      ]
+    },
+    {
+      "environment": "tail-followup-windows",
+      "delay": "10ms",
+      "drops": 2,
+      "variant": "repaired",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 3,
+      "sender_t3_timeouts": 3,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": [
+        1000.14,
+        1000.2889999999999
+      ]
+    },
+    {
+      "environment": "tail-followup-windows",
+      "delay": "10ms",
+      "drops": 3,
+      "variant": "upstream",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 3,
+      "sender_t3_timeouts": 6,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": [
+        3000.33,
+        3000.529
+      ]
+    },
+    {
+      "environment": "tail-followup-windows",
+      "delay": "10ms",
+      "drops": 3,
+      "variant": "repaired",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 3,
+      "sender_t3_timeouts": 6,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": [
+        3000.2200000000003,
+        3000.536
+      ]
+    },
+    {
+      "environment": "tail-followup-windows",
+      "delay": "25ms",
+      "drops": 0,
+      "variant": "upstream",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 0,
+      "sender_t3_timeouts": 0,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": null
+    },
+    {
+      "environment": "tail-followup-windows",
+      "delay": "25ms",
+      "drops": 0,
+      "variant": "repaired",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 0,
+      "sender_t3_timeouts": 0,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": null
+    },
+    {
+      "environment": "tail-followup-windows",
+      "delay": "25ms",
+      "drops": 1,
+      "variant": "upstream",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 3,
+      "sender_t3_timeouts": 0,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": [
+        321.893,
+        322.09900000000005
+      ]
+    },
+    {
+      "environment": "tail-followup-windows",
+      "delay": "25ms",
+      "drops": 1,
+      "variant": "repaired",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 3,
+      "sender_t3_timeouts": 0,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": [
+        310.628,
+        313.258
+      ]
+    },
+    {
+      "environment": "tail-followup-windows",
+      "delay": "25ms",
+      "drops": 2,
+      "variant": "upstream",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 3,
+      "sender_t3_timeouts": 3,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": [
+        1000.0390000000001,
+        1000.2639999999999
+      ]
+    },
+    {
+      "environment": "tail-followup-windows",
+      "delay": "25ms",
+      "drops": 2,
+      "variant": "repaired",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 3,
+      "sender_t3_timeouts": 3,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": [
+        1000.071,
+        1000.355
+      ]
+    },
+    {
+      "environment": "tail-followup-windows",
+      "delay": "25ms",
+      "drops": 3,
+      "variant": "upstream",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 3,
+      "sender_t3_timeouts": 6,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": [
+        3000.4359999999997,
+        3000.6279999999997
+      ]
+    },
+    {
+      "environment": "tail-followup-windows",
+      "delay": "25ms",
+      "drops": 3,
+      "variant": "repaired",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 3,
+      "sender_t3_timeouts": 6,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": [
+        3000.199,
+        3000.8830000000003
+      ]
+    },
+    {
+      "environment": "tail-followup-linux",
+      "delay": "10ms",
+      "drops": 0,
+      "variant": "upstream",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 0,
+      "sender_t3_timeouts": 0,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": null
+    },
+    {
+      "environment": "tail-followup-linux",
+      "delay": "10ms",
+      "drops": 0,
+      "variant": "repaired",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 0,
+      "sender_t3_timeouts": 0,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": null
+    },
+    {
+      "environment": "tail-followup-linux",
+      "delay": "10ms",
+      "drops": 1,
+      "variant": "upstream",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 3,
+      "sender_t3_timeouts": 0,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": [
+        252.596,
+        254.469
+      ]
+    },
+    {
+      "environment": "tail-followup-linux",
+      "delay": "10ms",
+      "drops": 1,
+      "variant": "repaired",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 3,
+      "sender_t3_timeouts": 0,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": [
+        253.245,
+        254.74199999999996
+      ]
+    },
+    {
+      "environment": "tail-followup-linux",
+      "delay": "10ms",
+      "drops": 2,
+      "variant": "upstream",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 3,
+      "sender_t3_timeouts": 3,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": [
+        1000.4460000000001,
+        1001.0390000000001
+      ]
+    },
+    {
+      "environment": "tail-followup-linux",
+      "delay": "10ms",
+      "drops": 2,
+      "variant": "repaired",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 3,
+      "sender_t3_timeouts": 3,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": [
+        1000.4419999999999,
+        1000.8950000000001
+      ]
+    },
+    {
+      "environment": "tail-followup-linux",
+      "delay": "10ms",
+      "drops": 3,
+      "variant": "upstream",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 3,
+      "sender_t3_timeouts": 6,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": [
+        3001.387,
+        3002.552
+      ]
+    },
+    {
+      "environment": "tail-followup-linux",
+      "delay": "10ms",
+      "drops": 3,
+      "variant": "repaired",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 3,
+      "sender_t3_timeouts": 6,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": [
+        3001.9649999999997,
+        3002.416
+      ]
+    },
+    {
+      "environment": "tail-followup-linux",
+      "delay": "25ms",
+      "drops": 0,
+      "variant": "upstream",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 0,
+      "sender_t3_timeouts": 0,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": null
+    },
+    {
+      "environment": "tail-followup-linux",
+      "delay": "25ms",
+      "drops": 0,
+      "variant": "repaired",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 0,
+      "sender_t3_timeouts": 0,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": null
+    },
+    {
+      "environment": "tail-followup-linux",
+      "delay": "25ms",
+      "drops": 1,
+      "variant": "upstream",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 3,
+      "sender_t3_timeouts": 0,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": [
+        313.15700000000004,
+        314.914
+      ]
+    },
+    {
+      "environment": "tail-followup-linux",
+      "delay": "25ms",
+      "drops": 1,
+      "variant": "repaired",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 3,
+      "sender_t3_timeouts": 0,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": [
+        313.5,
+        315.567
+      ]
+    },
+    {
+      "environment": "tail-followup-linux",
+      "delay": "25ms",
+      "drops": 2,
+      "variant": "upstream",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 3,
+      "sender_t3_timeouts": 3,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": [
+        1000.4859999999999,
+        1000.896
+      ]
+    },
+    {
+      "environment": "tail-followup-linux",
+      "delay": "25ms",
+      "drops": 2,
+      "variant": "repaired",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 3,
+      "sender_t3_timeouts": 3,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": [
+        1000.365,
+        1000.6850000000001
+      ]
+    },
+    {
+      "environment": "tail-followup-linux",
+      "delay": "25ms",
+      "drops": 3,
+      "variant": "upstream",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 3,
+      "sender_t3_timeouts": 6,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": [
+        3000.806,
+        3001.317
+      ]
+    },
+    {
+      "environment": "tail-followup-linux",
+      "delay": "25ms",
+      "drops": 3,
+      "variant": "repaired",
+      "runs": 3,
+      "valid": 3,
+      "sender_tlp_probes": 3,
+      "sender_t3_timeouts": 6,
+      "target_rack_marks": 0,
+      "later_send_witnesses": 0,
+      "original_to_recovery_ms": [
+        3001.707,
+        3002.6890000000003
+      ]
+    }
+  ],
+  "sources_sha256": {
+    "run_tail.py": "297913ba53200333887b43d4b40abe28af4c63bf87b5554539e94966a4d18bb1",
+    "summarize_tail.py": "734a58c8e388154491cb378ab90ccc94ac79eeeee83df749ff3c0774324304e8",
+    "candidate.patch": "4eac81e6719f2067d1143f2a4a30861e4d40d47d47da28bade06318585a26587",
+    "go.mod": "18bf5eb554b90d40299edda50837e990e2c1b5f10c27ba17cb1d0f2a96940928",
+    "go.sum": "407565ceba0bdf0a2a3314f472d39cdb171b49fca8d59b7a138237860f1f3890",
+    "faults.go": "89db3561b68ce473c2300defaea4b106bec553055f6622c4a437bf5e91dcb333",
+    "main.go": "ddda991acd5f5d6b2ead425e4edcf853323ed18c9a0fd9c326686084d02938b0",
+    "network.go": "e98b6a792afea2118e54e55e5885ce01ed7078251cec04ae07059c443e957d05",
+    "packet.go": "69fdb5cdbf1fb4913c7dd867fdb86506362471fad245a0a77a11b355ab9adb11",
+    "session.go": "77253ab02c7142317422140ae5f583b19e0e7829b440620aa86a4fe04a6970ae",
+    "trace.go": "d54e1fe4aab744eacd9089da49ac42ec40fcff78a7001c6137e9c62e1c030e0d"
+  },
+  "original_evidence_sha256": "344e7e6b8ab887a8cd4ae0c729b27eed12c3502c8765cc88d0b04eb4437e335f"
+}
