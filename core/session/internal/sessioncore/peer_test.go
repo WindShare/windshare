@@ -146,13 +146,11 @@ func TestRPCBeginRollsBackEveryPreDeliveryFailure(t *testing.T) {
 			if pendingCalls != 1 {
 				t.Fatal("RPC did not register its pending response sink")
 			}
-			time.Sleep(deadline - time.Nanosecond)
-			synctest.Wait()
+			synctest.Sleep(deadline - time.Nanosecond)
 			if len(result) != 0 {
 				t.Fatal("RPC returned before its deadline")
 			}
-			time.Sleep(time.Nanosecond)
-			synctest.Wait()
+			synctest.Sleep(time.Nanosecond)
 			if err := <-result; !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("pre-transport timeout error = %v", err)
 			}
@@ -214,13 +212,11 @@ func testRPCContinuationRetractsPendingPreTransportTimeout(t *testing.T) {
 		result <- continuationAttemptResult{outcome: outcome, err: err}
 	}()
 	synctest.Wait()
-	time.Sleep(deadline - time.Nanosecond)
-	synctest.Wait()
+	synctest.Sleep(deadline - time.Nanosecond)
 	if len(result) != 0 {
 		t.Fatal("continuation returned before its deadline")
 	}
-	time.Sleep(time.Nanosecond)
-	synctest.Wait()
+	synctest.Sleep(time.Nanosecond)
 	got := <-result
 	if got.outcome != protocolsession.SendOutcomeDropped || !errors.Is(got.err, context.DeadlineExceeded) ||
 		errors.Is(got.err, session.ErrRuntimeClosed) {
