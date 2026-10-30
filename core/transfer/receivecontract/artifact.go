@@ -294,8 +294,8 @@ func canonicalSourcePath(value string) (string, string, error) {
 		return "", "", ErrInvalidReceiveContract
 	}
 	leaf := canonical
-	if separator := strings.LastIndexByte(canonical, '/'); separator >= 0 {
-		leaf = canonical[separator+1:]
+	if _, cutLeaf, found := strings.CutLast(canonical, "/"); found {
+		leaf = cutLeaf
 	}
 	if canonicalComponent(leaf) != nil {
 		return "", "", ErrInvalidReceiveContract

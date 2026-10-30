@@ -420,9 +420,9 @@ type highWaterObserver struct {
 
 func newHighWaterObserver(channel *pion.DataChannel, highWater uint64) *highWaterObserver {
 	return &highWaterObserver{
-		pionDataChannel: pionDataChannel{DataChannel: channel},
-		highWater:       highWater,
-		highSeen:        make(chan struct{}),
+		DataChannel: channel,
+		highWater:   highWater,
+		highSeen:    make(chan struct{}),
 	}
 }
 

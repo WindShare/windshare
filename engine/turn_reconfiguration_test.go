@@ -19,7 +19,7 @@ func TestTURNConfigurationUpdatesWhileApplicationTaskRemainsRunning(t *testing.T
 	current, err := start(application, t.Context(), func(ctx context.Context, _ task.Control) task.Completion[int] {
 		close(started)
 		<-ctx.Done()
-		return task.Completion[int]{Settlement: task.Settlement{Outcome: task.OutcomeSuccess}}
+		return task.Completion[int]{Outcome: task.OutcomeSuccess}
 	})
 	if err != nil {
 		t.Fatal(err)

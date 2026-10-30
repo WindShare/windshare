@@ -835,8 +835,8 @@ func TestAdmitPeerChannelResponseFailureRetainsAuthenticatedRejection(t *testing
 	base, peer := newMemoryChannelPair()
 	wantSendErr := errors.New("admission response transport failed")
 	candidate := &failingAdmissionSendChannel{
-		countingAdmissionChannel: countingAdmissionChannel{FrameChannel: base},
-		err:                      wantSendErr,
+		FrameChannel: base,
+		err:          wantSendErr,
 	}
 	result := make(chan struct {
 		admission sendersession.PeerAdmissionResult

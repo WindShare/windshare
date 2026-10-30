@@ -74,8 +74,8 @@ func TestReceiverReadinessFollowsLiveLaneIncarnations(t *testing.T) {
 		return nil
 	}})
 	path := &changingReceiverPath{
-		receiverFixturePath: receiverFixturePath{done: make(chan struct{})},
-		lane:                turncontrol.Lane{ID: 7, Epoch: 1}, live: true,
+		done: make(chan struct{}),
+		lane: turncontrol.Lane{ID: 7, Epoch: 1}, live: true,
 	}
 	entry := &receiverPath{path: path, grant: turncontrol.Grant{
 		Authority: turncontrol.Header{SessionID: [16]byte{1}, OwnerPathID: [16]byte{2}, Sequence: 1}, PathID: [16]byte{3},

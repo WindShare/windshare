@@ -104,7 +104,7 @@ func TestDetachedReceiveObserverPreservesExecutionAndDurableSourceLoss(t *testin
 			}
 			observation.protocol.RecordDropped(5)
 			observation.complete()
-			return task.Completion[Result]{Settlement: task.Settlement{Outcome: task.OutcomeSuccess, Err: ctx.Err()}}
+			return task.Completion[Result]{Outcome: task.OutcomeSuccess, Err: ctx.Err()}
 		},
 	})
 	if err != nil {

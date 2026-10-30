@@ -37,7 +37,7 @@ func TestDiagnosticPressurePreservesProductProgressCancellationAndSettlement(t *
 			control.Emit(pressureProgress())
 			close(produced)
 			<-ctx.Done()
-			return task.Completion[int]{Value: 42, Settlement: task.Settlement{Outcome: task.OutcomeCancelled, Err: context.Cause(ctx)}}
+			return task.Completion[int]{Value: 42, Outcome: task.OutcomeCancelled, Err: context.Cause(ctx)}
 		})
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +84,7 @@ func TestClosedDiagnosticStreamDoesNotAffectTasksAndScopesRemainDistinct(t *test
 	for range 2 {
 		current, err := startWorkflow(application, t.Context(), appobs.WorkflowShare, stream.Sink(), func(_ context.Context, c task.Control) task.Completion[int] {
 			c.Diagnostics.Emit(diagnostics.New("source.started", nil))
-			return task.Completion[int]{Value: 1, Settlement: task.Settlement{Outcome: task.OutcomeSuccess}}
+			return task.Completion[int]{Value: 1, Outcome: task.OutcomeSuccess}
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -113,7 +113,7 @@ func TestClosedDiagnosticStreamDoesNotAffectTasksAndScopesRemainDistinct(t *test
 		if c.Diagnostics.Emit(diagnostics.New("after.close", nil)) {
 			t.Error("closed sink accepted event")
 		}
-		return task.Completion[int]{Settlement: task.Settlement{Outcome: task.OutcomeSuccess}}
+		return task.Completion[int]{Outcome: task.OutcomeSuccess}
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -146,7 +146,7 @@ func BenchmarkEngineObservationPressure(b *testing.B) {
 							c.Emit(progress)
 						}
 					}
-					return task.Completion[int]{Settlement: task.Settlement{Outcome: task.OutcomeSuccess}}
+					return task.Completion[int]{Outcome: task.OutcomeSuccess}
 				})
 				if err != nil {
 					b.Fatal(err)

@@ -45,11 +45,11 @@ func TestApplicationCloseJoinsTasksWithIndependentCleanup(t *testing.T) {
 			cleanup, cancel := control.CleanupContext()
 			defer cancel()
 			if cleanup.Err() != nil {
-				return task.Completion[int]{Settlement: task.Settlement{Outcome: task.OutcomeFailed, FailureClass: task.FailureLocal, Err: cleanup.Err(), CleanupError: cleanup.Err()}}
+				return task.Completion[int]{Outcome: task.OutcomeFailed, FailureClass: task.FailureLocal, Err: cleanup.Err(), CleanupError: cleanup.Err()}
 			}
 			cleaning <- struct{}{}
 			<-release
-			return task.Completion[int]{Value: i, Settlement: task.Settlement{Outcome: task.OutcomeSuccess}}
+			return task.Completion[int]{Value: i, Outcome: task.OutcomeSuccess}
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -112,7 +112,7 @@ func TestFinalCleanupFailureSurvivesTaskAndApplicationShutdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	current, err := start(application, context.Background(), func(context.Context, task.Control) task.Completion[int] {
-		return task.Completion[int]{Value: 9, Settlement: task.Settlement{Outcome: task.OutcomeFailed, FailureClass: task.FailureLocal, Err: cleanupErr, CleanupError: cleanupErr}}
+		return task.Completion[int]{Value: 9, Outcome: task.OutcomeFailed, FailureClass: task.FailureLocal, Err: cleanupErr, CleanupError: cleanupErr}
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -169,9 +169,9 @@ func TestInjectedEntropyIsSerializedAcrossTasks(t *testing.T) {
 				var buffer [32]byte
 				_, err := io.ReadFull(control.Random, buffer[:])
 				if err == nil {
-					return task.Completion[int]{Settlement: task.Settlement{Outcome: task.OutcomeSuccess}}
+					return task.Completion[int]{Outcome: task.OutcomeSuccess}
 				}
-				return task.Completion[int]{Settlement: task.Settlement{Outcome: task.OutcomeFailed, FailureClass: task.FailureLocal, Err: err}}
+				return task.Completion[int]{Outcome: task.OutcomeFailed, FailureClass: task.FailureLocal, Err: err}
 			})
 			if err != nil {
 				t.Error(err)

@@ -82,7 +82,7 @@ func TestReceiveAttemptLifetimeKeepsOneOperationUntilDecision(t *testing.T) {
 				if retained.operation != &operation || authority.closes != 0 {
 					t.Fatal("retry replaced or released output authority")
 				}
-				return task.Completion[Result]{Settlement: task.Settlement{Outcome: task.OutcomeSuccess}}
+				return task.Completion[Result]{Outcome: task.OutcomeSuccess}
 			})
 			if attempts != test.attempts || result.Value.Recovery.Retention != test.outcome || authority.closes != 1 || authority.discards != test.discarded {
 				t.Fatalf("attempts=%d recovery=%v close=%d discard=%d", attempts, result.Value.Recovery, authority.closes, authority.discards)

@@ -27,7 +27,7 @@ func (f *canceledFirstAccounts) Acquire(ctx context.Context, _ string, subject S
 
 func TestCanceledIssuerImmediatelyServesNextDemandWithoutFailureObservation(t *testing.T) {
 	now := time.Unix(1700000000, 0)
-	accounts := &canceledFirstAccounts{accountFixture: accountFixture{now: func() time.Time { return now }}, started: make(chan struct{})}
+	accounts := &canceledFirstAccounts{now: func() time.Time { return now }, started: make(chan struct{})}
 	var messages []turncontrol.Message
 	var events []Event
 	s := NewSender(SenderConfig{Accounts: accounts, SessionID: [16]byte{1}, Now: accounts.now,

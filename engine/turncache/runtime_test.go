@@ -42,7 +42,7 @@ func TestRefreshCannotWriteUserSettingsOrBudget(t *testing.T) {
 	if err := store.Save(config); err != nil {
 		t.Fatal(err)
 	}
-	cache := observedCache{FileStore: FileStore{Settings: store}, saved: make(chan error, 1)}
+	cache := observedCache{Settings: store, saved: make(chan error, 1)}
 	if err := cache.FileStore.Save(t.Context(), config.Profiles[0], turn.Capability{ServiceID: "cf-service", Enabled: true}, time.Now().Add(-time.Minute)); err != nil {
 		t.Fatal(err)
 	}

@@ -199,12 +199,10 @@ func startTarget(config processowner.Config, job windows.Handle, events *os.File
 		return rootProcess{}, fmt.Errorf("bind target handle list: %w", err)
 	}
 	startup := windows.StartupInfoEx{
-		StartupInfo: windows.StartupInfo{
-			Cb:       uint32(unsafe.Sizeof(windows.StartupInfoEx{})),
-			Flags:    windows.STARTF_USESTDHANDLES,
-			StdInput: windows.Handle(nullInput.Fd()), StdOutput: windows.Handle(os.Stdout.Fd()),
-			StdErr: windows.Handle(os.Stderr.Fd()),
-		},
+		Cb:       uint32(unsafe.Sizeof(windows.StartupInfoEx{})),
+		Flags:    windows.STARTF_USESTDHANDLES,
+		StdInput: windows.Handle(nullInput.Fd()), StdOutput: windows.Handle(os.Stdout.Fd()),
+		StdErr:                  windows.Handle(os.Stderr.Fd()),
 		ProcThreadAttributeList: attributes.List(),
 	}
 	executable, err := windows.UTF16PtrFromString(config.Executable)

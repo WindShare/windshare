@@ -413,19 +413,18 @@ func fileClaimState(state fileState) ClaimState {
 }
 
 func claimName(path string) string {
-	separator := strings.LastIndexByte(path, '/')
-	if separator < 0 {
-		return path
+	if _, leaf, found := strings.CutLast(path, "/"); found {
+		return leaf
 	}
-	return path[separator+1:]
+	return path
 }
 
 func parentPath(path string) string {
-	separator := strings.LastIndexByte(path, '/')
-	if separator < 0 {
+	parent, _, found := strings.CutLast(path, "/")
+	if !found {
 		return ""
 	}
-	return path[:separator]
+	return parent
 }
 
 func receiptKey(admission transfer.DirectoryAdmission) admissionReceiptKey {

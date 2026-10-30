@@ -335,11 +335,11 @@ func immediateDirectoryChild(parent, child string) bool {
 	if child == "" {
 		return false
 	}
-	separator := strings.LastIndexByte(child, '/')
-	if separator < 0 {
+	parentPath, _, found := strings.CutLast(child, "/")
+	if !found {
 		return parent == ""
 	}
-	return parent == child[:separator]
+	return parent == parentPath
 }
 
 func (admission DirectoryAdmission) validSnapshot() bool {

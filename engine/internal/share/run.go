@@ -25,7 +25,7 @@ func Run(ctx context.Context, request Request, dependencies Dependencies) task.C
 		if d.Controller != nil {
 			d.Controller.finish(ErrConfiguration)
 		}
-		return task.Completion[Result]{Settlement: task.Settlement{Outcome: task.OutcomeFailed, FailureClass: task.FailureLocal, Err: ErrConfiguration}}
+		return task.Completion[Result]{Outcome: task.OutcomeFailed, FailureClass: task.FailureLocal, Err: ErrConfiguration}
 	}
 	started := d.Control.Now()
 	o := newObservations(d.Control, request)
@@ -54,9 +54,8 @@ func Run(ctx context.Context, request Request, dependencies Dependencies) task.C
 		finishErr = context.Cause(ctx)
 	}
 	d.Controller.finish(finishErr)
-	return task.Completion[Result]{Value: result, Settlement: task.Settlement{
-		Outcome: outcome, FailureClass: class, Err: errors.Join(runErr, cleanupErr), CleanupError: cleanupErr,
-	}}
+	return task.Completion[Result]{Value: result,
+		Outcome: outcome, FailureClass: class, Err: errors.Join(runErr, cleanupErr), CleanupError: cleanupErr}
 }
 
 type activeShare struct {

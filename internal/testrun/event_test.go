@@ -317,11 +317,11 @@ func TestJSONLineSinkSerializesConcurrentRecordsAtomically(t *testing.T) {
 func TestValidateEventRejectsMalformedAndOversizedRecords(t *testing.T) {
 	valid := Event{
 		SchemaVersion: EventSchemaVersion,
-		Identity:      Identity{RunID: "run-1", OperationID: "operation-1", Scenario: "scenario"},
-		Component:     "component",
-		Milestone:     "milestone",
-		Outcome:       string(OutcomeSucceeded),
-		Payload:       json.RawMessage(`{"ready":true}`),
+		RunID:         "run-1", OperationID: "operation-1", Scenario: "scenario",
+		Component: "component",
+		Milestone: "milestone",
+		Outcome:   string(OutcomeSucceeded),
+		Payload:   json.RawMessage(`{"ready":true}`),
 	}
 	if err := ValidateEvent(valid); err != nil {
 		t.Fatal(err)
@@ -357,8 +357,8 @@ func TestValidateEventRejectsMalformedAndOversizedRecords(t *testing.T) {
 func TestEventPayloadIsSemanticJSONRatherThanCrossRuntimeCanonicalBytes(t *testing.T) {
 	base := Event{
 		SchemaVersion: EventSchemaVersion,
-		Identity:      Identity{RunID: "run-1", OperationID: "operation-1", Scenario: "scenario"},
-		Component:     "component", Milestone: "milestone", Outcome: string(OutcomeSucceeded),
+		RunID:         "run-1", OperationID: "operation-1", Scenario: "scenario",
+		Component: "component", Milestone: "milestone", Outcome: string(OutcomeSucceeded),
 	}
 	tests := []struct {
 		name    string
@@ -408,8 +408,8 @@ func TestEventPayloadIsSemanticJSONRatherThanCrossRuntimeCanonicalBytes(t *testi
 func TestEventDocumentBoundaryIsExact(t *testing.T) {
 	event := Event{
 		SchemaVersion: EventSchemaVersion,
-		Identity:      Identity{RunID: "run-1", OperationID: "operation-1", Scenario: "scenario"},
-		Component:     "component", Milestone: "milestone", Outcome: string(OutcomeSucceeded),
+		RunID:         "run-1", OperationID: "operation-1", Scenario: "scenario",
+		Component: "component", Milestone: "milestone", Outcome: string(OutcomeSucceeded),
 		Payload: json.RawMessage(`""`),
 	}
 	base, err := encodeEvent(event)
@@ -457,8 +457,8 @@ func TestJSONLineSinkRejectsInvalidInputAndHandlesWriterContracts(t *testing.T) 
 
 	valid := Event{
 		SchemaVersion: EventSchemaVersion,
-		Identity:      Identity{RunID: "run-1", OperationID: "operation-1", Scenario: "scenario"},
-		Component:     "component", Milestone: "milestone", Outcome: string(OutcomeStarted),
+		RunID:         "run-1", OperationID: "operation-1", Scenario: "scenario",
+		Component: "component", Milestone: "milestone", Outcome: string(OutcomeStarted),
 	}
 	shortSink, err := NewJSONLineSink(zeroWriter{})
 	if err != nil {
@@ -484,8 +484,8 @@ func TestJSONLineSinkRejectsInvalidInputAndHandlesWriterContracts(t *testing.T) 
 func TestJSONLineSinkBoundsStalledAndPanickingWriters(t *testing.T) {
 	valid := Event{
 		SchemaVersion: EventSchemaVersion,
-		Identity:      Identity{RunID: "run-1", OperationID: "operation-1", Scenario: "scenario"},
-		Component:     "component", Milestone: "milestone", Outcome: string(OutcomeStarted),
+		RunID:         "run-1", OperationID: "operation-1", Scenario: "scenario",
+		Component: "component", Milestone: "milestone", Outcome: string(OutcomeStarted),
 	}
 	t.Run("stall", func(t *testing.T) {
 		writer := &stalledWriter{entered: make(chan struct{}, 1), release: make(chan struct{})}

@@ -9,9 +9,9 @@ import (
 )
 
 func expiredPending(now time.Time) *PendingSetup {
-	return &PendingSetup{setupIntent: setupIntent{SettingsRevision: prior().SettingsRevision(),
+	return &PendingSetup{SettingsRevision: prior().SettingsRevision(),
 		OperationID: "operation", RelayURL: "https://private.example", ConsoleURL: "https://console.example",
-		DeviceName: "Laptop", ClaimSecret: encode(make([]byte, claimSecretBytes)), Operation: AddProfile},
+		DeviceName: "Laptop", ClaimSecret: encode(make([]byte, claimSecretBytes)), Operation: AddProfile,
 		phase: awaiting{Enrollment: enrollment{ID: "enrollment", UserCode: "ABCD-EFGH", VerificationURL: "https://console.example/",
 			IntervalMS: 5000, ExpiresAt: now.Add(-time.Minute).UnixMilli()}}}
 }

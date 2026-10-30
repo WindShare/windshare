@@ -122,7 +122,7 @@ func TestRecoveryDistinguishesRequestAndContractFailuresFromRepairableFailures(t
 				if attempts != 2 || !test.retry || retained.operation != prepared.operation {
 					t.Fatal("retry changed the retained operation or repeated a terminal failure")
 				}
-				return task.Completion[Result]{Settlement: task.Settlement{Outcome: task.OutcomeSuccess}}
+				return task.Completion[Result]{Outcome: task.OutcomeSuccess}
 			})
 			if test.retry {
 				if attempts != 2 || prompts != 1 || completed.Outcome != task.OutcomeSuccess {

@@ -124,7 +124,7 @@ func (test *liveFilesTest) begin(t *testing.T, index int) (transfer.FileTransact
 	file := test.materialization(t, index, test.fixture.session, test.fixture.file.Descriptor())
 	native := &liveTransactionFile{}
 	destination := &liveTestDestination{
-		memoryDestination: memoryDestination{target: file.Target(), final: FinalAbsent}, parent: test.parent,
+		target: file.Target(), final: FinalAbsent, parent: test.parent,
 	}
 	start, err := test.files.Begin(context.Background(), file, destination, func() (*PartialFileTransaction, error) {
 		var object checkpointmodel.ObjectID
@@ -185,8 +185,8 @@ func TestLiveFilesRetryRestoresHistoricalDeliveryWithoutInspectingFinal(t *testi
 	file := test.materialization(t, 0, nextSession, test.fixture.file.Descriptor())
 	inspectionFailure := errors.New("public file was moved or edited by its owner")
 	destination := &liveTestDestination{
-		memoryDestination: memoryDestination{target: file.Target(), observeErr: inspectionFailure},
-		parentErr:         inspectionFailure,
+		target: file.Target(), observeErr: inspectionFailure,
+		parentErr: inspectionFailure,
 	}
 	start, err := test.files.Begin(context.Background(), file, destination, mustNeverCreate(t))
 	settlement, settled := start.ImmediateSettlement()
@@ -209,7 +209,7 @@ func TestLiveFilesRetryRestoresHistoricalDeliveryWithoutInspectingFinal(t *testi
 		t.Fatal(err)
 	}
 	file = test.materialization(t, 0, nextSession, changed)
-	destination = &liveTestDestination{memoryDestination: memoryDestination{target: file.Target()}, parentErr: inspectionFailure}
+	destination = &liveTestDestination{target: file.Target(), parentErr: inspectionFailure}
 	start, err = test.files.Begin(context.Background(), file, destination, mustNeverCreate(t))
 	settlement, _ = start.ImmediateSettlement()
 	if _, reason, blocked := settlement.ItemBlock(); err != nil || !blocked || reason != transfer.ItemBlockRevisionConflict {
@@ -229,7 +229,7 @@ func TestLiveFilesReceiptFailurePausesAdmissionAndRetriesWithoutRedelivery(t *te
 		t.Fatal("unrecorded delivery lost its retained fallback")
 	}
 	file := test.materialization(t, 1, test.fixture.session, test.fixture.file.Descriptor())
-	destination := &liveTestDestination{memoryDestination: memoryDestination{target: file.Target()}, parent: test.parent}
+	destination := &liveTestDestination{target: file.Target(), parent: test.parent}
 	_, err := test.files.Begin(context.Background(), file, destination, mustNeverCreate(t))
 	value, ok := fault.NormalizeBoundaryError(err).Fault()
 	if !errors.Is(err, failure) || !ok || value.Scope() != fault.ScopeOutputPause || !destination.closed {
@@ -237,7 +237,7 @@ func TestLiveFilesReceiptFailurePausesAdmissionAndRetriesWithoutRedelivery(t *te
 	}
 	test.receipts.writeErr = nil
 	file = test.materialization(t, 0, test.fixture.session, test.fixture.file.Descriptor())
-	destination = &liveTestDestination{memoryDestination: memoryDestination{target: file.Target()}, parentErr: failure}
+	destination = &liveTestDestination{target: file.Target(), parentErr: failure}
 	start, err := test.files.Begin(context.Background(), file, destination, mustNeverCreate(t))
 	settlement, _ := start.ImmediateSettlement()
 	if err != nil || settlement.Kind() != transfer.FilePreviouslyPublished || !native.closed || len(test.files.files) != 0 {
@@ -257,7 +257,7 @@ func TestLiveFilesCleanupDebtKeepsOwnershipButNotCompletionHostage(t *testing.T)
 	}
 	file := test.materialization(t, 0, test.fixture.session, test.fixture.file.Descriptor())
 	start, err := test.files.Begin(context.Background(), file,
-		&liveTestDestination{memoryDestination: memoryDestination{target: file.Target()}}, mustNeverCreate(t))
+		&liveTestDestination{target: file.Target()}, mustNeverCreate(t))
 	settlement, _ := start.ImmediateSettlement()
 	if err != nil || settlement.Kind() != transfer.FilePreviouslyPublished {
 		t.Fatalf("cleanup debt prevented restoring delivery: %v", err)
@@ -282,7 +282,7 @@ func TestLiveFilesUnfinishedCapacityPausesWithoutDiscardingProgress(t *testing.T
 		}
 	}
 	file := test.materialization(t, maximumUnsettledLiveFiles, test.fixture.session, test.fixture.file.Descriptor())
-	destination := &liveTestDestination{memoryDestination: memoryDestination{target: file.Target(), final: FinalAbsent}, parent: test.parent}
+	destination := &liveTestDestination{target: file.Target(), final: FinalAbsent, parent: test.parent}
 	_, err := test.files.Begin(context.Background(), file, destination, mustNeverCreate(t))
 	value, ok := fault.NormalizeBoundaryError(err).Fault()
 	if !errors.Is(err, ErrLiveRetentionLimit) || !ok || value.Scope() != fault.ScopeOutputPause {
@@ -308,14 +308,14 @@ func TestLiveFilesUnfinishedRetryStillRequiresExactParent(t *testing.T) {
 	}
 	test.parent.identity++
 	file := test.materialization(t, 0, test.fixture.session, test.fixture.file.Descriptor())
-	destination := &liveTestDestination{memoryDestination: memoryDestination{target: file.Target()}, parent: test.parent}
+	destination := &liveTestDestination{target: file.Target(), parent: test.parent}
 	start, err := test.files.Begin(context.Background(), file, destination, mustNeverCreate(t))
 	settlement, _ := start.ImmediateSettlement()
 	if _, reason, blocked := settlement.ItemBlock(); err != nil || !blocked || reason != transfer.ItemBlockOwnershipUnknown || native.closed {
 		t.Fatalf("unfinished object crossed a replaced parent: %v %v", reason, err)
 	}
 	test.parent.identity--
-	destination = &liveTestDestination{memoryDestination: memoryDestination{target: file.Target(), final: FinalAbsent}, parent: test.parent}
+	destination = &liveTestDestination{target: file.Target(), final: FinalAbsent, parent: test.parent}
 	start, err = test.files.Begin(context.Background(), file, destination, mustNeverCreate(t))
 	next, progress, active := start.Transaction()
 	if err != nil || !active || progress.Retention() != transfer.RangesInProcess || next.Binding().ObjectIdentity() != first.Binding().ObjectIdentity() {
@@ -336,7 +336,7 @@ func TestLiveFilesPublicationCannotReopenWhileReceiptRecordingIsPending(t *testi
 		t.Fatal(err)
 	}
 	file := test.materialization(t, 0, test.fixture.session, test.fixture.file.Descriptor())
-	destination := &liveTestDestination{memoryDestination: memoryDestination{target: file.Target()}, parent: test.parent}
+	destination := &liveTestDestination{target: file.Target(), parent: test.parent}
 	start, err := test.files.Begin(context.Background(), file, destination, mustNeverCreate(t))
 	settlement, settled := start.ImmediateSettlement()
 	if err != nil || !settled || settlement.Kind() != transfer.FilePreviouslyPublished {

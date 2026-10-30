@@ -27,7 +27,7 @@ func (f *fixedRecoveryAccounts) Acquire(context.Context, string, Subject) (*Leas
 func recoverySender(t *testing.T) (*Sender, *fixedRecoveryAccounts, *time.Time) {
 	t.Helper()
 	now := time.Unix(1700000000, 0)
-	accounts := &fixedRecoveryAccounts{accountFixture: accountFixture{now: func() time.Time { return now }}}
+	accounts := &fixedRecoveryAccounts{now: func() time.Time { return now }}
 	s := NewSender(SenderConfig{Accounts: accounts, SessionID: [16]byte{1}, Now: accounts.now, Send: func(context.Context, []byte) error { return nil }})
 	t.Cleanup(s.close)
 	s.apply(t.Context(), turncontrol.Demand{Authority: fixtureHeader(s, 1), HoldFor: turncontrol.MaximumDemandLifetime})

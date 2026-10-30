@@ -107,8 +107,8 @@ func (active *receiveOperation) settleAttempt(ctx context.Context, settlement *S
 		settlement.Connectivity = connectivity
 		completed, err := Settle(*settlement)
 		if err != nil {
-			return task.Completion[Result]{Settlement: task.Settlement{Outcome: task.OutcomeFailed, FailureClass: task.FailureLocal,
-				Err: errors.Join(Failure{Cause: err}, settlement.diagnosticCauses()), CleanupError: cleanupErr}}
+			return task.Completion[Result]{Outcome: task.OutcomeFailed, FailureClass: task.FailureLocal,
+				Err: errors.Join(Failure{Cause: err}, settlement.diagnosticCauses()), CleanupError: cleanupErr}
 		}
 		return completed
 	}
