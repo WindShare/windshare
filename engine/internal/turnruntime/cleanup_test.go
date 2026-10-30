@@ -124,8 +124,7 @@ func TestLostManagedIssuanceRetainsOwnershipThroughLostCleanupReply(t *testing.T
 				if state := manager.Snapshot()[0]; state.ActiveLeases != expectedActive || state.PendingCleanup != 1 {
 					t.Fatalf("lost reply discarded ownership: %+v", state)
 				}
-				time.Sleep(cleanupRetryDelay)
-				synctest.Wait()
+				synctest.Sleep(cleanupRetryDelay)
 				if state := manager.Snapshot()[0]; state.PendingCleanup != 0 || state.ActiveLeases != expectedActive {
 					t.Fatalf("cleanup did not converge: %+v", state)
 				}
@@ -200,8 +199,7 @@ func TestUnresolvedCleanupBoundsCapacityAndSurvivesReconfiguration(t *testing.T)
 			t.Fatalf("configuration bypassed unresolved ownership: %v", err)
 		}
 		available.Store(true)
-		time.Sleep(cleanupRetryDelay)
-		synctest.Wait()
+		synctest.Sleep(cleanupRetryDelay)
 		if state := manager.Snapshot()[0]; state.PendingCleanup != 0 {
 			t.Fatal(state)
 		}
@@ -251,8 +249,7 @@ func TestCleanupExpiryAndBoundedShutdownNeverClaimRevocation(t *testing.T) {
 				}
 				synctest.Wait()
 				if !shutdown {
-					time.Sleep(lifetime)
-					synctest.Wait()
+					synctest.Sleep(lifetime)
 				}
 				start := time.Now()
 				err = manager.Close()

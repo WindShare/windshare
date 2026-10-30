@@ -76,8 +76,7 @@ func TestBlockReceiverWaitsBehindProductiveRequests(t *testing.T) {
 					}
 					deliver(earlier, fragments[index])
 				}
-				time.Sleep(5 * time.Second)
-				synctest.Wait()
+				synctest.Sleep(5 * time.Second)
 				if duplicate {
 					if err := <-earlierDone; !errors.Is(err, contentflow.ErrFragmentInactivity) {
 						t.Fatalf("duplicate revived assembly: %v", err)

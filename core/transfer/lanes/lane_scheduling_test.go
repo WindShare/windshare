@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/core/content/records"
@@ -83,52 +84,62 @@ func TestLaneSchedulingKeepsUnmeasuredRelayOutOfFastContent(t *testing.T) {
 }
 
 func TestLaneSchedulingRescuesAlreadyDispatchedPrefix(t *testing.T) {
-	descriptor := transferDescriptor(t, 2)
-	lanes := newBoundaryLaneSet(t, 121)
-	relayStarted := make(chan struct{})
-	relayCancelled := make(chan struct{})
-	_ = lanes.Add(Identity{ID: 1}, RouteRelay, laneFunction(func(ctx context.Context, _ Demand) (records.BlockRecord, error) {
-		close(relayStarted)
-		<-ctx.Done()
-		close(relayCancelled)
-		return records.BlockRecord{}, ctx.Err()
-	}))
-	input := validDemand(t, descriptor, 0)
-	result := make(chan error, 1)
-	go func() {
-		_, err := lanes.Fetch(context.Background(), Request{Demand: input, Validate: validateTransferRecord(input)})
-		result <- err
-	}()
-	<-relayStarted
-	// Suspension fences only new content; the old prefix remains on the relay.
-	suspension, err := lanes.SuspendContent(Identity{ID: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = lanes.Add(Identity{ID: 2}, RouteDirect, laneFunction(func(_ context.Context, input Demand) (records.BlockRecord, error) {
-		return transferRecord(t, descriptor, input.Index), nil
-	}))
-	warm := validDemand(t, descriptor, 1)
-	if _, err := lanes.Fetch(context.Background(), Request{Demand: warm, Validate: validateTransferRecord(warm)}); err != nil {
-		t.Fatal(err)
-	}
-	if err := suspension.Resume(); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case err := <-result:
+	synctest.Test(t, func(t *testing.T) {
+		descriptor := transferDescriptor(t, 2)
+		lanes := newBoundaryLaneSet(t, 121)
+		relayStarted := make(chan struct{})
+		relayCancelled := make(chan struct{})
+		_ = lanes.Add(Identity{ID: 1}, RouteRelay, laneFunction(func(ctx context.Context, _ Demand) (records.BlockRecord, error) {
+			close(relayStarted)
+			<-ctx.Done()
+			close(relayCancelled)
+			return records.BlockRecord{}, ctx.Err()
+		}))
+		input := validDemand(t, descriptor, 0)
+		result := make(chan error, 1)
+		go func() {
+			_, err := lanes.Fetch(context.Background(), Request{Demand: input, Validate: validateTransferRecord(input)})
+			result <- err
+		}()
+		<-relayStarted
+		synctest.Wait()
+		// Suspension fences only new content; the old prefix remains on the relay.
+		suspension, err := lanes.SuspendContent(Identity{ID: 1})
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("slow prefix was not rescued by the newly available direct path")
-	}
-	lanes.Close()
-	select {
-	case <-relayCancelled:
-	default:
-		t.Fatal("rescued attempt was not canceled")
-	}
+		_ = lanes.Add(Identity{ID: 2}, RouteDirect, laneFunction(func(_ context.Context, input Demand) (records.BlockRecord, error) {
+			return transferRecord(t, descriptor, input.Index), nil
+		}))
+		warm := validDemand(t, descriptor, 1)
+		if _, err := lanes.Fetch(context.Background(), Request{Demand: warm, Validate: validateTransferRecord(warm)}); err != nil {
+			t.Fatal(err)
+		}
+		if err := suspension.Resume(); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Sleep(rescuePollInterval - time.Nanosecond)
+		select {
+		case err := <-result:
+			t.Fatalf("prefix was rescued before the scheduling wakeup: %v", err)
+		default:
+		}
+		synctest.Sleep(time.Nanosecond)
+		select {
+		case err := <-result:
+			if err != nil {
+				t.Fatal(err)
+			}
+		default:
+			t.Fatal("slow prefix was not rescued by the newly available direct path")
+		}
+		lanes.Close()
+		select {
+		case <-relayCancelled:
+		default:
+			t.Fatal("rescued attempt was not canceled")
+		}
+	})
 }
 
 func TestLaneSchedulingUsesMeasuredCompletionAndMarginalRelayCost(t *testing.T) {

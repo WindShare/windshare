@@ -99,17 +99,30 @@ func TestRemoteRejectsUnboundOrUnboundedAuthority(t *testing.T) {
 	}
 }
 func TestRemoteDoesNotFollowCredentialRedirect(t *testing.T) {
-	contacted := false
-	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { contacted = true }))
-	defer target.Close()
-	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	const relayHost = "relay.example"
+	requests := make(chan string, 2)
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case requests <- r.Host:
+		default:
+			t.Error("unexpected extra redirect request")
+		}
+		if r.Host != relayHost {
+			t.Error("credential request reached redirect target", r.Host)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer private-device-key" {
+			t.Error("deployment credential was omitted")
+		}
+		http.Redirect(w, r, "https://other.example/api/turn/capability", http.StatusTemporaryRedirect)
 	}))
-	defer origin.Close()
-	if _, err := Discover(t.Context(), nil, origin.URL, "private-device-key"); err == nil {
+	client := remoteHTTPClient()
+	// Keep the credential policy while routing every host through the in-memory network.
+	client.Transport = server.Client().Transport
+	if _, err := Discover(t.Context(), client, "https://"+relayHost, "private-device-key"); err == nil {
 		t.Fatal("redirect accepted")
 	}
-	if contacted {
-		t.Fatal("credential sent to redirect target")
+	if len(requests) != 1 || <-requests != relayHost {
+		t.Fatal("credential was omitted or followed a redirect")
 	}
 }

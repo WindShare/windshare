@@ -69,8 +69,7 @@ func TestReceiverHeartbeatRunsWhileApplicationCreditIsUnavailable(t *testing.T) 
 		result := make(chan error, 1)
 		go func() { result <- channel.Send(t.Context(), []byte("waiting for capacity")) }()
 		synctest.Wait()
-		time.Sleep(4 * time.Second)
-		synctest.Wait()
+		synctest.Sleep(4 * time.Second)
 		if !errors.Is(link.Err(), ErrHeartbeat) {
 			t.Fatal("credit wait hid silent socket", link.Err())
 		}

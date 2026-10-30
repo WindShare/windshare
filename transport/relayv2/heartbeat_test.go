@@ -100,8 +100,7 @@ func TestHeartbeatKeepsProbingWhileContentOutlivesAcknowledgements(t *testing.T)
 func TestHeartbeatRetiresSilentLink(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		link := startHeartbeatLink(t, newScriptedSocket())
-		time.Sleep(testHeartbeat.Timeout)
-		synctest.Wait()
+		synctest.Sleep(testHeartbeat.Timeout)
 		select {
 		case <-link.done:
 		default:
