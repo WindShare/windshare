@@ -40,6 +40,8 @@
 - 当前产品正在开发阶段，一个使用者都没有、没有线上兼容，没有任何负担。
 - 如果需要做产品决策，可以从用户使用体验升级/降级角度出发，是否为了低频场景大幅牺牲高频场景体验？或者查看 `docs/clarifications/原始需求.md`。
 - 日志与 trace 设计，不考虑任何严格脱敏，方便开发者 debug。
+- UI-UX 设计简单易懂，操作直观，高频路径少选择，降低用户心智负担。
+
 
 ## Project Overview
 
@@ -52,8 +54,10 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 ├── .github/workflows/             CI, weekly suites, source/binary releases, and Cloudflare deployment
 ├── core/                         Network-free reusable package subtree
 │   ├── link/, senderobject/      Capability links and sealed transport-neutral objects
+│   ├── senderauth/                Sender-signature acceptance policy
 │   ├── catalog/                  Committed directory generations/pages, durable storage/recovery
 │   ├── content/                  File revisions, ranges, leases/capacity, keys, authenticated records
+│   ├── capacityledger/            Shared capacity accounting
 │   ├── session/                  Shared contracts, sendersession/receiversession runtimes, catalog/content flows, TURN controls
 │   ├── framechannel/             Transport-neutral frame contract
 │   ├── observationstream/        Bounded producer-owned observation queues
@@ -67,8 +71,9 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 ├── engine/                       Shared native application API, tasks, observations, aggregate budgets
 │   ├── observation/              Typed product observation contracts
 │   ├── output/, recovery/        Platform-neutral destination and recovery inventory ports
+│   ├── relayprofile/              Relay selection and saved credentials
 │   ├── relayconfig/, relaysetup/  Saved relay/frontend settings, discovery, device enrollment, and installation
-│   ├── turn/                     TURN settings, status, and observation contracts
+│   ├── turn/, turncache/          TURN settings/status contracts and relay-scoped capability cache
 │   └── internal/                 Share/receive/recovery workflows, native connectivity, and TURN runtime
 ├── cmd/
 │   ├── wind/                     CLI requests, presentation, recovery interaction, and exit-code mapping
@@ -76,11 +81,13 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 ├── connectivity/
 │   ├── v2signal/                 Canonical E2E signaling schema, codec, and validation
 │   ├── v2peer/                   Peer negotiation/admission and demand-driven PeerSet orchestration
+│   ├── throughput/                Throughput-driven path growth and retirement
 │   ├── nativepeer/, pionpeer/    Native resource ownership and Pion connection adaptation
 │   ├── networkstate/             Network snapshots and generation tracking
 │   ├── socketauthority/          UDP/TCP socket ownership and capability snapshots
 │   ├── reachability/, icepolicy/ Gateway mapping leases and ICE endpoint policy
 │   ├── iceconfig/, turnpath/      ICE configuration and TURN delegation, renewal, recovery, and retirement
+│   ├── turncapacity/, turnroute/  Shared TURN admission and route planning
 │   └── senderrelay/, relayset/    Relay registration/recovery, independent lifecycles, and coordinated session admission
 ├── transport/
 │   ├── relayv2/                  Relay registration and multiplexed FrameChannel lifecycle
