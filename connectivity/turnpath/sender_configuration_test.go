@@ -28,7 +28,7 @@ func (accounts *mutableAccounts) Acquire(ctx context.Context, _ string, subject 
 func configurationSender(t *testing.T) (*Sender, *mutableAccounts) {
 	t.Helper()
 	now := time.Unix(1700000000, 0)
-	accounts := &mutableAccounts{accountFixture: accountFixture{now: func() time.Time { return now }}}
+	accounts := &mutableAccounts{now: func() time.Time { return now }}
 	accounts.inventory = Inventory{Revision: 1, Profiles: accounts.Profiles()}
 	accounts.inventory.Profiles[0].Revision = 1
 	sender := NewSender(SenderConfig{Accounts: accounts, SessionID: [16]byte{1}, Now: accounts.now,

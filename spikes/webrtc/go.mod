@@ -1,6 +1,6 @@
 module github.com/windshare/windshare/spikes/webrtc
 
-go 1.26.5
+go 1.27.3
 
 require (
 	github.com/pion/webrtc/v4 v4.2.20

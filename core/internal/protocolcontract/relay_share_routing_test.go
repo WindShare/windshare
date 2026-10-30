@@ -15,18 +15,16 @@ func v2RelayShareRoutingCases() []v2RelayShareRoutingVector {
 	const route = "share_id=-_8AAQIDBAUGBwgJ"
 	accepted := func(name, base, dial, identity string, share []byte) v2RelayShareRoutingVector {
 		return v2RelayShareRoutingVector{
-			v2RelayEndpointVector: v2RelayEndpointVector{
-				Name: name, RelayBaseURL: base, Accepted: true, DialEndpoint: dial,
-				RelayIdentityEndpoint: identity,
-				RelayIdentityB64:      b64(hash(slices.Concat([]byte(domainRelayIdentity), []byte(identity)))),
-			},
-			ShareIDRawB64: b64(share),
+			Name: name, RelayBaseURL: base, Accepted: true, DialEndpoint: dial,
+			RelayIdentityEndpoint: identity,
+			RelayIdentityB64:      b64(hash(slices.Concat([]byte(domainRelayIdentity), []byte(identity)))),
+			ShareIDRawB64:         b64(share),
 		}
 	}
 	rejected := func(name, base string, share []byte) v2RelayShareRoutingVector {
 		return v2RelayShareRoutingVector{
-			v2RelayEndpointVector: v2RelayEndpointVector{Name: name, RelayBaseURL: base},
-			ShareIDRawB64:         b64(share),
+			Name: name, RelayBaseURL: base,
+			ShareIDRawB64: b64(share),
 		}
 	}
 	return []v2RelayShareRoutingVector{

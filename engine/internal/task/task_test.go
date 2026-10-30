@@ -29,9 +29,9 @@ func TestWaitAndObservationDetachmentDoNotCancelExecution(t *testing.T) {
 		close(entered)
 		<-release
 		if ctx.Err() != nil {
-			return Completion[int]{Settlement: Settlement{Outcome: OutcomeCancelled, Err: ctx.Err()}}
+			return Completion[int]{Outcome: OutcomeCancelled, Err: ctx.Err()}
 		}
-		return Completion[int]{Value: 42, Settlement: Settlement{Outcome: OutcomeSuccess}}
+		return Completion[int]{Value: 42, Outcome: OutcomeSuccess}
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +74,7 @@ func TestStopCausesAndCleanupAreIndependent(t *testing.T) {
 				_, deadline := cleanup.Deadline()
 				cleaning <- cleanup.Err() == nil && deadline
 				<-release
-				return Completion[int]{Settlement: Settlement{Outcome: OutcomeFailed, FailureClass: FailureLocal, Err: errors.Join(context.Cause(ctx), cleanupErr), CleanupError: cleanupErr}}
+				return Completion[int]{Outcome: OutcomeFailed, FailureClass: FailureLocal, Err: errors.Join(context.Cause(ctx), cleanupErr), CleanupError: cleanupErr}
 			}))
 			if err != nil {
 				t.Fatal(err)
@@ -125,9 +125,9 @@ func TestParentCancellationCarriesValuesButCleanupOutlivesParent(t *testing.T) {
 		cleanup, cleanupCancel := control.CleanupContext()
 		defer cleanupCancel()
 		if ctx.Value(key{}) != "trace" || cleanup.Value(key{}) != "trace" || cleanup.Err() != nil {
-			return Completion[int]{Settlement: Settlement{Outcome: OutcomeFailed, FailureClass: FailureLocal, Err: errors.New("lost trace values or inherited cancellation")}}
+			return Completion[int]{Outcome: OutcomeFailed, FailureClass: FailureLocal, Err: errors.New("lost trace values or inherited cancellation")}
 		}
-		return Completion[int]{Value: int(Reason(ctx)), Settlement: Settlement{Outcome: OutcomeCancelled}}
+		return Completion[int]{Value: int(Reason(ctx)), Outcome: OutcomeCancelled}
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -148,12 +148,12 @@ func TestParentCancellationCarriesValuesButCleanupOutlivesParent(t *testing.T) {
 func TestUndrainedObservationsRemainBoundedAndFinalResultIsDurable(t *testing.T) {
 	config := testConfig(func(_ context.Context, control Control) Completion[int] {
 		if control.Emit(nil) {
-			return Completion[int]{Settlement: Settlement{Outcome: OutcomeFailed, FailureClass: FailureLocal, Err: errors.New("accepted nil event")}}
+			return Completion[int]{Outcome: OutcomeFailed, FailureClass: FailureLocal, Err: errors.New("accepted nil event")}
 		}
 		for i := range 1000 {
 			control.Emit(detail{Value: i})
 		}
-		return Completion[int]{Value: 7, Settlement: Settlement{Outcome: OutcomeSuccess}}
+		return Completion[int]{Value: 7, Outcome: OutcomeSuccess}
 	})
 	config.ObservationCapacity = 2
 	completed := make(chan error, 1)

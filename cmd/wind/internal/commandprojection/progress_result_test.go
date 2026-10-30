@@ -264,16 +264,13 @@ func TestGetResultUsesSettlementOwnedCountsAndDropsDiagnosticPathsAndCauses(t *t
 }
 
 func TestShareAndCommandFailureProjectionNeverDeriveExitFromRenderer(t *testing.T) {
-	clean, err := ProjectShareResult(engine.TaskResult[engine.ShareResult]{Completion: engine.TaskCompletion[engine.ShareResult]{
-		Settlement: engine.TaskSettlement{Outcome: engine.OutcomeStopped}, Value: engine.ShareResult{Elapsed: time.Second},
-	}})
+	clean, err := ProjectShareResult(engine.TaskResult[engine.ShareResult]{
+		Outcome: engine.OutcomeStopped, Value: engine.ShareResult{Elapsed: time.Second}})
 	if err != nil || clean.ExitCode() != clievent.ExitSuccess || !clean.StoppedCleanly() {
 		t.Fatalf("clean share result = %+v err=%v", clean, err)
 	}
 	failed, err := ProjectShareResult(engine.TaskResult[engine.ShareResult]{
-		Completion: engine.TaskCompletion[engine.ShareResult]{Settlement: engine.TaskSettlement{
-			Outcome: engine.OutcomeFailed, FailureClass: engine.FailureNetwork, Err: opaqueCanaryError{"provider-secret"}, Failure: mustFailure(appobs.FailureUnexpected),
-		}},
+		Outcome: engine.OutcomeFailed, FailureClass: engine.FailureNetwork, Err: opaqueCanaryError{"provider-secret"}, Failure: mustFailure(appobs.FailureUnexpected),
 	})
 	if err != nil || failed.ExitCode() != clievent.ExitNetwork || failed.StoppedCleanly() {
 		t.Fatalf("failed share result = %+v err=%v", failed, err)

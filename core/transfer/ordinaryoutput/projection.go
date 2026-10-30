@@ -532,8 +532,8 @@ func compareSourcePaths(candidate, anchor string) sourcePathRelation {
 }
 
 func sourceLeaf(path string) string {
-	if separator := strings.LastIndexByte(path, '/'); separator >= 0 {
-		return path[separator+1:]
+	if _, leaf, found := strings.CutLast(path, "/"); found {
+		return leaf
 	}
 	return path
 }

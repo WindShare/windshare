@@ -3,7 +3,7 @@ param(
     [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
     [string[]]$Command,
 
-    [string]$Image = "golang:1.26.5",
+    [string]$Image = "golang:1.27.3",
 
     [switch]$Interactive,
 

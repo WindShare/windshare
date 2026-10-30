@@ -150,8 +150,8 @@ func joinMaterializationPath(parent, leaf string) string {
 }
 
 func pathLeaf(path string) string {
-	if separator := strings.LastIndexByte(path, '/'); separator >= 0 {
-		return path[separator+1:]
+	if _, leaf, found := strings.CutLast(path, "/"); found {
+		return leaf
 	}
 	return path
 }

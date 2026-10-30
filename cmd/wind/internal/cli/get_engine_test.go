@@ -24,10 +24,8 @@ func TestReceiveTaskCompletionReportsDroppedObservationsBeforeTerminal(t *testin
 	runtime.diagnosticSink().Lost("protocol", 5)
 	result := engine.TaskResult[engine.ReceiveResult]{
 		Observations: observationstream.Completion{CapacityDropped: 7},
-		Completion: engine.TaskCompletion[engine.ReceiveResult]{
-			Settlement: engine.TaskSettlement{Outcome: engine.OutcomeFailed, FailureClass: engine.FailureLocal, Err: engine.ReceiveFailure{Code: engine.ReceiveFailureInvalidInput}},
-			Value:      engine.ReceiveResult{},
-		},
+		Outcome:      engine.OutcomeFailed, FailureClass: engine.FailureLocal, Err: engine.ReceiveFailure{Code: engine.ReceiveFailureInvalidInput},
+		Value: engine.ReceiveResult{},
 	}
 	if code := app.reportReceiveTask(result, observation); code != ExitFailure {
 		t.Fatalf("exit=%d", code)

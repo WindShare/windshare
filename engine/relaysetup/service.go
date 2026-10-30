@@ -156,11 +156,10 @@ func (service *Service) Run(ctx context.Context, request Request, progress func(
 	if _, err := io.ReadFull(service.dependencies.Random, operation); err != nil {
 		return Result{}, err
 	}
-	saved.Pending = &PendingSetup{setupIntent: setupIntent{
+	saved.Pending = &PendingSetup{
 		SettingsRevision: saved.SettingsRevision(), OperationID: encode(operation),
 		RelayURL: discovery.RelayURL, ConsoleURL: discovery.ConsoleURL, FrontURL: discovery.FrontendURL,
-		DeviceName: request.DeviceName, ClaimSecret: encode(secret), Operation: request.Operation,
-	}, phase: requesting{}}
+		DeviceName: request.DeviceName, ClaimSecret: encode(secret), Operation: request.Operation, phase: requesting{}}
 
 	// Persist the claimant before the first request; a lost response can recover by digest.
 	pending := saved.Pending

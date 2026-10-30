@@ -71,7 +71,7 @@ func buildRun(create func() (scratchFile, error), write func(*runBuilder) error)
 	if err != nil {
 		return nil, err
 	}
-	builder := &runBuilder{run: run{file: file}, writer: bufio.NewWriterSize(file, runBufferBytes)}
+	builder := &runBuilder{file: file, writer: bufio.NewWriterSize(file, runBufferBytes)}
 	if err := write(builder); err != nil {
 		return nil, errors.Join(err, file.Close())
 	}

@@ -31,7 +31,7 @@ func TestReceiverQualityMeasuresExactIncarnationAndKeepsCumulativeAccounting(t *
 			return Measurement{UsefulBytes: bytes, BusyTime: time.Second, PendingBytes: 4096}
 		},
 	})
-	path := &changingReceiverPath{receiverFixturePath: receiverFixturePath{done: make(chan struct{})},
+	path := &changingReceiverPath{done: make(chan struct{}),
 		lane: turncontrol.Lane{ID: 7, Epoch: 1}, live: true}
 	entry := &receiverPath{path: path, grant: turncontrol.Grant{
 		Authority: turncontrol.Header{SessionID: [16]byte{1}, OwnerPathID: [16]byte{2}, Sequence: 1}, PathID: [16]byte{3}}}

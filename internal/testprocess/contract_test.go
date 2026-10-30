@@ -71,9 +71,7 @@ func TestBoundedOutputRetainsTailAndBoundsReadiness(t *testing.T) {
 func TestEventReaderValidatesSchemaAndReportsStreamErrors(t *testing.T) {
 	event := testrun.Event{
 		SchemaVersion: testrun.EventSchemaVersion,
-		Identity: testrun.Identity{
-			RunID: "run-1", OperationID: "operation-1", Scenario: "event-reader",
-		},
+		RunID:         "run-1", OperationID: "operation-1", Scenario: "event-reader",
 		Component: "component", Milestone: "ready", Outcome: string(testrun.OutcomeSucceeded),
 	}
 	encoded, err := json.Marshal(event)

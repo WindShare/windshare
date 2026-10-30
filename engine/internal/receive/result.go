@@ -98,10 +98,9 @@ func settlePreparationFailure(step stepOutcome, failure Failure, contextErr, cle
 	if attention, ok := errors.AsType[*output.AttentionError](cause); ok {
 		value.OutputAttention = attention.Reason
 	}
-	return task.Completion[Result]{Value: value, Settlement: task.Settlement{
+	return task.Completion[Result]{Value: value,
 		Outcome: task.OutcomeFailed, FailureClass: class,
-		Err: errors.Join(failure, cause), CleanupError: cleanupErr,
-	}}
+		Err: errors.Join(failure, cause), CleanupError: cleanupErr}
 }
 
 func Settle(input SettlementInput) (task.Completion[Result], error) {
@@ -141,8 +140,8 @@ func Settle(input SettlementInput) (task.Completion[Result], error) {
 		class = task.FailureNetwork
 	}
 	result := task.Completion[Result]{
-		Settlement: task.Settlement{Outcome: outcome, FailureClass: class, CleanupError: input.CleanupError},
-		Value:      Result{Transfer: r, Operation: input.Operation, Job: input.Job, Destination: input.Destination, DestinationAdjusted: input.DestinationAdjusted, Elapsed: input.Elapsed, Connectivity: input.Connectivity},
+		Outcome: outcome, FailureClass: class, CleanupError: input.CleanupError,
+		Value: Result{Transfer: r, Operation: input.Operation, Job: input.Job, Destination: input.Destination, DestinationAdjusted: input.DestinationAdjusted, Elapsed: input.Elapsed, Connectivity: input.Connectivity},
 	}
 	if outcome != task.OutcomeSuccess {
 		// The typed reason keeps application precedence while the error tree retains

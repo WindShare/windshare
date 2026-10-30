@@ -26,7 +26,7 @@ func TestDiagnosticFailuresPreserveSuccessfulApplicationSettlement(t *testing.T)
 		func(_ context.Context, control task.Control) task.Completion[int] {
 			control.Emit(receive.Warning{Code: receive.FailurePeerNegotiation, Cause: pathCause})
 			control.Emit(unknownDiagnostic{})
-			return task.Completion[int]{Value: 42, Settlement: task.Settlement{Outcome: task.OutcomeSuccess}}
+			return task.Completion[int]{Value: 42, Outcome: task.OutcomeSuccess}
 		})
 	if err != nil {
 		t.Fatal(err)
