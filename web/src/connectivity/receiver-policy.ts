@@ -610,6 +610,8 @@ export class ReceiverConnectivity {
     this.#turn.detached(installed.peerPathId.copyBytes(), { laneId: installed.laneId, laneEpoch: installed.laneEpoch })
     installed.unsubscribePathRoute?.()
     const closeTask = Promise.allSettled([
+      // Record retirement before transport cleanup can finish the receive stream.
+      this.#session.retireLane(installed.laneId, installed.laneEpoch),
       Promise.resolve().then(() => installed.peer.close()),
       Promise.resolve().then(() => installed.route.close()),
     ]).then(() => {

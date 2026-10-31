@@ -83,6 +83,28 @@ const lane = named<LaneVector>('sender-granted-lane-attach')
 afterEach(() => vi.useRealTimers())
 
 describe('receiver runtime caller-owned lane admission', () => {
+  it('records lane replacement and ignores delayed retirement of its old epoch', async () => {
+    const events: ProtocolTraceEvent[] = []
+    const { runtime, initialChannel } = runtimeFixture({ current: event => events.push(event) }, lane.attachedLaneId)
+    const replacement = new ScriptedChannel(b64ToBytes(lane.laneAckB64))
+    try {
+      await expect(runtime.adoptGrantedLane(replacement, grant())).resolves.toMatchObject({ installation: 'installed' })
+      await runtime.retireLane(lane.attachedLaneId, 0)
+      expect(initialChannel.closes).toBe(1)
+      expect(replacement.closes).toBe(0)
+      expect(runtime.laneIds()).toEqual([lane.attachedLaneId])
+      expect(events.filter(event => event.eventName === 'lane_transition' && event.transition === 'detached')).toMatchObject([{
+        termination: { kind: 'closed', reason: 'replaced' },
+        correlation: { lane: { id: lane.attachedLaneId, epoch: 0 } },
+      }])
+      await runtime.retireLane(lane.attachedLaneId, lane.attachedLaneEpoch)
+      expect(replacement.closes).toBe(1)
+      expect(runtime.isClosed).toBe(false)
+    } finally {
+      await runtime.close()
+    }
+  })
+
   it.each([false, true])('accepts a recycled automatic slot only with an advancing epoch (stale=%s)', async (stale) => {
     const { runtime } = runtimeFixture()
     const current = grant()
@@ -119,13 +141,15 @@ describe('receiver runtime caller-owned lane admission', () => {
     expect(events.find(event => event.eventName === 'lane_transition' && event.transition === 'detached')).toMatchObject({
       eventName: 'lane_transition',
       transition: 'detached',
-      detachmentClass: 'authenticated_failure',
       correlation: { lane: { id: 0x0102_0304, epoch: 0 } },
-      failure: {
-        name: 'SessionRuntimeError',
-        cause: {
-          name: 'EnvelopeError',
-          message: 'Envelope header is malformed or has the wrong direction',
+      termination: {
+        kind: 'authenticated_failure',
+        failure: {
+          name: 'SessionRuntimeError',
+          cause: {
+            name: 'EnvelopeError',
+            message: 'Envelope header is malformed or has the wrong direction',
+          },
         },
       },
     })
@@ -243,6 +267,7 @@ describe('receiver runtime caller-owned lane admission', () => {
 
 function runtimeFixture(
   protocolTrace?: ReceiverSessionOptions['protocolTrace'],
+  initialLaneId = 0x0102_0304,
 ): { readonly runtime: ReceiverSessionRuntime; readonly initialChannel: ScriptedChannel } {
   const initialChannel = new ScriptedChannel()
   const initialReader = initialChannel.frames.getReader()
@@ -255,7 +280,7 @@ function runtimeFixture(
     transcriptHash: new Uint8Array(32),
     receiverToSenderKey: vectorBytes(lane.receiverToSenderKeyB64),
     senderToReceiverKey: vectorBytes(lane.senderToReceiverKeyB64),
-    initialLaneId: 0x0102_0304,
+    initialLaneId,
     initialLaneEpoch: 0,
   })
   const options = {

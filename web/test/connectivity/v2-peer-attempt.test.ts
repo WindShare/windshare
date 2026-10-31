@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { PeerChannel } from '../../src/connectivity/peer-channel'
 import type { OfferChannelFactory } from '../../src/connectivity/peer-offer'
 import type { ConnectivityTraceEvent } from '../../src/connectivity/diagnostics'
@@ -166,6 +166,10 @@ class FakeSession {
     })
   }
 
+  async retireLane(laneId: number, laneEpoch: number): Promise<void> {
+    if (laneEpoch === this.grant.laneEpoch) this.ids.delete(laneId)
+  }
+
   async close(): Promise<void> {
     this.isClosed = true
   }
@@ -214,6 +218,7 @@ function fixture(tabAdmission?: PeerTabAdmission) {
   const clock = new ManualClock()
   const diagnostics: ConnectivityTraceEvent[] = []
   const publications: unknown[] = []
+  const publish = vi.fn((candidate: unknown) => { publications.push(candidate); return true })
   let randomSeed = 10
   const executor = new BrowserPeerAttemptExecutor({
     tabAdmission: tabAdmission ?? new PeerTabAdmission({}, clock),
@@ -222,13 +227,10 @@ function fixture(tabAdmission?: PeerTabAdmission) {
     peerPathIdentity: identity(7),
     clock,
     randomBytes: (length) => new Uint8Array(length).fill(randomSeed++),
-    publish: (candidate) => {
-      publications.push(candidate)
-      return true
-    },
+    publish,
     trace: { current: (event) => diagnostics.push(event) },
   })
-  return { clock, diagnostics, executor, offers, publications, session }
+  return { clock, diagnostics, executor, offers, publications, publish, session }
 }
 
 function attemptContext(phases: string[] = []): PeerAttemptContext {
@@ -246,6 +248,21 @@ function attemptContext(phases: string[] = []): PeerAttemptContext {
 }
 
 describe('browser peer attempt phase executor', () => {
+  it('retires an installed lane through its session before cleaning up rejected publication', async () => {
+    const { executor, offers, publish, session } = fixture()
+    const peer = new CountingPeer()
+    publish.mockReturnValue(false)
+    const retire = vi.spyOn(session, 'retireLane')
+    const close = vi.spyOn(peer, 'close')
+    const attempt = executor.createAttempt(attemptContext())
+    offers.opened.resolve(peer)
+    await expect(attempt.result).resolves.toMatchObject({ type: 'failed' })
+    expect(retire).toHaveBeenCalledExactlyOnceWith(session.grant.laneId, session.grant.laneEpoch)
+    expect(retire.mock.invocationCallOrder[0]).toBeLessThan(close.mock.invocationCallOrder[0]!)
+    expect(session.laneIds()).toEqual([1])
+    expect(peer.closes).toBe(1)
+  })
+
   it('keeps queued receivers outside the provider and releases capacity after exact-owner cancellation', async () => {
     const admission = new PeerTabAdmission({ concurrentAttempts: 1 })
     const first = fixture(admission)
