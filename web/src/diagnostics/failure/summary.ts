@@ -35,11 +35,21 @@ function exceptionSummary(node: DiagnosticExceptionProjection, capacity: number)
   return boundedDiagnosticText(parts.join(''), capacity)
 }
 
-export function summarizeFailureFact(fact: FailureFactV2): FailureFactV2 {
-  if (fact.evidence === undefined) return fact
+export interface FailureFactSummary {
+  readonly fact: FailureFactV2
+  readonly evidenceDetailsOmitted: 0 | 1
+}
+
+export function hasFailureEvidenceDetails(evidence: FailureEvidence | undefined): boolean {
+  // Summaries retain evidence identity, so presence alone cannot account later reductions.
+  return evidence !== undefined && !evidence.exception.truncated.includes('summary')
+}
+
+export function summarizeFailureFact(fact: FailureFactV2): FailureFactSummary {
   const evidence = fact.evidence
+  if (evidence === undefined || !hasFailureEvidenceDetails(evidence)) return Object.freeze({ fact, evidenceDetailsOmitted: 0 })
   const exception = evidence.exception
-  return Object.freeze({ ...fact, evidence: Object.freeze({
+  const summary = Object.freeze({ ...fact, evidence: Object.freeze({
     ...evidence, context: Object.freeze({}), contextTruncated: true,
     exception: Object.freeze({
       ...exception,
@@ -50,4 +60,5 @@ export function summarizeFailureFact(fact: FailureFactV2): FailureFactV2 {
       truncated: Object.freeze(['summary']), unavailable: Object.freeze([]),
     }),
   }) })
+  return Object.freeze({ fact: summary, evidenceDetailsOmitted: 1 })
 }

@@ -1,7 +1,7 @@
 import type { AggregatedConsequences, FailureFactBucket } from './aggregate'
 import type { IncidentPolicy } from './policy'
 import type { IncidentScopeIdentity } from './scope'
-import { summarizeFailureFact } from '../failure/summary'
+import { hasFailureEvidenceDetails, summarizeFailureFact } from '../failure/summary'
 import type { FailureFactBucketV2, IncidentRecordV2 } from '../export/incident-record-v2'
 import { decimalUint64, deepFreezeJson, isDeeplyFrozen, jsonUtf8ByteLength, utcRfc3339 } from '../export/json'
 import { projectFailureFactBucketV2 } from '../export/projector'
@@ -47,7 +47,7 @@ export function summarizeIncidentConsequencesV2(record: IncidentConsequencesV2):
     consequences: Object.freeze([]),
     overflow_fact_count: record.fact_count,
     evidence_details_omitted: record.evidence_details_omitted +
-      record.consequences.filter(bucket => bucket.representative.evidence !== undefined).length,
+      record.consequences.filter(bucket => hasFailureEvidenceDetails(bucket.representative.evidence)).length,
   })
 }
 
@@ -86,9 +86,10 @@ export function projectIncidentConsequencesV2(input: {
   if (jsonUtf8ByteLength(record) > maximumBytes) {
     for (let index = 0; index < consequences.length; index++) {
       const bucket = consequences[index]!
-      if (bucket.representative.evidence === undefined) continue
-      consequences[index] = { ...bucket, representative: summarizeFailureFact(bucket.representative) }
-      evidenceDetailsOmitted++
+      const summary = summarizeFailureFact(bucket.representative)
+      if (summary.evidenceDetailsOmitted === 0) continue
+      consequences[index] = { ...bucket, representative: summary.fact }
+      evidenceDetailsOmitted += summary.evidenceDetailsOmitted
     }
     record = build()
   }

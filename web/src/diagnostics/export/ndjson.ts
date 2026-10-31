@@ -8,7 +8,7 @@ import type {
   DiagnosticBundleV2,
 } from './diagnostic-bundle-v2'
 import { isDeeplyFrozen } from './json'
-import { summarizeFailureFact } from '../failure/summary'
+import { hasFailureEvidenceDetails, summarizeFailureFact } from '../failure/summary'
 import { summarizeIncidentConsequencesV2 } from '../incident/consequences'
 
 export const MAX_DIAGNOSTIC_BUNDLE_BYTES = 8 * 1_024 * 1_024
@@ -87,17 +87,18 @@ export class DiagnosticBundleNdjsonEncoder {
     const cached = this.#summaries.get(line)
     if (cached !== undefined) return cached
     const { payload } = line.record
+    const trigger = summarizeFailureFact(payload.trigger)
     const secondary = [...payload.contributors, ...payload.consequences]
     const overflow = secondary.reduce((count, bucket) => count + BigInt(bucket.count), BigInt(payload.overflow_fact_count))
     const summary = this.#encodeLine({ ...line,
       ...(line.late_consequences === undefined ? {} : {
         late_consequences: summarizeIncidentConsequencesV2(line.late_consequences),
       }), record: { ...line.record, payload: {
-      ...payload, trigger: summarizeFailureFact(payload.trigger),
+      ...payload, trigger: trigger.fact,
       contributors: [], consequences: [], overflow_fact_count: overflow.toString(10),
       evidence_details_omitted: (payload.evidence_details_omitted ?? 0) +
-        secondary.filter(bucket => bucket.representative.evidence !== undefined).length +
-        (payload.trigger.evidence === undefined ? 0 : 1),
+        secondary.filter(bucket => hasFailureEvidenceDetails(bucket.representative.evidence)).length +
+        trigger.evidenceDetailsOmitted,
     } } })
     if (isDeeplyFrozen(line)) this.#summaries.set(line, summary)
     return summary

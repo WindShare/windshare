@@ -204,7 +204,9 @@ class V1IncidentRecordProjector implements IncidentRecordProjector {
     let record = buildRecord()
     if (jsonUtf8ByteLength(record) > this.#policy.maxIncidentRecordBytes) {
       evidenceDetailsOmitted += summarizeBuckets(contributors) + summarizeBuckets(consequences)
-      if (trigger.evidence !== undefined) { trigger = summarizeFailureFact(trigger); evidenceDetailsOmitted++ }
+      const summary = summarizeFailureFact(trigger)
+      trigger = summary.fact
+      evidenceDetailsOmitted += summary.evidenceDetailsOmitted
       record = buildRecord()
     }
     while (
@@ -505,9 +507,10 @@ function summarizeBuckets(buckets: FailureFactBucketV2[]): number {
   let count = 0
   for (let index = 0; index < buckets.length; index++) {
     const bucket = buckets[index]!
-    if (bucket.representative.evidence === undefined) continue
-    buckets[index] = Object.freeze({ ...bucket, representative: summarizeFailureFact(bucket.representative) })
-    count++
+    const summary = summarizeFailureFact(bucket.representative)
+    if (summary.evidenceDetailsOmitted === 0) continue
+    buckets[index] = Object.freeze({ ...bucket, representative: summary.fact })
+    count += summary.evidenceDetailsOmitted
   }
   return count
 }

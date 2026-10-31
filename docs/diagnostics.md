@@ -84,7 +84,9 @@ continue recording until **Stop recording** or the original deadline.
 Compact failure evidence is retained even with recording off. Automatically recovered failures stay silent;
 open **Diagnostics** to export them. Typed classifications keep separate immutable exception trees, operation
 context, and evidence IDs. Repeated causes are counted independently of occurrence identities. Exception trees
-are bounded to 8 KiB; silent history keeps at most 64 records / 256 KiB and four causes per classification.
+are bounded to 8 KiB; silent history keeps at most 64 records / 256 KiB and up to four distinct causes per
+classification, favoring recent observations. Relations retain separate counts and share cause slots.
+Incident buckets retain the earliest causes within each relation, with the nominated trigger always preserved.
 
 The detailed trace ring is opt-in and bounded to 4 MiB / 4,096 events. Incident history retains 64 root events.
 Pending context pressure omits supporting facts with explicit counts; live operations can still report their failure trigger.
