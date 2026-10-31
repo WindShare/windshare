@@ -111,7 +111,7 @@ func (mapper *Mapper) Bind(logical string) (string, error) {
 	if len(mapper.resolver.mappings) >= MaximumMappings {
 		return "", ErrInvalidMapping
 	}
-	for attempt := uint32(0); attempt < MaximumAttempts; attempt++ {
+	for attempt := range uint32(MaximumAttempts) {
 		component, err := Candidate(mapper.resolver.operation, logical, attempt)
 		if err != nil {
 			return "", err
@@ -154,8 +154,8 @@ func (mapper *Mapper) emit(event Trace) {
 }
 
 func splitParent(path string) (string, string) {
-	if slash := strings.LastIndexByte(path, '/'); slash >= 0 {
-		return path[:slash], path[slash+1:]
+	if parent, leaf, ok := strings.CutLast(path, "/"); ok {
+		return parent, leaf
 	}
 	return "", path
 }
