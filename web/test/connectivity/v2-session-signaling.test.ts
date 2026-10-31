@@ -370,7 +370,7 @@ describe('v2 authenticated session signaling', () => {
 
     await route.close()
     incoming.releaseLock()
-    await lane.close()
+    await lane.close('session_closed')
     expect(session.closeCalls).toBe(0)
   })
 

@@ -467,13 +467,18 @@ export function validateLane(payload: UnknownRecord): void {
         'lane retry_after_ms')
       return
     case 'detached':
+      if (payload.detachment_class === 'closed') {
+        exactKeys(payload, ['transition', 'detachment_class', 'close_reason'], [], 'lane closed payload')
+        member(payload.close_reason, ['retired', 'replaced', 'session_closed'], 'lane close reason')
+        return
+      }
       exactKeys(payload, ['transition', 'detachment_class'], ['failure_detail'], 'lane detached payload')
       if (payload.failure_detail !== undefined && (
         typeof payload.failure_detail !== 'string' ||
         payload.failure_detail.length > TRACE_FAILURE_DETAIL_MAX_CHARACTERS
       )) throw new TypeError('lane failure detail must be bounded text')
       member(payload.detachment_class,
-        ['closed', 'physical_failure', 'authenticated_failure'],
+        ['physical_failure', 'authenticated_failure'],
         'lane detachment class')
       return
     default:

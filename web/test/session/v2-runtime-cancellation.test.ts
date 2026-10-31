@@ -108,10 +108,12 @@ describe('request cancellation across send backpressure', () => {
       expect(runtime.laneIds()).toEqual([])
       expect(runtime.isClosed).toBe(false)
       expect(events).toContainEqual(expect.objectContaining({
-        transition: 'detached', detachmentClass: 'physical_failure',
-        failure: expect.objectContaining({ cause: expect.objectContaining({
-          cause: expect.objectContaining({ message: 'Session lane send timed out' }),
-        }) }),
+        transition: 'detached', termination: {
+          kind: 'physical_failure',
+          failure: expect.objectContaining({ cause: expect.objectContaining({
+            cause: expect.objectContaining({ message: 'Session lane send timed out' }),
+          }) }),
+        },
       }))
     } finally { await runtime.close() }
   })

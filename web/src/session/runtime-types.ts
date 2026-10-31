@@ -38,6 +38,12 @@ export interface SessionOperation {
   cancel(cause: unknown, protocolReason?: OperationCancelReason): void
 }
 
+export type LaneCloseReason = 'retired' | 'replaced' | 'session_closed'
+
+export type LaneTermination =
+  | Readonly<{ kind: 'closed'; reason: LaneCloseReason }>
+  | Readonly<{ kind: 'physical_failure' | 'authenticated_failure'; failure: unknown }>
+
 export interface LaneChange {
   readonly type: 'attached' | 'detached'
   readonly laneId: number
