@@ -140,6 +140,7 @@ export class BrowserDiagnosticsRuntime implements DiagnosticsRuntimePort, Diagno
     const status = projectDiagnosticsStatusV2(traceStatus, healthAtExport)
     return Object.freeze({
       incidents,
+      lateConsequences: this.#incident.history.consequencesSnapshot(),
       ...(this.#failures === undefined ? {} : { failureEvidence: this.#failures.snapshot() }),
       localOutputFailures: this.#localOutputFailures?.snapshot() ?? [],
       status,

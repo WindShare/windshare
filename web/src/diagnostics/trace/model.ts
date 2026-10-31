@@ -626,7 +626,6 @@ export interface TraceEventPayloadByNameV2 extends ConnectionTracePayloads {
   readonly retained_action: RetainedActionPayloadV1
   readonly incident_marker: Readonly<{
     incident_sequence: string
-    root_incident_sequence?: string
     scope: Readonly<{
       scope_kind: IncidentScopeKind
       scope_sequence: string

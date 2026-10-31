@@ -87,7 +87,7 @@ describe('bounded cause retention', () => {
     for (const row of snapshot.records) expect(isBoundedDiagnosticExceptionProjection(row.fact.evidence!.exception, MAX_EXCEPTION_TEXT_BYTES)).toBe(true)
   })
 
-  it('keeps a minimal nominated trigger after record trimming and root history eviction', () => {
+  it('preserves a trimmed root alongside bounded late evidence', () => {
     const policy = createIncidentPolicy({ maxIncidentHistoryRecords: 1, maxIncidentRecordBytes: 3000 })
     const projector = createIncidentRecordProjector({
       policy, runtimeRunId: createRuntimeRunIdentity(new Uint8Array(16).fill(1)),
@@ -105,10 +105,13 @@ describe('bounded cause retention', () => {
     expect(reporter.history.last()?.payload.evidence_details_omitted).toBeGreaterThan(0)
     scope.facts.record(fact('first cleanup'), 'consequence')
     scope.facts.record(fact('second cleanup'), 'consequence')
-    const latest = reporter.history.last()!
+    const root = reporter.history.last()!
+    const supplement = reporter.history.consequencesSnapshot()[0]!
     expect(reporter.history.snapshot()).toHaveLength(1)
-    expect(latest.payload.root_trigger?.evidence?.exception.message).toContain('root cause')
-    expect(latest.payload.trigger.evidence?.exception.message).toContain('second cleanup')
-    expect(new TextEncoder().encode(JSON.stringify(latest)).byteLength).toBeLessThanOrEqual(3000)
+    expect(root.payload.trigger.evidence?.exception.message).toContain('root cause')
+    expect(supplement.consequences.map(bucket => bucket.representative.evidence?.exception.message))
+      .toEqual(['first cleanup', 'second cleanup'])
+    expect(new TextEncoder().encode(JSON.stringify(root)).byteLength).toBeLessThanOrEqual(3000)
+    expect(new TextEncoder().encode(JSON.stringify(supplement)).byteLength).toBeLessThanOrEqual(3000)
   })
 })

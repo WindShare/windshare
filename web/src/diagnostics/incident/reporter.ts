@@ -1,7 +1,6 @@
-import { summarizeFailureFact } from '../failure/summary'
-import { projectFailureFactV2 } from '../export/projector'
-import type { FailureFactV2 } from '../export/incident-record-v2'
+import { projectIncidentConsequencesV2, type IncidentConsequencesV2 } from './consequences'
 import type { FailureEvidenceHistoryPort } from '../failure/history'
+import type { FailureFact } from './fact'
 import {
   createFailureFactAccumulator,
   type FailureFactAccumulator,
@@ -21,7 +20,6 @@ import {
   type IncidentScopeObserver,
   type IncidentScopeOwner,
 } from './scope'
-import type { FailureFact } from './fact'
 import {
   presentationBoundaryForScope,
   type PresentationDecision,
@@ -58,7 +56,7 @@ export interface IncidentTimeSource {
 }
 
 export interface IncidentConsoleSink {
-  error(record: IncidentRecordV2): void
+  error(record: IncidentRecordV2 | IncidentConsequencesV2): void
 }
 
 export interface IncidentTraceSignalPort {
@@ -70,7 +68,6 @@ export interface IncidentTraceSignalPort {
 export interface IncidentLink {
   readonly incidentSequence: bigint
   readonly scope: IncidentScopeIdentity
-  readonly rootIncidentSequence?: bigint
 }
 
 export interface IncidentReporterOptions {
@@ -112,18 +109,17 @@ interface ActiveIncidentScope {
 }
 
 interface LateIncidentLink {
-  readonly trigger: FailureFactV2
+  readonly runtimeRunId: string
   readonly link: IncidentLink
-  readonly presentation: Readonly<{
-    boundary: PresentationBoundary
-    outcome: PresentationOutcome
-  }>
   readonly sealedAtElapsedMs: bigint
   consoleReports: number
+  accumulator?: FailureFactAccumulator
+  firstObserved?: IncidentTimestamp
+  readonly omittedBucketCounts: WeakMap<FailureFact, bigint>
 }
 
 interface PendingLateLink {
-  commit(): void
+  commit(runtimeRunId: string): void
 }
 
 export const MAX_ACTIVE_INCIDENT_SCOPES = 16
@@ -319,11 +315,8 @@ class BrowserIncidentReporter implements IncidentReporter {
     const pendingLink = this.#prepareLateLink(
       facts.scope,
       sequence,
-      state.decision.boundary,
-      state.decision.outcome,
       timestamp.elapsedMs,
       state.consoleReports,
-      facts.trigger.fact,
     )
     const projection = this.#projectWithExactHealth({
       sequence,
@@ -334,7 +327,7 @@ class BrowserIncidentReporter implements IncidentReporter {
     })
 
     this.#appendHistory(projection.record)
-    pendingLink.commit()
+    pendingLink.commit(projection.record.runtime_run_id)
     const link = Object.freeze({
       incidentSequence: sequence,
       scope: facts.scope,
@@ -354,32 +347,38 @@ class BrowserIncidentReporter implements IncidentReporter {
     const root = this.#lateLinks.get(key)
     if (root === undefined) return
 
-    const sequence = this.#allocateIncidentSequence()
-    this.#recordPendingHistoryEviction()
-    const consoleAdmitted = this.#admitConsole(root)
-    const facts = lateConsequenceFacts(observation)
-    const projection = this.#projectWithExactHealth({
-      sequence,
-      timestamp,
-      presentation: root.presentation,
-      facts,
-      initialOverflow: 0n,
-      rootIncidentSequence: root.link.incidentSequence,
-      rootTrigger: root.trigger,
-    })
-
-    this.#appendHistory(projection.record)
-    const link = Object.freeze({
-      incidentSequence: sequence,
-      rootIncidentSequence: root.link.incidentSequence,
+    root.accumulator ??= createFailureFactAccumulator(root.link.scope, this.#policy)
+    root.firstObserved ??= timestamp
+    const previous = root.accumulator.snapshotConsequences()
+    root.accumulator.record(observation.ref)
+    const facts = root.accumulator.snapshotConsequences()
+    const { record, omittedBuckets } = projectIncidentConsequencesV2({
+      runtimeRunId: root.runtimeRunId,
+      incidentSequence: root.link.incidentSequence,
       scope: root.link.scope,
+      firstObserved: root.firstObserved,
+      lastObserved: timestamp,
+      facts,
+      policy: this.#policy,
     })
-    this.#signalTrace({
-      kind: 'incident_sealed',
-      incident: link,
-      elapsedMs: timestamp.elapsedMs,
-    })
-    if (consoleAdmitted) this.#reportConsole(projection.record)
+    let overflow = facts.overflowCount - previous.overflowCount
+    // Byte pruning can change which causes fit. Account each cause independently
+    // so an old omission returning to the export cannot mask a newly omitted fact.
+    for (const bucket of omittedBuckets) {
+      overflow += bucket.count - (root.omittedBucketCounts.get(bucket.representative) ?? 0n)
+      root.omittedBucketCounts.set(bucket.representative, bucket.count)
+    }
+    this.#health.recordFactOverflow(overflow)
+    try {
+      if (!this.#history.recordConsequences(record)) {
+        this.#lateLinks.delete(key)
+        this.#health.recordLateLinkEviction()
+        return
+      }
+    } catch { /* A fallible retention sink cannot suppress Console evidence. */ }
+    const newCause = facts.buckets.length > previous.buckets.length ||
+      (previous.overflowCount === 0n && facts.overflowCount > 0n)
+    if (newCause && this.#admitConsole(root)) this.#reportConsole(record)
   }
 
   #projectWithExactHealth(input: {
@@ -391,8 +390,6 @@ class BrowserIncidentReporter implements IncidentReporter {
     }>
     readonly facts: SealedFailureFacts
     readonly initialOverflow: bigint
-    readonly rootTrigger?: FailureFactV2
-    readonly rootIncidentSequence?: bigint
   }): IncidentRecordProjection {
     let accountedOverflow = input.initialOverflow
     const context = captureDiagnosticContextV1(this.#contextSources)
@@ -407,12 +404,8 @@ class BrowserIncidentReporter implements IncidentReporter {
         elapsedMs: input.timestamp.elapsedMs,
         presentation: input.presentation,
         facts: input.facts,
-        ...(input.rootTrigger === undefined ? {} : { rootTrigger: input.rootTrigger }),
         context,
         health: this.#health.incidentHealthSnapshot(),
-        ...(input.rootIncidentSequence === undefined
-          ? {}
-          : { rootIncidentSequence: input.rootIncidentSequence }),
       })
       if (result.overflowFactCount < accountedOverflow) {
         throw new Error('Incident projector lost overflow accounting')
@@ -450,11 +443,8 @@ class BrowserIncidentReporter implements IncidentReporter {
   #prepareLateLink(
     scope: IncidentScopeIdentity,
     sequence: bigint,
-    boundary: PresentationBoundary,
-    outcome: PresentationOutcome,
     elapsedMs: bigint,
     consoleReports: number,
-    trigger: FailureFact,
   ): PendingLateLink {
     this.#evictExpiredLateLinks(elapsedMs)
     while (this.#lateLinks.size >= this.#policy.maxLateIncidentLinks) {
@@ -464,16 +454,15 @@ class BrowserIncidentReporter implements IncidentReporter {
       this.#health.recordLateLinkEviction()
     }
     const key = scopeKey(scope)
-    const entry: LateIncidentLink = {
-      trigger: summarizeFailureFact(projectFailureFactV2(trigger)),
-      link: Object.freeze({ incidentSequence: sequence, scope }),
-      presentation: Object.freeze({ boundary, outcome }),
-      sealedAtElapsedMs: elapsedMs,
-      consoleReports,
-    }
     return Object.freeze({
-      commit: () => {
-        this.#lateLinks.set(key, entry)
+      commit: (runtimeRunId: string) => {
+        this.#lateLinks.set(key, {
+          runtimeRunId,
+          link: Object.freeze({ incidentSequence: sequence, scope }),
+          sealedAtElapsedMs: elapsedMs,
+          consoleReports,
+          omittedBucketCounts: new WeakMap(),
+        })
       },
     })
   }
@@ -499,7 +488,7 @@ class BrowserIncidentReporter implements IncidentReporter {
     }
   }
 
-  #reportConsole(record: IncidentRecordV2): void {
+  #reportConsole(record: IncidentRecordV2 | IncidentConsequencesV2): void {
     try {
       this.#consoleSink.error(record)
     } catch {
@@ -543,23 +532,6 @@ export function createIncidentReporter(
   options: IncidentReporterOptions,
 ): IncidentReporter {
   return new BrowserIncidentReporter(options)
-}
-
-function lateConsequenceFacts(
-  observation: FactObservation,
-): SealedFailureFacts {
-  return Object.freeze({
-    scope: observation.ref.scope,
-    trigger: Object.freeze({
-      ref: observation.ref,
-      fact: observation.fact as FailureFact,
-    }),
-    factCount: 1n,
-    contributorBuckets: Object.freeze([]),
-    contributorOverflowCount: 0n,
-    consequenceBuckets: Object.freeze([]),
-    consequenceOverflowCount: 0n,
-  })
 }
 
 function scopeKey(identity: IncidentScopeIdentity): string {

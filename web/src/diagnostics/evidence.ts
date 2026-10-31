@@ -39,6 +39,7 @@ export class DiagnosticsEvidenceReader {
     const last = this.#last
     if (last !== undefined && metadata === last.metadata &&
         sameRecords(input.incidents, last.input.incidents) &&
+        sameRecords(input.lateConsequences, last.input.lateConsequences) &&
         input.failureEvidence === last.input.failureEvidence &&
         sameRecords(input.localOutputFailures, last.input.localOutputFailures) &&
         sameRecords(input.traceCapture?.events, last.input.traceCapture?.events)) {

@@ -1,5 +1,6 @@
 import type { FailureEvidenceHistorySnapshot, FailureObservation } from '../failure/history'
 import type { IncidentLink } from '../incident/reporter'
+import { validateIncidentConsequencesV2, type IncidentConsequencesV2 } from '../incident/consequences'
 import { MAX_SAFE_STRING_UTF8_BYTES } from '../incident/policy'
 import type {
   DiagnosticsHealthV1,
@@ -75,6 +76,7 @@ export interface DiagnosticBundleHeaderV2 {
 export interface DiagnosticBundleIncidentLineV2 {
   readonly line_type: 'incident'
   readonly record: IncidentRecordV2
+  readonly late_consequences?: IncidentConsequencesV2
 }
 
 export interface DiagnosticBundleLocalOutputFailureLineV2 {
@@ -119,6 +121,7 @@ export interface DiagnosticBundleSnapshotInput {
   readonly identity: DiagnosticBundleIdentityV2
   readonly time: string
   readonly incidents: readonly IncidentRecordV2[]
+  readonly lateConsequences?: readonly IncidentConsequencesV2[]
   readonly failureEvidence?: FailureEvidenceHistorySnapshot
   readonly localOutputFailures?: readonly CorrelatedLocalOutputOperationFailureV1[]
   readonly status: DiagnosticsStatusV2
@@ -198,7 +201,12 @@ export class DiagnosticBundleProjectorV2 {
       throw new TypeError('trace status and export header must share one health cut')
     }
 
-    const incidents = Object.freeze(input.incidents.map(record => this.#incidentLine(record))
+    const late = new Map((input.lateConsequences ?? []).map(record => [record.incident_sequence, record]))
+    if (late.size !== (input.lateConsequences?.length ?? 0) ||
+        [...late.keys()].some(sequence => !input.incidents.some(record => record.sequence === sequence))) {
+      throw new TypeError('Late consequences require one retained owning incident')
+    }
+    const incidents = Object.freeze(input.incidents.map(record => this.#incidentLine(record, late.get(record.sequence)))
       .sort((left, right) => compareDecimal(left.record.sequence, right.record.sequence)))
     const incidentRecords = incidents.map(line => line.record)
     requireUniqueDecimalSequences(incidentRecords.map(record => record.sequence), 'incident')
@@ -247,12 +255,14 @@ export class DiagnosticBundleProjectorV2 {
     })
   }
 
-  #incidentLine(record: IncidentRecordV2): DiagnosticBundleIncidentLineV2 {
+  #incidentLine(record: IncidentRecordV2, late?: IncidentConsequencesV2): DiagnosticBundleIncidentLineV2 {
     const cached = this.#incidents.get(record)
-    if (cached !== undefined) return cached
+    if (cached !== undefined && cached.late_consequences === late) return cached
+    if (late !== undefined) validateIncidentConsequencesV2(late, record)
     const line = Object.freeze({
       line_type: 'incident' as const,
       record: validateIncident(record, this.#identity),
+      ...(late === undefined ? {} : { late_consequences: late }),
     })
     this.#incidents.set(record, line)
     return line
@@ -318,7 +328,6 @@ function projectLocalOutputFailureLine(
 ): DiagnosticBundleLocalOutputFailureLineV2 {
   validateLocalOutputFailure(projection)
   const owner = incidents.filter((incident) =>
-    incident.payload.root_incident_sequence === undefined &&
     incident.payload.scope.scope_kind === projection.owningScope.scopeKind &&
     incident.payload.scope.scope_sequence === projection.owningScope.scopeSequence &&
     incidentContainsNativeOutputFailure(incident))
@@ -367,23 +376,11 @@ function projectCapturedEvent(
   const time = utcTimeFromMilliseconds(captured.observedAtMilliseconds)
   if (captured.value.kind === 'incident_marker') {
     const incident = captured.value.incident
-    if (incident.rootIncidentSequence !== undefined &&
-        incident.rootIncidentSequence >= incident.incidentSequence) {
-      throw new RangeError('trace root incident marker must precede its linked incident')
-    }
     const payload: TraceEventPayloadByNameV2['incident_marker'] = {
       incident_sequence: decimalUint64(
         incident.incidentSequence,
         'trace incident marker sequence',
       ),
-      ...(incident.rootIncidentSequence === undefined
-        ? {}
-        : {
-            root_incident_sequence: decimalUint64(
-              incident.rootIncidentSequence,
-              'trace root incident marker sequence',
-            ),
-          }),
       scope: {
         scope_kind: incident.scope.scopeKind,
         scope_sequence: decimalUint64(

@@ -86,7 +86,9 @@ open **Diagnostics** to export them. Typed classifications keep separate immutab
 context, and evidence IDs. Repeated causes are counted independently of occurrence identities. Exception trees
 are bounded to 8 KiB; silent history keeps at most 64 records / 256 KiB and four causes per classification.
 
-The detailed trace ring is opt-in and bounded to 4 MiB / 4,096 events. Incident history is separate.
+The detailed trace ring is opt-in and bounded to 4 MiB / 4,096 events. Incident history retains 64 root events.
+For 10 minutes after sealing, late consequences coalesce into each root's `late_consequences` export supplement
+(at most 16 KiB), with cause samples, repeat counts, and omissions; they never evict root events.
 Exports are bounded to 8 MiB, reserve nominated trigger summaries, and report omitted evidence.
 The first failure saves asynchronously; subsequent changes coalesce over five seconds within each capture.
 Capture stops and page hiding flush pending evidence. Final snapshots and their retry budgets survive recording
