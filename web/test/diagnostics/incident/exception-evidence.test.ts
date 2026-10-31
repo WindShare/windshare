@@ -24,6 +24,33 @@ describe('classification-independent exception evidence', () => {
     expect(Object.isFrozen(fact.evidence!.exception.cause)).toBe(true)
   })
 
+  it('captures only own enumerable context fields', () => {
+    const inherited = Object.create({ inherited: 'not part of this observation' }) as Record<string, string>
+    inherited.own = 'retained'
+    Object.defineProperty(inherited, 'hidden', { value: 'not enumerable' })
+    const evidence = captureFailureEvidence(new Error('failure'), { context: inherited })
+
+    expect(evidence.context).toEqual({ own: 'retained' })
+    expect(evidence.contextTruncated).toBe(false)
+  })
+
+  it('keeps later fields when bounded context names collide', () => {
+    const prefix = 'k'.repeat(256)
+    const input = Object.fromEntries([
+      [prefix + 'first', 'first value'],
+      [prefix + 'second', 'second value'],
+      ['tail', 'retained'],
+      ['__proto__', 'own value'],
+    ])
+    const evidence = captureFailureEvidence(new Error('failure'), { context: input })
+
+    expect(evidence.context).toEqual(Object.fromEntries([
+      [prefix, 'first value'], ['tail', 'retained'], ['__proto__', 'own value'],
+    ]))
+    expect(Object.getPrototypeOf(evidence.context)).toBe(Object.prototype)
+    expect(evidence.contextTruncated).toBe(true)
+  })
+
   it('bounds escaped multibyte text and the entire exception graph', () => {
     const large = '\u754c\u{1f680}\u0000'.repeat(MAX_EXCEPTION_TEXT_BYTES)
     let error: Error = new Error(large)

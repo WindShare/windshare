@@ -185,6 +185,7 @@ export function createDiagnosticBundleV2(
 export class DiagnosticBundleProjectorV2 {
   readonly #identity: DiagnosticBundleIdentityV2
   readonly #incidents = new WeakMap<IncidentRecordV2, DiagnosticBundleIncidentLineV2>()
+  readonly #failures = new WeakMap<FailureObservation, DiagnosticBundleFailureEvidenceLineV2>()
   readonly #events = new WeakMap<
     TraceCapturedEvent<TraceEventObservationV2, IncidentLink>, DiagnosticBundleTraceEventLineV2
   >()
@@ -246,9 +247,7 @@ export class DiagnosticBundleProjectorV2 {
         diagnostics_health_at_export: healthAtExport,
       }),
       incidents,
-      failureEvidence: Object.freeze((input.failureEvidence?.records ?? []).map(record => Object.freeze({
-        line_type: 'failure_evidence' as const, record,
-      }))),
+      failureEvidence: Object.freeze((input.failureEvidence?.records ?? []).map(record => this.#failureLine(record))),
       localOutputFailures,
       ...(traceCapture === undefined ? {} : { traceCapture }),
       traceEvents,
@@ -265,6 +264,14 @@ export class DiagnosticBundleProjectorV2 {
       ...(late === undefined ? {} : { late_consequences: late }),
     })
     this.#incidents.set(record, line)
+    return line
+  }
+
+  #failureLine(record: FailureObservation): DiagnosticBundleFailureEvidenceLineV2 {
+    const cached = this.#failures.get(record)
+    if (cached !== undefined) return cached
+    const line = Object.freeze({ line_type: 'failure_evidence' as const, record })
+    if (isDeeplyFrozen(record)) this.#failures.set(record, line)
     return line
   }
 
