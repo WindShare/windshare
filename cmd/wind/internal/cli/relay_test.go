@@ -89,3 +89,84 @@ func TestRelayCommandsInstallThroughEngineWithoutAdministratorAuthority(t *testi
 		})
 	}
 }
+
+func TestRelayHelpCompletesBeforeOperation(t *testing.T) {
+	const relayURL = "https://relay.example"
+	for _, operation := range []string{"add", "onboard", "cancel"} {
+		for _, help := range []string{"-h", "-help", "--h", "--help", "--help=1"} {
+			for _, args := range [][]string{
+				{operation, help},
+				{operation, relayURL, help},
+				{operation, help, relayURL},
+			} {
+				t.Run(strings.Join(args, " "), func(t *testing.T) {
+					var stdout, stderr bytes.Buffer
+					// There is deliberately no engine: help must finish before
+					// enrollment or cancellation can acquire external authority.
+					app := &App{Stdout: &stdout, Stderr: &stderr}
+					t.Cleanup(app.closeTerminalOutput)
+					code := app.runRelay(t.Context(), args)
+					if code != ExitOK || stdout.Len() != 0 || stderr.Len() == 0 {
+						t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestRelaySetupOptionsAreInterleaved(t *testing.T) {
+	const relayURL = "https://relay.example"
+	for _, operation := range []string{"add", "onboard"} {
+		for _, args := range [][]string{
+			{relayURL, "--name", "device", "--no-browser"},
+			{"--name", "device", relayURL, "--no-browser"},
+			{"--no-browser", "--name=device", relayURL},
+		} {
+			t.Run(operation+"/"+strings.Join(args, " "), func(t *testing.T) {
+				app := &App{}
+				request, outcome := app.parseRelaySetupRequest(operation, args)
+				wantOperation := relaysetup.AddProfile
+				if operation == "onboard" {
+					wantOperation = relaysetup.PrivateOnboarding
+				}
+				if outcome != requestParseReady || request.URL != relayURL ||
+					request.DeviceName != "device" || !request.NoBrowser || request.Operation != wantOperation {
+					t.Fatalf("outcome=%v request=%+v", outcome, request)
+				}
+			})
+		}
+	}
+
+	app := &App{}
+	request, outcome := app.parseRelaySetupRequest("add", []string{"--name", "--help", relayURL})
+	if outcome != requestParseReady || request.DeviceName != "--help" {
+		t.Fatalf("a flag value became a help request: outcome=%v request=%+v", outcome, request)
+	}
+}
+
+func TestRelayArgumentErrorsCompleteBeforeOperation(t *testing.T) {
+	const rejectedValue = "relay_argument_CANARY"
+	for _, args := range [][]string{
+		{"add"},
+		{"onboard", ""},
+		{"cancel"},
+		{"cancel", "https://relay.example", "extra"},
+		{"add", "--name"},
+		{"add", "--no-browser=" + rejectedValue},
+		{"onboard", "--" + rejectedValue},
+		{"cancel", "--no-browser"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			var stderr bytes.Buffer
+			app := &App{Stderr: &stderr}
+			t.Cleanup(app.closeTerminalOutput)
+			if code := app.runRelay(t.Context(), args); code != ExitUsage || stderr.Len() == 0 {
+				t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+			}
+			if strings.Contains(stderr.String(), rejectedValue) {
+				t.Fatalf("parser projected a rejected value: %q", stderr.String())
+			}
+		})
+	}
+}

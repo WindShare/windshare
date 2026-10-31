@@ -69,7 +69,7 @@ func (canvas *Canvas) ReplaceProgress(line Line) {
 	if !dynamicAvailable(capabilities) {
 		var output bytes.Buffer
 		canvas.endAbandonedDynamicLineLocked(&output)
-		canvas.renderLineLocked(&output, line, capabilities)
+		renderLine(&output, line, capabilities)
 		output.WriteByte('\n')
 		if canvas.writeLocked(output.Bytes()) {
 			canvas.hasActive = false
@@ -79,15 +79,16 @@ func (canvas *Canvas) ReplaceProgress(line Line) {
 
 	var output bytes.Buffer
 	output.WriteString(clearTerminalLine)
-	canvas.renderLineLocked(&output, line, capabilities)
+	canvas.renderProgressLocked(&output, line, capabilities)
 	if canvas.writeLocked(output.Bytes()) {
 		canvas.active = line.clone()
 		canvas.hasActive = true
 	}
 }
 
-// Insert clears any active progress, writes complete lines, then redraws the
-// latest progress from semantic spans using the current terminal width.
+// Insert preserves complete records, letting the terminal wrap long lines so
+// help and diagnostics never lose content. Only the transient progress row is
+// clipped to the current width when it is redrawn after the insertion.
 func (canvas *Canvas) Insert(lines []Line) {
 	canvas.mu.Lock()
 	defer canvas.mu.Unlock()
@@ -106,12 +107,12 @@ func (canvas *Canvas) Insert(lines []Line) {
 		}
 	}
 	for _, line := range lines {
-		canvas.renderLineLocked(&output, line, capabilities)
+		renderLine(&output, line, capabilities)
 		output.WriteByte('\n')
 	}
 	if canvas.hasActive && dynamic {
 		output.WriteString(clearTerminalLine)
-		canvas.renderLineLocked(&output, canvas.active, capabilities)
+		canvas.renderProgressLocked(&output, canvas.active, capabilities)
 	}
 	if canvas.writeLocked(output.Bytes()) && !dynamic {
 		canvas.hasActive = false
@@ -167,8 +168,16 @@ func (canvas *Canvas) endAbandonedDynamicLineLocked(output *bytes.Buffer) {
 	}
 }
 
-func (canvas *Canvas) renderLineLocked(output *bytes.Buffer, line Line, capabilities Capabilities) {
-	spans := clipSpans(line, capabilities.Columns, canvas.cellWidth)
+func (canvas *Canvas) renderProgressLocked(output *bytes.Buffer, line Line, capabilities Capabilities) {
+	renderSpans(output, clipSpans(line, capabilities.Columns, canvas.cellWidth), capabilities)
+}
+
+func renderLine(output *bytes.Buffer, line Line, capabilities Capabilities) {
+	spans, _ := escapedSpans(line)
+	renderSpans(output, spans, capabilities)
+}
+
+func renderSpans(output *bytes.Buffer, spans []Span, capabilities Capabilities) {
 	styled := dynamicAvailable(capabilities) && capabilities.Color
 	for _, span := range spans {
 		styleSequence := ""

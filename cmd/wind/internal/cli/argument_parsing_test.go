@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"flag"
 	"strings"
 	"testing"
 )
@@ -162,5 +163,54 @@ func assertArgumentCanariesAbsent(t *testing.T, stdout, stderr string, canaries 
 		if bytes.Contains([]byte(stdout), []byte(canary.value)) || bytes.Contains([]byte(stderr), []byte(canary.value)) {
 			t.Fatalf("%s canary reached output: stdout=%q stderr=%q", canary.name, stdout, stderr)
 		}
+	}
+}
+
+func TestFlagDefaultsPreserveRegisteredValuesAndOutput(t *testing.T) {
+	const registeredValue = "registered-default"
+	const parsedValue = "parsed-value-CANARY"
+	var output bytes.Buffer
+	flags := flag.NewFlagSet("example", flag.ContinueOnError)
+	flags.SetOutput(&output)
+	flags.String("name", registeredValue, "label")
+	flags.Bool("v", false, "switch")
+	if err := flags.Set("name", parsedValue); err != nil {
+		t.Fatal(err)
+	}
+
+	defaults := flagDefaults(flags)
+	if flags.Output() != &output || output.Len() != 0 {
+		t.Fatal("rendering defaults changed the parser's output authority")
+	}
+	if strings.ContainsAny(defaults, "\t") || strings.Contains(defaults, `\t`) {
+		t.Fatalf("unexpanded layout tabs: %q", defaults)
+	}
+	if !strings.Contains(defaults, registeredValue) || strings.Contains(defaults, parsedValue) {
+		t.Fatalf("defaults reflected parsed values instead of registration metadata: %q", defaults)
+	}
+}
+
+func TestExpandTabStopsUsesEightColumnStops(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want string
+	}{
+		{name: "short boolean", text: "  -v\tshow diagnostic milestones\n", want: "  -v    show diagnostic milestones\n"},
+		{name: "usage line", text: "    \tretained operation ID\n", want: "        retained operation ID\n"},
+		{
+			name: "multi-line usage",
+			text: "  -o string\n    \tfirst line\n    \tsecond line\n",
+			want: "  -o string\n        first line\n        second line\n",
+		},
+		{name: "tab inside description", text: "    \ta\tb\n", want: "        a       b\n"},
+		{name: "no tabs", text: "  -name string\n", want: "  -name string\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := expandTabStops(test.text); got != test.want {
+				t.Fatalf("expandTabStops(%q) = %q, want %q", test.text, got, test.want)
+			}
+		})
 	}
 }
