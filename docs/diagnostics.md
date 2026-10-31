@@ -87,6 +87,7 @@ context, and evidence IDs. Repeated causes are counted independently of occurren
 are bounded to 8 KiB; silent history keeps at most 64 records / 256 KiB and four causes per classification.
 
 The detailed trace ring is opt-in and bounded to 4 MiB / 4,096 events. Incident history retains 64 root events.
+Pending context pressure omits supporting facts with explicit counts; live operations can still report their failure trigger.
 For 10 minutes after sealing, late consequences coalesce into each root's `late_consequences` export supplement
 (at most 16 KiB), with cause samples, repeat counts, and omissions; they never evict root events.
 Exports are bounded to 8 MiB, reserve nominated trigger summaries, and report omitted evidence.
