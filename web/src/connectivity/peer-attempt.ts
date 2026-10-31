@@ -74,7 +74,9 @@ export interface BrowserPeerAttemptExecutorOptions {
 interface AttemptResources {
   route?: SessionSignalingRoute
   peer?: PeerChannel
-  peerOwner: 'attempt' | 'adoption' | 'runtime' | 'published'
+  peerOwner:
+    | Readonly<{ kind: 'attempt' | 'adoption' | 'published' }>
+    | Readonly<{ kind: 'runtime'; laneId: number; laneEpoch: number }>
 }
 
 type PhaseSettlementAuthority =
@@ -171,7 +173,7 @@ export class BrowserPeerAttemptExecutor implements PeerRecoveryAttemptFactory {
     signal: AbortSignal,
     cancellationOwner: () => Parameters<PeerAttemptHandle['cancel']>[0] | undefined,
   ): Promise<PeerAttemptResult> {
-    const resources: AttemptResources = { peerOwner: 'attempt' }
+    const resources: AttemptResources = { peerOwner: { kind: 'attempt' } }
     let terminalError: unknown
     let permit: PeerTabAdmissionPermit | undefined
     try {
@@ -237,8 +239,11 @@ export class BrowserPeerAttemptExecutor implements PeerRecoveryAttemptFactory {
       this.#failRoute(resources.route, result)
       return result
     } finally {
-      if (resources.peerOwner !== 'published') {
-        if (resources.peer !== undefined && resources.peerOwner !== 'adoption') {
+      if (resources.peerOwner.kind !== 'published') {
+        if (resources.peerOwner.kind === 'runtime') {
+          await this.#session.retireLane(resources.peerOwner.laneId, resources.peerOwner.laneEpoch).catch(() => undefined)
+        }
+        if (resources.peer !== undefined && resources.peerOwner.kind !== 'adoption') {
           await resources.peer.close().catch(() => undefined)
         }
         await resources.route?.close(
@@ -264,7 +269,7 @@ export class BrowserPeerAttemptExecutor implements PeerRecoveryAttemptFactory {
     route.grantMilestone('grant-received', grantOperationId, laneIdentity)
     route.throwIfAttemptFailed()
 
-    resources.peerOwner = 'adoption'
+    resources.peerOwner = { kind: 'adoption' }
     const adoption = await this.#session.adoptGrantedLane(peer, grant, { signal })
     if (adoption.disposition !== 'unverified') {
       route.grantMilestone('lane-hello-sent', grantOperationId, laneIdentity)
@@ -287,7 +292,7 @@ export class BrowserPeerAttemptExecutor implements PeerRecoveryAttemptFactory {
 
     const settlement = receiverAdmissionSettlement(grant, adoption)
     if (settlement.type === 'failed') return settlement
-    resources.peerOwner = 'runtime'
+    resources.peerOwner = { kind: 'runtime', ...laneIdentity }
     route.throwIfAttemptFailed()
     let published: boolean
     try {
@@ -306,7 +311,7 @@ export class BrowserPeerAttemptExecutor implements PeerRecoveryAttemptFactory {
     if (!published) {
       return failedPhase(new LaneInstallationError(), 'authenticated-admission')
     }
-    resources.peerOwner = 'published'
+    resources.peerOwner = { kind: 'published' }
     route.grantMilestone('admitted', grantOperationId, laneIdentity)
     return completedPhase(laneIdentity, 'authenticated-admission')
   }

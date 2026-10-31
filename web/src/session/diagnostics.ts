@@ -1,4 +1,5 @@
 import type { Ed25519Observation } from '../crypto/ed25519'
+import type { LaneTermination } from './runtime-types'
 import type { CancellationTraceReason, OperationRequestTrace } from './operation-diagnostics'
 import type { RequestSchedulingObservation } from '../content/scheduling/requests'
 import type { FailureCorrelation } from '../diagnostics/incident/failure-correlation'
@@ -35,11 +36,6 @@ export type LaneTransition =
   | 'admission_accepted'
   | 'admission_rejected'
   | 'installed'
-
-export type LaneDetachmentClass =
-  | 'closed'
-  | 'physical_failure'
-  | 'authenticated_failure'
 
 export interface BlockWaitTrace {
   readonly phase: 'awaiting_first_fragment' | 'receiving_fragments'
@@ -124,8 +120,7 @@ export type LaneTransitionTraceEvent =
   | Readonly<{
       eventName: 'lane_transition'
       transition: 'detached'
-      detachmentClass: LaneDetachmentClass
-      failure?: unknown
+      termination: LaneTermination
       correlation: FailureCorrelation
     }>
 

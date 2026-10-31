@@ -55,15 +55,20 @@ export function projectProtocolTraceEvent(
           retry_after_ms: event.retryAfterMilliseconds,
         })
       case 'detached':
+        if (event.termination.kind === 'closed') {
+          return correlatedObservation(event.eventName, correlation, {
+            transition: event.transition,
+            detachment_class: 'closed',
+            close_reason: event.termination.reason,
+          })
+        }
         return correlatedObservation(event.eventName, correlation, {
           transition: event.transition,
-          detachment_class: event.detachmentClass,
+          detachment_class: event.termination.kind,
           // Error causes are non-enumerable; preserving them here makes an
           // authenticated failure distinguishable from ordinary transport loss.
-          ...(event.failure === undefined ? {} : {
-            failure_detail: formatDiagnosticText(event.failure, FAILURE_DETAIL_FORMAT)
-              .slice(0, TRACE_FAILURE_DETAIL_MAX_CHARACTERS),
-          }),
+          failure_detail: formatDiagnosticText(event.termination.failure, FAILURE_DETAIL_FORMAT)
+            .slice(0, TRACE_FAILURE_DETAIL_MAX_CHARACTERS),
         })
       default:
         return correlatedObservation(event.eventName, correlation, {
