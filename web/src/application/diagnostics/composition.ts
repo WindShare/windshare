@@ -1,3 +1,4 @@
+import { FailureEvidenceHistory, type FailureEvidenceHistoryPort } from '../../diagnostics/failure/history'
 import { encodeBase64Url } from '../../crypto/bytes'
 import { traceEventRetention } from '../../diagnostics/trace/retention'
 import type { ReceiverDiagnosticSnapshot } from '../../diagnostics/export/context'
@@ -56,6 +57,8 @@ export interface BrowserDiagnosticsCompositionOptions {
 }
 
 export interface BrowserDiagnosticsComposition {
+  readonly failures: FailureEvidenceHistoryPort
+  readonly observeEvidence: (listener: () => void) => () => void
   readonly trace: TraceSwitch<
     TraceEventObservationV2,
     IncidentLink
@@ -103,7 +106,9 @@ export function createBrowserDiagnosticsComposition(
     build: options.build,
     secureContext: options.secureContext,
   })
+  const failures = new FailureEvidenceHistory(() => clock.captureTime())
   const incidents = createIncidentReporter({
+    evidence: failures,
     projector,
     history,
     health,
@@ -137,13 +142,21 @@ export function createBrowserDiagnosticsComposition(
   })
   const runtime = createBrowserDiagnosticsRuntime({
     identity,
+    failures,
     incident: incidents,
     trace,
     localOutputFailures,
     timeSource: Object.freeze({ captureTime: () => clock.captureTime() }),
   })
 
-  return Object.freeze({ trace, incidents, runtime, localOutputFailures })
+  const observeEvidence = (listener: () => void) => {
+    const stopFailures = failures.subscribe(listener)
+    const stopTrace = trace.subscribe(listener)
+    const stopOutput = localOutputFailures.subscribe(listener)
+    const stopHistory = history.subscribe(listener)
+    return () => { stopFailures(); stopTrace(); stopOutput(); stopHistory() }
+  }
+  return Object.freeze({ trace, incidents, runtime, localOutputFailures, failures, observeEvidence })
 }
 
 function diagnosticContextSources(

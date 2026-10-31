@@ -37,6 +37,7 @@ export type OutputFailureCode<Stage extends OutputFailureStage> =
   Stage extends 'checkpoint' ? CheckpointFaultCodeValue : OutputFaultCodeValue
 
 export interface OutputFailureObservation<Stage extends OutputFailureStage> {
+  readonly error?: unknown
   readonly nativeClass: NativeFailureClass
   readonly recoveryDisposition?: RecoveryDisposition
   readonly code?: OutputFailureCode<Stage>
@@ -73,6 +74,7 @@ export function createOutputFailureSink<Stage extends OutputFailureStage>(input:
     record: (observation: OutputFailureObservation<Stage>): FailureFactRef | undefined => {
       try {
         return input.facts.record(nativeOutputFailureFact({
+          ...observation,
           stage: input.stage,
           recoveryDisposition:
             observation.recoveryDisposition ?? input.recoveryDisposition,
@@ -101,6 +103,7 @@ export function recordOutputException<Stage extends OutputFailureStage>(
   const classifiedCode = input.code ?? outputFailureCode(error, sink.stage)
   try {
     return sink.record({
+      error,
       nativeClass: nativeFailureClass(error),
       ...(input.recoveryDisposition === undefined
         ? {}

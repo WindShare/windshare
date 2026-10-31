@@ -1,3 +1,4 @@
+import { bindFailureEvidence } from '../../diagnostics/failure/evidence'
 import { isFailureFact, type FailureFact, type FailureFactRef } from '../../diagnostics/incident'
 import { BoundaryFaultError, isFault, type Fault } from './fault'
 import type { TransferFileOutcomeEvidence } from './file-outcome'
@@ -18,7 +19,8 @@ export class ClassifiedTransferFailureError extends BoundaryFaultError {
     classification: ClassifiedTransferFailure,
     fileOutcomeEvidence?: TransferFileOutcomeEvidence,
   ) {
-    super(classification.fault, 'File transfer failed at a classified boundary')
+    super(classification.fault, classification.fact.evidence?.exception.message ?? 'File transfer failed at a classified boundary')
+    if (classification.fact.evidence !== undefined) bindFailureEvidence(this, classification.fact.evidence)
     this.name = 'ClassifiedTransferFailureError'
     this.classification = snapshotClassification(classification)
     this.fileOutcomeEvidence = fileOutcomeEvidence === undefined

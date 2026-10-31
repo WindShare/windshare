@@ -317,14 +317,21 @@ export function failureFactRelationForRef(
   return relation
 }
 
+/** A shared snapshot can cross boundaries; its reference belongs only to one owner. */
+export function recordScopedFailure(
+  scope: IncidentScopeHandle, fact: FailureFact, relation: FailureFactRelation,
+  previous?: FailureFactRef,
+): FailureFactRef {
+  if (previous !== undefined && previous.scope === scope.identity &&
+      refFacts.get(previous) === fact && refRelations.get(previous) === relation) return previous
+  return scope.facts.record(fact, relation)
+}
+
 export function sameIncidentScope(
   left: FailureFactRef,
   right: FailureFactRef,
 ): boolean {
-  return (
-    left.scope.scopeKind === right.scope.scopeKind &&
-    left.scope.scopeSequence === right.scope.scopeSequence
-  )
+  return left.scope === right.scope
 }
 
 function readClock(clock: IncidentClock): number {

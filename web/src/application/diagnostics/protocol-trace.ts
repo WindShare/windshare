@@ -1,3 +1,5 @@
+import { captureFailureEvidence } from '../../diagnostics/failure/evidence'
+import { summarizeFailureEvidence } from '../../diagnostics/failure/summary'
 import { projectCorrelationV1 } from '../../diagnostics/export/correlation-v1'
 import { projectConnectionTrace, projectRelayDeliveryTrace } from '../../diagnostics/trace/connection-payload'
 import { projectContentRetry, projectContentScheduling } from '../../diagnostics/trace/content-scheduling'
@@ -65,6 +67,7 @@ export function projectProtocolTraceEvent(
         return correlatedObservation(event.eventName, correlation, {
           transition: event.transition,
           detachment_class: event.termination.kind,
+          failure_evidence: summarizeFailureEvidence(captureFailureEvidence(event.termination.failure, { operation: 'session.receive' })),
           // Error causes are non-enumerable; preserving them here makes an
           // authenticated failure distinguishable from ordinary transport loss.
           failure_detail: formatDiagnosticText(event.termination.failure, FAILURE_DETAIL_FORMAT)
@@ -110,6 +113,7 @@ export function projectProtocolTraceEvent(
       })
     default:
       return correlatedObservation(event.eventName, correlation, {
+        ...protocolFailureSummary(event),
         transition: event.transition,
         request_kind: event.requestKind,
       })
@@ -167,4 +171,9 @@ function projectSenderVerification(event: SenderVerificationTraceEvent): TraceEv
       backend: event.backend, transition: event.transition, reason: event.reason,
     },
   }
+}
+
+function protocolFailureSummary(event: ProtocolTraceEvent) {
+  return 'evidence' in event && event.evidence !== undefined
+    ? { failure_evidence: summarizeFailureEvidence(event.evidence) } : {}
 }

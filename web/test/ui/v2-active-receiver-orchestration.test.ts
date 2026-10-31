@@ -453,7 +453,7 @@ describe('v2 receive attempt observability', () => {
       outcome: 'failed',
     })
     expect(JSON.stringify(diagnostics.facts.map(observation => observation.fact)))
-      .not.toContain('private publication detail')
+      .toContain('private publication detail')
     await controller.dispose()
   })
 

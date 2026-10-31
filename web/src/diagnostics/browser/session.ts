@@ -13,6 +13,8 @@ import {
 import { createDiagnosticFile, type DiagnosticFile } from './file'
 
 export const DIAGNOSTICS_CHECKPOINT_INTERVAL_MS = 5_000
+export const DIAGNOSTICS_SAVE_MAX_ATTEMPTS = 3
+const DIAGNOSTICS_SAVE_RETRY_MS = 1_000
 
 export interface BrowserDiagnosticsSnapshot {
   readonly capture: DiagnosticsStatusV2
@@ -48,6 +50,11 @@ export class BrowserDiagnosticsSession implements DiagnosticsRuntimePort {
   readonly #stopObservation: () => void
   readonly #writes = new Map<string, PendingDiagnosticCapture | null>()
   #queuedEvidence: DiagnosticsEvidenceSnapshot | undefined
+  #retryPending: PendingDiagnosticCapture | undefined
+  #retryAttempts = 0
+  #retryTimer: TraceScheduledTask | undefined
+  #saveTimer: TraceScheduledTask | undefined
+  #lastSaveAt = Number.NEGATIVE_INFINITY
   #saved: readonly DiagnosticCaptureSummary[] = []
   #archiveRevision = 0
   #snapshot: BrowserDiagnosticsSnapshot
@@ -97,6 +104,7 @@ export class BrowserDiagnosticsSession implements DiagnosticsRuntimePort {
   get runtimeRunId(): string { return this.#runId }
   activation(): TraceActivationSnapshot { return this.#options.runtime.activation() }
   status(): DiagnosticsStatusV2 { return this.#options.runtime.status() }
+  inspectFailureEvidence() { return this.#options.runtime.inspectFailureEvidence() }
   inspectLastFailure() { return this.#options.runtime.inspectLastFailure() }
   export(): string { return this.#options.runtime.export() }
   exportFile(): DiagnosticFile { return createDiagnosticFile(this.export()) }
@@ -105,6 +113,10 @@ export class BrowserDiagnosticsSession implements DiagnosticsRuntimePort {
   clear(): void {
     const id = this.#captureId(this.status())
     this.#queuedEvidence = undefined
+    this.#retryPending = undefined
+    this.#retryTimer?.cancel()
+    this.#saveTimer?.cancel()
+    this.#saveTimer = undefined
     this.#options.runtime.clear()
     this.#archiveRevision++
     this.#saved = this.#saved.filter(capture => capture.id !== id)
@@ -117,17 +129,28 @@ export class BrowserDiagnosticsSession implements DiagnosticsRuntimePort {
   checkpoint(): Promise<void> {
     try {
       const evidence = this.#options.runtime.readEvidence()
-      if (evidence.status.state !== 'idle' && evidence.hasEvidence && evidence !== this.#queuedEvidence) {
+      if (evidence.hasEvidence && evidence !== this.#queuedEvidence) {
         const capture: SavedDiagnosticCapture = Object.freeze({
           id: this.#captureId(evidence.status),
           scope: this.#scope,
           savedAt: this.#now(),
+          captureState: evidence.status.state,
           file: createDiagnosticFile(evidence.export()),
         })
         // Coalesce changed snapshots; identical evidence does not renew retention
         // or rebuild the file on a timer, visibility change, or repeated pagehide.
+        this.#retryTimer?.cancel()
+        this.#retryPending = undefined
+        this.#retryAttempts = 0
+        // At most the in-flight capture and the latest replacement retain encoded bodies.
+        for (const [id, pending] of this.#writes) if (pending !== null) this.#writes.delete(id)
         this.#writes.set(capture.id, { capture, evidence })
+        this.#lastSaveAt = this.#now()
         this.#queuedEvidence = evidence
+      } else if (this.#retryPending !== undefined && this.#retryAttempts < DIAGNOSTICS_SAVE_MAX_ATTEMPTS) {
+        this.#retryTimer?.cancel()
+        this.#writes.set(this.#retryPending.capture.id, this.#retryPending)
+        this.#retryPending = undefined
       }
     } catch {
       this.#archiveUnavailable = true
@@ -141,6 +164,8 @@ export class BrowserDiagnosticsSession implements DiagnosticsRuntimePort {
     this.#disposed = true
     this.#stopObservation()
     this.#timer?.cancel()
+    this.#saveTimer?.cancel()
+    this.#retryTimer?.cancel()
     this.#listeners.clear()
   }
 
@@ -180,8 +205,16 @@ export class BrowserDiagnosticsSession implements DiagnosticsRuntimePort {
         this.#saved = retainDiagnosticCaptures(saved, this.#now())
         this.#archiveUnavailable = false
       } catch {
-        // A failed write must stay retryable even when no new events arrive.
-        if (pending?.evidence === this.#queuedEvidence) this.#queuedEvidence = undefined
+        if (pending !== null && pending.evidence === this.#queuedEvidence) {
+          this.#retryAttempts++
+          this.#retryPending = pending
+          if (!this.#disposed && this.#retryAttempts < DIAGNOSTICS_SAVE_MAX_ATTEMPTS) {
+            this.#retryTimer = this.#scheduler.schedule(DIAGNOSTICS_SAVE_RETRY_MS * this.#retryAttempts, () => {
+              this.#retryTimer = undefined
+              this.checkpoint().catch(() => undefined)
+            })
+          }
+        }
         this.#archiveUnavailable = true
       }
       this.refresh()
@@ -196,7 +229,15 @@ export class BrowserDiagnosticsSession implements DiagnosticsRuntimePort {
       if (this.#disposed) return
       this.refresh()
       // Incident publication updates several evidence stores; snapshot after that turn finishes.
-      this.checkpoint().catch(() => undefined)
+      const delay = this.#lastSaveAt + DIAGNOSTICS_CHECKPOINT_INTERVAL_MS - this.#now()
+      const status = this.status()
+      const newSeal = status.state === 'sealed' && (this.#queuedEvidence?.status.state !== 'sealed' ||
+        this.#queuedEvidence.status.capture_generation !== status.capture_generation)
+      if (delay <= 0 || newSeal) this.checkpoint().catch(() => undefined)
+      else if (this.#saveTimer === undefined) this.#saveTimer = this.#scheduler.schedule(delay, () => {
+        this.#saveTimer = undefined
+        this.checkpoint().catch(() => undefined)
+      })
     })
   }
 

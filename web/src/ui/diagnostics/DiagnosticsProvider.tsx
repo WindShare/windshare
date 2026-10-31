@@ -63,12 +63,14 @@ function DiagnosticsNotice({ snapshot, onOpen, onStop }: {
 }) {
   const [dismissed, setDismissed] = useState<string | null>(null)
   const { capture, activation, previous, hasCurrentEvidence } = snapshot
-  const notice = hasCurrentEvidence ? `capture:${capture.capture_generation}` : previous?.id ?? ''
+  const currentRecording = capture.state !== 'idle' && hasCurrentEvidence
+  const savedRecording = previous !== null && previous.captureState !== 'idle'
+  const notice = currentRecording ? `capture:${capture.capture_generation}` : previous?.id ?? ''
   const active = activation.kind === 'active'
-  // Hiding retained evidence never hides an active recording or revokes its data.
-  if (!active && (!hasCurrentEvidence && previous === null || dismissed === notice)) return null
+  // Automatically recovered failures remain available in the panel without announcing a recording.
+  if (!active && ((!currentRecording && !savedRecording) || dismissed === notice)) return null
   return <aside className="diagnostics-surface diagnostics-bar" aria-label="Diagnostics">
-    <span role="status">{!active && !hasCurrentEvidence && previous !== null
+    <span role="status">{!active && !currentRecording && savedRecording
       ? 'Saved diagnostics available' : diagnosticsCaptureLabel(capture)}</span>
     <button type="button" onClick={event => onOpen(event.currentTarget)}>Export diagnostics</button>
     {active

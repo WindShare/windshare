@@ -1,3 +1,4 @@
+import { unclassifiedFailureFact } from '../../../src/diagnostics/incident'
 import { describe, expect, it, vi } from 'vitest'
 import { createBrowserDiagnosticsComposition } from '../../../src/application/diagnostics/composition'
 import { BrowserDiagnosticsSession, DIAGNOSTICS_CHECKPOINT_INTERVAL_MS } from '../../../src/diagnostics/browser/session'
@@ -6,6 +7,45 @@ import { DEFAULT_TRACE_CAPTURE_EXPIRY_MS } from '../../../src/diagnostics/trace/
 import { FakeTraceTime } from '../trace/test-support'
 
 describe('browser diagnostic evidence lifetime', () => {
+  it('saves failures with trace off, coalesces bursts, and restores the last successful archive after reload', async () => {
+    const harness = setup()
+    const failure = (message: string) => harness.composition.failures.record(unclassifiedFailureFact({
+      stage: 'content_read', recoveryDisposition: 'retryable', error: new Error(message),
+    }))
+    failure('initial cause')
+    await settle()
+    expect(harness.archive.captures[0]?.file.text).toContain('initial cause')
+    expect(harness.session.status().state).toBe('idle')
+    expect(harness.session.inspectLastFailure()).toBeNull()
+    for (let index = 0; index < 30; index++) { failure('latest cause'); await settle() }
+    expect(harness.archive.save).toHaveBeenCalledTimes(1)
+    harness.time.advance(DIAGNOSTICS_CHECKPOINT_INTERVAL_MS)
+    await settle()
+    expect(harness.archive.save).toHaveBeenCalledTimes(2)
+    expect(harness.archive.captures[0]?.file.text).toContain('latest cause')
+    harness.session.dispose()
+    const reopened = setup({ archive: harness.archive, runSeed: 2, time: harness.time })
+    await settle()
+    const previous = reopened.session.getSnapshot().previous!
+    expect((await reopened.session.readSavedFile(previous.id))?.text).toContain('latest cause')
+    reopened.session.dispose()
+  })
+
+  it('retries trace-off saves autonomously with a bounded attempt budget', async () => {
+    const archive = memoryArchive()
+    archive.save.mockRejectedValue(new Error('unavailable'))
+    const harness = setup({ archive })
+    harness.composition.failures.record(unclassifiedFailureFact({
+      stage: 'content_read', recoveryDisposition: 'retryable', error: new Error('retained in memory'),
+    }))
+    await settle()
+    for (let index = 0; index < 6; index++) { harness.time.advance(5000); await settle() }
+    expect(archive.save).toHaveBeenCalledTimes(3)
+    expect(harness.session.export()).toContain('retained in memory')
+    expect(harness.session.getSnapshot().archiveUnavailable).toBe(true)
+    harness.session.dispose()
+  })
+
   it('starts before producers, keeps repeated link intake idempotent, and exports without changing capture', async () => {
     const harness = setup()
     harness.session.enableFromLink()
@@ -189,8 +229,8 @@ describe('browser diagnostic evidence lifetime', () => {
   })
 })
 
-function setup(options: { archive?: ReturnType<typeof memoryArchive>; runSeed?: number; pageUrl?: string } = {}) {
-  const time = new FakeTraceTime()
+function setup(options: { time?: FakeTraceTime; archive?: ReturnType<typeof memoryArchive>; runSeed?: number; pageUrl?: string } = {}) {
+  const time = options.time ?? new FakeTraceTime()
   const archive = options.archive ?? memoryArchive()
   const composition = createBrowserDiagnosticsComposition({
     build: { version: '0.0.0', mode: 'test' },
@@ -202,7 +242,7 @@ function setup(options: { archive?: ReturnType<typeof memoryArchive>; runSeed?: 
   })
   const session = new BrowserDiagnosticsSession({
     runtime: composition.runtime,
-    observeCapture: composition.trace.subscribe,
+    observeCapture: composition.observeEvidence,
     archive,
     pageUrl: options.pageUrl ?? 'https://receiver.invalid/share',
     scheduler: time,

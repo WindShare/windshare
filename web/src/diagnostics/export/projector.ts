@@ -1,3 +1,4 @@
+import { summarizeFailureFact } from '../failure/summary'
 import { projectReceivedProtocolErrorV2 } from './protocol-error-v2'
 import { encodeBase64Url } from '../../crypto/bytes'
 import type {
@@ -74,6 +75,7 @@ export interface IncidentRecordProjectionInput {
   readonly facts: SealedFailureFacts
   readonly context: DiagnosticContextV1
   readonly health: IncidentDiagnosticsHealthSnapshot
+  readonly rootTrigger?: FailureFactV2
   readonly rootIncidentSequence?: bigint
 }
 
@@ -156,7 +158,8 @@ class V1IncidentRecordProjector implements IncidentRecordProjector {
       throw new RangeError('Root incident sequence must precede its linked incident')
     }
 
-    const trigger = projectFailureFactV2(input.facts.trigger.fact)
+    let trigger = projectFailureFactV2(input.facts.trigger.fact)
+    let evidenceDetailsOmitted = 0
     const correlation = projectCorrelationV1(input.facts.trigger.fact.correlation)
     const contributors = input.facts.contributorBuckets.map((bucket) =>
       projectBucket(bucket, this.#policy))
@@ -185,6 +188,8 @@ class V1IncidentRecordProjector implements IncidentRecordProjector {
       runtime_run_id: this.#runtimeRunId,
       ...(correlation === undefined ? {} : { correlation }),
       payload: {
+        ...(input.rootTrigger === undefined ? {} : { root_trigger: input.rootTrigger }),
+        ...(evidenceDetailsOmitted === 0 ? {} : { evidence_details_omitted: evidenceDetailsOmitted }),
         ...(rootIncidentSequence === undefined
           ? {}
           : { root_incident_sequence: rootIncidentSequence }),
@@ -215,6 +220,11 @@ class V1IncidentRecordProjector implements IncidentRecordProjector {
     })
 
     let record = buildRecord()
+    if (jsonUtf8ByteLength(record) > this.#policy.maxIncidentRecordBytes) {
+      evidenceDetailsOmitted += summarizeBuckets(contributors) + summarizeBuckets(consequences)
+      if (trigger.evidence !== undefined) { trigger = summarizeFailureFact(trigger); evidenceDetailsOmitted++ }
+      record = buildRecord()
+    }
     while (
       jsonUtf8ByteLength(record) > this.#policy.maxIncidentRecordBytes
     ) {
@@ -335,9 +345,10 @@ function validSemanticIdentifiers(
     ))
 }
 
-function projectFailureFactV2(fact: FailureFact): FailureFactV2 {
+export function projectFailureFactV2(fact: FailureFact): FailureFactV2 {
   const correlation = projectCorrelationV1(fact.correlation)
   const common = {
+    ...(fact.evidence === undefined ? {} : { evidence: fact.evidence }),
     kind: fact.kind,
     stage: fact.stage,
     recovery_disposition: fact.recoveryDisposition,
@@ -420,7 +431,7 @@ function projectFailureFactV2(fact: FailureFact): FailureFactV2 {
       return deepFreezeJson({
         ...common,
         kind: fact.kind,
-        payload: { unclassified: { exception: fact.payload.unclassified.exception } },
+        payload: { unclassified: {} },
       })
   }
 }
@@ -430,6 +441,7 @@ function projectBucket(
   policy: IncidentPolicy,
 ): FailureFactBucketV2 {
   return deepFreezeJson({
+    ...(bucket.causeSignature === undefined ? {} : { cause_signature: bucket.causeSignature }),
     fingerprint: boundedUtf8String(
       bucket.fingerprint.replaceAll('-', '_'),
       'failure fingerprint',
@@ -505,4 +517,15 @@ export function projectDiagnosticsHealthV1(
       'trace coalesced health',
     ),
   })
+}
+
+function summarizeBuckets(buckets: FailureFactBucketV2[]): number {
+  let count = 0
+  for (let index = 0; index < buckets.length; index++) {
+    const bucket = buckets[index]!
+    if (bucket.representative.evidence === undefined) continue
+    buckets[index] = Object.freeze({ ...bucket, representative: summarizeFailureFact(bucket.representative) })
+    count++
+  }
+  return count
 }

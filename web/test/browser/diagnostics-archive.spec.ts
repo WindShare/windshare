@@ -42,7 +42,7 @@ test('ordinary startup lists summaries without reading or encoding archived log 
       '\n' + JSON.stringify({ message: 'x'.repeat(5 * 1_024 * 1_024) }) + '\n'
     for (let index = 0; index < 3; index++) {
       await archive.save({
-        id: 'capture-' + index, scope: index === 0 ? '/' : '/other-' + index, savedAt: Date.now() - index,
+        id: 'capture-' + index, scope: index === 0 ? '/' : '/other-' + index, captureState: 'sealed', savedAt: Date.now() - index,
         file: { name: 'diagnostics.ndjson', runtimeRunId, text },
       })
     }
@@ -69,7 +69,7 @@ test('archive retention removes both summaries and bodies', async ({ page }) => 
     const { DIAGNOSTICS_ARCHIVE_MAX_AGE_MS } = await import(/* @vite-ignore */ policyPath) as typeof import('../../src/diagnostics/browser/archive')
     let now = Date.now()
     const oldCapture = {
-      id: 'original', scope: '/', savedAt: now,
+      id: 'original', scope: '/', captureState: 'sealed' as const, savedAt: now,
       file: { name: 'diagnostics.ndjson', runtimeRunId: 'AQAAAAAAAAAAAAAAAAAAAA', text: '原始记录' },
     }
     const archive = new IndexedDBDiagnosticsArchive(() => indexedDB, () => now)

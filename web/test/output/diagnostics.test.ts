@@ -24,7 +24,7 @@ import { TargetOwnershipUnknownError } from '../../src/output/persistent-tree/er
 import { checkpointAuthorityObserver } from '../../src/output/file-system-access/session-diagnostics'
 
 describe('output diagnostics', () => {
-  it('records a stage-fixed privacy-safe consequence without retaining the exception', () => {
+  it('records a stage-fixed consequence with a bounded snapshot independent of classification', () => {
     const scope = createIncidentScopeIssuer().open('receive')
     const facts: FailureFact[] = []
     const relations: FailureFactRelation[] = []
@@ -64,8 +64,8 @@ describe('output diagnostics', () => {
     ])
     const encoded = JSON.stringify(facts)
     expect(encoded).not.toContain('private-operation')
-    expect(encoded).not.toContain('private path')
-    expect(encoded).not.toContain('TargetOwnershipUnknownError')
+    expect(facts[0]?.evidence?.exception.cause?.message).toBe('private path and name')
+    expect(facts[0]?.evidence?.exception.errorName).toBe(error.name)
   })
 
   it('keeps browser exception classification closed and does not trust arbitrary names', () => {

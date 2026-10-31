@@ -45,9 +45,9 @@ describe('direct weekly network fixtures', () => {
         failureClassification: {
           fact: {
             kind: 'unclassified',
-            payload: { unclassified: { exception: {
-              errorName: 'Error', message: 'physical socket failed', cause: expect.stringContaining('connection reset'),
-            } } },
+            evidence: { exception: {
+              errorName: 'Error', message: 'physical socket failed', cause: { message: 'connection reset' },
+            } },
           },
         },
       },

@@ -1,3 +1,4 @@
+import type { FailureEvidence } from '../diagnostics/failure/evidence'
 import type { Ed25519Observation } from '../crypto/ed25519'
 import type { LaneTermination } from './runtime-types'
 import type { CancellationTraceReason, OperationRequestTrace } from './operation-diagnostics'
@@ -66,6 +67,7 @@ export type ProtocolOperationTraceEvent =
     }>
   | Readonly<{
       eventName: 'protocol_operation'
+      evidence?: FailureEvidence
       transition: 'request_sent' | 'request_send_failed' | 'admission_ready' | 'admission_abandoned'
         | 'send_queued' | 'send_sealing' | 'send_sending' | 'send_completed'
         | 'send_withdrawn' | 'send_abandoned' | 'send_failed'
@@ -232,6 +234,7 @@ export type ProtocolTraceObserver = (event: ProtocolTraceEvent) => void
  * emission point. An absent observer means no trace-only object is constructed.
  */
 export interface ProtocolTraceSource {
+  readonly failure?: (error: unknown, operation: string, correlation: FailureCorrelation, relation?: 'consequence') => void
   readonly current: ProtocolTraceObserver | undefined
 }
 

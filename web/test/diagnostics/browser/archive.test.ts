@@ -47,9 +47,9 @@ describe('diagnostic archive retention', () => {
 })
 
 function summary(id: string, savedAt: number, byteLength = 8): DiagnosticCaptureSummary {
-  return { id, savedAt, scope: '/share', byteLength }
+  return { id, savedAt, scope: '/share', captureState: 'sealed', byteLength }
 }
 
 function capture(id: string, text: string): SavedDiagnosticCapture {
-  return { id, savedAt: NOW, scope: '/share', file: { name: 'diagnostics.ndjson', runtimeRunId: RUN_ID, text } }
+  return { id, savedAt: NOW, scope: '/share', captureState: 'sealed', file: { name: 'diagnostics.ndjson', runtimeRunId: RUN_ID, text } }
 }

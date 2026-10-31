@@ -1,3 +1,5 @@
+import { observeProtocolFailure } from './failure-diagnostics'
+import { bindFailureEvidence, captureFailureEvidence } from '../diagnostics/failure/evidence'
 import type { ShareDescriptor } from '../catalog/records'
 import type { FrameChannel } from '../contracts/channel'
 import { CborError } from '../protocol/cbor'
@@ -27,6 +29,7 @@ export class SessionLane {
   readonly #sessionId: Uint8Array<ArrayBuffer>
   readonly #onClosed: (lane: SessionLane, termination: LaneTermination) => void
   readonly #pumpTask: Promise<void>
+  readonly #protocolTrace: ProtocolTraceSource | undefined
   #closed = false
   #termination: LaneTermination | undefined
   #closeTask: Promise<void> | undefined
@@ -42,6 +45,7 @@ export class SessionLane {
     readonly onClosed: (lane: SessionLane, termination: LaneTermination) => void
     readonly protocolTrace?: ProtocolTraceSource
   }) {
+    this.#protocolTrace = options.protocolTrace
     this.id = options.laneId
     this.epoch = options.laneEpoch
     this.#channel = options.channel
@@ -61,12 +65,15 @@ export class SessionLane {
       }),
       {
         onFailure: reason => {
-          this.#recordFailure(new SessionRuntimeError('lane', 'Session lane delivery failed', { cause: reason }))
+          const failure = new SessionRuntimeError('lane', 'Session lane delivery failed', { cause: reason })
+          bindFailureEvidence(failure, captureFailureEvidence(reason, { operation: 'session.send' }))
+          this.#recordFailure(failure)
           this.#shutdown().catch(() => undefined)
         },
-        observe: (message, transition) => options.protocolTrace?.current?.({
+        observe: (message, transition, evidence) => options.protocolTrace?.current?.({
           eventName: 'protocol_operation',
           transition,
+          ...(evidence === undefined ? {} : { evidence }),
           requestKind: protocolMessageKindV1(message.kind),
           correlation: Object.freeze({
             protocolSessionId: createProtocolSessionIdentity(this.#sessionId),
@@ -102,14 +109,17 @@ export class SessionLane {
     if (!this.#closed) {
       this.#closed = true
       this.writer.fail(new SessionRuntimeError('lane', 'Session lane closed'))
-      await this.#reader.cancel().catch(() => undefined)
+      await this.#reader.cancel().catch(error => this.#observeCleanup(error, 'session.reader.cancel'))
     }
     try {
       this.#reader.releaseLock()
     } catch {
       // The reader pump may have observed the cancellation first.
     }
-    await this.#channel.close()
+    try { await this.#channel.close() } catch (error) {
+      this.#observeCleanup(error, 'session.channel.close')
+      throw error
+    }
     await this.#pumpTask
   }
 
@@ -119,17 +129,30 @@ export class SessionLane {
     } catch (cause) {
       // Read failure also rejects pending writes. Give them the same physical
       // failure boundary without reclassifying later authentication or parsing.
-      throw new SessionRuntimeError('lane', 'Session lane receive failed', { cause })
+      const failure = new SessionRuntimeError('lane', 'Session lane receive failed', { cause })
+      bindFailureEvidence(failure, captureFailureEvidence(cause, { operation: 'session.read' }))
+      throw failure
     }
   }
 
   #recordFailure(failure: unknown): void {
     const kind = isFatalSessionFailure(failure) ? 'authenticated_failure' : 'physical_failure'
+    observeProtocolFailure(this.#protocolTrace, failure, 'session.receive', {
+      protocolSessionId: createProtocolSessionIdentity(this.#sessionId),
+      lane: Object.freeze({ id: this.id, epoch: this.epoch }),
+    }, { closed: this.#closed }, this.#termination !== undefined && kind !== 'authenticated_failure' ? 'consequence' : undefined)
     // Cleanup must not overwrite an observed failure. Authentication still wins
     // when verification of an already-read frame finishes during local closure.
     if (this.#termination === undefined || kind === 'authenticated_failure') {
       this.#termination = Object.freeze({ kind, failure })
     }
+  }
+
+  #observeCleanup(error: unknown, operation: string): void {
+    observeProtocolFailure(this.#protocolTrace, error, operation, {
+      protocolSessionId: createProtocolSessionIdentity(this.#sessionId),
+      lane: Object.freeze({ id: this.id, epoch: this.epoch }),
+    }, { termination: this.#termination?.kind ?? 'unknown' }, 'consequence')
   }
 
   async #pump(): Promise<void> {
@@ -163,21 +186,21 @@ export class SessionLane {
       this.#recordFailure(error)
       this.writer.fail(error)
     } finally {
+      if (this.#termination === undefined) {
+        this.#recordFailure(new SessionRuntimeError('lane', 'Session lane receive stream ended unexpectedly'))
+      }
+      const termination = this.#termination!
       this.#closed = true
-      this.#termination ??= Object.freeze({
-        kind: 'physical_failure',
-        failure: new SessionRuntimeError('lane', 'Session lane receive stream ended unexpectedly'),
-      })
-      this.writer.fail(this.#termination.kind === 'closed'
+      this.writer.fail(termination.kind === 'closed'
         ? new SessionRuntimeError('lane', 'Session lane closed')
-        : this.#termination.failure)
+        : termination.failure)
       try {
         this.#reader.releaseLock()
       } catch {
         // Another close path may already have released the only reader.
       }
-      await this.#channel.close().catch(() => undefined)
-      this.#onClosed(this, this.#termination)
+      await this.#channel.close().catch(error => this.#observeCleanup(error, 'session.channel.close'))
+      this.#onClosed(this, termination)
     }
   }
 }

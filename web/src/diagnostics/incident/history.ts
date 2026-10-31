@@ -18,6 +18,8 @@ export interface IncidentHistoryPort extends IncidentHistoryReadPort {
 }
 
 export class BoundedIncidentHistory implements IncidentHistoryPort {
+  readonly #listeners = new Set<() => void>()
+  readonly #maximumRecordBytes: number
   readonly #capacity: number
   readonly #records: IncidentRecordV2[] = []
 
@@ -25,7 +27,13 @@ export class BoundedIncidentHistory implements IncidentHistoryPort {
     const snapshot = policy === DEFAULT_INCIDENT_POLICY
       ? DEFAULT_INCIDENT_POLICY
       : createIncidentPolicy(policy)
+    this.#maximumRecordBytes = snapshot.maxIncidentRecordBytes
     this.#capacity = snapshot.maxIncidentHistoryRecords
+  }
+
+  subscribe = (listener: () => void): (() => void) => {
+    this.#listeners.add(listener)
+    return () => { this.#listeners.delete(listener) }
   }
 
   nextAppendEvictionCount(): bigint {
@@ -36,12 +44,16 @@ export class BoundedIncidentHistory implements IncidentHistoryPort {
     if (
       record.schema_version !== INCIDENT_RECORD_SCHEMA_VERSION ||
       record.event !== 'failure_incident' ||
-      !isDeeplyFrozen(record)
+      !isDeeplyFrozen(record) ||
+      new TextEncoder().encode(JSON.stringify(record)).byteLength > this.#maximumRecordBytes
     ) {
       throw new TypeError('Incident history accepts only immutable V2 incident records')
     }
     if (this.#records.length >= this.#capacity) this.#records.shift()
     this.#records.push(record)
+    for (const listener of this.#listeners) {
+      try { listener() } catch { /* History remains available if a subscriber fails. */ }
+    }
   }
 
   last(): IncidentRecordV2 | null {

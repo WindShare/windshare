@@ -1,3 +1,4 @@
+import type { FailureEvidenceHistorySnapshot, FailureObservation } from '../failure/history'
 import type { IncidentLink } from '../incident/reporter'
 import { MAX_SAFE_STRING_UTF8_BYTES } from '../incident/policy'
 import type {
@@ -61,6 +62,13 @@ export interface DiagnosticBundleHeaderV2 {
   readonly runtime: RuntimeIdentityV1
   readonly runtime_run_id: string
   readonly time: string
+  readonly failure_evidence_omitted?: string
+  readonly export_omitted?: Readonly<{
+    incidents_summarized: number
+    failure_evidence_records: number
+    local_output_failures: number
+    trace_events: number
+  }>
   readonly diagnostics_health_at_export: DiagnosticsHealthV1
 }
 
@@ -71,12 +79,15 @@ export interface DiagnosticBundleIncidentLineV2 {
 
 export interface DiagnosticBundleLocalOutputFailureLineV2 {
   readonly line_type: 'local_output_operation_failure'
-  readonly owning_incident: Readonly<{
-    readonly incident_sequence: string
-    readonly scope: IncidentRecordV2['payload']['scope']
-  }>
+  readonly owning_scope: IncidentRecordV2['payload']['scope']
+  readonly owning_incident_sequence?: string
   readonly correlation: CorrelationV1
   readonly record: LocalOutputOperationFailureV1
+}
+
+export interface DiagnosticBundleFailureEvidenceLineV2 {
+  readonly line_type: 'failure_evidence'
+  readonly record: FailureObservation
 }
 
 export interface DiagnosticBundleTraceCaptureLineV2 {
@@ -90,6 +101,7 @@ export interface DiagnosticBundleTraceEventLineV2 {
 }
 
 export interface DiagnosticBundleV2 {
+  readonly failureEvidence: readonly DiagnosticBundleFailureEvidenceLineV2[]
   readonly header: DiagnosticBundleHeaderV2
   readonly incidents: readonly DiagnosticBundleIncidentLineV2[]
   readonly localOutputFailures: readonly DiagnosticBundleLocalOutputFailureLineV2[]
@@ -107,6 +119,7 @@ export interface DiagnosticBundleSnapshotInput {
   readonly identity: DiagnosticBundleIdentityV2
   readonly time: string
   readonly incidents: readonly IncidentRecordV2[]
+  readonly failureEvidence?: FailureEvidenceHistorySnapshot
   readonly localOutputFailures?: readonly CorrelatedLocalOutputOperationFailureV1[]
   readonly status: DiagnosticsStatusV2
   readonly healthAtExport: DiagnosticsHealthV1
@@ -192,7 +205,6 @@ export class DiagnosticBundleProjectorV2 {
     const localOutputFailures = Object.freeze(
       [...(input.localOutputFailures ?? [])]
         .map((record) => projectLocalOutputFailureLine(record, incidentRecords))
-        .filter((line): line is DiagnosticBundleLocalOutputFailureLineV2 => line !== undefined)
         .sort(compareLocalOutputFailures),
     )
 
@@ -222,9 +234,13 @@ export class DiagnosticBundleProjectorV2 {
         runtime: identity.runtime,
         runtime_run_id: identity.runtimeRunId,
         time: utcRfc3339(input.time, 'diagnostic bundle time'),
+        ...(input.failureEvidence === undefined ? {} : { failure_evidence_omitted: input.failureEvidence.omitted }),
         diagnostics_health_at_export: healthAtExport,
       }),
       incidents,
+      failureEvidence: Object.freeze((input.failureEvidence?.records ?? []).map(record => Object.freeze({
+        line_type: 'failure_evidence' as const, record,
+      }))),
       localOutputFailures,
       ...(traceCapture === undefined ? {} : { traceCapture }),
       traceEvents,
@@ -299,21 +315,18 @@ function validateLocalOutputFailure(
 function projectLocalOutputFailureLine(
   projection: CorrelatedLocalOutputOperationFailureV1,
   incidents: readonly IncidentRecordV2[],
-): DiagnosticBundleLocalOutputFailureLineV2 | undefined {
+): DiagnosticBundleLocalOutputFailureLineV2 {
   validateLocalOutputFailure(projection)
   const owner = incidents.filter((incident) =>
     incident.payload.root_incident_sequence === undefined &&
     incident.payload.scope.scope_kind === projection.owningScope.scopeKind &&
     incident.payload.scope.scope_sequence === projection.owningScope.scopeSequence &&
     incidentContainsNativeOutputFailure(incident))
-  if (owner.length !== 1) return undefined
-  const incident = owner[0]!
+  const incident = owner.length === 1 ? owner[0] : undefined
   return deepFreezeJson({
     line_type: 'local_output_operation_failure' as const,
-    owning_incident: {
-      incident_sequence: incident.sequence,
-      scope: incident.payload.scope,
-    },
+    owning_scope: { scope_kind: projection.owningScope.scopeKind, scope_sequence: projection.owningScope.scopeSequence },
+    ...(incident === undefined ? {} : { owning_incident_sequence: incident.sequence }),
     correlation: projection.correlation,
     record: projection.failure,
   })
@@ -324,8 +337,8 @@ function compareLocalOutputFailures(
   right: DiagnosticBundleLocalOutputFailureLineV2,
 ): number {
   return compareDecimal(
-    left.owning_incident.incident_sequence,
-    right.owning_incident.incident_sequence,
+    left.owning_scope.scope_sequence,
+    right.owning_scope.scope_sequence,
   ) ||
     (left.correlation.protocol_generation ?? 0) -
       (right.correlation.protocol_generation ?? 0) ||

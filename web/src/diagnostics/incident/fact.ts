@@ -1,5 +1,4 @@
-import type { DiagnosticExceptionProjection } from '../exception'
-import { isIncidentExceptionEvidence, snapshotIncidentException } from './exception-evidence'
+import { evidenceFromInput, isFailureEvidence, type FailureEvidence, type FailureEvidenceInput } from '../failure/evidence'
 import {
   CheckpointFaultCode,
   OutputFaultCode,
@@ -159,7 +158,7 @@ export interface FailureFactByKind {
     }>
   }>
   readonly unclassified: Readonly<{
-    unclassified: Readonly<{ exception: DiagnosticExceptionProjection | null }>
+    unclassified: Readonly<Record<string, never>>
   }>
 }
 
@@ -170,6 +169,7 @@ export type FailureFact<Kind extends FailureFactKind = FailureFactKind> =
         stage: FailureStage
         recoveryDisposition: RecoveryDisposition
         correlation?: FailureCorrelation
+        evidence?: FailureEvidence
         payload: FailureFactByKind[Kind]
       }>
     : never
@@ -228,7 +228,7 @@ export function faultFailureFact(input: {
   readonly recoveryDisposition: RecoveryDisposition
   readonly fault: Fault
   readonly correlation?: FailureCorrelation
-}): FailureFact<'fault'> {
+} & FailureEvidenceInput): FailureFact<'fault'> {
   if (!isClosedImmutableFault(input.fault)) {
     throw new TypeError('Fault failure facts require an immutable normalized fault')
   }
@@ -238,6 +238,7 @@ export function faultFailureFact(input: {
     input.recoveryDisposition,
     Object.freeze({ fault: input.fault }),
     input.correlation,
+    input,
   )
 }
 
@@ -245,7 +246,7 @@ export function protocolFailureFact(input: {
   readonly stage: FailureStage
   readonly recoveryDisposition: RecoveryDisposition
   readonly protocolFailure: ReceivedProtocolError
-}): FailureFact<'protocol_failure'> {
+} & FailureEvidenceInput): FailureFact<'protocol_failure'> {
   const protocolFailure = createReceivedProtocolError(input.protocolFailure)
   return createFact(
     'protocol_failure',
@@ -253,6 +254,7 @@ export function protocolFailureFact(input: {
     input.recoveryDisposition,
     Object.freeze({ protocolFailure }),
     protocolFailure.correlation,
+    input,
   )
 }
 
@@ -263,7 +265,7 @@ export function peerFailureFact(input: {
   readonly code: TypedPeerErrorCode
   readonly retryable: boolean
   readonly correlation?: FailureCorrelation
-}): FailureFact<'peer_failure'> {
+} & FailureEvidenceInput): FailureFact<'peer_failure'> {
   if (
     !isMember(CONNECTIVITY_FAILURE_SCOPES, input.scope) ||
     !isMember(TYPED_PEER_ERROR_CODES, input.code)
@@ -282,6 +284,7 @@ export function peerFailureFact(input: {
       }),
     }),
     input.correlation,
+    input,
   )
 }
 
@@ -291,7 +294,7 @@ export function nativeOutputFailureFact(input: {
   readonly nativeClass: NativeFailureClass
   readonly code?: OutputFaultCodeValue | CheckpointFaultCodeValue
   readonly correlation?: FailureCorrelation
-}): FailureFact<'native_output_failure'> {
+} & FailureEvidenceInput): FailureFact<'native_output_failure'> {
   if (!isMember(NATIVE_FAILURE_CLASSES, input.nativeClass)) {
     throw new TypeError('Native output failure class is invalid')
   }
@@ -312,6 +315,7 @@ export function nativeOutputFailureFact(input: {
       }),
     }),
     input.correlation,
+    input,
   )
 }
 
@@ -321,7 +325,7 @@ export function lifecycleFailureFact(input: {
   readonly kind: ReceiveLifecycleKind
   readonly reason?: LifecycleFailureReason
   readonly correlation?: FailureCorrelation
-}): FailureFact<'lifecycle_failure'> {
+} & FailureEvidenceInput): FailureFact<'lifecycle_failure'> {
   if (!isMember(lifecycleKinds, input.kind) || !isLifecycleReason(input.kind, input.reason)) {
     throw new TypeError('Lifecycle failure is invalid')
   }
@@ -336,6 +340,7 @@ export function lifecycleFailureFact(input: {
       }),
     }),
     input.correlation,
+    input,
   )
 }
 
@@ -344,15 +349,14 @@ export function unclassifiedFailureFact(input: {
   readonly recoveryDisposition: RecoveryDisposition
   readonly error?: unknown
   readonly correlation?: FailureCorrelation
-}): FailureFact<'unclassified'> {
+} & FailureEvidenceInput): FailureFact<'unclassified'> {
   return createFact(
     'unclassified',
     input.stage,
     input.recoveryDisposition,
-    Object.freeze({ unclassified: Object.freeze({
-      exception: Object.hasOwn(input, 'error') ? snapshotIncidentException(input.error) : null,
-    }) }),
+    Object.freeze({ unclassified: Object.freeze({}) }),
     input.correlation,
+    input,
   )
 }
 
@@ -363,7 +367,7 @@ export function isFailureFact(value: unknown): value is FailureFact {
     !hasExactOptionalKeys(
       value,
       ['kind', 'stage', 'recoveryDisposition', 'payload'],
-      ['correlation'],
+      ['correlation', 'evidence'],
     )
   ) {
     return false
@@ -379,6 +383,7 @@ export function isFailureFact(value: unknown): value is FailureFact {
         !isFailureCorrelation(value.correlation)
       )
     ) ||
+    (value.evidence !== undefined && !isFailureEvidence(value.evidence)) ||
     !isRecord(value.payload) ||
     !Object.isFrozen(value.payload)
   ) {
@@ -420,9 +425,7 @@ export function isFailureFact(value: unknown): value is FailureFact {
         hasExactKeys(value.payload, ['unclassified']) &&
         isRecord(value.payload.unclassified) &&
         Object.isFrozen(value.payload.unclassified) &&
-        hasExactKeys(value.payload.unclassified, ['exception']) &&
-        (value.payload.unclassified.exception === null ||
-          isIncidentExceptionEvidence(value.payload.unclassified.exception))
+        hasExactKeys(value.payload.unclassified, [])
       )
   }
 }
@@ -442,11 +445,13 @@ function createFact<Kind extends FailureFactKind>(
   recoveryDisposition: RecoveryDisposition,
   payload: FailureFactByKind[Kind],
   correlation?: FailureCorrelation,
+  input?: FailureEvidenceInput,
 ): FailureFact<Kind> {
   if (!isMember(FAILURE_STAGES, stage)) throw new RangeError('Unknown failure stage')
   if (!isMember(RECOVERY_DISPOSITIONS, recoveryDisposition)) {
     throw new RangeError('Unknown recovery disposition')
   }
+  const evidence = evidenceFromInput(input, stage)
   const fact = Object.freeze({
     kind,
     stage,
@@ -454,6 +459,7 @@ function createFact<Kind extends FailureFactKind>(
     ...(correlation === undefined
       ? {}
       : { correlation: createFailureCorrelation(correlation) }),
+    ...(evidence === undefined ? {} : { evidence }),
     payload,
   }) as FailureFact<Kind>
   if (!isFailureFact(fact)) throw new TypeError('Failure fact is invalid')

@@ -85,6 +85,7 @@ implements LocalOutputOperationFailureReadPort, LocalOutputOperationFailureDiagn
   // Raw thrown values stay on the synchronous milestone so count-bounded history
   // cannot accidentally extend the lifetime of an arbitrarily large object graph.
   readonly #records: CorrelatedLocalOutputOperationFailureV1[] = []
+  readonly #listeners = new Set<() => void>()
   #generation = 0
 
   constructor(capacity = MAX_RETAINED_LOCAL_OUTPUT_OPERATION_FAILURES) {
@@ -138,6 +139,11 @@ implements LocalOutputOperationFailureReadPort, LocalOutputOperationFailureDiagn
     })
   }
 
+  subscribe = (listener: () => void): (() => void) => {
+    this.#listeners.add(listener)
+    return () => { this.#listeners.delete(listener) }
+  }
+
   snapshot(): readonly CorrelatedLocalOutputOperationFailureV1[] {
     return Object.freeze([...this.#records])
   }
@@ -150,6 +156,9 @@ implements LocalOutputOperationFailureReadPort, LocalOutputOperationFailureDiagn
   #append(record: CorrelatedLocalOutputOperationFailureV1): void {
     if (this.#records.length >= this.#capacity) this.#records.shift()
     this.#records.push(record)
+    for (const listener of this.#listeners) {
+      try { listener() } catch { /* Diagnostics cannot interrupt storage. */ }
+    }
   }
 }
 

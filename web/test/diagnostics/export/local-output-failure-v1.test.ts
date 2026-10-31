@@ -29,7 +29,7 @@ import {
 const PRIVATE_ARTIFACT_PATH = Object.freeze(['C:', 'Users', 'private', 'secret.bin'])
 
 describe('local output failure bundle projection', () => {
-  it('joins two detailed failures to exactly one incident each in deterministic order', () => {
+  it('links published incidents and retains silent output failures in deterministic order', () => {
     const firstProtocol = createFailureIdentity(
       'protocol_session',
       new Uint8Array(16).fill(2),
@@ -102,7 +102,7 @@ describe('local output failure bundle projection', () => {
     const encoded = encodeDiagnosticBundleNdjson(bundle)
 
     expect(bundle.localOutputFailures.map((line) => ({
-      incident: line.owning_incident.incident_sequence,
+      incident: line.owning_incident_sequence,
       operation: line.correlation.receive_operation_id,
       transfer: line.correlation.transfer_job_id,
       output: line.correlation.output_session_id,
@@ -125,12 +125,15 @@ describe('local output failure bundle projection', () => {
         protocol: 'AwMDAwMDAwMDAwMDAwMDAw',
         generation: 7,
       },
+      { incident: undefined, operation: 'orphan-operation', transfer: 'orphan-job', output: 'orphan-output',
+        protocol: undefined, generation: undefined },
     ])
-    for (const line of bundle.localOutputFailures) {
+    expect(bundle.localOutputFailures.at(-1)?.owning_scope.scope_sequence).toBe('99')
+    for (const line of bundle.localOutputFailures.filter(line => line.owning_incident_sequence !== undefined)) {
       expect(bundle.incidents.filter((incident) =>
-        incident.record.sequence === line.owning_incident.incident_sequence &&
-        incident.record.payload.scope.scope_kind === line.owning_incident.scope.scope_kind &&
-        incident.record.payload.scope.scope_sequence === line.owning_incident.scope.scope_sequence))
+        incident.record.sequence === line.owning_incident_sequence &&
+        incident.record.payload.scope.scope_kind === line.owning_scope.scope_kind &&
+        incident.record.payload.scope.scope_sequence === line.owning_scope.scope_sequence))
         .toHaveLength(1)
     }
     expect(encoded).toContain('"message":"checkpoint transaction aborted"')
@@ -210,7 +213,7 @@ describe('local output failure bundle projection', () => {
     for (const value of [
       projected.exception.message,
       projected.exception.stack,
-      projected.exception.cause,
+      projected.exception.cause?.thrownValue,
     ]) {
       expect(value).not.toBeNull()
       expect(utf8ByteLength(value ?? '')).toBeLessThanOrEqual(

@@ -358,6 +358,7 @@ async function settleFileFault(
     if (isWholeOutputFault(failure.fault.scope)) return failure
     const promoted = promoteFaultScope(failure.fault, FaultScope.OutputPause)
     return normalizedFileTransferFault(promoted, {
+      error: failure.diagnostic,
       ...(options.incidentScope === undefined
         ? {}
         : { incidentScope: options.incidentScope }),
@@ -387,6 +388,7 @@ async function settleFileFault(
           ? {}
           : { incidentScope: options.incidentScope }),
         stage: 'settlement',
+        error: failure.diagnostic,
         materializationFailureReason: failure.materializationFailureReason,
       },
     )
@@ -399,7 +401,8 @@ async function settleFileFault(
             ? {}
             : { incidentScope: options.incidentScope }),
           stage: 'settlement',
-          materializationFailureReason: failure.materializationFailureReason,
+          error: failure.diagnostic,
+        materializationFailureReason: failure.materializationFailureReason,
         },
       )
     : failure
@@ -435,6 +438,7 @@ async function pauseCanceledFileTransfer(
             ? {}
             : { incidentScope: options.incidentScope }),
           stage: 'settlement',
+          error: pauseFailure,
           materializationFailureReason: 'output-write-failed',
         },
       ),
@@ -497,6 +501,7 @@ function throwTransferOrReleaseFailure(
   const governing = joinFaults(primaryFailure.fault, releaseFailure.fault)
   if (governing === undefined) throw primaryFailure.diagnostic
   throw normalizedFileTransferFault(governing, {
+    error: primaryFailure.diagnostic,
     ...(incidentScope === undefined ? {} : { incidentScope }),
     stage: 'settlement',
     materializationFailureReason: primaryFailure.materializationFailureReason,
