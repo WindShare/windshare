@@ -1,5 +1,6 @@
 import { MAX_FAILURE_OPERATION_BYTES, FAILURE_SIGNATURE_HEX_LENGTH } from '../failure/evidence'
 import { MAX_FAILURE_SUMMARY_TEXT_BYTES } from '../failure/summary'
+import { isBoundedDiagnosticText } from '../exception/text'
 import { BROWSER_CONNECTIVITY_ATTEMPT_STAGES } from '../../connectivity/diagnostics'
 import { validateProtocolErrorContentV2 } from './protocol-error-v2'
 import { classifyPeerAttemptFailure } from '../../connectivity/peer-failure'
@@ -618,10 +619,11 @@ function validateFailureSummary(value: unknown): void {
   const summary = recordValue(value, 'failure evidence')
   exactKeys(summary, ['id', 'operation', 'signature', 'message'], [], 'failure evidence')
   decimalUint64(summary.id, 'failure evidence id')
-  boundedConnectionText(summary.operation, MAX_FAILURE_OPERATION_BYTES, 'failure operation')
+  if (!isBoundedDiagnosticText(summary.operation, MAX_FAILURE_OPERATION_BYTES) || summary.operation.length === 0) {
+    throw new TypeError('failure operation must be non-empty bounded diagnostic text')
+  }
   boundedConnectionText(summary.signature, FAILURE_SIGNATURE_HEX_LENGTH, 'failure signature')
-  if (summary.message !== null && (typeof summary.message !== 'string' ||
-      new TextEncoder().encode(summary.message).byteLength > MAX_FAILURE_SUMMARY_TEXT_BYTES)) {
+  if (summary.message !== null && !isBoundedDiagnosticText(summary.message, MAX_FAILURE_SUMMARY_TEXT_BYTES)) {
     throw new TypeError('failure summary message exceeds its budget')
   }
 }

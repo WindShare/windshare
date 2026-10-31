@@ -33,7 +33,7 @@ export function captureFailureEvidence(error: unknown, input: Omit<FailureEviden
       if (cause !== undefined) { bindFailureEvidence(error, cause); return cause }
     }
   } catch { /* Hostile exception access is captured below as unavailable evidence. */ }
-  const operation = boundedDiagnosticText(input.operation ?? 'unknown', MAX_FAILURE_OPERATION_BYTES)
+  const operation = boundedDiagnosticText(input.operation || 'unknown', MAX_FAILURE_OPERATION_BYTES)
   const exception = projectDiagnosticException(error)
   const { context, contextTruncated } = captureContext(input.context)
   const evidence: FailureEvidence = Object.freeze({
@@ -84,10 +84,13 @@ function captureContext(input: FailureEvidenceInput['context']) {
   try {
     // Callers supply a small record of identities/state, never an arbitrary object graph.
     let count = 0
-    for (const key in input) {
+    const source = input ?? {}
+    for (const key of Object.keys(source)) {
       if (++count > MAX_CONTEXT_FIELDS) { contextTruncated = true; break }
-      const value = input[key]
       const boundedKey = boundedDiagnosticText(key, MAX_CONTEXT_TEXT_BYTES)
+      // Truncation can alias distinct fields; preserve the first without losing later evidence.
+      if (Object.hasOwn(context, boundedKey)) { contextTruncated = true; continue }
+      const value = source[key]
       const bounded = typeof value === 'string' ? boundedDiagnosticText(value, MAX_CONTEXT_TEXT_BYTES) : value
       if (bounded === undefined || (typeof bounded === 'number' && !Number.isFinite(bounded))) continue
       if (bounded !== value || boundedKey !== key) contextTruncated = true
