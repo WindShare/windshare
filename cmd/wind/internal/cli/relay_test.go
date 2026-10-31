@@ -89,3 +89,18 @@ func TestRelayCommandsInstallThroughEngineWithoutAdministratorAuthority(t *testi
 		})
 	}
 }
+
+func TestRelayFlagHelpAlignsOptionsWithoutEscapedTabs(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr}
+	code := app.Run(t.Context(), []string{"relay", "add", "https://relay.example", "--help"})
+	app.closeTerminalOutput()
+	help := stderr.String()
+	if code != ExitUsage || stdout.Len() != 0 || !strings.HasPrefix(help, "Usage of relay add:\n") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), help)
+	}
+	if strings.Contains(help, `\t`) || strings.Contains(help, "\t") ||
+		!strings.Contains(help, "\n  -no-browser\n        display the approval URL without opening a browser\n") {
+		t.Fatalf("relay help renders flag layout tabs: %q", help)
+	}
+}
