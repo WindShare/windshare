@@ -120,7 +120,7 @@ func TestCanvasSamplesWidthForEveryRender(t *testing.T) {
 	columns = 2
 	canvas.Insert([]Line{Plain("log")})
 
-	want := clearTerminalLine + "界a" + clearTerminalLine + "lo\n" + clearTerminalLine + "界"
+	want := clearTerminalLine + "界a" + clearTerminalLine + "log\n" + clearTerminalLine + "界"
 	if got := output.String(); got != want {
 		t.Fatalf("output = %q, want %q", got, want)
 	}
@@ -157,7 +157,7 @@ func TestCanvasUsesInjectedCellWidth(t *testing.T) {
 	}
 }
 
-func TestCanvasEscapesBeforeClippingAndStyling(t *testing.T) {
+func TestCanvasEscapesCompleteRecordsBeforeStyling(t *testing.T) {
 	var output bytes.Buffer
 	canvas := New(Config{
 		Writer:       &output,
@@ -165,7 +165,7 @@ func TestCanvasEscapesBeforeClippingAndStyling(t *testing.T) {
 	})
 	canvas.Insert([]Line{NewLine(Span{Text: "x\x1b[2J\ny\u202e", Style: StyleError})})
 
-	want := "\x1b[31mx\\x1b[2J\\n\x1b[0m\n"
+	want := "\x1b[31mx\\x1b[2J\\ny\\u202e\x1b[0m\n"
 	if got := output.String(); got != want {
 		t.Fatalf("output = %q, want %q", got, want)
 	}
@@ -173,6 +173,22 @@ func TestCanvasEscapesBeforeClippingAndStyling(t *testing.T) {
 	semantic = strings.ReplaceAll(semantic, "\x1b[0m", "")
 	if strings.ContainsRune(semantic, '\x1b') {
 		t.Fatalf("semantic output contains injected ESC: %q", semantic)
+	}
+}
+
+func TestCanvasCompleteRecordsPreserveContentAcrossWidths(t *testing.T) {
+	const record = "    " + "metadata is preserved: " + "界👩‍💻e\u0301"
+	content := strings.Repeat(record, 8)
+	for _, columns := range []int{0, 1, 8, 80, 82, 120} {
+		var output bytes.Buffer
+		canvas := New(Config{
+			Writer:       &output,
+			Capabilities: fixedProvider(Capabilities{Interactive: true, ANSI: true, Columns: columns}),
+		})
+		canvas.Insert([]Line{Plain(content)})
+		if got := output.String(); got != content+"\n" {
+			t.Fatalf("columns=%d lost record content: %q", columns, got)
+		}
 	}
 }
 
