@@ -21,7 +21,7 @@ import {
   type IncidentScopeOwner,
 } from './scope'
 import {
-  presentationBoundaryForScope,
+  type IncidentPresentationDecision,
   type PresentationDecision,
   type PresentationOutcome,
   type PresentationBoundary,
@@ -36,6 +36,7 @@ import {
   type IncidentHealthReadPort,
 } from './health'
 import type { TraceCaptureSignal } from '../trace/ports'
+import { PendingIncidentScopes } from './pending-scopes'
 import {
   captureDiagnosticContextV1,
   type DiagnosticContextSources,
@@ -98,16 +99,6 @@ type FactObservation = Parameters<
   NonNullable<IncidentScopeObserver['factRecorded']>
 >[0]
 
-interface ActiveIncidentScope {
-  readonly owner: IncidentScopeOwner
-  accumulator?: FailureFactAccumulator
-  decision?: PresentationDecision
-  sealRequested: boolean
-  sealing: boolean
-  scopeClosed: boolean
-  consoleReports: number
-}
-
 interface LateIncidentLink {
   readonly runtimeRunId: string
   readonly link: IncidentLink
@@ -122,8 +113,6 @@ interface PendingLateLink {
   commit(runtimeRunId: string): void
 }
 
-export const MAX_ACTIVE_INCIDENT_SCOPES = 16
-
 class BrowserIncidentReporter implements IncidentReporter {
   readonly history: IncidentHistoryReadPort
   readonly health: IncidentHealthReadPort
@@ -137,7 +126,7 @@ class BrowserIncidentReporter implements IncidentReporter {
   readonly #traceSignals: IncidentTraceSignalPort | undefined
   readonly #scopeIssuer: IncidentScopeIssuer
   readonly #policy: IncidentPolicy
-  readonly #active = new Map<string, ActiveIncidentScope>()
+  readonly #pending: PendingIncidentScopes
   readonly #lateLinks = new Map<string, LateIncidentLink>()
   #nextIncidentSequence = 1n
 
@@ -157,37 +146,19 @@ class BrowserIncidentReporter implements IncidentReporter {
     this.history = this.#history
     this.#health = options.health ?? new IncidentDiagnosticsHealth()
     this.health = this.#health
+    this.#pending = new PendingIncidentScopes(
+      this.#policy, (decision, facts) => this.#emitRootIncident(decision, facts),
+    )
   }
 
   openScope(kind: IncidentScopeKind): IncidentScopeOwner {
     const owner = this.#scopeIssuer.open(kind, {
       factRecorded: (observation) => this.#onFact(observation),
-      deadlineReached: (identity) => this.#requestSeal(identity),
-      scopeClosed: (identity) => this.#onScopeClosed(identity),
+      deadlineReached: (identity) => this.#pending.requestSeal(identity),
+      scopeClosed: (identity) => this.#pending.requestSeal(identity),
     })
-    // An abandoned product scope cannot retain unbounded aggregation state.
-    if (this.#active.size >= MAX_ACTIVE_INCIDENT_SCOPES) this.#evictOldestScope()
-    this.#active.set(scopeKey(owner.identity), {
-      owner,
-      sealRequested: false,
-      sealing: false,
-      scopeClosed: false,
-      consoleReports: 0,
-    })
+    this.#pending.register(owner.handle)
     return owner
-  }
-
-  #evictOldestScope(): void {
-    const oldest = this.#active.entries().next().value
-    if (oldest === undefined) return
-    const [key, state] = oldest
-    if (state.decision?.kind === 'incident') {
-      state.sealRequested = true
-      this.#trySeal(state)
-    } else {
-      this.#active.delete(key)
-      this.#health.recordFactOverflow(state.accumulator?.factCount ?? 0n)
-    }
   }
 
   submitDecision(
@@ -195,7 +166,7 @@ class BrowserIncidentReporter implements IncidentReporter {
     decision: PresentationDecision,
   ): void {
     try {
-      this.#submitDecision(scope, decision)
+      this.#pending.decide(scope, decision)
     } catch {
       // Reporting is observational; a malformed diagnostic call has no authority.
     }
@@ -210,100 +181,19 @@ class BrowserIncidentReporter implements IncidentReporter {
     }
   }
 
-  #submitDecision(
-    scope: IncidentScopeHandle,
-    decision: PresentationDecision,
-  ): void {
-    const key = scopeKey(scope.identity)
-    const state = this.#active.get(key)
-    if (state === undefined || state.owner.handle !== scope) return
-    if (state.decision !== undefined) return
-    if (
-      decision.boundary !== presentationBoundaryForScope(
-        state.owner.identity.scopeKind,
-      )
-    ) {
-      return
-    }
-    if (
-      decision.kind === 'incident' &&
-      decision.trigger.scope !== state.owner.identity
-    ) {
-      return
-    }
-    state.decision = decision
-    if (decision.kind === 'excluded') {
-      this.#active.delete(key)
-      return
-    }
-    this.#trySeal(state)
-    if (state.scopeClosed && this.#active.has(key)) {
-      this.#active.delete(key)
-    }
-  }
-
   #onFact(observation: FactObservation): void {
     this.#evidence?.record(observation.fact, observation.relation, observation.ref)
-    const key = scopeKey(observation.ref.scope)
-    const active = this.#active.get(key)
-    if (active !== undefined) {
-      active.accumulator ??= createFailureFactAccumulator(
-        active.owner.identity,
-        this.#policy,
-      )
-      active.accumulator.record(observation.ref)
-      return
-    }
+    if (this.#pending.record(observation.ref)) return
     if (observation.relation === 'consequence') {
       this.#reportLateConsequence(observation)
     }
   }
 
-  #requestSeal(identity: IncidentScopeIdentity): void {
-    const state = this.#active.get(scopeKey(identity))
-    if (state === undefined) return
-    state.sealRequested = true
-    this.#trySeal(state)
-  }
-
-  #onScopeClosed(identity: IncidentScopeIdentity): void {
-    const key = scopeKey(identity)
-    const state = this.#active.get(key)
-    if (state === undefined) return
-
-    state.scopeClosed = true
-    this.#requestSeal(identity)
-    if (state.decision !== undefined && this.#active.has(key)) {
-      this.#active.delete(key)
-    }
-  }
-
-  #trySeal(state: ActiveIncidentScope): void {
-    if (
-      !state.sealRequested ||
-      state.sealing ||
-      state.decision?.kind !== 'incident' ||
-      state.accumulator === undefined
-    ) {
-      return
-    }
-    state.sealing = true
-    const key = scopeKey(state.owner.identity)
-    try {
-      const facts = state.accumulator.seal(state.decision.trigger)
-      this.#emitRootIncident(state, facts)
-    } catch {
-      // Projection/reporting failure cannot delay or change the owned outcome.
-    } finally {
-      this.#active.delete(key)
-    }
-  }
-
   #emitRootIncident(
-    state: ActiveIncidentScope,
+    decision: IncidentPresentationDecision,
     facts: SealedFailureFacts,
   ): void {
-    if (state.decision?.kind !== 'incident') return
+    const reports = { consoleReports: 0 }
     const sequence = this.#allocateIncidentSequence()
     const timestamp = this.#readTimestamp()
     const initialOverflow =
@@ -311,17 +201,17 @@ class BrowserIncidentReporter implements IncidentReporter {
       facts.consequenceOverflowCount
     this.#health.recordFactOverflow(initialOverflow)
     this.#recordPendingHistoryEviction()
-    const consoleAdmitted = this.#admitConsole(state)
+    const consoleAdmitted = this.#admitConsole(reports)
     const pendingLink = this.#prepareLateLink(
       facts.scope,
       sequence,
       timestamp.elapsedMs,
-      state.consoleReports,
+      reports.consoleReports,
     )
     const projection = this.#projectWithExactHealth({
       sequence,
       timestamp,
-      presentation: state.decision,
+      presentation: decision,
       facts,
       initialOverflow,
     })
@@ -430,7 +320,7 @@ class BrowserIncidentReporter implements IncidentReporter {
   }
 
   #admitConsole(
-    scope: ActiveIncidentScope | LateIncidentLink,
+    scope: { consoleReports: number },
   ): boolean {
     if (scope.consoleReports >= this.#policy.maxConsoleReportsPerScope) {
       this.#health.recordConsoleSuppression()

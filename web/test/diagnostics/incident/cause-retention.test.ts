@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { createFailureFactAccumulator, createIncidentPolicy, createIncidentScopeIssuer, unclassifiedFailureFact, incidentPresentationDecision } from '../../../src/diagnostics/incident'
 import { FailureEvidenceHistory, MAX_FAILURE_OBSERVATION_BYTES, MAX_FAILURE_OBSERVATIONS } from '../../../src/diagnostics/failure/history'
 import { createBrowserDiagnosticsComposition } from '../../../src/application/diagnostics/composition'
-import { createIncidentReporter, MAX_ACTIVE_INCIDENT_SCOPES } from '../../../src/diagnostics/incident/reporter'
+import { createIncidentReporter } from '../../../src/diagnostics/incident/reporter'
+import { MAX_PENDING_INCIDENT_CONTEXTS } from '../../../src/diagnostics/incident/pending-scopes'
 import { createIncidentRecordProjector, createRuntimeRunIdentity } from '../../../src/diagnostics/export/projector'
 import { normalizeFileTransferFailure, FileOutputError } from '../../../src/transfer/job/failures'
 import { isBoundedDiagnosticExceptionProjection, MAX_EXCEPTION_TEXT_BYTES } from '../../../src/diagnostics/exception'
@@ -18,7 +19,7 @@ describe('bounded cause retention', () => {
     const diagnostics = createBrowserDiagnosticsComposition({ build: { version: '0.0.0', mode: 'test' },
       secureContext: true, consoleSink: { error: () => undefined },
     })
-    const scopes = Array.from({ length: MAX_ACTIVE_INCIDENT_SCOPES + 1 }, (_, index) => {
+    const scopes = Array.from({ length: MAX_PENDING_INCIDENT_CONTEXTS + 1 }, (_, index) => {
       const scope = diagnostics.incidents.openScope('receive')
       const trigger = scope.facts.record(fact('nominated-' + index), 'contributor')
       diagnostics.incidents.submitDecision(scope.handle, incidentPresentationDecision('receive', 'failed', trigger))
