@@ -58,7 +58,7 @@ func TestDirectoryAdmissionRejectsUnboundAndCanceledRequestsBeforeMutation(t *te
 func TestDirectoryBindingRejectsEveryCanonicalizationSubstitution(t *testing.T) {
 	t.Run("invalid-artifact", func(t *testing.T) {
 		fixture := newTestFixture(t, nil)
-		if _, _, _, err := fixture.session.bindMaterializedArtifact(
+		if _, _, err := fixture.session.bindMaterializedArtifact(
 			ordinaryoutput.ArtifactPath{},
 		); !errors.Is(err, ErrDirectoryBinding) {
 			t.Fatalf("invalid artifact = %v", err)

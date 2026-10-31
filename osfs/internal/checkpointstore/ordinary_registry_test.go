@@ -625,7 +625,15 @@ func ordinaryRegistryFixture(t *testing.T, fill byte) ordinaryRegistryTestFixtur
 	operationID, _ := receivecontract.OperationIDFromBytes(bytes.Repeat([]byte{fill + 3}, receivecontract.StableIdentityBytes))
 	reservationID, _ := receivecontract.DestinationReservationIDFromBytes(bytes.Repeat([]byte{fill + 4}, receivecontract.StableIdentityBytes))
 	authority, _ := receivecontract.AuthorityRefFromBytes(bytes.Repeat([]byte{fill + 5}, receivecontract.AuthorityRefBytes))
-	reservation, err := receivecontract.NewNativeNamedEntryReservation(operationID, reservationID, artifact, authority, "download.txt", 0)
+	reservation, err := receivecontract.NewNativeNamedEntryReservation(
+		operationID,
+		reservationID,
+		artifact,
+		authority,
+		"download.txt",
+		"download.txt",
+		0,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -277,11 +277,14 @@ func decodeNamedContainerEntryReservation(
 			return DestinationReservation{}, ErrInvalidReceiveContract
 		}
 		reservation, err = NewNativeNamedEntryReservation(
-			operation, id, artifact, authority, string(logicalReservedRaw), collisionIndex,
+			operation,
+			id,
+			artifact,
+			authority,
+			string(logicalReservedRaw),
+			string(physicalRaw),
+			collisionIndex,
 		)
-		if err == nil && reservation.PhysicalName() != string(physicalRaw) {
-			err = ErrInvalidReceiveContract
-		}
 	default:
 		return DestinationReservation{}, ErrInvalidReceiveContract
 	}

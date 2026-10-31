@@ -9,6 +9,7 @@ import (
 	"slices"
 	"unicode/utf8"
 
+	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
@@ -79,7 +80,6 @@ func NewReservationClaimRecord(spec ReservationClaimRecordSpec) (ReservationClai
 		!validReservationClaimText(spec.RequestedName, MaximumReservationNameBytesV2) ||
 		!validReservationClaimText(spec.LogicalReservedName, MaximumReservationNameBytesV2) ||
 		!validReservationClaimText(spec.PhysicalName, MaximumReservationNameBytesV2) ||
-		spec.LogicalReservedName != spec.PhysicalName ||
 		spec.OperationID.IsZero() || spec.ReservationID.IsZero() || spec.Generation == 0 ||
 		(spec.EntryKind != receivecontract.ContainerEntrySingleFile &&
 			spec.EntryKind != receivecontract.ContainerEntryResultRoot) || !spec.Phase.Valid() ||
@@ -137,12 +137,15 @@ func (record ReservationClaimRecord) Valid() bool {
 		!validReservationClaimText(record.requestedName, MaximumReservationNameBytesV2) ||
 		!validReservationClaimText(record.logicalReservedName, MaximumReservationNameBytesV2) ||
 		!validReservationClaimText(record.physicalName, MaximumReservationNameBytesV2) ||
-		record.logicalReservedName != record.physicalName ||
 		record.operationID.IsZero() || record.reservationID.IsZero() || record.generation == 0 ||
 		(record.entryKind != receivecontract.ContainerEntrySingleFile &&
 			record.entryKind != receivecontract.ContainerEntryResultRoot) || !record.phase.Valid() ||
 		len(record.persistentIdentity) > MaximumPersistentIdentityClaimBytesV2 ||
 		record.token != mustReservationClaimToken(record.canonicalNameKey) {
+		return false
+	}
+	physical, err := catalog.CanonicalName(record.physicalName)
+	if err != nil || physical != record.physicalName {
 		return false
 	}
 	digestBound := !record.reservationDigest.IsZero()

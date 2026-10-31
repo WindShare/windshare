@@ -533,6 +533,7 @@ async function destinationReservation(
           artifact: named.artifact,
           authorityRef: named.authorityRef,
           logicalReservedName: named.logicalReservedName,
+          physicalName: named.physicalName,
           collisionIndex: named.collisionIndex,
         })
         case 'fsa-container': {

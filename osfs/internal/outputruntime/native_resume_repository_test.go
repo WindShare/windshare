@@ -116,6 +116,11 @@ func openOrdinaryResumeFileWithTracer(
 	tracer FilesystemOutputTracer,
 ) ordinaryResumeSessionFixture {
 	t.Helper()
+	return openNamedResumeFile(t, root, seed, exactSize, reopen, "resume.bin", openOutputRuntimeTestPlatform, tracer)
+}
+
+func openNamedResumeFile(t *testing.T, root string, seed byte, exactSize uint64, reopen bool, name string, factory PlatformFactory, tracer FilesystemOutputTracer) ordinaryResumeSessionFixture {
+	t.Helper()
 	fileID := incrementalTestIdentity16[catalog.FileID](seed + 1)
 	rules, err := transfer.NewSelectionRules(false, []transfer.SelectionOverride{{
 		FileID: fileID, Selected: true,
@@ -131,13 +136,14 @@ func openOrdinaryResumeFileWithTracer(
 	if err != nil {
 		t.Fatal(err)
 	}
-	name := "resume.bin"
 	artifact, err := receivecontract.NewSingleFileDirectoryTree(fileID, name, name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	authority := newNativeReservationTestAuthority(t, root)
-	authority.tracer = tracer
+	authority, err := New(Config{RootPath: root, PlatformFactory: factory, Tracer: tracer})
+	if err != nil {
+		t.Fatal(err)
+	}
 	mode, err := authority.BindDestination(context.Background())
 	if err != nil || !mode.Resumable() {
 		t.Fatalf("bind = %+v, %v", mode, err)

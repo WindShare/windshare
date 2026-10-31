@@ -155,7 +155,7 @@ func TestNativeIdentityAndAdapterBranchesRemainFailClosed(t *testing.T) {
 	if _, err := newOrdinaryLifecycleRecorder(nil, nil, nil, transfer.OutputSessionID{}); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
 		t.Fatalf("invalid lifecycle recorder = %v", err)
 	}
-	if _, err := newOperationDestinationBinder(destinationauthority.ReservedEntry{}); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+	if _, err := newOperationDestinationBinder(nil); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
 		t.Fatalf("invalid destination binder = %v", err)
 	}
 	if _, err := (operationDestinationBinder{}).BindArtifactPath(
@@ -223,7 +223,13 @@ func TestVolatileReservationClaimsSerializeAndRollbackExactNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	reservation, err := receivecontract.NewNativeNamedEntryReservation(
-		operationID, reservationID, artifact, authorityRef, resultRoot.Name(), 0,
+		operationID,
+		reservationID,
+		artifact,
+		authorityRef,
+		resultRoot.Name(),
+		resultRoot.Name(),
+		0,
 	)
 	if err != nil {
 		t.Fatal(err)

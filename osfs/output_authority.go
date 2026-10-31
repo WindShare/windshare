@@ -320,6 +320,7 @@ const (
 	FilesystemOutputRuntimeDeliveryReceipt
 	FilesystemOutputRuntimeReleaseLiveFile
 	FilesystemOutputRuntimeLiveRetention
+	FilesystemOutputRuntimeMapName
 )
 
 type FilesystemOutputRuntimeDecision uint8
@@ -379,6 +380,10 @@ type FilesystemOutputExecutionModeFact = outputcap.ExecutionMode
 // FilesystemOutputTrace projects native capability decisions and milestones.
 // These observations carry no handles or durable recovery authority.
 type FilesystemOutputTrace struct {
+	LogicalPath                       string
+	PhysicalPath                      string
+	NameMappingAttempt                uint32
+	NameMappingReused                 bool
 	FileID                            catalog.FileID
 	Operation                         FilesystemOutputTraceOperation
 	DestinationCapabilities           FilesystemOutputDestinationCapabilities

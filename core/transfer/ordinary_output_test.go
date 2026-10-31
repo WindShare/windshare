@@ -102,7 +102,13 @@ func TestOrdinaryOutputArtifactUsesExistingCanonicalConstructors(t *testing.T) {
 				test.decision.Kind() == ordinaryoutput.ShapeSingleFile,
 			)
 			reservation, reservationErr := receivecontract.NewNativeNamedEntryReservation(
-				operation, reservationID, got, authority, reservedName, 0,
+				operation,
+				reservationID,
+				got,
+				authority,
+				reservedName,
+				reservedName,
+				0,
 			)
 			plan, planErr := receivecontract.NewDirectTreePlan(got, reservation)
 			if nameErr != nil || reservationErr != nil || planErr != nil || plan.IsZero() ||
@@ -133,7 +139,13 @@ func TestOrdinaryOutputArtifactProjectorConsumesIntentWithoutChangingCanonicalBy
 	reservationID, _ := receivecontract.DestinationReservationIDFromBytes(bytes.Repeat([]byte{5}, receivecontract.StableIdentityBytes))
 	authority, _ := receivecontract.AuthorityRefFromBytes(bytes.Repeat([]byte{6}, receivecontract.AuthorityRefBytes))
 	reservation, err := receivecontract.NewNativeNamedEntryReservation(
-		operation, reservationID, artifact, authority, "file.bin", 0,
+		operation,
+		reservationID,
+		artifact,
+		authority,
+		"file.bin",
+		"file.bin",
+		0,
 	)
 	if err != nil {
 		t.Fatal(err)

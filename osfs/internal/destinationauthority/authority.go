@@ -568,3 +568,9 @@ func (authority *BoundDestination) InspectControl(inspect func(outputcap.Directo
 		return errors.Join(inspect(control), control.Close())
 	})
 }
+
+// WithPublicContainer validates the retained destination witness before writing
+// auxiliary output that must survive retirement of an individual result root.
+func (authority *BoundDestination) WithPublicContainer(visit func(outputcap.Directory) error) error {
+	return authority.withGuardedRoot(visit)
+}

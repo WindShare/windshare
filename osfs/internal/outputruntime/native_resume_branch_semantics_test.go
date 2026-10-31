@@ -228,7 +228,7 @@ func TestObserveOrdinaryResumeFinalParameterValidationAndHelpers(t *testing.T) {
 	var nilContext context.Context
 
 	// Parameter validations on observeOrdinaryResumeFinal
-	if _, err := observeOrdinaryResumeFinal(nilContext, nil, nil, checkpointmodel.Record{}); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+	if _, err := observeOrdinaryResumeFinal(nilContext, nil, nil, nil, checkpointmodel.Record{}); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
 		t.Fatalf("nil params error = %v", err)
 	}
 
@@ -236,12 +236,12 @@ func TestObserveOrdinaryResumeFinalParameterValidationAndHelpers(t *testing.T) {
 	cancel()
 	topLevel := &destinationauthority.TopLevelReservation{}
 	store := &checkpointstore.FileExecutionStore{}
-	if _, err := observeOrdinaryResumeFinal(canceled, topLevel, store, checkpointmodel.Record{}); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+	if _, err := observeOrdinaryResumeFinal(canceled, topLevel, store, nil, checkpointmodel.Record{}); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
 		t.Fatalf("invalid record error = %v", err)
 	}
 
 	// ordinaryResumeItems with invalid parameters
-	if _, _, err := ordinaryResumeItems(nilContext, nil, nil); !errors.Is(err, resumeauthority.ErrInvalidContract) {
+	if _, _, err := ordinaryResumeItems(nilContext, nil, nil, nil); !errors.Is(err, resumeauthority.ErrInvalidContract) {
 		t.Fatalf("nil ordinaryResumeItems error = %v", err)
 	}
 

@@ -355,9 +355,9 @@ async function decodeNamedContainerEntryReservationBytes(
       artifact: options.artifact,
       authorityRef: options.authorityRef,
       logicalReservedName: options.logicalReservedName,
+      physicalName: options.physicalName,
       collisionIndex: options.collisionIndex,
     })
-    if (reservation.physicalName !== physicalName) invalidDecodedCanonicalBytes()
   } else if (common.authorityKind === 2 &&
              sameGuarantees(common.guarantees, fsaTreeGuarantees())) {
     reservation = await createFSANamedEntryReservation(options)
