@@ -70,3 +70,5 @@ func entrySpelling(parent *directory, name string) (spelling string, resultErr e
 }
 
 func exactEntrySpelling(requested, actual string) bool { return requested == actual }
+
+func validateNativeName(string) error { return nil }

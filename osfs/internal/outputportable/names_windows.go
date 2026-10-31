@@ -5,12 +5,23 @@ package outputportable
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 	"golang.org/x/sys/windows"
 )
 
 const initialResolvedPathUnits = 512
+
+func validateNativeName(name string) error {
+	// The backend combines rooted lookups with conventional Win32 handle opens.
+	// Refuse spellings those APIs reject or normalize before either can mutate.
+	if !filepath.IsLocal(name) || strings.ContainsAny(name, `<>"|?*`) ||
+		strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {
+		return outputcap.ErrNameRejected
+	}
+	return nil
+}
 
 func entrySpelling(parent *directory, name string) (spelling string, resultErr error) {
 	encoded, err := windows.UTF16PtrFromString(filepath.Join(parent.path, name))

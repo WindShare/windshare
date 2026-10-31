@@ -24,7 +24,13 @@ func TestReservedEntryAliasesOnlyLogicalTopLevelComponent(t *testing.T) {
 		t.Fatal(err)
 	}
 	reservation, err := receivecontract.NewNativeNamedEntryReservation(
-		operation, reservationID, artifact, authority, reservedName, 1,
+		operation,
+		reservationID,
+		artifact,
+		authority,
+		reservedName,
+		reservedName,
+		1,
 	)
 	if err != nil {
 		t.Fatal(err)

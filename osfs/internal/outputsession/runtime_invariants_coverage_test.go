@@ -35,7 +35,7 @@ func TestExecutorContractContradictionsRetainAmbiguousAuthority(t *testing.T) {
 		fixture.session.mu.Lock()
 		entry := fixture.session.directoryClaims[event.ClaimID]
 		retained := entry != nil && entry.uncertain && len(fixture.session.nodeClaims) == 1 &&
-			len(fixture.session.locatorClaims) == 1 && fixture.session.metadataBytes != 0
+			len(fixture.session.artifactClaims) == 1 && fixture.session.metadataBytes != 0
 		fixture.session.mu.Unlock()
 		if !retained {
 			t.Fatal("ambiguous materialization discarded reserved namespace authority")
@@ -101,7 +101,7 @@ func TestExecutorContractContradictionsRetainAmbiguousAuthority(t *testing.T) {
 		fixture.session.mu.Lock()
 		entry := fixture.session.fileClaims[event.ClaimID]
 		retained := entry != nil && entry.uncertain && fixture.session.fileSlots == 1 &&
-			len(fixture.session.nodeClaims) == 2 && len(fixture.session.locatorClaims) == 2
+			len(fixture.session.nodeClaims) == 2 && len(fixture.session.artifactClaims) == 2
 		fixture.session.mu.Unlock()
 		if !retained {
 			t.Fatal("ambiguous file begin released authority needed for reconciliation")

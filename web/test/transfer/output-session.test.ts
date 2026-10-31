@@ -90,7 +90,7 @@ describe('plan-specific output boundary', () => {
       reservationId: identityText(10),
       artifact,
       authorityRef: digestIdentity(11),
-      logicalReservedName: 'file.bin',
+      logicalReservedName: 'file.bin', physicalName: 'file.bin',
       collisionIndex: 0,
     })
     const nativeCoordinates = await createDirectTreeCoordinateContract(await createReceiveIntent({

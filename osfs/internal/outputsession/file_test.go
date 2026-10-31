@@ -434,10 +434,10 @@ func TestFileBeginAmbiguityRetainsAllIndexes(t *testing.T) {
 	}
 	fixture.session.mu.Lock()
 	defer fixture.session.mu.Unlock()
-	if len(fixture.session.fileClaims) != 1 || len(fixture.session.locatorClaims) != 2 ||
+	if len(fixture.session.fileClaims) != 1 || len(fixture.session.artifactClaims) != 2 ||
 		fixture.session.fileSlots != 1 || !fixture.session.attention {
 		t.Fatalf("files=%d locators=%d slots=%d attention=%v", len(fixture.session.fileClaims),
-			len(fixture.session.locatorClaims), fixture.session.fileSlots, fixture.session.attention)
+			len(fixture.session.artifactClaims), fixture.session.fileSlots, fixture.session.attention)
 	}
 }
 

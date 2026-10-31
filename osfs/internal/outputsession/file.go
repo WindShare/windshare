@@ -28,7 +28,7 @@ func (session *Session) BeginFile(
 		return transfer.FileStart{}, session.rejectFileBinding(operationID, 0, err)
 	}
 
-	artifactLocatorKey, destination, destinationLocatorKey, canonicalErr :=
+	destination, destinationLocatorKey, canonicalErr :=
 		session.bindMaterializedArtifact(file.ArtifactPath())
 	if canonicalErr != nil {
 		return transfer.FileStart{}, session.rejectFileBinding(operationID, 0, canonicalErr)
@@ -38,7 +38,7 @@ func (session *Session) BeginFile(
 	}
 
 	entry, pending, cached, event, err := session.reserveFile(
-		operationID, file, artifactLocatorKey, destination, destinationLocatorKey,
+		operationID, file, destination, destinationLocatorKey,
 	)
 	session.emit(event)
 	if err != nil {
@@ -105,7 +105,7 @@ func validateFileRequest(session *Session, file transfer.MaterializationFile) er
 func (session *Session) reserveFile(
 	operationID uint64,
 	file transfer.MaterializationFile,
-	artifactLocatorKey string,
+
 	destination DestinationPath,
 	destinationLocatorKey string,
 ) (*fileEntry, *fileBeginOperation, bool, TraceEvent, error) {
@@ -124,7 +124,7 @@ func (session *Session) reserveFile(
 	node := catalog.NodeID(file.Descriptor().FileID())
 	nameKey := parentNameKey{parent: parentID, name: claimName(destination.String())}
 	reference, exists, consistent := session.existingClaimLocked(
-		node, file.SourcePath().String(), file.ArtifactPath().String(), artifactLocatorKey, nameKey,
+		node, file.SourcePath().String(), file.ArtifactPath().String(), nameKey,
 	)
 	if !consistent {
 		return nil, nil, false, session.fileBindingTraceLocked(operationID, reference.id),
@@ -133,15 +133,11 @@ func (session *Session) reserveFile(
 	if exists {
 		entry := session.fileClaims[reference.id]
 		if reference.kind != ClaimFile || entry == nil || entry.claim.file != file ||
-			entry.claim.artifactLocatorKey != artifactLocatorKey ||
+
 			entry.claim.destination != destination ||
 			entry.claim.destinationLocatorKey != destinationLocatorKey {
 			return nil, nil, false, session.fileBindingTraceLocked(operationID, reference.id),
 				session.rejectDirectoryBindingLocked(ErrDirectoryBinding)
-		}
-		if owner, claimed := session.locatorClaims[artifactLocatorKey]; !claimed || owner != reference {
-			return nil, nil, false, session.fileBindingTraceLocked(operationID, reference.id),
-				session.markInvariantFailureLocked()
 		}
 		if owner, claimed := session.destinationClaims[destinationLocatorKey]; !claimed || owner != reference {
 			return nil, nil, false, session.fileBindingTraceLocked(operationID, reference.id),
@@ -173,10 +169,6 @@ func (session *Session) reserveFile(
 		return nil, nil, false, session.fileBindingTraceLocked(operationID, parentID),
 			session.rejectDirectoryBindingLocked(ErrDirectoryBinding)
 	}
-	if owner, exists := session.locatorClaims[artifactLocatorKey]; exists {
-		return nil, nil, false, session.fileBindingTraceLocked(operationID, owner.id),
-			session.rejectDirectoryBindingLocked(ErrDirectoryBinding)
-	}
 	if owner, exists := session.destinationClaims[destinationLocatorKey]; exists {
 		return nil, nil, false, session.fileBindingTraceLocked(operationID, owner.id),
 			session.rejectDirectoryBindingLocked(ErrDirectoryBinding)
@@ -196,7 +188,7 @@ func (session *Session) reserveFile(
 	operation := &fileBeginOperation{done: make(chan struct{})}
 	entry := &fileEntry{
 		claim: FileClaim{
-			id: claimID, file: file, artifactLocatorKey: artifactLocatorKey,
+			id: claimID, file: file,
 			destination: destination, destinationLocatorKey: destinationLocatorKey, parent: parentID,
 		},
 		state: filePending, beginOperation: operation,
@@ -206,7 +198,7 @@ func (session *Session) reserveFile(
 	session.nodeClaims[node] = reference
 	session.pathClaims[file.SourcePath().String()] = reference
 	session.artifactClaims[file.ArtifactPath().String()] = reference
-	session.locatorClaims[artifactLocatorKey] = reference
+
 	session.destinationClaims[destinationLocatorKey] = reference
 	session.nameClaims[nameKey] = reference
 	session.fileSlots++
@@ -440,9 +432,6 @@ func (session *Session) removeFileReservationLocked(entry *fileEntry) {
 	}
 	if session.nameClaims[nameKey] == reference {
 		delete(session.nameClaims, nameKey)
-	}
-	if session.locatorClaims[entry.claim.artifactLocatorKey] == reference {
-		delete(session.locatorClaims, entry.claim.artifactLocatorKey)
 	}
 	if session.destinationClaims[entry.claim.destinationLocatorKey] == reference {
 		delete(session.destinationClaims, entry.claim.destinationLocatorKey)

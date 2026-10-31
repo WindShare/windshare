@@ -98,7 +98,13 @@ func (authority *layoutRecordingGetOutputAuthority) Create(
 		return getOutputOperation{}, err
 	}
 	reservation, err := receivecontract.NewNativeNamedEntryReservation(
-		operationID, reservationID, artifact, authorityRef, reservedName, 0,
+		operationID,
+		reservationID,
+		artifact,
+		authorityRef,
+		reservedName,
+		reservedName,
+		0,
 	)
 	if err != nil {
 		return getOutputOperation{}, err

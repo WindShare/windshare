@@ -91,6 +91,7 @@ const (
 	FilesystemOutputRuntimeDeliveryReceipt
 	FilesystemOutputRuntimeReleaseLiveFile
 	FilesystemOutputRuntimeLiveRetention
+	FilesystemOutputRuntimeMapName
 )
 
 type FilesystemOutputRuntimeDecision uint8
@@ -142,6 +143,10 @@ const (
 )
 
 type FilesystemOutputTrace struct {
+	LogicalPath                       string
+	PhysicalPath                      string
+	NameMappingAttempt                uint32
+	NameMappingReused                 bool
 	FileID                            catalog.FileID
 	Operation                         FilesystemOutputTraceOperation
 	DestinationCapabilities           outputcap.DestinationCapabilities

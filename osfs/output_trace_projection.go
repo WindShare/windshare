@@ -17,6 +17,8 @@ func (tracer outputRuntimeTracer) TraceFilesystemOutput(event outputruntime.File
 
 func projectFilesystemOutputTrace(event outputruntime.FilesystemOutputTrace) FilesystemOutputTrace {
 	return FilesystemOutputTrace{
+		LogicalPath: event.LogicalPath, PhysicalPath: event.PhysicalPath,
+		NameMappingAttempt: event.NameMappingAttempt, NameMappingReused: event.NameMappingReused,
 		Operation:                       projectTraceOperation(event.Operation),
 		DestinationCapabilities:         event.DestinationCapabilities,
 		DestinationBindingID:            event.DestinationBindingID,
@@ -280,6 +282,8 @@ func projectRuntimeOperation(
 		return FilesystemOutputRuntimeDeliveryReceipt
 	case outputruntime.FilesystemOutputRuntimeReleaseLiveFile:
 		return FilesystemOutputRuntimeReleaseLiveFile
+	case outputruntime.FilesystemOutputRuntimeMapName:
+		return FilesystemOutputRuntimeMapName
 	case outputruntime.FilesystemOutputRuntimeLiveRetention:
 		return FilesystemOutputRuntimeLiveRetention
 	default:

@@ -343,10 +343,14 @@ func TestOrdinaryResumeItemReducesEveryDurableFilePhase(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if err := lease.ensureNamesLocked(); err != nil {
+				t.Fatal(err)
+			}
 			item, err := ordinaryResumeRecordItem(
 				context.Background(),
 				lease.topLevel,
 				lease.store,
+				lease.names,
 				record,
 			)
 			wantBlock := test.block

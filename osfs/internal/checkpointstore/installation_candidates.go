@@ -79,6 +79,43 @@ func MatchesTemporaryName(candidate, target string, encoded []byte) bool {
 	return sharedCandidates.matches(candidate, target, encoded)
 }
 
+// InstallNameMapping uses operation-owned scratch slots so a torn metadata
+// write can be retired on restart without confusing it with received content.
+func (lease *OperationRegistryLease) InstallNameMapping(name string, encoded []byte) error {
+	directory, err := lease.OpenNameState(true)
+	if err != nil {
+		return err
+	}
+	installer := recordInstaller{directory: directory, candidates: operationCandidates(lease.operation)}
+	return errors.Join(installer.create(name, encoded), directory.Close())
+}
+
+// ReclaimNameCandidates never interprets scratch bytes as a committed mapping.
+func (lease *OperationRegistryLease) ReclaimNameCandidates(directory outputcap.Directory) error {
+	if lease == nil || lease.lock == nil || lease.deleted || !lease.record.Valid() || directory == nil {
+		return transfer.ErrInvalidOutputBinding
+	}
+	names, err := directory.Names(MaximumOrdinaryOperationRecordsV1 * 2)
+	if err != nil {
+		return err
+	}
+	namespace := operationCandidates(lease.operation)
+	for _, name := range names {
+		if !namespace.owns(name) {
+			continue
+		}
+		entry, err := directory.OpenEntry(name)
+		if err != nil {
+			return err
+		}
+		removeErr := directory.RemoveEntry(name, entry)
+		if err := errors.Join(removeErr, entry.Close()); err != nil {
+			return err
+		}
+	}
+	return directory.Sync()
+}
+
 type recordInstaller struct {
 	directory  outputcap.Directory
 	candidates candidateNamespace

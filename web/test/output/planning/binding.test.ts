@@ -260,7 +260,7 @@ describe('receive intent binding', () => {
 
     const dishonest = await createNativeNamedEntryReservation({
       operationId: identity(63), reservationId: identity(64), artifact: action.artifact,
-      authorityRef: identity(65, 32), logicalReservedName: 'report.txt', collisionIndex: 0,
+      authorityRef: identity(65, 32), logicalReservedName: 'report.txt', physicalName: 'report.txt', collisionIndex: 0,
     })
     await expect(bindReceiveIntent({
       selection,

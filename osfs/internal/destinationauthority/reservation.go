@@ -56,8 +56,8 @@ func (spec ReservationClaimSpec) Valid() bool {
 		spec.OperationID, spec.RequestedName, spec.CollisionIndex,
 		spec.EntryKind == receivecontract.ContainerEntrySingleFile,
 	)
-	return err == nil && expected == spec.LogicalReservedName &&
-		spec.PhysicalName == spec.LogicalReservedName
+	physical, physicalErr := catalog.CanonicalName(spec.PhysicalName)
+	return err == nil && expected == spec.LogicalReservedName && physicalErr == nil && physical == spec.PhysicalName
 }
 
 type ReservationMetadataClaimer interface {
@@ -83,9 +83,8 @@ type ReservationClaimHandle interface {
 	Close() error
 }
 
-// ReservedEntry keeps the artifact, logical reservation, and filesystem names
-// separate so native equality remains an enforced invariant rather than an
-// accidental consequence of storing only one of the facts.
+// ReservedEntry separates source identity, logical collision choice, and the
+// exact physical name frozen by destination admission.
 type ReservedEntry struct {
 	requestedName       string
 	logicalReservedName string
@@ -108,7 +107,6 @@ func NewReservedEntry(reservation receivecontract.DestinationReservation) (Reser
 		reservation.EntryKind() == receivecontract.ContainerEntrySingleFile,
 	)
 	if err != nil || expected != reservation.LogicalReservedName() ||
-		reservation.PhysicalName() != reservation.LogicalReservedName() ||
 		reservation.CollisionIndex() >= ordinaryoutput.MaximumResultNameReservationAttemptsV1 {
 		return ReservedEntry{}, ErrInvalidReservation
 	}
@@ -126,7 +124,6 @@ func (entry ReservedEntry) CollisionIndex() uint32                        { retu
 func (entry ReservedEntry) EntryKind() receivecontract.ContainerEntryKind { return entry.kind }
 func (entry ReservedEntry) Valid() bool {
 	return entry.requestedName != "" && entry.logicalReservedName != "" && entry.physicalName != "" &&
-		entry.logicalReservedName == entry.physicalName &&
 		(entry.kind == receivecontract.ContainerEntrySingleFile ||
 			entry.kind == receivecontract.ContainerEntryResultRoot)
 }

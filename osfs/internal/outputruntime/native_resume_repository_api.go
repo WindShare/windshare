@@ -12,7 +12,9 @@ import (
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/osfs/internal/checkpointstore"
 	"github.com/windshare/windshare/osfs/internal/destinationauthority"
+	"github.com/windshare/windshare/osfs/internal/namestore"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
+	"github.com/windshare/windshare/osfs/internal/outputnames"
 	"github.com/windshare/windshare/osfs/internal/resumeauthority"
 )
 
@@ -238,6 +240,8 @@ type NativeResumeLease struct {
 	operation  *checkpointstore.OperationRegistryLease
 	header     resumeauthority.Header
 	topLevel   *destinationauthority.TopLevelReservation
+	names      *outputnames.Mapper
+	nameStore  *namestore.Store
 	repository *checkpointstore.Repository
 	store      *checkpointstore.FileExecutionStore
 }
@@ -292,7 +296,10 @@ func (lease *NativeResumeLease) Snapshot(
 		}
 		return resumeauthority.Snapshot{}, nativeResumeError(err)
 	}
-	items, repositoryAttention, err := ordinaryResumeItems(ctx, lease.topLevel, lease.store)
+	if err := lease.ensureNamesLocked(); err != nil {
+		return resumeauthority.Snapshot{}, nativeResumeError(err)
+	}
+	items, repositoryAttention, err := ordinaryResumeItems(ctx, lease.topLevel, lease.store, lease.names)
 	if err != nil {
 		return resumeauthority.Snapshot{}, nativeResumeError(err)
 	}
@@ -380,6 +387,9 @@ func (lease *NativeResumeLease) Cleanup(
 		}
 		lease.repository = nil
 		lease.store = nil
+	}
+	if err := lease.cleanupNamesLocked(); err != nil {
+		return nativeResumeCleanupFailure(err)
 	}
 	if err := lease.retireTopLevelIdentityLocked(); err != nil {
 		return nativeResumeCleanupFailure(err)
