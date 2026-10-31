@@ -1,4 +1,5 @@
 import { ContentAttemptLifetimes } from './scheduling/attempt-lifetimes'
+import { BlockAttempts, type BlockRetryDecision } from './scheduling/attempts'
 import { LanePerformance } from './scheduling/performance'
 import { LaneSampling, type SamplingEvidence, type SamplingOutcome } from './scheduling/sampling'
 import { BlockReceiveWindow, type BlockReceiveAdmission } from './scheduling/receive-window'
@@ -33,7 +34,7 @@ export interface BlockLane {
 
 export class BlockLaneAttemptsError extends AggregateError {
   constructor(errors: readonly unknown[]) {
-    super(errors, 'Every receiver content lane failed')
+    super(errors, 'Receiver block attempts exhausted')
     this.name = 'BlockLaneAttemptsError'
   }
 }
@@ -91,9 +92,12 @@ export interface BlockSchedulingObservation extends BlockDispatchObservation {
   readonly bytesPerSecond: number
 }
 
+export type BlockRetryObservation = BlockRetryDecision & Readonly<{ fileId: string; localBlockIndex: bigint }>
+
 export interface LaneSetOptions {
   readonly now?: () => number
   readonly onBlockScheduled?: (observation: BlockSchedulingObservation) => void
+  readonly onBlockRetry?: (observation: BlockRetryObservation) => void
   readonly onRequestScheduled?: (observation: RequestSchedulingObservation) => void
   readonly dispatchSequence?: BlockDispatchSequenceAuthority
   readonly onBlockDispatched?: (observation: BlockDispatchObservation) => void
@@ -123,6 +127,7 @@ export class LaneSet {
   readonly #onBlockFetched: (observation: BlockRouteObservation) => void
   readonly #now: () => number
   readonly #onBlockScheduled: ((observation: BlockSchedulingObservation) => void) | undefined
+  readonly #onBlockRetry: ((observation: BlockRetryObservation) => void) | undefined
   readonly requests: LaneRequests
   readonly #admissions: ContentAdmissions
   readonly #rescues = new LaneRescues()
@@ -135,6 +140,7 @@ export class LaneSet {
     this.#admissions = new ContentAdmissions(() => [...this.#lanes.values()], this.#now)
     this.requests = new LaneRequests({ now: this.#now, ...(options.onRequestScheduled === undefined ? {} : { observe: options.onRequestScheduled }) })
     this.#onBlockScheduled = options.onBlockScheduled
+    this.#onBlockRetry = options.onBlockRetry
     this.#dispatchSequence = options.dispatchSequence ?? new BlockDispatchSequenceAuthority()
     this.#onBlockDispatched = options.onBlockDispatched ?? (() => undefined)
     this.#onBlockFetched = options.onBlockFetched ?? (() => undefined)
@@ -267,21 +273,20 @@ export class LaneSet {
     signal.throwIfAborted()
     routes.assertActive()
     const failures: unknown[] = []
-    const attempted = new Set<LaneState>()
+    const attempts = new BlockAttempts(this.#onBlockRetry === undefined ? undefined : decision =>
+      this.#onBlockRetry!({ ...decision, fileId: demand.descriptor.fileIdText, localBlockIndex: demand.localBlockIndex }))
     let supplemented = false
     while (true) {
       signal.throwIfAborted()
       routes.assertActive()
-      const admission = await this.#admit(work, signal, attempted, failures)
-      const state = admission.lane
-      attempted.add(state)
+      const admission = await this.#admit(work, signal, attempts, failures)
       try {
         const winner = await raceContent(
           signal,
-          attemptSignal => this.#fetchAttempt(admission, demand, attemptSignal, work.onReceive),
+          attemptSignal => this.#fetchAttempt(admission, demand, attemptSignal, attempts, work.onReceive),
           attemptSignal => {
             if (supplemented) return undefined
-            const rescue = this.#rescue(work, attempted, admission, attemptSignal)
+            const rescue = this.#rescue(work, attempts, admission, attemptSignal)
             supplemented = rescue !== undefined
             return rescue
           },
@@ -291,31 +296,28 @@ export class LaneSet {
         return winner.record
       } catch (error) {
         if (signal.aborted) throw signal.reason ?? error
-        if (!(error instanceof ContentRaceFailures)) throw error
-        const fatalIndex = error.errors.findIndex((failure: unknown) => !isRetryableLaneFailure(failure))
-        if (fatalIndex >= 0) throw error.errors[fatalIndex]
-        failures.push(...error.errors)
+        failures.push(...retryableLaneFailures(error))
       }
     }
   }
 
   async #admit(
-    work: ContentWork, signal: AbortSignal, attempted: ReadonlySet<LaneState>, failures: readonly unknown[],
+    work: ContentWork, signal: AbortSignal, attempts: BlockAttempts, failures: readonly unknown[],
   ): Promise<ContentAdmission> {
-    if (!this.#availableLanes(work.routes).some(lane => !attempted.has(lane))) {
-      await this.#awaitReplacementOrThrow(failures, attempted, work.routes, signal)
+    while (!this.#availableLanes(work.routes).some(lane => attempts.allows(lane))) {
+      await this.#awaitReplacementOrThrow(failures, attempts, work.routes, signal)
     }
-    const admission = await this.#admissions.request(work, signal, lane => !attempted.has(lane))
+    const admission = await this.#admissions.request(work, signal, lane => attempts.allows(lane))
     if (signal.aborted) { admission.close('cancelled'); throw signal.reason }
     return admission
   }
 
   #rescue(
-    work: ContentWork, attempted: Set<LaneState>, primary: ContentAdmission, signal: AbortSignal,
+    work: ContentWork, attempts: BlockAttempts, primary: ContentAdmission, signal: AbortSignal,
   ): Promise<() => Promise<FetchedBlock>> | undefined {
     if (work.distance() > 0n) return undefined
     work.routes.assertActive()
-    const candidate = orderedContentLanes([...this.#lanes.values()], work).find(lane => !attempted.has(lane))
+    const candidate = orderedContentLanes([...this.#lanes.values()], work).find(lane => attempts.allows(lane))
     const decide = (lane: ContentLane) => work.distance() > 0n ? undefined
       : rescueDecision(primary.permit.progress(), primary.expected, lane.receive.estimateCompletion(demandBytes(work.demand)))
     if (candidate === undefined || decide(candidate) === undefined) return undefined
@@ -331,11 +333,8 @@ export class LaneSet {
         return () => { release?.(); this.#rescues.release() }
       },
     } }
-    return this.#admissions.requestRescue(rescueWork, signal, lane => !attempted.has(lane), decide)
-      .then(admission => () => {
-        attempted.add(admission.lane)
-        return this.#fetchAttempt(admission, work.demand, signal, work.onReceive)
-      })
+    return this.#admissions.requestRescue(rescueWork, signal, lane => attempts.allows(lane), decide)
+      .then(admission => () => this.#fetchAttempt(admission, work.demand, signal, attempts, work.onReceive))
   }
 
   waitForLeaseIdle(leaseId: Uint8Array): Promise<void> {
@@ -346,35 +345,34 @@ export class LaneSet {
     admission: ContentAdmission,
     demand: BlockDemand,
     signal: AbortSignal,
+    attempts: BlockAttempts,
     onReceive?: (objectBytes: number) => void,
   ): Promise<FetchedBlock> {
     const { lane: state, purpose, started, expected, permit, rescueReason } = admission
     const expectedMilliseconds = expected.milliseconds
     const bytes = demandBytes(demand)
-    const observation = Object.freeze({
-      dispatchSequence: this.#dispatchSequence.next(),
-      laneId: state.lane.id,
-      laneEpoch: state.laneEpoch,
-      route: state.route,
-      fileId: demand.descriptor.fileIdText,
-      localBlockIndex: demand.localBlockIndex,
-    })
     const releaseAttempt = this.#attemptLifetimes.begin(demand.leaseId)
-    try {
-      this.#onBlockDispatched(observation)
-    } catch { /* Diagnostics cannot redirect authenticated work. */ }
-    try {
-      this.#onBlockScheduled?.(Object.freeze({
-        ...observation, purpose, expectedMilliseconds, deliveryEvidence: expected.evidence,
-        ...(rescueReason === undefined ? {} : { rescueReason }), admission: permit.admission,
-        pendingBytes: state.performance.pendingBytes,
-        bytesPerSecond: state.performance.bytesPerSecond,
-      }))
-    } catch { /* Scheduling observers cannot become transfer authority. */ }
     let outcome: SamplingOutcome = 'cancelled'
     let received = 0
     try {
       signal.throwIfAborted()
+      const observation = Object.freeze({
+        dispatchSequence: this.#dispatchSequence.next(),
+        laneId: state.lane.id, laneEpoch: state.laneEpoch, route: state.route,
+        fileId: demand.descriptor.fileIdText, localBlockIndex: demand.localBlockIndex,
+      })
+      attempts.started(state, observation.dispatchSequence)
+      try {
+        this.#onBlockDispatched(observation)
+      } catch { /* Diagnostics cannot redirect authenticated work. */ }
+      try {
+        this.#onBlockScheduled?.(Object.freeze({
+          ...observation, purpose, expectedMilliseconds, deliveryEvidence: expected.evidence,
+          ...(rescueReason === undefined ? {} : { rescueReason }), admission: permit.admission,
+          pendingBytes: state.performance.pendingBytes,
+          bytesPerSecond: state.performance.bytesPerSecond,
+        }))
+      } catch { /* Scheduling observers cannot become transfer authority. */ }
       const record = await state.lane.fetchBlock(demand, signal, {
         received: bytes => { received += bytes; permit.receive(bytes); onReceive?.(bytes) },
         admitted: admission => {
@@ -392,7 +390,10 @@ export class LaneSet {
     } catch (error) {
       outcome = signal.aborted ? 'cancelled' : 'failed'
       if (signal.reason instanceof ContentRaceWon) outcome = 'superseded'
-      if (!signal.aborted && isRetryableLaneFailure(error)) state.failed = true
+      if (!signal.aborted && isRetryableLaneFailure(error)) {
+        state.failed = true
+        attempts.failed(state)
+      }
       throw error
     } finally {
       releaseAttempt()
@@ -464,17 +465,18 @@ export class LaneSet {
 
   async #awaitReplacementOrThrow(
     failures: readonly unknown[],
-    attempted: ReadonlySet<LaneState>,
+    attempts: BlockAttempts,
     routes: BlockRouteEligibility,
     signal: AbortSignal,
   ): Promise<void> {
     const eligible = this.#availableLanes(routes)
-    if (eligible.length === 0) {
+    if (!attempts.exhausted && eligible.length === 0) {
       await this.#waitForContentAvailability(routes, signal)
       return
     }
-    if (eligible.some((candidate) => !attempted.has(candidate))) return
+    if (eligible.some(candidate => attempts.allows(candidate))) return
     if (failures.length === 0) throw new Error('No eligible content lane is available')
+    attempts.reportExhausted()
     throw new BlockLaneAttemptsError(failures)
   }
 
@@ -509,6 +511,13 @@ export class LaneSet {
     }
     waiter.unsubscribeRoutes?.()
   }
+}
+
+function retryableLaneFailures(error: unknown): readonly unknown[] {
+  if (!(error instanceof ContentRaceFailures)) throw error
+  const fatalIndex = error.errors.findIndex((failure: unknown) => !isRetryableLaneFailure(failure))
+  if (fatalIndex >= 0) throw error.errors[fatalIndex]
+  return error.errors
 }
 
 function isRetryableLaneFailure(error: unknown): boolean {

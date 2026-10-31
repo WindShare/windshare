@@ -13,6 +13,7 @@ const CORRELATED_TRACE_EVENT_NAMES: ReadonlySet<TraceDomainEventNameV2> = new Se
   'protocol_operation',
   'operation_recovery',
   'content_scheduling',
+  'content_retry',
   'request_scheduling',
   'lease_retirement',
   'peer_attempt',

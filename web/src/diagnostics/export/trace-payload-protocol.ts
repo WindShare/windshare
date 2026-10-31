@@ -498,14 +498,50 @@ function validatePeerSettlement(value: unknown): void {
   throw new TypeError('peer settlement discriminant is invalid')
 }
 
+export function validateContentRetry(payload: UnknownRecord): void {
+  member(payload.transition, ['retrying', 'exhausted'], 'content retry transition')
+  const retrying = payload.transition === 'retrying'
+  exactKeys(payload, [
+    'first_dispatch_sequence', 'file_id', 'block_index', 'attempts', 'maximum_attempts', 'transition', 'reason',
+    ...(retrying ? ['dispatch_sequence', 'route', 'successful_blocks'] : []),
+    ...(retrying && payload.reason === 'recovered_lane' ? ['successful_blocks_at_failure'] : []),
+  ], [], 'content retry payload')
+  decimalFields(payload, ['first_dispatch_sequence', 'block_index'], 'content retry')
+  canonicalIdentity(payload.file_id, 'content retry file')
+  const maximum = integerBetween(payload.maximum_attempts, 1, Number.MAX_SAFE_INTEGER, 'content retry limit')
+  const attempts = integerBetween(payload.attempts, 1, maximum, 'content attempts')
+  if (!retrying) {
+    member(payload.reason, ['attempt_limit', 'no_recovered_lane'], 'content exhaustion reason')
+    if ((payload.reason === 'attempt_limit') !== (attempts === maximum)) {
+      throw new TypeError('Content exhaustion reason contradicts its attempt budget')
+    }
+    return
+  }
+  member(payload.reason, ['untried_lane', 'recovered_lane'], 'content retry reason')
+  member(payload.route, ['application-relay', 'direct', 'turn'], 'content retry route')
+  decimalFields(payload, ['dispatch_sequence', 'successful_blocks'], 'content retry')
+  if (payload.reason === 'recovered_lane') {
+    decimalUint64(payload.successful_blocks_at_failure, 'content recovery evidence')
+    if (BigInt(payload.successful_blocks as string) <= BigInt(payload.successful_blocks_at_failure as string)) {
+      throw new TypeError('Content retry lacks new authenticated delivery')
+    }
+  }
+}
+
 export function validateContentScheduling(payload: UnknownRecord): void {
   exactKeys(payload, [
     'dispatch_sequence', 'file_id', 'block_index', 'route', 'purpose', 'expected_ms', 'pending_bytes', 'bytes_per_second',
-  ], ['admission'], 'content scheduling payload')
+  ], ['admission', 'delivery_evidence', 'rescue_reason'], 'content scheduling payload')
   decimalFields(payload, ['dispatch_sequence', 'block_index', 'pending_bytes'], 'content scheduling')
   canonicalIdentity(payload.file_id, 'content scheduling file')
   member(payload.route, ['application-relay', 'direct', 'turn'], 'content scheduling route')
   member(payload.purpose, ['content', 'probe', 'sample', 'rescue'], 'content scheduling purpose')
+  if (payload.delivery_evidence !== undefined) {
+    member(payload.delivery_evidence, ['unknown', 'recent', 'stale'], 'content delivery evidence')
+  }
+  if (payload.rescue_reason !== undefined) {
+    member(payload.rescue_reason, ['faster-delivery', 'no-progress', 'bootstrap-overdue'], 'content rescue reason')
+  }
   integerBetween(payload.expected_ms, 0, Number.MAX_SAFE_INTEGER, 'estimated completion')
   integerBetween(payload.bytes_per_second, 0, Number.MAX_SAFE_INTEGER, 'content throughput')
   if (payload.admission !== undefined) {

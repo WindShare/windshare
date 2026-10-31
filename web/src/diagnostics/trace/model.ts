@@ -1,3 +1,4 @@
+import type { ContentRetryPayload, ContentSchedulingPayload } from './content-scheduling'
 import type { ConnectionTracePayloads } from './connection-payload'
 import type {
   DirectZipCoordinationPayloadV1,
@@ -57,6 +58,7 @@ export const TRACE_EVENT_NAMES_V2 = Object.freeze([
   'sender_verification',
   'protocol_operation',
   'content_scheduling',
+  'content_retry',
   'request_scheduling',
   'lease_retirement',
   'operation_recovery',
@@ -313,17 +315,8 @@ export interface TraceEventPayloadByNameV2 extends ConnectionTracePayloads {
     elapsed_ms: number
     pending_requests: number
   }>
-  readonly content_scheduling: Readonly<{
-    admission?: Readonly<{ waited_ms: number; unfinished_bytes: string; ahead_bytes: string; bytes_per_second: number }>
-    dispatch_sequence: string
-    file_id: string
-    block_index: string
-    route: 'application-relay' | 'direct' | 'turn'
-    purpose: 'content' | 'probe' | 'sample' | 'rescue'
-    expected_ms: number
-    pending_bytes: string
-    bytes_per_second: number
-  }>
+  readonly content_scheduling: ContentSchedulingPayload
+  readonly content_retry: ContentRetryPayload
   readonly operation_recovery: Readonly<{
     operation_sequence: string
     generation_id: string
@@ -646,6 +639,7 @@ type CorrelatedTraceEventNameV2 =
   | 'protocol_operation'
   | 'operation_recovery'
   | 'content_scheduling'
+  | 'content_retry'
   | 'request_scheduling'
   | 'lease_retirement'
   | 'peer_attempt'
