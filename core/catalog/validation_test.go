@@ -14,7 +14,7 @@ func TestDomainConstructorsRejectInvalidAxes(t *testing.T) {
 	validDescriptor := DescriptorSpec{
 		WireVersion: WireVersionV2, Suite: SuiteV2, ShareInstance: share,
 		SyntheticRoot: root, RootCommit: committedRootForTest(t, share, root), ChunkSize: DefaultChunkSize,
-		SenderPublicKey: bytes.Repeat([]byte{1}, SenderPublicKeySize), PathPolicy: PathPolicyV1,
+		SenderPublicKey: bytes.Repeat([]byte{1}, SenderPublicKeySize), PathPolicy: PathPolicyV2,
 	}
 	mutations := []func(*DescriptorSpec){
 		func(spec *DescriptorSpec) { spec.Capabilities = 1 << 63 },

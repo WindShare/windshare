@@ -108,11 +108,11 @@ func (function ArtifactDestinationBinderFunc) BindArtifactPath(
 }
 
 type DirectoryClaim struct {
-	id                    ClaimID
-	source                transfer.AuthenticatedSourceDirectory
-	admission             transfer.DirectoryAdmission
-	artifact              ordinaryoutput.ArtifactPath
-	artifactLocatorKey    string
+	id        ClaimID
+	source    transfer.AuthenticatedSourceDirectory
+	admission transfer.DirectoryAdmission
+	artifact  ordinaryoutput.ArtifactPath
+
 	destination           DestinationPath
 	destinationLocatorKey string
 	parent                ClaimID
@@ -123,7 +123,6 @@ func (claim DirectoryClaim) ID() ClaimID                                   { ret
 func (claim DirectoryClaim) Source() transfer.AuthenticatedSourceDirectory { return claim.source }
 func (claim DirectoryClaim) Admission() transfer.DirectoryAdmission        { return claim.admission }
 func (claim DirectoryClaim) ArtifactPath() ordinaryoutput.ArtifactPath     { return claim.artifact }
-func (claim DirectoryClaim) LocatorKey() string                            { return claim.artifactLocatorKey }
 func (claim DirectoryClaim) DestinationPath() DestinationPath              { return claim.destination }
 func (claim DirectoryClaim) DestinationLocatorKey() string                 { return claim.destinationLocatorKey }
 func (claim DirectoryClaim) ParentID() ClaimID                             { return claim.destinationParent }
@@ -131,9 +130,9 @@ func (claim DirectoryClaim) SourceParentID() ClaimID                       { ret
 func (claim DirectoryClaim) IsSessionRoot() bool                           { return claim.destination.IsSessionRoot() }
 
 type FileClaim struct {
-	id                    ClaimID
-	file                  transfer.MaterializationFile
-	artifactLocatorKey    string
+	id   ClaimID
+	file transfer.MaterializationFile
+
 	destination           DestinationPath
 	destinationLocatorKey string
 	parent                ClaimID
@@ -141,7 +140,6 @@ type FileClaim struct {
 
 func (claim FileClaim) ID() ClaimID                        { return claim.id }
 func (claim FileClaim) File() transfer.MaterializationFile { return claim.file }
-func (claim FileClaim) LocatorKey() string                 { return claim.artifactLocatorKey }
 func (claim FileClaim) DestinationPath() DestinationPath   { return claim.destination }
 func (claim FileClaim) DestinationLocatorKey() string      { return claim.destinationLocatorKey }
 func (claim FileClaim) ParentID() ClaimID                  { return claim.parent }
@@ -310,17 +308,17 @@ func directoryBaseMetadataBytes(
 func directoryMetadataBytes(
 	source transfer.AuthenticatedSourceDirectory,
 	artifact ordinaryoutput.ArtifactPath,
-	artifactLocatorKey string,
+
 	destination DestinationPath,
 	destinationLocatorKey string,
 ) uint64 {
 	// Path/name and locator indexes retain immutable string headers over the same
 	// backing bytes as their claims, so each UTF-8 byte sequence is charged once.
-	bytes := directoryBaseMetadataBytes(source, artifact) + uint64(len(artifactLocatorKey))
+	bytes := directoryBaseMetadataBytes(source, artifact)
 	if destination.String() != "" && destination.String() != artifact.String() {
 		bytes += uint64(len(destination.String()))
 	}
-	if destinationLocatorKey != artifactLocatorKey {
+	if destinationLocatorKey != artifact.String() {
 		bytes += uint64(len(destinationLocatorKey))
 	}
 	return bytes

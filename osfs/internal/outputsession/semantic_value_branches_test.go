@@ -32,7 +32,7 @@ func TestSessionAndClaimAccessorsExposeOnlyReservedSemanticCoordinates(t *testin
 	fixture.session.mu.Unlock()
 	if rootClaim.ID() != rootID || rootClaim.Admission().IsZero() ||
 		rootClaim.Source().DirectoryID.IsZero() || !rootClaim.ArtifactPath().Valid() ||
-		rootClaim.LocatorKey() == "" || !rootClaim.DestinationPath().Valid() ||
+		!rootClaim.ArtifactPath().Valid() || !rootClaim.DestinationPath().Valid() ||
 		rootClaim.DestinationLocatorKey() == "" || rootClaim.ParentID() != 0 ||
 		rootClaim.SourceParentID() != 0 || !rootClaim.IsSessionRoot() {
 		t.Fatalf("root claim = %+v", rootClaim)
@@ -51,7 +51,7 @@ func TestSessionAndClaimAccessorsExposeOnlyReservedSemanticCoordinates(t *testin
 	}
 	fixture.session.mu.Unlock()
 	if fileClaim.ID() == 0 || fileClaim.File().Descriptor() != file.Descriptor() ||
-		fileClaim.LocatorKey() == "" || !fileClaim.DestinationPath().Valid() ||
+		!fileClaim.File().ArtifactPath().Valid() || !fileClaim.DestinationPath().Valid() ||
 		fileClaim.DestinationLocatorKey() == "" || fileClaim.ParentID() != rootID {
 		t.Fatalf("file claim = %+v", fileClaim)
 	}

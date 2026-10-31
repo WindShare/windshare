@@ -158,7 +158,13 @@ func TestArtifactPathProjectorIsStableAcrossLogicalReservationAlias(t *testing.T
 	)
 	reservedName, _ := receivecontract.CollisionName(operation, "photos", 1, false)
 	reservation, err := receivecontract.NewNativeNamedEntryReservation(
-		operation, reservationID, artifact, authority, reservedName, 1,
+		operation,
+		reservationID,
+		artifact,
+		authority,
+		reservedName,
+		reservedName,
+		1,
 	)
 	if err != nil || reservation.LogicalReservedName() == "photos" {
 		t.Fatalf("reservation=%+v err=%v", reservation, err)

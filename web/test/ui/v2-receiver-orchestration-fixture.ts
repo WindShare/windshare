@@ -450,7 +450,7 @@ export class FakeJoinedShare {
                 representativeFile: {
                   fileId: FILE_ID,
                   sourcePath: FILE_ENTRY.name,
-                  portableName: FILE_ENTRY.name,
+                  catalogName: FILE_ENTRY.name,
                 },
               }
             : {}),
@@ -460,7 +460,7 @@ export class FakeJoinedShare {
                   kind: 'directory' as const,
                   directoryId: ROOT_ID,
                   sourcePath: 'Shared files',
-                  portableName: 'Shared files',
+                  catalogName: 'Shared files',
                 }],
                 selectedRootCount: 1,
                 earlyLayoutBasis: { kind: 'synthetic-selection' as const },

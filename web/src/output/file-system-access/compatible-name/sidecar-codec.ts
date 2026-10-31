@@ -1,3 +1,4 @@
+import { snapshotCatalogPath } from '../../../catalog/path-policy'
 import type {
   CompatibleNameEntryKind,
 } from './model'
@@ -7,7 +8,7 @@ import type {
 } from '../../../transfer/lifecycle/name-repair'
 
 export const COMPATIBLE_NAME_SIDECAR_FORMAT_VERSION =
-  'windshare-name-restoration/v2' as const
+  'windshare-name-restoration/v3' as const
 
 const TEXT_ENCODER = new TextEncoder()
 const TEXT_DECODER = new TextDecoder('utf-8', { fatal: true })
@@ -252,14 +253,11 @@ function decodeLogicalPath(value: string): readonly string[] {
 }
 
 function validateLogicalPath(path: readonly string[]): readonly string[] {
-  if (!Array.isArray(path) || path.length === 0) {
-    throw new CompatibleNameSidecarError('compatible-name logical path is empty')
+  try {
+    return snapshotCatalogPath(path)
+  } catch (cause) {
+    throw new CompatibleNameSidecarError('compatible-name logical path is invalid', { cause })
   }
-  const validated: string[] = []
-  for (const component of path) {
-    validated.push(validatePathComponent(component, 'logical path'))
-  }
-  return Object.freeze(validated)
 }
 
 function validatePathComponent(value: string, label: string): string {

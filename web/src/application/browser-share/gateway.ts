@@ -8,7 +8,7 @@ import {
   SelectionPolicy,
   type FrozenSelectionPolicy,
 } from '../../catalog/selection'
-import { snapshotPortableCatalogPath } from '../../catalog/path-policy'
+import { snapshotCatalogPath } from '../../catalog/path-policy'
 import type { OfferChannelFactory } from '../../connectivity/peer-offer'
 import type { ConnectivityTraceSource } from '../../connectivity/diagnostics'
 import type { PeerRecoveryDependencies } from '../../connectivity/peer-set/path'
@@ -130,7 +130,7 @@ export class JoinedBrowserShare {
     try {
       // Navigation and transfer discovery share one prospective-path admission.
       // Checking before I/O keeps an over-depth or over-byte route unpublished.
-      path = snapshotPortableCatalogPath([...parent.path, entry.name])
+      path = snapshotCatalogPath([...parent.path, entry.name])
     } catch (error) {
       throw new BrowseNavigationError('Catalog path exceeds portable path admission', {
         cause: error,

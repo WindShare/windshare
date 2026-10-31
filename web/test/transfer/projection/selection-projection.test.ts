@@ -25,7 +25,7 @@ interface EvidenceInput {
   readonly representativeFile?: Readonly<{
     fileId: string
     sourcePath: string
-    portableName: string
+    catalogName: string
   }>
   readonly roots?: readonly SelectedRootFact[]
   readonly selectedRootCount?: number
@@ -133,8 +133,8 @@ describe('epoch-scoped selection projection', () => {
           files: 2,
           bytes: 8n,
           roots: [
-            { kind: 'file', fileId: firstId, sourcePath: 'folder/a.txt', portableName: 'a.txt' },
-            { kind: 'file', fileId: secondId, sourcePath: 'folder/b.txt', portableName: 'b.txt' },
+            { kind: 'file', fileId: firstId, sourcePath: 'folder/a.txt', catalogName: 'a.txt' },
+            { kind: 'file', fileId: secondId, sourcePath: 'folder/b.txt', catalogName: 'b.txt' },
           ],
           settledTargets: controller.state.projection.unsettledTargets,
         })))
@@ -484,24 +484,24 @@ function evidenceEvent(
   })
 }
 
-function fileRoot(seed: number, portableName: string): Extract<SelectedRootFact, { kind: 'file' }> {
+function fileRoot(seed: number, catalogName: string): Extract<SelectedRootFact, { kind: 'file' }> {
   return Object.freeze({
     kind: 'file',
     fileId: identity(seed),
-    sourcePath: portableName,
-    portableName,
+    sourcePath: catalogName,
+    catalogName,
   })
 }
 
 function directoryRoot(
   seed: number,
-  portableName: string,
+  catalogName: string,
 ): Extract<SelectedRootFact, { kind: 'directory' }> {
   return Object.freeze({
     kind: 'directory',
     directoryId: identity(seed),
-    sourcePath: portableName,
-    portableName,
+    sourcePath: catalogName,
+    catalogName,
   })
 }
 

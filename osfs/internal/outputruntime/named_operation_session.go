@@ -16,7 +16,9 @@ import (
 	"github.com/windshare/windshare/osfs/internal/destinationauthority"
 	"github.com/windshare/windshare/osfs/internal/directoryauthority"
 	"github.com/windshare/windshare/osfs/internal/fileexecution"
+	"github.com/windshare/windshare/osfs/internal/namestore"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
+	"github.com/windshare/windshare/osfs/internal/outputnames"
 	"github.com/windshare/windshare/osfs/internal/outputsession"
 )
 
@@ -70,6 +72,12 @@ func (resources *operationOutputResources) ReleaseOutputSession(context.Context)
 }
 
 func (resources *operationOutputResources) RecordTreeSettlement(ctx context.Context, kind transfer.DirectTreeSettlementKind, outcome transfer.DirectTreeOutcome, snapshot outputsession.TreeSettlementSnapshot) error {
+	if kind == transfer.DirectTreeSettlementSuccess {
+		operation := resources.operation
+		if err := operation.nameStore.Export(operation.names, namesRoot(operation.topLevel), operation.authority.destination.WithPublicContainer); err != nil {
+			return err
+		}
+	}
 	if resources.lifecycle != nil {
 		if err := resources.lifecycle.RecordTreeSettlement(ctx, kind, outcome, snapshot); err != nil {
 			return err
@@ -84,8 +92,10 @@ func (authority *Authority) openNamedOperation(
 	operation *Operation,
 ) (transfer.DirectTreeSession, error) {
 	intent := operation.intent
-	entry := operation.topLevel.ReservedEntry()
-	binder, err := newOperationDestinationBinder(entry)
+	if err := operation.prepareNames(); err != nil {
+		return nil, checkpointRuntimeError(ctx, "load destination name mappings", err)
+	}
+	binder, err := newOperationDestinationBinder(operation.names)
 	if err != nil {
 		return nil, runtimeDependencyError("bind operation artifact coordinates", err)
 	}
@@ -339,6 +349,9 @@ func (recorder *ordinaryLifecycleRecorder) cleanupTerminal(ctx context.Context) 
 		cleanupErr = recorder.repository.Close()
 	}
 	if cleanupErr == nil {
+		cleanupErr = recorder.operation.nameStore.Clear()
+	}
+	if cleanupErr == nil {
 		cleanupErr = recorder.operation.topLevel.RetireRecoveryIdentity()
 	}
 	if cleanupErr == nil {
@@ -470,32 +483,25 @@ func operationSessionCapabilities(
 }
 
 type operationDestinationBinder struct {
-	entry destinationauthority.ReservedEntry
+	names *outputnames.Mapper
 }
 
-func newOperationDestinationBinder(
-	entry destinationauthority.ReservedEntry,
-) (operationDestinationBinder, error) {
-	if !entry.Valid() {
+func newOperationDestinationBinder(names *outputnames.Mapper) (operationDestinationBinder, error) {
+	if names == nil {
 		return operationDestinationBinder{}, transfer.ErrInvalidOutputBinding
 	}
-	return operationDestinationBinder{entry: entry}, nil
+	return operationDestinationBinder{names: names}, nil
 }
 
-func (binder operationDestinationBinder) BindArtifactPath(
-	artifact ordinaryoutput.ArtifactPath,
-) (outputsession.DestinationPath, error) {
-	if !artifact.Valid() || !binder.entry.Valid() {
+func (binder operationDestinationBinder) BindArtifactPath(artifact ordinaryoutput.ArtifactPath) (outputsession.DestinationPath, error) {
+	if !artifact.Valid() || binder.names == nil {
 		return outputsession.DestinationPath{}, transfer.ErrInvalidOutputBinding
 	}
-	physical, err := destinationauthority.PhysicalArtifactPath(artifact.String(), binder.entry)
+	physical, err := binder.names.Bind(artifact.String())
 	if err != nil {
 		return outputsession.DestinationPath{}, err
 	}
 	if physical == "" {
-		if binder.entry.EntryKind() != receivecontract.ContainerEntryResultRoot {
-			return outputsession.DestinationPath{}, transfer.ErrInvalidOutputBinding
-		}
 		return outputsession.NewDestinationSessionRoot(), nil
 	}
 	return outputsession.NewDestinationPath(physical)
@@ -526,5 +532,46 @@ func validateNamedOperationIntent(
 		return err
 	}
 	_ = projector
+	return nil
+}
+
+func namesRoot(topLevel *destinationauthority.TopLevelReservation) outputnames.Root {
+	entry := topLevel.ReservedEntry()
+	return outputnames.Root{RequestedName: entry.RequestedName(), ReservedName: entry.LogicalReservedName(), PhysicalName: entry.PhysicalName(), Kind: entry.EntryKind()}
+}
+
+func newOperationNames(intent transfer.ReceiveIntent, topLevel *destinationauthority.TopLevelReservation, lease *checkpointstore.OperationRegistryLease, fresh bool, trace func(outputnames.Trace)) (*outputnames.Mapper, *namestore.Store, error) {
+	store := namestore.New(lease, intent.OperationID().Bytes(), fresh)
+	mapper, err := outputnames.New(intent.OperationID().Bytes(), namesRoot(topLevel), store,
+		outputnames.GuardedNamespace{Acquire: topLevel.AcquirePublicOperationGuard}, trace)
+	return mapper, store, err
+}
+
+func (operation *Operation) prepareNames() error {
+	if operation.names != nil {
+		return nil
+	}
+	mapper, store, err := newOperationNames(operation.intent, operation.topLevel, operation.lease, !operation.reopened, func(event outputnames.Trace) {
+		operation.authority.trace(FilesystemOutputTrace{
+			Operation: TraceRuntimeDecision, ReceiveIntentDigest: operation.intent.Digest(),
+			ReceiveOperationID: operation.intent.OperationID(), RuntimeComponent: FilesystemOutputRuntimeSession,
+			RuntimeOperation: FilesystemOutputRuntimeMapName, RuntimeDecision: FilesystemOutputRuntimeReserved,
+			LogicalPath: event.LogicalPath, PhysicalPath: event.PhysicalPath,
+			NameMappingAttempt: event.Attempt, NameMappingReused: event.Reused,
+		})
+	})
+	if err != nil {
+		return err
+	}
+	operation.names, operation.nameStore = mapper, store
+	root := namesRoot(operation.topLevel)
+	if root.ReservedName != root.PhysicalName {
+		operation.authority.trace(FilesystemOutputTrace{
+			Operation: TraceRuntimeDecision, ReceiveIntentDigest: operation.intent.Digest(),
+			ReceiveOperationID: operation.intent.OperationID(), RuntimeComponent: FilesystemOutputRuntimeSession,
+			RuntimeOperation: FilesystemOutputRuntimeMapName, RuntimeDecision: FilesystemOutputRuntimeReserved,
+			LogicalPath: root.RequestedName, PhysicalPath: root.PhysicalName, NameMappingReused: operation.reopened,
+		})
+	}
 	return nil
 }

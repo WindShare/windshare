@@ -33,9 +33,16 @@ func (lease *OperationRegistryLease) Deleted() bool {
 // OpenFileState retains file checkpoints below the exact leased operation.
 // A fresh operation may create the namespace without enumerating it; only a
 // matched resume asks the file store to reconcile its bounded contents.
-func (lease *OperationRegistryLease) OpenFileState(
-	create bool,
-) (outputcap.Directory, error) {
+func (lease *OperationRegistryLease) OpenFileState(create bool) (outputcap.Directory, error) {
+	return lease.openStateDirectory(ordinaryFileStateDirectory, create)
+}
+
+// OpenNameState is lazy: normal names never create an extra recovery namespace.
+func (lease *OperationRegistryLease) OpenNameState(create bool) (outputcap.Directory, error) {
+	return lease.openStateDirectory(ordinaryNameStateDirectory, create)
+}
+
+func (lease *OperationRegistryLease) openStateDirectory(name string, create bool) (outputcap.Directory, error) {
 	if lease == nil || lease.registry == nil || lease.lock == nil ||
 		lease.operation.IsZero() || !lease.record.Valid() {
 		return nil, transfer.ErrInvalidOutputBinding
@@ -50,7 +57,7 @@ func (lease *OperationRegistryLease) OpenFileState(
 	if create {
 		open = openOrCreateDirectory
 	}
-	files, openErr := open(operation, ordinaryFileStateDirectory)
+	files, openErr := open(operation, name)
 	closeErr := operation.Close()
 	if openErr != nil || closeErr != nil {
 		return nil, repositoryError(
@@ -316,6 +323,13 @@ func (lease *OperationRegistryLease) DeleteTerminal() error {
 	directory, err := openExistingDirectory(lease.registry.operations, name)
 	if err != nil {
 		return repositoryError("open terminal ordinary operation", err)
+	}
+	nameState, nameErr := openExistingDirectory(directory, ordinaryNameStateDirectory)
+	if nameErr == nil {
+		nameErr = removeEmptyDirectory(directory, ordinaryNameStateDirectory, nameState)
+	}
+	if nameErr != nil && !errors.Is(nameErr, fs.ErrNotExist) {
+		return errors.Join(nameErr, directory.Close())
 	}
 	if err := lease.registry.releaseTerminalReservation(lease.record); err != nil {
 		return errors.Join(err, directory.Close())

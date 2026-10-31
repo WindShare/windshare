@@ -48,7 +48,13 @@ func resultRootReservationClaimFixture(
 		t.Fatal(err)
 	}
 	reservation, err := receivecontract.NewNativeNamedEntryReservation(
-		operation, reservationID, artifact, authority, reservedName, collision,
+		operation,
+		reservationID,
+		artifact,
+		authority,
+		reservedName,
+		reservedName,
+		collision,
 	)
 	if err != nil {
 		t.Fatal(err)

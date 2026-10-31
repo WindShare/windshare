@@ -372,7 +372,13 @@ func newDecoderContractFixture(t *testing.T) decoderContractFixture {
 		t.Fatal(err)
 	}
 	singleReservation, err := NewNativeNamedEntryReservation(
-		operation, reservationID, single, authority, singleReserved, 1,
+		operation,
+		reservationID,
+		single,
+		authority,
+		singleReserved,
+		singleReserved,
+		1,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -382,7 +388,13 @@ func newDecoderContractFixture(t *testing.T) decoderContractFixture {
 		t.Fatal(err)
 	}
 	selectionReservation, err := NewNativeNamedEntryReservation(
-		operation, reservationID, selectionTree, authority, selectionReserved, 2,
+		operation,
+		reservationID,
+		selectionTree,
+		authority,
+		selectionReserved,
+		selectionReserved,
+		2,
 	)
 	if err != nil {
 		t.Fatal(err)

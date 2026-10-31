@@ -7,6 +7,7 @@ import (
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
+	"github.com/windshare/windshare/osfs/internal/outputnames"
 )
 
 func (authority *BoundDestination) ReserveTopLevel(
@@ -53,7 +54,7 @@ func reserveTopLevelOnRoot(
 	}
 	for collisionIndex := range ordinaryoutput.MaximumResultNameReservationAttemptsV1 {
 		candidate, collision, err := beginTopLevelReservationCandidate(
-			binding, request, preferredName, entryKind, collisionIndex, canonicalComponentKey,
+			root, binding, request, preferredName, entryKind, collisionIndex, canonicalComponentKey,
 		)
 		if err != nil {
 			return nil, err
@@ -82,6 +83,7 @@ func reserveTopLevelOnRoot(
 }
 
 func beginTopLevelReservationCandidate(
+	root outputcap.Directory,
 	binding Binding,
 	request ReservationRequest,
 	preferredName string,
@@ -97,6 +99,20 @@ func beginTopLevelReservationCandidate(
 		return topLevelReservationCandidate{}, false, errors.Join(ErrInvalidReservation, err)
 	}
 	physicalName := logicalReservedName
+	if !outputnames.PortableName(physicalName) {
+		// Probe before recording ownership: a refusal cannot leave a claim under
+		// a spelling the destination cannot subsequently reopen.
+		_, _, probeErr := root.ClassifyExactEntry(physicalName)
+		if errors.Is(probeErr, outputcap.ErrNameRejected) {
+			operationID := request.OperationID.Bytes()
+			physicalName, err = outputnames.Candidate(operationID, logicalReservedName, 0)
+			if err != nil {
+				return topLevelReservationCandidate{}, false, err
+			}
+		} else if probeErr != nil {
+			return topLevelReservationCandidate{}, false, probeErr
+		}
+	}
 	canonicalNameKey, err := canonicalComponentKey(physicalName)
 	if err != nil || canonicalNameKey == "" {
 		return topLevelReservationCandidate{}, false, errors.Join(ErrInvalidReservation, err)
@@ -122,7 +138,7 @@ func beginTopLevelReservationCandidate(
 			ErrReservationIndeterminate, claimErr, closeReservationClaimHandle(handle),
 		)
 	}
-	canonical, err := canonicalReservation(binding, request, logicalReservedName, collisionIndex)
+	canonical, err := canonicalReservation(binding, request, logicalReservedName, physicalName, collisionIndex)
 	if err != nil {
 		return topLevelReservationCandidate{}, false, errors.Join(err, rollbackReservationClaim(handle))
 	}
@@ -344,12 +360,17 @@ func newTopLevelReservation(
 func canonicalReservation(
 	binding Binding,
 	request ReservationRequest,
-	logicalReservedName string,
+	logicalReservedName, physicalName string,
 	collisionIndex uint32,
 ) (receivecontract.DestinationReservation, error) {
 	canonical, err := receivecontract.NewNativeNamedEntryReservation(
-		request.OperationID, request.ReservationID, request.Artifact,
-		binding.AuthorityRef(), logicalReservedName, collisionIndex,
+		request.OperationID,
+		request.ReservationID,
+		request.Artifact,
+		binding.AuthorityRef(),
+		logicalReservedName,
+		physicalName,
+		collisionIndex,
 	)
 	if err != nil {
 		return receivecontract.DestinationReservation{}, errors.Join(ErrInvalidReservation, err)

@@ -148,12 +148,12 @@ export async function createNativeNamedEntryReservation(input: {
   readonly artifact: ArtifactSpec
   readonly authorityRef: string
   readonly logicalReservedName: string
+  readonly physicalName: string
   readonly collisionIndex: number
 }): Promise<NativeNamedContainerEntryReservation> {
   return createNamedEntryReservation({
     ...input,
     authorityKind: 'native-container',
-    physicalName: input.logicalReservedName,
   }) as Promise<NativeNamedContainerEntryReservation>
 }
 
@@ -200,9 +200,6 @@ async function createNamedEntryReservation(input: {
   )
   if (logicalReservedName !== expected) {
     throw new TypeError('named-entry collision decision is invalid')
-  }
-  if (input.authorityKind === 'native-container' && physicalName !== logicalReservedName) {
-    throw new TypeError('native named-entry physical name must equal its logical reservation')
   }
   return createDestinationReservation({
     kind: 'named-container-entry',
@@ -419,6 +416,7 @@ export async function validateDestinationReservation(
             artifact: options.artifact,
             authorityRef: options.authorityRef,
             logicalReservedName: options.logicalReservedName,
+            physicalName: options.physicalName,
             collisionIndex: options.collisionIndex,
           })
         : await createFSANamedEntryReservation(options)

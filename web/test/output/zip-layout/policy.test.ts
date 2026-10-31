@@ -20,6 +20,19 @@ import {
 } from '../../../src/output/zip-layout/policy'
 
 describe('ZipEncodingPolicyV1', () => {
+  it.each(['NUL .txt', 'CON', 'COM? .log', 'trailing-space ', 'trailing-dot.', 'question?.txt'])(
+    'preserves the original destination-specific name %j in both ZIP headers', name => {
+      const plan = planZipEntry(normalizeZipEntry({
+        kind: 'file', path: ['root', name], exactSize: 0n,
+      }), 0n)
+      const expected = new TextEncoder().encode(`root/${name}`)
+      const local = encodeZipLocalHeader(plan)
+      const central = encodeZipCentralDirectoryRecord(plan, 0)
+      expect(local.slice(30, 30 + expected.length)).toEqual(expected)
+      expect(central.slice(46, 46 + expected.length)).toEqual(expected)
+    },
+  )
+
   it('uses ZIP32 with descriptor-authoritative local placeholders when values fit', () => {
     const plan = planZipEntry(normalizeZipEntry({
       kind: 'file',

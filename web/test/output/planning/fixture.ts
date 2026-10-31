@@ -210,7 +210,7 @@ export function singleFileProof(): ArtifactShapeProof {
     file: {
       fileId: identity(20),
       sourcePath: 'docs/report.txt',
-      portableName: 'report.txt',
+      catalogName: 'report.txt',
     },
   }
 }
@@ -227,7 +227,7 @@ export function treeProof(
       kind: 'directory',
       directoryId: identity(30),
       sourcePath: 'photos',
-      portableName: 'photos',
+      catalogName: 'photos',
     }],
     selectedRootCountLowerBound: 1,
     selectedRootsTruncated: false,

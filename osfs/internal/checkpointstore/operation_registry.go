@@ -23,6 +23,7 @@ const (
 
 	ordinaryOperationRecordFile    = "record"
 	ordinaryFileStateDirectory     = "files"
+	ordinaryNameStateDirectory     = "names"
 	ordinaryAdmissionCandidateFile = "candidate"
 	ordinaryOperationLockSuffix    = ".operation.lock"
 	ordinaryActiveLockSuffix       = ".active.lock"
@@ -47,6 +48,7 @@ var ordinaryRegistryEntries = map[string]outputcap.EntryKind{
 var ordinaryOperationEntries = map[string]outputcap.EntryKind{
 	ordinaryOperationRecordFile: outputcap.EntryRegularFile,
 	ordinaryFileStateDirectory:  outputcap.EntryDirectory,
+	ordinaryNameStateDirectory:  outputcap.EntryDirectory,
 }
 
 var ordinaryAdmissionCandidateEntries = map[string]outputcap.EntryKind{

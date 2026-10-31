@@ -649,7 +649,7 @@ func newVerticalFixtureWithContent(t *testing.T, data []byte, chunkSize uint32) 
 		WireVersion: catalog.WireVersionV2, Suite: catalog.SuiteV2, ShareInstance: fixture.share,
 		SyntheticRoot: fixture.syntheticRoot, RootCommit: committedRoot, ChunkSize: chunkSize,
 		Capabilities:    catalog.CapabilityCatalog | catalog.CapabilityRanges,
-		SenderPublicKey: publicKey, CreatedAtSeconds: 1, PathPolicy: catalog.PathPolicyV1,
+		SenderPublicKey: publicKey, CreatedAtSeconds: 1, PathPolicy: catalog.PathPolicyV2,
 	})
 	if err != nil {
 		t.Fatal(err)

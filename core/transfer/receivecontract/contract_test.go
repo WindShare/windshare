@@ -206,13 +206,27 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	singleName, _ := CollisionName(operation, "report.txt", 1, true)
-	nativeEntry, err := NewNativeNamedEntryReservation(operation, reservationID, single, authority, singleName, 1)
+	nativeEntry, err := NewNativeNamedEntryReservation(
+		operation,
+		reservationID,
+		single,
+		authority,
+		singleName,
+		singleName,
+		1,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	resultName, _ := CollisionName(operation, "docs-selection", 2, false)
 	resultEntry, err := NewNativeNamedEntryReservation(
-		operation, reservationID, tree, authority, resultName, 2,
+		operation,
+		reservationID,
+		tree,
+		authority,
+		resultName,
+		resultName,
+		2,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -298,7 +312,15 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 	if _, err := NewNativeContainerRootReservation(operation, reservationID, tree, authority); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatalf("result tree accepted as container root: %v", err)
 	}
-	if _, err := NewNativeNamedEntryReservation(operation, reservationID, single, authority, "wrong.txt", 1); !errors.Is(err, ErrInvalidReceiveContract) {
+	if _, err := NewNativeNamedEntryReservation(
+		operation,
+		reservationID,
+		single,
+		authority,
+		"wrong.txt",
+		"wrong.txt",
+		1,
+	); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatalf("wrong collision name accepted: %v", err)
 	}
 	if _, err := NewManagedAtomicReservation(operation, reservationID, tree, authority, NameApplicationChosen, "docs-selection", "docs-selection", 0); !errors.Is(err, ErrInvalidReceiveContract) {

@@ -1,4 +1,4 @@
-import { snapshotPortableCatalogPath } from '../../../catalog/path-policy'
+import { snapshotCatalogPath } from '../../../catalog/path-policy'
 import {
   validateReceiveIntent,
   type DirectTreePlan,
@@ -285,7 +285,7 @@ function requireSingleFileAncestor(
 function snapshotCoordinate(input: readonly string[]): readonly string[] {
   if (!Array.isArray(input)) throw new TypeError('path coordinate must be segmented')
   if (input.length === 0) return Object.freeze([])
-  return snapshotPortableCatalogPath(input)
+  return snapshotCatalogPath(input)
 }
 
 function startsWith(path: readonly string[], prefix: readonly string[]): boolean {
