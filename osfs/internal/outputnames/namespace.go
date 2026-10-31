@@ -2,6 +2,7 @@ package outputnames
 
 import (
 	"errors"
+	"slices"
 	"strings"
 
 	"github.com/windshare/windshare/osfs/internal/outputcap"
@@ -31,8 +32,8 @@ func (namespace GuardedNamespace) InspectName(parentPath, component string) (kin
 	}
 	var opened []outputcap.Directory
 	defer func() {
-		for index := len(opened) - 1; index >= 0; index-- {
-			resultErr = errors.Join(resultErr, opened[index].Close())
+		for _, directory := range slices.Backward(opened) {
+			resultErr = errors.Join(resultErr, directory.Close())
 		}
 	}()
 	var parents []string
