@@ -33,6 +33,7 @@ export class RemoteOperationError extends Error {
     this.retryAfterMilliseconds = protocolFailure.content.retryAfterMilliseconds
     this.protocolFailure = protocolFailure
     this.failureFact = protocolFailureFact({
+      error: this,
       stage: 'protocol_operation',
       recoveryDisposition: protocolFailure.content.retryable ? 'retryable' : 'terminal',
       protocolFailure,

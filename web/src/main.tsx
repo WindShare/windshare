@@ -52,7 +52,7 @@ const diagnostics = createBrowserDiagnosticsComposition({
 })
 const diagnosticSession = new BrowserDiagnosticsSession({
   runtime: diagnostics.runtime,
-  observeCapture: diagnostics.trace.subscribe,
+  observeCapture: diagnostics.observeEvidence,
   archive: new IndexedDBDiagnosticsArchive(() => window.indexedDB),
   pageUrl: initialCapability.pageUrl,
 })
@@ -65,7 +65,7 @@ const diagnosticDelivery = createDiagnosticsDelivery({
 const stopDiagnosticsObservation = observeDiagnosticsPage(window, diagnosticSession)
 const receiverTrace = createReceiverTraceSource(diagnostics.trace)
 const outputTrace = createOutputTraceSource(diagnostics.trace)
-const protocolTrace = createProtocolTraceSource(diagnostics.trace)
+const protocolTrace = createProtocolTraceSource(diagnostics.trace, diagnostics.failures)
 const connectivityTrace = createConnectivityTraceSource(diagnostics.trace)
 
 const receiveMutations = createBrowserReceiveOperationMutationPort({ outputTrace })

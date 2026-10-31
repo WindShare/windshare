@@ -4,7 +4,7 @@ import { PATH_POLICY, type ShareDescriptor } from '../../src/catalog/records'
 import { ReceiverSessionRuntime } from '../../src/session/runtime'
 import type { ReceiverSessionOptions } from '../../src/session/runtime-types'
 import type { SessionKeys } from '../../src/session/transcript'
-import type { ProtocolTraceEvent } from '../../src/session/diagnostics'
+import type { ProtocolTraceEvent, ProtocolTraceSource } from '../../src/session/diagnostics'
 import { EnvelopeOpener } from '../../src/session/envelope'
 import { decodeMessage } from '../../src/session/message'
 
@@ -88,14 +88,14 @@ export class BackpressuredChannel implements FrameChannel {
   }
 }
 
-export function runtimeFixture() {
+export function runtimeFixture(protocolTrace?: ProtocolTraceSource) {
   const channel = new BackpressuredChannel()
   const events: ProtocolTraceEvent[] = []
   let seed = 10
   const options: ReceiverSessionOptions = {
     descriptor: SHARE, readSecret: new Uint8Array(32), initialChannel: channel,
     randomBytes: length => new Uint8Array(length).fill(++seed),
-    protocolTrace: { current: event => events.push(event) },
+    protocolTrace: protocolTrace ?? { current: event => events.push(event) },
   }
   const keys: SessionKeys = {
     protocolSessionId: BINDING.protocolSessionId, transcriptHash: new Uint8Array(32),

@@ -1,3 +1,4 @@
+import type { FailureEvidenceSummary } from '../failure/summary'
 export const TRACE_FAILURE_DETAIL_MAX_CHARACTERS = 2_048
 
 export type LaneTransitionPayloadV1 =
@@ -24,5 +25,6 @@ export type LaneTransitionPayloadV1 =
   | Readonly<{
       transition: 'detached'
       detachment_class: 'physical_failure' | 'authenticated_failure'
+      failure_evidence?: FailureEvidenceSummary
       failure_detail?: string
     }>

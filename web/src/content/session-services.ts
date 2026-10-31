@@ -76,6 +76,7 @@ export class RemoteRevisionError extends Error {
     })
     this.protocolFailure = protocolFailure
     this.failureFact = protocolFailureFact({
+      error: this,
       stage: 'protocol_operation',
       // Wire retryability remains evidence; only the dedicated capacity type
       // grants a browser transfer authority to schedule another attempt.

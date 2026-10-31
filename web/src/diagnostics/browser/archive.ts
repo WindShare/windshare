@@ -1,4 +1,5 @@
 import type { DiagnosticFile } from './file'
+import { TRACE_CAPTURE_STATES, type TraceCaptureState } from '../trace/model'
 
 export const DIAGNOSTICS_ARCHIVE_MAX_AGE_MS = 24 * 60 * 60 * 1_000
 export const DIAGNOSTICS_ARCHIVE_MAX_CAPTURES = 3
@@ -9,6 +10,7 @@ export interface DiagnosticCaptureSummary {
   readonly id: string
   readonly scope: string
   readonly savedAt: number
+  readonly captureState: TraceCaptureState
   readonly byteLength: number
 }
 
@@ -16,6 +18,7 @@ export interface SavedDiagnosticCapture {
   readonly id: string
   readonly scope: string
   readonly savedAt: number
+  readonly captureState: TraceCaptureState
   readonly file: DiagnosticFile
 }
 
@@ -31,6 +34,7 @@ export function isSavedDiagnosticCapture(value: unknown): value is SavedDiagnost
   const candidate = value as Partial<SavedDiagnosticCapture>
   const file = candidate.file
   return typeof candidate.id === 'string' && typeof candidate.scope === 'string' &&
+    TRACE_CAPTURE_STATES.includes(candidate.captureState!) &&
     Number.isSafeInteger(candidate.savedAt) && candidate.savedAt! >= 0 &&
     typeof file === 'object' && file !== null &&
     typeof file.name === 'string' && /^[A-Za-z0-9_.-]+\.ndjson$/u.test(file.name) &&
@@ -45,13 +49,15 @@ export function summarizeDiagnosticCapture(capture: SavedDiagnosticCapture): Dia
   if (byteLength > DIAGNOSTICS_ARCHIVE_MAX_FILE_BYTES) {
     throw new RangeError('Diagnostic capture exceeds the archive file limit')
   }
-  return Object.freeze({ id: capture.id, scope: capture.scope, savedAt: capture.savedAt, byteLength })
+  return Object.freeze({ id: capture.id, scope: capture.scope, savedAt: capture.savedAt,
+    captureState: capture.captureState, byteLength })
 }
 
 export function isDiagnosticCaptureSummary(value: unknown): value is DiagnosticCaptureSummary {
   if (typeof value !== 'object' || value === null) return false
   const candidate = value as Partial<DiagnosticCaptureSummary>
   return typeof candidate.id === 'string' && typeof candidate.scope === 'string' &&
+    TRACE_CAPTURE_STATES.includes(candidate.captureState!) &&
     Number.isSafeInteger(candidate.savedAt) && candidate.savedAt! >= 0 &&
     Number.isSafeInteger(candidate.byteLength) && candidate.byteLength! >= 0 &&
     candidate.byteLength! <= DIAGNOSTICS_ARCHIVE_MAX_FILE_BYTES

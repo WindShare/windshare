@@ -378,7 +378,7 @@ describe('v2 preview incident ownership', () => {
           kind: 'unclassified',
           stage: 'preview_media',
           recoveryDisposition: 'none',
-          payload: { unclassified: { exception: null } },
+          payload: { unclassified: {} },
         },
         relation: 'contributor',
       },
@@ -548,7 +548,7 @@ describe('v2 preview incident ownership', () => {
         scope: { scopeKind: 'preview_seek' },
         fact: {
           kind: 'unclassified', stage: 'preview_seek',
-          payload: { unclassified: { exception: { message: 'seek failed', stack: expect.any(String) } } },
+          evidence: { exception: { message: 'seek failed', stack: expect.any(String) } },
         },
         relation: 'contributor',
       },
@@ -556,7 +556,7 @@ describe('v2 preview incident ownership', () => {
         scope: { scopeKind: 'preview_seek' },
         fact: {
           kind: 'unclassified', stage: 'cleanup',
-          payload: { unclassified: { exception: { message: 'close failed', stack: expect.any(String) } } },
+          evidence: { exception: { message: 'close failed', stack: expect.any(String) } },
         },
         relation: 'consequence',
       },
@@ -655,7 +655,7 @@ describe('v2 preview incident ownership', () => {
     expect(incidents.facts[0]).toMatchObject({
       fact: {
         kind: 'unclassified', stage: 'preview_open',
-        payload: { unclassified: { exception: { message: 'open failed', stack: expect.any(String) } } },
+        evidence: { exception: { message: 'open failed', stack: expect.any(String) } },
       },
       relation: 'contributor',
     })
@@ -721,9 +721,9 @@ describe('preview diagnostics continuity', () => {
       expect(snapshot.preview.state).toBe('error')
       expect(diagnostics.runtime.inspectLastFailure()?.payload.trigger).toMatchObject({
         stage: 'preview_open',
-        payload: { unclassified: { exception: {
+        evidence: { exception: {
           errorName: 'PreviewRuntimeError', message: failure.message, stack: failure.stack,
-        } } },
+        } },
       })
       // This pause exceeds both former failure deadlines without delaying the test.
       time.advance(60_000)

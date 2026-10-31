@@ -17,7 +17,10 @@ import {
   type IncidentPolicy,
 } from './policy'
 
+export const MAX_DIAGNOSTIC_CAUSES_PER_CLASSIFICATION = 4
+
 export interface FailureFactBucket {
+  readonly causeSignature?: string
   readonly fingerprint: FailureFingerprint
   readonly count: bigint
   readonly representative: FailureFact
@@ -37,11 +40,13 @@ export interface SealedFailureFacts {
 }
 
 export interface FailureFactAccumulator {
+  readonly factCount: bigint
   record(ref: FailureFactRef): void
   seal(trigger: FailureFactRef): SealedFailureFacts
 }
 
 interface MutableBucket {
+  readonly causeSignature?: string
   readonly fingerprint: FailureFingerprint
   count: bigint
   representative: FailureFactRef
@@ -50,13 +55,14 @@ interface MutableBucket {
 
 interface RefPlacement {
   readonly relation: FailureFactRelation
+  readonly key: string
   readonly retained: boolean
   readonly fingerprint: FailureFingerprint
 }
 
 class ExactFailureFactAccumulator implements FailureFactAccumulator {
-  readonly #contributorBuckets = new Map<FailureFingerprint, MutableBucket>()
-  readonly #consequenceBuckets = new Map<FailureFingerprint, MutableBucket>()
+  readonly #contributorBuckets = new Map<string, MutableBucket>()
+  readonly #consequenceBuckets = new Map<string, MutableBucket>()
   readonly #placements = new WeakMap<FailureFactRef, RefPlacement>()
   readonly #scope: IncidentScopeIdentity
   readonly #policy: IncidentPolicy
@@ -72,6 +78,8 @@ class ExactFailureFactAccumulator implements FailureFactAccumulator {
     this.#scope = scope
     this.#policy = policy
   }
+
+  get factCount(): bigint { return this.#factCount }
 
   record(ref: FailureFactRef): void {
     if (this.#sealed !== undefined) {
@@ -91,27 +99,31 @@ class ExactFailureFactAccumulator implements FailureFactAccumulator {
     const capacity = relation === 'contributor'
       ? this.#policy.maxContributorBucketsPerIncident
       : this.#policy.maxConsequenceBucketsPerIncident
-    const existing = buckets.get(fingerprint)
+    const causeSignature = fact.evidence?.signature
+    const key = fingerprint + ':' + (causeSignature ?? '-')
+    const existing = buckets.get(key)
     if (existing !== undefined) {
       existing.count += 1n
       // A single private fallback lets a nominated primary become the trigger
       // without losing the one public representative promised for its bucket.
       existing.fallbackRepresentative ??= ref
-      this.#placements.set(ref, { relation, retained: true, fingerprint })
-    } else if (buckets.size < capacity) {
-      buckets.set(fingerprint, {
+      this.#placements.set(ref, { relation, key, retained: true, fingerprint })
+    } else if (buckets.size < capacity &&
+        [...buckets.values()].filter(bucket => bucket.fingerprint === fingerprint).length < MAX_DIAGNOSTIC_CAUSES_PER_CLASSIFICATION) {
+      buckets.set(key, {
+        ...(causeSignature === undefined ? {} : { causeSignature }),
         fingerprint,
         count: 1n,
         representative: ref,
       })
-      this.#placements.set(ref, { relation, retained: true, fingerprint })
+      this.#placements.set(ref, { relation, key, retained: true, fingerprint })
     } else {
       if (relation === 'contributor') {
         this.#contributorOverflowCount += 1n
       } else {
         this.#consequenceOverflowCount += 1n
       }
-      this.#placements.set(ref, { relation, retained: false, fingerprint })
+      this.#placements.set(ref, { relation, key, retained: false, fingerprint })
     }
     this.#factCount += 1n
   }
@@ -161,14 +173,14 @@ class ExactFailureFactAccumulator implements FailureFactAccumulator {
       return
     }
 
-    const bucket = this.#contributorBuckets.get(placement.fingerprint)
+    const bucket = this.#contributorBuckets.get(placement.key)
     if (bucket === undefined || bucket.count === 0n) {
       throw new Error('Contributor accounting invariant failed')
     }
     bucket.count -= 1n
     if (bucket.representative !== trigger) return
     if (bucket.count === 0n) {
-      this.#contributorBuckets.delete(placement.fingerprint)
+      this.#contributorBuckets.delete(placement.key)
       return
     }
     if (bucket.fallbackRepresentative === undefined) {
@@ -178,10 +190,7 @@ class ExactFailureFactAccumulator implements FailureFactAccumulator {
   }
 
   #requireScope(ref: FailureFactRef): void {
-    if (
-      ref.scope.scopeKind !== this.#scope.scopeKind ||
-      ref.scope.scopeSequence !== this.#scope.scopeSequence
-    ) {
+    if (ref.scope !== this.#scope) {
       throw new TypeError('Failure fact reference belongs to another incident scope')
     }
   }
@@ -201,10 +210,7 @@ export function createFailureFactAccumulator(
     throw new TypeError('Incident scope identity is invalid')
   }
   return new ExactFailureFactAccumulator(
-    Object.freeze({
-      scopeKind: scope.scopeKind,
-      scopeSequence: scope.scopeSequence,
-    }),
+    scope,
     policy === DEFAULT_INCIDENT_POLICY
       ? DEFAULT_INCIDENT_POLICY
       : createIncidentPolicy(policy),
@@ -212,7 +218,7 @@ export function createFailureFactAccumulator(
 }
 
 function sealBuckets(
-  buckets: ReadonlyMap<FailureFingerprint, MutableBucket>,
+  buckets: ReadonlyMap<string, MutableBucket>,
 ): readonly FailureFactBucket[] {
   return Object.freeze(
     [...buckets.values()]
@@ -221,6 +227,7 @@ function sealBuckets(
         compareFingerprints(left.fingerprint, right.fingerprint),
       )
       .map((bucket) => Object.freeze({
+        ...(bucket.causeSignature === undefined ? {} : { causeSignature: bucket.causeSignature }),
         fingerprint: bucket.fingerprint,
         count: bucket.count,
         representative: failureFactForRef(bucket.representative),

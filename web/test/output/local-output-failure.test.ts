@@ -65,7 +65,7 @@ describe('local output failure diagnostics', () => {
           exception: {
             javascriptKind: 'unknown',
             message: 'second failure',
-            cause: 'disk detached',
+            cause: { thrownValue: 'disk detached' },
           },
         },
       },
@@ -115,7 +115,7 @@ describe('local output failure diagnostics', () => {
       },
     })
 
-    expect(exceptionProjection(hostile)).toEqual({
+    expect(exceptionProjection(hostile)).toMatchObject({
       javascriptKind: 'unknown',
       nativeClass: 'unknown',
       thrownType: 'object',

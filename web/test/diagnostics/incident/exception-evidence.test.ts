@@ -1,63 +1,83 @@
 import { describe, expect, it } from 'vitest'
-import { isFailureFact, unclassifiedFailureFact } from '../../../src/diagnostics/incident/fact'
-import { MAX_INCIDENT_EXCEPTION_TEXT_BYTES } from '../../../src/diagnostics/incident/exception-evidence'
+import { faultFailureFact, isFailureFact, unclassifiedFailureFact } from '../../../src/diagnostics/incident/fact'
+import { MAX_EXCEPTION_BYTES, MAX_EXCEPTION_TEXT_BYTES, projectDiagnosticException } from '../../../src/diagnostics/exception'
+import { captureFailureEvidence } from '../../../src/diagnostics/failure/evidence'
+import { catalogFault, CatalogFaultCode, FaultScope } from '../../../src/transfer/failure/fault'
 
 const context = { stage: 'authority_activation', recoveryDisposition: 'terminal' } as const
 
-describe('unclassified exception evidence', () => {
-  it('snapshots exception text without retaining the mutable thrown object', () => {
+describe('classification-independent exception evidence', () => {
+  it('retains immutable messages, stacks and cause branches on typed facts', () => {
     const error = new Error('initial failure', { cause: new Error('initial cause') })
     error.stack = 'initial stack'
-    const fact = unclassifiedFailureFact({ ...context, error })
+    const fact = faultFailureFact({ ...context,
+      fault: catalogFault(FaultScope.SessionTerminal, CatalogFaultCode.InvalidGeneration), error,
+      operation: 'catalog.accept', context: { directory: 'directory-a', expectedPage: 2, actualPage: 3 },
+    })
     error.message = 'changed'
     error.stack = 'changed'
     expect(isFailureFact(fact)).toBe(true)
-    expect(fact.payload.unclassified.exception).toMatchObject({
-      errorName: 'Error', message: 'initial failure', stack: 'initial stack', cause: 'Error: initial cause',
+    expect(fact.kind).toBe('fault')
+    expect(fact.evidence).toMatchObject({ operation: 'catalog.accept', context: { expectedPage: 2, actualPage: 3 },
+      exception: { errorName: 'Error', message: 'initial failure', stack: 'initial stack', cause: { message: 'initial cause' } },
     })
-    expect(Object.isFrozen(fact.payload.unclassified.exception)).toBe(true)
+    expect(Object.isFrozen(fact.evidence!.exception.cause)).toBe(true)
   })
 
-  it('bounds multibyte message and stack evidence before retention', () => {
-    const error = new TypeError('错误😀'.repeat(MAX_INCIDENT_EXCEPTION_TEXT_BYTES))
-    error.stack = error.message
-    const fact = unclassifiedFailureFact({ ...context, error })
-    const evidence = fact.payload.unclassified.exception!
-    for (const text of [evidence.message!, evidence.stack!]) {
-      expect(new TextEncoder().encode(text).byteLength).toBeLessThanOrEqual(MAX_INCIDENT_EXCEPTION_TEXT_BYTES)
-      expect(text).not.toContain('\uFFFD')
-      expect(text.length).toBeGreaterThan(0)
-    }
-    expect(isFailureFact(fact)).toBe(true)
+  it('bounds escaped multibyte text and the entire exception graph', () => {
+    const large = '\u754c\u{1f680}\u0000'.repeat(MAX_EXCEPTION_TEXT_BYTES)
+    let error: Error = new Error(large)
+    for (let index = 0; index < 12; index++) error = new AggregateError(Array(20).fill(error), large, { cause: error })
+    error.stack = large
+    const snapshot = projectDiagnosticException(error)
+    expect(new TextEncoder().encode(JSON.stringify(snapshot)).byteLength).toBeLessThanOrEqual(MAX_EXCEPTION_BYTES)
+    expect(snapshot.omittedBranches).toBeGreaterThan(0)
+    expect(snapshot.truncated.length).toBeGreaterThan(0)
+    expect(snapshot.message).not.toContain('\uFFFD')
   })
 
-  it('distinguishes absent evidence from a thrown undefined value', () => {
-    expect(unclassifiedFailureFact(context).payload.unclassified.exception).toBeNull()
-    expect(unclassifiedFailureFact({ ...context, error: undefined }).payload.unclassified.exception)
+  it('distinguishes unavailable evidence, thrown undefined, cycles and inaccessible properties', () => {
+    expect(unclassifiedFailureFact(context).evidence).toBeUndefined()
+    expect(unclassifiedFailureFact({ ...context, error: undefined }).evidence!.exception)
       .toMatchObject({ thrownType: 'undefined', thrownValue: 'undefined' })
-  })
-
-  it('captures hostile thrown values without affecting product control flow', () => {
-    const error = new Proxy({}, { get() { throw new Error('unreadable property') } })
-    const fact = unclassifiedFailureFact({ ...context, error })
-    expect(isFailureFact(fact)).toBe(true)
-    expect(fact.payload.unclassified.exception).toMatchObject({
+    const error = new Error('cycle')
+    error.cause = error
+    const snapshot = projectDiagnosticException(error)
+    expect(snapshot.truncated).toContain('cause:cycle')
+    const hostile = new Proxy({}, { get() { throw new Error('unreadable') } })
+    expect(projectDiagnosticException(hostile)).toMatchObject({
       thrownType: 'object', thrownValue: '[unprintable thrown value]',
     })
+    expect(projectDiagnosticException(hostile).unavailable).toContain('cause')
   })
 
-  it('rejects forged, unbounded or mutable retained evidence', () => {
+  it('reuses originating evidence through wrappers and aggregate branches', () => {
+    const cause = new Error('disk permission denied')
+    const outputSnapshot = projectDiagnosticException(cause)
+    const original = captureFailureEvidence(cause, { operation: 'output.write' })
+    expect(original.exception).toBe(outputSnapshot)
+    const wrapper = new Error('failed to publish', { cause })
+    expect(captureFailureEvidence(wrapper, { operation: 'transfer' })).toBe(original)
+    const aggregate = captureFailureEvidence(new AggregateError([wrapper, new Error('cleanup failed')], 'settlement failed'), { operation: 'settlement' })
+    expect(aggregate.exception.errors[0]).toBe(original.exception)
+    expect(aggregate.exception.errors[1]?.message).toBe('cleanup failed')
+  })
+
+  it('groups diagnostic causes independently of occurrence identities and exception ordering', () => {
+    const first = captureFailureEvidence(new Error('same cause'), { operation: 'read', context: { lane: 1 } })
+    const second = captureFailureEvidence(new Error('same cause'), { operation: 'read', context: { lane: 9 } })
+    const different = captureFailureEvidence(new Error('different cause'), { operation: 'read' })
+    expect(first.signature).toBe(second.signature)
+    expect(first.signature).not.toBe(different.signature)
+    const aggregate = (errors: string[]) => captureFailureEvidence(
+      new AggregateError(errors.map(message => new Error(message)), 'branches'), { operation: 'read' },
+    ).signature
+    expect(aggregate(['a', 'b'])).toBe(aggregate(['b', 'a']))
+  })
+
+  it('rejects forged or mutable evidence independently of the classification payload', () => {
     const fact = unclassifiedFailureFact({ ...context, error: new Error('failure') })
-    for (const exception of [
-      { ...fact.payload.unclassified.exception },
-      Object.freeze({ ...fact.payload.unclassified.exception, message: 'x'.repeat(MAX_INCIDENT_EXCEPTION_TEXT_BYTES + 1) }),
-      Object.freeze({ ...fact.payload.unclassified.exception, thrownType: 'invented' }),
-      Object.freeze({ ...fact.payload.unclassified.exception, raw: new Error() }),
-    ]) {
-      const forged = Object.freeze({ ...fact, payload: Object.freeze({
-        unclassified: Object.freeze({ exception }),
-      }) })
-      expect(isFailureFact(forged)).toBe(false)
-    }
+    expect(isFailureFact(Object.freeze({ ...fact, evidence: { ...fact.evidence } }))).toBe(false)
+    expect(isFailureFact(Object.freeze({ ...fact, evidence: Object.freeze({ ...fact.evidence, raw: new Error() }) }))).toBe(false)
   })
 })

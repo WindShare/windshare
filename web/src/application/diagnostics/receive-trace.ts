@@ -1,3 +1,5 @@
+import type { FailureEvidenceHistoryPort } from '../../diagnostics/failure/history'
+import { unclassifiedFailureFact, type FailureCorrelation } from '../../diagnostics/incident/fact'
 import { projectProtocolTraceEvent } from './protocol-trace'
 export { projectProtocolTraceEvent } from './protocol-trace'
 import { correlatedObservation, decimal, observation, requiredCorrelation, snake } from '../../diagnostics/export/trace-observation'
@@ -38,8 +40,15 @@ export function createOutputTraceSource(
 
 export function createProtocolTraceSource(
   trace: BrowserTraceSource,
+  failures?: FailureEvidenceHistoryPort,
 ): ProtocolTraceSource {
-  return adaptTraceSource(trace, projectProtocolTraceEvent)
+  const detailed = adaptTraceSource(trace, projectProtocolTraceEvent)
+  return Object.freeze({
+    get current() { return detailed.current },
+    failure: (error: unknown, operation: string, correlation: FailureCorrelation, relation?: 'consequence') => failures?.record(unclassifiedFailureFact({
+      error, operation, correlation, stage: 'protocol_operation', recoveryDisposition: 'none',
+    }), relation),
+  })
 }
 
 export function createConnectivityTraceSource(

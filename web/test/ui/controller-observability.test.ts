@@ -18,10 +18,10 @@ describe('controller failure evidence', () => {
       expect(incidents.decisions).toMatchObject([{ kind: 'incident', outcome: 'failed' }])
       expect(fact).toMatchObject({
         kind: 'unclassified', stage, recoveryDisposition: 'terminal',
-        payload: { unclassified: { exception: {
+        evidence: { exception: {
           javascriptKind: 'type-error', errorName: 'TypeError', message: error.message,
-          stack: error.stack, cause: 'Error: resumable-receive supplied pause',
-        } } },
+          stack: error.stack, cause: { message: 'resumable-receive supplied pause' },
+        } },
       })
     },
   )

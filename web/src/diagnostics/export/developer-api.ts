@@ -7,6 +7,7 @@ export interface WindShareDiagnostics {
   enable(): DiagnosticsStatusV2
   disable(): DiagnosticsStatusV2
   status(): DiagnosticsStatusV2
+  inspectFailureEvidence(): ReturnType<DiagnosticsRuntimePort['inspectFailureEvidence']>
   inspectLastFailure(): IncidentRecordV2 | null
   export(): string
   clear(): void
@@ -28,6 +29,7 @@ export function createWindShareDiagnostics(
     enable: () => runtime.enable(),
     disable: () => runtime.disable(),
     status: () => runtime.status(),
+    inspectFailureEvidence: () => runtime.inspectFailureEvidence(),
     inspectLastFailure: () => runtime.inspectLastFailure(),
     export: () => runtime.export(),
     clear: () => runtime.clear(),

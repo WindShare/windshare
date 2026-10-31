@@ -92,7 +92,7 @@ export function incidentRecord(sequence: string): IncidentRecordV2 {
         kind: 'unclassified',
         stage: 'join',
         recovery_disposition: 'terminal',
-        payload: { unclassified: { exception: null } },
+        payload: { unclassified: {} },
       },
       contributors: [],
       consequences: [],

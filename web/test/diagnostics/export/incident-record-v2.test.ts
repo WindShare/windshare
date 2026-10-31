@@ -43,9 +43,9 @@ describe('IncidentRecordV2 projection', () => {
     })])
     const { record } = projector().project(input(facts))
     expect(record.payload.trigger).toMatchObject({
-      kind: 'unclassified', payload: { unclassified: { exception: {
+      kind: 'unclassified', evidence: { exception: {
         errorName: 'TypeError', message: error.message, stack: error.stack,
-      } } },
+      } },
     })
     expect(JSON.parse(JSON.stringify(record))).toEqual(record)
   })

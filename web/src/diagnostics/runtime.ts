@@ -1,3 +1,4 @@
+import type { FailureEvidenceHistoryPort, FailureEvidenceHistorySnapshot } from './failure/history'
 import {
   projectDiagnosticsStatusV2,
   type DiagnosticBundleIdentityV2,
@@ -45,6 +46,7 @@ export interface DiagnosticsExportTimeSource {
 }
 
 export interface BrowserDiagnosticsRuntimeOptions {
+  readonly failures?: FailureEvidenceHistoryPort
   readonly identity: DiagnosticBundleIdentityV2
   readonly incident: DiagnosticsIncidentRuntimePort
   readonly trace: DiagnosticsTraceRuntimePort
@@ -60,6 +62,7 @@ export interface DiagnosticsRuntimePort {
   enable(): DiagnosticsStatusV2
   disable(): DiagnosticsStatusV2
   status(): DiagnosticsStatusV2
+  inspectFailureEvidence(): FailureEvidenceHistorySnapshot
   inspectLastFailure(): IncidentRecordV2 | null
   export(): string
   clear(): void
@@ -69,6 +72,7 @@ export const SYSTEM_DIAGNOSTICS_EXPORT_TIME_SOURCE: DiagnosticsExportTimeSource 
   Object.freeze({ captureTime: () => new Date().toISOString() })
 
 export class BrowserDiagnosticsRuntime implements DiagnosticsRuntimePort, DiagnosticsEvidenceReadPort {
+  readonly #failures: FailureEvidenceHistoryPort | undefined
   readonly #identity: DiagnosticBundleIdentityV2
   readonly #evidence: DiagnosticsEvidenceReader
   readonly #incident: DiagnosticsIncidentRuntimePort
@@ -77,6 +81,7 @@ export class BrowserDiagnosticsRuntime implements DiagnosticsRuntimePort, Diagno
   readonly #localOutputFailures: BrowserDiagnosticsRuntimeOptions['localOutputFailures']
 
   constructor(options: BrowserDiagnosticsRuntimeOptions) {
+    this.#failures = options.failures
     this.#identity = options.identity
     this.#incident = options.incident
     this.#trace = options.trace
@@ -99,6 +104,10 @@ export class BrowserDiagnosticsRuntime implements DiagnosticsRuntimePort, Diagno
 
   status(): DiagnosticsStatusV2 {
     return this.#statusFrom(this.#trace.status())
+  }
+
+  inspectFailureEvidence(): FailureEvidenceHistorySnapshot {
+    return this.#failures?.snapshot() ?? Object.freeze({ records: Object.freeze([]), omitted: '0', retainedBytes: 0 })
   }
 
   inspectLastFailure(): IncidentRecordV2 | null {
@@ -131,6 +140,7 @@ export class BrowserDiagnosticsRuntime implements DiagnosticsRuntimePort, Diagno
     const status = projectDiagnosticsStatusV2(traceStatus, healthAtExport)
     return Object.freeze({
       incidents,
+      ...(this.#failures === undefined ? {} : { failureEvidence: this.#failures.snapshot() }),
       localOutputFailures: this.#localOutputFailures?.snapshot() ?? [],
       status,
       healthAtExport,
@@ -139,6 +149,7 @@ export class BrowserDiagnosticsRuntime implements DiagnosticsRuntimePort, Diagno
   }
 
   clear(): void {
+    this.#failures?.clear()
     this.#evidence.clear()
     try {
       this.#incident.clearRetainedIncidents()

@@ -1,3 +1,6 @@
+import { recordScopedFailure } from '../../diagnostics/incident/scope'
+import { withFailureEvidence } from '../../diagnostics/failure/attach'
+import type { FailureEvidenceInput } from '../../diagnostics/failure/evidence'
 import { ClassifiedTransferFailureError, snapshotClassification, isClassifiedTransferFailure, type ClassifiedTransferFailure } from '../failure/classification'
 import { declaredOutputFailure, type OutputFailure } from '../failure/output'
 import { DirectoryFailureError } from '../../catalog/client'
@@ -67,7 +70,7 @@ const REVISION_FAILURE_UNSUPPORTED_STABILITY = 0x3004
 const REVISION_FAILURE_DRIFT = 0x3007
 const MAXIMUM_FAILURE_CAUSE_DEPTH = 8
 
-export interface TransferFailureClassificationOptions {
+export interface TransferFailureClassificationOptions extends FailureEvidenceInput {
   readonly signal?: AbortSignal
   readonly incidentScope?: IncidentScopeHandle
   readonly relation?: FailureFactRelation
@@ -102,6 +105,7 @@ export function isolatedDirectoryOutputFailure(
   const normalized = normalizedFileTransferFault(
     outputFault(FaultScope.DirectoryLocal, OutputFaultCode.DirectoryMetadata),
     {
+      error,
       stage: 'output_commit',
       materializationFailureReason: 'directory-finalize-failed',
       ...(incidentScope === undefined ? {} : { incidentScope }),
@@ -133,11 +137,13 @@ export function normalizeFileTransferFailure(
     return Object.freeze({ kind: 'canceled', diagnostic: error })
   }
   if (options.signal?.aborted === true) {
+    recordConcurrentCancellationFailure(error, options)
     return Object.freeze({
       kind: 'canceled',
       diagnostic: options.signal.reason ?? error,
     })
   }
+  options = { ...options, error }
   if (error instanceof RevisionCapacityWaitBudgetError) {
     return normalizedFileTransferClassification(Object.freeze({
       fault: outputFault(FaultScope.OutputPause, OutputFaultCode.ResourceBudget),
@@ -218,7 +224,7 @@ export function normalizeFileTransferFailure(
   if (classified === undefined) {
     return normalizedFileTransferClassification(Object.freeze({
       fault,
-      fact: unclassifiedFailureFact({ stage, recoveryDisposition, error }),
+      fact: unclassifiedFailureFact({ ...options, stage, recoveryDisposition, error }),
       materializationFailureReason: reason,
     }), options, fileOutcomeEvidence)
   }
@@ -287,6 +293,7 @@ export function normalizedFileTransferFault(
   return normalizedFileTransferClassification(Object.freeze({
     fault,
     fact: faultFailureFact({
+      ...options,
       stage,
       recoveryDisposition: options.recoveryDisposition ?? recoveryDispositionFor(undefined, fault),
       fault,
@@ -297,12 +304,15 @@ export function normalizedFileTransferFault(
 
 function normalizedFileTransferClassification(
   classification: ClassifiedTransferFailure,
-  options: Pick<TransferFailureClassificationOptions, 'incidentScope' | 'relation'>,
+  options: Pick<TransferFailureClassificationOptions, 'incidentScope' | 'relation'> & FailureEvidenceInput,
   fileOutcomeEvidence?: TransferFileOutcomeEvidence,
 ): NormalizedFileTransferFailure & { readonly kind: 'fault' } {
+  const captured = Object.hasOwn(options, 'error')
+    ? Object.freeze({ ...classification, fact: withFailureEvidence(classification.fact, options.error, options) })
+    : classification
   return normalizedFromClassification(
     materializeClassifiedTransferFailure(
-      classification,
+      captured,
       options.incidentScope,
       options.relation,
     ),
@@ -348,10 +358,10 @@ export function materializeClassifiedTransferFailure(
   relation: FailureFactRelation = 'contributor',
 ): ClassifiedTransferFailure {
   const snapshot = snapshotClassification(classification)
-  if (snapshot.factRef !== undefined || incidentScope === undefined) return snapshot
+  if (incidentScope === undefined) return snapshot
   let factRef: FailureFactRef | undefined
   try {
-    factRef = incidentScope.facts.record(snapshot.fact, relation)
+    factRef = recordScopedFailure(incidentScope, snapshot.fact, relation, snapshot.factRef)
   } catch {
     // Incident recording is observational and cannot alter product classification.
   }
@@ -594,4 +604,13 @@ export function materializationFailureReason(
     return 'content-read-failed'
   }
   return fallback
+}
+
+function recordConcurrentCancellationFailure(error: unknown, options: TransferFailureClassificationOptions): void {
+  if (error === options.signal?.reason) return
+  try {
+    options.incidentScope?.facts.record(unclassifiedFailureFact({
+      stage: options.stage ?? 'cleanup', recoveryDisposition: 'none', error, operation: 'transfer.cancel.concurrent',
+    }), 'consequence')
+  } catch { /* Concurrent cleanup evidence cannot override cancellation. */ }
 }

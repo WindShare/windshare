@@ -1,3 +1,7 @@
+import { summarizeFailureFact } from '../failure/summary'
+import { projectFailureFactV2 } from '../export/projector'
+import type { FailureFactV2 } from '../export/incident-record-v2'
+import type { FailureEvidenceHistoryPort } from '../failure/history'
 import {
   createFailureFactAccumulator,
   type FailureFactAccumulator,
@@ -70,6 +74,7 @@ export interface IncidentLink {
 }
 
 export interface IncidentReporterOptions {
+  readonly evidence?: FailureEvidenceHistoryPort
   readonly projector: IncidentRecordProjector
   readonly timeSource: IncidentTimeSource
   readonly consoleSink: IncidentConsoleSink
@@ -107,6 +112,7 @@ interface ActiveIncidentScope {
 }
 
 interface LateIncidentLink {
+  readonly trigger: FailureFactV2
   readonly link: IncidentLink
   readonly presentation: Readonly<{
     boundary: PresentationBoundary
@@ -120,9 +126,12 @@ interface PendingLateLink {
   commit(): void
 }
 
+export const MAX_ACTIVE_INCIDENT_SCOPES = 16
+
 class BrowserIncidentReporter implements IncidentReporter {
   readonly history: IncidentHistoryReadPort
   readonly health: IncidentHealthReadPort
+  readonly #evidence: FailureEvidenceHistoryPort | undefined
   readonly #history: IncidentHistoryPort
   readonly #health: IncidentDiagnosticsHealth
   readonly #projector: IncidentRecordProjector
@@ -140,6 +149,7 @@ class BrowserIncidentReporter implements IncidentReporter {
     this.#policy = options.policy === undefined
       ? DEFAULT_INCIDENT_POLICY
       : createIncidentPolicy(options.policy)
+    this.#evidence = options.evidence
     this.#projector = options.projector
     this.#timeSource = options.timeSource
     this.#consoleSink = options.consoleSink
@@ -159,6 +169,8 @@ class BrowserIncidentReporter implements IncidentReporter {
       deadlineReached: (identity) => this.#requestSeal(identity),
       scopeClosed: (identity) => this.#onScopeClosed(identity),
     })
+    // An abandoned product scope cannot retain unbounded aggregation state.
+    if (this.#active.size >= MAX_ACTIVE_INCIDENT_SCOPES) this.#evictOldestScope()
     this.#active.set(scopeKey(owner.identity), {
       owner,
       sealRequested: false,
@@ -167,6 +179,19 @@ class BrowserIncidentReporter implements IncidentReporter {
       consoleReports: 0,
     })
     return owner
+  }
+
+  #evictOldestScope(): void {
+    const oldest = this.#active.entries().next().value
+    if (oldest === undefined) return
+    const [key, state] = oldest
+    if (state.decision?.kind === 'incident') {
+      state.sealRequested = true
+      this.#trySeal(state)
+    } else {
+      this.#active.delete(key)
+      this.#health.recordFactOverflow(state.accumulator?.factCount ?? 0n)
+    }
   }
 
   submitDecision(
@@ -206,11 +231,7 @@ class BrowserIncidentReporter implements IncidentReporter {
     }
     if (
       decision.kind === 'incident' &&
-      (
-        decision.trigger.scope.scopeKind !== state.owner.identity.scopeKind ||
-        decision.trigger.scope.scopeSequence !==
-          state.owner.identity.scopeSequence
-      )
+      decision.trigger.scope !== state.owner.identity
     ) {
       return
     }
@@ -226,6 +247,7 @@ class BrowserIncidentReporter implements IncidentReporter {
   }
 
   #onFact(observation: FactObservation): void {
+    this.#evidence?.record(observation.fact, observation.relation, observation.ref)
     const key = scopeKey(observation.ref.scope)
     const active = this.#active.get(key)
     if (active !== undefined) {
@@ -301,6 +323,7 @@ class BrowserIncidentReporter implements IncidentReporter {
       state.decision.outcome,
       timestamp.elapsedMs,
       state.consoleReports,
+      facts.trigger.fact,
     )
     const projection = this.#projectWithExactHealth({
       sequence,
@@ -342,6 +365,7 @@ class BrowserIncidentReporter implements IncidentReporter {
       facts,
       initialOverflow: 0n,
       rootIncidentSequence: root.link.incidentSequence,
+      rootTrigger: root.trigger,
     })
 
     this.#appendHistory(projection.record)
@@ -367,6 +391,7 @@ class BrowserIncidentReporter implements IncidentReporter {
     }>
     readonly facts: SealedFailureFacts
     readonly initialOverflow: bigint
+    readonly rootTrigger?: FailureFactV2
     readonly rootIncidentSequence?: bigint
   }): IncidentRecordProjection {
     let accountedOverflow = input.initialOverflow
@@ -382,6 +407,7 @@ class BrowserIncidentReporter implements IncidentReporter {
         elapsedMs: input.timestamp.elapsedMs,
         presentation: input.presentation,
         facts: input.facts,
+        ...(input.rootTrigger === undefined ? {} : { rootTrigger: input.rootTrigger }),
         context,
         health: this.#health.incidentHealthSnapshot(),
         ...(input.rootIncidentSequence === undefined
@@ -428,6 +454,7 @@ class BrowserIncidentReporter implements IncidentReporter {
     outcome: PresentationOutcome,
     elapsedMs: bigint,
     consoleReports: number,
+    trigger: FailureFact,
   ): PendingLateLink {
     this.#evictExpiredLateLinks(elapsedMs)
     while (this.#lateLinks.size >= this.#policy.maxLateIncidentLinks) {
@@ -438,6 +465,7 @@ class BrowserIncidentReporter implements IncidentReporter {
     }
     const key = scopeKey(scope)
     const entry: LateIncidentLink = {
+      trigger: summarizeFailureFact(projectFailureFactV2(trigger)),
       link: Object.freeze({ incidentSequence: sequence, scope }),
       presentation: Object.freeze({ boundary, outcome }),
       sealedAtElapsedMs: elapsedMs,

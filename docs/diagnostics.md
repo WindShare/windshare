@@ -68,7 +68,7 @@ wind share <path> --browser-trace --trace-dir ./traces
 You can also add `?trace=1` (or `&trace=1` when a query exists) to an existing link.
 
 1. Open the test link or paste it into the receiver's input, then reproduce the issue.
-   The top bar shows recording or retained-evidence status.
+   The top bar shows detailed recording or saved-recording status.
 2. Click **Export diagnostics**. Choose **Share file**, **Save file**, or **Copy log**.
    File sharing appears when supported; some phones receive the same NDJSON content as a `.txt` attachment.
    Clipboard denial exposes selectable text for manual copying.
@@ -81,11 +81,16 @@ deadline; it does not extend capture or undo a manual stop. The activation query
 Failures retain incident details without ending capture; later previews, retries, and downloads
 continue recording until **Stop recording** or the original deadline.
 
-The trace ring is bounded to 4 MiB / 4,096 events. Older events roll out, with bounded priority
-for failure markers, outcomes, and milestones. Incident details have a separate bounded history.
-Changed evidence is saved every five seconds and on page hiding; failures and capture stops
-trigger an immediate save after publication. Unchanged evidence
-is not rewritten, and retained events reuse their encoded records. Empty captures are not archived.
+Compact failure evidence is retained even with recording off. Automatically recovered failures stay silent;
+open **Diagnostics** to export them. Typed classifications keep separate immutable exception trees, operation
+context, and evidence IDs. Repeated causes are counted independently of occurrence identities. Exception trees
+are bounded to 8 KiB; silent history keeps at most 64 records / 256 KiB and four causes per classification.
+
+The detailed trace ring is opt-in and bounded to 4 MiB / 4,096 events. Incident history is separate.
+Exports are bounded to 8 MiB, reserve nominated trigger summaries, and report omitted evidence.
+The first failure saves asynchronously; subsequent changes coalesce over five seconds. Capture stops and
+page hiding flush pending evidence. Saves retry up to three times per snapshot. Unchanged evidence is not
+rewritten, and retained events reuse encoded records. Empty captures are not archived.
 After reload, **Previous diagnostics** exports the latest saved capture for that page, with its original
 run identity. An empty current run offers no file, so it cannot be mistaken for the saved evidence.
 The archive admits up to three captures for 24 hours, at most 12 MiB each / 16 MiB total;
@@ -102,10 +107,11 @@ The same controls are available through `window.windshareDiagnostics`:
 |---|---|
 | `enable()` | Activates diagnostic recording (30-minute window). |
 | `disable()` | Stops recording and prevents capture on subsequent page loads. |
-| `export()` | Returns the current run's events and incidents as NDJSON text. |
+| `export()` | Returns the current run's evidence, events, and incidents as NDJSON text. |
 | `status()` | Prints current capture state, event counts, and expiry deadline. |
 | `activation()` | Reports whether reload can resume capture and its original deadline, independently of retained evidence. |
-| `inspectLastFailure()` | Returns the most recent failure incident and stack trace. |
+| `inspectLastFailure()` | Returns the most recent user-facing failure incident and its evidence. |
+| `inspectFailureEvidence()` | Returns bounded failure snapshots, repeat counts, and omissions, including silent recovery failures. |
 | `clear()` | Clears buffered logs and the current capture's saved snapshot without disabling capture. |
 
 ### Key Browser Events
@@ -114,7 +120,7 @@ The same controls are available through `window.windshareDiagnostics`:
 - `operation_recovery`: Operation retry decisions, protocol generation, and available lanes.
 - `connection_recovery`: Initial, fast, and slow waiting phases; attempt, generation, retry delay, wait reason (backoff, recovery capacity, or service cooldown), outcome, and failure context.
 - `relay_heartbeat`: Per-relay probe round, acknowledgement or failure, buffered bytes, elapsed time (round trip, or inbound silence on failure), and timeout. Initial events can precede protocol-session identity.
-- `protocol_operation`: Frame lifecycle states (`queued`, `sending`, `completed`, `withdrawn`, `failed`).
+- `protocol_operation`: Frame lifecycle states (`queued`, `sending`, `completed`, `withdrawn`, `failed`); failures link to a compact `failure_evidence` summary.
 - `lease_retirement`: Block lease cleanup and timeouts.
 - Block timeout `protocol_operation` events include `block_wait`: the receive phase, elapsed wait, and count of earlier-request fragments that extended queue allowance.
 

@@ -8,6 +8,7 @@ const EXPECTED_API_METHODS = Object.freeze([
   'disable',
   'enable',
   'export',
+  'inspectFailureEvidence',
   'inspectLastFailure',
   'status',
 ])

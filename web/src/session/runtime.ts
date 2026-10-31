@@ -1,3 +1,4 @@
+import { observeProtocolFailure } from './failure-diagnostics'
 import { cancellationTraceReason } from './operation-diagnostics'
 import { OperationCancellationError } from './runtime-types'
 import { decodePeerPathControl } from '../protocol/peer-path-control'
@@ -448,9 +449,12 @@ export class ReceiverSessionRuntime {
         correlation: this.operationCorrelation(operation),
       }))
     } catch (error) {
+      const evidence = options.signal?.aborted === true && error === options.signal.reason ? undefined
+        : observeProtocolFailure(this.#protocolTrace, error, 'session.request.send', this.operationCorrelation(operation))
       this.#emitProtocolTrace(() => Object.freeze({
         eventName: 'protocol_operation',
         transition: 'request_send_failed',
+        ...(evidence === undefined ? {} : { evidence }),
         requestKind: protocolMessageKindV1(kind),
         correlation: this.operationCorrelation(operation),
       }))

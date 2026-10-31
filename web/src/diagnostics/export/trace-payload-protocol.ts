@@ -1,3 +1,5 @@
+import { MAX_FAILURE_OPERATION_BYTES, FAILURE_SIGNATURE_HEX_LENGTH } from '../failure/evidence'
+import { MAX_FAILURE_SUMMARY_TEXT_BYTES } from '../failure/summary'
 import { BROWSER_CONNECTIVITY_ATTEMPT_STAGES } from '../../connectivity/diagnostics'
 import { validateProtocolErrorContentV2 } from './protocol-error-v2'
 import { classifyPeerAttemptFailure } from '../../connectivity/peer-failure'
@@ -134,7 +136,11 @@ export function validateProtocolOperation(payload: UnknownRecord): void {
     case 'request_send_failed':
     case 'admission_ready':
     case 'admission_abandoned':
-      exactKeys(payload, ['transition', 'request_kind'], [], 'protocol request payload')
+      exactKeys(payload, ['transition', 'request_kind'], ['failure_evidence'], 'protocol request payload')
+      if (payload.failure_evidence !== undefined) {
+        member(payload.transition, ['send_failed', 'request_send_failed'], 'failure evidence transition')
+        validateFailureSummary(payload.failure_evidence)
+      }
       member(payload.request_kind, PROTOCOL_MESSAGE_KINDS_V1, 'protocol request kind')
       return
     case 'admission_waiting':
@@ -473,7 +479,8 @@ export function validateLane(payload: UnknownRecord): void {
         member(payload.close_reason, ['retired', 'replaced', 'session_closed'], 'lane close reason')
         return
       }
-      exactKeys(payload, ['transition', 'detachment_class'], ['failure_detail'], 'lane detached payload')
+      exactKeys(payload, ['transition', 'detachment_class'], ['failure_detail', 'failure_evidence'], 'lane detached payload')
+      if (payload.failure_evidence !== undefined) validateFailureSummary(payload.failure_evidence)
       if (payload.failure_detail !== undefined && (
         typeof payload.failure_detail !== 'string' ||
         payload.failure_detail.length > TRACE_FAILURE_DETAIL_MAX_CHARACTERS
@@ -605,4 +612,16 @@ export function validateSenderVerification(payload: UnknownRecord): void {
     'qualified', 'unsupported', 'qualification-failed', 'timeout', 'operation-failed',
     'invalid-key', 'invalid-signature', 'backend-error',
   ], 'verification reason')
+}
+
+function validateFailureSummary(value: unknown): void {
+  const summary = recordValue(value, 'failure evidence')
+  exactKeys(summary, ['id', 'operation', 'signature', 'message'], [], 'failure evidence')
+  decimalUint64(summary.id, 'failure evidence id')
+  boundedConnectionText(summary.operation, MAX_FAILURE_OPERATION_BYTES, 'failure operation')
+  boundedConnectionText(summary.signature, FAILURE_SIGNATURE_HEX_LENGTH, 'failure signature')
+  if (summary.message !== null && (typeof summary.message !== 'string' ||
+      new TextEncoder().encode(summary.message).byteLength > MAX_FAILURE_SUMMARY_TEXT_BYTES)) {
+    throw new TypeError('failure summary message exceeds its budget')
+  }
 }

@@ -39,6 +39,7 @@ export class DiagnosticsEvidenceReader {
     const last = this.#last
     if (last !== undefined && metadata === last.metadata &&
         sameRecords(input.incidents, last.input.incidents) &&
+        input.failureEvidence === last.input.failureEvidence &&
         sameRecords(input.localOutputFailures, last.input.localOutputFailures) &&
         sameRecords(input.traceCapture?.events, last.input.traceCapture?.events)) {
       return last.snapshot
@@ -46,7 +47,8 @@ export class DiagnosticsEvidenceReader {
     const time = this.#captureTime()
     const snapshot: DiagnosticsEvidenceSnapshot = Object.freeze({
       status: input.status,
-      hasEvidence: input.incidents.length > 0 || (input.traceCapture?.events.length ?? 0) > 0,
+      hasEvidence: input.incidents.length > 0 || (input.failureEvidence?.records.length ?? 0) > 0 ||
+        (input.localOutputFailures?.length ?? 0) > 0 || (input.traceCapture?.events.length ?? 0) > 0,
       export: () => this.#encode(input, time),
     })
     this.#last = { input, metadata, snapshot }

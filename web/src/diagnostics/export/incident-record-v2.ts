@@ -1,4 +1,4 @@
-import type { DiagnosticExceptionProjection } from '../exception'
+import type { FailureEvidence } from '../failure/evidence'
 import type {
   FailureFactKind,
   FailureStage,
@@ -168,6 +168,7 @@ interface FailureFactEnvelopeV2<
   readonly stage: FailureStage
   readonly recovery_disposition: RecoveryDisposition
   readonly correlation?: CorrelationV1
+  readonly evidence?: FailureEvidence
   readonly payload: Payload
 }
 
@@ -202,10 +203,11 @@ export type FailureFactV2 =
       }>
     }>>>
   | Readonly<FailureFactEnvelopeV2<'unclassified', Readonly<{
-      unclassified: Readonly<{ exception: DiagnosticExceptionProjection | null }>
+      unclassified: Readonly<Record<string, never>>
     }>>>
 
 export interface FailureFactBucketV2 {
+  readonly cause_signature?: string
   readonly fingerprint: string
   readonly count: string
   readonly representative: FailureFactV2
@@ -223,6 +225,8 @@ export interface DiagnosticsHealthV1 {
 }
 
 export interface FailureIncidentPayloadV2 {
+  readonly root_trigger?: FailureFactV2
+  readonly evidence_details_omitted?: number
   readonly root_incident_sequence?: string
   readonly scope: Readonly<{
     scope_kind:

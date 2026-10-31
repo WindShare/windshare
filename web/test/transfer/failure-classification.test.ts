@@ -29,7 +29,7 @@ describe('transfer failure classification', () => {
     const scope = incidentScope(observation => { recorded.push(observation) })
 
     const normalized = normalizeFileTransferFailure(
-      new FileOutputError('native detail is not retained', 'output-commit-failed'),
+      new FileOutputError('native detail is retained', 'output-commit-failed'),
       { incidentScope: scope },
     )
     expect(normalized.kind).toBe('fault')
@@ -48,7 +48,7 @@ describe('transfer failure classification', () => {
     expect(normalized.materializationFailureReason).toBe('output-commit-failed')
     expect(Object.isFrozen(normalized.fact)).toBe(true)
     expect(Object.isFrozen(normalized.diagnostic.classification)).toBe(true)
-    expect(JSON.stringify(normalized.fact)).not.toContain('native detail')
+    expect(normalized.fact.evidence?.exception.message).toBe('native detail is retained')
 
     const replay = normalizeFileTransferFailure(normalized.diagnostic, {
       incidentScope: scope,
@@ -60,7 +60,7 @@ describe('transfer failure classification', () => {
 
   it('carries reviewed authority and immutable exception evidence across transfer admission', () => {
     const normalized = normalizeFileTransferFailure(new Error('private admission detail'), {
-      stage: 'authority_selection',
+      stage: 'authority_selection', operation: 'output.select', context: { destination: 'tree' },
     })
     expect(normalized.kind).toBe('fault')
     if (normalized.kind !== 'fault') return
@@ -77,7 +77,8 @@ describe('transfer failure classification', () => {
     expect(normalized.fault).toEqual(dependencyContractFault())
     expect(normalized.fact).toMatchObject({
       kind: 'unclassified', stage: 'authority_selection',
-      payload: { unclassified: { exception: { errorName: 'Error', message: 'private admission detail' } } },
+      evidence: { operation: 'output.select', context: { destination: 'tree' },
+        exception: { errorName: 'Error', message: 'private admission detail' } },
     })
   })
 
@@ -143,7 +144,7 @@ describe('transfer failure classification', () => {
     const controller = new AbortController()
     controller.abort(new DOMException('cancelled', 'AbortError'))
 
-    const normalized = normalizeFileTransferFailure(new Error('late rejection'), {
+    const normalized = normalizeFileTransferFailure(controller.signal.reason, {
       signal: controller.signal,
       incidentScope: scope,
     })
