@@ -146,7 +146,7 @@ func TestRouteSupplyOwnsReplacementWait(t *testing.T) {
 }
 
 func TestRouteSupplyOwnsInitialWait(t *testing.T) {
-	for _, transition := range []string{"owner ends", "caller cancels", "set stops", "lane arrives"} {
+	for _, transition := range []string{"owner ends", "caller cancels", "set stops", "set closes", "lane arrives"} {
 		t.Run(transition, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				lanes := newBoundaryLaneSet(t, 63)
@@ -183,6 +183,9 @@ func TestRouteSupplyOwnsInitialWait(t *testing.T) {
 					wantErr = context.Canceled
 				case "set stops":
 					lanes.Stop()
+					wantErr = ErrClosed
+				case "set closes":
+					lanes.Close()
 					wantErr = ErrClosed
 				case "lane arrives":
 					record := transferRecord(t, descriptor, 0)
