@@ -250,7 +250,7 @@ test('receives and recovers downloads through the real sender and relay', async 
       expect(reconstruction.bundle).not.toContain(forbidden)
       expect(senderArtifact).not.toContain(forbidden)
     }
-    expect(reconstruction.bundle).not.toMatch(/"(?:user_agent|platform|path|handle|message|stack)"/u)
+    expect(reconstruction.bundle).not.toMatch(/"(?:user_agent|platform|path|handle)"/u)
     await testInfo.attach('fsa-continuation-browser-bundle', {
       body: reconstruction.bundle,
       contentType: 'application/x-ndjson',
@@ -409,7 +409,8 @@ function assertFSAReconstruction(records: readonly unknown[]): void {
   expect(header).toMatchObject({ diagnostics_health_at_export: zeroHealth })
   const incidentLine = records.find((record) =>
     isRecord(record) && record.line_type === 'incident')
-  if (!isRecord(incidentLine) || !isRecord(incidentLine.record)) {
+  if (!isRecord(incidentLine) || !isRecord(incidentLine.record) ||
+      !isRecord(incidentLine.record.payload)) {
     throw new TypeError('FSA reconstruction omitted its incident')
   }
   expect(incidentLine.record).toMatchObject({
@@ -419,6 +420,13 @@ function assertFSAReconstruction(records: readonly unknown[]): void {
       trigger: {
         kind: 'native_output_failure',
         stage: 'reopen',
+        evidence: {
+          operation: 'reopen',
+          exception: {
+            errorName: 'InvalidStateError',
+            message: expect.stringContaining('another WindShare task'),
+          },
+        },
       },
       contributors: [{
         count: '1',
@@ -434,6 +442,13 @@ function assertFSAReconstruction(records: readonly unknown[]): void {
           kind: 'native_output_failure',
           stage: 'cleanup',
           recovery_disposition: 'needs_attention',
+          evidence: {
+            operation: 'cleanup',
+            exception: {
+              errorName: 'InvalidStateError',
+              message: expect.stringContaining('generation or lease changed'),
+            },
+          },
         },
       }],
       fact_count: '3',
@@ -446,6 +461,19 @@ function assertFSAReconstruction(records: readonly unknown[]): void {
         output: { plan_kind: 'direct_tree' },
       },
     },
+  })
+
+  // Evidence retention must preserve the same typed cause independently of trace.
+  const incidentPayload = incidentLine.record.payload
+  if (!isRecord(incidentPayload.scope)) {
+    throw new TypeError('FSA reconstruction omitted its incident scope')
+  }
+  expect(records).toContainEqual({
+    line_type: 'failure_evidence',
+    record: expect.objectContaining({
+      scope: expect.objectContaining(incidentPayload.scope),
+      fact: incidentPayload.trigger,
+    }),
   })
 
   const trace = records
