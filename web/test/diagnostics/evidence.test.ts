@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createBrowserDiagnosticsComposition } from '../../src/application/diagnostics/composition'
 import { deepFreezeJson } from '../../src/diagnostics/export/json'
+import { unclassifiedFailureFact } from '../../src/diagnostics/incident/fact'
 import { FakeTraceTime } from './trace/test-support'
 
 describe('diagnostic evidence snapshots', () => {
@@ -41,6 +42,37 @@ describe('diagnostic evidence snapshots', () => {
       const third = runtime.export()
       expect(eventLines(third)).toHaveLength(2)
       expect(traceEncodes(stringify.mock.calls)).toBe(1)
+    } finally {
+      stringify.mockRestore()
+    }
+  })
+
+  it('reuses retained failure encodings while updated observations receive fresh lines', () => {
+    const { runtime, trace, failures, time } = setup()
+    runtime.enable()
+    const fact = unclassifiedFailureFact({
+      stage: 'join', recoveryDisposition: 'terminal', error: new Error('join failed'),
+    })
+    failures.record(fact)
+    const before = runtime.readEvidence()
+    const original = before.export()
+    const stringify = vi.spyOn(JSON, 'stringify')
+    const failureEncodes = () => stringify.mock.calls.filter(([value]) =>
+      typeof value === 'object' && value !== null && 'line_type' in value &&
+      value.line_type === 'failure_evidence').length
+    try {
+      time.advance(10)
+      record(trace)
+      const changedTrace = runtime.readEvidence()
+      expect(changedTrace).not.toBe(before)
+      expect(changedTrace.export()).toContain('"count":"1"')
+      expect(failureEncodes()).toBe(0)
+
+      failures.record(fact)
+      expect(runtime.readEvidence().export()).toContain('"count":"2"')
+      expect(failureEncodes()).toBe(1)
+      expect(before.export()).toBe(original)
+      expect(failureEncodes()).toBe(1)
     } finally {
       stringify.mockRestore()
     }
