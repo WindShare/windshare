@@ -2,7 +2,13 @@ import { unclassifiedFailureFact } from '../../../src/diagnostics/incident'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createBrowserDiagnosticsComposition } from '../../../src/application/diagnostics/composition'
 import { BrowserDiagnosticsSession, DIAGNOSTICS_CHECKPOINT_INTERVAL_MS } from '../../../src/diagnostics/browser/session'
-import { retainDiagnosticCaptures, summarizeDiagnosticCapture, type DiagnosticsArchiveStore, type SavedDiagnosticCapture } from '../../../src/diagnostics/browser/archive'
+import {
+  DIAGNOSTICS_ARCHIVE_MAX_AGE_MS,
+  retainDiagnosticCaptures,
+  summarizeDiagnosticCapture,
+  type DiagnosticsArchiveStore,
+  type SavedDiagnosticCapture,
+} from '../../../src/diagnostics/browser/archive'
 import { DEFAULT_TRACE_CAPTURE_EXPIRY_MS } from '../../../src/diagnostics/trace/capacity'
 import { FakeTraceTime } from '../trace/test-support'
 
@@ -28,7 +34,7 @@ describe('browser diagnostic evidence lifetime', () => {
     harness.session.dispose()
     const reopened = setup({ archive: harness.archive, runSeed: 2, time: harness.time })
     await settle()
-    const previous = reopened.session.getSnapshot().previous!
+    const previous = reopened.session.getSnapshot().previousCaptures[0]!
     expect((await reopened.session.readSavedFile(previous.id))?.text).toContain('latest cause')
     reopened.session.dispose()
   })
@@ -148,14 +154,56 @@ describe('browser diagnostic evidence lifetime', () => {
     expect(reopened.session.status().state).toBe('idle')
     expect(reopened.session.getSnapshot().hasCurrentEvidence).toBe(false)
     expect(reopened.archive.readFile).not.toHaveBeenCalled()
-    const previous = reopened.session.getSnapshot().previous!
+    const previous = reopened.session.getSnapshot().previousCaptures[0]!
     expect((await reopened.session.readSavedFile(previous.id))?.text).toBe(text)
     expect(reopened.session.exportFile().text).not.toContain('"line_type":"trace_event"')
     const unrelated = setup({ archive: first.archive, pageUrl: 'https://receiver.invalid/other' })
     await settle()
-    expect(unrelated.session.getSnapshot().previous).toBeNull()
+    expect(unrelated.session.getSnapshot().previousCaptures).toEqual([])
     reopened.session.dispose()
     unrelated.session.dispose()
+  })
+
+  it('keeps newer silent failures and older recordings available together after reload', async () => {
+    const { archive, time, recording, failure } = await archivedRecordingAndFailure()
+    const reopened = setup({ archive, time, runSeed: 3 })
+    await settle()
+    const previousCaptures = reopened.session.getSnapshot().previousCaptures
+    expect(previousCaptures).toEqual([failure, recording].map(summarizeDiagnosticCapture))
+    expect(archive.readFile).not.toHaveBeenCalled()
+    expect((await reopened.session.readSavedFile(recording.id))?.text).toBe(recording.file.text)
+    expect((await reopened.session.readSavedFile(failure.id))?.text).toBe(failure.file.text)
+
+    time.advance(1)
+    reopened.composition.failures.record(unclassifiedFailureFact({
+      stage: 'content_read', recoveryDisposition: 'retryable', error: new Error('current failure'),
+    }))
+    await reopened.session.checkpoint()
+    await settle()
+    expect(archive.captures).toHaveLength(3)
+    expect(reopened.session.getSnapshot().previousCaptures).toEqual(previousCaptures)
+    reopened.session.dispose()
+  })
+
+  it.each([false, true])('expires each historical file on time while recording is %s', async recordingEnabled => {
+    const { archive, time, recording, failure } = await archivedRecordingAndFailure()
+    time.advance(DIAGNOSTICS_ARCHIVE_MAX_AGE_MS - (time.nowMilliseconds() - recording.savedAt) - 1)
+    const reopened = setup({ archive, time, runSeed: 3 })
+    if (recordingEnabled) reopened.session.enable()
+    await settle()
+    expect(reopened.session.getSnapshot().previousCaptures).toHaveLength(2)
+    const listener = vi.fn()
+    reopened.session.subscribe(listener)
+
+    time.advance(1)
+    await settle()
+    expect(reopened.session.getSnapshot().previousCaptures).toEqual([summarizeDiagnosticCapture(failure)])
+    expect(listener).toHaveBeenCalled()
+    time.advance(failure.savedAt - recording.savedAt)
+    await settle()
+    expect(reopened.session.getSnapshot().previousCaptures).toEqual([])
+    expect(archive.readFile).not.toHaveBeenCalled()
+    reopened.session.dispose()
   })
 
   it('checkpoints a failure without replacing capture when the same diagnostic intent is received again', async () => {
@@ -240,6 +288,7 @@ describe('browser diagnostic evidence lifetime', () => {
     expect(previous.captureState).toBe('sealed')
     expect(previous.file.text).toContain('"seal_reason":"manual_disable"')
     expect(archive.captures).toHaveLength(2)
+    expect(harness.session.getSnapshot().previousCaptures).toEqual([summarizeDiagnosticCapture(previous)])
     expect(harness.session.status().state).toBe('recording')
     harness.session.dispose()
   })
@@ -288,6 +337,25 @@ function setup(options: { time?: FakeTraceTime; archive?: ReturnType<typeof memo
     now: () => time.nowMilliseconds(),
   })
   return { time, archive, composition, session }
+}
+
+async function archivedRecordingAndFailure() {
+  const first = setup()
+  first.session.enable()
+  record(first)
+  first.session.disable()
+  await first.session.checkpoint()
+  const recording = first.archive.captures[0]!
+  first.session.dispose()
+  first.time.advance(DIAGNOSTICS_CHECKPOINT_INTERVAL_MS * 2)
+  const second = setup({ archive: first.archive, time: first.time, runSeed: 2 })
+  second.composition.failures.record(unclassifiedFailureFact({
+    stage: 'content_read', recoveryDisposition: 'retryable', error: new Error('saved silent failure'),
+  }))
+  await second.session.checkpoint()
+  const failure = second.archive.captures[0]!
+  second.session.dispose()
+  return { archive: first.archive, time: first.time, recording, failure }
 }
 
 function record(harness: ReturnType<typeof setup>) {
