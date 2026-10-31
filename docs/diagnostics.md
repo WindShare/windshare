@@ -88,9 +88,11 @@ are bounded to 8 KiB; silent history keeps at most 64 records / 256 KiB and four
 
 The detailed trace ring is opt-in and bounded to 4 MiB / 4,096 events. Incident history is separate.
 Exports are bounded to 8 MiB, reserve nominated trigger summaries, and report omitted evidence.
-The first failure saves asynchronously; subsequent changes coalesce over five seconds. Capture stops and
-page hiding flush pending evidence. Saves retry up to three times per snapshot. Unchanged evidence is not
-rewritten, and retained events reuse encoded records. Empty captures are not archived.
+The first failure saves asynchronously; subsequent changes coalesce over five seconds within each capture.
+Capture stops and page hiding flush pending evidence. Final snapshots and their retry budgets survive recording
+restarts. Pending snapshots obey the archive retention limits, plus one in-flight body while its write settles.
+Saves retry up to three times per snapshot. Unchanged evidence is not rewritten, retained events reuse encoded
+records, and empty captures are not archived.
 After reload, **Previous diagnostics** exports the latest saved capture for that page, with its original
 run identity. An empty current run offers no file, so it cannot be mistaken for the saved evidence.
 The archive admits up to three captures for 24 hours, at most 12 MiB each / 16 MiB total;

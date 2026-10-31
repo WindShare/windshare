@@ -11,10 +11,9 @@ import {
   type DiagnosticCaptureSummary,
 } from './archive'
 import { createDiagnosticFile, type DiagnosticFile } from './file'
+import { DiagnosticsArchiveWriter } from './archive-writer'
 
 export const DIAGNOSTICS_CHECKPOINT_INTERVAL_MS = 5_000
-export const DIAGNOSTICS_SAVE_MAX_ATTEMPTS = 3
-const DIAGNOSTICS_SAVE_RETRY_MS = 1_000
 
 export interface BrowserDiagnosticsSnapshot {
   readonly capture: DiagnosticsStatusV2
@@ -34,11 +33,6 @@ export interface BrowserDiagnosticsSessionOptions {
   readonly now?: () => number
 }
 
-interface PendingDiagnosticCapture {
-  readonly capture: SavedDiagnosticCapture
-  readonly evidence: DiagnosticsEvidenceSnapshot
-}
-
 /** Owns diagnostic evidence delivery independently of receiver/connection lifetime. */
 export class BrowserDiagnosticsSession implements DiagnosticsRuntimePort {
   readonly #options: BrowserDiagnosticsSessionOptions
@@ -48,18 +42,14 @@ export class BrowserDiagnosticsSession implements DiagnosticsRuntimePort {
   readonly #scheduler: TraceScheduler
   readonly #listeners = new Set<() => void>()
   readonly #stopObservation: () => void
-  readonly #writes = new Map<string, PendingDiagnosticCapture | null>()
+  readonly #writer: DiagnosticsArchiveWriter
   #queuedEvidence: DiagnosticsEvidenceSnapshot | undefined
-  #retryPending: PendingDiagnosticCapture | undefined
-  #retryAttempts = 0
-  #retryTimer: TraceScheduledTask | undefined
   #saveTimer: TraceScheduledTask | undefined
   #lastSaveAt = Number.NEGATIVE_INFINITY
   #saved: readonly DiagnosticCaptureSummary[] = []
   #archiveRevision = 0
   #snapshot: BrowserDiagnosticsSnapshot
   #archiveUnavailable = false
-  #draining: Promise<void> | undefined
   #timer: TraceScheduledTask | undefined
   #notificationQueued = false
   #disposed = false
@@ -71,6 +61,19 @@ export class BrowserDiagnosticsSession implements DiagnosticsRuntimePort {
     this.#scheduler = options.scheduler ?? SYSTEM_TRACE_SCHEDULER
     this.#runId = options.runtime.runtimeRunId
     this.#snapshot = this.#readSnapshot()
+    this.#writer = new DiagnosticsArchiveWriter({
+      archive: options.archive, scheduler: this.#scheduler, now: this.#now,
+      onSaved: saved => {
+        this.#archiveRevision++
+        this.#saved = retainDiagnosticCaptures(saved, this.#now())
+        this.#archiveUnavailable = false
+        this.refresh()
+      },
+      onFailure: () => {
+        this.#archiveUnavailable = true
+        this.refresh()
+      },
+    })
     this.#stopObservation = options.observeCapture(() => this.#captureChanged())
     this.#loadArchive().catch(() => undefined)
     this.#schedule()
@@ -113,16 +116,14 @@ export class BrowserDiagnosticsSession implements DiagnosticsRuntimePort {
   clear(): void {
     const id = this.#captureId(this.status())
     this.#queuedEvidence = undefined
-    this.#retryPending = undefined
-    this.#retryTimer?.cancel()
     this.#saveTimer?.cancel()
     this.#saveTimer = undefined
     this.#options.runtime.clear()
     this.#archiveRevision++
     this.#saved = this.#saved.filter(capture => capture.id !== id)
     // A tombstone follows any in-flight write, so clear cannot resurrect old evidence.
-    this.#writes.set(id, null)
-    this.#drain().catch(() => undefined)
+    this.#writer.remove(id)
+    this.#writer.flush().catch(() => undefined)
     this.refresh()
   }
 
@@ -139,24 +140,15 @@ export class BrowserDiagnosticsSession implements DiagnosticsRuntimePort {
         })
         // Coalesce changed snapshots; identical evidence does not renew retention
         // or rebuild the file on a timer, visibility change, or repeated pagehide.
-        this.#retryTimer?.cancel()
-        this.#retryPending = undefined
-        this.#retryAttempts = 0
-        // At most the in-flight capture and the latest replacement retain encoded bodies.
-        for (const [id, pending] of this.#writes) if (pending !== null) this.#writes.delete(id)
-        this.#writes.set(capture.id, { capture, evidence })
+        this.#writer.save(capture)
         this.#lastSaveAt = this.#now()
         this.#queuedEvidence = evidence
-      } else if (this.#retryPending !== undefined && this.#retryAttempts < DIAGNOSTICS_SAVE_MAX_ATTEMPTS) {
-        this.#retryTimer?.cancel()
-        this.#writes.set(this.#retryPending.capture.id, this.#retryPending)
-        this.#retryPending = undefined
       }
     } catch {
       this.#archiveUnavailable = true
       this.refresh()
     }
-    return this.#drain()
+    return this.#writer.flush()
   }
 
   dispose(): void {
@@ -165,7 +157,7 @@ export class BrowserDiagnosticsSession implements DiagnosticsRuntimePort {
     this.#stopObservation()
     this.#timer?.cancel()
     this.#saveTimer?.cancel()
-    this.#retryTimer?.cancel()
+    this.#writer.dispose()
     this.#listeners.clear()
   }
 
@@ -182,43 +174,6 @@ export class BrowserDiagnosticsSession implements DiagnosticsRuntimePort {
       this.#archiveUnavailable = true
     }
     this.refresh()
-  }
-
-  #drain(): Promise<void> {
-    if (this.#draining !== undefined) return this.#draining
-    if (this.#writes.size === 0) return Promise.resolve()
-    this.#draining = this.#writePending().finally(() => {
-      this.#draining = undefined
-      if (this.#writes.size > 0) return this.#drain()
-    })
-    return this.#draining
-  }
-
-  async #writePending(): Promise<void> {
-    for (const [id, pending] of this.#writes) {
-      this.#writes.delete(id)
-      try {
-        const saved = pending === null
-          ? await this.#options.archive.remove(id)
-          : await this.#options.archive.save(pending.capture)
-        this.#archiveRevision++
-        this.#saved = retainDiagnosticCaptures(saved, this.#now())
-        this.#archiveUnavailable = false
-      } catch {
-        if (pending !== null && pending.evidence === this.#queuedEvidence) {
-          this.#retryAttempts++
-          this.#retryPending = pending
-          if (!this.#disposed && this.#retryAttempts < DIAGNOSTICS_SAVE_MAX_ATTEMPTS) {
-            this.#retryTimer = this.#scheduler.schedule(DIAGNOSTICS_SAVE_RETRY_MS * this.#retryAttempts, () => {
-              this.#retryTimer = undefined
-              this.checkpoint().catch(() => undefined)
-            })
-          }
-        }
-        this.#archiveUnavailable = true
-      }
-      this.refresh()
-    }
   }
 
   #captureChanged(): void {
