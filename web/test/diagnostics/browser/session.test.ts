@@ -1,5 +1,5 @@
 import { unclassifiedFailureFact } from '../../../src/diagnostics/incident'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createBrowserDiagnosticsComposition } from '../../../src/application/diagnostics/composition'
 import { BrowserDiagnosticsSession, DIAGNOSTICS_CHECKPOINT_INTERVAL_MS } from '../../../src/diagnostics/browser/session'
 import { retainDiagnosticCaptures, summarizeDiagnosticCapture, type DiagnosticsArchiveStore, type SavedDiagnosticCapture } from '../../../src/diagnostics/browser/archive'
@@ -7,6 +7,8 @@ import { DEFAULT_TRACE_CAPTURE_EXPIRY_MS } from '../../../src/diagnostics/trace/
 import { FakeTraceTime } from '../trace/test-support'
 
 describe('browser diagnostic evidence lifetime', () => {
+  beforeEach(() => { vi.spyOn(console, 'debug').mockImplementation(() => undefined) })
+
   it('saves failures with trace off, coalesces bursts, and restores the last successful archive after reload', async () => {
     const harness = setup()
     const failure = (message: string) => harness.composition.failures.record(unclassifiedFailureFact({
@@ -202,6 +204,43 @@ describe('browser diagnostic evidence lifetime', () => {
     expect(harness.session.getSnapshot().archiveUnavailable).toBe(true)
     expect(harness.session.exportFile().text).toContain('"line_type":"trace_event"')
     expect(harness.session.status().enabled).toBe(true)
+    harness.session.dispose()
+  })
+
+  it('preserves a previous recording final snapshot while a new recording checkpoints behind a slow write', async () => {
+    const archive = memoryArchive()
+    let release: () => void = () => undefined
+    const blocked = new Promise<void>(resolve => { release = resolve })
+    const normalSave = archive.save.getMockImplementation()!
+    archive.save.mockImplementationOnce(async capture => {
+      await blocked
+      return normalSave(capture)
+    })
+    const harness = setup({ archive })
+    const first = harness.session.enable()
+    record(harness)
+    const pending = harness.session.checkpoint()
+    await settle()
+    record(harness)
+    harness.session.disable()
+    await settle()
+    expect(harness.session.status()).toMatchObject({ state: 'sealed', retained_event_count: '2' })
+    harness.session.enable()
+    record(harness)
+    harness.time.advance(DIAGNOSTICS_CHECKPOINT_INTERVAL_MS)
+    await settle()
+    release()
+    await pending
+    await settle()
+    const previous = archive.captures.find(capture =>
+      capture.id === `${harness.session.runtimeRunId}.${first.capture_generation}`)!
+    const events = previous.file.text.trim().split('\n')
+      .filter(line => JSON.parse(line).line_type === 'trace_event')
+    expect(events).toHaveLength(2)
+    expect(previous.captureState).toBe('sealed')
+    expect(previous.file.text).toContain('"seal_reason":"manual_disable"')
+    expect(archive.captures).toHaveLength(2)
+    expect(harness.session.status().state).toBe('recording')
     harness.session.dispose()
   })
 
