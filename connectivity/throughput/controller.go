@@ -7,6 +7,7 @@ import "time"
 type Controller struct {
 	window                              window
 	trial                               *trial
+	inconclusive                        *inconclusiveRetry
 	eligibleSince, idleSince, notBefore time.Time
 	paths                               []PathIdentity
 }
@@ -30,6 +31,7 @@ func (c *Controller) Step(now time.Time, o Observation, maximumPaths int) Decisi
 	if c.trial != nil {
 		return c.advanceTrial(now, o, busy)
 	}
+	c.rearmExploration(now, o)
 	optional := newestOptional(o.Paths)
 	if !busy && optional != nil && !o.Pending && now.Sub(c.idleSince) >= IdleRetention {
 		c.notBefore = now.Add(ObservationWindow)
@@ -74,6 +76,8 @@ func (c *Controller) reset(now time.Time, o Observation) {
 func (c *Controller) endTrial(now time.Time, o Observation, d Decision, delay time.Duration) Decision {
 	d.BaselineUsefulRate, d.BaselineOutputRate = c.trial.baseline.useful, c.trial.baseline.output
 	c.trial = nil
+	c.inconclusive = nil
+	d.RetryAfter = delay
 	c.notBefore = now.Add(delay)
 	c.reset(now, o)
 	return d
