@@ -18,7 +18,7 @@ func TestCatalogOmissionsRetainBoundedPathsAndScanCorrelation(t *testing.T) {
 		t.Fatal(err)
 	}
 	const omitted = maxCatalogOmissionSamples + 2
-	for index := uint64(0); index < omitted; index++ {
+	for index := range omitted {
 		if err := os.Symlink("target.bin", filepath.Join(root, fmt.Sprintf("link-%02d", index))); err != nil {
 			t.Skipf("symlink creation unavailable: %v", err)
 		}
