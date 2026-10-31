@@ -498,6 +498,7 @@ export class ReceiverConnectivity {
       queuedBytes: demand.queuedBytes, unfinishedBytes: demand.unfinishedBytes, capacityWaitingBytes: demand.capacityWaitingBytes,
       usefulRate: decision.usefulRate ?? 0, outputRate: decision.outputRate ?? 0,
       baselineUsefulRate: decision.baselineUsefulRate ?? 0, baselineOutputRate: decision.baselineOutputRate ?? 0,
+      ...(decision.retryAfterMilliseconds === undefined ? {} : { retryAfterMilliseconds: decision.retryAfterMilliseconds }),
       ...(decision.path === undefined ? {} : { trialPath: decision.path }),
       ...(decision.work === undefined ? {} : { trialWork: decision.work }),
     }))

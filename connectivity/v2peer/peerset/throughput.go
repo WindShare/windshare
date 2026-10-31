@@ -60,7 +60,7 @@ func (s *ReceiverSession) runContentControl(lanes *transferlanes.Set) {
 			if target != nil {
 				lanes.SampleLane(identity)
 			}
-		case throughput.Retire, throughput.Keep, throughput.Abandon:
+		case throughput.Settle, throughput.Retire, throughput.Keep, throughput.Abandon:
 			lanes.StopSampling(identity)
 			if decision.Action == throughput.Retire && target != nil && target.config.Purpose == v2signal.ThroughputExploration {
 				retire = target

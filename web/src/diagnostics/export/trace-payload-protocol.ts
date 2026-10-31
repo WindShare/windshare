@@ -355,9 +355,10 @@ export function validatePeerRecovery(payload: UnknownRecord): void {
     case 'parallelism':
       exactKeys(payload, ['stage', 'action', 'reason', 'paths', 'queued_bytes', 'unfinished_bytes', 'capacity_waiting_bytes',
         'network_waiting_bytes', 'in_flight_bytes', 'remaining_bytes', 'remaining_known',
-        'useful_rate', 'output_rate', 'baseline_useful_rate', 'baseline_output_rate'], ['trial_path', 'trial_work'], 'peer parallelism')
-      member(payload.action, ['explore', 'sample', 'keep', 'retire', 'abandon'], 'parallelism action')
-      member(payload.reason, ['sustained-network-demand', 'aggregate-progress-improved', 'no-aggregate-gain', 'no-network-demand', 'consumer-pressure', 'path-sampling-started', 'connection-not-admitted', 'trial-path-replaced', 'trial-topology-changed', 'trial-demand-ended', 'trial-observation-reset', 'insufficient-scheduling-evidence'], 'parallelism reason')
+        'useful_rate', 'output_rate', 'baseline_useful_rate', 'baseline_output_rate'], ['trial_path', 'trial_work', 'retry_after_ms'], 'peer parallelism')
+      member(payload.action, ['explore', 'sample', 'settle', 'keep', 'retire', 'abandon'], 'parallelism action')
+      member(payload.reason, ['sustained-network-demand', 'aggregate-progress-improved', 'no-aggregate-gain', 'no-network-demand', 'consumer-pressure', 'path-sampling-started', 'connection-not-admitted', 'trial-path-replaced', 'trial-topology-changed', 'trial-demand-ended', 'trial-observation-reset', 'insufficient-scheduling-evidence', 'sampling-work-unavailable', 'sampling-work-settling', 'sampling-work-unsettled'], 'parallelism reason')
+      if (payload.retry_after_ms !== undefined) uint32(payload.retry_after_ms, 'parallelism retry delay')
       if (payload.trial_path !== undefined) {
         const path = recordValue(payload.trial_path, 'trial path')
         exactKeys(path, ['path_id', 'lane_id', 'lane_epoch'], [], 'trial path')

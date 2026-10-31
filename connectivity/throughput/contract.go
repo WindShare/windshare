@@ -8,15 +8,17 @@ import (
 )
 
 const (
-	SampleInterval          = time.Second
-	ObservationWindow       = 3 * time.Second
-	FailureBackoff          = 15 * time.Second
-	IdleRetention           = 10 * time.Second
-	MinimumUsefulGain       = 1.10
-	MinimumOutputGain       = 1.05
-	MinimumOutputRatio      = 0.65
-	minimumSettledAttempts  = 4
-	minimumBusyMilliseconds = 1000
+	SampleInterval             = time.Second
+	ObservationWindow          = 3 * time.Second
+	FailureBackoff             = 15 * time.Second
+	maximumInconclusiveBackoff = time.Minute
+	settlementWindow           = lanescheduling.SampleLifetime
+	IdleRetention              = 10 * time.Second
+	MinimumUsefulGain          = 1.10
+	MinimumOutputGain          = 1.05
+	MinimumOutputRatio         = 0.65
+	minimumSettledAttempts     = 4
+	minimumBusyMilliseconds    = 1000
 )
 
 type PathIdentity struct {
@@ -47,6 +49,7 @@ const (
 	Hold    Action = "hold"
 	Explore Action = "explore"
 	Sample  Action = "sample"
+	Settle  Action = "settle"
 	Retire  Action = "retire"
 	Keep    Action = "keep"
 	Abandon Action = "abandon"
@@ -57,6 +60,7 @@ type Decision struct {
 	Reason                                 string
 	Path                                   PathIdentity
 	Work                                   lanescheduling.SamplingEvidence
+	RetryAfter                             time.Duration
 	UsefulRate, OutputRate                 float64
 	BaselineUsefulRate, BaselineOutputRate float64
 }
