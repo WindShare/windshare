@@ -75,7 +75,9 @@ export function Explorer({ rows, breadcrumbs, pageIndex, pageCount, omittedCount
     {browse.error !== null && <div className="directory-notice directory-error" role="alert">
       <p>{browse.error}</p><button type="button" onClick={actions.retry}>Retry directory</button>
     </div>}
-    {rows.length === 0 && browse.kind === 'ready' && <p className="directory-empty">This folder is empty.</p>}
+    {rows.length === 0 && browse.kind === 'ready' && <p className="directory-empty">
+      {omittedCount > 0n ? 'No supported items in this folder.' : 'This folder is empty.'}
+    </p>}
     {rows.length > 0 && <ul className="explorer-list" tabIndex={0} aria-label="Folder contents">
         {rows.map(row => <li key={row.id} className="explorer-row"
           data-selection={draft.mode === 'selection' ? row.selection : 'unselected'}>
@@ -92,7 +94,7 @@ export function Explorer({ rows, breadcrumbs, pageIndex, pageCount, omittedCount
           <span className="entry-action-hint" aria-hidden="true">{row.kind === 'directory' ? 'Open' : 'Preview'}</span>
         </li>)}
       </ul>}
-    {omittedCount > 0n && <p className="directory-notice">{omittedCount.toString()} items could not be included in this directory.</p>}
+    {omittedCount > 0n && <p className="directory-notice">{omittedCount.toString()} unsupported source items were not included. Supported items can still be downloaded.</p>}
     {pageCount > 1 && <nav className="directory-pagination" aria-label="Directory pages">
       <button type="button" disabled={pageIndex === 0} onClick={() => actions.showPage(pageIndex - 1)}><ReceiverIcon name="chevron-left" />Previous</button>
       <span>Page {pageIndex + 1} of {pageCount}</span>

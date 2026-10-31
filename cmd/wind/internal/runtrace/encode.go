@@ -52,16 +52,17 @@ func (enc *cliEncoder) encodeTransferSettled(event clievent.TransferSettled) err
 		return errInvalidSchemaEvent
 	}
 	payload := transferSettledPayload{
-		ResultStatus:        status,
-		ExitCode:            exitCode,
-		Drift:               drift,
-		ResultElapsedMS:     signedDecimal(result.Elapsed().Milliseconds()),
-		DestinationAdjusted: result.DestinationAdjusted(),
-		FileOutcomes:        wire.EncodeFileOutcomes(result.Files()),
-		DirectoryFailures:   decimal(result.DirectoryFailures()),
-		OmittedDiagnostics:  decimal(result.OmittedDiagnostics()),
-		PublishedBytes:      decimal(result.PublishedBytes()),
-		CountersExact:       result.CountersExact(),
+		SourceOmittedEntries: decimal(result.SourceOmittedEntries()),
+		ResultStatus:         status,
+		ExitCode:             exitCode,
+		Drift:                drift,
+		ResultElapsedMS:      signedDecimal(result.Elapsed().Milliseconds()),
+		DestinationAdjusted:  result.DestinationAdjusted(),
+		FileOutcomes:         wire.EncodeFileOutcomes(result.Files()),
+		DirectoryFailures:    decimal(result.DirectoryFailures()),
+		OmittedDiagnostics:   decimal(result.OmittedDiagnostics()),
+		PublishedBytes:       decimal(result.PublishedBytes()),
+		CountersExact:        result.CountersExact(),
 	}
 	if metrics, ok := event.DownloadConnectivity(); ok {
 		summary := &downloadConnectivity{

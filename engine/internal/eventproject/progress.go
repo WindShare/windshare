@@ -15,7 +15,8 @@ func ProjectProgress(
 		return appobs.ProgressSnapshot{}, ErrInvalidProjection
 	}
 	result, err := appobs.NewProgressSnapshot(appobs.ProgressSpec{
-		DiscoveredFiles: value.DiscoveredFiles, DiscoveredBytes: value.DiscoveredBytes,
+		SourceOmittedEntries: value.SourceOmittedEntries,
+		DiscoveredFiles:      value.DiscoveredFiles, DiscoveredBytes: value.DiscoveredBytes,
 		PublishedFiles: value.PublishedFiles, PublishedBytes: value.PublishedBytes,
 		VerifiedBytes: value.VerifiedBytes, NewlyVerifiedBytes: value.NewlyVerifiedBytes,
 		PreviouslyPublishedBytes: value.PreviouslyPublishedBytes,

@@ -90,7 +90,7 @@ func (state *resolver) resolveWholeShare(ctx context.Context) (ShapeDecision, er
 	if fallback != ShapeFallbackNone {
 		return syntheticShape(fallback)
 	}
-	if !result.Complete {
+	if !result.Validated || result.Directory.OmittedCount() != 0 {
 		return syntheticShape(ShapeFallbackIncompleteGeneration)
 	}
 	if result.Directory.EntryCount() != 1 || root.NodeID().IsZero() {
@@ -148,7 +148,7 @@ func (state *resolver) resolvePathTrieChildren(
 	if err != nil || fallback != ShapeFallbackNone {
 		return fallback, err
 	}
-	if !result.Complete {
+	if !result.Validated {
 		return ShapeFallbackIncompleteGeneration, nil
 	}
 
@@ -294,7 +294,7 @@ func (search *opaqueSearch) directory(
 	if fallback != ShapeFallbackNone {
 		return fallback, nil
 	}
-	if !result.Complete {
+	if !result.Validated {
 		return ShapeFallbackIncompleteGeneration, nil
 	}
 	if search.remaining == 0 {
@@ -526,7 +526,7 @@ func (state *resolver) walkDirectory(
 		}
 		return catalogwalk.TerminalGeneration{}, ShapeFallbackNone, err
 	}
-	if result.Exhausted != catalogwalk.BudgetWithinLimits || !result.Complete {
+	if result.Exhausted != catalogwalk.BudgetWithinLimits || !result.Validated {
 		for _, identity := range provisionalClaims {
 			delete(state.claims, identity)
 		}

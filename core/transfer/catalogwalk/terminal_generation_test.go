@@ -27,7 +27,7 @@ func TestReadTerminalGenerationValidatesScopeCompletenessAndUsage(t *testing.T) 
 			return nil
 		},
 	)
-	if err != nil || !result.Complete || result.Exhausted != BudgetWithinLimits ||
+	if err != nil || !result.Validated || result.Exhausted != BudgetWithinLimits ||
 		result.Directory.EntryCount() != 1 || len(visited) != 1 || visited[0] != file.NodeID() {
 		t.Fatalf("result=%+v visited=%v err=%v", result, visited, err)
 	}
@@ -94,7 +94,7 @@ func TestReadTerminalGenerationDistinguishesEveryBudgetFromIntegrityFailure(t *t
 			context.Background(), &walkCursor{pages: []catalog.CatalogPage{omitted}},
 			share, directory, meter, func(catalog.Entry) error { return nil },
 		)
-		if err != nil || result.Complete || result.Directory.OmittedCount() != 1 {
+		if err != nil || !result.Validated || result.Directory.OmittedCount() != 1 {
 			t.Fatalf("result=%+v err=%v", result, err)
 		}
 	})

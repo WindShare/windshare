@@ -27,6 +27,7 @@ func ProjectReceiveResult(input engine.TaskCompletion[engine.ReceiveResult]) (cl
 	r := input.Value.Transfer
 	spec := clievent.TransferResultSpec{Status: status, ExitCode: exit, Drift: drift, Elapsed: input.Value.Elapsed, Destination: appobs.NewDisplayPath(input.Value.Destination), DestinationAdjusted: input.Value.DestinationAdjusted,
 		Files: projectFileOutcomes(r.Progress.FileOutcomes), DirectoryFailures: saturatingCount(len(r.Directories), r.OmittedDirectoryFailures), OmittedDiagnostics: saturatingAdd(r.OmittedDirectoryFailures, r.OmittedFileFailures), PublishedBytes: r.Progress.PublishedBytes, CountersExact: r.Progress.CountersExact}
+	spec.SourceOmittedEntries = r.Progress.SourceOmittedEntries
 	if input.Outcome != engine.OutcomeSuccess {
 		spec.Failure = input.Failure
 	}

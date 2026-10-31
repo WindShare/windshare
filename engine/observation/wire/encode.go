@@ -112,6 +112,7 @@ func EncodeProgress(snapshot appobs.ProgressSnapshot) (ProgressPayload, error) {
 		return ProgressPayload{}, errInvalidSchemaEvent
 	}
 	return ProgressPayload{
+		SourceOmittedEntries:     decimal(snapshot.SourceOmittedEntries()),
 		Discovery:                discovery,
 		CountersExact:            snapshot.CountersExact(),
 		DiscoveredFiles:          decimal(snapshot.DiscoveredFiles()),

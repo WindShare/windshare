@@ -498,6 +498,7 @@ describe('derived output lifecycle and recovery presentation', () => {
     )).toBe(true)
 
     expect(receiveState.adoptTransferResult({
+      measure: { discovery: 'complete', discoveredFiles: 0, discoveredBytes: 0n, sizeClass: 'small', sourceOmittedEntries: 0n },
       worker: pausedWorker(),
       lifecycle: paused,
       intent,
@@ -559,6 +560,7 @@ describe('derived output lifecycle and recovery presentation', () => {
     )
 
     expect(receiveState.adoptTransferResult({
+      measure: { discovery: 'complete', discoveredFiles: 0, discoveredBytes: 0n, sizeClass: 'small', sourceOmittedEntries: 0n },
       worker: pausedWorker(),
       lifecycle: paused,
       intent,
@@ -644,6 +646,7 @@ describe('derived output lifecycle and recovery presentation', () => {
       },
     })
     expect(receiveState.adoptTransferResult({
+      measure: { discovery: 'complete', discoveredFiles: 0, discoveredBytes: 0n, sizeClass: 'small', sourceOmittedEntries: 0n },
       worker: successfulWorker(),
       lifecycle: published,
       intent,
@@ -698,6 +701,7 @@ describe('derived output lifecycle and recovery presentation', () => {
       },
     })
     expect(receiveState.adoptTransferResult({
+      measure: { discovery: 'complete', discoveredFiles: 0, discoveredBytes: 0n, sizeClass: 'small', sourceOmittedEntries: 0n },
       worker: successfulWorker(),
       lifecycle: published,
       intent,

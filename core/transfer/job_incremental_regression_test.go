@@ -237,39 +237,53 @@ func TestTransferJobRejectsCrossPageNameSequenceViolationsBeforeAdmission(t *tes
 	}
 }
 
-func TestTransferJobDoesNotAdmitOrQueueOmittedChildGeneration(t *testing.T) {
+func TestTransferJobDownloadsSupportedChildrenAndReportsSourceOmissions(t *testing.T) {
 	share := transferID[catalog.ShareInstance](205)
 	root := transferID[catalog.DirectoryID](206)
 	child := transferID[catalog.DirectoryID](207)
 	file := transferID[catalog.FileID](208)
-	rules, _ := NewSelectionRules(true, nil)
-	descriptor := jobDescriptor(t, share, file, 1, 0)
-	opened, _ := NewOpenedRevision(transferID[RevisionHandle](209), descriptor)
-	output := newJobOutput(share)
-	revisions := &jobRevisionClient{
-		opened:   map[catalog.FileID]OpenedRevision{file: opened},
-		failures: make(map[catalog.FileID]error),
-	}
-	job, err := newTestTransferJob(t, testTransferJobConfig{
-		ShareInstance: share, SyntheticRoot: root, Rules: rules,
-		Catalog: failingCatalog{
-			snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
-				root:  jobSnapshot(t, share, root, 1, jobDirectoryEntry(t, child, "child")),
-				child: jobSnapshotWithOmissions(t, share, child, 2, 1, jobEntry(t, file, "partial.bin", 0)),
-			},
-			failures: make(map[catalog.DirectoryID]error),
-		},
-		Revisions: revisions, Blocks: scriptedRangeReader{}, Materializer: output,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomePartial || result.TerminationCause != nil || len(result.Directories) != 1 ||
-		!errors.Is(result.Directories[0].Cause, ErrCatalogEntriesOmitted) || len(result.Files) != 0 ||
-		len(revisions.order) != 0 || len(output.directories) != 1 || output.directories[0] != "" ||
-		len(output.finalized) != 1 || output.finalized[0] != "" {
-		t.Fatalf("omitted child result=%+v opens=%v directories=%v finalized=%v", result, revisions.order, output.directories, output.finalized)
+	for _, selectionCase := range []struct {
+		name      string
+		all       bool
+		overrides []SelectionOverride
+		omitted   uint64
+	}{
+		{name: "whole share", all: true, omitted: 1},
+		{name: "selected directory", overrides: []SelectionOverride{{DirectoryID: child, Selected: true}}, omitted: 1},
+		{name: "selected file", overrides: []SelectionOverride{{FileID: file, Selected: true}}},
+	} {
+		t.Run(selectionCase.name, func(t *testing.T) {
+			rules, _ := NewSelectionRules(selectionCase.all, selectionCase.overrides)
+			descriptor := jobDescriptor(t, share, file, 1, 0)
+			opened, _ := NewOpenedRevision(transferID[RevisionHandle](209), descriptor)
+			output := newJobOutput(share)
+			revisions := &jobRevisionClient{
+				opened:   map[catalog.FileID]OpenedRevision{file: opened},
+				failures: make(map[catalog.FileID]error),
+			}
+			job, err := newTestTransferJob(t, testTransferJobConfig{
+				ShareInstance: share, SyntheticRoot: root, Rules: rules,
+				Catalog: failingCatalog{
+					snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
+						root:  jobSnapshot(t, share, root, 1, jobDirectoryEntry(t, child, "child")),
+						child: jobSnapshotWithOmissions(t, share, child, 2, 1, jobEntry(t, file, "partial.bin", 0)),
+					},
+					failures: make(map[catalog.DirectoryID]error),
+				},
+				Revisions: revisions, Blocks: scriptedRangeReader{}, Materializer: output,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := job.Run(context.Background())
+			if result.Outcome != DirectTreeOutcomeSuccess || result.TerminationCause != nil || len(result.Directories) != 0 ||
+				len(result.Files) != 0 || result.SucceededFiles != 1 || result.Progress.SourceOmittedEntries != selectionCase.omitted ||
+				result.Progress.Discovery != DiscoveryComplete || !result.Progress.CountersExact ||
+				!slices.Equal(revisions.order, []catalog.FileID{file}) || !slices.Equal(output.directories, []string{"", "child"}) ||
+				!slices.Equal(output.finalized, []string{"child", ""}) {
+				t.Fatalf("omitted child result=%+v opens=%v directories=%v finalized=%v", result, revisions.order, output.directories, output.finalized)
+			}
+		})
 	}
 }
 

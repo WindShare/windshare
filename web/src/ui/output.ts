@@ -1,4 +1,4 @@
-import { EMPTY_RECEIVE_RUNTIME, type ReceiveRuntimeSnapshot, type ReceiveRuntimeState } from '../application/receive/state'
+import { EMPTY_RECEIVE_RUNTIME, type ReceiveRuntimeSnapshot, type ReceiveRuntimeState, type TransferResultProjection } from '../application/receive/state'
 import {
   presentArtifactActivation, presentArtifactOffers,
   type ArtifactActivationPresentation, type ArtifactOfferPresentation,
@@ -35,7 +35,23 @@ export function presentReceiveOutput(facts: ReceiveRuntimeSnapshot): OutputPrese
     activationPresentation: presentArtifactActivation(facts.activation, activeOfferedChoice),
     lifecyclePresentation,
     transferResultPresentation: transferResult === null ? null :
-      presentTransferResult(transferResult.worker, facts.repairSummary, transferResult.lifecycle),
+      presentSourceCoverage(transferResult,
+        presentTransferResult(transferResult.worker, facts.repairSummary, transferResult.lifecycle)),
+  })
+}
+
+function presentSourceCoverage(
+  transfer: TransferResultProjection,
+  presentation: TransferResultPresentation,
+): TransferResultPresentation {
+  const omitted = transfer.measure.sourceOmittedEntries
+  if (omitted === 0n) return presentation
+  return Object.freeze({
+    title: presentation.tone === 'success' ? 'Completed with skipped items' : presentation.title,
+    tone: 'warning',
+    lines: Object.freeze([...presentation.lines,
+      `${omitted} unsupported source ${omitted === 1n ? 'item was' : 'items were'} not included.`,
+    ]),
   })
 }
 

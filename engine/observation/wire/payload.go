@@ -38,6 +38,7 @@ type CapacityWait struct {
 }
 
 type ProgressPayload struct {
+	SourceOmittedEntries     string       `json:"source_omitted_entries"`
 	Discovery                string       `json:"discovery"`
 	CountersExact            bool         `json:"counters_exact"`
 	DiscoveredFiles          string       `json:"discovered_files"`
