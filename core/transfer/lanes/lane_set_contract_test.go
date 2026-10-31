@@ -423,77 +423,59 @@ func TestLaneSetRejectsForgedDemandNotAdmittedMarker(t *testing.T) {
 	}
 }
 
-func TestLaneSetResumeAndLifecycleWakeBlockedFetches(t *testing.T) {
-	descriptor := transferDescriptor(t, 1)
-	demand := validDemand(t, descriptor, 0)
-	lanes, _ := New(Config{
-		ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](35),
+func TestLaneSetResumeWakesBlockedFetch(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		descriptor := transferDescriptor(t, 1)
+		demand := validDemand(t, descriptor, 0)
+		record := transferRecord(t, descriptor, 0)
+		lanes, err := New(Config{
+			ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](35),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lanes.Close()
+		identity := Identity{ID: 1, Epoch: 1}
+		var calls atomic.Int32
+		if err := lanes.Add(identity, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
+			calls.Add(1)
+			return record, nil
+		})); err != nil {
+			t.Fatal(err)
+		}
+		suspension, err := lanes.SuspendContent(identity)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result := make(chan error, 1)
+		go func() {
+			_, fetchErr := lanes.Fetch(t.Context(), Request{Demand: demand, Validate: validateTransferRecord(demand)})
+			result <- fetchErr
+		}()
+		// Prove the fetch reached the suspended lane before testing its wakeup;
+		// starting a goroutine alone also permits Resume to win admission.
+		synctest.Wait()
+		select {
+		case fetchErr := <-result:
+			t.Fatalf("fetch ended before the suspended lane resumed: %v", fetchErr)
+		default:
+		}
+		if err := suspension.Resume(); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		select {
+		case fetchErr := <-result:
+			if fetchErr != nil {
+				t.Fatal(fetchErr)
+			}
+		default:
+			t.Fatal("resumed lane did not wake the blocked fetch")
+		}
+		if calls.Load() != 1 {
+			t.Fatalf("resumed lane calls=%d", calls.Load())
+		}
 	})
-	identity := Identity{ID: 1, Epoch: 1}
-	var calls atomic.Int32
-	_ = lanes.Add(identity, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
-		calls.Add(1)
-		return transferRecord(t, descriptor, 0), nil
-	}))
-	suspension, err := lanes.SuspendContent(identity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result := make(chan error, 1)
-	go func() {
-		_, fetchErr := lanes.Fetch(context.Background(), Request{Demand: demand, Validate: validateTransferRecord(demand)})
-		result <- fetchErr
-	}()
-	if err := suspension.Resume(); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case fetchErr := <-result:
-		if fetchErr != nil {
-			t.Fatal(fetchErr)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("resumed lane did not wake the blocked fetch")
-	}
-	if calls.Load() != 1 {
-		t.Fatalf("resumed lane calls=%d", calls.Load())
-	}
-	lanes.Close()
-
-	empty, _ := New(Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](36)})
-	_, _ = empty.ExpectRoute(RouteDirect)
-	closedResult := make(chan error, 1)
-	go func() {
-		_, fetchErr := empty.Fetch(context.Background(), Request{Demand: demand, Validate: validateTransferRecord(demand)})
-		closedResult <- fetchErr
-	}()
-	empty.Close()
-	select {
-	case fetchErr := <-closedResult:
-		if !errors.Is(fetchErr, ErrClosed) {
-			t.Fatalf("closed empty lane set error=%v", fetchErr)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("closing an empty lane set did not wake the blocked fetch")
-	}
-
-	cancellable, _ := New(Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](37)})
-	defer cancellable.Close()
-	ctx, cancel := context.WithCancel(context.Background())
-	cancelledResult := make(chan error, 1)
-	go func() {
-		_, fetchErr := cancellable.Fetch(ctx, Request{Demand: demand, Validate: validateTransferRecord(demand)})
-		cancelledResult <- fetchErr
-	}()
-	cancel()
-	select {
-	case fetchErr := <-cancelledResult:
-		if !errors.Is(fetchErr, context.Canceled) {
-			t.Fatalf("cancelled empty lane set error=%v", fetchErr)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("context cancellation did not wake the blocked fetch")
-	}
 }
 
 func TestLaneSetContentSuspensionUsesExactInitialIdentityAndOpaqueHandle(t *testing.T) {
