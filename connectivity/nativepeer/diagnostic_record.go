@@ -69,7 +69,8 @@ func (value Observation) DiagnosticRecord() diag.Record {
 			}
 		}
 		fields["parallelism"] = diag.Object(diag.Fields{
-			"action": diag.Text(string(d.Action)), "reason": diag.Text(d.Reason), "paths": diag.Uint(uint64(len(o.Paths))), "optional_paths": diag.Uint(optional),
+			"retry_after_ms": diag.Millis(d.RetryAfter),
+			"action":         diag.Text(string(d.Action)), "reason": diag.Text(d.Reason), "paths": diag.Uint(uint64(len(o.Paths))), "optional_paths": diag.Uint(optional),
 			"network_waiting_bytes": diag.Uint(o.NetworkWaitingBytes), "in_flight_bytes": diag.Uint(o.InFlightBytes), "remaining_bytes": diag.Uint(o.RemainingBytes), "remaining_known": diag.Bool(o.RemainingKnown),
 			"queued_bytes": diag.Uint(o.QueuedBytes), "unfinished_bytes": diag.Uint(o.UnfinishedBytes), "capacity_waiting_bytes": diag.Uint(o.CapacityWaitingBytes),
 			"useful_rate": diag.Number(d.UsefulRate), "output_rate": diag.Number(d.OutputRate), "baseline_useful_rate": diag.Number(d.BaselineUsefulRate), "baseline_output_rate": diag.Number(d.BaselineOutputRate),

@@ -46,7 +46,7 @@ import type {
 } from '../../src/connectivity/peer-set/path'
 
 describe('content path policy authority', () => {
-  it.each(['no-aggregate-gain', 'insufficient-scheduling-evidence'])(
+  it.each(['no-aggregate-gain', 'sampling-work-unavailable', 'sampling-work-unsettled'])(
     'retires an optional path for %s without ending the download', async reason => {
     const clock = new ManualRecoveryClock()
     const offers = new SuccessfulOffers()
@@ -55,6 +55,8 @@ describe('content path policy authority', () => {
       policy: 'p2p-only', peerRecovery: { clock }, recoveryTraceObserver: event => events.push(event),
     })
     const retire = vi.spyOn(session, 'retireLane')
+    const stopSampling = vi.spyOn(lanes, 'stopSampling')
+    const sampleLane = vi.spyOn(lanes, 'sampleLane')
     vi.spyOn(lanes, 'schedulingDemand').mockImplementation(() => ({
       queuedBytes: 100, queuedBlocks: 10, networkWaitingBytes: 100, capacityWaitingBytes: 0,
       inFlightBytes: 100, unfinishedBytes: 100, usefulBytes: clock.now(), outputBytes: clock.now(),
@@ -72,11 +74,20 @@ describe('content path policy authority', () => {
     const readEvidence = lanes.samplingEvidence.bind(lanes)
     vi.spyOn(lanes, 'samplingEvidence').mockImplementation((id, epoch) => {
       const evidence = readEvidence(id, epoch)
-      if (reason === 'insufficient-scheduling-evidence' || evidence === undefined || id !== sample.trialPath!.laneId) return evidence
+      if (reason === 'sampling-work-unavailable' || evidence === undefined || id !== sample.trialPath!.laneId) return evidence
+      if (reason === 'sampling-work-unsettled') return { ...evidence, offeredBytes: 1024 * 1024, busyMilliseconds: 450 }
       return { ...evidence, offeredBytes: 8 * 1024 * 1024, settledBytes: 8 * 1024 * 1024,
         completedBytes: 8 * 1024 * 1024, completedAttempts: 8, busyMilliseconds: 1000 }
     })
     for (let second = 0; second < (reason === 'no-aggregate-gain' ? 3 : 10); second++) await clock.advance(1000)
+    if (reason === 'sampling-work-unsettled') {
+      expect(lanes.eligibleSize(activation.routes)).toBe(2)
+      expect(stopSampling).toHaveBeenCalledWith(sample.trialPath.laneId, sample.trialPath.laneEpoch)
+      expect(sampleLane).toHaveBeenCalledTimes(1)
+      expect(retire).not.toHaveBeenCalledWith(sample.trialPath.laneId, sample.trialPath.laneEpoch)
+      expect(events).toContainEqual(expect.objectContaining({ stage: 'parallelism', action: 'settle' }))
+      for (let second = 0; second < 12; second++) await clock.advance(1000)
+    }
     await waitForMicrotaskCondition('unhelpful path retired', () => lanes.eligibleSize(activation.routes) === 1)
     expect(activation.routes.active).toBe(true)
     expect(events).toContainEqual(expect.objectContaining({ stage: 'parallelism', action: 'retire', reason }))

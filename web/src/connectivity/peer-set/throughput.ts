@@ -3,6 +3,8 @@ import { SAMPLE_BYTE_BUDGET, SAMPLE_LIFETIME_MILLISECONDS, type SamplingEvidence
 export const THROUGHPUT_SAMPLE_MS = 1000
 const OBSERVATION_MS = 3000
 const FAILURE_BACKOFF_MS = 15_000
+const MAXIMUM_INCONCLUSIVE_BACKOFF_MS = 60_000
+const SETTLEMENT_MS = SAMPLE_LIFETIME_MILLISECONDS
 const IDLE_RETENTION_MS = 10_000
 const MINIMUM_USEFUL_GAIN = 1.10
 const MINIMUM_OUTPUT_GAIN = 1.05
@@ -34,10 +36,11 @@ export interface ThroughputObservation {
   readonly pending: boolean
 }
 export interface ThroughputDecision {
-  readonly action: 'hold' | 'explore' | 'sample' | 'retire' | 'keep' | 'abandon'
+  readonly action: 'hold' | 'explore' | 'sample' | 'settle' | 'retire' | 'keep' | 'abandon'
   readonly reason?: string
   readonly path?: ThroughputPathIdentity
   readonly work?: SamplingEvidence
+  readonly retryAfterMilliseconds?: number
   readonly usefulRate?: number
   readonly outputRate?: number
   readonly baselineUsefulRate?: number
@@ -46,9 +49,11 @@ export interface ThroughputDecision {
 interface Window { at: number; useful: number; output: number }
 interface Rates { usefulRate: number; outputRate: number }
 interface Baseline { rates: Rates; paths: readonly ThroughputPathIdentity[] }
-type Trial =
-  | { phase: 'connecting'; baseline: Baseline }
-  | { phase: 'sampling'; baseline: Baseline; path: ThroughputPathIdentity; initial: SamplingEvidence; started: number; window: Window }
+type ActiveTrial = {
+  baseline: Baseline; path: ThroughputPathIdentity; initial: SamplingEvidence; started: number; window: Window
+} & ({ phase: 'sampling' } | { phase: 'settling'; deadline: number })
+type Trial = { phase: 'connecting'; baseline: Baseline } | ActiveTrial
+interface InconclusiveRetry { paths: readonly ThroughputPathIdentity[]; delay: number }
 const HOLD = { action: 'hold' } as const
 
 function samePath(a: ThroughputPathIdentity, b: ThroughputPathIdentity): boolean {
@@ -87,6 +92,7 @@ export class ThroughputController {
   #eligibleSince: number | undefined
   #idleSince: number | undefined
   #notBefore = -Infinity
+  #inconclusive: InconclusiveRetry | undefined
   #paths: readonly ThroughputPathIdentity[] = []
 
   step(now: number, o: ThroughputObservation, maximumPaths: number): ThroughputDecision {
@@ -95,6 +101,7 @@ export class ThroughputController {
     if (busy) { this.#idleSince = undefined; this.#eligibleSince ??= now }
     else { this.#eligibleSince = undefined; this.#idleSince ??= now }
     if (this.#trial !== undefined) return this.#advanceTrial(now, o, busy)
+    this.#rearmExploration(now, o)
     const optional = o.paths.filter(path => path.optional).at(-1)
     if (!busy && optional !== undefined && !o.pending && now - this.#idleSince! >= IDLE_RETENTION_MS) {
       this.#notBefore = now + OBSERVATION_MS
@@ -152,24 +159,43 @@ export class ThroughputController {
   }
 
   #measureTrial(now: number, o: ThroughputObservation, busy: boolean,
-    trial: Extract<Trial, { phase: 'sampling' }>, evidence: SamplingEvidence): ThroughputDecision {
+    trial: ActiveTrial, evidence: SamplingEvidence): ThroughputDecision {
     const work = workSince(evidence, trial.initial)
     if (Object.values(work).some(value => value < 0) || o.usefulBytes < trial.window.useful || o.outputBytes < trial.window.output) {
       return this.#endTrial(now, o, { action: 'retire', reason: 'trial-observation-reset', path: trial.path }, OBSERVATION_MS)
     }
-    if (!busy) return this.#endTrial(now, o, { action: 'retire', reason: 'trial-demand-ended', path: trial.path, work }, OBSERVATION_MS)
-    if (work.offeredBytes === 0) trial.window = windowAt(now, o)
+    // Natural allocation may have started work before the sampling grant.
+    const pending = evidence.offeredBytes > evidence.settledBytes
+    if (!busy) {
+      if (pending && o.unfinishedBytes > 0) return this.#settleTrial(now, o, trial, work)
+      return this.#endTrial(now, o, { action: 'retire', reason: 'trial-demand-ended', path: trial.path, work }, OBSERVATION_MS)
+    }
+    if (work.offeredBytes === 0 && work.busyMilliseconds === 0 && work.settledBytes === 0) trial.window = windowAt(now, o)
     if (now - trial.window.at >= OBSERVATION_MS) {
       const decision = this.#evaluateTrial(now, o, trial, work)
       if (decision !== undefined) return decision
     }
-    if (now - trial.started >= SAMPLE_LIFETIME_MILLISECONDS) return this.#endTrial(now, o,
-      { action: 'retire', reason: 'insufficient-scheduling-evidence', path: trial.path, work }, OBSERVATION_MS)
-    return HOLD
+    if (trial.phase === 'sampling' && now - trial.started < SAMPLE_LIFETIME_MILLISECONDS) return HOLD
+    if (pending) return this.#settleTrial(now, o, trial, work)
+    const reason = work.offeredBytes === 0 && work.settledBytes === 0 ? 'sampling-work-unavailable' : 'insufficient-scheduling-evidence'
+    return this.#endInconclusiveTrial(now, o, { action: 'retire', reason, path: trial.path, work })
+  }
+
+  #settleTrial(now: number, o: ThroughputObservation, trial: ActiveTrial, work: SamplingEvidence): ThroughputDecision {
+    // Admission expiry stops accelerated allocation, not work already in flight.
+    // The absolute cap also bounds delayed ticks and ordinary allocations.
+    const deadline = trial.phase === 'settling' ? trial.deadline
+      : Math.min(now + SETTLEMENT_MS, trial.started + SAMPLE_LIFETIME_MILLISECONDS + SETTLEMENT_MS)
+    if (now >= deadline) return this.#endInconclusiveTrial(now, o,
+      { action: 'retire', reason: 'sampling-work-unsettled', path: trial.path, work })
+    if (trial.phase === 'settling') return HOLD
+    this.#trial = { ...trial, phase: 'settling', deadline }
+    return { action: 'settle', reason: 'sampling-work-settling', path: trial.path, work,
+      baselineUsefulRate: trial.baseline.rates.usefulRate, baselineOutputRate: trial.baseline.rates.outputRate }
   }
 
   #evaluateTrial(now: number, o: ThroughputObservation,
-    trial: Extract<Trial, { phase: 'sampling' }>, work: SamplingEvidence): ThroughputDecision | undefined {
+    trial: ActiveTrial, work: SamplingEvidence): ThroughputDecision | undefined {
     const rates = ratesAt(now, o, trial.window)
     if (rates.outputRate < rates.usefulRate * MINIMUM_OUTPUT_RATIO && o.capacityWaitingBytes > 0) {
       return this.#endTrial(now, o, { action: 'retire', reason: 'consumer-pressure', path: trial.path, work, ...rates }, OBSERVATION_MS)
@@ -183,11 +209,33 @@ export class ThroughputController {
     improved ? 0 : FAILURE_BACKOFF_MS)
   }
 
+  #rearmExploration(now: number, o: ThroughputObservation): void {
+    if (this.#inconclusive === undefined) return
+    const idle = this.#idleSince !== undefined && now - this.#idleSince >= IDLE_RETENTION_MS
+    const reset = this.#window !== undefined && (o.usefulBytes < this.#window.useful || o.outputBytes < this.#window.output)
+    if (idle || reset || !samePaths(this.#inconclusive.paths, o.paths.map(path => path.identity))) {
+      this.#inconclusive = undefined
+      this.#notBefore = now
+    }
+  }
+
+  #endInconclusiveTrial(now: number, o: ThroughputObservation, decision: ThroughputDecision): ThroughputDecision {
+    const delay = this.#inconclusive === undefined ? FAILURE_BACKOFF_MS
+      : Math.min(this.#inconclusive.delay * 2, MAXIMUM_INCONCLUSIVE_BACKOFF_MS)
+    // Remember the baseline, not the optional path we are about to remove.
+    const retry = { paths: this.#trial!.baseline.paths, delay }
+    const result = this.#endTrial(now, o, decision, delay)
+    this.#inconclusive = retry
+    return result
+  }
+
   #endTrial(now: number, o: ThroughputObservation, decision: ThroughputDecision, delay: number): ThroughputDecision {
     const baseline = this.#trial!.baseline.rates
     this.#trial = undefined
+    this.#inconclusive = undefined
     this.#notBefore = now + delay
     this.#reset(now, o)
-    return { ...decision, baselineUsefulRate: baseline.usefulRate, baselineOutputRate: baseline.outputRate }
+    return { ...decision, retryAfterMilliseconds: delay,
+      baselineUsefulRate: baseline.usefulRate, baselineOutputRate: baseline.outputRate }
   }
 }

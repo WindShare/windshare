@@ -76,6 +76,12 @@ frontiers in that priority remain on normal allocation; preview frontiers never 
 At most one exploratory allocation is active, with one start every five seconds. A successful sample
 is not a prerequisite for normal allocation.
 
+Optional direct-path trials grant 12 seconds of accelerated sampling. Already assigned work
+may settle for up to 12 additional seconds; expiry never renews the sampling grant.
+Inconclusive trials retry after 15, 30, then at most 60 seconds. Baseline path replacement,
+progress-counter reset, or 10 seconds without network demand rearms exploration; a measured
+result clears inconclusive history. Initial connectivity and recovery keep their own policy.
+
 Each content lane starts one cold block request, then uses unique fragment receipt to admit
 more work before the current block finishes. Another request starts when unfinished payload falls
 below measured response delay plus 250 ms of traffic, within the receiver's existing concurrency budget.
