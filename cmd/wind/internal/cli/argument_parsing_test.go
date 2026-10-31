@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"flag"
 	"strings"
 	"testing"
 )
@@ -165,38 +166,27 @@ func assertArgumentCanariesAbsent(t *testing.T, stdout, stderr string, canaries 
 	}
 }
 
-func TestFlagHelpAlignsOptionsWithoutEscapedTabs(t *testing.T) {
-	tests := []struct {
-		name string
-		args []string
-		want []string
-	}{
-		{name: "share", args: []string{"share", "--help"}, want: []string{
-			"\n  -split-key\n        print a bare link and separate key string\n",
-			"\n  -v    show diagnostic milestones\n",
-		}},
-		{name: "get", args: []string{"get", "--help"}, want: []string{
-			"\n  -o string\n        output directory (default \".\")\n",
-		}},
-		{name: "resume retry", args: []string{"resume", "retry", "--help"}, want: []string{
-			"\n  -operation string\n        retained operation ID\n",
-		}},
+func TestFlagDefaultsPreserveRegisteredValuesAndOutput(t *testing.T) {
+	const registeredValue = "registered-default"
+	const parsedValue = "parsed-value-CANARY"
+	var output bytes.Buffer
+	flags := flag.NewFlagSet("example", flag.ContinueOnError)
+	flags.SetOutput(&output)
+	flags.String("name", registeredValue, "label")
+	flags.Bool("v", false, "switch")
+	if err := flags.Set("name", parsedValue); err != nil {
+		t.Fatal(err)
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			stdout, stderr, code := runArgumentParsingCase(t, test.args)
-			if code != ExitOK || stdout != "" || !strings.Contains(stderr, "\nOptions:\n") {
-				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
-			}
-			if strings.Contains(stderr, `\t`) || strings.Contains(stderr, "\t") {
-				t.Fatalf("help renders flag layout tabs: %q", stderr)
-			}
-			for _, want := range test.want {
-				if !strings.Contains(stderr, want) {
-					t.Fatalf("help does not contain %q: %q", want, stderr)
-				}
-			}
-		})
+
+	defaults := flagDefaults(flags)
+	if flags.Output() != &output || output.Len() != 0 {
+		t.Fatal("rendering defaults changed the parser's output authority")
+	}
+	if strings.ContainsAny(defaults, "\t") || strings.Contains(defaults, `\t`) {
+		t.Fatalf("unexpanded layout tabs: %q", defaults)
+	}
+	if !strings.Contains(defaults, registeredValue) || strings.Contains(defaults, parsedValue) {
+		t.Fatalf("defaults reflected parsed values instead of registration metadata: %q", defaults)
 	}
 }
 

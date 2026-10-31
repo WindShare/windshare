@@ -270,8 +270,11 @@ func (a *App) newFlagSet(name string) *flag.FlagSet {
 // cannot reflect that capability back to the terminal.
 func (a *App) writeFlagHelp(fs *flag.FlagSet, synopsis string) {
 	var help strings.Builder
-	fmt.Fprintf(&help, "Usage: %s %s\n\nOptions:\n", commandmeta.Name, synopsis)
-	help.WriteString(flagDefaults(fs))
+	fmt.Fprintf(&help, "Usage: %s %s\n", commandmeta.Name, synopsis)
+	if defaults := flagDefaults(fs); defaults != "" {
+		help.WriteString("\nOptions:\n")
+		help.WriteString(defaults)
+	}
 	_, _ = io.WriteString(a.stderrWriter(), help.String())
 }
 
