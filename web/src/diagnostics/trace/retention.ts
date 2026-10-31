@@ -99,6 +99,16 @@ function relayDeliveryRetention(payload: TraceEventPayloadByNameV2['relay_delive
   }
 }
 
+function schedulingRetention(
+  event: Extract<TraceEventObservationV2, { eventName: 'request_scheduling' | 'content_scheduling' | 'content_retry' }>,
+): TraceRetention {
+  switch (event.eventName) {
+    case 'request_scheduling': return event.payload.transition === 'failed' ? 'outcome' : 'recent'
+    case 'content_scheduling': return event.payload.purpose === 'rescue' ? 'milestone' : 'recent'
+    case 'content_retry': return event.payload.transition === 'exhausted' ? 'outcome' : 'milestone'
+  }
+}
+
 export function traceEventRetention(event: TraceEventObservationV2): TraceRetention {
   switch (event.eventName) {
     case 'sender_verification':
@@ -127,9 +137,9 @@ export function traceEventRetention(event: TraceEventObservationV2): TraceRetent
     case 'lease_retirement':
       return LEASE_RETIREMENT_RETENTION[event.payload.transition]
     case 'request_scheduling':
-      return event.payload.transition === 'failed' ? 'outcome' : 'recent'
+    case 'content_retry':
     case 'content_scheduling':
-      return event.payload.purpose === 'rescue' ? 'milestone' : 'recent'
+      return schedulingRetention(event)
     case 'peer_attempt':
       if (event.payload.stage === 'failed' || event.payload.stage === 'admitted') return 'outcome'
       return event.payload.stage === 'provider_fact' ? 'recent' : 'milestone'

@@ -16,7 +16,7 @@ import {
   type BlockRouteObservation,
 } from '../content/broker'
 import { RevisionService, SessionBlockLane } from '../content/session-services'
-import { traceContentScheduling } from '../diagnostics/trace/content-scheduling'
+import { traceContentRetry, traceContentScheduling } from '../diagnostics/trace/content-scheduling'
 import type { ProtocolTraceSource } from '../session/diagnostics'
 import type { ReceiverSessionRuntime } from '../session/runtime'
 import type { LaneChange } from '../session/runtime-types'
@@ -90,6 +90,7 @@ export class ReceiverGenerationFactory {
         }),
         onBlockScheduled: (fact) =>
           traceContentScheduling(fact, core.session.protocolSessionIdentity, options.protocolTrace),
+        onBlockRetry: fact => traceContentRetry(fact, core.session.protocolSessionIdentity, options.protocolTrace),
         onBlockFetched: (fact) => {
           options.pathActivity.fetched(generationId, fact)
           options.onBlockFetched?.(fact)
