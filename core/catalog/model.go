@@ -532,6 +532,11 @@ func CanonicalName(name string) (string, error) {
 	if dot := strings.IndexByte(stem, '.'); dot >= 0 {
 		stem = stem[:dot]
 	}
+	// Mirrors Go's internal/filepathlite isReservedName: the device stem ends at
+	// the first '.' (':' is already rejected as non-portable) and only trailing
+	// U+0020 spaces are ignored, so "NUL .txt" is still the NUL device while
+	// "NUL\u00a0.txt" is not.
+	stem = strings.TrimRight(stem, " ")
 	if _, reserved := windowsReservedNames[asciiUpper(stem)]; reserved {
 		return "", fmt.Errorf("%w: reserved device name", ErrInvalidName)
 	}
