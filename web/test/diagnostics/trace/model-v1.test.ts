@@ -70,6 +70,10 @@ const PAYLOAD_FOR_EVERY_EVENT = {
     dispatch_sequence: '1', file_id: 'AQAAAAAAAAAAAAAAAAAAAA', block_index: '0', route: 'direct', purpose: 'content',
     expected_ms: 10, pending_bytes: '1024', bytes_per_second: 102400,
   },
+  content_retry: {
+    first_dispatch_sequence: '1', file_id: 'AQAAAAAAAAAAAAAAAAAAAA', block_index: '27',
+    attempts: 2, maximum_attempts: 16, transition: 'exhausted', reason: 'no_recovered_lane',
+  },
   request_scheduling: {
     request_sequence: '1', request_kind: 'open_revisions', route: 'direct', transition: 'dispatched',
     expected_ms: 25, elapsed_ms: 0, pending_requests: 1,

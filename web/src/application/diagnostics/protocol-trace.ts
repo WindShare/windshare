@@ -1,6 +1,6 @@
 import { projectCorrelationV1 } from '../../diagnostics/export/correlation-v1'
 import { projectConnectionTrace, projectRelayDeliveryTrace } from '../../diagnostics/trace/connection-payload'
-import { projectContentScheduling } from '../../diagnostics/trace/content-scheduling'
+import { projectContentRetry, projectContentScheduling } from '../../diagnostics/trace/content-scheduling'
 import { projectProtocolErrorContentV2 } from '../../diagnostics/export/protocol-error-v2'
 import { TRACE_FAILURE_DETAIL_MAX_CHARACTERS } from '../../diagnostics/trace/lane-payload'
 import { formatDiagnosticText } from '../../security/diagnostic-formatter'
@@ -33,6 +33,7 @@ export function projectProtocolTraceEvent(
     })
   }
   if (event.eventName === 'content_scheduling') return projectContentScheduling(event)
+  if (event.eventName === 'content_retry') return projectContentRetry(event)
   if (event.eventName === 'operation_recovery') {
     return correlatedObservation(event.eventName, correlation, {
       operation_sequence: decimal(event.operationSequence),

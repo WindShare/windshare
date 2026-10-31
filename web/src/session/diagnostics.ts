@@ -196,6 +196,11 @@ export type ContentSchedulingTraceEvent = Readonly<{
   bytesPerSecond: number
 }>
 
+export type ContentRetryTraceEvent = import('../content/lane-set').BlockRetryObservation & Readonly<{
+  eventName: 'content_retry'
+  correlation: FailureCorrelation
+}>
+
 export type RequestSchedulingTraceEvent = RequestSchedulingObservation & Readonly<{
   eventName: 'request_scheduling'
   correlation: FailureCorrelation
@@ -217,6 +222,7 @@ export type ProtocolTraceEvent =
   | LeaseRetirementTraceEvent
   | RequestSchedulingTraceEvent
   | ContentSchedulingTraceEvent
+  | ContentRetryTraceEvent
   | ProtocolOperationTraceEvent
   | LaneTransitionTraceEvent
   | OperationRecoveryTraceEvent
