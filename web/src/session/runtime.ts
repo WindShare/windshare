@@ -37,7 +37,6 @@ import {
 } from './message'
 import {
   protocolMessageKindV1,
-  type LaneDetachmentClass,
   type ProtocolTraceEvent,
   type ProtocolTraceSource,
 } from './diagnostics'
@@ -51,6 +50,7 @@ import {
 import { OperationQueue, OperationRouter } from './operation-router'
 import {
   type LaneChange,
+  type LaneTermination,
   OPERATION_CANCEL_REASON,
   type OperationCancelReason,
   type OperationCancellation,
@@ -524,6 +524,13 @@ export class ReceiverSessionRuntime {
     )).catch(() => undefined)
   }
 
+  async retireLane(laneId: number, laneEpoch: number): Promise<void> {
+    const lane = this.#lanes.get(laneId)
+    // Delayed cleanup belongs to its admitted generation, never a reused slot.
+    if (lane?.epoch !== laneEpoch) return
+    await lane.close('retired')
+  }
+
   async stop(): Promise<void> {
     if (this.#closed) {
       await this.close()
@@ -547,7 +554,7 @@ export class ReceiverSessionRuntime {
   async #close(): Promise<void> {
     this.#closed = true
     this.#router.terminate(new SessionRuntimeError('session', 'Receiver session closed'))
-    await Promise.allSettled([...this.#lanes.values()].map((lane) => lane.close()))
+    await Promise.allSettled([...this.#lanes.values()].map((lane) => lane.close('session_closed')))
     this.#lanes.clear()
     this.#laneEpochs.clear()
     this.#laneInstallTails.clear()
@@ -576,21 +583,19 @@ export class ReceiverSessionRuntime {
       laneEpoch,
       router: this.#router,
       ...(this.#protocolTrace === undefined ? {} : { protocolTrace: this.#protocolTrace }),
-      onClosed: (closed, failure, fatal) => {
+      onClosed: (closed, termination) => {
         // Fatal authenticated failures become non-recoverable before observers
         // see the final lane detach; physical zero-lane loss remains recoverable.
-        let detachmentClass: LaneDetachmentClass = 'physical_failure'
-        if (fatal) detachmentClass = 'authenticated_failure'
-        else if (this.#closed) detachmentClass = 'closed'
+        const fatal = termination.kind === 'authenticated_failure'
         if (fatal) this.#closed = true
-        const scopedFailure = fatal
-          ? new SessionRuntimeError('session', 'Authenticated session lane failed', { cause: failure })
-          : new SessionRuntimeError('lane', 'Physical session lane failed', { cause: failure })
-        this.#detach(
-          closed,
-          scopedFailure,
-          detachmentClass,
-        )
+        this.#detach(closed, termination.kind === 'closed' ? termination : Object.freeze({
+          kind: termination.kind,
+          failure: new SessionRuntimeError(
+            fatal ? 'session' : 'lane',
+            fatal ? 'Authenticated session lane failed' : 'Physical session lane failed',
+            { cause: termination.failure },
+          ),
+        }))
         if (fatal) this.close().catch(() => undefined)
       },
     })
@@ -635,8 +640,7 @@ export class ReceiverSessionRuntime {
       }
       const current = this.#lanes.get(laneId)
       if (current !== undefined) {
-        await current.close()
-        this.#detach(current)
+        await current.close('replaced')
       }
       this.#requireOpen()
       const latestEpoch = this.#laneEpochs.get(laneId)
@@ -655,11 +659,11 @@ export class ReceiverSessionRuntime {
 
   #detach(
     lane: SessionLane,
-    failure?: unknown,
-    detachmentClass: 'closed' | 'physical_failure' | 'authenticated_failure' = 'closed',
+    termination: LaneTermination,
   ): void {
     if (this.#lanes.get(lane.id) !== lane) return
     this.#lanes.delete(lane.id)
+    const failure = termination.kind === 'closed' ? undefined : termination.failure
     const reason = failure ?? new SessionRuntimeError('lane', 'Operation lane became unavailable')
     for (const [operation, laneId] of this.#operationLanes) {
       if (laneId === lane.id) operation.fail(reason)
@@ -667,8 +671,7 @@ export class ReceiverSessionRuntime {
     this.#emitProtocolTrace(() => Object.freeze({
       eventName: 'lane_transition',
       transition: 'detached',
-      detachmentClass,
-      ...(failure === undefined ? {} : { failure }),
+      termination,
       correlation: Object.freeze({
         protocolSessionId: this.protocolSessionIdentity,
         lane: Object.freeze({ id: lane.id, epoch: lane.epoch }),

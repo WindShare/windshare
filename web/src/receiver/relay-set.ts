@@ -33,6 +33,7 @@ export class ReceiverRelaySet {
     this.#session = options.initial.session
     this.#connections.set(options.initial.relayBase, {
       relay: options.initial.relay, laneId: options.initial.relayLaneId,
+      laneEpoch: options.initial.session.keys.initialLaneEpoch,
     })
   }
 
@@ -81,16 +82,16 @@ export class ReceiverRelaySet {
           reservation: { milliseconds: RELAY_ATTACH_ATTEMPT_MILLISECONDS, finish: () => undefined },
           parent: signal, now: this.#options.now,
           connect: attemptSignal => this.#options.factory.attachRelay(this.#session, attemptSignal, relayBase),
-          close: attached => attached.relay.close(),
+          close: attached => this.#closeAttached(attached),
         })
         if (signal.aborted || this.#session.isClosed) {
-          await attached.relay.close().catch(() => undefined)
+          await this.#closeAttached(attached)
           return
         }
         try {
           this.#options.admit(attached.laneId)
         } catch (error) {
-          await attached.relay.close().catch(() => undefined)
+          await this.#closeAttached(attached)
           throw error
         }
         this.#connections.set(relayBase, attached)
@@ -109,8 +110,15 @@ export class ReceiverRelaySet {
     }
   }
 
+  async #closeAttached(attached: AttachedRelay): Promise<void> {
+    await Promise.allSettled([
+      this.#session.retireLane(attached.laneId, attached.laneEpoch),
+      attached.relay.close(),
+    ])
+  }
+
   #release(attached: AttachedRelay): void {
-    const task = attached.relay.close().catch(() => undefined)
+    const task = this.#closeAttached(attached)
     this.#cleanup.add(task)
     task.finally(() => this.#cleanup.delete(task)).catch(() => undefined)
   }
@@ -120,7 +128,7 @@ export class ReceiverRelaySet {
     const connections = [...this.#connections.values()]
     this.#connections.clear()
     await Promise.allSettled([
-      ...connections.map((attached) => attached.relay.close()),
+      ...connections.map((attached) => this.#closeAttached(attached)),
       ...this.#tasks.values(),
       ...this.#cleanup,
     ])

@@ -18,6 +18,11 @@ export type LaneTransitionPayloadV1 =
     }>
   | Readonly<{
       transition: 'detached'
-      detachment_class: 'closed' | 'physical_failure' | 'authenticated_failure'
+      detachment_class: 'closed'
+      close_reason: 'retired' | 'replaced' | 'session_closed'
+    }>
+  | Readonly<{
+      transition: 'detached'
+      detachment_class: 'physical_failure' | 'authenticated_failure'
       failure_detail?: string
     }>

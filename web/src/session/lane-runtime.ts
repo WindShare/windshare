@@ -12,7 +12,7 @@ import {
   verifySenderControl,
 } from './message'
 import type { OperationRouter } from './operation-router'
-import { SessionRuntimeError } from './runtime-types'
+import { SessionRuntimeError, type LaneCloseReason, type LaneTermination } from './runtime-types'
 import type { SessionKeys } from './transcript'
 
 export class SessionLane {
@@ -25,10 +25,10 @@ export class SessionLane {
   readonly #router: OperationRouter
   readonly #descriptor: ShareDescriptor
   readonly #sessionId: Uint8Array<ArrayBuffer>
-  readonly #onClosed: (lane: SessionLane, failure: unknown, fatal: boolean) => void
+  readonly #onClosed: (lane: SessionLane, termination: LaneTermination) => void
   readonly #pumpTask: Promise<void>
   #closed = false
-  #sendFailure: unknown
+  #termination: LaneTermination | undefined
   #closeTask: Promise<void> | undefined
 
   constructor(options: {
@@ -39,7 +39,7 @@ export class SessionLane {
     readonly laneId: number
     readonly laneEpoch: number
     readonly router: OperationRouter
-    readonly onClosed: (lane: SessionLane, failure: unknown, fatal: boolean) => void
+    readonly onClosed: (lane: SessionLane, termination: LaneTermination) => void
     readonly protocolTrace?: ProtocolTraceSource
   }) {
     this.id = options.laneId
@@ -61,8 +61,8 @@ export class SessionLane {
       }),
       {
         onFailure: reason => {
-          this.#sendFailure = new SessionRuntimeError('lane', 'Session lane delivery failed', { cause: reason })
-          this.close().catch(() => undefined)
+          this.#recordFailure(new SessionRuntimeError('lane', 'Session lane delivery failed', { cause: reason }))
+          this.#shutdown().catch(() => undefined)
         },
         observe: (message, transition) => options.protocolTrace?.current?.({
           eventName: 'protocol_operation',
@@ -88,7 +88,12 @@ export class SessionLane {
     this.#pumpTask = this.#pump()
   }
 
-  close(): Promise<void> {
+  close(reason: LaneCloseReason): Promise<void> {
+    this.#termination ??= Object.freeze({ kind: 'closed', reason })
+    return this.#shutdown()
+  }
+
+  #shutdown(): Promise<void> {
     this.#closeTask ??= this.#close()
     return this.#closeTask
   }
@@ -118,8 +123,16 @@ export class SessionLane {
     }
   }
 
+  #recordFailure(failure: unknown): void {
+    const kind = isFatalSessionFailure(failure) ? 'authenticated_failure' : 'physical_failure'
+    // Cleanup must not overwrite an observed failure. Authentication still wins
+    // when verification of an already-read frame finishes during local closure.
+    if (this.#termination === undefined || kind === 'authenticated_failure') {
+      this.#termination = Object.freeze({ kind, failure })
+    }
+  }
+
   async #pump(): Promise<void> {
-    let failure: unknown
     try {
       while (!this.#closed) {
         const result = await this.#readFrame()
@@ -147,21 +160,24 @@ export class SessionLane {
         )
       }
     } catch (error) {
-      failure = error
+      this.#recordFailure(error)
       this.writer.fail(error)
     } finally {
       this.#closed = true
-      failure ??= this.#sendFailure
-      if (failure === undefined) {
-        this.writer.fail(new SessionRuntimeError('lane', 'Session lane became unavailable'))
-      }
+      this.#termination ??= Object.freeze({
+        kind: 'physical_failure',
+        failure: new SessionRuntimeError('lane', 'Session lane receive stream ended unexpectedly'),
+      })
+      this.writer.fail(this.#termination.kind === 'closed'
+        ? new SessionRuntimeError('lane', 'Session lane closed')
+        : this.#termination.failure)
       try {
         this.#reader.releaseLock()
       } catch {
         // Another close path may already have released the only reader.
       }
       await this.#channel.close().catch(() => undefined)
-      this.#onClosed(this, failure, isFatalSessionFailure(failure))
+      this.#onClosed(this, this.#termination)
     }
   }
 }

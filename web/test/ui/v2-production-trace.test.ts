@@ -208,8 +208,7 @@ it('exports lane exception causes and bounded stacks without mutating the failur
     const event = {
       eventName: 'lane_transition' as const,
       transition: 'detached' as const,
-      detachmentClass: 'authenticated_failure' as const,
-      failure,
+      termination: { kind: 'authenticated_failure' as const, failure },
       correlation: {
         protocolSessionId: createProtocolSessionIdentity(new Uint8Array(16).fill(1)),
         lane: { id: 2, epoch: 0 },

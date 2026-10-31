@@ -343,7 +343,7 @@ describe('v2 receiver reconnect supervisor', () => {
       signal.throwIfAborted()
       expect(target).toBe(session as unknown as ReceiverSessionRuntime)
       session.attach(3)
-      return { relay: replacementRelay.connection, laneId: 3 }
+      return { relay: replacementRelay.connection, laneId: 3, laneEpoch: 1 }
     }
     const { supervisor } = supervisorFixture(session, initialRelay, factory)
     const generations: number[] = []
@@ -471,7 +471,7 @@ describe('v2 receiver reconnect supervisor', () => {
     const secondFactory = new FakeSessionFactory()
     firstFactory.attachRelayImpl = async () => {
       firstSession.attach(3)
-      return { relay: new TrackedRelay(3).connection, laneId: 3 }
+      return { relay: new TrackedRelay(3).connection, laneId: 3, laneEpoch: 1 }
     }
     const first = supervisorFixture(firstSession, firstRelay, firstFactory, descriptor(1)).supervisor
     const second = supervisorFixture(secondSession, secondRelay, secondFactory, descriptor(20)).supervisor
@@ -531,7 +531,7 @@ function registerProtocolSessionReplacementWaitTests(): void {
     const factory = new FakeSessionFactory()
     factory.attachRelayImpl = async () => {
       session.attach(3)
-      return { relay: replacementRelay.connection, laneId: 3 }
+      return { relay: replacementRelay.connection, laneId: 3, laneEpoch: 1 }
     }
     const { supervisor } = supervisorFixture(session, initialRelay, factory)
     const controller = new AbortController()
@@ -610,7 +610,7 @@ describe('independent receiver relay set', () => {
       const replacing = requested.filter((base) => base === relayBase).length > 1
       const laneId = replacing ? 4 : 3
       session.attach(laneId)
-      return { relay: replacing ? replacement.connection : third.connection, laneId }
+      return { relay: replacing ? replacement.connection : third.connection, laneId, laneEpoch: 1 }
     }
     const supervisor = new ReceiverReconnectSupervisor({
       descriptor: descriptor(), initial: core(session, initial), sessionFactory: factory, policy: 'relay-only',
@@ -621,7 +621,7 @@ describe('independent receiver relay set', () => {
     expect(supervisor.contentLaneCount(activation.routes)).toBe(2)
     expect(initial.closeCalls).toBe(0)
     session.attach(2)
-    slow.resolve({ relay: second.connection, laneId: 2 })
+    slow.resolve({ relay: second.connection, laneId: 2, laneEpoch: 1 })
     await flushReconciliation()
     expect(supervisor.contentLaneCount(activation.routes)).toBe(3)
     session.detach(3)
@@ -647,7 +647,7 @@ describe('independent receiver relay set', () => {
     factory.attachRelayImpl = async () => {
       const laneId = ++calls + 1
       session.attach(laneId)
-      return { relay: calls === 1 ? extra.connection : replaced.connection, laneId }
+      return { relay: calls === 1 ? extra.connection : replaced.connection, laneId, laneEpoch: 1 }
     }
     const supervisor = new ReceiverReconnectSupervisor({
       descriptor: descriptor(), initial: core(session, initial), sessionFactory: factory,
