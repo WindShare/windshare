@@ -4,7 +4,7 @@ import type { DiagnosticsDelivery } from '../../diagnostics/browser/delivery'
 import { DetailSheet } from '../controls/DetailSheet'
 import { DiagnosticsPanelContext } from './context'
 import { DiagnosticFileActions } from './DiagnosticFileActions'
-import { SavedDiagnosticFileActions } from './SavedDiagnosticFileActions'
+import { PreviousDiagnostics } from './PreviousDiagnostics'
 import { diagnosticsCaptureLabel } from './presentation'
 import './diagnostics.css'
 
@@ -22,7 +22,7 @@ export function DiagnosticsProvider({ session, delivery, children }: {
     session.refresh()
     setOpen(true)
   }
-  const { capture, activation, previous, hasCurrentEvidence } = snapshot
+  const { capture, activation, previousCaptures, hasCurrentEvidence } = snapshot
   const label = diagnosticsCaptureLabel(capture)
 
   return <DiagnosticsPanelContext value={openPanel}>
@@ -45,11 +45,7 @@ export function DiagnosticsProvider({ session, delivery, children }: {
           {snapshot.savedAt !== null && <p>Last saved locally: {new Date(snapshot.savedAt).toLocaleString()}</p>}
           <DiagnosticFileActions key={capture.capture_generation} readFile={() => session.exportFile()} delivery={delivery} />
         </section> : <p>No diagnostics have been recorded on this page yet.</p>}
-        {previous !== null && <section aria-label="Previous diagnostics">
-          <h3>Previous diagnostics</h3>
-          <p>Saved locally: {new Date(previous.savedAt).toLocaleString()}</p>
-          <SavedDiagnosticFileActions key={previous.id} captureId={previous.id} readFile={session.readSavedFile} delivery={delivery} />
-        </section>}
+        <PreviousDiagnostics captures={previousCaptures} readFile={session.readSavedFile} delivery={delivery} />
         <p>Recent diagnostic files are kept locally for up to 24 hours, within a fixed storage limit.</p>
       </DetailSheet>
     </div>}
@@ -62,15 +58,16 @@ function DiagnosticsNotice({ snapshot, onOpen, onStop }: {
   readonly onStop: () => void
 }) {
   const [dismissed, setDismissed] = useState<string | null>(null)
-  const { capture, activation, previous, hasCurrentEvidence } = snapshot
+  const { capture, activation, previousCaptures, hasCurrentEvidence } = snapshot
   const currentRecording = capture.state !== 'idle' && hasCurrentEvidence
-  const savedRecording = previous !== null && previous.captureState !== 'idle'
-  const notice = currentRecording ? `capture:${capture.capture_generation}` : previous?.id ?? ''
+  // Silent snapshots must not replace the recording that owns this notification or its dismissal.
+  const savedRecording = previousCaptures.find(previous => previous.captureState !== 'idle')
+  const notice = currentRecording ? `capture:${capture.capture_generation}` : savedRecording?.id ?? ''
   const active = activation.kind === 'active'
   // Automatically recovered failures remain available in the panel without announcing a recording.
-  if (!active && ((!currentRecording && !savedRecording) || dismissed === notice)) return null
+  if (!active && ((!currentRecording && savedRecording === undefined) || dismissed === notice)) return null
   return <aside className="diagnostics-surface diagnostics-bar" aria-label="Diagnostics">
-    <span role="status">{!active && !currentRecording && savedRecording
+    <span role="status">{!active && !currentRecording && savedRecording !== undefined
       ? 'Saved diagnostics available' : diagnosticsCaptureLabel(capture)}</span>
     <button type="button" onClick={event => onOpen(event.currentTarget)}>Export diagnostics</button>
     {active
