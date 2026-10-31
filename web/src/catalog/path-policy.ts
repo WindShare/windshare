@@ -143,8 +143,20 @@ function isControlOrFormatCharacter(scalar: number): boolean {
 }
 
 function isWindowsReservedName(segment: string): boolean {
-  const stem = segment.split('.', 1)[0] ?? ''
+  // Mirrors Go's internal/filepathlite isReservedName: the device stem ends at
+  // the first '.' (':' is already rejected as non-portable) and only trailing
+  // U+0020 spaces are ignored, so `NUL .txt` is still the NUL device while
+  // `NUL\u00a0.txt` is not.
+  const stem = trimTrailingSpaces(segment.split('.', 1)[0] ?? '')
   return WINDOWS_RESERVED_NAMES.has(asciiLower(stem))
+}
+
+// A loop rather than `trimEnd()` (which also strips NBSP and other Unicode
+// spaces) or `/ +$/` (rejected by sonarjs/super-linear-regex).
+function trimTrailingSpaces(value: string): string {
+  let end = value.length
+  while (end > 0 && value.charCodeAt(end - 1) === 0x20 /* U+0020 SPACE */) end -= 1
+  return value.slice(0, end)
 }
 
 function asciiLower(value: string): string {

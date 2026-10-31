@@ -1,7 +1,7 @@
 {
   "version": 1,
   "kind": "path-policy",
-  "description": "版本化跨平台路径契约。Canonicalize 只做 NFC;CollisionKey = NFC(Unicode 15.0.0 locale-independent full case fold(path))。valid 用例记录规范路径及碰撞键,同一 collisionGroup 必须碰撞;invalid-path 用例必须在清单或文件系统操作前拒绝。根级 .wsresume 前缀按完整折叠保留,Cc/Cf、Win32 非法/设备名(含上标 COM/LPT 与 CONIN$/CONOUT$)均拒绝。",
+  "description": "版本化跨平台路径契约。Canonicalize 只做 NFC;CollisionKey = NFC(Unicode 15.0.0 locale-independent full case fold(path))。valid 用例记录规范路径及碰撞键,同一 collisionGroup 必须碰撞;invalid-path 用例必须在清单或文件系统操作前拒绝。根级 .wsresume 前缀按完整折叠保留,Cc/Cf、Win32 非法/设备名(含上标 COM/LPT、CONIN$/CONOUT$,以及主干与扩展名之间带空格的设备名)均拒绝。",
   "cases": [
     {
       "name": "policy-version",
@@ -151,6 +151,52 @@
       "name": "console-output-device",
       "input": "conout$.log",
       "expected": "invalid-path"
+    },
+    {
+      "name": "device-stem-trailing-space",
+      "input": "NUL .txt",
+      "expected": "invalid-path"
+    },
+    {
+      "name": "nested-device-stem-trailing-spaces",
+      "input": "safe/com1  .tar.gz",
+      "expected": "invalid-path"
+    },
+    {
+      "name": "spaced-device-stem-and-extension",
+      "input": "CON . txt",
+      "expected": "invalid-path"
+    },
+    {
+      "name": "console-device-stem-trailing-space",
+      "input": "conin$ .log",
+      "expected": "invalid-path"
+    },
+    {
+      "name": "superscript-device-stem-trailing-space",
+      "input": "COM¹ .log",
+      "expected": "invalid-path"
+    },
+    {
+      "name": "device-stem-trailing-nbsp-is-not-trimmed",
+      "input": "NUL\u00a0.txt",
+      "expected": "valid",
+      "canonical": "NUL\u00a0.txt",
+      "collisionKey": "nul\u00a0.txt"
+    },
+    {
+      "name": "device-stem-leading-space-is-not-trimmed",
+      "input": " NUL.txt",
+      "expected": "valid",
+      "canonical": " NUL.txt",
+      "collisionKey": " nul.txt"
+    },
+    {
+      "name": "non-device-stem-trailing-space",
+      "input": "NULx .txt",
+      "expected": "valid",
+      "canonical": "NULx .txt",
+      "collisionKey": "nulx .txt"
     }
   ]
 }
