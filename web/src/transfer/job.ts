@@ -175,16 +175,13 @@ export class TransferJob {
       explicitTargets: this.#failures.explicitTargets,
       signal: this.#lifetime.signal,
       rootCommitted: () => this.#root.committed,
-      observeSelectedFile: (entry) => {
-        const measure = this.#measure.observeUniqueFile(entry.expectedSize)
-        this.#observers?.measure(measure)
-        this.#emitProgress()
-      },
+      observeSelectedFile: entry => this.#publishMeasure(this.#measure.observeUniqueFile(entry.expectedSize)),
       recordDirectoryFailure: (identity, error) => this.#failures.recordDiscoveryDirectory(identity, error),
       authenticateDirectory: (cursor, committed, parent) =>
         this.#authenticateDirectory(cursor, committed, parent),
       projectFile: sourcePath => this.#projectFile(sourcePath),
       generationCommitted: (cursor, committed) => this.#pinDiscoveryGeneration(cursor, committed),
+      observeSourceOmissions: count => this.#publishMeasure(this.#measure.observeSourceOmissions(count)),
       prepareDirectory: (collector, cursor, committed, role) =>
         this.#preparedDirectory(collector, cursor, committed, role),
     })
@@ -393,20 +390,12 @@ export class TransferJob {
       broker: this.#capacity.broker,
       execution,
       maximumNodeClaims: this.#limits.catalogNodeClaims,
+      observeSourceOmissions: count => this.#publishMeasure(this.#measure.observeSourceOmissions(count)),
       signal: this.#lifetime.signal,
-      observeSelectedFile: exactSize => {
-        const measure = this.#measure.observeUniqueFile(exactSize)
-        this.#observers?.measure(measure)
-        this.#emitProgress()
-      },
+      observeSelectedFile: exactSize => this.#publishMeasure(this.#measure.observeUniqueFile(exactSize)),
       ...createDirectZipProgressObservers(this.#progress, () => this.#emitProgress()),
       observeDiscovery: event => this.#observers?.discoveryScheduling(event),
-      finishMeasure: () => {
-        const measure = this.#measure.complete()
-        this.#observers?.measure(measure)
-        this.#emitProgress()
-        return measure
-      },
+      finishMeasure: () => this.#publishMeasure(this.#measure.complete()),
     })
   }
 
@@ -417,6 +406,12 @@ export class TransferJob {
         cursor.idText, encodeBase64Url(committed.generation), cursor.path, this.#lifetime.signal,
       )
     }
+  }
+
+  #publishMeasure(measure: SelectionMeasure): SelectionMeasure {
+    this.#observers?.measure(measure)
+    this.#emitProgress()
+    return measure
   }
 
   async #authenticateDirectory(

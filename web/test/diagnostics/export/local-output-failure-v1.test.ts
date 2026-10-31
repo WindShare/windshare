@@ -137,7 +137,8 @@ describe('local output failure bundle projection', () => {
         .toHaveLength(1)
     }
     expect(encoded).toContain('"message":"checkpoint transaction aborted"')
-    expect(encoded).not.toMatch(/destination|decision|proof|omission|fallback|"raw"/u)
+    // Captured stacks and messages may contain these words; only schema keys are restricted.
+    expect(encoded).not.toMatch(/"[^"\\]*(?:destination|decision|proof|omission|fallback|raw)[^"\\]*":/u)
   })
 
   it('keeps diagnostic-only output identities and artifact paths out of protocol traces', () => {

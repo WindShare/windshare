@@ -77,7 +77,7 @@ export function memberRollbackSource(rootId: string, mode: MemberRollbackRevisio
         output: execution.ordered, signal,
         observeSelectedFile: () => undefined, observeReplayedFile: () => undefined,
         finishMeasure: () => ({ discoveredFiles: members.length, discoveredBytes: 12n,
-          discovery: 'complete', sizeClass: 'small' }),
+          discovery: 'complete', sourceOmittedEntries: 0n, sizeClass: 'small' }),
         transferFile: (file, transferSignal) => transferDirectZipFileV1({
           descriptor, output: execution.output, signal: transferSignal, revisions, broker,
           onInitialDurable: offset => { initialDurable.push({

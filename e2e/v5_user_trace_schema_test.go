@@ -136,7 +136,7 @@ func buildV5TracePayloadSchemas() map[string]*v5TraceObjectSchema {
 		v5TraceFields(v5TraceBool, "counters_exact"),
 		v5TraceFields(
 			v5TraceDecimal,
-			"discovered_files", "discovered_bytes", "published_files", "published_bytes",
+			"source_omitted_entries", "discovered_files", "discovered_bytes", "published_files", "published_bytes",
 			"verified_bytes", "newly_verified_bytes", "previously_published_bytes", "restart_reusable_bytes",
 		),
 		v5TraceObjectField("file_outcomes", fileOutcomes, false),
@@ -190,7 +190,7 @@ func buildV5TracePayloadSchemas() map[string]*v5TraceObjectSchema {
 			v5TraceObjectField("download_connectivity", v5DownloadConnectivitySchema(), true),
 			v5TraceFields(v5TraceString, "result_status", "drift"),
 			v5TraceFields(v5TraceInteger, "exit_code"),
-			v5TraceFields(v5TraceDecimal, "result_elapsed_ms", "directory_failures", "omitted_diagnostics", "published_bytes"),
+			v5TraceFields(v5TraceDecimal, "result_elapsed_ms", "source_omitted_entries", "directory_failures", "omitted_diagnostics", "published_bytes"),
 			v5TraceFields(v5TraceBool, "destination_adjusted", "counters_exact"),
 			v5TraceObjectField("file_outcomes", fileOutcomes, false),
 			v5TraceObjectField("failure", failure, true),

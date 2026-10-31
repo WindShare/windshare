@@ -27,6 +27,7 @@ func (outcomes FileOutcomes) HasNonSuccess() bool {
 }
 
 type ProgressSpec struct {
+	SourceOmittedEntries     uint64
 	DiscoveredFiles          uint64
 	DiscoveredBytes          uint64
 	PublishedFiles           uint64
@@ -47,6 +48,7 @@ type ProgressSpec struct {
 }
 
 type ProgressSnapshot struct {
+	sourceOmittedEntries     uint64
 	discoveredFiles          uint64
 	discoveredBytes          uint64
 	publishedFiles           uint64
@@ -88,7 +90,8 @@ func NewProgressSnapshot(spec ProgressSpec) (ProgressSnapshot, error) {
 		}
 	}
 	return ProgressSnapshot{
-		discoveredFiles: spec.DiscoveredFiles, discoveredBytes: spec.DiscoveredBytes,
+		sourceOmittedEntries: spec.SourceOmittedEntries,
+		discoveredFiles:      spec.DiscoveredFiles, discoveredBytes: spec.DiscoveredBytes,
 		publishedFiles: spec.PublishedFiles, publishedBytes: spec.PublishedBytes,
 		verifiedBytes: spec.VerifiedBytes, newlyVerifiedBytes: spec.NewlyVerifiedBytes,
 		restartReusableBytes:     spec.RestartReusableBytes,
@@ -115,6 +118,8 @@ func checkedAdd(left, right uint64) (uint64, bool) {
 }
 
 func (snapshot ProgressSnapshot) DiscoveredFiles() uint64 { return snapshot.discoveredFiles }
+
+func (snapshot ProgressSnapshot) SourceOmittedEntries() uint64 { return snapshot.sourceOmittedEntries }
 
 func (snapshot ProgressSnapshot) DiscoveredBytes() uint64 { return snapshot.discoveredBytes }
 
@@ -162,7 +167,8 @@ func (snapshot ProgressSnapshot) CountersExact() bool { return snapshot.counters
 
 func (snapshot ProgressSnapshot) Valid() bool {
 	_, err := NewProgressSnapshot(ProgressSpec{
-		DiscoveredFiles: snapshot.discoveredFiles, DiscoveredBytes: snapshot.discoveredBytes,
+		SourceOmittedEntries: snapshot.sourceOmittedEntries,
+		DiscoveredFiles:      snapshot.discoveredFiles, DiscoveredBytes: snapshot.discoveredBytes,
 		PublishedFiles: snapshot.publishedFiles, PublishedBytes: snapshot.publishedBytes,
 		VerifiedBytes: snapshot.verifiedBytes, NewlyVerifiedBytes: snapshot.newlyVerifiedBytes,
 		RestartReusableBytes:     snapshot.restartReusableBytes,

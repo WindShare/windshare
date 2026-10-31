@@ -5,6 +5,8 @@ export type SelectionSizeClass = 'small' | 'large' | 'unknown'
 export type DiscoveryTerminal = 'open' | 'complete' | 'failed'
 
 export interface SelectionMeasure {
+  /** Unsupported children of selected directories; excluded from file and byte totals. */
+  readonly sourceOmittedEntries: bigint
   readonly discoveredFiles: number
   readonly discoveredBytes: bigint
   readonly discovery: DiscoveryTerminal
@@ -23,10 +25,19 @@ export class SelectionMeasureError extends Error {
  * NodeID authority is the deduplication boundary, so this layer retains no IDs.
  */
 export class SelectionMeasureTracker {
+  #sourceOmittedEntries = 0n
   #files = 0
   #bytes = 0n
   #reachedLargeBoundary = false
   #terminal: DiscoveryTerminal = 'open'
+
+  observeSourceOmissions(count: bigint): SelectionMeasure {
+    if (this.#terminal !== 'open' || count < 0n) {
+      throw new SelectionMeasureError('source omissions require open discovery and a non-negative count')
+    }
+    this.#sourceOmittedEntries += count
+    return this.snapshot()
+  }
 
   observeUniqueFile(exactSize: bigint): SelectionMeasure {
     if (this.#terminal !== 'open') {
@@ -61,6 +72,7 @@ export class SelectionMeasureTracker {
       sizeClass = 'small'
     }
     return Object.freeze({
+      sourceOmittedEntries: this.#sourceOmittedEntries,
       discoveredFiles: this.#files,
       discoveredBytes: this.#bytes,
       discovery: this.#terminal,

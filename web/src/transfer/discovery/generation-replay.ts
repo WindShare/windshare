@@ -165,7 +165,7 @@ function requireCommittedDirectoryAuthority(
       committed.generation.every((byte) => byte === 0)) {
     throw new CatalogTraversalError('Committed directory identity changed authenticated authority')
   }
-  if (committed.omittedCount !== 0n) {
-    throw new DirectoryTraversalError('Committed directory generation omitted catalog entries')
+  if (cursor.path.length === 0 && committed.omittedCount !== 0n) {
+    throw new CatalogTraversalError('Synthetic root omitted explicitly selected entries')
   }
 }

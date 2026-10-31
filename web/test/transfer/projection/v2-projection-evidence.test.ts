@@ -7,6 +7,23 @@ import { encodeBase64Url } from '../../../src/crypto/bytes'
 import { projectAuthenticatedGeneration } from '../../../src/transfer/discovery/projection-evidence'
 
 describe('authenticated catalog generation projection adapter', () => {
+  it('projects supported entries while preserving the authenticated omission count', async () => {
+    const fixture = committedFixture()
+    const input = {
+      committed: { ...fixture.committed, omittedCount: 2n },
+      selection: frozenSelectionPolicy(true, []),
+      directoryAncestry: [fixture.committed.directoryIdText], directoryPath: ['folder'],
+      containingDirectorySelected: true, unsettledTargets: [],
+    }
+    const evidence = await projectAuthenticatedGeneration({
+      ...input, pages: pages({ ...fixture.page, omittedCount: 2n }),
+    })
+    expect(evidence.metrics.byteCountLowerBound).toBe(17n)
+    await expect(projectAuthenticatedGeneration({
+      ...input, pages: pages({ ...fixture.page, omittedCount: 1n }),
+    })).rejects.toThrow(/committed generation/u)
+  })
+
   it('streams a committed generation into bounded shape evidence', async () => {
     const fixture = committedFixture()
     const evidence = await projectAuthenticatedGeneration({

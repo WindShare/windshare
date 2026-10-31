@@ -45,6 +45,9 @@ export async function collectExactSingleFileEvidence(
   let committed = options.root ?? await options.catalog.loadDirectory(directoryId, {
     signal: options.signal,
   })
+  if (committed.omittedCount !== 0n) {
+    throw new CatalogTraversalError('Synthetic root omitted explicitly selected entries')
+  }
 
   for (let depth = 0; depth < sourcePath.length; depth += 1) {
     committed = requireCommittedDirectory(committed, directoryId, directoryIdText)
@@ -94,7 +97,8 @@ async function findEntry(
         !equalBytes(page.shareInstance, options.descriptor.shareInstance) ||
         !equalBytes(page.directoryId, directory.directoryId) ||
         !equalBytes(page.generation, directory.generation) ||
-        page.terminal !== (pageIndex === directory.pageCount - 1)) {
+        page.terminal !== (pageIndex === directory.pageCount - 1) ||
+        page.omittedCount !== (page.terminal ? directory.omittedCount : 0n)) {
       throw new CatalogTraversalError(
         'OriginalFile catalog replay does not match its committed generation',
       )
@@ -123,7 +127,7 @@ function requireCommittedDirectory(
   if (input === undefined || input.directoryIdText !== expectedIdText ||
       !equalBytes(input.directoryId, expectedId) ||
       input.generation.byteLength !== CATALOG_IDENTITY_BYTES ||
-      input.generation.every(byte => byte === 0) || input.omittedCount !== 0n ||
+      input.generation.every(byte => byte === 0) || input.omittedCount < 0n ||
       !Number.isSafeInteger(input.pageCount) || input.pageCount < 1 ||
       !Number.isSafeInteger(input.entryCount) || input.entryCount < 0) {
     throw new CatalogTraversalError(

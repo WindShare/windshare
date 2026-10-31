@@ -138,6 +138,7 @@ export class TransferObservers {
 
     this.#emit(() => Object.freeze({
       name: 'transfer_progress',
+      sourceOmittedEntries: state.measure.sourceOmittedEntries,
       operationId: this.#options.intent.operationId,
       transferJobId: this.#options.transferJobId,
       discoveredFiles: BigInt(state.measure.discoveredFiles),

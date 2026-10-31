@@ -40,6 +40,7 @@ export interface DirectZipCatalogSourceOptionsV1 {
   readonly selection: FrozenSelectionPolicy
   readonly intent: DirectZipIntent
   readonly maximumNodeClaims: number
+  readonly observeSourceOmissions: (count: bigint) => void
 }
 
 /**
@@ -139,6 +140,7 @@ export class DirectZipCatalogSourceV1 implements DirectZipOrderedSourceV1 {
       throw new TypeError('selected directory escapes the frozen ZIP result-root anchor')
     }
     child ??= await this.#loadDirectory(candidate.entry, signal)
+    if (child.omittedCount > 0n) this.#options.observeSourceOmissions(child.omittedCount)
     const member = this.#directoryMember(candidate, child)
     return member === undefined ? Object.freeze({ child }) : Object.freeze({ child, member })
   }
@@ -150,6 +152,9 @@ export class DirectZipCatalogSourceV1 implements DirectZipOrderedSourceV1 {
       { signal },
     )
     requireCommittedDirectory(committed, this.#options.descriptor.syntheticRoot)
+    if (committed.omittedCount !== 0n) {
+      throw new Error('direct ZIP synthetic root omitted explicitly selected entries')
+    }
     this.#claim(committed.directoryIdText)
     if (this.#selectedRuleIds.has(committed.directoryIdText)) {
       this.#observedSelectedRuleIds.add(committed.directoryIdText)
@@ -294,7 +299,7 @@ export class DirectZipCatalogSourceV1 implements DirectZipOrderedSourceV1 {
 }
 
 function requireCommittedDirectory(directory: CommittedDirectory, expectedId: Uint8Array): void {
-  if (!equalBytes(directory.directoryId, expectedId) || directory.omittedCount !== 0n ||
+  if (!equalBytes(directory.directoryId, expectedId) || directory.omittedCount < 0n ||
       directory.generation.byteLength !== 16 || directory.generation.every(byte => byte === 0)) {
     throw new Error('direct ZIP catalog generation lost authenticated directory authority')
   }

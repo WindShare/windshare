@@ -47,7 +47,8 @@ func (v TransferLifecycleTrace) DiagnosticRecord() diag.Record {
 }
 func (v ReceiveProgressSnapshot) DiagnosticValue() diag.Value {
 	return diag.Object(diag.Fields{"discovery": diag.Text(v.Discovery.DiagnosticName()), "counters_exact": diag.Bool(v.CountersExact),
-		"discovered_files": diag.Uint(v.DiscoveredFiles), "discovered_bytes": diag.Uint(v.DiscoveredBytes),
+		"source_omitted_entries": diag.Uint(v.SourceOmittedEntries),
+		"discovered_files":       diag.Uint(v.DiscoveredFiles), "discovered_bytes": diag.Uint(v.DiscoveredBytes),
 		"published_files": diag.Uint(v.PublishedFiles), "published_bytes": diag.Uint(v.PublishedBytes),
 		"verified_bytes": diag.Uint(v.VerifiedBytes), "previously_published_bytes": diag.Uint(v.PreviouslyPublishedBytes),
 		"newly_verified_bytes":   diag.Uint(v.NewlyVerifiedBytes),

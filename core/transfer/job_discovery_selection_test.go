@@ -390,7 +390,7 @@ func TestTransferJobOmittedRootChildrenPauseBeforeOutputAdmission(t *testing.T) 
 		admissionMeasure = measure
 	}
 	if result.Outcome != DirectTreeOutcomePaused || len(result.Directories) != 1 ||
-		!errors.Is(result.Directories[0].Cause, ErrCatalogEntriesOmitted) || result.Progress.ConnectionSizeClass() != ConnectionSizeUnknown {
+		!errors.Is(result.Directories[0].Cause, ErrCatalogRootEntriesOmitted) || result.Progress.ConnectionSizeClass() != ConnectionSizeUnknown {
 		t.Fatalf("result=%+v", result)
 	}
 	if result.TerminationFault != mustCatalogFault(fault.ScopeSessionTerminal, fault.CatalogInvalidGeneration) ||

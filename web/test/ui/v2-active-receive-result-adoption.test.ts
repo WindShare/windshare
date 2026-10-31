@@ -60,7 +60,7 @@ const TRANSFER_MEASURE: SelectionMeasure = Object.freeze({
   discoveredFiles: 1,
   discoveredBytes: 128n,
   discovery: 'complete',
-  sizeClass: 'small',
+  sourceOmittedEntries: 0n, sizeClass: 'small',
 })
 const UNAVAILABLE_PLANS: PlanExecutionAuthority = Object.freeze({
   openDirectTree: unavailableExecution,
