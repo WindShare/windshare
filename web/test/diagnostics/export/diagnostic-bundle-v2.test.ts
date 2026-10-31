@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest'
 
 import {
   createDiagnosticBundleV2,
+  DiagnosticBundleProjectorV2,
   projectDiagnosticsStatusV2,
 } from '../../../src/diagnostics/export/diagnostic-bundle-v2'
 import { deepFreezeJson, isDeeplyFrozen } from '../../../src/diagnostics/export/json'
+import { DiagnosticBundleNdjsonEncoder } from '../../../src/diagnostics/export/ndjson'
 import {
   snapshotTraceEventObservationV2,
   traceEventObservationBytesV2,
@@ -80,6 +82,28 @@ describe('DiagnosticBundleV2', () => {
       'payload',
     ])
     expect(isDeeplyFrozen(bundle)).toBe(true)
+  })
+
+  it('does not cache failure lines whose injected records are only shallowly frozen', () => {
+    const fact = { ...incidentRecord('1').payload.trigger }
+    const record = Object.freeze({
+      sequence: '1', time: '2026-08-19T01:30:00Z', count: '1', relation: 'observed' as const, fact,
+    })
+    const health = diagnosticsHealthV1()
+    const input = {
+      time: record.time, incidents: [],
+      failureEvidence: { records: [record], omitted: '0', retainedBytes: 0 },
+      status: projectDiagnosticsStatusV2(traceStatus(), health), healthAtExport: health,
+    }
+    const projector = new DiagnosticBundleProjectorV2(TEST_BUNDLE_IDENTITY)
+    const encoder = new DiagnosticBundleNdjsonEncoder()
+    const first = projector.project(input)
+    encoder.encode(first)
+    fact.stage = 'projection'
+    const second = projector.project(input)
+
+    expect(second.failureEvidence[0]).not.toBe(first.failureEvidence[0])
+    expect(encoder.encode(second)).toContain('"stage":"projection"')
   })
 
   it('publishes every named trace capacity using the frozen key order', () => {

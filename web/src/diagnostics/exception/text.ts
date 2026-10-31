@@ -15,6 +15,11 @@ export function boundedDiagnosticText(value: string, maximumBytes: number): stri
   return value.slice(0, end)
 }
 
+export function isBoundedDiagnosticText(value: unknown, maximumBytes: number): value is string {
+  // Capture and validation must agree on UTF-8 storage and JSON escaping.
+  return typeof value === 'string' && boundedDiagnosticText(value, maximumBytes) === value
+}
+
 function encodedScalarBytes(scalar: number): number {
   if (scalar === 34 || scalar === 92 || JSON_SHORT_ESCAPES.has(scalar)) return 2
   if (scalar < 32 || (scalar >= 0xd800 && scalar <= 0xdfff)) return 6
