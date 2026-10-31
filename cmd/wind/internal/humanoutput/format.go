@@ -38,6 +38,11 @@ func FormatBytes(value uint64) string {
 		whole++
 		tenth = 0
 	}
+	// Rounding can reach the next unit's threshold (999.95 KB); showing
+	// "1000.0 KB" would contradict the "1.0 MB" that 1,000,000 B reports.
+	if whole == decimalKilo && unit < decimalGiga {
+		return FormatBytes(unit * decimalKilo)
+	}
 	return strconv.FormatUint(whole, 10) + "." + strconv.FormatUint(tenth, 10) + " " + suffix
 }
 
@@ -45,13 +50,20 @@ func FormatRate(bytesPerSecond uint64) string {
 	return FormatBytes(bytesPerSecond) + "/s"
 }
 
+// secondTenthsPerMinute counts the 0.1s ticks FormatElapsed prints below one minute.
+const secondTenthsPerMinute = 600
+
 func FormatElapsed(elapsed time.Duration) string {
 	if elapsed < 0 {
 		elapsed = 0
 	}
 	if elapsed < time.Minute {
 		tenths := (elapsed + 50*time.Millisecond) / (100 * time.Millisecond)
-		return strconv.FormatInt(int64(tenths/10), 10) + "." + strconv.FormatInt(int64(tenths%10), 10) + "s"
+		// A value that rounds up to 60.0s belongs to the minute format below, which
+		// prints it as "1m 0s"; "60.0s" would be a spelling no other duration uses.
+		if tenths < secondTenthsPerMinute {
+			return strconv.FormatInt(int64(tenths/10), 10) + "." + strconv.FormatInt(int64(tenths%10), 10) + "s"
+		}
 	}
 	totalSeconds := uint64((elapsed + time.Second/2) / time.Second)
 	return formatClockDuration(totalSeconds)
