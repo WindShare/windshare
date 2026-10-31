@@ -34,7 +34,7 @@ func v5CapacityTraceRecord(sequence int, command, event, runtimeRunID string, pa
 func v5CapacityProgressVector() map[string]any {
 	return map[string]any{
 		"discovery": "complete", "counters_exact": true,
-		"discovered_files": "2", "discovered_bytes": "8192",
+		"source_omitted_entries": "0", "discovered_files": "2", "discovered_bytes": "8192",
 		"published_files": "1", "published_bytes": "4096",
 		"verified_bytes": "4096", "newly_verified_bytes": "4096",
 		"previously_published_bytes": "0", "restart_reusable_bytes": "0",

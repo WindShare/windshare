@@ -268,6 +268,7 @@ function emitPageEvents(
   emitTrace(trace, counters, () => ({
     eventName: 'transfer_progress',
     payload: {
+      source_omitted_entries: '0',
       discovered_files: String(counters.fileCount),
       discovered_bytes: String(counters.completedBytes),
       written_bytes: String(counters.completedBytes),
