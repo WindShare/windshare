@@ -795,6 +795,7 @@ describe('browser diagnostics production composition', () => {
   it('projects complete capacity scheduling progress independently from file outcomes', () => {
     const projected = projectReceiverTraceEvent(Object.freeze({
       name: 'transfer_progress',
+      sourceOmittedEntries: 0n,
       operationId: 'BQAAAAAAAAAAAAAAAAAAAA',
       transferJobId: 'BgAAAAAAAAAAAAAAAAAAAA',
       discoveredFiles: 2n,

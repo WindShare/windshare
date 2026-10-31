@@ -28,34 +28,36 @@ func (value DriftReason) Name() (string, bool) {
 }
 
 type TransferResultSpec struct {
-	Status              ResultStatus
-	ExitCode            ExitCode
-	Drift               DriftReason
-	Elapsed             time.Duration
-	Destination         appobs.DisplayPath
-	DestinationAdjusted bool
-	Files               appobs.FileOutcomes
-	DirectoryFailures   uint64
-	OmittedDiagnostics  uint64
-	PublishedBytes      uint64
-	CountersExact       bool
-	Failure             appobs.Failure
+	SourceOmittedEntries uint64
+	Status               ResultStatus
+	ExitCode             ExitCode
+	Drift                DriftReason
+	Elapsed              time.Duration
+	Destination          appobs.DisplayPath
+	DestinationAdjusted  bool
+	Files                appobs.FileOutcomes
+	DirectoryFailures    uint64
+	OmittedDiagnostics   uint64
+	PublishedBytes       uint64
+	CountersExact        bool
+	Failure              appobs.Failure
 }
 
 type TransferResult struct {
-	status              ResultStatus
-	exitCode            ExitCode
-	drift               DriftReason
-	elapsed             time.Duration
-	destination         appobs.DisplayPath
-	destinationAdjusted bool
-	files               appobs.FileOutcomes
-	directoryFailures   uint64
-	omittedDiagnostics  uint64
-	publishedBytes      uint64
-	countersExact       bool
-	failure             appobs.Failure
-	hasFailure          bool
+	sourceOmittedEntries uint64
+	status               ResultStatus
+	exitCode             ExitCode
+	drift                DriftReason
+	elapsed              time.Duration
+	destination          appobs.DisplayPath
+	destinationAdjusted  bool
+	files                appobs.FileOutcomes
+	directoryFailures    uint64
+	omittedDiagnostics   uint64
+	publishedBytes       uint64
+	countersExact        bool
+	failure              appobs.Failure
+	hasFailure           bool
 }
 
 func NewTransferResult(spec TransferResultSpec) (TransferResult, error) {
@@ -80,7 +82,8 @@ func NewTransferResult(spec TransferResultSpec) (TransferResult, error) {
 		return TransferResult{}, ErrInvalidResult
 	}
 	return TransferResult{
-		status: spec.Status, exitCode: spec.ExitCode, drift: spec.Drift,
+		sourceOmittedEntries: spec.SourceOmittedEntries,
+		status:               spec.Status, exitCode: spec.ExitCode, drift: spec.Drift,
 		elapsed: spec.Elapsed, destination: spec.Destination,
 		destinationAdjusted: spec.DestinationAdjusted, files: spec.Files,
 		directoryFailures: spec.DirectoryFailures, omittedDiagnostics: spec.OmittedDiagnostics,
@@ -96,6 +99,7 @@ func (result TransferResult) Elapsed() time.Duration          { return result.el
 func (result TransferResult) Destination() appobs.DisplayPath { return result.destination }
 func (result TransferResult) DestinationAdjusted() bool       { return result.destinationAdjusted }
 func (result TransferResult) Files() appobs.FileOutcomes      { return result.files }
+func (result TransferResult) SourceOmittedEntries() uint64    { return result.sourceOmittedEntries }
 func (result TransferResult) DirectoryFailures() uint64       { return result.directoryFailures }
 func (result TransferResult) OmittedDiagnostics() uint64      { return result.omittedDiagnostics }
 func (result TransferResult) PublishedBytes() uint64          { return result.publishedBytes }
@@ -105,7 +109,8 @@ func (result TransferResult) Failure() (appobs.Failure, bool) {
 }
 func (result TransferResult) Valid() bool {
 	_, err := NewTransferResult(TransferResultSpec{
-		Status: result.status, ExitCode: result.exitCode, Drift: result.drift,
+		SourceOmittedEntries: result.sourceOmittedEntries,
+		Status:               result.status, ExitCode: result.exitCode, Drift: result.drift,
 		Elapsed: result.elapsed, Destination: result.destination,
 		DestinationAdjusted: result.destinationAdjusted, Files: result.files,
 		DirectoryFailures: result.directoryFailures, OmittedDiagnostics: result.omittedDiagnostics,

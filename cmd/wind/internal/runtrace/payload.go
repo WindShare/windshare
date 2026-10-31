@@ -23,6 +23,7 @@ type downloadConnectivity struct {
 }
 
 type transferSettledPayload struct {
+	SourceOmittedEntries string                `json:"source_omitted_entries"`
 	DownloadConnectivity *downloadConnectivity `json:"download_connectivity,omitempty"`
 	ResultStatus         string                `json:"result_status"`
 	ExitCode             int                   `json:"exit_code"`

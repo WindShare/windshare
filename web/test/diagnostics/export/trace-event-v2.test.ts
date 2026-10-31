@@ -488,6 +488,7 @@ const VALID_OBSERVATIONS: readonly TraceEventObservationV2[] = [
     task_settlement: 'unsettled', retention: 'reconcile', cleanup: 'settled',
   }),
   observation('transfer_progress', {
+    source_omitted_entries: '0',
     operation_id: OPERATION_ID,
     transfer_job_id: OPERATION_ID,
     discovered_files: '2',

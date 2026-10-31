@@ -14,6 +14,9 @@ func formatTransferResult(result clievent.TransferResult, symbols Symbols) []ter
 	switch result.Status() {
 	case clievent.ResultSuccess:
 		headline = statusLine(symbols.Success, "Download completed in "+elapsed, terminalcanvas.StyleSuccess)
+		if result.SourceOmittedEntries() != 0 {
+			headline = statusLine(symbols.Warning, "Download completed with skipped items in "+elapsed, terminalcanvas.StyleWarning)
+		}
 	case clievent.ResultPartial:
 		headline = statusLine(symbols.Warning, withDrift("Download finished partially in "+elapsed, result.Drift()), terminalcanvas.StyleWarning)
 	case clievent.ResultPaused:
@@ -85,6 +88,9 @@ func formatOutcomeSummary(result clievent.TransferResult, separator string) stri
 	}
 	if result.DirectoryFailures() != 0 {
 		parts = append(parts, countedResultNoun(result, result.DirectoryFailures(), "directory failed", "directories failed"))
+	}
+	if result.SourceOmittedEntries() != 0 {
+		parts = append(parts, countedResultNoun(result, result.SourceOmittedEntries(), "unsupported source item not included", "unsupported source items not included"))
 	}
 	if result.OmittedDiagnostics() != 0 {
 		parts = append(parts, countedResultNoun(result, result.OmittedDiagnostics(), "diagnostic omitted", "diagnostics omitted"))

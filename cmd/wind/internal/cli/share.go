@@ -96,6 +96,7 @@ func shareFileSource(paths []string) liveshare.FileSourceFactory {
 	return liveshare.FileSourceFactoryFunc(func(ctx context.Context, source liveshare.FileSourceContext) (liveshare.FileSource, error) {
 		return osfs.NewSelectedFileSource(ctx, osfs.SelectedCatalogSourceConfig{
 			Paths: selected, SyntheticRoot: source.SyntheticRoot, Identities: osfs.CatalogIdentitySourceFunc(source.NewIdentity),
+			Diagnostics: source.Diagnostics,
 		})
 	})
 }
