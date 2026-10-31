@@ -147,7 +147,7 @@ describe('relay endpoint failure isolation', () => {
     factory.attachRelayImpl = async () => {
       if (factory.attachRelayCalls > 1) throw error
       session.attach(2)
-      return { relay: invalid.connection, laneId: 2 }
+      return { relay: invalid.connection, laneId: 2, laneEpoch: 1 }
     }
     const observed: unknown[] = []
     const trace = vi.fn()

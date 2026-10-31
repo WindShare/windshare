@@ -57,6 +57,11 @@ export class FakeSession {
     })
   }
 
+  async retireLane(laneId: number, laneEpoch: number): Promise<void> {
+    const epoch = laneId === this.initialLaneId ? this.keys.initialLaneEpoch : 1
+    if (this.#laneIds.has(laneId) && epoch === laneEpoch) this.detach(laneId)
+  }
+
   async close(): Promise<void> {
     this.closeCalls += 1
     this.isClosed = true
