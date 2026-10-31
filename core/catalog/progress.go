@@ -38,6 +38,8 @@ type ScanRequest struct {
 }
 
 type ScanResult struct {
+	// OmittedCount counts unsupported children excluded from a fully scanned,
+	// stable directory. Enumeration and identity failures must return an error.
 	OmittedCount uint64
 }
 

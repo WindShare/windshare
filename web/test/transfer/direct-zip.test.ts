@@ -68,13 +68,14 @@ const ROOT: DirectZipAuthenticatedRootV1 = Object.freeze({
 })
 
 describe('direct ZIP ordered transfer composition', () => {
-  it('merges authenticated directory lookahead by unsigned artifact-path bytes', async () => {
+  it.each([0n, 2n])('merges authenticated directory lookahead with %s source omissions', async omittedCount => {
     const rootId = id(1)
     const childId = id(2)
     const siblingFile = catalogFile(id(3), 'a.txt', 1n)
     const childFile = catalogFile(id(4), 'z.txt', 1n)
     const root = committed(rootId, 11, 2)
-    const child = committed(childId, 12, 1)
+    const child = { ...committed(childId, 12, 1), omittedCount }
+    const omissions: bigint[] = []
     const entries = new Map([
       [root.directoryIdText, [catalogDirectory(childId, 'a'), siblingFile]],
       [child.directoryIdText, [childFile]],
@@ -112,11 +113,13 @@ describe('direct ZIP ordered transfer composition', () => {
         },
       } as never,
       maximumNodeClaims: 10,
+      observeSourceOmissions: count => omissions.push(count),
     })
 
     const paths: string[] = []
     for await (const member of source.members(SIGNAL)) paths.push(member.artifactPath.join('/'))
     expect(paths).toEqual(['root/a', 'root/a.txt', 'root/a/z.txt'])
+    expect(omissions).toEqual(omittedCount === 0n ? [] : [omittedCount])
   })
 
   it('ignores unselected siblings outside a frozen directory result-root anchor', async () => {
@@ -165,6 +168,7 @@ describe('direct ZIP ordered transfer composition', () => {
         },
       } as never,
       maximumNodeClaims: 10,
+      observeSourceOmissions: () => undefined,
     })
     const paths: string[] = []
     for await (const member of source.members(SIGNAL)) paths.push(member.artifactPath.join('/'))
@@ -197,7 +201,7 @@ describe('direct ZIP ordered transfer composition', () => {
       observeSelectedFile: size => observed.push(size),
       observeReplayedFile: size => replayed.push(size),
       transferFile: async member => { calls.push(`transfer:${member.artifactPath.join('/')}`) },
-      finishMeasure: () => ({ discoveredFiles: 2, discoveredBytes: 3n, discovery: 'complete', sizeClass: 'small' }),
+      finishMeasure: () => ({ discoveredFiles: 2, discoveredBytes: 3n, discovery: 'complete', sourceOmittedEntries: 0n, sizeClass: 'small' }),
     }).run()
 
     expect(calls).toEqual([
@@ -237,7 +241,7 @@ describe('direct ZIP discovery pipeline', () => {
       },
       finishMeasure: () => {
         discovered.resolve()
-        return { discoveredFiles: 2, discoveredBytes: 5n, discovery: 'complete', sizeClass: 'small' }
+        return { discoveredFiles: 2, discoveredBytes: 5n, discovery: 'complete', sourceOmittedEntries: 0n, sizeClass: 'small' }
       },
     }).run()
     await Promise.all([discovered.promise, transferStarted.promise])
@@ -263,7 +267,7 @@ describe('direct ZIP discovery pipeline', () => {
       transferFile: async () => { await releaseTransfer.promise },
       finishMeasure: () => {
         finished = true
-        return { discoveredFiles: 300, discoveredBytes: 300n, discovery: 'complete', sizeClass: 'large' }
+        return { discoveredFiles: 300, discoveredBytes: 300n, discovery: 'complete', sourceOmittedEntries: 0n, sizeClass: 'large' }
       },
     }).run()
     await reachedBound.promise
@@ -824,7 +828,7 @@ describe('direct ZIP receive lifecycle', () => {
     const rootId = id(20)
     const root = committed(rootId, 21, 1)
     const measure = { discoveredFiles: 1, discoveredBytes: 4n,
-      discovery: 'complete' as const, sizeClass: 'small' as const }
+      discovery: 'complete' as const, sourceOmittedEntries: 0n, sizeClass: 'small' as const }
     const snapshot = () => { materialized.push(progress.snapshot(measure).materializedBytes) }
     await runDirectZipJob({
       descriptor: { syntheticRoot: rootId, shareInstance: opened.descriptor.shareInstance, chunkSize: 2 } as never,
@@ -844,6 +848,7 @@ describe('direct ZIP receive lifecycle', () => {
       } },
       execution: { output: resumed, ordered: resumed } as never,
       maximumNodeClaims: 10,
+      observeSourceOmissions: () => undefined,
       signal: SIGNAL,
       observeSelectedFile: () => undefined,
       ...createDirectZipProgressObservers(progress, snapshot),

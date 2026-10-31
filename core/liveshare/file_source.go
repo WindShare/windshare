@@ -6,12 +6,14 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/diagnostics"
 )
 
 type FileSourceContext struct {
 	ShareInstance catalog.ShareInstance
 	SyntheticRoot catalog.DirectoryID
 	NewIdentity   func() ([catalog.IdentityBytes]byte, error)
+	Diagnostics   diagnostics.Sink
 }
 
 // FileSource owns the selected scope's handles and grant-use leases. Selected

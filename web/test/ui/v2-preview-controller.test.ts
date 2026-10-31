@@ -741,6 +741,7 @@ describe('preview diagnostics continuity', () => {
         payload: {
           operation_id: identityText(5), transfer_job_id: identityText(6),
           discovered_files: '1', discovered_bytes: '100', received_object_bytes: '100',
+          source_omitted_entries: '0',
           written_bytes: '100', completed_files: '1', completed_bytes: '100',
           file_errors: '0', selection_errors: '0', failed_directories: '0',
           content_lanes: 1, capacity_waiting_files: '0', capacity_accumulated_wait_ms: '0',

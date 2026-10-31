@@ -35,6 +35,9 @@ export async function projectAuthenticatedGeneration(
   input: ProjectionGenerationInput,
 ): Promise<AuthenticatedProjectionEvidence> {
   requireCommittedGeneration(input.committed)
+  if (input.directoryPath.length === 0 && input.committed.omittedCount !== 0n) {
+    throw new SelectionProjectionError('synthetic root omitted explicitly selected entries')
+  }
   const directoryPath = input.directoryPath.length === 0
     ? Object.freeze([]) as readonly string[]
     : snapshotCatalogPath(input.directoryPath)
@@ -175,7 +178,7 @@ function settleObservedTarget(
 }
 
 function requireCommittedGeneration(committed: CommittedDirectory): void {
-  if (committed.pageCount <= 0 || committed.entryCount < 0 || committed.omittedCount !== 0n) {
+  if (committed.pageCount <= 0 || committed.entryCount < 0 || committed.omittedCount < 0n) {
     throw new SelectionProjectionError('projection requires a complete committed catalog generation')
   }
   if (committed.directoryIdText !== encodeBase64Url(committed.directoryId) ||

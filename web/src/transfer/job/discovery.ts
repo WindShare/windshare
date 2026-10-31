@@ -39,6 +39,7 @@ export class JobDiscovery {
   readonly #signal: AbortSignal
   readonly #rootCommitted: () => CommittedDirectory | undefined
   readonly #observeSelectedFile: (entry: Extract<CatalogEntry, { kind: 'file' }>) => void
+  readonly #observeSourceOmissions: (count: bigint) => void
   readonly #recordDirectoryFailure: (identity: string, error: unknown) => void
   readonly #authenticateDirectory: (
     cursor: DirectoryCursor,
@@ -62,6 +63,7 @@ export class JobDiscovery {
     readonly signal: AbortSignal
     readonly rootCommitted: () => CommittedDirectory | undefined
     readonly observeSelectedFile: (entry: Extract<CatalogEntry, { kind: 'file' }>) => void
+    readonly observeSourceOmissions: (count: bigint) => void
     readonly recordDirectoryFailure: (identity: string, error: unknown) => void
     readonly authenticateDirectory: (
       cursor: DirectoryCursor,
@@ -84,6 +86,7 @@ export class JobDiscovery {
     this.#signal = input.signal
     this.#rootCommitted = input.rootCommitted
     this.#observeSelectedFile = input.observeSelectedFile
+    this.#observeSourceOmissions = input.observeSourceOmissions
     this.#recordDirectoryFailure = input.recordDirectoryFailure
     this.#authenticateDirectory = input.authenticateDirectory
     this.#projectFile = input.projectFile
@@ -119,6 +122,9 @@ export class JobDiscovery {
       recordDirectoryFailure: this.#recordDirectoryFailure,
     })
     if (generation === undefined) return
+    if (cursor.selected && generation.committed.omittedCount > 0n) {
+      this.#observeSourceOmissions(generation.committed.omittedCount)
+    }
     const materialize = this.#directoryMaterializer(work, cursor, generation.committed, collector)
     const replayInput = { catalog: this.#catalog, traversal: this.#traversal, signal: this.#signal }
     await replays.push({

@@ -36,6 +36,7 @@ type incrementalDirectoryDiscovery struct {
 	request                    incrementalDirectoryRequest
 	checkpoint                 nodeLedgerCheckpoint
 	generation                 catalog.DirectoryGeneration
+	omittedCount               uint64
 	commitments                []catalog.PageCommitment
 	selection                  discoveredSelection
 	descendantAdmission        bool
@@ -235,10 +236,14 @@ func (discovery *incrementalDirectoryDiscovery) readTerminalGeneration(
 			ctx, discovery.checkpoint, discovery.request.directory, discovery.request.path, failure,
 		)
 	}
-	if !result.Complete {
-		return false, discovery.rejectOmittedGeneration()
+	if discovery.request.path == "" && result.Directory.OmittedCount() != 0 {
+		return false, discovery.rejectOmittedRoot()
 	}
 	discovery.generation = result.Directory.Generation()
+	discovery.omittedCount = result.Directory.OmittedCount()
+	if discovery.request.selected {
+		discovery.selection.sourceOmittedEntries = discovery.omittedCount
+	}
 	discovery.commitments = result.PageCommitments()
 	if len(discovery.commitments) == 0 {
 		failure := catalogIntegrityFailure(ErrCatalogIdentity)
@@ -354,26 +359,21 @@ func (discovery *incrementalDirectoryDiscovery) childNeedsDiscovery(
 	}
 }
 
-func (discovery *incrementalDirectoryDiscovery) rejectOmittedGeneration() error {
+func (discovery *incrementalDirectoryDiscovery) rejectOmittedRoot() error {
 	discovery.run.job.progress.failDiscovery()
 	discovery.run.discoveryFailed = true
 	discovery.run.recordDirectoryFailure(DirectoryJobFailure{
 		DirectoryID: discovery.request.directory,
 		Path:        discovery.request.path,
 		Stage:       FailureDirectoryDiscovery,
-		Cause:       ErrCatalogEntriesOmitted,
+		Cause:       ErrCatalogRootEntriesOmitted,
 	})
-	if discovery.request.path == "" {
-		// Omitted root children invalidate the authority for every descendant.
-		discovery.run.rootGeneration = catalog.DirectoryGeneration{}
-	}
+	// Explicit selections cannot silently disappear from the synthetic root.
+	discovery.run.rootGeneration = catalog.DirectoryGeneration{}
 	if err := discovery.run.rollbackClaims(discovery.checkpoint); err != nil {
 		return failurestate.DependencyContract(err)
 	}
-	if discovery.request.path == "" {
-		return catalogIntegrityFailure(ErrCatalogEntriesOmitted)
-	}
-	return nil
+	return catalogIntegrityFailure(ErrCatalogRootEntriesOmitted)
 }
 
 func (discovery *incrementalDirectoryDiscovery) needsAdmission() bool {

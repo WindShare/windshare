@@ -84,7 +84,7 @@ export const EMPTY_RECEIVE_RUNTIME: ReceiveRuntimeSnapshot = Object.freeze({
 export type TransferResultProjection = Pick<
   TransferJobResult,
   'worker' | 'intent' | 'transferJobId' | 'lifecycle' | 'repairSummary' | 'recoverySummary' |
-    'abortReason'
+    'abortReason' | 'measure'
 >
 
 /**

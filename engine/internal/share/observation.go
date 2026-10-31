@@ -100,6 +100,7 @@ func (o *observations) sourceFactory(factory liveshare.FileSourceFactory) livesh
 		return nil
 	}
 	return liveshare.FileSourceFactoryFunc(func(ctx context.Context, source liveshare.FileSourceContext) (liveshare.FileSource, error) {
+		source.Diagnostics = o.control.Diagnostics
 		o.emit(Observation{Milestone: SourceAcquiring, ShareInstance: source.ShareInstance})
 		acquired, err := factory.OpenFileSource(ctx, source)
 		milestone := SourceAcquired

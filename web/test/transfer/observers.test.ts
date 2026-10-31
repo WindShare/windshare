@@ -20,7 +20,7 @@ describe('transfer observer separation', () => {
     let snapshots = 0
     const snapshot = () => {
       snapshots++
-      return ledger.snapshot({ discovery: 'complete', discoveredFiles: 1, discoveredBytes: 4n, sizeClass: 'small' })
+      return ledger.snapshot({ discovery: 'complete', discoveredFiles: 1, discoveredBytes: 4n, sourceOmittedEntries: 0n, sizeClass: 'small' })
     }
     const receipts: Array<(bytes: number) => void> = []
     const broker = observeTransferContent({
@@ -72,7 +72,7 @@ describe('transfer observer separation', () => {
         discovery: 'open',
         discoveredFiles: 1,
         discoveredBytes: 2n,
-        sizeClass: 'unknown',
+        sourceOmittedEntries: 0n, sizeClass: 'unknown',
       },
       phase: 'receiving',
       materializedBytes: 1n,

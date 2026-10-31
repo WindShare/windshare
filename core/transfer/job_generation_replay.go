@@ -118,12 +118,16 @@ func (discovery *incrementalDirectoryDiscovery) matchesReplayPage(
 	commitment catalog.PageCommitment,
 	terminal bool,
 ) bool {
+	omitted := uint64(0)
+	if terminal {
+		omitted = discovery.omittedCount
+	}
 	return page.ShareInstance() == discovery.run.job.share &&
 		page.DirectoryID() == discovery.request.directory &&
 		page.Generation() == discovery.generation &&
 		page.PageIndex() == pageIndex &&
 		page.Commitment() == commitment &&
-		page.Terminal() == terminal && page.OmittedCount() == 0
+		page.Terminal() == terminal && page.OmittedCount() == omitted
 }
 
 func (discovery *incrementalDirectoryDiscovery) replayPage(

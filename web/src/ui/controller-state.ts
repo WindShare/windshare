@@ -72,7 +72,7 @@ export function projectBrowsePage(
       browse: Object.freeze({
         kind: 'ready' as const,
         status: page.entryCount === 0 ? 'This directory is empty.' : '',
-        error: page.omittedCount === 0n ? null : `${page.omittedCount} entries were omitted by the sender.`,
+        error: null,
       }),
       rows: Object.freeze(rows),
       breadcrumbs: breadcrumbsFor(route),

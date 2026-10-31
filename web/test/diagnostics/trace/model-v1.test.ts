@@ -102,6 +102,7 @@ const PAYLOAD_FOR_EVERY_EVENT = {
   receive_transition: { transition: 'materialization_started', plan_kind: 'direct_tree' },
   lifecycle_action_transition: { transition: 'started', action: 'pause' },
   transfer_progress: {
+    source_omitted_entries: '0',
     operation_id: 'BQAAAAAAAAAAAAAAAAAAAA',
     transfer_job_id: 'BgAAAAAAAAAAAAAAAAAAAA',
     discovered_files: '0',

@@ -101,12 +101,12 @@ func (meter *Meter) consume(page catalog.CatalogPage) BudgetLimit {
 	}
 }
 
-// TerminalGeneration is usable proof only when Complete is true and Exhausted
-// is zero. Omitted children are valid catalog state but cannot prove a shape.
+// TerminalGeneration is usable proof only when Validated is true. Source
+// exclusions do not invalidate the authenticated catalog or its terminal page.
 type TerminalGeneration struct {
 	Directory   catalog.CommittedDirectory
 	commitments *terminalGenerationCommitments
-	Complete    bool
+	Validated   bool
 	Exhausted   BudgetLimit
 }
 
@@ -196,7 +196,7 @@ func finishTerminalGeneration(
 		commitments: &terminalGenerationCommitments{
 			values: append([]catalog.PageCommitment(nil), commitments...),
 		},
-		Complete: committed.OmittedCount() == 0,
+		Validated: true,
 	}, nil
 }
 

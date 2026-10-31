@@ -31,6 +31,7 @@ export interface DirectZipJobOrchestration extends DirectZipProgressObservers {
   readonly maximumNodeClaims: number
   readonly signal: AbortSignal
   readonly observeSelectedFile: (exactSize: bigint) => void
+  readonly observeSourceOmissions: (count: bigint) => void
   readonly observeDiscovery: (event: import('./discovery/queue').DiscoverySchedulingObservation) => void
   readonly finishMeasure: () => SelectionMeasure
 }
@@ -70,6 +71,7 @@ export function runDirectZipJob(
     selection: orchestration.selection,
     intent: orchestration.intent,
     maximumNodeClaims: orchestration.maximumNodeClaims,
+    observeSourceOmissions: orchestration.observeSourceOmissions,
   })
   return new DirectZipOrderedCoordinatorV1({
     source,

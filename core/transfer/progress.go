@@ -30,6 +30,9 @@ const (
 // caller's clock and presentation decision outside core, so polling still
 // cannot affect transfer authority or introduce I/O on the data path.
 type ReceiveProgressSnapshot struct {
+	// SourceOmittedEntries counts unsupported children of selected directories,
+	// independently of transfer failures and the supported-file denominator.
+	SourceOmittedEntries     uint64
 	DiscoveredFiles          uint64
 	DiscoveredBytes          uint64
 	PublishedFiles           uint64
@@ -65,9 +68,10 @@ func (snapshot ReceiveProgressSnapshot) ConnectionSizeClass() ConnectionSizeClas
 }
 
 type discoveredSelection struct {
-	files uint64
-	bytes uint64
-	exact bool
+	sourceOmittedEntries uint64
+	files                uint64
+	bytes                uint64
+	exact                bool
 }
 
 func newDiscoveredSelection() discoveredSelection {
@@ -104,6 +108,9 @@ func (tracker *receiveProgressTracker) addDiscovery(selection discoveredSelectio
 	)
 	tracker.snapshot.DiscoveredBytes, tracker.snapshot.CountersExact = saturatingAdd(
 		tracker.snapshot.DiscoveredBytes, selection.bytes, tracker.snapshot.CountersExact,
+	)
+	tracker.snapshot.SourceOmittedEntries, tracker.snapshot.CountersExact = saturatingAdd(
+		tracker.snapshot.SourceOmittedEntries, selection.sourceOmittedEntries, tracker.snapshot.CountersExact,
 	)
 	tracker.snapshot.CountersExact = tracker.snapshot.CountersExact && selection.exact
 	tracker.validateExactLocked()

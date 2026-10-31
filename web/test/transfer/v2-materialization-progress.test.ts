@@ -144,7 +144,7 @@ describe('native materialization progress', () => {
     ledger.observeMaterializedFile('partial', 8n)
     ledger.settleFile('partial', { kind: 'paused', retainedBytes: 7n })
     ledger.observeMaterializedFile('partial', 7n)
-    const measure = { discovery: 'complete', discoveredFiles: 2, discoveredBytes: 100n, sizeClass: 'small' } as const
+    const measure = { discovery: 'complete', discoveredFiles: 2, discoveredBytes: 100n, sourceOmittedEntries: 0n, sizeClass: 'small' } as const
     expect(ledger.snapshot(measure)).toMatchObject({ materializedBytes: 97n, writtenBytes: 2n, completedBytes: 90n })
     ledger.settleFile('partial', { kind: 'completed', exactSize: 10n })
     expect(ledger.snapshot(measure)).toMatchObject({ materializedBytes: 100n, writtenBytes: 2n, completedBytes: 100n })

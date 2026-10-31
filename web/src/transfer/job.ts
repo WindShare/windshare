@@ -185,6 +185,7 @@ export class TransferJob {
         this.#authenticateDirectory(cursor, committed, parent),
       projectFile: sourcePath => this.#projectFile(sourcePath),
       generationCommitted: (cursor, committed) => this.#pinDiscoveryGeneration(cursor, committed),
+      observeSourceOmissions: count => this.#observeSourceOmissions(count),
       prepareDirectory: (collector, cursor, committed, role) =>
         this.#preparedDirectory(collector, cursor, committed, role),
     })
@@ -393,6 +394,7 @@ export class TransferJob {
       broker: this.#capacity.broker,
       execution,
       maximumNodeClaims: this.#limits.catalogNodeClaims,
+      observeSourceOmissions: count => this.#observeSourceOmissions(count),
       signal: this.#lifetime.signal,
       observeSelectedFile: exactSize => {
         const measure = this.#measure.observeUniqueFile(exactSize)
@@ -417,6 +419,12 @@ export class TransferJob {
         cursor.idText, encodeBase64Url(committed.generation), cursor.path, this.#lifetime.signal,
       )
     }
+  }
+
+  #observeSourceOmissions(count: bigint): void {
+    const measure = this.#measure.observeSourceOmissions(count)
+    this.#observers?.measure(measure)
+    this.#emitProgress()
   }
 
   async #authenticateDirectory(
