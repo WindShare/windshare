@@ -254,7 +254,7 @@ func TestDirectoryReservationRollsBackExactlyAtStableNoChangeCut(t *testing.T) {
 	}
 	fixture.session.mu.Lock()
 	if len(fixture.session.directoryClaims) != 0 || len(fixture.session.nodeClaims) != 0 ||
-		len(fixture.session.pathClaims) != 0 || len(fixture.session.locatorClaims) != 0 ||
+		len(fixture.session.pathClaims) != 0 || len(fixture.session.artifactClaims) != 0 ||
 		fixture.session.metadataBytes != 0 || fixture.session.rootClaim != 0 {
 		fixture.session.mu.Unlock()
 		t.Fatal("failed no-change admission retained authority or budget")
@@ -314,7 +314,6 @@ func TestDirectoryMetadataBudgetChargesLocatorBeforeMaterialization(t *testing.T
 	}
 	rootCharge := directoryMetadataBytes(
 		mustSourceDirectory(t, root), mustArtifactPath(t, receivecontract.DefaultResultRootName),
-		"locator:"+receivecontract.DefaultResultRootName,
 		NewDestinationSessionRoot(), "locator:root",
 	)
 	fixture := newTestFixture(t, func(config *Config) {
@@ -325,7 +324,7 @@ func TestDirectoryMetadataBudgetChargesLocatorBeforeMaterialization(t *testing.T
 	child := fixture.childDirectory(rootAdmission, 44, "child")
 	childArtifact := receivecontract.DefaultResultRootName + "/child"
 	childCharge := directoryMetadataBytes(
-		mustSourceDirectory(t, child), mustArtifactPath(t, childArtifact), "locator:"+childArtifact,
+		mustSourceDirectory(t, child), mustArtifactPath(t, childArtifact),
 		mustDestinationPath(t, "child"), "locator:child",
 	)
 	fixture.session.mu.Lock()
@@ -352,10 +351,9 @@ func TestDirectoryMetadataBudgetAcceptsExactBoundaryAndRejectsOneByteOver(t *tes
 		Generation:  identity[catalog.DirectoryGeneration](31),
 		SourcePath:  ordinaryoutput.EmptySourceCatalogPath(),
 	}
-	const rootCharge uint64 = 118
+	const rootCharge uint64 = 101
 	if charge := directoryMetadataBytes(
 		mustSourceDirectory(t, root), mustArtifactPath(t, receivecontract.DefaultResultRootName),
-		"locator:"+receivecontract.DefaultResultRootName,
 		NewDestinationSessionRoot(), "locator:root",
 	); charge != rootCharge {
 		t.Fatalf("root metadata charge=%d want=%d", charge, rootCharge)
@@ -397,10 +395,10 @@ func TestDirectoryMetadataChargeCountsUTF8FieldsAndFixedIndexesOnce(t *testing.T
 	fixture := newTestFixture(t, nil)
 	parent := fixture.admitRoot(context.Background())
 	child := fixture.childDirectory(parent, 52, "\u76ee\u5f55")
-	const childCharge uint64 = 178
+	const childCharge uint64 = 154
 	childArtifact := receivecontract.DefaultResultRootName + "/\u76ee\u5f55"
 	if charge := directoryMetadataBytes(
-		mustSourceDirectory(t, child), mustArtifactPath(t, childArtifact), "locator:"+childArtifact,
+		mustSourceDirectory(t, child), mustArtifactPath(t, childArtifact),
 		mustDestinationPath(t, "\u76ee\u5f55"), "locator:\u76ee\u5f55",
 	); charge != childCharge {
 		t.Fatalf("UTF-8 metadata charge=%d want=%d", charge, childCharge)
@@ -553,7 +551,7 @@ func TestDirectoryAdmissionAmbiguityRetainsClaimForAttention(t *testing.T) {
 	fixture.session.mu.Lock()
 	entry := fixture.session.directoryClaims[fixture.session.rootClaim]
 	retained := entry != nil && entry.uncertain && fixture.session.metadataBytes != 0 &&
-		len(fixture.session.nodeClaims) == 1 && len(fixture.session.locatorClaims) == 1
+		len(fixture.session.nodeClaims) == 1 && len(fixture.session.artifactClaims) == 1
 	fixture.session.mu.Unlock()
 	if !retained {
 		t.Fatal("ambiguous admission did not retain its full reservation")

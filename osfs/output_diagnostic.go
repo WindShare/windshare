@@ -25,7 +25,7 @@ func (value FilesystemOutputRuntimeComponent) DiagnosticName() string {
 	return names[value]
 }
 func (value FilesystemOutputRuntimeOperation) DiagnosticName() string {
-	names := [...]string{"", "open_direct_tree", "acquire_operation_lease", "reconcile_checkpoints", "admit_directory", "finalize_directory", "begin_file", "write_range", "checkpoint_file", "commit_file", "pause_file", "retire_file", "pause_tree", "finalize_tree", "materialize_directory", "create_owned_file", "recover_file", "publish_file", "quarantine_file", "admit_destination", "first_write", "cleanup", "delivery_receipt", "release_live_file", "live_retention"}
+	names := [...]string{"", "open_direct_tree", "acquire_operation_lease", "reconcile_checkpoints", "admit_directory", "finalize_directory", "begin_file", "write_range", "checkpoint_file", "commit_file", "pause_file", "retire_file", "pause_tree", "finalize_tree", "materialize_directory", "create_owned_file", "recover_file", "publish_file", "quarantine_file", "admit_destination", "first_write", "cleanup", "delivery_receipt", "release_live_file", "live_retention", "map_name"}
 	if int(value) >= len(names) {
 		return "unknown_" + strconv.FormatUint(uint64(value), 10)
 	}
@@ -84,6 +84,12 @@ func (v FilesystemOutputTrace) DiagnosticRecord() diagnostics.Record {
 	if v.RuntimeOperation == FilesystemOutputRuntimeWriteRange || v.RuntimeOperation == FilesystemOutputRuntimeFirstWrite {
 		f["write_offset"] = diagnostics.Uint(v.WriteOffset)
 		f["write_length"] = diagnostics.Uint(v.WriteLength)
+	}
+	if v.RuntimeOperation == FilesystemOutputRuntimeMapName {
+		f["logical_path"] = diagnostics.Text(v.LogicalPath)
+		f["physical_path"] = diagnostics.Text(v.PhysicalPath)
+		f["name_mapping_attempt"] = diagnostics.Uint(uint64(v.NameMappingAttempt))
+		f["name_mapping_reused"] = diagnostics.Bool(v.NameMappingReused)
 	}
 	if v.CheckpointReclaimedCandidateCount != 0 {
 		f["checkpoint_reclaimed_candidate_count"] = diagnostics.Uint(v.CheckpointReclaimedCandidateCount)

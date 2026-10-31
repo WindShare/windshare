@@ -192,7 +192,7 @@ function treeProjection(selectionDigest: string): SelectionProjectionV1 {
     kind: 'directory' as const,
     directoryId,
     sourcePath: 'photos',
-    portableName: 'photos',
+    catalogName: 'photos',
   })
   return Object.freeze({
     version: 1 as const,

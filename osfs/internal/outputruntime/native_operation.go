@@ -13,7 +13,9 @@ import (
 	"github.com/windshare/windshare/osfs/internal/checkpointstore"
 	"github.com/windshare/windshare/osfs/internal/destinationauthority"
 	"github.com/windshare/windshare/osfs/internal/fileexecution"
+	"github.com/windshare/windshare/osfs/internal/namestore"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
+	"github.com/windshare/windshare/osfs/internal/outputnames"
 )
 
 type Operation struct {
@@ -29,6 +31,8 @@ type Operation struct {
 	opened    bool
 	closed    bool
 	liveFiles *fileexecution.LiveFiles
+	names     *outputnames.Mapper
+	nameStore *namestore.Store
 }
 
 func (operation *Operation) ReceiveIntent() (transfer.ReceiveIntent, bool) {

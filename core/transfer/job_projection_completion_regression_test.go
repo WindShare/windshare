@@ -259,7 +259,13 @@ func projectionDriftIntent(
 		t.Fatal(err)
 	}
 	reservation, err := receivecontract.NewNativeNamedEntryReservation(
-		operation, reservationID, artifact, authority, "file.bin", 0,
+		operation,
+		reservationID,
+		artifact,
+		authority,
+		"file.bin",
+		"file.bin",
+		0,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -305,7 +311,13 @@ func directoryProjectionDriftIntent(
 		t.Fatal(err)
 	}
 	reservation, err := receivecontract.NewNativeNamedEntryReservation(
-		operation, reservationID, artifact, authority, resultRoot.Name(), 0,
+		operation,
+		reservationID,
+		artifact,
+		authority,
+		resultRoot.Name(),
+		resultRoot.Name(),
+		0,
 	)
 	if err != nil {
 		t.Fatal(err)

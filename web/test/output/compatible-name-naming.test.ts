@@ -69,9 +69,9 @@ describe('compatible physical-name policy', () => {
     expect(candidate.physicalComponent).toBe(`${prefix}.windshare-${PRIMARY_TOKEN}`)
   })
 
-  it('keeps non-portable input outside compatible-name virtualization', () => {
+  it('keeps traversal outside compatible-name virtualization', () => {
     expect(() => compatibleNameReadablePrefix('nested/name')).toThrow(TypeError)
-    expect(() => compatibleNameReadablePrefix('entry.')).toThrow(TypeError)
+    expect(() => compatibleNameReadablePrefix('..')).toThrow(TypeError)
   })
 
   it('uses the persisted primary token only for attempt zero', async () => {

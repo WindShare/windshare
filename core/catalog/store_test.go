@@ -238,7 +238,7 @@ func TestCatalogStorePublishesPagesAndBudgetOnlyAfterAtomicCommit(t *testing.T) 
 		WireVersion: WireVersionV2, Suite: SuiteV2, ShareInstance: idValue[ShareInstance](1),
 		SyntheticRoot: root, RootCommit: committedRoot, ChunkSize: DefaultChunkSize,
 		Capabilities: CapabilityCatalog, SenderPublicKey: bytes.Repeat([]byte{1}, SenderPublicKeySize),
-		PathPolicy: PathPolicyV1,
+		PathPolicy: PathPolicyV2,
 	})
 	if err != nil || committedRoot.AuthorizeRegistration(descriptor) != nil {
 		t.Fatalf("committed root did not authorize descriptor: %v", err)

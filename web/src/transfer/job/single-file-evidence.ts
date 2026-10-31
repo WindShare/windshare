@@ -1,4 +1,4 @@
-import { canonicalizePortableCatalogPath } from '../../catalog/path-policy'
+import { canonicalizeCatalogPath } from '../../catalog/path-policy'
 import type { CatalogClient } from '../../catalog/client'
 import type { CommittedDirectory } from '../../catalog/page-store'
 import {
@@ -36,7 +36,7 @@ export async function collectExactSingleFileEvidence(
   options: ExactSingleFileCatalogEvidenceOptions,
 ): Promise<ExactSingleFileEvidence> {
   options.signal.throwIfAborted()
-  const sourcePath = Object.freeze(canonicalizePortableCatalogPath(
+  const sourcePath = Object.freeze(canonicalizeCatalogPath(
     options.artifact.sourcePath,
   ).split('/'))
   let directoryId = options.descriptor.syntheticRoot.slice()

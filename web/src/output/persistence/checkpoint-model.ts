@@ -1,5 +1,5 @@
 import { contentIsComplete } from '../../transfer/output/content-availability'
-import { snapshotPortableCatalogPath } from '../../catalog/path-policy'
+import { snapshotCatalogPath } from '../../catalog/path-policy'
 import { decodeBase64Url, encodeBase64Url } from '../../crypto/bytes'
 import {
   FILE_CHECKPOINT_COMMIT_CANDIDATE,
@@ -308,7 +308,7 @@ function snapshotCheckpointPath(
     // Its coordinate is therefore empty; legacy kind 2 remains fenced out.
     if (materializerKind === FILE_CHECKPOINT_MATERIALIZER_FSA_TREE &&
         Array.isArray(path) && path.length === 0) return Object.freeze([])
-    return snapshotPortableCatalogPath(path)
+    return snapshotCatalogPath(path)
   } catch (cause) {
     throw new FileCheckpointError(
       'binding',

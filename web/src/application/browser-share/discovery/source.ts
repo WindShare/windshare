@@ -1,7 +1,7 @@
 import { DirectoryFailureError, type CatalogClient } from '../../../catalog/client'
 import type { CatalogEntry, ShareDescriptor } from '../../../catalog/records'
 import type { FrozenSelectionPolicy } from '../../../catalog/selection'
-import { snapshotPortableCatalogPath } from '../../../catalog/path-policy'
+import { snapshotCatalogPath } from '../../../catalog/path-policy'
 import { projectAuthenticatedGeneration } from '../../../transfer/discovery/projection-evidence'
 import {
   RetryableProjectionDiscoveryError,
@@ -216,7 +216,7 @@ export class JoinedProjectionSource implements AuthenticatedDiscoverySource {
     const ancestry = [...cursor.ancestry, entry.idText]
     if (!selected && !this.#demand.needsDirectory(ancestry)) return undefined
 
-    const path = snapshotPortableCatalogPath([...cursor.path, entry.name])
+    const path = snapshotCatalogPath([...cursor.path, entry.name])
     const selectedDirectoryRoot = projectionDirectoryRoot(cursor, entry.idText, path, selected)
     return Object.freeze({
       id: entry.id.slice(),

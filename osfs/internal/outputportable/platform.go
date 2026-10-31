@@ -83,7 +83,8 @@ func (*Platform) CanonicalLocatorKey(path string) (string, error) {
 	return canonical, nil
 }
 func (*Platform) CanonicalComponentKey(name string) (string, error) {
-	if err := validName(name); err != nil {
+	// Snapshot identity must also describe foreign spellings we cannot create.
+	if err := validComponent(name); err != nil {
 		return "", err
 	}
 	return name, nil

@@ -380,7 +380,7 @@ func buildSenderObjects(t *testing.T, f *fixture) []sealedObject {
 	descriptor := map[uint64]any{
 		0: uint64(1), 1: uint64(2), 2: uint64(2), 3: f.shareInstance,
 		4: f.syntheticRoot, 5: uint64(chunkSize), 6: uint64(0x07),
-		7: []byte(f.edPublic), 8: uint64(1700000000), 9: "windshare/path/v1-unicode-15.0.0",
+		7: []byte(f.edPublic), 8: uint64(1700000000), 9: "windshare/path/v2-unicode-15.0.0",
 	}
 	descriptorContext := slices.Concat([]byte{suite}, f.pkHash, f.shareIDRaw)
 

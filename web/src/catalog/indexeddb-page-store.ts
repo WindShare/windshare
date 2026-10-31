@@ -39,10 +39,9 @@ import {
   type CommittedDirectory,
 } from './page-store-contracts'
 
-// Raw authenticated directory identities are now mandatory in committed
-// records. A schema bump deliberately rebuilds older caches instead of
-// interpreting readable projections as authority.
-const DATABASE_VERSION = 6
+// Path policy v2 retains destination-specific names. Rebuild earlier caches,
+// including persisted scan failures, rather than reusing their narrower policy.
+const DATABASE_VERSION = 7
 const NODE_OWNER_INDEX = 'by-node-owner'
 const NAME_OWNER_INDEX = 'by-name-owner'
 
@@ -72,7 +71,7 @@ type NodeOwnerKey = [shareInstanceId: string, nodeIdText: string]
 type NameOwnerKey = [
   shareInstanceId: string,
   directoryIdText: string,
-  portableNameKey: string,
+  catalogNameKey: string,
 ]
 
 interface StoredPage extends CatalogBudgetedPageRecord {
@@ -178,7 +177,7 @@ export class IndexedDbCatalogPageStore implements CatalogPageStore {
 
   async hasCommittedName(directory: CommittedDirectory, name: string): Promise<boolean> {
     this.#requireOpen()
-    const portableNameKey = catalogNameCollisionKey(name)
+    const catalogNameKey = catalogNameCollisionKey(name)
     const transaction = this.#database.transaction(
       [CATALOG_DIRECTORY_STORE, CATALOG_PAGE_STORE],
       'readonly',
@@ -196,7 +195,7 @@ export class IndexedDbCatalogPageStore implements CatalogPageStore {
           pages.index(NAME_OWNER_INDEX).getKey([
             this.#shareInstanceId,
             directory.directoryIdText,
-            portableNameKey,
+            catalogNameKey,
           ] satisfies NameOwnerKey),
         ),
       ])
@@ -239,14 +238,14 @@ export class IndexedDbCatalogPageStore implements CatalogPageStore {
       if (pageNodes.has(entry.idText)) {
         throw ownershipFailure('Catalog page repeats a node identity')
       }
-      const portableNameKey = catalogNameCollisionKey(entry.name)
-      if (pageNames.has(portableNameKey)) {
+      const catalogNameKey = catalogNameCollisionKey(entry.name)
+      if (pageNames.has(catalogNameKey)) {
         throw ownershipFailure('Catalog page repeats a portable sibling name')
       }
       pageNodes.add(entry.idText)
-      pageNames.add(portableNameKey)
+      pageNames.add(catalogNameKey)
       nodeOwnerKeys.push([this.#shareInstanceId, entry.idText])
-      nameOwnerKeys.push([this.#shareInstanceId, page.directoryIdText, portableNameKey])
+      nameOwnerKeys.push([this.#shareInstanceId, page.directoryIdText, catalogNameKey])
     }
 
     for (let attempt = 0; attempt < 2; attempt += 1) {

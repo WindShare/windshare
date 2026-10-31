@@ -247,6 +247,9 @@ var (
 	// ErrNamespaceCollision reports that a no-replace namespace mutation found an
 	// existing entry.
 	ErrNamespaceCollision = errors.New("osfs: output namespace entry already exists")
+	// ErrNameRejected is a pre-mutation refusal of one confined component, not
+	// a permission, ownership, or storage failure.
+	ErrNameRejected = errors.New("osfs: destination rejects the output name")
 	// ErrNamespaceLockBusy reports that another operation owns the namespace lock.
 	ErrNamespaceLockBusy = errors.New("osfs: output namespace lock is already held")
 )

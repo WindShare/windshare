@@ -39,3 +39,5 @@ func exactEntrySpelling(requested, actual string) bool {
 	// This accepts normalization only after native lookup proved the same entry.
 	return requested == norm.NFC.String(actual)
 }
+
+func validateNativeName(string) error { return nil }

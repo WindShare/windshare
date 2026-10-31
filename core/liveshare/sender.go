@@ -363,7 +363,7 @@ func prepareSenderCatalog(
 		ShareInstance: authority.shareInstance, SyntheticRoot: authority.syntheticRoot, RootCommit: committedRoot,
 		ChunkSize:       config.ChunkSize,
 		Capabilities:    catalog.CapabilityCatalog | catalog.CapabilityRanges | catalog.CapabilityAuthenticatedModifiedTime,
-		SenderPublicKey: authority.publicKey, CreatedAtSeconds: uint64(config.Now().Unix()), PathPolicy: catalog.PathPolicyV1,
+		SenderPublicKey: authority.publicKey, CreatedAtSeconds: uint64(config.Now().Unix()), PathPolicy: catalog.PathPolicyV2,
 	})
 	if err != nil {
 		return senderCatalog{}, err

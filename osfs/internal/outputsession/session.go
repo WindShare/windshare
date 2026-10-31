@@ -157,12 +157,12 @@ type Session struct {
 	activeFiles     uint64
 	fileSlots       uint64
 
-	directoryClaims   map[ClaimID]*directoryEntry
-	fileClaims        map[ClaimID]*fileEntry
-	nodeClaims        map[catalog.NodeID]claimRef
-	pathClaims        map[string]claimRef
-	artifactClaims    map[string]claimRef
-	locatorClaims     map[string]claimRef
+	directoryClaims map[ClaimID]*directoryEntry
+	fileClaims      map[ClaimID]*fileEntry
+	nodeClaims      map[catalog.NodeID]claimRef
+	pathClaims      map[string]claimRef
+	artifactClaims  map[string]claimRef
+
 	destinationClaims map[string]claimRef
 	nameClaims        map[parentNameKey]claimRef
 	receiptClaims     map[admissionReceiptKey]ClaimID
@@ -192,27 +192,27 @@ func New(config Config) (*Session, error) {
 		return nil, ErrInvalidConfiguration
 	}
 	session := &Session{
-		gate:              newOperationGate(),
-		state:             sessionOpen,
-		intent:            config.Intent,
-		projector:         projector,
-		scope:             scope,
-		sessionID:         config.SessionID,
-		capabilities:      config.Capabilities,
-		limits:            limits,
-		locator:           config.Locator,
-		destinations:      config.Destinations,
-		directories:       config.Directories,
-		files:             config.Files,
-		resources:         config.Resources,
-		lifecycle:         config.Lifecycle,
-		trace:             config.Trace,
-		directoryClaims:   make(map[ClaimID]*directoryEntry),
-		fileClaims:        make(map[ClaimID]*fileEntry),
-		nodeClaims:        make(map[catalog.NodeID]claimRef),
-		pathClaims:        make(map[string]claimRef),
-		artifactClaims:    make(map[string]claimRef),
-		locatorClaims:     make(map[string]claimRef),
+		gate:            newOperationGate(),
+		state:           sessionOpen,
+		intent:          config.Intent,
+		projector:       projector,
+		scope:           scope,
+		sessionID:       config.SessionID,
+		capabilities:    config.Capabilities,
+		limits:          limits,
+		locator:         config.Locator,
+		destinations:    config.Destinations,
+		directories:     config.Directories,
+		files:           config.Files,
+		resources:       config.Resources,
+		lifecycle:       config.Lifecycle,
+		trace:           config.Trace,
+		directoryClaims: make(map[ClaimID]*directoryEntry),
+		fileClaims:      make(map[ClaimID]*fileEntry),
+		nodeClaims:      make(map[catalog.NodeID]claimRef),
+		pathClaims:      make(map[string]claimRef),
+		artifactClaims:  make(map[string]claimRef),
+
 		destinationClaims: make(map[string]claimRef),
 		nameClaims:        make(map[parentNameKey]claimRef),
 		receiptClaims:     make(map[admissionReceiptKey]ClaimID),
@@ -484,7 +484,7 @@ func (session *Session) releaseLedgerLocked() {
 	session.nodeClaims = nil
 	session.pathClaims = nil
 	session.artifactClaims = nil
-	session.locatorClaims = nil
+
 	session.destinationClaims = nil
 	session.nameClaims = nil
 	session.receiptClaims = nil

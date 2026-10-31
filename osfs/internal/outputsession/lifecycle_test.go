@@ -255,7 +255,7 @@ func TestCompleteRequiresSettledRootAndCachesClosedResult(t *testing.T) {
 	fixture.session.mu.Lock()
 	ledgerReleased := allZero(fixture.session.secret[:]) &&
 		fixture.session.directoryClaims == nil && fixture.session.fileClaims == nil &&
-		fixture.session.nodeClaims == nil && fixture.session.locatorClaims == nil
+		fixture.session.nodeClaims == nil && fixture.session.artifactClaims == nil
 	fixture.session.mu.Unlock()
 	if !ledgerReleased {
 		t.Fatal("closed session retained claim authority or receipt key material")

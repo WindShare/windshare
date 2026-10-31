@@ -12,23 +12,23 @@ import (
 	"github.com/windshare/windshare/osfs/internal/destinationauthority"
 	"github.com/windshare/windshare/osfs/internal/fileexecution"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
+	"github.com/windshare/windshare/osfs/internal/outputnames"
 )
 
 func observeOrdinaryResumeFinal(
 	ctx context.Context,
 	topLevel *destinationauthority.TopLevelReservation,
 	store *checkpointstore.FileExecutionStore,
+	names *outputnames.Mapper,
 	record checkpointmodel.Record,
 ) (result fileexecution.FinalObservation, resultErr error) {
-	if ctx == nil || topLevel == nil || store == nil || !record.Valid() {
+	if ctx == nil || topLevel == nil || store == nil || names == nil || !record.Valid() {
 		return fileexecution.FinalObservation{}, transfer.ErrInvalidOutputBinding
 	}
 	if err := ctx.Err(); err != nil {
 		return fileexecution.FinalObservation{}, err
 	}
-	physical, err := destinationauthority.PhysicalArtifactPath(
-		record.CanonicalPath(), topLevel.ReservedEntry(),
-	)
+	physical, err := names.Resolve(record.CanonicalPath())
 	if err != nil || physical == "" {
 		return fileexecution.FinalObservation{}, errors.Join(err, transfer.ErrInvalidOutputBinding)
 	}

@@ -1,5 +1,5 @@
 import { contentIsComplete } from '../../../transfer/output/content-availability'
-import { snapshotPortableCatalogPath } from '../../../catalog/path-policy'
+import { snapshotCatalogPath } from '../../../catalog/path-policy'
 import { receiveContentWarningFields, type ReceiveContentWarning } from '../../../transfer/lifecycle/content-warning'
 import { validateZipEntryPlan, type ZipEntryPlanV1 } from '../../zip-layout/policy'
 
@@ -110,7 +110,7 @@ export function snapshotTaskEntry(value: TaskEntry): TaskEntry {
   if (!value.entryId || (value.kind !== 'file' && value.kind !== 'directory')) {
     throw new TypeError('Task entry identity is invalid')
   }
-  const path = snapshotPortableCatalogPath(value.path)
+  const path = snapshotCatalogPath(value.path)
   if (!value.source.shareInstance || !value.source.directoryId || !value.source.generation) {
     throw new TypeError('Task entry lacks authenticated source evidence')
   }

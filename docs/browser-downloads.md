@@ -23,6 +23,8 @@ WindShare recommends a save method based on browser capabilities, available stor
 
 > Under **Other ways to save**, expand **Saving and recovery options**. Choosing **Write directly to folder** bypasses file staging in browser storage. A crash may lose most progress in a large unfinished file; completed files remain saved.
 
+Folder downloads try original names first. If the destination rejects a name, WindShare saves it under a compatible name and keeps a name-restoration report beside the result. The Windows restoration script restores supported names without overwriting existing files; unsupported names retain their compatible files and report. ZIP entries retain their catalog names, which the extraction destination may not support.
+
 ## Progress & Details
 
 - **Live indicators**: Displays received/reused bytes, completed or saved files, and transfer speed. Exact totals and percentages depend on completed item discovery; remaining time also requires a sufficiently stable transfer rate.

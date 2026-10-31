@@ -1,4 +1,4 @@
-import { snapshotPortableCatalogPath } from '../../catalog/path-policy'
+import { snapshotCatalogPath } from '../../catalog/path-policy'
 import type { CommittedDirectory } from '../../catalog/page-store'
 import type { CatalogEntry, CatalogPage } from '../../catalog/records'
 import type { FrozenSelectionPolicy } from '../../catalog/selection'
@@ -37,7 +37,7 @@ export async function projectAuthenticatedGeneration(
   requireCommittedGeneration(input.committed)
   const directoryPath = input.directoryPath.length === 0
     ? Object.freeze([]) as readonly string[]
-    : snapshotPortableCatalogPath(input.directoryPath)
+    : snapshotCatalogPath(input.directoryPath)
   const accumulator = new GenerationProjectionAccumulator(input, directoryPath)
   for await (const page of input.pages) {
     input.signal?.throwIfAborted()
@@ -140,7 +140,7 @@ class GenerationProjectionAccumulator {
     this.#representativeFile ??= Object.freeze({
       fileId: entry.idText,
       sourcePath,
-      portableName: entry.name,
+      catalogName: entry.name,
     })
   }
 
@@ -157,8 +157,8 @@ class GenerationProjectionAccumulator {
 
 function selectedRoot(entry: CatalogEntry, sourcePath: string): SelectedRootFact {
   return Object.freeze(entry.kind === 'file'
-    ? { kind: 'file', fileId: entry.idText, sourcePath, portableName: entry.name }
-    : { kind: 'directory', directoryId: entry.idText, sourcePath, portableName: entry.name })
+    ? { kind: 'file', fileId: entry.idText, sourcePath, catalogName: entry.name }
+    : { kind: 'directory', directoryId: entry.idText, sourcePath, catalogName: entry.name })
 }
 
 function settleObservedTarget(

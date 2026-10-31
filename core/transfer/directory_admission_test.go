@@ -49,7 +49,13 @@ func TestDirectoryAdmissionBindsNativeResultRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	reservation, err := receivecontract.NewNativeNamedEntryReservation(
-		operation, reservationID, artifact, authority, "docs-selection", 0,
+		operation,
+		reservationID,
+		artifact,
+		authority,
+		"docs-selection",
+		"docs-selection",
+		0,
 	)
 	if err != nil {
 		t.Fatal(err)

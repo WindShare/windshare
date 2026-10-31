@@ -24,7 +24,7 @@ import {
   requireUnsigned,
   CborError,
 } from '../protocol/cbor'
-import { isPortableCatalogName, PATH_POLICY } from './path-policy'
+import { isCatalogName, PATH_POLICY } from './path-policy'
 
 export { PATH_POLICY } from './path-policy'
 
@@ -419,7 +419,7 @@ function decodeModifiedTime(
 }
 
 function requireCatalogName(name: string): string {
-  if (!isPortableCatalogName(name)) {
+  if (!isCatalogName(name)) {
     throw new CborError('Catalog entry name is not a safe path segment')
   }
   return name

@@ -112,7 +112,7 @@ const (
 	SuiteV2                  = 2
 	SenderPublicKeySize      = 32
 	MaxDescriptorObjectBytes = 16 << 10
-	PathPolicyV1             = "windshare/path/v1-unicode-" + unicode15.Version
+	PathPolicyV2             = "windshare/path/v2-unicode-" + unicode15.Version
 	activeCapabilities       = CapabilityCatalog | CapabilityRanges | CapabilityAuthenticatedModifiedTime
 )
 
@@ -190,7 +190,7 @@ func newDescriptorValue(spec ReceivedDescriptorSpec) (ShareDescriptor, error) {
 	if spec.CreatedAtSeconds > MaxSafeInteger {
 		return ShareDescriptor{}, errors.New("catalog descriptor creation time exceeds the safe integer range")
 	}
-	if spec.PathPolicy != PathPolicyV1 {
+	if spec.PathPolicy != PathPolicyV2 {
 		return ShareDescriptor{}, errors.New("catalog descriptor uses an unsupported path policy")
 	}
 	return ShareDescriptor{
@@ -468,13 +468,6 @@ var (
 	ErrPathTooDeep = errors.New("catalog path exceeds maximum depth")
 )
 
-var windowsReservedNames = map[string]struct{}{
-	"CON": {}, "PRN": {}, "AUX": {}, "NUL": {}, "CONIN$": {}, "CONOUT$": {},
-	"COM1": {}, "COM2": {}, "COM3": {}, "COM4": {}, "COM5": {}, "COM6": {}, "COM7": {}, "COM8": {}, "COM9": {},
-	"LPT1": {}, "LPT2": {}, "LPT3": {}, "LPT4": {}, "LPT5": {}, "LPT6": {}, "LPT7": {}, "LPT8": {}, "LPT9": {},
-	"COM¹": {}, "COM²": {}, "COM³": {}, "LPT¹": {}, "LPT²": {}, "LPT³": {},
-}
-
 // General-category tables advance with the Go toolchain. Freezing the Unicode
 // 15 Cf ranges keeps validation aligned with the versioned path identity.
 var formatCharacterRanges = [...]struct {
@@ -506,6 +499,8 @@ var formatCharacterRanges = [...]struct {
 
 // CanonicalName normalizes Unicode before validation so equality and ordering are
 // stable across filesystems that expose different normalization forms.
+// Destination naming restrictions belong to materialization; rejecting a readable
+// source name here would also prevent lossless archives and compatible-name repair.
 func CanonicalName(name string) (string, error) {
 	if !utf8.ValidString(name) {
 		return "", fmt.Errorf("%w: invalid UTF-8", ErrInvalidName)
@@ -517,23 +512,13 @@ func CanonicalName(name string) (string, error) {
 	if !utf8.ValidString(canonical) || len(canonical) > MaxNameBytes {
 		return "", fmt.Errorf("%w: invalid UTF-8 or name too long", ErrInvalidName)
 	}
-	if strings.ContainsAny(canonical, "/\\") {
-		return "", fmt.Errorf("%w: separators are not allowed", ErrInvalidName)
-	}
-	if strings.HasSuffix(canonical, ".") || strings.HasSuffix(canonical, " ") {
-		return "", fmt.Errorf("%w: trailing dots and spaces are not portable", ErrInvalidName)
+	if strings.ContainsAny(canonical, "/\\:") {
+		return "", fmt.Errorf("%w: path separators and volume/stream syntax are not allowed", ErrInvalidName)
 	}
 	for _, r := range canonical {
-		if isControlOrFormatCharacter(r) || strings.ContainsRune(`<>:"|?*`, r) {
-			return "", fmt.Errorf("%w: contains a non-portable character", ErrInvalidName)
+		if isControlOrFormatCharacter(r) {
+			return "", fmt.Errorf("%w: contains a control or format character", ErrInvalidName)
 		}
-	}
-	stem := canonical
-	if dot := strings.IndexByte(stem, '.'); dot >= 0 {
-		stem = stem[:dot]
-	}
-	if _, reserved := windowsReservedNames[asciiUpper(stem)]; reserved {
-		return "", fmt.Errorf("%w: reserved device name", ErrInvalidName)
 	}
 	return canonical, nil
 }
@@ -592,18 +577,4 @@ func isControlOrFormatCharacter(scalar rune) bool {
 		}
 	}
 	return false
-}
-
-func asciiUpper(value string) string {
-	// Win32 device aliases are ASCII-insensitive. Ambient Unicode uppercasing
-	// would make newly assigned characters silently change path validity.
-	var output strings.Builder
-	output.Grow(len(value))
-	for _, scalar := range value {
-		if scalar >= 'a' && scalar <= 'z' {
-			scalar -= 'a' - 'A'
-		}
-		output.WriteRune(scalar)
-	}
-	return output.String()
 }

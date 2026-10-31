@@ -201,7 +201,7 @@ async function deriveSingleFileArtifact(
       artifact: await createOriginalFileArtifact({
         fileId: file.fileId,
         sourcePath: file.sourcePath,
-        suggestedName: file.portableName,
+        suggestedName: file.catalogName,
       }),
     })
   }
@@ -211,7 +211,7 @@ async function deriveSingleFileArtifact(
       artifact: await createSingleFileDirectoryTreeArtifact({
         fileId: file.fileId,
         sourcePath: file.sourcePath,
-        outputName: file.portableName,
+        outputName: file.catalogName,
       }),
     })
   }

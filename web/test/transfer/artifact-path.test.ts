@@ -9,6 +9,7 @@ import {
   createNativeContainerRootReservation,
   createNativeNamedEntryReservation,
   createReceiveIntent,
+  decodeReceiveIntent,
   createResultRootDirectoryTreeArtifact,
   createSelectionSpec,
   createSingleFileDirectoryTreeArtifact,
@@ -25,6 +26,32 @@ import { createDirectTreeCoordinateContract } from '../../src/transfer/job/coord
 import { identityText } from './v2-job-fixture'
 
 describe('artifact path projection', () => {
+  it('freezes native physical names without changing logical artifact identity', async () => {
+    const artifact = await createSingleFileDirectoryTreeArtifact({
+      fileId: identityText(20), sourcePath: 'report?.pdf', outputName: 'report?.pdf',
+    })
+    const reservation = await createNativeNamedEntryReservation({
+      operationId: identityText(43), reservationId: identityText(44), artifact,
+      authorityRef: opaqueIdentity(45), logicalReservedName: 'report?.pdf',
+      physicalName: 'report-compatible.pdf', collisionIndex: 0,
+    })
+    const intent = await createReceiveIntent({
+      selection: await selectionSpec(), artifact,
+      plan: await createDirectTreePlan(artifact, reservation),
+    })
+    const decoded = await decodeReceiveIntent(intent.canonicalBytes)
+    expect(decoded.digest).toBe(intent.digest)
+    expect(decoded.plan).toMatchObject({
+      reservation: { requestedName: 'report?.pdf', physicalName: 'report-compatible.pdf' },
+    })
+    const coordinates = await createDirectTreeCoordinateContract(decoded)
+    expect(coordinates.projectFile(['report?.pdf'])).toMatchObject({
+      logicalArtifactPath: ['report?.pdf'],
+      // Native destination admission owns the final physical-path mapping.
+      relativePath: ['report?.pdf'],
+    })
+  })
+
   it('keeps anchored logical paths unchanged for ZIP and prepared output', () => {
     const layout = createCompleteDirectoryResultRoot(identityText(8), 'parent/photos')
     const intent = {
@@ -71,7 +98,7 @@ describe('artifact path projection', () => {
       reservationId: identityText(44),
       artifact,
       authorityRef: opaqueIdentity(45),
-      logicalReservedName: 'report.bin',
+      logicalReservedName: 'report.bin', physicalName: 'report.bin',
       collisionIndex: 0,
     })
     const native = await createDirectTreeCoordinateContract(await createReceiveIntent({
@@ -158,7 +185,7 @@ describe('artifact path projection', () => {
       reservationId: identityText(46),
       artifact,
       authorityRef: opaqueIdentity(47),
-      logicalReservedName: 'windshare',
+      logicalReservedName: 'windshare', physicalName: 'windshare',
       collisionIndex: 0,
     })
     const intent = await createReceiveIntent({

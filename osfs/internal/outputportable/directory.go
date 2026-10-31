@@ -46,11 +46,18 @@ func openDirectory(path string) (*directory, error) {
 	return &directory{root: &directoryRoot{path: path, info: current}, handle: handle, path: path, info: current}, nil
 }
 
-func validName(name string) error {
-	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\\x00") || !filepath.IsLocal(name) {
+func validComponent(name string) error {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\:\x00") {
 		return outputcap.ErrUnsafeNamespace
 	}
 	return nil
+}
+
+func validName(name string) error {
+	if err := validComponent(name); err != nil {
+		return err
+	}
+	return validateNativeName(name)
 }
 func (d *directory) validate() error {
 	if d == nil || d.root == nil || d.handle == nil {

@@ -1,4 +1,4 @@
-import { isPortableCatalogName } from '../../catalog/path-policy'
+import { isCatalogName } from '../../catalog/path-policy'
 import type { PersistentOutputStage } from '../persistent-tree/stage-diagnostics'
 
 export type FileSystemComponentKind = 'file' | 'directory'
@@ -136,8 +136,8 @@ function rejectionMessage(kind: PathComponentRejectionEvidence['kind']): string 
 }
 
 function requireCanonicalComponent(component: string): string {
-  if (typeof component !== 'string' || !isPortableCatalogName(component)) {
-    throw new TypeError('FSA inspection requires one canonical portable path component')
+  if (typeof component !== 'string' || !isCatalogName(component)) {
+    throw new TypeError('FSA inspection requires one canonical catalog path component')
   }
   return component
 }

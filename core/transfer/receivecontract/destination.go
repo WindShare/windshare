@@ -72,7 +72,7 @@ func NewNativeNamedEntryReservation(
 	id DestinationReservationID,
 	artifact ArtifactSpec,
 	authority AuthorityRef,
-	logicalReservedName string,
+	logicalReservedName, physicalName string,
 	collisionIndex uint32,
 ) (DestinationReservation, error) {
 	layout, ok := artifact.DirectoryTree()
@@ -92,12 +92,12 @@ func NewNativeNamedEntryReservation(
 		return DestinationReservation{}, ErrInvalidReceiveContract
 	}
 	expected, err := CollisionName(operation, requestedName, collisionIndex, entryKind == ContainerEntrySingleFile)
-	if err != nil || logicalReservedName != expected {
+	if err != nil || logicalReservedName != expected || canonicalComponent(physicalName) != nil {
 		return DestinationReservation{}, ErrInvalidReceiveContract
 	}
 	return newDestinationReservation(
 		ReservationNamedContainerEntry, operation, id, artifact, AuthorityNativeContainer,
-		authority, NativeTreeGuarantees(), entryKind, requestedName, logicalReservedName, logicalReservedName, "", collisionIndex,
+		authority, NativeTreeGuarantees(), entryKind, requestedName, logicalReservedName, physicalName, "", collisionIndex,
 	)
 }
 

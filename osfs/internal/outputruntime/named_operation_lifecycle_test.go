@@ -58,6 +58,9 @@ func openOrdinaryLifecycleFixture(t *testing.T, seed byte) ordinaryLifecycleFixt
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := operation.prepareNames(); err != nil {
+		t.Fatal(err)
+	}
 	recorder, err := newOrdinaryLifecycleRecorder(operation, store, repository, sessionID)
 	if err != nil {
 		t.Fatal(err)
