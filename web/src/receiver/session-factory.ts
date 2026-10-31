@@ -24,6 +24,7 @@ export interface ProtocolGenerationCore {
 export interface AttachedRelay {
   readonly relay: RelayReceiverConnection
   readonly laneId: number
+  readonly laneEpoch: number
 }
 
 export interface ReceiverSessionFactory {
@@ -154,7 +155,7 @@ export class BrowserSessionFactory implements ReceiverSessionFactory {
         { signal: admission.signal },
       )
       if (result.installation !== 'installed') throw result.error
-      return Object.freeze({ relay, laneId: grant.laneId })
+      return Object.freeze({ relay, laneId: grant.laneId, laneEpoch: grant.laneEpoch })
     } catch (error) {
       await relay.close().catch(() => undefined)
       throw error

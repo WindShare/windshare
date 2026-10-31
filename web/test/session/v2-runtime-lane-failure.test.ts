@@ -31,7 +31,7 @@ it('keeps physical receive failure within the lane boundary for waiting sends', 
   }
 })
 
-it.each(['send', 'receive'] as const)('retries a physical %s failure on the healthy content lane', async (direction) => {
+it.each(['send', 'receive', 'retirement'] as const)('retries %s lane loss on the healthy content lane', async (direction) => {
   const { runtime, channel } = runtimeFixture()
   const dispatched = vi.fn()
   const lanes = new LaneSet({ onBlockDispatched: dispatched })
@@ -55,7 +55,8 @@ it.each(['send', 'receive'] as const)('retries a physical %s failure on the heal
     lanes.add({ id: 2, fetchBlock: fetchPeer }, 'direct')
     const physicalFailure = new Error(`physical ${direction} failed during relay cut`)
     if (direction === 'send') channel.failOutgoing(physicalFailure)
-    else channel.failIncoming(physicalFailure)
+    else if (direction === 'receive') channel.failIncoming(physicalFailure)
+    else await runtime.retireLane(1, 0)
     await completed
     expect(fetchPeer).toHaveBeenCalledOnce()
     expect(fetchPeer).toHaveBeenCalledWith(demand, expect.any(AbortSignal), {
@@ -80,7 +81,7 @@ it('keeps envelope validation failure fatal while sends are waiting', async () =
     await rejected
     await vi.waitFor(() => expect(runtime.isClosed).toBe(true))
     expect(events).toContainEqual(expect.objectContaining({
-      transition: 'detached', detachmentClass: 'authenticated_failure',
+      transition: 'detached', termination: expect.objectContaining({ kind: 'authenticated_failure' }),
     }))
   } finally {
     await runtime.close()
