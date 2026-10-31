@@ -15,21 +15,27 @@ import (
 const relayUsage = "Usage: wind relay add <url> [--name <device>] [--no-browser] | wind relay onboard <url> [--name <device>] [--no-browser] | wind relay cancel <url>"
 
 func (app *App) runRelay(ctx context.Context, args []string) int {
-	if len(args) < 2 {
+	if len(args) == 0 {
 		app.writeCompleteLine("%s", relayUsage)
 		return ExitUsage
 	}
-	operation := relaysetup.AddProfile
 	switch args[0] {
-	case "add":
-	case "onboard":
-		operation = relaysetup.PrivateOnboarding
-	case "cancel":
-		if len(args) != 2 {
-			app.writeCompleteLine("%s", relayUsage)
-			return ExitUsage
+	case "help", "-h", "--help":
+		app.writeCompleteLine("%s", relayUsage)
+		return ExitOK
+	case "add", "onboard":
+		request, outcome := app.parseRelaySetupRequest(args[0], args[1:])
+		if outcome != requestParseReady {
+			return outcome.exitCode()
 		}
-		if err := app.application.CancelRelaySetup(ctx, args[1]); err != nil {
+		return app.runRelaySetup(ctx, request)
+	case "cancel":
+		flags := app.newFlagSet("relay cancel")
+		address, outcome := app.parseRelayURL(flags, "relay cancel <url>", args[1:])
+		if outcome != requestParseReady {
+			return outcome.exitCode()
+		}
+		if err := app.application.CancelRelaySetup(ctx, address); err != nil {
 			app.writeCompleteLine("relay cancel: %v", err)
 			return ExitFailure
 		}
@@ -39,18 +45,42 @@ func (app *App) runRelay(ctx context.Context, args []string) int {
 		app.writeCompleteLine("%s", relayUsage)
 		return ExitUsage
 	}
-	flags := flag.NewFlagSet("relay "+args[0], flag.ContinueOnError)
-	flags.SetOutput(app.stderrWriter())
+}
+
+func (app *App) parseRelaySetupRequest(operation string, args []string) (engine.RelaySetupRequest, requestParseOutcome) {
+	request := engine.RelaySetupRequest{Operation: relaysetup.AddProfile}
+	if operation == "onboard" {
+		request.Operation = relaysetup.PrivateOnboarding
+	}
+	flags := app.newFlagSet("relay " + operation)
 	hostname, _ := os.Hostname()
 	if hostname == "" {
 		hostname = "WindShare client"
 	}
-	noBrowser := flags.Bool("no-browser", false, "display the approval URL without opening a browser")
-	name := flags.String("name", hostname, "device name displayed for browser approval")
-	if err := flags.Parse(args[2:]); err != nil || flags.NArg() != 0 {
-		return ExitUsage
+	flags.BoolVar(&request.NoBrowser, "no-browser", false, "display the approval URL without opening a browser")
+	flags.StringVar(&request.DeviceName, "name", hostname, "device name displayed for browser approval")
+	address, outcome := app.parseRelayURL(flags, flags.Name()+" <url> [options]", args)
+	if outcome != requestParseReady {
+		return engine.RelaySetupRequest{}, outcome
 	}
-	current, err := app.application.StartRelaySetup(ctx, engine.RelaySetupRequest{URL: args[1], DeviceName: *name, Operation: operation, NoBrowser: *noBrowser})
+	request.URL = address
+	return request, requestParseReady
+}
+
+func (app *App) parseRelayURL(flags *flag.FlagSet, synopsis string, args []string) (string, requestParseOutcome) {
+	positionals, flagParse := parseInterleaved(flags, args)
+	if outcome := app.projectFlagParse(flags.Name(), flags, synopsis, flagParse); outcome != requestParseReady {
+		return "", outcome
+	}
+	if len(positionals) != 1 || positionals[0] == "" {
+		app.writeCompleteLine("%s: exactly one relay URL is required", flags.Name())
+		return "", requestParseUsageFailure
+	}
+	return positionals[0], requestParseReady
+}
+
+func (app *App) runRelaySetup(ctx context.Context, request engine.RelaySetupRequest) int {
+	current, err := app.application.StartRelaySetup(ctx, request)
 	if err != nil {
 		app.writeCompleteLine("relay setup: %v", err)
 		return ExitFailure
@@ -73,12 +103,12 @@ func (app *App) runRelay(ctx context.Context, args []string) int {
 	if result.Err != nil {
 		app.writeCompleteLine("relay setup: %v", result.Err)
 		if ctx.Err() != nil {
-			app.writeCompleteLine("Setup was saved. Run the same command to continue, or wind relay cancel %s.", args[1])
+			app.writeCompleteLine("Setup was saved. Run the same command to continue, or wind relay cancel %s.", request.URL)
 		}
 		return ExitFailure
 	}
 	app.writeCompleteLine("Relay saved: %s", result.Value.RelayURL)
-	if operation == relaysetup.PrivateOnboarding {
+	if request.Operation == relaysetup.PrivateOnboarding {
 		app.writeCompleteLine("Only this private relay is selected. P2P remains enabled.")
 	}
 	if result.Value.FrontURL == "" {
@@ -86,6 +116,7 @@ func (app *App) runRelay(ctx context.Context, args []string) int {
 	}
 	return ExitOK
 }
+
 func openRelayBrowser(ctx context.Context, address string) error {
 	var command *exec.Cmd
 	switch runtime.GOOS {
