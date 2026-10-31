@@ -225,9 +225,7 @@ export interface DiagnosticsHealthV1 {
 }
 
 export interface FailureIncidentPayloadV2 {
-  readonly root_trigger?: FailureFactV2
   readonly evidence_details_omitted?: number
-  readonly root_incident_sequence?: string
   readonly scope: Readonly<{
     scope_kind:
       | 'join'

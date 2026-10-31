@@ -43,6 +43,13 @@ export interface FailureFactAccumulator {
   readonly factCount: bigint
   record(ref: FailureFactRef): void
   seal(trigger: FailureFactRef): SealedFailureFacts
+  snapshotConsequences(): AggregatedConsequences
+}
+
+export interface AggregatedConsequences {
+  readonly factCount: bigint
+  readonly buckets: readonly FailureFactBucket[]
+  readonly overflowCount: bigint
 }
 
 interface MutableBucket {
@@ -106,7 +113,7 @@ class ExactFailureFactAccumulator implements FailureFactAccumulator {
       existing.count += 1n
       // A single private fallback lets a nominated primary become the trigger
       // without losing the one public representative promised for its bucket.
-      existing.fallbackRepresentative ??= ref
+      if (relation === 'contributor') existing.fallbackRepresentative ??= ref
       this.#placements.set(ref, { relation, key, retained: true, fingerprint })
     } else if (buckets.size < capacity &&
         [...buckets.values()].filter(bucket => bucket.fingerprint === fingerprint).length < MAX_DIAGNOSTIC_CAUSES_PER_CLASSIFICATION) {
@@ -126,6 +133,15 @@ class ExactFailureFactAccumulator implements FailureFactAccumulator {
       this.#placements.set(ref, { relation, key, retained: false, fingerprint })
     }
     this.#factCount += 1n
+  }
+
+  snapshotConsequences(): AggregatedConsequences {
+    const buckets = sealBuckets(this.#consequenceBuckets)
+    return Object.freeze({
+      factCount: buckets.reduce((count, bucket) => count + bucket.count, this.#consequenceOverflowCount),
+      buckets,
+      overflowCount: this.#consequenceOverflowCount,
+    })
   }
 
   seal(trigger: FailureFactRef): SealedFailureFacts {

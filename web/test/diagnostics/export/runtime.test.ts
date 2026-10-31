@@ -80,6 +80,7 @@ describe('browser diagnostics runtime', () => {
     expect(trace.statusReads).toBe(1)
     expect(trace.captureReads).toBe(1)
     expect(incident.history.snapshot).toHaveBeenCalledTimes(1)
+    expect(incident.history.consequencesSnapshot).toHaveBeenCalledTimes(1)
     expect(incident.health.incidentHealthSnapshot).toHaveBeenCalledTimes(1)
     expect(trace.peek()).toEqual(before)
     const header = JSON.parse(exported.split('\n')[0]!) as {
@@ -172,6 +173,7 @@ function fakeIncident(
     history: {
       last: vi.fn(() => retained.at(-1) ?? null),
       snapshot: vi.fn(() => Object.freeze([...retained])),
+      consequencesSnapshot: vi.fn(() => Object.freeze([])),
     },
     health: {
       incidentHealthSnapshot: vi.fn(() => health),
@@ -279,9 +281,6 @@ function realTraceSwitch(time: FakeTraceTime) {
     eventBytes: traceEventObservationBytesV2,
     snapshotIncident: (incident) => Object.freeze({
       incidentSequence: incident.incidentSequence,
-      ...(incident.rootIncidentSequence === undefined
-        ? {}
-        : { rootIncidentSequence: incident.rootIncidentSequence }),
       scope: Object.freeze({ ...incident.scope }),
     }),
     incidentMarkerBytes: () => 1,

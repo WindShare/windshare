@@ -124,7 +124,7 @@ describe('browser incident reporter', () => {
     expect(consoleError).toHaveBeenCalledTimes(1)
   })
 
-  it('creates immutable late-linked records without mutating the root', () => {
+  it('retains an immutable late supplement without consuming another history slot', () => {
     const policy = createIncidentPolicy({
       maxConsoleReportsPerScope: 1,
       maxIncidentHistoryRecords: 1,
@@ -142,19 +142,19 @@ describe('browser incident reporter', () => {
 
     scope.facts.record(fact('cleanup'), 'consequence')
 
-    const linked = fixture.reporter.history.last()
-    expect(linked?.sequence).toBe('2')
-    expect(linked?.payload.root_incident_sequence).toBe('1')
-    expect(linked?.payload.fact_count).toBe('1')
-    expect(linked?.payload.contributors).toEqual([])
-    expect(linked?.payload.consequences).toEqual([])
-    expect(linked?.payload.diagnostics_health_at_seal).toMatchObject({
-      incident_history_eviction_count: '1',
-      console_suppression_count: '1',
+    const supplement = fixture.reporter.history.consequencesSnapshot()[0]
+    expect(fixture.reporter.history.snapshot()).toEqual([root])
+    expect(fixture.reporter.history.last()).toBe(root)
+    expect(supplement?.incident_sequence).toBe('1')
+    expect(supplement?.fact_count).toBe('1')
+    expect(supplement?.consequences).toHaveLength(1)
+    expect(fixture.reporter.health.incidentHealthSnapshot()).toMatchObject({
+      incidentHistoryEvictionCount: 0n,
+      consoleSuppressionCount: 1n,
     })
     expect(consoleError).toHaveBeenCalledTimes(1)
     expect(root.payload.consequences).toEqual([])
-    expect(Object.isFrozen(linked)).toBe(true)
+    expect(Object.isFrozen(supplement)).toBe(true)
   })
 
   it('folds projector pruning into the same final health cut', () => {
@@ -192,10 +192,12 @@ describe('browser incident reporter', () => {
   it('clears retained history and revokes late-link authority together', () => {
     const fixture = reporterFixture()
     const root = reportRoot(fixture.reporter)
+    root.scope.facts.record(fact('cleanup'), 'consequence')
     fixture.reporter.clearRetainedIncidents()
     root.scope.facts.record(fact('cleanup'), 'consequence')
 
     expect(fixture.reporter.history.snapshot()).toEqual([])
+    expect(fixture.reporter.history.consequencesSnapshot()).toEqual([])
   })
 
   it('evicts late links by age before accepting a late consequence', () => {
@@ -351,8 +353,10 @@ function failingHistory(): IncidentHistoryPort {
     append: () => {
       throw new Error('history unavailable')
     },
+    recordConsequences: () => { throw new Error('history unavailable') },
     last: () => null,
     snapshot: () => Object.freeze([]),
+    consequencesSnapshot: () => Object.freeze([]),
     clear: () => undefined,
   }
 }

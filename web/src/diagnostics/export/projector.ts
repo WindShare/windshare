@@ -75,8 +75,6 @@ export interface IncidentRecordProjectionInput {
   readonly facts: SealedFailureFacts
   readonly context: DiagnosticContextV1
   readonly health: IncidentDiagnosticsHealthSnapshot
-  readonly rootTrigger?: FailureFactV2
-  readonly rootIncidentSequence?: bigint
 }
 
 export interface IncidentRecordProjection {
@@ -145,26 +143,14 @@ class V1IncidentRecordProjector implements IncidentRecordProjector {
       throw new TypeError('Incident presentation is invalid')
     }
     const sequence = decimalUint64(input.sequence, 'incident sequence')
-    const rootIncidentSequence = input.rootIncidentSequence === undefined
-      ? undefined
-      : decimalUint64(input.rootIncidentSequence, 'root incident sequence')
-    if (
-      input.rootIncidentSequence !== undefined &&
-      (
-        input.rootIncidentSequence === 0n ||
-        input.rootIncidentSequence >= input.sequence
-      )
-    ) {
-      throw new RangeError('Root incident sequence must precede its linked incident')
-    }
 
     let trigger = projectFailureFactV2(input.facts.trigger.fact)
     let evidenceDetailsOmitted = 0
     const correlation = projectCorrelationV1(input.facts.trigger.fact.correlation)
     const contributors = input.facts.contributorBuckets.map((bucket) =>
-      projectBucket(bucket, this.#policy))
+      projectFailureFactBucketV2(bucket, this.#policy))
     const consequences = input.facts.consequenceBuckets.map((bucket) =>
-      projectBucket(bucket, this.#policy))
+      projectFailureFactBucketV2(bucket, this.#policy))
     let overflowFactCount =
       input.facts.contributorOverflowCount +
       input.facts.consequenceOverflowCount
@@ -188,11 +174,7 @@ class V1IncidentRecordProjector implements IncidentRecordProjector {
       runtime_run_id: this.#runtimeRunId,
       ...(correlation === undefined ? {} : { correlation }),
       payload: {
-        ...(input.rootTrigger === undefined ? {} : { root_trigger: input.rootTrigger }),
         ...(evidenceDetailsOmitted === 0 ? {} : { evidence_details_omitted: evidenceDetailsOmitted }),
-        ...(rootIncidentSequence === undefined
-          ? {}
-          : { root_incident_sequence: rootIncidentSequence }),
         scope: {
           scope_kind: input.facts.scope.scopeKind,
           scope_sequence: decimalUint64(
@@ -436,7 +418,7 @@ export function projectFailureFactV2(fact: FailureFact): FailureFactV2 {
   }
 }
 
-function projectBucket(
+export function projectFailureFactBucketV2(
   bucket: FailureFactBucket,
   policy: IncidentPolicy,
 ): FailureFactBucketV2 {

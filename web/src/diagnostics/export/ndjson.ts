@@ -9,6 +9,7 @@ import type {
 } from './diagnostic-bundle-v2'
 import { isDeeplyFrozen } from './json'
 import { summarizeFailureFact } from '../failure/summary'
+import { summarizeIncidentConsequencesV2 } from '../incident/consequences'
 
 export const MAX_DIAGNOSTIC_BUNDLE_BYTES = 8 * 1_024 * 1_024
 const OMISSION_HEADER_RESERVE_BYTES = 512
@@ -88,9 +89,11 @@ export class DiagnosticBundleNdjsonEncoder {
     const { payload } = line.record
     const secondary = [...payload.contributors, ...payload.consequences]
     const overflow = secondary.reduce((count, bucket) => count + BigInt(bucket.count), BigInt(payload.overflow_fact_count))
-    const summary = this.#encodeLine({ ...line, record: { ...line.record, payload: {
+    const summary = this.#encodeLine({ ...line,
+      ...(line.late_consequences === undefined ? {} : {
+        late_consequences: summarizeIncidentConsequencesV2(line.late_consequences),
+      }), record: { ...line.record, payload: {
       ...payload, trigger: summarizeFailureFact(payload.trigger),
-      ...(payload.root_trigger === undefined ? {} : { root_trigger: summarizeFailureFact(payload.root_trigger) }),
       contributors: [], consequences: [], overflow_fact_count: overflow.toString(10),
       evidence_details_omitted: (payload.evidence_details_omitted ?? 0) +
         secondary.filter(bucket => bucket.representative.evidence !== undefined).length +

@@ -183,9 +183,6 @@ function snapshotIncidentLink(incident: IncidentLink): IncidentLink {
   return Object.freeze({
     incidentSequence: incident.incidentSequence,
     scope: Object.freeze({ ...incident.scope }),
-    ...(incident.rootIncidentSequence === undefined
-      ? {}
-      : { rootIncidentSequence: incident.rootIncidentSequence }),
   })
 }
 
@@ -196,9 +193,6 @@ function incidentMarkerBytes(incident: IncidentLink): number {
       scope_kind: incident.scope.scopeKind,
       scope_sequence: incident.scope.scopeSequence.toString(10),
     },
-    ...(incident.rootIncidentSequence === undefined
-      ? {}
-      : { root_incident_sequence: incident.rootIncidentSequence.toString(10) }),
   })
   return new TextEncoder().encode(encoded).byteLength
 }
