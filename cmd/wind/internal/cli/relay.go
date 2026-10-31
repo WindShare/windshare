@@ -51,7 +51,12 @@ func (app *App) runRelay(ctx context.Context, args []string) int {
 	}
 	noBrowser := flags.Bool("no-browser", false, "display the approval URL without opening a browser")
 	name := flags.String("name", hostname, "device name displayed for browser approval")
-	if err := flags.Parse(args[2:]); err != nil || flags.NArg() != 0 {
+	flagArgs := args[2:]
+	if isFlagHelpArgument(args[1]) {
+		// `relay add --help` has no URL yet; show the same help as `relay add <url> --help`.
+		flagArgs = args[1:]
+	}
+	if err := flags.Parse(flagArgs); err != nil || flags.NArg() != 0 {
 		return ExitUsage
 	}
 	current, err := app.application.StartRelaySetup(ctx, engine.RelaySetupRequest{URL: args[1], DeviceName: *name, Operation: operation, NoBrowser: *noBrowser})
@@ -90,6 +95,16 @@ func (app *App) runRelay(ctx context.Context, args []string) int {
 	}
 	return ExitOK
 }
+
+// isFlagHelpArgument reports the spellings the flag package treats as a help request.
+func isFlagHelpArgument(argument string) bool {
+	switch argument {
+	case "-h", "-help", "--h", "--help":
+		return true
+	}
+	return false
+}
+
 func openRelayBrowser(ctx context.Context, address string) error {
 	var command *exec.Cmd
 	switch runtime.GOOS {

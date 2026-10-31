@@ -91,16 +91,34 @@ func TestRelayCommandsInstallThroughEngineWithoutAdministratorAuthority(t *testi
 }
 
 func TestRelayFlagHelpAlignsOptionsWithoutEscapedTabs(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	app := &App{Stdout: &stdout, Stderr: &stderr}
-	code := app.Run(t.Context(), []string{"relay", "add", "https://relay.example", "--help"})
-	app.closeTerminalOutput()
-	help := stderr.String()
-	if code != ExitUsage || stdout.Len() != 0 || !strings.HasPrefix(help, "Usage of relay add:\n") {
-		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), help)
-	}
-	if strings.Contains(help, `\t`) || strings.Contains(help, "\t") ||
-		!strings.Contains(help, "\n  -no-browser\n        display the approval URL without opening a browser\n") {
-		t.Fatalf("relay help renders flag layout tabs: %q", help)
+	for _, operation := range []string{"add", "onboard"} {
+		var withURL string
+		for _, args := range [][]string{
+			{"relay", operation, "https://relay.example", "--help"},
+			{"relay", operation, "https://relay.example", "-h"},
+			{"relay", operation, "--help"},
+			{"relay", operation, "-h"},
+		} {
+			t.Run(strings.Join(args, " "), func(t *testing.T) {
+				var stdout, stderr bytes.Buffer
+				app := &App{Stdout: &stdout, Stderr: &stderr}
+				code := app.Run(t.Context(), args)
+				app.closeTerminalOutput()
+				help := stderr.String()
+				if code != ExitUsage || stdout.Len() != 0 {
+					t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), help)
+				}
+				if strings.Contains(help, `\t`) || strings.Contains(help, "\t") ||
+					!strings.Contains(help, "\n  -no-browser\n        display the approval URL without opening a browser\n") ||
+					!strings.Contains(help, "\n  -name string\n        device name displayed for browser approval (default ") {
+					t.Fatalf("relay help does not align options: %q", help)
+				}
+				if withURL == "" {
+					withURL = help
+				} else if help != withURL {
+					t.Fatalf("help = %q, want the <url> form %q", help, withURL)
+				}
+			})
+		}
 	}
 }
