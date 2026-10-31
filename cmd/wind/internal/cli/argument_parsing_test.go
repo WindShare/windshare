@@ -199,3 +199,28 @@ func TestFlagHelpAlignsOptionsWithoutEscapedTabs(t *testing.T) {
 		})
 	}
 }
+
+func TestExpandTabStopsUsesEightColumnStops(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want string
+	}{
+		{name: "short boolean", text: "  -v\tshow diagnostic milestones\n", want: "  -v    show diagnostic milestones\n"},
+		{name: "usage line", text: "    \tretained operation ID\n", want: "        retained operation ID\n"},
+		{
+			name: "multi-line usage",
+			text: "  -o string\n    \tfirst line\n    \tsecond line\n",
+			want: "  -o string\n        first line\n        second line\n",
+		},
+		{name: "tab inside description", text: "    \ta\tb\n", want: "        a       b\n"},
+		{name: "no tabs", text: "  -name string\n", want: "  -name string\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := expandTabStops(test.text); got != test.want {
+				t.Fatalf("expandTabStops(%q) = %q, want %q", test.text, got, test.want)
+			}
+		})
+	}
+}
