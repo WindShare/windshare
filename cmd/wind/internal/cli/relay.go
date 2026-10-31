@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"runtime"
@@ -41,6 +42,9 @@ func (app *App) runRelay(ctx context.Context, args []string) int {
 	}
 	flags := flag.NewFlagSet("relay "+args[0], flag.ContinueOnError)
 	flags.SetOutput(app.stderrWriter())
+	flags.Usage = func() {
+		_, _ = io.WriteString(app.stderrWriter(), "Usage of "+flags.Name()+":\n"+flagDefaults(flags))
+	}
 	hostname, _ := os.Hostname()
 	if hostname == "" {
 		hostname = "WindShare client"

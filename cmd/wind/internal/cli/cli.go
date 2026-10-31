@@ -271,10 +271,42 @@ func (a *App) newFlagSet(name string) *flag.FlagSet {
 func (a *App) writeFlagHelp(fs *flag.FlagSet, synopsis string) {
 	var help strings.Builder
 	fmt.Fprintf(&help, "Usage: %s %s\n\nOptions:\n", commandmeta.Name, synopsis)
-	fs.SetOutput(&help)
-	fs.PrintDefaults()
-	fs.SetOutput(io.Discard)
+	help.WriteString(flagDefaults(fs))
 	_, _ = io.WriteString(a.stderrWriter(), help.String())
+}
+
+// flagDefaults renders PrintDefaults for TerminalCanvas. The flag package
+// aligns usage text with tabs, which the canvas would show as literal `\t`
+// escapes, so layout tabs become the spaces a terminal would have displayed.
+func flagDefaults(fs *flag.FlagSet) string {
+	output := fs.Output()
+	var defaults strings.Builder
+	fs.SetOutput(&defaults)
+	fs.PrintDefaults()
+	fs.SetOutput(output)
+	return expandTabStops(defaults.String())
+}
+
+func expandTabStops(text string) string {
+	const tabWidth = 8
+	var expanded strings.Builder
+	expanded.Grow(len(text))
+	column := 0
+	for _, character := range text {
+		switch character {
+		case '\t':
+			padding := tabWidth - column%tabWidth
+			expanded.WriteString(strings.Repeat(" ", padding))
+			column += padding
+		case '\n':
+			expanded.WriteRune(character)
+			column = 0
+		default:
+			expanded.WriteRune(character)
+			column++
+		}
+	}
+	return expanded.String()
 }
 
 func (a *App) projectFlagParse(
