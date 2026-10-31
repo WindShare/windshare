@@ -1,6 +1,6 @@
 import {
-  canonicalizePortableCatalogPath,
-  isPortableCatalogName,
+  canonicalizeCatalogPath,
+  isCatalogName,
 } from '../../catalog/path-policy'
 import { CATALOG_DIRECTORY_ENTRIES } from '../../catalog/records'
 import { decodeBase64Url } from '../../crypto/bytes'
@@ -40,7 +40,7 @@ export type DiscoveryState =
 export interface ProjectedFileFact {
   readonly fileId: string
   readonly sourcePath: string
-  readonly portableName: string
+  readonly catalogName: string
 }
 
 export interface ProjectedDirectoryAnchor {
@@ -53,13 +53,13 @@ export type SelectedRootFact =
       kind: 'file'
       fileId: string
       sourcePath: string
-      portableName: string
+      catalogName: string
     }>
   | Readonly<{
       kind: 'directory'
       directoryId: string
       sourcePath: string
-      portableName: string
+      catalogName: string
     }>
 
 export type LayoutBasisProof =
@@ -340,7 +340,7 @@ export function snapshotFileFact(fact: ProjectedFileFact): ProjectedFileFact {
   return Object.freeze({
     fileId: requireIdentity(fact.fileId, 'file'),
     sourcePath: requirePath(fact.sourcePath),
-    portableName: requirePortableName(fact.portableName),
+    catalogName: requireCatalogName(fact.catalogName),
   })
 }
 
@@ -358,7 +358,7 @@ export function snapshotSelectedRoot(root: SelectedRootFact): SelectedRootFact {
   return Object.freeze({
     kind: 'directory',
     ...snapshotDirectoryAnchor(root),
-    portableName: requirePortableName(root.portableName),
+    catalogName: requireCatalogName(root.catalogName),
   })
 }
 
@@ -471,14 +471,14 @@ function requireIdentity(value: string, label: string): string {
 }
 
 function requirePath(path: string): string {
-  const canonical = canonicalizePortableCatalogPath(path)
+  const canonical = canonicalizeCatalogPath(path)
   if (canonical !== path) throw new SelectionProjectionError('projection path is not canonical')
   return canonical
 }
 
-function requirePortableName(name: string): string {
-  if (!isPortableCatalogName(name)) {
-    throw new SelectionProjectionError('projection name violates the portable catalog policy')
+function requireCatalogName(name: string): string {
+  if (!isCatalogName(name)) {
+    throw new SelectionProjectionError('projection name violates the catalog path policy')
   }
   return name
 }

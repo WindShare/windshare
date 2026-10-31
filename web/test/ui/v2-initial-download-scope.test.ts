@@ -52,7 +52,7 @@ class InitialFolderShare extends FakeJoinedShare {
             byteCountLowerBound: 0n },
           ...(selected ? {
             selectedRoots: [{ kind: 'directory' as const, directoryId: FOLDER.idText,
-              sourcePath: FOLDER.name, portableName: FOLDER.name }],
+              sourcePath: FOLDER.name, catalogName: FOLDER.name }],
             selectedRootCount: 1,
             earlyLayoutBasis: { kind: 'complete-directory' as const,
               anchor: { directoryId: FOLDER.idText, sourcePath: FOLDER.name } },

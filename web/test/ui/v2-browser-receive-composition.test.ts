@@ -687,7 +687,7 @@ describe('browser output attempt ownership', () => {
       file: {
         fileId: binaryIdentityText(20),
         sourcePath: 'docs/report.txt',
-        portableName: 'report.txt',
+        catalogName: 'report.txt',
       },
     }, 3n)
     const offered = await offerArtifacts(state, COMPLETE_DISCOVERY, environment)

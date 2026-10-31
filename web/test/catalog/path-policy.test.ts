@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  canonicalizePortableCatalogPath,
+  canonicalizeCatalogPath,
   catalogNameCollisionKey,
   catalogPathCollisionKey,
-  isPortableCatalogName,
+  isCatalogName,
   CATALOG_PATH_BYTES,
   CATALOG_PATH_DEPTH,
   PATH_POLICY,
@@ -32,24 +32,24 @@ describe('v2 catalog path policy', () => {
     const version = vectors.find((vector) => vector.name === 'policy-version')
     expect(PATH_POLICY).toBe(version?.policyVersion)
     expect(PATH_POLICY_UNICODE_VERSION).toBe(version?.unicodeVersion)
-    expect(isPortableCatalogName('Ångström')).toBe(true)
+    expect(isCatalogName('Ångström')).toBe(true)
     expect(catalogNameCollisionKey('Straße')).toBe(catalogNameCollisionKey('STRASSE'))
     expect(catalogNameCollisionKey('Ångström')).toBe('ångström')
   })
 
   it.each(vectors.filter((vector) => vector.expected === 'valid'))(
-    'reproduces the portable path vector: $name',
+    'reproduces the catalog path vector: $name',
     (vector) => {
-      const canonical = canonicalizePortableCatalogPath(vector.input ?? '')
+      const canonical = canonicalizeCatalogPath(vector.input ?? '')
       expect(canonical).toBe(vector.canonical)
       expect(catalogPathCollisionKey(canonical)).toBe(vector.collisionKey)
     },
   )
 
   it.each(vectors.filter((vector) => vector.expected === 'invalid-path'))(
-    'rejects the hostile portable path vector: $name',
+    'rejects the hostile catalog path vector: $name',
     (vector) => {
-      expect(() => canonicalizePortableCatalogPath(vector.input ?? '')).toThrow(TypeError)
+      expect(() => canonicalizeCatalogPath(vector.input ?? '')).toThrow(TypeError)
     },
   )
 
@@ -71,28 +71,24 @@ describe('v2 catalog path policy', () => {
     '/absolute',
     'a/b',
     'a\\b',
-    'C:drive',
-    'trailing-space ',
-    'trailing-dot.',
-    'CON.txt',
     'safe\u007fname',
     'zero\u200bwidth',
     'A\u030a',
     String.fromCharCode(0xd800),
-  ])('rejects a non-portable catalog segment: %j', (name) => {
-    expect(isPortableCatalogName(name)).toBe(false)
+  ])('rejects a invalid catalog segment: %j', (name) => {
+    expect(isCatalogName(name)).toBe(false)
     expect(() => catalogNameCollisionKey(name)).toThrow(TypeError)
   })
 
   it('bounds canonical names by UTF-8 bytes rather than UTF-16 units', () => {
-    expect(isPortableCatalogName('界'.repeat(85))).toBe(true)
-    expect(isPortableCatalogName('界'.repeat(86))).toBe(false)
+    expect(isCatalogName('界'.repeat(85))).toBe(true)
+    expect(isCatalogName('界'.repeat(86))).toBe(false)
   })
 
   it('enforces the shared protocol path depth and byte boundaries', () => {
     const maximumDepth = Array.from({ length: CATALOG_PATH_DEPTH }, () => 'a').join('/')
-    expect(canonicalizePortableCatalogPath(maximumDepth)).toBe(maximumDepth)
-    expect(() => canonicalizePortableCatalogPath(`${maximumDepth}/a`)).toThrow(TypeError)
+    expect(canonicalizeCatalogPath(maximumDepth)).toBe(maximumDepth)
+    expect(() => canonicalizeCatalogPath(`${maximumDepth}/a`)).toThrow(TypeError)
 
     const maximumBytes = [
       ...Array.from({ length: 127 }, () => 'a'.repeat(255)),
@@ -101,14 +97,14 @@ describe('v2 catalog path policy', () => {
       'c',
     ].join('/')
     expect(new TextEncoder().encode(maximumBytes)).toHaveLength(CATALOG_PATH_BYTES)
-    expect(canonicalizePortableCatalogPath(maximumBytes)).toBe(maximumBytes)
+    expect(canonicalizeCatalogPath(maximumBytes)).toBe(maximumBytes)
     const overBytes = [
       ...Array.from({ length: 127 }, () => 'a'.repeat(255)),
       'a'.repeat(253),
       'b',
       'c',
     ].join('/')
-    expect(() => canonicalizePortableCatalogPath(overBytes))
+    expect(() => canonicalizeCatalogPath(overBytes))
       .toThrow(TypeError)
   })
 })

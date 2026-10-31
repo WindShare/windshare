@@ -1,5 +1,5 @@
 import { type AuthenticatedGenerationReference } from '../../transfer/preparation/generation'
-import { snapshotPortableCatalogPath } from '../../catalog/path-policy'
+import { snapshotCatalogPath } from '../../catalog/path-policy'
 import type { FinalFileCheckpointProof } from '../persistence/journal'
 import {
   canonicalDigest,
@@ -326,7 +326,7 @@ function snapshotManifestEntry(entry: MaterializedManifestEntry): MaterializedMa
     requireExactKeys(entry, ['kind', 'artifactPath', 'directoryId', 'generation', 'ownedObjectId'])
     return Object.freeze({
       kind: 'directory',
-      artifactPath: snapshotPortableCatalogPath(entry.artifactPath),
+      artifactPath: snapshotCatalogPath(entry.artifactPath),
       directoryId: snapshotIdentity(entry.directoryId, 16, 'directory ID'),
       generation: snapshotIdentity(entry.generation, 16, 'directory generation'),
       ownedObjectId: snapshotIdentity(entry.ownedObjectId, 32, 'owned object ID'),
@@ -339,7 +339,7 @@ function snapshotManifestEntry(entry: MaterializedManifestEntry): MaterializedMa
   requireExactKeys(entry.checkpoint, ['recordId', 'recordDigest', 'checkpointGeneration'])
   return Object.freeze({
     kind: 'file',
-    artifactPath: snapshotPortableCatalogPath(entry.artifactPath),
+    artifactPath: snapshotCatalogPath(entry.artifactPath),
     fileId: snapshotIdentity(entry.fileId, 16, 'file ID'),
     fileRevision: snapshotIdentity(entry.fileRevision, 16, 'file revision'),
     exactSize: checkedU64(entry.exactSize, 'file size'),
@@ -508,7 +508,7 @@ function decodeMaterializedPath(bytes: Uint8Array): readonly string[] {
     segments.push(value)
   }
   reader.finish('materialized path')
-  return snapshotPortableCatalogPath(segments)
+  return snapshotCatalogPath(segments)
 }
 
 function boundedManifestCount(value: bigint, allowZero = true): number {

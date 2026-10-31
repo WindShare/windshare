@@ -1,5 +1,5 @@
 import {
-  canonicalizePortableCatalogPath,
+  canonicalizeCatalogPath,
   CATALOG_NAME_BYTES,
   CATALOG_PATH_BYTES,
   CATALOG_PATH_DEPTH,
@@ -168,7 +168,7 @@ export function invalidDecodedCanonicalBytes(): never {
 
 export function requireCanonicalPath(value: string): string {
   if (typeof value !== 'string') throw new TypeError('canonical path must be text')
-  const canonical = canonicalizePortableCatalogPath(value)
+  const canonical = canonicalizeCatalogPath(value)
   if (canonical !== value) throw new TypeError('path is not in canonical form')
   return canonical
 }

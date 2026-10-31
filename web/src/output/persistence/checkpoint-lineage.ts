@@ -1,4 +1,4 @@
-import { snapshotPortableCatalogPath } from '../../catalog/path-policy'
+import { snapshotCatalogPath } from '../../catalog/path-policy'
 import { encodeBase64Url } from '../../crypto/bytes'
 import {
   checkpointConcatBytes,
@@ -146,7 +146,7 @@ function normalizeCheckpointLineageSpec(
     canonicalPath = materializerKind === FILE_CHECKPOINT_MATERIALIZER_FSA_TREE &&
         Array.isArray(input.canonicalPath) && input.canonicalPath.length === 0
       ? Object.freeze([])
-      : snapshotPortableCatalogPath(input.canonicalPath)
+      : snapshotCatalogPath(input.canonicalPath)
   } catch (cause) {
     throw new FileCheckpointError(
       'binding',

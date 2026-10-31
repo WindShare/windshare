@@ -1,4 +1,4 @@
-import { snapshotPortableCatalogPath } from '../../catalog/path-policy'
+import { snapshotCatalogPath } from '../../catalog/path-policy'
 import type { ResultRootLayout, ReceiveIntent } from '../intent'
 import type { ArtifactLayoutClass } from './contract'
 import type { LogicalArtifactPath } from './coordinate/direct-tree'
@@ -22,7 +22,7 @@ export function artifactFilePath(
   intent: ReceiveIntent,
   sourcePath: readonly string[],
 ): LogicalArtifactPath {
-  const source = snapshotPortableCatalogPath(sourcePath)
+  const source = snapshotCatalogPath(sourcePath)
   switch (intent.artifact.kind) {
     case 'original-file':
       requireSourcePath(intent.artifact.sourcePath, source)
@@ -57,7 +57,7 @@ export function artifactDirectoryPath(
     }
     return logicalArtifactPath([])
   }
-  const source = snapshotPortableCatalogPath(sourcePath)
+  const source = snapshotCatalogPath(sourcePath)
   switch (intent.artifact.kind) {
     case 'original-file':
       return logicalArtifactPath([])
@@ -114,7 +114,7 @@ function resultRootArtifactPath(
 
 function logicalArtifactPath(input: readonly string[]): LogicalArtifactPath {
   if (input.length === 0) return Object.freeze([]) as unknown as LogicalArtifactPath
-  return snapshotPortableCatalogPath(input) as LogicalArtifactPath
+  return snapshotCatalogPath(input) as LogicalArtifactPath
 }
 
 function requireSourcePath(expected: string, actual: readonly string[]): void {

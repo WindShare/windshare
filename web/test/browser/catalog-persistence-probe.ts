@@ -20,7 +20,7 @@ import { encodeBase64Url } from '../../src/crypto/bytes'
 import { createSignedRootCollisionFixture } from '../catalog/signed-root-collision-fixture'
 import { runSignedCatalogOwnershipProbe } from '../catalog/signed-catalog-ownership-probe'
 
-const LEGACY_DATABASE_VERSION = 3
+const LEGACY_DATABASE_VERSION = 6
 const DIRECTORY_STORE = 'committed-directories'
 const PAGE_STORE = 'catalog-pages'
 const LEGACY_NODE_STORE = 'catalog-node-owners'

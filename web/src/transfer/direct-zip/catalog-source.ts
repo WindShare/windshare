@@ -1,4 +1,4 @@
-import { snapshotPortableCatalogPath } from '../../catalog/path-policy'
+import { snapshotCatalogPath } from '../../catalog/path-policy'
 import type { CatalogClient } from '../../catalog/client'
 import type { CommittedDirectory } from '../../catalog/page-store'
 import type { CatalogEntry, ShareDescriptor } from '../../catalog/records'
@@ -219,7 +219,7 @@ export class DirectZipCatalogSourceV1 implements DirectZipOrderedSourceV1 {
     ancestry: readonly string[],
     iterator: AsyncIterator<CatalogEntry>,
   ): CatalogFrontierEntry {
-    const sourcePath = snapshotPortableCatalogPath([...parentPath, entry.name])
+    const sourcePath = snapshotCatalogPath([...parentPath, entry.name])
     const artifactPath = projectedArtifactPath(this.#options.intent, sourcePath, entry.kind)
     return Object.freeze({ entry, parent, sourcePath, artifactPath, ancestry, iterator })
   }

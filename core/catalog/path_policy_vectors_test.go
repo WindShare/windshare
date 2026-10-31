@@ -45,7 +45,7 @@ func TestSharedPathPolicyVector(t *testing.T) {
 	for _, testCase := range vector.Cases {
 		t.Run(testCase.Name, func(t *testing.T) {
 			if testCase.PolicyVersion != "" {
-				if testCase.PolicyVersion != PathPolicyV1 || testCase.UnicodeVersion != expectedPathPolicyUnicodeVersion {
+				if testCase.PolicyVersion != PathPolicyV2 || testCase.UnicodeVersion != expectedPathPolicyUnicodeVersion {
 					t.Fatalf("path policy identity = %q/%q", testCase.PolicyVersion, testCase.UnicodeVersion)
 				}
 				return

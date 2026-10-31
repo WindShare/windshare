@@ -1,4 +1,4 @@
-import { snapshotPortableCatalogPath } from '../../catalog/path-policy'
+import { snapshotCatalogPath } from '../../catalog/path-policy'
 
 export const ZIP_ENCODING_POLICY_VERSION = 1 as const
 export const ZIP_ENCODING_POLICY = 'windshare/zip-encoding/v1-store-data-descriptor' as const
@@ -95,7 +95,7 @@ export interface EncodedZipEndRecords {
 export function normalizeZipEntry(spec: ZipEntrySpec): NormalizedZipEntry {
   if (spec === null || typeof spec !== 'object') throw new TypeError('ZIP entry is invalid')
   if (spec.kind !== 'directory' && spec.kind !== 'file') throw new TypeError('ZIP entry kind is invalid')
-  const path = snapshotPortableCatalogPath(spec.path)
+  const path = snapshotCatalogPath(spec.path)
   const artifactPath = path.join('/')
   const artifactPathBytes = frozenBytes(TEXT_ENCODER.encode(artifactPath))
   const name = spec.kind === 'directory' ? `${artifactPath}/` : artifactPath
@@ -192,7 +192,7 @@ export function validateZipEntryPlan(
     throw new TypeError('ZIP entry plan version is invalid')
   }
   requireDosDateTime(plan.dosTime, plan.dosDate)
-  const path = snapshotPortableCatalogPath(plan.path)
+  const path = snapshotCatalogPath(plan.path)
   const artifactPath = path.join('/')
   const artifactPathBytes = frozenBytes(TEXT_ENCODER.encode(artifactPath))
   const nameBytes = frozenBytes(TEXT_ENCODER.encode(
@@ -568,7 +568,7 @@ function requireNormalizedEntry(entry: NormalizedZipEntry): void {
   }
   requireZipUint64(entry.exactSize, 'ZIP entry size')
   requireDosDateTime(entry.dosTime, entry.dosDate)
-  const canonicalPath = snapshotPortableCatalogPath(entry.path)
+  const canonicalPath = snapshotCatalogPath(entry.path)
   const artifactPath = canonicalPath.join('/')
   if (entry.artifactPath !== artifactPath ||
       !equalNumbers(entry.artifactPathBytes, TEXT_ENCODER.encode(artifactPath)) ||

@@ -1,4 +1,4 @@
-import { snapshotPortableCatalogPath } from '../../catalog/path-policy'
+import { snapshotCatalogPath } from '../../catalog/path-policy'
 import { openNativeObject } from './native-object/client'
 import type { NativeObjectFactory, NativeObjectIO } from './native-object/contracts'
 import type { ObjectGrowthReservation } from './object-capacity'
@@ -506,7 +506,7 @@ function snapshotRevision(revision: OpenedFileRevision): OpenedFileRevision {
 
 function snapshotPath(path: readonly string[], allowEmpty: boolean): readonly string[] {
   if (allowEmpty && path.length === 0) return Object.freeze([])
-  return snapshotPortableCatalogPath(path)
+  return snapshotCatalogPath(path)
 }
 
 function requireFileHandle(

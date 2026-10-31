@@ -1,6 +1,7 @@
-import { isPortableCatalogName, CATALOG_NAME_BYTES } from '../../../catalog/path-policy'
+import { isCatalogName, CATALOG_NAME_BYTES } from '../../../catalog/path-policy'
 import { encodeBase64Url } from '../../../crypto/bytes'
 import { compatibleNameReadablePrefix } from '../../file-system-access/compatible-name/naming'
+import { isPortableOutputName } from '../../names/policy'
 import {
   DIRECT_ZIP_BINDING_DIGEST_BYTES,
   DIRECT_ZIP_CANDIDATE_ID_BYTES,
@@ -203,7 +204,7 @@ export function directZipStableTargetName(
   resultRootComponent: string,
   candidateId: Uint8Array,
 ): string {
-  if (!isPortableCatalogName(resultRootComponent)) {
+  if (!isCatalogName(resultRootComponent)) {
     throw new TypeError('direct ZIP result-root component violates the canonical path policy')
   }
   const identity = snapshotDirectZipFixedBytes(
@@ -219,7 +220,7 @@ export function directZipStableTargetName(
   const prefix = truncateUtf8(compatibleRoot, STABLE_NAME_PREFIX_MAX_UTF8_BYTES)
   const stableName = `${prefix}${DIRECT_ZIP_STABLE_NAME_SEPARATOR}${token}` +
     DIRECT_ZIP_STABLE_NAME_EXTENSION
-  if (!isPortableCatalogName(stableName) || TEXT_ENCODER.encode(stableName).byteLength > CATALOG_NAME_BYTES) {
+  if (!isPortableOutputName(stableName) || TEXT_ENCODER.encode(stableName).byteLength > CATALOG_NAME_BYTES) {
     throw new TypeError('direct ZIP stable target name violates the compatible-name policy')
   }
   return stableName

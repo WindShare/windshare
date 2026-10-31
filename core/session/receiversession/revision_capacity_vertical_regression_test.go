@@ -210,7 +210,7 @@ func newSyntheticCapacityFixture(t *testing.T, fileCount uint64) *syntheticCapac
 		WireVersion: catalog.WireVersionV2, Suite: catalog.SuiteV2,
 		ShareInstance: share, SyntheticRoot: syntheticRoot, RootCommit: committedRoot,
 		ChunkSize: catalog.MinChunkSize, Capabilities: catalog.CapabilityCatalog | catalog.CapabilityRanges,
-		SenderPublicKey: publicKey, CreatedAtSeconds: 1, PathPolicy: catalog.PathPolicyV1,
+		SenderPublicKey: publicKey, CreatedAtSeconds: 1, PathPolicy: catalog.PathPolicyV2,
 	})
 	if err != nil {
 		t.Fatal(err)

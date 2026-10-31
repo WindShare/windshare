@@ -1,4 +1,4 @@
-import { snapshotPortableCatalogPath } from '../../catalog/path-policy'
+import { snapshotCatalogPath } from '../../catalog/path-policy'
 
 export const MAX_CONTENT_WARNING_FILES = 8
 const MAX_FILE_COUNT = 0xffff_ffff_ffff_ffffn
@@ -29,7 +29,7 @@ export function snapshotReceiveContentWarning(value: ReceiveContentWarning): Rec
         !['source-changed', 'source-unavailable', 'file-failed'].includes(file.reason)) {
       throw new TypeError('Missing file reason is invalid')
     }
-    return Object.freeze({ path: snapshotPortableCatalogPath(file.path), reason: file.reason })
+    return Object.freeze({ path: snapshotCatalogPath(file.path), reason: file.reason })
   })
   return Object.freeze({
     kind: value.kind, completedFileCount: value.completedFileCount,

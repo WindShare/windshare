@@ -1,6 +1,6 @@
 import {
   catalogNameCollisionKey,
-  isPortableCatalogName,
+  isCatalogName,
 } from '../../catalog/path-policy'
 import { encodeBase64Url } from '../../crypto/bytes'
 import type {
@@ -371,9 +371,9 @@ export function resultNamePrefix(value: string, maximumBytes: number): string {
 }
 
 export function requireResultName(value: string): string {
-  if (typeof value !== 'string' || !isPortableCatalogName(value) ||
+  if (typeof value !== 'string' || !isCatalogName(value) ||
       catalogNameCollisionKey(value).startsWith('.wsresume')) {
-    throw new TypeError('result name violates the frozen portable policy')
+    throw new TypeError('result name violates the catalog path policy')
   }
   return value
 }
