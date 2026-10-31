@@ -70,7 +70,7 @@ func TestDescriptorAndControlCodecsAuthenticateCanonicalValues(t *testing.T) {
 		WireVersion: catalog.WireVersionV2, Suite: catalog.SuiteV2,
 		ShareInstance: fixture.share, SyntheticRoot: directoryID(t, 91),
 		ChunkSize: catalog.MinChunkSize, Capabilities: catalog.CapabilityCatalog | catalog.CapabilityRanges,
-		SenderPublicKey: fixture.publicKey, CreatedAtSeconds: 123, PathPolicy: catalog.PathPolicyV1,
+		SenderPublicKey: fixture.publicKey, CreatedAtSeconds: 123, PathPolicy: catalog.PathPolicyV2,
 	})
 	if err != nil {
 		t.Fatal(err)

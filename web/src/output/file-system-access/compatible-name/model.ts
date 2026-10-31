@@ -1,8 +1,8 @@
 import type { CompatibleNameRepairSummary, CompatibleNamePairPlacement, CompatibleNameFooterObservationV1, CompatibleNameFooterState } from '../../../transfer/lifecycle/name-repair'
 import {
   catalogNameCollisionKey,
-  snapshotPortableCatalogPath,
-  isPortableCatalogName,
+  snapshotCatalogPath,
+  isCatalogName,
 } from '../../../catalog/path-policy'
 import { encodeBase64Url } from '../../../crypto/bytes'
 import type { ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
@@ -126,8 +126,8 @@ export function compatibleNameOperationHeaderV1(
   const authorityRef = snapshotIdentity(input.authorityRef, 32, 'authority reference')
   const primaryToken = compatibleToken(input.primaryToken, 'primary compatible-name token')
   const root = Object.freeze({
-    logicalName: portableComponent(input.root.logicalName, 'logical result-entry name'),
-    physicalName: portableComponent(input.root.physicalName, 'physical result-entry name'),
+    logicalName: catalogComponent(input.root.logicalName, 'logical result-entry name'),
+    physicalName: catalogComponent(input.root.physicalName, 'physical result-entry name'),
   })
   const pairPlacement = compatiblePairPlacement(input.pairPlacement)
   if (pairPlacement === 'inside-logical-root' && root.logicalName !== root.physicalName) {
@@ -172,7 +172,7 @@ export function compatibleNameMappingV1(
   input: CompatibleNameMappingSpec,
 ): CompatibleNameMappingV1 {
   const operationId = snapshotIdentity(input.operationId, 16, 'operation ID')
-  const logicalPath = snapshotPortableCatalogPath(input.logicalPath)
+  const logicalPath = snapshotCatalogPath(input.logicalPath)
   const entryKind = compatibleEntryKind(input.entryKind)
   const ownershipState = compatibleOwnershipState(input.ownershipState)
   const commitState = compatibleCommitState(input.commitState)
@@ -197,7 +197,7 @@ export function compatibleNameMappingV1(
     operationId,
     logicalPath,
     entryKind,
-    physicalComponent: portableComponent(input.physicalComponent, 'physical component'),
+    physicalComponent: catalogComponent(input.physicalComponent, 'physical component'),
     attempt,
     token,
     ownershipState,
@@ -324,7 +324,7 @@ export function compatibleNameRepairSummary(
       input.logicalPathSample.length > committedCount) {
     throw new TypeError('compatible-name repair sample exceeds its bound')
   }
-  const logicalPathSample = Object.freeze(input.logicalPathSample.map(snapshotPortableCatalogPath))
+  const logicalPathSample = Object.freeze(input.logicalPathSample.map(snapshotCatalogPath))
   const sampleKeys = logicalPathSample.map(path => encodeBase64Url(canonicalPath(path)))
   if (new Set(sampleKeys).size !== sampleKeys.length) {
     throw new TypeError('compatible-name repair sample repeats a logical path')
@@ -353,8 +353,8 @@ export function compatibleNameRepairSummary(
     committedCount,
     logicalPathSample,
     pairDisplayNames: Object.freeze({
-      ...(input.pairDisplayNames.script === undefined ? {} : { script: portableComponent(input.pairDisplayNames.script, 'script display name') }),
-      sidecar: portableComponent(input.pairDisplayNames.sidecar, 'sidecar display name'),
+      ...(input.pairDisplayNames.script === undefined ? {} : { script: catalogComponent(input.pairDisplayNames.script, 'script display name') }),
+      sidecar: catalogComponent(input.pairDisplayNames.sidecar, 'sidecar display name'),
     }),
     placement: compatiblePairPlacement(input.placement),
     ...(latestObservedFooter === undefined ? {} : { latestObservedFooter }),
@@ -378,7 +378,7 @@ export function compatibleNameMappingId(
   entryKindInput: CompatibleNameEntryKind,
 ): string {
   const operationId = snapshotIdentity(operationIdInput, 16, 'operation ID')
-  const logicalPath = snapshotPortableCatalogPath(logicalPathInput)
+  const logicalPath = snapshotCatalogPath(logicalPathInput)
   const entryKind = compatibleEntryKind(entryKindInput)
   return `${COMPATIBLE_NAME_LEDGER_FORMAT_VERSION}/${operationId}/${entryKind}/${
     encodeBase64Url(canonicalPath(logicalPath))}`
@@ -392,7 +392,7 @@ export function compatibleMappingPhysicalParent(
   header: Pick<CompatibleNameOperationHeaderV1, 'pairPlacement' | 'root'>,
   logicalPathInput: readonly string[],
 ): readonly string[] {
-  const logicalPath = snapshotPortableCatalogPath(logicalPathInput)
+  const logicalPath = snapshotCatalogPath(logicalPathInput)
   const relativeParent = logicalPath.slice(0, -1)
   return header.pairPlacement === 'inside-logical-root'
     ? Object.freeze([header.root.logicalName, ...relativeParent])
@@ -435,7 +435,7 @@ function compatiblePairIdentity(
     throw new TypeError(`${label} pair ownership state is invalid`)
   }
   return Object.freeze({
-    physicalName: portableComponent(input.physicalName, `${label} physical name`),
+    physicalName: catalogComponent(input.physicalName, `${label} physical name`),
     handleId: nonEmptyCanonicalText(input.handleId, `${label} handle ID`),
     ownedObjectId: snapshotIdentity(input.ownedObjectId, 32, `${label} owned object ID`),
     ownershipState,
@@ -513,8 +513,8 @@ function compatibleToken(value: string, label: string): string {
   return value
 }
 
-function portableComponent(value: string, label: string): string {
-  if (typeof value !== 'string' || !isPortableCatalogName(value)) {
+function catalogComponent(value: string, label: string): string {
+  if (typeof value !== 'string' || !isCatalogName(value)) {
     throw new TypeError(`${label} violates the canonical path-component policy`)
   }
   return value

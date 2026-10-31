@@ -84,12 +84,20 @@ describe('v2 catalog generation cursor', () => {
 
   it.each([
     fileEntry(4, 'e\u0301'),
-    fileEntry(4, 'CON'),
-  ])('rejects a non-portable sibling name before traversal', (entry) => {
+    fileEntry(4, '../outside'),
+  ])('rejects an invalid catalog sibling name before traversal', (entry) => {
     const pages = new CatalogPageCursor(SHARE, directoryCursor(), committed(1, 1))
     expect(() => pages.accept(singlePage([entry])))
       .toThrow(CatalogTraversalError)
   })
+
+  it.each(['CON', 'question?.txt', 'trailing-space ', 'trailing-dot.'])(
+    'retains %s for destination-specific output handling', (name) => {
+      const pages = new CatalogPageCursor(SHARE, directoryCursor(), committed(1, 1))
+      expect(() => pages.accept(singlePage([fileEntry(4, name)]))).not.toThrow()
+      expect(() => pages.finish()).not.toThrow()
+    },
+  )
 
   it('applies the reserved output namespace policy while composing entry paths', () => {
     const guard = new CatalogTraversalGuard(SHARE, 1)

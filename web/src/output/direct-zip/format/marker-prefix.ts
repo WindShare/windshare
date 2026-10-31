@@ -1,4 +1,4 @@
-import { snapshotPortableCatalogPath } from '../../../catalog/path-policy'
+import { snapshotCatalogPath } from '../../../catalog/path-policy'
 import {
   concatDirectZipBytes,
   equalDirectZipBytes,
@@ -236,7 +236,7 @@ function decodeRootName(rootNameBytes: Uint8Array): {
     throw new TypeError('direct ZIP ownership member is not a result-root directory')
   }
   const rootComponent = rootName.slice(0, -1)
-  snapshotPortableCatalogPath([rootComponent])
+  snapshotCatalogPath([rootComponent])
   if (!equalDirectZipBytes(TEXT_ENCODER.encode(`${rootComponent}/`), rootNameBytes)) {
     throw new TypeError('direct ZIP result-root name is not canonical')
   }

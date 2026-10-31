@@ -12,7 +12,7 @@ func TestReceivedDescriptorAndPageFunctionAdapters(t *testing.T) {
 	descriptor, err := NewReceivedShareDescriptor(ReceivedDescriptorSpec{
 		WireVersion: WireVersionV2, Suite: SuiteV2, ShareInstance: share, SyntheticRoot: root,
 		ChunkSize: MinChunkSize, Capabilities: CapabilityCatalog | CapabilityRanges,
-		SenderPublicKey: bytes.Repeat([]byte{3}, SenderPublicKeySize), PathPolicy: PathPolicyV1,
+		SenderPublicKey: bytes.Repeat([]byte{3}, SenderPublicKeySize), PathPolicy: PathPolicyV2,
 	})
 	if err != nil || descriptor.ShareInstance() != share {
 		t.Fatalf("received descriptor = %+v, %v", descriptor, err)

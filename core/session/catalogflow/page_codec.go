@@ -111,7 +111,7 @@ func validateDescriptorValue(descriptor catalog.ShareDescriptor) error {
 		descriptor.ChunkSize() < catalog.MinChunkSize || descriptor.ChunkSize() > catalog.MaxChunkSize ||
 		descriptor.ChunkSize()&(descriptor.ChunkSize()-1) != 0 ||
 		len(descriptor.SenderPublicKey()) != catalog.SenderPublicKeySize ||
-		descriptor.CreatedAtSeconds() > catalog.MaxSafeInteger || descriptor.PathPolicy() != catalog.PathPolicyV1 {
+		descriptor.CreatedAtSeconds() > catalog.MaxSafeInteger || descriptor.PathPolicy() != catalog.PathPolicyV2 {
 		return ErrWireObject
 	}
 	return nil

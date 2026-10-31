@@ -1,4 +1,4 @@
-import { snapshotPortableCatalogPath } from '../../catalog/path-policy'
+import { snapshotCatalogPath } from '../../catalog/path-policy'
 import { decodeBase64Url, encodeBase64Url } from '../../crypto/bytes'
 import { sha256 } from '../../crypto/digest'
 
@@ -111,7 +111,7 @@ export function snapshotIdentity(value: string, width: number, label: string): s
 }
 
 export function canonicalPath(path: readonly string[]): CanonicalBytes {
-  const snapshot = snapshotPortableCatalogPath(path)
+  const snapshot = snapshotCatalogPath(path)
   return concatCanonicalBytes([
     canonicalU64(BigInt(snapshot.length)),
     ...snapshot.map((segment) => canonicalFrame(canonicalText(segment))),

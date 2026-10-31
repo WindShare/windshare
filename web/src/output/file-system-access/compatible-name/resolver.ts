@@ -1,4 +1,4 @@
-import { catalogNameCollisionKey, snapshotPortableCatalogPath } from '../../../catalog/path-policy'
+import { catalogNameCollisionKey, snapshotCatalogPath } from '../../../catalog/path-policy'
 import type {
   PersistentDirectoryNamespaceClaim,
   PersistentOutputNamespaceClaimPort,
@@ -33,7 +33,7 @@ export class LogicalSiblingNamespaceAuthority implements PersistentOutputNamespa
   bindDirectoryNamespace(claim: PersistentDirectoryNamespaceClaim): void {
     const materializationRelativePath = claim.materializationRelativePath.length === 0
       ? Object.freeze([])
-      : snapshotPortableCatalogPath(claim.materializationRelativePath)
+      : snapshotCatalogPath(claim.materializationRelativePath)
     const key = pathKey(materializationRelativePath)
     const existing = this.#claims.get(key)
     if (existing !== undefined &&
@@ -45,7 +45,7 @@ export class LogicalSiblingNamespaceAuthority implements PersistentOutputNamespa
   }
 
   membership(pathInput: readonly string[]) {
-    const path = pathInput.length === 0 ? Object.freeze([]) : snapshotPortableCatalogPath(pathInput)
+    const path = pathInput.length === 0 ? Object.freeze([]) : snapshotCatalogPath(pathInput)
     return this.#claims.get(pathKey(path))
   }
 }
@@ -86,7 +86,7 @@ export class PhysicalPathResolver {
     logicalPathInput: readonly string[],
     entryKind: CompatibleNameEntryKind,
   ): CompatibleNameMappingV1 | undefined {
-    const logicalPath = snapshotPortableCatalogPath(logicalPathInput)
+    const logicalPath = snapshotCatalogPath(logicalPathInput)
     return this.#mappings.get(mappingKey(logicalPath, entryKind))
   }
 
@@ -94,7 +94,7 @@ export class PhysicalPathResolver {
     logicalPathInput: readonly string[],
     entryKind: CompatibleNameEntryKind,
   ): string {
-    const logicalPath = snapshotPortableCatalogPath(logicalPathInput)
+    const logicalPath = snapshotCatalogPath(logicalPathInput)
     return this.#mappings.get(mappingKey(logicalPath, entryKind))?.physicalComponent ??
       logicalPath.at(-1)!
   }
@@ -102,7 +102,7 @@ export class PhysicalPathResolver {
   hasClaimedPhysicalComponent(parentPathInput: readonly string[], component: string): boolean {
     const parentPath = parentPathInput.length === 0
       ? Object.freeze([])
-      : snapshotPortableCatalogPath(parentPathInput)
+      : snapshotCatalogPath(parentPathInput)
     const physicalParent = this.#physicalParent(parentPath)
     if (this.#physicalByParent.has(physicalParentKey(physicalParent, component))) return true
     return this.#isPairClaim(physicalParent, component)
@@ -111,7 +111,7 @@ export class PhysicalPathResolver {
   hasClaimedLogicalSibling(parentPathInput: readonly string[], component: string): boolean {
     const parentPath = parentPathInput.length === 0
       ? Object.freeze([])
-      : snapshotPortableCatalogPath(parentPathInput)
+      : snapshotCatalogPath(parentPathInput)
     return this.hasClaimedPhysicalComponent(parentPath, component)
   }
 
@@ -122,7 +122,7 @@ export class PhysicalPathResolver {
   ): CompatiblePhysicalChild {
     const parentLogicalPath = parentLogicalPathInput.length === 0
       ? Object.freeze([])
-      : snapshotPortableCatalogPath(parentLogicalPathInput)
+      : snapshotCatalogPath(parentLogicalPathInput)
     const physicalParent = this.#physicalParent(parentLogicalPath)
     if (this.#isPairClaim(physicalParent, physicalComponent)) {
       return Object.freeze({ kind: 'restoration-pair' })

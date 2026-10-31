@@ -18,6 +18,7 @@ import { identity, treeProof } from './fixture'
 describe('result naming and layout authority', () => {
   it.each([
     ['complete-directory', 'photos', 'photos'],
+    ['complete-directory', 'CON', 'CON'],
     ['directory-selection', 'photos', 'photos-selection'],
     ['synthetic-selection', undefined, 'windshare'],
   ] as const)('maps %s to one shared directory/ZIP result root', async (kind, sourcePath, expected) => {
@@ -59,8 +60,8 @@ describe('result naming and layout authority', () => {
     expect(layout.name.endsWith('-selection')).toBe(true)
     expect(() => resultRootLayoutFromProof(treeProof({
       kind: 'complete-directory',
-      anchor: { directoryId: identity(43), sourcePath: 'CON' },
-    }))).toThrow(/path policy|portable policy/u)
+      anchor: { directoryId: identity(43), sourcePath: '../outside' },
+    }))).toThrow(/path policy/u)
     expect(() => resultRootLayoutFromProof(treeProof({
       kind: 'complete-directory',
       anchor: { directoryId: identity(44), sourcePath: 're\u0301sume\u0301' },

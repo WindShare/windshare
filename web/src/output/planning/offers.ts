@@ -112,12 +112,12 @@ async function singleFileCandidates(
   const original = await createOriginalFileArtifact({
     fileId: file.fileId,
     sourcePath: file.sourcePath,
-    suggestedName: file.portableName,
+    suggestedName: file.catalogName,
   })
   const directoryTree = await createSingleFileDirectoryTreeArtifact({
     fileId: file.fileId,
     sourcePath: file.sourcePath,
-    outputName: file.portableName,
+    outputName: file.catalogName,
   })
   const completeRoute = chooseOriginalFileRoute(environment, projection.metrics.byteCountLowerBound)
   const candidates: PlanningArtifactCandidate[] = []

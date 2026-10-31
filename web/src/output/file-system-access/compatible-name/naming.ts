@@ -1,8 +1,9 @@
 import {
-  isPortableCatalogName,
-  snapshotPortableCatalogPath,
+  isCatalogName,
+  snapshotCatalogPath,
   CATALOG_NAME_BYTES,
 } from '../../../catalog/path-policy'
+import { isPortableOutputName } from '../../names/policy'
 import { sha256 } from '../../../crypto/digest'
 import type { CryptoRuntime } from '../../../crypto/webcrypto'
 import {
@@ -86,7 +87,7 @@ export async function compatibleNameCandidate(
   cryptoRuntime?: CryptoRuntime,
 ): Promise<CompatibleNameCandidate> {
   const operationId = snapshotIdentity(input.operationId, OPERATION_ID_BYTES, 'operation ID')
-  const logicalPath = snapshotPortableCatalogPath(input.logicalPath)
+  const logicalPath = snapshotCatalogPath(input.logicalPath)
   const entryKind = compatibleNameEntryKind(input.entryKind)
   const attempt = compatibleNameAttempt(input.attempt)
   const primaryToken = compatibleNameToken(input.primaryToken, 'primary compatible-name token')
@@ -98,8 +99,8 @@ export async function compatibleNameCandidate(
     )
   const readablePrefix = compatibleNameReadablePrefix(logicalPath.at(-1) ?? '')
   const physicalComponent = `${readablePrefix}${COMPATIBLE_NAME_SUFFIX}${token}`
-  if (!isPortableCatalogName(physicalComponent)) {
-    throw new TypeError('compatible physical component violates the canonical path policy')
+  if (!isPortableOutputName(physicalComponent)) {
+    throw new TypeError('compatible physical component violates the portable output policy')
   }
   return Object.freeze({
     operationId,
@@ -112,14 +113,14 @@ export async function compatibleNameCandidate(
 }
 
 export function compatibleNameReadablePrefix(logicalComponent: string): string {
-  if (!isPortableCatalogName(logicalComponent)) {
+  if (!isCatalogName(logicalComponent)) {
     throw new TypeError('compatible-name prefix source violates the canonical path policy')
   }
   const sanitizedPrefix = sanitizeCompatibleNameReadablePrefix(logicalComponent)
   const prefix = truncateCompatibleNameReadablePrefix(sanitizedPrefix)
   // Removing punctuation can expose a Windows-reserved stem (for example, `COM1!` -> `COM1`).
-  // Prefixing that rare result keeps candidate generation total for every portable source name.
-  if (!isPortableCatalogName(`${prefix}${COMPATIBLE_NAME_SUFFIX}${PORTABILITY_PROBE_TOKEN}`)) {
+  // Prefixing that rare result keeps candidate generation total for every catalog name.
+  if (!isPortableOutputName(`${prefix}${COMPATIBLE_NAME_SUFFIX}${PORTABILITY_PROBE_TOKEN}`)) {
     return truncateCompatibleNameReadablePrefix(
       `${COMPATIBLE_NAME_READABLE_PREFIX_FALLBACK}${READABLE_SEPARATOR}${prefix}`,
     )

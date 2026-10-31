@@ -84,7 +84,7 @@ func TestCatalogWireDecodersRejectAuthenticatedSemanticConfusion(t *testing.T) {
 		6: uint64(catalog.CapabilityCatalog),
 		7: fixture.publicKey,
 		8: uint64(1),
-		9: catalog.PathPolicyV1,
+		9: catalog.PathPolicyV2,
 	}
 	badDescriptorNumber := cloneIntegerFields(descriptorFields)
 	badDescriptorNumber[1] = ^uint64(0)

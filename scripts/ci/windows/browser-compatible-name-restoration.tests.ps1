@@ -7,7 +7,7 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../..'))
 $templatePath = Join-Path $repositoryRoot 'web/src/output/file-system-access/compatible-name/restoration/windows-v1.ps1'
 $expectedTemplateId = 'windows-powershell-v1'
-$expectedSidecarVersion = 'windshare-name-restoration/v2'
+$expectedSidecarVersion = 'windshare-name-restoration/v3'
 $utf8WithoutBom = New-Object Text.UTF8Encoding($false, $true)
 
 function Assert-True {
@@ -176,13 +176,14 @@ function Invoke-DisplayedRestorationCommand {
 
     # A fresh process proves the user-facing command owns its policy override instead of inheriting
     # this contract process's ambient Bypass policy.
-    & powershell.exe `
+    $commandOutput = @(& powershell.exe `
         -NoProfile `
         -ExecutionPolicy Bypass `
-        -File $ScriptPath
+        -File $ScriptPath 2>&1)
     if ($LASTEXITCODE -ne 0) {
-        throw "Displayed WindShare restoration command failed with exit code $LASTEXITCODE."
+        throw "Displayed WindShare restoration command failed with exit code $LASTEXITCODE. $($commandOutput -join [Environment]::NewLine)"
     }
+    $commandOutput
 }
 
 function Invoke-DisplayedRestorationCommandFromRestrictedParent {
@@ -361,6 +362,30 @@ try {
         -Expected 'nested-content' `
         -Actual ([IO.File]::ReadAllText((Join-Path $complete.Root 'rejected-dir/pyvenv.cfg'))) `
         -Message 'rerun treats restored path state as complete'
+
+    $destinationNames = New-OperationRoot -Parent $temporaryRoot -Name 'destination-specific names'
+    New-ContractFile -Path (Join-Path $destinationNames.Root 'nul.windshare-aaaaaa') -Contents 'reserved-name-content'
+    New-ContractFile -Path (Join-Path $destinationNames.Root 'question.windshare-aaaaaa') -Contents 'retained-content'
+    New-ContractFile -Path (Join-Path $destinationNames.Root 'normal.windshare-aaaaaa') -Contents 'normal-content'
+    $destinationRecords = @(
+        [PSCustomObject]@{ Ordinal = 1; Kind = 'file'; LogicalPath = 'NUL .txt'; PhysicalComponent = 'nul.windshare-aaaaaa' },
+        [PSCustomObject]@{ Ordinal = 2; Kind = 'file'; LogicalPath = 'question?.txt'; PhysicalComponent = 'question.windshare-aaaaaa' },
+        [PSCustomObject]@{ Ordinal = 3; Kind = 'file'; LogicalPath = 'normal.cfg'; PhysicalComponent = 'normal.windshare-aaaaaa' }
+    )
+    Write-Sidecar -Path $destinationNames.Sidecar -Records $destinationRecords -State completed
+    Invoke-DisplayedRestorationCommand -ScriptPath $destinationNames.Script | Out-Null
+    Assert-Equal -Expected 'reserved-name-content' `
+        -Actual ([IO.File]::ReadAllText((Join-Path $destinationNames.Root 'NUL .txt'))) `
+        -Message 'device-like catalog name is restored literally'
+    Assert-Equal -Expected 'retained-content' `
+        -Actual ([IO.File]::ReadAllText((Join-Path $destinationNames.Root 'question.windshare-aaaaaa'))) `
+        -Message 'unsupported destination spelling retains compatible content'
+    Assert-Equal -Expected 'normal-content' `
+        -Actual ([IO.File]::ReadAllText((Join-Path $destinationNames.Root 'normal.cfg'))) `
+        -Message 'unsupported spelling does not block other restorations'
+    Assert-True -Condition (Test-Path -LiteralPath $destinationNames.Sidecar) `
+        -Message 'incomplete restoration retains the durable original-name report'
+    Invoke-DisplayedRestorationCommand -ScriptPath $destinationNames.Script | Out-Null
 
     $missingPair = New-OperationRoot -Parent $temporaryRoot -Name 'missing exact pair'
     $pairSource = Join-Path $missingPair.Root 'payload.windshare-bbbbbb'

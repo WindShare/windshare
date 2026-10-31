@@ -1,4 +1,4 @@
-import { catalogNameCollisionKey, snapshotPortableCatalogPath } from '../../catalog/path-policy'
+import { catalogNameCollisionKey, snapshotCatalogPath } from '../../catalog/path-policy'
 import type { CommittedDirectory } from '../../catalog/page-store'
 import { MAXIMUM_DIRECTORY_PAGES } from '../../catalog/client'
 import {
@@ -35,7 +35,7 @@ export class CatalogTraversalGuard {
 
   entryPath(cursor: DirectoryCursor, entry: CatalogEntry): readonly string[] {
     try {
-      return snapshotPortableCatalogPath([...cursor.path, entry.name])
+      return snapshotCatalogPath([...cursor.path, entry.name])
     } catch (cause) {
       throw new DirectoryTraversalError('Catalog entry exceeded the protocol path policy', { cause })
     }
@@ -164,7 +164,7 @@ function catalogEntryAuthority(entry: CatalogEntry): {
   try {
     nameKey = catalogNameCollisionKey(entry.name)
   } catch (cause) {
-    throw new CatalogTraversalError('Catalog page contains a non-portable sibling name', { cause })
+    throw new CatalogTraversalError('Catalog page contains an invalid catalog sibling name', { cause })
   }
   return {
     nameBytes: TEXT_ENCODER.encode(entry.name),

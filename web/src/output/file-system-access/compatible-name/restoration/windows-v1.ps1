@@ -9,7 +9,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $script:WindShareRestorationTemplateId = 'windows-powershell-v1'
-$script:WindShareSidecarVersion = 'windshare-name-restoration/v2'
+$script:WindShareSidecarVersion = 'windshare-name-restoration/v3'
 $script:WindShareTerminalStates = @('completed', 'stopped', 'failed')
 $script:WindShareAllowedStates = @('active') + $script:WindShareTerminalStates
 $script:WindShareAllowedPlacements = @('inside', 'beside')
@@ -29,6 +29,9 @@ namespace WindShare.Restoration
             string existingFileName,
             string newFileName,
             UInt32 flags);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "GetFileAttributesW")]
+        public static extern UInt32 GetFileAttributesW(string fileName);
     }
 }
 '@
@@ -194,9 +197,12 @@ function Get-WindShareLogicalPathParts {
         [char]'/', [StringSplitOptions]::None
     ))
     foreach ($part in $parts) {
-        Assert-WindSharePathComponent `
-            -Component $part `
-            -FieldName 'logicalPath'
+        # Logical names are metadata. Destination restrictions are checked only
+        # before a rename, so an unrestorable item cannot invalidate the report.
+        if ([string]::IsNullOrEmpty($part) -or $part -eq '.' -or $part -eq '..' -or
+            $part.Contains(':') -or (Test-WindShareContainsControlCharacter -Value $part)) {
+            throw "WindShare sidecar logical path contains an invalid component."
+        }
     }
     return $parts
 }
@@ -438,7 +444,22 @@ function Test-WindSharePathPresent {
         [string]$Path
     )
 
-    return Test-Path -LiteralPath $Path
+    return $null -ne (Get-WindSharePathAttributes -Path $Path)
+}
+
+function Get-WindSharePathAttributes {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    # PowerShell's provider can interpret device stems differently from the
+    # native rename API. Inspection must use the same literal namespace.
+    $attributes = [WindShare.Restoration.NativeMethods]::GetFileAttributesW(
+        (ConvertTo-WindShareExtendedPath -Path $Path)
+    )
+    if ($attributes -ne [uint32]::MaxValue) { return $attributes }
+    $nativeError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    $fileNotFound = 2
+    $pathNotFound = 3
+    if ($nativeError -eq $fileNotFound -or $nativeError -eq $pathNotFound) { return $null }
+    throw (New-Object ComponentModel.Win32Exception($nativeError))
 }
 
 function Assert-WindShareTraversableDirectory {
@@ -451,11 +472,11 @@ function Assert-WindShareTraversableDirectory {
         [string]$LogicalPath
     )
 
-    $item = Get-Item -LiteralPath $Path -Force
-    if (-not $item.PSIsContainer) {
+    $attributes = Get-WindSharePathAttributes -Path $Path
+    if ($null -eq $attributes -or ($attributes -band [IO.FileAttributes]::Directory) -eq 0) {
         throw "WindShare restoration ancestor '$LogicalPath' is not a directory."
     }
-    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
         throw "WindShare restoration refuses reparse-point ancestor '$LogicalPath'."
     }
 }
@@ -533,6 +554,11 @@ function Invoke-WindShareRestorationRecord {
         [hashtable]$RecordsByLogicalPath
     )
 
+    foreach ($part in $Record.LogicalParts) {
+        if ($part.IndexOfAny([IO.Path]::GetInvalidFileNameChars()) -ge 0) {
+            return [PSCustomObject]@{ Status = 'unsupported-name'; LogicalPath = $Record.LogicalPath }
+        }
+    }
     $parentPath = Resolve-WindShareRestorationParent `
         -AnchorPath $AnchorPath `
         -Record $Record `
@@ -540,20 +566,26 @@ function Invoke-WindShareRestorationRecord {
     $logicalLeaf = $Record.LogicalParts[$Record.LogicalParts.Count - 1]
     $sourcePath = Join-Path $parentPath $Record.PhysicalComponent
     $targetPath = Join-Path $parentPath $logicalLeaf
+    # Older .NET path normalization can discard trailing dots/spaces. A repair
+    # must preserve the exact requested name or leave the compatible file intact.
+    if ([IO.Path]::GetFileName([IO.Path]::GetFullPath($targetPath)) -cne $logicalLeaf) {
+        return [PSCustomObject]@{ Status = 'unsupported-name'; LogicalPath = $Record.LogicalPath }
+    }
     $sourcePresent = Test-WindSharePathPresent -Path $sourcePath
     $targetPresent = Test-WindSharePathPresent -Path $targetPath
 
     if ($sourcePresent -and -not $targetPresent) {
-        $sourceItem = Get-Item -LiteralPath $sourcePath -Force
+        $sourceAttributes = Get-WindSharePathAttributes -Path $sourcePath
+        $sourceIsDirectory = ($sourceAttributes -band [IO.FileAttributes]::Directory) -ne 0
         if (
-            ($Record.Kind -ceq 'directory' -and -not $sourceItem.PSIsContainer) -or
-            ($Record.Kind -ceq 'file' -and $sourceItem.PSIsContainer)
+            ($Record.Kind -ceq 'directory' -and -not $sourceIsDirectory) -or
+            ($Record.Kind -ceq 'file' -and $sourceIsDirectory)
         ) {
             throw "WindShare restoration source '$($Record.LogicalPath)' has the wrong entry kind."
         }
         if (
-            $sourceItem.PSIsContainer -and
-            (($sourceItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)
+            $sourceIsDirectory -and
+            (($sourceAttributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)
         ) {
             throw "WindShare restoration refuses reparse-point source '$($Record.LogicalPath)'."
         }
@@ -561,13 +593,11 @@ function Invoke-WindShareRestorationRecord {
         Invoke-WindShareNoReplaceMove `
             -SourcePath $sourcePath `
             -TargetPath $targetPath
-        Write-Output "restored: $($Record.LogicalPath)"
-        return
+        return [PSCustomObject]@{ Status = 'restored'; LogicalPath = $Record.LogicalPath }
     }
 
     if (-not $sourcePresent -and $targetPresent) {
-        Write-Output "already restored: $($Record.LogicalPath)"
-        return
+        return [PSCustomObject]@{ Status = 'already-restored'; LogicalPath = $Record.LogicalPath }
     }
 
     if ($sourcePresent -and $targetPresent) {
@@ -612,11 +642,18 @@ function Invoke-WindShareRestoration {
     $orderedRecords = @($checkpoint.Records | Sort-Object `
         @{ Expression = { $_.Depth }; Descending = $true }, `
         @{ Expression = { $_.Ordinal }; Descending = $true })
+    $unsupportedCount = 0
     foreach ($record in $orderedRecords) {
-        Invoke-WindShareRestorationRecord `
+        $result = Invoke-WindShareRestorationRecord `
             -AnchorPath $scriptDirectory `
             -Record $record `
             -RecordsByLogicalPath $checkpoint.RecordsByLogicalPath
+        Write-Output "$($result.Status): $($result.LogicalPath)"
+        if ($result.Status -eq 'unsupported-name') { $unsupportedCount++ }
+    }
+    if ($unsupportedCount -gt 0) {
+        Write-Warning "$unsupportedCount names cannot be restored in this environment. Compatible files are retained; keep the script and sidecar."
+        return
     }
 
     Write-Output (

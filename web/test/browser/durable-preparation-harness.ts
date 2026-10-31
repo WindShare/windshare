@@ -517,7 +517,7 @@ export function productZipProjection(
     kind: 'directory' as const,
     directoryId,
     sourcePath: 'micro-share',
-    portableName: 'micro-share',
+    catalogName: 'micro-share',
   })
   return Object.freeze({
     version: 1 as const,

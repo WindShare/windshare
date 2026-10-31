@@ -4,16 +4,15 @@ import {
   PINNED_NORMALIZATION_VERSION,
 } from '../unicode/unicode-normalization'
 
-export const PATH_POLICY = 'windshare/path/v1-unicode-15.0.0'
+export const PATH_POLICY = 'windshare/path/v2-unicode-15.0.0'
 export const PATH_POLICY_UNICODE_VERSION = PINNED_CASE_FOLD_VERSION
 export const CATALOG_NAME_BYTES = 255
 export const CATALOG_PATH_BYTES = 32 * 1024
 export const CATALOG_PATH_DEPTH = 256
 
 const TEXT_ENCODER = new TextEncoder()
-const SNAPSHOTTED_PORTABLE_PATHS = new WeakSet<readonly string[]>()
+const SNAPSHOTTED_CATALOG_PATHS = new WeakSet<readonly string[]>()
 const RESERVED_OUTPUT_PREFIX = '.wsresume'
-const WINDOWS_ILLEGAL_CHARACTERS = new Set('<>:"|?*\\')
 const FORMAT_CHARACTER_RANGES: readonly (readonly [number, number])[] = [
   [0x00ad, 0x00ad],
   [0x0600, 0x0605],
@@ -37,20 +36,7 @@ const FORMAT_CHARACTER_RANGES: readonly (readonly [number, number])[] = [
   [0xe0001, 0xe0001],
   [0xe0020, 0xe007f],
 ]
-const WINDOWS_RESERVED_NAMES = (() => {
-  const names = new Set(['con', 'prn', 'aux', 'nul', 'conin$', 'conout$'])
-  for (let suffix = 1; suffix <= 9; suffix += 1) {
-    names.add(`com${suffix}`)
-    names.add(`lpt${suffix}`)
-  }
-  for (const suffix of ['¹', '²', '³']) {
-    names.add(`com${suffix}`)
-    names.add(`lpt${suffix}`)
-  }
-  return names
-})()
-
-export function isPortableCatalogName(name: string): boolean {
+export function isCatalogName(name: string): boolean {
   if (
     name.length === 0 ||
     name === '.' ||
@@ -59,41 +45,39 @@ export function isPortableCatalogName(name: string): boolean {
     normalizeNFC15(name) !== name ||
     name.includes('/') ||
     name.includes('\\') ||
-    name.endsWith('.') ||
-    name.endsWith(' ') ||
-    TEXT_ENCODER.encode(name).byteLength > CATALOG_NAME_BYTES ||
-    isWindowsReservedName(name)
+    name.includes(':') ||
+    TEXT_ENCODER.encode(name).byteLength > CATALOG_NAME_BYTES
   ) return false
   for (const character of name) {
     const scalar = character.codePointAt(0) ?? 0
-    if (isControlOrFormatCharacter(scalar) || WINDOWS_ILLEGAL_CHARACTERS.has(character)) return false
+    if (isControlOrFormatCharacter(scalar)) return false
   }
   return true
 }
 
 export function catalogNameCollisionKey(name: string): string {
-  if (!isPortableCatalogName(name)) throw new TypeError('Catalog name violates the frozen path policy')
+  if (!isCatalogName(name)) throw new TypeError('Catalog name violates the frozen path policy')
   return foldPortableName15(name)
 }
 
 /** Canonicalizes a locally composed catalog path; wire entries remain single segments. */
-export function canonicalizePortableCatalogPath(path: string): string {
+export function canonicalizeCatalogPath(path: string): string {
   if (!isWellFormedUnicode(path)) throw new TypeError('Catalog path contains invalid Unicode')
   const canonical = normalizeNFC15(path)
   const segments = canonical.split('/')
-  snapshotPortableCatalogPath(segments)
+  snapshotCatalogPath(segments)
   return segments.join('/')
 }
 
 /** Validates an already segmented path without hiding traversal ownership in a joined string. */
-export function snapshotPortableCatalogPath(path: readonly string[]): readonly string[] {
-  if (SNAPSHOTTED_PORTABLE_PATHS.has(path)) return path
+export function snapshotCatalogPath(path: readonly string[]): readonly string[] {
+  if (SNAPSHOTTED_CATALOG_PATHS.has(path)) return path
   if (!Array.isArray(path) || path.length === 0 || path.length > CATALOG_PATH_DEPTH) {
     throw new TypeError('Catalog path violates the frozen path policy')
   }
   let pathBytes = path.length - 1
   for (const segment of path) {
-    if (!isPortableCatalogName(segment)) {
+    if (!isCatalogName(segment)) {
       throw new TypeError('Catalog path violates the frozen path policy')
     }
     pathBytes += TEXT_ENCODER.encode(segment).byteLength
@@ -103,12 +87,12 @@ export function snapshotPortableCatalogPath(path: readonly string[]): readonly s
     foldPortableName15(path[0] ?? '').startsWith(RESERVED_OUTPUT_PREFIX)
   ) throw new TypeError('Catalog path violates the frozen path policy')
   const snapshot = Object.freeze([...path])
-  SNAPSHOTTED_PORTABLE_PATHS.add(snapshot)
+  SNAPSHOTTED_CATALOG_PATHS.add(snapshot)
   return snapshot
 }
 
 export function catalogPathCollisionKey(path: string): string {
-  const canonical = canonicalizePortableCatalogPath(path)
+  const canonical = canonicalizeCatalogPath(path)
   return foldPortableName15(canonical)
 }
 
@@ -142,33 +126,7 @@ function isControlOrFormatCharacter(scalar: number): boolean {
   return scalar <= 0x1f || (scalar >= 0x7f && scalar <= 0x9f) || isFormatCharacter(scalar)
 }
 
-function isWindowsReservedName(segment: string): boolean {
-  // Mirrors Go's internal/filepathlite isReservedName: the device stem ends at
-  // the first '.' (':' is already rejected as non-portable) and only trailing
-  // U+0020 spaces are ignored, so `NUL .txt` is still the NUL device while
-  // `NUL\u00a0.txt` is not.
-  const stem = trimTrailingSpaces(segment.split('.', 1)[0] ?? '')
-  return WINDOWS_RESERVED_NAMES.has(asciiLower(stem))
-}
-
-// A loop rather than `trimEnd()` (which also strips NBSP and other Unicode
-// spaces) or `/ +$/` (rejected by sonarjs/super-linear-regex).
-function trimTrailingSpaces(value: string): string {
-  let end = value.length
-  while (end > 0 && value.charCodeAt(end - 1) === 0x20 /* U+0020 SPACE */) end -= 1
-  return value.slice(0, end)
-}
-
-function asciiLower(value: string): string {
-  let lowered = ''
-  for (const character of value) {
-    const code = character.codePointAt(0) ?? 0
-    lowered += code >= 0x41 && code <= 0x5a ? String.fromCodePoint(code + 0x20) : character
-  }
-  return lowered
-}
-
 if (
-  PATH_POLICY !== `windshare/path/v1-unicode-${PINNED_CASE_FOLD_VERSION}` ||
+  PATH_POLICY !== `windshare/path/v2-unicode-${PINNED_CASE_FOLD_VERSION}` ||
   PINNED_NORMALIZATION_VERSION !== PINNED_CASE_FOLD_VERSION
 ) throw new Error('Catalog path policy does not match its pinned Unicode tables')

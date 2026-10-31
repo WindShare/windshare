@@ -1,11 +1,11 @@
 {
   "version": 1,
   "kind": "path-policy",
-  "description": "版本化跨平台路径契约。Canonicalize 只做 NFC;CollisionKey = NFC(Unicode 15.0.0 locale-independent full case fold(path))。valid 用例记录规范路径及碰撞键,同一 collisionGroup 必须碰撞;invalid-path 用例必须在清单或文件系统操作前拒绝。根级 .wsresume 前缀按完整折叠保留,Cc/Cf、Win32 非法/设备名(含上标 COM/LPT、CONIN$/CONOUT$,以及主干与扩展名之间带空格的设备名)均拒绝。",
+  "description": "Logical catalog paths use Unicode 15 NFC and full-fold sibling identity. Structural and control-character violations are rejected. Destination-specific names remain transferable; portableOutput describes conventional disk-name compatibility, independently of catalog validity.",
   "cases": [
     {
       "name": "policy-version",
-      "policyVersion": "windshare/path/v1-unicode-15.0.0",
+      "policyVersion": "windshare/path/v2-unicode-15.0.0",
       "unicodeVersion": "15.0.0"
     },
     {
@@ -135,68 +135,148 @@
     {
       "name": "superscript-com-device",
       "input": "COM¹.txt",
-      "expected": "invalid-path"
+      "expected": "valid",
+      "canonical": "COM¹.txt",
+      "collisionKey": "com¹.txt",
+      "portableOutput": false
     },
     {
       "name": "superscript-lpt-device",
       "input": "lpt²",
-      "expected": "invalid-path"
+      "expected": "valid",
+      "canonical": "lpt²",
+      "collisionKey": "lpt²",
+      "portableOutput": false
     },
     {
       "name": "console-input-device",
       "input": "CONIN$",
-      "expected": "invalid-path"
+      "expected": "valid",
+      "canonical": "CONIN$",
+      "collisionKey": "conin$",
+      "portableOutput": false
     },
     {
       "name": "console-output-device",
       "input": "conout$.log",
-      "expected": "invalid-path"
+      "expected": "valid",
+      "canonical": "conout$.log",
+      "collisionKey": "conout$.log",
+      "portableOutput": false
     },
     {
       "name": "device-stem-trailing-space",
       "input": "NUL .txt",
-      "expected": "invalid-path"
+      "expected": "valid",
+      "canonical": "NUL .txt",
+      "collisionKey": "nul .txt",
+      "portableOutput": false
     },
     {
       "name": "nested-device-stem-trailing-spaces",
       "input": "safe/com1  .tar.gz",
-      "expected": "invalid-path"
+      "expected": "valid",
+      "canonical": "safe/com1  .tar.gz",
+      "collisionKey": "safe/com1  .tar.gz",
+      "portableOutput": false
     },
     {
       "name": "spaced-device-stem-and-extension",
       "input": "CON . txt",
-      "expected": "invalid-path"
+      "expected": "valid",
+      "canonical": "CON . txt",
+      "collisionKey": "con . txt",
+      "portableOutput": false
     },
     {
       "name": "console-device-stem-trailing-space",
       "input": "conin$ .log",
-      "expected": "invalid-path"
+      "expected": "valid",
+      "canonical": "conin$ .log",
+      "collisionKey": "conin$ .log",
+      "portableOutput": false
     },
     {
       "name": "superscript-device-stem-trailing-space",
       "input": "COM¹ .log",
-      "expected": "invalid-path"
+      "expected": "valid",
+      "canonical": "COM¹ .log",
+      "collisionKey": "com¹ .log",
+      "portableOutput": false
     },
     {
       "name": "device-stem-trailing-nbsp-is-not-trimmed",
-      "input": "NUL\u00a0.txt",
+      "input": "NUL .txt",
       "expected": "valid",
-      "canonical": "NUL\u00a0.txt",
-      "collisionKey": "nul\u00a0.txt"
+      "canonical": "NUL .txt",
+      "collisionKey": "nul .txt",
+      "portableOutput": true
     },
     {
       "name": "device-stem-leading-space-is-not-trimmed",
       "input": " NUL.txt",
       "expected": "valid",
       "canonical": " NUL.txt",
-      "collisionKey": " nul.txt"
+      "collisionKey": " nul.txt",
+      "portableOutput": true
     },
     {
       "name": "non-device-stem-trailing-space",
       "input": "NULx .txt",
       "expected": "valid",
       "canonical": "NULx .txt",
-      "collisionKey": "nulx .txt"
+      "collisionKey": "nulx .txt",
+      "portableOutput": true
+    },
+    {
+      "name": "destination-specific-trailing-space ",
+      "input": "tree/trailing-space ",
+      "expected": "valid",
+      "canonical": "tree/trailing-space ",
+      "collisionKey": "tree/trailing-space ",
+      "portableOutput": false
+    },
+    {
+      "name": "destination-specific-trailing-dot.",
+      "input": "tree/trailing-dot.",
+      "expected": "valid",
+      "canonical": "tree/trailing-dot.",
+      "collisionKey": "tree/trailing-dot.",
+      "portableOutput": false
+    },
+    {
+      "name": "destination-specific-question?.txt",
+      "input": "tree/question?.txt",
+      "expected": "valid",
+      "canonical": "tree/question?.txt",
+      "collisionKey": "tree/question?.txt",
+      "portableOutput": false
+    },
+    {
+      "name": "destination-specific-time:12.txt",
+      "input": "tree/time:12.txt",
+      "expected": "invalid-path"
+    },
+    {
+      "name": "destination-specific-C:drive",
+      "input": "tree/C:drive",
+      "expected": "invalid-path"
+    },
+    {
+      "name": "destination-specific-CON",
+      "input": "tree/CON",
+      "expected": "valid",
+      "canonical": "tree/CON",
+      "collisionKey": "tree/con",
+      "portableOutput": false
+    },
+    {
+      "name": "destination-specific-NUL",
+      "input": "tree/NUL",
+      "expected": "valid",
+      "canonical": "tree/NUL",
+      "collisionKey": "tree/nul",
+      "portableOutput": false
     }
   ]
 }
