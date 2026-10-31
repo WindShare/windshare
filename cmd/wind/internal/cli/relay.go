@@ -96,7 +96,10 @@ func (app *App) runRelay(ctx context.Context, args []string) int {
 	return ExitOK
 }
 
-// isFlagHelpArgument reports the spellings the flag package treats as a help request.
+// isFlagHelpArgument reports whether argument is one of the bare help flags
+// -h, -help, --h or --help. Valued forms such as -h=true or --help=1, which the
+// flag package also treats as a help request, are not recognized, so in the
+// first operand position they are still taken as the URL.
 func isFlagHelpArgument(argument string) bool {
 	switch argument {
 	case "-h", "-help", "--h", "--help":
