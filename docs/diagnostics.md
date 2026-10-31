@@ -93,11 +93,12 @@ Capture stops and page hiding flush pending evidence. Final snapshots and their 
 restarts. Pending snapshots obey the archive retention limits, plus one in-flight body while its write settles.
 Saves retry up to three times per snapshot. Unchanged evidence is not rewritten, retained events reuse encoded
 records, and empty captures are not archived.
-After reload, **Previous diagnostics** exports the latest saved capture for that page, with its original
-run identity. An empty current run offers no file, so it cannot be mistaken for the saved evidence.
+After reload, **Previous diagnostics** offers the latest file and expandable older files for that page,
+with their original run identities. Newer failure snapshots do not hide saved-recording notices.
+An empty current run offers no file.
 The archive admits up to three captures for 24 hours, at most 12 MiB each / 16 MiB total;
-expired records are pruned on access. Startup reads only archive summaries; opening the diagnostics
-panel loads the previous file on demand. The archive is separate from transfer storage.
+expired records are pruned on access. Startup reads only archive summaries; file contents load when
+revealed in the diagnostics panel. The archive is separate from transfer storage.
 Storage denial leaves live export available. Abrupt browser termination can lose events since the last
 successful save. Download names include the timestamp and run ID and use `.ndjson`.
 

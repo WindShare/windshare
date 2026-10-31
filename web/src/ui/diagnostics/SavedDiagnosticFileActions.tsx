@@ -22,7 +22,7 @@ export function SavedDiagnosticFileActions({ captureId, readFile, delivery }: {
     return () => { active = false }
   }, [captureId, readFile])
 
-  // Prepare only when the panel opens; the eventual share click can hand off
+  // Prepare when a saved file is revealed; the eventual share click can hand off
   // synchronously without making a user's gesture wait for browser storage.
   if (state.kind === 'loading') return <p role="status">Loading saved diagnostics…</p>
   if (state.kind === 'unavailable') return <p role="status">This saved diagnostic file is no longer available.</p>
