@@ -12,10 +12,11 @@ type trial struct {
 	sample   *sampleTrial
 }
 type sampleTrial struct {
-	path    PathIdentity
-	initial lanescheduling.SamplingEvidence
-	started time.Time
-	window  window
+	path          PathIdentity
+	initial       lanescheduling.SamplingEvidence
+	started       time.Time
+	window        window
+	settlingUntil time.Time
 }
 
 func (c *Controller) advanceTrial(now time.Time, o Observation, busy bool) Decision {
@@ -49,11 +50,16 @@ func (c *Controller) advanceTrial(now time.Time, o Observation, busy bool) Decis
 		d.Reason = "trial-observation-reset"
 		return c.endTrial(now, o, d, ObservationWindow)
 	}
+	// Natural allocation may have started work before the sampling grant.
+	pending := target.Work.OfferedBytes > target.Work.SettledBytes
 	if !busy {
+		if pending && o.UnfinishedBytes > 0 {
+			return c.settleTrial(now, o, work)
+		}
 		d.Reason = "trial-demand-ended"
 		return c.endTrial(now, o, d, ObservationWindow)
 	}
-	if work.OfferedBytes == 0 {
+	if work.OfferedBytes == 0 && work.BusyMilliseconds == 0 && work.SettledBytes == 0 {
 		s.window = windowAt(now, o)
 	}
 	if now.Sub(s.window.at) >= ObservationWindow {
@@ -61,11 +67,41 @@ func (c *Controller) advanceTrial(now time.Time, o Observation, busy bool) Decis
 			return decision
 		}
 	}
-	if now.Sub(s.started) >= lanescheduling.SampleLifetime {
-		d.Reason = "insufficient-scheduling-evidence"
-		return c.endTrial(now, o, d, ObservationWindow)
+	if s.settlingUntil.IsZero() && now.Sub(s.started) < lanescheduling.SampleLifetime {
+		return Decision{Action: Hold}
 	}
-	return Decision{Action: Hold}
+	if pending {
+		return c.settleTrial(now, o, work)
+	}
+	d.Reason = "insufficient-scheduling-evidence"
+	if work.OfferedBytes == 0 && work.SettledBytes == 0 {
+		d.Reason = "sampling-work-unavailable"
+	}
+	return c.endInconclusiveTrial(now, o, d)
+}
+
+func (c *Controller) settleTrial(now time.Time, o Observation, work lanescheduling.SamplingEvidence) Decision {
+	s := c.trial.sample
+	// Admission expiry stops accelerated allocation, not work already in flight.
+	// The absolute cap also bounds delayed ticks and ordinary allocations.
+	deadline := s.settlingUntil
+	if deadline.IsZero() {
+		deadline = s.started.Add(lanescheduling.SampleLifetime + settlementWindow)
+		if bounded := now.Add(settlementWindow); bounded.Before(deadline) {
+			deadline = bounded
+		}
+	}
+	d := Decision{Action: Retire, Reason: "sampling-work-unsettled", Path: s.path, Work: work}
+	if !now.Before(deadline) {
+		return c.endInconclusiveTrial(now, o, d)
+	}
+	if !s.settlingUntil.IsZero() {
+		return Decision{Action: Hold}
+	}
+	s.settlingUntil = deadline
+	d.Action, d.Reason = Settle, "sampling-work-settling"
+	d.BaselineUsefulRate, d.BaselineOutputRate = c.trial.baseline.useful, c.trial.baseline.output
+	return d
 }
 
 func (c *Controller) evaluateTrial(now time.Time, o Observation, work lanescheduling.SamplingEvidence) Decision {

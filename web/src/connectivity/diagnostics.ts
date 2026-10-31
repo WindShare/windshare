@@ -193,6 +193,7 @@ export type PeerRecoveryTraceEvent = PeerRecoveryBase & (
       networkWaitingBytes: number; inFlightBytes: number; remainingBytes: number; remainingKnown: boolean;
       paths: number; queuedBytes: number; unfinishedBytes: number; capacityWaitingBytes: number;
       usefulRate: number; outputRate: number; baselineUsefulRate: number; baselineOutputRate: number;
+      retryAfterMilliseconds?: number;
       trialPath?: Readonly<{ pathId: string; laneId: number; laneEpoch: number }>;
       trialWork?: import('../content/scheduling/sampling').SamplingEvidence }>
   | Readonly<{

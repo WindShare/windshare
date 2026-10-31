@@ -28,9 +28,9 @@ func TestDiagnosticSeparatesSocketTimeoutFromProviderFailure(t *testing.T) {
 	}
 }
 func TestDiagnosticDistinguishesUsefulWorkFromNetworkDemand(t *testing.T) {
-	source := Observation{Parallelism: &ParallelismFacts{Decision: throughput.Decision{UsefulRate: 123, OutputRate: 456}, Demand: throughput.Observation{NetworkWaitingBytes: math.MaxUint64, InFlightBytes: 10, RemainingBytes: 30, RemainingKnown: true, CapacityWaitingBytes: 20}}}
+	source := Observation{Parallelism: &ParallelismFacts{Decision: throughput.Decision{UsefulRate: 123, OutputRate: 456, RetryAfter: 30 * time.Second}, Demand: throughput.Observation{NetworkWaitingBytes: math.MaxUint64, InFlightBytes: 10, RemainingBytes: 30, RemainingKnown: true, CapacityWaitingBytes: 20}}}
 	p := source.DiagnosticRecord().Payload().Get("parallelism")
-	if p.Get("network_waiting_bytes").Uint() != math.MaxUint64 || p.Get("capacity_waiting_bytes").Uint() != 20 || p.Get("useful_rate").Uint() != 123 || p.Get("output_rate").Uint() != 456 {
+	if p.Get("network_waiting_bytes").Uint() != math.MaxUint64 || p.Get("capacity_waiting_bytes").Uint() != 20 || p.Get("useful_rate").Uint() != 123 || p.Get("output_rate").Uint() != 456 || p.Get("retry_after_ms").Uint() != 30000 {
 		t.Fatal("demand and measured delivery conflated")
 	}
 }

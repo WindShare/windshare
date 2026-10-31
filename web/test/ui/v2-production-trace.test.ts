@@ -444,6 +444,9 @@ describe('peer recovery terminal trace', () => {
 
   it.each([
     ['sample', 'path-sampling-started'],
+    ['settle', 'sampling-work-settling'],
+    ['retire', 'sampling-work-unavailable'],
+    ['retire', 'sampling-work-unsettled'],
     ['retire', 'insufficient-scheduling-evidence'],
     ['abandon', 'trial-path-replaced'],
   ] as const)('exports %s with the exact trial identity and settlement evidence', (action, reason) => {
@@ -452,12 +455,13 @@ describe('peer recovery terminal trace', () => {
       networkWaitingBytes: 1000, inFlightBytes: 100, remainingBytes: 10_000, remainingKnown: true,
       queuedBytes: 1000, unfinishedBytes: 100, capacityWaitingBytes: 0,
       usefulRate: 100, outputRate: 100, baselineUsefulRate: 100, baselineOutputRate: 100,
+      retryAfterMilliseconds: 30_000,
       trialPath: { pathId: 'AgICAgICAgICAgICAgICAg', laneId: 2, laneEpoch: 3 },
       trialWork: { offeredBytes: 400, settledBytes: 300, completedBytes: 100,
         completedAttempts: 1, failedAttempts: 1, supersededAttempts: 0, cancelledAttempts: 1, busyMilliseconds: 1500 },
     })
     expect(snapshotTraceEventObservationV2(projected).payload).toMatchObject({
-      action, reason, trial_path: { path_id: 'AgICAgICAgICAgICAgICAg', lane_id: 2, lane_epoch: 3 },
+      action, reason, retry_after_ms: 30_000, trial_path: { path_id: 'AgICAgICAgICAgICAgICAg', lane_id: 2, lane_epoch: 3 },
       trial_work: { offered_bytes: '400', settled_bytes: '300', completed_bytes: '100', completed_attempts: '1',
         failed_attempts: '1', superseded_attempts: '0', cancelled_attempts: '1', busy_ms: '1500' },
     })
