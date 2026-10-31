@@ -19,7 +19,7 @@ export interface BrowserDiagnosticsSnapshot {
   readonly capture: DiagnosticsStatusV2
   readonly activation: TraceActivationSnapshot
   readonly hasCurrentEvidence: boolean
-  readonly previous: DiagnosticCaptureSummary | null
+  readonly previousCaptures: readonly DiagnosticCaptureSummary[]
   readonly savedAt: number | null
   readonly archiveUnavailable: boolean
 }
@@ -204,7 +204,7 @@ export class BrowserDiagnosticsSession implements DiagnosticsRuntimePort {
       capture: evidence.status,
       activation: this.activation(),
       hasCurrentEvidence: evidence.hasEvidence,
-      previous: saved.find(capture => capture.scope === this.#scope && capture.id !== id) ?? null,
+      previousCaptures: Object.freeze(saved.filter(capture => capture.scope === this.#scope && capture.id !== id)),
       savedAt: saved.find(capture => capture.id === id)?.savedAt ?? null,
       archiveUnavailable: this.#archiveUnavailable,
     })
@@ -220,10 +220,13 @@ export class BrowserDiagnosticsSession implements DiagnosticsRuntimePort {
 
   #schedule(): void {
     if (this.#disposed || this.#timer !== undefined) return
-    const previous = this.#snapshot.previous
-    let delay: number | undefined
-    if (this.#snapshot.capture.enabled) delay = DIAGNOSTICS_CHECKPOINT_INTERVAL_MS
-    else if (previous !== null) delay = Math.max(1, previous.savedAt + DIAGNOSTICS_ARCHIVE_MAX_AGE_MS - this.#now())
+    const oldestPrevious = this.#snapshot.previousCaptures.at(-1)
+    let delay = this.#snapshot.capture.enabled ? DIAGNOSTICS_CHECKPOINT_INTERVAL_MS : undefined
+    if (oldestPrevious !== undefined) {
+      // Every offered file must expire on time, even behind a newer silent failure snapshot.
+      const expiryDelay = Math.max(1, oldestPrevious.savedAt + DIAGNOSTICS_ARCHIVE_MAX_AGE_MS - this.#now())
+      delay = delay === undefined ? expiryDelay : Math.min(delay, expiryDelay)
+    }
     if (delay === undefined) return
     this.#timer = this.#scheduler.schedule(delay, () => {
       this.#timer = undefined

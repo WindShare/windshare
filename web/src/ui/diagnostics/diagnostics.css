@@ -28,6 +28,15 @@
 .diagnostics-surface button:disabled { opacity: .6; cursor: wait; }
 .diagnostics-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .diagnostics-sheet section { margin-block: 24px; padding-top: 8px; border-top: 1px solid var(--receiver-rule); }
+.diagnostics-saved-file > h4 { margin: 0 0 4px; font-size: 14px; font-weight: 600; }
+.diagnostics-saved-file > p { margin: 0 0 12px; }
+.diagnostics-history { margin-top: 16px; border: 1px solid var(--receiver-rule); border-radius: 8px; }
+.diagnostics-history > summary { min-height: 44px; box-sizing: border-box; padding: 10px 12px; cursor: pointer; }
+.diagnostics-history > summary:hover { background: var(--receiver-wash); }
+.diagnostics-history > summary:focus-visible { outline: 2px solid var(--receiver-accent); outline-offset: 3px; }
+.diagnostics-history[open] > summary { border-bottom: 1px solid var(--receiver-rule); }
+.diagnostics-history > .diagnostics-saved-file { padding: 12px; }
+.diagnostics-history > .diagnostics-saved-file + .diagnostics-saved-file { border-top: 1px solid var(--receiver-rule); }
 .diagnostics-copy { display: grid; gap: 8px; }
 .diagnostics-copy textarea {
   width: 100%;
