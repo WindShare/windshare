@@ -9,11 +9,14 @@ export class LanePerformance {
   pendingBytes = 0
   bytesPerSecond = 0
   hasSuccessfulSample = false
+  #successfulBlocks = 0
   lastAttempt: number | undefined
   #busySince = 0
   #completedBytes = 0
   #activeSince = 0
   #busyMilliseconds = 0
+
+  get successfulBlocks(): number { return this.#successfulBlocks }
 
   begin(now: number, bytes: number): void {
     if (this.pendingBytes === 0) {
@@ -28,6 +31,7 @@ export class LanePerformance {
   complete(now: number, bytes: number, successful: boolean): void {
     const wasBusy = this.pendingBytes > 0
     if (successful && bytes > 0) {
+      this.#successfulBlocks++
       this.#completedBytes += bytes
       const elapsed = Math.max(now - this.#busySince, MINIMUM_SAMPLE_MILLISECONDS)
       if (!this.hasSuccessfulSample || elapsed >= MEASUREMENT_WINDOW_MILLISECONDS || bytes >= this.pendingBytes) {

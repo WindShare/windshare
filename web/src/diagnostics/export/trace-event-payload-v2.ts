@@ -13,6 +13,7 @@ import {
   validateRelayDelivery,
   validateSenderVerification,
   validateContentScheduling,
+  validateContentRetry,
   validateRequestScheduling,
   validateLeaseRetirement,
 } from './trace-payload-protocol'
@@ -61,6 +62,7 @@ const EVENT_PAYLOAD_VALIDATORS = Object.freeze({
   authority_transition: validateAuthority,
   protocol_operation: validateProtocolOperation,
   content_scheduling: validateContentScheduling,
+  content_retry: validateContentRetry,
   request_scheduling: validateRequestScheduling,
   lease_retirement: validateLeaseRetirement,
   operation_recovery: validateOperationRecovery,

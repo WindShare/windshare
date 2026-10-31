@@ -60,6 +60,7 @@ describe('trace frozen contract', () => {
       'sender_verification',
       'protocol_operation',
       'content_scheduling',
+      'content_retry',
       'request_scheduling',
       'lease_retirement',
       'operation_recovery',
