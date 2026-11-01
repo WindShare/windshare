@@ -377,8 +377,9 @@ func rangeSetByteCount(ranges content.RangeSet) (uint64, bool) {
 }
 
 // fileTransferProgress retains only the proof necessary to classify one
-// unconfirmed write. The operation tracker therefore never becomes a second
-// file/range manifest.
+// unconfirmed write: a pending interval is in flight or written but not yet
+// acknowledged, so its bytes may or may not have reached the output. The
+// operation tracker therefore never becomes a second file/range manifest.
 type fileTransferProgress struct {
 	persisted      VerifiedRanges
 	persistedBytes uint64
@@ -471,31 +472,34 @@ func (progress *fileTransferProgress) reconcileSettlement(
 			(checkpoint.Retention() != RangesAfterRestart || progress.trusted.Retention() != RangesInProcess)) {
 		return 0, false
 	}
-	if progress.hasPending {
-		if checkpoint.CheckpointGeneration() == progress.trusted.CheckpointGeneration() &&
-			exactRangeSetsEqual(checkpoint.Ranges(), progress.trusted.Ranges()) {
-			// A terminal settlement may explicitly decline the fully written but
-			// unconfirmed interval. Keeping the prior checkpoint is authoritative
-			// and must not turn unacknowledged bytes into progress.
-			progress.pending = content.Range{}
-			progress.hasPending = false
-			return 0, true
-		}
-		// Terminal persistence may use a different generation from in-process
-		// acknowledgements. Coverage, not the two independent clocks, decides it.
-		requested, _ := content.NewRangeSet([]content.Range{progress.pending})
-		expected, mergeErr := MergeRanges(progress.trusted.Ranges(), requested)
-		if mergeErr == nil && exactRangeSetsEqual(checkpoint.Ranges(), expected) {
-			return progress.acceptPending(checkpoint), true
-		}
+	if keepsTrustedCoverage(checkpoint, progress.trusted) {
+		// Keeping the trusted coverage declines any pending interval: bytes that
+		// were in flight or written but unconfirmed never become progress.
+		progress.trusted = checkpoint
+		progress.pending, progress.hasPending = content.Range{}, false
+		return 0, true
+	}
+	if !progress.hasPending {
 		return 0, false
 	}
-	if !exactRangeSetsEqual(checkpoint.Ranges(), progress.trusted.Ranges()) ||
-		(checkpoint.Retention() == progress.trusted.Retention() && checkpoint.CheckpointGeneration() < progress.trusted.CheckpointGeneration()) {
-		return 0, false
+	// Terminal persistence may use a different generation from in-process
+	// acknowledgements. Coverage, not the two independent clocks, decides it.
+	requested, _ := content.NewRangeSet([]content.Range{progress.pending})
+	expected, mergeErr := MergeRanges(progress.trusted.Ranges(), requested)
+	if mergeErr == nil && exactRangeSetsEqual(checkpoint.Ranges(), expected) {
+		return progress.acceptPending(checkpoint), true
 	}
-	progress.trusted = checkpoint
-	return 0, true
+	return 0, false
+}
+
+// keepsTrustedCoverage reports whether a settlement checkpoint covers exactly
+// the trusted ranges. A settlement may take a fresh checkpoint, so within one
+// retention kind the generation must not move backwards; restart and
+// in-process generations are independent clocks and are not compared.
+func keepsTrustedCoverage(checkpoint, trusted VerifiedRanges) bool {
+	return exactRangeSetsEqual(checkpoint.Ranges(), trusted.Ranges()) &&
+		(checkpoint.Retention() != trusted.Retention() ||
+			checkpoint.CheckpointGeneration() >= trusted.CheckpointGeneration())
 }
 
 func (progress *fileTransferProgress) acceptPending(next VerifiedRanges) uint64 {

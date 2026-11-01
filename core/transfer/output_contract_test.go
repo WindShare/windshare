@@ -692,6 +692,94 @@ func TestFileTransferProgressRejectsUnrelatedSettlementCheckpointCoverage(t *tes
 	}
 }
 
+func TestFileTransferProgressAcceptsRestartPauseThatDeclinesPendingWrite(t *testing.T) {
+	binding, _ := outputLifecycleFixture(t)
+	ranges := func(end uint64) content.RangeSet {
+		set, err := content.NewRangeSet([]content.Range{{Offset: 0, End: end}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return set
+	}
+	initial, err := VerifyRestartRanges(binding, 1, ranges(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction := &jobFileTransaction{binding: binding}
+	progress, _, valid := newFileTransferProgress(transaction, initial, true)
+	if !valid || !progress.beginPending(content.Range{Offset: 1, End: 2}) {
+		t.Fatalf("initial file progress = %+v valid=%t", progress, valid)
+	}
+	// Batched checkpoints acknowledge in-process ranges with their own clock.
+	accepted, err := VerifyProcessRanges(binding, 9, ranges(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, acknowledged := progress.acknowledge(transaction, accepted); !acknowledged ||
+		!progress.beginPending(content.Range{Offset: 2, End: 3}) {
+		t.Fatalf("acknowledged file progress = %+v", progress)
+	}
+	persisted, err := VerifyRestartRanges(binding, 2, ranges(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	settlement, err := NewVerifiedFileSettlement(FilePaused, persisted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delta, reconciled := progress.reconcileSettlement(transaction, settlement); !reconciled || delta != 0 ||
+		progress.hasPending {
+		t.Fatalf("pause that declined the pending write: delta=%d reconciled=%t progress=%+v", delta, reconciled, progress)
+	}
+}
+
+func TestFileTransferProgressRejectsSettlementThatMovesGenerationBackwards(t *testing.T) {
+	binding, _ := outputLifecycleFixture(t)
+	covered, err := content.NewRangeSet([]content.Range{{Offset: 0, End: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name    string
+		restart bool
+		verify  func(MaterializedFileBinding, CheckpointGeneration, content.RangeSet) (VerifiedRanges, error)
+		pending bool
+	}{
+		{name: "in-process", verify: VerifyProcessRanges},
+		{name: "in-process pending", verify: VerifyProcessRanges, pending: true},
+		{name: "restart", restart: true, verify: VerifyRestartRanges},
+		{name: "restart pending", restart: true, verify: VerifyRestartRanges, pending: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, generation := range []CheckpointGeneration{4, 5, 6} {
+				initial, err := test.verify(binding, 5, covered)
+				if err != nil {
+					t.Fatal(err)
+				}
+				transaction := &jobFileTransaction{binding: binding}
+				progress, _, valid := newFileTransferProgress(transaction, initial, test.restart)
+				if !valid || test.pending && !progress.beginPending(content.Range{Offset: 1, End: 2}) {
+					t.Fatalf("initial file progress = %+v valid=%t", progress, valid)
+				}
+				checkpoint, err := test.verify(binding, generation, covered)
+				if err != nil {
+					t.Fatal(err)
+				}
+				settlement, err := NewVerifiedFileSettlement(FilePaused, checkpoint)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Identical coverage is not enough: within one retention kind an
+				// older generation is a stale checkpoint.
+				delta, reconciled := progress.reconcileSettlement(transaction, settlement)
+				if want := generation >= 5; reconciled != want || delta != 0 {
+					t.Fatalf("generation %d: delta=%d reconciled=%t, want reconciled=%t", generation, delta, reconciled, want)
+				}
+			}
+		})
+	}
+}
+
 func TestTransferLifecycleFirstWriteRequiresNewDurableContent(t *testing.T) {
 	for _, immediate := range []bool{false, true} {
 		name := "already durable transaction"
