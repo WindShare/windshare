@@ -48,6 +48,8 @@ type v5TraceCorrelation struct {
 	ShareInstanceID     string
 	ReceiveOperationID  string
 	TransferJobID       string
+	FileID              string
+	OutputSessionID     string
 	ProtocolSessionID   string
 	ProtocolOperationID string
 	PeerPathID          string

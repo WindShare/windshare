@@ -28,6 +28,7 @@ type RuntimeLane struct {
 
 	ctx          context.Context
 	cancel       context.CancelFunc
+	retired      chan struct{}
 	done         chan struct{}
 	closeOnce    sync.Once
 	cryptoOnce   sync.Once
@@ -45,6 +46,7 @@ type selectedLane struct {
 	identity session.LaneIdentity
 	channel  protocolsession.FrameChannel
 	writer   *protocolsession.SessionWriter
+	retired  <-chan struct{}
 	done     <-chan struct{}
 }
 
@@ -315,7 +317,7 @@ func (lanes *runtimeLanes) build(
 	}
 	return &RuntimeLane{
 		identity: identity, channel: channel, writer: writer, pump: pump,
-		sealer: sealer, opener: opener, done: make(chan struct{}),
+		sealer: sealer, opener: opener, retired: make(chan struct{}), done: make(chan struct{}),
 	}, nil
 }
 
@@ -429,6 +431,9 @@ func (lanes *runtimeLanes) retireLane(lane *RuntimeLane) {
 		// owned by lane.done and the runtime wait group after membership ends.
 		lane.destroyCrypto()
 		lanes.finishLane(lane)
+		// Recovery needs the completed logical transition, including its terminal
+		// cause, but must not wait for provider callbacks or physical cleanup.
+		close(lane.retired)
 	})
 }
 
@@ -542,6 +547,7 @@ func (lane *RuntimeLane) selected() selectedLane {
 		identity: lane.identity,
 		channel:  lane.channel,
 		writer:   lane.writer,
+		retired:  lane.retired,
 		done:     lane.done,
 	}
 }

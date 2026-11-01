@@ -107,15 +107,11 @@ func (client *receiverRevisionClient) OpenRevision(
 	if err != nil {
 		return revisionaccess.Lease{}, err
 	}
-	call, err := rpc.Begin(ctx, protocolsession.MessageOpenRevisions, body)
+	result, err := requestControlResult(ctx, rpc, protocolsession.MessageOpenRevisions, body)
 	if err != nil {
 		return revisionaccess.Lease{}, err
 	}
-	defer func() { _ = rpc.CancelAndEnd(call, contentflow.CancelReasonOutputAbort) }()
-	message, err := rpc.Await(ctx, call)
-	if err != nil {
-		return revisionaccess.Lease{}, err
-	}
+	message := result.message
 	if message.Kind() == protocolsession.MessageOperationError {
 		return revisionaccess.Lease{}, remoteRevisionOperationError(message)
 	}
@@ -133,7 +129,7 @@ func (client *receiverRevisionClient) OpenRevision(
 	if results[0].Failure != nil {
 		return revisionaccess.Lease{}, &RemoteRevisionError{
 			failure: *results[0].Failure, protocolSession: rpc.Runtime().ProtocolSessionID(),
-			protocolOperation: call.ID(),
+			protocolOperation: result.operationID,
 		}
 	}
 	if lifecycleErr := client.operationLifecycleError(ctx); lifecycleErr != nil {
@@ -290,15 +286,11 @@ func (client *receiverRevisionClient) releaseRemoteLease(ctx context.Context, le
 	if err != nil {
 		return err
 	}
-	call, err := client.rpc.Begin(ctx, protocolsession.MessageReleaseLease, body)
+	result, err := requestControlResult(ctx, client.rpc, protocolsession.MessageReleaseLease, body)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = client.rpc.CancelAndEnd(call, contentflow.CancelReasonOutputAbort) }()
-	message, err := client.rpc.Await(ctx, call)
-	if err != nil {
-		return err
-	}
+	message := result.message
 	if message.Kind() == protocolsession.MessageOperationError {
 		return remoteRevisionOperationError(message)
 	}
@@ -318,15 +310,30 @@ func (client *receiverRevisionClient) releaseRemoteLease(ctx context.Context, le
 
 func (client *receiverRevisionClient) renewLoop(state *remoteLeaseState) {
 	for state.renewAfter > 0 {
-		select {
-		case <-state.ctx.Done():
-			return
-		case <-client.after(state.renewAfter):
-		}
+		// The confirmed lifetime includes waiting to renew. Scheduling delays or a
+		// lost reply must not extend local authority beyond that same deadline.
 		ctx, cancel := context.WithTimeout(state.ctx, state.ttl)
-		lease, err := client.renew(ctx, state.id)
+		var lease contentflow.RemoteLease
+		var err error
+		select {
+		case <-ctx.Done():
+			if state.ctx.Err() != nil {
+				cancel()
+				return
+			}
+			err = ctx.Err()
+		case <-client.after(state.renewAfter):
+			lease, err = client.renew(ctx, state.id)
+		}
+		expired := ctx.Err() == context.DeadlineExceeded && state.ctx.Err() == nil
 		cancel()
 		if err != nil {
+			if expired && errors.Is(err, context.DeadlineExceeded) {
+				// The RPC trace retains the deadline. Reads need lease expiry rather
+				// than context cancellation so revisionaccess can replace authorization
+				// for the same immutable file while retaining received ranges.
+				err = content.ErrLeaseExpired
+			}
 			state.setError(err)
 			return
 		}
@@ -339,6 +346,8 @@ func (client *receiverRevisionClient) renew(ctx context.Context, leaseID content
 	if err != nil {
 		return contentflow.RemoteLease{}, err
 	}
+	// Renewal changes the sender's acceptance window. A lost successful reply
+	// cannot be recovered by issuing another renewal, which would be too early.
 	call, err := client.rpc.Begin(ctx, protocolsession.MessageRenewLease, body)
 	if err != nil {
 		return contentflow.RemoteLease{}, err

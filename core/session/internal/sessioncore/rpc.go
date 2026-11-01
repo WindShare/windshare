@@ -303,6 +303,7 @@ func (client *Requests) sendRequest(
 			usableAtSelection = client.runtime.lanes.usableCount()
 		}
 		call.setProtocolTraceLane(selected.identity, usableAtSelection)
+		call.bindRequestCarrier(selected.retired)
 		var receipt protocolsession.SendReceipt
 		if message.Kind() == protocolsession.MessagePeerOffer {
 			receipt, err = selected.writer.TryControlObservingAuthenticatedViolations(message, call.observeAuthenticatedOperationViolation)
@@ -529,63 +530,6 @@ func (client *Requests) cancelAndEnd(call *Call, reason contentflow.CancelReason
 	call.recordProtocolTraceCleanup(err)
 	client.end(call)
 	return err
-}
-
-func (client *Requests) await(ctx context.Context, call *Call) (protocolsession.Message, error) {
-	return client.awaitCall(ctx, call, true)
-}
-
-func (client *Requests) awaitPeer(
-	ctx context.Context,
-	call *Call,
-) (protocolsession.Message, error) {
-	return client.awaitCall(ctx, call, false)
-}
-
-func (client *Requests) awaitCall(
-	ctx context.Context,
-	call *Call,
-	cancelOnContext bool,
-) (protocolsession.Message, error) {
-	if client == nil || client.runtime == nil {
-		return protocolsession.Message{}, session.ErrRuntimeClosed
-	}
-	if call == nil {
-		return protocolsession.Message{}, session.ErrOperationMissing
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	for {
-		done := call.doneChannel()
-		select {
-		case <-ctx.Done():
-			call.recordProtocolTraceFailure(ctx.Err())
-			if !cancelOnContext {
-				return protocolsession.Message{}, ctx.Err()
-			}
-			// Cancellation admission is part of the observable failure. Dropping
-			// it here would make a later exact-call cleanup appear benign even
-			// when the first cancellation transition genuinely failed.
-			cleanupErr := client.admitCancellation(call, contentflow.CancelReasonTimeout)
-			call.recordProtocolTraceCleanup(cleanupErr)
-			return protocolsession.Message{}, errors.Join(ctx.Err(), cleanupErr)
-		case <-client.runtime.Done():
-			call.recordProtocolTraceFailure(session.ErrRuntimeClosed)
-			return protocolsession.Message{}, errors.Join(session.ErrRuntimeClosed, client.runtime.Err())
-		case <-done:
-			call.recordProtocolTraceFailure(session.ErrOperationMissing)
-			return protocolsession.Message{}, session.ErrOperationMissing
-		case response := <-call.messages:
-			expected, _ := call.operationAuthority()
-			if expected.Same(response.generation) {
-				call.stateMu.Lock()
-				call.lastResponseLane = response.lane
-				call.stateMu.Unlock()
-				return response.message, nil
-			}
-		}
-	}
 }
 
 func (client *Requests) admitCancellation(
