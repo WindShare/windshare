@@ -391,11 +391,12 @@ func (transport rpcCatalogTransport) FetchPage(ctx context.Context, request cata
 	if err != nil {
 		return nil, err
 	}
-	call, err := transport.rpc.Begin(ctx, protocolsession.MessageListChildren, body)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = transport.rpc.CancelAndEnd(call, contentflow.CancelReasonOutputAbort) }()
+	return runControlRequest(ctx, transport.rpc, protocolsession.MessageListChildren, body, func(call *sessioncore.Call) ([]byte, error) {
+		return transport.receivePage(ctx, request, call)
+	})
+}
+
+func (transport rpcCatalogTransport) receivePage(ctx context.Context, request catalogflow.ListRequest, call *sessioncore.Call) ([]byte, error) {
 	var progressState catalogProgressState
 	for {
 		message, err := transport.rpc.Await(ctx, call)

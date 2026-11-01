@@ -21,6 +21,7 @@ type trackedRequestClient struct {
 	*sessioncore.Requests
 	mu         sync.Mutex
 	calls      map[protocolsession.OperationID]*sessioncore.Call
+	issued     []protocolsession.OperationID
 	closed     bool
 	cancelGate <-chan struct{}
 	cancelErr  error
@@ -43,6 +44,7 @@ func (client *trackedRequestClient) remember(call *sessioncore.Call) {
 	}
 	client.mu.Lock()
 	client.calls[call.ID()] = call
+	client.issued = append(client.issued, call.ID())
 	client.mu.Unlock()
 	requestFixtures.Store(call, client)
 }
