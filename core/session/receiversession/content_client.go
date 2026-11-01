@@ -331,11 +331,17 @@ func (client *receiverRevisionClient) renew(ctx context.Context, leaseID content
 	if err != nil {
 		return contentflow.RemoteLease{}, err
 	}
-	result, err := requestControlResult(ctx, client.rpc, protocolsession.MessageRenewLease, body)
+	// Renewal changes the sender's acceptance window. A lost successful reply
+	// cannot be recovered by issuing another renewal, which would be too early.
+	call, err := client.rpc.Begin(ctx, protocolsession.MessageRenewLease, body)
 	if err != nil {
 		return contentflow.RemoteLease{}, err
 	}
-	message := result.message
+	defer func() { _ = client.rpc.CancelAndEnd(call, contentflow.CancelReasonOutputAbort) }()
+	message, err := client.rpc.Await(ctx, call)
+	if err != nil {
+		return contentflow.RemoteLease{}, err
+	}
 	if message.Kind() == protocolsession.MessageOperationError {
 		return contentflow.RemoteLease{}, remoteRevisionOperationError(message)
 	}
