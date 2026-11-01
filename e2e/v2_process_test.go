@@ -657,8 +657,8 @@ func TestLongV2ProcessResumesDurableOutputAfterReceiverCrash(t *testing.T) {
 	)
 	resumed.forbidStderr(stderrCanaries...)
 	resumed.forbidUserTrace(append(append([]string(nil), stderrCanaries...), root, filepath.Base(root), "file-000.bin", "file-001.bin", output)...)
-	// Recovery performs native witness revalidation before transferring the
-	// interrupted tail, so it retains a scenario ceiling distinct from readiness.
+	// Recovery loads delivery history and revalidates partial-file witnesses on
+	// demand, so it retains a scenario ceiling distinct from readiness.
 	if err := resumed.waitWithin(t, v2DurableResumeProcessTimeout); err != nil {
 		t.Fatalf(
 			"resumed receiver failed: %v; receiver stdout=%q stderr=%q; sender stdout=%q stderr=%q; relay stdout=%q stderr=%q",

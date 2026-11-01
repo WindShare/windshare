@@ -222,7 +222,10 @@ func validateV5TraceRecord(
 				encoded, _ := json.Marshal(common)
 				projected = validateV5TraceCorrelation(t, encoded, event+" correlation")
 			}
-			for name, target := range map[string]*string{"share_instance_id": &projected.ShareInstanceID, "receive_operation_id": &projected.ReceiveOperationID, "transfer_job_id": &projected.TransferJobID} {
+			for name, target := range map[string]*string{
+				"share_instance_id": &projected.ShareInstanceID, "receive_operation_id": &projected.ReceiveOperationID,
+				"transfer_job_id": &projected.TransferJobID, "file_id": &projected.FileID, "output_session_id": &projected.OutputSessionID,
+			} {
 				if raw, ok := object[name]; ok {
 					*target = v5TraceStringRaw(t, raw, name)
 				}
@@ -626,7 +629,7 @@ func assertV2UserTraceProductDiagnostics(t *testing.T, process *v2Process, recei
 	t.Helper()
 	receiveOperationID = v5TraceIdentityFromHex(t, receiveOperationID)
 	records, _ := readV5UserTrace(t, process.userTracePath, process.userTraceCommand)
-	checkpointReconciled := false
+	fileRecovered := false
 	receiverCompleted := false
 	laneSettlements := 0
 	laneAdoptions := 0
@@ -634,13 +637,23 @@ func assertV2UserTraceProductDiagnostics(t *testing.T, process *v2Process, recei
 	for _, record := range records {
 		switch record.Event {
 		case "filesystem_output":
-			if operation, ok := record.Payload["operation"]; ok &&
-				v5TraceStringRaw(t, operation, "filesystem_output.operation") == "checkpoint_reconciled" {
-				if record.Correlation == nil || record.Correlation.ReceiveOperationID != receiveOperationID {
-					t.Fatal("checkpoint reconciliation belongs to a different retained operation")
-				}
-				checkpointReconciled = true
+			// Ordinary recovery loads each file on demand. A crash can leave either
+			// a published receipt or a checkpoint requiring native reconciliation.
+			operation := v5TraceStringField(t, record.Payload, "runtime_operation")
+			if v5TraceStringField(t, record.Payload, "runtime_component") != "file" ||
+				(operation != "delivery_receipt" && operation != "recover_file") ||
+				v5TraceStringField(t, record.Payload, "runtime_decision") != "reconciled" {
+				continue
 			}
+			if record.Correlation == nil || record.Correlation.ReceiveOperationID != receiveOperationID {
+				t.Fatal("file recovery belongs to a different retained operation")
+			}
+			validateV5TraceIdentity(t, record.Correlation.FileID, "file recovery file_id", v5IdentityBytes)
+			validateV5TraceIdentity(t, record.Correlation.OutputSessionID, "file recovery output_session_id", v5IdentityBytes)
+			if v5TraceBoolField(t, record.Payload, "failed") {
+				t.Fatal("file recovery reported reconciliation with a failure")
+			}
+			fileRecovered = true
 		case "lane_settlement":
 			laneSettlements++
 			correlation := record.Correlation
@@ -666,8 +679,8 @@ func assertV2UserTraceProductDiagnostics(t *testing.T, process *v2Process, recei
 			t.Fatal("successful retained-operation recovery lost diagnostic observations")
 		}
 	}
-	if !checkpointReconciled {
-		t.Fatal("user trace omitted retained-operation checkpoint reconciliation")
+	if !fileRecovered {
+		t.Fatal("user trace omitted retained-operation file recovery")
 	}
 	// The initial relay lane exists before lane-adoption observations; every
 	// additional incarnation must have a corresponding adoption record.
