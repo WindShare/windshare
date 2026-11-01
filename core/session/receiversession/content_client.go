@@ -107,15 +107,11 @@ func (client *receiverRevisionClient) OpenRevision(
 	if err != nil {
 		return revisionaccess.Lease{}, err
 	}
-	call, err := rpc.Begin(ctx, protocolsession.MessageOpenRevisions, body)
+	result, err := requestControlResult(ctx, rpc, protocolsession.MessageOpenRevisions, body)
 	if err != nil {
 		return revisionaccess.Lease{}, err
 	}
-	defer func() { _ = rpc.CancelAndEnd(call, contentflow.CancelReasonOutputAbort) }()
-	message, err := rpc.Await(ctx, call)
-	if err != nil {
-		return revisionaccess.Lease{}, err
-	}
+	message := result.message
 	if message.Kind() == protocolsession.MessageOperationError {
 		return revisionaccess.Lease{}, remoteRevisionOperationError(message)
 	}
@@ -133,7 +129,7 @@ func (client *receiverRevisionClient) OpenRevision(
 	if results[0].Failure != nil {
 		return revisionaccess.Lease{}, &RemoteRevisionError{
 			failure: *results[0].Failure, protocolSession: rpc.Runtime().ProtocolSessionID(),
-			protocolOperation: call.ID(),
+			protocolOperation: result.operationID,
 		}
 	}
 	if lifecycleErr := client.operationLifecycleError(ctx); lifecycleErr != nil {
@@ -290,15 +286,11 @@ func (client *receiverRevisionClient) releaseRemoteLease(ctx context.Context, le
 	if err != nil {
 		return err
 	}
-	call, err := client.rpc.Begin(ctx, protocolsession.MessageReleaseLease, body)
+	result, err := requestControlResult(ctx, client.rpc, protocolsession.MessageReleaseLease, body)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = client.rpc.CancelAndEnd(call, contentflow.CancelReasonOutputAbort) }()
-	message, err := client.rpc.Await(ctx, call)
-	if err != nil {
-		return err
-	}
+	message := result.message
 	if message.Kind() == protocolsession.MessageOperationError {
 		return remoteRevisionOperationError(message)
 	}
@@ -339,15 +331,11 @@ func (client *receiverRevisionClient) renew(ctx context.Context, leaseID content
 	if err != nil {
 		return contentflow.RemoteLease{}, err
 	}
-	call, err := client.rpc.Begin(ctx, protocolsession.MessageRenewLease, body)
+	result, err := requestControlResult(ctx, client.rpc, protocolsession.MessageRenewLease, body)
 	if err != nil {
 		return contentflow.RemoteLease{}, err
 	}
-	defer func() { _ = client.rpc.CancelAndEnd(call, contentflow.CancelReasonOutputAbort) }()
-	message, err := client.rpc.Await(ctx, call)
-	if err != nil {
-		return contentflow.RemoteLease{}, err
-	}
+	message := result.message
 	if message.Kind() == protocolsession.MessageOperationError {
 		return contentflow.RemoteLease{}, remoteRevisionOperationError(message)
 	}
