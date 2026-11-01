@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/windshare/windshare/internal/testloopback"
 )
@@ -159,7 +160,7 @@ func (proxy *relayCutProxy) serve(front net.Conn) {
 	}()
 	go func() {
 		defer proxy.finishActivity()
-		_, copyErr := io.Copy(relayDownstreamWriter{target: front, bytes: &proxy.downstream}, backend)
+		_, copyErr := io.Copy(&relayDownstreamWriter{target: front, bytes: &proxy.downstream, ctx: proxy.ctx}, backend)
 		results <- copyErr
 	}()
 	select {
@@ -265,13 +266,39 @@ func (proxy *relayCutProxy) recordError(err error) {
 	}
 }
 
+// A relay-only copy of the 1 MiB fixture must outlast the process deadline.
+// This keeps useful work pending during Pion negotiation on fast loopback hosts,
+// while the small bootstrap and signaling exchanges can still establish the peer.
+const relayCutBytesPerSecond = 32 << 10
+const relayCutWriteChunkBytes = 4 << 10
+
 type relayDownstreamWriter struct {
 	target io.Writer
 	bytes  *atomic.Uint64
+	ctx    context.Context
 }
 
-func (writer relayDownstreamWriter) Write(value []byte) (int, error) {
-	written, err := writer.target.Write(value)
-	writer.bytes.Add(uint64(written))
-	return written, err
+func (writer *relayDownstreamWriter) Write(value []byte) (int, error) {
+	total := 0
+	for len(value) > 0 {
+		size := min(len(value), relayCutWriteChunkBytes)
+		timer := time.NewTimer(time.Duration(size) * time.Second / relayCutBytesPerSecond)
+		select {
+		case <-writer.ctx.Done():
+			timer.Stop()
+			return total, writer.ctx.Err()
+		case <-timer.C:
+		}
+		written, err := writer.target.Write(value[:size])
+		writer.bytes.Add(uint64(written))
+		total += written
+		if err != nil {
+			return total, err
+		}
+		if written != size {
+			return total, io.ErrShortWrite
+		}
+		value = value[written:]
+	}
+	return total, nil
 }
