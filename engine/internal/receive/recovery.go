@@ -77,11 +77,23 @@ func Run(ctx context.Context, request Request, deps Dependencies) task.Completio
 	return runOperation(ctx, request, deps, runAttempt)
 }
 
-type attemptRunner func(context.Context, Request, Dependencies, *getOutputPreparation) task.Completion[Result]
+type attemptRunner func(context.Context, preparedRequest, Dependencies, *getOutputPreparation) task.Completion[Result]
 
 func runOperation(ctx context.Context, request Request, deps Dependencies, attempt attemptRunner) (completed task.Completion[Result]) {
 	deps = deps.normalized()
 	deps.Control.Diagnostics = request.Diagnostics
+	startedAt := deps.Clock.Now()
+	input, err := prepareRequest(request)
+	if err != nil {
+		deps.Control.Diagnostics.Emit(diagnostics.New("receive.request_rejected", diagnostics.Fields{
+			"selection_path_count": diagnostics.Uint(uint64(len(request.Only))), "cause": diagnostics.Text(err.Error()),
+		}).Correlate(diagnostics.Fields{"receive_operation_id": diagnostics.Identity(request.OperationID.Bytes())}))
+		completed = settlePreparationFailure(stepInvalidRequest, Failure{Code: FailureInvalidInput, Cause: err}, ctx.Err(), nil)
+		completed.Value.Destination = request.Destination
+		completed.Value.Connectivity.Final = true
+		completed.Value.Elapsed = max(deps.Clock.Now().Sub(startedAt), 0)
+		return completed
+	}
 	var retained getOutputPreparation
 	defer func() {
 		if retained.authority == nil {
@@ -95,7 +107,7 @@ func runOperation(ctx context.Context, request Request, deps Dependencies, attem
 		}
 	}()
 	for attemptNumber := uint64(1); ; attemptNumber++ {
-		completed = attempt(ctx, request, deps, &retained)
+		completed = attempt(ctx, input, deps, &retained)
 		if completed.Outcome == task.OutcomeSuccess || retained.operation == nil || !retained.operation.Valid() {
 			return
 		}

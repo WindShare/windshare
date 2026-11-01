@@ -6,6 +6,7 @@ import (
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"testing"
 
+	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/engine/internal/task"
 	"github.com/windshare/windshare/engine/output"
@@ -60,7 +61,7 @@ func TestReceiveAttemptLifetimeKeepsOneOperationUntilDecision(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			attempts, decisions := 0, 0
-			request := Request{OnPause: func(_ context.Context, pause Pause) (RecoveryAction, error) {
+			request := Request{Capability: link.Link{Suite: link.SuiteSenderAuthenticated}, Connectivity: ConnectivityRelayOnly, OnPause: func(_ context.Context, pause Pause) (RecoveryAction, error) {
 				decisions++
 				if authority.closes != 0 || pause.Operation != operation.Intent.OperationID() || !pause.Allows(test.action) {
 					t.Fatal("decision lost retained authority")
@@ -70,7 +71,7 @@ func TestReceiveAttemptLifetimeKeepsOneOperationUntilDecision(t *testing.T) {
 			if test.unattended {
 				request.OnPause = nil
 			}
-			result := runOperation(ctx, request, Dependencies{}, func(_ context.Context, _ Request, _ Dependencies, retained *getOutputPreparation) task.Completion[Result] {
+			result := runOperation(ctx, request, Dependencies{}, func(_ context.Context, _ preparedRequest, _ Dependencies, retained *getOutputPreparation) task.Completion[Result] {
 				attempts++
 				if attempts == 1 {
 					*retained = getOutputPreparation{authority: authority, operation: &operation, mode: test.mode}

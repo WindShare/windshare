@@ -42,7 +42,7 @@ type getOutputPreparation struct {
 
 func (a *runner) prepareGetOutput(
 	ctx context.Context,
-	request getRequest,
+	request preparedRequest,
 	observation getObservation,
 ) (getOutputPreparation, stepOutcome) {
 	outputRoot := request.outDir
@@ -89,7 +89,7 @@ type getReceiverRecovery struct {
 	observation getObservation
 }
 
-func (a *runner) connectGetReceiver(ctx context.Context, request getRequest, observation getObservation) (*getReceiverSession, stepOutcome) {
+func (a *runner) connectGetReceiver(ctx context.Context, request preparedRequest, observation getObservation) (*getReceiverSession, stepOutcome) {
 	options := a.receiverRecoveryOptions
 	options.WaitTimeout = request.waitTimeout
 	options.Observe = observation.receiverRecovery
@@ -219,11 +219,8 @@ func (execution *getTransferExecution) SettleAdmission() {
 	})
 }
 
-func (a *runner) prepareGetConnectivity(ctx context.Context, request getRequest, output getOutputPreparation, runtime *receiversession.Runtime, observation getObservation, options receiverPeerOptions) (*getTransferExecution, stepOutcome) {
-	connectivity, err := request.connectivity.receiverPlan()
-	if err != nil {
-		return nil, observation.failCode(stepInvalidRequest, FailureInvalidInput)
-	}
+func (a *runner) prepareGetConnectivity(ctx context.Context, request preparedRequest, output getOutputPreparation, runtime *receiversession.Runtime, observation getObservation, options receiverPeerOptions) (*getTransferExecution, stepOutcome) {
+	connectivity := request.connectivity
 	laneID, laneEpoch := runtime.LaneIdentity()
 	relaySuspension, err := runtime.LaneSet().SuspendContent(
 		transferlanes.Identity{ID: laneID, Epoch: laneEpoch},
@@ -265,7 +262,7 @@ func (a *runner) prepareGetConnectivity(ctx context.Context, request getRequest,
 			runtime.Close()
 		}
 	}
-	peer, _, err := beginReceiverPlanning(
+	peer, err := beginReceiverConnectivity(
 		connectivity,
 		func() *activeReceiverPeer {
 			options.demand = peerset.BrowseDemand
@@ -277,7 +274,6 @@ func (a *runner) prepareGetConnectivity(ctx context.Context, request getRequest,
 			return a.startReceiverPeer(ctx, runtime, observation, observePeer, localStop, connectivity.peer, options)
 		},
 		admission.AdmitRelayOnly,
-		func() (transfer.SelectionRules, error) { return selectionRules(request.only) },
 	)
 	execution.peer = peer
 	if err != nil {
@@ -298,13 +294,9 @@ type getTransferDependencies interface {
 	NewTransferJob(transfer.ReceiveIntent, transfer.TransferJobID, transfer.DirectTreeMaterializer, transfer.TransferLifecycleTracer) (*transfer.TransferJob, error)
 }
 
-func (a *runner) finishGetTransfer(ctx context.Context, request getRequest, output getOutputPreparation, dependencies getTransferDependencies, execution *getTransferExecution, observation getObservation) (*getTransferPlan, stepOutcome) {
-	rules, err := selectionRules(request.only)
-	if err != nil {
-		return nil, observation.fail(stepInvalidRequest, err)
-	}
+func (a *runner) finishGetTransfer(ctx context.Context, request preparedRequest, output getOutputPreparation, dependencies getTransferDependencies, execution *getTransferExecution, observation getObservation) (*getTransferPlan, stepOutcome) {
 	job, operation, destination, adjusted, code := a.buildGetTransferJob(
-		ctx, execution.runtime, output, rules, observation, dependencies,
+		ctx, execution.runtime, output, request.selection, observation, dependencies,
 	)
 	if code != stepReady {
 		if errors.Is(execution.admission.Err(), errReceiverP2PPathUnavailable) {
@@ -505,11 +497,11 @@ func reportGetOutputAdmissionFailure(observation getObservation, err error) step
 		return observation.fail(stepLocalFailure, err)
 	}
 }
-func receiverRoutePolicy(policy ConnectivityPolicy) transferlanes.ContentRoutePolicy {
-	switch policy {
-	case ConnectivityP2POnly:
+func receiverRoutePolicy(plan receiverConnectivityPlan) transferlanes.ContentRoutePolicy {
+	switch plan.peer {
+	case receiverPeerRequired:
 		return transferlanes.ContentRouteDirectOnly
-	case ConnectivityRelayOnly:
+	case receiverPeerDisabled:
 		return transferlanes.ContentRouteRelayOnly
 	default:
 		return transferlanes.ContentRouteAll

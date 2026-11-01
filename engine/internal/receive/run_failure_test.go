@@ -111,6 +111,7 @@ func TestReceiveRejectsNonCanonicalSelectionAsInvalidInputBeforeIO(t *testing.T)
 		{"empty segment", []string{"tree//file.bin"}},
 		{"absolute", []string{"/tree"}},
 		{"canonical alias", []string{"tree", "tree/"}},
+		{"non-normalized Unicode", []string{"cafe\u0301"}},
 		{"duplicate", []string{"tree", "tree"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -125,7 +126,7 @@ func TestReceiveRejectsNonCanonicalSelectionAsInvalidInputBeforeIO(t *testing.T)
 				return nil, errors.New("invalid selection reached the relay")
 			}})
 			failure, classified := errors.AsType[Failure](result.Err)
-			if created || dialed || result.Outcome != task.OutcomeFailed || result.FailureClass != task.FailureUsage || !classified ||
+			if created || dialed || !result.Value.Connectivity.Final || result.Outcome != task.OutcomeFailed || result.FailureClass != task.FailureUsage || !classified ||
 				failure.Code != FailureInvalidInput || !errors.Is(result.Err, transfer.ErrInvalidSelectionRules) || result.Value.Recovery.Reason != RecoveryInvalidRequest {
 				t.Fatalf("only=%q created=%v dialed=%v outcome=%d class=%d code=%d reason=%d err=%v", test.only, created, dialed,
 					result.Outcome, result.FailureClass, failure.Code, result.Value.Recovery.Reason, result.Err)

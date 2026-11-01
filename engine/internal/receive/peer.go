@@ -219,14 +219,13 @@ func (paths *receiverContentPaths) changedPathLocked() (ContentPath, bool) {
 	return current, true
 }
 
-func beginReceiverPlanning(
+func beginReceiverConnectivity(
 	plan receiverConnectivityPlan,
 	startPeer func() *activeReceiverPeer,
 	admitRelayOnly func() error,
-	resolveSelection func() (transfer.SelectionRules, error),
-) (*activeReceiverPeer, transfer.SelectionRules, error) {
+) (*activeReceiverPeer, error) {
 	if !plan.valid() {
-		return nil, transfer.SelectionRules{}, ErrInvalidConnectivityPolicy
+		return nil, ErrInvalidConnectivityPolicy
 	}
 	// Content may use the authenticated relay as soon as output authority is
 	// ready. Peer discovery and file size never delay that first usable path.
@@ -234,23 +233,22 @@ func beginReceiverPlanning(
 	switch plan.peer {
 	case receiverPeerPreferred:
 		if err := admitRelayOnly(); err != nil {
-			return nil, transfer.SelectionRules{}, err
+			return nil, err
 		}
 		peer = startPeer()
 	case receiverPeerDisabled:
 		if err := admitRelayOnly(); err != nil {
-			return nil, transfer.SelectionRules{}, err
+			return nil, err
 		}
 	case receiverPeerRequired:
 		peer = startPeer()
 		if peer == nil {
-			return nil, transfer.SelectionRules{}, errReceiverP2PPathUnavailable
+			return nil, errReceiverP2PPathUnavailable
 		}
 	default:
-		return nil, transfer.SelectionRules{}, ErrInvalidConnectivityPolicy
+		return nil, ErrInvalidConnectivityPolicy
 	}
-	rules, err := resolveSelection()
-	return peer, rules, err
+	return peer, nil
 }
 
 type receiverPeerAttempt interface {

@@ -2,12 +2,11 @@ package receive
 
 import (
 	"errors"
+	"slices"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/windshare/windshare/core/session"
-	"github.com/windshare/windshare/core/transfer"
 )
 
 type cliReceiverPeerAttempt struct {
@@ -56,106 +55,47 @@ func (attempt *cliReceiverPeerAttempt) finishOutcome(outcome receiverPeerMonitor
 	})
 }
 
-func TestReceiverPeerStartsBeforeBlockingSelectionPlanning(t *testing.T) {
-	plan, err := ConnectivityAuto.receiverPlan()
-	if err != nil {
-		t.Fatal(err)
-	}
-	peerStarted := make(chan struct{})
-	selectionEntered := make(chan struct{})
-	releaseSelection := make(chan struct{})
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_, _, _ = beginReceiverPlanning(
-			plan,
-			func() *activeReceiverPeer {
-				close(peerStarted)
-				return nil
-			},
-			func() error {
-				// Auto admits its authenticated relay before peer setup and selection.
-				return nil
-			},
-			func() (transfer.SelectionRules, error) {
-				close(selectionEntered)
-				<-releaseSelection
-				return transfer.SelectionRules{}, nil
-			},
-		)
-	}()
-	select {
-	case <-selectionEntered:
-	case <-time.After(time.Second):
-		t.Fatal("selection planning did not begin")
-	}
-	select {
-	case <-peerStarted:
-	default:
-		t.Fatal("blocking selection planning began before the peer race")
-	}
-	close(releaseSelection)
-	<-done
-}
-
-func TestReceiverRelayOnlyPlanningNeverCreatesPeerAttempt(t *testing.T) {
-	plan, err := ConnectivityRelayOnly.receiverPlan()
-	if err != nil {
-		t.Fatal(err)
-	}
-	peerStarts := 0
-	relayResumes := 0
-	_, _, err = beginReceiverPlanning(
-		plan,
-		func() *activeReceiverPeer {
-			peerStarts++
-			return nil
-		},
-		func() error {
-			relayResumes++
-			return nil
-		},
-		func() (transfer.SelectionRules, error) { return transfer.SelectionRules{}, nil },
-	)
-	if err != nil || peerStarts != 0 || relayResumes != 1 {
-		t.Fatalf("relay-only planning: err=%v peer_starts=%d relay_resumes=%d", err, peerStarts, relayResumes)
-	}
-}
-
-func TestReceiverP2POnlyPlanningRequiresPeerAndNeverAdmitsRelay(t *testing.T) {
-	plan, err := ConnectivityP2POnly.receiverPlan()
-	if err != nil {
-		t.Fatal(err)
-	}
-	relayAdmissions := 0
-	peer := &activeReceiverPeer{}
-	got, _, err := beginReceiverPlanning(
-		plan,
-		func() *activeReceiverPeer { return peer },
-		func() error {
-			relayAdmissions++
-			return nil
-		},
-		func() (transfer.SelectionRules, error) { return transfer.SelectionRules{}, nil },
-	)
-	if err != nil || got != peer || relayAdmissions != 0 {
-		t.Fatalf("p2p-only planning: peer=%p err=%v relay_admissions=%d", got, err, relayAdmissions)
-	}
-
-	_, _, err = beginReceiverPlanning(
-		plan,
-		func() *activeReceiverPeer { return nil },
-		func() error {
-			t.Fatal("p2p-only planning admitted relay content")
-			return nil
-		},
-		func() (transfer.SelectionRules, error) {
-			t.Fatal("selection resolved without the required direct peer")
-			return transfer.SelectionRules{}, nil
-		},
-	)
-	if !errors.Is(err, errReceiverP2PPathUnavailable) {
-		t.Fatalf("missing p2p-only peer error=%v", err)
+func TestReceiverConnectivityKeepsAdmissionOrderingAndPolicy(t *testing.T) {
+	admissionErr := errors.New("relay admission failed")
+	for _, test := range []struct {
+		name           string
+		policy         ConnectivityPolicy
+		missingPeer    bool
+		admissionError error
+		wantEvents     []string
+		wantError      error
+	}{
+		{"auto", ConnectivityAuto, false, nil, []string{"relay", "peer"}, nil},
+		{"relay only", ConnectivityRelayOnly, false, nil, []string{"relay"}, nil},
+		{"peer only", ConnectivityP2POnly, false, nil, []string{"peer"}, nil},
+		{"missing required peer", ConnectivityP2POnly, true, nil, []string{"peer"}, errReceiverP2PPathUnavailable},
+		{"auto admission failure", ConnectivityAuto, false, admissionErr, []string{"relay"}, admissionErr},
+		{"relay admission failure", ConnectivityRelayOnly, false, admissionErr, []string{"relay"}, admissionErr},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			plan, err := test.policy.receiverPlan()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var events []string
+			peer := &activeReceiverPeer{}
+			got, err := beginReceiverConnectivity(plan, func() *activeReceiverPeer {
+				events = append(events, "peer")
+				if test.missingPeer {
+					return nil
+				}
+				return peer
+			}, func() error {
+				events = append(events, "relay")
+				return test.admissionError
+			})
+			if !errors.Is(err, test.wantError) || !slices.Equal(events, test.wantEvents) {
+				t.Fatalf("events=%v err=%v", events, err)
+			}
+			if err == nil && test.policy != ConnectivityRelayOnly && got != peer {
+				t.Fatal("connectivity lost its peer owner")
+			}
+		})
 	}
 }
 

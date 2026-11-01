@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/diagnostics"
+	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 
 	"github.com/windshare/windshare/connectivity/relayset"
@@ -21,6 +22,8 @@ import (
 const defaultCleanupTimeout = 5 * time.Second
 
 var ErrMissingOutputFactory = errors.New("receive output factory is required")
+
+var errInvalidRequest = errors.New("receive request is invalid")
 
 // Request binds one destination authority to a selection. Reconnection never
 // reacquires it: its reservation and authenticated progress belong to the task.
@@ -91,14 +94,43 @@ func (d Dependencies) normalized() Dependencies {
 	return d
 }
 
-type getRequest struct {
+type preparedRequest struct {
 	admission    OutputAdmission
 	operationID  receivecontract.OperationID
 	outDir       string
-	only         []string
+	selection    transfer.SelectionRules
 	link         link.Link
-	connectivity ConnectivityPolicy
+	connectivity receiverConnectivityPlan
 	waitTimeout  time.Duration
+	output       OutputFactory
+}
+
+// Freeze caller intent before acquiring resources so retries and connection
+// generations cannot reinterpret the selection of an already-owned operation.
+func prepareRequest(request Request) (preparedRequest, error) {
+	if request.Capability.Suite != link.SuiteSenderAuthenticated || request.WaitTimeout < 0 || request.Admission > OutputRedownload || !request.OperationID.IsZero() && request.Admission != OutputResumeExisting {
+		return preparedRequest{}, errInvalidRequest
+	}
+	connectivity, err := request.Connectivity.receiverPlan()
+	if err != nil {
+		return preparedRequest{}, err
+	}
+	rules, err := selectionRules(request.Only)
+	if err != nil {
+		return preparedRequest{}, err
+	}
+	return preparedRequest{
+		admission: request.Admission, operationID: request.OperationID,
+		outDir: request.Destination, selection: rules, link: request.Capability,
+		connectivity: connectivity, waitTimeout: request.WaitTimeout, output: request.Output,
+	}, nil
+}
+
+func selectionRules(requested []string) (transfer.SelectionRules, error) {
+	if len(requested) == 0 {
+		return transfer.NewSelectionRules(true, nil)
+	}
+	return transfer.NewPathSelectionRules(requested)
 }
 
 type runner struct {
