@@ -578,8 +578,10 @@ func (o *jobOutput) PauseTree(context.Context, JobPauseReason) (DirectTreeSettle
 }
 
 type jobTransactionScript struct {
+	beforeWrite              func() error
 	writeErr                 error
 	writeErrAfterWrite       error
+	afterWrite               func()
 	checkpointErr            error
 	checkpointErrAfterAccept error
 	omitCheckpoint           bool
@@ -592,6 +594,8 @@ type jobTransactionScript struct {
 	pauseErr                 error
 	pauseResult              *FileSettlement
 	pauseHook                func(context.Context, FilePauseReason)
+	pausePersistsPending     bool
+	pauseAdvancesGeneration  bool
 	retireSettlement         FileSettlementKind
 	retireErr                error
 	retireErrAfterWrite      error
@@ -616,6 +620,11 @@ type jobFileTransaction struct {
 func (t *jobFileTransaction) Binding() MaterializedFileBinding { return t.binding }
 
 func (t *jobFileTransaction) WriteRange(_ context.Context, offset uint64, data []byte) error {
+	if t.script.beforeWrite != nil {
+		if err := t.script.beforeWrite(); err != nil {
+			return err
+		}
+	}
 	if t.script.writeErr != nil {
 		return t.script.writeErr
 	}
@@ -626,6 +635,9 @@ func (t *jobFileTransaction) WriteRange(_ context.Context, offset uint64, data [
 	t.pending, err = MergeRanges(t.pending, set)
 	if err == nil && t.script.writeErrAfterWrite != nil {
 		return t.script.writeErrAfterWrite
+	}
+	if err == nil && t.script.afterWrite != nil {
+		t.script.afterWrite()
 	}
 	return err
 }
@@ -722,6 +734,20 @@ func (t *jobFileTransaction) Pause(ctx context.Context, reason FilePauseReason) 
 	kind := t.script.pauseSettlement
 	if kind == 0 {
 		kind = FilePaused
+	}
+	if t.script.pausePersistsPending && !t.pending.IsEmpty() {
+		// Batched native checkpoints persist written-but-unacknowledged bytes when
+		// the transaction pauses.
+		merged, err := MergeRanges(t.durable, t.pending)
+		if err != nil {
+			return FileSettlement{}, err
+		}
+		t.durable, t.pending = merged, content.RangeSet{}
+		t.generation++
+	}
+	if t.script.pauseAdvancesGeneration {
+		// Live partial files take a fresh in-process checkpoint when pausing.
+		t.generation++
 	}
 	checkpoint, err := t.output.verifyRanges(t.binding, t.generation, t.durable)
 	if err != nil {

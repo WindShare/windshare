@@ -472,10 +472,9 @@ func (progress *fileTransferProgress) reconcileSettlement(
 		return 0, false
 	}
 	if progress.hasPending {
-		if checkpoint.CheckpointGeneration() == progress.trusted.CheckpointGeneration() &&
-			exactRangeSetsEqual(checkpoint.Ranges(), progress.trusted.Ranges()) {
+		if sameOrNewerCheckpoint(checkpoint, progress.trusted) {
 			// A terminal settlement may explicitly decline the fully written but
-			// unconfirmed interval. Keeping the prior checkpoint is authoritative
+			// unconfirmed interval. Keeping the prior coverage is authoritative
 			// and must not turn unacknowledged bytes into progress.
 			progress.pending = content.Range{}
 			progress.hasPending = false
@@ -490,12 +489,20 @@ func (progress *fileTransferProgress) reconcileSettlement(
 		}
 		return 0, false
 	}
-	if !exactRangeSetsEqual(checkpoint.Ranges(), progress.trusted.Ranges()) ||
-		(checkpoint.Retention() == progress.trusted.Retention() && checkpoint.CheckpointGeneration() < progress.trusted.CheckpointGeneration()) {
+	if !sameOrNewerCheckpoint(checkpoint, progress.trusted) {
 		return 0, false
 	}
 	progress.trusted = checkpoint
 	return 0, true
+}
+
+// sameOrNewerCheckpoint reports whether a settlement keeps exactly the trusted
+// coverage. Pausing may advance the generation, so it must not move backwards;
+// restart and in-process generations are independent clocks and are not ordered.
+func sameOrNewerCheckpoint(checkpoint, trusted VerifiedRanges) bool {
+	return exactRangeSetsEqual(checkpoint.Ranges(), trusted.Ranges()) &&
+		(checkpoint.Retention() != trusted.Retention() ||
+			checkpoint.CheckpointGeneration() >= trusted.CheckpointGeneration())
 }
 
 func (progress *fileTransferProgress) acceptPending(next VerifiedRanges) uint64 {

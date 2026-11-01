@@ -439,6 +439,13 @@ func (r *jobRun) transferRequestedRange(
 			ctx, plan, opened, transaction, FailureBlockTransfer, err, policy.retireReason(), progress,
 		)
 	}
+	if !progress.beginPending(requested) {
+		return false, r.settleFailedFile(
+			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0, progress,
+		)
+	}
+	// The interval is pending before the write: cancellation can make a
+	// completed write look failed, and a pause may still persist its bytes.
 	if err := buffered.Flush(ctx); err != nil {
 		return false, r.settleFailedFile(
 			ctx, plan, opened, transaction, FailureBlockTransfer, err, 0, progress,
@@ -448,11 +455,6 @@ func (r *jobRun) transferRequestedRange(
 	// acceptance measures consumer progress for connection exploration.
 	if observer, ok := r.job.blocks.(interface{ RecordOutput(uint64) }); ok {
 		observer.RecordOutput(requested.Length())
-	}
-	if !progress.beginPending(requested) {
-		return false, r.settleFailedFile(
-			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0, progress,
-		)
 	}
 	acknowledgement, rawCheckpointErr := transaction.Accept(ctx)
 	err = normalizeOutputBoundary(ctx, rawCheckpointErr)

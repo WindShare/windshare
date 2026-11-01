@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -259,6 +260,84 @@ func TestTransferJobReconcilesOnlySettlementConfirmedPendingCheckpointBytes(t *t
 				result.Progress.NewlyVerifiedBytes != wantBytes || result.Progress.PublishedFiles != 0 ||
 				result.Progress.FileOutcomes.PausedFiles != 1 || !result.Progress.CountersExact {
 				t.Fatalf("checkpoint reconciliation result=%+v", result)
+			}
+		})
+	}
+}
+
+func TestTransferJobPauseAcceptsRangeWrittenAsCancellationArrives(t *testing.T) {
+	share := transferID[catalog.ShareInstance](0x63)
+	output := newJobOutput(share)
+	revisions := &jobRevisionClient{}
+	job, file := branchJob(t, output, revisions, scriptedRangeReader{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// Ctrl-C can arrive after the output accepted the write but before the job
+	// observes the write result. Pause then persists those bytes.
+	output.transactionScript.afterWrite = cancel
+	output.transactionScript.pausePersistsPending = true
+	expectedSize := revisions.opened[file].Descriptor.ExactSize()
+
+	result := job.Run(ctx)
+	transaction := output.transactions["file.bin"]
+	if result.Outcome != DirectTreeOutcomePaused || !errors.Is(result.TerminationCause, context.Canceled) ||
+		result.SettlementFailure != nil || result.SettlementFault.Valid() ||
+		len(result.Files) != 1 || result.Files[0].SettlementFailure != nil ||
+		transaction == nil || !slices.Equal(transaction.pauseReasons, []FilePauseReason{FilePauseInterrupted}) ||
+		result.Progress.FileOutcomes.PausedFiles != 1 || result.Progress.VerifiedBytes != expectedSize ||
+		result.Progress.RestartReusableBytes != expectedSize || !result.Progress.CountersExact {
+		t.Fatalf("interrupted write result=%+v transaction=%+v", result, transaction)
+	}
+}
+
+func TestTransferJobLiveOnlyPauseDeclinesRangeThatNeverReachedOutput(t *testing.T) {
+	diskFull := outputFailure(fault.ScopeFileLocal, fault.OutputStateIO, syscall.ENOSPC)
+	tests := []struct {
+		name    string
+		script  func(context.CancelFunc) jobTransactionScript
+		outcome DirectTreeOutcome
+		cause   error
+		failure error
+		reason  FilePauseReason
+	}{
+		{
+			name: "cancelled before write",
+			script: func(cancel context.CancelFunc) jobTransactionScript {
+				return jobTransactionScript{beforeWrite: func() error { cancel(); return context.Canceled }}
+			},
+			outcome: DirectTreeOutcomePaused, cause: context.Canceled, failure: context.Canceled, reason: FilePauseInterrupted,
+		},
+		{
+			name:    "disk full",
+			script:  func(context.CancelFunc) jobTransactionScript { return jobTransactionScript{writeErr: diskFull} },
+			outcome: DirectTreeOutcomePartial, failure: syscall.ENOSPC, reason: FilePauseOutputFailure,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			share := transferID[catalog.ShareInstance](0x64)
+			output := newJobOutput(share)
+			capabilities := output.Capabilities()
+			capabilities.Durability = DurabilityNone
+			output.capabilitiesOverride, output.inProcess = &capabilities, true
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			// The requested range is pending while it is written, but it never
+			// reaches the output. A live pause declines it at a newer generation.
+			output.transactionScript = test.script(cancel)
+			output.transactionScript.pauseAdvancesGeneration = true
+			job, _ := branchJob(t, output, &jobRevisionClient{}, scriptedRangeReader{})
+
+			result := job.Run(ctx)
+			transaction := output.transactions["file.bin"]
+			if result.Outcome != test.outcome || (test.cause == nil) != (result.TerminationCause == nil) ||
+				(test.cause != nil && !errors.Is(result.TerminationCause, test.cause)) ||
+				result.SettlementFailure != nil || result.SettlementFault.Valid() || result.TerminationFault.Valid() ||
+				len(result.Files) != 1 || !errors.Is(result.Files[0].Cause, test.failure) ||
+				result.Files[0].SettlementFailure != nil || result.Files[0].SettlementFault.Valid() ||
+				transaction == nil || !slices.Equal(transaction.pauseReasons, []FilePauseReason{test.reason}) ||
+				result.Progress.FileOutcomes.PausedFiles != 1 || result.Progress.VerifiedBytes != 0 || !result.Progress.CountersExact {
+				t.Fatalf("live-only pause result=%+v transaction=%+v", result, transaction)
 			}
 		})
 	}
