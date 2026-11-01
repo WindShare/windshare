@@ -32,6 +32,8 @@ export const BINDING = {
 }
 
 export class BackpressuredChannel implements FrameChannel {
+  readonly availability = new AbortController()
+  readonly unavailable = this.availability.signal
   state: ChannelState = 'open'
   readonly sent: Uint8Array[] = []
   sending = deferred<void>()
@@ -82,6 +84,7 @@ export class BackpressuredChannel implements FrameChannel {
   async close(): Promise<void> {
     if (this.state === 'closed') return
     this.state = 'closed'
+    this.availability.abort(new Error('Channel closed'))
     this.#failure = new Error('Channel closed')
     this.#capacity.reject(this.#failure)
     try { this.#controller.close() } catch { /* Reader cancellation already closed the stream. */ }
@@ -90,6 +93,10 @@ export class BackpressuredChannel implements FrameChannel {
 
 export function runtimeFixture(protocolTrace?: ProtocolTraceSource) {
   const channel = new BackpressuredChannel()
+  return { ...runtimeOnChannel(channel, protocolTrace), channel }
+}
+
+export function runtimeOnChannel(channel: FrameChannel, protocolTrace?: ProtocolTraceSource) {
   const events: ProtocolTraceEvent[] = []
   let seed = 10
   const options: ReceiverSessionOptions = {
@@ -106,7 +113,7 @@ export function runtimeFixture(protocolTrace?: ProtocolTraceSource) {
     options: ReceiverSessionOptions, keys: SessionKeys,
     receiverInstanceId: Uint8Array, reader: ReadableStreamDefaultReader<Uint8Array>,
   ) => ReceiverSessionRuntime
-  return { runtime: new Runtime(options, keys, id(6), channel.frames.getReader()), channel, events }
+  return { runtime: new Runtime(options, keys, id(6), channel.frames.getReader()), events }
 }
 
 export async function openSent(channel: BackpressuredChannel) {

@@ -32,6 +32,8 @@ interface LaneVector extends VectorCase {
 }
 
 class ScriptedChannel implements FrameChannel {
+  readonly availability = new AbortController()
+  readonly unavailable = this.availability.signal
   readonly frames: ReadableStream<Uint8Array>
   state = 'open' as const
   readonly sent: Uint8Array[] = []
@@ -66,6 +68,7 @@ class ScriptedChannel implements FrameChannel {
   async close(): Promise<void> {
     if (this.#closed) return
     this.#closed = true
+    this.availability.abort(new Error('Channel closed'))
     this.closes += 1
     try {
       this.#controller.close()
@@ -92,7 +95,7 @@ describe('receiver runtime caller-owned lane admission', () => {
       await runtime.retireLane(lane.attachedLaneId, 0)
       expect(initialChannel.closes).toBe(1)
       expect(replacement.closes).toBe(0)
-      expect(runtime.laneIds()).toEqual([lane.attachedLaneId])
+      expect(runtime.availableLaneIds()).toEqual([lane.attachedLaneId])
       expect(events.filter(event => event.eventName === 'lane_transition' && event.transition === 'detached')).toMatchObject([{
         termination: { kind: 'closed', reason: 'replaced' },
         correlation: { lane: { id: lane.attachedLaneId, epoch: 0 } },
@@ -170,7 +173,7 @@ describe('receiver runtime caller-owned lane admission', () => {
 
     expect(result).toMatchObject({ disposition: 'accepted', installation: 'installed' })
     expect(channel.sent).toEqual([b64ToBytes(lane.laneHelloB64)])
-    expect(runtime.laneIds()).toEqual([0x0102_0304, lane.attachedLaneId])
+    expect(runtime.availableLaneIds()).toEqual([0x0102_0304, lane.attachedLaneId])
     expect(channel.closes).toBe(0)
     expect(events.map((event) => event.eventName === 'lane_transition' && event.transition)).toEqual([
       'attached',
@@ -211,7 +214,7 @@ describe('receiver runtime caller-owned lane admission', () => {
       retryAfterMilliseconds: lane.laneRejectRetryAfterMilliseconds,
     })
     expect(channel.closes).toBe(1)
-    expect(runtime.laneIds()).toEqual([0x0102_0304])
+    expect(runtime.availableLaneIds()).toEqual([0x0102_0304])
     await runtime.close()
   })
 
@@ -235,7 +238,7 @@ describe('receiver runtime caller-owned lane admission', () => {
     })
     expect(result.installation === 'failed' && result.error).toBeInstanceOf(LaneInstallationError)
     expect(candidate.closes).toBe(1)
-    expect(runtime.laneIds()).toEqual([0x0102_0304, lane.attachedLaneId])
+    expect(runtime.availableLaneIds()).toEqual([0x0102_0304, lane.attachedLaneId])
     await runtime.close()
     expect(installed.closes).toBe(1)
     expect(candidate.closes).toBe(1)

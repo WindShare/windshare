@@ -257,7 +257,7 @@ class FakeSession {
   readonly #laneEpochs = new Map<number, number>()
   closeCalls = 0
 
-  laneIds(): readonly number[] {
+  availableLaneIds(): readonly number[] {
     return [...this.#ids]
   }
 
@@ -543,6 +543,7 @@ function fakePeer(): PeerChannel {
   return {
     pathRoute: 'direct',
     state: 'open',
+    unavailable: new AbortController().signal,
     frames: new ReadableStream<Uint8Array>(),
     opened: Promise.resolve(),
     done: Promise.resolve(),

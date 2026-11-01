@@ -33,6 +33,8 @@ const SESSION_ID = identity(9)
 const FILE_BYTES = 4n
 
 class ScriptedWire implements FrameChannel {
+  readonly availability = new AbortController()
+  readonly unavailable = this.availability.signal
   state: ChannelState = 'open'
   readonly frames: ReadableStream<Uint8Array>
   readonly requests: SessionMessage[] = []
@@ -106,6 +108,7 @@ class ScriptedWire implements FrameChannel {
   async close(): Promise<void> {
     if (this.state === 'closed') return
     this.state = 'closed'
+    this.availability.abort(new Error('Channel closed'))
     try { this.#controller.close() } catch { /* Runtime cancellation may have closed the reader. */ }
   }
 }

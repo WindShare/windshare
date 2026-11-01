@@ -184,6 +184,7 @@ describe('direct weekly network fixtures', () => {
     let pathRoute: PeerPathRoute = 'direct'
     const peer: PeerChannel = {
       state: 'open',
+    unavailable: new AbortController().signal,
       frames: new ReadableStream<Uint8Array>({ start: (controller) => controller.close() }),
       opened: Promise.resolve(),
       done: Promise.resolve(),

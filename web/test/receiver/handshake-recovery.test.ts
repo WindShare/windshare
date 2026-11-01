@@ -29,6 +29,8 @@ const signingKey = createPrivateKey({
 })
 
 class HandshakeChannel implements FrameChannel {
+  readonly availability = new AbortController()
+  readonly unavailable = this.availability.signal
   readonly frames: ReadableStream<Uint8Array>
   readonly helloSent = deferred<void>()
   state: FrameChannel['state'] = 'open'
@@ -62,6 +64,7 @@ class HandshakeChannel implements FrameChannel {
   async close(): Promise<void> {
     if (this.state === 'closed') return
     this.state = 'closed'
+    this.availability.abort(new Error('Channel closed'))
     try { this.#controller.close() } catch { /* Admission or lane teardown already cancelled its reader. */ }
   }
 }

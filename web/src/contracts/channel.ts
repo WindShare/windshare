@@ -14,6 +14,13 @@ export type ChannelState = 'connecting' | 'open' | 'closed'
  */
 export interface FrameChannel {
   readonly state: ChannelState
+
+  /**
+   * Aborts once the channel can no longer accept application sends. Accepted
+   * inbound frames still belong to frames; this signal never authorizes their
+   * cancellation. close() separately joins transport resource cleanup.
+   */
+  readonly unavailable: AbortSignal
   readonly frames: ReadableStream<Frame>
 
   /** Backpressure resolves on capacity and rejects on abort or remote close. */

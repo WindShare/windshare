@@ -86,7 +86,7 @@ class FakeSession {
 
   async sendOperationMessage(): Promise<void> {}
 
-  laneIds(): readonly number[] {
+  availableLaneIds(): readonly number[] {
     return [...this.ids]
   }
 
@@ -198,6 +198,8 @@ class ControlledOffers implements OfferChannelFactory {
 }
 
 class CountingPeer implements PeerChannel {
+  readonly availability = new AbortController()
+  readonly unavailable = this.availability.signal
   readonly state = 'open'
   readonly frames = new ReadableStream<Uint8Array>()
   readonly opened = Promise.resolve()
@@ -208,6 +210,7 @@ class CountingPeer implements PeerChannel {
   async send(): Promise<void> {}
   async sendTerminal(): Promise<void> {}
   async close(): Promise<void> {
+    this.availability.abort(new Error('Peer closed'))
     this.closes += 1
   }
 }
@@ -259,7 +262,7 @@ describe('browser peer attempt phase executor', () => {
     await expect(attempt.result).resolves.toMatchObject({ type: 'failed' })
     expect(retire).toHaveBeenCalledExactlyOnceWith(session.grant.laneId, session.grant.laneEpoch)
     expect(retire.mock.invocationCallOrder[0]).toBeLessThan(close.mock.invocationCallOrder[0]!)
-    expect(session.laneIds()).toEqual([1])
+    expect(session.availableLaneIds()).toEqual([1])
     expect(peer.closes).toBe(1)
   })
 

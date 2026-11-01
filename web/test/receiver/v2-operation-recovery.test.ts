@@ -30,7 +30,7 @@ it('finishes a catalog request on the surviving fourth lane without replacing th
   const attempted: number[] = []
   const page = Uint8Array.of(7, 8, 9)
   Object.assign(session, { beginOperation: vi.fn(async () => {
-    const laneId = session.laneIds()[0]!
+    const laneId = session.availableLaneIds()[0]!
     attempted.push(laneId)
     return { next: async () => {
       if (laneId !== 4) {
