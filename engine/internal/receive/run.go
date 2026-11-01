@@ -41,6 +41,14 @@ func runAttempt(ctx context.Context, request Request, deps Dependencies, retaine
 		step = observation.fail(stepInvalidRequest, err)
 		return
 	}
+	// Selection paths are caller input. Rejecting them before output or network
+	// work keeps a typo from touching the destination or the relay, and gives
+	// it the invalid-input reason instead of an unclassified planning error.
+	if _, err := selectionRules(request.Only); err != nil {
+		observation.fail(stepInvalidRequest, err)
+		step = observation.failCode(stepInvalidRequest, FailureInvalidInput)
+		return
+	}
 	if retained.authority == nil {
 		*retained, step = a.prepareGetOutput(ctx, input, observation)
 		if step != stepReady {
