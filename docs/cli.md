@@ -56,7 +56,7 @@ Optional `managed_turn_policies` and manual `turn` sections live in the same fil
 wind get <link> [-o <directory>] [--only <path>]... [--redownload] [--key <key>] [--connectivity auto|relay-only|p2p-only] [--wait-timeout <duration>]
 ```
 
-- Joins the share, resolves the selected catalog paths (`--only`, repeatable), and writes the result under `-o` (default `.`). A bare link uses `--key` or prompts for the key on stdin.
+- Joins the share, resolves the selected catalog paths (`--only`, repeatable), and writes the result under `-o` (default `.`). Paths are relative and slash-separated; a trailing directory slash and equivalent Unicode forms are normalized, and repeated paths are ignored. A bare link uses `--key` or prompts for the key on stdin.
 - Terminal result states are `success`, `partial`, `paused`, and `failed`.
 
 | Selection | Saved as |

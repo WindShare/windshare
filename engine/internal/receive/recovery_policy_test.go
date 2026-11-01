@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
@@ -19,14 +20,14 @@ func TestInvalidSelectionPreservesProgressWithoutOfferingSameRequestRetry(t *tes
 			t.Run(fmt.Sprintf("mode=%d/interactive=%t", mode, interactive), func(t *testing.T) {
 				prepared, authority := recoveryTestPreparation(t, mode)
 				attempts := 0
-				request := Request{}
+				request := Request{Capability: link.Link{Suite: link.SuiteSenderAuthenticated}, Connectivity: ConnectivityRelayOnly}
 				if interactive {
 					request.OnPause = func(context.Context, Pause) (RecoveryAction, error) {
 						t.Fatal("invalid selection offered an unchanged-request retry")
 						return RecoveryExit, nil
 					}
 				}
-				completed := runOperation(t.Context(), request, Dependencies{}, func(_ context.Context, _ Request, _ Dependencies, retained *getOutputPreparation) task.Completion[Result] {
+				completed := runOperation(t.Context(), request, Dependencies{}, func(_ context.Context, _ preparedRequest, _ Dependencies, retained *getOutputPreparation) task.Completion[Result] {
 					attempts++
 					if attempts > 1 {
 						t.Fatal("repeated a request whose selection is missing")
@@ -90,14 +91,14 @@ func TestRecoveryDistinguishesRequestAndContractFailuresFromRepairableFailures(t
 		t.Run(test.name, func(t *testing.T) {
 			prepared, authority := recoveryTestPreparation(t, OutputResumable)
 			attempts, prompts := 0, 0
-			request := Request{OnPause: func(_ context.Context, pause Pause) (RecoveryAction, error) {
+			request := Request{Capability: link.Link{Suite: link.SuiteSenderAuthenticated}, Connectivity: ConnectivityRelayOnly, OnPause: func(_ context.Context, pause Pause) (RecoveryAction, error) {
 				prompts++
 				if !test.retry || pause.Reason != test.reason || !pause.Allows(RecoveryRetry) || authority.closes != 0 {
 					t.Fatalf("inappropriate pause: %+v", pause)
 				}
 				return RecoveryRetry, nil
 			}}
-			completed := runOperation(t.Context(), request, Dependencies{}, func(_ context.Context, _ Request, _ Dependencies, retained *getOutputPreparation) task.Completion[Result] {
+			completed := runOperation(t.Context(), request, Dependencies{}, func(_ context.Context, _ preparedRequest, _ Dependencies, retained *getOutputPreparation) task.Completion[Result] {
 				attempts++
 				if attempts == 1 {
 					*retained = prepared

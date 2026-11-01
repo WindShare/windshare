@@ -2,7 +2,13 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
+	"slices"
+	"strings"
 	"testing"
+
+	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/transfer"
 
 	"github.com/windshare/windshare/engine"
 )
@@ -42,6 +48,74 @@ func TestReceiveCommandsKeepSeparateAdmissionContracts(t *testing.T) {
 				t.Fatalf("command changed admission semantics: %+v", request)
 			}
 		})
+	}
+}
+
+func TestReceiveCommandsNormalizeEquivalentCatalogSelections(t *testing.T) {
+	capability := newSemanticCapability(t)
+	encoded, err := capability.URL("https://relay.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range []receiveCommand{receiveGet, receiveResumeRetry} {
+		t.Run(string(command), func(t *testing.T) {
+			app := &App{Stderr: &bytes.Buffer{}}
+			request, outcome := app.parseReceiveRequest(command, []string{
+				encoded, "--only", "tree/", "--only", "cafe\u0301/",
+				"--only", "tree", "--only", "caf\u00e9", "--only", " spaced ",
+			})
+			want := []string{"tree", "caf\u00e9", " spaced "}
+			if outcome != requestParseReady || !slices.Equal(request.only, want) {
+				t.Fatalf("selection=%q outcome=%d", request.only, outcome)
+			}
+			if _, err := transfer.NewPathSelectionRules(request.only); err != nil {
+				t.Fatalf("CLI selection violated the core contract: %v", err)
+			}
+		})
+	}
+}
+
+func TestInvalidReceiveSelectionReportsTheOptionBeforeRequestingAKey(t *testing.T) {
+	capability := newSemanticCapability(t)
+	bare, _, err := capability.SplitURL("https://relay.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"", "./tree", "../escape", "tree//file.bin", "/tree", "tree//", "tree\\file", ".wsresume"} {
+		for _, command := range []receiveCommand{receiveGet, receiveResumeRetry} {
+			var stderr bytes.Buffer
+			// No input stream or engine: invalid paths must stop at argument parsing.
+			app := &App{Stderr: &stderr}
+			_, outcome := app.parseReceiveRequest(command, []string{bare, "--only", path})
+			if outcome != requestParseUsageFailure || !strings.Contains(stderr.String(), "--only") {
+				t.Fatalf("path=%q outcome=%d diagnostic=%q", path, outcome, stderr.String())
+			}
+		}
+	}
+}
+
+func TestReceiveSelectionBoundsApplyAfterDeduplication(t *testing.T) {
+	paths := make([]string, transfer.MaxSelectionPathTargets+1)
+	for i := range paths {
+		paths[i] = fmt.Sprintf("file-%04d", i)
+	}
+	if _, err := normalizeReceiveSelection(paths); err == nil {
+		t.Fatal("accepted too many distinct catalog paths")
+	}
+	paths[len(paths)-1] = paths[0] + "/"
+	normalized, err := normalizeReceiveSelection(paths)
+	if err != nil || len(normalized) != transfer.MaxSelectionPathTargets {
+		t.Fatalf("duplicate consumed a path slot: count=%d err=%v", len(normalized), err)
+	}
+	prefix := strings.Repeat("a", catalog.MaxNameBytes) + "/" + strings.Repeat("b", catalog.MaxNameBytes) + "/"
+	paths = paths[:0]
+	for totalBytes := 0; totalBytes <= transfer.MaxSelectionPathTargetBytes; {
+		path := fmt.Sprintf("%sfile-%04d", prefix, len(paths))
+		paths = append(paths, path)
+		totalBytes += len(path)
+	}
+	if _, err := normalizeReceiveSelection(paths); err == nil {
+		t.Fatal("accepted catalog paths beyond the total byte limit")
 	}
 }
 
