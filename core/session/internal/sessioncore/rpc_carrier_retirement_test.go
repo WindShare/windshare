@@ -16,7 +16,6 @@ func TestRPCPendingControlWakesWhenRequestCarrierRetires(t *testing.T) {
 	for _, kind := range []protocolsession.MessageKind{
 		protocolsession.MessageListChildren,
 		protocolsession.MessageOpenRevisions,
-		protocolsession.MessageRenewLease,
 		protocolsession.MessageReleaseLease,
 	} {
 		t.Run(fmt.Sprint(kind), func(t *testing.T) {

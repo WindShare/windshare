@@ -310,15 +310,30 @@ func (client *receiverRevisionClient) releaseRemoteLease(ctx context.Context, le
 
 func (client *receiverRevisionClient) renewLoop(state *remoteLeaseState) {
 	for state.renewAfter > 0 {
-		select {
-		case <-state.ctx.Done():
-			return
-		case <-client.after(state.renewAfter):
-		}
+		// The confirmed lifetime includes waiting to renew. Scheduling delays or a
+		// lost reply must not extend local authority beyond that same deadline.
 		ctx, cancel := context.WithTimeout(state.ctx, state.ttl)
-		lease, err := client.renew(ctx, state.id)
+		var lease contentflow.RemoteLease
+		var err error
+		select {
+		case <-ctx.Done():
+			if state.ctx.Err() != nil {
+				cancel()
+				return
+			}
+			err = ctx.Err()
+		case <-client.after(state.renewAfter):
+			lease, err = client.renew(ctx, state.id)
+		}
+		expired := ctx.Err() == context.DeadlineExceeded && state.ctx.Err() == nil
 		cancel()
 		if err != nil {
+			if expired && errors.Is(err, context.DeadlineExceeded) {
+				// The RPC trace retains the deadline. Reads need lease expiry rather
+				// than context cancellation so revisionaccess can replace authorization
+				// for the same immutable file while retaining received ranges.
+				err = content.ErrLeaseExpired
+			}
 			state.setError(err)
 			return
 		}

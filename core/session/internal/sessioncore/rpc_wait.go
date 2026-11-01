@@ -14,23 +14,23 @@ import (
 // reached the peer. The consumer must retire this attempt before retrying.
 var ErrRequestCarrierRetired = fmt.Errorf("%w: request carrier retired before response", ErrLaneUnavailable)
 
-func (call *Call) bindRequestCarrier(done <-chan struct{}) {
-	// Peer negotiation and block streams have their own multi-lane owners and
-	// retirement policies. Ordinary control RPCs otherwise have no wakeup when
-	// a confirmed response is lost with the physical carrier.
+func (call *Call) bindRequestCarrier(retired <-chan struct{}) {
+	// These operations have owners whose authority survives one carrier. In
+	// particular, renewal may finish on another lane; only the lease's confirmed
+	// validity bounds that wait. Retrying renewal would change its acceptance window.
 	switch call.requestKind {
-	case protocolsession.MessagePeerOffer, protocolsession.MessageRequestBlocks:
+	case protocolsession.MessagePeerOffer, protocolsession.MessageRequestBlocks, protocolsession.MessageRenewLease:
 		return
 	}
 	call.stateMu.Lock()
-	call.requestCarrierDone = done
+	call.requestCarrierRetired = retired
 	call.stateMu.Unlock()
 }
 
-func (call *Call) controlCarrierDone() <-chan struct{} {
+func (call *Call) controlCarrierRetired() <-chan struct{} {
 	call.stateMu.Lock()
 	defer call.stateMu.Unlock()
-	return call.requestCarrierDone
+	return call.requestCarrierRetired
 }
 
 func (call *Call) acceptResponse(response operationResponse) (protocolsession.Message, bool) {
@@ -61,7 +61,7 @@ func (client *Requests) awaitCall(ctx context.Context, call *Call, cancelOnConte
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	carrierDone := call.controlCarrierDone()
+	carrierRetired := call.controlCarrierRetired()
 	for {
 		done := call.doneChannel()
 		select {
@@ -81,7 +81,7 @@ func (client *Requests) awaitCall(ctx context.Context, call *Call, cancelOnConte
 		case <-done:
 			call.recordProtocolTraceFailure(session.ErrOperationMissing)
 			return protocolsession.Message{}, session.ErrOperationMissing
-		case <-carrierDone:
+		case <-carrierRetired:
 			// A response already authenticated before retirement remains usable.
 			// This also admits a final that migrated to another surviving lane.
 			select {
