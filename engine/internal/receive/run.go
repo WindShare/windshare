@@ -9,7 +9,6 @@ import (
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/connectivity/v2peer/peerset"
 	"github.com/windshare/windshare/core/downloadmetrics"
-	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/session/receivercontinuation"
 
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
@@ -19,13 +18,10 @@ import (
 
 const getProgressInterval = 500 * time.Millisecond
 
-func runAttempt(ctx context.Context, request Request, deps Dependencies, retained *getOutputPreparation) (completed task.Completion[Result]) {
-	deps = deps.normalized()
-	deps.Control.Diagnostics = request.Diagnostics
-	a := &runner{receiverRecoveryOptions: deps.Recovery, receiverPeerFactory: deps.PeerFactory, receiverDial: deps.ReceiverDial, getOutputFactory: request.Output, control: deps.Control, clock: deps.Clock}
+func runAttempt(ctx context.Context, input preparedRequest, deps Dependencies, retained *getOutputPreparation) (completed task.Completion[Result]) {
+	a := &runner{receiverRecoveryOptions: deps.Recovery, receiverPeerFactory: deps.PeerFactory, receiverDial: deps.ReceiverDial, getOutputFactory: input.output, control: deps.Control, clock: deps.Clock}
 	a.receiveCapacity = deps.Capacity
 	a.connectivityCapacity = deps.Connectivity
-	input := getRequest{admission: request.Admission, operationID: request.OperationID, outDir: request.Destination, only: append([]string(nil), request.Only...), link: request.Capability, connectivity: request.Connectivity, waitTimeout: request.WaitTimeout}
 	startedAt := a.clock.Now()
 	metrics := downloadmetrics.Prepare(a.clock.Now)
 	observation := newObservation(deps.Control, deps.Control.Diagnostics.Enabled(), metrics)
@@ -33,14 +29,6 @@ func runAttempt(ctx context.Context, request Request, deps Dependencies, retaine
 	var settlement *SettlementInput
 	step := stepReady
 	defer func() { completed = active.settleAttempt(ctx, settlement, step, startedAt) }()
-	if request.Capability.Suite != link.SuiteSenderAuthenticated || request.WaitTimeout < 0 || request.Admission > OutputRedownload || !request.OperationID.IsZero() && request.Admission != OutputResumeExisting {
-		step = observation.failCode(stepInvalidRequest, FailureInvalidInput)
-		return
-	}
-	if _, err := request.Connectivity.receiverPlan(); err != nil {
-		step = observation.fail(stepInvalidRequest, err)
-		return
-	}
 	if retained.authority == nil {
 		*retained, step = a.prepareGetOutput(ctx, input, observation)
 		if step != stepReady {
@@ -119,12 +107,6 @@ func (active *receiveOperation) settleAttempt(ctx context.Context, settlement *S
 	return completed
 }
 
-func selectionRules(requested []string) (transfer.SelectionRules, error) {
-	if len(requested) == 0 {
-		return transfer.NewSelectionRules(true, nil)
-	}
-	return transfer.NewPathSelectionRules(requested)
-}
 func (a *runner) runTransferJob(ctx context.Context, job *transfer.TransferJob, observation getObservation, observeSelection func(transfer.ReceiveProgressSnapshot)) transfer.JobResult {
 	snapshots := job.ProgressSnapshots()
 	result := make(chan transfer.JobResult, 1)

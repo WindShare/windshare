@@ -18,7 +18,7 @@ import (
 // the final ownership snapshot so no generation can outlive task completion.
 type receiveOperation struct {
 	runner       *runner
-	input        getRequest
+	input        preparedRequest
 	output       getOutputPreparation
 	observation  getObservation
 	metrics      *downloadmetrics.Metrics

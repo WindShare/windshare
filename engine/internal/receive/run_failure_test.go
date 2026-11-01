@@ -100,3 +100,37 @@ func testDiagnosticSink(t *testing.T) diagnostics.Sink {
 	t.Cleanup(func() { stream.Close() })
 	return stream.Sink()
 }
+
+func TestReceiveRejectsNonCanonicalSelectionAsInvalidInputBeforeIO(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		only []string
+	}{
+		{"trailing slash", []string{"tree/"}},
+		{"dot prefix", []string{"./tree"}},
+		{"empty segment", []string{"tree//file.bin"}},
+		{"absolute", []string{"/tree"}},
+		{"canonical alias", []string{"tree", "tree/"}},
+		{"non-normalized Unicode", []string{"cafe\u0301"}},
+		{"duplicate", []string{"tree", "tree"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			created, dialed := false, false
+			request := Request{Capability: link.Link{Suite: link.SuiteSenderAuthenticated}, Connectivity: ConnectivityRelayOnly, Only: test.only,
+				Output: OutputFactoryFunc(func(OutputConfig) (OutputAuthority, error) {
+					created = true
+					return &failedOutputAuthority{mode: OutputResumable}, nil
+				}), Destination: t.TempDir(), Diagnostics: testDiagnosticSink(t)}
+			result := Run(context.Background(), request, Dependencies{ReceiverDial: func(context.Context, relayv2.ReceiverConfig) (relayset.ReceiverConnection, error) {
+				dialed = true
+				return nil, errors.New("invalid selection reached the relay")
+			}})
+			failure, classified := errors.AsType[Failure](result.Err)
+			if created || dialed || !result.Value.Connectivity.Final || result.Outcome != task.OutcomeFailed || result.FailureClass != task.FailureUsage || !classified ||
+				failure.Code != FailureInvalidInput || !errors.Is(result.Err, transfer.ErrInvalidSelectionRules) || result.Value.Recovery.Reason != RecoveryInvalidRequest {
+				t.Fatalf("only=%q created=%v dialed=%v outcome=%d class=%d code=%d reason=%d err=%v", test.only, created, dialed,
+					result.Outcome, result.FailureClass, failure.Code, result.Value.Recovery.Reason, result.Err)
+			}
+		})
+	}
+}

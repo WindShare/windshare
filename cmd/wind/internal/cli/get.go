@@ -12,7 +12,9 @@ import (
 
 	"github.com/windshare/windshare/adapters/filesystem"
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/link"
+	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine"
 )
@@ -135,6 +137,11 @@ func (a *App) parseReceiveRequest(command receiveCommand, args []string) (receiv
 		a.writeCompleteLine("%s: exactly one link argument is required", name)
 		return receiveRequest{}, requestParseUsageFailure
 	}
+	paths, err := normalizeReceiveSelection(only)
+	if err != nil {
+		a.writeCompleteLine("%s: %v", name, err)
+		return receiveRequest{}, requestParseUsageFailure
+	}
 	var operationID receivecontract.OperationID
 	if operation != "" {
 		raw, err := hex.DecodeString(operation)
@@ -165,9 +172,39 @@ func (a *App) parseReceiveRequest(command receiveCommand, args []string) (receiv
 	}
 	return receiveRequest{
 		admission: admission, operationID: operationID,
-		outDir: *outDir, only: append([]string(nil), only...), link: capability, connectivity: connectivity,
+		outDir: *outDir, only: paths, link: capability, connectivity: connectivity,
 		observation: observation, waitTimeout: *waitTimeout,
 	}, requestParseReady
+}
+
+// CLI spellings may be equivalent even though core selection identity must be
+// canonical. Keep catalog paths independent of the host filesystem's path rules.
+func normalizeReceiveSelection(requested []string) ([]string, error) {
+	if len(requested) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]struct{}, min(len(requested), transfer.MaxSelectionPathTargets))
+	paths := make([]string, 0, min(len(requested), transfer.MaxSelectionPathTargets))
+	var totalBytes uint64
+	for _, raw := range requested {
+		path, err := catalog.CanonicalPath(strings.TrimSuffix(raw, "/"))
+		if err != nil {
+			return nil, fmt.Errorf("--only %q: %w", raw, err)
+		}
+		if _, duplicate := seen[path]; duplicate {
+			continue
+		}
+		if len(paths) == transfer.MaxSelectionPathTargets {
+			return nil, fmt.Errorf("--only: select at most %d distinct catalog paths", transfer.MaxSelectionPathTargets)
+		}
+		totalBytes += uint64(len(path))
+		if totalBytes > transfer.MaxSelectionPathTargetBytes {
+			return nil, fmt.Errorf("--only: catalog paths exceed the %d-byte total limit", transfer.MaxSelectionPathTargetBytes)
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	return paths, nil
 }
 
 func (a *App) resolveLink(raw, keyString string) (link.Link, error) {
