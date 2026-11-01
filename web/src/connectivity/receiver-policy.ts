@@ -231,11 +231,14 @@ export class ReceiverConnectivity {
     this.#unsubscribeLaneChanges = this.#session.subscribeLaneChanges((change) => {
       if (change.type === 'attached') {
         this.#laneEpochs.set(change.laneId, change.laneEpoch)
+      } else if (change.type === 'unavailable') {
+        this.#withdrawAdmittedLane(change.laneId, change.laneEpoch)
       } else {
         if (this.#laneEpochs.get(change.laneId) === change.laneEpoch) {
           this.#laneEpochs.delete(change.laneId)
+          this.#withdrawAdmittedLane(change.laneId, change.laneEpoch)
+          this.#lanes.remove(change.laneId)
         }
-        this.#removeAdmittedLane(change.laneId, change.laneEpoch)
         this.#peerDetached(change.laneId, change.laneEpoch)
       }
     })
@@ -292,7 +295,7 @@ export class ReceiverConnectivity {
   }
 
   addRelayLane(laneId: number): void {
-    if (!this.#session.laneIds().includes(laneId)) {
+    if (!this.#session.availableLaneIds().includes(laneId)) {
       throw new Error('Replacement relay lane is not attached to this ProtocolSession')
     }
     this.#relayLaneIds.add(laneId)
@@ -542,7 +545,7 @@ export class ReceiverConnectivity {
       !equalDiagnosticIdentities(candidate.protocolSessionId, this.#protocolSessionId) ||
       this.#peers.path(candidate.peerPathId) === undefined ||
       this.#laneEpochs.get(candidate.laneId) !== candidate.laneEpoch ||
-      !this.#session.laneIds().includes(candidate.laneId)
+      !this.#session.availableLaneIds().includes(candidate.laneId)
     ) return false
     const pathRoute = candidate.peer.pathRoute
     if (this.#policy === 'p2p-only' && pathRoute !== 'direct') return false
@@ -633,7 +636,7 @@ export class ReceiverConnectivity {
     if (existing !== undefined) {
       return existing.laneEpoch === laneEpoch && existing.route === route
     }
-    if (!this.#session.laneIds().includes(laneId)) return false
+    if (!this.#session.availableLaneIds().includes(laneId)) return false
     this.#lanes.add(this.#createBlockLane(laneId), route, laneEpoch)
     this.#admitted.set(laneId, { laneEpoch, route })
     try {
@@ -656,10 +659,16 @@ export class ReceiverConnectivity {
   }
 
   #removeAdmittedLane(laneId: number, laneEpoch: number): void {
+    if (this.#admitted.get(laneId)?.laneEpoch !== laneEpoch) return
+    this.#withdrawAdmittedLane(laneId, laneEpoch)
+    this.#lanes.remove(laneId)
+  }
+
+  #withdrawAdmittedLane(laneId: number, laneEpoch: number): void {
     const admitted = this.#admitted.get(laneId)
     if (admitted === undefined || admitted.laneEpoch !== laneEpoch) return
     this.#admitted.delete(laneId)
-    this.#lanes.remove(laneId)
+    this.#lanes.withdraw(laneId, laneEpoch)
     try {
       this.#onContentLaneDetached(Object.freeze({
         laneId,

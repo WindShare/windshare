@@ -194,8 +194,20 @@ export class OperationQueue implements SessionOperation {
     }
   }
 
+  /** Physical input exhaustion preserves authenticated responses already owned by the consumer. */
+  endInput(reason: unknown): Promise<void> {
+    if (!this.#closed) {
+      this.#closed = true
+      this.#failure = reason
+      this.#authority.retire('local-cancel')
+      for (const reader of this.#readers.splice(0)) reader.reject(reason)
+      this.#settle(false, 'local_cancel')
+    }
+    return new Promise(resolve => this.onSettled(resolve))
+  }
+
   fail(reason: unknown): void {
-    if (this.#failure !== undefined) return
+    if (this.#failure !== undefined && this.#consumerSettled) return
     const settlement = isSessionFailure(reason) ? 'session_terminal' : 'local_cancel'
     if (settlement === 'session_terminal') this.#authority.close()
     else this.#authority.retire('local-cancel')
@@ -203,7 +215,7 @@ export class OperationQueue implements SessionOperation {
   }
 
   cancel(cause: unknown, protocolReason?: OperationCancelReason): void {
-    if (this.#failure !== undefined) return
+    if (this.#failure !== undefined && this.#consumerSettled) return
     if (protocolReason !== undefined) this.#cancellationReason = cancellationTraceReason(protocolReason)
     this.#authority.retire('local-cancel')
     this.#rejectConsumer(cause, 'local_cancel')

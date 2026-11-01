@@ -357,7 +357,7 @@ describe('v2 receiver reconnect supervisor', () => {
     expect(factory.attachRelayCalls).toBe(1)
     expect(factory.connectFreshCalls).toBe(0)
     expect(supervisor.generationId).toBe(1)
-    expect(session.laneIds()).toEqual([2, 3])
+    expect(session.availableLaneIds()).toEqual([2, 3])
     expect(initialRelay.closeCalls).toBe(1)
     expect(generations).toEqual([])
 
@@ -483,7 +483,7 @@ describe('v2 receiver reconnect supervisor', () => {
     expect(secondFactory.attachRelayCalls).toBe(0)
     expect(first.generationId).toBe(1)
     expect(second.generationId).toBe(1)
-    expect(secondSession.laneIds()).toEqual([1, 2])
+    expect(secondSession.availableLaneIds()).toEqual([1, 2])
 
     await Promise.all([first.close(), second.close()])
   })

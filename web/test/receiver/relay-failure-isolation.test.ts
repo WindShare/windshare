@@ -179,7 +179,7 @@ describe('relay endpoint failure isolation', () => {
       expect(trace).toHaveBeenCalledWith(expect.objectContaining({
         eventName: 'connection_recovery', transition: 'terminal', relayBase: INVALID_RELAY, generationId: 1,
       }))
-      await expect(supervisor.execute(undefined, async generation => generation.session.laneIds()))
+      await expect(supervisor.execute(undefined, async generation => generation.session.availableLaneIds()))
         .resolves.toMatchObject({ value: [1] })
       supervisor.requestReconnect()
       await vi.advanceTimersByTimeAsync(60_000)

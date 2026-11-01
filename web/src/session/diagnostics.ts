@@ -108,7 +108,7 @@ export type ProtocolOperationTraceEvent =
 export type LaneTransitionTraceEvent =
   | Readonly<{
       eventName: 'lane_transition'
-      transition: 'attached' | 'grant_requested' | 'grant_received' | 'hello_sent' |
+      transition: 'attached' | 'unavailable' | 'grant_requested' | 'grant_received' | 'hello_sent' |
         'admission_response_received' | 'admission_accepted' | 'installed'
       correlation: FailureCorrelation
     }>

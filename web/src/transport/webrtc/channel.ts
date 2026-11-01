@@ -43,6 +43,7 @@ export class WebRTCFrameChannel implements FrameChannel {
   readonly #flow: DataChannelFlowControl
   readonly #frameStream: FrameStream
   readonly #sendLock = new SendLock()
+  readonly #availability = new AbortController()
   readonly #opened = deferred<void>()
   readonly #done = deferred<void>()
   readonly #physicalDone = deferred<void>()
@@ -95,6 +96,8 @@ export class WebRTCFrameChannel implements FrameChannel {
       this.#reconcileOpen()
     }
   }
+
+  get unavailable(): AbortSignal { return this.#availability.signal }
 
   get state(): ChannelState {
     return this.#state
@@ -182,6 +185,7 @@ export class WebRTCFrameChannel implements FrameChannel {
     this.#terminal = 'local'
     this.#terminalAcknowledgement = deferred<void>()
     this.#terminalAcknowledgement.promise.catch(() => undefined)
+    this.#availability.abort(new WebRTCChannelClosedError('WebRTC local terminal claimed'))
     // An ordinary send may own the serialized turn while waiting for low water.
     // Waking it makes the terminal claim visible before it can enqueue more data.
     this.#wakeFlowWaiters()
@@ -295,6 +299,7 @@ export class WebRTCFrameChannel implements FrameChannel {
         return
       }
       this.#terminal = 'remote'
+      this.#availability.abort(new WebRTCChannelClosedError('WebRTC remote terminal announced'))
       this.#wakeFlowWaiters()
       return
     }
@@ -475,6 +480,7 @@ export class WebRTCFrameChannel implements FrameChannel {
     this.#wakeFlowWaiters()
     const unavailable = classifiedReason ?? new WebRTCChannelClosedError()
     this.#sendLock.shutdown(unavailable)
+    this.#availability.abort(unavailable)
     if (wasConnecting) {
       this.#opened.reject(unavailable)
     }

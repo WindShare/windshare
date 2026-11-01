@@ -105,7 +105,7 @@ describe('request cancellation across send backpressure', () => {
       await channel.sending.promise
       await vi.advanceTimersByTimeAsync(SESSION_SEND_TIMEOUT_MILLISECONDS)
       await pending
-      expect(runtime.laneIds()).toEqual([])
+      expect(runtime.availableLaneIds()).toEqual([])
       expect(runtime.isClosed).toBe(false)
       expect(events).toContainEqual(expect.objectContaining({
         transition: 'detached', termination: {

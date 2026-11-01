@@ -45,7 +45,7 @@ export type LaneTermination =
   | Readonly<{ kind: 'physical_failure' | 'authenticated_failure'; failure: unknown }>
 
 export interface LaneChange {
-  readonly type: 'attached' | 'detached'
+  readonly type: 'attached' | 'unavailable' | 'detached'
   readonly laneId: number
   readonly laneEpoch: number
   readonly failure?: unknown

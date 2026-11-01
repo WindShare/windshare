@@ -18,6 +18,7 @@ export class FakeSession {
   readonly keys: { readonly protocolSessionId: Uint8Array<ArrayBuffer>; readonly initialLaneEpoch: 0 }
   readonly protocolSessionIdentity: ProtocolSessionIdentity
   readonly #laneIds: Set<number>
+  readonly #receiving: Set<number>
   readonly #listeners = new Set<(change: LaneChange) => void>()
   closeCalls = 0
   isClosed = false
@@ -31,9 +32,12 @@ export class FakeSession {
     })
     this.protocolSessionIdentity = createProtocolSessionIdentity(this.keys.protocolSessionId)
     this.#laneIds = new Set(laneIds)
+    this.#receiving = new Set(laneIds)
   }
 
-  laneIds(): readonly number[] {
+  get hasAttachedLanes(): boolean { return this.#receiving.size > 0 }
+
+  availableLaneIds(): readonly number[] {
     return [...this.#laneIds]
   }
 
@@ -44,11 +48,18 @@ export class FakeSession {
 
   attach(laneId: number): void {
     this.#laneIds.add(laneId)
+    this.#receiving.add(laneId)
     this.#emit({ type: 'attached', laneId, laneEpoch: 1 })
+  }
+
+  withdraw(laneId: number): void {
+    this.#laneIds.delete(laneId)
+    this.#emit({ type: 'unavailable', laneId, laneEpoch: laneId === this.initialLaneId ? 0 : 1 })
   }
 
   detach(laneId: number, failure?: unknown): void {
     this.#laneIds.delete(laneId)
+    this.#receiving.delete(laneId)
     this.#emit({
       type: 'detached',
       laneId,

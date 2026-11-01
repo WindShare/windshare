@@ -25,13 +25,16 @@ it('retires the admitted lane once and releases both waiting operations and bloc
     await Promise.all([response, sending])
     await runtime.retireLane(1, 0)
     expect(runtime.isClosed).toBe(false)
-    expect(runtime.laneIds()).toEqual([])
+    expect(runtime.availableLaneIds()).toEqual([])
     expect(channel.state).toBe('closed')
     expect(detachments(events)).toMatchObject([{
       termination: { kind: 'closed', reason: 'retired' },
       correlation: { lane: { id: 1, epoch: 0 } },
     }])
-    expect(changes).toEqual([{ type: 'detached', laneId: 1, laneEpoch: 0 }])
+    expect(changes).toEqual([
+      { type: 'unavailable', laneId: 1, laneEpoch: 0 },
+      { type: 'detached', laneId: 1, laneEpoch: 0 },
+    ])
   } finally {
     await runtime.close()
   }
