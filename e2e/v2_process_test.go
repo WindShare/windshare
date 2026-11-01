@@ -187,6 +187,7 @@ func startTracedV2Process(
 	process.userTraceCommand = command
 	process.milestones = &observationMilestones{path: tracePath, command: command, done: process.done}
 	t.Cleanup(process.milestones.close)
+	t.Cleanup(func() { process.logFailureTrace(t) })
 	return process
 }
 
