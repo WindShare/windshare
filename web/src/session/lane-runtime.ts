@@ -27,7 +27,9 @@ export class SessionLane {
   readonly #router: OperationRouter
   readonly #descriptor: ShareDescriptor
   readonly #sessionId: Uint8Array<ArrayBuffer>
-  readonly #onClosed: (lane: SessionLane, termination: LaneTermination) => void
+  readonly #onInputEnded: (lane: SessionLane, termination: LaneTermination) => Promise<void>
+  readonly #onUnavailable: (lane: SessionLane) => void
+  #available = true
   readonly #pumpTask: Promise<void>
   readonly #protocolTrace: ProtocolTraceSource | undefined
   #closed = false
@@ -42,7 +44,8 @@ export class SessionLane {
     readonly laneId: number
     readonly laneEpoch: number
     readonly router: OperationRouter
-    readonly onClosed: (lane: SessionLane, termination: LaneTermination) => void
+    readonly onInputEnded: (lane: SessionLane, termination: LaneTermination) => Promise<void>
+    readonly onUnavailable: (lane: SessionLane) => void
     readonly protocolTrace?: ProtocolTraceSource
   }) {
     this.#protocolTrace = options.protocolTrace
@@ -53,7 +56,8 @@ export class SessionLane {
     this.#router = options.router
     this.#descriptor = options.descriptor
     this.#sessionId = options.keys.protocolSessionId.slice()
-    this.#onClosed = options.onClosed
+    this.#onInputEnded = options.onInputEnded
+    this.#onUnavailable = options.onUnavailable
     this.writer = new SessionWriter(
       options.channel,
       new EnvelopeSealer(options.keys.receiverToSenderKey, {
@@ -68,7 +72,8 @@ export class SessionLane {
           const failure = new SessionRuntimeError('lane', 'Session lane delivery failed', { cause: reason })
           bindFailureEvidence(failure, captureFailureEvidence(reason, { operation: 'session.send' }))
           this.#recordFailure(failure)
-          this.#shutdown().catch(() => undefined)
+          // A rejected send must not cancel the transport's accepted inbound prefix.
+          if (!this.#channel.unavailable.aborted) this.#shutdown().catch(() => undefined)
         },
         observe: (message, transition, evidence) => options.protocolTrace?.current?.({
           eventName: 'protocol_operation',
@@ -95,6 +100,20 @@ export class SessionLane {
     this.#pumpTask = this.#pump()
   }
 
+  get available(): boolean { return this.#available && !this.#channel.unavailable.aborted }
+  get done(): Promise<void> { return this.#pumpTask }
+
+  observeAvailability(): void {
+    this.#channel.unavailable.addEventListener('abort', this.#withdraw, { once: true })
+    if (this.#channel.unavailable.aborted) this.#withdraw()
+  }
+
+  readonly #withdraw = (): void => {
+    if (!this.#available) return
+    this.#available = false
+    this.#onUnavailable(this)
+  }
+
   close(reason: LaneCloseReason): Promise<void> {
     this.#termination ??= Object.freeze({ kind: 'closed', reason })
     return this.#shutdown()
@@ -108,6 +127,7 @@ export class SessionLane {
   async #close(): Promise<void> {
     if (!this.#closed) {
       this.#closed = true
+      this.#withdraw()
       this.writer.fail(new SessionRuntimeError('lane', 'Session lane closed'))
       await this.#reader.cancel().catch(error => this.#observeCleanup(error, 'session.reader.cancel'))
     }
@@ -191,6 +211,7 @@ export class SessionLane {
       }
       const termination = this.#termination!
       this.#closed = true
+      this.#withdraw()
       this.writer.fail(termination.kind === 'closed'
         ? new SessionRuntimeError('lane', 'Session lane closed')
         : termination.failure)
@@ -199,8 +220,12 @@ export class SessionLane {
       } catch {
         // Another close path may already have released the only reader.
       }
-      await this.#channel.close().catch(error => this.#observeCleanup(error, 'session.channel.close'))
-      this.#onClosed(this, termination)
+      this.#channel.unavailable.removeEventListener('abort', this.#withdraw)
+      // Input settlement and transport cleanup have distinct owners. Observers
+      // must not wait for a socket close handshake to withdraw work.
+      const input = this.#onInputEnded(this, termination)
+      const cleanup = this.#channel.close().catch(error => this.#observeCleanup(error, 'session.channel.close'))
+      try { await input } finally { await cleanup }
     }
   }
 }

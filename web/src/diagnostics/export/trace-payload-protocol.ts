@@ -459,6 +459,7 @@ export function validatePeerRecovery(payload: UnknownRecord): void {
 export function validateLane(payload: UnknownRecord): void {
   switch (payload.transition) {
     case 'attached':
+    case 'unavailable':
     case 'grant_requested':
     case 'grant_received':
     case 'hello_sent':

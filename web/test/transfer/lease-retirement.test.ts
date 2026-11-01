@@ -57,7 +57,7 @@ async function runDownload(scenario: Scenario) {
     await Promise.race([Promise.all([trigger, siblingReading.promise]),
       task.then(() => { throw new Error('Job ended before reproduction trigger') })])
     expect(output.commits).toEqual([wire.files[0]!.idText])
-    expect(wire.runtime.laneIds()).toEqual([1, 2])
+    expect(wire.runtime.availableLaneIds()).toEqual([1, 2])
     expect([...wire.relay.errors, ...wire.direct.errors]).toEqual([])
 
     if (scenario === 'relay-loss-before-release') {
@@ -105,7 +105,7 @@ async function runDownload(scenario: Scenario) {
     }
     const evidence = {
       scenario, worker: result.worker, lifecycle: result.lifecycle, failureTrigger: result.failureTrigger,
-      liveProtocolLanes: wire.runtime.laneIds(), siblingAborted, directProbeSucceeded: true,
+      liveProtocolLanes: wire.runtime.availableLaneIds(), siblingAborted, directProbeSucceeded: true,
       committedFiles: output.commits, bytesWritten: output.writes.reduce((sum, write) => sum + write.bytes, 0),
       progress, transitions, protocolEvents: wire.events, retirements: wire.retirements,
     }

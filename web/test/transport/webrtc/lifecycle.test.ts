@@ -442,12 +442,17 @@ describe('WebRTC lifecycle and protocol failures', () => {
     expect(raw.closeCalls).toBe(1)
   })
 
-  it('freezes ordinary outbound traffic as soon as a remote intent is admitted', async () => {
+  it('withdraws ordinary sends at remote intent while preserving the final inbound frame', async () => {
     const { raw, channel } = wrap()
+    expect(channel.unavailable.aborted).toBe(false)
     raw.receiveText(TERMINAL_INTENT_CONTROL)
+    expect(channel.unavailable.aborted).toBe(true)
     await expect(channel.send(Uint8Array.of(1))).rejects.toThrow(/terminal/u)
-    raw.remoteClose()
+    raw.receiveBinary(Uint8Array.of(7))
     await channel.done
+    expect(await readAll(channel.frames)).toEqual([Uint8Array.of(7)])
+    raw.remoteClose()
+    await channel.close()
   })
 
   it('wakes a capacity-blocked ordinary send when remote terminal intent is admitted', async () => {

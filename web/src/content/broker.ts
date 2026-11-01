@@ -134,6 +134,9 @@ export class BlockBroker implements RouteAuthorizedBlockRangeReader {
   readonly #validateDemand: (demand: BlockDemand) => unknown
   readonly #inflight = new Map<string, SharedBlockLoad>()
   readonly #queued = new Set<SharedBlockLoad>()
+  readonly #reads = new Set<Promise<BlockRecord>>()
+  readonly #idleWaiters = new Set<() => void>()
+  #ranges = 0
   #activeLoads = 0
   #loadSequence = 0
   readonly #unsubscribeBudget: () => void
@@ -157,7 +160,26 @@ export class BlockBroker implements RouteAuthorizedBlockRangeReader {
     this.#validateDemand = options.validateDemand ?? (() => undefined)
   }
 
-  async readBlock(
+  readBlock(demand: BlockDemand, options: RouteAuthorizedBlockReadOptions): Promise<BlockRecord> {
+    const task = this.#readBlock(demand, options)
+    this.#reads.add(task)
+    const settled = () => { this.#reads.delete(task); this.#notifyIdle() }
+    task.then(settled, settled)
+    return task
+  }
+
+  waitForIdle(): Promise<void> {
+    if (this.#closed || (this.#reads.size === 0 && this.#ranges === 0)) return Promise.resolve()
+    return new Promise(resolve => this.#idleWaiters.add(resolve))
+  }
+
+  #notifyIdle(): void {
+    if (!this.#closed && (this.#reads.size !== 0 || this.#ranges !== 0)) return
+    for (const resolve of this.#idleWaiters) resolve()
+    this.#idleWaiters.clear()
+  }
+
+  async #readBlock(
     demand: BlockDemand,
     options: RouteAuthorizedBlockReadOptions,
   ): Promise<BlockRecord> {
@@ -249,6 +271,7 @@ export class BlockBroker implements RouteAuthorizedBlockRangeReader {
         ...(options.onReceive === undefined ? {} : { onReceive: options.onReceive }),
       }),
     })
+    this.#ranges++
     const stopObservation = options.remainingWork === undefined ? undefined : this.#lanes.observeRemainingWork(options.remainingWork)
     try {
       for (let emitted = plan.blocks.first; emitted < plan.blocks.end; emitted += 1n) {
@@ -272,6 +295,8 @@ export class BlockBroker implements RouteAuthorizedBlockRangeReader {
       unlink()
       controller.abort(new DOMException('Range consumer left', 'AbortError'))
       await window.close()
+      this.#ranges--
+      this.#notifyIdle()
     }
   }
 
@@ -316,6 +341,7 @@ export class BlockBroker implements RouteAuthorizedBlockRangeReader {
     this.#inflight.clear()
     this.#queued.clear()
     this.#buffers.clearCache()
+    this.#notifyIdle()
   }
 
   #createLoad(demand: BlockDemand, priority: BlockPriority): SharedBlockLoad {

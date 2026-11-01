@@ -120,6 +120,12 @@ export class LaneSet {
   #authenticatedBytes = 0
   #outputBytes = 0
   readonly #lanes = new Map<number, LaneState>()
+  readonly #draining = new Map<number, LaneState>()
+  readonly #retired = new Set<LaneState>()
+  readonly #activeFetches = new Map<LaneState, number>()
+  readonly #idleWaiters = new Set<() => void>()
+  readonly #work = new Set<Promise<BlockRecord>>()
+  readonly #admissionLifetime = new AbortController()
   readonly #useful = new Map<number, { bytes: number; admittedAt: number; lastAt: number | undefined }>()
   readonly #waiters = new Set<PendingLane>()
   readonly #dispatchSequence: BlockDispatchSequenceAuthority
@@ -163,13 +169,38 @@ export class LaneSet {
     this.#wakeWaiters()
   }
 
-  remove(laneId: number): void {
-    this.#lanes.get(laneId)?.unsubscribeReceive()
-    this.#lanes.get(laneId)?.lane.close?.()
+  withdraw(laneId: number, laneEpoch: number): void {
+    const state = this.#lanes.get(laneId)
+    if (state?.laneEpoch !== laneEpoch) return
+    state.unsubscribeReceive()
     this.#lanes.delete(laneId)
+    this.#draining.set(laneId, state)
+    this.requests.remove(laneId, laneEpoch)
+    this.#wakeWaiters()
+  }
+
+  remove(laneId: number): void {
+    const state = this.#lanes.get(laneId) ?? this.#draining.get(laneId)
+    if (state !== undefined) {
+      state.unsubscribeReceive()
+      this.#retired.add(state)
+      this.#releaseRetired(state)
+    }
+    this.#lanes.delete(laneId)
+    this.#draining.delete(laneId)
     this.#useful.delete(laneId)
     this.requests.remove(laneId)
     this.#wakeWaiters()
+  }
+
+  waitForIdle(): Promise<void> {
+    if (this.#work.size === 0) return Promise.resolve()
+    return new Promise(resolve => this.#idleWaiters.add(resolve))
+  }
+
+  #releaseRetired(state: LaneState): void {
+    if (this.#activeFetches.has(state) || !this.#retired.delete(state)) return
+    state.lane.close?.()
   }
 
   get size(): number {
@@ -267,7 +298,28 @@ export class LaneSet {
     this.#admissions.wake()
   }
 
-  async fetchWork(work: ContentWork): Promise<BlockRecord> {
+  retire(): void {
+    const reason = new SessionRuntimeError('lane', 'Content generation retired')
+    this.#admissionLifetime.abort(reason)
+    this.requests.close()
+    for (const waiter of [...this.#waiters]) this.#rejectWaiter(waiter, reason)
+  }
+
+  fetchWork(work: ContentWork): Promise<BlockRecord> {
+    const task = this.#fetchWork(work)
+    this.#work.add(task)
+    const settled = () => {
+      this.#work.delete(task)
+      if (this.#work.size !== 0) return
+      for (const resolve of this.#idleWaiters) resolve()
+      this.#idleWaiters.clear()
+    }
+    task.then(settled, settled)
+    return task
+  }
+
+  async #fetchWork(work: ContentWork): Promise<BlockRecord> {
+    this.#admissionLifetime.signal.throwIfAborted()
     const { demand, routes } = work
     const signal = AbortSignal.any([work.signal, this.#lifetime.signal])
     signal.throwIfAborted()
@@ -304,6 +356,8 @@ export class LaneSet {
   async #admit(
     work: ContentWork, signal: AbortSignal, attempts: BlockAttempts, failures: readonly unknown[],
   ): Promise<ContentAdmission> {
+    signal = AbortSignal.any([signal, this.#admissionLifetime.signal])
+    signal.throwIfAborted()
     while (!this.#availableLanes(work.routes).some(lane => attempts.allows(lane))) {
       await this.#awaitReplacementOrThrow(failures, attempts, work.routes, signal)
     }
@@ -352,10 +406,14 @@ export class LaneSet {
     const expectedMilliseconds = expected.milliseconds
     const bytes = demandBytes(demand)
     const releaseAttempt = this.#attemptLifetimes.begin(demand.leaseId)
+    this.#activeFetches.set(state, (this.#activeFetches.get(state) ?? 0) + 1)
     let outcome: SamplingOutcome = 'cancelled'
     let received = 0
     try {
       signal.throwIfAborted()
+      if (this.#lanes.get(state.lane.id) !== state) {
+        throw new SessionRuntimeError('lane', 'Content lane is no longer available')
+      }
       const observation = Object.freeze({
         dispatchSequence: this.#dispatchSequence.next(),
         laneId: state.lane.id, laneEpoch: state.laneEpoch, route: state.route,
@@ -398,10 +456,18 @@ export class LaneSet {
     } finally {
       releaseAttempt()
       admission.close(outcome)
+      this.#finishFetch(state)
       if (outcome === 'superseded') {
         state.performance.superseded(bytes, this.#now() - started)
       }
     }
+  }
+
+  #finishFetch(state: LaneState): void {
+    const active = this.#activeFetches.get(state)! - 1
+    if (active === 0) this.#activeFetches.delete(state)
+    else this.#activeFetches.set(state, active)
+    this.#releaseRetired(state)
   }
 
   #observeFetched(state: LaneState, observation: BlockDispatchObservation, record: BlockRecord): void {
@@ -424,8 +490,13 @@ export class LaneSet {
     this.#closed = true
     this.requests.close()
     this.#lifetime.abort(new Error('LaneSet is closed'))
-    for (const state of this.#lanes.values()) { state.unsubscribeReceive(); state.lane.close?.() }
+    for (const state of new Set([...this.#lanes.values(), ...this.#draining.values(), ...this.#retired])) {
+      state.unsubscribeReceive()
+      state.lane.close?.()
+    }
     this.#lanes.clear()
+    this.#draining.clear()
+    this.#retired.clear()
     const reason = new Error('LaneSet is closed')
     for (const waiter of [...this.#waiters]) this.#rejectWaiter(waiter, reason)
   }

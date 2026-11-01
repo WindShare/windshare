@@ -125,6 +125,8 @@ class AdmissionGatedPeerChannel implements PeerChannel {
     }), { signal: this.#gateAbort.signal })
   }
 
+  get unavailable(): AbortSignal { return this.#channel.unavailable }
+
   get state() {
     return this.#channel.state
   }
