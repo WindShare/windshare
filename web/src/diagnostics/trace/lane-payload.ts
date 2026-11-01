@@ -5,6 +5,7 @@ export type LaneTransitionPayloadV1 =
   | Readonly<{
       transition:
         | 'attached'
+        | 'unavailable'
         | 'grant_requested'
         | 'grant_received'
         | 'hello_sent'

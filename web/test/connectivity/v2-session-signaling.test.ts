@@ -55,6 +55,8 @@ function signalingRouter(): OperationRouter {
 }
 
 class InMemoryFrameChannel implements FrameChannel {
+  readonly availability = new AbortController()
+  readonly unavailable = this.availability.signal
   readonly frames: ReadableStream<Uint8Array<ArrayBuffer>>
   readonly sent: Uint8Array<ArrayBuffer>[] = []
   #controller!: ReadableStreamDefaultController<Uint8Array<ArrayBuffer>>
@@ -81,6 +83,7 @@ class InMemoryFrameChannel implements FrameChannel {
   async close(): Promise<void> {
     if (this.state === 'closed') return
     this.state = 'closed'
+    this.availability.abort(new Error('Channel closed'))
     try {
       this.#controller.close()
     } catch {
@@ -217,7 +220,8 @@ describe('v2 authenticated session signaling', () => {
       laneId: sessionKeys.initialLaneId,
       laneEpoch: sessionKeys.initialLaneEpoch,
       router,
-      onClosed: () => undefined,
+      onUnavailable: () => undefined,
+      onInputEnded: async () => undefined,
     })
     let nonce = 0
     const senderSealer = new EnvelopeSealer(sessionKeys.senderToReceiverKey, {

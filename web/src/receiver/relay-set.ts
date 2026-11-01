@@ -48,7 +48,7 @@ export class ReceiverRelaySet {
       if (attached.laneId !== laneId) continue
       this.#connections.delete(relayBase)
       this.#release(attached)
-      if (this.#session.laneIds().length > 0) this.#ensure(relayBase)
+      if (this.#session.availableLaneIds().length > 0) this.#ensure(relayBase)
       return
     }
   }
@@ -65,7 +65,7 @@ export class ReceiverRelaySet {
     this.#tasks.set(relayBase, task)
     task.finally(() => {
       if (this.#tasks.get(relayBase) === task) this.#tasks.delete(relayBase)
-      if (this.#session.laneIds().length > 0 && !this.#session.isClosed) this.#ensure(relayBase)
+      if (this.#session.availableLaneIds().length > 0 && !this.#session.isClosed) this.#ensure(relayBase)
     }).catch(() => undefined)
   }
 
@@ -73,7 +73,7 @@ export class ReceiverRelaySet {
     let attempt = 0
     const startedAt = this.#options.now()
     const signal = this.#lifetime.signal
-    while (!signal.aborted && !this.#session.isClosed && this.#session.laneIds().length > 0) {
+    while (!signal.aborted && !this.#session.isClosed && this.#session.availableLaneIds().length > 0) {
       const phase = reconnectPhase(attempt, this.#options.now() - startedAt)
       attempt += 1
       this.#options.observe(relayBase, { attempt, phase, transition: 'attempt_started' })

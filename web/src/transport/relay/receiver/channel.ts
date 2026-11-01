@@ -48,6 +48,8 @@ export class OpaqueRelayFrameChannel implements FrameChannel {
     this.#heartbeat = new RelayHeartbeat(socket, error => this.#fail(error, RELAY_HEARTBEAT_CLOSE_CODE, 'relay heartbeat failed'), heartbeatTrace)
   }
 
+  get unavailable(): AbortSignal { return this.#lifetime.signal }
+
   get state(): ChannelState {
     return this.#state
   }

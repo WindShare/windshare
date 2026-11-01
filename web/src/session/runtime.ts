@@ -1,6 +1,6 @@
 import { observeProtocolFailure } from './failure-diagnostics'
 import { cancellationTraceReason } from './operation-diagnostics'
-import { OperationCancellationError } from './runtime-types'
+import { cancellationFromSignal } from './operations/cancellation'
 import { decodePeerPathControl } from '../protocol/peer-path-control'
 import { decodeTurnControl } from '../protocol/turn-control'
 import type { ShareDescriptor } from '../catalog/records'
@@ -53,7 +53,6 @@ import {
   type LaneChange,
   type LaneTermination,
   OPERATION_CANCEL_REASON,
-  type OperationCancelReason,
   type OperationCancellation,
   type ReceiverSessionOptions,
   type SessionOperation,
@@ -90,6 +89,7 @@ export class ReceiverSessionRuntime {
   readonly receiverInstanceId: Uint8Array<ArrayBuffer>
   readonly #router: OperationRouter
   readonly #lanes = new Map<number, SessionLane>()
+  readonly #ownedLanes = new Set<SessionLane>()
   readonly #laneEpochs = new Map<number, number>()
   readonly #laneInstallTails = new Map<number, Promise<void>>()
   readonly #operationLanes = new Map<OperationQueue, number>()
@@ -167,9 +167,11 @@ export class ReceiverSessionRuntime {
     return this.#closed
   }
 
-  laneIds(): readonly number[] {
-    return Object.freeze([...this.#lanes.keys()])
+  availableLaneIds(): readonly number[] {
+    return Object.freeze([...this.#lanes.values()].filter(lane => lane.available).map(lane => lane.id))
   }
+
+  get hasAttachedLanes(): boolean { return this.#lanes.size > 0 }
 
   operationCorrelation(operation: SessionOperation): FailureCorrelation {
     const laneId = this.#operationLanes.get(operation as OperationQueue)
@@ -418,21 +420,21 @@ export class ReceiverSessionRuntime {
     // the same snapshot even if the caller subsequently reuses its buffer.
     const requestBody = canonicalBody.slice()
     const operation = await this.#router.admit(kind, requestBody, options.signal)
+    let correlation = this.operationCorrelation(operation)
     try {
       const message = encodeMessage(kind, operation.id, requestBody)
       options.signal?.throwIfAborted()
       const lane = this.#selectLane(options.laneId)
       this.#operationLanes.set(operation, lane.id)
+      correlation = this.operationCorrelation(operation)
       operation.onSettled(() => this.#operationLanes.delete(operation))
       const delivery = lane.writer.enqueue(message)
       this.#operationSends.set(operation, delivery)
       const cancellationSignal = options.signal
       if (cancellationSignal !== undefined) {
         const cancel = () => {
-          const cause = abortCause(cancellationSignal)
           this.cancelOperation(operation, {
-            protocolReason: cancellationProtocolReason(cause),
-            cause,
+            ...cancellationFromSignal(cancellationSignal),
             laneId: lane.id,
           }).catch(() => undefined)
         }
@@ -450,7 +452,7 @@ export class ReceiverSessionRuntime {
       }))
     } catch (error) {
       const evidence = options.signal?.aborted === true && error === options.signal.reason ? undefined
-        : observeProtocolFailure(this.#protocolTrace, error, 'session.request.send', this.operationCorrelation(operation))
+        : observeProtocolFailure(this.#protocolTrace, error, 'session.request.send', correlation)
       this.#emitProtocolTrace(() => Object.freeze({
         eventName: 'protocol_operation',
         transition: 'request_send_failed',
@@ -558,7 +560,7 @@ export class ReceiverSessionRuntime {
   async #close(): Promise<void> {
     this.#closed = true
     this.#router.terminate(new SessionRuntimeError('session', 'Receiver session closed'))
-    await Promise.allSettled([...this.#lanes.values()].map((lane) => lane.close('session_closed')))
+    await Promise.allSettled([...this.#ownedLanes].map((lane) => lane.close('session_closed')))
     this.#lanes.clear()
     this.#laneEpochs.clear()
     this.#laneInstallTails.clear()
@@ -587,12 +589,13 @@ export class ReceiverSessionRuntime {
       laneEpoch,
       router: this.#router,
       ...(this.#protocolTrace === undefined ? {} : { protocolTrace: this.#protocolTrace }),
-      onClosed: (closed, termination) => {
+      onUnavailable: lane => this.#withdrawLane(lane),
+      onInputEnded: async (closed, termination) => {
         // Fatal authenticated failures become non-recoverable before observers
         // see the final lane detach; physical zero-lane loss remains recoverable.
         const fatal = termination.kind === 'authenticated_failure'
         if (fatal) this.#closed = true
-        this.#detach(closed, termination.kind === 'closed' ? termination : Object.freeze({
+        const detach = this.#detach(closed, termination.kind === 'closed' ? termination : Object.freeze({
           kind: termination.kind,
           failure: new SessionRuntimeError(
             fatal ? 'session' : 'lane',
@@ -601,9 +604,12 @@ export class ReceiverSessionRuntime {
           ),
         }))
         if (fatal) this.close().catch(() => undefined)
+        await detach
       },
     })
     this.#lanes.set(laneId, lane)
+    this.#ownedLanes.add(lane)
+    lane.done.finally(() => this.#ownedLanes.delete(lane)).catch(() => undefined)
     this.#laneEpochs.set(laneId, laneEpoch)
     this.#emitProtocolTrace(() => Object.freeze({
       eventName: 'lane_transition',
@@ -614,18 +620,19 @@ export class ReceiverSessionRuntime {
       }),
     }))
     this.#emitLaneChange({ type: 'attached', laneId, laneEpoch })
+    lane.observeAvailability()
   }
 
   #selectLane(id?: number): SessionLane {
     if (id === undefined) {
       const initial = this.#lanes.get(this.initialLaneId)
-      if (initial !== undefined) return initial
-      const available = this.#lanes.values().next().value as SessionLane | undefined
+      if (initial?.available) return initial
+      const available = [...this.#lanes.values()].find(lane => lane.available)
       if (available !== undefined) return available
       throw new SessionRuntimeError('lane', 'No session lane is available')
     }
     const lane = this.#lanes.get(id)
-    if (lane === undefined) throw new SessionRuntimeError('lane', 'Requested lane is unavailable')
+    if (!lane?.available) throw new SessionRuntimeError('lane', 'Requested lane is unavailable')
     return lane
   }
 
@@ -661,17 +668,32 @@ export class ReceiverSessionRuntime {
     }
   }
 
-  #detach(
+  #withdrawLane(lane: SessionLane): void {
+    if (this.#lanes.get(lane.id) !== lane) return
+    this.#emitProtocolTrace(() => Object.freeze({
+      eventName: 'lane_transition', transition: 'unavailable',
+      correlation: Object.freeze({ protocolSessionId: this.protocolSessionIdentity,
+        lane: Object.freeze({ id: lane.id, epoch: lane.epoch }) }),
+    }))
+    this.#emitLaneChange({ type: 'unavailable', laneId: lane.id, laneEpoch: lane.epoch })
+  }
+
+  async #detach(
     lane: SessionLane,
     termination: LaneTermination,
-  ): void {
+  ): Promise<void> {
     if (this.#lanes.get(lane.id) !== lane) return
-    this.#lanes.delete(lane.id)
     const failure = termination.kind === 'closed' ? undefined : termination.failure
     const reason = failure ?? new SessionRuntimeError('lane', 'Operation lane became unavailable')
+    const drains: Promise<void>[] = []
     for (const [operation, laneId] of this.#operationLanes) {
-      if (laneId === lane.id) operation.fail(reason)
+      if (laneId !== lane.id) continue
+      if (termination.kind === 'physical_failure') drains.push(operation.endInput(reason))
+      else operation.fail(reason)
     }
+    await Promise.all(drains)
+    if (this.#lanes.get(lane.id) !== lane) return
+    this.#lanes.delete(lane.id)
     this.#emitProtocolTrace(() => Object.freeze({
       eventName: 'lane_transition',
       transition: 'detached',
@@ -724,16 +746,4 @@ export class ReceiverSessionRuntime {
 
 function isReceiverFollowupAllowed(request: MessageKind, followup: MessageKind): boolean {
   return request === MESSAGE_KIND.peerOffer && followup === MESSAGE_KIND.peerCandidate
-}
-
-
-function abortCause(signal: AbortSignal): unknown {
-  return signal.reason ?? new DOMException('Operation aborted', 'AbortError')
-}
-
-function cancellationProtocolReason(cause: unknown): OperationCancelReason {
-  if (cause instanceof OperationCancellationError) return cause.protocolReason
-  return cause instanceof DOMException && cause.name === 'TimeoutError'
-    ? OPERATION_CANCEL_REASON.timeout
-    : OPERATION_CANCEL_REASON.user
 }
