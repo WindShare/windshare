@@ -303,7 +303,7 @@ func (client *Requests) sendRequest(
 			usableAtSelection = client.runtime.lanes.usableCount()
 		}
 		call.setProtocolTraceLane(selected.identity, usableAtSelection)
-		call.bindRequestCarrier(selected.done)
+		call.bindRequestCarrier(selected.retired)
 		var receipt protocolsession.SendReceipt
 		if message.Kind() == protocolsession.MessagePeerOffer {
 			receipt, err = selected.writer.TryControlObservingAuthenticatedViolations(message, call.observeAuthenticatedOperationViolation)

@@ -251,16 +251,16 @@ func (routes *operationLaneRoutes) clear() {
 }
 
 type Call struct {
-	id                 protocolsession.OperationID
-	messages           chan operationResponse
-	laneMu             sync.Mutex
-	lane               session.LaneIdentity
-	stateMu            sync.Mutex
-	lastResponseLane   session.LaneIdentity
-	requestCarrierDone <-chan struct{}
-	closed             bool
-	done               chan struct{}
-	candidateSend      chan struct{}
+	id                    protocolsession.OperationID
+	messages              chan operationResponse
+	laneMu                sync.Mutex
+	lane                  session.LaneIdentity
+	stateMu               sync.Mutex
+	lastResponseLane      session.LaneIdentity
+	requestCarrierRetired <-chan struct{}
+	closed                bool
+	done                  chan struct{}
+	candidateSend         chan struct{}
 
 	generation protocolsession.OperationGeneration
 	authority  protocolsession.OutboundOperationPermit
