@@ -30,7 +30,7 @@ func runControlRequest[T any](
 		}
 		value, receiveErr := receive(call)
 		cleanupErr := rpc.CancelAndEnd(call, contentflow.CancelReasonOutputAbort)
-		if receiveErr != sessioncore.ErrRequestCarrierRetired {
+		if !errors.Is(receiveErr, sessioncore.ErrRequestCarrierRetired) {
 			return value, receiveErr
 		}
 		if cleanupErr != nil {
