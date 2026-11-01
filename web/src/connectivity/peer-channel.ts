@@ -44,6 +44,8 @@ export class OwnedPeerChannel implements PeerChannel {
     this.done = ownerDone
   }
 
+  get unavailable(): AbortSignal { return this.#channel.unavailable }
+
   get state() {
     return this.#channel.state
   }

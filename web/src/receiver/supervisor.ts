@@ -121,6 +121,7 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
   readonly #waiters = new Set<GenerationWaiter>()
   readonly #generationListeners = new Set<ProtocolGenerationListener>()
   readonly #generations: ReceiverGenerationFactory
+  readonly #retiring = new Map<ReceiverGeneration, Promise<void>>()
   #current: ReceiverGeneration
   #nextGeneration = 1
   #reconcileTask: Promise<void> | undefined
@@ -317,16 +318,23 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
       generationId: generation.id, revision: generation.availability.revision + 1,
     })
     if (change.type === 'attached') {
+      if (generation.session.availableLaneIds().length > 0) this.connection.connected()
       this.#wakeWaiters()
       return
     }
     generation.lanes.requests.remove(change.laneId, change.laneEpoch)
+    if (change.type === 'unavailable') {
+      if (generation.session.availableLaneIds().length === 0) this.connection.reconnecting({ kind: 'connecting' })
+      this.#wakeWaiters()
+      return
+    }
     if (generation.session.isClosed || isSessionFailure(change.failure)) {
       this.#failTerminal(change.failure ?? new Error('ProtocolSession closed terminally'))
       return
     }
-    if (generation.session.laneIds().length === 0) {
+    if (!generation.session.hasAttachedLanes) {
       generation.retired = true
+      generation.lanes.retire()
       this.pathActivity.generationRetired(generation.id)
       generation.session.close().catch(() => undefined)
     }
@@ -346,6 +354,10 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
     signal?.throwIfAborted()
     this.#throwIfTerminal()
     if (!isRecoverableOperationFailure(error, generation, this.#current)) throw error
+    if (this.isCurrent(generation) && generation.session.availableLaneIds().length === 0) {
+      await this.#ready(signal)
+      return
+    }
     const availability = generation.availability
     const decision = recovery.decide(this.isCurrent(generation) ? availability : undefined)
     this.#traceOperationRecovery(generation, operationSequence, recovery, decision)
@@ -388,7 +400,7 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
         operationSequence,
         generationId: generation.id,
         availabilityRevision: generation.availability.revision,
-        laneCount: generation.session.laneIds().length,
+        laneCount: generation.session.availableLaneIds().length,
         unchangedAvailabilityRetries: recovery.unchangedAvailabilityRetries,
         ...decision,
       })
@@ -428,7 +440,7 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
   }
 
   async #reconcileGeneration(generation: ReceiverGeneration): Promise<boolean> {
-    if (generation.retired || generation.session.laneIds().length === 0) {
+    if (generation.retired || !generation.session.hasAttachedLanes) {
       await this.#replaceGeneration(generation)
       return true
     }
@@ -506,6 +518,13 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
       await closeCore(core)
       throw error
     }
+    // Buffered output can outlive network recovery. Its previous generation
+    // remains owned without delaying this generation's next recovery attempt.
+    const cleanup = Promise.all([previous.lanes.waitForIdle(), previous.broker.waitForIdle()])
+      .then(() => previous.close())
+      .catch(error => this.#observeRecoveryError(error))
+      .finally(() => this.#retiring.delete(previous))
+    this.#retiring.set(previous, cleanup)
     this.#current = next
     this.#traceConnection({ transition: 'connected' })
     this.connection.connected()
@@ -514,7 +533,6 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
     next.relays.start()
     this.#wakeWaiters()
     this.#publishGenerationInstalled(next)
-    await previous.close()
   }
 
   #publishGenerationInstalled(generation: ReceiverGeneration): void {
@@ -537,7 +555,7 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
       signal?.throwIfAborted()
       this.#throwIfTerminal()
       const current = this.#current
-      if (!current.retired && current.session.laneIds().length > 0) return current
+      if (!current.retired && current.session.availableLaneIds().length > 0) return current
       await this.#waitForWake(signal)
     }
   }
@@ -596,6 +614,7 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
     this.connectivity.close().catch(() => undefined)
     this.#factory.close()
     this.#current.close().catch(() => undefined)
+    for (const generation of this.#retiring.keys()) generation.close().catch(() => undefined)
   }
 
   #throwIfTerminal(): void {
@@ -630,6 +649,8 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
     await Promise.allSettled([
       this.connectivity.close(),
       this.#current.close(),
+      ...[...this.#retiring.keys()].map(generation => generation.close()),
+      ...this.#retiring.values(),
       ...(this.#reconcileTask === undefined ? [] : [this.#reconcileTask]),
     ])
     this.#factory.close()
