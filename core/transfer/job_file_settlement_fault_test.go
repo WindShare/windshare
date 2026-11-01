@@ -266,27 +266,72 @@ func TestTransferJobReconcilesOnlySettlementConfirmedPendingCheckpointBytes(t *t
 }
 
 func TestTransferJobPauseAcceptsRangeWrittenAsCancellationArrives(t *testing.T) {
-	share := transferID[catalog.ShareInstance](0x63)
+	for _, liveOnly := range []bool{false, true} {
+		name := "restart"
+		if liveOnly {
+			name = "live only"
+		}
+		t.Run(name, func(t *testing.T) {
+			share := transferID[catalog.ShareInstance](0x63)
+			output := newJobOutput(share)
+			if liveOnly {
+				capabilities := output.Capabilities()
+				capabilities.Durability = DurabilityNone
+				output.capabilitiesOverride, output.inProcess = &capabilities, true
+				// Live partial files take a fresh in-process checkpoint when pausing.
+				output.transactionScript.pauseAdvancesGeneration = true
+			}
+			revisions := &jobRevisionClient{}
+			job, file := branchJob(t, output, revisions, scriptedRangeReader{})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			// Ctrl-C can arrive after the output accepted the write but before the job
+			// observes the write result. Pause then persists those bytes.
+			output.transactionScript.afterWrite = cancel
+			output.transactionScript.pausePersistsPending = true
+			expectedSize := revisions.opened[file].Descriptor.ExactSize()
+			expectedReusable := expectedSize
+			if liveOnly {
+				expectedReusable = 0
+			}
+
+			result := job.Run(ctx)
+			transaction := output.transactions["file.bin"]
+			if result.Outcome != DirectTreeOutcomePaused || !errors.Is(result.TerminationCause, context.Canceled) ||
+				result.SettlementFailure != nil || result.SettlementFault.Valid() || result.TerminationFault.Valid() ||
+				len(result.Files) != 1 || result.Files[0].SettlementFailure != nil ||
+				transaction == nil || !slices.Equal(transaction.pauseReasons, []FilePauseReason{FilePauseInterrupted}) ||
+				result.Progress.FileOutcomes.PausedFiles != 1 || result.Progress.VerifiedBytes != expectedSize ||
+				result.Progress.RestartReusableBytes != expectedReusable || !result.Progress.CountersExact {
+				t.Fatalf("interrupted write result=%+v transaction=%+v", result, transaction)
+			}
+		})
+	}
+}
+
+// An output error reported after the bytes reached the output, which the pause
+// then persists, is isolated to the file like any other file-local output
+// failure. Before the interval was pending during the write, the unexplained
+// coverage made this a job-wide output contract fault.
+func TestTransferJobPauseAcceptsRangeWrittenBeforeOutputFailure(t *testing.T) {
+	share := transferID[catalog.ShareInstance](0x65)
 	output := newJobOutput(share)
 	revisions := &jobRevisionClient{}
 	job, file := branchJob(t, output, revisions, scriptedRangeReader{})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	// Ctrl-C can arrive after the output accepted the write but before the job
-	// observes the write result. Pause then persists those bytes.
-	output.transactionScript.afterWrite = cancel
+	output.transactionScript.writeErrAfterWrite = outputFailure(fault.ScopeFileLocal, fault.OutputStateIO, syscall.ENOSPC)
 	output.transactionScript.pausePersistsPending = true
 	expectedSize := revisions.opened[file].Descriptor.ExactSize()
 
-	result := job.Run(ctx)
+	result := job.Run(context.Background())
 	transaction := output.transactions["file.bin"]
-	if result.Outcome != DirectTreeOutcomePaused || !errors.Is(result.TerminationCause, context.Canceled) ||
+	if result.Outcome != DirectTreeOutcomePartial || result.TerminationCause != nil || result.TerminationFault.Valid() ||
 		result.SettlementFailure != nil || result.SettlementFault.Valid() ||
-		len(result.Files) != 1 || result.Files[0].SettlementFailure != nil ||
-		transaction == nil || !slices.Equal(transaction.pauseReasons, []FilePauseReason{FilePauseInterrupted}) ||
+		len(result.Files) != 1 || !errors.Is(result.Files[0].Cause, syscall.ENOSPC) ||
+		result.Files[0].SettlementFailure != nil || result.Files[0].SettlementFault.Valid() ||
+		transaction == nil || !slices.Equal(transaction.pauseReasons, []FilePauseReason{FilePauseOutputFailure}) ||
 		result.Progress.FileOutcomes.PausedFiles != 1 || result.Progress.VerifiedBytes != expectedSize ||
 		result.Progress.RestartReusableBytes != expectedSize || !result.Progress.CountersExact {
-		t.Fatalf("interrupted write result=%+v transaction=%+v", result, transaction)
+		t.Fatalf("output failure after write result=%+v transaction=%+v", result, transaction)
 	}
 }
 
