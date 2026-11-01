@@ -2,16 +2,18 @@ package receiversession
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
-func TestControlTransactionsRecoverConfirmedFramesLostWithCarrier(t *testing.T) {
+func TestControlTransactionsSettleConfirmedFramesLostWithCarrier(t *testing.T) {
 	for _, operation := range []string{"catalog", "open", "renew", "release"} {
 		for _, direction := range []string{"request", "response"} {
 			t.Run(operation+"/"+direction, func(t *testing.T) {
@@ -80,8 +82,17 @@ func TestControlTransactionsRecoverConfirmedFramesLostWithCarrier(t *testing.T) 
 					synctest.Wait()
 					select {
 					case err := <-done:
-						if err != nil || ctx.Err() != nil {
-							t.Fatalf("control did not recover before its deadline: %v; context=%v", err, ctx.Err())
+						if ctx.Err() != nil {
+							t.Fatalf("carrier loss waited for the deadline: %v", ctx.Err())
+						}
+						if operation == "renew" {
+							// A successful renewal changes its acceptance window, so an
+							// ambiguous attempt must fail instead of being replayed.
+							if !errors.Is(err, sessioncore.ErrRequestCarrierRetired) {
+								t.Fatalf("ambiguous renewal was replayed: %v", err)
+							}
+						} else if err != nil {
+							t.Fatalf("repeatable control did not recover: %v", err)
 						}
 					default:
 						t.Fatal("lost response remained pending despite a surviving lane")
@@ -90,7 +101,7 @@ func TestControlTransactionsRecoverConfirmedFramesLostWithCarrier(t *testing.T) 
 					if !generation.IsZero() || !authority.IsZero() {
 						t.Fatal("retry retained the old operation's authority")
 					}
-					if peerReceiver.sends.Load() <= peerSendsBefore || peerSender.sends.Load() <= 1 {
+					if operation != "renew" && (peerReceiver.sends.Load() <= peerSendsBefore || peerSender.sends.Load() <= 1) {
 						t.Fatal("replacement lane carried no recovered transaction")
 					}
 					if receiver.Err() != nil || receiver.ProtocolSessionID() != sender.ProtocolSessionID() {
@@ -99,7 +110,11 @@ func TestControlTransactionsRecoverConfirmedFramesLostWithCarrier(t *testing.T) 
 					requests.mu.Lock()
 					issued := append([]protocolsession.OperationID(nil), requests.issued[issuedBefore:]...)
 					requests.mu.Unlock()
-					if len(issued) != 2 || issued[0] != oldID || issued[1] == oldID {
+					if operation == "renew" {
+						if len(issued) != 1 || issued[0] != oldID {
+							t.Fatalf("non-repeatable renewal issued another operation: %v", issued)
+						}
+					} else if len(issued) != 2 || issued[0] != oldID || issued[1] == oldID {
 						t.Fatalf("recovery did not issue one fresh operation: %v", issued)
 					}
 				})
