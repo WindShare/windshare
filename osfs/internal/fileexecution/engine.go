@@ -42,6 +42,18 @@ func (engine *Engine) LookupDelivery(ctx context.Context, file catalog.FileID, p
 		MaterializationBindingDigest: engine.intent.BindingDigest(), FileID: file, CanonicalPath: path,
 		MaterializerKind: ownership.MaterializerKind(), AuthorityRef: ownership.AuthorityRef(),
 	})
+	// A historical receipt bypasses BeginFile, so its recovery decision must be
+	// observable here without enumerating checkpoints or inspecting public files.
+	if found || err != nil {
+		event := engine.traceEvent(engine.nextSequence(), TraceDeliveryReceipt, TraceReconciled, 0, 0, traceFault(err))
+		event.FileID = file
+		if err != nil {
+			event.Outcome = traceOutcomeForError(err)
+		} else {
+			event.Previous, event.Next = checkpointmodel.PhasePublished, checkpointmodel.PhasePublished
+		}
+		engine.emit(event)
+	}
 	if err != nil || !found {
 		return transfer.HistoricalDelivery{}, false, err
 	}
