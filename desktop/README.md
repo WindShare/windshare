@@ -24,10 +24,10 @@ GPU. Windows is the locally verified platform.
 - Preview latency defaults to 1900 ms. Pass `--share-delay-ms=200` or
   `--share-delay-ms=5000` after `cargo run ... --` to inspect fast and slow results.
   Motion uses actual completion events, never the configured delay.
-- Animated color SVGs reuse cached paint masks and fractional GPU transforms;
-  motion never goes through pixel-snapped layout or image bounds. Inactive share
-  windows stop decorative frames. Traces report phases and render callback cadence,
-  not GPU presentation FPS.
+- Animated color SVGs reuse cached paint masks and fractional GPU transforms.
+  Wind meshes are cached; invisible artwork is omitted. Text fades in at fixed
+  positions while the link surface expands with fractional geometry. Inactive
+  share windows stop decorative frames. Normal traces report phase and callback timing.
 - Receive: paste a link or use the sample, inspect files, preview receiving.
 - My shares: search, filter, grid/list, pause and copy.
 - Preferences: notifications, transfer details and reduced motion.
@@ -35,6 +35,12 @@ GPU. Windows is the locally verified platform.
   Body text is 16 px, with contrasting text on pale macaron surfaces.
 - `Ctrl+N`: new share; `Ctrl+K`: search; `Esc`: dismiss dialog.
   Controls support Tab and Enter/Space.
+
+For frame profiling, run `cargo run --manifest-path desktop/Cargo.toml --features motion-profile`.
+The CSV in the OS temporary directory (`windshare-motion-<pid>.csv`) records CPU
+layout/prepaint/paint durations, presentation callback intervals and share phases.
+Override its path with `WINDSHARE_MOTION_PROFILE`. This is not GPU completion timing;
+compare the same build profile, window size and display refresh rate.
 
 ## Structure
 

@@ -10,6 +10,8 @@ mod motion;
 mod motion_probe;
 mod overlays;
 mod pages;
+#[cfg(feature = "motion-profile")]
+mod profiling;
 mod receiving;
 mod share_animation;
 mod share_timing;
@@ -52,6 +54,8 @@ fn main() {
         .with_ansi(false)
         .with_target(false)
         .init();
+    #[cfg(feature = "motion-profile")]
+    let _capture = profiling::start();
     let compact = std::env::args().any(|arg| arg == "--compact");
     let share_delay_ms = std::env::args()
         .find_map(|arg| arg.strip_prefix("--share-delay-ms=").map(str::to_owned))
