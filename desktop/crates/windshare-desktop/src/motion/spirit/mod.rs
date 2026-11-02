@@ -8,7 +8,7 @@ use gpui::{
     Radians, Role, Subscription, Task, Window, canvas, div, point, prelude::*, px,
 };
 use std::time::Instant;
-use windshare_ui::primary;
+use windshare_ui::Theme;
 
 #[derive(Clone, Copy)]
 struct Presentation {
@@ -212,6 +212,7 @@ impl SpiritView {
 
 impl Render for SpiritView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::from(window.appearance());
         let pose = self.pose(window, cx);
         let Presentation {
             mood,
@@ -240,7 +241,7 @@ impl Render for SpiritView {
             .track_focus(&self.focus)
             .tab_index(0)
             .cursor_pointer()
-            .focus_visible(|style| style.border_color(primary()))
+            .focus_visible(|style| style.border_color(theme.focus_ring()))
             .on_mouse_move(cx.listener(Self::follow))
             .on_mouse_down(
                 MouseButton::Left,

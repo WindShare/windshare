@@ -12,7 +12,7 @@ use std::{
     f32::consts::{PI, TAU},
     time::Duration,
 };
-use windshare_ui::{Icon, Tone, caption, icon, muted, row, vector_sprite};
+use windshare_ui::{Icon, Theme, Tone, icon, row, vector_sprite};
 
 const SCENE_WIDTH: f32 = 340.;
 const SCENE_HEIGHT: f32 = 176.;
@@ -68,6 +68,7 @@ pub fn scaled_spirit(
 
 impl RenderOnce for SpiritScene {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::from(window.appearance());
         let Self {
             id,
             mood,
@@ -92,7 +93,7 @@ impl RenderOnce for SpiritScene {
                     point(unit(SCENE_WIDTH / 2.), unit(SCENE_HEIGHT / 2.)),
                     scale,
                 )
-                .text_color(tone.accent()),
+                .text_color(tone.accent(theme)),
             );
         for (index, asset) in (0_u16..).zip(PAPERS) {
             let paper = div().absolute().inset_0().size_full();
@@ -159,11 +160,11 @@ impl RenderOnce for SpiritScene {
     }
 }
 
-pub fn reassurance(symbol: Icon, text: &'static str) -> Div {
+pub fn reassurance(theme: Theme, symbol: Icon, text: &'static str) -> Div {
     row()
         .gap(px(7.))
-        .child(icon(symbol, 16.).text_color(muted()))
-        .child(caption(text))
+        .child(icon(symbol, 16.).text_color(theme.muted_text()))
+        .child(theme.caption(text))
 }
 
 pub fn reveal(content: Div, id: impl Into<ElementId>, still: bool) -> AnyElement {

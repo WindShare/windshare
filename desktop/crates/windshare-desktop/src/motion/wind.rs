@@ -6,7 +6,7 @@ use std::{
     f32::consts::{PI, TAU},
     sync::Arc,
 };
-use windshare_ui::Tone;
+use windshare_ui::{Theme, Tone};
 
 const WIND_END: f32 = 1.75;
 const WIND_LENGTH: f32 = 0.88;
@@ -16,17 +16,19 @@ const HORIZONTAL_ORIGIN: f32 = -0.09;
 
 struct WindMesh {
     bounds: Bounds<Pixels>,
+    theme: Theme,
     strokes: Vec<(Path<Pixels>, Hsla)>,
 }
 
 pub fn wind_field(head: f32, strength: f32) -> impl IntoElement {
     canvas(
         |bounds, window, _| {
+            let theme = Theme::from(window.appearance());
             window.with_global_id("share-wind-mesh".into(), |id, window| {
                 window.with_element_state(id, |cached: Option<Arc<WindMesh>>, _| {
                     let mesh = cached
-                        .filter(|mesh| mesh.bounds == bounds)
-                        .unwrap_or_else(|| Arc::new(WindMesh::new(bounds)));
+                        .filter(|mesh| mesh.bounds == bounds && mesh.theme == theme)
+                        .unwrap_or_else(|| Arc::new(WindMesh::new(bounds, theme)));
                     (mesh.clone(), mesh)
                 })
             })
@@ -59,12 +61,12 @@ pub fn wind_field(head: f32, strength: f32) -> impl IntoElement {
 }
 
 impl WindMesh {
-    fn new(bounds: Bounds<Pixels>) -> Self {
+    fn new(bounds: Bounds<Pixels>, theme: Theme) -> Self {
         let mut strokes = Vec::new();
         for (lane, tone) in (0_u16..).zip([Tone::Mint, Tone::Lavender, Tone::Peach]) {
             for (width, color) in [
-                (17., tone.surface().opacity(0.78)),
-                (1.5, tone.accent().opacity(0.72)),
+                (17., tone.surface(theme).opacity(0.78)),
+                (1.5, tone.accent(theme).opacity(0.72)),
             ] {
                 let mut path = PathBuilder::stroke(px(width));
                 for step in 0..=WIND_SEGMENTS {
@@ -92,6 +94,10 @@ impl WindMesh {
                 }
             }
         }
-        Self { bounds, strokes }
+        Self {
+            bounds,
+            theme,
+            strokes,
+        }
     }
 }

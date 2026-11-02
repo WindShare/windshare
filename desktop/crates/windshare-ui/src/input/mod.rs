@@ -1,7 +1,7 @@
 mod editing;
 mod paint;
 
-use crate::{INPUT_FONT_SIZE, INPUT_LINE_HEIGHT, border, ink, paper, primary};
+use crate::{INPUT_FONT_SIZE, INPUT_LINE_HEIGHT, Theme};
 use gpui::{
     App, Bounds, ClipboardItem, ElementInputHandler, Entity, EntityInputHandler, EventEmitter,
     FocusHandle, Focusable, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels,
@@ -193,7 +193,8 @@ impl Input {
 }
 
 impl Render for Input {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::from(window.appearance());
         div()
             .id("input")
             .role(Role::TextInput)
@@ -205,17 +206,17 @@ impl Render for Input {
             .h(px(52.))
             .px(px(12.))
             .py(px(12.))
-            .bg(paper())
+            .bg(theme.surface())
             .rounded(px(10.))
             .border_1()
-            .border_color(border())
+            .border_color(theme.border())
             .text_size(px(INPUT_FONT_SIZE))
-            .text_color(ink())
+            .text_color(theme.text())
             .line_height(px(INPUT_LINE_HEIGHT))
             .track_focus(&self.focus)
             .tab_index(0)
             .cursor_text()
-            .focus(|s| s.border_color(primary()))
+            .focus(|s| s.border_color(theme.focus_ring()))
             .overflow_hidden()
             .on_key_down(cx.listener(Self::key))
             .on_mouse_down(

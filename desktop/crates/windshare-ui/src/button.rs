@@ -1,4 +1,4 @@
-use crate::{Icon, Tone, action_hover, action_surface, border, icon, ink, muted, paper, primary};
+use crate::{Icon, Theme, Tone, icon};
 use gpui::{
     App, AppContext, ElementId, FocusHandle, FontWeight, Pixels, Role, SharedString, Window, div,
     prelude::*, px,
@@ -21,6 +21,49 @@ pub enum ButtonStyle {
     Secondary,
     Ghost,
     Tinted(Tone),
+}
+
+struct ButtonColors {
+    background: gpui::Hsla,
+    foreground: gpui::Hsla,
+    hover: gpui::Hsla,
+    border: gpui::Hsla,
+    focus: gpui::Hsla,
+}
+
+impl ButtonStyle {
+    fn colors(self, theme: Theme) -> ButtonColors {
+        match self {
+            Self::Primary => ButtonColors {
+                background: theme.action_surface(),
+                foreground: theme.action_text(),
+                hover: theme.action_hover(),
+                border: theme.action_surface(),
+                focus: theme.action_text(),
+            },
+            Self::Secondary => ButtonColors {
+                background: theme.surface(),
+                foreground: theme.text(),
+                hover: Tone::Neutral.surface(theme),
+                border: theme.border(),
+                focus: theme.focus_ring(),
+            },
+            Self::Ghost => ButtonColors {
+                background: gpui::transparent_black(),
+                foreground: theme.muted_text(),
+                hover: Tone::Neutral.surface(theme),
+                border: gpui::transparent_black(),
+                focus: theme.focus_ring(),
+            },
+            Self::Tinted(tone) => ButtonColors {
+                background: tone.surface(theme),
+                foreground: tone.text(theme),
+                hover: tone.accent(theme).opacity(0.35),
+                border: gpui::transparent_black(),
+                focus: theme.focus_ring(),
+            },
+        }
+    }
 }
 
 #[derive(IntoElement)]
@@ -98,28 +141,9 @@ impl Button {
 }
 
 impl RenderOnce for Button {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let (bg, fg, hover, stroke) = match self.style {
-            ButtonStyle::Primary => (
-                action_surface(),
-                primary(),
-                action_hover(),
-                action_surface(),
-            ),
-            ButtonStyle::Secondary => (paper(), ink(), Tone::Neutral.surface(), border()),
-            ButtonStyle::Ghost => (
-                gpui::transparent_black(),
-                muted(),
-                Tone::Neutral.surface(),
-                gpui::transparent_black(),
-            ),
-            ButtonStyle::Tinted(tone) => (
-                tone.surface(),
-                tone.text(),
-                tone.accent().opacity(0.35),
-                gpui::transparent_black(),
-            ),
-        };
+    fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
+        let theme = Theme::from(window.appearance());
+        let colors = self.style.colors(theme);
         let mouse_handler = self.handler.clone();
         let key_handler = self.handler;
         let empty = self.label.is_empty();
@@ -149,9 +173,9 @@ impl RenderOnce for Button {
             .flex_shrink_0()
             .rounded(px(10.))
             .border_1()
-            .border_color(stroke)
-            .bg(bg)
-            .text_color(fg)
+            .border_color(colors.border)
+            .bg(colors.background)
+            .text_color(colors.foreground)
             .text_size(px(match self.size {
                 ButtonSize::Small => 13.,
                 ButtonSize::Regular => 15.,
@@ -164,9 +188,9 @@ impl RenderOnce for Button {
                     .focusable()
                     .when_some(self.focus, |el, handle| el.track_focus(&handle))
                     .tab_index(0)
-                    .hover(move |s| s.bg(hover))
+                    .hover(move |s| s.bg(colors.hover))
                     .active(|s| s.opacity(0.75))
-                    .focus_visible(|s| s.border_color(primary()).shadow_sm())
+                    .focus_visible(|s| s.border_color(colors.focus).shadow_sm())
                     .on_click(move |_, window, cx| {
                         cx.stop_propagation();
                         if let Some(f) = &mouse_handler {
@@ -195,7 +219,7 @@ impl RenderOnce for Button {
                             18.
                         },
                     )
-                    .text_color(fg),
+                    .text_color(colors.foreground),
                 )
             })
             .when(!empty, |el| el.child(self.label))
@@ -204,15 +228,16 @@ impl RenderOnce for Button {
 
 struct Tooltip(SharedString);
 impl Render for Tooltip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::from(window.appearance());
         div()
             .px_3()
             .py_2()
             .rounded_lg()
-            .bg(Tone::Mint.surface())
+            .bg(Tone::Mint.surface(theme))
             .border_1()
-            .border_color(border())
-            .text_color(ink())
+            .border_color(theme.border())
+            .text_color(theme.text())
             .text_size(px(14.))
             .child(self.0.clone())
     }

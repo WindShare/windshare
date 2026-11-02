@@ -94,5 +94,4 @@ pub fn icon(name: Icon, size: f32) -> Svg {
         .path(format!("icons/{}", name.name()))
         .size(px(size))
         .flex_shrink_0()
-        .text_color(crate::ink())
 }
