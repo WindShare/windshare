@@ -10,7 +10,7 @@ mod surface;
 mod theme;
 pub use surface::rounded_surface;
 
-pub use artwork::VectorArtwork;
+pub use artwork::{VectorArtwork, VectorSprite};
 pub use assets::Assets;
 pub use button::{Button, ButtonStyle};
 pub use icons::{Icon, icon};

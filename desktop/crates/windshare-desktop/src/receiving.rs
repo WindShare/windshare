@@ -63,6 +63,7 @@ impl Desktop {
                             ),
                     )
                     .child(scaled_spirit(
+                        "receive-link-spirit",
                         SpiritMood::Idle,
                         Tone::Lavender,
                         0.58,
@@ -146,6 +147,7 @@ impl Desktop {
             .items_center()
             .gap(px(20.))
             .child(scaled_spirit(
+                "receive-opening-spirit",
                 SpiritMood::Receiving,
                 Tone::Lavender,
                 layout.scene_scale(),
@@ -261,6 +263,7 @@ impl Desktop {
             .items_center()
             .gap(px(18.))
             .child(scaled_spirit(
+                "receive-saving-spirit",
                 SpiritMood::Receiving,
                 Tone::Lavender,
                 layout.scene_scale(),
@@ -307,6 +310,7 @@ impl Desktop {
                     .items_center()
                     .gap(px(16.))
                     .child(scaled_spirit(
+                        "receive-complete-spirit",
                         SpiritMood::Happy,
                         Tone::Lavender,
                         layout.scene_scale(),

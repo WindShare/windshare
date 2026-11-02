@@ -28,6 +28,8 @@ GPU. Windows is the locally verified platform.
   Wind meshes are cached; invisible artwork is omitted. Text fades in at fixed
   positions while the link surface expands with fractional geometry. Inactive
   share windows stop decorative frames. Normal traces report phase and callback timing.
+- Floating spirits follow the pointer, spring back and smile on click or Enter/Space.
+  Hit targets stay fixed; reduced motion keeps smile feedback without movement.
 - Receive: paste a link or use the sample, inspect files, preview receiving.
 - My shares: search, filter, grid/list, pause and copy.
 - Preferences: notifications, transfer details and reduced motion.
