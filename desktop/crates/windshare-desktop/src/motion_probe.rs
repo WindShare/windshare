@@ -38,6 +38,8 @@ impl MotionProbe {
             self.previous = None;
         }
         if self.phase != Some(frame.phase) {
+            #[cfg(feature = "motion-profile")]
+            crate::profiling::mark(run.operation, format!("{:?}", frame.phase));
             tracing::info!(event = "share.presentation_phase", operation = run.operation,
                 phase = ?frame.phase,
                 elapsed_ms = now.duration_since(run.started_at).as_millis(),

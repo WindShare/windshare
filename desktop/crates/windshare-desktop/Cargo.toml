@@ -9,6 +9,9 @@ publish.workspace = true
 name = "windshare"
 path = "src/main.rs"
 
+[features]
+motion-profile = ["gpui/profiler"]
+
 [lints]
 workspace = true
 

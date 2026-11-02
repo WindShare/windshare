@@ -87,7 +87,7 @@ desktop-check: private export MFLAGS :=
 desktop-check: private export CARGO_MAKEFLAGS :=
 desktop-check:
 	$(RUST_CARGO) fmt --manifest-path desktop/Cargo.toml --all -- --check
-	$(RUST_CARGO) clippy --manifest-path desktop/Cargo.toml --workspace --all-targets --locked --jobs $(RUST_BUILD_JOBS) -- -D warnings
+	$(RUST_CARGO) clippy --manifest-path desktop/Cargo.toml --workspace --all-targets --all-features --locked --jobs $(RUST_BUILD_JOBS) -- -D warnings
 	$(RUST_CARGO) build --manifest-path desktop/Cargo.toml --locked --jobs $(RUST_BUILD_JOBS)
 
 $(PLATFORM_TARGETS):

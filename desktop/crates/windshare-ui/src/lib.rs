@@ -6,7 +6,9 @@ mod icons;
 pub use focus::advance_focus;
 mod input;
 mod primitives;
+mod surface;
 mod theme;
+pub use surface::rounded_surface;
 
 pub use artwork::VectorArtwork;
 pub use assets::Assets;

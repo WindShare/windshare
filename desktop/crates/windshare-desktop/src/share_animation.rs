@@ -5,8 +5,8 @@ use crate::{
         FLIGHT_DURATION, LANDING_DURATION, ShareFrame, ease_out, lerp, segment, smooth,
     },
 };
-use gpui::{Div, PathBuilder, Point, Window, canvas, div, point, prelude::*, px};
-use std::f32::consts::{PI, TAU};
+use gpui::{Div, Point, Window, div, point, prelude::*, px};
+use std::f32::consts::PI;
 use windshare_ui::{Tone, vector_sprite};
 
 const READY_WIDTH: f32 = 620.;
@@ -18,7 +18,6 @@ const CRUISING_SPIRIT_SIZE: f32 = 144.;
 const PAPER_COUNT: u16 = 7;
 const SURROUND_PAPER_WIDTH: f32 = 23.;
 const SURROUND_PAPER_HEIGHT: f32 = 27.;
-const WIND_SEGMENTS: u16 = 48;
 const PAPER_ASSETS: [Artwork; 3] = [Artwork::Paper, Artwork::Photo, Artwork::Folder];
 
 #[derive(Clone, Copy)]
@@ -119,7 +118,7 @@ impl ShareScene {
             .size_full()
             .when(self.arrival_progress() < 1., |el| {
                 el.child(self.wind_field())
-                    .children((0..PAPER_COUNT).map(|index| self.paper(index)))
+                    .children((0..PAPER_COUNT).filter_map(|index| self.paper(index)))
             })
             .child(self.spirit())
     }
@@ -161,30 +160,41 @@ impl ShareScene {
         let mut layer = div()
             .absolute()
             .inset_0()
-            .child(
-                vector_sprite(
-                    "brand/breeze.svg",
-                    gpui::size(px(340.), px(176.)),
-                    point(px(center.x), px(center.y + breeze_offset)),
-                    local_scale,
+            .when(surround > 0., |el| {
+                el.child(
+                    vector_sprite(
+                        "brand/breeze.svg",
+                        gpui::size(px(340.), px(176.)),
+                        point(px(center.x), px(center.y + breeze_offset)),
+                        local_scale,
+                    )
+                    .text_color(Tone::Mint.accent())
+                    .opacity(surround),
                 )
-                .text_color(Tone::Mint.accent())
-                .opacity(surround),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .child(Artwork::Spirit.sprite(center, size))
-                    .opacity(1. - smile),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .child(Artwork::Happy.sprite(center, size))
-                    .opacity(smile),
-            );
+            })
+            .when(smile < 1., |el| {
+                el.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .child(Artwork::Spirit.sprite(center, size))
+                        .opacity(1. - smile),
+                )
+            })
+            .when(smile > 0., |el| {
+                el.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .child(Artwork::Happy.sprite(center, size))
+                        .opacity(smile),
+                )
+            });
+        // Zero-opacity SVG layers still incur layout and atlas work in GPUI.
+        // Keep their lifetime aligned with the visible part of the choreography.
+        if surround <= 0. {
+            return layer;
+        }
         for (index, asset) in PAPER_ASSETS.into_iter().enumerate() {
             let (x, y) = [(-82., -8.), (77., -29.), (76., 38.)][index];
             let drift = self.frame.breath * if index == 1 { -2. } else { 2. };
@@ -209,7 +219,7 @@ impl ShareScene {
         clippy::suboptimal_flops,
         reason = "Control-point formulas keep the per-paper spatial and timing offsets visible."
     )]
-    fn paper(self, index: u16) -> Div {
+    fn paper(self, index: u16) -> Option<Div> {
         let g = self.geometry;
         let seed = f32::from(index);
         let (center, size, opacity) = if self.landing() {
@@ -254,12 +264,14 @@ impl ShareScene {
                 smooth(segment(t, 0.01, 0.13)),
             )
         };
-        div()
-            .absolute()
-            .inset_0()
-            .size_full()
-            .opacity(opacity)
-            .child(PAPER_ASSETS[usize::from(index) % PAPER_ASSETS.len()].sprite(center, size))
+        (opacity > 0.).then(|| {
+            div()
+                .absolute()
+                .inset_0()
+                .size_full()
+                .opacity(opacity)
+                .child(PAPER_ASSETS[usize::from(index) % PAPER_ASSETS.len()].sprite(center, size))
+        })
     }
 
     fn wind_pose(self) -> (f32, f32) {
@@ -278,44 +290,8 @@ impl ShareScene {
         }
     }
     fn wind_field(self) -> impl IntoElement {
-        canvas(
-            |_, _, _| (),
-            move |bounds, (), window, _| {
-                let (head, strength) = self.wind_pose();
-                for (lane, tone) in (0_u16..).zip([Tone::Mint, Tone::Lavender, Tone::Peach]) {
-                    for (width, color) in [
-                        (17., tone.surface().opacity(strength * 0.78)),
-                        (1.5, tone.accent().opacity(strength * 0.72)),
-                    ] {
-                        let mut path = PathBuilder::stroke(px(width));
-                        let begin = (head - 0.88).max(0.);
-                        for step in 0..=WIND_SEGMENTS {
-                            let t = lerp(begin, head, f32::from(step) / f32::from(WIND_SEGMENTS));
-                            let travel = t * 1.18;
-                            let cycle_angle = t * TAU;
-                            let lane_phase = f32::from(lane) * 0.8;
-                            let wave = (cycle_angle + lane_phase).sin() * 0.045;
-                            let arch = (t * PI).sin() * 0.24;
-                            let lane_offset = f32::from(lane) * 0.075;
-                            let x = self.geometry.width * (travel - 0.09);
-                            let y = self.geometry.height * (0.48 - arch + lane_offset + wave);
-                            let p = bounds.origin + point(px(x), px(y));
-                            if step == 0 {
-                                path.move_to(p);
-                            } else {
-                                path.line_to(p);
-                            }
-                        }
-                        if let Ok(path) = path.build() {
-                            window.paint_path(path, color);
-                        }
-                    }
-                }
-            },
-        )
-        .absolute()
-        .inset_0()
-        .size_full()
+        let (head, strength) = self.wind_pose();
+        crate::motion::wind_field(head, strength)
     }
 }
 

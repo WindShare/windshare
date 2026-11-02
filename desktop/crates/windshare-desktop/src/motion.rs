@@ -1,3 +1,6 @@
+mod wind;
+pub use wind::wind_field;
+
 use crate::{artwork::Artwork, share_timing::lerp};
 use gpui::{
     Animation, AnimationExt, AnyElement, Div, ElementId, div, ease_out_quint, point, prelude::*,

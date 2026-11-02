@@ -10,7 +10,7 @@ use crate::{
 use gpui::{Div, Window, div, prelude::*, px};
 use windshare_ui::{
     Button, ButtonStyle, FONT, Icon, Tone, border, caption, card, column, heading, icon, icon_tile,
-    label, muted, paper, primary, row,
+    label, muted, paper, primary, rounded_surface, row,
 };
 
 impl Desktop {
@@ -177,6 +177,8 @@ impl Desktop {
         let result = scene.frame.result_visibility;
         let pending = run.share_id().is_none();
         let bundle = run.bundle;
+        // Small layout translations snap text to whole pixels. Keep typography and
+        // hit targets settled while opacity and decorative geometry carry the reveal.
         div()
             .relative()
             .w_full()
@@ -186,7 +188,7 @@ impl Desktop {
                 column()
                     .absolute()
                     .left(px(g.content_left))
-                    .top(px(g.content_top + lerp(36., 18., title)))
+                    .top(px(g.content_top + 18.))
                     .w(px(g.content_width - 196.))
                     .h(px(72.))
                     .opacity(title)
@@ -210,7 +212,7 @@ impl Desktop {
                 row()
                     .absolute()
                     .left(px(g.content_left))
-                    .top(px(g.content_top + lerp(236., 212., summary)))
+                    .top(px(g.content_top + 212.))
                     .w(px(g.content_width))
                     .h(px(62.))
                     .gap(px(12.))
@@ -295,19 +297,19 @@ impl Desktop {
         div()
             .absolute()
             .left(px(g.content_left))
-            .top(px(g.link_top() + lerp(18., 0., expansion)))
+            .top(px(g.link_top()))
             .w(px(g.content_width))
             .h(px(SHARE_LINK_HEIGHT))
             .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .top_0()
-                    .h_full()
-                    .w(px(lerp(60., g.content_width, expansion)))
-                    .rounded(px(15.))
-                    .bg(Tone::Mint.surface())
-                    .opacity(scene.control_visibility()),
+                rounded_surface(
+                    gpui::size(
+                        px(lerp(60., g.content_width, expansion)),
+                        px(SHARE_LINK_HEIGHT),
+                    ),
+                    px(15.),
+                    Tone::Mint.surface(),
+                )
+                .opacity(scene.control_visibility()),
             )
             .child(
                 row()
