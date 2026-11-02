@@ -5,6 +5,8 @@ use gpui::{
 };
 use std::rc::Rc;
 
+pub const LARGE_BUTTON_HEIGHT: f32 = 54.;
+
 #[derive(Clone, Copy)]
 enum ButtonSize {
     Small,
@@ -20,6 +22,8 @@ pub enum ButtonStyle {
     #[default]
     Secondary,
     Ghost,
+    Navigation,
+    ActiveNavigation(Tone),
     Tinted(Tone),
 }
 
@@ -55,12 +59,26 @@ impl ButtonStyle {
                 border: gpui::transparent_black(),
                 focus: theme.focus_ring(),
             },
+            Self::Navigation => ButtonColors {
+                background: gpui::transparent_black(),
+                foreground: theme.muted_text(),
+                hover: theme.navigation_hover(),
+                border: gpui::transparent_black(),
+                focus: theme.focus_ring(),
+            },
+            Self::ActiveNavigation(tone) => ButtonColors {
+                background: tone.navigation_surface(theme),
+                foreground: tone.text(theme),
+                hover: tone.accent(theme).opacity(0.35),
+                border: gpui::transparent_black(),
+                focus: theme.focus_ring(),
+            },
             Self::Tinted(tone) => ButtonColors {
                 background: tone.surface(theme),
                 foreground: tone.text(theme),
                 hover: tone.accent(theme).opacity(0.35),
                 border: gpui::transparent_black(),
-                focus: theme.focus_ring(),
+                focus: tone.text(theme),
             },
         }
     }
@@ -165,7 +183,7 @@ impl RenderOnce for Button {
             .h(px(match self.size {
                 ButtonSize::Small => 36.,
                 ButtonSize::Regular => 46.,
-                ButtonSize::Large => 54.,
+                ButtonSize::Large => LARGE_BUTTON_HEIGHT,
             }))
             .when_some(self.min_width, gpui::Styled::min_w)
             .when(self.full_width, |el| el.w_full().justify_start())

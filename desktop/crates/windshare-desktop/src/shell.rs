@@ -7,34 +7,31 @@ use windshare_ui::{
     Button, ButtonStyle, FONT, Icon, SIDEBAR_COMPACT_WIDTH, SIDEBAR_WIDTH, Theme, Tone, column, row,
 };
 
+const TITLEBAR_HEIGHT: f32 = 40.;
+
 impl Desktop {
+    fn titlebar_drag_area() -> Div {
+        div()
+            .h(px(TITLEBAR_HEIGHT))
+            .flex_shrink_0()
+            .window_control_area(WindowControlArea::Drag)
+            .on_mouse_down(MouseButton::Left, |event, window, _| {
+                if event.click_count == 2 {
+                    window.zoom_window();
+                } else {
+                    window.start_window_move();
+                }
+            })
+    }
+
     pub fn titlebar(theme: Theme) -> Div {
         row()
-            .h(px(40.))
+            .h(px(TITLEBAR_HEIGHT))
             .flex_shrink_0()
             .pl(px(16.))
             .pr(px(5.))
             .bg(theme.canvas())
-            .child(
-                row()
-                    .flex_1()
-                    .h_full()
-                    .justify_center()
-                    .window_control_area(WindowControlArea::Drag)
-                    .on_mouse_down(MouseButton::Left, |event, window, _| {
-                        if event.click_count == 2 {
-                            window.zoom_window();
-                        } else {
-                            window.start_window_move();
-                        }
-                    })
-                    .child(
-                        theme
-                            .label("WindShare", 12.)
-                            .font_family(FONT)
-                            .text_color(theme.muted_text()),
-                    ),
-            )
+            .child(Self::titlebar_drag_area().flex_1())
             .when(cfg!(not(target_os = "macos")), |el| {
                 el.child(
                     row()
@@ -76,12 +73,20 @@ impl Desktop {
             }))
             .h_full()
             .flex_shrink_0()
-            .px(px(if compact { 13. } else { 18. }))
-            .pt(px(22.))
-            .pb(px(22.))
             .bg(theme.sidebar())
             .border_r_1()
             .border_color(theme.border())
+            .child(Self::titlebar_drag_area().w_full())
+            .child(self.sidebar_content(theme, compact, cx))
+    }
+
+    fn sidebar_content(&self, theme: Theme, compact: bool, cx: &Context<Self>) -> Div {
+        column()
+            .flex_1()
+            .min_h_0()
+            .px(px(if compact { 13. } else { 18. }))
+            .pt(px(22.))
+            .pb(px(22.))
             .child(
                 row()
                     .gap(px(8.))
@@ -122,12 +127,11 @@ impl Desktop {
                         "关于 WindShare"
                     },
                     Icon::Help,
-                    ButtonStyle::Ghost,
+                    ButtonStyle::Navigation,
                     PreviewAction::Help,
                     cx,
                 )
-                .full_width()
-                .tooltip("关于 WindShare"),
+                .full_width(),
             )
     }
 
@@ -137,20 +141,19 @@ impl Desktop {
             page.title(),
             symbol,
             if self.page == page {
-                ButtonStyle::Tinted(if page == Page::Receive {
+                ButtonStyle::ActiveNavigation(if page == Page::Receive {
                     Tone::Lavender
                 } else {
                     Tone::Mint
                 })
             } else {
-                ButtonStyle::Ghost
+                ButtonStyle::Navigation
             },
             PreviewAction::Navigate(page),
             cx,
         )
         .full_width()
         .large()
-        .tooltip(page.title())
     }
 
     pub fn page_heading(&self, theme: Theme, compact: bool, cx: &Context<Self>) -> Div {

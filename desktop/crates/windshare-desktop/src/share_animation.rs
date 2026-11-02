@@ -1,14 +1,19 @@
 use crate::{
     artwork::Artwork,
     layout::{FlowLayout, task_width},
-    motion::{Spirit, SpiritMood},
+    motion::{Spirit, SpiritMood, SpiritScene},
     share_timing::{
         FLIGHT_DURATION, LANDING_DURATION, ShareFrame, ease_out, lerp, segment, smooth,
     },
 };
 use gpui::{Div, Point, Window, div, point, prelude::*, px};
 use std::f32::consts::PI;
-use windshare_ui::{Theme, Tone, vector_sprite};
+use windshare_ui::{LARGE_BUTTON_HEIGHT, Theme, Tone, vector_sprite};
+
+pub const SHARE_CHOICE_SECTION_GAP: f32 = 24.;
+pub const SHARE_CHOICE_TITLE_HEIGHT: f32 = 36.;
+const SHARE_CHOICE_CONTROLS_HEIGHT: f32 =
+    2. * SHARE_CHOICE_SECTION_GAP + SHARE_CHOICE_TITLE_HEIGHT + LARGE_BUTTON_HEIGHT;
 
 const READY_WIDTH: f32 = 620.;
 const READY_HEIGHT: f32 = 352.;
@@ -29,6 +34,7 @@ pub struct ShareGeometry {
     pub content_left: f32,
     pub content_top: f32,
     initial_spirit_size: f32,
+    initial_spirit_y: f32,
 }
 impl ShareGeometry {
     pub fn new(window: &Window, layout: FlowLayout) -> Self {
@@ -41,6 +47,10 @@ impl ShareGeometry {
             content_left: (width - content_width) / 2.,
             content_top: (layout.stage_height() - READY_HEIGHT) / 2.,
             initial_spirit_size: 156. * layout.scene_scale(),
+            // The chooser is centered as a group; launch from the body's visual
+            // center so layout edits do not create a jump at the first frame.
+            initial_spirit_y: (layout.stage_height() - SHARE_CHOICE_CONTROLS_HEIGHT) / 2.
+                + SpiritScene::body_center_offset_y(layout.scene_scale()),
         }
     }
     fn destination(self) -> Point<f32> {
@@ -140,7 +150,7 @@ impl ShareScene {
             (
                 cubic(
                     [
-                        point(g.width * 0.5, g.height * 0.235),
+                        point(g.width * 0.5, g.initial_spirit_y),
                         point(g.width * 0.14, g.height * 0.63),
                         point(end.x - 110., end.y + 36.),
                         end,

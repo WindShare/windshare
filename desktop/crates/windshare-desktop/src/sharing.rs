@@ -4,13 +4,18 @@ use crate::{
     layout::FlowLayout,
     model::PreviewAction,
     motion::{SpiritMood, reassurance, scaled_spirit},
-    share_animation::{SHARE_LINK_HEIGHT, ShareGeometry, ShareScene},
+    share_animation::{
+        SHARE_CHOICE_SECTION_GAP, SHARE_CHOICE_TITLE_HEIGHT, SHARE_LINK_HEIGHT, ShareGeometry,
+        ShareScene,
+    },
     share_timing::lerp,
 };
 use gpui::{Div, Window, div, prelude::*, px};
 use windshare_ui::{
     Button, ButtonStyle, FONT, Icon, Theme, Tone, column, icon, rounded_surface, row,
 };
+
+const SHARE_CHOICE_BUTTON_MIN_WIDTH: f32 = 160.;
 
 impl Desktop {
     pub fn sharing_page(&mut self, layout: FlowLayout, window: &Window, cx: &Context<Self>) -> Div {
@@ -69,7 +74,7 @@ impl Desktop {
     ) -> Div {
         column()
             .items_center()
-            .gap(px(16.))
+            .gap(px(SHARE_CHOICE_SECTION_GAP))
             .child(scaled_spirit(
                 "share-choose-spirit",
                 SpiritMood::Idle,
@@ -78,15 +83,9 @@ impl Desktop {
                 still,
             ))
             .child(
-                column()
-                    .items_center()
-                    .gap(px(8.))
-                    .child(theme.heading("想分享什么？", 26.))
-                    .child(
-                        theme
-                            .label("选一份文件，或一整个文件夹。", 16.)
-                            .text_color(theme.muted_text()),
-                    ),
+                theme
+                    .heading("想分享什么？", 26.)
+                    .line_height(px(SHARE_CHOICE_TITLE_HEIGHT)),
             )
             .child(
                 row()
@@ -101,6 +100,7 @@ impl Desktop {
                             cx,
                         )
                         .large()
+                        .min_width(px(SHARE_CHOICE_BUTTON_MIN_WIDTH))
                         .focus_handle(&self.primary_focus),
                     )
                     .child(
@@ -112,10 +112,10 @@ impl Desktop {
                             PreviewAction::SelectFolder,
                             cx,
                         )
-                        .large(),
+                        .large()
+                        .min_width(px(SHARE_CHOICE_BUTTON_MIN_WIDTH)),
                     ),
             )
-            .child(theme.caption("此预览使用示例文件"))
     }
 
     fn preparing_scene(

@@ -10,17 +10,17 @@ use gpui::{Animation, AnimationExt, Div, FontWeight, div, prelude::*, px, relati
 use std::time::Duration;
 use windshare_ui::{ButtonStyle, Icon, Theme, Tone, column, icon, row};
 
-fn link_feedback(theme: Theme, feedback: LinkFeedback) -> Div {
-    let (message, color) = match feedback {
-        LinkFeedback::None => ("粘贴后按 Enter，即可打开分享", theme.muted_text()),
-        LinkFeedback::Invalid => (
-            "链接似乎不完整，请重新粘贴，或使用下方示例。",
-            Tone::Rose.text(theme),
-        ),
+fn link_feedback(theme: Theme, feedback: LinkFeedback) -> Option<Div> {
+    let message = match feedback {
+        LinkFeedback::None => return None,
+        LinkFeedback::Invalid => "链接似乎不完整，请重新粘贴，或使用下方示例。",
     };
-    div()
-        .h(px(22.))
-        .child(theme.label(message, 14.).text_color(color))
+    Some(
+        theme
+            .label(message, 14.)
+            .line_height(px(22.))
+            .text_color(Tone::Rose.text(theme)),
+    )
 }
 
 impl Desktop {
@@ -68,13 +68,13 @@ impl Desktop {
                     .justify_between()
                     .child(
                         column()
-                            .gap(px(10.))
+                            .gap(px(12.))
                             .flex_1()
-                            .child(theme.badge("接收一份分享", Tone::Lavender).w(px(104.)))
-                            .child(theme.heading("从一个链接开始", 27.))
+                            .child(theme.heading("从一个链接开始", 27.).line_height(px(36.)))
                             .child(
                                 theme
                                     .label("粘贴链接，先看看对方分享了什么。", 16.)
+                                    .line_height(px(26.))
                                     .text_color(theme.muted_text()),
                             ),
                     )
@@ -110,13 +110,13 @@ impl Desktop {
                                 .large(),
                             ),
                     )
-                    .child(link_feedback(theme, feedback))
+                    .children(link_feedback(theme, feedback))
                     .child(
                         Self::button(
                             "open-link",
                             "打开分享",
                             Icon::Arrow,
-                            ButtonStyle::Primary,
+                            ButtonStyle::Tinted(Tone::Lavender),
                             PreviewAction::OpenPreview,
                             cx,
                         )

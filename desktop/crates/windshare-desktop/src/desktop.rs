@@ -42,8 +42,8 @@ pub struct Desktop {
 }
 impl Desktop {
     pub fn new(window: &mut Window, preview_share_delay: Duration, cx: &mut Context<Self>) -> Self {
-        let search = cx.new(|cx| Input::new("搜索分享名称", cx));
-        let link_input = cx.new(|cx| Input::new("粘贴 WindShare 分享链接", cx));
+        let search = cx.new(|cx| Input::new("搜索分享名称", cx).placeholder("搜索分享名称"));
+        let link_input = cx.new(|cx| Input::new("分享链接", cx).accent(Tone::Lavender));
         let subscriptions = vec![
             windshare_ui::follow_system_theme(window),
             cx.subscribe(&search, |_, _, _, cx| cx.notify()),
@@ -201,7 +201,6 @@ impl Render for Desktop {
             .track_focus(&self.focus)
             .tab_group()
             .on_key_down(cx.listener(Self::handle_key))
-            .child(Self::titlebar(theme))
             .child(
                 row()
                     .items_stretch()
@@ -212,6 +211,7 @@ impl Render for Desktop {
                         column()
                             .flex_1()
                             .min_w_0()
+                            .child(Self::titlebar(theme))
                             .child(
                                 column()
                                     .id(("page-scroll", self.page as usize))
