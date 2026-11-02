@@ -15,6 +15,7 @@ const (
 	catalogOmissionSymlink catalogOmissionReason = "symbolic_link"
 	catalogOmissionReparse catalogOmissionReason = "reparse_point"
 	catalogOmissionSpecial catalogOmissionReason = "special_file"
+	catalogOmissionName    catalogOmissionReason = "unrepresentable_name"
 	// Path samples bound diagnostic work even for dependency trees full of links.
 	maxCatalogOmissionSamples = uint64(16)
 )
@@ -27,9 +28,19 @@ func catalogOmissionFor(info fs.FileInfo) catalogOmissionReason {
 		return catalogOmissionReparse
 	case !info.IsDir() && !info.Mode().IsRegular():
 		return catalogOmissionSpecial
+	case !catalogRepresentableName(info.Name()):
+		// Native filesystems accept names outside the shared path grammar, such
+		// as ':' on Unix or invalid UTF-8. They cannot become catalog entries, so
+		// failing them would make every readable sibling unavailable as well.
+		return catalogOmissionName
 	default:
 		return catalogOmissionNone
 	}
+}
+
+func catalogRepresentableName(name string) bool {
+	_, err := catalog.CanonicalName(name)
+	return err == nil
 }
 
 func catalogScanCorrelation(request catalog.ScanRequest) diag.Fields {

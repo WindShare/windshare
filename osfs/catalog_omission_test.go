@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -70,5 +71,60 @@ func TestCatalogOmissionsRetainBoundedPathsAndScanCorrelation(t *testing.T) {
 	}
 	if samples != maxCatalogOmissionSamples || summaries != 1 {
 		t.Fatalf("samples=%d summaries=%d", samples, summaries)
+	}
+}
+
+func TestCatalogOmitsNamesOutsideThePathGrammarWithoutFailingSiblings(t *testing.T) {
+	root := t.TempDir()
+	// Directional marks are common in names produced by messaging and Windows apps.
+	unrepresentable := []string{"\u200eIMG-0001.jpg"}
+	if runtime.GOOS != "windows" {
+		unrepresentable = append(unrepresentable, "12:30.log", `back\slash.txt`, "tab\tname.txt")
+	}
+	if runtime.GOOS == "linux" {
+		unrepresentable = append(unrepresentable, "latin1-caf\xe9.txt")
+	}
+	for _, name := range append([]string{"readable.txt"}, unrepresentable...) {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(root, "dir:with-colon"), 0o700); err != nil && runtime.GOOS != "windows" {
+		t.Fatal(err)
+	} else if err == nil {
+		unrepresentable = append(unrepresentable, "dir:with-colon")
+	}
+	stream, err := diag.NewStream(64, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	synthetic, _ := catalog.DirectoryIDFromBytes(identity16(73))
+	source, err := NewSelectedCatalogSource(SelectedCatalogSourceConfig{
+		Paths: []string{root}, SyntheticRoot: synthetic, Diagnostics: stream.Sink(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = source.Close() })
+	children := &collectingScanChildren{}
+	result, err := source.ScanDirectory(context.Background(), catalog.ScanRequest{
+		Directory: source.SelectedRoots()[0], Work: &countingScanWork{}, Children: children,
+	})
+	stream.Close()
+	if err != nil || result.OmittedCount != uint64(len(unrepresentable)) ||
+		len(children.items) != 1 || children.items[0].Name != "readable.txt" {
+		t.Fatalf("scan=%+v children=%+v err=%v", result, children.items, err)
+	}
+	reasons := 0
+	for record := range stream.Records() {
+		if record.Name() == "catalog_source_omission" {
+			if reason := record.Payload().Get("reason").Text(); reason != "unrepresentable_name" {
+				t.Fatalf("omission reason = %q", reason)
+			}
+			reasons++
+		}
+	}
+	if reasons != len(unrepresentable) {
+		t.Fatalf("omission samples = %d, want %d", reasons, len(unrepresentable))
 	}
 }
