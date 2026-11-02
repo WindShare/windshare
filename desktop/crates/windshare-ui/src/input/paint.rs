@@ -1,10 +1,10 @@
 use super::*;
-use crate::{Tone, muted, primary};
 
 pub(super) fn text_canvas(input: Entity<Input>) -> impl IntoElement {
     let layout_input = input.clone();
     canvas(
         move |bounds, window, cx| {
+            let theme = Theme::from(window.appearance());
             let field = layout_input.read(cx);
             let style = window.text_style();
             let text: SharedString = if field.value.is_empty() {
@@ -16,7 +16,7 @@ pub(super) fn text_canvas(input: Entity<Input>) -> impl IntoElement {
                 len: text.len(),
                 font: style.font(),
                 color: if field.value.is_empty() {
-                    muted()
+                    theme.muted_text()
                 } else {
                     style.color
                 },
@@ -40,6 +40,7 @@ pub(super) fn text_canvas(input: Entity<Input>) -> impl IntoElement {
             (line, scroll)
         },
         move |bounds, (line, scroll), window, cx| {
+            let theme = Theme::from(window.appearance());
             let field = input.read(cx);
             let selection = field.selection();
             let focused = field.focus.is_focused(window);
@@ -57,7 +58,7 @@ pub(super) fn text_canvas(input: Entity<Input>) -> impl IntoElement {
                         point(origin.x + line.x_for_index(selection.start), bounds.top()),
                         point(origin.x + line.x_for_index(selection.end), bounds.bottom()),
                     ),
-                    Tone::Mint.accent().opacity(0.4),
+                    theme.selection(),
                 ));
             }
             let _ = line.paint(
@@ -74,7 +75,7 @@ pub(super) fn text_canvas(input: Entity<Input>) -> impl IntoElement {
                         point(origin.x + line.x_for_index(cursor), bounds.top() + px(2.)),
                         size(px(1.5), px(22.)),
                     ),
-                    primary(),
+                    theme.accent_text(),
                 ));
             }
             if let Some(marked) = &marked {
@@ -86,7 +87,7 @@ pub(super) fn text_canvas(input: Entity<Input>) -> impl IntoElement {
                         ),
                         point(origin.x + line.x_for_index(marked.end), bounds.bottom()),
                     ),
-                    primary(),
+                    theme.accent_text(),
                 ));
             }
             input.update(cx, |field, _| {

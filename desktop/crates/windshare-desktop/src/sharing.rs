@@ -9,12 +9,12 @@ use crate::{
 };
 use gpui::{Div, Window, div, prelude::*, px};
 use windshare_ui::{
-    Button, ButtonStyle, FONT, Icon, Tone, border, caption, card, column, heading, icon, icon_tile,
-    label, muted, paper, primary, rounded_surface, row,
+    Button, ButtonStyle, FONT, Icon, Theme, Tone, column, icon, rounded_surface, row,
 };
 
 impl Desktop {
     pub fn sharing_page(&mut self, layout: FlowLayout, window: &Window, cx: &Context<Self>) -> Div {
+        let theme = Theme::from(window.appearance());
         let geometry = ShareGeometry::new(window, layout);
         let still = self.reduced_motion() || cx.reduce_motion();
         let active = window.is_window_active();
@@ -22,7 +22,7 @@ impl Desktop {
             ShareFlow::Choose => column()
                 .h(px(geometry.height))
                 .justify_center()
-                .child(self.choose_share(layout, still, cx)),
+                .child(self.choose_share(theme, layout, still, cx)),
             ShareFlow::Running(run) => {
                 let now = std::time::Instant::now();
                 let frame = run.sample(now, still);
@@ -32,18 +32,19 @@ impl Desktop {
                 }
                 let scene = ShareScene::new(geometry, frame);
                 if still && run.share_id().is_none() {
-                    self.quiet_preparation(run.bundle, layout, cx)
+                    self.quiet_preparation(theme, run.bundle, layout, cx)
                 } else if scene.landing() {
-                    self.result_share(run, scene, cx)
+                    self.result_share(theme, run, scene, cx)
                 } else {
-                    self.preparing_scene(run.bundle, scene, cx)
+                    self.preparing_scene(theme, run.bundle, scene, cx)
                 }
             }
         };
         column()
             .gap(px(22.))
             .child(
-                card()
+                theme
+                    .card()
                     .rounded(px(24.))
                     .p(px(layout.panel_padding()))
                     .overflow_hidden()
@@ -54,12 +55,18 @@ impl Desktop {
                     .justify_center()
                     .flex_wrap()
                     .gap(px(22.))
-                    .child(reassurance(Icon::Shield, "端到端加密"))
-                    .child(reassurance(Icon::Globe, "对方无需安装"))
-                    .child(reassurance(Icon::Monitor, "文件留在你的设备")),
+                    .child(reassurance(theme, Icon::Shield, "端到端加密"))
+                    .child(reassurance(theme, Icon::Globe, "对方无需安装"))
+                    .child(reassurance(theme, Icon::Monitor, "文件留在你的设备")),
             )
     }
-    fn choose_share(&self, layout: FlowLayout, still: bool, cx: &Context<Self>) -> Div {
+    fn choose_share(
+        &self,
+        theme: Theme,
+        layout: FlowLayout,
+        still: bool,
+        cx: &Context<Self>,
+    ) -> Div {
         column()
             .items_center()
             .gap(px(16.))
@@ -74,8 +81,12 @@ impl Desktop {
                 column()
                     .items_center()
                     .gap(px(8.))
-                    .child(heading("想分享什么？", 26.))
-                    .child(label("选一份文件，或一整个文件夹。", 16.).text_color(muted())),
+                    .child(theme.heading("想分享什么？", 26.))
+                    .child(
+                        theme
+                            .label("选一份文件，或一整个文件夹。", 16.)
+                            .text_color(theme.muted_text()),
+                    ),
             )
             .child(
                 row()
@@ -104,17 +115,23 @@ impl Desktop {
                         .large(),
                     ),
             )
-            .child(caption("此预览使用示例文件"))
+            .child(theme.caption("此预览使用示例文件"))
     }
 
-    fn preparing_scene(&self, bundle: SampleBundle, scene: ShareScene, cx: &Context<Self>) -> Div {
+    fn preparing_scene(
+        &self,
+        theme: Theme,
+        bundle: SampleBundle,
+        scene: ShareScene,
+        cx: &Context<Self>,
+    ) -> Div {
         let visibility = scene.preparation_visibility();
         div()
             .relative()
             .w_full()
             .h(px(scene.geometry.height))
-            .child(scene.scenery(self.reduced_motion()))
-            .child(preparation_message(bundle.name(), visibility))
+            .child(scene.scenery(theme, self.reduced_motion()))
+            .child(preparation_message(theme, bundle.name(), visibility))
             .child(
                 row()
                     .absolute()
@@ -139,6 +156,7 @@ impl Desktop {
 
     fn quiet_preparation(
         &self,
+        theme: Theme,
         bundle: SampleBundle,
         layout: FlowLayout,
         cx: &Context<Self>,
@@ -155,8 +173,12 @@ impl Desktop {
                 layout.scene_scale(),
                 true,
             ))
-            .child(heading("正在准备分享", 26.))
-            .child(label(bundle.name(), 16.).text_color(muted()))
+            .child(theme.heading("正在准备分享", 26.))
+            .child(
+                theme
+                    .label(bundle.name(), 16.)
+                    .text_color(theme.muted_text()),
+            )
             .child(
                 Self::button(
                     "cancel-share",
@@ -171,7 +193,13 @@ impl Desktop {
             )
     }
 
-    fn result_share(&self, run: ShareRun, scene: ShareScene, cx: &Context<Self>) -> Div {
+    fn result_share(
+        &self,
+        theme: Theme,
+        run: ShareRun,
+        scene: ShareScene,
+        cx: &Context<Self>,
+    ) -> Div {
         let g = scene.geometry;
         let title = scene.title_visibility();
         let summary = scene.summary_visibility();
@@ -185,7 +213,7 @@ impl Desktop {
             .relative()
             .w_full()
             .h(px(g.height))
-            .child(scene.scenery(self.reduced_motion()))
+            .child(scene.scenery(theme, self.reduced_motion()))
             .child(
                 column()
                     .absolute()
@@ -196,6 +224,7 @@ impl Desktop {
                     .opacity(title)
                     .when(result < 1., |el| {
                         el.child(result_title(
+                            theme,
                             "正在准备链接",
                             "文件已就位，再等一小会儿。",
                             1. - result,
@@ -203,13 +232,14 @@ impl Desktop {
                     })
                     .when(result > 0., |el| {
                         el.child(result_title(
+                            theme,
                             "链接准备好了",
                             "复制链接，发给想分享的人。",
                             result,
                         ))
                     }),
             )
-            .child(self.link_reveal(run, scene, cx))
+            .child(self.link_reveal(theme, run, scene, cx))
             .child(
                 row()
                     .absolute()
@@ -221,12 +251,12 @@ impl Desktop {
                     .p(px(12.))
                     .rounded(px(12.))
                     .border_1()
-                    .border_color(border())
-                    .bg(paper())
+                    .border_color(theme.border())
+                    .bg(theme.surface())
                     .opacity(summary)
-                    .child(icon_tile(bundle.icon(), bundle.tone(), 38.))
-                    .child(label(bundle.name(), 16.).flex_1())
-                    .child(caption(format!("{} · {}", bundle.detail(), bundle.size()))),
+                    .child(theme.icon_tile(bundle.icon(), bundle.tone(), 38.))
+                    .child(theme.label(bundle.name(), 16.).flex_1())
+                    .child(theme.caption(format!("{} · {}", bundle.detail(), bundle.size()))),
             )
             .child(
                 row()
@@ -236,6 +266,7 @@ impl Desktop {
                     .justify_center()
                     .opacity(footer)
                     .child(reassurance(
+                        theme,
                         Icon::Monitor,
                         "保持 WindShare 开启，对方就能接收。",
                     )),
@@ -262,7 +293,13 @@ impl Desktop {
             )
     }
 
-    fn link_reveal(&self, run: ShareRun, scene: ShareScene, cx: &Context<Self>) -> Div {
+    fn link_reveal(
+        &self,
+        theme: Theme,
+        run: ShareRun,
+        scene: ShareScene,
+        cx: &Context<Self>,
+    ) -> Div {
         let g = scene.geometry;
         let expansion = scene.link_expansion();
         let result = scene.frame.result_visibility;
@@ -309,7 +346,7 @@ impl Desktop {
                         px(SHARE_LINK_HEIGHT),
                     ),
                     px(15.),
-                    Tone::Mint.surface(),
+                    Tone::Mint.surface(theme),
                 )
                 .opacity(scene.control_visibility()),
             )
@@ -321,7 +358,7 @@ impl Desktop {
                     .pl(px(18.))
                     .child(
                         icon(Icon::Link, 21.)
-                            .text_color(primary())
+                            .text_color(theme.accent_text())
                             .opacity(scene.link_visibility()),
                     )
                     .child(
@@ -331,10 +368,11 @@ impl Desktop {
                             .flex_1()
                             .min_w_0()
                             .opacity(scene.link_visibility())
-                            .when(result < 1., |el| el.child(link_placeholder(scene)))
+                            .when(result < 1., |el| el.child(link_placeholder(theme, scene)))
                             .when_some(share, |el, share| {
                                 el.child(
-                                    label(share.link(), 16.)
+                                    theme
+                                        .label(share.link(), 16.)
                                         .absolute()
                                         .inset_0()
                                         .w_full()
@@ -349,16 +387,16 @@ impl Desktop {
     }
 }
 
-fn result_title(title: &'static str, subtitle: &'static str, visibility: f32) -> Div {
+fn result_title(theme: Theme, title: &'static str, subtitle: &'static str, visibility: f32) -> Div {
     column()
         .absolute()
         .inset_0()
         .gap(px(8.))
         .opacity(visibility)
-        .child(heading(title, 26.))
-        .child(label(subtitle, 16.).text_color(muted()))
+        .child(theme.heading(title, 26.))
+        .child(theme.label(subtitle, 16.).text_color(theme.muted_text()))
 }
-fn preparation_message(name: &str, visibility: f32) -> Div {
+fn preparation_message(theme: Theme, name: &str, visibility: f32) -> Div {
     column()
         .absolute()
         .bottom(px(44.))
@@ -366,11 +404,15 @@ fn preparation_message(name: &str, visibility: f32) -> Div {
         .items_center()
         .gap(px(8.))
         .opacity(visibility)
-        .child(heading("正在准备分享", 26.))
-        .child(label(name.to_owned(), 16.).text_color(muted()))
+        .child(theme.heading("正在准备分享", 26.))
+        .child(
+            theme
+                .label(name.to_owned(), 16.)
+                .text_color(theme.muted_text()),
+        )
 }
 
-fn link_placeholder(scene: ShareScene) -> Div {
+fn link_placeholder(theme: Theme, scene: ShareScene) -> Div {
     let result = scene.frame.result_visibility;
     let breath_variation = 0.15 * scene.frame.breath;
     let placeholder_opacity = (1. - result) * (0.65 + breath_variation);
@@ -384,13 +426,13 @@ fn link_placeholder(scene: ShareScene) -> Div {
                 .w(px(138.))
                 .h(px(8.))
                 .rounded_full()
-                .bg(Tone::Mint.accent().opacity(0.35)),
+                .bg(Tone::Mint.accent(theme).opacity(0.35)),
         )
         .child(
             div()
                 .w(px(44.))
                 .h(px(8.))
                 .rounded_full()
-                .bg(Tone::Mint.accent().opacity(0.20)),
+                .bg(Tone::Mint.accent(theme).opacity(0.20)),
         )
 }

@@ -2,35 +2,33 @@ use crate::{
     desktop::Desktop,
     model::{Filter, PreviewAction, Share, ShareState},
 };
-use gpui::{Div, Stateful, div, prelude::*, px, rgb};
-use windshare_ui::{
-    ButtonStyle, Icon, Tone, badge, border, caption, card, column, dot, heading, icon_tile, label,
-    muted, row,
-};
+use gpui::{Div, Stateful, div, prelude::*, px};
+use windshare_ui::{ButtonStyle, Icon, Theme, Tone, column, row};
 
 impl Desktop {
-    pub fn share_card(share: &Share, cx: &Context<Self>) -> Stateful<Div> {
+    pub fn share_card(theme: Theme, share: &Share, cx: &Context<Self>) -> Stateful<Div> {
         let id = share.id;
         let status = match share.state {
             ShareState::Live { viewers } if viewers > 0 => format!("{viewers} 人正在接收"),
             ShareState::Live { .. } => "等待接收".to_owned(),
             ShareState::Paused => "已暂停".to_owned(),
         };
-        card()
+        theme
+            .card()
             .id(("share-card", id))
             .flex_1()
             .min_w_0()
             .p(px(20.))
             .gap(px(12.))
             .cursor_pointer()
-            .hover(|s| s.border_color(share.tone.accent()))
+            .hover(|s| s.border_color(share.tone.accent(theme)))
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.dispatch(PreviewAction::Detail(id), window, cx);
             }))
             .child(
                 row()
                     .justify_between()
-                    .child(icon_tile(share.symbol, share.tone, 44.))
+                    .child(theme.icon_tile(share.symbol, share.tone, 44.))
                     .child(
                         Self::button(
                             ("share-menu", id),
@@ -47,24 +45,24 @@ impl Desktop {
             .child(
                 column()
                     .gap(px(5.))
-                    .child(heading(share.name.clone(), 18.).truncate())
-                    .child(caption(format!("{}   ·   {}", share.detail, share.size))),
+                    .child(theme.heading(share.name.clone(), 18.).truncate())
+                    .child(theme.caption(format!("{}   ·   {}", share.detail, share.size))),
             )
             .child(
                 row()
                     .justify_between()
                     .pt(px(6.))
                     .border_t_1()
-                    .border_color(border())
+                    .border_color(theme.border())
                     .child(
                         row()
                             .gap(px(6.))
-                            .child(dot(if share.live() {
+                            .child(theme.dot(if share.live() {
                                 Tone::Mint
                             } else {
                                 Tone::Neutral
                             }))
-                            .child(caption(status)),
+                            .child(theme.caption(status)),
                     )
                     .child(
                         Self::button(
@@ -94,7 +92,7 @@ impl Desktop {
             })
             .collect()
     }
-    pub fn shares_page(&self, compact: bool, cx: &Context<Self>) -> Div {
+    pub fn shares_page(&self, theme: Theme, compact: bool, cx: &Context<Self>) -> Div {
         let shares = self.visible_shares(cx);
         let count = shares.len();
         let columns = if compact { 2 } else { 3 };
@@ -109,7 +107,7 @@ impl Desktop {
                             .gap(px(4.))
                             .p(px(4.))
                             .rounded(px(11.))
-                            .bg(rgb(0xef_f2_ec))
+                            .bg(theme.inset())
                             .children(
                                 [
                                     (Filter::All, "全部"),
@@ -164,15 +162,15 @@ impl Desktop {
             .child(
                 row()
                     .justify_between()
-                    .child(caption(format!("共 {count} 个分享")))
-                    .child(caption("最近分享在前")),
+                    .child(theme.caption(format!("共 {count} 个分享")))
+                    .child(theme.caption("最近分享在前")),
             )
-            .when(count == 0, |el| el.child(Self::empty_shares(cx)))
+            .when(count == 0, |el| el.child(Self::empty_shares(theme, cx)))
             .when(count > 0 && self.grid, |el| {
                 el.children(shares.chunks(columns).map(|chunk| {
                     let mut cards = row().gap(px(18.)).items_stretch();
                     for share in chunk {
-                        cards = cards.child(Self::share_card(share, cx));
+                        cards = cards.child(Self::share_card(theme, share, cx));
                     }
                     for _ in chunk.len()..columns {
                         cards = cards.child(div().flex_1());
@@ -182,27 +180,29 @@ impl Desktop {
             })
             .when(count > 0 && !self.grid, |el| {
                 el.child(
-                    card()
-                        .overflow_hidden()
-                        .children(shares.iter().map(|share| Self::share_list_row(share, cx))),
+                    theme.card().overflow_hidden().children(
+                        shares
+                            .iter()
+                            .map(|share| Self::share_list_row(theme, share, cx)),
+                    ),
                 )
             })
     }
-    fn share_list_row(share: &Share, cx: &Context<Self>) -> Div {
+    fn share_list_row(theme: Theme, share: &Share, cx: &Context<Self>) -> Div {
         row()
             .gap(px(12.))
             .p(px(20.))
             .border_b_1()
-            .border_color(border())
-            .child(icon_tile(share.symbol, share.tone, 40.))
+            .border_color(theme.border())
+            .child(theme.icon_tile(share.symbol, share.tone, 40.))
             .child(
                 column()
                     .flex_1()
                     .gap(px(5.))
-                    .child(heading(share.name.clone(), 17.))
-                    .child(caption(format!("{} · {}", share.detail, share.size))),
+                    .child(theme.heading(share.name.clone(), 17.))
+                    .child(theme.caption(format!("{} · {}", share.detail, share.size))),
             )
-            .child(badge(
+            .child(theme.badge(
                 if share.live() {
                     "分享中"
                 } else {
@@ -238,15 +238,20 @@ impl Desktop {
                 .tooltip("分享详情"),
             )
     }
-    fn empty_shares(cx: &Context<Self>) -> Div {
-        card()
+    fn empty_shares(theme: Theme, cx: &Context<Self>) -> Div {
+        theme
+            .card()
             .h(px(330.))
             .items_center()
             .justify_center()
             .gap(px(12.))
-            .child(icon_tile(Icon::Search, Tone::Lavender, 58.))
-            .child(heading("没有找到这个分享", 22.))
-            .child(label("换个关键词，或创建一个新分享。", 16.).text_color(muted()))
+            .child(theme.icon_tile(Icon::Search, Tone::Lavender, 58.))
+            .child(theme.heading("没有找到这个分享", 22.))
+            .child(
+                theme
+                    .label("换个关键词，或创建一个新分享。", 16.)
+                    .text_color(theme.muted_text()),
+            )
             .child(Self::button(
                 "empty-new",
                 "新建分享",

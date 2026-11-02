@@ -2,20 +2,19 @@ use crate::{
     desktop::Desktop,
     model::{Page, PreviewAction},
 };
-use gpui::{Div, MouseButton, WindowControlArea, div, img, prelude::*, px, rgb};
+use gpui::{Div, MouseButton, WindowControlArea, div, img, prelude::*, px};
 use windshare_ui::{
-    Button, ButtonStyle, FONT, Icon, SIDEBAR_COMPACT_WIDTH, SIDEBAR_WIDTH, Tone, border,
-    canvas_color, column, dot, heading, label, muted, primary, row, separator,
+    Button, ButtonStyle, FONT, Icon, SIDEBAR_COMPACT_WIDTH, SIDEBAR_WIDTH, Theme, Tone, column, row,
 };
 
 impl Desktop {
-    pub fn titlebar() -> Div {
+    pub fn titlebar(theme: Theme) -> Div {
         row()
             .h(px(40.))
             .flex_shrink_0()
             .pl(px(16.))
             .pr(px(5.))
-            .bg(canvas_color())
+            .bg(theme.canvas())
             .child(
                 row()
                     .flex_1()
@@ -30,9 +29,10 @@ impl Desktop {
                         }
                     })
                     .child(
-                        label("WindShare", 12.)
+                        theme
+                            .label("WindShare", 12.)
                             .font_family(FONT)
-                            .text_color(muted()),
+                            .text_color(theme.muted_text()),
                     ),
             )
             .when(cfg!(not(target_os = "macos")), |el| {
@@ -67,7 +67,7 @@ impl Desktop {
             })
     }
 
-    pub fn sidebar(&self, compact: bool, cx: &Context<Self>) -> Div {
+    pub fn sidebar(&self, theme: Theme, compact: bool, cx: &Context<Self>) -> Div {
         column()
             .w(px(if compact {
                 SIDEBAR_COMPACT_WIDTH
@@ -79,9 +79,9 @@ impl Desktop {
             .px(px(if compact { 13. } else { 18. }))
             .pt(px(22.))
             .pb(px(22.))
-            .bg(rgb(0xf0_f5_ef))
+            .bg(theme.sidebar())
             .border_r_1()
-            .border_color(border())
+            .border_color(theme.border())
             .child(
                 row()
                     .gap(px(8.))
@@ -92,9 +92,10 @@ impl Desktop {
                             .flex_shrink_0(),
                     )
                     .child(
-                        heading("WindShare", if compact { 18. } else { 22. })
+                        theme
+                            .heading("WindShare", if compact { 18. } else { 22. })
                             .font_family(FONT)
-                            .text_color(primary()),
+                            .text_color(theme.accent_text()),
                     ),
             )
             .child(
@@ -103,7 +104,7 @@ impl Desktop {
                     .child(self.navigation(Page::Share, Icon::Upload, cx))
                     .child(self.navigation(Page::Receive, Icon::Download, cx)),
             )
-            .child(div().my(px(25.)).child(separator()))
+            .child(div().my(px(25.)).child(theme.separator()))
             .child(
                 column()
                     .gap(px(8.))
@@ -152,17 +153,18 @@ impl Desktop {
         .tooltip(page.title())
     }
 
-    pub fn page_heading(&self, compact: bool, cx: &Context<Self>) -> Div {
+    pub fn page_heading(&self, theme: Theme, compact: bool, cx: &Context<Self>) -> Div {
         row()
             .justify_between()
             .gap(px(20.))
             .child(
                 column()
                     .gap(px(10.))
-                    .child(heading(self.page.title(), if compact { 30. } else { 34. }))
+                    .child(theme.heading(self.page.title(), if compact { 30. } else { 34. }))
                     .child(
-                        label(self.page.subtitle(), 16.)
-                            .text_color(muted())
+                        theme
+                            .label(self.page.subtitle(), 16.)
+                            .text_color(theme.muted_text())
                             .line_height(px(26.)),
                     ),
             )
@@ -181,13 +183,17 @@ impl Desktop {
             })
     }
 
-    pub fn statusbar() -> Div {
+    pub fn statusbar(theme: Theme) -> Div {
         row()
             .h(px(40.))
             .flex_shrink_0()
             .px(px(28.))
             .gap(px(8.))
-            .child(dot(Tone::Peach))
-            .child(label("UI 预览 · 示例文件", 12.).text_color(muted()))
+            .child(theme.dot(Tone::Peach))
+            .child(
+                theme
+                    .label("UI 预览 · 示例文件", 12.)
+                    .text_color(theme.muted_text()),
+            )
     }
 }

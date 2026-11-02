@@ -17,6 +17,7 @@ cargo run --manifest-path desktop/Cargo.toml --locked -- --compact
 Windows requires the MSVC target, Visual Studio C++ build tools and a DirectX 11
 GPU. Windows is the locally verified platform.
 
+- Light and dark palettes follow the system appearance, including changes while open.
 - Share: the original 1350 ms flight and 720 ms landing play continuously.
   Late results keep the settled scene breathing, then crossfade the link in
   over 180 ms. Copy stays disabled until a result exists. Reduced motion skips
@@ -34,7 +35,7 @@ GPU. Windows is the locally verified platform.
 - My shares: search, filter, grid/list, pause and copy.
 - Preferences: notifications, transfer details and reduced motion.
 - Task panels keep a stable height; compact layouts retain labeled navigation.
-  Body text is 16 px, with contrasting text on pale macaron surfaces.
+  Body text is 16 px, with contrasting text on themed, softly tinted surfaces.
 - `Ctrl+N`: new share; `Ctrl+K`: search; `Esc`: dismiss dialog.
   Controls support Tab and Enter/Space.
 

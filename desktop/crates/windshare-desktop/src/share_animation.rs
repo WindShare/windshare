@@ -8,7 +8,7 @@ use crate::{
 };
 use gpui::{Div, Point, Window, div, point, prelude::*, px};
 use std::f32::consts::PI;
-use windshare_ui::{Tone, vector_sprite};
+use windshare_ui::{Theme, Tone, vector_sprite};
 
 const READY_WIDTH: f32 = 620.;
 const READY_HEIGHT: f32 = 352.;
@@ -112,7 +112,7 @@ impl ShareScene {
     fn reveal(self, start: f32, end: f32) -> f32 {
         smooth(segment(self.arrival_progress(), start, end))
     }
-    pub fn scenery(self, reduced_motion: bool) -> Div {
+    pub fn scenery(self, theme: Theme, reduced_motion: bool) -> Div {
         div()
             .absolute()
             .inset_0()
@@ -121,7 +121,7 @@ impl ShareScene {
                 el.child(self.wind_field())
                     .children((0..PAPER_COUNT).filter_map(|index| self.paper(index)))
             })
-            .child(self.spirit(reduced_motion))
+            .child(self.spirit(theme, reduced_motion))
     }
 
     fn spirit_pose(self) -> (Point<f32>, f32) {
@@ -152,7 +152,7 @@ impl ShareScene {
         }
     }
 
-    fn spirit(self, reduced_motion: bool) -> Div {
+    fn spirit(self, theme: Theme, reduced_motion: bool) -> Div {
         let (center, size) = self.spirit_pose();
         let interactive = self.arrival_progress() >= 1. && self.frame.result_visibility >= 1.;
         let smile = self.reveal(0.02, 0.42) * self.frame.result_visibility;
@@ -170,7 +170,7 @@ impl ShareScene {
                         point(px(center.x), px(center.y + breeze_offset)),
                         local_scale,
                     )
-                    .text_color(Tone::Mint.accent())
+                    .text_color(Tone::Mint.accent(theme))
                     .opacity(surround),
                 )
             })

@@ -11,9 +11,8 @@ use gpui::{
 use std::time::Duration;
 use windshare_ui::InputEvent;
 use windshare_ui::{
-    Button, ButtonStyle, COMPACT_WIDTH, Icon, Input, Tone, UI_FONT, action_surface, advance_focus,
-    canvas_color, column, icon_tile, ink, label, notification_border, notification_surface,
-    primary, row,
+    Button, ButtonStyle, COMPACT_WIDTH, Icon, Input, Theme, Tone, UI_FONT, advance_focus, column,
+    row,
 };
 
 pub struct Desktop {
@@ -46,6 +45,7 @@ impl Desktop {
         let search = cx.new(|cx| Input::new("搜索分享名称", cx));
         let link_input = cx.new(|cx| Input::new("粘贴 WindShare 分享链接", cx));
         let subscriptions = vec![
+            windshare_ui::follow_system_theme(window),
             cx.subscribe(&search, |_, _, _, cx| cx.notify()),
             cx.subscribe_in(&link_input, window, |this, _, event, window, cx| {
                 if matches!(event, InputEvent::Submit) {
@@ -180,33 +180,34 @@ impl Desktop {
 }
 impl Render for Desktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::from(window.appearance());
         let compact = window.viewport_size().width < px(COMPACT_WIDTH);
         let layout = FlowLayout::for_window(window);
         let content = match self.page {
             Page::Share => self.sharing_page(layout, window, cx),
-            Page::Receive => self.receiving_page(layout, cx),
-            Page::Shares => self.shares_page(compact, cx),
-            Page::Transfers => self.transfers_page(cx),
-            Page::Settings => self.settings_page(cx),
-            Page::Components => Self::components_page(cx),
+            Page::Receive => self.receiving_page(theme, layout, cx),
+            Page::Shares => self.shares_page(theme, compact, cx),
+            Page::Transfers => self.transfers_page(theme, cx),
+            Page::Settings => self.settings_page(theme, cx),
+            Page::Components => Self::components_page(theme, cx),
         };
         column()
             .size_full()
             .relative()
-            .bg(canvas_color())
+            .bg(theme.canvas())
             .font_family(UI_FONT)
-            .text_color(ink())
+            .text_color(theme.text())
             .text_size(px(16.))
             .track_focus(&self.focus)
             .tab_group()
             .on_key_down(cx.listener(Self::handle_key))
-            .child(Self::titlebar())
+            .child(Self::titlebar(theme))
             .child(
                 row()
                     .items_stretch()
                     .flex_1()
                     .min_h_0()
-                    .child(self.sidebar(compact, cx))
+                    .child(self.sidebar(theme, compact, cx))
                     .child(
                         column()
                             .flex_1()
@@ -226,7 +227,7 @@ impl Render for Desktop {
                                             .w_full()
                                             .max_w(px(MAX_PAGE_WIDTH))
                                             .gap(px(24.))
-                                            .child(self.page_heading(compact, cx))
+                                            .child(self.page_heading(theme, compact, cx))
                                             .child(
                                                 content.with_animation(
                                                     ("page-enter", self.page as usize),
@@ -239,7 +240,7 @@ impl Render for Desktop {
                                             ),
                                     ),
                             )
-                            .child(Self::statusbar()),
+                            .child(Self::statusbar(theme)),
                     ),
             )
             .when(self.overlay.is_some(), |root| {
@@ -255,12 +256,12 @@ impl Render for Desktop {
                         .px(px(22.))
                         .py(px(16.))
                         .rounded(px(16.))
-                        .bg(notification_surface())
+                        .bg(theme.notification_surface())
                         .border_1()
-                        .border_color(notification_border())
+                        .border_color(theme.notification_border())
                         .shadow_sm()
-                        .child(icon_tile(Icon::Check, Tone::Mint, 30.).bg(action_surface()))
-                        .child(label(text, 16.).text_color(primary()))
+                        .child(theme.icon_tile(Icon::Check, Tone::Mint, 30.))
+                        .child(theme.label(text, 16.).text_color(theme.accent_text()))
                         .with_animation(
                             ("toast", id),
                             Animation::new(Duration::from_millis(if self.reduced_motion() {

@@ -3,13 +3,10 @@ use crate::{
     model::{Page, PreviewAction},
 };
 use gpui::{Div, KeyDownEvent, prelude::*, px};
-use windshare_ui::{
-    Button, ButtonStyle, Icon, Tone, badge, border, caption, card, column, heading, icon_tile,
-    label, muted, progress, row, section_header, separator, toggle,
-};
+use windshare_ui::{Button, ButtonStyle, Icon, Theme, Tone, column, row};
 
 impl Desktop {
-    pub fn settings_page(&self, cx: &Context<Self>) -> Div {
+    pub fn settings_page(&self, theme: Theme, cx: &Context<Self>) -> Div {
         let settings = [
             ("轻提示", "操作完成后显示轻量通知。", Icon::Bell),
             ("传输详情", "显示速度与预计剩余时间。", Icon::Activity),
@@ -18,26 +15,28 @@ impl Desktop {
         column()
             .gap(px(24.))
             .child(
-                card()
+                theme
+                    .card()
                     .p(px(28.))
                     .gap(px(10.))
-                    .child(heading("界面与体验", 22.))
+                    .child(theme.heading("界面与体验", 22.))
                     .children(settings.into_iter().enumerate().map(
                         |(index, (title, detail, symbol))| {
                             row()
                                 .gap(px(18.))
                                 .py(px(24.))
-                                .when(index > 0, |el| el.border_t_1().border_color(border()))
-                                .child(icon_tile(symbol, Tone::Neutral, 44.))
+                                .when(index > 0, |el| el.border_t_1().border_color(theme.border()))
+                                .child(theme.icon_tile(symbol, Tone::Neutral, 44.))
                                 .child(
                                     column()
                                         .flex_1()
                                         .gap(px(7.))
-                                        .child(heading(title, 17.))
-                                        .child(caption(detail)),
+                                        .child(theme.heading(title, 17.))
+                                        .child(theme.caption(detail)),
                                 )
                                 .child(
-                                    toggle(("setting", index), self.settings[index])
+                                    theme
+                                        .toggle(("setting", index), self.settings[index])
                                         .aria_label(title)
                                         .on_click(cx.listener(move |this, _, window, cx| {
                                             this.dispatch(
@@ -73,8 +72,8 @@ impl Desktop {
                     .child(
                         column()
                             .gap(px(7.))
-                            .child(heading("WindShare 设计组件", 18.))
-                            .child(caption("柔和配色、清晰字号，以及原生的细节。")),
+                            .child(theme.heading("WindShare 设计组件", 18.))
+                            .child(theme.caption("柔和配色、清晰字号，以及原生的细节。")),
                     )
                     .child(Self::button(
                         "view-components",
@@ -87,15 +86,16 @@ impl Desktop {
             )
     }
 
-    pub fn components_page(cx: &Context<Self>) -> Div {
+    pub fn components_page(theme: Theme, cx: &Context<Self>) -> Div {
         column()
             .gap(px(24.))
-            .child(color_palette())
+            .child(color_palette(theme))
             .child(
-                card()
+                theme
+                    .card()
                     .p(px(28.))
                     .gap(px(22.))
-                    .child(section_header("按钮", "悬停 · 聚焦 · 按下"))
+                    .child(theme.section_header("按钮", "悬停 · 聚焦 · 按下"))
                     .child(
                         row()
                             .flex_wrap()
@@ -132,31 +132,34 @@ impl Desktop {
                     ),
             )
             .child(
-                card()
+                theme
+                    .card()
                     .p(px(28.))
                     .gap(px(20.))
-                    .child(heading("让信息清晰，让阅读轻松", 28.))
+                    .child(theme.heading("让信息清晰，让阅读轻松", 28.))
                     .child(
-                        label("正文 16 px · 辅助文字 14 px · 页面标题 34 px", 16.)
-                            .text_color(muted()),
+                        theme
+                            .label("正文 16 px · 辅助文字 14 px · 页面标题 34 px", 16.)
+                            .text_color(theme.muted_text()),
                     )
-                    .child(separator())
-                    .child(heading("状态也有自己的秩序", 20.))
+                    .child(theme.separator())
+                    .child(theme.heading("状态也有自己的秩序", 20.))
                     .child(
                         row()
                             .gap(px(12.))
-                            .child(badge("已连接", Tone::Mint))
-                            .child(badge("等待中", Tone::Peach))
-                            .child(badge("已暂停", Tone::Neutral))
-                            .child(badge("需要重试", Tone::Rose)),
+                            .child(theme.badge("已连接", Tone::Mint))
+                            .child(theme.badge("等待中", Tone::Peach))
+                            .child(theme.badge("已暂停", Tone::Neutral))
+                            .child(theme.badge("需要重试", Tone::Rose)),
                     )
-                    .child(progress(0.62, Tone::Lavender)),
+                    .child(theme.progress(0.62, Tone::Lavender)),
             )
             .child(
-                card()
+                theme
+                    .card()
                     .p(px(28.))
                     .gap(px(18.))
-                    .child(section_header("自有图标", "24 px 网格"))
+                    .child(theme.section_header("自有图标", "24 px 网格"))
                     .child(
                         row().flex_wrap().gap(px(16.)).children(
                             [
@@ -174,15 +177,15 @@ impl Desktop {
                                 Icon::Sun,
                             ]
                             .into_iter()
-                            .map(|symbol| icon_tile(symbol, Tone::Neutral, 46.)),
+                            .map(|symbol| theme.icon_tile(symbol, Tone::Neutral, 46.)),
                         ),
                     )
-                    .child(caption("所有控件基于 GPUI 基础元素实现。")),
+                    .child(theme.caption("所有控件基于 GPUI 基础元素实现。")),
             )
     }
 }
 
-fn color_palette() -> Div {
+fn color_palette(theme: Theme) -> Div {
     row().gap(px(12.)).children(
         [
             (Tone::Mint, "薄荷"),
@@ -199,8 +202,8 @@ fn color_palette() -> Div {
                 .p(px(20.))
                 .rounded(px(16.))
                 .justify_end()
-                .bg(tone.surface())
-                .child(heading(name, 16.).text_color(tone.text()))
+                .bg(tone.surface(theme))
+                .child(theme.heading(name, 16.).text_color(tone.text(theme)))
         }),
     )
 }
