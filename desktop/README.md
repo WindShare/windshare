@@ -17,11 +17,16 @@ cargo run --manifest-path desktop/Cargo.toml --locked -- --compact
 Windows requires the MSVC target, Visual Studio C++ build tools and a DirectX 11
 GPU. Windows is the locally verified platform.
 
-- Share: at least 1.65 seconds of flight followed by a 350 ms landing. Early
-  results wait for the entrance; longer waits keep a gentle orbit until ready.
-  Copying works during landing. Reduced motion skips both decorative delays.
-- Preview latency defaults to 1350 ms. Pass `--share-delay-ms=200` or
+- Share: the original 1350 ms flight and 720 ms landing play continuously.
+  Late results keep the settled scene breathing, then crossfade the link in
+  over 180 ms. Copy stays disabled until a result exists. Reduced motion skips
+  decorative delays.
+- Preview latency defaults to 1900 ms. Pass `--share-delay-ms=200` or
   `--share-delay-ms=5000` after `cargo run ... --` to inspect fast and slow results.
+  Motion uses actual completion events, never the configured delay.
+- Animated SVGs keep a fixed raster size and use GPU transforms. Inactive share
+  windows stop scheduling decorative frames. Trace events report presentation
+  phases and render callback cadence, not GPU presentation FPS.
 - Receive: paste a link or use the sample, inspect files, preview receiving.
 - My shares: search, filter, grid/list, pause and copy.
 - Preferences: notifications, transfer details and reduced motion.

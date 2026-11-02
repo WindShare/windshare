@@ -1,14 +1,11 @@
 use crate::{
     layout::{FlowLayout, task_width},
     share_timing::{
-        ArrivalFrame, FLIGHT_LAUNCH_SECONDS, ShareArrival, ease_out, lerp, segment, smooth,
+        FLIGHT_DURATION, LANDING_DURATION, ShareFrame, ease_out, lerp, segment, smooth,
     },
 };
 use gpui::{prelude::*, *};
-use std::{
-    f32::consts::{PI, TAU},
-    time::{Duration, Instant},
-};
+use std::f32::consts::{PI, TAU};
 use windshare_ui::*;
 
 const READY_WIDTH: f32 = 620.;
@@ -19,9 +16,6 @@ const LANDED_SPIRIT_SIZE: f32 = 92.;
 const CRUISING_SPIRIT_SIZE: f32 = 144.;
 const PAPER_COUNT: usize = 7;
 const WIND_SEGMENTS: usize = 48;
-const CRUISE_CYCLE_SECONDS: f32 = 3.2;
-const CRUISE_BLEND_SECONDS: f32 = 0.5;
-const PREPARATION_FADE_SECONDS: f32 = 0.18;
 const PAPER_ASSETS: [&str; 3] = ["brand/paper.svg", "brand/photo.svg", "brand/folder.svg"];
 
 #[derive(Clone, Copy)]
@@ -33,7 +27,6 @@ pub struct ShareGeometry {
     pub content_top: f32,
     initial_spirit_size: f32,
 }
-
 impl ShareGeometry {
     pub fn new(window: &Window, layout: FlowLayout) -> Self {
         let width = task_width(window, layout);
@@ -54,14 +47,12 @@ impl ShareGeometry {
         )
     }
     fn flight_end(self) -> Point<f32> {
-        let destination = self.destination();
-        point(destination.x - 46., destination.y + 28.)
+        self.destination() + point(-46., 28.)
     }
     pub fn link_top(self) -> f32 {
         self.content_top + SHARE_LINK_TOP
     }
     fn link_anchor(self) -> Point<f32> {
-        // The paper destination follows the actual link row when its layout changes.
         point(
             self.content_left + 30.,
             self.link_top() + SHARE_LINK_HEIGHT / 2.,
@@ -70,38 +61,29 @@ impl ShareGeometry {
 }
 
 #[derive(Clone, Copy)]
-enum Phase {
-    Flight(f32),
-    Arrival(ArrivalFrame),
-    Settled,
-}
-
-#[derive(Clone, Copy)]
 pub struct ShareScene {
     pub geometry: ShareGeometry,
-    phase: Phase,
+    pub frame: ShareFrame,
 }
-
 impl ShareScene {
-    pub fn flight(geometry: ShareGeometry, started_at: Instant) -> Self {
-        Self {
-            geometry,
-            phase: Phase::Flight(started_at.elapsed().as_secs_f32()),
-        }
+    pub fn new(geometry: ShareGeometry, frame: ShareFrame) -> Self {
+        Self { geometry, frame }
     }
-    pub fn arrival(geometry: ShareGeometry, arrival: ShareArrival) -> Self {
-        Self {
-            geometry,
-            phase: Phase::Arrival(arrival.sample(Instant::now())),
-        }
+    pub fn landing(self) -> bool {
+        self.frame.story >= FLIGHT_DURATION
     }
-    pub fn settled(geometry: ShareGeometry) -> Self {
-        Self {
-            geometry,
-            phase: Phase::Settled,
-        }
+    fn flight_progress(self) -> f32 {
+        (self.frame.story.as_secs_f32() / FLIGHT_DURATION.as_secs_f32()).min(1.)
     }
-
+    fn arrival_progress(self) -> f32 {
+        (self
+            .frame
+            .story
+            .saturating_sub(FLIGHT_DURATION)
+            .as_secs_f32()
+            / LANDING_DURATION.as_secs_f32())
+        .min(1.)
+    }
     pub fn title_visibility(self) -> f32 {
         self.reveal(0., 0.38)
     }
@@ -112,98 +94,76 @@ impl ShareScene {
         self.reveal(0.12, 0.48)
     }
     pub fn control_visibility(self) -> f32 {
-        // The available copy action is visible from the first ready frame.
-        0.5 + 0.5 * self.reveal(0., 0.22)
+        self.reveal(0., 0.22)
     }
     pub fn summary_visibility(self) -> f32 {
-        self.reveal(0.36, 0.80)
+        self.reveal(0.24, 0.72)
     }
     pub fn footer_visibility(self) -> f32 {
-        self.reveal(0.62, 1.)
+        self.reveal(0.42, 0.86)
     }
     pub fn preparation_visibility(self) -> f32 {
-        let enter = |seconds| smooth(segment(seconds, 0., PREPARATION_FADE_SECONDS));
-        match self.phase {
-            Phase::Flight(seconds) => enter(seconds),
-            Phase::Arrival(frame) => {
-                enter(frame.flight_seconds) * (1. - smooth(segment(frame.progress, 0., 0.26)))
-            }
-            Phase::Settled => 0.,
-        }
+        let t = self.flight_progress();
+        smooth(segment(t, 0., 0.18)) * (1. - smooth(segment(t, 0.82, 1.)))
     }
     fn reveal(self, start: f32, end: f32) -> f32 {
-        match self.phase {
-            Phase::Flight(_) => 0.,
-            Phase::Arrival(frame) => smooth(segment(frame.progress, start, end)),
-            Phase::Settled => 1.,
-        }
+        smooth(segment(self.arrival_progress(), start, end))
     }
-
-    pub fn scenery(self, still: bool) -> Div {
+    pub fn scenery(self) -> Div {
         div()
             .absolute()
             .inset_0()
             .size_full()
-            .when(!matches!(self.phase, Phase::Settled), |el| {
+            .when(self.arrival_progress() < 1., |el| {
                 el.child(self.wind_field())
                     .children((0..PAPER_COUNT).map(|index| self.paper(index)))
             })
-            .child(self.spirit(still))
+            .child(self.spirit())
     }
 
     fn spirit_pose(self) -> (Point<f32>, f32) {
         let g = self.geometry;
-        match self.phase {
-            Phase::Flight(seconds) => self.flying_spirit(seconds),
-            Phase::Arrival(frame) => {
-                let (center, size) = self.flying_spirit(frame.source_seconds);
-                let blend = smooth(frame.progress);
-                (
-                    mix_point(center, g.destination(), blend),
-                    lerp(size, LANDED_SPIRIT_SIZE, blend),
-                )
-            }
-            Phase::Settled => (g.destination(), LANDED_SPIRIT_SIZE),
+        if self.landing() {
+            let t = smooth(self.arrival_progress());
+            (
+                mix_point(g.flight_end(), g.destination(), t) + point(0., self.frame.breath * 2.),
+                lerp(CRUISING_SPIRIT_SIZE, LANDED_SPIRIT_SIZE, t),
+            )
+        } else {
+            let t = self.flight_progress();
+            let end = g.flight_end();
+            (
+                cubic(
+                    [
+                        point(g.width * 0.5, g.height * 0.235),
+                        point(g.width * 0.14, g.height * 0.63),
+                        point(end.x - 110., end.y + 36.),
+                        end,
+                    ],
+                    smooth(t),
+                ),
+                lerp(g.initial_spirit_size, CRUISING_SPIRIT_SIZE, smooth(t)) + 64. * (PI * t).sin(),
+            )
         }
     }
 
-    fn flying_spirit(self, seconds: f32) -> (Point<f32>, f32) {
-        let g = self.geometry;
-        let (launch, cruise) = flight_clock(seconds);
-        let end = g.flight_end();
-        let center = cubic(
-            [
-                point(g.width * 0.5, g.height * 0.235),
-                point(g.width * 0.14, g.height * 0.63),
-                point(end.x - 110., end.y + 36.),
-                end,
-            ],
-            launch,
-        ) + cruise_offset(cruise);
-        let size = lerp(g.initial_spirit_size, CRUISING_SPIRIT_SIZE, launch)
-            + 64. * (PI * launch).sin().powi(2)
-            + 4. * cruise.sin();
-        (center, size)
-    }
-
-    fn spirit(self, still: bool) -> AnyElement {
+    fn spirit(self) -> Div {
         let (center, size) = self.spirit_pose();
-        let smile = self.reveal(0.02, 0.42);
+        let smile = self.reveal(0.02, 0.42) * self.frame.result_visibility;
         let local_scale = size / 156.;
         let surround = self.reveal(0.55, 1.);
         let mut layer = div()
             .absolute()
             .inset_0()
             .child(
-                svg()
-                    .path("brand/breeze.svg")
-                    .absolute()
-                    .left(px(center.x - 170. * local_scale))
-                    .top(px(center.y - 82. * local_scale))
-                    .w(px(340. * local_scale))
-                    .h(px(176. * local_scale))
-                    .text_color(Tone::Mint.accent())
-                    .opacity(surround),
+                vector_sprite(
+                    "brand/breeze.svg",
+                    gpui::size(px(340.), px(176.)),
+                    point(px(center.x), px(center.y + 6. * local_scale)),
+                    local_scale,
+                )
+                .text_color(Tone::Mint.accent())
+                .opacity(surround),
             )
             .child(
                 img("brand/spirit.svg")
@@ -223,45 +183,64 @@ impl ShareScene {
             );
         for (index, asset) in PAPER_ASSETS.into_iter().enumerate() {
             let (x, y) = [(-82., -8.), (77., -29.), (76., 38.)][index];
+            let drift = self.frame.breath * if index == 1 { -2. } else { 2. };
             layer = layer.child(
                 img(asset)
                     .absolute()
                     .left(px(center.x + x))
-                    .top(px(center.y + y))
+                    .top(px(center.y + y + drift))
                     .w(px(23.))
                     .h(px(27.))
                     .opacity(surround),
             );
         }
-        if matches!(self.phase, Phase::Settled) && !still {
-            layer
-                .with_animation(
-                    "share-landed-breath",
-                    Animation::new(Duration::from_millis(3400)).repeat(),
-                    |el, delta| el.top(px((delta * TAU).sin() * 2.)),
-                )
-                .into_any_element()
-        } else {
-            layer.into_any_element()
-        }
+        layer
     }
 
     fn paper(self, index: usize) -> Div {
+        let g = self.geometry;
         let seed = index as f32;
-        let (center, size, opacity) = match self.phase {
-            Phase::Flight(seconds) => self.flying_paper(index, seconds),
-            Phase::Arrival(frame) => {
-                let (source, size, opacity) = self.flying_paper(index, frame.source_seconds);
-                let p = smooth(segment(frame.progress, seed * 0.01, 0.72 + seed * 0.028));
-                let center = mix_point(source, self.geometry.link_anchor(), p)
-                    + point(0., -48. * (PI * p).sin().powi(2));
-                (
-                    center,
-                    lerp(size, 10., p),
-                    opacity * (1. - smooth(segment(p, 0.70, 1.))),
-                )
-            }
-            Phase::Settled => (self.geometry.link_anchor(), 0., 0.),
+        let (center, size, opacity) = if self.landing() {
+            let p = ease_out(segment(
+                self.arrival_progress(),
+                seed * 0.018,
+                0.48 + seed * 0.025,
+            ));
+            let end = g.flight_end();
+            let link = g.link_anchor();
+            (
+                cubic(
+                    [
+                        end,
+                        point(end.x + 45. - seed * 10., end.y + 95.),
+                        point(link.x + 100. + seed * 9., link.y - 70.),
+                        link,
+                    ],
+                    p,
+                ),
+                lerp(27., 10., p),
+                1. - smooth(segment(p, 0.64, 1.)),
+            )
+        } else {
+            let t = self.flight_progress();
+            let p = smooth(segment(t, seed * 0.028, 0.88 + seed * 0.018));
+            let flank = if index.is_multiple_of(2) { -0.12 } else { 1.10 };
+            (
+                cubic(
+                    [
+                        point(g.width * (0.39 + seed * 0.035), g.height * 0.57),
+                        point(g.width * flank, g.height * (0.62 - seed * 0.045)),
+                        point(
+                            g.width * (0.12 + seed * 0.115),
+                            g.height * (-0.25 + seed * 0.035),
+                        ),
+                        g.flight_end(),
+                    ],
+                    p,
+                ),
+                lerp(54. + seed * 3., 27., p),
+                smooth(segment(t, 0.01, 0.13)),
+            )
         };
         div()
             .absolute()
@@ -273,65 +252,26 @@ impl ShareScene {
             .child(img(PAPER_ASSETS[index % PAPER_ASSETS.len()]).size_full())
     }
 
-    fn flying_paper(self, index: usize, seconds: f32) -> (Point<f32>, f32, f32) {
-        let g = self.geometry;
-        let seed = index as f32;
-        let (_, cruise) = flight_clock(seconds);
-        let angle = seed / PAPER_COUNT as f32 * TAU;
-        let orbit = |phase: f32| point(76. * phase.cos(), 42. * phase.sin());
-        let anchor = g.flight_end() + orbit(angle);
-        let t = segment(seconds, 0., FLIGHT_LAUNCH_SECONDS);
-        let p = smooth(segment(t, seed * 0.028, 0.88 + seed * 0.018));
-        let flank = if index.is_multiple_of(2) { -0.12 } else { 1.10 };
-        let center = cubic(
-            [
-                point(g.width * (0.30 + seed * 0.065), g.height * 0.57),
-                point(g.width * flank, g.height * (0.62 - seed * 0.045)),
-                point(
-                    g.width * (0.12 + seed * 0.115),
-                    g.height * (-0.25 + seed * 0.035),
-                ),
-                anchor,
-            ],
-            p,
-        ) + orbit(angle + cruise)
-            - orbit(angle)
-            + cruise_offset(cruise);
-        (
-            center,
-            lerp(44. + seed * 2., 27., p),
-            smooth(segment(seconds, 0.015, 0.14)),
-        )
-    }
-
-    fn wind_pose(self) -> (f32, f32, f32) {
-        let flight = |seconds| {
-            let (launch, cruise) = flight_clock(seconds);
+    fn wind_pose(self) -> (f32, f32) {
+        if self.landing() {
+            let t = self.arrival_progress();
             (
-                lerp(0.18, 1.15, launch),
-                smooth(segment(seconds, 0., 0.16)) * (0.88 + 0.06 * cruise.sin()),
-                cruise * 0.6,
+                1.15 + 0.6 * smooth(t),
+                0.8 * (1. - smooth(segment(t, 0., 0.8))),
             )
-        };
-        match self.phase {
-            Phase::Flight(seconds) => flight(seconds),
-            Phase::Arrival(frame) => {
-                let (head, strength, ripple) = flight(frame.source_seconds);
-                (
-                    head + 0.6 * smooth(frame.progress),
-                    strength * (1. - smooth(segment(frame.progress, 0., 0.8))),
-                    ripple,
-                )
-            }
-            Phase::Settled => (0., 0., 0.),
+        } else {
+            let t = self.flight_progress();
+            (
+                lerp(0.18, 1.15, smooth(t)),
+                smooth(segment(t, 0., 0.14)) * (1. - 0.2 * segment(t, 0.9, 1.)),
+            )
         }
     }
-
     fn wind_field(self) -> impl IntoElement {
         canvas(
             |_, _, _| (),
             move |bounds, _, window, _| {
-                let (head, strength, ripple) = self.wind_pose();
+                let (head, strength) = self.wind_pose();
                 for (lane, tone) in [Tone::Mint, Tone::Lavender, Tone::Peach]
                     .into_iter()
                     .enumerate()
@@ -341,14 +281,14 @@ impl ShareScene {
                         (1.5, tone.accent().opacity(strength * 0.72)),
                     ] {
                         let mut path = PathBuilder::stroke(px(width));
-                        let begin = (head - 1.20).max(0.);
+                        let begin = (head - 0.88).max(0.);
                         for step in 0..=WIND_SEGMENTS {
                             let t = lerp(begin, head, step as f32 / WIND_SEGMENTS as f32);
                             let x = self.geometry.width * (t * 1.18 - 0.09);
                             let y = self.geometry.height
                                 * (0.48 - 0.24 * (t * PI).sin()
                                     + lane as f32 * 0.075
-                                    + 0.045 * (t * TAU + lane as f32 * 0.8 - ripple).sin());
+                                    + 0.045 * (t * TAU + lane as f32 * 0.8).sin());
                             let p = bounds.origin + point(px(x), px(y));
                             if step == 0 {
                                 path.move_to(p);
@@ -369,16 +309,6 @@ impl ShareScene {
     }
 }
 
-fn flight_clock(seconds: f32) -> (f32, f32) {
-    let launch = smooth(segment(seconds, 0., FLIGHT_LAUNCH_SECONDS));
-    let cruising = (seconds - FLIGHT_LAUNCH_SECONDS).max(0.);
-    // Ease into a perpetual orbit once, so long waits never freeze or restart the entrance.
-    let clock = cruising * smooth(segment(cruising, 0., CRUISE_BLEND_SECONDS));
-    (launch, clock / CRUISE_CYCLE_SECONDS * TAU)
-}
-fn cruise_offset(phase: f32) -> Point<f32> {
-    point(20. * phase.sin(), 10. * (phase.cos() - 1.))
-}
 fn mix_point(a: Point<f32>, b: Point<f32>, t: f32) -> Point<f32> {
     point(lerp(a.x, b.x, t), lerp(a.y, b.y, t))
 }

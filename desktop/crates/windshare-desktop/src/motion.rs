@@ -58,13 +58,13 @@ pub fn scaled_spirit(mood: SpiritMood, tone: Tone, scale: f32, still: bool) -> D
         .h(unit(SCENE_HEIGHT))
         .flex_shrink_0()
         .child(
-            svg()
-                .path("brand/breeze.svg")
-                .absolute()
-                .inset_0()
-                .w(unit(SCENE_WIDTH))
-                .h(unit(SCENE_HEIGHT))
-                .text_color(tone.accent()),
+            vector_sprite(
+                "brand/breeze.svg",
+                size(px(SCENE_WIDTH), px(SCENE_HEIGHT)),
+                point(unit(SCENE_WIDTH / 2.), unit(SCENE_HEIGHT / 2.)),
+                scale,
+            )
+            .text_color(tone.accent()),
         );
     for (index, asset) in PAPERS.into_iter().enumerate() {
         let paper = div()

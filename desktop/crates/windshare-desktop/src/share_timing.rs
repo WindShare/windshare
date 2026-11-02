@@ -1,43 +1,73 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-const MIN_FLIGHT_MS: u64 = 1650;
-pub const MIN_FLIGHT_DURATION: Duration = Duration::from_millis(MIN_FLIGHT_MS);
-pub const FLIGHT_LAUNCH_SECONDS: f32 = MIN_FLIGHT_MS as f32 / 1000.;
-const ARRIVAL_DURATION: Duration = Duration::from_millis(350);
+pub const FLIGHT_DURATION: Duration = Duration::from_millis(1350);
+pub const LANDING_DURATION: Duration = Duration::from_millis(720);
+pub const STORY_DURATION: Duration = FLIGHT_DURATION.saturating_add(LANDING_DURATION);
+const RESULT_FADE: Duration = Duration::from_millis(180);
+const BREATH_CYCLE_SECONDS: f32 = 3.4;
 
-#[derive(Clone, Copy, Debug)]
-pub struct ShareArrival {
-    started_at: Instant,
-    flight_elapsed: Duration,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PresentationPhase {
+    Flight,
+    Landing,
+    WaitingForLink,
+    RevealingLink,
+    Complete,
 }
 
 #[derive(Clone, Copy)]
-pub struct ArrivalFrame {
-    pub source_seconds: f32,
-    pub flight_seconds: f32,
-    pub progress: f32,
+pub struct ShareFrame {
+    pub story: Duration,
+    pub breath: f32,
+    pub result_visibility: f32,
+    pub phase: PresentationPhase,
 }
 
-impl ShareArrival {
-    pub fn new(flight_started_at: Instant, reveal_at: Instant) -> Self {
-        let flight_elapsed = reveal_at.saturating_duration_since(flight_started_at);
+impl ShareFrame {
+    pub fn sample(elapsed: Duration, ready_at: Option<Duration>, still: bool) -> Self {
+        // Readiness controls usable content. The presentation clock only controls choreography.
+        let story = if still {
+            if ready_at.is_some() {
+                STORY_DURATION
+            } else {
+                Duration::ZERO
+            }
+        } else {
+            elapsed.min(STORY_DURATION)
+        };
+        let result_visibility = ready_at.map_or(0., |ready| {
+            if still {
+                1.
+            } else {
+                smooth(
+                    (elapsed.saturating_sub(ready).as_secs_f32() / RESULT_FADE.as_secs_f32())
+                        .min(1.),
+                )
+            }
+        });
+        let breath = if still {
+            0.
+        } else {
+            (elapsed.saturating_sub(STORY_DURATION).as_secs_f32() / BREATH_CYCLE_SECONDS
+                * std::f32::consts::TAU)
+                .sin()
+        };
+        let phase = if story < FLIGHT_DURATION {
+            PresentationPhase::Flight
+        } else if story < STORY_DURATION {
+            PresentationPhase::Landing
+        } else if ready_at.is_none() {
+            PresentationPhase::WaitingForLink
+        } else if result_visibility < 1. {
+            PresentationPhase::RevealingLink
+        } else {
+            PresentationPhase::Complete
+        };
         Self {
-            started_at: reveal_at,
-            flight_elapsed,
-        }
-    }
-
-    pub fn duration(self) -> Duration {
-        ARRIVAL_DURATION
-    }
-
-    pub fn sample(self, now: Instant) -> ArrivalFrame {
-        let elapsed = now.saturating_duration_since(self.started_at);
-        ArrivalFrame {
-            // Continue the source trajectory while blending out, preserving its velocity.
-            source_seconds: (self.flight_elapsed + elapsed).as_secs_f32(),
-            flight_seconds: self.flight_elapsed.as_secs_f32(),
-            progress: (elapsed.as_secs_f32() / ARRIVAL_DURATION.as_secs_f32()).clamp(0., 1.),
+            story,
+            breath,
+            result_visibility,
+            phase,
         }
     }
 }
@@ -47,8 +77,7 @@ pub fn segment(value: f32, start: f32, end: f32) -> f32 {
 }
 
 pub fn smooth(t: f32) -> f32 {
-    // Zero endpoint velocity and acceleration keep an interrupted flight from snapping.
-    t * t * t * (t * (t * 6. - 15.) + 10.)
+    t * t * (3. - 2. * t)
 }
 
 pub fn ease_out(t: f32) -> f32 {

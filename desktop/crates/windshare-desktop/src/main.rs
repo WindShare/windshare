@@ -6,6 +6,7 @@ mod flow_state;
 mod layout;
 mod model;
 mod motion;
+mod motion_probe;
 mod overlays;
 mod pages;
 mod receiving;
@@ -20,7 +21,7 @@ use desktop::Desktop;
 use gpui::{prelude::*, *};
 use std::{borrow::Cow, time::Duration};
 
-const DEFAULT_PREVIEW_SHARE_MS: u64 = 1350;
+const DEFAULT_PREVIEW_SHARE_MS: u64 = 1900;
 
 struct DesktopAssets;
 impl AssetSource for DesktopAssets {
