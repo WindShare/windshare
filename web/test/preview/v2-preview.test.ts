@@ -287,6 +287,21 @@ describe('v2 file preview runtime', () => {
     expect(fixture.releases()).toBe(1)
   })
 
+  it('presents the oriented dimensions when the browser applies a quarter-turn orientation', async () => {
+    const bytes = pngFile(128, 20, 10)
+    const fixture = runtime(bytes, 64n)
+    const urls = urlPorts({ decodeImage: async () => ({ width: 10, height: 20 }) })
+    const preview = await FilePreview.open(
+      fileEntry(BigInt(bytes.byteLength), 'portrait.png'),
+      fixture.revisions,
+      fixture.broker,
+      new AbortController().signal,
+      urls.ports,
+    )
+    expect(preview.current).toMatchObject({ kind: 'image', width: 10, height: 20 })
+    await preview.close()
+  })
+
   it('rejects an MP4 codec the browser cannot decode before reading a sample', async () => {
     const bytes = mp4ShapedFile(128)
     const fixture = runtime(bytes, 64n)

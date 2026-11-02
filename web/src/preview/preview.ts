@@ -18,6 +18,7 @@ import {
 
 import { isAutomaticPhotoCandidate, requireAutomaticPhotoHeader, AutomaticPhotoDeferredError } from './automatic-photo'
 
+// Displayed dimensions, after any orientation metadata, matching the preview <img>.
 export interface ImageDecodeResult {
   readonly width: number
   readonly height: number
@@ -211,7 +212,7 @@ export class FilePreview {
       throw new ImagePreviewError('Browser rejected the image payload', { cause })
     }
     signal.throwIfAborted()
-    if (decoded.width !== header.width || decoded.height !== header.height) {
+    if (!matchesOrientedHeader(decoded, header)) {
       throw new ImagePreviewError('Decoded image dimensions disagree with its bounded header')
     }
     const url = this.#replaceUrl(blob)
@@ -220,8 +221,8 @@ export class FilePreview {
       name: this.#entry.name,
       url,
       mimeType: header.mimeType,
-      width: header.width,
-      height: header.height,
+      width: decoded.width,
+      height: decoded.height,
     })
     await this.#release()
   }
@@ -290,13 +291,24 @@ class BrokerPreviewSource implements PreviewRangeSource {
 
 async function decodeBrowserImage(blob: Blob, signal: AbortSignal): Promise<ImageDecodeResult> {
   signal.throwIfAborted()
-  const bitmap = await createImageBitmap(blob, { imageOrientation: 'none' })
+  // Decode the way the preview <img> displays the file. Current browsers treat
+  // the legacy 'none' orientation as the default 'from-image', so no option
+  // value reliably exposes the stored, unrotated dimensions.
+  const bitmap = await createImageBitmap(blob)
   try {
     signal.throwIfAborted()
     return Object.freeze({ width: bitmap.width, height: bitmap.height })
   } finally {
     bitmap.close()
   }
+}
+
+// Orientation metadata (EXIF orientations 5-8) displays stored pixels with a
+// quarter turn. The pixel count, and thus the header's decoded-memory bound, is
+// unchanged, so a transposed decode still proves the bounded header honest.
+function matchesOrientedHeader(decoded: ImageDecodeResult, header: ImageHeader): boolean {
+  return (decoded.width === header.width && decoded.height === header.height) ||
+    (decoded.width === header.height && decoded.height === header.width)
 }
 
 function looksLikeMp4(bytes: Uint8Array): boolean {
