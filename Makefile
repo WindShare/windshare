@@ -77,5 +77,18 @@ rust:
 	cd $(RUST_WORKSPACE) && $(RUST_CARGO) build -p windshare-relay-core -p windshare-relay-cloudflare --target wasm32-unknown-unknown --locked --jobs $(RUST_BUILD_JOBS)
 	@echo "== rust: PASS =="
 
+# The UI study is independent of the production relay workspace and its gates.
+.PHONY: desktop desktop-check
+desktop:
+	$(RUST_CARGO) run --manifest-path desktop/Cargo.toml --locked
+
+desktop-check: private export MAKEFLAGS :=
+desktop-check: private export MFLAGS :=
+desktop-check: private export CARGO_MAKEFLAGS :=
+desktop-check:
+	$(RUST_CARGO) fmt --manifest-path desktop/Cargo.toml --all -- --check
+	$(RUST_CARGO) clippy --manifest-path desktop/Cargo.toml --workspace --all-targets --locked --jobs $(RUST_BUILD_JOBS) -- -D warnings
+	$(RUST_CARGO) build --manifest-path desktop/Cargo.toml --locked --jobs $(RUST_BUILD_JOBS)
+
 $(PLATFORM_TARGETS):
 	$(RUN_PLATFORM_GATE)
