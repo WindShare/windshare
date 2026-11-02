@@ -22,7 +22,7 @@ impl Desktop {
             ShareFlow::Choose => column()
                 .h(px(geometry.height))
                 .justify_center()
-                .child(self.choose_share(layout, still || !active, cx)),
+                .child(self.choose_share(layout, still, cx)),
             ShareFlow::Running(run) => {
                 let now = std::time::Instant::now();
                 let frame = run.sample(now, still);
@@ -64,6 +64,7 @@ impl Desktop {
             .items_center()
             .gap(px(16.))
             .child(scaled_spirit(
+                "share-choose-spirit",
                 SpiritMood::Idle,
                 Tone::Mint,
                 layout.scene_scale(),
@@ -112,7 +113,7 @@ impl Desktop {
             .relative()
             .w_full()
             .h(px(scene.geometry.height))
-            .child(scene.scenery())
+            .child(scene.scenery(self.reduced_motion()))
             .child(preparation_message(bundle.name(), visibility))
             .child(
                 row()
@@ -148,6 +149,7 @@ impl Desktop {
             .justify_center()
             .gap(px(16.))
             .child(scaled_spirit(
+                "share-preparing-spirit",
                 SpiritMood::Sending,
                 Tone::Mint,
                 layout.scene_scale(),
@@ -183,7 +185,7 @@ impl Desktop {
             .relative()
             .w_full()
             .h(px(g.height))
-            .child(scene.scenery())
+            .child(scene.scenery(self.reduced_motion()))
             .child(
                 column()
                     .absolute()

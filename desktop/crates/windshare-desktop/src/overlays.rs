@@ -158,7 +158,7 @@ impl Desktop {
 
     fn about_preview(&self, cx: &Context<Self>) -> Div {
         column().gap(px(20.)).items_center()
-            .child(spirit_scene(SpiritMood::Happy, Tone::Mint, self.reduced_motion()))
+            .child(spirit_scene("about-spirit", SpiritMood::Happy, Tone::Mint, self.reduced_motion()))
             .child(heading("文件随风，分享自如。", 24.))
             .child(label("WindShare 是开源的端到端加密文件分享工具。\n选好文件、生成链接，让对方直接接收。", 16.).text_color(muted()).line_height(px(28.)).text_center())
             .child(separator())

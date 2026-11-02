@@ -1,7 +1,7 @@
 use anyhow::{Context as _, Result, bail, ensure};
 use gpui::{
-    Bounds, Hsla, IntoElement, Pixels, Point, SharedString, Size, TransformationMatrix, canvas,
-    prelude::*, rgba, size,
+    App, Bounds, Hsla, IntoElement, Pixels, Point, Radians, SharedString, Size,
+    TransformationMatrix, Window, canvas, prelude::*, rgba, size,
 };
 use std::{
     fmt::Write as _,
@@ -41,8 +41,43 @@ impl VectorArtwork {
         raster_size: Size<Pixels>,
         center: Point<Pixels>,
         scale: f32,
-    ) -> impl IntoElement + use<> {
-        let layers = self.layers.clone();
+    ) -> VectorSprite {
+        VectorSprite {
+            layers: self.layers.clone(),
+            raster_size,
+            center,
+            scale,
+            rotation: Radians(0.),
+        }
+    }
+}
+
+#[derive(IntoElement)]
+#[must_use]
+pub struct VectorSprite {
+    layers: Arc<[Layer]>,
+    raster_size: Size<Pixels>,
+    center: Point<Pixels>,
+    scale: f32,
+    rotation: Radians,
+}
+
+impl VectorSprite {
+    pub const fn rotate(mut self, rotation: Radians) -> Self {
+        self.rotation = rotation;
+        self
+    }
+}
+
+impl RenderOnce for VectorSprite {
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        let Self {
+            layers,
+            raster_size,
+            center,
+            scale,
+            rotation,
+        } = self;
         canvas(
             |_, _, _| (),
             move |bounds, (), window, cx| {
@@ -52,6 +87,7 @@ impl VectorArtwork {
                 let factor = window.scale_factor();
                 let transform = TransformationMatrix::unit()
                     .translate((bounds.origin + center).scale(factor))
+                    .rotate(rotation)
                     .scale(size(scale, scale))
                     .translate(raster_bounds.center().scale(-factor));
                 for layer in layers.iter() {

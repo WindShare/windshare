@@ -1,6 +1,6 @@
-use gpui::{IntoElement, Point, point, px, size};
+use gpui::{Point, point, px, size};
 use std::sync::LazyLock;
-use windshare_ui::VectorArtwork;
+use windshare_ui::{VectorArtwork, VectorSprite};
 
 // Cover the largest flight pose with one atlas size throughout the choreography.
 const SPIRIT_RASTER_SIZE: f32 = 224.;
@@ -34,7 +34,7 @@ impl Artwork {
         tracing::info!(event = "desktop.artwork_ready", assets = ARTWORK.len());
     }
 
-    pub fn sprite(self, center: Point<f32>, width: f32) -> impl IntoElement {
+    pub fn sprite(self, center: Point<f32>, width: f32) -> VectorSprite {
         let (raster_width, raster_height) = match self {
             Self::Spirit | Self::Happy => (SPIRIT_RASTER_SIZE, SPIRIT_RASTER_SIZE),
             Self::Paper | Self::Photo | Self::Folder => {

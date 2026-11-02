@@ -1,6 +1,7 @@
 use crate::{
     artwork::Artwork,
     layout::{FlowLayout, task_width},
+    motion::{Spirit, SpiritMood},
     share_timing::{
         FLIGHT_DURATION, LANDING_DURATION, ShareFrame, ease_out, lerp, segment, smooth,
     },
@@ -111,7 +112,7 @@ impl ShareScene {
     fn reveal(self, start: f32, end: f32) -> f32 {
         smooth(segment(self.arrival_progress(), start, end))
     }
-    pub fn scenery(self) -> Div {
+    pub fn scenery(self, reduced_motion: bool) -> Div {
         div()
             .absolute()
             .inset_0()
@@ -120,7 +121,7 @@ impl ShareScene {
                 el.child(self.wind_field())
                     .children((0..PAPER_COUNT).filter_map(|index| self.paper(index)))
             })
-            .child(self.spirit())
+            .child(self.spirit(reduced_motion))
     }
 
     fn spirit_pose(self) -> (Point<f32>, f32) {
@@ -151,8 +152,9 @@ impl ShareScene {
         }
     }
 
-    fn spirit(self) -> Div {
+    fn spirit(self, reduced_motion: bool) -> Div {
         let (center, size) = self.spirit_pose();
+        let interactive = self.arrival_progress() >= 1. && self.frame.result_visibility >= 1.;
         let smile = self.reveal(0.02, 0.42) * self.frame.result_visibility;
         let local_scale = size / 156.;
         let breeze_offset = 6. * local_scale;
@@ -172,7 +174,18 @@ impl ShareScene {
                     .opacity(surround),
                 )
             })
-            .when(smile < 1., |el| {
+            // Choreography owns the pose until landing and expression reveal finish.
+            // Only the settled character gets a stationary, accessible hit target.
+            .when(interactive, |el| {
+                el.child(Spirit::new(
+                    "share-ready-spirit",
+                    SpiritMood::Happy,
+                    self.geometry.destination(),
+                    LANDED_SPIRIT_SIZE,
+                    reduced_motion,
+                ))
+            })
+            .when(!interactive && smile < 1., |el| {
                 el.child(
                     div()
                         .absolute()
@@ -181,7 +194,7 @@ impl ShareScene {
                         .opacity(1. - smile),
                 )
             })
-            .when(smile > 0., |el| {
+            .when(!interactive && smile > 0., |el| {
                 el.child(
                     div()
                         .absolute()
