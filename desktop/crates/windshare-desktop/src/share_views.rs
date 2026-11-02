@@ -1,9 +1,15 @@
-use crate::{desktop::Desktop, model::*};
-use gpui::{prelude::*, *};
-use windshare_ui::*;
+use crate::{
+    desktop::Desktop,
+    model::{Filter, PreviewAction, Share, ShareState},
+};
+use gpui::{Div, Stateful, div, prelude::*, px, rgb};
+use windshare_ui::{
+    ButtonStyle, Icon, Tone, badge, border, caption, card, column, dot, heading, icon_tile, label,
+    muted, row,
+};
 
 impl Desktop {
-    pub fn share_card(&self, share: &Share, cx: &Context<Self>) -> Stateful<Div> {
+    pub fn share_card(share: &Share, cx: &Context<Self>) -> Stateful<Div> {
         let id = share.id;
         let status = match share.state {
             ShareState::Live { viewers } if viewers > 0 => format!("{viewers} 人正在接收"),
@@ -19,14 +25,14 @@ impl Desktop {
             .cursor_pointer()
             .hover(|s| s.border_color(share.tone.accent()))
             .on_click(cx.listener(move |this, _, window, cx| {
-                this.dispatch(PreviewAction::Detail(id), window, cx)
+                this.dispatch(PreviewAction::Detail(id), window, cx);
             }))
             .child(
                 row()
                     .justify_between()
                     .child(icon_tile(share.symbol, share.tone, 44.))
                     .child(
-                        self.button(
+                        Self::button(
                             ("share-menu", id),
                             "",
                             Icon::More,
@@ -61,7 +67,7 @@ impl Desktop {
                             .child(caption(status)),
                     )
                     .child(
-                        self.button(
+                        Self::button(
                             ("share-copy", id),
                             "",
                             Icon::Link,
@@ -74,10 +80,9 @@ impl Desktop {
                     ),
             )
     }
-    pub fn shares_page(&self, compact: bool, cx: &Context<Self>) -> Div {
+    fn visible_shares(&self, cx: &Context<Self>) -> Vec<&Share> {
         let query = self.search.read(cx).value().to_lowercase();
-        let shares: Vec<_> = self
-            .shares
+        self.shares
             .iter()
             .filter(|share| {
                 share.name.to_lowercase().contains(&query)
@@ -87,7 +92,10 @@ impl Desktop {
                         Filter::Paused => !share.live(),
                     }
             })
-            .collect();
+            .collect()
+    }
+    pub fn shares_page(&self, compact: bool, cx: &Context<Self>) -> Div {
+        let shares = self.visible_shares(cx);
         let count = shares.len();
         let columns = if compact { 2 } else { 3 };
         column()
@@ -101,7 +109,7 @@ impl Desktop {
                             .gap(px(4.))
                             .p(px(4.))
                             .rounded(px(11.))
-                            .bg(rgb(0xeff2ec))
+                            .bg(rgb(0xef_f2_ec))
                             .children(
                                 [
                                     (Filter::All, "全部"),
@@ -110,7 +118,7 @@ impl Desktop {
                                 ]
                                 .into_iter()
                                 .map(|(filter, title)| {
-                                    self.button(
+                                    Self::button(
                                         ("filter", filter as usize),
                                         title,
                                         if filter == Filter::All {
@@ -141,7 +149,7 @@ impl Desktop {
                                     .child(self.search.clone()),
                             )
                             .child(
-                                self.button(
+                                Self::button(
                                     "layout",
                                     "",
                                     if self.grid { Icon::List } else { Icon::Grid },
@@ -159,12 +167,12 @@ impl Desktop {
                     .child(caption(format!("共 {count} 个分享")))
                     .child(caption("最近分享在前")),
             )
-            .when(count == 0, |el| el.child(self.empty_shares(cx)))
+            .when(count == 0, |el| el.child(Self::empty_shares(cx)))
             .when(count > 0 && self.grid, |el| {
                 el.children(shares.chunks(columns).map(|chunk| {
                     let mut cards = row().gap(px(18.)).items_stretch();
                     for share in chunk {
-                        cards = cards.child(self.share_card(share, cx));
+                        cards = cards.child(Self::share_card(share, cx));
                     }
                     for _ in chunk.len()..columns {
                         cards = cards.child(div().flex_1());
@@ -176,11 +184,11 @@ impl Desktop {
                 el.child(
                     card()
                         .overflow_hidden()
-                        .children(shares.iter().map(|share| self.share_list_row(share, cx))),
+                        .children(shares.iter().map(|share| Self::share_list_row(share, cx))),
                 )
             })
     }
-    fn share_list_row(&self, share: &Share, cx: &Context<Self>) -> Div {
+    fn share_list_row(share: &Share, cx: &Context<Self>) -> Div {
         row()
             .gap(px(12.))
             .p(px(20.))
@@ -207,7 +215,7 @@ impl Desktop {
                 },
             ))
             .child(
-                self.button(
+                Self::button(
                     ("list-link", share.id),
                     "复制链接",
                     Icon::Link,
@@ -218,7 +226,7 @@ impl Desktop {
                 .compact(),
             )
             .child(
-                self.button(
+                Self::button(
                     ("list-detail", share.id),
                     "",
                     Icon::Chevron,
@@ -230,7 +238,7 @@ impl Desktop {
                 .tooltip("分享详情"),
             )
     }
-    fn empty_shares(&self, cx: &Context<Self>) -> Div {
+    fn empty_shares(cx: &Context<Self>) -> Div {
         card()
             .h(px(330.))
             .items_center()
@@ -239,7 +247,7 @@ impl Desktop {
             .child(icon_tile(Icon::Search, Tone::Lavender, 58.))
             .child(heading("没有找到这个分享", 22.))
             .child(label("换个关键词，或创建一个新分享。", 16.).text_color(muted()))
-            .child(self.button(
+            .child(Self::button(
                 "empty-new",
                 "新建分享",
                 Icon::Plus,

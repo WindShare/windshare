@@ -1,9 +1,15 @@
-use crate::{desktop::Desktop, model::*};
-use gpui::{prelude::*, *};
-use windshare_ui::*;
+use crate::{
+    desktop::Desktop,
+    model::{Page, PreviewAction},
+};
+use gpui::{Div, MouseButton, WindowControlArea, div, img, prelude::*, px, rgb};
+use windshare_ui::{
+    Button, ButtonStyle, FONT, Icon, SIDEBAR_COMPACT_WIDTH, SIDEBAR_WIDTH, Tone, border,
+    canvas_color, column, dot, heading, label, muted, primary, row, separator,
+};
 
 impl Desktop {
-    pub fn titlebar(&self, _: &Context<Self>) -> Div {
+    pub fn titlebar() -> Div {
         row()
             .h(px(40.))
             .flex_shrink_0()
@@ -39,7 +45,7 @@ impl Desktop {
                                 .compact()
                                 .style(ButtonStyle::Ghost)
                                 .tooltip("最小化")
-                                .on_press(|_, window, _| window.minimize_window()),
+                                .on_press(|(), window, _| window.minimize_window()),
                         )
                         .child(
                             Button::new("maximize", "")
@@ -47,7 +53,7 @@ impl Desktop {
                                 .compact()
                                 .style(ButtonStyle::Ghost)
                                 .tooltip("最大化或还原")
-                                .on_press(|_, window, _| window.zoom_window()),
+                                .on_press(|(), window, _| window.zoom_window()),
                         )
                         .child(
                             Button::new("close-window", "")
@@ -55,7 +61,7 @@ impl Desktop {
                                 .compact()
                                 .style(ButtonStyle::Ghost)
                                 .tooltip("关闭窗口")
-                                .on_press(|_, window, _| window.remove_window()),
+                                .on_press(|(), window, _| window.remove_window()),
                         ),
                 )
             })
@@ -73,7 +79,7 @@ impl Desktop {
             .px(px(if compact { 13. } else { 18. }))
             .pt(px(22.))
             .pb(px(22.))
-            .bg(rgb(0xf0f5ef))
+            .bg(rgb(0xf0_f5_ef))
             .border_r_1()
             .border_color(border())
             .child(
@@ -107,7 +113,7 @@ impl Desktop {
             .child(div().flex_1().min_h(px(40.)))
             .child(self.navigation(Page::Settings, Icon::Settings, cx))
             .child(
-                self.button(
+                Self::button(
                     "about-nav",
                     if compact {
                         "关于"
@@ -125,7 +131,7 @@ impl Desktop {
     }
 
     fn navigation(&self, page: Page, symbol: Icon, cx: &Context<Self>) -> Button {
-        self.button(
+        Self::button(
             ("nav", page as usize),
             page.title(),
             symbol,
@@ -162,7 +168,7 @@ impl Desktop {
             )
             .when(self.page == Page::Shares, |el| {
                 el.child(
-                    self.button(
+                    Self::button(
                         "new-share-top",
                         "新建分享",
                         Icon::Plus,
@@ -175,7 +181,7 @@ impl Desktop {
             })
     }
 
-    pub fn statusbar(&self, _: &Context<Self>) -> Div {
+    pub fn statusbar() -> Div {
         row()
             .h(px(40.))
             .flex_shrink_0()

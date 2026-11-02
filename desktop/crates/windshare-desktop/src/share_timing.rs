@@ -76,6 +76,10 @@ pub fn segment(value: f32, start: f32, end: f32) -> f32 {
     ((value - start) / (end - start)).clamp(0., 1.)
 }
 
+#[allow(
+    clippy::suboptimal_flops,
+    reason = "Keep the standard smoothstep polynomial recognizable."
+)]
 pub fn smooth(t: f32) -> f32 {
     t * t * (3. - 2. * t)
 }
@@ -85,5 +89,5 @@ pub fn ease_out(t: f32) -> f32 {
 }
 
 pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
-    a + (b - a) * t
+    (b - a).mul_add(t, a)
 }

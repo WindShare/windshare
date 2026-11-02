@@ -1,5 +1,12 @@
-use crate::{desktop::Desktop, flow_state::*, model::*};
-use gpui::*;
+use crate::{
+    desktop::Desktop,
+    flow_state::{
+        COPY_FEEDBACK_MS, CopyFeedback, LinkFeedback, RECEIVE_OPEN_MS, RECEIVE_SAVE_MS,
+        ReceiveFlow, SampleBundle, ShareFlow, ShareReadiness, ShareRun,
+    },
+    model::{Overlay, Page, PreviewAction, Share, ShareState, TransferState},
+};
+use gpui::{ClipboardItem, Context, Focusable, Window};
 use std::time::{Duration, Instant};
 
 const DEMO_LINK: &str = "https://windshare.example/s/kyoto-weekend";
@@ -97,7 +104,7 @@ impl Desktop {
         }).detach();
     }
 
-    fn next_operation(&mut self) -> usize {
+    const fn next_operation(&mut self) -> usize {
         self.operation_sequence += 1;
         self.operation_sequence
     }

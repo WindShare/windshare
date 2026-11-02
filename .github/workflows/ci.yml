@@ -275,6 +275,24 @@ jobs:
         working-directory: relay-rust
         run: rustup run stable cargo test -p windshare-relay-native --locked
 
+  desktop-windows:
+    name: Rust desktop (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install stable Rust and desktop validation components
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop -> target
+          cache-bin: false
+          cmd-format: rustup run stable {0}
+      - name: Check desktop formatting, Clippy, and native build
+        run: make desktop-check
+
   web:
     name: Web application
     runs-on: ubuntu-latest

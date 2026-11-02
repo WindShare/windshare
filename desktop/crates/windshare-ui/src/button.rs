@@ -1,5 +1,8 @@
 use crate::{Icon, Tone, action_hover, action_surface, border, icon, ink, muted, paper, primary};
-use gpui::{prelude::*, *};
+use gpui::{
+    App, AppContext, ElementId, FocusHandle, FontWeight, Pixels, Role, SharedString, Window, div,
+    prelude::*, px,
+};
 use std::rc::Rc;
 
 #[derive(Clone, Copy)]
@@ -21,6 +24,7 @@ pub enum ButtonStyle {
 }
 
 #[derive(IntoElement)]
+#[must_use]
 pub struct Button {
     id: ElementId,
     label: SharedString,
@@ -51,19 +55,19 @@ impl Button {
             min_width: None,
         }
     }
-    pub fn icon(mut self, icon: Icon) -> Self {
+    pub const fn icon(mut self, icon: Icon) -> Self {
         self.symbol = Some(icon);
         self
     }
-    pub fn style(mut self, style: ButtonStyle) -> Self {
+    pub const fn style(mut self, style: ButtonStyle) -> Self {
         self.style = style;
         self
     }
-    pub fn full_width(mut self) -> Self {
+    pub const fn full_width(mut self) -> Self {
         self.full_width = true;
         self
     }
-    pub fn min_width(mut self, width: Pixels) -> Self {
+    pub const fn min_width(mut self, width: Pixels) -> Self {
         self.min_width = Some(width);
         self
     }
@@ -71,15 +75,15 @@ impl Button {
         self.focus = Some(handle.clone());
         self
     }
-    pub fn large(mut self) -> Self {
+    pub const fn large(mut self) -> Self {
         self.size = ButtonSize::Large;
         self
     }
-    pub fn compact(mut self) -> Self {
+    pub const fn compact(mut self) -> Self {
         self.size = ButtonSize::Small;
         self
     }
-    pub fn disabled(mut self, disabled: bool) -> Self {
+    pub const fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
     }
@@ -139,7 +143,7 @@ impl RenderOnce for Button {
                 ButtonSize::Regular => 46.,
                 ButtonSize::Large => 54.,
             }))
-            .when_some(self.min_width, |el, width| el.min_w(width))
+            .when_some(self.min_width, gpui::Styled::min_w)
             .when(self.full_width, |el| el.w_full().justify_start())
             .px(px(if empty { 9. } else { 16. }))
             .flex_shrink_0()

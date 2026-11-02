@@ -1,12 +1,20 @@
 use crate::{
-    flow_state::*,
+    flow_state::{CopyFeedback, ReceiveFlow, ShareFlow},
     layout::{FlowLayout, MAX_PAGE_WIDTH, page_gutter},
-    model::*,
+    model::{Filter, Overlay, Page, PreviewAction, Share, Transfer, demo_shares, demo_transfers},
+    share_timing::lerp,
 };
-use gpui::{prelude::*, *};
+use gpui::{
+    Animation, AnimationExt, App, AppContext, ElementId, Entity, FocusHandle, Focusable,
+    KeyDownEvent, SharedString, Subscription, Window, ease_out_quint, prelude::*, px,
+};
 use std::time::Duration;
 use windshare_ui::InputEvent;
-use windshare_ui::*;
+use windshare_ui::{
+    Button, ButtonStyle, COMPACT_WIDTH, Icon, Input, Tone, UI_FONT, action_surface, advance_focus,
+    canvas_color, column, icon_tile, ink, label, notification_border, notification_surface,
+    primary, row,
+};
 
 pub struct Desktop {
     pub page: Page,
@@ -80,7 +88,6 @@ impl Desktop {
         }
     }
     pub fn button(
-        &self,
         id: impl Into<ElementId>,
         text: impl Into<SharedString>,
         symbol: Icon,
@@ -88,9 +95,10 @@ impl Desktop {
         action: PreviewAction,
         cx: &Context<Self>,
     ) -> Button {
-        Button::new(id, text).icon(symbol).style(style).on_press(
-            cx.listener(move |this, _, window, cx| this.dispatch(action.clone(), window, cx)),
-        )
+        Button::new(id, text)
+            .icon(symbol)
+            .style(style)
+            .on_press(cx.listener(move |this, (), window, cx| this.dispatch(action, window, cx)))
     }
     pub fn notify(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
         if !self.settings[0] {
@@ -136,16 +144,37 @@ impl Desktop {
     }
     pub fn focus_task(&self, window: &mut Window, cx: &mut App) {
         let focus = match self.page {
-            Page::Share => self.primary_focus.clone(),
             Page::Receive if matches!(self.receive_flow, ReceiveFlow::Link { .. }) => {
                 self.link_input.read(cx).focus_handle(cx)
             }
-            Page::Receive => self.primary_focus.clone(),
+            Page::Share | Page::Receive => self.primary_focus.clone(),
             _ => self.focus.clone(),
         };
         window.focus(&focus, cx);
     }
-    pub fn reduced_motion(&self) -> bool {
+    fn handle_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let key = &event.keystroke;
+        if key.key == "tab" {
+            let scope = if self.overlay.is_some() {
+                &self.modal_focus
+            } else {
+                &self.focus
+            };
+            advance_focus(scope, key.modifiers.shift, window, cx);
+            cx.stop_propagation();
+        } else if key.key == "escape" && self.overlay.is_some() {
+            self.close_overlay(window, cx);
+            cx.notify();
+        } else if key.modifiers.control && key.key == "n" {
+            self.dispatch(PreviewAction::NewShare, window, cx);
+        } else if key.modifiers.control && key.key == "k" && self.overlay.is_none() {
+            self.navigate(Page::Shares, window, cx);
+            let focus = self.search.read(cx).focus_handle(cx);
+            window.focus(&focus, cx);
+            cx.notify();
+        }
+    }
+    pub const fn reduced_motion(&self) -> bool {
         self.settings[2]
     }
 }
@@ -159,7 +188,7 @@ impl Render for Desktop {
             Page::Shares => self.shares_page(compact, cx),
             Page::Transfers => self.transfers_page(cx),
             Page::Settings => self.settings_page(cx),
-            Page::Components => self.components_page(cx),
+            Page::Components => Self::components_page(cx),
         };
         column()
             .size_full()
@@ -170,29 +199,8 @@ impl Render for Desktop {
             .text_size(px(16.))
             .track_focus(&self.focus)
             .tab_group()
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                let key = &event.keystroke;
-                if key.key == "tab" {
-                    let scope = if this.overlay.is_some() {
-                        &this.modal_focus
-                    } else {
-                        &this.focus
-                    };
-                    advance_focus(scope, key.modifiers.shift, window, cx);
-                    cx.stop_propagation();
-                } else if key.key == "escape" && this.overlay.is_some() {
-                    this.close_overlay(window, cx);
-                    cx.notify();
-                } else if key.modifiers.control && key.key == "n" {
-                    this.dispatch(PreviewAction::NewShare, window, cx);
-                } else if key.modifiers.control && key.key == "k" && this.overlay.is_none() {
-                    this.navigate(Page::Shares, window, cx);
-                    let focus = this.search.read(cx).focus_handle(cx);
-                    window.focus(&focus, cx);
-                    cx.notify();
-                }
-            }))
-            .child(self.titlebar(cx))
+            .on_key_down(cx.listener(Self::handle_key))
+            .child(Self::titlebar())
             .child(
                 row()
                     .items_stretch()
@@ -226,12 +234,12 @@ impl Render for Desktop {
                                                         if self.reduced_motion() { 1 } else { 260 },
                                                     ))
                                                     .with_easing(ease_out_quint()),
-                                                    |el, delta| el.opacity(delta),
+                                                    gpui::Styled::opacity,
                                                 ),
                                             ),
                                     ),
                             )
-                            .child(self.statusbar(cx)),
+                            .child(Self::statusbar()),
                     ),
             )
             .when(self.overlay.is_some(), |root| {
@@ -261,7 +269,7 @@ impl Render for Desktop {
                                 280
                             }))
                             .with_easing(ease_out_quint()),
-                            |el, delta| el.opacity(delta).bottom(px(44. + 8. * delta)),
+                            |el, delta| el.opacity(delta).bottom(px(lerp(44., 52., delta))),
                         ),
                 )
             })

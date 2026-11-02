@@ -4,9 +4,9 @@ use crate::{
         FLIGHT_DURATION, LANDING_DURATION, ShareFrame, ease_out, lerp, segment, smooth,
     },
 };
-use gpui::{prelude::*, *};
+use gpui::{Div, PathBuilder, Point, Window, canvas, div, img, point, prelude::*, px};
 use std::f32::consts::{PI, TAU};
-use windshare_ui::*;
+use windshare_ui::{Tone, vector_sprite};
 
 const READY_WIDTH: f32 = 620.;
 const READY_HEIGHT: f32 = 352.;
@@ -14,8 +14,8 @@ pub const SHARE_LINK_HEIGHT: f32 = 78.;
 const SHARE_LINK_TOP: f32 = 116.;
 const LANDED_SPIRIT_SIZE: f32 = 92.;
 const CRUISING_SPIRIT_SIZE: f32 = 144.;
-const PAPER_COUNT: usize = 7;
-const WIND_SEGMENTS: usize = 48;
+const PAPER_COUNT: u16 = 7;
+const WIND_SEGMENTS: u16 = 48;
 const PAPER_ASSETS: [&str; 3] = ["brand/paper.svg", "brand/photo.svg", "brand/folder.svg"];
 
 #[derive(Clone, Copy)]
@@ -66,7 +66,7 @@ pub struct ShareScene {
     pub frame: ShareFrame,
 }
 impl ShareScene {
-    pub fn new(geometry: ShareGeometry, frame: ShareFrame) -> Self {
+    pub const fn new(geometry: ShareGeometry, frame: ShareFrame) -> Self {
         Self { geometry, frame }
     }
     pub fn landing(self) -> bool {
@@ -132,6 +132,8 @@ impl ShareScene {
         } else {
             let t = self.flight_progress();
             let end = g.flight_end();
+            let cruising_size = lerp(g.initial_spirit_size, CRUISING_SPIRIT_SIZE, smooth(t));
+            let flight_stretch = 64. * (PI * t).sin();
             (
                 cubic(
                     [
@@ -142,7 +144,7 @@ impl ShareScene {
                     ],
                     smooth(t),
                 ),
-                lerp(g.initial_spirit_size, CRUISING_SPIRIT_SIZE, smooth(t)) + 64. * (PI * t).sin(),
+                cruising_size + flight_stretch,
             )
         }
     }
@@ -151,6 +153,7 @@ impl ShareScene {
         let (center, size) = self.spirit_pose();
         let smile = self.reveal(0.02, 0.42) * self.frame.result_visibility;
         let local_scale = size / 156.;
+        let breeze_offset = 6. * local_scale;
         let surround = self.reveal(0.55, 1.);
         let mut layer = div()
             .absolute()
@@ -159,7 +162,7 @@ impl ShareScene {
                 vector_sprite(
                     "brand/breeze.svg",
                     gpui::size(px(340.), px(176.)),
-                    point(px(center.x), px(center.y + 6. * local_scale)),
+                    point(px(center.x), px(center.y + breeze_offset)),
                     local_scale,
                 )
                 .text_color(Tone::Mint.accent())
@@ -197,9 +200,13 @@ impl ShareScene {
         layer
     }
 
-    fn paper(self, index: usize) -> Div {
+    #[allow(
+        clippy::suboptimal_flops,
+        reason = "Control-point formulas keep the per-paper spatial and timing offsets visible."
+    )]
+    fn paper(self, index: u16) -> Div {
         let g = self.geometry;
-        let seed = index as f32;
+        let seed = f32::from(index);
         let (center, size, opacity) = if self.landing() {
             let p = ease_out(segment(
                 self.arrival_progress(),
@@ -249,33 +256,30 @@ impl ShareScene {
             .w(px(size))
             .h(px(size * 1.14))
             .opacity(opacity)
-            .child(img(PAPER_ASSETS[index % PAPER_ASSETS.len()]).size_full())
+            .child(img(PAPER_ASSETS[usize::from(index) % PAPER_ASSETS.len()]).size_full())
     }
 
     fn wind_pose(self) -> (f32, f32) {
         if self.landing() {
             let t = self.arrival_progress();
             (
-                1.15 + 0.6 * smooth(t),
+                lerp(1.15, 1.75, smooth(t)),
                 0.8 * (1. - smooth(segment(t, 0., 0.8))),
             )
         } else {
             let t = self.flight_progress();
             (
                 lerp(0.18, 1.15, smooth(t)),
-                smooth(segment(t, 0., 0.14)) * (1. - 0.2 * segment(t, 0.9, 1.)),
+                smooth(segment(t, 0., 0.14)) * lerp(1., 0.8, segment(t, 0.9, 1.)),
             )
         }
     }
     fn wind_field(self) -> impl IntoElement {
         canvas(
             |_, _, _| (),
-            move |bounds, _, window, _| {
+            move |bounds, (), window, _| {
                 let (head, strength) = self.wind_pose();
-                for (lane, tone) in [Tone::Mint, Tone::Lavender, Tone::Peach]
-                    .into_iter()
-                    .enumerate()
-                {
+                for (lane, tone) in (0_u16..).zip([Tone::Mint, Tone::Lavender, Tone::Peach]) {
                     for (width, color) in [
                         (17., tone.surface().opacity(strength * 0.78)),
                         (1.5, tone.accent().opacity(strength * 0.72)),
@@ -283,12 +287,15 @@ impl ShareScene {
                         let mut path = PathBuilder::stroke(px(width));
                         let begin = (head - 0.88).max(0.);
                         for step in 0..=WIND_SEGMENTS {
-                            let t = lerp(begin, head, step as f32 / WIND_SEGMENTS as f32);
-                            let x = self.geometry.width * (t * 1.18 - 0.09);
-                            let y = self.geometry.height
-                                * (0.48 - 0.24 * (t * PI).sin()
-                                    + lane as f32 * 0.075
-                                    + 0.045 * (t * TAU + lane as f32 * 0.8).sin());
+                            let t = lerp(begin, head, f32::from(step) / f32::from(WIND_SEGMENTS));
+                            let travel = t * 1.18;
+                            let cycle_angle = t * TAU;
+                            let lane_phase = f32::from(lane) * 0.8;
+                            let wave = (cycle_angle + lane_phase).sin() * 0.045;
+                            let arch = (t * PI).sin() * 0.24;
+                            let lane_offset = f32::from(lane) * 0.075;
+                            let x = self.geometry.width * (travel - 0.09);
+                            let y = self.geometry.height * (0.48 - arch + lane_offset + wave);
                             let p = bounds.origin + point(px(x), px(y));
                             if step == 0 {
                                 path.move_to(p);
@@ -312,16 +319,26 @@ impl ShareScene {
 fn mix_point(a: Point<f32>, b: Point<f32>, t: f32) -> Point<f32> {
     point(lerp(a.x, b.x, t), lerp(a.y, b.y, t))
 }
+#[allow(
+    clippy::suboptimal_flops,
+    reason = "Keep the Bernstein weights visible instead of nesting fused coordinate operations."
+)]
 fn cubic(points: [Point<f32>; 4], t: f32) -> Point<f32> {
-    let s = 1. - t;
+    let [start, first_control, second_control, end] = points;
+    let remaining = 1. - t;
+    let start_weight = remaining.powi(3);
+    let first_control_weight = 3. * remaining * remaining * t;
+    let second_control_weight = 3. * remaining * t * t;
+    let end_weight = t.powi(3);
+
     point(
-        s.powi(3) * points[0].x
-            + 3. * s * s * t * points[1].x
-            + 3. * s * t * t * points[2].x
-            + t.powi(3) * points[3].x,
-        s.powi(3) * points[0].y
-            + 3. * s * s * t * points[1].y
-            + 3. * s * t * t * points[2].y
-            + t.powi(3) * points[3].y,
+        start_weight * start.x
+            + first_control_weight * first_control.x
+            + second_control_weight * second_control.x
+            + end_weight * end.x,
+        start_weight * start.y
+            + first_control_weight * first_control.y
+            + second_control_weight * second_control.y
+            + end_weight * end.y,
     )
 }

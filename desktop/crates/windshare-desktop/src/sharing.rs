@@ -1,21 +1,20 @@
 use crate::{
     desktop::Desktop,
-    flow_state::*,
+    flow_state::{CopyFeedback, SampleBundle, ShareFlow, ShareRun},
     layout::FlowLayout,
-    model::*,
-    motion::*,
+    model::PreviewAction,
+    motion::{SpiritMood, reassurance, scaled_spirit},
     share_animation::{SHARE_LINK_HEIGHT, ShareGeometry, ShareScene},
+    share_timing::lerp,
 };
-use gpui::{prelude::*, *};
-use windshare_ui::*;
+use gpui::{Div, Window, div, prelude::*, px};
+use windshare_ui::{
+    Button, ButtonStyle, FONT, Icon, Tone, border, caption, card, column, heading, icon, icon_tile,
+    label, muted, paper, primary, row,
+};
 
 impl Desktop {
-    pub fn sharing_page(
-        &mut self,
-        layout: FlowLayout,
-        window: &mut Window,
-        cx: &Context<Self>,
-    ) -> Div {
+    pub fn sharing_page(&mut self, layout: FlowLayout, window: &Window, cx: &Context<Self>) -> Div {
         let geometry = ShareGeometry::new(window, layout);
         let still = self.reduced_motion() || cx.reduce_motion();
         let active = window.is_window_active();
@@ -81,7 +80,7 @@ impl Desktop {
                 row()
                     .gap(px(12.))
                     .child(
-                        self.button(
+                        Self::button(
                             "choose-files",
                             "选择文件",
                             Icon::Plus,
@@ -93,7 +92,7 @@ impl Desktop {
                         .focus_handle(&self.primary_focus),
                     )
                     .child(
-                        self.button(
+                        Self::button(
                             "choose-folder",
                             "选择文件夹",
                             Icon::Folder,
@@ -123,7 +122,7 @@ impl Desktop {
                     .justify_center()
                     .opacity(visibility)
                     .child(
-                        self.button(
+                        Self::button(
                             "cancel-share",
                             "取消",
                             Icon::Close,
@@ -157,7 +156,7 @@ impl Desktop {
             .child(heading("正在准备分享", 26.))
             .child(label(bundle.name(), 16.).text_color(muted()))
             .child(
-                self.button(
+                Self::button(
                     "cancel-share",
                     "取消",
                     Icon::Close,
@@ -187,7 +186,7 @@ impl Desktop {
                 column()
                     .absolute()
                     .left(px(g.content_left))
-                    .top(px(g.content_top + 18. + 18. * (1. - title)))
+                    .top(px(g.content_top + lerp(36., 18., title)))
                     .w(px(g.content_width - 196.))
                     .h(px(72.))
                     .opacity(title)
@@ -211,7 +210,7 @@ impl Desktop {
                 row()
                     .absolute()
                     .left(px(g.content_left))
-                    .top(px(g.content_top + 212. + 24. * (1. - summary)))
+                    .top(px(g.content_top + lerp(236., 212., summary)))
                     .w(px(g.content_width))
                     .h(px(62.))
                     .gap(px(12.))
@@ -245,7 +244,7 @@ impl Desktop {
                     .justify_center()
                     .opacity(footer)
                     .child(
-                        self.button(
+                        Self::button(
                             "share-again",
                             if pending { "取消" } else { "再分享一组" },
                             if pending { Icon::Close } else { Icon::Plus },
@@ -287,8 +286,8 @@ impl Desktop {
         .disabled(!enabled);
         let control = if let Some(share) = share {
             let id = share.id;
-            control.on_press(cx.listener(move |this, _, window, cx| {
-                this.dispatch(PreviewAction::CopyLink(id), window, cx)
+            control.on_press(cx.listener(move |this, (), window, cx| {
+                this.dispatch(PreviewAction::CopyLink(id), window, cx);
             }))
         } else {
             control
@@ -296,7 +295,7 @@ impl Desktop {
         div()
             .absolute()
             .left(px(g.content_left))
-            .top(px(g.link_top() + 18. * (1. - expansion)))
+            .top(px(g.link_top() + lerp(18., 0., expansion)))
             .w(px(g.content_width))
             .h(px(SHARE_LINK_HEIGHT))
             .child(
@@ -305,7 +304,7 @@ impl Desktop {
                     .left_0()
                     .top_0()
                     .h_full()
-                    .w(px(60. + (g.content_width - 60.) * expansion))
+                    .w(px(lerp(60., g.content_width, expansion)))
                     .rounded(px(15.))
                     .bg(Tone::Mint.surface())
                     .opacity(scene.control_visibility()),
@@ -328,29 +327,7 @@ impl Desktop {
                             .flex_1()
                             .min_w_0()
                             .opacity(scene.link_visibility())
-                            .when(result < 1., |el| {
-                                el.child(
-                                    row()
-                                        .absolute()
-                                        .inset_0()
-                                        .gap(px(8.))
-                                        .opacity((1. - result) * (0.65 + 0.15 * scene.frame.breath))
-                                        .child(
-                                            div()
-                                                .w(px(138.))
-                                                .h(px(8.))
-                                                .rounded_full()
-                                                .bg(Tone::Mint.accent().opacity(0.35)),
-                                        )
-                                        .child(
-                                            div()
-                                                .w(px(44.))
-                                                .h(px(8.))
-                                                .rounded_full()
-                                                .bg(Tone::Mint.accent().opacity(0.20)),
-                                        ),
-                                )
-                            })
+                            .when(result < 1., |el| el.child(link_placeholder(scene)))
                             .when_some(share, |el, share| {
                                 el.child(
                                     label(share.link(), 16.)
@@ -387,4 +364,29 @@ fn preparation_message(name: &str, visibility: f32) -> Div {
         .opacity(visibility)
         .child(heading("正在准备分享", 26.))
         .child(label(name.to_owned(), 16.).text_color(muted()))
+}
+
+fn link_placeholder(scene: ShareScene) -> Div {
+    let result = scene.frame.result_visibility;
+    let breath_variation = 0.15 * scene.frame.breath;
+    let placeholder_opacity = (1. - result) * (0.65 + breath_variation);
+    row()
+        .absolute()
+        .inset_0()
+        .gap(px(8.))
+        .opacity(placeholder_opacity)
+        .child(
+            div()
+                .w(px(138.))
+                .h(px(8.))
+                .rounded_full()
+                .bg(Tone::Mint.accent().opacity(0.35)),
+        )
+        .child(
+            div()
+                .w(px(44.))
+                .h(px(8.))
+                .rounded_full()
+                .bg(Tone::Mint.accent().opacity(0.20)),
+        )
 }

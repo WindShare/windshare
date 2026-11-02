@@ -17,31 +17,31 @@ pub enum SampleBundle {
     Photos,
 }
 impl SampleBundle {
-    pub fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Self::Design => "品牌设计素材",
             Self::Photos => "京都的周末",
         }
     }
-    pub fn detail(self) -> &'static str {
+    pub const fn detail(self) -> &'static str {
         match self {
             Self::Design => "3 个文件",
             Self::Photos => "1 个文件夹 · 3 个文件",
         }
     }
-    pub fn size(self) -> &'static str {
+    pub const fn size(self) -> &'static str {
         match self {
             Self::Design => "32 MB",
             Self::Photos => "24 MB",
         }
     }
-    pub fn icon(self) -> Icon {
+    pub const fn icon(self) -> Icon {
         match self {
             Self::Design => Icon::File,
             Self::Photos => Icon::Folder,
         }
     }
-    pub fn tone(self) -> Tone {
+    pub const fn tone(self) -> Tone {
         match self {
             Self::Design => Tone::Lavender,
             Self::Photos => Tone::Peach,
@@ -81,7 +81,7 @@ impl ShareRun {
         )
     }
 
-    pub fn share_id(self) -> Option<usize> {
+    pub const fn share_id(self) -> Option<usize> {
         match self.readiness {
             ShareReadiness::Pending => None,
             ShareReadiness::Ready { share_id, .. } => Some(share_id),

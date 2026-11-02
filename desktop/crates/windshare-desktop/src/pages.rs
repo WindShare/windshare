@@ -1,6 +1,12 @@
-use crate::{desktop::Desktop, model::*};
-use gpui::{prelude::*, *};
-use windshare_ui::*;
+use crate::{
+    desktop::Desktop,
+    model::{Page, PreviewAction},
+};
+use gpui::{Div, KeyDownEvent, prelude::*, px};
+use windshare_ui::{
+    Button, ButtonStyle, Icon, Tone, badge, border, caption, card, column, heading, icon_tile,
+    label, muted, progress, row, section_header, separator, toggle,
+};
 
 impl Desktop {
     pub fn settings_page(&self, cx: &Context<Self>) -> Div {
@@ -38,7 +44,7 @@ impl Desktop {
                                                 PreviewAction::ToggleSetting(index),
                                                 window,
                                                 cx,
-                                            )
+                                            );
                                         }))
                                         .on_key_down(cx.listener(
                                             move |this, event: &KeyDownEvent, window, cx| {
@@ -70,7 +76,7 @@ impl Desktop {
                             .child(heading("WindShare 设计组件", 18.))
                             .child(caption("柔和配色、清晰字号，以及原生的细节。")),
                     )
-                    .child(self.button(
+                    .child(Self::button(
                         "view-components",
                         "查看组件",
                         Icon::Grid,
@@ -81,31 +87,10 @@ impl Desktop {
             )
     }
 
-    pub fn components_page(&self, cx: &Context<Self>) -> Div {
+    pub fn components_page(cx: &Context<Self>) -> Div {
         column()
             .gap(px(24.))
-            .child(
-                row().gap(px(12.)).children(
-                    [
-                        (Tone::Mint, "薄荷"),
-                        (Tone::Lavender, "薰衣草"),
-                        (Tone::Peach, "杏桃"),
-                        (Tone::Blue, "晴空"),
-                        (Tone::Rose, "玫瑰"),
-                    ]
-                    .into_iter()
-                    .map(|(tone, name)| {
-                        column()
-                            .flex_1()
-                            .h(px(110.))
-                            .p(px(20.))
-                            .rounded(px(16.))
-                            .justify_end()
-                            .bg(tone.surface())
-                            .child(heading(name, 16.).text_color(tone.text()))
-                    }),
-                ),
-            )
+            .child(color_palette())
             .child(
                 card()
                     .p(px(28.))
@@ -115,7 +100,7 @@ impl Desktop {
                         row()
                             .flex_wrap()
                             .gap(px(12.))
-                            .child(self.button(
+                            .child(Self::button(
                                 "sample-primary",
                                 "复制链接",
                                 Icon::Copy,
@@ -123,7 +108,7 @@ impl Desktop {
                                 PreviewAction::Toast("分享链接已复制"),
                                 cx,
                             ))
-                            .child(self.button(
+                            .child(Self::button(
                                 "sample-secondary",
                                 "接收文件",
                                 Icon::Download,
@@ -131,7 +116,7 @@ impl Desktop {
                                 PreviewAction::Receive,
                                 cx,
                             ))
-                            .child(self.button(
+                            .child(Self::button(
                                 "sample-tinted",
                                 "轻量通知",
                                 Icon::Bell,
@@ -195,4 +180,27 @@ impl Desktop {
                     .child(caption("所有控件基于 GPUI 基础元素实现。")),
             )
     }
+}
+
+fn color_palette() -> Div {
+    row().gap(px(12.)).children(
+        [
+            (Tone::Mint, "薄荷"),
+            (Tone::Lavender, "薰衣草"),
+            (Tone::Peach, "杏桃"),
+            (Tone::Blue, "晴空"),
+            (Tone::Rose, "玫瑰"),
+        ]
+        .into_iter()
+        .map(|(tone, name)| {
+            column()
+                .flex_1()
+                .h(px(110.))
+                .p(px(20.))
+                .rounded(px(16.))
+                .justify_end()
+                .bg(tone.surface())
+                .child(heading(name, 16.).text_color(tone.text()))
+        }),
+    )
 }

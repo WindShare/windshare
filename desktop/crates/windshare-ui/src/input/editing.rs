@@ -1,4 +1,6 @@
-use super::*;
+use super::{
+    Bounds, Context, EntityInputHandler, Input, Pixels, Point, Range, UTF16Selection, Window, point,
+};
 
 impl EntityInputHandler for Input {
     fn text_for_range(
@@ -55,8 +57,8 @@ impl EntityInputHandler for Input {
     ) {
         let bytes = range
             .map(|r| self.byte_range(r))
-            .or(self.marked.clone())
-            .unwrap_or(self.selection());
+            .or_else(|| self.marked.clone())
+            .unwrap_or_else(|| self.selection());
         self.replace(bytes, text, window, cx);
     }
     fn replace_and_mark_text_in_range(
@@ -69,8 +71,8 @@ impl EntityInputHandler for Input {
     ) {
         let bytes = range
             .map(|r| self.byte_range(r))
-            .or(self.marked.clone())
-            .unwrap_or(self.selection());
+            .or_else(|| self.marked.clone())
+            .unwrap_or_else(|| self.selection());
         let start = bytes.start;
         self.replace(bytes, text, window, cx);
         self.marked = (!text.is_empty()).then_some(start..self.cursor);

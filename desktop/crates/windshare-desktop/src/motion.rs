@@ -1,13 +1,19 @@
-use gpui::{prelude::*, *};
+use crate::share_timing::lerp;
+use gpui::{
+    Animation, AnimationExt, AnyElement, Div, ElementId, div, ease_out_quint, img, point,
+    prelude::*, px, size,
+};
 use std::{
     f32::consts::{PI, TAU},
     time::Duration,
 };
-use windshare_ui::*;
+use windshare_ui::{Icon, Tone, caption, icon, muted, row, vector_sprite};
 
 const SCENE_WIDTH: f32 = 340.;
 const SCENE_HEIGHT: f32 = 176.;
 const SPIRIT_SIZE: f32 = 156.;
+const SPIRIT_TOP: f32 = 4.;
+const SPIRIT_FLOAT_AMPLITUDE: f32 = 4.;
 const FLOAT_CYCLE_MS: u64 = 3400;
 const FLIGHT_CYCLE_MS: u64 = 1500;
 const PAPERS: [&str; 3] = ["brand/paper.svg", "brand/photo.svg", "brand/folder.svg"];
@@ -30,7 +36,7 @@ pub fn scaled_spirit(mood: SpiritMood, tone: Tone, scale: f32, still: bool) -> D
     let spirit = div()
         .absolute()
         .left(unit(92.))
-        .top(unit(4.))
+        .top(unit(SPIRIT_TOP))
         .size(unit(SPIRIT_SIZE))
         .child(
             img(if mood == SpiritMood::Happy {
@@ -47,7 +53,10 @@ pub fn scaled_spirit(mood: SpiritMood, tone: Tone, scale: f32, still: bool) -> D
             .with_animation(
                 ("spirit-float", mood as usize),
                 Animation::new(Duration::from_millis(FLOAT_CYCLE_MS)).repeat(),
-                move |el, delta| el.top(px((4. + (delta * TAU).sin() * 4.) * scale)),
+                move |el, delta| {
+                    let float_offset = (delta * TAU).sin() * SPIRIT_FLOAT_AMPLITUDE;
+                    el.top(px((SPIRIT_TOP + float_offset) * scale))
+                },
             )
             .into_any_element()
     };
@@ -66,7 +75,7 @@ pub fn scaled_spirit(mood: SpiritMood, tone: Tone, scale: f32, still: bool) -> D
             )
             .text_color(tone.accent()),
         );
-    for (index, asset) in PAPERS.into_iter().enumerate() {
+    for (index, asset) in (0_u16..).zip(PAPERS) {
         let paper = div()
             .absolute()
             .w(unit(36.))
@@ -75,34 +84,40 @@ pub fn scaled_spirit(mood: SpiritMood, tone: Tone, scale: f32, still: bool) -> D
         let element = if active && !still {
             paper
                 .with_animation(
-                    ("flying-file", index + mood as usize * 10),
+                    ("flying-file", usize::from(index) + mood as usize * 10),
                     Animation::new(Duration::from_millis(FLIGHT_CYCLE_MS)).repeat(),
                     move |el, delta| {
-                        let phase = (delta + index as f32 / 3.) % 1.;
+                        let phase = (delta + f32::from(index) / 3.) % 1.;
                         let travel = if mood == SpiritMood::Receiving {
                             1. - phase
                         } else {
                             phase
                         };
-                        el.left(px((12. + travel * 282.) * scale))
-                            .top(px((96. - (phase * PI).sin() * 73.) * scale))
-                            .opacity((phase * PI).sin() * 0.95)
+                        let arc = (phase * PI).sin();
+                        let lift = arc * 73.;
+                        el.left(px(lerp(12., 294., travel) * scale))
+                            .top(px((96. - lift) * scale))
+                            .opacity(arc * 0.95)
                     },
                 )
                 .into_any_element()
         } else {
-            let (x, y) = [(31., 63.), (268., 26.), (265., 123.)][index];
+            let (x, y) = [(31., 63.), (268., 26.), (265., 123.)][usize::from(index)];
             let paper = paper.left(unit(x)).top(unit(y));
             if still {
                 paper.into_any_element()
             } else {
                 paper
                     .with_animation(
-                        ("paper-drift", index + mood as usize * 10),
-                        Animation::new(Duration::from_millis(FLOAT_CYCLE_MS + index as u64 * 450))
-                            .repeat(),
+                        ("paper-drift", usize::from(index) + mood as usize * 10),
+                        Animation::new(Duration::from_millis(
+                            FLOAT_CYCLE_MS + u64::from(index) * 450,
+                        ))
+                        .repeat(),
                         move |el, delta| {
-                            el.top(px((y + (delta * TAU + index as f32).sin() * 3.) * scale))
+                            let cycle_angle = delta * TAU;
+                            let drift = (cycle_angle + f32::from(index)).sin() * 3.;
+                            el.top(px((y + drift) * scale))
                         },
                     )
                     .into_any_element()
