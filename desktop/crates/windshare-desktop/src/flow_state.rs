@@ -1,6 +1,6 @@
+use crate::share_timing::ShareArrival;
+use std::time::Instant;
 use windshare_ui::{Icon, Tone};
-
-pub const SHARE_PREPARE_MS: u64 = 1350;
 pub const COPY_FEEDBACK_MS: u64 = 2400;
 
 #[derive(Clone, Copy)]
@@ -54,6 +54,17 @@ pub enum ShareFlow {
     Preparing {
         operation: usize,
         bundle: SampleBundle,
+        started_at: Instant,
+    },
+    AwaitingReveal {
+        operation: usize,
+        bundle: SampleBundle,
+        started_at: Instant,
+    },
+    Revealing {
+        operation: usize,
+        share_id: usize,
+        arrival: ShareArrival,
     },
     Ready {
         share_id: usize,

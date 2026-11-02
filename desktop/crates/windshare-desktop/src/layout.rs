@@ -1,4 +1,23 @@
 use gpui::{Window, px};
+use windshare_ui::{COMPACT_WIDTH, SIDEBAR_COMPACT_WIDTH, SIDEBAR_WIDTH};
+
+pub const MAX_PAGE_WIDTH: f32 = 960.;
+pub fn page_gutter(compact: bool) -> f32 {
+    if compact { 28. } else { 48. }
+}
+
+pub fn task_width(window: &Window, layout: FlowLayout) -> f32 {
+    let viewport = f32::from(window.viewport_size().width);
+    let compact = viewport < COMPACT_WIDTH;
+    let sidebar = if compact {
+        SIDEBAR_COMPACT_WIDTH
+    } else {
+        SIDEBAR_WIDTH
+    };
+    (viewport - sidebar - 2. * page_gutter(compact)).min(MAX_PAGE_WIDTH)
+        - 2. * layout.panel_padding()
+        - 2.
+}
 
 const SHORT_WINDOW_HEIGHT: f32 = 800.;
 pub const RECEIVE_STAGE_HEIGHT: f32 = 430.;
