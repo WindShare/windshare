@@ -32,6 +32,15 @@ export const ZIP_CLASSIC_END_BYTES = 22n
 export const ZIP64_END_BYTES = 76n
 const ZIP_DOS_MINIMUM_YEAR = 1980
 const ZIP_DOS_MAXIMUM_YEAR = 2107
+const ZIP_DOS_MINIMUM = Object.freeze({ dosTime: 0, dosDate: (1 << 5) | 1 })
+const ZIP_DOS_MAXIMUM = Object.freeze({
+  dosTime: (23 << 11) | (59 << 5) | 29,
+  dosDate: ((ZIP_DOS_MAXIMUM_YEAR - ZIP_DOS_MINIMUM_YEAR) << 9) | (12 << 5) | 31,
+})
+// UTC offsets stay under one day, so instants outside these bounds are outside the DOS
+// years in every zone. They also keep Number() conversion inside the Date range.
+const ZIP_DOS_LOWER_GUARD_MILLISECONDS = BigInt(Date.UTC(ZIP_DOS_MINIMUM_YEAR - 1, 11, 30))
+const ZIP_DOS_UPPER_GUARD_MILLISECONDS = BigInt(Date.UTC(ZIP_DOS_MAXIMUM_YEAR + 1, 0, 2))
 const TEXT_ENCODER = new TextEncoder()
 const EMPTY_ZIP_EXTRA_FIELDS = new Uint8Array(0)
 
@@ -522,26 +531,29 @@ export const ZIP_ENCODING_POLICY_V1: ZipEncodingPolicyV1 = Object.freeze({
   requireSpoolBudget: requireZipSpoolBudget,
 })
 
-// MS-DOS fields carry no zone, and extractors (Windows Explorer, Archive Utility, unzip,
-// 7-Zip) read them as the extracting machine's local time. Encoding the receiver's local
-// wall clock therefore restores the source instant on the machine that saved the ZIP.
+// MS-DOS fields carry no zone, and by convention extractors read them as the extracting
+// machine's local time. Encoding the receiver's local wall clock therefore restores the
+// source instant on the machine that saved the ZIP. Already written fields are never
+// re-derived (see Direct ZIP replay), because the zone may have changed since.
 function normalizeDosDateTime(
   modifiedTimeMilliseconds: bigint | undefined,
 ): { readonly dosTime: number; readonly dosDate: number } {
   if (modifiedTimeMilliseconds !== undefined && typeof modifiedTimeMilliseconds !== 'bigint') {
     throw new TypeError('ZIP modified time must be an integer millisecond value')
   }
-  const minimum = BigInt(new Date(ZIP_DOS_MINIMUM_YEAR, 0, 1, 0, 0, 0).getTime())
-  const maximum = BigInt(new Date(ZIP_DOS_MAXIMUM_YEAR, 11, 31, 23, 59, 58).getTime())
-  let clamped = modifiedTimeMilliseconds ?? minimum
-  if (clamped < minimum) clamped = minimum
-  if (clamped > maximum) clamped = maximum
-  const value = new Date(Number(clamped))
+  if (modifiedTimeMilliseconds === undefined ||
+      modifiedTimeMilliseconds < ZIP_DOS_LOWER_GUARD_MILLISECONDS) return ZIP_DOS_MINIMUM
+  if (modifiedTimeMilliseconds > ZIP_DOS_UPPER_GUARD_MILLISECONDS) return ZIP_DOS_MAXIMUM
+  // Clamp on the local calendar year, so the bounds need no per-zone Date construction.
+  const value = new Date(Number(modifiedTimeMilliseconds))
+  const year = value.getFullYear()
+  if (year < ZIP_DOS_MINIMUM_YEAR) return ZIP_DOS_MINIMUM
+  if (year > ZIP_DOS_MAXIMUM_YEAR) return ZIP_DOS_MAXIMUM
   return {
     dosTime: (value.getHours() << 11) |
       (value.getMinutes() << 5) |
       (value.getSeconds() >>> 1),
-    dosDate: ((value.getFullYear() - ZIP_DOS_MINIMUM_YEAR) << 9) |
+    dosDate: ((year - ZIP_DOS_MINIMUM_YEAR) << 9) |
       ((value.getMonth() + 1) << 5) |
       value.getDate(),
   }

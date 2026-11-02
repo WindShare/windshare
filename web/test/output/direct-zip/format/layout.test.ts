@@ -123,6 +123,25 @@ describe('DirectZip layout policy V2', () => {
     }
   })
 
+  it('revalidates committed DOS fields without re-deriving them in the current time zone', () => {
+    // 2024-03-10 02:30 exists in UTC but falls in America/New_York's spring-forward gap.
+    vi.stubEnv('TZ', 'UTC')
+    const plan = planDirectZipEntryV2({
+      ordinal: 1n,
+      localHeaderOffset: 64n,
+      entry: {
+        kind: 'file', path: ['root', 'a'], exactSize: 3n,
+        modifiedTimeMilliseconds: BigInt(Date.UTC(2024, 2, 10, 2, 30)),
+      },
+    })
+    vi.stubEnv('TZ', 'America/New_York')
+
+    expect(validateDirectZipEntryPlanV2(plan)).toEqual(plan)
+    expect(() => validateDirectZipEntryPlanV2({
+      ...plan, zipEntry: { ...plan.zipEntry, dosTime: 24 << 11 },
+    })).toThrow(/DOS timestamp is invalid/u)
+  })
+
   it('rejects numeric offsets outside the positioned FSA safe-integer boundary', () => {
     expect(directZipFsaOffset(DIRECT_ZIP_MAXIMUM_POSITIONED_FSA_OFFSET)).toBe(Number.MAX_SAFE_INTEGER)
     expect(directZipFsaOffsetBigInt(Number.MAX_SAFE_INTEGER)).toBe(
