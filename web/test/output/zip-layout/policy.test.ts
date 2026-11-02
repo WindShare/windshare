@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import {
   ZIP_UINT16_SENTINEL,
@@ -101,7 +101,9 @@ describe('ZipEncodingPolicyV1', () => {
     expect(view.getBigUint64(extraOffset + 4, true)).toBe(ZIP_UINT32_SENTINEL)
   })
 
-  it('uses UTC, clamps the DOS range, and truncates to two-second precision', () => {
+  it('uses the local wall clock, clamps the DOS range, and truncates to two-second precision', () => {
+    // DOS fields carry no zone; extractors read them as local time.
+    vi.stubEnv('TZ', 'Asia/Singapore')
     const early = normalizeZipEntry({
       kind: 'directory',
       path: ['root'],
@@ -110,7 +112,7 @@ describe('ZipEncodingPolicyV1', () => {
     const precise = normalizeZipEntry({
       kind: 'directory',
       path: ['root'],
-      modifiedTimeMilliseconds: BigInt(Date.UTC(2024, 5, 7, 8, 9, 11, 999)),
+      modifiedTimeMilliseconds: BigInt(new Date(2024, 5, 7, 8, 9, 11, 999).getTime()),
     })
     const late = normalizeZipEntry({
       kind: 'directory',

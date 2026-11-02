@@ -1,5 +1,4 @@
 import { encodeBase64Url } from '../../../crypto/bytes'
-import { planDirectZipEntryV2 } from '../format'
 import {
   createDirectZipCheckpointProposalV1, createDirectZipCheckpointV1,
   assertDirectZipRollbackPredecessorV1,
@@ -26,7 +25,7 @@ import { checkpointInput, writerCandidate, writerCheckpoint } from './checkpoint
 import {
   BrowserDirectZipPages, streamEntries, type BrowserDirectZipPageAuthority,
 } from './pages'
-import { decodeLayout, digestBytes, requireLayoutPlan, UNBOUND_DISCOVERY } from './records'
+import { decodeLayout, digestBytes, replayLayoutPlan, UNBOUND_DISCOVERY } from './records'
 
 export interface BrowserDirectZipJournalOptions {
   readonly repository: DirectZipJournalRepository
@@ -256,15 +255,9 @@ export class BrowserDirectZipJournal implements DirectZipWriterCutSink, DirectZi
     const next = await this.#replayEntries.next()
     if (next.done) throw new TypeError('Direct ZIP retained member layout is missing')
     const layout = decodeLayout(next.value)
-    const plan = planDirectZipEntryV2({
-      ordinal, localHeaderOffset: layout.offset,
-      entry: member.kind === 'file'
-        ? { kind: 'file', path: member.artifactPath, exactSize: member.expectedSize,
-            ...(member.modifiedTime === undefined ? {} : { modifiedTimeMilliseconds: member.modifiedTime.milliseconds }) }
-        : { kind: 'directory', path: member.artifactPath,
-            ...(member.modifiedTime === undefined ? {} : { modifiedTimeMilliseconds: member.modifiedTime.milliseconds }) },
-    })
-    requireLayoutPlan(next.value, plan)
+    replayLayoutPlan(next.value, ordinal, member.kind === 'file'
+      ? { kind: 'file', path: member.artifactPath, exactSize: member.expectedSize }
+      : { kind: 'directory', path: member.artifactPath })
     if (!equalCanonicalBytes(layout.layoutEvidence, member.layoutEvidence) ||
         !equalCanonicalBytes(layout.discoveryEvidence, member.discoveryEvidence)) {
       throw new TypeError('Direct ZIP replay changed authenticated discovery')

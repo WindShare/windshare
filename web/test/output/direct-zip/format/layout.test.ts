@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import {
   DIRECT_ZIP_MAXIMUM_BOOTSTRAP_PREFIX_BYTES,
@@ -104,6 +104,42 @@ describe('DirectZip layout policy V2', () => {
       entry: { kind: 'file', path: ['root', 'a'], exactSize: 0n },
       ownershipMarker: TEST_DIRECT_ZIP_MARKER,
     })).toThrow(/entry zero/u)
+  })
+
+  it('revalidates local DOS timestamps, including a repeated daylight-saving hour', () => {
+    vi.stubEnv('TZ', 'America/New_York')
+    // 05:30Z and 06:30Z are both 01:30 local on 2024-11-03.
+    for (const instant of [Date.UTC(2024, 10, 3, 5, 30), Date.UTC(2024, 10, 3, 6, 30)]) {
+      const plan = planDirectZipEntryV2({
+        ordinal: 1n,
+        localHeaderOffset: 64n,
+        entry: {
+          kind: 'file', path: ['root', 'a'], exactSize: 3n, modifiedTimeMilliseconds: BigInt(instant),
+        },
+      })
+
+      expect(plan.zipEntry.dosTime).toBe(1 << 11 | 30 << 5)
+      expect(validateDirectZipEntryPlanV2(plan)).toEqual(plan)
+    }
+  })
+
+  it('revalidates committed DOS fields without re-deriving them in the current time zone', () => {
+    // 2024-03-10 02:30 exists in UTC but falls in America/New_York's spring-forward gap.
+    vi.stubEnv('TZ', 'UTC')
+    const plan = planDirectZipEntryV2({
+      ordinal: 1n,
+      localHeaderOffset: 64n,
+      entry: {
+        kind: 'file', path: ['root', 'a'], exactSize: 3n,
+        modifiedTimeMilliseconds: BigInt(Date.UTC(2024, 2, 10, 2, 30)),
+      },
+    })
+    vi.stubEnv('TZ', 'America/New_York')
+
+    expect(validateDirectZipEntryPlanV2(plan)).toEqual(plan)
+    expect(() => validateDirectZipEntryPlanV2({
+      ...plan, zipEntry: { ...plan.zipEntry, dosTime: 24 << 11 },
+    })).toThrow(/DOS timestamp is invalid/u)
   })
 
   it('rejects numeric offsets outside the positioned FSA safe-integer boundary', () => {

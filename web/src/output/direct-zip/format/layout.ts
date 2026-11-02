@@ -54,13 +54,42 @@ export function compareDirectZipEntryPlansV2(
   return compareNormalizedZipEntries(left.zipEntry, right.zipEntry)
 }
 
+export interface DirectZipDosDateTimeV2 {
+  readonly dosTime: number
+  readonly dosDate: number
+}
+
 export function planDirectZipEntryV2(
   input: PlanDirectZipEntryInputV2,
 ): DirectZipEntryPlanV2 {
   if (input === null || typeof input !== 'object') throw new TypeError('direct ZIP entry input is invalid')
+  return planNormalizedDirectZipEntry(input, normalizeZipEntry(input.entry))
+}
+
+/**
+ * Plans an entry whose DOS date/time fields are already fixed (a committed local header or a
+ * persisted plan). They are kept verbatim: re-deriving them from the source instant would
+ * depend on the current time zone, which may differ from the one that wrote them.
+ */
+export function planDirectZipEntryWithDosDateTimeV2(
+  input: PlanDirectZipEntryInputV2,
+  dateTime: DirectZipDosDateTimeV2,
+): DirectZipEntryPlanV2 {
+  if (input === null || typeof input !== 'object') throw new TypeError('direct ZIP entry input is invalid')
+  if (dateTime === null || typeof dateTime !== 'object') throw new TypeError('ZIP DOS timestamp is invalid')
+  return planNormalizedDirectZipEntry(input, Object.freeze({
+    ...normalizeZipEntry(input.entry),
+    dosTime: dateTime.dosTime,
+    dosDate: dateTime.dosDate,
+  }))
+}
+
+function planNormalizedDirectZipEntry(
+  input: PlanDirectZipEntryInputV2,
+  normalized: NormalizedZipEntry,
+): DirectZipEntryPlanV2 {
   requireZipUint64(input.ordinal, 'direct ZIP entry ordinal')
   requireDirectZipFsaOffset(input.localHeaderOffset, 'direct ZIP local-header offset')
-  const normalized = normalizeZipEntry(input.entry)
   const isOwnershipEntry = input.ordinal === 0n
   if (isOwnershipEntry) {
     if (input.localHeaderOffset !== 0n || normalized.kind !== 'directory' ||
@@ -104,25 +133,17 @@ export function validateDirectZipEntryPlanV2(
       candidate.version !== DIRECT_ZIP_ENTRY_LAYOUT_VERSION) {
     throw new TypeError('direct ZIP entry plan version is invalid')
   }
-  const rebuilt = planDirectZipEntryV2({
+  // planZipEntry checks the DOS fields' structure; their values are not re-derived.
+  const rebuilt = planDirectZipEntryWithDosDateTimeV2({
     ordinal: candidate.ordinal,
     localHeaderOffset: candidate.zipEntry.localHeaderOffset,
     entry: candidate.zipEntry.kind === 'directory'
-      ? {
-          kind: 'directory',
-          path: candidate.zipEntry.path,
-          modifiedTimeMilliseconds: dosDateTimeMilliseconds(candidate.zipEntry),
-        }
-      : {
-          kind: 'file',
-          path: candidate.zipEntry.path,
-          exactSize: candidate.zipEntry.exactSize,
-          modifiedTimeMilliseconds: dosDateTimeMilliseconds(candidate.zipEntry),
-        },
+      ? { kind: 'directory', path: candidate.zipEntry.path }
+      : { kind: 'file', path: candidate.zipEntry.path, exactSize: candidate.zipEntry.exactSize },
     ...(candidate.ownershipMarker === undefined
       ? {}
       : { ownershipMarker: candidate.ownershipMarker }),
-  })
+  }, candidate.zipEntry)
   if (!sameZipEntryPlan(candidate.zipEntry, rebuilt.zipEntry) ||
       candidate.localHeaderBytes !== rebuilt.localHeaderBytes ||
       candidate.descriptorBytes !== rebuilt.descriptorBytes ||
@@ -186,14 +207,4 @@ function sameOptionalMarker(
 ): boolean {
   if (left === undefined || right === undefined) return left === right
   return equalDirectZipOwnershipMarkersV1(left, right)
-}
-
-function dosDateTimeMilliseconds(entry: NormalizedZipEntry): bigint {
-  const second = (entry.dosTime & 0x1f) * 2
-  const minute = (entry.dosTime >>> 5) & 0x3f
-  const hour = (entry.dosTime >>> 11) & 0x1f
-  const day = entry.dosDate & 0x1f
-  const month = (entry.dosDate >>> 5) & 0x0f
-  const year = 1980 + ((entry.dosDate >>> 9) & 0x7f)
-  return BigInt(Date.UTC(year, month - 1, day, hour, minute, second))
 }

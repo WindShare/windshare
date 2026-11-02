@@ -1,14 +1,17 @@
 import { decodeBase64Url, encodeBase64Url } from '../../../crypto/bytes'
 import {
-  chainDirectZipEpochDigestV1, encodeDirectZipLocalHeaderV2,
-  type DirectZipEntryPlanV2,
+  chainDirectZipEpochDigestV1, encodeDirectZipLocalHeaderV2, planDirectZipEntryWithDosDateTimeV2,
+  type DirectZipDosDateTimeV2, type DirectZipEntryPlanV2,
 } from '../format'
+import type { ZipEntrySpec } from '../../zip-layout/policy'
 import type { DirectZipEpochProofV1, DirectZipMemberAdmissionV1 } from '../writer'
 import {
   canonicalFrame, canonicalRecord, canonicalU64, equalCanonicalBytes, type CanonicalBytes,
 } from '../../../transfer/encoding/canonical'
 import { CanonicalRecordReader } from '../../../transfer/encoding/canonical-reader'
 
+const ZIP_LOCAL_HEADER_SIGNATURE = 0x04034b50
+const ZIP_LOCAL_HEADER_FIXED_BYTES = 30
 const LAYOUT_DOMAIN = 'windshare/browser-direct-zip-layout/v1'
 const CENTRAL_DOMAIN = 'windshare/browser-direct-zip-central/v1'
 const EPOCH_DOMAIN = 'windshare/browser-direct-zip-epoch/v1'
@@ -36,12 +39,34 @@ export function decodeLayout(bytes: Uint8Array) {
   return Object.freeze(value)
 }
 
-export function requireLayoutPlan(bytes: Uint8Array, plan: DirectZipEntryPlanV2): void {
+/**
+ * Replays one committed member against its authenticated entry. Every field is recomputed
+ * except the DOS date/time, which is taken from the committed local header: those bytes are
+ * already in the target and were encoded in the zone active when the member was admitted
+ * (UTC before local-time encoding), which can differ from the zone that resumes.
+ */
+export function replayLayoutPlan(
+  bytes: Uint8Array, ordinal: bigint, entry: ZipEntrySpec,
+): DirectZipEntryPlanV2 {
   const layout = decodeLayout(bytes)
-  if (layout.ordinal !== plan.ordinal || layout.offset !== plan.zipEntry.localHeaderOffset ||
+  const plan = planDirectZipEntryWithDosDateTimeV2(
+    { ordinal, localHeaderOffset: layout.offset, entry },
+    committedDosDateTime(layout.localHeader),
+  )
+  if (layout.ordinal !== ordinal ||
       !equalCanonicalBytes(layout.localHeader, encodeDirectZipLocalHeaderV2(plan))) {
     throw new TypeError('Direct ZIP replay changed its committed entry plan')
   }
+  return plan
+}
+
+function committedDosDateTime(localHeader: Uint8Array): DirectZipDosDateTimeV2 {
+  const view = new DataView(localHeader.buffer, localHeader.byteOffset, localHeader.byteLength)
+  if (localHeader.byteLength < ZIP_LOCAL_HEADER_FIXED_BYTES ||
+      view.getUint32(0, true) !== ZIP_LOCAL_HEADER_SIGNATURE) {
+    throw new TypeError('Direct ZIP replay changed its committed entry plan')
+  }
+  return { dosTime: view.getUint16(10, true), dosDate: view.getUint16(12, true) }
 }
 
 export function encodeCentral(ordinal: bigint, bytes: Uint8Array): CanonicalBytes {
