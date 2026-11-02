@@ -76,8 +76,9 @@ func TestCatalogOmissionsRetainBoundedPathsAndScanCorrelation(t *testing.T) {
 
 func TestCatalogOmitsNamesOutsideThePathGrammarWithoutFailingSiblings(t *testing.T) {
 	root := t.TempDir()
-	// Directional marks are common in names produced by messaging and Windows apps.
-	unrepresentable := []string{"\u200eIMG-0001.jpg"}
+	// Directional marks and ZWNJ (required in Persian words such as "books") are
+	// format characters that the shared name grammar rejects today.
+	unrepresentable := []string{"\u200eIMG-0001.jpg", "\u06a9\u062a\u0627\u0628\u200c\u0647\u0627.docx"}
 	if runtime.GOOS != "windows" {
 		unrepresentable = append(unrepresentable, "12:30.log", `back\slash.txt`, "tab\tname.txt")
 	}
@@ -89,9 +90,12 @@ func TestCatalogOmitsNamesOutsideThePathGrammarWithoutFailingSiblings(t *testing
 			t.Fatal(err)
 		}
 	}
-	if err := os.Mkdir(filepath.Join(root, "dir:with-colon"), 0o700); err != nil && runtime.GOOS != "windows" {
-		t.Fatal(err)
-	} else if err == nil {
+	// On NTFS "dir:with-colon" is alternate data stream syntax, so do not create it there.
+	if runtime.GOOS != "windows" {
+		// The omitted directory is never opened, so its subtree counts as one item.
+		if err := os.MkdirAll(filepath.Join(root, "dir:with-colon", "inner"), 0o700); err != nil {
+			t.Fatal(err)
+		}
 		unrepresentable = append(unrepresentable, "dir:with-colon")
 	}
 	stream, err := diag.NewStream(64, nil)

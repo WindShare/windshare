@@ -350,6 +350,16 @@ func (source *SelectedCatalogSource) scanChild(
 	if reason := catalogOmissionFor(before); reason != catalogOmissionNone {
 		return catalog.ScannedChild{}, reason, nil
 	}
+	// Native filesystems accept names outside the shared grammar, such as ':' on
+	// Unix or invalid UTF-8. Omit them before opening so readable siblings survive.
+	// Over-long or over-deep joined paths still fail the directory.
+	locator, err := newChildSourceReference(parentLocator, name)
+	if errors.Is(err, errUnrepresentableSourceName) {
+		return catalog.ScannedChild{}, catalogOmissionName, nil
+	}
+	if err != nil {
+		return catalog.ScannedChild{}, catalogOmissionNone, catalog.NewPermanentScanError(err)
+	}
 	handle, err := directory.Open(name)
 	if err != nil {
 		return catalog.ScannedChild{}, catalogOmissionNone, catalog.NewTransientScanError(err, 0)
@@ -364,14 +374,6 @@ func (source *SelectedCatalogSource) scanChild(
 		return catalog.ScannedChild{}, catalogOmissionNone, catalog.NewPermanentScanError(catalog.ErrDirectoryStale)
 	}
 	modified, err := catalogModifiedTime(opened)
-	if err != nil {
-		return catalog.ScannedChild{}, catalogOmissionNone, catalog.NewPermanentScanError(err)
-	}
-	relative := name
-	if parentLocator.RelativePath() != "" {
-		relative = parentLocator.RelativePath() + "/" + name
-	}
-	locator, err := NewSourceReference(parentLocator.RootSlot(), filepath.ToSlash(relative))
 	if err != nil {
 		return catalog.ScannedChild{}, catalogOmissionNone, catalog.NewPermanentScanError(err)
 	}
