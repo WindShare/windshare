@@ -1,4 +1,4 @@
-use gpui::{prelude::*, *};
+use gpui::{Svg, prelude::*, px, svg};
 
 #[derive(Clone, Copy, Debug)]
 pub enum Icon {
@@ -44,7 +44,7 @@ pub enum Icon {
 }
 
 impl Icon {
-    pub fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Self::Wind => "wind",
             Self::Home => "home",

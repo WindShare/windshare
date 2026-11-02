@@ -18,7 +18,10 @@ mod shell;
 mod transfer_views;
 
 use desktop::Desktop;
-use gpui::{prelude::*, *};
+use gpui::{
+    AppContext, AssetSource, Bounds, SharedString, TitlebarOptions, WindowBounds, WindowOptions,
+    px, size,
+};
 use std::{borrow::Cow, time::Duration};
 
 const DEFAULT_PREVIEW_SHARE_MS: u64 = 1900;
@@ -70,8 +73,7 @@ fn main() {
                 .parse::<u32>()
                 .expect("--share-delay-ms requires an unsigned integer")
         })
-        .map(u64::from)
-        .unwrap_or(DEFAULT_PREVIEW_SHARE_MS);
+        .map_or(DEFAULT_PREVIEW_SHARE_MS, u64::from);
     let preview_share_delay = Duration::from_millis(share_delay_ms);
     gpui_platform::application()
         .with_assets(DesktopAssets)

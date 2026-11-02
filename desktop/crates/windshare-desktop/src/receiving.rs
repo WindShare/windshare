@@ -1,13 +1,17 @@
 use crate::{
     desktop::Desktop,
-    flow_state::*,
+    flow_state::{LinkFeedback, RECEIVE_SAVE_MS, RECEIVED_FILES, ReceiveFlow},
     layout::{FlowLayout, RECEIVE_STAGE_HEIGHT},
-    model::*,
-    motion::*,
+    model::PreviewAction,
+    motion::{SpiritMood, reassurance, reveal, scaled_spirit},
+    share_timing::lerp,
 };
-use gpui::{prelude::*, *};
+use gpui::{Animation, AnimationExt, Div, FontWeight, div, prelude::*, px, relative};
 use std::time::Duration;
-use windshare_ui::*;
+use windshare_ui::{
+    ButtonStyle, Icon, Tone, badge, border, caption, card, column, heading, icon, icon_tile, label,
+    muted, row,
+};
 
 impl Desktop {
     pub fn receiving_page(&self, layout: FlowLayout, cx: &Context<Self>) -> Div {
@@ -74,7 +78,7 @@ impl Desktop {
                             .gap(px(10.))
                             .child(div().flex_1().min_w_0().child(self.link_input.clone()))
                             .child(
-                                self.button(
+                                Self::button(
                                     "paste-link",
                                     "粘贴",
                                     Icon::Copy,
@@ -105,7 +109,7 @@ impl Desktop {
                         ),
                     )
                     .child(
-                        self.button(
+                        Self::button(
                             "open-link",
                             "打开分享",
                             Icon::Arrow,
@@ -124,7 +128,7 @@ impl Desktop {
                     .pt(px(4.))
                     .child(caption("还没有链接？"))
                     .child(
-                        self.button(
+                        Self::button(
                             "demo-link",
                             "试试示例分享",
                             Icon::Spark,
@@ -150,7 +154,7 @@ impl Desktop {
             .child(heading("正在打开分享", 26.))
             .child(label("正在和分享者建立安全连接。", 16.).text_color(muted()))
             .child(
-                self.button(
+                Self::button(
                     "cancel-open",
                     "取消",
                     Icon::Close,
@@ -210,7 +214,7 @@ impl Desktop {
                     .child(caption("保存到 下载 / 京都的周末")),
             )
             .child(
-                self.button(
+                Self::button(
                     "save-files",
                     "接收这 3 个文件",
                     Icon::Download,
@@ -223,7 +227,7 @@ impl Desktop {
             )
             .child(
                 row().justify_center().child(
-                    self.button(
+                    Self::button(
                         "receive-other",
                         "换一个分享链接",
                         Icon::Link,
@@ -249,7 +253,7 @@ impl Desktop {
                 .with_animation(
                     ("receive-progress", operation),
                     Animation::new(Duration::from_millis(RECEIVE_SAVE_MS)),
-                    |el, delta| el.w(relative(0.05 + 0.95 * delta)),
+                    |el, delta| el.w(relative(lerp(0.05, 1., delta))),
                 )
                 .into_any_element()
         };
@@ -281,7 +285,7 @@ impl Desktop {
                     .child(caption("正在演示接收过程").text_center()),
             )
             .child(
-                self.button(
+                Self::button(
                     "cancel-receive",
                     "取消接收",
                     Icon::Close,
@@ -315,7 +319,7 @@ impl Desktop {
             ))
             .child(badge("演示完成，未写入实际文件", Tone::Lavender))
             .child(
-                self.button(
+                Self::button(
                     "receive-again",
                     "接收另一个分享",
                     Icon::Link,

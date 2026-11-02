@@ -1,6 +1,12 @@
-use crate::{desktop::Desktop, model::*};
-use gpui::{prelude::*, *};
-use windshare_ui::*;
+use crate::{
+    desktop::Desktop,
+    model::{PreviewAction, Transfer, TransferState},
+};
+use gpui::{Div, prelude::*, px};
+use windshare_ui::{
+    ButtonStyle, FONT, Icon, Tone, caption, card, column, heading, icon_tile, label, progress, row,
+    section_header, separator,
+};
 
 impl Desktop {
     pub fn transfers_page(&self, cx: &Context<Self>) -> Div {
@@ -43,7 +49,7 @@ impl Desktop {
                                     .child(caption(transfer.detail)),
                             )
                             .child(
-                                label(format!("{}%", (transfer.progress * 100.) as u32), 15.)
+                                label(format!("{:.0}%", (transfer.progress * 100.).trunc()), 15.)
                                     .font_family(FONT)
                                     .text_color(transfer.tone.text()),
                             ),
@@ -71,7 +77,7 @@ impl Desktop {
                     ),
             )
             .child(
-                self.button(
+                Self::button(
                     ("transfer-toggle", index),
                     "",
                     if complete {

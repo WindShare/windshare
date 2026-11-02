@@ -1,5 +1,8 @@
 use crate::{Icon, RADIUS, Tone, border, icon, ink, muted, paper, primary};
-use gpui::{prelude::*, *};
+use gpui::{
+    Div, ElementId, FontWeight, Pixels, Point, Role, SharedString, Size, Stateful, Svg, Toggled,
+    Transformation, div, prelude::*, px, relative, size, svg,
+};
 
 pub fn vector_sprite(
     path: impl Into<SharedString>,
@@ -112,7 +115,7 @@ pub fn toggle(id: impl Into<ElementId>, checked: bool) -> Stateful<Div> {
         } else {
             Tone::Neutral.accent()
         })
-        .when(checked, |el| el.justify_end())
+        .when(checked, gpui::Styled::justify_end)
         .focusable()
         .tab_index(0)
         .focus_visible(|s| s.border_2().border_color(Tone::Mint.accent()))

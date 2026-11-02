@@ -14,6 +14,8 @@ pub use input::{Input, InputEvent};
 pub use primitives::*;
 pub use theme::*;
 
+/// # Panics
+/// Panics if the platform text system cannot register the bundled font.
 pub fn init(cx: &mut gpui::App) {
     use std::borrow::Cow;
     cx.text_system()

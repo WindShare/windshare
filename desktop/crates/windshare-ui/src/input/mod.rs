@@ -2,7 +2,12 @@ mod editing;
 mod paint;
 
 use crate::{INPUT_FONT_SIZE, INPUT_LINE_HEIGHT, border, ink, paper, primary};
-use gpui::{prelude::*, *};
+use gpui::{
+    App, Bounds, ClipboardItem, ElementInputHandler, Entity, EntityInputHandler, EventEmitter,
+    FocusHandle, Focusable, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels,
+    Point, Role, ShapedLine, SharedString, TextAlign, TextRun, UTF16Selection, Window, canvas, div,
+    fill, point, prelude::*, px, size,
+};
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -87,7 +92,7 @@ impl Input {
         &mut self,
         range: Range<usize>,
         text: &str,
-        window: &mut Window,
+        window: &Window,
         cx: &mut Context<Self>,
     ) {
         let text = text.replace(['\r', '\n'], " ");

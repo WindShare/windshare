@@ -8,6 +8,16 @@ edition = "2024"
 license = "AGPL-3.0-or-later"
 publish = false
 
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+# Reserve must_use for obligation types; annotating every value-returning
+# getter would add noise without catching a realistic mistake.
+must_use_candidate = "allow"
+cognitive_complexity = "deny"
+too_many_lines = "deny"
+
 [workspace.dependencies]
 # Match the exact upstream snapshot used by gpui-kit, without its component layer.
 gpui = { package = "gpui-pre", version = "=0.3.10" }

@@ -1,7 +1,16 @@
-use crate::{desktop::Desktop, model::*, motion::*};
-use gpui::{prelude::*, *};
+use crate::{
+    desktop::Desktop,
+    model::{Overlay, PreviewAction},
+    motion::{SpiritMood, spirit_scene},
+};
+use gpui::{
+    Animation, AnimationExt, Div, MouseButton, Role, Window, ease_out_quint, prelude::*, px,
+};
 use std::time::Duration;
-use windshare_ui::*;
+use windshare_ui::{
+    ButtonStyle, FONT, Icon, MOTION_MS, Tone, badge, caption, card, column, heading, icon_tile,
+    ink, label, muted, row, separator,
+};
 
 impl Desktop {
     pub fn overlay_view(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement {
@@ -32,7 +41,7 @@ impl Desktop {
                     .gap(px(20.))
                     .child(heading(title, 26.))
                     .child(
-                        self.button(
+                        Self::button(
                             "dialog-close",
                             "",
                             Icon::Close,
@@ -66,7 +75,7 @@ impl Desktop {
                         MOTION_MS
                     }))
                     .with_easing(ease_out_quint()),
-                    |el, delta| el.opacity(delta),
+                    gpui::Styled::opacity,
                 ),
             )
     }
@@ -117,7 +126,7 @@ impl Desktop {
                             .bg(Tone::Mint.surface()),
                     )
                     .child(
-                        self.button(
+                        Self::button(
                             "detail-copy",
                             "复制分享链接",
                             Icon::Copy,
@@ -129,7 +138,7 @@ impl Desktop {
                     ),
             )
             .child(caption("分享时请保持 WindShare 开启。"))
-            .child(self.button(
+            .child(Self::button(
                 "detail-toggle",
                 if share.live() {
                     "暂停分享"
@@ -154,6 +163,6 @@ impl Desktop {
             .child(label("WindShare 是开源的端到端加密文件分享工具。\n选好文件、生成链接，让对方直接接收。", 16.).text_color(muted()).line_height(px(28.)).text_center())
             .child(separator())
             .child(caption("当前为 GPUI 界面预览。文件、链接与传输均为演示，\n不连接网络，也不会读写实际文件。").text_center().line_height(px(24.)))
-            .child(self.button("about-done", "知道了", Icon::Check, ButtonStyle::Primary, PreviewAction::Close, cx))
+            .child(Self::button("about-done", "知道了", Icon::Check, ButtonStyle::Primary, PreviewAction::Close, cx))
     }
 }

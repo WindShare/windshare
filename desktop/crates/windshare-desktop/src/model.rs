@@ -10,7 +10,7 @@ pub enum Page {
     Components,
 }
 impl Page {
-    pub fn title(self) -> &'static str {
+    pub const fn title(self) -> &'static str {
         match self {
             Self::Share => "分享文件",
             Self::Receive => "接收文件",
@@ -20,7 +20,7 @@ impl Page {
             Self::Components => "设计组件",
         }
     }
-    pub fn subtitle(self) -> &'static str {
+    pub const fn subtitle(self) -> &'static str {
         match self {
             Self::Share => "选好文件，复制链接。分享就这么简单。",
             Self::Receive => "打开链接，把喜欢的文件带到你的设备。",
@@ -54,7 +54,7 @@ pub struct Share {
     pub state: ShareState,
 }
 impl Share {
-    pub fn live(&self) -> bool {
+    pub const fn live(&self) -> bool {
         matches!(self.state, ShareState::Live { .. })
     }
     pub fn link(&self) -> String {
@@ -83,7 +83,7 @@ pub enum Overlay {
     Detail(usize),
     Help,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum PreviewAction {
     Navigate(Page),
     Filter(Filter),
