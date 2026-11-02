@@ -381,6 +381,85 @@ test('runs production image decode and bounded MP4 seek semantics in the active 
   expect(new Set(evidence.video.upstreamBlocks).size).toBe(evidence.video.upstreamBlocks.length)
 })
 
+test('previews a JPEG whose EXIF orientation transposes its stored dimensions', async ({ page }) => {
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
+  const evidence = await page.evaluate(async ({ width, height }) => {
+    const previewPath = '/src/preview/preview.ts'
+    const previewModule = await import(previewPath) as typeof import('../../src/preview/preview')
+    const geometryPath = '/src/content/geometry.ts'
+    const geometryModule = await import(geometryPath) as typeof import('../../src/content/geometry')
+
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    canvas.getContext('2d')?.fillRect(0, 0, width, height)
+    const encoded = await new Promise<Blob>((resolve, reject) => canvas.toBlob(
+      (blob) => blob === null ? reject(new Error('Canvas JPEG encoding failed')) : resolve(blob),
+      'image/jpeg',
+    ))
+    const jpeg = new Uint8Array(await encoded.arrayBuffer())
+    // Portrait camera photos commonly store landscape pixels plus EXIF orientation 6.
+    const exifOrientation6 = Uint8Array.of(
+      0xff, 0xe1, 0x00, 0x22, 0x45, 0x78, 0x69, 0x66, 0x00, 0x00,
+      0x4d, 0x4d, 0x00, 0x2a, 0x00, 0x00, 0x00, 0x08,
+      0x00, 0x01, 0x01, 0x12, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x06, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00,
+    )
+    const bytes = new Uint8Array(jpeg.byteLength + exifOrientation6.byteLength)
+    bytes.set(jpeg.subarray(0, 2))
+    bytes.set(exifOrientation6, 2)
+    bytes.set(jpeg.subarray(2), 2 + exifOrientation6.byteLength)
+
+    const identity = (first: number) => Uint8Array.of(first, ...new Uint8Array(15))
+    const descriptor = Object.freeze({
+      shareInstance: identity(1),
+      shareInstanceId: 'share',
+      fileId: identity(2),
+      fileIdText: 'file',
+      fileRevision: identity(3),
+      fileRevisionText: 'revision',
+      exactSize: BigInt(bytes.byteLength),
+      geometry: new geometryModule.FileGeometry(BigInt(bytes.byteLength), 16n * 1024n),
+    })
+    let releases = 0
+    const preview = await previewModule.FilePreview.open(
+      Object.freeze({
+        kind: 'file', id: descriptor.fileId, idText: 'file', name: 'portrait.jpg',
+        expectedSize: descriptor.exactSize,
+      }),
+      {
+        open: async () => ({ descriptor, leaseId: identity(4), release: async () => { releases += 1 } }),
+      },
+      {
+        async* readRange(_revision, _lease, range) {
+          yield { offset: range.start, data: bytes.slice(Number(range.start), Number(range.end)) }
+        },
+      },
+      new AbortController().signal,
+    )
+    const image = preview.current
+    const element = new Image()
+    element.src = image.url
+    await element.decode()
+    const result = {
+      kind: image.kind,
+      width: image.width,
+      height: image.height,
+      rendered: { width: element.naturalWidth, height: element.naturalHeight },
+      releases,
+    }
+    await preview.close()
+    return result
+  }, { width: 40, height: 20 })
+  expect(evidence).toEqual({
+    kind: 'image',
+    width: 20,
+    height: 40,
+    rendered: { width: 20, height: 40 },
+    releases: 1,
+  })
+})
+
 function expectSameOriginLoopbackBlob(objectUrl: string, pageOrigin: string): void {
   expect(objectUrl).toMatch(/^blob:http:\/\/127\.0\.0\.1:\d+\//u)
   expect(new URL(objectUrl).protocol).toBe('blob:')
