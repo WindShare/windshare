@@ -36,7 +36,6 @@ pub struct Restoration<'s> {
 
 impl Restoration<'static> {
     /// After a process restart only storage survives.
-    #[must_use]
     pub const fn restarted(record: Option<Record>) -> Self {
         Self {
             record,

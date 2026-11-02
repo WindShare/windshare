@@ -78,13 +78,11 @@ pub struct PublishedRoute {
 }
 
 impl PublishedRoute {
-    #[must_use]
     pub const fn attribution(&self) -> crate::access::Attribution {
         self.attribution
     }
 
     /// Returns the published facts, including the resume commitment.
-    #[must_use]
     pub const fn registration(&self) -> &Registration {
         &self.registration
     }
@@ -117,13 +115,11 @@ pub struct OwnedRoute {
 
 impl OwnedRoute {
     /// Returns the published route.
-    #[must_use]
     pub const fn route(&self) -> &PublishedRoute {
         &self.route
     }
 
     /// Returns the ownership entitled to serve the route after confirmation.
-    #[must_use]
     pub const fn ownership(&self) -> OwnershipId {
         self.route.ownership(self.epoch, self.owner)
     }
@@ -156,26 +152,22 @@ impl GraceRoute {
     }
 
     /// Returns the published route.
-    #[must_use]
     pub const fn route(&self) -> &PublishedRoute {
         &self.route
     }
 
     /// Returns the ownership the route lost.
-    #[must_use]
     pub const fn lost(&self) -> OwnershipId {
         self.route.ownership(self.epoch, self.owner)
     }
 
     /// Returns the instant the route lapses, persisted so restores never
     /// extend it.
-    #[must_use]
     pub const fn deadline(&self) -> UnixMillis {
         self.deadline
     }
 
     /// The record that replaces the share's owned record.
-    #[must_use]
     pub const fn record(self) -> Record {
         Record::Grace(self)
     }
@@ -192,25 +184,21 @@ pub struct StoppedShare {
 
 impl StoppedShare {
     /// The final record, stored only after exact participant cleanup.
-    #[must_use]
     pub const fn record(self) -> Record {
         Record::Stopped(self)
     }
 
     /// Returns the retired route.
-    #[must_use]
     pub const fn route(&self) -> ShareRoute {
         self.route
     }
 
     /// Returns the content instance that can never publish or resume again.
-    #[must_use]
     pub const fn share_instance(&self) -> ShareInstance {
         self.share_instance
     }
 
     /// Returns the identifier of the STOP that retired the instance.
-    #[must_use]
     pub const fn stop_id(&self) -> StopId {
         self.stop_id
     }
@@ -238,7 +226,6 @@ pub enum Record {
 
 impl Record {
     /// Returns the relay whose storage owns this record.
-    #[must_use]
     pub const fn relay(&self) -> RelayIdentity {
         match self {
             Self::Published(owned) => owned.route.relay,
@@ -249,7 +236,6 @@ impl Record {
     }
 
     /// Returns the share this record belongs to.
-    #[must_use]
     pub const fn share(&self) -> ShareId {
         match self {
             Self::Published(owned) => owned.route.registration.route().share_id(),
@@ -260,7 +246,6 @@ impl Record {
     }
 
     /// Encodes the bytes a host persists, at most [`MAX_RECORD_BYTES`].
-    #[must_use]
     pub fn encode(&self) -> EncodedRecord {
         let kind = match self {
             Self::Published(_) => PUBLISHED,
@@ -352,7 +337,6 @@ pub struct EncodedRecord(Writer<MAX_RECORD_BYTES>);
 
 impl EncodedRecord {
     /// Returns the bytes to store.
-    #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         self.0.written()
     }

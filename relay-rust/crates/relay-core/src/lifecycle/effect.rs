@@ -148,7 +148,6 @@ pub enum Refusal {
 impl Refusal {
     /// Maps lifecycle refusals onto the existing wire contract. Stale host work
     /// is ignored locally and must not reply on a replacement connection.
-    #[must_use]
     pub const fn frame(self) -> Option<ErrorFrame> {
         match self {
             Self::WrongShare | Self::NotFound => Some(ErrorFrame::NotFound),

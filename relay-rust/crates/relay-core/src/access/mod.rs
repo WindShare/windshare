@@ -27,24 +27,20 @@ pub struct RegistrationRequest {
 }
 
 impl RegistrationRequest {
-    #[must_use]
     pub fn from_frame(connection: ConnectionRef, frame: &[u8]) -> Option<Self> {
         let init = RegisterInit::decode(frame).ok()?;
         (init.mode() == RegistrationMode::Fresh).then_some(Self { connection, init })
     }
 
-    #[must_use]
     pub const fn connection(&self) -> ConnectionRef {
         self.connection
     }
 
-    #[must_use]
     pub const fn registration(&self) -> &Registration {
         self.init.registration()
     }
 
     /// Resolve after policy I/O and revocation checks, using the decision's time.
-    #[must_use]
     pub const fn resolve(
         self,
         decision: RegistrationDecision,
@@ -82,7 +78,6 @@ pub struct RegistrationGrant {
 }
 
 impl RegistrationAuthorization {
-    #[must_use]
     pub const fn connection(&self) -> ConnectionRef {
         match self {
             Self::Granted(grant) => grant.request.connection,

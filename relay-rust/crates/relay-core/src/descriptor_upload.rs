@@ -39,7 +39,6 @@ impl<'a> DescriptorUpload<'a> {
     }
 
     /// Returns the uploaded sealed-object bytes.
-    #[must_use]
     pub const fn object(&self) -> &'a [u8] {
         self.object
     }
@@ -64,13 +63,11 @@ impl<'a> AuthorizedDescriptor<'a> {
     }
 
     /// Returns the registration this descriptor was committed by.
-    #[must_use]
     pub const fn registration(&self) -> &FreshRegistration {
         &self.registration
     }
 
     /// Returns the exact bytes to deliver to joining receivers.
-    #[must_use]
     pub const fn object(&self) -> &'a [u8] {
         self.object
     }

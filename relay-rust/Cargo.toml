@@ -15,5 +15,10 @@ unsafe_code = "forbid"
 all = { level = "deny", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
+# `#[must_use]` is reserved for obligation types (host actions, effects) where
+# dropping the value silently loses work the host must perform. Auto-marking
+# every value-returning getter adds a line of noise per accessor without
+# catching a realistic mistake, so the pedantic candidate lint stays off.
+must_use_candidate = "allow"
 cognitive_complexity = "deny"
 too_many_lines = "deny"

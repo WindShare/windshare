@@ -51,7 +51,6 @@ pub enum Responsibility<'a> {
 }
 
 impl<'a> Restore<'a> {
-    #[must_use]
     pub const fn restarted(record: Option<Record>, responsibility: Responsibility<'a>) -> Self {
         Self {
             authority: Authority::Known(record),

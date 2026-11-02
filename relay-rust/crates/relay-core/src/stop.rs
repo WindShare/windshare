@@ -55,25 +55,21 @@ impl StopInit {
     }
 
     /// Returns the share route whose key hash the proof must match.
-    #[must_use]
     pub const fn route(&self) -> ShareRoute {
         self.route
     }
 
     /// Returns the content instance to retire.
-    #[must_use]
     pub const fn share_instance(&self) -> ShareInstance {
         self.share_instance
     }
 
     /// Returns the relay the sender addressed.
-    #[must_use]
     pub const fn relay(&self) -> RelayIdentity {
         self.relay
     }
 
     /// Returns the identifier STOPPED must echo.
-    #[must_use]
     pub const fn stop_id(&self) -> StopId {
         self.stop_id
     }
@@ -113,7 +109,6 @@ impl StopProof {
     }
 
     /// Returns the claimed sender key and signature.
-    #[must_use]
     pub const fn sender_proof(&self) -> &SenderProof {
         &self.proof
     }
@@ -133,18 +128,15 @@ impl Stopped {
     pub const ENCODED_BYTES: usize = 24;
 
     /// Acknowledges the STOP request that carried `stop_id`.
-    #[must_use]
     pub const fn new(stop_id: StopId) -> Self {
         Self { stop_id }
     }
 
-    #[must_use]
     pub const fn stop_id(self) -> StopId {
         self.stop_id
     }
 
     /// Encodes the confirmation sent to the sender.
-    #[must_use]
     pub fn encode(&self) -> [u8; Self::ENCODED_BYTES] {
         let mut frame = Writer::with_header(STOPPED_MAGIC, 0);
         frame.put(self.stop_id.as_bytes());
@@ -200,7 +192,6 @@ pub struct StopAuthority {
 
 impl StopAuthority {
     /// Returns the authenticated STOP request.
-    #[must_use]
     pub const fn init(&self) -> &StopInit {
         &self.init
     }

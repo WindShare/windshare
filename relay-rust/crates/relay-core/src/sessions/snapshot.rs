@@ -54,25 +54,21 @@ impl SessionKey {
 
 impl SessionSnapshot {
     /// The admission this snapshot claims.
-    #[must_use]
     pub const fn key(&self) -> SessionKey {
         self.key
     }
 
     /// The recorded phase, which is never `Retired`.
-    #[must_use]
     pub const fn phase(&self) -> Phase {
         self.stage.phase()
     }
 
     /// The original provisional deadline, which restoration never extends.
-    #[must_use]
     pub const fn deadline(&self) -> Option<UnixMillis> {
         self.stage.deadline()
     }
 
     /// Encodes the bytes a host records, at most [`MAX_SNAPSHOT_BYTES`].
-    #[must_use]
     pub fn encode(&self) -> EncodedSnapshot {
         let (kind, deadline) = match self.stage {
             Stage::AwaitingReceiver { deadline } => (AWAITING_RECEIVER, Some(deadline)),
@@ -135,7 +131,6 @@ pub struct EncodedSnapshot(Writer<MAX_SNAPSHOT_BYTES>);
 
 impl EncodedSnapshot {
     /// Returns the bytes to record.
-    #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         self.0.written()
     }

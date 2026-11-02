@@ -129,12 +129,10 @@ pub struct WorkId {
 }
 
 impl WorkId {
-    #[must_use]
     pub const fn incarnation(self) -> Incarnation {
         self.incarnation
     }
 
-    #[must_use]
     pub const fn sequence(self) -> u64 {
         self.sequence
     }
@@ -211,7 +209,7 @@ pub enum Control {
 
 /// Outputs are ordered within a step. Independent connections may execute in parallel.
 #[derive(Debug, Default)]
-#[must_use]
+#[must_use = "execute every output and honor the deadline before the next input"]
 pub struct RelayStep {
     pub outputs: Vec<Output>,
     pub deadline: Option<UnixMillis>,

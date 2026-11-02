@@ -39,7 +39,6 @@ impl SenderPublicKey {
 
     /// Returns an independent copy for identity binding without mutable access
     /// to the retained verification key.
-    #[must_use]
     pub fn to_bytes(&self) -> [u8; PUBLIC_KEY_LENGTH] {
         self.key.to_bytes()
     }

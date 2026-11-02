@@ -21,7 +21,6 @@ pub enum Feedback {
 impl<O: Observer> ConnectionLedger<O> {
     /// Every route is retired and its unsubmitted queue has been discarded.
     /// Submitted occupancy may still await consumption, settlement or release.
-    #[must_use]
     pub fn queues_discarded(&self) -> bool {
         self.entries
             .iter()
@@ -188,7 +187,6 @@ impl<O: Observer> ConnectionLedger<O> {
     }
 
     /// Earliest fixed retirement deadline to combine with other engine deadlines.
-    #[must_use]
     pub fn deadline(&self) -> Option<UnixMillis> {
         if self.state != ConnectionState::Open {
             return None;
@@ -197,7 +195,6 @@ impl<O: Observer> ConnectionLedger<O> {
     }
 
     /// A pending close obligation survives feedback until actual closure is confirmed.
-    #[must_use]
     pub const fn close_request(&self) -> Option<CloseRequest> {
         match self.state {
             ConnectionState::Closing(request) => Some(request),
@@ -206,7 +203,6 @@ impl<O: Observer> ConnectionLedger<O> {
     }
 
     /// Checks absolute cleanup time without treating other traffic as progress.
-    #[must_use]
     pub fn tick(&mut self, now: UnixMillis) -> Option<CloseRequest> {
         self.expire(now);
         self.close_request()

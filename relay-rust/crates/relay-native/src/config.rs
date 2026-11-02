@@ -80,7 +80,6 @@ impl Endpoint {
         })
     }
 
-    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.url
     }

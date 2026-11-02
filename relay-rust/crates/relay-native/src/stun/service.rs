@@ -73,7 +73,6 @@ impl Service {
         })
     }
 
-    #[must_use]
     pub fn udp_addresses(&self) -> Vec<SocketAddr> {
         self.listeners
             .iter()
@@ -81,7 +80,6 @@ impl Service {
             .collect()
     }
 
-    #[must_use]
     pub fn admin_address(&self) -> Option<SocketAddr> {
         self.admin.as_ref().map(|(_, address)| *address)
     }

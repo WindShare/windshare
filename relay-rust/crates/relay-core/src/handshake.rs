@@ -66,7 +66,6 @@ impl Initiation {
         }
     }
 
-    #[must_use]
     pub const fn uses_business_capacity(&self) -> bool {
         matches!(self, Self::Register(_) | Self::Join(_))
     }
@@ -251,7 +250,6 @@ impl RegistrationAdmission {
 
 impl ControlHandshake {
     /// Starts the handshake of a connection `relay` accepted at `now`.
-    #[must_use]
     pub fn open(relay: RelayIdentity, connection: ConnectionRef, now: UnixMillis) -> Self {
         Self {
             relay,
@@ -264,7 +262,6 @@ impl ControlHandshake {
     }
 
     /// Returns what the handshake is waiting for.
-    #[must_use]
     pub const fn phase(&self) -> Phase {
         let Progress::Pending { awaiting, .. } = &self.progress else {
             return Phase::Finished;
@@ -281,7 +278,6 @@ impl ControlHandshake {
 
     /// Returns the absolute instant at which the current phase expires, or
     /// `None` once the handshake finished.
-    #[must_use]
     pub const fn deadline(&self) -> Option<UnixMillis> {
         match &self.progress {
             Progress::Pending { deadline, .. } => Some(*deadline),
@@ -295,7 +291,6 @@ impl ControlHandshake {
     /// Hosts call this from their timer or alarm. [`Self::receive`] and
     /// [`Self::admit`] check the deadline themselves, so a host that wakes late
     /// never acts on an expired phase.
-    #[must_use]
     pub fn expire(&mut self, now: UnixMillis) -> bool {
         match self.progress {
             Progress::Pending { deadline, .. } if now >= deadline => {

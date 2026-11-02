@@ -36,17 +36,14 @@ impl DeliveryConsumed {
         DeliveryTotals::decode(encoded, Self::MAGIC).map(Self)
     }
 
-    #[must_use]
     pub fn encode(self) -> [u8; FRAME_BYTES] {
         self.0.encode(Self::MAGIC)
     }
 
-    #[must_use]
     pub const fn session(self) -> RelaySessionId {
         self.0.session
     }
 
-    #[must_use]
     pub const fn total(self) -> Counts {
         self.0.total
     }

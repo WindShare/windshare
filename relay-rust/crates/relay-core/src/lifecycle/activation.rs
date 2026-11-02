@@ -18,31 +18,26 @@ pub struct OwnershipCommit {
 }
 
 impl OwnershipCommit {
-    #[must_use]
     pub const fn id(self) -> OperationId {
         self.id
     }
 
-    #[must_use]
     pub const fn record(self) -> Record {
         Record::Published(self.route)
     }
 
     /// The complete owner stored atomically with a fresh descriptor.
-    #[must_use]
     pub const fn ownership(self) -> OwnedRoute {
         self.route
     }
 
     /// The original handshake budget also bounds the final durable confirmation.
-    #[must_use]
     pub const fn deadline(self) -> UnixMillis {
         self.deadline
     }
 
     /// Close this exact former owner after the write, even if STOP or a
     /// disconnect has since superseded the pending activation.
-    #[must_use]
     pub const fn replaced(self) -> Option<ConnectionRef> {
         self.replaced
     }

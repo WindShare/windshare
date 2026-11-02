@@ -16,7 +16,6 @@ impl RetryAfter {
     pub const IMMEDIATE: Self = Self(0);
 
     /// Returns `None` beyond [`Self::MAX_MILLISECONDS`].
-    #[must_use]
     pub const fn from_millis(milliseconds: u32) -> Option<Self> {
         if milliseconds > Self::MAX_MILLISECONDS {
             return None;
@@ -94,7 +93,6 @@ impl ErrorFrame {
     }
 
     /// Encodes the refusal sent to the client.
-    #[must_use]
     pub fn encode(self) -> [u8; Self::ENCODED_BYTES] {
         // WS2E has a six-byte header: its code occupies the two bytes other
         // control frames reserve, leaving only byte 5 reserved.

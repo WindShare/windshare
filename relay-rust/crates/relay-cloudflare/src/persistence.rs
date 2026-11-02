@@ -22,7 +22,6 @@ pub struct Image {
 }
 
 impl Image {
-    #[must_use]
     pub fn new(route: &Route) -> Self {
         Self {
             format: LIFECYCLE_SCHEMA,

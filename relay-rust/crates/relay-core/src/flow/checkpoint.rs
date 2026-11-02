@@ -26,7 +26,6 @@ pub enum CheckpointError {
 }
 
 impl LedgerCheckpoint {
-    #[must_use]
     pub const fn destination(&self) -> ConnectionRef {
         self.destination
     }

@@ -175,37 +175,31 @@ impl<O: Observer> ConnectionLedger<O> {
     }
 
     /// Connection-wide usage, including retired but unsettled flows.
-    #[must_use]
     pub const fn usage(&self) -> Usage {
         self.usage
     }
 
     /// Retained flows and allocated slots, separate from payload capacity.
-    #[must_use]
     pub const fn metadata_usage(&self) -> MetadataUsage {
         self.entries.usage()
     }
 
     /// Occupied part of the protected startup pool.
-    #[must_use]
     pub const fn startup_used(&self) -> Counts {
         self.startup_used
     }
 
     /// Ordinary occupancy cannot borrow from the startup pool.
-    #[must_use]
     pub fn regular_used(&self) -> Counts {
         self.usage.total().sub(self.startup_used)
     }
 
     /// Read-only counters for a still-retained exact direction.
-    #[must_use]
     pub fn snapshot(&self, flow: FlowKey) -> Option<Snapshot> {
         self.delivery(flow).ok().map(Snapshot::from)
     }
 
     /// Allows hosts/tests to inspect their own tracing backend.
-    #[must_use]
     pub const fn observer(&self) -> &O {
         &self.observer
     }

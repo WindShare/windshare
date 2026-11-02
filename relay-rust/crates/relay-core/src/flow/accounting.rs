@@ -18,7 +18,6 @@ impl Counts {
     pub const ZERO: Self = Self::new(0, 0);
 
     /// The dimensions are independent, including frame-only and byte-only grants.
-    #[must_use]
     pub const fn new(frames: u64, encoded_bytes: u64) -> Self {
         Self {
             frames,
@@ -91,7 +90,6 @@ pub struct Usage {
 
 impl Usage {
     /// Total outstanding responsibility of the destination connection.
-    #[must_use]
     pub fn total(self) -> Counts {
         self.granted.add(self.received).add(self.submitted)
     }
@@ -164,19 +162,16 @@ impl Limits {
     }
 
     /// Total bound, including startup reservations and all three occupancy stages.
-    #[must_use]
     pub const fn total(self) -> Counts {
         self.total
     }
 
     /// Capacity inaccessible to ordinary replenishment.
-    #[must_use]
     pub const fn startup_reserve(self) -> Counts {
         self.startup_reserve
     }
 
     /// Exactly one initial grant per flow; it does not wait for the first frame.
-    #[must_use]
     pub const fn startup_grant(self) -> Counts {
         self.startup_grant
     }

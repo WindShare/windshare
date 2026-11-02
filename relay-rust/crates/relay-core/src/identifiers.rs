@@ -18,13 +18,11 @@ macro_rules! nonzero_identifier {
         impl $name {
             /// Accepts any value except all zeros, which the wire contract
             /// reserves for an absent identity and never authenticates.
-            #[must_use]
             pub fn new(bytes: [u8; $width]) -> Option<Self> {
                 (bytes != [0; $width]).then_some(Self(bytes))
             }
 
             /// Returns the encoded identity.
-            #[must_use]
             pub const fn as_bytes(&self) -> &[u8; $width] {
                 &self.0
             }
@@ -40,13 +38,11 @@ macro_rules! digest_identifier {
 
         impl $name {
             /// Accepts every value: digests have no reserved encoding.
-            #[must_use]
             pub const fn new(bytes: [u8; $width]) -> Self {
                 Self(bytes)
             }
 
             /// Returns the encoded digest.
-            #[must_use]
             pub const fn as_bytes(&self) -> &[u8; $width] {
                 &self.0
             }
@@ -109,7 +105,6 @@ digest_identifier!(
 
 impl PkHash {
     /// Derives the key commitment that share links and route identities carry.
-    #[must_use]
     pub fn of(sender: &SenderPublicKey) -> Self {
         Self(sha256_prefix(&[SENDER_KEY_DOMAIN, &sender.to_bytes()]))
     }
@@ -117,7 +112,6 @@ impl PkHash {
 
 impl DescriptorDigest {
     /// Commits to exact descriptor bytes without interpreting the sealed object.
-    #[must_use]
     pub fn of(descriptor: &[u8]) -> Self {
         Self(sha256_prefix(&[descriptor]))
     }
@@ -135,7 +129,6 @@ pub struct ShareRoute {
 
 impl ShareRoute {
     /// Pairs `share_id` with `pk_hash` only when the ID derives from the hash.
-    #[must_use]
     pub fn new(share_id: ShareId, pk_hash: PkHash) -> Option<Self> {
         let derived: [u8; 12] = sha256_prefix(&[SHARE_ID_DOMAIN, pk_hash.as_bytes()]);
         (derived == share_id.0).then_some(Self { share_id, pk_hash })
@@ -148,13 +141,11 @@ impl ShareRoute {
     }
 
     /// Returns the routing identity receivers join with.
-    #[must_use]
     pub const fn share_id(&self) -> ShareId {
         self.share_id
     }
 
     /// Returns the key commitment every sender proof must match.
-    #[must_use]
     pub const fn pk_hash(&self) -> PkHash {
         self.pk_hash
     }
@@ -173,7 +164,6 @@ impl ResumeToken {
     }
 
     /// Returns the commitment a resume registration must already carry.
-    #[must_use]
     pub fn hash(&self) -> ResumeTokenHash {
         ResumeTokenHash(sha256_prefix(&[&self.0]))
     }

@@ -55,7 +55,6 @@ impl CheckpointManifest {
         self.reservations.iter().map(|entry| entry.connection)
     }
 
-    #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
         out.push(MANIFEST_FORMAT);

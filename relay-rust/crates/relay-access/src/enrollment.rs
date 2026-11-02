@@ -131,7 +131,6 @@ impl Enrollment {
         Ok(credential)
     }
 
-    #[must_use]
     pub const fn incomplete_credential(&self) -> Option<[u8; 16]> {
         match self.state {
             EnrollmentState::Approved { credential } | EnrollmentState::Claimed { credential } => {

@@ -89,7 +89,6 @@ impl Route {
         })
     }
 
-    #[must_use]
     pub fn object_name(&self) -> String {
         URL_SAFE_NO_PAD.encode(self.share.as_bytes())
     }

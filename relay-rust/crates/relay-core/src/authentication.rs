@@ -34,7 +34,6 @@ impl SenderProof {
     }
 
     /// Returns the key the sender claims to hold.
-    #[must_use]
     pub const fn sender(&self) -> &SenderPublicKey {
         &self.sender
     }

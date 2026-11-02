@@ -13,7 +13,6 @@ use crate::{
 impl<O: Observer> ShareRelay<O> {
     /// Current responsibility for this exact generation, including detached sockets.
     /// Hosts use this for diagnostics; it does not grant forwarding or release authority.
-    #[must_use]
     pub fn delivery_usage(&self, connection: ConnectionRef) -> Option<crate::flow::Usage> {
         self.generations
             .ledger(&connection)
@@ -24,7 +23,6 @@ impl<O: Observer> ShareRelay<O> {
     /// Grants, queued payloads and unconsumed submissions all occupy the window;
     /// duplicate feedback therefore cannot create additional credit. Hosts must
     /// still reserve this offer through `Input::Grant`, which rechecks authority.
-    #[must_use]
     pub fn delivery_window(&self, flow: FlowKey, target: Counts) -> Option<Counts> {
         self.generations
             .ledger(&flow.destination())?

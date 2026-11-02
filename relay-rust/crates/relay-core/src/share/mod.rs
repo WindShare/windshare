@@ -181,12 +181,10 @@ impl<O: Observer> ShareRelay<O> {
         }
     }
 
-    #[must_use]
     pub fn deadline(&self) -> Option<crate::clock::UnixMillis> {
         self.next_deadline().map(|(at, _)| at)
     }
 
-    #[must_use]
     pub const fn observer(&self) -> &O {
         &self.observer
     }

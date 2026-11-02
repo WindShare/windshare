@@ -99,7 +99,6 @@ impl<O: Observer> Runtime<O> {
         self.flush(host)
     }
 
-    #[must_use]
     pub fn deadline(&self) -> Option<UnixMillis> {
         self.relay.deadline()
     }

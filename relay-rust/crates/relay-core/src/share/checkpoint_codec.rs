@@ -25,7 +25,6 @@ const CONNECTION_HEADER_BYTES: usize =
     1 + IDENTITY_BYTES + ConnectionRef::ENCODED_BYTES + 2 + 2 * LENGTH_BYTES;
 
 impl ConnectionCheckpoint {
-    #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
         out.push(CONNECTION_FORMAT);
@@ -67,7 +66,6 @@ impl ConnectionCheckpoint {
     /// Maximum binary size for this configured retained-flow bound.
     /// A handshake cannot own flows/admissions; established sockets may retain
     /// the full sender fanout, including retired delivery obligations.
-    #[must_use]
     pub fn maximum_bytes(retained_flow_limit: usize) -> Option<usize> {
         let established = LedgerCheckpoint::maximum_bytes(retained_flow_limit)?
             .checked_add(
@@ -154,7 +152,6 @@ impl ConnectionCheckpoint {
 }
 
 impl Checkpoint {
-    #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
         out.push(FORMAT);

@@ -50,30 +50,25 @@ impl JoinRequest {
     }
 
     /// Relay of the receiving handshake.
-    #[must_use]
     pub const fn relay(&self) -> RelayIdentity {
         self.relay
     }
 
     /// Exact receiver lifetime.
-    #[must_use]
     pub const fn connection(&self) -> ConnectionRef {
         self.connection
     }
 
     /// Requested share.
-    #[must_use]
     pub const fn share(&self) -> ShareId {
         self.share
     }
 
-    #[must_use]
     pub const fn receive_capacity(&self) -> ReceiveCapacity {
         self.receive_capacity
     }
 
     /// Absolute budget from receiving JOIN, including host preparation.
-    #[must_use]
     pub const fn deadline(&self) -> UnixMillis {
         self.deadline
     }
@@ -89,7 +84,6 @@ pub struct Join {
 impl Join {
     pub const ENCODED_BYTES: usize = 20 + ReceiveCapacity::ENCODED_BYTES;
 
-    #[must_use]
     pub fn encode(&self) -> [u8; Self::ENCODED_BYTES] {
         let mut out = Writer::with_header(JOIN_MAGIC, 0);
         out.put(self.share_id.as_bytes());
@@ -115,12 +109,10 @@ impl Join {
     }
 
     /// Returns the share the receiver asks to join.
-    #[must_use]
     pub const fn share_id(&self) -> ShareId {
         self.share_id
     }
 
-    #[must_use]
     pub const fn receive_capacity(&self) -> ReceiveCapacity {
         self.receive_capacity
     }

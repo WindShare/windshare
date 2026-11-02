@@ -16,13 +16,11 @@ impl Limits {
 }
 
 impl<O: Observer> ShareRelay<O> {
-    #[must_use]
     pub fn connection_usage(&self) -> ConnectionUsage {
         self.generations.usage()
     }
 
     /// None means exact delivery accounting is available or no responsibility remains.
-    #[must_use]
     pub fn unavailable_reservation(&self, connection: ConnectionRef) -> Option<Counts> {
         self.generations.unavailable_reservation(connection)
     }
