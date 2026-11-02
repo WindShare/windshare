@@ -1,5 +1,6 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
+mod artwork;
 mod commands;
 mod desktop;
 mod flow_state;
@@ -33,22 +34,8 @@ impl AssetSource for DesktopAssets {
             "brand/spirit.svg" => {
                 return Ok(Some(Cow::Borrowed(include_bytes!("../assets/spirit.svg"))));
             }
-            "brand/spirit-happy.svg" => {
-                return Ok(Some(Cow::Borrowed(include_bytes!(
-                    "../assets/spirit-happy.svg"
-                ))));
-            }
             "brand/breeze.svg" => {
                 return Ok(Some(Cow::Borrowed(include_bytes!("../assets/breeze.svg"))));
-            }
-            "brand/paper.svg" => {
-                return Ok(Some(Cow::Borrowed(include_bytes!("../assets/paper.svg"))));
-            }
-            "brand/photo.svg" => {
-                return Ok(Some(Cow::Borrowed(include_bytes!("../assets/photo.svg"))));
-            }
-            "brand/folder.svg" => {
-                return Ok(Some(Cow::Borrowed(include_bytes!("../assets/folder.svg"))));
             }
             _ => {}
         }
@@ -79,6 +66,7 @@ fn main() {
         .with_assets(DesktopAssets)
         .run(move |cx| {
             windshare_ui::init(cx);
+            artwork::Artwork::preload();
             let dimensions = if compact {
                 size(px(960.), px(760.))
             } else {

@@ -15,11 +15,13 @@ pub fn vector_sprite(
     svg()
         .path(path)
         .absolute()
-        .left(center.x - native_size.width / 2.)
-        .top(center.y - native_size.height / 2.)
+        .left_0()
+        .top_0()
         .w(native_size.width)
         .h(native_size.height)
-        .with_transformation(Transformation::scale(size(scale, scale)))
+        .with_transformation(Transformation::scale(size(scale, scale)).with_translation(
+            center - gpui::point(native_size.width / 2., native_size.height / 2.),
+        ))
 }
 
 pub fn row() -> Div {
