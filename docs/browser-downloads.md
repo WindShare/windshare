@@ -25,6 +25,8 @@ WindShare recommends a save method based on browser capabilities, available stor
 
 Folder downloads try original names first. If the destination rejects a name, WindShare saves it under a compatible name and keeps a name-restoration report beside the result. The Windows restoration script restores supported names without overwriting existing files; unsupported names retain their compatible files and report. ZIP entries retain their catalog names, which the extraction destination may not support.
 
+ZIP entry modified times are written in the receiving browser's local time zone, because ZIP date fields have no time zone and extractors read them as local time. They have 2-second precision and are clamped to 1980–2107.
+
 ## Progress & Details
 
 - **Live indicators**: Displays received/reused bytes, completed or saved files, and transfer speed. Exact totals and percentages depend on completed item discovery; remaining time also requires a sufficiently stable transfer rate.
