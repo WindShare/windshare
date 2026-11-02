@@ -1,0 +1,17 @@
+[package]
+name = "windshare-desktop"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "windshare"
+path = "src/main.rs"
+
+[dependencies]
+gpui.workspace = true
+gpui_platform.workspace = true
+windshare-ui.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

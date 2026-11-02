@@ -1,0 +1,23 @@
+[workspace]
+members = ["crates/windshare-ui", "crates/windshare-desktop"]
+default-members = ["crates/windshare-desktop"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[workspace.dependencies]
+# Match the exact upstream snapshot used by gpui-kit, without its component layer.
+gpui = { package = "gpui-pre", version = "=0.3.10" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+anyhow = "1"
+unicode-segmentation = "1.12"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+windshare-ui = { path = "crates/windshare-ui" }
+
+[profile.dev]
+debug = 0
+incremental = true
