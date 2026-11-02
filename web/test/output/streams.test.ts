@@ -3,7 +3,7 @@ import {
   Uint8ArrayWriter,
   ZipReader,
 } from '@zip.js/zip.js'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
@@ -77,6 +77,28 @@ describe('planned ZIP stream output', () => {
         exactArchiveBytes: plan.exactArchiveBytes,
       },
     ])
+  })
+
+  it('lets an independent reader in the receiver time zone recover the source modified time', async () => {
+    vi.stubEnv('TZ', 'Asia/Singapore')
+    const modified = Date.UTC(2026, 10, 2, 1, 30, 0)
+    const plan = await preparedLayout([
+      { kind: 'directory', path: ['tree'], modifiedTimeMilliseconds: BigInt(modified) },
+    ])
+    const output = recordingStream()
+    const archive = new StreamingZipArchiveWriter(
+      output.stream,
+      new MemoryZipCentralDirectorySpool(),
+      { kind: 'sealed', plan },
+    )
+
+    await archive.addDirectory(entry(plan, 0, 'directory'))
+    await archive.close(plan, ACTIVE_SIGNAL)
+
+    const reader = new ZipReader(new Uint8ArrayReader(output.bytes()))
+    const [directory] = await reader.getEntries()
+    expect(directory?.lastModDate.getTime()).toBe(modified)
+    await reader.close()
   })
 
   it('accepts progressive close only from the completed discovery ledger', async () => {

@@ -195,5 +195,6 @@ function dosDateTimeMilliseconds(entry: NormalizedZipEntry): bigint {
   const day = entry.dosDate & 0x1f
   const month = (entry.dosDate >>> 5) & 0x0f
   const year = 1980 + ((entry.dosDate >>> 9) & 0x7f)
-  return BigInt(Date.UTC(year, month - 1, day, hour, minute, second))
+  // Inverse of the ZIP policy's local wall-clock encoding.
+  return BigInt(new Date(year, month - 1, day, hour, minute, second).getTime())
 }

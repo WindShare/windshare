@@ -30,8 +30,8 @@ const ZIP64_EXTRA_HEADER_BYTES = 4n
 const ZIP64_EXTRA_VALUE_BYTES = 8n
 export const ZIP_CLASSIC_END_BYTES = 22n
 export const ZIP64_END_BYTES = 76n
-const ZIP_MINIMUM_DATE_MILLISECONDS = BigInt(Date.UTC(1980, 0, 1, 0, 0, 0))
-const ZIP_MAXIMUM_DATE_MILLISECONDS = BigInt(Date.UTC(2107, 11, 31, 23, 59, 58))
+const ZIP_DOS_MINIMUM_YEAR = 1980
+const ZIP_DOS_MAXIMUM_YEAR = 2107
 const TEXT_ENCODER = new TextEncoder()
 const EMPTY_ZIP_EXTRA_FIELDS = new Uint8Array(0)
 
@@ -522,23 +522,28 @@ export const ZIP_ENCODING_POLICY_V1: ZipEncodingPolicyV1 = Object.freeze({
   requireSpoolBudget: requireZipSpoolBudget,
 })
 
+// MS-DOS fields carry no zone, and extractors (Windows Explorer, Archive Utility, unzip,
+// 7-Zip) read them as the extracting machine's local time. Encoding the receiver's local
+// wall clock therefore restores the source instant on the machine that saved the ZIP.
 function normalizeDosDateTime(
   modifiedTimeMilliseconds: bigint | undefined,
 ): { readonly dosTime: number; readonly dosDate: number } {
   if (modifiedTimeMilliseconds !== undefined && typeof modifiedTimeMilliseconds !== 'bigint') {
     throw new TypeError('ZIP modified time must be an integer millisecond value')
   }
-  let clamped = modifiedTimeMilliseconds ?? ZIP_MINIMUM_DATE_MILLISECONDS
-  if (clamped < ZIP_MINIMUM_DATE_MILLISECONDS) clamped = ZIP_MINIMUM_DATE_MILLISECONDS
-  if (clamped > ZIP_MAXIMUM_DATE_MILLISECONDS) clamped = ZIP_MAXIMUM_DATE_MILLISECONDS
+  const minimum = BigInt(new Date(ZIP_DOS_MINIMUM_YEAR, 0, 1, 0, 0, 0).getTime())
+  const maximum = BigInt(new Date(ZIP_DOS_MAXIMUM_YEAR, 11, 31, 23, 59, 58).getTime())
+  let clamped = modifiedTimeMilliseconds ?? minimum
+  if (clamped < minimum) clamped = minimum
+  if (clamped > maximum) clamped = maximum
   const value = new Date(Number(clamped))
   return {
-    dosTime: (value.getUTCHours() << 11) |
-      (value.getUTCMinutes() << 5) |
-      (value.getUTCSeconds() >>> 1),
-    dosDate: ((value.getUTCFullYear() - 1980) << 9) |
-      ((value.getUTCMonth() + 1) << 5) |
-      value.getUTCDate(),
+    dosTime: (value.getHours() << 11) |
+      (value.getMinutes() << 5) |
+      (value.getSeconds() >>> 1),
+    dosDate: ((value.getFullYear() - ZIP_DOS_MINIMUM_YEAR) << 9) |
+      ((value.getMonth() + 1) << 5) |
+      value.getDate(),
   }
 }
 
