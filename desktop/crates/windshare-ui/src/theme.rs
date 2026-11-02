@@ -80,6 +80,9 @@ impl Theme {
     pub fn sidebar(self) -> Hsla {
         self.color(0xf0_f5_ef, 0x18_22_1c)
     }
+    pub fn navigation_hover(self) -> Hsla {
+        self.color(0xe4_e8_e5, 0x2b_34_30)
+    }
     pub fn inset(self) -> Hsla {
         self.color(0xef_f2_ec, 0x11_19_15)
     }
@@ -140,6 +143,13 @@ pub enum Tone {
 }
 
 impl Tone {
+    pub fn navigation_surface(self, theme: Theme) -> Hsla {
+        match self {
+            // Mint needs more separation from the green sidebar than other tones.
+            Self::Mint => theme.color(0xd2_ea_dc, 0x2c_46_36),
+            _ => self.surface(theme),
+        }
+    }
     pub fn surface(self, theme: Theme) -> Hsla {
         let (light, dark) = match self {
             Self::Mint => (0xe9_f3_eb, 0x28_3b_2f),

@@ -41,6 +41,12 @@ pub struct SpiritScene {
     reduced_motion: bool,
 }
 
+impl SpiritScene {
+    pub fn body_center_offset_y(scale: f32) -> f32 {
+        (SPIRIT_TOP + SPIRIT_SIZE / 2. - SCENE_HEIGHT / 2.) * scale
+    }
+}
+
 pub fn spirit_scene(
     id: impl Into<ElementId>,
     mood: SpiritMood,

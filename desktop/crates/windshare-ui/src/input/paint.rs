@@ -42,6 +42,8 @@ pub(super) fn text_canvas(input: Entity<Input>) -> impl IntoElement {
         move |bounds, (line, scroll), window, cx| {
             let theme = Theme::from(window.appearance());
             let field = input.read(cx);
+            let accent_color = field.accent_color(theme);
+            let selection_color = field.selection_color(theme);
             let selection = field.selection();
             let focused = field.focus.is_focused(window);
             let cursor = field.cursor;
@@ -58,7 +60,7 @@ pub(super) fn text_canvas(input: Entity<Input>) -> impl IntoElement {
                         point(origin.x + line.x_for_index(selection.start), bounds.top()),
                         point(origin.x + line.x_for_index(selection.end), bounds.bottom()),
                     ),
-                    theme.selection(),
+                    selection_color,
                 ));
             }
             let _ = line.paint(
@@ -75,7 +77,7 @@ pub(super) fn text_canvas(input: Entity<Input>) -> impl IntoElement {
                         point(origin.x + line.x_for_index(cursor), bounds.top() + px(2.)),
                         size(px(1.5), px(22.)),
                     ),
-                    theme.accent_text(),
+                    accent_color,
                 ));
             }
             if let Some(marked) = &marked {
@@ -87,7 +89,7 @@ pub(super) fn text_canvas(input: Entity<Input>) -> impl IntoElement {
                         ),
                         point(origin.x + line.x_for_index(marked.end), bounds.bottom()),
                     ),
-                    theme.accent_text(),
+                    accent_color,
                 ));
             }
             input.update(cx, |field, _| {

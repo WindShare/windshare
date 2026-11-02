@@ -1,7 +1,7 @@
 mod editing;
 mod paint;
 
-use crate::{INPUT_FONT_SIZE, INPUT_LINE_HEIGHT, Theme};
+use crate::{INPUT_FONT_SIZE, INPUT_LINE_HEIGHT, Theme, Tone};
 use gpui::{
     App, Bounds, ClipboardItem, ElementInputHandler, Entity, EntityInputHandler, EventEmitter,
     FocusHandle, Focusable, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels,
@@ -17,10 +17,13 @@ pub enum InputEvent {
     Submit,
 }
 
+#[must_use]
 pub struct Input {
     focus: FocusHandle,
     value: String,
+    label: SharedString,
     placeholder: SharedString,
+    accent: Option<Tone>,
     anchor: usize,
     cursor: usize,
     marked: Option<Range<usize>>,
@@ -38,11 +41,14 @@ impl Focusable for Input {
 }
 
 impl Input {
-    pub fn new(placeholder: impl Into<SharedString>, cx: &mut Context<Self>) -> Self {
+    pub fn new(label: impl Into<SharedString>, cx: &mut Context<Self>) -> Self {
         Self {
             focus: cx.focus_handle(),
             value: String::new(),
-            placeholder: placeholder.into(),
+            // The accessible name remains available when the field needs no hint.
+            label: label.into(),
+            placeholder: SharedString::default(),
+            accent: None,
             anchor: 0,
             cursor: 0,
             marked: None,
@@ -51,6 +57,24 @@ impl Input {
             scroll: px(0.),
             selecting: false,
         }
+    }
+    pub fn placeholder(mut self, text: impl Into<SharedString>) -> Self {
+        self.placeholder = text.into();
+        self
+    }
+    pub const fn accent(mut self, tone: Tone) -> Self {
+        self.accent = Some(tone);
+        self
+    }
+    fn accent_color(&self, theme: Theme) -> gpui::Hsla {
+        self.accent
+            .map_or_else(|| theme.accent_text(), |tone| tone.text(theme))
+    }
+    fn selection_color(&self, theme: Theme) -> gpui::Hsla {
+        self.accent.map_or_else(
+            || theme.selection(),
+            |tone| tone.accent(theme).opacity(0.35),
+        )
     }
     pub fn value(&self) -> &str {
         &self.value
@@ -195,10 +219,11 @@ impl Input {
 impl Render for Input {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::from(window.appearance());
+        let focus_color = self.accent_color(theme);
         div()
             .id("input")
             .role(Role::TextInput)
-            .aria_label(self.placeholder.clone())
+            .aria_label(self.label.clone())
             .aria_placeholder(self.placeholder.clone())
             .aria_value(self.value.clone())
             .w_full()
@@ -216,7 +241,7 @@ impl Render for Input {
             .track_focus(&self.focus)
             .tab_index(0)
             .cursor_text()
-            .focus(|s| s.border_color(theme.focus_ring()))
+            .focus(|s| s.border_color(focus_color))
             .overflow_hidden()
             .on_key_down(cx.listener(Self::key))
             .on_mouse_down(
