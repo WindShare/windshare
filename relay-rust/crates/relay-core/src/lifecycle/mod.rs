@@ -173,7 +173,6 @@ impl<O: Observer> ShareLifecycle<O> {
     }
 
     /// Returns lifecycle visibility without exposing mutable state.
-    #[must_use]
     pub const fn phase(&self) -> Phase {
         match self.state {
             State::Vacant => Phase::Vacant,
@@ -188,7 +187,6 @@ impl<O: Observer> ShareLifecycle<O> {
 
     /// Returns the next absolute deadline. Expiry never cancels an outstanding
     /// durable write; ordered grace/STOP work follows its exact confirmation.
-    #[must_use]
     pub const fn deadline(&self) -> Option<UnixMillis> {
         match self.state {
             State::Reserved(pending) => Some(pending.deadline),

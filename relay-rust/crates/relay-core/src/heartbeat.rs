@@ -21,22 +21,18 @@ pub struct ConnectionProbeAck(NonZeroU64);
 impl ConnectionProbe {
     pub const MAGIC: [u8; 4] = *b"WS2H";
 
-    #[must_use]
     pub const fn new(nonce: NonZeroU64) -> Self {
         Self(nonce)
     }
 
-    #[must_use]
     pub const fn nonce(self) -> u64 {
         self.0.get()
     }
 
-    #[must_use]
     pub const fn acknowledgement(self) -> ConnectionProbeAck {
         ConnectionProbeAck(self.0)
     }
 
-    #[must_use]
     pub fn encode(self) -> [u8; FRAME_BYTES] {
         encode_nonce(Self::MAGIC, self.0)
     }
@@ -51,12 +47,10 @@ impl ConnectionProbe {
 impl ConnectionProbeAck {
     pub const MAGIC: [u8; 4] = *b"WS2A";
 
-    #[must_use]
     pub const fn nonce(self) -> u64 {
         self.0.get()
     }
 
-    #[must_use]
     pub fn encode(self) -> [u8; FRAME_BYTES] {
         encode_nonce(Self::MAGIC, self.0)
     }

@@ -70,13 +70,11 @@ impl OpaqueHeader {
     }
 
     /// Wire session ID for lookup and permit binding.
-    #[must_use]
     pub const fn session(self) -> RelaySessionId {
         self.session
     }
 
     /// Complete encoded size, including the routing header, for host credit accounting.
-    #[must_use]
     pub const fn encoded_bytes(self) -> usize {
         self.encoded_bytes
     }
@@ -104,7 +102,6 @@ impl SessionAdmitted {
     }
 
     /// Session the sender retained.
-    #[must_use]
     pub const fn session(self) -> RelaySessionId {
         self.session
     }

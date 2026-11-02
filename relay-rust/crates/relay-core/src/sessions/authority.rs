@@ -31,7 +31,6 @@ pub struct SessionKey {
 
 impl SessionKey {
     /// Correlates the admission and its non-reusable permit generation.
-    #[must_use]
     pub const fn admission(self) -> OperationId {
         OperationId::admission(
             self.owner,
@@ -42,43 +41,36 @@ impl SessionKey {
     }
 
     /// The exact sender ownership, not merely its socket slot.
-    #[must_use]
     pub const fn owner(self) -> OwnershipId {
         self.owner
     }
 
     /// The routing ID carried by WS2O and WS2M.
-    #[must_use]
     pub const fn wire_id(self) -> RelaySessionId {
         self.wire_id
     }
 
     /// Hosting relay.
-    #[must_use]
     pub const fn relay(self) -> RelayIdentity {
         self.owner.relay()
     }
 
     /// Share routing identity.
-    #[must_use]
     pub const fn share(self) -> ShareId {
         self.owner.share()
     }
 
     /// Published content instance.
-    #[must_use]
     pub const fn instance(self) -> ShareInstance {
         self.instance
     }
 
     /// Exact sending connection lifetime.
-    #[must_use]
     pub const fn sender(self) -> ConnectionRef {
         self.owner.connection()
     }
 
     /// Exact receiving connection lifetime.
-    #[must_use]
     pub const fn receiver(self) -> ConnectionRef {
         self.receiver
     }
@@ -133,25 +125,21 @@ impl ForwardPermit {
 
     /// Includes relay, share, session, ownership epoch, admission and both
     /// connection generations.
-    #[must_use]
     pub const fn session(self) -> SessionKey {
         self.session
     }
 
     /// Protocol version this authorization was issued for.
-    #[must_use]
     pub const fn protocol_version(self) -> u8 {
         WIRE_VERSION
     }
 
     /// Direction authorized for this session.
-    #[must_use]
     pub const fn direction(self) -> Direction {
         self.direction
     }
 
     /// Resolve this exact lifetime, never its slot alone.
-    #[must_use]
     pub const fn source(self) -> ConnectionRef {
         match self.direction {
             Direction::ToSender => self.session.receiver(),
@@ -160,7 +148,6 @@ impl ForwardPermit {
     }
 
     /// Resolve this exact lifetime, never its slot alone.
-    #[must_use]
     pub const fn destination(self) -> ConnectionRef {
         match self.direction {
             Direction::ToSender => self.session.sender(),
@@ -183,7 +170,6 @@ pub struct ValidatedForward<'a, O> {
 
 impl<O: LifecycleObserver> ValidatedForward<'_, O> {
     /// Exact route to submit while the authorities remain borrowed.
-    #[must_use]
     pub const fn permit(&self) -> ForwardPermit {
         self.permit
     }
@@ -212,13 +198,11 @@ pub struct Revocation {
 
 impl Revocation {
     /// Exact old ownership; a later resume on the same socket is different.
-    #[must_use]
     pub const fn owner(self) -> OwnershipId {
         self.owner
     }
 
     /// Why that ownership lost all forwarding authority.
-    #[must_use]
     pub const fn reason(self) -> RetirementReason {
         self.reason
     }

@@ -49,7 +49,6 @@ impl ChallengeSeed {
 
     /// Returns `None` when either value is all zeros, which the wire reserves
     /// and only a broken random source produces.
-    #[must_use]
     pub fn new(id: [u8; 16], nonce: [u8; 32]) -> Option<Self> {
         Some(Self {
             id: ChallengeId::new(id)?,
@@ -75,7 +74,6 @@ impl Challenge {
     pub const ENCODED_BYTES: usize = 64;
 
     /// Returns `None` for a zero expiry, which no client accepts.
-    #[must_use]
     pub const fn new(
         purpose: ChallengePurpose,
         id: ChallengeId,
@@ -117,26 +115,22 @@ impl Challenge {
     }
 
     /// Returns the operation this challenge may authenticate.
-    #[must_use]
     pub const fn purpose(&self) -> ChallengePurpose {
         self.purpose
     }
 
     /// Returns the first second at which proofs are no longer accepted.
-    #[must_use]
     pub const fn expires_at(&self) -> UnixSeconds {
         self.expires_at
     }
 
     /// A proof is accepted strictly before the expiry second, matching the
     /// half-open interval every client signs against.
-    #[must_use]
     pub const fn is_live_at(&self, now: UnixMillis) -> bool {
         now.0 < self.expires_at.start().0
     }
 
     /// Encodes the challenge sent to the client.
-    #[must_use]
     pub fn encode(&self) -> [u8; Self::ENCODED_BYTES] {
         let mut frame = Writer::with_header(MAGIC, self.purpose.wire());
         self.put_body(&mut frame);

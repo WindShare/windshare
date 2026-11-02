@@ -53,7 +53,6 @@ pub struct CheckpointBudget {
 
 impl CheckpointBudget {
     /// Reserve space for the host's structured serialization and own metadata.
-    #[must_use]
     pub const fn new(attachment_bytes: usize, envelope_bytes: usize) -> Option<Self> {
         match attachment_bytes.checked_sub(envelope_bytes) {
             Some(payload_bytes) if payload_bytes > 0 => Some(Self { payload_bytes }),
@@ -61,7 +60,6 @@ impl CheckpointBudget {
         }
     }
 
-    #[must_use]
     pub const fn payload_bytes(self) -> usize {
         self.payload_bytes
     }
@@ -82,7 +80,6 @@ impl CheckpointBudget {
 }
 
 impl ConnectionCheckpoint {
-    #[must_use]
     pub const fn connection(&self) -> ConnectionRef {
         self.connection
     }
@@ -179,7 +176,6 @@ impl Checkpoint {
         Ok(checkpoint)
     }
 
-    #[must_use]
     pub fn manifest(&self) -> CheckpointManifest {
         self.manifest.clone()
     }

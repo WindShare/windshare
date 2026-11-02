@@ -17,25 +17,21 @@ pub struct FlowKey {
 
 impl FlowKey {
     /// Exact relay/share/admission and both connection generations.
-    #[must_use]
     pub const fn session(self) -> SessionKey {
         self.permit.session()
     }
 
     /// This ledger accounts for only this delivery direction.
-    #[must_use]
     pub const fn direction(self) -> Direction {
         self.permit.direction()
     }
 
     /// Connection whose consumption can release this flow's submitted occupancy.
-    #[must_use]
     pub const fn destination(self) -> ConnectionRef {
         self.permit.destination()
     }
 
     /// Revalidate this route through the live session before granting or forwarding.
-    #[must_use]
     pub const fn permit(self) -> ForwardPermit {
         self.permit
     }
@@ -84,13 +80,11 @@ pub struct ReceivedFrame {
 
 impl ReceivedFrame {
     /// Keep this exact key through any asynchronous queueing.
-    #[must_use]
     pub const fn flow(&self) -> FlowKey {
         self.flow
     }
 
     /// Wire bytes that the host must retain and submit with this receipt.
-    #[must_use]
     pub const fn encoded_bytes(&self) -> u64 {
         self.encoded_bytes
     }

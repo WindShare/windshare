@@ -51,7 +51,6 @@ impl RegistrationMode {
     }
 
     /// Returns the only challenge purpose a proof in this mode may answer.
-    #[must_use]
     pub const fn challenge_purpose(self) -> ChallengePurpose {
         match self {
             Self::Fresh => ChallengePurpose::Register,
@@ -94,25 +93,21 @@ impl Registration {
     }
 
     /// Returns the share route whose key hash every proof must match.
-    #[must_use]
     pub const fn route(&self) -> ShareRoute {
         self.route
     }
 
     /// Returns the content instance the registration serves.
-    #[must_use]
     pub const fn share_instance(&self) -> ShareInstance {
         self.share_instance
     }
 
     /// Returns the digest the uploaded descriptor bytes must match.
-    #[must_use]
     pub const fn descriptor_digest(&self) -> DescriptorDigest {
         self.descriptor_digest
     }
 
     /// Returns the commitment a later resume token must hash to.
-    #[must_use]
     pub const fn resume_token_hash(&self) -> ResumeTokenHash {
         self.resume_token_hash
     }
@@ -129,7 +124,6 @@ pub struct RegisterInit {
 impl RegisterInit {
     pub const ENCODED_BYTES: usize = 116 + ReceiveCapacity::ENCODED_BYTES;
 
-    #[must_use]
     pub fn encode(&self) -> [u8; Self::ENCODED_BYTES] {
         let mut out = Writer::with_header(
             REGISTER_INIT_MAGIC,
@@ -177,19 +171,16 @@ impl RegisterInit {
     }
 
     /// Returns whether this registration is fresh or a resume.
-    #[must_use]
     pub const fn mode(&self) -> RegistrationMode {
         self.mode
     }
 
     /// Returns the facts this request asks the relay to publish or reclaim.
-    #[must_use]
     pub const fn registration(&self) -> &Registration {
         &self.registration
     }
 
     /// This connection's receive bound; it is not part of durable share ownership.
-    #[must_use]
     pub const fn receive_capacity(&self) -> ReceiveCapacity {
         self.receive_capacity
     }
@@ -234,13 +225,11 @@ impl RegisterProof {
     }
 
     /// Returns the mode the sender claims to be proving.
-    #[must_use]
     pub const fn mode(&self) -> RegistrationMode {
         self.mode
     }
 
     /// Returns the claimed sender key and signature.
-    #[must_use]
     pub const fn sender_proof(&self) -> &SenderProof {
         &self.proof
     }
@@ -270,7 +259,6 @@ impl ResumeCredential {
     }
 
     /// Returns the presented token.
-    #[must_use]
     pub const fn token(&self) -> &ResumeToken {
         &self.token
     }
@@ -289,7 +277,6 @@ impl Registered {
     pub const ENCODED_BYTES: usize = 68;
 
     /// Acknowledges exactly the identity and descriptor `registration` committed.
-    #[must_use]
     pub const fn new(registration: &Registration) -> Self {
         Self {
             share_id: registration.route.share_id(),
@@ -299,7 +286,6 @@ impl Registered {
     }
 
     /// Encodes the acknowledgement sent to the sender.
-    #[must_use]
     pub fn encode(&self) -> [u8; Self::ENCODED_BYTES] {
         let mut frame = Writer::with_header(REGISTERED_MAGIC, 0);
         frame
@@ -372,7 +358,6 @@ pub struct FreshRegistration {
 
 impl FreshRegistration {
     /// Returns the authenticated registration.
-    #[must_use]
     pub const fn init(&self) -> &RegisterInit {
         &self.init
     }
@@ -405,7 +390,6 @@ pub struct ResumeRegistration {
 
 impl ResumeRegistration {
     /// Returns the authenticated registration.
-    #[must_use]
     pub const fn init(&self) -> &RegisterInit {
         &self.init
     }

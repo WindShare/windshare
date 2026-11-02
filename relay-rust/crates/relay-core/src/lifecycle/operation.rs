@@ -57,13 +57,11 @@ pub struct Incarnation([u8; 16]);
 
 impl Incarnation {
     /// Rejects the reserved all-zero value.
-    #[must_use]
     pub fn new(bytes: [u8; 16]) -> Option<Self> {
         (bytes != [0; 16]).then_some(Self(bytes))
     }
 
     /// Returns the encoded incarnation.
-    #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 16] {
         &self.0
     }
@@ -102,31 +100,26 @@ impl OperationId {
     }
 
     /// Returns the relay whose lifecycle this operation belongs to.
-    #[must_use]
     pub const fn relay(self) -> RelayIdentity {
         self.relay
     }
 
     /// Returns the share this operation belongs to.
-    #[must_use]
     pub const fn share(self) -> ShareId {
         self.share
     }
 
     /// Returns the engine incarnation that minted this operation.
-    #[must_use]
     pub const fn incarnation(self) -> Incarnation {
         self.incarnation
     }
 
     /// Returns the exact connection lifetime that owns this attempt.
-    #[must_use]
     pub const fn connection(self) -> ConnectionRef {
         self.connection
     }
 
     /// Returns the never-wrapping sequence within this engine incarnation.
-    #[must_use]
     pub const fn sequence(self) -> NonZeroU64 {
         self.sequence
     }
@@ -148,7 +141,6 @@ impl OwnershipEpoch {
     }
 
     /// Returns the stored epoch.
-    #[must_use]
     pub const fn get(self) -> NonZeroU64 {
         self.0
     }
@@ -188,25 +180,21 @@ impl OwnershipId {
     }
 
     /// Returns the relay whose lifecycle owns the route.
-    #[must_use]
     pub const fn relay(self) -> RelayIdentity {
         self.relay
     }
 
     /// Returns the owned share.
-    #[must_use]
     pub const fn share(self) -> ShareId {
         self.share
     }
 
     /// Returns which of the route's successive owners this is.
-    #[must_use]
     pub const fn epoch(self) -> OwnershipEpoch {
         self.epoch
     }
 
     /// Returns the exact sender connection lifetime.
-    #[must_use]
     pub const fn connection(self) -> ConnectionRef {
         self.connection
     }
@@ -227,19 +215,16 @@ pub struct Reservation(pub(super) Pending);
 
 impl Reservation {
     /// Returns the identity used to cancel failed or disconnected handshakes.
-    #[must_use]
     pub const fn id(&self) -> OperationId {
         self.0.id
     }
 
     /// Returns the registration the share reserved.
-    #[must_use]
     pub const fn init(&self) -> &RegisterInit {
         &self.0.init
     }
 
     /// Returns the original handshake deadline, including host publication work.
-    #[must_use]
     pub const fn deadline(&self) -> UnixMillis {
         self.0.deadline
     }
@@ -267,13 +252,11 @@ impl<'f> Publication<'f> {
     }
 
     /// Returns the attempt whose publication was authenticated.
-    #[must_use]
     pub const fn id(&self) -> OperationId {
         self.id
     }
 
     /// Returns the authenticated registration and opaque descriptor bytes.
-    #[must_use]
     pub const fn descriptor(&self) -> &AuthorizedDescriptor<'f> {
         &self.descriptor
     }
@@ -308,19 +291,16 @@ pub struct ResumeAttempt {
 
 impl ResumeAttempt {
     /// Returns the identity the resuming connection owns the route under.
-    #[must_use]
     pub const fn id(&self) -> OperationId {
         self.id
     }
 
     /// Returns the registration the resume names.
-    #[must_use]
     pub const fn init(&self) -> &RegisterInit {
         &self.init
     }
 
     /// Returns the original handshake deadline, which the commit must meet.
-    #[must_use]
     pub const fn deadline(&self) -> UnixMillis {
         self.deadline
     }
@@ -345,13 +325,11 @@ impl Resumption {
     }
 
     /// Returns the attempt whose resume was authenticated.
-    #[must_use]
     pub const fn id(&self) -> OperationId {
         self.attempt.id
     }
 
     /// Returns the authenticated registration.
-    #[must_use]
     pub const fn init(&self) -> &RegisterInit {
         &self.attempt.init
     }
@@ -369,13 +347,11 @@ pub struct PublishedRegistration {
 
 impl PublishedRegistration {
     /// Only `Action::Registered` authorizes this reply after final persistence.
-    #[must_use]
     pub const fn acknowledgement(self) -> Registered {
         Registered::new(&self.route.registration)
     }
 
     /// The record naming this owner, stored before its acknowledgement.
-    #[must_use]
     pub const fn record(self) -> Record {
         Record::Published(OwnedRoute {
             route: self.route,

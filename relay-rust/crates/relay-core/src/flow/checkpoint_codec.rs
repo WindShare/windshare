@@ -19,7 +19,6 @@ const SLOT_BYTES: usize = size_of::<u64>();
 const ENTRY_BYTES: usize = SLOT_BYTES + 1 + KEY_BYTES + COUNTERS * 16 + 1 + 8;
 
 impl LedgerCheckpoint {
-    #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
         out.push(FORMAT);
@@ -129,7 +128,6 @@ impl LedgerCheckpoint {
         })
     }
 
-    #[must_use]
     pub fn maximum_bytes(slots: usize) -> Option<usize> {
         slots
             .checked_mul(ENTRY_BYTES)?

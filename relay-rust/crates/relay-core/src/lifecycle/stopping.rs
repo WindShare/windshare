@@ -68,13 +68,11 @@ impl PendingStop {
     }
 
     /// Actor-issued transaction identity and the requesting connection lifetime.
-    #[must_use]
     pub const fn id(self) -> OperationId {
         self.id
     }
 
     /// The permanent fact that survives after cleanup.
-    #[must_use]
     pub const fn stopped(self) -> StoppedShare {
         StoppedShare {
             relay: self.id.relay(),
@@ -86,13 +84,11 @@ impl PendingStop {
 
     /// Authority whose retirement must be confirmed before STOPPED.
     /// This does not require release of submitted transport buffers.
-    #[must_use]
     pub const fn cleanup(self) -> StopCleanup {
         self.cleanup
     }
 
     /// The record stored before participant cleanup, retained on any failure.
-    #[must_use]
     pub const fn record(self) -> Record {
         Record::Stopping(self)
     }
@@ -138,7 +134,6 @@ pub enum StopWork {
 
 impl StopWork {
     /// The durable transaction this step belongs to.
-    #[must_use]
     pub const fn pending(self) -> PendingStop {
         match self {
             Self::Persist(pending) | Self::Retire(pending) | Self::Commit(pending) => pending,
@@ -146,7 +141,6 @@ impl StopWork {
     }
 
     /// The phase whose completion a callback reports.
-    #[must_use]
     pub const fn step(self) -> StopStep {
         match self {
             Self::Persist(_) => StopStep::Persist,
@@ -174,14 +168,12 @@ pub struct StopAcknowledgement {
 
 impl StopAcknowledgement {
     /// The original or retrying STOP connection; never a replacement generation.
-    #[must_use]
     pub const fn connection(self) -> ConnectionRef {
         self.connection
     }
 
     /// The STOPPED frame, available after durability and the revocation barrier.
     /// It makes no claim about delivery settlement or already-submitted bytes.
-    #[must_use]
     pub const fn acknowledgement(self) -> Stopped {
         self.stopped
     }

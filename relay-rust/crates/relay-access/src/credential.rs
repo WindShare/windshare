@@ -15,7 +15,6 @@ pub enum Attribution {
 impl Attribution {
     pub const ENCODED_BYTES: usize = 33;
 
-    #[must_use]
     pub fn encode(self) -> [u8; Self::ENCODED_BYTES] {
         let mut bytes = [0; Self::ENCODED_BYTES];
         if let Self::Credential {
@@ -30,7 +29,6 @@ impl Attribution {
         bytes
     }
 
-    #[must_use]
     pub fn decode(bytes: [u8; Self::ENCODED_BYTES]) -> Option<Self> {
         match bytes[0] {
             0 if bytes[1..].iter().all(|byte| *byte == 0) => Some(Self::Anonymous),
@@ -51,7 +49,6 @@ impl Attribution {
 pub struct Digest(pub [u8; 32]);
 
 impl Digest {
-    #[must_use]
     pub fn of(secret: &[u8]) -> Self {
         Self(Sha256::digest(secret).into())
     }

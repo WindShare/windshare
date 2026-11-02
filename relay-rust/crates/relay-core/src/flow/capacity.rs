@@ -19,7 +19,6 @@ pub(super) struct CapacityPools {
 impl ReceiveCapacity {
     pub const ENCODED_BYTES: usize = 16;
 
-    #[must_use]
     pub const fn new(frames: u64, encoded_bytes: u64) -> Option<Self> {
         if frames == 0 || encoded_bytes == 0 {
             None
@@ -28,7 +27,6 @@ impl ReceiveCapacity {
         }
     }
 
-    #[must_use]
     pub const fn counts(self) -> Counts {
         self.0
     }
@@ -81,14 +79,12 @@ impl<O: Observer> ConnectionLedger<O> {
         })
     }
 
-    #[must_use]
     pub const fn receive_capacity(&self) -> Option<ReceiveCapacity> {
         self.receive_capacity
     }
 
     /// Additional ordinary credit needed to maintain a host-selected outstanding
     /// window. This is an advisory view, never a reservation or forwarding permit.
-    #[must_use]
     pub fn window_credit(&self, flow: super::FlowKey, target: Counts) -> Option<Counts> {
         self.ensure_open().ok()?;
         let entry = self.delivery(flow).ok()?;

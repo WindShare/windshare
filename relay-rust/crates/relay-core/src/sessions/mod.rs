@@ -119,13 +119,11 @@ impl Session {
     }
 
     /// Exact identity to retain before asynchronous work.
-    #[must_use]
     pub const fn key(&self) -> SessionKey {
         self.key
     }
 
     /// Current admission/retirement phase.
-    #[must_use]
     pub const fn phase(&self) -> Phase {
         match self.state {
             State::Live(stage) => stage.phase(),
@@ -134,7 +132,6 @@ impl Session {
     }
 
     /// Original absolute admission deadline; no traffic can extend it.
-    #[must_use]
     pub const fn deadline(&self) -> Option<UnixMillis> {
         match self.state {
             State::Live(stage) => stage.deadline(),
@@ -147,7 +144,6 @@ impl Session {
     ///
     /// `None` once retired: drop the recorded snapshot, keeping only what
     /// late-frame handling needs.
-    #[must_use]
     pub const fn snapshot(&self) -> Option<SessionSnapshot> {
         match self.state {
             State::Live(stage) => Some(SessionSnapshot {

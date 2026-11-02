@@ -41,12 +41,10 @@ impl StoredAuthority {
         Ok(value)
     }
 
-    #[must_use]
     pub const fn record(&self) -> Record {
         self.record
     }
 
-    #[must_use]
     pub fn descriptor(&self) -> Option<&[u8]> {
         self.descriptor.as_deref()
     }

@@ -17,14 +17,13 @@ impl UnixMillis {
     ///
     /// Saturates rather than wraps, so overflow can never move a deadline
     /// into the past and expire it early.
-    #[must_use]
+    #[must_use = "the returned instant replaces this one; discarding it loses the deadline"]
     pub fn saturating_add(self, duration: Duration) -> Self {
         let millis = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
         Self(self.0.saturating_add(millis))
     }
 
     /// Returns the first whole second at or after this instant.
-    #[must_use]
     pub const fn ceil_seconds(self) -> UnixSeconds {
         UnixSeconds(self.0.div_ceil(MILLIS_PER_SECOND))
     }
@@ -36,7 +35,6 @@ pub struct UnixSeconds(pub u64);
 
 impl UnixSeconds {
     /// Returns the first millisecond of this second.
-    #[must_use]
     pub const fn start(self) -> UnixMillis {
         UnixMillis(self.0.saturating_mul(MILLIS_PER_SECOND))
     }

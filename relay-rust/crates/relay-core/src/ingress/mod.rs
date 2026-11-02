@@ -31,7 +31,6 @@ pub enum FrameKind {
 }
 
 impl FrameKind {
-    #[must_use]
     pub const fn classify(bytes: &[u8]) -> Self {
         match bytes.first_chunk::<4>().copied() {
             Some(OpaqueHeader::MAGIC) => Self::Opaque,
@@ -60,7 +59,6 @@ pub enum Control<'a> {
 }
 
 impl<'a> Control<'a> {
-    #[must_use]
     pub fn inspect(connection: ConnectionRef, frame: &'a [u8]) -> Self {
         match FrameKind::classify(frame) {
             FrameKind::Opaque | FrameKind::Unsupported => {
