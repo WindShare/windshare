@@ -1,3 +1,4 @@
+mod artwork;
 mod assets;
 mod button;
 mod focus;
@@ -7,6 +8,7 @@ mod input;
 mod primitives;
 mod theme;
 
+pub use artwork::VectorArtwork;
 pub use assets::Assets;
 pub use button::{Button, ButtonStyle};
 pub use icons::{Icon, icon};

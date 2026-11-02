@@ -1,10 +1,11 @@
 use crate::{
+    artwork::Artwork,
     layout::{FlowLayout, task_width},
     share_timing::{
         FLIGHT_DURATION, LANDING_DURATION, ShareFrame, ease_out, lerp, segment, smooth,
     },
 };
-use gpui::{Div, PathBuilder, Point, Window, canvas, div, img, point, prelude::*, px};
+use gpui::{Div, PathBuilder, Point, Window, canvas, div, point, prelude::*, px};
 use std::f32::consts::{PI, TAU};
 use windshare_ui::{Tone, vector_sprite};
 
@@ -15,8 +16,10 @@ const SHARE_LINK_TOP: f32 = 116.;
 const LANDED_SPIRIT_SIZE: f32 = 92.;
 const CRUISING_SPIRIT_SIZE: f32 = 144.;
 const PAPER_COUNT: u16 = 7;
+const SURROUND_PAPER_WIDTH: f32 = 23.;
+const SURROUND_PAPER_HEIGHT: f32 = 27.;
 const WIND_SEGMENTS: u16 = 48;
-const PAPER_ASSETS: [&str; 3] = ["brand/paper.svg", "brand/photo.svg", "brand/folder.svg"];
+const PAPER_ASSETS: [Artwork; 3] = [Artwork::Paper, Artwork::Photo, Artwork::Folder];
 
 #[derive(Clone, Copy)]
 pub struct ShareGeometry {
@@ -169,31 +172,33 @@ impl ShareScene {
                 .opacity(surround),
             )
             .child(
-                img("brand/spirit.svg")
+                div()
                     .absolute()
-                    .left(px(center.x - size / 2.))
-                    .top(px(center.y - size / 2.))
-                    .size(px(size))
+                    .inset_0()
+                    .child(Artwork::Spirit.sprite(center, size))
                     .opacity(1. - smile),
             )
             .child(
-                img("brand/spirit-happy.svg")
+                div()
                     .absolute()
-                    .left(px(center.x - size / 2.))
-                    .top(px(center.y - size / 2.))
-                    .size(px(size))
+                    .inset_0()
+                    .child(Artwork::Happy.sprite(center, size))
                     .opacity(smile),
             );
         for (index, asset) in PAPER_ASSETS.into_iter().enumerate() {
             let (x, y) = [(-82., -8.), (77., -29.), (76., 38.)][index];
             let drift = self.frame.breath * if index == 1 { -2. } else { 2. };
             layer = layer.child(
-                img(asset)
+                div()
                     .absolute()
-                    .left(px(center.x + x))
-                    .top(px(center.y + y + drift))
-                    .w(px(23.))
-                    .h(px(27.))
+                    .inset_0()
+                    .child(asset.sprite(
+                        point(
+                            center.x + x + SURROUND_PAPER_WIDTH / 2.,
+                            center.y + y + drift + SURROUND_PAPER_HEIGHT / 2.,
+                        ),
+                        SURROUND_PAPER_WIDTH,
+                    ))
                     .opacity(surround),
             );
         }
@@ -251,12 +256,10 @@ impl ShareScene {
         };
         div()
             .absolute()
-            .left(px(center.x - size / 2.))
-            .top(px(center.y - size * 0.57))
-            .w(px(size))
-            .h(px(size * 1.14))
+            .inset_0()
+            .size_full()
             .opacity(opacity)
-            .child(img(PAPER_ASSETS[usize::from(index) % PAPER_ASSETS.len()]).size_full())
+            .child(PAPER_ASSETS[usize::from(index) % PAPER_ASSETS.len()].sprite(center, size))
     }
 
     fn wind_pose(self) -> (f32, f32) {

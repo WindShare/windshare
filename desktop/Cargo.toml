@@ -24,6 +24,7 @@ gpui = { package = "gpui-pre", version = "=0.3.10" }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 anyhow = "1"
 unicode-segmentation = "1.12"
+usvg = { version = "0.46", default-features = false }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 windshare-ui = { path = "crates/windshare-ui" }

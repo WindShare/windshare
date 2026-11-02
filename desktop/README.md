@@ -24,9 +24,10 @@ GPU. Windows is the locally verified platform.
 - Preview latency defaults to 1900 ms. Pass `--share-delay-ms=200` or
   `--share-delay-ms=5000` after `cargo run ... --` to inspect fast and slow results.
   Motion uses actual completion events, never the configured delay.
-- Animated SVGs keep a fixed raster size and use GPU transforms. Inactive share
-  windows stop scheduling decorative frames. Trace events report presentation
-  phases and render callback cadence, not GPU presentation FPS.
+- Animated color SVGs reuse cached paint masks and fractional GPU transforms;
+  motion never goes through pixel-snapped layout or image bounds. Inactive share
+  windows stop decorative frames. Traces report phases and render callback cadence,
+  not GPU presentation FPS.
 - Receive: paste a link or use the sample, inspect files, preview receiving.
 - My shares: search, filter, grid/list, pause and copy.
 - Preferences: notifications, transfer details and reduced motion.
