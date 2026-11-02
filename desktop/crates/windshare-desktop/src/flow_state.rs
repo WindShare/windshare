@@ -1,4 +1,4 @@
-use crate::share_timing::ShareArrival;
+use crate::share_timing::ShareFrame;
 use std::time::Instant;
 use windshare_ui::{Icon, Tone};
 pub const COPY_FEEDBACK_MS: u64 = 2400;
@@ -51,24 +51,42 @@ impl SampleBundle {
 #[derive(Clone, Copy, Debug)]
 pub enum ShareFlow {
     Choose,
-    Preparing {
-        operation: usize,
-        bundle: SampleBundle,
-        started_at: Instant,
-    },
-    AwaitingReveal {
-        operation: usize,
-        bundle: SampleBundle,
-        started_at: Instant,
-    },
-    Revealing {
-        operation: usize,
-        share_id: usize,
-        arrival: ShareArrival,
-    },
-    Ready {
-        share_id: usize,
-    },
+    Running(ShareRun),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ShareRun {
+    pub operation: usize,
+    pub bundle: SampleBundle,
+    pub started_at: Instant,
+    pub readiness: ShareReadiness,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum ShareReadiness {
+    Pending,
+    Ready { share_id: usize, at: Instant },
+}
+
+impl ShareRun {
+    pub fn sample(self, now: Instant, still: bool) -> ShareFrame {
+        let ready_at = match self.readiness {
+            ShareReadiness::Pending => None,
+            ShareReadiness::Ready { at, .. } => Some(at.saturating_duration_since(self.started_at)),
+        };
+        ShareFrame::sample(
+            now.saturating_duration_since(self.started_at),
+            ready_at,
+            still,
+        )
+    }
+
+    pub fn share_id(self) -> Option<usize> {
+        match self.readiness {
+            ShareReadiness::Pending => None,
+            ShareReadiness::Ready { share_id, .. } => Some(share_id),
+        }
+    }
 }
 #[derive(Clone, Copy, Debug)]
 pub enum LinkFeedback {

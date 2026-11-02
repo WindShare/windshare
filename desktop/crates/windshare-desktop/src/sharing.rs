@@ -10,39 +10,35 @@ use gpui::{prelude::*, *};
 use windshare_ui::*;
 
 impl Desktop {
-    pub fn sharing_page(&self, layout: FlowLayout, window: &mut Window, cx: &Context<Self>) -> Div {
+    pub fn sharing_page(
+        &mut self,
+        layout: FlowLayout,
+        window: &mut Window,
+        cx: &Context<Self>,
+    ) -> Div {
         let geometry = ShareGeometry::new(window, layout);
         let still = self.reduced_motion() || cx.reduce_motion();
+        let active = window.is_window_active();
         let content = match self.share_flow {
             ShareFlow::Choose => column()
                 .h(px(geometry.height))
                 .justify_center()
-                .child(self.choose_share(layout, cx)),
-            ShareFlow::Preparing {
-                bundle, started_at, ..
-            }
-            | ShareFlow::AwaitingReveal {
-                bundle, started_at, ..
-            } if !still => {
-                window.request_animation_frame();
-                self.preparing_scene(bundle, ShareScene::flight(geometry, started_at), cx)
-            }
-            ShareFlow::Preparing { bundle, .. } | ShareFlow::AwaitingReveal { bundle, .. } => {
-                self.quiet_preparation(bundle, layout, cx)
-            }
-            ShareFlow::Revealing {
-                share_id, arrival, ..
-            } => {
-                let scene = if still {
-                    ShareScene::settled(geometry)
-                } else {
+                .child(self.choose_share(layout, still || !active, cx)),
+            ShareFlow::Running(run) => {
+                let now = std::time::Instant::now();
+                let frame = run.sample(now, still);
+                self.motion_probe.observe(run, frame, now, active && !still);
+                if active && !still {
                     window.request_animation_frame();
-                    ShareScene::arrival(geometry, arrival)
-                };
-                self.ready_share(share_id, scene, still, cx)
-            }
-            ShareFlow::Ready { share_id } => {
-                self.ready_share(share_id, ShareScene::settled(geometry), still, cx)
+                }
+                let scene = ShareScene::new(geometry, frame);
+                if still && run.share_id().is_none() {
+                    self.quiet_preparation(run.bundle, layout, cx)
+                } else if scene.landing() {
+                    self.result_share(run, scene, cx)
+                } else {
+                    self.preparing_scene(run.bundle, scene, cx)
+                }
             }
         };
         column()
@@ -64,8 +60,7 @@ impl Desktop {
                     .child(reassurance(Icon::Monitor, "文件留在你的设备")),
             )
     }
-
-    fn choose_share(&self, layout: FlowLayout, cx: &Context<Self>) -> Div {
+    fn choose_share(&self, layout: FlowLayout, still: bool, cx: &Context<Self>) -> Div {
         column()
             .items_center()
             .gap(px(16.))
@@ -73,7 +68,7 @@ impl Desktop {
                 SpiritMood::Idle,
                 Tone::Mint,
                 layout.scene_scale(),
-                self.reduced_motion(),
+                still,
             ))
             .child(
                 column()
@@ -118,7 +113,7 @@ impl Desktop {
             .relative()
             .w_full()
             .h(px(scene.geometry.height))
-            .child(scene.scenery(false))
+            .child(scene.scenery())
             .child(preparation_message(bundle.name(), visibility))
             .child(
                 row()
@@ -175,37 +170,43 @@ impl Desktop {
             )
     }
 
-    fn ready_share(&self, id: usize, scene: ShareScene, still: bool, cx: &Context<Self>) -> Div {
-        let Some(share) = self.shares.iter().find(|share| share.id == id) else {
-            return column();
-        };
+    fn result_share(&self, run: ShareRun, scene: ShareScene, cx: &Context<Self>) -> Div {
         let g = scene.geometry;
         let title = scene.title_visibility();
         let summary = scene.summary_visibility();
         let footer = scene.footer_visibility();
+        let result = scene.frame.result_visibility;
+        let pending = run.share_id().is_none();
+        let bundle = run.bundle;
         div()
             .relative()
             .w_full()
             .h(px(g.height))
-            .child(scene.scenery(still))
-            .when(scene.preparation_visibility() > 0., |el| {
-                el.child(preparation_message(
-                    &share.name,
-                    scene.preparation_visibility(),
-                ))
-            })
+            .child(scene.scenery())
             .child(
                 column()
                     .absolute()
                     .left(px(g.content_left))
                     .top(px(g.content_top + 18. + 18. * (1. - title)))
                     .w(px(g.content_width - 196.))
-                    .gap(px(8.))
+                    .h(px(72.))
                     .opacity(title)
-                    .child(heading("链接准备好了", 26.))
-                    .child(label("复制链接，发给想分享的人。", 16.).text_color(muted())),
+                    .when(result < 1., |el| {
+                        el.child(result_title(
+                            "正在准备链接",
+                            "文件已就位，再等一小会儿。",
+                            1. - result,
+                        ))
+                    })
+                    .when(result > 0., |el| {
+                        el.child(result_title(
+                            "链接准备好了",
+                            "复制链接，发给想分享的人。",
+                            result,
+                        ))
+                    }),
             )
-            .child(self.link_reveal(share, scene, cx))
+            .child(self.link_reveal(run, scene, cx))
             .child(
                 row()
                     .absolute()
@@ -220,9 +221,9 @@ impl Desktop {
                     .border_color(border())
                     .bg(paper())
                     .opacity(summary)
-                    .child(icon_tile(share.symbol, share.tone, 38.))
-                    .child(label(share.name.clone(), 16.).flex_1())
-                    .child(caption(format!("{} · {}", share.detail, share.size))),
+                    .child(icon_tile(bundle.icon(), bundle.tone(), 38.))
+                    .child(label(bundle.name(), 16.).flex_1())
+                    .child(caption(format!("{} · {}", bundle.detail(), bundle.size()))),
             )
             .child(
                 row()
@@ -246,21 +247,52 @@ impl Desktop {
                     .child(
                         self.button(
                             "share-again",
-                            "再分享一组",
-                            Icon::Plus,
+                            if pending { "取消" } else { "再分享一组" },
+                            if pending { Icon::Close } else { Icon::Plus },
                             ButtonStyle::Ghost,
                             PreviewAction::ResetShare,
                             cx,
                         )
-                        .compact(),
+                        .compact()
+                        .when(pending, |button| button.focus_handle(&self.primary_focus)),
                     ),
             )
     }
 
-    fn link_reveal(&self, share: &Share, scene: ShareScene, cx: &Context<Self>) -> Div {
+    fn link_reveal(&self, run: ShareRun, scene: ShareScene, cx: &Context<Self>) -> Div {
         let g = scene.geometry;
         let expansion = scene.link_expansion();
-        let copied = matches!(self.copy_feedback, CopyFeedback::Copied { share_id, .. } if share_id == share.id);
+        let result = scene.frame.result_visibility;
+        let share = run
+            .share_id()
+            .and_then(|id| self.shares.iter().find(|share| share.id == id));
+        let copied = matches!(self.copy_feedback, CopyFeedback::Copied { share_id, .. }
+            if Some(share_id) == run.share_id());
+        let enabled = share.is_some() && scene.control_visibility() > 0.95;
+        let control = Button::new(
+            "ready-copy",
+            if share.is_none() {
+                "等待链接"
+            } else if copied {
+                "已复制"
+            } else {
+                "复制链接"
+            },
+        )
+        .icon(if copied { Icon::Check } else { Icon::Copy })
+        .style(ButtonStyle::Primary)
+        .large()
+        .min_width(px(128.))
+        .focus_handle(&self.primary_focus)
+        .disabled(!enabled);
+        let control = if let Some(share) = share {
+            let id = share.id;
+            control.on_press(cx.listener(move |this, _, window, cx| {
+                this.dispatch(PreviewAction::CopyLink(id), window, cx)
+            }))
+        } else {
+            control
+        };
         div()
             .absolute()
             .left(px(g.content_left))
@@ -290,32 +322,61 @@ impl Desktop {
                             .opacity(scene.link_visibility()),
                     )
                     .child(
-                        label(share.link(), 16.)
-                            .font_family(FONT)
+                        div()
+                            .relative()
+                            .h(px(24.))
                             .flex_1()
                             .min_w_0()
-                            .truncate()
-                            .opacity(scene.link_visibility()),
+                            .opacity(scene.link_visibility())
+                            .when(result < 1., |el| {
+                                el.child(
+                                    row()
+                                        .absolute()
+                                        .inset_0()
+                                        .gap(px(8.))
+                                        .opacity((1. - result) * (0.65 + 0.15 * scene.frame.breath))
+                                        .child(
+                                            div()
+                                                .w(px(138.))
+                                                .h(px(8.))
+                                                .rounded_full()
+                                                .bg(Tone::Mint.accent().opacity(0.35)),
+                                        )
+                                        .child(
+                                            div()
+                                                .w(px(44.))
+                                                .h(px(8.))
+                                                .rounded_full()
+                                                .bg(Tone::Mint.accent().opacity(0.20)),
+                                        ),
+                                )
+                            })
+                            .when_some(share, |el, share| {
+                                el.child(
+                                    label(share.link(), 16.)
+                                        .absolute()
+                                        .inset_0()
+                                        .w_full()
+                                        .font_family(FONT)
+                                        .truncate()
+                                        .opacity(result),
+                                )
+                            }),
                     )
-                    .child(
-                        div().opacity(scene.control_visibility()).child(
-                            self.button(
-                                "ready-copy",
-                                if copied { "已复制" } else { "复制链接" },
-                                if copied { Icon::Check } else { Icon::Copy },
-                                ButtonStyle::Primary,
-                                PreviewAction::CopyLink(share.id),
-                                cx,
-                            )
-                            .large()
-                            .min_width(px(128.))
-                            .focus_handle(&self.primary_focus),
-                        ),
-                    ),
+                    .child(div().opacity(scene.control_visibility()).child(control)),
             )
     }
 }
 
+fn result_title(title: &'static str, subtitle: &'static str, visibility: f32) -> Div {
+    column()
+        .absolute()
+        .inset_0()
+        .gap(px(8.))
+        .opacity(visibility)
+        .child(heading(title, 26.))
+        .child(label(subtitle, 16.).text_color(muted()))
+}
 fn preparation_message(name: &str, visibility: f32) -> Div {
     column()
         .absolute()

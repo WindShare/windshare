@@ -1,6 +1,24 @@
 use crate::{Icon, RADIUS, Tone, border, icon, ink, muted, paper, primary};
 use gpui::{prelude::*, *};
 
+pub fn vector_sprite(
+    path: impl Into<SharedString>,
+    native_size: Size<Pixels>,
+    center: Point<Pixels>,
+    scale: f32,
+) -> Svg {
+    // GPUI's SVG atlas is keyed by raster size. Animate a GPU transform so every
+    // intermediate scale reuses the same texture, including on the first playback.
+    svg()
+        .path(path)
+        .absolute()
+        .left(center.x - native_size.width / 2.)
+        .top(center.y - native_size.height / 2.)
+        .w(native_size.width)
+        .h(native_size.height)
+        .with_transformation(Transformation::scale(size(scale, scale)))
+}
+
 pub fn row() -> Div {
     div().flex().items_center()
 }
