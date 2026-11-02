@@ -1,4 +1,8 @@
-use crate::{flow_state::*, layout::FlowLayout, model::*};
+use crate::{
+    flow_state::*,
+    layout::{FlowLayout, MAX_PAGE_WIDTH, page_gutter},
+    model::*,
+};
 use gpui::{prelude::*, *};
 use std::time::Duration;
 use windshare_ui::InputEvent;
@@ -13,6 +17,7 @@ pub struct Desktop {
     pub search: Entity<Input>,
     pub link_input: Entity<Input>,
     pub share_flow: ShareFlow,
+    pub preview_share_delay: Duration,
     pub receive_flow: ReceiveFlow,
     pub copy_feedback: CopyFeedback,
     pub primary_focus: FocusHandle,
@@ -28,7 +33,7 @@ pub struct Desktop {
     _subscriptions: Vec<Subscription>,
 }
 impl Desktop {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, preview_share_delay: Duration, cx: &mut Context<Self>) -> Self {
         let search = cx.new(|cx| Input::new("搜索分享名称", cx));
         let link_input = cx.new(|cx| Input::new("粘贴 WindShare 分享链接", cx));
         let subscriptions = vec![
@@ -56,6 +61,7 @@ impl Desktop {
             search,
             link_input,
             share_flow: ShareFlow::Choose,
+            preview_share_delay,
             receive_flow: ReceiveFlow::default(),
             copy_feedback: CopyFeedback::Idle,
             primary_focus,
@@ -146,7 +152,7 @@ impl Render for Desktop {
         let compact = window.viewport_size().width < px(COMPACT_WIDTH);
         let layout = FlowLayout::for_window(window);
         let content = match self.page {
-            Page::Share => self.sharing_page(layout, cx),
+            Page::Share => self.sharing_page(layout, window, cx),
             Page::Receive => self.receiving_page(layout, cx),
             Page::Shares => self.shares_page(compact, cx),
             Page::Transfers => self.transfers_page(cx),
@@ -202,13 +208,13 @@ impl Render for Desktop {
                                     .items_center()
                                     .flex_1()
                                     .min_h_0()
-                                    .px(px(if compact { 28. } else { 48. }))
+                                    .px(px(page_gutter(compact)))
                                     .pt(px(layout.page_top()))
                                     .pb(px(32.))
                                     .child(
                                         column()
                                             .w_full()
-                                            .max_w(px(960.))
+                                            .max_w(px(MAX_PAGE_WIDTH))
                                             .gap(px(24.))
                                             .child(self.page_heading(compact, cx))
                                             .child(

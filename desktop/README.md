@@ -17,7 +17,11 @@ cargo run --manifest-path desktop/Cargo.toml --locked -- --compact
 Windows requires the MSVC target, Visual Studio C++ build tools and a DirectX 11
 GPU. Windows is the locally verified platform.
 
-- Share: select sample files/folder, watch a 1.35-second preparation, copy a link.
+- Share: at least 1.65 seconds of flight followed by a 350 ms landing. Early
+  results wait for the entrance; longer waits keep a gentle orbit until ready.
+  Copying works during landing. Reduced motion skips both decorative delays.
+- Preview latency defaults to 1350 ms. Pass `--share-delay-ms=200` or
+  `--share-delay-ms=5000` after `cargo run ... --` to inspect fast and slow results.
 - Receive: paste a link or use the sample, inspect files, preview receiving.
 - My shares: search, filter, grid/list, pause and copy.
 - Preferences: notifications, transfer details and reduced motion.

@@ -1,6 +1,11 @@
-use crate::{desktop::Desktop, flow_state::*, model::*};
+use crate::{
+    desktop::Desktop,
+    flow_state::*,
+    model::*,
+    share_timing::{MIN_FLIGHT_DURATION, ShareArrival},
+};
 use gpui::*;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const DEMO_LINK: &str = "https://windshare.example/s/kyoto-weekend";
 
@@ -104,31 +109,174 @@ impl Desktop {
 
     fn prepare_share(&mut self, bundle: SampleBundle, window: &mut Window, cx: &mut Context<Self>) {
         let operation = self.next_operation();
-        self.share_flow = ShareFlow::Preparing { operation, bundle };
+        let preview_delay = self.preview_share_delay;
+        self.share_flow = ShareFlow::Preparing {
+            operation,
+            bundle,
+            started_at: Instant::now(),
+        };
         self.focus_task(window, cx);
         tracing::info!(
             event = "share.preparing",
             operation,
             session = std::process::id(),
+            preview_delay_ms = preview_delay.as_millis(),
             ?bundle,
             preview = true
         );
         cx.spawn(async move |view, cx| {
-            cx.background_executor().timer(Duration::from_millis(SHARE_PREPARE_MS)).await;
-            let _ = view.update(cx, |this, cx| {
-                // A canceled preview must never replace a newer choice when its timer completes.
-                if !matches!(this.share_flow, ShareFlow::Preparing { operation: current, .. } if current == operation) { return; }
-                let id = this.shares.iter().map(|share| share.id).max().unwrap_or(0) + 1;
-                this.shares.insert(0, Share {
-                    id, name: bundle.name().into(), detail: bundle.detail(), size: bundle.size(),
-                    date: "刚刚", tone: bundle.tone(), symbol: bundle.icon(),
-                    state: ShareState::Live { viewers: 0 },
+            // Only the preview source knows the simulated latency; motion never predicts readiness.
+            cx.background_executor().timer(preview_delay).await;
+            let Some(entrance_remaining) = view
+                .update(cx, |this, cx| this.share_prepared(operation, bundle, cx))
+                .ok()
+                .flatten()
+            else {
+                return;
+            };
+            if !entrance_remaining.is_zero() {
+                cx.background_executor().timer(entrance_remaining).await;
+            }
+            let settling = view
+                .update(cx, |this, cx| this.begin_share_reveal(operation, cx))
+                .ok()
+                .flatten();
+            if let Some(duration) = settling {
+                cx.background_executor().timer(duration).await;
+                let _ = view.update(cx, |this, cx| {
+                    // A replay or cancellation owns a new operation and must not inherit this ending.
+                    if let ShareFlow::Revealing {
+                        operation: current,
+                        share_id,
+                        ..
+                    } = this.share_flow
+                        && current == operation
+                    {
+                        this.share_flow = ShareFlow::Ready { share_id };
+                        tracing::info!(event = "share.presentation_settled", operation, share_id);
+                        cx.notify();
+                    }
                 });
-                this.share_flow = ShareFlow::Ready { share_id: id };
-                tracing::info!(event = "share.ready", operation, share_id = id, preview = true);
-                cx.notify();
-            });
-        }).detach();
+            }
+        })
+        .detach();
+    }
+
+    fn share_prepared(
+        &mut self,
+        operation: usize,
+        bundle: SampleBundle,
+        cx: &mut Context<Self>,
+    ) -> Option<Duration> {
+        let ShareFlow::Preparing {
+            operation: current,
+            started_at,
+            ..
+        } = self.share_flow
+        else {
+            tracing::info!(
+                event = "share.completion_discarded",
+                operation,
+                reason = "no_longer_preparing"
+            );
+            return None;
+        };
+        if current != operation {
+            tracing::info!(
+                event = "share.completion_discarded",
+                operation,
+                current,
+                reason = "superseded"
+            );
+            return None;
+        }
+        let elapsed = started_at.elapsed();
+        let entrance_remaining = if self.reduced_motion() || cx.reduce_motion() {
+            Duration::ZERO
+        } else {
+            MIN_FLIGHT_DURATION.saturating_sub(elapsed)
+        };
+        // A ready result is retained while the minimum entrance finishes; no readiness is fabricated.
+        self.share_flow = ShareFlow::AwaitingReveal {
+            operation,
+            bundle,
+            started_at,
+        };
+        tracing::info!(
+            event = "share.ready",
+            operation,
+            elapsed_ms = elapsed.as_millis(),
+            entrance_remaining_ms = entrance_remaining.as_millis(),
+            preview = true
+        );
+        cx.notify();
+        Some(entrance_remaining)
+    }
+
+    fn begin_share_reveal(&mut self, operation: usize, cx: &mut Context<Self>) -> Option<Duration> {
+        let ShareFlow::AwaitingReveal {
+            operation: current,
+            bundle,
+            started_at,
+        } = self.share_flow
+        else {
+            tracing::info!(
+                event = "share.presentation_discarded",
+                operation,
+                reason = "no_longer_waiting"
+            );
+            return None;
+        };
+        if current != operation {
+            tracing::info!(
+                event = "share.presentation_discarded",
+                operation,
+                current,
+                reason = "superseded"
+            );
+            return None;
+        }
+        let reveal_at = Instant::now();
+        let arrival = ShareArrival::new(started_at, reveal_at);
+        let id = self.shares.iter().map(|share| share.id).max().unwrap_or(0) + 1;
+        self.shares.insert(
+            0,
+            Share {
+                id,
+                name: bundle.name().into(),
+                detail: bundle.detail(),
+                size: bundle.size(),
+                date: "刚刚",
+                tone: bundle.tone(),
+                symbol: bundle.icon(),
+                state: ShareState::Live { viewers: 0 },
+            },
+        );
+        let animate = !self.reduced_motion() && !cx.reduce_motion();
+        // The minimum flight is complete; copying works throughout the short landing.
+        self.share_flow = if animate {
+            ShareFlow::Revealing {
+                operation,
+                share_id: id,
+                arrival,
+            }
+        } else {
+            ShareFlow::Ready { share_id: id }
+        };
+        tracing::info!(
+            event = "share.presentation_started",
+            operation,
+            share_id = id,
+            elapsed_ms = reveal_at.duration_since(started_at).as_millis(),
+            settle_ms = if animate {
+                arrival.duration().as_millis()
+            } else {
+                0
+            },
+            preview = true
+        );
+        cx.notify();
+        animate.then_some(arrival.duration())
     }
 
     fn open_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
