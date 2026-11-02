@@ -1,3 +1,4 @@
+use crate::localization::{Language, Text, language};
 use crate::{
     desktop::Desktop,
     flow_state::{CopyFeedback, SampleBundle, ShareFlow, ShareRun},
@@ -19,6 +20,7 @@ const SHARE_CHOICE_BUTTON_MIN_WIDTH: f32 = 160.;
 
 impl Desktop {
     pub fn sharing_page(&mut self, layout: FlowLayout, window: &Window, cx: &Context<Self>) -> Div {
+        let locale = language(cx);
         let theme = Theme::from(window.appearance());
         let geometry = ShareGeometry::new(window, layout);
         let still = self.reduced_motion() || cx.reduce_motion();
@@ -60,9 +62,21 @@ impl Desktop {
                     .justify_center()
                     .flex_wrap()
                     .gap(px(22.))
-                    .child(reassurance(theme, Icon::Shield, "端到端加密"))
-                    .child(reassurance(theme, Icon::Globe, "对方无需安装"))
-                    .child(reassurance(theme, Icon::Monitor, "文件留在你的设备")),
+                    .child(reassurance(
+                        theme,
+                        Icon::Shield,
+                        locale.text(Text::Encrypted),
+                    ))
+                    .child(reassurance(
+                        theme,
+                        Icon::Globe,
+                        locale.text(Text::NoInstall),
+                    ))
+                    .child(reassurance(
+                        theme,
+                        Icon::Monitor,
+                        locale.text(Text::FilesStayLocal),
+                    )),
             )
     }
     fn choose_share(
@@ -72,6 +86,7 @@ impl Desktop {
         still: bool,
         cx: &Context<Self>,
     ) -> Div {
+        let locale = language(cx);
         column()
             .items_center()
             .gap(px(SHARE_CHOICE_SECTION_GAP))
@@ -84,7 +99,7 @@ impl Desktop {
             ))
             .child(
                 theme
-                    .heading("想分享什么？", 26.)
+                    .heading(locale.text(Text::ChooseShare), 26.)
                     .line_height(px(SHARE_CHOICE_TITLE_HEIGHT)),
             )
             .child(
@@ -93,7 +108,7 @@ impl Desktop {
                     .child(
                         Self::button(
                             "choose-files",
-                            "选择文件",
+                            locale.text(Text::ChooseFiles),
                             Icon::Plus,
                             ButtonStyle::Primary,
                             PreviewAction::SelectFiles,
@@ -106,7 +121,7 @@ impl Desktop {
                     .child(
                         Self::button(
                             "choose-folder",
-                            "选择文件夹",
+                            locale.text(Text::ChooseFolder),
                             Icon::Folder,
                             ButtonStyle::Secondary,
                             PreviewAction::SelectFolder,
@@ -125,13 +140,19 @@ impl Desktop {
         scene: ShareScene,
         cx: &Context<Self>,
     ) -> Div {
+        let locale = language(cx);
         let visibility = scene.preparation_visibility();
         div()
             .relative()
             .w_full()
             .h(px(scene.geometry.height))
             .child(scene.scenery(theme, self.reduced_motion()))
-            .child(preparation_message(theme, bundle.name(), visibility))
+            .child(preparation_message(
+                theme,
+                bundle.name(),
+                visibility,
+                locale,
+            ))
             .child(
                 row()
                     .absolute()
@@ -142,7 +163,7 @@ impl Desktop {
                     .child(
                         Self::button(
                             "cancel-share",
-                            "取消",
+                            locale.text(Text::Cancel),
                             Icon::Close,
                             ButtonStyle::Ghost,
                             PreviewAction::ResetShare,
@@ -161,6 +182,7 @@ impl Desktop {
         layout: FlowLayout,
         cx: &Context<Self>,
     ) -> Div {
+        let locale = language(cx);
         column()
             .h(px(layout.stage_height()))
             .items_center()
@@ -173,7 +195,7 @@ impl Desktop {
                 layout.scene_scale(),
                 true,
             ))
-            .child(theme.heading("正在准备分享", 26.))
+            .child(theme.heading(locale.text(Text::PreparingShare), 26.))
             .child(
                 theme
                     .label(bundle.name(), 16.)
@@ -182,7 +204,7 @@ impl Desktop {
             .child(
                 Self::button(
                     "cancel-share",
-                    "取消",
+                    locale.text(Text::Cancel),
                     Icon::Close,
                     ButtonStyle::Ghost,
                     PreviewAction::ResetShare,
@@ -200,6 +222,7 @@ impl Desktop {
         scene: ShareScene,
         cx: &Context<Self>,
     ) -> Div {
+        let locale = language(cx);
         let g = scene.geometry;
         let title = scene.title_visibility();
         let summary = scene.summary_visibility();
@@ -225,16 +248,16 @@ impl Desktop {
                     .when(result < 1., |el| {
                         el.child(result_title(
                             theme,
-                            "正在准备链接",
-                            "文件已就位，再等一小会儿。",
+                            locale.text(Text::PreparingLink),
+                            locale.text(Text::PreparingLinkDetail),
                             1. - result,
                         ))
                     })
                     .when(result > 0., |el| {
                         el.child(result_title(
                             theme,
-                            "链接准备好了",
-                            "复制链接，发给想分享的人。",
+                            locale.text(Text::LinkReady),
+                            locale.text(Text::LinkReadyDetail),
                             result,
                         ))
                     }),
@@ -256,7 +279,11 @@ impl Desktop {
                     .opacity(summary)
                     .child(theme.icon_tile(bundle.icon(), bundle.tone(), 38.))
                     .child(theme.label(bundle.name(), 16.).flex_1())
-                    .child(theme.caption(format!("{} · {}", bundle.detail(), bundle.size()))),
+                    .child(theme.caption(format!(
+                        "{} · {}",
+                        bundle.contents().description(locale),
+                        bundle.size()
+                    ))),
             )
             .child(
                 row()
@@ -268,7 +295,7 @@ impl Desktop {
                     .child(reassurance(
                         theme,
                         Icon::Monitor,
-                        "保持 WindShare 开启，对方就能接收。",
+                        locale.text(Text::KeepOpenToReceive),
                     )),
             )
             .child(
@@ -281,7 +308,11 @@ impl Desktop {
                     .child(
                         Self::button(
                             "share-again",
-                            if pending { "取消" } else { "再分享一组" },
+                            if pending {
+                                locale.text(Text::Cancel)
+                            } else {
+                                locale.text(Text::ShareAgain)
+                            },
                             if pending { Icon::Close } else { Icon::Plus },
                             ButtonStyle::Ghost,
                             PreviewAction::ResetShare,
@@ -300,6 +331,7 @@ impl Desktop {
         scene: ShareScene,
         cx: &Context<Self>,
     ) -> Div {
+        let locale = language(cx);
         let g = scene.geometry;
         let expansion = scene.link_expansion();
         let result = scene.frame.result_visibility;
@@ -312,11 +344,11 @@ impl Desktop {
         let control = Button::new(
             "ready-copy",
             if share.is_none() {
-                "等待链接"
+                locale.text(Text::WaitingLink)
             } else if copied {
-                "已复制"
+                locale.text(Text::Copied)
             } else {
-                "复制链接"
+                locale.text(Text::CopyLink)
             },
         )
         .icon(if copied { Icon::Check } else { Icon::Copy })
@@ -396,7 +428,7 @@ fn result_title(theme: Theme, title: &'static str, subtitle: &'static str, visib
         .child(theme.heading(title, 26.))
         .child(theme.label(subtitle, 16.).text_color(theme.muted_text()))
 }
-fn preparation_message(theme: Theme, name: &str, visibility: f32) -> Div {
+fn preparation_message(theme: Theme, name: &str, visibility: f32, locale: Language) -> Div {
     column()
         .absolute()
         .bottom(px(44.))
@@ -404,7 +436,7 @@ fn preparation_message(theme: Theme, name: &str, visibility: f32) -> Div {
         .items_center()
         .gap(px(8.))
         .opacity(visibility)
-        .child(theme.heading("正在准备分享", 26.))
+        .child(theme.heading(locale.text(Text::PreparingShare), 26.))
         .child(
             theme
                 .label(name.to_owned(), 16.)

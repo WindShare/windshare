@@ -1,12 +1,13 @@
+use crate::localization::{LanguageSettings, Text};
 use crate::{
     desktop::Desktop,
     flow_state::{
         COPY_FEEDBACK_MS, CopyFeedback, LinkFeedback, RECEIVE_OPEN_MS, RECEIVE_SAVE_MS,
         ReceiveFlow, SampleBundle, ShareFlow, ShareReadiness, ShareRun,
     },
-    model::{Overlay, Page, PreviewAction, Share, ShareState, TransferState},
+    model::{Overlay, Page, PreviewAction, Share, ShareAge, ShareState, TransferState},
 };
-use gpui::{ClipboardItem, Context, Focusable, Window};
+use gpui::{BorrowAppContext, ClipboardItem, Context, Focusable, Window};
 use std::time::{Duration, Instant};
 
 const DEMO_LINK: &str = "https://windshare.example/s/kyoto-weekend";
@@ -77,6 +78,9 @@ impl Desktop {
                     *setting = !*setting;
                 }
             }
+            PreviewAction::SetLanguage(choice) => {
+                cx.update_global::<LanguageSettings, _>(|settings, _| settings.select(choice));
+            }
             PreviewAction::Toast(message) => self.notify(message, cx),
         }
         cx.notify();
@@ -92,7 +96,7 @@ impl Desktop {
             share_id: id,
             revision,
         };
-        self.notify("分享链接已复制", cx);
+        self.notify(Text::LinkCopied, cx);
         cx.spawn(async move |view, cx| {
             cx.background_executor().timer(Duration::from_millis(COPY_FEEDBACK_MS)).await;
             let _ = view.update(cx, |this, cx| {
@@ -160,9 +164,9 @@ impl Desktop {
             Share {
                 id,
                 name: bundle.name().into(),
-                detail: bundle.detail(),
+                contents: bundle.contents(),
                 size: bundle.size(),
-                date: "刚刚",
+                age: ShareAge::JustNow,
                 tone: bundle.tone(),
                 symbol: bundle.icon(),
                 state: ShareState::Live { viewers: 0 },

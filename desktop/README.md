@@ -2,7 +2,8 @@
 
 Native GPUI UI preview with independent **Share** and **Receive** screens.
 All files, links and transfers are samples; no network, engine or filesystem
-integration is included. Preview links use the reserved `windshare.example` domain.
+transfer integration is included. Language preferences are saved locally; preview
+links use the reserved `windshare.example` domain.
 
 ## Run
 
@@ -33,7 +34,10 @@ GPU. Windows is the locally verified platform.
   Hit targets stay fixed; reduced motion keeps smile feedback without movement.
 - Receive: paste a link or use the sample, inspect files, preview receiving.
 - My shares: search, filter, grid/list, pause and copy.
-- Preferences: notifications, transfer details and reduced motion.
+- Preferences: language, notifications, transfer details and reduced motion.
+  English and 简体中文 switch immediately without resetting inputs or tasks. The
+  default follows the system locale at startup, with English for unsupported locales.
+  The language choice is saved in the OS config directory at `WindShare/desktop/language`.
 - Task panels keep a stable height; compact layouts retain labeled navigation.
   Body text is 16 px, with contrasting text on themed, softly tinted surfaces.
 - `Ctrl+N`: new share; `Ctrl+K`: search; `Esc`: dismiss dialog.

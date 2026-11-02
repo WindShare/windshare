@@ -1,3 +1,4 @@
+use crate::localization::{Language, LanguageChoice, Text};
 use windshare_ui::{Icon, Tone};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -10,24 +11,24 @@ pub enum Page {
     Components,
 }
 impl Page {
-    pub const fn title(self) -> &'static str {
+    pub const fn title(self, language: Language) -> &'static str {
         match self {
-            Self::Share => "分享文件",
-            Self::Receive => "接收文件",
-            Self::Shares => "我的分享",
-            Self::Transfers => "传输",
-            Self::Settings => "偏好设置",
-            Self::Components => "设计组件",
+            Self::Share => language.text(Text::ShareTitle),
+            Self::Receive => language.text(Text::ReceiveTitle),
+            Self::Shares => language.text(Text::SharesTitle),
+            Self::Transfers => language.text(Text::TransfersTitle),
+            Self::Settings => language.text(Text::SettingsTitle),
+            Self::Components => language.text(Text::ComponentsTitle),
         }
     }
-    pub const fn subtitle(self) -> &'static str {
+    pub const fn subtitle(self, language: Language) -> &'static str {
         match self {
-            Self::Share => "选好文件，复制链接。分享就这么简单。",
-            Self::Receive => "打开链接，把喜欢的文件带到你的设备。",
-            Self::Shares => "已经分享的内容，都在这里。",
-            Self::Transfers => "查看正在传输和已经完成的文件。",
-            Self::Settings => "让 WindShare 更合你的习惯。",
-            Self::Components => "WindShare 自有组件，直接基于 GPUI 构建。",
+            Self::Share => language.text(Text::ShareSubtitle),
+            Self::Receive => language.text(Text::ReceiveSubtitle),
+            Self::Shares => language.text(Text::SharesSubtitle),
+            Self::Transfers => language.text(Text::TransfersSubtitle),
+            Self::Settings => language.text(Text::SettingsSubtitle),
+            Self::Components => language.text(Text::ComponentsSubtitle),
         }
     }
 }
@@ -46,9 +47,9 @@ pub enum ShareState {
 pub struct Share {
     pub id: usize,
     pub name: String,
-    pub detail: &'static str,
+    pub contents: ShareContents,
     pub size: &'static str,
-    pub date: &'static str,
+    pub age: ShareAge,
     pub tone: Tone,
     pub symbol: Icon,
     pub state: ShareState,
@@ -73,7 +74,8 @@ pub struct Transfer {
     pub rate_mbps: f32,
     pub remaining_seconds: u32,
     pub name: &'static str,
-    pub detail: &'static str,
+    pub peer: TransferPeer,
+    pub size_detail: &'static str,
     pub progress: f32,
     pub tone: Tone,
     pub state: TransferState,
@@ -105,16 +107,17 @@ pub enum PreviewAction {
     Close,
     Help,
     ToggleSetting(usize),
-    Toast(&'static str),
+    SetLanguage(LanguageChoice),
+    Toast(Text),
 }
 pub fn demo_shares() -> Vec<Share> {
     vec![
         Share {
             id: 1,
             name: "品牌设计素材".into(),
-            detail: "24 个文件",
+            contents: ShareContents::Files(24),
             size: "128 MB",
-            date: "刚刚",
+            age: ShareAge::JustNow,
             tone: Tone::Lavender,
             symbol: Icon::Folder,
             state: ShareState::Live { viewers: 2 },
@@ -122,9 +125,9 @@ pub fn demo_shares() -> Vec<Share> {
         Share {
             id: 2,
             name: "京都的周末".into(),
-            detail: "86 张照片",
+            contents: ShareContents::Photos(86),
             size: "1.4 GB",
-            date: "12 分钟前",
+            age: ShareAge::MinutesAgo(12),
             tone: Tone::Peach,
             symbol: Icon::Image,
             state: ShareState::Live { viewers: 1 },
@@ -132,9 +135,9 @@ pub fn demo_shares() -> Vec<Share> {
         Share {
             id: 3,
             name: "周日的慢节奏".into(),
-            detail: "12 首音乐",
+            contents: ShareContents::Tracks(12),
             size: "84 MB",
-            date: "昨天",
+            age: ShareAge::Yesterday,
             tone: Tone::Blue,
             symbol: Icon::Music,
             state: ShareState::Paused,
@@ -148,7 +151,8 @@ pub fn demo_transfers() -> Vec<Transfer> {
             symbol: Icon::File,
             rate_mbps: 24.8,
             remaining_seconds: 16,
-            detail: "来自 Alex · 842 MB / 1.2 GB",
+            peer: TransferPeer::From("Alex"),
+            size_detail: "842 MB / 1.2 GB",
             progress: 0.68,
             tone: Tone::Mint,
             state: TransferState::Running,
@@ -158,7 +162,8 @@ pub fn demo_transfers() -> Vec<Transfer> {
             symbol: Icon::Folder,
             rate_mbps: 12.4,
             remaining_seconds: 13,
-            detail: "发送给 Jamie · 86 MB / 248 MB",
+            peer: TransferPeer::To("Jamie"),
+            size_detail: "86 MB / 248 MB",
             progress: 0.35,
             tone: Tone::Lavender,
             state: TransferState::Running,
@@ -168,10 +173,57 @@ pub fn demo_transfers() -> Vec<Transfer> {
             symbol: Icon::File,
             rate_mbps: 0.0,
             remaining_seconds: 0,
-            detail: "来自 Sam · 18 MB",
+            peer: TransferPeer::From("Sam"),
+            size_detail: "18 MB",
             progress: 1.,
             tone: Tone::Peach,
             state: TransferState::Complete,
         },
     ]
+}
+
+#[derive(Clone, Copy)]
+pub enum ShareContents {
+    Files(usize),
+    FoldersAndFiles { folders: usize, files: usize },
+    Photos(usize),
+    Tracks(usize),
+}
+impl ShareContents {
+    pub fn description(self, language: Language) -> String {
+        match self {
+            Self::Files(count) => language.files(count),
+            Self::FoldersAndFiles { folders, files } => language.folders_and_files(folders, files),
+            Self::Photos(count) => language.photos(count),
+            Self::Tracks(count) => language.tracks(count),
+        }
+    }
+}
+#[derive(Clone, Copy)]
+pub enum ShareAge {
+    JustNow,
+    MinutesAgo(u32),
+    Yesterday,
+}
+impl ShareAge {
+    pub fn description(self, language: Language) -> String {
+        match self {
+            Self::JustNow => language.text(Text::JustNow).to_owned(),
+            Self::MinutesAgo(minutes) => language.minutes_ago(minutes),
+            Self::Yesterday => language.text(Text::Yesterday).to_owned(),
+        }
+    }
+}
+#[derive(Clone, Copy)]
+pub enum TransferPeer {
+    From(&'static str),
+    To(&'static str),
+}
+impl Transfer {
+    pub fn detail(&self, language: Language) -> String {
+        match self.peer {
+            TransferPeer::From(name) => language.received_from(name, self.size_detail),
+            TransferPeer::To(name) => language.sent_to(name, self.size_detail),
+        }
+    }
 }

@@ -1,10 +1,11 @@
-#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+#![cfg_attr(all(target_os = "windows", not(test)), windows_subsystem = "windows")]
 
 mod artwork;
 mod commands;
 mod desktop;
 mod flow_state;
 mod layout;
+mod localization;
 mod model;
 mod motion;
 mod motion_probe;
@@ -70,6 +71,7 @@ fn main() {
         .with_assets(DesktopAssets)
         .run(move |cx| {
             windshare_ui::init(cx);
+            cx.set_global(localization::LanguageSettings::load());
             artwork::Artwork::preload();
             let dimensions = if compact {
                 size(px(960.), px(760.))
@@ -81,7 +83,11 @@ fn main() {
                     None, dimensions, cx,
                 ))),
                 titlebar: Some(TitlebarOptions {
-                    title: Some("WindShare - UI preview".into()),
+                    title: Some(
+                        localization::language(cx)
+                            .text(localization::Text::WindowTitle)
+                            .into(),
+                    ),
                     appears_transparent: true,
                     ..Default::default()
                 }),

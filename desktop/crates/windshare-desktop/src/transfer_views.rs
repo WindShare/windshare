@@ -1,3 +1,4 @@
+use crate::localization::{Text, language};
 use crate::{
     desktop::Desktop,
     model::{PreviewAction, Transfer, TransferState},
@@ -7,6 +8,7 @@ use windshare_ui::{ButtonStyle, FONT, Icon, Theme, Tone, column, row};
 
 impl Desktop {
     pub fn transfers_page(&self, theme: Theme, cx: &Context<Self>) -> Div {
+        let locale = language(cx);
         let active = self
             .transfers
             .iter()
@@ -16,7 +18,10 @@ impl Desktop {
             .card()
             .p(px(28.))
             .gap(px(24.))
-            .child(theme.section_header("文件传输", &format!("{active} 项进行中")))
+            .child(theme.section_header(
+                locale.text(Text::FileTransfers),
+                &locale.active_transfers(active),
+            ))
             .children(self.transfers.iter().enumerate().map(|(index, transfer)| {
                 column()
                     .gap(px(24.))
@@ -34,6 +39,7 @@ impl Desktop {
         transfer: &Transfer,
         cx: &Context<Self>,
     ) -> Div {
+        let locale = language(cx);
         let paused = transfer.state == TransferState::Paused;
         let complete = transfer.state == TransferState::Complete;
         row()
@@ -52,7 +58,7 @@ impl Desktop {
                                 column()
                                     .gap(px(6.))
                                     .child(theme.heading(transfer.name, 17.))
-                                    .child(theme.caption(transfer.detail)),
+                                    .child(theme.caption(transfer.detail(locale))),
                             )
                             .child(
                                 theme
@@ -72,17 +78,19 @@ impl Desktop {
                         row()
                             .justify_between()
                             .child(theme.caption(if complete {
-                                "已完成"
+                                locale.text(Text::Complete)
                             } else if paused {
-                                "已暂停"
+                                locale.text(Text::Paused)
                             } else {
-                                "正在传输"
+                                locale.text(Text::Transferring)
                             }))
                             .when(self.settings[1] && !paused && !complete, |el| {
-                                el.child(theme.caption(format!(
-                                    "{:.1} MB/s · 剩余 {} 秒",
-                                    transfer.rate_mbps, transfer.remaining_seconds
-                                )))
+                                el.child(theme.caption(
+                                    locale.transfer_rate(
+                                        transfer.rate_mbps,
+                                        transfer.remaining_seconds,
+                                    ),
+                                ))
                             }),
                     ),
             )
@@ -103,11 +111,11 @@ impl Desktop {
                 )
                 .disabled(complete)
                 .tooltip(if complete {
-                    "传输完成"
+                    locale.text(Text::TransferComplete)
                 } else if paused {
-                    "继续传输"
+                    locale.text(Text::ResumeTransfer)
                 } else {
-                    "暂停传输"
+                    locale.text(Text::PauseTransfer)
                 }),
             )
     }
