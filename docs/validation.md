@@ -30,7 +30,7 @@ Make targets operate on the repository root and use the installed Go, Rust, Node
 | `make vectors` | Shared protocol, TURN control, signaling, and CLI trace vectors. |
 | `make vectors-update` | Regenerates protocol vectors. |
 | `make rust` | Cargo fmt, Clippy, native tests, doctests, coverage, and wasm builds. |
-| `make desktop-check` | Desktop workspace: Cargo fmt, strict Clippy, and native build; requires native GPUI prerequisites. |
+| `make desktop-check` | Desktop workspace: Cargo fmt, strict Clippy, non-UI unit tests, and native build; requires native GPUI prerequisites. |
 | `make web` | ESLint, TypeScript/Vite build, Vitest. |
 | `make e2e` | `TestUserTraceCriticalSenderRelayReceiver` over real CLI processes. |
 | `make browser` | Chromium relay smoke and short browser contracts. |

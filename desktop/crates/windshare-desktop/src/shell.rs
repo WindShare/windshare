@@ -1,3 +1,4 @@
+use crate::localization::{Text, language};
 use crate::{
     desktop::Desktop,
     model::{Page, PreviewAction},
@@ -24,7 +25,8 @@ impl Desktop {
             })
     }
 
-    pub fn titlebar(theme: Theme) -> Div {
+    pub fn titlebar(theme: Theme, cx: &Context<Self>) -> Div {
+        let locale = language(cx);
         row()
             .h(px(TITLEBAR_HEIGHT))
             .flex_shrink_0()
@@ -41,7 +43,7 @@ impl Desktop {
                                 .icon(Icon::Minimize)
                                 .compact()
                                 .style(ButtonStyle::Ghost)
-                                .tooltip("最小化")
+                                .tooltip(locale.text(Text::Minimize))
                                 .on_press(|(), window, _| window.minimize_window()),
                         )
                         .child(
@@ -49,7 +51,7 @@ impl Desktop {
                                 .icon(Icon::Maximize)
                                 .compact()
                                 .style(ButtonStyle::Ghost)
-                                .tooltip("最大化或还原")
+                                .tooltip(locale.text(Text::Maximize))
                                 .on_press(|(), window, _| window.zoom_window()),
                         )
                         .child(
@@ -57,7 +59,7 @@ impl Desktop {
                                 .icon(Icon::Close)
                                 .compact()
                                 .style(ButtonStyle::Ghost)
-                                .tooltip("关闭窗口")
+                                .tooltip(locale.text(Text::CloseWindow))
                                 .on_press(|(), window, _| window.remove_window()),
                         ),
                 )
@@ -81,6 +83,7 @@ impl Desktop {
     }
 
     fn sidebar_content(&self, theme: Theme, compact: bool, cx: &Context<Self>) -> Div {
+        let locale = language(cx);
         column()
             .flex_1()
             .min_h_0()
@@ -122,9 +125,9 @@ impl Desktop {
                 Self::button(
                     "about-nav",
                     if compact {
-                        "关于"
+                        locale.text(Text::AboutShort)
                     } else {
-                        "关于 WindShare"
+                        locale.text(Text::About)
                     },
                     Icon::Help,
                     ButtonStyle::Navigation,
@@ -136,9 +139,10 @@ impl Desktop {
     }
 
     fn navigation(&self, page: Page, symbol: Icon, cx: &Context<Self>) -> Button {
+        let locale = language(cx);
         Self::button(
             ("nav", page as usize),
-            page.title(),
+            page.title(locale),
             symbol,
             if self.page == page {
                 ButtonStyle::ActiveNavigation(if page == Page::Receive {
@@ -157,16 +161,19 @@ impl Desktop {
     }
 
     pub fn page_heading(&self, theme: Theme, compact: bool, cx: &Context<Self>) -> Div {
+        let locale = language(cx);
         row()
             .justify_between()
             .gap(px(20.))
             .child(
                 column()
+                    .flex_1()
+                    .min_w_0()
                     .gap(px(10.))
-                    .child(theme.heading(self.page.title(), if compact { 30. } else { 34. }))
+                    .child(theme.heading(self.page.title(locale), if compact { 30. } else { 34. }))
                     .child(
                         theme
-                            .label(self.page.subtitle(), 16.)
+                            .label(self.page.subtitle(locale), 16.)
                             .text_color(theme.muted_text())
                             .line_height(px(26.)),
                     ),
@@ -175,18 +182,19 @@ impl Desktop {
                 el.child(
                     Self::button(
                         "new-share-top",
-                        "新建分享",
+                        locale.text(Text::NewShare),
                         Icon::Plus,
                         ButtonStyle::Primary,
                         PreviewAction::NewShare,
                         cx,
                     )
-                    .tooltip("新建分享 · Ctrl+N"),
+                    .tooltip(locale.text(Text::NewShareShortcut)),
                 )
             })
     }
 
-    pub fn statusbar(theme: Theme) -> Div {
+    pub fn statusbar(theme: Theme, cx: &Context<Self>) -> Div {
+        let locale = language(cx);
         row()
             .h(px(40.))
             .flex_shrink_0()
@@ -195,7 +203,7 @@ impl Desktop {
             .child(theme.dot(Tone::Peach))
             .child(
                 theme
-                    .label("UI 预览 · 示例文件", 12.)
+                    .label(locale.text(Text::PreviewStatus), 12.)
                     .text_color(theme.muted_text()),
             )
     }

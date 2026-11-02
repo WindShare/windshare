@@ -87,6 +87,17 @@ impl Input {
         cx.emit(InputEvent::Changed);
         cx.notify();
     }
+    pub fn set_labels(
+        &mut self,
+        label: impl Into<SharedString>,
+        placeholder: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        // Presentation changes must preserve the user's value, selection and IME composition.
+        self.label = label.into();
+        self.placeholder = placeholder.into();
+        cx.notify();
+    }
     pub fn focus(&self, window: &mut Window, cx: &mut App) {
         window.focus(&self.focus, cx);
     }

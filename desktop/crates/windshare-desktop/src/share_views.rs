@@ -1,3 +1,4 @@
+use crate::localization::{Text, language};
 use crate::{
     desktop::Desktop,
     model::{Filter, PreviewAction, Share, ShareState},
@@ -7,11 +8,12 @@ use windshare_ui::{ButtonStyle, Icon, Theme, Tone, column, row};
 
 impl Desktop {
     pub fn share_card(theme: Theme, share: &Share, cx: &Context<Self>) -> Stateful<Div> {
+        let locale = language(cx);
         let id = share.id;
         let status = match share.state {
-            ShareState::Live { viewers } if viewers > 0 => format!("{viewers} 人正在接收"),
-            ShareState::Live { .. } => "等待接收".to_owned(),
-            ShareState::Paused => "已暂停".to_owned(),
+            ShareState::Live { viewers } if viewers > 0 => locale.viewers(viewers),
+            ShareState::Live { .. } => locale.text(Text::WaitingReceiver).to_owned(),
+            ShareState::Paused => locale.text(Text::Paused).to_owned(),
         };
         theme
             .card()
@@ -39,14 +41,18 @@ impl Desktop {
                             cx,
                         )
                         .compact()
-                        .tooltip("分享详情"),
+                        .tooltip(locale.text(Text::ShareDetails)),
                     ),
             )
             .child(
                 column()
                     .gap(px(5.))
                     .child(theme.heading(share.name.clone(), 18.).truncate())
-                    .child(theme.caption(format!("{}   ·   {}", share.detail, share.size))),
+                    .child(theme.caption(format!(
+                        "{}   ·   {}",
+                        share.contents.description(locale),
+                        share.size
+                    ))),
             )
             .child(
                 row()
@@ -74,7 +80,7 @@ impl Desktop {
                             cx,
                         )
                         .compact()
-                        .tooltip("复制分享链接"),
+                        .tooltip(locale.text(Text::CopyShareLink)),
                     ),
             )
     }
@@ -93,6 +99,7 @@ impl Desktop {
             .collect()
     }
     pub fn shares_page(&self, theme: Theme, compact: bool, cx: &Context<Self>) -> Div {
+        let locale = language(cx);
         let shares = self.visible_shares(cx);
         let count = shares.len();
         let columns = if compact { 2 } else { 3 };
@@ -101,6 +108,7 @@ impl Desktop {
             .child(
                 row()
                     .justify_between()
+                    .flex_wrap()
                     .gap_4()
                     .child(
                         row()
@@ -110,9 +118,9 @@ impl Desktop {
                             .bg(theme.inset())
                             .children(
                                 [
-                                    (Filter::All, "全部"),
-                                    (Filter::Live, "分享中"),
-                                    (Filter::Paused, "已暂停"),
+                                    (Filter::All, locale.text(Text::All)),
+                                    (Filter::Live, locale.text(Text::Sharing)),
+                                    (Filter::Paused, locale.text(Text::Paused)),
                                 ]
                                 .into_iter()
                                 .map(|(filter, title)| {
@@ -155,15 +163,15 @@ impl Desktop {
                                     PreviewAction::ToggleGrid,
                                     cx,
                                 )
-                                .tooltip("切换布局"),
+                                .tooltip(locale.text(Text::ChangeLayout)),
                             ),
                     ),
             )
             .child(
                 row()
                     .justify_between()
-                    .child(theme.caption(format!("共 {count} 个分享")))
-                    .child(theme.caption("最近分享在前")),
+                    .child(theme.caption(locale.shares(count)))
+                    .child(theme.caption(locale.text(Text::NewestFirst))),
             )
             .when(count == 0, |el| el.child(Self::empty_shares(theme, cx)))
             .when(count > 0 && self.grid, |el| {
@@ -189,6 +197,7 @@ impl Desktop {
             })
     }
     fn share_list_row(theme: Theme, share: &Share, cx: &Context<Self>) -> Div {
+        let locale = language(cx);
         row()
             .gap(px(12.))
             .p(px(20.))
@@ -200,13 +209,17 @@ impl Desktop {
                     .flex_1()
                     .gap(px(5.))
                     .child(theme.heading(share.name.clone(), 17.))
-                    .child(theme.caption(format!("{} · {}", share.detail, share.size))),
+                    .child(theme.caption(format!(
+                        "{} · {}",
+                        share.contents.description(locale),
+                        share.size
+                    ))),
             )
             .child(theme.badge(
                 if share.live() {
-                    "分享中"
+                    locale.text(Text::Sharing)
                 } else {
-                    "已暂停"
+                    locale.text(Text::Paused)
                 },
                 if share.live() {
                     Tone::Mint
@@ -217,7 +230,7 @@ impl Desktop {
             .child(
                 Self::button(
                     ("list-link", share.id),
-                    "复制链接",
+                    locale.text(Text::CopyLink),
                     Icon::Link,
                     ButtonStyle::Secondary,
                     PreviewAction::CopyLink(share.id),
@@ -235,10 +248,11 @@ impl Desktop {
                     cx,
                 )
                 .compact()
-                .tooltip("分享详情"),
+                .tooltip(locale.text(Text::ShareDetails)),
             )
     }
     fn empty_shares(theme: Theme, cx: &Context<Self>) -> Div {
+        let locale = language(cx);
         theme
             .card()
             .h(px(330.))
@@ -246,15 +260,15 @@ impl Desktop {
             .justify_center()
             .gap(px(12.))
             .child(theme.icon_tile(Icon::Search, Tone::Lavender, 58.))
-            .child(theme.heading("没有找到这个分享", 22.))
+            .child(theme.heading(locale.text(Text::NoSharesFound), 22.))
             .child(
                 theme
-                    .label("换个关键词，或创建一个新分享。", 16.)
+                    .label(locale.text(Text::NoSharesFoundDetail), 16.)
                     .text_color(theme.muted_text()),
             )
             .child(Self::button(
                 "empty-new",
-                "新建分享",
+                locale.text(Text::NewShare),
                 Icon::Plus,
                 ButtonStyle::Primary,
                 PreviewAction::NewShare,

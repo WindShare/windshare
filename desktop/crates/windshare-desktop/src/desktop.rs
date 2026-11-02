@@ -1,3 +1,4 @@
+use crate::localization::{LanguageSettings, Text, language};
 use crate::{
     flow_state::{CopyFeedback, ReceiveFlow, ShareFlow},
     layout::{FlowLayout, MAX_PAGE_WIDTH, page_gutter},
@@ -6,7 +7,7 @@ use crate::{
 };
 use gpui::{
     Animation, AnimationExt, App, AppContext, ElementId, Entity, FocusHandle, Focusable,
-    KeyDownEvent, SharedString, Subscription, Window, ease_out_quint, prelude::*, px,
+    KeyDownEvent, Subscription, Window, ease_out_quint, prelude::*, px,
 };
 use std::time::Duration;
 use windshare_ui::InputEvent;
@@ -31,7 +32,7 @@ pub struct Desktop {
     pub primary_focus: FocusHandle,
     pub operation_sequence: usize,
     pub overlay: Option<Overlay>,
-    pub toast: Option<(usize, SharedString)>,
+    pub toast: Option<(usize, Text)>,
     pub settings: [bool; 3],
     pub dialog_sequence: usize,
     toast_sequence: usize,
@@ -42,9 +43,29 @@ pub struct Desktop {
 }
 impl Desktop {
     pub fn new(window: &mut Window, preview_share_delay: Duration, cx: &mut Context<Self>) -> Self {
-        let search = cx.new(|cx| Input::new("搜索分享名称", cx).placeholder("搜索分享名称"));
-        let link_input = cx.new(|cx| Input::new("分享链接", cx).accent(Tone::Lavender));
+        let locale = language(cx);
+        let search = cx.new(|cx| {
+            Input::new(locale.text(Text::SearchShares), cx)
+                .placeholder(locale.text(Text::SearchShares))
+        });
+        let link_input =
+            cx.new(|cx| Input::new(locale.text(Text::ShareLink), cx).accent(Tone::Lavender));
         let subscriptions = vec![
+            cx.observe_global_in::<LanguageSettings>(window, |this, window, cx| {
+                let locale = language(cx);
+                window.set_window_title(locale.text(Text::WindowTitle));
+                this.search.update(cx, |input, cx| {
+                    input.set_labels(
+                        locale.text(Text::SearchShares),
+                        locale.text(Text::SearchShares),
+                        cx,
+                    );
+                });
+                this.link_input.update(cx, |input, cx| {
+                    input.set_labels(locale.text(Text::ShareLink), "", cx);
+                });
+                cx.notify();
+            }),
             windshare_ui::follow_system_theme(window),
             cx.subscribe(&search, |_, _, _, cx| cx.notify()),
             cx.subscribe_in(&link_input, window, |this, _, event, window, cx| {
@@ -89,7 +110,7 @@ impl Desktop {
     }
     pub fn button(
         id: impl Into<ElementId>,
-        text: impl Into<SharedString>,
+        text: impl Into<gpui::SharedString>,
         symbol: Icon,
         style: ButtonStyle,
         action: PreviewAction,
@@ -100,13 +121,13 @@ impl Desktop {
             .style(style)
             .on_press(cx.listener(move |this, (), window, cx| this.dispatch(action, window, cx)))
     }
-    pub fn notify(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
+    pub fn notify(&mut self, message: Text, cx: &mut Context<Self>) {
         if !self.settings[0] {
             return;
         }
         self.toast_sequence += 1;
         let id = self.toast_sequence;
-        self.toast = Some((id, message.into()));
+        self.toast = Some((id, message));
         cx.spawn(async move |view, cx| {
             cx.background_executor().timer(Duration::from_secs(4)).await;
             let _ = view.update(cx, |this, cx| {
@@ -180,6 +201,7 @@ impl Desktop {
 }
 impl Render for Desktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let locale = language(cx);
         let theme = Theme::from(window.appearance());
         let compact = window.viewport_size().width < px(COMPACT_WIDTH);
         let layout = FlowLayout::for_window(window);
@@ -211,7 +233,7 @@ impl Render for Desktop {
                         column()
                             .flex_1()
                             .min_w_0()
-                            .child(Self::titlebar(theme))
+                            .child(Self::titlebar(theme, cx))
                             .child(
                                 column()
                                     .id(("page-scroll", self.page as usize))
@@ -240,13 +262,13 @@ impl Render for Desktop {
                                             ),
                                     ),
                             )
-                            .child(Self::statusbar(theme)),
+                            .child(Self::statusbar(theme, cx)),
                     ),
             )
             .when(self.overlay.is_some(), |root| {
                 root.child(self.overlay_view(window, cx))
             })
-            .when_some(self.toast.clone(), |root, (id, text)| {
+            .when_some(self.toast, |root, (id, text)| {
                 root.child(
                     row()
                         .absolute()
@@ -261,7 +283,11 @@ impl Render for Desktop {
                         .border_color(theme.notification_border())
                         .shadow_sm()
                         .child(theme.icon_tile(Icon::Check, Tone::Mint, 30.))
-                        .child(theme.label(text, 16.).text_color(theme.accent_text()))
+                        .child(
+                            theme
+                                .label(locale.text(text), 16.)
+                                .text_color(theme.accent_text()),
+                        )
                         .with_animation(
                             ("toast", id),
                             Animation::new(Duration::from_millis(if self.reduced_motion() {

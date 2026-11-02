@@ -1,6 +1,7 @@
+use crate::localization::{Language, Text, language};
 use crate::{
     desktop::Desktop,
-    flow_state::{LinkFeedback, RECEIVE_SAVE_MS, RECEIVED_FILES, ReceiveFlow},
+    flow_state::{LinkFeedback, RECEIVE_SAVE_MS, RECEIVED_FILES, ReceiveFlow, SampleBundle},
     layout::{FlowLayout, RECEIVE_STAGE_HEIGHT},
     model::PreviewAction,
     motion::{SpiritMood, reassurance, reveal, scaled_spirit},
@@ -10,10 +11,10 @@ use gpui::{Animation, AnimationExt, Div, FontWeight, div, prelude::*, px, relati
 use std::time::Duration;
 use windshare_ui::{ButtonStyle, Icon, Theme, Tone, column, icon, row};
 
-fn link_feedback(theme: Theme, feedback: LinkFeedback) -> Option<Div> {
+fn link_feedback(theme: Theme, feedback: LinkFeedback, locale: Language) -> Option<Div> {
     let message = match feedback {
         LinkFeedback::None => return None,
-        LinkFeedback::Invalid => "链接似乎不完整，请重新粘贴，或使用下方示例。",
+        LinkFeedback::Invalid => locale.text(Text::InvalidLink),
     };
     Some(
         theme
@@ -25,6 +26,7 @@ fn link_feedback(theme: Theme, feedback: LinkFeedback) -> Option<Div> {
 
 impl Desktop {
     pub fn receiving_page(&self, theme: Theme, layout: FlowLayout, cx: &Context<Self>) -> Div {
+        let locale = language(cx);
         let content = match self.receive_flow {
             ReceiveFlow::Link { feedback } => self.receive_link(theme, feedback, cx),
             ReceiveFlow::Opening { .. } => self.opening_link(theme, layout, cx),
@@ -51,12 +53,21 @@ impl Desktop {
                     .justify_center()
                     .flex_wrap()
                     .gap(px(24.))
-                    .child(reassurance(theme, Icon::Shield, "只有你和分享者能读取文件"))
-                    .child(reassurance(theme, Icon::Download, "接收前可查看文件")),
+                    .child(reassurance(
+                        theme,
+                        Icon::Shield,
+                        locale.text(Text::PrivateFiles),
+                    ))
+                    .child(reassurance(
+                        theme,
+                        Icon::Download,
+                        locale.text(Text::InspectBeforeReceive),
+                    )),
             )
     }
 
     fn receive_link(&self, theme: Theme, feedback: LinkFeedback, cx: &Context<Self>) -> Div {
+        let locale = language(cx);
         column()
             .gap(px(24.))
             .w_full()
@@ -70,10 +81,14 @@ impl Desktop {
                         column()
                             .gap(px(12.))
                             .flex_1()
-                            .child(theme.heading("从一个链接开始", 27.).line_height(px(36.)))
                             .child(
                                 theme
-                                    .label("粘贴链接，先看看对方分享了什么。", 16.)
+                                    .heading(locale.text(Text::StartWithLink), 27.)
+                                    .line_height(px(36.)),
+                            )
+                            .child(
+                                theme
+                                    .label(locale.text(Text::PasteLinkDetail), 16.)
                                     .line_height(px(26.))
                                     .text_color(theme.muted_text()),
                             ),
@@ -91,7 +106,7 @@ impl Desktop {
                     .gap(px(12.))
                     .child(
                         theme
-                            .label("分享链接", 16.)
+                            .label(locale.text(Text::ShareLink), 16.)
                             .font_weight(FontWeight::SEMIBOLD),
                     )
                     .child(
@@ -101,7 +116,7 @@ impl Desktop {
                             .child(
                                 Self::button(
                                     "paste-link",
-                                    "粘贴",
+                                    locale.text(Text::Paste),
                                     Icon::Copy,
                                     ButtonStyle::Secondary,
                                     PreviewAction::PasteLink,
@@ -110,11 +125,11 @@ impl Desktop {
                                 .large(),
                             ),
                     )
-                    .children(link_feedback(theme, feedback))
+                    .children(link_feedback(theme, feedback, locale))
                     .child(
                         Self::button(
                             "open-link",
-                            "打开分享",
+                            locale.text(Text::OpenShare),
                             Icon::Arrow,
                             ButtonStyle::Tinted(Tone::Lavender),
                             PreviewAction::OpenPreview,
@@ -129,11 +144,11 @@ impl Desktop {
                     .justify_between()
                     .gap(px(16.))
                     .pt(px(4.))
-                    .child(theme.caption("还没有链接？"))
+                    .child(theme.caption(locale.text(Text::NoLink)))
                     .child(
                         Self::button(
                             "demo-link",
-                            "试试示例分享",
+                            locale.text(Text::TrySample),
                             Icon::Spark,
                             ButtonStyle::Ghost,
                             PreviewAction::DemoLink,
@@ -145,6 +160,7 @@ impl Desktop {
     }
 
     fn opening_link(&self, theme: Theme, layout: FlowLayout, cx: &Context<Self>) -> Div {
+        let locale = language(cx);
         column()
             .items_center()
             .gap(px(20.))
@@ -155,16 +171,16 @@ impl Desktop {
                 layout.scene_scale(),
                 self.reduced_motion(),
             ))
-            .child(theme.heading("正在打开分享", 26.))
+            .child(theme.heading(locale.text(Text::OpeningShare), 26.))
             .child(
                 theme
-                    .label("正在和分享者建立安全连接。", 16.)
+                    .label(locale.text(Text::ConnectingSecurely), 16.)
                     .text_color(theme.muted_text()),
             )
             .child(
                 Self::button(
                     "cancel-open",
-                    "取消",
+                    locale.text(Text::Cancel),
                     Icon::Close,
                     ButtonStyle::Ghost,
                     PreviewAction::ResetReceive,
@@ -176,6 +192,7 @@ impl Desktop {
     }
 
     fn receive_files(&self, theme: Theme, cx: &Context<Self>) -> Div {
+        let locale = language(cx);
         column()
             .gap(px(16.))
             .child(reveal(
@@ -186,10 +203,17 @@ impl Desktop {
                         column()
                             .gap(px(6.))
                             .flex_1()
-                            .child(theme.heading("京都的周末", 24.))
-                            .child(theme.caption("来自 Alex · 3 个文件 · 共 24 MB")),
+                            .child(theme.heading(SampleBundle::Photos.name(), 24.))
+                            .child(theme.caption(locale.received_from(
+                                "Alex",
+                                &format!(
+                                    "{} · {}",
+                                    locale.files(RECEIVED_FILES.len()),
+                                    SampleBundle::Photos.size()
+                                ),
+                            ))),
                     )
-                    .child(theme.badge("分享者在线", Tone::Mint)),
+                    .child(theme.badge(locale.text(Text::SenderOnline), Tone::Mint)),
                 "receive-files",
                 self.reduced_motion(),
             ))
@@ -219,12 +243,12 @@ impl Desktop {
                 row()
                     .gap(px(8.))
                     .child(icon(Icon::Folder, 17.).text_color(theme.muted_text()))
-                    .child(theme.caption("保存到 下载 / 京都的周末")),
+                    .child(theme.caption(locale.save_to_downloads(SampleBundle::Photos.name()))),
             )
             .child(
                 Self::button(
                     "save-files",
-                    "接收这 3 个文件",
+                    locale.receive_files(RECEIVED_FILES.len()),
                     Icon::Download,
                     ButtonStyle::Primary,
                     PreviewAction::SavePreview,
@@ -237,7 +261,7 @@ impl Desktop {
                 row().justify_center().child(
                     Self::button(
                         "receive-other",
-                        "换一个分享链接",
+                        locale.text(Text::AnotherLink),
                         Icon::Link,
                         ButtonStyle::Ghost,
                         PreviewAction::ResetReceive,
@@ -255,6 +279,7 @@ impl Desktop {
         layout: FlowLayout,
         cx: &Context<Self>,
     ) -> Div {
+        let locale = language(cx);
         let progress_bar = div()
             .h(px(7.))
             .w(relative(0.05))
@@ -281,10 +306,17 @@ impl Desktop {
                 layout.scene_scale(),
                 self.reduced_motion(),
             ))
-            .child(theme.heading("文件正在向你靠近", 26.))
+            .child(theme.heading(locale.text(Text::ReceivingFiles), 26.))
             .child(
                 theme
-                    .label("京都的周末 · 3 个文件", 16.)
+                    .label(
+                        format!(
+                            "{} · {}",
+                            SampleBundle::Photos.name(),
+                            locale.files(RECEIVED_FILES.len())
+                        ),
+                        16.,
+                    )
                     .text_color(theme.muted_text()),
             )
             .child(
@@ -301,12 +333,16 @@ impl Desktop {
                             .overflow_hidden()
                             .child(progress_bar),
                     )
-                    .child(theme.caption("正在演示接收过程").text_center()),
+                    .child(
+                        theme
+                            .caption(locale.text(Text::ReceiveSimulation))
+                            .text_center(),
+                    ),
             )
             .child(
                 Self::button(
                     "cancel-receive",
-                    "取消接收",
+                    locale.text(Text::CancelReceive),
                     Icon::Close,
                     ButtonStyle::Ghost,
                     PreviewAction::ResetReceive,
@@ -318,6 +354,7 @@ impl Desktop {
     }
 
     fn receive_complete(&self, theme: Theme, layout: FlowLayout, cx: &Context<Self>) -> Div {
+        let locale = language(cx);
         column()
             .items_center()
             .gap(px(18.))
@@ -332,20 +369,28 @@ impl Desktop {
                         layout.scene_scale(),
                         self.reduced_motion(),
                     ))
-                    .child(theme.heading("接收完成", 26.))
+                    .child(theme.heading(locale.text(Text::ReceiveComplete), 26.))
                     .child(
                         theme
-                            .label("京都的周末 · 3 个文件 · 24 MB", 16.)
+                            .label(
+                                format!(
+                                    "{} · {} · {}",
+                                    SampleBundle::Photos.name(),
+                                    locale.files(RECEIVED_FILES.len()),
+                                    SampleBundle::Photos.size()
+                                ),
+                                16.,
+                            )
                             .text_color(theme.muted_text()),
                     ),
                 "receive-complete",
                 self.reduced_motion(),
             ))
-            .child(theme.badge("演示完成，未写入实际文件", Tone::Lavender))
+            .child(theme.badge(locale.text(Text::PreviewComplete), Tone::Lavender))
             .child(
                 Self::button(
                     "receive-again",
-                    "接收另一个分享",
+                    locale.text(Text::ReceiveAnother),
                     Icon::Link,
                     ButtonStyle::Primary,
                     PreviewAction::ResetReceive,

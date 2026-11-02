@@ -1,4 +1,4 @@
-use crate::share_timing::ShareFrame;
+use crate::{model::ShareContents, share_timing::ShareFrame};
 use std::time::Instant;
 use windshare_ui::{Icon, Tone};
 pub const COPY_FEEDBACK_MS: u64 = 2400;
@@ -23,10 +23,13 @@ impl SampleBundle {
             Self::Photos => "京都的周末",
         }
     }
-    pub const fn detail(self) -> &'static str {
+    pub const fn contents(self) -> ShareContents {
         match self {
-            Self::Design => "3 个文件",
-            Self::Photos => "1 个文件夹 · 3 个文件",
+            Self::Design => ShareContents::Files(3),
+            Self::Photos => ShareContents::FoldersAndFiles {
+                folders: 1,
+                files: 3,
+            },
         }
     }
     pub const fn size(self) -> &'static str {

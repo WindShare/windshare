@@ -1,3 +1,4 @@
+use crate::localization::{LanguageSettings, Text, language};
 mod behavior;
 
 use super::SpiritMood;
@@ -74,8 +75,9 @@ struct SpiritView {
 }
 
 impl SpiritView {
-    fn new(presentation: Presentation, window: &mut Window, cx: &Context<Self>) -> Self {
+    fn new(presentation: Presentation, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let subscriptions = vec![
+            cx.observe_global::<LanguageSettings>(|_, cx| cx.notify()),
             cx.observe_window_activation(window, |this, _, cx| {
                 this.behavior.reset();
                 this.pointer_position = None;
@@ -237,7 +239,7 @@ impl Render for SpiritView {
             .border_1()
             .border_color(gpui::transparent_black())
             .role(Role::Button)
-            .aria_label("和 WindShare 小精灵打个招呼")
+            .aria_label(language(cx).text(Text::SpiritGreeting))
             .track_focus(&self.focus)
             .tab_index(0)
             .cursor_pointer()

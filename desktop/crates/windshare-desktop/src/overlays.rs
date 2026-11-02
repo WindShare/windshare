@@ -1,3 +1,4 @@
+use crate::localization::{Text, language};
 use crate::{
     desktop::Desktop,
     model::{Overlay, PreviewAction},
@@ -11,14 +12,18 @@ use windshare_ui::{ButtonStyle, FONT, Icon, MOTION_MS, Theme, Tone, column, row}
 
 impl Desktop {
     pub fn overlay_view(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement {
+        let locale = language(cx);
         let theme = Theme::from(window.appearance());
         let overlay = self
             .overlay
             .clone()
             .expect("overlay is only rendered when open");
         let (title, content) = match overlay {
-            Overlay::Detail(id) => ("分享详情", self.share_detail(theme, id, cx)),
-            Overlay::Help => ("关于 WindShare", self.about_preview(theme, cx)),
+            Overlay::Detail(id) => (
+                locale.text(Text::ShareDetails),
+                self.share_detail(theme, id, cx),
+            ),
+            Overlay::Help => (locale.text(Text::About), self.about_preview(theme, cx)),
         };
         let modal = theme
             .card()
@@ -48,7 +53,7 @@ impl Desktop {
                             PreviewAction::Close,
                             cx,
                         )
-                        .tooltip("关闭 · Esc"),
+                        .tooltip(locale.text(Text::CloseDialog)),
                     ),
             )
             .child(content);
@@ -80,6 +85,7 @@ impl Desktop {
     }
 
     fn share_detail(&self, theme: Theme, id: usize, cx: &Context<Self>) -> Div {
+        let locale = language(cx);
         let Some(share) = self.shares.iter().find(|share| share.id == id) else {
             return column();
         };
@@ -93,18 +99,22 @@ impl Desktop {
                         column()
                             .gap(px(7.))
                             .child(theme.heading(share.name.clone(), 22.))
-                            .child(theme.caption(format!("{} · {}", share.detail, share.size))),
+                            .child(theme.caption(format!(
+                                "{} · {}",
+                                share.contents.description(locale),
+                                share.size
+                            ))),
                     ),
             )
             .child(
                 row()
                     .justify_between()
-                    .child(theme.caption(format!("创建于 {}", share.date)))
+                    .child(theme.caption(locale.created(&share.age.description(locale))))
                     .child(theme.badge(
                         if share.live() {
-                            "正在分享"
+                            locale.text(Text::SharingActive)
                         } else {
-                            "已暂停"
+                            locale.text(Text::Paused)
                         },
                         if share.live() {
                             Tone::Mint
@@ -116,7 +126,7 @@ impl Desktop {
             .child(
                 column()
                     .gap(px(12.))
-                    .child(theme.label("分享链接", 16.))
+                    .child(theme.label(locale.text(Text::ShareLink), 16.))
                     .child(
                         theme
                             .label(share.link(), 15.)
@@ -128,7 +138,7 @@ impl Desktop {
                     .child(
                         Self::button(
                             "detail-copy",
-                            "复制分享链接",
+                            locale.text(Text::CopyShareLink),
                             Icon::Copy,
                             ButtonStyle::Primary,
                             PreviewAction::CopyLink(id),
@@ -137,13 +147,13 @@ impl Desktop {
                         .large(),
                     ),
             )
-            .child(theme.caption("分享时请保持 WindShare 开启。"))
+            .child(theme.caption(locale.text(Text::KeepOpen)))
             .child(Self::button(
                 "detail-toggle",
                 if share.live() {
-                    "暂停分享"
+                    locale.text(Text::PauseShare)
                 } else {
-                    "继续分享"
+                    locale.text(Text::ResumeShare)
                 },
                 if share.live() {
                     Icon::Pause
@@ -157,12 +167,38 @@ impl Desktop {
     }
 
     fn about_preview(&self, theme: Theme, cx: &Context<Self>) -> Div {
-        column().gap(px(20.)).items_center()
-            .child(spirit_scene("about-spirit", SpiritMood::Happy, Tone::Mint, self.reduced_motion()))
-            .child(theme.heading("文件随风，分享自如。", 24.))
-            .child(theme.label("WindShare 是开源的端到端加密文件分享工具。\n选好文件、生成链接，让对方直接接收。", 16.).text_color(theme.muted_text()).line_height(px(28.)).text_center())
+        let locale = language(cx);
+        column()
+            .gap(px(20.))
+            .items_center()
+            .child(spirit_scene(
+                "about-spirit",
+                SpiritMood::Happy,
+                Tone::Mint,
+                self.reduced_motion(),
+            ))
+            .child(theme.heading(locale.text(Text::AboutTagline), 24.))
+            .child(
+                theme
+                    .label(locale.text(Text::AboutDescription), 16.)
+                    .text_color(theme.muted_text())
+                    .line_height(px(28.))
+                    .text_center(),
+            )
             .child(theme.separator())
-            .child(theme.caption("当前为 GPUI 界面预览。文件、链接与传输均为演示，\n不连接网络，也不会读写实际文件。").text_center().line_height(px(24.)))
-            .child(Self::button("about-done", "知道了", Icon::Check, ButtonStyle::Primary, PreviewAction::Close, cx))
+            .child(
+                theme
+                    .caption(locale.text(Text::AboutPreview))
+                    .text_center()
+                    .line_height(px(24.)),
+            )
+            .child(Self::button(
+                "about-done",
+                locale.text(Text::GotIt),
+                Icon::Check,
+                ButtonStyle::Primary,
+                PreviewAction::Close,
+                cx,
+            ))
     }
 }
