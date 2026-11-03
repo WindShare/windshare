@@ -1,0 +1,276 @@
+{
+  "baseline_commit": "6ec762ebc1106ae8c5ce1a69208a98dfcfdddaaf",
+  "candidate_commit": "1340f02e98f1a7c8f06f865e135ec505a1bce2dc",
+  "candidate_tree": "fbb77d75260db2424995a9d9dc5071789918804d",
+  "candidate_patch_sha256": "6a64127aac03c402409abcce5c562e61895d300aa16a594311ad2dd228f06df6",
+  "environment": "windows",
+  "go": "go version go1.27.3 windows/amd64",
+  "successful_transfers": 52,
+  "focused_passed_subtests": 30,
+  "metric": "Milliseconds from the last deliberately lost target transmission to its next transmission.",
+  "scope": "Recovery evidence for this exact commit; no general throughput claim.",
+  "aggregate": [
+    {
+      "case": "data-chunks",
+      "variant": "upstream",
+      "runs": 2,
+      "t3_timeouts": 2,
+      "target_rack_marks": 2,
+      "runs_with_later_send_ack_before_recovery": 2,
+      "recovery_ms": {
+        "min": 975.0629999999999,
+        "median": 975.4734999999998,
+        "max": 975.8839999999999
+      }
+    },
+    {
+      "case": "data-chunks",
+      "variant": "repaired",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "target_rack_marks": 4,
+      "runs_with_later_send_ack_before_recovery": 2,
+      "recovery_ms": {
+        "min": 28.54600000000002,
+        "median": 29.232000000000014,
+        "max": 29.918000000000006
+      }
+    },
+    {
+      "case": "double-loss",
+      "variant": "upstream",
+      "runs": 5,
+      "t3_timeouts": 5,
+      "target_rack_marks": 5,
+      "runs_with_later_send_ack_before_recovery": 5,
+      "recovery_ms": {
+        "min": 970.153,
+        "median": 971.08,
+        "max": 971.3009999999999
+      }
+    },
+    {
+      "case": "double-loss",
+      "variant": "repaired",
+      "runs": 5,
+      "t3_timeouts": 0,
+      "target_rack_marks": 10,
+      "runs_with_later_send_ack_before_recovery": 4,
+      "recovery_ms": {
+        "min": 21.536999999999978,
+        "median": 28.900000000000006,
+        "max": 30.275999999999982
+      }
+    },
+    {
+      "case": "fragmented",
+      "variant": "upstream",
+      "runs": 2,
+      "t3_timeouts": 2,
+      "target_rack_marks": 1,
+      "runs_with_later_send_ack_before_recovery": 2,
+      "recovery_ms": {
+        "min": 975.5419999999999,
+        "median": 977.6125,
+        "max": 979.683
+      }
+    },
+    {
+      "case": "fragmented",
+      "variant": "repaired",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "target_rack_marks": 3,
+      "runs_with_later_send_ack_before_recovery": 0,
+      "recovery_ms": {
+        "min": 29.822000000000003,
+        "median": 31.56649999999999,
+        "max": 33.31099999999998
+      }
+    },
+    {
+      "case": "late-original",
+      "variant": "upstream",
+      "runs": 3,
+      "t3_timeouts": 0,
+      "target_rack_marks": 3,
+      "runs_with_later_send_ack_before_recovery": 0,
+      "recovery_ms": null
+    },
+    {
+      "case": "late-original",
+      "variant": "repaired",
+      "runs": 3,
+      "t3_timeouts": 0,
+      "target_rack_marks": 3,
+      "runs_with_later_send_ack_before_recovery": 0,
+      "recovery_ms": null
+    },
+    {
+      "case": "no-loss",
+      "variant": "upstream",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "target_rack_marks": 0,
+      "runs_with_later_send_ack_before_recovery": 0,
+      "recovery_ms": null
+    },
+    {
+      "case": "no-loss",
+      "variant": "repaired",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "target_rack_marks": 0,
+      "runs_with_later_send_ack_before_recovery": 0,
+      "recovery_ms": null
+    },
+    {
+      "case": "reordering",
+      "variant": "upstream",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "target_rack_marks": 2,
+      "runs_with_later_send_ack_before_recovery": 0,
+      "recovery_ms": null
+    },
+    {
+      "case": "reordering",
+      "variant": "repaired",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "target_rack_marks": 2,
+      "runs_with_later_send_ack_before_recovery": 0,
+      "recovery_ms": null
+    },
+    {
+      "case": "rtt-50ms",
+      "variant": "upstream",
+      "runs": 2,
+      "t3_timeouts": 2,
+      "target_rack_marks": 2,
+      "runs_with_later_send_ack_before_recovery": 2,
+      "recovery_ms": {
+        "min": 945.8900000000001,
+        "median": 945.9960000000001,
+        "max": 946.1020000000001
+      }
+    },
+    {
+      "case": "rtt-50ms",
+      "variant": "repaired",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "target_rack_marks": 4,
+      "runs_with_later_send_ack_before_recovery": 0,
+      "recovery_ms": {
+        "min": 51.113,
+        "median": 51.26349999999999,
+        "max": 51.41399999999999
+      }
+    },
+    {
+      "case": "short-flight",
+      "variant": "upstream",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "target_rack_marks": 2,
+      "runs_with_later_send_ack_before_recovery": 2,
+      "recovery_ms": {
+        "min": 199.54800000000003,
+        "median": 214.2645,
+        "max": 228.981
+      }
+    },
+    {
+      "case": "short-flight",
+      "variant": "repaired",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "target_rack_marks": 4,
+      "runs_with_later_send_ack_before_recovery": 2,
+      "recovery_ms": {
+        "min": 29.195999999999998,
+        "median": 29.58999999999999,
+        "max": 29.98399999999998
+      }
+    },
+    {
+      "case": "single-loss",
+      "variant": "upstream",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "target_rack_marks": 2,
+      "runs_with_later_send_ack_before_recovery": 0,
+      "recovery_ms": {
+        "min": 29.01299999999999,
+        "median": 29.108999999999988,
+        "max": 29.204999999999984
+      }
+    },
+    {
+      "case": "single-loss",
+      "variant": "repaired",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "target_rack_marks": 2,
+      "runs_with_later_send_ack_before_recovery": 0,
+      "recovery_ms": {
+        "min": 24.625,
+        "median": 27.107000000000006,
+        "max": 29.589000000000013
+      }
+    },
+    {
+      "case": "tail",
+      "variant": "upstream",
+      "runs": 2,
+      "t3_timeouts": 2,
+      "target_rack_marks": 0,
+      "runs_with_later_send_ack_before_recovery": 0,
+      "recovery_ms": {
+        "min": 691.74,
+        "median": 714.4565,
+        "max": 737.1730000000001
+      }
+    },
+    {
+      "case": "tail",
+      "variant": "repaired",
+      "runs": 2,
+      "t3_timeouts": 2,
+      "target_rack_marks": 0,
+      "runs_with_later_send_ack_before_recovery": 0,
+      "recovery_ms": {
+        "min": 747.0609999999999,
+        "median": 747.8265,
+        "max": 748.5920000000001
+      }
+    },
+    {
+      "case": "triple-loss",
+      "variant": "upstream",
+      "runs": 2,
+      "t3_timeouts": 4,
+      "target_rack_marks": 2,
+      "runs_with_later_send_ack_before_recovery": 2,
+      "recovery_ms": {
+        "min": 2000.163,
+        "median": 2000.223,
+        "max": 2000.283
+      }
+    },
+    {
+      "case": "triple-loss",
+      "variant": "repaired",
+      "runs": 2,
+      "t3_timeouts": 0,
+      "target_rack_marks": 6,
+      "runs_with_later_send_ack_before_recovery": 0,
+      "recovery_ms": {
+        "min": 21.433999999999997,
+        "median": 23.32799999999999,
+        "max": 25.22199999999998
+      }
+    }
+  ]
+}
