@@ -1,6 +1,7 @@
 package osfs
 
 import (
+	"errors"
 	"io/fs"
 	"path/filepath"
 
@@ -15,6 +16,7 @@ const (
 	catalogOmissionSymlink catalogOmissionReason = "symbolic_link"
 	catalogOmissionReparse catalogOmissionReason = "reparse_point"
 	catalogOmissionSpecial catalogOmissionReason = "special_file"
+	catalogOmissionDenied  catalogOmissionReason = "access_denied"
 	// Path samples bound diagnostic work even for dependency trees full of links.
 	maxCatalogOmissionSamples = uint64(16)
 )
@@ -30,6 +32,18 @@ func catalogOmissionFor(info fs.FileInfo) catalogOmissionReason {
 	default:
 		return catalogOmissionNone
 	}
+}
+
+// Permission denials are a stable property of one child (a chmod 000 file,
+// root-owned lost+found, macOS privacy-protected folders), not of the
+// directory. Failing the scan would hide every readable sibling and offer a
+// retry that cannot succeed, so the child is omitted like other entries the
+// sender cannot share.
+func classifyChildAccessError(err error) (catalogOmissionReason, error) {
+	if errors.Is(err, fs.ErrPermission) {
+		return catalogOmissionDenied, nil
+	}
+	return catalogOmissionNone, catalog.NewTransientScanError(err, 0)
 }
 
 func catalogScanCorrelation(request catalog.ScanRequest) diag.Fields {

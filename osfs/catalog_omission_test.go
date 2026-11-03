@@ -72,3 +72,66 @@ func TestCatalogOmissionsRetainBoundedPathsAndScanCorrelation(t *testing.T) {
 		t.Fatalf("samples=%d summaries=%d", samples, summaries)
 	}
 }
+
+func TestCatalogScanOmitsUnreadableChildrenAndKeepsReadableSiblings(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "readable.txt"), []byte("ok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "readable-dir"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	deniedFile, deniedDir := filepath.Join(root, "denied.txt"), filepath.Join(root, "denied-dir")
+	if err := os.WriteFile(deniedFile, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(deniedDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{deniedFile, deniedDir} {
+		if err := os.Chmod(path, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(path, 0o700) })
+		if probe, err := os.Open(path); err == nil {
+			_ = probe.Close()
+			t.Skip("platform or privileges ignore mode bits for open")
+		}
+	}
+	stream, err := diag.NewStream(16, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	synthetic, _ := catalog.DirectoryIDFromBytes(identity16(73))
+	source, err := NewSelectedCatalogSource(SelectedCatalogSourceConfig{
+		Paths: []string{root}, SyntheticRoot: synthetic, Diagnostics: stream.Sink(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = source.Close() })
+	children := &collectingScanChildren{}
+	result, err := source.ScanDirectory(context.Background(), catalog.ScanRequest{
+		Directory: source.SelectedRoots()[0], Work: &countingScanWork{}, Children: children,
+	})
+	stream.Close()
+	if err != nil {
+		t.Fatalf("one unreadable child failed the whole directory: %v", err)
+	}
+	names := map[string]bool{}
+	for _, child := range children.items {
+		names[child.Name] = true
+	}
+	if result.OmittedCount != 2 || len(names) != 2 || !names["readable.txt"] || !names["readable-dir"] {
+		t.Fatalf("scan=%+v children=%v", result, names)
+	}
+	denied := map[string]bool{}
+	for record := range stream.Records() {
+		if record.Name() == "catalog_source_omission" && record.Payload().Get("reason").Text() == "access_denied" {
+			denied[record.Payload().Get("relative_path").Text()] = true
+		}
+	}
+	if len(denied) != 2 || !denied["denied.txt"] || !denied["denied-dir"] {
+		t.Fatalf("omission evidence lost the denied paths: %v", denied)
+	}
+}

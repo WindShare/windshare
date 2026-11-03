@@ -345,14 +345,16 @@ func (source *SelectedCatalogSource) scanChild(
 	name := entry.Name()
 	before, err := directory.Lstat(name)
 	if err != nil {
-		return catalog.ScannedChild{}, catalogOmissionNone, catalog.NewTransientScanError(err, 0)
+		reason, scanErr := classifyChildAccessError(err)
+		return catalog.ScannedChild{}, reason, scanErr
 	}
 	if reason := catalogOmissionFor(before); reason != catalogOmissionNone {
 		return catalog.ScannedChild{}, reason, nil
 	}
 	handle, err := directory.Open(name)
 	if err != nil {
-		return catalog.ScannedChild{}, catalogOmissionNone, catalog.NewTransientScanError(err, 0)
+		reason, scanErr := classifyChildAccessError(err)
+		return catalog.ScannedChild{}, reason, scanErr
 	}
 	opened, statErr := handle.Stat()
 	identity, candidate, baselineErr := platformCatalogBaseline(handle)
