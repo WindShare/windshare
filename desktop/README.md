@@ -66,3 +66,7 @@ wordmark and Latin display text under its [OFL license](crates/windshare-ui/asse
 
 Validate with `make desktop-check` and `make sloc`. Visual and interaction checks
 run in the native window; no fragile UI structure or copy tests are added.
+
+## Design
+
+Modern minimalist UI with a soft flat design and a low-saturation pastel color palette. Designed in a lightweight productivity tool style, featuring generous whitespace for an airy, breathable layout. Visually light and comfortable, maintaining a clean and restrained overall aesthetic.
