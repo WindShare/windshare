@@ -14,7 +14,10 @@ func TestSourceOmissionsPreserveBoundedSamplesAndScanIdentityAcrossProjection(t 
 	summary := catalog.SourceOmissions{
 		Directory: catalog.DirectoryID{1}, Generation: catalog.DirectoryGeneration{2}, Attempt: catalog.ScanAttemptID{3},
 		DirectoryPath: "/source/nested", Count: 3,
-		Samples: []catalog.SourceOmission{{Name: "family\u200bphotos", Reason: catalog.SourceOmissionName, Detail: "unsupported format character U+200B"}},
+		Samples: []catalog.SourceOmission{
+			{Name: "family\u200bphotos", Reason: catalog.SourceOmissionName, Detail: "unsupported format character U+200B"},
+			{Name: "private.txt", Reason: catalog.SourceOmissionAccessDenied},
+		},
 	}
 	var published task.Observation
 	accepted := Workflow(appobs.WorkflowShare, task.Observation{TaskID: "share:1", Event: share.SourceOmissionsObserved{Summary: summary}}, func(value task.Observation) bool {
@@ -37,8 +40,9 @@ func TestSourceOmissionsPreserveBoundedSamplesAndScanIdentityAcrossProjection(t 
 		payload.DirectoryID != wire.EncodeIdentity(summary.Directory.Bytes()) ||
 		payload.GenerationID != wire.EncodeIdentity(summary.Generation.Bytes()) ||
 		payload.ScanAttemptID != wire.EncodeIdentity(summary.Attempt.Bytes()) ||
-		payload.DirectoryPath != summary.DirectoryPath || payload.OmittedEntries != "3" || payload.UnsampledEntries != "2" ||
-		len(payload.Samples) != 1 || payload.Samples[0].Name != "family\u200bphotos" || payload.Samples[0].Reason != "unrepresentable_name" || payload.Samples[0].Detail != "unsupported format character U+200B" {
+		payload.DirectoryPath != summary.DirectoryPath || payload.OmittedEntries != "3" || payload.UnsampledEntries != "1" ||
+		len(payload.Samples) != 2 || payload.Samples[0].Name != "family\u200bphotos" || payload.Samples[0].Reason != "unrepresentable_name" || payload.Samples[0].Detail != "unsupported format character U+200B" ||
+		payload.Samples[1].Name != "private.txt" || payload.Samples[1].Reason != "access_denied" || payload.Samples[1].Detail != "" {
 		t.Fatalf("omission serialization lost source facts or sample ownership: %+v", encoded)
 	}
 

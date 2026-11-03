@@ -90,7 +90,7 @@ func formatOutcomeSummary(result clievent.TransferResult, separator string) stri
 		parts = append(parts, countedResultNoun(result, result.DirectoryFailures(), "directory failed", "directories failed"))
 	}
 	if result.SourceOmittedEntries() != 0 {
-		parts = append(parts, countedResultNoun(result, result.SourceOmittedEntries(), "unsupported source item not included", "unsupported source items not included"))
+		parts = append(parts, countedResultNoun(result, result.SourceOmittedEntries(), "source item not included", "source items not included"))
 	}
 	if result.OmittedDiagnostics() != 0 {
 		parts = append(parts, countedResultNoun(result, result.OmittedDiagnostics(), "diagnostic omitted", "diagnostics omitted"))

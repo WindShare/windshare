@@ -217,7 +217,7 @@ func sourceFailureMessage(failure appobs.Failure) string {
 	case appobs.MessageSourceUnsupported:
 		return "This source cannot be shared safely. Select a regular file or directory on a supported filesystem; symbolic links are not supported."
 	case appobs.MessageSourceOmitted:
-		return "The sender excluded unsupported items. Ask the sender to check the skipped names and reasons, fix the source, and share it again."
+		return "The sender could not include some source items. Ask the sender to check the skipped names and reasons, fix the source, and share it again."
 	case appobs.MessageSourceChanged:
 		if _, selected := failure.SourcePath(); selected {
 			return "The source changed while it was being opened. Retry the share."
