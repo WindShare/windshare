@@ -13,7 +13,7 @@ use std::time::Duration;
 use windshare_ui::InputEvent;
 use windshare_ui::{
     Button, ButtonStyle, COMPACT_WIDTH, Icon, Input, Theme, Tone, UI_FONT, advance_focus, column,
-    row,
+    icon, row,
 };
 
 pub struct Desktop {
@@ -282,7 +282,7 @@ impl Render for Desktop {
                         .border_1()
                         .border_color(theme.notification_border())
                         .shadow_sm()
-                        .child(theme.icon_tile(Icon::Check, Tone::Mint, 30.))
+                        .child(icon(Icon::Check, 18.).text_color(theme.accent_text()))
                         .child(
                             theme
                                 .label(locale.text(text), 16.)
