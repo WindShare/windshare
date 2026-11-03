@@ -87,5 +87,11 @@ node_modules/
 .codex-work/
 .codex
 
+# Local MCP server config; holds host-specific SSH credentials.
+/.mcp.json
+
+# Diagnostic dumps and traces from manual `wind` repro runs.
+/cmd/wind/[0-9]/
+
 web/scripts/browser-evidence/fsa-small-file/
 spikes/relay-hosts/native/.target-retention
