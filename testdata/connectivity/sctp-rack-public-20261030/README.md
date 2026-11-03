@@ -1,6 +1,21 @@
 # Public-API SCTP lost-retransmission reproduction
 
-Baseline: [pion/sctp `6ec762e`](https://github.com/pion/sctp/commit/6ec762ebc1106ae8c5ce1a69208a98dfcfdddaaf), checked 2026-10-30. Candidate: [candidate.patch](candidate.patch), also applied on the fork's `fix/rack-lost-retransmissions` branch.
+Baseline: [pion/sctp `6ec762e`](https://github.com/pion/sctp/commit/6ec762ebc1106ae8c5ce1a69208a98dfcfdddaaf), checked 2026-10-30. The original [candidate.patch](candidate.patch) and [evidence.zip](evidence.zip) are frozen historical evidence; they differ from the current fork commit.
+
+## Current fork verification
+
+Use [commit-1340f02-evidence.zip](commit-1340f02-evidence.zip) for the issue. Its [patch](candidate-1340f02.patch) reproduces the exact source tree of fork commit `1340f02e98f1a7c8f06f865e135ec505a1bce2dc`. The unchanged archived reproducer completed **52 Windows loopback transfers**: double-loss recovery was **970.2–971.3 ms upstream versus 21.5–30.3 ms repaired**, five runs each; T3 expirations were 5 versus 0. See the [summary](commit-1340f02-summary.json).
+
+Unlike the historical patch, this commit accepts retry delivery evidence without an RTT estimate and processes the entire SACK's RTT samples before judging retry ACK timing. The historical patch fails four current regression subcases; the commit passes all 30 subcases and `go test -race -count=1 ./...`. The new archive includes those logs and commit/source/binary hashes. This revalidation covers Windows; the Linux/LAN measurements below belong to the historical candidate.
+
+To verify another revision, use a fresh output directory:
+
+```powershell
+python verify_commit.py --fork ../sctp --commit 1340f02e98f1a7c8f06f865e135ec505a1bce2dc --output results/commit-new
+python publish_commit.py --run results/commit-new
+```
+
+The sections below describe the original candidate and its unchanged archives.
 
 ## Finding
 
@@ -43,7 +58,7 @@ Further latency work should measure real DataChannel traffic, delayed/lost ACKs 
 
 ## Run
 
-Requires Go; measurements used Go 1.27.3 on Windows and Ubuntu. This directory is an independent module and imports no WindShare implementation.
+Requires Go; measurements used Go 1.27.3 on Windows and Ubuntu. This directory is an independent module and imports no WindShare implementation. To repeat the historical candidate, `ForkPath` must contain the baseline plus the original `candidate.patch`, rather than the current fork branch.
 
 ```powershell
 go run . -trace results/upstream.jsonl
@@ -61,6 +76,6 @@ Use a fresh output directory. On Linux, build with `go build -o .build/upstream-
 - Full upstream-pinned golangci-lint **v2.10.1** passed using **Go 1.26.9 and LF-normalized source copies**. Its importer cannot read Go 1.27 export data; Windows CRLF checkouts also trigger existing GCI failures. No unrelated source formatting was committed to the fork.
 - Exploratory failures remain archived: early harness shutdown errors and a unit-fixture timer leak were corrected before final batches. The late-original scan-only experiment is not evidence that the RTT guard was exercised.
 
-[summary.json](summary.json) contains aggregates and source hashes for the archived harness. The working copy uses equivalent integer-range loops to satisfy current Go diagnostics. [evidence.zip](evidence.zip) retains final/exploratory traces, per-run commands, validation logs and the candidate patch. `python summarize.py` rebuilds the archive from local results.
+[summary.json](summary.json) contains aggregates and source hashes for the archived harness. The working copy uses equivalent integer-range loops to satisfy current Go diagnostics. [evidence.zip](evidence.zip) retains final/exploratory traces, per-run commands, validation logs and the candidate patch. Keep this archive frozen; new commits use the verification workflow above.
 
 Published archives replace workstation paths and LAN addresses with portable paths and documentation addresses; runners require explicit SSH configuration. Measurements and binary hashes are unchanged. Each archive's `publication.json` records original/published digests, and references are updated to the published bytes. Raw captures stay in ignored `results/`. Run `python -m unittest public_evidence_test` to check publication behavior.
