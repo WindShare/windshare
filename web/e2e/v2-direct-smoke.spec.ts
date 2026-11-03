@@ -1,5 +1,6 @@
 import { expect, test, type Download } from '@playwright/test'
 import type { WindShareDiagnostics } from '../src/diagnostics/export/developer-api'
+import { openApplication } from '../test/browser/application/navigation'
 import {
   PROTOCOL_MESSAGE_KINDS_V1,
   type ProtocolMessageKindV1,
@@ -85,7 +86,7 @@ test('receives and recovers downloads through the real sender and relay', async 
       fragment: new URL(navigationUrl).hash,
       separateKey: share.key,
     })
-    await withCapabilityRedaction(() => page.goto(navigationUrl), {
+    await withCapabilityRedaction(() => openApplication(page, navigationUrl), {
       completeUrl: navigationUrl,
       fragment: new URL(navigationUrl).hash,
       separateKey: share.key,

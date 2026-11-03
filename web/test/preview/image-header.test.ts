@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   sniffImageHeader,
   IMAGE_DECODED_BYTES,
+  IMAGE_HEADER_BYTES,
   ImagePreviewError,
 } from '../../src/preview/image-header'
 
@@ -39,6 +40,26 @@ function webpAnimated(): Uint8Array<ArrayBuffer> {
   return bytes
 }
 
+// Simple-format WebP stores the whole bitstream in its first chunk, so only the
+// bounded prefix is materialized, as the preview runtime does.
+function simpleWebpPrefix(kind: 'VP8 ' | 'VP8L', exactSize: number, chunkLength = exactSize - 20) {
+  const bytes = new Uint8Array(IMAGE_HEADER_BYTES)
+  const view = new DataView(bytes.buffer)
+  bytes.set([82, 73, 70, 70])
+  view.setUint32(4, exactSize - 8, true)
+  bytes.set([87, 69, 66, 80, ...Array.from(kind, (char) => char.charCodeAt(0))], 8)
+  view.setUint32(16, chunkLength, true)
+  if (kind === 'VP8 ') {
+    bytes.set([0x9d, 0x01, 0x2a], 23)
+    view.setUint16(26, 1024, true)
+    view.setUint16(28, 768, true)
+  } else {
+    bytes[20] = 0x2f
+    view.setUint32(21, (1024 - 1) | ((768 - 1) << 14), true)
+  }
+  return { bytes, exactSize: BigInt(exactSize) }
+}
+
 describe('bounded image header policy', () => {
   it('accepts a static PNG without reading its encoded payload', () => {
     expect(sniffImageHeader(png(320, 200), 1_000_041n)).toEqual({
@@ -60,5 +81,31 @@ describe('bounded image header policy', () => {
 
   it('rejects a WebP whose authenticated file size disagrees with RIFF', () => {
     expect(() => sniffImageHeader(webpAnimated(), 31n)).toThrow('RIFF length')
+  })
+
+  it('reads simple-format WebP dimensions when the bitstream exceeds the sniff', () => {
+    const exactSize = 4 * IMAGE_HEADER_BYTES
+    for (const kind of ['VP8 ', 'VP8L'] as const) {
+      // An odd chunk length ends with a RIFF pad byte at the end of the file.
+      for (const chunkLength of [exactSize - 20, exactSize - 21]) {
+        const { bytes } = simpleWebpPrefix(kind, exactSize, chunkLength)
+        expect(sniffImageHeader(bytes, BigInt(exactSize)))
+          .toEqual({ mimeType: 'image/webp', width: 1024, height: 768 })
+      }
+    }
+  })
+
+  it('rejects a simple-format WebP without a bitstream signature', () => {
+    for (const [kind, signatureOffset] of [['VP8 ', 23], ['VP8L', 20]] as const) {
+      const { bytes, exactSize } = simpleWebpPrefix(kind, 4 * IMAGE_HEADER_BYTES)
+      bytes[signatureOffset] = 0
+      expect(() => sniffImageHeader(bytes, exactSize)).toThrow(ImagePreviewError)
+    }
+  })
+
+  it('rejects a WebP chunk that claims bytes beyond the file', () => {
+    const exactSize = 4 * IMAGE_HEADER_BYTES
+    const { bytes } = simpleWebpPrefix('VP8 ', exactSize, exactSize)
+    expect(() => sniffImageHeader(bytes, BigInt(exactSize))).toThrow('bounded header sniff')
   })
 })
