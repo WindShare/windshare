@@ -1,11 +1,12 @@
 import { expect, test, type Download, type Page } from '@playwright/test'
+import { openApplication, reloadApplication } from './application/navigation'
 
 const SHARE_PATH = '/AAAAAAAAAAAAAAAA'
 const TEST_LINK = SHARE_PATH + '?trace=1#invalid-key'
 
 test('mobile diagnostic link captures startup failure and exports retained evidence after reload', async ({ page, context }) => {
   await page.setViewportSize({ width: 390, height: 844 })
-  await page.goto(TEST_LINK)
+  await openApplication(page, TEST_LINK)
   await expect.poll(() => page.evaluate(() => window.windshareDiagnostics.inspectLastFailure()?.event)).toBe('failure_incident')
   expect(await page.evaluate(() => window.windshareDiagnostics.status().enabled)).toBe(true)
   expect(new URL(page.url()).searchParams.has('trace')).toBe(false)
@@ -29,7 +30,7 @@ test('mobile diagnostic link captures startup failure and exports retained evide
   // Stop capture activation before reload; recovery must export the old run, not a new empty bundle.
   await dialog.getByRole('button', { name: 'Stop recording', exact: true }).click()
   expect(await page.evaluate(() => window.windshareDiagnostics.activation().kind)).toBe('off')
-  await page.reload()
+  await reloadApplication(page)
   await expect.poll(() => page.evaluate(() => window.windshareDiagnostics.status().enabled)).toBe(false)
   await bar.getByRole('button', { name: 'Export diagnostics' }).click()
   const previous = dialog.getByRole('region', { name: 'Previous diagnostics' })
@@ -45,7 +46,7 @@ test('mobile diagnostic link captures startup failure and exports retained evide
 })
 
 test('pasting a diagnostic link captures the first join and keeps recording until manually stopped', async ({ page }) => {
-  await page.goto('/')
+  await openApplication(page, '/')
   await page.getByRole('textbox').fill(new URL(TEST_LINK, page.url()).href)
   await page.getByRole('textbox').press('Enter')
   await expect.poll(() => page.evaluate(() => window.windshareDiagnostics.inspectLastFailure()?.event)).toBe('failure_incident')
@@ -65,17 +66,17 @@ test('pasting a diagnostic link captures the first join and keeps recording unti
   await dialog.getByRole('button', { name: 'Start recording' }).click()
   await expect(bar).toBeVisible()
   await dialog.getByRole('button', { name: 'Stop recording', exact: true }).click()
-  await page.reload()
+  await reloadApplication(page)
   await expect.poll(() => page.evaluate(() => window.windshareDiagnostics.activation().kind)).toBe('off')
   expect(await page.evaluate(() => window.windshareDiagnostics.status().enabled)).toBe(false)
 })
 
 test('page controls stop link activation across reload and support a fresh manual capture', async ({ page }) => {
-  await page.goto('/?trace=1')
+  await openApplication(page, '/?trace=1')
   const bar = page.getByRole('complementary', { name: 'Diagnostics' })
   await bar.getByRole('button', { name: 'Stop recording' }).click()
   await expect.poll(() => page.evaluate(() => window.windshareDiagnostics.status().enabled)).toBe(false)
-  await page.reload()
+  await reloadApplication(page)
   await expect.poll(() => page.evaluate(() => window.windshareDiagnostics.status().enabled)).toBe(false)
   await page.getByRole('button', { name: 'Diagnostics', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Diagnostics', exact: true })
@@ -86,7 +87,7 @@ test('page controls stop link activation across reload and support a fresh manua
 })
 
 test('ordinary startup failures remain exportable while trace recording is off', async ({ page }) => {
-  await page.goto(SHARE_PATH + '#invalid-key')
+  await openApplication(page, SHARE_PATH + '#invalid-key')
   await expect.poll(() => page.evaluate(() => window.windshareDiagnostics.inspectLastFailure() !== null)).toBe(true)
   await page.getByRole('alert').getByRole('button', { name: 'Export diagnostics' }).click()
   const dialog = page.getByRole('dialog', { name: 'Diagnostics', exact: true })
@@ -109,7 +110,7 @@ test('denied storage and clipboard still allow manual export, and share cancella
       throw new DOMException('canceled', 'AbortError')
     } })
   })
-  await page.goto(TEST_LINK)
+  await openApplication(page, TEST_LINK)
   await page.getByRole('complementary', { name: 'Diagnostics' }).getByRole('button', { name: 'Export diagnostics' }).click()
   const dialog = page.getByRole('dialog', { name: 'Diagnostics', exact: true })
   const downloads: Download[] = []

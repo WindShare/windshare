@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { openApplication, reloadApplication } from './application/navigation'
 
 declare global {
   interface Window {
@@ -31,8 +32,7 @@ test('ordinary startup lists summaries without reading or encoding archived log 
       return encode.call(this, input)
     }
   })
-  await page.goto('/')
-  await expect.poll(() => page.evaluate(() => window.windshareDiagnostics !== undefined)).toBe(true)
+  await openApplication(page, '/')
   await page.evaluate(async () => {
     const modulePath = '/src/diagnostics/browser/indexeddb-archive.ts'
     const { IndexedDBDiagnosticsArchive } = await import(/* @vite-ignore */ modulePath) as typeof import('../../src/diagnostics/browser/indexeddb-archive')
@@ -47,7 +47,7 @@ test('ordinary startup lists summaries without reading or encoding archived log 
       })
     }
   })
-  await page.reload()
+  await reloadApplication(page)
   const bar = page.getByRole('complementary', { name: 'Diagnostics' })
   await expect(bar).toBeVisible()
   expect(await page.evaluate(() => window.windshareDiagnostics.status().enabled)).toBe(false)
