@@ -160,10 +160,10 @@ func (d *directory) ClassifyExactEntry(name string) (outputcap.EntryKind, bool, 
 		return k, err == nil, err
 	}
 	// Reusing a directory through a case or short-name alias would merge source
-	// trees. Ask the opened object for its spelling instead of guessing the
-	// parent filesystem's Unicode equivalence relation.
-	actual, err := entrySpelling(d, name)
-	return k, err == nil && exactEntrySpelling(name, actual), err
+	// trees. Resolve the entry's spelling within this parent; a shared file
+	// object alone cannot distinguish hard links or native name aliases.
+	exact, err := entryMatchesSpelling(d, name)
+	return k, err == nil && exact, err
 }
 
 type entry struct {
