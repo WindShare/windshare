@@ -23,6 +23,7 @@ const (
 	ReceiveRecoveryOwnershipUnknown = receive.RecoveryOwnershipUnknown
 	ReceiveRecoveryRevisionChanged  = receive.RecoveryRevisionChanged
 	ReceiveRecoverySelectionMissing = receive.RecoverySelectionMissing
+	ReceiveRecoverySourceOmitted    = receive.RecoverySourceOmitted
 	ReceiveRecoveryInvalidRequest   = receive.RecoveryInvalidRequest
 	ReceiveRecoveryNeedsInspection  = receive.RecoveryNeedsInspection
 	ReceiveRetentionNone            = receive.RetentionNone
@@ -85,6 +86,7 @@ const (
 	ReceiveLocalCheckpointInvalid    = receive.LocalCheckpointInvalid
 	ReceiveLocalOwnedObjectUnknown   = receive.LocalOwnedObjectUnknown
 	ReceiveLocalDestinationCollision = receive.LocalDestinationCollision
+	ReceiveLocalSourceOmitted        = receive.LocalSourceOmitted
 )
 
 var ErrInvalidConnectivityPolicy = receive.ErrInvalidConnectivityPolicy

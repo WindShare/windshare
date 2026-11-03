@@ -59,6 +59,7 @@ const (
 	FailureSourceMissing
 	FailureSourceAccessDenied
 	FailureSourceUnsupported
+	FailureSourceOmitted
 	FailureCatalogUnavailable
 	FailureCatalogDirectoryStale
 	FailureCatalogInvalidGeneration
@@ -229,6 +230,8 @@ func coreFailureDefinition(code FailureCode) (failureDefinition, bool) {
 		return failureDefinition{"source_access_denied", MessageSourceAccessDenied}, true
 	case FailureSourceUnsupported:
 		return failureDefinition{"source_unsupported", MessageSourceUnsupported}, true
+	case FailureSourceOmitted:
+		return failureDefinition{"source_omitted", MessageSourceOmitted}, true
 	case FailureCatalogUnavailable:
 		return failureDefinition{"catalog_unavailable", MessageCatalogUnavailable}, true
 	case FailureCatalogDirectoryStale:

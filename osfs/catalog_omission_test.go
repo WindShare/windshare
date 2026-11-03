@@ -18,7 +18,7 @@ func TestCatalogOmissionsRetainBoundedPathsAndScanCorrelation(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "target.bin"), []byte("target"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	const omitted = maxCatalogOmissionSamples + 2
+	const omitted = catalog.MaxSourceOmissionSamples + 2
 	for index := range omitted {
 		if err := os.Symlink("target.bin", filepath.Join(root, fmt.Sprintf("link-%02d", index))); err != nil {
 			t.Skipf("symlink creation unavailable: %v", err)
@@ -69,7 +69,7 @@ func TestCatalogOmissionsRetainBoundedPathsAndScanCorrelation(t *testing.T) {
 			t.Fatalf("unexpected record %s", record.Name())
 		}
 	}
-	if samples != maxCatalogOmissionSamples || summaries != 1 {
+	if samples != catalog.MaxSourceOmissionSamples || summaries != 1 {
 		t.Fatalf("samples=%d summaries=%d", samples, summaries)
 	}
 }

@@ -307,6 +307,8 @@ func renderEvent(event clievent.Event, visitor eventVisitor) error {
 		return visitor.VisitDiagnostic(value)
 	case appobs.Ready:
 		return visitor.VisitReady(value)
+	case appobs.SourceOmissionsObserved:
+		return visitor.VisitSourceOmissions(value)
 	case appobs.SharingSubjectSelected:
 		return visitor.VisitSharingSubjectSelected(value)
 	case appobs.RelayConnected:

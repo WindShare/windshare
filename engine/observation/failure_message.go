@@ -20,6 +20,7 @@ const (
 	MessageSourceMissing
 	MessageSourceAccessDenied
 	MessageSourceUnsupported
+	MessageSourceOmitted
 	MessageSourceChanged
 	MessageCatalogUnavailable
 	MessageSessionFailed
@@ -73,6 +74,8 @@ func (value SafeMessageKey) Name() (string, bool) {
 		return "source_access_denied", true
 	case MessageSourceUnsupported:
 		return "source_unsupported", true
+	case MessageSourceOmitted:
+		return "source_omitted", true
 	case MessageSourceChanged:
 		return "source_changed", true
 	case MessageCatalogUnavailable:
