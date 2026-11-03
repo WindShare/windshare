@@ -1,6 +1,6 @@
 mod spirit;
 mod wind;
-pub use spirit::Spirit;
+pub use spirit::{Spirit, SpiritState};
 pub use wind::wind_field;
 
 use crate::{artwork::Artwork, share_timing::lerp};
@@ -155,7 +155,7 @@ impl RenderOnce for SpiritScene {
         // File paths pass behind the character so its face remains unobstructed.
         scene.child(Spirit::new(
             "body",
-            mood,
+            SpiritState::Floating(mood),
             point(
                 SCENE_WIDTH / 2. * scale,
                 (SPIRIT_TOP + SPIRIT_SIZE / 2.) * scale,

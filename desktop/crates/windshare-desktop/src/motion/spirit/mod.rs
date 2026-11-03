@@ -1,23 +1,17 @@
 use crate::localization::{LanguageSettings, Text, language};
 mod behavior;
+mod presentation;
 
-use super::SpiritMood;
 use crate::artwork::Artwork;
 use behavior::{Behavior, NOMINAL_SIZE, Pose, SMILE_DURATION};
 use gpui::{
     App, Bounds, ElementId, FocusHandle, IntoElement, MouseButton, MouseMoveEvent, Pixels, Point,
     Radians, Role, Subscription, Task, Window, canvas, div, point, prelude::*, px,
 };
+use presentation::Presentation;
+pub use presentation::SpiritState;
 use std::time::Instant;
 use windshare_ui::Theme;
-
-#[derive(Clone, Copy)]
-struct Presentation {
-    mood: SpiritMood,
-    center: Point<f32>,
-    width: f32,
-    reduced_motion: bool,
-}
 
 #[derive(IntoElement)]
 pub struct Spirit {
@@ -28,7 +22,7 @@ pub struct Spirit {
 impl Spirit {
     pub fn new(
         id: impl Into<ElementId>,
-        mood: SpiritMood,
+        state: SpiritState,
         center: Point<f32>,
         width: f32,
         reduced_motion: bool,
@@ -36,7 +30,7 @@ impl Spirit {
         Self {
             id: id.into(),
             presentation: Presentation {
-                mood,
+                state,
                 center,
                 width,
                 reduced_motion,
@@ -59,6 +53,7 @@ impl RenderOnce for Spirit {
 enum MotionMode {
     Suspended,
     Reduced,
+    Choreographed,
     Animated,
 }
 
@@ -108,6 +103,8 @@ impl SpiritView {
             MotionMode::Suspended
         } else if self.presentation.reduced_motion || cx.reduce_motion() {
             MotionMode::Reduced
+        } else if matches!(self.presentation.state, SpiritState::Choreographed { .. }) {
+            MotionMode::Choreographed
         } else {
             MotionMode::Animated
         }
@@ -199,7 +196,12 @@ impl SpiritView {
             return Pose::default();
         }
         let was_following = self.behavior.following();
-        let pose = self.behavior.advance(elapsed, now);
+        let mut pose = self.behavior.advance(elapsed, now);
+        // A settled share keeps the scene's breathing clock. Only standalone
+        // spirits own an ambient float; interaction adds a spring offset to either.
+        if matches!(self.presentation.state, SpiritState::Floating(_)) {
+            pose.y += self.behavior.float_offset();
+        }
         if was_following && !self.behavior.following() {
             tracing::info!(
                 event = "desktop.spirit_released",
@@ -214,20 +216,38 @@ impl SpiritView {
 
 impl Render for SpiritView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::from(window.appearance());
         let pose = self.pose(window, cx);
-        let Presentation {
-            mood,
-            center,
-            width,
-            ..
-        } = self.presentation;
-        let scale = width / NOMINAL_SIZE;
-        let artwork = if mood == SpiritMood::Happy || self.behavior.smiling(Instant::now()) {
-            Artwork::Happy
-        } else {
-            Artwork::Spirit
-        };
+        let presentation = self.presentation;
+        let scale = presentation.width / NOMINAL_SIZE;
+        let center = presentation.center + point(pose.x * scale, pose.y * scale);
+        let smile = presentation.smile(self.behavior.smiling(Instant::now()));
+        // Keep the artwork in scene coordinates for its entire lifetime. The
+        // stationary focus/hit target is a sibling, so enabling it cannot change
+        // rasterization, border insets, or the scene's breathing phase.
+        div()
+            .absolute()
+            .inset_0()
+            .size_full()
+            .child(
+                Artwork::Spirit
+                    .blend_to(Artwork::Happy, center, presentation.width, smile)
+                    .rotate(Radians(pose.tilt.to_radians())),
+            )
+            .when_some(presentation.hit_center(), |el, anchor| {
+                el.child(self.hit_target(anchor, window, cx))
+            })
+    }
+}
+
+impl SpiritView {
+    fn hit_target(
+        &self,
+        center: Point<f32>,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let theme = Theme::from(window.appearance());
+        let width = self.presentation.width;
         let observer = cx.weak_entity();
         div()
             .id("spirit-target")
@@ -261,17 +281,6 @@ impl Render for SpiritView {
             .on_mouse_exit(cx.listener(|this, _, _, cx| this.release("window_left", cx)))
             .on_scroll(cx.listener(|this, _, _, cx| this.release("scrolled", cx)))
             .on_click(cx.listener(Self::tap))
-            .child(
-                artwork
-                    .sprite(
-                        point(
-                            pose.x.mul_add(scale, width / 2.),
-                            pose.y.mul_add(scale, width / 2.),
-                        ),
-                        width,
-                    )
-                    .rotate(Radians(pose.tilt.to_radians())),
-            )
             .child(
                 canvas(
                     move |bounds, window, cx| {

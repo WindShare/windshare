@@ -1,7 +1,7 @@
 use crate::{
     artwork::Artwork,
     layout::{FlowLayout, task_width},
-    motion::{Spirit, SpiritMood, SpiritScene},
+    motion::{Spirit, SpiritScene, SpiritState},
     share_timing::{
         FLIGHT_DURATION, LANDING_DURATION, ShareFrame, ease_out, lerp, segment, smooth,
     },
@@ -165,7 +165,15 @@ impl ShareScene {
     fn spirit(self, theme: Theme, reduced_motion: bool) -> Div {
         let (center, size) = self.spirit_pose();
         let interactive = self.arrival_progress() >= 1. && self.frame.result_visibility >= 1.;
-        let smile = self.reveal(0.02, 0.42) * self.frame.result_visibility;
+        let state = if interactive {
+            SpiritState::Settled {
+                anchor: self.geometry.destination(),
+            }
+        } else {
+            SpiritState::Choreographed {
+                smile: self.reveal(0.02, 0.42) * self.frame.result_visibility,
+            }
+        };
         let local_scale = size / 156.;
         let breeze_offset = 6. * local_scale;
         let surround = self.reveal(0.55, 1.);
@@ -184,35 +192,15 @@ impl ShareScene {
                     .opacity(surround),
                 )
             })
-            // Choreography owns the pose until landing and expression reveal finish.
-            // Only the settled character gets a stationary, accessible hit target.
-            .when(interactive, |el| {
-                el.child(Spirit::new(
-                    "share-ready-spirit",
-                    SpiritMood::Happy,
-                    self.geometry.destination(),
-                    LANDED_SPIRIT_SIZE,
-                    reduced_motion,
-                ))
-            })
-            .when(!interactive && smile < 1., |el| {
-                el.child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .child(Artwork::Spirit.sprite(center, size))
-                        .opacity(1. - smile),
-                )
-            })
-            .when(!interactive && smile > 0., |el| {
-                el.child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .child(Artwork::Happy.sprite(center, size))
-                        .opacity(smile),
-                )
-            });
+            // One character owns drawing throughout flight, landing and interaction.
+            // Readiness adds a hit target without replacing the artwork or its clock.
+            .child(Spirit::new(
+                "share-spirit",
+                state,
+                center,
+                size,
+                reduced_motion,
+            ));
         // Zero-opacity SVG layers still incur layout and atlas work in GPUI.
         // Keep their lifetime aligned with the visible part of the choreography.
         if surround <= 0. {

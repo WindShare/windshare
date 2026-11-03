@@ -33,14 +33,8 @@ const DEFAULT_PREVIEW_SHARE_MS: u64 = 1900;
 struct DesktopAssets;
 impl AssetSource for DesktopAssets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
-        match path {
-            "brand/spirit.svg" => {
-                return Ok(Some(Cow::Borrowed(include_bytes!("../assets/spirit.svg"))));
-            }
-            "brand/breeze.svg" => {
-                return Ok(Some(Cow::Borrowed(include_bytes!("../assets/breeze.svg"))));
-            }
-            _ => {}
+        if path == "brand/breeze.svg" {
+            return Ok(Some(Cow::Borrowed(include_bytes!("../assets/breeze.svg"))));
         }
         windshare_ui::Assets.load(path)
     }
