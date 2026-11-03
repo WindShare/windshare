@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/url"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -186,7 +187,7 @@ func Parse(raw string) (Link, error) {
 	if u.Fragment == "" {
 		return Link{}, ErrMissingFragment
 	}
-	l.Suite, l.ReadSecret, l.PKHash, err = decodeKey(u.Fragment)
+	l.Suite, l.ReadSecret, l.PKHash, err = decodeKey(browserFragment(u))
 	if err != nil {
 		return Link{}, err
 	}
@@ -206,15 +207,15 @@ func Split(full string) (bare, key string, err error) {
 	if u.Fragment == "" {
 		return "", "", ErrMissingFragment
 	}
-	suite, _, pkHash, err := decodeKey(u.Fragment)
+	key = browserFragment(u)
+	suite, _, pkHash, err := decodeKey(key)
 	if err != nil {
 		return "", "", err
 	}
-	if err := validateIdentityForSuite(Link{Suite: suite, PKHash: pkHash, ShareID: lastSegment(u.Path), ReadSecret: make([]byte, ReadSecretBytes)}); err != nil {
+	if err := validateIdentityForSuite(Link{Suite: suite, PKHash: pkHash, ShareID: routeSegment(u), ReadSecret: make([]byte, ReadSecretBytes)}); err != nil {
 		return "", "", err
 	}
-	key = u.Fragment
-	u.Fragment = ""
+	u.Fragment, u.RawFragment = "", ""
 	return u.String(), key, nil
 }
 
@@ -231,7 +232,7 @@ func Merge(bare, key string) (Link, error) {
 		return Link{}, err
 	}
 	if u.Fragment != "" {
-		s2, sec2, hash2, err := decodeKey(u.Fragment)
+		s2, sec2, hash2, err := decodeKey(browserFragment(u))
 		if err != nil {
 			return Link{}, err
 		}
@@ -253,7 +254,7 @@ func parseBare(raw string) (Link, *url.URL, error) {
 	if err != nil {
 		return Link{}, nil, err
 	}
-	shareID := lastSegment(u.Path)
+	shareID := routeSegment(u)
 	if err := validBareShareID(shareID); err != nil {
 		return Link{}, nil, err
 	}
@@ -261,14 +262,14 @@ func parseBare(raw string) (Link, *url.URL, error) {
 }
 
 func parseAbsoluteURL(raw string) (*url.URL, url.Values, error) {
-	trimmed := strings.TrimSpace(raw)
+	trimmed := trimCopiedText(raw)
 	// WHATWG parsing repairs backslashes into authority or path separators while
 	// net/url preserves some of them. Rejecting the ambiguous spelling gives a
 	// capability URL one identity in both runtimes.
 	if strings.ContainsRune(trimmed, '\\') {
 		return nil, nil, fmt.Errorf("%w: invalid URL syntax", ErrMalformedLink)
 	}
-	u, err := url.Parse(trimmed)
+	u, err := url.Parse(whatwgPreprocess(trimmed))
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		// net/url parse errors retain and render the complete input URL. Returning
 		// that detail would copy a capability fragment into CLI diagnostics.
@@ -294,14 +295,83 @@ func parseAbsoluteURL(raw string) (*url.URL, url.Values, error) {
 	return u, query, nil
 }
 
-// lastSegment 取路径最后一个非空段:前端可部署在子路径下(前端域与路径为
-// 部署期配置),shareId 恒为末段。
-func lastSegment(p string) string {
-	p = strings.Trim(p, "/")
-	if i := strings.LastIndexByte(p, '/'); i >= 0 {
-		return p[i+1:]
+// routeSegment returns the last non-empty path segment: frontends may be
+// deployed below a path prefix, and shareId is always the final segment. Like
+// the browser, it resolves dot segments (including %2e spellings) before
+// decoding, so an encoded slash stays inside its segment.
+func routeSegment(u *url.URL) string {
+	escaped := u.RawPath
+	if escaped == "" {
+		escaped = u.EscapedPath()
 	}
-	return p
+	var segments []string
+	for segment := range strings.SplitSeq(strings.TrimPrefix(escaped, "/"), "/") {
+		switch strings.ToLower(segment) {
+		case ".", "%2e":
+		case "..", ".%2e", "%2e.", "%2e%2e":
+			if len(segments) > 0 {
+				segments = segments[:len(segments)-1]
+			}
+		default:
+			segments = append(segments, segment)
+		}
+	}
+	for len(segments) > 0 && segments[len(segments)-1] == "" {
+		segments = segments[:len(segments)-1]
+	}
+	if len(segments) == 0 {
+		return ""
+	}
+	decoded, err := url.PathUnescape(segments[len(segments)-1])
+	if err != nil {
+		return ""
+	}
+	return decoded
+}
+
+// browserFragment returns location.hash without its '#': the copied fragment
+// bytes with only the WHATWG fragment percent-encode set escaped. net/url's
+// Fragment is percent-decoded and would accept keys the browser rejects.
+func browserFragment(u *url.URL) string {
+	raw := u.RawFragment
+	if raw == "" {
+		raw = u.EscapedFragment()
+	}
+	var encoded strings.Builder
+	for i := range len(raw) {
+		switch c := raw[i]; {
+		case c <= ' ' || c >= 0x7f || c == '"' || c == '<' || c == '>' || c == '`':
+			fmt.Fprintf(&encoded, "%%%02X", c)
+		default:
+			encoded.WriteByte(c)
+		}
+	}
+	return encoded.String()
+}
+
+// trimCopiedText applies JavaScript's String.prototype.trim, which the browser
+// receiver uses before parsing. Go's TrimSpace differs at U+0085 and U+FEFF.
+func trimCopiedText(s string) string {
+	return strings.TrimFunc(s, func(r rune) bool {
+		switch r {
+		case '\t', '\n', '\v', '\f', '\r', '\u2028', '\u2029', '\ufeff':
+			return true
+		}
+		return unicode.Is(unicode.Zs, r)
+	})
+}
+
+// whatwgPreprocess mirrors the WHATWG URL parser's input cleanup: browsers drop
+// C0 controls and spaces at the boundaries and every ASCII tab or newline, so a
+// line-wrapped copy still names the same capability.
+func whatwgPreprocess(s string) string {
+	s = strings.TrimFunc(s, func(r rune) bool { return r <= ' ' })
+	return strings.Map(func(r rune) rune {
+		if r == '\t' || r == '\n' || r == '\r' {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 func validBareShareID(s string) error {
@@ -337,9 +407,9 @@ func constantTimeStringEqual(left, right string) bool {
 // decodeKey accepts a key string, a leading '#', or a complete copied URL and
 // then applies strict suite-specific byte widths.
 func decodeKey(s string) (suite byte, secret, pkHash []byte, err error) {
-	s = strings.TrimSpace(s)
+	s = trimCopiedText(s)
 	if i := strings.IndexByte(s, '#'); i >= 0 {
-		s = strings.TrimSpace(s[i+1:])
+		s = trimCopiedText(s[i+1:])
 	}
 	if s == "" {
 		return 0, nil, nil, fmt.Errorf("%w: key string is empty", ErrMalformedFragment)

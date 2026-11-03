@@ -5,6 +5,84 @@
   "cases": [
     {
       "catalogKeyB64": "r9W4bwpszHnYVwoyRjZxuUXGtSTKZ00/CkDK544TWRA=",
+      "copiedLinks": [
+        {
+          "accepted": true,
+          "name": "c0-control-boundaries",
+          "relays": [
+            "https://share.example"
+          ],
+          "url": "\u0000https://share.example/app/tVW-68OSeLBZTpU-#AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E\u001f"
+        },
+        {
+          "accepted": true,
+          "name": "wrapped-route",
+          "relays": [
+            "https://share.example"
+          ],
+          "url": "https://share.example/app/tVW-68OSeLBZ\r\nTpU-#AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E"
+        },
+        {
+          "accepted": true,
+          "name": "wrapped-key",
+          "relays": [
+            "https://share.example"
+          ],
+          "url": "https://share.example/app/tVW-68OSeLBZTpU-#AgABAgMEBQYHCAkKCwwNDg\n8kQqCgOKPbpFQm33t9wk_E"
+        },
+        {
+          "accepted": true,
+          "name": "single-dot-segment",
+          "relays": [
+            "https://share.example"
+          ],
+          "url": "https://share.example/app/tVW-68OSeLBZTpU-/.#AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E"
+        },
+        {
+          "accepted": true,
+          "name": "encoded-single-dot-segment",
+          "relays": [
+            "https://share.example"
+          ],
+          "url": "https://share.example/app/tVW-68OSeLBZTpU-/%2E/#AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E"
+        },
+        {
+          "accepted": true,
+          "name": "double-dot-segment",
+          "relays": [
+            "https://share.example"
+          ],
+          "url": "https://share.example/app/tVW-68OSeLBZTpU-/x/.%2e#AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E"
+        },
+        {
+          "accepted": false,
+          "name": "double-dot-removes-route",
+          "url": "https://share.example/app/tVW-68OSeLBZTpU-/..#AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E"
+        },
+        {
+          "accepted": false,
+          "name": "encoded-slash-after-route",
+          "url": "https://share.example/app/tVW-68OSeLBZTpU-%2F#AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E"
+        },
+        {
+          "accepted": true,
+          "name": "repeated-fragment-delimiter",
+          "relays": [
+            "https://share.example"
+          ],
+          "url": "https://share.example/app/tVW-68OSeLBZTpU-##AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E"
+        },
+        {
+          "accepted": false,
+          "name": "percent-encoded-key",
+          "url": "https://share.example/app/tVW-68OSeLBZTpU-#%41gABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E"
+        },
+        {
+          "accepted": false,
+          "name": "space-prefixed-key",
+          "url": "https://share.example/app/tVW-68OSeLBZTpU-# AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E"
+        }
+      ],
       "descriptorKeyB64": "QJf/rkymcTqujczmpzms5e8PRSI08a/0Fm7ica6GlQ4=",
       "fileIdB64": "cHFyc3R1dnd4eXp7fH1+fw==",
       "fileObjectKeyB64": "4rzGG8yKKJdsSeoyXXqLxF+f8ep/ziFK/7s7CVkcgY0=",
