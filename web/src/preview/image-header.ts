@@ -105,7 +105,7 @@ function parseWebp(bytes: Uint8Array, exactSize: bigint): ImageHeader {
   if (declared !== exactSize) throw new ImagePreviewError('WebP RIFF length does not match the file')
   let offset = 12
   while (offset < bytes.byteLength) {
-    const chunk = nextWebpChunk(bytes, offset)
+    const chunk = nextWebpChunk(bytes, offset, exactSize)
     if (chunk === undefined) break
     if (chunk.type === 'ANIM' || chunk.type === 'ANMF') {
       throw new ImagePreviewError('Animated WebP preview is not supported')
@@ -124,12 +124,15 @@ interface WebpChunk {
   readonly next: number
 }
 
-function nextWebpChunk(bytes: Uint8Array, offset: number): WebpChunk | undefined {
+// Image chunk payloads are intentionally outside the sniff budget, like PNG
+// IDAT: a simple-format VP8/VP8L chunk spans the whole bitstream, but its
+// dimensions sit in the first payload bytes. Bound chunks by the file instead.
+function nextWebpChunk(bytes: Uint8Array, offset: number, exactSize: bigint): WebpChunk | undefined {
   if (offset + 8 > bytes.byteLength) return undefined
   const length = uint32LittleEndian(bytes, offset + 4)
   const data = offset + 8
   const next = data + length + (length & 1)
-  if (!Number.isSafeInteger(next) || next > bytes.byteLength) return undefined
+  if (!Number.isSafeInteger(next) || BigInt(next) > exactSize) return undefined
   return { type: ascii(bytes, offset, offset + 4), length, data, next }
 }
 
