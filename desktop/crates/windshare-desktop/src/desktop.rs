@@ -233,7 +233,7 @@ impl Render for Desktop {
                         column()
                             .flex_1()
                             .min_w_0()
-                            .child(Self::titlebar(theme, cx))
+                            .child(Self::titlebar(theme, window, cx))
                             .child(
                                 column()
                                     .id(("page-scroll", self.page as usize))

@@ -4,9 +4,10 @@ use crate::{
     desktop::Desktop,
     model::{Page, PreviewAction},
 };
-use gpui::{Div, MouseButton, WindowControlArea, div, point, prelude::*, px};
+use gpui::{Div, Window, div, point, prelude::*, px};
 use windshare_ui::{
-    Button, ButtonStyle, FONT, Icon, SIDEBAR_COMPACT_WIDTH, SIDEBAR_WIDTH, Theme, Tone, column, row,
+    Button, ButtonStyle, FONT, Icon, SIDEBAR_COMPACT_WIDTH, SIDEBAR_WIDTH, Theme, Tone, column,
+    row, toggle_window_maximize, window_drag_area,
 };
 
 const TITLEBAR_HEIGHT: f32 = 40.;
@@ -15,21 +16,16 @@ const COMPACT_BRAND_MARK_SIZE: f32 = 36.;
 
 impl Desktop {
     fn titlebar_drag_area() -> Div {
-        div()
-            .h(px(TITLEBAR_HEIGHT))
-            .flex_shrink_0()
-            .window_control_area(WindowControlArea::Drag)
-            .on_mouse_down(MouseButton::Left, |event, window, _| {
-                if event.click_count == 2 {
-                    window.zoom_window();
-                } else {
-                    window.start_window_move();
-                }
-            })
+        window_drag_area().h(px(TITLEBAR_HEIGHT)).flex_shrink_0()
     }
 
-    pub fn titlebar(theme: Theme, cx: &Context<Self>) -> Div {
+    pub fn titlebar(theme: Theme, window: &Window, cx: &Context<Self>) -> Div {
         let locale = language(cx);
+        let (maximize_icon, maximize_label) = if window.is_maximized() {
+            (Icon::Restore, Text::RestoreWindow)
+        } else {
+            (Icon::Maximize, Text::Maximize)
+        };
         row()
             .h(px(TITLEBAR_HEIGHT))
             .flex_shrink_0()
@@ -51,11 +47,11 @@ impl Desktop {
                         )
                         .child(
                             Button::new("maximize", "")
-                                .icon(Icon::Maximize)
+                                .icon(maximize_icon)
                                 .compact()
                                 .style(ButtonStyle::Ghost)
-                                .tooltip(locale.text(Text::Maximize))
-                                .on_press(|(), window, _| window.zoom_window()),
+                                .tooltip(locale.text(maximize_label))
+                                .on_press(|(), window, _| toggle_window_maximize(window)),
                         )
                         .child(
                             Button::new("close-window", "")

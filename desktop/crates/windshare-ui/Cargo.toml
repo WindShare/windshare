@@ -14,3 +14,7 @@ anyhow.workspace = true
 unicode-segmentation.workspace = true
 usvg.workspace = true
 tracing.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+raw-window-handle = { version = "0.6.2", features = ["std"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }

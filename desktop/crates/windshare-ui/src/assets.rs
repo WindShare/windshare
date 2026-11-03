@@ -71,6 +71,9 @@ impl AssetSource for Assets {
             }
             "minimize" => r#"<path d="M5 12h14"/>"#,
             "maximize" => r#"<rect x="5" y="5" width="14" height="14" rx="1"/>"#,
+            "restore" => {
+                r#"<path d="M9 5V3h12v12h-2"/><rect x="3" y="9" width="12" height="12" rx="1"/>"#
+            }
             "refresh" => r#"<path d="M20 8a9 9 0 1 0 0 8M20 2v6h-6"/>"#,
             "external" => r#"<path d="M14 3h7v7M21 3 10 14M10 3H3v18h18v-7"/>"#,
             "sliders" => {
