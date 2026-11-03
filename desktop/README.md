@@ -59,7 +59,7 @@ compare the same build profile, window size and display refresh rate.
   variants with transparent wind lines and drifting paper illustrations; the
   original stays unchanged.
 
-GPUI is pinned to `gpui-pre = 0.3.10`, matching the
+GPUI is pinned to `gpui-pre = 0.3.11`, matching the
 [GPUI Kit snapshot](https://github.com/longbridge/gpui-kit/blob/main/Cargo.toml).
 Windows Chinese typography uses Microsoft YaHei UI; Manrope is bundled for the
 wordmark and Latin display text under its [OFL license](crates/windshare-ui/assets/fonts/OFL.txt).
