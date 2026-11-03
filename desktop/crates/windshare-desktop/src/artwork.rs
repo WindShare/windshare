@@ -7,13 +7,14 @@ const SPIRIT_RASTER_SIZE: f32 = 224.;
 const PAPER_RASTER_WIDTH: f32 = 100.;
 const PAPER_ASPECT: f32 = 1.14;
 
-static ARTWORK: LazyLock<[VectorArtwork; 5]> = LazyLock::new(|| {
+static ARTWORK: LazyLock<[VectorArtwork; 6]> = LazyLock::new(|| {
     [
         include_bytes!("../assets/spirit.svg").as_slice(),
         include_bytes!("../assets/spirit-happy.svg").as_slice(),
         include_bytes!("../assets/paper.svg").as_slice(),
         include_bytes!("../assets/photo.svg").as_slice(),
         include_bytes!("../assets/folder.svg").as_slice(),
+        include_bytes!("../assets/spirit-mark.svg").as_slice(),
     ]
     .map(|source| VectorArtwork::from_svg(source).expect("bundled vector artwork must be valid"))
 });
@@ -25,6 +26,7 @@ pub enum Artwork {
     Paper,
     Photo,
     Folder,
+    BrandMark,
 }
 
 impl Artwork {
@@ -34,8 +36,22 @@ impl Artwork {
         tracing::info!(event = "desktop.artwork_ready", assets = ARTWORK.len());
     }
 
+    pub fn blend_to(
+        self,
+        other: Self,
+        center: Point<f32>,
+        width: f32,
+        progress: f32,
+    ) -> VectorSprite {
+        self.sprite(center, width)
+            .blend_to(&ARTWORK[other as usize], progress)
+    }
+
     pub fn sprite(self, center: Point<f32>, width: f32) -> VectorSprite {
         let (raster_width, raster_height) = match self {
+            // A stationary brand mark is rasterized at its display size; the
+            // flight atlas would discard fine coverage when shrunk this far.
+            Self::BrandMark => (width, width),
             Self::Spirit | Self::Happy => (SPIRIT_RASTER_SIZE, SPIRIT_RASTER_SIZE),
             Self::Paper | Self::Photo | Self::Folder => {
                 (PAPER_RASTER_WIDTH, PAPER_RASTER_WIDTH * PAPER_ASPECT)

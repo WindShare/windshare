@@ -44,6 +44,7 @@ impl VectorArtwork {
     ) -> VectorSprite {
         VectorSprite {
             layers: self.layers.clone(),
+            blend: None,
             raster_size,
             center,
             scale,
@@ -56,13 +57,33 @@ impl VectorArtwork {
 #[must_use]
 pub struct VectorSprite {
     layers: Arc<[Layer]>,
+    blend: Option<ArtworkBlend>,
     raster_size: Size<Pixels>,
     center: Point<Pixels>,
     scale: f32,
     rotation: Radians,
 }
 
+struct ArtworkBlend {
+    layers: Arc<[Layer]>,
+    progress: f32,
+}
+
 impl VectorSprite {
+    /// Keeps shared background layers opaque while the differing foreground fades.
+    pub fn blend_to(mut self, artwork: &VectorArtwork, progress: f32) -> Self {
+        self.blend = None;
+        if progress >= 1. {
+            self.layers = artwork.layers.clone();
+        } else if progress > 0. {
+            self.blend = Some(ArtworkBlend {
+                layers: artwork.layers.clone(),
+                progress,
+            });
+        }
+        self
+    }
+
     pub const fn rotate(mut self, rotation: Radians) -> Self {
         self.rotation = rotation;
         self
@@ -73,6 +94,7 @@ impl RenderOnce for VectorSprite {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         let Self {
             layers,
+            blend,
             raster_size,
             center,
             scale,
@@ -81,26 +103,47 @@ impl RenderOnce for VectorSprite {
         canvas(
             |_, _, _| (),
             move |bounds, (), window, cx| {
-                // Layout and image painting snap to whole device pixels. Keep layout fixed;
-                // the GPU transform carries both fractional translation and scaling.
-                let raster_bounds = Bounds::new(bounds.origin, raster_size);
                 let factor = window.scale_factor();
+                // GPUI snaps the raster quad before applying its transform. Use that
+                // same device-aligned quad as the pivot, preserving fractional motion.
+                // Keep it at the visible pose because scene culling uses the raw quad.
+                let raster_bounds = Bounds::centered_at(bounds.origin + center, raster_size)
+                    .map(|value| (value * factor).round() / factor);
                 let transform = TransformationMatrix::unit()
                     .translate((bounds.origin + center).scale(factor))
                     .rotate(rotation)
-                    .scale(size(scale, scale))
+                    .scale(size(
+                        scale * (raster_size.width / raster_bounds.size.width),
+                        scale * (raster_size.height / raster_bounds.size.height),
+                    ))
                     .translate(raster_bounds.center().scale(-factor));
-                for layer in layers.iter() {
-                    if let Err(error) = window.paint_svg(
-                        raster_bounds,
-                        layer.key.clone(),
-                        Some(&layer.mask),
-                        transform,
-                        layer.color,
-                        cx,
-                    ) {
-                        tracing::error!(event = "artwork.paint_failed", asset = %layer.key, %error);
+                let mut paint = |layers: &[Layer], opacity: f32| {
+                    for layer in layers {
+                        if let Err(error) = window.paint_svg(
+                            raster_bounds,
+                            layer.key.clone(),
+                            Some(&layer.mask),
+                            transform,
+                            layer.color.opacity(opacity),
+                            cx,
+                        ) {
+                            tracing::error!(event = "artwork.paint_failed", asset = %layer.key, %error);
+                        }
                     }
+                };
+                if let Some(blend) = blend {
+                    // Fading two complete, overlapping sprites changes body coverage
+                    // and edge contrast. Only their differing paint suffix may fade.
+                    let shared = layers
+                        .iter()
+                        .zip(blend.layers.iter())
+                        .take_while(|(a, b)| a.key == b.key && a.color == b.color)
+                        .count();
+                    paint(&layers[..shared], 1.);
+                    paint(&layers[shared..], 1. - blend.progress);
+                    paint(&blend.layers[shared..], blend.progress);
+                } else {
+                    paint(&layers, 1.);
                 }
             },
         )

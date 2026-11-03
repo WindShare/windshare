@@ -109,12 +109,11 @@ impl Behavior {
             response,
         );
         self.float_phase = (self.float_phase + seconds / FLOAT_CYCLE_SECONDS).fract();
-        Pose {
-            y: (self.float_phase * TAU)
-                .sin()
-                .mul_add(FLOAT_AMPLITUDE, self.pose.y),
-            ..self.pose
-        }
+        self.pose
+    }
+
+    pub fn float_offset(&self) -> f32 {
+        (self.float_phase * TAU).sin() * FLOAT_AMPLITUDE
     }
 
     pub fn reset(&mut self) {

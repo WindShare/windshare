@@ -1,14 +1,17 @@
 use crate::localization::{Text, language};
 use crate::{
+    artwork::Artwork,
     desktop::Desktop,
     model::{Page, PreviewAction},
 };
-use gpui::{Div, MouseButton, WindowControlArea, div, img, prelude::*, px};
+use gpui::{Div, MouseButton, WindowControlArea, div, point, prelude::*, px};
 use windshare_ui::{
     Button, ButtonStyle, FONT, Icon, SIDEBAR_COMPACT_WIDTH, SIDEBAR_WIDTH, Theme, Tone, column, row,
 };
 
 const TITLEBAR_HEIGHT: f32 = 40.;
+const BRAND_MARK_SIZE: f32 = 42.;
+const COMPACT_BRAND_MARK_SIZE: f32 = 36.;
 
 impl Desktop {
     fn titlebar_drag_area() -> Div {
@@ -84,6 +87,11 @@ impl Desktop {
 
     fn sidebar_content(&self, theme: Theme, compact: bool, cx: &Context<Self>) -> Div {
         let locale = language(cx);
+        let mark_size = if compact {
+            COMPACT_BRAND_MARK_SIZE
+        } else {
+            BRAND_MARK_SIZE
+        };
         column()
             .flex_1()
             .min_h_0()
@@ -94,11 +102,9 @@ impl Desktop {
                 row()
                     .gap(px(8.))
                     .mb(px(42.))
-                    .child(
-                        img("brand/spirit.svg")
-                            .size(px(if compact { 34. } else { 42. }))
-                            .flex_shrink_0(),
-                    )
+                    .child(div().relative().size(px(mark_size)).flex_shrink_0().child(
+                        Artwork::BrandMark.sprite(point(mark_size / 2., mark_size / 2.), mark_size),
+                    ))
                     .child(
                         theme
                             .heading("WindShare", if compact { 18. } else { 22. })
