@@ -20,8 +20,8 @@ too_many_lines = "deny"
 
 [workspace.dependencies]
 # Match the exact upstream snapshot used by gpui-kit, without its component layer.
-gpui = { package = "gpui-pre", version = "=0.3.10" }
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+gpui = { package = "gpui-pre", version = "=0.3.11" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 anyhow = "1"
 dirs = "5.0.1"
 sys-locale = "0.3.2"
