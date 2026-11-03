@@ -345,6 +345,7 @@ func (source *SelectedCatalogSource) scanChild(
 	name := entry.Name()
 	before, err := directory.Lstat(name)
 	if err != nil {
+		// Defensive: lstat needs only parent search access, but SELinux, macOS TCC or races can still deny it.
 		reason, scanErr := classifyChildAccessError(err)
 		return catalog.ScannedChild{}, reason, scanErr
 	}
