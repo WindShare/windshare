@@ -364,6 +364,7 @@ func identityCase(t *testing.T, f *fixture) any {
 		"shareId":            f.shareID,
 		"keyString":          base64.RawURLEncoding.EncodeToString(keyRaw),
 		"links":              capabilityLinkCases(t, f),
+		"copiedLinks":        copiedCapabilityLinkCases(t, f),
 		"descriptorKeyB64":   b64(f.descriptorKey),
 		"catalogKeyB64":      b64(f.catalogKey),
 		"fileIdB64":          b64(f.fileID),

@@ -98,6 +98,12 @@ interface IdentityVector extends VectorCase {
   readonly shareId: string
   readonly keyString: string
   readonly links: readonly { readonly name: string; readonly url: string; readonly relays: readonly string[] }[]
+  readonly copiedLinks: readonly {
+    readonly name: string
+    readonly url: string
+    readonly accepted: boolean
+    readonly relays?: readonly string[]
+  }[]
   readonly descriptorKeyB64: string
   readonly catalogKeyB64: string
   readonly fileIdB64: string
@@ -420,6 +426,20 @@ describe('suite-02 Web runtime contract', () => {
       expect(parsed.shareId, test.name).toBe(identity.shareId)
       expect(parsed.readSecret, test.name).toEqual(bytes(identity.readSecretB64))
       expect(parsed.pkHash, test.name).toEqual(bytes(identity.pkHashB64))
+    }
+  })
+
+  it('accepts and rejects copied link spellings exactly as Go does', async () => {
+    for (const test of identity.copiedLinks) {
+      const parsed = parseSuite02CapabilityLink(test.url)
+      if (!test.accepted) {
+        await expect(parsed, test.name).rejects.toThrow()
+        continue
+      }
+      const capability = await parsed
+      expect(capability.shareId, test.name).toBe(identity.shareId)
+      expect(capability.relays, test.name).toEqual(test.relays)
+      expect(capability.readSecret, test.name).toEqual(bytes(identity.readSecretB64))
     }
   })
 

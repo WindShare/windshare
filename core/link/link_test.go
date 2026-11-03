@@ -63,6 +63,7 @@ func TestURLRoundTrip(t *testing.T) {
 		{"基址尾斜杠", newLink("https://windshare.top"), "https://windshare.top/"},
 		{"基址带子路径", newLink("r.example.com"), "https://ex.com/app"},
 		{"localhost 开发基址", newLink("http://localhost:5173"), "http://localhost:5173"},
+		{"discard encoded base fragment", newLink("https://ex.com"), "https://ex.com/app#%41" + testKey[1:]},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
