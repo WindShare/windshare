@@ -76,11 +76,10 @@ func TestCatalogOmissionsRetainBoundedPathsAndScanCorrelation(t *testing.T) {
 
 func TestCatalogOmitsNamesOutsideThePathGrammarWithoutFailingSiblings(t *testing.T) {
 	root := t.TempDir()
-	// Directional marks and ZWNJ (required in Persian words such as "books") are
-	// format characters that the shared name grammar rejects today.
-	unrepresentable := []string{"\u200eIMG-0001.jpg", "\u06a9\u062a\u0627\u0628\u200c\u0647\u0627.docx"}
+	// Directional controls remain excluded, while language joining controls are shareable.
+	unrepresentable := []string{"\u200eIMG-0001.jpg", "zero\u200bwidth.txt"}
 	if runtime.GOOS != "windows" {
-		unrepresentable = append(unrepresentable, "12:30.log", `back\slash.txt`, "tab\tname.txt")
+		unrepresentable = append(unrepresentable, `back\slash.txt`, "tab\tname.txt")
 	}
 	if runtime.GOOS == "linux" {
 		unrepresentable = append(unrepresentable, "latin1-caf\xe9.txt")
@@ -90,14 +89,11 @@ func TestCatalogOmitsNamesOutsideThePathGrammarWithoutFailingSiblings(t *testing
 			t.Fatal(err)
 		}
 	}
-	// On NTFS "dir:with-colon" is alternate data stream syntax, so do not create it there.
-	if runtime.GOOS != "windows" {
-		// The omitted directory is never opened, so its subtree counts as one item.
-		if err := os.MkdirAll(filepath.Join(root, "dir:with-colon", "inner"), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		unrepresentable = append(unrepresentable, "dir:with-colon")
+	// Omitting a directory excludes its subtree without opening it.
+	if err := os.MkdirAll(filepath.Join(root, "dir\u200bhidden", "inner"), 0o700); err != nil {
+		t.Fatal(err)
 	}
+	unrepresentable = append(unrepresentable, "dir\u200bhidden")
 	stream, err := diag.NewStream(64, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -124,6 +120,9 @@ func TestCatalogOmitsNamesOutsideThePathGrammarWithoutFailingSiblings(t *testing
 		if record.Name() == "catalog_source_omission" {
 			if reason := record.Payload().Get("reason").Text(); reason != "unrepresentable_name" {
 				t.Fatalf("omission reason = %q", reason)
+			}
+			if record.Payload().Get("detail").Text() == "" {
+				t.Fatal("name omission lost the concrete rejection reason")
 			}
 			reasons++
 		}

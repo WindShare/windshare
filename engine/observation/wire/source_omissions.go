@@ -5,6 +5,7 @@ import appobs "github.com/windshare/windshare/engine/observation"
 type SourceOmissionSample struct {
 	Name   string `json:"name"`
 	Reason string `json:"reason"`
+	Detail string `json:"detail,omitempty"`
 }
 
 type SourceOmissionsPayload struct {
@@ -23,7 +24,7 @@ func (enc *encoder) encodeSourceOmissions(event appobs.SourceOmissionsObserved) 
 	summary := event.Summary()
 	samples := make([]SourceOmissionSample, len(summary.Samples))
 	for index, sample := range summary.Samples {
-		samples[index] = SourceOmissionSample{Name: sample.Name, Reason: string(sample.Reason)}
+		samples[index] = SourceOmissionSample{Name: sample.Name, Reason: string(sample.Reason), Detail: sample.Detail}
 	}
 	enc.set("source_omissions", nil, SourceOmissionsPayload{
 		DirectoryID:   EncodeIdentity(summary.Directory.Bytes()),

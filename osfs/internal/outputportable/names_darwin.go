@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"unsafe"
 
+	"github.com/windshare/windshare/osfs/internal/pathfailure"
 	"golang.org/x/sys/unix"
 	"golang.org/x/text/unicode/norm"
 )
@@ -41,3 +42,5 @@ func exactEntrySpelling(requested, actual string) bool {
 }
 
 func validateNativeName(string) error { return nil }
+
+func isNativeNameRefusal(err error) bool { return pathfailure.IsTooLong(err) }

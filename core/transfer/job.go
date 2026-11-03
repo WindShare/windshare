@@ -25,8 +25,11 @@ const (
 	MaximumOutputSettlementTimeout = 5 * time.Minute
 	DefaultTransferQueueCapacity   = 8
 	MaximumTransferQueueCapacity   = 256
-	DefaultGenerationReplayPages   = (catalog.MaxDirectoryEntries + catalog.MaxCatalogPageEntries - 1) / catalog.MaxCatalogPageEntries
-	MaximumGenerationReplayPages   = catalog.MaxDirectoryEntries
+	// Byte-limited pages need not be full. Bound retained bytes independently
+	// so allowing more pages does not enlarge the metadata memory budget.
+	DefaultGenerationReplayPages = catalog.MaxDirectoryEntries
+	defaultGenerationReplayBytes = 256 << 20
+	MaximumGenerationReplayPages = catalog.MaxDirectoryEntries
 )
 
 var (
@@ -296,7 +299,7 @@ func NewTransferJob(config TransferJobConfig) (*TransferJob, error) {
 	walkLimits, ok := catalogwalk.NewLimits(
 		uint32(replayPageCapacity),
 		catalog.MaxDirectoryEntries,
-		uint64(replayPageCapacity)*(catalog.CatalogPageMemoryOverhead+catalog.MaxCatalogPageObjectBytes),
+		min(uint64(replayPageCapacity)*(catalog.CatalogPageMemoryOverhead+catalog.MaxCatalogPageObjectBytes), defaultGenerationReplayBytes),
 	)
 	if !ok {
 		return nil, ErrInvalidTransferJob

@@ -47,7 +47,7 @@ func openDirectory(path string) (*directory, error) {
 }
 
 func validComponent(name string) error {
-	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\:\x00") {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\\x00") {
 		return outputcap.ErrUnsafeNamespace
 	}
 	return nil

@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/windshare/windshare/osfs/internal/outputcap"
@@ -28,6 +29,23 @@ func TestLocatorIdentityDoesNotInferNativeEquivalence(t *testing.T) {
 		if key, err := platform.CanonicalComponentKey(spelling); err != nil || key != spelling {
 			t.Fatalf("snapshot spelling %q: %q, %v", spelling, key, err)
 		}
+	}
+}
+
+func TestLongComponentRefusalCanBeRepairedButParentFailureCannot(t *testing.T) {
+	root := t.TempDir()
+	platform, err := Open(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer platform.Close()
+	longName := strings.Repeat("a", 1024)
+	if _, _, err := platform.Root().ClassifyExactEntry(longName); !errors.Is(err, outputcap.ErrNameRejected) {
+		t.Fatalf("component refusal did not permit repair: %v", err)
+	}
+	parent := &directoryRoot{path: filepath.Join(root, longName)}
+	if _, err := parent.Lstat("file"); err == nil || errors.Is(err, outputcap.ErrNameRejected) {
+		t.Fatalf("parent failure incorrectly permits child name repair: %v", err)
 	}
 }
 

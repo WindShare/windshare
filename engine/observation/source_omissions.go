@@ -36,7 +36,8 @@ func (value SourceOmissionsObserved) Validate() error {
 		return ErrInvalidEvent
 	}
 	for _, sample := range summary.Samples {
-		if sample.Name == "" || !sample.Reason.Valid() {
+		if sample.Name == "" || !sample.Reason.Valid() ||
+			(sample.Reason == catalog.SourceOmissionName) != (sample.Detail != "") {
 			return ErrInvalidEvent
 		}
 	}

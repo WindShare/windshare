@@ -25,6 +25,8 @@ func (reason SourceOmissionReason) Valid() bool {
 type SourceOmission struct {
 	Name   string
 	Reason SourceOmissionReason
+	// Detail explains the rejected spelling, including invisible scalars and byte limits.
+	Detail string
 }
 
 // SourceOmissions is local source feedback after a stable directory scan.

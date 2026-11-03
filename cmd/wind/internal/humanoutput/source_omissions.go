@@ -12,7 +12,7 @@ func (visitor eventVisitor) VisitSourceOmissions(event appobs.SourceOmissionsObs
 		statusLine(visitor.symbols().Warning, "Sharing skipped "+formatCount(summary.Count)+" unsupported source items in "+escapedDisplay(summary.DirectoryPath), terminalcanvas.StyleWarning),
 	}
 	for _, sample := range summary.Samples {
-		lines = append(lines, terminalcanvas.Plain("  "+escapedDisplay(sample.Name)+": "+sourceOmissionReason(sample.Reason)))
+		lines = append(lines, terminalcanvas.Plain("  "+escapedDisplay(sample.Name)+": "+sourceOmissionReason(sample)))
 	}
 	if unsampled := summary.Count - uint64(len(summary.Samples)); unsampled != 0 {
 		lines = append(lines, terminalcanvas.Plain("  "+formatCount(unsampled)+" more skipped items; examples above are limited."))
@@ -22,8 +22,8 @@ func (visitor eventVisitor) VisitSourceOmissions(event appobs.SourceOmissionsObs
 	return nil
 }
 
-func sourceOmissionReason(reason catalog.SourceOmissionReason) string {
-	switch reason {
+func sourceOmissionReason(sample catalog.SourceOmission) string {
+	switch sample.Reason {
 	case catalog.SourceOmissionSymbolicLink:
 		return "symbolic link; select the actual file or directory"
 	case catalog.SourceOmissionReparsePoint:
@@ -31,7 +31,7 @@ func sourceOmissionReason(reason catalog.SourceOmissionReason) string {
 	case catalog.SourceOmissionSpecialFile:
 		return "special file; only regular files and directories can be shared"
 	case catalog.SourceOmissionName:
-		return "unsupported name; rename this item"
+		return escapedDisplay(sample.Detail) + "; rename this item"
 	default:
 		return "unsupported source item"
 	}

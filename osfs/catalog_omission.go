@@ -47,15 +47,16 @@ func catalogScanCorrelation(request catalog.ScanRequest) diag.Fields {
 }
 
 func (source *SelectedCatalogSource) traceCatalogOmission(
-	request catalog.ScanRequest, parent sourceLocation, name string, reason catalog.SourceOmissionReason, count uint64,
+	request catalog.ScanRequest, parent sourceLocation, omission catalog.SourceOmission, count uint64,
 ) {
 	if !source.diagnostics.Enabled() || count > catalog.MaxSourceOmissionSamples {
 		return
 	}
 	source.diagnostics.Emit(diag.New("catalog_source_omission", diag.Fields{
 		"root_slot":     diag.Uint(uint64(parent.RootSlot())),
-		"relative_path": diag.Text(filepath.ToSlash(filepath.Join(parent.RelativePath(), name))),
-		"reason":        diag.Text(string(reason)),
+		"relative_path": diag.Text(filepath.ToSlash(filepath.Join(parent.RelativePath(), omission.Name))),
+		"reason":        diag.Text(string(omission.Reason)),
+		"detail":        diag.Text(omission.Detail),
 	}).Correlate(catalogScanCorrelation(request)))
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -15,7 +16,7 @@ func TestStableScanReportsBoundedOmissionsWithoutDiagnostics(t *testing.T) {
 	root := t.TempDir()
 	const omitted = catalog.MaxSourceOmissionSamples + 3
 	for index := range omitted {
-		name := fmt.Sprintf("omitted-%02d\u200d", index)
+		name := fmt.Sprintf("omitted-%02d\u200b", index)
 		if err := os.MkdirAll(filepath.Join(root, name, "unscanned-subtree"), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -51,7 +52,7 @@ func TestStableScanReportsBoundedOmissionsWithoutDiagnostics(t *testing.T) {
 	}
 	seen := map[string]bool{}
 	for _, sample := range report.Samples {
-		if sample.Reason != catalog.SourceOmissionName || seen[sample.Name] {
+		if sample.Reason != catalog.SourceOmissionName || !strings.Contains(sample.Detail, "U+200B") || seen[sample.Name] {
 			t.Fatalf("invalid sample: %+v", sample)
 		}
 		if _, err := os.Stat(filepath.Join(report.DirectoryPath, sample.Name)); err != nil {

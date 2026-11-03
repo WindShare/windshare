@@ -1,5 +1,8 @@
 import { isCatalogName } from '../../catalog/path-policy'
 
+export const PORTABLE_OUTPUT_NAME_BYTES = 255
+const TEXT_ENCODER = new TextEncoder()
+
 const WINDOWS_ILLEGAL_CHARACTERS = new Set('<>:"|?*')
 const WINDOWS_RESERVED_NAMES = (() => {
   const names = new Set(['con', 'prn', 'aux', 'nul', 'conin$', 'conout$'])
@@ -16,7 +19,7 @@ const WINDOWS_RESERVED_NAMES = (() => {
 
 /** Generated fallback names must remain usable through conventional filesystem APIs. */
 export function isPortableOutputName(name: string): boolean {
-  if (!isCatalogName(name) || name.endsWith('.') || name.endsWith(' ') || isWindowsReservedName(name)) return false
+  if (!isCatalogName(name) || TEXT_ENCODER.encode(name).byteLength > PORTABLE_OUTPUT_NAME_BYTES || name.endsWith('.') || name.endsWith(' ') || isWindowsReservedName(name)) return false
   for (const character of name) {
     if (WINDOWS_ILLEGAL_CHARACTERS.has(character)) return false
   }

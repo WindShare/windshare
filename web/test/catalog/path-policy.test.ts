@@ -5,6 +5,7 @@ import {
   catalogNameCollisionKey,
   catalogPathCollisionKey,
   isCatalogName,
+  CATALOG_NAME_BYTES,
   CATALOG_PATH_BYTES,
   CATALOG_PATH_DEPTH,
   PATH_POLICY,
@@ -27,7 +28,7 @@ const vectors = loadVectorFile(
   new URL('../../../core/testvectors/path-policy.json', import.meta.url),
 ).cases as unknown as readonly PathPolicyVector[]
 
-describe('v2 catalog path policy', () => {
+describe('logical catalog path policy', () => {
   it('pins Unicode 15 NFC and full-fold collision identity', () => {
     const version = vectors.find((vector) => vector.name === 'policy-version')
     expect(PATH_POLICY).toBe(version?.policyVersion)
@@ -81,8 +82,8 @@ describe('v2 catalog path policy', () => {
   })
 
   it('bounds canonical names by UTF-8 bytes rather than UTF-16 units', () => {
-    expect(isCatalogName('界'.repeat(85))).toBe(true)
-    expect(isCatalogName('界'.repeat(86))).toBe(false)
+    expect(isCatalogName('界'.repeat(Math.floor(CATALOG_NAME_BYTES / 3)))).toBe(true)
+    expect(isCatalogName('界'.repeat(Math.floor(CATALOG_NAME_BYTES / 3) + 1))).toBe(false)
   })
 
   it('enforces the shared protocol path depth and byte boundaries', () => {

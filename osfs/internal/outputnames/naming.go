@@ -14,6 +14,7 @@ import (
 )
 
 const (
+	MaxPortableNameBytes  = 255
 	MaximumAttempts       = 16
 	tokenBytes            = 16
 	nameSuffix            = ".windshare-"
@@ -27,8 +28,8 @@ var ErrInvalidMapping = errors.New("output name mapping is invalid")
 // the destination's own namespace, including on filesystems with fewer restrictions.
 func PortableName(name string) bool {
 	canonical, err := catalog.CanonicalName(name)
-	if err != nil || canonical != name || strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") ||
-		strings.ContainsAny(name, `<>"|?*`) {
+	if err != nil || canonical != name || len(name) > MaxPortableNameBytes || strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") ||
+		strings.ContainsAny(name, `<>:"|?*`) {
 		return false
 	}
 	stem, _, _ := strings.Cut(name, ".")
@@ -85,7 +86,7 @@ func Candidate(operationID []byte, logicalPath string, attempt uint32) (string, 
 	_, _ = identity.Write(operationID)
 	_, _ = fmt.Fprintf(identity, "\x00%s\x00%d", logicalPath, attempt)
 	token := hex.EncodeToString(identity.Sum(nil)[:tokenBytes])
-	budget := catalog.MaxNameBytes - len(nameSuffix) - len(token) - len(extension)
+	budget := MaxPortableNameBytes - len(nameSuffix) - len(token) - len(extension)
 	prefix = truncateUTF8(prefix, budget)
 	name = prefix + nameSuffix + token + extension
 	if !PortableName(name) {

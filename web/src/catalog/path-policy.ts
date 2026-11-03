@@ -4,9 +4,10 @@ import {
   PINNED_NORMALIZATION_VERSION,
 } from '../unicode/unicode-normalization'
 
-export const PATH_POLICY = 'windshare/path/v2-unicode-15.0.0'
+export const PATH_POLICY = 'windshare/path/v3-unicode-15.0.0'
 export const PATH_POLICY_UNICODE_VERSION = PINNED_CASE_FOLD_VERSION
-export const CATALOG_NAME_BYTES = 255
+// Logical metadata budget; destination providers impose their own component limits.
+export const CATALOG_NAME_BYTES = 4 * 1024
 export const CATALOG_PATH_BYTES = 32 * 1024
 export const CATALOG_PATH_DEPTH = 256
 
@@ -45,7 +46,6 @@ export function isCatalogName(name: string): boolean {
     normalizeNFC15(name) !== name ||
     name.includes('/') ||
     name.includes('\\') ||
-    name.includes(':') ||
     TEXT_ENCODER.encode(name).byteLength > CATALOG_NAME_BYTES
   ) return false
   for (const character of name) {
@@ -123,10 +123,15 @@ function isFormatCharacter(scalar: number): boolean {
 }
 
 function isControlOrFormatCharacter(scalar: number): boolean {
+  // These format characters are part of ordinary words and emoji sequences.
+  const softHyphen = 0x00ad
+  const zeroWidthNonJoiner = 0x200c
+  const zeroWidthJoiner = 0x200d
+  if (scalar === softHyphen || scalar === zeroWidthNonJoiner || scalar === zeroWidthJoiner) return false
   return scalar <= 0x1f || (scalar >= 0x7f && scalar <= 0x9f) || isFormatCharacter(scalar)
 }
 
 if (
-  PATH_POLICY !== `windshare/path/v2-unicode-${PINNED_CASE_FOLD_VERSION}` ||
+  PATH_POLICY !== `windshare/path/v3-unicode-${PINNED_CASE_FOLD_VERSION}` ||
   PINNED_NORMALIZATION_VERSION !== PINNED_CASE_FOLD_VERSION
 ) throw new Error('Catalog path policy does not match its pinned Unicode tables')

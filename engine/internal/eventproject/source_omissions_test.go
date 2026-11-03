@@ -14,7 +14,7 @@ func TestSourceOmissionsPreserveBoundedSamplesAndScanIdentityAcrossProjection(t 
 	summary := catalog.SourceOmissions{
 		Directory: catalog.DirectoryID{1}, Generation: catalog.DirectoryGeneration{2}, Attempt: catalog.ScanAttemptID{3},
 		DirectoryPath: "/source/nested", Count: 3,
-		Samples: []catalog.SourceOmission{{Name: "family\u200dphotos", Reason: catalog.SourceOmissionName}},
+		Samples: []catalog.SourceOmission{{Name: "family\u200bphotos", Reason: catalog.SourceOmissionName, Detail: "unsupported format character U+200B"}},
 	}
 	var published task.Observation
 	accepted := Workflow(appobs.WorkflowShare, task.Observation{TaskID: "share:1", Event: share.SourceOmissionsObserved{Summary: summary}}, func(value task.Observation) bool {
@@ -38,7 +38,7 @@ func TestSourceOmissionsPreserveBoundedSamplesAndScanIdentityAcrossProjection(t 
 		payload.GenerationID != wire.EncodeIdentity(summary.Generation.Bytes()) ||
 		payload.ScanAttemptID != wire.EncodeIdentity(summary.Attempt.Bytes()) ||
 		payload.DirectoryPath != summary.DirectoryPath || payload.OmittedEntries != "3" || payload.UnsampledEntries != "2" ||
-		len(payload.Samples) != 1 || payload.Samples[0].Name != "family\u200dphotos" || payload.Samples[0].Reason != "unrepresentable_name" {
+		len(payload.Samples) != 1 || payload.Samples[0].Name != "family\u200bphotos" || payload.Samples[0].Reason != "unrepresentable_name" || payload.Samples[0].Detail != "unsupported format character U+200B" {
 		t.Fatalf("omission serialization lost source facts or sample ownership: %+v", encoded)
 	}
 
@@ -51,6 +51,7 @@ func TestSourceOmissionsPreserveBoundedSamplesAndScanIdentityAcrossProjection(t 
 			value.Samples[0].Reason = catalog.SourceOmissionReason("unknown")
 		},
 		func(value *catalog.SourceOmissions) { value.Samples[0].Name = "" },
+		func(value *catalog.SourceOmissions) { value.Samples[0].Detail = "" },
 		func(value *catalog.SourceOmissions) {
 			value.Samples = make([]catalog.SourceOmission, catalog.MaxSourceOmissionSamples+1)
 		},

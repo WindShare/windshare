@@ -43,7 +43,13 @@ func (r *directoryRoot) Lstat(name string) (os.FileInfo, error) {
 		return nil, err
 	}
 	defer root.Close()
-	return root.Lstat(name)
+	info, err := root.Lstat(name)
+	// The parent is already open and verified. Only a confined component
+	// refusal may trigger name repair; failure to reopen the parent must not.
+	if validComponent(name) == nil && isNativeNameRefusal(err) {
+		err = errors.Join(outputcap.ErrNameRejected, err)
+	}
+	return info, err
 }
 func (r *directoryRoot) Mkdir(name string, mode fs.FileMode) error {
 	root, err := r.open()
