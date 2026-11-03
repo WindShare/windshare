@@ -6324,9 +6324,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "gpui-pre",
+ "raw-window-handle",
  "tracing",
  "unicode-segmentation",
  "usvg",
+ "windows 0.62.2",
 ]
 
 [[package]]

@@ -162,8 +162,7 @@ impl RenderOnce for Button {
     fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
         let theme = Theme::from(window.appearance());
         let colors = self.style.colors(theme);
-        let mouse_handler = self.handler.clone();
-        let key_handler = self.handler;
+        let handler = self.handler;
         let empty = self.label.is_empty();
         let accessible_label = if empty {
             self.tooltip
@@ -209,18 +208,12 @@ impl RenderOnce for Button {
                     .hover(move |s| s.bg(colors.hover))
                     .active(|s| s.opacity(0.75))
                     .focus_visible(|s| s.border_color(colors.focus).shadow_sm())
+                    // GPUI maps Enter/Space release to a click for focused elements.
+                    // A separate key-down handler would activate toggles twice.
                     .on_click(move |_, window, cx| {
                         cx.stop_propagation();
-                        if let Some(f) = &mouse_handler {
+                        if let Some(f) = &handler {
                             f(&(), window, cx);
-                        }
-                    })
-                    .on_key_down(move |event, window, cx| {
-                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                            cx.stop_propagation();
-                            if let Some(f) = &key_handler {
-                                f(&(), window, cx);
-                            }
                         }
                     })
             })
