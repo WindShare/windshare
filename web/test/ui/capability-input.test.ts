@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { encodeSuite02CapabilityKey } from '../../src/crypto/suite02-link'
+import { decodeSuite02CapabilityKey, encodeSuite02CapabilityKey } from '../../src/crypto/suite02-link'
 import { capabilityFromInput, capabilityInputFingerprint } from '../../src/application/browser-share/capability-input'
 
 describe('capability input identity', () => {
@@ -14,6 +14,22 @@ describe('capability input identity', () => {
     expect(await capabilityFromInput(key.encoded, pageUrl)).toMatchObject({
       shareId: key.shareId, relays: ['https://relay.invalid'],
     })
+  })
+
+  it('normalizes separate key input without relaxing the canonical key decoder', async () => {
+    const key = await encodeSuite02CapabilityKey(new Uint8Array(16).fill(255), new Uint8Array(16).fill(2))
+    const pageUrl = `https://receiver.invalid/${key.shareId}`
+    for (const input of [` # ${key.encoded} `, `\ufeff${key.encoded}\u3000`]) {
+      expect((await capabilityFromInput(input, pageUrl)).readSecret).toEqual(key.readSecret)
+      await expect(decodeSuite02CapabilityKey(input)).rejects.toThrow()
+    }
+    for (const input of [
+      `prefix#${key.encoded}`,
+      `##${key.encoded}`,
+      key.encoded.slice(0, 20) + '\r\n' + key.encoded.slice(20),
+    ]) {
+      await expect(capabilityFromInput(input, pageUrl)).rejects.toThrow()
+    }
   })
 
   it('resolves a pasted short link against its own origin, independently of the portal', async () => {
