@@ -9,7 +9,7 @@ import (
 func (visitor eventVisitor) VisitSourceOmissions(event appobs.SourceOmissionsObserved) error {
 	summary := event.Summary()
 	lines := []terminalcanvas.Line{
-		statusLine(visitor.symbols().Warning, "Sharing skipped "+formatCount(summary.Count)+" unsupported source items in "+escapedDisplay(summary.DirectoryPath), terminalcanvas.StyleWarning),
+		statusLine(visitor.symbols().Warning, "Sharing skipped "+formatCount(summary.Count)+" source items in "+escapedDisplay(summary.DirectoryPath), terminalcanvas.StyleWarning),
 	}
 	for _, sample := range summary.Samples {
 		lines = append(lines, terminalcanvas.Plain("  "+escapedDisplay(sample.Name)+": "+sourceOmissionReason(sample)))
@@ -32,7 +32,9 @@ func sourceOmissionReason(sample catalog.SourceOmission) string {
 		return "special file; only regular files and directories can be shared"
 	case catalog.SourceOmissionName:
 		return escapedDisplay(sample.Detail) + "; rename this item"
+	case catalog.SourceOmissionAccessDenied:
+		return "access denied; grant this sender read access and directory traversal access, then share again"
 	default:
-		return "unsupported source item"
+		return "source item not included"
 	}
 }

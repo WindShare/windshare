@@ -11,11 +11,12 @@ const (
 	SourceOmissionReparsePoint SourceOmissionReason = "reparse_point"
 	SourceOmissionSpecialFile  SourceOmissionReason = "special_file"
 	SourceOmissionName         SourceOmissionReason = "unrepresentable_name"
+	SourceOmissionAccessDenied SourceOmissionReason = "access_denied"
 )
 
 func (reason SourceOmissionReason) Valid() bool {
 	switch reason {
-	case SourceOmissionSymbolicLink, SourceOmissionReparsePoint, SourceOmissionSpecialFile, SourceOmissionName:
+	case SourceOmissionSymbolicLink, SourceOmissionReparsePoint, SourceOmissionSpecialFile, SourceOmissionName, SourceOmissionAccessDenied:
 		return true
 	default:
 		return false
@@ -30,8 +31,9 @@ type SourceOmission struct {
 }
 
 // SourceOmissions is local source feedback after a stable directory scan.
-// Native names and paths are deliberately not catalog names or wire metadata:
-// the rejected names cannot be represented by the catalog grammar.
+// Native names and paths stay out of catalog wire metadata because some omitted
+// names cannot be represented by the catalog grammar. Count measures immediate
+// children; an omitted directory excludes its subtree without traversing it.
 type SourceOmissions struct {
 	Directory     DirectoryID
 	Generation    DirectoryGeneration

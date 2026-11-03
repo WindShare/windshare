@@ -353,7 +353,9 @@ func (source *SelectedCatalogSource) scanChild(
 	name := entry.Name()
 	before, err := directory.Lstat(name)
 	if err != nil {
-		return catalog.ScannedChild{}, catalog.SourceOmission{}, catalog.NewTransientScanError(err, 0)
+		// lstat usually needs only parent search access, but policy or races can deny it.
+		omission, scanErr := classifyChildAccessError(name, err)
+		return catalog.ScannedChild{}, omission, scanErr
 	}
 	if reason := catalogOmissionFor(before); reason != catalog.SourceOmissionNone {
 		return catalog.ScannedChild{}, catalog.SourceOmission{Name: name, Reason: reason}, nil
@@ -371,7 +373,8 @@ func (source *SelectedCatalogSource) scanChild(
 	}
 	handle, err := directory.Open(name)
 	if err != nil {
-		return catalog.ScannedChild{}, catalog.SourceOmission{}, catalog.NewTransientScanError(err, 0)
+		omission, scanErr := classifyChildAccessError(name, err)
+		return catalog.ScannedChild{}, omission, scanErr
 	}
 	opened, statErr := handle.Stat()
 	identity, candidate, baselineErr := platformCatalogBaseline(handle)

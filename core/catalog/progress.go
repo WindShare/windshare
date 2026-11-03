@@ -38,8 +38,10 @@ type ScanRequest struct {
 }
 
 type ScanResult struct {
-	// OmittedCount counts unsupported children excluded from a fully scanned,
-	// stable directory. Enumeration and identity failures must return an error.
+	// OmittedCount counts immediate children the source could not include in a
+	// fully enumerated, stable directory. An omitted directory counts once for
+	// its entire subtree. Failures that prevent complete enumeration or directory
+	// identity validation must return an error.
 	OmittedCount uint64
 }
 

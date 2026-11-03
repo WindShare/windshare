@@ -1,6 +1,7 @@
 package osfs
 
 import (
+	"errors"
 	"io/fs"
 	"path/filepath"
 
@@ -24,6 +25,15 @@ func catalogOmissionFor(info fs.FileInfo) catalog.SourceOmissionReason {
 	default:
 		return catalog.SourceOmissionNone
 	}
+}
+
+// A denied child must not hide readable siblings. Permission fixes take effect
+// in a new share because committed directory generations are immutable.
+func classifyChildAccessError(name string, err error) (catalog.SourceOmission, error) {
+	if errors.Is(err, fs.ErrPermission) {
+		return catalog.SourceOmission{Name: name, Reason: catalog.SourceOmissionAccessDenied}, nil
+	}
+	return catalog.SourceOmission{}, catalog.NewTransientScanError(err, 0)
 }
 
 func (source *SelectedCatalogSource) observeCatalogOmissions(request catalog.ScanRequest, path string, result catalogOmissions) {

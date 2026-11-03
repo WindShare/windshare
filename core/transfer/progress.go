@@ -30,8 +30,9 @@ const (
 // caller's clock and presentation decision outside core, so polling still
 // cannot affect transfer authority or introduce I/O on the data path.
 type ReceiveProgressSnapshot struct {
-	// SourceOmittedEntries counts unsupported children of selected directories,
-	// independently of transfer failures and the supported-file denominator.
+	// SourceOmittedEntries counts children the source could not include in selected
+	// directories, independently of transfer failures and discovered-file counters.
+	// An omitted directory counts once for its entire subtree.
 	SourceOmittedEntries     uint64
 	DiscoveredFiles          uint64
 	DiscoveredBytes          uint64
