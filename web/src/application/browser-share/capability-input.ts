@@ -13,7 +13,9 @@ const TEXT_ENCODER = new TextEncoder()
 export async function capabilityFromInput(input: string, pageUrl: string): Promise<Suite02CapabilityLink> {
   const trimmed = input.trim()
   if (trimmed.includes('://')) return parseSuite02CapabilityLink(trimmed)
-  const capability = await decodeSuite02CapabilityKey(trimmed)
+  // A copied leading '#' is an input convenience, not part of the key format.
+  const payload = trimmed.startsWith('#') ? trimmed.slice(1).trim() : trimmed
+  const capability = await decodeSuite02CapabilityKey(payload)
   try {
     return Object.freeze({
       ...capability,

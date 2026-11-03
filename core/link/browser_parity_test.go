@@ -1,6 +1,7 @@
 package link_test
 
 import (
+	"bytes"
 	"errors"
 	"reflect"
 	"strconv"
@@ -29,11 +30,6 @@ func TestParseResolvesCopiedSpellingsLikeBrowser(t *testing.T) {
 		{"trailing encoded double-dot segment", base + "/x/.%2e#" + testKey},
 		{"double-dot removes empty segment", base + "//..#" + testKey},
 		{"trailing key space", full + " "},
-		{"repeated fragment delimiter", base + "##" + testKey},
-		// WHATWG drops the line break, so the second link becomes part of the
-		// first fragment and the key after its '#' is read. The first host wins.
-		{"two links joined by a line break", full + "\nhttps://other.example/" + testShareID + "#" + testKey},
-		{"two links joined by CRLF", full + "\r\nhttps://other.example/" + testShareID + "?r=https://r.example#" + testKey},
 	}
 	want := testCapability
 	want.Relays = []string{"https://ex.com"}
@@ -45,6 +41,14 @@ func TestParseResolvesCopiedSpellingsLikeBrowser(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("Parse(%s) = %+v, want %+v", strconv.Quote(test.raw), got, want)
+			}
+			bare, key, err := link.Split(test.raw)
+			if err != nil || key != testKey {
+				t.Fatalf("Split(%s) = %q, %q, %v", strconv.Quote(test.raw), bare, key, err)
+			}
+			merged, err := link.Merge(bare, key)
+			if err != nil || !reflect.DeepEqual(merged, got) {
+				t.Fatalf("Merge(Split(%s)) = %+v, %v; want %+v", strconv.Quote(test.raw), merged, err, got)
 			}
 		})
 	}
@@ -58,11 +62,21 @@ func TestParseResolvesCopiedSpellingsLikeBrowser(t *testing.T) {
 		{"encoded slash after route", base + "%2F#" + testKey},
 		{"encoded slash before route", "https://ex.com/x%2F" + testShareID + "#" + testKey},
 		{"double-dot removes route", base + "/..#" + testKey},
+		{"repeated fragment delimiter", base + "##" + testKey},
+		{"URL inside fragment", base + "#https://other.example/#" + testKey},
+		{"two links joined by a line break", full + "\nhttps://other.example/" + testShareID + "#" + testKey},
+		{"two links joined by CRLF", full + "\r\nhttps://other.example/" + testShareID + "?r=https://r.example#" + testKey},
 	}
 	for _, test := range rejected {
 		t.Run(test.name, func(t *testing.T) {
 			if got, err := link.Parse(test.raw); err == nil || errors.Is(err, link.ErrMissingFragment) {
 				t.Fatalf("Parse(%s) = %+v, %v; browser rejects it", strconv.Quote(test.raw), got, err)
+			}
+			if bare, key, err := link.Split(test.raw); err == nil {
+				t.Fatalf("Split(%s) accepted invalid input: %q, %q", strconv.Quote(test.raw), bare, key)
+			}
+			if got, err := link.Merge(test.raw, testKey); err == nil {
+				t.Fatalf("Merge(%s, key) accepted invalid input: %+v", strconv.Quote(test.raw), got)
 			}
 		})
 	}
@@ -83,6 +97,22 @@ func TestMergeAndSplitUseBrowserFragmentSpelling(t *testing.T) {
 	}
 	if _, err := link.Merge(bare, "\ufeff"+testKey); err != nil {
 		t.Fatalf("Merge with byte order mark key: %v", err)
+	}
+}
+
+func TestSplitMergeNormalizesWrappedKeyWithUnderscores(t *testing.T) {
+	want := newLink()
+	want.ReadSecret = bytes.Repeat([]byte{0xff}, link.ReadSecretBytes)
+	key := mustKeyString(want)
+	base := "https://ex.com/" + want.ShareID
+	want.Relays = []string{"https://ex.com"}
+	bare, splitKey, err := link.Split(base + "#" + key[:20] + "\r\n" + key[20:])
+	if err != nil || splitKey != key {
+		t.Fatalf("Split = %q, %q, %v; want canonical key %q", bare, splitKey, err, key)
+	}
+	got, err := link.Merge(bare, splitKey)
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("Merge(Split) = %+v, %v; want %+v", got, err, want)
 	}
 }
 
@@ -128,6 +158,9 @@ func TestMergeResolvesSeparateKeyLikeBrowserKeyBox(t *testing.T) {
 		"x://y#" + testKey,
 		"\u0085" + testKey,
 		testKey + "\u0085",
+		"prefix#" + testKey,
+		"##" + testKey,
+		testKey[:20] + "\r\n" + testKey[20:],
 	} {
 		if got, err := link.Merge(base, key); err == nil {
 			t.Fatalf("Merge(base, %s) = %+v; browser rejects it", strconv.Quote(key), got)

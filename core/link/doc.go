@@ -7,6 +7,7 @@
 // their order. The fragment never travels in HTTP requests. Split and Merge
 // support delivering the link and key separately. Parsing follows the browser
 // receiver in boundary trimming, removal of inner tabs and newlines, dot-segment
-// resolution before taking the route, and reading the fragment verbatim. All
-// operations are pure.
+// resolution before taking the route, and reading the fragment verbatim. Each
+// fragment is one canonical key payload; a separately entered key may include a
+// leading '#'. Split emits canonical keys for Merge. All operations are pure.
 package link

@@ -69,6 +69,7 @@ func copiedCapabilityLinkCases(t *testing.T, f *fixture) []any {
 		{"double-dot-removes-route", bare + "/..#" + key},
 		{"encoded-slash-after-route", bare + "%2F#" + key},
 		{"repeated-fragment-delimiter", bare + "##" + key},
+		{"url-inside-fragment", bare + "#https://other.example/#" + key},
 		{"percent-encoded-key", bare + "#" + encodedKey},
 		{"space-prefixed-key", bare + "# " + key},
 		{"two-links-joined-by-newline", full + "\nhttps://other.example/" + bare[len(bare)-16:] + "#" + key},

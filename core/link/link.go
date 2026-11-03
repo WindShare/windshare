@@ -180,59 +180,59 @@ func (l Link) bareURL(base string) (*url.URL, error) {
 // Parse 解析完整能力链接。fragment 缺失返回 ErrMissingFragment,接收侧据此
 // 转入分离密钥输入流程(Merge)。
 func Parse(raw string) (Link, error) {
+	l, _, err := parseComplete(raw)
+	return l, err
+}
+
+func parseComplete(raw string) (Link, *url.URL, error) {
 	l, u, err := parseBare(raw)
 	if err != nil {
-		return Link{}, err
+		return Link{}, nil, err
 	}
 	if u.Fragment == "" {
-		return Link{}, ErrMissingFragment
+		return Link{}, nil, ErrMissingFragment
 	}
-	l.Suite, l.ReadSecret, l.PKHash, err = decodeKeyPayload(browserFragment(u))
+	l.Suite, l.ReadSecret, l.PKHash, err = decodeCanonicalKey(rawFragment(u))
 	if err != nil {
-		return Link{}, err
+		return Link{}, nil, err
 	}
 	if err := validateIdentityForSuite(l); err != nil {
-		return Link{}, err
+		return Link{}, nil, err
 	}
-	return l, nil
+	return l, u, nil
 }
 
 // Split 把完整链接拆为「裸链接 + 密钥串」(发送侧 --split-key 的字符串形态;
 // 与 Merge 构成 §6.3 的拆合纯函数对)。拆前校验密钥串可解,不放走坏链接。
 func Split(full string) (bare, key string, err error) {
-	_, u, err := parseBare(full)
+	capability, u, err := parseComplete(full)
 	if err != nil {
 		return "", "", err
 	}
-	if u.Fragment == "" {
-		return "", "", ErrMissingFragment
-	}
-	key = browserFragment(u)
-	suite, _, pkHash, err := decodeKeyPayload(key)
+	// Emit the decoded capability's canonical key, never copied input that Merge
+	// could reinterpret as another URL.
+	key, err = capability.KeyString()
 	if err != nil {
-		return "", "", err
-	}
-	if err := validateIdentityForSuite(Link{Suite: suite, PKHash: pkHash, ShareID: routeSegment(u), ReadSecret: make([]byte, ReadSecretBytes)}); err != nil {
 		return "", "", err
 	}
 	u.Fragment, u.RawFragment = "", ""
 	return u.String(), key, nil
 }
 
-// Merge 把裸链接与另行送达的密钥串合回 Link(接收侧;key 宽容解析,见 decodeKey)。
-// 裸链接若自带 fragment(用户把完整链接同时粘到两处):一致则接受,不一致报
-// ErrKeyConflict。
+// Merge combines a capability URL with a separately supplied key. Key input may
+// include a leading '#' or be a complete link, but must match the URL's identity.
+// An embedded key must also agree; conflicting keys return ErrKeyConflict.
 func Merge(bare, key string) (Link, error) {
 	l, u, err := parseBare(bare)
 	if err != nil {
 		return Link{}, err
 	}
-	suite, secret, pkHash, err := decodeKey(key)
+	suite, secret, pkHash, err := decodeCopiedKey(key)
 	if err != nil {
 		return Link{}, err
 	}
 	if u.Fragment != "" {
-		s2, sec2, hash2, err := decodeKeyPayload(browserFragment(u))
+		s2, sec2, hash2, err := decodeCanonicalKey(rawFragment(u))
 		if err != nil {
 			return Link{}, err
 		}
@@ -335,32 +335,14 @@ func isDoubleDotSegment(s string) bool {
 	return s == ".." || strings.EqualFold(s, ".%2e") || strings.EqualFold(s, "%2e.") || strings.EqualFold(s, "%2e%2e")
 }
 
-// browserFragment returns location.hash without its '#': the copied fragment
-// bytes with only the WHATWG fragment percent-encode set escaped. net/url's
-// Fragment is percent-decoded and would accept keys the browser rejects.
-//
-// This relies on url.Parse keeping the original fragment spelling: it sets
-// RawFragment to the text after the first '#' whenever that text differs from
-// EscapedFragment's default escaping of Fragment, and leaves it empty only when
-// the two are equal. Either way raw is the copied text verbatim. Calling
-// EscapedFragment on a set RawFragment could substitute Go's escaping, so it is
-// read directly. url.Parse rejects invalid %-escapes and control bytes in the
-// fragment; the browser keeps them, but neither forms a valid key.
-func browserFragment(u *url.URL) string {
-	raw := u.RawFragment
-	if raw == "" {
-		raw = u.EscapedFragment()
+// Keep percent escapes visible to the canonical key decoder. Reading Fragment
+// would decode them and admit keys the browser rejects. Characters WHATWG would
+// escape already fail the key alphabet, so no browser escaping emulation is needed.
+func rawFragment(u *url.URL) string {
+	if u.RawFragment != "" {
+		return u.RawFragment
 	}
-	var encoded strings.Builder
-	for i := range len(raw) {
-		switch c := raw[i]; {
-		case c <= ' ' || c >= 0x7f || c == '"' || c == '<' || c == '>' || c == '`':
-			fmt.Fprintf(&encoded, "%%%02X", c)
-		default:
-			encoded.WriteByte(c)
-		}
-	}
-	return encoded.String()
+	return u.EscapedFragment()
 }
 
 // TrimCopiedText applies JavaScript's String.prototype.trim, which the browser
@@ -419,11 +401,11 @@ func constantTimeStringEqual(left, right string) bool {
 	return len(left) == len(right) && subtle.ConstantTimeCompare([]byte(left), []byte(right)) == 1
 }
 
-// decodeKey resolves separately supplied key input as the browser's key box
+// decodeCopiedKey resolves separately supplied key input as the browser's key box
 // does: text containing "://" is a complete capability link and follows Parse,
 // so its fragment is read verbatim and its route must match its key. Any other
 // text is a key payload.
-func decodeKey(s string) (suite byte, secret, pkHash []byte, err error) {
+func decodeCopiedKey(s string) (suite byte, secret, pkHash []byte, err error) {
 	s = TrimCopiedText(s)
 	if strings.Contains(s, "://") {
 		capability, parseErr := Parse(s)
@@ -436,15 +418,16 @@ func decodeKey(s string) (suite byte, secret, pkHash []byte, err error) {
 		}
 		return capability.Suite, capability.ReadSecret, capability.PKHash, nil
 	}
-	return decodeKeyPayload(s)
+	return decodeCanonicalKey(TrimCopiedText(strings.TrimPrefix(s, "#")))
 }
 
-// decodeKeyPayload accepts a key string, optionally after text and a '#' as in
-// the browser's keyPayload, then applies strict suite-specific byte widths.
-func decodeKeyPayload(s string) (suite byte, secret, pkHash []byte, err error) {
-	s = TrimCopiedText(s)
-	if i := strings.IndexByte(s, '#'); i >= 0 {
-		s = TrimCopiedText(s[i+1:])
+// A URL fragment is already a payload, not another pasted input. Extracting a
+// later '#' could combine the route and relay of one link with another key.
+func decodeCanonicalKey(s string) (suite byte, secret, pkHash []byte, err error) {
+	// Go's base64 decoder otherwise ignores CR/LF, unlike the browser decoder.
+	// Copy normalization belongs to the input boundary, not the key format.
+	if strings.ContainsAny(s, "\r\n") {
+		return 0, nil, nil, fmt.Errorf("%w: key must be canonical base64url", ErrMalformedFragment)
 	}
 	if s == "" {
 		return 0, nil, nil, fmt.Errorf("%w: key string is empty", ErrMalformedFragment)

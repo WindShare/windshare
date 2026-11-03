@@ -30,12 +30,6 @@ export interface Suite02CapabilityLink extends Suite02CapabilityKey {
   readonly relays: readonly string[]
 }
 
-function keyPayload(input: string): string {
-  const trimmed = input.trim()
-  const fragment = trimmed.indexOf('#')
-  return (fragment === -1 ? trimmed : trimmed.slice(fragment + 1)).trim()
-}
-
 async function shareIdentity(
   pkHash: Uint8Array,
   runtime: CryptoRuntime,
@@ -59,11 +53,12 @@ export async function suite02SenderKeyHash(
   return digest.slice(0, SUITE02_PK_HASH_BYTES)
 }
 
+// URL fragments and normalized key input must name one canonical payload;
+// searching for another '#' could silently combine two different capabilities.
 export async function decodeSuite02CapabilityKey(
-  input: string,
+  encoded: string,
   runtime: CryptoRuntime = defaultCryptoRuntime(),
 ): Promise<Suite02CapabilityKey> {
-  const encoded = keyPayload(input)
   const raw = decodeBase64Url(encoded)
   if (
     encoded.length !== SUITE02_KEY_CHARACTERS ||

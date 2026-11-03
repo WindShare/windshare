@@ -65,12 +65,14 @@
           "url": "https://share.example/app/tVW-68OSeLBZTpU-%2F#AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E"
         },
         {
-          "accepted": true,
+          "accepted": false,
           "name": "repeated-fragment-delimiter",
-          "relays": [
-            "https://share.example"
-          ],
           "url": "https://share.example/app/tVW-68OSeLBZTpU-##AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E"
+        },
+        {
+          "accepted": false,
+          "name": "url-inside-fragment",
+          "url": "https://share.example/app/tVW-68OSeLBZTpU-#https://other.example/#AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E"
         },
         {
           "accepted": false,
@@ -83,11 +85,8 @@
           "url": "https://share.example/app/tVW-68OSeLBZTpU-# AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E"
         },
         {
-          "accepted": true,
+          "accepted": false,
           "name": "two-links-joined-by-newline",
-          "relays": [
-            "https://share.example"
-          ],
           "url": "https://share.example/app/tVW-68OSeLBZTpU-#AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E\nhttps://other.example/tVW-68OSeLBZTpU-#AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E"
         }
       ],
