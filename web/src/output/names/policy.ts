@@ -17,9 +17,13 @@ const WINDOWS_RESERVED_NAMES = (() => {
   return names
 })()
 
+export function fitsPortableOutputNameBudget(name: string): boolean {
+  return TEXT_ENCODER.encode(name).byteLength <= PORTABLE_OUTPUT_NAME_BYTES
+}
+
 /** Generated fallback names must remain usable through conventional filesystem APIs. */
 export function isPortableOutputName(name: string): boolean {
-  if (!isCatalogName(name) || TEXT_ENCODER.encode(name).byteLength > PORTABLE_OUTPUT_NAME_BYTES || name.endsWith('.') || name.endsWith(' ') || isWindowsReservedName(name)) return false
+  if (!isCatalogName(name) || !fitsPortableOutputNameBudget(name) || name.endsWith('.') || name.endsWith(' ') || isWindowsReservedName(name)) return false
   for (const character of name) {
     if (WINDOWS_ILLEGAL_CHARACTERS.has(character)) return false
   }

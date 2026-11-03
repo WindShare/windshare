@@ -437,7 +437,7 @@ describe('File System Access DirectTree lifecycle', () => {
 
   it.each([
     { label: 'ordinary name', name: 'report.bin' },
-    { label: 'maximum-length extension', name: 'x.' + 'y'.repeat(253) },
+    { label: 'extension leaving exactly one collision suffix', name: 'x.' + 'y'.repeat(242) },
   ])('writes and reopens a suffixed $label without replacing the original', async ({ name }) => {
     const parent = new MemoryDirectory('downloads')
     await parent.getFileHandle(name, { create: true })

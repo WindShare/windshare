@@ -2,7 +2,7 @@ import {
   isCatalogName,
   snapshotCatalogPath,
 } from '../../../catalog/path-policy'
-import { isPortableOutputName, PORTABLE_OUTPUT_NAME_BYTES } from '../../names/policy'
+import { isPortableOutputName } from '../../names/policy'
 import { sha256 } from '../../../crypto/digest'
 import type { CryptoRuntime } from '../../../crypto/webcrypto'
 import {
@@ -30,8 +30,9 @@ export const COMPATIBLE_NAME_SUFFIX = '.windshare-'
 export const COMPATIBLE_NAME_COLLISION_RETRY_LIMIT = 7
 export const COMPATIBLE_NAME_FIXED_SUFFIX_UTF8_BYTES =
   TEXT_ENCODER.encode(COMPATIBLE_NAME_SUFFIX).byteLength + COMPATIBLE_NAME_TOKEN_CHARACTERS
-export const COMPATIBLE_NAME_READABLE_PREFIX_MAX_UTF8_BYTES =
-  PORTABLE_OUTPUT_NAME_BYTES - COMPATIBLE_NAME_FIXED_SUFFIX_UTF8_BYTES
+// A readable label need not consume the whole component limit. Short repair names leave room
+// for parent directories under native full-path limits; the report preserves the complete name.
+export const COMPATIBLE_NAME_READABLE_PREFIX_MAX_UTF8_BYTES = 64
 export const COMPATIBLE_NAME_READABLE_PREFIX_FALLBACK = 'entry'
 export const COMPATIBLE_NAME_FALLBACK_TOKEN_DOMAIN =
   'windshare/compatible-name-fallback/v1'
@@ -129,7 +130,7 @@ export function compatibleNameReadablePrefix(logicalComponent: string): string {
 
 /**
  * This is deliberately a candidate policy, not a browser-rejection oracle. It runs only after the
- * native lookup has rejected the logical component, and reduces syntax diversity without erasing
+ * output admission has rejected the logical component, and reduces syntax diversity without erasing
  * readable Unicode text or relying on browser-, platform-, or error-specific rules.
  */
 function sanitizeCompatibleNameReadablePrefix(logicalComponent: string): string {
