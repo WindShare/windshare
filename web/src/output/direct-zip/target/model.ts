@@ -1,7 +1,7 @@
-import { isCatalogName, CATALOG_NAME_BYTES } from '../../../catalog/path-policy'
+import { isCatalogName } from '../../../catalog/path-policy'
 import { encodeBase64Url } from '../../../crypto/bytes'
 import { compatibleNameReadablePrefix } from '../../file-system-access/compatible-name/naming'
-import { isPortableOutputName } from '../../names/policy'
+import { isPortableOutputName, PORTABLE_OUTPUT_NAME_BYTES } from '../../names/policy'
 import {
   DIRECT_ZIP_BINDING_DIGEST_BYTES,
   DIRECT_ZIP_CANDIDATE_ID_BYTES,
@@ -26,7 +26,7 @@ const STABLE_NAME_FIXED_UTF8_BYTES = TEXT_ENCODER.encode(
   `${DIRECT_ZIP_STABLE_NAME_SEPARATOR}${'a'.repeat(CANDIDATE_TOKEN_CHARACTERS)}` +
   DIRECT_ZIP_STABLE_NAME_EXTENSION,
 ).byteLength
-const STABLE_NAME_PREFIX_MAX_UTF8_BYTES = CATALOG_NAME_BYTES - STABLE_NAME_FIXED_UTF8_BYTES
+const STABLE_NAME_PREFIX_MAX_UTF8_BYTES = PORTABLE_OUTPUT_NAME_BYTES - STABLE_NAME_FIXED_UTF8_BYTES
 
 export type DirectZipEvidenceComparison = 'same' | 'different' | 'unknown'
 export type DirectZipPermissionState = PermissionState | 'unsupported'
@@ -220,7 +220,7 @@ export function directZipStableTargetName(
   const prefix = truncateUtf8(compatibleRoot, STABLE_NAME_PREFIX_MAX_UTF8_BYTES)
   const stableName = `${prefix}${DIRECT_ZIP_STABLE_NAME_SEPARATOR}${token}` +
     DIRECT_ZIP_STABLE_NAME_EXTENSION
-  if (!isPortableOutputName(stableName) || TEXT_ENCODER.encode(stableName).byteLength > CATALOG_NAME_BYTES) {
+  if (!isPortableOutputName(stableName) || TEXT_ENCODER.encode(stableName).byteLength > PORTABLE_OUTPUT_NAME_BYTES) {
     throw new TypeError('direct ZIP stable target name violates the compatible-name policy')
   }
   return stableName

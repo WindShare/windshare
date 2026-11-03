@@ -163,10 +163,7 @@ func TestSelectedCatalogSourceClassifiesFilesystemAndIdentityFailures(t *testing
 	if _, _, err := source.scanChild(cancelled, authority, sourceLocation{}, entries[0]); !errors.Is(err, context.Canceled) {
 		t.Fatalf("child cancellation error = %v", err)
 	}
-	components := make([]string, 163)
-	for index := range components {
-		components[index] = strings.Repeat("a", 200)
-	}
+	components := []string{strings.Repeat("a", maxNativeSourcePathBytes-1)}
 	parentLocator, err := NewSourceReference(0, strings.Join(components, "/"))
 	if err != nil {
 		t.Fatal(err)

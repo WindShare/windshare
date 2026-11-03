@@ -10,6 +10,7 @@ import (
 	"strconv"
 
 	"github.com/windshare/windshare/osfs/internal/outputcap"
+	"github.com/windshare/windshare/osfs/internal/pathfailure"
 	"golang.org/x/sys/unix"
 )
 
@@ -72,3 +73,5 @@ func entrySpelling(parent *directory, name string) (spelling string, resultErr e
 func exactEntrySpelling(requested, actual string) bool { return requested == actual }
 
 func validateNativeName(string) error { return nil }
+
+func isNativeNameRefusal(err error) bool { return pathfailure.IsTooLong(err) }

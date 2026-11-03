@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -24,16 +26,17 @@ func TestPortableOutputPublishesDistinctDottedINames(t *testing.T) {
 }
 
 func TestPortableOutputPreservesOrRepairsDestinationNames(t *testing.T) {
-	for _, rootName := range []string{"docs", "folder?"} {
+	for _, rootName := range []string{"docs", "folder?", "C:archive"} {
 		t.Run(rootName, func(t *testing.T) {
 			testPortableOutputNames(t, rootName, "subdir?", []string{
-				"CON .txt", "LPT¹.log", "NUL ", "ordinary.txt", "question?.txt", "trailing.", "zzz-following.txt",
+				"12:30.log", "C:drive", "کتاب\u200cها.docx", "👨\u200d👩\u200d👧.txt", strings.Repeat("界", 100) + ".txt", strings.Repeat("a", 300) + ".txt", "CON .txt", "LPT¹.log", "NUL ", "ordinary.txt", "question?.txt", "trailing.", "zzz-following.txt",
 			})
 		})
 	}
 }
 
 func testPortableOutputNames(t *testing.T, rootName, subdir string, names []string) {
+	slices.Sort(names)
 	ctx := context.Background()
 	root := t.TempDir()
 	authority, err := New(Config{RootPath: root, PlatformFactory: outputportable.Open})
@@ -275,11 +278,13 @@ func testPortableOutputNames(t *testing.T, rootName, subdir string, names []stri
 		}
 		t.Fatalf("repair mapping count = %d", len(mappings))
 	}
-	if runtime.GOOS != "windows" && len(mappings) != 0 {
-		t.Fatalf("supported source names were changed: %+v", mappings)
+	for _, mapping := range mappings {
+		if runtime.GOOS != "windows" && len(path.Base(mapping.LogicalPath)) <= outputnames.MaxPortableNameBytes {
+			t.Fatalf("supported source name was changed: %+v", mapping)
+		}
 	}
 	for _, name := range names {
-		if runtime.GOOS == "windows" && !outputnames.PortableName(name) && !strings.Contains(physicalNames[name], ".windshare-") {
+		if runtime.GOOS == "windows" && len(name) <= outputnames.MaxPortableNameBytes && !outputnames.PortableName(name) && !strings.Contains(physicalNames[name], ".windshare-") {
 			t.Fatalf("restricted name not repaired: %q", physicalNames[name])
 		}
 		if actual, err := os.ReadFile(filepath.Join(root, physicalRoot, filepath.FromSlash(physicalNames[name]))); err != nil || string(actual) != name {

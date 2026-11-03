@@ -25,6 +25,7 @@ const (
 	LocalCheckpointInvalid
 	LocalOwnedObjectUnknown
 	LocalDestinationCollision
+	LocalSourceOmitted
 )
 
 // Failure retains the authoritative reason selected by application precedence.
@@ -113,6 +114,11 @@ func Settle(input SettlementInput) (task.Completion[Result], error) {
 	case transfer.DirectTreeOutcomeSuccess:
 		if successfulGetResult(r) && input.CleanupError == nil {
 			outcome = task.OutcomeSuccess
+			if r.Progress.SourceOmittedEntries != 0 {
+				// Output publication can finish even when the source selection is incomplete.
+				// Preserve its successful settlement so no recovery state is retained.
+				outcome = task.OutcomePartial
+			}
 		}
 	case transfer.DirectTreeOutcomePartial:
 		outcome = task.OutcomePartial
@@ -217,6 +223,9 @@ func resultFailure(input SettlementInput, class task.FailureClass) Failure {
 				return Failure{Fault: f}
 			}
 		}
+	}
+	if r.Outcome == transfer.DirectTreeOutcomeSuccess && successfulGetResult(r) && r.Progress.SourceOmittedEntries != 0 {
+		return Failure{Local: LocalSourceOmitted}
 	}
 	for _, cause := range []error{input.AdmissionError, input.RuntimeError, input.ConnectionError, input.ContextError, r.TerminationCause, r.SettlementFailure, r.SelectionResolutionFailure, r.SourceDriftFailure} {
 		if cause != nil {

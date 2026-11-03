@@ -7,6 +7,7 @@ import { loadVectorFile } from '../vectors'
 interface NameVector {
   readonly name: string
   readonly input: string
+  readonly canonical: string
   readonly portableOutput?: boolean
 }
 const vectors = loadVectorFile(new URL('../../../core/testvectors/path-policy.json', import.meta.url))
@@ -14,12 +15,12 @@ const vectors = loadVectorFile(new URL('../../../core/testvectors/path-policy.js
 
 describe('destination naming is separate from catalog authority', () => {
   it.each(vectors.filter(vector => vector.portableOutput !== undefined))('$name', vector => {
-    const name = vector.input.split('/').at(-1)!
+    const name = vector.canonical.split('/').at(-1)!
     expect(isCatalogName(name)).toBe(true)
     expect(isPortableOutputName(name)).toBe(vector.portableOutput)
   })
 
-  it.each(['NUL .txt', 'CON', 'COM¹', 'trailing-space ', 'trailing-dot.', 'question?.txt'])(
+  it.each(['NUL .txt', 'CON', 'COM¹', 'trailing-space ', 'trailing-dot.', 'question?.txt', 'C:notes', '界'.repeat(100) + '.txt'])(
     'allocates a portable fallback without losing %j', async name => {
       const candidate = await compatibleNameCandidate({
         operationId: 'AQIDBAUGBwgJCgsMDQ4PEA',

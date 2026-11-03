@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -17,7 +18,7 @@ func TestCatalogOmissionsRetainBoundedPathsAndScanCorrelation(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "target.bin"), []byte("target"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	const omitted = maxCatalogOmissionSamples + 2
+	const omitted = catalog.MaxSourceOmissionSamples + 2
 	for index := range omitted {
 		if err := os.Symlink("target.bin", filepath.Join(root, fmt.Sprintf("link-%02d", index))); err != nil {
 			t.Skipf("symlink creation unavailable: %v", err)
@@ -68,7 +69,65 @@ func TestCatalogOmissionsRetainBoundedPathsAndScanCorrelation(t *testing.T) {
 			t.Fatalf("unexpected record %s", record.Name())
 		}
 	}
-	if samples != maxCatalogOmissionSamples || summaries != 1 {
+	if samples != catalog.MaxSourceOmissionSamples || summaries != 1 {
 		t.Fatalf("samples=%d summaries=%d", samples, summaries)
+	}
+}
+
+func TestCatalogOmitsNamesOutsideThePathGrammarWithoutFailingSiblings(t *testing.T) {
+	root := t.TempDir()
+	// Directional controls remain excluded, while language joining controls are shareable.
+	unrepresentable := []string{"\u200eIMG-0001.jpg", "zero\u200bwidth.txt"}
+	if runtime.GOOS != "windows" {
+		unrepresentable = append(unrepresentable, `back\slash.txt`, "tab\tname.txt")
+	}
+	if runtime.GOOS == "linux" {
+		unrepresentable = append(unrepresentable, "latin1-caf\xe9.txt")
+	}
+	for _, name := range append([]string{"readable.txt"}, unrepresentable...) {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Omitting a directory excludes its subtree without opening it.
+	if err := os.MkdirAll(filepath.Join(root, "dir\u200bhidden", "inner"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	unrepresentable = append(unrepresentable, "dir\u200bhidden")
+	stream, err := diag.NewStream(64, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	synthetic, _ := catalog.DirectoryIDFromBytes(identity16(73))
+	source, err := NewSelectedCatalogSource(SelectedCatalogSourceConfig{
+		Paths: []string{root}, SyntheticRoot: synthetic, Diagnostics: stream.Sink(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = source.Close() })
+	children := &collectingScanChildren{}
+	result, err := source.ScanDirectory(context.Background(), catalog.ScanRequest{
+		Directory: source.SelectedRoots()[0], Work: &countingScanWork{}, Children: children,
+	})
+	stream.Close()
+	if err != nil || result.OmittedCount != uint64(len(unrepresentable)) ||
+		len(children.items) != 1 || children.items[0].Name != "readable.txt" {
+		t.Fatalf("scan=%+v children=%+v err=%v", result, children.items, err)
+	}
+	reasons := 0
+	for record := range stream.Records() {
+		if record.Name() == "catalog_source_omission" {
+			if reason := record.Payload().Get("reason").Text(); reason != "unrepresentable_name" {
+				t.Fatalf("omission reason = %q", reason)
+			}
+			if record.Payload().Get("detail").Text() == "" {
+				t.Fatal("name omission lost the concrete rejection reason")
+			}
+			reasons++
+		}
+	}
+	if reasons != len(unrepresentable) {
+		t.Fatalf("omission samples = %d, want %d", reasons, len(unrepresentable))
 	}
 }

@@ -8,28 +8,33 @@ import (
 	diag "github.com/windshare/windshare/core/diagnostics"
 )
 
-type catalogOmissionReason string
+type catalogOmissions struct {
+	count   uint64
+	samples []catalog.SourceOmission
+}
 
-const (
-	catalogOmissionNone    catalogOmissionReason = ""
-	catalogOmissionSymlink catalogOmissionReason = "symbolic_link"
-	catalogOmissionReparse catalogOmissionReason = "reparse_point"
-	catalogOmissionSpecial catalogOmissionReason = "special_file"
-	// Path samples bound diagnostic work even for dependency trees full of links.
-	maxCatalogOmissionSamples = uint64(16)
-)
-
-func catalogOmissionFor(info fs.FileInfo) catalogOmissionReason {
+func catalogOmissionFor(info fs.FileInfo) catalog.SourceOmissionReason {
 	switch {
 	case info.Mode()&fs.ModeSymlink != 0:
-		return catalogOmissionSymlink
+		return catalog.SourceOmissionSymbolicLink
 	case isReparsePoint(info):
-		return catalogOmissionReparse
+		return catalog.SourceOmissionReparsePoint
 	case !info.IsDir() && !info.Mode().IsRegular():
-		return catalogOmissionSpecial
+		return catalog.SourceOmissionSpecialFile
 	default:
-		return catalogOmissionNone
+		return catalog.SourceOmissionNone
 	}
+}
+
+func (source *SelectedCatalogSource) observeCatalogOmissions(request catalog.ScanRequest, path string, result catalogOmissions) {
+	if source.omissions == nil || result.count == 0 {
+		return
+	}
+	directory, _ := request.Directory.DirectoryID()
+	source.omissions.ObserveSourceOmissions(catalog.SourceOmissions{
+		Directory: directory, Generation: request.Generation, Attempt: request.AttemptID,
+		DirectoryPath: path, Count: result.count, Samples: result.samples,
+	})
 }
 
 func catalogScanCorrelation(request catalog.ScanRequest) diag.Fields {
@@ -42,15 +47,16 @@ func catalogScanCorrelation(request catalog.ScanRequest) diag.Fields {
 }
 
 func (source *SelectedCatalogSource) traceCatalogOmission(
-	request catalog.ScanRequest, parent sourceLocation, name string, reason catalogOmissionReason, count uint64,
+	request catalog.ScanRequest, parent sourceLocation, omission catalog.SourceOmission, count uint64,
 ) {
-	if !source.diagnostics.Enabled() || count > maxCatalogOmissionSamples {
+	if !source.diagnostics.Enabled() || count > catalog.MaxSourceOmissionSamples {
 		return
 	}
 	source.diagnostics.Emit(diag.New("catalog_source_omission", diag.Fields{
 		"root_slot":     diag.Uint(uint64(parent.RootSlot())),
-		"relative_path": diag.Text(filepath.ToSlash(filepath.Join(parent.RelativePath(), name))),
-		"reason":        diag.Text(string(reason)),
+		"relative_path": diag.Text(filepath.ToSlash(filepath.Join(parent.RelativePath(), omission.Name))),
+		"reason":        diag.Text(string(omission.Reason)),
+		"detail":        diag.Text(omission.Detail),
 	}).Correlate(catalogScanCorrelation(request)))
 }
 
@@ -58,7 +64,7 @@ func (source *SelectedCatalogSource) traceCatalogOmissionSummary(request catalog
 	if count == 0 || !source.diagnostics.Enabled() {
 		return
 	}
-	samples := min(count, maxCatalogOmissionSamples)
+	samples := min(count, catalog.MaxSourceOmissionSamples)
 	source.diagnostics.Emit(diag.New("catalog_source_omission_summary", diag.Fields{
 		"omitted_entries": diag.Uint(count), "sampled_entries": diag.Uint(samples),
 		"unsampled_entries": diag.Uint(count - samples),

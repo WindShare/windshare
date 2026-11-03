@@ -48,6 +48,8 @@ func (p workflowProjection) observe(envelope task.Observation) bool {
 		return p.emit(projectTask(p.workflow, envelope))
 	case share.Observation:
 		return p.share(value)
+	case share.SourceOmissionsObserved:
+		return p.emit(appobs.NewSourceOmissionsObserved(value.Summary))
 	case receive.Warning:
 		return p.emit(appobs.NewWarning(p.workflow, receiveWarning(value.Code, value.Cause)))
 	case receive.RelayConnected:

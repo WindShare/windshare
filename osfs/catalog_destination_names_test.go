@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -12,9 +13,13 @@ import (
 
 func TestSelectedCatalogSourceRetainsDestinationSpecificNames(t *testing.T) {
 	root := t.TempDir()
-	names := []string{"ordinary.txt", "NUL .txt", "COM1 .photos"}
+	names := []string{"ordinary.txt", "NUL .txt", "COM1 .photos", "کتاب\u200cها.docx", "👨\u200d👩\u200d👧 photos", "soft\u00adhyphen.txt"}
+	// Windows counts native UTF-16 units, independently of catalog UTF-8 bytes.
+	if runtime.GOOS == "windows" {
+		names = append(names, strings.Repeat("界", 100)+".txt", strings.Repeat("\u1112\u1161\u11ab", 40)+".txt")
+	}
 	if runtime.GOOS != "windows" {
-		names = append(names, "NUL", "question?.txt", "trailing-space ", "trailing-dot.")
+		names = append(names, "12:30.log", "C:drive", "NUL", "question?.txt", "trailing-space ", "trailing-dot.")
 	}
 	for _, name := range names {
 		if err := os.WriteFile(filepath.Join(root, name), []byte(name), 0o600); err != nil {

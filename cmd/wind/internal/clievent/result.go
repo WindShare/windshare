@@ -70,7 +70,7 @@ func NewTransferResult(spec TransferResultSpec) (TransferResult, error) {
 	}
 	hasFailure := spec.Failure.Valid()
 	switch {
-	case spec.Status == ResultSuccess && (spec.ExitCode != ExitSuccess || spec.Drift != DriftNone || hasFailure):
+	case spec.Status == ResultSuccess && (spec.ExitCode != ExitSuccess || spec.Drift != DriftNone || hasFailure || spec.SourceOmittedEntries != 0):
 		return TransferResult{}, ErrInvalidResult
 	case spec.Status != ResultSuccess && spec.ExitCode == ExitSuccess:
 		return TransferResult{}, ErrInvalidResult

@@ -101,6 +101,42 @@ describe('planned ZIP stream output', () => {
     await reader.close()
   })
 
+  it('round-trips logical Unicode and colon names without applying disk component limits', async () => {
+    const names = [
+      '12:30.log', 'C:notes', 'soft\u00adhyphen.txt', 'کتاب\u200cها.docx',
+      '界'.repeat(100) + '.txt', '👨\u200d👩\u200d👧.txt',
+    ]
+    const root = 'C:archive'
+    const plan = await preparedLayout([
+      { kind: 'directory', path: [root] },
+      ...names.map((name) => ({ kind: 'file' as const, path: [root, name], exactSize: 1n })),
+    ])
+    const output = recordingStream()
+    const archive = new StreamingZipArchiveWriter(
+      output.stream, new MemoryZipCentralDirectorySpool(), { kind: 'sealed', plan },
+    )
+    await archive.addDirectory(entry(plan, 0, 'directory'))
+    for (let index = 0; index < names.length; index += 1) {
+      const member = await archive.beginFile(entry(plan, index + 1, 'file'))
+      await member.write(Uint8Array.of(index))
+      await member.close()
+    }
+    await archive.close(plan, ACTIVE_SIGNAL)
+
+    const reader = new ZipReader(new Uint8ArrayReader(output.bytes()))
+    const entries = await reader.getEntries()
+    expect(entries.map((value) => value.filename)).toEqual([
+      './' + root + '/', ...names.map((name) => './' + root + '/' + name),
+    ])
+    for (let index = 0; index < names.length; index += 1) {
+      const member = entries[index + 1]!
+      if (member.directory) throw new Error('file became a directory')
+      expect(await member.getData(new Uint8ArrayWriter())).toEqual(Uint8Array.of(index))
+    }
+    await reader.close()
+    expect(BigInt(output.bytes().length)).toBe(plan.exactArchiveBytes)
+  })
+
   it('accepts progressive close only from the completed discovery ledger', async () => {
     const ledger = new ZipLayoutLedgerV1(RECEIVE_INTENT_DIGEST, ARTIFACT_DIGEST)
     const root = ledger.append({ kind: 'directory', path: ['tree'] })

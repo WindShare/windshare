@@ -162,7 +162,7 @@ export function pairIdentity(
 
 function assertRootRejection(input: CompatibleNameRootRepairRequest): void {
   if (!(input.rejection instanceof PathComponentRejectedError) || !input.rejection.preMutation ||
-      input.rejection.evidenceKind !== 'non-creating-lookup' ||
+      input.rejection.evidenceKind === 'write-policy-refusal' ||
       input.rejection.stage !== 'fsa.root.entry.inspect' ||
       input.rejection.canonicalComponent !== input.logicalReservedName ||
       input.rejection.expectedKind !== input.entryKind) {
@@ -180,18 +180,15 @@ export function assertDescendantRejection(input: CompatibleNameRejectedComponent
   }
 }
 
-/**
- * Only directory creation has a Chromium write-path policy; file creation and writes are
- * unrestricted. A file refusal must therefore still come from the non-creating lookup.
- */
+/** Files require inspection evidence; only directories can also have a write-policy refusal. */
 function descendantEvidenceMatches(
   rejection: PathComponentRejectedError,
   entryKind: CompatibleNameEntryKind,
 ): boolean {
-  if (rejection.evidenceKind === 'non-creating-lookup') {
-    return rejection.stage === descendantInspectionStage(entryKind)
+  if (rejection.evidenceKind === 'write-policy-refusal') {
+    return entryKind === 'directory' && rejection.stage === 'fsa.directory.entry.create'
   }
-  return entryKind === 'directory' && rejection.stage === 'fsa.directory.entry.create'
+  return rejection.stage === descendantInspectionStage(entryKind)
 }
 
 export function assertPreparedSnapshot(

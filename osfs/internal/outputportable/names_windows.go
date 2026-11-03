@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/windshare/windshare/osfs/internal/outputcap"
+	"github.com/windshare/windshare/osfs/internal/pathfailure"
 	"golang.org/x/sys/windows"
 )
 
@@ -57,3 +58,8 @@ func entrySpelling(parent *directory, name string) (spelling string, resultErr e
 }
 
 func exactEntrySpelling(requested, actual string) bool { return requested == actual }
+
+// NT rooted lookups can report an oversized component as invalid syntax.
+func isNativeNameRefusal(err error) bool {
+	return pathfailure.IsTooLong(err) || errors.Is(err, windows.ERROR_INVALID_NAME)
+}
