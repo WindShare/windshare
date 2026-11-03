@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { openApplication, reloadApplication } from './application/navigation'
 import type { WindShareDiagnostics } from '../../src/diagnostics/export/developer-api'
 
 const BASE64URL_IDENTITY_PATTERN = /^[A-Za-z0-9_-]{22}$/u
@@ -21,7 +22,7 @@ test('diagnostic evidence stays page-local and manual disable survives reload', 
     }
   })
 
-  await page.goto('/')
+  await openApplication(page, '/')
 
   const initial = await page.evaluate(() => {
     const descriptor = Object.getOwnPropertyDescriptor(window, 'windshareDiagnostics')
@@ -121,7 +122,7 @@ test('diagnostic evidence stays page-local and manual disable survives reload', 
   expect(disabledBundle.runtimeRunId).toBe(initialBundle.runtimeRunId)
   expect(detailedTraceConsoleMessages).toEqual([])
 
-  await page.reload()
+  await reloadApplication(page)
 
   const reloaded = await page.evaluate(() => {
     const diagnostics: WindShareDiagnostics = window.windshareDiagnostics
@@ -149,14 +150,14 @@ test('diagnostic evidence stays page-local and manual disable survives reload', 
 })
 
 test('diagnostic activation survives reload without leaking to another tab or share', async ({ page, context }) => {
-  await page.goto('/')
+  await openApplication(page, '/')
   const enabled = await page.evaluate(() => ({
     status: window.windshareDiagnostics.enable(),
     bundle: window.windshareDiagnostics.export(),
   }))
   const initialIdentity = parseBundle(enabled.bundle).runtimeRunId
 
-  await page.reload()
+  await reloadApplication(page)
   expect(await page.evaluate(() => window.windshareDiagnostics.status())).toMatchObject({
     enabled: true, expires_at: enabled.status.expires_at,
   })
@@ -166,12 +167,12 @@ test('diagnostic activation survives reload without leaking to another tab or sh
   expect(reloadedIdentity).not.toBe(initialIdentity)
 
   const reopened = await context.newPage()
-  await reopened.goto('/')
+  await openApplication(reopened, '/')
   expect(await reopened.evaluate(() => window.windshareDiagnostics.status())).toMatchObject({
     enabled: false,
   })
   // Invalid key material fails during controller startup without external networking.
-  await reopened.goto('/AAAAAAAAAAAAAAAA?trace=1#invalid-key')
+  await openApplication(reopened, '/AAAAAAAAAAAAAAAA?trace=1#invalid-key')
   await expect.poll(() => reopened.evaluate(() => window.windshareDiagnostics.inspectLastFailure()?.event))
     .toBe('failure_incident')
   const restored = await reopened.evaluate(() => ({
@@ -185,11 +186,11 @@ test('diagnostic activation survives reload without leaking to another tab or sh
   expect(parseBundle(restored.bundle).runtimeRunId).not.toBe(reloadedIdentity)
 
   await reopened.evaluate(() => window.windshareDiagnostics.disable())
-  await page.reload()
+  await reloadApplication(page)
   expect(await page.evaluate(() => window.windshareDiagnostics.status())).toMatchObject({
     enabled: true, expires_at: enabled.status.expires_at,
   })
-  await page.goto('/different-share')
+  await openApplication(page, '/different-share')
   expect(await page.evaluate(() => window.windshareDiagnostics.status().enabled)).toBe(false)
 })
 
@@ -199,10 +200,7 @@ test('blocked browser storage does not break startup or manual capture', async (
       get() { throw new DOMException('Storage denied', 'SecurityError') },
     })
   })
-  await page.goto('/')
-  // Page load can precede module initialization; storage denial must be tested
-  // against the installed API rather than depend on startup timing under load.
-  await expect.poll(() => page.evaluate(() => window.windshareDiagnostics !== undefined)).toBe(true)
+  await openApplication(page, '/')
   const statuses = await page.evaluate(() => ({
     initial: window.windshareDiagnostics.status(),
     enabled: window.windshareDiagnostics.enable(),
