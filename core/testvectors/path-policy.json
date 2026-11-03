@@ -5,7 +5,7 @@
   "cases": [
     {
       "name": "policy-version",
-      "policyVersion": "windshare/path/v2-unicode-15.0.0",
+      "policyVersion": "windshare/path/v3-unicode-15.0.0",
       "unicodeVersion": "15.0.0"
     },
     {
@@ -125,7 +125,9 @@
     {
       "name": "zero-width-joiner",
       "input": "safe/a‍b",
-      "expected": "invalid-path"
+      "expected": "valid",
+      "canonical": "safe/a‍b",
+      "collisionKey": "safe/a‍b"
     },
     {
       "name": "control-character",
@@ -255,12 +257,18 @@
     {
       "name": "destination-specific-time:12.txt",
       "input": "tree/time:12.txt",
-      "expected": "invalid-path"
+      "expected": "valid",
+      "canonical": "tree/time:12.txt",
+      "collisionKey": "tree/time:12.txt",
+      "portableOutput": false
     },
     {
       "name": "destination-specific-C:drive",
       "input": "tree/C:drive",
-      "expected": "invalid-path"
+      "expected": "valid",
+      "canonical": "tree/C:drive",
+      "collisionKey": "tree/c:drive",
+      "portableOutput": false
     },
     {
       "name": "destination-specific-CON",
@@ -277,6 +285,46 @@
       "canonical": "tree/NUL",
       "collisionKey": "tree/nul",
       "portableOutput": false
+    },
+    {
+      "name": "persian-non-joiner",
+      "input": "کتاب‌ها.docx",
+      "expected": "valid",
+      "canonical": "کتاب‌ها.docx",
+      "collisionKey": "کتاب‌ها.docx",
+      "portableOutput": true
+    },
+    {
+      "name": "emoji-family",
+      "input": "👨‍👩‍👧 photos",
+      "expected": "valid",
+      "canonical": "👨‍👩‍👧 photos",
+      "collisionKey": "👨‍👩‍👧 photos",
+      "portableOutput": true
+    },
+    {
+      "name": "soft-hyphen",
+      "input": "soft­hyphen.txt",
+      "expected": "valid",
+      "canonical": "soft­hyphen.txt",
+      "collisionKey": "soft­hyphen.txt",
+      "portableOutput": true
+    },
+    {
+      "name": "long-unicode-name",
+      "input": "界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界.txt",
+      "expected": "valid",
+      "canonical": "界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界.txt",
+      "collisionKey": "界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界.txt",
+      "portableOutput": false
+    },
+    {
+      "name": "nfd-hangul",
+      "input": "한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한.txt",
+      "expected": "valid",
+      "canonical": "한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한.txt",
+      "collisionKey": "한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한.txt",
+      "portableOutput": true
     }
   ]
 }

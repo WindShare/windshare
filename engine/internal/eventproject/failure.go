@@ -285,6 +285,7 @@ func projectReceiveFailure(value receive.Failure) (appobs.Failure, bool) {
 		return failure, true
 	}
 	local := map[receive.LocalFailure]appobs.FailureCode{
+		receive.LocalSourceOmitted:    appobs.FailureSourceOmitted,
 		receive.LocalSelectionMissing: appobs.FailureSelectionMissing, receive.LocalRevisionConflict: appobs.FailureCheckpointRevisionConflict,
 		receive.LocalCheckpointInvalid: appobs.FailureCheckpointInvalid, receive.LocalOwnedObjectUnknown: appobs.FailureOwnedObjectUnknown, receive.LocalDestinationCollision: appobs.FailureDestinationCollision}
 	if code, ok := local[value.Local]; ok {

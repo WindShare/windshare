@@ -50,7 +50,7 @@ function presentSourceCoverage(
     title: presentation.tone === 'success' ? 'Completed with skipped items' : presentation.title,
     tone: 'warning',
     lines: Object.freeze([...presentation.lines,
-      `${omitted} unsupported source ${omitted === 1n ? 'item was' : 'items were'} not included.`,
+      `${omitted} unsupported source ${omitted === 1n ? 'item was' : 'items were'} not included. A skipped folder counts as one item, including all of its contents. Ask the sender to check the skipped names and reasons.`,
     ]),
   })
 }

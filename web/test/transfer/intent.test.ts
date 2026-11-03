@@ -239,7 +239,7 @@ describe('ReceiveIntent canonical authority', () => {
     })
     expect(syntheticRoot.name).toBe('windshare')
     expect(archive.suggestedName).toBe('docs-selection.zip')
-    expect(receiveContract.RESULT_NAME_POLICY).toBe('windshare/result-name/v1-unicode-15.0.0')
+    expect(receiveContract.RESULT_NAME_POLICY).toBe('windshare/result-name/v2-unicode-15.0.0')
     expect(receiveContract.COLLISION_SUFFIX_HEX_CHARS).toBe(10)
     expect(nativeTreeGuarantees()).toEqual({
       profile: 'native-tree',

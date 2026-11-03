@@ -181,9 +181,9 @@ func TestMappingRecoveryRejectsAnotherOperationOrInventedName(t *testing.T) {
 }
 
 func TestGeneratedNamesPreserveUsableExtensionsAndStayPortable(t *testing.T) {
-	for _, name := range []string{"report?.pdf", "CON .txt", "NUL", "LPT¹.txt", "trail. ", strings.Repeat("界", 80) + "?.txt", "???"} {
+	for _, name := range []string{"report?.pdf", "CON .txt", "NUL", "LPT¹.txt", "trail. ", "12:30.log", "C:notes.txt", strings.Repeat("界", 100) + ".txt", strings.Repeat("a", catalog.MaxNameBytes-4) + ".txt", "???"} {
 		candidate, err := Candidate(testOperation, "docs/"+name, 0)
-		if err != nil || !PortableName(candidate) || len(candidate) > catalog.MaxNameBytes || !utf8.ValidString(candidate) {
+		if err != nil || !PortableName(candidate) || len(candidate) > MaxPortableNameBytes || !utf8.ValidString(candidate) {
 			t.Fatalf("%q -> %q, %v", name, candidate, err)
 		}
 		repeated, _ := Candidate(testOperation, "docs/"+name, 0)

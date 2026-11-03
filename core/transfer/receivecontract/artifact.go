@@ -16,8 +16,8 @@ const (
 	DefaultArchiveName      = "windshare.zip"
 	PartialSelectionSuffix  = "-selection"
 	ArchiveExtension        = ".zip"
-	ResultNamePolicy        = "windshare/result-name/v1-unicode-15.0.0"
-	MaxResultComponentBytes = 255
+	ResultNamePolicy        = "windshare/result-name/v2-unicode-15.0.0"
+	MaxResultComponentBytes = catalog.MaxNameBytes
 	CollisionSuffixHexChars = 10
 )
 

@@ -75,14 +75,14 @@ func decodeFileCatalogMeta(encoded []byte) (fileCatalogMeta, error) {
 	meta.spillBytes = binary.BigEndian.Uint64(encoded[140:148])
 	if meta.share.IsZero() || meta.directory.IsZero() || meta.generation.IsZero() ||
 		meta.pageCount == 0 || meta.terminal.IsZero() || meta.entryCount > MaxDirectoryEntries ||
-		meta.pageCount != catalogPageCount(meta.entryCount) ||
+		meta.pageCount < minimumCatalogPageCount(meta.entryCount) || uint64(meta.pageCount) > max(uint64(1), meta.entryCount) ||
 		meta.omitted > MaxDirectoryEntries-meta.entryCount {
 		return fileCatalogMeta{}, ErrCorruptCatalogStorage
 	}
 	return meta, nil
 }
 
-func catalogPageCount(entries uint64) uint32 {
+func minimumCatalogPageCount(entries uint64) uint32 {
 	if entries == 0 {
 		return 1
 	}

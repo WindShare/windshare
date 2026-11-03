@@ -107,7 +107,7 @@ export function normalizeZipEntry(spec: ZipEntrySpec): NormalizedZipEntry {
   const path = snapshotCatalogPath(spec.path)
   const artifactPath = path.join('/')
   const artifactPathBytes = frozenBytes(TEXT_ENCODER.encode(artifactPath))
-  const name = spec.kind === 'directory' ? `${artifactPath}/` : artifactPath
+  const name = zipEntryName(spec.kind, artifactPath)
   const nameBytes = frozenBytes(TEXT_ENCODER.encode(name))
   if (nameBytes.length === 0 || nameBytes.length > Number(ZIP_UINT16_SENTINEL)) {
     throw new RangeError('ZIP entry name length is outside the ZIP format')
@@ -125,6 +125,13 @@ export function normalizeZipEntry(spec: ZipEntrySpec): NormalizedZipEntry {
     dosTime,
     dosDate,
   })
+}
+
+function zipEntryName(kind: ZipEntryKind, artifactPath: string): string {
+  // The relative prefix prevents a valid Unix name from becoming ZIP drive
+  // syntax. Catalog paths cannot contain a '.' component, so this encoding is injective.
+  const relativePath = /^[a-z]:/iu.test(artifactPath) ? './' + artifactPath : artifactPath
+  return kind === 'directory' ? relativePath + '/' : relativePath
 }
 
 export function compareNormalizedZipEntries(
@@ -205,7 +212,7 @@ export function validateZipEntryPlan(
   const artifactPath = path.join('/')
   const artifactPathBytes = frozenBytes(TEXT_ENCODER.encode(artifactPath))
   const nameBytes = frozenBytes(TEXT_ENCODER.encode(
-    plan.kind === 'directory' ? `${artifactPath}/` : artifactPath,
+    zipEntryName(plan.kind, artifactPath),
   ))
   const normalized: NormalizedZipEntry = Object.freeze({
     kind: plan.kind,
@@ -590,7 +597,7 @@ function requireNormalizedEntry(entry: NormalizedZipEntry): void {
   if (entry.artifactPath !== artifactPath ||
       !equalNumbers(entry.artifactPathBytes, TEXT_ENCODER.encode(artifactPath)) ||
       !equalNumbers(entry.nameBytes, TEXT_ENCODER.encode(
-        entry.kind === 'directory' ? `${artifactPath}/` : artifactPath,
+        zipEntryName(entry.kind, artifactPath),
       ))) {
     throw new TypeError('ZIP entry name is not canonical')
   }

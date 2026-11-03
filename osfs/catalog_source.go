@@ -41,6 +41,7 @@ type SelectedCatalogSourceConfig struct {
 	SyntheticRoot catalog.DirectoryID
 	Identities    CatalogIdentitySource
 	Diagnostics   diagnostics.Sink
+	Omissions     catalog.SourceOmissionObserver
 }
 
 // SelectedCatalogSource opens only the explicitly selected roots during share
@@ -52,6 +53,7 @@ type SelectedCatalogSource struct {
 	selected    []catalog.NodeRecord
 	identities  CatalogIdentitySource
 	diagnostics diagnostics.Sink
+	omissions   catalog.SourceOmissionObserver
 	used        map[catalog.NodeID]struct{}
 	closed      bool
 }
@@ -73,7 +75,7 @@ func newSelectedCatalogSource(ctx context.Context, config SelectedCatalogSourceC
 	}
 	source := &SelectedCatalogSource{
 		identities: config.Identities, used: map[catalog.NodeID]struct{}{config.SyntheticRoot.NodeID(): {}},
-		diagnostics: config.Diagnostics,
+		diagnostics: config.Diagnostics, omissions: config.Omissions,
 	}
 	fail := func(cause error) (*SelectedCatalogSource, error) {
 		return nil, errors.Join(cause, source.Close())
@@ -244,7 +246,10 @@ func (source *SelectedCatalogSource) ScanDirectory(ctx context.Context, request 
 		!bytes.Equal(beforeEntries[:], afterEntries[:]) {
 		return catalog.ScanResult{}, catalog.NewPermanentScanError(errors.Join(catalog.ErrDirectoryStale, err))
 	}
-	return result, nil
+	if result.count != 0 && source.omissions != nil {
+		source.observeCatalogOmissions(request, filepath.Join(root.Name(), path), result)
+	}
+	return catalog.ScanResult{OmittedCount: result.count}, nil
 }
 
 func (source *SelectedCatalogSource) enumerateCatalogChildren(
@@ -253,35 +258,38 @@ func (source *SelectedCatalogSource) enumerateCatalogChildren(
 	handle *os.File,
 	locator sourceLocation,
 	request catalog.ScanRequest,
-) (catalog.ScanResult, [sha256.Size]byte, error) {
-	result := catalog.ScanResult{}
-	defer func() { source.traceCatalogOmissionSummary(request, result.OmittedCount) }()
+) (catalogOmissions, [sha256.Size]byte, error) {
+	result := catalogOmissions{}
+	defer func() { source.traceCatalogOmissionSummary(request, result.count) }()
 	fingerprint := newCatalogDirectoryFingerprint()
 	for {
 		entries, readErr := handle.ReadDir(catalogEnumerationBatchSize)
 		for _, entry := range entries {
 			fingerprint.add(entry)
 			if err := request.Work.Consume(1); err != nil {
-				return catalog.ScanResult{}, [sha256.Size]byte{}, err
+				return catalogOmissions{}, [sha256.Size]byte{}, err
 			}
 			child, omission, err := source.scanChild(ctx, directory, locator, entry)
 			if err != nil {
-				return catalog.ScanResult{}, [sha256.Size]byte{}, err
+				return catalogOmissions{}, [sha256.Size]byte{}, err
 			}
-			if omission != catalogOmissionNone {
-				result.OmittedCount++
-				source.traceCatalogOmission(request, locator, entry.Name(), omission, result.OmittedCount)
+			if omission.Reason != catalog.SourceOmissionNone {
+				result.count++
+				source.traceCatalogOmission(request, locator, omission, result.count)
+				if source.omissions != nil && len(result.samples) < catalog.MaxSourceOmissionSamples {
+					result.samples = append(result.samples, omission)
+				}
 				continue
 			}
 			if err := request.Children.Add(ctx, child); err != nil {
-				return catalog.ScanResult{}, [sha256.Size]byte{}, err
+				return catalogOmissions{}, [sha256.Size]byte{}, err
 			}
 		}
 		if errors.Is(readErr, io.EOF) {
 			return result, fingerprint.sum(), nil
 		}
 		if readErr != nil {
-			return catalog.ScanResult{}, [sha256.Size]byte{}, catalog.NewTransientScanError(readErr, 0)
+			return catalogOmissions{}, [sha256.Size]byte{}, catalog.NewTransientScanError(readErr, 0)
 		}
 	}
 }
@@ -338,42 +346,45 @@ func (source *SelectedCatalogSource) scanChild(
 	directory *os.Root,
 	parentLocator sourceLocation,
 	entry fs.DirEntry,
-) (catalog.ScannedChild, catalogOmissionReason, error) {
+) (catalog.ScannedChild, catalog.SourceOmission, error) {
 	if err := ctx.Err(); err != nil {
-		return catalog.ScannedChild{}, catalogOmissionNone, err
+		return catalog.ScannedChild{}, catalog.SourceOmission{}, err
 	}
 	name := entry.Name()
 	before, err := directory.Lstat(name)
 	if err != nil {
-		return catalog.ScannedChild{}, catalogOmissionNone, catalog.NewTransientScanError(err, 0)
+		return catalog.ScannedChild{}, catalog.SourceOmission{}, catalog.NewTransientScanError(err, 0)
 	}
-	if reason := catalogOmissionFor(before); reason != catalogOmissionNone {
-		return catalog.ScannedChild{}, reason, nil
+	if reason := catalogOmissionFor(before); reason != catalog.SourceOmissionNone {
+		return catalog.ScannedChild{}, catalog.SourceOmission{Name: name, Reason: reason}, nil
+	}
+	// Public names are admitted independently of the native locator. A readable
+	// name can need destination repair without being excluded from the catalog.
+	if _, err := catalog.CanonicalName(name); err != nil {
+		return catalog.ScannedChild{}, catalog.SourceOmission{
+			Name: name, Reason: catalog.SourceOmissionName, Detail: err.Error(),
+		}, nil
+	}
+	locator, err := newChildSourceReference(parentLocator, name)
+	if err != nil {
+		return catalog.ScannedChild{}, catalog.SourceOmission{}, catalog.NewPermanentScanError(err)
 	}
 	handle, err := directory.Open(name)
 	if err != nil {
-		return catalog.ScannedChild{}, catalogOmissionNone, catalog.NewTransientScanError(err, 0)
+		return catalog.ScannedChild{}, catalog.SourceOmission{}, catalog.NewTransientScanError(err, 0)
 	}
 	opened, statErr := handle.Stat()
 	identity, candidate, baselineErr := platformCatalogBaseline(handle)
 	closeErr := handle.Close()
 	if err := errors.Join(statErr, baselineErr, closeErr); err != nil {
-		return catalog.ScannedChild{}, catalogOmissionNone, catalog.NewTransientScanError(err, 0)
+		return catalog.ScannedChild{}, catalog.SourceOmission{}, catalog.NewTransientScanError(err, 0)
 	}
 	if opened.IsDir() != before.IsDir() || !os.SameFile(before, opened) {
-		return catalog.ScannedChild{}, catalogOmissionNone, catalog.NewPermanentScanError(catalog.ErrDirectoryStale)
+		return catalog.ScannedChild{}, catalog.SourceOmission{}, catalog.NewPermanentScanError(catalog.ErrDirectoryStale)
 	}
 	modified, err := catalogModifiedTime(opened)
 	if err != nil {
-		return catalog.ScannedChild{}, catalogOmissionNone, catalog.NewPermanentScanError(err)
-	}
-	relative := name
-	if parentLocator.RelativePath() != "" {
-		relative = parentLocator.RelativePath() + "/" + name
-	}
-	locator, err := NewSourceReference(parentLocator.RootSlot(), filepath.ToSlash(relative))
-	if err != nil {
-		return catalog.ScannedChild{}, catalogOmissionNone, catalog.NewPermanentScanError(err)
+		return catalog.ScannedChild{}, catalog.SourceOmission{}, catalog.NewPermanentScanError(err)
 	}
 	child := catalog.ScannedChild{Name: name, SourceReference: locator, SourceIdentity: identity, ModifiedTime: modified}
 	if opened.IsDir() {
@@ -384,9 +395,9 @@ func (source *SelectedCatalogSource) scanChild(
 		child.ExpectedSize = uint64(opened.Size())
 	}
 	if err != nil {
-		return catalog.ScannedChild{}, catalogOmissionNone, err
+		return catalog.ScannedChild{}, catalog.SourceOmission{}, err
 	}
-	return child, catalogOmissionNone, nil
+	return child, catalog.SourceOmission{}, nil
 }
 
 func portableCatalogModifiedTime(information fs.FileInfo) (catalog.ModifiedTime, error) {
