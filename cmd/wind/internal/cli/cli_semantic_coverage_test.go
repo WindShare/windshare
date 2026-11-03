@@ -220,6 +220,28 @@ func TestGetCapabilityInputStaysLocalAndUnambiguous(t *testing.T) {
 		}
 	})
 
+	t.Run("entered key trims like --key", func(t *testing.T) {
+		for _, test := range []struct {
+			entered  string
+			accepted bool
+		}{
+			{"\ufeff" + keyString + "\u00a0", true},
+			{"\u0085" + keyString, false},
+			{keyString + "\u0085", false},
+		} {
+			app, _, _ := newSemanticTestApp(strings.NewReader(test.entered + "\r\n"))
+			_, promptErr := app.resolveLink(bare, "")
+			flagApp, _, _ := newSemanticTestApp(strings.NewReader(""))
+			_, flagErr := flagApp.resolveLink(bare, test.entered)
+			if (promptErr == nil) != test.accepted || (flagErr == nil) != test.accepted {
+				t.Fatalf("entered %q: prompt=%v --key=%v, want accepted=%v", test.entered, promptErr, flagErr, test.accepted)
+			}
+			if !test.accepted && !errors.Is(promptErr, engine.ErrInvalidReceiveLink) {
+				t.Fatalf("entered %q: prompt=%v, want invalid link", test.entered, promptErr)
+			}
+		}
+	})
+
 	t.Run("empty entered key", func(t *testing.T) {
 		app, _, _ := newSemanticTestApp(strings.NewReader("\n"))
 		if _, err := app.resolveLink(bare, ""); !errors.Is(err, engine.ErrReceiveKeyRequired) {

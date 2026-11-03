@@ -187,7 +187,7 @@ func Parse(raw string) (Link, error) {
 	if u.Fragment == "" {
 		return Link{}, ErrMissingFragment
 	}
-	l.Suite, l.ReadSecret, l.PKHash, err = decodeKey(browserFragment(u))
+	l.Suite, l.ReadSecret, l.PKHash, err = decodeKeyPayload(browserFragment(u))
 	if err != nil {
 		return Link{}, err
 	}
@@ -208,7 +208,7 @@ func Split(full string) (bare, key string, err error) {
 		return "", "", ErrMissingFragment
 	}
 	key = browserFragment(u)
-	suite, _, pkHash, err := decodeKey(key)
+	suite, _, pkHash, err := decodeKeyPayload(key)
 	if err != nil {
 		return "", "", err
 	}
@@ -232,7 +232,7 @@ func Merge(bare, key string) (Link, error) {
 		return Link{}, err
 	}
 	if u.Fragment != "" {
-		s2, sec2, hash2, err := decodeKey(browserFragment(u))
+		s2, sec2, hash2, err := decodeKeyPayload(browserFragment(u))
 		if err != nil {
 			return Link{}, err
 		}
@@ -262,7 +262,7 @@ func parseBare(raw string) (Link, *url.URL, error) {
 }
 
 func parseAbsoluteURL(raw string) (*url.URL, url.Values, error) {
-	trimmed := trimCopiedText(raw)
+	trimmed := TrimCopiedText(raw)
 	// WHATWG parsing repairs backslashes into authority or path separators while
 	// net/url preserves some of them. Rejecting the ambiguous spelling gives a
 	// capability URL one identity in both runtimes.
@@ -298,40 +298,54 @@ func parseAbsoluteURL(raw string) (*url.URL, url.Values, error) {
 // routeSegment returns the last non-empty path segment: frontends may be
 // deployed below a path prefix, and shareId is always the final segment. Like
 // the browser, it resolves dot segments (including %2e spellings) before
-// decoding, so an encoded slash stays inside its segment.
+// decoding, so an encoded slash stays inside its segment. Scanning from the end
+// lets each ".." cancel the nearest earlier segment without building the path.
 func routeSegment(u *url.URL) string {
 	escaped := u.RawPath
 	if escaped == "" {
 		escaped = u.EscapedPath()
 	}
-	var segments []string
-	for segment := range strings.SplitSeq(strings.TrimPrefix(escaped, "/"), "/") {
-		switch strings.ToLower(segment) {
-		case ".", "%2e":
-		case "..", ".%2e", "%2e.", "%2e%2e":
-			if len(segments) > 0 {
-				segments = segments[:len(segments)-1]
+	removed := 0
+	for rest := escaped; rest != ""; {
+		i := strings.LastIndexByte(rest, '/')
+		segment := rest[i+1:]
+		rest = rest[:max(i, 0)]
+		switch {
+		case isSingleDotSegment(segment):
+		case isDoubleDotSegment(segment):
+			removed++
+		case removed > 0:
+			removed--
+		case segment != "":
+			decoded, err := url.PathUnescape(segment)
+			if err != nil {
+				return ""
 			}
-		default:
-			segments = append(segments, segment)
+			return decoded
 		}
 	}
-	for len(segments) > 0 && segments[len(segments)-1] == "" {
-		segments = segments[:len(segments)-1]
-	}
-	if len(segments) == 0 {
-		return ""
-	}
-	decoded, err := url.PathUnescape(segments[len(segments)-1])
-	if err != nil {
-		return ""
-	}
-	return decoded
+	return ""
+}
+
+func isSingleDotSegment(s string) bool {
+	return s == "." || strings.EqualFold(s, "%2e")
+}
+
+func isDoubleDotSegment(s string) bool {
+	return s == ".." || strings.EqualFold(s, ".%2e") || strings.EqualFold(s, "%2e.") || strings.EqualFold(s, "%2e%2e")
 }
 
 // browserFragment returns location.hash without its '#': the copied fragment
 // bytes with only the WHATWG fragment percent-encode set escaped. net/url's
 // Fragment is percent-decoded and would accept keys the browser rejects.
+//
+// This relies on url.Parse keeping the original fragment spelling: it sets
+// RawFragment to the text after the first '#' whenever that text differs from
+// EscapedFragment's default escaping of Fragment, and leaves it empty only when
+// the two are equal. Either way raw is the copied text verbatim. Calling
+// EscapedFragment on a set RawFragment could substitute Go's escaping, so it is
+// read directly. url.Parse rejects invalid %-escapes and control bytes in the
+// fragment; the browser keeps them, but neither forms a valid key.
 func browserFragment(u *url.URL) string {
 	raw := u.RawFragment
 	if raw == "" {
@@ -349,9 +363,10 @@ func browserFragment(u *url.URL) string {
 	return encoded.String()
 }
 
-// trimCopiedText applies JavaScript's String.prototype.trim, which the browser
-// receiver uses before parsing. Go's TrimSpace differs at U+0085 and U+FEFF.
-func trimCopiedText(s string) string {
+// TrimCopiedText applies JavaScript's String.prototype.trim, which the browser
+// receiver uses before parsing links and keys. Go's TrimSpace differs at U+0085
+// and U+FEFF, so clients reading pasted capability text should use this rule.
+func TrimCopiedText(s string) string {
 	return strings.TrimFunc(s, func(r rune) bool {
 		switch r {
 		case '\t', '\n', '\v', '\f', '\r', '\u2028', '\u2029', '\ufeff':
@@ -404,12 +419,32 @@ func constantTimeStringEqual(left, right string) bool {
 	return len(left) == len(right) && subtle.ConstantTimeCompare([]byte(left), []byte(right)) == 1
 }
 
-// decodeKey accepts a key string, a leading '#', or a complete copied URL and
-// then applies strict suite-specific byte widths.
+// decodeKey resolves separately supplied key input as the browser's key box
+// does: text containing "://" is a complete capability link and follows Parse,
+// so its fragment is read verbatim and its route must match its key. Any other
+// text is a key payload.
 func decodeKey(s string) (suite byte, secret, pkHash []byte, err error) {
-	s = trimCopiedText(s)
+	s = TrimCopiedText(s)
+	if strings.Contains(s, "://") {
+		capability, parseErr := Parse(s)
+		if errors.Is(parseErr, ErrMissingFragment) {
+			// A link without a key is not a key; asking for one again would loop.
+			return 0, nil, nil, fmt.Errorf("%w: key link has no fragment", ErrMalformedFragment)
+		}
+		if parseErr != nil {
+			return 0, nil, nil, parseErr
+		}
+		return capability.Suite, capability.ReadSecret, capability.PKHash, nil
+	}
+	return decodeKeyPayload(s)
+}
+
+// decodeKeyPayload accepts a key string, optionally after text and a '#' as in
+// the browser's keyPayload, then applies strict suite-specific byte widths.
+func decodeKeyPayload(s string) (suite byte, secret, pkHash []byte, err error) {
+	s = TrimCopiedText(s)
 	if i := strings.IndexByte(s, '#'); i >= 0 {
-		s = trimCopiedText(s[i+1:])
+		s = TrimCopiedText(s[i+1:])
 	}
 	if s == "" {
 		return 0, nil, nil, fmt.Errorf("%w: key string is empty", ErrMalformedFragment)

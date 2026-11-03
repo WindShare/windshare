@@ -5,7 +5,8 @@
 // An omitted relay hint selects the link's origin. A single equivalent relay at
 // that origin's root is omitted when constructing links; explicit hints preserve
 // their order. The fragment never travels in HTTP requests. Split and Merge
-// support delivering the link and key separately. Parsing follows the browser's
-// trimming and WHATWG URL semantics, so CLI and browser receivers accept the
-// same copied links. All operations are pure.
+// support delivering the link and key separately. Parsing follows the browser
+// receiver in boundary trimming, removal of inner tabs and newlines, dot-segment
+// resolution before taking the route, and reading the fragment verbatim. All
+// operations are pure.
 package link

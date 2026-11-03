@@ -30,6 +30,10 @@ func TestParseResolvesCopiedSpellingsLikeBrowser(t *testing.T) {
 		{"double-dot removes empty segment", base + "//..#" + testKey},
 		{"trailing key space", full + " "},
 		{"repeated fragment delimiter", base + "##" + testKey},
+		// WHATWG drops the line break, so the second link becomes part of the
+		// first fragment and the key after its '#' is read. The first host wins.
+		{"two links joined by a line break", full + "\nhttps://other.example/" + testShareID + "#" + testKey},
+		{"two links joined by CRLF", full + "\r\nhttps://other.example/" + testShareID + "?r=https://r.example#" + testKey},
 	}
 	want := testCapability
 	want.Relays = []string{"https://ex.com"}
@@ -79,5 +83,70 @@ func TestMergeAndSplitUseBrowserFragmentSpelling(t *testing.T) {
 	}
 	if _, err := link.Merge(bare, "\ufeff"+testKey); err != nil {
 		t.Fatalf("Merge with byte order mark key: %v", err)
+	}
+}
+
+// Known differences: net/url rejects invalid percent escapes in any path
+// segment and a NUL byte, while WHATWG keeps the former and percent-encodes the
+// latter. The browser accepts these links when the bad segment is not the route.
+// Pin the CLI's rejection so a change in either direction is deliberate.
+func TestParseKnownBrowserDifferencesStayRejected(t *testing.T) {
+	for _, raw := range []string{
+		"https://ex.com/" + testShareID + "/%ZZ/..#" + testKey,
+		"https://ex.com/%zz/" + testShareID + "#" + testKey,
+		"https://ex.com/a\x00b/" + testShareID + "#" + testKey,
+	} {
+		if got, err := link.Parse(raw); err == nil {
+			t.Fatalf("Parse(%s) = %+v; update the documented browser differences", strconv.Quote(raw), got)
+		}
+	}
+}
+
+// A separately entered key goes through the browser's capabilityFromInput: text
+// containing "://" is parsed as a complete link (raw fragment, route checked
+// against the key); anything else is a key payload, optionally after '#'.
+func TestMergeResolvesSeparateKeyLikeBrowserKeyBox(t *testing.T) {
+	base := "https://ex.com/" + testShareID
+	want := testCapability
+	want.Relays = []string{"https://ex.com"}
+	for _, key := range []string{
+		testKey,
+		"# " + testKey,
+		"\ufeff" + testKey + "\u3000",
+		base + "#" + testKey,
+		"https://other.example/app/" + testShareID + "#" + testKey,
+	} {
+		got, err := link.Merge(base, key)
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("Merge(base, %s) = %+v, %v; browser accepts it", strconv.Quote(key), got, err)
+		}
+	}
+	for _, key := range []string{
+		base + "# " + testKey,
+		base + "#%" + strconv.FormatInt(int64(testKey[0]), 16) + testKey[1:],
+		"https://ex.com/AAAAAAAAAAAAAAAA#" + testKey,
+		"x://y#" + testKey,
+		"\u0085" + testKey,
+		testKey + "\u0085",
+	} {
+		if got, err := link.Merge(base, key); err == nil {
+			t.Fatalf("Merge(base, %s) = %+v; browser rejects it", strconv.Quote(key), got)
+		}
+	}
+	// A link without a key is a malformed key, not a request for another key.
+	if _, err := link.Merge(base, base); !errors.Is(err, link.ErrMalformedFragment) || errors.Is(err, link.ErrMissingFragment) {
+		t.Fatalf("Merge(base, base) = %v, want ErrMalformedFragment", err)
+	}
+}
+
+func TestTrimCopiedTextUsesJavaScriptTrim(t *testing.T) {
+	for raw, want := range map[string]string{
+		"\ufeff\u00a0\u2028 key \t\r\n": "key",
+		"\u0085key\u0085":               "\u0085key\u0085",
+		"\x00key":                       "\x00key",
+	} {
+		if got := link.TrimCopiedText(raw); got != want {
+			t.Fatalf("TrimCopiedText(%s) = %s, want %s", strconv.Quote(raw), strconv.Quote(got), strconv.Quote(want))
+		}
 	}
 }

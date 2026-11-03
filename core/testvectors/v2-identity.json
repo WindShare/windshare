@@ -81,6 +81,14 @@
           "accepted": false,
           "name": "space-prefixed-key",
           "url": "https://share.example/app/tVW-68OSeLBZTpU-# AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E"
+        },
+        {
+          "accepted": true,
+          "name": "two-links-joined-by-newline",
+          "relays": [
+            "https://share.example"
+          ],
+          "url": "https://share.example/app/tVW-68OSeLBZTpU-#AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E\nhttps://other.example/tVW-68OSeLBZTpU-#AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E"
         }
       ],
       "descriptorKeyB64": "QJf/rkymcTqujczmpzms5e8PRSI08a/0Fm7ica6GlQ4=",

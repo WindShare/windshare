@@ -71,6 +71,7 @@ func copiedCapabilityLinkCases(t *testing.T, f *fixture) []any {
 		{"repeated-fragment-delimiter", bare + "##" + key},
 		{"percent-encoded-key", bare + "#" + encodedKey},
 		{"space-prefixed-key", bare + "# " + key},
+		{"two-links-joined-by-newline", full + "\nhttps://other.example/" + bare[len(bare)-16:] + "#" + key},
 	} {
 		parsed, err := link.Parse(test.url)
 		result := map[string]any{"name": test.name, "url": test.url, "accepted": err == nil}
