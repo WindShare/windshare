@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { MAX_RESULT_COMPONENT_BYTES } from '../../../src/transfer/intent/model'
 
 import {
   createOriginalFileArtifact,
@@ -49,14 +50,14 @@ describe('result naming and layout authority', () => {
   })
 
   it('truncates protected suffixes on scalar boundaries and rejects noncanonical names', () => {
-    const longLeaf = '界'.repeat(85)
+    const longLeaf = '界'.repeat(Math.floor(MAX_RESULT_COMPONENT_BYTES / 3))
     const layout = resultRootLayoutFromProof(treeProof({
       kind: 'directory-selection',
       anchor: { directoryId: identity(42), sourcePath: longLeaf },
     }))
     if (layout === null) throw new Error('test layout must be settled')
 
-    expect(new TextEncoder().encode(layout.name).byteLength).toBeLessThanOrEqual(255)
+    expect(new TextEncoder().encode(layout.name).byteLength).toBeLessThanOrEqual(MAX_RESULT_COMPONENT_BYTES)
     expect(layout.name.endsWith('-selection')).toBe(true)
     expect(() => resultRootLayoutFromProof(treeProof({
       kind: 'complete-directory',

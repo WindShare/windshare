@@ -23,11 +23,18 @@ func TestFilesystemReferenceOwnsPathInterpretation(t *testing.T) {
 	if err != nil || location.RootSlot() != 3 || location.RelativePath() != decomposed {
 		t.Fatalf("native source spelling = %+v, %v", location, err)
 	}
-	for _, path := range []string{"../sibling", "/absolute", "a\\b", "a/", "a//b", "C:/file", "bad\x00name", string([]byte{0xff}), strings.Repeat("a", catalog.MaxNameBytes+1), "a" + strings.Repeat("/a", catalog.MaxPathDepth), strings.Repeat("a/", catalog.MaxPathBytes)} {
+
+	rejected := []string{"../sibling", "/absolute", "a/", "a//b", "bad\x00name",
+		strings.Repeat("a", maxNativeSourcePathBytes+1), "a" + strings.Repeat("/a", catalog.MaxPathDepth)}
+	if os.PathSeparator == '\\' {
+		rejected = append(rejected, "a\\b", "C:/file", "file:stream")
+	}
+	for _, path := range rejected {
 		if _, err := NewSourceReference(0, path); err == nil {
 			t.Fatalf("unsafe filesystem path accepted: %q", path)
 		}
 	}
+
 	if _, err := NewSourceReference(catalog.MaxSelectedRoots, "file"); err == nil {
 		t.Fatal("out-of-range root accepted")
 	}

@@ -1,4 +1,5 @@
-import { snapshotCatalogPath } from '../../../catalog/path-policy'
+import { CATALOG_NAME_BYTES, snapshotCatalogPath } from '../../../catalog/path-policy'
+import { normalizeZipEntry } from '../../zip-layout/policy'
 import {
   concatDirectZipBytes,
   equalDirectZipBytes,
@@ -20,7 +21,8 @@ import {
 export const DIRECT_ZIP_LOCAL_HEADER_FIXED_BYTES = 30
 export const DIRECT_ZIP_CENTRAL_HEADER_FIXED_BYTES = 46
 export const DIRECT_ZIP_SIGNED_ZIP32_DESCRIPTOR_BYTES = 16
-export const DIRECT_ZIP_MAXIMUM_ROOT_NAME_BYTES = 256
+// A root may need the relative './' prefix and always ends in '/'.
+export const DIRECT_ZIP_MAXIMUM_ROOT_NAME_BYTES = CATALOG_NAME_BYTES + './'.length + '/'.length
 export const DIRECT_ZIP_MAXIMUM_OWNERSHIP_HEADER_READ_BYTES =
   DIRECT_ZIP_LOCAL_HEADER_FIXED_BYTES + DIRECT_ZIP_MAXIMUM_ROOT_NAME_BYTES +
   DIRECT_ZIP_OWNERSHIP_EXTRA_FIELD_BYTES
@@ -35,7 +37,6 @@ const ZIP_STORE_METHOD = 0
 const ZIP_CLASSIC_VERSION = 20
 const ZIP64_VERSION = 45
 const ZIP_DIRECTORY_ATTRIBUTE = 0x10
-const TEXT_ENCODER = new TextEncoder()
 const TEXT_DECODER = new TextDecoder('utf-8', { fatal: true })
 
 export interface DirectZipOwnershipHeaderV1 {
@@ -232,12 +233,14 @@ function decodeRootName(rootNameBytes: Uint8Array): {
   } catch {
     throw new TypeError('direct ZIP result-root name is not UTF-8')
   }
-  if (!rootName.endsWith('/') || rootName.indexOf('/') !== rootName.length - 1) {
+  const relativeName = rootName.startsWith('./') ? rootName.slice(2) : rootName
+  if (!relativeName.endsWith('/') || relativeName.indexOf('/') !== relativeName.length - 1) {
     throw new TypeError('direct ZIP ownership member is not a result-root directory')
   }
-  const rootComponent = rootName.slice(0, -1)
+  const rootComponent = relativeName.slice(0, -1)
   snapshotCatalogPath([rootComponent])
-  if (!equalDirectZipBytes(TEXT_ENCODER.encode(`${rootComponent}/`), rootNameBytes)) {
+  const expected = normalizeZipEntry({ kind: 'directory', path: [rootComponent] })
+  if (!equalDirectZipBytes(Uint8Array.from(expected.nameBytes), rootNameBytes)) {
     throw new TypeError('direct ZIP result-root name is not canonical')
   }
   return Object.freeze({ rootComponent, rootNameBytes: Uint8Array.from(rootNameBytes) })

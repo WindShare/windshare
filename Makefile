@@ -5,12 +5,12 @@ override GOTOOLCHAIN := local
 override GOWORK := off
 export GOTOOLCHAIN GOWORK
 
-PUBLIC_TARGETS := ci ci-parallel ci-full check hygiene sloc workflow-lint lint vet short-go race coverage vectors vectors-update rust web e2e browser browser-weekly gopls long-go
+PUBLIC_TARGETS := ci ci-parallel ci-full check hygiene sloc workflow-lint lint vet short-go race coverage vectors vectors-update rust desktop-check web e2e browser browser-weekly gopls long-go
 include scripts/ci/ci-gates.mk
 
 INTERNAL_TARGETS := browser-weekly-supplement $(CI_PARALLEL_LANES)
 COMPOSITE_TARGETS := ci ci-parallel ci-full browser-weekly $(CI_PARALLEL_LANES)
-PORTABLE_TARGETS := rust
+PORTABLE_TARGETS := rust desktop-check
 PLATFORM_TARGETS := $(filter-out $(COMPOSITE_TARGETS) $(PORTABLE_TARGETS),$(PUBLIC_TARGETS) $(INTERNAL_TARGETS))
 
 # rustup run fails when stable is missing instead of installing it during a gate.
@@ -59,7 +59,7 @@ ci-full: ci long-go browser-weekly-supplement
 browser-weekly: browser browser-weekly-supplement
 	@echo "browser-weekly: all gates passed"
 
-check: rust
+check: rust desktop-check
 
 # Cargo owns its bounded workers; MSYS Make's jobserver handles cannot be used by
 # native Windows Cargo. Keep scheduler state out of this leaf gate on both hosts.
@@ -76,6 +76,20 @@ rust:
 	cd $(RUST_WORKSPACE) && $(RUST_CARGO) clippy -p windshare-relay-cloudflare --target wasm32-unknown-unknown --locked --jobs $(RUST_BUILD_JOBS) -- -D warnings
 	cd $(RUST_WORKSPACE) && $(RUST_CARGO) build -p windshare-relay-core -p windshare-relay-cloudflare --target wasm32-unknown-unknown --locked --jobs $(RUST_BUILD_JOBS)
 	@echo "== rust: PASS =="
+
+# Native UI dependencies have their own workspace and CI cache.
+.PHONY: desktop
+desktop:
+	$(RUST_CARGO) run --manifest-path desktop/Cargo.toml --locked
+
+desktop-check: private export MAKEFLAGS :=
+desktop-check: private export MFLAGS :=
+desktop-check: private export CARGO_MAKEFLAGS :=
+desktop-check:
+	$(RUST_CARGO) fmt --manifest-path desktop/Cargo.toml --all -- --check
+	$(RUST_CARGO) clippy --manifest-path desktop/Cargo.toml --workspace --all-targets --all-features --locked --jobs $(RUST_BUILD_JOBS) -- -D warnings
+	$(RUST_CARGO) test --manifest-path desktop/Cargo.toml --workspace --locked --jobs $(RUST_BUILD_JOBS)
+	$(RUST_CARGO) build --manifest-path desktop/Cargo.toml --locked --jobs $(RUST_BUILD_JOBS)
 
 $(PLATFORM_TARGETS):
 	$(RUN_PLATFORM_GATE)

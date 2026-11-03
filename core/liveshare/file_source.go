@@ -14,6 +14,7 @@ type FileSourceContext struct {
 	SyntheticRoot catalog.DirectoryID
 	NewIdentity   func() ([catalog.IdentityBytes]byte, error)
 	Diagnostics   diagnostics.Sink
+	Omissions     catalog.SourceOmissionObserver
 }
 
 // FileSource owns the selected scope's handles and grant-use leases. Selected

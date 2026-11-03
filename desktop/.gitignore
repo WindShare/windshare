@@ -1,0 +1,5 @@
+/target/
+/evidence/
+# Shallow clone of https://github.com/longbridge/gpui-kit.git, kept locally as the
+# upstream reference for the exact gpui snapshot our Cargo.lock is pinned to.
+/gpui-kit/

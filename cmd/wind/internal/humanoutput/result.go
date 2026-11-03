@@ -14,9 +14,6 @@ func formatTransferResult(result clievent.TransferResult, symbols Symbols) []ter
 	switch result.Status() {
 	case clievent.ResultSuccess:
 		headline = statusLine(symbols.Success, "Download completed in "+elapsed, terminalcanvas.StyleSuccess)
-		if result.SourceOmittedEntries() != 0 {
-			headline = statusLine(symbols.Warning, "Download completed with skipped items in "+elapsed, terminalcanvas.StyleWarning)
-		}
 	case clievent.ResultPartial:
 		headline = statusLine(symbols.Warning, withDrift("Download finished partially in "+elapsed, result.Drift()), terminalcanvas.StyleWarning)
 	case clievent.ResultPaused:
@@ -33,6 +30,9 @@ func formatTransferResult(result clievent.TransferResult, symbols Symbols) []ter
 		headline,
 		terminalcanvas.NewLine(terminalcanvas.Span{Text: destination}),
 		terminalcanvas.NewLine(terminalcanvas.Span{Text: "  " + formatOutcomeSummary(result, symbols.Separator)}),
+	}
+	if result.SourceOmittedEntries() != 0 {
+		lines = append(lines, terminalcanvas.Plain("  A skipped directory counts as one item; all of its contents are excluded."))
 	}
 	if failure, ok := result.Failure(); ok {
 		lines = append(lines, terminalcanvas.NewLine(
@@ -90,7 +90,7 @@ func formatOutcomeSummary(result clievent.TransferResult, separator string) stri
 		parts = append(parts, countedResultNoun(result, result.DirectoryFailures(), "directory failed", "directories failed"))
 	}
 	if result.SourceOmittedEntries() != 0 {
-		parts = append(parts, countedResultNoun(result, result.SourceOmittedEntries(), "unsupported source item not included", "unsupported source items not included"))
+		parts = append(parts, countedResultNoun(result, result.SourceOmittedEntries(), "source item not included", "source items not included"))
 	}
 	if result.OmittedDiagnostics() != 0 {
 		parts = append(parts, countedResultNoun(result, result.OmittedDiagnostics(), "diagnostic omitted", "diagnostics omitted"))

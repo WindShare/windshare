@@ -31,7 +31,7 @@ structured messages use deterministic CBOR.
 - **Protocol session** (end-to-end): handshake, `OperationEnvelope` framing, and operation messages.
 - **Sender objects** (end-to-end, sender-signed): descriptor, catalog pages, directory errors, revision descriptors, and block records, sealed independently of any session or lane.
 
-Catalog names describe source identity within the shared path grammar. Destination filename restrictions, ZIP, checkpoints, and download resumption are receiver-local.
+Private source locators preserve native bytes; catalog names use a versioned Unicode grammar. ZIP retains logical names, while disk output preserves supported spellings and records compatible replacements when needed. Checkpoints and download resumption remain receiver-local.
 
 ## Flow
 

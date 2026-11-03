@@ -1,0 +1,16 @@
+[package]
+name = "windshare-ui"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gpui.workspace = true
+anyhow.workspace = true
+unicode-segmentation.workspace = true
+usvg.workspace = true
+tracing.workspace = true

@@ -28,6 +28,7 @@ const (
 	RecoveryOwnershipUnknown
 	RecoveryRevisionChanged
 	RecoverySelectionMissing
+	RecoverySourceOmitted
 	RecoveryInvalidRequest
 	RecoveryNeedsInspection
 )
@@ -108,7 +109,8 @@ func runOperation(ctx context.Context, request Request, deps Dependencies, attem
 	}()
 	for attemptNumber := uint64(1); ; attemptNumber++ {
 		completed = attempt(ctx, input, deps, &retained)
-		if completed.Outcome == task.OutcomeSuccess || retained.operation == nil || !retained.operation.Valid() {
+		if completed.Outcome == task.OutcomeSuccess || completed.Value.Recovery.Reason == RecoverySourceOmitted ||
+			retained.operation == nil || !retained.operation.Valid() {
 			return
 		}
 		completed.Value.Operation = retained.operation.Intent.OperationID()
@@ -173,6 +175,9 @@ func recoveryReason(class task.FailureClass, failure Failure, result transfer.Jo
 	// fault took precedence in the terminal error.
 	if provesMissingSelection(result) || failure.Local == LocalSelectionMissing {
 		return RecoverySelectionMissing
+	}
+	if failure.Local == LocalSourceOmitted {
+		return RecoverySourceOmitted
 	}
 	if class == task.FailureUsage || failure.Code == FailureInvalidInput {
 		return RecoveryInvalidRequest

@@ -76,7 +76,7 @@ export function Explorer({ rows, breadcrumbs, pageIndex, pageCount, omittedCount
       <p>{browse.error}</p><button type="button" onClick={actions.retry}>Retry directory</button>
     </div>}
     {rows.length === 0 && browse.kind === 'ready' && <p className="directory-empty">
-      {omittedCount > 0n ? 'No supported items in this folder.' : 'This folder is empty.'}
+      {omittedCount > 0n ? 'No items are available in this folder.' : 'This folder is empty.'}
     </p>}
     {rows.length > 0 && <ul className="explorer-list" tabIndex={0} aria-label="Folder contents">
         {rows.map(row => <li key={row.id} className="explorer-row"
@@ -94,7 +94,7 @@ export function Explorer({ rows, breadcrumbs, pageIndex, pageCount, omittedCount
           <span className="entry-action-hint" aria-hidden="true">{row.kind === 'directory' ? 'Open' : 'Preview'}</span>
         </li>)}
       </ul>}
-    {omittedCount > 0n && <p className="directory-notice">{omittedCount.toString()} unsupported source items were not included. Supported items can still be downloaded.</p>}
+    {omittedCount > 0n && <p className="directory-notice">{omittedCount.toString()} source items were not included. A skipped folder counts as one item, including all of its contents. Available items can still be downloaded; ask the sender to check the skipped names and reasons.</p>}
     {pageCount > 1 && <nav className="directory-pagination" aria-label="Directory pages">
       <button type="button" disabled={pageIndex === 0} onClick={() => actions.showPage(pageIndex - 1)}><ReceiverIcon name="chevron-left" />Previous</button>
       <span>Page {pageIndex + 1} of {pageCount}</span>

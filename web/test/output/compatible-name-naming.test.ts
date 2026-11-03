@@ -61,11 +61,11 @@ describe('compatible physical-name policy', () => {
       attempt: 0,
     })
 
-    expect(prefix).toBe('é'.repeat(119))
+    expect(prefix).toBe('é'.repeat(32))
     expect(TEXT_ENCODER.encode(prefix)).toHaveLength(
       COMPATIBLE_NAME_READABLE_PREFIX_MAX_UTF8_BYTES,
     )
-    expect(TEXT_ENCODER.encode(candidate.physicalComponent)).toHaveLength(255)
+    expect(TEXT_ENCODER.encode(candidate.physicalComponent)).toHaveLength(81)
     expect(candidate.physicalComponent).toBe(`${prefix}.windshare-${PRIMARY_TOKEN}`)
   })
 

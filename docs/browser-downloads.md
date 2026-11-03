@@ -23,7 +23,7 @@ WindShare recommends a save method based on browser capabilities, available stor
 
 > Under **Other ways to save**, expand **Saving and recovery options**. Choosing **Write directly to folder** bypasses file staging in browser storage. A crash may lose most progress in a large unfinished file; completed files remain saved.
 
-Folder downloads try original names first. If the destination rejects a name, WindShare saves it under a compatible name and keeps a name-restoration report beside the result. The Windows restoration script restores supported names without overwriting existing files; unsupported names retain their compatible files and report. ZIP entries retain their catalog names, which the extraction destination may not support.
+Folder downloads preserve accepted names up to 255 UTF-8 bytes. Longer or rejected names receive a compact compatible spelling and a name-restoration report. The browser budget is conservative even on filesystems that accept longer names. The Windows script restores supported names without overwriting files; unsupported names keep their compatible spelling and report. ZIP entries retain catalog names, subject to the extractor's filesystem limits.
 
 ZIP entry modified times are written in the receiving browser's local time zone, because ZIP date fields have no time zone and extractors read them as local time. They have 2-second precision and are clamped to 1980–2107.
 

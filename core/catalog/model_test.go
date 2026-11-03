@@ -91,7 +91,7 @@ func TestShareDescriptorOwnsInputsAndRejectsInvalidDomainValues(t *testing.T) {
 		Capabilities:     CapabilityCatalog | CapabilityRanges,
 		SenderPublicKey:  publicKey,
 		CreatedAtSeconds: 123,
-		PathPolicy:       PathPolicyV2,
+		PathPolicy:       PathPolicy,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -108,8 +108,8 @@ func TestShareDescriptorOwnsInputsAndRejectsInvalidDomainValues(t *testing.T) {
 
 	invalid := []DescriptorSpec{
 		{},
-		{WireVersion: 2, Suite: 2, ShareInstance: share, SyntheticRoot: root, RootCommit: committed, ChunkSize: 1000, SenderPublicKey: bytes.Repeat([]byte{1}, SenderPublicKeySize), PathPolicy: PathPolicyV2},
-		{WireVersion: 2, Suite: 2, ShareInstance: share, SyntheticRoot: root, RootCommit: committed, ChunkSize: DefaultChunkSize, PathPolicy: PathPolicyV2},
+		{WireVersion: 2, Suite: 2, ShareInstance: share, SyntheticRoot: root, RootCommit: committed, ChunkSize: 1000, SenderPublicKey: bytes.Repeat([]byte{1}, SenderPublicKeySize), PathPolicy: PathPolicy},
+		{WireVersion: 2, Suite: 2, ShareInstance: share, SyntheticRoot: root, RootCommit: committed, ChunkSize: DefaultChunkSize, PathPolicy: PathPolicy},
 	}
 	for index, spec := range invalid {
 		if _, err := NewShareDescriptor(spec); err == nil {
@@ -215,14 +215,14 @@ func TestDomainAccessorsPreserveTypedSemantics(t *testing.T) {
 		WireVersion: WireVersionV2, Suite: SuiteV2, ShareInstance: share, SyntheticRoot: directory,
 		RootCommit: committedRootForTest(t, share, directory),
 		ChunkSize:  DefaultChunkSize, Capabilities: CapabilityCatalog,
-		SenderPublicKey: bytes.Repeat([]byte{7}, SenderPublicKeySize), CreatedAtSeconds: 9, PathPolicy: PathPolicyV2,
+		SenderPublicKey: bytes.Repeat([]byte{7}, SenderPublicKeySize), CreatedAtSeconds: 9, PathPolicy: PathPolicy,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if descriptor.WireVersion() != WireVersionV2 || descriptor.Suite() != SuiteV2 || descriptor.ShareInstance() != share ||
 		descriptor.SyntheticRoot() != directory || descriptor.ChunkSize() != DefaultChunkSize ||
-		descriptor.Capabilities() != CapabilityCatalog || descriptor.CreatedAtSeconds() != 9 || descriptor.PathPolicy() != PathPolicyV2 {
+		descriptor.Capabilities() != CapabilityCatalog || descriptor.CreatedAtSeconds() != 9 || descriptor.PathPolicy() != PathPolicy {
 		t.Fatalf("descriptor accessors = %+v", descriptor)
 	}
 

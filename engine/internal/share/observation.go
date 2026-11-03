@@ -74,6 +74,16 @@ type Observation struct {
 
 func (Observation) EngineEvent() {}
 
+type SourceOmissionsObserved struct{ Summary catalog.SourceOmissions }
+
+func (SourceOmissionsObserved) EngineEvent() {}
+
+func (o *observations) ObserveSourceOmissions(summary catalog.SourceOmissions) {
+	if o.control.Emit != nil {
+		o.control.Emit(SourceOmissionsObserved{Summary: summary})
+	}
+}
+
 type observations struct {
 	control    task.Control
 	detailed   bool
@@ -101,6 +111,7 @@ func (o *observations) sourceFactory(factory liveshare.FileSourceFactory) livesh
 	}
 	return liveshare.FileSourceFactoryFunc(func(ctx context.Context, source liveshare.FileSourceContext) (liveshare.FileSource, error) {
 		source.Diagnostics = o.control.Diagnostics
+		source.Omissions = o
 		o.emit(Observation{Milestone: SourceAcquiring, ShareInstance: source.ShareInstance})
 		acquired, err := factory.OpenFileSource(ctx, source)
 		milestone := SourceAcquired

@@ -165,19 +165,9 @@ func failureMessage(failure appobs.Failure) string {
 		message = "A previous direct connection attempt is still finishing."
 	case appobs.MessageDirectAdmission:
 		message = "The direct channel could not be admitted."
-	case appobs.MessageSourceUnavailable:
-		message = "The source content is unavailable."
-	case appobs.MessageSourceMissing:
-		message = "Source path not found. Check the path and try again."
-	case appobs.MessageSourceAccessDenied:
-		message = "Permission denied while opening the source. Check read access to the source and its parent directory."
-	case appobs.MessageSourceUnsupported:
-		message = "This source cannot be shared safely. Select a regular file or directory on a supported filesystem; symbolic links are not supported."
-	case appobs.MessageSourceChanged:
-		message = "The source content changed during transfer."
-		if _, selected := failure.SourcePath(); selected {
-			message = "The source changed while it was being opened. Retry the share."
-		}
+	case appobs.MessageSourceUnavailable, appobs.MessageSourceMissing, appobs.MessageSourceAccessDenied,
+		appobs.MessageSourceUnsupported, appobs.MessageSourceOmitted, appobs.MessageSourceChanged:
+		message = sourceFailureMessage(failure)
 	case appobs.MessageCatalogUnavailable:
 		message = "The content catalog is unavailable."
 	case appobs.MessageSessionFailed:
@@ -215,6 +205,27 @@ func failureMessage(failure appobs.Failure) string {
 		message += " Path: " + escapedDisplay(path.Text())
 	}
 	return message
+}
+
+func sourceFailureMessage(failure appobs.Failure) string {
+	key, _ := failure.MessageKey()
+	switch key {
+	case appobs.MessageSourceMissing:
+		return "Source path not found. Check the path and try again."
+	case appobs.MessageSourceAccessDenied:
+		return "Permission denied while opening the source. Check read access to the source and its parent directory."
+	case appobs.MessageSourceUnsupported:
+		return "This source cannot be shared safely. Select a regular file or directory on a supported filesystem; symbolic links are not supported."
+	case appobs.MessageSourceOmitted:
+		return "The sender could not include some source items. Ask the sender to check the skipped names and reasons, fix the source, and share it again."
+	case appobs.MessageSourceChanged:
+		if _, selected := failure.SourcePath(); selected {
+			return "The source changed while it was being opened. Retry the share."
+		}
+		return "The source content changed during transfer."
+	default:
+		return "The source content is unavailable."
+	}
 }
 
 func failureLine(label string, failure appobs.Failure, symbol string, style terminalcanvas.Style) terminalcanvas.Line {

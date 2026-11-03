@@ -13,7 +13,6 @@ import type {
 import {
   openCatalogObject,
   CATALOG_DIRECTORY_ENTRIES,
-  CATALOG_PAGE_ENTRIES,
   CATALOG_PAGE_OBJECT_BYTES,
 } from './records'
 import {
@@ -23,9 +22,8 @@ import {
   type CommittedDirectory,
 } from './page-store'
 
-export const MAXIMUM_DIRECTORY_PAGES = Math.ceil(
-  CATALOG_DIRECTORY_ENTRIES / CATALOG_PAGE_ENTRIES,
-)
+// Byte-limited pages need not be full; every nonterminal page still owns an entry.
+export const MAXIMUM_DIRECTORY_PAGES = CATALOG_DIRECTORY_ENTRIES
 export const MAXIMUM_CATALOG_SPOOL_BYTES = 256 * 1024 * 1024
 export const MAXIMUM_CONCURRENT_DIRECTORY_LOADS = 4
 

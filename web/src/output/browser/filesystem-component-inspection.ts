@@ -1,4 +1,5 @@
 import { isCatalogName } from '../../catalog/path-policy'
+import { fitsPortableOutputNameBudget, PORTABLE_OUTPUT_NAME_BYTES } from '../names/policy'
 import type { PersistentOutputStage } from '../persistent-tree/stage-diagnostics'
 
 export type FileSystemComponentKind = 'file' | 'directory'
@@ -27,12 +28,16 @@ export interface FileSystemComponentInspectionInput {
 }
 
 /**
- * Both forms of evidence share one property: the browser raised the refusal before WindShare
- * mutated the destination. Non-creating lookups prove it by construction. Chromium's write-path
- * policy (which blocks the `.git/hooks` directory) is evaluated before the creation touches the
- * filesystem, so its SecurityError is equally safe to route through compatible-name repair.
+ * Repair requires evidence collected before WindShare mutates the destination. The output byte
+ * budget and non-creating lookups satisfy that by construction. Chromium's write-path policy
+ * (which blocks `.git/hooks`) also raises SecurityError before creation touches the filesystem.
  */
 export type PathComponentRejectionEvidence =
+  | Readonly<{
+      readonly kind: 'component-byte-budget'
+      readonly stage: FileSystemComponentInspectionStage
+      readonly cause: RangeError
+    }>
   | Readonly<{
       readonly kind: 'non-creating-lookup'
       readonly stage: FileSystemComponentInspectionStage
@@ -97,9 +102,26 @@ export async function inspectFileSystemComponent(
     await oppositeLookup(component)
     return 'occupied'
   } catch (error) {
-    if (errorNamed(error, 'NotFoundError')) return 'absent'
     if (errorNamed(error, 'TypeMismatchError')) return 'occupied'
-    throw error
+    if (!errorNamed(error, 'NotFoundError')) throw error
+  }
+
+  requireNewComponentBudget(input)
+  return 'absent'
+}
+
+function requireNewComponentBudget(input: FileSystemComponentInspectionInput): void {
+  // FSA also reports uncreatable overlong names as absent. Bound new physical components before
+  // freezing their identity; diagnostic lookups must keep honoring already-owned entries.
+  if (input.mode === 'classify-rejection' && !fitsPortableOutputNameBudget(input.component)) {
+    throw new PathComponentRejectedError({
+      evidence: {
+        kind: 'component-byte-budget', stage: input.stage,
+        cause: new RangeError(`New FSA components are limited to ${PORTABLE_OUTPUT_NAME_BYTES} UTF-8 bytes`),
+      },
+      canonicalComponent: input.component,
+      expectedKind: input.expectedKind,
+    })
   }
 }
 
@@ -130,9 +152,14 @@ export function descendantInspectionStage(
 }
 
 function rejectionMessage(kind: PathComponentRejectionEvidence['kind']): string {
-  return kind === 'non-creating-lookup'
-    ? 'The browser rejected a non-creating lookup for a canonical path component'
-    : 'The browser refused to create a canonical path component under its write-path policy'
+  switch (kind) {
+    case 'component-byte-budget':
+      return 'The canonical path component exceeds the FSA output byte budget'
+    case 'non-creating-lookup':
+      return 'The browser rejected a non-creating lookup for a canonical path component'
+    case 'write-policy-refusal':
+      return 'The browser refused to create a canonical path component under its write-path policy'
+  }
 }
 
 function requireCanonicalComponent(component: string): string {

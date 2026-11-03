@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { CATALOG_NAME_BYTES } from '../../../../src/catalog/path-policy'
 
 import {
   DIRECT_ZIP_MAXIMUM_BOOTSTRAP_PREFIX_BYTES,
@@ -36,8 +37,10 @@ describe('DirectZip layout policy V2', () => {
     })
   })
 
-  it('reaches the semantic maximum read bounds only for a 255-byte root component', () => {
-    const prefix = encodeDirectZipBootstrapPrefixV1('r'.repeat(255), TEST_DIRECT_ZIP_MARKER)
+  it('bounds and restores a maximum-length root including its relative ZIP prefix', () => {
+    const name = 'C:' + 'r'.repeat(CATALOG_NAME_BYTES - 2)
+    const prefix = encodeDirectZipBootstrapPrefixV1(name, TEST_DIRECT_ZIP_MARKER)
+    expect(parseDirectZipBootstrapPrefixV1(prefix).rootComponent).toBe(name)
 
     expect(deriveDirectZipOwnershipHeaderReadBytes(prefix.subarray(0, 30)))
       .toBe(DIRECT_ZIP_MAXIMUM_OWNERSHIP_HEADER_READ_BYTES)
@@ -56,20 +59,22 @@ describe('DirectZip layout policy V2', () => {
     expect(() => parseDirectZipBootstrapPrefixV1(unsigned)).toThrow(/descriptor/u)
   })
 
-  it('writes the identical ownership field in the root central record', () => {
+  it.each(['root', 'C:archive', '界'.repeat(100), 'کتاب\u200cها', '👨\u200d👩\u200d👧'])(
+    'restores the same root %j from local and central ownership records', (rootName) => {
     const root = planDirectZipEntryV2({
       ordinal: 0n,
       localHeaderOffset: 0n,
-      entry: { kind: 'directory', path: ['root'] },
+      entry: { kind: 'directory', path: [rootName] },
       ownershipMarker: TEST_DIRECT_ZIP_MARKER,
     })
     const local = parseDirectZipBootstrapPrefixV1(
-      encodeDirectZipBootstrapPrefixV1('root', TEST_DIRECT_ZIP_MARKER),
+      encodeDirectZipBootstrapPrefixV1(rootName, TEST_DIRECT_ZIP_MARKER),
     )
     const central = parseDirectZipOwnershipCentralRecordV1(
       encodeDirectZipCentralDirectoryRecordV2(root, 0),
     )
 
+    expect(local.rootComponent).toBe(rootName)
     expect(() => requireMatchingDirectZipOwnershipRecordsV1(local, central)).not.toThrow()
     const foreignCentral = {
       ...central,

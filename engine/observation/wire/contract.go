@@ -63,6 +63,8 @@ func (enc *encoder) encodeEvent(event appobs.Event) error {
 	switch value := event.(type) {
 	case appobs.Ready:
 		return enc.encodeReady(value)
+	case appobs.SourceOmissionsObserved:
+		return enc.encodeSourceOmissions(value)
 	case appobs.SharingSubjectSelected:
 		return enc.encodeSharingSubjectSelected(value)
 	case appobs.RelayConnected:

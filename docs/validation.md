@@ -20,9 +20,9 @@ Make targets operate on the repository root and use the installed Go, Rust, Node
 
 | Command | Runs |
 |---|---|
-| `make check` | `rust`, then Go short tests, Web typecheck, and Web unit tests. |
+| `make check` | `rust` and `desktop-check`, then Go short tests, Web typecheck, and Web unit tests. |
 | `make ci` | The ordinary gate set, serially. |
-| `make ci-parallel` | The same gates in three concurrent lanes: `short-go vectors rust e2e hygiene workflow-lint sloc`, `web browser`, and `gopls lint vet`. |
+| `make ci-parallel` | The same gates in three concurrent lanes: `short-go vectors rust desktop-check e2e hygiene workflow-lint sloc`, `web browser`, and `gopls lint vet`. |
 | `make ci-full` | `ci`, `long-go`, and the weekly browser supplement. |
 | `make short-go` | Pinned ICE/TURN/SCTP state tests, then non-core and core short tests with race detection and coverage verdicts. |
 | `make race` | Short tests with race detection. |
@@ -30,6 +30,7 @@ Make targets operate on the repository root and use the installed Go, Rust, Node
 | `make vectors` | Shared protocol, TURN control, signaling, and CLI trace vectors. |
 | `make vectors-update` | Regenerates protocol vectors. |
 | `make rust` | Cargo fmt, Clippy, native tests, doctests, coverage, and wasm builds. |
+| `make desktop-check` | Desktop workspace: Cargo fmt, strict Clippy, non-UI unit tests, and native build; requires native GPUI prerequisites. |
 | `make web` | ESLint, TypeScript/Vite build, Vitest. |
 | `make e2e` | `TestUserTraceCriticalSenderRelayReceiver` over real CLI processes. |
 | `make browser` | Chromium relay smoke and short browser contracts. |
@@ -45,7 +46,7 @@ Make targets operate on the repository root and use the installed Go, Rust, Node
 The ordinary gate set shared by `make ci` and `make ci-parallel`:
 
 ```text
-short-go vectors rust web e2e browser hygiene workflow-lint lint vet gopls sloc
+short-go vectors rust desktop-check web e2e browser hygiene workflow-lint lint vet gopls sloc
 ```
 
 ### Web boundaries
@@ -87,6 +88,7 @@ Coverage is gated on the core and non-core totals and on each package, with no p
 | Core Go | Vet, short race tests, coverage, and protocol vectors. |
 | Rust relay (Linux) | Full `make rust` gate. |
 | Rust relay (Windows) | `cargo test -p windshare-relay-native --locked`: native unit and process integration tests, without workspace coverage or Wasm builds. |
+| Rust desktop (Windows) | `make desktop-check`: fmt, Clippy with warnings denied, and native build. |
 | Web | Lint, build, and unit tests. |
 | Go E2E | The critical sender/relay/receiver process test. |
 | Chromium relay smoke | Relay smoke, sustained native-size block bursts, and session isolation. |

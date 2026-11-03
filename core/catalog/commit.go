@@ -497,6 +497,11 @@ func collectPageEntries(
 	state *pageStagingState,
 ) ([]Entry, error) {
 	entries := make([]Entry, 0, count)
+	// Bounds cover the canonical entry fields and sealed envelope, independent
+	// of native filename limits. Leave room for one maximum-sized next name so
+	// the iterator never needs an unaccounted lookahead record.
+	const pageEnvelopeBudgetBytes, entryEncodingBudgetBytes = 512, 128
+	remainingBytes := MaxCatalogPageObjectBytes - pageEnvelopeBudgetBytes
 	for range count {
 		record, ok, err := iterator.Next(ctx)
 		if err != nil {
@@ -519,6 +524,10 @@ func collectPageEntries(
 		entries = append(entries, entry)
 		state.lastName = entry.Name()
 		state.consumed++
+		remainingBytes -= len(entry.Name()) + entryEncodingBudgetBytes
+		if remainingBytes < MaxNameBytes+entryEncodingBudgetBytes {
+			break
+		}
 	}
 	return entries, nil
 }
