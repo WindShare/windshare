@@ -2,9 +2,6 @@ use gpui::{Point, point, px, size};
 use std::sync::LazyLock;
 use windshare_ui::{VectorArtwork, VectorSprite};
 
-// Cover the largest flight pose with one atlas size throughout the choreography.
-const SPIRIT_RASTER_SIZE: f32 = 224.;
-const PAPER_RASTER_WIDTH: f32 = 100.;
 const PAPER_ASPECT: f32 = 1.14;
 
 static ARTWORK: LazyLock<[VectorArtwork; 6]> = LazyLock::new(|| {
@@ -33,7 +30,11 @@ impl Artwork {
     pub fn preload() {
         // Resolve source geometry before the first animation frame, never during motion.
         LazyLock::force(&ARTWORK);
-        tracing::info!(event = "desktop.artwork_ready", assets = ARTWORK.len());
+        tracing::info!(
+            event = "desktop.artwork_ready",
+            assets = ARTWORK.len(),
+            renderer = "vector_mesh"
+        );
     }
 
     pub fn blend_to(
@@ -48,19 +49,13 @@ impl Artwork {
     }
 
     pub fn sprite(self, center: Point<f32>, width: f32) -> VectorSprite {
-        let (raster_width, raster_height) = match self {
-            // A stationary brand mark is rasterized at its display size; the
-            // flight atlas would discard fine coverage when shrunk this far.
-            Self::BrandMark => (width, width),
-            Self::Spirit | Self::Happy => (SPIRIT_RASTER_SIZE, SPIRIT_RASTER_SIZE),
-            Self::Paper | Self::Photo | Self::Folder => {
-                (PAPER_RASTER_WIDTH, PAPER_RASTER_WIDTH * PAPER_ASPECT)
-            }
+        let height = match self {
+            Self::Spirit | Self::Happy | Self::BrandMark => width,
+            Self::Paper | Self::Photo | Self::Folder => width * PAPER_ASPECT,
         };
         ARTWORK[self as usize].sprite(
-            size(px(raster_width), px(raster_height)),
+            size(px(width), px(height)),
             point(px(center.x), px(center.y)),
-            width / raster_width,
         )
     }
 }

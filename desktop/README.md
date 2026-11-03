@@ -26,7 +26,7 @@ GPU. Windows is the locally verified platform.
 - Preview latency defaults to 1900 ms. Pass `--share-delay-ms=200` or
   `--share-delay-ms=5000` after `cargo run ... --` to inspect fast and slow results.
   Motion uses actual completion events, never the configured delay.
-- Animated color SVGs reuse cached paint masks and fractional GPU transforms.
+- Animated color SVGs reuse vector meshes, antialiased at their final display size.
   Wind meshes are cached; invisible artwork is omitted. Text fades in at fixed
   positions while the link surface expands with fractional geometry. Inactive
   share windows stop decorative frames. Normal traces report phase and callback timing.

@@ -1,23 +1,24 @@
 use anyhow::{Context as _, Result, bail, ensure};
 use gpui::{
-    App, Bounds, Hsla, IntoElement, Pixels, Point, Radians, SharedString, Size,
-    TransformationMatrix, Window, canvas, prelude::*, rgba, size,
+    App, Bounds, FillOptions, Hsla, IntoElement, Path, PathBuilder, PathStyle, Pixels, Point,
+    Radians, Size, TransformationMatrix, Window, canvas, point, prelude::*, px, rgba, size,
 };
-use std::{
-    fmt::Write as _,
-    hash::{Hash, Hasher},
-    sync::Arc,
-};
+use std::sync::Arc;
 use usvg::{FillRule, Node, Paint, PaintOrder, tiny_skia_path::PathSegment};
 
-/// Solid-color SVG artwork, parsed once into ordered, reusable GPU masks.
+// Unit-viewport tessellation keeps curve error below a tenth of a pixel even
+// at a 400-device-pixel display size, without tessellating during animation.
+const CURVE_TOLERANCE: f32 = 1. / 4096.;
+
+/// Solid-color SVG artwork, parsed once into ordered, reusable vector meshes.
 /// Filters, clipping and group compositing are deliberately outside this format.
 pub struct VectorArtwork {
     layers: Arc<[Layer]>,
 }
 struct Layer {
-    key: SharedString,
-    mask: Arc<[u8]>,
+    outline: usvg::tiny_skia_path::Path,
+    fill_rule: FillRule,
+    mesh: Path<Pixels>,
     color: Hsla,
 }
 
@@ -36,18 +37,12 @@ impl VectorArtwork {
         })
     }
 
-    pub fn sprite(
-        &self,
-        raster_size: Size<Pixels>,
-        center: Point<Pixels>,
-        scale: f32,
-    ) -> VectorSprite {
+    pub fn sprite(&self, size: Size<Pixels>, center: Point<Pixels>) -> VectorSprite {
         VectorSprite {
             layers: self.layers.clone(),
             blend: None,
-            raster_size,
+            size,
             center,
-            scale,
             rotation: Radians(0.),
         }
     }
@@ -58,9 +53,8 @@ impl VectorArtwork {
 pub struct VectorSprite {
     layers: Arc<[Layer]>,
     blend: Option<ArtworkBlend>,
-    raster_size: Size<Pixels>,
+    size: Size<Pixels>,
     center: Point<Pixels>,
-    scale: f32,
     rotation: Radians,
 }
 
@@ -95,40 +89,31 @@ impl RenderOnce for VectorSprite {
         let Self {
             layers,
             blend,
-            raster_size,
+            size,
             center,
-            scale,
             rotation,
         } = self;
         canvas(
             |_, _, _| (),
-            move |bounds, (), window, cx| {
-                let factor = window.scale_factor();
-                // GPUI snaps the raster quad before applying its transform. Use that
-                // same device-aligned quad as the pivot, preserving fractional motion.
-                // Keep it at the visible pose because scene culling uses the raw quad.
-                let raster_bounds = Bounds::centered_at(bounds.origin + center, raster_size)
-                    .map(|value| (value * factor).round() / factor);
-                let transform = TransformationMatrix::unit()
-                    .translate((bounds.origin + center).scale(factor))
-                    .rotate(rotation)
-                    .scale(size(
-                        scale * (raster_size.width / raster_bounds.size.width),
-                        scale * (raster_size.height / raster_bounds.size.height),
-                    ))
-                    .translate(raster_bounds.center().scale(-factor));
+            move |bounds, (), window, _| {
+                let center = bounds.origin + center;
+                let (sin, cos) = rotation.0.sin_cos();
+                let transform = TransformationMatrix {
+                    rotation_scale: [
+                        [cos * f32::from(size.width), -sin * f32::from(size.height)],
+                        [sin * f32::from(size.width), cos * f32::from(size.height)],
+                    ],
+                    translation: [f32::from(center.x), f32::from(center.y)],
+                };
+                // Antialias after the final transform. Shrinking a cached SVG mask
+                // loses edge coverage because the atlas has no minification levels.
+                // Path painting also preserves fractional motion and applies DPI once.
                 let mut paint = |layers: &[Layer], opacity: f32| {
                     for layer in layers {
-                        if let Err(error) = window.paint_svg(
-                            raster_bounds,
-                            layer.key.clone(),
-                            Some(&layer.mask),
-                            transform,
+                        window.paint_path(
+                            transformed_mesh(&layer.mesh, transform),
                             layer.color.opacity(opacity),
-                            cx,
-                        ) {
-                            tracing::error!(event = "artwork.paint_failed", asset = %layer.key, %error);
-                        }
+                        );
                     }
                 };
                 if let Some(blend) = blend {
@@ -137,7 +122,11 @@ impl RenderOnce for VectorSprite {
                     let shared = layers
                         .iter()
                         .zip(blend.layers.iter())
-                        .take_while(|(a, b)| a.key == b.key && a.color == b.color)
+                        .take_while(|(a, b)| {
+                            a.color == b.color
+                                && a.fill_rule == b.fill_rule
+                                && a.outline == b.outline
+                        })
                         .count();
                     paint(&layers[..shared], 1.);
                     paint(&layers[shared..], 1. - blend.progress);
@@ -151,6 +140,22 @@ impl RenderOnce for VectorSprite {
         .inset_0()
         .size_full()
     }
+}
+
+fn transformed_mesh(mesh: &Path<Pixels>, transform: TransformationMatrix) -> Path<Pixels> {
+    let mut path = mesh.clone();
+    for vertex in &mut path.vertices {
+        vertex.xy_position = transform.apply(vertex.xy_position);
+    }
+    let [[xx, xy], [yx, yy]] = transform.rotation_scale;
+    path.bounds = Bounds::centered_at(
+        transform.apply(mesh.bounds.center()),
+        size(
+            mesh.bounds.size.width * xx.abs() + mesh.bounds.size.height * xy.abs(),
+            mesh.bounds.size.width * yx.abs() + mesh.bounds.size.height * yy.abs(),
+        ),
+    );
+    path
 }
 
 fn collect_layers(
@@ -234,29 +239,37 @@ fn layer(
         .clone()
         .transform(transform)
         .context("invalid artwork transform")?;
-    let mut commands = String::new();
-    for segment in path.segments() {
-        match segment {
-            PathSegment::MoveTo(p) => write!(commands, "M{} {}", p.x, p.y),
-            PathSegment::LineTo(p) => write!(commands, "L{} {}", p.x, p.y),
-            PathSegment::QuadTo(a, b) => write!(commands, "Q{} {} {} {}", a.x, a.y, b.x, b.y),
-            PathSegment::CubicTo(a, b, c) => {
-                write!(commands, "C{} {} {} {} {} {}", a.x, a.y, b.x, b.y, c.x, c.y)
-            }
-            PathSegment::Close => write!(commands, "Z"),
-        }?;
-    }
-    let rule = match rule {
-        FillRule::NonZero => "nonzero",
-        FillRule::EvenOdd => "evenodd",
+    let outline = path
+        .transform(usvg::Transform::from_row(
+            1. / viewport.width(),
+            0.,
+            0.,
+            1. / viewport.height(),
+            -0.5,
+            -0.5,
+        ))
+        .context("invalid artwork viewport")?;
+    let fill_rule = match rule {
+        FillRule::NonZero => gpui::FillRule::NonZero,
+        FillRule::EvenOdd => gpui::FillRule::EvenOdd,
     };
-    let mask = format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {} {}"><path fill="white" fill-rule="{rule}" d="{commands}"/></svg>"#,
-        viewport.width(),
-        viewport.height()
-    );
-    let mut hash = std::collections::hash_map::DefaultHasher::new();
-    mask.hash(&mut hash);
+    let mut builder = PathBuilder::fill().with_style(PathStyle::Fill(
+        FillOptions::default()
+            .with_fill_rule(fill_rule)
+            .with_tolerance(CURVE_TOLERANCE),
+    ));
+    let position = |p: usvg::tiny_skia_path::Point| point(px(p.x), px(p.y));
+    for segment in outline.segments() {
+        match segment {
+            PathSegment::MoveTo(p) => builder.move_to(position(p)),
+            PathSegment::LineTo(p) => builder.line_to(position(p)),
+            PathSegment::QuadTo(a, b) => builder.curve_to(position(b), position(a)),
+            PathSegment::CubicTo(a, b, c) => {
+                builder.cubic_bezier_to(position(c), position(a), position(b));
+            }
+            PathSegment::Close => builder.close(),
+        }
+    }
     let color = rgba(u32::from_be_bytes([
         color.red,
         color.green,
@@ -264,8 +277,9 @@ fn layer(
         255,
     ]));
     Ok(Layer {
-        key: format!("vector-artwork/{:016x}", hash.finish()).into(),
-        mask: Arc::from(mask.into_bytes()),
+        outline,
+        fill_rule: rule,
+        mesh: builder.build().context("invalid artwork mesh")?,
         color: Hsla::from(color).opacity(opacity),
     })
 }
