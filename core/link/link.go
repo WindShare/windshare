@@ -173,7 +173,7 @@ func (l Link) bareURL(base string) (*url.URL, error) {
 	if relays := explicitRelays(u, l.Relays); len(relays) > 0 {
 		u.RawQuery = url.Values{relayParam: relays}.Encode()
 	}
-	u.Fragment = ""
+	u.Fragment, u.RawFragment = "", ""
 	return u, nil
 }
 
