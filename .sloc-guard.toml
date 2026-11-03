@@ -56,6 +56,11 @@ max_lines = 800
 reason = "React components carry JSX markup overhead"
 
 [[content.rules]]
+pattern = "desktop/crates/*/src/**"
+max_lines = 700
+reason = "GPUI view builders spend most lines on declarative layout, the same markup overhead TSX gets headroom for"
+
+[[content.rules]]
 pattern = "**/*_test.go"
 max_lines = 1100
 reason = "Go tests need room for table-driven cases and fixtures"
