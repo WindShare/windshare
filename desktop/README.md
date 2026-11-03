@@ -16,7 +16,8 @@ cargo run --manifest-path desktop/Cargo.toml --locked -- --compact
 ```
 
 Windows requires the MSVC target, Visual Studio C++ build tools and a DirectX 11
-GPU. Windows is the locally verified platform.
+GPU. Windows is the locally verified platform. Dev builds optimize GPUI's core and
+Windows renderer for high-refresh animation while keeping application crates unoptimized.
 
 - Light and dark palettes follow the system appearance, including changes while open.
 - Share: the original 1350 ms flight and 720 ms landing play continuously.
