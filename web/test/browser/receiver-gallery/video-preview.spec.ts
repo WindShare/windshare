@@ -173,3 +173,26 @@ test('a failed seek rolls back to the requested position, not the presented keyf
   await expect(slider).toHaveValue('0.2')
   await expect(page.locator('.preview-frame-status')).toHaveText('')
 })
+
+test('a frame that succeeds after a shown failure moves the slider to its position', async ({ page }) => {
+  await openVideo(page)
+  const slider = page.getByRole('slider', { name: 'Seek Summer afternoon.mp4' })
+  await slider.focus()
+  await page.keyboard.press('ArrowRight')            // seek B to 0.1, held (range read in flight)
+  await expect(slider).toHaveValue('0.1')
+  // A failure published for an older frame while B is loading. The production
+  // controller no longer publishes one, so this exercises VideoFrame alone.
+  await page.evaluate(() => (window as unknown as VideoGallery)
+    .windshareFailVideoSeek('The browser could not decode this bounded media preview.'))
+  await expect(slider).toHaveValue('0')
+  await page.evaluate(() => (window as unknown as VideoGallery).windshareCompleteVideoSeek(0.1))
+  await expect.poll(async () => (await galleryEvidence(page)).intents).toContain('presented:3')
+  await expect(page.locator('.preview-seek-failure [role="alert"]')).toHaveCount(0)
+  await expect(slider).toHaveValue('0.1')
+  await expect(slider).toHaveAttribute('aria-valuetext', /^0:00 of /u)
+  await expect(page.locator('.preview-frame-status')).toHaveText('')
+  // The followed position is the repeated-seek baseline: one step goes to 0.2.
+  await page.keyboard.press('ArrowRight')
+  await expect(slider).toHaveValue('0.2')
+  expect(await seeks(page)).toEqual(['seek:0.1', 'seek:0.2'])
+})

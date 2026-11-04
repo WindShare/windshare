@@ -99,7 +99,8 @@ class GalleryController {
     if (this.#snapshot.preview !== preview) return
     URL.revokeObjectURL(this.#videoUrl!)
     this.#videoUrl = URL.createObjectURL(bytes)
-    this.#publish({ preview: { ...preview, seeking: false, positionSeconds: seconds, frameSeconds,
+    // Like production previewSnapshot, a new presentation carries no failure.
+    this.#publish({ preview: { ...preview, seeking: false, failure: null, positionSeconds: seconds, frameSeconds,
       presentationId: preview.presentationId + 1, url: decoderUrl ?? this.#videoUrl } })
   }
   // The production controller rolls back to the requested position of the

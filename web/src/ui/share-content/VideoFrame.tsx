@@ -24,6 +24,8 @@ export function VideoFrame({ preview, actions }: {
   const [position, setPosition] = useState(preview.positionSeconds)
   const requested = useRef(preview.positionSeconds)
   const drag = useRef<{ pointerId: number; origin: number } | null>(null)
+  // The presentation a shown failure rolled the slider back for.
+  const failedPresentation = useRef<number | null>(null)
   const pending = preview.failure === null && (preview.seeking || presentedId !== preview.presentationId)
   const seek = (seconds: number) => {
     if (seconds === requested.current && preview.failure === null) return
@@ -50,9 +52,19 @@ export function VideoFrame({ preview, actions }: {
   })
   const fail = useEffectEvent(() => actions.failed(preview.presentationId))
   useLayoutEffect(() => {
-    if (preview.failure === null) return
-    // A failed seek leaves the previous frame on the canvas; the slider, the
-    // time label and the repeated-seek guard return to that frame's position.
+    if (preview.failure === null) {
+      // A new frame that succeeds after a failure was shown brings its own
+      // requested position. The controller does not show a failure while a
+      // newer seek is loading, so this normally matches the slider already;
+      // following it keeps a rolled-back slider from staying behind the frame.
+      if (failedPresentation.current === null || preview.seeking ||
+          preview.presentationId === failedPresentation.current) return
+      failedPresentation.current = null
+    } else {
+      // A failed seek leaves the previous frame on the canvas; the slider, the
+      // time label and the repeated-seek guard return to that frame's position.
+      failedPresentation.current = preview.presentationId
+    }
     requested.current = preview.positionSeconds
     if (drag.current !== null) {
       drag.current.origin = preview.positionSeconds
