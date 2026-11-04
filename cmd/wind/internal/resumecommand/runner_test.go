@@ -19,13 +19,13 @@ func TestResumeParsersRequireOneExplicitOutputRootAndOrdinal(t *testing.T) {
 	root := t.TempDir()
 	app, _, _ := newResumeTestApp()
 
-	request, valid := app.parser().ParseRoot("resume list", []string{"-o", root})
-	if !valid || request.rootPath != root {
-		t.Fatalf("list request=%+v valid=%t", request, valid)
+	request, parse := app.parser().ParseRoot("resume list", []string{"-o", root})
+	if parse != resumeRequestReady || request.rootPath != root {
+		t.Fatalf("list request=%+v parse=%d", request, parse)
 	}
-	discard, valid := app.parser().ParseDiscard([]string{"--item", "2", "-o", root})
-	if !valid || discard.rootPath != root || discard.itemNumber != 2 {
-		t.Fatalf("discard request=%+v valid=%t", discard, valid)
+	discard, parse := app.parser().ParseDiscard([]string{"--item", "2", "-o", root})
+	if parse != resumeRequestReady || discard.rootPath != root || discard.itemNumber != 2 {
+		t.Fatalf("discard request=%+v parse=%d", discard, parse)
 	}
 
 	for name, args := range map[string][]string{
@@ -40,7 +40,7 @@ func TestResumeParsersRequireOneExplicitOutputRootAndOrdinal(t *testing.T) {
 		"positional path":    {"-o", root, "--item", "1", "records/one"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, valid := app.parser().ParseDiscard(args); valid {
+			if _, parse := app.parser().ParseDiscard(args); parse != resumeRequestInvalid {
 				t.Fatal("invalid discard request was accepted")
 			}
 		})
@@ -52,10 +52,44 @@ func TestResumeParsersRequireOneExplicitOutputRootAndOrdinal(t *testing.T) {
 		"positional":    {"-o", root, "records/one"},
 	} {
 		t.Run("list "+name, func(t *testing.T) {
-			if _, valid := app.parser().ParseRoot("resume list", args); valid {
+			if _, parse := app.parser().ParseRoot("resume list", args); parse != resumeRequestInvalid {
 				t.Fatal("invalid list request was accepted")
 			}
 		})
+	}
+}
+
+func TestResumeActionHelpSucceedsWithoutOpeningDestinationState(t *testing.T) {
+	root := t.TempDir()
+	for name, args := range map[string][]string{
+		"list short":                   {"list", "-h"},
+		"list long after root":         {"list", "-o", root, "--help"},
+		"discard short":                {"discard", "-h"},
+		"discard long after a request": {"discard", "-o", root, "--item", "1", "--help"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			opener := &fakeResumeStateInventoryOpener{err: errors.New("help opened destination state")}
+			app, stdout, stderr := newResumeTestApp()
+			app.resumeInventories = opener
+			if result := app.Run(context.Background(), append([]string{"resume"}, args...)); result != ResultOK {
+				t.Fatalf("result=%d stderr=%q", result, stderr.String())
+			}
+			if opener.calls != 0 || stdout.Len() != 0 {
+				t.Fatalf("help reached destination state: calls=%d stdout=%q", opener.calls, stdout.String())
+			}
+			if !strings.Contains(stderr.String(), "wind resume list") ||
+				strings.Contains(stderr.String(), "arguments are invalid") {
+				t.Fatalf("stderr=%q", stderr.String())
+			}
+		})
+	}
+
+	// A help spelling consumed as the -o value is a path, not a help request.
+	opener := &fakeResumeStateInventoryOpener{err: errors.New("destination unavailable")}
+	app, _, _ := newResumeTestApp()
+	app.resumeInventories = opener
+	if result := app.Run(context.Background(), []string{"resume", "list", "-o", "--help"}); result == ResultOK || opener.calls != 1 {
+		t.Fatalf("result=%d calls=%d", result, opener.calls)
 	}
 }
 

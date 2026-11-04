@@ -8,6 +8,8 @@ import (
 	"strconv"
 )
 
+// List and discard accept no positional arguments. The standard parser must
+// retain ownership of "--" so later tokens cannot be reinterpreted as help.
 type flagRequestParser struct {
 	logger resumeLogger
 }
@@ -15,60 +17,66 @@ type flagRequestParser struct {
 func (parser flagRequestParser) ParseRoot(
 	action string,
 	args []string,
-) (resumeRootRequest, bool) {
+) (resumeRootRequest, resumeRequestParse) {
 	flags := parser.newFlagSet(action)
 	var rootPath resumeRootPathFlag
 	flags.Var(&rootPath, "o", "output directory (required)")
-	positional, err := parseInterleaved(flags, args)
+	err := flags.Parse(args)
+	if errors.Is(err, flag.ErrHelp) {
+		return resumeRootRequest{}, resumeRequestHelp
+	}
 	if err != nil {
 		parser.logger.Logf("%s: arguments are invalid", action)
-		return resumeRootRequest{}, false
+		return resumeRootRequest{}, resumeRequestInvalid
 	}
-	if len(positional) != 0 {
+	if flags.NArg() != 0 {
 		parser.logger.Logf("%s: positional arguments are not accepted", action)
-		return resumeRootRequest{}, false
+		return resumeRootRequest{}, resumeRequestInvalid
 	}
 	if !rootPath.set {
 		parser.logger.Logf("%s: -o is required", action)
-		return resumeRootRequest{}, false
+		return resumeRootRequest{}, resumeRequestInvalid
 	}
 	absolute, err := absoluteResumeRoot(rootPath.value)
 	if err != nil {
 		parser.logger.Logf("%s: output directory is invalid", action)
-		return resumeRootRequest{}, false
+		return resumeRootRequest{}, resumeRequestInvalid
 	}
-	return resumeRootRequest{rootPath: absolute}, true
+	return resumeRootRequest{rootPath: absolute}, resumeRequestReady
 }
 
-func (parser flagRequestParser) ParseDiscard(args []string) (resumeDiscardRequest, bool) {
+func (parser flagRequestParser) ParseDiscard(args []string) (resumeDiscardRequest, resumeRequestParse) {
 	flags := parser.newFlagSet("resume discard")
 	var rootPath resumeRootPathFlag
 	flags.Var(&rootPath, "o", "output directory (required)")
 	var item resumeItemNumberFlag
 	flags.Var(&item, "item", "one current inventory item number (required)")
-	positional, err := parseInterleaved(flags, args)
+	err := flags.Parse(args)
+	if errors.Is(err, flag.ErrHelp) {
+		return resumeDiscardRequest{}, resumeRequestHelp
+	}
 	if err != nil {
 		parser.logger.Logf("resume discard: arguments are invalid")
-		return resumeDiscardRequest{}, false
+		return resumeDiscardRequest{}, resumeRequestInvalid
 	}
-	if len(positional) != 0 {
+	if flags.NArg() != 0 {
 		parser.logger.Logf("resume discard: positional arguments are not accepted")
-		return resumeDiscardRequest{}, false
+		return resumeDiscardRequest{}, resumeRequestInvalid
 	}
 	if !rootPath.set {
 		parser.logger.Logf("resume discard: -o is required")
-		return resumeDiscardRequest{}, false
+		return resumeDiscardRequest{}, resumeRequestInvalid
 	}
 	if !item.set {
 		parser.logger.Logf("resume discard: --item is required")
-		return resumeDiscardRequest{}, false
+		return resumeDiscardRequest{}, resumeRequestInvalid
 	}
 	absolute, err := absoluteResumeRoot(rootPath.value)
 	if err != nil {
 		parser.logger.Logf("resume discard: output directory is invalid")
-		return resumeDiscardRequest{}, false
+		return resumeDiscardRequest{}, resumeRequestInvalid
 	}
-	return resumeDiscardRequest{rootPath: absolute, itemNumber: item.value}, true
+	return resumeDiscardRequest{rootPath: absolute, itemNumber: item.value}, resumeRequestReady
 }
 
 func (parser flagRequestParser) newFlagSet(name string) *flag.FlagSet {
@@ -78,21 +86,6 @@ func (parser flagRequestParser) newFlagSet(name string) *flag.FlagSet {
 	// accidentally pasted into --item or another unsupported position.
 	flags.SetOutput(io.Discard)
 	return flags
-}
-
-func parseInterleaved(flags *flag.FlagSet, args []string) ([]string, error) {
-	var positional []string
-	for {
-		if err := flags.Parse(args); err != nil {
-			return nil, err
-		}
-		rest := flags.Args()
-		if len(rest) == 0 {
-			return positional, nil
-		}
-		positional = append(positional, rest[0])
-		args = rest[1:]
-	}
 }
 
 type resumeRootPathFlag struct {
