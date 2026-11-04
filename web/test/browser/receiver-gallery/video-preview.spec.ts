@@ -4,7 +4,7 @@ import { holdVideoPresentation } from './video-presentation'
 
 interface VideoGallery {
   windshareHoldVideoSeeks(): void
-  windshareCompleteVideoSeek(seconds: number, decoderUrl?: string, frameSeconds?: number): Promise<void>
+  windshareCompleteVideoSeek(seconds: number, decoderUrl?: string, decodeSeconds?: number): Promise<void>
   windshareFailVideoSeek(message: string): void
 }
 
@@ -65,7 +65,7 @@ for (const viewport of [{ width: 1024, height: 900 }, { width: 360, height: 740 
     const presentation = await holdVideoPresentation(page, 0.1)
     try {
       const request = page.waitForRequest('**/held-video-segment')
-      await page.evaluate(() => (window as unknown as VideoGallery).windshareCompleteVideoSeek(0.1, '/held-video-segment'))
+      await page.evaluate(() => (window as unknown as VideoGallery).windshareCompleteVideoSeek(0.2, '/held-video-segment', 0.1))
       await request
       expect(await visibleFrame(page)).toEqual(original)
       expect(await slider.boundingBox()).toEqual(controls)

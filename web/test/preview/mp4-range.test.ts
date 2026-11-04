@@ -94,7 +94,7 @@ describe('v2 MP4 edit-list presentation time', () => {
     const signal = new AbortController().signal
     const preview = await openFixture(name)
     const positions: number[] = []
-    for (const target of targets) positions.push((await preview.segmentAt(target, signal)).positionSeconds)
+    for (const target of targets) positions.push((await preview.segmentAt(target, signal)).keyframeSeconds)
     return positions
   }
 
@@ -196,18 +196,11 @@ describe('v2 MP4 edit-list presentation time', () => {
     expectPositions(await seekPositions(targets, name), expected)
   })
 
-  // `-g 100` (a single keyframe) copied with `-ss 0.5 -c copy`: the edit list
-  // hides the only keyframe (at -0.5 s). One sample can only decode that
-  // keyframe, so every target shows it at position 0, earlier than the clip's
-  // first visible frame, instead of failing the preview.
-  it('shows the hidden keyframe when the edit list hides every keyframe', async () => {
-    const signal = new AbortController().signal
-    const preview = await openFixture('h264-head-trimmed-single-keyframe.mp4')
-    for (const target of [0, 0.7, 1.5]) {
-      const segment = await preview.segmentAt(target, signal)
-      expect(segment.positionSeconds).toBe(0)
-      expect(segment.frameSeconds).toBeCloseTo(2_048 / 10_240, 9)
-    }
+  // The only keyframe is pre-roll at -0.5 s. Showing it would expose a frame
+  // excluded from the clip, even though its compressed bytes remain in the file.
+  it('rejects a clip whose edit list hides every keyframe', async () => {
+    await expect(openFixture('h264-head-trimmed-single-keyframe.mp4'))
+      .rejects.toThrow(new VideoPreviewError('MP4 has no keyframe on its presentation timeline'))
   })
 
   // Same `h264-no-edit-list.mp4` with its stss entry count patched to zero:
@@ -240,8 +233,8 @@ describe('v2 MP4 edit-list presentation time', () => {
   ] as const)('reports %s at %f s as position %f s, frame %f s', async (name, target, position, frame) => {
     const preview = await openFixture(name)
     const segment = await preview.segmentAt(target, new AbortController().signal)
-    expect(segment.positionSeconds).toBeCloseTo(position, 9)
-    expect(segment.frameSeconds).toBeCloseTo(frame, 9)
+    expect(segment.keyframeSeconds).toBeCloseTo(position, 9)
+    expect(segment.decodeSeconds).toBeCloseTo(frame, 9)
     const bytes = new Uint8Array(await segment.bytes.arrayBuffer())
     expect(findBox(fixture(name), 'edts') >= 0 || name === 'h264-no-edit-list.mp4').toBe(true)
     expect(findBox(bytes, 'edts')).toBe(-1)
@@ -261,11 +254,11 @@ describe('v2 MP4 edit-list presentation time', () => {
     const preview = await openFixture('h264-open-gop-leading-tail.mp4')
     for (const target of [1.2, 1.3]) {
       const segment = await preview.segmentAt(target, signal)
-      expect(segment.positionSeconds).toBeCloseTo(1.2, 9)
-      expect(segment.frameSeconds).toBeCloseTo(13_312 / 10_240, 9)
+      expect(segment.keyframeSeconds).toBeCloseTo(1.2, 9)
+      expect(segment.decodeSeconds).toBeCloseTo(13_312 / 10_240, 9)
       const samples = await segmentSamples(new Uint8Array(await segment.bytes.arrayBuffer()))
       expect(samples).toMatchObject([{ is_sync: true, cts: 13_312 }])
     }
-    expect((await preview.segmentAt(1.1, signal)).positionSeconds).toBe(0)
+    expect((await preview.segmentAt(1.1, signal)).keyframeSeconds).toBe(0)
   })
 })

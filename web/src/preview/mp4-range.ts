@@ -1,6 +1,7 @@
 import type { ISOFile, Movie, MP4BoxBuffer, Sample, Track } from 'mp4box'
 
 import { bigintToSafeNumber, byteRange, type ByteRange } from '../content/geometry'
+import { initializeKeyframeFragment } from './mp4box-fragment'
 
 export const VIDEO_EDGE_METADATA_BYTES = 256 * 1024
 export const VIDEO_METADATA_BYTES = 4 * 1024 * 1024
@@ -30,12 +31,11 @@ export interface Mp4Metadata {
 
 export interface Mp4Segment {
   readonly bytes: Blob
-  // The selected keyframe on the presentation (edit-list) timeline: what the
-  // slider and time label show.
-  readonly positionSeconds: number
+  // The selected keyframe on the source clip's edit-list presentation timeline.
+  readonly keyframeSeconds: number
   // Where the decoder element finds that keyframe in `bytes`. The one-sample
   // segment carries no edit list, so this is the sample's raw composition time.
-  readonly frameSeconds: number
+  readonly decodeSeconds: number
 }
 
 interface MetadataPart {
@@ -106,37 +106,15 @@ export class Mp4RangePreview {
     const file = await metadataFile(this.#parts)
     const info = requireMovie(file)
     const track = requireTrack(info, this.#trackId)
-    file.setSegmentOptions(track.id, track.id, {
-      nbSamples: 1,
-      nbSamplesPerFragment: 1,
-      rapAlignement: false,
-    })
-    stripEditList(file.getTrackById(track.id))
-    const initialization = file.initializeSegmentation('per-track')
-      .find((candidate) => candidate.id === track.id)
-    if (initialization === undefined || initialization.buffer.byteLength > VIDEO_METADATA_BYTES) {
+    const keyframe = this.#keyframeAt(seconds)
+    const sample = file.getTrackSamplesInfo(track.id)[keyframe.index]
+    requireSample(sample, this.#source.exactSize)
+    const initialization = initializeKeyframeFragment(file, track.id, keyframe.index)
+    if (initialization === undefined || initialization.byteLength > VIDEO_METADATA_BYTES) {
       throw new VideoPreviewError('MP4 initialization segment exceeds the preview limit')
     }
-    const samples = file.getTrackSamplesInfo(track.id)
-    const keyframe = this.#keyframeAt(seconds)
-    const sample = samples[keyframe.index]
-    requireSample(sample, this.#source.exactSize)
-    // Start fragmentation at the chosen sample index instead of mp4box's
-    // time-based seek. That seek compares raw cts with seconds * timescale in
-    // float math, and skips the whole track (silently keeping sample 0) when
-    // the target is past the end of the last decode-order sample, which an
-    // open-GOP file whose last keyframe is followed only by its leading frames
-    // reaches at that keyframe.
-    // mp4box internals: trak.nextSample and resetFragmentedTrackStateAfterSeek
-    // are typed but undocumented fragmentation state, which this relies on
-    // behaving as in the pinned mp4box 2.4.1 (package.json). Revalidate them,
-    // with stripEditList below, on any mp4box upgrade: mp4-range.test.ts and
-    // the media-preview-edit-list browser specs cover both.
-    const trak = file.getTrackById(track.id)
-    trak.nextSample = keyframe.index
-    file.resetFragmentedTrackStateAfterSeek(trak, keyframe.index)
-    const positionSeconds = keyframe.ticks / this.#timescale
-    const frameSeconds = sample.cts / this.#timescale
+    const keyframeSeconds = keyframe.ticks / this.#timescale
+    const decodeSeconds = sample.cts / this.#timescale
     const sampleData = await this.#source.read(
       byteRange(BigInt(sample.offset), BigInt(sample.offset + sample.size)),
       signal,
@@ -152,14 +130,14 @@ export class Mp4RangePreview {
       appendPart(file, { start: sample.offset, data: sampleData })
       file.flush()
       const segment = await segmentPromise
-      const total = initialization.buffer.byteLength + segment.byteLength
+      const total = initialization.byteLength + segment.byteLength
       if (total > VIDEO_METADATA_BYTES + VIDEO_SAMPLE_BYTES) {
         throw new VideoPreviewError('Video preview segment exceeds its memory limit')
       }
       return Object.freeze({
-        bytes: new Blob([initialization.buffer, segment], { type: 'video/mp4' }),
-        positionSeconds,
-        frameSeconds,
+        bytes: new Blob([initialization, segment], { type: 'video/mp4' }),
+        keyframeSeconds,
+        decodeSeconds,
       })
     } finally {
       unlink()
@@ -357,11 +335,8 @@ function emptyTicks(track: Track, movieTicks: number): number {
   return Math.round(movieTicks * track.timescale / track.movie_timescale)
 }
 
-// Sync samples presented within [0, duration], sorted by presentation tick.
-// Computed once at open. If the edit list hides every keyframe (a head-trimmed
-// copy of a long-GOP file whose only keyframe precedes the cut), the latest
-// hidden keyframe is shown at position 0. That frame is earlier than the
-// clip's first visible frame, but it is the only frame one sample can decode.
+// Only frames inside the clip can represent it. A hidden pre-roll keyframe is
+// a decoding dependency, not a preview of the edited content.
 function presentedKeyframes(
   track: Track,
   samples: readonly Sample[],
@@ -369,18 +344,12 @@ function presentedKeyframes(
 ): readonly PresentedKeyframe[] {
   const offsetTicks = presentationOffsetTicks(track)
   const keyframes: PresentedKeyframe[] = []
-  let hidden: PresentedKeyframe | undefined
   for (const [index, sample] of samples.entries()) {
     if (!sample.is_sync) continue
     const ticks = sample.cts - offsetTicks
-    if (ticks < 0) {
-      if (hidden === undefined || ticks > hidden.ticks) hidden = { index, ticks }
-    } else if (ticks / track.timescale <= durationSeconds) {
+    if (ticks >= 0 && ticks / track.timescale <= durationSeconds) {
       keyframes.push(Object.freeze({ index, ticks }))
     }
-  }
-  if (keyframes.length === 0 && hidden !== undefined) {
-    keyframes.push(Object.freeze({ index: hidden.index, ticks: 0 }))
   }
   if (keyframes.length === 0) {
     throw new VideoPreviewError('MP4 has no keyframe on its presentation timeline', {
@@ -398,20 +367,6 @@ function requireOffset(ticks: number, track: Track): number {
     })
   }
   return ticks
-}
-
-// The one-sample segment is decoded on its own raw timeline. Firefox and
-// WebKitGTK do not apply edit lists to it the way Chromium does, so it carries
-// none: every browser then places the sample at its composition time (or, in
-// Firefox, rebases it to zero), and positionSeconds stays the only
-// presentation-timeline value.
-// This edits mp4box's parsed box tree (trak.boxes, trak.edts, trak.edtss)
-// so initializeSegmentation writes no edts. Those are mp4box internals as of
-// the pinned 2.4.1, not a supported API: revalidate on any mp4box upgrade.
-function stripEditList(trak: ReturnType<ISOFile['getTrackById']>): void {
-  if (trak.boxes !== undefined) trak.boxes = trak.boxes.filter((box) => box.type !== 'edts')
-  delete trak.edts
-  trak.edtss = []
 }
 
 function requireSample(sample: Sample | undefined, exactSize: bigint): asserts sample is Sample {

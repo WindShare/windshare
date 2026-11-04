@@ -74,7 +74,7 @@ class GalleryController {
       syntheticVideo().then(video => {
         this.#videoUrl = video.url
         this.#publish({ preview: { state: 'video', fileId: id, name, ...video, presentationId: 2,
-          positionSeconds: 0, frameSeconds: 0, seeking: false, failure: null } })
+          requestedSeconds: 0, decodeSeconds: 0, seeking: false, failure: null } })
       }).catch(() => this.previewMediaFailed())
       return
     }
@@ -87,12 +87,12 @@ class GalleryController {
     this.intents.push('seek:' + seconds)
     const preview = this.#snapshot.preview
     if (preview.state !== 'video') return
-    this.#publish({ preview: { ...preview, seeking: true, failure: null } })
+    this.#publish({ preview: { ...preview, requestedSeconds: seconds, seeking: true, failure: null } })
     if (!this.holdVideoSeeks) this.completeVideoSeek(seconds).catch(() => this.previewMediaFailed())
   }
-  // frameSeconds is the decoder time of the presented keyframe; it defaults to
+  // decodeSeconds is the decoder time of the presented keyframe; it defaults to
   // the request, and differs from it for a seek between keyframes.
-  completeVideoSeek = async (seconds: number, decoderUrl?: string, frameSeconds = seconds) => {
+  completeVideoSeek = async (seconds: number, decoderUrl?: string, decodeSeconds = seconds) => {
     const preview = this.#snapshot.preview
     if (preview.state !== 'video') throw new Error('No video preview is open')
     const bytes = await fetch(this.#videoUrl!).then(response => response.blob())
@@ -100,7 +100,7 @@ class GalleryController {
     URL.revokeObjectURL(this.#videoUrl!)
     this.#videoUrl = URL.createObjectURL(bytes)
     // Like production previewSnapshot, a new presentation carries no failure.
-    this.#publish({ preview: { ...preview, seeking: false, failure: null, positionSeconds: seconds, frameSeconds,
+    this.#publish({ preview: { ...preview, seeking: false, failure: null, requestedSeconds: seconds, decodeSeconds,
       presentationId: preview.presentationId + 1, url: decoderUrl ?? this.#videoUrl } })
   }
   // The production controller rolls back to the requested position of the
@@ -108,12 +108,12 @@ class GalleryController {
   failVideoSeek = (message: string) => {
     const preview = this.#snapshot.preview
     if (preview.state !== 'video') throw new Error('No video preview is open')
-    this.#publish({ preview: { ...preview, seeking: false, failure: message, positionSeconds: this.#presentedSeconds } })
+    this.#publish({ preview: { ...preview, seeking: false, failure: message, requestedSeconds: this.#presentedSeconds } })
   }
   previewMediaPresented = (id: number) => {
     this.intents.push('presented:' + id)
     const preview = this.#snapshot.preview
-    if (preview.state === 'video' && preview.presentationId === id) this.#presentedSeconds = preview.positionSeconds
+    if (preview.state === 'video' && preview.presentationId === id) this.#presentedSeconds = preview.requestedSeconds
   }
   previewMediaFailed = () => {
     this.#publish({ preview: { state: 'error', fileId: 'photo', name: 'Photo', message: 'The browser could not decode this preview.' } })
@@ -206,8 +206,8 @@ export async function mountGallery(scenario: Scenario = 'folder'): Promise<void>
 
 export function holdVideoSeeks() { active!.holdVideoSeeks = true }
 
-export function completeVideoSeek(seconds: number, decoderUrl?: string, frameSeconds?: number) {
-  return active!.completeVideoSeek(seconds, decoderUrl, frameSeconds)
+export function completeVideoSeek(seconds: number, decoderUrl?: string, decodeSeconds?: number) {
+  return active!.completeVideoSeek(seconds, decoderUrl, decodeSeconds)
 }
 
 export function galleryEvidence() {

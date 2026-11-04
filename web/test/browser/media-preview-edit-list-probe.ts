@@ -9,8 +9,8 @@ const HARNESS_TIMEOUT_MS = 15_000
 export interface FrameObservation {
   readonly target: number
   readonly outcome: 'presented' | 'failed' | 'timeout'
-  readonly positionSeconds: number
-  readonly frameSeconds: number
+  readonly keyframeSeconds: number
+  readonly decodeSeconds: number
   readonly mediaTime: number | null
   readonly currentTime: number
 }
@@ -77,7 +77,7 @@ export async function presentSegments(
         const timer = setTimeout(() => { close(); resolve('timeout') }, timeoutMs)
         close = presentationModule.observeVideoFrame(
           decoder,
-          segment.frameSeconds,
+          segment.decodeSeconds,
           () => { clearTimeout(timer); resolve('presented') },
           () => { clearTimeout(timer); resolve('failed') },
         )
@@ -87,8 +87,8 @@ export async function presentSegments(
       observations.push({
         target,
         outcome,
-        positionSeconds: segment.positionSeconds,
-        frameSeconds: segment.frameSeconds,
+        keyframeSeconds: segment.keyframeSeconds,
+        decodeSeconds: segment.decodeSeconds,
         mediaTime: lastMediaTime ?? null,
         currentTime: video.currentTime,
       })

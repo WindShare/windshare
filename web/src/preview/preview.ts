@@ -58,8 +58,8 @@ export type PreviewPresentation =
       readonly width: number
       readonly height: number
       readonly durationSeconds: number
-      readonly positionSeconds: number
-      readonly frameSeconds: number
+      readonly keyframeSeconds: number
+      readonly decodeSeconds: number
     }
 
 // Whether a FilePreview.seek failure is confined to the requested position,
@@ -350,8 +350,8 @@ function videoPresentation(
     width: metadata.width,
     height: metadata.height,
     durationSeconds: metadata.durationSeconds,
-    positionSeconds: segment.positionSeconds,
-    frameSeconds: segment.frameSeconds,
+    keyframeSeconds: segment.keyframeSeconds,
+    decodeSeconds: segment.decodeSeconds,
   })
 }
 

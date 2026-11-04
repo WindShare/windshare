@@ -2,7 +2,7 @@ import { isAutomaticPhotoCandidate, AutomaticPhotoDeferredError, AUTOMATIC_PHOTO
 import type { CatalogEntry } from '../catalog/records'
 import { RemoteOperationError } from '../content/session-operations'
 import { RemoteRevisionError } from '../content/session-services'
-import { isPositionLocalPreviewFailure, type PreviewPresentation } from '../preview/preview'
+import { isPositionLocalPreviewFailure } from '../preview/preview'
 import { unclassifiedFailureFact, type FailureFact } from '../diagnostics/incident/fact'
 import {
   excludedPresentationDecision,
@@ -41,15 +41,10 @@ interface PendingPreviewSeek {
   readonly attempt: PreviewAttempt
 }
 
+type ReadyPreviewSnapshot = Extract<ReceiverSnapshot['preview'], { state: 'image' | 'video' }>
+
 interface PendingMediaPresentation {
-  readonly id: number
-  readonly url: string
-  // The slider position this frame answers: the seconds its seek requested,
-  // or for the opening frame the open's initial slider value (the keyframe
-  // the session's seek(0) chose). Not the presented keyframe's own position
-  // or the decoder time, which stay inside the preview layer; undefined for
-  // images.
-  readonly requestedSeconds: number | undefined
+  readonly preview: ReadyPreviewSnapshot
   readonly attempt: PreviewAttempt
 }
 
@@ -60,12 +55,9 @@ interface ScopedActivePreview extends ActivePreview {
   seekAttempt?: PendingPreviewSeek
   mediaAttempt?: PendingMediaPresentation
   incidentAttempt?: PreviewAttempt
-  framePresented?: boolean
-  // The requested slider position (PendingMediaPresentation.requestedSeconds)
-  // of the frame currently on the canvas. A failed seek rolls back to it, so
-  // the slider returns to where the user left it for that frame rather than
-  // jumping to its keyframe.
-  presentedRequestedSeconds?: number
+  // Retain the complete accepted presentation instead of independent flags and
+  // positions that could disagree about what is actually on the canvas.
+  presented?: ReadyPreviewSnapshot
   // The attempt whose incident reports this session's local seek failures.
   localFailureAttempt?: PreviewAttempt
 }
@@ -176,7 +168,7 @@ export class PreviewController {
     }
     active.seekAttempt = pending
     try {
-      this.#publishPreview(Object.freeze({ ...preview, seeking: true, failure: null }))
+      this.#publishPreview(Object.freeze({ ...preview, requestedSeconds: seconds, seeking: true, failure: null }))
     } catch (error) {
       this.#exclude(pending.attempt, 'not_user_visible')
       this.#closeAttempt(pending.attempt)
@@ -199,13 +191,12 @@ export class PreviewController {
           this.#closeAttempt(pending.attempt)
           return
         }
-        const requestedSeconds = presentation.kind === 'video' ? seconds : undefined
-        const media = this.#startMediaAttempt(active, presentation.url, requestedSeconds)
-        // The slider stays where the user asked for this frame, not at the
-        // keyframe the preview layer presented for it.
-        const projected = previewSnapshot(active.entry, presentation, false, media.id, requestedSeconds)
+        const projected = previewSnapshot(active.entry, presentation, this.#nextId++)
+        const media = this.#startMediaAttempt(active, projected.state === 'video'
+          ? Object.freeze({ ...projected, requestedSeconds: seconds })
+          : projected)
         try {
-          this.#publishPreview(projected)
+          this.#publishPreview(media.preview)
         } catch (error) {
           this.#exclude(pending.attempt, 'not_user_visible')
           this.#closeAttempt(pending.attempt)
@@ -241,7 +232,7 @@ export class PreviewController {
         }
         delete active.seekAttempt
         const fact = () => previewFailureFact('preview_seek', error)
-        if (active.framePresented === true && isPositionLocalPreviewFailure(error)) {
+        if (active.presented?.state === 'video' && isPositionLocalPreviewFailure(error)) {
           // Only this position failed; the session, its previous frame and the
           // download stay available, so the preview remains open.
           this.#recordLocalFailure(active, pending.attempt, fact)
@@ -271,21 +262,19 @@ export class PreviewController {
       media === undefined ||
       (preview.state !== 'image' && preview.state !== 'video') ||
       preview.presentationId !== presentationId ||
-      media.id !== presentationId
+      media.preview.presentationId !== presentationId
     ) {
       return
     }
     this.#exclude(media.attempt, 'success')
     this.#closeAttempt(media.attempt)
     delete active.mediaAttempt
-    active.framePresented = true
-    if (media.requestedSeconds === undefined) return
-    active.presentedRequestedSeconds = media.requestedSeconds
-    if (preview.state === 'video' && preview.failure !== null &&
-        preview.positionSeconds !== media.requestedSeconds) {
-      // An earlier seek's frame presented after a later seek failed and rolled
-      // the slider back: point the slider at the frame now on screen.
-      this.#publishPreview(Object.freeze({ ...preview, positionSeconds: media.requestedSeconds }))
+    active.presented = media.preview
+    if (preview.state === 'video' && media.preview.state === 'video' && preview.failure !== null &&
+        preview.requestedSeconds !== media.preview.requestedSeconds) {
+      // A prior frame can arrive after a newer request failed. Its accepted
+      // snapshot owns the rollback position, without changing the latest error.
+      this.#publishPreview(Object.freeze({ ...preview, requestedSeconds: media.preview.requestedSeconds }))
     }
   }
 
@@ -298,7 +287,7 @@ export class PreviewController {
       media === undefined ||
       (preview.state !== 'image' && preview.state !== 'video') ||
       preview.presentationId !== presentationId ||
-      media.id !== presentationId
+      media.preview.presentationId !== presentationId
     ) {
       return
     }
@@ -307,7 +296,7 @@ export class PreviewController {
       recoveryDisposition: 'none',
     })
     delete active.mediaAttempt
-    if (preview.state === 'video' && active.framePresented === true) {
+    if (preview.state === 'video' && active.presented?.state === 'video') {
       // A later seek's frame did not present: keep the earlier frame on screen.
       this.#recordLocalFailure(active, media.attempt, fact)
       // A newer seek is still reading its range, and the snapshot already
@@ -355,11 +344,9 @@ export class PreviewController {
         return
       }
       active.session = session
-      // The slider opens at the position of the keyframe the session's seek(0)
-      // presented, so that is the opening frame's requested position.
-      const media = this.#startMediaAttempt(active, session.current.url, videoPosition(session.current))
-      const projected = previewSnapshot(active.entry, session.current, false, media.id)
-      this.#publishPreview(projected)
+      const media = this.#startMediaAttempt(active,
+        previewSnapshot(active.entry, session.current, this.#nextId++))
+      this.#publishPreview(media.preview)
       this.#exclude(active.openAttempt, 'success')
       this.#closeAttempt(active.openAttempt)
     } catch (error) {
@@ -394,12 +381,9 @@ export class PreviewController {
     if (previous !== undefined && previous !== attempt) this.#closeAttempt(previous)
   }
 
-  // A preview that stays open can fail locally at every position the user
-  // tries. Like main, where the first failure closed the preview, a session
-  // reports one incident for them: the first failure becomes the incident and
-  // later ones add their facts to it as consequences. Their own scopes carry
-  // no fact and close undecided. A later failure that closes the preview still
-  // reports its own incident.
+  // Scrubbing a damaged region must not flood diagnostics. Local failures share
+  // one incident, with later failures recorded as consequences. A session-ending
+  // failure owns a separate incident because it requires different recovery.
   #recordLocalFailure(
     active: ScopedActivePreview,
     attempt: PreviewAttempt,
@@ -422,18 +406,17 @@ export class PreviewController {
 
   #publishVideoFailure(active: ScopedActivePreview, failure: string): void {
     const preview = this.#host.snapshot().preview
-    if (preview.state !== 'video') return
+    if (preview.state !== 'video' || active.presented?.state !== 'video') return
     // The canvas still shows the last presented frame, so the slider, the
     // time label and the next seek's baseline return to the position the
     // user requested for it.
-    const positionSeconds = active.presentedRequestedSeconds ?? preview.positionSeconds
-    this.#publishPreview(Object.freeze({ ...preview, positionSeconds, seeking: false, failure }))
+    const requestedSeconds = active.presented.requestedSeconds
+    this.#publishPreview(Object.freeze({ ...preview, requestedSeconds, seeking: false, failure }))
   }
 
   #startMediaAttempt(
     active: ScopedActivePreview,
-    url: string,
-    requestedSeconds: number | undefined,
+    preview: ReadyPreviewSnapshot,
   ): PendingMediaPresentation {
     const replaced = active.mediaAttempt
     if (replaced !== undefined) {
@@ -442,9 +425,7 @@ export class PreviewController {
       delete active.mediaAttempt
     }
     const media: PendingMediaPresentation = {
-      id: this.#nextId++,
-      url,
-      requestedSeconds,
+      preview,
       attempt: this.#newAttempt('preview_media'),
     }
     active.mediaAttempt = media
@@ -591,10 +572,6 @@ export class PreviewController {
   #publishPreview(preview: ReceiverSnapshot['preview']): void {
     this.#host.publish({ ...this.#host.snapshot(), preview })
   }
-}
-
-function videoPosition(presentation: PreviewPresentation): number | undefined {
-  return presentation.kind === 'video' ? presentation.positionSeconds : undefined
 }
 
 function previewFailureFact(

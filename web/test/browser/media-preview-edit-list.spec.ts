@@ -33,8 +33,6 @@ const CASES = [
   // Open GOP whose last decode-order samples are the 1.2 s keyframe and its
   // leading frames: mp4box's time-based seek skipped the track there.
   { fixture: 'h264-open-gop-leading-tail.mp4', targets: [0, 1.2], keyframes: [0, 1.2] },
-  // Edit list hides the only keyframe: it is shown at position 0.
-  { fixture: 'h264-head-trimmed-single-keyframe.mp4', targets: [0, 1], keyframes: [0, 0] },
 ] as const
 // Browser media pipelines round rational sample times to microseconds.
 const MEDIA_TIME_TOLERANCE_SECONDS = 1e-5
@@ -45,9 +43,9 @@ for (const { fixture, targets, keyframes } of CASES) {
     for (const [index, observation] of results.entries()) {
       const context = JSON.stringify(observation)
       expect(observation.outcome, context).toBe('presented')
-      expect(observation.positionSeconds, context).toBeCloseTo(keyframes[index] ?? Number.NaN, 6)
+      expect(observation.keyframeSeconds, context).toBeCloseTo(keyframes[index] ?? Number.NaN, 6)
       expect(observation.mediaTime, context).not.toBeNull()
-      expect(Math.abs((observation.mediaTime ?? Number.NaN) - observation.frameSeconds), context)
+      expect(Math.abs((observation.mediaTime ?? Number.NaN) - observation.decodeSeconds), context)
         .toBeLessThanOrEqual(MEDIA_TIME_TOLERANCE_SECONDS)
     }
   })

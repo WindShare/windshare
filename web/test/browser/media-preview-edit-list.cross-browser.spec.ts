@@ -21,7 +21,7 @@ for (const { fixture, targets, keyframes } of CASES) {
     for (const [index, observation] of results.entries()) {
       const context = JSON.stringify(observation)
       expect(observation.outcome, context).toBe('presented')
-      expect(observation.positionSeconds, context).toBeCloseTo(keyframes[index] ?? Number.NaN, 6)
+      expect(observation.keyframeSeconds, context).toBeCloseTo(keyframes[index] ?? Number.NaN, 6)
     }
   })
 }

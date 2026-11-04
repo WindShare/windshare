@@ -97,11 +97,7 @@ export function breadcrumbsFor(route: readonly BrowseDirectory[]) {
 export function previewSnapshot(
   entry: Extract<CatalogEntry, { kind: 'file' }>,
   presentation: PreviewPresentation,
-  seeking: boolean,
   presentationId: number,
-  // A seek's requested slider position; the presentation's keyframe position
-  // otherwise (the opening frame).
-  requestedSeconds?: number,
 ) {
   return Object.freeze(presentation.kind === 'image'
     ? {
@@ -124,9 +120,9 @@ export function previewSnapshot(
         width: presentation.width,
         height: presentation.height,
         durationSeconds: presentation.durationSeconds,
-        positionSeconds: requestedSeconds ?? presentation.positionSeconds,
-        frameSeconds: presentation.frameSeconds,
-        seeking,
+        requestedSeconds: presentation.keyframeSeconds,
+        decodeSeconds: presentation.decodeSeconds,
+        seeking: false,
         failure: null,
       })
 }

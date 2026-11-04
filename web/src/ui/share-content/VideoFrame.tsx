@@ -21,11 +21,9 @@ export function VideoFrame({ preview, actions }: {
   const canvas = useRef<HTMLCanvasElement>(null)
   const decoder = useRef<HTMLVideoElement>(null)
   const [presentedId, setPresentedId] = useState<number | null>(null)
-  const [position, setPosition] = useState(preview.positionSeconds)
-  const requested = useRef(preview.positionSeconds)
+  const [position, setPosition] = useState(preview.requestedSeconds)
+  const requested = useRef(preview.requestedSeconds)
   const drag = useRef<{ pointerId: number; origin: number } | null>(null)
-  // The presentation a shown failure rolled the slider back for.
-  const failedPresentation = useRef<number | null>(null)
   const pending = preview.failure === null && (preview.seeking || presentedId !== preview.presentationId)
   const seek = (seconds: number) => {
     if (seconds === requested.current && preview.failure === null) return
@@ -52,33 +50,22 @@ export function VideoFrame({ preview, actions }: {
   })
   const fail = useEffectEvent(() => actions.failed(preview.presentationId))
   useLayoutEffect(() => {
-    if (preview.failure === null) {
-      // A new frame that succeeds after a failure was shown brings its own
-      // requested position. The controller does not show a failure while a
-      // newer seek is loading, so this normally matches the slider already;
-      // following it keeps a rolled-back slider from staying behind the frame.
-      if (failedPresentation.current === null || preview.seeking ||
-          preview.presentationId === failedPresentation.current) return
-      failedPresentation.current = null
-    } else {
-      // A failed seek leaves the previous frame on the canvas; the slider, the
-      // time label and the repeated-seek guard return to that frame's position.
-      failedPresentation.current = preview.presentationId
-    }
-    requested.current = preview.positionSeconds
+    // The controller publishes both requested intent and failure rollback. A
+    // live drag stays local; only its cancellation origin follows that state.
+    requested.current = preview.requestedSeconds
     if (drag.current !== null) {
-      drag.current.origin = preview.positionSeconds
+      drag.current.origin = preview.requestedSeconds
       return
     }
-    setPosition(preview.positionSeconds)
-  }, [preview])
+    setPosition(preview.requestedSeconds)
+  }, [preview.requestedSeconds])
   useLayoutEffect(() => {
     const video = decoder.current
     if (video === null) return
     // The decoder's lifetime owns its callback, so replacement or closure cannot
     // let an obsolete frame overwrite the retained canvas or settle a new attempt.
-    return observeVideoFrame(video, preview.frameSeconds, () => present(video), fail)
-  }, [preview.presentationId, preview.frameSeconds, preview.url])
+    return observeVideoFrame(video, preview.decodeSeconds, () => present(video), fail)
+  }, [preview.presentationId, preview.decodeSeconds, preview.url])
 
   return <div className="video-frame-preview">
     <div className="preview-frame-stage" style={{ '--preview-ratio': preview.width / preview.height } as CSSProperties}
@@ -119,7 +106,6 @@ export function VideoFrame({ preview, actions }: {
         ? <p className="preview-seek-hint">Choose a moment to preview. Download the video to play it.</p>
         : <div className="preview-seek-failure">
           <p role="alert">{preview.failure}</p>
-          <p>Choose another moment to try again. You can still download the original file.</p>
         </div>}
     </div>
   </div>
