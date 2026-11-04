@@ -27,11 +27,16 @@ class ExactTextTokenizer extends Tokenizer {
   override next(): Token {
     const start = this.pos()
     const token = super.next()
-    if (token.type === Type.string) {
-      const content = this.data.subarray(start + textHeaderBytes(this.data[start]!), this.pos())
-      if (UTF8_BYTE_ORDER_MARK.every((value, index) => content[index] === value)) {
-        token.value = BOM_PRESERVING_UTF8.decode(content)
-      }
+    if (token.type !== Type.string) return token
+    const contentStart = start + textHeaderBytes(this.data[start]!)
+    const contentEnd = this.pos()
+    if (
+      contentEnd - contentStart >= UTF8_BYTE_ORDER_MARK.length &&
+      this.data[contentStart] === UTF8_BYTE_ORDER_MARK[0] &&
+      this.data[contentStart + 1] === UTF8_BYTE_ORDER_MARK[1] &&
+      this.data[contentStart + 2] === UTF8_BYTE_ORDER_MARK[2]
+    ) {
+      token.value = BOM_PRESERVING_UTF8.decode(this.data.subarray(contentStart, contentEnd))
     }
     return token
   }

@@ -42,8 +42,28 @@ describe('canonical CBOR wire validation', () => {
     for (const text of [short, long, bomOnly, `a${bomOnly}`]) {
       expect(open(encodeCanonicalCbor(text))).toBe(text)
     }
-    const nested = new Map<number, unknown>([[0, [short, 'plain']], [1, new Map([[2, long]])]])
+    const nested = new Map<number, unknown>([[0, ['', short, '', 'plain', bomOnly, '']], [1, new Map([[2, long]])]])
     expect(open(encodeCanonicalCbor(nested))).toEqual(nested)
+  })
+
+  it.each([
+    [255, [0x78, 0xff]],
+    [256, [0x79, 0x01, 0x00]],
+    [65_535, [0x79, 0xff, 0xff]],
+    [65_536, [0x7a, 0x00, 0x01, 0x00, 0x00]],
+  ] as const)('preserves leading U+FEFF in %i-byte text across length headers and input offsets', (length, header) => {
+    const text = `\ufeff${'x'.repeat(length - 3)}`
+    const encoded = encodeCanonicalCbor(text)
+    expect(encoded.subarray(0, header.length)).toEqual(Uint8Array.from(header))
+    expect(open(encoded)).toBe(text)
+
+    // Invalid surrounding bytes expose any decoder that ignores the input view's bounds.
+    const offset = 5
+    const padded = new Uint8Array(encoded.length + offset * 2).fill(0xff)
+    padded.set(encoded, offset)
+    for (const input of [padded, Buffer.from(padded)]) {
+      expect(open(input.subarray(offset, offset + encoded.length))).toBe(text)
+    }
   })
 
   it('decodes byte strings as plain Uint8Array even from a Buffer input', () => {

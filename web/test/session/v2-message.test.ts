@@ -40,6 +40,23 @@ describe('v2 session wire registry', () => {
 })
 
 describe('v2 authenticated sender control schemas', () => {
+  it('preserves a BOM-only operation failure message through the session envelope', () => {
+    const body = encodeBody(new Map<number, unknown>([
+      [0, 1], [1, 4], [2, 0x4001], [3, false], [4, null], [5, '\ufeff'],
+    ]))
+    const message = decodeMessage(encodeMessage(MESSAGE_KIND.operationError, identity(1), body).plaintext)
+    expect(message.body).toEqual(body)
+    expect(() => validateSenderControlBody(message.kind, message.body)).not.toThrow()
+    expect(decodeOperationErrorControl(message.body).message).toBe('\ufeff')
+  })
+
+  it('accepts a BOM-only session terminal message without treating it as empty', () => {
+    const body = encodeBody(new Map<number, unknown>([[0, 1], [1, 0x1001], [2, '\ufeff']]))
+    const message = decodeMessage(encodeMessage(MESSAGE_KIND.sessionTerminal, undefined, body).plaintext)
+    expect(message.body).toEqual(body)
+    expect(() => validateSenderControlBody(message.kind, message.body)).not.toThrow()
+  })
+
   it('freezes operation retry delays to 1 through 30000 milliseconds', () => {
 		const operationError = (retryAfterMilliseconds: number) => encodeBody(
 			new Map<number, unknown>([
