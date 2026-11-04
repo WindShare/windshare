@@ -21,12 +21,12 @@ export function VideoFrame({ preview, actions }: {
   const canvas = useRef<HTMLCanvasElement>(null)
   const decoder = useRef<HTMLVideoElement>(null)
   const [presentedId, setPresentedId] = useState<number | null>(null)
-  const [position, setPosition] = useState(preview.positionSeconds)
-  const requested = useRef(preview.positionSeconds)
+  const [position, setPosition] = useState(preview.requestedSeconds)
+  const requested = useRef(preview.requestedSeconds)
   const drag = useRef<{ pointerId: number; origin: number } | null>(null)
-  const pending = preview.seeking || presentedId !== preview.presentationId
+  const pending = preview.failure === null && (preview.seeking || presentedId !== preview.presentationId)
   const seek = (seconds: number) => {
-    if (seconds === requested.current) return
+    if (seconds === requested.current && preview.failure === null) return
     requested.current = seconds
     actions.seek(seconds)
   }
@@ -50,12 +50,22 @@ export function VideoFrame({ preview, actions }: {
   })
   const fail = useEffectEvent(() => actions.failed(preview.presentationId))
   useLayoutEffect(() => {
+    // The controller publishes both requested intent and failure rollback. A
+    // live drag stays local; only its cancellation origin follows that state.
+    requested.current = preview.requestedSeconds
+    if (drag.current !== null) {
+      drag.current.origin = preview.requestedSeconds
+      return
+    }
+    setPosition(preview.requestedSeconds)
+  }, [preview.requestedSeconds])
+  useLayoutEffect(() => {
     const video = decoder.current
     if (video === null) return
     // The decoder's lifetime owns its callback, so replacement or closure cannot
     // let an obsolete frame overwrite the retained canvas or settle a new attempt.
-    return observeVideoFrame(video, preview.positionSeconds, () => present(video), fail)
-  }, [preview.presentationId, preview.positionSeconds, preview.url])
+    return observeVideoFrame(video, preview.decodeSeconds, () => present(video), fail)
+  }, [preview.presentationId, preview.decodeSeconds, preview.url])
 
   return <div className="video-frame-preview">
     <div className="preview-frame-stage" style={{ '--preview-ratio': preview.width / preview.height } as CSSProperties}
@@ -92,7 +102,11 @@ export function VideoFrame({ preview, actions }: {
         }}
         onPointerCancel={cancelDrag}
         onLostPointerCapture={cancelDrag} />
-      <p className="preview-seek-hint">Choose a moment to preview. Download the video to play it.</p>
+      {preview.failure === null
+        ? <p className="preview-seek-hint">Choose a moment to preview. Download the video to play it.</p>
+        : <div className="preview-seek-failure">
+          <p role="alert">{preview.failure}</p>
+        </div>}
     </div>
   </div>
 }

@@ -67,8 +67,17 @@ export type PreviewSnapshot =
       readonly width: number
       readonly height: number
       readonly durationSeconds: number
-      readonly positionSeconds: number
+      // The slider position: the seconds the latest seek requested (not the
+      // keyframe presented for it), or on open the keyframe seek(0) chose.
+      readonly requestedSeconds: number
+      // The decoder element's time for the presented sample; not shown.
+      readonly decodeSeconds: number
       readonly seeking: boolean
+      // Why the latest seek showed no new frame. The preview stays open on the
+      // previous frame, with the download still available, and
+      // requestedSeconds is rolled back to the position requested for that
+      // frame.
+      readonly failure: string | null
     }
   | {
       readonly state: 'error'

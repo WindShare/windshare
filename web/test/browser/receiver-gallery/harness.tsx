@@ -22,6 +22,9 @@ class GalleryController {
   readonly intents: string[] = []
   #videoUrl: string | undefined
   holdVideoSeeks = false
+  // The requested position of the frame on the canvas, as the production
+  // controller tracks it for rollback.
+  #presentedSeconds = 0
   close = () => { if (this.#videoUrl !== undefined) URL.revokeObjectURL(this.#videoUrl) }
   constructor(snapshot: ReceiverSnapshot) { this.#snapshot = snapshot }
   getSnapshot = () => this.#snapshot
@@ -71,7 +74,7 @@ class GalleryController {
       syntheticVideo().then(video => {
         this.#videoUrl = video.url
         this.#publish({ preview: { state: 'video', fileId: id, name, ...video, presentationId: 2,
-          positionSeconds: 0, seeking: false } })
+          requestedSeconds: 0, decodeSeconds: 0, seeking: false, failure: null } })
       }).catch(() => this.previewMediaFailed())
       return
     }
@@ -84,20 +87,34 @@ class GalleryController {
     this.intents.push('seek:' + seconds)
     const preview = this.#snapshot.preview
     if (preview.state !== 'video') return
-    this.#publish({ preview: { ...preview, seeking: true } })
+    this.#publish({ preview: { ...preview, requestedSeconds: seconds, seeking: true, failure: null } })
     if (!this.holdVideoSeeks) this.completeVideoSeek(seconds).catch(() => this.previewMediaFailed())
   }
-  completeVideoSeek = async (seconds: number, decoderUrl?: string) => {
+  // decodeSeconds is the decoder time of the presented keyframe; it defaults to
+  // the request, and differs from it for a seek between keyframes.
+  completeVideoSeek = async (seconds: number, decoderUrl?: string, decodeSeconds = seconds) => {
     const preview = this.#snapshot.preview
     if (preview.state !== 'video') throw new Error('No video preview is open')
     const bytes = await fetch(this.#videoUrl!).then(response => response.blob())
     if (this.#snapshot.preview !== preview) return
     URL.revokeObjectURL(this.#videoUrl!)
     this.#videoUrl = URL.createObjectURL(bytes)
-    this.#publish({ preview: { ...preview, seeking: false, positionSeconds: seconds,
+    // Like production previewSnapshot, a new presentation carries no failure.
+    this.#publish({ preview: { ...preview, seeking: false, failure: null, requestedSeconds: seconds, decodeSeconds,
       presentationId: preview.presentationId + 1, url: decoderUrl ?? this.#videoUrl } })
   }
-  previewMediaPresented = (id: number) => { this.intents.push('presented:' + id) }
+  // The production controller rolls back to the requested position of the
+  // presented frame on failure.
+  failVideoSeek = (message: string) => {
+    const preview = this.#snapshot.preview
+    if (preview.state !== 'video') throw new Error('No video preview is open')
+    this.#publish({ preview: { ...preview, seeking: false, failure: message, requestedSeconds: this.#presentedSeconds } })
+  }
+  previewMediaPresented = (id: number) => {
+    this.intents.push('presented:' + id)
+    const preview = this.#snapshot.preview
+    if (preview.state === 'video' && preview.presentationId === id) this.#presentedSeconds = preview.requestedSeconds
+  }
   previewMediaFailed = () => {
     this.#publish({ preview: { state: 'error', fileId: 'photo', name: 'Photo', message: 'The browser could not decode this preview.' } })
   }
@@ -164,7 +181,8 @@ export async function mountGallery(scenario: Scenario = 'folder'): Promise<void>
     windshareAdvanceProgress: active.advanceProgress,
     windshareUpdatePathActivity: active.updatePathActivity,
     windshareUpdateConnection: active.updateConnection,
-    windshareHoldVideoSeeks: holdVideoSeeks, windshareCompleteVideoSeek: completeVideoSeek })
+    windshareHoldVideoSeeks: holdVideoSeeks, windshareCompleteVideoSeek: completeVideoSeek,
+    windshareFailVideoSeek: active.failVideoSeek })
   const container = document.createElement('div')
   container.dataset.galleryScenario = scenario
   const toolbar = document.createElement('nav')
@@ -188,8 +206,8 @@ export async function mountGallery(scenario: Scenario = 'folder'): Promise<void>
 
 export function holdVideoSeeks() { active!.holdVideoSeeks = true }
 
-export function completeVideoSeek(seconds: number, decoderUrl?: string) {
-  return active!.completeVideoSeek(seconds, decoderUrl)
+export function completeVideoSeek(seconds: number, decoderUrl?: string, decodeSeconds?: number) {
+  return active!.completeVideoSeek(seconds, decoderUrl, decodeSeconds)
 }
 
 export function galleryEvidence() {

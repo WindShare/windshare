@@ -1,6 +1,7 @@
 import type { ISOFile, Movie, MP4BoxBuffer, Sample, Track } from 'mp4box'
 
 import { bigintToSafeNumber, byteRange, type ByteRange } from '../content/geometry'
+import { initializeKeyframeFragment } from './mp4box-fragment'
 
 export const VIDEO_EDGE_METADATA_BYTES = 256 * 1024
 export const VIDEO_METADATA_BYTES = 4 * 1024 * 1024
@@ -12,6 +13,7 @@ export const VIDEO_MAXIMUM_SAMPLES = 1_000_000
 
 const TOP_LEVEL_BOX_LIMIT = 64
 const MP4_HEADER_BYTES = 16
+const EMPTY_EDIT_MEDIA_TIME = -1
 const SUPPORTED_VIDEO_CODEC = /^(?:avc1|avc3|hvc1|hev1|vp09|av01)\./u
 
 export interface PreviewRangeSource {
@@ -29,7 +31,11 @@ export interface Mp4Metadata {
 
 export interface Mp4Segment {
   readonly bytes: Blob
-  readonly positionSeconds: number
+  // The selected keyframe on the source clip's edit-list presentation timeline.
+  readonly keyframeSeconds: number
+  // Where the decoder element finds that keyframe in `bytes`. The one-sample
+  // segment carries no edit list, so this is the sample's raw composition time.
+  readonly decodeSeconds: number
 }
 
 interface MetadataPart {
@@ -46,9 +52,18 @@ interface TopLevelBox extends BoxLocation {
   readonly type: string
 }
 
+// A sync sample and its position on the presentation timeline, in
+// track-timescale ticks.
+interface PresentedKeyframe {
+  readonly index: number
+  readonly ticks: number
+}
+
 interface ParsedMetadata {
   readonly metadata: Mp4Metadata
   readonly trackId: number
+  readonly timescale: number
+  readonly keyframes: readonly PresentedKeyframe[]
   readonly parts: readonly MetadataPart[]
 }
 
@@ -63,12 +78,16 @@ export class Mp4RangePreview {
   readonly metadata: Mp4Metadata
   readonly #source: PreviewRangeSource
   readonly #trackId: number
+  readonly #timescale: number
+  readonly #keyframes: readonly PresentedKeyframe[]
   readonly #parts: readonly MetadataPart[]
 
   private constructor(source: PreviewRangeSource, parsed: ParsedMetadata) {
     this.#source = source
     this.metadata = parsed.metadata
     this.#trackId = parsed.trackId
+    this.#timescale = parsed.timescale
+    this.#keyframes = parsed.keyframes
     this.#parts = parsed.parts
   }
 
@@ -87,22 +106,15 @@ export class Mp4RangePreview {
     const file = await metadataFile(this.#parts)
     const info = requireMovie(file)
     const track = requireTrack(info, this.#trackId)
-    file.setSegmentOptions(track.id, track.id, {
-      nbSamples: 1,
-      nbSamplesPerFragment: 1,
-      rapAlignement: false,
-    })
-    const initialization = file.initializeSegmentation('per-track')
-      .find((candidate) => candidate.id === track.id)
-    if (initialization === undefined || initialization.buffer.byteLength > VIDEO_METADATA_BYTES) {
+    const keyframe = this.#keyframeAt(seconds)
+    const sample = file.getTrackSamplesInfo(track.id)[keyframe.index]
+    requireSample(sample, this.#source.exactSize)
+    const initialization = initializeKeyframeFragment(file, track.id, keyframe.index)
+    if (initialization === undefined || initialization.byteLength > VIDEO_METADATA_BYTES) {
       throw new VideoPreviewError('MP4 initialization segment exceeds the preview limit')
     }
-    file.seek(seconds, true)
-    const fragmented = file.fragmentedTracks.find((candidate) => candidate.id === track.id)
-    const samples = file.getTrackSamplesInfo(track.id)
-    const sampleIndex = fragmented?.state.lastFragmentSampleNumber ?? -1
-    const sample = samples[sampleIndex]
-    requireSample(sample, this.#source.exactSize)
+    const keyframeSeconds = keyframe.ticks / this.#timescale
+    const decodeSeconds = sample.cts / this.#timescale
     const sampleData = await this.#source.read(
       byteRange(BigInt(sample.offset), BigInt(sample.offset + sample.size)),
       signal,
@@ -118,13 +130,14 @@ export class Mp4RangePreview {
       appendPart(file, { start: sample.offset, data: sampleData })
       file.flush()
       const segment = await segmentPromise
-      const total = initialization.buffer.byteLength + segment.byteLength
+      const total = initialization.byteLength + segment.byteLength
       if (total > VIDEO_METADATA_BYTES + VIDEO_SAMPLE_BYTES) {
         throw new VideoPreviewError('Video preview segment exceeds its memory limit')
       }
       return Object.freeze({
-        bytes: new Blob([initialization.buffer, segment], { type: 'video/mp4' }),
-        positionSeconds: sample.cts / sample.timescale,
+        bytes: new Blob([initialization, segment], { type: 'video/mp4' }),
+        keyframeSeconds,
+        decodeSeconds,
       })
     } finally {
       unlink()
@@ -132,6 +145,23 @@ export class Mp4RangePreview {
       file.stop()
       await segmentPromise.catch(() => undefined)
     }
+  }
+
+  // The last keyframe presented at or before the target tick. Head-trimmed
+  // copies (`-ss … -c copy`) keep the keyframe before the cut and hide it with
+  // the edit list, so a target before the first visible keyframe uses that
+  // keyframe, which is later than the target. The list is never empty: open
+  // rejects a file without a usable keyframe.
+  #keyframeAt(seconds: number): PresentedKeyframe {
+    const targetTicks = Math.round(seconds * this.#timescale)
+    let low = 0
+    let high = this.#keyframes.length - 1
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2)
+      if (this.#keyframes[middle]!.ticks <= targetTicks) low = middle
+      else high = middle - 1
+    }
+    return this.#keyframes[low]!
   }
 }
 
@@ -172,6 +202,8 @@ async function parseMetadata(
   const durationSeconds = track.movie_duration / track.movie_timescale
   return Object.freeze({
     trackId: track.id,
+    timescale: track.timescale,
+    keyframes: presentedKeyframes(track, samples, durationSeconds),
     parts: Object.freeze(parts.map((part) => Object.freeze({
       start: part.start,
       data: part.data.slice(),
@@ -281,6 +313,60 @@ function validateTrack(track: Track, samples: readonly Sample[], exactSize: bigi
     throw new VideoPreviewError('MP4 sample count exceeds the preview limit')
   }
   for (const sample of samples) requireSample(sample, exactSize)
+}
+
+// Encoders that reorder frames (H.264/HEVC B-frames) start composition after
+// zero and record that delay in an edit list. Presentation time is composition
+// time minus the first edit's media start, plus any leading empty edits. All in
+// track-timescale ticks: Chromium presents empty edits in whole track ticks.
+function presentationOffsetTicks(track: Track): number {
+  let emptyMovieTicks = 0
+  for (const edit of track.edits ?? []) {
+    if (edit.media_time === EMPTY_EDIT_MEDIA_TIME) {
+      emptyMovieTicks += edit.segment_duration
+      continue
+    }
+    return requireOffset(edit.media_time - emptyTicks(track, emptyMovieTicks), track)
+  }
+  return requireOffset(-emptyTicks(track, emptyMovieTicks), track)
+}
+
+function emptyTicks(track: Track, movieTicks: number): number {
+  return Math.round(movieTicks * track.timescale / track.movie_timescale)
+}
+
+// Only frames inside the clip can represent it. A hidden pre-roll keyframe is
+// a decoding dependency, not a preview of the edited content.
+function presentedKeyframes(
+  track: Track,
+  samples: readonly Sample[],
+  durationSeconds: number,
+): readonly PresentedKeyframe[] {
+  const offsetTicks = presentationOffsetTicks(track)
+  const keyframes: PresentedKeyframe[] = []
+  for (const [index, sample] of samples.entries()) {
+    if (!sample.is_sync) continue
+    const ticks = sample.cts - offsetTicks
+    if (ticks >= 0 && ticks / track.timescale <= durationSeconds) {
+      keyframes.push(Object.freeze({ index, ticks }))
+    }
+  }
+  if (keyframes.length === 0) {
+    throw new VideoPreviewError('MP4 has no keyframe on its presentation timeline', {
+      cause: { offsetTicks, timescale: track.timescale, durationSeconds },
+    })
+  }
+  keyframes.sort((left, right) => left.ticks - right.ticks)
+  return Object.freeze(keyframes)
+}
+
+function requireOffset(ticks: number, track: Track): number {
+  if (!Number.isSafeInteger(ticks) || Math.abs(ticks / track.timescale) > VIDEO_MAXIMUM_SECONDS) {
+    throw new VideoPreviewError('MP4 edit list timing exceeds the preview limits', {
+      cause: { offsetTicks: ticks, timescale: track.timescale, edits: track.edits },
+    })
+  }
+  return ticks
 }
 
 function requireSample(sample: Sample | undefined, exactSize: bigint): asserts sample is Sample {

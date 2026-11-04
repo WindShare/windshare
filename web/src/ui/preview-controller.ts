@@ -2,6 +2,7 @@ import { isAutomaticPhotoCandidate, AutomaticPhotoDeferredError, AUTOMATIC_PHOTO
 import type { CatalogEntry } from '../catalog/records'
 import { RemoteOperationError } from '../content/session-operations'
 import { RemoteRevisionError } from '../content/session-services'
+import { isPositionLocalPreviewFailure } from '../preview/preview'
 import { unclassifiedFailureFact, type FailureFact } from '../diagnostics/incident/fact'
 import {
   excludedPresentationDecision,
@@ -23,6 +24,8 @@ import {
 
 type PreviewScopeKind = 'preview_open' | 'preview_seek' | 'preview_media'
 
+const MEDIA_FAILURE_MESSAGE = 'The browser could not decode this bounded media preview.'
+
 interface PreviewIncidentPort {
   openScope(kind: PreviewScopeKind): IncidentScopeOwner
   submitDecision(scope: IncidentScopeHandle, decision: PresentationDecision): void
@@ -38,9 +41,10 @@ interface PendingPreviewSeek {
   readonly attempt: PreviewAttempt
 }
 
+type ReadyPreviewSnapshot = Extract<ReceiverSnapshot['preview'], { state: 'image' | 'video' }>
+
 interface PendingMediaPresentation {
-  readonly id: number
-  readonly url: string
+  readonly preview: ReadyPreviewSnapshot
   readonly attempt: PreviewAttempt
 }
 
@@ -51,6 +55,11 @@ interface ScopedActivePreview extends ActivePreview {
   seekAttempt?: PendingPreviewSeek
   mediaAttempt?: PendingMediaPresentation
   incidentAttempt?: PreviewAttempt
+  // Retain the complete accepted presentation instead of independent flags and
+  // positions that could disagree about what is actually on the canvas.
+  presented?: ReadyPreviewSnapshot
+  // The attempt whose incident reports this session's local seek failures.
+  localFailureAttempt?: PreviewAttempt
 }
 
 export interface PreviewControllerHost {
@@ -159,7 +168,7 @@ export class PreviewController {
     }
     active.seekAttempt = pending
     try {
-      this.#publishPreview(Object.freeze({ ...preview, seeking: true }))
+      this.#publishPreview(Object.freeze({ ...preview, requestedSeconds: seconds, seeking: true, failure: null }))
     } catch (error) {
       this.#exclude(pending.attempt, 'not_user_visible')
       this.#closeAttempt(pending.attempt)
@@ -182,10 +191,12 @@ export class PreviewController {
           this.#closeAttempt(pending.attempt)
           return
         }
-        const media = this.#startMediaAttempt(active, presentation.url)
-        const projected = previewSnapshot(active.entry, presentation, false, media.id)
+        const projected = previewSnapshot(active.entry, presentation, this.#nextId++)
+        const media = this.#startMediaAttempt(active, projected.state === 'video'
+          ? Object.freeze({ ...projected, requestedSeconds: seconds })
+          : projected)
         try {
-          this.#publishPreview(projected)
+          this.#publishPreview(media.preview)
         } catch (error) {
           this.#exclude(pending.attempt, 'not_user_visible')
           this.#closeAttempt(pending.attempt)
@@ -219,9 +230,17 @@ export class PreviewController {
           delete active.seekAttempt
           return
         }
-        this.#recordFailure(pending.attempt, () => previewFailureFact('preview_seek', error))
-        active.incidentAttempt = pending.attempt
         delete active.seekAttempt
+        const fact = () => previewFailureFact('preview_seek', error)
+        if (active.presented?.state === 'video' && isPositionLocalPreviewFailure(error)) {
+          // Only this position failed; the session, its previous frame and the
+          // download stay available, so the preview remains open.
+          this.#recordLocalFailure(active, pending.attempt, fact)
+          this.#publishVideoFailure(active, this.#host.publicError(error))
+          return
+        }
+        this.#recordFailure(pending.attempt, fact)
+        this.#retainIncidentAttempt(active, pending.attempt)
         const failure = Object.freeze({
           state: 'error' as const,
           fileId: active.entry.idText,
@@ -243,13 +262,20 @@ export class PreviewController {
       media === undefined ||
       (preview.state !== 'image' && preview.state !== 'video') ||
       preview.presentationId !== presentationId ||
-      media.id !== presentationId
+      media.preview.presentationId !== presentationId
     ) {
       return
     }
     this.#exclude(media.attempt, 'success')
     this.#closeAttempt(media.attempt)
     delete active.mediaAttempt
+    active.presented = media.preview
+    if (preview.state === 'video' && media.preview.state === 'video' && preview.failure !== null &&
+        preview.requestedSeconds !== media.preview.requestedSeconds) {
+      // A prior frame can arrive after a newer request failed. Its accepted
+      // snapshot owns the rollback position, without changing the latest error.
+      this.#publishPreview(Object.freeze({ ...preview, requestedSeconds: media.preview.requestedSeconds }))
+    }
   }
 
   mediaFailed(presentationId: number): void {
@@ -261,20 +287,34 @@ export class PreviewController {
       media === undefined ||
       (preview.state !== 'image' && preview.state !== 'video') ||
       preview.presentationId !== presentationId ||
-      media.id !== presentationId
+      media.preview.presentationId !== presentationId
     ) {
       return
     }
-    this.#recordFailure(media.attempt, () => unclassifiedFailureFact({
+    const fact = () => unclassifiedFailureFact({
       stage: 'preview_media',
       recoveryDisposition: 'none',
-    }))
-    active.incidentAttempt = media.attempt
+    })
+    delete active.mediaAttempt
+    if (preview.state === 'video' && active.presented?.state === 'video') {
+      // A later seek's frame did not present: keep the earlier frame on screen.
+      this.#recordLocalFailure(active, media.attempt, fact)
+      // A newer seek is still reading its range, and the snapshot already
+      // belongs to it (it reuses this presentation's id while it loads). Its
+      // own result decides the slider, status and failure next, so this stale
+      // frame only adds to the incident: publishing it would clear seeking,
+      // show an error and roll the slider back under a seek still in flight.
+      if (active.seekAttempt !== undefined) return
+      this.#publishVideoFailure(active, MEDIA_FAILURE_MESSAGE)
+      return
+    }
+    this.#recordFailure(media.attempt, fact)
+    this.#retainIncidentAttempt(active, media.attempt)
     const failure = Object.freeze({
       state: 'error' as const,
       fileId: active.entry.idText,
       name: active.entry.name,
-      message: 'The browser could not decode this bounded media preview.',
+      message: MEDIA_FAILURE_MESSAGE,
     })
     this.#closeActive('stale_replacement')
     this.#publishPreview(failure)
@@ -304,9 +344,9 @@ export class PreviewController {
         return
       }
       active.session = session
-      const media = this.#startMediaAttempt(active, session.current.url)
-      const projected = previewSnapshot(active.entry, session.current, false, media.id)
-      this.#publishPreview(projected)
+      const media = this.#startMediaAttempt(active,
+        previewSnapshot(active.entry, session.current, this.#nextId++))
+      this.#publishPreview(media.preview)
       this.#exclude(active.openAttempt, 'success')
       this.#closeAttempt(active.openAttempt)
     } catch (error) {
@@ -335,9 +375,48 @@ export class PreviewController {
     }
   }
 
+  #retainIncidentAttempt(active: ScopedActivePreview, attempt: PreviewAttempt): void {
+    const previous = active.incidentAttempt
+    active.incidentAttempt = attempt
+    if (previous !== undefined && previous !== attempt) this.#closeAttempt(previous)
+  }
+
+  // Scrubbing a damaged region must not flood diagnostics. Local failures share
+  // one incident, with later failures recorded as consequences. A session-ending
+  // failure owns a separate incident because it requires different recovery.
+  #recordLocalFailure(
+    active: ScopedActivePreview,
+    attempt: PreviewAttempt,
+    failure: () => FailureFact,
+  ): void {
+    const reported = active.localFailureAttempt
+    if (reported === undefined) {
+      this.#recordFailure(attempt, failure)
+      active.localFailureAttempt = attempt
+      this.#retainIncidentAttempt(active, attempt)
+      return
+    }
+    this.#closeAttempt(attempt)
+    try {
+      reported.scope?.facts.record(failure(), 'consequence')
+    } catch {
+      // Repeated-failure evidence cannot change the visible preview result.
+    }
+  }
+
+  #publishVideoFailure(active: ScopedActivePreview, failure: string): void {
+    const preview = this.#host.snapshot().preview
+    if (preview.state !== 'video' || active.presented?.state !== 'video') return
+    // The canvas still shows the last presented frame, so the slider, the
+    // time label and the next seek's baseline return to the position the
+    // user requested for it.
+    const requestedSeconds = active.presented.requestedSeconds
+    this.#publishPreview(Object.freeze({ ...preview, requestedSeconds, seeking: false, failure }))
+  }
+
   #startMediaAttempt(
     active: ScopedActivePreview,
-    url: string,
+    preview: ReadyPreviewSnapshot,
   ): PendingMediaPresentation {
     const replaced = active.mediaAttempt
     if (replaced !== undefined) {
@@ -346,8 +425,7 @@ export class PreviewController {
       delete active.mediaAttempt
     }
     const media: PendingMediaPresentation = {
-      id: this.#nextId++,
-      url,
+      preview,
       attempt: this.#newAttempt('preview_media'),
     }
     active.mediaAttempt = media
