@@ -13,10 +13,6 @@ export const VIDEO_MAXIMUM_SAMPLES = 1_000_000
 const TOP_LEVEL_BOX_LIMIT = 64
 const MP4_HEADER_BYTES = 16
 const EMPTY_EDIT_MEDIA_TIME = -1
-// VideoPreviewError messages reach the preview alert as written.
-const NO_PRESENTED_KEYFRAME_MESSAGE =
-  'This video can’t be previewed because it was trimmed in a way that leaves no complete frame to show.'
-const UNSUPPORTED_TIMING_MESSAGE = 'This video’s timing information isn’t supported by the preview.'
 const SUPPORTED_VIDEO_CODEC = /^(?:avc1|avc3|hvc1|hev1|vp09|av01)\./u
 
 export interface PreviewRangeSource {
@@ -34,7 +30,12 @@ export interface Mp4Metadata {
 
 export interface Mp4Segment {
   readonly bytes: Blob
+  // The selected keyframe on the presentation (edit-list) timeline: what the
+  // slider and time label show.
   readonly positionSeconds: number
+  // Where the decoder element finds that keyframe in `bytes`. The one-sample
+  // segment carries no edit list, so this is the sample's raw composition time.
+  readonly frameSeconds: number
 }
 
 interface MetadataPart {
@@ -51,7 +52,8 @@ interface TopLevelBox extends BoxLocation {
   readonly type: string
 }
 
-// A sync sample on the presentation timeline, in track-timescale ticks.
+// A sync sample and its position on the presentation timeline, in
+// track-timescale ticks.
 interface PresentedKeyframe {
   readonly index: number
   readonly ticks: number
@@ -109,6 +111,7 @@ export class Mp4RangePreview {
       nbSamplesPerFragment: 1,
       rapAlignement: false,
     })
+    stripEditList(file.getTrackById(track.id))
     const initialization = file.initializeSegmentation('per-track')
       .find((candidate) => candidate.id === track.id)
     if (initialization === undefined || initialization.buffer.byteLength > VIDEO_METADATA_BYTES) {
@@ -118,17 +121,17 @@ export class Mp4RangePreview {
     const keyframe = this.#keyframeAt(seconds)
     const sample = samples[keyframe.index]
     requireSample(sample, this.#source.exactSize)
-    // The keyframe is chosen in integer ticks. mp4box compares raw cts with
-    // seconds * timescale, so seek half a tick past the chosen sample: an exact
-    // cts / timescale can land below cts in float math and select the keyframe
-    // a whole GOP earlier. The segment keeps the edit list, so the browser
-    // presents the sample at its presentation time.
-    file.seek((sample.cts + 0.5) / this.#timescale, true)
-    const fragmented = file.fragmentedTracks.find((candidate) => candidate.id === track.id)
-    if (fragmented?.state.lastFragmentSampleNumber !== keyframe.index) {
-      throw new VideoPreviewError('This video could not be previewed at this position.')
-    }
+    // Start fragmentation at the chosen sample index instead of mp4box's
+    // time-based seek. That seek compares raw cts with seconds * timescale in
+    // float math, and skips the whole track (silently keeping sample 0) when
+    // the target is past the end of the last decode-order sample, which an
+    // open-GOP file whose last keyframe is followed only by its leading frames
+    // reaches at that keyframe.
+    const trak = file.getTrackById(track.id)
+    trak.nextSample = keyframe.index
+    file.resetFragmentedTrackStateAfterSeek(trak, keyframe.index)
     const positionSeconds = keyframe.ticks / this.#timescale
+    const frameSeconds = sample.cts / this.#timescale
     const sampleData = await this.#source.read(
       byteRange(BigInt(sample.offset), BigInt(sample.offset + sample.size)),
       signal,
@@ -151,6 +154,7 @@ export class Mp4RangePreview {
       return Object.freeze({
         bytes: new Blob([initialization.buffer, segment], { type: 'video/mp4' }),
         positionSeconds,
+        frameSeconds,
       })
     } finally {
       unlink()
@@ -162,10 +166,10 @@ export class Mp4RangePreview {
 
   // The last keyframe presented at or before the target tick. Head-trimmed
   // copies (`-ss … -c copy`) keep the keyframe before the cut and hide it with
-  // the edit list; the browser never presents it, so a target before the first
-  // visible keyframe uses that keyframe, which is later than the target.
+  // the edit list, so a target before the first visible keyframe uses that
+  // keyframe, which is later than the target. The list is never empty: open
+  // rejects a file without a usable keyframe.
   #keyframeAt(seconds: number): PresentedKeyframe {
-    if (this.#keyframes.length === 0) throw new VideoPreviewError(NO_PRESENTED_KEYFRAME_MESSAGE)
     const targetTicks = Math.round(seconds * this.#timescale)
     let low = 0
     let high = this.#keyframes.length - 1
@@ -331,7 +335,7 @@ function validateTrack(track: Track, samples: readonly Sample[], exactSize: bigi
 // Encoders that reorder frames (H.264/HEVC B-frames) start composition after
 // zero and record that delay in an edit list. Presentation time is composition
 // time minus the first edit's media start, plus any leading empty edits. All in
-// track-timescale ticks: the browser presents empty edits in whole track ticks.
+// track-timescale ticks: Chromium presents empty edits in whole track ticks.
 function presentationOffsetTicks(track: Track): number {
   let emptyMovieTicks = 0
   for (const edit of track.edits ?? []) {
@@ -339,9 +343,9 @@ function presentationOffsetTicks(track: Track): number {
       emptyMovieTicks += edit.segment_duration
       continue
     }
-    return requireOffset(edit.media_time - emptyTicks(track, emptyMovieTicks), track.timescale)
+    return requireOffset(edit.media_time - emptyTicks(track, emptyMovieTicks), track)
   }
-  return requireOffset(-emptyTicks(track, emptyMovieTicks), track.timescale)
+  return requireOffset(-emptyTicks(track, emptyMovieTicks), track)
 }
 
 function emptyTicks(track: Track, movieTicks: number): number {
@@ -349,7 +353,10 @@ function emptyTicks(track: Track, movieTicks: number): number {
 }
 
 // Sync samples presented within [0, duration], sorted by presentation tick.
-// Computed once at open.
+// Computed once at open. If the edit list hides every keyframe (a head-trimmed
+// copy of a long-GOP file whose only keyframe precedes the cut), the latest
+// hidden keyframe is shown at position 0. That frame is earlier than the
+// clip's first visible frame, but it is the only frame one sample can decode.
 function presentedKeyframes(
   track: Track,
   samples: readonly Sample[],
@@ -357,25 +364,46 @@ function presentedKeyframes(
 ): readonly PresentedKeyframe[] {
   const offsetTicks = presentationOffsetTicks(track)
   const keyframes: PresentedKeyframe[] = []
+  let hidden: PresentedKeyframe | undefined
   for (const [index, sample] of samples.entries()) {
     if (!sample.is_sync) continue
-    if (sample.timescale !== track.timescale) {
-      throw new VideoPreviewError(UNSUPPORTED_TIMING_MESSAGE)
-    }
     const ticks = sample.cts - offsetTicks
-    if (ticks >= 0 && ticks / track.timescale <= durationSeconds) {
+    if (ticks < 0) {
+      if (hidden === undefined || ticks > hidden.ticks) hidden = { index, ticks }
+    } else if (ticks / track.timescale <= durationSeconds) {
       keyframes.push(Object.freeze({ index, ticks }))
     }
+  }
+  if (keyframes.length === 0 && hidden !== undefined) {
+    keyframes.push(Object.freeze({ index: hidden.index, ticks: 0 }))
+  }
+  if (keyframes.length === 0) {
+    throw new VideoPreviewError('MP4 has no keyframe on its presentation timeline', {
+      cause: { offsetTicks, timescale: track.timescale, durationSeconds },
+    })
   }
   keyframes.sort((left, right) => left.ticks - right.ticks)
   return Object.freeze(keyframes)
 }
 
-function requireOffset(ticks: number, timescale: number): number {
-  if (!Number.isSafeInteger(ticks) || Math.abs(ticks / timescale) > VIDEO_MAXIMUM_SECONDS) {
-    throw new VideoPreviewError(UNSUPPORTED_TIMING_MESSAGE)
+function requireOffset(ticks: number, track: Track): number {
+  if (!Number.isSafeInteger(ticks) || Math.abs(ticks / track.timescale) > VIDEO_MAXIMUM_SECONDS) {
+    throw new VideoPreviewError('MP4 edit list timing exceeds the preview limits', {
+      cause: { offsetTicks: ticks, timescale: track.timescale, edits: track.edits },
+    })
   }
   return ticks
+}
+
+// The one-sample segment is decoded on its own raw timeline. Firefox and
+// WebKitGTK do not apply edit lists to it the way Chromium does, so it carries
+// none: every browser then places the sample at its composition time (or, in
+// Firefox, rebases it to zero), and positionSeconds stays the only
+// presentation-timeline value.
+function stripEditList(trak: ReturnType<ISOFile['getTrackById']>): void {
+  if (trak.boxes !== undefined) trak.boxes = trak.boxes.filter((box) => box.type !== 'edts')
+  delete trak.edts
+  trak.edtss = []
 }
 
 function requireSample(sample: Sample | undefined, exactSize: bigint): asserts sample is Sample {

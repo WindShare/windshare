@@ -71,7 +71,7 @@ class GalleryController {
       syntheticVideo().then(video => {
         this.#videoUrl = video.url
         this.#publish({ preview: { state: 'video', fileId: id, name, ...video, presentationId: 2,
-          positionSeconds: 0, seeking: false } })
+          positionSeconds: 0, frameSeconds: 0, seeking: false } })
       }).catch(() => this.previewMediaFailed())
       return
     }
@@ -94,7 +94,7 @@ class GalleryController {
     if (this.#snapshot.preview !== preview) return
     URL.revokeObjectURL(this.#videoUrl!)
     this.#videoUrl = URL.createObjectURL(bytes)
-    this.#publish({ preview: { ...preview, seeking: false, positionSeconds: seconds,
+    this.#publish({ preview: { ...preview, seeking: false, positionSeconds: seconds, frameSeconds: seconds,
       presentationId: preview.presentationId + 1, url: decoderUrl ?? this.#videoUrl } })
   }
   previewMediaPresented = (id: number) => { this.intents.push('presented:' + id) }

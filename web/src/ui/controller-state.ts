@@ -122,6 +122,7 @@ export function previewSnapshot(
         height: presentation.height,
         durationSeconds: presentation.durationSeconds,
         positionSeconds: presentation.positionSeconds,
+        frameSeconds: presentation.frameSeconds,
         seeking,
       })
 }

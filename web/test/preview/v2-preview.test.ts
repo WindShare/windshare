@@ -242,7 +242,11 @@ describe('v2 file preview runtime', () => {
           }
           const start = seconds === 0 ? 100_000n : 200_000n
           const sample = await source.read(byteRange(start, start + 4n), signal)
-          return Object.freeze({ bytes: new Blob([sample], { type: 'video/mp4' }), positionSeconds: seconds })
+          return Object.freeze({
+            bytes: new Blob([sample], { type: 'video/mp4' }),
+            positionSeconds: seconds,
+            frameSeconds: seconds + 0.2,
+          })
         },
       }
     }
@@ -254,14 +258,14 @@ describe('v2 file preview runtime', () => {
       new AbortController().signal,
       urls.ports,
     )
-    expect(preview.current).toMatchObject({ kind: 'video', url: 'blob:preview-1', positionSeconds: 0 })
+    expect(preview.current).toMatchObject({ kind: 'video', url: 'blob:preview-1', positionSeconds: 0, frameSeconds: 0.2 })
     expect(fixture.releases()).toBe(0)
 
     const superseded = preview.seek(1)
     await Promise.resolve()
     const latest = preview.seek(2)
     await expect(superseded).rejects.toMatchObject({ name: 'AbortError' })
-    await expect(latest).resolves.toMatchObject({ url: 'blob:preview-2', positionSeconds: 2 })
+    await expect(latest).resolves.toMatchObject({ url: 'blob:preview-2', positionSeconds: 2, frameSeconds: 2.2 })
     expect(pending[0]?.aborted).toBe(true)
     expect(urls.revoked).toEqual(['blob:preview-1'])
     expect(fixture.releases()).toBe(0)
@@ -317,7 +321,7 @@ describe('v2 file preview runtime', () => {
         },
         segmentAt: async () => {
           sampleReads += 1
-          return { bytes: new Blob(), positionSeconds: 0 }
+          return { bytes: new Blob(), positionSeconds: 0, frameSeconds: 0 }
         },
       }),
       supportsVideo: () => false,

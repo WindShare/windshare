@@ -58,6 +58,7 @@ export type PreviewPresentation =
       readonly height: number
       readonly durationSeconds: number
       readonly positionSeconds: number
+      readonly frameSeconds: number
     }
 
 export class PreviewRuntimeError extends Error {
@@ -164,7 +165,7 @@ export class FilePreview {
       const segment = await video.segmentAt(seconds, controller.signal)
       controller.signal.throwIfAborted()
       const url = this.#replaceUrl(segment.bytes)
-      this.#presentation = videoPresentation(this.#entry.name, url, video.metadata, segment.positionSeconds)
+      this.#presentation = videoPresentation(this.#entry.name, url, video.metadata, segment)
       return this.#presentation
     } finally {
       unlink()
@@ -325,7 +326,7 @@ function videoPresentation(
   name: string,
   url: string,
   metadata: Mp4Metadata,
-  positionSeconds: number,
+  segment: Mp4Segment,
 ): PreviewPresentation {
   return Object.freeze({
     kind: 'video',
@@ -335,7 +336,8 @@ function videoPresentation(
     width: metadata.width,
     height: metadata.height,
     durationSeconds: metadata.durationSeconds,
-    positionSeconds,
+    positionSeconds: segment.positionSeconds,
+    frameSeconds: segment.frameSeconds,
   })
 }
 

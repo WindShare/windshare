@@ -54,8 +54,8 @@ export function VideoFrame({ preview, actions }: {
     if (video === null) return
     // The decoder's lifetime owns its callback, so replacement or closure cannot
     // let an obsolete frame overwrite the retained canvas or settle a new attempt.
-    return observeVideoFrame(video, preview.positionSeconds, () => present(video), fail)
-  }, [preview.presentationId, preview.positionSeconds, preview.url])
+    return observeVideoFrame(video, preview.frameSeconds, () => present(video), fail)
+  }, [preview.presentationId, preview.frameSeconds, preview.url])
 
   return <div className="video-frame-preview">
     <div className="preview-frame-stage" style={{ '--preview-ratio': preview.width / preview.height } as CSSProperties}

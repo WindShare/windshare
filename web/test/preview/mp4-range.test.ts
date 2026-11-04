@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { createFile, type MP4BoxBuffer, type Sample } from 'mp4box'
 
 import { Mp4RangePreview, VideoPreviewError, type PreviewRangeSource } from '../../src/preview/mp4-range'
 import type { ByteRange } from '../../src/content/geometry'
@@ -7,6 +8,27 @@ import type { ByteRange } from '../../src/content/geometry'
 function box(bytes: Uint8Array, offset: number, size: number, type: string): void {
   new DataView(bytes.buffer).setUint32(offset, size, false)
   bytes.set([...type].map((value) => value.charCodeAt(0)), offset + 4)
+}
+
+// Offset of the first box of this type at any depth, found by its fourcc.
+function findBox(bytes: Uint8Array, type: string): number {
+  const code = [...type].map((value) => value.charCodeAt(0))
+  for (let offset = 4; offset + 4 <= bytes.byteLength; offset += 1) {
+    if (code.every((value, index) => bytes[offset + index] === value)) return offset - 4
+  }
+  return -1
+}
+
+async function segmentSamples(bytes: Uint8Array): Promise<Sample[]> {
+  const file = createFile()
+  let trackId: number | undefined
+  file.onReady = (info) => { trackId = info.videoTracks[0]?.id }
+  const buffer = bytes.slice().buffer as MP4BoxBuffer
+  buffer.fileStart = 0
+  file.appendBuffer(buffer)
+  file.flush()
+  if (trackId === undefined) throw new Error('Segment has no video track')
+  return file.getTrackSamplesInfo(trackId)
 }
 
 class RecordedSource implements PreviewRangeSource {
@@ -174,13 +196,76 @@ describe('v2 MP4 edit-list presentation time', () => {
     expectPositions(await seekPositions(targets, name), expected)
   })
 
-  // `-g 100` (a single keyframe) copied with `-ss 0.5 -c copy`: no keyframe is on
-  // the presentation timeline, so the preview must fail instead of reporting 0.
-  it('rejects a trimmed clip with no keyframe on the presentation timeline', async () => {
+  // `-g 100` (a single keyframe) copied with `-ss 0.5 -c copy`: the edit list
+  // hides the only keyframe (at -0.5 s). One sample can only decode that
+  // keyframe, so every target shows it at position 0, earlier than the clip's
+  // first visible frame, instead of failing the preview.
+  it('shows the hidden keyframe when the edit list hides every keyframe', async () => {
+    const signal = new AbortController().signal
     const preview = await openFixture('h264-head-trimmed-single-keyframe.mp4')
-    await expect(preview.segmentAt(0, new AbortController().signal))
-      .rejects.toThrow(VideoPreviewError)
-    await expect(preview.segmentAt(1, new AbortController().signal))
-      .rejects.toThrow('leaves no complete frame to show')
+    for (const target of [0, 0.7, 1.5]) {
+      const segment = await preview.segmentAt(target, signal)
+      expect(segment.positionSeconds).toBe(0)
+      expect(segment.frameSeconds).toBeCloseTo(2_048 / 10_240, 9)
+    }
+  })
+
+  // Same `h264-no-edit-list.mp4` with its stss entry count patched to zero:
+  // no sample is a keyframe, so open rejects it before any seek.
+  it('rejects a file without a presentable keyframe at open', async () => {
+    const bytes = fixture('h264-no-edit-list.mp4')
+    const stss = findBox(bytes, 'stss')
+    new DataView(bytes.buffer).setUint32(stss + 12, 0, false)
+    await expect(Mp4RangePreview.open(new RecordedSource(bytes), new AbortController().signal))
+      .rejects.toThrow(new VideoPreviewError('MP4 has no keyframe on its presentation timeline'))
+  })
+
+  // The decoder element gets the sample's raw composition time, since the
+  // one-sample segment carries no edit list. The no-B-frame fixtures are
+  // `-f lavfi -i testsrc=size=64x64:rate=10 -c:v libx264 -g 10 -bf 0 -pix_fmt
+  // yuv420p -fflags +bitexact -map_metadata -1`, with `-itsoffset 0.5` before
+  // `-i` and `-t 2` (leading empty edit: keyframes at 0.5 s and 1.5 s, raw cts
+  // 0 and 1 s), or `-t 3` copied with `-ss 0.5 -c copy` (head-trimmed:
+  // keyframes at 0.5 s and 1.5 s, raw cts 1 and 2 s).
+  it.each([
+    ['h264-bframes-edit-list.mp4', 0, 0, 2_048 / 10_240],
+    ['h264-bframes-edit-list.mp4', 1.5, 1, 12_288 / 10_240],
+    ['h264-leading-empty-edit.mp4', 0, 0.5, 2_048 / 10_240],
+    ['h264-leading-empty-edit-no-bframes.mp4', 0, 0.5, 0],
+    ['h264-leading-empty-edit-no-bframes.mp4', 1.5, 1.5, 1],
+    ['h264-head-trimmed.mp4', 0, 0.5, 12_288 / 10_240],
+    ['h264-head-trimmed-no-bframes.mp4', 0, 0.5, 1],
+    ['h264-head-trimmed-no-bframes.mp4', 1.5, 1.5, 2],
+    ['h264-no-edit-list.mp4', 1, 1, 1],
+  ] as const)('reports %s at %f s as position %f s, frame %f s', async (name, target, position, frame) => {
+    const preview = await openFixture(name)
+    const segment = await preview.segmentAt(target, new AbortController().signal)
+    expect(segment.positionSeconds).toBeCloseTo(position, 9)
+    expect(segment.frameSeconds).toBeCloseTo(frame, 9)
+    const bytes = new Uint8Array(await segment.bytes.arrayBuffer())
+    expect(findBox(fixture(name), 'edts') >= 0 || name === 'h264-no-edit-list.mp4').toBe(true)
+    expect(findBox(bytes, 'edts')).toBe(-1)
+    const samples = await segmentSamples(bytes)
+    expect(samples).toHaveLength(1)
+    expect(samples[0]).toMatchObject({ is_sync: true, cts: Math.round(frame * 10_240) })
+  })
+
+  // Open-GOP x264 (`-t 3 -g 12 -bf 2 -x264-params
+  // open-gop=1:scenecut=0:b-pyramid=0:b-adapt=0`) copied with `-frames:v 13`:
+  // decode order ends with the keyframe at 1.2 s followed only by its two
+  // leading B-frames, so the last decode-order sample ends at that keyframe's
+  // cts. mp4box's time-based seek skips a track whose last sample ends before
+  // the target and silently keeps sample 0; the seek must still reach it.
+  it('reaches a last keyframe followed only by its leading frames', async () => {
+    const signal = new AbortController().signal
+    const preview = await openFixture('h264-open-gop-leading-tail.mp4')
+    for (const target of [1.2, 1.3]) {
+      const segment = await preview.segmentAt(target, signal)
+      expect(segment.positionSeconds).toBeCloseTo(1.2, 9)
+      expect(segment.frameSeconds).toBeCloseTo(13_312 / 10_240, 9)
+      const samples = await segmentSamples(new Uint8Array(await segment.bytes.arrayBuffer()))
+      expect(samples).toMatchObject([{ is_sync: true, cts: 13_312 }])
+    }
+    expect((await preview.segmentAt(1.1, signal)).positionSeconds).toBe(0)
   })
 })

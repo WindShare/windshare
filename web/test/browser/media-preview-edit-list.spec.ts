@@ -1,10 +1,11 @@
 import { expect, test } from '@playwright/test'
-import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
+import { presentSegments } from './media-preview-edit-list-probe'
 
-// Chromium-only on purpose: Firefox has a pre-existing bug where every non-zero
-// seek of a one-sample preview segment never presents, so this contract is not
-// named *.cross-browser.spec.ts.
-const FIXTURE_DIRECTORY = '/test/fixtures/preview'
+// Chromium only: it checks that the accepted frame's mediaTime is the sample's
+// raw composition time. Firefox rebases the one-sample segment to zero and
+// reports mediaTime 0, so media-preview-edit-list.cross-browser.spec.ts checks
+// presentation alone in every browser.
+
 // Each target must present the keyframe segmentAt reports. See
 // test/preview/mp4-range.test.ts for how each fixture was encoded.
 const CASES = [
@@ -29,94 +30,24 @@ const CASES = [
   { fixture: 'h264-head-trimmed-mid-frame.mp4', targets: [0, 1.24], keyframes: [3_533 / 15_360, 18_893 / 15_360] },
   // 29.97 fps with timescale 30000: keyframes at 0, 1.001 s and 2.002 s.
   { fixture: 'h264-ntsc-30000.mp4', targets: [0, 1.001, 2.002], keyframes: [0, 1.001, 2.002] },
+  // Open GOP whose last decode-order samples are the 1.2 s keyframe and its
+  // leading frames: mp4box's time-based seek skipped the track there.
+  { fixture: 'h264-open-gop-leading-tail.mp4', targets: [0, 1.2], keyframes: [0, 1.2] },
+  // Edit list hides the only keyframe: it is shown at position 0.
+  { fixture: 'h264-head-trimmed-single-keyframe.mp4', targets: [0, 1], keyframes: [0, 0] },
 ] as const
-const PRESENTATION_TIMEOUT_MS = 5_000
 // Browser media pipelines round rational sample times to microseconds.
 const MEDIA_TIME_TOLERANCE_SECONDS = 1e-5
 
 for (const { fixture, targets, keyframes } of CASES) {
   test(`presents the keyframe segmentAt reports for ${fixture}`, async ({ page }) => {
-    await page.goto(BROWSER_CONTRACT_HOST_PATH)
-    const results = await page.evaluate(async ({ fixturePath, targets, timeoutMs }) => {
-      const mp4RangePath = '/src/preview/mp4-range.ts'
-      const presentationPath = '/src/ui/share-content/video-frame-presentation.ts'
-      const [mp4RangeModule, presentationModule] = await Promise.all([
-        import(mp4RangePath) as Promise<typeof import('../../src/preview/mp4-range')>,
-        import(presentationPath) as Promise<typeof import('../../src/ui/share-content/video-frame-presentation')>,
-      ])
-
-      const response = await fetch(fixturePath)
-      if (!response.ok) throw new Error(`Fixture returned HTTP ${response.status}`)
-      const bytes = new Uint8Array(await response.arrayBuffer())
-      const source = {
-        exactSize: BigInt(bytes.byteLength),
-        async read(range: { readonly start: bigint; readonly end: bigint }, signal: AbortSignal) {
-          signal.throwIfAborted()
-          return bytes.slice(Number(range.start), Number(range.end))
-        },
-      }
-      const signal = new AbortController().signal
-      const preview = await mp4RangeModule.Mp4RangePreview.open(source, signal)
-
-      const observations = []
-      for (const target of targets) {
-        const segment = await preview.segmentAt(target, signal)
-        const url = URL.createObjectURL(segment.bytes)
-        const video = document.createElement('video')
-        video.muted = true
-        video.playsInline = true
-        video.preload = 'auto'
-        video.hidden = true
-        let lastMediaTime: number | undefined
-        // Production observer, real element: only the frame callback is wrapped so
-        // the test can read the mediaTime of the frame the observer accepted.
-        const decoder = {
-          get currentTime() { return video.currentTime },
-          set currentTime(value: number) { video.currentTime = value },
-          get readyState() { return video.readyState },
-          HAVE_METADATA: video.HAVE_METADATA,
-          addEventListener: video.addEventListener.bind(video),
-          removeEventListener: video.removeEventListener.bind(video),
-          cancelVideoFrameCallback: video.cancelVideoFrameCallback.bind(video),
-          requestVideoFrameCallback: (callback: VideoFrameRequestCallback) =>
-            video.requestVideoFrameCallback((now, metadata) => {
-              lastMediaTime = metadata.mediaTime
-              callback(now, metadata)
-            }),
-        } as Parameters<typeof presentationModule.observeVideoFrame>[0]
-        const outcome = await new Promise<'presented' | 'failed' | 'timeout'>((resolve) => {
-          let close = () => {}
-          const timer = setTimeout(() => { close(); resolve('timeout') }, timeoutMs)
-          close = presentationModule.observeVideoFrame(
-            decoder,
-            segment.positionSeconds,
-            () => { clearTimeout(timer); resolve('presented') },
-            () => { clearTimeout(timer); resolve('failed') },
-          )
-          document.body.append(video)
-          video.src = url
-        })
-        observations.push({
-          target,
-          outcome,
-          positionSeconds: segment.positionSeconds,
-          mediaTime: lastMediaTime ?? null,
-          currentTime: video.currentTime,
-        })
-        video.removeAttribute('src')
-        video.load()
-        video.remove()
-        URL.revokeObjectURL(url)
-      }
-      return observations
-    }, { fixturePath: `${FIXTURE_DIRECTORY}/${fixture}`, targets, timeoutMs: PRESENTATION_TIMEOUT_MS })
-
+    const results = await presentSegments(page, fixture, targets)
     for (const [index, observation] of results.entries()) {
       const context = JSON.stringify(observation)
       expect(observation.outcome, context).toBe('presented')
       expect(observation.positionSeconds, context).toBeCloseTo(keyframes[index] ?? Number.NaN, 6)
       expect(observation.mediaTime, context).not.toBeNull()
-      expect(Math.abs((observation.mediaTime ?? Number.NaN) - observation.positionSeconds), context)
+      expect(Math.abs((observation.mediaTime ?? Number.NaN) - observation.frameSeconds), context)
         .toBeLessThanOrEqual(MEDIA_TIME_TOLERANCE_SECONDS)
     }
   })

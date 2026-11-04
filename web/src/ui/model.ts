@@ -68,6 +68,8 @@ export type PreviewSnapshot =
       readonly height: number
       readonly durationSeconds: number
       readonly positionSeconds: number
+      // The decoder element's time for the presented sample; not shown.
+      readonly frameSeconds: number
       readonly seeking: boolean
     }
   | {
