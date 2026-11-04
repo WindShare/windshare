@@ -122,9 +122,19 @@ type resumeConfirmationTerminal interface {
 	ReadLine(context.Context, string) (string, error)
 }
 
+// resumeRequestParse separates an explicit help request from rejected
+// arguments, so action-level -h/--help succeeds like every other wind command.
+type resumeRequestParse int
+
+const (
+	resumeRequestInvalid resumeRequestParse = iota
+	resumeRequestReady
+	resumeRequestHelp
+)
+
 type resumeRequestParser interface {
-	ParseRoot(string, []string) (resumeRootRequest, bool)
-	ParseDiscard([]string) (resumeDiscardRequest, bool)
+	ParseRoot(string, []string) (resumeRootRequest, resumeRequestParse)
+	ParseDiscard([]string) (resumeDiscardRequest, resumeRequestParse)
 }
 
 type resumeRenderer interface {
