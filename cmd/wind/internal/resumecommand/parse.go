@@ -8,6 +8,8 @@ import (
 	"strconv"
 )
 
+// List and discard accept no positional arguments. The standard parser must
+// retain ownership of "--" so later tokens cannot be reinterpreted as help.
 type flagRequestParser struct {
 	logger resumeLogger
 }
@@ -19,7 +21,7 @@ func (parser flagRequestParser) ParseRoot(
 	flags := parser.newFlagSet(action)
 	var rootPath resumeRootPathFlag
 	flags.Var(&rootPath, "o", "output directory (required)")
-	positional, err := parseInterleaved(flags, args)
+	err := flags.Parse(args)
 	if errors.Is(err, flag.ErrHelp) {
 		return resumeRootRequest{}, resumeRequestHelp
 	}
@@ -27,7 +29,7 @@ func (parser flagRequestParser) ParseRoot(
 		parser.logger.Logf("%s: arguments are invalid", action)
 		return resumeRootRequest{}, resumeRequestInvalid
 	}
-	if len(positional) != 0 {
+	if flags.NArg() != 0 {
 		parser.logger.Logf("%s: positional arguments are not accepted", action)
 		return resumeRootRequest{}, resumeRequestInvalid
 	}
@@ -49,7 +51,7 @@ func (parser flagRequestParser) ParseDiscard(args []string) (resumeDiscardReques
 	flags.Var(&rootPath, "o", "output directory (required)")
 	var item resumeItemNumberFlag
 	flags.Var(&item, "item", "one current inventory item number (required)")
-	positional, err := parseInterleaved(flags, args)
+	err := flags.Parse(args)
 	if errors.Is(err, flag.ErrHelp) {
 		return resumeDiscardRequest{}, resumeRequestHelp
 	}
@@ -57,7 +59,7 @@ func (parser flagRequestParser) ParseDiscard(args []string) (resumeDiscardReques
 		parser.logger.Logf("resume discard: arguments are invalid")
 		return resumeDiscardRequest{}, resumeRequestInvalid
 	}
-	if len(positional) != 0 {
+	if flags.NArg() != 0 {
 		parser.logger.Logf("resume discard: positional arguments are not accepted")
 		return resumeDiscardRequest{}, resumeRequestInvalid
 	}
@@ -84,21 +86,6 @@ func (parser flagRequestParser) newFlagSet(name string) *flag.FlagSet {
 	// accidentally pasted into --item or another unsupported position.
 	flags.SetOutput(io.Discard)
 	return flags
-}
-
-func parseInterleaved(flags *flag.FlagSet, args []string) ([]string, error) {
-	var positional []string
-	for {
-		if err := flags.Parse(args); err != nil {
-			return nil, err
-		}
-		rest := flags.Args()
-		if len(rest) == 0 {
-			return positional, nil
-		}
-		positional = append(positional, rest[0])
-		args = rest[1:]
-	}
 }
 
 type resumeRootPathFlag struct {
