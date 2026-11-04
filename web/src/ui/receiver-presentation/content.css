@@ -57,6 +57,7 @@
 :where(.receiver-shell, .detail-sheet) .preview-time { font-variant-numeric: tabular-nums; }
 :where(.receiver-shell, .detail-sheet) .preview-seek input { width: 100%; min-height: 2.75rem; margin: 0; accent-color: var(--receiver-accent); cursor: pointer; touch-action: pan-y; }
 :where(.receiver-shell, .detail-sheet) .preview-seek-hint { margin: 0; font-size: .75rem; line-height: 1.5; }
+:where(.receiver-shell, .detail-sheet) .preview-seek-failure p { margin: 0; font-size: .75rem; line-height: 1.5; overflow-wrap: anywhere; }
 :where(.receiver-shell, .detail-sheet) .preview-failure { display: grid; place-items: center; min-height: 12rem; padding: 1rem; color: var(--receiver-muted); text-align: center; overflow-wrap: anywhere; }
 :where(.receiver-shell, .detail-sheet) .preview-failure > .receiver-icon { width: 2.5rem; height: 2.5rem; color: var(--receiver-accent); }
 :where(.receiver-shell, .detail-sheet) .preview-failure p { margin: .5rem 0; }

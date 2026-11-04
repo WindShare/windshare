@@ -97,7 +97,6 @@ export function breadcrumbsFor(route: readonly BrowseDirectory[]) {
 export function previewSnapshot(
   entry: Extract<CatalogEntry, { kind: 'file' }>,
   presentation: PreviewPresentation,
-  seeking: boolean,
   presentationId: number,
 ) {
   return Object.freeze(presentation.kind === 'image'
@@ -121,8 +120,10 @@ export function previewSnapshot(
         width: presentation.width,
         height: presentation.height,
         durationSeconds: presentation.durationSeconds,
-        positionSeconds: presentation.positionSeconds,
-        seeking,
+        requestedSeconds: presentation.keyframeSeconds,
+        decodeSeconds: presentation.decodeSeconds,
+        seeking: false,
+        failure: null,
       })
 }
 

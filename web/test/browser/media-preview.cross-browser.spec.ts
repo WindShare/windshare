@@ -271,14 +271,14 @@ test('runs production image decode and bounded MP4 seek semantics in the active 
         blobBytes: initialBlob.size,
         blobMimeType: initialBlob.type,
         objectUrl: initial.url,
-        positionSeconds: initial.positionSeconds,
+        keyframeSeconds: initial.keyframeSeconds,
       },
       initialRevokedAfterSeek,
       later: {
         blobBytes: laterBlob.size,
         blobMimeType: laterBlob.type,
         objectUrl: later.url,
-        positionSeconds: later.positionSeconds,
+        keyframeSeconds: later.keyframeSeconds,
       },
       latestRevokedAfterClose: await objectUrlIsRevoked(later.url),
       limits: {
@@ -332,12 +332,12 @@ test('runs production image decode and bounded MP4 seek semantics in the active 
     height: MP4_HEIGHT,
     initial: {
       blobMimeType: 'video/mp4',
-      positionSeconds: 0,
+      keyframeSeconds: 0,
     },
     initialRevokedAfterSeek: true,
     later: {
       blobMimeType: 'video/mp4',
-      positionSeconds: 1,
+      keyframeSeconds: 1,
     },
     latestRevokedAfterClose: true,
     mimeType: 'video/mp4; codecs="avc1.42001e"',
