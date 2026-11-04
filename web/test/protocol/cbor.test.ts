@@ -32,6 +32,46 @@ describe('canonical CBOR wire validation', () => {
     expect(() => open(Uint8Array.from(value))).toThrow()
   })
 
+  it('keeps a leading U+FEFF in decoded text like the Go codec', () => {
+    // 0x68 = text(8): EF BB BF "a.txt"; 0x78 0x20 = text(32) takes cborg's TextDecoder path.
+    const short = '\ufeffa.txt'
+    const long = `\ufeff${'x'.repeat(29)}`
+    const bomOnly = '\ufeff'
+    expect(Array.from(encodeCanonicalCbor(short).subarray(0, 4))).toEqual([0x68, 0xef, 0xbb, 0xbf])
+    expect(Array.from(encodeCanonicalCbor(long).subarray(0, 2))).toEqual([0x78, 0x20])
+    for (const text of [short, long, bomOnly, `a${bomOnly}`]) {
+      expect(open(encodeCanonicalCbor(text))).toBe(text)
+    }
+    const nested = new Map<number, unknown>([[0, ['', short, '', 'plain', bomOnly, '']], [1, new Map([[2, long]])]])
+    expect(open(encodeCanonicalCbor(nested))).toEqual(nested)
+  })
+
+  it.each([
+    [255, [0x78, 0xff]],
+    [256, [0x79, 0x01, 0x00]],
+    [65_535, [0x79, 0xff, 0xff]],
+    [65_536, [0x7a, 0x00, 0x01, 0x00, 0x00]],
+  ] as const)('preserves leading U+FEFF in %i-byte text across length headers and input offsets', (length, header) => {
+    const text = `\ufeff${'x'.repeat(length - 3)}`
+    const encoded = encodeCanonicalCbor(text)
+    expect(encoded.subarray(0, header.length)).toEqual(Uint8Array.from(header))
+    expect(open(encoded)).toBe(text)
+
+    // Invalid surrounding bytes expose any decoder that ignores the input view's bounds.
+    const offset = 5
+    const padded = new Uint8Array(encoded.length + offset * 2).fill(0xff)
+    padded.set(encoded, offset)
+    for (const input of [padded, Buffer.from(padded)]) {
+      expect(open(input.subarray(offset, offset + encoded.length))).toBe(text)
+    }
+  })
+
+  it('decodes byte strings as plain Uint8Array even from a Buffer input', () => {
+    const decoded = open(Buffer.from(encodeCanonicalCbor(Uint8Array.of(1, 2, 3))))
+    expect(Object.getPrototypeOf(decoded)).toBe(Uint8Array.prototype)
+    expect(decoded).toEqual(Uint8Array.of(1, 2, 3))
+  })
+
   it('bounds nesting before decoding and rejects trailing data and non-NFC text', () => {
     expect(() => open(Uint8Array.from([...Array<number>(MAXIMUM_CBOR_DEPTH + 1).fill(0x81), 0]))).toThrow()
     expect(() => open(Uint8Array.of(0, 0))).toThrow()

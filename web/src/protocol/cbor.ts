@@ -1,4 +1,4 @@
-import { decode, encode, rfc8949EncodeOptions, type DecodeOptions } from 'cborg'
+import { decode, encode, rfc8949EncodeOptions, Tokenizer, Type, type DecodeOptions, type Token } from 'cborg'
 
 import { isWellFormedUnicode } from './text'
 import { validateCanonicalEncoding, MAXIMUM_CBOR_DEPTH, MAXIMUM_CBOR_ARRAY_ITEMS, MAXIMUM_CBOR_MAP_FIELDS } from './cbor-canonical'
@@ -14,6 +14,39 @@ const STRICT_DECODE_OPTIONS: DecodeOptions = Object.freeze({
   strict: true,
   useMaps: true,
 })
+
+const UTF8_BYTE_ORDER_MARK = [0xef, 0xbb, 0xbf] as const
+const BOM_PRESERVING_UTF8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
+const CBOR_INLINE_ARGUMENT_LIMIT = 24
+const CBOR_ARGUMENT_BYTES = [1, 2, 4, 8] as const
+
+// cborg decodes text with a default TextDecoder, which silently drops a leading
+// U+FEFF. CBOR text is a value, not a byte stream with an encoding signature, and
+// Go keeps that scalar, so the browser must decode the exact authenticated text.
+class ExactTextTokenizer extends Tokenizer {
+  override next(): Token {
+    const start = this.pos()
+    const token = super.next()
+    if (token.type !== Type.string) return token
+    const contentStart = start + textHeaderBytes(this.data[start]!)
+    const contentEnd = this.pos()
+    if (
+      contentEnd - contentStart >= UTF8_BYTE_ORDER_MARK.length &&
+      this.data[contentStart] === UTF8_BYTE_ORDER_MARK[0] &&
+      this.data[contentStart + 1] === UTF8_BYTE_ORDER_MARK[1] &&
+      this.data[contentStart + 2] === UTF8_BYTE_ORDER_MARK[2]
+    ) {
+      token.value = BOM_PRESERVING_UTF8.decode(this.data.subarray(contentStart, contentEnd))
+    }
+    return token
+  }
+}
+
+function textHeaderBytes(initial: number): number {
+  const additional = initial & 31
+  if (additional < CBOR_INLINE_ARGUMENT_LIMIT) return 1
+  return 1 + (CBOR_ARGUMENT_BYTES[additional - CBOR_INLINE_ARGUMENT_LIMIT] ?? 0)
+}
 
 export class CborError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -45,7 +78,13 @@ export function decodeCanonicalCbor(
   let decoded: unknown
   try {
     validateCanonicalEncoding(encoded)
-    decoded = decode(encoded, STRICT_DECODE_OPTIONS) as unknown
+    // A supplied tokenizer bypasses cborg's input normalization, so subclasses such
+    // as Node's Buffer must be viewed as plain bytes or byte strings would inherit them.
+    const bytes = new Uint8Array(encoded.buffer, encoded.byteOffset, encoded.byteLength)
+    decoded = decode(bytes, {
+      ...STRICT_DECODE_OPTIONS,
+      tokenizer: new ExactTextTokenizer(bytes, STRICT_DECODE_OPTIONS),
+    }) as unknown
   } catch (cause) {
     throw new CborError(`${label} is not strict CBOR`, { cause })
   }
