@@ -30,8 +30,7 @@ func (runner Runner) Run(ctx context.Context, args []string) Result {
 	case "discard":
 		return runner.runDiscard(ctx, args[1:])
 	case "help", "-h", "--help":
-		runner.dependencies.output.WriteUsage(runner.dependencies.renderer.Usage())
-		return ResultOK
+		return runner.help()
 	default:
 		runner.dependencies.logger.Logf("resume: unknown action")
 		runner.dependencies.output.WriteUsage(runner.dependencies.renderer.Usage())
@@ -39,10 +38,25 @@ func (runner Runner) Run(ctx context.Context, args []string) Result {
 	}
 }
 
+func (runner Runner) help() Result {
+	runner.dependencies.output.WriteUsage(runner.dependencies.renderer.Usage())
+	return ResultOK
+}
+
+// unreadyRequest answers a request that cannot run. Help is answered before any
+// inventory is opened, so it can never touch destination state even when it
+// follows otherwise valid discard arguments.
+func (runner Runner) unreadyRequest(parse resumeRequestParse) Result {
+	if parse == resumeRequestHelp {
+		return runner.help()
+	}
+	return ResultUsage
+}
+
 func (runner Runner) runList(ctx context.Context, args []string) Result {
-	request, valid := runner.dependencies.parser.ParseRoot("resume list", args)
-	if !valid {
-		return ResultUsage
+	request, parse := runner.dependencies.parser.ParseRoot("resume list", args)
+	if parse != resumeRequestReady {
+		return runner.unreadyRequest(parse)
 	}
 	inventory, err := runner.dependencies.inventories.OpenResumeStateInventory(ctx, request.rootPath)
 	if err != nil {
@@ -113,9 +127,9 @@ func (runner Runner) reportListOpenFailure(err error) Result {
 }
 
 func (runner Runner) runDiscard(ctx context.Context, args []string) Result {
-	request, valid := runner.dependencies.parser.ParseDiscard(args)
-	if !valid {
-		return ResultUsage
+	request, parse := runner.dependencies.parser.ParseDiscard(args)
+	if parse != resumeRequestReady {
+		return runner.unreadyRequest(parse)
 	}
 	inventory, err := runner.dependencies.inventories.OpenResumeStateInventory(ctx, request.rootPath)
 	if err != nil {
