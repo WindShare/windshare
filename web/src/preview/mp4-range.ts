@@ -13,6 +13,7 @@ export const VIDEO_MAXIMUM_SAMPLES = 1_000_000
 const TOP_LEVEL_BOX_LIMIT = 64
 const MP4_HEADER_BYTES = 16
 const EMPTY_EDIT_MEDIA_TIME = -1
+const PRESENTATION_ORIGIN_EPSILON_SECONDS = 1 / 1_000_000
 const SUPPORTED_VIDEO_CODEC = /^(?:avc1|avc3|hvc1|hev1|vp09|av01)\./u
 
 export interface PreviewRangeSource {
@@ -110,9 +111,23 @@ export class Mp4RangePreview {
       rawCompositionEndSeconds(samples),
     ), true)
     const fragmented = file.fragmentedTracks.find((candidate) => candidate.id === track.id)
-    const sampleIndex = fragmented?.state.lastFragmentSampleNumber ?? -1
-    const sample = samples[sampleIndex]
+    let sampleIndex = fragmented?.state.lastFragmentSampleNumber ?? -1
+    let sample = samples[sampleIndex]
     requireSample(sample, this.#source.exactSize)
+    let positionSeconds = this.#presentationSeconds(sample)
+    if (positionSeconds < 0) {
+      // Head-trimmed copies (`-ss … -c copy`) keep the keyframe before the cut,
+      // which the edit list hides. The browser never presents it, so use the
+      // first keyframe that is actually on the presentation timeline.
+      sampleIndex = this.#firstPresentedKeyframe(samples)
+      sample = samples[sampleIndex]
+      requireSample(sample, this.#source.exactSize)
+      file.seek(sample.cts / sample.timescale, true)
+      if (fragmented?.state.lastFragmentSampleNumber !== sampleIndex) {
+        throw new VideoPreviewError('MP4 keyframe could not be selected for preview')
+      }
+      positionSeconds = this.#presentationSeconds(sample)
+    }
     const sampleData = await this.#source.read(
       byteRange(BigInt(sample.offset), BigInt(sample.offset + sample.size)),
       signal,
@@ -134,7 +149,7 @@ export class Mp4RangePreview {
       }
       return Object.freeze({
         bytes: new Blob([initialization.buffer, segment], { type: 'video/mp4' }),
-        positionSeconds: Math.max(0, sample.cts / sample.timescale - this.#presentationOffsetSeconds),
+        positionSeconds,
       })
     } finally {
       unlink()
@@ -142,6 +157,28 @@ export class Mp4RangePreview {
       file.stop()
       await segmentPromise.catch(() => undefined)
     }
+  }
+
+  #presentationSeconds(sample: Sample): number {
+    const seconds = sample.cts / sample.timescale - this.#presentationOffsetSeconds
+    // Edit offsets and sample times use different timescales; absorb float error
+    // at the presentation origin instead of treating a keyframe at 0 as trimmed.
+    return Math.abs(seconds) <= PRESENTATION_ORIGIN_EPSILON_SECONDS ? 0 : seconds
+  }
+
+  #firstPresentedKeyframe(samples: readonly Sample[]): number {
+    let chosen = -1
+    let chosenSeconds = Number.POSITIVE_INFINITY
+    for (const [index, candidate] of samples.entries()) {
+      if (!candidate.is_sync) continue
+      const seconds = this.#presentationSeconds(candidate)
+      if (seconds >= 0 && seconds <= this.metadata.durationSeconds && seconds < chosenSeconds) {
+        chosen = index
+        chosenSeconds = seconds
+      }
+    }
+    if (chosen < 0) throw new VideoPreviewError('MP4 has no keyframe on its presentation timeline')
+    return chosen
   }
 }
 
