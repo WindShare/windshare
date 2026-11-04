@@ -300,6 +300,12 @@ export class PreviewController {
     if (preview.state === 'video' && active.framePresented === true) {
       // A later seek's frame did not present: keep the earlier frame on screen.
       this.#recordLocalFailure(active, media.attempt, fact)
+      // A newer seek is still reading its range, and the snapshot already
+      // belongs to it (it reuses this presentation's id while it loads). Its
+      // own result decides the slider, status and failure next, so this stale
+      // frame only adds to the incident: publishing it would clear seeking,
+      // show an error and roll the slider back under a seek still in flight.
+      if (active.seekAttempt !== undefined) return
       this.#publishVideoFailure(active, MEDIA_FAILURE_MESSAGE)
       return
     }

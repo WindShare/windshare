@@ -1037,6 +1037,90 @@ describe('v2 preview seek failure rollback', () => {
   })
 })
 
+describe('v2 preview stale media failure during a newer seek', () => {
+  function racingPreview() {
+    const joined = new DiagnosticPreviewJoined()
+    const incidents = new RecordingPreviewIncidents()
+    let snapshot = directPreviewSnapshot()
+    const previews = new PreviewController({
+      snapshot: () => snapshot,
+      publish: (next) => { snapshot = next },
+      publicError: () => 'preview failed',
+      incidents,
+    })
+    const video = () => {
+      if (snapshot.preview.state !== 'video') throw new TypeError('expected video preview')
+      return snapshot.preview
+    }
+    const presentAt = (seconds: number) => Object.freeze({
+      kind: 'video' as const, name: entry.name, mimeType: 'video/mp4', width: 20, height: 10,
+      durationSeconds: 30, positionSeconds: seconds, frameSeconds: seconds, url: `blob:at-${seconds}`,
+    })
+    return { joined, incidents, previews, video, presentAt }
+  }
+
+  it('keeps seek B pending when the previous frame fails, then shows B', async () => {
+    const { joined, incidents, previews, video, presentAt } = racingPreview()
+    previews.open(joined as unknown as JoinedBrowserShare, entry)
+    await turn()
+    previews.mediaPresented(video().presentationId)       // frame at 0 on canvas
+    joined.seekResult = presentAt
+    previews.seek(5)                                      // seek A
+    await turn()
+    const a = video().presentationId                      // A decoding
+    let releaseB!: () => void
+    joined.seekResult = (s) => new Promise((resolve) => { releaseB = () => resolve(presentAt(s)) })
+    previews.seek(20)                                     // seek B: range read in flight
+    await turn()
+    expect(video()).toMatchObject({ seeking: true, failure: null, presentationId: a })
+    previews.mediaFailed(a)                               // A's decode error or 10 s deadline fires
+    expect(video()).toMatchObject({ seeking: true, failure: null, positionSeconds: 5, presentationId: a })
+    // The stale frame is still evidence: it reports the session's local incident.
+    const reported = incidents.decisions.filter(({ decision }) => decision.kind === 'incident')
+    expect(reported.map(({ scope }) => scope.scopeKind)).toEqual(['preview_media'])
+
+    releaseB()
+    await turn()
+    expect(video()).toMatchObject({ seeking: false, failure: null, positionSeconds: 20 })
+    expect(video().presentationId).not.toBe(a)
+    previews.mediaPresented(video().presentationId)
+    expect(video()).toMatchObject({ seeking: false, failure: null, positionSeconds: 20 })
+    expect(joined.closed).toBe(0)
+    await previews.close()
+    expect(incidents.owners.every((owner) => owner.isClosed())).toBe(true)
+  })
+
+  it('reports seek B\'s own local failure after the stale frame failure', async () => {
+    const { joined, incidents, previews, video, presentAt } = racingPreview()
+    previews.open(joined as unknown as JoinedBrowserShare, entry)
+    await turn()
+    previews.mediaPresented(video().presentationId)
+    joined.seekResult = presentAt
+    previews.seek(5)
+    await turn()
+    const a = video().presentationId
+    let failB!: () => void
+    joined.seekResult = () => new Promise((_resolve, reject) => {
+      failB = () => reject(new VideoPreviewError('MP4 sample timing exceeds the preview limits'))
+    })
+    previews.seek(20)
+    await turn()
+    previews.mediaFailed(a)
+    expect(video()).toMatchObject({ seeking: true, failure: null })
+    failB()
+    await turn()
+    // The canvas still shows the opening frame, so B's failure rolls back to it.
+    expect(video()).toMatchObject({ seeking: false, failure: 'preview failed', positionSeconds: 0 })
+    const reported = incidents.decisions.filter(({ decision }) => decision.kind === 'incident')
+    expect(reported).toHaveLength(1)
+    expect(incidents.facts.map(({ fact, relation }) => [fact.stage, relation])).toEqual([
+      ['preview_media', 'contributor'],
+      ['preview_seek', 'consequence'],
+    ])
+    await previews.close()
+  })
+})
+
 describe('preview diagnostics continuity', () => {
   it('exports a failed preview and subsequent download evidence in the same capture', async () => {
     const time = new FakeTraceTime()
