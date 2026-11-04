@@ -22,6 +22,9 @@ class GalleryController {
   readonly intents: string[] = []
   #videoUrl: string | undefined
   holdVideoSeeks = false
+  // The requested position of the frame on the canvas, as the production
+  // controller tracks it for rollback.
+  #presentedSeconds = 0
   close = () => { if (this.#videoUrl !== undefined) URL.revokeObjectURL(this.#videoUrl) }
   constructor(snapshot: ReceiverSnapshot) { this.#snapshot = snapshot }
   getSnapshot = () => this.#snapshot
@@ -87,23 +90,30 @@ class GalleryController {
     this.#publish({ preview: { ...preview, seeking: true, failure: null } })
     if (!this.holdVideoSeeks) this.completeVideoSeek(seconds).catch(() => this.previewMediaFailed())
   }
-  completeVideoSeek = async (seconds: number, decoderUrl?: string) => {
+  // frameSeconds is the decoder time of the presented keyframe; it defaults to
+  // the request, and differs from it for a seek between keyframes.
+  completeVideoSeek = async (seconds: number, decoderUrl?: string, frameSeconds = seconds) => {
     const preview = this.#snapshot.preview
     if (preview.state !== 'video') throw new Error('No video preview is open')
     const bytes = await fetch(this.#videoUrl!).then(response => response.blob())
     if (this.#snapshot.preview !== preview) return
     URL.revokeObjectURL(this.#videoUrl!)
     this.#videoUrl = URL.createObjectURL(bytes)
-    this.#publish({ preview: { ...preview, seeking: false, positionSeconds: seconds, frameSeconds: seconds,
+    this.#publish({ preview: { ...preview, seeking: false, positionSeconds: seconds, frameSeconds,
       presentationId: preview.presentationId + 1, url: decoderUrl ?? this.#videoUrl } })
   }
-  // The production controller keeps the last presented position on failure.
+  // The production controller rolls back to the requested position of the
+  // presented frame on failure.
   failVideoSeek = (message: string) => {
     const preview = this.#snapshot.preview
     if (preview.state !== 'video') throw new Error('No video preview is open')
-    this.#publish({ preview: { ...preview, seeking: false, failure: message } })
+    this.#publish({ preview: { ...preview, seeking: false, failure: message, positionSeconds: this.#presentedSeconds } })
   }
-  previewMediaPresented = (id: number) => { this.intents.push('presented:' + id) }
+  previewMediaPresented = (id: number) => {
+    this.intents.push('presented:' + id)
+    const preview = this.#snapshot.preview
+    if (preview.state === 'video' && preview.presentationId === id) this.#presentedSeconds = preview.positionSeconds
+  }
   previewMediaFailed = () => {
     this.#publish({ preview: { state: 'error', fileId: 'photo', name: 'Photo', message: 'The browser could not decode this preview.' } })
   }
@@ -195,8 +205,8 @@ export async function mountGallery(scenario: Scenario = 'folder'): Promise<void>
 
 export function holdVideoSeeks() { active!.holdVideoSeeks = true }
 
-export function completeVideoSeek(seconds: number, decoderUrl?: string) {
-  return active!.completeVideoSeek(seconds, decoderUrl)
+export function completeVideoSeek(seconds: number, decoderUrl?: string, frameSeconds?: number) {
+  return active!.completeVideoSeek(seconds, decoderUrl, frameSeconds)
 }
 
 export function galleryEvidence() {

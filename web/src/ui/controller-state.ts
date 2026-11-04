@@ -99,6 +99,9 @@ export function previewSnapshot(
   presentation: PreviewPresentation,
   seeking: boolean,
   presentationId: number,
+  // A seek's requested slider position; the presentation's keyframe position
+  // otherwise (the opening frame).
+  requestedSeconds?: number,
 ) {
   return Object.freeze(presentation.kind === 'image'
     ? {
@@ -121,7 +124,7 @@ export function previewSnapshot(
         width: presentation.width,
         height: presentation.height,
         durationSeconds: presentation.durationSeconds,
-        positionSeconds: presentation.positionSeconds,
+        positionSeconds: requestedSeconds ?? presentation.positionSeconds,
         frameSeconds: presentation.frameSeconds,
         seeking,
         failure: null,

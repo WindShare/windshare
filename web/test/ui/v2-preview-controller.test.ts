@@ -981,12 +981,53 @@ describe('v2 preview seek failure rollback', () => {
       if (snapshot.preview.state !== 'video') throw new TypeError('expected video preview')
       return snapshot.preview
     }
-    const presentAt = (seconds: number) => Object.freeze({
-      kind: 'video' as const, name: entry.name, mimeType: 'video/mp4', width: 20, height: 10,
-      durationSeconds: 30, positionSeconds: seconds, frameSeconds: seconds + 0.2, url: `blob:at-${seconds}`,
-    })
+    // Long-GOP source: a seek presents the keyframe at or before the request
+    // (every 8 s), so the requested position and the keyframe differ.
+    const presentAt = (seconds: number) => keyframePresentation(seconds)
     return { joined, previews, video, presentAt }
   }
+
+  it('rolls back to the requested position, not the presented keyframe', async () => {
+    const { joined, previews, video, presentAt } = rollbackPreview()
+    previews.open(joined as unknown as JoinedBrowserShare, entry)
+    await turn()
+    previews.mediaPresented(video().presentationId)
+    joined.seekResult = presentAt
+    previews.seek(7.9)
+    await turn()
+    // The preview layer presents keyframe 0 for 7.9 s; the slider keeps 7.9.
+    expect(video()).toMatchObject({ positionSeconds: 7.9, frameSeconds: 0.2 })
+    previews.mediaPresented(video().presentationId)
+
+    joined.seekResult = () => { throw new VideoPreviewError('MP4 sample geometry exceeds the preview limits') }
+    previews.seek(9)
+    await turn()
+    expect(video()).toMatchObject({ positionSeconds: 7.9, seeking: false, failure: 'preview failed' })
+
+    // A decode failure of a later frame also returns to 7.9, not keyframe 8.
+    joined.seekResult = presentAt
+    previews.seek(10)
+    await turn()
+    previews.mediaFailed(video().presentationId)
+    expect(video()).toMatchObject({ positionSeconds: 7.9, seeking: false,
+      failure: 'The browser could not decode this bounded media preview.' })
+    await previews.close()
+  })
+
+  it('rolls back to the opening keyframe position when no seek has presented', async () => {
+    const joined = new DiagnosticPreviewJoined({ openPresentation: keyframePresentation(0, 0.5) })
+    const { previews, video } = rollbackPreview()
+    previews.open(joined as unknown as JoinedBrowserShare, entry)
+    await turn()
+    // A head-trimmed file opens with the slider at the keyframe seek(0) chose.
+    expect(video().positionSeconds).toBe(0.5)
+    previews.mediaPresented(video().presentationId)
+    joined.seekResult = () => { throw new VideoPreviewError('MP4 sample timing exceeds the preview limits') }
+    previews.seek(3)
+    await turn()
+    expect(video()).toMatchObject({ positionSeconds: 0.5, failure: 'preview failed' })
+    await previews.close()
+  })
 
   it('returns the position to the last presented frame after a local seek failure', async () => {
     const { joined, previews, video, presentAt } = rollbackPreview()
@@ -1052,10 +1093,7 @@ describe('v2 preview stale media failure during a newer seek', () => {
       if (snapshot.preview.state !== 'video') throw new TypeError('expected video preview')
       return snapshot.preview
     }
-    const presentAt = (seconds: number) => Object.freeze({
-      kind: 'video' as const, name: entry.name, mimeType: 'video/mp4', width: 20, height: 10,
-      durationSeconds: 30, positionSeconds: seconds, frameSeconds: seconds, url: `blob:at-${seconds}`,
-    })
+    const presentAt = (seconds: number) => keyframePresentation(seconds)
     return { joined, incidents, previews, video, presentAt }
   }
 
@@ -1390,11 +1428,22 @@ function diagnosticImageJoined(): Readonly<{
   })
 }
 
+// A video seek result for a long-GOP source with a keyframe every 8 s: the
+// presented keyframe position differs from the requested seconds unless the
+// request lands on a keyframe.
+function keyframePresentation(seconds: number, keyframe = Math.floor(seconds / 8) * 8) {
+  return Object.freeze({
+    kind: 'video' as const, name: entry.name, mimeType: 'video/mp4', width: 20, height: 10,
+    durationSeconds: 30, positionSeconds: keyframe, frameSeconds: keyframe + 0.2, url: `blob:at-${seconds}`,
+  })
+}
+
 interface DiagnosticPreviewOptions {
   readonly openFailure?: unknown
   readonly openPending?: boolean
   readonly seekFailure?: unknown
   readonly closeFailure?: unknown
+  readonly openPresentation?: ReturnType<typeof keyframePresentation>
 }
 
 class DiagnosticPreviewJoined {
@@ -1419,7 +1468,7 @@ class DiagnosticPreviewJoined {
   constructor(options: DiagnosticPreviewOptions = {}) {
     this.#options = options
     this.#session = {
-      current: this.#presentation,
+      current: options.openPresentation ?? this.#presentation,
       seek: async (seconds: number) => {
         if (this.seekResult !== undefined) return this.seekResult(seconds)
         if (this.#options.seekFailure !== undefined) {

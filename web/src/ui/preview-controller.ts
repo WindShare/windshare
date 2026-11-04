@@ -45,7 +45,12 @@ interface PendingPreviewSeek {
 interface PendingMediaPresentation {
   readonly id: number
   readonly url: string
-  readonly positionSeconds: number | undefined
+  // The slider position this frame answers: the seconds its seek requested,
+  // or for the opening frame the open's initial slider value (the keyframe
+  // the session's seek(0) chose). Not the presented keyframe's own position
+  // or the decoder time, which stay inside the preview layer; undefined for
+  // images.
+  readonly requestedSeconds: number | undefined
   readonly attempt: PreviewAttempt
 }
 
@@ -57,8 +62,11 @@ interface ScopedActivePreview extends ActivePreview {
   mediaAttempt?: PendingMediaPresentation
   incidentAttempt?: PreviewAttempt
   framePresented?: boolean
-  // The slider position of the frame currently on the canvas.
-  presentedPositionSeconds?: number
+  // The requested slider position (PendingMediaPresentation.requestedSeconds)
+  // of the frame currently on the canvas. A failed seek rolls back to it, so
+  // the slider returns to where the user left it for that frame rather than
+  // jumping to its keyframe.
+  presentedRequestedSeconds?: number
   // The attempt whose incident reports this session's local seek failures.
   localFailureAttempt?: PreviewAttempt
 }
@@ -192,8 +200,11 @@ export class PreviewController {
           this.#closeAttempt(pending.attempt)
           return
         }
-        const media = this.#startMediaAttempt(active, presentation.url, videoPosition(presentation))
-        const projected = previewSnapshot(active.entry, presentation, false, media.id)
+        const requestedSeconds = presentation.kind === 'video' ? seconds : undefined
+        const media = this.#startMediaAttempt(active, presentation.url, requestedSeconds)
+        // The slider stays where the user asked for this frame, not at the
+        // keyframe the preview layer presented for it.
+        const projected = previewSnapshot(active.entry, presentation, false, media.id, requestedSeconds)
         try {
           this.#publishPreview(projected)
         } catch (error) {
@@ -269,13 +280,13 @@ export class PreviewController {
     this.#closeAttempt(media.attempt)
     delete active.mediaAttempt
     active.framePresented = true
-    if (media.positionSeconds === undefined) return
-    active.presentedPositionSeconds = media.positionSeconds
+    if (media.requestedSeconds === undefined) return
+    active.presentedRequestedSeconds = media.requestedSeconds
     if (preview.state === 'video' && preview.failure !== null &&
-        preview.positionSeconds !== media.positionSeconds) {
+        preview.positionSeconds !== media.requestedSeconds) {
       // An earlier seek's frame presented after a later seek failed and rolled
       // the slider back: point the slider at the frame now on screen.
-      this.#publishPreview(Object.freeze({ ...preview, positionSeconds: media.positionSeconds }))
+      this.#publishPreview(Object.freeze({ ...preview, positionSeconds: media.requestedSeconds }))
     }
   }
 
@@ -345,6 +356,8 @@ export class PreviewController {
         return
       }
       active.session = session
+      // The slider opens at the position of the keyframe the session's seek(0)
+      // presented, so that is the opening frame's requested position.
       const media = this.#startMediaAttempt(active, session.current.url, videoPosition(session.current))
       const projected = previewSnapshot(active.entry, session.current, false, media.id)
       this.#publishPreview(projected)
@@ -412,15 +425,16 @@ export class PreviewController {
     const preview = this.#host.snapshot().preview
     if (preview.state !== 'video') return
     // The canvas still shows the last presented frame, so the slider, the
-    // time label and the next seek's baseline return to its position.
-    const positionSeconds = active.presentedPositionSeconds ?? preview.positionSeconds
+    // time label and the next seek's baseline return to the position the
+    // user requested for it.
+    const positionSeconds = active.presentedRequestedSeconds ?? preview.positionSeconds
     this.#publishPreview(Object.freeze({ ...preview, positionSeconds, seeking: false, failure }))
   }
 
   #startMediaAttempt(
     active: ScopedActivePreview,
     url: string,
-    positionSeconds: number | undefined,
+    requestedSeconds: number | undefined,
   ): PendingMediaPresentation {
     const replaced = active.mediaAttempt
     if (replaced !== undefined) {
@@ -431,7 +445,7 @@ export class PreviewController {
     const media: PendingMediaPresentation = {
       id: this.#nextId++,
       url,
-      positionSeconds,
+      requestedSeconds,
       attempt: this.#newAttempt('preview_media'),
     }
     active.mediaAttempt = media

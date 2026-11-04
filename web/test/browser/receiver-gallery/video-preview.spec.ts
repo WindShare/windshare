@@ -4,7 +4,7 @@ import { holdVideoPresentation } from './video-presentation'
 
 interface VideoGallery {
   windshareHoldVideoSeeks(): void
-  windshareCompleteVideoSeek(seconds: number, decoderUrl?: string): Promise<void>
+  windshareCompleteVideoSeek(seconds: number, decoderUrl?: string, frameSeconds?: number): Promise<void>
   windshareFailVideoSeek(message: string): void
 }
 
@@ -151,4 +151,25 @@ test('a failed seek rolls the slider and time label back to the presented frame'
   expect(await seeks(page)).toEqual(['seek:0.1', 'seek:0.2', 'seek:0.2'])
   await expect(page.locator('.preview-seek-failure [role="alert"]')).toHaveCount(0)
   await expect(page.locator('.preview-frame-status')).toHaveText('Loading frame…')
+})
+
+test('a failed seek rolls back to the requested position, not the presented keyframe', async ({ page }) => {
+  await openVideo(page)
+  const slider = page.getByRole('slider', { name: 'Seek Summer afternoon.mp4' })
+  await slider.focus()
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('ArrowRight')
+  await expect(slider).toHaveValue('0.2')
+  // A long-GOP seek: 0.2 s presents the keyframe at 0 s.
+  await page.evaluate(() => (window as unknown as VideoGallery).windshareCompleteVideoSeek(0.2, undefined, 0))
+  await expect.poll(async () => (await galleryEvidence(page)).intents).toContain('presented:3')
+  await expect(slider).toHaveValue('0.2')
+
+  await page.keyboard.press('ArrowRight')
+  await expect(slider).toHaveValue('0.3')
+  await page.evaluate(() => (window as unknown as VideoGallery)
+    .windshareFailVideoSeek('MP4 sample geometry exceeds the preview limits'))
+  await expect(page.locator('.preview-seek-failure [role="alert"]')).toHaveText('MP4 sample geometry exceeds the preview limits')
+  await expect(slider).toHaveValue('0.2')
+  await expect(page.locator('.preview-frame-status')).toHaveText('')
 })
