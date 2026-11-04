@@ -32,6 +32,26 @@ describe('canonical CBOR wire validation', () => {
     expect(() => open(Uint8Array.from(value))).toThrow()
   })
 
+  it('keeps a leading U+FEFF in decoded text like the Go codec', () => {
+    // 0x68 = text(8): EF BB BF "a.txt"; 0x78 0x20 = text(32) takes cborg's TextDecoder path.
+    const short = '\ufeffa.txt'
+    const long = `\ufeff${'x'.repeat(29)}`
+    const bomOnly = '\ufeff'
+    expect(Array.from(encodeCanonicalCbor(short).subarray(0, 4))).toEqual([0x68, 0xef, 0xbb, 0xbf])
+    expect(Array.from(encodeCanonicalCbor(long).subarray(0, 2))).toEqual([0x78, 0x20])
+    for (const text of [short, long, bomOnly, `a${bomOnly}`]) {
+      expect(open(encodeCanonicalCbor(text))).toBe(text)
+    }
+    const nested = new Map<number, unknown>([[0, [short, 'plain']], [1, new Map([[2, long]])]])
+    expect(open(encodeCanonicalCbor(nested))).toEqual(nested)
+  })
+
+  it('decodes byte strings as plain Uint8Array even from a Buffer input', () => {
+    const decoded = open(Buffer.from(encodeCanonicalCbor(Uint8Array.of(1, 2, 3))))
+    expect(Object.getPrototypeOf(decoded)).toBe(Uint8Array.prototype)
+    expect(decoded).toEqual(Uint8Array.of(1, 2, 3))
+  })
+
   it('bounds nesting before decoding and rejects trailing data and non-NFC text', () => {
     expect(() => open(Uint8Array.from([...Array<number>(MAXIMUM_CBOR_DEPTH + 1).fill(0x81), 0]))).toThrow()
     expect(() => open(Uint8Array.of(0, 0))).toThrow()
