@@ -822,14 +822,17 @@ describe('v2 preview seek failure presentation', () => {
     expect(snapshot.preview).toMatchObject({ state: 'video', seeking: true, failure: null })
     await turn()
     expect(snapshot.preview).toMatchObject({ state: 'video', seeking: false, failure: 'preview failed' })
-    expect(incidents.owners.filter((owner) => owner.identity.scopeKind === 'preview_seek')
-      .map((owner) => owner.isClosed())).toEqual([true, false])
+    // The first local failure keeps the session's one incident open; the
+    // repeat adds to it and its own scope closes without a second incident.
+    const seekScopes = incidents.owners.filter((owner) => owner.identity.scopeKind === 'preview_seek')
+    expect(seekScopes.map((owner) => owner.isClosed())).toEqual([false, true])
+    expect(incidents.decisions.filter(({ decision }) => decision.kind === 'incident')).toHaveLength(1)
 
     await previews.close()
     expect(joined.closed).toBe(1)
     expect(incidents.facts).toMatchObject([
       {
-        scope: { scopeKind: 'preview_seek' },
+        scope: seekScopes[0]!.identity,
         fact: {
           kind: 'unclassified', stage: 'preview_seek',
           evidence: { exception: { message: 'seek failed', stack: expect.any(String) } },
@@ -837,15 +840,15 @@ describe('v2 preview seek failure presentation', () => {
         relation: 'contributor',
       },
       {
-        scope: { scopeKind: 'preview_seek' },
+        scope: seekScopes[0]!.identity,
         fact: {
           kind: 'unclassified', stage: 'preview_seek',
           evidence: { exception: { message: 'seek failed', stack: expect.any(String) } },
         },
-        relation: 'contributor',
+        relation: 'consequence',
       },
       {
-        scope: { scopeKind: 'preview_seek' },
+        scope: seekScopes[0]!.identity,
         fact: {
           kind: 'unclassified', stage: 'cleanup',
           evidence: { exception: { message: 'close failed', stack: expect.any(String) } },
@@ -891,6 +894,76 @@ describe('v2 preview seek failure presentation', () => {
     previews.mediaFailed(seekPresentation)
     expect(incidents.decisions.filter(({ decision }) => decision.kind === 'incident')).toHaveLength(1)
     await previews.close()
+    expect(incidents.owners.every((owner) => owner.isClosed())).toBe(true)
+  })
+})
+
+describe('v2 preview local failure incidents', () => {
+  function localFailurePreview() {
+    const joined = new DiagnosticPreviewJoined({
+      seekFailure: new VideoPreviewError('MP4 sample timing exceeds the preview limits'),
+    })
+    const incidents = new RecordingPreviewIncidents()
+    let snapshot = directPreviewSnapshot()
+    const previews = new PreviewController({
+      snapshot: () => snapshot,
+      publish: (next) => { snapshot = next },
+      publicError: () => 'preview failed',
+      incidents,
+    })
+    const preview = () => snapshot.preview
+    const presentationId = () => {
+      const current = snapshot.preview
+      if (current.state !== 'video') throw new TypeError('expected video preview')
+      return current.presentationId
+    }
+    return { joined, incidents, previews, preview, presentationId }
+  }
+
+  it('reports one incident per preview session for repeated local failures', async () => {
+    const { joined, incidents, previews, preview, presentationId } = localFailurePreview()
+    previews.open(joined as unknown as JoinedBrowserShare, entry)
+    await turn()
+    previews.mediaPresented(presentationId())
+    for (const seconds of [3, 6, 9]) {
+      previews.seek(seconds)
+      await turn()
+    }
+    joined.seekResult = () => joined.presentation
+    previews.seek(12)
+    await turn()
+    previews.mediaFailed(presentationId())
+    expect(preview()).toMatchObject({ state: 'video', failure: expect.any(String) })
+
+    const reported = incidents.decisions.filter(({ decision }) => decision.kind === 'incident')
+    expect(reported).toHaveLength(1)
+    expect(reported[0]?.scope.scopeKind).toBe('preview_seek')
+    expect(incidents.facts.map(({ scope, fact, relation }) => [scope, fact.stage, relation])).toEqual([
+      [reported[0]?.scope, 'preview_seek', 'contributor'],
+      [reported[0]?.scope, 'preview_seek', 'consequence'],
+      [reported[0]?.scope, 'preview_seek', 'consequence'],
+      [reported[0]?.scope, 'preview_media', 'consequence'],
+    ])
+    const open = incidents.owners.filter((owner) => !owner.isClosed())
+    expect(open.map((owner) => owner.identity)).toEqual([reported[0]?.scope])
+    await previews.close()
+    expect(incidents.owners.every((owner) => owner.isClosed())).toBe(true)
+  })
+
+  it('still reports a closing failure after a local incident', async () => {
+    const { joined, incidents, previews, preview, presentationId } = localFailurePreview()
+    previews.open(joined as unknown as JoinedBrowserShare, entry)
+    await turn()
+    previews.mediaPresented(presentationId())
+    previews.seek(3)
+    await turn()
+    joined.seekResult = () => { throw new ReceiveSourceInvalidatedError(new Error('revision changed')) }
+    previews.seek(6)
+    await turn()
+
+    expect(preview().state).toBe('error')
+    expect(joined.closed).toBe(1)
+    expect(incidents.decisions.filter(({ decision }) => decision.kind === 'incident')).toHaveLength(2)
     expect(incidents.owners.every((owner) => owner.isClosed())).toBe(true)
   })
 })
@@ -1255,6 +1328,7 @@ class DiagnosticPreviewJoined {
   })
   readonly #session: FilePreview
   closed = 0
+  get presentation() { return this.#presentation }
   // Replaces the default seek result: return a presentation or throw.
   seekResult: ((seconds: number) => unknown) | undefined
 

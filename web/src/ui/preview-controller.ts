@@ -59,6 +59,8 @@ interface ScopedActivePreview extends ActivePreview {
   framePresented?: boolean
   // The slider position of the frame currently on the canvas.
   presentedPositionSeconds?: number
+  // The attempt whose incident reports this session's local seek failures.
+  localFailureAttempt?: PreviewAttempt
 }
 
 export interface PreviewControllerHost {
@@ -227,15 +229,17 @@ export class PreviewController {
           delete active.seekAttempt
           return
         }
-        this.#recordFailure(pending.attempt, () => previewFailureFact('preview_seek', error))
-        this.#retainIncidentAttempt(active, pending.attempt)
         delete active.seekAttempt
+        const fact = () => previewFailureFact('preview_seek', error)
         if (active.framePresented === true && isLocalSeekFailure(error)) {
           // Only this position failed; the session, its previous frame and the
           // download stay available, so the preview remains open.
+          this.#recordLocalFailure(active, pending.attempt, fact)
           this.#publishVideoFailure(active, this.#host.publicError(error))
           return
         }
+        this.#recordFailure(pending.attempt, fact)
+        this.#retainIncidentAttempt(active, pending.attempt)
         const failure = Object.freeze({
           state: 'error' as const,
           fileId: active.entry.idText,
@@ -288,17 +292,19 @@ export class PreviewController {
     ) {
       return
     }
-    this.#recordFailure(media.attempt, () => unclassifiedFailureFact({
+    const fact = () => unclassifiedFailureFact({
       stage: 'preview_media',
       recoveryDisposition: 'none',
-    }))
-    this.#retainIncidentAttempt(active, media.attempt)
+    })
     delete active.mediaAttempt
     if (preview.state === 'video' && active.framePresented === true) {
       // A later seek's frame did not present: keep the earlier frame on screen.
+      this.#recordLocalFailure(active, media.attempt, fact)
       this.#publishVideoFailure(active, MEDIA_FAILURE_MESSAGE)
       return
     }
+    this.#recordFailure(media.attempt, fact)
+    this.#retainIncidentAttempt(active, media.attempt)
     const failure = Object.freeze({
       state: 'error' as const,
       fileId: active.entry.idText,
@@ -368,6 +374,32 @@ export class PreviewController {
     const previous = active.incidentAttempt
     active.incidentAttempt = attempt
     if (previous !== undefined && previous !== attempt) this.#closeAttempt(previous)
+  }
+
+  // A preview that stays open can fail locally at every position the user
+  // tries. Like main, where the first failure closed the preview, a session
+  // reports one incident for them: the first failure becomes the incident and
+  // later ones add their facts to it as consequences. Their own scopes carry
+  // no fact and close undecided. A later failure that closes the preview still
+  // reports its own incident.
+  #recordLocalFailure(
+    active: ScopedActivePreview,
+    attempt: PreviewAttempt,
+    failure: () => FailureFact,
+  ): void {
+    const reported = active.localFailureAttempt
+    if (reported === undefined) {
+      this.#recordFailure(attempt, failure)
+      active.localFailureAttempt = attempt
+      this.#retainIncidentAttempt(active, attempt)
+      return
+    }
+    this.#closeAttempt(attempt)
+    try {
+      reported.scope?.facts.record(failure(), 'consequence')
+    } catch {
+      // Repeated-failure evidence cannot change the visible preview result.
+    }
   }
 
   #publishVideoFailure(active: ScopedActivePreview, failure: string): void {
