@@ -5,8 +5,8 @@ import (
 	"strings"
 )
 
-// Evaluate needs no privileges or I/O. Explicit blocks dominate allows; uncertainty
-// about a potentially matching block must never become an optimistic allow verdict.
+// Evaluate reports the configuration observed within InspectionScope. It does
+// not attempt to resolve arbitrary address ranges, ports, IPsec, or global rules.
 func Evaluate(snapshot Snapshot) []Finding {
 	if len(snapshot.Networks) == 0 {
 		return unknownFindings(NoActiveNetwork)
@@ -22,110 +22,89 @@ func Evaluate(snapshot Snapshot) []Finding {
 
 func evaluateScope(snapshot Snapshot, network Network, protocol Protocol) Finding {
 	finding := Finding{Network: network, Protocol: protocol, Reason: IncompleteEvidence}
-	var profile ProfilePolicy
-	found := false
-	for _, candidate := range snapshot.Profiles {
-		if candidate.Profile == network.Profile && candidate.Profile != UnknownProfile {
-			if found { // Conflicting snapshots are not evidence of an effective policy.
-				return finding
-			}
-			profile, found = candidate, true
-		}
-	}
-	if !found {
+	profile := networkProfile(snapshot.Profiles, network.Profile)
+	if profile == nil {
 		return finding
 	}
 	if profile.Enabled == No {
-		finding.Verdict, finding.Reason = Allowed, FirewallDisabled
+		finding.Status, finding.Reason = RuleNotRequired, FirewallDisabled
 		return finding
 	}
-	exempt := matchInterface(profile.DisabledInterfaces, network.Interface)
-	if exempt == Yes {
-		finding.Verdict, finding.Reason = Allowed, InterfaceExempt
+	uncertainExemption := false
+	for _, alias := range profile.DisabledInterfaces {
+		if alias == "*" || strings.EqualFold(alias, network.Interface) {
+			finding.Status, finding.Reason = RuleNotRequired, InterfaceExempt
+			return finding
+		}
+		if strings.ContainsAny(alias, "*?[") {
+			uncertainExemption = true
+		}
+	}
+	if uncertainExemption {
 		return finding
 	}
-	if profile.Enabled != Yes || exempt == Unspecified {
+	if profile.Enabled != Yes || profile.AllowInboundRules == Unspecified || profile.AllowLocalRules == Unspecified {
 		return finding
 	}
 	if profile.AllowInboundRules == No {
-		finding.Verdict, finding.Reason = Blocked, InboundRulesDisabled
+		switch profile.DefaultInbound {
+		case Block:
+			finding.Status, finding.Reason = PolicyRestricted, InboundRulesDisabled
+		case Allow:
+			finding.Status, finding.Reason = RuleNotRequired, DefaultAllow
+		}
 		return finding
 	}
-	if profile.AllowInboundRules != Yes || profile.AllowLocalRules == Unspecified {
-		return finding
+	allow, block, conditional, conditionalBlock := false, false, false, false
+	for _, rule := range snapshot.Rules {
+		if rule.Protocol != AnyProtocol && rule.Protocol != protocol || !slices.Contains(rule.Profiles, network.Profile) {
+			continue
+		}
+		finding.Rules = append(finding.Rules, rule)
+		if rule.Local && profile.AllowLocalRules == No {
+			continue
+		}
+		if rule.Conditional || rule.Action == UnknownAction {
+			conditional = true
+			conditionalBlock = conditionalBlock || rule.Action != Allow
+			continue
+		}
+		allow = allow || rule.Action == Allow
+		block = block || rule.Action == Block
 	}
-	evidence := collectRules(snapshot.Rules, network, protocol, profile.AllowLocalRules)
-	finding.Rules = evidence.rules
 	switch {
-	case evidence.block && evidence.mayBypassBlocks:
-		finding.Reason = ConditionalRule
-	case evidence.block:
-		finding.Verdict, finding.Reason = Blocked, ExplicitBlock
-	case evidence.conditionalBlock:
-		finding.Reason = ConditionalRule
-	case evidence.allow:
-		finding.Verdict, finding.Reason = Allowed, ExplicitAllow
-	case profile.DefaultInbound == Allowed:
-		finding.Verdict, finding.Reason = Allowed, DefaultAllow
-	case evidence.conditionalAllow:
-		finding.Reason = ConditionalRule
-	case profile.DefaultInbound == Blocked && profile.AllowLocalRules == No:
-		finding.Verdict, finding.Reason = Blocked, LocalRulesDisabled
-	case profile.DefaultInbound == Blocked:
-		finding.Verdict, finding.Reason = Blocked, DefaultBlock
+	case block:
+		finding.Status, finding.Reason = PolicyRestricted, ExplicitBlock
+	case conditionalBlock:
+		finding.Status, finding.Reason = RuleRestricted, ConditionalRule
+	case allow:
+		finding.Status, finding.Reason = RulePresent, ExplicitAllow
+	case profile.DefaultInbound == Allow:
+		finding.Status, finding.Reason = RuleNotRequired, DefaultAllow
+	case conditional:
+		finding.Status, finding.Reason = RuleRestricted, ConditionalRule
+	case profile.DefaultInbound == Block && profile.AllowLocalRules == No:
+		finding.Status, finding.Reason = PolicyRestricted, LocalRulesDisabled
+	case profile.DefaultInbound == Block:
+		finding.Status, finding.Reason = RuleMissing, NoMatchingRule
 	}
 	return finding
 }
 
-type ruleEvidence struct {
-	rules                                            []Rule
-	allow, block, conditionalAllow, conditionalBlock bool
-	mayBypassBlocks                                  bool
-}
-
-func collectRules(rules []Rule, network Network, protocol Protocol, allowLocal Setting) ruleEvidence {
-	var evidence ruleEvidence
-	for _, rule := range rules {
-		if rule.Protocol != AnyProtocol && rule.Protocol != protocol ||
-			!slices.Contains(rule.Profiles, network.Profile) ||
-			rule.Local && allowLocal == No {
-			continue
-		}
-		interfaceMatch := Yes
-		if len(rule.Interfaces) > 0 {
-			interfaceMatch = matchInterface(rule.Interfaces, network.Interface)
-		}
-		if interfaceMatch == No {
-			continue
-		}
-		addressMatch := matchLocalAddresses(rule.LocalAddresses, network.LocalAddresses)
-		if addressMatch == No {
-			continue
-		}
-		evidence.rules = append(evidence.rules, rule)
-		evidence.mayBypassBlocks = evidence.mayBypassBlocks || rule.OverridesBlocks && rule.Action == Allowed
-		if rule.Conditional || rule.Action == Unknown || interfaceMatch == Unspecified || addressMatch == Unspecified {
-			evidence.conditionalAllow = evidence.conditionalAllow || rule.Action == Allowed
-			evidence.conditionalBlock = evidence.conditionalBlock || rule.Action != Allowed
-			continue
-		}
-		evidence.allow = evidence.allow || rule.Action == Allowed
-		evidence.block = evidence.block || rule.Action == Blocked
+func networkProfile(profiles []ProfilePolicy, profile Profile) *ProfilePolicy {
+	if profile == UnknownProfile {
+		return nil
 	}
-	return evidence
-}
-
-func matchInterface(aliases []string, name string) Setting {
-	result := No
-	for _, alias := range aliases {
-		if alias == "*" || strings.EqualFold(alias, name) {
-			return Yes
+	var result *ProfilePolicy
+	for index := range profiles {
+		if profiles[index].Profile != profile {
+			continue
 		}
-		// Windows wildcard syntax is richer than a filesystem glob. An unresolved
-		// selector must not hide a block or manufacture an interface exemption.
-		if strings.ContainsAny(alias, "*?[") {
-			result = Unspecified
+		// Conflicting observations cannot establish a profile's configuration.
+		if result != nil {
+			return nil
 		}
+		result = &profiles[index]
 	}
 	return result
 }

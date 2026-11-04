@@ -46,7 +46,7 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 		return ExitFailure
 	}
 	if a.networkSetup != nil {
-		defer networkcommand.StartCheck(ctx, a.networkSetup, runtime, clievent.CommandShare)()
+		networkcommand.ObserveStartup(a.networkSetup, runtime, clievent.CommandShare)
 	}
 	go func() {
 		select {

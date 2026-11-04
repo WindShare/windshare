@@ -21,22 +21,25 @@ The source bundle contains its deployment scripts and templates.
 ## Windows first setup
 
 ```powershell
-wind doctor network            # Read current inbound policy; never elevates
+wind doctor network            # Inspect this executable's inbound rules; never elevates
 wind setup network             # Configure this executable's UDP/TCP rules
 wind setup network --skip      # Stop reminders; leave firewall rules unchanged
 ```
 
 Rules cover domain, private, and public networks, all ports and remote addresses.
 Only the short-lived rule writer requests administrator permission; transfers stay
-at their original privilege level. Setup reports rule operations separately from
-current policy. Organization policy and explicit blocks can still prevent inbound
-traffic; an allowed policy does not prove a direct connection.
+at their original privilege level. Explicit diagnostics inspect executable-specific
+rules and active profile settings. Global rules are excluded; a present rule does
+not prove effective permission or a direct connection.
 
-The installer offers setup once and uses these same commands. User choices live in
-`%LOCALAPPDATA%/WindShare/network-preference.json`, independently of executable and
-network changes. Cancelling UAC does not save a skip choice. Daily P2P-capable
-`share/get` tasks check current policy in the background; `relay-only` skips the check.
-Neither setup nor skipping changes a task's connectivity mode.
+The installer uses these same commands. Choices live in
+`%LOCALAPPDATA%/WindShare/network-preference.json`. Successful setup records the
+canonical executable path; moving the executable offers setup again. Skip persists
+across paths, and cancelling UAC preserves the previous choice.
+
+Daily P2P-capable `share/get` tasks read only this local record, without PowerShell
+or blocking prompts; `relay-only` skips the read. Rule or organization-policy changes
+require explicit diagnosis. Neither setup nor skipping changes connectivity mode.
 
 Unattended installation skips optional setup without saving a choice. Scripts never
 prompt or open UAC: explicitly run `wind setup network --non-interactive` from an

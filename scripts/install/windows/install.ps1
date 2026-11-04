@@ -35,5 +35,5 @@ if (Test-Path -LiteralPath (Join-Path $sourceRoot 'go.mod')) {
     throw 'Expected a complete source checkout/source bundle or a release binary bundle.'
 }
 try { Invoke-WindShareNetworkSetup -Executable $executable -StateDirectory $StateDirectory -Choice $Firewall }
-catch { Write-Warning "Optional network setup: $($_.Exception.Message) Run wind doctor network to inspect current policy." }
+catch { Write-Warning "Optional network setup: $($_.Exception.Message) Run wind doctor network to inspect this executable's rules." }
 Write-Output "Installed $executable. Add $destinationRoot to PATH if desired."

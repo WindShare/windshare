@@ -102,8 +102,8 @@ function New-NetFirewallRule {
 }
 `
 
-func TestWindowsPolicyReaderScopesEffectiveRules(t *testing.T) {
-	output, err := runPowerShell(t.Context(), fakeInspectCommands+"\n$Executable = 'C:\\wind.exe'\n"+inspectScript)
+func TestWindowsPolicyReaderScopesExecutableRules(t *testing.T) {
+	output, err := runPowerShell(t.Context(), fakeInspectCommands+"\n$Executable = 'C:\\wind[preview].exe'\n"+inspectScript)
 	if err != nil {
 		t.Fatal(err, string(output))
 	}
@@ -118,15 +118,15 @@ func TestWindowsPolicyReaderScopesEffectiveRules(t *testing.T) {
 		t.Fatal(snapshot.Rules)
 	}
 	findings := Evaluate(snapshot)
-	if findings[0].Verdict != Unknown || findings[1].Verdict != Blocked || !findings[1].Repairable() {
+	if findings[0].Status != RuleRestricted || findings[1].Status != RuleMissing || !findings[1].SuggestSetup() {
 		t.Fatal(findings)
 	}
 }
 
 const fakeInspectCommands = `
 $FixtureRules = @(
-    foreach ($name in @('allow', 'block', 'package', 'service', 'other-program')) {
-        [pscustomobject]@{ Name = $name; InstanceID = $name; Profile = 2; PrimaryStatus = 'OK';
+    foreach ($name in @('allow', 'block', 'package', 'service', 'other-program', 'sshd-52222', 'tailscale', 'global-block')) {
+        [pscustomobject]@{ Name = $name; InstanceID = $name; Profile = 2; PrimaryStatus = 'OK'; Enabled = 'True'; Direction = 'Inbound';
             Action = $(if ($name -eq 'block') { 'Block' } else { 'Allow' }); PolicyStoreSourceType = 'Local';
             Owner = ''; PackageFamilyName = $(if ($name -eq 'package') { 'Store.App' } else { '' }) }
     }
@@ -135,10 +135,6 @@ function Get-NetConnectionProfile {
     [CmdletBinding()] param()
     [pscustomobject]@{ InterfaceAlias = 'Wi-Fi'; InterfaceIndex = 1; NetworkCategory = 'Private' }
 }
-function Get-NetIPAddress {
-    [CmdletBinding()] param()
-    [pscustomobject]@{ InterfaceIndex = 1; IPAddress = '192.168.1.2' }
-}
 function Get-NetFirewallProfile {
     [CmdletBinding()] param($PolicyStore)
     if ($PolicyStore -ne 'ActiveStore') { throw 'Not resultant policy.' }
@@ -146,15 +142,22 @@ function Get-NetFirewallProfile {
         DefaultInboundAction = 'Block'; DisabledInterfaceAliases = @() }
 }
 function Get-NetFirewallRule {
-    [CmdletBinding()] param($PolicyStore, $Enabled, $Direction)
-    if ($PolicyStore -ne 'ActiveStore' -or $Direction -ne 'Inbound' -or $Enabled -ne 'True') { throw 'Not current inbound policy.' }
-    $FixtureRules
+    [CmdletBinding()] param($PolicyStore, [Parameter(ValueFromPipeline)]$Application)
+    process {
+        if ($PolicyStore -ne 'ActiveStore' -or $null -eq $Application) { throw 'Unscoped rule query.' }
+        if ($Application.Program -ne $Executable) { throw 'Queried another program or global rule.' }
+        $FixtureRules | Where-Object { $_.InstanceID -eq $Application.InstanceID }
+    }
 }
 function Get-NetFirewallApplicationFilter {
-    [CmdletBinding()] param($PolicyStore)
+    [CmdletBinding()] param($PolicyStore, $Program)
+    if ($PolicyStore -ne 'ActiveStore' -or $Program -cne [WildcardPattern]::Escape($Executable)) { throw 'Unscoped application query.' }
     foreach ($rule in $FixtureRules) {
-        [pscustomobject]@{ InstanceID = $rule.Name; Package = $null;
-            Program = $(if ($rule.Name -eq 'other-program') { 'C:\other.exe' } else { 'Any' }) }
+        # Deliberately return irrelevant candidates too: the adapter must reject
+        # Any even if a provider expands or mishandles the program query.
+        $path = if ($rule.Name -eq 'other-program') { 'C:\other.exe' }
+            elseif ($rule.Name -in @('sshd-52222', 'tailscale', 'global-block')) { 'Any' } else { $Executable }
+        [pscustomobject]@{ InstanceID = $rule.Name; Package = $null; Program = $path }
     }
 }
 function Get-NetFirewallServiceFilter {

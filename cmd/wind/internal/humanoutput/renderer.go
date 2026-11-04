@@ -291,11 +291,11 @@ func (eventVisitor) VisitEngineTaskObserved(appobs.EngineTaskObserved) error { r
 
 func (eventVisitor) VisitObserverLossObserved(appobs.ObserverLossObserved) error { return nil }
 
-func (visitor eventVisitor) VisitNetworkPolicyObserved(event clievent.NetworkPolicyObserved) error {
+func (visitor eventVisitor) VisitNetworkSetupObserved(event clievent.NetworkSetupObserved) error {
 	if event.SuggestSetup() {
-		visitor.renderer.insert(terminalcanvas.Plain("Local firewall policy may limit direct connections. Configure: wind setup network; stop reminders: wind setup network --skip"))
+		visitor.renderer.insert(terminalcanvas.Plain("Network setup: wind setup network; dismiss: wind setup network --skip"))
 	} else if visitor.verboseVisible() {
-		visitor.renderer.insert(terminalcanvas.Plain("Inbound " + event.Profile() + " " + event.Protocol() + ": " + event.Verdict() + " (" + event.Reason() + "; choice: " + event.Choice() + ")"))
+		visitor.renderer.insert(terminalcanvas.Plain("Network setup: " + event.Decision()))
 	}
 	return nil
 }
@@ -341,8 +341,8 @@ func renderEvent(event clievent.Event, visitor eventVisitor) error {
 		return visitor.VisitEngineTaskObserved(value)
 	case appobs.ObserverLossObserved:
 		return visitor.VisitObserverLossObserved(value)
-	case clievent.NetworkPolicyObserved:
-		return visitor.VisitNetworkPolicyObserved(value)
+	case clievent.NetworkSetupObserved:
+		return visitor.VisitNetworkSetupObserved(value)
 	default:
 		return nil
 	}
