@@ -71,6 +71,9 @@ export type PreviewSnapshot =
       // The decoder element's time for the presented sample; not shown.
       readonly frameSeconds: number
       readonly seeking: boolean
+      // Why the latest seek showed no new frame. The preview stays open on the
+      // previous frame, with the download still available.
+      readonly failure: string | null
     }
   | {
       readonly state: 'error'

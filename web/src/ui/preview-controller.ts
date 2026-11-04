@@ -23,6 +23,8 @@ import {
 
 type PreviewScopeKind = 'preview_open' | 'preview_seek' | 'preview_media'
 
+const MEDIA_FAILURE_MESSAGE = 'The browser could not decode this bounded media preview.'
+
 interface PreviewIncidentPort {
   openScope(kind: PreviewScopeKind): IncidentScopeOwner
   submitDecision(scope: IncidentScopeHandle, decision: PresentationDecision): void
@@ -51,6 +53,7 @@ interface ScopedActivePreview extends ActivePreview {
   seekAttempt?: PendingPreviewSeek
   mediaAttempt?: PendingMediaPresentation
   incidentAttempt?: PreviewAttempt
+  framePresented?: boolean
 }
 
 export interface PreviewControllerHost {
@@ -159,7 +162,7 @@ export class PreviewController {
     }
     active.seekAttempt = pending
     try {
-      this.#publishPreview(Object.freeze({ ...preview, seeking: true }))
+      this.#publishPreview(Object.freeze({ ...preview, seeking: true, failure: null }))
     } catch (error) {
       this.#exclude(pending.attempt, 'not_user_visible')
       this.#closeAttempt(pending.attempt)
@@ -220,16 +223,11 @@ export class PreviewController {
           return
         }
         this.#recordFailure(pending.attempt, () => previewFailureFact('preview_seek', error))
-        active.incidentAttempt = pending.attempt
+        this.#retainIncidentAttempt(active, pending.attempt)
         delete active.seekAttempt
-        const failure = Object.freeze({
-          state: 'error' as const,
-          fileId: active.entry.idText,
-          name: active.entry.name,
-          message: this.#host.publicError(error),
-        })
-        this.#closeActive('stale_replacement')
-        this.#publishPreview(failure)
+        // One position failed; the session, its previous frame and the
+        // download stay available, so the preview remains open.
+        this.#publishVideoFailure(this.#host.publicError(error))
       },
     )
   }
@@ -250,6 +248,7 @@ export class PreviewController {
     this.#exclude(media.attempt, 'success')
     this.#closeAttempt(media.attempt)
     delete active.mediaAttempt
+    active.framePresented = true
   }
 
   mediaFailed(presentationId: number): void {
@@ -269,12 +268,18 @@ export class PreviewController {
       stage: 'preview_media',
       recoveryDisposition: 'none',
     }))
-    active.incidentAttempt = media.attempt
+    this.#retainIncidentAttempt(active, media.attempt)
+    delete active.mediaAttempt
+    if (preview.state === 'video' && active.framePresented === true) {
+      // A later seek's frame did not present: keep the earlier frame on screen.
+      this.#publishVideoFailure(MEDIA_FAILURE_MESSAGE)
+      return
+    }
     const failure = Object.freeze({
       state: 'error' as const,
       fileId: active.entry.idText,
       name: active.entry.name,
-      message: 'The browser could not decode this bounded media preview.',
+      message: MEDIA_FAILURE_MESSAGE,
     })
     this.#closeActive('stale_replacement')
     this.#publishPreview(failure)
@@ -333,6 +338,18 @@ export class PreviewController {
         message: this.#host.publicError(error),
       }))
     }
+  }
+
+  #retainIncidentAttempt(active: ScopedActivePreview, attempt: PreviewAttempt): void {
+    const previous = active.incidentAttempt
+    active.incidentAttempt = attempt
+    if (previous !== undefined && previous !== attempt) this.#closeAttempt(previous)
+  }
+
+  #publishVideoFailure(failure: string): void {
+    const preview = this.#host.snapshot().preview
+    if (preview.state !== 'video') return
+    this.#publishPreview(Object.freeze({ ...preview, seeking: false, failure }))
   }
 
   #startMediaAttempt(

@@ -124,6 +124,7 @@ export function previewSnapshot(
         positionSeconds: presentation.positionSeconds,
         frameSeconds: presentation.frameSeconds,
         seeking,
+        failure: null,
       })
 }
 

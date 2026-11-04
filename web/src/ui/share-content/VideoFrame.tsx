@@ -24,9 +24,9 @@ export function VideoFrame({ preview, actions }: {
   const [position, setPosition] = useState(preview.positionSeconds)
   const requested = useRef(preview.positionSeconds)
   const drag = useRef<{ pointerId: number; origin: number } | null>(null)
-  const pending = preview.seeking || presentedId !== preview.presentationId
+  const pending = preview.failure === null && (preview.seeking || presentedId !== preview.presentationId)
   const seek = (seconds: number) => {
-    if (seconds === requested.current) return
+    if (seconds === requested.current && preview.failure === null) return
     requested.current = seconds
     actions.seek(seconds)
   }
@@ -92,7 +92,12 @@ export function VideoFrame({ preview, actions }: {
         }}
         onPointerCancel={cancelDrag}
         onLostPointerCapture={cancelDrag} />
-      <p className="preview-seek-hint">Choose a moment to preview. Download the video to play it.</p>
+      {preview.failure === null
+        ? <p className="preview-seek-hint">Choose a moment to preview. Download the video to play it.</p>
+        : <div className="preview-seek-failure">
+          <p role="alert">{preview.failure}</p>
+          <p>Choose another moment to try again. You can still download the original file.</p>
+        </div>}
     </div>
   </div>
 }
