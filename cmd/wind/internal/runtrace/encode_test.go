@@ -14,6 +14,7 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	appobs "github.com/windshare/windshare/engine/observation"
 	wire "github.com/windshare/windshare/engine/observation/wire"
+	"github.com/windshare/windshare/internal/platformsetup"
 )
 
 const (
@@ -59,7 +60,7 @@ func TestEncodeVisitsEveryEventWithSealedPayloads(t *testing.T) {
 		"trace_incomplete",
 		"lane_adopted",
 		"observer_loss",
-		"platform_setup",
+		"network_policy",
 	}
 	eventNames := make(map[string]struct{}, len(events))
 	payloadTypes := make(map[reflect.Type]string, len(events))
@@ -380,7 +381,7 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 			Reason:   appobs.ObserverLossAdapterCapacityTimeout,
 			Count:    math.MaxUint64,
 		})),
-		mustValue(clievent.NewPlatformSetupObserved(clievent.CommandGet, "declined", "user-skipped")),
+		mustValue(clievent.NewNetworkPolicyObserved(clievent.CommandGet, platformsetup.Skip, platformsetup.Finding{Protocol: platformsetup.UDP, Reason: platformsetup.ReadFailed}, false)),
 	}
 }
 

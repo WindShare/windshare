@@ -15,6 +15,7 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
 	"github.com/windshare/windshare/cmd/wind/internal/configcommand"
+	"github.com/windshare/windshare/cmd/wind/internal/networkcommand"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relaysetup"
@@ -61,6 +62,9 @@ const usageText = `Usage:
   ` + commandmeta.Name + ` config import <file|-> [--front-url <url>] [-v|--verbose]
       Validate and replace sharing defaults. --front-url saves the website address; '-' reads JSON from stdin.
 
+  ` + commandmeta.Name + ` doctor network [--json]
+  ` + commandmeta.Name + ` setup network [--skip|--remove] [--non-interactive] [--json]
+
   ` + commandmeta.Name + ` resume retry [-o <directory>] [--only <path>] <link>
       Continue an existing download with its original link and selection.
 
@@ -92,7 +96,7 @@ type App struct {
 	application             *engine.Engine
 	engineConfig            engine.Config
 	getOutputFactory        engine.OutputFactory
-	platformSetupStatus     *platformsetup.Status
+	networkSetup            *platformsetup.Service
 	loadShareConfig         func() (relayconfig.Config, error)
 	saveShareConfig         func(relayconfig.Config) error
 }
@@ -100,12 +104,11 @@ type App struct {
 // Main 是 os 进程入口的接线:真实标准流 + SIGINT 取消(Ctrl-C 即"停止分享"
 // /"中断下载"语义,§6.9)。
 func Main() int {
-	setupStatus := platformsetup.Read()
 	app := &App{
 		Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin,
-		platformSetupStatus: &setupStatus,
-		loadShareConfig:     relayconfig.Load,
-		saveShareConfig:     relayconfig.Save,
+		networkSetup:    platformsetup.New(),
+		loadShareConfig: relayconfig.Load,
+		saveShareConfig: relayconfig.Save,
 	}
 	interrupts := make(chan os.Signal, interruptSignalBuffer)
 	signal.Notify(interrupts, os.Interrupt)
@@ -126,6 +129,15 @@ func Main() int {
 // 不引 CLI 框架)。
 func (a *App) Run(ctx context.Context, args []string) (code int) {
 	// Local configuration does not need a transfer engine or network resources.
+	if len(args) != 0 && (args[0] == "doctor" || args[0] == "setup") {
+		service := a.networkSetup
+		if service == nil {
+			service = platformsetup.New()
+		}
+		runner := networkcommand.Runner{Service: service, Input: a.Stdin, Output: a.stderrWriter(), JSONOutput: a.Stdout,
+			Interactive: func() bool { return networkcommand.IsInteractive(a.Stdin, a.Stderr) }}
+		return runner.Run(ctx, args[0], args[1:])
+	}
 	if len(args) != 0 && args[0] == "config" {
 		runner := configcommand.Runner{Input: a.Stdin, Output: a.stderrWriter(), Save: a.saveShareConfig}
 		switch runner.Run(ctx, args[1:]) {
