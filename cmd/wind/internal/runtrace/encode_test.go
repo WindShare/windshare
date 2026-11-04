@@ -60,7 +60,7 @@ func TestEncodeVisitsEveryEventWithSealedPayloads(t *testing.T) {
 		"trace_incomplete",
 		"lane_adopted",
 		"observer_loss",
-		"network_policy",
+		"network_setup",
 	}
 	eventNames := make(map[string]struct{}, len(events))
 	payloadTypes := make(map[reflect.Type]string, len(events))
@@ -381,7 +381,7 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 			Reason:   appobs.ObserverLossAdapterCapacityTimeout,
 			Count:    math.MaxUint64,
 		})),
-		mustValue(clievent.NewNetworkPolicyObserved(clievent.CommandGet, platformsetup.Skip, platformsetup.Finding{Protocol: platformsetup.UDP, Reason: platformsetup.ReadFailed}, false)),
+		mustValue(clievent.NewNetworkSetupObserved(clievent.CommandGet, platformsetup.StartupReport{Decision: platformsetup.SetupSkipped})),
 	}
 }
 

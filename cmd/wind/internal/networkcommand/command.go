@@ -60,7 +60,7 @@ func (runner Runner) Run(ctx context.Context, command string, args []string) int
 	if command == "doctor" {
 		report := runner.Service.Check(ctx)
 		runner.report(report, nil, options.jsonOutput)
-		if report.PolicyError != "" || report.PreferenceError != "" {
+		if report.InspectionError != "" || report.PreferenceError != "" {
 			return ResultFailure
 		}
 		return ResultOK
@@ -112,7 +112,7 @@ func parseNetworkArgs(command string, args []string) (networkOptions, error) {
 	flags := flag.NewFlagSet(command+" network", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.Usage = func() {}
-	flags.BoolVar(&options.jsonOutput, "json", false, "write the policy report as JSON")
+	flags.BoolVar(&options.jsonOutput, "json", false, "write the executable rule inspection as JSON")
 	if command == "setup" {
 		flags.BoolVar(&options.skip, "skip", false, "save the preference to stop reminders")
 		flags.BoolVar(&options.remove, "remove", false, "remove only this executable's WindShare rules")
@@ -148,15 +148,15 @@ func (runner Runner) report(report platformsetup.Report, operation *platformsetu
 		}
 		fmt.Fprintln(runner.Output)
 	}
-	fmt.Fprintf(runner.Output, "Executable: %s\nSetup choice: %s\n", report.Executable, report.Choice)
+	fmt.Fprintf(runner.Output, "Executable: %s\nSetup choice: %s\nConfigured executable: %s\nScope: %s\nGlobal rules: not evaluated\n", report.Executable, report.Preference.Choice, report.Preference.Executable, platformsetup.InspectionScope)
 	if report.PreferenceError != "" {
 		fmt.Fprintf(runner.Output, "Preference: unknown (%s)\n", report.PreferenceError)
 	}
-	if report.PolicyError != "" {
-		fmt.Fprintf(runner.Output, "Policy: unknown (%s)\n", report.PolicyError)
+	if report.InspectionError != "" {
+		fmt.Fprintf(runner.Output, "Inspection: unknown (%s)\n", report.InspectionError)
 	}
 	for _, finding := range report.Findings {
-		fmt.Fprintf(runner.Output, "%s %s %s: %s (%s)\n", finding.Network.Interface, finding.Network.Profile, finding.Protocol, finding.Verdict, finding.Reason)
+		fmt.Fprintf(runner.Output, "%s %s %s: %s (%s)\n", finding.Network.Interface, finding.Network.Profile, finding.Protocol, finding.Status, finding.Reason)
 		for _, rule := range finding.Rules {
 			fmt.Fprintf(runner.Output, "  %s: %s", rule.Name, rule.Action)
 			if rule.Restrictions != "" {
@@ -165,7 +165,7 @@ func (runner Runner) report(report platformsetup.Report, operation *platformsetu
 			fmt.Fprintln(runner.Output)
 		}
 	}
-	if report.Repairable() {
+	if report.SuggestSetup() {
 		fmt.Fprintln(runner.Output, "Configure: wind setup network")
 	}
 }

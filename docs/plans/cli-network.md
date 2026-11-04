@@ -1,50 +1,37 @@
-# CLI 网络配置计划
+# CLI network setup
 
-让 Windows 用户能知道直连是否可能受本机配置限制，并方便地完成一次配置。检查和配置都不阻塞正常分享，仍可使用可用的中转路径。
+Keep everyday sharing independent of Windows firewall inspection. Configuration
+history, observed executable rules, and actual connection outcomes are separate.
 
-## 背景
+## Daily transfers
 
-既有 LAN 对照记录指向 Windows 防火墙：
+P2P-capable `share/get` commands read only the local installation preference.
+They never launch PowerShell or wait for setup input. `relay-only` skips this read.
 
-| 条件 | 结果 |
-|---|---|
-| 没有放行规则 | 约 12 秒内无法连接 |
-| 只放行测试程序的 LAN UDP 入站 | 222 ms 建立原生 LAN 连接，8/8 次数据收发成功 |
-| 撤销规则 | 再次无法连接 |
+- `skip`: suppress reminders across executable and network changes.
+- `configure` plus the current canonical executable path: suppress reminders.
+- No choice or a different configured path: offer the explicit setup command.
+- An unreadable preference produces a trace diagnostic, not a blocking prompt.
 
-当时复用了生产 Go provider，代理保持开启、Chrome 使用默认权限，没有注入 LAN 候选，也没有配置 STUN/TURN。临时规则已撤销；该记录不代表实际 `wind.exe` 已永久放行或完整下载已复测。[完整对照记录](../../.tmp/lan-native-rootcause-20261021/findings.txt)
+A successful rule write records its executable path; cancellation and failure
+preserve the previous choice. Removal clears only the matching installation
+record. Replacing the binary at the same path does not require setup again.
 
-旧实现只读取安装时保存的记录，无法反映规则删除或策略变化。现在由 [platformsetup](../../internal/platformsetup/service.go) 读取当前策略并管理规则，CLI 与安装器共用该能力。
+## Explicit commands
 
-## 命令计划
+`wind doctor network` reads enabled inbound rules explicitly targeting the
+current executable and the active networks' firewall profiles. It never elevates.
+Reports identify this scope and describe rules as present, missing, restricted,
+or unknown. Global rules are excluded; these findings cannot prove effective
+host-wide permission or P2P reachability. Arbitrary traffic restrictions remain
+diagnostic evidence instead of being evaluated by a second firewall engine.
 
-以下命令已实现。使用方式见[安装文档](../installation.md#windows-first-setup)；策略判断基于可注入快照，Windows 规则操作由短暂运行的子进程执行。
+`wind setup network` writes only owned UDP/TCP rules for the current executable,
+covering all profiles, ports, and remote addresses. It preserves ownership checks,
+limits elevation to the rule writer, and inspects current rules after the operation.
+Organization policy can still ignore local rules or disallow inbound exceptions.
 
-### 第一步：`wind doctor network`
-
-只读检查当前程序的网络配置，回答“本机配置是否可能限制直连”，不修改系统设置、不触发提权。
-
-- 读取当前可执行文件路径、网络类型及适用的 UDP/TCP 有效入站策略，包括允许规则和阻止策略。
-- 分别呈现用户配置选择和当前策略判断；按协议及适用网络范围保留允许、阻止、无法确定三种结果及原因。
-- 仅对本工具可修复的问题给出 `wind setup network` 入口；受组织策略或其他阻止规则限制时说明原因，读取失败或证据不足则报告无法确定。
-
-缺少 WindShare 自建规则不等于被阻止，规则存在也不等于实际直连成功。实际连接方式继续由握手和路径观测决定。
-
-### 第二步：`wind setup network`
-
-为当前运行的 WindShare 配置应用级 UDP/TCP 入站规则，覆盖域、专用、公用网络，并在授权前说明范围。
-
-- 安装器和 CLI 共用同一套平台配置能力；规则绑定当前可执行文件，重复执行复用或修复本程序拥有的规则。
-- 需要权限时，只让短暂运行的配置子进程提权，分享进程保持普通权限。
-- 配置结束后复查当前入站策略，分别报告规则操作结果和策略判断；不协调其他 CLI 进程，传输沿用现有重试机制。
-- 用户拒绝授权或配置失败时给出原因，不改变任务连接模式；`p2p-only` 不自动改用内容中转。
-- `wind setup network --skip` 仅保存“不再提醒”偏好，不修改规则、不提权；取消一次 UAC 不等同于永久跳过。
-
-## 日常使用与实现边界
-
-- 正式安装器提供一次“允许 WindShare 通过防火墙”选择；跳过配置不等于选择 `relay-only`。
-- 需要 P2P 的 `share/get` 任务启动时在后台限时检查一次当前策略，不阻塞链接就绪；`relay-only` 不提示直连配置。
-- 普通输出仅给简短的可修复问题提示，附配置与不再提醒入口；详细判断由 `wind doctor network` 提供。独立保存用户跳过的选择，路径或网络变化不重置该偏好，不反复提示。
-- 安装器和 CLI 在脚本、CI 中不等待交互、不自动弹 UAC；非交互安装默认跳过可选配置且不记录用户偏好，需要配置时在已有权限的环境显式调用 `wind setup network`。
-- 每次检查读取当前策略，不把历史 `configured` 当作持续有效的证明；不新增常驻防火墙监控。
-- 分开建模用户配置选择、当前入站策略、实际连接结果。平台适配器负责系统读取和规则操作，策略判断使用可注入的状态快照，供 CLI、安装器和未来桌面共用；Windows 细节留在平台层。
+The installer uses the same setup commands and path-bound preference. Unattended
+installation never prompts or invents a user choice. Skipping setup does not
+change connectivity mode. Rule drift is diagnosed explicitly; connection traces
+remain the authority for actual direct and relay paths.
