@@ -24,7 +24,10 @@ function Invoke-WindShareNetworkSetup {
         if (Test-Path -LiteralPath $preferencePath) {
             try {
                 $saved = Get-Content -LiteralPath $preferencePath -Raw | ConvertFrom-Json
-                if ($saved.schema -eq 1 -and $saved.choice -in @('configure', 'skip')) { return }
+                if ($saved.schema -eq 2) {
+                    if ($saved.choice -eq 'skip') { return }
+                    if ($saved.choice -eq 'configure' -and $saved.executable -ieq [IO.Path]::GetFullPath($Executable)) { return }
+                }
             } catch { Write-Warning 'Network setup preference is unreadable.' }
         }
         $Choice = if ((& $Prompt) -ieq 'y') { 'Configure' } else { 'Skip' }

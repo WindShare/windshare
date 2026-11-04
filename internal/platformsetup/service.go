@@ -3,7 +3,6 @@ package platformsetup
 import (
 	"context"
 	"errors"
-	"os"
 	"time"
 )
 
@@ -44,27 +43,27 @@ type Platform interface {
 }
 
 type Preferences interface {
-	Load() (Choice, error)
-	Save(Choice) error
+	Load() (Preference, error)
+	Save(Preference) error
 }
 
 type Service struct {
 	Platform    Platform
 	Preferences Preferences
-	Executable  func() (string, error)
+	Executable  func() (string, error) // Canonical installation path used by rule ownership.
 }
 
 type Report struct {
 	Executable      string
-	Choice          Choice
+	Preference      Preference
 	PreferenceError string
-	PolicyError     string
+	InspectionError string
 	Findings        []Finding
 }
 
-func (report Report) Repairable() bool {
+func (report Report) SuggestSetup() bool {
 	for _, finding := range report.Findings {
-		if finding.Repairable() {
+		if finding.SuggestSetup() {
 			return true
 		}
 	}
@@ -72,15 +71,15 @@ func (report Report) Repairable() bool {
 }
 
 func New() *Service {
-	return &Service{Platform: nativePlatform(), Preferences: FilePreferences{}, Executable: os.Executable}
+	return &Service{Platform: nativePlatform(), Preferences: FilePreferences{}, Executable: installationExecutable}
 }
 
 func (service *Service) Check(ctx context.Context) Report {
 	ctx, cancel := context.WithTimeout(ctx, CheckTimeout)
 	defer cancel()
 	report := Report{}
-	choice, err := service.Preferences.Load()
-	report.Choice = choice
+	preference, err := service.Preferences.Load()
+	report.Preference = preference
 	if err != nil {
 		report.PreferenceError = err.Error()
 	}
@@ -98,14 +97,14 @@ func (service *Service) Check(ctx context.Context) Report {
 	if errors.Is(err, ErrUnsupported) {
 		reason = UnsupportedPlatform
 	}
-	report.PolicyError, report.Findings = err.Error(), unknownFindings(reason)
+	report.InspectionError, report.Findings = err.Error(), unknownFindings(reason)
 	return report
 }
 
-func (service *Service) Skip() error { return service.Preferences.Save(Skip) }
+func (service *Service) Skip() error { return service.Preferences.Save(Preference{Choice: Skip}) }
 
-// Setup always rechecks policy, including after a failed or declined operation.
-// A successful rule write is deliberately not a successful-connectivity verdict.
+// Explicit setup always inspects current executable rules, even after a failed
+// operation. A successful write records installation history, not reachability.
 func (service *Service) Setup(ctx context.Context, action RuleAction, allowElevation bool) (Operation, Report) {
 	executable, err := service.Executable()
 	if err != nil {
@@ -113,12 +112,28 @@ func (service *Service) Setup(ctx context.Context, action RuleAction, allowEleva
 	}
 	operation := service.Platform.Apply(ctx, executable, action, allowElevation)
 	var preferenceErr error
-	if operation.State == RulesApplied {
-		preferenceErr = service.Preferences.Save(Configure)
+	switch operation.State {
+	case RulesApplied:
+		preferenceErr = service.Preferences.Save(Preference{Choice: Configure, Executable: executable})
+	case RulesRemoved:
+		preferenceErr = service.forgetInstallation(executable)
 	}
 	report := service.Check(ctx)
 	if preferenceErr != nil {
 		report.PreferenceError = preferenceErr.Error()
 	}
 	return operation, report
+}
+
+func (service *Service) forgetInstallation(executable string) error {
+	preference, err := service.Preferences.Load()
+	if err != nil {
+		return err
+	}
+	// Removing one installation must preserve a user's skip choice and a receipt
+	// belonging to another installation.
+	if preference.Choice == Configure && sameExecutable(preference.Executable, executable) {
+		return service.Preferences.Save(Preference{})
+	}
+	return nil
 }

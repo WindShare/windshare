@@ -6,6 +6,8 @@ import "context"
 
 type unsupportedPlatform struct{}
 
+func installationExecutable() (string, error) { return "", ErrUnsupported }
+
 func nativePlatform() unsupportedPlatform { return unsupportedPlatform{} }
 func (unsupportedPlatform) Inspect(context.Context, string) (Snapshot, error) {
 	return Snapshot{}, ErrUnsupported
