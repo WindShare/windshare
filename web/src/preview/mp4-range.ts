@@ -12,6 +12,7 @@ export const VIDEO_MAXIMUM_SAMPLES = 1_000_000
 
 const TOP_LEVEL_BOX_LIMIT = 64
 const MP4_HEADER_BYTES = 16
+const EMPTY_EDIT_MEDIA_TIME = -1
 const SUPPORTED_VIDEO_CODEC = /^(?:avc1|avc3|hvc1|hev1|vp09|av01)\./u
 
 export interface PreviewRangeSource {
@@ -49,6 +50,7 @@ interface TopLevelBox extends BoxLocation {
 interface ParsedMetadata {
   readonly metadata: Mp4Metadata
   readonly trackId: number
+  readonly presentationOffsetSeconds: number
   readonly parts: readonly MetadataPart[]
 }
 
@@ -63,12 +65,14 @@ export class Mp4RangePreview {
   readonly metadata: Mp4Metadata
   readonly #source: PreviewRangeSource
   readonly #trackId: number
+  readonly #presentationOffsetSeconds: number
   readonly #parts: readonly MetadataPart[]
 
   private constructor(source: PreviewRangeSource, parsed: ParsedMetadata) {
     this.#source = source
     this.metadata = parsed.metadata
     this.#trackId = parsed.trackId
+    this.#presentationOffsetSeconds = parsed.presentationOffsetSeconds
     this.#parts = parsed.parts
   }
 
@@ -97,9 +101,15 @@ export class Mp4RangePreview {
     if (initialization === undefined || initialization.buffer.byteLength > VIDEO_METADATA_BYTES) {
       throw new VideoPreviewError('MP4 initialization segment exceeds the preview limit')
     }
-    file.seek(seconds, true)
-    const fragmented = file.fragmentedTracks.find((candidate) => candidate.id === track.id)
     const samples = file.getTrackSamplesInfo(track.id)
+    // mp4box seeks in raw composition time and skips a track entirely when the
+    // target passes its last decoded sample. The segment keeps the edit list, so
+    // the browser presents the chosen sample at its presentation time.
+    file.seek(Math.min(
+      Math.max(0, seconds + this.#presentationOffsetSeconds),
+      rawCompositionEndSeconds(samples),
+    ), true)
+    const fragmented = file.fragmentedTracks.find((candidate) => candidate.id === track.id)
     const sampleIndex = fragmented?.state.lastFragmentSampleNumber ?? -1
     const sample = samples[sampleIndex]
     requireSample(sample, this.#source.exactSize)
@@ -124,7 +134,7 @@ export class Mp4RangePreview {
       }
       return Object.freeze({
         bytes: new Blob([initialization.buffer, segment], { type: 'video/mp4' }),
-        positionSeconds: sample.cts / sample.timescale,
+        positionSeconds: Math.max(0, sample.cts / sample.timescale - this.#presentationOffsetSeconds),
       })
     } finally {
       unlink()
@@ -172,6 +182,7 @@ async function parseMetadata(
   const durationSeconds = track.movie_duration / track.movie_timescale
   return Object.freeze({
     trackId: track.id,
+    presentationOffsetSeconds: presentationOffsetSeconds(track),
     parts: Object.freeze(parts.map((part) => Object.freeze({
       start: part.start,
       data: part.data.slice(),
@@ -281,6 +292,33 @@ function validateTrack(track: Track, samples: readonly Sample[], exactSize: bigi
     throw new VideoPreviewError('MP4 sample count exceeds the preview limit')
   }
   for (const sample of samples) requireSample(sample, exactSize)
+}
+
+// Encoders that reorder frames (H.264/HEVC B-frames) start composition after
+// zero and record that delay in an edit list. Presentation time is composition
+// time minus the first edit's media start, plus any leading empty edits.
+function presentationOffsetSeconds(track: Track): number {
+  let delaySeconds = 0
+  for (const edit of track.edits ?? []) {
+    if (edit.media_time === EMPTY_EDIT_MEDIA_TIME) {
+      delaySeconds += edit.segment_duration / track.movie_timescale
+      continue
+    }
+    return requireFiniteOffset(edit.media_time / track.timescale - delaySeconds)
+  }
+  return requireFiniteOffset(-delaySeconds)
+}
+
+function rawCompositionEndSeconds(samples: readonly Sample[]): number {
+  const last = samples.at(-1)
+  return last === undefined ? 0 : (last.cts + last.duration) / last.timescale
+}
+
+function requireFiniteOffset(seconds: number): number {
+  if (!Number.isFinite(seconds) || Math.abs(seconds) > VIDEO_MAXIMUM_SECONDS) {
+    throw new VideoPreviewError('MP4 edit list is outside the preview policy')
+  }
+  return seconds
 }
 
 function requireSample(sample: Sample | undefined, exactSize: bigint): asserts sample is Sample {

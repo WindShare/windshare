@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
 
 import { Mp4RangePreview, VideoPreviewError, type PreviewRangeSource } from '../../src/preview/mp4-range'
 import type { ByteRange } from '../../src/content/geometry'
@@ -52,5 +53,29 @@ describe('v2 MP4 bounded range parser', () => {
     const source = new RecordedSource(bytes)
     await expect(Mp4RangePreview.open(source, new AbortController().signal))
       .rejects.toThrow('invalid size')
+  })
+})
+
+describe('v2 MP4 edit-list presentation time', () => {
+  // `ffmpeg -f lavfi -i testsrc=size=64x64:rate=10 -t 2 -c:v libx264 -g 10 -bf 2
+  // -pix_fmt yuv420p -fflags +bitexact -map_metadata -1`: keyframes are presented
+  // at 0 s and 1 s, and B-frames shift composition time by 0.2 s in the edit list.
+  const fixture = readFileSync(new URL('../fixtures/preview/h264-bframes-edit-list.mp4', import.meta.url))
+
+  async function seekPositions(targets: readonly number[]): Promise<number[]> {
+    const signal = new AbortController().signal
+    const preview = await Mp4RangePreview.open(new RecordedSource(new Uint8Array(fixture)), signal)
+    const positions: number[] = []
+    for (const target of targets) positions.push((await preview.segmentAt(target, signal)).positionSeconds)
+    return positions
+  }
+
+  it('seeks and reports keyframes on the presentation timeline', async () => {
+    const [start, second, afterSecond, end] = await seekPositions([0, 1, 1.1, 2])
+    expect(start).toBeCloseTo(0, 6)
+    expect(second).toBeCloseTo(1, 6)
+    expect(afterSecond).toBeCloseTo(1, 6)
+    // The authenticated duration ends after the last raw decode-order sample.
+    expect(end).toBeCloseTo(1, 6)
   })
 })
