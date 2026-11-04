@@ -126,8 +126,52 @@ describe('v2 MP4 edit-list presentation time', () => {
   // timescale, which the track presents as 80 ticks (80/600 s), followed by the
   // 40-tick B-frame shift. Keyframes are at 80/600 s and 680/600 s.
   it('rounds a leading empty edit to track-timescale ticks', async () => {
-    expectPositions(await seekPositions([0, 0.14, 1.133, 1.14, 2], 'h264-ts600-empty-edit.mp4'),
+    expectPositions(await seekPositions([0, 0.14, 1.13, 1.14, 2], 'h264-ts600-empty-edit.mp4'),
       [80 / 600, 80 / 600, 80 / 600, 680 / 600, 680 / 600])
+  })
+
+  // 30 fps `-t 3 -g 30 -bf 2` (timescale 15360) copied with `-ss 0.5 -c copy`:
+  // edit media_time 8704, keyframes at 7680/15360 = 0.5 s and 1.5 s. A seek
+  // exactly on 1.5 s must not fall back a whole GOP to 0.5 s.
+  it('selects a keyframe the seek lands on exactly with a nonzero offset', async () => {
+    expectPositions(await seekPositions([0, 0.5, 1.49, 1.5, 2.5], 'h264-head-trimmed-on-keyframe.mp4'),
+      [0.5, 0.5, 0.5, 1.5, 1.5])
+  })
+
+  // Same source copied with `-ss 0.77 -c copy`: edit media_time 12851 is not a
+  // multiple of the 512-tick frame, so keyframes are at 3533/15360 s and
+  // 18893/15360 s (Chromium presents them there; ffprobe rounds to 0.2 s).
+  it('keeps the exact tick offset when the cut is not on a frame boundary', async () => {
+    expectPositions(await seekPositions([0, 0.2, 1.2, 1.24, 2.2], 'h264-head-trimmed-mid-frame.mp4'),
+      [3_533 / 15_360, 3_533 / 15_360, 3_533 / 15_360, 18_893 / 15_360, 18_893 / 15_360])
+  })
+
+  // `-f lavfi -i testsrc=size=64x64:rate=30000/1001 -t 2.1 -g 30 -bf 2
+  // -video_track_timescale 30000`: keyframes at 0, 30030 and 60060 ticks. In
+  // float math 1.001 * 30000 < 30030, which used to fall back to 0 s.
+  it('selects 29.97 fps keyframes at their exact tick', async () => {
+    expectPositions(await seekPositions([0, 1, 1.001, 2, 2.002, 2.1], 'h264-ntsc-30000.mp4'),
+      [0, 0, 1.001, 1.001, 2.002, 2.002])
+  })
+
+  // Slider-style 0.1 s steps: every step reports the last keyframe at or before
+  // it (or the first visible keyframe before it), never one a GOP earlier.
+  it.each([
+    ['h264-bframes-edit-list.mp4', [0, 1]],
+    ['h264-leading-empty-edit.mp4', [0.5, 1.5]],
+    ['h264-head-trimmed.mp4', [0.5, 1.5]],
+    ['h264-head-trimmed-on-keyframe.mp4', [0.5, 1.5]],
+    ['h264-head-trimmed-mid-frame.mp4', [3_533 / 15_360, 18_893 / 15_360]],
+    ['h264-ntsc-head-trimmed-float.mp4', [7_478 / 30_000, 35_506 / 30_000]],
+    ['h264-ntsc-30000.mp4', [0, 1.001, 2.002]],
+    ['h264-ts600-empty-edit.mp4', [80 / 600, 680 / 600]],
+  ] as const)('sweeps 0.1 s steps over %s without GOP jumps', async (name, keyframes) => {
+    const preview = await openFixture(name)
+    const steps = Math.floor(preview.metadata.durationSeconds * 10 + 1e-9)
+    const targets = Array.from({ length: steps + 1 }, (_, step) => step / 10)
+    const expected = targets.map((target) =>
+      keyframes.findLast((keyframe) => keyframe <= target + 1e-9) ?? keyframes[0])
+    expectPositions(await seekPositions(targets, name), expected)
   })
 
   // `-g 100` (a single keyframe) copied with `-ss 0.5 -c copy`: no keyframe is on
@@ -137,6 +181,6 @@ describe('v2 MP4 edit-list presentation time', () => {
     await expect(preview.segmentAt(0, new AbortController().signal))
       .rejects.toThrow(VideoPreviewError)
     await expect(preview.segmentAt(1, new AbortController().signal))
-      .rejects.toThrow('trimmed without a full frame to show')
+      .rejects.toThrow('leaves no complete frame to show')
   })
 })

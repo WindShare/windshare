@@ -13,9 +13,10 @@ export const VIDEO_MAXIMUM_SAMPLES = 1_000_000
 const TOP_LEVEL_BOX_LIMIT = 64
 const MP4_HEADER_BYTES = 16
 const EMPTY_EDIT_MEDIA_TIME = -1
-const PRESENTATION_ORIGIN_EPSILON_SECONDS = 1 / 1_000_000
+// VideoPreviewError messages reach the preview alert as written.
 const NO_PRESENTED_KEYFRAME_MESSAGE =
-  'This video can’t be previewed because it was trimmed without a full frame to show.'
+  'This video can’t be previewed because it was trimmed in a way that leaves no complete frame to show.'
+const UNSUPPORTED_TIMING_MESSAGE = 'This video’s timing information isn’t supported by the preview.'
 const SUPPORTED_VIDEO_CODEC = /^(?:avc1|avc3|hvc1|hev1|vp09|av01)\./u
 
 export interface PreviewRangeSource {
@@ -50,11 +51,17 @@ interface TopLevelBox extends BoxLocation {
   readonly type: string
 }
 
+// A sync sample on the presentation timeline, in track-timescale ticks.
+interface PresentedKeyframe {
+  readonly index: number
+  readonly ticks: number
+}
+
 interface ParsedMetadata {
   readonly metadata: Mp4Metadata
   readonly trackId: number
-  readonly presentationOffsetSeconds: number
-  readonly firstPresentedKeyframe: number | undefined
+  readonly timescale: number
+  readonly keyframes: readonly PresentedKeyframe[]
   readonly parts: readonly MetadataPart[]
 }
 
@@ -69,16 +76,16 @@ export class Mp4RangePreview {
   readonly metadata: Mp4Metadata
   readonly #source: PreviewRangeSource
   readonly #trackId: number
-  readonly #presentationOffsetSeconds: number
-  readonly #firstPresentedKeyframe: number | undefined
+  readonly #timescale: number
+  readonly #keyframes: readonly PresentedKeyframe[]
   readonly #parts: readonly MetadataPart[]
 
   private constructor(source: PreviewRangeSource, parsed: ParsedMetadata) {
     this.#source = source
     this.metadata = parsed.metadata
     this.#trackId = parsed.trackId
-    this.#presentationOffsetSeconds = parsed.presentationOffsetSeconds
-    this.#firstPresentedKeyframe = parsed.firstPresentedKeyframe
+    this.#timescale = parsed.timescale
+    this.#keyframes = parsed.keyframes
     this.#parts = parsed.parts
   }
 
@@ -108,37 +115,20 @@ export class Mp4RangePreview {
       throw new VideoPreviewError('MP4 initialization segment exceeds the preview limit')
     }
     const samples = file.getTrackSamplesInfo(track.id)
-    // mp4box seeks in raw composition time and skips a track entirely when the
-    // target passes its last decoded sample. The segment keeps the edit list, so
-    // the browser presents the chosen sample at its presentation time.
-    file.seek(Math.min(
-      Math.max(0, seconds + this.#presentationOffsetSeconds),
-      rawCompositionEndSeconds(samples),
-    ), true)
-    const fragmented = file.fragmentedTracks.find((candidate) => candidate.id === track.id)
-    let sampleIndex = fragmented?.state.lastFragmentSampleNumber ?? -1
-    let sample = samples[sampleIndex]
+    const keyframe = this.#keyframeAt(seconds)
+    const sample = samples[keyframe.index]
     requireSample(sample, this.#source.exactSize)
-    let positionSeconds = presentationSeconds(sample, this.#presentationOffsetSeconds)
-    if (positionSeconds < 0) {
-      // Head-trimmed copies (`-ss … -c copy`) keep the keyframe before the cut,
-      // which the edit list hides. The browser never presents it, so use the
-      // first keyframe that is actually on the presentation timeline, which is
-      // later than the requested time.
-      if (this.#firstPresentedKeyframe === undefined) {
-        throw new VideoPreviewError(NO_PRESENTED_KEYFRAME_MESSAGE)
-      }
-      sampleIndex = this.#firstPresentedKeyframe
-      sample = samples[sampleIndex]
-      requireSample(sample, this.#source.exactSize)
-      // Seek half a tick past the sample: (cts / timescale) * timescale can be
-      // below cts in float math, and mp4box would then pick the keyframe before.
-      file.seek((sample.cts + 0.5) / sample.timescale, true)
-      if (fragmented?.state.lastFragmentSampleNumber !== sampleIndex) {
-        throw new VideoPreviewError('This video could not be previewed at this position.')
-      }
-      positionSeconds = presentationSeconds(sample, this.#presentationOffsetSeconds)
+    // The keyframe is chosen in integer ticks. mp4box compares raw cts with
+    // seconds * timescale, so seek half a tick past the chosen sample: an exact
+    // cts / timescale can land below cts in float math and select the keyframe
+    // a whole GOP earlier. The segment keeps the edit list, so the browser
+    // presents the sample at its presentation time.
+    file.seek((sample.cts + 0.5) / this.#timescale, true)
+    const fragmented = file.fragmentedTracks.find((candidate) => candidate.id === track.id)
+    if (fragmented?.state.lastFragmentSampleNumber !== keyframe.index) {
+      throw new VideoPreviewError('This video could not be previewed at this position.')
     }
+    const positionSeconds = keyframe.ticks / this.#timescale
     const sampleData = await this.#source.read(
       byteRange(BigInt(sample.offset), BigInt(sample.offset + sample.size)),
       signal,
@@ -168,6 +158,23 @@ export class Mp4RangePreview {
       file.stop()
       await segmentPromise.catch(() => undefined)
     }
+  }
+
+  // The last keyframe presented at or before the target tick. Head-trimmed
+  // copies (`-ss … -c copy`) keep the keyframe before the cut and hide it with
+  // the edit list; the browser never presents it, so a target before the first
+  // visible keyframe uses that keyframe, which is later than the target.
+  #keyframeAt(seconds: number): PresentedKeyframe {
+    if (this.#keyframes.length === 0) throw new VideoPreviewError(NO_PRESENTED_KEYFRAME_MESSAGE)
+    const targetTicks = Math.round(seconds * this.#timescale)
+    let low = 0
+    let high = this.#keyframes.length - 1
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2)
+      if (this.#keyframes[middle]!.ticks <= targetTicks) low = middle
+      else high = middle - 1
+    }
+    return this.#keyframes[low]!
   }
 }
 
@@ -206,11 +213,10 @@ async function parseMetadata(
   const samples = file.getTrackSamplesInfo(track.id)
   validateTrack(track, samples, source.exactSize)
   const durationSeconds = track.movie_duration / track.movie_timescale
-  const offsetSeconds = presentationOffsetSeconds(track)
   return Object.freeze({
     trackId: track.id,
-    presentationOffsetSeconds: offsetSeconds,
-    firstPresentedKeyframe: firstPresentedKeyframe(samples, offsetSeconds, durationSeconds),
+    timescale: track.timescale,
+    keyframes: presentedKeyframes(track, samples, durationSeconds),
     parts: Object.freeze(parts.map((part) => Object.freeze({
       start: part.start,
       data: part.data.slice(),
@@ -324,58 +330,52 @@ function validateTrack(track: Track, samples: readonly Sample[], exactSize: bigi
 
 // Encoders that reorder frames (H.264/HEVC B-frames) start composition after
 // zero and record that delay in an edit list. Presentation time is composition
-// time minus the first edit's media start, plus any leading empty edits.
-function presentationOffsetSeconds(track: Track): number {
-  let delaySeconds = 0
+// time minus the first edit's media start, plus any leading empty edits. All in
+// track-timescale ticks: the browser presents empty edits in whole track ticks.
+function presentationOffsetTicks(track: Track): number {
+  let emptyMovieTicks = 0
   for (const edit of track.edits ?? []) {
     if (edit.media_time === EMPTY_EDIT_MEDIA_TIME) {
-      // The browser presents the empty edit in whole track-timescale ticks.
-      delaySeconds += Math.round(edit.segment_duration * track.timescale / track.movie_timescale) /
-        track.timescale
+      emptyMovieTicks += edit.segment_duration
       continue
     }
-    return requireFiniteOffset(edit.media_time / track.timescale - delaySeconds)
+    return requireOffset(edit.media_time - emptyTicks(track, emptyMovieTicks), track.timescale)
   }
-  return requireFiniteOffset(-delaySeconds)
+  return requireOffset(-emptyTicks(track, emptyMovieTicks), track.timescale)
 }
 
-function presentationSeconds(sample: Sample, offsetSeconds: number): number {
-  const seconds = sample.cts / sample.timescale - offsetSeconds
-  // Edit offsets and sample times use different timescales; absorb float error
-  // at the presentation origin instead of treating a keyframe at 0 as trimmed.
-  return Math.abs(seconds) <= PRESENTATION_ORIGIN_EPSILON_SECONDS ? 0 : seconds
+function emptyTicks(track: Track, movieTicks: number): number {
+  return Math.round(movieTicks * track.timescale / track.movie_timescale)
 }
 
-// Index of the earliest keyframe presented in [0, duration], or undefined when a
-// head-trimmed copy hides every keyframe. Computed once at open.
-function firstPresentedKeyframe(
+// Sync samples presented within [0, duration], sorted by presentation tick.
+// Computed once at open.
+function presentedKeyframes(
+  track: Track,
   samples: readonly Sample[],
-  offsetSeconds: number,
   durationSeconds: number,
-): number | undefined {
-  let chosen: number | undefined
-  let chosenSeconds = Number.POSITIVE_INFINITY
-  for (const [index, candidate] of samples.entries()) {
-    if (!candidate.is_sync) continue
-    const seconds = presentationSeconds(candidate, offsetSeconds)
-    if (seconds >= 0 && seconds <= durationSeconds && seconds < chosenSeconds) {
-      chosen = index
-      chosenSeconds = seconds
+): readonly PresentedKeyframe[] {
+  const offsetTicks = presentationOffsetTicks(track)
+  const keyframes: PresentedKeyframe[] = []
+  for (const [index, sample] of samples.entries()) {
+    if (!sample.is_sync) continue
+    if (sample.timescale !== track.timescale) {
+      throw new VideoPreviewError(UNSUPPORTED_TIMING_MESSAGE)
+    }
+    const ticks = sample.cts - offsetTicks
+    if (ticks >= 0 && ticks / track.timescale <= durationSeconds) {
+      keyframes.push(Object.freeze({ index, ticks }))
     }
   }
-  return chosen
+  keyframes.sort((left, right) => left.ticks - right.ticks)
+  return Object.freeze(keyframes)
 }
 
-function rawCompositionEndSeconds(samples: readonly Sample[]): number {
-  const last = samples.at(-1)
-  return last === undefined ? 0 : (last.cts + last.duration) / last.timescale
-}
-
-function requireFiniteOffset(seconds: number): number {
-  if (!Number.isFinite(seconds) || Math.abs(seconds) > VIDEO_MAXIMUM_SECONDS) {
-    throw new VideoPreviewError('This video’s timing information is not supported by the preview.')
+function requireOffset(ticks: number, timescale: number): number {
+  if (!Number.isSafeInteger(ticks) || Math.abs(ticks / timescale) > VIDEO_MAXIMUM_SECONDS) {
+    throw new VideoPreviewError(UNSUPPORTED_TIMING_MESSAGE)
   }
-  return seconds
+  return ticks
 }
 
 function requireSample(sample: Sample | undefined, exactSize: bigint): asserts sample is Sample {

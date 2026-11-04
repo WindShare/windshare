@@ -22,6 +22,13 @@ const CASES = [
   // 600-tick track with `-itsoffset 0.1234`: the 133 ms empty edit is 80 ticks,
   // so keyframes are at 80/600 s and 680/600 s, not 0.133 s and 1.133 s.
   { fixture: 'h264-ts600-empty-edit.mp4', targets: [0, 1.14, 2], keyframes: [80 / 600, 680 / 600, 680 / 600] },
+  // Head-trimmed copy (`-ss 0.5 -c copy`, 30 fps): 1.5 s lands exactly on a
+  // keyframe with a nonzero edit offset.
+  { fixture: 'h264-head-trimmed-on-keyframe.mp4', targets: [0, 1.5], keyframes: [0.5, 1.5] },
+  // Head-trimmed copy whose cut (`-ss 0.77`) is not on a frame boundary.
+  { fixture: 'h264-head-trimmed-mid-frame.mp4', targets: [0, 1.24], keyframes: [3_533 / 15_360, 18_893 / 15_360] },
+  // 29.97 fps with timescale 30000: keyframes at 0, 1.001 s and 2.002 s.
+  { fixture: 'h264-ntsc-30000.mp4', targets: [0, 1.001, 2.002], keyframes: [0, 1.001, 2.002] },
 ] as const
 const PRESENTATION_TIMEOUT_MS = 5_000
 // Browser media pipelines round rational sample times to microseconds.
