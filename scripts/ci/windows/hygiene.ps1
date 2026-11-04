@@ -48,7 +48,7 @@ if ($unformatted.Count -ne 0) {
 
 Invoke-Step 'whitespace' { git --no-pager diff --check }
 Invoke-Step 'Release source and binary packaging contracts' { go test ./scripts/ci/_sourcebundle ./scripts/ci/_releaseassets }
-Invoke-Step 'Windows first-setup contract (fake firewall commands)' { & ./scripts/install/windows/firewall.tests.ps1 }
+Invoke-Step 'Windows installer network contract (injected commands)' { & ./scripts/install/windows/network.tests.ps1 }
 Invoke-Step 'Pinned Pion source verifier tests' { go test ./scripts/ci/_piondeps }
 Invoke-Step 'Pinned Pion source and patch reproduction' { go run ./scripts/ci/_piondeps -reproduce }
 # Requirement markers drift silently once a package starts importing an indirect

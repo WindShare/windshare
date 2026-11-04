@@ -12,6 +12,7 @@ import (
 
 	"github.com/windshare/windshare/adapters/filesystem"
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	"github.com/windshare/windshare/cmd/wind/internal/networkcommand"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/transfer"
@@ -64,6 +65,9 @@ func (a *App) runReceive(ctx context.Context, command receiveCommand, args []str
 	task, err := a.application.StartReceive(ctx, engine.ReceiveRequest{Admission: request.admission, OperationID: request.operationID, Capability: request.link, Only: request.only, Connectivity: request.connectivity, WaitTimeout: request.waitTimeout, Output: factory, Destination: destination, Diagnostics: runtime.diagnosticSink(), OnPause: a.receivePauseHandler()})
 	if err != nil {
 		return observation.commandFailure(ExitFailure, err)
+	}
+	if a.networkSetup != nil && request.connectivity != engine.ConnectivityRelayOnly {
+		defer networkcommand.StartCheck(ctx, a.networkSetup, runtime, clievent.CommandGet)()
 	}
 	for value := range task.Observations() {
 		observeEngineTask(runtime, value)

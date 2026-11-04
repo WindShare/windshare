@@ -7,14 +7,12 @@ param(
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-Import-Module (Join-Path $PSScriptRoot 'firewall.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'network.psm1') -Force
 $sourceRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../..'))
 $destinationRoot = [IO.Path]::GetFullPath($Destination)
 $executable = Join-Path $destinationRoot 'wind.exe'
-$statusPath = Join-Path ([IO.Path]::GetFullPath($StateDirectory)) 'connectivity-setup.json'
 if ($Uninstall) {
-    $status = Invoke-WindShareFirewallSetup -Executable $executable -StatusPath $statusPath -Choice Remove
-    if ($status.reason -ne 'rule-removed') { throw 'Remove the owned firewall rule from a permitted shell before uninstalling.' }
+    Invoke-WindShareNetworkSetup -Executable $executable -StateDirectory $StateDirectory -Choice Remove
     if (Test-Path -LiteralPath $executable) { Remove-Item -LiteralPath $executable -Force }
     return
 }
@@ -36,19 +34,6 @@ if (Test-Path -LiteralPath (Join-Path $sourceRoot 'go.mod')) {
 } else {
     throw 'Expected a complete source checkout/source bundle or a release binary bundle.'
 }
-if ($Firewall -eq 'Ask') {
-    if (Test-Path -LiteralPath $statusPath) {
-        try {
-            $previous = Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json
-            if ($previous.schema -eq 1 -and $previous.executable -ieq $executable -and
-                $previous.state -in @('configured', 'declined', 'unavailable')) {
-                Write-Output "Installed $executable. Kept first-setup decision: $($previous.state). Use -Firewall Configure to retry explicitly."
-                return
-            }
-        } catch { Write-Warning 'Previous setup status is unreadable; select optional first setup again.' }
-    }
-    $answer = Read-Host 'Allow WindShare inbound UDP/TCP for direct connections? [y/N] (optional; requires a shell already permitted to manage firewall rules)'
-    $Firewall = if ($answer -ieq 'y') { 'Configure' } else { 'Skip' }
-}
-$status = Invoke-WindShareFirewallSetup -Executable $executable -StatusPath $statusPath -Choice $Firewall
-Write-Output "Installed $executable. Firewall: $($status.state) ($($status.reason)). Add $destinationRoot to PATH if desired."
+try { Invoke-WindShareNetworkSetup -Executable $executable -StateDirectory $StateDirectory -Choice $Firewall }
+catch { Write-Warning "Optional network setup: $($_.Exception.Message) Run wind doctor network to inspect current policy." }
+Write-Output "Installed $executable. Add $destinationRoot to PATH if desired."

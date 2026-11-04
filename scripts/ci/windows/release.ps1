@@ -384,7 +384,7 @@ try {
         & $goExecutable test -count=1 ./scripts/ci/_sourcebundle ./scripts/ci/_releaseassets
     }
     Invoke-Step 'Windows first-setup contract (fake firewall commands)' {
-        & $currentPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/install/windows/firewall.tests.ps1
+        & $currentPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/install/windows/network.tests.ps1
     }
     # Helper tests execute repository code. Re-proving the clean exact checkout
     # prevents a test from replacing the later archive builder in place.

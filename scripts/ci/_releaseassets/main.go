@@ -58,7 +58,7 @@ func buildAssets(source, archive, out, version, commit string) error {
 	}
 	installFiles := []string{"scripts/install/install.sh"}
 	if runtime.GOOS == "windows" {
-		installFiles = []string{"scripts/install/windows/install.ps1", "scripts/install/windows/firewall.psm1"}
+		installFiles = []string{"scripts/install/windows/install.ps1", "scripts/install/windows/network.psm1"}
 	}
 	for _, path := range installFiles {
 		if err := copyFile(filepath.Join(source, filepath.FromSlash(path)), filepath.Join(staging, filepath.FromSlash(path))); err != nil {
