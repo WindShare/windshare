@@ -10,7 +10,13 @@ import (
 )
 
 func TestRulePathCanonicalization(t *testing.T) {
-	executable := filepath.Join(t.TempDir(), "installed application.exe")
+	// Windows runners may supply TEMP with an 8.3 parent component. Establish
+	// the long fixture path before comparing it with the short alias.
+	directory, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(directory, "installed application.exe")
 	if err := os.WriteFile(executable, []byte("binary"), 0o600); err != nil {
 		t.Fatal(err)
 	}

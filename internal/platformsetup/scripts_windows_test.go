@@ -47,7 +47,7 @@ func TestWindowsOwnedRuleWriter(t *testing.T) {
 				t.Fatal(result, runErr)
 			}
 			created, removed := 0, 0
-			for _, line := range strings.Split(strings.TrimSpace(string(calls)), "\n") {
+			for line := range strings.SplitSeq(strings.TrimSpace(string(calls)), "\n") {
 				var call struct{ Action, Name, Program, Protocol, Profile, Group, Direction, Enabled, Operation string }
 				if err := json.Unmarshal([]byte(line), &call); err != nil {
 					t.Fatal(err)

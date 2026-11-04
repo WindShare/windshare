@@ -155,8 +155,12 @@ func buildV5TracePayloadSchemas() map[string]*v5TraceObjectSchema {
 			v5TraceObjectField("failure", failure, true),
 			v5TraceObjectField("cleanup_failure", failure, true),
 		),
-		"ready":          v5TraceSchema(),
-		"platform_setup": v5TraceSchema(v5TraceFields(v5TraceString, "state", "reason")),
+		"ready": v5TraceSchema(),
+		"network_policy": v5TraceSchema(
+			v5TraceFields(v5TraceRawString, "interface"),
+			v5TraceFields(v5TraceString, "choice", "profile", "protocol", "verdict", "reason"),
+			v5TraceFields(v5TraceBool, "suggest_setup"),
+		),
 		"sharing_subject_selected": v5TraceSchema(
 			v5TraceFields(v5TraceString, "subject_kind"),
 			v5TraceFields(v5TraceDecimal, "selected_items"),
