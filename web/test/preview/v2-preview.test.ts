@@ -12,9 +12,12 @@ import {
 } from '../../src/content/broker'
 import type { BlockRecord, FileRevisionDescriptor } from '../../src/content/records'
 import type { RevisionReader } from '../../src/content/session-services'
-import type { Mp4Segment, PreviewRangeSource } from '../../src/preview/mp4-range'
+import { VideoPreviewError, type Mp4Segment, type PreviewRangeSource } from '../../src/preview/mp4-range'
+import { ReceiveSourceInvalidatedError } from '../../src/application/receive/errors'
 import {
   FilePreview,
+  isPositionLocalPreviewFailure,
+  PreviewRuntimeError,
   type PreviewPorts,
   type VideoRangePort,
 } from '../../src/preview/preview'
@@ -335,5 +338,16 @@ describe('v2 file preview runtime', () => {
     )).rejects.toThrow('does not support')
     expect(sampleReads).toBe(0)
     expect(fixture.releases()).toBe(1)
+  })
+})
+
+describe('position-local preview failure classification', () => {
+  it('treats only a bounded MP4 parser rejection as local to the requested position', () => {
+    expect(isPositionLocalPreviewFailure(new VideoPreviewError('MP4 sample geometry exceeds the preview limits'))).toBe(true)
+    expect(isPositionLocalPreviewFailure(new PreviewRuntimeError('preview integrity failed'))).toBe(false)
+    expect(isPositionLocalPreviewFailure(new ReceiveSourceInvalidatedError(new Error('revision changed')))).toBe(false)
+    expect(isPositionLocalPreviewFailure(new DOMException('aborted', 'AbortError'))).toBe(false)
+    expect(isPositionLocalPreviewFailure(new Error('range read failed'))).toBe(false)
+    expect(isPositionLocalPreviewFailure(undefined)).toBe(false)
   })
 })

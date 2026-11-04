@@ -11,6 +11,7 @@ import {
 } from './image-header'
 import {
   Mp4RangePreview,
+  VideoPreviewError,
   type Mp4Metadata,
   type Mp4Segment,
   type PreviewRangeSource,
@@ -60,6 +61,19 @@ export type PreviewPresentation =
       readonly positionSeconds: number
       readonly frameSeconds: number
     }
+
+// Whether a FilePreview.seek failure is confined to the requested position,
+// so the session, its previous frame and the download stay usable and the UI
+// may keep the preview open. Only the bounded MP4 parser rejecting that one
+// segment (VideoPreviewError) qualifies. Decoder failures and the presentation
+// deadline happen after seek resolves and are the UI's to classify. Every
+// other seek failure (a broker range read or disconnect, lease or source
+// invalidation such as ReceiveSourceInvalidatedError, an integrity check such
+// as PreviewRuntimeError, a remote rejection whether retryable or not, or a
+// dead peer session) says the session itself cannot serve another seek.
+export function isPositionLocalPreviewFailure(error: unknown): boolean {
+  return error instanceof VideoPreviewError
+}
 
 export class PreviewRuntimeError extends Error {
   constructor(message: string, options?: ErrorOptions) {

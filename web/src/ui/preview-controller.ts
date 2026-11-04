@@ -2,8 +2,7 @@ import { isAutomaticPhotoCandidate, AutomaticPhotoDeferredError, AUTOMATIC_PHOTO
 import type { CatalogEntry } from '../catalog/records'
 import { RemoteOperationError } from '../content/session-operations'
 import { RemoteRevisionError } from '../content/session-services'
-import { VideoPreviewError } from '../preview/mp4-range'
-import type { PreviewPresentation } from '../preview/preview'
+import { isPositionLocalPreviewFailure, type PreviewPresentation } from '../preview/preview'
 import { unclassifiedFailureFact, type FailureFact } from '../diagnostics/incident/fact'
 import {
   excludedPresentationDecision,
@@ -242,7 +241,7 @@ export class PreviewController {
         }
         delete active.seekAttempt
         const fact = () => previewFailureFact('preview_seek', error)
-        if (active.framePresented === true && isLocalSeekFailure(error)) {
+        if (active.framePresented === true && isPositionLocalPreviewFailure(error)) {
           // Only this position failed; the session, its previous frame and the
           // download stay available, so the preview remains open.
           this.#recordLocalFailure(active, pending.attempt, fact)
@@ -592,19 +591,6 @@ export class PreviewController {
   #publishPreview(preview: ReceiverSnapshot['preview']): void {
     this.#host.publish({ ...this.#host.snapshot(), preview })
   }
-}
-
-// A seek keeps the preview open only when its failure is confined to the
-// requested position: the bounded MP4 parser rejected that one segment
-// (VideoPreviewError). Decoder failures and the presentation deadline arrive
-// through mediaFailed instead. Every other seek failure (a broker range read or
-// disconnect, lease or source invalidation such as
-// ReceiveSourceInvalidatedError, an integrity check such as PreviewRuntimeError,
-// a remote rejection whether retryable or not, or a dead peer session) says the
-// session itself cannot serve another seek, so the preview closes into the
-// error state.
-function isLocalSeekFailure(error: unknown): boolean {
-  return error instanceof VideoPreviewError
 }
 
 function videoPosition(presentation: PreviewPresentation): number | undefined {
