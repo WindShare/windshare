@@ -111,6 +111,25 @@ describe('v2 MP4 edit-list presentation time', () => {
       [0.5, 0.5, 0.5, 0.5, 1.5, 1.5])
   })
 
+  // 29.97 fps `-t 2 -g 28 -bf 2` copied with `-ss 0.685 -c copy` (timescale 30000,
+  // edit media_time 22552). The first visible keyframe has cts 30030, so it is at
+  // 7478/30000 s. 30030 / 30000 * 30000 < 30030 in float math, so seeking mp4box
+  // to exactly cts / timescale picks the hidden keyframe before it.
+  it('selects the first visible keyframe when cts / timescale rounds down', async () => {
+    expectPositions(await seekPositions([0, 0.2, 0.5, 1.2], 'h264-ntsc-head-trimmed-float.mp4'),
+      [7_478 / 30_000, 7_478 / 30_000, 7_478 / 30_000, 35_506 / 30_000])
+    expect(7_478 / 30_000).toBeCloseTo(0.249267, 6)
+  })
+
+  // `-itsoffset 0.1234 -f lavfi -i testsrc=size=64x64:rate=30 -t 2 -g 30 -bf 2
+  // -video_track_timescale 600`: the empty edit is 133 ms in the 1000 Hz movie
+  // timescale, which the track presents as 80 ticks (80/600 s), followed by the
+  // 40-tick B-frame shift. Keyframes are at 80/600 s and 680/600 s.
+  it('rounds a leading empty edit to track-timescale ticks', async () => {
+    expectPositions(await seekPositions([0, 0.14, 1.133, 1.14, 2], 'h264-ts600-empty-edit.mp4'),
+      [80 / 600, 80 / 600, 80 / 600, 680 / 600, 680 / 600])
+  })
+
   // `-g 100` (a single keyframe) copied with `-ss 0.5 -c copy`: no keyframe is on
   // the presentation timeline, so the preview must fail instead of reporting 0.
   it('rejects a trimmed clip with no keyframe on the presentation timeline', async () => {
@@ -118,6 +137,6 @@ describe('v2 MP4 edit-list presentation time', () => {
     await expect(preview.segmentAt(0, new AbortController().signal))
       .rejects.toThrow(VideoPreviewError)
     await expect(preview.segmentAt(1, new AbortController().signal))
-      .rejects.toThrow('no keyframe on its presentation timeline')
+      .rejects.toThrow('trimmed without a full frame to show')
   })
 })

@@ -16,6 +16,12 @@ const CASES = [
   // Head-trimmed copy (`-ss 0.5 -c copy`): the keyframe before the cut is at
   // -0.5 s, so 0 s must use the first keyframe on the timeline, 0.5 s.
   { fixture: 'h264-head-trimmed.mp4', targets: [0, 1.5], keyframes: [0.5, 1.5] },
+  // 29.97 fps head-trimmed copy (`-ss 0.685 -c copy`): the first visible
+  // keyframe is at 7478/30000 s, where (cts / timescale) * timescale < cts.
+  { fixture: 'h264-ntsc-head-trimmed-float.mp4', targets: [0, 1.2], keyframes: [7_478 / 30_000, 35_506 / 30_000] },
+  // 600-tick track with `-itsoffset 0.1234`: the 133 ms empty edit is 80 ticks,
+  // so keyframes are at 80/600 s and 680/600 s, not 0.133 s and 1.133 s.
+  { fixture: 'h264-ts600-empty-edit.mp4', targets: [0, 1.14, 2], keyframes: [80 / 600, 680 / 600, 680 / 600] },
 ] as const
 const PRESENTATION_TIMEOUT_MS = 5_000
 // Browser media pipelines round rational sample times to microseconds.
