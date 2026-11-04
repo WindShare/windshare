@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/internal/platformsetup"
 )
@@ -29,7 +30,7 @@ func commandNetworkService(t *testing.T, platform *commandNetworkPlatform) *plat
 		Executable:  func() (string, error) { return "wind.exe", nil }}
 }
 
-func TestReceiveChecksPolicyOnlyForP2PCapableModes(t *testing.T) {
+func TestReceiveNeverInspectsFirewall(t *testing.T) {
 	for _, mode := range []string{"auto", "p2p-only", "relay-only"} {
 		t.Run(mode, func(t *testing.T) {
 			platform := &commandNetworkPlatform{}
@@ -40,14 +41,29 @@ func TestReceiveChecksPolicyOnlyForP2PCapableModes(t *testing.T) {
 			if code := app.Run(t.Context(), []string{"get", validGetTestLink(t), "--connectivity", mode}); code != ExitFailure {
 				t.Fatal(code)
 			}
-			want := int32(1)
-			if mode == "relay-only" {
-				want = 0
-			}
+			want := int32(0)
 			if got := platform.checks.Load(); got != want {
 				t.Fatal("policy check count", got, want)
 			}
 		})
+	}
+}
+
+func TestShareNeverInspectsFirewall(t *testing.T) {
+	platform := &commandNetworkPlatform{}
+	var prepared atomic.Bool
+	app := &App{Stderr: &bytes.Buffer{}, networkSetup: commandNetworkService(t, platform),
+		engineConfig: engine.Config{Share: engine.ShareDependencies{
+			Prepare: func(context.Context, liveshare.SenderConfig) (engine.PreparedShare, error) {
+				prepared.Store(true)
+				return nil, errors.New("injected preparation failure before dialing")
+			},
+		}}}
+	if code := app.Run(t.Context(), []string{"share", t.TempDir(), "--relay", "https://relay.example", "--front-url", "https://front.example"}); code != ExitUsage {
+		t.Fatal(code)
+	}
+	if !prepared.Load() || platform.checks.Load() != 0 {
+		t.Fatal("share read firewall policy or never started")
 	}
 }
 
@@ -64,7 +80,7 @@ func TestDoctorAndSkipAreLocalCommands(t *testing.T) {
 		t.Fatal("skip read system policy")
 	}
 	choice, err := app.networkSetup.Preferences.Load()
-	if err != nil || choice != platformsetup.Skip {
+	if err != nil || choice.Choice != platformsetup.Skip {
 		t.Fatal(choice, err)
 	}
 }

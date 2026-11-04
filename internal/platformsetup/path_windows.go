@@ -2,7 +2,16 @@ package platformsetup
 
 import (
 	"golang.org/x/sys/windows"
+	"os"
 )
+
+func installationExecutable() (string, error) {
+	path, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return longInstallationPath(path)
+}
 
 // A path, including its long Windows spelling, owns the rules across upgrades.
 // Hard links at different paths must not acquire each other's rule identity.

@@ -70,7 +70,7 @@ func TestCommandFailuresRemainSeparateFromPolicyVerdicts(t *testing.T) {
 			t.Fatal(state, code)
 		}
 	}
-	for _, report := range []platformsetup.Report{{PolicyError: "read failed"}, {PreferenceError: "unreadable"}} {
+	for _, report := range []platformsetup.Report{{InspectionError: "read failed"}, {PreferenceError: "unreadable"}} {
 		runner := Runner{Service: &fakeService{report: report}, Output: &bytes.Buffer{}}
 		if code := runner.Run(t.Context(), "doctor", []string{"network"}); code != ResultFailure {
 			t.Fatal(code)
@@ -84,10 +84,10 @@ func TestCommandFailuresRemainSeparateFromPolicyVerdicts(t *testing.T) {
 
 func TestJSONReportPreservesEvidenceOnItsOwnStream(t *testing.T) {
 	var human, machine bytes.Buffer
-	service := &fakeService{report: platformsetup.Report{Executable: "wind.exe", Choice: platformsetup.Skip, Findings: []platformsetup.Finding{{
+	service := &fakeService{report: platformsetup.Report{Executable: "wind.exe", Preference: platformsetup.Preference{Choice: platformsetup.Skip}, Findings: []platformsetup.Finding{{
 		Network: platformsetup.Network{Interface: "Wi-Fi", Profile: platformsetup.Private}, Protocol: platformsetup.UDP,
-		Verdict: platformsetup.Blocked, Reason: platformsetup.ExplicitBlock,
-		Rules: []platformsetup.Rule{{Name: "company policy", Action: platformsetup.Blocked}},
+		Status: platformsetup.PolicyRestricted, Reason: platformsetup.ExplicitBlock,
+		Rules: []platformsetup.Rule{{Name: "company policy", Action: platformsetup.Block}},
 	}}}}
 	runner := Runner{Service: service, Output: &human, JSONOutput: &machine}
 	if code := runner.Run(t.Context(), "doctor", []string{"network", "--json"}); code != ResultOK {
@@ -97,7 +97,7 @@ func TestJSONReportPreservesEvidenceOnItsOwnStream(t *testing.T) {
 	if err := json.Unmarshal(machine.Bytes(), &report); err != nil {
 		t.Fatal(err)
 	}
-	if human.Len() != 0 || report.Choice != "skip" || len(report.Findings) != 1 || report.Findings[0].Repairable || len(report.Findings[0].Rules) != 1 {
+	if human.Len() != 0 || report.Choice != "skip" || report.Scope != platformsetup.InspectionScope || len(report.Findings) != 1 || report.Findings[0].SuggestSetup || len(report.Findings[0].Rules) != 1 {
 		t.Fatal(human.String(), machine.String())
 	}
 }

@@ -67,7 +67,7 @@ func (a *App) runReceive(ctx context.Context, command receiveCommand, args []str
 		return observation.commandFailure(ExitFailure, err)
 	}
 	if a.networkSetup != nil && request.connectivity != engine.ConnectivityRelayOnly {
-		defer networkcommand.StartCheck(ctx, a.networkSetup, runtime, clievent.CommandGet)()
+		networkcommand.ObserveStartup(a.networkSetup, runtime, clievent.CommandGet)
 	}
 	for value := range task.Observations() {
 		observeEngineTask(runtime, value)

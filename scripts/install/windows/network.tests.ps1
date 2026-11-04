@@ -22,10 +22,19 @@ try {
     Invoke-WindShareNetworkSetup $executable $testRoot Ask -Interactive $true -Run $run -Prompt { 'n' }
     if (($script:calls[4].arguments -join ' ') -ne 'setup network --skip') { throw 'Explicit decline was not saved.' }
     foreach ($choice in @('skip', 'configure')) {
-        [IO.File]::WriteAllText((Join-Path $testRoot 'network-preference.json'), "{`"schema`":1,`"choice`":`"$choice`"}")
+        $record = @{ schema = 2; choice = $choice; executable = $(if ($choice -eq 'configure') { $executable.ToUpperInvariant() } else { '' }) }
+        [IO.File]::WriteAllText((Join-Path $testRoot 'network-preference.json'), ($record | ConvertTo-Json -Compress))
         Invoke-WindShareNetworkSetup $executable $testRoot Ask -Interactive $true -Run $run -Prompt $failPrompt
     }
     if ($script:calls.Count -ne 5) { throw 'Saved user choice was repeated.' }
+    $record = @{ schema = 2; choice = 'configure'; executable = 'C:\old\wind.exe' }
+    [IO.File]::WriteAllText((Join-Path $testRoot 'network-preference.json'), ($record | ConvertTo-Json -Compress))
+    Invoke-WindShareNetworkSetup $executable $testRoot Ask -Interactive $true -Run $run -Prompt { 'y' }
+    if ($script:calls.Count -ne 6) { throw 'Another installation suppressed setup.' }
+    $record = @{ schema = 2; choice = 'skip'; executable = '' }
+    [IO.File]::WriteAllText((Join-Path $testRoot 'network-preference.json'), ($record | ConvertTo-Json -Compress))
+    Invoke-WindShareNetworkSetup 'C:\moved\wind.exe' $testRoot Ask -Interactive $true -Run $run -Prompt $failPrompt
+    if ($script:calls.Count -ne 6) { throw 'Moving the executable reset skip.' }
     foreach ($call in $script:calls) {
         if ($call.program -ne $executable -or $call.preference -ne (Join-Path $testRoot 'network-preference.json')) { throw 'Setup targeted another installation or user.' }
     }

@@ -1,5 +1,5 @@
-// Package platformsetup separates a user's setup choice from current host policy.
-// Its reports describe inbound policy, never the outcome of an ICE connection.
+// Package platformsetup separates installation history, executable-scoped rule
+// inspection, and rule writes. None of them asserts actual ICE reachability.
 package platformsetup
 
 type Choice uint8
@@ -23,7 +23,6 @@ const (
 )
 
 func (v Profile) String() string { return enumName(int(v), "unknown", "domain", "private", "public") }
-func (v Profile) Valid() bool    { return v <= Public }
 
 type Protocol uint8
 
@@ -34,18 +33,35 @@ const (
 )
 
 func (v Protocol) String() string { return enumName(int(v), "any", "UDP", "TCP") }
-func (v Protocol) Valid() bool    { return v == UDP || v == TCP }
 
-type Verdict uint8
+type InboundAction uint8
 
 const (
-	Unknown Verdict = iota
-	Allowed
-	Blocked
+	UnknownAction InboundAction = iota
+	Allow
+	Block
 )
 
-func (v Verdict) String() string { return enumName(int(v), "unknown", "allowed", "blocked") }
-func (v Verdict) Valid() bool    { return v <= Blocked }
+func (v InboundAction) String() string { return enumName(int(v), "unknown", "allow", "block") }
+
+// InspectionScope excludes all-program rules; even RulePresent is not evidence
+// that the host's complete effective policy allows this executable.
+const InspectionScope = "executable-inbound-rules"
+
+type RuleStatus uint8
+
+const (
+	UnknownStatus RuleStatus = iota
+	RulePresent
+	RuleMissing
+	RuleRestricted
+	PolicyRestricted
+	RuleNotRequired
+)
+
+func (v RuleStatus) String() string {
+	return enumName(int(v), "unknown", "rule-present", "rule-missing", "rule-restricted", "policy-restricted", "rule-not-required")
+}
 
 type Reason uint8
 
@@ -61,16 +77,15 @@ const (
 	ConditionalRule
 	ExplicitAllow
 	DefaultAllow
-	DefaultBlock
+	NoMatchingRule
 	LocalRulesDisabled
 )
 
 func (v Reason) String() string {
-	return enumName(int(v), "incomplete-evidence", "unsupported-platform", "policy-read-failed",
+	return enumName(int(v), "incomplete-evidence", "unsupported-platform", "read-failed",
 		"no-active-network", "firewall-disabled", "interface-exempt", "inbound-rules-disabled",
-		"explicit-block", "conditional-rule", "explicit-allow", "default-allow", "default-block", "local-rules-disabled")
+		"explicit-block", "conditional-rule", "explicit-allow", "default-allow", "no-matching-rule", "local-rules-disabled")
 }
-func (v Reason) Valid() bool { return v <= LocalRulesDisabled }
 
 func enumName(index int, names ...string) string {
 	if index < 0 || index >= len(names) {
@@ -89,9 +104,8 @@ const (
 )
 
 type Network struct {
-	Interface      string
-	Profile        Profile
-	LocalAddresses []string
+	Interface string
+	Profile   Profile
 }
 
 type ProfilePolicy struct {
@@ -99,23 +113,20 @@ type ProfilePolicy struct {
 	Enabled            Setting
 	AllowInboundRules  Setting
 	AllowLocalRules    Setting
-	DefaultInbound     Verdict
+	DefaultInbound     InboundAction
 	DisabledInterfaces []string
 }
 
-// Rules are already scoped to this executable by the platform adapter. Conditional
-// rules retain their restrictions because peer addresses and ICE ports are not known.
+// The adapter selects explicit executable paths. Restricted rules are retained
+// for diagnosis without attempting to evaluate their arbitrary traffic selectors.
 type Rule struct {
-	Name            string
-	Profiles        []Profile
-	Protocol        Protocol
-	Action          Verdict
-	Local           bool
-	Conditional     bool
-	Restrictions    string
-	Interfaces      []string
-	LocalAddresses  []string
-	OverridesBlocks bool
+	Name         string
+	Profiles     []Profile
+	Protocol     Protocol
+	Action       InboundAction
+	Local        bool
+	Conditional  bool
+	Restrictions string
 }
 
 type Snapshot struct {
@@ -127,9 +138,9 @@ type Snapshot struct {
 type Finding struct {
 	Network  Network
 	Protocol Protocol
-	Verdict  Verdict
+	Status   RuleStatus
 	Reason   Reason
 	Rules    []Rule
 }
 
-func (f Finding) Repairable() bool { return f.Verdict == Blocked && f.Reason == DefaultBlock }
+func (f Finding) SuggestSetup() bool { return f.Status == RuleMissing }
