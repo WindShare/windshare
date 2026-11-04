@@ -2,6 +2,7 @@ import { isAutomaticPhotoCandidate, AutomaticPhotoDeferredError, AUTOMATIC_PHOTO
 import type { CatalogEntry } from '../catalog/records'
 import { RemoteOperationError } from '../content/session-operations'
 import { RemoteRevisionError } from '../content/session-services'
+import { VideoPreviewError } from '../preview/mp4-range'
 import { unclassifiedFailureFact, type FailureFact } from '../diagnostics/incident/fact'
 import {
   excludedPresentationDecision,
@@ -225,9 +226,20 @@ export class PreviewController {
         this.#recordFailure(pending.attempt, () => previewFailureFact('preview_seek', error))
         this.#retainIncidentAttempt(active, pending.attempt)
         delete active.seekAttempt
-        // One position failed; the session, its previous frame and the
-        // download stay available, so the preview remains open.
-        this.#publishVideoFailure(this.#host.publicError(error))
+        if (active.framePresented === true && isLocalSeekFailure(error)) {
+          // Only this position failed; the session, its previous frame and the
+          // download stay available, so the preview remains open.
+          this.#publishVideoFailure(this.#host.publicError(error))
+          return
+        }
+        const failure = Object.freeze({
+          state: 'error' as const,
+          fileId: active.entry.idText,
+          name: active.entry.name,
+          message: this.#host.publicError(error),
+        })
+        this.#closeActive('stale_replacement')
+        this.#publishPreview(failure)
       },
     )
   }
@@ -511,6 +523,19 @@ export class PreviewController {
   #publishPreview(preview: ReceiverSnapshot['preview']): void {
     this.#host.publish({ ...this.#host.snapshot(), preview })
   }
+}
+
+// A seek keeps the preview open only when its failure is confined to the
+// requested position: the bounded MP4 parser rejected that one segment
+// (VideoPreviewError). Decoder failures and the presentation deadline arrive
+// through mediaFailed instead. Every other seek failure (a broker range read or
+// disconnect, lease or source invalidation such as
+// ReceiveSourceInvalidatedError, an integrity check such as PreviewRuntimeError,
+// a remote rejection whether retryable or not, or a dead peer session) says the
+// session itself cannot serve another seek, so the preview closes into the
+// error state.
+function isLocalSeekFailure(error: unknown): boolean {
+  return error instanceof VideoPreviewError
 }
 
 function previewFailureFact(

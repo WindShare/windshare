@@ -18,7 +18,7 @@ import { createBrowserDiagnosticsComposition } from '../../src/application/diagn
 import { browserBuildSnapshot } from '../../src/diagnostics/build-identity'
 import { FakeTraceTime } from '../diagnostics/trace/test-support'
 import { RemoteOperationError } from '../../src/content/session-operations'
-import { RevisionCapacityBusyError } from '../../src/content/session-services'
+import { RemoteRevisionError, RevisionCapacityBusyError } from '../../src/content/session-services'
 import { REVISION_CODE_QUOTA } from '../../src/content/flow'
 import type { CatalogScanProgressListener } from '../../src/catalog/client'
 import { SelectionPolicy } from '../../src/catalog/selection'
@@ -27,6 +27,8 @@ import {
   ConnectivityRouteAuthority,
 } from '../../src/connectivity/receiver-policy'
 import { PreviewRuntimeError, type FilePreview } from '../../src/preview/preview'
+import { VideoPreviewError } from '../../src/preview/mp4-range'
+import { ReceiveSourceInvalidatedError } from '../../src/application/receive/errors'
 import { AutomaticPhotoDeferredError } from '../../src/preview/automatic-photo'
 import type {
   AuthenticatedDiscoveryRequest,
@@ -193,6 +195,26 @@ function authenticatedRemoteOperationError(): RemoteOperationError {
     }), content: {
       scope: 'revision', code: 0x22, retryable: true, retryAfterMilliseconds: 250
     }
+  }))
+}
+
+function remoteOperationError(retryable: boolean): RemoteOperationError {
+  return new RemoteOperationError(createReceivedProtocolError({
+    requestKind: 'request_blocks', correlation: Object.freeze({
+      protocolSessionId: createFailureIdentity('protocol_session', identity(13)),
+      protocolOperationId: createFailureIdentity('protocol_operation', identity(14)),
+    }), content: retryable
+      ? { scope: 'block', code: 0x31, retryable, retryAfterMilliseconds: 250 }
+      : { scope: 'block', code: 0x31, retryable },
+  }))
+}
+
+function nonRetryableRemoteRevisionError(): RemoteRevisionError {
+  return new RemoteRevisionError(createReceivedProtocolError({
+    requestKind: 'open_revisions', correlation: Object.freeze({
+      protocolSessionId: createFailureIdentity('protocol_session', identity(15)),
+      protocolOperationId: createFailureIdentity('protocol_operation', identity(16)),
+    }), content: { scope: 'revision', code: 0x21, retryable: false },
   }))
 }
 
@@ -630,7 +652,7 @@ describe('v2 preview incident ownership', () => {
 })
 
 describe('v2 preview seek failure presentation', () => {
-  it('keeps the preview open on seek failure and records session-close failure as its consequence', async () => {
+  it('keeps seek failure primary and records session-close failure as its consequence', async () => {
     const joined = new DiagnosticPreviewJoined({
       seekFailure: new Error('seek failed'),
       closeFailure: new Error('close failed'),
@@ -646,8 +668,132 @@ describe('v2 preview seek failure presentation', () => {
 
     previews.open(joined as unknown as JoinedBrowserShare, entry)
     await turn()
+    if (snapshot.preview.state !== 'video') throw new TypeError('expected video preview')
+    previews.mediaPresented(snapshot.preview.presentationId)
+    previews.seek(12)
+    await turn()
+
+    // An unclassified seek failure is not known to be local to one position.
+    expect(snapshot.preview).toEqual({
+      state: 'error', fileId: entry.idText, name: entry.name, message: 'preview failed',
+    })
+    expect(joined.closed).toBe(1)
+    expect(incidents.owners.map((owner) => owner.identity.scopeKind)).toEqual([
+      'preview_open',
+      'preview_media',
+      'preview_seek',
+    ])
+    expect(incidents.decisions).toMatchObject([
+      { decision: { kind: 'excluded', reason: 'success' } },
+      { decision: { kind: 'excluded', reason: 'success' } },
+      {
+        scope: { scopeKind: 'preview_seek' },
+        decision: {
+          kind: 'incident',
+          boundary: 'preview',
+          outcome: 'failed',
+        },
+      },
+    ])
+    expect(incidents.facts).toMatchObject([
+      {
+        scope: { scopeKind: 'preview_seek' },
+        fact: {
+          kind: 'unclassified', stage: 'preview_seek',
+          evidence: { exception: { message: 'seek failed', stack: expect.any(String) } },
+        },
+        relation: 'contributor',
+      },
+      {
+        scope: { scopeKind: 'preview_seek' },
+        fact: {
+          kind: 'unclassified', stage: 'cleanup',
+          evidence: { exception: { message: 'close failed', stack: expect.any(String) } },
+        },
+        relation: 'consequence',
+      },
+    ])
+    expect(incidents.owners.every((owner) => owner.isClosed())).toBe(true)
+  })
+
+  it.each([
+    ['a short broker range read', () => new PreviewRuntimeError('Preview range ended before its exact length')],
+    ['a source invalidation', () => new ReceiveSourceInvalidatedError(new Error('revision changed'))],
+    ['a non-retryable remote operation error', () => remoteOperationError(false)],
+    ['a retryable remote operation error', () => remoteOperationError(true)],
+    ['a non-retryable remote revision error', () => nonRetryableRemoteRevisionError()],
+    ['a dead peer session', () => new DOMException('Peer session closed', 'NetworkError')],
+  ])('closes the preview into the error state after %s', async (_name, failure) => {
+    const error = failure()
+    const joined = new DiagnosticPreviewJoined({ seekFailure: error })
+    const incidents = new RecordingPreviewIncidents()
+    let snapshot = directPreviewSnapshot()
+    const previews = new PreviewController({
+      snapshot: () => snapshot,
+      publish: (next) => { snapshot = next },
+      publicError: (cause) => cause instanceof Error ? cause.message : 'preview failed',
+      incidents,
+    })
+
+    previews.open(joined as unknown as JoinedBrowserShare, entry)
+    await turn()
+    if (snapshot.preview.state !== 'video') throw new TypeError('expected video preview')
+    previews.mediaPresented(snapshot.preview.presentationId)
+    previews.seek(12)
+    await turn()
+
+    expect(snapshot.preview).toEqual({
+      state: 'error', fileId: entry.idText, name: entry.name, message: error.message,
+    })
+    expect(joined.closed).toBe(1)
+    expect(incidents.decisions.filter(({ decision }) => decision.kind === 'incident')).toMatchObject([
+      { scope: { scopeKind: 'preview_seek' }, decision: { boundary: 'preview', outcome: 'failed' } },
+    ])
+    expect(incidents.owners.every((owner) => owner.isClosed())).toBe(true)
+  })
+
+  it('uses the error state when a local seek failure precedes the first presented frame', async () => {
+    const joined = new DiagnosticPreviewJoined({
+      seekFailure: new VideoPreviewError('MP4 sample geometry exceeds the preview limits'),
+    })
+    let snapshot = directPreviewSnapshot()
+    const previews = new PreviewController({
+      snapshot: () => snapshot,
+      publish: (next) => { snapshot = next },
+      publicError: () => 'preview failed',
+    })
+
+    previews.open(joined as unknown as JoinedBrowserShare, entry)
+    await turn()
+    // The opening frame has not presented, so there is no earlier frame to keep.
+    previews.seek(12)
+    await turn()
+
+    expect(snapshot.preview).toEqual({
+      state: 'error', fileId: entry.idText, name: entry.name, message: 'preview failed',
+    })
+    expect(joined.closed).toBe(1)
+  })
+
+  it('keeps the preview open on a local seek failure and records session-close failure as its consequence', async () => {
+    const joined = new DiagnosticPreviewJoined({
+      seekFailure: new VideoPreviewError('seek failed'),
+      closeFailure: new Error('close failed'),
+    })
+    const incidents = new RecordingPreviewIncidents()
+    let snapshot = directPreviewSnapshot()
+    const previews = new PreviewController({
+      snapshot: () => snapshot,
+      publish: (next) => { snapshot = next },
+      publicError: () => 'preview failed',
+      incidents,
+    })
+
+    previews.open(joined as unknown as JoinedBrowserShare, entry)
+    await turn()
     const opened = snapshot.preview
     if (opened.state !== 'video') throw new TypeError('expected video preview')
+    previews.mediaPresented(opened.presentationId)
     previews.seek(12)
     await turn()
 
@@ -660,6 +806,7 @@ describe('v2 preview seek failure presentation', () => {
       'preview_seek',
     ])
     expect(incidents.decisions).toMatchObject([
+      { decision: { kind: 'excluded', reason: 'success' } },
       { decision: { kind: 'excluded', reason: 'success' } },
       {
         scope: { scopeKind: 'preview_seek' },
@@ -680,10 +827,6 @@ describe('v2 preview seek failure presentation', () => {
 
     await previews.close()
     expect(joined.closed).toBe(1)
-    expect(incidents.decisions.at(-1)).toMatchObject({
-      scope: { scopeKind: 'preview_media' },
-      decision: { kind: 'excluded', boundary: 'preview', reason: 'cancelled' },
-    })
     expect(incidents.facts).toMatchObject([
       {
         scope: { scopeKind: 'preview_seek' },
