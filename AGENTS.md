@@ -9,6 +9,7 @@
 - Don't name your package util, common, or misc. Packages should differ by what they provide, not what they contain.
 - **Prefer Deep Modules**: Avoid coupling all functionality at one layer; use meaningful module boundaries to contain complexity. Simply put, each folder should not contain more than 20 code files (excluding test files), otherwise the module is too large.
 - **UI & Visual Craft**: Benchmark all interfaces against Linear, Vercel, and Stripe—deliberately engineering typographic hierarchy, spatial rhythm, subtle surface/border contrast, fluid micro-interactions, and complete state coverage (hover/focus/loading/empty/error), while strictly avoiding generic AI clichés (neon gradients, heavy drop shadows, or unstyled defaults).
+- **Self-explanatory UI**: Omit all secondary descriptions and helper text. Let primary labels and layout speak for themselves.
 - **Semantic Precision**: Avoid ambiguous or overloaded fields.
 - **Concise User-Facing Docs**: Keep externally maintained docs (README, docs/) concise and easy to follow; nobody reads verbose documentation.
 
@@ -62,6 +63,9 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 │   ├── framechannel/             Transport-neutral frame contract
 │   ├── observationstream/        Bounded producer-owned observation queues
 │   ├── diagnostics/              Source-owned diagnostic records and injected sinks
+│   ├── diagnosticerror/          Bounded immutable error snapshots
+│   ├── connectionpath/           Transport-neutral path lifecycle facts
+│   ├── downloadmetrics/          Per-download authenticated content accounting
 │   ├── transfer/                 Receive contracts/discovery, jobs, lane scheduling, output settlement
 │   ├── liveshare/                Runtime assembly and injected file-source ownership
 │   ├── testvectors/              Canonical Go↔TypeScript contract vectors
@@ -98,6 +102,7 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 │   ├── crates/relay-core/        No-I/O kernel with strict sender-signature verification
 │   ├── crates/relay-native/      Native wsrelay host, SQLite, HTTP/WebSocket, and STUN
 │   └── crates/relay-cloudflare/  Worker/DO host, access console, credential management, and managed TURN
+├── desktop/                      Rust/GPUI desktop UI preview; no engine or transfer integration
 ├── web/                          React/TypeScript landing portal and browser receiver
 │   ├── src/crypto/, protocol/    Suite-02 links/key hierarchy, sealed-object auth, canonical CBOR/text
 │   ├── src/contracts/, session/  Browser FrameChannel contract and ReceiverSessionRuntime
