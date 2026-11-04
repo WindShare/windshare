@@ -8,6 +8,7 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
+	"github.com/windshare/windshare/cmd/wind/internal/networkcommand"
 	"github.com/windshare/windshare/cmd/wind/internal/observationbridge"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/engine"
@@ -43,6 +44,9 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 	if err != nil {
 		emitShareCommandFailure(runtime, ExitFailure, err)
 		return ExitFailure
+	}
+	if a.networkSetup != nil {
+		defer networkcommand.StartCheck(ctx, a.networkSetup, runtime, clievent.CommandShare)()
 	}
 	go func() {
 		select {

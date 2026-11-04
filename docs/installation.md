@@ -20,21 +20,30 @@ The source bundle contains its deployment scripts and templates.
 
 ## Windows first setup
 
-The installer asks once whether to create application-scoped inbound UDP and TCP rules.
-Skipping is supported; sharing continues using available direct paths and relay.
-It never elevates itself or changes global firewall policy. Run from a shell that
-already has permission if you choose to configure the rule. Managed policy and
-explicit block rules retain precedence. A created rule does not prove reachability.
+```powershell
+wind doctor network            # Read current inbound policy; never elevates
+wind setup network             # Configure this executable's UDP/TCP rules
+wind setup network --skip      # Stop reminders; leave firewall rules unchanged
+```
 
-The decision (`configured`, `declined`, or `unavailable`) is saved under
-`%LOCALAPPDATA%/WindShare/connectivity-setup.json` for diagnostics. Reinstalling at
-the same path (including its Windows 8.3 short form) keeps that decision. Retry
-explicitly with `-Firewall Configure`, or skip first setup with `-Firewall Skip`.
-Daily `share` and `get` only read status.
-Use `-Uninstall` with the same `-Destination` to remove that installation's owned
-rule and executable. Other firewall rules are never removed. Automatic firewall
-setup is currently supported only on Windows. TCP follows the pinned provider's
-verified platform capabilities; a firewall rule does not enable an unsupported transport.
+Rules cover domain, private, and public networks, all ports and remote addresses.
+Only the short-lived rule writer requests administrator permission; transfers stay
+at their original privilege level. Setup reports rule operations separately from
+current policy. Organization policy and explicit blocks can still prevent inbound
+traffic; an allowed policy does not prove a direct connection.
+
+The installer offers setup once and uses these same commands. User choices live in
+`%LOCALAPPDATA%/WindShare/network-preference.json`, independently of executable and
+network changes. Cancelling UAC does not save a skip choice. Daily P2P-capable
+`share/get` tasks check current policy in the background; `relay-only` skips the check.
+Neither setup nor skipping changes a task's connectivity mode.
+
+Unattended installation skips optional setup without saving a choice. Scripts never
+prompt or open UAC: explicitly run `wind setup network --non-interactive` from an
+administrator terminal when needed. `--json` writes diagnostic results to stdout.
+Installer `-Firewall Configure` and `-Firewall Skip` explicitly select an action;
+`-Uninstall` with the same `-Destination` removes only its owned rules and executable.
+Automatic firewall configuration is Windows-only.
 
 ## Build from source
 

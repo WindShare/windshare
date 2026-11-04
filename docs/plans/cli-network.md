@@ -14,11 +14,11 @@
 
 当时复用了生产 Go provider，代理保持开启、Chrome 使用默认权限，没有注入 LAN 候选，也没有配置 STUN/TURN。临时规则已撤销；该记录不代表实际 `wind.exe` 已永久放行或完整下载已复测。[完整对照记录](../../.tmp/lan-native-rootcause-20261021/findings.txt)
 
-目前配置入口在安装脚本中，要求用户事先准备有权限的终端。[状态读取](../../internal/platformsetup/status.go)只检查以前保存的安装记录，无法反映规则删除或当前策略变化；状态也主要在 verbose 输出中显示。
+旧实现只读取安装时保存的记录，无法反映规则删除或策略变化。现在由 [platformsetup](../../internal/platformsetup/service.go) 读取当前策略并管理规则，CLI 与安装器共用该能力。
 
 ## 命令计划
 
-以下命令尚未实现，按先检查、后配置的顺序开发；仅展示当前版本已实现的操作入口。
+以下命令已实现。使用方式见[安装文档](../installation.md#windows-first-setup)；策略判断基于可注入快照，Windows 规则操作由短暂运行的子进程执行。
 
 ### 第一步：`wind doctor network`
 

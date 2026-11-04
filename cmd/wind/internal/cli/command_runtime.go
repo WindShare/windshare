@@ -142,12 +142,6 @@ func (a *App) newCommandRuntime(
 		runtime.diagnosticRecords = runtime.diagnosticStream.Records()
 	}
 	go runtime.run()
-	if runtime.detailedDiagnostics && a.platformSetupStatus != nil {
-		status := a.platformSetupStatus
-		if event, err := clievent.NewPlatformSetupObserved(command, status.State, status.Reason); err == nil {
-			runtime.Observe(event)
-		}
-	}
 	return runtime, nil
 }
 

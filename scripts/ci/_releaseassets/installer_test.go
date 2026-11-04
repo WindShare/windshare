@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,7 +60,7 @@ func testInstallerFixture(t *testing.T, repository string, platform installerPla
 	source := filepath.Join(root, "distribution with spaces")
 	destination := filepath.Join(root, "installed app")
 	state := filepath.Join(root, "private setup state")
-	for _, path := range []string{platform.script, "scripts/install/windows/firewall.psm1"} {
+	for _, path := range []string{platform.script, "scripts/install/windows/network.psm1"} {
 		content, err := os.ReadFile(filepath.Join(repository, filepath.FromSlash(path)))
 		if err != nil {
 			t.Fatal(err)
@@ -90,15 +89,15 @@ func testInstallerFixture(t *testing.T, repository string, platform installerPla
 	installed := filepath.Join(destination, platform.binary)
 	if failure {
 		writeInstallerFixture(t, destination, platform.binary, "PREVIOUS_INSTALLATION")
-		writeInstallerFixture(t, state, "connectivity-setup.json", "PREVIOUS_SETUP_STATE")
+		writeInstallerFixture(t, state, "network-preference.json", "PREVIOUS_SETUP_STATE")
 	}
-	output, err := runInstallerFixture(t, platform, source, destination, state, "Skip")
+	output, err := runInstallerFixture(t, platform, source, destination, state, "Ask")
 	if failure {
 		if err == nil {
 			t.Fatalf("installation unexpectedly succeeded: %s", output)
 		}
 		assertInstallerFile(t, installed, "PREVIOUS_INSTALLATION")
-		assertInstallerFile(t, filepath.Join(state, "connectivity-setup.json"), "PREVIOUS_SETUP_STATE")
+		assertInstallerFile(t, filepath.Join(state, "network-preference.json"), "PREVIOUS_SETUP_STATE")
 	} else {
 		if err != nil {
 			t.Fatalf("install: %v\n%s", err, output)
@@ -116,39 +115,18 @@ func testInstallerFixture(t *testing.T, repository string, platform installerPla
 			assertInstallerFile(t, installed, staleInstallerBinary)
 		}
 		if platform.name == "windows" {
-			statusPath := filepath.Join(state, "connectivity-setup.json")
-			statusBytes, err := os.ReadFile(statusPath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var status struct {
-				State, Reason, Executable string
-			}
-			if err := json.Unmarshal(statusBytes, &status); err != nil {
-				t.Fatal(err)
-			}
-			if status.State != "declined" || status.Reason != "user-skipped" {
-				t.Fatalf("skip status: %s", statusBytes)
-			}
-			reportedFile, err := os.Stat(status.Executable)
-			if err != nil {
-				t.Fatalf("stat reported executable %q: %v", status.Executable, err)
-			}
-			installedFile, err := os.Stat(installed)
-			if err != nil {
-				t.Fatalf("stat installed executable %q: %v", installed, err)
-			}
-			// PowerShell expands the 8.3 aliases used by Windows runner temp paths.
-			if !os.SameFile(reportedFile, installedFile) {
-				t.Fatalf("reported executable %q is not installed executable %q", status.Executable, installed)
+			statusPath := filepath.Join(state, "network-preference.json")
+			if _, err := os.Stat(statusPath); !os.IsNotExist(err) {
+				t.Fatalf("unattended installer saved a user choice: %v", err)
 			}
 			if scenario == "binary-bundle" {
-				// A saved choice must avoid an interactive prompt even in a noninteractive install.
-				output, err := runInstallerFixture(t, platform, source, filepath.Dir(status.Executable), state, "Ask")
+				const preference = `{"schema":1,"choice":"skip"}`
+				writeInstallerFixture(t, state, "network-preference.json", preference)
+				output, err := runInstallerFixture(t, platform, source, destination, state, "Ask")
 				if err != nil {
 					t.Fatalf("reuse setup choice: %v\n%s", err, output)
 				}
-				assertInstallerFile(t, statusPath, string(statusBytes))
+				assertInstallerFile(t, statusPath, preference)
 			}
 		}
 	}

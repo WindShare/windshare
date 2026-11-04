@@ -58,12 +58,17 @@ type traceIncompletePayload struct {
 
 func (traceIncompletePayload) ObservationPayload() {}
 
-type platformSetupPayload struct {
-	State  string `json:"state"`
-	Reason string `json:"reason"`
+type networkPolicyPayload struct {
+	Interface    string `json:"interface"`
+	Choice       string `json:"choice"`
+	Profile      string `json:"profile"`
+	Protocol     string `json:"protocol"`
+	Verdict      string `json:"verdict"`
+	Reason       string `json:"reason"`
+	SuggestSetup bool   `json:"suggest_setup"`
 }
 
-func (platformSetupPayload) ObservationPayload() {}
+func (networkPolicyPayload) ObservationPayload() {}
 
 type traceSummaryPayload struct {
 	ContractRejected         string `json:"contract_rejected"`

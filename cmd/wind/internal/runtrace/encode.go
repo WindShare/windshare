@@ -125,8 +125,9 @@ func (enc *cliEncoder) encodeTraceIncomplete(event clievent.TraceIncomplete) err
 	return nil
 }
 
-func (enc *cliEncoder) encodePlatformSetupObserved(event clievent.PlatformSetupObserved) error {
-	enc.set("platform_setup", nil, platformSetupPayload{State: event.State(), Reason: event.Reason()})
+func (enc *cliEncoder) encodeNetworkPolicyObserved(event clievent.NetworkPolicyObserved) error {
+	enc.set("network_policy", nil, networkPolicyPayload{Interface: event.Interface(), Choice: event.Choice(), Profile: event.Profile(), Protocol: event.Protocol(),
+		Verdict: event.Verdict(), Reason: event.Reason(), SuggestSetup: event.SuggestSetup()})
 	return nil
 }
 
@@ -180,8 +181,8 @@ func encode(runID runIdentity, metadata entryMetadata, event clievent.Event) (Ru
 		err = enc.encodeSharingStopped(value)
 	case clievent.TraceIncomplete:
 		err = enc.encodeTraceIncomplete(value)
-	case clievent.PlatformSetupObserved:
-		err = enc.encodePlatformSetupObserved(value)
+	case clievent.NetworkPolicyObserved:
+		err = enc.encodeNetworkPolicyObserved(value)
 	default:
 		err = errInvalidSchemaEvent
 	}
