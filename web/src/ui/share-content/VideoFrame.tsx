@@ -50,6 +50,17 @@ export function VideoFrame({ preview, actions }: {
   })
   const fail = useEffectEvent(() => actions.failed(preview.presentationId))
   useLayoutEffect(() => {
+    if (preview.failure === null) return
+    // A failed seek leaves the previous frame on the canvas; the slider, the
+    // time label and the repeated-seek guard return to that frame's position.
+    requested.current = preview.positionSeconds
+    if (drag.current !== null) {
+      drag.current.origin = preview.positionSeconds
+      return
+    }
+    setPosition(preview.positionSeconds)
+  }, [preview])
+  useLayoutEffect(() => {
     const video = decoder.current
     if (video === null) return
     // The decoder's lifetime owns its callback, so replacement or closure cannot

@@ -895,6 +895,75 @@ describe('v2 preview seek failure presentation', () => {
   })
 })
 
+describe('v2 preview seek failure rollback', () => {
+  function rollbackPreview() {
+    const joined = new DiagnosticPreviewJoined()
+    let snapshot = directPreviewSnapshot()
+    const previews = new PreviewController({
+      snapshot: () => snapshot,
+      publish: (next) => { snapshot = next },
+      publicError: () => 'preview failed',
+    })
+    const video = () => {
+      if (snapshot.preview.state !== 'video') throw new TypeError('expected video preview')
+      return snapshot.preview
+    }
+    const presentAt = (seconds: number) => Object.freeze({
+      kind: 'video' as const, name: entry.name, mimeType: 'video/mp4', width: 20, height: 10,
+      durationSeconds: 30, positionSeconds: seconds, frameSeconds: seconds + 0.2, url: `blob:at-${seconds}`,
+    })
+    return { joined, previews, video, presentAt }
+  }
+
+  it('returns the position to the last presented frame after a local seek failure', async () => {
+    const { joined, previews, video, presentAt } = rollbackPreview()
+    previews.open(joined as unknown as JoinedBrowserShare, entry)
+    await turn()
+    previews.mediaPresented(video().presentationId)
+    joined.seekResult = presentAt
+    previews.seek(5)
+    await turn()
+    previews.mediaPresented(video().presentationId)
+    const presented = video()
+
+    joined.seekResult = () => { throw new VideoPreviewError('MP4 sample geometry exceeds the preview limits') }
+    previews.seek(9)
+    await turn()
+    expect(video()).toEqual({ ...presented, seeking: false, failure: 'preview failed' })
+
+    // A later seek whose frame fails to decode also returns to 5 s, while the
+    // canvas keeps that frame.
+    joined.seekResult = presentAt
+    previews.seek(12)
+    await turn()
+    expect(video().positionSeconds).toBe(12)
+    previews.mediaFailed(video().presentationId)
+    expect(video()).toMatchObject({ positionSeconds: 5, seeking: false,
+      failure: 'The browser could not decode this bounded media preview.' })
+    expect(joined.closed).toBe(0)
+    await previews.close()
+  })
+
+  it('follows a frame that presents after a later seek has failed', async () => {
+    const { joined, previews, video, presentAt } = rollbackPreview()
+    previews.open(joined as unknown as JoinedBrowserShare, entry)
+    await turn()
+    previews.mediaPresented(video().presentationId)
+    joined.seekResult = presentAt
+    previews.seek(5)
+    await turn()
+    const pending = video().presentationId
+    joined.seekResult = () => { throw new VideoPreviewError('MP4 sample timing exceeds the preview limits') }
+    previews.seek(9)
+    await turn()
+    // 5 s has not presented yet: the canvas still shows the opening frame.
+    expect(video()).toMatchObject({ positionSeconds: 0, failure: 'preview failed' })
+    previews.mediaPresented(pending)
+    expect(video()).toMatchObject({ positionSeconds: 5, failure: 'preview failed' })
+    await previews.close()
+  })
+})
+
 describe('preview diagnostics continuity', () => {
   it('exports a failed preview and subsequent download evidence in the same capture', async () => {
     const time = new FakeTraceTime()
@@ -1186,12 +1255,15 @@ class DiagnosticPreviewJoined {
   })
   readonly #session: FilePreview
   closed = 0
+  // Replaces the default seek result: return a presentation or throw.
+  seekResult: ((seconds: number) => unknown) | undefined
 
   constructor(options: DiagnosticPreviewOptions = {}) {
     this.#options = options
     this.#session = {
       current: this.#presentation,
-      seek: async () => {
+      seek: async (seconds: number) => {
+        if (this.seekResult !== undefined) return this.seekResult(seconds)
         if (this.#options.seekFailure !== undefined) {
           throw this.#options.seekFailure
         }

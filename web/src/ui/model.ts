@@ -72,7 +72,8 @@ export type PreviewSnapshot =
       readonly frameSeconds: number
       readonly seeking: boolean
       // Why the latest seek showed no new frame. The preview stays open on the
-      // previous frame, with the download still available.
+      // previous frame, with the download still available, and
+      // positionSeconds is rolled back to that frame's position.
       readonly failure: string | null
     }
   | {

@@ -84,7 +84,7 @@ class GalleryController {
     this.intents.push('seek:' + seconds)
     const preview = this.#snapshot.preview
     if (preview.state !== 'video') return
-    this.#publish({ preview: { ...preview, seeking: true } })
+    this.#publish({ preview: { ...preview, seeking: true, failure: null } })
     if (!this.holdVideoSeeks) this.completeVideoSeek(seconds).catch(() => this.previewMediaFailed())
   }
   completeVideoSeek = async (seconds: number, decoderUrl?: string) => {
@@ -96,6 +96,12 @@ class GalleryController {
     this.#videoUrl = URL.createObjectURL(bytes)
     this.#publish({ preview: { ...preview, seeking: false, positionSeconds: seconds, frameSeconds: seconds,
       presentationId: preview.presentationId + 1, url: decoderUrl ?? this.#videoUrl } })
+  }
+  // The production controller keeps the last presented position on failure.
+  failVideoSeek = (message: string) => {
+    const preview = this.#snapshot.preview
+    if (preview.state !== 'video') throw new Error('No video preview is open')
+    this.#publish({ preview: { ...preview, seeking: false, failure: message } })
   }
   previewMediaPresented = (id: number) => { this.intents.push('presented:' + id) }
   previewMediaFailed = () => {
@@ -164,7 +170,8 @@ export async function mountGallery(scenario: Scenario = 'folder'): Promise<void>
     windshareAdvanceProgress: active.advanceProgress,
     windshareUpdatePathActivity: active.updatePathActivity,
     windshareUpdateConnection: active.updateConnection,
-    windshareHoldVideoSeeks: holdVideoSeeks, windshareCompleteVideoSeek: completeVideoSeek })
+    windshareHoldVideoSeeks: holdVideoSeeks, windshareCompleteVideoSeek: completeVideoSeek,
+    windshareFailVideoSeek: active.failVideoSeek })
   const container = document.createElement('div')
   container.dataset.galleryScenario = scenario
   const toolbar = document.createElement('nav')
