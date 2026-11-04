@@ -127,6 +127,11 @@ export class Mp4RangePreview {
     // the target is past the end of the last decode-order sample, which an
     // open-GOP file whose last keyframe is followed only by its leading frames
     // reaches at that keyframe.
+    // mp4box internals: trak.nextSample and resetFragmentedTrackStateAfterSeek
+    // are typed but undocumented fragmentation state, which this relies on
+    // behaving as in the pinned mp4box 2.4.1 (package.json). Revalidate them,
+    // with stripEditList below, on any mp4box upgrade: mp4-range.test.ts and
+    // the media-preview-edit-list browser specs cover both.
     const trak = file.getTrackById(track.id)
     trak.nextSample = keyframe.index
     file.resetFragmentedTrackStateAfterSeek(trak, keyframe.index)
@@ -400,6 +405,9 @@ function requireOffset(ticks: number, track: Track): number {
 // none: every browser then places the sample at its composition time (or, in
 // Firefox, rebases it to zero), and positionSeconds stays the only
 // presentation-timeline value.
+// This edits mp4box's parsed box tree (trak.boxes, trak.edts, trak.edtss)
+// so initializeSegmentation writes no edts. Those are mp4box internals as of
+// the pinned 2.4.1, not a supported API: revalidate on any mp4box upgrade.
 function stripEditList(trak: ReturnType<ISOFile['getTrackById']>): void {
   if (trak.boxes !== undefined) trak.boxes = trak.boxes.filter((box) => box.type !== 'edts')
   delete trak.edts
