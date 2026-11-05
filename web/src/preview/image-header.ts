@@ -2,6 +2,11 @@ export const IMAGE_HEADER_BYTES = 64 * 1024
 export const IMAGE_FILE_BYTES = 64 * 1024 * 1024
 export const IMAGE_MAXIMUM_DIMENSION = 16_384
 export const IMAGE_DECODED_BYTES = 128 * 1024 * 1024
+// Bounds the serial JPEG header reads (at most 4 MiB) that a file of many
+// tiny segments could force. Real metadata needs far fewer: a Google Cardboard
+// photo carrying its right-eye image and audio in XMP puts the frame header
+// 2.8 MiB in, 24 windows deep.
+export const JPEG_HEADER_WINDOWS = 64
 
 const PNG_SIGNATURE = Uint8Array.of(137, 80, 78, 71, 13, 10, 26, 10)
 const JPEG_START = Uint8Array.of(0xff, 0xd8)
@@ -21,9 +26,28 @@ export class ImagePreviewError extends Error {
   }
 }
 
-export function sniffImageHeader(bytes: Uint8Array, exactSize: bigint): ImageHeader | undefined {
+// Camera JPEGs routinely place more than one sniff window of metadata (EXIF
+// previews, MPF, ICC, XMP) before the frame header. Segments are
+// length-prefixed, so the caller resumes the walk at `offset` with another
+// bounded window instead of reading the skipped payloads.
+export class JpegHeaderContinuation {
+  readonly offset: number
+  /** Sniff windows already walked, including the initial header window. */
+  readonly windows: number
+
+  constructor(offset: number, windows: number) {
+    this.offset = offset
+    this.windows = windows
+    Object.freeze(this)
+  }
+}
+
+export function sniffImageHeader(
+  bytes: Uint8Array,
+  exactSize: bigint,
+): ImageHeader | JpegHeaderContinuation | undefined {
   if (startsWith(bytes, PNG_SIGNATURE)) return validateDimensions(parsePng(bytes), exactSize)
-  if (startsWith(bytes, JPEG_START)) return validateDimensions(parseJpeg(bytes), exactSize)
+  if (startsWith(bytes, JPEG_START)) return walkJpeg(bytes, undefined, JPEG_START.byteLength, exactSize)
   if (ascii(bytes, 0, 4) === RIFF && ascii(bytes, 8, 12) === WEBP) {
     return validateDimensions(parseWebp(bytes, exactSize), exactSize)
   }
@@ -59,22 +83,71 @@ function parsePng(bytes: Uint8Array): ImageHeader {
   return { mimeType: 'image/png', width, height }
 }
 
-function parseJpeg(bytes: Uint8Array): ImageHeader {
-  let offset = 2
-  while (offset < bytes.byteLength) {
-    const segment = nextJpegSegment(bytes, offset)
-    if (segment === undefined) break
-    offset = segment.next
-    if (isJpegFrameMarker(segment.marker)) {
-      if (segment.length < 8) throw new ImagePreviewError('JPEG frame header is truncated')
-      return {
-        mimeType: 'image/jpeg',
-        width: uint16(bytes, segment.header + 5),
-        height: uint16(bytes, segment.header + 3),
-      }
+/** Continues a JPEG header walk; `window` holds the file bytes from `continuation.offset`. */
+export function continueJpegHeader(
+  window: Uint8Array,
+  continuation: JpegHeaderContinuation,
+  exactSize: bigint,
+): ImageHeader | JpegHeaderContinuation {
+  return walkJpeg(window, continuation, 0, exactSize)
+}
+
+const JPEG_ENDED = 'JPEG ended before its frame header'
+
+// Offsets are relative to `window`, which holds the file from `from.offset`.
+function walkJpeg(
+  window: Uint8Array,
+  from: JpegHeaderContinuation | undefined,
+  start: number,
+  exactSize: bigint,
+): ImageHeader | JpegHeaderContinuation {
+  // Walking a file the preview would reject anyway must not cost range reads.
+  requirePreviewFileSize(exactSize)
+  const fileEnd = Number(exactSize)
+  const windowStart = from?.offset ?? 0
+  const windowEnd = windowStart + window.byteLength
+  const windows = (from?.windows ?? 0) + 1
+  let offset = start
+  for (;;) {
+    const segment = nextJpegSegment(window, offset, fileEnd - windowStart)
+    if (segment === undefined) throw new ImagePreviewError(JPEG_ENDED)
+    if (segment === 'window-end') {
+      return resumeJpeg(windowStart + resumableOffset(window, offset), windowEnd, windows, fileEnd)
     }
+    if (isJpegFrameMarker(segment.marker)) return jpegFrameHeader(window, segment, exactSize)
+    offset = segment.next
+    if (offset >= window.byteLength) return resumeJpeg(windowStart + offset, windowEnd, windows, fileEnd)
   }
-  throw new ImagePreviewError('JPEG dimensions exceed the bounded header sniff')
+}
+
+// A window that reaches the end of the file cannot be resumed.
+function resumeJpeg(
+  offset: number,
+  windowEnd: number,
+  windows: number,
+  fileEnd: number,
+): JpegHeaderContinuation {
+  if (windowEnd >= fileEnd || offset >= fileEnd) throw new ImagePreviewError(JPEG_ENDED)
+  if (windows >= JPEG_HEADER_WINDOWS) throw new ImagePreviewError('JPEG metadata exceeds the preview limit')
+  return new JpegHeaderContinuation(offset, windows)
+}
+
+function jpegFrameHeader(window: Uint8Array, segment: JpegSegment, exactSize: bigint): ImageHeader {
+  if (segment.length < 8) throw new ImagePreviewError('JPEG frame header is truncated')
+  return validateDimensions({
+    mimeType: 'image/jpeg',
+    width: uint16(window, segment.header + 5),
+    height: uint16(window, segment.header + 3),
+  }, exactSize)
+}
+
+// Resuming at the marker keeps a segment whose header straddles the window
+// intact. A fill-byte run reaching the window end resumes at its last byte.
+// Windows short of the file end are full, so either choice makes progress.
+function resumableOffset(window: Uint8Array, offset: number): number {
+  let marker = offset
+  while (marker < window.byteLength && window[marker] === 0xff) marker += 1
+  return Math.max(offset, marker - 1)
 }
 
 interface JpegSegment {
@@ -84,18 +157,26 @@ interface JpegSegment {
   readonly next: number
 }
 
-function nextJpegSegment(bytes: Uint8Array, start: number): JpegSegment | undefined {
+// Segment payloads are outside the sniff budget, like PNG IDAT and WebP image
+// chunks: only the marker, length and a frame header must be in the window.
+function nextJpegSegment(
+  bytes: Uint8Array,
+  start: number,
+  fileEnd: number,
+): JpegSegment | 'window-end' | undefined {
   let offset = start
   while (bytes[offset] === 0xff) offset += 1
   const marker = bytes[offset]
   offset += 1
-  if (marker === undefined || marker === 0xd9 || marker === 0xda) return undefined
+  if (marker === undefined) return 'window-end'
+  if (marker === 0xd9 || marker === 0xda) return undefined
   if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
     return { marker, header: offset, length: 0, next: offset }
   }
-  if (offset + 2 > bytes.byteLength) return undefined
+  if (offset + 2 > bytes.byteLength) return 'window-end'
   const length = uint16(bytes, offset)
-  if (length < 2 || offset + length > bytes.byteLength) return undefined
+  if (length < 2 || offset + length > fileEnd) return undefined
+  if (isJpegFrameMarker(marker) && offset + Math.min(length, 8) > bytes.byteLength) return 'window-end'
   return { marker, header: offset, length, next: offset + length }
 }
 
@@ -178,10 +259,14 @@ function decodeWebpLossless(bytes: Uint8Array, chunk: WebpChunk): ImageHeader | 
   }
 }
 
-function validateDimensions(header: ImageHeader, exactSize: bigint): ImageHeader {
+function requirePreviewFileSize(exactSize: bigint): void {
   if (exactSize <= 0n || exactSize > BigInt(IMAGE_FILE_BYTES)) {
     throw new ImagePreviewError('Image encoded size exceeds the preview limit')
   }
+}
+
+function validateDimensions(header: ImageHeader, exactSize: bigint): ImageHeader {
+  requirePreviewFileSize(exactSize)
   if (
     !Number.isSafeInteger(header.width) || !Number.isSafeInteger(header.height) ||
     header.width <= 0 || header.height <= 0 ||
