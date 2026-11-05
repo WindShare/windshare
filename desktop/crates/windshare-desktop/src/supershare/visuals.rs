@@ -1,13 +1,7 @@
 use crate::artwork::Artwork;
-use gpui::{
-    Animation, AnimationExt, Div, FontWeight, Hsla, div, linear_color_stop, linear_gradient, point,
-    prelude::*, px, rgb,
-};
-use std::{f32::consts::TAU, time::Duration};
+use gpui::{Animation, AnimationExt, Div, FontWeight, Hsla, div, point, prelude::*, px, rgb};
+use std::time::Duration;
 use windshare_ui::{FONT, Icon, Theme, column, icon, row};
-
-const FLOAT_PERIOD: Duration = Duration::from_secs(7);
-const FLOAT_DISTANCE: f32 = 7.;
 
 #[derive(Clone, Copy)]
 pub(super) struct Finish {
@@ -72,76 +66,6 @@ pub(super) fn heading(theme: Theme, title_size: f32) -> Div {
                 .line_height(px(title_size * 1.12))
                 .text_color(finish.ink),
         )
-}
-
-pub(super) fn emblem(theme: Theme, span: f32, still: bool) -> Div {
-    let finish = Finish::new(theme);
-    let disc = div()
-        .relative()
-        .size(px(span))
-        .flex_shrink_0()
-        .child(
-            div()
-                .absolute()
-                .inset(px(span * 0.12))
-                .rounded_full()
-                .border_1()
-                .border_color(finish.pearl.opacity(0.75))
-                .bg(linear_gradient(
-                    140.,
-                    linear_color_stop(finish.pearl.opacity(0.82), 0.),
-                    linear_color_stop(finish.mint.opacity(0.18), 1.),
-                )),
-        )
-        .child(
-            div()
-                .absolute()
-                .inset(px(span * 0.155))
-                .rounded_full()
-                .border_1()
-                .border_color(finish.edge.opacity(0.25)),
-        )
-        .child(Artwork::Super.sprite(point(span * 0.5, span * 0.5), span * 0.62));
-    let disc = if still {
-        disc.into_any_element()
-    } else {
-        disc.with_animation(
-            "supershare-emblem",
-            Animation::new(FLOAT_PERIOD).repeat(),
-            |disc, delta| disc.top(px((delta * TAU).sin() * FLOAT_DISTANCE)),
-        )
-        .into_any_element()
-    };
-    div()
-        .relative()
-        .size(px(span))
-        .flex_shrink_0()
-        .child(orbit(span, finish.edge.opacity(0.18)))
-        .child(disc)
-        .children([
-            sparkle(span * 0.10, span * 0.19, 23., finish.foil),
-            sparkle(span * 0.86, span * 0.65, 17., finish.foil),
-            sparkle(span * 0.71, span * 0.05, 11., finish.ink.opacity(0.5)),
-            sparkle(span * 0.25, span * 0.91, 12., finish.ink.opacity(0.4)),
-        ])
-}
-
-fn orbit(span: f32, color: Hsla) -> Div {
-    div()
-        .absolute()
-        .inset_0()
-        .size(px(span))
-        .rounded_full()
-        .border_1()
-        .border_color(color)
-}
-
-fn sparkle(x: f32, y: f32, size: f32, color: Hsla) -> Div {
-    div()
-        .absolute()
-        .left(px(x))
-        .top(px(y))
-        .child(icon(Icon::Spark, size).text_color(color))
 }
 
 pub(super) fn price(theme: Theme, amount: &'static str, large: bool) -> Div {
