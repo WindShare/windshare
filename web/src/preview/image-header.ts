@@ -2,14 +2,18 @@ export const IMAGE_HEADER_BYTES = 64 * 1024
 export const IMAGE_FILE_BYTES = 64 * 1024 * 1024
 export const IMAGE_MAXIMUM_DIMENSION = 16_384
 export const IMAGE_DECODED_BYTES = 128 * 1024 * 1024
-// Bounds the serial JPEG header reads (at most 4 MiB) that a file of many
-// tiny segments could force. Real metadata needs far fewer: a Google Cardboard
-// photo carrying its right-eye image and audio in XMP puts the frame header
-// 2.8 MiB in, 24 windows deep.
-export const JPEG_HEADER_WINDOWS = 64
+// Bounds the serial JPEG segment or PNG chunk header reads (at most 4 MiB)
+// that a file of many tiny segments could force. Real metadata needs far
+// fewer: a Google Cardboard photo carrying its right-eye image and audio in
+// XMP puts the JPEG frame header 2.8 MiB in, 24 windows deep.
+export const IMAGE_HEADER_WINDOWS = 64
 
 const PNG_SIGNATURE = Uint8Array.of(137, 80, 78, 71, 13, 10, 26, 10)
 const JPEG_START = Uint8Array.of(0xff, 0xd8)
+const PNG_IHDR_END = 33
+const PNG_CHUNK_HEADER_BYTES = 8
+// Length, type and CRC frame every PNG chunk payload.
+const PNG_CHUNK_FRAMING_BYTES = 12
 const RIFF = 'RIFF'
 const WEBP = 'WEBP'
 
@@ -27,17 +31,24 @@ export class ImagePreviewError extends Error {
 }
 
 // Camera JPEGs routinely place more than one sniff window of metadata (EXIF
-// previews, MPF, ICC, XMP) before the frame header. Segments are
+// previews, MPF, ICC, XMP) before the frame header, and PNG encoders do the
+// same with iCCP, XMP and C2PA chunks before IDAT. Segments and chunks are
 // length-prefixed, so the caller resumes the walk at `offset` with another
 // bounded window instead of reading the skipped payloads.
-export class JpegHeaderContinuation {
+export class ImageHeaderContinuation {
   readonly offset: number
   /** Sniff windows already walked, including the initial header window. */
   readonly windows: number
+  /**
+   * Present exactly for a PNG walk: IHDR fixes the dimensions up front, and the
+   * walk only has to prove that no acTL precedes the image data.
+   */
+  readonly png: ImageHeader | undefined
 
-  constructor(offset: number, windows: number) {
+  constructor(offset: number, windows: number, png?: ImageHeader) {
     this.offset = offset
     this.windows = windows
+    this.png = png
     Object.freeze(this)
   }
 }
@@ -45,8 +56,8 @@ export class JpegHeaderContinuation {
 export function sniffImageHeader(
   bytes: Uint8Array,
   exactSize: bigint,
-): ImageHeader | JpegHeaderContinuation | undefined {
-  if (startsWith(bytes, PNG_SIGNATURE)) return validateDimensions(parsePng(bytes), exactSize)
+): ImageHeader | ImageHeaderContinuation | undefined {
+  if (startsWith(bytes, PNG_SIGNATURE)) return walkPng(bytes, undefined, parsePngHeader(bytes, exactSize), exactSize)
   if (startsWith(bytes, JPEG_START)) return walkJpeg(bytes, undefined, JPEG_START.byteLength, exactSize)
   if (ascii(bytes, 0, 4) === RIFF && ascii(bytes, 8, 12) === WEBP) {
     return validateDimensions(parseWebp(bytes, exactSize), exactSize)
@@ -54,41 +65,52 @@ export function sniffImageHeader(
   return undefined
 }
 
-function parsePng(bytes: Uint8Array): ImageHeader {
-  if (bytes.byteLength < 33 || ascii(bytes, 12, 16) !== 'IHDR' || uint32(bytes, 8) !== 13) {
+function parsePngHeader(bytes: Uint8Array, exactSize: bigint): ImageHeader {
+  if (bytes.byteLength < PNG_IHDR_END || ascii(bytes, 12, 16) !== 'IHDR' || uint32(bytes, 8) !== 13) {
     throw new ImagePreviewError('PNG does not begin with a canonical IHDR chunk')
   }
-  const width = uint32(bytes, 16)
-  const height = uint32(bytes, 20)
-  let offset = 8
-  let reachedData = false
-  while (offset + 8 <= bytes.byteLength) {
-    const length = uint32(bytes, offset)
-    const type = ascii(bytes, offset + 4, offset + 8)
-    // IDAT payloads are intentionally outside the sniff budget; its chunk header
-    // is sufficient to prove bounded metadata has ended.
-    if (type === 'acTL') throw new ImagePreviewError('Animated PNG preview is not supported')
-    if (type === 'IDAT') {
-      reachedData = true
-      break
-    }
-    const end = offset + 12 + length
-    if (!Number.isSafeInteger(end) || end > bytes.byteLength) break
-    if (type === 'IEND') throw new ImagePreviewError('PNG ended before image data')
-    offset = end
-  }
-  if (!reachedData) {
-    throw new ImagePreviewError('PNG metadata exceeds the bounded header sniff')
-  }
-  return { mimeType: 'image/png', width, height }
+  // Rejecting a decoded-memory bomb here keeps it from costing chunk walk reads.
+  return validateDimensions({ mimeType: 'image/png', width: uint32(bytes, 16), height: uint32(bytes, 20) }, exactSize)
 }
 
-/** Continues a JPEG header walk; `window` holds the file bytes from `continuation.offset`. */
-export function continueJpegHeader(
+// Offsets are relative to `window`, which holds the file from `from.offset`.
+function walkPng(
   window: Uint8Array,
-  continuation: JpegHeaderContinuation,
+  from: ImageHeaderContinuation | undefined,
+  header: ImageHeader,
   exactSize: bigint,
-): ImageHeader | JpegHeaderContinuation {
+): ImageHeader | ImageHeaderContinuation {
+  const fileEnd = Number(exactSize)
+  const windowStart = from?.offset ?? 0
+  const windows = (from?.windows ?? 0) + 1
+  let offset = from === undefined ? PNG_IHDR_END : 0
+  // IDAT payloads are intentionally outside the sniff budget; its chunk header
+  // is sufficient to prove bounded metadata has ended.
+  while (offset + PNG_CHUNK_HEADER_BYTES <= window.byteLength) {
+    const type = ascii(window, offset + 4, offset + PNG_CHUNK_HEADER_BYTES)
+    if (type === 'acTL') throw new ImagePreviewError('Animated PNG preview is not supported')
+    if (type === 'IDAT') return header
+    if (type === 'IEND') throw new ImagePreviewError(PNG_ENDED)
+    const end = windowStart + offset + PNG_CHUNK_FRAMING_BYTES + uint32(window, offset)
+    if (end >= fileEnd) throw new ImagePreviewError(PNG_ENDED)
+    offset = end - windowStart
+  }
+  // A chunk header straddling the window end is reread whole from its start.
+  const next = windowStart + offset
+  if (windowStart + window.byteLength >= fileEnd || next >= fileEnd) throw new ImagePreviewError(PNG_ENDED)
+  if (windows >= IMAGE_HEADER_WINDOWS) throw new ImagePreviewError('PNG metadata exceeds the preview limit')
+  return new ImageHeaderContinuation(next, windows, header)
+}
+
+const PNG_ENDED = 'PNG ended before image data'
+
+/** Continues a header walk; `window` holds the file bytes from `continuation.offset`. */
+export function continueImageHeader(
+  window: Uint8Array,
+  continuation: ImageHeaderContinuation,
+  exactSize: bigint,
+): ImageHeader | ImageHeaderContinuation {
+  if (continuation.png !== undefined) return walkPng(window, continuation, continuation.png, exactSize)
   return walkJpeg(window, continuation, 0, exactSize)
 }
 
@@ -97,10 +119,10 @@ const JPEG_ENDED = 'JPEG ended before its frame header'
 // Offsets are relative to `window`, which holds the file from `from.offset`.
 function walkJpeg(
   window: Uint8Array,
-  from: JpegHeaderContinuation | undefined,
+  from: ImageHeaderContinuation | undefined,
   start: number,
   exactSize: bigint,
-): ImageHeader | JpegHeaderContinuation {
+): ImageHeader | ImageHeaderContinuation {
   // Walking a file the preview would reject anyway must not cost range reads.
   requirePreviewFileSize(exactSize)
   const fileEnd = Number(exactSize)
@@ -126,10 +148,10 @@ function resumeJpeg(
   windowEnd: number,
   windows: number,
   fileEnd: number,
-): JpegHeaderContinuation {
+): ImageHeaderContinuation {
   if (windowEnd >= fileEnd || offset >= fileEnd) throw new ImagePreviewError(JPEG_ENDED)
-  if (windows >= JPEG_HEADER_WINDOWS) throw new ImagePreviewError('JPEG metadata exceeds the preview limit')
-  return new JpegHeaderContinuation(offset, windows)
+  if (windows >= IMAGE_HEADER_WINDOWS) throw new ImagePreviewError('JPEG metadata exceeds the preview limit')
+  return new ImageHeaderContinuation(offset, windows)
 }
 
 function jpegFrameHeader(window: Uint8Array, segment: JpegSegment, exactSize: bigint): ImageHeader {

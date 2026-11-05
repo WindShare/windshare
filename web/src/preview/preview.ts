@@ -4,11 +4,11 @@ import type { BlockRangeReader, BlockSlice } from '../content/broker'
 import type { OpenedRevision, RevisionReader } from '../content/session-services'
 import type { FileRevisionDescriptor } from '../content/records'
 import {
-  continueJpegHeader,
+  continueImageHeader,
   sniffImageHeader,
   IMAGE_HEADER_BYTES,
   ImagePreviewError,
-  JpegHeaderContinuation,
+  ImageHeaderContinuation,
   type ImageHeader,
 } from './image-header'
 import {
@@ -220,16 +220,16 @@ export class FilePreview {
     const exactSize = this.#source.exactSize
     let sniffed = sniffImageHeader(header, exactSize)
     let walked = 0
-    while (sniffed instanceof JpegHeaderContinuation) {
+    while (sniffed instanceof ImageHeaderContinuation) {
       // A walk that stops advancing would reread the same window forever.
-      if (sniffed.offset <= walked) throw new PreviewRuntimeError('JPEG header walk did not advance')
+      if (sniffed.offset <= walked) throw new PreviewRuntimeError('Image header walk did not advance')
       walked = sniffed.offset
       const start = BigInt(sniffed.offset)
       const end = start + BigInt(IMAGE_HEADER_BYTES) < exactSize
         ? start + BigInt(IMAGE_HEADER_BYTES)
         : exactSize
       const window = await this.#source.read(byteRange(start, end), signal)
-      sniffed = continueJpegHeader(window, sniffed, exactSize)
+      sniffed = continueImageHeader(window, sniffed, exactSize)
     }
     return sniffed
   }
