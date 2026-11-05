@@ -3,15 +3,17 @@ mod checkout;
 mod emblem;
 mod layout;
 mod offer;
+mod payments;
 mod redemption;
 mod state;
 mod visuals;
 
 use crate::localization::{LanguageSettings, Text, language};
 use gpui::{AppContext, Context, Entity, FocusHandle, Focusable, Subscription, Window, prelude::*};
+use payments::{Coin, Payment};
 use state::{
     Action, Attempt, CONFIRM_DELAY, Confirmation, ENABLE_DELAY, OFFLINE_CODE, PREVIEW_CODE, Page,
-    Payment, Plan, REDEEM_DELAY, Redemption, State,
+    Plan, REDEEM_DELAY, Redemption, State,
 };
 use windshare_ui::{Button, Input, InputEvent};
 
@@ -24,6 +26,7 @@ pub struct SuperShare {
     primary_focus: FocusHandle,
     sequence: usize,
     reduced_motion: bool,
+    copied_address: Option<Coin>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -60,6 +63,7 @@ impl SuperShare {
             primary_focus: cx.focus_handle(),
             sequence: 0,
             reduced_motion: false,
+            copied_address: None,
             _subscriptions: subscriptions,
         }
     }
@@ -74,6 +78,7 @@ impl SuperShare {
     }
 
     pub fn leave(&mut self, cx: &mut Context<Self>) {
+        self.copied_address = None;
         if let Some(operation) = self.state.page.operation() {
             tracing::info!(
                 event = "supershare.operation_canceled",
@@ -82,8 +87,8 @@ impl SuperShare {
                 reason = "navigation",
             );
             self.state.page.cancel_pending();
-            cx.notify();
         }
+        cx.notify();
     }
 
     fn button(id: &'static str, label: &'static str, action: Action, cx: &Context<Self>) -> Button {
@@ -93,6 +98,7 @@ impl SuperShare {
 
     fn dispatch(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) {
         let before = self.state;
+        self.copied_address = None;
         match action {
             Action::SelectPlan(plan) if matches!(self.state.page, Page::Offer(_)) => {
                 self.state.page = Page::Offer(plan);
@@ -106,7 +112,14 @@ impl SuperShare {
                 window.focus(&self.primary_focus, cx);
             }
             Action::SelectPayment(payment) => {
-                if let Page::Checkout { plan, .. } = self.state.page {
+                if let Page::Checkout {
+                    plan,
+                    payment: current,
+                    confirmation,
+                } = self.state.page
+                    && payment != current
+                    && !confirmation.busy()
+                {
                     self.state.page = Page::Checkout {
                         plan,
                         payment,
@@ -267,7 +280,7 @@ impl Render for SuperShare {
                 plan,
                 payment,
                 confirmation,
-            } => self.checkout_page(theme, plan, payment, confirmation, cx),
+            } => self.checkout_page(theme, stage, plan, payment, confirmation, cx),
             Page::Redeem { status, .. } => self.redemption_page(theme, status, cx),
             Page::Enabled { .. } => self.enabled_page(theme, stage, window, cx),
         };
@@ -278,6 +291,8 @@ impl Render for SuperShare {
             .child(
                 windshare_ui::column()
                     .w_full()
+                    // Preserve the natural scroll extent when a centered form exceeds the viewport.
+                    .flex_shrink_0()
                     .min_h(gpui::px(stage.height))
                     .justify_center()
                     .px(gpui::px(stage.gutter))

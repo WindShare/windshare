@@ -1,3 +1,4 @@
+use super::payments::Payment;
 use crate::localization::Text;
 use std::time::Duration;
 
@@ -28,48 +29,6 @@ impl Plan {
             Self::LongTerm => "9.9",
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Coin {
-    Btc,
-    Eth,
-    UsdtTrc20,
-    Sol,
-    Sui,
-    Bch,
-    Bnb,
-}
-
-impl Coin {
-    pub const ALL: [Self; 7] = [
-        Self::Btc,
-        Self::Eth,
-        Self::UsdtTrc20,
-        Self::Sol,
-        Self::Sui,
-        Self::Bch,
-        Self::Bnb,
-    ];
-
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Btc => "BTC",
-            Self::Eth => "ETH",
-            Self::UsdtTrc20 => "USDT · TRC20",
-            Self::Sol => "SOL",
-            Self::Sui => "SUI",
-            Self::Bch => "BCH",
-            Self::Bnb => "BNB",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Payment {
-    Alipay,
-    PayPal,
-    Crypto(Coin),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

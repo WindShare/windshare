@@ -36,8 +36,9 @@ Windows renderer for high-refresh animation while keeping application crates uno
   Hit targets stay fixed; reduced motion keeps smile feedback without movement.
 - SuperShare: click the top-left logo to open the edge-to-edge purchase canvas,
   with monthly/long-term selection, payment methods,
-  two-step local activation, and a pearl-gold brand mark. Payment destinations are
-  placeholders; activation lasts only for this preview session.
+  two-step local activation, and a pearl-gold brand mark. Alipay, OKX Pay and
+  Binance Pay use bundled QR codes; crypto supports seven wallets with network labels,
+  locally generated QR codes and address copying. Activation lasts only for this preview session.
   Redemption uses local fixtures: `SUPER-PREVIEW` succeeds, `OFFLINE-PREVIEW` shows
   the connection error, and other codes show an invalid-code result. No payments
   or official redemption requests are sent.
