@@ -77,6 +77,17 @@ impl SuperShare {
         cx.notify();
     }
 
+    pub fn enter(&mut self, cx: &mut Context<Self>) {
+        let before = self.state;
+        self.state.enter();
+        self.copied_address = None;
+        tracing::info!(
+            event = "supershare.entered", session = std::process::id(),
+            enabled = self.state.enabled(), ?before, after = ?self.state,
+        );
+        cx.notify();
+    }
+
     pub fn leave(&mut self, cx: &mut Context<Self>) {
         self.copied_address = None;
         if let Some(operation) = self.state.page.operation() {

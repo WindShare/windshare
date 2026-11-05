@@ -58,21 +58,33 @@ pub enum Redemption {
     Unavailable,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct Activation {
+    plan: Plan,
+    payment: Payment,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct State {
     pub page: Page,
-    // Returning to checkout must not revoke the locally enabled plan.
-    enabled_plan: Option<Plan>,
+    // Browsing another purchase must not replace the activation restored by the avatar entry.
+    activation: Option<Activation>,
 }
 
 impl State {
     pub const fn enabled(self) -> bool {
-        self.enabled_plan.is_some()
+        self.activation.is_some()
+    }
+
+    pub const fn enter(&mut self) {
+        if let Some(Activation { plan, payment }) = self.activation {
+            self.page = Page::Enabled { plan, payment };
+        }
     }
 
     pub const fn enable(&mut self, plan: Plan, payment: Payment) {
-        self.enabled_plan = Some(plan);
-        self.page = Page::Enabled { plan, payment };
+        self.activation = Some(Activation { plan, payment });
+        self.enter();
     }
 }
 

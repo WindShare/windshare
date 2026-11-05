@@ -162,7 +162,10 @@ impl Desktop {
         self.return_focus = None;
     }
     pub fn navigate(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
-        if self.page == Page::SuperShare && page != Page::SuperShare {
+        if page == Page::SuperShare {
+            self.super_share
+                .update(cx, crate::supershare::SuperShare::enter);
+        } else if self.page == Page::SuperShare {
             self.super_share
                 .update(cx, crate::supershare::SuperShare::leave);
         }
