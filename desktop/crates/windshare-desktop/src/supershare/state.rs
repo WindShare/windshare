@@ -99,8 +99,26 @@ pub enum Redemption {
     Unavailable,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct State {
+    pub page: Page,
+    // Returning to checkout must not revoke the locally enabled plan.
+    enabled_plan: Option<Plan>,
+}
+
+impl State {
+    pub const fn enabled(self) -> bool {
+        self.enabled_plan.is_some()
+    }
+
+    pub const fn enable(&mut self, plan: Plan, payment: Payment) {
+        self.enabled_plan = Some(plan);
+        self.page = Page::Enabled { plan, payment };
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum State {
+pub enum Page {
     Offer(Plan),
     Checkout {
         plan: Plan,
@@ -111,20 +129,23 @@ pub enum State {
         plan: Plan,
         status: Redemption,
     },
-    Enabled(Plan),
+    Enabled {
+        plan: Plan,
+        payment: Payment,
+    },
 }
 
-impl Default for State {
+impl Default for Page {
     fn default() -> Self {
         Self::Offer(Plan::default())
     }
 }
 
-impl State {
+impl Page {
     pub const fn plan(self) -> Plan {
         match self {
             Self::Offer(plan)
-            | Self::Enabled(plan)
+            | Self::Enabled { plan, .. }
             | Self::Checkout { plan, .. }
             | Self::Redeem { plan, .. } => plan,
         }
@@ -171,5 +192,5 @@ pub enum Action {
     Back,
     Redeem,
     SubmitCode,
-    Done,
+    ReturnToCheckout,
 }
