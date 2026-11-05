@@ -1,16 +1,22 @@
 use super::{
     SuperShare,
-    state::{Action, Coin, Confirmation, Payment, Plan},
+    layout::Stage,
+    payments::Payment,
+    state::{Action, Confirmation, Plan},
     visuals,
 };
 use crate::localization::{Text, language};
-use gpui::{Context, Div, div, prelude::*, px};
+use gpui::{Context, Div, prelude::*, px};
 use windshare_ui::{ButtonStyle, Icon, Theme, Tone, column, icon, row};
+
+const CHECKOUT_MAX_WIDTH: f32 = 760.;
+const STACKED_PAYMENT_WIDTH: f32 = 640.;
 
 impl SuperShare {
     pub(super) fn checkout_page(
         &self,
         theme: Theme,
+        stage: Stage,
         plan: Plan,
         payment: Payment,
         confirmation: Confirmation,
@@ -19,7 +25,7 @@ impl SuperShare {
         let locale = language(cx);
         column()
             .w_full()
-            .max_w(px(720.))
+            .max_w(px(CHECKOUT_MAX_WIDTH))
             .mx_auto()
             .gap(px(22.))
             .child(Self::page_navigation(theme, cx))
@@ -39,8 +45,20 @@ impl SuperShare {
                             .child(visuals::price(theme, plan.price(), true)),
                     )
                     .child(theme.separator())
-                    .child(Self::payment_tabs(payment, cx))
-                    .child(Self::payment_destination(theme, payment, cx))
+                    .child(Self::payment_tabs(
+                        theme,
+                        payment,
+                        confirmation.busy(),
+                        stage.content_width < STACKED_PAYMENT_WIDTH,
+                        cx,
+                    ))
+                    .child(self.payment_destination(
+                        theme,
+                        payment,
+                        confirmation.busy(),
+                        stage.content_width < STACKED_PAYMENT_WIDTH,
+                        cx,
+                    ))
                     .child(self.confirmation_view(theme, confirmation, cx)),
             )
     }
@@ -64,99 +82,6 @@ impl SuperShare {
                             .font_family(windshare_ui::FONT),
                     ),
             )
-    }
-
-    fn payment_tabs(payment: Payment, cx: &Context<Self>) -> Div {
-        let locale = language(cx);
-        let coin = if let Payment::Crypto(coin) = payment {
-            coin
-        } else {
-            Coin::UsdtTrc20
-        };
-        row().gap(px(10.)).children(
-            [
-                (
-                    "super-alipay",
-                    locale.text(Text::SuperAlipay),
-                    Payment::Alipay,
-                ),
-                ("super-paypal", "PayPal", Payment::PayPal),
-                (
-                    "super-crypto",
-                    locale.text(Text::SuperCrypto),
-                    Payment::Crypto(coin),
-                ),
-            ]
-            .into_iter()
-            .map(|(id, label, method)| {
-                div().flex_1().child(
-                    Self::button(id, label, Action::SelectPayment(method), cx)
-                        .style(if method == payment {
-                            ButtonStyle::ActiveNavigation(Tone::Mint)
-                        } else {
-                            ButtonStyle::Ghost
-                        })
-                        .full_width()
-                        .align_start(),
-                )
-            }),
-        )
-    }
-
-    fn payment_destination(theme: Theme, payment: Payment, cx: &Context<Self>) -> Div {
-        let locale = language(cx);
-        let (symbol, label, tone) = match payment {
-            Payment::Alipay => (Icon::Grid, Text::SuperQrPending, Tone::Blue),
-            Payment::PayPal => (Icon::External, Text::SuperAccountPending, Tone::Blue),
-            Payment::Crypto(_) => (Icon::Copy, Text::SuperAddressPending, Tone::Mint),
-        };
-        column()
-            .gap(px(18.))
-            .when(matches!(payment, Payment::Crypto(_)), |el| {
-                el.child(Self::coin_picker(payment, cx))
-            })
-            .child(
-                column()
-                    .h(px(204.))
-                    .items_center()
-                    .justify_center()
-                    .gap(px(18.))
-                    .rounded(px(16.))
-                    .bg(theme.surface().opacity(0.35))
-                    .child(
-                        row()
-                            .size(px(72.))
-                            .justify_center()
-                            .rounded(px(20.))
-                            .border_1()
-                            .border_color(theme.border())
-                            .bg(theme.surface())
-                            .child(icon(symbol, 30.).text_color(tone.text(theme))),
-                    )
-                    .child(
-                        theme
-                            .label(locale.text(label), 15.)
-                            .text_color(theme.muted_text()),
-                    ),
-            )
-    }
-
-    fn coin_picker(payment: Payment, cx: &Context<Self>) -> Div {
-        row()
-            .flex_wrap()
-            .gap(px(8.))
-            .children(Coin::ALL.into_iter().map(|coin| {
-                windshare_ui::Button::new(("super-coin", coin as usize), coin.label())
-                    .compact()
-                    .style(if payment == Payment::Crypto(coin) {
-                        ButtonStyle::ActiveNavigation(Tone::Mint)
-                    } else {
-                        ButtonStyle::Secondary
-                    })
-                    .on_press(cx.listener(move |this, (), window, cx| {
-                        this.dispatch(Action::SelectPayment(Payment::Crypto(coin)), window, cx);
-                    }))
-            }))
     }
 
     fn confirmation_view(

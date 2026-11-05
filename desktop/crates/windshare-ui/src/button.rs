@@ -1,7 +1,7 @@
 use crate::{Icon, Theme, Tone, icon};
 use gpui::{
-    App, AppContext, ElementId, FocusHandle, FontWeight, Pixels, Role, SharedString, Window, div,
-    prelude::*, px,
+    AnyElement, App, AppContext, ElementId, FocusHandle, FontWeight, Pixels, Role, SharedString,
+    Window, div, prelude::*, px,
 };
 use std::rc::Rc;
 
@@ -23,6 +23,11 @@ enum ButtonSize {
 }
 
 type PressHandler = Rc<dyn Fn(&(), &mut Window, &mut App)>;
+
+enum ButtonLeading {
+    Icon(Icon),
+    Element(AnyElement),
+}
 
 #[derive(Clone, Copy, Default)]
 pub enum ButtonStyle {
@@ -123,7 +128,7 @@ impl ButtonStyle {
 pub struct Button {
     id: ElementId,
     label: SharedString,
-    symbol: Option<Icon>,
+    leading: Option<ButtonLeading>,
     style: ButtonStyle,
     handler: Option<PressHandler>,
     size: ButtonSize,
@@ -140,7 +145,7 @@ impl Button {
         Self {
             id: id.into(),
             label: label.into(),
-            symbol: None,
+            leading: None,
             style: ButtonStyle::default(),
             handler: None,
             size: ButtonSize::Regular,
@@ -152,8 +157,12 @@ impl Button {
             min_width: None,
         }
     }
-    pub const fn icon(mut self, icon: Icon) -> Self {
-        self.symbol = Some(icon);
+    pub fn icon(mut self, icon: Icon) -> Self {
+        self.leading = Some(ButtonLeading::Icon(icon));
+        self
+    }
+    pub fn leading(mut self, element: impl IntoElement) -> Self {
+        self.leading = Some(ButtonLeading::Element(element.into_any_element()));
         self
     }
     pub const fn style(mut self, style: ButtonStyle) -> Self {
@@ -205,9 +214,13 @@ impl RenderOnce for Button {
         let handler = self.handler;
         let empty = self.label.is_empty();
         let accessible_label = if empty {
-            self.tooltip
-                .clone()
-                .unwrap_or_else(|| self.symbol.map_or("Button", Icon::name).into())
+            self.tooltip.clone().unwrap_or_else(|| {
+                match &self.leading {
+                    Some(ButtonLeading::Icon(icon)) => icon.name(),
+                    _ => "Button",
+                }
+                .into()
+            })
         } else {
             self.label.clone()
         };
@@ -263,8 +276,8 @@ impl RenderOnce for Button {
             .when_some(self.tooltip, |el, text| {
                 el.tooltip(move |_, cx| cx.new(|_| Tooltip(text.clone())).into())
             })
-            .when_some(self.symbol, |el, symbol| {
-                el.child(
+            .when_some(self.leading, |el, leading| match leading {
+                ButtonLeading::Icon(symbol) => el.child(
                     icon(
                         symbol,
                         if matches!(self.size, ButtonSize::Large) {
@@ -274,7 +287,8 @@ impl RenderOnce for Button {
                         },
                     )
                     .text_color(colors.foreground),
-                )
+                ),
+                ButtonLeading::Element(element) => el.child(element),
             })
             .when(!empty, |el| el.child(self.label))
     }
