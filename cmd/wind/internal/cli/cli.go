@@ -134,12 +134,13 @@ func (a *App) Run(ctx context.Context, args []string) (code int) {
 		if service == nil {
 			service = platformsetup.New()
 		}
-		runner := networkcommand.Runner{Service: service, Input: a.Stdin, Output: a.stderrWriter(), JSONOutput: a.Stdout,
+		runner := networkcommand.Runner{Service: service, Output: a.stderrLines(), JSONOutput: a.Stdout,
 			Interactive: func() bool { return networkcommand.IsInteractive(a.Stdin, a.Stderr) }}
 		return runner.Run(ctx, args[0], args[1:])
 	}
 	if len(args) != 0 && args[0] == "config" {
-		runner := configcommand.Runner{Input: a.Stdin, Output: a.stderrWriter(), Save: a.saveShareConfig}
+		output := a.stderrLines()
+		runner := configcommand.Runner{Input: a.Stdin, Output: output, TraceHandler: output.jsonHandler(), Save: a.saveShareConfig}
 		switch runner.Run(ctx, args[1:]) {
 		case configcommand.ResultOK:
 			return ExitOK
@@ -201,21 +202,20 @@ func (a *App) newApplication() (*engine.Engine, error) {
 }
 
 func (a *App) usage() {
-	fmt.Fprint(a.stderrWriter(), usageText)
+	a.stderrLines().WriteLines(usageText)
 }
 
 // writeCompleteLine is reserved for command parsing, prompts, resume, and
 // private-test diagnostics that occur outside a command event runtime.
 func (a *App) writeCompleteLine(format string, args ...any) {
 	message := fmt.Sprintf(format, args...)
-	_, _ = fmt.Fprintln(a.stderrWriter(), message)
+	a.stderrLines().WriteLines(message)
 }
 
-// stderrWriter gives top-level, prompt, resume, and private-trace diagnostics a
-// complete-line adapter so TerminalCanvas remains the only stderr writer and
-// can coordinate each insertion with an active command progress row.
-func (a *App) stderrWriter() io.Writer {
-	return completeLineCanvasWriter{canvas: a.terminalOutput().canvas}
+// stderrLines keeps record boundaries explicit while TerminalCanvas coordinates
+// every insertion with the active command progress row.
+func (a *App) stderrLines() canvasLineOutput {
+	return canvasLineOutput{canvas: a.terminalOutput().canvas}
 }
 
 type requestParseOutcome uint8
@@ -287,7 +287,7 @@ func (a *App) writeFlagHelp(fs *flag.FlagSet, synopsis string) {
 		help.WriteString("\nOptions:\n")
 		help.WriteString(defaults)
 	}
-	_, _ = io.WriteString(a.stderrWriter(), help.String())
+	a.stderrLines().WriteLines(help.String())
 }
 
 // flagDefaults renders PrintDefaults for TerminalCanvas. The flag package

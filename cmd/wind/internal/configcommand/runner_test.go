@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -17,6 +19,14 @@ import (
 
 const importedConfiguration = `{"front_url":"https://front.example/app","profiles":[{"url":"https://private.example?route=one","access_key":"secret-canary"}]}`
 
+type bufferLines struct{ buffer *bytes.Buffer }
+
+func (output bufferLines) WriteLines(records ...string) {
+	for _, record := range records {
+		_, _ = fmt.Fprintln(output.buffer, strings.TrimSuffix(record, "\n"))
+	}
+}
+
 func TestImportFromFileAndStdin(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "downloaded configuration.json")
 	if err := os.WriteFile(path, []byte(importedConfiguration), 0o600); err != nil {
@@ -27,7 +37,8 @@ func TestImportFromFileAndStdin(t *testing.T) {
 			var output bytes.Buffer
 			var saved relayconfig.Config
 			runner := Runner{
-				Input: strings.NewReader(importedConfiguration), Output: &output,
+				Input: strings.NewReader(importedConfiguration), Output: bufferLines{buffer: &output},
+				TraceHandler: slog.NewJSONHandler(&output, nil),
 				Save: func(config relayconfig.Config) error {
 					saved = config
 					return nil
@@ -73,7 +84,8 @@ func TestImportFailureDoesNotSaveOrExposePrivateInput(t *testing.T) {
 			var output bytes.Buffer
 			saves := 0
 			runner := Runner{
-				Input: strings.NewReader(scenario.input), Output: &output,
+				Input: strings.NewReader(scenario.input), Output: bufferLines{buffer: &output},
+				TraceHandler: slog.NewJSONHandler(&output, nil),
 				Save: func(relayconfig.Config) error {
 					saves++
 					return scenario.saveError

@@ -3,7 +3,6 @@ package cli
 import (
 	"errors"
 	"flag"
-	"fmt"
 	"math"
 	"slices"
 
@@ -42,7 +41,7 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 	browserTrace := flags.Bool("browser-trace", false, "enable browser diagnostics when the generated link is opened")
 	var observation observationOptions
 	if err := bindObservationOptions(flags, &observation); err != nil {
-		_, _ = fmt.Fprintln(a.stderrWriter(), "share: observation options are unavailable")
+		a.writeCompleteLine("share: observation options are unavailable")
 		return shareRequest{}, requestParseInternalFailure
 	}
 	paths, flagParse := parseInterleaved(flags, args)
@@ -50,15 +49,15 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		return shareRequest{}, parse
 	}
 	if err := observation.validate(); err != nil {
-		_, _ = fmt.Fprintf(a.stderrWriter(), "share: %s\n", observationOptionDiagnostic(err))
+		a.writeCompleteLine("share: %s", observationOptionDiagnostic(err))
 		return shareRequest{}, requestParseUsageFailure
 	}
 	if len(paths) == 0 {
-		_, _ = fmt.Fprintln(a.stderrWriter(), "share: at least one path is required")
+		a.writeCompleteLine("share: at least one path is required")
 		return shareRequest{}, requestParseUsageFailure
 	}
 	if *blockSize < 0 || *blockSize > math.MaxUint32 {
-		_, _ = fmt.Fprintln(a.stderrWriter(), "share: block size is outside the suite-02 range")
+		a.writeCompleteLine("share: block size is outside the suite-02 range")
 		return shareRequest{}, requestParseUsageFailure
 	}
 	// The process entry point supplies personal configuration. Embedded callers
@@ -68,7 +67,7 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		var err error
 		saved, err = a.loadShareConfig()
 		if err != nil {
-			_, _ = fmt.Fprintln(a.stderrWriter(), "share: cannot load sharing configuration; check windshare/config.json or WINDSHARE_CONFIG")
+			a.writeCompleteLine("share: cannot load sharing configuration; check windshare/config.json or WINDSHARE_CONFIG")
 			return shareRequest{}, requestParseUsageFailure
 		}
 	}
@@ -82,12 +81,12 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		*frontURL = saved.FrontURL
 	}
 	if err := relayconfig.ValidateFrontURL(*frontURL); err != nil {
-		_, _ = fmt.Fprintln(a.stderrWriter(), "share: configure a frontend URL with wind config import <file|-> --front-url <url>, or pass --front-url for this share; expected an HTTP(S) base URL without credentials, query or fragment")
+		a.writeCompleteLine("share: configure a frontend URL with wind config import <file|-> --front-url <url>, or pass --front-url for this share; expected an HTTP(S) base URL without credentials, query or fragment")
 		return shareRequest{}, requestParseUsageFailure
 	}
 	relays, err := relayconfig.SelectRelays(saved, relayURLs)
 	if err != nil {
-		_, _ = fmt.Fprintln(a.stderrWriter(), "share: configure relay candidates with wind config import <file|->, or pass --relay for this share")
+		a.writeCompleteLine("share: configure relay candidates with wind config import <file|->, or pass --relay for this share")
 		return shareRequest{}, requestParseUsageFailure
 	}
 	return shareRequest{

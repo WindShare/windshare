@@ -18,7 +18,7 @@ func TestFilesystemRunnerHelpUsesOnlyRootOwnedOperationInventory(t *testing.T) {
 	stderr := &bytes.Buffer{}
 	runner := NewFilesystemRunner(FilesystemConfig{
 		Input: strings.NewReader(""), Output: stdout,
-		RawTerminalOutput: stderr, SerializedTerminalOutput: stderr,
+		RawTerminalOutput: stderr, DiagnosticOutput: testDiagnosticOutput{writer: stderr},
 	})
 	if result := runner.Run(context.Background(), []string{"help"}); result != ResultOK {
 		t.Fatalf("result=%d", result)
@@ -43,7 +43,7 @@ func TestFilesystemRunnerUsesEngineRecoveryWithoutCreatingMissingRoot(t *testing
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 	runner := NewFilesystemRunner(FilesystemConfig{
 		Recovery: application, Input: strings.NewReader(""), Output: stdout,
-		RawTerminalOutput: stderr, SerializedTerminalOutput: stderr,
+		RawTerminalOutput: stderr, DiagnosticOutput: testDiagnosticOutput{writer: stderr},
 		Logf: func(format string, args ...any) { _, _ = fmt.Fprintf(stderr, format, args...) },
 	})
 	if result := runner.Run(context.Background(), []string{"list", "-o", missing}); result != ResultFailure {

@@ -12,15 +12,20 @@ type recoveryInspector interface {
 	InspectRecovery(context.Context, engine.RecoveryAuthority) (*engine.RecoveryInventory, error)
 }
 
-// FilesystemConfig keeps raw terminal detection separate from serialized writes;
+// LineOutput commits complete diagnostic records before returning, including prompts.
+type LineOutput interface {
+	WriteLines(...string)
+}
+
+// FilesystemConfig keeps raw terminal detection separate from diagnostic records;
 // the CLI's stderr lock must not hide the underlying terminal file descriptor.
 type FilesystemConfig struct {
-	Recovery                 recoveryInspector
-	Input                    io.Reader
-	Output                   io.Writer
-	RawTerminalOutput        io.Writer
-	SerializedTerminalOutput io.Writer
-	Logf                     func(string, ...any)
+	Recovery          recoveryInspector
+	Input             io.Reader
+	Output            io.Writer
+	RawTerminalOutput io.Writer
+	DiagnosticOutput  LineOutput
+	Logf              func(string, ...any)
 }
 
 func NewFilesystemRunner(config FilesystemConfig) Runner {
@@ -28,11 +33,11 @@ func NewFilesystemRunner(config FilesystemConfig) Runner {
 	return newRunner(resumeDependencies{
 		inventories: filesystemResumeStateInventoryOpener{recovery: config.Recovery},
 		confirmation: newStdioResumeConfirmationTerminal(
-			config.Input, config.RawTerminalOutput, config.SerializedTerminalOutput,
+			config.Input, config.RawTerminalOutput, config.DiagnosticOutput,
 		),
 		parser:   flagRequestParser{logger: logger},
 		renderer: textRenderer{},
-		output:   streamResumeOutput{result: config.Output, usage: config.SerializedTerminalOutput},
+		output:   streamResumeOutput{result: config.Output, usage: config.DiagnosticOutput},
 		logger:   logger,
 	})
 }

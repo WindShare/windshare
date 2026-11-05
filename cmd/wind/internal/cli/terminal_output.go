@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"io"
+	"log/slog"
 	"strings"
 	"sync"
 
@@ -57,22 +57,40 @@ func (a *App) closeTerminalOutput() {
 	terminal.closed = true
 }
 
-// completeLineCanvasWriter is intentionally diagnostic-only: Canvas retains
-// the first write failure for health observation while callers receive a full
-// successful write so stderr cannot acquire command or transfer authority.
-type completeLineCanvasWriter struct {
+// canvasLineOutput accepts complete records, never byte-stream fragments.
+// Calls commit immediately, including prompts without a trailing newline.
+// Canvas retains failures for health observation without giving diagnostics
+// command or transfer authority.
+type canvasLineOutput struct {
 	canvas *terminalcanvas.Canvas
 }
 
-func (writer completeLineCanvasWriter) Write(payload []byte) (int, error) {
-	if len(payload) == 0 {
-		return 0, nil
+func (output canvasLineOutput) WriteLines(records ...string) {
+	if output.canvas == nil {
+		return
 	}
-	if writer.canvas == nil {
-		return len(payload), nil
+	var lines []terminalcanvas.Line
+	for _, record := range records {
+		lines = append(lines, splitCompleteLines(record)...)
 	}
-	writer.canvas.Insert(splitCompleteLines(string(payload)))
-	return len(payload), nil
+	output.canvas.Insert(lines)
+}
+
+func (output canvasLineOutput) jsonHandler() *slog.JSONHandler {
+	return slog.NewJSONHandler(jsonLogRecordWriter{output: output}, nil)
+}
+
+// slog.JSONHandler guarantees one Write per complete JSON record. Keep its
+// adapter private to the handler so commands cannot mistake it for a byte stream.
+type jsonLogRecordWriter struct {
+	output canvasLineOutput
+}
+
+func (writer jsonLogRecordWriter) Write(record []byte) (int, error) {
+	if len(record) > 0 {
+		writer.output.WriteLines(string(record))
+	}
+	return len(record), nil
 }
 
 func splitCompleteLines(value string) []terminalcanvas.Line {
@@ -88,5 +106,3 @@ func splitCompleteLines(value string) []terminalcanvas.Line {
 	}
 	return lines
 }
-
-var _ io.Writer = completeLineCanvasWriter{}

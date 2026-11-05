@@ -12,20 +12,20 @@ import (
 
 type stdioResumeConfirmationTerminal struct {
 	input       io.Reader
-	output      io.Writer
+	output      LineOutput
 	interactive bool
 }
 
 func newStdioResumeConfirmationTerminal(
 	input io.Reader,
 	rawOutput io.Writer,
-	serializedOutput io.Writer,
+	diagnosticOutput LineOutput,
 ) stdioResumeConfirmationTerminal {
 	inputFD, inputIsFile := input.(interface{ Fd() uintptr })
 	outputFD, outputIsFile := rawOutput.(interface{ Fd() uintptr })
 	return stdioResumeConfirmationTerminal{
 		input:  input,
-		output: serializedOutput,
+		output: diagnosticOutput,
 		interactive: inputIsFile && outputIsFile &&
 			term.IsTerminal(int(inputFD.Fd())) && term.IsTerminal(int(outputFD.Fd())),
 	}
@@ -45,13 +45,7 @@ func (terminal stdioResumeConfirmationTerminal) ReadLine(
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	written, err := io.WriteString(terminal.output, prompt)
-	if err != nil {
-		return "", err
-	}
-	if written != len(prompt) {
-		return "", io.ErrShortWrite
-	}
+	terminal.output.WriteLines(prompt)
 	line, err := bufio.NewReader(terminal.input).ReadString('\n')
 	if err != nil {
 		return "", errors.Join(errResumeConfirmationInput, err)
