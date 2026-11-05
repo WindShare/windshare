@@ -3,7 +3,13 @@ use gpui::{
     Bounds, Div, Path, PathBuilder, Pixels, canvas, div, linear_color_stop, linear_gradient, point,
     prelude::*, px,
 };
+use std::sync::Arc;
 use windshare_ui::Theme;
+
+struct SilkMesh {
+    bounds: Bounds<Pixels>,
+    paths: [Path<Pixels>; 4],
+}
 
 pub fn backdrop(theme: Theme) -> Div {
     let finish = Finish::new(theme);
@@ -20,8 +26,30 @@ pub fn backdrop(theme: Theme) -> Div {
         ))
         .child(
             canvas(
-                |bounds, _, _| silk_paths(bounds),
-                move |_, paths, window, _| {
+                |bounds, window, _| {
+                    // The emblem's frame demand also repaints this static backdrop.
+                    // Keep tessellation out of that loop; resize alone changes geometry.
+                    window.with_global_id("supershare-silk-mesh".into(), |id, window| {
+                        window.with_element_state(id, |cached: Option<Arc<SilkMesh>>, _| {
+                            let mesh =
+                                cached
+                                    .filter(|mesh| mesh.bounds == bounds)
+                                    .unwrap_or_else(|| {
+                                        tracing::debug!(
+                                            event = "supershare.backdrop_mesh_rebuilt",
+                                            session = std::process::id(),
+                                            ?bounds,
+                                        );
+                                        Arc::new(SilkMesh {
+                                            bounds,
+                                            paths: silk_paths(bounds),
+                                        })
+                                    });
+                            (mesh.clone(), mesh)
+                        })
+                    })
+                },
+                move |_, mesh, window, _| {
                     let fills = [
                         linear_gradient(
                             160.,
@@ -44,8 +72,8 @@ pub fn backdrop(theme: Theme) -> Div {
                             linear_color_stop(finish.foil.opacity(0.22), 1.),
                         ),
                     ];
-                    for (path, fill) in paths.into_iter().zip(fills) {
-                        window.paint_path(path, fill);
+                    for (path, fill) in mesh.paths.iter().zip(fills) {
+                        window.paint_path(path.clone(), fill);
                     }
                 },
             )

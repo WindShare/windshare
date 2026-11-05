@@ -1,5 +1,6 @@
 use super::{
     SuperShare,
+    emblem::emblem,
     layout::{COLUMN_GAP, OfferLayout, PURCHASE_MAX_WIDTH, STACKED_HERO_GAP, Stage},
     state::{Action, Plan},
     visuals::{self, Finish},
@@ -26,7 +27,7 @@ impl SuperShare {
         cx: &Context<Self>,
     ) -> Div {
         let heading = visuals::heading(theme, stage.title_size);
-        let emblem = visuals::emblem(
+        let emblem = emblem(
             theme,
             stage.emblem_size,
             self.reduced_motion || !window.is_window_active(),
@@ -179,7 +180,7 @@ impl SuperShare {
             .justify_center()
             .gap(px(32.))
             .child(
-                visuals::emblem(
+                emblem(
                     theme,
                     stage.emblem_size,
                     self.reduced_motion || !window.is_window_active(),

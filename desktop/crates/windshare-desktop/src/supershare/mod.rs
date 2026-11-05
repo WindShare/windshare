@@ -1,5 +1,6 @@
 mod backdrop;
 mod checkout;
+mod emblem;
 mod layout;
 mod offer;
 mod redemption;
