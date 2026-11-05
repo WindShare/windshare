@@ -12,6 +12,7 @@ import {
 } from '../../src/content/broker'
 import type { BlockRecord, FileRevisionDescriptor } from '../../src/content/records'
 import type { RevisionReader } from '../../src/content/session-services'
+import { AutomaticPhotoDeferredError } from '../../src/preview/automatic-photo'
 import { VideoPreviewError, type Mp4Segment, type PreviewRangeSource } from '../../src/preview/mp4-range'
 import { ReceiveSourceInvalidatedError } from '../../src/application/receive/errors'
 import {
@@ -22,14 +23,14 @@ import {
   type VideoRangePort,
 } from '../../src/preview/preview'
 
-// Lets a test break the JPEG header walk's progress invariant.
-const jpegWalk = vi.hoisted(() => ({ stall: false }))
+// Lets a test break the image header walk's progress invariant.
+const headerWalk = vi.hoisted(() => ({ stall: false }))
 vi.mock('../../src/preview/image-header', async (importOriginal) => {
   const original = await importOriginal<typeof import('../../src/preview/image-header')>()
   return {
     ...original,
-    continueJpegHeader: (...args: Parameters<typeof original.continueJpegHeader>) =>
-      jpegWalk.stall ? args[1] : original.continueJpegHeader(...args),
+    continueImageHeader: (...args: Parameters<typeof original.continueImageHeader>) =>
+      headerWalk.stall ? args[1] : original.continueImageHeader(...args),
   }
 })
 
@@ -113,6 +114,19 @@ function pngFile(size: number, width: number, height: number): Uint8Array<ArrayB
   new DataView(bytes.buffer).setUint32(20, height, false)
   new DataView(bytes.buffer).setUint32(33, size - 41, false)
   bytes.set([73, 68, 65, 84], 37)
+  return bytes
+}
+
+function pngWithMetadata(width: number, height: number): Uint8Array<ArrayBuffer> {
+  // C2PA manifests can push IDAT beyond the first sniff window.
+  const metadata = 150 * 1024
+  const bytes = new Uint8Array(33 + 12 + metadata + 12 + 1024)
+  const view = new DataView(bytes.buffer)
+  bytes.set(pngFile(41, width, height).subarray(0, 33))
+  view.setUint32(33, metadata, false)
+  bytes.set([99, 97, 66, 88], 37)
+  view.setUint32(33 + 12 + metadata, 1024, false)
+  bytes.set([73, 68, 65, 84], 33 + 12 + metadata + 4)
   return bytes
 }
 
@@ -265,10 +279,49 @@ describe('v2 file preview runtime', () => {
     await preview.close()
   })
 
-  it('fails a JPEG header walk that stops advancing instead of looping', async () => {
+  it('defers oversized automatic PNGs before metadata reads while preserving manual preview', async () => {
+    const bytes = pngWithMetadata(4000, 3000)
+    const fixture = runtime(bytes, 64n * 1024n)
+    const decodeImage = vi.fn(async () => ({ width: 4000, height: 3000 }))
+    const urls = urlPorts({ decodeImage })
+    const entry = fileEntry(BigInt(bytes.byteLength), 'large.png')
+    await expect(FilePreview.openAutomaticPhoto(
+      entry, fixture.revisions, fixture.broker, new AbortController().signal, urls.ports,
+    )).rejects.toBeInstanceOf(AutomaticPhotoDeferredError)
+    expect(fixture.lane.calls).toEqual([0n])
+    expect(decodeImage).not.toHaveBeenCalled()
+    expect(urls.created).toEqual([])
+    expect(fixture.releases()).toBe(1)
+
+    const manual = await FilePreview.open(
+      entry, fixture.revisions, fixture.broker, new AbortController().signal, urls.ports,
+    )
+    expect(manual.current).toMatchObject({ kind: 'image', width: 4000, height: 3000 })
+    expect(new Set(fixture.lane.calls)).toEqual(new Set([0n, 1n, 2n]))
+    expect(fixture.lane.calls).toHaveLength(3)
+    await manual.close()
+    expect(fixture.releases()).toBe(2)
+  })
+
+  it.each(['open', 'openAutomaticPhoto'] as const)('%s previews a PNG with large metadata', async (operation) => {
+    const bytes = pngWithMetadata(1024, 1024)
+    const fixture = runtime(bytes, 64n * 1024n)
+    const urls = urlPorts({ decodeImage: async () => ({ width: 1024, height: 1024 }) })
+    const preview = await FilePreview[operation](
+      fileEntry(BigInt(bytes.byteLength), 'generated.png'),
+      fixture.revisions,
+      fixture.broker,
+      new AbortController().signal,
+      urls.ports,
+    )
+    expect(preview.current).toMatchObject({ kind: 'image', mimeType: 'image/png', width: 1024, height: 1024 })
+    await preview.close()
+  })
+
+  it('fails an image header walk that stops advancing instead of looping', async () => {
     const bytes = cameraJpegFile(3, 6000, 4000)
     const fixture = runtime(bytes, 64n * 1024n)
-    jpegWalk.stall = true
+    headerWalk.stall = true
     try {
       await expect(FilePreview.open(
         fileEntry(BigInt(bytes.byteLength), 'DSC_0001.JPG'),
@@ -276,9 +329,9 @@ describe('v2 file preview runtime', () => {
         fixture.broker,
         new AbortController().signal,
         urlPorts().ports,
-      )).rejects.toThrow('JPEG header walk did not advance')
+      )).rejects.toThrow('Image header walk did not advance')
     } finally {
-      jpegWalk.stall = false
+      headerWalk.stall = false
     }
     // The stalled continuation is rejected before its window is read again.
     expect(fixture.lane.calls).toEqual([0n, 1n, 2n])
