@@ -456,16 +456,16 @@ func TestStdioResumeConfirmationAndOutputBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = reader.Close(); _ = writer.Close() })
-	if terminal := newStdioResumeConfirmationTerminal(reader, writer, writer); terminal.Interactive() {
+	if terminal := newStdioResumeConfirmationTerminal(reader, writer, testDiagnosticOutput{writer: writer}); terminal.Interactive() {
 		t.Fatal("pipe-backed confirmation was treated as a terminal")
 	}
 
 	output := &bytes.Buffer{}
 	terminal := stdioResumeConfirmationTerminal{
-		input: strings.NewReader("discard 3\r\nignored\n"), output: output, interactive: true,
+		input: strings.NewReader("discard 3\r\nignored\n"), output: testDiagnosticOutput{writer: output}, interactive: true,
 	}
 	line, err := terminal.ReadLine(context.Background(), "confirm: ")
-	if err != nil || line != "discard 3" || output.String() != "confirm: " {
+	if err != nil || line != "discard 3" || output.String() != "confirm: \n" {
 		t.Fatalf("line=%q output=%q err=%v", line, output.String(), err)
 	}
 	if err := (streamResumeOutput{result: shortResumeWriter{}}).WriteResult("checkpoint"); !errors.Is(err, io.ErrShortWrite) {
@@ -477,14 +477,20 @@ func testResumeOperation(fill string, state resumeOperationState) resumeOperatio
 	return resumeOperation{ID: testResumeID(fill), State: state}
 }
 
-type writerLogger struct {
+type testDiagnosticOutput struct {
 	writer io.Writer
 }
 
-func (logger writerLogger) Logf(format string, args ...any) {
-	if logger.writer != nil {
-		_, _ = fmt.Fprintln(logger.writer, fmt.Sprintf(format, args...))
+func (output testDiagnosticOutput) WriteLines(records ...string) {
+	if output.writer != nil {
+		for _, record := range records {
+			_, _ = fmt.Fprintln(output.writer, strings.TrimSuffix(record, "\n"))
+		}
 	}
+}
+
+func (output testDiagnosticOutput) Logf(format string, args ...any) {
+	output.WriteLines(fmt.Sprintf(format, args...))
 }
 
 type resumeTestApp struct {
@@ -515,7 +521,7 @@ func (app *resumeTestApp) Run(ctx context.Context, args []string) Result {
 
 func (app *resumeTestApp) parser() flagRequestParser {
 	return flagRequestParser{
-		logger: writerLogger{writer: app.stderr},
+		logger: testDiagnosticOutput{writer: app.stderr},
 	}
 }
 
@@ -526,9 +532,9 @@ func (app *resumeTestApp) runner() Runner {
 	}
 	confirmation := app.resumeConfirmation
 	if confirmation == nil {
-		confirmation = newStdioResumeConfirmationTerminal(app.stdin, app.stderr, app.stderr)
+		confirmation = newStdioResumeConfirmationTerminal(app.stdin, app.stderr, testDiagnosticOutput{writer: app.stderr})
 	}
-	logger := writerLogger{writer: app.stderr}
+	logger := testDiagnosticOutput{writer: app.stderr}
 	return newRunner(resumeDependencies{
 		inventories:  inventories,
 		confirmation: confirmation,
@@ -536,7 +542,7 @@ func (app *resumeTestApp) runner() Runner {
 		renderer:     textRenderer{},
 		output: streamResumeOutput{
 			result: app.stdout,
-			usage:  app.stderr,
+			usage:  testDiagnosticOutput{writer: app.stderr},
 		},
 		logger: logger,
 	})

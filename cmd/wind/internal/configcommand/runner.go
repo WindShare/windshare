@@ -27,53 +27,55 @@ const (
 const Usage = "Usage: " + commandmeta.Name + " config import <file|-> [--front-url <url>] [-v|--verbose]\n" +
 	"  Replace sharing defaults; --front-url saves the website address; '-' reads JSON from stdin.\n"
 
+// LineOutput commits complete diagnostic records immediately; it is not a byte stream.
+type LineOutput interface {
+	WriteLines(...string)
+}
+
 // Runner keeps the destination authority injected so embedded callers cannot
 // accidentally modify the developer's personal configuration.
 type Runner struct {
-	Input  io.Reader
-	Output io.Writer
-	Save   func(relayconfig.Config) error
+	Input        io.Reader
+	Output       LineOutput
+	TraceHandler slog.Handler
+	Save         func(relayconfig.Config) error
 }
 
 func (runner Runner) Run(ctx context.Context, args []string) Result {
-	output := runner.Output
-	if output == nil {
-		output = io.Discard
-	}
 	request, err := parse(args)
 	if errors.Is(err, flag.ErrHelp) {
-		_, _ = io.WriteString(output, Usage)
+		runner.writeLine("%s", Usage)
 		return ResultOK
 	}
 	if err != nil {
-		_, _ = io.WriteString(output, Usage)
+		runner.writeLine("%s", Usage)
 		return ResultUsage
 	}
-	traceOutput := io.Discard
-	if request.verbose {
-		traceOutput = output
+	traceHandler := slog.DiscardHandler
+	if request.verbose && runner.TraceHandler != nil {
+		traceHandler = runner.TraceHandler
 	}
 	sourceKind := "file"
 	if request.source == "-" {
 		sourceKind = "stdin"
 	}
-	log := slog.New(slog.NewJSONHandler(traceOutput, nil)).With(
+	log := slog.New(traceHandler).With(
 		"operation", "config_import", "operation_id", rand.Text(), "source", sourceKind)
 	log.Info("started")
 	if err := ctx.Err(); err != nil {
 		log.Info("failed", "stage", "read", "reason", "cancelled")
-		_, _ = fmt.Fprintln(output, "config import: cancelled; saved configuration was not changed")
+		runner.writeLine("config import: cancelled; saved configuration was not changed")
 		return ResultFailure
 	}
 	config, err := runner.read(request.source)
 	if err != nil {
 		if errors.Is(err, relayconfig.ErrConfig) {
 			log.Info("failed", "stage", "validate", "reason", "invalid_configuration")
-			_, _ = fmt.Fprintf(output, "config import: invalid sharing configuration; expected at most %d profiles, active_relays selected from those profiles, and an optional HTTP(S) front_url\n", relayconfig.MaximumProfiles)
+			runner.writeLine("config import: invalid sharing configuration; expected at most %d profiles, active_relays selected from those profiles, and an optional HTTP(S) front_url", relayconfig.MaximumProfiles)
 			return ResultUsage
 		}
 		log.Info("failed", "stage", "read", "reason", "source_unreadable")
-		_, _ = fmt.Fprintln(output, "config import: cannot read the input file or stdin; saved configuration was not changed")
+		runner.writeLine("config import: cannot read the input file or stdin; saved configuration was not changed")
 		return ResultFailure
 	}
 	if request.frontURL != "" {
@@ -82,30 +84,36 @@ func (runner Runner) Run(ctx context.Context, args []string) Result {
 	log.Info("validated", "candidate_count", len(config.Profiles), "front_url", config.FrontURL, "frontend_override", request.frontURL != "")
 	if ctx.Err() != nil {
 		log.Info("failed", "stage", "save", "reason", "cancelled")
-		_, _ = fmt.Fprintln(output, "config import: cancelled; saved configuration was not changed")
+		runner.writeLine("config import: cancelled; saved configuration was not changed")
 		return ResultFailure
 	}
 	if runner.Save == nil {
 		log.Info("failed", "stage", "save", "reason", "destination_unavailable")
-		_, _ = fmt.Fprintln(output, "config import: configuration storage is unavailable")
+		runner.writeLine("config import: configuration storage is unavailable")
 		return ResultFailure
 	}
 	if err := runner.Save(config); err != nil {
 		log.Info("failed", "stage", "save", "reason", "write_failed")
-		_, _ = fmt.Fprintln(output, "config import: cannot save configuration; check the user config directory or WINDSHARE_CONFIG")
+		runner.writeLine("config import: cannot save configuration; check the user config directory or WINDSHARE_CONFIG")
 		return ResultFailure
 	}
 	log.Info("committed", "candidate_count", len(config.Profiles), "frontend_configured", config.FrontURL != "")
-	_, _ = fmt.Fprintf(output, "Saved sharing configuration with %d relay candidate(s).\n", len(config.Profiles))
+	runner.writeLine("Saved sharing configuration with %d relay candidate(s).", len(config.Profiles))
 	if len(config.TURN.Profiles) > 0 {
-		_, _ = fmt.Fprintln(output, turn.DelegationNotice)
+		runner.writeLine("%s", turn.DelegationNotice)
 	}
 	if config.FrontURL == "" {
-		_, _ = fmt.Fprintln(output, "No frontend configured. Re-import with --front-url <url>, or pass --front-url when sharing.")
+		runner.writeLine("No frontend configured. Re-import with --front-url <url>, or pass --front-url when sharing.")
 	} else {
-		_, _ = fmt.Fprintf(output, "Frontend: %s. Future shares use these defaults.\n", config.FrontURL)
+		runner.writeLine("Frontend: %s. Future shares use these defaults.", config.FrontURL)
 	}
 	return ResultOK
+}
+
+func (runner Runner) writeLine(format string, args ...any) {
+	if runner.Output != nil {
+		runner.Output.WriteLines(fmt.Sprintf(format, args...))
+	}
 }
 
 func (runner Runner) read(source string) (relayconfig.Config, error) {
