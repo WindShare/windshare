@@ -2,6 +2,9 @@ module github.com/windshare/windshare
 
 go 1.27.3
 
+// Desktop is an independent Cargo workspace; its reference fixtures are not Go packages.
+ignore ./desktop
+
 // The pinned provider adaptation is reproduced and verified by third_party/pion.
 replace github.com/pion/ice/v4 => ./third_party/pion/ice
 
