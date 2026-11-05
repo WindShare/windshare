@@ -44,11 +44,11 @@ func (runner Runner) Run(ctx context.Context, command string, args []string) int
 	}
 	options, err := parseNetworkArgs(command, args)
 	if err != nil {
-		fmt.Fprintf(runner.Output, "Usage: wind %s network [--json]", command)
+		usage := "Usage: wind " + command + " network [--json]"
 		if command == "setup" {
-			fmt.Fprint(runner.Output, " [--skip|--remove] [--non-interactive]")
+			usage += " [--skip|--remove] [--non-interactive]"
 		}
-		fmt.Fprintln(runner.Output)
+		fmt.Fprintln(runner.Output, usage)
 		if errors.Is(err, flag.ErrHelp) {
 			return ResultOK
 		}
@@ -142,11 +142,7 @@ func (runner Runner) report(report platformsetup.Report, operation *platformsetu
 		return
 	}
 	if operation != nil {
-		fmt.Fprintf(runner.Output, "Rule operation: %s", operation.State)
-		if operation.Detail != "" {
-			fmt.Fprintf(runner.Output, " (%s)", operation.Detail)
-		}
-		fmt.Fprintln(runner.Output)
+		fmt.Fprintln(runner.Output, "Rule operation: "+string(operation.State)+parenthesized(operation.Detail))
 	}
 	fmt.Fprintf(runner.Output, "Executable: %s\nSetup choice: %s\nConfigured executable: %s\nScope: %s\nGlobal rules: not evaluated\n", report.Executable, report.Preference.Choice, report.Preference.Executable, platformsetup.InspectionScope)
 	if report.PreferenceError != "" {
@@ -158,14 +154,19 @@ func (runner Runner) report(report platformsetup.Report, operation *platformsetu
 	for _, finding := range report.Findings {
 		fmt.Fprintf(runner.Output, "%s %s %s: %s (%s)\n", finding.Network.Interface, finding.Network.Profile, finding.Protocol, finding.Status, finding.Reason)
 		for _, rule := range finding.Rules {
-			fmt.Fprintf(runner.Output, "  %s: %s", rule.Name, rule.Action)
-			if rule.Restrictions != "" {
-				fmt.Fprintf(runner.Output, " (%s)", rule.Restrictions)
-			}
-			fmt.Fprintln(runner.Output)
+			fmt.Fprintln(runner.Output, "  "+rule.Name+": "+rule.Action.String()+parenthesized(rule.Restrictions))
 		}
 	}
 	if report.SuggestSetup() {
 		fmt.Fprintln(runner.Output, "Configure: wind setup network")
 	}
+}
+
+// Human output is a complete-line stream (the CLI's stderr canvas renders every
+// write as whole lines), so optional suffixes are joined before writing.
+func parenthesized(detail string) string {
+	if detail == "" {
+		return ""
+	}
+	return " (" + detail + ")"
 }
