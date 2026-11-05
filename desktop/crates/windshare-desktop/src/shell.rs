@@ -4,13 +4,13 @@ use crate::{
     desktop::Desktop,
     model::{Page, PreviewAction},
 };
-use gpui::{Div, Window, div, point, prelude::*, px};
+use gpui::{Div, Role, Window, div, point, prelude::*, px};
 use windshare_ui::{
     Button, ButtonStyle, FONT, Icon, SIDEBAR_COMPACT_WIDTH, SIDEBAR_WIDTH, Theme, Tone, column,
     row, toggle_window_maximize, window_drag_area,
 };
 
-const TITLEBAR_HEIGHT: f32 = 40.;
+use crate::layout::{STATUSBAR_HEIGHT, TITLEBAR_HEIGHT};
 const BRAND_MARK_SIZE: f32 = 42.;
 const COMPACT_BRAND_MARK_SIZE: f32 = 36.;
 
@@ -19,7 +19,7 @@ impl Desktop {
         window_drag_area().h(px(TITLEBAR_HEIGHT)).flex_shrink_0()
     }
 
-    pub fn titlebar(theme: Theme, window: &Window, cx: &Context<Self>) -> Div {
+    pub fn titlebar(window: &Window, cx: &Context<Self>) -> Div {
         let locale = language(cx);
         let (maximize_icon, maximize_label) = if window.is_maximized() {
             (Icon::Restore, Text::RestoreWindow)
@@ -31,7 +31,6 @@ impl Desktop {
             .flex_shrink_0()
             .pl(px(16.))
             .pr(px(5.))
-            .bg(theme.canvas())
             .child(Self::titlebar_drag_area().flex_1())
             .when(cfg!(not(target_os = "macos")), |el| {
                 el.child(
@@ -74,9 +73,11 @@ impl Desktop {
             }))
             .h_full()
             .flex_shrink_0()
-            .bg(theme.sidebar())
-            .border_r_1()
-            .border_color(theme.border())
+            .when(self.page != Page::SuperShare, |el| {
+                el.bg(theme.sidebar())
+                    .border_r_1()
+                    .border_color(theme.border())
+            })
             .child(Self::titlebar_drag_area().w_full())
             .child(self.sidebar_content(theme, compact, cx))
     }
@@ -88,6 +89,29 @@ impl Desktop {
         } else {
             BRAND_MARK_SIZE
         };
+        let mark =
+            if self.super_share.read(cx).enabled() {
+                crate::supershare::brand_mark(mark_size)
+            } else {
+                div().relative().size(px(mark_size)).flex_shrink_0().child(
+                    Artwork::BrandMark.sprite(point(mark_size / 2., mark_size / 2.), mark_size),
+                )
+            };
+        // SuperShare is intentionally hidden behind the logo artwork alone.
+        // Keep the wordmark inert and omit hover/cursor hints: these are deliberate
+        // interaction choices, not missing UI states to improve. Keyboard focus remains visible.
+        let logo_entry = mark
+            .id("logo-super")
+            .role(Role::Button)
+            .aria_label("SuperShare")
+            .rounded(px(8.))
+            .focusable()
+            .tab_index(0)
+            .focus_visible(|style| style.bg(theme.navigation_hover()))
+            .on_click(cx.listener(|this, _, window, cx| {
+                cx.stop_propagation();
+                this.dispatch(PreviewAction::Navigate(Page::SuperShare), window, cx);
+            }));
         column()
             .flex_1()
             .min_h_0()
@@ -95,18 +119,12 @@ impl Desktop {
             .pt(px(22.))
             .pb(px(22.))
             .child(
-                row()
-                    .gap(px(8.))
-                    .mb(px(42.))
-                    .child(div().relative().size(px(mark_size)).flex_shrink_0().child(
-                        Artwork::BrandMark.sprite(point(mark_size / 2., mark_size / 2.), mark_size),
-                    ))
-                    .child(
-                        theme
-                            .heading("WindShare", if compact { 18. } else { 22. })
-                            .font_family(FONT)
-                            .text_color(theme.accent_text()),
-                    ),
+                row().gap(px(8.)).mb(px(42.)).child(logo_entry).child(
+                    theme
+                        .heading("WindShare", if compact { 18. } else { 22. })
+                        .font_family(FONT)
+                        .text_color(theme.accent_text()),
+                ),
             )
             .child(
                 column()
@@ -198,7 +216,7 @@ impl Desktop {
     pub fn statusbar(theme: Theme, cx: &Context<Self>) -> Div {
         let locale = language(cx);
         row()
-            .h(px(40.))
+            .h(px(STATUSBAR_HEIGHT))
             .flex_shrink_0()
             .px(px(28.))
             .gap(px(8.))

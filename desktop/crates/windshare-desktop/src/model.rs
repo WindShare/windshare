@@ -9,6 +9,7 @@ pub enum Page {
     Transfers,
     Settings,
     Components,
+    SuperShare,
 }
 impl Page {
     pub const fn title(self, language: Language) -> &'static str {
@@ -19,6 +20,7 @@ impl Page {
             Self::Transfers => language.text(Text::TransfersTitle),
             Self::Settings => language.text(Text::SettingsTitle),
             Self::Components => language.text(Text::ComponentsTitle),
+            Self::SuperShare => "SuperShare",
         }
     }
     pub const fn subtitle(self, language: Language) -> &'static str {
@@ -29,6 +31,7 @@ impl Page {
             Self::Transfers => language.text(Text::TransfersSubtitle),
             Self::Settings => language.text(Text::SettingsSubtitle),
             Self::Components => language.text(Text::ComponentsSubtitle),
+            Self::SuperShare => "",
         }
     }
 }

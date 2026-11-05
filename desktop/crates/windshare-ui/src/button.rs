@@ -6,6 +6,7 @@ use gpui::{
 use std::rc::Rc;
 
 pub const LARGE_BUTTON_HEIGHT: f32 = 54.;
+const QUIET_HOVER_OPACITY: f32 = 0.08;
 
 #[derive(Clone, Copy)]
 enum ButtonSize {
@@ -19,9 +20,11 @@ type PressHandler = Rc<dyn Fn(&(), &mut Window, &mut App)>;
 #[derive(Clone, Copy, Default)]
 pub enum ButtonStyle {
     Primary,
+    Contrast,
     #[default]
     Secondary,
     Ghost,
+    Quiet,
     Navigation,
     ActiveNavigation(Tone),
     Tinted(Tone),
@@ -31,6 +34,7 @@ struct ButtonColors {
     background: gpui::Hsla,
     foreground: gpui::Hsla,
     hover: gpui::Hsla,
+    hover_foreground: gpui::Hsla,
     border: gpui::Hsla,
     focus: gpui::Hsla,
 }
@@ -42,13 +46,23 @@ impl ButtonStyle {
                 background: theme.action_surface(),
                 foreground: theme.action_text(),
                 hover: theme.action_hover(),
+                hover_foreground: theme.action_text(),
                 border: theme.action_surface(),
                 focus: theme.action_text(),
+            },
+            Self::Contrast => ButtonColors {
+                background: theme.text(),
+                foreground: theme.canvas(),
+                hover: theme.accent_text(),
+                hover_foreground: theme.canvas(),
+                border: theme.text(),
+                focus: theme.accent_text(),
             },
             Self::Secondary => ButtonColors {
                 background: theme.surface(),
                 foreground: theme.text(),
                 hover: Tone::Neutral.surface(theme),
+                hover_foreground: theme.text(),
                 border: theme.border(),
                 focus: theme.focus_ring(),
             },
@@ -56,6 +70,16 @@ impl ButtonStyle {
                 background: gpui::transparent_black(),
                 foreground: theme.muted_text(),
                 hover: Tone::Neutral.surface(theme),
+                hover_foreground: theme.muted_text(),
+                border: gpui::transparent_black(),
+                focus: theme.focus_ring(),
+            },
+            // Text actions on decorative surfaces should preserve the canvas beneath them.
+            Self::Quiet => ButtonColors {
+                background: gpui::transparent_black(),
+                foreground: theme.muted_text(),
+                hover: theme.accent_text().opacity(QUIET_HOVER_OPACITY),
+                hover_foreground: theme.accent_text(),
                 border: gpui::transparent_black(),
                 focus: theme.focus_ring(),
             },
@@ -63,6 +87,7 @@ impl ButtonStyle {
                 background: gpui::transparent_black(),
                 foreground: theme.muted_text(),
                 hover: theme.navigation_hover(),
+                hover_foreground: theme.muted_text(),
                 border: gpui::transparent_black(),
                 focus: theme.focus_ring(),
             },
@@ -70,6 +95,7 @@ impl ButtonStyle {
                 background: tone.navigation_surface(theme),
                 foreground: tone.text(theme),
                 hover: tone.accent(theme).opacity(0.35),
+                hover_foreground: tone.text(theme),
                 border: gpui::transparent_black(),
                 focus: theme.focus_ring(),
             },
@@ -77,6 +103,7 @@ impl ButtonStyle {
                 background: tone.surface(theme),
                 foreground: tone.text(theme),
                 hover: tone.accent(theme).opacity(0.35),
+                hover_foreground: tone.text(theme),
                 border: gpui::transparent_black(),
                 focus: tone.text(theme),
             },
@@ -205,7 +232,7 @@ impl RenderOnce for Button {
                     .focusable()
                     .when_some(self.focus, |el, handle| el.track_focus(&handle))
                     .tab_index(0)
-                    .hover(move |s| s.bg(colors.hover))
+                    .hover(move |s| s.bg(colors.hover).text_color(colors.hover_foreground))
                     .active(|s| s.opacity(0.75))
                     .focus_visible(|s| s.border_color(colors.focus).shadow_sm())
                     // GPUI maps Enter/Space release to a click for focused elements.

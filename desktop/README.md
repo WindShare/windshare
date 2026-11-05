@@ -33,6 +33,13 @@ Windows renderer for high-refresh animation while keeping application crates uno
   share windows stop decorative frames. Normal traces report phase and callback timing.
 - Floating spirits follow the pointer, spring back and smile on click or Enter/Space.
   Hit targets stay fixed; reduced motion keeps smile feedback without movement.
+- SuperShare: click the top-left logo to open the edge-to-edge purchase canvas,
+  with monthly/long-term selection, payment methods,
+  two-step local activation, and a pearl-gold brand mark. Payment destinations are
+  placeholders; activation lasts only for this preview session.
+  Redemption uses local fixtures: `SUPER-PREVIEW` succeeds, `OFFLINE-PREVIEW` shows
+  the connection error, and other codes show an invalid-code result. No payments
+  or official redemption requests are sent.
 - Receive: paste a link or use the sample, inspect files, preview receiving.
 - My shares: search, filter, grid/list, pause and copy.
 - Preferences: language, notifications, transfer details and reduced motion.

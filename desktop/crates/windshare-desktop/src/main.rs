@@ -19,6 +19,7 @@ mod share_timing;
 mod share_views;
 mod sharing;
 mod shell;
+mod supershare;
 mod transfer_views;
 
 use desktop::Desktop;
