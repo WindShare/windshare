@@ -15,7 +15,7 @@ pub struct MotionProbe {
     intervals: Vec<f32>,
 }
 impl MotionProbe {
-    pub fn observe(&mut self, run: ShareRun, frame: ShareFrame, now: Instant, active: bool) {
+    pub fn observe(&mut self, run: ShareRun, frame: ShareFrame, now: Instant, animating: bool) {
         if self.operation != Some(run.operation) {
             *self = Self {
                 operation: Some(run.operation),
@@ -25,7 +25,7 @@ impl MotionProbe {
         if self.phase == Some(PresentationPhase::Complete) {
             return;
         }
-        if active {
+        if animating {
             if let Some(previous) = self.previous
                 && self.intervals.len() < SAMPLE_LIMIT
             {
@@ -34,7 +34,7 @@ impl MotionProbe {
             }
             self.previous = Some(now);
         } else {
-            // Inactive windows deliberately stop scheduling decorative frames.
+            // Hidden windows, reduced motion and completed scenes do not schedule frames.
             self.previous = None;
         }
         if self.phase != Some(frame.phase) {
@@ -42,6 +42,7 @@ impl MotionProbe {
             crate::profiling::mark(run.operation, format!("{:?}", frame.phase));
             tracing::info!(event = "share.presentation_phase", operation = run.operation,
                 phase = ?frame.phase,
+                animating,
                 elapsed_ms = now.duration_since(run.started_at).as_millis(),
                 link_ready = run.share_id().is_some());
             self.phase = Some(frame.phase);

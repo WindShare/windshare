@@ -8,6 +8,13 @@ use std::rc::Rc;
 pub const LARGE_BUTTON_HEIGHT: f32 = 54.;
 const QUIET_HOVER_OPACITY: f32 = 0.08;
 
+#[derive(Clone, Copy, Default)]
+enum ButtonAlignment {
+    #[default]
+    Center,
+    Start,
+}
+
 #[derive(Clone, Copy)]
 enum ButtonSize {
     Small,
@@ -121,6 +128,7 @@ pub struct Button {
     handler: Option<PressHandler>,
     size: ButtonSize,
     full_width: bool,
+    alignment: ButtonAlignment,
     disabled: bool,
     tooltip: Option<SharedString>,
     focus: Option<FocusHandle>,
@@ -137,6 +145,7 @@ impl Button {
             handler: None,
             size: ButtonSize::Regular,
             full_width: false,
+            alignment: ButtonAlignment::default(),
             disabled: false,
             tooltip: None,
             focus: None,
@@ -153,6 +162,10 @@ impl Button {
     }
     pub const fn full_width(mut self) -> Self {
         self.full_width = true;
+        self
+    }
+    pub const fn align_start(mut self) -> Self {
+        self.alignment = ButtonAlignment::Start;
         self
     }
     pub const fn min_width(mut self, width: Pixels) -> Self {
@@ -212,7 +225,10 @@ impl RenderOnce for Button {
                 ButtonSize::Large => LARGE_BUTTON_HEIGHT,
             }))
             .when_some(self.min_width, gpui::Styled::min_w)
-            .when(self.full_width, |el| el.w_full().justify_start())
+            .when(self.full_width, gpui::Styled::w_full)
+            .when(matches!(self.alignment, ButtonAlignment::Start), |el| {
+                el.justify_start()
+            })
             .px(px(if empty { 9. } else { 16. }))
             .flex_shrink_0()
             .rounded(px(10.))

@@ -154,7 +154,8 @@ impl Desktop {
                     PreviewAction::Help,
                     cx,
                 )
-                .full_width(),
+                .full_width()
+                .align_start(),
             )
     }
 
@@ -177,6 +178,7 @@ impl Desktop {
             cx,
         )
         .full_width()
+        .align_start()
         .large()
     }
 

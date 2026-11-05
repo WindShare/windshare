@@ -263,7 +263,12 @@ impl Desktop {
                         .w_full()
                         .max_w(px(MAX_PAGE_WIDTH))
                         .gap(px(24.))
-                        .child(self.page_heading(theme, compact, cx))
+                        // Share scenes own their headings and occupy the workspace.
+                        // A persistent page introduction competes with the result.
+                        .when(self.page == Page::Share, |el| el.flex_1().justify_center())
+                        .when(self.page != Page::Share, |el| {
+                            el.child(self.page_heading(theme, compact, cx))
+                        })
                         .child(
                             content.with_animation(
                                 ("page-enter", self.page as usize),

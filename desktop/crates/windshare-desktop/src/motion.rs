@@ -27,7 +27,6 @@ const PAPERS: [Artwork; 3] = [Artwork::Paper, Artwork::Photo, Artwork::Folder];
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SpiritMood {
     Idle,
-    Sending,
     Receiving,
     Happy,
 }
@@ -82,7 +81,7 @@ impl RenderOnce for SpiritScene {
             scale,
             reduced_motion,
         } = self;
-        let active = matches!(mood, SpiritMood::Sending | SpiritMood::Receiving);
+        let receiving = mood == SpiritMood::Receiving;
         let still = reduced_motion || cx.reduce_motion() || !window.is_window_active();
         let unit = |value| px(value * scale);
         // Open wind lines connect the character to the files without isolating it in a badge.
@@ -112,18 +111,14 @@ impl RenderOnce for SpiritScene {
                     PAPER_WIDTH * scale,
                 )
             };
-            let element = if active && !still {
+            let element = if receiving && !still {
                 paper
                     .with_animation(
                         ("flying-file", usize::from(index)),
                         Animation::new(Duration::from_millis(FLIGHT_CYCLE_MS)).repeat(),
                         move |el, delta| {
                             let phase = (delta + f32::from(index) / 3.) % 1.;
-                            let travel = if mood == SpiritMood::Receiving {
-                                1. - phase
-                            } else {
-                                phase
-                            };
+                            let travel = 1. - phase;
                             let arc = (phase * PI).sin();
                             el.child(paper_at(lerp(12., 294., travel), arc.mul_add(-73., 96.)))
                                 .opacity(arc * 0.95)

@@ -4,7 +4,8 @@ pub const FLIGHT_DURATION: Duration = Duration::from_millis(1350);
 pub const LANDING_DURATION: Duration = Duration::from_millis(720);
 pub const STORY_DURATION: Duration = FLIGHT_DURATION.saturating_add(LANDING_DURATION);
 const RESULT_FADE: Duration = Duration::from_millis(180);
-const BREATH_CYCLE_SECONDS: f32 = 3.4;
+const LINK_ACTIVITY_CYCLE: Duration = Duration::from_millis(1500);
+const STILL_ACTIVITY_PHASE: f32 = 0.5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PresentationPhase {
@@ -18,8 +19,8 @@ pub enum PresentationPhase {
 #[derive(Clone, Copy)]
 pub struct ShareFrame {
     pub story: Duration,
-    pub breath: f32,
     pub result_visibility: f32,
+    pub activity_phase: f32,
     pub phase: PresentationPhase,
 }
 
@@ -27,13 +28,21 @@ impl ShareFrame {
     pub fn sample(elapsed: Duration, ready_at: Option<Duration>, still: bool) -> Self {
         // Readiness controls usable content. The presentation clock only controls choreography.
         let story = if still {
-            if ready_at.is_some() {
-                STORY_DURATION
-            } else {
-                Duration::ZERO
-            }
+            STORY_DURATION
         } else {
             elapsed.min(STORY_DURATION)
+        };
+        // Waiting outlives the finite introduction. Its activity follows the
+        // operation clock so the indicator keeps moving until a result arrives.
+        let activity_phase = if still {
+            STILL_ACTIVITY_PHASE
+        } else {
+            let cycle = LINK_ACTIVITY_CYCLE.as_secs_f32();
+            elapsed
+                .saturating_sub(FLIGHT_DURATION)
+                .as_secs_f32()
+                .rem_euclid(cycle)
+                / cycle
         };
         let result_visibility = ready_at.map_or(0., |ready| {
             if still {
@@ -45,13 +54,6 @@ impl ShareFrame {
                 )
             }
         });
-        let breath = if still {
-            0.
-        } else {
-            (elapsed.saturating_sub(STORY_DURATION).as_secs_f32() / BREATH_CYCLE_SECONDS
-                * std::f32::consts::TAU)
-                .sin()
-        };
         let phase = if story < FLIGHT_DURATION {
             PresentationPhase::Flight
         } else if story < STORY_DURATION {
@@ -65,10 +67,14 @@ impl ShareFrame {
         };
         Self {
             story,
-            breath,
             result_visibility,
+            activity_phase,
             phase,
         }
+    }
+
+    pub const fn needs_animation(self) -> bool {
+        !matches!(self.phase, PresentationPhase::Complete)
     }
 }
 
