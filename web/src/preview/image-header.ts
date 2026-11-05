@@ -23,6 +23,8 @@ export interface ImageHeader {
   readonly height: number
 }
 
+type PngImageHeader = ImageHeader & { readonly mimeType: 'image/png' }
+
 export class ImagePreviewError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options)
@@ -35,22 +37,20 @@ export class ImagePreviewError extends Error {
 // same with iCCP, XMP and C2PA chunks before IDAT. Segments and chunks are
 // length-prefixed, so the caller resumes the walk at `offset` with another
 // bounded window instead of reading the skipped payloads.
-export class ImageHeaderContinuation {
+export type ImageHeaderContinuation = {
   readonly offset: number
   /** Sniff windows already walked, including the initial header window. */
   readonly windows: number
-  /**
-   * Present exactly for a PNG walk: IHDR fixes the dimensions up front, and the
-   * walk only has to prove that no acTL precedes the image data.
-   */
-  readonly png: ImageHeader | undefined
+} & (
+  | { readonly format: 'jpeg' }
+  // PNG dimensions are known before the walk proves that no acTL precedes IDAT.
+  | { readonly format: 'png'; readonly header: PngImageHeader }
+)
 
-  constructor(offset: number, windows: number, png?: ImageHeader) {
-    this.offset = offset
-    this.windows = windows
-    this.png = png
-    Object.freeze(this)
-  }
+export function isImageHeaderContinuation(
+  header: ImageHeader | ImageHeaderContinuation | undefined,
+): header is ImageHeaderContinuation {
+  return header !== undefined && 'format' in header
 }
 
 export function sniffImageHeader(
@@ -65,7 +65,7 @@ export function sniffImageHeader(
   return undefined
 }
 
-function parsePngHeader(bytes: Uint8Array, exactSize: bigint): ImageHeader {
+function parsePngHeader(bytes: Uint8Array, exactSize: bigint): PngImageHeader {
   if (bytes.byteLength < PNG_IHDR_END || ascii(bytes, 12, 16) !== 'IHDR' || uint32(bytes, 8) !== 13) {
     throw new ImagePreviewError('PNG does not begin with a canonical IHDR chunk')
   }
@@ -76,8 +76,8 @@ function parsePngHeader(bytes: Uint8Array, exactSize: bigint): ImageHeader {
 // Offsets are relative to `window`, which holds the file from `from.offset`.
 function walkPng(
   window: Uint8Array,
-  from: ImageHeaderContinuation | undefined,
-  header: ImageHeader,
+  from: Extract<ImageHeaderContinuation, { format: 'png' }> | undefined,
+  header: PngImageHeader,
   exactSize: bigint,
 ): ImageHeader | ImageHeaderContinuation {
   const fileEnd = Number(exactSize)
@@ -99,7 +99,7 @@ function walkPng(
   const next = windowStart + offset
   if (windowStart + window.byteLength >= fileEnd || next >= fileEnd) throw new ImagePreviewError(PNG_ENDED)
   if (windows >= IMAGE_HEADER_WINDOWS) throw new ImagePreviewError('PNG metadata exceeds the preview limit')
-  return new ImageHeaderContinuation(next, windows, header)
+  return Object.freeze({ format: 'png', offset: next, windows, header })
 }
 
 const PNG_ENDED = 'PNG ended before image data'
@@ -110,7 +110,7 @@ export function continueImageHeader(
   continuation: ImageHeaderContinuation,
   exactSize: bigint,
 ): ImageHeader | ImageHeaderContinuation {
-  if (continuation.png !== undefined) return walkPng(window, continuation, continuation.png, exactSize)
+  if (continuation.format === 'png') return walkPng(window, continuation, continuation.header, exactSize)
   return walkJpeg(window, continuation, 0, exactSize)
 }
 
@@ -119,7 +119,7 @@ const JPEG_ENDED = 'JPEG ended before its frame header'
 // Offsets are relative to `window`, which holds the file from `from.offset`.
 function walkJpeg(
   window: Uint8Array,
-  from: ImageHeaderContinuation | undefined,
+  from: Extract<ImageHeaderContinuation, { format: 'jpeg' }> | undefined,
   start: number,
   exactSize: bigint,
 ): ImageHeader | ImageHeaderContinuation {
@@ -151,7 +151,7 @@ function resumeJpeg(
 ): ImageHeaderContinuation {
   if (windowEnd >= fileEnd || offset >= fileEnd) throw new ImagePreviewError(JPEG_ENDED)
   if (windows >= IMAGE_HEADER_WINDOWS) throw new ImagePreviewError('JPEG metadata exceeds the preview limit')
-  return new ImageHeaderContinuation(offset, windows)
+  return Object.freeze({ format: 'jpeg', offset, windows })
 }
 
 function jpegFrameHeader(window: Uint8Array, segment: JpegSegment, exactSize: bigint): ImageHeader {
@@ -287,7 +287,7 @@ function requirePreviewFileSize(exactSize: bigint): void {
   }
 }
 
-function validateDimensions(header: ImageHeader, exactSize: bigint): ImageHeader {
+function validateDimensions<Header extends ImageHeader>(header: Header, exactSize: bigint): Header {
   requirePreviewFileSize(exactSize)
   if (
     !Number.isSafeInteger(header.width) || !Number.isSafeInteger(header.height) ||

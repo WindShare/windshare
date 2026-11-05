@@ -8,7 +8,7 @@ import {
   IMAGE_HEADER_BYTES,
   ImagePreviewError,
   IMAGE_HEADER_WINDOWS,
-  ImageHeaderContinuation,
+  isImageHeaderContinuation,
 } from '../../src/preview/image-header'
 
 function writeUint32(bytes: Uint8Array, offset: number, value: number): void {
@@ -110,7 +110,7 @@ function pngFile(metadataLengths: readonly number[], extras: readonly string[] =
 function sniffWindows(file: Uint8Array, exactSize = BigInt(file.byteLength)) {
   let sniffed = sniffImageHeader(file.subarray(0, IMAGE_HEADER_BYTES), exactSize)
   const windows = [0]
-  while (sniffed instanceof ImageHeaderContinuation) {
+  while (isImageHeaderContinuation(sniffed)) {
     windows.push(sniffed.offset)
     const window = file.subarray(sniffed.offset, sniffed.offset + IMAGE_HEADER_BYTES)
     sniffed = continueImageHeader(window, sniffed, exactSize)

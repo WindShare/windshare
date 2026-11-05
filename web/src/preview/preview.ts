@@ -8,8 +8,9 @@ import {
   sniffImageHeader,
   IMAGE_HEADER_BYTES,
   ImagePreviewError,
-  ImageHeaderContinuation,
+  isImageHeaderContinuation,
   type ImageHeader,
+  type ImageHeaderContinuation,
 } from './image-header'
 import {
   Mp4RangePreview,
@@ -200,7 +201,12 @@ export class FilePreview {
       ? this.#source.exactSize
       : BigInt(IMAGE_HEADER_BYTES)
     const header = await this.#source.read(byteRange(0n, headerEnd), signal)
-    const image = await this.#sniffImage(header, signal)
+    const sniffed = sniffImageHeader(header, this.#source.exactSize)
+    if (intent === 'automatic-photo' && isImageHeaderContinuation(sniffed) && sniffed.format === 'png') {
+      // IHDR fixes decoded size; metadata reads cannot make an oversized image eligible.
+      requireAutomaticPhotoHeader(sniffed.header)
+    }
+    const image = await this.#completeImageHeader(sniffed, signal)
     signal.throwIfAborted()
     if (intent === 'automatic-photo') requireAutomaticPhotoHeader(image)
     if (image !== undefined) {
@@ -216,11 +222,13 @@ export class FilePreview {
     await this.seek(0, signal)
   }
 
-  async #sniffImage(header: Uint8Array, signal: AbortSignal): Promise<ImageHeader | undefined> {
+  async #completeImageHeader(
+    sniffed: ImageHeader | ImageHeaderContinuation | undefined,
+    signal: AbortSignal,
+  ): Promise<ImageHeader | undefined> {
     const exactSize = this.#source.exactSize
-    let sniffed = sniffImageHeader(header, exactSize)
     let walked = 0
-    while (sniffed instanceof ImageHeaderContinuation) {
+    while (isImageHeaderContinuation(sniffed)) {
       // A walk that stops advancing would reread the same window forever.
       if (sniffed.offset <= walked) throw new PreviewRuntimeError('Image header walk did not advance')
       walked = sniffed.offset
