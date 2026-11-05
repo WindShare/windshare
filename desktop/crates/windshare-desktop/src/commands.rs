@@ -99,7 +99,21 @@ impl Desktop {
             share_id: id,
             revision,
         };
-        self.notify(Text::LinkCopied, cx);
+        let inline_feedback = self.page == Page::Share
+            && self.overlay.is_none()
+            && matches!(self.share_flow, ShareFlow::Running(run) if run.share_id() == Some(id));
+        // The result button acknowledges its own action; other surfaces still
+        // need a toast because they have no inline confirmation.
+        if !inline_feedback {
+            self.notify(Text::LinkCopied, cx);
+        }
+        tracing::info!(
+            event = "share.link_copied",
+            session = std::process::id(),
+            operation = revision,
+            share_id = id,
+            inline_feedback
+        );
         cx.spawn(async move |view, cx| {
             cx.background_executor().timer(Duration::from_millis(COPY_FEEDBACK_MS)).await;
             let _ = view.update(cx, |this, cx| {

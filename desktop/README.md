@@ -20,17 +20,18 @@ GPU. Windows is the locally verified platform. Dev builds optimize GPUI's core a
 Windows renderer for high-refresh animation while keeping application crates unoptimized.
 
 - Light and dark palettes follow the system appearance, including changes while open.
-- Share: the original 1350 ms flight and 720 ms landing play continuously.
-  Late results keep the settled scene breathing, then crossfade the link in
-  over 180 ms. Copy stays disabled until a result exists. Reduced motion skips
-  decorative delays.
+- Share: a file-first result card keeps copying primary, with inline copy feedback.
+  The 1350 ms flight and 720 ms landing fade into the card. Pending links keep
+  an indeterminate activity strip until the link fades in over 180 ms; completed
+  results stop animation. Copy stays disabled until a result exists. Reduced
+  motion skips the introduction and keeps the waiting indicator static.
 - Preview latency defaults to 1900 ms. Pass `--share-delay-ms=200` or
   `--share-delay-ms=5000` after `cargo run ... --` to inspect fast and slow results.
   Motion uses actual completion events, never the configured delay.
 - Animated color SVGs reuse vector meshes, antialiased at their final display size.
-  Wind meshes are cached; invisible artwork is omitted. Text fades in at fixed
-  positions while the link surface expands with fractional geometry. Inactive
-  share windows stop decorative frames. Normal traces report phase and callback timing.
+  Wind meshes are cached; invisible artwork is omitted. Result content uses
+  natural layout independently of the animation coordinates. Inactive share
+  windows stop decorative frames. Normal traces report phase and callback timing.
 - Floating spirits follow the pointer, spring back and smile on click or Enter/Space.
   Hit targets stay fixed; reduced motion keeps smile feedback without movement.
 - SuperShare: click the top-left logo to open the edge-to-edge purchase canvas,

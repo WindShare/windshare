@@ -197,11 +197,7 @@ impl SpiritView {
         }
         let was_following = self.behavior.following();
         let mut pose = self.behavior.advance(elapsed, now);
-        // A settled share keeps the scene's breathing clock. Only standalone
-        // spirits own an ambient float; interaction adds a spring offset to either.
-        if matches!(self.presentation.state, SpiritState::Floating(_)) {
-            pose.y += self.behavior.float_offset();
-        }
+        pose.y += self.behavior.float_offset();
         if was_following && !self.behavior.following() {
             tracing::info!(
                 event = "desktop.spirit_released",
@@ -223,7 +219,7 @@ impl Render for SpiritView {
         let smile = presentation.smile(self.behavior.smiling(Instant::now()));
         // Keep the artwork in scene coordinates for its entire lifetime. The
         // stationary focus/hit target is a sibling, so enabling it cannot change
-        // rasterization, border insets, or the scene's breathing phase.
+        // rasterization, border insets, or the ambient motion.
         div()
             .absolute()
             .inset_0()

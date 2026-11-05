@@ -96,7 +96,8 @@ impl SuperShare {
                         } else {
                             ButtonStyle::Ghost
                         })
-                        .full_width(),
+                        .full_width()
+                        .align_start(),
                 )
             }),
         )

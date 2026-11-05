@@ -5,7 +5,6 @@ use gpui::Point;
 pub enum SpiritState {
     Floating(SpiritMood),
     Choreographed { smile: f32 },
-    Settled { anchor: Point<f32> },
 }
 
 #[derive(Clone, Copy)]
@@ -21,14 +20,13 @@ impl Presentation {
         match self.state {
             SpiritState::Floating(_) => Some(self.center),
             SpiritState::Choreographed { .. } => None,
-            SpiritState::Settled { anchor } => Some(anchor),
         }
     }
 
     pub fn smile(self, greeting: bool) -> f32 {
         match self.state {
             SpiritState::Choreographed { smile } => smile,
-            SpiritState::Settled { .. } | SpiritState::Floating(SpiritMood::Happy) => 1.,
+            SpiritState::Floating(SpiritMood::Happy) => 1.,
             SpiritState::Floating(_) => f32::from(u8::from(greeting)),
         }
     }
