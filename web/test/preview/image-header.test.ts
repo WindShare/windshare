@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  continueJpegHeader,
   sniffImageHeader,
   IMAGE_DECODED_BYTES,
+  IMAGE_FILE_BYTES,
   IMAGE_HEADER_BYTES,
   ImagePreviewError,
+  JPEG_HEADER_WINDOWS,
+  JpegHeaderContinuation,
 } from '../../src/preview/image-header'
 
 function writeUint32(bytes: Uint8Array, offset: number, value: number): void {
@@ -60,6 +64,42 @@ function simpleWebpPrefix(kind: 'VP8 ' | 'VP8L', exactSize: number, chunkLength 
   return { bytes, exactSize: BigInt(exactSize) }
 }
 
+const JPEG_MAXIMUM_SEGMENT = 0xffff
+
+// Camera JPEGs carry EXIF previews, MPF and ICC segments ahead of the frame.
+function jpegFile(metadataLengths: readonly number[], fill = 0): Uint8Array<ArrayBuffer> {
+  const metadata = metadataLengths.reduce((total, length) => total + 2 + length, 0)
+  const bytes = new Uint8Array(2 + metadata + fill + 2 + 17 + 2)
+  const view = new DataView(bytes.buffer)
+  bytes.set([0xff, 0xd8])
+  let offset = 2
+  for (const length of metadataLengths) {
+    bytes.set([0xff, 0xe1], offset)
+    view.setUint16(offset + 2, length, false)
+    offset += 2 + length
+  }
+  bytes.fill(0xff, offset, offset + fill)
+  offset += fill
+  bytes.set([0xff, 0xc0], offset)
+  view.setUint16(offset + 2, 17, false)
+  view.setUint16(offset + 5, 768, false)
+  view.setUint16(offset + 7, 1024, false)
+  bytes.set([0xff, 0xda], offset + 19)
+  return bytes
+}
+
+// Mirrors the preview runtime: each step reads one bounded window.
+function sniffJpeg(file: Uint8Array, exactSize = BigInt(file.byteLength)) {
+  let sniffed = sniffImageHeader(file.subarray(0, IMAGE_HEADER_BYTES), exactSize)
+  const windows = [0]
+  while (sniffed instanceof JpegHeaderContinuation) {
+    windows.push(sniffed.offset)
+    const window = file.subarray(sniffed.offset, sniffed.offset + IMAGE_HEADER_BYTES)
+    sniffed = continueJpegHeader(window, sniffed, exactSize)
+  }
+  return { header: sniffed, windows }
+}
+
 describe('bounded image header policy', () => {
   it('accepts a static PNG without reading its encoded payload', () => {
     expect(sniffImageHeader(png(320, 200), 1_000_041n)).toEqual({
@@ -107,5 +147,53 @@ describe('bounded image header policy', () => {
     const exactSize = 4 * IMAGE_HEADER_BYTES
     const { bytes } = simpleWebpPrefix('VP8 ', exactSize, exactSize)
     expect(() => sniffImageHeader(bytes, BigInt(exactSize))).toThrow('bounded header sniff')
+  })
+
+  it('resumes a JPEG walk past metadata segments larger than the sniff', () => {
+    const { header, windows } = sniffJpeg(jpegFile([JPEG_MAXIMUM_SEGMENT, JPEG_MAXIMUM_SEGMENT]))
+    expect(header).toEqual({ mimeType: 'image/jpeg', width: 1024, height: 768 })
+    // Segment payloads are skipped by length, never read.
+    expect(windows).toEqual([0, 2 + 2 + JPEG_MAXIMUM_SEGMENT, 2 + 2 * (2 + JPEG_MAXIMUM_SEGMENT)])
+  })
+
+  it('reads a JPEG frame header that straddles a sniff window boundary', () => {
+    const frameStart = IMAGE_HEADER_BYTES - 12
+    for (let shift = 0; shift <= 12; shift += 1) {
+      const { header } = sniffJpeg(jpegFile([frameStart + shift - 4]))
+      expect(header).toEqual({ mimeType: 'image/jpeg', width: 1024, height: 768 })
+    }
+    // Fill bytes before a marker may also cross the boundary.
+    for (const fill of [1, 12, 13, 14]) {
+      const { header } = sniffJpeg(jpegFile([frameStart - 4], fill))
+      expect(header).toEqual({ mimeType: 'image/jpeg', width: 1024, height: 768 })
+    }
+  })
+
+  it('rejects a JPEG segment that claims bytes beyond the file', () => {
+    const file = jpegFile([JPEG_MAXIMUM_SEGMENT])
+    const truncated = file.subarray(0, JPEG_MAXIMUM_SEGMENT)
+    expect(() => sniffJpeg(truncated)).toThrow('JPEG ended before its frame header')
+    expect(() => sniffJpeg(file.subarray(0, file.byteLength - 21)))
+      .toThrow('JPEG ended before its frame header')
+  })
+
+  it('caps the windows a JPEG header walk may read', () => {
+    // Each maximum-size segment ends past its window, so it costs one read.
+    const atLimit = jpegFile(Array<number>(JPEG_HEADER_WINDOWS - 1).fill(JPEG_MAXIMUM_SEGMENT))
+    const { header, windows } = sniffJpeg(atLimit)
+    expect(header).toEqual({ mimeType: 'image/jpeg', width: 1024, height: 768 })
+    expect(windows).toHaveLength(JPEG_HEADER_WINDOWS)
+    const overLimit = jpegFile(Array<number>(JPEG_HEADER_WINDOWS).fill(JPEG_MAXIMUM_SEGMENT))
+    expect(() => sniffJpeg(overLimit)).toThrow('JPEG metadata exceeds the preview limit')
+    // Tiny segments cannot force a serial read of every window in the file.
+    const tiny = jpegFile(Array<number>(((JPEG_HEADER_WINDOWS + 1) * IMAGE_HEADER_BYTES) / 4).fill(2))
+    expect(tiny.byteLength).toBeLessThan(IMAGE_FILE_BYTES)
+    expect(() => sniffJpeg(tiny)).toThrow('JPEG metadata exceeds the preview limit')
+  })
+
+  it('rejects an oversized JPEG before resuming its header walk', () => {
+    const file = jpegFile([JPEG_MAXIMUM_SEGMENT])
+    expect(() => sniffImageHeader(file.subarray(0, IMAGE_HEADER_BYTES), BigInt(IMAGE_FILE_BYTES + 1)))
+      .toThrow('encoded size exceeds')
   })
 })

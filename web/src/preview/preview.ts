@@ -4,9 +4,11 @@ import type { BlockRangeReader, BlockSlice } from '../content/broker'
 import type { OpenedRevision, RevisionReader } from '../content/session-services'
 import type { FileRevisionDescriptor } from '../content/records'
 import {
+  continueJpegHeader,
   sniffImageHeader,
   IMAGE_HEADER_BYTES,
   ImagePreviewError,
+  JpegHeaderContinuation,
   type ImageHeader,
 } from './image-header'
 import {
@@ -198,7 +200,7 @@ export class FilePreview {
       ? this.#source.exactSize
       : BigInt(IMAGE_HEADER_BYTES)
     const header = await this.#source.read(byteRange(0n, headerEnd), signal)
-    const image = sniffImageHeader(header, this.#source.exactSize)
+    const image = await this.#sniffImage(header, signal)
     signal.throwIfAborted()
     if (intent === 'automatic-photo') requireAutomaticPhotoHeader(image)
     if (image !== undefined) {
@@ -212,6 +214,24 @@ export class FilePreview {
     }
     this.#video = video
     await this.seek(0, signal)
+  }
+
+  async #sniffImage(header: Uint8Array, signal: AbortSignal): Promise<ImageHeader | undefined> {
+    const exactSize = this.#source.exactSize
+    let sniffed = sniffImageHeader(header, exactSize)
+    let walked = 0
+    while (sniffed instanceof JpegHeaderContinuation) {
+      // A walk that stops advancing would reread the same window forever.
+      if (sniffed.offset <= walked) throw new PreviewRuntimeError('JPEG header walk did not advance')
+      walked = sniffed.offset
+      const start = BigInt(sniffed.offset)
+      const end = start + BigInt(IMAGE_HEADER_BYTES) < exactSize
+        ? start + BigInt(IMAGE_HEADER_BYTES)
+        : exactSize
+      const window = await this.#source.read(byteRange(start, end), signal)
+      sniffed = continueJpegHeader(window, sniffed, exactSize)
+    }
+    return sniffed
   }
 
   async #initializeImage(header: ImageHeader, signal: AbortSignal): Promise<void> {

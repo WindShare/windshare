@@ -22,6 +22,17 @@ import {
   type VideoRangePort,
 } from '../../src/preview/preview'
 
+// Lets a test break the JPEG header walk's progress invariant.
+const jpegWalk = vi.hoisted(() => ({ stall: false }))
+vi.mock('../../src/preview/image-header', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../../src/preview/image-header')>()
+  return {
+    ...original,
+    continueJpegHeader: (...args: Parameters<typeof original.continueJpegHeader>) =>
+      jpegWalk.stall ? args[1] : original.continueJpegHeader(...args),
+  }
+})
+
 function identity(first: number): Uint8Array<ArrayBuffer> {
   const value = new Uint8Array(16)
   value[0] = first
@@ -102,6 +113,24 @@ function pngFile(size: number, width: number, height: number): Uint8Array<ArrayB
   new DataView(bytes.buffer).setUint32(20, height, false)
   new DataView(bytes.buffer).setUint32(33, size - 41, false)
   bytes.set([73, 68, 65, 84], 37)
+  return bytes
+}
+
+// Camera EXIF previews and MPF segments put the frame header past one sniff.
+function cameraJpegFile(metadataSegments: number, width: number, height: number): Uint8Array<ArrayBuffer> {
+  const segment = 2 + 0xffff
+  const frame = 2 + metadataSegments * segment
+  const bytes = new Uint8Array(frame + 2 + 17 + 2)
+  const view = new DataView(bytes.buffer)
+  bytes.set([0xff, 0xd8])
+  for (let index = 0; index < metadataSegments; index += 1) {
+    bytes.set([0xff, 0xe1, 0xff, 0xff], 2 + index * segment)
+  }
+  bytes.set([0xff, 0xc0], frame)
+  view.setUint16(frame + 2, 17, false)
+  view.setUint16(frame + 5, height, false)
+  view.setUint16(frame + 7, width, false)
+  bytes.set([0xff, 0xda], frame + 19)
   return bytes
 }
 
@@ -216,6 +245,43 @@ describe('v2 file preview runtime', () => {
     expect(fixture.releases()).toBe(1)
     await preview.close()
     expect(urls.revoked).toEqual(['blob:preview-1'])
+    expect(fixture.releases()).toBe(1)
+  })
+
+  it('previews a camera JPEG whose metadata pushes the frame header past the sniff', async () => {
+    const bytes = cameraJpegFile(3, 6000, 4000)
+    const fixture = runtime(bytes, 64n * 1024n)
+    const urls = urlPorts({ decodeImage: async () => ({ width: 6000, height: 4000 }) })
+    const preview = await FilePreview.open(
+      fileEntry(BigInt(bytes.byteLength), 'DSC_0001.JPG'),
+      fixture.revisions,
+      fixture.broker,
+      new AbortController().signal,
+      urls.ports,
+    )
+    expect(preview.current).toMatchObject({ kind: 'image', mimeType: 'image/jpeg', width: 6000, height: 4000 })
+    // Each resumed header window is cached and reused by the full read.
+    expect(fixture.lane.calls).toEqual([0n, 1n, 2n, 3n])
+    await preview.close()
+  })
+
+  it('fails a JPEG header walk that stops advancing instead of looping', async () => {
+    const bytes = cameraJpegFile(3, 6000, 4000)
+    const fixture = runtime(bytes, 64n * 1024n)
+    jpegWalk.stall = true
+    try {
+      await expect(FilePreview.open(
+        fileEntry(BigInt(bytes.byteLength), 'DSC_0001.JPG'),
+        fixture.revisions,
+        fixture.broker,
+        new AbortController().signal,
+        urlPorts().ports,
+      )).rejects.toThrow('JPEG header walk did not advance')
+    } finally {
+      jpegWalk.stall = false
+    }
+    // The stalled continuation is rejected before its window is read again.
+    expect(fixture.lane.calls).toEqual([0n, 1n, 2n])
     expect(fixture.releases()).toBe(1)
   })
 
