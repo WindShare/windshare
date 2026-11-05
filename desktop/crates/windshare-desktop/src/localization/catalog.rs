@@ -38,6 +38,7 @@ messages! {
     SuperUnconfirmed => ("Unable to confirm just yet", "暂时无法确认"),
     SuperRetry => ("Confirm again", "再次确认"),
     SuperEnabled => ("SuperShare is enabled", "SuperShare 已启用"),
+    SuperStartSharing => ("Start sharing", "开始分享"),
     SuperReturnToPayment => ("Back to payment", "返回付款"),
     SuperRedeeming => ("Redeeming…", "兑换中…"),
     JustNow => ("just now", "刚刚"),

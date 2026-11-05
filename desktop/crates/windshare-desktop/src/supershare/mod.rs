@@ -9,7 +9,10 @@ mod state;
 mod visuals;
 
 use crate::localization::{LanguageSettings, Text, language};
-use gpui::{AppContext, Context, Entity, FocusHandle, Focusable, Subscription, Window, prelude::*};
+use gpui::{
+    AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Subscription, Window,
+    prelude::*,
+};
 use payments::{Coin, Payment};
 use state::{
     Action, Attempt, CONFIRM_DELAY, Confirmation, ENABLE_DELAY, OFFLINE_CODE, PREVIEW_CODE, Page,
@@ -35,6 +38,9 @@ impl Focusable for SuperShare {
         self.primary_focus.clone()
     }
 }
+
+pub struct StartSharing;
+impl EventEmitter<StartSharing> for SuperShare {}
 
 impl SuperShare {
     pub fn new(window: &Window, cx: &mut Context<Self>) -> Self {
@@ -139,11 +145,13 @@ impl SuperShare {
                 }
             }
             Action::Confirm => self.confirm(cx),
-            Action::Back if !matches!(self.state.page, Page::Enabled { .. }) => {
+            Action::Back
+                if matches!(self.state.page, Page::Checkout { .. } | Page::Redeem { .. }) =>
+            {
                 self.state.page = Page::Offer(self.state.page.plan());
                 window.focus(&self.primary_focus, cx);
             }
-            Action::Redeem if !matches!(self.state.page, Page::Enabled { .. }) => {
+            Action::Redeem if matches!(self.state.page, Page::Offer(_)) => {
                 self.state.page = Page::Redeem {
                     plan: self.state.page.plan(),
                     status: Redemption::Ready,
@@ -151,6 +159,9 @@ impl SuperShare {
                 window.focus(&self.code.read(cx).focus_handle(cx), cx);
             }
             Action::SubmitCode => self.redeem(cx),
+            Action::StartSharing if matches!(self.state.page, Page::ActivationComplete(_)) => {
+                cx.emit(StartSharing);
+            }
             Action::ReturnToCheckout => {
                 if let Page::Enabled { plan, payment } = self.state.page {
                     self.state.page = Page::Checkout {
@@ -293,7 +304,9 @@ impl Render for SuperShare {
                 confirmation,
             } => self.checkout_page(theme, stage, plan, payment, confirmation, cx),
             Page::Redeem { status, .. } => self.redemption_page(theme, status, cx),
-            Page::Enabled { .. } => self.enabled_page(theme, stage, window, cx),
+            Page::ActivationComplete(_) | Page::Enabled { .. } => {
+                self.enabled_page(theme, stage, window, cx)
+            }
         };
         windshare_ui::column()
             .id("super-page-scroll")

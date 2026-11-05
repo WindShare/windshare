@@ -2,7 +2,7 @@ use super::{
     SuperShare,
     emblem::emblem,
     layout::{COLUMN_GAP, OfferLayout, PURCHASE_MAX_WIDTH, STACKED_HERO_GAP, Stage},
-    state::{Action, Plan},
+    state::{Action, Page, Plan},
     visuals::{self, Finish},
 };
 use crate::localization::{Text, language};
@@ -174,6 +174,18 @@ impl SuperShare {
         cx: &Context<Self>,
     ) -> Div {
         let locale = language(cx);
+        let (id, label, action) = match self.state.page {
+            Page::ActivationComplete(_) => (
+                "super-start-sharing",
+                Text::SuperStartSharing,
+                Action::StartSharing,
+            ),
+            _ => (
+                "super-return-to-checkout",
+                Text::SuperReturnToPayment,
+                Action::ReturnToCheckout,
+            ),
+        };
         column()
             .w_full()
             .items_center()
@@ -203,17 +215,12 @@ impl SuperShare {
                     .child(theme.heading(locale.text(Text::SuperEnabled), 30.)),
             )
             .child(
-                Self::button(
-                    "super-return-to-checkout",
-                    locale.text(Text::SuperReturnToPayment),
-                    Action::ReturnToCheckout,
-                    cx,
-                )
-                .icon(Icon::Arrow)
-                .style(ButtonStyle::Contrast)
-                .large()
-                .min_width(px(PURCHASE_BUTTON_WIDTH))
-                .focus_handle(&self.primary_focus),
+                Self::button(id, locale.text(label), action, cx)
+                    .icon(Icon::Arrow)
+                    .style(ButtonStyle::Contrast)
+                    .large()
+                    .min_width(px(PURCHASE_BUTTON_WIDTH))
+                    .focus_handle(&self.primary_focus),
             )
     }
 }

@@ -84,7 +84,7 @@ impl State {
 
     pub const fn enable(&mut self, plan: Plan, payment: Payment) {
         self.activation = Some(Activation { plan, payment });
-        self.enter();
+        self.page = Page::ActivationComplete(plan);
     }
 }
 
@@ -100,6 +100,7 @@ pub enum Page {
         plan: Plan,
         status: Redemption,
     },
+    ActivationComplete(Plan),
     Enabled {
         plan: Plan,
         payment: Payment,
@@ -116,6 +117,7 @@ impl Page {
     pub const fn plan(self) -> Plan {
         match self {
             Self::Offer(plan)
+            | Self::ActivationComplete(plan)
             | Self::Enabled { plan, .. }
             | Self::Checkout { plan, .. }
             | Self::Redeem { plan, .. } => plan,
@@ -163,5 +165,6 @@ pub enum Action {
     Back,
     Redeem,
     SubmitCode,
+    StartSharing,
     ReturnToCheckout,
 }
