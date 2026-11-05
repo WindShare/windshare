@@ -2,6 +2,8 @@ use gpui::{Window, px};
 use windshare_ui::{COMPACT_WIDTH, SIDEBAR_COMPACT_WIDTH, SIDEBAR_WIDTH};
 
 pub const MAX_PAGE_WIDTH: f32 = 960.;
+pub const TITLEBAR_HEIGHT: f32 = 40.;
+pub const STATUSBAR_HEIGHT: f32 = 40.;
 const PANEL_BORDER_WIDTH: f32 = 1.;
 pub const fn page_gutter(compact: bool) -> f32 {
     if compact { 28. } else { 48. }

@@ -18,6 +18,7 @@ use windshare_ui::{
 
 pub struct Desktop {
     pub page: Page,
+    pub super_share: Entity<crate::supershare::SuperShare>,
     pub filter: Filter,
     pub shares: Vec<Share>,
     pub transfers: Vec<Transfer>,
@@ -50,7 +51,13 @@ impl Desktop {
         });
         let link_input =
             cx.new(|cx| Input::new(locale.text(Text::ShareLink), cx).accent(Tone::Lavender));
+        let super_share = cx.new(|cx| crate::supershare::SuperShare::new(window, cx));
         let subscriptions = vec![
+            cx.observe(&super_share, |_, _, cx| cx.notify()),
+            cx.subscribe_in(&super_share, window, |this, _, _, window, cx| {
+                this.navigate(Page::Share, window, cx);
+                cx.notify();
+            }),
             cx.observe_global_in::<LanguageSettings>(window, |this, window, cx| {
                 let locale = language(cx);
                 window.set_window_title(locale.text(Text::WindowTitle));
@@ -84,6 +91,7 @@ impl Desktop {
         window.focus(&primary_focus, cx);
         Self {
             page: Page::Share,
+            super_share,
             filter: Filter::All,
             shares: demo_shares(),
             transfers: demo_transfers(),
@@ -158,6 +166,10 @@ impl Desktop {
         self.return_focus = None;
     }
     pub fn navigate(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
+        if self.page == Page::SuperShare && page != Page::SuperShare {
+            self.super_share
+                .update(cx, crate::supershare::SuperShare::leave);
+        }
         self.page = page;
         self.overlay = None;
         self.return_focus = None;
@@ -169,6 +181,7 @@ impl Desktop {
                 self.link_input.read(cx).focus_handle(cx)
             }
             Page::Share | Page::Receive => self.primary_focus.clone(),
+            Page::SuperShare => self.super_share.read(cx).focus_handle(cx),
             _ => self.focus.clone(),
         };
         window.focus(&focus, cx);
@@ -195,6 +208,78 @@ impl Desktop {
             cx.notify();
         }
     }
+    fn page_content(
+        &mut self,
+        layout: FlowLayout,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> gpui::Div {
+        let theme = Theme::from(window.appearance());
+        let compact = window.viewport_size().width < px(COMPACT_WIDTH);
+        match self.page {
+            Page::Share => self.sharing_page(layout, window, cx),
+            Page::Receive => self.receiving_page(theme, layout, cx),
+            Page::Shares => self.shares_page(theme, compact, cx),
+            Page::Transfers => self.transfers_page(theme, cx),
+            Page::Settings => self.settings_page(theme, cx),
+            Page::Components => Self::components_page(theme, cx),
+            Page::SuperShare => column().child(self.super_share.clone()),
+        }
+    }
+
+    fn main_pane(&mut self, window: &Window, cx: &Context<Self>) -> gpui::Div {
+        let theme = Theme::from(window.appearance());
+        // A showcase owns its layout; workspace gutters must not crop its visual canvas.
+        let body = if self.page == Page::SuperShare {
+            column().flex_1().min_h_0().child(self.super_share.clone())
+        } else {
+            self.workspace_page(window, cx)
+        };
+        column()
+            .flex_1()
+            .min_w_0()
+            .child(Self::titlebar(window, cx))
+            .child(body)
+            .child(Self::statusbar(theme, cx))
+    }
+
+    fn workspace_page(&mut self, window: &Window, cx: &Context<Self>) -> gpui::Div {
+        let theme = Theme::from(window.appearance());
+        let compact = window.viewport_size().width < px(COMPACT_WIDTH);
+        let layout = FlowLayout::for_window(window);
+        let content = self.page_content(layout, window, cx);
+        column().flex_1().min_h_0().child(
+            column()
+                .id(("page-scroll", self.page as usize))
+                .overflow_y_scroll()
+                .items_center()
+                .flex_1()
+                .min_h_0()
+                .px(px(page_gutter(compact)))
+                .pt(px(layout.page_top()))
+                .pb(px(32.))
+                .child(
+                    column()
+                        .w_full()
+                        .max_w(px(MAX_PAGE_WIDTH))
+                        .gap(px(24.))
+                        .child(self.page_heading(theme, compact, cx))
+                        .child(
+                            content.with_animation(
+                                ("page-enter", self.page as usize),
+                                Animation::new(Duration::from_millis(if self.reduced_motion() {
+                                    1
+                                } else {
+                                    260
+                                }))
+                                .with_easing(ease_out_quint()),
+                                gpui::Styled::opacity,
+                            ),
+                        ),
+                ),
+        )
+    }
+
     pub const fn reduced_motion(&self) -> bool {
         self.settings[2]
     }
@@ -204,15 +289,7 @@ impl Render for Desktop {
         let locale = language(cx);
         let theme = Theme::from(window.appearance());
         let compact = window.viewport_size().width < px(COMPACT_WIDTH);
-        let layout = FlowLayout::for_window(window);
-        let content = match self.page {
-            Page::Share => self.sharing_page(layout, window, cx),
-            Page::Receive => self.receiving_page(theme, layout, cx),
-            Page::Shares => self.shares_page(theme, compact, cx),
-            Page::Transfers => self.transfers_page(theme, cx),
-            Page::Settings => self.settings_page(theme, cx),
-            Page::Components => Self::components_page(theme, cx),
-        };
+        let pane = self.main_pane(window, cx);
         column()
             .size_full()
             .relative()
@@ -223,47 +300,16 @@ impl Render for Desktop {
             .track_focus(&self.focus)
             .tab_group()
             .on_key_down(cx.listener(Self::handle_key))
+            .when(self.page == Page::SuperShare, |root| {
+                root.child(crate::supershare::backdrop(theme))
+            })
             .child(
                 row()
                     .items_stretch()
                     .flex_1()
                     .min_h_0()
                     .child(self.sidebar(theme, compact, cx))
-                    .child(
-                        column()
-                            .flex_1()
-                            .min_w_0()
-                            .child(Self::titlebar(theme, window, cx))
-                            .child(
-                                column()
-                                    .id(("page-scroll", self.page as usize))
-                                    .overflow_y_scroll()
-                                    .items_center()
-                                    .flex_1()
-                                    .min_h_0()
-                                    .px(px(page_gutter(compact)))
-                                    .pt(px(layout.page_top()))
-                                    .pb(px(32.))
-                                    .child(
-                                        column()
-                                            .w_full()
-                                            .max_w(px(MAX_PAGE_WIDTH))
-                                            .gap(px(24.))
-                                            .child(self.page_heading(theme, compact, cx))
-                                            .child(
-                                                content.with_animation(
-                                                    ("page-enter", self.page as usize),
-                                                    Animation::new(Duration::from_millis(
-                                                        if self.reduced_motion() { 1 } else { 260 },
-                                                    ))
-                                                    .with_easing(ease_out_quint()),
-                                                    gpui::Styled::opacity,
-                                                ),
-                                            ),
-                                    ),
-                            )
-                            .child(Self::statusbar(theme, cx)),
-                    ),
+                    .child(pane),
             )
             .when(self.overlay.is_some(), |root| {
                 root.child(self.overlay_view(window, cx))
