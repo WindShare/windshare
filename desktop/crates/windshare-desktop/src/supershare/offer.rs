@@ -204,9 +204,9 @@ impl SuperShare {
             )
             .child(
                 Self::button(
-                    "super-done",
-                    locale.text(Text::SuperStartSharing),
-                    Action::Done,
+                    "super-return-to-checkout",
+                    locale.text(Text::SuperReturnToPayment),
+                    Action::ReturnToCheckout,
                     cx,
                 )
                 .icon(Icon::Arrow)

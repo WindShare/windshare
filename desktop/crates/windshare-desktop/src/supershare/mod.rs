@@ -8,12 +8,9 @@ mod state;
 mod visuals;
 
 use crate::localization::{LanguageSettings, Text, language};
-use gpui::{
-    AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Subscription, Window,
-    prelude::*,
-};
+use gpui::{AppContext, Context, Entity, FocusHandle, Focusable, Subscription, Window, prelude::*};
 use state::{
-    Action, Attempt, CONFIRM_DELAY, Confirmation, ENABLE_DELAY, OFFLINE_CODE, PREVIEW_CODE,
+    Action, Attempt, CONFIRM_DELAY, Confirmation, ENABLE_DELAY, OFFLINE_CODE, PREVIEW_CODE, Page,
     Payment, Plan, REDEEM_DELAY, Redemption, State,
 };
 use windshare_ui::{Button, Input, InputEvent};
@@ -36,9 +33,6 @@ impl Focusable for SuperShare {
     }
 }
 
-pub struct Done;
-impl EventEmitter<Done> for SuperShare {}
-
 impl SuperShare {
     pub fn new(window: &Window, cx: &mut Context<Self>) -> Self {
         let label = language(cx).text(Text::SuperCode);
@@ -53,7 +47,7 @@ impl SuperShare {
             cx.subscribe_in(&code, window, |this, _, event, window, cx| match event {
                 InputEvent::Submit => this.dispatch(Action::SubmitCode, window, cx),
                 InputEvent::Changed => {
-                    if let State::Redeem { status, .. } = &mut this.state {
+                    if let Page::Redeem { status, .. } = &mut this.state.page {
                         *status = Redemption::Ready;
                     }
                     cx.notify();
@@ -71,7 +65,7 @@ impl SuperShare {
     }
 
     pub const fn enabled(&self) -> bool {
-        matches!(self.state, State::Enabled(_))
+        self.state.enabled()
     }
 
     pub fn set_reduced_motion(&mut self, reduced: bool, cx: &mut Context<Self>) {
@@ -80,14 +74,14 @@ impl SuperShare {
     }
 
     pub fn leave(&mut self, cx: &mut Context<Self>) {
-        if let Some(operation) = self.state.operation() {
+        if let Some(operation) = self.state.page.operation() {
             tracing::info!(
                 event = "supershare.operation_canceled",
                 session = std::process::id(),
                 operation,
                 reason = "navigation",
             );
-            self.state.cancel_pending();
+            self.state.page.cancel_pending();
             cx.notify();
         }
     }
@@ -100,20 +94,20 @@ impl SuperShare {
     fn dispatch(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) {
         let before = self.state;
         match action {
-            Action::SelectPlan(plan) if matches!(self.state, State::Offer(_)) => {
-                self.state = State::Offer(plan);
+            Action::SelectPlan(plan) if matches!(self.state.page, Page::Offer(_)) => {
+                self.state.page = Page::Offer(plan);
             }
-            Action::Checkout if matches!(self.state, State::Offer(_)) => {
-                self.state = State::Checkout {
-                    plan: self.state.plan(),
+            Action::Checkout if matches!(self.state.page, Page::Offer(_)) => {
+                self.state.page = Page::Checkout {
+                    plan: self.state.page.plan(),
                     payment: Payment::Alipay,
                     confirmation: Confirmation::Ready,
                 };
                 window.focus(&self.primary_focus, cx);
             }
             Action::SelectPayment(payment) => {
-                if let State::Checkout { plan, .. } = self.state {
-                    self.state = State::Checkout {
+                if let Page::Checkout { plan, .. } = self.state.page {
+                    self.state.page = Page::Checkout {
                         plan,
                         payment,
                         confirmation: Confirmation::Ready,
@@ -121,19 +115,28 @@ impl SuperShare {
                 }
             }
             Action::Confirm => self.confirm(cx),
-            Action::Back if !self.enabled() => {
-                self.state = State::Offer(self.state.plan());
+            Action::Back if !matches!(self.state.page, Page::Enabled { .. }) => {
+                self.state.page = Page::Offer(self.state.page.plan());
                 window.focus(&self.primary_focus, cx);
             }
-            Action::Redeem if !self.enabled() => {
-                self.state = State::Redeem {
-                    plan: self.state.plan(),
+            Action::Redeem if !matches!(self.state.page, Page::Enabled { .. }) => {
+                self.state.page = Page::Redeem {
+                    plan: self.state.page.plan(),
                     status: Redemption::Ready,
                 };
                 window.focus(&self.code.read(cx).focus_handle(cx), cx);
             }
             Action::SubmitCode => self.redeem(cx),
-            Action::Done if self.enabled() => cx.emit(Done),
+            Action::ReturnToCheckout => {
+                if let Page::Enabled { plan, payment } = self.state.page {
+                    self.state.page = Page::Checkout {
+                        plan,
+                        payment,
+                        confirmation: Confirmation::Ready,
+                    };
+                    window.focus(&self.primary_focus, cx);
+                }
+            }
             _ => {}
         }
         tracing::info!(
@@ -144,11 +147,11 @@ impl SuperShare {
     }
 
     fn confirm(&mut self, cx: &Context<Self>) {
-        let State::Checkout {
+        let Page::Checkout {
             plan,
             payment,
             confirmation,
-        } = self.state
+        } = self.state.page
         else {
             return;
         };
@@ -159,7 +162,7 @@ impl SuperShare {
         };
         self.sequence += 1;
         let operation = self.sequence;
-        self.state = State::Checkout {
+        self.state.page = Page::Checkout {
             plan,
             payment,
             confirmation: Confirmation::Checking { operation, attempt },
@@ -171,14 +174,16 @@ impl SuperShare {
                     return;
                 }
                 // This preview never claims a payment settled; confirmation only changes local appearance.
-                this.state = match attempt {
-                    Attempt::Initial => State::Checkout {
-                        plan,
-                        payment,
-                        confirmation: Confirmation::Unconfirmed,
-                    },
-                    Attempt::Retry => State::Enabled(plan),
-                };
+                match attempt {
+                    Attempt::Initial => {
+                        this.state.page = Page::Checkout {
+                            plan,
+                            payment,
+                            confirmation: Confirmation::Unconfirmed,
+                        };
+                    }
+                    Attempt::Retry => this.state.enable(plan, payment),
+                }
                 this.trace_completion(operation);
                 cx.notify();
             });
@@ -187,7 +192,7 @@ impl SuperShare {
     }
 
     fn redeem(&mut self, cx: &Context<Self>) {
-        let State::Redeem { plan, status } = self.state else {
+        let Page::Redeem { plan, status } = self.state.page else {
             return;
         };
         if matches!(status, Redemption::Checking { .. }) {
@@ -199,7 +204,7 @@ impl SuperShare {
         }
         self.sequence += 1;
         let operation = self.sequence;
-        self.state = State::Redeem {
+        self.state.page = Page::Redeem {
             plan,
             status: Redemption::Checking { operation },
         };
@@ -210,17 +215,18 @@ impl SuperShare {
                     return;
                 }
                 // Fixed fixtures exercise UI outcomes without inventing an official redemption service.
-                this.state = match code.as_str() {
-                    PREVIEW_CODE => State::Enabled(Plan::LongTerm),
-                    OFFLINE_CODE => State::Redeem {
+                if code == PREVIEW_CODE {
+                    this.state.enable(Plan::LongTerm, Payment::Alipay);
+                } else {
+                    this.state.page = Page::Redeem {
                         plan,
-                        status: Redemption::Unavailable,
-                    },
-                    _ => State::Redeem {
-                        plan,
-                        status: Redemption::Invalid,
-                    },
-                };
+                        status: if code == OFFLINE_CODE {
+                            Redemption::Unavailable
+                        } else {
+                            Redemption::Invalid
+                        },
+                    };
+                }
                 this.trace_completion(operation);
                 cx.notify();
             });
@@ -229,7 +235,7 @@ impl SuperShare {
     }
 
     fn accept_completion(&self, operation: usize) -> bool {
-        let current = self.state.operation();
+        let current = self.state.page.operation();
         if current == Some(operation) {
             return true;
         }
@@ -255,15 +261,15 @@ impl Render for SuperShare {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = windshare_ui::Theme::from(window.appearance());
         let stage = layout::Stage::for_window(window);
-        let content = match self.state {
-            State::Offer(plan) => self.offer_page(theme, stage, plan, window, cx),
-            State::Checkout {
+        let content = match self.state.page {
+            Page::Offer(plan) => self.offer_page(theme, stage, plan, window, cx),
+            Page::Checkout {
                 plan,
                 payment,
                 confirmation,
             } => self.checkout_page(theme, plan, payment, confirmation, cx),
-            State::Redeem { status, .. } => self.redemption_page(theme, status, cx),
-            State::Enabled(_) => self.enabled_page(theme, stage, window, cx),
+            Page::Redeem { status, .. } => self.redemption_page(theme, status, cx),
+            Page::Enabled { .. } => self.enabled_page(theme, stage, window, cx),
         };
         windshare_ui::column()
             .id("super-page-scroll")

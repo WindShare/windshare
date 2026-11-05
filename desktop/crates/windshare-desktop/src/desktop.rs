@@ -54,10 +54,6 @@ impl Desktop {
         let super_share = cx.new(|cx| crate::supershare::SuperShare::new(window, cx));
         let subscriptions = vec![
             cx.observe(&super_share, |_, _, cx| cx.notify()),
-            cx.subscribe_in(&super_share, window, |this, _, _, window, cx| {
-                this.navigate(Page::Share, window, cx);
-                cx.notify();
-            }),
             cx.observe_global_in::<LanguageSettings>(window, |this, window, cx| {
                 let locale = language(cx);
                 window.set_window_title(locale.text(Text::WindowTitle));
