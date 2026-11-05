@@ -217,7 +217,7 @@ func (a *App) resolveLink(raw, keyString string) (link.Link, error) {
 	if !errors.Is(err, engine.ErrReceiveKeyRequired) {
 		return capability, err
 	}
-	_, _ = fmt.Fprint(a.stderrWriter(), "Link has no key; enter the key string: ")
+	a.stderrLines().WriteLines("Link has no key; enter the key string: ")
 	line, readErr := bufio.NewReader(a.Stdin).ReadString('\n')
 	// Use the same trimming as --key and the browser key box.
 	line = link.TrimCopiedText(line)

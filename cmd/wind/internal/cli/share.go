@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"errors"
-	"fmt"
 	"slices"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
@@ -22,13 +21,13 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 		return parse.exitCode()
 	}
 	if err := a.application.ConfigureTURN(request.sharing.TURNSettings()); err != nil {
-		_, _ = fmt.Fprintf(a.stderrWriter(), "share: TURN configuration: %v\n", err)
+		a.writeCompleteLine("share: TURN configuration: %v", err)
 		return ExitUsage
 	}
 	runtime, err := a.newCommandRuntime(clievent.CommandShare, request.observation)
 	if err != nil {
 		if !errors.Is(err, errUserTraceOpen) {
-			_, _ = fmt.Fprintln(a.stderrWriter(), "share: command observation could not start")
+			a.writeCompleteLine("share: command observation could not start")
 		}
 		return ExitFailure
 	}

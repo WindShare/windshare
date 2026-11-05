@@ -30,25 +30,30 @@ type Service interface {
 	Skip() error
 }
 
+// LineOutput commits complete diagnostic records immediately. Embedded line
+// breaks belong to the record; a trailing newline is not required.
+type LineOutput interface {
+	WriteLines(...string)
+}
+
 type Runner struct {
 	Service     Service
-	Input       io.Reader
-	Output      io.Writer
+	Output      LineOutput
 	JSONOutput  io.Writer
 	Interactive func() bool
 }
 
 func (runner Runner) Run(ctx context.Context, command string, args []string) int {
 	if runner.JSONOutput == nil {
-		runner.JSONOutput = runner.Output
+		runner.JSONOutput = io.Discard
 	}
 	options, err := parseNetworkArgs(command, args)
 	if err != nil {
-		fmt.Fprintf(runner.Output, "Usage: wind %s network [--json]", command)
+		usage := "Usage: wind " + command + " network [--json]"
 		if command == "setup" {
-			fmt.Fprint(runner.Output, " [--skip|--remove] [--non-interactive]")
+			usage += " [--skip|--remove] [--non-interactive]"
 		}
-		fmt.Fprintln(runner.Output)
+		runner.writeLine("%s", usage)
 		if errors.Is(err, flag.ErrHelp) {
 			return ResultOK
 		}
@@ -67,13 +72,13 @@ func (runner Runner) Run(ctx context.Context, command string, args []string) int
 	}
 	if options.skip {
 		if err := runner.Service.Skip(); err != nil {
-			fmt.Fprintf(runner.Output, "Network preference: %v\n", err)
+			runner.writeLine("Network preference: %v", err)
 			return ResultFailure
 		}
 		if options.jsonOutput {
 			fmt.Fprintln(runner.JSONOutput, `{"choice":"skip"}`)
 		} else {
-			fmt.Fprintln(runner.Output, "Network setup reminders disabled.")
+			runner.writeLine("Network setup reminders disabled.")
 		}
 		return ResultOK
 	}
@@ -85,16 +90,14 @@ func (runner Runner) Run(ctx context.Context, command string, args []string) int
 	// Windows asks for consent, and redirected/CI execution never opens a prompt.
 	if !options.jsonOutput {
 		if options.remove {
-			fmt.Fprintln(runner.Output, "Remove this executable's WindShare firewall rules.")
+			runner.writeLine("Remove this executable's WindShare firewall rules.")
 		} else {
-			fmt.Fprintln(runner.Output, "Allow inbound UDP/TCP for this executable on domain, private, and public networks (all ports and remote addresses).")
+			runner.writeLine("Allow inbound UDP/TCP for this executable on domain, private, and public networks (all ports and remote addresses).")
 		}
 	}
-	interactive := runner.Interactive
-	if interactive == nil {
-		interactive = func() bool { return IsInteractive(runner.Input, runner.Output) }
-	}
-	operation, report := runner.Service.Setup(ctx, action, !options.noninteractive && !options.jsonOutput && interactive())
+	// Elevation depends on the host's raw terminal handles, not its line sink.
+	allowElevation := !options.noninteractive && !options.jsonOutput && runner.Interactive != nil && runner.Interactive()
+	operation, report := runner.Service.Setup(ctx, action, allowElevation)
 	runner.report(report, &operation, options.jsonOutput)
 	if !operation.Succeeded() || report.PreferenceError != "" {
 		return ResultFailure
@@ -142,30 +145,35 @@ func (runner Runner) report(report platformsetup.Report, operation *platformsetu
 		return
 	}
 	if operation != nil {
-		fmt.Fprintf(runner.Output, "Rule operation: %s", operation.State)
-		if operation.Detail != "" {
-			fmt.Fprintf(runner.Output, " (%s)", operation.Detail)
-		}
-		fmt.Fprintln(runner.Output)
+		runner.writeLine("Rule operation: %s%s", operation.State, parenthesized(operation.Detail))
 	}
-	fmt.Fprintf(runner.Output, "Executable: %s\nSetup choice: %s\nConfigured executable: %s\nScope: %s\nGlobal rules: not evaluated\n", report.Executable, report.Preference.Choice, report.Preference.Executable, platformsetup.InspectionScope)
+	runner.writeLine("Executable: %s\nSetup choice: %s\nConfigured executable: %s\nScope: %s\nGlobal rules: not evaluated", report.Executable, report.Preference.Choice, report.Preference.Executable, platformsetup.InspectionScope)
 	if report.PreferenceError != "" {
-		fmt.Fprintf(runner.Output, "Preference: unknown (%s)\n", report.PreferenceError)
+		runner.writeLine("Preference: unknown (%s)", report.PreferenceError)
 	}
 	if report.InspectionError != "" {
-		fmt.Fprintf(runner.Output, "Inspection: unknown (%s)\n", report.InspectionError)
+		runner.writeLine("Inspection: unknown (%s)", report.InspectionError)
 	}
 	for _, finding := range report.Findings {
-		fmt.Fprintf(runner.Output, "%s %s %s: %s (%s)\n", finding.Network.Interface, finding.Network.Profile, finding.Protocol, finding.Status, finding.Reason)
+		runner.writeLine("%s %s %s: %s (%s)", finding.Network.Interface, finding.Network.Profile, finding.Protocol, finding.Status, finding.Reason)
 		for _, rule := range finding.Rules {
-			fmt.Fprintf(runner.Output, "  %s: %s", rule.Name, rule.Action)
-			if rule.Restrictions != "" {
-				fmt.Fprintf(runner.Output, " (%s)", rule.Restrictions)
-			}
-			fmt.Fprintln(runner.Output)
+			runner.writeLine("  %s: %s%s", rule.Name, rule.Action, parenthesized(rule.Restrictions))
 		}
 	}
 	if report.SuggestSetup() {
-		fmt.Fprintln(runner.Output, "Configure: wind setup network")
+		runner.writeLine("Configure: wind setup network")
 	}
+}
+
+func (runner Runner) writeLine(format string, args ...any) {
+	if runner.Output != nil {
+		runner.Output.WriteLines(fmt.Sprintf(format, args...))
+	}
+}
+
+func parenthesized(detail string) string {
+	if detail == "" {
+		return ""
+	}
+	return " (" + detail + ")"
 }

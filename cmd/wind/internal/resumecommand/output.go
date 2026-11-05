@@ -7,7 +7,7 @@ import (
 
 type streamResumeOutput struct {
 	result io.Writer
-	usage  io.Writer
+	usage  LineOutput
 }
 
 func (output streamResumeOutput) WriteResult(value string) error {
@@ -23,7 +23,7 @@ func (output streamResumeOutput) WriteResult(value string) error {
 
 func (output streamResumeOutput) WriteUsage(value string) {
 	if output.usage != nil {
-		_, _ = io.WriteString(output.usage, value)
+		output.usage.WriteLines(value)
 	}
 }
 

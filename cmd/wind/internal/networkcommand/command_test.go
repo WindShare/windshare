@@ -10,6 +10,12 @@ import (
 	"github.com/windshare/windshare/internal/platformsetup"
 )
 
+type recordedLines []string
+
+func (output *recordedLines) WriteLines(lines ...string) {
+	*output = append(*output, lines...)
+}
+
 type fakeService struct {
 	checks, setups, skips int
 	elevation             bool
@@ -54,7 +60,7 @@ func TestCommandsKeepReadingPreferenceAndMutationIndependent(t *testing.T) {
 		{"setup", nil, 0, 0, 0, false, 0, ResultUsage},
 	} {
 		service := &fakeService{operation: platformsetup.Operation{State: platformsetup.RulesApplied}}
-		runner := Runner{Service: service, Output: &bytes.Buffer{}, Interactive: func() bool { return true }}
+		runner := Runner{Service: service, Output: &recordedLines{}, Interactive: func() bool { return true }}
 		code := runner.Run(t.Context(), test.command, test.args)
 		if code != test.code || service.checks != test.checks || service.setups != test.setups || service.skips != test.skips || service.elevation != test.elevation || service.action != test.action {
 			t.Fatalf("%s %v: code=%d, service=%+v", test.command, test.args, code, service)
@@ -65,25 +71,26 @@ func TestCommandsKeepReadingPreferenceAndMutationIndependent(t *testing.T) {
 func TestCommandFailuresRemainSeparateFromPolicyVerdicts(t *testing.T) {
 	for _, state := range []platformsetup.OperationState{platformsetup.AuthorizationDeclined, platformsetup.PermissionRequired, platformsetup.OperationFailed, platformsetup.OperationUnsupported} {
 		service := &fakeService{operation: platformsetup.Operation{State: state, Detail: "failure"}}
-		runner := Runner{Service: service, Output: &bytes.Buffer{}}
+		runner := Runner{Service: service, Output: &recordedLines{}}
 		if code := runner.Run(t.Context(), "setup", []string{"network"}); code != ResultFailure || service.elevation {
 			t.Fatal(state, code)
 		}
 	}
 	for _, report := range []platformsetup.Report{{InspectionError: "read failed"}, {PreferenceError: "unreadable"}} {
-		runner := Runner{Service: &fakeService{report: report}, Output: &bytes.Buffer{}}
+		runner := Runner{Service: &fakeService{report: report}, Output: &recordedLines{}}
 		if code := runner.Run(t.Context(), "doctor", []string{"network"}); code != ResultFailure {
 			t.Fatal(code)
 		}
 	}
-	runner := Runner{Service: &fakeService{skipErr: errors.New("disk full")}, Output: &bytes.Buffer{}}
+	runner := Runner{Service: &fakeService{skipErr: errors.New("disk full")}, Output: &recordedLines{}}
 	if code := runner.Run(t.Context(), "setup", []string{"network", "--skip"}); code != ResultFailure {
 		t.Fatal(code)
 	}
 }
 
 func TestJSONReportPreservesEvidenceOnItsOwnStream(t *testing.T) {
-	var human, machine bytes.Buffer
+	var human recordedLines
+	var machine bytes.Buffer
 	service := &fakeService{report: platformsetup.Report{Executable: "wind.exe", Preference: platformsetup.Preference{Choice: platformsetup.Skip}, Findings: []platformsetup.Finding{{
 		Network: platformsetup.Network{Interface: "Wi-Fi", Profile: platformsetup.Private}, Protocol: platformsetup.UDP,
 		Status: platformsetup.PolicyRestricted, Reason: platformsetup.ExplicitBlock,
@@ -97,8 +104,8 @@ func TestJSONReportPreservesEvidenceOnItsOwnStream(t *testing.T) {
 	if err := json.Unmarshal(machine.Bytes(), &report); err != nil {
 		t.Fatal(err)
 	}
-	if human.Len() != 0 || report.Choice != "skip" || report.Scope != platformsetup.InspectionScope || len(report.Findings) != 1 || report.Findings[0].SuggestSetup || len(report.Findings[0].Rules) != 1 {
-		t.Fatal(human.String(), machine.String())
+	if len(human) != 0 || report.Choice != "skip" || report.Scope != platformsetup.InspectionScope || len(report.Findings) != 1 || report.Findings[0].SuggestSetup || len(report.Findings[0].Rules) != 1 {
+		t.Fatal(human, machine.String())
 	}
 }
 
