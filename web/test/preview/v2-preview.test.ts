@@ -105,6 +105,39 @@ function runtime(bytes: Uint8Array<ArrayBuffer>, blockSize: bigint) {
   return { broker, descriptor, lane, releases: () => releases, revisions }
 }
 
+function animatedWebp(): Uint8Array<ArrayBuffer> {
+  const bytes = new Uint8Array(30)
+  bytes.set([82, 73, 70, 70])
+  new DataView(bytes.buffer).setUint32(4, 22, true)
+  bytes.set([87, 69, 66, 80, 86, 80, 56, 88], 8)
+  new DataView(bytes.buffer).setUint32(16, 10, true)
+  bytes[20] = 0x02
+  return bytes
+}
+
+function animatedPng(): Uint8Array<ArrayBuffer> {
+  const bytes = new Uint8Array(53)
+  bytes.set([137, 80, 78, 71, 13, 10, 26, 10])
+  const view = new DataView(bytes.buffer)
+  view.setUint32(8, 13, false)
+  bytes.set([73, 72, 68, 82], 12)
+  view.setUint32(16, 64, false)
+  view.setUint32(20, 48, false)
+  view.setUint32(33, 0, false)
+  bytes.set([97, 99, 84, 76], 37)
+  view.setUint32(45, 1_000_000, false)
+  bytes.set([73, 68, 65, 84], 49)
+  return bytes
+}
+
+function truncatedJpeg(): Uint8Array<ArrayBuffer> {
+  // SOI + one EXIF segment and EOI: no frame header for the sniff to find.
+  const bytes = new Uint8Array(2 + 2 + 16 + 2)
+  bytes.set([0xff, 0xd8, 0xff, 0xe1, 0x00, 0x10], 0)
+  bytes.set([0xff, 0xd9], bytes.byteLength - 2)
+  return bytes
+}
+
 function pngFile(size: number, width: number, height: number): Uint8Array<ArrayBuffer> {
   const bytes = new Uint8Array(size)
   bytes.set([137, 80, 78, 71, 13, 10, 26, 10])
@@ -202,7 +235,27 @@ describe('v2 file preview runtime', () => {
     await manual.close()
   })
 
+  it.each([
+    ['animated.webp', animatedWebp()],
+    ['animated.png', animatedPng()],
+    ['truncated.jpg', truncatedJpeg()],
+  ] as const)('defers automatic photos that fail image-format inspection (%s)', async (name, bytes) => {
+    const fixture = runtime(bytes, BigInt(bytes.byteLength))
+    await expect(FilePreview.openAutomaticPhoto(
+      fileEntry(BigInt(bytes.byteLength), name),
+      fixture.revisions, fixture.broker, new AbortController().signal,
+    )).rejects.toBeInstanceOf(AutomaticPhotoDeferredError)
+    expect(fixture.releases()).toBe(1)
+    // Manual Preview still surfaces the format failure so the user can act on it.
+    await expect(FilePreview.open(
+      fileEntry(BigInt(bytes.byteLength), name),
+      fixture.revisions, fixture.broker, new AbortController().signal,
+    )).rejects.toThrow(/Animated|ended before its frame header/i)
+    expect(fixture.releases()).toBe(2)
+  })
+
   it('never promotes an image extension to automatic MP4 decoding', async () => {
+
     const bytes = mp4ShapedFile(100 * 1024)
     const fixture = runtime(bytes, 64n * 1024n)
     const openVideo = vi.fn()
