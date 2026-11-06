@@ -26,6 +26,7 @@ import type {
   PeerFailureCodeV1,
 } from '../export/incident-record-v2'
 import type { IncidentScopeKind } from '../incident/scope'
+import type { DiagnosticExceptionProjection } from '../exception'
 
 export type {
   DirectZipCoordinationPayloadV1,
@@ -217,10 +218,17 @@ export interface TraceEventPayloadByNameV2 extends ConnectionTracePayloads {
   readonly browse_transition:
     | Readonly<{ transition: AttemptTransitionV1 }>
     | Readonly<{ transition: 'page_loaded'; entry_count: string }>
-  readonly preview_transition: Readonly<{
-    attempt: 'open' | 'seek' | 'media'
-    transition: AttemptTransitionV1 | 'closed'
-  }>
+  readonly preview_transition:
+    | Readonly<{ attempt: 'open' | 'seek' | 'media'; transition: AttemptTransitionV1 | 'closed' }>
+    | Readonly<{
+        attempt: 'open'
+        transition: 'deferred'
+        intent: 'automatic_photo'
+        preview_id: string
+        share_instance_id: string
+        file_id: string
+        exception: DiagnosticExceptionProjection
+      }>
   readonly projection_transition:
     | Readonly<{ transition: 'started'; projection_epoch: string }>
     | Readonly<{

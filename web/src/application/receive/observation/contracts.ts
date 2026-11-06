@@ -155,7 +155,17 @@ export type ReceiverExperienceTraceEvent =
   | Readonly<{ name: 'receiver_experience'; transition: 'intent'; action: string;
       operationId: string | null; generation: bigint }>
 
+export type PreviewTraceEvent = Readonly<{
+  name: 'preview_transition'
+  transition: 'deferred'
+  previewId: number
+  shareInstanceId: string
+  fileId: string
+  error: unknown
+}>
+
 export type ReceiverTraceEvent =
+  | PreviewTraceEvent
   | ReceiverExperienceTraceEvent
   | ProjectionTraceEvent
   | TransferTraceEvent

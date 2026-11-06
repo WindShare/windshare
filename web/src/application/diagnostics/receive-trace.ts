@@ -1,4 +1,5 @@
 import type { FailureEvidenceHistoryPort } from '../../diagnostics/failure/history'
+import { projectDiagnosticException } from '../../diagnostics/exception'
 import { unclassifiedFailureFact, type FailureCorrelation } from '../../diagnostics/incident/fact'
 import { projectProtocolTraceEvent } from './protocol-trace'
 export { projectProtocolTraceEvent } from './protocol-trace'
@@ -78,6 +79,12 @@ export function projectReceiverTraceEvent(
       })
       return observation('receiver_experience', { transition: 'intent', action: event.action,
         operation_id: event.operationId, generation: decimal(event.generation) })
+    case 'preview_transition':
+      return observation('preview_transition', {
+        attempt: 'open', transition: event.transition, intent: 'automatic_photo',
+        preview_id: decimal(event.previewId), share_instance_id: event.shareInstanceId,
+        file_id: event.fileId, exception: projectDiagnosticException(event.error),
+      })
     case 'join_transition':
       return observation('join_transition', { transition: event.transition })
     case 'projection_transition':

@@ -133,6 +133,7 @@ export class ReceiverController {
       publish: (snapshot) => this.#publish(snapshot),
       publicError: (error) => this.#publicError(error),
       ...(options.incidents === undefined ? {} : { incidents: options.incidents }),
+      ...(options.trace === undefined ? {} : { trace: options.trace }),
     })
     this.#operationTransitions = new ReceiveOperationTransitions({
       runtime: this.#receive.tasks, snapshot: () => this.#snapshot,
