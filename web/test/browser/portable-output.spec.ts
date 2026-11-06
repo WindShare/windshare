@@ -94,8 +94,6 @@ test('rejects an over-limit portable artifact before a browser handoff can start
   page,
 }) => {
   await page.goto(BROWSER_CONTRACT_HOST_PATH)
-  const downloadNames: string[] = []
-  page.on('download', (download) => downloadNames.push(download.suggestedFilename()))
 
   const result = await page.evaluate(async () => {
     const portablePath = '/src/output/portable/browser-download.ts'
@@ -108,25 +106,35 @@ test('rejects an over-limit portable artifact before a browser handoff can start
       'too-large.bin',
       BigInt(portable.PORTABLE_HANDOFF_MAXIMUM_BYTES) + 1n,
     )
+    const windowPort = fixture.currentPortableHandoffWindow()
+    let objectUrlCreations = 0
     try {
       await portable.openPortableBrowserHandoff({
         ...prepared,
-        windowPort: fixture.currentPortableHandoffWindow(),
+        windowPort: {
+          ...windowPort,
+          URL: {
+            createObjectURL(source) {
+              objectUrlCreations++
+              return windowPort.URL.createObjectURL(source)
+            },
+            revokeObjectURL: (url) => windowPort.URL.revokeObjectURL(url),
+          },
+        },
       })
-      return { name: '', message: '' }
+      return { name: '', message: '', objectUrlCreations }
     } catch (error) {
       return error instanceof DOMException
-        ? { name: error.name, message: error.message }
-        : { name: 'UnexpectedError', message: String(error) }
+        ? { name: error.name, message: error.message, objectUrlCreations }
+        : { name: 'UnexpectedError', message: String(error), objectUrlCreations }
     }
   })
 
   expect(result).toEqual({
     name: 'NotSupportedError',
     message: 'Portable browser handoff is limited to 64 MiB',
+    objectUrlCreations: 0,
   })
-  await page.waitForTimeout(50)
-  expect(downloadNames).toEqual([])
 })
 
 async function readDownload(
