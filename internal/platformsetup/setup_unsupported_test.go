@@ -55,6 +55,8 @@ func TestSetupOnUnsupportedPlatformMatchesCheckVocabulary(t *testing.T) {
 		t.Skip("installationExecutable is supported on Windows")
 	}
 	service := New()
+	// A saved skip choice legitimately takes precedence over platform support at startup.
+	service.Preferences = FilePreferences{Path: filepath.Join(t.TempDir(), PreferenceFileName)}
 	operation, report := service.Setup(t.Context(), EnsureRules, true)
 	if operation.State != OperationUnsupported {
 		t.Fatalf("New().Setup state=%q detail=%q, want unsupported", operation.State, operation.Detail)
