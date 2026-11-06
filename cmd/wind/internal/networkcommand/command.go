@@ -28,6 +28,9 @@ type Service interface {
 	Check(context.Context) platformsetup.Report
 	Setup(context.Context, platformsetup.RuleAction, bool) (platformsetup.Operation, platformsetup.Report)
 	Skip() error
+	// SupportsSetup reports whether this host can apply executable firewall
+	// rules. Explicit setup prints the Windows consent preamble only when true.
+	SupportsSetup() bool
 }
 
 // LineOutput commits complete diagnostic records immediately. Embedded line
@@ -88,7 +91,9 @@ func (runner Runner) Run(ctx context.Context, command string, args []string) int
 	}
 	// Explicit setup is the authorization to request UAC. Scope is printed before
 	// Windows asks for consent, and redirected/CI execution never opens a prompt.
-	if !options.jsonOutput {
+	// Unsupported platforms cannot apply rules, so the Windows-specific consent
+	// text would only confuse the later OperationUnsupported result.
+	if !options.jsonOutput && runner.Service.SupportsSetup() {
 		if options.remove {
 			runner.writeLine("Remove this executable's WindShare firewall rules.")
 		} else {
@@ -155,7 +160,7 @@ func (runner Runner) report(report platformsetup.Report, operation *platformsetu
 		runner.writeLine("Inspection: unknown (%s)", report.InspectionError)
 	}
 	for _, finding := range report.Findings {
-		runner.writeLine("%s %s %s: %s (%s)", finding.Network.Interface, finding.Network.Profile, finding.Protocol, finding.Status, finding.Reason)
+		runner.writeLine("%s", formatFindingLine(finding))
 		for _, rule := range finding.Rules {
 			runner.writeLine("  %s: %s%s", rule.Name, rule.Action, parenthesized(rule.Restrictions))
 		}
@@ -176,4 +181,17 @@ func parenthesized(detail string) string {
 		return ""
 	}
 	return " (" + detail + ")"
+}
+
+// formatFindingLine omits an empty interface so unsupported-platform findings
+// read as "UDP: unknown (unsupported-platform)" instead of a leading space.
+func formatFindingLine(finding platformsetup.Finding) string {
+	parts := make([]string, 0, 5)
+	if finding.Network.Interface != "" {
+		parts = append(parts, finding.Network.Interface, finding.Network.Profile.String())
+	} else if finding.Network.Profile != platformsetup.UnknownProfile {
+		parts = append(parts, finding.Network.Profile.String())
+	}
+	parts = append(parts, finding.Protocol.String()+":", finding.Status.String(), "("+finding.Reason.String()+")")
+	return strings.Join(parts, " ")
 }

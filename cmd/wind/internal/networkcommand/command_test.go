@@ -23,6 +23,7 @@ type fakeService struct {
 	report                platformsetup.Report
 	operation             platformsetup.Operation
 	skipErr               error
+	supportsSetup         bool
 }
 
 func (service *fakeService) Check(context.Context) platformsetup.Report {
@@ -34,7 +35,8 @@ func (service *fakeService) Setup(_ context.Context, action platformsetup.RuleAc
 	service.action, service.elevation = action, elevation
 	return service.operation, service.report
 }
-func (service *fakeService) Skip() error { service.skips++; return service.skipErr }
+func (service *fakeService) Skip() error         { service.skips++; return service.skipErr }
+func (service *fakeService) SupportsSetup() bool { return service.supportsSetup }
 
 func TestCommandsKeepReadingPreferenceAndMutationIndependent(t *testing.T) {
 	for _, test := range []struct {
@@ -59,7 +61,7 @@ func TestCommandsKeepReadingPreferenceAndMutationIndependent(t *testing.T) {
 		{"setup", []string{"network", "--help"}, 0, 0, 0, false, 0, ResultOK},
 		{"setup", nil, 0, 0, 0, false, 0, ResultUsage},
 	} {
-		service := &fakeService{operation: platformsetup.Operation{State: platformsetup.RulesApplied}}
+		service := &fakeService{supportsSetup: true, operation: platformsetup.Operation{State: platformsetup.RulesApplied}}
 		runner := Runner{Service: service, Output: &recordedLines{}, Interactive: func() bool { return true }}
 		code := runner.Run(t.Context(), test.command, test.args)
 		if code != test.code || service.checks != test.checks || service.setups != test.setups || service.skips != test.skips || service.elevation != test.elevation || service.action != test.action {
@@ -70,7 +72,7 @@ func TestCommandsKeepReadingPreferenceAndMutationIndependent(t *testing.T) {
 
 func TestCommandFailuresRemainSeparateFromPolicyVerdicts(t *testing.T) {
 	for _, state := range []platformsetup.OperationState{platformsetup.AuthorizationDeclined, platformsetup.PermissionRequired, platformsetup.OperationFailed, platformsetup.OperationUnsupported} {
-		service := &fakeService{operation: platformsetup.Operation{State: state, Detail: "failure"}}
+		service := &fakeService{supportsSetup: state != platformsetup.OperationUnsupported, operation: platformsetup.Operation{State: state, Detail: "failure"}}
 		runner := Runner{Service: service, Output: &recordedLines{}}
 		if code := runner.Run(t.Context(), "setup", []string{"network"}); code != ResultFailure || service.elevation {
 			t.Fatal(state, code)
