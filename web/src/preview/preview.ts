@@ -165,7 +165,7 @@ export class FilePreview {
       // Speculative gallery presentation must not turn format rejection into a
       // browse error panel; manual Preview still surfaces ImagePreviewError.
       if (intent === 'automatic-photo' && error instanceof ImagePreviewError) {
-        throw new AutomaticPhotoDeferredError('Use Preview to inspect this file')
+        throw new AutomaticPhotoDeferredError('Use Preview to inspect this file', { cause: error })
       }
       throw error
     }

@@ -8,8 +8,8 @@ export const AUTOMATIC_PHOTO_DECODED_BYTES = 32 * 1024 * 1024
 export const AUTOMATIC_PHOTO_TIMEOUT_MILLISECONDS = 5_000
 
 export class AutomaticPhotoDeferredError extends Error {
-  constructor(message: string) {
-    super(message)
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options)
     this.name = 'AutomaticPhotoDeferredError'
   }
 }

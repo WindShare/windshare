@@ -13,6 +13,7 @@ import {
 import type { BlockRecord, FileRevisionDescriptor } from '../../src/content/records'
 import type { RevisionReader } from '../../src/content/session-services'
 import { AutomaticPhotoDeferredError } from '../../src/preview/automatic-photo'
+import { ImagePreviewError } from '../../src/preview/image-header'
 import { VideoPreviewError, type Mp4Segment, type PreviewRangeSource } from '../../src/preview/mp4-range'
 import { ReceiveSourceInvalidatedError } from '../../src/application/receive/errors'
 import {
@@ -244,7 +245,7 @@ describe('v2 file preview runtime', () => {
     await expect(FilePreview.openAutomaticPhoto(
       fileEntry(BigInt(bytes.byteLength), name),
       fixture.revisions, fixture.broker, new AbortController().signal,
-    )).rejects.toBeInstanceOf(AutomaticPhotoDeferredError)
+    )).rejects.toMatchObject({ name: 'AutomaticPhotoDeferredError', cause: expect.any(ImagePreviewError) })
     expect(fixture.releases()).toBe(1)
     // Manual Preview still surfaces the format failure so the user can act on it.
     await expect(FilePreview.open(
@@ -254,8 +255,38 @@ describe('v2 file preview runtime', () => {
     expect(fixture.releases()).toBe(2)
   })
 
-  it('never promotes an image extension to automatic MP4 decoding', async () => {
+  it('retains browser decode evidence when automatic presentation is deferred', async () => {
+    const fixture = runtime(pngFile(128, 20, 10), 64n)
+    const failure = new DOMException('The image data is invalid', 'InvalidStateError')
+    const urls = urlPorts({ decodeImage: async () => { throw failure } })
+    const entry = fileEntry(128n, 'photo.png')
+    await expect(FilePreview.openAutomaticPhoto(
+      entry, fixture.revisions, fixture.broker, new AbortController().signal, urls.ports,
+    )).rejects.toMatchObject({
+      name: 'AutomaticPhotoDeferredError',
+      cause: { name: 'ImagePreviewError', cause: failure },
+    })
+    await expect(FilePreview.open(
+      entry, fixture.revisions, fixture.broker, new AbortController().signal, urls.ports,
+    )).rejects.toMatchObject({ name: 'ImagePreviewError', cause: failure })
+    expect(fixture.releases()).toBe(2)
+    expect(urls.created).toEqual([])
+  })
 
+  it.each([new Error('range read failed'), new PreviewRuntimeError('invalid content range')])(
+    'preserves source failures during automatic presentation: %s', async (failure) => {
+      const fixture = runtime(pngFile(128, 20, 10), 64n)
+      const broker: BlockRangeReader = {
+        readRange: async function* () { yield await Promise.reject(failure) },
+      }
+      await expect(FilePreview.openAutomaticPhoto(
+        fileEntry(128n, 'photo.png'), fixture.revisions, broker, new AbortController().signal,
+      )).rejects.toBe(failure)
+      expect(fixture.releases()).toBe(1)
+    },
+  )
+
+  it('never promotes an image extension to automatic MP4 decoding', async () => {
     const bytes = mp4ShapedFile(100 * 1024)
     const fixture = runtime(bytes, 64n * 1024n)
     const openVideo = vi.fn()
