@@ -1,4 +1,6 @@
 import { PROJECTION_DISCOVERY_STATES } from '../trace/model'
+import { isBoundedDiagnosticExceptionProjection, MAX_EXCEPTION_TEXT_BYTES, type DiagnosticExceptionProjection } from '../exception'
+import { deepFreezeJson } from './json'
 import { STORAGE_PERSISTENCE_TRANSITIONS } from '../trace/storage-persistence-payload'
 import {
   RETAINED_ACTION_TRANSITIONS,
@@ -129,6 +131,20 @@ export function validateBrowse(payload: UnknownRecord): void {
 }
 
 export function validatePreview(payload: UnknownRecord): void {
+  if (payload.transition === 'deferred') {
+    exactKeys(payload, ['attempt', 'transition', 'intent', 'preview_id', 'share_instance_id', 'file_id', 'exception'],
+      [], 'preview_transition deferred payload')
+    member(payload.attempt, ['open'], 'deferred preview attempt')
+    member(payload.intent, ['automatic_photo'], 'deferred preview intent')
+    decimalUint64(payload.preview_id, 'deferred preview identity')
+    canonicalIdentity(payload.share_instance_id, 'deferred preview share instance')
+    canonicalIdentity(payload.file_id, 'deferred preview file')
+    const exception = deepFreezeJson(payload.exception) as DiagnosticExceptionProjection
+    if (!isBoundedDiagnosticExceptionProjection(exception, MAX_EXCEPTION_TEXT_BYTES)) {
+      throw new TypeError('deferred preview exception must be a bounded diagnostic snapshot')
+    }
+    return
+  }
   exactKeys(payload, ['attempt', 'transition'], [], 'preview_transition payload')
   member(payload.attempt, ['open', 'seek', 'media'], 'preview_transition attempt')
   member(payload.transition, [...ATTEMPT_TRANSITIONS, 'closed'], 'preview_transition transition')

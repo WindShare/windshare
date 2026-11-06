@@ -13,6 +13,7 @@ import {
 import type { BlockRecord, FileRevisionDescriptor } from '../../src/content/records'
 import type { RevisionReader } from '../../src/content/session-services'
 import { AutomaticPhotoDeferredError } from '../../src/preview/automatic-photo'
+import { ImagePreviewError } from '../../src/preview/image-header'
 import { VideoPreviewError, type Mp4Segment, type PreviewRangeSource } from '../../src/preview/mp4-range'
 import { ReceiveSourceInvalidatedError } from '../../src/application/receive/errors'
 import {
@@ -103,6 +104,39 @@ function runtime(bytes: Uint8Array<ArrayBuffer>, blockSize: bigint) {
     }),
   } satisfies RevisionReader
   return { broker, descriptor, lane, releases: () => releases, revisions }
+}
+
+function animatedWebp(): Uint8Array<ArrayBuffer> {
+  const bytes = new Uint8Array(30)
+  bytes.set([82, 73, 70, 70])
+  new DataView(bytes.buffer).setUint32(4, 22, true)
+  bytes.set([87, 69, 66, 80, 86, 80, 56, 88], 8)
+  new DataView(bytes.buffer).setUint32(16, 10, true)
+  bytes[20] = 0x02
+  return bytes
+}
+
+function animatedPng(): Uint8Array<ArrayBuffer> {
+  const bytes = new Uint8Array(53)
+  bytes.set([137, 80, 78, 71, 13, 10, 26, 10])
+  const view = new DataView(bytes.buffer)
+  view.setUint32(8, 13, false)
+  bytes.set([73, 72, 68, 82], 12)
+  view.setUint32(16, 64, false)
+  view.setUint32(20, 48, false)
+  view.setUint32(33, 0, false)
+  bytes.set([97, 99, 84, 76], 37)
+  view.setUint32(45, 1_000_000, false)
+  bytes.set([73, 68, 65, 84], 49)
+  return bytes
+}
+
+function truncatedJpeg(): Uint8Array<ArrayBuffer> {
+  // SOI + one EXIF segment and EOI: no frame header for the sniff to find.
+  const bytes = new Uint8Array(2 + 2 + 16 + 2)
+  bytes.set([0xff, 0xd8, 0xff, 0xe1, 0x00, 0x10], 0)
+  bytes.set([0xff, 0xd9], bytes.byteLength - 2)
+  return bytes
 }
 
 function pngFile(size: number, width: number, height: number): Uint8Array<ArrayBuffer> {
@@ -201,6 +235,56 @@ describe('v2 file preview runtime', () => {
     expect(fixture.lane.calls).toEqual([0n, 1n, 2n, 3n])
     await manual.close()
   })
+
+  it.each([
+    ['animated.webp', animatedWebp()],
+    ['animated.png', animatedPng()],
+    ['truncated.jpg', truncatedJpeg()],
+  ] as const)('defers automatic photos that fail image-format inspection (%s)', async (name, bytes) => {
+    const fixture = runtime(bytes, BigInt(bytes.byteLength))
+    await expect(FilePreview.openAutomaticPhoto(
+      fileEntry(BigInt(bytes.byteLength), name),
+      fixture.revisions, fixture.broker, new AbortController().signal,
+    )).rejects.toMatchObject({ name: 'AutomaticPhotoDeferredError', cause: expect.any(ImagePreviewError) })
+    expect(fixture.releases()).toBe(1)
+    // Manual Preview still surfaces the format failure so the user can act on it.
+    await expect(FilePreview.open(
+      fileEntry(BigInt(bytes.byteLength), name),
+      fixture.revisions, fixture.broker, new AbortController().signal,
+    )).rejects.toThrow(/Animated|ended before its frame header/i)
+    expect(fixture.releases()).toBe(2)
+  })
+
+  it('retains browser decode evidence when automatic presentation is deferred', async () => {
+    const fixture = runtime(pngFile(128, 20, 10), 64n)
+    const failure = new DOMException('The image data is invalid', 'InvalidStateError')
+    const urls = urlPorts({ decodeImage: async () => { throw failure } })
+    const entry = fileEntry(128n, 'photo.png')
+    await expect(FilePreview.openAutomaticPhoto(
+      entry, fixture.revisions, fixture.broker, new AbortController().signal, urls.ports,
+    )).rejects.toMatchObject({
+      name: 'AutomaticPhotoDeferredError',
+      cause: { name: 'ImagePreviewError', cause: failure },
+    })
+    await expect(FilePreview.open(
+      entry, fixture.revisions, fixture.broker, new AbortController().signal, urls.ports,
+    )).rejects.toMatchObject({ name: 'ImagePreviewError', cause: failure })
+    expect(fixture.releases()).toBe(2)
+    expect(urls.created).toEqual([])
+  })
+
+  it.each([new Error('range read failed'), new PreviewRuntimeError('invalid content range')])(
+    'preserves source failures during automatic presentation: %s', async (failure) => {
+      const fixture = runtime(pngFile(128, 20, 10), 64n)
+      const broker: BlockRangeReader = {
+        readRange: async function* () { yield await Promise.reject(failure) },
+      }
+      await expect(FilePreview.openAutomaticPhoto(
+        fileEntry(128n, 'photo.png'), fixture.revisions, broker, new AbortController().signal,
+      )).rejects.toBe(failure)
+      expect(fixture.releases()).toBe(1)
+    },
+  )
 
   it('never promotes an image extension to automatic MP4 decoding', async () => {
     const bytes = mp4ShapedFile(100 * 1024)

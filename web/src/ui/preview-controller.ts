@@ -15,6 +15,8 @@ import type {
   IncidentScopeOwner,
 } from '../diagnostics/incident/scope'
 import type { JoinedBrowserShare } from '../application/browser-share/gateway'
+import type { PreviewTraceEvent } from '../application/receive/observation/contracts'
+import type { DomainTraceSource } from '../diagnostics/trace/ports'
 import { EMPTY_PREVIEW, type ReceiverSnapshot } from './model'
 import {
   isAbortError,
@@ -67,6 +69,7 @@ export interface PreviewControllerHost {
   publish(snapshot: ReceiverSnapshot): void
   publicError(error: unknown): string
   readonly incidents?: PreviewIncidentPort
+  readonly trace?: DomainTraceSource<PreviewTraceEvent>
 }
 
 export class PreviewController {
@@ -359,6 +362,7 @@ export class PreviewController {
         return
       }
       if (active.intent === 'automatic-photo' && error instanceof AutomaticPhotoDeferredError) {
+        this.#traceAutomaticDeferral(joined, active, error)
         this.#exclude(active.openAttempt, 'not_user_visible')
         this.cancel()
         return
@@ -372,6 +376,21 @@ export class PreviewController {
         name: active.entry.name,
         message: this.#host.publicError(error),
       }))
+    }
+  }
+
+  #traceAutomaticDeferral(
+    joined: JoinedBrowserShare,
+    active: ScopedActivePreview,
+    error: AutomaticPhotoDeferredError,
+  ): void {
+    try {
+      this.#host.trace?.current?.({
+        name: 'preview_transition', transition: 'deferred', previewId: active.id,
+        shareInstanceId: joined.descriptor.shareInstanceId, fileId: active.entry.idText, error,
+      })
+    } catch {
+      // A diagnostic sink cannot turn optional presentation into a visible failure.
     }
   }
 
