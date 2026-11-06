@@ -23,6 +23,10 @@ type fakeService struct {
 	report                platformsetup.Report
 	operation             platformsetup.Operation
 	skipErr               error
+	// supportsSetup mirrors platformsetup.Service.SupportsSetup. The zero
+	// value means supported so existing setup tests keep printing the consent
+	// preamble unless a case opts out.
+	supportsSetup *bool
 }
 
 func (service *fakeService) Check(context.Context) platformsetup.Report {
@@ -35,6 +39,12 @@ func (service *fakeService) Setup(_ context.Context, action platformsetup.RuleAc
 	return service.operation, service.report
 }
 func (service *fakeService) Skip() error { service.skips++; return service.skipErr }
+func (service *fakeService) SupportsSetup() bool {
+	if service.supportsSetup == nil {
+		return true
+	}
+	return *service.supportsSetup
+}
 
 func TestCommandsKeepReadingPreferenceAndMutationIndependent(t *testing.T) {
 	for _, test := range []struct {

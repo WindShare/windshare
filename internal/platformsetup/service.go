@@ -103,6 +103,17 @@ func (service *Service) Check(ctx context.Context) Report {
 
 func (service *Service) Skip() error { return service.Preferences.Save(Preference{Choice: Skip}) }
 
+// SupportsSetup reports whether Setup can apply host firewall rules for this
+// installation. Non-Windows hosts return false through ErrUnsupported.
+func (service *Service) SupportsSetup() bool {
+	executable := service.Executable
+	if executable == nil {
+		executable = installationExecutable
+	}
+	_, err := executable()
+	return !errors.Is(err, ErrUnsupported)
+}
+
 // Explicit setup always inspects current executable rules, even after a failed
 // operation. A successful write records installation history, not reachability.
 func (service *Service) Setup(ctx context.Context, action RuleAction, allowElevation bool) (Operation, Report) {
