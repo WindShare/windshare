@@ -8,8 +8,6 @@ import (
 	"github.com/windshare/windshare/internal/platformsetup"
 )
 
-func boolPtr(value bool) *bool { return &value }
-
 func TestHumanFindingsOmitEmptyInterfacePrefix(t *testing.T) {
 	var human recordedLines
 	service := &fakeService{report: platformsetup.Report{
@@ -71,7 +69,7 @@ func TestSetupOmitsWindowsPreambleWhenUnsupported(t *testing.T) {
 				{Protocol: platformsetup.UDP, Reason: platformsetup.UnsupportedPlatform},
 			},
 		},
-		supportsSetup: boolPtr(false),
+		supportsSetup: false,
 	}
 	runner := Runner{Service: service, Output: &human, Interactive: func() bool { return true }}
 	if code := runner.Run(t.Context(), "setup", []string{"network"}); code != ResultFailure {
@@ -93,7 +91,7 @@ func TestSetupStillPrintsPreambleWhenSupported(t *testing.T) {
 	var human recordedLines
 	service := &fakeService{
 		operation:     platformsetup.Operation{State: platformsetup.RulesApplied},
-		supportsSetup: boolPtr(true),
+		supportsSetup: true,
 	}
 	runner := Runner{Service: service, Output: &human, Interactive: func() bool { return true }}
 	if code := runner.Run(t.Context(), "setup", []string{"network"}); code != ResultOK {
@@ -110,7 +108,7 @@ func TestSetupJSONNeverPrintsPreamble(t *testing.T) {
 	var machine bytes.Buffer
 	service := &fakeService{
 		operation:     platformsetup.Operation{State: platformsetup.RulesApplied},
-		supportsSetup: boolPtr(true),
+		supportsSetup: true,
 	}
 	runner := Runner{Service: service, Output: &human, JSONOutput: &machine, Interactive: func() bool { return true }}
 	if code := runner.Run(t.Context(), "setup", []string{"network", "--json"}); code != ResultOK {
