@@ -10,19 +10,7 @@ const DATA_CHANNEL_LABEL = 'windshare-frame-channel'
 const DATA_CHANNEL_PROTOCOL = 'windshare-v2'
 
 test('production browser adapter interoperates with the accepted Pion adapter', async ({ page, browserName }, testInfo) => {
-  const capability = await classifyNativePeerConnection(page)
-  await testInfo.attach('rtc-capability', {
-    body: JSON.stringify(capability),
-    contentType: 'application/json',
-  })
-  if (capability.rtcCapability === 'unavailable') {
-    expect(capability.pionApplicability).toBe('not-applicable')
-    return
-  }
-  expect(
-    capability.rtcCapability,
-    `native RTC API is present but its local offer probe was ${capability.rtcCapability}`,
-  ).toBe('available')
+  await requireNativeAdapter(page, testInfo)
 
   const result = await page.evaluate(async (path) => {
     const harness = await import(path) as typeof BrowserHarness
@@ -86,7 +74,7 @@ test('production browser adapter interoperates with the accepted Pion adapter', 
 })
 
 test('native DataChannel closing settles both production adapters', async ({ page }, testInfo) => {
-  if (!await nativeAdapterApplicable(page, testInfo)) return
+  await requireNativeAdapter(page, testInfo)
   const result = await page.evaluate(async (path) => {
     const harness = await import(path) as typeof BrowserHarness
     return harness.runBrowserDataChannelClose()
@@ -103,7 +91,7 @@ test('native DataChannel closing settles both production adapters', async ({ pag
 })
 
 test('native channel configuration is rejected before negotiation', async ({ page }, testInfo) => {
-  if (!await nativeAdapterApplicable(page, testInfo)) return
+  await requireNativeAdapter(page, testInfo)
   const result = await page.evaluate(async (path) => {
     const harness = await import(path) as typeof BrowserHarness
     return harness.runBrowserInvalidConfiguration()
@@ -119,7 +107,7 @@ test('native channel configuration is rejected before negotiation', async ({ pag
   expect(result.rawNegotiated).toBe(false)
 })
 
-async function nativeAdapterApplicable(page: Page, testInfo: TestInfo): Promise<boolean> {
+async function requireNativeAdapter(page: Page, testInfo: TestInfo): Promise<void> {
   const capability = await classifyNativePeerConnection(page)
   await testInfo.attach('rtc-capability', {
     body: JSON.stringify(capability),
@@ -127,11 +115,15 @@ async function nativeAdapterApplicable(page: Page, testInfo: TestInfo): Promise<
   })
   if (capability.rtcCapability === 'unavailable') {
     expect(capability.pionApplicability).toBe('not-applicable')
-    return false
   }
+  // Native interop needs an RTC implementation; an absent API is inapplicable,
+  // while an available API with a broken offer probe must still fail below.
+  test.skip(
+    capability.rtcCapability === 'unavailable',
+    'The current browser environment does not expose native WebRTC',
+  )
   expect(
     capability.rtcCapability,
     `native RTC API is present but the local offer probe classified it as ${capability.rtcCapability}`,
   ).toBe('available')
-  return true
 }
