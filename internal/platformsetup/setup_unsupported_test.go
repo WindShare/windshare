@@ -69,3 +69,22 @@ func TestSetupOnUnsupportedPlatformMatchesCheckVocabulary(t *testing.T) {
 		t.Fatalf("Startup decision=%v, want unsupported", startup.Decision)
 	}
 }
+
+func TestSupportsSetupMatchesExecutableGate(t *testing.T) {
+	t.Parallel()
+	service := &Service{
+		Preferences: FilePreferences{Path: filepath.Join(t.TempDir(), PreferenceFileName)},
+		Executable:  func() (string, error) { return "", ErrUnsupported },
+	}
+	if service.SupportsSetup() {
+		t.Fatal("unsupported executable still reported setup support")
+	}
+	service.Executable = func() (string, error) { return `C:\wind.exe`, nil }
+	if !service.SupportsSetup() {
+		t.Fatal("resolvable executable reported no setup support")
+	}
+	service.Executable = func() (string, error) { return "", errors.New("path missing") }
+	if !service.SupportsSetup() {
+		t.Fatal("non-unsupported executable errors must not look like an unsupported platform")
+	}
+}
