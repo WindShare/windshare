@@ -108,7 +108,14 @@ func (service *Service) Skip() error { return service.Preferences.Save(Preferenc
 func (service *Service) Setup(ctx context.Context, action RuleAction, allowElevation bool) (Operation, Report) {
 	executable, err := service.Executable()
 	if err != nil {
-		return Operation{State: OperationFailed, Detail: err.Error()}, service.Check(ctx)
+		// Executable() is the first platform gate. Keep its unsupported signal so
+		// JSON and human setup output match Check/Startup instead of looking like
+		// a failed rule write.
+		state := OperationFailed
+		if errors.Is(err, ErrUnsupported) {
+			state = OperationUnsupported
+		}
+		return Operation{State: state, Detail: err.Error()}, service.Check(ctx)
 	}
 	operation := service.Platform.Apply(ctx, executable, action, allowElevation)
 	var preferenceErr error
