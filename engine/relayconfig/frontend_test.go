@@ -10,7 +10,10 @@ import (
 )
 
 func TestFrontendValidationPreservesWebsiteAddress(t *testing.T) {
-	for _, raw := range []string{"https://front.example", "https://front.example/app/", "http://localhost:38384", "http://[::1]:38384"} {
+	for _, raw := range []string{
+		"https://front.example", "https://front.example/app/", "http://localhost:38384", "http://[::1]:38384",
+		"https://front.example/\u5206\u4eab", "https://front.example/my%C2%A0app", "https://front.example/app%C2%85",
+	} {
 		if err := ValidateFrontURL(raw); err != nil {
 			t.Fatalf("valid frontend %q: %v", raw, err)
 		}
@@ -41,8 +44,8 @@ func TestFrontendValidationPreservesWebsiteAddress(t *testing.T) {
 		if raw != "" {
 			encoded, _ := json.Marshal(raw)
 			input := `{"front_url":` + string(encoded) + `,"profiles":[{"url":"https://relay.example"}]}`
-			if _, err := Decode(strings.NewReader(input)); !errors.Is(err, ErrConfig) {
-				t.Fatalf("import accepted invalid frontend: %q", raw)
+			if _, err := Decode(strings.NewReader(input)); !errors.Is(err, ErrConfig) || !errors.Is(err, ErrFrontURL) {
+				t.Fatalf("import lost frontend validation cause for %q: %v", raw, err)
 			}
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -118,8 +119,10 @@ func (config Config) validateFields() error {
 	if err := config.TURNSettings().Validate(); err != nil {
 		return errors.Join(ErrConfig, err)
 	}
-	if config.FrontURL != "" && ValidateFrontURL(config.FrontURL) != nil {
-		return ErrConfig
+	if config.FrontURL != "" {
+		if err := ValidateFrontURL(config.FrontURL); err != nil {
+			return fmt.Errorf("%w: %w", ErrConfig, err)
+		}
 	}
 	if config.Profiles == nil || len(config.Profiles) > MaximumProfiles ||
 		len(config.ActiveRelays) > relayset.MaximumEndpoints {

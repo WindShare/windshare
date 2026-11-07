@@ -48,7 +48,11 @@ func (runner Runner) Run(ctx context.Context, args []string) Result {
 		return ResultOK
 	}
 	if err != nil {
-		runner.writeLine("%s", Usage)
+		if errors.Is(err, relayconfig.ErrFrontURL) {
+			runner.writeLine("config import: %s", err)
+		} else {
+			runner.writeLine("%s", Usage)
+		}
 		return ResultUsage
 	}
 	traceHandler := slog.DiscardHandler
@@ -69,6 +73,11 @@ func (runner Runner) Run(ctx context.Context, args []string) Result {
 	}
 	config, err := runner.read(request.source)
 	if err != nil {
+		if errors.Is(err, relayconfig.ErrFrontURL) {
+			log.Info("failed", "stage", "validate", "reason", "invalid_frontend", "error", err)
+			runner.writeLine("config import: %s", err)
+			return ResultUsage
+		}
 		if errors.Is(err, relayconfig.ErrConfig) {
 			log.Info("failed", "stage", "validate", "reason", "invalid_configuration")
 			runner.writeLine("config import: invalid sharing configuration; expected at most %d profiles, active_relays selected from those profiles, and an optional HTTP(S) front_url", relayconfig.MaximumProfiles)
@@ -151,13 +160,7 @@ func parse(args []string) (importRequest, error) {
 	flags.SetOutput(io.Discard)
 	flags.BoolVar(&request.verbose, "v", false, "emit structured import diagnostics")
 	flags.BoolVar(&request.verbose, "verbose", false, "emit structured import diagnostics")
-	flags.Func("front-url", "save this frontend base URL for future shares", func(value string) error {
-		if err := relayconfig.ValidateFrontURL(value); err != nil {
-			return err
-		}
-		request.frontURL = value
-		return nil
-	})
+	flags.StringVar(&request.frontURL, "front-url", "", "save this frontend base URL for future shares")
 	args = args[1:]
 	var paths []string
 	for {
@@ -173,6 +176,17 @@ func parse(args []string) (importRequest, error) {
 	}
 	if len(paths) != 1 || paths[0] == "" {
 		return importRequest{}, errors.New("expected one input file or stdin")
+	}
+	// Validate after flag parsing so flag.Func cannot flatten the error category
+	// into a message that also echoes the rejected value. Omission stays valid.
+	var frontErr error
+	flags.Visit(func(option *flag.Flag) {
+		if option.Name == "front-url" {
+			frontErr = relayconfig.ValidateFrontURL(request.frontURL)
+		}
+	})
+	if frontErr != nil {
+		return importRequest{}, frontErr
 	}
 	request.source = paths[0]
 	return request, nil
