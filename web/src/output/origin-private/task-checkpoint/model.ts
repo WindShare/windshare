@@ -102,7 +102,9 @@ export function snapshotTaskCheckpoint(value: TaskCheckpoint): TaskCheckpoint {
     ...value,
     ...receiveContentWarningFields(value.contentWarning),
     object: Object.freeze({ ...value.object }),
-    selectedPaths: Object.freeze(value.selectedPaths.map(snapshotCatalogPath)),
+    // An empty relative path selects the shared root; non-root segments keep the frozen policy.
+    selectedPaths: Object.freeze(value.selectedPaths.map(path =>
+      Array.isArray(path) && path.length === 0 ? Object.freeze([]) : snapshotCatalogPath(path))),
     ...(value.finalization === undefined ? {} : { finalization: Object.freeze({ ...value.finalization }) }),
   })
 }

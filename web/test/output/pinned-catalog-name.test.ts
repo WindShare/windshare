@@ -165,6 +165,8 @@ describe('frozen catalog names throughout output ownership', () => {
 
   it('retains root paths, rejects malformed UTF-8 and leaves generic NFC strict', () => {
     expect(decodeMaterializationPath(canonicalMaterializationPath([]))).toEqual([])
+    const rootSelection = { ...zipCheckpoint(NAME), selectedPaths: [[]] }
+    expect(JSON.parse(new TextDecoder().decode(encodeTaskCheckpoint(rootSelection))).selectedPaths).toEqual([[]])
     const malformed = concatCanonicalBytes([canonicalU64(1n), canonicalFrame(Uint8Array.of(0xed, 0xa0, 0x80))])
     expect(() => decodeMaterializationPath(malformed)).toThrow()
     expect(() => canonicalText('e\u0301')).toThrow()
