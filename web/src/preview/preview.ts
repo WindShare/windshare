@@ -20,6 +20,7 @@ import {
   type PreviewRangeSource,
 } from './mp4-range'
 
+import { unsupportedStillImageFtypBrand } from './ftyp-brand'
 import { isAutomaticPhotoCandidate, requireAutomaticPhotoHeader, AutomaticPhotoDeferredError } from './automatic-photo'
 
 // Displayed dimensions, after any orientation metadata, matching the preview <img>.
@@ -219,7 +220,9 @@ export class FilePreview {
       return
     }
     if (!looksLikeMp4(header)) throw new PreviewRuntimeError('File is not a supported preview image or MP4 video')
-    const video = await this.#openVideo(this.#source, signal)
+    const video = await this.#openVideo(this.#source, signal).catch((error: unknown) => {
+      throw stillImageFailure(error, header) ?? error
+    })
     if (!this.#supportsVideo(video.metadata.mimeType)) {
       throw new PreviewRuntimeError('Browser does not support this bounded MP4 video codec')
     }
@@ -361,6 +364,18 @@ function matchesOrientedHeader(decoded: ImageDecodeResult, header: ImageHeader):
 
 function looksLikeMp4(bytes: Uint8Array): boolean {
   return bytes.byteLength >= 12 && String.fromCharCode(...bytes.subarray(4, 8)) === 'ftyp'
+}
+
+// HEIC/AVIF still images are ISO BMFF files too, so they reach the MP4 demuxer
+// and fail with a video-metadata error. Only after the demuxer proves there is no
+// movie box at all, and the ftyp unambiguously names a still image, is that
+// failure reported as an unsupported image instead. Every other failure
+// (transport, abort, codec policy, limits, invariants) passes through unchanged,
+// and a file the demuxer accepts is never second-guessed by its brands.
+function stillImageFailure(error: unknown, header: Uint8Array): ImagePreviewError | undefined {
+  if (!(error instanceof VideoPreviewError) || error.failure !== 'no-movie-box') return undefined
+  const label = unsupportedStillImageFtypBrand(header)
+  return label === undefined ? undefined : new ImagePreviewError(`${label} preview is not supported`, { cause: error })
 }
 
 function requireNextSlice(slice: BlockSlice, expectedOffset: bigint): void {
