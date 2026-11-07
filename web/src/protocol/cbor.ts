@@ -1,5 +1,6 @@
 import { decode, encode, rfc8949EncodeOptions, type DecodeOptions } from 'cborg'
 
+import { normalizeNFC15 } from '../unicode/unicode-normalization'
 import { isWellFormedUnicode } from './text'
 import { validateCanonicalEncoding, MAXIMUM_CBOR_DEPTH, MAXIMUM_CBOR_ARRAY_ITEMS, MAXIMUM_CBOR_MAP_FIELDS } from './cbor-canonical'
 export { MAXIMUM_CBOR_DEPTH, MAXIMUM_CBOR_ARRAY_ITEMS, MAXIMUM_CBOR_MAP_FIELDS } from './cbor-canonical'
@@ -117,8 +118,7 @@ export function requireSigned(value: unknown, label: string): bigint {
 export function requireText(value: unknown, label: string): string {
   if (
     typeof value !== 'string' ||
-    !isWellFormedUnicode(value) ||
-    value.normalize('NFC') !== value
+    !isPinnedNfcText(value)
   ) {
     throw new CborError(`${label} must be well-formed NFC text`)
   }
@@ -162,9 +162,16 @@ function validateNumber(value: number): void {
 }
 
 function validateText(value: string): void {
-  if (!isWellFormedUnicode(value) || value.normalize('NFC') !== value) {
+  if (!isPinnedNfcText(value)) {
     throw new CborError('CBOR text must be well-formed NFC')
   }
+}
+
+// Peers pin NFC to the Unicode 15.0.0 path policy. The runtime's ICU tables
+// advance with the browser, so String.prototype.normalize can compose scalars
+// that were unassigned in Unicode 15 and reject names the sender canonicalized.
+function isPinnedNfcText(value: string): boolean {
+  return isWellFormedUnicode(value) && normalizeNFC15(value) === value
 }
 
 function validateArray(value: readonly unknown[], depth: number): void {
