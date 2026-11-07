@@ -1,3 +1,4 @@
+import { encodeCatalogName } from '../../../catalog/path-policy'
 import { encodeBase64Url } from '../../../crypto/bytes'
 import type { ArtifactChoiceID } from '../../../transfer/intent'
 import { requireDirectZipFsaOffset } from '../format'
@@ -488,10 +489,8 @@ export async function createDirectZipBootstrapCandidateV1(
   const choiceIdentityCanonicalBytes = snapshotCanonicalBytes(input.choiceIdentityCanonicalBytes)
   const choiceId = snapshotIdentity(input.choiceId, 32, 'artifact choice ID') as ArtifactChoiceID
   const preClickRanking = snapshotRanking(input.preClickRanking, choiceId)
-  const stablePhysicalName = snapshotCanonicalText(
-    input.stablePhysicalName,
-    'stable physical name',
-  )
+  const stablePhysicalNameBytes = encodeCatalogName(input.stablePhysicalName)
+  const stablePhysicalName = input.stablePhysicalName
   const ownershipNonce = snapshotIdentity(input.ownershipNonce, 32, 'ownership nonce')
   const targetBindingDigest = snapshotDigest(input.targetBindingDigest, 'target binding digest')
   const policies = await snapshotPolicies(input.policies)
@@ -506,7 +505,7 @@ export async function createDirectZipBootstrapCandidateV1(
     canonicalFrame(choiceIdentityCanonicalBytes),
     identityFrame(choiceId, 32, 'artifact choice ID'),
     canonicalFrame(canonicalRanking(preClickRanking)),
-    canonicalFrame(canonicalText(stablePhysicalName)),
+    canonicalFrame(stablePhysicalNameBytes),
     identityFrame(ownershipNonce, 32, 'ownership nonce'),
     digestFrame(targetBindingDigest, 'target binding digest'),
     ...policyFrames(policies),

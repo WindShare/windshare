@@ -37,6 +37,29 @@ export function decodeCanonicalCbor(
   maximumBytes: number,
   label: string,
 ): unknown {
+  return decodeCbor(encoded, maximumBytes, label, validateText)
+}
+
+/**
+ * For schemas with field-owned text policies. The schema must validate every field,
+ * including every string: this checks deterministic wire structure and Unicode,
+ * but deliberately leaves NFC to the schema. No unvalidated value is returned.
+ */
+export function decodeCanonicalCborWithSchema<T>(
+  encoded: Uint8Array,
+  maximumBytes: number,
+  label: string,
+  schema: (value: unknown) => T,
+): T {
+  return schema(decodeCbor(encoded, maximumBytes, label, validateUnicodeText))
+}
+
+function decodeCbor(
+  encoded: Uint8Array,
+  maximumBytes: number,
+  label: string,
+  textValidator: (value: string) => void,
+): unknown {
   if (!Number.isSafeInteger(maximumBytes) || maximumBytes <= 0) {
     throw new TypeError('CBOR byte limit must be a positive safe integer')
   }
@@ -50,7 +73,7 @@ export function decodeCanonicalCbor(
   } catch (cause) {
     throw new CborError(`${label} is not strict CBOR`, { cause })
   }
-  validateValue(decoded, 0)
+  validateValue(decoded, 0, textValidator)
   return decoded
 }
 
@@ -132,7 +155,7 @@ export function requireBoolean(value: unknown, label: string): boolean {
   return value
 }
 
-function validateValue(value: unknown, depth: number): void {
+function validateValue(value: unknown, depth: number, textValidator = validateText): void {
   if (depth > MAXIMUM_CBOR_DEPTH) {
     throw new CborError('CBOR nesting exceeds the protocol limit')
   }
@@ -145,9 +168,9 @@ function validateValue(value: unknown, depth: number): void {
   }
   if (typeof value === 'number') return validateNumber(value)
   if (typeof value === 'bigint') return
-  if (typeof value === 'string') return validateText(value)
-  if (Array.isArray(value)) return validateArray(value, depth)
-  if (value instanceof Map) return validateMap(value, depth)
+  if (typeof value === 'string') return textValidator(value)
+  if (Array.isArray(value)) return validateArray(value, depth, textValidator)
+  if (value instanceof Map) return validateMap(value, depth, textValidator)
   throw new CborError('CBOR contains an unsupported semantic value')
 }
 
@@ -167,14 +190,18 @@ function validateText(value: string): void {
   }
 }
 
-function validateArray(value: readonly unknown[], depth: number): void {
+function validateUnicodeText(value: string): void {
+  if (!isWellFormedUnicode(value)) throw new CborError('CBOR text must be well-formed Unicode')
+}
+
+function validateArray(value: readonly unknown[], depth: number, textValidator: (value: string) => void): void {
   if (value.length > MAXIMUM_CBOR_ARRAY_ITEMS) {
     throw new CborError('CBOR array exceeds the protocol limit')
   }
-  for (const item of value) validateValue(item, depth + 1)
+  for (const item of value) validateValue(item, depth + 1, textValidator)
 }
 
-function validateMap(value: ReadonlyMap<unknown, unknown>, depth: number): void {
+function validateMap(value: ReadonlyMap<unknown, unknown>, depth: number, textValidator: (value: string) => void): void {
   if (value.size > MAXIMUM_CBOR_MAP_FIELDS) {
     throw new CborError('CBOR map exceeds the protocol limit')
   }
@@ -182,6 +209,6 @@ function validateMap(value: ReadonlyMap<unknown, unknown>, depth: number): void 
     if (typeof key !== 'number' || !Number.isSafeInteger(key) || key < 0) {
       throw new CborError('CBOR schema keys must be nonnegative integers')
     }
-    validateValue(item, depth + 1)
+    validateValue(item, depth + 1, textValidator)
   }
 }

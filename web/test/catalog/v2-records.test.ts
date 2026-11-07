@@ -1,5 +1,6 @@
 import { evidenceFor } from '../../src/diagnostics/failure/evidence'
 import { describe, expect, it } from 'vitest'
+import { encode, rfc8949EncodeOptions } from 'cborg'
 
 import { decodeCatalogPage, decodeDirectoryFailure, decodeShareDescriptor, PATH_POLICY } from '../../src/catalog/records'
 import { encodeCanonicalCbor } from '../../src/protocol/cbor'
@@ -21,6 +22,19 @@ describe('v2 catalog text boundaries', () => {
     const decoded = await decodeCatalogPage(page('a.txt'), senderObject)
     expect(decoded.entries[0]?.name).toBe('a.txt')
     await expect(decodeCatalogPage(page('\ufeffa.txt'), senderObject)).rejects.toThrow(/safe path segment/)
+  })
+
+  it('accepts a catalog entry name that is NFC under the pinned Unicode 15 path policy', async () => {
+    // Go's catalog canonicalizer preserves these post-Unicode-15 Kirat Rai scalars;
+    // newer browser ICU data would compose them to U+16D69.
+    const name = '\u{16D63}\u{16D67}.txt'
+    const page = encode(new Map<number, unknown>([
+      [0, 1], [1, identity(1)], [2, identity(2)], [3, identity(3)], [4, 0],
+      [5, true], [6, new Uint8Array(32)],
+      [7, [[2, identity(4), name, 12, null, 0, 0]]], [8, 0],
+    ]), rfc8949EncodeOptions)
+    const decoded = await decodeCatalogPage(page, Uint8Array.of(1))
+    expect(decoded.entries[0]?.name).toBe(name)
   })
 
   it('rejects a leading U+FEFF in the descriptor path policy', () => {

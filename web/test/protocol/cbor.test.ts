@@ -110,3 +110,19 @@ describe('canonical CBOR wire validation', () => {
     expect(encode(open(source), rfc8949EncodeOptions)).toEqual(source)
   })
 })
+
+describe('generic CBOR NFC remains runtime-based', () => {
+  const text = '\u{16D63}\u{16D67}'
+
+  it('does not apply the pinned catalog path policy to generic text', () => {
+    const actions = [
+      () => requireText(text, 'generic text'),
+      () => encodeCanonicalCbor([text]),
+      () => decodeCanonicalCbor(encode([text], rfc8949EncodeOptions), 1024, 'generic text'),
+    ]
+    for (const action of actions) {
+      if (text.normalize('NFC') === text) expect(action).not.toThrow()
+      else expect(action).toThrow(/NFC/)
+    }
+  })
+})
