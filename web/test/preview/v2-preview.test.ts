@@ -722,4 +722,44 @@ describe('v2 file preview ftyp classification', () => {
     )).rejects.toBe(failure)
     expect(fixture.releases()).toBe(1)
   })
+
+  const withFreeBoxes = (head: Uint8Array, at: number, count: number) => {
+    const out = new Uint8Array(head.byteLength + count * 8)
+    out.set(head.subarray(0, at))
+    const view = new DataView(out.buffer)
+    for (let box = 0; box < count; box++) {
+      view.setUint32(at + box * 8, 8, false)
+      out.set([102, 114, 101, 101], at + box * 8 + 4)
+    }
+    out.set(head.subarray(at), at + count * 8)
+    return out
+  }
+  const stillFtyp = () => { const bytes = ftypFile('heic', ['mif1', 'heic']); return bytes.subarray(0, 24) }
+
+  it('keeps the untagged bounded-scan error when a moov lies past the 64-box limit', async () => {
+    const source = rebranded('heic')
+    const ftypEnd = new DataView(source.buffer).getUint32(0, false)
+    const bytes = withFreeBoxes(source, ftypEnd, 64)
+    const view = new DataView(bytes.buffer)
+    for (let at = ftypEnd + 512; at + 16 <= bytes.byteLength; at++) {
+      if (bytes[at] !== 115 || bytes[at + 1] !== 116 || bytes[at + 2] !== 99 || bytes[at + 3] !== 111) continue
+      for (let entry = 0; entry < view.getUint32(at + 8, false); entry++) {
+        view.setUint32(at + 12 + entry * 4, view.getUint32(at + 12 + entry * 4, false) + 512, false)
+      }
+    }
+    const outcome = await openReal(bytes, 'clip.mp4')
+    expect(outcome).toMatchObject({ name: 'VideoPreviewError', message: 'MP4 metadata was not found within the bounded box scan' })
+    expect((outcome as VideoPreviewError).failure).toBeUndefined()
+  })
+
+  it('tags a scan that reaches EOF exactly at the 64-box limit without a moov', async () => {
+    const outcome = await openReal(withFreeBoxes(stillFtyp(), 24, 63), 'photo.heic')
+    expect(outcome).toMatchObject({ name: 'ImagePreviewError', message: 'HEIC/AVIF preview is not supported' })
+  })
+
+  it('does not tag a scan that stops at the box limit before EOF', async () => {
+    const outcome = await openReal(withFreeBoxes(stillFtyp(), 24, 64), 'photo.heic')
+    expect(outcome).toMatchObject({ name: 'VideoPreviewError', message: 'MP4 metadata was not found within the bounded box scan' })
+    expect((outcome as VideoPreviewError).failure).toBeUndefined()
+  })
 })
