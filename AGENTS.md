@@ -9,7 +9,7 @@
 - Don't name your package util, common, or misc. Packages should differ by what they provide, not what they contain.
 - **Prefer Deep Modules**: Avoid coupling all functionality at one layer; use meaningful module boundaries to contain complexity. Simply put, each folder should not contain more than 20 code files (excluding test files), otherwise the module is too large.
 - **UI & Visual Craft**: Benchmark all interfaces against Linear, Vercel, and Stripe—deliberately engineering typographic hierarchy, spatial rhythm, subtle surface/border contrast, fluid micro-interactions, and complete state coverage (hover/focus/loading/empty/error), while strictly avoiding generic AI clichés (neon gradients, heavy drop shadows, or unstyled defaults).
-- **Self-explanatory UI**: Omit all secondary descriptions and helper text. Let primary labels and layout speak for themselves.
+- **Self-explanatory UI**: Omit unnecessary secondary descriptions and helper text. Let primary labels and layout speak for themselves.
 - **Semantic Precision**: Avoid ambiguous or overloaded fields.
 - **Concise User-Facing Docs**: Keep externally maintained docs (README, docs/) concise and easy to follow; nobody reads verbose documentation.
 
