@@ -16,6 +16,7 @@ import {
 import type { Suite02CapabilityKey } from '../crypto/suite02-link'
 import {
   decodeCanonicalCbor,
+  decodeCanonicalCborWithSchema,
   requireArray,
   requireBoolean,
   requireBytes,
@@ -280,8 +281,21 @@ export async function decodeCatalogPage(
   plaintext: Uint8Array,
   senderObject: Uint8Array,
 ): Promise<CatalogPage> {
+  const page = decodeCanonicalCborWithSchema(
+    plaintext, CATALOG_PAGE_OBJECT_BYTES, 'catalog page', decodeCatalogPageFields,
+  )
+  return Object.freeze({
+    ...page,
+    objectCommitment: await sha256(senderObject),
+    senderObjectBytes: senderObject.byteLength,
+  })
+}
+
+// Only entry names use the frozen path policy. Every other field is non-text;
+// descriptor policy strings and session/control text keep generic CBOR NFC.
+function decodeCatalogPageFields(value: unknown): Omit<CatalogPage, 'objectCommitment' | 'senderObjectBytes'> {
   const fields = requireNumericMap(
-    decodeCanonicalCbor(plaintext, CATALOG_PAGE_OBJECT_BYTES, 'catalog page'),
+    value,
     [0, 1, 2, 3, 4, 5, 6, 7, 8],
     'catalog page',
   )
@@ -301,7 +315,7 @@ export async function decodeCatalogPage(
   if ((!terminal && omittedCount !== 0n) || omittedCount > BigInt(CATALOG_DIRECTORY_ENTRIES)) {
     throw catalogFailure(new CborError('Catalog omitted count is inconsistent'), { invariant: 'omitted-count', terminal, maximum: CATALOG_DIRECTORY_ENTRIES, actual: String(omittedCount) })
   }
-  return Object.freeze({
+  return {
     shareInstance,
     directoryId,
     directoryIdText: encodeBase64Url(directoryId),
@@ -312,9 +326,7 @@ export async function decodeCatalogPage(
     previousCommitment,
     entries: Object.freeze(entries),
     omittedCount,
-    objectCommitment: await sha256(senderObject),
-    senderObjectBytes: senderObject.byteLength,
-  })
+  }
 }
 
 export function decodeDirectoryFailure(plaintext: Uint8Array): DirectoryFailure {
@@ -367,7 +379,7 @@ function decodeCatalogEntry(value: unknown): CatalogEntry {
   if (fields.length !== 7) throw catalogFailure(new CborError('Catalog entry has the wrong field count'), { invariant: 'entry-fields', expected: 7, actual: fields.length })
   const kind = requireUnsigned(fields[0], 'catalog entry kind')
   const id = requireBytes(fields[1], 16, 'catalog entry ID', true)
-  const name = requireCatalogName(requireText(fields[2], 'catalog entry name'))
+  const name = requireCatalogName(fields[2])
   const modifiedTime = decodeModifiedTime(fields[4], fields[5], fields[6])
   if (kind === 1n) {
     if (fields[3] !== null) throw catalogFailure(new CborError('Directory entry carries a file size'), { invariant: 'directory-size', expected: null, actual: String(fields[3]), nodeId: encodeBase64Url(id) })
@@ -427,9 +439,9 @@ function decodeModifiedTime(
   })
 }
 
-function requireCatalogName(name: string): string {
-  if (!isCatalogName(name)) {
-    throw catalogFailure(new CborError('Catalog entry name is not a safe path segment'), { invariant: 'safe-path-segment', actual: name })
+function requireCatalogName(name: unknown): string {
+  if (typeof name !== 'string' || !isCatalogName(name)) {
+    throw catalogFailure(new CborError('Catalog entry name is not a safe path segment'), { invariant: 'safe-path-segment', actual: String(name) })
   }
   return name
 }
