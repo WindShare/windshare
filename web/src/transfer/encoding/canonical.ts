@@ -114,7 +114,8 @@ export function canonicalPath(path: readonly string[]): CanonicalBytes {
   const snapshot = snapshotCatalogPath(path)
   return concatCanonicalBytes([
     canonicalU64(BigInt(snapshot.length)),
-    ...snapshot.map((segment) => canonicalFrame(canonicalText(segment))),
+    // The path policy already validated these names; runtime NFC can disagree with it.
+    ...snapshot.map((segment) => canonicalFrame(TEXT_ENCODER.encode(segment))),
   ])
 }
 

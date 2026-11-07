@@ -1,3 +1,4 @@
+import { encodeCatalogName } from '../../catalog/path-policy'
 import { BROWSER_HANDOFF_OBJECT_URL_LEASE_MILLISECONDS } from '../../transfer/intent'
 import {
   canonicalBoolean,
@@ -375,14 +376,13 @@ export async function createHandoffReceipt(input: {
     'publication attempt ID',
   )
   const packagedArtifactDigest = digest(input.packagedArtifactDigest, 'package digest')
-  const suggestedName = new TextDecoder(undefined, { fatal: true }).decode(
-    canonicalText(input.suggestedName),
-  )
+  const suggestedNameBytes = encodeCatalogName(input.suggestedName)
+  const suggestedName = input.suggestedName
   const urlLeaseEndsAt = unixMilliseconds(input.urlLeaseEndsAt, 'URL lease end')
   const completed = await completeReceipt(identity, RECEIPT_HANDOFF, [
     canonicalFrame(canonicalIdentity(publicationAttemptId, 16, 'publication attempt ID')),
     canonicalFrame(canonicalIdentity(packagedArtifactDigest, 32, 'package digest')),
-    canonicalFrame(canonicalText(suggestedName)),
+    canonicalFrame(suggestedNameBytes),
     canonicalFrame(canonicalU64(BROWSER_HANDOFF_OBJECT_URL_LEASE_MILLISECONDS)),
     canonicalFrame(canonicalUnixMilliseconds(urlLeaseEndsAt)),
     canonicalFrame(canonicalBoolean(true)),

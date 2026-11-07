@@ -14,7 +14,7 @@ import {
 } from '../../src/crypto/sender-object'
 import { deriveSuite02CatalogKey } from '../../src/crypto/suite02-key-derivation'
 import { defaultCryptoRuntime } from '../../src/crypto/webcrypto'
-import { encodeCanonicalCbor } from '../../src/protocol/cbor'
+import { encode, rfc8949EncodeOptions } from 'cborg'
 
 const IDENTITY_BYTES = 16
 const FILE_ENTRY_KIND = 2n
@@ -82,7 +82,8 @@ export async function createSignedCatalogFixture(): Promise<SignedCatalogFixture
     readSecret,
     sealPage: async (input: SignedCatalogPageInput): Promise<SealedCatalogPage> => {
       if (closed) throw new Error('Signed catalog fixture is closed')
-      const plaintext = encodeCanonicalCbor(new Map<number, unknown>([
+      // The Go catalog codec encodes schema-validated names, not generic session text.
+      const plaintext = encode(new Map<number, unknown>([
         [0, 1n],
         [1, shareInstance],
         [2, input.directoryId],
@@ -92,7 +93,7 @@ export async function createSignedCatalogFixture(): Promise<SignedCatalogFixture
         [6, input.previousCommitment],
         [7, input.entries.map(catalogEntryRecord)],
         [8, 0n],
-      ]))
+      ]), rfc8949EncodeOptions)
       const binding = createCatalogPageObjectBinding(shareInstance, input.directoryId, input.pageIndex)
       const header = new Uint8Array(SENDER_OBJECT_HEADER_BYTES)
       header[0] = SENDER_OBJECT_WIRE_VERSION
