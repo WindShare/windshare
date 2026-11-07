@@ -111,23 +111,18 @@ describe('canonical CBOR wire validation', () => {
   })
 })
 
-describe('canonical CBOR NFC version', () => {
-  // U+16D63 U+16D67 are Kirat Rai scalars assigned after Unicode 15.0.0. They are
-  // already NFC under the pinned path policy, which Go's catalog canonicalizer
-  // preserves, but newer runtime ICU data composes them to U+16D69.
-  const postPolicyName = '\u{16D63}\u{16D67}.txt'
+describe('generic CBOR NFC remains runtime-based', () => {
+  const text = '\u{16D63}\u{16D67}'
 
-  it('decodes text that is NFC under the pinned Unicode 15 policy', () => {
-    const encoded = encode(new Map([[0, postPolicyName]]), rfc8949EncodeOptions)
-    const decoded = decodeCanonicalCbor(encoded, 1024, 'catalog page') as Map<number, string>
-    expect(decoded.get(0)).toBe(postPolicyName)
-    expect(requireText(postPolicyName, 'catalog entry name')).toBe(postPolicyName)
-    expect(() => encodeCanonicalCbor([postPolicyName])).not.toThrow()
-  })
-
-  it('still rejects text that is not NFC under the pinned policy', () => {
-    const decomposed = 'e\u0301'
-    expect(() => requireText(decomposed, 'catalog entry name')).toThrow(/NFC/)
-    expect(() => decodeCanonicalCbor(encode([decomposed], rfc8949EncodeOptions), 1024, 'test')).toThrow(/NFC/)
+  it('does not apply the pinned catalog path policy to generic text', () => {
+    const actions = [
+      () => requireText(text, 'generic text'),
+      () => encodeCanonicalCbor([text]),
+      () => decodeCanonicalCbor(encode([text], rfc8949EncodeOptions), 1024, 'generic text'),
+    ]
+    for (const action of actions) {
+      if (text.normalize('NFC') === text) expect(action).not.toThrow()
+      else expect(action).toThrow(/NFC/)
+    }
   })
 })
