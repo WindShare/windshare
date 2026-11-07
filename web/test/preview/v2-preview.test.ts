@@ -189,6 +189,19 @@ function mp4ShapedFile(size: number): Uint8Array<ArrayBuffer> {
   return bytes
 }
 
+function ftypFile(major: string, compatible: readonly string[] = [], size = 64): Uint8Array<ArrayBuffer> {
+  const boxSize = 16 + compatible.length * 4
+  const bytes = new Uint8Array(Math.max(size, boxSize))
+  new DataView(bytes.buffer).setUint32(0, boxSize, false)
+  bytes.set([102, 116, 121, 112], 4)
+  bytes.set([...major.padEnd(4, ' ')].slice(0, 4).map((c) => c.charCodeAt(0)), 8)
+  // bytes 12..15 remain minor_version 0.
+  compatible.forEach((brand, index) => {
+    bytes.set([...brand.padEnd(4, ' ')].slice(0, 4).map((c) => c.charCodeAt(0)), 16 + index * 4)
+  })
+  return bytes
+}
+
 function urlPorts(extra: PreviewPorts = {}) {
   const created: Blob[] = []
   const revoked: string[] = []
@@ -296,6 +309,40 @@ describe('v2 file preview runtime', () => {
     )).rejects.toThrow('Use Preview')
     expect(openVideo).not.toHaveBeenCalled()
     expect(fixture.lane.calls).toEqual([0n])
+    expect(fixture.releases()).toBe(1)
+  })
+
+  it.each([
+    ['photo.heic', 'heic', []],
+    ['photo.avif', 'avif', []],
+    ['photo.heif', 'mif1', ['heic', 'miaf']],
+    ['photo.jxl', 'jxl ', []],
+  ] as const)('rejects %s still-image ftyp before the MP4 pipeline', async (name, major, compatible) => {
+    const bytes = ftypFile(major, compatible)
+    const fixture = runtime(bytes, BigInt(bytes.byteLength))
+    const openVideo = vi.fn()
+    await expect(FilePreview.open(
+      fileEntry(BigInt(bytes.byteLength), name),
+      fixture.revisions, fixture.broker, new AbortController().signal, { openVideo },
+    )).rejects.toMatchObject({
+      name: 'ImagePreviewError',
+      message: expect.stringMatching(/HEIC\/AVIF|JPEG XL/),
+    })
+    expect(openVideo).not.toHaveBeenCalled()
+    expect(fixture.releases()).toBe(1)
+  })
+
+  it('still opens ordinary MP4 ftyp brands through the video pipeline', async () => {
+    const bytes = ftypFile('isom', ['isom', 'mp41'])
+    const fixture = runtime(bytes, BigInt(bytes.byteLength))
+    const openVideo = vi.fn(async () => {
+      throw new VideoPreviewError('MP4 metadata was not found within the bounded box scan')
+    })
+    await expect(FilePreview.open(
+      fileEntry(BigInt(bytes.byteLength), 'clip.mp4'),
+      fixture.revisions, fixture.broker, new AbortController().signal, { openVideo },
+    )).rejects.toBeInstanceOf(VideoPreviewError)
+    expect(openVideo).toHaveBeenCalledOnce()
     expect(fixture.releases()).toBe(1)
   })
 
