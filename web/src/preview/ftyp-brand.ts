@@ -1,6 +1,11 @@
 // Classifies a sniffed ISO BMFF ftyp box as a still HEIF/AVIF image only when
-// that is unambiguous; otherwise returns undefined and the caller keeps the
-// legacy MP4 path. No video-brand list is kept: unknown brands decline.
+// that is unambiguous; otherwise returns undefined. FilePreview consults it only
+// after the MP4 demuxer found no movie box, to word that failure as an
+// unsupported image; it never decides whether a file is played. No video-brand
+// list is kept: unknown brands decline.
+// Brand sources: ISO/IEC 23008-12 (HEIF: mif1, mif2, heic, heix, heim, msf1,
+// heis, hevs), ISO/IEC 23000-22 (MIAF: miaf, MiHE/MiHA/MiHB/MiPr/MiAC/MiCm
+// profile brands) and the AV1 Image File Format spec (avif, avis, MA1A, MA1B).
 //
 // Reject only when ALL of these hold:
 // - the major brand is a still-image brand (ISO/IEC 23008-12 HEIF, MIAF, AVIF);

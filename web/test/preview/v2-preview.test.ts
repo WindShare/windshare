@@ -314,39 +314,6 @@ describe('v2 file preview runtime', () => {
     expect(fixture.releases()).toBe(1)
   })
 
-  it.each([
-    ['photo.heic', 'heic', []],
-    ['photo.avif', 'avif', []],
-    ['photo.heif', 'mif1', ['heic', 'miaf']],
-  ] as const)('rejects %s still-image ftyp before the MP4 pipeline', async (name, major, compatible) => {
-    const bytes = ftypFile(major, compatible)
-    const fixture = runtime(bytes, BigInt(bytes.byteLength))
-    const openVideo = vi.fn()
-    await expect(FilePreview.open(
-      fileEntry(BigInt(bytes.byteLength), name),
-      fixture.revisions, fixture.broker, new AbortController().signal, { openVideo },
-    )).rejects.toMatchObject({
-      name: 'ImagePreviewError',
-      message: expect.stringMatching(/HEIC\/AVIF/),
-    })
-    expect(openVideo).not.toHaveBeenCalled()
-    expect(fixture.releases()).toBe(1)
-  })
-
-  it('still opens ordinary MP4 ftyp brands through the video pipeline', async () => {
-    const bytes = ftypFile('isom', ['isom', 'mp41'])
-    const fixture = runtime(bytes, BigInt(bytes.byteLength))
-    const openVideo = vi.fn(async () => {
-      throw new VideoPreviewError('MP4 metadata was not found within the bounded box scan')
-    })
-    await expect(FilePreview.open(
-      fileEntry(BigInt(bytes.byteLength), 'clip.mp4'),
-      fixture.revisions, fixture.broker, new AbortController().signal, { openVideo },
-    )).rejects.toBeInstanceOf(VideoPreviewError)
-    expect(openVideo).toHaveBeenCalledOnce()
-    expect(fixture.releases()).toBe(1)
-  })
-
   it('aborts speculative decoding without publishing or leaking an object URL', async () => {
     const bytes = pngFile(128, 20, 10)
     const fixture = runtime(bytes, 64n)
@@ -619,34 +586,58 @@ describe('v2 file preview ftyp classification', () => {
     bytes.set(trailing, boxSize)
     return bytes
   }
-  const openWithStubVideo = async (bytes: Uint8Array<ArrayBuffer>, name: string) => {
+  // Real Mp4RangePreview parser and segment generator; only the browser codec
+  // check and object-URL ports are controlled for Node.
+  const openReal = async (bytes: Uint8Array<ArrayBuffer>, name: string) => {
     const fixture = runtime(bytes, BigInt(bytes.byteLength))
-    const openVideo = vi.fn(async () => {
-      throw new VideoPreviewError('stub video pipeline')
-    })
-    const result = FilePreview.open(
+    const urls = urlPorts({ supportsVideo: () => true })
+    const outcome = await FilePreview.open(
       fileEntry(BigInt(bytes.byteLength), name),
-      fixture.revisions, fixture.broker, new AbortController().signal, { openVideo },
-    )
-    return { result, openVideo, fixture }
+      fixture.revisions, fixture.broker, new AbortController().signal, urls.ports,
+    ).then(async (preview) => {
+      const current = preview.current
+      await preview.close()
+      return current
+    }, (error: unknown) => error)
+    expect(fixture.releases()).toBe(1)
+    return outcome
   }
 
-  it('rejects a real ffmpeg/libaom still AVIF before the MP4 pipeline', async () => {
-    const { result, openVideo } = await openWithStubVideo(realFixture('still-ffmpeg-libaom.avif'), 'still.avif')
-    await expect(result).rejects.toMatchObject({ name: 'ImagePreviewError' })
-    expect(openVideo).not.toHaveBeenCalled()
+  it('reports a real ffmpeg/libaom still AVIF as an unsupported image', async () => {
+    const outcome = await openReal(realFixture('still-ffmpeg-libaom.avif'), 'still.avif')
+    expect(outcome).toMatchObject({ name: 'ImagePreviewError', message: 'HEIC/AVIF preview is not supported' })
+    expect((outcome as Error).cause).toMatchObject({ name: 'VideoPreviewError', failure: 'no-movie-box' })
+  })
+
+  it('keeps the real AVIF image sequence on its existing video-policy error', async () => {
+    await expect(openReal(realFixture('sequence-ffmpeg-libaom.avif'), 'seq.avif')).resolves.toMatchObject({
+      name: 'VideoPreviewError', message: 'MP4 codec or duration is outside the preview policy',
+    })
+  })
+
+  const rebranded = (major: string) => {
+    const bytes = realFixture('h264-no-edit-list.mp4').slice()
+    bytes.set([...major].map((c) => c.charCodeAt(0)), 8)
+    for (let at = 16; at < 32; at += 4) bytes.set([109, 105, 102, 49], at)
+    return bytes
+  }
+
+  it.each([
+    ['real H.264 MP4', () => realFixture('h264-no-edit-list.mp4')],
+    ['real H.264 re-branded mif1 with only mif1 compatible brands', () => rebranded('mif1')],
+    ['real H.264 re-branded avif with only mif1 compatible brands', () => rebranded('avif')],
+    ['real H.264 re-branded heic with only mif1 compatible brands', () => rebranded('heic')],
+    ['real H.264 re-branded iso7 with only mif1 compatible brands', () => rebranded('iso7')],
+  ] as const)('presents %s as video through the real demuxer', async (_label, make) => {
+    await expect(openReal(make(), 'clip.mp4')).resolves.toMatchObject({ kind: 'video' })
   })
 
   it.each([
-    ['real ffmpeg AVIF image sequence (avis/msf1)', realFixture('sequence-ffmpeg-libaom.avif'), 'seq.avif'],
-    ['real ffmpeg H.264 MP4', realFixture('h264-no-edit-list.mp4'), 'clip.mp4'],
-    ['extended ftyp isom with minor_version heic', extendedFtyp('isom', 'heic', ['isom', 'mp41']), 'clip.mp4'],
+    ['extended ftyp isom with minor_version heic', extendedFtyp('isom', 'heic', ['isom', 'mp41'])],
     ['extended ftyp isom followed by free payload mif1',
-      extendedFtyp('isom', '\0\0\0\0', ['isom'], [0, 0, 0, 12, 102, 114, 101, 101, 109, 105, 102, 49]), 'clip.mp4'],
-  ] as const)('keeps %s on the video pipeline', async (_label, bytes, name) => {
-    const { result, openVideo } = await openWithStubVideo(new Uint8Array(bytes), name)
-    await expect(result).rejects.toBeInstanceOf(VideoPreviewError)
-    expect(openVideo).toHaveBeenCalledOnce()
+      extendedFtyp('isom', '\0\0\0\0', ['isom'], [0, 0, 0, 12, 102, 114, 101, 101, 109, 105, 102, 49])],
+  ] as const)('keeps %s without a movie box as a video error', async (_label, bytes) => {
+    await expect(openReal(new Uint8Array(bytes), 'clip.mp4')).resolves.toMatchObject({ name: 'VideoPreviewError' })
   })
 
   // Real H.264 fixture re-branded to major mif1 with its video brands pushed past
@@ -680,24 +671,55 @@ describe('v2 file preview ftyp classification', () => {
     return out
   }
 
-  it.each([false, true])('keeps a mif1-major MP4 whose video brands lie past the sniff window on the video path (extended=%s)', async (extended) => {
-    const { result, openVideo } = await openWithStubVideo(longFtypVideo(extended), 'clip.mp4')
-    await expect(result).rejects.toBeInstanceOf(VideoPreviewError)
-    expect(openVideo).toHaveBeenCalledOnce()
+  it.each([false, true])('presents a mif1-major MP4 whose video brands lie past the sniff window as video (extended=%s)', async (extended) => {
+    await expect(openReal(longFtypVideo(extended), 'clip.mp4')).resolves.toMatchObject({ kind: 'video' })
   })
 
-  it('keeps a real H.264 MP4 re-branded to major iso7 with only mif1 compatible brands on the video path', async () => {
-    const bytes = realFixture('h264-no-edit-list.mp4').slice()
-    bytes.set([105, 115, 111, 55], 8)
-    for (let at = 16; at < 32; at += 4) bytes.set([109, 105, 102, 49], at)
-    const { result, openVideo } = await openWithStubVideo(bytes, 'clip.mp4')
-    await expect(result).rejects.toBeInstanceOf(VideoPreviewError)
-    expect(openVideo).toHaveBeenCalledOnce()
+  it('reports an extended-size ftyp with a genuine HEIC major brand and no movie box as an image', async () => {
+    await expect(openReal(extendedFtyp('heic', '\0\0\0\0', ['mif1', 'heic']), 'photo.heic')).resolves.toMatchObject({
+      name: 'ImagePreviewError',
+    })
   })
 
-  it('rejects an extended-size ftyp with a genuine HEIC major brand', async () => {
-    const { result, openVideo } = await openWithStubVideo(extendedFtyp('heic', '\0\0\0\0', ['mif1', 'heic']), 'photo.heic')
-    await expect(result).rejects.toMatchObject({ name: 'ImagePreviewError' })
-    expect(openVideo).not.toHaveBeenCalled()
+  it.each([
+    ['photo.heic', 'heic', []],
+    ['photo.avif', 'avif', []],
+    ['photo.heif', 'mif1', ['heic', 'miaf']],
+  ] as const)('reports %s without a movie box as an unsupported image after the MP4 scan', async (name, major, compatible) => {
+    const bytes = ftypFile(major, compatible)
+    const fixture = runtime(bytes, BigInt(bytes.byteLength))
+    const error = await FilePreview.open(
+      fileEntry(BigInt(bytes.byteLength), name),
+      fixture.revisions, fixture.broker, new AbortController().signal,
+    ).catch((caught: unknown) => caught)
+    expect(error).toMatchObject({ name: 'ImagePreviewError', message: 'HEIC/AVIF preview is not supported' })
+    expect((error as Error).cause).toMatchObject({ name: 'VideoPreviewError', failure: 'no-movie-box' })
+    expect(fixture.releases()).toBe(1)
+  })
+
+  it('keeps an ordinary MP4 brand without a movie box as a video error', async () => {
+    const bytes = ftypFile('isom', ['isom', 'mp41'])
+    const fixture = runtime(bytes, BigInt(bytes.byteLength))
+    await expect(FilePreview.open(
+      fileEntry(BigInt(bytes.byteLength), 'clip.mp4'),
+      fixture.revisions, fixture.broker, new AbortController().signal,
+    )).rejects.toMatchObject({ name: 'VideoPreviewError', message: 'MP4 metadata was not found within the bounded box scan' })
+    expect(fixture.releases()).toBe(1)
+  })
+
+  it.each([
+    ['transport', () => new PreviewRuntimeError('Preview range returned a gap or empty slice')],
+    ['abort', () => new DOMException('aborted', 'AbortError')],
+    ['codec policy', () => new VideoPreviewError('MP4 codec or duration is outside the preview policy')],
+  ] as const)('passes a %s failure through unchanged for a still-branded header', async (_label, make) => {
+    const bytes = ftypFile('heic', ['mif1', 'heic'])
+    const fixture = runtime(bytes, BigInt(bytes.byteLength))
+    const failure = make()
+    await expect(FilePreview.open(
+      fileEntry(BigInt(bytes.byteLength), 'photo.heic'),
+      fixture.revisions, fixture.broker, new AbortController().signal,
+      { openVideo: async () => { throw failure } },
+    )).rejects.toBe(failure)
+    expect(fixture.releases()).toBe(1)
   })
 })

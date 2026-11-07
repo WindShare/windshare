@@ -67,10 +67,17 @@ interface ParsedMetadata {
   readonly parts: readonly MetadataPart[]
 }
 
+// 'no-movie-box': the top-level scan ended without any moov box, i.e. the file
+// carries no movie metadata at all (HEIF/AVIF still images look like this).
+export type VideoPreviewFailure = 'no-movie-box'
+
 export class VideoPreviewError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
+  readonly failure: VideoPreviewFailure | undefined
+
+  constructor(message: string, options?: ErrorOptions & { readonly failure?: VideoPreviewFailure }) {
     super(message, options)
     this.name = 'VideoPreviewError'
+    this.failure = options?.failure
   }
 }
 
@@ -239,7 +246,7 @@ async function locateMoov(
     }
     offset = box.end
   }
-  throw new VideoPreviewError('MP4 metadata was not found within the bounded box scan')
+  throw new VideoPreviewError('MP4 metadata was not found within the bounded box scan', { failure: 'no-movie-box' })
 }
 
 function decodeTopLevelBox(header: Uint8Array, offset: number, fileSize: number): TopLevelBox {
