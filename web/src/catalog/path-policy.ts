@@ -40,19 +40,28 @@ const FORMAT_CHARACTER_RANGES: readonly (readonly [number, number])[] = [
 export function isCatalogName(name: string): boolean {
   if (
     name.length === 0 ||
+    name.length > CATALOG_NAME_BYTES ||
     name === '.' ||
     name === '..' ||
     !isWellFormedUnicode(name) ||
-    normalizeNFC15(name) !== name ||
     name.includes('/') ||
     name.includes('\\') ||
-    TEXT_ENCODER.encode(name).byteLength > CATALOG_NAME_BYTES
+    TEXT_ENCODER.encode(name).byteLength > CATALOG_NAME_BYTES ||
+    normalizeNFC15(name) !== name
   ) return false
   for (const character of name) {
     const scalar = character.codePointAt(0) ?? 0
     if (isControlOrFormatCharacter(scalar)) return false
   }
   return true
+}
+
+/** Field-owned encoding preserves frozen path identity across browser Unicode upgrades. */
+export function encodeCatalogName(name: string): Uint8Array<ArrayBuffer> {
+  if (typeof name !== 'string' || !isCatalogName(name)) {
+    throw new TypeError('Catalog name violates the frozen path policy')
+  }
+  return TEXT_ENCODER.encode(name)
 }
 
 export function catalogNameCollisionKey(name: string): string {

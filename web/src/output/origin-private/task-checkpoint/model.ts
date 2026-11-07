@@ -71,6 +71,7 @@ export interface TaskCheckpoint {
 
 export const MAX_TASK_ENTRY_PAGE_SIZE = 256
 const MAX_UINT64 = (1n << 64n) - 1n
+const TEXT_ENCODER = new TextEncoder()
 
 export function snapshotTaskCheckpoint(value: TaskCheckpoint): TaskCheckpoint {
   for (const identity of [value.object.operationId, value.object.objectId, value.object.handleId]) {
@@ -101,9 +102,16 @@ export function snapshotTaskCheckpoint(value: TaskCheckpoint): TaskCheckpoint {
     ...value,
     ...receiveContentWarningFields(value.contentWarning),
     object: Object.freeze({ ...value.object }),
-    selectedPaths: Object.freeze(value.selectedPaths.map(path => Object.freeze([...path]))),
+    selectedPaths: Object.freeze(value.selectedPaths.map(snapshotCatalogPath)),
     ...(value.finalization === undefined ? {} : { finalization: Object.freeze({ ...value.finalization }) }),
   })
+}
+
+export function encodeTaskCheckpoint(value: TaskCheckpoint): Uint8Array<ArrayBuffer> {
+  // Selection names use the frozen path policy; the seal preserves their exact JSON bytes.
+  const snapshot = snapshotTaskCheckpoint(value)
+  return TEXT_ENCODER.encode(JSON.stringify(snapshot, (_, field: unknown) =>
+    typeof field === 'bigint' ? field.toString() : field))
 }
 
 export function snapshotTaskEntry(value: TaskEntry): TaskEntry {

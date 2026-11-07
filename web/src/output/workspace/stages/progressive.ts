@@ -1,5 +1,5 @@
 import { createProgressiveZipWorkspaceBudget } from '../budget'
-import { canonicalDigest, canonicalFrame, canonicalRecord, canonicalText } from '../../../transfer/encoding/canonical'
+import { canonicalDigest, canonicalFrame, canonicalRecord } from '../../../transfer/encoding/canonical'
 import { sealPackagedArtifact } from '../aggregate'
 import {
   createPreparationAdmissionReceipt, createZipArtifactVerificationReceipt,
@@ -7,7 +7,7 @@ import {
 } from '../receipts'
 import { createPersistedReceiveRecord, RECEIVE_RECORD_PACKAGE } from '../records'
 import { nextReceiveLifecycleState, type ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
-import { taskEntryComplete, type TaskCheckpoint } from '../../origin-private/task-checkpoint/model'
+import { encodeTaskCheckpoint, taskEntryComplete, type TaskCheckpoint } from '../../origin-private/task-checkpoint/model'
 import type { TaskCheckpointStore } from '../../origin-private/task-checkpoint/store'
 import { issueContentGate, type AdmittedWorkspaceContent, type WorkspaceBudgetAuthority } from './contracts'
 import type { WorkspaceStageRuntime } from './runtime'
@@ -184,8 +184,7 @@ async function verifyCurrentCheckpoint(store: TaskCheckpointStore, checkpoint: T
 }
 
 function checkpointDigest(checkpoint: TaskCheckpoint): Promise<string> {
-  const text = JSON.stringify(checkpoint, (_, value: unknown) => typeof value === 'bigint' ? value.toString() : value)
   return canonicalDigest(canonicalRecord('windshare/opfs-zip-checkpoint-seal/v1', 1, [
-    canonicalFrame(canonicalText(text)),
+    canonicalFrame(encodeTaskCheckpoint(checkpoint)),
   ]))
 }

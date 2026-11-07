@@ -1,3 +1,4 @@
+import { encodeCatalogName } from '../../catalog/path-policy'
 import { BROWSER_HANDOFF_OBJECT_URL_LEASE_MILLISECONDS } from '../../transfer/intent'
 import { encodeBase64Url } from '../../crypto/bytes'
 import {
@@ -6,7 +7,6 @@ import {
   canonicalFrame,
   canonicalIdentity,
   canonicalRecord,
-  canonicalText,
   canonicalU8,
   canonicalU64,
   concatCanonicalBytes,
@@ -246,7 +246,7 @@ function snapshotPublicationRoute(route: PublicationAttemptRoute): PublicationAt
       typeof route.packagedFileSupported !== 'boolean') {
     throw new TypeError('publication handoff route is invalid')
   }
-  canonicalText(route.suggestedName)
+  encodeCatalogName(route.suggestedName)
   return Object.freeze({ ...route })
 }
 
@@ -259,7 +259,7 @@ function canonicalPublicationRoute(route: PublicationAttemptRoute): CanonicalByt
   }
   return concatCanonicalBytes([
     canonicalU8(2),
-    canonicalFrame(canonicalText(route.suggestedName)),
+    canonicalFrame(encodeCatalogName(route.suggestedName)),
     canonicalFrame(canonicalU64(route.objectUrlLeaseMilliseconds)),
     canonicalFrame(canonicalU8(route.packagedFileSupported ? 1 : 0)),
   ])
