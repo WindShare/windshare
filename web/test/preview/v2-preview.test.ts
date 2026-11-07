@@ -649,6 +649,52 @@ describe('v2 file preview ftyp classification', () => {
     expect(openVideo).toHaveBeenCalledOnce()
   })
 
+  // Real H.264 fixture re-branded to major mif1 with its video brands pushed past
+  // the 64 KiB sniff window (stco offsets shifted so the file stays decodable).
+  const longFtypVideo = (extended: boolean) => {
+    const source = realFixture('h264-no-edit-list.mp4')
+    const sourceView = new DataView(source.buffer, source.byteOffset, source.byteLength)
+    const oldSize = sourceView.getUint32(0, false)
+    const header = extended ? 24 : 16
+    const brands = new Uint8Array(16384 * 4 + (oldSize - 16))
+    brands.fill(122, 0, 16384 * 4)
+    brands.set(source.subarray(16, oldSize), 16384 * 4)
+    const newSize = header + brands.byteLength
+    const out = new Uint8Array(newSize + source.byteLength - oldSize)
+    const view = new DataView(out.buffer)
+    view.setUint32(0, extended ? 1 : newSize, false)
+    out.set([102, 116, 121, 112], 4)
+    if (extended) view.setBigUint64(8, BigInt(newSize), false)
+    out.set([109, 105, 102, 49], header - 8)
+    out.set(brands, header)
+    out.set(source.subarray(oldSize), newSize)
+    const delta = newSize - oldSize
+    for (let at = newSize; at + 4 <= out.byteLength; at++) {
+      if (out[at] !== 115 || out[at + 1] !== 116 || out[at + 2] !== 99 || out[at + 3] !== 111) continue
+      const count = view.getUint32(at + 8, false)
+      for (let entry = 0; entry < count; entry++) {
+        const offset = at + 12 + entry * 4
+        view.setUint32(offset, view.getUint32(offset, false) + delta, false)
+      }
+    }
+    return out
+  }
+
+  it.each([false, true])('keeps a mif1-major MP4 whose video brands lie past the sniff window on the video path (extended=%s)', async (extended) => {
+    const { result, openVideo } = await openWithStubVideo(longFtypVideo(extended), 'clip.mp4')
+    await expect(result).rejects.toBeInstanceOf(VideoPreviewError)
+    expect(openVideo).toHaveBeenCalledOnce()
+  })
+
+  it('keeps a real H.264 MP4 re-branded to major iso7 with only mif1 compatible brands on the video path', async () => {
+    const bytes = realFixture('h264-no-edit-list.mp4').slice()
+    bytes.set([105, 115, 111, 55], 8)
+    for (let at = 16; at < 32; at += 4) bytes.set([109, 105, 102, 49], at)
+    const { result, openVideo } = await openWithStubVideo(bytes, 'clip.mp4')
+    await expect(result).rejects.toBeInstanceOf(VideoPreviewError)
+    expect(openVideo).toHaveBeenCalledOnce()
+  })
+
   it('rejects an extended-size ftyp with a genuine HEIC major brand', async () => {
     const { result, openVideo } = await openWithStubVideo(extendedFtyp('heic', '\0\0\0\0', ['mif1', 'heic']), 'photo.heic')
     await expect(result).rejects.toMatchObject({ name: 'ImagePreviewError' })

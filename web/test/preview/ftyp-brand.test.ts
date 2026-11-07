@@ -23,11 +23,29 @@ describe('unsupportedStillImageFtypBrand', () => {
     expect(unsupportedStillImageFtypBrand(u8(box(32, ftyp('avif', '\0\0\0\0', ['avif', 'mif1', 'miaf', 'MA1B']))))).toBe('HEIC/AVIF')
   })
 
-  it('classifies compatible-only still brands under a non-video major', () => {
-    expect(unsupportedStillImageFtypBrand(u8(box(24, ftyp('MiHE', '\0\0\0\0', ['mif1', 'heic']))))).toBe('HEIC/AVIF')
+  it('classifies real-world iPhone-style HEIC brand lists', () => {
+    expect(unsupportedStillImageFtypBrand(u8(box(40, ftyp('heic', '\0\0\0\0', ['mif1', 'MiHE', 'MiPr', 'miaf', 'MiHB', 'heic']))))).toBe('HEIC/AVIF')
+  })
+
+  it('declines a non-still major even with only still compatible brands', () => {
+    expect(unsupportedStillImageFtypBrand(u8(box(24, ftyp('MiHE', '\0\0\0\0', ['mif1', 'heic']))))).toBeUndefined()
+    expect(unsupportedStillImageFtypBrand(u8(box(24, ftyp('iso7', '\0\0\0\0', ['mif1', 'heic']))))).toBeUndefined()
+  })
+
+  it('declines a still major with any unknown or video compatible brand', () => {
+    for (const brand of ['iso7', 'avc1', 'zzzz', 'msf1', 'avis']) {
+      expect(unsupportedStillImageFtypBrand(u8(box(24, ftyp('mif1', '\0\0\0\0', ['heic', brand]))))).toBeUndefined()
+    }
+  })
+
+  it('declines a brand list that is not a whole number of entries', () => {
+    expect(unsupportedStillImageFtypBrand(u8([...box(17, ftyp('mif1', '\0\0\0\0', [])), 0, 0, 0, 0]))).toBeUndefined()
+    expect(unsupportedStillImageFtypBrand(u8([...box(1, ftyp('heic', '\0\0\0\0', []), 25n), 0, 0, 0, 0]))).toBeUndefined()
   })
 
   it('never treats minor_version or following boxes as brands', () => {
+    expect(unsupportedStillImageFtypBrand(u8(box(20, ftyp('heic', 'zzzz', ['mif1']))))).toBe('HEIC/AVIF')
+    expect(unsupportedStillImageFtypBrand(u8([...box(20, ftyp('heic', '\0\0\0\0', ['mif1'])), ...free('avc1')]))).toBe('HEIC/AVIF')
     expect(unsupportedStillImageFtypBrand(u8(box(16, ftyp('isom', 'heic', []))))).toBeUndefined()
     expect(unsupportedStillImageFtypBrand(u8(box(16, ftyp('XXXX', 'heic', []))))).toBeUndefined()
     expect(unsupportedStillImageFtypBrand(u8([...box(24, ftyp('isom', '\0\0\0\0', ['isom', 'mp41'])), ...free('mif1')]))).toBeUndefined()
@@ -36,12 +54,18 @@ describe('unsupportedStillImageFtypBrand', () => {
 
   it('reads extended size=1 boxes at the 64-bit offsets and bounds the scan', () => {
     expect(unsupportedStillImageFtypBrand(u8(box(1, ftyp('heic', '\0\0\0\0', ['mif1']), 28n)))).toBe('HEIC/AVIF')
-    expect(unsupportedStillImageFtypBrand(u8(box(1, ftyp('XXXX', '\0\0\0\0', ['mif1']), 28n)))).toBe('HEIC/AVIF')
+    expect(unsupportedStillImageFtypBrand(u8(box(1, ftyp('XXXX', '\0\0\0\0', ['mif1']), 28n)))).toBeUndefined()
     // isom + following free payload 'mif1' must stay video.
     expect(unsupportedStillImageFtypBrand(u8([...box(1, ftyp('isom', '\0\0\0\0', ['isom', 'mp41']), 32n), ...free('mif1')]))).toBeUndefined()
     expect(unsupportedStillImageFtypBrand(u8([...box(1, ftyp('XXXX', '\0\0\0\0', []), 24n), ...free('mif1')]))).toBeUndefined()
-    // Huge declared length is clamped to the sniff window, not converted unsafely.
-    expect(unsupportedStillImageFtypBrand(u8(box(1, ftyp('XXXX', '\0\0\0\0', ['mif1']), 0xffff_ffff_ffff_ffffn)))).toBe('HEIC/AVIF')
+    // A declared end beyond the sniffed bytes (incl. 2^64-1) declines without unsafe conversion.
+    expect(unsupportedStillImageFtypBrand(u8(box(1, ftyp('heic', '\0\0\0\0', ['mif1']), 0xffff_ffff_ffff_ffffn)))).toBeUndefined()
+    expect(unsupportedStillImageFtypBrand(u8(box(1, ftyp('heic', '\0\0\0\0', ['mif1']), 29n)))).toBeUndefined()
+  })
+
+  it('declines when the declared ftyp extends past the sniffed bytes', () => {
+    expect(unsupportedStillImageFtypBrand(u8(box(28, ftyp('heic', '\0\0\0\0', ['mif1', 'heic'])).slice(0, 27)))).toBeUndefined()
+    expect(unsupportedStillImageFtypBrand(u8(box(70_000, ftyp('mif1', '\0\0\0\0', ['heic']))))).toBeUndefined()
   })
 
   it('declines malformed or truncated headers', () => {
@@ -69,11 +93,11 @@ describe('unsupportedStillImageFtypBrand', () => {
   })
 
   it('respects Uint8Array byteOffset for sliced views', () => {
-    const inner = box(24, ftyp('XXXX', '\0\0\0\0', ['heic', 'mif1']))
+    const inner = box(24, ftyp('heic', '\0\0\0\0', ['heic', 'mif1']))
     const backing = u8([...box(24, ftyp('isom', '\0\0\0\0', ['isom', 'mp41'])), ...inner, 0, 0])
     expect(unsupportedStillImageFtypBrand(backing.subarray(24, 48))).toBe('HEIC/AVIF')
     expect(unsupportedStillImageFtypBrand(backing.subarray(0, 24))).toBeUndefined()
-    const ext = u8([9, 9, 9, ...box(1, ftyp('XXXX', '\0\0\0\0', ['mif1']), 28n)])
+    const ext = u8([9, 9, 9, ...box(1, ftyp('avif', '\0\0\0\0', ['mif1']), 28n)])
     expect(unsupportedStillImageFtypBrand(ext.subarray(3))).toBe('HEIC/AVIF')
   })
 })
