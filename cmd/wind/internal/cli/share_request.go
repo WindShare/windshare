@@ -67,7 +67,11 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		var err error
 		saved, err = a.loadShareConfig()
 		if err != nil {
-			a.writeCompleteLine("share: cannot load sharing configuration; check windshare/config.json or WINDSHARE_CONFIG")
+			if errors.Is(err, relayconfig.ErrFrontURL) {
+				a.writeCompleteLine("share: %s", err)
+			} else {
+				a.writeCompleteLine("share: cannot load sharing configuration; check windshare/config.json or WINDSHARE_CONFIG")
+			}
 			return shareRequest{}, requestParseUsageFailure
 		}
 	}
@@ -81,7 +85,11 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		*frontURL = saved.FrontURL
 	}
 	if err := relayconfig.ValidateFrontURL(*frontURL); err != nil {
-		a.writeCompleteLine("share: configure a frontend URL with wind config import <file|-> --front-url <url>, or pass --front-url for this share; expected an HTTP(S) base URL without credentials, query or fragment")
+		if *frontURL == "" {
+			a.writeCompleteLine("share: configure a frontend URL with wind config import <file|-> --front-url <url>, or pass --front-url for this share")
+		} else {
+			a.writeCompleteLine("share: %s", err)
+		}
 		return shareRequest{}, requestParseUsageFailure
 	}
 	relays, err := relayconfig.SelectRelays(saved, relayURLs)

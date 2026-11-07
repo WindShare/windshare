@@ -99,6 +99,17 @@ func TestImportFailureDoesNotSaveOrExposePrivateInput(t *testing.T) {
 	}
 }
 
+func TestImportParsePreservesFrontendValidationCause(t *testing.T) {
+	for _, raw := range []string{"", "https://front.example/app\u00a0", "https://front.example/app\u0085", "wss://front.example"} {
+		if _, err := parse([]string{"import", "-", "--front-url", raw}); !errors.Is(err, relayconfig.ErrFrontURL) {
+			t.Fatalf("parse lost frontend validation cause for %q: %v", raw, err)
+		}
+	}
+	if _, err := parse([]string{"import", "-"}); err != nil {
+		t.Fatalf("omitted frontend override was rejected: %v", err)
+	}
+}
+
 func TestImportFrontendOverrideReplacesTheDocumentChoice(t *testing.T) {
 	var saved relayconfig.Config
 	runner := Runner{
