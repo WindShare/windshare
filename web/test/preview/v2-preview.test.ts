@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+
 import { describe, expect, it, vi } from 'vitest'
 
 import type { CatalogEntry } from '../../src/catalog/records'
@@ -316,7 +318,6 @@ describe('v2 file preview runtime', () => {
     ['photo.heic', 'heic', []],
     ['photo.avif', 'avif', []],
     ['photo.heif', 'mif1', ['heic', 'miaf']],
-    ['photo.jxl', 'jxl ', []],
   ] as const)('rejects %s still-image ftyp before the MP4 pipeline', async (name, major, compatible) => {
     const bytes = ftypFile(major, compatible)
     const fixture = runtime(bytes, BigInt(bytes.byteLength))
@@ -326,7 +327,7 @@ describe('v2 file preview runtime', () => {
       fixture.revisions, fixture.broker, new AbortController().signal, { openVideo },
     )).rejects.toMatchObject({
       name: 'ImagePreviewError',
-      message: expect.stringMatching(/HEIC\/AVIF|JPEG XL/),
+      message: expect.stringMatching(/HEIC\/AVIF/),
     })
     expect(openVideo).not.toHaveBeenCalled()
     expect(fixture.releases()).toBe(1)
@@ -599,5 +600,58 @@ describe('position-local preview failure classification', () => {
     expect(isPositionLocalPreviewFailure(new DOMException('aborted', 'AbortError'))).toBe(false)
     expect(isPositionLocalPreviewFailure(new Error('range read failed'))).toBe(false)
     expect(isPositionLocalPreviewFailure(undefined)).toBe(false)
+  })
+})
+
+describe('v2 file preview ftyp classification', () => {
+  const realFixture = (name: string) => new Uint8Array(readFileSync(new URL(`../fixtures/preview/${name}`, import.meta.url)))
+  const extendedFtyp = (major: string, minor: string, compatible: readonly string[], trailing: number[] = []) => {
+    const enc = (b: string) => [...b].map((c) => c.charCodeAt(0))
+    const boxSize = 24 + compatible.length * 4
+    const bytes = new Uint8Array(Math.max(64, boxSize + trailing.length))
+    const view = new DataView(bytes.buffer)
+    view.setUint32(0, 1, false)
+    bytes.set(enc('ftyp'), 4)
+    view.setBigUint64(8, BigInt(boxSize), false)
+    bytes.set(enc(major), 16)
+    bytes.set(enc(minor), 20)
+    compatible.forEach((brand, index) => bytes.set(enc(brand), 24 + index * 4))
+    bytes.set(trailing, boxSize)
+    return bytes
+  }
+  const openWithStubVideo = async (bytes: Uint8Array<ArrayBuffer>, name: string) => {
+    const fixture = runtime(bytes, BigInt(bytes.byteLength))
+    const openVideo = vi.fn(async () => {
+      throw new VideoPreviewError('stub video pipeline')
+    })
+    const result = FilePreview.open(
+      fileEntry(BigInt(bytes.byteLength), name),
+      fixture.revisions, fixture.broker, new AbortController().signal, { openVideo },
+    )
+    return { result, openVideo, fixture }
+  }
+
+  it('rejects a real ffmpeg/libaom still AVIF before the MP4 pipeline', async () => {
+    const { result, openVideo } = await openWithStubVideo(realFixture('still-ffmpeg-libaom.avif'), 'still.avif')
+    await expect(result).rejects.toMatchObject({ name: 'ImagePreviewError' })
+    expect(openVideo).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['real ffmpeg AVIF image sequence (avis/msf1)', realFixture('sequence-ffmpeg-libaom.avif'), 'seq.avif'],
+    ['real ffmpeg H.264 MP4', realFixture('h264-no-edit-list.mp4'), 'clip.mp4'],
+    ['extended ftyp isom with minor_version heic', extendedFtyp('isom', 'heic', ['isom', 'mp41']), 'clip.mp4'],
+    ['extended ftyp isom followed by free payload mif1',
+      extendedFtyp('isom', '\0\0\0\0', ['isom'], [0, 0, 0, 12, 102, 114, 101, 101, 109, 105, 102, 49]), 'clip.mp4'],
+  ] as const)('keeps %s on the video pipeline', async (_label, bytes, name) => {
+    const { result, openVideo } = await openWithStubVideo(new Uint8Array(bytes), name)
+    await expect(result).rejects.toBeInstanceOf(VideoPreviewError)
+    expect(openVideo).toHaveBeenCalledOnce()
+  })
+
+  it('rejects an extended-size ftyp with a genuine HEIC major brand', async () => {
+    const { result, openVideo } = await openWithStubVideo(extendedFtyp('heic', '\0\0\0\0', ['mif1', 'heic']), 'photo.heic')
+    await expect(result).rejects.toMatchObject({ name: 'ImagePreviewError' })
+    expect(openVideo).not.toHaveBeenCalled()
   })
 })

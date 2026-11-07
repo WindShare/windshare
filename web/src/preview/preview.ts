@@ -20,6 +20,7 @@ import {
   type PreviewRangeSource,
 } from './mp4-range'
 
+import { unsupportedStillImageFtypBrand } from './ftyp-brand'
 import { isAutomaticPhotoCandidate, requireAutomaticPhotoHeader, AutomaticPhotoDeferredError } from './automatic-photo'
 
 // Displayed dimensions, after any orientation metadata, matching the preview <img>.
@@ -218,7 +219,7 @@ export class FilePreview {
       await this.#initializeImage(image, signal)
       return
     }
-    // HEIC/AVIF/JPEG XL also begin with an ISO BMFF ftyp box. Reject them before
+    // HEIC/AVIF also begin with an ISO BMFF ftyp box. Reject them before
     // the MP4 pipeline so Preview does not report a video-metadata failure for a
     // still image the explorer already decorated as a photo.
     const stillImage = unsupportedStillImageFtypBrand(header)
@@ -368,42 +369,6 @@ function matchesOrientedHeader(decoded: ImageDecodeResult, header: ImageHeader):
 
 function looksLikeMp4(bytes: Uint8Array): boolean {
   return bytes.byteLength >= 12 && String.fromCharCode(...bytes.subarray(4, 8)) === 'ftyp'
-}
-
-// Major/compatible brands that name a still-image ISO BMFF family. Video MP4
-// brands (isom, mp42, avc1, hvc1, ...) stay on the MP4 path.
-const UNSUPPORTED_STILL_IMAGE_FTYP_BRANDS: ReadonlyMap<string, string> = new Map([
-  ['avif', 'HEIC/AVIF'],
-  ['avis', 'HEIC/AVIF'],
-  ['heic', 'HEIC/AVIF'],
-  ['heix', 'HEIC/AVIF'],
-  ['heim', 'HEIC/AVIF'],
-  ['heis', 'HEIC/AVIF'],
-  ['mif1', 'HEIC/AVIF'],
-  ['msf1', 'HEIC/AVIF'],
-  ['miaf', 'HEIC/AVIF'],
-  ['jxl ', 'JPEG XL'],
-])
-
-function unsupportedStillImageFtypBrand(bytes: Uint8Array): string | undefined {
-  if (!looksLikeMp4(bytes) || bytes.byteLength < 16) return undefined
-  const size = new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, false)
-  // size 0 means "extends to EOF"; size 1 is the 64-bit form. Bound the brand
-  // scan to the bytes we already sniffed either way.
-  const brandEnd = size === 0 || size === 1
-    ? bytes.byteLength
-    : Math.min(bytes.byteLength, size)
-  if (brandEnd < 16) return undefined
-  const major = String.fromCharCode(...bytes.subarray(8, 12))
-  const majorLabel = UNSUPPORTED_STILL_IMAGE_FTYP_BRANDS.get(major)
-  if (majorLabel !== undefined) return majorLabel
-  // Compatible brands follow the 4-byte minor_version field.
-  for (let offset = 16; offset + 4 <= brandEnd; offset += 4) {
-    const brand = String.fromCharCode(...bytes.subarray(offset, offset + 4))
-    const label = UNSUPPORTED_STILL_IMAGE_FTYP_BRANDS.get(brand)
-    if (label !== undefined) return label
-  }
-  return undefined
 }
 
 function requireNextSlice(slice: BlockSlice, expectedOffset: bigint): void {
