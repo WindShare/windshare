@@ -22,6 +22,7 @@ import { CanonicalRecordReader } from '../../transfer/encoding/canonical-reader'
 import {
   canonicalFrame,
   canonicalIdentity,
+  canonicalPath,
   canonicalText,
   canonicalU8,
   canonicalU64,
@@ -31,6 +32,7 @@ import {
   type CanonicalBytes,
 } from '../../transfer/encoding/canonical'
 const TEXT_DECODER = new TextDecoder('utf-8', { fatal: true })
+const PATH_TEXT_DECODER = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
 
 const DIRECTORY_FINALIZED_OUTCOME_DISCRIMINANT = 1
 const DIRECTORY_ISOLATED_OUTCOME_DISCRIMINANT = 2
@@ -593,10 +595,7 @@ export function canonicalMaterializationPath(
   pathInput: readonly string[],
 ): CanonicalBytes {
   const path = snapshotMaterializationRootRelativePath(pathInput)
-  return concatCanonicalBytes([
-    canonicalU64(BigInt(path.length)),
-    ...path.map(segment => canonicalFrame(canonicalText(segment))),
-  ])
+  return path.length === 0 ? canonicalU64(0n) : canonicalPath(path)
 }
 
 export function decodeMaterializationPath(bytes: Uint8Array): MaterializationRootRelativePath {
@@ -607,7 +606,8 @@ export function decodeMaterializationPath(bytes: Uint8Array): MaterializationRoo
   }
   const segments: string[] = []
   for (let index = 0; index < Number(count); index += 1) {
-    segments.push(decodeText(reader.frame('materialization path segment'), 'path segment'))
+    // Snapshotting below applies the frozen path policy, not generic text NFC.
+    segments.push(PATH_TEXT_DECODER.decode(reader.frame('materialization path segment')))
   }
   reader.finish('materialization relative path')
   return snapshotMaterializationRootRelativePath(segments)

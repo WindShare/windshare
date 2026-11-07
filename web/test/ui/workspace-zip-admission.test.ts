@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { SelectionPolicy } from '../../src/catalog/selection'
 import * as progressiveBackend from '../../src/output/origin-private/progressive-backend'
 import type { OriginPrivateProgressiveZipBackend } from '../../src/output/origin-private/progressive-backend'
+import type { TaskCheckpoint } from '../../src/output/origin-private/task-checkpoint/model'
 import type { AuthorityOwnedReceiveOperationContinuation } from '../../src/output/resume/reopen-authority'
 import type { ReceiveOperationRepository, ReceiveOperationTransition } from '../../src/output/workspace/repository'
 import { WorkspaceOperationStages } from '../../src/output/workspace/stages'
@@ -47,9 +48,10 @@ async function fixture() {
     throw new Error('Retained ZIP must never be discarded by failed admission')
   })
   const close = vi.fn(async () => undefined)
-  const checkpoint = {
+  const checkpoint: TaskCheckpoint = {
     object: { operationId: intent.operationId, objectId: digestIdentity(33), handleId: 'zip-handle', kind: 'zip-archive' },
-    generation: 7n, physicalLength: 128n, discoveryComplete: false, artifactState: 'receiving', entryCount: 1n,
+    generation: 7n, allocatedLength: 128n, physicalLength: 128n, discoveryComplete: false,
+    artifactState: 'receiving', entryCount: 1n, selectedPaths: [],
   }
   const store = {
     readCheckpoint: async () => checkpoint,
