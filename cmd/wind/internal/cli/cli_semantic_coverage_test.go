@@ -130,6 +130,26 @@ func TestShareRequestValidationPreservesSuiteBoundaries(t *testing.T) {
 			},
 			wantStderr: "outside the suite-02 range",
 		},
+		{
+			name:       "copied relay whitespace",
+			args:       []string{"root", "--relay", " https://relay.example", "--front-url", "https://app.example"},
+			wantStderr: "whitespace or invisible spacing",
+		},
+		{
+			name:       "invalid relay spelling",
+			args:       []string{"root", "--relay", "not-a-relay", "--front-url", "https://app.example"},
+			wantStderr: "invalid relay URL",
+		},
+		{
+			name:       "unsupported relay scheme",
+			args:       []string{"root", "--relay", "ftp://relay.example", "--front-url", "https://app.example"},
+			wantStderr: "invalid relay URL",
+		},
+		{
+			name:       "missing relays keep configuration guidance",
+			args:       []string{"root", "--front-url", "https://app.example"},
+			wantStderr: "configure relay candidates",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			app, _, stderr := newSemanticTestApp(strings.NewReader(""))

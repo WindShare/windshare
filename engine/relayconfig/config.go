@@ -24,7 +24,10 @@ const (
 	MaximumProfiles = 64
 )
 
-var ErrConfig = errors.New("invalid sharing configuration")
+var (
+	ErrConfig   = errors.New("invalid sharing configuration")
+	ErrRelayURL = errors.New("invalid relay URL")
+)
 
 type Config struct {
 	ManagedTURNPolicies []turn.ManagedPolicy
