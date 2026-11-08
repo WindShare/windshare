@@ -13,6 +13,15 @@ export function initializeKeyframeFragment(
     rapAlignement: false,
   })
   const track = file.getTrackById(trackId)
+  // This fragment is an independent still frame, not a slice of the source
+  // playback clock. Nonzero DTS/CTS makes browsers disagree about its origin
+  // and can clamp a seek past its only frame. Keep source timing in the range
+  // index and give the decoder a single sample at zero with its original bytes
+  // and duration. This file is a private metadata copy for this request.
+  const sample = track.samples[sampleIndex]!
+  sample.dts = 0
+  sample.cts = 0
+  track.first_dts = 0
   // A single-sample decoder must not reapply the original clip's edits. Browsers
   // disagree about those edits; the source presentation clock stays outside it.
   if (track.boxes !== undefined) track.boxes = track.boxes.filter((box) => box.type !== 'edts')

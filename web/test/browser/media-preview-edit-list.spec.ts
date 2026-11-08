@@ -1,10 +1,8 @@
 import { expect, test } from '@playwright/test'
 import { presentSegments } from './media-preview-edit-list-probe'
 
-// Chromium only: it checks that the accepted frame's mediaTime is the sample's
-// raw composition time. Firefox rebases the one-sample segment to zero and
-// reports mediaTime 0, so media-preview-edit-list.cross-browser.spec.ts checks
-// presentation alone in every browser.
+// The source presentation clock selects the keyframe; every independent
+// decoder segment presents that frame at zero regardless of source offsets.
 
 // Each target must present the keyframe segmentAt reports. See
 // test/preview/mp4-range.test.ts for how each fixture was encoded.

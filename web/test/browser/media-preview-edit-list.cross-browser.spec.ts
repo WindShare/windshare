@@ -1,9 +1,9 @@
 import { expect, test } from '@playwright/test'
 import { presentSegments } from './media-preview-edit-list-probe'
 
-// Files that showed a frame on main in Firefox or WebKitGTK, which apply edit
-// lists differently from Chromium, plus the B-frame shift. Every target must
-// present the keyframe segmentAt reports; a stalled decoder fails through the
+// Browser media pipelines disagree about nonzero fragment origins. Every
+// independent segment must present at zero while retaining the selected
+// keyframe's source position; a stalled decoder fails through the
 // production deadline instead of loading forever. Commands are in
 // test/preview/mp4-range.test.ts.
 const CASES = [
@@ -22,6 +22,8 @@ for (const { fixture, targets, keyframes } of CASES) {
       const context = JSON.stringify(observation)
       expect(observation.outcome, context).toBe('presented')
       expect(observation.keyframeSeconds, context).toBeCloseTo(keyframes[index] ?? Number.NaN, 6)
+      expect(observation.decodeSeconds, context).toBe(0)
+      expect(observation.mediaTime, context).toBe(0)
     }
   })
 }
