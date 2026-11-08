@@ -108,8 +108,7 @@ func decodeShareDescriptor(encoded []byte) (catalog.ShareDescriptor, error) {
 func validateDescriptorValue(descriptor catalog.ShareDescriptor) error {
 	if descriptor.WireVersion() != catalog.WireVersionV2 || descriptor.Suite() != catalog.SuiteV2 ||
 		descriptor.ShareInstance().IsZero() || descriptor.SyntheticRoot().IsZero() ||
-		descriptor.ChunkSize() < catalog.MinChunkSize || descriptor.ChunkSize() > catalog.MaxChunkSize ||
-		descriptor.ChunkSize()&(descriptor.ChunkSize()-1) != 0 ||
+		!catalog.ValidChunkSize(descriptor.ChunkSize()) ||
 		len(descriptor.SenderPublicKey()) != catalog.SenderPublicKeySize ||
 		descriptor.CreatedAtSeconds() > catalog.MaxSafeInteger || descriptor.PathPolicy() != catalog.PathPolicy {
 		return ErrWireObject

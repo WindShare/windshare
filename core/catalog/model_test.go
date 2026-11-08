@@ -8,6 +8,19 @@ import (
 	"testing"
 )
 
+func TestValidChunkSizePreservesProtocolBoundaries(t *testing.T) {
+	for _, size := range []uint32{MinChunkSize, DefaultChunkSize, MaxChunkSize} {
+		if !ValidChunkSize(size) {
+			t.Errorf("rejected supported block size %d", size)
+		}
+	}
+	for _, size := range []uint32{0, 1, MinChunkSize - 1, MinChunkSize + 1, MaxChunkSize - 1, MaxChunkSize + 1, ^uint32(0)} {
+		if ValidChunkSize(size) {
+			t.Errorf("accepted unsupported block size %d", size)
+		}
+	}
+}
+
 func idValue[T ~[IdentityBytes]byte](value byte) T {
 	var id T
 	id[0] = value
