@@ -4,8 +4,10 @@
 // unsupported image; it never decides whether a file is played. No video-brand
 // list is kept: unknown brands decline.
 // Brand sources: ISO/IEC 23008-12 (HEIF: mif1, mif2, heic, heix, heim, msf1,
-// heis, hevs), ISO/IEC 23000-22 (MIAF: miaf, MiHE/MiHA/MiHB/MiPr/MiAC/MiCm
-// profile brands) and the AV1 Image File Format spec (avif, avis, MA1A, MA1B).
+// heis, hevs, and tmap for tone-map derived image items), ISO/IEC 23000-22
+// (MIAF: miaf, MiHE/MiHA/MiHB/MiPr/MiAC/MiCm profile brands) and the AV1 Image
+// File Format spec (avif, avis, MA1A, MA1B). iOS 18+ still HEIC photos write
+// tmap as a compatible brand for adaptive HDR; it is not a sequence or video brand.
 //
 // Reject only when ALL of these hold:
 // - the major brand is a still-image brand (ISO/IEC 23008-12 HEIF, MIAF, AVIF);
@@ -18,7 +20,7 @@
 // FF0A codestream, never ftyp.
 const STILL_MAJOR_BRANDS: ReadonlySet<string> = new Set(['avif', 'heic', 'heix', 'heim', 'mif1', 'miaf'])
 const STILL_COMPATIBLE_BRANDS: ReadonlySet<string> = new Set([
-  ...STILL_MAJOR_BRANDS, 'mif2', 'MA1A', 'MA1B', 'MiHE', 'MiHA', 'MiHB', 'MiPr', 'MiAC', 'MiCm',
+  ...STILL_MAJOR_BRANDS, 'mif2', 'MA1A', 'MA1B', 'MiHE', 'MiHA', 'MiHB', 'MiPr', 'MiAC', 'MiCm', 'tmap',
 ])
 
 function fourcc(bytes: Uint8Array, offset: number): string {

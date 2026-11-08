@@ -215,7 +215,7 @@ jobs:
       - name: Enforce core and package coverage floors
         run: >-
           go-test-coverage --config=core/.testcoverage.yml
-          --profile="$RUNNER_TEMP/core.cover.out" --source-dir=core
+          --profile="$RUNNER_TEMP/core.cover.out"
       - name: Verify protocol vectors once
         run: make vectors
 
