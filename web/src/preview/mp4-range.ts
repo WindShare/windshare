@@ -33,8 +33,8 @@ export interface Mp4Segment {
   readonly bytes: Blob
   // The selected keyframe on the source clip's edit-list presentation timeline.
   readonly keyframeSeconds: number
-  // Where the decoder element finds that keyframe in `bytes`. The one-sample
-  // segment carries no edit list, so this is the sample's raw composition time.
+  // The independent one-sample decoder timeline starts at zero; source edits
+  // and composition offsets belong only to keyframeSeconds.
   readonly decodeSeconds: number
 }
 
@@ -121,7 +121,6 @@ export class Mp4RangePreview {
       throw new VideoPreviewError('MP4 initialization segment exceeds the preview limit')
     }
     const keyframeSeconds = keyframe.ticks / this.#timescale
-    const decodeSeconds = sample.cts / this.#timescale
     const sampleData = await this.#source.read(
       byteRange(BigInt(sample.offset), BigInt(sample.offset + sample.size)),
       signal,
@@ -144,7 +143,7 @@ export class Mp4RangePreview {
       return Object.freeze({
         bytes: new Blob([initialization, segment], { type: 'video/mp4' }),
         keyframeSeconds,
-        decodeSeconds,
+        decodeSeconds: 0,
       })
     } finally {
       unlink()
