@@ -63,7 +63,7 @@ func TestSavedCandidatesAndExplicitSelectionKeepAuthorityBoundToAddress(t *testi
 	}
 }
 
-func TestSelectRelaysInvalidAddressesMatchBothSentinels(t *testing.T) {
+func TestSelectRelaysDistinguishesInvalidAddressesFromMissingConfiguration(t *testing.T) {
 	const canary = "canary-secret-7f3a"
 	valid := Config{ActiveRelays: []string{"https://relay.example"}}
 	for _, test := range []struct {
@@ -80,8 +80,8 @@ func TestSelectRelaysInvalidAddressesMatchBothSentinels(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := SelectRelays(test.config, test.override)
-			if !errors.Is(err, ErrConfig) || !errors.Is(err, ErrRelayURL) {
-				t.Fatalf("want ErrConfig and ErrRelayURL, got %v", err)
+			if errors.Is(err, ErrConfig) || !errors.Is(err, ErrRelayURL) {
+				t.Fatalf("want only ErrRelayURL, got %v", err)
 			}
 			if text := err.Error(); strings.Contains(text, canary) || strings.Contains(text, ErrConfig.Error()) ||
 				!strings.HasPrefix(text, ErrRelayURL.Error()+": ") {
@@ -91,9 +91,6 @@ func TestSelectRelaysInvalidAddressesMatchBothSentinels(t *testing.T) {
 	}
 	if _, err := SelectRelays(Config{}, nil); !errors.Is(err, ErrConfig) || errors.Is(err, ErrRelayURL) {
 		t.Fatalf("missing list should match only ErrConfig: %v", err)
-	}
-	if err := ValidateRelayURL("not-a-relay"); errors.Is(err, ErrConfig) || !errors.Is(err, ErrRelayURL) {
-		t.Fatalf("ValidateRelayURL should match only ErrRelayURL: %v", err)
 	}
 }
 
@@ -113,20 +110,23 @@ func TestSelectRelaysReportsInvalidCopiedAddresses(t *testing.T) {
 		{name: "missing scheme", address: "not-a-relay", want: "not an accepted relay address"},
 		{name: "unsupported scheme", address: "ftp://relay.example", want: "not an accepted relay address"},
 		{name: "credentials", address: "https://user:secret@relay.example", want: "not an accepted relay address"},
+		{name: "interior tab", address: "https://relay.example/a\tb", want: "whitespace or invisible spacing"},
+		{name: "invalid port with valid path space", address: "https://relay.example:65536/a b", want: "not an accepted relay address"},
+		{name: "invalid scheme with valid path spacing", address: "ftp://relay.example/a\u00a0b", want: "not an accepted relay address"},
+		{name: "control byte with valid path space", address: "https://relay.example/a b\x1b", want: "not an accepted relay address"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			validation := ValidateRelayURL(test.address)
-			if !errors.Is(validation, ErrRelayURL) || !strings.Contains(validation.Error(), test.want) {
-				t.Fatalf("ValidateRelayURL(%q)=%v", test.address, validation)
-			}
 			if _, selectErr := SelectRelays(saved, []string{test.address}); !errors.Is(selectErr, ErrRelayURL) ||
 				!strings.Contains(selectErr.Error(), test.want) {
 				t.Fatalf("SelectRelays(%q)=%v", test.address, selectErr)
 			}
 		})
 	}
-	if err := ValidateRelayURL("https://relay.example"); err != nil {
-		t.Fatal(err)
+	for _, address := range []string{"https://relay.example", "https://relay.example/a b", "https://relay.example/a%20b"} {
+		selected, err := SelectRelays(saved, []string{address})
+		if err != nil || len(selected) != 1 || selected[0].PublicURL != address {
+			t.Fatalf("valid address %q changed: selected=%v error=%v", address, selected, err)
+		}
 	}
 	if _, err := SelectRelays(Config{}, nil); !errors.Is(err, ErrConfig) || errors.Is(err, ErrRelayURL) {
 		t.Fatalf("empty selection should stay a configuration error: %v", err)

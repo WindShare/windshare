@@ -17,6 +17,10 @@ const (
 	relayIdentityDomain = "windshare/v2 relay-identity\x00"
 )
 
+// ErrRelayEndpointWhitespace identifies rejected spacing at the validation source,
+// so callers do not mistake otherwise valid path contents for the failure cause.
+var ErrRelayEndpointWhitespace = fmt.Errorf("%w: relay whitespace", ErrIdentity)
+
 type RelayEndpoint struct {
 	DialURL     string
 	IdentityURL string
@@ -27,11 +31,17 @@ type RelayEndpoint struct {
 // endpoint bytes signed by registration and stop. Query credentials remain on
 // DialURL but are deliberately excluded from the long-lived relay identity.
 func NormalizeRelayEndpoint(raw string) (RelayEndpoint, error) {
-	if raw == "" || !utf8.ValidString(raw) || hasBoundaryWhitespace(raw) || strings.ContainsRune(raw, '\\') {
+	if raw == "" || !utf8.ValidString(raw) || strings.ContainsRune(raw, '\\') {
 		return RelayEndpoint{}, fmt.Errorf("%w: relay base spelling", ErrIdentity)
+	}
+	if hasBoundaryWhitespace(raw) {
+		return RelayEndpoint{}, ErrRelayEndpointWhitespace
 	}
 	for index := range len(raw) {
 		if raw[index] <= 0x1f || raw[index] == 0x7f {
+			if boundaryWhitespace(rune(raw[index])) {
+				return RelayEndpoint{}, ErrRelayEndpointWhitespace
+			}
 			return RelayEndpoint{}, fmt.Errorf("%w: relay base control byte", ErrIdentity)
 		}
 	}
