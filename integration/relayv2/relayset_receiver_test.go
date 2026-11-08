@@ -88,6 +88,10 @@ func TestReceiverFirstUsableSessionRecoversWithFreeOrReassignedLane(t *testing.T
 		if !live {
 			t.Fatalf("additional lane %v was never published", oldLane)
 		}
+		senderDone, live := initial.Runtime.LaneDone(oldLane)
+		if !live {
+			t.Fatalf("additional sender lane %v was never published", oldLane)
+		}
 		trace.RequireRecord(t, "relay_loss_injected", testrun.OutcomeSucceeded, struct {
 			Failure string               `json:"failure"`
 			Lane    session.LaneIdentity `json:"lane"`
@@ -102,6 +106,11 @@ func TestReceiverFirstUsableSessionRecoversWithFreeOrReassignedLane(t *testing.T
 		}
 		resume := waitRelaysetEvent(t, ctx, retrying)
 		waitRelaysetEvent(t, ctx, oldDone)
+		// Relay retirement and control traffic travel on independent sockets.
+		// Only the sender owns slot reuse; receiver cleanup cannot prove that
+		// the old slot is free before either replacement requests its grant.
+		waitRelaysetEvent(t, ctx, senderDone)
+		trace.RequireRecord(t, "sender_lane_released", testrun.OutcomeSucceeded, oldLane)
 		requireRelaysetLive(t, runtime, primary, initial.Lane)
 		expectedLanes := 2
 		if index == 1 {

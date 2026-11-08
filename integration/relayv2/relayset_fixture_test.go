@@ -96,6 +96,7 @@ type relaysetAdmission struct {
 	Lane     session.LaneIdentity      `json:"lane"`
 	Kind     sendersession.ChannelKind `json:"kind"`
 	Err      error                     `json:"-"`
+	Runtime  *sendersession.Runtime    `json:"-"`
 }
 
 type relaysetShare struct {
@@ -199,7 +200,7 @@ func prepareRelaysetShare(t *testing.T, ctx context.Context, trace *testscenario
 					if result.Session != nil {
 						lane.ID, lane.Epoch = result.Session.LaneIdentity()
 					}
-					event := relaysetAdmission{Endpoint: url, Session: channel.RelaySessionID(), Lane: lane, Kind: result.Kind, Err: err}
+					event := relaysetAdmission{Endpoint: url, Session: channel.RelaySessionID(), Lane: lane, Kind: result.Kind, Err: err, Runtime: result.Session}
 					if err != nil {
 						_ = channel.Close()
 					}
