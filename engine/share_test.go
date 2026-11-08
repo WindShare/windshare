@@ -7,15 +7,83 @@ import (
 	"testing"
 	"time"
 
+	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
 	sendersession "github.com/windshare/windshare/core/session/sendersession"
+	appobs "github.com/windshare/windshare/engine/observation"
 	"github.com/windshare/windshare/engine/relayprofile"
 )
 
 const shareStartupTestTimeout = 5 * time.Second
+
+func TestShareChunkSizeValidationPrecedesSenderPreparation(t *testing.T) {
+	tests := []struct {
+		name      string
+		size      uint32
+		wantValid bool
+	}{
+		{name: "default", wantValid: true},
+		{name: "minimum", size: catalog.MinChunkSize, wantValid: true},
+		{name: "explicit default", size: catalog.DefaultChunkSize, wantValid: true},
+		{name: "maximum", size: catalog.MaxChunkSize, wantValid: true},
+		{name: "below minimum", size: catalog.MinChunkSize - 1},
+		{name: "not a power of two", size: catalog.MinChunkSize + 1},
+		{name: "above maximum", size: catalog.MaxChunkSize + 1},
+		{name: "maximum wire integer", size: ^uint32(0)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			preparationStopped := errors.New("preparation stopped")
+			prepared := false
+			var preparedSize uint32
+			application := newTestEngine(t, Config{Share: ShareDependencies{
+				Prepare: func(_ context.Context, config liveshare.SenderConfig) (PreparedShare, error) {
+					prepared, preparedSize = true, config.ChunkSize
+					return nil, preparationStopped
+				},
+			}})
+			ctx, cancel := context.WithTimeout(t.Context(), shareStartupTestTimeout)
+			defer cancel()
+			current, err := application.StartShare(ctx, ShareRequest{ChunkSize: test.size})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := current.Wait(ctx)
+			if err != nil || result.Outcome != OutcomeFailed || result.FailureClass != FailureUsage {
+				t.Fatalf("result = %+v, %v", result, err)
+			}
+			if test.wantValid {
+				if !prepared || preparedSize != test.size || !errors.Is(result.Err, preparationStopped) {
+					t.Fatalf("valid chunk size was changed or rejected: prepared=%v size=%d result=%+v", prepared, preparedSize, result)
+				}
+				return
+			}
+			if prepared || !errors.Is(result.Err, ErrInvalidShareChunkSize) || result.Failure.Code() != appobs.FailureInvalidInput {
+				t.Fatalf("invalid chunk size lost its input failure: prepared=%v result=%+v", prepared, result)
+			}
+			if _, err := current.Ready(ctx); !errors.Is(err, ErrInvalidShareChunkSize) {
+				t.Fatalf("readiness lost the input error: %v", err)
+			}
+			settled := 0
+			for observation := range current.Observations() {
+				event, ok := observation.Event.(appobs.EngineTaskObserved)
+				if !ok || event.Facts().Stage != appobs.EngineTaskSettled {
+					continue
+				}
+				settled++
+				if event.Facts().Failure.Code() != appobs.FailureInvalidInput || event.Facts().FailureClass != appobs.EngineFailureUsage {
+					t.Fatalf("task observation lost the input failure: %+v", event.Facts())
+				}
+			}
+			if settled != 1 {
+				t.Fatalf("settled observations = %d", settled)
+			}
+		})
+	}
+}
 
 func TestShareReadinessAndFinalizationUseDurableAuthority(t *testing.T) {
 	prepared := &preparedFacadeShare{}

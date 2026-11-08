@@ -92,6 +92,12 @@ const (
 	MaxFileSize      = MaxSafeInteger
 )
 
+// ValidChunkSize reports whether size is a suite-02 block size: a power of two
+// from MinChunkSize to MaxChunkSize inclusive.
+func ValidChunkSize(size uint32) bool {
+	return size >= MinChunkSize && size <= MaxChunkSize && size&(size-1) == 0
+}
+
 type Capability uint64
 
 const (
@@ -173,7 +179,7 @@ func NewReceivedShareDescriptor(spec ReceivedDescriptorSpec) (ShareDescriptor, e
 }
 
 func newDescriptorValue(spec ReceivedDescriptorSpec) (ShareDescriptor, error) {
-	if spec.ChunkSize < MinChunkSize || spec.ChunkSize > MaxChunkSize || spec.ChunkSize&(spec.ChunkSize-1) != 0 {
+	if !ValidChunkSize(spec.ChunkSize) {
 		return ShareDescriptor{}, fmt.Errorf("catalog chunk size %d is outside the supported power-of-two range", spec.ChunkSize)
 	}
 	if len(spec.SenderPublicKey) != SenderPublicKeySize {
