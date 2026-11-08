@@ -6,6 +6,7 @@ import (
 	"math"
 	"slices"
 
+	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relayprofile"
 )
@@ -56,8 +57,11 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		a.writeCompleteLine("share: at least one path is required")
 		return shareRequest{}, requestParseUsageFailure
 	}
-	if *blockSize < 0 || *blockSize > math.MaxUint32 {
-		a.writeCompleteLine("share: block size is outside the suite-02 range")
+	// Reject unsupported sizes here: the engine would otherwise fail during
+	// relay preparation with a generic error that does not name this option.
+	if *blockSize != 0 && (*blockSize < 0 || *blockSize > math.MaxUint32 || !catalog.ValidChunkSize(uint32(*blockSize))) {
+		a.writeCompleteLine("share: block size is outside the suite-02 range; use 0 for the default or a power of two from %d to %d bytes",
+			catalog.MinChunkSize, catalog.MaxChunkSize)
 		return shareRequest{}, requestParseUsageFailure
 	}
 	// The process entry point supplies personal configuration. Embedded callers

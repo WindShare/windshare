@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
@@ -110,6 +111,19 @@ func TestShareRequestValidationPreservesSuiteBoundaries(t *testing.T) {
 		}
 	})
 
+	t.Run("suite block size boundaries", func(t *testing.T) {
+		for _, size := range []uint32{0, catalog.MinChunkSize, catalog.MaxChunkSize} {
+			app, _, stderr := newSemanticTestApp(strings.NewReader(""))
+			request, parse := app.parseShareRequest([]string{
+				"root", "--relay", "wss://relay.example", "--front-url", "https://app.example",
+				"--block-size", strconv.FormatUint(uint64(size), 10),
+			})
+			if parse != requestParseReady || request.chunkSize != size {
+				t.Fatalf("size=%d parse=%d chunk=%d stderr=%q", size, parse, request.chunkSize, stderr.String())
+			}
+		}
+	})
+
 	for _, test := range []struct {
 		name       string
 		args       []string
@@ -130,6 +144,11 @@ func TestShareRequestValidationPreservesSuiteBoundaries(t *testing.T) {
 			},
 			wantStderr: "outside the suite-02 range",
 		},
+		// The engine rejects these only after relay preparation begins, where the
+		// failure collapses into a generic error without naming the bad option.
+		{name: "block size below suite minimum", args: []string{"root", "--block-size", "512"}, wantStderr: "outside the suite-02 range"},
+		{name: "block size above suite maximum", args: []string{"root", "--block-size", "8388608"}, wantStderr: "outside the suite-02 range"},
+		{name: "block size not a power of two", args: []string{"root", "--block-size", "1000000"}, wantStderr: "outside the suite-02 range"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			app, _, stderr := newSemanticTestApp(strings.NewReader(""))
