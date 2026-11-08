@@ -1,6 +1,9 @@
 package relayconfig
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/engine/relayprofile"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
@@ -20,7 +23,7 @@ func SelectRelays(config Config, override []string) ([]relayprofile.Candidate, e
 	for _, candidate := range saved {
 		endpoint, err := v2.NormalizeRelayEndpoint(candidate.PublicURL)
 		if err != nil {
-			return nil, ErrConfig
+			return nil, relayURLError(err)
 		}
 		credentials[endpoint.DialURL] = candidate.AccessKey
 	}
@@ -29,7 +32,7 @@ func SelectRelays(config Config, override []string) ([]relayprofile.Candidate, e
 	for _, address := range override {
 		endpoint, err := v2.NormalizeRelayEndpoint(address)
 		if err != nil {
-			return nil, ErrConfig
+			return nil, relayURLError(err)
 		}
 		if seen[endpoint.DialURL] {
 			continue
@@ -45,4 +48,11 @@ func SelectRelays(config Config, override []string) ([]relayprofile.Candidate, e
 		return nil, ErrConfig
 	}
 	return candidates, nil
+}
+
+func relayURLError(cause error) error {
+	if errors.Is(cause, v2.ErrRelayEndpointWhitespace) {
+		return fmt.Errorf("%w: contains whitespace or invisible spacing; remove it from the address", ErrRelayURL)
+	}
+	return fmt.Errorf("%w: not an accepted relay address; use an absolute http, https, ws, or wss URL with a host and no user:password@ or #fragment", ErrRelayURL)
 }

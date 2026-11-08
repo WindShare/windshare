@@ -6,6 +6,38 @@ import (
 	"testing"
 )
 
+func TestRelayEndpointWhitespaceCauseMatchesRejectedSpelling(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		address    string
+		whitespace bool
+	}{
+		{name: "leading space", address: " https://relay.example", whitespace: true},
+		{name: "trailing newline", address: "https://relay.example\n", whitespace: true},
+		{name: "BOM prefix", address: "\ufeffhttps://relay.example", whitespace: true},
+		{name: "interior tab", address: "https://relay.example/a\tb", whitespace: true},
+		{name: "invalid port with path space", address: "https://relay.example:65536/a b"},
+		{name: "invalid scheme with path spacing", address: "ftp://relay.example/a\u00a0b"},
+		{name: "control byte with path space", address: "https://relay.example/a b\x1b"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := NormalizeRelayEndpoint(test.address)
+			if !errors.Is(err, ErrIdentity) || errors.Is(err, ErrRelayEndpointWhitespace) != test.whitespace {
+				t.Fatalf("NormalizeRelayEndpoint(%q) = %v; whitespace cause = %t", test.address, err, test.whitespace)
+			}
+		})
+	}
+	for _, address := range []string{
+		"https://relay.example/a b",
+		"https://relay.example/a\u00a0b",
+		"https://relay.example/a%20b",
+	} {
+		if _, err := NormalizeRelayEndpoint(address); err != nil {
+			t.Fatalf("valid path spelling %q rejected: %v", address, err)
+		}
+	}
+}
+
 func TestRelayShareRoutingVectors(t *testing.T) {
 	var vectors struct {
 		Cases []struct {

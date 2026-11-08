@@ -145,6 +145,26 @@ func TestShareRequestValidationPreservesSuiteBoundaries(t *testing.T) {
 			wantStderr: "--block-size",
 		},
 		{
+			name:       "copied relay whitespace",
+			args:       []string{"root", "--relay", " https://relay.example", "--front-url", "https://app.example"},
+			wantStderr: "whitespace or invisible spacing",
+		},
+		{
+			name:       "invalid relay spelling",
+			args:       []string{"root", "--relay", "not-a-relay", "--front-url", "https://app.example"},
+			wantStderr: "invalid relay URL",
+		},
+		{
+			name:       "unsupported relay scheme",
+			args:       []string{"root", "--relay", "ftp://relay.example", "--front-url", "https://app.example"},
+			wantStderr: "invalid relay URL",
+		},
+		{
+			name:       "missing relays keep configuration guidance",
+			args:       []string{"root", "--front-url", "https://app.example"},
+			wantStderr: "configure relay candidates",
+		},
+		{
 			name: "block size wraps to a valid wire value",
 			args: []string{
 				"root", "--block-size", strconv.FormatUint(uint64(math.MaxUint32)+1+catalog.MinChunkSize, 10),

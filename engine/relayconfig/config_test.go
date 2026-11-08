@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/windshare/windshare/engine/relayprofile"
 )
 
 func TestDecodeRejectsIncompleteAmbiguousAndOversizedConfiguration(t *testing.T) {
@@ -56,8 +58,78 @@ func TestSavedCandidatesAndExplicitSelectionKeepAuthorityBoundToAddress(t *testi
 	if err != nil || len(selected) != 1 || selected[0].AccessKey != "two-token" {
 		t.Fatal("equivalent explicit candidates were not deduplicated")
 	}
-	if _, err := SelectRelays(saved, []string{"invalid"}); err == nil {
-		t.Fatal("invalid override accepted")
+	if _, err := SelectRelays(saved, []string{"invalid"}); !errors.Is(err, ErrRelayURL) {
+		t.Fatalf("invalid override: %v", err)
+	}
+}
+
+func TestSelectRelaysDistinguishesInvalidAddressesFromMissingConfiguration(t *testing.T) {
+	const canary = "canary-secret-7f3a"
+	valid := Config{ActiveRelays: []string{"https://relay.example"}}
+	for _, test := range []struct {
+		name     string
+		config   Config
+		override []string
+	}{
+		{name: "bad override", config: valid, override: []string{"ftp://" + canary + ".example"}},
+		{name: "empty override string", config: valid, override: []string{""}},
+		{name: "bad saved profile", config: Config{
+			Profiles:     []relayprofile.Candidate{{PublicURL: "https://user:" + canary + "@relay.example", AccessKey: canary}},
+			ActiveRelays: []string{"https://relay.example"},
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := SelectRelays(test.config, test.override)
+			if errors.Is(err, ErrConfig) || !errors.Is(err, ErrRelayURL) {
+				t.Fatalf("want only ErrRelayURL, got %v", err)
+			}
+			if text := err.Error(); strings.Contains(text, canary) || strings.Contains(text, ErrConfig.Error()) ||
+				!strings.HasPrefix(text, ErrRelayURL.Error()+": ") {
+				t.Fatalf("unexpected diagnostic text %q", text)
+			}
+		})
+	}
+	if _, err := SelectRelays(Config{}, nil); !errors.Is(err, ErrConfig) || errors.Is(err, ErrRelayURL) {
+		t.Fatalf("missing list should match only ErrConfig: %v", err)
+	}
+}
+
+func TestSelectRelaysReportsInvalidCopiedAddresses(t *testing.T) {
+	saved, err := Decode(strings.NewReader(`{"profiles":[{"url":"https://relay.example"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name    string
+		address string
+		want    string
+	}{
+		{name: "leading space", address: " https://relay.example", want: "whitespace or invisible spacing"},
+		{name: "trailing newline", address: "https://relay.example\n", want: "whitespace or invisible spacing"},
+		{name: "bom prefix", address: "\ufeffhttps://relay.example", want: "whitespace or invisible spacing"},
+		{name: "missing scheme", address: "not-a-relay", want: "not an accepted relay address"},
+		{name: "unsupported scheme", address: "ftp://relay.example", want: "not an accepted relay address"},
+		{name: "credentials", address: "https://user:secret@relay.example", want: "not an accepted relay address"},
+		{name: "interior tab", address: "https://relay.example/a\tb", want: "whitespace or invisible spacing"},
+		{name: "invalid port with valid path space", address: "https://relay.example:65536/a b", want: "not an accepted relay address"},
+		{name: "invalid scheme with valid path spacing", address: "ftp://relay.example/a\u00a0b", want: "not an accepted relay address"},
+		{name: "control byte with valid path space", address: "https://relay.example/a b\x1b", want: "not an accepted relay address"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, selectErr := SelectRelays(saved, []string{test.address}); !errors.Is(selectErr, ErrRelayURL) ||
+				!strings.Contains(selectErr.Error(), test.want) {
+				t.Fatalf("SelectRelays(%q)=%v", test.address, selectErr)
+			}
+		})
+	}
+	for _, address := range []string{"https://relay.example", "https://relay.example/a b", "https://relay.example/a%20b"} {
+		selected, err := SelectRelays(saved, []string{address})
+		if err != nil || len(selected) != 1 || selected[0].PublicURL != address {
+			t.Fatalf("valid address %q changed: selected=%v error=%v", address, selected, err)
+		}
+	}
+	if _, err := SelectRelays(Config{}, nil); !errors.Is(err, ErrConfig) || errors.Is(err, ErrRelayURL) {
+		t.Fatalf("empty selection should stay a configuration error: %v", err)
 	}
 }
 

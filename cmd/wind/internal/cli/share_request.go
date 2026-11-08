@@ -100,7 +100,11 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 	}
 	relays, err := relayconfig.SelectRelays(saved, relayURLs)
 	if err != nil {
-		a.writeCompleteLine("share: configure relay candidates with wind config import <file|->, or pass --relay for this share")
+		if errors.Is(err, relayconfig.ErrRelayURL) {
+			a.writeCompleteLine("share: %s", err)
+		} else {
+			a.writeCompleteLine("share: configure relay candidates with wind config import <file|->, or pass --relay for this share")
+		}
 		return shareRequest{}, requestParseUsageFailure
 	}
 	return shareRequest{
