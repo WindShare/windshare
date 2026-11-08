@@ -213,8 +213,8 @@ describe('v2 MP4 edit-list presentation time', () => {
       .rejects.toThrow(new VideoPreviewError('MP4 has no keyframe on its presentation timeline'))
   })
 
-  // The decoder element gets the sample's raw composition time, since the
-  // one-sample segment carries no edit list. The no-B-frame fixtures are
+  // Source keyframes keep their presentation positions while each independent
+  // decoder fragment starts at zero. The no-B-frame fixtures are
   // `-f lavfi -i testsrc=size=64x64:rate=10 -c:v libx264 -g 10 -bf 0 -pix_fmt
   // yuv420p -fflags +bitexact -map_metadata -1`, with `-itsoffset 0.5` before
   // `-i` and `-t 2` (leading empty edit: keyframes at 0.5 s and 1.5 s, raw cts
@@ -230,17 +230,21 @@ describe('v2 MP4 edit-list presentation time', () => {
     ['h264-head-trimmed-no-bframes.mp4', 0, 0.5, 1],
     ['h264-head-trimmed-no-bframes.mp4', 1.5, 1.5, 2],
     ['h264-no-edit-list.mp4', 1, 1, 1],
-  ] as const)('reports %s at %f s as position %f s, frame %f s', async (name, target, position, frame) => {
+  ] as const)('normalizes %s at %f s while preserving position %f s and source frame %f s', async (name, target, position, frame) => {
     const preview = await openFixture(name)
     const segment = await preview.segmentAt(target, new AbortController().signal)
     expect(segment.keyframeSeconds).toBeCloseTo(position, 9)
-    expect(segment.decodeSeconds).toBeCloseTo(frame, 9)
+    expect(segment.decodeSeconds).toBe(0)
     const bytes = new Uint8Array(await segment.bytes.arrayBuffer())
     expect(findBox(fixture(name), 'edts') >= 0 || name === 'h264-no-edit-list.mp4').toBe(true)
     expect(findBox(bytes, 'edts')).toBe(-1)
     const samples = await segmentSamples(bytes)
     expect(samples).toHaveLength(1)
-    expect(samples[0]).toMatchObject({ is_sync: true, cts: Math.round(frame * 10_240) })
+    const original = fixture(name)
+    const selected = (await segmentSamples(original)).find((sample) => sample.cts === Math.round(frame * 10_240))!
+    expect(samples[0]).toMatchObject({ is_sync: true, dts: 0, cts: 0, duration: selected.duration })
+    expect(bytes.slice(samples[0]!.offset, samples[0]!.offset + samples[0]!.size))
+      .toEqual(original.slice(selected.offset, selected.offset + selected.size))
   })
 
   // Open-GOP x264 (`-t 3 -g 12 -bf 2 -x264-params
@@ -255,9 +259,9 @@ describe('v2 MP4 edit-list presentation time', () => {
     for (const target of [1.2, 1.3]) {
       const segment = await preview.segmentAt(target, signal)
       expect(segment.keyframeSeconds).toBeCloseTo(1.2, 9)
-      expect(segment.decodeSeconds).toBeCloseTo(13_312 / 10_240, 9)
+      expect(segment.decodeSeconds).toBe(0)
       const samples = await segmentSamples(new Uint8Array(await segment.bytes.arrayBuffer()))
-      expect(samples).toMatchObject([{ is_sync: true, cts: 13_312 }])
+      expect(samples).toMatchObject([{ is_sync: true, dts: 0, cts: 0 }])
     }
     expect((await preview.segmentAt(1.1, signal)).keyframeSeconds).toBe(0)
   })

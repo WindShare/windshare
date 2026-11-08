@@ -362,6 +362,15 @@ func (runtime *Runtime) DetachLane(identity session.LaneIdentity) bool {
 	return runtime != nil && runtime.core.DetachLane(identity)
 }
 
+// LaneDone observes exact admitted ownership through registry release and
+// transport cleanup. A remote close alone does not establish that boundary.
+func (runtime *Runtime) LaneDone(identity session.LaneIdentity) (<-chan struct{}, bool) {
+	if runtime == nil || runtime.core == nil {
+		return nil, false
+	}
+	return runtime.core.LaneDone(identity)
+}
+
 func (runtime *Runtime) AttachedLanes() int {
 	if runtime == nil {
 		return 0

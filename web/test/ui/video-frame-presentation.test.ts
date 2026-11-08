@@ -262,34 +262,6 @@ describe('video frame presentation fallbacks', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  // Firefox rebases the one-sample segment to zero: its timeline ends at the
-  // sample duration, the seek is clamped, and the frame reports mediaTime 0.
-  it('accepts the only sample once a decoder timeline that ends before it has settled', () => {
-    const video = new FrameDecoder()
-    video.duration = 0.1
-    const { presented } = observe(video, 0.2)
-    video.metadata()
-    expect(video.seeks).toEqual([0.2])
-    video.seeking = true
-    video.frame(0)
-    expect(presented).not.toHaveBeenCalled()
-    video.dispatchEvent(new Event('loadeddata'))
-    expect(presented).not.toHaveBeenCalled()
-    video.seeked()
-    expect(presented).toHaveBeenCalledExactlyOnceWith()
-  })
-
-  it('accepts a rebased frame that arrives after the seek settles', () => {
-    const video = new FrameDecoder()
-    video.duration = 0.1
-    const { presented } = observe(video, 0.1)
-    video.metadata()
-    video.seeked()
-    expect(presented).not.toHaveBeenCalled()
-    video.frame(0)
-    expect(presented).toHaveBeenCalledTimes(1)
-  })
-
   it('keeps waiting for the exact frame when the decoder timeline contains it', () => {
     const video = new FrameDecoder()
     video.duration = 0.3

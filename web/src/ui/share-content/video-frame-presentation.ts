@@ -1,5 +1,5 @@
 type FrameDecoder = Pick<HTMLVideoElement,
-  'currentTime' | 'duration' | 'seeking' | 'readyState' | 'HAVE_METADATA' | 'HAVE_CURRENT_DATA' |
+  'currentTime' | 'readyState' | 'HAVE_METADATA' |
   'addEventListener' | 'removeEventListener' |
   'requestVideoFrameCallback' | 'cancelVideoFrameCallback'>
 
@@ -32,7 +32,6 @@ export function observeVideoFrame(
   let closed = false
   let callbackId: number | undefined
   let deadline: ReturnType<typeof setTimeout> | undefined
-  let rebasedFrame = false
 
   const close = () => {
     closed = true
@@ -41,8 +40,6 @@ export function observeVideoFrame(
     pauseDeadline()
     visibility?.removeEventListener('visibilitychange', visibilityChanged)
     video.removeEventListener('loadedmetadata', seek)
-    video.removeEventListener('loadeddata', settleRebased)
-    video.removeEventListener('seeked', settleRebased)
     video.removeEventListener('error', fail)
   }
   const finish = () => {
@@ -77,30 +74,11 @@ export function observeVideoFrame(
       fail()
     }
   }
-  // Firefox rebases a one-sample segment to start at zero, so its timeline
-  // ends before the sample's composition time and its frames report mediaTime
-  // 0; WebKitGTK ends the timeline at the sample's decode time. When the
-  // decoder's own timeline ends at or before the requested time, no frame can
-  // be presented there: the seek is clamped and mediaTime cannot match. The segment holds only the selected sample, so
-  // any frame presented then is that sample. Firefox can report that frame
-  // before its data is current or while the clamped seek runs, when drawing it
-  // would copy nothing, so it is accepted once the decoder has settled.
-  const rebasedTimeline = () =>
-    video.readyState >= video.HAVE_METADATA && Number.isFinite(video.duration) &&
-    video.duration <= frameTimeSeconds + MEDIA_TIME_ROUNDING_SECONDS
-  const settleRebased = () => {
-    if (rebasedFrame && !video.seeking && video.readyState >= video.HAVE_CURRENT_DATA) finish()
-  }
   const frame: VideoFrameRequestCallback = (_now, metadata) => {
     if (closed) return
     callbackId = undefined
     if (Math.abs(metadata.mediaTime - frameTimeSeconds) <= MEDIA_TIME_ROUNDING_SECONDS) {
       finish()
-      return
-    }
-    if (rebasedTimeline()) {
-      rebasedFrame = true
-      settleRebased()
       return
     }
     // loadeddata/seeked can precede the compositor's target frame. A callback
@@ -116,8 +94,6 @@ export function observeVideoFrame(
   }
 
   video.addEventListener('loadedmetadata', seek)
-  video.addEventListener('loadeddata', settleRebased)
-  video.addEventListener('seeked', settleRebased)
   video.addEventListener('error', fail)
   visibility?.addEventListener('visibilitychange', visibilityChanged)
   armDeadline()
