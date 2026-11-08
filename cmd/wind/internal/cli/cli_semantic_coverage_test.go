@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
@@ -110,6 +111,19 @@ func TestShareRequestValidationPreservesSuiteBoundaries(t *testing.T) {
 		}
 	})
 
+	t.Run("suite block size boundaries", func(t *testing.T) {
+		for _, size := range []uint32{0, catalog.MinChunkSize, catalog.MaxChunkSize} {
+			app, _, stderr := newSemanticTestApp(strings.NewReader(""))
+			request, parse := app.parseShareRequest([]string{
+				"root", "--relay", "wss://relay.example", "--front-url", "https://app.example",
+				"--block-size", strconv.FormatUint(uint64(size), 10),
+			})
+			if parse != requestParseReady || request.chunkSize != size {
+				t.Fatalf("size=%d parse=%d chunk=%d stderr=%q", size, parse, request.chunkSize, stderr.String())
+			}
+		}
+	})
+
 	for _, test := range []struct {
 		name       string
 		args       []string
@@ -121,14 +135,14 @@ func TestShareRequestValidationPreservesSuiteBoundaries(t *testing.T) {
 		{
 			name:       "negative block size",
 			args:       []string{"root", "--block-size", "-1"},
-			wantStderr: "outside the suite-02 range",
+			wantStderr: "--block-size",
 		},
 		{
 			name: "block size exceeds wire width",
 			args: []string{
 				"root", "--block-size", strconv.FormatUint(uint64(math.MaxUint32)+1, 10),
 			},
-			wantStderr: "outside the suite-02 range",
+			wantStderr: "--block-size",
 		},
 		{
 			name:       "copied relay whitespace",
@@ -150,6 +164,17 @@ func TestShareRequestValidationPreservesSuiteBoundaries(t *testing.T) {
 			args:       []string{"root", "--front-url", "https://app.example"},
 			wantStderr: "configure relay candidates",
 		},
+		{
+			name: "block size wraps to a valid wire value",
+			args: []string{
+				"root", "--block-size", strconv.FormatUint(uint64(math.MaxUint32)+1+catalog.MinChunkSize, 10),
+			},
+			wantStderr: "--block-size",
+		},
+		// Missing sharing configuration must not mask an invalid command-line value.
+		{name: "block size below suite minimum", args: []string{"root", "--block-size", "512"}, wantStderr: "--block-size"},
+		{name: "block size above suite maximum", args: []string{"root", "--block-size", "8388608"}, wantStderr: "--block-size"},
+		{name: "block size not a power of two", args: []string{"root", "--block-size", "1000000"}, wantStderr: "--block-size"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			app, _, stderr := newSemanticTestApp(strings.NewReader(""))

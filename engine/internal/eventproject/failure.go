@@ -15,6 +15,7 @@ import (
 	transfer "github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	receive "github.com/windshare/windshare/engine/internal/receive"
+	share "github.com/windshare/windshare/engine/internal/share"
 	task "github.com/windshare/windshare/engine/internal/task"
 	appobs "github.com/windshare/windshare/engine/observation"
 	output "github.com/windshare/windshare/engine/output"
@@ -131,6 +132,9 @@ func classifyDirectError(cause error) (appobs.Failure, bool) {
 	if exactError(cause, context.Canceled) || exactError(cause, task.ErrCancelled) ||
 		exactError(cause, task.ErrApplicationClosed) || exactError(cause, task.ErrShareStopped) {
 		return mustFailure(appobs.FailureCanceled), true
+	}
+	if exactError(cause, share.ErrInvalidChunkSize) {
+		return mustFailure(appobs.FailureInvalidInput), true
 	}
 	if exactError(cause, context.DeadlineExceeded) {
 		return mustFailure(appobs.FailureDeadline), true

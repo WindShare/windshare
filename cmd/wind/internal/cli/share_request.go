@@ -3,9 +3,11 @@ package cli
 import (
 	"errors"
 	"flag"
+	"fmt"
 	"math"
 	"slices"
 
+	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relayprofile"
 )
@@ -35,7 +37,8 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		relayURLs = append(relayURLs, value)
 		return nil
 	})
-	blockSize := flags.Int64("block-size", 0, "file-local block size in bytes; 0 uses the default")
+	blockSize := flags.Int64("block-size", 0, fmt.Sprintf("file-local block size in bytes; 0 uses the default, otherwise a power of two from %d to %d",
+		catalog.MinChunkSize, catalog.MaxChunkSize))
 	splitKey := flags.Bool("split-key", false, "print a bare link and separate key string")
 	frontURL := flags.String("front-url", "", "override the saved frontend base URL for this share")
 	browserTrace := flags.Bool("browser-trace", false, "enable browser diagnostics when the generated link is opened")
@@ -56,8 +59,11 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		a.writeCompleteLine("share: at least one path is required")
 		return shareRequest{}, requestParseUsageFailure
 	}
-	if *blockSize < 0 || *blockSize > math.MaxUint32 {
-		a.writeCompleteLine("share: block size is outside the suite-02 range")
+	// Report invalid flags before configuration or workflow failures can obscure
+	// the user's input error.
+	if *blockSize != 0 && (*blockSize < 0 || *blockSize > math.MaxUint32 || !catalog.ValidChunkSize(uint32(*blockSize))) {
+		a.writeCompleteLine("share: --block-size must be 0 for the default or a power of two from %d to %d bytes",
+			catalog.MinChunkSize, catalog.MaxChunkSize)
 		return shareRequest{}, requestParseUsageFailure
 	}
 	// The process entry point supplies personal configuration. Embedded callers

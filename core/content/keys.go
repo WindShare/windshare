@@ -145,7 +145,7 @@ func (t *KeyTree) revisionKey(file catalog.FileID, revision FileRevision) (Deriv
 }
 
 func SegmentForBlock(localBlockIndex uint64, chunkSize uint32) (uint64, error) {
-	if chunkSize < catalog.MinChunkSize || chunkSize > catalog.MaxChunkSize || chunkSize&(chunkSize-1) != 0 || SegmentPlaintextBytes%uint64(chunkSize) != 0 {
+	if !catalog.ValidChunkSize(chunkSize) || SegmentPlaintextBytes%uint64(chunkSize) != 0 {
 		return 0, fmt.Errorf("%w: segment chunk size %d", ErrInvalidGeometry, chunkSize)
 	}
 	// All allowed chunks divide the 16 GiB segment. Dividing the block index

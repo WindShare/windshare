@@ -29,7 +29,7 @@ type FileGeometry struct {
 }
 
 func NewFileGeometry(exactSize uint64, chunkSize uint32) (FileGeometry, error) {
-	if exactSize > catalog.MaxFileSize || chunkSize < catalog.MinChunkSize || chunkSize > catalog.MaxChunkSize || chunkSize&(chunkSize-1) != 0 {
+	if exactSize > catalog.MaxFileSize || !catalog.ValidChunkSize(chunkSize) {
 		return FileGeometry{}, fmt.Errorf("%w: size=%d chunk=%d", ErrInvalidGeometry, exactSize, chunkSize)
 	}
 	return FileGeometry{exactSize: exactSize, chunkSize: chunkSize}, nil

@@ -29,6 +29,8 @@ import (
 
 var ErrConfiguration = errors.New("invalid share workflow configuration")
 
+var ErrInvalidChunkSize = errors.New("invalid share block size")
+
 type Request struct {
 	Source      liveshare.FileSourceFactory
 	Relays      []relayprofile.Candidate

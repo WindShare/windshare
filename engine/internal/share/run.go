@@ -3,9 +3,11 @@ package share
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/windshare/windshare/connectivity/relayset"
+	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/liveshare"
 
 	sendersession "github.com/windshare/windshare/core/session/sendersession"
@@ -73,6 +75,10 @@ type activeShare struct {
 
 func (s *activeShare) start(ctx, resourceContext context.Context, request Request) (task.FailureClass, error) {
 	d, o := s.dependencies, s.observations
+	if request.ChunkSize != 0 && !catalog.ValidChunkSize(request.ChunkSize) {
+		return task.FailureUsage, fmt.Errorf("%w: %d; use 0 for the default or a power of two from %d to %d bytes",
+			ErrInvalidChunkSize, request.ChunkSize, catalog.MinChunkSize, catalog.MaxChunkSize)
+	}
 	urls, err := relayprofile.PublicURLs(request.Relays)
 	if err != nil || len(urls) > relayset.MaximumEndpoints {
 		return task.FailureUsage, errors.Join(ErrConfiguration, err)
