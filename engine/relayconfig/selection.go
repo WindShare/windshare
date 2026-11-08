@@ -23,7 +23,7 @@ func SelectRelays(config Config, override []string) ([]relayprofile.Candidate, e
 	for _, candidate := range saved {
 		endpoint, err := v2.NormalizeRelayEndpoint(candidate.PublicURL)
 		if err != nil {
-			return nil, relayURLError(candidate.PublicURL)
+			return nil, selectionError{relayURLError(candidate.PublicURL)}
 		}
 		credentials[endpoint.DialURL] = candidate.AccessKey
 	}
@@ -32,7 +32,7 @@ func SelectRelays(config Config, override []string) ([]relayprofile.Candidate, e
 	for _, address := range override {
 		endpoint, err := v2.NormalizeRelayEndpoint(address)
 		if err != nil {
-			return nil, relayURLError(address)
+			return nil, selectionError{relayURLError(address)}
 		}
 		if seen[endpoint.DialURL] {
 			continue
@@ -62,5 +62,13 @@ func relayURLError(raw string) error {
 	if strings.IndexFunc(raw, forbiddenFrontURLRune) >= 0 {
 		return fmt.Errorf("%w: contains whitespace or invisible spacing; remove it from the address", ErrRelayURL)
 	}
-	return fmt.Errorf("%w: expected an absolute HTTP(S) or WS(S) address without credentials or fragment", ErrRelayURL)
+	return fmt.Errorf("%w: not an accepted relay address; use an absolute http, https, ws, or wss URL with a host and no user:password@ or #fragment", ErrRelayURL)
 }
+
+// selectionError keeps SelectRelays compatible with callers that match
+// ErrConfig while also exposing ErrRelayURL. Its text is the relay URL
+// diagnostic only, which never echoes the rejected address.
+type selectionError struct{ relay error }
+
+func (e selectionError) Error() string   { return e.relay.Error() }
+func (e selectionError) Unwrap() []error { return []error{ErrConfig, e.relay} }

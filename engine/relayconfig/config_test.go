@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/windshare/windshare/engine/relayprofile"
 )
 
 func TestDecodeRejectsIncompleteAmbiguousAndOversizedConfiguration(t *testing.T) {
@@ -61,6 +63,40 @@ func TestSavedCandidatesAndExplicitSelectionKeepAuthorityBoundToAddress(t *testi
 	}
 }
 
+func TestSelectRelaysInvalidAddressesMatchBothSentinels(t *testing.T) {
+	const canary = "canary-secret-7f3a"
+	valid := Config{ActiveRelays: []string{"https://relay.example"}}
+	for _, test := range []struct {
+		name     string
+		config   Config
+		override []string
+	}{
+		{name: "bad override", config: valid, override: []string{"ftp://" + canary + ".example"}},
+		{name: "empty override string", config: valid, override: []string{""}},
+		{name: "bad saved profile", config: Config{
+			Profiles:     []relayprofile.Candidate{{PublicURL: "https://user:" + canary + "@relay.example", AccessKey: canary}},
+			ActiveRelays: []string{"https://relay.example"},
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := SelectRelays(test.config, test.override)
+			if !errors.Is(err, ErrConfig) || !errors.Is(err, ErrRelayURL) {
+				t.Fatalf("want ErrConfig and ErrRelayURL, got %v", err)
+			}
+			if text := err.Error(); strings.Contains(text, canary) || strings.Contains(text, ErrConfig.Error()) ||
+				!strings.HasPrefix(text, ErrRelayURL.Error()+": ") {
+				t.Fatalf("unexpected diagnostic text %q", text)
+			}
+		})
+	}
+	if _, err := SelectRelays(Config{}, nil); !errors.Is(err, ErrConfig) || errors.Is(err, ErrRelayURL) {
+		t.Fatalf("missing list should match only ErrConfig: %v", err)
+	}
+	if err := ValidateRelayURL("not-a-relay"); errors.Is(err, ErrConfig) || !errors.Is(err, ErrRelayURL) {
+		t.Fatalf("ValidateRelayURL should match only ErrRelayURL: %v", err)
+	}
+}
+
 func TestSelectRelaysReportsInvalidCopiedAddresses(t *testing.T) {
 	saved, err := Decode(strings.NewReader(`{"profiles":[{"url":"https://relay.example"}]}`))
 	if err != nil {
@@ -74,9 +110,9 @@ func TestSelectRelaysReportsInvalidCopiedAddresses(t *testing.T) {
 		{name: "leading space", address: " https://relay.example", want: "whitespace or invisible spacing"},
 		{name: "trailing newline", address: "https://relay.example\n", want: "whitespace or invisible spacing"},
 		{name: "bom prefix", address: "\ufeffhttps://relay.example", want: "whitespace or invisible spacing"},
-		{name: "missing scheme", address: "not-a-relay", want: "absolute HTTP(S) or WS(S) address"},
-		{name: "unsupported scheme", address: "ftp://relay.example", want: "absolute HTTP(S) or WS(S) address"},
-		{name: "credentials", address: "https://user:secret@relay.example", want: "absolute HTTP(S) or WS(S) address"},
+		{name: "missing scheme", address: "not-a-relay", want: "not an accepted relay address"},
+		{name: "unsupported scheme", address: "ftp://relay.example", want: "not an accepted relay address"},
+		{name: "credentials", address: "https://user:secret@relay.example", want: "not an accepted relay address"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			validation := ValidateRelayURL(test.address)
