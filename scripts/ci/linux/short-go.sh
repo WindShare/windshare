@@ -34,6 +34,6 @@ echo "-- core short race and atomic coverage"
 go test -short -race -covermode=atomic -coverprofile="$core_profile" "${core_packages[@]}"
 
 echo "-- core coverage verdict"
-go-test-coverage --config=core/.testcoverage.yml --profile="$core_profile" --source-dir=core
+go-test-coverage --config=core/.testcoverage.yml --profile="$core_profile"
 
 echo "== short-go: PASS in ${SECONDS}s =="
