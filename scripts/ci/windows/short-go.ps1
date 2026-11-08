@@ -49,7 +49,7 @@ try {
         go test -short -race -covermode=atomic "-coverprofile=$coreProfile" $corePackages
     }
     Invoke-Step 'core coverage verdict' {
-        go-test-coverage --config=core/.testcoverage.yml "--profile=$coreProfile" --source-dir=core
+        go-test-coverage --config=core/.testcoverage.yml "--profile=$coreProfile"
     }
 
     Write-Output ('== short-go: PASS in {0:mm\:ss} ==' -f $gateStopwatch.Elapsed)

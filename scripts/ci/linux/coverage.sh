@@ -29,6 +29,6 @@ echo "-- core short atomic coverage sweep"
 go test -short -count=1 -covermode=atomic -coverprofile="$core_profile" "${core_packages[@]}"
 
 echo "-- core coverage verdict"
-go-test-coverage --config=core/.testcoverage.yml --profile="$core_profile" --source-dir=core
+go-test-coverage --config=core/.testcoverage.yml --profile="$core_profile"
 
 echo "== coverage: PASS in ${SECONDS}s =="
