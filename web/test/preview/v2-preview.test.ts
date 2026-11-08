@@ -685,6 +685,8 @@ describe('v2 file preview ftyp classification', () => {
     ['photo.heic', 'heic', []],
     ['photo.avif', 'avif', []],
     ['photo.heif', 'mif1', ['heic', 'miaf']],
+    ['ios18-hdr.heic', 'heic', ['mif1', 'MiHB', 'MiHE', 'MiPr', 'miaf', 'heic', 'tmap']],
+    ['ios26-hdr.heic', 'heic', ['mif1', 'MiHB', 'MiHA', 'heix', 'MiHE', 'MiPr', 'heic', 'miaf', 'tmap']],
   ] as const)('reports %s without a movie box as an unsupported image after the MP4 scan', async (name, major, compatible) => {
     const bytes = ftypFile(major, compatible)
     const fixture = runtime(bytes, BigInt(bytes.byteLength))

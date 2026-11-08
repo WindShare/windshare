@@ -3,7 +3,6 @@
 # https://github.com/vladopajic/go-test-coverage
 
 profile: cover.out
-local-prefix: github.com/windshare/windshare
 
 threshold:
   # Every package must hold the floor on its own; the group total cannot

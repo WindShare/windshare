@@ -25,6 +25,10 @@ describe('unsupportedStillImageFtypBrand', () => {
 
   it('classifies real-world iPhone-style HEIC brand lists', () => {
     expect(unsupportedStillImageFtypBrand(u8(box(40, ftyp('heic', '\0\0\0\0', ['mif1', 'MiHE', 'MiPr', 'miaf', 'MiHB', 'heic']))))).toBe('HEIC/AVIF')
+    // iPhone 15 Pro / iOS 18 adaptive HDR (ftyp size 44) and iPhone 17 / iOS 26
+    // (size 52) both include the HEIF tone-map compatible brand `tmap`.
+    expect(unsupportedStillImageFtypBrand(u8(box(44, ftyp('heic', '\0\0\0\0', ['mif1', 'MiHB', 'MiHE', 'MiPr', 'miaf', 'heic', 'tmap']))))).toBe('HEIC/AVIF')
+    expect(unsupportedStillImageFtypBrand(u8(box(52, ftyp('heic', '\0\0\0\0', ['mif1', 'MiHB', 'MiHA', 'heix', 'MiHE', 'MiPr', 'heic', 'miaf', 'tmap']))))).toBe('HEIC/AVIF')
   })
 
   it('declines a non-still major even with only still compatible brands', () => {
