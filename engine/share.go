@@ -15,6 +15,8 @@ import (
 	"github.com/windshare/windshare/engine/relayprofile"
 )
 
+var ErrInvalidShareChunkSize = share.ErrInvalidChunkSize
+
 type ShareRequest = share.Request
 type ShareRelayCandidate = relayprofile.Candidate
 type ShareResult = share.Result

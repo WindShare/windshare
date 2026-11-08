@@ -135,20 +135,26 @@ func TestShareRequestValidationPreservesSuiteBoundaries(t *testing.T) {
 		{
 			name:       "negative block size",
 			args:       []string{"root", "--block-size", "-1"},
-			wantStderr: "outside the suite-02 range",
+			wantStderr: "--block-size",
 		},
 		{
 			name: "block size exceeds wire width",
 			args: []string{
 				"root", "--block-size", strconv.FormatUint(uint64(math.MaxUint32)+1, 10),
 			},
-			wantStderr: "outside the suite-02 range",
+			wantStderr: "--block-size",
 		},
-		// The engine rejects these only after relay preparation begins, where the
-		// failure collapses into a generic error without naming the bad option.
-		{name: "block size below suite minimum", args: []string{"root", "--block-size", "512"}, wantStderr: "outside the suite-02 range"},
-		{name: "block size above suite maximum", args: []string{"root", "--block-size", "8388608"}, wantStderr: "outside the suite-02 range"},
-		{name: "block size not a power of two", args: []string{"root", "--block-size", "1000000"}, wantStderr: "outside the suite-02 range"},
+		{
+			name: "block size wraps to a valid wire value",
+			args: []string{
+				"root", "--block-size", strconv.FormatUint(uint64(math.MaxUint32)+1+catalog.MinChunkSize, 10),
+			},
+			wantStderr: "--block-size",
+		},
+		// Missing sharing configuration must not mask an invalid command-line value.
+		{name: "block size below suite minimum", args: []string{"root", "--block-size", "512"}, wantStderr: "--block-size"},
+		{name: "block size above suite maximum", args: []string{"root", "--block-size", "8388608"}, wantStderr: "--block-size"},
+		{name: "block size not a power of two", args: []string{"root", "--block-size", "1000000"}, wantStderr: "--block-size"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			app, _, stderr := newSemanticTestApp(strings.NewReader(""))
