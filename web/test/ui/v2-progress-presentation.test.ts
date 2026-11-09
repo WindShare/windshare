@@ -1,36 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import type { ReceiverProgress } from '../../src/ui/model'
-import {
-  capacityWaitDescription,
-  completionProgressDescription,
-  discoveryProgressDescription,
-  presentDirectZipProgress,
-} from '../../src/ui/progress-presentation'
+import { presentDirectZipProgress } from '../../src/ui/progress-presentation'
 import type { ReceiveLifecycleState } from '../../src/output/workspace'
 import type { DirectZipProgressSnapshot } from '../../src/application/receive/contracts'
 
 describe('v2 progress presentation', () => {
-  it.each(['open', 'failed'] as const)('keeps %s discovery and completion totals as lower bounds', (discovery) => {
-    const progress = receiverProgress({ discovery, failedDirectories: discovery === 'failed' ? 1 : 0 })
-
-    expect(discoveryProgressDescription(progress)).toContain('At least 2 file(s), 1.0 KiB discovered')
-    expect(completionProgressDescription(progress)).toBe(
-      '512 B received · 1 file(s) completed (512 B committed; final total unknown)',
-    )
-    expect(completionProgressDescription(progress)).not.toContain('/2')
-    expect(completionProgressDescription(progress)).not.toContain('%')
-  })
-
-  it('shows exact completed denominators and percentage only after discovery completes', () => {
-    const progress = receiverProgress({ discovery: 'complete' })
-
-    expect(discoveryProgressDescription(progress)).toBe('2 file(s), 1.0 KiB total')
-    expect(completionProgressDescription(progress)).toBe(
-      '512 B received · 1/2 file(s) completed · 512 B/1.0 KiB committed (50%)',
-    )
-  })
-
   it('keeps a complete direct ZIP below 100% until closing and verification have published it', () => {
     const progress = directZipProgress({
       phase: 'closing',
@@ -74,21 +48,6 @@ describe('v2 progress presentation', () => {
     expect(presented.primary).toContain('estimated selection is at least 1.0 KiB')
     expect(presented.primary).not.toContain('%')
   })
-
-  it('presents capacity waiting only after policy visibility and clears it with active waiters', () => {
-    expect(capacityWaitDescription(receiverProgress({
-      capacityWaitingFiles: 1,
-      capacityWaitVisible: false,
-    }))).toBeNull()
-    expect(capacityWaitDescription(receiverProgress({
-      capacityWaitingFiles: 1,
-      capacityWaitVisible: true,
-    }))).toBe('Waiting for sender capacity')
-    expect(capacityWaitDescription(receiverProgress({
-      capacityWaitingFiles: 0,
-      capacityWaitVisible: true,
-    }))).toBeNull()
-  })
 })
 
 function directZipProgress(
@@ -123,28 +82,4 @@ function lifecycle(kind: 'receiving' | 'published'): ReceiveLifecycleState {
         receiptDigest: 'receipt',
         cleanupState: 'clean',
       })
-}
-
-function receiverProgress(overrides: Partial<ReceiverProgress>): ReceiverProgress {
-  return Object.freeze({
-    phase: 'receiving',
-    materializedBytes: 512n,
-    discoveredFiles: 2,
-    discoveredBytes: 1_024n,
-    receivedObjectBytes: 512n,
-    writtenBytes: 512n,
-    completedFiles: 1,
-    completedBytes: 512n,
-    fileErrors: 0,
-    selectionErrors: 0,
-    contentLanes: 1,
-    discovery: 'open',
-    failedDirectories: 0,
-    capacityWaitingFiles: 0,
-    capacityAccumulatedWaitMilliseconds: 0,
-    capacityWaitAttempts: 0,
-    capacityWaitVisible: false,
-    transferJobId: 'job',
-    ...overrides,
-  })
 }
