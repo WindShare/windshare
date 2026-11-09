@@ -55,7 +55,8 @@ export class RelayHeartbeat {
   #round = 0n
   #acknowledged = 0n
   #tracked: TrackedProbe[] = []
-  #lastInboundAt = Date.now()
+  // Calendar corrections must not postpone relay loss or revoke a healthy path.
+  #lastInboundAt = performance.now()
   #closed = false
 
   constructor(socket: ProbeSocket, fail: (error: unknown) => void, trace?: (event: RelayHeartbeatTrace) => void) {
@@ -68,7 +69,7 @@ export class RelayHeartbeat {
 
   /** Records a frame the connection accepted; the silence timer rereads it lazily. */
   observeInbound(): void {
-    this.#lastInboundAt = Date.now()
+    this.#lastInboundAt = performance.now()
   }
 
   /**
@@ -88,7 +89,7 @@ export class RelayHeartbeat {
     this.#acknowledged = nonce
     const acknowledged = this.#tracked.find(probe => probe.round === nonce)
     this.#tracked = this.#tracked.filter(probe => probe.round > nonce)
-    if (acknowledged !== undefined) this.#emit('acknowledged', nonce, Date.now() - acknowledged.sentAt)
+    if (acknowledged !== undefined) this.#emit('acknowledged', nonce, performance.now() - acknowledged.sentAt)
     return true
   }
 
@@ -110,7 +111,7 @@ export class RelayHeartbeat {
   #probe(): void {
     if (this.#closed) return
     this.#round += 1n
-    const now = Date.now()
+    const now = performance.now()
     this.#tracked.push({ round: this.#round, sentAt: now })
     if (this.#tracked.length > MAXIMUM_TRACKED_PROBES) this.#tracked.shift()
     this.#emit('probe', this.#round, 0)
@@ -127,7 +128,7 @@ export class RelayHeartbeat {
 
   #checkSilence(): void {
     if (this.#closed) return
-    const silence = Date.now() - this.#lastInboundAt
+    const silence = performance.now() - this.#lastInboundAt
     if (silence >= RELAY_HEARTBEAT_TIMEOUT_MILLISECONDS) {
       this.#failed(new RelayHeartbeatError(), silence)
       return
