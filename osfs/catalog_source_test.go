@@ -3,6 +3,7 @@ package osfs
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -229,6 +230,25 @@ func TestSelectedCatalogSourceReportsMissingRoot(t *testing.T) {
 		Paths: []string{filepath.Join(t.TempDir(), "missing")}, SyntheticRoot: synthetic,
 	}); err == nil {
 		t.Fatal("missing selected root was accepted")
+	}
+}
+
+func TestSelectedCatalogSourceRejectsEmptyRootInsteadOfSharingWorkingDirectory(t *testing.T) {
+	// An unset shell variable such as `wind share "$DIR"` arrives as "". The
+	// platform resolver maps "" to the working directory, which would publish an
+	// unrelated tree without the user naming it.
+	t.Chdir(t.TempDir())
+	if err := os.WriteFile("private.txt", []byte("private"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	synthetic, _ := catalog.DirectoryIDFromBytes(identity16(6))
+	source, err := NewSelectedCatalogSource(SelectedCatalogSourceConfig{Paths: []string{""}, SyntheticRoot: synthetic})
+	if err == nil {
+		_ = source.Close()
+		t.Fatal("empty selected root resolved to the working directory")
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("empty selected root error = %v, want not-exist classification like other missing roots", err)
 	}
 }
 
