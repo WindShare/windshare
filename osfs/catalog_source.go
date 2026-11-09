@@ -101,6 +101,12 @@ func (source *SelectedCatalogSource) openSelectedRoot(
 	slot RootSlot,
 	parent catalog.DirectoryID,
 ) (catalog.NodeRecord, *os.Root, error) {
+	if selectedPath == "" {
+		// filepath.Abs("") is the working directory; an empty selection (typically an
+		// unset variable) must not silently publish it. Report it as any other
+		// missing root.
+		return catalog.NodeRecord{}, nil, pathfailure.Filesystem("resolve selected root", selectedPath, fs.ErrNotExist)
+	}
 	absolute, err := filepath.Abs(selectedPath)
 	if err != nil {
 		return catalog.NodeRecord{}, nil, pathfailure.Filesystem("resolve selected root", selectedPath, err)
