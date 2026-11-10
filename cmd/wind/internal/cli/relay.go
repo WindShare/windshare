@@ -105,7 +105,7 @@ func (app *App) runRelaySetup(ctx context.Context, request engine.RelaySetupRequ
 	if result.Err != nil {
 		app.writeCompleteLine("relay setup: %v", result.Err)
 		if ctx.Err() != nil {
-			app.writeInterruptedRelaySetupHint(request.URL)
+			app.writeInterruptedRelaySetupHint(result.Err)
 		}
 		return ExitFailure
 	}
@@ -129,18 +129,25 @@ func relayCancelExitCode(err error) int {
 	return ExitFailure
 }
 
-// writeInterruptedRelaySetupHint reads the saved state instead of assuming it,
-// because an interruption during discovery happens before any pending record
-// exists and "wind relay cancel" would then have nothing to cancel.
-func (app *App) writeInterruptedRelaySetupHint(address string) {
-	pending, err := app.application.RelaySetupPending(address)
-	switch {
-	case err != nil:
-		app.writeCompleteLine("relay setup: could not check for a saved setup: %v", err)
-	case pending:
-		app.writeCompleteLine("Setup was saved. Run the same command to continue, or %s relay cancel %s.", commandmeta.Name, address)
+func (app *App) writeInterruptedRelaySetupHint(err error) {
+	var failure *relaysetup.SetupError
+	if !errors.As(err, &failure) {
+		return
+	}
+	recovery := failure.Recovery
+	switch recovery.Action {
+	case relaysetup.RecoveryRestart:
+		app.writeCompleteLine("No pending setup was recorded; run the same command to start again.")
+	case relaysetup.RecoveryContinue:
+		app.writeCompleteLine("Setup was saved. Run the same command to continue, or %s relay cancel %s.", commandmeta.Name, recovery.RelayURL)
+	case relaysetup.RecoveryCancel:
+		app.writeCompleteLine("Cancel the saved setup with %s relay cancel %s, then run the same command again.", commandmeta.Name, recovery.RelayURL)
+	case relaysetup.RecoveryRetryCancel:
+		app.writeCompleteLine("Cancellation is unfinished; run %s relay cancel %s to finish it.", commandmeta.Name, recovery.RelayURL)
+	case relaysetup.RecoveryBlocked:
+		app.writeCompleteLine("Finish the pending setup for %s, or run %s relay cancel %s.", recovery.RelayURL, commandmeta.Name, recovery.RelayURL)
 	default:
-		app.writeCompleteLine("Nothing was saved; run the same command to start again.")
+		app.writeCompleteLine("Setup state could not be confirmed.")
 	}
 }
 

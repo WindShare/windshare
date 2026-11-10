@@ -292,8 +292,8 @@ func TestSettingsChangedBeforePendingIsSavedOnlyAsksToStartAgain(t *testing.T) {
 			if !errors.Is(err, ErrSettingsChanged) || store.saved.Pending != nil {
 				t.Fatalf("Run = %v, pending=%v", err, store.saved.Pending)
 			}
-			if strings.Contains(err.Error(), "cancel") || !strings.Contains(err.Error(), "start again") {
-				t.Fatalf("guidance mentions a setup that was never saved: %v", err)
+			if recovery := setupRecovery(t, err); recovery.Action != RecoveryRestart {
+				t.Fatalf("recovery requires a setup that was never saved: %+v", recovery)
 			}
 		})
 	}

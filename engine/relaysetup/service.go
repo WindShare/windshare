@@ -80,10 +80,10 @@ type Progress struct {
 func (Progress) EngineEvent() {}
 
 type Service struct {
-	dependencies Dependencies
-	mu           sync.Mutex
-	active       *activity
-	cancelling   bool
+	workflow
+	mu         sync.Mutex
+	active     *activity
+	cancelling bool
 }
 
 func New(dependencies Dependencies) *Service {
@@ -102,7 +102,7 @@ func New(dependencies Dependencies) *Service {
 	if dependencies.Log == nil {
 		dependencies.Log = slog.New(slog.NewJSONHandler(io.Discard, nil))
 	}
-	return &Service{dependencies: dependencies}
+	return &Service{workflow: workflow{dependencies: dependencies}}
 }
 func wait(ctx context.Context, duration time.Duration) error {
 	timer := time.NewTimer(duration)
@@ -114,13 +114,6 @@ func wait(ctx context.Context, duration time.Duration) error {
 		return nil
 	}
 }
-func (service *Service) emit(progress func(Progress), event Progress) {
-	service.dependencies.Log.Info("relay_setup", "stage", event.Stage, "operation_id", event.OperationID,
-		"enrollment_id", event.EnrollmentID, "retry_after", event.RetryAfter)
-	if progress != nil {
-		progress(event)
-	}
-}
 func (service *Service) Run(ctx context.Context, request Request, progress func(Progress)) (result Result, resultErr error) {
 	ctx, finish, err := service.begin(ctx, request.URL)
 	if err != nil {
@@ -130,66 +123,17 @@ func (service *Service) Run(ctx context.Context, request Request, progress func(
 	if service.dependencies.Store == nil {
 		return Result{}, errors.New("relay configuration storage is unavailable")
 	}
-	if request.Operation != AddProfile && request.Operation != PrivateOnboarding {
-		return Result{}, errors.New("unknown relay setup operation")
+	store := &recoveryStore{Store: service.dependencies.Store, request: request,
+		recovery: Recovery{Action: RecoveryUnknown, RelayURL: request.URL}}
+	dependencies := service.dependencies
+	dependencies.Store = store
+	run := workflow{dependencies: dependencies}
+	result, resultErr = run.execute(ctx, request, progress)
+	if resultErr != nil {
+		service.dependencies.Log.Info("relay_setup_failed", "operation", request.Operation,
+			"operation_id", store.recovery.OperationID, "relay_url", store.recovery.RelayURL,
+			"recovery", store.recovery.Action, "reason", resultErr)
+		resultErr = &SetupError{Recovery: store.recovery, cause: resultErr}
 	}
-	if err := ctx.Err(); err != nil {
-		return Result{}, err
-	}
-	saved, err := service.dependencies.Store.Load()
-	if err != nil {
-		return Result{}, err
-	}
-	if saved.Pending != nil {
-		if !sameRelay(saved.Pending.RelayURL, request.URL) || saved.Pending.Operation != request.Operation {
-			return Result{}, ErrPendingSetup
-		}
-		return service.continueEnrollment(ctx, saved, progress, request.NoBrowser)
-	}
-	discovery, err := service.discover(ctx, request.URL)
-	if err != nil {
-		return Result{}, err
-	}
-	if request.Operation == PrivateOnboarding && discovery.Access != "restricted" {
-		return Result{}, errors.New("private onboarding requires a restricted relay")
-	}
-	if discovery.Access == "open" {
-		return service.install(ctx, saved.SettingsRevision(), discovery.RelayURL, "", "", discovery.FrontendURL, request.Operation)
-	}
-	if request.DeviceName == "" {
-		return Result{}, errors.New("device name is required")
-	}
-	secret := make([]byte, claimSecretBytes)
-	if _, err := io.ReadFull(service.dependencies.Random, secret); err != nil {
-		return Result{}, err
-	}
-	operation := make([]byte, operationIDBytes)
-	if _, err := io.ReadFull(service.dependencies.Random, operation); err != nil {
-		return Result{}, err
-	}
-	saved.Pending = &PendingSetup{
-		SettingsRevision: saved.SettingsRevision(), OperationID: encode(operation),
-		RelayURL: discovery.RelayURL, ConsoleURL: discovery.ConsoleURL, FrontURL: discovery.FrontendURL,
-		DeviceName: request.DeviceName, ClaimSecret: encode(secret), Operation: request.Operation, phase: requesting{}}
-
-	// Persist the claimant before the first request; a lost response can recover by digest.
-	pending := saved.Pending
-	saved, err = service.dependencies.Store.Update(ctx, func(current *Snapshot) error {
-		if current.Pending != nil {
-			return ErrPendingSetup
-		}
-		if current.SettingsRevision() != pending.SettingsRevision {
-			return errSettingsChangedBeforePending
-		}
-		// Detect capacity and selection failures before asking anyone to approve.
-		if _, err := installation(current.Config, pending.RelayURL, "", pending.FrontURL, request.Operation); err != nil {
-			return err
-		}
-		current.Pending = pending
-		return nil
-	})
-	if err != nil {
-		return Result{}, err
-	}
-	return service.continueEnrollment(ctx, saved, progress, request.NoBrowser)
+	return result, resultErr
 }

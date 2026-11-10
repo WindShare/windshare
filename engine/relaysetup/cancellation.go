@@ -52,7 +52,7 @@ func (service *Service) Cancel(ctx context.Context, address string) error {
 	return service.finishCancellation(ctx, saved.Pending)
 }
 
-func (service *Service) finishCancellation(ctx context.Context, pending *PendingSetup) error {
+func (service *workflow) finishCancellation(ctx context.Context, pending *PendingSetup) error {
 	if pending.enrollment().ID != "" {
 		var response map[string]any
 		err := service.call(ctx, http.MethodPost, endpoint(pending.ConsoleURL, "enrollments/cancel"), claimant(pending), &response)
@@ -65,17 +65,4 @@ func (service *Service) finishCancellation(ctx context.Context, pending *Pending
 	}
 	service.emit(nil, Progress{Stage: "cancelled", OperationID: pending.OperationID, EnrollmentID: pending.enrollment().ID})
 	return nil
-}
-
-// HasPending reports whether a setup for address is persisted and resumable,
-// so a caller can describe what an interruption left behind.
-func (service *Service) HasPending(address string) (bool, error) {
-	if service.dependencies.Store == nil {
-		return false, errors.New("relay configuration storage is unavailable")
-	}
-	saved, err := service.dependencies.Store.Load()
-	if err != nil {
-		return false, err
-	}
-	return saved.Pending != nil && sameRelay(saved.Pending.RelayURL, address), nil
 }

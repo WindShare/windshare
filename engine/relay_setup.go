@@ -41,15 +41,3 @@ func relaySetupSettlement(ctx context.Context, err error) task.Settlement {
 	}
 	return task.Settlement{Outcome: task.OutcomeFailed, FailureClass: task.FailureLocal, Err: err}
 }
-
-// RelaySetupPending reports whether an interrupted setup for address left a
-// pending record that the same command would continue.
-func (engine *Engine) RelaySetupPending(address string) (bool, error) {
-	engine.mu.Lock()
-	closing := engine.closing
-	engine.mu.Unlock()
-	if closing {
-		return false, ErrClosed
-	}
-	return engine.relaySetup.HasPending(address)
-}

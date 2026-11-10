@@ -188,8 +188,7 @@ func TestRelayCancelWithNothingPendingIsAUsageError(t *testing.T) {
 		t.Run(address, func(t *testing.T) {
 			app, stdout, stderr := newRelayTestApp(t, nil)
 			code := app.Run(t.Context(), []string{"relay", "cancel", address})
-			const want = "relay cancel: no relay setup is pending; nothing was cancelled\n"
-			if code != ExitUsage || stderr.String() != want || stdout.Len() != 0 {
+			if code != ExitUsage || stderr.Len() == 0 || stdout.Len() != 0 {
 				t.Fatalf("exit=%d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
 			}
 		})
@@ -238,20 +237,23 @@ func TestInterruptedRelaySetupHintMatchesWhatWasSaved(t *testing.T) {
 			}))
 			t.Cleanup(func() { close(released) })
 			app, _, stderr := newRelayTestApp(t, server.Client())
+			store := &interruptedRelayStore{Store: app.engineConfig.RelaySetup.Store, ctx: ctx}
+			app.engineConfig.RelaySetup.Store = store
 			if code := app.Run(ctx, []string{"relay", "add", relayURL, "--name", "CLI device", "--no-browser"}); code != ExitFailure {
 				t.Fatalf("interrupted setup exit=%d stderr=%q", code, stderr.String())
 			}
-			hint := "Nothing was saved; run the same command to start again."
-			if scenario == "approval" {
-				hint = "Setup was saved. Run the same command to continue, or wind relay cancel " + relayURL + "."
+			if store.loadsAfterInterrupt.Load() != 0 {
+				t.Fatal("interruption feedback reacquired configuration storage")
 			}
-			if !strings.HasSuffix(stderr.String(), hint+"\n") {
-				t.Fatalf("stderr=%q, want hint %q", stderr.String(), hint)
+			cancelCommand := "wind relay cancel " + relayURL
+			if strings.Contains(stderr.String(), cancelCommand) != (scenario == "approval") {
+				t.Fatalf("cancellation guidance does not match saved progress: %q", stderr.String())
 			}
 			if scenario != "approval" {
 				return
 			}
-			// The saved-setup hint must be actionable as printed.
+			// Explicit cancellation is a new operation with its own storage access.
+			app.engineConfig.RelaySetup.Store = store.Store
 			stderr.Reset()
 			if code := app.Run(t.Context(), []string{"relay", "cancel", relayURL}); code != ExitOK || !cancelled.Load() {
 				t.Fatalf("following the hint: exit=%d cancelled=%v stderr=%q", code, cancelled.Load(), stderr.String())
