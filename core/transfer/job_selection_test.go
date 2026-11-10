@@ -428,6 +428,7 @@ func TestTransferJobMissingOpaqueDirectoryTargetAborts(t *testing.T) {
 	result := job.Run(context.Background())
 	if result.Outcome != DirectTreeOutcomePartial || result.TerminationCause != nil ||
 		len(result.Directories) != 0 || !errors.Is(result.SelectionResolutionFailure, ErrSelectionTargetMissing) ||
+		result.MissingSelectionPaths != nil ||
 		output.aborted || output.pauseCalls != 0 || output.completeCalls != 1 ||
 		!slices.Equal(output.directories, []string{""}) || !slices.Equal(output.finalized, []string{""}) {
 		t.Fatalf("result=%+v", result)

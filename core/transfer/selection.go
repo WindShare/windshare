@@ -241,8 +241,10 @@ func (r SelectionRules) selectedOpaqueTargetCount() int {
 	return count
 }
 
+// missingPathTargets returns nil rather than an empty slice when nothing is
+// missing so JobResult.MissingSelectionPaths has one representation for "none".
 func (r SelectionRules) missingPathTargets(matched map[string]struct{}) []string {
-	missing := make([]string, 0)
+	var missing []string
 	for _, target := range r.pathTargets {
 		if _, found := matched[target]; !found {
 			missing = append(missing, target)
@@ -279,12 +281,13 @@ func (r SelectionRules) missingSelectedFileTargets(matched map[catalog.FileID]st
 	return missing
 }
 
+// missingTargetsError takes the already computed missing paths so the error
+// text and JobResult.MissingSelectionPaths cannot disagree.
 func (r SelectionRules) missingTargetsError(
-	matchedPaths map[string]struct{},
+	paths []string,
 	matchedDirectories map[catalog.DirectoryID]struct{},
 	matchedFiles map[catalog.FileID]struct{},
 ) error {
-	paths := r.missingPathTargets(matchedPaths)
 	directories := r.missingSelectedDirectoryTargets(matchedDirectories)
 	files := r.missingSelectedFileTargets(matchedFiles)
 	if len(paths) == 0 && len(directories) == 0 && len(files) == 0 {
