@@ -216,6 +216,7 @@ func (r *jobRun) finish(ctx context.Context) JobResult {
 		RevisionCleanupFailures:        r.revisionCleanupFailures,
 		OmittedRevisionCleanupFailures: r.omittedRevisionCleanupFailures,
 		SelectionResolutionFailure:     r.selectionResolutionFailure,
+		MissingSelectionPaths:          r.missingSelectionPaths,
 		SourceDriftFailure:             failurestate.Err(sourceDriftFailure),
 		SourceDriftFault:               sourceDriftFailure.Fault(),
 		SucceededFiles:                 progress.PublishedFiles,

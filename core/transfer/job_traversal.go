@@ -235,6 +235,7 @@ type jobRun struct {
 	needsAttention                 bool
 	selectionObservation           SelectionObservationV1
 	selectionResolutionFailure     error
+	missingSelectionPaths          []string
 	matchedPaths                   map[string]struct{}
 	matchedDirectories             map[catalog.DirectoryID]struct{}
 	matchedFiles                   map[catalog.FileID]struct{}

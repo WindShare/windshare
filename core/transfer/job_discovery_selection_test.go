@@ -434,7 +434,8 @@ func TestTransferJobResolvesPathSelectionInsideBoundedJobTraversal(t *testing.T)
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 1 || result.Progress.DiscoveredFiles != 1 {
+	if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 1 || result.Progress.DiscoveredFiles != 1 ||
+		result.MissingSelectionPaths != nil {
 		t.Fatalf("result=%+v", result)
 	}
 	if source.loadCount(root) != 3 || source.loadCount(folder) != 3 || source.loadCount(unrelated) != 0 {
@@ -579,5 +580,43 @@ func TestTransferJobTransfersCommittedSiblingBeforeDelayedDiscovery(t *testing.T
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("job did not finish after delayed sibling was released")
+	}
+}
+
+func TestTransferJobNamesOnlyTheMissingPathTargets(t *testing.T) {
+	share := transferID[catalog.ShareInstance](143)
+	root := transferID[catalog.DirectoryID](144)
+	folder := transferID[catalog.DirectoryID](145)
+	file := transferID[catalog.FileID](146)
+	descriptor := jobDescriptor(t, share, file, 4, 1)
+	opened, _ := NewOpenedRevision(transferID[RevisionHandle](147), descriptor)
+	// The present target must stay unnamed: reporting every requested path would
+	// point users at a correct --only value.
+	rules, err := NewPathSelectionRules([]string{"missing.bin", "folder/file.bin", "folder/missing.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := newTestTransferJob(t, testTransferJobConfig{
+		ShareInstance: share, SyntheticRoot: root, Rules: rules,
+		Catalog: failingCatalog{
+			snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
+				root:   jobSnapshot(t, share, root, 1, jobDirectoryEntry(t, folder, "folder")),
+				folder: jobSnapshot(t, share, folder, 2, jobEntry(t, file, "file.bin", 1)),
+			},
+			failures: make(map[catalog.DirectoryID]error),
+		},
+		Revisions: &jobRevisionClient{
+			opened: map[catalog.FileID]OpenedRevision{file: opened}, failures: make(map[catalog.FileID]error),
+		},
+		Blocks: scriptedRangeReader{}, Materializer: newJobOutput(share),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := job.Run(context.Background())
+	if !errors.Is(result.SelectionResolutionFailure, ErrSelectionTargetMissing) || result.SucceededFiles != 1 ||
+		!slices.Equal(result.MissingSelectionPaths, []string{"folder/missing.txt", "missing.bin"}) {
+		t.Fatalf("missing paths=%q succeeded=%d failure=%v",
+			result.MissingSelectionPaths, result.SucceededFiles, result.SelectionResolutionFailure)
 	}
 }
