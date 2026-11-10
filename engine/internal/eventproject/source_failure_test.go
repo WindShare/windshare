@@ -49,12 +49,37 @@ func TestSourceFailuresPreserveMeaningAndSelectedPathThroughCleanup(t *testing.T
 	}
 }
 
+func TestSelectionCollisionProjectionRequiresExplicitSelectionSemantics(t *testing.T) {
+	const first, second = "a/notes.txt", "b/NOTES.TXT"
+	cause := fmt.Errorf("prepare: %w", errors.Join(
+		&catalog.SelectionNameCollisionError{FirstLabel: first, SecondLabel: second}, context.DeadlineExceeded,
+	))
+	failure, present := ClassifyError(cause)
+	collision, located := failure.SelectionCollision()
+	if !present || !failure.Valid() || failure.Code() != appobs.FailureSelectionCollision || !located ||
+		collision.FirstPath().Text() != first || collision.SecondPath().Text() != second {
+		t.Fatalf("selection collision lost its context: %+v", failure)
+	}
+	for _, unrelated := range []error{
+		catalog.ErrSiblingCollision,
+		fmt.Errorf("duplicate node identity: %w", catalog.ErrSiblingCollision),
+		&catalog.SelectionError{Label: second, Cause: catalog.ErrSiblingCollision},
+		&catalog.SelectionNameCollisionError{SecondLabel: second},
+	} {
+		failure, present := ClassifyError(unrelated)
+		if !present || failure.Code() != appobs.FailureUnexpected {
+			t.Fatalf("non-selection or incomplete collision became a selection failure: %+v", failure)
+		}
+	}
+}
+
 func TestSourceFailureProjectionKeepsTraversalBounded(t *testing.T) {
 	cycle := &catalog.SelectionError{Label: "selected"}
 	cycle.Cause = cycle
 	for _, cause := range []error{
 		cycle,
 		(*catalog.SelectionError)(nil),
+		(*catalog.SelectionNameCollisionError)(nil),
 		(*catalog.SourceError)(nil),
 		&catalog.SourceError{Failure: catalog.SourceFailure(255)},
 	} {

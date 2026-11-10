@@ -65,7 +65,7 @@ func TestFailureMessagesCoverClosedVocabulary(t *testing.T) {
 	t.Parallel()
 	codes := []appobs.FailureCode{
 		appobs.FailureUnexpected, appobs.FailureCanceled, appobs.FailureDeadline,
-		appobs.FailureInvalidInput, appobs.FailureCapabilityInvalid, appobs.FailureSelectionMissing,
+		appobs.FailureInvalidInput, appobs.FailureCapabilityInvalid, appobs.FailureSelectionMissing, appobs.FailureSelectionCollision,
 		appobs.FailurePublication, appobs.FailureTraceWrite, appobs.FailureRelayMalformed,
 		appobs.FailureRelayStarting, appobs.FailurePeerNegotiation, appobs.FailureSourceUnavailable,
 		appobs.FailurePeerPolicy, appobs.FailurePeerBusy, appobs.FailurePeerAdmission,

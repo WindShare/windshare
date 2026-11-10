@@ -109,6 +109,14 @@ func CanonicalPath(path string) (string, error) {
 	return strings.Join(components, "/"), nil
 }
 
+// SiblingNameKey returns the key under which sibling names collide: two names
+// cannot coexist in one directory listing when their keys are equal, because
+// receivers may compare them case- or form-insensitively. Computing it once per
+// name lets callers detect collisions with a map instead of pairwise folds.
+func SiblingNameKey(name string) string {
+	return siblingCollisionKey(name)
+}
+
 func siblingCollisionKey(name string) string {
 	return unicode15.FoldPortableName(name)
 }

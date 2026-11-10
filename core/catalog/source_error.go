@@ -38,3 +38,15 @@ func (err *SelectionError) Error() string {
 	return fmt.Sprintf("select source %q: %v", err.Label, err.Cause)
 }
 func (err *SelectionError) Unwrap() error { return err.Cause }
+
+// SelectionNameCollisionError identifies selections that cannot coexist under
+// the synthetic root. Labels are display facts, not filesystem authority; this
+// error is distinct from catalog integrity failures such as duplicate node IDs.
+type SelectionNameCollisionError struct {
+	FirstLabel  string
+	SecondLabel string
+}
+
+func (err *SelectionNameCollisionError) Error() string {
+	return fmt.Sprintf("selected sources %q and %q have colliding names", err.FirstLabel, err.SecondLabel)
+}

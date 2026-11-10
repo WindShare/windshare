@@ -80,6 +80,7 @@ func newSelectedCatalogSource(ctx context.Context, config SelectedCatalogSourceC
 	fail := func(cause error) (*SelectedCatalogSource, error) {
 		return nil, errors.Join(cause, source.Close())
 	}
+	selectedNames := make(map[string]int, len(config.Paths))
 	for index, selectedPath := range config.Paths {
 		if err := ctx.Err(); err != nil {
 			return fail(err)
@@ -90,6 +91,16 @@ func newSelectedCatalogSource(ctx context.Context, config SelectedCatalogSourceC
 				Label: selectedPath, Cause: classifySourceError("acquire selected root", catalog.SourceReference{}, err),
 			})
 		}
+		nameKey := catalog.SiblingNameKey(record.Entry().Name())
+		if position, collides := selectedNames[nameKey]; collides {
+			// Selected roots become siblings under one synthetic root. Preserve both
+			// selections before the catalog loses their caller-facing labels.
+			collision := &catalog.SelectionNameCollisionError{
+				FirstLabel: config.Paths[position], SecondLabel: selectedPath,
+			}
+			return fail(errors.Join(collision, root.Close()))
+		}
+		selectedNames[nameKey] = index
 		source.roots = append(source.roots, root)
 		source.selected = append(source.selected, record)
 	}
