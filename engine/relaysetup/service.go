@@ -102,7 +102,7 @@ func New(dependencies Dependencies) *Service {
 	if dependencies.Log == nil {
 		dependencies.Log = slog.New(slog.NewJSONHandler(io.Discard, nil))
 	}
-	return &Service{workflow: workflow{dependencies: dependencies}}
+	return &Service{dependencies: dependencies}
 }
 func wait(ctx context.Context, duration time.Duration) error {
 	timer := time.NewTimer(duration)
