@@ -22,7 +22,7 @@ func (service *Service) awaitCredential(ctx context.Context, pending *PendingSet
 		if current.SettingsRevision() != pending.SettingsRevision {
 			service.dependencies.Log.Info("relay_setup_settings_changed", "operation_id", pending.OperationID,
 				"enrollment_id", pending.enrollment().ID)
-			return Snapshot{}, ErrSettingsChanged
+			return Snapshot{}, errSettingsChangedWhilePending
 		}
 		var credential credentialResponse
 		err = service.call(ctx, http.MethodPost, endpoint(pending.ConsoleURL, "enrollments/claim"), claimant(pending), &credential)

@@ -20,12 +20,19 @@ func (service *Service) Cancel(ctx context.Context, address string) error {
 		return err
 	}
 	if saved.Pending == nil {
-		if interrupted {
+		service.dependencies.Log.Info("relay_cancel_without_pending", "address", address, "interruption", interrupted.String())
+		switch interrupted {
+		case stoppedRunning:
+			// The setup stopped before saving a pending record (for example
+			// during discovery), so stopping it is the whole cancellation.
 			return nil
+		case finishedFirst:
+			return errFinishedBeforeCancel
+		default:
+			// Reporting success here would hide a mistyped URL or an already
+			// finished setup behind "cancelled".
+			return ErrNoPendingSetup
 		}
-		// Reporting success here would hide a mistyped URL or an already
-		// finished setup behind "cancelled".
-		return ErrNoPendingSetup
 	}
 	if !sameRelay(saved.Pending.RelayURL, address) {
 		return ErrPendingSetup
@@ -58,4 +65,17 @@ func (service *Service) finishCancellation(ctx context.Context, pending *Pending
 	}
 	service.emit(nil, Progress{Stage: "cancelled", OperationID: pending.OperationID, EnrollmentID: pending.enrollment().ID})
 	return nil
+}
+
+// HasPending reports whether a setup for address is persisted and resumable,
+// so a caller can describe what an interruption left behind.
+func (service *Service) HasPending(address string) (bool, error) {
+	if service.dependencies.Store == nil {
+		return false, errors.New("relay configuration storage is unavailable")
+	}
+	saved, err := service.dependencies.Store.Load()
+	if err != nil {
+		return false, err
+	}
+	return saved.Pending != nil && sameRelay(saved.Pending.RelayURL, address), nil
 }

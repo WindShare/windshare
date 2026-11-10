@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -28,8 +29,17 @@ var (
 	ErrPendingSetup    = errors.New("another relay setup is pending; finish or cancel it first")
 	ErrNoPendingSetup  = errors.New("no relay setup is pending; nothing was cancelled")
 	ErrSetupRunning    = errors.New("relay setup is already running; finish or cancel it first")
-	ErrSettingsChanged = errors.New("sharing settings changed during relay setup; cancel this setup and start again")
+	ErrSettingsChanged = errors.New("sharing settings changed during relay setup")
 	ErrSetupSuperseded = errors.New("relay setup was completed, cancelled or replaced")
+)
+
+// The recovery for ErrSettingsChanged depends on whether a pending record
+// exists: before one is saved there is nothing to cancel, and once one is saved
+// it blocks every new setup until it is cancelled.
+var (
+	errSettingsChangedBeforePending = fmt.Errorf("%w; start again", ErrSettingsChanged)
+	errSettingsChangedWhilePending  = fmt.Errorf("%w; cancel this setup and start again", ErrSettingsChanged)
+	errFinishedBeforeCancel         = fmt.Errorf("relay setup finished before it could be cancelled; %w", ErrNoPendingSetup)
 )
 
 type Store interface {
@@ -111,12 +121,12 @@ func (service *Service) emit(progress func(Progress), event Progress) {
 		progress(event)
 	}
 }
-func (service *Service) Run(ctx context.Context, request Request, progress func(Progress)) (Result, error) {
+func (service *Service) Run(ctx context.Context, request Request, progress func(Progress)) (result Result, resultErr error) {
 	ctx, finish, err := service.begin(ctx, request.URL)
 	if err != nil {
 		return Result{}, err
 	}
-	defer finish()
+	defer func() { finish(resultErr == nil) }()
 	if service.dependencies.Store == nil {
 		return Result{}, errors.New("relay configuration storage is unavailable")
 	}
@@ -169,7 +179,7 @@ func (service *Service) Run(ctx context.Context, request Request, progress func(
 			return ErrPendingSetup
 		}
 		if current.SettingsRevision() != pending.SettingsRevision {
-			return ErrSettingsChanged
+			return errSettingsChangedBeforePending
 		}
 		// Detect capacity and selection failures before asking anyone to approve.
 		if _, err := installation(current.Config, pending.RelayURL, "", pending.FrontURL, request.Operation); err != nil {

@@ -47,7 +47,7 @@ func (service *Service) install(ctx context.Context, revision, address, accessKe
 			return ErrPendingSetup
 		}
 		if current.SettingsRevision() != revision {
-			return ErrSettingsChanged
+			return errSettingsChangedBeforePending
 		}
 		next, err := installation(current.Config, address, accessKey, frontend, operation)
 		if err == nil {
@@ -69,7 +69,7 @@ func pendingInstallation(current Snapshot, pending *PendingSetup) (relayconfig.C
 		return relayconfig.Config{}, ErrSetupSuperseded
 	}
 	if current.SettingsRevision() != pending.SettingsRevision {
-		return relayconfig.Config{}, ErrSettingsChanged
+		return relayconfig.Config{}, errSettingsChangedWhilePending
 	}
 	return installation(current.Config, pending.RelayURL, pending.credential().AccessKey, pending.FrontURL, pending.Operation)
 }

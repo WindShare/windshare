@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -198,6 +199,9 @@ func TestSettingsChangedDuringAcknowledgementCannotPublishOldIntent(t *testing.T
 	_, err := service.Run(t.Context(), Request{URL: "https://private.example", Operation: AddProfile}, nil)
 	if !errors.Is(err, ErrSettingsChanged) || store.saved.SettingsRevision() != imported.SettingsRevision() {
 		t.Fatalf("acknowledgement bypassed the settings conflict: %v", err)
+	}
+	if !strings.Contains(err.Error(), "cancel this setup") {
+		t.Fatalf("a saved pending setup needs cancellation guidance: %v", err)
 	}
 	if err := service.Cancel(t.Context(), "https://private.example"); err != nil || store.saved.Pending != nil {
 		t.Fatalf("acknowledged conflict could not be abandoned: %v", err)
