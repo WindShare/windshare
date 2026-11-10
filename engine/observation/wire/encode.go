@@ -90,6 +90,11 @@ func EncodeFailure(failure appobs.Failure) (Failure, error) {
 	if path, ok := failure.SourcePath(); ok {
 		projected.SourcePath = path.Text()
 	}
+	if collision, ok := failure.SelectionCollision(); ok {
+		projected.SelectionCollision = &SelectionCollision{
+			FirstPath: collision.FirstPath().Text(), SecondPath: collision.SecondPath().Text(),
+		}
+	}
 	return projected, nil
 }
 

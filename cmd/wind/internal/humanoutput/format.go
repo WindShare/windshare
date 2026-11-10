@@ -151,6 +151,12 @@ func failureMessage(failure appobs.Failure) string {
 		message = "The selected content was not found."
 	case appobs.MessageRetainedOutputMissing:
 		message = "No saved download matches this resume request."
+	case appobs.MessageSelectionCollision:
+		message = "Selected names must differ even ignoring case. Rename one item or remove a duplicate selection."
+		if collision, ok := failure.SelectionCollision(); ok {
+			message = "Selected names collide: " + escapedDisplay(collision.FirstPath().Text()) + " and " +
+				escapedDisplay(collision.SecondPath().Text()) + ". " + message
+		}
 	case appobs.MessageRelayRejected:
 		message = "The relay rejected the request."
 	case appobs.MessageRelayUnavailable:
