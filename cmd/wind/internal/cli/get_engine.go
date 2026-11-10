@@ -121,6 +121,9 @@ func (a *App) reportReceiveRecovery(result engine.ReceiveResult) {
 	}
 	switch recovery.Reason {
 	case engine.ReceiveRecoverySelectionMissing:
+		for _, path := range result.Transfer.MissingSelectionPaths {
+			a.writeCompleteLine("Not found in this share: --only %q", path)
+		}
 		a.writeCompleteLine("Correct --only and run wind get with the intended selection.")
 	case engine.ReceiveRecoveryInvalidRequest:
 		a.writeCompleteLine("Correct the request before starting another download.")

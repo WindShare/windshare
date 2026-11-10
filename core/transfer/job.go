@@ -157,6 +157,9 @@ type JobResult struct {
 	// SelectionResolutionFailure is separate from bounded diagnostics because a
 	// proven explicit miss is an authoritative job outcome, not an incidental detail.
 	SelectionResolutionFailure error
+	// MissingSelectionPaths names the requested paths that the complete catalog
+	// proved absent, so the CLI can name them without parsing error text.
+	MissingSelectionPaths []string
 	// SourceDriftFailure preserves the first semantic drift outcome even when its
 	// per-file or per-directory diagnostic is omitted by the retention budget.
 	SourceDriftFailure      error
@@ -477,6 +480,7 @@ func (r *jobRun) completeDiscovery(
 			// Absence proven by a complete catalog is a closed selection result,
 			// not a resumable transport or output failure.
 			r.selectionResolutionFailure = missingErr
+			r.missingSelectionPaths = r.job.rules.missingPathTargets(r.matchedPaths)
 		}
 	}
 	r.job.progress.finishDiscovery()

@@ -581,3 +581,30 @@ func TestTransferJobTransfersCommittedSiblingBeforeDelayedDiscovery(t *testing.T
 		t.Fatal("job did not finish after delayed sibling was released")
 	}
 }
+
+func TestTransferJobNamesEveryMissingPathTarget(t *testing.T) {
+	share := transferID[catalog.ShareInstance](143)
+	root := transferID[catalog.DirectoryID](144)
+	rules, err := NewPathSelectionRules([]string{"missing.bin", "folder/missing.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := newTestTransferJob(t, testTransferJobConfig{
+		ShareInstance: share, SyntheticRoot: root, Rules: rules,
+		Catalog: failingCatalog{
+			snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{root: jobSnapshot(t, share, root, 1)},
+			failures:  make(map[catalog.DirectoryID]error),
+		},
+		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Materializer: newJobOutput(share),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := job.Run(context.Background())
+	missing := slices.Clone(result.MissingSelectionPaths)
+	slices.Sort(missing)
+	if !errors.Is(result.SelectionResolutionFailure, ErrSelectionTargetMissing) ||
+		!slices.Equal(missing, []string{"folder/missing.txt", "missing.bin"}) {
+		t.Fatalf("missing paths=%q failure=%v", missing, result.SelectionResolutionFailure)
+	}
+}
