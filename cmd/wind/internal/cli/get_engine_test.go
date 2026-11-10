@@ -27,7 +27,7 @@ func TestReceiveTaskCompletionReportsDroppedObservationsBeforeTerminal(t *testin
 		Outcome:      engine.OutcomeFailed, FailureClass: engine.FailureLocal, Err: engine.ReceiveFailure{Code: engine.ReceiveFailureInvalidInput},
 		Value: engine.ReceiveResult{},
 	}
-	if code := app.reportReceiveTask(result, observation); code != ExitFailure {
+	if code := app.reportReceiveTask(result, receiveSelection{}, observation); code != ExitFailure {
 		t.Fatalf("exit=%d", code)
 	}
 	observation.completeAndFinalize()

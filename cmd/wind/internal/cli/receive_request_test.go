@@ -65,10 +65,12 @@ func TestReceiveCommandsNormalizeEquivalentCatalogSelections(t *testing.T) {
 				"--only", "tree", "--only", "caf\u00e9", "--only", " spaced ",
 			})
 			want := []string{"tree", "caf\u00e9", " spaced "}
-			if outcome != requestParseReady || !slices.Equal(request.only, want) {
-				t.Fatalf("selection=%q outcome=%d", request.only, outcome)
+			wantTyped := []string{"tree/", "cafe\u0301/", " spaced "}
+			if outcome != requestParseReady || !slices.Equal(request.selection.paths, want) ||
+				!slices.Equal(request.selection.typed, wantTyped) {
+				t.Fatalf("selection=%q typed=%q outcome=%d", request.selection.paths, request.selection.typed, outcome)
 			}
-			if _, err := transfer.NewPathSelectionRules(request.only); err != nil {
+			if _, err := transfer.NewPathSelectionRules(request.selection.paths); err != nil {
 				t.Fatalf("CLI selection violated the core contract: %v", err)
 			}
 		})
@@ -104,8 +106,8 @@ func TestReceiveSelectionBoundsApplyAfterDeduplication(t *testing.T) {
 	}
 	paths[len(paths)-1] = paths[0] + "/"
 	normalized, err := normalizeReceiveSelection(paths)
-	if err != nil || len(normalized) != transfer.MaxSelectionPathTargets {
-		t.Fatalf("duplicate consumed a path slot: count=%d err=%v", len(normalized), err)
+	if err != nil || len(normalized.paths) != transfer.MaxSelectionPathTargets {
+		t.Fatalf("duplicate consumed a path slot: count=%d err=%v", len(normalized.paths), err)
 	}
 	prefix := strings.Repeat("a", catalog.MaxNameBytes) + "/" + strings.Repeat("b", catalog.MaxNameBytes) + "/"
 	paths = paths[:0]

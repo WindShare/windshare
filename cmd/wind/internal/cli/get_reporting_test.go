@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -500,4 +501,84 @@ func (a *App) reportTransferResultWithAdmission(
 		return ExitFailure
 	}
 	return code
+}
+
+func TestMissingSelectionEchoesTypedOnlyValuesInCommandLineOrder(t *testing.T) {
+	const hint = "--only paths start with the shared file or folder name (<name>/...) and are case-sensitive."
+	many := receiveSelection{}
+	var manyMissing []string
+	for index := range maxReportedMissingSelections + 3 {
+		path := fmt.Sprintf("file-%02d", index)
+		many.paths, many.typed = append(many.paths, path), append(many.typed, path+"/")
+		manyMissing = append(manyMissing, path)
+	}
+	manyLines := []string{"Not found in this share:"}
+	for _, typed := range many.typed[:maxReportedMissingSelections] {
+		manyLines = append(manyLines, fmt.Sprintf("  --only %q", typed))
+	}
+	tests := []struct {
+		name      string
+		selection receiveSelection
+		missing   []string
+		wantLines []string
+		absent    []string
+	}{
+		{
+			name: "typed spelling and order, present target unnamed",
+			selection: receiveSelection{
+				paths: []string{"d/nope", "d/a b.txt", "a b.txt"},
+				typed: []string{"d/nope", "d/a b.txt", "a b.txt/"},
+			},
+			// The engine reports canonical targets sorted; output follows the command line.
+			missing:   []string{"a b.txt", "d/nope"},
+			wantLines: []string{"Not found in this share:", `  --only "d/nope"`, `  --only "a b.txt/"`, hint},
+			absent:    []string{`"d/a b.txt"`, `--only "a b.txt"` + "\n", "omitted"},
+		},
+		{
+			name:    "opaque node-ID miss names no paths",
+			missing: nil, absent: []string{"Not found in this share", hint},
+		},
+		{
+			name:      "long selection is capped",
+			selection: many, missing: manyMissing,
+			wantLines: append(manyLines, "  3 more omitted.", hint),
+			absent:    []string{fmt.Sprintf("%q", many.typed[maxReportedMissingSelections])},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stderr := &bytes.Buffer{}
+			app := &App{Stderr: stderr, terminalCapabilities: terminalcanvas.CapabilityProviderFunc(func() terminalcanvas.Capabilities {
+				return terminalcanvas.Capabilities{Columns: 500}
+			})}
+			runtime, err := app.newCommandRuntime(clievent.CommandGet, observationOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			settled, err := engine.SettleReceive(engine.ReceiveSettlementInput{
+				Result: transfer.JobResult{
+					Outcome:                    transfer.DirectTreeOutcomePartial,
+					Progress:                   transfer.ReceiveProgressSnapshot{Discovery: transfer.DiscoveryComplete, CountersExact: true},
+					SelectionResolutionFailure: transfer.ErrSelectionTargetMissing,
+					MissingSelectionPaths:      test.missing,
+				},
+				Destination: t.TempDir(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			code := app.reportEngineReceive(settled, test.selection, getObservation{runtime: runtime})
+			runtime.Close()
+			output := stderr.String()
+			want := strings.Join(append(test.wantLines, "Correct --only and run wind get with the intended selection."), "\n") + "\n"
+			if code != ExitUsage || !strings.Contains(output, want) || !strings.Contains(output, "selected content was not found") {
+				t.Fatalf("exit=%d stderr=%q\nwant block=%q", code, output, want)
+			}
+			for _, unwanted := range test.absent {
+				if strings.Contains(output, unwanted) {
+					t.Fatalf("stderr=%q contains %q", output, unwanted)
+				}
+			}
+		})
+	}
 }
