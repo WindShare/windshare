@@ -45,7 +45,7 @@ type discovery struct {
 	FrontendURL string `json:"frontend_url"`
 }
 
-func (service *Service) call(ctx context.Context, method, address string, body, out any) error {
+func (run *workflow) call(ctx context.Context, method, address string, body, out any) error {
 	var reader io.Reader
 	if body != nil {
 		encoded, err := json.Marshal(body)
@@ -61,7 +61,7 @@ func (service *Service) call(ctx context.Context, method, address string, body, 
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	response, err := service.dependencies.HTTP.Do(request)
+	response, err := run.dependencies.HTTP.Do(request)
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -100,7 +100,7 @@ func (service *Service) call(ctx context.Context, method, address string, body, 
 	}
 	return failure
 }
-func (service *Service) discover(ctx context.Context, address string) (discovery, error) {
+func (run *workflow) discover(ctx context.Context, address string) (discovery, error) {
 	var result discovery
 	parsed, err := url.Parse(address)
 	if err != nil {
@@ -116,7 +116,7 @@ func (service *Service) discover(ctx context.Context, address string) (discovery
 		return result, errors.New("relay discovery requires an HTTP(S) base URL")
 	}
 	parsed.Path = "/.well-known/windshare"
-	if err = service.call(ctx, http.MethodGet, parsed.String(), nil, &result); err != nil {
+	if err = run.call(ctx, http.MethodGet, parsed.String(), nil, &result); err != nil {
 		return result, err
 	}
 	if result.Version != 1 || (result.Access != "open" && result.Access != "restricted") || !sameRelay(address, result.RelayURL) {

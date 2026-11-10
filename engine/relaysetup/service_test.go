@@ -198,3 +198,103 @@ func TestCancelledRequestKeepsPriorConfigurationAndCanBeExplicitlyAbandoned(t *t
 		t.Fatal(err)
 	}
 }
+
+func TestCancelWithoutPendingSetupReportsNothingToCancel(t *testing.T) {
+	store := &memoryStore{saved: prior()}
+	service := New(Dependencies{Store: store, HTTP: fakeHTTP(func(req *http.Request) (*http.Response, error) {
+		t.Fatalf("cancellation without pending setup contacted %s", req.URL)
+		return nil, nil
+	})})
+	for _, address := range []string{"https://private.example", "not a relay"} {
+		if err := service.Cancel(t.Context(), address); !errors.Is(err, ErrNoPendingSetup) {
+			t.Fatalf("Cancel(%q) = %v, want ErrNoPendingSetup", address, err)
+		}
+	}
+	if store.saved.Pending != nil || !slices.Equal(store.saved.Profiles, prior().Profiles) {
+		t.Fatal("cancellation without pending setup changed settings")
+	}
+}
+
+func TestCancelInterruptingDiscoveryBeforePendingIsSaved(t *testing.T) {
+	store := &memoryStore{saved: prior()}
+	discovering := make(chan struct{})
+	service := New(Dependencies{Store: store, HTTP: fakeHTTP(func(req *http.Request) (*http.Response, error) {
+		close(discovering)
+		<-req.Context().Done()
+		return nil, req.Context().Err()
+	})})
+	result := make(chan error, 1)
+	go func() {
+		_, err := service.Run(t.Context(), Request{URL: "https://private.example", DeviceName: "Laptop", Operation: AddProfile}, nil)
+		result <- err
+	}()
+	<-discovering
+	if err := service.Cancel(t.Context(), "https://private.example"); err != nil {
+		t.Fatalf("cancelling an unsaved running setup: %v", err)
+	}
+	if err := <-result; !errors.Is(err, context.Canceled) || store.saved.Pending != nil {
+		t.Fatalf("running setup was not cancelled: %v", err)
+	}
+}
+
+// commitDespiteCancelStore lets the installation commit win the race against a
+// concurrent Cancel: it waits until the run's context is cancelled and then
+// commits anyway, as a real file transaction already past its write would.
+type commitDespiteCancelStore struct {
+	*memoryStore
+	committing chan struct{}
+}
+
+func (store commitDespiteCancelStore) Update(ctx context.Context, change func(*Snapshot) error) (Snapshot, error) {
+	select {
+	case <-store.committing:
+		return store.memoryStore.Update(ctx, change)
+	default:
+	}
+	close(store.committing)
+	<-ctx.Done()
+	return store.memoryStore.Update(context.Background(), change)
+}
+
+func TestCancelLosingTheRaceToInstallationReportsNothingCancelled(t *testing.T) {
+	store := commitDespiteCancelStore{memoryStore: &memoryStore{saved: prior()}, committing: make(chan struct{})}
+	service := New(Dependencies{Store: store, HTTP: fakeHTTP(func(*http.Request) (*http.Response, error) {
+		return response(200, map[string]any{"version": 1, "access": "open", "relay_url": "https://open.example"})
+	})})
+	result := make(chan error, 1)
+	go func() {
+		_, err := service.Run(t.Context(), Request{URL: "https://open.example", Operation: AddProfile}, nil)
+		result <- err
+	}()
+	<-store.committing
+	err := service.Cancel(t.Context(), "https://open.example")
+	if runErr := <-result; runErr != nil {
+		t.Fatalf("installation that committed reported %v", runErr)
+	}
+	if !errors.Is(err, ErrNoPendingSetup) || !strings.Contains(err.Error(), "finished before") {
+		t.Fatalf("Cancel after a committed installation = %v, want a finished-first ErrNoPendingSetup", err)
+	}
+	if len(store.saved.Profiles) != 2 {
+		t.Fatal("test did not commit the installation")
+	}
+}
+
+func TestSettingsChangedBeforePendingIsSavedOnlyAsksToStartAgain(t *testing.T) {
+	for _, access := range []string{"open", "restricted"} {
+		t.Run(access, func(t *testing.T) {
+			store := &memoryStore{saved: prior()}
+			service := New(Dependencies{Store: store, HTTP: fakeHTTP(func(*http.Request) (*http.Response, error) {
+				store.saved.FrontURL = "https://later-choice.example"
+				return response(200, map[string]any{"version": 1, "access": access, "relay_url": "https://private.example",
+					"console_url": "https://private.example"})
+			})})
+			_, err := service.Run(t.Context(), Request{URL: "https://private.example", DeviceName: "Laptop", Operation: AddProfile}, nil)
+			if !errors.Is(err, ErrSettingsChanged) || store.saved.Pending != nil {
+				t.Fatalf("Run = %v, pending=%v", err, store.saved.Pending)
+			}
+			if recovery := setupRecovery(t, err); recovery.Action != RecoveryRestart {
+				t.Fatalf("recovery requires a setup that was never saved: %+v", recovery)
+			}
+		})
+	}
+}

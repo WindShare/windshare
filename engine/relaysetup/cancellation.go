@@ -7,7 +7,7 @@ import (
 )
 
 func (service *Service) Cancel(ctx context.Context, address string) error {
-	finish, err := service.beginCancellation(ctx, address)
+	finish, interrupted, err := service.beginCancellation(ctx, address)
 	if err != nil {
 		return err
 	}
@@ -16,8 +16,23 @@ func (service *Service) Cancel(ctx context.Context, address string) error {
 		return errors.New("relay configuration storage is unavailable")
 	}
 	saved, err := service.dependencies.Store.Load()
-	if err != nil || saved.Pending == nil {
+	if err != nil {
 		return err
+	}
+	if saved.Pending == nil {
+		service.dependencies.Log.Info("relay_cancel_without_pending", "address", address, "interruption", interrupted.String())
+		switch interrupted {
+		case stoppedRunning:
+			// The setup stopped before saving a pending record (for example
+			// during discovery), so stopping it is the whole cancellation.
+			return nil
+		case finishedFirst:
+			return errFinishedBeforeCancel
+		default:
+			// Reporting success here would hide a mistyped URL or an already
+			// finished setup behind "cancelled".
+			return ErrNoPendingSetup
+		}
 	}
 	if !sameRelay(saved.Pending.RelayURL, address) {
 		return ErrPendingSetup
@@ -37,7 +52,7 @@ func (service *Service) Cancel(ctx context.Context, address string) error {
 	return service.finishCancellation(ctx, saved.Pending)
 }
 
-func (service *Service) finishCancellation(ctx context.Context, pending *PendingSetup) error {
+func (service *workflow) finishCancellation(ctx context.Context, pending *PendingSetup) error {
 	if pending.enrollment().ID != "" {
 		var response map[string]any
 		err := service.call(ctx, http.MethodPost, endpoint(pending.ConsoleURL, "enrollments/cancel"), claimant(pending), &response)
