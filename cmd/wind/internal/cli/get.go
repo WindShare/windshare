@@ -32,7 +32,7 @@ type receiveRequest struct {
 	admission    engine.ReceiveOutputAdmission
 	operationID  receivecontract.OperationID
 	outDir       string
-	only         []string
+	selection    receiveSelection
 	link         link.Link
 	connectivity engine.ConnectivityPolicy
 	observation  observationOptions
@@ -62,7 +62,7 @@ func (a *App) runReceive(ctx context.Context, command receiveCommand, args []str
 	if factory == nil {
 		factory = filesystem.FilesystemOutput{RootPath: destination, CreateRoot: true}
 	}
-	task, err := a.application.StartReceive(ctx, engine.ReceiveRequest{Admission: request.admission, OperationID: request.operationID, Capability: request.link, Only: request.only, Connectivity: request.connectivity, WaitTimeout: request.waitTimeout, Output: factory, Destination: destination, Diagnostics: runtime.diagnosticSink(), OnPause: a.receivePauseHandler()})
+	task, err := a.application.StartReceive(ctx, engine.ReceiveRequest{Admission: request.admission, OperationID: request.operationID, Capability: request.link, Only: request.selection.paths, Connectivity: request.connectivity, WaitTimeout: request.waitTimeout, Output: factory, Destination: destination, Diagnostics: runtime.diagnosticSink(), OnPause: a.receivePauseHandler()})
 	if err != nil {
 		return observation.commandFailure(ExitFailure, err)
 	}
@@ -77,7 +77,7 @@ func (a *App) runReceive(ctx context.Context, command receiveCommand, args []str
 	if err != nil {
 		return observation.commandFailure(ExitFailure, err)
 	}
-	return a.reportReceiveTask(result, observation)
+	return a.reportReceiveTask(result, request.selection, observation)
 }
 
 const (
@@ -141,7 +141,7 @@ func (a *App) parseReceiveRequest(command receiveCommand, args []string) (receiv
 		a.writeCompleteLine("%s: exactly one link argument is required", name)
 		return receiveRequest{}, requestParseUsageFailure
 	}
-	paths, err := normalizeReceiveSelection(only)
+	selection, err := normalizeReceiveSelection(only)
 	if err != nil {
 		a.writeCompleteLine("%s: %v", name, err)
 		return receiveRequest{}, requestParseUsageFailure
@@ -176,39 +176,51 @@ func (a *App) parseReceiveRequest(command receiveCommand, args []string) (receiv
 	}
 	return receiveRequest{
 		admission: admission, operationID: operationID,
-		outDir: *outDir, only: paths, link: capability, connectivity: connectivity,
+		outDir: *outDir, selection: selection, link: capability, connectivity: connectivity,
 		observation: observation, waitTimeout: *waitTimeout,
 	}, requestParseReady
 }
 
+// receiveSelection pairs each canonical --only target with the spelling the
+// user typed first, so reports can echo command-line input instead of claiming
+// that normalized catalog identity is what the user wrote.
+type receiveSelection struct {
+	// paths are canonical, deduplicated, and in command-line order.
+	paths []string
+	// typed[i] is the first command-line spelling of paths[i].
+	typed []string
+}
+
 // CLI spellings may be equivalent even though core selection identity must be
 // canonical. Keep catalog paths independent of the host filesystem's path rules.
-func normalizeReceiveSelection(requested []string) ([]string, error) {
+func normalizeReceiveSelection(requested []string) (receiveSelection, error) {
 	if len(requested) == 0 {
-		return nil, nil
+		return receiveSelection{}, nil
 	}
 	seen := make(map[string]struct{}, min(len(requested), transfer.MaxSelectionPathTargets))
 	paths := make([]string, 0, min(len(requested), transfer.MaxSelectionPathTargets))
+	typed := make([]string, 0, cap(paths))
 	var totalBytes uint64
 	for _, raw := range requested {
 		path, err := catalog.CanonicalPath(strings.TrimSuffix(raw, "/"))
 		if err != nil {
-			return nil, fmt.Errorf("--only %q: %w", raw, err)
+			return receiveSelection{}, fmt.Errorf("--only %q: %w", raw, err)
 		}
 		if _, duplicate := seen[path]; duplicate {
 			continue
 		}
 		if len(paths) == transfer.MaxSelectionPathTargets {
-			return nil, fmt.Errorf("--only: select at most %d distinct catalog paths", transfer.MaxSelectionPathTargets)
+			return receiveSelection{}, fmt.Errorf("--only: select at most %d distinct catalog paths", transfer.MaxSelectionPathTargets)
 		}
 		totalBytes += uint64(len(path))
 		if totalBytes > transfer.MaxSelectionPathTargetBytes {
-			return nil, fmt.Errorf("--only: catalog paths exceed the %d-byte total limit", transfer.MaxSelectionPathTargetBytes)
+			return receiveSelection{}, fmt.Errorf("--only: catalog paths exceed the %d-byte total limit", transfer.MaxSelectionPathTargetBytes)
 		}
 		seen[path] = struct{}{}
 		paths = append(paths, path)
+		typed = append(typed, raw)
 	}
-	return paths, nil
+	return receiveSelection{paths: paths, typed: typed}, nil
 }
 
 func (a *App) resolveLink(raw, keyString string) (link.Link, error) {

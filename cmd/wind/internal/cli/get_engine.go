@@ -61,7 +61,7 @@ func receiveExit(class engine.FailureClass) int {
 		return ExitFailure
 	}
 }
-func (a *App) reportEngineReceive(result engine.TaskCompletion[engine.ReceiveResult], observation getObservation) int {
+func (a *App) reportEngineReceive(result engine.TaskCompletion[engine.ReceiveResult], selection receiveSelection, observation getObservation) int {
 	code := receiveExit(result.FailureClass)
 	if result.Value.OutputAttention == recovery.AttentionRecoveryUnavailable {
 		a.writeCompleteLine("Existing progress is retained, but restart recovery is unavailable on this destination. Restore its recovery capability before retrying; inspect with wind resume list -o <directory>.")
@@ -72,7 +72,7 @@ func (a *App) reportEngineReceive(result engine.TaskCompletion[engine.ReceiveRes
 	if result.Failure.Code() == appobs.FailureRetainedOutputMissing {
 		a.writeCompleteLine("Searched output directory: %q. Check -o, --only, and --operation, or use wind get to start a download.", result.Value.Destination)
 	}
-	a.reportReceiveRecovery(result.Value)
+	a.reportReceiveRecovery(result.Value, selection)
 	if result.Value.Job.IsZero() {
 		failure := result.Failure
 		exit, _ := getEventExit(code)
@@ -103,12 +103,12 @@ func (a *App) reportEngineReceive(result engine.TaskCompletion[engine.ReceiveRes
 	return code
 }
 
-func (a *App) reportReceiveTask(result engine.TaskResult[engine.ReceiveResult], observation getObservation) int {
+func (a *App) reportReceiveTask(result engine.TaskResult[engine.ReceiveResult], selection receiveSelection, observation getObservation) int {
 	observation.runtime.ReportObserverLoss(appobs.ObserverLossEngineObservation, appobs.ObserverLossStreamCapacity, result.Observations.CapacityDropped)
-	return a.reportEngineReceive(result.Completion, observation)
+	return a.reportEngineReceive(result.Completion, selection, observation)
 }
 
-func (a *App) reportReceiveRecovery(result engine.ReceiveResult) {
+func (a *App) reportReceiveRecovery(result engine.ReceiveResult, selection receiveSelection) {
 	recovery := result.Recovery
 	switch recovery.Retention {
 	case engine.ReceiveRetentionCheckpoints:
@@ -121,9 +121,7 @@ func (a *App) reportReceiveRecovery(result engine.ReceiveResult) {
 	}
 	switch recovery.Reason {
 	case engine.ReceiveRecoverySelectionMissing:
-		for _, path := range result.Transfer.MissingSelectionPaths {
-			a.writeCompleteLine("Not found in this share: --only %q", path)
-		}
+		a.reportMissingSelection(result.Transfer.MissingSelectionPaths, selection)
 		a.writeCompleteLine("Correct --only and run wind get with the intended selection.")
 	case engine.ReceiveRecoveryInvalidRequest:
 		a.writeCompleteLine("Correct the request before starting another download.")
@@ -134,6 +132,43 @@ func (a *App) reportReceiveRecovery(result engine.ReceiveResult) {
 			a.writeCompleteLine("Retry with wind resume retry -o <original-directory> --operation %x and the same link and selection.", result.Operation.Bytes())
 		}
 	}
+}
+
+// maxReportedMissingSelections keeps a long mistyped selection from flooding
+// the terminal; the first lines are enough to show the shared mistake.
+const maxReportedMissingSelections = 20
+
+// reportMissingSelection echoes the --only values whose canonical target the
+// complete catalog proved absent, as typed and in command-line order.
+func (a *App) reportMissingSelection(missing []string, selection receiveSelection) {
+	if len(missing) == 0 {
+		return
+	}
+	absent := make(map[string]struct{}, len(missing))
+	for _, path := range missing {
+		absent[path] = struct{}{}
+	}
+	named := make([]string, 0, len(missing))
+	for index, path := range selection.paths {
+		if _, found := absent[path]; found {
+			named = append(named, selection.typed[index])
+			delete(absent, path)
+		}
+	}
+	// Name a canonical target the CLI cannot map back rather than hide it.
+	for _, path := range missing {
+		if _, found := absent[path]; found {
+			named = append(named, path)
+		}
+	}
+	a.writeCompleteLine("Not found in this share:")
+	for _, value := range named[:min(len(named), maxReportedMissingSelections)] {
+		a.writeCompleteLine("  --only %q", value)
+	}
+	if omitted := len(named) - maxReportedMissingSelections; omitted > 0 {
+		a.writeCompleteLine("  %d more omitted.", omitted)
+	}
+	a.writeCompleteLine("--only paths start with the shared file or folder name (<name>/...) and are case-sensitive.")
 }
 
 func receiveRecoveryChoices(pause engine.ReceivePause) (string, string) {
