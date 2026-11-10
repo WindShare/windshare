@@ -80,6 +80,7 @@ func newSelectedCatalogSource(ctx context.Context, config SelectedCatalogSourceC
 	fail := func(cause error) (*SelectedCatalogSource, error) {
 		return nil, errors.Join(cause, source.Close())
 	}
+	selectedNames := make(map[string]int, len(config.Paths))
 	for index, selectedPath := range config.Paths {
 		if err := ctx.Err(); err != nil {
 			return fail(err)
@@ -90,6 +91,19 @@ func newSelectedCatalogSource(ctx context.Context, config SelectedCatalogSourceC
 				Label: selectedPath, Cause: classifySourceError("acquire selected root", catalog.SourceReference{}, err),
 			})
 		}
+		nameKey := catalog.SiblingNameKey(record.Entry().Name())
+		if position, collides := selectedNames[nameKey]; collides {
+			// Selected roots become siblings under one synthetic root, so same-named
+			// items from different folders cannot be published together. Name the
+			// later path here; the catalog commit would only report an anonymous
+			// sibling collision.
+			_ = root.Close()
+			return fail(&catalog.SelectionError{Label: selectedPath, Cause: fmt.Errorf(
+				"osfs: selected paths %q and %q both appear as %q: %w",
+				config.Paths[position], selectedPath, record.Entry().Name(), catalog.ErrSiblingCollision,
+			)})
+		}
+		selectedNames[nameKey] = index
 		source.roots = append(source.roots, root)
 		source.selected = append(source.selected, record)
 	}

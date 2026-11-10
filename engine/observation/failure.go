@@ -15,6 +15,7 @@ const (
 	FailureInvalidInput
 	FailureCapabilityInvalid
 	FailureSelectionMissing
+	FailureSelectionCollision
 	FailurePublication
 	FailureTraceOpen
 	FailureTraceExists
@@ -127,6 +128,8 @@ func workflowFailureDefinition(code FailureCode) (failureDefinition, bool) {
 		return failureDefinition{"capability_invalid", MessageCapabilityInvalid}, true
 	case FailureSelectionMissing:
 		return failureDefinition{"selection_missing", MessageSelectionMissing}, true
+	case FailureSelectionCollision:
+		return failureDefinition{"selection_collision", MessageSelectionCollision}, true
 	case FailurePublication:
 		return failureDefinition{"capability_publication", MessagePublicationFailed}, true
 	case FailureTraceOpen:
@@ -417,7 +420,7 @@ func NewSourcePathFailure(code FailureCode, path DisplayPath) (Failure, error) {
 func sourcePathFailureCode(code FailureCode) bool {
 	switch code {
 	case FailureSourceMissing, FailureSourceAccessDenied, FailureSourceUnsupported,
-		FailureSourceUnavailable, FailureSourceRevisionChanged:
+		FailureSourceUnavailable, FailureSourceRevisionChanged, FailureSelectionCollision:
 		return true
 	default:
 		return false

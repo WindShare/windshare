@@ -151,6 +151,8 @@ func failureMessage(failure appobs.Failure) string {
 		message = "The selected content was not found."
 	case appobs.MessageRetainedOutputMissing:
 		message = "No saved download matches this resume request."
+	case appobs.MessageSelectionCollision:
+		message = "This path has the same name as another selected path. Selected names must differ even ignoring case; rename one, share their common parent folder, or remove the duplicate."
 	case appobs.MessageRelayRejected:
 		message = "The relay rejected the request."
 	case appobs.MessageRelayUnavailable:

@@ -133,6 +133,9 @@ func classifyDirectError(cause error) (appobs.Failure, bool) {
 		exactError(cause, task.ErrApplicationClosed) || exactError(cause, task.ErrShareStopped) {
 		return mustFailure(appobs.FailureCanceled), true
 	}
+	if exactError(cause, catalog.ErrSiblingCollision) {
+		return mustFailure(appobs.FailureSelectionCollision), true
+	}
 	if exactError(cause, share.ErrInvalidChunkSize) {
 		return mustFailure(appobs.FailureInvalidInput), true
 	}

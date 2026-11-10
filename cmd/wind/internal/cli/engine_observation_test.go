@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"io"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -115,4 +116,50 @@ func TestShareAdapterExportsTaskAndSourceAcquisitionFailureMilestones(t *testing
 	if !acquiring.Valid() || !failed.Valid() || failed.Scope().TaskID != taskID.String() || acquiring.Scope() != failed.Scope() || acquiring.Correlation().Get("share_instance_id").Text() != failed.Correlation().Get("share_instance_id").Text() || !strings.Contains(failed.Payload().Get("failure").Text(), strconv.Quote(missing)) {
 		t.Fatalf("source failure lost scope/details: %v", sources)
 	}
+}
+
+// Two selected files named alike (a/README.md, b/README.md) cannot both be
+// top-level catalog entries. The share must stop as a usage error that names the
+// offending path instead of an unclassified failure.
+func TestShareReportsSelectedPathsThatCollideByName(t *testing.T) {
+	trace := newRecordingUserTrace()
+	app := &App{
+		Stdout: io.Discard, Stderr: io.Discard,
+		openUserTrace: func(runtrace.Target, clievent.Command, runtrace.Config, runtrace.Dependencies) (userTraceRecorder, error) {
+			return trace, nil
+		},
+	}
+	base := t.TempDir()
+	var selected []string
+	for _, folder := range []string{"a", "b"} {
+		if err := os.Mkdir(filepath.Join(base, folder), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(base, folder, "README.md")
+		if err := os.WriteFile(path, []byte(folder), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		selected = append(selected, path)
+	}
+	args := append([]string{"share"}, selected...)
+	args = append(args, "--front-url", "https://front.example", "--relay", "https://relay.example",
+		"--trace", filepath.Join(t.TempDir(), "trace.ndjson"))
+	if code := app.Run(context.Background(), args); code != ExitUsage {
+		t.Fatalf("colliding selection exit = %d", code)
+	}
+	trace.mu.Lock()
+	defer trace.mu.Unlock()
+	for _, event := range trace.events {
+		typed, ok := event.(appobs.EngineTaskObserved)
+		if !ok || typed.Facts().Stage != appobs.EngineTaskSettled {
+			continue
+		}
+		failure := typed.Facts().Failure
+		path, located := failure.SourcePath()
+		if failure.Code() != appobs.FailureSelectionCollision || !located || path.Text() != selected[1] {
+			t.Fatalf("colliding selection lost its reason or path: %+v", failure)
+		}
+		return
+	}
+	t.Fatal("share never settled")
 }

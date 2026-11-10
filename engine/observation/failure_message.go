@@ -36,6 +36,7 @@ const (
 	MessageOwnedObjectUnknown
 	MessageOutputRecoveryUnavailable
 	MessageRetainedOutputMissing
+	MessageSelectionCollision
 )
 
 func (value SafeMessageKey) Name() (string, bool) {
@@ -106,6 +107,8 @@ func (value SafeMessageKey) Name() (string, bool) {
 		return "output_recovery_unavailable", true
 	case MessageRetainedOutputMissing:
 		return "retained_output_missing", true
+	case MessageSelectionCollision:
+		return "selection_collision", true
 	default:
 		return "", false
 	}
