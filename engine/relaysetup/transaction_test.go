@@ -115,7 +115,12 @@ func TestProfileCapacityIsCheckedBeforeEnrollmentAndAcknowledgement(t *testing.T
 			if !errors.Is(err, relayconfig.ErrConfig) {
 				t.Fatal(err)
 			}
-			if err := service.Cancel(t.Context(), "https://private.example"); err != nil {
+			// An unclaimed capacity failure is rejected before anything is pending.
+			wantCancel := error(nil)
+			if !claimed {
+				wantCancel = ErrNoPendingSetup
+			}
+			if err := service.Cancel(t.Context(), "https://private.example"); !errors.Is(err, wantCancel) {
 				t.Fatal(err)
 			}
 			if store.saved.Pending != nil || len(store.saved.Profiles) != relayconfig.MaximumProfiles {
@@ -193,6 +198,9 @@ func TestSettingsChangedDuringAcknowledgementCannotPublishOldIntent(t *testing.T
 	_, err := service.Run(t.Context(), Request{URL: "https://private.example", Operation: AddProfile}, nil)
 	if !errors.Is(err, ErrSettingsChanged) || store.saved.SettingsRevision() != imported.SettingsRevision() {
 		t.Fatalf("acknowledgement bypassed the settings conflict: %v", err)
+	}
+	if recovery := setupRecovery(t, err); recovery.Action != RecoveryCancel {
+		t.Fatalf("a conflicting pending setup needs cancellation: %+v", recovery)
 	}
 	if err := service.Cancel(t.Context(), "https://private.example"); err != nil || store.saved.Pending != nil {
 		t.Fatalf("acknowledged conflict could not be abandoned: %v", err)

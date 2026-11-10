@@ -41,13 +41,13 @@ func installationResult(saved relayconfig.Config, address, credentialID string) 
 	return Result{RelayURL: address, CredentialID: credentialID, FrontURL: saved.FrontURL, ActiveRelays: saved.ActiveRelays}
 }
 
-func (service *Service) install(ctx context.Context, revision, address, accessKey, credentialID, frontend string, operation Operation) (Result, error) {
-	saved, err := service.dependencies.Store.Update(ctx, func(current *Snapshot) error {
+func (run *workflow) install(ctx context.Context, revision, address, accessKey, credentialID, frontend string, operation Operation) (Result, error) {
+	saved, err := run.dependencies.Store.Update(ctx, func(current *Snapshot) error {
 		if current.Pending != nil {
 			return ErrPendingSetup
 		}
 		if current.SettingsRevision() != revision {
-			return ErrSettingsChanged
+			return errSettingsChangedBeforePending
 		}
 		next, err := installation(current.Config, address, accessKey, frontend, operation)
 		if err == nil {
@@ -69,7 +69,7 @@ func pendingInstallation(current Snapshot, pending *PendingSetup) (relayconfig.C
 		return relayconfig.Config{}, ErrSetupSuperseded
 	}
 	if current.SettingsRevision() != pending.SettingsRevision {
-		return relayconfig.Config{}, ErrSettingsChanged
+		return relayconfig.Config{}, errSettingsChangedWhilePending
 	}
 	return installation(current.Config, pending.RelayURL, pending.credential().AccessKey, pending.FrontURL, pending.Operation)
 }

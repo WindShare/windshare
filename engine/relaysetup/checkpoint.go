@@ -11,8 +11,8 @@ func ownsPending(current Snapshot, pending *PendingSetup) error {
 	return nil
 }
 
-func (service *Service) currentPending(pending *PendingSetup) (Snapshot, error) {
-	current, err := service.dependencies.Store.Load()
+func (run *workflow) currentPending(pending *PendingSetup) (Snapshot, error) {
+	current, err := run.dependencies.Store.Load()
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -25,8 +25,8 @@ func (service *Service) currentPending(pending *PendingSetup) (Snapshot, error) 
 	return current, nil
 }
 
-func (service *Service) checkpoint(ctx context.Context, pending *PendingSetup, change func(*PendingSetup) setupPhase) (Snapshot, error) {
-	return service.dependencies.Store.Update(ctx, func(current *Snapshot) error {
+func (run *workflow) checkpoint(ctx context.Context, pending *PendingSetup, change func(*PendingSetup) setupPhase) (Snapshot, error) {
+	return run.dependencies.Store.Update(ctx, func(current *Snapshot) error {
 		if err := ownsPending(*current, pending); err != nil {
 			return err
 		}
@@ -38,8 +38,8 @@ func (service *Service) checkpoint(ctx context.Context, pending *PendingSetup, c
 	})
 }
 
-func (service *Service) clearPending(ctx context.Context, pending *PendingSetup) error {
-	_, err := service.dependencies.Store.Update(ctx, func(current *Snapshot) error {
+func (run *workflow) clearPending(ctx context.Context, pending *PendingSetup) error {
+	_, err := run.dependencies.Store.Update(ctx, func(current *Snapshot) error {
 		if err := ownsPending(*current, pending); err != nil {
 			return err
 		}

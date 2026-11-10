@@ -2,12 +2,14 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
 
+	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/relaysetup"
 )
@@ -37,7 +39,7 @@ func (app *App) runRelay(ctx context.Context, args []string) int {
 		}
 		if err := app.application.CancelRelaySetup(ctx, address); err != nil {
 			app.writeCompleteLine("relay cancel: %v", err)
-			return ExitFailure
+			return relayCancelExitCode(err)
 		}
 		app.writeCompleteLine("Pending relay setup cancelled.")
 		return ExitOK
@@ -103,7 +105,7 @@ func (app *App) runRelaySetup(ctx context.Context, request engine.RelaySetupRequ
 	if result.Err != nil {
 		app.writeCompleteLine("relay setup: %v", result.Err)
 		if ctx.Err() != nil {
-			app.writeCompleteLine("Setup was saved. Run the same command to continue, or wind relay cancel %s.", request.URL)
+			app.writeInterruptedRelaySetupHint(result.Err)
 		}
 		return ExitFailure
 	}
@@ -115,6 +117,38 @@ func (app *App) runRelaySetup(ctx context.Context, request engine.RelaySetupRequ
 		app.writeCompleteLine("No share frontend was advertised. Pass --front-url when sharing.")
 	}
 	return ExitOK
+}
+
+// relayCancelExitCode treats "nothing is pending" as a user error, like naming
+// an --only path or a resume item that does not exist: the command named
+// nothing to act on, and retrying it unchanged cannot succeed.
+func relayCancelExitCode(err error) int {
+	if errors.Is(err, relaysetup.ErrNoPendingSetup) {
+		return ExitUsage
+	}
+	return ExitFailure
+}
+
+func (app *App) writeInterruptedRelaySetupHint(err error) {
+	var failure *relaysetup.SetupError
+	if !errors.As(err, &failure) {
+		return
+	}
+	recovery := failure.Recovery
+	switch recovery.Action {
+	case relaysetup.RecoveryRestart:
+		app.writeCompleteLine("No pending setup was recorded; run the same command to start again.")
+	case relaysetup.RecoveryContinue:
+		app.writeCompleteLine("Setup was saved. Run the same command to continue, or %s relay cancel %s.", commandmeta.Name, recovery.RelayURL)
+	case relaysetup.RecoveryCancel:
+		app.writeCompleteLine("Cancel the saved setup with %s relay cancel %s, then run the same command again.", commandmeta.Name, recovery.RelayURL)
+	case relaysetup.RecoveryRetryCancel:
+		app.writeCompleteLine("Cancellation is unfinished; run %s relay cancel %s to finish it.", commandmeta.Name, recovery.RelayURL)
+	case relaysetup.RecoveryBlocked:
+		app.writeCompleteLine("Finish the pending setup for %s, or run %s relay cancel %s.", recovery.RelayURL, commandmeta.Name, recovery.RelayURL)
+	default:
+		app.writeCompleteLine("Setup state could not be confirmed.")
+	}
 }
 
 func openRelayBrowser(ctx context.Context, address string) error {

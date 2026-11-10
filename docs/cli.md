@@ -36,7 +36,7 @@ wind config import <file|-> [--front-url <url>] [-v|--verbose]
 
 - `relay add` discovers relay access, runs browser device approval when required, and saves the profile while preserving active-relay and frontend selections.
 - `relay onboard` enrolls a private relay, saves its advertised frontend and managed TURN reference, and selects only that relay in `active_relays`.
-- `relay cancel` abandons an unfinished enrollment and revokes its issued credential.
+- `relay cancel` abandons an unfinished enrollment and revokes its issued credential; it fails when nothing is pending for that relay.
 - `config import` validates and replaces the saved sharing configuration from a JSON file or stdin (`-`).
 - Settings live in `windshare/config.json` under the user configuration directory (or `WINDSHARE_CONFIG`). Rebuildable runtime state lives alongside it in `config.json.state/setup/` (pending enrollment) and `config.json.state/turn/` (managed TURN discovery cache).
 
