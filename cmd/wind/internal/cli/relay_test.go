@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -166,6 +167,94 @@ func TestRelayArgumentErrorsCompleteBeforeOperation(t *testing.T) {
 			}
 			if strings.Contains(stderr.String(), rejectedValue) {
 				t.Fatalf("parser projected a rejected value: %q", stderr.String())
+			}
+		})
+	}
+}
+
+func newRelayTestApp(t *testing.T, client *http.Client) (*App, *bytes.Buffer, *bytes.Buffer) {
+	t.Helper()
+	store := relayconfig.FileStore{Path: filepath.Join(t.TempDir(), "config.json")}
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr, engineConfig: engine.Config{RelaySetup: relaysetup.Dependencies{
+		Store: relaysetup.FileStore{Settings: store}, HTTP: client,
+	}}}
+	t.Cleanup(app.closeTerminalOutput)
+	return app, &stdout, &stderr
+}
+
+func TestRelayCancelWithNothingPendingIsAUsageError(t *testing.T) {
+	for _, address := range []string{"https://relay.example", "not a relay"} {
+		t.Run(address, func(t *testing.T) {
+			app, stdout, stderr := newRelayTestApp(t, nil)
+			code := app.Run(t.Context(), []string{"relay", "cancel", address})
+			const want = "relay cancel: no relay setup is pending; nothing was cancelled\n"
+			if code != ExitUsage || stderr.String() != want || stdout.Len() != 0 {
+				t.Fatalf("exit=%d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+			}
+		})
+	}
+}
+
+func TestInterruptedRelaySetupHintMatchesWhatWasSaved(t *testing.T) {
+	const relayURL = "https://relay.example"
+	for _, scenario := range []string{"discovery", "approval"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx, interrupt := context.WithCancel(t.Context())
+			defer interrupt()
+			var cancelled atomic.Bool
+			released := make(chan struct{})
+			server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				var response any
+				switch {
+				case request.URL.Path == "/.well-known/windshare" && scenario == "discovery",
+					request.URL.Path == "/api/enrollments/claim":
+					// Ctrl-C arrives while this request is outstanding. The client
+					// may abandon the request without closing its connection, so the
+					// test releases the handler before the server shuts down.
+					interrupt()
+					select {
+					case <-request.Context().Done():
+					case <-released:
+					}
+					return
+				case request.URL.Path == "/.well-known/windshare":
+					response = map[string]any{"version": 1, "access": "restricted", "relay_url": relayURL, "console_url": relayURL}
+				case request.URL.Path == "/api/enrollments":
+					response = map[string]any{"enrollment_id": "enrollment", "user_code": "ABCD-EFGH",
+						"verification_uri_complete": relayURL + "/?code=ABCD-EFGH",
+						"expires_at":                time.Now().Add(time.Minute).UnixMilli(), "interval_ms": 5000}
+				case request.URL.Path == "/api/enrollments/cancel":
+					cancelled.Store(true)
+					response = map[string]bool{"ok": true}
+				default:
+					t.Error("unexpected setup endpoint", request.URL.Path)
+					writer.WriteHeader(http.StatusNotFound)
+					return
+				}
+				if err := json.NewEncoder(writer).Encode(response); err != nil {
+					t.Error(err)
+				}
+			}))
+			t.Cleanup(func() { close(released) })
+			app, _, stderr := newRelayTestApp(t, server.Client())
+			if code := app.Run(ctx, []string{"relay", "add", relayURL, "--name", "CLI device", "--no-browser"}); code != ExitFailure {
+				t.Fatalf("interrupted setup exit=%d stderr=%q", code, stderr.String())
+			}
+			hint := "Nothing was saved; run the same command to start again."
+			if scenario == "approval" {
+				hint = "Setup was saved. Run the same command to continue, or wind relay cancel " + relayURL + "."
+			}
+			if !strings.HasSuffix(stderr.String(), hint+"\n") {
+				t.Fatalf("stderr=%q, want hint %q", stderr.String(), hint)
+			}
+			if scenario != "approval" {
+				return
+			}
+			// The saved-setup hint must be actionable as printed.
+			stderr.Reset()
+			if code := app.Run(t.Context(), []string{"relay", "cancel", relayURL}); code != ExitOK || !cancelled.Load() {
+				t.Fatalf("following the hint: exit=%d cancelled=%v stderr=%q", code, cancelled.Load(), stderr.String())
 			}
 		})
 	}

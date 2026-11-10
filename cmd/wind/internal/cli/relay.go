@@ -2,12 +2,14 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
 
+	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/relaysetup"
 )
@@ -37,7 +39,7 @@ func (app *App) runRelay(ctx context.Context, args []string) int {
 		}
 		if err := app.application.CancelRelaySetup(ctx, address); err != nil {
 			app.writeCompleteLine("relay cancel: %v", err)
-			return ExitFailure
+			return relayCancelExitCode(err)
 		}
 		app.writeCompleteLine("Pending relay setup cancelled.")
 		return ExitOK
@@ -103,7 +105,7 @@ func (app *App) runRelaySetup(ctx context.Context, request engine.RelaySetupRequ
 	if result.Err != nil {
 		app.writeCompleteLine("relay setup: %v", result.Err)
 		if ctx.Err() != nil {
-			app.writeCompleteLine("Setup was saved. Run the same command to continue, or wind relay cancel %s.", request.URL)
+			app.writeInterruptedRelaySetupHint(request.URL)
 		}
 		return ExitFailure
 	}
@@ -115,6 +117,31 @@ func (app *App) runRelaySetup(ctx context.Context, request engine.RelaySetupRequ
 		app.writeCompleteLine("No share frontend was advertised. Pass --front-url when sharing.")
 	}
 	return ExitOK
+}
+
+// relayCancelExitCode treats "nothing is pending" as a user error, like naming
+// an --only path or a resume item that does not exist: the command named
+// nothing to act on, and retrying it unchanged cannot succeed.
+func relayCancelExitCode(err error) int {
+	if errors.Is(err, relaysetup.ErrNoPendingSetup) {
+		return ExitUsage
+	}
+	return ExitFailure
+}
+
+// writeInterruptedRelaySetupHint reads the saved state instead of assuming it,
+// because an interruption during discovery happens before any pending record
+// exists and "wind relay cancel" would then have nothing to cancel.
+func (app *App) writeInterruptedRelaySetupHint(address string) {
+	pending, err := app.application.RelaySetupPending(address)
+	switch {
+	case err != nil:
+		app.writeCompleteLine("relay setup: could not check for a saved setup: %v", err)
+	case pending:
+		app.writeCompleteLine("Setup was saved. Run the same command to continue, or %s relay cancel %s.", commandmeta.Name, address)
+	default:
+		app.writeCompleteLine("Nothing was saved; run the same command to start again.")
+	}
 }
 
 func openRelayBrowser(ctx context.Context, address string) error {
