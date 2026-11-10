@@ -198,3 +198,41 @@ func TestCancelledRequestKeepsPriorConfigurationAndCanBeExplicitlyAbandoned(t *t
 		t.Fatal(err)
 	}
 }
+
+func TestCancelWithoutPendingSetupReportsNothingToCancel(t *testing.T) {
+	store := &memoryStore{saved: prior()}
+	service := New(Dependencies{Store: store, HTTP: fakeHTTP(func(req *http.Request) (*http.Response, error) {
+		t.Fatalf("cancellation without pending setup contacted %s", req.URL)
+		return nil, nil
+	})})
+	for _, address := range []string{"https://private.example", "not a relay"} {
+		if err := service.Cancel(t.Context(), address); !errors.Is(err, ErrNoPendingSetup) {
+			t.Fatalf("Cancel(%q) = %v, want ErrNoPendingSetup", address, err)
+		}
+	}
+	if store.saved.Pending != nil || !slices.Equal(store.saved.Profiles, prior().Profiles) {
+		t.Fatal("cancellation without pending setup changed settings")
+	}
+}
+
+func TestCancelInterruptingDiscoveryBeforePendingIsSaved(t *testing.T) {
+	store := &memoryStore{saved: prior()}
+	discovering := make(chan struct{})
+	service := New(Dependencies{Store: store, HTTP: fakeHTTP(func(req *http.Request) (*http.Response, error) {
+		close(discovering)
+		<-req.Context().Done()
+		return nil, req.Context().Err()
+	})})
+	result := make(chan error, 1)
+	go func() {
+		_, err := service.Run(t.Context(), Request{URL: "https://private.example", DeviceName: "Laptop", Operation: AddProfile}, nil)
+		result <- err
+	}()
+	<-discovering
+	if err := service.Cancel(t.Context(), "https://private.example"); err != nil {
+		t.Fatalf("cancelling an unsaved running setup: %v", err)
+	}
+	if err := <-result; !errors.Is(err, context.Canceled) || store.saved.Pending != nil {
+		t.Fatalf("running setup was not cancelled: %v", err)
+	}
+}

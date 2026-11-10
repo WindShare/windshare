@@ -115,7 +115,12 @@ func TestProfileCapacityIsCheckedBeforeEnrollmentAndAcknowledgement(t *testing.T
 			if !errors.Is(err, relayconfig.ErrConfig) {
 				t.Fatal(err)
 			}
-			if err := service.Cancel(t.Context(), "https://private.example"); err != nil {
+			// An unclaimed capacity failure is rejected before anything is pending.
+			wantCancel := error(nil)
+			if !claimed {
+				wantCancel = ErrNoPendingSetup
+			}
+			if err := service.Cancel(t.Context(), "https://private.example"); !errors.Is(err, wantCancel) {
 				t.Fatal(err)
 			}
 			if store.saved.Pending != nil || len(store.saved.Profiles) != relayconfig.MaximumProfiles {

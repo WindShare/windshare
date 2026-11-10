@@ -26,6 +26,7 @@ var (
 	ErrDenied          = errors.New("relay access was refused; approve this device or install a new access key")
 	ErrExpired         = errors.New("relay enrollment expired; start setup again")
 	ErrPendingSetup    = errors.New("another relay setup is pending; finish or cancel it first")
+	ErrNoPendingSetup  = errors.New("no relay setup is pending; nothing was cancelled")
 	ErrSetupRunning    = errors.New("relay setup is already running; finish or cancel it first")
 	ErrSettingsChanged = errors.New("sharing settings changed during relay setup; cancel this setup and start again")
 	ErrSetupSuperseded = errors.New("relay setup was completed, cancelled or replaced")

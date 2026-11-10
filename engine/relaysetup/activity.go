@@ -26,16 +26,18 @@ func (service *Service) begin(ctx context.Context, address string) (context.Cont
 	}, nil
 }
 
-func (service *Service) beginCancellation(ctx context.Context, address string) (func(), error) {
+// beginCancellation reports whether it interrupted a running setup, because a
+// setup still discovering its relay has not persisted a pending record yet.
+func (service *Service) beginCancellation(ctx context.Context, address string) (func(), bool, error) {
 	service.mu.Lock()
 	if service.cancelling {
 		service.mu.Unlock()
-		return nil, ErrSetupRunning
+		return nil, false, ErrSetupRunning
 	}
 	current := service.active
 	if current != nil && !sameRelay(current.address, address) {
 		service.mu.Unlock()
-		return nil, ErrPendingSetup
+		return nil, false, ErrPendingSetup
 	}
 	service.cancelling = true
 	if current != nil {
@@ -54,8 +56,8 @@ func (service *Service) beginCancellation(ctx context.Context, address string) (
 		case <-current.done:
 		case <-ctx.Done():
 			release()
-			return nil, ctx.Err()
+			return nil, false, ctx.Err()
 		}
 	}
-	return release, nil
+	return release, current != nil, nil
 }

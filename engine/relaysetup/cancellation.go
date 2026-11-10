@@ -7,7 +7,7 @@ import (
 )
 
 func (service *Service) Cancel(ctx context.Context, address string) error {
-	finish, err := service.beginCancellation(ctx, address)
+	finish, interrupted, err := service.beginCancellation(ctx, address)
 	if err != nil {
 		return err
 	}
@@ -16,8 +16,16 @@ func (service *Service) Cancel(ctx context.Context, address string) error {
 		return errors.New("relay configuration storage is unavailable")
 	}
 	saved, err := service.dependencies.Store.Load()
-	if err != nil || saved.Pending == nil {
+	if err != nil {
 		return err
+	}
+	if saved.Pending == nil {
+		if interrupted {
+			return nil
+		}
+		// Reporting success here would hide a mistyped URL or an already
+		// finished setup behind "cancelled".
+		return ErrNoPendingSetup
 	}
 	if !sameRelay(saved.Pending.RelayURL, address) {
 		return ErrPendingSetup
