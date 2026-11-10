@@ -394,13 +394,26 @@ func (context FaultContext) Valid() bool {
 	return domainOK && scopeOK && context.code != 0
 }
 
+type SelectionCollision struct {
+	firstPath  DisplayPath
+	secondPath DisplayPath
+}
+
+func (collision SelectionCollision) FirstPath() DisplayPath  { return collision.firstPath }
+func (collision SelectionCollision) SecondPath() DisplayPath { return collision.secondPath }
+
+func (collision SelectionCollision) Valid() bool {
+	return !collision.firstPath.Empty() && !collision.secondPath.Empty()
+}
+
 type Failure struct {
-	code             FailureCode
-	sourcePath       DisplayPath
-	fault            FaultContext
-	hasFault         bool
-	retryAfterMillis uint64
-	hasRetryAfter    bool
+	code               FailureCode
+	sourcePath         DisplayPath
+	selectionCollision SelectionCollision
+	fault              FaultContext
+	hasFault           bool
+	retryAfterMillis   uint64
+	hasRetryAfter      bool
 }
 
 func NewFailure(code FailureCode) (Failure, error) {
@@ -417,10 +430,18 @@ func NewSourcePathFailure(code FailureCode, path DisplayPath) (Failure, error) {
 	return Failure{code: code, sourcePath: path}, nil
 }
 
+func NewSelectionCollisionFailure(first, second DisplayPath) (Failure, error) {
+	collision := SelectionCollision{firstPath: first, secondPath: second}
+	if !collision.Valid() {
+		return Failure{}, ErrInvalidFailure
+	}
+	return Failure{code: FailureSelectionCollision, selectionCollision: collision}, nil
+}
+
 func sourcePathFailureCode(code FailureCode) bool {
 	switch code {
 	case FailureSourceMissing, FailureSourceAccessDenied, FailureSourceUnsupported,
-		FailureSourceUnavailable, FailureSourceRevisionChanged, FailureSelectionCollision:
+		FailureSourceUnavailable, FailureSourceRevisionChanged:
 		return true
 	default:
 		return false
@@ -454,6 +475,10 @@ func (failure Failure) SourcePath() (DisplayPath, bool) {
 	return failure.sourcePath, !failure.sourcePath.Empty()
 }
 
+func (failure Failure) SelectionCollision() (SelectionCollision, bool) {
+	return failure.selectionCollision, failure.code == FailureSelectionCollision && failure.selectionCollision.Valid()
+}
+
 func (failure Failure) MessageKey() (SafeMessageKey, bool) {
 	return failure.code.MessageKey()
 }
@@ -471,6 +496,11 @@ func (failure Failure) Valid() bool {
 		return false
 	}
 	if !failure.sourcePath.Empty() && (!sourcePathFailureCode(failure.code) || failure.hasFault || failure.hasRetryAfter) {
+		return false
+	}
+	if failure.selectionCollision != (SelectionCollision{}) &&
+		(failure.code != FailureSelectionCollision || !failure.selectionCollision.Valid() ||
+			!failure.sourcePath.Empty() || failure.hasFault || failure.hasRetryAfter) {
 		return false
 	}
 	if failure.hasFault {

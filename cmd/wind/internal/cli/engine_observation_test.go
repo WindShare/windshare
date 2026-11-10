@@ -119,8 +119,8 @@ func TestShareAdapterExportsTaskAndSourceAcquisitionFailureMilestones(t *testing
 }
 
 // Two selected files named alike (a/README.md, b/README.md) cannot both be
-// top-level catalog entries. The share must stop as a usage error that names the
-// offending path instead of an unclassified failure.
+// top-level catalog entries. The share must stop as a usage error that preserves
+// both selections for diagnostics and presentation.
 func TestShareReportsSelectedPathsThatCollideByName(t *testing.T) {
 	trace := newRecordingUserTrace()
 	app := &App{
@@ -155,9 +155,10 @@ func TestShareReportsSelectedPathsThatCollideByName(t *testing.T) {
 			continue
 		}
 		failure := typed.Facts().Failure
-		path, located := failure.SourcePath()
-		if failure.Code() != appobs.FailureSelectionCollision || !located || path.Text() != selected[1] {
-			t.Fatalf("colliding selection lost its reason or path: %+v", failure)
+		collision, located := failure.SelectionCollision()
+		if failure.Code() != appobs.FailureSelectionCollision || !located ||
+			collision.FirstPath().Text() != selected[0] || collision.SecondPath().Text() != selected[1] {
+			t.Fatalf("colliding selection lost its reason or paths: %+v", failure)
 		}
 		return
 	}

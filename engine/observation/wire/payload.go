@@ -12,12 +12,18 @@ type Fault struct {
 	Code   uint16 `json:"code"`
 }
 
+type SelectionCollision struct {
+	FirstPath  string `json:"first_path"`
+	SecondPath string `json:"second_path"`
+}
+
 type Failure struct {
-	Code         string  `json:"code"`
-	MessageKey   string  `json:"message_key"`
-	Fault        *Fault  `json:"fault,omitempty"`
-	RetryAfterMS *string `json:"retry_after_ms,omitempty"`
-	SourcePath   string  `json:"source_path,omitempty"`
+	Code               string              `json:"code"`
+	MessageKey         string              `json:"message_key"`
+	Fault              *Fault              `json:"fault,omitempty"`
+	RetryAfterMS       *string             `json:"retry_after_ms,omitempty"`
+	SourcePath         string              `json:"source_path,omitempty"`
+	SelectionCollision *SelectionCollision `json:"selection_collision,omitempty"`
 }
 
 type FileOutcomes struct {

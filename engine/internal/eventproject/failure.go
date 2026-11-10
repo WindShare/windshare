@@ -133,8 +133,14 @@ func classifyDirectError(cause error) (appobs.Failure, bool) {
 		exactError(cause, task.ErrApplicationClosed) || exactError(cause, task.ErrShareStopped) {
 		return mustFailure(appobs.FailureCanceled), true
 	}
-	if exactError(cause, catalog.ErrSiblingCollision) {
-		return mustFailure(appobs.FailureSelectionCollision), true
+	// A catalog collision can also indicate corrupt node identities. Only the
+	// source adapter can identify a conflict between caller-selected names.
+	//nolint:errorlint
+	if collision, ok := cause.(*catalog.SelectionNameCollisionError); ok {
+		failure, err := appobs.NewSelectionCollisionFailure(
+			appobs.NewDisplayPath(collision.FirstLabel), appobs.NewDisplayPath(collision.SecondLabel),
+		)
+		return failure, err == nil
 	}
 	if exactError(cause, share.ErrInvalidChunkSize) {
 		return mustFailure(appobs.FailureInvalidInput), true

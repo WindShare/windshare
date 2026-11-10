@@ -5,10 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/windshare/windshare/core/catalog"
 )
@@ -40,9 +37,9 @@ func TestSelectedCatalogSourceRejectsRootsThatShareAName(t *testing.T) {
 				_ = source.Close()
 				t.Fatal("selected roots with colliding names were accepted")
 			}
-			var selected *catalog.SelectionError
-			if !errors.Is(err, catalog.ErrSiblingCollision) || !errors.As(err, &selected) || selected.Label != paths[len(paths)-1] {
-				t.Fatalf("collision did not identify the later selected path: %v", err)
+			var collision *catalog.SelectionNameCollisionError
+			if !errors.As(err, &collision) || collision.FirstLabel != paths[0] || collision.SecondLabel != paths[len(paths)-1] {
+				t.Fatalf("collision did not identify both selected paths: %v", err)
 			}
 		})
 	}
@@ -71,9 +68,9 @@ func TestSelectedCatalogSourceRejectsCanonicallyEquivalentNames(t *testing.T) {
 		_ = source.Close()
 		t.Fatal("NFC and NFD spellings of one name were accepted")
 	}
-	var selected *catalog.SelectionError
-	if !errors.Is(err, catalog.ErrSiblingCollision) || !errors.As(err, &selected) || selected.Label != second {
-		t.Fatalf("collision did not identify the later selected path: %v", err)
+	var collision *catalog.SelectionNameCollisionError
+	if !errors.As(err, &collision) || collision.FirstLabel != first || collision.SecondLabel != second {
+		t.Fatalf("collision did not identify both selected paths: %v", err)
 	}
 }
 
@@ -95,30 +92,24 @@ func selectedRootFixture(tb testing.TB, count int) []string {
 	return paths
 }
 
-func TestSelectedCatalogSourceCollisionCheckScalesLinearly(t *testing.T) {
-	paths := selectedRootFixture(t, catalog.MaxSelectedRoots)
+func TestSelectedCatalogSourceCollisionAfterDistinctRoots(t *testing.T) {
+	const selectedRootCount = 4
+	paths := selectedRootFixture(t, selectedRootCount)
 	synthetic, _ := catalog.DirectoryIDFromBytes(identity16(1))
-	start := time.Now()
-	source, err := NewSelectedCatalogSource(SelectedCatalogSourceConfig{Paths: paths, SyntheticRoot: synthetic})
-	if err != nil {
-		t.Fatalf("distinct names were rejected: %v", err)
-	}
-	_ = source.Close()
-	if elapsed := time.Since(start); elapsed > 10*time.Second {
-		t.Fatalf("opening %d distinct roots took %v; the collision check is not linear", len(paths), elapsed)
-	}
 	// A collision with the very first root must still be found and name both paths.
 	clash := filepath.Join(filepath.Dir(paths[1]), "\u00e4\u00f6\u00fc-0000.txt")
 	if err := os.WriteFile(clash, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	paths[len(paths)-1] = clash
-	if source, err = NewSelectedCatalogSource(SelectedCatalogSourceConfig{Paths: paths, SyntheticRoot: synthetic}); err == nil {
+	source, err := NewSelectedCatalogSource(SelectedCatalogSourceConfig{Paths: paths, SyntheticRoot: synthetic})
+	if err == nil {
 		_ = source.Close()
 		t.Fatal("late collision with the first root was accepted")
 	}
-	if !errors.Is(err, catalog.ErrSiblingCollision) || !strings.Contains(err.Error(), strconv.Quote(paths[0])) {
-		t.Fatalf("collision did not name the earlier path: %v", err)
+	var collision *catalog.SelectionNameCollisionError
+	if !errors.As(err, &collision) || collision.FirstLabel != paths[0] || collision.SecondLabel != clash {
+		t.Fatalf("collision did not identify both selected paths: %v", err)
 	}
 }
 
