@@ -15,6 +15,7 @@ import (
 const (
 	Version = generatedUnicodeVersion
 
+	asciiLimit          = 0x80
 	scalarLimit         = rune(0x11_0000)
 	hangulSyllableBase  = rune(0xac00)
 	hangulLeadingBase   = rune(0x1100)
@@ -26,6 +27,15 @@ const (
 	hangulBlockCount    = hangulVowelCount * hangulTrailingCount
 	hangulSyllableCount = hangulLeadingCount * hangulBlockCount
 )
+
+func isASCII(value string) bool {
+	for index := 0; index < len(value); index++ {
+		if value[index] >= asciiLimit {
+			return false
+		}
+	}
+	return true
+}
 
 type normalizationTables struct {
 	decompositions map[rune][]rune
@@ -128,28 +138,18 @@ func combiningClass(scalar rune) uint8 {
 	return normalization().combiningClass[scalar]
 }
 
-func decomposition(scalar rune) []rune {
-	if hangul := decomposeHangul(scalar); hangul != nil {
-		return hangul
-	}
-	if mapped := normalization().decompositions[scalar]; mapped != nil {
-		return mapped
-	}
-	return []rune{scalar}
-}
-
-func decomposeHangul(scalar rune) []rune {
+func decomposeHangul(scalar rune) ([3]rune, int) {
 	syllable := int(scalar - hangulSyllableBase)
 	if syllable < 0 || syllable >= hangulSyllableCount {
-		return nil
+		return [3]rune{}, 0
 	}
 	leading := hangulLeadingBase + rune(syllable/hangulBlockCount)
 	vowel := hangulVowelBase + rune((syllable%hangulBlockCount)/hangulTrailingCount)
 	trailing := syllable % hangulTrailingCount
 	if trailing == 0 {
-		return []rune{leading, vowel}
+		return [3]rune{leading, vowel}, 2
 	}
-	return []rune{leading, vowel, hangulTrailingBase + rune(trailing)}
+	return [3]rune{leading, vowel, hangulTrailingBase + rune(trailing)}, 3
 }
 
 func compose(starter, next rune) (rune, bool) {
@@ -177,6 +177,9 @@ func composeHangul(starter, next rune) (rune, bool) {
 }
 
 func composeSegment(segment []rune) []rune {
+	if len(segment) <= 1 {
+		return segment
+	}
 	sort.SliceStable(segment, func(left, right int) bool {
 		return combiningClass(segment[left]) < combiningClass(segment[right])
 	})
@@ -206,13 +209,21 @@ func composeSegment(segment []rune) []rune {
 // NormalizeNFC applies canonical composition with the frozen Unicode 15.0.0
 // tables, including algorithmic Hangul normalization.
 func NormalizeNFC(value string) string {
-	output := make([]rune, 0, len(value))
-	segment := make([]rune, 0, 8)
+	// ASCII scalars have combining class zero and neither decompose nor compose
+	// with any adjacent ASCII scalar under Unicode 15.0.0.
+	if isASCII(value) {
+		return value
+	}
+	tables := normalization()
+	var outputBuffer [64]rune
+	var segmentBuffer [8]rune
+	output := outputBuffer[:0]
+	segment := segmentBuffer[:0]
 	emit := func(scalars []rune) {
 		output = append(output, scalars...)
 	}
 	accept := func(scalar rune) {
-		scalarClass := combiningClass(scalar)
+		scalarClass := tables.combiningClass[scalar]
 		if scalarClass != 0 {
 			segment = append(segment, scalar)
 			return
@@ -221,7 +232,7 @@ func NormalizeNFC(value string) string {
 			segment = append(segment, scalar)
 			return
 		}
-		if len(segment) == 1 && combiningClass(segment[0]) == 0 {
+		if len(segment) == 1 && tables.combiningClass[segment[0]] == 0 {
 			if composite, ok := compose(segment[0], scalar); ok {
 				segment[0] = composite
 			} else {
@@ -231,20 +242,30 @@ func NormalizeNFC(value string) string {
 			return
 		}
 		normalized := composeSegment(segment)
-		if len(normalized) == 1 && combiningClass(normalized[0]) == 0 {
+		if len(normalized) == 1 && tables.combiningClass[normalized[0]] == 0 {
 			if composite, ok := compose(normalized[0], scalar); ok {
-				segment = []rune{composite}
+				segment = append(segment[:0], composite)
 				return
 			}
 		}
 		emit(normalized)
-		segment = []rune{scalar}
+		segment = append(segment[:0], scalar)
 	}
 
 	for _, scalar := range value {
-		for _, decomposed := range decomposition(scalar) {
-			accept(decomposed)
+		if hangul, length := decomposeHangul(scalar); length > 0 {
+			for index := range length {
+				accept(hangul[index])
+			}
+			continue
 		}
+		if mapped := tables.decompositions[scalar]; mapped != nil {
+			for _, decomposed := range mapped {
+				accept(decomposed)
+			}
+			continue
+		}
+		accept(scalar)
 	}
 	emit(composeSegment(segment))
 	return string(output)
@@ -253,6 +274,29 @@ func NormalizeNFC(value string) string {
 // FullCaseFold applies Unicode 15.0.0's locale-independent default full case
 // folding. Turkic tailoring is intentionally outside the portable identity.
 func FullCaseFold(value string) string {
+	// Within ASCII, Unicode 15.0.0 full case folding maps only A..Z to a..z.
+	if isASCII(value) {
+		firstUpper := -1
+		for index := 0; index < len(value); index++ {
+			if value[index] >= 'A' && value[index] <= 'Z' {
+				firstUpper = index
+				break
+			}
+		}
+		if firstUpper < 0 {
+			return value
+		}
+		folded := make([]byte, len(value))
+		copy(folded[:firstUpper], value[:firstUpper])
+		for index := firstUpper; index < len(value); index++ {
+			octet := value[index]
+			if octet >= 'A' && octet <= 'Z' {
+				octet += 'a' - 'A'
+			}
+			folded[index] = octet
+		}
+		return string(folded)
+	}
 	mappings := caseFoldMappings()
 	var output strings.Builder
 	output.Grow(len(value))

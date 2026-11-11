@@ -111,3 +111,30 @@ func TestFullCaseFold(t *testing.T) {
 		t.Fatalf("canonically equivalent folds differ: %q != %q", left, right)
 	}
 }
+
+func TestASCIIFastPathsPreserveUnicode15SemanticsWithoutAllocating(t *testing.T) {
+	mappings := caseFoldMappings()
+	for octet := range byte(asciiLimit) {
+		input := string([]byte{octet})
+		if got, want := NormalizeNFC(input), norm.NFC.String(input); got != want {
+			t.Fatalf("NormalizeNFC(%#02x) = %q, want %q", octet, got, want)
+		}
+		wantFold := input
+		if mapped, ok := mappings[rune(octet)]; ok {
+			wantFold = mapped
+		}
+		if got := FullCaseFold(input); got != wantFold {
+			t.Fatalf("FullCaseFold(%#02x) = %q, want %q", octet, got, wantFold)
+		}
+	}
+	if allocs := testing.AllocsPerRun(100, func() {
+		if FoldPortableName("plain_ascii-file.01.txt") != "plain_ascii-file.01.txt" {
+			t.Fatal("unexpected lowercase ASCII fold")
+		}
+	}); allocs != 0 {
+		t.Fatalf("lowercase ASCII FoldPortableName allocated %v objects, want 0", allocs)
+	}
+	if got := FoldPortableName("README.MD"); got != "readme.md" {
+		t.Fatalf("FoldPortableName(README.MD) = %q, want readme.md", got)
+	}
+}

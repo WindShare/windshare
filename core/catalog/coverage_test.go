@@ -570,7 +570,7 @@ func TestEmptyStreamingScanAndLowLevelAdmissionBranches(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer meter.Close()
-	if _, err := newExternalSorter(nil, meter, hierarchy, 1); err == nil {
+	if _, err := newExternalSorter(nil, meter, hierarchy, 1, true); err == nil {
 		t.Fatal("storage-free sorter was accepted")
 	}
 	factory := NewFileSpillFactory(t.TempDir())
@@ -584,7 +584,7 @@ func TestEmptyStreamingScanAndLowLevelAdmissionBranches(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer workspace.Close()
-	sorter, err := newExternalSorter(workspace, meter, hierarchy, 0)
+	sorter, err := newExternalSorter(workspace, meter, hierarchy, 0, true)
 	if err != nil || sorter.runBytes != DefaultSortRunMemoryBytes {
 		t.Fatalf("default sorter = %+v err=%v", sorter, err)
 	}

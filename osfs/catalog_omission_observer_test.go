@@ -41,7 +41,11 @@ func TestStableScanReportsBoundedOmissionsWithoutDiagnostics(t *testing.T) {
 		Children: &collectingScanChildren{},
 	}
 	result, err := source.ScanDirectory(t.Context(), request)
-	if err != nil || result.OmittedCount != omitted || len(reports) != 1 {
+	if err != nil {
+		t.Fatal(err)
+	}
+	result.PublishOmissions(0, nil)
+	if result.OmittedCount != omitted || len(reports) != 1 {
 		t.Fatalf("result=%+v reports=%+v err=%v", result, reports, err)
 	}
 	report := reports[0]

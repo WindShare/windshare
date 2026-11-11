@@ -61,25 +61,35 @@ func (r sortRecord) memoryBytes() uint64 {
 }
 
 type externalSorter struct {
-	workspace   SpillWorkspace
-	meter       ResourceMeter
-	hierarchy   BudgetHierarchy
-	runBytes    uint64
-	chunk       []sortRecord
-	chunkBytes  uint64
-	chunkBudget *BudgetReservation
-	runs        []SpillObject
-	count       uint64
+	workspace        SpillWorkspace
+	meter            ResourceMeter
+	hierarchy        BudgetHierarchy
+	runBytes         uint64
+	rejectDuplicates bool
+	chunk            []sortRecord
+	chunkBytes       uint64
+	chunkBudget      *BudgetReservation
+	runs             []SpillObject
+	count            uint64
 }
 
-func newExternalSorter(workspace SpillWorkspace, meter ResourceMeter, hierarchy BudgetHierarchy, runBytes uint64) (*externalSorter, error) {
+func newExternalSorter(
+	workspace SpillWorkspace,
+	meter ResourceMeter,
+	hierarchy BudgetHierarchy,
+	runBytes uint64,
+	rejectDuplicates bool,
+) (*externalSorter, error) {
 	if workspace == nil || meter == nil {
 		return nil, errors.New("catalog external sorter requires spill storage and resource meter")
 	}
 	if runBytes == 0 {
 		runBytes = DefaultSortRunMemoryBytes
 	}
-	return &externalSorter{workspace: workspace, meter: meter, hierarchy: hierarchy, runBytes: runBytes}, nil
+	return &externalSorter{
+		workspace: workspace, meter: meter, hierarchy: hierarchy,
+		runBytes: runBytes, rejectDuplicates: rejectDuplicates,
+	}, nil
 }
 
 func (s *externalSorter) add(ctx context.Context, record sortRecord) error {
@@ -88,7 +98,7 @@ func (s *externalSorter) add(ctx context.Context, record sortRecord) error {
 	}
 	memory := record.memoryBytes()
 	if s.chunkBytes != 0 && s.chunkBytes+memory > s.runBytes {
-		if err := s.flush(ctx, true); err != nil {
+		if err := s.flush(ctx); err != nil {
 			return err
 		}
 	}
@@ -110,7 +120,7 @@ func (s *externalSorter) add(ctx context.Context, record sortRecord) error {
 	return nil
 }
 
-func (s *externalSorter) flush(ctx context.Context, rejectDuplicates bool) error {
+func (s *externalSorter) flush(ctx context.Context) error {
 	if len(s.chunk) == 0 {
 		return nil
 	}
@@ -123,7 +133,7 @@ func (s *externalSorter) flush(ctx context.Context, rejectDuplicates bool) error
 	sort.Slice(s.chunk, func(left, right int) bool {
 		return bytes.Compare(s.chunk[left].key, s.chunk[right].key) < 0
 	})
-	if rejectDuplicates {
+	if s.rejectDuplicates {
 		for index := 1; index < len(s.chunk); index++ {
 			if bytes.Equal(s.chunk[index-1].key, s.chunk[index].key) {
 				return ErrSiblingCollision
@@ -150,14 +160,14 @@ func (s *externalSorter) flush(ctx context.Context, rejectDuplicates bool) error
 		return err
 	}
 	committed = true
-	return s.compactRun(ctx, object, rejectDuplicates)
+	return s.compactRun(ctx, object)
 }
 
 // compactRun performs a binary carry as soon as a run is complete. Retaining a
 // flat run list makes bookkeeping memory proportional to directory width even
 // when record payloads spill correctly; one run per level keeps both the sorter
 // and FileSpillWorkspace metadata logarithmically bounded.
-func (s *externalSorter) compactRun(ctx context.Context, run SpillObject, rejectDuplicates bool) error {
+func (s *externalSorter) compactRun(ctx context.Context, run SpillObject) error {
 	for level := 0; ; level++ {
 		if level == len(s.runs) {
 			s.runs = append(s.runs, run)
@@ -167,7 +177,7 @@ func (s *externalSorter) compactRun(ctx context.Context, run SpillObject, reject
 			s.runs[level] = run
 			return nil
 		}
-		merged, err := s.mergePair(ctx, s.runs[level], run, rejectDuplicates)
+		merged, err := s.mergePair(ctx, s.runs[level], run)
 		if err != nil {
 			return err
 		}
@@ -176,8 +186,8 @@ func (s *externalSorter) compactRun(ctx context.Context, run SpillObject, reject
 	}
 }
 
-func (s *externalSorter) finish(ctx context.Context, rejectDuplicates bool) (SpillObject, uint64, error) {
-	if err := s.flush(ctx, rejectDuplicates); err != nil {
+func (s *externalSorter) finish(ctx context.Context) (SpillObject, uint64, error) {
+	if err := s.flush(ctx); err != nil {
 		return nil, 0, err
 	}
 	if len(s.runs) == 0 {
@@ -205,7 +215,7 @@ func (s *externalSorter) finish(ctx context.Context, rejectDuplicates bool) (Spi
 				next = append(next, runs[index])
 				continue
 			}
-			merged, err := s.mergePair(ctx, runs[index], runs[index+1], rejectDuplicates)
+			merged, err := s.mergePair(ctx, runs[index], runs[index+1])
 			if err != nil {
 				return nil, 0, err
 			}
@@ -226,7 +236,7 @@ func (s *externalSorter) close() {
 	s.chunkBytes = 0
 }
 
-func (s *externalSorter) mergePair(ctx context.Context, left, right SpillObject, rejectDuplicates bool) (SpillObject, error) {
+func (s *externalSorter) mergePair(ctx context.Context, left, right SpillObject) (SpillObject, error) {
 	leftCursor, err := newSortCursor(ctx, left, s.hierarchy)
 	if err != nil {
 		return nil, err
@@ -247,7 +257,7 @@ func (s *externalSorter) mergePair(ctx context.Context, left, right SpillObject,
 			_ = writer.Abort()
 		}
 	}()
-	if err := mergeSortRecords(ctx, writer, s.meter, leftCursor, rightCursor, rejectDuplicates); err != nil {
+	if err := mergeSortRecords(ctx, writer, s.meter, leftCursor, rightCursor, s.rejectDuplicates); err != nil {
 		return nil, err
 	}
 	object, err := writer.Commit()
@@ -260,11 +270,7 @@ func (s *externalSorter) mergePair(ctx context.Context, left, right SpillObject,
 	leftCursor.close()
 	rightCursor.close()
 	for _, input := range []SpillObject{left, right} {
-		size := input.Size()
-		if err := input.Remove(); err != nil {
-			return nil, err
-		}
-		if err := s.meter.Release(ResourceUsage{SpillBytes: size}); err != nil {
+		if err := releaseSpillObject(input, s.meter); err != nil {
 			return nil, err
 		}
 	}
@@ -423,12 +429,16 @@ func (s sortedNodeSource) Open(ctx context.Context) (NodeRecordIterator, error) 
 	return &sortedNodeIterator{cursor: cursor}, nil
 }
 
-func (s sortedNodeSource) Release(meter ResourceMeter) error {
-	size := s.object.Size()
-	if err := s.object.Remove(); err != nil {
+func releaseSpillObject(object SpillObject, meter ResourceMeter) error {
+	size := object.Size()
+	if err := object.Remove(); err != nil {
 		return err
 	}
 	return meter.Release(ResourceUsage{SpillBytes: size})
+}
+
+func (s sortedNodeSource) Release(meter ResourceMeter) error {
+	return releaseSpillObject(s.object, meter)
 }
 
 type sortedNodeIterator struct {
@@ -455,24 +465,43 @@ func (i *sortedNodeIterator) Close() error {
 	return nil
 }
 
+type directorySortResult struct {
+	nodes          nodeRecordSource
+	omittedCount   uint64
+	omittedSamples []SourceOmission
+}
+
+// Full node payloads are sorted once. The admission index contains only names
+// and identities; colliding names add a small exclusion stream instead of
+// forcing every healthy directory through a second payload sort.
 type directorySorter struct {
-	parent     DirectoryID
-	nodes      *externalSorter
-	validation *externalSorter
-	meter      ResourceMeter
-	hierarchy  BudgetHierarchy
+	parent       DirectoryID
+	nodes        *externalSorter
+	admission    *externalSorter
+	omittedNames *externalSorter
+	meter        ResourceMeter
+	hierarchy    BudgetHierarchy
 }
 
 func newDirectorySorter(parent DirectoryID, workspace SpillWorkspace, meter ResourceMeter, hierarchy BudgetHierarchy, runBytes uint64) (*directorySorter, error) {
-	nodes, err := newExternalSorter(workspace, meter, hierarchy, runBytes)
+	// Equal canonical names remain provisional until sibling admission excludes
+	// every member. Identity duplicates are validated separately in the index.
+	nodes, err := newExternalSorter(workspace, meter, hierarchy, runBytes, false)
 	if err != nil {
 		return nil, err
 	}
-	validation, err := newExternalSorter(workspace, meter, hierarchy, runBytes)
+	admission, err := newExternalSorter(workspace, meter, hierarchy, runBytes, false)
 	if err != nil {
 		return nil, err
 	}
-	return &directorySorter{parent: parent, nodes: nodes, validation: validation, meter: meter, hierarchy: hierarchy}, nil
+	omittedNames, err := newExternalSorter(workspace, meter, hierarchy, runBytes, false)
+	if err != nil {
+		return nil, err
+	}
+	return &directorySorter{
+		parent: parent, nodes: nodes, admission: admission,
+		omittedNames: omittedNames, meter: meter, hierarchy: hierarchy,
+	}, nil
 }
 
 func (s *directorySorter) Add(ctx context.Context, child ScannedChild) error {
@@ -494,33 +523,43 @@ func (s *directorySorter) Add(ctx context.Context, child ScannedChild) error {
 	if err := s.nodes.add(ctx, sortRecord{key: []byte(node.Entry().Name()), payload: encoded}); err != nil {
 		return err
 	}
-	nameKey := append([]byte{0}, []byte(siblingCollisionKey(node.Entry().Name()))...)
-	if err := s.validation.add(ctx, sortRecord{key: nameKey}); err != nil {
+	identityKey := append([]byte{admissionIdentityKey}, node.NodeID().Bytes()...)
+	if err := s.admission.add(ctx, sortRecord{key: identityKey}); err != nil {
 		return err
 	}
-	nodeKey := append([]byte{1}, node.NodeID().Bytes()...)
-	return s.validation.add(ctx, sortRecord{key: nodeKey})
+	collisionKey := siblingCollisionKey(node.Entry().Name())
+	candidateKey := make([]byte, 0, len(collisionKey)+len(child.Name)+2)
+	candidateKey = append(candidateKey, admissionNameKey)
+	candidateKey = append(candidateKey, collisionKey...)
+	candidateKey = append(candidateKey, 0)
+	candidateKey = append(candidateKey, child.Name...)
+	return s.admission.add(ctx, sortRecord{key: candidateKey})
 }
 
-func (s *directorySorter) Finish(ctx context.Context) (sortedNodeSource, error) {
-	nodes, count, err := s.nodes.finish(ctx, true)
+func (s *directorySorter) Finish(ctx context.Context) (directorySortResult, error) {
+	nodes, count, err := s.nodes.finish(ctx)
 	if err != nil {
-		return sortedNodeSource{}, err
+		return directorySortResult{}, err
 	}
-	validation, _, err := s.validation.finish(ctx, true)
+	admission, _, err := s.admission.finish(ctx)
 	if err != nil {
-		_ = nodes.Remove()
-		_ = s.meter.Release(ResourceUsage{SpillBytes: nodes.Size()})
-		return sortedNodeSource{}, err
+		return directorySortResult{}, err
 	}
-	validationBytes := validation.Size()
-	if err := validation.Remove(); err != nil {
-		return sortedNodeSource{}, err
+	omittedCount, samples, admissionErr := s.collectSiblingOmissions(ctx, admission)
+	if err := errors.Join(admissionErr, releaseSpillObject(admission, s.meter)); err != nil {
+		return directorySortResult{}, err
 	}
-	if err := s.meter.Release(ResourceUsage{SpillBytes: validationBytes}); err != nil {
-		return sortedNodeSource{}, err
+	source := sortedNodeSource{object: nodes, count: count, hierarchy: s.hierarchy}
+	result := directorySortResult{nodes: source, omittedCount: omittedCount, omittedSamples: samples}
+	if omittedCount == 0 {
+		return result, nil
 	}
-	return sortedNodeSource{object: nodes, count: count, hierarchy: s.hierarchy}, nil
+	omittedNames, _, err := s.omittedNames.finish(ctx)
+	if err != nil {
+		return directorySortResult{}, err
+	}
+	result.nodes = admittedNodeSource{source: source, names: omittedNames, omittedCount: omittedCount}
+	return result, nil
 }
 
 func (s *directorySorter) Close() {
@@ -528,5 +567,6 @@ func (s *directorySorter) Close() {
 		return
 	}
 	s.nodes.close()
-	s.validation.close()
+	s.admission.close()
+	s.omittedNames.close()
 }

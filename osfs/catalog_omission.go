@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io/fs"
 	"path/filepath"
+	"sync"
 
 	"github.com/windshare/windshare/core/catalog"
 	diag "github.com/windshare/windshare/core/diagnostics"
@@ -34,6 +35,43 @@ func classifyChildAccessError(name string, err error) (catalog.SourceOmission, e
 		return catalog.SourceOmission{Name: name, Reason: catalog.SourceOmissionAccessDenied}, nil
 	}
 	return catalog.SourceOmission{}, catalog.NewTransientScanError(err, 0)
+}
+
+func (source *SelectedCatalogSource) newScanOmissionReporter(
+	request catalog.ScanRequest,
+	parent sourceLocation,
+	directoryPath string,
+	initial catalogOmissions,
+) catalog.ScanOmissionReporter {
+	if source.omissions == nil && !source.diagnostics.Enabled() {
+		return nil
+	}
+	var once sync.Once
+	return catalog.ScanOmissionReporterFunc(func(additionalCount uint64, additionalSamples []catalog.SourceOmission) {
+		once.Do(func() {
+			totalCount := initial.count + additionalCount
+			if totalCount == 0 {
+				return
+			}
+			samples := make(
+				[]catalog.SourceOmission,
+				0,
+				min(len(initial.samples)+len(additionalSamples), catalog.MaxSourceOmissionSamples),
+			)
+			samples = append(samples, initial.samples...)
+			if remaining := catalog.MaxSourceOmissionSamples - len(samples); remaining > 0 && len(additionalSamples) > 0 {
+				samples = append(samples, additionalSamples[:min(len(additionalSamples), remaining)]...)
+			}
+			for index, sample := range samples {
+				source.traceCatalogOmission(request, parent, sample, uint64(index+1))
+			}
+			source.traceCatalogOmissionSummary(request, totalCount)
+			source.observeCatalogOmissions(request, directoryPath, catalogOmissions{
+				count:   totalCount,
+				samples: samples,
+			})
+		})
+	})
 }
 
 func (source *SelectedCatalogSource) observeCatalogOmissions(request catalog.ScanRequest, path string, result catalogOmissions) {

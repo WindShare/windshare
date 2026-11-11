@@ -470,26 +470,32 @@ func TestScanChildSinkSerializesConcurrentProducersAndRejectsLateUse(t *testing.
 	}
 }
 
-func TestExternalSortRejectsPortableAndIdentityCollisions(t *testing.T) {
+func TestExternalSortRejectsNodeIdentityCollisions(t *testing.T) {
 	for name, children := range map[string][]ScannedChild{
-		"portable-name": {scannedFile(t, 100, "README", 1), scannedFile(t, 101, "Readme", 1)},
-		"node-identity": {scannedFile(t, 102, "a", 1), scannedFile(t, 102, "b", 1)},
+		"distinct-names":  {scannedFile(t, 102, "a", 1), scannedFile(t, 102, "b", 1)},
+		"colliding-names": {scannedFile(t, 103, "README", 1), scannedFile(t, 103, "Readme", 1)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			store, _, _ := newStore(t, NewMemoryCatalogBackend(), nil)
 			defer store.Close()
 			session := generousBudget(t, "session")
 			directory := prepareScannableDirectory(t, store, session, 110, 112)
+			var published bool
 			scanner := DirectoryScannerFunc(func(ctx context.Context, request ScanRequest) (ScanResult, error) {
 				for _, child := range children {
 					if err := request.Children.Add(ctx, child); err != nil {
 						return ScanResult{}, err
 					}
 				}
-				return ScanResult{}, nil
+				return ScanResult{
+					Omissions: ScanOmissionReporterFunc(func(uint64, []SourceOmission) { published = true }),
+				}, nil
 			})
 			if _, err := store.ListChildren(context.Background(), directory, session, ScanOptions{}, scanner); !errors.Is(err, ErrSiblingCollision) {
 				t.Fatalf("collision error = %v", err)
+			}
+			if published {
+				t.Fatal("failed scan published omissions")
 			}
 			if _, exists, _ := store.Directory(context.Background(), directory); exists {
 				t.Fatal("colliding scan was committed")
