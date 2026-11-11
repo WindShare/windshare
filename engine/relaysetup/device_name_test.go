@@ -1,59 +1,99 @@
 package relaysetup
 
 import (
+	"encoding/json"
+	"errors"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/windshare/windshare/engine/relayconfig"
 )
 
-// A device name the checkpoint would reject must be refused before any
-// enrollment request, with a diagnostic that names the offending input
-// instead of an opaque checkpoint serialization failure.
-func TestRestrictedSetupRejectsUnsavableDeviceNameBeforeEnrollment(t *testing.T) {
-	for _, name := range []string{
-		"",
-		"   ",
-		strings.Repeat("a", maximumDeviceNameBytes+1),
-		"Lap\ttop",
-		"Laptop\n",
-	} {
-		t.Run(strings.ReplaceAll(name, "\n", `\n`), func(t *testing.T) {
-			store := &memoryStore{saved: prior()}
-			enrollments := 0
-			client := fakeHTTP(func(req *http.Request) (*http.Response, error) {
-				switch req.URL.Path {
-				case "/.well-known/windshare":
-					return response(200, map[string]any{"version": 1, "access": "restricted", "relay_url": "https://private.example", "console_url": "https://console.example"})
-				case "/api/enrollments":
-					enrollments++
-					return response(200, map[string]any{"enrollment_id": "pending", "user_code": "ABCD-EFGH", "verification_uri_complete": "https://console.example/", "expires_at": time.Now().Add(time.Minute).UnixMilli(), "interval_ms": 5000})
-				default:
-					t.Fatalf("unexpected endpoint: %s", req.URL)
-					return nil, nil
+// Invalid input must leave durable storage readable, including when JSON would
+// otherwise replace invalid UTF-8 and expand a name beyond the byte limit.
+func TestRestrictedSetupRejectsInvalidDeviceNameBeforeEnrollment(t *testing.T) {
+	for _, operation := range []Operation{AddProfile, PrivateOnboarding} {
+		for _, test := range []struct{ name, input string }{
+			{"empty", ""},
+			{"blank", "   "},
+			{"too long", strings.Repeat("a", maximumDeviceNameBytes+1)},
+			{"tab", "Lap\ttop"},
+			{"newline", "Laptop\n"},
+			{"invalid UTF-8", "\xff"},
+			{"UTF-8 expansion at limit", strings.Repeat("a", maximumDeviceNameBytes-1) + "\xff"},
+		} {
+			t.Run(string(operation)+"/"+test.name, func(t *testing.T) {
+				settings := relayconfig.FileStore{Path: filepath.Join(t.TempDir(), "config.json")}
+				initial := prior()
+				if err := settings.Save(initial.Config); err != nil {
+					t.Fatal(err)
+				}
+				store := FileStore{Settings: settings}
+				enrollments := 0
+				client := fakeHTTP(func(req *http.Request) (*http.Response, error) {
+					switch req.URL.Path {
+					case "/.well-known/windshare":
+						return response(http.StatusOK, map[string]any{"version": 1, "access": "restricted",
+							"relay_url": "https://private.example", "console_url": "https://console.example"})
+					case "/api/enrollments":
+						enrollments++
+						return response(http.StatusBadRequest, map[string]string{"error": "invalid_name"})
+					default:
+						t.Fatalf("unexpected endpoint: %s", req.URL)
+						return nil, nil
+					}
+				})
+				service := New(Dependencies{Store: store, HTTP: client})
+				_, err := service.Run(t.Context(), Request{URL: "https://private.example",
+					DeviceName: test.input, Operation: operation}, nil)
+				if !errors.Is(err, ErrInvalidDeviceName) {
+					t.Fatalf("error = %v, want ErrInvalidDeviceName", err)
+				}
+				saved, err := store.Load()
+				if err != nil || enrollments != 0 || saved.Pending != nil ||
+					saved.SettingsRevision() != initial.SettingsRevision() {
+					t.Fatalf("rejected input changed setup: requests=%d pending=%v load=%v",
+						enrollments, saved.Pending != nil, err)
+				}
+				if err := service.Cancel(t.Context(), "https://private.example"); !errors.Is(err, ErrNoPendingSetup) {
+					t.Fatalf("rejected input blocked cancellation: %v", err)
 				}
 			})
-			service := New(Dependencies{Store: store, HTTP: client})
-			_, err := service.Run(t.Context(), Request{URL: "https://private.example", DeviceName: name, Operation: AddProfile}, nil)
-			if err == nil {
-				t.Fatal("unsavable device name was accepted")
-			}
-			if !strings.Contains(err.Error(), "device name") || strings.Contains(err.Error(), "checkpoint") {
-				t.Fatalf("diagnostic does not name the device name: %v", err)
-			}
-			if enrollments != 0 || store.saved.Pending != nil {
-				t.Fatalf("rejected name still started enrollment: requests=%d pending=%v", enrollments, store.saved.Pending != nil)
-			}
-		})
+		}
 	}
 }
 
-// Names the checkpoint accepts must keep working, including the longest one.
-func TestRestrictedSetupAcceptsLongestSavableDeviceName(t *testing.T) {
-	if err := validateDeviceName(strings.Repeat("a", maximumDeviceNameBytes)); err != nil {
-		t.Fatal(err)
+func TestDeviceNameCheckpointRoundTrip(t *testing.T) {
+	for _, name := range []string{
+		strings.Repeat("a", maximumDeviceNameBytes),
+		strings.Repeat("界", 42) + "ab",
+		"Ricky's 笔记本",
+		"  My laptop  ",
+		"\ufffd",
+	} {
+		pending := expiredPending(time.Now())
+		pending.DeviceName = name
+		encoded, err := json.Marshal(pending)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var restored PendingSetup
+		if err := json.Unmarshal(encoded, &restored); err != nil || restored.DeviceName != name {
+			t.Fatalf("name did not round-trip unchanged: before=%q after=%q error=%v",
+				name, restored.DeviceName, err)
+		}
 	}
-	if err := validateDeviceName("Ricky's 笔记本"); err != nil {
-		t.Fatal(err)
+}
+
+func TestDeviceNameCheckpointRejectsInvalidUTF8(t *testing.T) {
+	for _, name := range []string{"\xff", strings.Repeat("a", maximumDeviceNameBytes-1) + "\xff"} {
+		pending := expiredPending(time.Now())
+		pending.DeviceName = name
+		if _, err := json.Marshal(pending); err == nil {
+			t.Fatal("checkpoint accepted a name JSON would silently replace")
+		}
 	}
 }

@@ -31,8 +31,6 @@ var (
 	ErrSetupRunning    = errors.New("relay setup is already running; finish or cancel it first")
 	ErrSettingsChanged = errors.New("sharing settings changed during relay setup")
 	ErrSetupSuperseded = errors.New("relay setup was completed, cancelled or replaced")
-	// ErrInvalidDeviceName reports a name the setup checkpoint could not record.
-	ErrInvalidDeviceName = errors.New("device name must be 1 to 128 bytes, not blank, and free of control characters")
 )
 
 // The recovery for ErrSettingsChanged depends on whether a pending record

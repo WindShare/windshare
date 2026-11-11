@@ -56,14 +56,15 @@ func (app *App) parseRelaySetupRequest(operation string, args []string) (engine.
 	}
 	flags := app.newFlagSet("relay " + operation)
 	hostname, _ := os.Hostname()
-	if hostname == "" {
-		hostname = "WindShare client"
-	}
 	flags.BoolVar(&request.NoBrowser, "no-browser", false, "display the approval URL without opening a browser")
-	flags.StringVar(&request.DeviceName, "name", hostname, "device name displayed for browser approval")
+	flags.StringVar(&request.DeviceName, "name", relaysetup.DefaultDeviceName(hostname), "device name displayed for browser approval")
 	address, outcome := app.parseRelayURL(flags, flags.Name()+" <url> [options]", args)
 	if outcome != requestParseReady {
 		return engine.RelaySetupRequest{}, outcome
+	}
+	if err := relaysetup.ValidateDeviceName(request.DeviceName); err != nil {
+		app.writeRelaySetupFailure(err)
+		return engine.RelaySetupRequest{}, requestParseUsageFailure
 	}
 	request.URL = address
 	return request, requestParseReady
@@ -84,8 +85,7 @@ func (app *App) parseRelayURL(flags *flag.FlagSet, synopsis string, args []strin
 func (app *App) runRelaySetup(ctx context.Context, request engine.RelaySetupRequest) int {
 	current, err := app.application.StartRelaySetup(ctx, request)
 	if err != nil {
-		app.writeCompleteLine("relay setup: %v", err)
-		return ExitFailure
+		return app.writeRelaySetupFailure(err)
 	}
 	for observation := range current.Observations() {
 		if event, ok := observation.Event.(engine.RelaySetupProgress); ok {
@@ -99,18 +99,16 @@ func (app *App) runRelaySetup(ctx context.Context, request engine.RelaySetupRequ
 	}
 	result, err := current.Wait(context.Background())
 	if err != nil {
-		app.writeCompleteLine("relay setup: %v", err)
-		return ExitFailure
+		return app.writeRelaySetupFailure(err)
 	}
 	if result.Err != nil {
-		app.writeCompleteLine("relay setup: %v", result.Err)
-		if errors.Is(result.Err, relaysetup.ErrInvalidDeviceName) {
-			app.writeCompleteLine("Choose another device name with --name.")
-		}
-		if ctx.Err() != nil {
+		code := app.writeRelaySetupFailure(result.Err)
+		// A concrete input error takes precedence over cancellation: retrying
+		// the unchanged command would fail again.
+		if code != ExitUsage && ctx.Err() != nil {
 			app.writeInterruptedRelaySetupHint(result.Err)
 		}
-		return ExitFailure
+		return code
 	}
 	app.writeCompleteLine("Relay saved: %s", result.Value.RelayURL)
 	if request.Operation == relaysetup.PrivateOnboarding {
@@ -120,6 +118,15 @@ func (app *App) runRelaySetup(ctx context.Context, request engine.RelaySetupRequ
 		app.writeCompleteLine("No share frontend was advertised. Pass --front-url when sharing.")
 	}
 	return ExitOK
+}
+
+func (app *App) writeRelaySetupFailure(err error) int {
+	app.writeCompleteLine("relay setup: %v", err)
+	if errors.Is(err, relaysetup.ErrInvalidDeviceName) {
+		app.writeCompleteLine("Choose another device name with --name.")
+		return ExitUsage
+	}
+	return ExitFailure
 }
 
 // relayCancelExitCode treats "nothing is pending" as a user error, like naming

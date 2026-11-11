@@ -46,7 +46,7 @@ func (run *workflow) execute(ctx context.Context, request Request, progress func
 	if discovery.Access == "open" {
 		return run.install(ctx, saved.SettingsRevision(), discovery.RelayURL, "", "", discovery.FrontendURL, request.Operation)
 	}
-	if err := validateDeviceName(request.DeviceName); err != nil {
+	if err := ValidateDeviceName(request.DeviceName); err != nil {
 		return Result{}, err
 	}
 	secret := make([]byte, claimSecretBytes)
