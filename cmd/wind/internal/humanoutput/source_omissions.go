@@ -32,6 +32,8 @@ func sourceOmissionReason(sample catalog.SourceOmission) string {
 		return "special file; only regular files and directories can be shared"
 	case catalog.SourceOmissionName:
 		return escapedDisplay(sample.Detail) + "; rename this item"
+	case catalog.SourceOmissionNameCollision:
+		return escapedDisplay(sample.Detail) + " ignoring letter case or Unicode form; rename one of them"
 	case catalog.SourceOmissionAccessDenied:
 		return "access denied; grant this sender read access and directory traversal access, then share again"
 	default:

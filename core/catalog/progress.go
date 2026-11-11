@@ -39,10 +39,19 @@ type ScanRequest struct {
 
 type ScanResult struct {
 	// OmittedCount counts immediate children the source could not include in a
-	// fully enumerated, stable directory. An omitted directory counts once for
-	// its entire subtree. Failures that prevent complete enumeration or directory
-	// identity validation must return an error.
+	// fully enumerated, stable directory before catalog-level admission. An
+	// omitted directory counts once for its entire subtree. Failures that prevent
+	// complete enumeration or directory identity validation must return an error.
 	OmittedCount uint64
+	// Omissions publishes local omission feedback and diagnostics once the caller
+	// commits the scanned directory generation.
+	Omissions ScanOmissionReporter
+}
+
+func (r ScanResult) PublishOmissions(additionalCount uint64, additionalSamples []SourceOmission) {
+	if r.Omissions != nil {
+		r.Omissions.ReportScanOmissions(additionalCount, additionalSamples)
+	}
 }
 
 type DirectoryScanner interface {

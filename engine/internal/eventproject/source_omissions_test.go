@@ -13,10 +13,11 @@ import (
 func TestSourceOmissionsPreserveBoundedSamplesAndScanIdentityAcrossProjection(t *testing.T) {
 	summary := catalog.SourceOmissions{
 		Directory: catalog.DirectoryID{1}, Generation: catalog.DirectoryGeneration{2}, Attempt: catalog.ScanAttemptID{3},
-		DirectoryPath: "/source/nested", Count: 3,
+		DirectoryPath: "/source/nested", Count: 4,
 		Samples: []catalog.SourceOmission{
 			{Name: "family\u200bphotos", Reason: catalog.SourceOmissionName, Detail: "unsupported format character U+200B"},
 			{Name: "private.txt", Reason: catalog.SourceOmissionAccessDenied},
+			catalog.NewSiblingCollisionOmission("README.md", "Readme.md"),
 		},
 	}
 	var published task.Observation
@@ -40,9 +41,10 @@ func TestSourceOmissionsPreserveBoundedSamplesAndScanIdentityAcrossProjection(t 
 		payload.DirectoryID != wire.EncodeIdentity(summary.Directory.Bytes()) ||
 		payload.GenerationID != wire.EncodeIdentity(summary.Generation.Bytes()) ||
 		payload.ScanAttemptID != wire.EncodeIdentity(summary.Attempt.Bytes()) ||
-		payload.DirectoryPath != summary.DirectoryPath || payload.OmittedEntries != "3" || payload.UnsampledEntries != "1" ||
-		len(payload.Samples) != 2 || payload.Samples[0].Name != "family\u200bphotos" || payload.Samples[0].Reason != "unrepresentable_name" || payload.Samples[0].Detail != "unsupported format character U+200B" ||
-		payload.Samples[1].Name != "private.txt" || payload.Samples[1].Reason != "access_denied" || payload.Samples[1].Detail != "" {
+		payload.DirectoryPath != summary.DirectoryPath || payload.OmittedEntries != "4" || payload.UnsampledEntries != "1" ||
+		len(payload.Samples) != 3 || payload.Samples[0].Name != "family\u200bphotos" || payload.Samples[0].Reason != "unrepresentable_name" || payload.Samples[0].Detail != "unsupported format character U+200B" ||
+		payload.Samples[1].Name != "private.txt" || payload.Samples[1].Reason != "access_denied" || payload.Samples[1].Detail != "" ||
+		payload.Samples[2].Name != "README.md" || payload.Samples[2].Reason != "name_collision" || payload.Samples[2].Detail != `collides with sibling "Readme.md"` {
 		t.Fatalf("omission serialization lost source facts or sample ownership: %+v", encoded)
 	}
 
@@ -56,6 +58,7 @@ func TestSourceOmissionsPreserveBoundedSamplesAndScanIdentityAcrossProjection(t 
 		},
 		func(value *catalog.SourceOmissions) { value.Samples[0].Name = "" },
 		func(value *catalog.SourceOmissions) { value.Samples[0].Detail = "" },
+		func(value *catalog.SourceOmissions) { value.Samples[2].Detail = "" },
 		func(value *catalog.SourceOmissions) {
 			value.Samples = make([]catalog.SourceOmission, catalog.MaxSourceOmissionSamples+1)
 		},

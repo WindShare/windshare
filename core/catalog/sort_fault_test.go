@@ -117,14 +117,14 @@ func TestExternalSorterFaultMatrix(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			hierarchy, meter := sorterBudget(t, 1<<20, 1<<20)
 			defer meter.Close()
-			sorter, err := newExternalSorter(workspace, meter, hierarchy, 1024)
+			sorter, err := newExternalSorter(workspace, meter, hierarchy, 1024, true)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if err := sorter.add(context.Background(), sortRecord{key: []byte("key"), payload: []byte("value")}); err != nil {
 				t.Fatal(err)
 			}
-			if _, _, err := sorter.finish(context.Background(), true); !errors.Is(err, injected) {
+			if _, _, err := sorter.finish(context.Background()); !errors.Is(err, injected) {
 				t.Fatalf("sort fault = %v", err)
 			}
 			sorter.close()
@@ -134,21 +134,21 @@ func TestExternalSorterFaultMatrix(t *testing.T) {
 	hierarchy, meter := sorterBudget(t, 1<<20, 1<<20)
 	defer meter.Close()
 	workspace := &fakeSpillWorkspace{}
-	sorter, _ := newExternalSorter(workspace, meter, hierarchy, 1024)
+	sorter, _ := newExternalSorter(workspace, meter, hierarchy, 1024, true)
 	if err := sorter.add(context.Background(), sortRecord{key: []byte("same")}); err != nil {
 		t.Fatal(err)
 	}
 	if err := sorter.add(context.Background(), sortRecord{key: []byte("same")}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := sorter.finish(context.Background(), true); !errors.Is(err, ErrSiblingCollision) {
+	if _, _, err := sorter.finish(context.Background()); !errors.Is(err, ErrSiblingCollision) {
 		t.Fatalf("duplicate sort key = %v", err)
 	}
 	sorter.close()
 
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	sorter, _ = newExternalSorter(&fakeSpillWorkspace{}, meter, hierarchy, 1024)
+	sorter, _ = newExternalSorter(&fakeSpillWorkspace{}, meter, hierarchy, 1024, true)
 	if err := sorter.add(cancelled, sortRecord{key: []byte("key")}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled add = %v", err)
 	}
@@ -156,7 +156,7 @@ func TestExternalSorterFaultMatrix(t *testing.T) {
 		&fakeSpillObject{openErr: injected},
 		&fakeSpillObject{data: nil},
 	}
-	if _, _, err := sorter.finish(context.Background(), true); !errors.Is(err, injected) {
+	if _, _, err := sorter.finish(context.Background()); !errors.Is(err, injected) {
 		t.Fatalf("merge open fault = %v", err)
 	}
 }
@@ -265,7 +265,7 @@ func TestLongExternalSorterCompactsRunMetadataWhileStreaming(t *testing.T) {
 	}
 	defer workspaceValue.Close()
 	workspace := workspaceValue.(*fileSpillWorkspace)
-	sorter, err := newExternalSorter(workspace, meter, hierarchy, 1)
+	sorter, err := newExternalSorter(workspace, meter, hierarchy, 1, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +284,7 @@ func TestLongExternalSorterCompactsRunMetadataWhileStreaming(t *testing.T) {
 			t.Fatalf("run metadata grew with width: live=%d levels=%d max=%d", liveObjects, len(sorter.runs), maxLive)
 		}
 	}
-	object, count, err := sorter.finish(context.Background(), true)
+	object, count, err := sorter.finish(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

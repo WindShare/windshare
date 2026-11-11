@@ -452,16 +452,24 @@ func (s *CatalogStore) runAttempt(attempt *scanAttempt, directory NodeRecord, se
 		resultErr = err
 		return
 	}
-	source, err := sorter.Finish(attemptContext)
+	sortResult, err := sorter.Finish(attemptContext)
 	if err != nil {
 		resultErr = err
 		return
 	}
+	if result.OmittedCount > MaxDirectoryEntries || sortResult.omittedCount > MaxDirectoryEntries-result.OmittedCount {
+		_ = sortResult.nodes.Release(attempt.resources)
+		resultErr = fmt.Errorf("%w: directory %x exceeds its entry limit", ErrPageLimit, attempt.directory)
+		return
+	}
 	commit := DirectoryCommit{
-		directory: directory, generation: attempt.generation, children: source, omittedCount: result.OmittedCount,
+		directory:    directory,
+		generation:   attempt.generation,
+		children:     sortResult.nodes,
+		omittedCount: result.OmittedCount + sortResult.omittedCount,
 	}
 	if err := validateDirectoryCommit(s.shareInstance, commit, false); err != nil {
-		_ = source.Release(attempt.resources)
+		_ = sortResult.nodes.Release(attempt.resources)
 		resultErr = err
 		return
 	}
@@ -470,7 +478,9 @@ func (s *CatalogStore) runAttempt(attempt *scanAttempt, directory NodeRecord, se
 	s.commitMu.Unlock()
 	if err != nil {
 		resultErr = err
+		return
 	}
+	result.PublishOmissions(sortResult.omittedCount, sortResult.omittedSamples)
 }
 
 func (s *CatalogStore) completeAttempt(attempt *scanAttempt, committed CommittedDirectory, resultErr error) {
