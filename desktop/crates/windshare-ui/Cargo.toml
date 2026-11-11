@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 gpui.workspace = true
+qrcode.workspace = true
 anyhow.workspace = true
 unicode-segmentation.workspace = true
 usvg.workspace = true

@@ -19,7 +19,6 @@ workspace = true
 dirs.workspace = true
 sys-locale.workspace = true
 tempfile.workspace = true
-qrcode.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
 windshare-ui.workspace = true

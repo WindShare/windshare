@@ -6,6 +6,7 @@ use crate::{
         ReceiveFlow, SampleBundle, ShareFlow, ShareReadiness, ShareRun,
     },
     model::{Overlay, Page, PreviewAction, Share, ShareAge, ShareState, TransferState},
+    sharing::{LinkDisclosure, ShareLink},
 };
 use gpui::{BorrowAppContext, ClipboardItem, Context, Focusable, Window};
 use std::time::{Duration, Instant};
@@ -55,6 +56,8 @@ impl Desktop {
             PreviewAction::Help => self.open_overlay(Overlay::Help, window, cx),
             PreviewAction::Close => self.close_overlay(window, cx),
             PreviewAction::CopyLink(id) => self.copy_link(id, cx),
+            PreviewAction::ToggleLink(id) => self.toggle_link(id),
+            PreviewAction::EnlargeQr(id) => self.enlarge_qr(id, window, cx),
             PreviewAction::ToggleShare(id) => {
                 if let Some(share) = self.shares.iter_mut().find(|share| share.id == id) {
                     share.state = if share.live() {
@@ -93,15 +96,18 @@ impl Desktop {
         let Some(share) = self.shares.iter().find(|share| share.id == id) else {
             return;
         };
-        cx.write_to_clipboard(ClipboardItem::new_string(share.link()));
+        cx.write_to_clipboard(ClipboardItem::new_string(share.link.url().to_string()));
         let revision = self.next_operation();
         self.copy_feedback = CopyFeedback::Copied {
             share_id: id,
             revision,
         };
-        let inline_feedback = self.page == Page::Share
-            && self.overlay.is_none()
-            && matches!(self.share_flow, ShareFlow::Running(run) if run.share_id() == Some(id));
+        let inline_feedback = (self.page == Page::Share
+            && self.overlays.is_empty()
+            && matches!(self.share_flow, ShareFlow::Running(run) if run.share_id() == Some(id)))
+            || self.overlays.last().is_some_and(
+                |frame| matches!(frame.content, Overlay::Detail(share_id) if share_id == id),
+            );
         // The result button acknowledges its own action; other surfaces still
         // need a toast because they have no inline confirmation.
         if !inline_feedback {
@@ -133,6 +139,7 @@ impl Desktop {
     fn prepare_share(&mut self, bundle: SampleBundle, window: &mut Window, cx: &mut Context<Self>) {
         let operation = self.next_operation();
         let preview_delay = self.preview_share_delay;
+        self.link_disclosure = LinkDisclosure::Summary;
         self.share_flow = ShareFlow::Running(ShareRun {
             operation,
             bundle,
@@ -180,6 +187,7 @@ impl Desktop {
             0,
             Share {
                 id,
+                link: ShareLink::preview(id),
                 name: bundle.name().into(),
                 contents: bundle.contents(),
                 size: bundle.size(),

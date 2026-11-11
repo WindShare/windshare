@@ -6317,7 +6317,6 @@ dependencies = [
  "dirs",
  "gpui-pre",
  "gpui-pre-platform",
- "qrcode",
  "sys-locale",
  "tempfile",
  "tracing",
@@ -6331,6 +6330,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "gpui-pre",
+ "qrcode",
  "raw-window-handle",
  "tracing",
  "unicode-segmentation",

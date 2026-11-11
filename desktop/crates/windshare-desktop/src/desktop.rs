@@ -3,7 +3,9 @@ use crate::{
     flow_state::{CopyFeedback, ReceiveFlow, ShareFlow},
     layout::{FlowLayout, MAX_PAGE_WIDTH, page_gutter},
     model::{Filter, Overlay, Page, PreviewAction, Share, Transfer, demo_shares, demo_transfers},
+    overlays::OverlayFrame,
     share_timing::lerp,
+    sharing::LinkDisclosure,
 };
 use gpui::{
     Animation, AnimationExt, App, AppContext, ElementId, Entity, FocusHandle, Focusable,
@@ -32,14 +34,13 @@ pub struct Desktop {
     pub copy_feedback: CopyFeedback,
     pub primary_focus: FocusHandle,
     pub operation_sequence: usize,
-    pub overlay: Option<Overlay>,
+    pub overlays: Vec<OverlayFrame>,
+    pub link_disclosure: LinkDisclosure,
     pub toast: Option<(usize, Text)>,
     pub settings: [bool; 3],
     pub dialog_sequence: usize,
     toast_sequence: usize,
     pub focus: FocusHandle,
-    pub modal_focus: FocusHandle,
-    pub return_focus: Option<FocusHandle>,
     _subscriptions: Vec<Subscription>,
 }
 impl Desktop {
@@ -105,14 +106,13 @@ impl Desktop {
             copy_feedback: CopyFeedback::Idle,
             primary_focus,
             operation_sequence: 0,
-            overlay: None,
+            overlays: Vec::new(),
+            link_disclosure: LinkDisclosure::default(),
             toast: None,
             settings: [true, true, false],
             dialog_sequence: 0,
             toast_sequence: 0,
             focus,
-            modal_focus: cx.focus_handle(),
-            return_focus: None,
             _subscriptions: subscriptions,
         }
     }
@@ -153,17 +153,31 @@ impl Desktop {
         cx.notify();
     }
     pub fn open_overlay(&mut self, overlay: Overlay, window: &mut Window, cx: &mut Context<Self>) {
-        if self.overlay.is_none() {
-            self.return_focus = window.focused(cx);
-        }
-        self.overlay = Some(overlay);
         self.dialog_sequence += 1;
-        window.focus(&self.modal_focus, cx);
+        let scope = cx.focus_handle();
+        self.overlays.push(OverlayFrame {
+            content: overlay,
+            return_focus: window.focused(cx),
+            scope: scope.clone(),
+            sequence: self.dialog_sequence,
+        });
+        window.focus(&scope, cx);
     }
     pub fn close_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.overlay = None;
-        window.focus(self.return_focus.as_ref().unwrap_or(&self.focus), cx);
-        self.return_focus = None;
+        let Some(frame) = self.overlays.pop() else {
+            return;
+        };
+        let fallback = self
+            .overlays
+            .last()
+            .map_or(&self.focus, |frame| &frame.scope);
+        window.focus(frame.return_focus.as_ref().unwrap_or(fallback), cx);
+        tracing::info!(
+            event = "desktop.overlay_closed",
+            session = std::process::id(),
+            overlay = ?frame.content,
+            remaining = self.overlays.len(),
+        );
     }
     pub fn navigate(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
         if page == Page::SuperShare {
@@ -174,8 +188,8 @@ impl Desktop {
                 .update(cx, crate::supershare::SuperShare::leave);
         }
         self.page = page;
-        self.overlay = None;
-        self.return_focus = None;
+        self.overlays.clear();
+        self.link_disclosure = LinkDisclosure::Summary;
         self.focus_task(window, cx);
     }
     pub fn focus_task(&self, window: &mut Window, cx: &mut App) {
@@ -192,19 +206,18 @@ impl Desktop {
     fn handle_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = &event.keystroke;
         if key.key == "tab" {
-            let scope = if self.overlay.is_some() {
-                &self.modal_focus
-            } else {
-                &self.focus
-            };
+            let scope = self
+                .overlays
+                .last()
+                .map_or(&self.focus, |frame| &frame.scope);
             advance_focus(scope, key.modifiers.shift, window, cx);
             cx.stop_propagation();
-        } else if key.key == "escape" && self.overlay.is_some() {
+        } else if key.key == "escape" && !self.overlays.is_empty() {
             self.close_overlay(window, cx);
             cx.notify();
         } else if key.modifiers.control && key.key == "n" {
             self.dispatch(PreviewAction::NewShare, window, cx);
-        } else if key.modifiers.control && key.key == "k" && self.overlay.is_none() {
+        } else if key.modifiers.control && key.key == "k" && self.overlays.is_empty() {
             self.navigate(Page::Shares, window, cx);
             let focus = self.search.read(cx).focus_handle(cx);
             window.focus(&focus, cx);
@@ -319,7 +332,7 @@ impl Render for Desktop {
                     .child(self.sidebar(theme, compact, cx))
                     .child(pane),
             )
-            .when(self.overlay.is_some(), |root| {
+            .when(!self.overlays.is_empty(), |root| {
                 root.child(self.overlay_view(window, cx))
             })
             .when_some(self.toast, |root, (id, text)| {

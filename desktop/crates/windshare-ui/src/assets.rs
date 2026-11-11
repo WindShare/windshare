@@ -27,6 +27,9 @@ impl AssetSource for Assets {
             "arrow" => r#"<path d="M4 12h15m-6-6 6 6-6 6"/>"#,
             "arrow-up-right" => r#"<path d="M6 18 18 6M6 6h12v12"/>"#,
             "chevron" => r#"<path d="m8 5 7 7-7 7"/>"#,
+            "chevron-down" => r#"<path d="m5 9 7 7 7-7"/>"#,
+            "chevron-up" => r#"<path d="m5 15 7-7 7 7"/>"#,
+            "expand" => r#"<path d="M8 3H3v5m13-5h5v5M3 16v5h5m8 0h5v-5"/>"#,
             "link" => {
                 r#"<path d="m10 13 4-4m-7 6-1 1a4 4 0 0 0 6 6l4-4a4 4 0 0 0 0-6M17 9l1-1a4 4 0 0 0-6-6L8 6a4 4 0 0 0 0 6" transform="translate(0 -1)"/>"#
             }

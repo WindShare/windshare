@@ -3,40 +3,85 @@ use crate::{
     desktop::Desktop,
     model::{Overlay, PreviewAction},
     motion::{SpiritMood, spirit_scene},
+    sharing::{detail_width, enlarged_qr_side},
 };
 use gpui::{
-    Animation, AnimationExt, Div, MouseButton, Role, Window, ease_out_quint, prelude::*, px,
+    Animation, AnimationExt, Div, FocusHandle, MouseButton, Role, Window, ease_out_quint,
+    prelude::*, px,
 };
 use std::time::Duration;
-use windshare_ui::{ButtonStyle, FONT, Icon, MOTION_MS, Theme, Tone, column, row};
+use windshare_ui::{ButtonStyle, Icon, MOTION_MS, Theme, Tone, column, row};
+
+pub const OVERLAY_MARGIN: f32 = 40.;
+pub const OVERLAY_PADDING: f32 = 30.;
+const DEFAULT_OVERLAY_WIDTH: f32 = 540.;
+
+pub struct OverlayFrame {
+    pub content: Overlay,
+    pub return_focus: Option<FocusHandle>,
+    pub scope: FocusHandle,
+    pub sequence: usize,
+}
 
 impl Desktop {
     pub fn overlay_view(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement {
+        // Keep lower layers mounted: their stable element state owns the focus handles
+        // that an enlarged QR must return to. Each layer has its own keyboard scope.
+        column()
+            .id("overlay-stack")
+            .absolute()
+            .inset_0()
+            .size_full()
+            .children(
+                self.overlays
+                    .iter()
+                    .map(|frame| self.overlay_frame(frame, window, cx)),
+            )
+    }
+
+    fn overlay_frame(
+        &self,
+        frame: &OverlayFrame,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         let locale = language(cx);
         let theme = Theme::from(window.appearance());
-        let overlay = self
-            .overlay
-            .clone()
-            .expect("overlay is only rendered when open");
-        let (title, content) = match overlay {
+        let (title, width, content) = match &frame.content {
             Overlay::Detail(id) => (
                 locale.text(Text::ShareDetails),
-                self.share_detail(theme, id, cx),
+                detail_width(window),
+                self.share_detail(theme, *id, window, cx),
             ),
-            Overlay::Help => (locale.text(Text::About), self.about_preview(theme, cx)),
+            Overlay::ShareQr(id) => (
+                locale.text(Text::ScanToReceive),
+                self.shares
+                    .iter()
+                    .find(|share| share.id == *id)
+                    .map_or(DEFAULT_OVERLAY_WIDTH, |share| {
+                        OVERLAY_PADDING.mul_add(2., enlarged_qr_side(share, window))
+                    }),
+                self.share_qr_detail(theme, *id, window, cx),
+            ),
+            Overlay::Help => (
+                locale.text(Text::About),
+                DEFAULT_OVERLAY_WIDTH,
+                self.about_preview(theme, cx),
+            ),
         };
         let modal = theme
             .card()
-            .id("dialog")
+            .id(("dialog", frame.sequence))
             .role(Role::Dialog)
             .aria_label(title)
-            .w(px(540.))
-            .max_h(window.viewport_size().height - px(80.))
-            .p(px(30.))
+            .w(px(width))
+            .max_w(window.viewport_size().width - px(OVERLAY_MARGIN * 2.))
+            .max_h(window.viewport_size().height - px(OVERLAY_MARGIN * 2.))
+            .p(px(OVERLAY_PADDING))
             .gap(px(26.))
             .overflow_y_scroll()
             .shadow_sm()
-            .track_focus(&self.modal_focus)
+            .track_focus(&frame.scope)
             .tab_group()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
@@ -58,7 +103,7 @@ impl Desktop {
             )
             .child(content);
         row()
-            .id("overlay")
+            .id(("overlay", frame.sequence))
             .absolute()
             .inset_0()
             .size_full()
@@ -72,7 +117,7 @@ impl Desktop {
             )
             .child(
                 modal.with_animation(
-                    ("dialog-enter", self.dialog_sequence),
+                    ("dialog-enter", frame.sequence),
                     Animation::new(Duration::from_millis(if self.reduced_motion() {
                         1
                     } else {
@@ -82,88 +127,6 @@ impl Desktop {
                     gpui::Styled::opacity,
                 ),
             )
-    }
-
-    fn share_detail(&self, theme: Theme, id: usize, cx: &Context<Self>) -> Div {
-        let locale = language(cx);
-        let Some(share) = self.shares.iter().find(|share| share.id == id) else {
-            return column();
-        };
-        column()
-            .gap(px(24.))
-            .child(
-                row()
-                    .gap(px(16.))
-                    .child(theme.icon_tile(share.symbol, share.tone, 58.))
-                    .child(
-                        column()
-                            .gap(px(7.))
-                            .child(theme.heading(share.name.clone(), 22.))
-                            .child(theme.caption(format!(
-                                "{} · {}",
-                                share.contents.description(locale),
-                                share.size
-                            ))),
-                    ),
-            )
-            .child(
-                row()
-                    .justify_between()
-                    .child(theme.caption(locale.created(&share.age.description(locale))))
-                    .child(theme.badge(
-                        if share.live() {
-                            locale.text(Text::SharingActive)
-                        } else {
-                            locale.text(Text::Paused)
-                        },
-                        if share.live() {
-                            Tone::Mint
-                        } else {
-                            Tone::Neutral
-                        },
-                    )),
-            )
-            .child(
-                column()
-                    .gap(px(12.))
-                    .child(theme.label(locale.text(Text::ShareLink), 16.))
-                    .child(
-                        theme
-                            .label(share.link(), 15.)
-                            .font_family(FONT)
-                            .p(px(16.))
-                            .rounded(px(12.))
-                            .bg(Tone::Mint.surface(theme)),
-                    )
-                    .child(
-                        Self::button(
-                            "detail-copy",
-                            locale.text(Text::CopyShareLink),
-                            Icon::Copy,
-                            ButtonStyle::Primary,
-                            PreviewAction::CopyLink(id),
-                            cx,
-                        )
-                        .large(),
-                    ),
-            )
-            .child(theme.caption(locale.text(Text::KeepOpen)))
-            .child(Self::button(
-                "detail-toggle",
-                if share.live() {
-                    locale.text(Text::PauseShare)
-                } else {
-                    locale.text(Text::ResumeShare)
-                },
-                if share.live() {
-                    Icon::Pause
-                } else {
-                    Icon::Play
-                },
-                ButtonStyle::Secondary,
-                PreviewAction::ToggleShare(id),
-                cx,
-            ))
     }
 
     fn about_preview(&self, theme: Theme, cx: &Context<Self>) -> Div {
