@@ -51,6 +51,8 @@ func TestDurationFormattersAreDeterministic(t *testing.T) {
 		{"last tenth before a minute", FormatElapsed(59*time.Second + 949*time.Millisecond), "59.9s"},
 		{"rounds up to a minute", FormatElapsed(59*time.Second + 950*time.Millisecond), "1m 0s"},
 		{"exactly a minute", FormatElapsed(time.Minute), "1m 0s"},
+		{"rounds half a second up", FormatElapsed(65*time.Second + 500*time.Millisecond), "1m 6s"},
+		{"maximum elapsed does not wrap", FormatElapsed(math.MaxInt64), "2562047h 47m"},
 		{"short eta", FormatETA(2), "2s left"},
 		{"minute eta", FormatETA(125), "2m 5s left"},
 		{"hour eta", FormatETA(3_725), "1h 2m left"},

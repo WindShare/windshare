@@ -65,7 +65,12 @@ func FormatElapsed(elapsed time.Duration) string {
 			return strconv.FormatInt(int64(tenths/10), 10) + "." + strconv.FormatInt(int64(tenths%10), 10) + "s"
 		}
 	}
-	totalSeconds := uint64((elapsed + time.Second/2) / time.Second)
+	// Rounding after division keeps saturated durations (time.Sub clamps to the
+	// maximum Duration) from wrapping into a negative sum.
+	totalSeconds := uint64(elapsed / time.Second)
+	if elapsed%time.Second >= time.Second/2 {
+		totalSeconds++
+	}
 	return formatClockDuration(totalSeconds)
 }
 
