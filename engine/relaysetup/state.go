@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/url"
 	"strings"
-	"unicode"
 
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relayprofile"
@@ -18,7 +17,6 @@ import (
 const (
 	claimSecretBytes        = 32
 	operationIDBytes        = 16
-	maximumDeviceNameBytes  = 128
 	minimumPollIntervalMS   = 1000
 	maximumPollIntervalMS   = 30_000
 	maximumCheckpointBytes  = 16 * 1024
@@ -105,8 +103,7 @@ func (pending *PendingSetup) validate() error {
 		return (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' && c != '_'
 	}) ||
 		(pending.Operation != AddProfile && pending.Operation != PrivateOnboarding) ||
-		strings.TrimSpace(pending.DeviceName) == "" || len(pending.DeviceName) > maximumDeviceNameBytes ||
-		strings.ContainsFunc(pending.DeviceName, unicode.IsControl) {
+		ValidateDeviceName(pending.DeviceName) != nil {
 		return invalid
 	}
 	if relayconfig.ValidateFrontURL(pending.ConsoleURL) != nil ||
