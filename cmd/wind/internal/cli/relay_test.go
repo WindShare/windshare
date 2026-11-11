@@ -261,3 +261,33 @@ func TestInterruptedRelaySetupHintMatchesWhatWasSaved(t *testing.T) {
 		})
 	}
 }
+
+func TestRelaySetupExplainsUnsavableDeviceName(t *testing.T) {
+	const relayURL = "https://relay.example"
+	var enrollments atomic.Int32
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/.well-known/windshare":
+			if err := json.NewEncoder(writer).Encode(map[string]any{"version": 1, "access": "restricted",
+				"relay_url": relayURL, "console_url": relayURL}); err != nil {
+				t.Error(err)
+			}
+		default:
+			enrollments.Add(1)
+			writer.WriteHeader(http.StatusServiceUnavailable)
+		}
+	}))
+	for _, name := range []string{"   ", strings.Repeat("a", 129), "CLI\tdevice"} {
+		app, stdout, stderr := newRelayTestApp(t, server.Client())
+		if code := app.Run(t.Context(), []string{"relay", "add", relayURL, "--name", name, "--no-browser"}); code != ExitFailure {
+			t.Fatalf("name %q: exit=%d stderr=%q", name, code, stderr.String())
+		}
+		if !strings.Contains(stderr.String(), "device name") || !strings.Contains(stderr.String(), "--name") ||
+			strings.Contains(stderr.String(), "checkpoint") || stdout.Len() != 0 {
+			t.Fatalf("name %q: diagnostic does not explain the device name: %q", name, stderr.String())
+		}
+	}
+	if enrollments.Load() != 0 {
+		t.Fatal("an unsavable device name reached enrollment")
+	}
+}

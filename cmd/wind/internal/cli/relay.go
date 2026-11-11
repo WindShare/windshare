@@ -104,6 +104,9 @@ func (app *App) runRelaySetup(ctx context.Context, request engine.RelaySetupRequ
 	}
 	if result.Err != nil {
 		app.writeCompleteLine("relay setup: %v", result.Err)
+		if errors.Is(result.Err, relaysetup.ErrInvalidDeviceName) {
+			app.writeCompleteLine("Choose another device name with --name.")
+		}
 		if ctx.Err() != nil {
 			app.writeInterruptedRelaySetupHint(result.Err)
 		}

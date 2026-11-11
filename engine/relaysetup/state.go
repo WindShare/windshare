@@ -97,6 +97,16 @@ func (pending *PendingSetup) withPhase(phase setupPhase) *PendingSetup {
 	return &next
 }
 
+// validateDeviceName is the single rule for names a checkpoint may record, so
+// setup can refuse a name before enrollment instead of failing to persist it.
+func validateDeviceName(name string) error {
+	if strings.TrimSpace(name) == "" || len(name) > maximumDeviceNameBytes ||
+		strings.ContainsFunc(name, unicode.IsControl) {
+		return ErrInvalidDeviceName
+	}
+	return nil
+}
+
 func (pending *PendingSetup) validate() error {
 	invalid := errors.New("invalid relay setup checkpoint")
 	secret, err := base64.RawURLEncoding.DecodeString(pending.ClaimSecret)
@@ -105,8 +115,7 @@ func (pending *PendingSetup) validate() error {
 		return (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' && c != '_'
 	}) ||
 		(pending.Operation != AddProfile && pending.Operation != PrivateOnboarding) ||
-		strings.TrimSpace(pending.DeviceName) == "" || len(pending.DeviceName) > maximumDeviceNameBytes ||
-		strings.ContainsFunc(pending.DeviceName, unicode.IsControl) {
+		validateDeviceName(pending.DeviceName) != nil {
 		return invalid
 	}
 	if relayconfig.ValidateFrontURL(pending.ConsoleURL) != nil ||
