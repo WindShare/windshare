@@ -466,39 +466,41 @@ func (i *sortedNodeIterator) Close() error {
 }
 
 type directorySortResult struct {
-	nodes          sortedNodeSource
+	nodes          nodeRecordSource
 	omittedCount   uint64
 	omittedSamples []SourceOmission
 }
 
-// directorySorter admits scanned children in bounded memory. NodeID collisions
-// remain invariant failures, while portable-name collisions withhold every
-// member of the colliding group so healthy siblings stay shareable.
+// Full node payloads are sorted once. The admission index contains only names
+// and identities; colliding names add a small exclusion stream instead of
+// forcing every healthy directory through a second payload sort.
 type directorySorter struct {
-	parent     DirectoryID
-	candidates *externalSorter
-	nodeIDs    *externalSorter
-	nodes      *externalSorter
-	meter      ResourceMeter
-	hierarchy  BudgetHierarchy
+	parent       DirectoryID
+	nodes        *externalSorter
+	admission    *externalSorter
+	omittedNames *externalSorter
+	meter        ResourceMeter
+	hierarchy    BudgetHierarchy
 }
 
 func newDirectorySorter(parent DirectoryID, workspace SpillWorkspace, meter ResourceMeter, hierarchy BudgetHierarchy, runBytes uint64) (*directorySorter, error) {
-	candidates, err := newExternalSorter(workspace, meter, hierarchy, runBytes, false)
+	// Equal canonical names remain provisional until sibling admission excludes
+	// every member. Identity duplicates are validated separately in the index.
+	nodes, err := newExternalSorter(workspace, meter, hierarchy, runBytes, false)
 	if err != nil {
 		return nil, err
 	}
-	nodeIDs, err := newExternalSorter(workspace, meter, hierarchy, runBytes, true)
+	admission, err := newExternalSorter(workspace, meter, hierarchy, runBytes, false)
 	if err != nil {
 		return nil, err
 	}
-	nodes, err := newExternalSorter(workspace, meter, hierarchy, runBytes, true)
+	omittedNames, err := newExternalSorter(workspace, meter, hierarchy, runBytes, false)
 	if err != nil {
 		return nil, err
 	}
 	return &directorySorter{
-		parent: parent, candidates: candidates, nodeIDs: nodeIDs,
-		nodes: nodes, meter: meter, hierarchy: hierarchy,
+		parent: parent, nodes: nodes, admission: admission,
+		omittedNames: omittedNames, meter: meter, hierarchy: hierarchy,
 	}, nil
 }
 
@@ -518,57 +520,53 @@ func (s *directorySorter) Add(ctx context.Context, child ScannedChild) error {
 	if err != nil {
 		return err
 	}
-	if err := s.nodeIDs.add(ctx, sortRecord{key: node.NodeID().Bytes()}); err != nil {
+	if err := s.nodes.add(ctx, sortRecord{key: []byte(node.Entry().Name()), payload: encoded}); err != nil {
+		return err
+	}
+	identityKey := append([]byte{admissionIdentityKey}, node.NodeID().Bytes()...)
+	if err := s.admission.add(ctx, sortRecord{key: identityKey}); err != nil {
 		return err
 	}
 	collisionKey := siblingCollisionKey(node.Entry().Name())
-	candidateKey := make([]byte, 0, len(collisionKey)+1+len(child.Name))
+	candidateKey := make([]byte, 0, len(collisionKey)+len(child.Name)+2)
+	candidateKey = append(candidateKey, admissionNameKey)
 	candidateKey = append(candidateKey, collisionKey...)
 	candidateKey = append(candidateKey, 0)
 	candidateKey = append(candidateKey, child.Name...)
-	return s.candidates.add(ctx, sortRecord{key: candidateKey, payload: encoded})
+	return s.admission.add(ctx, sortRecord{key: candidateKey})
 }
 
 func (s *directorySorter) Finish(ctx context.Context) (directorySortResult, error) {
-	nodeIDs, _, err := s.nodeIDs.finish(ctx)
-	if err != nil {
-		return directorySortResult{}, err
-	}
-	if err := releaseSpillObject(nodeIDs, s.meter); err != nil {
-		return directorySortResult{}, err
-	}
-	candidates, candidateCount, err := s.candidates.finish(ctx)
-	if err != nil {
-		return directorySortResult{}, err
-	}
-	var omittedCount uint64
-	var omittedSamples []SourceOmission
-	if candidateCount > 0 {
-		omittedCount, omittedSamples, err = s.partitionCandidates(ctx, candidates)
-		if err != nil {
-			_ = releaseSpillObject(candidates, s.meter)
-			return directorySortResult{}, err
-		}
-	}
-	if err := releaseSpillObject(candidates, s.meter); err != nil {
-		return directorySortResult{}, err
-	}
 	nodes, count, err := s.nodes.finish(ctx)
 	if err != nil {
 		return directorySortResult{}, err
 	}
-	return directorySortResult{
-		nodes:          sortedNodeSource{object: nodes, count: count, hierarchy: s.hierarchy},
-		omittedCount:   omittedCount,
-		omittedSamples: omittedSamples,
-	}, nil
+	admission, _, err := s.admission.finish(ctx)
+	if err != nil {
+		return directorySortResult{}, err
+	}
+	omittedCount, samples, admissionErr := s.collectSiblingOmissions(ctx, admission)
+	if err := errors.Join(admissionErr, releaseSpillObject(admission, s.meter)); err != nil {
+		return directorySortResult{}, err
+	}
+	source := sortedNodeSource{object: nodes, count: count, hierarchy: s.hierarchy}
+	result := directorySortResult{nodes: source, omittedCount: omittedCount, omittedSamples: samples}
+	if omittedCount == 0 {
+		return result, nil
+	}
+	omittedNames, _, err := s.omittedNames.finish(ctx)
+	if err != nil {
+		return directorySortResult{}, err
+	}
+	result.nodes = admittedNodeSource{source: source, names: omittedNames, omittedCount: omittedCount}
+	return result, nil
 }
 
 func (s *directorySorter) Close() {
 	if s == nil {
 		return
 	}
-	s.candidates.close()
-	s.nodeIDs.close()
 	s.nodes.close()
+	s.admission.close()
+	s.omittedNames.close()
 }
