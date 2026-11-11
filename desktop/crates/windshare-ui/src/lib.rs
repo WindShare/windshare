@@ -6,6 +6,7 @@ mod icons;
 pub use focus::advance_focus;
 mod input;
 mod primitives;
+mod qr_code;
 mod surface;
 mod theme;
 mod window_controls;
@@ -17,6 +18,7 @@ pub use button::{Button, ButtonStyle, LARGE_BUTTON_HEIGHT};
 pub use icons::{Icon, icon};
 pub use input::{Input, InputEvent};
 pub use primitives::*;
+pub use qr_code::{QrCodeError, QrCodeImage};
 pub use theme::*;
 pub use window_controls::{toggle_window_maximize, window_drag_area};
 

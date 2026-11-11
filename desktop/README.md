@@ -20,7 +20,9 @@ GPU. Windows is the locally verified platform. Dev builds optimize GPUI's core a
 Windows renderer for high-refresh animation while keeping application crates unoptimized.
 
 - Light and dark palettes follow the system appearance, including changes while open.
-- Share: a file-first result card keeps copying primary, with inline copy feedback.
+- Share: the result card pairs copying with a local QR code; narrow windows stack them.
+  Long links use middle elision and expand in place. QR size follows payload density;
+  click to enlarge. Share details reuse the same controls, with inline copy feedback.
   The 1350 ms flight and 720 ms landing fade into the card. Pending links keep
   an indeterminate activity strip until the link fades in over 180 ms; completed
   results stop animation. Copy stays disabled until a result exists. Reduced

@@ -1,4 +1,5 @@
 use crate::localization::{Language, LanguageChoice, Text};
+use crate::sharing::ShareLink;
 use windshare_ui::{Icon, Tone};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,6 +51,7 @@ pub enum ShareState {
 pub struct Share {
     pub id: usize,
     pub name: String,
+    pub link: ShareLink,
     pub contents: ShareContents,
     pub size: &'static str,
     pub age: ShareAge,
@@ -60,9 +62,6 @@ pub struct Share {
 impl Share {
     pub const fn live(&self) -> bool {
         matches!(self.state, ShareState::Live { .. })
-    }
-    pub fn link(&self) -> String {
-        format!("https://windshare.example/s/preview-{}", self.id)
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,6 +85,7 @@ pub struct Transfer {
 #[derive(Clone, Debug)]
 pub enum Overlay {
     Detail(usize),
+    ShareQr(usize),
     Help,
 }
 #[derive(Clone, Copy, Debug)]
@@ -104,6 +104,8 @@ pub enum PreviewAction {
     ResetReceive,
     Detail(usize),
     CopyLink(usize),
+    ToggleLink(usize),
+    EnlargeQr(usize),
     ToggleShare(usize),
     ToggleTransfer(usize),
     ToggleGrid,
@@ -117,6 +119,7 @@ pub fn demo_shares() -> Vec<Share> {
     vec![
         Share {
             id: 1,
+            link: ShareLink::preview(1),
             name: "品牌设计素材".into(),
             contents: ShareContents::Files(24),
             size: "128 MB",
@@ -127,6 +130,7 @@ pub fn demo_shares() -> Vec<Share> {
         },
         Share {
             id: 2,
+            link: ShareLink::preview(2),
             name: "京都的周末".into(),
             contents: ShareContents::Photos(86),
             size: "1.4 GB",
@@ -137,6 +141,7 @@ pub fn demo_shares() -> Vec<Share> {
         },
         Share {
             id: 3,
+            link: ShareLink::preview(3),
             name: "周日的慢节奏".into(),
             contents: ShareContents::Tracks(12),
             size: "84 MB",

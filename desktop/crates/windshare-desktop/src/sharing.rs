@@ -1,4 +1,10 @@
+mod detail;
+mod link;
+mod link_views;
 mod result;
+
+pub use detail::{detail_width, enlarged_qr_side};
+pub use link::{LinkDisclosure, ShareLink};
 
 use crate::localization::{Language, Text, language};
 use crate::{
