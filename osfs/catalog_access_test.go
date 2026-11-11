@@ -71,10 +71,11 @@ func TestCatalogScanOmitsUnreadableChildrenAndKeepsReadableSiblings(t *testing.T
 		Work: &countingScanWork{}, Children: children,
 	}
 	result, err := source.ScanDirectory(t.Context(), request)
-	stream.Close()
 	if err != nil {
 		t.Fatalf("one unreadable child failed the whole directory: %v", err)
 	}
+	result.PublishOmissions(0, nil)
+	stream.Close()
 	names := map[string]bool{}
 	for _, child := range children.items {
 		names[child.Name] = true

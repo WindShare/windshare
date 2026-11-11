@@ -57,7 +57,7 @@ wind get <link> [-o <directory>] [--only <path>]... [--redownload] [--key <key>]
 ```
 
 - Joins the share, resolves the selected catalog paths (`--only`, repeatable), and writes the result under `-o` (default `.`). Paths are relative, slash-separated, case-sensitive, and start with the shared file or folder name (`d/a.txt` when sharing `d`); a trailing directory slash and equivalent Unicode forms are normalized, and repeated paths are ignored. A bare link uses `--key` or prompts for the key on stdin.
-- Terminal result states are `success`, `partial`, `paused`, and `failed`. Source omissions produce `partial` with a nonzero exit status; published files remain complete. The sender reports sampled skipped names and reasons, including missing permissions. A skipped directory excludes its whole subtree. Fix source access or names and share again; retrying the same link does not restore omitted items.
+- Terminal result states are `success`, `partial`, `paused`, and `failed`. Source omissions produce `partial` with a nonzero exit status; published files remain complete. The sender reports sampled skipped names and reasons, including missing permissions and sibling names that match ignoring letter case or Unicode form. A skipped directory excludes its whole subtree. Fix source access or names and share again; retrying the same link does not restore omitted items.
 
 | Selection | Saved as |
 |---|---|

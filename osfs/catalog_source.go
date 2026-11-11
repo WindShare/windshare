@@ -263,10 +263,10 @@ func (source *SelectedCatalogSource) ScanDirectory(ctx context.Context, request 
 		!bytes.Equal(beforeEntries[:], afterEntries[:]) {
 		return catalog.ScanResult{}, catalog.NewPermanentScanError(errors.Join(catalog.ErrDirectoryStale, err))
 	}
-	if result.count != 0 && source.omissions != nil {
-		source.observeCatalogOmissions(request, filepath.Join(root.Name(), path), result)
-	}
-	return catalog.ScanResult{OmittedCount: result.count}, nil
+	return catalog.ScanResult{
+		OmittedCount: result.count,
+		Omissions:    source.newScanOmissionReporter(request, locator, filepath.Join(root.Name(), path), result),
+	}, nil
 }
 
 func (source *SelectedCatalogSource) enumerateCatalogChildren(
@@ -277,7 +277,7 @@ func (source *SelectedCatalogSource) enumerateCatalogChildren(
 	request catalog.ScanRequest,
 ) (catalogOmissions, [sha256.Size]byte, error) {
 	result := catalogOmissions{}
-	defer func() { source.traceCatalogOmissionSummary(request, result.count) }()
+	captureSamples := source.omissions != nil || source.diagnostics.Enabled()
 	fingerprint := newCatalogDirectoryFingerprint()
 	for {
 		entries, readErr := handle.ReadDir(catalogEnumerationBatchSize)
@@ -291,9 +291,11 @@ func (source *SelectedCatalogSource) enumerateCatalogChildren(
 				return catalogOmissions{}, [sha256.Size]byte{}, err
 			}
 			if omission.Reason != catalog.SourceOmissionNone {
+				if result.count == catalog.MaxDirectoryEntries {
+					return catalogOmissions{}, [sha256.Size]byte{}, catalog.ErrPageLimit
+				}
 				result.count++
-				source.traceCatalogOmission(request, locator, omission, result.count)
-				if source.omissions != nil && len(result.samples) < catalog.MaxSourceOmissionSamples {
+				if captureSamples && len(result.samples) < catalog.MaxSourceOmissionSamples {
 					result.samples = append(result.samples, omission)
 				}
 				continue

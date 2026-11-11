@@ -481,8 +481,8 @@ func TestSortMergePropagatesCursorWriterRemovalAndBudgetFaults(t *testing.T) {
 		"release":    {workspace: &fakeSpillWorkspace{}, left: &fakeSpillObject{size: 1}, right: empty},
 	} {
 		t.Run(name, func(t *testing.T) {
-			sorter, _ := newExternalSorter(test.workspace, meter, hierarchy, 64)
-			_, err := sorter.mergePair(context.Background(), test.left, test.right, true)
+			sorter, _ := newExternalSorter(test.workspace, meter, hierarchy, 64, true)
+			_, err := sorter.mergePair(context.Background(), test.left, test.right)
 			if err == nil {
 				t.Fatal("merge fault was hidden")
 			}
@@ -505,8 +505,8 @@ func TestSortMergePropagatesCursorWriterRemovalAndBudgetFaults(t *testing.T) {
 		"commit": {writer: &fakeSpillWriter{commitErr: injected}},
 	} {
 		t.Run("empty-finish-"+name, func(t *testing.T) {
-			sorter, _ := newExternalSorter(workspace, meter, hierarchy, 64)
-			if _, _, err := sorter.finish(context.Background(), true); !errors.Is(err, injected) {
+			sorter, _ := newExternalSorter(workspace, meter, hierarchy, 64, true)
+			if _, _, err := sorter.finish(context.Background()); !errors.Is(err, injected) {
 				t.Fatalf("empty sorter fault = %v", err)
 			}
 		})

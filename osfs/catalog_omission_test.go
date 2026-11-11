@@ -43,6 +43,9 @@ func TestCatalogOmissionsRetainBoundedPathsAndScanCorrelation(t *testing.T) {
 		Directory: source.SelectedRoots()[0], AttemptID: attempt, Generation: generation,
 		Work: &countingScanWork{}, Children: children,
 	})
+	if err == nil {
+		result.PublishOmissions(0, nil)
+	}
 	stream.Close()
 	if err != nil || result.OmittedCount != omitted || len(children.items) != 1 || children.items[0].Name != "target.bin" {
 		t.Fatalf("scan=%+v children=%v err=%v", result, children.items, err)
@@ -110,6 +113,9 @@ func TestCatalogOmitsNamesOutsideThePathGrammarWithoutFailingSiblings(t *testing
 	result, err := source.ScanDirectory(context.Background(), catalog.ScanRequest{
 		Directory: source.SelectedRoots()[0], Work: &countingScanWork{}, Children: children,
 	})
+	if err == nil {
+		result.PublishOmissions(0, nil)
+	}
 	stream.Close()
 	if err != nil || result.OmittedCount != uint64(len(unrepresentable)) ||
 		len(children.items) != 1 || children.items[0].Name != "readable.txt" {
