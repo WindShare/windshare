@@ -275,6 +275,9 @@ func parseAbsoluteURL(raw string) (*url.URL, url.Values, error) {
 		// that detail would copy a capability fragment into CLI diagnostics.
 		return nil, nil, fmt.Errorf("%w: invalid URL syntax or missing scheme/host", ErrMalformedLink)
 	}
+	if err := asciiHost(u); err != nil {
+		return nil, nil, fmt.Errorf("%w: invalid URL host", ErrMalformedLink)
+	}
 	// URL.Query silently discards malformed pairs. Capability parsing must fail
 	// closed instead, or Go and the browser can derive different relay lists from
 	// the same copied link. Escaped semicolons (%3B) remain valid relay content.

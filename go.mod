@@ -35,6 +35,9 @@ require (
 	// East Asian wide, and emoji clusters in terminal display cells.
 	github.com/rivo/uniseg v0.4.7
 	golang.org/x/mod v0.38.0
+	// Relay endpoint normalization must resolve Unicode hosts exactly as browser
+	// WHATWG URL does; pinning x/net directly also holds the audited security floor.
+	golang.org/x/net v0.57.0
 	// The Windows test runner verifies handle-owned leases and named-pipe guards at
 	// the OS boundary; this dependency is test-harness-only and already in the graph.
 	golang.org/x/sys v0.47.0
@@ -59,8 +62,5 @@ require (
 	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
-	// Relay endpoint normalization must resolve Unicode hosts exactly as browser
-	// WHATWG URL does; pinning x/net directly also holds the audited security floor.
-	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 )
