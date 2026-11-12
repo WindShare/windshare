@@ -28,7 +28,7 @@ type ShareSnapshot struct {
 }
 
 func (current *ShareTask) Snapshot() ShareSnapshot {
-	snapshot := ShareSnapshot{State: current.State()}
+	var snapshot ShareSnapshot
 	ready, err, settled := current.controller.Startup()
 	if settled {
 		snapshot.Startup = ShareStartupFailed
@@ -48,6 +48,9 @@ func (current *ShareTask) Snapshot() ShareSnapshot {
 			snapshot.RelayAvailability = &available
 		}
 	}
+	// Read lifecycle after startup and availability so cancellation cannot pair
+	// a newer readiness result with a lifecycle sampled before the stop.
+	snapshot.State = current.State()
 	select {
 	case <-current.Done():
 		result, _ := current.Wait(context.Background())

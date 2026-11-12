@@ -53,6 +53,7 @@ type Task[T any] struct {
 func (current *Task[T]) ID() TaskID                       { return current.current.ID() }
 func (current *Task[T]) State() TaskState                 { return current.current.State() }
 func (current *Task[T]) Done() <-chan struct{}            { return current.current.Done() }
+func (current *Task[T]) Changes() <-chan struct{}         { return current.current.Changes() }
 func (current *Task[T]) Observations() <-chan Observation { return current.current.Observations() }
 func (current *Task[T]) Cancel()                          { current.current.Cancel() }
 func (current *Task[T]) Wait(ctx context.Context) (TaskResult[T], error) {
