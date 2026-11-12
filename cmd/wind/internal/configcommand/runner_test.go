@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -207,5 +208,65 @@ func TestImportParseTreatsArgumentsAfterTerminatorAsPaths(t *testing.T) {
 	request, err = parse([]string{"import", "relay.json", "--verbose"})
 	if err != nil || request.source != "relay.json" || !request.verbose {
 		t.Fatalf("parse(relay.json --verbose) = %+v, %v", request, err)
+	}
+}
+
+func TestImportParseRejectsOptionsAfterTerminatorFollowingOptions(t *testing.T) {
+	// Options before "--" must not hide the terminator from later arguments.
+	for _, args := range [][]string{
+		{"import", "-v", "--", "relay.json", "--verbose"},
+		{"import", "--front-url", "https://a.example", "--", "relay.json", "--front-url", "https://b.example"},
+		// The second "--" is a literal second path, not another terminator.
+		{"import", "--", "relay.json", "--"},
+	} {
+		if request, err := parse(args); err == nil {
+			t.Fatalf("parse(%q) = %+v, want rejection", args[1:], request)
+		}
+	}
+	request, err := parse([]string{"import", "--", "--verbose"})
+	if err != nil || request.source != "--verbose" || request.verbose {
+		t.Fatalf("parse(-- --verbose) = %+v, %v", request, err)
+	}
+}
+
+func TestImportParseKeepsTerminatorAsOptionValue(t *testing.T) {
+	// A "--" value belongs to --front-url, so -v stays an option and the
+	// frontend validation reports the specific cause, as share and get do.
+	_, err := parse([]string{"import", "--front-url", "--", "relay.json", "-v"})
+	if !errors.Is(err, relayconfig.ErrFrontURL) {
+		t.Fatalf("parse(--front-url -- relay.json -v) = %v, want frontend URL error", err)
+	}
+	for _, args := range [][]string{
+		{"import", "--front-url=--", "relay.json", "-v"},
+		{"import", "--front-url", "--", "relay.json", "--verbose"},
+	} {
+		if _, err := parse(args); !errors.Is(err, relayconfig.ErrFrontURL) {
+			t.Fatalf("parse(%q) = %v, want frontend URL error", args[1:], err)
+		}
+	}
+}
+
+func TestImportParseKeepsAcceptedForms(t *testing.T) {
+	for _, tc := range []struct {
+		args     []string
+		source   string
+		verbose  bool
+		frontURL string
+	}{
+		{[]string{"import", "relay.json"}, "relay.json", false, ""},
+		{[]string{"import", "relay.json", "--verbose"}, "relay.json", true, ""},
+		{[]string{"import", "-v", "--", "-profile.json"}, "-profile.json", true, ""},
+		{[]string{"import", "--front-url", "https://front.example", "relay.json"}, "relay.json", false, "https://front.example"},
+		{[]string{"import", "--front-url", "https://front.example", "--", "relay.json"}, "relay.json", false, "https://front.example"},
+		{[]string{"import", "--", "-"}, "-", false, ""},
+		{[]string{"import", "relay.json", "--"}, "relay.json", false, ""},
+	} {
+		request, err := parse(tc.args)
+		if err != nil || request.source != tc.source || request.verbose != tc.verbose || request.frontURL != tc.frontURL {
+			t.Fatalf("parse(%q) = %+v, %v", tc.args[1:], request, err)
+		}
+	}
+	if _, err := parse([]string{"import", "--help"}); !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("parse(import --help) = %v, want flag.ErrHelp", err)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
 	"github.com/windshare/windshare/engine/relayconfig"
@@ -163,22 +164,25 @@ func parse(args []string) (importRequest, error) {
 	flags.StringVar(&request.frontURL, "front-url", "", "save this frontend base URL for future shares")
 	args = args[1:]
 	var paths []string
-	for {
-		if err := flags.Parse(args); err != nil {
+	for len(args) > 0 {
+		// "--" ends options only where an option could start, matching share and
+		// get; as the value of --front-url it stays a value for validation below.
+		if args[0] == "--" {
+			paths = append(paths, args[1:]...)
+			break
+		}
+		if len(args[0]) < 2 || args[0][0] != '-' {
+			paths = append(paths, args[0])
+			args = args[1:]
+			continue
+		}
+		// Parse one option occurrence at a time so the flag package never sees,
+		// and silently consumes, a terminator that belongs to this loop.
+		width := importOptionWidth(flags, args)
+		if err := flags.Parse(args[:width]); err != nil {
 			return importRequest{}, err
 		}
-		rest := flags.Args()
-		// The flag package consumes a "--" terminator silently; once it has, every
-		// remaining argument is a path, matching the share and get option boundary.
-		if consumed := len(args) - len(rest); consumed > 0 && args[consumed-1] == "--" {
-			paths = append(paths, rest...)
-			break
-		}
-		if len(rest) == 0 {
-			break
-		}
-		paths = append(paths, rest[0])
-		args = rest[1:]
+		args = args[width:]
 	}
 	if len(paths) != 1 || paths[0] == "" {
 		return importRequest{}, errors.New("expected one input file or stdin")
@@ -196,4 +200,22 @@ func parse(args []string) (importRequest, error) {
 	}
 	request.source = paths[0]
 	return request, nil
+}
+
+// importOptionWidth reports how many arguments the option at args[0] occupies:
+// two for a registered value option written without "=", otherwise one, so the
+// flag package reports unknown, malformed, and missing-value options itself.
+func importOptionWidth(flags *flag.FlagSet, args []string) int {
+	name := strings.TrimPrefix(strings.TrimPrefix(args[0], "-"), "-")
+	if strings.Contains(name, "=") || len(args) == 1 {
+		return 1
+	}
+	registered := flags.Lookup(name)
+	if registered == nil {
+		return 1
+	}
+	if value, ok := registered.Value.(interface{ IsBoolFlag() bool }); ok && value.IsBoolFlag() {
+		return 1
+	}
+	return 2
 }
