@@ -1,6 +1,6 @@
 # Demand-driven WebRTC throughput
 
-2026-10-23. Implements [the throughput plan](../../../../docs/plans/webrtc-throughput.md).
+2026-10-23. Implements [the throughput plan](../../../../docs/.archive/2026.10.24/webrtc-throughput.md).
 
 Engine now owns shared receive and send capacity. Native receivers reserve physical response space before dispatch and allocate distinct queued blocks across lanes. Go and browser PeerSets use the same throughput decisions, with essential attempt/socket reserves, aggregate progress measurements, cooldowns, and retirement. Browser canonical CBOR validation no longer re-encodes opaque content. Native send acceleration remains unadopted.
 

@@ -1,6 +1,6 @@
 # WebRTC throughput bottlenecks
 
-2026-10-24. Investigation of the current [throughput implementation](../../../../docs/plans/webrtc-throughput.md).
+2026-10-24. Investigation of the current [throughput implementation](../../../../docs/.archive/2026.10.24/webrtc-throughput.md).
 
 The complete pipeline can exceed 30 MB/s on this LAN. Its automatic policy does not do so reliably: growth waits too long after success, and a new path can be retired before the scheduler gives it another useful probe. Separately, wall-time measurements locate most single-connection send-loop time inside synchronous Windows UDP submission. No production change is adopted from this study.
 
