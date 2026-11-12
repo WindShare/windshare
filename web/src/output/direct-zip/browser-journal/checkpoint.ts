@@ -1,3 +1,4 @@
+import { sourceMetadataFields } from '../../../content/revision-comparison'
 import { encodeBase64Url } from '../../../crypto/bytes'
 import type {
   DirectZipCheckpointInputV1, DirectZipCheckpointProposalV1, DirectZipCheckpointV1,
@@ -35,6 +36,8 @@ export async function writerCheckpoint(
         source: Object.freeze({
           fileId: member.fileId, revision: member.fileRevision, exactSize: member.exactSize,
           rangeAuthority: member.sourceRangeAuthorityDigest,
+          ...sourceMetadataFields(member),
+          ...(member.reusedFrom === undefined ? {} : { reusedFrom: member.reusedFrom }),
         }),
         payloadOffset: member.memberPayloadOffset, crc32Accumulator: member.crc32Accumulator,
         rollback: Object.freeze({
@@ -107,6 +110,8 @@ export async function checkpointInput(
       currentMember: {
         fileId: member.source.fileId, fileRevision: member.source.revision,
         exactSize: member.source.exactSize, sourceRangeAuthorityDigest: member.source.rangeAuthority,
+        ...sourceMetadataFields(member.source),
+        ...(member.source.reusedFrom === undefined ? {} : { reusedFrom: member.source.reusedFrom }),
         entryPlan: member.plan, entryPlanCanonicalBytes: entryPlan.canonicalBytes,
         entryPlanDigest: entryPlan.digest, memberPayloadOffset: member.payloadOffset,
         crc32Accumulator: member.crc32Accumulator,

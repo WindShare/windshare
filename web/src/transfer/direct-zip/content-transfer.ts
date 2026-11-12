@@ -1,3 +1,4 @@
+import { sourceMetadataFields } from '../../content/revision-comparison'
 import type { ShareDescriptor } from '../../catalog/records'
 import { bigintToSafeNumber, byteRange } from '../../content/geometry'
 import {
@@ -38,6 +39,7 @@ export async function transferDirectZipFileV1(
     const transaction = await options.output.beginFile(file, Object.freeze({
       fileId: opened.descriptor.fileIdText,
       revision: opened.descriptor.fileRevisionText,
+      ...sourceMetadataFields(opened.descriptor),
       exactSize: opened.descriptor.exactSize,
       // Revision identity authenticates the complete geometry; the explicit label
       // keeps range authority distinct from a transient remote lease identifier.

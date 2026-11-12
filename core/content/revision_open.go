@@ -32,6 +32,7 @@ type openWorkResult struct {
 	leaseID    LeaseID
 	grant      revisioncapacity.AdmissionGrant
 	comparison RevisionComparison
+	metadata   SourceMetadata
 	continuity RevisionContinuity
 	cause      RevisionTraceCause
 	rejected   bool
@@ -250,7 +251,8 @@ func (s *RevisionStore) runOpen(ctx context.Context, attempt *openAttempt) {
 		result.comparison, result.cause, result.err = RevisionComparisonUnavailable, RevisionTraceCauseGeometry, err
 		return
 	}
-	result.comparison = RevisionComparisonMatch
+	result.descriptor = BindRevisionMetadata(result.descriptor, result.metadata)
+	result.comparison = RevisionComparisonMetadataAgreement
 	cleanupGrant = false
 }
 
@@ -289,6 +291,7 @@ func (s *RevisionStore) resolveOpenIdentity(
 	}
 	result.identity = revisionIdentity{file: attempt.file, revision: revisionID}
 	result.continuity = evidence.Continuity()
+	result.metadata = sourceMetadata(evidence)
 	return record, true
 }
 
@@ -584,7 +587,7 @@ func (s *RevisionStore) traceOpenCompletion(result openWorkResult, attempt *open
 	case RevisionComparisonUnavailable:
 		s.traceRevision(RevisionTraceStageUnavailableRetry, result.cause, attempt.file, result.identity.revision)
 		return
-	case RevisionComparisonMatch, RevisionComparisonUnknown:
+	case RevisionComparisonMetadataAgreement, RevisionComparisonUnknown:
 	default:
 		return
 	}

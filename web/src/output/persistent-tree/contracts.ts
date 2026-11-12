@@ -29,6 +29,7 @@ import type {
 } from './stage-diagnostics'
 
 export interface OpenedFileRevision {
+  readonly sourceMetadata?: string
   readonly fileId: string
   readonly fileRevision: string
   readonly exactSize: bigint
@@ -379,7 +380,7 @@ export type PersistentTreeTraceEvent =
       operation_id: string
       file_id: string
       record_id?: string
-      decision: 'absent' | 'installed' | 'exact' | 'revision-conflict' | 'ownership-conflict' | 'invalid'
+      decision: 'absent' | 'installed' | 'exact' | 'metadata-match' | 'revision-conflict' | 'ownership-conflict' | 'invalid'
     }>
 
 export type PersistentTreeTrace = (event: PersistentTreeTraceEvent) => void

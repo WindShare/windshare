@@ -159,6 +159,10 @@ export type DirectZipWriterTraceEventV1 = Readonly<{
   candidateId?: string
   entryOrdinal?: bigint
   decision?: string
+  fileId?: string
+  previousRevision?: string
+  currentRevision?: string
+  reusedBytes?: bigint
   error?: unknown
 }>
 

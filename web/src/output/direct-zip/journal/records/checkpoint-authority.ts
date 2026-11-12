@@ -48,6 +48,7 @@ export function sameCurrentMember(
 ): boolean {
   if (left === undefined || right === undefined) return left === right
   return left.fileId === right.fileId && left.fileRevision === right.fileRevision &&
+    left.sourceMetadata === right.sourceMetadata && left.reusedFrom === right.reusedFrom &&
     left.exactSize === right.exactSize &&
     left.sourceRangeAuthorityDigest === right.sourceRangeAuthorityDigest &&
     left.entryPlan.ordinal === right.entryPlan.ordinal &&

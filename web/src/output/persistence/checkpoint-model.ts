@@ -1,3 +1,4 @@
+import { sourceMetadataFields } from '../../content/revision-comparison'
 import { contentIsComplete } from '../../transfer/output/content-availability'
 import { snapshotCatalogPath } from '../../catalog/path-policy'
 import { decodeBase64Url, encodeBase64Url } from '../../crypto/bytes'
@@ -9,6 +10,7 @@ import {
   FILE_CHECKPOINT_MAX_QUARANTINE_REASON,
   FILE_CHECKPOINT_MAX_RETIREMENT_REASON,
   FILE_CHECKPOINT_PHASE_ACTIVE,
+  FILE_CHECKPOINT_PHASE_PAUSED,
   FILE_CHECKPOINT_PHASE_PUBLISHED,
   FileCheckpointError,
   checkpointCommitState,
@@ -23,7 +25,7 @@ import {
   type FileCheckpointRetirementReason,
 } from './checkpoint-lifecycle'
 
-export const FILE_CHECKPOINT_V2_SCHEMA_VERSION = 2 as const
+export const FILE_CHECKPOINT_V2_SCHEMA_VERSION = 4 as const
 export const FILE_CHECKPOINT_OWNERSHIP_MARKER = 'windshare/file-checkpoint/v2' as const
 export const FILE_CHECKPOINT_NAMESPACE = '.windshare-output/checkpoints-v2' as const
 
@@ -67,6 +69,8 @@ export interface FileCheckpointSpec {
   readonly materializationBindingDigest: CheckpointIdentity
   readonly fileId: CheckpointIdentity
   readonly fileRevision: CheckpointIdentity
+  readonly sourceMetadata?: string
+  readonly reusedFrom?: string
   readonly canonicalPath: readonly string[]
   readonly exactSize: bigint
   readonly materializerKind: FileCheckpointMaterializerKind | number
@@ -92,6 +96,8 @@ export interface FileCheckpointV2 {
   readonly materializationBindingDigest: string
   readonly fileId: string
   readonly fileRevision: string
+  readonly sourceMetadata?: string
+  readonly reusedFrom?: string
   readonly canonicalPath: readonly string[]
   readonly exactSize: bigint
   readonly materializerKind: FileCheckpointMaterializerKind
@@ -116,6 +122,8 @@ export interface NormalizedFileCheckpointSpec {
   readonly materializationBindingDigest: Uint8Array<ArrayBuffer>
   readonly fileId: Uint8Array<ArrayBuffer>
   readonly fileRevision: Uint8Array<ArrayBuffer>
+  readonly sourceMetadata?: string
+  readonly reusedFrom?: string
   readonly canonicalPath: readonly string[]
   readonly exactSize: bigint
   readonly materializerKind: FileCheckpointMaterializerKind
@@ -139,6 +147,9 @@ export function normalizeFileCheckpointSpec(
   if (ownershipMarker !== FILE_CHECKPOINT_OWNERSHIP_MARKER ||
       namespace !== FILE_CHECKPOINT_NAMESPACE) {
     throw new FileCheckpointError('ownership', 'FileCheckpointV2 ownership is invalid')
+  }
+  if (spec.reusedFrom !== undefined && (spec.sourceMetadata === undefined || spec.reusedFrom === spec.fileRevision)) {
+    throw new FileCheckpointError('binding', 'Reused plaintext requires distinct prior revision and metadata evidence')
   }
   const exactSize = uint64(spec.exactSize, 'exact size')
   const stateGeneration = nonZeroUint64(spec.stateGeneration, 'state generation')
@@ -184,6 +195,8 @@ export function normalizeFileCheckpointSpec(
     ),
     fileId: identityBytes(spec.fileId, FILE_ID_BYTES, 'file ID'),
     fileRevision: identityBytes(spec.fileRevision, FILE_REVISION_BYTES, 'file revision'),
+    ...sourceMetadataFields(spec),
+    ...(spec.reusedFrom === undefined ? {} : { reusedFrom: encodeBase64Url(identityBytes(spec.reusedFrom, FILE_REVISION_BYTES, 'reused revision')) }),
     canonicalPath: snapshotCheckpointPath(spec.canonicalPath, materializerKind),
     exactSize,
     materializerKind,
@@ -218,6 +231,7 @@ export function checkpointIdentityEqual(
     left.receiveIntentDigest === right.receiveIntentDigest &&
     left.materializationBindingDigest === right.materializationBindingDigest &&
     left.fileId === right.fileId && left.fileRevision === right.fileRevision &&
+    left.sourceMetadata === right.sourceMetadata && left.reusedFrom === right.reusedFrom &&
     samePath(left.canonicalPath, right.canonicalPath) && left.exactSize === right.exactSize &&
     left.materializerKind === right.materializerKind && left.authorityRef === right.authorityRef &&
     left.ownedObjectId === right.ownedObjectId
@@ -228,6 +242,7 @@ export function validateCheckpointTransitionSemantics(
   next: FileCheckpointV2,
 ): void {
   if (!checkpointIdentityEqual(previous, next)) {
+    if (validMetadataReuseTransition(previous, next)) return
     throw new FileCheckpointError('binding', 'checkpoint immutable identity changed')
   }
   if (previous.phase === FILE_CHECKPOINT_PHASE_PUBLISHED ||
@@ -360,4 +375,17 @@ function sameRanges(
 
 function samePath(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((segment, index) => segment === right[index])
+}
+
+export function validMetadataReuseTransition(previous: FileCheckpointV2, next: FileCheckpointV2): boolean {
+  const activeOrPaused = previous.phase === FILE_CHECKPOINT_PHASE_ACTIVE || previous.phase === FILE_CHECKPOINT_PHASE_PAUSED
+  return previous.fileRevision !== next.fileRevision && next.reusedFrom === previous.fileRevision &&
+    previous.sourceMetadata !== undefined && previous.sourceMetadata === next.sourceMetadata &&
+    checkpointIdentityEqual({ ...previous, fileRevision: next.fileRevision, reusedFrom: next.reusedFrom }, next) &&
+    activeOrPaused && previous.phase === next.phase &&
+    previous.commitState === FILE_CHECKPOINT_COMMIT_VERIFIED &&
+    (next.commitState === FILE_CHECKPOINT_COMMIT_VERIFIED || next.commitState === FILE_CHECKPOINT_COMMIT_CANDIDATE) &&
+    next.stateGeneration === previous.stateGeneration + 1n &&
+    next.checkpointGeneration === previous.checkpointGeneration + 1n &&
+    sameRanges(previous.verifiedRanges, next.verifiedRanges)
 }

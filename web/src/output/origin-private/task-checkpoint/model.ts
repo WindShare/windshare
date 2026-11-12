@@ -1,3 +1,4 @@
+import { sourceMetadataFields, compareRevisionMetadata } from '../../../content/revision-comparison'
 import { contentIsComplete } from '../../../transfer/output/content-availability'
 import { snapshotCatalogPath } from '../../../catalog/path-policy'
 import { receiveContentWarningFields, type ReceiveContentWarning } from '../../../transfer/lifecycle/content-warning'
@@ -37,7 +38,7 @@ export interface TaskEntry {
     generation: string
     sourcePath: readonly string[]
   }>
-  readonly revision?: Readonly<{ fileId: string; fileRevision: string; exactSize: bigint }>
+  readonly revision?: Readonly<{ fileId: string; fileRevision: string; exactSize: bigint; sourceMetadata?: string; reusedFrom?: string }>
   readonly zipLayout?: ZipEntryLayout
   readonly zipPlan?: ZipEntryPlanV1
   readonly ranges: readonly TaskRange[]
@@ -138,7 +139,7 @@ export function snapshotTaskEntry(value: TaskEntry): TaskEntry {
   return Object.freeze({
     ...value, path,
     source: Object.freeze({ ...value.source, sourcePath: Object.freeze([...value.source.sourcePath]) }),
-    ...(value.revision === undefined ? {} : { revision: Object.freeze({ ...value.revision }) }),
+    ...(value.revision === undefined ? {} : { revision: Object.freeze({ ...value.revision, ...sourceMetadataFields(value.revision) }) }),
     ...(layout === undefined ? {} : { zipLayout: Object.freeze({ ...layout }) }),
     ...(zipPlan === undefined ? {} : { zipPlan }),
     ranges: Object.freeze(value.ranges.map(range => Object.freeze({ ...range }))),
@@ -202,4 +203,13 @@ function validateLayout(value: TaskEntry, path: readonly string[], exactSize: bi
     }
   }
   return zipPlan
+}
+
+/** Only an unchanged, unfinished payload can acquire current-revision applicability. */
+export function taskEntryMetadataReusable(previous: TaskEntry, next: TaskEntry): boolean {
+  const before = previous.revision
+  const after = next.revision
+  return before !== undefined && after !== undefined && before.fileId === after.fileId &&
+    before.fileRevision !== after.fileRevision && after.reusedFrom === before.fileRevision &&
+    !taskEntryComplete(previous) && compareRevisionMetadata(before, after).kind === 'metadata-agreement'
 }

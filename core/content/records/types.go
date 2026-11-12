@@ -11,6 +11,7 @@ import (
 )
 
 const (
+	RevisionSchemaVersion     = 2
 	SchemaVersion             = 1
 	ObjectWireVersion         = senderobject.WireVersion
 	ObjectNonceBytes          = senderobject.NonceBytes

@@ -401,8 +401,9 @@ func buildSenderObjects(t *testing.T, f *fixture) []sealedObject {
 	directoryErrorContext := slices.Concat(f.shareInstance, f.directoryID)
 
 	revision := map[uint64]any{
-		0: uint64(1), 1: f.shareInstance, 2: f.fileID, 3: f.fileRevision,
+		0: uint64(2), 1: f.shareInstance, 2: f.fileID, 3: f.fileRevision,
 		4: uint64(2097175), 5: int64(1700000200), 6: uint64(123000000), 7: uint64(2),
+		8: fixed(0xa4, 32),
 	}
 	revisionContext := slices.Concat(f.shareInstance, f.fileID)
 

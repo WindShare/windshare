@@ -226,7 +226,7 @@ describe('Browser-local FileCheckpointV2 vectors', () => {
     )))
   })
 
-  it('replays every included and excluded lineage axis without redefining RecordID', () => {
+  it('keeps logical record identity independent of source revision and local object authority', () => {
     const baselineVector = checkpointCase('candidate')
     const baseline = checkpointRecord(baselineVector)
     const baselineLineage = deriveCheckpointLineageID(baseline)
@@ -277,7 +277,8 @@ describe('Browser-local FileCheckpointV2 vectors', () => {
       'lineage-excludes-owned-object',
     ] as const) {
       expect(deriveCheckpointLineageID(records.get(name)!)).toBe(baselineLineage)
-      expect(records.get(name)!.recordId).not.toBe(baseline.recordId)
+      expect(records.get(name)!.recordId).toBe(baseline.recordId)
+      expect(checkpointIdentityEqual(records.get(name)!, baseline)).toBe(false)
     }
     expect(deriveCheckpointLineageID(records.get('lineage-path-segments-a')!))
       .not.toBe(deriveCheckpointLineageID(records.get('lineage-path-segments-b')!))

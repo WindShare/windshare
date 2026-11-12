@@ -4,6 +4,7 @@ import {
 } from '../browser/indexeddb-database'
 import { readStoredCheckpoint } from '../browser/indexeddb/repository-transactions'
 import { FILE_CHECKPOINT_COMMIT_VERIFIED } from '../persistence/checkpoint'
+import { admitBrowserDeliverySource } from './recovery/source'
 import { advanceBrowserDeliveryRecord } from './lifecycle'
 import type { BrowserDeliveryRecordV1, BrowserSavePolicyV1 } from './model'
 import { browserDeliveryStagingPath } from './records'
@@ -58,8 +59,10 @@ async function projectReceivingCheckpoint(
   if (rows.length !== 1) return record
   const checkpoint = readStoredCheckpoint(rows[0])
   if (checkpoint.commitState !== FILE_CHECKPOINT_COMMIT_VERIFIED ||
-      checkpoint.fileRevision !== record.source.fileRevision || checkpoint.exactSize !== record.source.exactSize ||
+      checkpoint.exactSize !== record.source.exactSize ||
       JSON.stringify(checkpoint.canonicalPath) !== JSON.stringify(browserDeliveryStagingPath(record.fileId))) return record
   // This temporary value is never written. The local engine must inspect ownership and commit the transition under its lease.
-  return advanceBrowserDeliveryRecord(policy, record, { kind: 'receiving', checkpoint })
+  if (checkpoint.fileRevision === record.source.fileRevision) return advanceBrowserDeliveryRecord(policy, record, { kind: 'receiving', checkpoint })
+  try { return admitBrowserDeliverySource(policy, record, checkpoint) }
+  catch { return record }
 }

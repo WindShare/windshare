@@ -1,3 +1,5 @@
+import { validateDirectCheckpointProof } from './final-proof'
+import { admitBrowserDeliverySource } from './recovery/source'
 import { withStagingExportAuthority } from '../staging-budget/export-authority'
 import type { PersistentFileRequest, PersistentFileTransactionPort, PersistentFinalFileCommit } from '../persistent-tree/contracts'
 import { fileCheckpointIsComplete, type FileCheckpointV2 } from '../persistence/checkpoint'
@@ -32,7 +34,9 @@ export class BrowserDeliveryEngine {
   async recordCheckpoint(fileId: string, checkpoint: FileCheckpointV2): Promise<void> {
     const record = await this.#read(fileId)
     if (record.state.kind !== 'receiving') return
-    const receiving = await this.#advance(record, { kind: 'receiving', checkpoint })
+    const receiving = record.source.fileRevision === checkpoint.fileRevision
+      ? await this.#advance(record, { kind: 'receiving', checkpoint })
+      : await this.#admitSource(record, checkpoint)
     this.#emit(receiving, 'receiving')
     if (record.placement === 'staged') {
       await (await this.#options.reservation(record)).received(checkpointBytes(checkpoint))
@@ -59,6 +63,7 @@ export class BrowserDeliveryEngine {
     if (checkpoint === undefined || checkpoint.recordId !== commit.recordId || !fileCheckpointIsComplete(checkpoint)) {
       throw new TypeError('Completed receiving transaction has no matching durable checkpoint')
     }
+    validateDirectCheckpointProof(commit.checkpointProof, checkpoint)
     const staged = await this.#advance(record, { kind: 'staged-complete', stage: checkpoint })
     const reservation = await this.#options.reservation(staged)
     await reservation.received(checkpoint.exactSize)
@@ -117,6 +122,7 @@ export class BrowserDeliveryEngine {
         if (checkpoint === undefined || checkpoint.recordId !== commit.recordId || !fileCheckpointIsComplete(checkpoint)) {
           throw new TypeError('Destination close has no durable final target proof')
         }
+        validateDirectCheckpointProof(commit.checkpointProof, checkpoint)
         record = await this.#advance(record, { kind: 'target-saved', target: checkpoint, stage })
         savedCommit = commit
         const elapsed = Math.max(0, this.#now() - started)
@@ -194,6 +200,7 @@ export class BrowserDeliveryEngine {
     const port = record.placement === 'staged' ? this.#stage() : this.#options.target
     const checkpoint = await port.readCheckpoint(fileId)
     if (checkpoint === undefined) return record
+    if (record.source.fileRevision !== checkpoint.fileRevision) record = await this.#admitSource(record, checkpoint)
     if (fileCheckpointIsComplete(checkpoint)) {
       if (record.placement === 'staged') {
         record = await this.#advance(record, { kind: 'staged-complete', stage: checkpoint })
@@ -210,8 +217,9 @@ export class BrowserDeliveryEngine {
           this.#options.changed(record)
         } finally { await target.close() }
       }
-    } else if (record.state.checkpoint?.checkpointGeneration !== checkpoint.checkpointGeneration ||
-        record.state.checkpoint?.stateGeneration !== checkpoint.stateGeneration) {
+    } else if (record.state.kind === 'receiving' &&
+        (record.state.checkpoint?.checkpointGeneration !== checkpoint.checkpointGeneration ||
+        record.state.checkpoint?.stateGeneration !== checkpoint.stateGeneration)) {
       record = await this.#advance(record, { kind: 'receiving', checkpoint })
     }
     return record
@@ -292,6 +300,13 @@ export class BrowserDeliveryEngine {
     const record = await this.#options.repository.readFile(this.#options.policy.operationId, fileId)
     if (record === undefined) throw new TypeError('Browser delivery record disappeared')
     return record
+  }
+
+  async #admitSource(previous: BrowserDeliveryRecordV1, checkpoint: FileCheckpointV2): Promise<BrowserDeliveryRecordV1> {
+    const next = admitBrowserDeliverySource(this.#options.policy, previous, checkpoint)
+    await this.#options.repository.replaceFile(previous, next)
+    this.#options.changed(next)
+    return next
   }
 
   async #advance(previous: BrowserDeliveryRecordV1, state: BrowserDeliveryState): Promise<BrowserDeliveryRecordV1> {

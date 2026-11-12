@@ -63,7 +63,7 @@ func TestFileExecutionAuthorityClassifiesPhysicalLineageEvidence(t *testing.T) {
 			if err != nil || decision != test.want {
 				t.Fatalf("decision = (%s, %v), want %s", decision, err, test.want)
 			}
-			if (decision == checkpointmodel.CheckpointLineageDecisionExact) != selected.Valid() {
+			if (decision == checkpointmodel.CheckpointLineageDecisionExact || decision == checkpointmodel.CheckpointLineageDecisionRevisionConflict) != selected.Valid() {
 				t.Fatalf("selected record validity = %t for %s", selected.Valid(), decision)
 			}
 		})
@@ -301,8 +301,15 @@ func TestRevisionConflictNeverMovesPhysicalVerifiedRanges(t *testing.T) {
 	}
 	spec, _ := first.CheckpointLineageSpec()
 	decision, selected, err := authority.classify(spec, checkpointmodel.CheckpointLineageRequest{FileRevision: second.FileRevision(), ExactSize: second.ExactSize()})
-	if err != nil || decision != checkpointmodel.CheckpointLineageDecisionRevisionConflict || selected.Valid() {
+	if err != nil || decision != checkpointmodel.CheckpointLineageDecisionRevisionConflict || !selected.Valid() {
 		t.Fatalf("conflict granted ranges: %v %v", decision, err)
+	}
+	resolution, err := fileexecution.ResolveCheckpoint(decision, selected)
+	if _, accepted := resolution.Record(); err != nil || accepted {
+		t.Fatal("retained candidate granted accepted progress")
+	}
+	if _, retained := resolution.Candidate(); !retained {
+		t.Fatal("conflict lost source comparison evidence")
 	}
 	if err := authority.add(second); !errors.Is(err, checkpointmodel.ErrRecordBinding) {
 		t.Fatal("new revision occupied the old checkpoint location")

@@ -1,3 +1,4 @@
+import { sourceMetadataFields } from '../../content/revision-comparison'
 import { snapshotContentAvailability, type ContentAvailability, type ContentReplica, type OutputSourceIdentity } from './content-availability'
 export type { OutputSourceIdentity } from './content-availability'
 import type { SourceFault } from '../failure/fault'
@@ -75,6 +76,7 @@ export interface OutputCatalogFileIdentity {
 }
 
 export interface OpenedOutputRevision extends OutputSourceIdentity {
+  readonly sourceMetadata?: string
   readonly exactSize: bigint
 }
 
@@ -405,6 +407,7 @@ export function snapshotOpenedOutputRevision(revision: OpenedOutputRevision): Op
   }
   return Object.freeze({
     ...snapshotOutputSource(revision),
+    ...sourceMetadataFields(revision),
     exactSize: revision.exactSize,
   })
 }

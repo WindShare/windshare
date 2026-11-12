@@ -149,6 +149,20 @@ func decodeRecordPayload(payload []byte) (Record, error) {
 	if err != nil {
 		return Record{}, err
 	}
+	metadataBytes, err := cursor.frame(32)
+	if err != nil {
+		return Record{}, err
+	}
+	metadata, err := content.SourceMetadataFromBytes(metadataBytes)
+	if err != nil {
+		return Record{}, ErrRecordBinding
+	}
+	reusedBytes, err := cursor.frame(16)
+	if err != nil || len(reusedBytes) != 16 {
+		return Record{}, ErrRecordBinding
+	}
+	var reusedFrom content.FileRevision
+	copy(reusedFrom[:], reusedBytes)
 	pathBytes, err := cursor.frame(maximumPathBytes + uint64(catalog.MaxPathDepth+1)*8)
 	if err != nil {
 		return Record{}, err
@@ -209,7 +223,7 @@ func decodeRecordPayload(payload []byte) (Record, error) {
 		ownershipMarker: marker, namespace: namespace, recordID: recordID,
 		operationID: operation, receiveIntentDigest: receiveIntent,
 		materializationBindingDigest: materialization, fileID: fileID,
-		fileRevision: revision, canonicalPath: path, exactSize: exactSize,
+		fileRevision: revision, sourceMetadata: metadata, reusedFrom: reusedFrom, canonicalPath: path, exactSize: exactSize,
 		materializerKind: MaterializerKind(materializer), authorityRef: authority,
 		ownedObjectID: object, stateGeneration: stateGeneration,
 		checkpointGeneration: checkpointGeneration, verifiedRanges: ranges,

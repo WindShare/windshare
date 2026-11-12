@@ -1,3 +1,4 @@
+import { sourceMetadataFields } from '../../../content/revision-comparison'
 import {
   DIRECT_ZIP_SHA256_BYTES,
   chainDirectZipEpochDigestV1,
@@ -56,7 +57,7 @@ export function snapshotPageState(
 export function snapshotSource(
   source: DirectZipSourceAuthorityV1,
 ): DirectZipSourceAuthorityV1 {
-  return Object.freeze({ ...source })
+  return Object.freeze({ ...source, ...sourceMetadataFields(source) })
 }
 
 export function snapshotMutableMember(

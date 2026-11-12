@@ -257,11 +257,19 @@ export class DirectZipEpochWriterV1 {
     const decision = decideDirectZipMemberResumeV1(this.#checkpoint, source)
     if (decision.kind === 'rollback-member') return decision
     if (this.#member === undefined) throw new Error('direct ZIP member state is absent')
+    const previousRevision = this.#member.source.revision
+    if (previousRevision !== source.revision) {
+      // The durable predecessor remains untouched until the next checkpoint CAS.
+      // New bytes and any completion belong to the freshly authenticated source.
+      this.#member = { ...this.#member, source: snapshotSource({ ...source, reusedFrom: previousRevision }) }
+    }
     this.#memberHandleGeneration += 1
     this.#emit('member-resumed', {
       entryOrdinal: this.#member.plan.ordinal,
       offsetClass: 'member-payload',
-      decision: `payload-offset:${decision.payloadOffset.toString()}`,
+      decision: previousRevision === source.revision ? 'same-revision' : 'metadata-agreement',
+      fileId: source.fileId, previousRevision, currentRevision: source.revision,
+      reusedBytes: decision.payloadOffset,
     })
     return new DirectZipMemberWriterV1(this, this.#memberHandleGeneration)
   }
