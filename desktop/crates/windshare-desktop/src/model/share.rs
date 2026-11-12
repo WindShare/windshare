@@ -13,6 +13,7 @@ pub enum ShareSource {
 
 #[derive(Clone, Copy, Debug)]
 pub enum ShareState {
+    AwaitingConfiguration,
     Preparing,
     Live { viewers: Option<usize> },
     Paused,
@@ -63,6 +64,7 @@ impl Share {
 
     pub const fn status(&self) -> (Text, Tone) {
         match self.state {
+            ShareState::AwaitingConfiguration => (Text::SharingSetup, Tone::Peach),
             ShareState::Preparing => (Text::PreparingLink, Tone::Peach),
             ShareState::Live { .. } => (Text::Sharing, Tone::Mint),
             ShareState::Paused => (Text::Paused, Tone::Neutral),
@@ -93,6 +95,11 @@ impl Share {
                 }
             }
             ShareSource::Native { .. } => match self.state {
+                ShareState::AwaitingConfiguration => (
+                    Text::SharingSetup,
+                    Icon::Settings,
+                    Action::ConfigureShare(self.id),
+                ),
                 ShareState::Preparing => (Text::Cancel, Icon::Close, Action::StopShare(self.id)),
                 ShareState::Live { .. } | ShareState::Stopping => {
                     (Text::StopSharing, Icon::Close, Action::StopShare(self.id))

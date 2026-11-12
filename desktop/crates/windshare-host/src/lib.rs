@@ -15,8 +15,8 @@ pub fn check_host() -> anyhow::Result<()> {
 }
 
 pub use model::{
-    Completion, Connection, Failure, Model, Operation, OperationState, Share, ShareState, Snapshot,
-    Startup,
+    Completion, Connection, Failure, Model, Operation, OperationState, Outcome, SelectedRoot,
+    Selection, Setup, Share, ShareState, Snapshot, Startup, StopReason,
 };
 
 use request::Command;
@@ -36,6 +36,24 @@ const MAXIMUM_OPERATIONS: usize = 1024;
 struct Shared {
     model: Mutex<Model>,
     closing: AtomicBool,
+    updates: async_channel::Sender<()>,
+    wake: polling::Poller,
+}
+
+impl Shared {
+    fn update(&self, change: impl FnOnce(&mut Model)) {
+        let mut model = self.model.lock().expect("model lock");
+        let before = model.clone();
+        change(&mut model);
+        if *model != before {
+            let _ = self.updates.try_send(());
+        }
+    }
+
+    fn notify(&self) {
+        let _ = self.updates.try_send(());
+        let _ = self.wake.notify();
+    }
 }
 
 #[derive(Clone)]
@@ -44,6 +62,7 @@ pub struct Controller {
     commands: SyncSender<Command>,
     sequence: Arc<AtomicU64>,
     worker: Arc<Mutex<Option<JoinHandle<()>>>>,
+    updates: async_channel::Receiver<()>,
 }
 
 impl Controller {
@@ -53,9 +72,12 @@ impl Controller {
     /// # Panics
     /// The worker panics if its application model mutex is poisoned.
     pub fn start() -> std::io::Result<Self> {
+        let (updates, receiver_updates) = async_channel::bounded(1);
         let shared = Arc::new(Shared {
             model: Mutex::new(Model::default()),
             closing: AtomicBool::new(false),
+            updates,
+            wake: polling::Poller::new()?,
         });
         let (commands, receiver) = mpsc::sync_channel(COMMAND_QUEUE_CAPACITY);
         let state = shared.clone();
@@ -64,13 +86,14 @@ impl Controller {
             .spawn(move || {
                 let result =
                     connection::run(&state, &receiver).map_err(|error| format!("{error:#}"));
-                state.model.lock().expect("model lock").connection = Connection::Closed(result);
+                state.update(|model| model.connection = Connection::Closed(result));
             })?;
         Ok(Self {
             shared,
             commands,
             sequence: Arc::new(AtomicU64::new(0)),
             worker: Arc::new(Mutex::new(Some(worker))),
+            updates: receiver_updates,
         })
     }
 
@@ -78,6 +101,11 @@ impl Controller {
     /// Panics if the application model mutex is poisoned.
     pub fn model(&self) -> Model {
         self.shared.model.lock().expect("model lock").clone()
+    }
+
+    /// Coalesced model invalidation for the GUI executor. Subscribe before reading.
+    pub async fn changed(&self) {
+        let _ = self.updates.recv().await;
     }
 
     /// Registers a selection before sending it; reconnects reuse this identity.
@@ -128,17 +156,24 @@ impl Controller {
         });
         model.command_error = None;
         drop(model);
+        self.shared.notify();
         tracing::info!(event = "desktop.share_submitted", operation_id = %id);
         Ok(id)
     }
 
     fn command(&self, command: Command) {
-        let error = self
-            .commands
-            .try_send(command)
-            .err()
-            .map(|error| error.to_string());
-        self.shared.model.lock().expect("model lock").command_error = error;
+        let error = if self.shared.closing.load(Ordering::Acquire) {
+            Some("WindShare is closing".into())
+        } else {
+            command.validate().err().or_else(|| {
+                self.commands
+                    .try_send(command)
+                    .err()
+                    .map(|error| error.to_string())
+            })
+        };
+        self.shared.update(|model| model.command_error = error);
+        let _ = self.shared.wake.notify();
     }
 
     pub fn cancel(&self, operation_id: &str) {
@@ -153,8 +188,29 @@ impl Controller {
         });
     }
 
+    pub fn configure(&self, operation_id: &str, relay_url: String, front_url: String) {
+        self.command(Command::Configure {
+            operation_id: operation_id.into(),
+            setup: request::SetupInput {
+                id: format!(
+                    "setup:{}",
+                    self.sequence.fetch_add(1, Ordering::Relaxed) + 1
+                ),
+                relay_url,
+                front_url,
+            },
+        });
+    }
+
+    pub fn resume(&self, operation_id: &str) {
+        self.command(Command::Resume {
+            operation_id: operation_id.into(),
+        });
+    }
+
     pub fn begin_shutdown(&self) {
         self.shared.closing.store(true, Ordering::Release);
+        let _ = self.shared.wake.notify();
     }
 
     /// Must be called off the GUI executor. Main also joins after the event loop.
@@ -168,8 +224,9 @@ impl Controller {
         let failed = guard.take().is_some_and(|worker| worker.join().is_err());
         drop(guard);
         if failed {
-            self.shared.model.lock().expect("model lock").connection =
-                Connection::Closed(Err("host worker panicked".into()));
+            self.shared.update(|model| {
+                model.connection = Connection::Closed(Err("host worker panicked".into()));
+            });
         }
         match &self.model().connection {
             Connection::Closed(result) => result.clone(),

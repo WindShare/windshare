@@ -13,6 +13,20 @@ pub enum Command {
     Stop {
         task_id: String,
     },
+    Configure {
+        operation_id: String,
+        setup: SetupInput,
+    },
+    Resume {
+        operation_id: String,
+    },
+}
+
+#[derive(Debug, Serialize)]
+pub struct SetupInput {
+    pub id: String,
+    pub relay_url: String,
+    pub front_url: String,
 }
 
 #[derive(Debug, Serialize)]

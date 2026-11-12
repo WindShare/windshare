@@ -2,15 +2,19 @@ use super::*;
 
 fn controller() -> (Controller, mpsc::Receiver<Command>) {
     let (commands, receiver) = mpsc::sync_channel(COMMAND_QUEUE_CAPACITY);
+    let (updates, receiver_updates) = async_channel::bounded(1);
     (
         Controller {
             shared: Arc::new(Shared {
                 model: Mutex::new(Model::default()),
                 closing: AtomicBool::new(false),
+                updates,
+                wake: polling::Poller::new().unwrap(),
             }),
             commands,
             sequence: Arc::new(AtomicU64::new(0)),
             worker: Arc::new(Mutex::new(None)),
+            updates: receiver_updates,
         },
         receiver,
     )
@@ -52,4 +56,21 @@ fn oversized_selection_is_rejected_before_queueing() {
     );
     assert_eq!(controller.model().operations, Vec::<Operation>::new());
     assert!(receiver.try_recv().is_err());
+}
+
+#[test]
+fn model_notifications_coalesce_and_unchanged_state_does_not_wake() {
+    let (controller, _) = controller();
+    controller
+        .shared
+        .update(|model| model.connection = Connection::Connected);
+    controller
+        .shared
+        .update(|model| model.connection = Connection::Reconnecting("lost".into()));
+    assert_eq!(controller.updates.len(), 1);
+    controller.updates.try_recv().unwrap();
+    controller
+        .shared
+        .update(|model| model.connection = Connection::Reconnecting("lost".into()));
+    assert!(controller.updates.try_recv().is_err());
 }

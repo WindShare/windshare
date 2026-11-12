@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -49,13 +49,14 @@ func Start() (*Host, error) {
 	token := hex.EncodeToString(entropy[:])
 	sessionID := token[:sessionIdentityCharacters]
 	cache, err := os.UserCacheDir()
-	if err != nil {
-		return nil, err
-	}
 	directory := filepath.Join(cache, "WindShare", "logs")
-	log, err := logstore.Open(directory, sessionID)
+	var log *logstore.Recorder
+	if err == nil {
+		log, err = logstore.Open(directory, sessionID)
+	}
 	if err != nil {
-		return nil, err
+		_, _ = fmt.Fprintf(os.Stderr, "host.log_unavailable session_id=%s error=%v\n", sessionID, err)
+		log = logstore.Disabled(sessionID, err)
 	}
 	application, err := engine.New(engine.Config{})
 	if err != nil {
@@ -64,11 +65,12 @@ func Start() (*Host, error) {
 	}
 	host := &Host{log: log, diagnosticDone: make(chan struct{})}
 	deps := dependencies{
-		start: func(request engine.ShareRequest) (shareTask, error) {
-			return application.StartShare(context.Background(), request)
+		start: func(ctx context.Context, request engine.ShareRequest) (shareTask, error) {
+			return application.StartShare(ctx, request)
 		},
 		close: application.Close, load: relayconfig.Load, log: log.Record,
 		configure: application.ConfigureTURN,
+		setup:     nativeSetup,
 	}
 	if os.Getenv("WINDSHARE_TRACE") == "1" {
 		host.diagnostics, err = diagnostics.NewStream(diagnosticCapacity, nil)
@@ -109,7 +111,10 @@ func (h *Host) closeEngine() error {
 		h.diagnostics.Close()
 	}
 	<-h.diagnosticDone
-	return errors.Join(err, h.log.Close())
+	if logErr := h.log.Close(); logErr != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "host.log_closed session_id=%s error=%v\n", h.Endpoint.SessionID, logErr)
+	}
+	return err
 }
 
 // Close returns only after the control workers, engine, and log writer join.

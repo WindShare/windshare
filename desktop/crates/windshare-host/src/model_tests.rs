@@ -5,6 +5,7 @@ fn snapshot(revision: u64, shares: Vec<Share>) -> Snapshot {
         session_id: "first".into(),
         revision,
         shares,
+        setup: Setup::Idle,
     }
 }
 
@@ -15,7 +16,8 @@ fn accepted(id: &str, state: ShareState) -> Share {
         state,
         startup: Startup::Ready,
         url: "https://example.test/share#key".into(),
-        selected_count: 1,
+        created_at_ms: 0,
+        selection: None,
         result: None,
         error: None,
         relay: None,
@@ -31,6 +33,7 @@ fn snapshots_cannot_move_backwards_or_cross_host_sessions() {
         session_id: "retired".into(),
         revision: 100,
         shares: vec![],
+        setup: Setup::Idle,
     });
     assert_eq!(model.revision, 5);
     assert_eq!(

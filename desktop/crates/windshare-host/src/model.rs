@@ -5,6 +5,8 @@ pub struct Snapshot {
     pub session_id: String,
     pub revision: u64,
     pub shares: Vec<Share>,
+    #[serde(default)]
+    pub setup: Setup,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -17,7 +19,8 @@ pub struct Share {
     #[serde(default)]
     pub url: String,
     #[serde(default)]
-    pub selected_count: u64,
+    pub created_at_ms: u64,
+    pub selection: Option<Selection>,
     pub result: Option<Completion>,
     pub error: Option<Failure>,
     pub relay: Option<RelayObservation>,
@@ -39,6 +42,8 @@ pub struct RelayAvailability {
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ShareState {
+    AwaitingConfiguration,
+    Admitting,
     Preparing,
     Sharing,
     Stopping,
@@ -55,12 +60,68 @@ pub enum Startup {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct Completion {
-    pub outcome: String,
-    pub stop_reason: String,
+    pub outcome: Outcome,
+    pub stop_reason: StopReason,
     #[serde(default)]
     pub error: String,
     #[serde(default)]
     pub cleanup_error: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Outcome {
+    Stopped,
+    Cancelled,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StopReason {
+    None,
+    Cancelled,
+    ShareStopped,
+    ApplicationClosed,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct Selection {
+    pub count: u64,
+    pub root: Option<SelectedRoot>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SelectedRoot {
+    File { name: String, file_size: u64 },
+    Directory { name: String },
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum Setup {
+    #[default]
+    Idle,
+    Running {
+        id: String,
+        operation_id: String,
+        #[serde(default)]
+        stage: String,
+        #[serde(default)]
+        verification_url: String,
+        #[serde(default)]
+        user_code: String,
+    },
+    Finished {
+        id: String,
+        operation_id: String,
+    },
+    Failed {
+        id: String,
+        operation_id: String,
+        error: Failure,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -127,6 +188,7 @@ pub struct Model {
     pub revision: u64,
     pub operations: Vec<Operation>,
     pub command_error: Option<String>,
+    pub setup: Setup,
 }
 
 impl Default for Model {
@@ -137,6 +199,7 @@ impl Default for Model {
             revision: 0,
             operations: Vec::new(),
             command_error: None,
+            setup: Setup::Idle,
         }
     }
 }
@@ -153,6 +216,16 @@ impl Model {
         }
         self.session_id = Some(snapshot.session_id);
         self.revision = snapshot.revision;
+        self.setup = snapshot.setup;
+        // A full snapshot replaces accepted state, but cannot erase unsent local
+        // intents whose commands have not yet reached the host.
+        self.operations.retain(|operation| {
+            !matches!(operation.state, OperationState::Accepted(_))
+                || snapshot
+                    .shares
+                    .iter()
+                    .any(|share| share.operation_id == operation.id)
+        });
         for share in snapshot.shares {
             if let Some(operation) = self
                 .operations

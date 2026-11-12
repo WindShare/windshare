@@ -30,6 +30,7 @@ pub struct Desktop {
     pub link_input: Entity<Input>,
     pub share_flow: ShareFlow,
     pub runtime: Runtime,
+    pub setup_form: crate::live::SetupForm,
     pub motion_probe: crate::motion_probe::MotionProbe,
     pub receive_flow: ReceiveFlow,
     pub copy_feedback: CopyFeedback,
@@ -55,6 +56,7 @@ impl Desktop {
         let link_input =
             cx.new(|cx| Input::new(locale.text(Text::ShareLink), cx).accent(Tone::Lavender));
         let super_share = cx.new(|cx| crate::supershare::SuperShare::new(window, cx));
+        let setup_form = crate::live::SetupForm::new(cx);
         let subscriptions = vec![
             cx.observe(&super_share, |_, _, cx| cx.notify()),
             cx.subscribe_in(&super_share, window, |this, _, _, window, cx| {
@@ -74,6 +76,7 @@ impl Desktop {
                 this.link_input.update(cx, |input, cx| {
                     input.set_labels(locale.text(Text::ShareLink), "", cx);
                 });
+                this.setup_form.localize(cx);
                 cx.notify();
             }),
             windshare_ui::follow_system_theme(window),
@@ -92,8 +95,8 @@ impl Desktop {
         let focus = cx.focus_handle();
         let primary_focus = cx.focus_handle();
         window.focus(&primary_focus, cx);
-        if !preview {
-            Self::observe_runtime(window, cx);
+        if let Runtime::Native(session) = &runtime {
+            Self::observe_runtime(session.controller.clone(), window, cx);
         }
         Self {
             page: Page::Share,
@@ -110,6 +113,7 @@ impl Desktop {
             link_input,
             share_flow: ShareFlow::Choose,
             runtime,
+            setup_form,
             motion_probe: crate::motion_probe::MotionProbe::default(),
             receive_flow: ReceiveFlow::default(),
             copy_feedback: CopyFeedback::Idle,

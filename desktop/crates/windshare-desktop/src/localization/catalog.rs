@@ -18,6 +18,13 @@ macro_rules! messages {
 }
 
 messages! {
+    SharingSetup => ("Sharing setup", "分享设置"),
+    RelayAddress => ("Relay URL", "中转地址"),
+    FrontendAddress => ("Frontend URL (optional)", "前端地址（可选）"),
+    SaveAndShare => ("Save and share", "保存并分享"),
+    UseSavedSettings => ("Use saved settings", "使用已保存设置"),
+    ConnectingRelay => ("Connecting…", "正在连接…"),
+    ApproveDevice => ("Approve this device", "授权此设备"),
     OpenInBrowser => ("Open in browser", "在浏览器中打开"),
     StopSharing => ("Stop sharing", "停止分享"),
     ShareAgain => ("Share again", "重新分享"),
@@ -57,7 +64,7 @@ messages! {
     SuperRedeeming => ("Redeeming…", "兑换中…"),
     JustNow => ("just now", "刚刚"),
     Yesterday => ("yesterday", "昨天"),
-    WindowTitle => ("WindShare - UI preview", "WindShare - 界面预览"),
+    WindowTitle => ("WindShare", "WindShare"),
     ShareTitle => ("Share files", "分享文件"),
     ReceiveTitle => ("Receive files", "接收文件"),
     SharesTitle => ("My shares", "我的分享"),

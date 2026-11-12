@@ -1,36 +1,41 @@
 package desktop
 
 import (
+	"cmp"
+	"reflect"
 	"slices"
 
+	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/observation/wire"
 )
 
 func (a *Application) snapshotLocked() Snapshot {
-	a.revision++
-	snapshot := Snapshot{SessionID: a.sessionID, Revision: a.revision, Shares: make([]Share, 0, len(a.operations))}
+	next := Snapshot{SessionID: a.sessionID, Revision: a.snapshotValue.Revision, Shares: make([]Share, 0, len(a.operations)), Setup: a.setup}
 	for _, op := range a.operations {
-		view := projectShare(op)
-		if op.lastState != view.State || op.lastStartup != view.Startup {
-			a.deps.log("host.share_state", map[string]any{
-				"operation_id": view.OperationID, "task_id": view.TaskID,
-				"state": view.State, "startup": view.Startup, "result": view.Result, "error": view.Error,
-			})
-			op.lastState, op.lastStartup = view.State, view.Startup
-		}
-		snapshot.Shares = append(snapshot.Shares, view)
+		next.Shares = append(next.Shares, projectShare(op))
 	}
-	slices.SortFunc(snapshot.Shares, func(left, right Share) int {
-		if left.OperationID < right.OperationID {
-			return -1
+	slices.SortFunc(next.Shares, func(left, right Share) int { return cmp.Compare(left.OperationID, right.OperationID) })
+	if next.Revision != 0 && reflect.DeepEqual(next.Shares, a.snapshotValue.Shares) && reflect.DeepEqual(next.Setup, a.snapshotValue.Setup) {
+		return a.snapshotValue
+	}
+	next.Revision++
+	for i, view := range next.Shares {
+		if i >= len(a.snapshotValue.Shares) || !reflect.DeepEqual(view, a.snapshotValue.Shares[i]) {
+			a.deps.log("host.share_state", view)
 		}
-		if left.OperationID > right.OperationID {
-			return 1
+	}
+	a.snapshotValue = next
+	for subscriber := range a.subscribers {
+		// Each queued value is a complete snapshot. Replacing it loses no state,
+		// and a slow control connection cannot hold task or transfer progress.
+		select {
+		case <-subscriber.snapshots:
+		default:
 		}
-		return 0
-	})
-	return snapshot
+		subscriber.snapshots <- next
+	}
+	return next
 }
 
 func (a *Application) snapshot() Snapshot {
@@ -40,25 +45,44 @@ func (a *Application) snapshot() Snapshot {
 }
 
 func projectShare(op *operation) Share {
-	view := Share{OperationID: op.id, State: "preparing", Startup: "pending", Error: op.err}
-	if op.task == nil {
-		switch {
-		case op.cancelled:
-			view.State = "finished"
-			view.Result = &Completion{Outcome: "cancelled", StopReason: "cancelled"}
-		case op.err != nil:
-			view.State, view.Startup = "finished", "failed"
-			view.Result = &Completion{Outcome: "failed", StopReason: "none", Error: op.err.Message}
+	view := Share{OperationID: op.id, CreatedAt: op.createdAt.UnixMilli(), Startup: "pending"}
+	switch current := op.phase.(type) {
+	case awaitingConfiguration:
+		view.State, view.Error = AwaitingConfiguration, current.failure
+	case admission:
+		view.State = Admitting
+		if current.cancelling {
+			view.State = Stopping
 		}
-		return view
+	case terminal:
+		view.State, view.Result, view.Error = Finished, &current.result, current.error
+		if current.result.Outcome == OutcomeFailed {
+			view.Startup = "failed"
+		}
+	case running:
+		projectTask(&view, current)
 	}
-	state := op.task.Snapshot()
-	view.TaskID = string(op.task.ID())
+	return view
+}
+
+func projectTask(view *Share, current running) {
+	state := current.task.Snapshot()
+	view.TaskID, view.State = string(current.task.ID()), Preparing
 	switch state.Startup {
 	case engine.ShareReadyReached:
-		view.Startup, view.State = "ready", "sharing"
-		view.URL, _ = state.Ready.Capability.URL(op.frontURL)
-		view.SelectedCount = state.Ready.SelectedRootSummary.SelectedCount()
+		view.Startup, view.State = "ready", Sharing
+		view.URL, _ = state.Ready.Capability.URL(current.frontURL)
+		summary := state.Ready.SelectedRootSummary
+		view.Selection = &Selection{Count: summary.SelectedCount()}
+		if root, ok := summary.SingleRoot(); ok {
+			selected := &SelectedRoot{Name: root.Name(), Kind: "directory"}
+			if root.Kind() == liveshare.SelectedRootKindFile {
+				selected.Kind = "file"
+				size, _ := root.FileSize()
+				selected.FileSize = &size
+			}
+			view.Selection.Root = selected
+		}
 	case engine.ShareStartupFailed:
 		view.Startup = "failed"
 		if state.StartupError != nil {
@@ -66,7 +90,8 @@ func projectShare(op *operation) Share {
 		}
 	}
 	if state.State == engine.TaskStopping || state.State == engine.TaskFinished {
-		view.State = "stopping"
+		view.State = Stopping
+		view.URL = ""
 	}
 	if state.RelayAvailability != nil {
 		encoded, err := wire.Encode(*state.RelayAvailability)
@@ -75,13 +100,12 @@ func projectShare(op *operation) Share {
 		}
 	}
 	if result := state.Result; result != nil {
-		view.State = "finished"
+		view.State, view.URL = Finished, ""
 		view.Result = &Completion{
 			Outcome: outcomeName(result.Outcome), StopReason: reasonName(result.StopReason),
 			Error: errorText(result.Err), CleanupError: errorText(result.CleanupError),
 		}
 	}
-	return view
 }
 
 func errorText(err error) string {
@@ -91,28 +115,26 @@ func errorText(err error) string {
 	return ""
 }
 
-func outcomeName(value engine.Outcome) string {
+func outcomeName(value engine.Outcome) Outcome {
 	switch value {
 	case engine.OutcomeStopped:
-		return "stopped"
+		return OutcomeStopped
 	case engine.OutcomeCancelled:
-		return "cancelled"
-	case engine.OutcomeFailed:
-		return "failed"
+		return OutcomeCancelled
 	default:
-		return "unexpected"
+		return OutcomeFailed
 	}
 }
 
-func reasonName(value engine.StopReason) string {
+func reasonName(value engine.StopReason) StopReason {
 	switch value {
 	case engine.Cancelled:
-		return "cancelled"
+		return Cancelled
 	case engine.ShareStopped:
-		return "share_stopped"
+		return ShareStopped
 	case engine.ApplicationClosed:
-		return "application_closed"
+		return ApplicationClosed
 	default:
-		return "none"
+		return NoStopReason
 	}
 }

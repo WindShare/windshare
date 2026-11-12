@@ -8,8 +8,6 @@ use gpui::{Context, Window};
 use std::time::{Duration, Instant};
 use windshare_host::{Connection, Controller, Model};
 
-const REFRESH_INTERVAL: Duration = Duration::from_millis(100);
-
 pub enum Runtime {
     Preview { delay: Duration },
     Native(Box<Session>),
@@ -91,7 +89,7 @@ impl Desktop {
         self.runtime.is_preview() || matches!(page, Page::Share | Page::Shares | Page::Settings)
     }
 
-    pub fn observe_runtime(window: &Window, cx: &Context<Self>) {
+    pub fn observe_runtime(controller: Controller, window: &Window, cx: &Context<Self>) {
         let weak = cx.entity().downgrade();
         window.on_window_should_close(cx, move |_, cx| {
             let _ = weak.update(cx, Self::quit);
@@ -99,7 +97,7 @@ impl Desktop {
         });
         cx.spawn(async move |view, cx| {
             loop {
-                cx.background_executor().timer(REFRESH_INTERVAL).await;
+                controller.changed().await;
                 if view.update(cx, Self::refresh_native).is_err() {
                     break;
                 }
