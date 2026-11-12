@@ -66,11 +66,9 @@ func (a *Application) resume(id string) error {
 func (a *Application) admit(op *operation) {
 	ctx, cancel := context.WithCancel(context.Background())
 	op.phase, op.cancel = admission{}, cancel
-	a.work.Add(1)
-	go func() {
-		defer a.work.Done()
+	a.work.Go(func() {
 		a.runAdmission(ctx, op)
-	}()
+	})
 }
 
 func (a *Application) runAdmission(ctx context.Context, op *operation) {
