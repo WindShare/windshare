@@ -55,8 +55,12 @@ func prohibitedAPI(path string) bool {
 // platform cannot conceal a forbidden import until another CI runner builds it.
 func sourceFindings(root string) ([]string, error) {
 	var findings []string
-	for _, subtree := range []string{"cmd", "engine"} {
-		err := filepath.WalkDir(filepath.Join(root, subtree), func(path string, entry fs.DirEntry, err error) error {
+	for _, subtree := range []string{"cmd", "engine", "host"} {
+		directory := filepath.Join(root, subtree)
+		err := filepath.WalkDir(directory, func(path string, entry fs.DirEntry, err error) error {
+			if path == directory && os.IsNotExist(err) {
+				return nil
+			}
 			if err != nil {
 				return err
 			}
@@ -76,7 +80,7 @@ func sourceFindings(root string) ([]string, error) {
 				application := strings.HasPrefix(filepath.ToSlash(relative), "engine/")
 				observation := strings.HasPrefix(filepath.ToSlash(relative), "engine/observation/")
 				testSupport := strings.HasPrefix(dependency, module+"/internal/test") &&
-					(application || strings.HasPrefix(filepath.ToSlash(relative), "cmd/wind/"))
+					(application || productionHost(filepath.ToSlash(relative)))
 				forbidden := testSupport || storageImplementation(dependency) && application ||
 					prohibited(dependency) && (observation || !application && !storageImplementation(dependency))
 				if forbidden {
@@ -91,6 +95,11 @@ func sourceFindings(root string) ([]string, error) {
 		}
 	}
 	return findings, nil
+}
+
+func productionHost(path string) bool {
+	return strings.HasPrefix(path, "host/") || strings.HasPrefix(path, "cmd/wind/") ||
+		strings.HasPrefix(path, "cmd/windshare-host/")
 }
 
 // Alias resolution and recursive public-field/method traversal prevent a facade
@@ -261,5 +270,5 @@ func main() {
 		fmt.Fprintln(os.Stderr, "engine-boundary:", err)
 		os.Exit(1)
 	}
-	fmt.Println("engine-boundary: PASS (cmd imports and exported application contracts)")
+	fmt.Println("engine-boundary: PASS (production hosts and exported engine contracts)")
 }
