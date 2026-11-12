@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/windshare/windshare/adapters/filesystem"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -46,7 +47,7 @@ func TestPrepareShareSenderEmitsSourceCatalogStorageMilestonesWithoutSlog(t *tes
 	}
 	defer func() { _ = application.Close(context.Background()) }()
 	current, err := application.StartShare(context.Background(), engine.ShareRequest{Diagnostics: stream.Sink(),
-		Source: shareFileSource([]string{sharedPath}), Relays: []engine.ShareRelayCandidate{{PublicURL: "https://relay.example"}}, ChunkSize: catalog.MinChunkSize,
+		Source: filesystem.ShareSource([]string{sharedPath}), Relays: []engine.ShareRelayCandidate{{PublicURL: "https://relay.example"}}, ChunkSize: catalog.MinChunkSize,
 	})
 	if err != nil {
 		t.Fatal(err)

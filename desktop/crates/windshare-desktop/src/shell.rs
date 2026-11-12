@@ -2,7 +2,7 @@ use crate::localization::{Text, language};
 use crate::{
     artwork::Artwork,
     desktop::Desktop,
-    model::{Page, PreviewAction},
+    model::{Action, Page},
 };
 use gpui::{Div, Role, Window, div, point, prelude::*, px};
 use windshare_ui::{
@@ -58,7 +58,7 @@ impl Desktop {
                                 .compact()
                                 .style(ButtonStyle::Ghost)
                                 .tooltip(locale.text(Text::CloseWindow))
-                                .on_press(|(), window, _| window.remove_window()),
+                                .on_press(cx.listener(|this, (), _, cx| this.quit(cx))),
                         ),
                 )
             })
@@ -110,7 +110,7 @@ impl Desktop {
             .focus_visible(|style| style.bg(theme.navigation_hover()))
             .on_click(cx.listener(|this, _, window, cx| {
                 cx.stop_propagation();
-                this.dispatch(PreviewAction::Navigate(Page::SuperShare), window, cx);
+                this.dispatch(Action::Navigate(Page::SuperShare), window, cx);
             }));
         column()
             .flex_1()
@@ -151,7 +151,7 @@ impl Desktop {
                     },
                     Icon::Help,
                     ButtonStyle::Navigation,
-                    PreviewAction::Help,
+                    Action::Help,
                     cx,
                 )
                 .full_width()
@@ -174,12 +174,13 @@ impl Desktop {
             } else {
                 ButtonStyle::Navigation
             },
-            PreviewAction::Navigate(page),
+            Action::Navigate(page),
             cx,
         )
         .full_width()
         .align_start()
         .large()
+        .disabled(!self.page_available(page))
     }
 
     pub fn page_heading(&self, theme: Theme, compact: bool, cx: &Context<Self>) -> Div {
@@ -207,7 +208,7 @@ impl Desktop {
                         locale.text(Text::NewShare),
                         Icon::Plus,
                         ButtonStyle::Primary,
-                        PreviewAction::NewShare,
+                        Action::NewShare,
                         cx,
                     )
                     .tooltip(locale.text(Text::NewShareShortcut)),
@@ -215,17 +216,21 @@ impl Desktop {
             })
     }
 
-    pub fn statusbar(theme: Theme, cx: &Context<Self>) -> Div {
+    pub fn statusbar(&self, theme: Theme, cx: &Context<Self>) -> Div {
         let locale = language(cx);
         row()
             .h(px(STATUSBAR_HEIGHT))
             .flex_shrink_0()
             .px(px(28.))
             .gap(px(8.))
-            .child(theme.dot(Tone::Peach))
+            .child(theme.dot(if self.runtime.is_preview() {
+                Tone::Peach
+            } else {
+                Tone::Mint
+            }))
             .child(
                 theme
-                    .label(locale.text(Text::PreviewStatus), 12.)
+                    .label(locale.text(self.runtime.status()), 12.)
                     .text_color(theme.muted_text()),
             )
     }

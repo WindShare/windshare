@@ -78,9 +78,17 @@ rust:
 	@echo "== rust: PASS =="
 
 # Native UI dependencies have their own workspace and CI cache.
-.PHONY: desktop
+.PHONY: desktop desktop-preview desktop-package
+
+desktop-package:
+	$(RUST_CARGO) build --manifest-path desktop/Cargo.toml --release --locked --jobs $(RUST_BUILD_JOBS)
+	node desktop/package.mjs release
+
 desktop:
 	$(RUST_CARGO) run --manifest-path desktop/Cargo.toml --locked
+
+desktop-preview:
+	$(RUST_CARGO) run --manifest-path desktop/Cargo.toml --locked -- --preview
 
 desktop-check: private export MAKEFLAGS :=
 desktop-check: private export MFLAGS :=

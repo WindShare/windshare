@@ -1,7 +1,7 @@
 use crate::localization::{Language, Text, language};
 use crate::{
     desktop::Desktop,
-    model::{Page, PreviewAction},
+    model::{Action, Page},
 };
 use gpui::{Div, KeyDownEvent, prelude::*, px};
 use windshare_ui::{Button, ButtonStyle, Icon, Theme, Tone, column, row};
@@ -35,70 +35,78 @@ impl Desktop {
                     .p(px(28.))
                     .gap(px(10.))
                     .child(theme.heading(locale.text(Text::InterfaceExperience), 22.))
-                    .children(settings.into_iter().enumerate().map(
-                        |(index, (title, detail, symbol))| {
-                            row()
-                                .gap(px(18.))
-                                .py(px(24.))
-                                .when(index > 0, |el| el.border_t_1().border_color(theme.border()))
-                                .child(theme.icon_tile(symbol, Tone::Neutral, 44.))
-                                .child(
-                                    column()
-                                        .flex_1()
-                                        .gap(px(7.))
-                                        .child(theme.heading(title, 17.))
-                                        .child(theme.caption(detail)),
-                                )
-                                .child(
-                                    theme
-                                        .toggle(("setting", index), self.settings[index])
-                                        .aria_label(title)
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.dispatch(
-                                                PreviewAction::ToggleSetting(index),
-                                                window,
-                                                cx,
-                                            );
-                                        }))
-                                        .on_key_down(cx.listener(
-                                            move |this, event: &KeyDownEvent, window, cx| {
-                                                if matches!(
-                                                    event.keystroke.key.as_str(),
-                                                    "enter" | "space"
-                                                ) {
-                                                    cx.stop_propagation();
-                                                    this.dispatch(
-                                                        PreviewAction::ToggleSetting(index),
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }
-                                            },
-                                        )),
-                                )
-                        },
-                    )),
+                    .children(
+                        settings
+                            .into_iter()
+                            .enumerate()
+                            .filter(|(index, _)| self.runtime.is_preview() || *index != 1)
+                            .map(|(index, (title, detail, symbol))| {
+                                row()
+                                    .gap(px(18.))
+                                    .py(px(24.))
+                                    .when(index > 0, |el| {
+                                        el.border_t_1().border_color(theme.border())
+                                    })
+                                    .child(theme.icon_tile(symbol, Tone::Neutral, 44.))
+                                    .child(
+                                        column()
+                                            .flex_1()
+                                            .gap(px(7.))
+                                            .child(theme.heading(title, 17.))
+                                            .child(theme.caption(detail)),
+                                    )
+                                    .child(
+                                        theme
+                                            .toggle(("setting", index), self.settings[index])
+                                            .aria_label(title)
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                this.dispatch(
+                                                    Action::ToggleSetting(index),
+                                                    window,
+                                                    cx,
+                                                );
+                                            }))
+                                            .on_key_down(cx.listener(
+                                                move |this, event: &KeyDownEvent, window, cx| {
+                                                    if matches!(
+                                                        event.keystroke.key.as_str(),
+                                                        "enter" | "space"
+                                                    ) {
+                                                        cx.stop_propagation();
+                                                        this.dispatch(
+                                                            Action::ToggleSetting(index),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    }
+                                                },
+                                            )),
+                                    )
+                            }),
+                    ),
             )
-            .child(
-                row()
-                    .justify_between()
-                    .gap(px(16.))
-                    .p(px(24.))
-                    .child(
-                        column()
-                            .gap(px(7.))
-                            .child(theme.heading(locale.text(Text::DesignComponents), 18.))
-                            .child(theme.caption(locale.text(Text::DesignComponentsDetail))),
-                    )
-                    .child(Self::button(
-                        "view-components",
-                        locale.text(Text::ViewComponents),
-                        Icon::Grid,
-                        ButtonStyle::Secondary,
-                        PreviewAction::Navigate(Page::Components),
-                        cx,
-                    )),
-            )
+            .when(self.runtime.is_preview(), |el| {
+                el.child(
+                    row()
+                        .justify_between()
+                        .gap(px(16.))
+                        .p(px(24.))
+                        .child(
+                            column()
+                                .gap(px(7.))
+                                .child(theme.heading(locale.text(Text::DesignComponents), 18.))
+                                .child(theme.caption(locale.text(Text::DesignComponentsDetail))),
+                        )
+                        .child(Self::button(
+                            "view-components",
+                            locale.text(Text::ViewComponents),
+                            Icon::Grid,
+                            ButtonStyle::Secondary,
+                            Action::Navigate(Page::Components),
+                            cx,
+                        )),
+                )
+            })
     }
 
     pub fn components_page(theme: Theme, cx: &Context<Self>) -> Div {
@@ -179,7 +187,7 @@ impl Desktop {
                         locale.text(Text::CopyLink),
                         Icon::Copy,
                         ButtonStyle::Primary,
-                        PreviewAction::Toast(Text::LinkCopied),
+                        Action::Toast(Text::LinkCopied),
                         cx,
                     ))
                     .child(Self::button(
@@ -187,7 +195,7 @@ impl Desktop {
                         locale.text(Text::ReceiveTitle),
                         Icon::Download,
                         ButtonStyle::Secondary,
-                        PreviewAction::Receive,
+                        Action::Receive,
                         cx,
                     ))
                     .child(Self::button(
@@ -195,7 +203,7 @@ impl Desktop {
                         locale.text(Text::NotificationSample),
                         Icon::Bell,
                         ButtonStyle::Tinted(Tone::Lavender),
-                        PreviewAction::Toast(Text::NotificationSampleMessage),
+                        Action::Toast(Text::NotificationSampleMessage),
                         cx,
                     ))
                     .child(

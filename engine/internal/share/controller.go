@@ -4,15 +4,21 @@ import (
 	"context"
 	"slices"
 	"sync"
+
+	"github.com/windshare/windshare/connectivity/relayset"
 )
 
 // Controller retains the first service-ready result independently of diagnostic
 // delivery and caller presentation. Closing readyDone publishes immutable state.
 type Controller struct {
-	ready     Ready
-	readyErr  error
-	readyDone chan struct{}
-	readyOnce sync.Once
+	mu                sync.Mutex
+	availability      func() relayset.SenderAvailability
+	finalAvailability relayset.SenderAvailability
+	hasAvailability   bool
+	ready             Ready
+	readyErr          error
+	readyDone         chan struct{}
+	readyOnce         sync.Once
 }
 
 func NewController() *Controller {
@@ -45,6 +51,12 @@ func (c *Controller) publish(ready Ready) {
 }
 
 func (c *Controller) finish(err error) {
+	c.mu.Lock()
+	if c.availability != nil {
+		c.finalAvailability = c.availability()
+		c.availability = nil
+	}
+	c.mu.Unlock()
 	c.readyOnce.Do(func() {
 		c.readyErr = err
 		close(c.readyDone)

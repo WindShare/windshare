@@ -1,7 +1,7 @@
 use crate::localization::{Text, language};
 use crate::{
     desktop::Desktop,
-    model::{Filter, PreviewAction, Share, ShareState},
+    model::{Action, Filter, Share},
 };
 use gpui::{Div, Stateful, div, prelude::*, px};
 use windshare_ui::{ButtonStyle, Icon, Theme, Tone, column, row};
@@ -10,11 +10,7 @@ impl Desktop {
     pub fn share_card(theme: Theme, share: &Share, cx: &Context<Self>) -> Stateful<Div> {
         let locale = language(cx);
         let id = share.id;
-        let status = match share.state {
-            ShareState::Live { viewers } if viewers > 0 => locale.viewers(viewers),
-            ShareState::Live { .. } => locale.text(Text::WaitingReceiver).to_owned(),
-            ShareState::Paused => locale.text(Text::Paused).to_owned(),
-        };
+        let status = share.status_description(locale);
         theme
             .card()
             .id(("share-card", id))
@@ -25,7 +21,7 @@ impl Desktop {
             .cursor_pointer()
             .hover(|s| s.border_color(share.tone.accent(theme)))
             .on_click(cx.listener(move |this, _, window, cx| {
-                this.dispatch(PreviewAction::Detail(id), window, cx);
+                this.dispatch(Action::Detail(id), window, cx);
             }))
             .child(
                 row()
@@ -37,7 +33,7 @@ impl Desktop {
                             "",
                             Icon::More,
                             ButtonStyle::Ghost,
-                            PreviewAction::Detail(id),
+                            Action::Detail(id),
                             cx,
                         )
                         .compact()
@@ -48,11 +44,7 @@ impl Desktop {
                 column()
                     .gap(px(5.))
                     .child(theme.heading(share.name.clone(), 18.).truncate())
-                    .child(theme.caption(format!(
-                        "{}   ·   {}",
-                        share.contents.description(locale),
-                        share.size
-                    ))),
+                    .child(theme.caption(share.description(locale))),
             )
             .child(
                 row()
@@ -76,11 +68,12 @@ impl Desktop {
                             "",
                             Icon::Link,
                             ButtonStyle::Ghost,
-                            PreviewAction::CopyLink(id),
+                            Action::CopyLink(id),
                             cx,
                         )
                         .compact()
-                        .tooltip(locale.text(Text::CopyShareLink)),
+                        .tooltip(locale.text(Text::CopyShareLink))
+                        .disabled(share.usable_link().is_none()),
                     ),
             )
     }
@@ -93,7 +86,7 @@ impl Desktop {
                     && match self.filter {
                         Filter::All => true,
                         Filter::Live => share.live(),
-                        Filter::Paused => !share.live(),
+                        Filter::Finished => share.finished(),
                     }
             })
             .collect()
@@ -110,42 +103,7 @@ impl Desktop {
                     .justify_between()
                     .flex_wrap()
                     .gap_4()
-                    .child(
-                        row()
-                            .gap(px(4.))
-                            .p(px(4.))
-                            .rounded(px(11.))
-                            .bg(theme.inset())
-                            .children(
-                                [
-                                    (Filter::All, locale.text(Text::All)),
-                                    (Filter::Live, locale.text(Text::Sharing)),
-                                    (Filter::Paused, locale.text(Text::Paused)),
-                                ]
-                                .into_iter()
-                                .map(|(filter, title)| {
-                                    Self::button(
-                                        ("filter", filter as usize),
-                                        title,
-                                        if filter == Filter::All {
-                                            Icon::Grid
-                                        } else if filter == Filter::Live {
-                                            Icon::Link
-                                        } else {
-                                            Icon::Pause
-                                        },
-                                        if filter == self.filter {
-                                            ButtonStyle::Secondary
-                                        } else {
-                                            ButtonStyle::Ghost
-                                        },
-                                        PreviewAction::Filter(filter),
-                                        cx,
-                                    )
-                                    .compact()
-                                }),
-                            ),
-                    )
+                    .child(self.share_filters(theme, cx))
                     .child(
                         row()
                             .gap_2()
@@ -160,7 +118,7 @@ impl Desktop {
                                     "",
                                     if self.grid { Icon::List } else { Icon::Grid },
                                     ButtonStyle::Secondary,
-                                    PreviewAction::ToggleGrid,
+                                    Action::ToggleGrid,
                                     cx,
                                 )
                                 .tooltip(locale.text(Text::ChangeLayout)),
@@ -196,6 +154,50 @@ impl Desktop {
                 )
             })
     }
+    fn share_filters(&self, theme: Theme, cx: &Context<Self>) -> Div {
+        let locale = language(cx);
+        row()
+            .gap(px(4.))
+            .p(px(4.))
+            .rounded(px(11.))
+            .bg(theme.inset())
+            .children(
+                [
+                    (Filter::All, locale.text(Text::All)),
+                    (Filter::Live, locale.text(Text::Sharing)),
+                    (
+                        Filter::Finished,
+                        locale.text(if self.runtime.is_preview() {
+                            Text::Paused
+                        } else {
+                            Text::FinishedShares
+                        }),
+                    ),
+                ]
+                .into_iter()
+                .map(|(filter, title)| {
+                    Self::button(
+                        ("filter", filter as usize),
+                        title,
+                        if filter == Filter::All {
+                            Icon::Grid
+                        } else if filter == Filter::Live {
+                            Icon::Link
+                        } else {
+                            Icon::Close
+                        },
+                        if filter == self.filter {
+                            ButtonStyle::Secondary
+                        } else {
+                            ButtonStyle::Ghost
+                        },
+                        Action::Filter(filter),
+                        cx,
+                    )
+                    .compact()
+                }),
+            )
+    }
     fn share_list_row(theme: Theme, share: &Share, cx: &Context<Self>) -> Div {
         let locale = language(cx);
         row()
@@ -209,34 +211,20 @@ impl Desktop {
                     .flex_1()
                     .gap(px(5.))
                     .child(theme.heading(share.name.clone(), 17.))
-                    .child(theme.caption(format!(
-                        "{} · {}",
-                        share.contents.description(locale),
-                        share.size
-                    ))),
+                    .child(theme.caption(share.description(locale))),
             )
-            .child(theme.badge(
-                if share.live() {
-                    locale.text(Text::Sharing)
-                } else {
-                    locale.text(Text::Paused)
-                },
-                if share.live() {
-                    Tone::Mint
-                } else {
-                    Tone::Neutral
-                },
-            ))
+            .child(theme.badge(locale.text(share.status().0), share.status().1))
             .child(
                 Self::button(
                     ("list-link", share.id),
                     locale.text(Text::CopyLink),
                     Icon::Link,
                     ButtonStyle::Secondary,
-                    PreviewAction::CopyLink(share.id),
+                    Action::CopyLink(share.id),
                     cx,
                 )
-                .compact(),
+                .compact()
+                .disabled(share.usable_link().is_none()),
             )
             .child(
                 Self::button(
@@ -244,7 +232,7 @@ impl Desktop {
                     "",
                     Icon::Chevron,
                     ButtonStyle::Ghost,
-                    PreviewAction::Detail(share.id),
+                    Action::Detail(share.id),
                     cx,
                 )
                 .compact()
@@ -271,7 +259,7 @@ impl Desktop {
                 locale.text(Text::NewShare),
                 Icon::Plus,
                 ButtonStyle::Primary,
-                PreviewAction::NewShare,
+                Action::NewShare,
                 cx,
             ))
     }

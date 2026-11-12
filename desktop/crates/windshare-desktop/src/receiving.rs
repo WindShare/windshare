@@ -3,7 +3,7 @@ use crate::{
     desktop::Desktop,
     flow_state::{LinkFeedback, RECEIVE_SAVE_MS, RECEIVED_FILES, ReceiveFlow, SampleBundle},
     layout::{FlowLayout, RECEIVE_STAGE_HEIGHT},
-    model::PreviewAction,
+    model::Action,
     motion::{SpiritMood, reassurance, reveal, scaled_spirit},
     share_timing::lerp,
 };
@@ -119,7 +119,7 @@ impl Desktop {
                                     locale.text(Text::Paste),
                                     Icon::Copy,
                                     ButtonStyle::Secondary,
-                                    PreviewAction::PasteLink,
+                                    Action::PasteLink,
                                     cx,
                                 )
                                 .large(),
@@ -132,7 +132,7 @@ impl Desktop {
                             locale.text(Text::OpenShare),
                             Icon::Arrow,
                             ButtonStyle::Tinted(Tone::Lavender),
-                            PreviewAction::OpenPreview,
+                            Action::OpenPreview,
                             cx,
                         )
                         .large()
@@ -151,7 +151,7 @@ impl Desktop {
                             locale.text(Text::TrySample),
                             Icon::Spark,
                             ButtonStyle::Ghost,
-                            PreviewAction::DemoLink,
+                            Action::DemoLink,
                             cx,
                         )
                         .compact(),
@@ -183,7 +183,7 @@ impl Desktop {
                     locale.text(Text::Cancel),
                     Icon::Close,
                     ButtonStyle::Ghost,
-                    PreviewAction::ResetReceive,
+                    Action::ResetReceive,
                     cx,
                 )
                 .compact()
@@ -251,7 +251,7 @@ impl Desktop {
                     locale.receive_files(RECEIVED_FILES.len()),
                     Icon::Download,
                     ButtonStyle::Primary,
-                    PreviewAction::SavePreview,
+                    Action::SavePreview,
                     cx,
                 )
                 .large()
@@ -264,7 +264,7 @@ impl Desktop {
                         locale.text(Text::AnotherLink),
                         Icon::Link,
                         ButtonStyle::Ghost,
-                        PreviewAction::ResetReceive,
+                        Action::ResetReceive,
                         cx,
                     )
                     .compact(),
@@ -345,7 +345,7 @@ impl Desktop {
                     locale.text(Text::CancelReceive),
                     Icon::Close,
                     ButtonStyle::Ghost,
-                    PreviewAction::ResetReceive,
+                    Action::ResetReceive,
                     cx,
                 )
                 .compact()
@@ -393,7 +393,7 @@ impl Desktop {
                     locale.text(Text::ReceiveAnother),
                     Icon::Link,
                     ButtonStyle::Primary,
-                    PreviewAction::ResetReceive,
+                    Action::ResetReceive,
                     cx,
                 )
                 .large()

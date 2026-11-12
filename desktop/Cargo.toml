@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/windshare-ui", "crates/windshare-desktop"]
+members = ["crates/windshare-ui", "crates/windshare-desktop", "crates/windshare-host"]
 default-members = ["crates/windshare-desktop"]
 resolver = "2"
 

@@ -16,6 +16,8 @@ motion-profile = ["gpui/profiler"]
 workspace = true
 
 [dependencies]
+windshare-host = { path = "../windshare-host" }
+tracing-appender = "0.2.5"
 dirs.workspace = true
 sys-locale.workspace = true
 tempfile.workspace = true

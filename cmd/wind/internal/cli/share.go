@@ -5,14 +5,13 @@ import (
 	"errors"
 	"slices"
 
+	"github.com/windshare/windshare/adapters/filesystem"
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
 	"github.com/windshare/windshare/cmd/wind/internal/networkcommand"
 	"github.com/windshare/windshare/cmd/wind/internal/observationbridge"
-	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/engine"
 	appobs "github.com/windshare/windshare/engine/observation"
-	"github.com/windshare/windshare/osfs"
 )
 
 func (a *App) runShare(ctx context.Context, args []string) int {
@@ -89,19 +88,9 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 
 func (a *App) engineShareRequest(request shareRequest, runtime *commandRuntime) engine.ShareRequest {
 	return engine.ShareRequest{
-		Source: shareFileSource(request.paths), Relays: slices.Clone(request.relays), ChunkSize: request.chunkSize,
+		Source: filesystem.ShareSource(request.paths), Relays: slices.Clone(request.relays), ChunkSize: request.chunkSize,
 		Diagnostics: runtime.diagnosticSink(),
 	}
-}
-
-func shareFileSource(paths []string) liveshare.FileSourceFactory {
-	selected := append([]string(nil), paths...)
-	return liveshare.FileSourceFactoryFunc(func(ctx context.Context, source liveshare.FileSourceContext) (liveshare.FileSource, error) {
-		return osfs.NewSelectedFileSource(ctx, osfs.SelectedCatalogSourceConfig{
-			Paths: selected, SyntheticRoot: source.SyntheticRoot, Identities: osfs.CatalogIdentitySourceFunc(source.NewIdentity),
-			Diagnostics: source.Diagnostics, Omissions: source.Omissions,
-		})
-	})
 }
 
 func (a *App) publishEngineShare(ready engine.ShareReady, presentation shareLinkPresentation, runtime *commandRuntime, observations *shareObservations) error {

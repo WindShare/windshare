@@ -120,6 +120,11 @@ func (s *activeShare) start(ctx, resourceContext context.Context, request Reques
 	if s.relays == nil {
 		return task.FailureLocal, ErrConfiguration
 	}
+	if source, ok := s.relays.(interface {
+		Availability() relayset.SenderAvailability
+	}); ok {
+		d.Controller.bindAvailability(source.Availability)
+	}
 	if observed, ok := s.relays.(interface {
 		ObserveAvailability(func(relayset.SenderAvailability))
 	}); ok {
