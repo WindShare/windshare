@@ -242,7 +242,7 @@ impl SpiritView {
         window: &Window,
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        let theme = Theme::from(window.appearance());
+        let theme = Theme::current(window, cx);
         let width = self.presentation.width;
         let observer = cx.weak_entity();
         div()

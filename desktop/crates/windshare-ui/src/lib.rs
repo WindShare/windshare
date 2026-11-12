@@ -1,3 +1,6 @@
+mod appearance;
+pub use appearance::{ThemePreference, observe_theme};
+
 mod artwork;
 mod assets;
 mod button;
@@ -26,6 +29,7 @@ pub use window_controls::{toggle_window_maximize, window_drag_area};
 /// Panics if the platform text system cannot register the bundled font.
 pub fn init(cx: &mut gpui::App) {
     use std::borrow::Cow;
+    cx.set_global(ThemePreference::default());
     cx.text_system()
         .add_fonts(vec![Cow::Borrowed(include_bytes!(
             "../assets/fonts/Manrope.ttf"

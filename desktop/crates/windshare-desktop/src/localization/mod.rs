@@ -4,7 +4,7 @@ mod preferences;
 mod view;
 
 pub use catalog::Text;
-pub use preferences::{LanguageChoice, LanguageSettings, Persistence};
+pub use preferences::{LanguageChoice, LanguageSettings};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Language {

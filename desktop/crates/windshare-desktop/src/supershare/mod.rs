@@ -294,7 +294,7 @@ impl SuperShare {
 
 impl Render for SuperShare {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = windshare_ui::Theme::from(window.appearance());
+        let theme = windshare_ui::Theme::current(window, cx);
         let stage = layout::Stage::for_window(window);
         let content = match self.state.page {
             Page::Offer(plan) => self.offer_page(theme, stage, plan, window, cx),

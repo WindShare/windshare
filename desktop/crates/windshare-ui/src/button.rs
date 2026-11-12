@@ -208,8 +208,8 @@ impl Button {
 }
 
 impl RenderOnce for Button {
-    fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
-        let theme = Theme::from(window.appearance());
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::current(window, cx);
         let colors = self.style.colors(theme);
         let handler = self.handler;
         let empty = self.label.is_empty();
@@ -296,8 +296,8 @@ impl RenderOnce for Button {
 
 struct Tooltip(SharedString);
 impl Render for Tooltip {
-    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::from(window.appearance());
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::current(window, cx);
         div()
             .px_3()
             .py_2()

@@ -57,7 +57,7 @@ impl Desktop {
             cx.new(|cx| Input::new(locale.text(Text::ShareLink), cx).accent(Tone::Lavender));
         let super_share = cx.new(|cx| crate::supershare::SuperShare::new(window, cx));
         let setup_form = crate::live::SetupForm::new(cx);
-        let subscriptions = vec![
+        let mut subscriptions = vec![
             cx.observe(&super_share, |_, _, cx| cx.notify()),
             cx.subscribe_in(&super_share, window, |this, _, _, window, cx| {
                 this.navigate(Page::Share, window, cx);
@@ -79,7 +79,6 @@ impl Desktop {
                 this.setup_form.localize(cx);
                 cx.notify();
             }),
-            windshare_ui::follow_system_theme(window),
             cx.subscribe(&search, |_, _, _, cx| cx.notify()),
             cx.subscribe_in(&link_input, window, |this, _, event, window, cx| {
                 if matches!(event, InputEvent::Submit) {
@@ -92,6 +91,7 @@ impl Desktop {
                 }
             }),
         ];
+        subscriptions.extend(windshare_ui::observe_theme(window, cx));
         let focus = cx.focus_handle();
         let primary_focus = cx.focus_handle();
         window.focus(&primary_focus, cx);
@@ -246,7 +246,7 @@ impl Desktop {
         window: &Window,
         cx: &Context<Self>,
     ) -> gpui::Div {
-        let theme = Theme::from(window.appearance());
+        let theme = Theme::current(window, cx);
         let compact = window.viewport_size().width < px(COMPACT_WIDTH);
         match self.page {
             Page::Share => column().child(self.sharing_page(layout, window, cx)),
@@ -260,7 +260,7 @@ impl Desktop {
     }
 
     fn main_pane(&mut self, window: &Window, cx: &Context<Self>) -> gpui::Div {
-        let theme = Theme::from(window.appearance());
+        let theme = Theme::current(window, cx);
         // A showcase owns its layout; workspace gutters must not crop its visual canvas.
         let body = if self.page == Page::SuperShare {
             column().flex_1().min_h_0().child(self.super_share.clone())
@@ -276,7 +276,7 @@ impl Desktop {
     }
 
     fn workspace_page(&mut self, window: &Window, cx: &Context<Self>) -> gpui::Div {
-        let theme = Theme::from(window.appearance());
+        let theme = Theme::current(window, cx);
         let compact = window.viewport_size().width < px(COMPACT_WIDTH);
         let layout = FlowLayout::for_window(window);
         let content = self.page_content(layout, window, cx);
@@ -331,7 +331,7 @@ impl Desktop {
 impl Render for Desktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let locale = language(cx);
-        let theme = Theme::from(window.appearance());
+        let theme = Theme::current(window, cx);
         let compact = window.viewport_size().width < px(COMPACT_WIDTH);
         let pane = self.main_pane(window, cx);
         column()

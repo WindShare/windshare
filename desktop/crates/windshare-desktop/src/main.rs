@@ -13,6 +13,7 @@ mod motion;
 mod motion_probe;
 mod overlays;
 mod pages;
+mod preferences;
 #[cfg(feature = "motion-profile")]
 mod profiling;
 mod receiving;
@@ -90,7 +91,7 @@ fn main() -> std::process::ExitCode {
         .with_assets(DesktopAssets)
         .run(move |cx| {
             windshare_ui::init(cx);
-            cx.set_global(localization::LanguageSettings::load());
+            preferences::init(cx);
             artwork::Artwork::preload();
             let dimensions = if compact {
                 size(px(960.), px(760.))

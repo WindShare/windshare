@@ -100,6 +100,7 @@ impl Desktop {
                     });
                 }
             }
+            Action::SetAppearance(choice) => crate::preferences::select_appearance(choice, cx),
             Action::SetLanguage(choice) => {
                 cx.update_global::<LanguageSettings, _>(|settings, _| settings.select(choice));
             }
