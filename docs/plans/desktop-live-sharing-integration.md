@@ -1,5 +1,9 @@
 # Desktop live sharing: refine t8 and merge into main
 
+Implemented on 2026-11-12. Native first-use setup, desktop-to-browser download integrity,
+control replay/reconnection, permanent stop and joined shutdown were verified on Windows.
+Runtime and build instructions live in [desktop/README.md](../../desktop/README.md).
+
 Optimize `t8n3q6w9z2` (`d9353799`) and merge it into `main`. The comparison used `main` at `99e0f146` and `k9v4m7x2q8` at `8ac31a71`.
 
 ## Rationale
