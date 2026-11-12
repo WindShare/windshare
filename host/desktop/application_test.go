@@ -61,8 +61,7 @@ func (f *fakeShare) finish() {
 	if f.reason == engine.ShareStopped {
 		outcome = engine.OutcomeStopped
 	}
-	f.state.Result = &engine.TaskResult[engine.ShareResult]{StopReason: f.reason,
-		Completion: engine.TaskCompletion[engine.ShareResult]{Settlement: engine.TaskSettlement{Outcome: outcome}}}
+	f.state.Result = &engine.TaskResult[engine.ShareResult]{StopReason: f.reason, Outcome: outcome}
 	close(f.events)
 	f.signal()
 }
