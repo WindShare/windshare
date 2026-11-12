@@ -2,11 +2,11 @@ use super::link_views::{LINK_COLUMN_GAP, LINK_PANEL_WIDTH, link_columns_fit};
 use crate::{
     desktop::Desktop,
     localization::{Language, Text, language},
-    model::{PreviewAction, Share},
+    model::{Action, Share},
     overlays::{OVERLAY_MARGIN, OVERLAY_PADDING},
 };
 use gpui::{Div, Window, div, prelude::*, px};
-use windshare_ui::{ButtonStyle, Icon, Theme, Tone, column, icon, row};
+use windshare_ui::{ButtonStyle, Icon, Theme, column, icon, row};
 
 const QR_LARGE_MIN_SIDE: f32 = 352.;
 const QR_LARGE_MODULE_SIDE: f32 = 6.;
@@ -17,10 +17,14 @@ pub fn detail_width(window: &Window) -> f32 {
 }
 
 pub fn enlarged_qr_side(share: &Share, window: &Window) -> f32 {
-    let desired = share.link.qr().map_or(QR_LARGE_MIN_SIDE, |code| {
-        code.side_for_modules(QR_LARGE_MODULE_SIDE)
-            .max(QR_LARGE_MIN_SIDE)
-    });
+    let desired =
+        share
+            .usable_link()
+            .and_then(|link| link.qr().ok())
+            .map_or(QR_LARGE_MIN_SIDE, |code| {
+                code.side_for_modules(QR_LARGE_MODULE_SIDE)
+                    .max(QR_LARGE_MIN_SIDE)
+            });
     desired
         .min(
             (OVERLAY_MARGIN + OVERLAY_PADDING)
@@ -52,24 +56,26 @@ impl Desktop {
                     .flex_wrap()
                     .gap(px(8.))
                     .child(theme.caption(locale.created(&share.age.description(locale))))
-                    .child(theme.badge(
-                        locale.text(if share.live() {
-                            Text::SharingActive
-                        } else {
-                            Text::Paused
-                        }),
-                        if share.live() {
-                            Tone::Mint
-                        } else {
-                            Tone::Neutral
-                        },
-                    )),
+                    .child(theme.badge(locale.text(share.status().0), share.status().1)),
             )
+            .when(share.error.is_some() || share.relay_reconnecting, |el| {
+                el.child(Self::share_notice(theme, share, cx))
+            })
             .child(
                 column()
                     .gap(px(8.))
                     .child(self.share_copy_button(id, cx))
-                    .child(self.share_link_disclosure(theme, share, true, cx)),
+                    .child(self.share_link_disclosure(theme, share, true, cx))
+                    .when(share.usable_link().is_some(), |el| {
+                        el.child(Self::button(
+                            "detail-open",
+                            locale.text(Text::OpenInBrowser),
+                            Icon::External,
+                            ButtonStyle::Quiet,
+                            Action::OpenLink(id),
+                            cx,
+                        ))
+                    }),
             );
         column()
             .gap(px(24.))
@@ -101,27 +107,21 @@ impl Desktop {
                     .child(
                         row()
                             .gap(px(7.))
+                            .opacity(if share.finished() { 0. } else { 1. })
                             .child(icon(Icon::Monitor, 16.).text_color(theme.muted_text()))
                             .child(theme.caption(locale.text(Text::KeepOpenToReceive))),
                     )
                     .child(
                         Self::button(
                             "detail-toggle",
-                            locale.text(if share.live() {
-                                Text::PauseShare
-                            } else {
-                                Text::ResumeShare
-                            }),
-                            if share.live() {
-                                Icon::Pause
-                            } else {
-                                Icon::Play
-                            },
+                            locale.text(share.control().0),
+                            share.control().1,
                             ButtonStyle::Quiet,
-                            PreviewAction::ToggleShare(id),
+                            share.control().2,
                             cx,
                         )
-                        .compact(),
+                        .compact()
+                        .disabled(matches!(share.state, crate::model::ShareState::Stopping)),
                     ),
             )
     }
@@ -147,10 +147,15 @@ impl Desktop {
                     .line_clamp(2)
                     .text_center(),
             )
-            .child(share.link.qr().map_or_else(
-                |_| column().child(theme.caption(locale.text(Text::QrUnavailable))),
-                |code| column().child(code.view(enlarged_qr_side(share, window))),
-            ))
+            .child(
+                share
+                    .usable_link()
+                    .and_then(|link| link.qr().ok())
+                    .map_or_else(
+                        || column().child(theme.caption(locale.text(Text::QrUnavailable))),
+                        |code| column().child(code.view(enlarged_qr_side(share, window))),
+                    ),
+            )
             .child(
                 row()
                     .gap(px(7.))
@@ -170,10 +175,6 @@ fn share_summary(theme: Theme, share: &Share, locale: Language) -> Div {
                 .min_w_0()
                 .gap(px(7.))
                 .child(theme.heading(share.name.clone(), 22.).line_clamp(2))
-                .child(theme.caption(format!(
-                    "{} \u{b7} {}",
-                    share.contents.description(locale),
-                    share.size
-                ))),
+                .child(theme.caption(share.description(locale))),
         )
 }

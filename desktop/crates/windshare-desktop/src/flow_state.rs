@@ -60,7 +60,7 @@ pub enum ShareFlow {
 #[derive(Clone, Copy, Debug)]
 pub struct ShareRun {
     pub operation: usize,
-    pub bundle: SampleBundle,
+    pub selection_id: usize,
     pub started_at: Instant,
     pub readiness: ShareReadiness,
 }
@@ -68,26 +68,28 @@ pub struct ShareRun {
 #[derive(Clone, Copy, Debug)]
 pub enum ShareReadiness {
     Pending,
-    Ready { share_id: usize, at: Instant },
+    Ready { at: Instant },
+    Finished,
 }
 
 impl ShareRun {
     pub fn sample(self, now: Instant, still: bool) -> ShareFrame {
         let ready_at = match self.readiness {
             ShareReadiness::Pending => None,
-            ShareReadiness::Ready { at, .. } => Some(at.saturating_duration_since(self.started_at)),
+            ShareReadiness::Ready { at } => Some(at.saturating_duration_since(self.started_at)),
+            ShareReadiness::Finished => Some(std::time::Duration::ZERO),
         };
         ShareFrame::sample(
             now.saturating_duration_since(self.started_at),
             ready_at,
-            still,
+            still || matches!(self.readiness, ShareReadiness::Finished),
         )
     }
 
     pub const fn share_id(self) -> Option<usize> {
         match self.readiness {
-            ShareReadiness::Pending => None,
-            ShareReadiness::Ready { share_id, .. } => Some(share_id),
+            ShareReadiness::Pending | ShareReadiness::Finished => None,
+            ShareReadiness::Ready { .. } => Some(self.selection_id),
         }
     }
 }

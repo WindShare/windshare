@@ -1,7 +1,7 @@
 use crate::localization::{Text, language};
 use crate::{
     desktop::Desktop,
-    model::{PreviewAction, Transfer, TransferState},
+    model::{Action, Transfer, TransferState},
 };
 use gpui::{Div, prelude::*, px};
 use windshare_ui::{ButtonStyle, FONT, Icon, Theme, Tone, column, row};
@@ -106,7 +106,7 @@ impl Desktop {
                         Icon::Pause
                     },
                     ButtonStyle::Ghost,
-                    PreviewAction::ToggleTransfer(index),
+                    Action::ToggleTransfer(index),
                     cx,
                 )
                 .disabled(complete)

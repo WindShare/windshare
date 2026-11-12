@@ -4,7 +4,7 @@
 
 Connect the everyday flow: select files or folders → obtain a usable link → let a browser receive them → stop sharing or quit the app.
 
-The desktop currently uses sample selections, links and timed completion. The [engine](../../engine/share.go) already owns real sharing: `StartShare` returns a task; `Ready` waits for the first relay registration and local session admission, without waiting for P2P, a receiver or descendant discovery. The missing boundary is desktop integration, not another transfer implementation.
+The default desktop reuses the original UI and animation with native selections and real engine tasks; sample flows require `--preview`. The [engine](../../engine/share.go) already owns real sharing: `StartShare` returns a task; `Ready` waits for the first relay registration and local session admission, without waiting for P2P, a receiver or descendant discovery. The missing boundary is desktop integration, not another transfer implementation.
 
 This improves the primary user journey. A thin C ABI and local WebSocket follow the stated product direction and keep transfer behavior shared across clients. They add native build and debugging cost, so scope the work to desktop sharing rather than a general RPC framework or future mobile infrastructure.
 
@@ -23,6 +23,12 @@ Observation queues are bounded, lossy and not broadcast. Add engine queries for 
 
 ### 1. Connect the host and a minimal desktop caller
 
+Implemented and verified on Windows (2026-11-11), initially through
+`windshare --live-share <path...>`. The relocated desktop package
+downloaded a 1 MiB file through the saved relay/frontend configuration in Edge;
+source and download SHA-256 matched. Explicit stop and quitting with an active
+share both reached joined engine shutdown. See [desktop build and run](../../desktop/README.md).
+
 - Extract `shareFileSource` from [CLI assembly](../../cmd/wind/internal/cli/share.go) into `adapters/filesystem`; use it from both CLI and host. Reuse `engine/relayconfig`, `core/link` and [observation encoding](../../engine/observation/wire/contract.go) without importing CLI presentation code.
 - Add the host outside the engine subtree, with narrow commands to create, list and query shares, observe updates, cancel preparation and stop sharing. Return task identity before waiting for readiness.
 - Bind tasks to the application, independently of request waits and subscriptions. Retain task handles/results and map creation operations to tasks within the application session, so lost replies can be recovered and retries cannot create duplicate shares. Cancellation targets that operation and stops its share even if readiness races with the request. Delegate shutdown to `Engine.Close`.
@@ -33,7 +39,14 @@ Use an already configured relay/frontend for this first increment. Missing confi
 
 ### 2. Complete the user-facing sharing flow
 
-- Replace `SampleBundle`, generated preview links and completion timers with native selection and real tasks. Accept mixed file/folder drops as one share alongside native pickers, without descendant counting or staging copies.
+The configured-installation flow is implemented: `make desktop` opens native file
+and folder selection, accepts mixed drops, exposes real links immediately, and
+retains tasks in My shares. Windows verification covered picker cancellation,
+Chinese paths with spaces, repeated shares across navigation, browser download
+with matching SHA-256, explicit stop, and joined quit with another active share.
+In-app relay setup and official account bootstrap below remain pending.
+
+- Preserve the original shell, animated selection/flight/landing, result card, and share grid/list. Use one presentation for native and preview sessions; replace `SampleBundle`, generated preview links and completion timers with native selection and real tasks. Accept mixed file/folder drops as one share alongside native pickers, without descendant counting or staging copies.
 - Present preparation, active sharing, stopping and terminal outcomes from real state. Represent temporary connectivity recovery separately. Replace the sample pause/resume action with stop sharing.
 - Make the returned link immediately available for copying; decorative animation must not delay interaction. Show selected-root information already available from the engine, leaving unknown directory totals absent.
 - Register tasks in the desktop model before readiness; preserve preparing and active shares across navigation, new-share actions and control reconnection. Keep all sample data, receive/transfer simulations and unsupported controls in development preview only. Complete desktop-to-browser downloads through existing receiver and transfer capabilities.

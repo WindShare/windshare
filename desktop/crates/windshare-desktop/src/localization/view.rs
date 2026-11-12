@@ -1,5 +1,5 @@
 use super::{LanguageChoice, LanguageSettings, Persistence, Text, language};
-use crate::{desktop::Desktop, model::PreviewAction};
+use crate::{desktop::Desktop, model::Action};
 use gpui::{Div, prelude::*, px};
 use windshare_ui::{ButtonStyle, Icon, Theme, Tone, column, row};
 
@@ -42,7 +42,7 @@ impl Desktop {
                             } else {
                                 ButtonStyle::Secondary
                             },
-                            PreviewAction::SetLanguage(choice),
+                            Action::SetLanguage(choice),
                             cx,
                         )
                     })),
@@ -66,7 +66,7 @@ impl Desktop {
                             locale.text(Text::RetrySave),
                             Icon::Settings,
                             ButtonStyle::Secondary,
-                            PreviewAction::SetLanguage(settings.choice),
+                            Action::SetLanguage(settings.choice),
                             cx,
                         )),
                 )

@@ -1,3 +1,6 @@
+mod share;
+pub use share::{Share, ShareSource, ShareState};
+
 use crate::localization::{Language, LanguageChoice, Text};
 use crate::sharing::ShareLink;
 use windshare_ui::{Icon, Tone};
@@ -40,29 +43,7 @@ impl Page {
 pub enum Filter {
     All,
     Live,
-    Paused,
-}
-#[derive(Clone, Debug)]
-pub enum ShareState {
-    Live { viewers: usize },
-    Paused,
-}
-#[derive(Clone)]
-pub struct Share {
-    pub id: usize,
-    pub name: String,
-    pub link: ShareLink,
-    pub contents: ShareContents,
-    pub size: &'static str,
-    pub age: ShareAge,
-    pub tone: Tone,
-    pub symbol: Icon,
-    pub state: ShareState,
-}
-impl Share {
-    pub const fn live(&self) -> bool {
-        matches!(self.state, ShareState::Live { .. })
-    }
+    Finished,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TransferState {
@@ -89,7 +70,7 @@ pub enum Overlay {
     Help,
 }
 #[derive(Clone, Copy, Debug)]
-pub enum PreviewAction {
+pub enum Action {
     Navigate(Page),
     Filter(Filter),
     NewShare,
@@ -107,6 +88,9 @@ pub enum PreviewAction {
     ToggleLink(usize),
     EnlargeQr(usize),
     ToggleShare(usize),
+    StopShare(usize),
+    ShareAgain(usize),
+    OpenLink(usize),
     ToggleTransfer(usize),
     ToggleGrid,
     Close,
@@ -119,32 +103,41 @@ pub fn demo_shares() -> Vec<Share> {
     vec![
         Share {
             id: 1,
-            link: ShareLink::preview(1),
+            source: ShareSource::Preview,
+            link: Some(ShareLink::preview(1)),
+            error: None,
+            relay_reconnecting: false,
             name: "品牌设计素材".into(),
             contents: ShareContents::Files(24),
-            size: "128 MB",
+            size: Some("128 MB".into()),
             age: ShareAge::JustNow,
             tone: Tone::Lavender,
             symbol: Icon::Folder,
-            state: ShareState::Live { viewers: 2 },
+            state: ShareState::Live { viewers: Some(2) },
         },
         Share {
             id: 2,
-            link: ShareLink::preview(2),
+            source: ShareSource::Preview,
+            link: Some(ShareLink::preview(2)),
+            error: None,
+            relay_reconnecting: false,
             name: "京都的周末".into(),
             contents: ShareContents::Photos(86),
-            size: "1.4 GB",
+            size: Some("1.4 GB".into()),
             age: ShareAge::MinutesAgo(12),
             tone: Tone::Peach,
             symbol: Icon::Image,
-            state: ShareState::Live { viewers: 1 },
+            state: ShareState::Live { viewers: Some(1) },
         },
         Share {
             id: 3,
-            link: ShareLink::preview(3),
+            source: ShareSource::Preview,
+            link: Some(ShareLink::preview(3)),
+            error: None,
+            relay_reconnecting: false,
             name: "周日的慢节奏".into(),
             contents: ShareContents::Tracks(12),
-            size: "84 MB",
+            size: Some("84 MB".into()),
             age: ShareAge::Yesterday,
             tone: Tone::Blue,
             symbol: Icon::Music,
@@ -192,6 +185,7 @@ pub fn demo_transfers() -> Vec<Transfer> {
 
 #[derive(Clone, Copy)]
 pub enum ShareContents {
+    Selected(usize),
     Files(usize),
     FoldersAndFiles { folders: usize, files: usize },
     Photos(usize),
@@ -200,6 +194,13 @@ pub enum ShareContents {
 impl ShareContents {
     pub fn description(self, language: Language) -> String {
         match self {
+            Self::Selected(count) => match language {
+                Language::English => format!(
+                    "{count} selected {}",
+                    if count == 1 { "item" } else { "items" }
+                ),
+                Language::SimplifiedChinese => format!("已选择 {count} 项"),
+            },
             Self::Files(count) => language.files(count),
             Self::FoldersAndFiles { folders, files } => language.folders_and_files(folders, files),
             Self::Photos(count) => language.photos(count),
@@ -209,6 +210,7 @@ impl ShareContents {
 }
 #[derive(Clone, Copy)]
 pub enum ShareAge {
+    CreatedAt(std::time::Instant),
     JustNow,
     MinutesAgo(u32),
     Yesterday,
@@ -216,6 +218,14 @@ pub enum ShareAge {
 impl ShareAge {
     pub fn description(self, language: Language) -> String {
         match self {
+            Self::CreatedAt(at) => {
+                let minutes = u32::try_from(at.elapsed().as_secs() / 60).unwrap_or(u32::MAX);
+                if minutes == 0 {
+                    language.text(Text::JustNow).into()
+                } else {
+                    language.minutes_ago(minutes)
+                }
+            }
             Self::JustNow => language.text(Text::JustNow).to_owned(),
             Self::MinutesAgo(minutes) => language.minutes_ago(minutes),
             Self::Yesterday => language.text(Text::Yesterday).to_owned(),

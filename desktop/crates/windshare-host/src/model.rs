@@ -1,0 +1,184 @@
+use serde::Deserialize;
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Snapshot {
+    pub session_id: String,
+    pub revision: u64,
+    pub shares: Vec<Share>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct Share {
+    pub operation_id: String,
+    #[serde(default)]
+    pub task_id: String,
+    pub state: ShareState,
+    pub startup: Startup,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub selected_count: u64,
+    pub result: Option<Completion>,
+    pub error: Option<Failure>,
+    pub relay: Option<RelayObservation>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct RelayObservation {
+    pub payload: RelayAvailability,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct RelayAvailability {
+    pub available: u32,
+    pub total: u32,
+    pub ever_ready: bool,
+    pub terminal: u32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShareState {
+    Preparing,
+    Sharing,
+    Stopping,
+    Finished,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Startup {
+    Pending,
+    Ready,
+    Failed,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct Completion {
+    pub outcome: String,
+    pub stop_reason: String,
+    #[serde(default)]
+    pub error: String,
+    #[serde(default)]
+    pub cleanup_error: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct Failure {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Connection {
+    Starting,
+    Connected,
+    Reconnecting(String),
+    Closing,
+    Closed(Result<(), String>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OperationState {
+    Submitting,
+    Accepted(Share),
+    Rejected(Failure),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Operation {
+    pub id: String,
+    pub paths: Vec<String>,
+    pub state: OperationState,
+}
+
+impl Operation {
+    pub const fn share(&self) -> Option<&Share> {
+        match &self.state {
+            OperationState::Accepted(share) => Some(share),
+            _ => None,
+        }
+    }
+
+    pub fn error(&self) -> Option<&str> {
+        match &self.state {
+            OperationState::Rejected(error) => Some(&error.message),
+            OperationState::Accepted(share) => share
+                .error
+                .as_ref()
+                .map(|error| error.message.as_str())
+                .or_else(|| {
+                    share.result.as_ref().and_then(|result| {
+                        [&result.error, &result.cleanup_error]
+                            .into_iter()
+                            .find(|error| !error.is_empty())
+                            .map(String::as_str)
+                    })
+                }),
+            OperationState::Submitting => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Model {
+    pub connection: Connection,
+    pub session_id: Option<String>,
+    pub revision: u64,
+    pub operations: Vec<Operation>,
+    pub command_error: Option<String>,
+}
+
+impl Default for Model {
+    fn default() -> Self {
+        Self {
+            connection: Connection::Starting,
+            session_id: None,
+            revision: 0,
+            operations: Vec::new(),
+            command_error: None,
+        }
+    }
+}
+
+impl Model {
+    pub fn reconcile(&mut self, snapshot: Snapshot) {
+        if self
+            .session_id
+            .as_ref()
+            .is_some_and(|session| session != &snapshot.session_id)
+            || snapshot.revision <= self.revision
+        {
+            return;
+        }
+        self.session_id = Some(snapshot.session_id);
+        self.revision = snapshot.revision;
+        for share in snapshot.shares {
+            if let Some(operation) = self
+                .operations
+                .iter_mut()
+                .find(|op| op.id == share.operation_id)
+            {
+                operation.state = OperationState::Accepted(share);
+            } else {
+                self.operations.push(Operation {
+                    id: share.operation_id.clone(),
+                    paths: Vec::new(),
+                    state: OperationState::Accepted(share),
+                });
+            }
+        }
+        // A snapshot may predate admission of queued creates. Keep those local
+        // selections registered until their own reply or a newer snapshot arrives.
+    }
+
+    pub fn reject(&mut self, operation_id: &str, error: Failure) {
+        if let Some(operation) = self.operations.iter_mut().find(|op| op.id == operation_id) {
+            operation.state = OperationState::Rejected(error);
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "model_tests.rs"]
+mod tests;

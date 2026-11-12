@@ -52,6 +52,12 @@ linters:
       # legitimately contain that substring and must stay linted.
       - _test\.go$
     rules:
+      # cmd/cgo appends //line/export directives to this ABI source and maps
+      # their positions past EOF. Formatting those generated directives breaks cgo.
+      - path: cmd/windshare-host/main\.go
+        linters:
+          - gocritic
+        text: "^commentFormatting:"
       # `defer x.Close()` (and the named close-equivalent cleanups startGate.
       # close, EventReader.closeSource) on read paths: the error is
       # unactionable and Go convention ignores it; write paths must check

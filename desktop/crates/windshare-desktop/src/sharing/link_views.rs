@@ -2,7 +2,7 @@ use crate::{
     desktop::Desktop,
     flow_state::CopyFeedback,
     localization::{Text, language},
-    model::{Overlay, PreviewAction, Share},
+    model::{Action, Overlay, Share},
 };
 use gpui::{Div, Role, Stateful, Window, div, prelude::*, px};
 use windshare_ui::{Button, ButtonStyle, FONT, Icon, Theme, column, icon, row};
@@ -17,7 +17,8 @@ const QR_FRAME_BORDER: f32 = 1.;
 
 pub(super) fn inline_qr_side(share: Option<&Share>) -> f32 {
     share
-        .and_then(|share| share.link.qr().ok())
+        .and_then(Share::usable_link)
+        .and_then(|link| link.qr().ok())
         .map_or(QR_INLINE_MIN_SIDE, |code| {
             code.side_for_modules(QR_MODULE_SIDE)
                 .clamp(QR_INLINE_MIN_SIDE, QR_INLINE_MAX_SIDE)
@@ -41,11 +42,17 @@ impl Desktop {
             language(cx).text(if copied { Text::Copied } else { Text::CopyLink }),
             if copied { Icon::Check } else { Icon::Copy },
             ButtonStyle::Primary,
-            PreviewAction::CopyLink(id),
+            Action::CopyLink(id),
             cx,
         )
         .large()
         .full_width()
+        .disabled(
+            !self
+                .shares
+                .iter()
+                .any(|share| share.id == id && share.usable_link().is_some()),
+        )
     }
 
     pub(crate) fn share_link_disclosure(
@@ -55,6 +62,9 @@ impl Desktop {
         enabled: bool,
         cx: &Context<Self>,
     ) -> Div {
+        let Some(link) = share.usable_link() else {
+            return column();
+        };
         let locale = language(cx);
         let expanded = self.link_disclosure.expanded(share.id);
         let label = locale.text(if expanded {
@@ -72,7 +82,7 @@ impl Desktop {
                     label,
                     theme,
                     enabled,
-                    PreviewAction::ToggleLink(share.id),
+                    Action::ToggleLink(share.id),
                     cx,
                 )
                 .w_full()
@@ -82,7 +92,7 @@ impl Desktop {
                 .py(px(4.))
                 .child(
                     theme
-                        .label(share.link.url(), 13.)
+                        .label(link.url(), 13.)
                         .font_family(FONT)
                         .flex_1()
                         .min_w_0()
@@ -105,7 +115,7 @@ impl Desktop {
             .when(expanded, |el| {
                 el.child(
                     theme
-                        .label(share.link.url(), 14.)
+                        .label(link.url(), 14.)
                         .font_family(FONT)
                         .w_full()
                         .min_w_0()
@@ -125,7 +135,7 @@ impl Desktop {
     ) -> Div {
         let locale = language(cx);
         let side = inline_qr_side(share);
-        let Some(share) = share else {
+        let Some(share) = share.filter(|share| share.usable_link().is_some()) else {
             return column()
                 .items_center()
                 .gap(px(8.))
@@ -141,7 +151,7 @@ impl Desktop {
                 )
                 .child(theme.caption(locale.text(Text::ScanToReceive)).opacity(0.4));
         };
-        let Ok(code) = share.link.qr() else {
+        let Some(code) = share.usable_link().and_then(|link| link.qr().ok()) else {
             return column()
                 .size(px(side))
                 .flex_shrink_0()
@@ -157,7 +167,7 @@ impl Desktop {
                 locale.text(Text::EnlargeQr),
                 theme,
                 enabled,
-                PreviewAction::EnlargeQr(share.id),
+                Action::EnlargeQr(share.id),
                 cx,
             )
             .flex_col()
@@ -197,7 +207,8 @@ impl Desktop {
             .shares
             .iter()
             .find(|share| share.id == id)
-            .and_then(|share| share.link.qr().ok())
+            .and_then(Share::usable_link)
+            .and_then(|link| link.qr().ok())
         else {
             return;
         };
@@ -216,7 +227,7 @@ fn link_action(
     label: &'static str,
     theme: Theme,
     enabled: bool,
-    action: PreviewAction,
+    action: Action,
     cx: &Context<Desktop>,
 ) -> Stateful<Div> {
     row()

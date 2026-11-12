@@ -1,7 +1,7 @@
 use crate::localization::{Text, language};
 use crate::{
     desktop::Desktop,
-    model::{Overlay, PreviewAction},
+    model::{Action, Overlay},
     motion::{SpiritMood, spirit_scene},
     sharing::{detail_width, enlarged_qr_side},
 };
@@ -95,7 +95,7 @@ impl Desktop {
                             "",
                             Icon::Close,
                             ButtonStyle::Ghost,
-                            PreviewAction::Close,
+                            Action::Close,
                             cx,
                         )
                         .tooltip(locale.text(Text::CloseDialog)),
@@ -113,7 +113,7 @@ impl Desktop {
             .occlude()
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _, window, cx| this.dispatch(PreviewAction::Close, window, cx)),
+                cx.listener(|this, _, window, cx| this.dispatch(Action::Close, window, cx)),
             )
             .child(
                 modal.with_animation(
@@ -160,7 +160,7 @@ impl Desktop {
                 locale.text(Text::GotIt),
                 Icon::Check,
                 ButtonStyle::Primary,
-                PreviewAction::Close,
+                Action::Close,
                 cx,
             ))
     }

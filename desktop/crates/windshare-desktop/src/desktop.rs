@@ -2,7 +2,8 @@ use crate::localization::{LanguageSettings, Text, language};
 use crate::{
     flow_state::{CopyFeedback, ReceiveFlow, ShareFlow},
     layout::{FlowLayout, MAX_PAGE_WIDTH, page_gutter},
-    model::{Filter, Overlay, Page, PreviewAction, Share, Transfer, demo_shares, demo_transfers},
+    live::Runtime,
+    model::{Action, Filter, Overlay, Page, Share, Transfer, demo_shares, demo_transfers},
     overlays::OverlayFrame,
     share_timing::lerp,
     sharing::LinkDisclosure,
@@ -28,7 +29,7 @@ pub struct Desktop {
     pub search: Entity<Input>,
     pub link_input: Entity<Input>,
     pub share_flow: ShareFlow,
-    pub preview_share_delay: Duration,
+    pub runtime: Runtime,
     pub motion_probe: crate::motion_probe::MotionProbe,
     pub receive_flow: ReceiveFlow,
     pub copy_feedback: CopyFeedback,
@@ -44,7 +45,8 @@ pub struct Desktop {
     _subscriptions: Vec<Subscription>,
 }
 impl Desktop {
-    pub fn new(window: &mut Window, preview_share_delay: Duration, cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, runtime: Runtime, cx: &mut Context<Self>) -> Self {
+        let preview = runtime.is_preview();
         let locale = language(cx);
         let search = cx.new(|cx| {
             Input::new(locale.text(Text::SearchShares), cx)
@@ -78,7 +80,7 @@ impl Desktop {
             cx.subscribe(&search, |_, _, _, cx| cx.notify()),
             cx.subscribe_in(&link_input, window, |this, _, event, window, cx| {
                 if matches!(event, InputEvent::Submit) {
-                    this.dispatch(PreviewAction::OpenPreview, window, cx);
+                    this.dispatch(Action::OpenPreview, window, cx);
                 } else {
                     if matches!(this.receive_flow, ReceiveFlow::Link { .. }) {
                         this.receive_flow = ReceiveFlow::default();
@@ -90,22 +92,29 @@ impl Desktop {
         let focus = cx.focus_handle();
         let primary_focus = cx.focus_handle();
         window.focus(&primary_focus, cx);
+        if !preview {
+            Self::observe_runtime(window, cx);
+        }
         Self {
             page: Page::Share,
             super_share,
             filter: Filter::All,
-            shares: demo_shares(),
-            transfers: demo_transfers(),
+            shares: if preview { demo_shares() } else { Vec::new() },
+            transfers: if preview {
+                demo_transfers()
+            } else {
+                Vec::new()
+            },
             grid: true,
             search,
             link_input,
             share_flow: ShareFlow::Choose,
-            preview_share_delay,
+            runtime,
             motion_probe: crate::motion_probe::MotionProbe::default(),
             receive_flow: ReceiveFlow::default(),
             copy_feedback: CopyFeedback::Idle,
             primary_focus,
-            operation_sequence: 0,
+            operation_sequence: if preview { 3 } else { 0 },
             overlays: Vec::new(),
             link_disclosure: LinkDisclosure::default(),
             toast: None,
@@ -121,7 +130,7 @@ impl Desktop {
         text: impl Into<gpui::SharedString>,
         symbol: Icon,
         style: ButtonStyle,
-        action: PreviewAction,
+        action: Action,
         cx: &Context<Self>,
     ) -> Button {
         Button::new(id, text)
@@ -180,6 +189,9 @@ impl Desktop {
         );
     }
     pub fn navigate(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.page_available(page) {
+            return;
+        }
         if page == Page::SuperShare {
             self.super_share
                 .update(cx, crate::supershare::SuperShare::enter);
@@ -216,7 +228,7 @@ impl Desktop {
             self.close_overlay(window, cx);
             cx.notify();
         } else if key.modifiers.control && key.key == "n" {
-            self.dispatch(PreviewAction::NewShare, window, cx);
+            self.dispatch(Action::NewShare, window, cx);
         } else if key.modifiers.control && key.key == "k" && self.overlays.is_empty() {
             self.navigate(Page::Shares, window, cx);
             let focus = self.search.read(cx).focus_handle(cx);
@@ -233,7 +245,7 @@ impl Desktop {
         let theme = Theme::from(window.appearance());
         let compact = window.viewport_size().width < px(COMPACT_WIDTH);
         match self.page {
-            Page::Share => self.sharing_page(layout, window, cx),
+            Page::Share => column().child(self.sharing_page(layout, window, cx)),
             Page::Receive => self.receiving_page(theme, layout, cx),
             Page::Shares => self.shares_page(theme, compact, cx),
             Page::Transfers => self.transfers_page(theme, cx),
@@ -256,7 +268,7 @@ impl Desktop {
             .min_w_0()
             .child(Self::titlebar(window, cx))
             .child(body)
-            .child(Self::statusbar(theme, cx))
+            .child(self.statusbar(theme, cx))
     }
 
     fn workspace_page(&mut self, window: &Window, cx: &Context<Self>) -> gpui::Div {
@@ -284,6 +296,13 @@ impl Desktop {
                         .when(self.page == Page::Share, |el| el.flex_1().justify_center())
                         .when(self.page != Page::Share, |el| {
                             el.child(self.page_heading(theme, compact, cx))
+                        })
+                        .when_some(self.runtime.notice(), |el, error| {
+                            el.child(
+                                theme.card().p(px(18.)).child(
+                                    theme.label(error, 15.).text_color(Tone::Rose.text(theme)),
+                                ),
+                            )
                         })
                         .child(
                             content.with_animation(
@@ -321,6 +340,12 @@ impl Render for Desktop {
             .track_focus(&self.focus)
             .tab_group()
             .on_key_down(cx.listener(Self::handle_key))
+            .on_drop(
+                cx.listener(|this, paths: &gpui::ExternalPaths, window, cx| {
+                    cx.stop_propagation();
+                    this.create_native_share(paths.paths().to_vec(), Icon::Folder, window, cx);
+                }),
+            )
             .when(self.page == Page::SuperShare, |root| {
                 root.child(crate::supershare::backdrop(theme))
             })

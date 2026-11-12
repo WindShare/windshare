@@ -18,6 +18,20 @@ macro_rules! messages {
 }
 
 messages! {
+    OpenInBrowser => ("Open in browser", "在浏览器中打开"),
+    StopSharing => ("Stop sharing", "停止分享"),
+    ShareAgain => ("Share again", "重新分享"),
+    FinishedShares => ("Finished", "已结束"),
+    ShareStopped => ("Stopped", "已停止"),
+    ShareCancelled => ("Cancelled", "已取消"),
+    ShareFailed => ("Sharing failed", "分享失败"),
+    StoppingShare => ("Stopping…", "正在停止…"),
+    RelayReconnecting => ("Reconnecting relay · Existing transfers may continue", "正在重连中转 · 已连接的传输可能仍在继续"),
+    StartingHost => ("Starting WindShare…", "正在启动 WindShare…"),
+    ReadyToShare => ("Ready to share", "随时分享"),
+    ControlsReconnecting => ("Reconnecting controls…", "正在恢复控制连接…"),
+    ClosingShares => ("Stopping shares and closing…", "正在停止分享并退出…"),
+    HostClosed => ("WindShare has stopped", "WindShare 已停止"),
     SuperMonth => ("1 month", "1 个月"),
     SuperLongTerm => ("Long-term", "长期"),
     SuperContinue => ("Continue", "继续"),
@@ -142,7 +156,6 @@ messages! {
     NoSharesFound => ("No shares found", "没有找到这个分享"),
     NoSharesFoundDetail => ("Try another search or create a new share.", "换个关键词，或创建一个新分享。"),
     CloseDialog => ("Close · Esc", "关闭 · Esc"),
-    SharingActive => ("Sharing", "正在分享"),
     PauseShare => ("Pause sharing", "暂停分享"),
     ResumeShare => ("Resume sharing", "继续分享"),
     AboutTagline => ("Files on the breeze. Sharing with ease.", "文件随风，分享自如。"),

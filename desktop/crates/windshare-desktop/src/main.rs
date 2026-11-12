@@ -5,7 +5,9 @@ mod commands;
 mod desktop;
 mod flow_state;
 mod layout;
+mod live;
 mod localization;
+mod logging;
 mod model;
 mod motion;
 mod motion_probe;
@@ -44,14 +46,36 @@ impl AssetSource for DesktopAssets {
     }
 }
 
-fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter("windshare=info")
-        .with_ansi(false)
-        .with_target(false)
-        .init();
+fn main() -> std::process::ExitCode {
+    let _logs = logging::start();
     #[cfg(feature = "motion-profile")]
     let _capture = profiling::start();
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if arguments.iter().any(|arg| arg == "--host-check") {
+        if let Err(error) = windshare_host::check_host() {
+            tracing::error!(event = "desktop.host_check_failed", %error);
+            return std::process::ExitCode::FAILURE;
+        }
+        return std::process::ExitCode::SUCCESS;
+    }
+    if !arguments.iter().any(|arg| arg == "--preview") {
+        let paths = arguments
+            .iter()
+            .position(|arg| arg == "--live-share")
+            .map(|index| {
+                arguments[index + 1..]
+                    .iter()
+                    .map(std::path::PathBuf::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let compact = arguments.iter().any(|arg| arg == "--compact");
+        if let Err(error) = live::run(paths, compact) {
+            tracing::error!(event = "desktop.live_share_failed", %error);
+            return std::process::ExitCode::FAILURE;
+        }
+        return std::process::ExitCode::SUCCESS;
+    }
     let compact = std::env::args().any(|arg| arg == "--compact");
     let share_delay_ms = std::env::args()
         .find_map(|arg| arg.strip_prefix("--share-delay-ms=").map(str::to_owned))
@@ -91,7 +115,15 @@ fn main() {
                 ..Default::default()
             };
             cx.open_window(options, |window, cx| {
-                cx.new(|cx| Desktop::new(window, preview_share_delay, cx))
+                cx.new(|cx| {
+                    Desktop::new(
+                        window,
+                        live::Runtime::Preview {
+                            delay: preview_share_delay,
+                        },
+                        cx,
+                    )
+                })
             })
             .expect("WindShare needs an available native GPU window");
             tracing::info!(
@@ -108,4 +140,5 @@ fn main() {
             .detach();
             cx.activate(true);
         });
+    std::process::ExitCode::SUCCESS
 }

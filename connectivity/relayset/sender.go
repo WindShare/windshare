@@ -130,6 +130,13 @@ type SenderAvailability struct {
 	Terminal  uint32
 }
 
+// Availability reads the owner's current state even when observations were dropped.
+func (s *Sender) Availability() SenderAvailability {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.availabilityLocked()
+}
+
 func (s *Sender) availabilityLocked() SenderAvailability {
 	state := SenderAvailability{Total: uint32(len(s.current)), EverReady: s.everReady}
 	for _, available := range s.current {
