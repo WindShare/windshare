@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/windshare/windshare/core/urlhost"
 )
 
 var ErrFrontURL = errors.New("invalid frontend URL")
@@ -25,6 +27,9 @@ func ValidateFrontURL(raw string) error {
 		u.User != nil || u.RawQuery != "" || u.ForceQuery ||
 		strings.ContainsAny(raw, `#\`) || strings.HasSuffix(u.Host, ":") {
 		return fmt.Errorf("%w: expected an absolute HTTP(S) base URL without credentials, query or fragment", ErrFrontURL)
+	}
+	if err := urlhost.Normalize(u); err != nil {
+		return fmt.Errorf("%w: invalid host", ErrFrontURL)
 	}
 	if port := u.Port(); port != "" {
 		value, err := strconv.Atoi(port)

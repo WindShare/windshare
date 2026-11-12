@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/windshare/windshare/core/urlhost"
 )
 
 type v2RelayEndpointVector struct {
@@ -96,6 +98,26 @@ func v2RelayEndpointCases() []v2RelayEndpointVector {
 		accepted("canonicalize-scheme-host-default-port", "HTTPS://RELAY.EXAMPLE:443/base/", "wss://relay.example/base/v2/ws", "wss://relay.example/base/v2/ws"),
 		accepted("query-kept-outside-identity", "https://relay.example/base/?token=a%20b", "wss://relay.example/base/v2/ws?token=a%20b", "wss://relay.example/base/v2/ws"),
 		accepted("local-ws-port", "http://127.0.0.1:8080/relay", "ws://127.0.0.1:8080/relay/v2/ws", "ws://127.0.0.1:8080/relay/v2/ws"),
+		accepted("unicode-latin", "https://münchen.de", "wss://xn--mnchen-3ya.de/v2/ws", "wss://xn--mnchen-3ya.de/v2/ws"),
+		accepted("punycode-latin", "https://xn--mnchen-3ya.de", "wss://xn--mnchen-3ya.de/v2/ws", "wss://xn--mnchen-3ya.de/v2/ws"),
+		accepted("unicode-uppercase", "https://MÜNCHEN.DE:443/", "wss://xn--mnchen-3ya.de/v2/ws", "wss://xn--mnchen-3ya.de/v2/ws"),
+		accepted("unicode-cjk-port-and-credentials", "https://文件.example:8443/base/?token=a%2fb+~&flag", "wss://xn--5nqy36c.example:8443/base/v2/ws?token=a%2fb+~&flag", "wss://xn--5nqy36c.example:8443/base/v2/ws"),
+		accepted("unicode-nontransitional", "https://straße.de", "wss://xn--strae-oqa.de/v2/ws", "wss://xn--strae-oqa.de/v2/ws"),
+		accepted("unicode-emoji", "https://ex😀.com", "wss://xn--ex-oo82a.com/v2/ws", "wss://xn--ex-oo82a.com/v2/ws"),
+		accepted("unicode-fullwidth", "https://ＥＸＡＭＰＬＥ.com", "wss://example.com/v2/ws", "wss://example.com/v2/ws"),
+		accepted("unicode-dot", "https://ex。com", "wss://ex.com/v2/ws", "wss://ex.com/v2/ws"),
+		accepted("unicode-trailing-dot", "https://ü.com.", "wss://xn--tda.com./v2/ws", "wss://xn--tda.com./v2/ws"),
+		rejected("erased-domain", "https://\u00ad"),
+		rejected("erased-domain-with-port", "https://\u200b:8443"),
+		rejected("invalid-joiner", "https://a\u200db.com"),
+		rejected("fullwidth-port-delimiter", "https://ü.com：8080"),
+		rejected("fullwidth-path-delimiter", "https://ü.com／evil"),
+		rejected("invalid-punycode", "https://xn--test.example"),
+		rejected("punycode-disallowed-code-point", "https://xn--a.example"),
+		rejected("empty-punycode", "https://xn--.example"),
+		rejected("unicode-with-empty-punycode-label", "https://b\u00fccher.xn--.example"),
+		rejected("unicode-with-ascii-only-punycode-label", "https://b\u00fccher.xn--abc-.example"),
+		rejected("reserved-ascii-label", "https://ab--cd.example"),
 		rejected("userinfo", "https://user:pass@relay.example/base"),
 		rejected("fragment", "https://relay.example/base#redirect"),
 		rejected("dot-segment", "https://relay.example/a/../base"),
@@ -171,10 +193,10 @@ func isRelayEndpointBoundaryWhitespace(character rune) bool {
 }
 
 func canonicalizeV2RelayAuthority(u *url.URL) error {
-	hostname := u.Hostname()
-	if hostname == "" || !isASCII(hostname) || strings.ContainsRune(hostname, '%') {
+	if err := urlhost.Normalize(u); err != nil {
 		return fmt.Errorf("relay host is invalid")
 	}
+	hostname := u.Hostname()
 	port := u.Port()
 	if port != "" {
 		value, err := strconv.ParseUint(port, 10, 16)
@@ -209,8 +231,8 @@ func validV2RelayDNSName(hostname string) bool {
 	}
 	for label := range strings.SplitSeq(name, ".") {
 		if len(label) == 0 || len(label) > 63 || strings.HasPrefix(label, "-") ||
-			strings.HasSuffix(label, "-") || strings.HasPrefix(label, "xn--") ||
-			(len(label) > 3 && label[2:4] == "--") {
+			strings.HasSuffix(label, "-") ||
+			len(label) > 3 && label[2:4] == "--" && !strings.HasPrefix(label, "xn--") {
 			return false
 		}
 		for index := range len(label) {
@@ -246,15 +268,6 @@ func validV2RelayQuery(query string) bool {
 			continue
 		}
 		if !isASCIIAlphaNumeric(character) && !strings.ContainsRune("-._~!$&()*+,;=:@/?", rune(character)) {
-			return false
-		}
-	}
-	return true
-}
-
-func isASCII(value string) bool {
-	for index := range len(value) {
-		if value[index] >= utf8.RuneSelf {
 			return false
 		}
 	}

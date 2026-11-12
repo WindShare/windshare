@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/windshare/windshare/core/urlhost"
 )
 
 const (
@@ -133,10 +135,10 @@ func boundaryWhitespace(character rune) bool {
 }
 
 func canonicalizeRelayAuthority(parsed *url.URL) error {
-	hostname := parsed.Hostname()
-	if hostname == "" || !asciiOnly(hostname) || strings.ContainsRune(hostname, '%') {
+	if err := urlhost.Normalize(parsed); err != nil {
 		return fmt.Errorf("%w: relay host", ErrIdentity)
 	}
+	hostname := parsed.Hostname()
 	port := parsed.Port()
 	if port != "" {
 		value, err := strconv.ParseUint(port, 10, 16)
@@ -171,8 +173,8 @@ func validRelayDNSName(hostname string) bool {
 	}
 	for label := range strings.SplitSeq(name, ".") {
 		if len(label) == 0 || len(label) > 63 || strings.HasPrefix(label, "-") ||
-			strings.HasSuffix(label, "-") || strings.HasPrefix(label, "xn--") ||
-			len(label) > 3 && label[2:4] == "--" {
+			strings.HasSuffix(label, "-") ||
+			len(label) > 3 && label[2:4] == "--" && !strings.HasPrefix(label, "xn--") {
 			return false
 		}
 		for index := range len(label) {
@@ -207,15 +209,6 @@ func validRelayQuery(query string) bool {
 			continue
 		}
 		if !asciiAlphaNumeric(character) && !strings.ContainsRune("-._~!$&()*+,;=:@/?", rune(character)) {
-			return false
-		}
-	}
-	return true
-}
-
-func asciiOnly(value string) bool {
-	for index := range len(value) {
-		if value[index] >= utf8.RuneSelf {
 			return false
 		}
 	}

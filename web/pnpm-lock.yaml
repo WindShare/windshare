@@ -17,6 +17,9 @@ importers:
       mp4box:
         specifier: 2.4.1
         version: 2.4.1
+      punycode:
+        specifier: 2.3.1
+        version: 2.3.1
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -33,6 +36,9 @@ importers:
       '@types/node':
         specifier: ^24.13.2
         version: 24.13.2
+      '@types/punycode':
+        specifier: 2.1.4
+        version: 2.1.4
       '@types/react':
         specifier: ^19.2.17
         version: 19.2.17
@@ -367,6 +373,9 @@ packages:
 
   '@types/node@24.13.2':
     resolution: {integrity: sha512-fRa09kZTgu8o71KFcDjUFuc7F+dEbZYZmkI0mg5YBTRs0yMKjYHsq/c0urDKeDb+D5qVgXOdFcuu+DZPKOITwA==}
+
+  '@types/punycode@2.1.4':
+    resolution: {integrity: sha512-trzh6NzBnq8yw5e35f8xe8VTYjqM3NE7bohBtvDVf/dtUer3zYTLK1Ka3DG3p7bdtoaOHZucma6FfVKlQ134pQ==}
 
   '@types/react-dom@19.2.3':
     resolution: {integrity: sha512-jp2L/eY6fn+KgVVQAOqYItbF0VY/YApe5Mz2F0aykSO8gx31bYCZyvSeYxCHKvzHG5eZjc+zyaS5BrBWya2+kQ==}
@@ -1440,6 +1449,8 @@ snapshots:
   '@types/node@24.13.2':
     dependencies:
       undici-types: 7.18.2
+
+  '@types/punycode@2.1.4': {}
 
   '@types/react-dom@19.2.3(@types/react@19.2.17)':
     dependencies:

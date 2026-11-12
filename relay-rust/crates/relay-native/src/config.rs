@@ -93,8 +93,7 @@ fn validate_dns(host: &str) -> Result<()> {
             || label.len() > 63
             || label.starts_with('-')
             || label.ends_with('-')
-            || label.starts_with("xn--")
-            || label.as_bytes().get(2..4) == Some(b"--")
+            || (label.as_bytes().get(2..4) == Some(b"--") && !label.starts_with("xn--"))
             || !label
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'-')
