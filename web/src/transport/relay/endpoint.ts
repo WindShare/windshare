@@ -45,8 +45,7 @@ function validDNSName(hostname: string): boolean {
       label.length > 63 ||
       label.startsWith('-') ||
       label.endsWith('-') ||
-      label.startsWith('xn--') ||
-      (label.length > 3 && label.slice(2, 4) === '--') ||
+      (label.length > 3 && label.slice(2, 4) === '--' && !label.startsWith('xn--')) ||
       !/^[a-z0-9-]+$/u.test(label)
     ) {
       return false

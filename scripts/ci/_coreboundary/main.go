@@ -35,6 +35,12 @@ var allowedThirdPartyModules = map[string]struct{}{
 	"golang.org/x/text":            {},
 }
 
+// IDNA is pure text processing; accepting it must not authorize x/net's socket
+// and transport packages in the reusable core.
+var allowedThirdPartyPackages = map[string]string{
+	"golang.org/x/net/idna": "golang.org/x/net",
+}
+
 var prohibitedPackageCapabilities = []pathFamily{
 	{Root: "crypto/tls", Capability: "TLS transport"},
 	{Root: "net/http", Capability: "HTTP transport"},
@@ -263,6 +269,12 @@ func validatePackages(
 	return findings
 }
 
+func allowedThirdPartySource(importPath, modulePath string) bool {
+	_, allowedModule := allowedThirdPartyModules[modulePath]
+	owner, allowedPackage := allowedThirdPartyPackages[importPath]
+	return allowedModule || allowedPackage && owner == modulePath
+}
+
 func packagePolicyViolations(scope graphScope, pkg listedPackage) []string {
 	logicalImportPath := pkg.ImportPath
 	if pkg.ForTest != "" {
@@ -318,13 +330,13 @@ func packagePolicyViolations(scope graphScope, pkg listedPackage) []string {
 			pkg.Module.Path,
 		)}
 	}
-	if _, ok := allowedThirdPartyModules[pkg.Module.Path]; !ok {
+	if !allowedThirdPartySource(pkg.ImportPath, pkg.Module.Path) {
 		return []string{fmt.Sprintf("third-party module %s is not allowlisted", pkg.Module.Path)}
 	}
 
 	if pkg.Module.Replace != nil {
 		replacementPath := pkg.Module.Replace.Path
-		if _, ok := allowedThirdPartyModules[replacementPath]; !ok {
+		if !allowedThirdPartySource(pkg.ImportPath, replacementPath) {
 			return []string{fmt.Sprintf(
 				"allowlisted module %s is replaced by unreviewed source %s",
 				pkg.Module.Path,

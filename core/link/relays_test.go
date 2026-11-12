@@ -156,15 +156,24 @@ func TestImplicitRelayResolvesUnicodeHostsLikeBrowser(t *testing.T) {
 
 func TestParseRejectsUnicodeHostsBrowsersRefuse(t *testing.T) {
 	for _, host := range []string{
-		"a\u200db.com", "\u2488.com",
+		"a\u200db.com", "\u2488.com", "\u00ad", "\u200b:8443", "xn--test.example",
 		// Fullwidth look-alikes normalize to URL syntax characters, which a
 		// browser refuses instead of reinterpreting as port/path/userinfo.
 		"ü.com\uff1a8080", "ü.com\uff0fevil", "ü.com\uff20evil", "ü.com\uff1fx",
 		"ü.com\uff03x", "ü.com\uff05x", "ü.com\uff3c", "ü\u3000.com",
 	} {
-		_, err := link.Parse("https://" + host + "/" + testShareID + "#" + testKey)
-		if !errors.Is(err, link.ErrMalformedLink) {
+		full := "https://" + host + "/" + testShareID + "#" + testKey
+		if _, err := link.Parse(full); !errors.Is(err, link.ErrMalformedLink) {
 			t.Fatalf("Parse host %q error=%v, want ErrMalformedLink", host, err)
+		}
+		if _, _, err := link.Split(full); !errors.Is(err, link.ErrMalformedLink) {
+			t.Fatalf("Split host %q error=%v, want ErrMalformedLink", host, err)
+		}
+		if _, err := link.Merge(full, testKey); !errors.Is(err, link.ErrMalformedLink) {
+			t.Fatalf("Merge host %q error=%v, want ErrMalformedLink", host, err)
+		}
+		if _, err := newLink().URL("https://" + host); !errors.Is(err, link.ErrMalformedLink) {
+			t.Fatalf("URL host %q error=%v, want ErrMalformedLink", host, err)
 		}
 	}
 }

@@ -99,6 +99,29 @@ func TestPackagePolicyEnforcesCoreAndModuleBoundaries(t *testing.T) {
 			},
 		},
 		{
+			name: "IDNA text processing is a package-scoped exception",
+			pkg: listedPackage{
+				ImportPath: "golang.org/x/net/idna",
+				Module:     &listedModule{Path: "golang.org/x/net"},
+			},
+		},
+		{
+			name: "IDNA exception does not permit sibling socket capabilities",
+			pkg: listedPackage{
+				ImportPath: "golang.org/x/net/ipv4",
+				Module:     &listedModule{Path: "golang.org/x/net"},
+			},
+			wantProblem: "not allowlisted",
+		},
+		{
+			name: "IDNA exception does not permit unreviewed replacement sources",
+			pkg: listedPackage{
+				ImportPath: "golang.org/x/net/idna",
+				Module:     &listedModule{Path: "golang.org/x/net", Replace: &listedModule{Path: "../fork"}},
+			},
+			wantProblem: "unreviewed source",
+		},
+		{
 			name: "unreviewed third-party module",
 			pkg: listedPackage{
 				ImportPath: "example.com/codec",
