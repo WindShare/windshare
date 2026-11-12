@@ -1,3 +1,4 @@
+import { sourceMetadataFields } from '../../content/revision-comparison'
 import { snapshotSourceAuthenticationPath, snapshotMaterializationRootRelativePath } from '../../transfer/job/coordinate/direct-tree'
 import {
   FILE_CHECKPOINT_COMMIT_VERIFIED, FILE_CHECKPOINT_ID_BYTES, FILE_CHECKPOINT_MAX_FILE_SIZE,
@@ -76,9 +77,9 @@ export function snapshotBrowserDeliveryRecord(
   } as const
   const record = Object.freeze({
     ...value,
-    digest: deliveryDigest('windshare/browser-file-delivery/v1', [
+    digest: deliveryDigest('windshare/browser-file-delivery/v2', [
       value.schemaVersion, value.operationId, value.policyDigest, source.fileId, source.fileRevision,
-      source.canonicalPath, source.exactSize.toString(), materializationRelativePath, localMutationFields(localMutation),
+      source.canonicalPath, source.exactSize.toString(), source.sourceMetadata ?? null, materializationRelativePath, localMutationFields(localMutation),
       value.placement, value.placementReason,
       value.generation.toString(), stateFields(state),
     ]),
@@ -125,7 +126,7 @@ function snapshotSource(source: BrowserDeliverySource): BrowserDeliverySource {
     fileId: snapshotIdentity(source.fileId, FILE_ID_BYTES, 'file ID'),
     fileRevision: snapshotIdentity(source.fileRevision, FILE_REVISION_BYTES, 'file revision'),
     canonicalPath: snapshotSourceAuthenticationPath(source.canonicalPath),
-    exactSize: source.exactSize,
+    exactSize: source.exactSize, ...sourceMetadataFields(source),
   })
 }
 
@@ -214,6 +215,7 @@ function snapshotCheckpoint(
   validateFileCheckpoint(input)
   if (!sameDurableCheckpointNamespace(namespace, input) || input.fileId !== source.fileId ||
       input.fileRevision !== source.fileRevision || input.exactSize !== source.exactSize ||
+      input.sourceMetadata !== source.sourceMetadata ||
       JSON.stringify(input.canonicalPath) !== JSON.stringify(checkpointPath) ||
       input.commitState !== FILE_CHECKPOINT_COMMIT_VERIFIED || (complete && !fileCheckpointIsComplete(input))) {
     throw new TypeError('Browser delivery checkpoint does not prove its bound source and storage')

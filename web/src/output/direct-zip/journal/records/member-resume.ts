@@ -1,3 +1,4 @@
+import { sourceMetadataFields } from '../../../../content/revision-comparison'
 import { decodeBase64Url, encodeBase64Url } from '../../../../crypto/bytes'
 import {
   chainDirectZipEpochDigestV1,
@@ -70,6 +71,8 @@ export async function snapshotCurrentMember(
   return Object.freeze({
     fileId: snapshotIdentity(input.fileId, 16, 'file ID'),
     fileRevision: snapshotIdentity(input.fileRevision, 16, 'file revision'),
+    ...sourceMetadataFields(input),
+    ...(input.reusedFrom === undefined ? {} : { reusedFrom: snapshotIdentity(input.reusedFrom, 16, 'reused revision') }),
     exactSize,
     sourceRangeAuthorityDigest: snapshotDigest(
       input.sourceRangeAuthorityDigest,
@@ -110,6 +113,8 @@ export function canonicalCurrentMember(input: DirectZipMemberResumeV1 | undefine
     canonicalU8(2),
     identityFrame(input.fileId, 16, 'file ID'),
     identityFrame(input.fileRevision, 16, 'file revision'),
+    optionalTextFrame(input.sourceMetadata),
+    optionalTextFrame(input.reusedFrom),
     canonicalFrame(canonicalU64(input.exactSize)),
     digestFrame(input.sourceRangeAuthorityDigest, 'source range authority digest'),
     canonicalFrame(input.entryPlanCanonicalBytes),

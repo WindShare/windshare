@@ -1,3 +1,5 @@
+import { RevisionReopenedDuringRecoveryError } from '../../content/session-services'
+import { compareRevisionMetadata } from '../../content/revision-comparison'
 import { zipMemberCoordinates } from '../zip-layout/member'
 import { SourceRevisionChangedError } from '../persistent-tree/errors'
 import { receiveContentWarningFields, snapshotReceiveContentWarning, type ReceiveContentWarning } from '../../transfer/lifecycle/content-warning'
@@ -136,7 +138,17 @@ export class ProgressiveZipArchive {
   }): Promise<TaskEntry> {
     const previous = await this.#input.store.readEntry(input.entryId)
     if (previous !== undefined && !sameAdmission(previous, kind, input)) {
-      await this.markRevisionFailure(input.entryId, 'Original revision changed; start a new download')
+      const error = admissionFailure(previous, kind, input)
+      if (error instanceof RevisionReopenedDuringRecoveryError) {
+        this.#trace('source_comparison_retained', {
+          entryId: previous.entryId, fileId: previous.revision!.fileId,
+          previousRevision: previous.revision!.fileRevision,
+          currentRevision: input.revision!.fileRevision, reason: 'metadata-unavailable',
+          retainedBytes: previous.ranges.reduce((total, range) => total + range.end - range.start, 0n),
+        })
+        throw error
+      }
+      await this.markRevisionFailure(input.entryId, 'Source evidence changed; saved ranges remain candidates')
       throw new SourceRevisionChangedError({ cause: new Error('ZIP entry revision changed; start a new download') })
     }
     // A common checkpoint boundary serializes allocation with all existing entry writes.
@@ -144,9 +156,22 @@ export class ProgressiveZipArchive {
       const existing = await this.#input.store.readEntry(input.entryId)
       if (existing !== undefined) {
         if (!sameAdmission(existing, kind, input)) {
-          throw new SourceRevisionChangedError({ cause: new Error('ZIP entry revision changed; start a new download') })
+          throw admissionFailure(existing, kind, input)
         }
-        const { revisionFailure, ...restored } = existing
+        const { revisionFailure, ...retained } = existing
+        const changedIdentity = existing.revision?.fileRevision !== input.revision?.fileRevision
+        const restored = changedIdentity ? { ...retained, revision: {
+          ...input.revision!, reusedFrom: existing.revision!.fileRevision,
+        } } : retained
+        if (changedIdentity) {
+          await this.#commit({}, [restored])
+          this.#trace('source_metadata_reused', {
+            entryId: existing.entryId, previousRevision: existing.revision!.fileRevision,
+            currentRevision: input.revision!.fileRevision, reason: 'metadata-agreement',
+            reusedBytes: existing.ranges.reduce((total, range) => total + range.end - range.start, 0n),
+          })
+          return restored
+        }
         if (revisionFailure !== undefined) {
           await this.#commit({}, [restored])
           return restored
@@ -450,12 +475,29 @@ export class ProgressiveZipArchive {
 
 function sameAdmission(entry: TaskEntry, kind: TaskEntry['kind'],
   input: ZipEntryAdmission & { readonly revision?: TaskEntry['revision'] }): boolean {
+  if (!sameEntryContext(entry, kind, input)) return false
+  if (entry.revision === undefined || input.revision === undefined) return entry.revision === input.revision
+  return compareRevisionMetadata(entry.revision, input.revision).kind === 'metadata-agreement' &&
+    (entry.revision.fileRevision === input.revision.fileRevision ||
+      completeZipEntryCrc(entry.ranges, entry.revision.exactSize) === undefined)
+}
+
+function sameEntryContext(entry: TaskEntry, kind: TaskEntry['kind'],
+  input: ZipEntryAdmission & { readonly revision?: TaskEntry['revision'] }): boolean {
   return entry.kind === kind && entry.path.join('/') === input.path.join('/') &&
     entry.revision?.fileId === input.revision?.fileId &&
-    entry.revision?.fileRevision === input.revision?.fileRevision &&
-    entry.revision?.exactSize === input.revision?.exactSize &&
     entry.source.shareInstance === input.source.shareInstance &&
     entry.source.directoryId === input.source.directoryId &&
     entry.source.generation === input.source.generation &&
     entry.source.sourcePath.join('/') === input.source.sourcePath.join('/')
+}
+
+function admissionFailure(entry: TaskEntry, kind: TaskEntry['kind'],
+  input: ZipEntryAdmission & { readonly revision?: TaskEntry['revision'] }): Error {
+  if (sameEntryContext(entry, kind, input) && entry.revision !== undefined &&
+      input.revision !== undefined &&
+      compareRevisionMetadata(entry.revision, input.revision).kind !== 'observed-change') {
+    return new RevisionReopenedDuringRecoveryError()
+  }
+  return new SourceRevisionChangedError({ cause: new Error('ZIP source evidence changed') })
 }

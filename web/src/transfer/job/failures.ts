@@ -11,6 +11,7 @@ import {
   RemoteRevisionError,
   RevisionCapacityBusyError,
   RevisionChangedDuringRecoveryError,
+  RevisionReopenedDuringRecoveryError,
   RevisionLeaseExpiredError,
 } from '../../content/session-services'
 import {
@@ -396,6 +397,9 @@ function remoteTransferFault(error: unknown): Fault | undefined {
 }
 
 function sourceTransferFault(error: unknown): Fault | undefined {
+  if (error instanceof RevisionReopenedDuringRecoveryError) {
+    return sourceFault(FaultScope.FileLocal, SourceFaultCode.Unavailable)
+  }
   if (error instanceof RevisionChangedDuringRecoveryError) {
     return sourceFault(FaultScope.FileLocal, SourceFaultCode.RevisionInvalidated)
   }

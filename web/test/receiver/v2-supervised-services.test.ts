@@ -14,7 +14,7 @@ import { REVISION_CODE_QUOTA } from '../../src/content/flow'
 import {
   type OpenedRevision,
   RevisionCapacityBusyError,
-  RevisionChangedDuringRecoveryError,
+  RevisionReopenedDuringRecoveryError,
   type RevisionService,
 } from '../../src/content/session-services'
 import type { FileRevisionDescriptor } from '../../src/content/records'
@@ -458,7 +458,7 @@ describe('v2 supervised content generations', () => {
       opened.descriptor,
       opened.leaseId,
       byteRange(0n, 4n),
-    ))).rejects.toBeInstanceOf(RevisionChangedDuringRecoveryError)
+    ))).rejects.toBeInstanceOf(RevisionReopenedDuringRecoveryError)
 
     expect(provider.recoveries).toBe(1)
     expect(second.opens).toBe(1)

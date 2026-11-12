@@ -19,7 +19,7 @@ func ContentFault(err error) (fault.Fault, bool) {
 	case errors.Is(err, content.ErrRevisionNotFound), errors.Is(err, content.ErrRevisionUnreadable),
 		errors.Is(err, content.ErrUnsupportedStability):
 		return mustSourceFault(fault.ScopeFileLocal, fault.SourcePermanent), true
-	case errors.Is(err, content.ErrQuotaExceeded), errors.Is(err, content.ErrLeaseExpired),
+	case errors.Is(err, content.ErrRevisionReopened), errors.Is(err, content.ErrQuotaExceeded), errors.Is(err, content.ErrLeaseExpired),
 		errors.Is(err, content.ErrInvalidLease):
 		return mustSourceFault(fault.ScopeFileLocal, fault.SourceUnavailable), true
 	default:

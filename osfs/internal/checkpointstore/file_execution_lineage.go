@@ -109,7 +109,7 @@ func (a *fileExecutionAuthority) add(r checkpointmodel.Record) error {
 	return nil
 }
 func (a *fileExecutionAuthority) replace(previous, next checkpointmodel.Record) error {
-	if a == nil || !previous.Valid() || !next.Valid() || !checkpointmodel.IdentityEqual(previous, next) {
+	if a == nil || !previous.Valid() || !next.Valid() || (!checkpointmodel.IdentityEqual(previous, next) && checkpointmodel.ValidateTransition(previous, next) != nil) {
 		return checkpointmodel.ErrRecordBinding
 	}
 	current, found := a.physical[previous.RecordID()]
@@ -173,8 +173,9 @@ func (a *fileExecutionAuthority) classify(spec checkpointmodel.CheckpointLineage
 	}
 	decision := checkpointmodel.ClassifyCheckpointLineage(request, []checkpointmodel.CheckpointLineageEvidence{{
 		FileRevision: r.FileRevision(), ExactSize: r.ExactSize(), OwnedObjectID: r.OwnedObjectID(),
+		SourceMetadata: r.SourceMetadata(), Phase: r.Phase(), CommitState: r.CommitState(),
 	}}, len(a.objects[r.OwnedObjectID()]) > 1)
-	if decision != checkpointmodel.CheckpointLineageDecisionExact {
+	if decision != checkpointmodel.CheckpointLineageDecisionExact && decision != checkpointmodel.CheckpointLineageDecisionMetadataMatch && decision != checkpointmodel.CheckpointLineageDecisionRevisionConflict {
 		return decision, checkpointmodel.Record{}, nil
 	}
 	return decision, r, nil

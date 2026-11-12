@@ -128,7 +128,7 @@ describe('durable per-file delivery semantics', () => {
     }
     const source = { ...f.source, [field]: changes[field] }
     const changed = snapshotBrowserDeliveryRecord(f.policy, { ...f.initial, source, generation: 2n })
-    expect(() => assertBrowserDeliveryTransition(f.policy, f.initial, changed)).toThrow(/immutable/)
+    expect(() => assertBrowserDeliveryTransition(f.policy, f.initial, changed)).toThrow(/immutable/i)
   })
 
   it('retains complete staging after a failed and drained target copy attempt', () => {
@@ -235,6 +235,6 @@ describe('durable per-file delivery semantics', () => {
     const f = deliveryFixture('direct')
     const next = advanceBrowserDeliveryRecord(f.policy, f.initial, { kind: 'target-saved', target: f.target })
     const skipped = snapshotBrowserDeliveryRecord(f.policy, { ...next, generation: 9n })
-    expect(() => assertBrowserDeliveryTransition(f.policy, f.initial, skipped)).toThrow(/immutable/)
+    expect(() => assertBrowserDeliveryTransition(f.policy, f.initial, skipped)).toThrow(/immutable/i)
   })
 })

@@ -3,11 +3,12 @@ package outputruntime
 import (
 	"context"
 	"crypto/rand"
-	"github.com/windshare/windshare/core/catalog"
 	"io"
 	"sync"
 	"time"
 
+	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/osfs/internal/checkpointstore"
@@ -126,6 +127,7 @@ const (
 	FilesystemCheckpointRevisionConflict
 	FilesystemCheckpointOwnershipConflict
 	FilesystemCheckpointInvalid
+	FilesystemCheckpointMetadataMatch
 )
 
 type FilesystemOutputNativeLockScope uint8
@@ -165,6 +167,11 @@ type FilesystemOutputTrace struct {
 	RuntimeComponent                  FilesystemOutputRuntimeComponent
 	RuntimeOperation                  FilesystemOutputRuntimeOperation
 	RuntimeDecision                   FilesystemOutputRuntimeDecision
+	PreviousRevision                  content.FileRevision
+	CurrentRevision                   content.FileRevision
+	RecoveryReason                    content.RevisionComparisonReason
+	ReusedBytes                       uint64
+	RetainedBytes                     uint64
 	CheckpointDecision                FilesystemCheckpointDecision
 	OperationID                       uint64
 	ClaimID                           uint64

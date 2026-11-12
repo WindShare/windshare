@@ -17,7 +17,7 @@ const INPUT: DirectZipMemberRollbackTraceInput = {
   newCommittedLength: 9_007_199_254_740_000n,
   retainedSelectedPayloadBytes: 9_007_199_254_739_000n,
   memberOrdinal: 3n,
-  sourceChangeReason: 'revision-changed',
+  recoveryReason: 'metadata-unavailable',
 }
 
 describe('production direct ZIP member rollback tracing', () => {
@@ -40,7 +40,7 @@ describe('production direct ZIP member rollback tracing', () => {
         new_committed_length: '9007199254740000',
         retained_selected_payload_bytes: '9007199254739000',
         member_ordinal: '3',
-        source_change_reason: 'revision_changed',
+        recovery_reason: 'metadata_unavailable',
         ...(phase === 'failed' ? { native_error_name: 'DataError' } : {}),
       })),
     )
@@ -54,10 +54,10 @@ describe('production direct ZIP member rollback tracing', () => {
     const events: TraceEventObservationV2[] = []
     const source = createOutputTraceSource({ current: event => events.push(event) })
     const recovery = { ...INPUT }
-    delete recovery.sourceChangeReason
+    delete recovery.recoveryReason
     traceDirectZipMemberRollback(source, { ...recovery, phase: 'recovering' })
     expect(events).toHaveLength(1)
-    expect(events[0]!.payload).not.toHaveProperty('source_change_reason')
+    expect(events[0]!.payload).not.toHaveProperty('recovery_reason')
     expect(() => snapshotTraceEventObservationV2(events[0]!)).not.toThrow()
   })
 

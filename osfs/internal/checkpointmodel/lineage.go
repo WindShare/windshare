@@ -128,10 +128,11 @@ const (
 	CheckpointLineageDecisionRevisionConflict
 	CheckpointLineageDecisionOwnershipConflict
 	CheckpointLineageDecisionInvalid
+	CheckpointLineageDecisionMetadataMatch
 )
 
 func (decision CheckpointLineageDecision) Valid() bool {
-	return decision >= CheckpointLineageDecisionAbsent && decision <= CheckpointLineageDecisionInvalid
+	return decision >= CheckpointLineageDecisionAbsent && decision <= CheckpointLineageDecisionMetadataMatch
 }
 
 func (decision CheckpointLineageDecision) String() string {
@@ -146,20 +147,26 @@ func (decision CheckpointLineageDecision) String() string {
 		return "ownership-conflict"
 	case CheckpointLineageDecisionInvalid:
 		return "invalid"
+	case CheckpointLineageDecisionMetadataMatch:
+		return "metadata-match"
 	default:
 		return ""
 	}
 }
 
 type CheckpointLineageRequest struct {
-	FileRevision content.FileRevision
-	ExactSize    uint64
+	FileRevision   content.FileRevision
+	ExactSize      uint64
+	SourceMetadata content.SourceMetadata
 }
 
 type CheckpointLineageEvidence struct {
-	FileRevision  content.FileRevision
-	ExactSize     uint64
-	OwnedObjectID ObjectID
+	FileRevision   content.FileRevision
+	ExactSize      uint64
+	OwnedObjectID  ObjectID
+	SourceMetadata content.SourceMetadata
+	Phase          Phase
+	CommitState    CommitState
 }
 
 // ClassifyCheckpointLineage is the single mixed-conflict precedence for startup
@@ -181,13 +188,20 @@ func ClassifyCheckpointLineage(
 		if record.FileRevision.IsZero() || record.OwnedObjectID.IsZero() {
 			return CheckpointLineageDecisionInvalid
 		}
-		if record.FileRevision == request.FileRevision && record.ExactSize != request.ExactSize {
+		if record.FileRevision == request.FileRevision && (record.ExactSize != request.ExactSize ||
+			!record.SourceMetadata.IsZero() && !request.SourceMetadata.IsZero() && record.SourceMetadata != request.SourceMetadata) {
 			return CheckpointLineageDecisionInvalid
 		}
 	}
+	metadataMatch := false
 	for _, record := range evidence {
 		if record.FileRevision != request.FileRevision {
-			return CheckpointLineageDecisionRevisionConflict
+			if request.SourceMetadata.IsZero() || record.SourceMetadata != request.SourceMetadata ||
+				record.ExactSize != request.ExactSize || record.CommitState != CommitVerified ||
+				(record.Phase != PhaseActive && record.Phase != PhasePaused) {
+				return CheckpointLineageDecisionRevisionConflict
+			}
+			metadataMatch = true
 		}
 	}
 
@@ -199,6 +213,9 @@ func ClassifyCheckpointLineage(
 		if record.OwnedObjectID != firstObject {
 			return CheckpointLineageDecisionOwnershipConflict
 		}
+	}
+	if metadataMatch {
+		return CheckpointLineageDecisionMetadataMatch
 	}
 	return CheckpointLineageDecisionExact
 }

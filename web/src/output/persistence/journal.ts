@@ -46,6 +46,7 @@ export interface FinalFileCheckpointProof {
 
 export interface CheckpointLineageLookupRequest {
   readonly lineageId: CheckpointLineageID
+  readonly sourceMetadata?: string
   readonly fileId: string
   readonly canonicalPath: readonly string[]
   readonly fileRevision: string
@@ -54,7 +55,7 @@ export interface CheckpointLineageLookupRequest {
 
 export type CheckpointLineageDecision =
   | Readonly<{ kind: 'absent'; lineageId: CheckpointLineageID }>
-  | Readonly<{ kind: 'exact'; lineageId: CheckpointLineageID; record: FileCheckpointV2 }>
+  | Readonly<{ kind: 'exact' | 'metadata-match'; lineageId: CheckpointLineageID; record: FileCheckpointV2 }>
   | Readonly<{
     kind: 'revision-conflict'
     lineageId: CheckpointLineageID

@@ -11,7 +11,7 @@ export interface DirectZipMemberRollbackTraceInput {
   readonly newCommittedLength: bigint
   readonly retainedSelectedPayloadBytes: bigint
   readonly memberOrdinal: bigint
-  readonly sourceChangeReason?: Extract<
+  readonly recoveryReason?: Extract<
     DirectZipMemberResumeDecisionV1, { readonly kind: 'rollback-member' }
   >['reason']
   readonly error?: unknown
@@ -30,9 +30,9 @@ export function traceDirectZipMemberRollback(
     new_committed_length: input.newCommittedLength.toString(),
     retained_selected_payload_bytes: input.retainedSelectedPayloadBytes.toString(),
     member_ordinal: input.memberOrdinal.toString(),
-    ...(input.sourceChangeReason === undefined ? {} : {
-      source_change_reason: input.sourceChangeReason.replaceAll('-', '_') as
-        NonNullable<DirectZipMemberRollbackPayloadV1['source_change_reason']>,
+    ...(input.recoveryReason === undefined ? {} : {
+      recovery_reason: input.recoveryReason.replaceAll('-', '_') as
+        NonNullable<DirectZipMemberRollbackPayloadV1['recovery_reason']>,
     }),
     ...(input.error instanceof Error ? { native_error_name: input.error.name } : {}),
   }))

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { encodeBase64Url } from '../../../../src/crypto/bytes'
 import {
   DirectZipMemberWriterV1,
   type DirectZipCompletionSealV1,
@@ -13,6 +14,31 @@ import {
 const PAYLOAD = Uint8Array.of(1, 2, 3, 4, 5, 6)
 
 describe('DirectZip member epochs', () => {
+  it('admits an entirely reusable prefix without relabeling the durable predecessor', async () => {
+    const sourceMetadata = encodeBase64Url(new Uint8Array(32).fill(17))
+    const harness = createWriterHarness()
+    const writer = harness.writer()
+    const member = await writer.beginFile({
+      ...fileAdmission(harness.checkpoint), source: { ...fileSource(), sourceMetadata },
+    })
+    await member.write(PAYLOAD.subarray(0, 3))
+    const paused = await writer.pause()
+    const restored = harness.writer(paused.checkpoint)
+    const source = { ...fileSource('reopened'), rangeAuthority: 'fresh-authority', sourceMetadata }
+    const resumed = restored.resumeFile(source) as DirectZipMemberWriterV1
+    expect(resumed).toBeInstanceOf(DirectZipMemberWriterV1)
+    expect(restored.committedCheckpoint.member?.source).toEqual(paused.checkpoint.member?.source)
+    await resumed.write(PAYLOAD.subarray(3, 4))
+    const checkpoint = (await restored.pause()).checkpoint
+    expect(checkpoint.member?.source).toMatchObject({
+      ...source, reusedFrom: fileSource().revision,
+    })
+    expect(checkpoint.member?.payloadOffset).toBe(4n)
+    expect(harness.writer(checkpoint).decideMemberResume({
+      ...source, revision: 'changed', sourceMetadata: encodeBase64Url(new Uint8Array(32).fill(18)),
+    })).toMatchObject({ kind: 'rollback-member', reason: 'metadata-changed' })
+  })
+
   it('treats a generic checkpoint as an observation when automatic evidence is absent', async () => {
     const harness = createWriterHarness()
     const writer = harness.writer()
@@ -75,7 +101,7 @@ describe('DirectZip member epochs', () => {
       archiveOffset: harness.checkpoint.archiveOffset,
       safeResumeBytes: 0n,
       nextEntryOrdinal: 1n,
-      reason: 'revision-changed',
+      reason: 'metadata-unavailable',
     })
     expect(harness.target.openEpochCount).toBe(1)
   })

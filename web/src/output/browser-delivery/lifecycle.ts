@@ -1,3 +1,4 @@
+import { assertBrowserDeliverySource } from './recovery/source'
 import { fileCheckpointIsComplete, fileCheckpointDigest, type FileCheckpointV2 } from '../persistence/checkpoint'
 import type { BrowserDeliveryRecordV1, BrowserDeliveryState, BrowserSavePolicyV1 } from './model'
 import { localMutationFields, snapshotBrowserDeliveryRecord, validateBrowserDeliveryRecord } from './records'
@@ -45,6 +46,7 @@ export function assertBrowserDeliveryTransition(
   const previous = validateBrowserDeliveryRecord(policy, previousInput)
   const next = validateBrowserDeliveryRecord(policy, nextInput)
   assertImmutableFile(previous, next)
+  assertBrowserDeliverySource(previous, next)
   assertDurablePhase(previous, next)
   assertStableProof(stageCheckpoint(previous.state), stageCheckpoint(next.state), 'Complete staging')
   assertStableProof(targetCheckpoint(previous.state), targetCheckpoint(next.state), 'Saved target')
@@ -69,7 +71,7 @@ export function targetCheckpoint(state: BrowserDeliveryState): FileCheckpointV2 
 function assertImmutableFile(previous: BrowserDeliveryRecordV1, next: BrowserDeliveryRecordV1): void {
   if (next.generation !== previous.generation + 1n || next.fileId !== previous.fileId ||
       next.placement !== previous.placement || next.placementReason !== previous.placementReason ||
-      next.source.fileRevision !== previous.source.fileRevision || next.source.exactSize !== previous.source.exactSize ||
+      next.source.exactSize !== previous.source.exactSize ||
       JSON.stringify(next.source.canonicalPath) !== JSON.stringify(previous.source.canonicalPath) ||
       JSON.stringify(next.materializationRelativePath) !== JSON.stringify(previous.materializationRelativePath) ||
       JSON.stringify(localMutationFields(next.localMutation)) !== JSON.stringify(localMutationFields(previous.localMutation))) {
@@ -102,6 +104,7 @@ function assertReceivingCoverage(previous: BrowserDeliveryState, next: BrowserDe
   if (next.kind === 'receiving' || next.kind === 'discarding' || next.kind === 'restart-authorized') checkpoint = next.checkpoint
   else if (next.kind === 'staged-complete') checkpoint = next.stage
   if (checkpoint === undefined || checkpoint.recordId !== previous.checkpoint.recordId ||
+      checkpoint.ownedObjectId !== previous.checkpoint.ownedObjectId ||
       checkpoint.checkpointGeneration < previous.checkpoint.checkpointGeneration ||
       !previous.checkpoint.verifiedRanges.every(range =>
         checkpoint.verifiedRanges.some(nextRange => nextRange.start <= range.start && nextRange.end >= range.end))) {
@@ -113,6 +116,7 @@ function assertAuthorizedRestart(previous: BrowserDeliveryState, next: BrowserDe
   if (previous.kind !== 'restart-authorized' || next.kind !== 'receiving') return
   const reset = next.checkpoint
   if (reset === undefined || reset.recordId !== previous.checkpoint.recordId || reset.verifiedRanges.length !== 0 ||
+      reset.ownedObjectId !== previous.checkpoint.ownedObjectId ||
       reset.checkpointGeneration <= previous.checkpoint.checkpointGeneration ||
       reset.stateGeneration <= previous.checkpoint.stateGeneration) {
     throw new TypeError('Authorized restart requires the same owned file with a newer empty durable checkpoint')

@@ -460,7 +460,7 @@ func readStableBlock(ctx context.Context, source StableFile, destination []byte,
 	if verifyErr != nil {
 		return RevisionComparisonUnavailable, verifyErr
 	}
-	return RevisionComparisonMatch, nil
+	return RevisionComparisonMetadataAgreement, nil
 }
 
 func (s *RevisionStore) finishRead(revision *revisionState, comparison RevisionComparison) (

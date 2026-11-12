@@ -163,13 +163,15 @@ func TestRecordCodecRejectsNonCanonicalAndMalformedObjects(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The map is valid CBOR but uses a non-minimal integer for schema version.
-	nonCanonical := []byte{0xa8, 0x18, 0x00, 0x01, 0x01, 0x50}
+	nonCanonical := []byte{0xa9, 0x18, 0x00, 0x02, 0x01, 0x50}
 	nonCanonical = append(nonCanonical, fixture.share.Bytes()...)
 	nonCanonical = append(nonCanonical, 0x02, 0x50)
 	nonCanonical = append(nonCanonical, fixture.file.Bytes()...)
 	nonCanonical = append(nonCanonical, 0x03, 0x50)
 	nonCanonical = append(nonCanonical, fixture.revision.Bytes()...)
 	nonCanonical = append(nonCanonical, 0x04, 0x07, 0x05, 0xf6, 0x06, 0x00, 0x07, 0x00)
+	nonCanonical = append(nonCanonical, 0x08, 0x58, 0x20)
+	nonCanonical = append(nonCanonical, make([]byte, 32)...)
 	object, err := sealer.sealObject(binding, fileKey.Bytes(), nonCanonical)
 	if err != nil {
 		t.Fatal(err)
