@@ -56,6 +56,7 @@ func Run(ctx context.Context, request Request, dependencies Dependencies) task.C
 		finishErr = context.Cause(ctx)
 	}
 	d.Controller.finish(finishErr)
+	d.Control.NotifyStateChanged()
 	return task.Completion[Result]{Value: result,
 		Outcome: outcome, FailureClass: class, Err: errors.Join(runErr, cleanupErr), CleanupError: cleanupErr}
 }
@@ -128,7 +129,10 @@ func (s *activeShare) start(ctx, resourceContext context.Context, request Reques
 	if observed, ok := s.relays.(interface {
 		ObserveAvailability(func(relayset.SenderAvailability))
 	}); ok {
-		observed.ObserveAvailability(func(value relayset.SenderAvailability) { o.emit(Observation{RelayAvailability: &value}) })
+		observed.ObserveAvailability(func(value relayset.SenderAvailability) {
+			d.Control.NotifyStateChanged()
+			o.emit(Observation{RelayAvailability: &value})
+		})
 	}
 	s.networkDone = make(chan struct{})
 	go func() {
@@ -171,6 +175,7 @@ func (s *activeShare) start(ctx, resourceContext context.Context, request Reques
 	s.ready = true
 	o.emit(Observation{Milestone: ShareReady})
 	d.Controller.publish(Ready{Capability: s.prepared.Capability(), SelectedRootSummary: s.prepared.SelectedRootSummary(), RelayEndpoint: endpoint})
+	d.Control.NotifyStateChanged()
 	// Optional warming follows readiness and retains its own bounded background
 	// work. A slow scan or a caller that never displays the link cannot hold Ready.
 	if ctx.Err() == nil {

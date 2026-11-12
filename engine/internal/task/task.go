@@ -31,6 +31,7 @@ type Task[T any] struct {
 	reason       StopReason
 	cancel       context.CancelCauseFunc
 	done         chan struct{}
+	changed      chan struct{}
 	producer     observationstream.Producer[Observation]
 	observations observationstream.Consumer[Observation]
 	now          func() time.Time
@@ -51,7 +52,7 @@ func Start[T any](parent context.Context, config Config[T]) (*Task[T], error) {
 	ctx, cancel := context.WithCancelCause(context.WithoutCancel(parent))
 	started := config.Now()
 	current := &Task[T]{
-		id: config.ID, state: Running, cancel: cancel, done: make(chan struct{}),
+		id: config.ID, state: Running, cancel: cancel, done: make(chan struct{}), changed: make(chan struct{}),
 		producer: producer, observations: observations, now: config.Now,
 		result: Result[T]{StartedAt: started}, project: config.Project, publish: producer.TryPublish,
 	}
@@ -59,6 +60,7 @@ func Start[T any](parent context.Context, config Config[T]) (*Task[T], error) {
 	stopParent := context.AfterFunc(parent, func() { current.Stop(Cancelled) })
 	control := Control{
 		ID: config.ID, Now: config.Now, Random: config.Random, Emit: current.emit, Diagnostics: config.Diagnostics,
+		StateChanged: current.notifyChanged,
 		CleanupContext: func() (context.Context, context.CancelFunc) {
 			// Cleanup keeps caller values for tracing but cannot inherit a deadline
 			// or cancellation that caused the task to stop.
@@ -82,6 +84,7 @@ func Start[T any](parent context.Context, config Config[T]) (*Task[T], error) {
 			config.Completed(completion.CleanupError)
 		}
 		close(current.done)
+		current.notifyChanged()
 	}()
 	return current, nil
 }
@@ -116,6 +119,7 @@ func (current *Task[T]) Stop(reason StopReason) {
 	current.reason = reason
 	current.emit(Lifecycle{State: Stopping, StopReason: reason})
 	current.cancel(reason.cause())
+	current.notifyLocked()
 }
 
 func (current *Task[T]) Wait(ctx context.Context) (Result[T], error) {

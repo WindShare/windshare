@@ -113,6 +113,15 @@ type Control struct {
 	Random         io.Reader
 	CleanupContext func() (context.Context, context.CancelFunc)
 	Emit           func(Event) bool
+	StateChanged   func()
+}
+
+// NotifyStateChanged follows publication of queryable workflow state. It is
+// independent of detailed observations, whose bounded queue may drop records.
+func (control Control) NotifyStateChanged() {
+	if control.StateChanged != nil {
+		control.StateChanged()
+	}
 }
 
 type Completion[T any] struct {
