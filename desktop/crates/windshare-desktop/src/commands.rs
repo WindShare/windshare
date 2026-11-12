@@ -68,6 +68,10 @@ impl Desktop {
             Action::EnlargeQr(id) => self.enlarge_qr(id, window, cx),
             Action::StopShare(id) => self.stop_native_share(id),
             Action::ShareAgain(id) => self.repeat_native_share(id, window, cx),
+            Action::ConfigureShare(id) => self.open_sharing_setup(id, window, cx),
+            Action::SaveSharingSetup(id) => self.save_sharing_setup(id, cx),
+            Action::ResumeShare(id) => self.resume_native_share(id),
+            Action::ApproveRelay => self.approve_relay(cx),
             Action::OpenLink(id) => {
                 if let Some(link) = self
                     .shares
@@ -78,18 +82,7 @@ impl Desktop {
                     cx.open_url(&link.url());
                 }
             }
-            Action::ToggleShare(id) => {
-                if !self.runtime.is_preview() {
-                    return;
-                }
-                if let Some(share) = self.shares.iter_mut().find(|share| share.id == id) {
-                    share.state = if share.live() {
-                        ShareState::Paused
-                    } else {
-                        ShareState::Live { viewers: Some(0) }
-                    };
-                }
-            }
+            Action::ToggleShare(id) => self.toggle_preview_share(id),
             Action::ToggleTransfer(index) => {
                 if let Some(transfer) = self.transfers.get_mut(index) {
                     transfer.state = match transfer.state {
@@ -113,6 +106,19 @@ impl Desktop {
             Action::Toast(message) => self.notify(message, cx),
         }
         cx.notify();
+    }
+
+    fn toggle_preview_share(&mut self, id: usize) {
+        if !self.runtime.is_preview() {
+            return;
+        }
+        if let Some(share) = self.shares.iter_mut().find(|share| share.id == id) {
+            share.state = if share.live() {
+                ShareState::Paused
+            } else {
+                ShareState::Live { viewers: Some(0) }
+            };
+        }
     }
 
     fn reset_share(&mut self, window: &mut Window, cx: &mut Context<Self>) {

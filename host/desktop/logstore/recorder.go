@@ -34,6 +34,14 @@ type Recorder struct {
 	err       error
 }
 
+// Disabled retains the startup failure without making diagnostics an admission
+// dependency. No queue or writer is started when storage cannot be opened.
+func Disabled(session string, err error) *Recorder {
+	done := make(chan struct{})
+	close(done)
+	return &Recorder{session: session, closed: true, done: done, err: err}
+}
+
 func Open(directory, session string) (*Recorder, error) {
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return nil, err

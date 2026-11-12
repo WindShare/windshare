@@ -8,10 +8,35 @@ import (
 
 const notificationCapacity = 64
 
+type subscription struct {
+	snapshots chan Snapshot
+	evidence  chan Message
+	dropped   uint64
+}
+
 func (a *Application) observe(operationID string, task shareTask) {
 	defer a.readers.Done()
-	for record := range task.Observations() {
-		a.publishObservation(operationID, record)
+	events := task.Observations()
+	// Arm before querying; a commit racing the query closes this generation.
+	changed := task.Changes()
+	finished := task.Snapshot().Result != nil
+	a.snapshot()
+	for !finished || events != nil {
+		if finished {
+			changed = nil
+		}
+		select {
+		case <-changed:
+			changed = task.Changes()
+			finished = task.Snapshot().Result != nil
+			a.snapshot()
+		case record, ok := <-events:
+			if !ok {
+				events = nil
+			} else {
+				a.publishObservation(operationID, record)
+			}
+		}
 	}
 }
 
@@ -30,21 +55,25 @@ func (a *Application) publishObservation(operationID string, record engine.Obser
 	defer a.mu.Unlock()
 	for subscriber := range a.subscribers {
 		select {
-		case subscriber <- Message{Version: ProtocolVersion, Observation: notice}:
+		case subscriber.evidence <- Message{Version: ProtocolVersion, Observation: notice}:
 		default:
-			// State never depends on delivery: periodic snapshots repair even silent loss.
+			subscriber.dropped++
 		}
 	}
 }
 
-func (a *Application) subscribe() (chan Message, func()) {
+func (a *Application) subscribe() (*subscription, func()) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	queue := make(chan Message, notificationCapacity)
+	queue := &subscription{snapshots: make(chan Snapshot, 1), evidence: make(chan Message, notificationCapacity)}
 	a.subscribers[queue] = struct{}{}
 	return queue, func() {
 		a.mu.Lock()
 		delete(a.subscribers, queue)
+		dropped := queue.dropped
 		a.mu.Unlock()
+		if dropped != 0 {
+			a.deps.log("host.evidence_dropped", map[string]uint64{"count": dropped})
+		}
 	}
 }

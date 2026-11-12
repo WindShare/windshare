@@ -6491,7 +6491,9 @@ name = "windshare-host"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel",
  "libloading",
+ "polling",
  "serde",
  "serde_json",
  "tracing",

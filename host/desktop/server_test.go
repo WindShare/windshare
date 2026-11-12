@@ -17,8 +17,8 @@ func TestControlAuthenticatesAndRecoversAfterLostCreateReply(t *testing.T) {
 	a, _, starts := fixture(t)
 	created := make(chan struct{})
 	start := a.deps.start
-	a.deps.start = func(request engine.ShareRequest) (shareTask, error) {
-		task, err := start(request)
+	a.deps.start = func(ctx context.Context, request engine.ShareRequest) (shareTask, error) {
+		task, err := start(ctx, request)
 		close(created)
 		return task, err
 	}
@@ -79,7 +79,7 @@ func TestControlAuthenticatesAndRecoversAfterLostCreateReply(t *testing.T) {
 	if err := wsjson.Read(ctx, conn, &reply); err != nil {
 		t.Fatal(err)
 	}
-	if reply.Error != nil || *starts != 1 {
+	if reply.Error != nil || starts.Load() != 1 {
 		t.Fatal("retry duplicated share")
 	}
 }
@@ -87,6 +87,7 @@ func TestControlAuthenticatesAndRecoversAfterLostCreateReply(t *testing.T) {
 func TestSlowObserversCannotBlockAndSnapshotsRepairDroppedEvents(t *testing.T) {
 	a, task, _ := fixture(t)
 	a.execute(createRequest())
+	admitted(t, a)
 	queue, unsubscribe := a.subscribe()
 	defer unsubscribe()
 	event, err := appobs.NewRelayAvailability(1, 1, 0, true)
@@ -96,7 +97,7 @@ func TestSlowObserversCannotBlockAndSnapshotsRepairDroppedEvents(t *testing.T) {
 	for range notificationCapacity * 3 {
 		a.publishObservation("operation", engine.Observation{TaskID: "engine:1", Event: event})
 	}
-	if len(queue) != notificationCapacity {
+	if len(queue.evidence) != notificationCapacity {
 		t.Fatal("notification queue is not bounded")
 	}
 	task.mu.Lock()

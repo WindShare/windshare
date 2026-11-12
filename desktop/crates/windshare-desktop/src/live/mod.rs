@@ -1,6 +1,8 @@
 mod projection;
 mod selection;
 mod session;
+mod setup;
+pub use setup::SetupForm;
 
 use crate::desktop::Desktop;
 use gpui::{AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};

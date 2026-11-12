@@ -106,7 +106,7 @@ impl Desktop {
                 link: None,
                 contents: ShareContents::Selected(count),
                 size: None,
-                age: ShareAge::CreatedAt(Instant::now()),
+                age: ShareAge::CreatedAt(std::time::SystemTime::now()),
                 tone: Tone::Mint,
                 symbol,
                 state: ShareState::Preparing,

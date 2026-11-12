@@ -90,6 +90,10 @@ pub enum Action {
     ToggleShare(usize),
     StopShare(usize),
     ShareAgain(usize),
+    ConfigureShare(usize),
+    SaveSharingSetup(usize),
+    ResumeShare(usize),
+    ApproveRelay,
     OpenLink(usize),
     ToggleTransfer(usize),
     ToggleGrid,
@@ -210,7 +214,7 @@ impl ShareContents {
 }
 #[derive(Clone, Copy)]
 pub enum ShareAge {
-    CreatedAt(std::time::Instant),
+    CreatedAt(std::time::SystemTime),
     JustNow,
     MinutesAgo(u32),
     Yesterday,
@@ -219,7 +223,8 @@ impl ShareAge {
     pub fn description(self, language: Language) -> String {
         match self {
             Self::CreatedAt(at) => {
-                let minutes = u32::try_from(at.elapsed().as_secs() / 60).unwrap_or(u32::MAX);
+                let minutes = u32::try_from(at.elapsed().unwrap_or_default().as_secs() / 60)
+                    .unwrap_or(u32::MAX);
                 if minutes == 0 {
                     language.text(Text::JustNow).into()
                 } else {

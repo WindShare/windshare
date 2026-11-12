@@ -45,6 +45,14 @@ impl Desktop {
                 .child(self.choose_share(theme, layout, still, cx))
                 .into_any_element(),
             ShareFlow::Running(run) => {
+                if let Some(share) = self
+                    .shares
+                    .iter()
+                    .find(|share| share.id == run.selection_id)
+                    && matches!(share.state, crate::model::ShareState::AwaitingConfiguration)
+                {
+                    return self.sharing_setup(theme, share, cx).into_any_element();
+                }
                 let now = std::time::Instant::now();
                 let frame = run.sample(now, still);
                 let animating = active && !still && frame.needs_animation();

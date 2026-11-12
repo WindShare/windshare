@@ -18,7 +18,7 @@ import (
 const (
 	maximumClients      = 8
 	maximumMessageBytes = 256 * 1024
-	refreshInterval     = time.Second
+	refreshInterval     = 5 * time.Second
 	writeTimeout        = 2 * time.Second
 )
 
@@ -122,13 +122,22 @@ func (s *server) control(conn *websocket.Conn) {
 	defer func() { cancel(); _ = conn.CloseNow(); <-readerDone }()
 	notifications, unsubscribe := s.app.subscribe()
 	defer unsubscribe()
-	ticker := time.NewTicker(refreshInterval)
-	defer ticker.Stop()
+	timer := time.NewTimer(refreshInterval)
+	timer.Stop()
+	defer timer.Stop()
+	var fallback <-chan time.Time
 	snapshot := s.app.snapshot()
 	if !writeMessage(ctx, conn, Message{Version: ProtocolVersion, Snapshot: &snapshot}) {
 		return
 	}
 	for {
+		if snapshot.active() && fallback == nil {
+			timer.Reset(refreshInterval)
+			fallback = timer.C
+		} else if !snapshot.active() && fallback != nil {
+			timer.Stop()
+			fallback = nil
+		}
 		var message Message
 		select {
 		case request, ok := <-requests:
@@ -136,10 +145,22 @@ func (s *server) control(conn *websocket.Conn) {
 				return
 			}
 			message = s.app.execute(request)
-		case message = <-notifications:
-		case <-ticker.C:
-			snapshot := s.app.snapshot()
-			message = Message{Version: ProtocolVersion, Snapshot: &snapshot}
+		case next := <-notifications.snapshots:
+			if next.Revision <= snapshot.Revision {
+				continue
+			}
+			message = Message{Version: ProtocolVersion, Snapshot: &next}
+		case message = <-notifications.evidence:
+		case <-fallback:
+			fallback = nil
+			next := s.app.snapshot()
+			if next.Revision <= snapshot.Revision {
+				continue
+			}
+			message = Message{Version: ProtocolVersion, Snapshot: &next}
+		}
+		if message.Snapshot != nil {
+			snapshot = *message.Snapshot
 		}
 		if !writeMessage(ctx, conn, message) {
 			return

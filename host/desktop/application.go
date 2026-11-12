@@ -3,15 +3,13 @@ package desktop
 import (
 	"context"
 	"errors"
-	"fmt"
-	"path/filepath"
-	"slices"
 	"sync"
+	"time"
 
-	"github.com/windshare/windshare/adapters/filesystem"
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/relaysetup"
 	"github.com/windshare/windshare/engine/turn"
 )
 
@@ -23,70 +21,93 @@ const (
 type shareTask interface {
 	ID() engine.TaskID
 	Snapshot() engine.ShareSnapshot
+	Changes() <-chan struct{}
 	Observations() <-chan engine.Observation
 	Cancel()
 	StopShare()
 }
 
 type dependencies struct {
-	start       func(engine.ShareRequest) (shareTask, error)
+	start       func(context.Context, engine.ShareRequest) (shareTask, error)
 	close       func(context.Context) error
 	load        func() (relayconfig.Config, error)
 	configure   func(turn.Settings) error
+	setup       func(context.Context, SetupInput, func(relaysetup.Progress)) error
 	log         func(string, any)
 	diagnostics diagnostics.Sink
 }
 
-type operation struct {
-	id          string
-	paths       []string
-	frontURL    string
-	task        shareTask
-	err         *Failure
-	cancelled   bool
-	lastState   string
-	lastStartup string
+type operationPhase interface{ operationPhase() }
+type awaitingConfiguration struct{ failure *Failure }
+type admission struct{ cancelling bool }
+type running struct {
+	task     shareTask
+	frontURL string
+}
+type terminal struct {
+	result Completion
+	error  *Failure
 }
 
-// Application retains commands and task handles until joined shutdown. The
-// request connection is never an owner of a task or of engine cancellation.
+func (awaitingConfiguration) operationPhase() {}
+func (admission) operationPhase()             {}
+func (running) operationPhase()               {}
+func (terminal) operationPhase()              {}
+
+type operation struct {
+	id        string
+	paths     []string
+	relays    []string
+	createdAt time.Time
+	phase     operationPhase
+	cancel    context.CancelFunc
+}
+
+// Application owns intents independently of connections, navigation and startup.
+// Only committed state is observed; slow admission and setup never hold mu.
 type Application struct {
-	mu          sync.Mutex
-	sessionID   string
-	revision    uint64
-	operations  map[string]*operation
-	deps        dependencies
-	closing     bool
-	readers     sync.WaitGroup
-	subscribers map[chan Message]struct{}
+	mu            sync.Mutex
+	sessionID     string
+	snapshotValue Snapshot
+	operations    map[string]*operation
+	deps          dependencies
+	closing       bool
+	admissions    chan struct{}
+	work          sync.WaitGroup
+	readers       sync.WaitGroup
+	subscribers   map[*subscription]struct{}
+	setup         SetupView
+	setupRequests map[string]setupCommand
+	cancelSetup   context.CancelFunc
 }
 
 func newApplication(sessionID string, deps dependencies) *Application {
-	return &Application{sessionID: sessionID, operations: make(map[string]*operation), deps: deps, subscribers: make(map[chan Message]struct{})}
+	return &Application{
+		sessionID: sessionID, operations: make(map[string]*operation), deps: deps,
+		admissions: make(chan struct{}, 1), subscribers: make(map[*subscription]struct{}),
+		setup:         SetupView{State: "idle"},
+		setupRequests: make(map[string]setupCommand),
+	}
 }
 
 func (a *Application) execute(request Request) Message {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.deps.log("host.request", request)
+	if request.Command != "list" && request.Command != "query" {
+		a.deps.log("host.request", request)
+	}
 	var err error
 	switch request.Command {
 	case "create":
 		err = a.create(request)
+	case "configure":
+		err = a.configure(request)
+	case "resume":
+		err = a.resume(request.OperationID)
 	case "cancel":
 		err = a.cancel(request.OperationID)
 	case "stop":
-		var found bool
-		for _, op := range a.operations {
-			if op.task != nil && string(op.task.ID()) == request.TaskID {
-				op.task.StopShare()
-				found = true
-				break
-			}
-		}
-		if !found {
-			err = errors.New("share task not found")
-		}
+		err = a.stop(request.TaskID)
 	case "list", "observe":
 	case "query":
 		if _, ok := a.operations[request.OperationID]; !ok {
@@ -107,62 +128,14 @@ func (a *Application) execute(request Request) Message {
 
 func validOperation(id string) bool { return len(id) > 0 && len(id) <= maximumOperationIDBytes }
 
-func (a *Application) create(request Request) error {
-	if a.closing {
-		return engine.ErrClosed
-	}
-	if !validOperation(request.OperationID) {
-		return errors.New("operation_id must contain 1–128 bytes")
-	}
-	paths := make([]string, len(request.Paths))
-	for i, path := range request.Paths {
-		if path == "" {
-			return errors.New("selection contains an empty path")
+func (a *Application) stop(id string) error {
+	for _, op := range a.operations {
+		if current, ok := op.phase.(running); ok && string(current.task.ID()) == id {
+			current.task.StopShare()
+			return nil
 		}
-		absolute, err := filepath.Abs(path)
-		if err != nil {
-			return err
-		}
-		paths[i] = absolute
 	}
-	if previous, ok := a.operations[request.OperationID]; ok {
-		if previous.paths != nil && !slices.Equal(previous.paths, paths) {
-			return errors.New("operation_id already belongs to another selection")
-		}
-		return nil
-	}
-	if len(paths) == 0 {
-		return errors.New("select at least one file or folder")
-	}
-	if len(a.operations) >= maximumOperations {
-		return errors.New("application operation limit reached; restart after stopping shares")
-	}
-	op := &operation{id: request.OperationID, paths: paths}
-	a.operations[op.id] = op
-	config, err := a.deps.load()
-	if err != nil {
-		op.err = failure("configuration_required", fmt.Errorf("read saved WindShare configuration: %w", err))
-		return nil
-	}
-	relays, err := relayconfig.SelectRelays(config, nil)
-	if err != nil || config.FrontURL == "" {
-		op.err = failure("configuration_required", errors.New("save an active relay and frontend with 'wind relay add <url>' or 'wind config import <file> --front-url <url>', then create a new share"))
-		return nil
-	}
-	if err := a.deps.configure(config.TURNSettings()); err != nil {
-		op.err = failure("configuration_required", err)
-		return nil
-	}
-	op.frontURL = config.FrontURL
-	op.task, err = a.deps.start(engine.ShareRequest{Source: filesystem.ShareSource(paths), Relays: relays, Diagnostics: a.deps.diagnostics})
-	if err != nil {
-		op.err = failure("creation_failed", err)
-		return nil
-	}
-	a.deps.log("host.share_created", map[string]string{"operation_id": op.id, "task_id": string(op.task.ID())})
-	a.readers.Add(1)
-	go a.observe(op.id, op.task)
-	return nil
+	return errors.New("share task not found")
 }
 
 func (a *Application) cancel(id string) error {
@@ -177,14 +150,21 @@ func (a *Application) cancel(id string) error {
 		if len(a.operations) >= maximumOperations {
 			return errors.New("application operation limit reached")
 		}
-		// A cancellation may arrive before a retried create on another connection.
-		// Retaining this tombstone prevents a late request from resurrecting it.
-		op = &operation{id: id}
+		// A cancellation can precede replay on another connection.
+		op = &operation{id: id, createdAt: time.Now()}
 		a.operations[id] = op
 	}
-	op.cancelled = true
-	if op.task != nil {
-		op.task.Cancel()
+	if op.cancel != nil {
+		op.cancel()
+	}
+	switch current := op.phase.(type) {
+	case running:
+		current.task.Cancel()
+	case admission:
+		op.phase = admission{cancelling: true}
+	case terminal:
+	default:
+		op.phase = terminal{result: Completion{Outcome: OutcomeCancelled, StopReason: Cancelled}}
 	}
 	return nil
 }
@@ -192,7 +172,18 @@ func (a *Application) cancel(id string) error {
 func (a *Application) close() error {
 	a.mu.Lock()
 	a.closing = true
+	if a.cancelSetup != nil {
+		a.cancelSetup()
+	}
+	for _, op := range a.operations {
+		if _, admitting := op.phase.(admission); admitting && op.cancel != nil {
+			op.cancel()
+		}
+	}
 	a.mu.Unlock()
+	// Admission may be returning an engine handle. Join it before closing the
+	// engine so no late worker can escape the application's ownership barrier.
+	a.work.Wait()
 	err := a.deps.close(context.Background())
 	a.readers.Wait()
 	a.deps.log("host.engine_joined", map[string]string{"error": errorText(err)})
