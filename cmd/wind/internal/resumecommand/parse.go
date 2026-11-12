@@ -128,7 +128,9 @@ func (item *resumeItemNumberFlag) Set(value string) error {
 	if item == nil || item.set {
 		return errors.New("exactly one --item is allowed")
 	}
-	parsed, err := strconv.ParseUint(value, 10, strconv.IntSize)
+	// IntSize-1 bits keeps the ordinal within int, so it cannot wrap to a
+	// non-positive or different item number when converted below.
+	parsed, err := strconv.ParseUint(value, 10, strconv.IntSize-1)
 	if err != nil || parsed == 0 || strconv.FormatUint(parsed, 10) != value {
 		return errors.New("--item must be one canonical positive decimal number")
 	}
