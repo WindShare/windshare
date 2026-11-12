@@ -27,20 +27,27 @@ Choose files or folders in the native picker, or drop a mixed selection into the
 window as one share. Links are immediately available for copying, opening in a
 browser, or scanning. My shares retains preparing, active and finished tasks across
 navigation and control reconnects; New share does not stop existing shares.
-Only selected-root counts are shown, without scanning descendants or copying sources.
+The engine supplies selected-root names, types and known file sizes. Directory totals
+remain unknown; selecting a folder does not scan descendants or copy sources.
 
-Missing saved configuration is reported directly; configure it with
-`wind relay add <url>` or `wind config import <file> --front-url <url>`, then use
-Share again. `WINDSHARE_CONFIG` overrides the shared configuration path.
-In-app relay setup and official account bootstrap remain in the
-[integration plan](../docs/plans/desktop-live-sharing.md). Closing the window stops
-all shares and waits for the engine to join.
+When configuration is missing, enter a relay URL and, if the relay does not provide
+one, a frontend URL in the app. Restricted relays may require browser approval.
+The selection resumes automatically after setup. Existing CLI settings are reused;
+after changing them externally, choose **Use saved settings**. `WINDSHARE_CONFIG`
+overrides the shared configuration path. Setup preserves saved relay choices and
+disabled defaults; cancelling the share retains saved configuration.
+
+Manual setup supports development and self-hosting. Default onboarding still needs
+official account provisioning, which is outside this integration. Closing the window
+cancels pending setup/admission, stops all shares and joins the engine off the UI thread.
 
 `make desktop-package` creates a release archive under `dist/desktop`, including
-the executable, Go library, generated C header and license. Packaging checks
+the executable, Go library, license and instructions. The generated C header stays
+in the build output. Packaging checks
 `--host-check` from the relocated directory. Keep the library beside the executable.
 Logs default to the OS cache directory under `WindShare/logs`: host files rotate
-at 4 MiB with eight retained files; desktop logs retain seven daily files.
+at 4 MiB with eight retained files, independently for the host and desktop.
+Logging is asynchronous and bounded; unavailable log storage does not prevent sharing.
 `WINDSHARE_TRACE=1` enables detailed engine diagnostics; `RUST_LOG` controls Rust traces.
 
 ## Interface and preview
@@ -105,6 +112,8 @@ compare the same build profile, window size and display refresh rate.
   cards, progress and toggles. No third-party component library.
 - `crates/windshare-host`: native ABI ownership, reconnecting control client and task snapshots.
   Cargo builds `cmd/windshare-host`; `host/desktop` owns the engine and local endpoint.
+  Committed engine changes push coalesced full snapshots; GPUI wakes on model changes.
+  Reconnects reconcile the current session; a five-second fallback runs only while work is active.
 - `crates/windshare-desktop/src/live`: native selection, engine snapshot projection and
   joined app lifetime. `Desktop` and the existing view/motion modules serve both real
   and preview sessions; there is no separate production UI.

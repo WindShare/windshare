@@ -17,14 +17,15 @@ await mkdir(output, { recursive: true });
 const staging = await mkdtemp(join(output, 'windshare-'));
 const target = process.env.CARGO_TARGET_DIR
   ? resolve(process.env.CARGO_TARGET_DIR) : join(desktop, 'target');
-for (const name of [executable, library, 'windshare_host.h']) {
+for (const name of [executable, library]) {
   await copyFile(join(target, profile, name), join(staging, name));
 }
 await copyFile(join(root, 'LICENSE'), join(staging, 'LICENSE'));
 await writeFile(join(staging, 'README.txt'),
   'WindShare desktop: keep the executable and Go host library together.\n' +
   'Run windshare to select real files and folders, or drop a selection into the window.\n' +
-  'Uses saved wind relay/frontend configuration. Closing the window stops and joins shares.\n');
+  'Uses saved wind relay/frontend settings, with in-app manual setup when needed.\n' +
+  'Closing the window stops and joins shares.\n');
 const check = spawnSync(join(staging, executable), ['--host-check'], { cwd: staging, timeout: 60_000 });
 if (check.error || check.status !== 0) throw check.error ?? new Error('Packaged host check failed');
 const archive = join(output, `windshare-${process.platform}-${process.arch}-${profile}.tar.gz`);
