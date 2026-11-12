@@ -1,3 +1,5 @@
+import { decode as decodePunycode } from 'punycode/'
+
 import { concatBytes, encodeBase64Url } from '../../crypto/bytes'
 import { sha256 } from '../../crypto/digest'
 import { type CryptoRuntime, defaultCryptoRuntime } from '../../crypto/webcrypto'
@@ -8,6 +10,7 @@ export const RELAY_SHARE_ROUTE_QUERY = 'share_id'
 
 const TEXT_ENCODER = new TextEncoder()
 const RELAY_IDENTITY_DOMAIN = TEXT_ENCODER.encode('windshare/v2 relay-identity\0')
+const PUNYCODE_PREFIX = 'xn--'
 const INVALID_PERCENT_ENCODING = /%(?![0-9A-Fa-f]{2})/u
 const QUERY_CHARACTER = /^[A-Za-z0-9\-._~!$&()*+,;=:@/?]$/u
 
@@ -36,6 +39,17 @@ function boundaryWhitespace(character: string | undefined): boolean {
   )
 }
 
+function validALabel(label: string): boolean {
+  // Some URL runtimes accept invalid ASCII A-labels. Decode first so their
+  // Unicode validation runs, then require the same authenticated host identity.
+  try {
+    const unicode = decodePunycode(label.slice(PUNYCODE_PREFIX.length))
+    return new URL(`https://${unicode}`).hostname === label
+  } catch {
+    return false
+  }
+}
+
 function validDNSName(hostname: string): boolean {
   const name = hostname.endsWith('.') ? hostname.slice(0, -1) : hostname
   if (name.length === 0 || name.length > 253) return false
@@ -45,8 +59,9 @@ function validDNSName(hostname: string): boolean {
       label.length > 63 ||
       label.startsWith('-') ||
       label.endsWith('-') ||
-      (label.length > 3 && label.slice(2, 4) === '--' && !label.startsWith('xn--')) ||
-      !/^[a-z0-9-]+$/u.test(label)
+      (label.length > 3 && label.slice(2, 4) === '--' && !label.startsWith(PUNYCODE_PREFIX)) ||
+      !/^[a-z0-9-]+$/u.test(label) ||
+      (label.startsWith(PUNYCODE_PREFIX) && !validALabel(label))
     ) {
       return false
     }

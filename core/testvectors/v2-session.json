@@ -140,6 +140,11 @@
           "accepted": false
         },
         {
+          "name": "punycode-disallowed-code-point",
+          "relayBaseUrl": "https://xn--a.example",
+          "accepted": false
+        },
+        {
           "name": "empty-punycode",
           "relayBaseUrl": "https://xn--.example",
           "accepted": false

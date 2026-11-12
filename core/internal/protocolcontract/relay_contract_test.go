@@ -113,6 +113,7 @@ func v2RelayEndpointCases() []v2RelayEndpointVector {
 		rejected("fullwidth-port-delimiter", "https://ü.com：8080"),
 		rejected("fullwidth-path-delimiter", "https://ü.com／evil"),
 		rejected("invalid-punycode", "https://xn--test.example"),
+		rejected("punycode-disallowed-code-point", "https://xn--a.example"),
 		rejected("empty-punycode", "https://xn--.example"),
 		rejected("unicode-with-empty-punycode-label", "https://b\u00fccher.xn--.example"),
 		rejected("unicode-with-ascii-only-punycode-label", "https://b\u00fccher.xn--abc-.example"),
