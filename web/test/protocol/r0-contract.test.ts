@@ -6,11 +6,11 @@ import {
 
 import { decode, encode, rfc8949EncodeOptions } from 'cborg'
 import { describe, expect, it } from 'vitest'
+import { canonicalRelayEndpoint } from '../../src/transport/relay/endpoint'
 
 import { loadVectorFile, type VectorCase } from '../vectors'
 import {
   bytes,
-  canonicalV2RelayEndpoints,
   concat,
   derive,
   ed25519Public,
@@ -316,7 +316,7 @@ describe('R0 Go to TypeScript protocol contract', () => {
 })
 
 describe('R0 relay and ProtocolSession contract', () => {
-  it('binds relay registration, X25519 traffic keys, and terminal envelopes', () => {
+  it('binds relay registration, X25519 traffic keys, and terminal envelopes', async () => {
     const relayEndpoints = namedCase<RelayEndpointVector>(
       sessionCases,
       'v2-relay-endpoint-normalization',
@@ -393,10 +393,10 @@ describe('R0 relay and ProtocolSession contract', () => {
 
     for (const endpointCase of relayEndpoints.cases) {
       if (!endpointCase.accepted) {
-        expect(() => canonicalV2RelayEndpoints(endpointCase.relayBaseUrl)).toThrow(TypeError)
+        await expect(canonicalRelayEndpoint(endpointCase.relayBaseUrl)).rejects.toThrow(TypeError)
         continue
       }
-      const normalized = canonicalV2RelayEndpoints(endpointCase.relayBaseUrl)
+      const normalized = await canonicalRelayEndpoint(endpointCase.relayBaseUrl)
       expect(normalized.dialEndpoint).toBe(endpointCase.dialEndpoint)
       expect(normalized.relayIdentityEndpoint).toBe(endpointCase.relayIdentityEndpoint)
       expect(
@@ -409,8 +409,8 @@ describe('R0 relay and ProtocolSession contract', () => {
       ).toEqual(bytes(endpointCase.relayIdentityB64!))
     }
 
-    const normalizedRegistrationEndpoint = canonicalV2RelayEndpoints(registration.relayBaseUrl)
-    expect(normalizedRegistrationEndpoint).toEqual({
+    const normalizedRegistrationEndpoint = await canonicalRelayEndpoint(registration.relayBaseUrl)
+    expect(normalizedRegistrationEndpoint).toMatchObject({
       dialEndpoint: registration.dialEndpoint,
       relayIdentityEndpoint: registration.relayIdentityEndpoint,
     })

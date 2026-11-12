@@ -23,7 +23,6 @@ const SENDER_OBJECT_NONCE_BYTES = 12
 const SENDER_OBJECT_SIGNATURE_BYTES = 64
 const OPERATION_HEADER_BYTES = 16
 const OPERATION_NONCE_BYTES = 12
-const RELAY_WEBSOCKET_PATH = '/v2/ws'
 const OBJECT_DOMAIN_PREFIX = 'windshare/v2 object/'
 const CONTROL_OPERATION_DOMAIN = 'windshare/v2 control/operation'
 const CONTROL_TERMINAL_DOMAIN = 'windshare/v2 control/session-terminal'
@@ -586,107 +585,6 @@ export function expectSenderControl(
     operationId,
     body: requireMap(wrapper.get(1), 'sender control semantic body'),
   }
-}
-
-function rawRelayPathHasDotSegment(raw: string): boolean {
-  const authorityStart = raw.indexOf('://') + 3
-  const pathStart = raw.indexOf('/', authorityStart)
-  if (pathStart < 0) return false
-  const queryStart = raw.indexOf('?', pathStart)
-  const path = raw.slice(pathStart, queryStart < 0 ? raw.length : queryStart)
-  return path.split('/').some((segment) => {
-    try {
-      const decoded = decodeURIComponent(segment)
-      return decoded === '.' || decoded === '..'
-    } catch {
-      return true
-    }
-  })
-}
-
-function validRelayQuery(raw: string): boolean {
-  const queryStart = raw.indexOf('?')
-  if (queryStart < 0) return true
-  const query = raw.slice(queryStart + 1)
-  for (let index = 0; index < query.length; index += 1) {
-    const code = query.charCodeAt(index)
-    if (code > 0x7f) return false
-    const character = query[index]!
-    if (character === '%') {
-      if (index + 2 >= query.length || !/^[\dA-Fa-f]{2}$/u.test(query.slice(index + 1, index + 3))) {
-        return false
-      }
-      index += 2
-      continue
-    }
-    if (!/^[A-Za-z\d]$/u.test(character) && !'-._~!$&()*+,;=:@/?'.includes(character)) {
-      return false
-    }
-  }
-  return true
-}
-
-function isRelayBoundaryWhitespace(codePoint: number): boolean {
-  return (codePoint >= 0x09 && codePoint <= 0x0d) || codePoint === 0x20 ||
-    codePoint === 0x85 || codePoint === 0xa0 || codePoint === 0x1680 ||
-    (codePoint >= 0x2000 && codePoint <= 0x200a) || codePoint === 0x2028 ||
-    codePoint === 0x2029 || codePoint === 0x202f || codePoint === 0x205f ||
-    codePoint === 0x3000 || codePoint === 0xfeff
-}
-
-function hasInvalidRelaySpelling(raw: string): boolean {
-  const first = raw.codePointAt(0)
-  const last = raw.codePointAt(raw.length - 1)
-  if (first === undefined || last === undefined ||
-      isRelayBoundaryWhitespace(first) || isRelayBoundaryWhitespace(last)) return true
-  for (const character of raw) {
-    const codePoint = character.codePointAt(0)!
-    if (codePoint <= 0x1f || codePoint === 0x7f || character === '\\') return true
-  }
-  return false
-}
-
-function isASCIIText(value: string): boolean {
-  for (const character of value) {
-    if (character.codePointAt(0)! > 0x7f) return false
-  }
-  return true
-}
-
-export function canonicalV2RelayEndpoints(raw: string): {
-  readonly dialEndpoint: string
-  readonly relayIdentityEndpoint: string
-} {
-  if (raw === '' || hasInvalidRelaySpelling(raw) || raw.includes('#')) {
-    throw new TypeError('invalid v2 relay base spelling')
-  }
-  const schemeSeparator = raw.indexOf('://')
-  if (schemeSeparator <= 0) throw new TypeError('relay base must be absolute')
-  const authorityEndMatch = /[/?#]/u.exec(raw.slice(schemeSeparator + 3))
-  const authorityEnd = authorityEndMatch === null
-    ? raw.length
-    : schemeSeparator + 3 + authorityEndMatch.index
-  if (raw.slice(schemeSeparator + 3, authorityEnd).includes('@')) {
-    throw new TypeError('v2 relay base forbids userinfo')
-  }
-  if (rawRelayPathHasDotSegment(raw) || !validRelayQuery(raw)) {
-    throw new TypeError('invalid v2 relay base path or query')
-  }
-  const endpoint = new URL(raw)
-  if (endpoint.protocol === 'http:' || endpoint.protocol === 'ws:') endpoint.protocol = 'ws:'
-  else if (endpoint.protocol === 'https:' || endpoint.protocol === 'wss:') endpoint.protocol = 'wss:'
-  else throw new TypeError('unsupported v2 relay scheme')
-  if (endpoint.hostname === '' || !isASCIIText(endpoint.hostname)) {
-    throw new TypeError('invalid v2 relay host')
-  }
-  const basePath = endpoint.pathname.endsWith('/')
-    ? endpoint.pathname.slice(0, -1)
-    : endpoint.pathname
-  endpoint.pathname = `${basePath}${RELAY_WEBSOCKET_PATH}`
-  const dialEndpoint = endpoint.toString()
-  endpoint.search = ''
-  const relayIdentityEndpoint = endpoint.toString()
-  return { dialEndpoint, relayIdentityEndpoint }
 }
 
 export function validSingleFragment(

@@ -1,9 +1,11 @@
 package link_test
 
 import (
+	"errors"
 	"net/url"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/windshare/windshare/core/link"
@@ -110,6 +112,85 @@ func TestExplicitRelayHintsAreNeverPartiallyElided(t *testing.T) {
 		parsed, err := link.Parse(full)
 		if err != nil || !slices.Equal(parsed.Relays, relays) {
 			t.Fatalf("explicit relay list changed: got=%v want=%v error=%v", parsed.Relays, relays, err)
+		}
+	}
+}
+
+// Browsers convert a Unicode link host to its ASCII form before using the link
+// origin as the implicit relay. The CLI must derive the same relay, or a link
+// pasted from a chat that shows the Unicode spelling names an unreachable one.
+func TestImplicitRelayResolvesUnicodeHostsLikeBrowser(t *testing.T) {
+	for _, test := range []struct {
+		host string
+		want string
+	}{
+		{"münchen.de", "https://xn--mnchen-3ya.de"},
+		{"MÜNCHEN.DE", "https://xn--mnchen-3ya.de"},
+		{"文件.example:8443", "https://xn--5nqy36c.example:8443"},
+		{"ex😀.com", "https://xn--ex-oo82a.com"},
+		{"ＥＸＡＭＰＬＥ.com", "https://example.com"},
+		{"ex。com", "https://ex.com"},
+		{"xn--mnchen-3ya.de", "https://xn--mnchen-3ya.de"},
+		{"straße.de", "https://xn--strae-oqa.de"},
+		{"ü.com.", "https://xn--tda.com."},
+		{"ü-.com", "https://xn----dha.com"},
+		{"ü.com:8080", "https://xn--tda.com:8080"},
+	} {
+		t.Run(test.host, func(t *testing.T) {
+			full := "https://" + test.host + "/" + testShareID + "#" + testKey
+			got, err := link.Parse(full)
+			if err != nil || !slices.Equal(got.Relays, []string{test.want}) {
+				t.Fatalf("Parse relays=%v error=%v, want [%s]", got.Relays, err, test.want)
+			}
+			bare, key, err := link.Split(full)
+			if err != nil {
+				t.Fatal(err)
+			}
+			merged, err := link.Merge(bare, key)
+			if err != nil || !reflect.DeepEqual(merged, got) {
+				t.Fatalf("Merge(Split) = %+v, %v; want %+v", merged, err, got)
+			}
+		})
+	}
+}
+
+func TestParseRejectsUnicodeHostsBrowsersRefuse(t *testing.T) {
+	for _, host := range []string{
+		"a\u200db.com", "\u2488.com", "\u00ad", "\u200b:8443", "xn--test.example",
+		// Fullwidth look-alikes normalize to URL syntax characters, which a
+		// browser refuses instead of reinterpreting as port/path/userinfo.
+		"ü.com\uff1a8080", "ü.com\uff0fevil", "ü.com\uff20evil", "ü.com\uff1fx",
+		"ü.com\uff03x", "ü.com\uff05x", "ü.com\uff3c", "ü\u3000.com",
+	} {
+		full := "https://" + host + "/" + testShareID + "#" + testKey
+		if _, err := link.Parse(full); !errors.Is(err, link.ErrMalformedLink) {
+			t.Fatalf("Parse host %q error=%v, want ErrMalformedLink", host, err)
+		}
+		if _, _, err := link.Split(full); !errors.Is(err, link.ErrMalformedLink) {
+			t.Fatalf("Split host %q error=%v, want ErrMalformedLink", host, err)
+		}
+		if _, err := link.Merge(full, testKey); !errors.Is(err, link.ErrMalformedLink) {
+			t.Fatalf("Merge host %q error=%v, want ErrMalformedLink", host, err)
+		}
+		if _, err := newLink().URL("https://" + host); !errors.Is(err, link.ErrMalformedLink) {
+			t.Fatalf("URL host %q error=%v, want ErrMalformedLink", host, err)
+		}
+	}
+}
+
+func TestUnicodeFrontendKeepsTheSameImplicitRelayAsItsASCIIForm(t *testing.T) {
+	capability := newLink("https://xn--mnchen-3ya.de")
+	for _, base := range []string{"https://münchen.de", "https://xn--mnchen-3ya.de"} {
+		full, err := capability.URL(base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(full, "?r=") {
+			t.Fatalf("%s: relay hint was not elided for the frontend's own origin: %s", base, full)
+		}
+		parsed, err := link.Parse(full)
+		if err != nil || !slices.Equal(parsed.Relays, capability.Relays) {
+			t.Fatalf("%s: relays=%v error=%v", base, parsed.Relays, err)
 		}
 	}
 }

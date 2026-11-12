@@ -4,6 +4,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/windshare/windshare/core/urlhost"
 )
 
 const (
@@ -37,6 +39,9 @@ func explicitRelays(page *url.URL, relays []string) []string {
 		relay.Scheme = "https"
 	case "http", "https":
 	default:
+		return relays
+	}
+	if err := urlhost.Normalize(relay); err != nil {
 		return relays
 	}
 	// Only the root endpoint is implicit. Paths and query credentials can select

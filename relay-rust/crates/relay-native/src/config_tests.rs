@@ -1,6 +1,39 @@
 use super::*;
 
 #[test]
+fn canonical_endpoint_identities_match_shared_vectors() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+
+    let vectors: serde_json::Value =
+        serde_json::from_str(include_str!("../../../../core/testvectors/v2-session.json")).unwrap();
+    let cases = vectors["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "v2-relay-endpoint-normalization")
+        .unwrap();
+    for case in cases["cases"].as_array().unwrap() {
+        if case["accepted"] != true {
+            continue;
+        }
+        let canonical = case["relayIdentityEndpoint"].as_str().unwrap();
+        let endpoint = Endpoint::parse(canonical).unwrap_or_else(|error| {
+            panic!("{}: {error}", case["name"]);
+        });
+        let expected = STANDARD
+            .decode(case["relayIdentityB64"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(
+            endpoint.identity.as_bytes().as_slice(),
+            expected,
+            "{}",
+            case["name"]
+        );
+        assert_eq!(endpoint.url, canonical);
+    }
+}
+
+#[test]
 fn endpoint_identity_uses_exact_public_bytes() {
     let endpoint = Endpoint::parse("wss://relay.example/base/v2/ws").unwrap();
     let digest: [u8; 32] = Sha256::new()

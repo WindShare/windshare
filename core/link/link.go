@@ -13,6 +13,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/windshare/windshare/core/urlhost"
 )
 
 const (
@@ -274,6 +276,9 @@ func parseAbsoluteURL(raw string) (*url.URL, url.Values, error) {
 		// net/url parse errors retain and render the complete input URL. Returning
 		// that detail would copy a capability fragment into CLI diagnostics.
 		return nil, nil, fmt.Errorf("%w: invalid URL syntax or missing scheme/host", ErrMalformedLink)
+	}
+	if err := urlhost.Normalize(u); err != nil {
+		return nil, nil, fmt.Errorf("%w: invalid URL host", ErrMalformedLink)
 	}
 	// URL.Query silently discards malformed pairs. Capability parsing must fail
 	// closed instead, or Go and the browser can derive different relay lists from

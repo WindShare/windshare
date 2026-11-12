@@ -38,6 +38,38 @@ func TestRelayEndpointWhitespaceCauseMatchesRejectedSpelling(t *testing.T) {
 	}
 }
 
+func TestRelayEndpointNormalizationVectors(t *testing.T) {
+	var vectors struct {
+		Cases []struct {
+			Name                  string `json:"name"`
+			RelayBaseURL          string `json:"relayBaseUrl"`
+			Accepted              bool   `json:"accepted"`
+			DialEndpoint          string `json:"dialEndpoint"`
+			RelayIdentityEndpoint string `json:"relayIdentityEndpoint"`
+			RelayIdentityB64      string `json:"relayIdentityB64"`
+		} `json:"cases"`
+	}
+	loadV2VectorCase(t, "v2-session.json", "v2-relay-endpoint-normalization", &vectors)
+	for _, vector := range vectors.Cases {
+		t.Run(vector.Name, func(t *testing.T) {
+			got, err := NormalizeRelayEndpoint(vector.RelayBaseURL)
+			if !vector.Accepted {
+				if !errors.Is(err, ErrIdentity) {
+					t.Fatalf("rejected endpoint error = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.DialURL != vector.DialEndpoint || got.IdentityURL != vector.RelayIdentityEndpoint ||
+				!bytes.Equal(got.Identity[:], testB64(t, vector.RelayIdentityB64)) {
+				t.Fatalf("endpoint = %+v", got)
+			}
+		})
+	}
+}
+
 func TestRelayShareRoutingVectors(t *testing.T) {
 	var vectors struct {
 		Cases []struct {

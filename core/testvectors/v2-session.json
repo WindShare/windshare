@@ -38,6 +38,133 @@
           "relayIdentityB64": "HHSk7i5KuqyZHYIPDR01knFzmv9wZKj86db1SqmPjEA="
         },
         {
+          "name": "unicode-latin",
+          "relayBaseUrl": "https://münchen.de",
+          "accepted": true,
+          "dialEndpoint": "wss://xn--mnchen-3ya.de/v2/ws",
+          "relayIdentityEndpoint": "wss://xn--mnchen-3ya.de/v2/ws",
+          "relayIdentityB64": "myPY7msPwn4/kYGIR5Qq0ikRkHX5r/tKvFLmSj8Iekk="
+        },
+        {
+          "name": "punycode-latin",
+          "relayBaseUrl": "https://xn--mnchen-3ya.de",
+          "accepted": true,
+          "dialEndpoint": "wss://xn--mnchen-3ya.de/v2/ws",
+          "relayIdentityEndpoint": "wss://xn--mnchen-3ya.de/v2/ws",
+          "relayIdentityB64": "myPY7msPwn4/kYGIR5Qq0ikRkHX5r/tKvFLmSj8Iekk="
+        },
+        {
+          "name": "unicode-uppercase",
+          "relayBaseUrl": "https://MÜNCHEN.DE:443/",
+          "accepted": true,
+          "dialEndpoint": "wss://xn--mnchen-3ya.de/v2/ws",
+          "relayIdentityEndpoint": "wss://xn--mnchen-3ya.de/v2/ws",
+          "relayIdentityB64": "myPY7msPwn4/kYGIR5Qq0ikRkHX5r/tKvFLmSj8Iekk="
+        },
+        {
+          "name": "unicode-cjk-port-and-credentials",
+          "relayBaseUrl": "https://文件.example:8443/base/?token=a%2fb+~\u0026flag",
+          "accepted": true,
+          "dialEndpoint": "wss://xn--5nqy36c.example:8443/base/v2/ws?token=a%2fb+~\u0026flag",
+          "relayIdentityEndpoint": "wss://xn--5nqy36c.example:8443/base/v2/ws",
+          "relayIdentityB64": "lhqCWOqyakQBEtOlDZerMOD7aMK0+JMPjEKBYEnSuFc="
+        },
+        {
+          "name": "unicode-nontransitional",
+          "relayBaseUrl": "https://straße.de",
+          "accepted": true,
+          "dialEndpoint": "wss://xn--strae-oqa.de/v2/ws",
+          "relayIdentityEndpoint": "wss://xn--strae-oqa.de/v2/ws",
+          "relayIdentityB64": "iP1NZ2hGOE4tGKPOvERuek99xk0bW/vuVTcsm0efVuw="
+        },
+        {
+          "name": "unicode-emoji",
+          "relayBaseUrl": "https://ex😀.com",
+          "accepted": true,
+          "dialEndpoint": "wss://xn--ex-oo82a.com/v2/ws",
+          "relayIdentityEndpoint": "wss://xn--ex-oo82a.com/v2/ws",
+          "relayIdentityB64": "CoFyDKyBef5s5eW+2FCNuRhOnNoOaUITHDyeF1rq15s="
+        },
+        {
+          "name": "unicode-fullwidth",
+          "relayBaseUrl": "https://ＥＸＡＭＰＬＥ.com",
+          "accepted": true,
+          "dialEndpoint": "wss://example.com/v2/ws",
+          "relayIdentityEndpoint": "wss://example.com/v2/ws",
+          "relayIdentityB64": "70TZ54UCm7oPWzcv7VE7+nxu+4mf0NJf4n+JA+E/lpY="
+        },
+        {
+          "name": "unicode-dot",
+          "relayBaseUrl": "https://ex。com",
+          "accepted": true,
+          "dialEndpoint": "wss://ex.com/v2/ws",
+          "relayIdentityEndpoint": "wss://ex.com/v2/ws",
+          "relayIdentityB64": "+Q96XFyJymfCcKvvJAbKuO4pycspnZ6jaHy6ih+4SkY="
+        },
+        {
+          "name": "unicode-trailing-dot",
+          "relayBaseUrl": "https://ü.com.",
+          "accepted": true,
+          "dialEndpoint": "wss://xn--tda.com./v2/ws",
+          "relayIdentityEndpoint": "wss://xn--tda.com./v2/ws",
+          "relayIdentityB64": "9bY8pLbkSpwMX04C1uRyfEM6Bg0japv+rZ/oNc1JvPk="
+        },
+        {
+          "name": "erased-domain",
+          "relayBaseUrl": "https://­",
+          "accepted": false
+        },
+        {
+          "name": "erased-domain-with-port",
+          "relayBaseUrl": "https://​:8443",
+          "accepted": false
+        },
+        {
+          "name": "invalid-joiner",
+          "relayBaseUrl": "https://a‍b.com",
+          "accepted": false
+        },
+        {
+          "name": "fullwidth-port-delimiter",
+          "relayBaseUrl": "https://ü.com：8080",
+          "accepted": false
+        },
+        {
+          "name": "fullwidth-path-delimiter",
+          "relayBaseUrl": "https://ü.com／evil",
+          "accepted": false
+        },
+        {
+          "name": "invalid-punycode",
+          "relayBaseUrl": "https://xn--test.example",
+          "accepted": false
+        },
+        {
+          "name": "punycode-disallowed-code-point",
+          "relayBaseUrl": "https://xn--a.example",
+          "accepted": false
+        },
+        {
+          "name": "empty-punycode",
+          "relayBaseUrl": "https://xn--.example",
+          "accepted": false
+        },
+        {
+          "name": "unicode-with-empty-punycode-label",
+          "relayBaseUrl": "https://bücher.xn--.example",
+          "accepted": false
+        },
+        {
+          "name": "unicode-with-ascii-only-punycode-label",
+          "relayBaseUrl": "https://bücher.xn--abc-.example",
+          "accepted": false
+        },
+        {
+          "name": "reserved-ascii-label",
+          "relayBaseUrl": "https://ab--cd.example",
+          "accepted": false
+        },
+        {
           "name": "userinfo",
           "relayBaseUrl": "https://user:pass@relay.example/base",
           "accepted": false
@@ -119,6 +246,33 @@
           "dialEndpoint": "wss://[2001:db8::1]/a%2Fb/v2/ws?share_id=-_8AAQIDBAUGBwgJ",
           "relayIdentityEndpoint": "wss://[2001:db8::1]/a%2Fb/v2/ws",
           "relayIdentityB64": "tL88sN/xhKsslz4r7ShXUHRfEuytrnnalwUWLISZLIU=",
+          "shareIdRawB64": "+/8AAQIDBAUGBwgJ"
+        },
+        {
+          "name": "unicode-relay",
+          "relayBaseUrl": "https://münchen.de",
+          "accepted": true,
+          "dialEndpoint": "wss://xn--mnchen-3ya.de/v2/ws?share_id=-_8AAQIDBAUGBwgJ",
+          "relayIdentityEndpoint": "wss://xn--mnchen-3ya.de/v2/ws",
+          "relayIdentityB64": "myPY7msPwn4/kYGIR5Qq0ikRkHX5r/tKvFLmSj8Iekk=",
+          "shareIdRawB64": "+/8AAQIDBAUGBwgJ"
+        },
+        {
+          "name": "punycode-relay",
+          "relayBaseUrl": "https://xn--mnchen-3ya.de",
+          "accepted": true,
+          "dialEndpoint": "wss://xn--mnchen-3ya.de/v2/ws?share_id=-_8AAQIDBAUGBwgJ",
+          "relayIdentityEndpoint": "wss://xn--mnchen-3ya.de/v2/ws",
+          "relayIdentityB64": "myPY7msPwn4/kYGIR5Qq0ikRkHX5r/tKvFLmSj8Iekk=",
+          "shareIdRawB64": "+/8AAQIDBAUGBwgJ"
+        },
+        {
+          "name": "unicode-relay-query-bytes",
+          "relayBaseUrl": "https://文件.example:8443/base/?token=a%2fb+~\u0026flag",
+          "accepted": true,
+          "dialEndpoint": "wss://xn--5nqy36c.example:8443/base/v2/ws?token=a%2fb+~\u0026flag\u0026share_id=-_8AAQIDBAUGBwgJ",
+          "relayIdentityEndpoint": "wss://xn--5nqy36c.example:8443/base/v2/ws",
+          "relayIdentityB64": "lhqCWOqyakQBEtOlDZerMOD7aMK0+JMPjEKBYEnSuFc=",
           "shareIdRawB64": "+/8AAQIDBAUGBwgJ"
         },
         {

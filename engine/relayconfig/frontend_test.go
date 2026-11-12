@@ -12,6 +12,7 @@ import (
 func TestFrontendValidationPreservesWebsiteAddress(t *testing.T) {
 	for _, raw := range []string{
 		"https://front.example", "https://front.example/app/", "http://localhost:38384", "http://[::1]:38384",
+		"https://m\u00fcnchen.de/app", "https://xn--mnchen-3ya.de/app",
 		"https://front.example/\u5206\u4eab", "https://front.example/my%C2%A0app", "https://front.example/app%C2%85",
 	} {
 		if err := ValidateFrontURL(raw); err != nil {
@@ -20,6 +21,7 @@ func TestFrontendValidationPreservesWebsiteAddress(t *testing.T) {
 	}
 	for _, raw := range []string{
 		"", "front.example", "/app", "//front.example", "wss://front.example", "https:///app",
+		"https://\u00ad", "https://a\u200db.com", "https://xn--test.example", "https://\u00fc.com\uff1a8080",
 		"https://user:password@front.example", "https://front.example?route=other", "https://front.example?",
 		"https://front.example#key", "https://front.example#", " https://front.example", "https://front.example/has space",
 		"https://front.example:0", "https://front.example:65536", "https://front.example:", "https://front.example:nope",
