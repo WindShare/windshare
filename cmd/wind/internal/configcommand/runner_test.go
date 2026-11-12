@@ -191,3 +191,21 @@ func assertImportTrace(t *testing.T, output string, want []string) {
 		t.Fatal("import trace lost a workflow milestone:", messages)
 	}
 }
+
+func TestImportParseTreatsArgumentsAfterTerminatorAsPaths(t *testing.T) {
+	// "--" ends option parsing for every later argument, as it does for share and get.
+	if _, err := parse([]string{"import", "--", "relay.json", "--verbose"}); err == nil {
+		t.Fatal("parse accepted an argument after -- as the --verbose option")
+	}
+	if _, err := parse([]string{"import", "--", "relay.json", "--front-url", "https://example.com"}); err == nil {
+		t.Fatal("parse accepted arguments after -- as the --front-url option")
+	}
+	request, err := parse([]string{"import", "-v", "--", "-profile.json"})
+	if err != nil || request.source != "-profile.json" || !request.verbose {
+		t.Fatalf("parse(-v -- -profile.json) = %+v, %v", request, err)
+	}
+	request, err = parse([]string{"import", "relay.json", "--verbose"})
+	if err != nil || request.source != "relay.json" || !request.verbose {
+		t.Fatalf("parse(relay.json --verbose) = %+v, %v", request, err)
+	}
+}

@@ -168,6 +168,12 @@ func parse(args []string) (importRequest, error) {
 			return importRequest{}, err
 		}
 		rest := flags.Args()
+		// The flag package consumes a "--" terminator silently; once it has, every
+		// remaining argument is a path, matching the share and get option boundary.
+		if consumed := len(args) - len(rest); consumed > 0 && args[consumed-1] == "--" {
+			paths = append(paths, rest...)
+			break
+		}
 		if len(rest) == 0 {
 			break
 		}
