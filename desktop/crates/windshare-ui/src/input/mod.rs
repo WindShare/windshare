@@ -229,7 +229,7 @@ impl Input {
 
 impl Render for Input {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::from(window.appearance());
+        let theme = Theme::current(window, cx);
         let focus_color = self.accent_color(theme);
         div()
             .id("input")

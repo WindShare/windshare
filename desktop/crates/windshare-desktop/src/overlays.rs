@@ -46,7 +46,7 @@ impl Desktop {
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let locale = language(cx);
-        let theme = Theme::from(window.appearance());
+        let theme = Theme::current(window, cx);
         let (title, width, content) = match &frame.content {
             Overlay::Detail(id) => (
                 locale.text(Text::ShareDetails),

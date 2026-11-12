@@ -30,7 +30,7 @@ impl Desktop {
         window: &Window,
         cx: &Context<Self>,
     ) -> gpui::AnyElement {
-        let theme = Theme::from(window.appearance());
+        let theme = Theme::current(window, cx);
         let geometry = ShareGeometry::new(window, layout);
         let still = self.reduced_motion() || cx.reduce_motion();
         let active = window.is_window_active() && window.is_visible();

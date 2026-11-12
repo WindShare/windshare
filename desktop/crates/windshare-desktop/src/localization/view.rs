@@ -1,11 +1,12 @@
-use super::{LanguageChoice, LanguageSettings, Persistence, Text, language};
+use super::{LanguageChoice, LanguageSettings, Text, language};
+use crate::preferences::{Persistence, PreferenceChoice};
 use crate::{desktop::Desktop, model::Action};
 use gpui::{Div, prelude::*, px};
 use windshare_ui::{ButtonStyle, Icon, Theme, Tone, column, row};
 
 impl Desktop {
     pub fn language_card(theme: Theme, cx: &Context<Self>) -> Div {
-        let settings = cx.global::<LanguageSettings>();
+        let settings = &cx.global::<LanguageSettings>().preference;
         let locale = language(cx);
         theme
             .card()

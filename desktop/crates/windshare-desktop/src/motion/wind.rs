@@ -22,8 +22,8 @@ struct WindMesh {
 
 pub fn wind_field(head: f32, strength: f32) -> impl IntoElement {
     canvas(
-        |bounds, window, _| {
-            let theme = Theme::from(window.appearance());
+        |bounds, window, cx| {
+            let theme = Theme::current(window, cx);
             window.with_global_id("share-wind-mesh".into(), |id, window| {
                 window.with_element_state(id, |cached: Option<Arc<WindMesh>>, _| {
                     let mesh = cached

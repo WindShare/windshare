@@ -4,7 +4,7 @@ pub(super) fn text_canvas(input: Entity<Input>) -> impl IntoElement {
     let layout_input = input.clone();
     canvas(
         move |bounds, window, cx| {
-            let theme = Theme::from(window.appearance());
+            let theme = Theme::current(window, cx);
             let field = layout_input.read(cx);
             let style = window.text_style();
             let text: SharedString = if field.value.is_empty() {
@@ -40,7 +40,7 @@ pub(super) fn text_canvas(input: Entity<Input>) -> impl IntoElement {
             (line, scroll)
         },
         move |bounds, (line, scroll), window, cx| {
-            let theme = Theme::from(window.appearance());
+            let theme = Theme::current(window, cx);
             let field = input.read(cx);
             let accent_color = field.accent_color(theme);
             let selection_color = field.selection_color(theme);

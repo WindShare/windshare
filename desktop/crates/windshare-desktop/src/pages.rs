@@ -28,6 +28,7 @@ impl Desktop {
         ];
         column()
             .gap(px(24.))
+            .child(Self::appearance_card(theme, cx))
             .child(Self::language_card(theme, cx))
             .child(
                 theme

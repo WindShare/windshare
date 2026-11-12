@@ -73,7 +73,7 @@ pub fn scaled_spirit(
 
 impl RenderOnce for SpiritScene {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = Theme::from(window.appearance());
+        let theme = Theme::current(window, cx);
         let Self {
             id,
             mood,

@@ -101,6 +101,7 @@ pub enum Action {
     Help,
     ToggleSetting(usize),
     SetLanguage(LanguageChoice),
+    SetAppearance(windshare_ui::ThemePreference),
     Toast(Text),
 }
 pub fn demo_shares() -> Vec<Share> {

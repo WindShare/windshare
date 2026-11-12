@@ -17,7 +17,7 @@ pub fn run(paths: Vec<PathBuf>, compact: bool) -> Result<(), String> {
         .with_assets(crate::DesktopAssets)
         .run(move |cx| {
             windshare_ui::init(cx);
-            cx.set_global(crate::localization::LanguageSettings::load());
+            crate::preferences::init(cx);
             crate::artwork::Artwork::preload();
             let quit_controller = application_controller.clone();
             cx.on_app_quit(move |cx| {

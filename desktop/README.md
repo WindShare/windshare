@@ -61,7 +61,9 @@ real shares. Receive, transfer, component and SuperShare samples require `--prev
 Dev builds optimize GPUI's core and
 Windows renderer for high-refresh animation while keeping application crates unoptimized.
 
-- Light and dark palettes follow the system appearance, including changes while open.
+- Preferences offers System default, Light and Dark appearance. Changes apply immediately;
+  the choice is saved at `WindShare/desktop/appearance` in the OS config directory.
+  System default follows appearance changes while the app is open.
 - Share: the result card pairs copying with a local QR code; narrow windows stack them.
   Long links use middle elision and expand in place. QR size follows payload density;
   click to enlarge. Share details reuse the same controls, with inline copy feedback.
@@ -91,7 +93,7 @@ Windows renderer for high-refresh animation while keeping application crates uno
 - Receive: paste a link or use the sample, inspect files, preview receiving.
 - My shares: search, filter, grid/list, details and copy. Real shares stop permanently;
   preview fixtures retain simulated pause/resume.
-- Preferences: language, notifications, transfer details and reduced motion.
+- Preferences: appearance, language, notifications, transfer details and reduced motion.
   English and 简体中文 switch immediately without resetting inputs or tasks. The
   default follows the system locale at startup, with English for unsupported locales.
   The language choice is saved in the OS config directory at `WindShare/desktop/language`.

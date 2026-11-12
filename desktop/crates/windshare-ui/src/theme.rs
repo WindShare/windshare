@@ -1,4 +1,4 @@
-use gpui::{Hsla, Subscription, Window, WindowAppearance, rgb};
+use gpui::{Hsla, WindowAppearance, rgb};
 
 pub const FONT: &str = "Manrope";
 #[cfg(target_os = "windows")]
@@ -13,7 +13,7 @@ pub const COMPACT_WIDTH: f32 = 1120.;
 pub const RADIUS: f32 = 18.;
 pub const MOTION_MS: u64 = 220;
 
-/// A frame's palette, resolved from its native window rather than shared mutable state.
+/// A resolved palette, independent of how the user selected it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Theme {
     Light,
@@ -27,30 +27,6 @@ impl From<WindowAppearance> for Theme {
             WindowAppearance::Dark | WindowAppearance::VibrantDark => Self::Dark,
         }
     }
-}
-
-/// Keep this subscription alive for the window's lifetime.
-pub fn follow_system_theme(window: &Window) -> Subscription {
-    trace_appearance(window, "initial");
-    window.observe_window_appearance(|window, _| {
-        trace_appearance(window, "system_changed");
-        // Entity views and custom canvases may retain their last frame without a
-        // notification. Invalidate the whole window, including focused inputs.
-        window.refresh();
-    })
-}
-
-fn trace_appearance(window: &Window, reason: &str) {
-    let appearance = window.appearance();
-    tracing::info!(
-        operation = "desktop.theme_resolved",
-        session = std::process::id(),
-        window = ?window.window_handle(),
-        source = "system",
-        reason,
-        ?appearance,
-        theme = ?Theme::from(appearance),
-    );
 }
 
 impl Theme {
