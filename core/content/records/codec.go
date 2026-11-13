@@ -45,7 +45,7 @@ func encodeRevision(descriptor content.FileRevisionDescriptor) ([]byte, error) {
 		precision = uint64(modified.Precision())
 	}
 	return recordEncMode.Marshal(map[uint64]any{
-		0: uint64(SchemaVersion),
+		0: uint64(RevisionSchemaVersion),
 		1: descriptor.ShareInstance().Bytes(),
 		2: descriptor.FileID().Bytes(),
 		3: descriptor.FileRevision().Bytes(),
@@ -53,16 +53,17 @@ func encodeRevision(descriptor content.FileRevisionDescriptor) ([]byte, error) {
 		5: seconds,
 		6: nanos,
 		7: precision,
+		8: descriptor.SourceMetadata().Bytes(),
 	})
 }
 
 func decodeRevision(plaintext []byte, expectedShare catalog.ShareInstance, expectedFile catalog.FileID, chunkSize uint32) (content.FileRevisionDescriptor, error) {
-	fields, err := decodeMap(plaintext, 8)
+	fields, err := decodeMap(plaintext, 9)
 	if err != nil {
 		return content.FileRevisionDescriptor{}, err
 	}
-	if err := requireSchema(fields[0]); err != nil {
-		return content.FileRevisionDescriptor{}, err
+	if version, err := decodeUint(fields[0]); err != nil || version != RevisionSchemaVersion {
+		return content.FileRevisionDescriptor{}, ErrInvalidRecord
 	}
 	share, err := decodeShare(fields[1])
 	if err != nil || share != expectedShare {
@@ -96,7 +97,15 @@ func decodeRevision(plaintext []byte, expectedShare catalog.ShareInstance, expec
 	if err != nil {
 		return content.FileRevisionDescriptor{}, fmt.Errorf("%w: %w", ErrInvalidRecord, err)
 	}
-	return descriptor, nil
+	metadataBytes, err := decodeBytes(fields[8])
+	if err != nil {
+		return content.FileRevisionDescriptor{}, ErrInvalidRecord
+	}
+	metadata, err := content.SourceMetadataFromBytes(metadataBytes)
+	if err != nil {
+		return content.FileRevisionDescriptor{}, ErrInvalidRecord
+	}
+	return content.BindRevisionMetadata(descriptor, metadata), nil
 }
 
 func encodeBlock(record BlockRecord) ([]byte, error) {

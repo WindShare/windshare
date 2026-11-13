@@ -36,6 +36,7 @@ export interface FileRevisionDescriptor {
   readonly exactSize: bigint
   readonly geometry: FileGeometry
   readonly modifiedTime?: CatalogModifiedTime
+  readonly sourceMetadata?: string
 }
 
 export interface BlockRecord {
@@ -124,10 +125,10 @@ function decodeRevision(
 ): FileRevisionDescriptor {
   const fields = requireNumericMap(
     decodeCanonicalCbor(plaintext, MAXIMUM_REVISION_OBJECT_BYTES, 'file revision'),
-    [0, 1, 2, 3, 4, 5, 6, 7],
+    [0, 1, 2, 3, 4, 5, 6, 7, 8],
     'file revision',
   )
-  requireSchema(fields.get(0), 'file revision')
+  requireSchema(fields.get(0), 'file revision', 2n)
   const shareInstance = requireBytes(fields.get(1), 16, 'revision share instance', true)
   const fileId = requireBytes(fields.get(2), 16, 'revision file ID', true)
   if (!equalBytes(shareInstance, share.shareInstance) || !equalBytes(fileId, expectedFileId)) {
@@ -139,6 +140,8 @@ function decodeRevision(
     throw new CborError('File revision exact size exceeds the browser wire range')
   }
   const modifiedTime = decodeModifiedTime(fields.get(5), fields.get(6), fields.get(7))
+  const metadata = requireBytes(fields.get(8), 32, 'source metadata')
+  const sourceMetadata = metadata.every(byte => byte === 0) ? undefined : encodeBase64Url(metadata)
   return Object.freeze({
     shareInstance,
     shareInstanceId: encodeBase64Url(shareInstance),
@@ -149,6 +152,7 @@ function decodeRevision(
     exactSize,
     geometry: new FileGeometry(exactSize, BigInt(share.chunkSize)),
     ...(modifiedTime === undefined ? {} : { modifiedTime }),
+    ...(sourceMetadata === undefined ? {} : { sourceMetadata }),
   })
 }
 
@@ -210,8 +214,8 @@ function decodeModifiedTime(
   })
 }
 
-function requireSchema(value: unknown, label: string): void {
-  if (requireUnsigned(value, `${label} schema`) !== 1n) {
+function requireSchema(value: unknown, label: string, version = 1n): void {
+  if (requireUnsigned(value, `${label} schema`) !== version) {
     throw new CborError(`${label} schema is unsupported`)
   }
 }

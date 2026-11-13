@@ -197,7 +197,7 @@ func TestRevisionComparisonWrappingBoundaries(t *testing.T) {
 	}{
 		{name: "nil", err: nil, comparison: RevisionComparisonMismatch, wantSame: true},
 		{name: "unknown", err: sentinel, comparison: RevisionComparisonUnknown, wantSame: true},
-		{name: "match", err: sentinel, comparison: RevisionComparisonMatch, wantSame: true},
+		{name: "match", err: sentinel, comparison: RevisionComparisonMetadataAgreement, wantSame: true},
 		{name: "mismatch", err: sentinel, comparison: RevisionComparisonMismatch},
 		{name: "unavailable", err: sentinel, comparison: RevisionComparisonUnavailable},
 	}
@@ -221,12 +221,12 @@ func TestRevisionComparisonWrappingBoundaries(t *testing.T) {
 		err  error
 		want RevisionComparison
 	}{
-		{name: "nil is match", err: nil, want: RevisionComparisonMatch},
+		{name: "nil is match", err: nil, want: RevisionComparisonMetadataAgreement},
 		{name: "source drift", err: ErrSourceDrift, want: RevisionComparisonMismatch},
 		{name: "stale revision", err: ErrRevisionStale, want: RevisionComparisonMismatch},
 		{name: "explicit mismatch", err: WithRevisionComparison(sentinel, RevisionComparisonMismatch), want: RevisionComparisonMismatch},
 		{name: "explicit unavailable", err: WithRevisionComparison(sentinel, RevisionComparisonUnavailable), want: RevisionComparisonUnavailable},
-		{name: "invalid marker", err: revisionBoundaryClassifiedError{comparison: RevisionComparisonMatch}, want: RevisionComparisonUnavailable},
+		{name: "invalid marker", err: revisionBoundaryClassifiedError{comparison: RevisionComparisonMetadataAgreement}, want: RevisionComparisonUnavailable},
 		{name: "unclassified failure", err: sentinel, want: RevisionComparisonUnavailable},
 	}
 	for _, test := range classifications {

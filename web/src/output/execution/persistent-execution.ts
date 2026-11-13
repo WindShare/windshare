@@ -1,3 +1,4 @@
+import { sourceMetadataFields } from '../../content/revision-comparison'
 import type { FinalFileCheckpointProof } from '../persistence/journal'
 import {
   observePerformance,
@@ -480,6 +481,7 @@ class PersistentMaterializationOutput implements OutputSession {
             return Object.freeze({
               fileId: opened.fileId,
               fileRevision: opened.fileRevision,
+              ...sourceMetadataFields(opened),
               exactSize: opened.exactSize,
             })
           } finally {

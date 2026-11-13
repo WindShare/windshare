@@ -477,7 +477,7 @@ describe('persistent DirectoryTree recovery authority', () => {
     expect(fixture.events.filter(event => event === 'create:report.bin')).toHaveLength(1)
   })
 
-  it('blocks multiple persisted objects for one lineage without moving ranges', async () => {
+  it('rejects a substituted owned object under the same logical lineage without moving ranges', async () => {
     const fixture = await materializationFixture()
     const first = await fixture.session.beginFile({
       materializationRelativePath: ['report.bin'],
@@ -504,18 +504,15 @@ describe('persistent DirectoryTree recovery authority', () => {
       materializationRelativePath: ['report.bin'],
       openRevision: async () => revision(2n),
     })).rejects.toMatchObject({
-      name: 'CheckpointLineageDecisionError',
-      decision: 'ownership-conflict',
+      reason: 'target-ownership-unknown',
     })
     const records = (await fixture.checkpoints.scanCommitted({
       direction: 'ascending',
       fileId: FILE_ID,
     })).records
-    expect(records).toHaveLength(2)
-    expect(records.find(record => record.recordId === original.recordId)?.verifiedRanges)
-      .toEqual([{ start: 0n, end: 1n }])
-    expect(records.find(record => record.recordId !== original.recordId)?.verifiedRanges)
-      .toEqual([{ start: 0n, end: 1n }])
+    expect(records).toHaveLength(1)
+    expect(records[0]!.verifiedRanges).toEqual([{ start: 0n, end: 1n }])
+    expect(fixture.tree.file(['report.bin']).snapshot()).toEqual(Uint8Array.of(1))
   })
 
   it('classifies an occupied absent-lineage destination as a collision before claiming', async () => {

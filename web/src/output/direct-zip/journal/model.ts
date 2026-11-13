@@ -9,7 +9,7 @@ import type {
 } from '../../workspace/records'
 import type { ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 
-export const DIRECT_ZIP_JOURNAL_SCHEMA_VERSION = 1 as const
+export const DIRECT_ZIP_JOURNAL_SCHEMA_VERSION = 2 as const
 export const DIRECT_ZIP_PAGE_LAYOUT = 1 as const
 export const DIRECT_ZIP_PAGE_CENTRAL = 2 as const
 export const DIRECT_ZIP_PAGE_EPOCH = 3 as const
@@ -74,6 +74,8 @@ export interface DirectZipRecoveryGateV1 {
 }
 
 export interface DirectZipMemberResumeV1 {
+  readonly sourceMetadata?: string
+  readonly reusedFrom?: string
   readonly fileId: string
   readonly fileRevision: string
   readonly exactSize: bigint

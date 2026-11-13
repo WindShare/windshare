@@ -23,10 +23,11 @@ func (s *continuityRevisionSource) RevisionContinuity(catalog.NodeRecord) (Revis
 func TestRevisionContinuityRetainsResidentProgressAndSeparatesWeakReopen(t *testing.T) {
 	for _, continuity := range []RevisionContinuity{CatalogRevisionContinuity, OpenHandleRevisionContinuity} {
 		t.Run(map[RevisionContinuity]string{CatalogRevisionContinuity: "catalog", OpenHandleRevisionContinuity: "open-handle"}[continuity], func(t *testing.T) {
-			file, record := fileRecord(t, 1)
+			modified, _ := catalog.NewModifiedTime(100, 0, catalog.TimePrecisionSeconds)
+			file, record := fileRecordWithModifiedTime(t, 1, 1, modified)
 			source := &continuityRevisionSource{
 				testRevisionSource: &testRevisionSource{files: []*testStableFile{
-					{data: []byte{1}}, {data: []byte{1}},
+					{data: []byte{1}, modified: modified}, {data: []byte{1}, modified: modified},
 				}},
 				continuity: continuity,
 			}
@@ -56,6 +57,11 @@ func TestRevisionContinuityRetainsResidentProgressAndSeparatesWeakReopen(t *test
 			same := reopened.Descriptor().FileRevision() == first.Descriptor().FileRevision()
 			if same != (continuity == CatalogRevisionContinuity) {
 				t.Fatalf("reopened revision continuity=%v same=%v", continuity, same)
+			}
+			comparison := CompareRevisions(first.Descriptor(), reopened.Descriptor())
+			if first.Descriptor().SourceMetadata().IsZero() || !comparison.AllowsReuse() ||
+				comparison.Comparison == RevisionComparisonByteAgreement {
+				t.Fatalf("reopen lost best-effort source applicability: %+v", comparison)
 			}
 			if source.Calls() != 2 || source.files[0].closed.Load() != 1 {
 				t.Fatal("reopen did not release and reacquire exactly one stable handle")

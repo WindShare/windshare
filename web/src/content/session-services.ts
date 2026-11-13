@@ -112,6 +112,13 @@ export function requiresRevisionLeaseReplacement(error: unknown): boolean {
       (error.code === REVISION_CODE_LEASE_EXPIRED || error.code === REVISION_CODE_INVALID_LEASE))
 }
 
+export class RevisionReopenedDuringRecoveryError extends Error {
+  constructor() {
+    super('File access reopened; saved plaintext requires fresh admission')
+    this.name = 'RevisionReopenedDuringRecoveryError'
+  }
+}
+
 export class RevisionChangedDuringRecoveryError extends Error {
   constructor() {
     super('File revision changed while renewing file access')

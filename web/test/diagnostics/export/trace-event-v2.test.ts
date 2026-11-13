@@ -571,7 +571,7 @@ const VALID_OBSERVATIONS: readonly TraceEventObservationV2[] = [
       new_committed_length: '128',
       retained_selected_payload_bytes: '32',
       member_ordinal: '1',
-      ...(phase === 'recovering' ? {} : { source_change_reason: 'revision_changed' as const }),
+      ...(phase === 'recovering' ? {} : { recovery_reason: 'metadata_unavailable' as const }),
       ...(phase === 'failed' ? { native_error_name: 'DataError' } : {}),
     })),
   observation('retained_inventory', { transition: 'load_started' }),

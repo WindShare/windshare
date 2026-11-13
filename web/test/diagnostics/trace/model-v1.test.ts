@@ -267,7 +267,7 @@ const PAYLOAD_FOR_EVERY_EVENT = {
     new_committed_length: '128',
     retained_selected_payload_bytes: '32',
     member_ordinal: '1',
-    source_change_reason: 'revision_changed',
+    recovery_reason: 'metadata_unavailable',
   },
   retained_inventory: { transition: 'load_completed', operation_count: '0' },
   retained_action: {

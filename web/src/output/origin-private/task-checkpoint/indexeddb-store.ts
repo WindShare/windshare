@@ -1,3 +1,4 @@
+import { taskEntryMetadataReusable } from './model'
 import { commitOutputTransaction } from '../../persistence/transaction'
 import {
   DEFAULT_OUTPUT_DATABASE_NAME,
@@ -234,7 +235,8 @@ function validatePhysicalCoverage(entry: TaskEntry, physicalLength: bigint): voi
 }
 
 function validateEntryAdvance(previous: TaskEntry, next: TaskEntry): void {
-  if (!sameValue({ ...previous, ranges: [], revisionFailure: undefined },
+  const metadataReuse = taskEntryMetadataReusable(previous, next)
+  if (!sameValue({ ...previous, ...(metadataReuse ? { revision: next.revision } : {}), ranges: [], revisionFailure: undefined },
     { ...next, ranges: [], revisionFailure: undefined })) {
     throw new TypeError('Task entry changed its authenticated revision or fixed layout')
   }

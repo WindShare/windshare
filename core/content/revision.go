@@ -15,6 +15,7 @@ var (
 	ErrUnsupportedStability = errors.New("backend cannot prove stable file reads")
 	ErrSourceDrift          = errors.New("stable file source changed")
 	ErrRevisionDrift        = errors.New("file revision drifted")
+	ErrRevisionReopened     = errors.New("file revision reopened; saved plaintext requires fresh admission")
 	ErrLeaseExpired         = errors.New("file revision lease expired")
 	ErrInvalidLease         = errors.New("file revision lease is invalid")
 	ErrInvalidLeaseEnd      = errors.New("file revision lease ending is invalid")
@@ -38,6 +39,7 @@ type FileRevisionDescriptor struct {
 	revision      FileRevision
 	geometry      FileGeometry
 	modified      catalog.ModifiedTime
+	metadata      SourceMetadata
 }
 
 func NewFileRevisionDescriptor(share catalog.ShareInstance, file catalog.FileID, revision FileRevision, geometry FileGeometry, modified catalog.ModifiedTime) (FileRevisionDescriptor, error) {
@@ -57,6 +59,7 @@ func (d FileRevisionDescriptor) ExactSize() uint64                    { return d
 func (d FileRevisionDescriptor) ModifiedTime() catalog.ModifiedTime   { return d.modified }
 func (d FileRevisionDescriptor) Geometry() FileGeometry               { return d.geometry }
 func (d FileRevisionDescriptor) BlockCountFieldPresent() bool         { return false }
+func (d FileRevisionDescriptor) SourceMetadata() SourceMetadata       { return d.metadata }
 
 type RevisionLease struct {
 	id         LeaseID
@@ -101,9 +104,10 @@ type RevisionSource interface {
 	OpenStable(context.Context, catalog.NodeRecord) (StableFile, error)
 }
 
-// RevisionContinuity identifies how long a source can prove that identical
-// catalog metadata still describes the same bytes. Weak filesystem timestamps
-// can support a write-excluding live handle without proving continuity on reopen.
+// RevisionContinuity bounds cryptographic identity and cache reuse. A weak
+// provider keeps one identity while its write-excluding handle is resident;
+// reopen gets a fresh identity. SourceMetadata separately permits best-effort
+// plaintext reuse and never extends ciphertext or authentication authority.
 type RevisionContinuity uint8
 
 const (

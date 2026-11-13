@@ -131,11 +131,16 @@ export async function openPersistentSelectedFile(input: Readonly<{
       createdWithAtomicClaim = true
     }
   }
-  if (!createdWithAtomicClaim) await verifySelectedFile(handle, input.checkpoint, input.revision)
-  if (committed.commitState === FILE_CHECKPOINT_COMMIT_CANDIDATE) {
-    committed = await input.promote(committed, input.stageScope)
+  try {
+    if (!createdWithAtomicClaim) await verifySelectedFile(handle, input.checkpoint, input.revision)
+    if (committed.commitState === FILE_CHECKPOINT_COMMIT_CANDIDATE) {
+      committed = await input.promote(committed, input.stageScope)
+    }
+    return Object.freeze({ handle, checkpoint: committed })
+  } catch (error) {
+    await handle.close()
+    throw error
   }
-  return Object.freeze({ handle, checkpoint: committed })
 }
 
 export function isPristinePreObjectCandidate(checkpoint: FileCheckpointV2): boolean {

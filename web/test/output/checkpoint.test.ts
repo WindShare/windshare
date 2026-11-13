@@ -37,7 +37,7 @@ describe('FileCheckpointV2', () => {
     })
 
     const encoded = encodeFileCheckpointV2(record)
-    expect(new TextDecoder().decode(encoded.subarray(0, 8))).toBe('WSFCPV2\0')
+    expect(new TextDecoder().decode(encoded.subarray(0, 8))).toBe('WSFCPV4\0')
     expect(decodeFileCheckpointV2(encoded)).toEqual(record)
     expect(record.ownershipMarker).toBe(FILE_CHECKPOINT_OWNERSHIP_MARKER)
     expect(record.namespace).toBe(FILE_CHECKPOINT_NAMESPACE)
@@ -178,9 +178,9 @@ describe('CheckpointLineageID', () => {
     const baseline = checkpoint()
     const lineage = deriveCheckpointLineageID(baseline)
     const variants = [
-      { changesRecordId: true, record: checkpoint({ fileRevision: identity(16, 15) }) },
-      { changesRecordId: true, record: checkpoint({ exactSize: 13n }) },
-      { changesRecordId: true, record: checkpoint({ ownedObjectId: identity(32, 17) }) },
+      { changesRecordId: false, record: checkpoint({ fileRevision: identity(16, 15) }) },
+      { changesRecordId: false, record: checkpoint({ exactSize: 13n }) },
+      { changesRecordId: false, record: checkpoint({ ownedObjectId: identity(32, 17) }) },
       {
         changesRecordId: false,
         record: checkpoint({ verifiedRanges: [{ start: 0n, end: 1n }] }),

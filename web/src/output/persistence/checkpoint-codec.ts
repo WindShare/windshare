@@ -1,3 +1,4 @@
+import { sourceMetadataFields } from '../../content/revision-comparison'
 import { encodeBase64Url } from '../../crypto/bytes'
 import {
   FILE_CHECKPOINT_COMMIT_VERIFIED,
@@ -21,9 +22,9 @@ import {
   type NormalizedFileCheckpointSpec,
 } from './checkpoint-model'
 
-export const FILE_CHECKPOINT_RECORD_DOMAIN = 'windshare/file-checkpoint-record/v2' as const
-export const FILE_CHECKPOINT_CHECKSUM_DOMAIN = 'windshare/file-checkpoint-checksum/v2' as const
-export const FILE_CHECKPOINT_RECORD_MAGIC = 'WSFCPV2\0' as const
+export const FILE_CHECKPOINT_RECORD_DOMAIN = 'windshare/file-checkpoint-record/v4' as const
+export const FILE_CHECKPOINT_CHECKSUM_DOMAIN = 'windshare/file-checkpoint-checksum/v4' as const
+export const FILE_CHECKPOINT_RECORD_MAGIC = 'WSFCPV4\0' as const
 
 const TEXT_ENCODER = new TextEncoder()
 const TEXT_DECODER = new TextDecoder('utf-8', { fatal: true })
@@ -47,6 +48,8 @@ export function newFileCheckpointV2(spec: FileCheckpointSpec): FileCheckpointV2 
     materializationBindingDigest: encodeBase64Url(normalized.materializationBindingDigest),
     fileId: encodeBase64Url(normalized.fileId),
     fileRevision: encodeBase64Url(normalized.fileRevision),
+    ...sourceMetadataFields(normalized),
+    ...(normalized.reusedFrom === undefined ? {} : { reusedFrom: normalized.reusedFrom }),
     canonicalPath: normalized.canonicalPath,
     exactSize: normalized.exactSize,
     materializerKind: normalized.materializerKind,
@@ -192,6 +195,8 @@ function decodeCanonicalPayload(payload: Uint8Array): FileCheckpointV2 {
     ),
     fileId: cursor.identity(FILE_ID_BYTES, 'file ID'),
     fileRevision: cursor.identity(FILE_REVISION_BYTES, 'file revision'),
+    ...optionalEvidence(cursor, 'sourceMetadata', FILE_CHECKPOINT_ID_BYTES),
+    ...optionalEvidence(cursor, 'reusedFrom', FILE_REVISION_BYTES),
     canonicalPath: decodeCanonicalPath(cursor.frame(MAX_TEXT_FIELD_BYTES)),
     exactSize: cursor.framedU64('exact size'),
     materializerKind: cursor.framedByte('materializer kind'),
@@ -269,6 +274,8 @@ function canonicalPayload(
     )),
     checkpointFramedBytes(identityBytes(record.fileId, FILE_ID_BYTES, 'file ID')),
     checkpointFramedBytes(identityBytes(record.fileRevision, FILE_REVISION_BYTES, 'file revision')),
+    checkpointFramedBytes(record.sourceMetadata === undefined ? new Uint8Array(FILE_CHECKPOINT_ID_BYTES) : identityBytes(record.sourceMetadata, FILE_CHECKPOINT_ID_BYTES, 'source metadata')),
+    checkpointFramedBytes(record.reusedFrom === undefined ? new Uint8Array(FILE_REVISION_BYTES) : identityBytes(record.reusedFrom, FILE_REVISION_BYTES, 'reused revision')),
     checkpointFramedBytes(canonicalPathBytes(record.canonicalPath)),
     checkpointFramedBytes(uint64Bytes(record.exactSize)),
     checkpointFramedBytes(Uint8Array.of(record.materializerKind)),
@@ -298,22 +305,24 @@ function canonicalPayload(
 }
 
 function immutableIdentityBytes(record: NormalizedFileCheckpointSpec): Uint8Array<ArrayBuffer> {
+  // A task owns one logical slot. Revision applicability can change without
+  // manufacturing another output object or losing the atomic predecessor CAS.
   return checkpointConcatBytes([
-    RECORD_PREFIX,
-    Uint8Array.of(FILE_CHECKPOINT_V2_SCHEMA_VERSION),
-    checkpointFramedText(record.ownershipMarker),
-    checkpointFramedText(record.namespace),
+    TEXT_ENCODER.encode('windshare/checkpoint-lineage/v1'),
     checkpointFramedBytes(record.operationId),
     checkpointFramedBytes(record.receiveIntentDigest),
     checkpointFramedBytes(record.materializationBindingDigest),
     checkpointFramedBytes(record.fileId),
-    checkpointFramedBytes(record.fileRevision),
     checkpointFramedBytes(canonicalPathBytes(record.canonicalPath)),
-    checkpointFramedBytes(uint64Bytes(record.exactSize)),
     checkpointFramedBytes(Uint8Array.of(record.materializerKind)),
     checkpointFramedBytes(record.authorityRef),
-    checkpointFramedBytes(record.ownedObjectId),
   ])
+}
+
+function optionalEvidence(cursor: CheckpointCursor, field: 'sourceMetadata' | 'reusedFrom', length: number): { sourceMetadata?: string; reusedFrom?: string } {
+  const bytes = cursor.frame(length)
+  if (bytes.length !== length) throw new FileCheckpointError('binding', 'invalid recovery evidence length')
+  return bytes.every(byte => byte === 0) ? {} : { [field]: encodeBase64Url(bytes) }
 }
 
 function canonicalPathBytes(path: readonly string[]): Uint8Array<ArrayBuffer> {
