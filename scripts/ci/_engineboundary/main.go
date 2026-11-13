@@ -20,37 +20,6 @@ import (
 	"strings"
 )
 
-const module = "github.com/windshare/windshare"
-
-func prohibited(path string) bool {
-	for _, family := range []string{"/connectivity", "/transport", "/relay", "/osfs", "/core/osfs", "/adapters"} {
-		if path == module+family || strings.HasPrefix(path, module+family+"/") {
-			return true
-		}
-	}
-	return false
-}
-
-func storageImplementation(path string) bool {
-	for _, family := range []string{"/osfs", "/core/osfs", "/adapters"} {
-		if path == module+family || strings.HasPrefix(path, module+family+"/") {
-			return true
-		}
-	}
-	return false
-}
-func prohibitedAPI(path string) bool {
-	if !strings.HasPrefix(path, module+"/") {
-		return false
-	}
-	for _, contract := range []string{"/core", "/engine"} {
-		if path == module+contract || strings.HasPrefix(path, module+contract+"/") {
-			return false
-		}
-	}
-	return true
-}
-
 // Parse all production files, including inactive platform variants, so a local
 // platform cannot conceal a forbidden import until another CI runner builds it.
 func sourceFindings(root string) ([]string, error) {
@@ -71,21 +40,18 @@ func sourceFindings(root string) ([]string, error) {
 			if err != nil {
 				return err
 			}
+			relative, err := filepath.Rel(root, path)
+			if err != nil {
+				return err
+			}
+			source := filepath.ToSlash(relative)
 			for _, spec := range file.Imports {
 				dependency, err := strconv.Unquote(spec.Path.Value)
 				if err != nil {
 					return err
 				}
-				relative, _ := filepath.Rel(root, path)
-				application := strings.HasPrefix(filepath.ToSlash(relative), "engine/")
-				observation := strings.HasPrefix(filepath.ToSlash(relative), "engine/observation/")
-				testSupport := strings.HasPrefix(dependency, module+"/internal/test") &&
-					(application || productionHost(filepath.ToSlash(relative)))
-				forbidden := testSupport || storageImplementation(dependency) && application ||
-					prohibited(dependency) && (observation || !application && !storageImplementation(dependency))
-				if forbidden {
-					relative, _ := filepath.Rel(root, path)
-					findings = append(findings, fmt.Sprintf("%s imports implementation package %s", relative, dependency))
+				if reason := sourceImportViolation(source, dependency); reason != "" {
+					findings = append(findings, fmt.Sprintf("%s imports %s: %s", relative, dependency, reason))
 				}
 			}
 			return nil
@@ -95,11 +61,6 @@ func sourceFindings(root string) ([]string, error) {
 		}
 	}
 	return findings, nil
-}
-
-func productionHost(path string) bool {
-	return strings.HasPrefix(path, "host/") || strings.HasPrefix(path, "cmd/wind/") ||
-		strings.HasPrefix(path, "cmd/windshare-host/")
 }
 
 // Alias resolution and recursive public-field/method traversal prevent a facade
@@ -127,7 +88,7 @@ func typeFindings(label string, root types.Type) []string {
 			object := value.Obj()
 			if object.Pkg() != nil {
 				path := object.Pkg().Path()
-				if prohibited(path) || prohibitedAPI(path) {
+				if implementationPackage(path) || prohibitedAPI(path) {
 					findings = append(findings, at+" exposes "+path+"."+object.Name())
 					return
 				}
