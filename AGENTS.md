@@ -48,14 +48,14 @@
 
 WindShare is an open-source E2EE file/folder sharing tool. WindShare makes sharing local files and folders feel instant: select, generate a link, and let anyone browse and download in their browser, without waiting for uploads or a full directory scan. End-to-end encryption keeps both content and file metadata private from relays. Prioritize reliable P2P connectivity, seamless relay fallback, and resumable transfers that preserve progress without unnecessary disk usage. Keep everyday sharing effortless, use shared infrastructure efficiently, and give users control through open source and self-hosting. Technical complexity should serve the experience, never burden it.
 
-The root `go.mod` owns WindShare's production Go packages; pinned Pion dependency modules live under `third_party/pion/`. Within the root module, `core/**` is the network-free domain and protocol package boundary; dependency-graph gates prevent core packages from importing non-core WindShare packages or concrete networking and transport capabilities. `engine/**` composes those contracts with native connectivity, owns application tasks and shared capacity, and is consumed by the CLI.
+The root `go.mod` owns WindShare's production Go packages; pinned Pion dependency modules live under `third_party/pion/`. Within the root module, `core/**` is the network-free domain and protocol package boundary; dependency-graph gates prevent core packages from importing non-core WindShare packages or concrete networking and transport capabilities. `engine/**` composes those contracts with native connectivity and owns application tasks and shared capacity. The CLI and desktop host consume engine APIs and inject native filesystem adapters; shared engine code does not import `osfs/**` or `adapters/**`.
 
 ```text
 .
 ├── .github/workflows/             CI, weekly suites, source/binary releases, and Cloudflare deployment
 ├── core/                         Network-free reusable package subtree
-│   ├── link/, senderobject/      Capability links and sealed transport-neutral objects
-│   ├── senderauth/                Sender-signature acceptance policy
+│   ├── link/, urlhost/            Capability links and shared URL host normalization
+│   ├── senderobject/, senderauth/ Sealed transport-neutral objects and sender-signature acceptance
 │   ├── catalog/                  Committed directory generations/pages, durable storage/recovery
 │   ├── content/                  File revisions, ranges, leases/capacity, keys, authenticated records
 │   ├── capacityledger/            Shared capacity accounting
@@ -79,8 +79,10 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 │   ├── relayconfig/, relaysetup/  Saved relay/frontend settings, discovery, device enrollment, and installation
 │   ├── turn/, turncache/          TURN settings/status contracts and relay-scoped capability cache
 │   └── internal/                 Share/receive/recovery workflows, native connectivity, and TURN runtime
+├── host/desktop/                 Go engine ownership, share/setup commands, authenticated loopback control
 ├── cmd/
 │   ├── wind/                     CLI requests, presentation, recovery interaction, and exit-code mapping
+│   ├── windshare-host/           Go shared library; C ABI for desktop host lifetime and result buffers
 │   └── testprocessowner/         Test-only bounded process supervisor
 ├── connectivity/
 │   ├── v2signal/                 Canonical E2E signaling schema, codec, and validation
@@ -98,11 +100,15 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 │   └── webrtc/                   Pion FrameChannels and terminal lifecycle
 ├── relay/protocol/v2/            Go wire contracts, authenticated proofs, and opaque routes
 ├── relay-rust/                   Production relay Cargo workspace
+│   ├── console/                  Cloudflare access console assets
 │   ├── crates/relay-access/      Service credential and device enrollment policy
 │   ├── crates/relay-core/        No-I/O kernel with strict sender-signature verification
 │   ├── crates/relay-native/      Native wsrelay host, SQLite, HTTP/WebSocket, and STUN
 │   └── crates/relay-cloudflare/  Worker/DO host, access console, credential management, and managed TURN
-├── desktop/                      Rust/GPUI desktop UI preview; no engine or transfer integration
+├── desktop/                      GPUI app with native sharing; receive/transfer/SuperShare require --preview
+│   ├── crates/windshare-desktop/  Application lifecycle, live share projection, views and previews
+│   ├── crates/windshare-host/     Native ABI ownership, reconnecting control client, task snapshots
+│   └── crates/windshare-ui/       UI components, themes, icons, typography, native input
 ├── web/                          React/TypeScript landing portal and browser receiver
 │   ├── src/crypto/, protocol/    Suite-02 links/key hierarchy, sealed-object auth, canonical CBOR/text
 │   ├── src/contracts/, session/  Browser FrameChannel contract and ReceiverSessionRuntime
@@ -111,7 +117,7 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 │   ├── src/transport/            Relay/WebRTC channels and frame adapters
 │   ├── src/connectivity/         Signaling, path policy, lane adoption, and TURN delegation/renewal
 │   ├── src/receiver/             Reconnect and protocol-generation supervision
-│   ├── src/application/          Browser share/receive assembly, task commands, output-route coordination
+│   ├── src/application/          Browser receiver assembly, task commands, output-route coordination
 │   ├── src/transfer/             Intent/discovery, jobs, Direct ZIP coordination, backpressure/checkpoints/settlement
 │   ├── src/output/               Artifact authority, storage providers, Direct ZIP writing/journals, publication/recovery
 │   ├── src/diagnostics/          Bounded tracing, incident correlation, and developer export
@@ -120,13 +126,15 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 │   ├── scripts/                  Browser/Pion interop and output/diagnostic evidence
 │   ├── test/                     Unit and browser component-contract tests
 │   └── e2e/                      Direct smoke and scheduled product scenarios
-├── internal/                     Platform setup status, process ownership, performance evidence, and test support
+├── internal/                     Connection liveness, platform setup, process ownership, performance evidence, test support
 ├── integration/                  Native relayv2 and v2peer integration scenarios
 ├── e2e/                          Process-level Go end-to-end tests
 ├── spikes/                       R0 feasibility and isolated Pion↔Chromium evidence
 ├── testdata/                     Browser/output evidence, ICE policy/topology, and provider capabilities
 ├── third_party/pion/              Pinned ICE/WebRTC/TURN/SCTP sources, patches, and reproducibility manifest
+├── deploy/wsrelay/               Native relay container image
 └── scripts/
     ├── ci/                       CI gates, validation tooling, and release certification
-    └── deploy/                   Native relay and Cloudflare deployment, managed TURN provisioning
+    ├── deploy/                   Native relay and Cloudflare deployment, managed TURN provisioning
+    └── install/                  CLI installers and Windows network setup
 ```
