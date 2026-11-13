@@ -65,7 +65,28 @@ func (failure *BoundaryError) Fault() Fault {
 	return failure.fault
 }
 
-// NormalizeBoundary checks cancellation before accepting a typed collaborator
+// BoundaryCancellation returns a standard cancellation sentinel only for an
+// unclassified collaborator result. A classified fault owns its outcome; its
+// diagnostics cannot grant cancellation authority. Callers check their own
+// context first, independently of the collaborator's result.
+func BoundaryCancellation(err error) error {
+	if err == nil {
+		return nil
+	}
+	var classified *BoundaryError
+	if errors.As(err, &classified) && classified != nil && classified.Fault().Valid() {
+		return nil
+	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+// NormalizeBoundary checks caller cancellation before accepting a typed collaborator
 // fault. An unknown error is a local dependency-contract breach and therefore
 // pauses output authority rather than acquiring file isolation or retirement
 // authority.
@@ -78,12 +99,12 @@ func NormalizeBoundary(ctx context.Context, err error) BoundaryResult {
 
 // NormalizeBoundaryError is the context-free form for a completed collaborator
 // result. Keeping it separate prevents locked invariant and trace paths from
-// inventing a context while retaining cancellation carried by the error itself.
+// inventing a context while retaining unclassified collaborator cancellation.
 func NormalizeBoundaryError(err error) BoundaryResult {
 	if err == nil {
 		return BoundaryResult{kind: BoundarySuccess}
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if BoundaryCancellation(err) != nil {
 		return BoundaryResult{kind: BoundaryCanceled}
 	}
 	var normalized *BoundaryError

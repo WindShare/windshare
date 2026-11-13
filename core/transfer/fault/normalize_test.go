@@ -48,8 +48,8 @@ func TestNormalizeBoundaryExcludesCancellationAndDefaultsUnknownErrors(t *testin
 	if result := fault.NormalizeBoundary(canceled, typed); result.Kind() != fault.BoundaryCanceled {
 		t.Fatalf("canceled context result = %v", result.Kind())
 	}
-	if result := fault.NormalizeBoundary(context.Background(), fault.Wrap(normalized, context.Canceled)); result.Kind() != fault.BoundaryCanceled {
-		t.Fatalf("wrapped cancellation result = %v", result.Kind())
+	if result := fault.NormalizeBoundary(context.Background(), fault.Wrap(normalized, context.Canceled)); result.Kind() != fault.BoundaryFailed {
+		t.Fatalf("classified fault lost to diagnostic cancellation: %v", result.Kind())
 	}
 	if result := fault.NormalizeBoundary(context.Background(), context.DeadlineExceeded); result.Kind() != fault.BoundaryCanceled {
 		t.Fatalf("deadline result = %v", result.Kind())
