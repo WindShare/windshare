@@ -1,8 +1,9 @@
 use crate::{
     config::limits,
     connection::Outbox,
-    environment::{Environment, Trace},
+    environment::Environment,
     generation::{Generation, Recovery},
+    node::{Metrics, NodeTrace},
     storage::Persistence,
 };
 use anyhow::{Result, anyhow};
@@ -45,7 +46,7 @@ type Committed = (WorkId, Result<Option<StoredAuthority>>);
 type Commit = JoinHandle<Committed>;
 
 pub struct Actor<S, E> {
-    relay: ShareRelay<Trace>,
+    relay: ShareRelay<NodeTrace>,
     identity: Identity,
     store: S,
     authority: Option<StoredAuthority>,
@@ -67,6 +68,7 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
         idle: Arc<AtomicBool>,
         generation: Generation,
         recovery: Recovery,
+        metrics: Metrics,
     ) -> Result<()> {
         let identity = generation.identity();
         let reader = store.clone();
@@ -75,9 +77,14 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
             .await??;
         let restored =
             recovery.restore(identity, authority.as_ref().map(StoredAuthority::record))?;
-        let (relay, initial) =
-            ShareRelay::restore(identity, limits(), &restored, Trace, environment.now())
-                .map_err(|error| anyhow!("restore refused: {error:?}"))?;
+        let (relay, initial) = ShareRelay::restore(
+            identity,
+            limits(),
+            &restored,
+            NodeTrace::new(metrics),
+            environment.now(),
+        )
+        .map_err(|error| anyhow!("restore refused: {error:?}"))?;
         let mut actor = Self {
             relay,
             identity,

@@ -37,7 +37,7 @@ func TestShareLoadsSavedConfigurationAndOverridesChoicesIndependently(t *testing
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request, outcome := app.parseShareRequest(append([]string{"root"}, test.args...))
-			if outcome != requestParseReady || !reflect.DeepEqual(request.relays, test.relays) || request.link.frontURL != test.front {
+			if outcome != requestParseReady || !reflect.DeepEqual(request.relayIntent.Candidates(), test.relays) || request.link.frontURL != test.front {
 				t.Fatalf("selection changed: outcome=%v frontend=%q", outcome, request.link.frontURL)
 			}
 		})
@@ -54,9 +54,6 @@ func TestShareConfigurationFailuresDoNotFallBackToLocalhost(t *testing.T) {
 		err    error
 		args   []string
 	}{
-		{name: "unconfigured"},
-		{name: "relay-only saved configuration", config: relayconfig.Config{Profiles: []relayprofile.Candidate{{PublicURL: "https://relay.example"}}}},
-		{name: "frontend alone does not imply a relay", args: []string{"--front-url", "https://front.example"}},
 		{name: "invalid saved configuration", err: errors.New("private-error-token"), args: []string{"--front-url", "https://front.example", "--relay", "https://relay.example"}},
 		{name: "invalid frontend override", args: []string{"--front-url", "wss://front.example", "--relay", "https://relay.example"}},
 	} {
@@ -80,8 +77,8 @@ func TestShareRelayConfigurationIsPluralBoundedAndDeduplicated(t *testing.T) {
 	app := testApp("")
 	t.Cleanup(app.closeTerminalOutput)
 	request, outcome := app.parseShareRequest([]string{"root", "--front-url", "https://front.example", "--relay", "https://a.example", "--relay", "https://b.example", "--relay", "https://a.example"})
-	if outcome != requestParseReady || !reflect.DeepEqual(request.relays, []relayprofile.Candidate{{PublicURL: "https://a.example"}, {PublicURL: "https://b.example"}}) {
-		t.Fatalf("relays=%v outcome=%v", request.relays, outcome)
+	if outcome != requestParseReady || !reflect.DeepEqual(request.relayIntent.Candidates(), []relayprofile.Candidate{{PublicURL: "https://a.example"}, {PublicURL: "https://b.example"}}) {
+		t.Fatalf("relays=%v outcome=%v", request.relayIntent.Candidates(), outcome)
 	}
 	args := []string{"root", "--front-url", "https://front.example"}
 	for index := range relayprofile.MaximumEndpoints + 1 {

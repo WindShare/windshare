@@ -1,0 +1,4 @@
+{
+  "services": { "relay": false, "stun": true },
+  "relay_budget": { "bytes": 1000000000000, "reset_day_utc": 1 }
+}

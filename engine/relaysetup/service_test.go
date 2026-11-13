@@ -93,6 +93,17 @@ func TestOrdinaryAdditionPreservesSelectionAndFrontend(t *testing.T) {
 		t.Fatal("open relay accepted as private onboarding")
 	}
 }
+
+func TestFirstRelayDoesNotAcquireFrontendAuthorityFromDiscovery(t *testing.T) {
+	store := &memoryStore{saved: Snapshot{ConfiguredOnly: true}}
+	service := New(Dependencies{Store: store, HTTP: fakeHTTP(func(*http.Request) (*http.Response, error) {
+		return response(200, map[string]any{"version": 1, "access": "open", "relay_url": "https://open.example", "frontend_url": "https://suggested.example"})
+	})})
+	result, err := service.Run(t.Context(), Request{URL: "https://open.example", Operation: AddProfile}, nil)
+	if err != nil || result.FrontURL != "" || store.saved.FrontURL != "" || !store.saved.ConfiguredOnly || !slices.Equal(result.ActiveRelays, []string{"https://open.example"}) {
+		t.Fatal(result, store.saved.Config, err)
+	}
+}
 func TestPrivateEnrollmentResumesClaimedInstallationWithoutChangingSelectionsEarly(t *testing.T) {
 	store := &memoryStore{saved: prior(), failInstall: true}
 	now := time.Unix(100, 0)

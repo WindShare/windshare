@@ -15,7 +15,7 @@ import (
 type shareRequest struct {
 	sharing     relayconfig.Config
 	paths       []string
-	relays      []relayprofile.Candidate
+	relayIntent relayprofile.Intent
 	link        shareLinkPresentation
 	chunkSize   uint32
 	observation observationOptions
@@ -41,6 +41,7 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		catalog.MinChunkSize, catalog.MaxChunkSize))
 	splitKey := flags.Bool("split-key", false, "print a bare link and separate key string")
 	frontURL := flags.String("front-url", "", "override the saved frontend base URL for this share")
+	configuredOnly := flags.Bool("configured-relays-only", false, "use only configured relays for this share")
 	browserTrace := flags.Bool("browser-trace", false, "enable browser diagnostics when the generated link is opened")
 	var observation observationOptions
 	if err := bindObservationOptions(flags, &observation); err != nil {
@@ -81,24 +82,15 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 			return shareRequest{}, requestParseUsageFailure
 		}
 	}
-	// Presence matters: an explicitly empty override must fail instead of silently
-	// restoring a saved frontend the caller intended to replace.
-	frontOverride := false
-	flags.Visit(func(option *flag.Flag) {
-		frontOverride = frontOverride || option.Name == "front-url"
-	})
-	if !frontOverride {
-		*frontURL = saved.FrontURL
-	}
-	if err := relayconfig.ValidateFrontURL(*frontURL); err != nil {
-		if *frontURL == "" {
-			a.writeCompleteLine("share: configure a frontend URL with wind config import <file|-> --front-url <url>, or pass --front-url for this share")
-		} else {
-			a.writeCompleteLine("share: %s", err)
-		}
+	frontend, err := shareFrontend(flags, *frontURL, saved.FrontURL)
+	if err != nil {
+		a.writeCompleteLine("share: %s", err)
 		return shareRequest{}, requestParseUsageFailure
 	}
-	relays, err := relayconfig.SelectRelays(saved, relayURLs)
+	if *configuredOnly {
+		saved.ConfiguredOnly = true
+	}
+	intent, err := relayconfig.ShareIntent(saved, relayURLs)
 	if err != nil {
 		if errors.Is(err, relayconfig.ErrRelayURL) {
 			a.writeCompleteLine("share: %s", err)
@@ -109,8 +101,24 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 	}
 	return shareRequest{
 		sharing: saved,
-		paths:   paths, relays: relays,
-		link:      shareLinkPresentation{frontURL: *frontURL, splitKey: *splitKey, browserTrace: *browserTrace},
+		paths:   paths, relayIntent: intent,
+		link:      shareLinkPresentation{frontURL: frontend, splitKey: *splitKey, browserTrace: *browserTrace},
 		chunkSize: uint32(*blockSize), observation: observation,
 	}, requestParseReady
+}
+
+func shareFrontend(flags *flag.FlagSet, override, saved string) (string, error) {
+	// Presence matters: an explicitly empty override cannot silently restore a
+	// saved frontend the caller intended to replace.
+	explicit := false
+	flags.Visit(func(option *flag.Flag) { explicit = explicit || option.Name == "front-url" })
+	if !explicit {
+		override = saved
+	}
+	if override != "" || explicit {
+		if err := relayconfig.ValidateFrontURL(override); err != nil {
+			return "", err
+		}
+	}
+	return override, nil
 }

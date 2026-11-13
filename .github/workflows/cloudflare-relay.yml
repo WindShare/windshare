@@ -8,6 +8,7 @@ on:
     paths:
       - .github/workflows/cloudflare-relay.yml
       - scripts/deploy/cloudflare/**
+      - deploy/network/**
       - relay-rust/**
       - web/src/**
       - web/public/**
@@ -51,6 +52,8 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_WORKER_NAME: ${{ secrets.CLOUDFLARE_WORKER_NAME }}
           CLOUDFLARE_RELAY_DOMAIN: ${{ secrets.CLOUDFLARE_RELAY_DOMAIN }}
+          CLOUDFLARE_FRONTEND_DOMAIN: ${{ secrets.CLOUDFLARE_FRONTEND_DOMAIN }}
+          CLOUDFLARE_FRONTEND_SAAS_HOST: ${{ secrets.CLOUDFLARE_FRONTEND_SAAS_HOST }}
           CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
           WINDSHARE_OWNER_PASSWORD: ${{ secrets.WINDSHARE_OWNER_PASSWORD }}
           CLOUDFLARE_CONSOLE_DOMAIN: ${{ secrets.CLOUDFLARE_CONSOLE_DOMAIN }}
@@ -58,31 +61,36 @@ jobs:
           node --input-type=module -e "
             import { readDeploymentMode } from './scripts/deploy/cloudflare/configuration.mjs';
             import { readInputs } from './scripts/deploy/cloudflare/deployment.mjs';
-            readDeploymentMode(process.env);
-            readInputs(process.env);
+            import { readFrontendInputs } from './scripts/deploy/cloudflare/frontend.mjs';
+            const mode = readDeploymentMode(process.env);
+            (mode === 'frontend' ? readFrontendInputs : readInputs)(process.env);
           "
       - uses: pnpm/action-setup@v6
-        if: env.CLOUDFLARE_DEPLOYMENT_MODE == 'full'
+        if: env.CLOUDFLARE_DEPLOYMENT_MODE != 'relay-only'
         with:
           version: latest
       - name: Install frozen Web dependencies
-        if: env.CLOUDFLARE_DEPLOYMENT_MODE == 'full'
+        if: env.CLOUDFLARE_DEPLOYMENT_MODE != 'relay-only'
         run: pnpm -C web install --frozen-lockfile
       - name: Install Rust Wasm toolchain
+        if: env.CLOUDFLARE_DEPLOYMENT_MODE != 'frontend'
         run: rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
       - name: Install Worker builder
+        if: env.CLOUDFLARE_DEPLOYMENT_MODE != 'frontend'
         run: |
           cargo +stable install worker-build --version 0.8.7 --locked
       - name: Install pinned Wrangler
         working-directory: relay-rust/crates/relay-cloudflare
         run: npm ci
       - uses: actions/setup-go@v7
+        if: env.CLOUDFLARE_DEPLOYMENT_MODE != 'frontend'
         with:
           go-version-file: go.mod
       - name: Check local access lifecycle
+        if: env.CLOUDFLARE_DEPLOYMENT_MODE != 'frontend'
         working-directory: relay-rust/crates/relay-cloudflare
         run: npm run test:access
-      - name: Deploy relay and frontend, provision managed TURN
+      - name: Deploy selected service mode
         env:
           # Deployment token requires Account / Calls / Write in addition to Workers permissions.
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -90,6 +98,8 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_WORKER_NAME: ${{ secrets.CLOUDFLARE_WORKER_NAME }}
           CLOUDFLARE_RELAY_DOMAIN: ${{ secrets.CLOUDFLARE_RELAY_DOMAIN }}
+          CLOUDFLARE_FRONTEND_DOMAIN: ${{ secrets.CLOUDFLARE_FRONTEND_DOMAIN }}
+          CLOUDFLARE_FRONTEND_SAAS_HOST: ${{ secrets.CLOUDFLARE_FRONTEND_SAAS_HOST }}
           CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
           WINDSHARE_OWNER_PASSWORD: ${{ secrets.WINDSHARE_OWNER_PASSWORD }}
           CLOUDFLARE_CONSOLE_DOMAIN: ${{ secrets.CLOUDFLARE_CONSOLE_DOMAIN }}

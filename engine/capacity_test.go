@@ -12,6 +12,7 @@ import (
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/contentflow"
+	"github.com/windshare/windshare/engine/relayprofile"
 )
 
 var errCacheFull = errors.New("object exceeds remaining aggregate cache capacity")
@@ -42,7 +43,10 @@ func TestConcurrentSharesEnforceAggregateCapacityAndReleaseIndependently(t *test
 				return nil, ctx.Err()
 			}
 			application := newTestEngine(t, config)
-			first, err := application.StartShare(context.Background(), ShareRequest{})
+			first, err := application.StartShare(context.Background(), ShareRequest{RelayIntent: relayprofile.UseExplicit(
+				[]relayprofile.
+					Candidate{{PublicURL: "https://relay.example"}}),
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -50,7 +54,10 @@ func TestConcurrentSharesEnforceAggregateCapacityAndReleaseIndependently(t *test
 			if one.err != nil {
 				t.Fatal(one.err)
 			}
-			second, err := application.StartShare(context.Background(), ShareRequest{})
+			second, err := application.StartShare(context.Background(), ShareRequest{RelayIntent: relayprofile.UseExplicit(
+				[]relayprofile.
+					Candidate{{PublicURL: "https://relay.example"}}),
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -73,7 +80,10 @@ func TestConcurrentSharesEnforceAggregateCapacityAndReleaseIndependently(t *test
 			if err != nil || stopped.StopReason != ShareStopped || stopped.Outcome != OutcomeStopped {
 				t.Fatalf("explicit stop = %+v, %v", stopped, err)
 			}
-			third, err := application.StartShare(context.Background(), ShareRequest{})
+			third, err := application.StartShare(context.Background(), ShareRequest{RelayIntent: relayprofile.UseExplicit(
+				[]relayprofile.
+					Candidate{{PublicURL: "https://relay.example"}}),
+			})
 			if err != nil {
 				t.Fatal(err)
 			}

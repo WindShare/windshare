@@ -10,6 +10,7 @@ import (
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/engine/internal/share"
+	"github.com/windshare/windshare/engine/networkconfig"
 	"github.com/windshare/windshare/engine/relayprofile"
 	"github.com/windshare/windshare/engine/relaysetup"
 	"github.com/windshare/windshare/engine/turn"
@@ -38,6 +39,7 @@ type ReceiveDependencies struct {
 }
 
 type Config struct {
+	Network             *networkconfig.Config
 	TURN                turn.Settings
 	TURNDependencies    turn.Dependencies
 	RelaySetup          relaysetup.Dependencies

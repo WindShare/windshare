@@ -16,6 +16,8 @@ const (
 	senderRelayAttemptTimeout = 10 * time.Second
 )
 
+var errParked = errors.New("network registration parked")
+
 type Clock interface {
 	Now() time.Time
 	Wait(context.Context, time.Duration) error
@@ -70,9 +72,18 @@ func (lifecycle *Lifecycle) recoverOwned(callerContext context.Context) error {
 			return err
 		}
 		resume := lifecycle.resumeNext
+		permit, err := lifecycle.beginAttempt(recoveryContext)
+		if err != nil {
+			return err
+		}
+		started := lifecycle.config.Clock.Now()
 		event := Attempt{ShareInstance: lifecycle.config.Fresh.ShareInstance, Number: attempt, State: AttemptStarted, Generation: lifecycle.generation, Slow: slow, Resume: resume}
 		lifecycle.observeRecoveryAttempt(event)
-		dialErr := lifecycle.connectAttempt(callerContext, recoveryContext, resume)
+		dialErr := lifecycle.connectAttempt(callerContext, recoveryContext, resume, permit, event)
+		if permit != nil {
+			permit.Release()
+		}
+		event.Duration = lifecycle.config.Clock.Now().Sub(started)
 		if cause := lifecycle.recoveryCause(callerContext, recoveryContext); cause != nil {
 			return cause
 		}
@@ -81,28 +92,29 @@ func (lifecycle *Lifecycle) recoverOwned(callerContext context.Context) error {
 			lifecycle.observeRecoveryAttempt(event)
 			return nil
 		}
-		event.State, event.Failure = AttemptFailed, dialErr
-		lifecycle.resumeNext, event.Terminal = classifyRegistrationFailure(resume, dialErr)
-		lifecycle.observeRecoveryAttempt(event)
-		if event.Terminal {
-			lifecycle.mu.Lock()
-			lifecycle.terminalErr = dialErr
-			lifecycle.mu.Unlock()
+		if errors.Is(dialErr, errParked) {
+			event.State = AttemptParked
+			lifecycle.observeRecoveryAttempt(event)
+			if attempt != ^uint32(0) {
+				attempt++
+			}
+			continue
+		}
+		if lifecycle.registrationFailed(&event, dialErr) {
 			return dialErr
 		}
 		if !lifecycle.config.Clock.Now().Add(delay).Before(deadline) {
 			slow = true
 		}
 		wait := lifecycle.retryDelay(delay, slow, dialErr)
+		event.NextDelay = wait
+		lifecycle.observeRecoveryAttempt(event)
 		if slow && !waitingAnnounced {
 			event.State, event.Failure, event.Slow, event.NextDelay = AttemptWaiting, nil, true, wait
 			lifecycle.observeRecoveryAttempt(event)
 			waitingAnnounced = true
 		}
-		if err := lifecycle.wait(recoveryContext, wait); err != nil {
-			if cause := lifecycle.recoveryCause(callerContext, recoveryContext); cause != nil {
-				return cause
-			}
+		if err := lifecycle.wait(callerContext, recoveryContext, wait); err != nil {
 			return err
 		}
 		delay = min(delay*2, senderRelayRetryMaximum)
@@ -112,7 +124,26 @@ func (lifecycle *Lifecycle) recoverOwned(callerContext context.Context) error {
 	}
 }
 
-func (lifecycle *Lifecycle) wait(ctx context.Context, delay time.Duration) error {
+func (lifecycle *Lifecycle) beginAttempt(ctx context.Context) (AttemptPermit, error) {
+	if lifecycle.config.Attempts == nil {
+		return nil, nil
+	}
+	return lifecycle.config.Attempts.Begin(ctx)
+}
+
+func (lifecycle *Lifecycle) registrationFailed(event *Attempt, failure error) bool {
+	event.State, event.Failure = AttemptFailed, failure
+	lifecycle.resumeNext, event.Terminal = classifyRegistrationFailure(event.Resume, failure)
+	if event.Terminal {
+		lifecycle.observeRecoveryAttempt(*event)
+		lifecycle.mu.Lock()
+		lifecycle.terminalErr = failure
+		lifecycle.mu.Unlock()
+	}
+	return event.Terminal
+}
+
+func (lifecycle *Lifecycle) wait(caller, ctx context.Context, delay time.Duration) error {
 	waitContext, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
@@ -126,8 +157,8 @@ func (lifecycle *Lifecycle) wait(ctx context.Context, delay time.Duration) error
 	err := lifecycle.config.Clock.Wait(waitContext, delay)
 	cancel()
 	<-done
-	if ctx.Err() != nil {
-		return ctx.Err()
+	if cause := lifecycle.recoveryCause(caller, ctx); cause != nil {
+		return cause
 	}
 	if errors.Is(err, context.Canceled) {
 		return nil
@@ -137,7 +168,7 @@ func (lifecycle *Lifecycle) wait(ctx context.Context, delay time.Duration) error
 
 // connectAttempt contains ownership arbitration around one bounded handshake.
 // A success observed after cancellation is retired before it can advertise readiness.
-func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, resume bool) error {
+func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, resume bool, permit AttemptPermit, attempt Attempt) error {
 	init := lifecycle.config.Fresh
 	var descriptor []byte
 	if resume {
@@ -147,10 +178,16 @@ func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, res
 	}
 	dialContext, cancel := context.WithTimeout(recovery, senderRelayAttemptTimeout)
 	lifecycle.resumeNext, lifecycle.attempted = true, true
+	dialOptions := lifecycle.config.Candidate.registrationDialOptions(lifecycle.config.LifecycleObservationCapacity, resume)
+	dialOptions.ObserveStage = func(stage relayv2.DialStage) {
+		event := attempt
+		event.State, event.Stage, event.Duration, event.Failure = AttemptStage, stage.Stage, stage.Duration, stage.Failure
+		lifecycle.observeRecoveryAttempt(event)
+	}
 	connection, err := lifecycle.config.Dialer.Dial(dialContext, relayv2.SenderConfig{
 		RelayBaseURL: lifecycle.config.Candidate.PublicURL, Init: init, SenderPrivateKey: lifecycle.config.PrivateKey,
 		ResumeToken: lifecycle.config.ResumeToken, Descriptor: descriptor,
-		Dial: lifecycle.config.Candidate.registrationDialOptions(lifecycle.config.LifecycleObservationCapacity, resume),
+		Dial: dialOptions,
 	})
 	if err == nil {
 		err = dialContext.Err()
@@ -163,8 +200,14 @@ func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, res
 	if err == nil && !connection.valid() {
 		err = relayv2.ErrProtocol
 	}
+	if err == nil && permit != nil && !permit.Admit() {
+		err = errParked
+	}
 	if err == nil {
 		err = lifecycle.installRecovered(connection, caller, recovery)
+		if err != nil && lifecycle.config.Attempts != nil {
+			lifecycle.config.Attempts.Unavailable()
+		}
 	}
 	if err != nil {
 		_ = lifecycle.retireConnection(connection)

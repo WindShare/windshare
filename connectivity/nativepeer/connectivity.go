@@ -49,7 +49,7 @@ type Config struct {
 	Connect             func(pion.Configuration, pionpeer.AttemptConfig) (*pionpeer.Connection, error)
 	Monitor             NetworkMonitor
 	Sockets             *socketauthority.Authority
-	Pool                *icepolicy.ICEEndpointPool
+	Pool                func() icepolicy.ICEEndpointPool
 	Reachability        *reachability.Authority
 	Discovery           *gateway.Discovery
 	Now                 func() time.Time

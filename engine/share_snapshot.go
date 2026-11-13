@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 
-	"github.com/windshare/windshare/engine/internal/eventproject"
 	appobs "github.com/windshare/windshare/engine/observation"
 )
 
@@ -29,16 +28,16 @@ type ShareSnapshot struct {
 
 func (current *ShareTask) Snapshot() ShareSnapshot {
 	var snapshot ShareSnapshot
-	ready, err, settled := current.controller.Startup()
+	_, err, settled := current.controller.Startup()
 	if settled {
 		snapshot.Startup = ShareStartupFailed
 		snapshot.StartupError = err
 		if err == nil {
-			origin, projectionErr := eventproject.RelayOrigin(ready.RelayEndpoint)
+			ready, projectionErr := current.Ready(context.Background())
 			snapshot.StartupError = projectionErr
 			if projectionErr == nil {
 				snapshot.Startup = ShareReadyReached
-				snapshot.Ready = ShareReady{Capability: ready.Capability, SelectedRootSummary: ready.SelectedRootSummary, RelayOrigin: origin}
+				snapshot.Ready = ready
 			}
 		}
 	}

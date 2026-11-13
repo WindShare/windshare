@@ -40,6 +40,8 @@ func cloneReady(ready Ready) Ready {
 	ready.Capability.ReadSecret = slices.Clone(ready.Capability.ReadSecret)
 	ready.Capability.PKHash = slices.Clone(ready.Capability.PKHash)
 	ready.Capability.Relays = slices.Clone(ready.Capability.Relays)
+	ready.Capability.NodeAliases = slices.Clone(ready.Capability.NodeAliases)
+	ready.Admissions = slices.Clone(ready.Admissions)
 	return ready
 }
 

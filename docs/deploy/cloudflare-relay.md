@@ -8,6 +8,11 @@ Cloudflare TURN for automatic connection scheduling. Realtime TURN usage is bill
 separately; local budgets default to unlimited and are per Engine, not account-wide
 spending caps. Direct and application-relay paths remain available.
 
+`frontend` mode serves static assets and installer redirects without relay storage,
+an owner console, or TURN. It needs no owner password or Calls permission. The
+official split deployment uses [network operations](../../deploy/network/operations.md)
+to publish one build to Cloudflare and mainland hosts. The steps below cover private relays.
+
 ## First deployment
 
 1. Create a Cloudflare **workers.dev** subdomain, or choose two unused hostnames in
@@ -24,7 +29,7 @@ spending caps. Direct and application-relay paths remain available.
    | Secret | `WINDSHARE_OWNER_PASSWORD` | Console password, at least 16 characters |
    | Secret | `CLOUDFLARE_WORKER_NAME` | Stable lowercase name, at most 55 characters |
    | Variable | `CLOUDFLARE_RELAY_ENABLED` | `true` |
-   | Variable, optional | `CLOUDFLARE_DEPLOYMENT_MODE` | `full` (default) or `relay-only` |
+   | Variable, optional | `CLOUDFLARE_DEPLOYMENT_MODE` | `full` (default), `relay-only`, or `frontend` |
    | Secret, optional | `CLOUDFLARE_ANALYTICS_API_TOKEN` | Separate Account Analytics Read token for on-demand usage estimates |
    | Secret, optional pair | `CLOUDFLARE_RELAY_DOMAIN` | Relay hostname, e.g. `share.example.com` |
    | Secret, optional pair | `CLOUDFLARE_ZONE_ID` | That hostname's zone ID |
@@ -43,14 +48,15 @@ spending caps. Direct and application-relay paths remain available.
 
    ```sh
    wind relay onboard https://<relay-address>
-   wind share <path>
+   wind share <path> --configured-relays-only --front-url https://<frontend-address>
    ```
 
    Sign in to the console with the owner password, verify the device name and code,
-   and approve. The client saves its own credential and managed TURN reference, and selects only this private relay.
-   Existing profiles and frontend choices remain saved; P2P stays enabled. Headless
-   clients can display the URL and code with `--no-browser`. In `relay-only` mode, pass
-   `--front-url` when sharing unless a frontend is already saved.
+   and approve. The client saves its credential and managed TURN reference, and selects
+   this private relay in `active_relays`. Existing profiles and frontend choices remain
+   saved; P2P stays enabled. Use the relay address as the frontend in `full` mode, or a
+   separate frontend in `relay-only` mode. Omitting `--front-url` uses the saved or built-in
+   frontend. Headless clients can display the URL and code with `--no-browser`.
 
 The console supports named manual credentials and a JSON configuration for automation.
 See [sharing defaults](../cli.md#sharing-defaults). Actions masks deployment addresses,

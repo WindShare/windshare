@@ -2,11 +2,11 @@ import { encodeBase64Url } from '../../crypto/bytes'
 import { sha256 } from '../../crypto/digest'
 import {
   capabilityRelays,
+  capabilityNodeAliases,
   decodeSuite02CapabilityKey,
   parseSuite02CapabilityLink,
   type Suite02CapabilityLink,
 } from '../../crypto/suite02-link'
-import { receiverRelayBases } from '../../receiver/relay-race'
 
 const TEXT_ENCODER = new TextEncoder()
 
@@ -20,6 +20,7 @@ export async function capabilityFromInput(input: string, pageUrl: string): Promi
     return Object.freeze({
       ...capability,
       relays: capabilityRelays(new URL(pageUrl)),
+      nodeAliases: capabilityNodeAliases(new URL(pageUrl)),
     })
   } catch (error) {
     capability.readSecret.fill(0)
@@ -33,9 +34,8 @@ export async function capabilityInputFingerprint(input: string, pageUrl: string)
   let encoded: Uint8Array<ArrayBuffer> | undefined
   try {
     capability = await capabilityFromInput(input, pageUrl)
-    const relays = receiverRelayBases(capability.relays)
     encoded = TEXT_ENCODER.encode(JSON.stringify([
-      capability.suite, encodeBase64Url(capability.readSecret), encodeBase64Url(capability.pkHash), relays,
+      capability.suite, encodeBase64Url(capability.readSecret), encodeBase64Url(capability.pkHash), capability.relays, capability.nodeAliases,
     ]))
     return encodeBase64Url(await sha256(encoded))
   } catch {

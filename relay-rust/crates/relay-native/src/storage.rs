@@ -14,6 +14,7 @@ use windshare_relay_core::{
     share::Storage,
 };
 
+pub mod budget;
 mod transactions;
 use transactions::read;
 

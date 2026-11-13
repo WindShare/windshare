@@ -86,12 +86,13 @@ func (receiverClock) Wait(ctx context.Context, delay time.Duration) error {
 }
 
 type ReceiverConfig struct {
-	recovery    *ReceiverRecovery
-	Clock       ReceiverClock
-	Receiver    liveshare.ReceiverConfig
-	Dial        func(context.Context, relayv2.ReceiverConfig) (ReceiverConnection, error)
-	DialOptions relayv2.DialOptions
-	Connected   func(ReceiverConnection)
+	recovery         *ReceiverRecovery
+	Clock            ReceiverClock
+	Receiver         liveshare.ReceiverConfig
+	Dial             func(context.Context, relayv2.ReceiverConfig) (ReceiverConnection, error)
+	DialOptions      relayv2.DialOptions
+	Connected        func(ReceiverConnection)
+	ResolveEndpoints func(context.Context) ([]string, error)
 }
 
 // Receiver owns relay connections for one cryptographic session. Competing
@@ -132,7 +133,7 @@ func NewReceiver(ctx context.Context, config ReceiverConfig) (*Receiver, error) 
 	if ctx == nil {
 		return nil, errors.New("receiver relay set requires caller lifetime")
 	}
-	if err := validateReceiverEndpoints(config.Receiver.Capability.Relays); err != nil {
+	if err := validateReceiverCandidates(config); err != nil {
 		return nil, err
 	}
 	raw, err := base64.RawURLEncoding.Strict().DecodeString(config.Receiver.Capability.ShareID)
@@ -154,6 +155,11 @@ func NewReceiver(ctx context.Context, config ReceiverConfig) (*Receiver, error) 
 	}
 	lifetime, cancel := context.WithCancel(ctx)
 	receiver := &Receiver{ctx: lifetime, cancel: cancel, config: config, shareID: share, remaining: len(config.Receiver.Capability.Relays), ready: make(chan struct{})}
+	if config.ResolveEndpoints != nil {
+		receiver.remaining++
+		receiver.workers.Add(1)
+		go receiver.expandCandidates()
+	}
 	for _, url := range config.Receiver.Capability.Relays {
 		receiver.workers.Add(1)
 		go receiver.run(url)
@@ -208,6 +214,11 @@ func (receiver *Receiver) run(url string) {
 	recovery := receiver.config.recovery
 	started := receiver.config.Clock.Now()
 	for failures := uint32(0); receiver.attemptError(receiver.ctx) == nil; failures++ {
+		if !initial {
+			if err := receiver.waitForDemand(receiver.ctx); err != nil {
+				return
+			}
+		}
 		attempt := recovery.begin(url)
 		recovery.observe(url, attempt, ReceiverRecoveryConnecting, 0, receiver.current(), nil)
 		ctx, cancel := recovery.options.TimeoutContext(receiver.ctx, receiverAttemptTimeout)
@@ -413,8 +424,10 @@ func (receiver *Receiver) finishInitial(url string, err error) {
 		failure = &ReceiverJoinFailure{}
 		receiver.failure = failure
 	}
-	failure.causes = append(failure.causes, err)
-	if receiverEndpointRetryable(err) {
+	if err != nil {
+		failure.causes = append(failure.causes, err)
+	}
+	if url != "" && receiverEndpointRetryable(err) {
 		failure.retryEndpoints = append(failure.retryEndpoints, url)
 	}
 	if receiver.remaining == 0 {

@@ -57,7 +57,10 @@ func TestConcurrentShareCapacityObservationsKeepTheirTaskAndSharedBudget(t *test
 	})
 	var configs [2]liveshare.SenderConfig
 	for i := range tasks {
-		current, err := application.StartShare(ctx, ShareRequest{Diagnostics: stream.Sink()})
+		current, err := application.StartShare(ctx, ShareRequest{Diagnostics: stream.Sink(), RelayIntent: relayprofile.UseExplicit(
+			[]relayprofile.
+				Candidate{{PublicURL: "https://relay.example"}}),
+		})
 		if err != nil {
 			t.Fatal(err)
 		}

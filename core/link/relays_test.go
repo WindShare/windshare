@@ -37,7 +37,6 @@ func TestRelayHintOmissionPreservesEndpointSelection(t *testing.T) {
 		{"fragment", "https://relay.example", "wss://relay.example#", false},
 		{"unsupported scheme", "https://relay.example", "ftp://relay.example", false},
 		{"malformed URL", "https://relay.example", "wss://relay.example:bad", false},
-		{"relative hint", "https://relay.example", "relay.example", false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			capability := newLink(test.relay)
@@ -102,7 +101,6 @@ func TestExplicitRelayHintsAreNeverPartiallyElided(t *testing.T) {
 	for _, relays := range [][]string{
 		{"wss://relay.example", "wss://other.example"},
 		{"wss://other.example", "wss://relay.example"},
-		{""},
 	} {
 		capability := newLink(relays...)
 		full, err := capability.URL("https://relay.example")

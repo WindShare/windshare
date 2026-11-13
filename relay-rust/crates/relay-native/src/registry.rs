@@ -53,6 +53,7 @@ impl Handle {
 }
 
 pub struct Registry {
+    metrics: crate::node::Metrics,
     actors: Mutex<BTreeMap<ShareId, Arc<Handle>>>,
     store: Database,
     endpoint: Endpoint,
@@ -110,6 +111,7 @@ impl Registry {
             activity,
             generation.clone(),
             recovery,
+            self.metrics.clone(),
         )));
         let task = generation.supervise(task);
         let handle = Arc::new(Handle {
@@ -146,6 +148,8 @@ pub struct Server {
     origins: OriginPolicy,
     sources: SourcePolicy,
     limits: ConnectionLimits,
+    node: crate::node::Runtime,
+    settings_path: Option<std::path::PathBuf>,
 }
 
 impl Server {
@@ -161,7 +165,9 @@ impl Server {
         limits.validate()?;
         let store = Database::open(database, endpoint.identity)?;
         let records = store.recoverable_records(MAX_RESIDENT_SHARES)?;
+        let node = crate::node::Runtime::default();
         let registry = Arc::new(Registry {
+            metrics: node.metrics.clone(),
             actors: Mutex::new(BTreeMap::new()),
             store,
             endpoint,
@@ -179,7 +185,25 @@ impl Server {
             origins,
             sources,
             limits,
+            node,
+            settings_path: None,
         })
+    }
+
+    /// # Errors
+    /// Enforces one durable node ledger before opening public ingress.
+    pub fn configure(
+        mut self,
+        settings: crate::node::Settings,
+        path: Option<std::path::PathBuf>,
+    ) -> Result<Self> {
+        self.node.configure(settings, self.registry.store.clone())?;
+        self.settings_path = path;
+        Ok(self)
+    }
+
+    pub fn node(&self) -> crate::node::Runtime {
+        self.node.clone()
     }
 
     /// Runs until shutdown, isolating each socket's waits from share decisions.
@@ -196,21 +220,27 @@ impl Server {
             CONNECTION_ATTEMPTS,
             self.registry.environment.now(),
         )?;
-        let ingress = Arc::new(Ingress::new(
-            self.registry.endpoint.clone(),
-            self.origins,
-            self.sources,
-            slots,
-            self.registry.environment.clone(),
-        ));
+        let ingress = Arc::new(
+            Ingress::new(
+                self.registry.endpoint.clone(),
+                self.origins,
+                self.sources,
+                slots,
+                self.registry.environment.clone(),
+            )
+            .with_node(self.node.clone()),
+        );
         let http_requests = Arc::new(Semaphore::new(MAX_HTTP_REQUESTS));
         let mut tasks = JoinSet::new();
         let (stop_connections, stopping) = watch::channel(false);
         let mut next_connection = NonZeroU64::MIN;
         tokio::pin!(shutdown);
+        let maintenance = self.node.maintain(self.settings_path);
+        tokio::pin!(maintenance);
         let result = loop {
             tokio::select! {
                 () = &mut shutdown => break Ok(()),
+                () = &mut maintenance => unreachable!("node maintenance runs until server shutdown"),
                 result = tasks.join_next(), if !tasks.is_empty() => {
                     if let Some(Err(error)) = result {
                         tracing::error!(event = "socket_task_failed", %error);

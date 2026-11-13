@@ -1,0 +1,13 @@
+{
+  "network": "windshare",
+  "link_host": "https://ws.ourworld.top",
+  "backup_entry": "https://windshare.cc",
+  "mirrors": [
+    "https://ws.ourworld.top/.well-known/windshare-network",
+    "https://windshare.cc/.well-known/windshare-network",
+    "https://github.com/windshare/windshare/releases/latest/download/windshare-network.json"
+  ],
+  "roots": [],
+  "snapshot": null,
+  "global_pair_covers_mainland": false
+}

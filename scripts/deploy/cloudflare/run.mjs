@@ -6,7 +6,8 @@ import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cloudflareClient } from './cloudflare.mjs';
-import { consoleConfig, deploymentConfig, FULL_DEPLOYMENT, readDeploymentMode } from './configuration.mjs';
+import { consoleConfig, deploymentConfig, frontendConfig, FRONTEND_DEPLOYMENT, FULL_DEPLOYMENT, readDeploymentMode } from './configuration.mjs';
+import { deployFrontend, readFrontendInputs } from './frontend.mjs';
 import { deployRelay, readInputs, SECRET_BINDING, STATE_BINDING, validateHostConfig } from './deployment.mjs';
 import { deploymentReport, deploymentReporter } from './reporting.mjs';
 import { analyticsSecret, provisionTURN, turnConsoleClient } from './turn.mjs';
@@ -49,6 +50,17 @@ async function publish(plan, config, ownerPassword) {
 }
 async function main() {
   const mode = readDeploymentMode(process.env);
+  if (mode === FRONTEND_DEPLOYMENT) {
+    const inputs = readFrontendInputs(process.env);
+    const reporter = deploymentReporter({ githubActions, operationId, mode });
+    reporter.protect(inputs);
+    const directory = process.env.WINDSHARE_WEB_ARTIFACT;
+    if (!directory) command('pnpm build', [], { cwd: join(repositoryRoot, 'web'), shell: true,
+      env: { WIND_BUILD_REVISION: process.env.GITHUB_SHA ?? process.env.WIND_BUILD_REVISION } });
+    await deployFrontend({ inputs, cloudflare: cloudflareClient({ ...inputs, apiToken: process.env.CLOUDFLARE_API_TOKEN }),
+      log: reporter.log, deploy: plan => publish(plan, frontendConfig(inputs, directory ? resolve(directory) : undefined)) });
+    return;
+  }
   const inputs = readInputs(process.env);
   const reporter = deploymentReporter({ githubActions, operationId, mode });
   reporter.protect(inputs);

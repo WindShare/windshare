@@ -1,0 +1,42 @@
+# Reuse the existing TLS ingress. Split-line link hosts need independently renewed DNS-01 certificates.
+ws.ourworld.top {
+    tls /etc/windshare-network/tls/fullchain.pem /etc/windshare-network/tls/privkey.pem
+    root * /srv/windshare/current/web
+    encode gzip
+    header X-Content-Type-Options nosniff
+
+    handle /.well-known/windshare-network {
+        header Access-Control-Allow-Origin *
+        header Cache-Control "public, max-age=300"
+        @available file {path}
+        handle @available {
+            header Content-Type application/json
+            file_server
+        }
+        handle {
+            respond "Official network directory is not provisioned." 503
+        }
+    }
+    handle_path /downloads/* {
+        root * /srv/windshare/current/downloads
+        file_server
+    }
+    handle /assets/* {
+        header Cache-Control "public, max-age=31536000, immutable"
+        file_server
+    }
+    handle {
+        try_files {path} /index.html
+        header Cache-Control no-cache
+        file_server
+    }
+    log
+}
+
+{$WINDSHARE_NODE_HOST} {
+    reverse_proxy 127.0.0.1:8484 {
+        # Client-supplied forwarding headers must never choose the admission source.
+        header_up X-Windshare-Source-Ip {remote_host}
+    }
+    log
+}

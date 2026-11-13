@@ -57,11 +57,11 @@ func TestURLRoundTrip(t *testing.T) {
 		base string
 	}{
 		{"同站点中转", newLink("https://windshare.top"), "https://windshare.top"},
-		{"单中转", newLink("relay.example.com"), "https://windshare.top"},
-		{"多中转保序", newLink("relay-a.example.com", "relay-b.example.com"), "https://windshare.top"},
-		{"中转带端口", newLink("relay.example.com:8443"), "https://windshare.top"},
+		{"单中转", newLink("https://relay.example.com"), "https://windshare.top"},
+		{"多中转保序", newLink("https://relay-a.example.com", "https://relay-b.example.com"), "https://windshare.top"},
+		{"中转带端口", newLink("https://relay.example.com:8443"), "https://windshare.top"},
 		{"基址尾斜杠", newLink("https://windshare.top"), "https://windshare.top/"},
-		{"基址带子路径", newLink("r.example.com"), "https://ex.com/app"},
+		{"基址带子路径", newLink("https://r.example.com"), "https://ex.com/app"},
 		{"localhost 开发基址", newLink("http://localhost:5173"), "http://localhost:5173"},
 		{"discard encoded base fragment", newLink("https://ex.com"), "https://ex.com/app#%41" + testKey[1:]},
 	}
@@ -154,7 +154,7 @@ func TestParseQueryEdgeParity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"a;b", "c"}; !reflect.DeepEqual(got.Relays, want) {
+	if want := []string{"https://a;b", "https://c"}; !reflect.DeepEqual(got.Relays, want) {
 		t.Fatalf("Relays = %q, want %q", got.Relays, want)
 	}
 }
@@ -177,7 +177,7 @@ func TestMalformedLinkErrorsDoNotExposeCapabilityFragment(t *testing.T) {
 func rawB64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
 func TestSplitMergeRoundTrip(t *testing.T) {
-	l := newLink("relay.example.com")
+	l := newLink("https://relay.example.com")
 	full, err := l.URL("https://windshare.top")
 	if err != nil {
 		t.Fatal(err)
@@ -203,7 +203,7 @@ func TestSplitMergeRoundTrip(t *testing.T) {
 
 // SplitURL(构造侧)与 Split(字符串侧)必须产出同一对「裸链接 + 密钥串」。
 func TestSplitURLAgreesWithSplit(t *testing.T) {
-	l := newLink("relay.example.com")
+	l := newLink("https://relay.example.com")
 	full, err := l.URL("https://windshare.top")
 	if err != nil {
 		t.Fatal(err)
@@ -225,7 +225,7 @@ func TestSplitURLAgreesWithSplit(t *testing.T) {
 func TestMergeTolerantKeyForms(t *testing.T) {
 	bare := "https://windshare.top/" + testShareID + "?r=relay.example.com"
 	full := bare + "#" + testKey
-	want := newLink("relay.example.com")
+	want := newLink("https://relay.example.com")
 	tests := []struct {
 		name string
 		key  string
@@ -352,7 +352,7 @@ func TestSenderAuthenticatedLinkMatchesFrozenIdentityVector(t *testing.T) {
 		seed[index] = 0x20 + byte(index)
 	}
 	publicKey := ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey)
-	got, err := link.NewSenderAuthenticated(testSecret, publicKey, []string{"relay.example"})
+	got, err := link.NewSenderAuthenticated(testSecret, publicKey, []string{"https://relay.example"})
 	if err != nil {
 		t.Fatal(err)
 	}

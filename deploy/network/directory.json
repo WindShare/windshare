@@ -1,0 +1,21 @@
+{
+  "format": 1,
+  "network": "windshare",
+  "generation": 1,
+  "serial": 1,
+  "issued_at": "2026-11-13T00:00:00Z",
+  "expires_at": "2027-02-10T00:00:00Z",
+  "nodes": [{
+    "alias": "cn1",
+    "relay": "https://cn1.ourworld.top",
+    "stun": ["stun:cn1.ourworld.top:3478"],
+    "roles": ["stun"],
+    "zone": "cn",
+    "region": "cn-wuhan",
+    "provider": "aliyun",
+    "operator": "official",
+    "capacity_mbps": 200,
+    "status": "canary"
+  }],
+  "public_stun": []
+}

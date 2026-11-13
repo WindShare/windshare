@@ -5,6 +5,7 @@ import type { ReceiverController } from './controller'
 import { presentNewReceiveOperation } from './lifecycle-presentation'
 import { presentSavingActions } from './saving'
 import { SavingControls } from './saving/SavingControls'
+import { InAppBrowserHint } from './saving/InAppBrowserHint'
 import { ShareContent } from './share-content/ShareContent'
 import { MediaPreview, type PreviewActions } from './share-content/MediaPreview'
 import { DetailSheet } from './controls/DetailSheet'
@@ -134,6 +135,7 @@ export function ReceiverApp({ controller }: { readonly controller: ReceiverContr
           exitSelection: () => controller.exitSelectionMode(), selectPage: () => controller.selectPage(),
           clearSelection: () => controller.clearSelection(), retry: () => controller.retryDirectory(),
         } }} />}
+      {hasContent && <InAppBrowserHint />}
       {hasContent && !additionalReceive && savingControls}
       {matching !== undefined && <div className="continuation-suggestion">
         <span>Continue {matching.objectLabel}</span>

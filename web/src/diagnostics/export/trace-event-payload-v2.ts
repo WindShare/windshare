@@ -48,12 +48,13 @@ import {
   validatePerformancePhase,
   validatePerformanceSummary,
 } from './trace-payload-performance'
-import { recordValue, type UnknownRecord } from './trace-payload-validation'
+import { exactKeys, integerBetween, member, recordValue, type UnknownRecord } from './trace-payload-validation'
 import { validateBrowserDelivery } from './trace-payload-browser-delivery'
 
 export { validateCorrelationV1 } from './trace-payload-validation'
 
 const EVENT_PAYLOAD_VALIDATORS = Object.freeze({
+  network_directory: validateNetworkDirectory,
   join_transition: validateJoin,
   receiver_experience: validateReceiverExperience,
   browse_transition: validateBrowse,
@@ -94,6 +95,17 @@ const EVENT_PAYLOAD_VALIDATORS = Object.freeze({
   retained_inventory: validateRetainedInventory,
   retained_action: validateRetainedAction,
 } satisfies Record<TraceDomainEventNameV2, (payload: UnknownRecord) => void>)
+
+function validateNetworkDirectory(payload: UnknownRecord): void {
+  exactKeys(payload, ['operation_id', 'mirror', 'transition'], ['generation', 'serial', 'trusted_until_ms', 'failure_detail'], 'network directory')
+  member(payload.transition, ['accepted', 'rejected'], 'directory transition')
+  for (const field of ['operation_id', 'mirror', 'failure_detail']) {
+    if (payload[field] !== undefined && (typeof payload[field] !== 'string' || payload[field].length > 2048)) throw new TypeError('Invalid network trace text')
+  }
+  for (const field of ['generation', 'serial', 'trusted_until_ms']) {
+    if (payload[field] !== undefined) integerBetween(payload[field], 0, Number.MAX_SAFE_INTEGER, field)
+  }
+}
 
 export function validateTraceEventPayloadV2<Name extends TraceDomainEventNameV2>(
   eventName: Name,

@@ -5,7 +5,7 @@ import type { PeerProviderFact } from './provider-facts'
 import { PeerNetworkGeneration } from './network-generation'
 
 export class PeerProfilePlanner {
-  readonly #pool: ICEEndpointPool
+  readonly #pool: () => ICEEndpointPool
   readonly #network: PeerNetworkGeneration
   #wave = 0
   #usedEndpointIDs: string[] = []
@@ -14,8 +14,8 @@ export class PeerProfilePlanner {
   #rotationConsidered = false
   readonly #facts: ICEFactStore
 
-  constructor(pool?: ICEEndpointPool, network = new PeerNetworkGeneration()) {
-    this.#pool = pool ?? defaultICEEndpointPool()
+  constructor(pool?: ICEEndpointPool | (() => ICEEndpointPool), network = new PeerNetworkGeneration()) {
+    this.#pool = typeof pool === 'function' ? pool : () => pool ?? defaultICEEndpointPool()
     this.#network = network
     this.#facts = new ICEFactStore(network.id)
   }
@@ -37,7 +37,7 @@ export class PeerProfilePlanner {
       return this.#reuse(wave, sequence, nowMs)
     }
     this.#rotationConsidered = this.#selected !== undefined
-    const profile = selectAttemptProfile(this.#pool, {
+    const profile = selectAttemptProfile(this.#pool(), {
       networkGenerationID: this.#network.id, waveID: String(wave),
       sequence, nowMs, usedEndpointIDs: this.#usedEndpointIDs,
       usedFailureDomains: this.#usedFailureDomains, ipv4: true, ipv6: true,
@@ -51,7 +51,7 @@ export class PeerProfilePlanner {
   #reuse(wave: number, sequence: number, nowMs: number): AttemptICEProfile {
     // Footprint limits govern discovery of alternatives, never permission to reuse
     // the chosen profile. Only attributable failures can cool an endpoint down.
-    const pool = new ICEEndpointPool(this.#pool.endpoints.filter((endpoint) =>
+    const pool = new ICEEndpointPool(this.#pool().endpoints.filter((endpoint) =>
       this.#selected!.endpointIDs.includes(endpoint.id)))
     return selectAttemptProfile(pool, { networkGenerationID: this.#network.id,
       waveID: String(wave), sequence, nowMs, usedEndpointIDs: [], ipv4: true, ipv6: true },
@@ -64,7 +64,7 @@ export class PeerProfilePlanner {
       const endpointID = profile.endpointIDs[index]
       if (endpointID !== undefined) this.#facts.recordEndpointFailure(profile, endpointID, nowMs)
     } else if (fact.kind === 'candidate' && fact.candidateType === 'srflx' && fact.disposition === 'accepted') {
-      this.#facts.recordProfile(profile, true, Math.max(0, nowMs - startedAt))
+      this.#facts.recordProfile(profile, true, Math.max(0, nowMs - startedAt), nowMs)
     }
   }
 }

@@ -9,6 +9,24 @@ import (
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
+func ShareIntent(config Config, override []string) (relayprofile.Intent, error) {
+	var candidates []relayprofile.Candidate
+	if len(override) > 0 || len(config.ActiveRelays) > 0 {
+		var err error
+		candidates, err = SelectRelays(config, override)
+		if err != nil {
+			return relayprofile.Intent{}, err
+		}
+	}
+	if len(override) > 0 {
+		return relayprofile.UseExplicit(candidates), nil
+	}
+	if config.ConfiguredOnly {
+		return relayprofile.OnlyConfigured(candidates), nil
+	}
+	return relayprofile.Plan(candidates), nil
+}
+
 // SelectRelays treats a saved list or explicit override as the complete allowed
 // set. No infrastructure is added implicitly, including development listeners.
 func SelectRelays(config Config, override []string) ([]relayprofile.Candidate, error) {

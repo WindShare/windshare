@@ -16,7 +16,7 @@ func Save(config Config) error {
 }
 
 func (config Config) document() document {
-	disk := document{ManagedTURNPolicies: config.ManagedTURNPolicies, FrontURL: config.FrontURL, Profiles: make([]savedRelay, 0, len(config.Profiles)), ActiveRelays: config.ActiveRelays}
+	disk := document{ManagedTURNPolicies: config.ManagedTURNPolicies, FrontURL: config.FrontURL, Profiles: make([]savedRelay, 0, len(config.Profiles)), ActiveRelays: config.ActiveRelays, ConfiguredOnly: config.ConfiguredOnly}
 	if len(config.TURN.Accounts) > 0 || len(config.TURN.Profiles) > 0 {
 		disk.TURN = &config.TURN
 	}

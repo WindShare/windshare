@@ -5,6 +5,7 @@ package relayset
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 
 	"github.com/windshare/windshare/transport/relayv2"
@@ -197,6 +198,19 @@ func (s *Sender) ReadyRelayURL() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.firstReady
+}
+
+func (s *Sender) AdmittedURLs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var urls []string
+	for url, admitted := range s.current {
+		if admitted {
+			urls = append(urls, url)
+		}
+	}
+	slices.Sort(urls)
+	return urls
 }
 
 func (s *Sender) WaitReady(ctx context.Context) error {

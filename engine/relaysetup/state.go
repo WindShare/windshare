@@ -28,7 +28,6 @@ type setupIntent struct {
 	OperationID      string    `json:"operation_id"`
 	RelayURL         string    `json:"relay_url"`
 	ConsoleURL       string    `json:"console_url"`
-	FrontURL         string    `json:"front_url,omitempty"`
 	DeviceName       string    `json:"device_name"`
 	ClaimSecret      string    `json:"claim_secret"`
 	Operation        Operation `json:"operation"`
@@ -106,8 +105,7 @@ func (pending *PendingSetup) validate() error {
 		ValidateDeviceName(pending.DeviceName) != nil {
 		return invalid
 	}
-	if relayconfig.ValidateFrontURL(pending.ConsoleURL) != nil ||
-		pending.FrontURL != "" && relayconfig.ValidateFrontURL(pending.FrontURL) != nil {
+	if relayconfig.ValidateFrontURL(pending.ConsoleURL) != nil {
 		return invalid
 	}
 	console, _ := url.Parse(pending.ConsoleURL)

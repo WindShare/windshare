@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
-	"net"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/windshare/windshare/core/networkendpoint"
 )
 
 const (
@@ -19,6 +21,7 @@ const (
 	EndpointsPerWave        = 4
 	MaximumCatalogEndpoints = 512
 	EndpointFailureCooldown = 30 * time.Second
+	ProfileSuccessAge       = 15 * time.Minute
 )
 
 var ErrConfiguration = errors.New("invalid trusted ICE endpoint configuration")
@@ -65,15 +68,8 @@ func ParseLocalConfiguration(data []byte) (ICEEndpointPool, error) {
 }
 
 func validEndpointURL(raw string) bool {
-	if !strings.HasPrefix(raw, "stun:") || strings.ContainsAny(raw, "/?#@ \t\r\n") {
-		return false
-	}
-	host, port, err := net.SplitHostPort(strings.TrimPrefix(raw, "stun:"))
-	if err != nil || host == "" {
-		return false
-	}
-	number, err := strconv.Atoi(port)
-	return err == nil && number > 0 && number <= 65535
+	_, err := networkendpoint.NormalizeSTUN(raw)
+	return err == nil
 }
 
 type SelectionRequest struct {
@@ -95,6 +91,8 @@ type ProfileFact struct {
 	ProfileID               string
 	ServerReflexiveProduced bool
 	FirstCandidateDelay     time.Duration
+	EndpointIDs             []string
+	ObservedAt              time.Time
 }
 type GenerationFacts struct {
 	NetworkGenerationID string
@@ -173,7 +171,13 @@ func SelectAttemptProfile(pool ICEEndpointPool, request SelectionRequest, facts 
 		}
 	}
 	seed := request.NetworkGenerationID + "|" + request.WaveID
-	sort.Slice(candidates, func(i, j int) bool { return endpointLess(candidates[i], candidates[j], seed) })
+	sort.Slice(candidates, func(i, j int) bool {
+		left, right := successfulProfileMember(candidates[i].ID, request, facts), successfulProfileMember(candidates[j].ID, request, facts)
+		if left != right {
+			return left
+		}
+		return endpointLess(candidates[i], candidates[j], seed)
+	})
 	selected := make([]Endpoint, 0, remaining)
 	for len(candidates) > 0 && len(selected) < remaining {
 		index := diverseEndpointIndex(candidates, selected)
@@ -214,6 +218,21 @@ func endpointLess(a, b Endpoint, seed string) bool {
 	}
 	return a.ID < b.ID
 }
+
+func successfulProfileMember(endpoint string, request SelectionRequest, facts GenerationFacts) bool {
+	if facts.NetworkGenerationID != request.NetworkGenerationID {
+		return false
+	}
+	for _, profile := range facts.Profiles {
+		if !profile.ServerReflexiveProduced || profile.ObservedAt.After(request.Now) || request.Now.Sub(profile.ObservedAt) > ProfileSuccessAge {
+			continue
+		}
+		if slices.Contains(profile.EndpointIDs, endpoint) {
+			return true
+		}
+	}
+	return false
+}
 func diverseEndpointIndex(candidates, selected []Endpoint) int {
 	if len(selected) == 0 {
 		return 0
@@ -226,6 +245,9 @@ func diverseEndpointIndex(candidates, selected []Endpoint) int {
 		}
 		if endpoint.Region != "" && endpoint.Region != selected[0].Region {
 			score++
+		}
+		if endpoint.Provider != "" && endpoint.Provider != selected[0].Provider {
+			score += 4
 		}
 		if score > best {
 			index, best = i, score

@@ -40,6 +40,7 @@ pub struct Ingress {
     sources: SourcePolicy,
     capacity: Arc<Capacity>,
     environment: NativeEnvironment,
+    pub(crate) node: crate::node::Runtime,
 }
 
 pub struct Upgrade<S> {
@@ -50,7 +51,7 @@ pub struct Upgrade<S> {
 }
 
 impl Ingress {
-    pub const fn new(
+    pub fn new(
         endpoint: Endpoint,
         origins: OriginPolicy,
         sources: SourcePolicy,
@@ -63,7 +64,13 @@ impl Ingress {
             sources,
             capacity,
             environment,
+            node: crate::node::Runtime::default(),
         }
+    }
+
+    pub(crate) fn with_node(mut self, node: crate::node::Runtime) -> Self {
+        self.node = node;
+        self
     }
 
     pub async fn accept<S>(
@@ -157,6 +164,7 @@ impl RequestService<'_> {
             .accept(source, self.connection, self.ingress.environment.now())
             .map_or_else(
                 |_| {
+                    self.ingress.node.metrics.admission_refused();
                     reply(
                         StatusCode::SERVICE_UNAVAILABLE,
                         "relay connection capacity exceeded\n",

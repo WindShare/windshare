@@ -11,6 +11,7 @@ import (
 
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/engine"
+	"github.com/windshare/windshare/engine/builtinnetwork"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/host/desktop/logstore"
 )
@@ -58,7 +59,17 @@ func Start() (*Host, error) {
 		_, _ = fmt.Fprintf(os.Stderr, "host.log_unavailable session_id=%s error=%v\n", sessionID, err)
 		log = logstore.Disabled(sessionID, err)
 	}
-	application, err := engine.New(engine.Config{})
+	configPath, err := relayconfig.Path()
+	if err != nil {
+		_ = log.Close()
+		return nil, err
+	}
+	network, err := builtinnetwork.Config(configPath)
+	if err != nil {
+		_ = log.Close()
+		return nil, err
+	}
+	application, err := engine.New(engine.Config{Network: network})
 	if err != nil {
 		_ = log.Close()
 		return nil, err

@@ -191,6 +191,9 @@ func TestConfigurationWaitsAndTerminalFailureIsRetained(t *testing.T) {
 			a, _, starts := fixture(t)
 			if configuration {
 				a.deps.load = func() (relayconfig.Config, error) { return relayconfig.Config{}, nil }
+				a.deps.start = func(context.Context, engine.ShareRequest) (shareTask, error) {
+					return nil, engine.ErrNetworkUnavailable
+				}
 			} else {
 				a.deps.start = func(context.Context, engine.ShareRequest) (shareTask, error) {
 					return nil, errors.New("admission failed")

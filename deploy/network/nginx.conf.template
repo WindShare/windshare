@@ -1,0 +1,45 @@
+# Render NODE_HOST only after assigning the server its permanent directory identity.
+# ws.ourworld.top certificates use DNS-01; the node certificate may use HTTP-01.
+map $http_upgrade $windshare_connection { default upgrade; '' close; }
+
+server {
+    listen 443 ssl;
+    server_name ws.ourworld.top;
+    ssl_certificate /etc/letsencrypt/live/ws.ourworld.top/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/ws.ourworld.top/privkey.pem;
+    root /srv/windshare/current/web;
+
+    location = /.well-known/windshare-network {
+        default_type application/json;
+        add_header Access-Control-Allow-Origin "*" always;
+        add_header Cache-Control "public, max-age=300";
+        try_files $uri =503;
+    }
+    location /downloads/ {
+        alias /srv/windshare/current/downloads/;
+        autoindex off;
+        add_header X-Content-Type-Options nosniff;
+    }
+    location /assets/ { try_files $uri =404; add_header Cache-Control "public, max-age=31536000, immutable"; }
+    location / { try_files $uri /index.html; add_header Cache-Control no-cache; }
+}
+
+server {
+    listen 443 ssl;
+    server_name ${NODE_HOST};
+    ssl_certificate /etc/letsencrypt/live/${NODE_HOST}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${NODE_HOST}/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:8484;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $windshare_connection;
+        # Never append a client-supplied forwarding chain to the authenticated source.
+        proxy_set_header X-Windshare-Source-Ip $remote_addr;
+        proxy_read_timeout 90s;
+        proxy_send_timeout 90s;
+        proxy_buffering off;
+    }
+}

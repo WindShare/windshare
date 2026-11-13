@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { firstUsableRelay, receiverRelayBases, RelayEndpointFailure } from '../../src/receiver/relay-race'
 import { StaleShareInstanceError } from '../../src/receiver/session-factory'
 import { isShareRecoveryFailure } from '../../src/receiver/recovery-failure'
+import { RelayCandidates } from '../../src/receiver/relay-candidates'
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -10,6 +11,25 @@ function deferred<T>() {
 }
 
 describe('first usable relay', () => {
+  it('does not delay known paths for an unknown directory alias', async () => {
+    const expansion = deferred<readonly string[]>()
+    const source = new RelayCandidates(['known'], expansion.promise)
+    const connect = vi.fn(async (endpoint: string) => endpoint)
+    expect(await firstUsableRelay(source, new AbortController().signal, connect, async () => undefined)).toBe('known')
+    expansion.resolve(['later'])
+    await source.settled
+    expect(connect).toHaveBeenCalledTimes(1)
+  })
+  it('admits a newly resolved alias after the explicit endpoint fails', async () => {
+    const expansion = deferred<readonly string[]>()
+    const source = new RelayCandidates(['unavailable'], expansion.promise)
+    const result = firstUsableRelay(source, new AbortController().signal, async endpoint => {
+      if (endpoint === 'unavailable') throw new Error('node disabled')
+      return endpoint
+    }, async () => undefined)
+    expansion.resolve(['resolved'])
+    await expect(result).resolves.toBe('resolved')
+  })
   it('rejects authenticated identity failures beside a stalled endpoint and disposes its late result', async () => {
     const slow = deferred<string>()
     const failure = new StaleShareInstanceError('Authenticated descriptor changed')

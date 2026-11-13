@@ -257,8 +257,9 @@ func waitRelaysetEvent[T any](t *testing.T, ctx context.Context, events <-chan T
 }
 
 type relaysetClock struct {
-	mu  sync.Mutex
-	now time.Time
+	mu     sync.Mutex
+	now    time.Time
+	waited chan time.Duration
 }
 
 func (clock *relaysetClock) Now() time.Time {
@@ -274,6 +275,10 @@ func (clock *relaysetClock) Wait(ctx context.Context, delay time.Duration) error
 	clock.mu.Lock()
 	clock.now = clock.now.Add(delay)
 	clock.mu.Unlock()
+	select {
+	case clock.waited <- delay:
+	default:
+	}
 	return nil
 }
 

@@ -1,7 +1,7 @@
 use crate::actor::Event;
 use anyhow::Result;
 use futures_util::{Sink, SinkExt};
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 use tokio::sync::{Notify, OwnedSemaphorePermit, mpsc, watch};
 use tokio_tungstenite::tungstenite::Message;
 use windshare_relay_core::lifecycle::ConnectionRef;
@@ -10,6 +10,7 @@ pub(super) struct Frame {
     bytes: Vec<u8>,
     _slot: OwnedSemaphorePermit,
     _bytes: Option<OwnedSemaphorePermit>,
+    session: Option<windshare_relay_core::sessions::SessionKey>,
 }
 
 impl Frame {
@@ -17,11 +18,13 @@ impl Frame {
         bytes: Vec<u8>,
         slot: OwnedSemaphorePermit,
         byte_charge: Option<OwnedSemaphorePermit>,
+        session: Option<windshare_relay_core::sessions::SessionKey>,
     ) -> Self {
         Self {
             bytes,
             _slot: slot,
             _bytes: byte_charge,
+            session,
         }
     }
 }
@@ -45,6 +48,7 @@ impl Writer {
         flush: Arc<Notify>,
         events: mpsc::Sender<Event>,
         connection: ConnectionRef,
+        metrics: crate::node::Metrics,
     ) -> Result<()>
     where
         S: Sink<Message> + Unpin,
@@ -71,7 +75,12 @@ impl Writer {
                         sink.close().await?;
                         return Ok(());
                     };
+                    let start = Instant::now();
+                    let bytes = frame.bytes.len() as u64;
                     send(&mut sink, std::mem::take(&mut frame.bytes)).await?;
+                    if let Some(session) = frame.session {
+                        metrics.forwarded(session, bytes, start, Instant::now());
+                    }
                     // Keep both charges through the in-flight socket wait. Removing
                     // a message from mpsc alone must not replenish writer capacity.
                     drop(frame);

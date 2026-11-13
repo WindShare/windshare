@@ -49,7 +49,7 @@ describe('capability input identity', () => {
     const key = await encodeSuite02CapabilityKey(new Uint8Array(16).fill(1), new Uint8Array(16).fill(2))
     const pageUrl = 'https://portal.invalid/'
     const link = `https://relay.invalid/${key.shareId}?r=&trace=1#${key.encoded}`
-    expect((await capabilityFromInput(link, pageUrl)).relays).toEqual([''])
+    await expect(capabilityFromInput(link, pageUrl)).rejects.toThrow('Invalid relay hints')
     expect(await capabilityInputFingerprint(link, pageUrl)).toBeUndefined()
     expect(await capabilityInputFingerprint(key.encoded, `${pageUrl}?r=`)).toBeUndefined()
   })

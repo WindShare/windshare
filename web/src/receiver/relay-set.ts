@@ -14,6 +14,7 @@ interface RelaySetOptions {
   readonly now: () => number
   readonly observe: (relayBase: string, observation: RecoveryObservation) => void
   readonly failure: (error: unknown) => 'retry' | 'stop'
+  readonly waitForDemand?: (signal: AbortSignal) => Promise<void>
 }
 
 /** One generation owns independent relay delivery lifetimes; none may replace session authority. */
@@ -27,6 +28,7 @@ export class ReceiverRelaySet {
   readonly #lifetime = new AbortController()
   #started = false
   #closeTask: Promise<void> | undefined
+  #stopCandidates: (() => void) | undefined
 
   constructor(options: RelaySetOptions) {
     this.#options = options
@@ -41,6 +43,7 @@ export class ReceiverRelaySet {
     if (this.#started || this.#lifetime.signal.aborted) return
     this.#started = true
     for (const relayBase of this.#options.factory.relayBases) this.#ensure(relayBase)
+    this.#stopCandidates = this.#options.factory.observeRelayBases?.(bases => { for (const base of bases) this.#ensure(base) })
   }
 
   detached(laneId: number): void {
@@ -73,7 +76,11 @@ export class ReceiverRelaySet {
     let attempt = 0
     const startedAt = this.#options.now()
     const signal = this.#lifetime.signal
-    while (!signal.aborted && !this.#session.isClosed && this.#session.availableLaneIds().length > 0) {
+    while (!this.#retired && this.#session.availableLaneIds().length > 0) {
+      if (attempt > 0) {
+        await this.#options.waitForDemand?.(signal).catch(() => undefined)
+        if (this.#retired) return
+      }
       const phase = reconnectPhase(attempt, this.#options.now() - startedAt)
       attempt += 1
       this.#options.observe(relayBase, { attempt, phase, transition: 'attempt_started' })
@@ -84,30 +91,39 @@ export class ReceiverRelaySet {
           connect: attemptSignal => this.#options.factory.attachRelay(this.#session, attemptSignal, relayBase),
           close: attached => this.#closeAttached(attached),
         })
-        if (signal.aborted || this.#session.isClosed) {
+        if (this.#retired) {
           await this.#closeAttached(attached)
           return
         }
-        try {
-          this.#options.admit(attached.laneId)
-        } catch (error) {
-          await this.#closeAttached(attached)
-          throw error
-        }
+        await this.#admit(attached)
         this.#connections.set(relayBase, attached)
         this.#options.observe(relayBase, { attempt, phase, transition: 'connected' })
         return
       } catch (error) {
-        if (signal.aborted) return
-        this.#options.observe(relayBase, { attempt, phase, transition: 'attempt_failed', failure: error })
-        if (this.#options.failure(error) === 'stop') {
-          this.#disabled.add(relayBase)
-          this.#options.observe(relayBase, { attempt, phase, transition: 'terminal', failure: error })
-          return
-        }
-        await this.#options.sleep(attempt, signal, this.#options.now() - startedAt, error, relayBase).catch(() => undefined)
+        if (!await this.#retry(relayBase, attempt, startedAt, error)) return
       }
     }
+  }
+
+  get #retired(): boolean { return this.#lifetime.signal.aborted || this.#session.isClosed }
+
+  async #retry(relayBase: string, attempt: number, startedAt: number, error: unknown): Promise<boolean> {
+    if (this.#retired) return false
+    const elapsed = this.#options.now() - startedAt
+    const phase = reconnectPhase(attempt - 1, elapsed)
+    this.#options.observe(relayBase, { attempt, phase, transition: 'attempt_failed', failure: error })
+    if (this.#options.failure(error) === 'stop') {
+      this.#disabled.add(relayBase)
+      this.#options.observe(relayBase, { attempt, phase, transition: 'terminal', failure: error })
+      return false
+    }
+    await this.#options.sleep(attempt, this.#lifetime.signal, elapsed, error, relayBase).catch(() => undefined)
+    return !this.#retired
+  }
+
+  async #admit(attached: AttachedRelay): Promise<void> {
+    try { this.#options.admit(attached.laneId) }
+    catch (error) { await this.#closeAttached(attached); throw error }
   }
 
   async #closeAttached(attached: AttachedRelay): Promise<void> {
@@ -124,6 +140,7 @@ export class ReceiverRelaySet {
   }
 
   async #close(): Promise<void> {
+    this.#stopCandidates?.()
     this.#lifetime.abort(new DOMException('Relay generation retired', 'AbortError'))
     const connections = [...this.#connections.values()]
     this.#connections.clear()

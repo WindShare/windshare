@@ -103,7 +103,7 @@ func TestShareRequestValidationPreservesSuiteBoundaries(t *testing.T) {
 			t.Fatalf("parse=%d", parse)
 		}
 		if !reflect.DeepEqual(request.paths, []string{"root"}) ||
-			!reflect.DeepEqual(request.relays, []relayprofile.Candidate{{PublicURL: "wss://relay.example"}}) ||
+			!reflect.DeepEqual(request.relayIntent.Candidates(), []relayprofile.Candidate{{PublicURL: "wss://relay.example"}}) ||
 			request.link.frontURL != "https://app.example" ||
 			request.chunkSize != 65536 ||
 			!request.link.splitKey {
@@ -158,11 +158,6 @@ func TestShareRequestValidationPreservesSuiteBoundaries(t *testing.T) {
 			name:       "unsupported relay scheme",
 			args:       []string{"root", "--relay", "ftp://relay.example", "--front-url", "https://app.example"},
 			wantStderr: "invalid relay URL",
-		},
-		{
-			name:       "missing relays keep configuration guidance",
-			args:       []string{"root", "--front-url", "https://app.example"},
-			wantStderr: "configure relay candidates",
 		},
 		{
 			name: "block size wraps to a valid wire value",

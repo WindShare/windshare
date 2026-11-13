@@ -1,0 +1,16 @@
+[Unit]
+Description=WindShare DNS-01 certificate renewal
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/etc/windshare-network/credentials/alidns.env
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/windshare-network/credentials/alidns.env
+ExecStart=/opt/windshare-acme/3.1.6/acme.sh --cron --home /opt/windshare-acme/3.1.6 --config-home /var/lib/windshare-acme
+UMask=0077
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/windshare-acme /etc/windshare-network/tls
+NoNewPrivileges=true

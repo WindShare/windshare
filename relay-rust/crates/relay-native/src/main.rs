@@ -18,6 +18,8 @@ Usage: wsrelay --database <path> [options]
   --public-endpoint <ws(s)://host/v2/ws>    Canonical public WebSocket endpoint
   --origins <HTTP(S) origins>              Comma-separated browser allowlist
   --allow-localhost                       Allow localhost browser origins
+  --public-origins                        Accept all valid HTTP(S) browser origins
+  --node-config <path>                     Reloadable services and monthly relay budget
   --trusted-proxies <IPs>                 Peers trusted to supply source IP
   --source-ip-header <name>               Required with --trusted-proxies
   --max-business-connections <count>      Global business budget (default 256)
@@ -39,6 +41,7 @@ struct Options {
     sources: SourcePolicy,
     connections: ConnectionLimits,
     stun: stun::Config,
+    node_config: Option<PathBuf>,
 }
 
 fn options(mut args: impl Iterator<Item = String>) -> Result<Options> {
@@ -47,11 +50,17 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options> {
     let mut public_endpoint = None;
     let mut origins = Vec::new();
     let mut allow_localhost = false;
+    let mut public_origins = false;
+    let mut node_config = None;
     let mut proxies: Option<Vec<IpAddr>> = None;
     let mut source_header = None;
     let mut connections = ConnectionLimits::default();
     let mut stun = stun::Config::default();
     while let Some(arg) = args.next() {
+        if arg == "--public-origins" {
+            public_origins = true;
+            continue;
+        }
         if arg == "--allow-localhost" {
             allow_localhost = true;
             continue;
@@ -62,6 +71,7 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options> {
         match arg.as_str() {
             "--listen" => listen = value.parse()?,
             "--database" => database = Some(PathBuf::from(value)),
+            "--node-config" => node_config = Some(PathBuf::from(value)),
             "--public-endpoint" => public_endpoint = Some(value),
             "--origins" => origins.extend(value.split(',').map(|origin| origin.trim().to_owned())),
             "--trusted-proxies" => {
@@ -108,6 +118,10 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options> {
     }
     stun.validate()?;
     connections.validate()?;
+    anyhow::ensure!(
+        !public_origins || (origins.is_empty() && !allow_localhost),
+        "--public-origins cannot be combined with an origin allowlist"
+    );
     let sources = match (proxies, source_header) {
         (None, None) => SourcePolicy::default(),
         (Some(peers), Some(header)) => SourcePolicy::trusted_proxy(peers, &header)?,
@@ -117,10 +131,15 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options> {
         listen,
         database: database.context("required: --database <path>")?,
         public_endpoint,
-        origins: OriginPolicy::new(origins, allow_localhost)?,
+        origins: if public_origins {
+            OriginPolicy::Public
+        } else {
+            OriginPolicy::new(origins, allow_localhost)?
+        },
         sources,
         connections,
         stun,
+        node_config,
     })
 }
 
@@ -166,6 +185,10 @@ fn shutdown_signal() -> Result<impl Future<Output = ()>> {
     })
 }
 
+#[expect(
+    clippy::significant_drop_tightening,
+    reason = "the server remains owned by its async serve future through joined shutdown"
+)]
 async fn run(options: Options, shutdown: impl Future<Output = ()>) -> Result<()> {
     let listener = TcpListener::bind(options.listen).await?;
     let address = listener.local_addr()?;
@@ -176,14 +199,21 @@ async fn run(options: Options, shutdown: impl Future<Output = ()>) -> Result<()>
     )?;
     tracing::info!(event = "http_policy", origins = ?options.origins);
     tracing::info!(event = "connection_policy", sources = ?options.sources, limits = ?options.connections);
-    let stun = stun::Service::bind(options.stun)?;
+    let settings = options
+        .node_config
+        .as_deref()
+        .map(windshare_relay_native::node::Settings::read)
+        .transpose()?
+        .unwrap_or_default();
     let server = Server::open(
         endpoint.clone(),
         options.origins,
         options.sources,
         options.connections,
         &options.database,
-    )?;
+    )?
+    .configure(settings, options.node_config)?;
+    let stun = stun::Service::bind_with_node(options.stun, server.node())?;
     println!(
         "{}",
         serde_json::json!({

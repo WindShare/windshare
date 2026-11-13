@@ -27,7 +27,7 @@ Make targets operate on the repository root and use the installed Go, Rust, Node
 | `make short-go` | Pinned ICE/TURN/SCTP state tests, then non-core and core short tests with race detection and coverage verdicts. |
 | `make race` | Short tests with race detection. |
 | `make coverage` | Short tests with coverage verdicts. |
-| `make vectors` | Shared protocol, TURN control, signaling, and CLI trace vectors. |
+| `make vectors` | Shared protocol, signed network directory, TURN control, signaling, and CLI trace vectors. |
 | `make vectors-update` | Regenerates protocol vectors. |
 | `make rust` | Cargo fmt, Clippy, native tests, doctests, coverage, and wasm builds. |
 | `make desktop-check` | Desktop workspace: Cargo fmt, strict Clippy, non-UI tests (including native host ABI and artifact staging), and native build; requires Node.js, Go, a C compiler, and GPUI prerequisites. |

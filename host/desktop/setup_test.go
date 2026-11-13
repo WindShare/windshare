@@ -34,7 +34,10 @@ func TestSetupResumesOnlyWaitingIntentAndPreservesExplicitChoice(t *testing.T) {
 			}
 			start := a.deps.start
 			a.deps.start = func(ctx context.Context, request engine.ShareRequest) (shareTask, error) {
-				if len(request.Relays) != 1 || request.Relays[0].PublicURL != "https://chosen.example" {
+				if !saved.Load() {
+					return nil, engine.ErrNetworkUnavailable
+				}
+				if candidates := request.RelayIntent.Candidates(); len(candidates) != 1 || candidates[0].PublicURL != "https://chosen.example" {
 					t.Error("explicit relay lost")
 				}
 				return start(ctx, request)
@@ -96,6 +99,9 @@ func TestCancellationDuringAdmissionRemainsQueryableAndCancelsLateTask(t *testin
 func TestShutdownCancelsAndJoinsSetupWithoutLateAdmission(t *testing.T) {
 	a, _, starts := fixture(t)
 	a.deps.load = func() (relayconfig.Config, error) { return relayconfig.Config{}, nil }
+	a.deps.start = func(context.Context, engine.ShareRequest) (shareTask, error) {
+		return nil, engine.ErrNetworkUnavailable
+	}
 	entered, joined := make(chan struct{}), make(chan struct{})
 	a.deps.setup = func(ctx context.Context, _ SetupInput, _ func(relaysetup.Progress)) error {
 		close(entered)

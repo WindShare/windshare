@@ -164,6 +164,15 @@ export class ReceiverGenerationFactory {
         relays: new ReceiverRelaySet({
           initial: core,
           factory: options.factory,
+          waitForDemand: async (signal) => {
+            // A frozen link includes dormant sender fallbacks. Retrying them while
+            // current lanes meet demand only creates registration pressure.
+            const demandRecheckMilliseconds = 1_000
+            while (!signal.aborted && core.session.availableLaneIds().length > 0 &&
+              lanes.schedulingDemand().networkWaitingBytes === 0) {
+              await options.recoveryWake.sleep(options.clock, demandRecheckMilliseconds, signal)
+            }
+          },
           admit: (laneId) => connectivity!.addRelayLane(laneId),
           sleep: (attempt, signal, elapsed, error, relayBase) => {
             const phase = reconnectPhase(attempt, elapsed)

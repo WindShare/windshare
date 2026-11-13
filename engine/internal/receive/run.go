@@ -22,6 +22,7 @@ func runAttempt(ctx context.Context, input preparedRequest, deps Dependencies, r
 	a := &runner{receiverRecoveryOptions: deps.Recovery, receiverPeerFactory: deps.PeerFactory, receiverDial: deps.ReceiverDial, getOutputFactory: input.output, control: deps.Control, clock: deps.Clock}
 	a.receiveCapacity = deps.Capacity
 	a.connectivityCapacity = deps.Connectivity
+	a.resolveEndpoints = deps.ResolveEndpoints
 	startedAt := a.clock.Now()
 	metrics := downloadmetrics.Prepare(a.clock.Now)
 	observation := newObservation(deps.Control, deps.Control.Diagnostics.Enabled(), metrics)
@@ -43,7 +44,7 @@ func runAttempt(ctx context.Context, input preparedRequest, deps Dependencies, r
 		return
 	}
 	observation.emit(GenerationChanged{Current: active.session.runtime.ProtocolSessionID()})
-	nativeConfig := nativepeer.Config{Side: nativepeer.SideReceiver, Now: a.clock.Now}
+	nativeConfig := nativepeer.Config{Side: nativepeer.SideReceiver, Now: a.clock.Now, Pool: deps.ICEPool}
 	if deps.Control.Diagnostics.Enabled() {
 		nativeConfig.ObservationCapacity = nativepeer.DefaultObservationCapacity
 	}

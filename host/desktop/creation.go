@@ -89,8 +89,8 @@ func (a *Application) prepareAdmission(ctx context.Context, op *operation) opera
 	if err != nil {
 		return awaitingConfiguration{failure: failure("settings_unavailable", err)}
 	}
-	relays, err := relayconfig.SelectRelays(config, op.relays)
-	if err == nil {
+	intent, err := relayconfig.ShareIntent(config, op.relays)
+	if err == nil && config.FrontURL != "" {
 		err = relayconfig.ValidateFrontURL(config.FrontURL)
 	}
 	if err != nil {
@@ -103,13 +103,16 @@ func (a *Application) prepareAdmission(ctx context.Context, op *operation) opera
 		return terminal{}
 	}
 	task, err := a.deps.start(ctx, engine.ShareRequest{
-		Source: filesystem.ShareSource(op.paths), Relays: relays, Diagnostics: a.deps.diagnostics,
+		Source: filesystem.ShareSource(op.paths), RelayIntent: intent, Frontend: config.FrontURL, Diagnostics: a.deps.diagnostics,
 	})
 	if task != nil {
 		return running{task: task, frontURL: config.FrontURL}
 	}
 	if err == nil {
 		err = errors.New("engine returned no share task")
+	}
+	if errors.Is(err, engine.ErrNetworkUnavailable) {
+		return awaitingConfiguration{failure: failure("network_unavailable", err)}
 	}
 	return terminal{result: Completion{Outcome: OutcomeFailed, StopReason: NoStopReason, Error: err.Error()}, error: failure("creation_failed", err)}
 }

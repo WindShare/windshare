@@ -121,6 +121,7 @@ impl Harness {
             Arc::new(AtomicBool::new(false)),
             generation.clone(),
             Recovery::vacant(&store),
+            Metrics::default(),
         )));
         let task = generation.supervise(task);
         let (stop_tx, mut stopper, _stop_closure) = crate::connection::channel(connection(2));
@@ -288,6 +289,7 @@ async fn startup_recovers_committed_registration_and_interrupted_stop_from_sqlit
             Arc::clone(&idle),
             generation.clone(),
             Recovery::vacant(&store),
+            Metrics::default(),
         )));
         timeout(Duration::from_secs(3), async {
             while !matches!(
@@ -395,6 +397,7 @@ async fn cancelled_actor_cannot_lose_a_blocking_commit() {
         Arc::clone(&idle),
         generation.clone(),
         host.generation.recovery().unwrap(),
+        Metrics::default(),
     )));
     let abort = generation.supervise(task);
     timeout(Duration::from_secs(3), async {

@@ -1,5 +1,30 @@
 use super::*;
 
+#[test]
+fn public_mode_still_rejects_opaque_malformed_and_multiple_origins() {
+    let policy = OriginPolicy::Public;
+    for origin in [
+        "https://custom.example",
+        "http://localhost:8000",
+        "https://[::1]:443",
+    ] {
+        assert!(policy.allows(&headers(origin)));
+    }
+    for origin in [
+        "null",
+        "",
+        "file://localhost",
+        "https://app.example/path",
+        "https://user@app.example",
+        "https://a.example https://b.example",
+    ] {
+        assert!(!policy.allows(&headers(origin)));
+    }
+    let mut repeated = headers("https://custom.example");
+    repeated.append(header::ORIGIN, "https://custom.example".parse().unwrap());
+    assert!(!policy.allows(&repeated));
+}
+
 fn headers(origin: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(header::ORIGIN, origin.parse().unwrap());

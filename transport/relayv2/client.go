@@ -30,6 +30,7 @@ type DialOptions struct {
 	// SocketDialer lets deterministic tests and embedded callers own the
 	// transport boundary without weakening the protocol handshake.
 	SocketDialer func(context.Context, string, http.Header) (BinarySocket, error)
+	ObserveStage func(DialStage)
 }
 
 // BinarySocket is the narrow WebSocket surface owned by this protocol
@@ -41,7 +42,14 @@ type BinarySocket interface {
 	SetReadLimit(int64)
 }
 
-func (options DialOptions) dial(ctx context.Context, target string) (BinarySocket, error) {
+func (options DialOptions) dial(ctx context.Context, target string) (_ BinarySocket, failure error) {
+	started := time.Now()
+	if options.ObserveStage != nil {
+		defer func() {
+			options.ObserveStage(DialStage{Stage: "websocket", Duration: time.Since(started), Failure: failure})
+		}()
+		ctx = traceDial(ctx, options.ObserveStage)
+	}
 	if options.SocketDialer != nil {
 		return options.SocketDialer(ctx, target, options.Header.Clone())
 	}
@@ -73,7 +81,7 @@ type SenderConnection struct {
 	stats    RegistrationStats
 }
 
-func DialSender(ctx context.Context, config SenderConfig) (*SenderConnection, error) {
+func DialSender(ctx context.Context, config SenderConfig) (_ *SenderConnection, failure error) {
 	capacity, err := normalizeReceiveCapacity(config.Dial.ReceiveCapacity)
 	if err != nil {
 		return nil, err
@@ -85,22 +93,21 @@ func DialSender(ctx context.Context, config SenderConfig) (*SenderConnection, er
 	if _, err := config.Dial.Heartbeat.Normalize(); err != nil {
 		return nil, err
 	}
-	endpoint, err := v2.RelayEndpointForShare(config.RelayBaseURL, config.Init.ShareID)
+	endpoint, err := validateSenderRegistration(config)
 	if err != nil {
-		// Local address conflicts cannot recover by retrying the same registration.
-		return nil, errors.Join(ErrProtocol, err)
-	}
-	if config.Init.Validate() != nil || len(config.SenderPrivateKey) != ed25519.PrivateKeySize {
-		return nil, ErrProtocol
-	}
-	if config.Init.Mode == v2.RegistrationFresh && len(config.Descriptor) == 0 {
-		return nil, ErrProtocol
+		return nil, err
 	}
 	socket, err := config.Dial.dial(ctx, endpoint.DialURL)
 	if err != nil {
 		return nil, err
 	}
 	socket.SetReadLimit(registrationReadLimit)
+	admissionStarted := time.Now()
+	if config.Dial.ObserveStage != nil {
+		defer func() {
+			config.Dial.ObserveStage(DialStage{Stage: "admission", Duration: time.Since(admissionStarted), Failure: failure})
+		}()
+	}
 	stats := RegistrationStats{}
 	fail := func(cause error) (*SenderConnection, error) {
 		_ = socket.Close(websocket.StatusProtocolError, "")
@@ -167,6 +174,19 @@ func DialSender(ctx context.Context, config SenderConfig) (*SenderConnection, er
 	}
 	link.start()
 	return &SenderConnection{endpoint: endpoint, link: link, stats: stats}, nil
+}
+
+func validateSenderRegistration(config SenderConfig) (v2.RelayEndpoint, error) {
+	endpoint, err := v2.RelayEndpointForShare(config.RelayBaseURL, config.Init.ShareID)
+	if err != nil {
+		// Local address conflicts cannot recover by retrying the same registration.
+		return v2.RelayEndpoint{}, errors.Join(ErrProtocol, err)
+	}
+	if config.Init.Validate() != nil || len(config.SenderPrivateKey) != ed25519.PrivateKeySize ||
+		config.Init.Mode == v2.RegistrationFresh && len(config.Descriptor) == 0 {
+		return v2.RelayEndpoint{}, ErrProtocol
+	}
+	return endpoint, nil
 }
 
 func (connection *SenderConnection) Accept(ctx context.Context) (*Channel, error) {

@@ -5,6 +5,7 @@ import { ReceiverSessionRuntime } from '../session/runtime'
 import { dialRelayReceiver } from '../transport/relay/receiver'
 import type { ProtocolGenerationCore } from './session-factory'
 import { firstUsableRelay, RelayEndpointFailure } from './relay-race'
+import { relayCandidates, type RelayCandidateSource } from './relay-candidates'
 import { runInitialJoin, type InitialJoinOptions } from './initial-join'
 import { isShareRecoveryFailure, isTerminalRecoveryFailure } from './recovery-failure'
 import { observeRecovery } from './recovery-observation'
@@ -15,20 +16,24 @@ export interface BrowserRelayJoin extends ProtocolGenerationCore {
 }
 
 export function joinBrowserRelays(
-  relayBases: readonly string[],
+  relayBases: RelayCandidateSource,
   capability: Suite02CapabilityKey,
   signal: AbortSignal,
   protocolTrace?: ProtocolTraceSource,
   options: InitialJoinOptions = {},
 ): Promise<BrowserRelayJoin> {
   const disabled = new Map<string, RelayEndpointFailure>()
+  const candidates = relayCandidates(relayBases)
   return runInitialJoin({ ...options, signal,
     observe: observation => {
       observeRecovery(protocolTrace, { correlation: {}, generationId: 0, shareId: capability.shareId }, observation)
       options.observe?.(observation)
-    }, connect: attemptSignal => {
-    const eligible = relayBases.filter(base => !disabled.has(base))
-    if (eligible.length === 0) throw new AggregateError([...disabled.values()], 'All relay endpoints rejected this share')
+    }, connect: async attemptSignal => {
+    if (!candidates.bases.some(base => !disabled.has(base))) {
+      const all = await candidates.all()
+      if (!all.some(base => !disabled.has(base))) throw new AggregateError([...disabled.values()], 'All relay endpoints rejected this share')
+    }
+    const eligible = candidates.filter(base => !disabled.has(base))
     return firstUsableRelay(eligible, attemptSignal, (relayBase, relaySignal) =>
       connect(relayBase, relaySignal).catch((cause: unknown) => {
         if (isTerminalRecoveryFailure(cause)) disabled.set(relayBase, new RelayEndpointFailure(relayBase, cause))

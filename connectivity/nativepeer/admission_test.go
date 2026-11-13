@@ -69,7 +69,7 @@ func newAdmissionFixture(t *testing.T, endpoints int) (*Admission, *admissionTes
 	}
 	makeNative := func() *NativePeerConnectivity {
 		monitor := &testMonitor{state: networkstate.State{Addresses: []networkstate.Address{{IP: netip.MustParseAddr("127.0.0.1"), InterfaceIndex: 1}}}}
-		n := newTestConnectivity(t, Config{Admission: gate, Now: clock.Now, Monitor: monitor, Pool: &pool, Reachability: reachability.New(reachability.Config{Now: clock.Now}), ObservationCapacity: 256})
+		n := newTestConnectivity(t, Config{Admission: gate, Now: clock.Now, Monitor: monitor, Pool: func() icepolicy.ICEEndpointPool { return pool }, Reachability: reachability.New(reachability.Config{Now: clock.Now}), ObservationCapacity: 256})
 		t.Cleanup(func() {
 			if err := n.Close(context.Background()); err != nil {
 				t.Error(err)

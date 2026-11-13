@@ -8,7 +8,8 @@ import {
   type RelayReceiverConnection,
 } from '../transport/relay/receiver'
 
-import { firstUsableRelay, receiverRelayBases, RelayEndpointFailure } from './relay-race'
+import { firstUsableRelay, RelayEndpointFailure } from './relay-race'
+import { relayCandidates, type RelayCandidateSource, type RelayCandidates } from './relay-candidates'
 import { isShareRecoveryFailure, isTerminalRecoveryFailure } from './recovery-failure'
 import { emitRelayHeartbeat, emitRelayDelivery } from '../diagnostics/trace/connection-payload'
 
@@ -29,6 +30,7 @@ export interface AttachedRelay {
 
 export interface ReceiverSessionFactory {
   readonly relayBases: readonly string[]
+  observeRelayBases?(observer: (bases: readonly string[]) => void): () => void
   connectFresh(signal: AbortSignal): Promise<ProtocolGenerationCore>
   attachRelay(
     session: ReceiverSessionRuntime,
@@ -40,7 +42,7 @@ export interface ReceiverSessionFactory {
 }
 
 export interface BrowserSessionFactoryOptions {
-  readonly relayBases: readonly string[]
+  readonly relayBases: RelayCandidateSource
   readonly capability: Suite02CapabilityKey
   readonly descriptor: ShareDescriptor
   readonly descriptorObject: Uint8Array
@@ -64,7 +66,7 @@ export class StaleShareInstanceError extends Error {
  * remain delivery-only; only an authenticated descriptor can enter a generation.
  */
 export class BrowserSessionFactory implements ReceiverSessionFactory {
-  readonly relayBases: readonly string[]
+  readonly #candidates: RelayCandidates
   readonly #capability: Suite02CapabilityKey
   readonly #descriptor: ShareDescriptor
   readonly #descriptorObject: Uint8Array<ArrayBuffer>
@@ -78,7 +80,7 @@ export class BrowserSessionFactory implements ReceiverSessionFactory {
   #closed = false
 
   constructor(options: BrowserSessionFactoryOptions) {
-    this.relayBases = receiverRelayBases(options.relayBases)
+    this.#candidates = relayCandidates(options.relayBases)
     this.#capability = Object.freeze({
       suite: options.capability.suite,
       readSecret: options.capability.readSecret.slice(),
@@ -97,13 +99,19 @@ export class BrowserSessionFactory implements ReceiverSessionFactory {
 
   async connectFresh(signal: AbortSignal): Promise<ProtocolGenerationCore> {
     this.#requireOpen()
-    const eligible = this.relayBases.filter((relayBase) => !this.#terminalRelays.has(relayBase))
-    if (eligible.length === 0) throw new AggregateError([...this.#terminalRelays.values()], 'All relay endpoints rejected this share')
+    if (!this.relayBases.some(base => !this.#terminalRelays.has(base))) {
+      const all = await this.#candidates.all()
+      if (!all.some(base => !this.#terminalRelays.has(base))) throw new AggregateError([...this.#terminalRelays.values()], 'All relay endpoints rejected this share')
+    }
+    const eligible = this.#candidates.filter(relayBase => !this.#terminalRelays.has(relayBase))
     return firstUsableRelay(eligible, signal,
       (relayBase, attemptSignal) => this.#attemptRelay(relayBase, attemptSignal,
         () => this.#connectFreshRelay(relayBase, attemptSignal)),
       async (core) => { await Promise.allSettled([core.session.close(), core.relay.close()]) }, isShareRecoveryFailure)
   }
+
+  get relayBases(): readonly string[] { return this.#candidates.bases }
+  observeRelayBases(observer: (bases: readonly string[]) => void): () => void { return this.#candidates.observe(observer) }
 
   async #connectFreshRelay(relayBase: string, signal: AbortSignal): Promise<ProtocolGenerationCore> {
     let session: ReceiverSessionRuntime | undefined

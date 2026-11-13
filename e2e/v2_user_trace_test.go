@@ -597,7 +597,9 @@ func v5TraceContainsForbidden(encoded []byte, forbidden string) bool {
 	}
 	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(forbidden)))
 	candidates = append(candidates, []byte(digest), []byte(digest[:16]))
-	if len(forbidden) > 16 {
+	// A capability URL begins with a public frontend origin. Its key is checked
+	// separately; treating that host prefix as a secret forbids planner evidence.
+	if len(forbidden) > 16 && !strings.Contains(forbidden, "://") {
 		candidates = append(candidates, []byte(forbidden[:16]))
 	}
 	for _, candidate := range candidates {
@@ -606,6 +608,22 @@ func v5TraceContainsForbidden(encoded []byte, forbidden string) bool {
 		}
 	}
 	return false
+}
+
+func TestCapabilityTraceCheckAllowsFrontendDecisionButRejectsCapability(t *testing.T) {
+	capability := "https://front.example/share?n=jp1#private-capability-secret"
+	if v5TraceContainsForbidden([]byte(`{"frontend":"https://front.example"}`), capability) {
+		t.Fatal("public frontend decision was treated as a capability leak")
+	}
+	for _, secret := range v2CapabilityForbiddenValues(capability) {
+		encoded, err := json.Marshal(map[string]string{"value": secret})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !v5TraceContainsForbidden(encoded, secret) {
+			t.Fatal("capability disclosure missed")
+		}
+	}
 }
 
 func requireV2UserTraceFact(t *testing.T, process *v2Process, event, field, value string) {

@@ -1,3 +1,4 @@
+import { BuiltinNetwork } from '../network/builtin'
 import {
   CatalogClient,
   type CatalogScanProgressListener,
@@ -289,6 +290,7 @@ export class JoinedBrowserShare {
 }
 
 export interface BrowserReceiverGatewayOptions {
+  readonly network?: Pick<BuiltinNetwork, 'resolve' | 'icePool'>
   readonly relayBases?: readonly string[]
   readonly policy?: ConnectivityPolicy
   readonly offersFactory?: () => OfferChannelFactory
@@ -303,6 +305,7 @@ export interface BrowserReceiverGatewayOptions {
 }
 
 export class BrowserReceiverGateway {
+  readonly #network: Pick<BuiltinNetwork, 'resolve' | 'icePool'>
   readonly #relayBases: readonly string[] | undefined
   readonly #policy: ConnectivityPolicy
   readonly #offersFactory: (() => OfferChannelFactory) | undefined
@@ -320,13 +323,14 @@ export class BrowserReceiverGateway {
   ) | undefined
 
   constructor(options: BrowserReceiverGatewayOptions = {}) {
+    this.#network = options.network ?? new BuiltinNetwork()
     this.#relayBases = options.relayBases === undefined ? undefined : receiverRelayBases(options.relayBases)
     this.#policy = options.policy ?? 'auto'
     this.#offersFactory = options.offersFactory
     this.#nativePeerUsable = options.nativePeerUsable
     this.#protocolTrace = options.protocolTrace
     this.#connectivityTrace = options.connectivityTrace
-    this.#peerRecovery = options.peerRecovery
+    this.#peerRecovery = { ...options.peerRecovery, endpoints: options.peerRecovery?.endpoints ?? this.#network.icePool }
     this.#onBlockDispatched = options.onBlockDispatched
     this.#onBlockFetched = options.onBlockFetched
     this.#onContentLaneAdmitted = options.onContentLaneAdmitted
@@ -344,7 +348,7 @@ export class BrowserReceiverGateway {
     try {
       capability = await capabilityFromInput(input, pageUrl)
       signal?.throwIfAborted()
-      const relayBases = this.#relayBases ?? receiverRelayBases(capability.relays)
+      const relayBases = this.#relayBases ?? this.#network.resolve(capability)
       const initial = await joinBrowserRelays(relayBases, capability,
         signal ?? new AbortController().signal, this.#protocolTrace, recovery)
       relay = initial.relay

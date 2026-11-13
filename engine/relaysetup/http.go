@@ -38,11 +38,10 @@ func (failure *apiFailure) temporary() bool {
 }
 
 type discovery struct {
-	Version     int    `json:"version"`
-	Access      string `json:"access"`
-	RelayURL    string `json:"relay_url"`
-	ConsoleURL  string `json:"console_url"`
-	FrontendURL string `json:"frontend_url"`
+	Version    int    `json:"version"`
+	Access     string `json:"access"`
+	RelayURL   string `json:"relay_url"`
+	ConsoleURL string `json:"console_url"`
 }
 
 func (run *workflow) call(ctx context.Context, method, address string, body, out any) error {
@@ -121,9 +120,6 @@ func (run *workflow) discover(ctx context.Context, address string) (discovery, e
 	}
 	if result.Version != 1 || (result.Access != "open" && result.Access != "restricted") || !sameRelay(address, result.RelayURL) {
 		return result, errors.New("relay discovery returned an inconsistent identity or policy")
-	}
-	if result.FrontendURL != "" && relayconfig.ValidateFrontURL(result.FrontendURL) != nil {
-		return result, errors.New("invalid suggested frontend URL")
 	}
 	if result.Access == "restricted" && !secureEndpoint(result.ConsoleURL) {
 		return result, errors.New("restricted relay requires HTTPS access endpoints")

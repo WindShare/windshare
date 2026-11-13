@@ -11,6 +11,7 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 
+	"github.com/windshare/windshare/connectivity/icepolicy"
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/liveshare"
@@ -67,13 +68,15 @@ func (t systemTicker) C() <-chan time.Time { return t.ticker.C }
 func (t systemTicker) Stop()               { t.ticker.Stop() }
 
 type Dependencies struct {
-	Capacity     *liveshare.ReceiveCapacity
-	Connectivity *nativeconnectivity.Capacity
-	Control      task.Control
-	Clock        Clock
-	ReceiverDial func(context.Context, relayv2.ReceiverConfig) (relayset.ReceiverConnection, error)
-	Recovery     relayset.ReceiverRecoveryOptions
-	PeerFactory  func() (PeerStarter, error)
+	Capacity         *liveshare.ReceiveCapacity
+	Connectivity     *nativeconnectivity.Capacity
+	ICEPool          func() icepolicy.ICEEndpointPool
+	Control          task.Control
+	Clock            Clock
+	ReceiverDial     func(context.Context, relayv2.ReceiverConfig) (relayset.ReceiverConnection, error)
+	Recovery         relayset.ReceiverRecoveryOptions
+	PeerFactory      func() (PeerStarter, error)
+	ResolveEndpoints func(context.Context) ([]string, error)
 }
 
 func (d Dependencies) normalized() Dependencies {
@@ -139,6 +142,7 @@ type runner struct {
 	receiverRecoveryOptions relayset.ReceiverRecoveryOptions
 	receiverPeerFactory     func() (receiverPeerStarter, error)
 	receiverDial            func(context.Context, relayv2.ReceiverConfig) (relayset.ReceiverConnection, error)
+	resolveEndpoints        func(context.Context) ([]string, error)
 	getOutputFactory        getOutputAuthorityFactory
 	control                 task.Control
 	clock                   Clock

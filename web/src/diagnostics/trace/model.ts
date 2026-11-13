@@ -51,6 +51,7 @@ export type TraceSealReason = (typeof TRACE_SEAL_REASONS)[number]
 
 export const TRACE_EVENT_NAMES_V2 = Object.freeze([
   'join_transition',
+  'network_directory',
   'receiver_experience',
   'browse_transition',
   'preview_transition',

@@ -59,11 +59,12 @@ var (
 
 // Link 是能力链接的语义结构(§6.3)。
 type Link struct {
-	Suite      byte     // 套件/版本位,fragment 首字节
-	ReadSecret []byte   // 16B;链接中唯一秘密
-	PKHash     []byte   // suite 0x02 only: first16(SHA-256(sender-key-domain || sender public key))
-	ShareID    string   // suite-specific base64url relay route; never an encryption input
-	Relays     []string // Ordered relay bases; Parse and Merge resolve omitted hints from the link origin.
+	Suite       byte     // 套件/版本位,fragment 首字节
+	ReadSecret  []byte   // 16B;链接中唯一秘密
+	PKHash      []byte   // suite 0x02 only: first16(SHA-256(sender-key-domain || sender public key))
+	ShareID     string   // suite-specific base64url relay route; never an encryption input
+	Relays      []string // Ordered relay bases; Parse and Merge resolve omitted hints from the link origin.
+	NodeAliases []string // Directory names are resolved by the application, never by the parser.
 }
 
 // SenderKeyHash binds a suite-0x02 capability to its Ed25519 sender identity.
@@ -173,9 +174,11 @@ func (l Link) bareURL(base string) (*url.URL, error) {
 	u = u.JoinPath(l.ShareID)
 	// 查询与 fragment 由链接语义独占,base 携带的一律丢弃。
 	u.RawQuery = ""
-	if relays := explicitRelays(u, l.Relays); len(relays) > 0 {
-		u.RawQuery = url.Values{relayParam: relays}.Encode()
+	query, err := relayHints(u, l)
+	if err != nil {
+		return nil, err
 	}
+	u.RawQuery = query.Encode()
 	u.Fragment, u.RawFragment = "", ""
 	return u, nil
 }
@@ -261,7 +264,11 @@ func parseBare(raw string) (Link, *url.URL, error) {
 	if err := validBareShareID(shareID); err != nil {
 		return Link{}, nil, err
 	}
-	return Link{ShareID: shareID, Relays: resolveRelays(u, query)}, u, nil
+	relays, aliases, err := parseRelayHints(u, query)
+	if err != nil {
+		return Link{}, nil, err
+	}
+	return Link{ShareID: shareID, Relays: relays, NodeAliases: aliases}, u, nil
 }
 
 func parseAbsoluteURL(raw string) (*url.URL, url.Values, error) {

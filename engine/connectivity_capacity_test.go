@@ -41,7 +41,7 @@ func capacityNative(t *testing.T, application *Engine) *nativepeer.NativePeerCon
 	}
 	native, err := application.connectivity.NewNative(nativepeer.Config{
 		Now:                 application.config.Now,
-		Pool:                &pool,
+		Pool:                func() icepolicy.ICEEndpointPool { return pool },
 		Monitor:             networkstate.NewMonitor(capacityNetwork{}, time.Nanosecond),
 		Reachability:        reachability.New(reachability.Config{Now: application.config.Now}),
 		ObservationCapacity: nativepeer.DefaultObservationCapacity,

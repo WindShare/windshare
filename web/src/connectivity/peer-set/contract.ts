@@ -234,7 +234,7 @@ export interface PeerRecoveryDependencies {
   readonly tabAdmission?: PeerTabAdmission
   readonly providerProfile?: string
   readonly network?: PeerNetworkGeneration
-  readonly endpoints?: ICEEndpointPool
+  readonly endpoints?: ICEEndpointPool | (() => ICEEndpointPool)
   readonly budget?: PeerAttemptBudget
   readonly policy?: PeerRecoveryPolicy
   readonly clock?: PeerRecoveryClock
@@ -248,7 +248,7 @@ export interface PeerRecoverySupervisorOptions {
   readonly onUnavailable?: () => void
   readonly observeState?: (state: PeerRecoveryState) => void
   readonly network?: PeerNetworkGeneration
-  readonly endpoints?: ICEEndpointPool
+  readonly endpoints?: ICEEndpointPool | (() => ICEEndpointPool)
   readonly budget?: PeerAttemptBudget
   readonly releaseLane?: (lane: PeerAdmittedLane) => void
   readonly protocolSessionId: ProtocolSessionIdentity

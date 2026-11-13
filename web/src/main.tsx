@@ -21,6 +21,8 @@ import { ReceiverController } from './ui/controller'
 import { captureLocation, observeLocation } from './ui/capability/location'
 import { BrowserCapabilityIntake } from './ui/capability/intake'
 import { BrowserReceiverGateway } from './application/browser-share/gateway'
+import { BuiltinNetwork } from './application/network/builtin'
+import { networkObserver } from './application/network/diagnostics'
 import {
   createConnectivityTraceSource,
   createOutputTraceSource,
@@ -78,7 +80,9 @@ const receiveComposition = createBrowserReceiveComposition(
     localOutputFailures: diagnostics.localOutputFailures,
   },
 )
+const network = new BuiltinNetwork(networkObserver(diagnostics.trace))
 const gateway = new BrowserReceiverGateway({
+  network,
   protocolTrace,
   connectivityTrace,
 })
@@ -100,6 +104,7 @@ window.addEventListener('pagehide', (event) => {
     return
   }
   stopLocationObservation()
+  network.close()
   stopDiagnosticsObservation()
   diagnosticSession.dispose()
   controller.dispose().catch(() => undefined)
