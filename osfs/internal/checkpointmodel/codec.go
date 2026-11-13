@@ -149,6 +149,10 @@ func decodeRecordPayload(payload []byte) (Record, error) {
 	if err != nil {
 		return Record{}, err
 	}
+	metadata, reusedFrom, err := decodeSourceEvidence(&cursor)
+	if err != nil {
+		return Record{}, err
+	}
 	pathBytes, err := cursor.frame(maximumPathBytes + uint64(catalog.MaxPathDepth+1)*8)
 	if err != nil {
 		return Record{}, err
@@ -209,7 +213,7 @@ func decodeRecordPayload(payload []byte) (Record, error) {
 		ownershipMarker: marker, namespace: namespace, recordID: recordID,
 		operationID: operation, receiveIntentDigest: receiveIntent,
 		materializationBindingDigest: materialization, fileID: fileID,
-		fileRevision: revision, canonicalPath: path, exactSize: exactSize,
+		fileRevision: revision, sourceMetadata: metadata, reusedFrom: reusedFrom, canonicalPath: path, exactSize: exactSize,
 		materializerKind: MaterializerKind(materializer), authorityRef: authority,
 		ownedObjectID: object, stateGeneration: stateGeneration,
 		checkpointGeneration: checkpointGeneration, verifiedRanges: ranges,
@@ -286,6 +290,25 @@ func decodeRecordRevision(cursor *recordCursor) (content.FileRevision, error) {
 		return content.FileRevision{}, fmt.Errorf("%w: file revision", ErrRecordBinding)
 	}
 	return revision, nil
+}
+
+func decodeSourceEvidence(cursor *recordCursor) (content.SourceMetadata, content.FileRevision, error) {
+	metadataBytes, err := cursor.frame(sha256.Size)
+	if err != nil {
+		return content.SourceMetadata{}, content.FileRevision{}, err
+	}
+	metadata, err := content.SourceMetadataFromBytes(metadataBytes)
+	if err != nil {
+		return content.SourceMetadata{}, content.FileRevision{}, ErrRecordBinding
+	}
+	reusedBytes, err := cursor.frame(content.IdentityBytes)
+	if err != nil || len(reusedBytes) != content.IdentityBytes {
+		return content.SourceMetadata{}, content.FileRevision{}, ErrRecordBinding
+	}
+	// Zero values represent unavailable metadata and a revision with no reuse.
+	var reusedFrom content.FileRevision
+	copy(reusedFrom[:], reusedBytes)
+	return metadata, reusedFrom, nil
 }
 
 func decodeAuthorityRef(cursor *recordCursor) (receivecontract.AuthorityRef, error) {

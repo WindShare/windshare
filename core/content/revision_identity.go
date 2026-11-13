@@ -104,7 +104,8 @@ func evidenceForSourceContinuity(source RevisionSource, record catalog.NodeRecor
 	case OpenHandleRevisionContinuity:
 		// The instance belongs to one coalesced open, so all resident leases still
 		// share its revision. A reopen receives a new identity before capacity is
-		// charged and cannot mix old cached or downloaded ranges with new bytes.
+		// charged and cannot reuse old ciphertext. Saved plaintext requires a
+		// separate current-source applicability decision before resuming.
 		for evidence.openInstance == [sha256.Size]byte{} {
 			_, _ = rand.Read(evidence.openInstance[:])
 		}

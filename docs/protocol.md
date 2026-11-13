@@ -56,8 +56,10 @@ fragment = base64url(suite 0x02 || readSecret[16] || pkHash[16])
 
 - **Descriptor**: `ShareInstance`, synthetic root directory, chunk size, capabilities, and sender public key. It has no directory tree, file count, or total size.
 - **Catalog**: per-directory pages bound to a `DirectoryGeneration`. Each page references the previous one; the terminal page completes the generation. Entries carry kind, ID, name, expected size, and an optional modified time.
-- **Revision**: `OPEN_REVISIONS` returns, per file, a revision descriptor (`FileRevision`, exact size, modified time) with a time-limited lease, or a file error.
+- **Revision**: `OPEN_REVISIONS` returns, per file, a revision descriptor (`FileRevision`, exact size, modified time, source metadata) with a time-limited lease, or a file error.
 - **Blocks**: `BlockRef = (FileID, FileRevision, LocalBlockIndex)`. Blocks have the descriptor's chunk size; the last one may be shorter. Byte ranges `[offset, end)` select blocks. Each block is a sealed `BlockRecord` carried by one or more `BLOCK_FRAGMENT` messages.
+
+Revision record schema 2 carries a 32-byte opaque source-metadata token (zero means unavailable), authenticated with the descriptor. It binds share/file, provider identity/version, size, modification evidence and chunk geometry independently of open-instance nonces. Equal tokens permit best-effort plaintext reuse, not byte equality or reuse of old encrypted blocks. Resident handles retain their revision during reconnect; weak-provider reopen requires a fresh revision and checkpoint admission.
 
 ## Session messages
 

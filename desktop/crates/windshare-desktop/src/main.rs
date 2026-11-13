@@ -63,13 +63,12 @@ fn main() -> std::process::ExitCode {
         let paths = arguments
             .iter()
             .position(|arg| arg == "--live-share")
-            .map(|index| {
+            .map_or_default(|index| {
                 arguments[index + 1..]
                     .iter()
                     .map(std::path::PathBuf::from)
                     .collect()
-            })
-            .unwrap_or_default();
+            });
         let compact = arguments.iter().any(|arg| arg == "--compact");
         if let Err(error) = live::run(paths, compact) {
             tracing::error!(event = "desktop.live_share_failed", %error);

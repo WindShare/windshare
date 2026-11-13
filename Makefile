@@ -77,18 +77,20 @@ rust:
 	cd $(RUST_WORKSPACE) && $(RUST_CARGO) build -p windshare-relay-core -p windshare-relay-cloudflare --target wasm32-unknown-unknown --locked --jobs $(RUST_BUILD_JOBS)
 	@echo "== rust: PASS =="
 
-# Native UI dependencies have their own workspace and CI cache.
+# Native UI dependencies have their own workspace and CI cache. Staging uses
+# Cargo artifact messages because intermediate directory layouts are private.
+DESKTOP_BUILD = $(RUST_CARGO) build --manifest-path desktop/Cargo.toml --locked --jobs $(RUST_BUILD_JOBS) $(DESKTOP_CARGO_ARGS)
 .PHONY: desktop desktop-preview desktop-package
 
+desktop-package: private export CARGO_BUILD_JOBS := $(RUST_BUILD_JOBS)
 desktop-package:
-	$(RUST_CARGO) build --manifest-path desktop/Cargo.toml --release --locked --jobs $(RUST_BUILD_JOBS)
-	node desktop/package.mjs release
+	node desktop/package.mjs release $(RUST_CARGO)
 
 desktop:
-	$(RUST_CARGO) run --manifest-path desktop/Cargo.toml --locked
+	node desktop/build.mjs $(DESKTOP_BUILD) -- $(DESKTOP_ARGS)
 
 desktop-preview:
-	$(RUST_CARGO) run --manifest-path desktop/Cargo.toml --locked -- --preview
+	node desktop/build.mjs $(DESKTOP_BUILD) -- --preview $(DESKTOP_ARGS)
 
 desktop-check: private export MAKEFLAGS :=
 desktop-check: private export MFLAGS :=
@@ -97,7 +99,8 @@ desktop-check:
 	$(RUST_CARGO) fmt --manifest-path desktop/Cargo.toml --all -- --check
 	$(RUST_CARGO) clippy --manifest-path desktop/Cargo.toml --workspace --all-targets --all-features --locked --jobs $(RUST_BUILD_JOBS) -- -D warnings
 	$(RUST_CARGO) test --manifest-path desktop/Cargo.toml --workspace --locked --jobs $(RUST_BUILD_JOBS)
-	$(RUST_CARGO) build --manifest-path desktop/Cargo.toml --locked --jobs $(RUST_BUILD_JOBS)
+	node --test desktop/build.test.mjs
+	node desktop/build.mjs $(DESKTOP_BUILD)
 
 $(PLATFORM_TARGETS):
 	$(RUN_PLATFORM_GATE)

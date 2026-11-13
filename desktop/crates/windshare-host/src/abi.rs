@@ -46,12 +46,15 @@ struct Api {
 static API: OnceLock<Api> = OnceLock::new();
 
 fn library_path() -> Result<PathBuf> {
-    let executable = std::env::current_exe()?;
-    let directory = executable.parent().context("executable directory")?;
-    let directory = if directory.file_name().is_some_and(|name| name == "deps") {
-        directory.parent().context("Cargo test directory")?
+    // Unit tests consume their own build output. Application builds only trust
+    // their packaged sibling, so relocation never depends on the build machine.
+    let directory = if cfg!(test) {
+        PathBuf::from(env!("OUT_DIR"))
     } else {
-        directory
+        std::env::current_exe()?
+            .parent()
+            .context("executable directory")?
+            .to_path_buf()
     };
     let name = if cfg!(target_os = "windows") {
         "windshare_host.dll"
@@ -69,7 +72,12 @@ fn api() -> Result<&'static Api> {
     }
     // The absolute path prevents the working directory or DLL search path from
     // selecting another library. Export signatures use only C scalars/buffers.
-    let library = ManuallyDrop::new(unsafe { Library::new(library_path()?)? });
+    let path = library_path()?;
+    tracing::debug!(event = "desktop.host_library_loading", path = %path.display());
+    let library = ManuallyDrop::new(
+        unsafe { Library::new(&path) }
+            .with_context(|| format!("load native host library {}", path.display()))?,
+    );
     let api = unsafe {
         Api {
             start: *library.get(b"WindShareHostStart\0")?,

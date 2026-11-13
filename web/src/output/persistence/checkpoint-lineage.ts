@@ -1,3 +1,5 @@
+import { FILE_CHECKPOINT_COMMIT_VERIFIED, FILE_CHECKPOINT_PHASE_ACTIVE, FILE_CHECKPOINT_PHASE_PAUSED } from './checkpoint-lifecycle'
+import { sourceMetadataFields } from '../../content/revision-comparison'
 import { snapshotCatalogPath } from '../../catalog/path-policy'
 import { encodeBase64Url } from '../../crypto/bytes'
 import {
@@ -95,19 +97,24 @@ export function sameCheckpointLineageSpec(
 export type CheckpointLineageDecisionKind =
   | 'absent'
   | 'exact'
+  | 'metadata-match'
   | 'revision-conflict'
   | 'ownership-conflict'
   | 'invalid'
 
 export interface CheckpointLineageRequest {
   readonly fileRevision: CheckpointIdentity
+  readonly sourceMetadata?: string
   readonly exactSize: bigint
 }
 
 export interface CheckpointLineageEvidence {
   readonly fileRevision: CheckpointIdentity
+  readonly sourceMetadata?: string
   readonly exactSize: bigint
   readonly ownedObjectId: CheckpointIdentity
+  readonly phase?: number
+  readonly commitState?: number
 }
 
 // This is the only mixed-conflict precedence used by startup lookup and atomic
@@ -126,14 +133,18 @@ export function classifyCheckpointLineage(
   const records = normalizedEvidence as readonly NormalizedCheckpointLineageEvidence[]
   if (records.some((record) =>
     record.fileRevision === normalizedRequest.fileRevision &&
-    record.exactSize !== normalizedRequest.exactSize)) return 'invalid'
-  if (records.some((record) => record.fileRevision !== normalizedRequest.fileRevision)) {
-    return 'revision-conflict'
-  }
+    (record.exactSize !== normalizedRequest.exactSize ||
+      (record.sourceMetadata !== undefined && normalizedRequest.sourceMetadata !== undefined &&
+        record.sourceMetadata !== normalizedRequest.sourceMetadata)))) return 'invalid'
+  const different = records.filter(record => record.fileRevision !== normalizedRequest.fileRevision)
+  if (different.some(record => normalizedRequest.sourceMetadata === undefined ||
+      record.sourceMetadata !== normalizedRequest.sourceMetadata || record.exactSize !== normalizedRequest.exactSize ||
+      record.commitState !== FILE_CHECKPOINT_COMMIT_VERIFIED ||
+      (record.phase !== FILE_CHECKPOINT_PHASE_ACTIVE && record.phase !== FILE_CHECKPOINT_PHASE_PAUSED))) return 'revision-conflict'
   if (crossLineageOwnershipConflict) return 'ownership-conflict'
   const firstObject = records[0]!.ownedObjectId
   if (records.some((record) => record.ownedObjectId !== firstObject)) return 'ownership-conflict'
-  return 'exact'
+  return different.length > 0 ? 'metadata-match' : 'exact'
 }
 
 function normalizeCheckpointLineageSpec(
@@ -180,11 +191,14 @@ function normalizeCheckpointLineageSpec(
 
 interface NormalizedCheckpointLineageRequest {
   readonly fileRevision: string
+  readonly sourceMetadata?: string
   readonly exactSize: bigint
 }
 
 interface NormalizedCheckpointLineageEvidence extends NormalizedCheckpointLineageRequest {
   readonly ownedObjectId: string
+  readonly phase?: number
+  readonly commitState?: number
 }
 
 function normalizeCheckpointLineageRequest(
@@ -200,6 +214,7 @@ function normalizeCheckpointLineageRequest(
         'file revision',
       )),
       exactSize: request.exactSize,
+      ...sourceMetadataFields(request),
     }
   } catch {
     return undefined
@@ -214,6 +229,8 @@ function normalizeCheckpointLineageEvidence(
   try {
     return {
       ...request,
+      ...(evidence.phase === undefined ? {} : { phase: evidence.phase }),
+      ...(evidence.commitState === undefined ? {} : { commitState: evidence.commitState }),
       ownedObjectId: encodeBase64Url(identityBytes(
         evidence.ownedObjectId,
         FILE_CHECKPOINT_ID_BYTES,

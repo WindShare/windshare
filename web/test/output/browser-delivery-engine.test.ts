@@ -132,7 +132,7 @@ describe('browser folder per-file staged delivery', () => {
     const recovered = await f.reopen()
     await recovered.saveStagedFiles()
     expect(recovered.summary).toMatchObject({ receivingFiles: 1, recoverableBytes: 2n, targetSavedBytes: 0n })
-    await expect(recovered.beginFile({ ...request, openRevision: async () => ({ ...await request.openRevision(), fileRevision: deliveryIdentity(40, 16) }) })).rejects.toThrow('original authenticated')
+    await expect(recovered.beginFile({ ...request, openRevision: async () => ({ ...await request.openRevision(), fileRevision: deliveryIdentity(40, 16) }) })).rejects.toThrow(/metadata-unavailable/)
     await recovered.close()
   })
 

@@ -86,3 +86,15 @@ test('incompatible metadata resets without touching files or current records and
     currentRowsPreserved: true,
   })
 })
+
+for (const protocol of ['semantic', 'candidate'] as const) test(`${protocol} metadata admission survives reopen and preserves delivery history`, async ({ page }) => {
+  const result = await page.evaluate(async ({ path, protocol }) => {
+    const probe = await import(path) as typeof import('./indexeddb-output-repository-probe')
+    return probe.probeMetadataResume(`metadata-resume-${crypto.randomUUID()}`, protocol)
+  }, { path: PROBE_PATH, protocol })
+  expect(result).toEqual({
+    classification: 'metadata-match', sameRecord: true, sameObject: true,
+    persisted: true, retry: true, staleRejected: true, historicalRejected: true,
+    historyIntact: true, retainedBytes: [1, 2, 3, 4], fileBytes: [1, 2, 3, 4, 5, 6, 7, 8],
+  })
+})

@@ -37,7 +37,7 @@ func (engine *Engine) checkpointKey(file transfer.MaterializationFile) (Checkpoi
 		materialization: engine.binding.MaterializationBindingDigest(),
 		fileID:          descriptor.FileID(), revision: descriptor.FileRevision(), path: materializationPath,
 		exactSize: file.ExpectedSize(), materializer: ownership.MaterializerKind(),
-		authority: ownership.AuthorityRef(),
+		authority: ownership.AuthorityRef(), metadata: descriptor.SourceMetadata(),
 	}
 	if !key.valid() {
 		return CheckpointKey{}, ErrInvalidClaim
@@ -52,7 +52,7 @@ func newInitialRecord(key CheckpointKey, object checkpointmodel.ObjectID) (check
 	return checkpointmodel.NewRecord(checkpointmodel.RecordSpec{
 		OperationID: key.operation, ReceiveIntentDigest: key.intent,
 		MaterializationBindingDigest: key.materialization,
-		FileID:                       key.fileID, FileRevision: key.revision, CanonicalPath: key.path,
+		FileID:                       key.fileID, FileRevision: key.revision, SourceMetadata: key.metadata, CanonicalPath: key.path,
 		ExactSize: key.exactSize, MaterializerKind: key.materializer,
 		AuthorityRef: key.authority.Bytes(), OwnedObjectID: object.Bytes(),
 		StateGeneration: 1, CheckpointGeneration: 0,

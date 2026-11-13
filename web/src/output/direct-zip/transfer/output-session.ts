@@ -233,8 +233,8 @@ export class DirectZipTransferOutputV1 implements
       throw new Error('direct ZIP member rollback returned a non-authoritative checkpoint')
     }
     this.#workingOffset = replacement.archiveOffset
-    // A changed revision invalidates its reused payload, even when the archive
-    // prefix was previously durable. The replacement writer owns that decision.
+    // Durability alone cannot authorize reuse when current source evidence is
+    // missing or disagrees. The replacement writer owns the member rollback.
     this.#restoreRetainedPayload(replacement.safeResumeBytes)
     signal.throwIfAborted()
     return this.#startMember(ordinal, file, authority)

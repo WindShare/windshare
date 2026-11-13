@@ -3,6 +3,7 @@ package fileexecution
 import (
 	"context"
 
+	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
@@ -67,6 +68,31 @@ func (engine *Engine) beginExisting(
 	}
 	if err := recovery.commitCandidate(ctx, owned, final); err != nil {
 		return recovery.failStart(ctx, err)
+	}
+	if recovery.record.FileRevision() != file.Descriptor().FileRevision() {
+		if owned.Condition() != OwnedReady || (final.Condition() != FinalAbsent && final.Condition() != FinalCollision) {
+			return recovery.failStart(ctx, bindingError(ErrTargetOwnershipUnknown))
+		}
+		previous := recovery.record
+		next, err := checkpointmodel.AdmitMetadataReuse(previous, file.Descriptor())
+		if err != nil {
+			return recovery.failStart(ctx, err)
+		}
+		if _, err := engine.storeRecord(ctx, &previous, next); err != nil {
+			return recovery.failStart(ctx, err)
+		}
+		recovery.record = next
+		recovery.binding, err = outputBinding(file.Target(), next)
+		if err != nil {
+			return recovery.failStart(ctx, err)
+		}
+		event := engine.traceEvent(sequence, TraceRecoverFile, TraceReconciled, previous.Phase(), next.Phase(), fault.Fault{})
+		event.FileID, event.PreviousRevision, event.CurrentRevision = next.FileID(), previous.FileRevision(), next.FileRevision()
+		event.RecoveryReason = content.ComparisonMetadataAgreement
+		for _, span := range next.VerifiedRanges() {
+			event.ReusedBytes += span.Length()
+		}
+		engine.emit(event)
 	}
 	decision, err := ReduceRecovery(recovery.record, owned, final)
 	if err != nil {

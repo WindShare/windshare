@@ -4,11 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
-	"github.com/windshare/windshare/core/catalog"
 	"io"
 	"sync/atomic"
 	"time"
 
+	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
@@ -127,6 +127,9 @@ func (engine *Engine) BeginFile(
 		return transfer.FileStart{}, joinFailures(ctx, checkpointBindingError(ErrPortContract), closeDestination(destination))
 	}
 	engine.emit(engine.checkpointDecisionTrace(sequence, resolution.Decision(), file.Descriptor().FileID()))
+	if candidate, retained := resolution.Candidate(); retained {
+		engine.traceRetainedSource(candidate, file.Descriptor())
+	}
 	sequence = engine.nextSequence()
 	return engine.beginResolved(ctx, sequence, file, key, destination, resolution)
 }
@@ -143,6 +146,16 @@ func (engine *Engine) beginResolved(
 	case checkpointmodel.CheckpointLineageDecisionExact:
 		record, exact := resolution.Record()
 		if !exact || !key.matches(record) || !engine.binding.Matches(record, record.RecordID()) {
+			return transfer.FileStart{}, joinFailures(ctx, checkpointBindingError(ErrCheckpointBinding), closeDestination(destination))
+		}
+		return engine.beginExisting(ctx, sequence, file, destination, record)
+	case checkpointmodel.CheckpointLineageDecisionMetadataMatch:
+		record, found := resolution.Record()
+		spec, _ := key.CheckpointLineageSpec()
+		actual, _ := record.CheckpointLineageSpec()
+		if !found || !checkpointmodel.SameCheckpointLineageSpec(spec, actual) ||
+			!engine.binding.Matches(record, record.RecordID()) ||
+			!content.CompareRevisionMetadata(record.FileRevision(), record.ExactSize(), record.SourceMetadata(), file.Descriptor()).AllowsReuse() {
 			return transfer.FileStart{}, joinFailures(ctx, checkpointBindingError(ErrCheckpointBinding), closeDestination(destination))
 		}
 		return engine.beginExisting(ctx, sequence, file, destination, record)
@@ -289,7 +302,7 @@ func (engine *Engine) storeRecord(
 		previous == nil || !previous.Valid() || previous.RecordID() != next.RecordID() {
 		return false, checkpointBindingError(ErrCheckpointBinding)
 	}
-	if !checkpointmodel.IdentityEqual(*previous, next) {
+	if !checkpointmodel.IdentityEqual(*previous, next) && checkpointmodel.ValidateTransition(*previous, next) != nil {
 		return false, checkpointBindingError(ErrCheckpointBinding)
 	}
 	observation, operationErr := engine.checkpoints.Replace(ctx, *previous, next)

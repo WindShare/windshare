@@ -1,3 +1,4 @@
+import { compareRevisionMetadata } from '../../../content/revision-comparison'
 import type { DirectZipEntryPlanV2 } from '../format'
 
 export const DIRECT_ZIP_WRITER_CHECKPOINT_VERSION = 1 as const
@@ -14,6 +15,8 @@ export interface DirectZipWriterPageStateV1 {
 }
 
 export interface DirectZipSourceAuthorityV1 {
+  readonly sourceMetadata?: string
+  readonly reusedFrom?: string
   readonly fileId: string
   readonly revision: string
   readonly exactSize: bigint
@@ -126,10 +129,10 @@ export type DirectZipMemberResumeDecisionV1 =
       archiveOffset: bigint
       safeResumeBytes: bigint
       nextEntryOrdinal: bigint
-      reason: 'file-id-changed' | 'revision-changed' | 'size-changed' | 'range-authority-changed'
+      reason: 'file-id-changed' | 'metadata-changed' | 'metadata-unavailable' | 'size-changed' | 'range-authority-changed'
     }>
 
-type DirectZipChangedSourceReasonV1 = Extract<
+type DirectZipMemberRecoveryReasonV1 = Extract<
   DirectZipMemberResumeDecisionV1,
   { readonly kind: 'rollback-member' }
 >['reason']
@@ -142,7 +145,7 @@ export function decideDirectZipMemberResumeV1(
     throw new Error('direct ZIP checkpoint is not inside a member')
   }
   const current = checkpoint.member.source
-  const reason = changedSourceReason(current, source)
+  const reason = memberRecoveryReason(current, source)
   if (reason === undefined) {
     return Object.freeze({
       kind: 'resume',
@@ -160,13 +163,16 @@ export function decideDirectZipMemberResumeV1(
   })
 }
 
-function changedSourceReason(
+function memberRecoveryReason(
   current: DirectZipSourceAuthorityV1,
   source: DirectZipSourceAuthorityV1,
-): DirectZipChangedSourceReasonV1 | undefined {
+): DirectZipMemberRecoveryReasonV1 | undefined {
   if (current.fileId !== source.fileId) return 'file-id-changed'
-  if (current.revision !== source.revision) return 'revision-changed'
-  if (current.exactSize !== source.exactSize) return 'size-changed'
+  const comparison = compareRevisionMetadata(
+    { ...current, fileRevision: current.revision }, { ...source, fileRevision: source.revision },
+  )
+  if (comparison.kind === 'observed-change' || comparison.kind === 'unavailable') return comparison.reason
+  if (current.revision !== source.revision) return undefined
   if (current.rangeAuthority !== source.rangeAuthority) return 'range-authority-changed'
   return undefined
 }

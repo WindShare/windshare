@@ -1,3 +1,4 @@
+import { compareRevisionMetadata } from '../../content/revision-comparison'
 import { fileCheckpointReplica } from '../persistence/content'
 import type { PersistentFileRequest, PersistentFileTransactionPort, PersistentMaterializationPort } from '../persistent-tree/contracts'
 import { fileCheckpointIsComplete } from '../persistence/checkpoint'
@@ -98,14 +99,18 @@ export class BrowserDeliveryMaterialization implements PersistentMaterialization
   }
 
   async #selectRecord(source: BrowserDeliverySource, materializationRelativePath: readonly string[]): Promise<BrowserDeliveryRecordV1> {
-    const record = this.#records.get(source.fileId)
+    const retained = this.#records.get(source.fileId)
+    const record = retained === undefined ? undefined : await this.#engine.reconcile(source.fileId)
     if (record === undefined) return this.#createRecord(source, materializationRelativePath)
     const expected = createBrowserDeliveryRecord({ policy: this.#options.policy, source, materializationRelativePath,
       placement: record.placement, placementReason: record.placementReason })
-    if (expected.source.fileRevision !== record.source.fileRevision || expected.source.exactSize !== record.source.exactSize ||
+    const comparison = compareRevisionMetadata(record.source, expected.source)
+    const reopened = expected.source.fileRevision !== record.source.fileRevision
+    if (comparison.kind !== 'metadata-agreement' ||
+        (reopened && (record.state.kind !== 'receiving' || record.localMutation !== undefined)) ||
         JSON.stringify(expected.source.canonicalPath) !== JSON.stringify(record.source.canonicalPath) ||
         JSON.stringify(expected.materializationRelativePath) !== JSON.stringify(record.materializationRelativePath)) {
-      throw new DOMException('Retained file requires its original authenticated source revision', 'InvalidStateError')
+      throw new DOMException('Retained file lacks current-source applicability: ' + comparison.reason, 'InvalidStateError')
     }
     if (record.state.kind === 'discarding' || record.state.kind === 'discarded') {
       throw new DOMException('Discarded staging cannot be received again by the retained operation', 'InvalidStateError')
@@ -144,7 +149,7 @@ export class BrowserDeliveryMaterialization implements PersistentMaterialization
   }
 
   async #openReceiving(record: BrowserDeliveryRecordV1, source: BrowserDeliverySource, request: PersistentFileRequest): Promise<PersistentFileTransactionPort> {
-    const openedSource = record.source
+    const openedSource = source
     const openedRequest: PersistentFileRequest = { ...request, sourceAuthenticationPath: openedSource.canonicalPath, materializationRelativePath: record.materializationRelativePath, openRevision: async () => openedSource }
     let target: PersistentFileTransactionPort | undefined
     let receiving: PersistentFileTransactionPort | undefined
@@ -176,6 +181,7 @@ export class BrowserDeliveryMaterialization implements PersistentMaterialization
         await this.#stage().bindCapacity(source, reservation.objectCapacity)
         receiving = await this.#stage().beginFile({ ...openedRequest, materializationRelativePath: browserDeliveryStagingPath(record.fileId), recovery: { pausedFile: 'preserve' } })
       } else if (record.placement === 'direct') receiving = target
+      record = await this.#recordSourceAdmission(record, source)
       const transaction = new BrowserDeliveryFileTransaction({ record, request: openedRequest, target, ...(receiving === undefined ? {} : { receiving }),
         engine: this.#engine, targetPort: this.#options.target,
         ...(this.#options.staging === undefined ? {} : { stage: this.#options.staging }),
@@ -190,6 +196,15 @@ export class BrowserDeliveryMaterialization implements PersistentMaterialization
       if (target !== receiving) await target?.retire(error)
       throw error
     }
+  }
+
+  async #recordSourceAdmission(record: BrowserDeliveryRecordV1, source: BrowserDeliverySource): Promise<BrowserDeliveryRecordV1> {
+    if (record.source.fileRevision === source.fileRevision) return record
+    const port = record.placement === 'staged' ? this.#stage() : this.#options.target
+    const checkpoint = await port.readCheckpoint(record.fileId)
+    if (checkpoint?.fileRevision !== source.fileRevision) throw new TypeError('Source admission lost its durable checkpoint')
+    await this.#engine.recordCheckpoint(record.fileId, checkpoint)
+    return this.#records.get(record.fileId)!
   }
 
   ensureDirectory(path: readonly string[]) { return this.#options.target.ensureDirectory(path) }

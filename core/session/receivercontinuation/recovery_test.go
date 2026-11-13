@@ -162,7 +162,7 @@ func TestFreshLeaseCannotCertifyDifferentRetainedRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	binding := &revisionLease{runtime: previous, opened: opened}
-	if err = binding.refresh(context.Background(), next, changed); !errors.Is(err, content.ErrRevisionDrift) {
+	if err = binding.refresh(context.Background(), next, changed); !errors.Is(err, content.ErrRevisionReopened) || errors.Is(err, content.ErrRevisionDrift) {
 		t.Fatalf("fresh lease accepted changed immutable revision: %v", err)
 	}
 	if binding.runtime != previous || binding.opened != opened {

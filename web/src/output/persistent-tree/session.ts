@@ -1,3 +1,6 @@
+import { traceSourceComparison, traceRetainedCandidates } from '../diagnostics/recovery'
+import { sourceMetadataFields } from '../../content/revision-comparison'
+import { admitCheckpointMetadataReuse } from '../persistence/metadata-reuse'
 import {
   snapshotMaterializationRootRelativePath,
   type MaterializationRootRelativePath,
@@ -57,7 +60,7 @@ import { MutationAdmissionBarrier, type MutationAdmission } from './admission-ba
 type PersistentTreeTraceInput = Readonly<{
   eventName: 'output_reservation'; transition: 'acquired' | 'failed' }> |
   Readonly<{ eventName: 'checkpoint'; transition: 'restored' | 'persisted' | 'failed';
-      decision?: 'absent' | 'installed' | 'exact' | 'revision_conflict' | 'ownership_conflict' | 'invalid' }>
+      decision?: 'absent' | 'installed' | 'exact' | 'metadata_match' | 'revision_conflict' | 'ownership_conflict' | 'invalid' }>
 
 export class PersistentTreeOutputSession implements PersistentMaterializationPort {
   readonly #tree: PersistentTreeSessionOptions['tree']
@@ -197,6 +200,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     admission: MutationAdmission,
   ): Promise<PersistentFileTransaction> {
     let handedOff = false
+    let openedHandle: PersistentTreeFile | undefined
     let stageScope: PersistentOutputStageScope | undefined
     try {
       // Awaiting authenticated source authority before local planning prevents both
@@ -221,6 +225,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
           request.performancePipeline,
         )
         this.#traceCheckpointDecision(revision.fileId, decision)
+        traceRetainedCandidates(this.#diagnostics, decision, revision)
         const checkpoint = selectedCheckpoint(decision)
         const fileScope = stageScope?.withCorrelation({
           ownedObjectId: checkpoint.ownedObjectId,
@@ -240,10 +245,15 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
           promote: (candidate, scope) => this.#promoteInitialCheckpoint(candidate, scope),
         })
         const handle = selected.handle
-        const committed = await preparePersistentFileRecovery({
+        openedHandle = handle
+        const recovered = await preparePersistentFileRecovery({
           request, handle, selected: selected.checkpoint, stageScope: fileScope,
           checkpoints: this.#checkpoints, semantic: this.#semantic,
         })
+        const committed = await admitCheckpointMetadataReuse(recovered, revision, this.#checkpoints, this.#semantic)
+        if (recovered.fileRevision !== committed.fileRevision) {
+          traceSourceComparison(this.#diagnostics, recovered, revision, 'accepted')
+        }
         const transactionScope = fileScope?.withCorrelation({
           checkpointRecordId: committed.recordId,
           checkpointGeneration: committed.checkpointGeneration,
@@ -298,8 +308,10 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
       }
     } finally {
       if (!handedOff) {
-        admission.leave()
-        stageScope?.retireFileEvidence()
+        try { await openedHandle?.close() } finally {
+          admission.leave()
+          stageScope?.retireFileEvidence()
+        }
       }
     }
   }
@@ -610,15 +622,17 @@ function checkpointTraceTransition(
 ): 'persisted' | 'restored' | 'failed' {
   switch (decision) {
     case 'installed': return 'persisted'
-    case 'exact': return 'restored'
+    case 'exact':
+    case 'metadata-match': return 'restored'
     default: return 'failed'
   }
 }
 
 function checkpointTraceDecision(
   decision: InitialCheckpointCASResult['kind'] | CheckpointLineageDecision['kind'],
-): 'absent' | 'installed' | 'exact' | 'revision_conflict' | 'ownership_conflict' | 'invalid' {
+): 'absent' | 'installed' | 'exact' | 'metadata_match' | 'revision_conflict' | 'ownership_conflict' | 'invalid' {
   switch (decision) {
+    case 'metadata-match': return 'metadata_match'
     case 'revision-conflict': return 'revision_conflict'
     case 'ownership-conflict': return 'ownership_conflict'
     default: return decision
@@ -632,7 +646,7 @@ function snapshotOpenedRevision(input: OpenedFileRevision): OpenedFileRevision {
       input.exactSize > 0xffff_ffff_ffff_ffffn) {
     throw new TypeError('Opened file revision exact size is invalid')
   }
-  return Object.freeze({ ...input })
+  return Object.freeze({ ...input, ...sourceMetadataFields(input) })
 }
 
 function selectedCheckpoint(
@@ -641,6 +655,7 @@ function selectedCheckpoint(
   switch (decision.kind) {
     case 'installed':
     case 'exact':
+    case 'metadata-match':
       return decision.record
     case 'revision-conflict':
     case 'ownership-conflict':
