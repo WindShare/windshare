@@ -26,6 +26,20 @@ export function advanceBrowserDeliveryRecord(
   return next
 }
 
+/** Source admission and receiving state must describe the same durable checkpoint. */
+export function advanceBrowserDeliveryReceiving(
+  policy: BrowserSavePolicyV1, previousInput: BrowserDeliveryRecordV1, checkpoint: FileCheckpointV2,
+): BrowserDeliveryRecordV1 {
+  const previous = validateBrowserDeliveryRecord(policy, previousInput)
+  const next = snapshotBrowserDeliveryRecord(policy, {
+    ...previous, generation: previous.generation + 1n,
+    source: { ...previous.source, fileRevision: checkpoint.fileRevision },
+    state: { kind: 'receiving', checkpoint },
+  })
+  assertBrowserDeliveryTransition(policy, previous, next)
+  return next
+}
+
 /** Only this named transition permits replacing received coverage with a fresh owned-file epoch. */
 export function authorizeBrowserDeliveryRestart(
   policy: BrowserSavePolicyV1, previous: BrowserDeliveryRecordV1,

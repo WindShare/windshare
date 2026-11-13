@@ -1,10 +1,9 @@
 import { validateDirectCheckpointProof } from './final-proof'
-import { admitBrowserDeliverySource } from './recovery/source'
 import { withStagingExportAuthority } from '../staging-budget/export-authority'
 import type { PersistentFileRequest, PersistentFileTransactionPort, PersistentFinalFileCommit } from '../persistent-tree/contracts'
 import { fileCheckpointIsComplete, type FileCheckpointV2 } from '../persistence/checkpoint'
 import type { BrowserDeliveryRecordV1, BrowserDeliveryState, BrowserSavePolicyV1 } from './model'
-import { advanceBrowserDeliveryRecord, stageCheckpoint, targetCheckpoint } from './lifecycle'
+import { advanceBrowserDeliveryRecord, advanceBrowserDeliveryReceiving, stageCheckpoint, targetCheckpoint } from './lifecycle'
 import type { BrowserDeliveryRepository } from './repository'
 import type { BrowserDeliveryReservation, BrowserDeliveryRuntimeTrace, BrowserDeliveryStagePort, BrowserDeliveryTargetPort } from './ports'
 
@@ -34,9 +33,7 @@ export class BrowserDeliveryEngine {
   async recordCheckpoint(fileId: string, checkpoint: FileCheckpointV2): Promise<void> {
     const record = await this.#read(fileId)
     if (record.state.kind !== 'receiving') return
-    const receiving = record.source.fileRevision === checkpoint.fileRevision
-      ? await this.#advance(record, { kind: 'receiving', checkpoint })
-      : await this.#admitSource(record, checkpoint)
+    const receiving = await this.#advanceReceiving(record, checkpoint)
     this.#emit(receiving, 'receiving')
     if (record.placement === 'staged') {
       await (await this.#options.reservation(record)).received(checkpointBytes(checkpoint))
@@ -178,6 +175,7 @@ export class BrowserDeliveryEngine {
     if (checkpoint === undefined || checkpoint.verifiedRanges.length === 0 || fileCheckpointIsComplete(checkpoint)) return record
     const authorized = await this.#options.repository.authorizeRestart(record, checkpoint, crypto.randomUUID())
     this.#options.changed(authorized)
+    this.#emit(authorized, 'restart-authorized')
     return authorized
   }
 
@@ -186,13 +184,22 @@ export class BrowserDeliveryEngine {
     if (record.state.kind !== 'restart-authorized') return record
     const checkpoint = await this.#options.target.readCheckpoint(fileId)
     if (checkpoint === undefined) throw new TypeError('Authorized restart lost its target checkpoint')
-    return this.#advance(record, { kind: 'receiving', checkpoint })
+    const receiving = await this.#advanceReceiving(record, checkpoint)
+    this.#emit(receiving, 'restart-completed')
+    return receiving
   }
 
   async reconcile(fileId: string): Promise<BrowserDeliveryRecordV1> {
     let record = await this.#read(fileId)
     if (record.state.kind === 'restart-authorized') {
-      const target = await this.#openTarget(record)
+      const checkpoint = await this.#options.target.readCheckpoint(fileId)
+      if (checkpoint === undefined) throw new TypeError('Authorized restart lost its target checkpoint')
+      // Storage can commit source admission before the delivery CAS. Finish the
+      // local reset under that validated source instead of rebinding it backward.
+      const current = checkpoint.fileRevision === record.source.fileRevision ? record
+        : advanceBrowserDeliveryReceiving(this.#options.policy, record, checkpoint)
+      this.#emit(current, 'restart-recovering')
+      const target = await this.#openTarget(current)
       try { return await this.completeRestart(fileId) }
       finally { await target.retire() }
     }
@@ -200,7 +207,7 @@ export class BrowserDeliveryEngine {
     const port = record.placement === 'staged' ? this.#stage() : this.#options.target
     const checkpoint = await port.readCheckpoint(fileId)
     if (checkpoint === undefined) return record
-    if (record.source.fileRevision !== checkpoint.fileRevision) record = await this.#admitSource(record, checkpoint)
+    if (record.source.fileRevision !== checkpoint.fileRevision) record = await this.#advanceReceiving(record, checkpoint)
     if (fileCheckpointIsComplete(checkpoint)) {
       if (record.placement === 'staged') {
         record = await this.#advance(record, { kind: 'staged-complete', stage: checkpoint })
@@ -220,7 +227,7 @@ export class BrowserDeliveryEngine {
     } else if (record.state.kind === 'receiving' &&
         (record.state.checkpoint?.checkpointGeneration !== checkpoint.checkpointGeneration ||
         record.state.checkpoint?.stateGeneration !== checkpoint.stateGeneration)) {
-      record = await this.#advance(record, { kind: 'receiving', checkpoint })
+      record = await this.#advanceReceiving(record, checkpoint)
     }
     return record
   }
@@ -302,8 +309,8 @@ export class BrowserDeliveryEngine {
     return record
   }
 
-  async #admitSource(previous: BrowserDeliveryRecordV1, checkpoint: FileCheckpointV2): Promise<BrowserDeliveryRecordV1> {
-    const next = admitBrowserDeliverySource(this.#options.policy, previous, checkpoint)
+  async #advanceReceiving(previous: BrowserDeliveryRecordV1, checkpoint: FileCheckpointV2): Promise<BrowserDeliveryRecordV1> {
+    const next = advanceBrowserDeliveryReceiving(this.#options.policy, previous, checkpoint)
     await this.#options.repository.replaceFile(previous, next)
     this.#options.changed(next)
     return next
