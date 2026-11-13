@@ -1,0 +1,17 @@
+[Unit]
+Description=Renew WindShare node-only certificate through HTTP-01
+Wants=network-online.target
+After=network-online.target nginx.service
+ConditionPathExists=/etc/windshare-network/node-acme.env
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/windshare-network/node-acme.env
+ExecStart=/opt/windshare-acme/lego-5.5.2 --log.format json run --path /var/lib/windshare-node-acme --account-id ${ACME_ACCOUNT} --accept-tos --domains ${NODE_HOST} --http --http.webroot /var/lib/windshare-node-acme-webroot --deploy-hook /usr/local/libexec/windshare-reload-nginx
+TimeoutStartSec=900
+# HTTP challenge files must be readable by Nginx; private ACME state is in a 0700 directory.
+UMask=0022
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+NoNewPrivileges=true

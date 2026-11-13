@@ -1,0 +1,32 @@
+# Render NODE_HOST only; node-only hosts must not hold frontend TLS keys.
+map $http_upgrade $windshare_connection { default upgrade; '' close; }
+
+server {
+    listen 80;
+    server_name ${NODE_HOST};
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/lib/windshare-node-acme-webroot;
+        default_type text/plain;
+        try_files $uri =404;
+    }
+    location / { return 308 https://$host$request_uri; }
+}
+
+server {
+    listen 443 ssl;
+    server_name ${NODE_HOST};
+    ssl_certificate /var/lib/windshare-node-acme/certificates/${NODE_HOST}.crt;
+    ssl_certificate_key /var/lib/windshare-node-acme/certificates/${NODE_HOST}.key;
+    location / {
+        proxy_pass http://127.0.0.1:8484;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $windshare_connection;
+        # Admission must use the peer address, never a client-supplied forwarding chain.
+        proxy_set_header X-Windshare-Source-Ip $remote_addr;
+        proxy_read_timeout 90s;
+        proxy_send_timeout 90s;
+        proxy_buffering off;
+    }
+}

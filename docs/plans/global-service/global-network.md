@@ -71,6 +71,8 @@ Deployment templates and procedures live in
    expose P2 bearer tickets for unauthorized relay use; it does not expose content keys. Move hosting
    through DNS on the same hostname; change built-in hosts through signed client updates with the
    desktop release workflow, without a separate frontend-change protocol.
+    Only hosts whose administrators are all trusted may serve the official frontend. Node-only
+    hosts receive neither frontend TLS keys nor DNS, directory-signing, or authority credentials.
 3. **Relays are stateful, so links name them.** A share route exists only on the node the sender
    registered with (SQLite, the live sender socket, and a relay identity hashed from the canonical
    endpoint URL), so GeoDNS or anycast would land receivers on nodes without the route. Each node
@@ -164,7 +166,7 @@ Deployment templates and procedures live in
   same Workers as Cloudflare for SaaS custom hostnames on the `windshare.cc` zone. They must be
   subdomains, because the free plan cannot take a zone apex as a custom hostname.
 - CN-A and CN-B obtain certificates for `ws.` and `api.` through DNS-01, since validators abroad
-  resolve those names to Cloudflare. Node hostnames use HTTP-01.
+  resolve those names to Cloudflare. Node hostnames use independent HTTP-01 certificates.
 - Official public relays accept valid HTTP(S) browser origins, including self-hosted frontends.
   Admission and capacity policies apply independently; private deployments may restrict origins.
 - After P2 enables mainland relaying, a link can read
@@ -216,6 +218,8 @@ and fleet/device measurements; see
 
 - Servers: CN-A, CN-B, and two or three 50 Mbps overseas servers, one each near Asia, Europe, and
   the Americas. Other servers can join through P1's signed directory; P3 automates onboarding.
+  Temporary nodes with untrusted administrators may provide STUN and later encrypted relaying,
+  but stay outside frontend DNS and publication until replaced by trusted hosts.
 - DNS and certificates follow [Hosts and domains](#4-hosts-and-domains); verify split DNS, certificate
   issuance, and Cloudflare for SaaS routing to the Workers.
 - On CN-A and CN-B, one TLS reverse proxy on port 443 routes by hostname: `ws.` to the web build and
@@ -234,7 +238,7 @@ and fleet/device measurements; see
   Account classes and fair scheduling arrive in P2.
 - The Cloudflare deployment gains a `frontend` mode beside `full` and `relay-only`: static assets
   only, serving `windshare.cc` and the other lines of `ws.`.
-- One release pipeline publishes each web build to Cloudflare and both mainland servers, because
+- One release pipeline publishes each web build to Cloudflare and approved mainland frontend hosts, because
   one origin is served from both sides. `/downloads/` serves installers from CN-A and CN-B on the
   mainland line and redirects to GitHub releases on Cloudflare.
 - STUN: seed a small pool of reviewed public services and measured mainland endpoints in
