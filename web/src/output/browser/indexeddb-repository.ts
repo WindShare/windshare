@@ -626,6 +626,7 @@ implements SemanticFileCheckpointJournal,
     const transaction = this.#database.transaction([
       INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
       INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
+      INDEXEDDB_FILE_FINAL_PROOF_STORE,
     ], 'readwrite')
     try {
       await commitDurableCheckpointCas(transaction, previous, next)

@@ -159,11 +159,15 @@ func (binding *revisionLease) refresh(ctx context.Context, runtime *receiversess
 	if err != nil {
 		return err
 	}
-	// A fresh lease does not certify old bytes unless the authenticated immutable
-	// revision and geometry are identical.
+	// Resident leases preserve identity across reconnects. A reopened encryption
+	// identity requires a new output admission; it does not prove changed bytes.
 	if opened.Descriptor != descriptor {
 		_ = dependencies.ReleaseRevision(ctx, opened.Handle)
-		return content.ErrRevisionDrift
+		comparison := content.CompareRevisions(descriptor, opened.Descriptor)
+		if comparison.Comparison == content.RevisionComparisonMismatch {
+			return content.ErrRevisionStale
+		}
+		return content.ErrRevisionReopened
 	}
 	binding.runtime = runtime
 	binding.opened = opened

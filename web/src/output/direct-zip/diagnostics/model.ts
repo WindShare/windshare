@@ -1,3 +1,5 @@
+import type { DirectZipSourceComparisonV1 } from '../../../diagnostics/trace/direct-zip-payload'
+
 export const DIRECT_ZIP_DIAGNOSTIC_PLAN_KIND = 'direct-resumable-zip' as const
 
 export const DIRECT_ZIP_DIAGNOSTIC_MILESTONES = Object.freeze([
@@ -144,6 +146,7 @@ export interface DirectZipDiagnosticMilestoneInput {
   readonly checkpointPhase: DirectZipCheckpointPhase
   readonly epochOffsetClass: DirectZipEpochOffsetClass
   readonly decisions: DirectZipDiagnosticDecisionSnapshot
+  readonly sourceComparison?: DirectZipSourceComparisonV1
   /** Retained only in the local record; the exported projection never reads it. */
   readonly rawFsaStageFacts?: unknown
   /** Retained only in the local record; export reduces it to a closed native class. */

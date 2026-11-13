@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
@@ -52,6 +53,11 @@ type TraceEvent struct {
 	Decision          checkpointmodel.CheckpointLineageDecision
 	Fault             fault.Fault
 	RetainedLiveFiles uint64
+	PreviousRevision  content.FileRevision
+	CurrentRevision   content.FileRevision
+	RecoveryReason    content.RevisionComparisonReason
+	ReusedBytes       uint64
+	RetainedBytes     uint64
 }
 
 type TraceSink interface{ TraceFileExecution(TraceEvent) }
@@ -155,4 +161,14 @@ func (transaction *resumablePartialFileTransaction) traceEvent(sequence uint64, 
 func (transaction *resumablePartialFileTransaction) traceReceipt(err error) {
 	transaction.engine.emit(transaction.traceEvent(transaction.engine.nextSequence(), TraceDeliveryReceipt,
 		traceOutcomeForError(err), checkpointmodel.PhasePublished, checkpointmodel.PhasePublished, traceFault(err)))
+}
+
+func (engine *Engine) traceRetainedSource(previous checkpointmodel.Record, current content.FileRevisionDescriptor) {
+	event := engine.traceEvent(engine.nextSequence(), TraceRecoverFile, TraceNoChange, previous.Phase(), previous.Phase(), fault.Fault{})
+	event.FileID, event.PreviousRevision, event.CurrentRevision = current.FileID(), previous.FileRevision(), current.FileRevision()
+	event.RecoveryReason = content.CompareRevisionMetadata(previous.FileRevision(), previous.ExactSize(), previous.SourceMetadata(), current).Reason
+	for _, span := range previous.VerifiedRanges() {
+		event.RetainedBytes += span.Length()
+	}
+	engine.emit(event)
 }

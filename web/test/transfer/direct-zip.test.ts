@@ -532,7 +532,7 @@ describe('direct ZIP output settlement', () => {
     await transaction.write(0n, Uint8Array.of(1, 2, 3), SIGNAL)
     const paused = await first.pause()
     const rollback = vi.fn(async ({ decision }: Parameters<DirectZipMemberRollbackAuthorityV1['rollbackMember']>[0]) => {
-      expect(decision.reason).toBe('revision-changed')
+      expect(decision.reason).toBe('metadata-unavailable')
       const active = paused.checkpoint.member!
       await harness.pages.restore(active.rollback.pages)
       harness.target.visible = harness.target.visible.slice(0, Number(active.rollback.archiveOffset))

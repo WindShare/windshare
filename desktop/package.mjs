@@ -1,24 +1,24 @@
 import { copyFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { buildDesktop } from './build.mjs';
 
 const desktop = dirname(fileURLToPath(import.meta.url));
 const root = dirname(desktop);
 const profile = process.argv[2] ?? 'release';
 if (!['debug', 'release'].includes(profile)) throw new Error('Expected debug or release profile');
-const executable = process.platform === 'win32' ? 'windshare.exe' : 'windshare';
-const library = {
-  win32: 'windshare_host.dll', darwin: 'libwindshare_host.dylib', linux: 'libwindshare_host.so',
-}[process.platform];
-if (!library) throw new Error('Unsupported desktop platform');
+const cargo = process.argv.length > 3 ? process.argv.slice(3) : ['rustup', 'run', 'stable', 'cargo'];
+const artifacts = await buildDesktop([
+  ...cargo, 'build', '--manifest-path', join(desktop, 'Cargo.toml'), '--locked',
+  '--jobs', process.env.CARGO_BUILD_JOBS ?? '2', ...(profile === 'release' ? ['--release'] : []),
+]);
+const executable = basename(artifacts.executable);
 const output = join(root, 'dist', 'desktop');
 await mkdir(output, { recursive: true });
 const staging = await mkdtemp(join(output, 'windshare-'));
-const target = process.env.CARGO_TARGET_DIR
-  ? resolve(process.env.CARGO_TARGET_DIR) : join(desktop, 'target');
-for (const name of [executable, library]) {
-  await copyFile(join(target, profile, name), join(staging, name));
+for (const source of [artifacts.executable, artifacts.library]) {
+  await copyFile(source, join(staging, basename(source)));
 }
 await copyFile(join(root, 'LICENSE'), join(staging, 'LICENSE'));
 await writeFile(join(staging, 'README.txt'),

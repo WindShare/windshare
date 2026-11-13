@@ -184,6 +184,12 @@ func nativeDirectTreeTestFile(
 	if err != nil {
 		t.Fatal(err)
 	}
+	return nativeDirectTreeFileWithDescriptor(t, session, intent, descriptor, path, parent)
+}
+
+func nativeDirectTreeFileWithDescriptor(t *testing.T, session transfer.DirectTreeSession, intent transfer.ReceiveIntent,
+	descriptor content.FileRevisionDescriptor, path string, parent transfer.DirectoryAdmission) transfer.MaterializationFile {
+	t.Helper()
 	sourcePath, err := ordinaryoutput.NewSourceCatalogPath(path)
 	if err != nil {
 		t.Fatal(err)

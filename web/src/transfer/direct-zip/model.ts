@@ -56,6 +56,7 @@ export interface DirectZipOrderedOutputV1 {
 }
 
 export interface DirectZipOpenedSourceV1 {
+  readonly sourceMetadata?: string
   readonly fileId: string
   readonly revision: string
   readonly exactSize: bigint

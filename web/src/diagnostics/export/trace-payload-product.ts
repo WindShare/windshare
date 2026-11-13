@@ -615,6 +615,7 @@ export function validateCheckpoint(payload: UnknownRecord): void {
     }
     return
   }
+  if (payload.transition === 'source_comparison') return validateSourceComparison(payload)
   exactKeys(payload, ['backend', 'transition'], ['decision'], 'checkpoint payload')
   member(payload.backend, CHECKPOINT_BACKENDS, 'checkpoint backend')
   member(payload.transition, [
@@ -622,7 +623,7 @@ export function validateCheckpoint(payload: UnknownRecord): void {
   ], 'checkpoint transition')
   if (payload.decision !== undefined) {
     member(payload.decision, [
-      'absent', 'installed', 'exact', 'revision_conflict', 'ownership_conflict', 'invalid',
+      'absent', 'installed', 'exact', 'metadata_match', 'revision_conflict', 'ownership_conflict', 'invalid',
     ], 'checkpoint decision')
   }
 }
@@ -702,4 +703,21 @@ function validateOutputPair(
   exactKeys(payload, ['backend', 'transition'], [], `${eventName} payload`)
   member(payload.backend, backends, `${eventName} backend`)
   member(payload.transition, transitions, `${eventName} transition`)
+}
+
+function validateSourceComparison(payload: UnknownRecord): void {
+  exactKeys(payload, ['backend', 'transition', 'operation_id', 'file_id', 'previous_revision',
+    'current_revision', 'stage', 'comparison', 'reason', 'reused_bytes', 'retained_bytes'],
+  [], 'source comparison payload')
+  member(payload.backend, CHECKPOINT_BACKENDS, 'comparison backend')
+  for (const key of ['operation_id', 'file_id', 'previous_revision', 'current_revision']) {
+    canonicalIdentity(payload[key], key)
+  }
+  member(payload.stage, ['accepted', 'retained'], 'comparison stage')
+  member(payload.comparison, ['metadata-agreement', 'byte-agreement', 'observed-change',
+    'unavailable'], 'comparison evidence')
+  member(payload.reason, ['same-revision', 'metadata-agreement', 'saved-ranges-compared',
+    'size-changed', 'metadata-changed', 'metadata-unavailable'], 'comparison reason')
+  decimalUint64(payload.reused_bytes, 'reused bytes')
+  decimalUint64(payload.retained_bytes, 'retained bytes')
 }

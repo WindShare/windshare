@@ -12,15 +12,16 @@ From the repository root, with stable Rust and native GPUI prerequisites:
 ```sh
 make desktop
 # Compact window (960 × 760):
-cargo run --manifest-path desktop/Cargo.toml --locked -- --compact
+make desktop DESKTOP_ARGS='--compact'
 # Start with an existing selection:
-cargo run --manifest-path desktop/Cargo.toml --locked -- --live-share "/path/to/file" "/path/to/folder"
+make desktop DESKTOP_ARGS='--live-share "/path/to/file" "/path/to/folder"'
 # Sample UI and animation development:
 make desktop-preview
 ```
 
-The build also requires Go and a C compiler. Windows requires MinGW-w64 GCC on
-PATH for the Go library, the Rust MSVC target, Visual Studio C++ build tools and a
+The build also requires Node.js, Go and a C compiler. Use the Make targets to stage the
+native library beside the executable using Cargo's reported artifacts. Windows requires
+MinGW-w64 GCC on PATH for the Go library, the Rust MSVC target, Visual Studio C++ build tools and a
 DirectX 11 GPU. Windows is the locally verified platform.
 
 Choose files or folders in the native picker, or drop a mixed selection into the
@@ -73,7 +74,7 @@ Windows renderer for high-refresh animation while keeping application crates uno
   result exposes copy/open controls during the introduction. Reduced motion skips
   the introduction and keeps the waiting indicator static.
 - Preview latency defaults to 1900 ms. Pass `--share-delay-ms=200` or
-  `--share-delay-ms=5000` after `cargo run ... --` to inspect fast and slow results.
+  `--share-delay-ms=5000` via `make desktop-preview DESKTOP_ARGS=...` to inspect fast and slow results.
   Motion uses actual completion events, never the configured delay.
 - Animated color SVGs reuse vector meshes, antialiased at their final display size.
   Wind meshes are cached; invisible artwork is omitted. Result content uses
@@ -102,7 +103,7 @@ Windows renderer for high-refresh animation while keeping application crates uno
 - `Ctrl+N`: new share; `Ctrl+K`: search; `Esc`: dismiss dialog.
   Controls support Tab and Enter/Space.
 
-For frame profiling, run `cargo run --manifest-path desktop/Cargo.toml --features motion-profile -- --preview`.
+For frame profiling, run `make desktop-preview DESKTOP_CARGO_ARGS='--features motion-profile'`.
 The CSV in the OS temporary directory (`windshare-motion-<pid>.csv`) records CPU
 layout/prepaint/paint durations, presentation callback intervals and share phases.
 Override its path with `WINDSHARE_MOTION_PROFILE`. This is not GPU completion timing;

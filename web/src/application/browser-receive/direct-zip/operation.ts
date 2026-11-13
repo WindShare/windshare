@@ -330,7 +330,7 @@ export class BrowserDirectZipOperation implements BoundReceiveOperation {
       operationId: this.intent.operationId, sessionId: this.#input.leaseId, candidateId,
       oldCommittedLength: previous.committedLength, newCommittedLength: decision.archiveOffset,
       retainedSelectedPayloadBytes: decision.safeResumeBytes, memberOrdinal: decision.nextEntryOrdinal,
-      sourceChangeReason: decision.reason,
+      recoveryReason: decision.reason,
     }
     traceDirectZipMemberRollback(this.#input.trace, { ...trace, phase: 'requested' })
     try {
@@ -355,7 +355,7 @@ export class BrowserDirectZipOperation implements BoundReceiveOperation {
 
   async #recoverMemberRollback(
     signal: AbortSignal,
-    sourceChangeReason?: Parameters<typeof traceDirectZipMemberRollback>[1]['sourceChangeReason'],
+    recoveryReason?: Parameters<typeof traceDirectZipMemberRollback>[1]['recoveryReason'],
   ): Promise<void> {
     const rollback = this.#journal.pendingMemberRollback
     if (rollback === undefined) return
@@ -367,7 +367,7 @@ export class BrowserDirectZipOperation implements BoundReceiveOperation {
       newCommittedLength: rollback.checkpoint.committedLength,
       retainedSelectedPayloadBytes: rollback.checkpoint.safeResumeBytes,
       memberOrdinal: rollback.checkpoint.nextEntryOrdinal,
-      ...(sourceChangeReason === undefined ? {} : { sourceChangeReason }),
+      ...(recoveryReason === undefined ? {} : { recoveryReason }),
     }
     traceDirectZipMemberRollback(this.#input.trace, { ...trace, phase: 'recovering' })
     try {

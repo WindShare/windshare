@@ -230,10 +230,19 @@ export async function commitDurableCheckpointCas(
   validateFileCheckpointTransition(expected, next)
   const candidates = transaction.objectStore(INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE)
   const committed = transaction.objectStore(INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE)
-  const [candidateValue, committedValue] = await Promise.all([
+  const [candidateValue, committedValue, finalProof] = await Promise.all([
     requestResult<unknown>(candidates.get(expected.recordId)),
     requestResult<unknown>(committed.get(expected.recordId)),
+    expected.fileRevision === next.fileRevision ? Promise.resolve(undefined) :
+      requestResult<unknown>(transaction.objectStore(INDEXEDDB_FILE_FINAL_PROOF_STORE)
+        .index(INDEXEDDB_BY_OPERATION_RECORD_PROOF_INDEX).get([
+          expected.operationId, expected.recordId,
+        ])),
   ])
+  // Delivery history is immutable even when its source metadata still agrees.
+  if (finalProof !== undefined) {
+    abortConcurrency(transaction, 'metadata reuse cannot replace a historical delivery')
+  }
   if (candidateValue !== undefined || committedValue === undefined) {
     abortConcurrency(transaction, 'durable checkpoint CAS has an unresolved or missing predecessor')
   }

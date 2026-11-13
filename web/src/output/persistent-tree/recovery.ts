@@ -1,3 +1,4 @@
+import { sourceMetadataFields } from '../../content/revision-comparison'
 import {
   checkpointMatchesNamespace,
   validateFileCheckpointPage,
@@ -20,6 +21,7 @@ import {
   fileCheckpointIsComplete,
   deriveCheckpointLineageID,
   newFileCheckpointV2,
+  checkpointIdentityEqual,
   validateFileCheckpoint,
   type FileCheckpointV2,
 } from '../persistence/checkpoint'
@@ -443,6 +445,7 @@ export function persistentCheckpointLookup(
     fileId: revision.fileId,
     canonicalPath: path,
     fileRevision: revision.fileRevision,
+    ...sourceMetadataFields(revision),
     exactSize: revision.exactSize,
   })
 }
@@ -459,6 +462,7 @@ export function persistentInitialCheckpoint(
     materializationBindingDigest: binding.materializationBindingDigest,
     fileId: revision.fileId,
     fileRevision: revision.fileRevision,
+    ...sourceMetadataFields(revision),
     canonicalPath: path,
     exactSize: revision.exactSize,
     materializerKind: binding.materializerKind,
@@ -571,7 +575,7 @@ function assertResolvedCandidateIdentity(
   const expectedCommitState = observation.kind === 'verified'
     ? FILE_CHECKPOINT_COMMIT_VERIFIED
     : FILE_CHECKPOINT_COMMIT_QUARANTINED
-  if (resolved.recordId !== candidate.recordId ||
+  if (!checkpointIdentityEqual(resolved, candidate) ||
       resolved.commitState !== expectedCommitState ||
       !checkpointMatchesNamespace(resolved, binding)) {
     throw new TypeError('checkpoint probe returned a foreign resolved record')

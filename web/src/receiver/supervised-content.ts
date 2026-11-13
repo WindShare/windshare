@@ -1,3 +1,4 @@
+import { compareRevisionDescriptors } from '../content/revision-comparison'
 import type { DownloadMetrics } from './download-metrics'
 import { encodeBase64Url, equalBytes } from '../crypto/bytes'
 import { byteRange, type ByteRange } from '../content/geometry'
@@ -14,6 +15,7 @@ import {
   type OpenedRevision,
   type RevisionReader,
   RevisionChangedDuringRecoveryError,
+  RevisionReopenedDuringRecoveryError,
   requiresRevisionLeaseReplacement,
   RevisionService,
 } from '../content/session-services'
@@ -428,7 +430,11 @@ class RevisionAuthorization {
       }
       if (!sameRevision(this.#descriptor, result.value.descriptor)) {
         await result.value.release().catch(() => undefined)
-        throw new RevisionChangedDuringRecoveryError()
+        const comparison = compareRevisionDescriptors(this.#descriptor, result.value.descriptor)
+        if (comparison.kind === 'observed-change') {
+          throw new RevisionChangedDuringRecoveryError()
+        }
+        throw new RevisionReopenedDuringRecoveryError()
       }
       const next = { generation: result.generation, opened: result.value }
       this.#current = next
@@ -448,8 +454,12 @@ function sameRevision(
   return equalBytes(left.shareInstance, right.shareInstance) &&
     equalBytes(left.fileId, right.fileId) &&
     equalBytes(left.fileRevision, right.fileRevision) &&
-    left.exactSize === right.exactSize &&
-    left.geometry.blockSize === right.geometry.blockSize &&
+    left.exactSize === right.exactSize && left.sourceMetadata === right.sourceMetadata &&
+    sameSourceGeometry(left, right)
+}
+
+function sameSourceGeometry(left: FileRevisionDescriptor, right: FileRevisionDescriptor): boolean {
+  return left.geometry.blockSize === right.geometry.blockSize &&
     left.modifiedTime?.seconds === right.modifiedTime?.seconds &&
     left.modifiedTime?.nanoseconds === right.modifiedTime?.nanoseconds &&
     left.modifiedTime?.precision === right.modifiedTime?.precision

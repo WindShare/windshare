@@ -6,6 +6,7 @@ import type { FileRevisionDescriptor } from '../../src/content/records'
 import {
   RemoteOperationError,
   RevisionChangedDuringRecoveryError,
+  RevisionReopenedDuringRecoveryError,
   RevisionLeaseExpiredError,
   type RevisionService,
 } from '../../src/content/session-services'
@@ -128,11 +129,12 @@ describe('lease replacement within a healthy protocol generation', () => {
     f.content.close()
   })
 
-  it.each(['revision', 'geometry', 'modified time'])('rejects a changed %s before reading replacement bytes', async field => {
+  it.each(['revision', 'geometry', 'modified time', 'modification evidence'])('rejects a changed %s before reading replacement bytes', async field => {
     const f = fixture({
       serve: async function* () { yield await Promise.reject(remoteFailure()) },
       open: async count => {
         const value = descriptor()
+        if (field === 'modified time') Object.assign(value, { modifiedTime: { seconds: 2n, nanoseconds: 0, precision: 1, milliseconds: 2000n } })
         if (count === 1) return value
         if (field === 'revision') return { ...value, fileRevision: id(42) }
         if (field === 'geometry') return { ...value, geometry: new FileGeometry(4n, 2n) }
@@ -141,7 +143,7 @@ describe('lease replacement within a healthy protocol generation', () => {
     })
     const opened = await f.scoped.revisions.open(f.stable.fileId)
     await expect(collect(f.scoped.broker.readRange(opened.descriptor, opened.leaseId, byteRange(0n, 4n))))
-      .rejects.toBeInstanceOf(RevisionChangedDuringRecoveryError)
+      .rejects.toBeInstanceOf(field === 'revision' || field === 'modification evidence' ? RevisionReopenedDuringRecoveryError : RevisionChangedDuringRecoveryError)
     await opened.release()
     expect(f.events).toContain('release:2')
     expect(f.events).toContain('release:1')

@@ -57,6 +57,8 @@ func TestSenderObjectsMatchFrozenCrossRuntimeVectors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	metadata, _ := content.SourceMetadataFromBytes(sequence(0xa4, 32))
+	descriptor = content.BindRevisionMetadata(descriptor, metadata)
 	keys, err := content.NewKeyTree(sequence(0, content.ReadSecretBytes), share)
 	if err != nil {
 		t.Fatal(err)
