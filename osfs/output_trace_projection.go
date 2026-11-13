@@ -38,9 +38,10 @@ func projectFilesystemOutputTrace(event outputruntime.FilesystemOutputTrace) Fil
 		RuntimeOperation:                projectRuntimeOperation(event.RuntimeOperation),
 		RuntimeDecision:                 projectRuntimeDecision(event.RuntimeDecision),
 		CheckpointDecision:              projectCheckpointDecision(event.CheckpointDecision),
-		OperationID:                     event.OperationID,
-		ClaimID:                         event.ClaimID,
-		WriteOffset:                     event.WriteOffset, WriteLength: event.WriteLength,
+		PreviousRevision:                event.PreviousRevision, CurrentRevision: event.CurrentRevision, RecoveryReason: event.RecoveryReason, ReusedBytes: event.ReusedBytes, RetainedBytes: event.RetainedBytes,
+		OperationID: event.OperationID,
+		ClaimID:     event.ClaimID,
+		WriteOffset: event.WriteOffset, WriteLength: event.WriteLength,
 		CheckpointAttentionCode: event.CheckpointAttentionCode, CheckpointAttentionCount: event.CheckpointAttentionCount,
 		FaultDomain:                       event.FaultDomain,
 		NormalizedFaultScope:              event.NormalizedFaultScope,
@@ -67,6 +68,8 @@ func projectCheckpointDecision(
 	switch value {
 	case outputruntime.FilesystemCheckpointAbsent:
 		return FilesystemCheckpointAbsent
+	case outputruntime.FilesystemCheckpointMetadataMatch:
+		return FilesystemCheckpointMetadataMatch
 	case outputruntime.FilesystemCheckpointExact:
 		return FilesystemCheckpointExact
 	case outputruntime.FilesystemCheckpointRevisionConflict:

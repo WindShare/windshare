@@ -1,11 +1,26 @@
 export type CheckpointPayloadV1 =
   | Readonly<{
       backend: 'file_system_access' | 'origin_private'
+      transition: 'source_comparison'
+      operation_id: string
+      file_id: string
+      previous_revision: string
+      current_revision: string
+      stage: 'accepted' | 'retained'
+      comparison: 'metadata-agreement' | 'byte-agreement' | 'observed-change' | 'unavailable'
+      reason: 'same-revision' | 'metadata-agreement' | 'saved-ranges-compared' |
+        'size-changed' | 'metadata-changed' | 'metadata-unavailable'
+      reused_bytes: string
+      retained_bytes: string
+    }>
+  | Readonly<{
+      backend: 'file_system_access' | 'origin_private'
       transition: 'restored' | 'persisted' | 'quarantined' | 'failed'
       decision?:
         | 'absent'
         | 'installed'
         | 'exact'
+        | 'metadata_match'
         | 'revision_conflict'
         | 'ownership_conflict'
         | 'invalid'

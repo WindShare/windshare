@@ -39,7 +39,7 @@ func (value FilesystemOutputRuntimeDecision) DiagnosticName() string {
 	return names[value]
 }
 func (value FilesystemCheckpointDecision) DiagnosticName() string {
-	names := [...]string{"", "absent", "exact", "revision_conflict", "ownership_conflict", "invalid"}
+	names := [...]string{"", "absent", "exact", "revision_conflict", "ownership_conflict", "invalid", "metadata_match"}
 	if int(value) >= len(names) {
 		return "unknown_" + strconv.FormatUint(uint64(value), 10)
 	}
@@ -80,6 +80,13 @@ func (v FilesystemOutputTrace) DiagnosticRecord() diagnostics.Record {
 		"reserved_file_slot_count": diagnostics.Uint(v.ReservedFileSlotCount), "directory_metadata_bytes": diagnostics.Uint(v.DirectoryMetadataBytes),
 		"checkpoint_record_count":  diagnostics.Uint(v.CheckpointRecordCount),
 		"retained_live_file_count": diagnostics.Uint(v.RetainedLiveFileCount),
+	}
+	if v.RecoveryReason != "" {
+		f["recovery_reason"] = diagnostics.Text(string(v.RecoveryReason))
+		f["previous_revision"] = diagnostics.Identity(v.PreviousRevision.Bytes())
+		f["current_revision"] = diagnostics.Identity(v.CurrentRevision.Bytes())
+		f["reused_bytes"] = diagnostics.Uint(v.ReusedBytes)
+		f["retained_bytes"] = diagnostics.Uint(v.RetainedBytes)
 	}
 	if v.RuntimeOperation == FilesystemOutputRuntimeWriteRange || v.RuntimeOperation == FilesystemOutputRuntimeFirstWrite {
 		f["write_offset"] = diagnostics.Uint(v.WriteOffset)

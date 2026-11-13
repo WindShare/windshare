@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { encodeBase64Url } from '../../../src/crypto/bytes'
 import { deferred, manualSettlementDeadline } from '../../transfer/settlement-deadline'
 import { BoundaryFaultError, FaultScope, SourceFaultCode, sourceFault } from '../../../src/transfer/failure/fault'
 import { SelectionPolicy } from '../../../src/catalog/selection'
@@ -324,6 +325,33 @@ describe('progressive native ZIP missing-file results', () => {
 })
 
 describe('progressive native ZIP archive', () => {
+  it('admits saved ZIP ranges to a reopened revision without copying the archive', async () => {
+    const f = fixture()
+    const archive = await f.open()
+    const sourceMetadata = encodeBase64Url(new Uint8Array(32).fill(81))
+    const request = { entryId: 'a', path: ['a'], source,
+      revision: { fileId: 'a', fileRevision: 'original', exactSize: 6n, sourceMetadata } }
+    await archive.admitFile(request)
+    await archive.writeRange('a', 0n, bytes('abc'))
+    await archive.checkpoint('pause')
+    const previous = await archive.committedEntry('a')
+    const writes = f.io.writes.length
+    const restored = await f.open()
+    const next = await restored.admitFile({
+      ...request, revision: { ...request.revision, fileRevision: 'reopened' },
+    })
+    expect(next.ranges).toEqual(previous.ranges)
+    expect(next.zipLayout).toEqual(previous.zipLayout)
+    expect(next.revision).toMatchObject({ fileRevision: 'reopened', reusedFrom: 'original' })
+    expect(f.io.writes).toHaveLength(writes)
+    await expect(restored.admitFile({
+      ...request, revision: { ...request.revision, fileRevision: 'changed',
+        sourceMetadata: encodeBase64Url(new Uint8Array(32).fill(82)) },
+    })).rejects.toThrow('source revision')
+    expect((await restored.committedEntry('a')).ranges).toEqual(previous.ranges)
+    expect((await restored.committedEntry('a')).revision?.fileRevision).toBe('reopened')
+  })
+
   it('receives through the production OutputSession adapter with authenticated directory and revision ports', async () => {
     const file = fileEntry(identity(14), 'file.bin', 6n)
     const selection = new SelectionPolicy(true)
@@ -603,10 +631,10 @@ describe('progressive native ZIP archive', () => {
     await expect(archive.admitFile({
       entryId: 'a', path: ['a'], source,
       revision: { fileId: 'a', fileRevision: 'replacement', exactSize: 2n },
-    })).rejects.toThrow('source revision')
+    })).rejects.toThrow('requires fresh admission')
     await archive.writeRange('b', 0n, bytes('ok'))
     await archive.checkpoint('unrelated-completion')
-    expect((await archive.entry('a')).revisionFailure).toContain('Original revision')
+    expect((await archive.entry('a')).revisionFailure).toBeUndefined()
     expect((await archive.entry('b')).ranges).toHaveLength(1)
     expect(f.io.closed).toBe(false)
     await admit(archive, 'a', 2n)

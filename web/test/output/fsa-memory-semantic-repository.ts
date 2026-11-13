@@ -176,7 +176,7 @@ class MemoryCheckpointRepository implements FSASemanticOutputRepository {
     if (kind === 'absent') {
       return Object.freeze({ kind, lineageId: request.lineageId })
     }
-    if (kind === 'exact') {
+    if (kind === 'exact' || kind === 'metadata-match') {
       return Object.freeze({ kind, lineageId: request.lineageId, record: records[0]! })
     }
     return Object.freeze({

@@ -33,7 +33,7 @@ export function validateDirectZipMemberRollback(payload: UnknownRecord): void {
     'operation_id', 'session_id', 'candidate_id', 'phase',
     'old_committed_length', 'new_committed_length',
     'retained_selected_payload_bytes', 'member_ordinal',
-  ], ['source_change_reason', 'native_error_name'], 'direct_zip_member_rollback payload')
+  ], ['recovery_reason', 'native_error_name'], 'direct_zip_member_rollback payload')
   canonicalIdentity(payload.operation_id, 'direct ZIP operation ID')
   canonicalIdentity(payload.session_id, 'direct ZIP session ID')
   canonicalIdentity(payload.candidate_id, 'direct ZIP rollback candidate ID')
@@ -47,10 +47,10 @@ export function validateDirectZipMemberRollback(payload: UnknownRecord): void {
       BigInt(payload.old_committed_length as string)) {
     throw new RangeError('direct ZIP member rollback cannot increase the committed length')
   }
-  if (payload.source_change_reason !== undefined) {
-    member(payload.source_change_reason, [
-      'file_id_changed', 'revision_changed', 'size_changed', 'range_authority_changed',
-    ], 'direct ZIP member rollback source-change reason')
+  if (payload.recovery_reason !== undefined) {
+    member(payload.recovery_reason, [
+      'file_id_changed', 'metadata_changed', 'metadata_unavailable', 'size_changed', 'range_authority_changed',
+    ], 'direct ZIP member recovery reason')
   }
   if (payload.native_error_name !== undefined &&
       (typeof payload.native_error_name !== 'string' || payload.native_error_name.length === 0 ||
@@ -73,7 +73,8 @@ export function validateDirectZipMilestone(payload: UnknownRecord): void {
     'identity_decision',
     'space_decision',
     'cleanup_decision',
-  ], ['native_error_class'], 'direct_zip_milestone payload')
+  ], ['native_error_class', 'source_comparison'], 'direct_zip_milestone payload')
+  if (payload.source_comparison !== undefined) validateZipSourceComparison(payload.source_comparison)
   canonicalIdentity(payload.operation_id, 'direct ZIP operation ID')
   canonicalIdentity(payload.session_id, 'direct ZIP session ID')
   member(payload.plan_kind, ['direct_resumable_zip'], 'direct ZIP plan kind')
@@ -123,4 +124,16 @@ export function validateDirectZipMilestone(payload: UnknownRecord): void {
       'type_error', 'type_mismatch', 'unknown',
     ], 'direct ZIP native error class')
   }
+}
+
+function validateZipSourceComparison(value: unknown): void {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new TypeError('Invalid ZIP source comparison')
+  const source = value as UnknownRecord
+  exactKeys(source, ['file_id', 'previous_revision', 'current_revision', 'stage', 'reason', 'reused_bytes'], [], 'ZIP source comparison')
+  canonicalIdentity(source.file_id, 'ZIP source file ID')
+  canonicalIdentity(source.previous_revision, 'previous source revision')
+  canonicalIdentity(source.current_revision, 'current source revision')
+  member(source.stage, ['admitted'], 'source admission stage')
+  member(source.reason, ['same-revision', 'metadata-agreement'], 'source comparison reason')
+  decimalFields(source, ['reused_bytes'], 'ZIP source comparison')
 }

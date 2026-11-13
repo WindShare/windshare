@@ -1,3 +1,4 @@
+import { sourceMetadataFields } from '../../content/revision-comparison'
 import { OutputCapacityBlockedError } from '../capacity-pressure/drain'
 import type { ShareDescriptor } from '../../catalog/records'
 import { ByteRangeSet, bigintToSafeNumber, byteRange, type ByteRange } from '../../content/geometry'
@@ -149,6 +150,7 @@ export async function transferFile(
             shareInstance: opened.descriptor.shareInstanceId,
             fileId: opened.descriptor.fileIdText,
             fileRevision: opened.descriptor.fileRevisionText,
+            ...sourceMetadataFields(opened.descriptor),
             exactSize: opened.descriptor.exactSize,
           })
         } catch (reason) {

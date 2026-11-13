@@ -1,3 +1,4 @@
+import type { DirectZipSourceComparisonV1 } from '../../../diagnostics/trace/direct-zip-payload'
 import {
   observeDirectZipDiagnostic,
   type DirectZipDiagnosticDecisionSnapshot,
@@ -47,7 +48,11 @@ export class DirectZipTransferDiagnosticsV1 {
   #writerEvent(event: DirectZipWriterTraceEventV1): void {
     if (event.kind === 'checkpoint-policy-decided') this.#checkpointDecision(event.decision)
     if (event.kind === 'writer-gated') this.#gateDecision(event.decision)
-    this.#emit(event.kind, event.phase, event.offsetClass ?? 'not-positioned', event.error)
+    const source: DirectZipSourceComparisonV1 | undefined = event.fileId !== undefined && event.previousRevision !== undefined && event.currentRevision !== undefined &&
+      event.reusedBytes !== undefined && (event.decision === 'metadata-agreement' || event.decision === 'same-revision')
+      ? { file_id: event.fileId, previous_revision: event.previousRevision, current_revision: event.currentRevision,
+        stage: 'admitted' as const, reason: event.decision, reused_bytes: event.reusedBytes.toString() } : undefined
+    this.#emit(event.kind, event.phase, event.offsetClass ?? 'not-positioned', event.error, source)
   }
 
   #checkpointDecision(decision: string | undefined): void {
@@ -93,6 +98,7 @@ export class DirectZipTransferDiagnosticsV1 {
     checkpointPhase: DirectZipWriterTraceEventV1['phase'],
     epochOffsetClass: DirectZipEpochOffsetClass,
     rawException?: unknown,
+    sourceComparison?: DirectZipSourceComparisonV1,
   ): void {
     observeDirectZipDiagnostic(this.#observer, () => ({
       operationId: this.#operationId,
@@ -102,6 +108,7 @@ export class DirectZipTransferDiagnosticsV1 {
       checkpointPhase,
       epochOffsetClass,
       decisions: this.#decisions,
+      ...(sourceComparison === undefined ? {} : { sourceComparison }),
       ...(rawException === undefined ? {} : { rawException }),
     }))
   }

@@ -133,7 +133,7 @@ func TestRevisionComparisonMarkerPreservesTypedErrors(t *testing.T) {
 	}
 	if RevisionComparisonOf(ErrRevisionStale) != RevisionComparisonMismatch ||
 		RevisionComparisonOf(errors.New("transient")) != RevisionComparisonUnavailable ||
-		RevisionComparisonOf(nil) != RevisionComparisonMatch {
+		RevisionComparisonOf(nil) != RevisionComparisonMetadataAgreement {
 		t.Fatal("default comparison classification changed")
 	}
 }

@@ -1,3 +1,4 @@
+import { admitCheckpointMetadataReuse } from '../../src/output/persistence/metadata-reuse'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
   INDEXEDDB_OUTPUT_STORE_SCHEMAS,
@@ -451,6 +452,7 @@ async function preparedFile(
     materializationBindingDigest: identity(32, 12),
     fileId: identity(16, seed),
     fileRevision: identity(16, seed + 1),
+    sourceMetadata: identity(32, seed + 3),
     canonicalPath: [`file-${seed}.bin`],
     exactSize: 8n,
     materializerKind: FILE_CHECKPOINT_MATERIALIZER_FSA_TREE,
@@ -504,6 +506,7 @@ async function preparedFile(
       fileId: finalCheckpoint.fileId,
       canonicalPath: finalCheckpoint.canonicalPath,
       fileRevision: finalCheckpoint.fileRevision,
+      ...(finalCheckpoint.sourceMetadata === undefined ? {} : { sourceMetadata: finalCheckpoint.sourceMetadata }),
       exactSize: finalCheckpoint.exactSize,
     },
     finalCommit: {
@@ -594,4 +597,86 @@ function deleteDatabase(name: string): Promise<void> {
     request.addEventListener('blocked', () => resolve(), { once: true })
     request.addEventListener('error', () => reject(request.error), { once: true })
   })
+}
+
+export async function probeMetadataResume(databaseName: string, protocol: 'semantic' | 'candidate' = 'semantic') {
+  const binding = bindingFor(91)
+  const root = await navigator.storage.getDirectory()
+  const name = `resume-${databaseName}`
+  const handle = await root.getFileHandle(name, { create: true })
+  const writer = await handle.createWritable()
+  await writer.write(Uint8Array.of(1, 2, 3, 4))
+  await writer.close()
+  const prepared = await preparedFile(92, handle, binding.operationId, binding.authorityRef)
+  let repository = await IndexedDbFileCheckpointRepository.open(binding, databaseName)
+  try {
+    await repository.createInitialCheckpoint(prepared.candidate)
+    await repository.commitCreatedFile(prepared.created)
+    const previous = newFileCheckpointV2({ ...prepared.initialCommitted,
+      stateGeneration: 2n, checkpointGeneration: 1n, verifiedRanges: [{ start: 0n, end: 4n }] })
+    await repository.commitDurableCut(prepared.initialCommitted, previous)
+    const current = { ...previous, fileRevision: identity(16, 98) }
+    const classification = await repository.lookupLineage({
+      ...prepared.lookup, ...current, lineageId: deriveCheckpointLineageID(previous),
+    })
+    if (protocol === 'candidate') {
+      const promote = repository.commitCheckpointCandidate
+      repository.commitCheckpointCandidate = async () => { throw new Error('interrupted before promotion') }
+      await admitCheckpointMetadataReuse(previous, current, repository, undefined)
+        .then(() => { throw new Error('candidate admission unexpectedly completed') }, error => {
+          if (!(error instanceof Error) || error.message !== 'interrupted before promotion') throw error
+        })
+      repository.commitCheckpointCandidate = promote
+      repository.close()
+      repository = await IndexedDbFileCheckpointRepository.open(binding, databaseName)
+      const pending = (await repository.scanCandidates({ direction: 'ascending' })).records[0]!
+      if ((await repository.readCommitted(previous.recordId))?.checksum !== previous.checksum ||
+          pending.ownedObjectId !== previous.ownedObjectId || (await handle.getFile()).size !== 4) {
+        throw new Error('interrupted admission lost its predecessor or local file')
+      }
+      await repository.resolveCandidate(pending, { kind: 'verified',
+        committed: newFileCheckpointV2({ ...pending, commitState: FILE_CHECKPOINT_COMMIT_VERIFIED }) })
+    }
+    const accepted = protocol === 'candidate' ? (await repository.readCommitted(previous.recordId))!
+      : await admitCheckpointMetadataReuse(previous, current, repository, repository)
+    repository.close()
+    repository = await IndexedDbFileCheckpointRepository.open(binding, databaseName)
+    const retry = protocol === 'candidate'
+      ? await admitCheckpointMetadataReuse(accepted, current, repository, undefined)
+      : await admitCheckpointMetadataReuse(previous, current, repository, repository)
+    const persisted = await repository.readCommitted(accepted.recordId)
+    const staleRejected = await admitCheckpointMetadataReuse(previous,
+      { ...current, fileRevision: identity(16, 99) }, repository, repository)
+      .then(() => false, () => true)
+    const retainedBytes = [...new Uint8Array(await (await handle.getFile()).arrayBuffer())]
+    const completing = await handle.createWritable({ keepExistingData: true })
+    await completing.write({ type: 'write', position: 4, data: Uint8Array.of(5, 6, 7, 8) })
+    await completing.close()
+    const finalCheckpoint = newFileCheckpointV2({ ...accepted,
+      stateGeneration: accepted.stateGeneration + 1n, checkpointGeneration: accepted.checkpointGeneration + 1n,
+      verifiedRanges: [{ start: 0n, end: 8n }] })
+    const ledger = prepared.finalCommit.binding
+    const finalOutput = new VerifiedFinalOutputFile({
+      backend: 'browser-fsa', outputSessionId: 'metadata-resume',
+      canonicalPath: snapshotMaterializationRootRelativePath(finalCheckpoint.canonicalPath),
+      ownedFileIdentity: finalCheckpoint.ownedObjectId,
+    }, { shareInstance: identity(16, 13), fileId: current.fileId, fileRevision: current.fileRevision }, 8n)
+    const records = await createFinalizedFileMaterializationRecords({ binding: ledger, finalOutput, finalCheckpoint })
+    await repository.commitFinalFile({ binding: ledger, expectedCommittedCheckpoint: accepted, records,
+      expectedPersistedOwnedFileIdentity: finalCheckpoint.ownedObjectId })
+    const historicalRejected = await admitCheckpointMetadataReuse(finalCheckpoint,
+      { ...current, fileRevision: identity(16, 100) }, repository, repository).then(() => false, () => true)
+    return {
+      classification: classification.kind, sameRecord: accepted.recordId === previous.recordId,
+      sameObject: accepted.ownedObjectId === previous.ownedObjectId,
+      persisted: persisted?.checksum === accepted.checksum, retry: retry.checksum === accepted.checksum,
+      staleRejected, historicalRejected, retainedBytes,
+      historyIntact: (await repository.readCommitted(finalCheckpoint.recordId))?.checksum === finalCheckpoint.checksum,
+      fileBytes: [...new Uint8Array(await (await handle.getFile()).arrayBuffer())],
+    }
+  } finally {
+    repository.close()
+    await root.removeEntry(name).catch(() => undefined)
+    await deleteDatabase(databaseName)
+  }
 }

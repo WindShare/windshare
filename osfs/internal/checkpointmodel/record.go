@@ -18,11 +18,11 @@ import (
 )
 
 const (
-	SchemaVersion uint8 = 3
+	SchemaVersion uint8 = 4
 
-	recordDomain         = "windshare/file-checkpoint-record/v3"
-	recordChecksumDomain = "windshare/file-checkpoint-checksum/v3"
-	recordMagic          = "WSFCPV3\x00"
+	recordDomain         = "windshare/file-checkpoint-record/v4"
+	recordChecksumDomain = "windshare/file-checkpoint-checksum/v4"
+	recordMagic          = "WSFCPV4\x00"
 
 	maximumPathBytes = catalog.MaxPathBytes
 	maximumRanges    = 16_384
@@ -33,14 +33,14 @@ const (
 )
 
 var (
-	ErrInvalidRecord        = errors.New("file checkpoint v3 is invalid")
-	ErrRecordChecksum       = errors.New("file checkpoint v3 checksum is invalid")
-	ErrRecordNonCanonical   = errors.New("file checkpoint v3 encoding is not canonical")
-	ErrRecordGeneration     = errors.New("file checkpoint v3 generation is invalid")
-	ErrRecordBinding        = errors.New("file checkpoint v3 binding is invalid")
-	ErrRecordObjectConflict = errors.New("file checkpoint v3 output object has multiple owners")
-	ErrRecordRecovery       = errors.New("file checkpoint v3 has no verified committed record")
-	ErrRecordCrashBoundary  = errors.New("file checkpoint v3 crash cut is not recoverable")
+	ErrInvalidRecord        = errors.New("file checkpoint v4 is invalid")
+	ErrRecordChecksum       = errors.New("file checkpoint v4 checksum is invalid")
+	ErrRecordNonCanonical   = errors.New("file checkpoint v4 encoding is not canonical")
+	ErrRecordGeneration     = errors.New("file checkpoint v4 generation is invalid")
+	ErrRecordBinding        = errors.New("file checkpoint v4 binding is invalid")
+	ErrRecordObjectConflict = errors.New("file checkpoint v4 output object has multiple owners")
+	ErrRecordRecovery       = errors.New("file checkpoint v4 has no verified committed record")
+	ErrRecordCrashBoundary  = errors.New("file checkpoint v4 crash cut is not recoverable")
 )
 
 type (
@@ -231,6 +231,8 @@ type RecordSpec struct {
 	MaterializationBindingDigest receivecontract.BindingDigest
 	FileID                       catalog.FileID
 	FileRevision                 content.FileRevision
+	SourceMetadata               content.SourceMetadata
+	ReusedFrom                   content.FileRevision
 	CanonicalPath                string
 	ExactSize                    uint64
 	MaterializerKind             MaterializerKind
@@ -257,6 +259,8 @@ type Record struct {
 	materializationBindingDigest receivecontract.BindingDigest
 	fileID                       catalog.FileID
 	fileRevision                 content.FileRevision
+	sourceMetadata               content.SourceMetadata
+	reusedFrom                   content.FileRevision
 	canonicalPath                string
 	exactSize                    uint64
 	materializerKind             MaterializerKind
@@ -300,6 +304,9 @@ func NewRecord(spec RecordSpec) (Record, error) {
 	if err != nil {
 		return Record{}, err
 	}
+	if !spec.ReusedFrom.IsZero() && (spec.SourceMetadata.IsZero() || spec.ReusedFrom == spec.FileRevision) {
+		return Record{}, ErrRecordBinding
+	}
 	if spec.ExactSize > catalog.MaxFileSize {
 		return Record{}, fmt.Errorf("%w: exact size", ErrRecordBinding)
 	}
@@ -329,19 +336,20 @@ func NewRecord(spec RecordSpec) (Record, error) {
 		materializationBindingDigest: spec.MaterializationBindingDigest,
 		fileID:                       spec.FileID,
 		fileRevision:                 spec.FileRevision,
-		canonicalPath:                canonical,
-		exactSize:                    spec.ExactSize,
-		materializerKind:             spec.MaterializerKind,
-		authorityRef:                 authority,
-		ownedObjectID:                object,
-		stateGeneration:              spec.StateGeneration,
-		checkpointGeneration:         spec.CheckpointGeneration,
-		verifiedRanges:               ranges,
-		phase:                        spec.Phase,
-		commitState:                  spec.CommitState,
-		quarantineReason:             spec.QuarantineReason,
-		quarantineOrigin:             spec.QuarantineOrigin,
-		retirementReason:             spec.RetirementReason,
+		sourceMetadata:               spec.SourceMetadata, reusedFrom: spec.ReusedFrom,
+		canonicalPath:        canonical,
+		exactSize:            spec.ExactSize,
+		materializerKind:     spec.MaterializerKind,
+		authorityRef:         authority,
+		ownedObjectID:        object,
+		stateGeneration:      spec.StateGeneration,
+		checkpointGeneration: spec.CheckpointGeneration,
+		verifiedRanges:       ranges,
+		phase:                spec.Phase,
+		commitState:          spec.CommitState,
+		quarantineReason:     spec.QuarantineReason,
+		quarantineOrigin:     spec.QuarantineOrigin,
+		retirementReason:     spec.RetirementReason,
 	}
 	record.recordID = record.derivedRecordID()
 	record.checksum = record.derivedChecksum()
@@ -458,6 +466,8 @@ func (record Record) MaterializationBindingDigest() receivecontract.BindingDiges
 }
 func (record Record) FileID() catalog.FileID                     { return record.fileID }
 func (record Record) FileRevision() content.FileRevision         { return record.fileRevision }
+func (record Record) SourceMetadata() content.SourceMetadata     { return record.sourceMetadata }
+func (record Record) ReusedFrom() content.FileRevision           { return record.reusedFrom }
 func (record Record) CanonicalPath() string                      { return record.canonicalPath }
 func (record Record) ExactSize() uint64                          { return record.exactSize }
 func (record Record) MaterializerKind() MaterializerKind         { return record.materializerKind }
@@ -487,6 +497,9 @@ func (record Record) validate() error {
 		record.authorityRef.IsZero() || record.ownedObjectID.IsZero() || record.recordID.IsZero() ||
 		record.exactSize > catalog.MaxFileSize || record.stateGeneration == 0 {
 		return fmt.Errorf("%w: identity or generation", ErrRecordBinding)
+	}
+	if !record.reusedFrom.IsZero() && (record.sourceMetadata.IsZero() || record.reusedFrom == record.fileRevision) {
+		return ErrRecordBinding
 	}
 	if _, err := canonicalCheckpointPath(record.canonicalPath); err != nil {
 		return err
@@ -518,8 +531,8 @@ func (record Record) validate() error {
 }
 
 func (record Record) derivedRecordID() RecordID {
-	// One logical file has one lifecycle in a task. Revision and object identity
-	// are immutable contents of that lifecycle, not a second lookup namespace.
+	// One logical file has one lifecycle in a task. Revision admission and object
+	// ownership are checked within that lifecycle, not a second lookup namespace.
 	id, _ := DeriveCheckpointLineageID(CheckpointLineageSpec{
 		OperationID: record.operationID, ReceiveIntentDigest: record.receiveIntentDigest,
 		MaterializationBindingDigest: record.materializationBindingDigest, FileID: record.fileID,
@@ -539,6 +552,8 @@ func (record Record) canonicalPayload() []byte {
 	writeRecordFrame(&encoded, record.materializationBindingDigest.Bytes())
 	writeRecordFrame(&encoded, record.fileID.Bytes())
 	writeRecordFrame(&encoded, record.fileRevision.Bytes())
+	writeRecordFrame(&encoded, record.sourceMetadata.Bytes())
+	writeRecordFrame(&encoded, record.reusedFrom.Bytes())
 	writeRecordFrame(&encoded, canonicalPathBytes(record.canonicalPath))
 	writeRecordFramedU64(&encoded, record.exactSize)
 	writeRecordFrame(&encoded, []byte{byte(record.materializerKind)})

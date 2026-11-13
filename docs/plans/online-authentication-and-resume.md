@@ -24,6 +24,8 @@ Evolve the existing `RevisionContinuity`, `RevisionComparison` and checkpoint mo
 
 Update the threat model to distinguish authenticated origin from best-effort source continuity. Permit reuse after a fresh applicability decision while retaining content/context binding, completeness rules and independent local write/delete authority. Keep protocol and output descriptions aligned as implementation proceeds.
 
+Implemented: independent source comparison evidence, unchanged-source metadata admission on native and browser storage, interruption-safe checkpoint updates, retained candidates, and recovery diagnostics. Metadata agreement remains best-effort; changed-source byte comparison is deferred.
+
 ### 2. Centralize session authentication
 
 Refactor `core/session/protocolsession` and `web/src/session` so business handlers receive messages only through the authenticated sender-session boundary.

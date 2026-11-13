@@ -1,3 +1,4 @@
+import { sourceMetadataFields } from '../../../content/revision-comparison'
 import { assertWorkspaceCheckpoint } from './task-settlement'
 import {
   FILE_CHECKPOINT_COMMIT_CANDIDATE,
@@ -5,6 +6,7 @@ import {
   MAX_CHECKPOINT_AUXILIARY_ENTRIES_PER_OPERATION,
   MAX_CHECKPOINT_RECORDS_PER_OPERATION,
   checkpointIdentityEqual,
+  fileCheckpointIsComplete,
   classifyCheckpointLineage,
   decodeFileCheckpointV2,
   deriveCheckpointLineageID,
@@ -58,6 +60,7 @@ interface StoredFileCheckpoint {
 }
 
 export interface CheckpointLineageAuthority {
+  readonly sourceMetadata?: string
   readonly lineageId: CheckpointLineageID
   readonly spec: CheckpointLineageSpec
   readonly fileId: string
@@ -120,7 +123,7 @@ export async function stageStoredCheckpointUpdate(
 ): Promise<void> {
   if (expectedCommitted.commitState === FILE_CHECKPOINT_COMMIT_CANDIDATE ||
       candidate.commitState !== FILE_CHECKPOINT_COMMIT_CANDIDATE ||
-      !checkpointIdentityEqual(expectedCommitted, candidate)) {
+      (expectedCommitted.fileRevision !== candidate.fileRevision && fileCheckpointIsComplete(expectedCommitted))) {
     abortIntegrity(transaction, 'checkpoint update changed physical identity or predecessor state')
   }
   validateFileCheckpointTransition(expectedCommitted, candidate)
@@ -214,6 +217,7 @@ export function checkpointLineageAuthority(
     fileId: request.fileId,
     canonicalPath: Object.freeze([...request.canonicalPath]),
     fileRevision: request.fileRevision,
+    ...sourceMetadataFields(request),
     exactSize: request.exactSize,
   })
 }
@@ -233,6 +237,7 @@ export function checkpointLineageAuthorityForCandidate(
     fileId: candidate.fileId,
     canonicalPath: candidate.canonicalPath,
     fileRevision: candidate.fileRevision,
+    ...sourceMetadataFields(candidate),
     exactSize: candidate.exactSize,
   })
 }
@@ -318,12 +323,12 @@ export function classifyCheckpointInventory(
   inventory: IndexedDbCheckpointInventory,
 ): CheckpointLineageDecision {
   const kind = classifyCheckpointLineage(
-    { fileRevision: authority.fileRevision, exactSize: authority.exactSize },
+    { fileRevision: authority.fileRevision, exactSize: authority.exactSize, ...sourceMetadataFields(authority) },
     inventory.lineageRecords,
     inventory.crossLineageOwnershipConflict,
   )
   if (kind === 'absent') return Object.freeze({ kind, lineageId: authority.lineageId })
-  if (kind === 'exact') {
+  if (kind === 'exact' || kind === 'metadata-match') {
     const record = inventory.lineageRecords[0]
     if (record === undefined || inventory.lineageRecords.length !== 1) {
       throw new TypeError('exact checkpoint lineage did not resolve to one physical authority')
@@ -550,9 +555,6 @@ function reconcilePhysicalCheckpoint(
       throw new IndexedDbCheckpointRecoveryRequiredError()
     }
     return candidate
-  }
-  if (!checkpointIdentityEqual(candidate, committed)) {
-    throw new TypeError('candidate and committed checkpoint identities disagree')
   }
   validateFileCheckpointTransition(committed, candidate)
   if (requireResolvedState) throw new IndexedDbCheckpointRecoveryRequiredError()

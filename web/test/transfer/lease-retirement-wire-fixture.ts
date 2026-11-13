@@ -115,8 +115,8 @@ class ScriptedWire implements FrameChannel {
 
 async function sealedRevision(share: ShareDescriptor, fileId: Uint8Array, signing: Awaited<ReturnType<typeof senderControlKeyPair>>) {
   const body = encodeCanonicalCbor(new Map<number, unknown>([
-    [0, 1n], [1, share.shareInstance], [2, fileId], [3, identity(fileId[0]! + 40)],
-    [4, FILE_BYTES], [5, null], [6, 0n], [7, 0n],
+    [0, 2n], [1, share.shareInstance], [2, fileId], [3, identity(fileId[0]! + 40)],
+    [4, FILE_BYTES], [5, null], [6, 0n], [7, 0n], [8, new Uint8Array(32)],
   ]))
   const binding = createRevisionObjectBinding(share.shareInstance, fileId)
   const header = new Uint8Array(8)

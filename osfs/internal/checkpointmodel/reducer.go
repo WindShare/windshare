@@ -11,6 +11,7 @@ func IdentityEqual(left, right Record) bool {
 		left.receiveIntentDigest == right.receiveIntentDigest &&
 		left.materializationBindingDigest == right.materializationBindingDigest &&
 		left.fileID == right.fileID && left.fileRevision == right.fileRevision &&
+		left.sourceMetadata == right.sourceMetadata && left.reusedFrom == right.reusedFrom &&
 		left.canonicalPath == right.canonicalPath && left.exactSize == right.exactSize &&
 		left.materializerKind == right.materializerKind && left.authorityRef == right.authorityRef &&
 		left.ownedObjectID == right.ownedObjectID
@@ -39,7 +40,7 @@ func ValidateTransition(previous, next Record) error {
 		return err
 	}
 	if !IdentityEqual(previous, next) {
-		return ErrRecordBinding
+		return validateMetadataReuse(previous, next)
 	}
 	if next.stateGeneration < previous.stateGeneration ||
 		next.checkpointGeneration < previous.checkpointGeneration {
@@ -259,6 +260,7 @@ func AdvanceGeneration(
 		OperationID: previous.operationID, ReceiveIntentDigest: previous.receiveIntentDigest,
 		MaterializationBindingDigest: previous.materializationBindingDigest,
 		FileID:                       previous.fileID, FileRevision: previous.fileRevision,
+		SourceMetadata: previous.sourceMetadata, ReusedFrom: previous.reusedFrom,
 		CanonicalPath: previous.canonicalPath, ExactSize: previous.exactSize,
 		MaterializerKind: previous.materializerKind, AuthorityRef: previous.authorityRef.Bytes(),
 		OwnedObjectID: previous.ownedObjectID.Bytes(), StateGeneration: previous.stateGeneration + 1,
@@ -292,6 +294,7 @@ func AdvanceState(
 		OperationID: previous.operationID, ReceiveIntentDigest: previous.receiveIntentDigest,
 		MaterializationBindingDigest: previous.materializationBindingDigest,
 		FileID:                       previous.fileID, FileRevision: previous.fileRevision,
+		SourceMetadata: previous.sourceMetadata, ReusedFrom: previous.reusedFrom,
 		CanonicalPath: previous.canonicalPath, ExactSize: previous.exactSize,
 		MaterializerKind: previous.materializerKind, AuthorityRef: previous.authorityRef.Bytes(),
 		OwnedObjectID: previous.ownedObjectID.Bytes(), StateGeneration: stateGeneration,
@@ -323,6 +326,7 @@ func Promote(candidate Record, phase Phase, commitState CommitState) (Record, er
 		OperationID: candidate.operationID, ReceiveIntentDigest: candidate.receiveIntentDigest,
 		MaterializationBindingDigest: candidate.materializationBindingDigest,
 		FileID:                       candidate.fileID, FileRevision: candidate.fileRevision,
+		SourceMetadata: candidate.sourceMetadata, ReusedFrom: candidate.reusedFrom,
 		CanonicalPath: candidate.canonicalPath, ExactSize: candidate.exactSize,
 		MaterializerKind: candidate.materializerKind, AuthorityRef: candidate.authorityRef.Bytes(),
 		OwnedObjectID: candidate.ownedObjectID.Bytes(), StateGeneration: candidate.stateGeneration,

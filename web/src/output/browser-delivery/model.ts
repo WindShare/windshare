@@ -2,7 +2,7 @@ import type { FileCheckpointV2 } from '../persistence/checkpoint'
 import type { DurableCheckpointNamespaceIdentity } from '../persistence/namespace'
 
 export const BROWSER_SAVE_POLICY_VERSION = 1 as const
-export const BROWSER_DELIVERY_RECORD_VERSION = 1 as const
+export const BROWSER_DELIVERY_RECORD_VERSION = 2 as const
 export const BROWSER_DELIVERY_PAGE_LIMIT = 128
 
 export type BrowserRecoveryPreference = 'automatic' | 'direct'
@@ -22,6 +22,7 @@ export interface BrowserSavePolicyV1 {
 export interface BrowserDeliverySource {
   readonly fileId: string
   readonly fileRevision: string
+  readonly sourceMetadata?: string
   readonly canonicalPath: readonly string[]
   readonly exactSize: bigint
 }

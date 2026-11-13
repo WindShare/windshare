@@ -15,18 +15,29 @@ export type DirectZipMemberRollbackPayloadV1 = Readonly<{
   new_committed_length: string
   retained_selected_payload_bytes: string
   member_ordinal: string
-  source_change_reason?:
+  recovery_reason?:
     | 'file_id_changed'
-    | 'revision_changed'
+    | 'metadata_changed'
+    | 'metadata_unavailable'
     | 'size_changed'
     | 'range_authority_changed'
   native_error_name?: string
+}>
+
+export type DirectZipSourceComparisonV1 = Readonly<{
+  file_id: string
+  previous_revision: string
+  current_revision: string
+  stage: 'admitted'
+  reason: 'same-revision' | 'metadata-agreement'
+  reused_bytes: string
 }>
 
 export type DirectZipMilestonePayloadV1 = Readonly<{
   operation_id: string
   session_id: string
   plan_kind: 'direct_resumable_zip'
+  source_comparison?: DirectZipSourceComparisonV1
   milestone:
     | 'session_started'
     | 'session_restored'

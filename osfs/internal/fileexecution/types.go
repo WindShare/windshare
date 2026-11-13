@@ -23,6 +23,7 @@ type CheckpointKey struct {
 	materialization receivecontract.BindingDigest
 	fileID          catalog.FileID
 	revision        content.FileRevision
+	metadata        content.SourceMetadata
 	path            string
 	exactSize       uint64
 	materializer    checkpointmodel.MaterializerKind
@@ -61,7 +62,7 @@ func (key CheckpointKey) CheckpointLineageSpec() (checkpointmodel.CheckpointLine
 
 func (key CheckpointKey) CheckpointLineageRequest() checkpointmodel.CheckpointLineageRequest {
 	return checkpointmodel.CheckpointLineageRequest{
-		FileRevision: key.revision, ExactSize: key.exactSize,
+		FileRevision: key.revision, ExactSize: key.exactSize, SourceMetadata: key.metadata,
 	}
 }
 
@@ -80,7 +81,8 @@ type CheckpointObservation struct {
 }
 
 // CheckpointResolution carries the shared closed decision while exposing a
-// physical record only when that decision grants exact range authority.
+// accepted record only for exact/reusable progress. Conflicts retain candidate
+// evidence without granting receiving authority.
 type CheckpointResolution struct {
 	decision checkpointmodel.CheckpointLineageDecision
 	record   checkpointmodel.Record
@@ -90,8 +92,8 @@ func ResolveCheckpoint(
 	decision checkpointmodel.CheckpointLineageDecision,
 	record checkpointmodel.Record,
 ) (CheckpointResolution, error) {
-	exact := decision == checkpointmodel.CheckpointLineageDecisionExact
-	if !decision.Valid() || exact != record.Valid() {
+	exact := decision == checkpointmodel.CheckpointLineageDecisionExact || decision == checkpointmodel.CheckpointLineageDecisionMetadataMatch
+	if !decision.Valid() || (decision != checkpointmodel.CheckpointLineageDecisionRevisionConflict && exact != record.Valid()) {
 		return CheckpointResolution{}, ErrInvalidObservation
 	}
 	return CheckpointResolution{decision: decision, record: record}, nil
@@ -102,13 +104,20 @@ func (resolution CheckpointResolution) Decision() checkpointmodel.CheckpointLine
 }
 
 func (resolution CheckpointResolution) Record() (checkpointmodel.Record, bool) {
-	return resolution.record, resolution.decision == checkpointmodel.CheckpointLineageDecisionExact &&
+	return resolution.record, (resolution.decision == checkpointmodel.CheckpointLineageDecisionExact || resolution.decision == checkpointmodel.CheckpointLineageDecisionMetadataMatch) &&
 		resolution.record.Valid()
 }
 
+func (resolution CheckpointResolution) Candidate() (checkpointmodel.Record, bool) {
+	return resolution.record, resolution.decision == checkpointmodel.CheckpointLineageDecisionRevisionConflict && resolution.record.Valid()
+}
+
 func (resolution CheckpointResolution) valid() bool {
+	if resolution.decision == checkpointmodel.CheckpointLineageDecisionRevisionConflict {
+		return true
+	}
 	return resolution.decision.Valid() &&
-		(resolution.decision == checkpointmodel.CheckpointLineageDecisionExact) == resolution.record.Valid()
+		(resolution.decision == checkpointmodel.CheckpointLineageDecisionExact || resolution.decision == checkpointmodel.CheckpointLineageDecisionMetadataMatch) == resolution.record.Valid()
 }
 
 type InitialCheckpointObservation struct {

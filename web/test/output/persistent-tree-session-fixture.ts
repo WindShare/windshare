@@ -155,6 +155,10 @@ export class MemoryCheckpointRepository implements FileCheckpointJournal {
   }
 
   async commitDurableCut(previous: FileCheckpointV2, durable: FileCheckpointV2): Promise<void> {
+    if (previous.fileRevision !== durable.fileRevision &&
+        [...this.#finalProofs.values()].some(proof => proof.recordId === previous.recordId)) {
+      throw new DOMException('metadata reuse cannot replace a historical delivery', 'InvalidStateError')
+    }
     await this.#replaceCommitted(previous, durable)
   }
 
@@ -282,18 +286,20 @@ export class MemoryCheckpointRepository implements FileCheckpointJournal {
     const records = [...physical.values()].filter(record =>
       sameCheckpointLineageSpec(record, spec))
     const decision = classifyCheckpointLineage(
-      { fileRevision: request.fileRevision, exactSize: request.exactSize },
+      request,
       records.map(record => ({
         fileRevision: record.fileRevision,
         exactSize: record.exactSize,
         ownedObjectId: record.ownedObjectId,
+        ...(record.sourceMetadata === undefined ? {} : { sourceMetadata: record.sourceMetadata }),
+        phase: record.phase, commitState: record.commitState,
       })),
     )
     if (decision === 'absent') {
       return Object.freeze({ kind: 'absent', lineageId: request.lineageId })
     }
-    if (decision === 'exact') {
-      return Object.freeze({ kind: 'exact', lineageId: request.lineageId, record: records[0]! })
+    if (decision === 'exact' || decision === 'metadata-match') {
+      return Object.freeze({ kind: decision, lineageId: request.lineageId, record: records[0]! })
     }
     return Object.freeze({
       kind: decision,

@@ -104,11 +104,12 @@ func (authority *Authority) fileRuntimeTrace() fileexecution.TraceSink {
 		projected := FilesystemOutputTrace{
 			Operation: TraceRuntimeDecision, ReceiveIntentDigest: event.IntentDigest,
 			ReceiveOperationID: event.OperationID, SessionID: event.SessionID, FileID: event.FileID,
-			RuntimeComponent:      FilesystemOutputRuntimeFile,
-			RuntimeOperation:      runtimeFileOperation(event.Operation),
-			RuntimeDecision:       runtimeFileDecision(event.Outcome),
-			CheckpointDecision:    runtimeCheckpointDecision(event.Decision),
-			OperationID:           event.Sequence,
+			RuntimeComponent:   FilesystemOutputRuntimeFile,
+			RuntimeOperation:   runtimeFileOperation(event.Operation),
+			RuntimeDecision:    runtimeFileDecision(event.Outcome),
+			CheckpointDecision: runtimeCheckpointDecision(event.Decision),
+			OperationID:        event.Sequence,
+			PreviousRevision:   event.PreviousRevision, CurrentRevision: event.CurrentRevision, RecoveryReason: event.RecoveryReason, ReusedBytes: event.ReusedBytes, RetainedBytes: event.RetainedBytes,
 			RetainedLiveFileCount: event.RetainedLiveFiles,
 		}
 		applyRuntimeFault(&projected, event.Fault)
@@ -122,6 +123,8 @@ func runtimeCheckpointDecision(
 	switch decision {
 	case checkpointmodel.CheckpointLineageDecisionAbsent:
 		return FilesystemCheckpointAbsent
+	case checkpointmodel.CheckpointLineageDecisionMetadataMatch:
+		return FilesystemCheckpointMetadataMatch
 	case checkpointmodel.CheckpointLineageDecisionExact:
 		return FilesystemCheckpointExact
 	case checkpointmodel.CheckpointLineageDecisionRevisionConflict:

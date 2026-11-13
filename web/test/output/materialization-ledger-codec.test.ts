@@ -65,10 +65,10 @@ describe('materialization ledger canonical records', () => {
       entryDigest: records.ledgerEntry.entryDigest,
     }).toEqual({
       bindingDigest: '098pA56SwZmaPFKFBPNiUNmMSIy_Y49BeaYsFhgFN9k',
-      proofId: '4cErNY2gL_cW0xqkWfY4oakXvomd2LuBxYcf3B-Pc74',
-      proofDigest: '9TP6iD0uIaqCPB4r1tAnHgBB3K2ZH2GEwg11WNodj30',
+      proofId: 'qizdMWReZQ9qGcYsehAKHgC7Qq40FAuZNlob4bMGync',
+      proofDigest: 'NOtvyUQlmslcrCgEFTY18wland1gMWw9J8GNbiADiHQ',
       entryId: '6HHayigSmD-fwCkzFl9Gmik0h_4U7rQZ9NBYs0s0D20',
-      entryDigest: 'PGXYMQ9Ds7Gl7BNRlNitMUTZhCscscHxdlaqw2h1cuQ',
+      entryDigest: '-KGohL9Tq-BspRek20jJaCouS5nNH6dGU18KM1ujh_g',
     })
     expect(Object.isFrozen(records.finalProof.finalOutput.source)).toBe(true)
   })

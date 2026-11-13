@@ -23,7 +23,7 @@ import {
 
 describe('IndexedDB operation repository contract', () => {
   it('isolates V2 receive authority and Direct ZIP journal stores', () => {
-    expect(CHECKPOINT_DATABASE_VERSION).toBe(12)
+    expect(CHECKPOINT_DATABASE_VERSION).toBe(13)
     const stores = new Map(INDEXEDDB_OPERATION_STORE_SCHEMAS.map(value => [value.name, value]))
     expect([...stores.keys()]).not.toContain('receive-operation-v1-records')
     expect(stores.get('receive-operation-v2-records')).toEqual(schema(
