@@ -54,6 +54,7 @@ export interface BrowserDeliveryRuntimeTrace {
   readonly file_id: string
   readonly transition: 'placement' | 'receiving' | 'copy-started' | 'copy-failed' | 'target-saved' | 'cleanup-failed' | 'cleaned'
     | 'stop-staging-preserved' | 'stop-cleanup-pending' | 'discard-started' | 'discarded' | 'discard-failed'
+    | 'restart-authorized' | 'restart-recovering' | 'restart-completed'
   readonly placement?: BrowserFilePlacement
   readonly placement_reason?: string
   readonly received_bytes?: bigint
