@@ -1,4 +1,4 @@
-use std::{env, fs, path::PathBuf, process::Command};
+use std::{env, path::PathBuf, process::Command};
 
 fn main() {
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest directory"));
@@ -47,10 +47,4 @@ fn main() {
         .status()
         .expect("Install Go and a C compiler (MinGW-w64 GCC on Windows)");
     assert!(status.success(), "Go host build failed");
-    // Runtime lookup is executable-relative, so packaged builds never depend on
-    // Cargo's OUT_DIR or the original checkout. The C header is a build artifact.
-    let profile = output.ancestors().nth(3).expect("Cargo profile directory");
-    fs::copy(&library, profile.join(name)).expect("stage Go library beside desktop executable");
-    let header = library.with_extension("h");
-    fs::copy(&header, profile.join("windshare_host.h")).expect("stage C ABI header");
 }
