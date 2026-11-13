@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -279,6 +280,13 @@ func parseAbsoluteURL(raw string) (*url.URL, url.Values, error) {
 	}
 	if err := urlhost.Normalize(u); err != nil {
 		return nil, nil, fmt.Errorf("%w: invalid URL host", ErrMalformedLink)
+	}
+	// net/url accepts any decimal port, but WHATWG URL rejects values beyond
+	// 16 bits. Accepting them would derive an implicit relay no browser can open.
+	if port := u.Port(); port != "" {
+		if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+			return nil, nil, fmt.Errorf("%w: invalid URL port", ErrMalformedLink)
+		}
 	}
 	// URL.Query silently discards malformed pairs. Capability parsing must fail
 	// closed instead, or Go and the browser can derive different relay lists from
