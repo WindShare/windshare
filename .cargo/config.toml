@@ -1,0 +1,7 @@
+# Repo-wide Cargo cooldown for supply-chain protection (Rust 1.100+): ignore
+# newly published crate versions younger than 7 days unless already pinned in
+# Cargo.lock. Placed at the repo root so Cargo merges it into every workspace
+# (desktop, relay-rust, spikes) without duplicating per-workspace settings.
+# Emergency bypass: CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow cargo update ...
+[registry]
+global-min-publish-age = "7 days"
