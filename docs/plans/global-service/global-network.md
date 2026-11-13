@@ -212,12 +212,16 @@ Links open fast in both regions, and mainland P2P improves.
   installers, `cnN.` to `wsrelay`, and from P2 `api.` to `authority.windshare.link`.
 - Add an explicit public Origin mode to `wsrelay` for official relays. Run it under systemd behind
   TLS ingress on TCP 443 with `--public-endpoint`; selected STUN hosts also open UDP 3478.
+  The proxy overwrites a single-IP source header; configure `--trusted-proxies` and
+  `--source-ip-header` together so unrelated clients do not share the proxy's source limits.
 - Node configuration owns enabled services; ingress and discovery use the same state. Until P2,
   mainland relay service is disabled: reject registration, resume and joins, and close relay sessions
   when disabling it. STUN remains available; directory roles and Origin allowlists are not access control.
 - Before exposing a relay on an overage-billed plan, enforce a persistent node-wide egress byte budget
   shared across actors, reset only by the configured billing period. Exhaustion stops forwarding
-  on existing connections too. Account classes and fair scheduling arrive in P2.
+  on existing connections too. Budget exhaustion and service disablement are retryable node
+  unavailability, not share STOP or permanent access denial; preserve progress and other live paths.
+  Account classes and fair scheduling arrive in P2.
 - The Cloudflare deployment gains a `frontend` mode beside `full` and `relay-only`: static assets
   only, serving `windshare.link` and the other lines of `s.`.
 - One release pipeline publishes each web build to Cloudflare and both mainland servers, because
@@ -260,8 +264,11 @@ Directory payload, signed as exact bytes with Ed25519 so no JSON canonicalizatio
   reject rollback within a generation. Only a root-authorized higher generation can replace it
   and restart serial numbering; online keys cannot advance the generation.
 - Directory trust ends at the earlier of certificate expiry or payload expiry plus a bounded
-  client-defined grace period. Refresh in the background; afterward use explicit relays or
-  independent community discovery. Expiry alone does not end live transfers.
+  client-defined grace period. Refresh in the background; afterward use explicit relays or,
+  from P4, independent community discovery. Expiry alone does not end live transfers.
+  If default sharing has neither a valid directory nor a configured relay, reuse the directory
+  refresher for one bounded attempt; on failure, report temporary network unavailability, retain
+  selected files, and offer retry. Valid snapshots and configured relays never wait for refresh.
 - `status` is `canary`, `active`, or `draining`; `roles` reflects enabled node services. Until P2,
   `cn` nodes advertise only `stun` and enforce P0's relay shutdown locally.
 - `public_stun` holds standalone ICE endpoint records (URL, region, provider, failure domain);
@@ -287,7 +294,8 @@ Directory payload, signed as exact bytes with Ed25519 so no JSON canonicalizatio
   Optional coarse exit-location hints seed cold-start order without excluding regions or delaying sharing.
 - `connectivity/relayplan` (new, pure): configured candidates, directory nodes, connection observations,
   and policy in; an ordered plan and a decision record out.
-  1. Configured active relays come first, up to the protocol limit.
+  1. Maintain all configured active relays. Deduplicate network candidates against them and use only
+     remaining slots under the shared eight-endpoint limit.
   2. Unless the user chose configured relays only, candidates are `active` and `canary` nodes with the
      `relay` role, allowed by admission policy and not in cooldown.
   3. Order by recent connection results, P0 priors, capacity, and canary status; retain an unmeasured
@@ -299,25 +307,29 @@ Directory payload, signed as exact bytes with Ed25519 so no JSON canonicalizatio
   5. If the preferred backup is unavailable, use the best remaining candidate; one usable node
      can serve alone.
 
-  Zone preferences follow the admitted primary, not the sender's presumed location. Registration
-  advances through candidates with at most four network attempts in flight, within the protocol limit.
-  The first admission makes the link ready with a frozen set of at most four network candidates.
-  Target two network registrations under the diversity policy; later fallback stays within the
-  published set. Refactor `relayset` to park surplus candidates while retaining recovery material,
+  Zone preferences follow the admitted primary, not the sender's presumed location. Run at most four
+  network registration attempts concurrently; backoff frees slots for other candidates rather than
+  occupying them for a whole `WaitReady` recovery lifetime. Endpoint lifecycles retain registration
+  and resume authority. The first admission makes the link ready, freezing configured relays plus
+  at most four network candidates within the shared endpoint limit. Target two network registrations
+  under the diversity policy, subject to remaining slots; later fallback stays within the published
+  set. Refactor `relayset` to park surplus network candidates while retaining recovery material,
   without sending `STOP` or disrupting admitted sessions. Permanent share shutdown stops every
   attempted registration. Dormant candidates provide sender fallback, not extra live receiver
   entrypoints. Receivers stop routine retries of unavailable candidates while current paths meet
   demand, revisiting them for recovery or measured throughput needs. Explicit relays can serve alone.
-  Changes to the sender's active count or wake-up behavior require measured first-join coverage failures.
-- Frontend: an explicit frontend (`front_url`, `--front-url`), else the built-in link host, else the
-  backup entry when the link host is known unreachable from the sender. Bounded frontend checks on
+  Measure first-join coverage across zones using the final active relay pair. Changes to the sender's
+  active count or wake-up behavior require measured coverage failures.
+- Frontend: an explicit user choice (`front_url`, `--front-url`), else the built-in link host, else the
+  backup entry when the link host is known unreachable from the sender. Adding a relay must not save
+  its discovered `frontend_url` as a frontend override. Bounded frontend checks on
   network changes never delay sharing and cannot detect receiver-only blocking. An optional "Copy
   backup link" action reuses the share on the built-in backup host; switching hosts does not move
   browser download state.
 - Engine API: `ShareRequest` carries a relay intent, either explicit (`--relay`, the complete set as
-  today) or planned, plus an optional explicit frontend. `ShareReady` reports published candidates,
-  current admissions, frontend, and the decision. The CLI no longer calls `SelectRelays` or requires
-  a frontend.
+  today) or planned, plus an optional explicit frontend. `ShareReady` reports the frozen candidates,
+  initial admissions, frontend, and decision; live admissions use the existing availability queries
+  and observations. The CLI no longer calls `SelectRelays` or requires a frontend.
 - `engine/relayconfig`: configured relays (profiles, `active_relays`), a configured-relays-only switch,
   and the `front_url` override. The application injects the network through `engine.Config`.
   Initialization and refresh preserve explicit choices, including configured-only mode and disabled defaults.
