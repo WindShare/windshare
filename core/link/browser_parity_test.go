@@ -66,6 +66,8 @@ func TestParseResolvesCopiedSpellingsLikeBrowser(t *testing.T) {
 		{"URL inside fragment", base + "#https://other.example/#" + testKey},
 		{"two links joined by a line break", full + "\nhttps://other.example/" + testShareID + "#" + testKey},
 		{"two links joined by CRLF", full + "\r\nhttps://other.example/" + testShareID + "?r=https://r.example#" + testKey},
+		{"port beyond 16 bits", "https://ex.com:65536/" + testShareID + "#" + testKey},
+		{"zero-padded port beyond 16 bits", "https://ex.com:065536/" + testShareID + "#" + testKey},
 	}
 	for _, test := range rejected {
 		t.Run(test.name, func(t *testing.T) {
