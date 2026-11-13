@@ -7,13 +7,9 @@ import {
   probeBrowserHandoffCapabilities,
   type BrowserHandoffCapabilityFacts,
 } from '../portable/packaged-handoff'
-import {
-  createEnvironmentOffers,
-  sameGuaranteeFacts,
-  type BrowserHandoffTargetOffer,
-  type EnvironmentOffersInput,
-  type FSADirectoryContainerOffer,
-} from '../planning'
+import { createEnvironmentOffers, sameGuaranteeFacts } from '../planning/guarantees'
+import { type BrowserHandoffTargetOffer, type FSADirectoryContainerOffer } from '../model/artifacts/destinations'
+import { type EnvironmentOffersInput } from '../planning/contracts'
 import {
   BROWSER_HANDOFF_TARGET_ROUTE_ID,
   FSA_PARENT_DIRECTORY_ROUTE_ID,

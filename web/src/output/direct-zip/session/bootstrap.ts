@@ -1,12 +1,8 @@
 import { encodeBase64Url } from '../../../crypto/bytes'
 import { createFSAOwnedFileBinding } from '../../../transfer/intent'
 import type { ArtifactChoiceID, AvailableDirectZipPolicyDigests } from '../../../transfer/intent'
-import type {
-  BoundReceiveIntent,
-  CandidateMaterializationBinding,
-  MaterializationRouteIdentity,
-  ResolvedArtifactAction,
-} from '../../planning'
+import type { BoundReceiveIntent, CandidateMaterializationBinding } from '../../planning/binding'
+import type { MaterializationRouteIdentity, ResolvedArtifactAction } from '../../planning/contracts'
 import type { ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import type {
   DirectZipOperationLeaseEvidence,

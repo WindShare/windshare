@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   RetryableProjectionDiscoveryError,
   type AuthenticatedDiscoveryRequest,
-} from '../../src/transfer/projection'
+} from '../../src/transfer/projection/coordinator'
 import { SelectionProjectionRuntime } from '../../src/application/receive/discovery'
 import { ControllerObservability } from '../../src/application/receive/observation/coordinator'
 import type { JoinedBrowserShare } from '../../src/application/browser-share/gateway'

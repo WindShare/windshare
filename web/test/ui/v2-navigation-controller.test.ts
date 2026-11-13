@@ -19,7 +19,7 @@ import { RemoteOperationError } from '../../src/content/session-operations'
 import type {
   AuthenticatedDiscoveryRequest,
   AuthenticatedDiscoverySource,
-} from '../../src/transfer/projection'
+} from '../../src/transfer/projection/coordinator'
 import { BrowserNavigationCoordinator } from '../../src/ui/controller/navigation'
 import { captureLocation, ReceiverController } from '../../src/ui/controller'
 import type {

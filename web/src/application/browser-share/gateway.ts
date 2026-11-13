@@ -40,7 +40,7 @@ import { FilePreview } from '../../preview/preview'
 import { TransferJob, type TransferJobOptions } from '../../transfer/job'
 import { type ReceiveIntent } from '../../transfer/intent'
 import type { PlanExecutionAuthority } from '../../transfer/output/session'
-import type { AuthenticatedDiscoverySource } from '../../transfer/projection'
+import type { AuthenticatedDiscoverySource } from '../../transfer/projection/coordinator'
 import { type RelayReceiverConnection } from '../../transport/relay/receiver'
 import { JoinedProjectionSource } from './discovery/source'
 

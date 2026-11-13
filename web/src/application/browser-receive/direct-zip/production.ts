@@ -21,7 +21,7 @@ import {
   type ReceiveOperationLeaseRecord,
 } from '../../../output/workspace/records'
 import type { ReceiveOperationRepository } from '../../../output/workspace/repository'
-import { receiveOperationDisplayFields } from '../../../output/workspace/operation-display'
+import { receiveOperationDisplayFields } from '../../../output/model/operation-display'
 import { initialReceiveLifecycleState, nextReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import { storedReceiveLifecycleState } from '../../../output/workspace/state-codec'
 import {
@@ -29,7 +29,7 @@ import {
   validateReceiveIntent,
 } from '../../../transfer/intent'
 import type { DirectZipIntent } from '../../../transfer/direct-zip'
-import type { BoundReceiveIntent } from '../../../output/planning'
+import type { BoundReceiveIntent } from '../../../output/planning/binding'
 import type { ReopenedDirectZipOperation } from '../../../output/resume/reopen-authority'
 import type { OutputTraceSource } from '../../../output/diagnostics'
 import type {

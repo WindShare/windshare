@@ -9,6 +9,7 @@ const HARNESS_PATH = '/test/browser/fsa-namespace-atomicity-harness.ts'
 const INDEXEDDB_DATABASE_PATH = '/src/output/browser/indexeddb-database.ts'
 const INDEXEDDB_LEDGER_PATH = '/src/output/browser/indexeddb-compatible-name-ledger.ts'
 const INDEXEDDB_REPOSITORY_PATH = '/src/output/browser/indexeddb-repository.ts'
+const NAME_REPAIR_MODEL_PATH = '/src/transfer/lifecycle/name-repair.ts'
 const COMPATIBLE_NAME_MODEL_PATH = '/src/output/file-system-access/compatible-name/model.ts'
 const COMPATIBLE_NAME_RESOLVER_PATH = '/src/output/file-system-access/compatible-name/resolver.ts'
 const WORKSPACE_RECORDS_PATH = '/src/output/workspace/records.ts'
@@ -355,6 +356,8 @@ test('compatible-name ledger keeps pair ownership and contiguous commits across 
       typeof import('../../src/output/browser/indexeddb-repository')
     const model = await import(modulePaths.model) as
       typeof import('../../src/output/file-system-access/compatible-name/model')
+    const { compatibleNameRepairSummary } = await import(modulePaths.nameRepair) as
+      typeof import('../../src/transfer/lifecycle/name-repair')
     const records = await import(modulePaths.records) as
       typeof import('../../src/output/workspace/records')
     const { PhysicalPathResolver } = await import(modulePaths.resolver) as
@@ -417,7 +420,7 @@ test('compatible-name ledger keeps pair ownership and contiguous commits across 
       operationId: operation,
       logicalPath: ['root', 'rejected-directory'],
       entryKind: 'directory',
-      repairSummary: model.compatibleNameRepairSummary({
+      repairSummary: compatibleNameRepairSummary({
         committedCount: 0,
         logicalPathSample: [],
         pairDisplayNames: {
@@ -475,7 +478,7 @@ test('compatible-name ledger keeps pair ownership and contiguous commits across 
     })
     await ledger.persistRepairSummary(
       operation,
-      model.compatibleNameRepairSummary(summaryInput('active', true)),
+      compatibleNameRepairSummary(summaryInput('active', true)),
     )
     await ledger.persistPendingTerminalOutcome({
       operationId: operation,
@@ -501,7 +504,7 @@ test('compatible-name ledger keeps pair ownership and contiguous commits across 
           digest: receiptDigest,
         },
       }),
-      repairSummary: model.compatibleNameRepairSummary(summaryInput('active', true)),
+      repairSummary: compatibleNameRepairSummary(summaryInput('active', true)),
     })
     const pendingWasReadable = await ledger.readPendingTerminalOutcome(operation) !== undefined
     const pendingSummary = await ledger.readRepairSummary(operation)
@@ -509,10 +512,10 @@ test('compatible-name ledger keeps pair ownership and contiguous commits across 
       pendingSummary.terminalSettlement === 'pending'
     await ledger.clearPendingTerminalOutcome({
       operationId: operation,
-      repairSummary: model.compatibleNameRepairSummary(summaryInput('completed', false)),
+      repairSummary: compatibleNameRepairSummary(summaryInput('completed', false)),
     })
     const pendingWasCleared = await ledger.readPendingTerminalOutcome(operation) === undefined
-    const reportOnlySummary = model.compatibleNameRepairSummary({
+    const reportOnlySummary = compatibleNameRepairSummary({
       ...summaryInput('completed', false), pairDisplayNames: { sidecar: 'restore.windshare-aaaaaa.data' },
     })
     await ledger.persistRepairSummary(operation, reportOnlySummary)
@@ -520,7 +523,7 @@ test('compatible-name ledger keeps pair ownership and contiguous commits across 
     try {
       await ledger.persistRepairSummary(
         operation,
-        model.compatibleNameRepairSummary(summaryInput('active', true)),
+        compatibleNameRepairSummary(summaryInput('active', true)),
       )
     } catch {
       terminalSummaryImmutable = true
@@ -625,6 +628,7 @@ test('compatible-name ledger keeps pair ownership and contiguous commits across 
       ledger: INDEXEDDB_LEDGER_PATH,
       repository: INDEXEDDB_REPOSITORY_PATH,
       model: COMPATIBLE_NAME_MODEL_PATH,
+      nameRepair: NAME_REPAIR_MODEL_PATH,
       resolver: COMPATIBLE_NAME_RESOLVER_PATH,
       records: WORKSPACE_RECORDS_PATH,
     },
@@ -764,6 +768,7 @@ test('compatible-name ledger scopes mapping and pair claims to physical siblings
     modulePaths: {
       ledger: INDEXEDDB_LEDGER_PATH,
       model: COMPATIBLE_NAME_MODEL_PATH,
+      nameRepair: NAME_REPAIR_MODEL_PATH,
       resolver: COMPATIBLE_NAME_RESOLVER_PATH,
     },
   })

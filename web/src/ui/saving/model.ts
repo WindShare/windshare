@@ -1,9 +1,10 @@
-import type { ArtifactOffers, OfferedArtifactChoice } from '../../output/planning'
+import type { ArtifactOffers } from '../../output/model/artifacts/offers'
+import type { OfferedArtifactChoice } from '../../output/model/artifacts/choices'
 
 export type SavingOutcomeKind = 'original-file' | 'folder' | 'zip'
 
 export interface SavingChoice {
-  readonly recoveryPreference?: import('../../output/browser-delivery/model').BrowserRecoveryPreference
+  readonly recoveryPreference?: import('../../output/model/browser-delivery').BrowserRecoveryPreference
   readonly offered: OfferedArtifactChoice
   readonly label: string
   readonly outcome: SavingOutcomeKind

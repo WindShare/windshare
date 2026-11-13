@@ -79,7 +79,9 @@ export function findBoundaryViolations(graph, policy = TRANSFER_BOUNDARY) {
         if (visited.has(dependency)) continue
         visited.add(dependency)
         const next = [...chain, dependency]
-        if (dependency.startsWith('<') || policy.forbidden.some(directory => inside(dependency, directory))) {
+        if (dependency.startsWith('<') || policy.forbidden.some(directory => inside(dependency, directory)) ||
+            policy.publicSurfaces?.some(({ root, publicSubtree }) =>
+              inside(dependency, root) && !inside(dependency, publicSubtree))) {
           violations.push(next)
         } else if (!policy.stopAt?.some(directory => inside(dependency, directory))) {
           queue.push(next)

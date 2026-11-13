@@ -1,17 +1,13 @@
-import type { ReceiveOperationDisplay } from '../../output/workspace/operation-display'
+import type { ReceiveOperationDisplay } from '../../output/model/operation-display'
 import type { FailureFact } from '../../diagnostics/incident'
 import type {
   OutputFailureBindingLease,
   OutputFailureSinks,
 } from '../../output/diagnostics'
-import type {
-  BoundReceiveIntent,
-  CandidateMaterializationBinding,
-  EnvironmentOffers,
-  OfferedArtifactChoice,
-  ResolvedArtifactAction,
-} from '../../output/planning'
-import type { ReceiveOperationContinuation } from '../../output/resume/descriptor'
+import type { BoundReceiveIntent, CandidateMaterializationBinding } from '../../output/planning/binding'
+import type { EnvironmentOffers, ResolvedArtifactAction } from '../../output/planning/contracts'
+import type { OfferedArtifactChoice } from '../../output/model/artifacts/choices'
+import type { ReceiveOperationContinuation } from '../../output/model/continuation'
 import type { ReceiveLifecycleState } from '../../output/workspace'
 import type { CompatibleNameRepairProjectionSource } from '../../output/file-system-access/compatible-name/coordinator'
 import type {
@@ -181,7 +177,7 @@ export interface RetainedReceiveOperation {
   readonly continuation: ReceiveOperationContinuation
   readonly actions: readonly RetainedReceiveAction[]
   readonly sourceRevisionFailures?: import('../../transfer/lifecycle/source-revision').SourceRevisionFailures
-  readonly browserDelivery?: import('../../output/browser-delivery/retained').BrowserDeliveryResumeSummary
+  readonly browserDelivery?: import('../../output/model/browser-delivery').BrowserDeliverySummary
   readonly recoverySummary?: RecoverySummary
   readonly unavailableReason?: string
 }
@@ -226,7 +222,7 @@ export interface ReceiveCompositionPort {
     preClickRanking: readonly ArtifactChoiceID[],
     failures?: OutputFailureSinks,
     display?: ReceiveOperationDisplay,
-    recoveryPreference?: import('../../output/browser-delivery/model').BrowserRecoveryPreference,
+    recoveryPreference?: import('../../output/model/browser-delivery').BrowserRecoveryPreference,
   ): ArtifactPresentationAuthority
 }
 
@@ -234,7 +230,7 @@ export interface BrowserFolderProgressSnapshot {
   readonly kind: 'browser-folder'
   readonly operationId: string
   readonly generation: bigint
-  readonly summary: import('../../output/browser-delivery/retained').BrowserDeliveryResumeSummary
+  readonly summary: import('../../output/model/browser-delivery').BrowserDeliverySummary
 }
 
 export interface BrowserFolderProgressSource {

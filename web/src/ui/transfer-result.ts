@@ -1,6 +1,4 @@
-import {
-  compatibleNameRepairSummary,
-} from '../output/file-system-access/compatible-name/model'
+import { compatibleNameRepairSummary } from '../transfer/lifecycle/name-repair'
 import {
   type CompatibleNameRepairSummary,
 } from '../transfer/lifecycle/name-repair'

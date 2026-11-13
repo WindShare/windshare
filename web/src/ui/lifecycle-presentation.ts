@@ -1,6 +1,6 @@
 import { availableReceiveActions, receiveLifecycleCategory, newReceiveOperationKind, type ReceiveActionFacts } from '../application/receive/policy'
 import type { LifecycleUserAction, PersistentWriterOpenPauseFact, ActiveReceiveControl, ReceiveSettlementWait, WorkspaceUsage } from '../application/receive/actions'
-import { artifactRequestedName } from '../output/planning'
+import { artifactRequestedName } from '../output/model/artifact-name'
 import type {
   CompatibleNameRepairSummary,
 } from '../transfer/lifecycle/name-repair'
@@ -107,7 +107,7 @@ export function presentReceiveLifecycle(input: Readonly<{
   recoverySummary?: RecoverySummary | null
   writerOpenPause?: PersistentWriterOpenPauseFact | null
   directZipProgress?: DirectZipProgressSnapshot | null
-  browserDelivery?: import('../output/browser-delivery/retained').BrowserDeliveryResumeSummary | null
+  browserDelivery?: import('../output/model/browser-delivery').BrowserDeliverySummary | null
 }>): ReceiveLifecyclePresentation {
   const compatibleNameRepair = input.repairSummary === undefined || input.repairSummary === null
     ? null

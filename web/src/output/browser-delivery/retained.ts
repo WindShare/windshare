@@ -3,25 +3,10 @@ import { stageCheckpoint, targetCheckpoint } from './lifecycle'
 import type { BrowserDeliveryRecordV1, BrowserSavePolicyV1 } from './model'
 import { validateBrowserSavePolicy } from './policy'
 import { validateBrowserDeliveryRecord } from './records'
-
-export interface BrowserDeliveryResumeSummary {
-  readonly policy: BrowserSavePolicyV1
-  readonly receivingFiles: number
-  readonly incompleteStagedFiles: number
-  readonly stagedCompleteFiles: number
-  readonly copyingFiles: number
-  readonly cleanupPendingFiles: number
-  readonly targetSavedFiles: number
-  readonly discardedFiles: number
-  readonly recoverableBytes: bigint
-  readonly stagedBytes: bigint
-  readonly reservedStagingBytes: bigint
-  readonly targetSavedBytes: bigint
-  readonly localContinuation?: 'save-staged-files' | 'retry-staging-cleanup'
-}
+import type { BrowserDeliverySummary } from '../model/browser-delivery'
 
 export interface BrowserDeliveryLocalContinuation {
-  readonly summary: BrowserDeliveryResumeSummary
+  readonly summary: BrowserDeliverySummary
   saveStagedFiles(signal?: AbortSignal): Promise<void>
   cleanupStaging(signal?: AbortSignal): Promise<void>
   /** Terminal receiving cannot reuse incomplete stages; completed files remain locally saveable. */
@@ -30,20 +15,15 @@ export interface BrowserDeliveryLocalContinuation {
   discardStaging(signal?: AbortSignal): Promise<void>
 }
 
-export function hasBrowserDeliveryStaging(summary: BrowserDeliveryResumeSummary): boolean {
-  // Empty owned files and reservations still require disposal authority.
-  return summary.incompleteStagedFiles + summary.stagedCompleteFiles + summary.copyingFiles + summary.cleanupPendingFiles > 0 ||
-    summary.reservedStagingBytes > 0n
-}
+type DeliveryCounters = Omit<BrowserDeliverySummary, 'operationId' | 'receiveIntentDigest'>
 
-type DeliveryCounters = Omit<BrowserDeliveryResumeSummary, 'policy' | 'localContinuation'>
 type MutableCounters = { -readonly [K in keyof DeliveryCounters]: DeliveryCounters[K] }
 
 /** This describes retained work; only reopened storage authority can authorize a local copy or deletion. */
 export function summarizeBrowserDeliveries(
   policyInput: BrowserSavePolicyV1,
   records: readonly BrowserDeliveryRecordV1[],
-): BrowserDeliveryResumeSummary {
+): BrowserDeliverySummary {
   const accumulator = new BrowserDeliveryResumeAccumulator(policyInput)
   accumulator.add(records)
   return accumulator.summary()
@@ -69,7 +49,7 @@ export class BrowserDeliveryResumeAccumulator {
     }
   }
 
-  summary(): BrowserDeliveryResumeSummary { return freezeSummary(this.#policy, this.#counters) }
+  summary(): BrowserDeliverySummary { return freezeSummary(this.#policy, this.#counters) }
 }
 
 /** Active tasks update only the changed file; retained history must not cause quadratic rehashing. */
@@ -93,12 +73,11 @@ export class BrowserDeliveryLiveProjection {
     this.#files.set(record.fileId, { generation: record.generation, digest: record.digest, counters })
   }
 
-  summary(): BrowserDeliveryResumeSummary { return freezeSummary(this.#policy, this.#counters) }
+  summary(): BrowserDeliverySummary { return freezeSummary(this.#policy, this.#counters) }
 }
 
-function freezeSummary(policy: BrowserSavePolicyV1, counters: DeliveryCounters): BrowserDeliveryResumeSummary {
-  const localContinuation = continuationFor(counters)
-  return Object.freeze({ policy, ...counters, ...(localContinuation === undefined ? {} : { localContinuation }) })
+function freezeSummary(policy: BrowserSavePolicyV1, counters: DeliveryCounters): BrowserDeliverySummary {
+  return Object.freeze({ operationId: policy.operationId, receiveIntentDigest: policy.receiveIntentDigest, ...counters })
 }
 
 function emptyCounters(): MutableCounters {
@@ -160,10 +139,4 @@ function addReceiving(
     counters.stagedBytes += durableBytes
     counters.reservedStagingBytes += record.source.exactSize
   }
-}
-
-function continuationFor(counters: DeliveryCounters): BrowserDeliveryResumeSummary['localContinuation'] {
-  if (counters.stagedCompleteFiles + counters.copyingFiles > 0) return 'save-staged-files'
-  if (counters.cleanupPendingFiles > 0) return 'retry-staging-cleanup'
-  return undefined
 }

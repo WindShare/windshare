@@ -1,5 +1,7 @@
+import { browserDeliveryLocalActions } from '../../src/output/model/browser-delivery-actions'
 import { localDeliveryFixture } from '../output/browser-delivery-local-fixture'
-import { IndexedDbBrowserDeliveryRepository, advanceBrowserDeliveryRecord } from '../../src/output/browser-delivery'
+import { IndexedDbBrowserDeliveryRepository } from '../../src/output/browser-delivery/indexeddb'
+import { advanceBrowserDeliveryRecord } from '../../src/output/browser-delivery/lifecycle'
 import { IndexedDbReceiveOperationRepository } from '../../src/output/browser/indexeddb/receive-operation-repository'
 import { IndexedDbReceiveResumeSource } from '../../src/output/browser/indexeddb-resume-state'
 import { acquireBrowserReceiveOperationLease } from '../../src/output/browser/session-lease'
@@ -7,7 +9,7 @@ import { createReceiveOperationV2, storedReceiveOperationRecord } from '../../sr
 import { storedReceiveLifecycleState } from '../../src/output/workspace/state-codec'
 import { deriveArtifactChoiceIdentity } from '../../src/transfer/intent'
 import { beginBrowserDeliveryLocalMutation, reconcileBrowserDeliveryLifecycle } from '../../src/output/browser-delivery/recovery/local-lifecycle'
-import { readBrowserDeliveryResumeSummary } from '../../src/output/browser-delivery/retained-authority'
+import { readBrowserDeliverySummary } from '../../src/output/browser-delivery/retained-authority'
 import { INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE, openIndexedDbCheckpointDatabase,
   requestResult, transactionCompletion } from '../../src/output/browser/indexeddb-database'
 import { storedCheckpoint } from '../../src/output/browser/indexeddb/repository-transactions'
@@ -46,7 +48,7 @@ export async function reopenLocalLifecycleCrash(databaseName: string) {
     const [partial] = await source.listLifecycleStates()
     if (partial?.kind !== 'resumable-receive' || partial.payloadKind !== 'file-set') throw new Error('Missing lifecycle')
     const summary = await source.readRecoverySummary(partial)
-    const retained = await readBrowserDeliveryResumeSummary({ repository: journal, operationId: f.intent.operationId, databaseName })
+    const retained = await readBrowserDeliverySummary({ repository: journal, operationId: f.intent.operationId, databaseName })
     const lease = await acquireBrowserReceiveOperationLease(repository, f.intent.operationId)
     let busySummaryAbsent = false
     let unchangedGeneration = ''
@@ -61,7 +63,7 @@ export async function reopenLocalLifecycleCrash(databaseName: string) {
     } finally { await lease.release() }
     return {
       partialGeneration: partial.generation.toString(), partialBytes: summary?.verifiedPartialBytes.toString(),
-      retainedAction: retained?.localContinuation, unchangedGeneration, busySummaryAbsent,
+      retainedActions: browserDeliveryLocalActions(partial, retained), unchangedGeneration, busySummaryAbsent,
     }
   } finally { repository.close(); journal.close(); source.close() }
 }

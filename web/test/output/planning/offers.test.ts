@@ -1,11 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { createSelectionSpec } from '../../../src/transfer/intent'
-import type { ArtifactActionsOffer } from '../../../src/output/planning'
-import {
-  createEnvironmentOffers,
-  offerArtifacts,
-} from '../../../src/output/planning'
+import type { ArtifactActionsOffer } from '../../../src/output/model/artifacts/offers'
+import { createEnvironmentOffers } from '../../../src/output/planning/guarantees'
+import { offerArtifacts } from '../../../src/output/planning/offers'
 import {
   COMPLETE_DISCOVERY,
   environment,

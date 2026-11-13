@@ -6,7 +6,7 @@ import type {
   DirectZipRuntimePolicyV1,
 } from '../../../output/direct-zip/session'
 import type { ReopenedDirectZipOperation } from '../../../output/resume/reopen-authority'
-import type { OfferedArtifactChoice } from '../../../output/planning'
+import type { OfferedArtifactChoice } from '../../../output/model/artifacts/choices'
 import type { OutputFailureSinks } from '../../../output/diagnostics'
 import type {
   ArtifactPresentationAuthority,

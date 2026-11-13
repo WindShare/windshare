@@ -2,7 +2,10 @@ import { IndexedDbReceiveOperationRepository } from '../../../output/browser/ind
 import { acquireBrowserReceiveOperationLease, type BrowserReceiveOperationLease } from '../../../output/browser/session-lease'
 import { openBrowserFolderDelivery, openBrowserFolderDeliveryCleanup } from '../../../output/browser-delivery/assembly'
 import { beginBrowserDeliveryLocalMutation, reconcileBrowserDeliveryLifecycle } from '../../../output/browser-delivery/recovery/local-lifecycle'
-import { isBrowserDeliveryLocalLifecycle, type BrowserDeliveryLocalAction } from '../../../output/browser-delivery/recovery/local-actions'
+import {
+  isBrowserDeliveryLocalLifecycle,
+  type BrowserDeliveryLocalAction,
+} from '../../../output/model/browser-delivery-actions'
 import { isTerminalLifecycleState, type ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import { IndexedDbBrowserDeliveryRepository } from '../../../output/browser-delivery/indexeddb'
 import { reopenFileSystemAccessOutput, type FileSystemAccessOutputSession } from '../../../output/file-system-access/session'

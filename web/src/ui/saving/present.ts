@@ -1,4 +1,5 @@
-import type { ArtifactOffers, OfferedArtifactChoice } from '../../output/planning'
+import type { ArtifactOffers } from '../../output/model/artifacts/offers'
+import type { OfferedArtifactChoice } from '../../output/model/artifacts/choices'
 import type { SavingActionPresentation, SavingChoice, SavingOutcome, SavingOutcomeKind, SavingPresentationTransition } from './model'
 
 const DESKTOP_GUIDANCE = 'Use the WindShare desktop receiver: install WindShare, then run wind get with this share link to save outside browser storage limits.'
@@ -71,7 +72,7 @@ function groupOutcomes(
 }
 
 function savingChoice(offered: OfferedArtifactChoice, disabledReason: string | null, actionLabel?: string,
-  recoveryPreference: import('../../output/browser-delivery/model').BrowserRecoveryPreference = 'automatic'): SavingChoice {
+  recoveryPreference: import('../../output/model/browser-delivery').BrowserRecoveryPreference = 'automatic'): SavingChoice {
   const kind = outcome(offered)
   const descriptions: Record<SavingOutcomeKind, string> = {
     'original-file': 'Keeps the original file and format.',
@@ -103,7 +104,7 @@ function choiceLabel(offered: OfferedArtifactChoice): string {
 }
 
 function routeConsequences(offered: OfferedArtifactChoice,
-  recoveryPreference: import('../../output/browser-delivery/model').BrowserRecoveryPreference): string[] {
+  recoveryPreference: import('../../output/model/browser-delivery').BrowserRecoveryPreference): string[] {
   switch (offered.route.kind) {
     case 'direct-tree':
       if (recoveryPreference === 'automatic' && offered.route.target.kind === 'fsa-parent-directory') return [

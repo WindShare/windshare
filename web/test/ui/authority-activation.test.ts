@@ -1,17 +1,17 @@
 import { describe, expect, it, vi } from 'vitest'
 
+import { bindReceiveIntent } from '../../src/output/planning/binding'
+import { materializationRouteIdentity } from '../../src/output/planning/guarantees'
+import { offerArtifacts } from '../../src/output/planning/offers'
 import {
-  bindReceiveIntent,
-  materializationRouteIdentity,
-  offerArtifacts,
   reconcileArtifactChoice,
   type ArtifactChoiceReconcileOutcome,
-  type ArtifactOffers,
-  type OfferedArtifactChoice,
-} from '../../src/output/planning'
+} from '../../src/output/planning/reconciliation'
+import { type ArtifactOffers } from '../../src/output/model/artifacts/offers'
+import { type OfferedArtifactChoice } from '../../src/output/model/artifacts/choices'
 import { initialReceiveLifecycleState } from '../../src/output/workspace'
 import { createSelectionSpec } from '../../src/transfer/intent'
-import type { SelectionProjectionState } from '../../src/transfer/projection'
+import type { SelectionProjectionState } from '../../src/transfer/projection/contracts'
 import {
   AuthorityActivationCoordinator,
   type AuthorityActivationOptions,

@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
+import { browserDeliveryLocalActions } from '../../src/output/model/browser-delivery-actions'
 import { acquireArtifactReader } from '../../src/output/origin-private/export-readers'
 import { browserDeliveryStagingPath } from '../../src/output/browser-delivery/records'
 import { deliveryEngineFixture } from './browser-delivery-engine-fixture'
-import { deliveryIdentity } from './browser-delivery-fixture'
+import { deliveryIdentity, stoppedDeliveryLifecycle } from './browser-delivery-fixture'
 import { deferred } from './persistent-tree-file-fixture'
 
 const FILE_ID = deliveryIdentity(11, 16)
@@ -127,7 +128,8 @@ describe('browser delivery Stop disposition', () => {
     expect(f.repository.files.get(FILE_ID)?.state.kind).toBe('discarding')
     expect(f.repository.files.get(deliveryIdentity(12, 16))?.state.kind).toBe('discarded')
     expect(f.phases.get(FILE_ID)).not.toBe('released')
-    expect(f.session.summary).toMatchObject({ localContinuation: 'retry-staging-cleanup', reservedStagingBytes: 4n })
+    expect(f.session.summary).toMatchObject({ cleanupPendingFiles: 1, reservedStagingBytes: 4n })
+    expect(browserDeliveryLocalActions(stoppedDeliveryLifecycle(f.policy), f.session.summary)).toEqual(['cleanup-staging'])
     const cleanup = await f.reopenCleanup()
     await cleanup.cleanupStaging()
     expect(cleanup.getSummary()).toMatchObject({ reservedStagingBytes: 0n, stagedBytes: 0n })
@@ -194,7 +196,7 @@ describe('browser delivery Stop disposition', () => {
     await f.session.closeForStopSettlement()
     expect(() => f.stageTree.file(STAGE_PATH)).toThrow()
     expect(f.repository.files.get(FILE_ID)?.state.kind).toBe('discarding')
-    expect(f.session.summary.localContinuation).toBe('retry-staging-cleanup')
+    expect(browserDeliveryLocalActions(stoppedDeliveryLifecycle(f.policy), f.session.summary)).toEqual(['cleanup-staging'])
     const cleanup = await f.reopenCleanup()
     await cleanup.cleanupStaging()
     expect(f.phases.get(FILE_ID)).toBe('released')

@@ -1,6 +1,6 @@
 import type { SelectionProjectionRuntime } from './discovery'
 import { validateReceiveIntent } from '../../transfer/intent'
-import type { ReceiveOperationDisplay } from '../../output/workspace/operation-display'
+import type { ReceiveOperationDisplay } from '../../output/model/operation-display'
 import { StaleReceiveBoundaryError } from './observation/contracts'
 import { selectionPolicyFromIntent } from './selection'
 import type { RetainedContinuationAdoption } from './retained/coordinator'

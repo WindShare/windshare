@@ -4,9 +4,12 @@ import type { CatalogPage, CatalogEntry, ShareDescriptor } from '../../src/catal
 import type { CommittedDirectory } from '../../src/catalog/page-store'
 import { SelectionPolicy } from '../../src/catalog/selection'
 import { createSelectionSpec, selectionRulesSpecFromPolicy } from '../../src/transfer/intent'
-import { discoverAuthenticatedSelection, SelectionProjectionController } from '../../src/transfer/projection'
+import { discoverAuthenticatedSelection } from '../../src/transfer/projection/coordinator'
+import { SelectionProjectionController } from '../../src/transfer/projection/reducer'
 import { JoinedProjectionSource, DRAFT_PREFETCH_DIRECTORY_LIMIT } from '../../src/application/browser-share/discovery/source'
-import { offerArtifacts, reconcileArtifactChoice, materializationRouteIdentity } from '../../src/output/planning'
+import { offerArtifacts } from '../../src/output/planning/offers'
+import { reconcileArtifactChoice } from '../../src/output/planning/reconciliation'
+import { materializationRouteIdentity } from '../../src/output/planning/guarantees'
 import { environment, fsaTarget } from '../output/planning/fixture'
 
 function identity(seed: number): Uint8Array<ArrayBuffer> {

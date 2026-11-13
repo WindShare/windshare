@@ -3,8 +3,8 @@ import type {
   DirectZipRuntimeAuthorityContractV1,
   DirectZipSupportFacts,
   RuntimeDirectZipSupportFacts,
-  ZipRouteRecommendationPolicy,
-} from '../../planning'
+} from '../../model/artifacts/destinations'
+import type { ZipRouteRecommendationPolicy } from '../../planning/contracts'
 import {
   canonicalDigest,
   canonicalFrame,

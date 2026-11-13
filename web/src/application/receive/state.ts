@@ -1,16 +1,11 @@
 import { activationOwnsChoice } from './activation/model'
 import { sameReceiveLifecycleState } from '../../output/workspace/lifecycle/observation'
-import {
-  sameArtifactChoiceSemantics,
-  type ArtifactChoice,
-  type ArtifactSizeProjection,
-  type ArtifactOffers,
-  type OfferedArtifactChoice,
-  type ResolvedArtifactAction,
-} from '../../output/planning'
-import {
-  compatibleNameRepairSummary,
-} from '../../output/file-system-access/compatible-name/model'
+import { sameArtifactChoiceSemantics } from '../../output/planning/guarantees'
+import { type ArtifactChoice, type OfferedArtifactChoice } from '../../output/model/artifacts/choices'
+import { type ArtifactSizeProjection } from '../../output/model/artifacts/projections'
+import { type ArtifactOffers } from '../../output/model/artifacts/offers'
+import { type ResolvedArtifactAction } from '../../output/planning/contracts'
+import { compatibleNameRepairSummary } from '../../transfer/lifecycle/name-repair'
 import {
   type CompatibleNameRepairSummary,
 } from '../../transfer/lifecycle/name-repair'
@@ -26,7 +21,7 @@ import type {
   MaterializationPlan,
   ReceiveIntent,
 } from '../../transfer/intent'
-import type { SelectionProjectionState } from '../../transfer/projection'
+import type { SelectionProjectionState } from '../../transfer/projection/contracts'
 import type { TransferJobResult } from '../../transfer/job/contract'
 import { PersistentWriterOpenPauseRequestedError } from '../../output/execution/persistent-file-transaction'
 import type { AuthorityActivationSnapshot } from './activation/model'
@@ -342,8 +337,8 @@ export class ReceiveRuntimeState {
     const intent = this.#snapshot.receiveIntent
     if (intent === null || intent.plan.kind !== 'direct-tree' ||
         progress.operationId !== intent.operationId ||
-        progress.summary.policy.operationId !== intent.operationId ||
-        progress.summary.policy.receiveIntentDigest !== intent.digest) return false
+        progress.summary.operationId !== intent.operationId ||
+        progress.summary.receiveIntentDigest !== intent.digest) return false
     const current = this.#snapshot.browserFolderProgress
     if (current != null && progress.generation <= current.generation) return false
     this.#publishLifecycleSnapshot({

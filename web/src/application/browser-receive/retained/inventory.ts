@@ -1,5 +1,5 @@
 import { readRetainedBrowserDeliveries, retainedBrowserDeliveryActions, type BrowserDeliveryRepositoryFactory } from '../fsa/retained-delivery'
-import { hasBrowserDeliveryStaging } from '../../../output/browser-delivery/retained'
+import { hasBrowserDeliveryStaging } from '../../../output/model/browser-delivery'
 import { runRetainedBrowserFolderAction } from '../fsa/local-delivery'
 import { reopenFolderDeliveryContext } from '../fsa/folder-delivery'
 import { canForgetReceiveOperationHistory } from '../../../output/resume/operation-history'
@@ -224,7 +224,7 @@ export async function listBrowserRetainedOperations(
       const browserDeliveries = options.openResumeSource === undefined || options.openBrowserDeliveryRepository !== undefined
         ? await readRetainedBrowserDeliveries(inventory.operations.map(reference => reference.descriptor),
             signal, options.openBrowserDeliveryRepository)
-        : new Map<string, import('../../../output/browser-delivery/retained').BrowserDeliveryResumeSummary>()
+        : new Map<string, import('../../../output/model/browser-delivery').BrowserDeliverySummary>()
       const locks = windowPort.navigator?.locks
       const activities = locks === undefined
         ? inventory.operations.map(() => 'inactive' as const)

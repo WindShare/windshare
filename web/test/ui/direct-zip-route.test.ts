@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ArtifactChoiceID } from '../../src/transfer/intent'
 import type { DirectZipRuntimeFactsV1 } from '../../src/output/direct-zip/session'
-import type { OfferedArtifactChoice } from '../../src/output/planning'
+import type { OfferedArtifactChoice } from '../../src/output/model/artifacts/choices'
 import type { ReceiveOperationMutationPort } from '../../src/output/resume/authority'
 import type {
   AuthorityOwnedReceiveOperationMutationResult,

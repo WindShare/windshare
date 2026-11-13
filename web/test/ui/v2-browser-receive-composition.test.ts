@@ -11,12 +11,10 @@ import {
   type OutputFailureSinks,
   type OutputTraceEvent,
 } from '../../src/output/diagnostics'
-import {
-  bindReceiveIntent,
-  materializationRouteIdentity,
-  offerArtifacts,
-  reconcileArtifactChoice,
-} from '../../src/output/planning'
+import { bindReceiveIntent } from '../../src/output/planning/binding'
+import { materializationRouteIdentity } from '../../src/output/planning/guarantees'
+import { offerArtifacts } from '../../src/output/planning/offers'
+import { reconcileArtifactChoice } from '../../src/output/planning/reconciliation'
 import type {
   ReceiveOperationMutationPort,
   ReceiveOperationResumeRequest,

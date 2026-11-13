@@ -5,12 +5,10 @@ import {
   sameArtifactChoiceSemantics,
   sameMaterializationPlanSemantics,
   sameMaterializationRouteIdentity,
-  type ArtifactChoice,
-  type BoundReceiveIntent,
-  type MaterializationRouteIdentity,
-  type OfferedArtifactChoice,
-  type ResolvedArtifactAction,
-} from '../../../output/planning'
+} from '../../../output/planning/guarantees'
+import { type ArtifactChoice, type OfferedArtifactChoice } from '../../../output/model/artifacts/choices'
+import { type BoundReceiveIntent } from '../../../output/planning/binding'
+import { type MaterializationRouteIdentity, type ResolvedArtifactAction } from '../../../output/planning/contracts'
 import {
   createOperationID,
   createPortableBinding,

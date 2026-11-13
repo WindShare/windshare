@@ -1,4 +1,4 @@
-import { offerArtifacts } from '../../../src/output/planning'
+import { offerArtifacts } from '../../../src/output/planning/offers'
 import { createSelectionSpec, createZipArchiveArtifact, createCompleteDirectoryResultRoot, createWorkspaceBinding, createWorkspaceThenPublishPlan } from '../../../src/transfer/intent'
 import { EMPTY_OUTPUT_PRESENTATION } from '../../../src/ui/output'
 import { EMPTY_PREVIEW, EMPTY_PROGRESS, type BrowseRow, type PreviewSnapshot, type ReceiverSnapshot } from '../../../src/ui/model'

@@ -112,7 +112,7 @@ export interface ReceiverSnapshot {
   readonly draft: SelectionDraft
   readonly startAdmission: Readonly<{ allowed: boolean; reason: string | null; canReleaseCurrent: boolean }>
   readonly activeReceiveOperationId: string | null
-  readonly taskDisplay: import('../output/workspace/operation-display').ReceiveOperationDisplay | null
+  readonly taskDisplay: import('../output/model/operation-display').ReceiveOperationDisplay | null
   readonly pathActivity: import('../receiver/path-activity').ReceiverPathActivitySnapshot
   readonly phase: ReceiverPhase
   readonly status: string

@@ -2,7 +2,8 @@ import {
   createSelectionSpec, createSingleFileDirectoryTreeArtifact, createFSANamedEntryReservation,
   createReceiveIntent, createDirectTreePlan,
 } from '../../src/transfer/intent'
-import { createBrowserSavePolicy, createBrowserDeliveryRecord, browserDeliveryStagingPath } from '../../src/output/browser-delivery'
+import { createBrowserSavePolicy } from '../../src/output/browser-delivery/policy'
+import { createBrowserDeliveryRecord, browserDeliveryStagingPath } from '../../src/output/browser-delivery/records'
 import { requireDirectTreeIntent } from '../../src/output/file-system-access/settlement-proof'
 import { createFSARecoveryCheckpointSnapshot } from '../../src/output/file-system-access/recovery-summary'
 import { newFileCheckpointV2, FILE_CHECKPOINT_PHASE_PAUSED, FILE_CHECKPOINT_PHASE_ACTIVE,

@@ -4,7 +4,8 @@ import type { PersistentFileRequest, PersistentFileTransactionPort, PersistentMa
 import { fileCheckpointIsComplete } from '../persistence/checkpoint'
 import type { BrowserDeliveryRecordV1, BrowserDeliverySource } from './model'
 import { browserDeliveryStagingPath, createBrowserDeliveryRecord, validateBrowserDeliveryRecord } from './records'
-import { BrowserDeliveryLiveProjection, type BrowserDeliveryResumeSummary } from './retained'
+import { BrowserDeliveryLiveProjection } from './retained'
+import { type BrowserDeliverySummary } from '../model/browser-delivery'
 import type { BrowserDeliveryPlacementDecision, BrowserDeliveryReservation, BrowserDeliveryStagePort, BrowserDeliveryTargetPort } from './ports'
 import { BrowserDeliveryEngine, checkpointBytes, type BrowserDeliveryEngineOptions } from './engine'
 
@@ -30,7 +31,7 @@ export class BrowserDeliveryMaterialization implements PersistentMaterialization
   readonly #transactions = new Set<BrowserDeliveryFileTransaction>()
   readonly #beginnings = new Set<Promise<PersistentFileTransactionPort>>()
   readonly #localWork = new Set<Promise<void>>()
-  readonly #listeners = new Set<(summary: BrowserDeliveryResumeSummary) => void>()
+  readonly #listeners = new Set<(summary: BrowserDeliverySummary) => void>()
   #newReceivedBytes = 0n
   #closed = false
   #receivingClosed = false
@@ -75,9 +76,9 @@ export class BrowserDeliveryMaterialization implements PersistentMaterialization
     return result
   }
 
-  get summary(): BrowserDeliveryResumeSummary { return this.getSummary() }
-  getSummary(): BrowserDeliveryResumeSummary { return this.#projection.summary() }
-  subscribe(listener: (summary: BrowserDeliveryResumeSummary) => void): () => void {
+  get summary(): BrowserDeliverySummary { return this.getSummary() }
+  getSummary(): BrowserDeliverySummary { return this.#projection.summary() }
+  subscribe(listener: (summary: BrowserDeliverySummary) => void): () => void {
     this.#listeners.add(listener)
     return () => this.#listeners.delete(listener)
   }

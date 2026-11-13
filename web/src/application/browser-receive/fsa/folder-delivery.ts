@@ -1,6 +1,6 @@
 import { openBrowserFolderDelivery, openBrowserFolderDeliveryCleanup } from '../../../output/browser-delivery/assembly'
-import type { BrowserRecoveryPreference } from '../../../output/browser-delivery/model'
-import type { BrowserDeliveryResumeSummary } from '../../../output/browser-delivery/retained'
+import type { BrowserRecoveryPreference } from '../../../output/model/browser-delivery'
+import type { BrowserDeliverySummary } from '../../../output/model/browser-delivery'
 import type { BrowserStagingStorageFacts } from '../../../output/planning/staging-storage'
 import type { OriginPrivateStorageManager } from '../../../output/browser/environment'
 import type { BrowserFolderProgressSnapshot, BrowserFolderProgressSource } from '../../receive/contracts'
@@ -61,9 +61,9 @@ export class BrowserFolderDeliveryProgress implements BrowserFolderProgressSourc
     return this.#snapshot
   }
 
-  publish(summary: BrowserDeliveryResumeSummary): void {
+  publish(summary: BrowserDeliverySummary): void {
     this.#snapshot = Object.freeze({
-      kind: 'browser-folder', operationId: summary.policy.operationId,
+      kind: 'browser-folder', operationId: summary.operationId,
       generation: ++this.#generation, summary,
     })
     for (const listener of this.#listeners) {

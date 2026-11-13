@@ -1,13 +1,7 @@
 import { activationOwnsChoice } from '../application/receive/activation/model'
-import type {
-  ArtifactChoice,
-  ArtifactOffers,
-  ArtifactOperation,
-  OfferUnavailableReason,
-  OfferedArtifactChoice,
-  ProjectedByteCount,
-  ZipRouteGroup,
-} from '../output/planning'
+import type { ArtifactChoice, ArtifactOperation, OfferedArtifactChoice } from '../output/model/artifacts/choices'
+import type { ArtifactOffers, OfferUnavailableReason, ZipRouteGroup } from '../output/model/artifacts/offers'
+import type { ProjectedByteCount } from '../output/model/artifacts/projections'
 import type { AuthorityActivationSnapshot } from '../application/receive/activation/model'
 import { formatBytes } from './progress-presentation'
 

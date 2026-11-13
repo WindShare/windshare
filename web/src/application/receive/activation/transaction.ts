@@ -2,10 +2,9 @@ import {
   materializationRouteIdentity,
   sameArtifactChoiceSemantics,
   sameMaterializationRouteIdentity,
-  type ArtifactActionsOffer,
-  type ArtifactChoice,
-  type OfferedArtifactChoice,
-} from '../../../output/planning'
+} from '../../../output/planning/guarantees'
+import { type ArtifactActionsOffer } from '../../../output/model/artifacts/offers'
+import { type ArtifactChoice, type OfferedArtifactChoice } from '../../../output/model/artifacts/choices'
 import type { ArtifactChoiceID, ReceiveIntent, SelectionSpec } from '../../../transfer/intent'
 import type { ReceivePlanningShare } from '../joined-share'
 import type { BoundReceiveOperation } from '../contracts'

@@ -7,7 +7,7 @@ import {
   type DirectZipRuntimePolicyV1,
 } from '../../../../src/output/direct-zip/session'
 import { directZipEpochPolicyDigestV2 } from '../../../../src/output/direct-zip/writer'
-import { sameRuntimeDirectZipSupport } from '../../../../src/output/planning'
+import { sameRuntimeDirectZipSupport } from '../../../../src/output/planning/guarantees'
 
 const FEATURES: DirectZipRequiredFeatureFactsV1 = Object.freeze({
   createWritable: 'function',

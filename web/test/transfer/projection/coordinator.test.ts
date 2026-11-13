@@ -4,15 +4,17 @@ import { encodeBase64Url } from '../../../src/crypto/bytes'
 import { createSelectionSpec } from '../../../src/transfer/intent'
 import {
   RetryableProjectionDiscoveryError,
-  SelectionProjectionController,
   discoverAuthenticatedSelection,
   retryAuthenticatedSelectionDiscovery,
   type AuthenticatedDiscoveryCompletion,
   type AuthenticatedDiscoverySource,
+} from '../../../src/transfer/projection/coordinator'
+import { SelectionProjectionController } from '../../../src/transfer/projection/reducer'
+import {
   type AuthenticatedProjectionEvidence,
-  type ProjectionTraceEvent,
   type SelectionProjectionState,
-} from '../../../src/transfer/projection'
+} from '../../../src/transfer/projection/contracts'
+import { type ProjectionTraceEvent } from '../../../src/transfer/projection/trace'
 
 const NO_EVIDENCE: readonly AuthenticatedProjectionEvidence[] = Object.freeze([])
 

@@ -8,7 +8,7 @@ import { summarizeBrowserDeliveries } from '../../src/output/browser-delivery/re
 
 // IndexedDB checkpoint reconciliation is covered by the browser storage contracts.
 vi.mock('../../src/output/browser-delivery/retained-authority', () => ({
-  readBrowserDeliveryResumeSummary: async ({ repository, operationId }: { repository: BrowserDeliveryRepository; operationId: string }) => {
+  readBrowserDeliverySummary: async ({ repository, operationId }: { repository: BrowserDeliveryRepository; operationId: string }) => {
     const policy = await repository.readPolicy(operationId)
     return policy === undefined ? undefined : summarizeBrowserDeliveries(policy, (await repository.scanFiles({ operationId })).records)
   },

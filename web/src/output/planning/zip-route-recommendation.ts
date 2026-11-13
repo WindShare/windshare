@@ -1,9 +1,7 @@
-import type {
-  OfferedArtifactChoice,
-  WorkspaceCostObservationV1,
-  ZipRouteGroup,
-  ZipRouteRecommendationPolicy,
-} from './contracts'
+import type { OfferedArtifactChoice } from '../model/artifacts/choices'
+import type { WorkspaceCostObservationV1 } from '../../transfer/projection/contracts'
+import type { ZipRouteGroup } from '../model/artifacts/offers'
+import type { ZipRouteRecommendationPolicy } from './contracts'
 export interface ZipRouteRecommendationInput {
   readonly direct: OfferedArtifactChoice | null
   readonly workspace: OfferedArtifactChoice | null

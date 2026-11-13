@@ -1,5 +1,5 @@
-import type { ReceiveOperationDisplay } from '../../output/workspace/operation-display'
-import type { BrowserRecoveryPreference } from '../../output/browser-delivery/model'
+import type { ReceiveOperationDisplay } from '../../output/model/operation-display'
+import type { BrowserRecoveryPreference } from '../../output/model/browser-delivery'
 import type { ArtifactChoiceID, SelectionSpec } from '../../transfer/intent'
 import type { TransferProgress } from '../../transfer/job'
 import { AuthorityActivationCoordinator } from './activation/coordinator'

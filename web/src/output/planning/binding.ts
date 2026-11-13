@@ -14,11 +14,8 @@ import type {
   SelectionSpec,
   WorkspaceBinding,
 } from '../../transfer/intent'
-import type {
-  EnvironmentTargetOffer,
-  OfferedMaterializationRoute,
-  ResolvedArtifactAction,
-} from './contracts'
+import type { EnvironmentTargetOffer, OfferedMaterializationRoute } from '../model/artifacts/destinations'
+import type { ResolvedArtifactAction } from './contracts'
 import {
   materializationPlanSemantics,
   sameGuaranteeFacts,

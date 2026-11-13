@@ -7,11 +7,10 @@ import {
 import {
   discoverAuthenticatedSelection,
   retryAuthenticatedSelectionDiscovery,
-  SelectionProjectionController,
-  type ProjectionEpoch,
-  type SelectionProjectionState,
-} from '../../transfer/projection'
-import type { EnvironmentOffers } from '../../output/planning'
+} from '../../transfer/projection/coordinator'
+import { SelectionProjectionController } from '../../transfer/projection/reducer'
+import { type ProjectionEpoch, type SelectionProjectionState } from '../../transfer/projection/contracts'
+import type { EnvironmentOffers } from '../../output/planning/contracts'
 import type { ReceivePlanningShare } from './joined-share'
 import type { ReceiveCompositionPort } from './contracts'
 import type { ReceiveObservationOptions } from './observation/contracts'

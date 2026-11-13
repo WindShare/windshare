@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import type { ReceiveOperationDisplay } from '../../../src/output/workspace/operation-display'
+import type { ReceiveOperationDisplay } from '../../../src/output/model/operation-display'
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader } from '@zip.js/zip.js'
 import { BROWSER_CONTRACT_HOST_PATH } from '../contract-host'
 

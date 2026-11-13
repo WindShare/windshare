@@ -13,7 +13,10 @@ import type { CatalogScanProgressListener } from '../../src/catalog/client'
 import { SelectionPolicy } from '../../src/catalog/selection'
 import { type ConnectivityActivation, ConnectivityRouteAuthority } from '../../src/connectivity/receiver-policy'
 import type { FilePreview } from '../../src/preview/preview'
-import type { AuthenticatedDiscoveryRequest, AuthenticatedDiscoverySource } from '../../src/transfer/projection'
+import type {
+  AuthenticatedDiscoveryRequest,
+  AuthenticatedDiscoverySource,
+} from '../../src/transfer/projection/coordinator'
 import { EMPTY_PREVIEW, type ReceiverSnapshot } from '../../src/ui/model'
 import type { BrowseDirectory } from '../../src/application/browser-share/gateway'
 

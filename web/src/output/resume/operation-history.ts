@@ -5,7 +5,7 @@ import type { ReceiveOperationHandleInventoryRepository } from '../workspace/rep
 import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import type { ReceiveOperationResumeDescriptor } from './descriptor'
 import { deriveArtifactChoiceIdentity, type ArtifactChoiceID, type ReceiveIntent } from '../../transfer/intent'
-import type { ReceiveOperationDisplay } from '../workspace/operation-display'
+import type { ReceiveOperationDisplay } from '../model/operation-display'
 import type { ReceiveOperationRepository } from '../workspace/repository'
 
 /** Portable output has no recoverable payload; only its terminal browser handoff is inventoried. */

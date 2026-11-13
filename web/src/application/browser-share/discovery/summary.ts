@@ -9,7 +9,7 @@ import type {
   AuthenticatedProjectionEvidence,
   SelectedRootFact,
   SettledLayoutBasisProof,
-} from '../../../transfer/projection'
+} from '../../../transfer/projection/contracts'
 
 export class ProjectionDiscoverySummary {
   readonly #partialDirectoryRoots = new Set<string>()

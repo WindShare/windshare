@@ -15,20 +15,20 @@ import type {
   ArtifactShapeProof,
   DiscoveryState,
   SelectionProjectionV1,
-} from '../../../src/transfer/projection'
-import { nextProjectionEpoch } from '../../../src/transfer/projection'
-import {
-  createEnvironmentOffers,
-} from '../../../src/output/planning'
+} from '../../../src/transfer/projection/contracts'
+import { nextProjectionEpoch } from '../../../src/transfer/projection/model'
+import { createEnvironmentOffers } from '../../../src/output/planning/guarantees'
 import type {
   DestinationGuaranteeFacts,
-  EnvironmentOffers,
-  EnvironmentTargetOfferInput,
   DirectZipSupportFacts,
   PortableEnvironmentOffer,
   WorkspaceEnvironmentOffer,
+} from '../../../src/output/model/artifacts/destinations'
+import type {
+  EnvironmentOffers,
+  EnvironmentTargetOfferInput,
   ZipRouteRecommendationPolicy,
-} from '../../../src/output/planning'
+} from '../../../src/output/planning/contracts'
 
 export const TEST_JOB_WORKSPACE_LIMIT = 8_589_934_592n
 export const TEST_PROCESS_WORKSPACE_LIMIT = 17_179_869_184n

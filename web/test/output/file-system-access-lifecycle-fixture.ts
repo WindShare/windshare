@@ -46,11 +46,11 @@ import {
   compatibleNameMappingV1,
   compatibleNameOperationBootstrapV1,
   compatibleNameOperationHeaderV1,
-  compatibleNameRepairSummary,
   type CompatibleNameMappingV1,
   type CompatibleNameOperationHeaderV1,
   type CompatibleNamePendingTerminalOutcomeV1,
 } from '../../src/output/file-system-access/compatible-name/model'
+import { compatibleNameRepairSummary } from '../../src/transfer/lifecycle/name-repair'
 import {
   type CompatibleNameRepairSummary,
 } from '../../src/transfer/lifecycle/name-repair'

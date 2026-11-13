@@ -1,5 +1,5 @@
 import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
-import type { ReceiveOperationDisplay } from '../../output/workspace/operation-display'
+import type { ReceiveOperationDisplay } from '../../output/model/operation-display'
 import type { CompatibleNameRepairPresentation } from '../compatible-name-repair-presentation'
 import type { LifecycleUserAction } from '../../application/receive/actions'
 import type { ReceiverProgress } from '../model'
@@ -40,13 +40,13 @@ export interface TaskFacts {
   readonly completeness: TaskCompleteness
   readonly publication: TaskPublication
   readonly progress: ReceiverProgress | null
-  readonly browserDelivery?: import('../../output/browser-delivery/retained').BrowserDeliveryResumeSummary | null
+  readonly browserDelivery?: import('../../output/model/browser-delivery').BrowserDeliverySummary | null
   readonly directZipProgress: DirectZipProgressSnapshot | null
   readonly fidelity: CompatibleNameRepairPresentation | null
   readonly details: readonly string[]
   readonly interruption: 'pause' | 'stop' | 'finish' | null
   readonly execution: Readonly<{ kind: 'active' }> |
-    Readonly<{ kind: 'retained'; continuation: import('../../output/resume/descriptor').ReceiveOperationContinuation }> |
+    Readonly<{ kind: 'retained'; continuation: import('../../output/model/continuation').ReceiveOperationContinuation }> |
     Readonly<{ kind: 'local-finalization' }>
 }
 

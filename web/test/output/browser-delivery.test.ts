@@ -1,11 +1,22 @@
 import { describe, expect, it } from 'vitest'
+import { browserDeliveryLocalActions } from '../../src/output/model/browser-delivery-actions'
 import {
-  advanceBrowserDeliveryRecord, assertBrowserDeliveryTransition, createBrowserDeliveryRecord,
-  createBrowserSavePolicy, snapshotBrowserDeliveryRecord, summarizeBrowserDeliveries,
-  validateBrowserDeliveryRecord, validateBrowserSavePolicy, BrowserDeliveryLiveProjection, type BrowserDeliveryState,
-} from '../../src/output/browser-delivery'
+  advanceBrowserDeliveryRecord,
+  assertBrowserDeliveryTransition,
+} from '../../src/output/browser-delivery/lifecycle'
+import {
+  createBrowserDeliveryRecord,
+  snapshotBrowserDeliveryRecord,
+  validateBrowserDeliveryRecord,
+} from '../../src/output/browser-delivery/records'
+import { createBrowserSavePolicy, validateBrowserSavePolicy } from '../../src/output/browser-delivery/policy'
+import {
+  summarizeBrowserDeliveries,
+  BrowserDeliveryLiveProjection,
+} from '../../src/output/browser-delivery/retained'
+import { type BrowserDeliveryState } from '../../src/output/browser-delivery/model'
 import { newFileCheckpointV2 } from '../../src/output/persistence/checkpoint'
-import { deliveryFixture, deliveryIdentity, deliveryPolicy } from './browser-delivery-fixture'
+import { deliveryFixture, deliveryIdentity, deliveryPolicy, stoppedDeliveryLifecycle } from './browser-delivery-fixture'
 
 describe('immutable browser save policy', () => {
   it('reuses only canonical immutable snapshots and validates clones and foreign policies', () => {
@@ -65,16 +76,18 @@ describe('durable per-file delivery semantics', () => {
     const complete = f.advance(f.initial, { kind: 'staged-complete', stage: f.stage! })
     expect(summarizeBrowserDeliveries(f.policy, [complete])).toMatchObject({
       recoverableBytes: 8n, stagedBytes: 8n, targetSavedBytes: 0n,
-      localContinuation: 'save-staged-files',
     })
+    expect(browserDeliveryLocalActions(stoppedDeliveryLifecycle(f.policy), summarizeBrowserDeliveries(f.policy, [complete])))
+      .toEqual(['save-staged-files'])
     const copying = f.advance(complete, { kind: 'copying', stage: f.stage!, attempt: { attemptId: 'first' } })
     const saved = f.advance(copying, { kind: 'target-saved', stage: f.stage!, target: f.target })
     const pending = f.advance(saved, { kind: 'cleanup-pending', stage: f.stage!, target: f.target })
     const cleaned = f.advance(pending, { kind: 'cleaned', target: f.target })
     expect(summarizeBrowserDeliveries(f.policy, [pending])).toMatchObject({
       recoverableBytes: 8n, targetSavedBytes: 8n, stagedBytes: 8n,
-      localContinuation: 'retry-staging-cleanup',
     })
+    expect(browserDeliveryLocalActions(stoppedDeliveryLifecycle(f.policy), summarizeBrowserDeliveries(f.policy, [pending])))
+      .toEqual(['cleanup-staging'])
     expect(summarizeBrowserDeliveries(f.policy, [cleaned])).toMatchObject({
       targetSavedFiles: 1, targetSavedBytes: 8n, stagedBytes: 0n, reservedStagingBytes: 0n,
     })
@@ -134,9 +147,12 @@ describe('durable per-file delivery semantics', () => {
   it('retains complete staging after a failed and drained target copy attempt', () => {
     const f = deliveryFixture()
     const complete = f.advance(f.initial, { kind: 'staged-complete', stage: f.stage! })
+    expect(browserDeliveryLocalActions(stoppedDeliveryLifecycle(f.policy), summarizeBrowserDeliveries(f.policy, [complete])))
+      .toEqual(['save-staged-files'])
     const copying = f.advance(complete, { kind: 'copying', stage: f.stage!, attempt: { attemptId: 'first' } })
     const retry = f.advance(copying, { kind: 'staged-complete', stage: f.stage!, failureReason: 'target denied' })
-    expect(summarizeBrowserDeliveries(f.policy, [retry]).localContinuation).toBe('save-staged-files')
+    expect(browserDeliveryLocalActions(stoppedDeliveryLifecycle(f.policy), summarizeBrowserDeliveries(f.policy, [retry])))
+      .toEqual(['save-staged-files'])
     expect(() => f.advance(copying, { kind: 'copying', stage: f.stage!, attempt: { attemptId: 'second' } })).toThrow(/drained/)
     expect(f.advance(retry, { kind: 'copying', stage: f.stage!, attempt: { attemptId: 'second' } }).state.kind).toBe('copying')
   })
@@ -183,7 +199,7 @@ describe('durable per-file delivery semantics', () => {
     const f = deliveryFixture()
     const receiving = f.advance(f.initial, { kind: 'receiving', checkpoint: f.stage! })
     expect(summarizeBrowserDeliveries(f.policy, [receiving])).toMatchObject({
-      receivingFiles: 0, incompleteStagedFiles: 0, stagedCompleteFiles: 1, targetSavedBytes: 0n, localContinuation: 'save-staged-files',
+      receivingFiles: 0, incompleteStagedFiles: 0, stagedCompleteFiles: 1, targetSavedBytes: 0n,
     })
   })
 
@@ -193,8 +209,10 @@ describe('durable per-file delivery semantics', () => {
     expect(summarizeBrowserDeliveries(f.policy, [receiving])).toMatchObject({ incompleteStagedFiles: 1, stagedBytes: 3n })
     const discarding = f.advance(receiving, { kind: 'discarding', checkpoint: f.checkpoint('staged', 3n) })
     expect(summarizeBrowserDeliveries(f.policy, [discarding])).toMatchObject({
-      incompleteStagedFiles: 0, cleanupPendingFiles: 1, stagedBytes: 3n, targetSavedBytes: 0n, localContinuation: 'retry-staging-cleanup',
+      incompleteStagedFiles: 0, cleanupPendingFiles: 1, stagedBytes: 3n, targetSavedBytes: 0n,
     })
+    expect(browserDeliveryLocalActions(stoppedDeliveryLifecycle(f.policy), summarizeBrowserDeliveries(f.policy, [discarding])))
+      .toEqual(['cleanup-staging'])
     const discarded = f.advance(discarding, { kind: 'discarded' })
     expect(summarizeBrowserDeliveries(f.policy, [discarded])).toMatchObject({
       discardedFiles: 1, targetSavedFiles: 0, recoverableBytes: 0n, stagedBytes: 0n,
@@ -224,6 +242,9 @@ describe('durable per-file delivery semantics', () => {
     live.replace(complete)
     expect(live.summary()).toMatchObject({ receivingFiles: 1, incompleteStagedFiles: 0, stagedCompleteFiles: 1 })
     expect(live.summary()).toEqual(summarizeBrowserDeliveries(f.policy, [complete, other]))
+    expect(Object.isFrozen(live.summary())).toBe(true)
+    expect(live.summary()).toMatchObject({ operationId: f.policy.operationId, receiveIntentDigest: f.policy.receiveIntentDigest })
+    expect(live.summary()).not.toHaveProperty('policy')
     expect(() => live.replace(f.initial)).toThrow(/stale/)
     const copying = f.advance(complete, { kind: 'copying', stage: f.stage!, attempt: { attemptId: 'local' } })
     const saved = f.advance(copying, { kind: 'target-saved', target: f.target, stage: f.stage! })

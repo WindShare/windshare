@@ -1,5 +1,6 @@
 import type { ArtifactChoiceID, ReceiveIntent } from '../../../transfer/intent'
-import type { BoundReceiveIntent, MaterializationRouteIdentity } from '../../planning'
+import type { BoundReceiveIntent } from '../../planning/binding'
+import type { MaterializationRouteIdentity } from '../../planning/contracts'
 import type { ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import type {
   DirectZipCheckpointTargetExpectation,

@@ -1,5 +1,5 @@
 import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
-import type { ReceiveOperationDisplay } from '../../output/workspace/operation-display'
+import type { ReceiveOperationDisplay } from '../../output/model/operation-display'
 import { presentCompatibleNameRepair } from '../compatible-name-repair-presentation'
 import type { ReceiverProgress } from '../model'
 import type { RetainedReceiveOperationSnapshot, PendingRetainedReceiveActionSnapshot } from '../../application/receive/retained/model'

@@ -1,15 +1,12 @@
 import { ReceiveLifecycleNotifications, type ReceiveLifecycleListener } from '../../src/output/workspace/lifecycle/observation'
 import { describe, expect, it, vi } from 'vitest'
 
-import {
-  bindReceiveIntent,
-  materializationRouteIdentity,
-  offerArtifacts,
-  reconcileArtifactChoice,
-  type CandidateMaterializationBinding,
-  type OfferedArtifactChoice,
-  type ResolvedArtifactAction,
-} from '../../src/output/planning'
+import { bindReceiveIntent, type CandidateMaterializationBinding } from '../../src/output/planning/binding'
+import { materializationRouteIdentity } from '../../src/output/planning/guarantees'
+import { offerArtifacts } from '../../src/output/planning/offers'
+import { reconcileArtifactChoice } from '../../src/output/planning/reconciliation'
+import { type OfferedArtifactChoice } from '../../src/output/model/artifacts/choices'
+import { type ResolvedArtifactAction } from '../../src/output/planning/contracts'
 import {
   RECEIVE_RECORD_LIFECYCLE_STATE,
   RECEIVE_RECORD_OPERATION,

@@ -4,6 +4,8 @@ export const TRANSFER_BOUNDARY = Object.freeze({
   forbidden: ['output', 'application', 'ui'],
 })
 
+const OUTPUT_PUBLIC_SURFACE = Object.freeze({ root: 'output', publicSubtree: 'output/model' })
+
 export const BOUNDARY_POLICIES = Object.freeze([
   TRANSFER_BOUNDARY,
   {
@@ -34,25 +36,18 @@ export const BOUNDARY_POLICIES = Object.freeze([
     forbidden: ['connectivity', 'receiver', 'transport', 'output', 'application', 'ui'],
   },
   {
+    name: 'output models expose facts and pure queries',
+    roots: ['output/model'],
+    publicSurfaces: [OUTPUT_PUBLIC_SURFACE],
+    forbidden: ['application', 'ui', 'package:react', 'package:react-dom', 'connectivity', 'receiver', 'transport'],
+  },
+  {
     name: 'presentation delegates output ownership to the application',
     roots: ['ui'],
-    forbidden: [
-      'application/browser-receive',
-      'output/browser', 'output/origin-private', 'output/execution', 'output/persistent-tree',
-      'output/portable', 'output/direct-zip/browser', 'output/direct-zip/browser-journal',
-      'output/direct-zip/target', 'output/direct-zip/writer', 'output/direct-zip/journal',
-      'output/file-system-access/execution', 'output/file-system-access/session.ts',
-      'output/browser-delivery/assembly.ts', 'output/browser-delivery/engine.ts',
-      'output/browser-delivery/session.ts', 'output/browser-delivery/repository.ts',
-      'output/browser-delivery/indexeddb', 'output/browser-delivery/indexeddb.ts',
-      'output/browser-delivery/staging.ts', 'output/browser-delivery/staging-root.ts',
-      'output/browser-delivery/retained-authority.ts', 'output/browser-delivery/recovery/authority.ts',
-      'output/browser-delivery/recovery/inventory.ts', 'output/browser-delivery/recovery/mutation-journal.ts',
-      'output/resume/reopen-authority.ts',
-      'output/workspace/repository.ts', 'output/workspace/stages',
-    ],
-    // Application commands and diagnostic services encapsulate their effects;
-    // presentation can still consume pure domain models without duplicate types.
+    publicSurfaces: [OUTPUT_PUBLIC_SURFACE],
+    forbidden: ['application/browser-receive'],
+    // Commands and diagnostic services own their effects. Public models remain
+    // traversable so a forwarding module cannot conceal private output access.
     stopAt: ['application', 'diagnostics'],
   },
 ])

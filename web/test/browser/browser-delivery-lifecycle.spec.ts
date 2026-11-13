@@ -15,7 +15,7 @@ test('local target checkpoint crash cuts reopen with exact lifecycle authority a
     const probe = await import(path) as typeof import('./browser-delivery-lifecycle-probe')
     return probe.reopenLocalLifecycleCrash(databaseName)
   }, { path: PROBE, databaseName })).toEqual({
-    partialGeneration: '8', partialBytes: '3', retainedAction: 'save-staged-files',
+    partialGeneration: '8', partialBytes: '3', retainedActions: ['save-staged-files'],
     unchangedGeneration: '8', busySummaryAbsent: true,
   })
   await page.reload()

@@ -7,24 +7,20 @@ import type {
 import type {
   RecoverySummary,
 } from '../../src/transfer/lifecycle/recovery-summary'
-import {
-  WorkspaceCostObservationAccumulatorV1,
-  materializationRouteIdentity,
-  offerArtifacts,
-  reconcileArtifactChoice,
-  type ArtifactChoice,
-  type ArtifactOffers,
-  type EnvironmentOffers,
-  type OfferedArtifactChoice,
-  type ResolvedArtifactAction,
-} from '../../src/output/planning'
+import { WorkspaceCostObservationAccumulatorV1 } from '../../src/output/planning/workspace-cost-observation'
+import { materializationRouteIdentity } from '../../src/output/planning/guarantees'
+import { offerArtifacts } from '../../src/output/planning/offers'
+import { reconcileArtifactChoice } from '../../src/output/planning/reconciliation'
+import { type ArtifactChoice, type OfferedArtifactChoice } from '../../src/output/model/artifacts/choices'
+import { type ArtifactOffers } from '../../src/output/model/artifacts/offers'
+import { type EnvironmentOffers, type ResolvedArtifactAction } from '../../src/output/planning/contracts'
 import type { ReceiveLifecycleState } from '../../src/output/workspace'
 import { PersistentPreservingWriterOpenError } from '../../src/output/persistent-tree/recovery'
 import { createSelectionSpec, type ReceiveIntent } from '../../src/transfer/intent'
 import { snapshotMaterializationRootRelativePath } from '../../src/transfer/job/coordinate/direct-tree'
 import { PersistentWriterOpenPauseRequestedError } from '../../src/output/execution/persistent-file-transaction'
 import type { TransferWorkerSettlement } from '../../src/transfer/outcome'
-import type { SelectionProjectionState } from '../../src/transfer/projection'
+import type { SelectionProjectionState } from '../../src/transfer/projection/contracts'
 import type {
   AuthorityActivationSnapshot,
   LiveAuthorityActivationSnapshot,

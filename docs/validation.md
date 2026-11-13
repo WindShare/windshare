@@ -51,7 +51,7 @@ short-go vectors rust desktop-check web e2e browser hygiene workflow-lint lint v
 
 ### Web boundaries
 
-`make web` checks resolved TypeScript dependencies, including type imports, re-exports, aliases, and dynamic imports. Application and reusable modules cannot depend on UI/React. Protocol contracts cannot reach runtime implementations; sessions cannot reach connectivity, transport, or storage implementations. UI invokes application commands and diagnostic services without assembling output routes or accessing storage ownership implementations.
+`make web` checks resolved TypeScript dependencies, including type imports, re-exports, aliases, and dynamic imports. Application and reusable modules cannot depend on UI/React. Protocol contracts cannot reach runtime implementations; sessions cannot reach connectivity, transport, or storage implementations. UI invokes application commands and diagnostic services; its only output API is `output/model/**`. Models expose immutable facts and pure queries, with no transitive access to output implementations, application, UI/React, or concrete connectivity.
 
 `transfer/**` owns receive intent, lifecycle, output ports, and failure contracts; it cannot reach `output/**`, application composition, or UI, even through shared modules. Browser route coordination lives in `application/browser-receive`; storage execution, journals, and file ownership stay in `output/**`.
 
