@@ -46,6 +46,8 @@ func Normalize(
 	return New(fault.DependencyContractFault(), err)
 }
 
+// Public reduction and internal admission share cancellation authority so an
+// intermediate collaborator boundary cannot change the same result's policy.
 func boundaryCancellation(ctx context.Context, err error) cancellationKind {
 	if ctx != nil {
 		switch ctx.Err() {
@@ -55,13 +57,10 @@ func boundaryCancellation(ctx context.Context, err error) cancellationKind {
 			return cancellationDeadline
 		}
 	}
-	if err == nil {
-		return cancellationNone
-	}
-	if errors.Is(err, context.Canceled) {
+	switch cancellation := fault.BoundaryCancellation(err); {
+	case errors.Is(cancellation, context.Canceled):
 		return cancellationCanceled
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
+	case errors.Is(cancellation, context.DeadlineExceeded):
 		return cancellationDeadline
 	}
 	return cancellationNone

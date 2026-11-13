@@ -143,3 +143,22 @@ func TestTypedBoundaryAndCancellationAdmissionRemainDistinct(t *testing.T) {
 		t.Fatal("an ordinary error was treated as cancellation")
 	}
 }
+
+func TestClassifiedBoundaryKeepsPolicyWhenOnlyItsDiagnosticsHoldCancellation(t *testing.T) {
+	value, _ := fault.NewSession(fault.ScopeSessionTerminal, fault.SessionTransport)
+	boundary := fault.Wrap(value, errors.Join(errors.New("session closed"), context.Canceled))
+	if failurestate.IsCancellation(context.Background(), boundary) {
+		t.Fatal("a classified fault was reclassified by cancellation in its diagnostics")
+	}
+	if got := failurestate.Normalize(context.Background(), boundary, nil); got.Canceled() || got.Fault() != value {
+		t.Fatalf("classified fault = %v, want %v without cancellation", got, value)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if !failurestate.IsCancellation(ctx, boundary) || !failurestate.Normalize(ctx, boundary, nil).Canceled() {
+		t.Fatal("the caller's own cancellation lost to a classified fault")
+	}
+	if !failurestate.IsCancellation(context.Background(), fmt.Errorf("unclassified: %w", context.Canceled)) {
+		t.Fatal("an unclassified collaborator cancellation was ignored")
+	}
+}
