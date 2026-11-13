@@ -1,8 +1,9 @@
+import type { ReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
 import { encodeBase64Url } from '../../src/crypto/bytes'
-import {
-  createBrowserSavePolicy, createBrowserDeliveryRecord, advanceBrowserDeliveryRecord,
-  type BrowserSavePolicyV1,
-} from '../../src/output/browser-delivery'
+import { createBrowserSavePolicy } from '../../src/output/browser-delivery/policy'
+import { createBrowserDeliveryRecord } from '../../src/output/browser-delivery/records'
+import { advanceBrowserDeliveryRecord } from '../../src/output/browser-delivery/lifecycle'
+import { type BrowserSavePolicyV1 } from '../../src/output/browser-delivery/model'
 import {
   FILE_CHECKPOINT_COMMIT_VERIFIED, FILE_CHECKPOINT_MATERIALIZER_FSA_TREE,
   FILE_CHECKPOINT_MATERIALIZER_ORIGIN_PRIVATE, FILE_CHECKPOINT_PHASE_ACTIVE,
@@ -29,6 +30,14 @@ export function deliveryPolicy(preference: 'automatic' | 'direct' = 'automatic')
       },
     }),
   })
+}
+
+export function stoppedDeliveryLifecycle(policy: BrowserSavePolicyV1): ReceiveLifecycleState {
+  return {
+    operationId: policy.operationId, receiveIntentDigest: policy.receiveIntentDigest, generation: 2n,
+    kind: 'partial-directory', reason: 'stopped', successCount: 0n, failureCount: 1n,
+    receiptDigest: deliveryIdentity(90),
+  }
 }
 
 export function deliveryFixture(preference: 'automatic' | 'direct' = 'automatic') {

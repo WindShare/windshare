@@ -8,16 +8,17 @@ import { advanceBrowserDeliveryReceiving } from './lifecycle'
 import type { BrowserDeliveryRecordV1, BrowserSavePolicyV1 } from './model'
 import { browserDeliveryStagingPath } from './records'
 import type { BrowserDeliveryRepository } from './repository'
-import { BrowserDeliveryResumeAccumulator, type BrowserDeliveryResumeSummary } from './retained'
+import { BrowserDeliveryResumeAccumulator } from './retained'
+import { type BrowserDeliverySummary } from '../model/browser-delivery'
 
 const MAX_RECEIVING_CHECKPOINT_CANDIDATES = 2
 
 /** A read-only candidate projection closes the crash gap before the delivery journal catches up. */
-export async function readBrowserDeliveryResumeSummary(input: {
+export async function readBrowserDeliverySummary(input: {
   readonly repository: BrowserDeliveryRepository
   readonly operationId: string
   readonly databaseName?: string
-}): Promise<BrowserDeliveryResumeSummary | undefined> {
+}): Promise<BrowserDeliverySummary | undefined> {
   const policy = await input.repository.readPolicy(input.operationId)
   if (policy === undefined) return undefined
   const accumulator = new BrowserDeliveryResumeAccumulator(policy)

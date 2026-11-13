@@ -13,11 +13,9 @@ import {
 import type {
   CompatibleNameRepairSummary,
 } from '../../src/transfer/lifecycle/name-repair'
-import {
-  materializationRouteIdentity,
-  offerArtifacts,
-  type ArtifactChoice,
-} from '../../src/output/planning'
+import { materializationRouteIdentity } from '../../src/output/planning/guarantees'
+import { offerArtifacts } from '../../src/output/planning/offers'
+import { type ArtifactChoice } from '../../src/output/model/artifacts/choices'
 import {
   createDirectAtomicPlan,
   createManagedAtomicReservation,

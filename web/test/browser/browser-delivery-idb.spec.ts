@@ -12,7 +12,7 @@ test('retained staging and target proof remain distinct after reload and offline
   }, { path: PROBE_PATH, databaseName })
   expect(initial).toEqual({
     missingStageRejected: true, missingTargetRejected: true, retainedState: 'copying',
-    crashGapContinuation: 'save-staged-files', crashGapTargetBytes: '0',
+    crashGapActions: ['save-staged-files'], crashGapTargetBytes: '0',
   })
 
   await page.reload()
@@ -24,7 +24,7 @@ test('retained staging and target proof remain distinct after reload and offline
   }, { path: PROBE_PATH, databaseName })
   expect(recovered).toEqual({
     checkpointOnlyRejected: true,
-    beforeContinuation: 'save-staged-files', beforeTargetSavedBytes: '0', beforeStagedBytes: '8',
+    beforeActions: ['save-staged-files'], beforeTargetSavedBytes: '0', beforeStagedBytes: '8',
     afterTargetSavedBytes: '8', afterStagedBytes: '0', afterState: 'cleaned',
   })
 })

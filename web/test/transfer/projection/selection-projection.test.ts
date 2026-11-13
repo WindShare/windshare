@@ -4,15 +4,16 @@ import { encodeBase64Url } from '../../../src/crypto/bytes'
 import { createSelectionSpec, type NodeSelectionRule } from '../../../src/transfer/intent'
 import {
   MAX_PROJECTION_SELECTED_ROOT_FACTS,
-  SelectionProjectionController,
   createAuthenticatedProjectionEvidence,
-  reduceSelectionProjection,
+} from '../../../src/transfer/projection/model'
+import { SelectionProjectionController, reduceSelectionProjection } from '../../../src/transfer/projection/reducer'
+import {
   type AuthenticatedProjectionEvidence,
   type ProjectedDirectoryAnchor,
-  type ProjectionTraceEvent,
   type SelectedRootFact,
   type SelectionProjectionState,
-} from '../../../src/transfer/projection'
+} from '../../../src/transfer/projection/contracts'
+import { type ProjectionTraceEvent } from '../../../src/transfer/projection/trace'
 
 const SHARE_INSTANCE = identity(60_001)
 const SYNTHETIC_ROOT = identity(60_002)

@@ -1,8 +1,9 @@
 import { openBrowserFolderDelivery } from '../../src/output/browser-delivery/assembly'
 import { IndexedDbBrowserDeliveryRepository } from '../../src/output/browser-delivery/indexeddb'
-import { createBrowserDeliveryRecord, createBrowserSavePolicy } from '../../src/output/browser-delivery'
+import { createBrowserDeliveryRecord } from '../../src/output/browser-delivery/records'
+import { createBrowserSavePolicy } from '../../src/output/browser-delivery/policy'
 import { FILE_CHECKPOINT_MATERIALIZER_FSA_TREE, FILE_CHECKPOINT_MATERIALIZER_ORIGIN_PRIVATE } from '../../src/output/persistence/checkpoint'
-import { readBrowserDeliveryResumeSummary } from '../../src/output/browser-delivery/retained-authority'
+import { readBrowserDeliverySummary } from '../../src/output/browser-delivery/retained-authority'
 import { IndexedDbFileCheckpointRepository, IndexedDbReceiveOperationRepository } from '../../src/output/browser/indexeddb-repository'
 import { DEFAULT_OUTPUT_DATABASE_NAME } from '../../src/output/browser/indexeddb-database'
 import { acquireBrowserReceiveOperationLease } from '../../src/output/browser/session-lease'
@@ -186,7 +187,7 @@ export async function inspectStorage(fixture: StopStorageFixture) {
   const operations = await IndexedDbReceiveOperationRepository.open(fixture.databaseName)
   try {
     const record = await journal.readFile(fixture.intent.operationId, FILE_ID)
-    const summary = await readBrowserDeliveryResumeSummary({
+    const summary = await readBrowserDeliverySummary({
       repository: journal, operationId: fixture.intent.operationId, databaseName: fixture.databaseName,
     })
     const reservations = await capacity.transact(inventory => ({
@@ -201,7 +202,6 @@ export async function inspectStorage(fixture: StopStorageFixture) {
       reservations,
       reservedBytes: summary?.reservedStagingBytes.toString(),
       retainedBytes: summary?.stagedBytes.toString(),
-      continuation: summary?.localContinuation,
       actions: lifecycle === undefined ? [] : retainedBrowserDeliveryActions(lifecycle, summary, []),
       lifecycle: lifecycle?.kind,
       lifecycleGeneration: lifecycle?.generation.toString(),

@@ -6,21 +6,23 @@ import {
 import type { PreparedReceiveOperationTransition } from '../workspace/repository'
 import {
   COMPATIBLE_NAME_LEDGER_FORMAT_VERSION,
-  MAX_COMPATIBLE_NAME_COMMITTED_MAPPINGS,
-  MAX_COMPATIBLE_NAME_REPAIR_SUMMARY_PATHS,
   compatibleNameMappingId,
   compatibleNameMappingV1,
   compatibleNameOperationBootstrapV1,
   compatibleNameOperationHeaderV1,
   compatibleMappingPhysicalParent,
   compatiblePairPhysicalParent,
-  compatibleNameRepairSummary,
   type CompatibleNameMappingV1,
   type CompatibleNameOperationBootstrapV1,
   type CompatibleNameOperationHeaderV1,
   type CompatibleNameOperationSnapshotV1,
   type CompatibleNamePairKind,
 } from '../file-system-access/compatible-name/model'
+import {
+  MAX_COMPATIBLE_NAME_COMMITTED_MAPPINGS,
+  MAX_COMPATIBLE_NAME_REPAIR_SUMMARY_PATHS,
+  compatibleNameRepairSummary,
+} from '../../transfer/lifecycle/name-repair'
 import {
   type CompatibleNameRepairSummary,
 } from '../../transfer/lifecycle/name-repair'

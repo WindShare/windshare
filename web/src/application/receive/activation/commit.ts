@@ -1,12 +1,13 @@
 import {
   bindReceiveIntent,
-  materializationRouteIdentity,
-  sameMaterializationRouteIdentity,
   type BoundReceiveIntent,
   type CandidateMaterializationBinding,
-  type MaterializationRouteIdentity,
-  type ResolvedArtifactAction,
-} from '../../../output/planning'
+} from '../../../output/planning/binding'
+import {
+  materializationRouteIdentity,
+  sameMaterializationRouteIdentity,
+} from '../../../output/planning/guarantees'
+import { type MaterializationRouteIdentity, type ResolvedArtifactAction } from '../../../output/planning/contracts'
 import { validateReceiveIntent, type ReceiveIntent, type SelectionSpec } from '../../../transfer/intent'
 import type {
   ArtifactPresentationAuthority,

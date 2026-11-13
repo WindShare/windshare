@@ -1,5 +1,5 @@
 import { createBrowserReceiveOperationMutationPort } from '../../../src/output/resume/reopen-authority'
-import { offerArtifacts } from '../../../src/output/planning'
+import { offerArtifacts } from '../../../src/output/planning/offers'
 import { createSelectionSpec } from '../../../src/transfer/intent'
 import { SelectionPolicy } from '../../../src/catalog/selection'
 import { TransferJob } from '../../../src/transfer/job'

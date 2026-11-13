@@ -8,11 +8,13 @@ import {
   SelectionProjectionError,
   createAuthenticatedProjectionEvidence,
   selectionTargetKey,
+} from '../projection/model'
+import {
   type AuthenticatedProjectionEvidence,
   type ProjectedFileFact,
   type SelectedRootFact,
   type UnsettledSelectionTarget,
-} from '../projection/model'
+} from '../projection/contracts'
 
 export interface ProjectionGenerationInput {
   readonly committed: CommittedDirectory

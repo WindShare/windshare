@@ -1,19 +1,17 @@
 import { describe, expect, it } from 'vitest'
 
 import { createArtifactChoiceIdentity, createSelectionSpec } from '../../../src/transfer/intent'
-import type {
-  ArtifactActionsOffer,
-  ArtifactResolutionObservation,
-  OfferedArtifactChoice,
-  SelectionProjectionV1,
-} from '../../../src/output/planning'
+import type { ArtifactActionsOffer } from '../../../src/output/model/artifacts/offers'
+import type { ArtifactResolutionObservation } from '../../../src/output/planning/contracts'
+import type { OfferedArtifactChoice } from '../../../src/output/model/artifacts/choices'
+import type { SelectionProjectionV1 } from '../../../src/transfer/projection/contracts'
+import { materializationRouteIdentity } from '../../../src/output/planning/guarantees'
+import { offerArtifacts } from '../../../src/output/planning/offers'
 import {
-  materializationRouteIdentity,
-  offerArtifacts,
   reconcileArtifactChoice,
   resolveArtifactChoiceIdentity,
   sameStableArtifactChoiceIdentity,
-} from '../../../src/output/planning'
+} from '../../../src/output/planning/reconciliation'
 import {
   COMPLETE_DISCOVERY,
   environment,

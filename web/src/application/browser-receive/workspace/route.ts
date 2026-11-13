@@ -11,11 +11,9 @@ import {
   openOriginPrivateWorkspaceNamespace,
   type OriginPrivateWorkspaceNamespace,
 } from '../../../output/origin-private/namespace'
-import {
-  sameArtifactChoiceSemantics,
-  type OfferedArtifactChoice,
-  type ResolvedArtifactAction,
-} from '../../../output/planning'
+import { sameArtifactChoiceSemantics } from '../../../output/planning/guarantees'
+import { type OfferedArtifactChoice } from '../../../output/model/artifacts/choices'
+import { type ResolvedArtifactAction } from '../../../output/planning/contracts'
 import {
   WorkspaceOperationStages,
   type WorkspaceContentRequestCounter,

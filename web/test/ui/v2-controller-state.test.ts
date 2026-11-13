@@ -11,7 +11,7 @@ import {
   type IncidentScopeKind,
   type PresentationDecision,
 } from '../../src/diagnostics/incident'
-import { ArtifactPlanningContractError } from '../../src/output/planning'
+import { ArtifactPlanningContractError } from '../../src/output/planning/reconciliation'
 import { ActivationStateContractError } from '../../src/application/receive/activation/model'
 import { ControllerObservability } from '../../src/application/receive/observation/coordinator'
 import type { ReceiverIncidentPort } from '../../src/application/receive/observation/contracts'

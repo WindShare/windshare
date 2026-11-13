@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createSelectionSpec } from '../../src/transfer/intent'
-import { offerArtifacts } from '../../src/output/planning'
+import { offerArtifacts } from '../../src/output/planning/offers'
 import { compareSavingTransition, presentSavingActions } from '../../src/ui/saving'
 import {
   COMPLETE_DISCOVERY, directZipTarget, environment, fsaTarget, handoffTarget, identity,

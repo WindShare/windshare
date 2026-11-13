@@ -4,16 +4,18 @@ import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
   COMPATIBLE_NAME_LEDGER_FORMAT_VERSION,
   COMPATIBLE_NAME_PENDING_OUTCOME_FORMAT_VERSION,
-  MAX_COMPATIBLE_NAME_REPAIR_SUMMARY_PATHS,
   compatibleNameMappingId,
   compatibleNameMappingV1,
   compatibleNameOperationBootstrapV1,
   compatibleNameOperationHeaderV1,
   compatibleNamePendingTerminalOutcomeV1,
-  compatibleNameRepairSummary,
   type CompatibleNameOperationHeaderV1,
   type CompatibleNamePendingTerminalOutcomeV1,
 } from '../../src/output/file-system-access/compatible-name/model'
+import {
+  MAX_COMPATIBLE_NAME_REPAIR_SUMMARY_PATHS,
+  compatibleNameRepairSummary,
+} from '../../src/transfer/lifecycle/name-repair'
 import { PhysicalPathResolver } from '../../src/output/file-system-access/compatible-name/resolver'
 import {
   readMapping,

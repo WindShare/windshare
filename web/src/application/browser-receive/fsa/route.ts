@@ -1,4 +1,4 @@
-import { receiveOperationDisplayFields } from '../../../output/workspace/operation-display'
+import { receiveOperationDisplayFields } from '../../../output/model/operation-display'
 import { IndexedDbReceiveOperationRepository } from '../../../output/browser/indexeddb-repository'
 import { IndexedDbCompatibleNameLedger } from '../../../output/browser/indexeddb-compatible-name-ledger'
 import {
@@ -46,17 +46,14 @@ import {
   prepareFileSystemAccessSettlement,
 } from '../../../output/file-system-access/settlement'
 import { TargetOwnershipUnknownError } from '../../../output/persistent-tree/errors'
+import type { BoundReceiveIntent } from '../../../output/planning/binding'
 import type {
-  BoundReceiveIntent,
   DirectTreeMaterializationRoute,
   FSADirectoryContainerOffer,
-  OfferedArtifactChoice,
-  ResolvedArtifactAction,
-} from '../../../output/planning'
-import {
-  sameArtifactChoiceSemantics,
-  sameTargetSemantics,
-} from '../../../output/planning'
+} from '../../../output/model/artifacts/destinations'
+import type { OfferedArtifactChoice } from '../../../output/model/artifacts/choices'
+import type { ResolvedArtifactAction } from '../../../output/planning/contracts'
+import { sameArtifactChoiceSemantics, sameTargetSemantics } from '../../../output/planning/guarantees'
 import type { ReceiveOperationRepository } from '../../../output/workspace/repository'
 import { decodeStoredReceiveLifecycleState } from '../../../output/workspace/state-codec'
 import {

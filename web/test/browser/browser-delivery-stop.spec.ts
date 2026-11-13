@@ -70,7 +70,7 @@ test('Stop preserves complete staging for a local save after reopening terminal 
   expect(prepared.before).toMatchObject({ deliveryState: 'receiving', stageBytes: PREFIX,
     targetBytes: [], reservations: [{ exactSize: '8', verifiedBytes: '8' }] })
   expect(prepared.after).toMatchObject({ deliveryState: 'staged-complete', stageBytes: PREFIX,
-    targetBytes: [], lifecycle: 'partial-directory', continuation: 'save-staged-files' })
+    targetBytes: [], lifecycle: 'partial-directory' })
   expect(prepared.after.actions).toContain('save-staged-files')
   expect(prepared.after.actions).not.toContain('discard-incomplete-staging')
 

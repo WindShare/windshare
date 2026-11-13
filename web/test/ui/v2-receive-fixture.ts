@@ -1,4 +1,4 @@
-import { createEnvironmentOffers } from '../../src/output/planning'
+import { createEnvironmentOffers } from '../../src/output/planning/guarantees'
 import type { ReceiveCompositionPort } from '../../src/application/receive/contracts'
 
 /** Browse-only controller tests install an explicit non-executable output boundary. */

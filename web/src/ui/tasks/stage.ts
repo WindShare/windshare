@@ -1,5 +1,5 @@
 import type { TaskBlocking, TaskFacts, TaskStage } from './model'
-import { browserDeliveryLocalActions } from '../../output/browser-delivery/recovery/local-actions'
+import { browserDeliveryLocalActions } from '../../output/model/browser-delivery-actions'
 import { SOURCE_INVALIDATED_DESCRIPTION } from '../lifecycle-presentation'
 
 export interface StageCopy {
@@ -64,7 +64,7 @@ function savedStage(facts: TaskFacts): StageCopy {
   return stage('saved', facts.completeness === 'partial' ? 'Saved with missing items' : 'Saved', description, facts.lifecycle.kind)
 }
 
-function retainedStage(facts: TaskFacts, continuation: import('../../output/resume/descriptor').ReceiveOperationContinuation): StageCopy {
+function retainedStage(facts: TaskFacts, continuation: import('../../output/model/continuation').ReceiveOperationContinuation): StageCopy {
   switch (continuation) {
     case 'resume-start': return startupStage(facts)
     case 'cleanup-only': return executionStage(facts)

@@ -93,7 +93,7 @@ vi.mock('../../src/receiver/supervisor', () => ({
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import type { CommittedDirectory } from '../../src/catalog/page-store'
 import type { CatalogPage } from '../../src/catalog/records'
-import { offerArtifacts } from '../../src/output/planning'
+import { offerArtifacts } from '../../src/output/planning/offers'
 import {
   createSelectionSpec,
   selectionRulesSpecFromPolicy,
@@ -106,11 +106,11 @@ import {
 } from '../../src/application/browser-share/gateway'
 import {
   discoverAuthenticatedSelection,
-  nextProjectionEpoch,
   RetryableProjectionDiscoveryError,
-  SelectionProjectionController,
-  type SelectionProjectionState,
-} from '../../src/transfer/projection'
+} from '../../src/transfer/projection/coordinator'
+import { nextProjectionEpoch } from '../../src/transfer/projection/model'
+import { SelectionProjectionController } from '../../src/transfer/projection/reducer'
+import { type SelectionProjectionState } from '../../src/transfer/projection/contracts'
 import {
   directZipTarget,
   environment,

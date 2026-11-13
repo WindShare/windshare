@@ -6,7 +6,7 @@ import {
   type ArtifactChoiceID,
   type ReceiveIntent,
 } from '../../transfer/intent'
-import { sameGuaranteeFacts } from '../planning'
+import { sameGuaranteeFacts } from '../planning/guarantees'
 import type {
   CompatibleNameOperationBootstrapV1,
   CompatibleNameOperationHeaderV1,
@@ -100,7 +100,7 @@ export async function prepareFSAOperationBindingTransition(input: Readonly<{
   repository: FSAOperationBindingRepository
   intent: ReceiveIntent
   parent: FileSystemDirectoryHandle
-  display?: import('../workspace/operation-display').ReceiveOperationDisplay
+  display?: import('../model/operation-display').ReceiveOperationDisplay
   preClickRanking: readonly ArtifactChoiceID[]
 }>): Promise<PreparedFSAOperationBindingTransition> {
   const validated = await validatedFSAIntent(input.intent)

@@ -63,7 +63,7 @@ export class OriginPrivateWorkspaceNamespaceOpenError extends Error {
 /** The journal commit precedes every OPFS mutation, including creation of the namespace entry. */
 export async function openOriginPrivateWorkspaceNamespace(input: {
   readonly receiveIntent: ReceiveIntent
-  readonly display?: import('../workspace/operation-display').ReceiveOperationDisplay
+  readonly display?: import('../model/operation-display').ReceiveOperationDisplay
   readonly preClickRanking: readonly ArtifactChoiceID[]
   readonly repository: ReceiveOperationRepository
   readonly storage?: OriginPrivateDirectorySource

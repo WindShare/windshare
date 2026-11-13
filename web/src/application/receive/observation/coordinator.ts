@@ -8,7 +8,7 @@ import {
   type PresentationBoundary,
   type PresentationExclusionReason,
 } from '../../../diagnostics/incident'
-import { ArtifactPlanningContractError } from '../../../output/planning'
+import { ArtifactPlanningContractError } from '../../../output/planning/reconciliation'
 import {
   FaultScope,
   OutputFaultCode,

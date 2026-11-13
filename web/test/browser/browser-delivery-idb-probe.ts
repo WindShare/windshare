@@ -1,7 +1,13 @@
+import { browserDeliveryLocalActions } from '../../src/output/model/browser-delivery-actions'
+import { IndexedDbBrowserDeliveryRepository } from '../../src/output/browser-delivery/indexeddb'
 import {
-  IndexedDbBrowserDeliveryRepository, createBrowserDeliveryRecord, snapshotBrowserDeliveryRecord, authorizeBrowserDeliveryRestart,
-  createBrowserSavePolicy, summarizeBrowserDeliveries, readBrowserDeliveryResumeSummary,
-} from '../../src/output/browser-delivery'
+  createBrowserDeliveryRecord,
+  snapshotBrowserDeliveryRecord,
+} from '../../src/output/browser-delivery/records'
+import { authorizeBrowserDeliveryRestart } from '../../src/output/browser-delivery/lifecycle'
+import { createBrowserSavePolicy } from '../../src/output/browser-delivery/policy'
+import { summarizeBrowserDeliveries } from '../../src/output/browser-delivery/retained'
+import { readBrowserDeliverySummary } from '../../src/output/browser-delivery/retained-authority'
 import {
   INDEXEDDB_BROWSER_DELIVERY_FILE_STORE, INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE, INDEXEDDB_FILE_FINAL_PROOF_STORE,
   openIndexedDbCheckpointDatabase, requestResult, transactionCompletion,
@@ -13,7 +19,7 @@ import { createMaterializationLedgerBinding } from '../../src/output/materializa
 import { createFinalizedFileMaterializationRecords } from '../../src/output/materialization-ledger/journal'
 import { VerifiedFinalOutputFile } from '../../src/transfer/output/session'
 import { snapshotMaterializationRootRelativePath } from '../../src/transfer/job/coordinate/direct-tree'
-import { deliveryFixture, deliveryIdentity } from '../output/browser-delivery-fixture'
+import { deliveryFixture, deliveryIdentity, stoppedDeliveryLifecycle } from '../output/browser-delivery-fixture'
 
 export async function restartDeliveryJournal(databaseName: string) {
   const f = deliveryFixture('direct')
@@ -58,7 +64,7 @@ export async function prepareBrowserDeliveryReopen(databaseName: string) {
     const complete = f.advance(f.initial, { kind: 'staged-complete', stage: f.stage! })
     const missingStageRejected = await rejects(() => repository.replaceFile(f.initial, complete))
     await persistCheckpoint(databaseName, f.stage!)
-    const crashGapSummary = await readBrowserDeliveryResumeSummary({ repository, operationId: f.policy.operationId, databaseName })
+    const crashGapSummary = await readBrowserDeliverySummary({ repository, operationId: f.policy.operationId, databaseName })
     await repository.replaceFile(f.initial, complete)
     const copying = f.advance(complete, {
       kind: 'copying', stage: f.stage!, attempt: { attemptId: 'crashed-copy', targetOwnedObjectId: f.target.ownedObjectId },
@@ -68,7 +74,7 @@ export async function prepareBrowserDeliveryReopen(databaseName: string) {
     const missingTargetRejected = await rejects(() => repository.replaceFile(copying, saved))
     return {
       missingStageRejected, missingTargetRejected,
-      crashGapContinuation: crashGapSummary?.localContinuation, crashGapTargetBytes: crashGapSummary?.targetSavedBytes.toString(),
+      crashGapActions: browserDeliveryLocalActions(stoppedDeliveryLifecycle(f.policy), crashGapSummary), crashGapTargetBytes: crashGapSummary?.targetSavedBytes.toString(),
       retainedState: (await repository.readFile(f.policy.operationId, f.source.fileId))!.state.kind,
     }
   } finally { repository.close() }
@@ -101,7 +107,7 @@ export async function finishBrowserDeliveryReopen(databaseName: string) {
     const after = summarizeBrowserDeliveries(policy, [(await repository.readFile(policy.operationId, f.source.fileId))!])
     return {
       checkpointOnlyRejected,
-      beforeContinuation: before.localContinuation, beforeTargetSavedBytes: before.targetSavedBytes.toString(),
+      beforeActions: browserDeliveryLocalActions(stoppedDeliveryLifecycle(policy), before), beforeTargetSavedBytes: before.targetSavedBytes.toString(),
       beforeStagedBytes: before.stagedBytes.toString(), afterTargetSavedBytes: after.targetSavedBytes.toString(),
       afterStagedBytes: after.stagedBytes.toString(), afterState: cleaned.state.kind,
     }

@@ -1,6 +1,7 @@
 import type { ArtifactChoiceID } from '../../../transfer/intent'
 import type { DirectZipRuntimeFactsV1 } from '../../../output/direct-zip/session'
-import { sameRuntimeDirectZipSupport, type OfferedArtifactChoice } from '../../../output/planning'
+import { sameRuntimeDirectZipSupport } from '../../../output/planning/guarantees'
+import { type OfferedArtifactChoice } from '../../../output/model/artifacts/choices'
 import type { BrowserReceiveWindow } from '../../../output/browser/environment'
 import { snapshotPreClickRanking, unavailableRoute } from '../route-contract'
 import type { ArtifactPresentationAuthority } from '../../receive/contracts'

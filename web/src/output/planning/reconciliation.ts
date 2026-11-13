@@ -9,17 +9,23 @@ import type { ArtifactSpec, GuaranteeProfile } from '../../transfer/intent'
 import type {
   ArtifactChoice,
   ArtifactChoiceSemantics,
+  StableArtifactChoiceIdentity,
+} from '../model/artifacts/choices'
+import type {
   ArtifactResolutionObservation,
-  DiscoveryState,
   EnvironmentOffers,
   MaterializationRouteIdentity,
-  OfferedMaterializationPlanSemantics,
-  OfferedMaterializationRoute,
   ResolvedArtifactAction,
+} from './contracts'
+import type {
+  DiscoveryState,
   RetryableDiscoveryReason,
   SelectionProjectionV1,
-  StableArtifactChoiceIdentity,
-} from './contracts'
+} from '../../transfer/projection/contracts'
+import type {
+  OfferedMaterializationPlanSemantics,
+  OfferedMaterializationRoute,
+} from '../model/artifacts/destinations'
 import {
   assertEnvironmentOffers,
   materializationPlanSemantics,

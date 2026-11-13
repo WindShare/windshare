@@ -5,7 +5,7 @@ import {
   admitDirectZipRuntimeV1,
   type DirectZipSupportLookupV1,
 } from '../../../output/direct-zip/session'
-import type { EnvironmentTargetOfferInput } from '../../../output/planning'
+import type { EnvironmentTargetOfferInput } from '../../../output/planning/contracts'
 import type { BrowserReceiveWindow } from '../../../output/browser/environment'
 import type { BrowserDirectZipCompositionPort } from './contracts'
 

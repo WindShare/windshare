@@ -1,6 +1,9 @@
 import { equalBytes } from '../../../crypto/bytes'
 import { verifyBrowserReceiveOperationLease, type BrowserReceiveOperationLease } from '../../../output/browser/session-lease'
-import { isBrowserDeliveryLocalLifecycle, type BrowserDeliveryLocalAction } from '../../../output/browser-delivery/recovery/local-actions'
+import {
+  isBrowserDeliveryLocalLifecycle,
+  type BrowserDeliveryLocalAction,
+} from '../../../output/model/browser-delivery-actions'
 import { beginBrowserDeliveryLocalMutation, reconcileBrowserDeliveryLifecycle } from '../../../output/browser-delivery/recovery/local-lifecycle'
 import type { OutputDiagnosticsPorts } from '../../../output/diagnostics'
 import { reopenFileSystemAccessOutput, type FileSystemAccessOutputSession } from '../../../output/file-system-access/session'

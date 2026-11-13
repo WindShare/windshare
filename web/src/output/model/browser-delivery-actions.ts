@@ -1,5 +1,5 @@
-import { isTerminalLifecycleState, type ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
-import type { BrowserDeliveryResumeSummary } from '../retained'
+import { isTerminalLifecycleState, type ReceiveLifecycleState } from '../../transfer/lifecycle/state'
+import type { BrowserDeliverySummary } from './browser-delivery'
 
 export type BrowserDeliveryLocalAction = 'save-staged-files' | 'cleanup-staging' | 'discard-incomplete-staging'
 
@@ -11,11 +11,11 @@ export function isBrowserDeliveryLocalLifecycle(lifecycle: ReceiveLifecycleState
 /** Child storage survives source settlement; its actions do not reopen source reception. */
 export function browserDeliveryLocalActions(
   lifecycle: ReceiveLifecycleState,
-  summary: BrowserDeliveryResumeSummary | null | undefined,
+  summary: BrowserDeliverySummary | null | undefined,
 ): readonly BrowserDeliveryLocalAction[] {
   if (!isBrowserDeliveryLocalLifecycle(lifecycle) || summary == null ||
-      summary.policy.operationId !== lifecycle.operationId ||
-      summary.policy.receiveIntentDigest !== lifecycle.receiveIntentDigest) return Object.freeze([])
+      summary.operationId !== lifecycle.operationId ||
+      summary.receiveIntentDigest !== lifecycle.receiveIntentDigest) return Object.freeze([])
   const actions: BrowserDeliveryLocalAction[] = []
   if (summary.stagedCompleteFiles + summary.copyingFiles > 0) actions.push('save-staged-files')
   if (summary.cleanupPendingFiles > 0) actions.push('cleanup-staging')

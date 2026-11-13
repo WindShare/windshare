@@ -1,5 +1,8 @@
 import { bindRuntimeOutputFailures } from './retained/diagnostics'
-import { snapshotReceiveOperationDisplay, type ReceiveOperationDisplay } from '../../output/workspace/operation-display'
+import {
+  snapshotReceiveOperationDisplay,
+  type ReceiveOperationDisplay,
+} from '../../output/model/operation-display'
 import {
   probeBrowserEnvironment,
   startFSAParentPicker,
@@ -21,13 +24,12 @@ import {
 import type {
   BrowserHandoffTargetOffer,
   DirectZipSupportFacts,
-  EnvironmentTargetOfferInput,
   FSADirectoryContainerOffer,
-  OfferedArtifactChoice,
   PortableEnvironmentOffer,
   WorkspaceEnvironmentOffer,
-  ZipRouteRecommendationPolicy,
-} from '../../output/planning'
+} from '../../output/model/artifacts/destinations'
+import type { EnvironmentTargetOfferInput, ZipRouteRecommendationPolicy } from '../../output/planning/contracts'
+import type { OfferedArtifactChoice } from '../../output/model/artifacts/choices'
 import type { WorkspaceStageTraceListener } from '../../output/workspace/stages'
 import type { ArtifactChoiceID } from '../../transfer/intent'
 import type {
@@ -279,7 +281,7 @@ function startProductionAuthority(
   nativeObjectSupported: boolean,
   failures?: OutputFailureSinks,
   displayInput?: ReceiveOperationDisplay,
-  recoveryPreference: import('../../output/browser-delivery/model').BrowserRecoveryPreference = 'automatic',
+  recoveryPreference: import('../../output/model/browser-delivery').BrowserRecoveryPreference = 'automatic',
 ): ArtifactPresentationAuthority {
   const registry = inspectBrowserRouteRegistrySynchronously(windowPort, nativeObjectSupported)
   const binding = createOutputFailureBinding(failures)

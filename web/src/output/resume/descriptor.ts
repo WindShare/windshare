@@ -1,30 +1,11 @@
 import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
+import type { ReceiveOperationContinuation } from '../model/continuation'
 
 export const RECEIVE_OPERATION_RESUME_DESCRIPTOR_VERSION = 2 as const
 
-export type ReceiveOperationContinuation =
-  | 'resume-start'
-  | 'resume-receive'
-  | 'resume-direct-zip'
-  | 'reauthorize-direct-zip'
-  | 'verify-direct-zip-target'
-  | 'verify-direct-zip-completion'
-  | 'retry-direct-zip-space'
-  | 'pending-catch-up'
-  | 'restoration-available'
-  | 'resume-package'
-  | 'resume-local-finalization'
-  | 'save-artifact'
-  | 'retry-download'
-  | 'cleanup-incompatible'
-  | 'cleanup-only'
-  | 'retry-cleanup'
-  | 'needs-attention'
-  | 'history-only'
-
 export interface ReceiveOperationResumeDescriptor {
-  readonly browserDelivery?: import('../browser-delivery/retained').BrowserDeliveryResumeSummary
-  readonly display?: import('../workspace/operation-display').ReceiveOperationDisplay
+  readonly browserDelivery?: import('../model/browser-delivery').BrowserDeliverySummary
+  readonly display?: import('../model/operation-display').ReceiveOperationDisplay
   readonly shareInstance?: string
   readonly schemaVersion: typeof RECEIVE_OPERATION_RESUME_DESCRIPTOR_VERSION
   readonly operationId: string

@@ -4,10 +4,7 @@ import {
   recordOutputException,
   type OutputDiagnosticsPorts,
 } from '../diagnostics'
-import type {
-  BrowserHandoffTargetOffer,
-  PortableEnvironmentOffer,
-} from '../planning'
+import type { BrowserHandoffTargetOffer, PortableEnvironmentOffer } from '../model/artifacts/destinations'
 import {
   DEFAULT_PORTABLE_ARTIFACT_LIMIT,
   DEFAULT_PORTABLE_ASSEMBLY_PART_BYTES,

@@ -1,7 +1,8 @@
 import { encodeBase64Url } from '../../src/crypto/bytes'
-import { offerArtifacts, type SelectionProjectionV1 } from '../../src/output/planning'
+import { offerArtifacts } from '../../src/output/planning/offers'
+import { type SelectionProjectionV1 } from '../../src/transfer/projection/contracts'
 import { createSelectionSpec, type ArtifactChoiceID } from '../../src/transfer/intent'
-import { nextProjectionEpoch } from '../../src/transfer/projection'
+import { nextProjectionEpoch } from '../../src/transfer/projection/model'
 import {
   createBrowserReceiveComposition,
   type BrowserReceiveWindow,

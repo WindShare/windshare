@@ -9,17 +9,12 @@ import {
   createSelectionSpec,
   createWorkspaceBinding,
 } from '../../../src/transfer/intent'
-import type {
-  CandidateMaterializationBinding,
-  EnvironmentOffers,
-  ResolvedArtifactAction,
-} from '../../../src/output/planning'
-import {
-  bindReceiveIntent,
-  materializationRouteIdentity,
-  offerArtifacts,
-  reconcileArtifactChoice,
-} from '../../../src/output/planning'
+import type { CandidateMaterializationBinding } from '../../../src/output/planning/binding'
+import type { EnvironmentOffers, ResolvedArtifactAction } from '../../../src/output/planning/contracts'
+import { bindReceiveIntent } from '../../../src/output/planning/binding'
+import { materializationRouteIdentity } from '../../../src/output/planning/guarantees'
+import { offerArtifacts } from '../../../src/output/planning/offers'
+import { reconcileArtifactChoice } from '../../../src/output/planning/reconciliation'
 import {
   COMPLETE_DISCOVERY,
   environment,

@@ -52,7 +52,8 @@ local performance diagnostics are in
 | `src/transport/`, `src/connectivity/` | v2 relay/WebRTC channels, signaling, phased peer admission, and bounded direct recovery |
 | `src/transfer/projection/`, `src/transfer/discovery/` | Epoch-fenced selection proof and authenticated progressive discovery |
 | `src/transfer/job/`, `src/transfer/settlement/` | Plan-specific content execution, durable evidence, and settlement |
-| `src/output/planning/`, `src/output/capability/` | Pure artifact offers/binding and thin browser authority acquisition |
+| `src/output/model/` | Presentation-facing output facts and pure queries; no storage or execution authority |
+| `src/output/planning/`, `src/output/capability/` | Artifact offer assembly/binding and browser authority acquisition |
 | `src/output/persistent-tree/`, `src/output/file-system-access/` | Prefix-visible `directory-tree` transactions and FSA reservation/settlement |
 | `src/output/workspace/`, `src/output/origin-private/` | Manifests, budgets, lifecycle/recovery, OPFS materialization, package, and publication |
 | `src/output/zip-layout/`, `src/output/streams/`, `src/output/portable/` | Exact store-ZIP policy/writer and bounded browser handoff |

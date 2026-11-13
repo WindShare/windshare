@@ -5,11 +5,11 @@ import { snapshotCatalogPath } from '../../../catalog/path-policy'
 import { projectAuthenticatedGeneration } from '../../../transfer/discovery/projection-evidence'
 import {
   RetryableProjectionDiscoveryError,
-  createAuthenticatedProjectionEvidence,
   type AuthenticatedDiscoveryRequest,
   type AuthenticatedDiscoverySource,
-  type AuthenticatedProjectionEvidence,
-} from '../../../transfer/projection'
+} from '../../../transfer/projection/coordinator'
+import { createAuthenticatedProjectionEvidence } from '../../../transfer/projection/model'
+import { type AuthenticatedProjectionEvidence } from '../../../transfer/projection/contracts'
 import { ProjectionDiscoverySummary } from './summary'
 import { ProjectionDemand } from './demand'
 

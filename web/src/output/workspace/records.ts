@@ -24,7 +24,7 @@ import {
 } from '../../transfer/encoding/canonical'
 import { isReceiveStateByte } from '../../transfer/lifecycle/state'
 import { CanonicalRecordReader } from '../../transfer/encoding/canonical-reader'
-import { snapshotReceiveOperationDisplay, type ReceiveOperationDisplay } from './operation-display'
+import { snapshotReceiveOperationDisplay, type ReceiveOperationDisplay } from '../model/operation-display'
 
 export const RECEIVE_OPERATION_SCHEMA_VERSION = 2 as const
 export const MANIFEST_PAGE_ENTRY_LIMIT = 128

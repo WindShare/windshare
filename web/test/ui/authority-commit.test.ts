@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import {
-  bindReceiveIntent,
-  materializationRouteIdentity,
-  offerArtifacts,
-  reconcileArtifactChoice,
-} from '../../src/output/planning'
+import { bindReceiveIntent } from '../../src/output/planning/binding'
+import { materializationRouteIdentity } from '../../src/output/planning/guarantees'
+import { offerArtifacts } from '../../src/output/planning/offers'
+import { reconcileArtifactChoice } from '../../src/output/planning/reconciliation'
 import { initialReceiveLifecycleState } from '../../src/output/workspace'
 import { createSelectionSpec } from '../../src/transfer/intent'
 import {

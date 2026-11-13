@@ -1,7 +1,7 @@
 import { receiveInterruptionControls } from '../../../transfer/lifecycle/interruption'
 import { IndexedDbReceiveOperationRepository } from '../../../output/browser/indexeddb-repository'
 import { persistPortableDownloadHistory } from '../../../output/resume/operation-history'
-import type { ReceiveOperationDisplay } from '../../../output/workspace/operation-display'
+import type { ReceiveOperationDisplay } from '../../../output/model/operation-display'
 import type { ArtifactChoiceID } from '../../../transfer/intent'
 import {
   emitOutputTrace,
@@ -17,7 +17,7 @@ import {
   type PortableDownloadStartedRecord,
   type PortableExecutionLifecycleAuthority,
 } from '../../../output/portable/preparation'
-import type { ResolvedArtifactAction } from '../../../output/planning'
+import type { ResolvedArtifactAction } from '../../../output/planning/contracts'
 import { IndexedDbZipCentralDirectorySpool } from '../../../output/streams/zip-spool'
 import { reduceReceiveLifecycle, type LifecycleEvent } from '../../../transfer/lifecycle/reducer'
 import { initialReceiveLifecycleState, type ReceiveLifecycleState } from '../../../transfer/lifecycle/state'

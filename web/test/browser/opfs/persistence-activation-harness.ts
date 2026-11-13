@@ -1,7 +1,8 @@
 import { interruptReceive } from '../../../src/application/receive/active/interruption'
-import {
-  bindReceiveIntent, materializationRouteIdentity, offerArtifacts, reconcileArtifactChoice,
-} from '../../../src/output/planning'
+import { bindReceiveIntent } from '../../../src/output/planning/binding'
+import { materializationRouteIdentity } from '../../../src/output/planning/guarantees'
+import { offerArtifacts } from '../../../src/output/planning/offers'
+import { reconcileArtifactChoice } from '../../../src/output/planning/reconciliation'
 import type { OutputTraceEvent } from '../../../src/output/diagnostics/trace'
 import { createSelectionSpec } from '../../../src/transfer/intent'
 import { WorkspaceArtifactPresentationAuthority } from '../../../src/application/browser-receive/workspace/route'

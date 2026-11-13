@@ -1,4 +1,4 @@
-import type { ProjectedByteCount } from '../output/planning'
+import type { ProjectedByteCount } from '../output/model/artifacts/projections'
 import type { ReceiveLifecycleState } from '../transfer/lifecycle/state'
 import type { DirectZipProgressSnapshot } from '../application/receive/contracts'
 

@@ -2,12 +2,14 @@ export {
   MAX_PROJECTION_GENERATION_REFERENCES,
   MAX_PROJECTION_SELECTED_ROOT_FACTS,
   MAX_PROJECTION_UNSETTLED_TARGETS,
-  SELECTION_PROJECTION_VERSION,
   SelectionProjectionError,
   createAuthenticatedProjectionEvidence,
   nextProjectionEpoch,
   selectionTargetKey,
   unsettledTargetsForSelection,
+} from './model'
+export {
+  SELECTION_PROJECTION_VERSION,
   type ArtifactShapeProof,
   type AuthenticatedProjectionEvidence,
   type DiscoveryState,
@@ -16,8 +18,6 @@ export {
   type ProjectedFileFact,
   type ProjectionEpoch,
   type ProjectionMetrics,
-  type ProjectionTraceEvent,
-  type ProjectionTraceSource,
   type RetryableDiscoveryReason,
   type SelectedRootFact,
   type SelectionProjectionEvent,
@@ -26,7 +26,11 @@ export {
   type SettledLayoutBasisProof,
   type UnsettledSelectionTarget,
   type WorkspaceCostObservationV1,
-} from './model'
+} from './contracts'
+export {
+  type ProjectionTraceEvent,
+  type ProjectionTraceSource,
+} from './trace'
 export {
   type AuthenticatedGenerationReference,
 } from '../preparation/generation'

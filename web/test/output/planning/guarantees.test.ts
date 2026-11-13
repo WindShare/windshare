@@ -9,9 +9,9 @@ import {
 import {
   createEnvironmentOffers,
   legalGuaranteeProfile,
-  offerArtifacts,
   sameArtifactChoiceSemantics,
-} from '../../../src/output/planning'
+} from '../../../src/output/planning/guarantees'
+import { offerArtifacts } from '../../../src/output/planning/offers'
 import type {
   DeliveryMode,
   NameChooser,
@@ -22,10 +22,10 @@ import type {
 } from '../../../src/transfer/intent'
 import type {
   DestinationGuaranteeFacts,
-  ArtifactChoice,
   EnvironmentTargetKind,
-  EnvironmentTargetOfferInput,
-} from '../../../src/output/planning'
+} from '../../../src/output/model/artifacts/destinations'
+import type { ArtifactChoice } from '../../../src/output/model/artifacts/choices'
+import type { EnvironmentTargetOfferInput } from '../../../src/output/planning/contracts'
 import {
   fsaTarget,
   handoffTarget,

@@ -1,5 +1,5 @@
+import { SelectionProjectionError } from './model'
 import {
-  SelectionProjectionError,
   type AuthenticatedProjectionEvidence,
   type ProjectionEpoch,
   type RetryableDiscoveryReason,
@@ -7,7 +7,7 @@ import {
   type SettledLayoutBasisProof,
   type UnsettledSelectionTarget,
   type WorkspaceCostObservationV1,
-} from './model'
+} from './contracts'
 import {
   type AuthenticatedGenerationReference,
 } from '../preparation/generation'

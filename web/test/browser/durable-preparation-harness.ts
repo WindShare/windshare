@@ -1,14 +1,12 @@
-import {
-  bindReceiveIntent,
-  materializationRouteIdentity,
-  offerArtifacts,
-  reconcileArtifactChoice,
-  type EnvironmentOffers,
-  type OfferedArtifactChoice,
-  type SelectionProjectionV1,
-} from '../../src/output/planning'
+import { bindReceiveIntent } from '../../src/output/planning/binding'
+import { materializationRouteIdentity } from '../../src/output/planning/guarantees'
+import { offerArtifacts } from '../../src/output/planning/offers'
+import { reconcileArtifactChoice } from '../../src/output/planning/reconciliation'
+import { type EnvironmentOffers } from '../../src/output/planning/contracts'
+import { type OfferedArtifactChoice } from '../../src/output/model/artifacts/choices'
+import { type SelectionProjectionV1 } from '../../src/transfer/projection/contracts'
 import { BROWSER_HANDOFF_OBJECT_URL_LEASE_MS } from '../../src/output/portable/browser-download'
-import { nextProjectionEpoch } from '../../src/transfer/projection'
+import { nextProjectionEpoch } from '../../src/transfer/projection/model'
 import { TransferJob } from '../../src/transfer/job'
 import { EMPTY_TRANSFER_FAILURE_SUMMARY, transferWorkerSettlement } from '../../src/transfer/outcome'
 import { SelectionPolicy } from '../../src/catalog/selection'
@@ -472,7 +470,7 @@ export async function commitProductionChoice(
   environment: EnvironmentOffers,
   offered: OfferedArtifactChoice,
   signal: AbortSignal,
-  display?: import('../../src/output/workspace/operation-display').ReceiveOperationDisplay,
+  display?: import('../../src/output/model/operation-display').ReceiveOperationDisplay,
 ): Promise<BoundReceiveOperation> {
   const resolution = await reconcileArtifactChoice({
     choice: offered.choice,

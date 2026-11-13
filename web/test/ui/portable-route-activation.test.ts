@@ -1,14 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import {
-  bindReceiveIntent,
-  materializationRouteIdentity,
-  offerArtifacts,
-  reconcileArtifactChoice,
-  type CandidateMaterializationBinding,
-  type OfferedArtifactChoice,
-  type ResolvedArtifactAction,
-} from '../../src/output/planning'
+import { bindReceiveIntent, type CandidateMaterializationBinding } from '../../src/output/planning/binding'
+import { materializationRouteIdentity } from '../../src/output/planning/guarantees'
+import { offerArtifacts } from '../../src/output/planning/offers'
+import { reconcileArtifactChoice } from '../../src/output/planning/reconciliation'
+import { type OfferedArtifactChoice } from '../../src/output/model/artifacts/choices'
+import { type ResolvedArtifactAction } from '../../src/output/planning/contracts'
 import {
   createOperationID,
   createOriginalFileArtifact,
@@ -17,7 +14,7 @@ import {
   createSelectionSpec,
   type SelectionSpec,
 } from '../../src/transfer/intent'
-import { nextProjectionEpoch } from '../../src/transfer/projection'
+import { nextProjectionEpoch } from '../../src/transfer/projection/model'
 import type { BrowserReceiveWindow } from '../../src/output/browser/environment'
 import { createPortableReceiveOperation } from '../../src/application/browser-receive/portable/operation'
 import {

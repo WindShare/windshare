@@ -6,7 +6,6 @@ import type { SelectionSpec } from '../intent'
 import {
   MAX_PROJECTION_GENERATION_REFERENCES,
   MAX_PROJECTION_SELECTED_ROOT_FACTS,
-  SELECTION_PROJECTION_VERSION,
   SelectionProjectionError,
   compareGenerationReferences,
   nextProjectionEpoch,
@@ -17,6 +16,9 @@ import {
   snapshotMetrics,
   snapshotSelectedRoot,
   unsettledTargetsForSelection,
+} from './model'
+import {
+  SELECTION_PROJECTION_VERSION,
   type ArtifactShapeProof,
   type AuthenticatedProjectionEvidence,
   type DiscoveryState,
@@ -24,8 +26,6 @@ import {
   type ProjectedFileFact,
   type ProjectionEpoch,
   type ProjectionMetrics,
-  type ProjectionTraceEvent,
-  type ProjectionTraceSource,
   type SelectedRootFact,
   type SelectionProjectionEvent,
   type SelectionProjectionState,
@@ -33,7 +33,8 @@ import {
   type SettledLayoutBasisProof,
   type UnsettledSelectionTarget,
   type WorkspaceCostObservationV1,
-} from './model'
+} from './contracts'
+import { type ProjectionTraceEvent, type ProjectionTraceSource } from './trace'
 import {
   type AuthenticatedGenerationReference,
 } from '../preparation/generation'

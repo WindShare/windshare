@@ -38,7 +38,7 @@ import type {
   FSATerminalExclusiveAuthority,
   FSATerminalMutationKind,
 } from '../browser/mutation-coordination/model'
-import { decideCollisionName } from '../planning'
+import { decideCollisionName } from '../planning/naming'
 import type {
   PersistentDirectoryMaterialization,
   PersistentDirectoryLedgerMaterialization,

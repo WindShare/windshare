@@ -15,7 +15,7 @@ import { createBrowserReceiveComposition } from '../../../src/application/browse
 import type { BrowserReceiveWindow } from '../../../src/output/browser/environment'
 import type { DirectZipIntent, DirectZipOrderedFileV1 } from '../../../src/transfer/direct-zip'
 import type { BoundReceiveOperation } from '../../../src/application/receive/contracts'
-import type { ReceiveOperationDisplay } from '../../../src/output/workspace/operation-display'
+import type { ReceiveOperationDisplay } from '../../../src/output/model/operation-display'
 import { listBrowserRetainedOperations } from '../../../src/application/browser-receive/retained/inventory'
 import { presentTask, retainedTaskFacts } from '../../../src/ui/tasks'
 import { observeProductionDirectZipFileSystem } from './production-fsa-observation'

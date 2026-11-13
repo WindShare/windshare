@@ -7,7 +7,7 @@ import {
   requiresZip64End,
   type ZipEntrySpec,
 } from '../zip-layout/policy'
-import type { WorkspaceCostObservationV1 } from '../../transfer/projection'
+import type { WorkspaceCostObservationV1 } from '../../transfer/projection/contracts'
 
 /**
  * This accumulator keeps only checked numeric totals. It is passive recommendation

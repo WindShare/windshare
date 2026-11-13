@@ -7,37 +7,38 @@ import {
 import type { ArtifactSpec } from '../../transfer/intent'
 import type {
   ArtifactActionsOffer,
+  ArtifactOffers,
+  NoSafeDestinationOffer,
+  OfferDisabledDecision,
+  OfferUnavailableReason,
+} from '../model/artifacts/offers'
+import type {
   ArtifactChoice,
   ArtifactChoiceSemantics,
-  ArtifactOffers,
+  OfferedArtifactChoice,
+  PreparationRequirement,
+  RecoverySemantics,
+} from '../model/artifacts/choices'
+import type {
   BrowserHandoffTargetOffer,
   DirectAtomicMaterializationRoute,
   DirectResumableZipMaterializationRoute,
-  DiscoveryState,
-  EnvironmentOffers,
   FSADirectoryContainerOffer,
   ManagedAtomicTargetOffer,
   NativeDirectoryContainerOffer,
-  NoSafeDestinationOffer,
-  OfferedArtifactChoice,
   OfferedMaterializationRoute,
-  OfferDisabledDecision,
-  OfferUnavailableReason,
   PortableHandoffMaterializationRoute,
-  PreparationRequirement,
-  RecoverySemantics,
-  SelectionProjectionV1,
   WorkspaceThenPublishMaterializationRoute,
-} from './contracts'
+} from '../model/artifacts/destinations'
+import type { DiscoveryState, SelectionProjectionV1 } from '../../transfer/projection/contracts'
+import type { EnvironmentOffers } from './contracts'
 import {
   assertEnvironmentOffers,
   materializationPlanSemantics,
   outputLowerBoundFits,
 } from './guarantees'
-import {
-  artifactRequestedName,
-  resultRootLayoutFromProof,
-} from './naming'
+import { artifactRequestedName } from '../model/artifact-name'
+import { resultRootLayoutFromProof } from './naming'
 import { resolveArtifactChoiceIdentity } from './reconciliation'
 import { recommendZipRoutes } from './zip-route-recommendation'
 

@@ -1,4 +1,7 @@
-import type { PortableEnvironmentOffer, WorkspaceEnvironmentOffer } from '../../output/planning'
+import type {
+  PortableEnvironmentOffer,
+  WorkspaceEnvironmentOffer,
+} from '../../output/model/artifacts/destinations'
 import { MINIMUM_OPFS_QUOTA_RESERVE } from '../../output/workspace/budget'
 import { BROWSER_HANDOFF_OBJECT_URL_LEASE_MILLISECONDS, DEFAULT_PORTABLE_ARTIFACT_LIMIT, DEFAULT_PORTABLE_ASSEMBLY_PART_BYTES, DEFAULT_PORTABLE_MAXIMUM_PARTS } from '../../transfer/intent'
 import type { OriginPrivateStorageManager } from '../../output/browser/environment'

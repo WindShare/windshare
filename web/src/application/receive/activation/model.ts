@@ -1,11 +1,7 @@
-import type {
-  ArtifactChoice,
-  ArtifactChoiceInvalidationReason,
-  MaterializationRouteIdentity,
-  ProjectionEpoch,
-  ResolvedArtifactAction,
-  RetryableDiscoveryReason,
-} from '../../../output/planning'
+import type { ArtifactChoice } from '../../../output/model/artifacts/choices'
+import type { ArtifactChoiceInvalidationReason } from '../../../output/planning/reconciliation'
+import type { MaterializationRouteIdentity, ResolvedArtifactAction } from '../../../output/planning/contracts'
+import type { ProjectionEpoch, RetryableDiscoveryReason } from '../../../transfer/projection/contracts'
 import type { ArtifactChoiceID } from '../../../transfer/intent'
 
 export interface ActivationObservation {

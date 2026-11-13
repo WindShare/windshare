@@ -1,6 +1,6 @@
 import type { SelectionPolicy } from '../../catalog/selection'
 import type { ProtocolSessionIdentity } from '../../session/identities'
-import type { AuthenticatedDiscoverySource } from '../../transfer/projection'
+import type { AuthenticatedDiscoverySource } from '../../transfer/projection/coordinator'
 import type { ConnectivityActivation } from '../../connectivity/receiver-policy'
 import type { FrozenSelectionPolicy } from '../../catalog/selection'
 import type { ReceiveIntent } from '../../transfer/intent'

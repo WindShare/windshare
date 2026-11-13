@@ -17,12 +17,9 @@ import { recordOutputException, type OutputFailureSinks } from '../../src/output
 import type {
   CompatibleNameRepairSummary,
 } from '../../src/transfer/lifecycle/name-repair'
-import type {
-  CandidateMaterializationBinding,
-  EnvironmentOffers,
-  OfferedArtifactChoice,
-  ResolvedArtifactAction,
-} from '../../src/output/planning'
+import type { CandidateMaterializationBinding } from '../../src/output/planning/binding'
+import type { EnvironmentOffers, ResolvedArtifactAction } from '../../src/output/planning/contracts'
+import type { OfferedArtifactChoice } from '../../src/output/model/artifacts/choices'
 import {
   initialReceiveLifecycleState,
   nextReceiveLifecycleState,
@@ -48,11 +45,11 @@ import {
   type TransferWorkerSettlement,
 } from '../../src/transfer/outcome'
 import type { TransferJobResult } from '../../src/transfer/job'
+import { createAuthenticatedProjectionEvidence } from '../../src/transfer/projection/model'
 import {
-  createAuthenticatedProjectionEvidence,
   type AuthenticatedDiscoveryRequest,
   type AuthenticatedDiscoverySource,
-} from '../../src/transfer/projection'
+} from '../../src/transfer/projection/coordinator'
 import type { ReceiverIncidentPort } from '../../src/application/receive/observation/contracts'
 import { ReceiverController } from '../../src/ui/controller'
 import { type ReceiverTraceEvent } from '../../src/application/receive/observation/contracts'
@@ -182,7 +179,7 @@ export class FakeReceiveComposition implements ReceiveCompositionPort {
     offered: OfferedArtifactChoice,
     preClickRanking: readonly ArtifactChoiceID[],
     _failures?: OutputFailureSinks,
-    display?: import('../../src/output/workspace/operation-display').ReceiveOperationDisplay,
+    display?: import('../../src/output/model/operation-display').ReceiveOperationDisplay,
   ): ArtifactPresentationAuthority {
     this.startedChoices.push(offered)
     this.startedRankings.push(Object.freeze([...preClickRanking]))
@@ -240,7 +237,7 @@ export class FakeBoundRuntime implements BoundReceiveOperation {
   subscribeLifecycle(listener: ReceiveLifecycleListener): () => void {
     return this.lifecycleNotifications.subscribe(listener)
   }
-  display?: import('../../src/output/workspace/operation-display').ReceiveOperationDisplay
+  display?: import('../../src/output/model/operation-display').ReceiveOperationDisplay
   readonly plans = Object.freeze({}) as PlanExecutionAuthority
   readonly transferJobId = identityText(76)
   readonly intent: ReceiveIntent

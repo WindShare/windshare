@@ -4,8 +4,8 @@ import type { MaterializationPlan } from '../../transfer/intent'
 import type {
   RecoverySummary,
 } from '../../transfer/lifecycle/recovery-summary'
-import type { BrowserDeliveryResumeSummary } from '../../output/browser-delivery/retained'
-import { browserDeliveryLocalActions } from '../../output/browser-delivery/recovery/local-actions'
+import type { BrowserDeliverySummary } from '../../output/model/browser-delivery'
+import { browserDeliveryLocalActions } from '../../output/model/browser-delivery-actions'
 import type { LifecycleUserAction, ActiveReceiveControl, ReceiveSettlementWait } from './actions'
 
 export interface ReceiveActionFacts {
@@ -14,7 +14,7 @@ export interface ReceiveActionFacts {
   readonly activeControls?: readonly ActiveReceiveControl[]
   readonly interruption?: ReceiveSettlementWait | null
   readonly recoverySummary?: RecoverySummary | null
-  readonly browserDelivery?: BrowserDeliveryResumeSummary | null
+  readonly browserDelivery?: BrowserDeliverySummary | null
 }
 
 export function receiveLifecycleCategory(state: ReceiveLifecycleState): 'active' | 'retained' | 'terminal' {

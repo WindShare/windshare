@@ -5,10 +5,8 @@ import { acquireBrowserReceiveOperationLease } from '../../src/output/browser/se
 import { createIncidentScopeIssuer } from '../../src/diagnostics/incident'
 import { authorizeFSAParent } from '../../src/output/capability/acquisition'
 import type { AcquiredFSAParentAuthority } from '../../src/output/capability/contract'
-import {
-  bindReceiveIntent,
-  type ResolvedArtifactAction,
-} from '../../src/output/planning'
+import { bindReceiveIntent } from '../../src/output/planning/binding'
+import { type ResolvedArtifactAction } from '../../src/output/planning/contracts'
 import {
   createAttemptOutputFailureCapability,
   type LocalOutputOperationFailureDiagnosticsPort,

@@ -1,12 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
 import { createSelectionSpec } from '../../../src/transfer/intent'
-import {
-  WorkspaceCostObservationAccumulatorV1,
-  offerArtifacts,
-  recommendZipRoutes,
-  type ArtifactActionsOffer,
-} from '../../../src/output/planning'
+import { WorkspaceCostObservationAccumulatorV1 } from '../../../src/output/planning/workspace-cost-observation'
+import { offerArtifacts } from '../../../src/output/planning/offers'
+import { recommendZipRoutes } from '../../../src/output/planning/zip-route-recommendation'
+import { type ArtifactActionsOffer } from '../../../src/output/model/artifacts/offers'
 import {
   COMPLETE_DISCOVERY,
   directZipTarget,

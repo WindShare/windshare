@@ -13,12 +13,14 @@ import type {
 } from '../file-system-access/compatible-name/ledger'
 import {
   MAX_COMPATIBLE_NAME_COMMITTED_MAPPINGS,
+  compatibleNameRepairSummary,
+} from '../../transfer/lifecycle/name-repair'
+import {
   compatibleNameMappingId,
   compatibleNameMappingV1,
   compatibleNameOperationBootstrapV1,
   compatibleNameOperationHeaderV1,
   compatibleNamePendingTerminalOutcomeV1,
-  compatibleNameRepairSummary,
   type CompatibleNameMappingSpec,
   type CompatibleNameMappingV1,
   type CompatibleNameOperationBootstrapV1,

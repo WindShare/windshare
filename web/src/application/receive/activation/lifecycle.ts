@@ -1,13 +1,10 @@
 import { encodeBase64Url } from '../../../crypto/bytes'
-import type {
-  ArtifactChoiceReconcileOutcome,
-  MaterializationRouteIdentity,
-  OfferedArtifactChoice,
-  ResolvedArtifactAction,
-} from '../../../output/planning'
+import type { ArtifactChoiceReconcileOutcome } from '../../../output/planning/reconciliation'
+import type { MaterializationRouteIdentity, ResolvedArtifactAction } from '../../../output/planning/contracts'
+import type { OfferedArtifactChoice } from '../../../output/model/artifacts/choices'
 import type { ReceiveIntent } from '../../../transfer/intent'
 import type { ArtifactChoiceID } from '../../../transfer/intent'
-import type { ProjectionEpoch } from '../../../transfer/projection'
+import type { ProjectionEpoch } from '../../../transfer/projection/contracts'
 import type { ReceivePlanningShare } from '../joined-share'
 import type {
   ArtifactPresentationAuthority,

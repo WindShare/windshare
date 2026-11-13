@@ -1,11 +1,13 @@
 import type { FileCheckpointV2 } from '../persistence/checkpoint'
 import type { DurableCheckpointNamespaceIdentity } from '../persistence/namespace'
+import type { BrowserRecoveryPreference } from '../model/browser-delivery'
 
 export const BROWSER_SAVE_POLICY_VERSION = 1 as const
+
 export const BROWSER_DELIVERY_RECORD_VERSION = 2 as const
+
 export const BROWSER_DELIVERY_PAGE_LIMIT = 128
 
-export type BrowserRecoveryPreference = 'automatic' | 'direct'
 export type BrowserFilePlacement = 'direct' | 'staged'
 
 /** Receiving storage is browser-local authority; the receive intent still describes the final target. */
@@ -75,4 +77,5 @@ export interface BrowserDeliveryTraceEvent {
   readonly prior_state?: BrowserDeliveryState['kind']
   readonly state?: BrowserDeliveryState['kind']
 }
+
 export type BrowserDeliveryTrace = (event: BrowserDeliveryTraceEvent) => void

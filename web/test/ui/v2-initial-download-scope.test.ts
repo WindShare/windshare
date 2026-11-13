@@ -2,11 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import type { FrozenSelectionPolicy } from '../../src/catalog/selection'
 import type { CatalogEntry } from '../../src/catalog/records'
+import { createAuthenticatedProjectionEvidence } from '../../src/transfer/projection/model'
 import {
-  createAuthenticatedProjectionEvidence,
   type AuthenticatedDiscoveryRequest,
   type AuthenticatedDiscoverySource,
-} from '../../src/transfer/projection'
+} from '../../src/transfer/projection/coordinator'
 import type { ReceiverController } from '../../src/ui/controller'
 import type { ReceiverTraceEvent } from '../../src/application/receive/observation/contracts'
 import type { BrowseDirectory, BrowsePage } from '../../src/application/browser-share/gateway'

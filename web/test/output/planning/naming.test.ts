@@ -7,13 +7,13 @@ import {
   createSingleFileDirectoryTreeArtifact,
   createZipArchiveArtifact,
 } from '../../../src/transfer/intent'
+import { artifactRequestedName } from '../../../src/output/model/artifact-name'
 import {
-  artifactRequestedName,
   browserHandoffSuggestedName,
   decideCollisionName,
   resultRootLayoutFromProof,
-} from '../../../src/output/planning'
-import type { ArtifactShapeProof } from '../../../src/transfer/projection'
+} from '../../../src/output/planning/naming'
+import type { ArtifactShapeProof } from '../../../src/transfer/projection/contracts'
 import { identity, treeProof } from './fixture'
 
 describe('result naming and layout authority', () => {

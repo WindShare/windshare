@@ -22,11 +22,8 @@ import type {
   ReceiveLifecycleStatePayload,
 } from '../../src/transfer/lifecycle/state'
 import type { ReceiveIntent, SelectionSpec } from '../../src/transfer/intent'
-import type {
-  EnvironmentOffers,
-  ResolvedArtifactAction,
-} from '../../src/output/planning'
-import type { SelectionProjectionState } from '../../src/transfer/projection'
+import type { EnvironmentOffers, ResolvedArtifactAction } from '../../src/output/planning/contracts'
+import type { SelectionProjectionState } from '../../src/transfer/projection/contracts'
 import type {
   DirectAtomicExecution,
   PlanExecutionAuthority,
@@ -36,7 +33,10 @@ const GATEWAY_MODULE_PATH = '/src/application/browser-share/gateway.ts'
 const INTENT_MODULE_PATH = '/src/transfer/intent.ts'
 const OFFER_MODULE_PATH = '/src/connectivity/peer-offer.ts'
 const PLAN_AUTHORITY_MODULE_PATH = '/src/transfer/settlement/plan-authority.ts'
-const PLANNING_MODULE_PATH = '/src/output/planning/index.ts'
+const GUARANTEES_MODULE_PATH = '/src/output/planning/guarantees.ts'
+const BINDING_MODULE_PATH = '/src/output/planning/binding.ts'
+const ARTIFACT_OFFERS_MODULE_PATH = '/src/output/planning/offers.ts'
+const RECONCILIATION_MODULE_PATH = '/src/output/planning/reconciliation.ts'
 const PROJECTION_MODULE_PATH = '/src/transfer/projection/index.ts'
 const STREAM_MODULE_PATH = '/src/output/streams/single-file.ts'
 const WORKSPACE_STATE_MODULE_PATH = '/src/transfer/lifecycle/state.ts'
@@ -49,7 +49,10 @@ type GatewayModule = typeof import('../../src/application/browser-share/gateway'
 type IntentModule = typeof import('../../src/transfer/intent')
 type OfferModule = typeof import('../../src/connectivity/peer-offer')
 type PlanAuthorityModule = typeof import('../../src/transfer/settlement/plan-authority')
-type PlanningModule = typeof import('../../src/output/planning')
+type GuaranteesModule = typeof import('../../src/output/planning/guarantees')
+type BindingModule = typeof import('../../src/output/planning/binding')
+type ArtifactOffersModule = typeof import('../../src/output/planning/offers')
+type ReconciliationModule = typeof import('../../src/output/planning/reconciliation')
 type ProjectionModule = typeof import('../../src/transfer/projection')
 type StreamModule = typeof import('../../src/output/streams/single-file')
 type WorkspaceStateModule = typeof import('../../src/transfer/lifecycle/state')
@@ -83,7 +86,10 @@ interface ProductModules {
   readonly intent: IntentModule
   readonly offer: OfferModule
   readonly planAuthority: PlanAuthorityModule
-  readonly planning: PlanningModule
+  readonly guarantees: GuaranteesModule
+  readonly binding: BindingModule
+  readonly artifactOffers: ArtifactOffersModule
+  readonly reconciliation: ReconciliationModule
   readonly projection: ProjectionModule
   readonly stream: StreamModule
   readonly workspaceState: WorkspaceStateModule
@@ -248,7 +254,7 @@ async function bindDirectAtomicOperation(
     throw new Error('Hot-switch fixture requires a complete single-file projection')
   }
 
-  const environment = modules.planning.createEnvironmentOffers({
+  const environment = modules.guarantees.createEnvironmentOffers({
     targets: [{
       routeId: STREAM_TARGET_OFFER_ID,
       kind: 'managed-atomic-file-target',
@@ -274,7 +280,7 @@ async function bindDirectAtomicOperation(
     reservedName: suggestedName,
     collisionIndex: 0,
   })
-  const bound = await modules.planning.bindReceiveIntent({
+  const bound = await modules.binding.bindReceiveIntent({
     selection: selectionSpec,
     action,
     candidate: {
@@ -363,7 +369,7 @@ async function resolveHotSwitchDirectAtomicChoice(
   action: ResolvedArtifactAction
   suggestedName: string
 }>> {
-  const offers = await modules.planning.offerArtifacts(
+  const offers = await modules.artifactOffers.offerArtifacts(
     state.projection,
     state.discovery,
     environment,
@@ -377,9 +383,9 @@ async function resolveHotSwitchDirectAtomicChoice(
       offered.choice.artifactKind !== 'original-file' || offered.suggestedName === null) {
     throw new Error('Hot-switch fixture received an incompatible artifact choice')
   }
-  const resolution = await modules.planning.reconcileArtifactChoice({
+  const resolution = await modules.reconciliation.reconcileArtifactChoice({
     choice: offered.choice,
-    preferredRoute: modules.planning.materializationRouteIdentity(offered.route),
+    preferredRoute: modules.guarantees.materializationRouteIdentity(offered.route),
     expectedSelectionDigest: selection.digest,
     projection: state.projection,
     discovery: state.discovery,
@@ -484,13 +490,16 @@ function createGateway(
 }
 
 async function loadProductModules(): Promise<ProductModules> {
-  const [gateway, intent, offer, planAuthority, planning, projection, stream, workspaceState] =
+  const [gateway, intent, offer, planAuthority, guarantees, binding, artifactOffers, reconciliation, projection, stream, workspaceState] =
     await Promise.all([
     import(GATEWAY_MODULE_PATH) as Promise<GatewayModule>,
     import(INTENT_MODULE_PATH) as Promise<IntentModule>,
     import(OFFER_MODULE_PATH) as Promise<OfferModule>,
     import(PLAN_AUTHORITY_MODULE_PATH) as Promise<PlanAuthorityModule>,
-    import(PLANNING_MODULE_PATH) as Promise<PlanningModule>,
+    import(GUARANTEES_MODULE_PATH) as Promise<GuaranteesModule>,
+    import(BINDING_MODULE_PATH) as Promise<BindingModule>,
+    import(ARTIFACT_OFFERS_MODULE_PATH) as Promise<ArtifactOffersModule>,
+    import(RECONCILIATION_MODULE_PATH) as Promise<ReconciliationModule>,
     import(PROJECTION_MODULE_PATH) as Promise<ProjectionModule>,
     import(STREAM_MODULE_PATH) as Promise<StreamModule>,
     import(WORKSPACE_STATE_MODULE_PATH) as Promise<WorkspaceStateModule>,
@@ -500,7 +509,10 @@ async function loadProductModules(): Promise<ProductModules> {
     intent,
     offer,
     planAuthority,
-    planning,
+    guarantees,
+    binding,
+    artifactOffers,
+    reconciliation,
     projection,
     stream,
     workspaceState,

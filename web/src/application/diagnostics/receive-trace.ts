@@ -17,7 +17,7 @@ import type {
   OutputTraceEvent,
   OutputTraceSource,
 } from '../../output/diagnostics'
-import type { ProjectionTraceEvent } from '../../transfer/projection'
+import type { ProjectionTraceEvent } from '../../transfer/projection/trace'
 import type { TransferTraceEvent } from '../../transfer/job'
 import type {
   ProtocolTraceSource,

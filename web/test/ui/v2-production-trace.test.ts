@@ -24,7 +24,8 @@ import type {
   TraceScheduler,
 } from '../../src/diagnostics/trace/ports'
 import { createSelectionSpec } from '../../src/transfer/intent'
-import { nextProjectionEpoch, SelectionProjectionController } from '../../src/transfer/projection'
+import { nextProjectionEpoch } from '../../src/transfer/projection/model'
+import { SelectionProjectionController } from '../../src/transfer/projection/reducer'
 import {
   createConnectivityTraceSource,
   projectConnectivityTraceEvent,

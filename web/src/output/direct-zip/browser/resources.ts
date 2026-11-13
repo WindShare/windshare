@@ -14,8 +14,8 @@ import {
   type ReceiveOperationHandleRecord,
 } from '../../workspace/records'
 import type { ReceiveOperationRepository } from '../../workspace/repository'
-import type { ReceiveOperationDisplay } from '../../workspace/operation-display'
-import type { BoundReceiveIntent } from '../../planning'
+import type { ReceiveOperationDisplay } from '../../model/operation-display'
+import type { BoundReceiveIntent } from '../../planning/binding'
 import { validateReceiveIntent, type AvailableDirectZipPolicyDigests } from '../../../transfer/intent'
 import { equalDirectZipOwnershipMarkersV1 } from '../format'
 import type { BrowserReceiveWindow } from '../../browser/environment'

@@ -1,9 +1,9 @@
-import type { CompatibleNameRepairSummary, CompatibleNamePairPlacement, CompatibleNameFooterObservationV1, CompatibleNameFooterState } from '../../../transfer/lifecycle/name-repair'
-import {
-  catalogNameCollisionKey,
-  snapshotCatalogPath,
-  isCatalogName,
-} from '../../../catalog/path-policy'
+import type {
+  CompatibleNameRepairSummary,
+  CompatibleNamePairPlacement,
+  CompatibleNameFooterState,
+} from '../../../transfer/lifecycle/name-repair'
+import { catalogNameCollisionKey, snapshotCatalogPath } from '../../../catalog/path-policy'
 import { encodeBase64Url } from '../../../crypto/bytes'
 import type { ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import {
@@ -18,25 +18,33 @@ import {
   snapshotCanonicalBytes,
   snapshotIdentity,
 } from '../../../transfer/encoding/canonical'
+import { canonicalReceiveLifecycleStateBytes, decodeReceiveLifecycleState } from '../../workspace/state-codec'
 import {
-  canonicalReceiveLifecycleStateBytes,
-  decodeReceiveLifecycleState,
-} from '../../workspace/state-codec'
+  compatibleNameRepairSummary,
+  compatiblePairPlacement,
+  compatibleNameComponent,
+  compatibleNameBoundedCount,
+} from '../../../transfer/lifecycle/name-repair'
 
 export const COMPATIBLE_NAME_LEDGER_FORMAT_VERSION = 'compatible-name-ledger/v4' as const
+
 export const COMPATIBLE_NAME_PENDING_OUTCOME_FORMAT_VERSION =
   'compatible-name-pending-outcome/v2' as const
-export const MAX_COMPATIBLE_NAME_COMMITTED_MAPPINGS = 1_048_576
-export const MAX_COMPATIBLE_NAME_REPAIR_SUMMARY_PATHS = 8
 
 const BASE32_TOKEN_PATTERN = /^[a-z2-7]{6}$/u
 
 export type CompatibleNameEntryKind = 'file' | 'directory'
+
 export type CompatibleNameActivationState = 'prepared' | 'report-ready' | 'active'
+
 export type CompatibleNameOwnershipState = 'selected' | 'owned'
+
 export type CompatibleNameCommitState = 'uncommitted' | 'committed'
+
 export type CompatibleNamePairKind = 'script' | 'sidecar'
+
 export type CompatibleNameTerminalFooterState = Exclude<CompatibleNameFooterState, 'active'>
+
 export type CompatibleNameOrdinaryTerminalLifecycle = Extract<
   ReceiveLifecycleState,
   { readonly kind:
@@ -126,8 +134,8 @@ export function compatibleNameOperationHeaderV1(
   const authorityRef = snapshotIdentity(input.authorityRef, 32, 'authority reference')
   const primaryToken = compatibleToken(input.primaryToken, 'primary compatible-name token')
   const root = Object.freeze({
-    logicalName: catalogComponent(input.root.logicalName, 'logical result-entry name'),
-    physicalName: catalogComponent(input.root.physicalName, 'physical result-entry name'),
+    logicalName: compatibleNameComponent(input.root.logicalName, 'logical result-entry name'),
+    physicalName: compatibleNameComponent(input.root.physicalName, 'physical result-entry name'),
   })
   const pairPlacement = compatiblePairPlacement(input.pairPlacement)
   if (pairPlacement === 'inside-logical-root' && root.logicalName !== root.physicalName) {
@@ -176,7 +184,7 @@ export function compatibleNameMappingV1(
   const entryKind = compatibleEntryKind(input.entryKind)
   const ownershipState = compatibleOwnershipState(input.ownershipState)
   const commitState = compatibleCommitState(input.commitState)
-  const attempt = boundedNonNegativeInteger(input.attempt, 'compatible-name attempt')
+  const attempt = compatibleNameBoundedCount(input.attempt, 'compatible-name attempt')
   const token = compatibleToken(input.token, 'selected compatible-name token')
   const ownedObjectId = input.ownedObjectId === undefined
     ? undefined
@@ -197,7 +205,7 @@ export function compatibleNameMappingV1(
     operationId,
     logicalPath,
     entryKind,
-    physicalComponent: catalogComponent(input.physicalComponent, 'physical component'),
+    physicalComponent: compatibleNameComponent(input.physicalComponent, 'physical component'),
     attempt,
     token,
     ownershipState,
@@ -313,65 +321,6 @@ function isOrdinaryTerminalLifecycle(
   }
 }
 
-export function compatibleNameRepairSummary(
-  input: CompatibleNameRepairSummary,
-): CompatibleNameRepairSummary {
-  const committedCount = boundedNonNegativeInteger(
-    input.committedCount,
-    'compatible-name committed count',
-  )
-  if (input.logicalPathSample.length > MAX_COMPATIBLE_NAME_REPAIR_SUMMARY_PATHS ||
-      input.logicalPathSample.length > committedCount) {
-    throw new TypeError('compatible-name repair sample exceeds its bound')
-  }
-  const logicalPathSample = Object.freeze(input.logicalPathSample.map(snapshotCatalogPath))
-  const sampleKeys = logicalPathSample.map(path => encodeBase64Url(canonicalPath(path)))
-  if (new Set(sampleKeys).size !== sampleKeys.length) {
-    throw new TypeError('compatible-name repair sample repeats a logical path')
-  }
-  const latestObservedFooter = input.latestObservedFooter === undefined
-    ? undefined
-    : compatibleNameFooterObservationV1(input.latestObservedFooter)
-  if (latestObservedFooter !== undefined && latestObservedFooter.committedCount > committedCount) {
-    throw new TypeError('compatible-name footer exceeds the committed ledger prefix')
-  }
-  if (input.sidecarSync !== 'pending' && input.sidecarSync !== 'current') {
-    throw new TypeError('invalid sidecar synchronization state')
-  }
-  if (!['none', 'pending', 'complete'].includes(input.terminalSettlement)) {
-    throw new TypeError('invalid terminal settlement state')
-  }
-  if (input.sidecarSync === 'current' &&
-      latestObservedFooter?.committedCount !== committedCount) {
-    throw new TypeError('current sidecar requires a verified complete ledger prefix')
-  }
-  if (input.terminalSettlement === 'complete' &&
-      (input.sidecarSync !== 'current' || latestObservedFooter?.state === 'active')) {
-    throw new TypeError('complete terminal settlement requires a current terminal footer')
-  }
-  return Object.freeze({
-    committedCount,
-    logicalPathSample,
-    pairDisplayNames: Object.freeze({
-      ...(input.pairDisplayNames.script === undefined ? {} : { script: catalogComponent(input.pairDisplayNames.script, 'script display name') }),
-      sidecar: catalogComponent(input.pairDisplayNames.sidecar, 'sidecar display name'),
-    }),
-    placement: compatiblePairPlacement(input.placement),
-    ...(latestObservedFooter === undefined ? {} : { latestObservedFooter }),
-    sidecarSync: input.sidecarSync,
-    terminalSettlement: input.terminalSettlement,
-  })
-}
-
-export function compatibleNameFooterObservationV1(
-  input: CompatibleNameFooterObservationV1,
-): CompatibleNameFooterObservationV1 {
-  return Object.freeze({
-    committedCount: boundedNonNegativeInteger(input.committedCount, 'footer committed count'),
-    state: compatibleFooterState(input.state),
-  })
-}
-
 export function compatibleNameMappingId(
   operationIdInput: string,
   logicalPathInput: readonly string[],
@@ -435,7 +384,7 @@ function compatiblePairIdentity(
     throw new TypeError(`${label} pair ownership state is invalid`)
   }
   return Object.freeze({
-    physicalName: catalogComponent(input.physicalName, `${label} physical name`),
+    physicalName: compatibleNameComponent(input.physicalName, `${label} physical name`),
     handleId: nonEmptyCanonicalText(input.handleId, `${label} handle ID`),
     ownedObjectId: snapshotIdentity(input.ownedObjectId, 32, `${label} owned object ID`),
     ownershipState,
@@ -462,13 +411,6 @@ function compatibleEntryKind(value: CompatibleNameEntryKind): CompatibleNameEntr
   return value
 }
 
-function compatiblePairPlacement(value: CompatibleNamePairPlacement): CompatibleNamePairPlacement {
-  if (value !== 'inside-logical-root' && value !== 'beside-mapped-root') {
-    throw new TypeError('compatible-name pair placement is invalid')
-  }
-  return value
-}
-
 function compatibleActivationState(value: CompatibleNameActivationState): CompatibleNameActivationState {
   if (value !== 'prepared' && value !== 'report-ready' && value !== 'active') {
     throw new TypeError('compatible-name activation state is invalid')
@@ -490,13 +432,6 @@ function compatibleCommitState(value: CompatibleNameCommitState): CompatibleName
   return value
 }
 
-function compatibleFooterState(value: CompatibleNameFooterState): CompatibleNameFooterState {
-  if (value !== 'active' && value !== 'completed' && value !== 'stopped' && value !== 'failed') {
-    throw new TypeError('compatible-name footer state is invalid')
-  }
-  return value
-}
-
 function compatibleTerminalFooterState(
   value: CompatibleNameTerminalFooterState,
 ): CompatibleNameTerminalFooterState {
@@ -513,28 +448,14 @@ function compatibleToken(value: string, label: string): string {
   return value
 }
 
-function catalogComponent(value: string, label: string): string {
-  if (typeof value !== 'string' || !isCatalogName(value)) {
-    throw new TypeError(`${label} violates the canonical path-component policy`)
-  }
-  return value
-}
-
 function nonEmptyCanonicalText(value: string, label: string): string {
   const bytes = canonicalText(value)
   if (bytes.byteLength === 0) throw new TypeError(`${label} must not be empty`)
   return value
 }
 
-function boundedNonNegativeInteger(value: number, label: string): number {
-  if (!Number.isSafeInteger(value) || value < 0 || value > MAX_COMPATIBLE_NAME_COMMITTED_MAPPINGS) {
-    throw new TypeError(`${label} is invalid`)
-  }
-  return value
-}
-
 function boundedPositiveInteger(value: number, label: string): number {
-  if (boundedNonNegativeInteger(value, label) === 0) throw new TypeError(`${label} is invalid`)
+  if (compatibleNameBoundedCount(value, label) === 0) throw new TypeError(`${label} is invalid`)
   return value
 }
 

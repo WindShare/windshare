@@ -32,7 +32,7 @@ export * from './stages/contracts'
 export async function journalWorkspaceActivation(input: {
   readonly repository: ReceiveOperationRepository
   readonly receiveIntent: ReceiveIntent
-  readonly display?: import('./operation-display').ReceiveOperationDisplay
+  readonly display?: import('../model/operation-display').ReceiveOperationDisplay
   readonly preClickRanking: readonly ArtifactChoiceID[]
   readonly entryIdentity: string
   readonly workspaceRootHandleId: string

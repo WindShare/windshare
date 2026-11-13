@@ -13,6 +13,8 @@ import {
 import {
   MAX_COMPATIBLE_NAME_REPAIR_SUMMARY_PATHS,
   compatibleNameRepairSummary,
+} from '../../../transfer/lifecycle/name-repair'
+import {
   compatibleNameOperationBootstrapV1,
   compatibleNameMappingV1,
   compatibleNameOperationHeaderV1,

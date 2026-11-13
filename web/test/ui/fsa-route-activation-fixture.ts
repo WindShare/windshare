@@ -8,14 +8,12 @@ import {
 import { createIncidentScopeIssuer } from '../../src/diagnostics/incident'
 import { fsaParentOffer } from '../../src/output/capability/acquisition'
 import type { AcquiredFSAParentAuthority } from '../../src/output/capability/contract'
-import {
-  bindReceiveIntent,
-  materializationRouteIdentity,
-  offerArtifacts,
-  reconcileArtifactChoice,
-  type OfferedArtifactChoice,
-  type ResolvedArtifactAction,
-} from '../../src/output/planning'
+import { bindReceiveIntent } from '../../src/output/planning/binding'
+import { materializationRouteIdentity } from '../../src/output/planning/guarantees'
+import { offerArtifacts } from '../../src/output/planning/offers'
+import { reconcileArtifactChoice } from '../../src/output/planning/reconciliation'
+import { type OfferedArtifactChoice } from '../../src/output/model/artifacts/choices'
+import { type ResolvedArtifactAction } from '../../src/output/planning/contracts'
 import {
   createAttemptOutputFailureCapability,
   type LocalOutputOperationFailureDiagnosticsPort,
@@ -27,13 +25,13 @@ import {
   compatibleNameMappingV1,
   compatibleNameOperationBootstrapV1,
   compatibleNameOperationHeaderV1,
-  compatibleNameRepairSummary,
   type CompatibleNameMappingV1,
   type CompatibleNameOperationBootstrapV1,
   type CompatibleNameOperationHeaderV1,
   type CompatibleNameOperationSnapshotV1,
   type CompatibleNamePendingTerminalOutcomeV1,
 } from '../../src/output/file-system-access/compatible-name/model'
+import { compatibleNameRepairSummary } from '../../src/transfer/lifecycle/name-repair'
 import {
   type CompatibleNameRepairSummary,
 } from '../../src/transfer/lifecycle/name-repair'

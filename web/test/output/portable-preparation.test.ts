@@ -23,9 +23,7 @@ import type {
   DownloadStarted,
   PortableArtifactAdmission,
 } from '../../src/output/portable/browser-download'
-import type {
-  PortableEnvironmentOffer,
-} from '../../src/output/planning'
+import type { PortableEnvironmentOffer } from '../../src/output/model/artifacts/destinations'
 import type { ReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
 import { MemoryZipCentralDirectorySpool } from './zip-spool-fake'
 import type { ZipArchiveWriter } from '../../src/output/streams/zip-archive'

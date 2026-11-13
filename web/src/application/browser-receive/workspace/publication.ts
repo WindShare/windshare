@@ -3,7 +3,7 @@ import { removeOriginPrivateWorkspaceNamespace, type OriginPrivateWorkspaceNames
 import type { OriginPrivateRetainedArtifactBackend } from '../../../output/origin-private/session'
 import { BrowserHandoffNotStartedError, createWindowBrowserHandoffPublisher } from '../../../output/portable/browser-download'
 import { createPackagedArtifactHandoffPublisher } from '../../../output/portable/packaged-handoff'
-import { artifactRequestedName } from '../../../output/planning'
+import { artifactRequestedName } from '../../../output/model/artifact-name'
 import type { ReopenedWorkspaceOperation } from '../../../output/resume/reopen-authority'
 import type {
   WorkspaceCheckpointCleanupObservation,

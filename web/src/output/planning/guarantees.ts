@@ -11,23 +11,19 @@ import {
 } from '../../transfer/intent'
 import type { GuaranteeProfile } from '../../transfer/intent'
 import { decodeBase64Url } from '../../crypto/bytes'
+import type { ArtifactChoiceSemantics } from '../model/artifacts/choices'
 import type {
-  ArtifactChoiceSemantics,
   BrowserHandoffTargetOffer,
   BrowserHandoffTargetSemantics,
   DestinationGuaranteeFacts,
-  EnvironmentOffers,
-  EnvironmentOffersInput,
   EnvironmentTargetKind,
   EnvironmentTargetOffer,
-  EnvironmentTargetOfferInput,
   FSADirectoryContainerOffer,
   FSADirectoryTargetSemantics,
   FSAOwnedFileTargetOffer,
   FSAOwnedFileTargetSemantics,
   ManagedAtomicTargetOffer,
   ManagedAtomicTargetSemantics,
-  MaterializationRouteIdentity,
   MaterializationTargetSemantics,
   NativeDirectoryContainerOffer,
   NativeDirectoryTargetSemantics,
@@ -40,6 +36,12 @@ import type {
   WorkspacePlanSemantics,
   DirectZipSupportFacts,
   RuntimeDirectZipSupportFacts,
+} from '../model/artifacts/destinations'
+import type {
+  EnvironmentOffers,
+  EnvironmentOffersInput,
+  EnvironmentTargetOfferInput,
+  MaterializationRouteIdentity,
   ZipRouteRecommendationPolicy,
 } from './contracts'
 

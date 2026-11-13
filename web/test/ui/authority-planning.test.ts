@@ -2,13 +2,13 @@ import { describe, expect, it } from 'vitest'
 
 import {
   ArtifactPlanningContractError,
-  materializationRouteIdentity,
-  offerArtifacts,
   type ArtifactChoiceReconcileOutcome,
-  type ArtifactOffers,
-} from '../../src/output/planning'
+} from '../../src/output/planning/reconciliation'
+import { materializationRouteIdentity } from '../../src/output/planning/guarantees'
+import { offerArtifacts } from '../../src/output/planning/offers'
+import { type ArtifactOffers } from '../../src/output/model/artifacts/offers'
 import { createSelectionSpec } from '../../src/transfer/intent'
-import type { SelectionProjectionState } from '../../src/transfer/projection'
+import type { SelectionProjectionState } from '../../src/transfer/projection/contracts'
 import {
   AuthorityPlanningPipeline,
   planningSubject,

@@ -3,17 +3,17 @@ import {
   createDirectorySelectionResultRoot, createDirectResumableZipPlan, createFSAOwnedFileBinding,
   createSelectionSpec, createZipArchiveArtifact, deriveArtifactChoiceIdentity,
 } from '../../../src/transfer/intent'
-import {
-  bindReceiveIntent, materializationPlanSemantics,
-  type OfferedArtifactChoice, type ResolvedArtifactAction,
-} from '../../../src/output/planning'
+import { bindReceiveIntent } from '../../../src/output/planning/binding'
+import { materializationPlanSemantics } from '../../../src/output/planning/guarantees'
+import { type OfferedArtifactChoice } from '../../../src/output/model/artifacts/choices'
+import { type ResolvedArtifactAction } from '../../../src/output/planning/contracts'
 import { admitDirectZipRuntimeV1 } from '../../../src/output/direct-zip/session'
 import type { BrowserReceiveWindow } from '../../../src/output/browser/environment'
 import type { createBrowserDirectZipComposition } from '../../../src/application/browser-receive/direct-zip/production'
 import { observeBrowserDirectZipFeatureFacts } from '../../../src/output/direct-zip/browser/features'
 import { BROWSER_DIRECT_ZIP_TARGET_ROUTE_ID } from '../../../src/application/browser-receive/direct-zip/support'
 import type { createBrowserReceiveComposition } from '../../../src/application/browser-receive/composition'
-import type { ReceiveOperationDisplay } from '../../../src/output/workspace/operation-display'
+import type { ReceiveOperationDisplay } from '../../../src/output/model/operation-display'
 
 const id = (width: number, fill: number) => encodeBase64Url(new Uint8Array(width).fill(fill))
 

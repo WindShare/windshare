@@ -16,7 +16,7 @@ export interface ReceiveOperationResumeSource {
   listDirectZipBootstrapCandidates?(): Promise<readonly DirectZipBootstrapResumeDescriptorV1[]>
   listLifecycleStates(): Promise<readonly ReceiveLifecycleState[]>
   readOperationIdentity?(lifecycle: ReceiveLifecycleState): Promise<Readonly<{
-    display?: import('../workspace/operation-display').ReceiveOperationDisplay
+    display?: import('../model/operation-display').ReceiveOperationDisplay
     shareInstance: string
   }> | undefined>
   readProgressiveRequirement?(lifecycle: ReceiveLifecycleState): Promise<import('./progressive-checkpoint').ProgressiveZipRecoveryRequirement | undefined>

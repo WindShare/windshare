@@ -1,7 +1,7 @@
 import { renderToString } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { createSelectionSpec } from '../../src/transfer/intent'
-import { offerArtifacts } from '../../src/output/planning'
+import { offerArtifacts } from '../../src/output/planning/offers'
 import { presentSavingActions, type SavingActionPresentation } from '../../src/ui/saving'
 import { SavingControls } from '../../src/ui/saving/SavingControls'
 import { COMPLETE_DISCOVERY, environment, fsaTarget, identity, projection, treeProof } from '../output/planning/fixture'

@@ -1,9 +1,6 @@
 import type { BrowserHandoffCapabilityRuntime } from '../portable/packaged-handoff'
-import type {
-  BrowserHandoffTargetOffer,
-  EnvironmentOffers,
-  FSADirectoryContainerOffer,
-} from '../planning'
+import type { BrowserHandoffTargetOffer, FSADirectoryContainerOffer } from '../model/artifacts/destinations'
+import type { EnvironmentOffers } from '../planning/contracts'
 
 export const FSA_PARENT_DIRECTORY_ROUTE_ID = 'browser-fsa-parent-directory'
 export const BROWSER_HANDOFF_TARGET_ROUTE_ID = 'browser-object-url-handoff'

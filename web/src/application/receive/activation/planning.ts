@@ -1,17 +1,21 @@
 import {
   ArtifactPlanningContractError,
-  materializationRouteIdentity,
-  offerArtifacts,
   reconcileArtifactChoice,
+  type ArtifactChoiceReconcileOutcome,
+} from '../../../output/planning/reconciliation'
+import {
+  materializationRouteIdentity,
   sameArtifactChoiceSemantics,
   sameMaterializationRouteIdentity,
-  type ArtifactChoiceReconcileOutcome,
-  type ArtifactOffers,
+} from '../../../output/planning/guarantees'
+import { offerArtifacts } from '../../../output/planning/offers'
+import { type ArtifactOffers } from '../../../output/model/artifacts/offers'
+import {
   type ArtifactResolutionObservation,
   type MaterializationRouteIdentity,
-  type OfferedArtifactChoice,
-} from '../../../output/planning'
-import type { ProjectionEpoch, SelectionProjectionState } from '../../../transfer/projection'
+} from '../../../output/planning/contracts'
+import { type OfferedArtifactChoice } from '../../../output/model/artifacts/choices'
+import type { ProjectionEpoch, SelectionProjectionState } from '../../../transfer/projection/contracts'
 import { ActivationStateContractError } from './model'
 import type { ActiveProjection } from '../discovery'
 
