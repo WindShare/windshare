@@ -46,15 +46,8 @@ func Normalize(
 	return New(fault.DependencyContractFault(), err)
 }
 
-// boundaryCancellation decides whether a collaborator result is a cancellation.
-// Precedence, highest first:
-//  1. the caller's own context is canceled or past its deadline;
-//  2. the error already carries a classified BoundaryError fault, which keeps its
-//     policy even if its diagnostics contain context.Canceled;
-//  3. an unclassified error that wraps context.Canceled or DeadlineExceeded.
-//
-// IsCancellation therefore does not treat a classified fault as a cancellation;
-// callers such as job_revision_open rely on that.
+// Public reduction and internal admission share cancellation authority so an
+// intermediate collaborator boundary cannot change the same result's policy.
 func boundaryCancellation(ctx context.Context, err error) cancellationKind {
 	if ctx != nil {
 		switch ctx.Err() {
@@ -64,21 +57,10 @@ func boundaryCancellation(ctx context.Context, err error) cancellationKind {
 			return cancellationDeadline
 		}
 	}
-	if err == nil {
-		return cancellationNone
-	}
-	// A collaborator that already classified its failure owns the outcome. A
-	// cancellation in its diagnostics (for example the session lifetime that ended
-	// because the peer closed it) is evidence, not the caller's own cancellation;
-	// that was decided by the context checks above.
-	var classified *fault.BoundaryError
-	if errors.As(err, &classified) && classified != nil && classified.Fault().Valid() {
-		return cancellationNone
-	}
-	if errors.Is(err, context.Canceled) {
+	switch cancellation := fault.BoundaryCancellation(err); {
+	case errors.Is(cancellation, context.Canceled):
 		return cancellationCanceled
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
+	case errors.Is(cancellation, context.DeadlineExceeded):
 		return cancellationDeadline
 	}
 	return cancellationNone
