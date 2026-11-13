@@ -29,6 +29,7 @@ import type {
 import type { TestOutput } from './v2-job-fixture'
 import {
   catalogFixture,
+  digestIdentity,
   fileEntry,
   identity,
   planAuthorityFixture,
@@ -76,14 +77,35 @@ class DeferredTransferLane implements BlockLane {
 }
 
 describe('v2 authenticated file transfer', () => {
-  it('opens the authenticated revision through the adapter before output ownership exists', async () => {
+  it.each([undefined, digestIdentity(71)])('preserves source metadata %s through authenticated admission and output', async sourceMetadata => {
     const events: string[] = []
     const root = identity(2)
     const file = fileEntry(identity(11), 'payload.bin', 4n)
     const selection = selectOnlyFile(file)
     const catalog = catalogFixture([{ id: root, entries: [file] }])
     const readers = readerFixture([file], events)
+    const revisions: RevisionReader = {
+      open: async (fileId, signal) => {
+        const opened = await readers.revisions.open(fileId, signal)
+        return { ...opened, descriptor: {
+          ...opened.descriptor,
+          ...(sourceMetadata === undefined ? {} : { sourceMetadata }),
+        } }
+      },
+    }
+    const broker: BlockRangeReader = {
+      readRange: async function* (descriptor, leaseId, range, options) {
+        expect(descriptor.sourceMetadata).toBe(sourceMetadata)
+        yield* readers.broker.readRange(descriptor, leaseId, range, options)
+      },
+    }
     const output = testOutput(events)
+    const beginFile = output.beginFile
+    output.beginFile = async (request, signal) => {
+      const begun = await beginFile(request, signal)
+      expect(begun.revision.sourceMetadata).toBe(sourceMetadata)
+      return begun
+    }
     const plans = planAuthorityFixture({ output })
     const intent = await receiveIntentFixture({
       planKind: 'direct-atomic',
@@ -97,8 +119,8 @@ describe('v2 authenticated file transfer', () => {
       selection,
       intent,
       plans,
-      revisions: readers.revisions,
-      broker: readers.broker,
+      revisions,
+      broker,
     }).run()
 
     expect(result.worker.status).toBe('Succeeded')
