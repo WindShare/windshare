@@ -5,6 +5,7 @@ import type {
 } from '../../catalog/records'
 import { CATALOG_IDENTITY_BYTES } from '../../catalog/records'
 import { FileGeometry } from '../../content/geometry'
+import { sourceMetadataFields } from '../../content/revision-comparison'
 import type { OpenedRevision } from '../../content/session-services'
 import { encodeBase64Url, equalBytes } from '../../crypto/bytes'
 import { FileRevisionChangedError } from './failures'
@@ -46,6 +47,7 @@ export function validateOpenedFileRevision(
       exactSize: descriptor.exactSize,
       geometry: new FileGeometry(descriptor.exactSize, descriptor.geometry.blockSize),
       ...(modifiedTime === undefined ? {} : { modifiedTime }),
+      ...sourceMetadataFields(descriptor),
     }),
     leaseId: opened.leaseId.slice(),
     release: () => opened.release(),
