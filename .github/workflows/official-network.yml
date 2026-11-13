@@ -127,7 +127,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: [cn-a, cn-b]
+        # Serving the receiver grants access to link keys; node membership alone is insufficient.
+        node: ${{ fromJSON(vars.OFFICIAL_FRONTEND_NODES || '["cn-a"]') }}
     environment: official-${{ matrix.node }}
     steps:
       - uses: actions/checkout@v7
