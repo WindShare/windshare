@@ -30,7 +30,7 @@ func (processPhaseNetwork) Snapshot(context.Context) (networkstate.State, error)
 func TestNativeReceiverProcessWaitPrecedesPreparationAndFullCheckingPhases(t *testing.T) {
 	gate := nativepeer.NewAdmission(nativepeer.AdmissionClock{})
 	pool, _ := icepolicy.NewICEEndpointPool(nil)
-	native := newTestNative(t, nativepeer.Config{Admission: gate, Pool: &pool, Monitor: networkstate.NewMonitor(processPhaseNetwork{}, time.Nanosecond), Reachability: reachability.New(reachability.Config{}), ObservationCapacity: 64})
+	native := newTestNative(t, nativepeer.Config{Admission: gate, Pool: func() icepolicy.ICEEndpointPool { return pool }, Monitor: networkstate.NewMonitor(processPhaseNetwork{}, time.Nanosecond), Reachability: reachability.New(reachability.Config{}), ObservationCapacity: 64})
 	defer native.Close(context.Background())
 	binding := v2signal.Binding{PeerPathID: v2signal.PeerPathID{1}, AttemptID: v2signal.AttemptID{1}, AttemptSequence: 1}
 	var blockers []*pionpeer.Connection

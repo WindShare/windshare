@@ -129,6 +129,7 @@ impl Outbox {
                 pending.bytes.into_vec(),
                 slot,
                 Some(bytes),
+                Some(pending.receipt.flow().session()),
             ));
             Submission::Complete
         }))
@@ -157,7 +158,7 @@ impl Outbox {
         );
         let slot = Arc::clone(&self.control_slots).try_acquire_owned()?;
         self.ordered
-            .try_send(writer::Frame::new(bytes, slot, None))?;
+            .try_send(writer::Frame::new(bytes, slot, None, None))?;
         Ok(())
     }
 

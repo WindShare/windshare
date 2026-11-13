@@ -176,6 +176,7 @@ async fn process_composition_shuts_down_and_releases_storage_after_startup_failu
     let directory = tempfile::tempdir().unwrap();
     let database = directory.path().join("relay.sqlite");
     let startup = || Options {
+        node_config: None,
         listen: "127.0.0.1:0".parse().unwrap(),
         database: database.clone(),
         public_endpoint: Some("ws://127.0.0.1:8787/v2/ws".to_owned()),

@@ -44,7 +44,7 @@ func (run *workflow) execute(ctx context.Context, request Request, progress func
 		return Result{}, errors.New("private onboarding requires a restricted relay")
 	}
 	if discovery.Access == "open" {
-		return run.install(ctx, saved.SettingsRevision(), discovery.RelayURL, "", "", discovery.FrontendURL, request.Operation)
+		return run.install(ctx, saved.SettingsRevision(), discovery.RelayURL, "", "", request.Operation)
 	}
 	if err := ValidateDeviceName(request.DeviceName); err != nil {
 		return Result{}, err
@@ -59,7 +59,7 @@ func (run *workflow) execute(ctx context.Context, request Request, progress func
 	}
 	saved.Pending = &PendingSetup{
 		SettingsRevision: saved.SettingsRevision(), OperationID: encode(operation),
-		RelayURL: discovery.RelayURL, ConsoleURL: discovery.ConsoleURL, FrontURL: discovery.FrontendURL,
+		RelayURL: discovery.RelayURL, ConsoleURL: discovery.ConsoleURL,
 		DeviceName: request.DeviceName, ClaimSecret: encode(secret), Operation: request.Operation, phase: requesting{}}
 
 	// Persist the claimant before the first request; a lost response can recover by digest.
@@ -72,7 +72,7 @@ func (run *workflow) execute(ctx context.Context, request Request, progress func
 			return errSettingsChangedBeforePending
 		}
 		// Detect capacity and selection failures before asking anyone to approve.
-		if _, err := installation(current.Config, pending.RelayURL, "", pending.FrontURL, request.Operation); err != nil {
+		if _, err := installation(current.Config, pending.RelayURL, "", request.Operation); err != nil {
 			return err
 		}
 		current.Pending = pending

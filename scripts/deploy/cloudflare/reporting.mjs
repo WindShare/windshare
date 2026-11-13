@@ -21,7 +21,7 @@ export function deploymentReporter({ githubActions, operationId, mode, write = c
       mask(inputs.workerName);
       mask(inputs.workerName + '-console');
       if (inputs.route.kind === 'custom-domain') {
-        for (const hostname of [inputs.route.hostname, inputs.route.consoleHostname]) maskAddress('https://' + hostname);
+        for (const hostname of [inputs.route.hostname, inputs.route.consoleHostname].filter(Boolean)) maskAddress('https://' + hostname);
       }
     },
     log(event, fields = {}) {

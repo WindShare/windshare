@@ -11,7 +11,7 @@ import (
 
 // installation is shared by preflight and commit so the acknowledgement cannot
 // bypass a constraint discovered only when publishing settings.
-func installation(saved relayconfig.Config, address, accessKey, frontend string, operation Operation) (relayconfig.Config, error) {
+func installation(saved relayconfig.Config, address, accessKey string, operation Operation) (relayconfig.Config, error) {
 	firstProfile := len(saved.Profiles) == 0
 	candidate := relayprofile.Candidate{PublicURL: address, AccessKey: accessKey}
 	if err := candidate.Validate(); err != nil {
@@ -31,9 +31,7 @@ func installation(saved relayconfig.Config, address, accessKey, frontend string,
 	if operation == PrivateOnboarding || (firstProfile && len(saved.ActiveRelays) == 0) {
 		saved.ActiveRelays = []string{address}
 	}
-	if saved.FrontURL == "" {
-		saved.FrontURL = frontend
-	}
+	// Discovery authorizes relay use, never the frontend that receives link keys.
 	return saved, saved.Validate()
 }
 
@@ -41,7 +39,7 @@ func installationResult(saved relayconfig.Config, address, credentialID string) 
 	return Result{RelayURL: address, CredentialID: credentialID, FrontURL: saved.FrontURL, ActiveRelays: saved.ActiveRelays}
 }
 
-func (run *workflow) install(ctx context.Context, revision, address, accessKey, credentialID, frontend string, operation Operation) (Result, error) {
+func (run *workflow) install(ctx context.Context, revision, address, accessKey, credentialID string, operation Operation) (Result, error) {
 	saved, err := run.dependencies.Store.Update(ctx, func(current *Snapshot) error {
 		if current.Pending != nil {
 			return ErrPendingSetup
@@ -49,7 +47,7 @@ func (run *workflow) install(ctx context.Context, revision, address, accessKey, 
 		if current.SettingsRevision() != revision {
 			return errSettingsChangedBeforePending
 		}
-		next, err := installation(current.Config, address, accessKey, frontend, operation)
+		next, err := installation(current.Config, address, accessKey, operation)
 		if err == nil {
 			current.Config = next
 		}
@@ -71,5 +69,5 @@ func pendingInstallation(current Snapshot, pending *PendingSetup) (relayconfig.C
 	if current.SettingsRevision() != pending.SettingsRevision {
 		return relayconfig.Config{}, errSettingsChangedWhilePending
 	}
-	return installation(current.Config, pending.RelayURL, pending.credential().AccessKey, pending.FrontURL, pending.Operation)
+	return installation(current.Config, pending.RelayURL, pending.credential().AccessKey, pending.Operation)
 }

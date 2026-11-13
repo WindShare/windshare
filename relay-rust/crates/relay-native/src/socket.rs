@@ -37,8 +37,11 @@ pub async fn serve(
         .max_frame_size(Some(MAX_MESSAGE_BYTES))
         .write_buffer_size(0)
         .max_write_buffer_size(MAX_MESSAGE_BYTES * 2);
+    let node = ingress.node.clone();
+    let epoch = node.epoch();
+    anyhow::ensure!(node.available(), "relay temporarily unavailable");
     let socket = WebSocketStream::from_partially_read(
-        upgrade.stream,
+        crate::node::Metered::new(upgrade.stream, node.clone(), epoch),
         upgrade.buffered,
         Role::Server,
         Some(config),
@@ -47,18 +50,27 @@ pub async fn serve(
     let share = upgrade.share;
     let handle = registry.attach(share)?;
     tracing::debug!(event = "socket_connected", ?share, ?connection);
-    handle
-        .generation
-        .admit(
-            &handle.tx,
-            connection::run(
-                socket,
-                handle.tx.clone(),
-                connection,
-                shutdown,
-                handle.generation.clone(),
-                upgrade.admission,
-            ),
-        )?
-        .await
+    let (stop, stopping) = watch::channel(false);
+    let running = handle.generation.admit(
+        &handle.tx,
+        connection::run(
+            socket,
+            handle.tx.clone(),
+            connection,
+            stopping,
+            handle.generation.clone(),
+            upgrade.admission,
+            node.metrics.clone(),
+        ),
+    )?;
+    tokio::pin!(running);
+    tokio::select! {
+        result = &mut running => return result,
+        () = node.revoked(epoch) => {},
+        () = connection::stopped(&mut shutdown) => {},
+    }
+    stop.send_replace(true);
+    let result = running.await;
+    drop(handle);
+    result
 }

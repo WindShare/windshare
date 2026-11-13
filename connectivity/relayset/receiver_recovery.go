@@ -116,7 +116,7 @@ func (recovery *ReceiverRecovery) open(ctx context.Context, config ReceiverConfi
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := validateReceiverEndpoints(config.Receiver.Capability.Relays); err != nil {
+	if err := validateReceiverCandidates(config); err != nil {
 		return nil, err
 	}
 	started := recovery.options.Clock.Now()
@@ -141,6 +141,7 @@ func (recovery *ReceiverRecovery) open(ctx context.Context, config ReceiverConfi
 			return set, nil
 		}
 		last = err
+		retainResolvedEndpoints(waitCtx, &config)
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -171,7 +172,7 @@ func (recovery *ReceiverRecovery) open(ctx context.Context, config ReceiverConfi
 func (recovery *ReceiverRecovery) joinOnce(ctx, waitCtx context.Context, config ReceiverConfig) (*Receiver, error) {
 	var err error
 	config.Receiver.Capability.Relays, err = recovery.endpoints(config.Receiver.Capability.Relays)
-	if err != nil {
+	if err != nil && config.ResolveEndpoints == nil {
 		return nil, err
 	}
 	// A successful session borrows the caller lifetime, never the waiting

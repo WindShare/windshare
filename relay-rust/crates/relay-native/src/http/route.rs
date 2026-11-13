@@ -58,7 +58,8 @@ impl Ingress {
             let base = base
                 .replacen("wss://", "https://", 1)
                 .replacen("ws://", "http://", 1);
-            let body = serde_json::json!({"version":1,"access":"open","relay_url":base});
+            let body = serde_json::json!({"version":1,"access":"open","relay_url":base,
+                "services": self.node.services(), "relay_available": self.node.available()});
             return Route::Reply(
                 Response::builder()
                     .status(StatusCode::OK)
@@ -68,6 +69,16 @@ impl Ingress {
                     .body(Full::new(Bytes::from(body.to_string())))
                     .expect("static discovery headers"),
             );
+        }
+        if !self.node.available() {
+            let mut response = reply(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "relay temporarily unavailable\n",
+            );
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, "30".parse().expect("static retry"));
+            return Route::Reply(response);
         }
         if !self.origins.allows(request.headers()) {
             return Route::Reply(reply(StatusCode::FORBIDDEN, "origin is not allowed\n"));

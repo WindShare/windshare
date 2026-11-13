@@ -1,0 +1,159 @@
+name: Publish official network frontend
+
+on:
+  workflow_call:
+    inputs:
+      commit_sha:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Exact released commit SHA
+        required: true
+        type: string
+      version:
+        description: Existing release tag (vX.Y.Z)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+concurrency:
+  group: official-network
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: vars.OFFICIAL_NETWORK_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.commit_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify immutable release identity and provisioned trust
+        env:
+          RELEASE_SHA: ${{ inputs.commit_sha }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          [[ $RELEASE_SHA =~ ^[0-9a-f]{40}$ && $RELEASE_VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$(git rev-parse "refs/tags/$RELEASE_VERSION^{commit}")" = "$RELEASE_SHA"
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Verify directory authority, validity and mirror identity
+        run: go run ./cmd/network-sign verify
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+      - uses: pnpm/action-setup@v6
+        with:
+          version: latest
+      - name: Build one frontend for every region
+        env:
+          WIND_BUILD_REVISION: ${{ inputs.commit_sha }}
+        run: |
+          pnpm -C web install --frozen-lockfile
+          pnpm -C web build
+          mkdir -p official/web
+          cp -a web/dist/. official/web/
+      - name: Bundle identical installer files and publish signed mirror
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p "official/downloads/$RELEASE_VERSION"
+          gh release download "$RELEASE_VERSION" --dir "official/downloads/$RELEASE_VERSION"
+          cp -a "official/downloads/$RELEASE_VERSION" official/downloads/latest
+          gh release upload "$RELEASE_VERSION" deploy/network/windshare-network.json --clobber
+          tar -czf official-network.tar.gz -C official web downloads
+          sha256sum official-network.tar.gz > official-network.sha256
+      - uses: actions/upload-artifact@v7
+        with:
+          name: official-network
+          path: |
+            official-network.tar.gz
+            official-network.sha256
+          retention-days: 14
+          if-no-files-found: error
+
+  cloudflare:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: official-cloudflare
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.commit_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: official-network
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+      - name: Deploy shared frontend artifact
+        env:
+          CLOUDFLARE_DEPLOYMENT_MODE: frontend
+          WINDSHARE_WEB_ARTIFACT: official/web
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_WORKER_NAME: ${{ secrets.CLOUDFLARE_WORKER_NAME }}
+          CLOUDFLARE_FRONTEND_DOMAIN: windshare.cc
+          CLOUDFLARE_FRONTEND_SAAS_HOST: ws.ourworld.top
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+        run: |
+          sha256sum -c official-network.sha256
+          mkdir official
+          tar -xzf official-network.tar.gz -C official
+          npm ci --prefix relay-rust/crates/relay-cloudflare
+          node scripts/deploy/cloudflare/run.mjs
+
+  mainland:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [cn-a, cn-b]
+    environment: official-${{ matrix.node }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.commit_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: official-network
+      - name: Install the verified artifact
+        env:
+          NODE_HOST: ${{ secrets.SSH_HOST }}
+          NODE_USER: ${{ secrets.SSH_USER }}
+          NODE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          RELEASE_SHA: ${{ inputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          [[ $NODE_HOST =~ ^[a-zA-Z0-9.-]+$ && $NODE_USER =~ ^[a-z_][a-z0-9_-]*$ && $RELEASE_SHA =~ ^[0-9a-f]{40}$ ]]
+          install -d -m 0700 ~/.ssh
+          printf '%s\n' "$NODE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 0600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+          sha256sum -c official-network.sha256
+          read -r digest _ < official-network.sha256
+          remote="/tmp/windshare-web-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.tar.gz"
+          scp -o BatchMode=yes -o StrictHostKeyChecking=yes official-network.tar.gz "$NODE_USER@$NODE_HOST:$remote"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$NODE_USER@$NODE_HOST" \
+            "sudo /usr/local/sbin/windshare-install-web '$remote' '$digest' '$RELEASE_SHA' && rm -f '$remote'"

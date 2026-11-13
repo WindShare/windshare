@@ -38,5 +38,7 @@ export function cloudflareClient({ accountId, workerName, apiToken, fetchImpl = 
     route: () => get(`${workerPath}/subdomain`),
     zone: zoneId => get(`/zones/${zoneId}`),
     domains: hostname => get(`${accountPath}/domains?hostname=${encodeURIComponent(hostname)}`),
+    customHostnames: (zoneId, hostname) => get(`/zones/${zoneId}/custom_hostnames?hostname=${encodeURIComponent(hostname)}`),
+    workerRoutes: zoneId => get(`/zones/${zoneId}/workers/routes`),
   };
 }

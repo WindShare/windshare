@@ -20,12 +20,15 @@ pub fn run<I>(
     shutdown: watch::Receiver<bool>,
     generation: Generation,
     admission: Arc<Admission>,
+    metrics: crate::node::Metrics,
 ) -> impl Future<Output = Result<()>>
 where
     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let socket = AdmittedSocket::new(socket, Arc::clone(&admission));
-    supervise(socket, events, connection, shutdown, generation, admission)
+    supervise(
+        socket, events, connection, shutdown, generation, admission, metrics,
+    )
 }
 
 async fn supervise<I>(
@@ -35,6 +38,7 @@ async fn supervise<I>(
     mut shutdown: watch::Receiver<bool>,
     generation: Generation,
     admission: Arc<Admission>,
+    metrics: crate::node::Metrics,
 ) -> Result<()>
 where
     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -60,7 +64,9 @@ where
     }));
     let write_events = events.clone();
     let writer = tasks.spawn(generation.track(async move {
-        writer.run(sink, flush, write_events, connection).await?;
+        writer
+            .run(sink, flush, write_events, connection, metrics)
+            .await?;
         Ok(Closure::Drain)
     }));
     tracing::debug!(event = "connection_tasks_started", ?connection);

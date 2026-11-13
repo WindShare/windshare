@@ -18,6 +18,15 @@ function Invoke-Step([string]$Label, [scriptblock]$Body) {
 }
 
 Write-Output '== vectors-update =='
+Invoke-Step 'update signed network directory vectors' {
+    $previousUpdate = $env:UPDATE_NETWORK_VECTORS
+    try {
+        $env:UPDATE_NETWORK_VECTORS = '1'
+        go test -count=1 ./core/nodedirectory -run TestBrowserDirectoryVectors
+    } finally {
+        $env:UPDATE_NETWORK_VECTORS = $previousUpdate
+    }
+}
 Invoke-Step 'update TURN control vectors' {
     go test -count=1 ./core/session/turncontrol -update
 }

@@ -12,6 +12,18 @@ export function readRoute(env) {
   requireValue(ZONE_ID.test(zoneId ?? ''), 'Custom domains require CLOUDFLARE_ZONE_ID.');
   return { kind: 'custom-domain', hostname: name, consoleHostname, zoneId };
 }
+export function readFrontendRoute(env) {
+  const name = env.CLOUDFLARE_FRONTEND_DOMAIN;
+  const zoneId = env.CLOUDFLARE_ZONE_ID;
+  const saasHostname = env.CLOUDFLARE_FRONTEND_SAAS_HOST;
+  requireValue(!saasHostname || hostname(saasHostname), 'Set CLOUDFLARE_FRONTEND_SAAS_HOST to a validated custom hostname.');
+  requireValue(!saasHostname || name && zoneId, 'A SaaS hostname requires the frontend custom domain and zone.');
+  if (!name && !zoneId) return { kind: 'workers-dev' };
+  requireValue(hostname(name), 'Set CLOUDFLARE_FRONTEND_DOMAIN to a lowercase hostname without scheme, port or path.');
+  requireValue(ZONE_ID.test(zoneId ?? ''), 'Custom domains require CLOUDFLARE_ZONE_ID.');
+  return { kind: 'custom-domain', hostname: name, zoneId, ...(saasHostname ? { saasHostname } : {}) };
+}
+function routeHostnames(route) { return [route.hostname, route.consoleHostname].filter(Boolean); }
 export function endpointFor(inputs, subdomain) {
   if (inputs.route.kind === 'custom-domain') return `https://${inputs.route.hostname}`;
   requireValue(DNS_LABEL.test(subdomain ?? ''), 'Create your workers.dev subdomain in Cloudflare before deploying.');
@@ -19,7 +31,7 @@ export function endpointFor(inputs, subdomain) {
 }
 export function sameRoute(left, right) {
   return left?.kind === right.kind && (right.kind === 'workers-dev' ||
-    (left.hostname === right.hostname && left.consoleHostname === right.consoleHostname && left.zoneId === right.zoneId));
+    (left.hostname === right.hostname && left.consoleHostname === right.consoleHostname && left.zoneId === right.zoneId && left.saasHostname === right.saasHostname));
 }
 function ownsDomain(domain, inputs, name) {
   return domain.hostname === name && domain.zone_id === inputs.route.zoneId &&
@@ -30,7 +42,7 @@ export async function prepareRoute(inputs, cloudflare) {
   const zone = await cloudflare.zone(inputs.route.zoneId);
   requireValue(zone.id === inputs.route.zoneId && zone.account?.id === inputs.accountId && zone.status === 'active',
     'Custom domains must belong to an active zone in the deployment account.');
-  for (const name of [inputs.route.hostname, inputs.route.consoleHostname]) {
+  for (const name of routeHostnames(inputs.route)) {
     requireValue(hostname(name) && (name === zone.name || name.endsWith(`.${zone.name}`)), 'Custom domain is outside the selected zone.');
     const domains = await cloudflare.domains(name);
     requireValue(Array.isArray(domains) && domains.length <= 1 && domains.every(domain => ownsDomain(domain, inputs, name)),
@@ -43,7 +55,7 @@ export async function verifyRoute(inputs, cloudflare) {
   requireValue(route.enabled === (inputs.route.kind === 'workers-dev') && route.previews_enabled === false,
     'The stable workers.dev route or preview URL settings did not match; rerun the deployment.');
   if (inputs.route.kind === 'custom-domain') {
-    for (const name of [inputs.route.hostname, inputs.route.consoleHostname]) {
+    for (const name of routeHostnames(inputs.route)) {
       const domains = await cloudflare.domains(name);
       requireValue(Array.isArray(domains) && domains.length === 1 && ownsDomain(domains[0], inputs, name) &&
         domains[0].enabled === true && domains[0].previews_enabled === false,

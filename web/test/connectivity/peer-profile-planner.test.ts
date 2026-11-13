@@ -2,9 +2,14 @@ import { expect, it } from 'vitest'
 import { PeerProfilePlanner } from '../../src/connectivity/peer-set/profile-planner'
 import { ICEEndpointPool } from '../../src/connectivity/ice-policy/endpoints'
 import { PeerNetworkGeneration } from '../../src/connectivity/peer-set/network-generation'
+import { defaultICEEndpointPool } from '../../src/connectivity/ice-policy/defaults'
+
+function singletonPlanner(): PeerProfilePlanner {
+  return new PeerProfilePlanner(new ICEEndpointPool(defaultICEEndpointPool().endpoints.slice(0, 1)))
+}
 
 it('retains singleton primary STUN across every later fresh attempt', () => {
-  const planner = new PeerProfilePlanner()
+  const planner = singletonPlanner()
   const primary = planner.select(1, 1, 0)
   expect(primary.urls).toHaveLength(1)
   for (let attempt = 2; attempt <= 6; attempt++) {
@@ -29,7 +34,7 @@ it('rotates once into unused domains and reuses backup across network notices wi
 })
 
 it('cools attributable failures without converting profile exhaustion into permanent host-only recovery', () => {
-  const planner = new PeerProfilePlanner()
+  const planner = singletonPlanner()
   const first = planner.select(1, 1, 0)
   planner.observe(first, { kind: 'ice-error', endpoint: first.urls[0]!, code: 701 }, 0, 1)
   expect(planner.select(1, 2, 1000).urls).toEqual([])

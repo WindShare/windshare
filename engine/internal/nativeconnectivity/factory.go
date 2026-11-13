@@ -8,6 +8,7 @@ import (
 	"time"
 
 	pion "github.com/pion/webrtc/v4"
+	"github.com/windshare/windshare/connectivity/icepolicy"
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/turnpath"
 	"github.com/windshare/windshare/connectivity/v2peer"
@@ -20,6 +21,7 @@ type SenderConfig struct {
 	Now            func() time.Time
 	Diagnostics    bool
 	ObserveChannel func(*wsrtc.Channel)
+	ICEPool        func() icepolicy.ICEEndpointPool
 }
 
 func NewSender(config SenderConfig) (*v2peer.Factory, error) {
@@ -31,7 +33,7 @@ func NewSender(config SenderConfig) (*v2peer.Factory, error) {
 }
 
 func senderConfig(config SenderConfig) (v2peer.Config, error) {
-	nativeConfig := nativepeer.Config{Side: nativepeer.SideSender, Now: config.Now}
+	nativeConfig := nativepeer.Config{Side: nativepeer.SideSender, Now: config.Now, Pool: config.ICEPool}
 	if config.Diagnostics {
 		nativeConfig.ObservationCapacity = nativepeer.DefaultObservationCapacity
 	}

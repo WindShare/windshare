@@ -6,6 +6,7 @@ mod connection;
 mod environment;
 mod generation;
 mod http;
+pub mod node;
 mod registry;
 mod socket;
 mod storage;

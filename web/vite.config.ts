@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vitest/config'
+import { networkAssets } from './build/network-assets.js'
 
 const UNIT_TEST_PATTERN = 'test/**/*.test.{ts,tsx}'
 const MAX_UNIT_TEST_WORKERS = 2
@@ -31,7 +32,7 @@ export default defineConfig(({ command, mode }) => {
         : 'undefined',
       __WIND_BUILD_MODE__: JSON.stringify(buildMode),
     },
-    plugins: [react()],
+    plugins: [react(), networkAssets()],
     ...(mode === LOCAL_DEVELOPMENT_MODE
       ? {
           server: {

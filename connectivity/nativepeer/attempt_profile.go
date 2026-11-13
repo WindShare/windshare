@@ -21,7 +21,7 @@ func (n *NativePeerConnectivity) selectProfileLocked(snapshot networkstate.Snaps
 	}
 	pool := icepolicy.DefaultPool()
 	if n.config.Pool != nil {
-		pool = *n.config.Pool
+		pool = n.config.Pool()
 	}
 	v4, v6 := false, false
 	for _, a := range snapshot.LocalAddresses() {
@@ -76,10 +76,10 @@ func (n *NativePeerConnectivity) attemptObserver(key pathKey, path *pathResource
 				firstDelay = max(event.At.Sub(now), 0)
 			}
 			produced = true
-			facts.RecordProfile(profile, produced, firstDelay)
+			facts.RecordProfile(profile, produced, firstDelay, event.At)
 		}
 		if event.Milestone == "gathering_complete" && firstDelay < 0 {
-			facts.RecordProfile(profile, false, 0)
+			facts.RecordProfile(profile, false, 0, event.At)
 		}
 		observationMu.Unlock()
 		n.recordSelectedMapping(key, path, generation, event.Pair)

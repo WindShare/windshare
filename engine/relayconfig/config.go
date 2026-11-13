@@ -35,6 +35,7 @@ type Config struct {
 	FrontURL            string
 	Profiles            []relayprofile.Candidate
 	ActiveRelays        []string
+	ConfiguredOnly      bool
 }
 
 // TURNSettings projects only authority and policy; unrelated application settings
@@ -51,6 +52,7 @@ type document struct {
 	FrontURL            string               `json:"front_url,omitempty"`
 	Profiles            []savedRelay         `json:"profiles"`
 	ActiveRelays        []string             `json:"active_relays,omitempty"`
+	ConfiguredOnly      bool                 `json:"configured_relays_only,omitempty"`
 }
 type savedRelay struct {
 	URL       string `json:"url"`
@@ -67,6 +69,8 @@ func configurationPath() (path string, explicit bool, err error) {
 	}
 	return filepath.Join(directory, "windshare", "config.json"), false, nil
 }
+
+func Path() (string, error) { path, _, err := configurationPath(); return path, err }
 
 func Load() (Config, error) {
 	path, explicit, err := configurationPath()
@@ -98,7 +102,7 @@ func Decode(reader io.Reader) (Config, error) {
 	if err := decoder.Decode(&trailing); err != io.EOF || limited.N == 0 {
 		return Config{}, ErrConfig
 	}
-	result := Config{ManagedTURNPolicies: disk.ManagedTURNPolicies, FrontURL: disk.FrontURL, ActiveRelays: disk.ActiveRelays}
+	result := Config{ManagedTURNPolicies: disk.ManagedTURNPolicies, FrontURL: disk.FrontURL, ActiveRelays: disk.ActiveRelays, ConfiguredOnly: disk.ConfiguredOnly}
 	if disk.TURN != nil {
 		result.TURN = *disk.TURN
 	}

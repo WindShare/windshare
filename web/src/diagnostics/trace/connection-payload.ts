@@ -9,6 +9,15 @@ import type { TraceEventObservationV2 } from './model'
 import { TRACE_FAILURE_DETAIL_MAX_CHARACTERS } from './lane-payload'
 
 export interface ConnectionTracePayloads {
+  readonly network_directory: Readonly<{
+    operation_id: string
+    mirror: string
+    transition: 'accepted' | 'rejected'
+    generation?: number
+    serial?: number
+    trusted_until_ms?: number
+    failure_detail?: string
+  }>
   readonly connection_recovery: Readonly<{
     generation_id: string
     share_id?: string

@@ -20,6 +20,7 @@ import (
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/engine/internal/eventproject"
 	"github.com/windshare/windshare/engine/internal/nativeconnectivity"
+	"github.com/windshare/windshare/engine/internal/networkruntime"
 	"github.com/windshare/windshare/engine/internal/task"
 	"github.com/windshare/windshare/engine/internal/turnruntime"
 	appobs "github.com/windshare/windshare/engine/observation"
@@ -59,6 +60,7 @@ type managedTask interface {
 type Engine struct {
 	relaySetup      *relaysetup.Service
 	turn            *turnruntime.Runtime
+	network         *networkruntime.Runtime
 	mu              sync.Mutex
 	config          Config
 	random          *lockedReader
@@ -146,7 +148,15 @@ func New(config Config) (*Engine, error) {
 	if config.RelaySetup.Cache == nil {
 		config.RelaySetup.Cache = turnDependencies.Cache
 	}
+	network, err := networkruntime.New(config.Network, config.Now)
+	if err != nil {
+		_ = turn.Close()
+		_ = receiveCapacity.Close()
+		_ = revisions.Close()
+		return nil, err
+	}
 	return &Engine{
+		network:    network,
 		turn:       turn,
 		relaySetup: relaysetup.New(config.RelaySetup),
 		config:     config, random: random, identity: hex.EncodeToString(identity[:]),
@@ -238,6 +248,7 @@ func (engine *Engine) shutdown(active []managedTask) {
 	for _, current := range active {
 		<-current.Done()
 	}
+	engine.network.Close()
 	capacityErr := engine.revisions.Close()
 	receiveCapacityErr := engine.receiveCapacity.Close()
 	turnErr := engine.turn.Close()

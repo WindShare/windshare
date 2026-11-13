@@ -1,0 +1,17 @@
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "alidns:DescribeDomainRecords",
+        "alidns:AddDomainRecord",
+        "alidns:DeleteDomainRecord"
+      ],
+      "Resource": ["acs:alidns:*:<ALIYUN_ACCOUNT_ID>:domain/<DNS_ZONE>"],
+      "Condition": {
+        "IpAddress": {"acs:SourceIp": ["<RENEWAL_SOURCE_IP>"]}
+      }
+    }
+  ]
+}

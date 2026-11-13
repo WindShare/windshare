@@ -47,7 +47,10 @@ func TestShareChunkSizeValidationPrecedesSenderPreparation(t *testing.T) {
 			}})
 			ctx, cancel := context.WithTimeout(t.Context(), shareStartupTestTimeout)
 			defer cancel()
-			current, err := application.StartShare(ctx, ShareRequest{ChunkSize: test.size})
+			current, err := application.StartShare(ctx, ShareRequest{ChunkSize: test.size, RelayIntent: relayprofile.UseExplicit(
+				[]relayprofile.
+					Candidate{{PublicURL: "https://relay.example"}}),
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -98,7 +101,10 @@ func TestShareReadinessAndFinalizationUseDurableAuthority(t *testing.T) {
 			PollNetwork: func(ctx context.Context, _ func()) { <-ctx.Done() },
 		},
 	})
-	current, err := application.StartShare(context.Background(), ShareRequest{})
+	current, err := application.StartShare(context.Background(), ShareRequest{RelayIntent: relayprofile.UseExplicit(
+		[]relayprofile.
+			Candidate{{PublicURL: "https://relay.example"}}),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +145,10 @@ func TestShareStartsWithoutReadinessConsumer(t *testing.T) {
 		},
 		PollNetwork: func(ctx context.Context, _ func()) { <-ctx.Done() },
 	}})
-	current, err := application.StartShare(context.Background(), ShareRequest{})
+	current, err := application.StartShare(context.Background(), ShareRequest{RelayIntent: relayprofile.UseExplicit(
+		[]relayprofile.
+			Candidate{{PublicURL: "https://relay.example"}}),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +236,10 @@ func TestShareReleasesInjectedPeerAuthorityAfterPartialConstruction(t *testing.T
 		Peers:       func() (SharePeers, error) { return peers, failure },
 		PollNetwork: func(ctx context.Context, _ func()) { <-ctx.Done() },
 	}})
-	current, err := application.StartShare(t.Context(), ShareRequest{})
+	current, err := application.StartShare(t.Context(), ShareRequest{RelayIntent: relayprofile.UseExplicit(
+		[]relayprofile.
+			Candidate{{PublicURL: "https://relay.example"}}),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

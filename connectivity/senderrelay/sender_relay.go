@@ -34,6 +34,7 @@ type Config struct {
 	LifecycleObservationCapacity int
 	ObserveConnection            func(Connection) func()
 	ObserveAttempt               func(Attempt)
+	Attempts                     AttemptControl
 	// Jitter is applied only in the slow phase, keeping short outages responsive.
 	Jitter func(time.Duration) time.Duration
 }
@@ -45,6 +46,8 @@ const (
 	AttemptSucceeded
 	AttemptFailed
 	AttemptWaiting
+	AttemptParked
+	AttemptStage
 )
 
 type Attempt struct {
@@ -57,6 +60,8 @@ type Attempt struct {
 	Resume        bool
 	NextDelay     time.Duration
 	Terminal      bool
+	Duration      time.Duration
+	Stage         string
 }
 
 type Lifecycle struct {
@@ -205,6 +210,9 @@ func (lifecycle *Lifecycle) observeRecoveryAttempt(observation Attempt) {
 }
 
 func (lifecycle *Lifecycle) detachForRecovery() (Connection, error) {
+	if lifecycle.config.Attempts != nil {
+		lifecycle.config.Attempts.Unavailable()
+	}
 	lifecycle.mu.Lock()
 	defer lifecycle.mu.Unlock()
 	if lifecycle.stopping {

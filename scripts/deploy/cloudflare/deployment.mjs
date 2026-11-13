@@ -14,13 +14,17 @@ const ACCOUNT_ID = /^[a-f0-9]{32}$/;
 
 export function readInputs(env) {
   const inputs = {
-    accountId: env.CLOUDFLARE_ACCOUNT_ID, workerName: env.CLOUDFLARE_WORKER_NAME,
+    ...readWorkerIdentity(env),
     ownerPassword: env.WINDSHARE_OWNER_PASSWORD, route: readRoute(env),
   };
-  requireValue(ACCOUNT_ID.test(inputs.accountId ?? ''), 'Set CLOUDFLARE_ACCOUNT_ID to your 32-character account ID.');
-  requireValue(WORKER_NAME.test(inputs.workerName ?? ''), 'Set CLOUDFLARE_WORKER_NAME to a DNS label of at most 55 characters.');
   requireValue(typeof inputs.ownerPassword === 'string' && inputs.ownerPassword.length >= 16,
     'Set WINDSHARE_OWNER_PASSWORD in GitHub Secrets to a password of at least 16 characters.');
+  return inputs;
+}
+export function readWorkerIdentity(env) {
+  const inputs = { accountId: env.CLOUDFLARE_ACCOUNT_ID, workerName: env.CLOUDFLARE_WORKER_NAME };
+  requireValue(ACCOUNT_ID.test(inputs.accountId ?? ''), 'Set CLOUDFLARE_ACCOUNT_ID to your 32-character account ID.');
+  requireValue(WORKER_NAME.test(inputs.workerName ?? ''), 'Set CLOUDFLARE_WORKER_NAME to a DNS label of at most 55 characters.');
   return inputs;
 }
 function requireValue(condition, message) { if (!condition) throw new Error(message); }

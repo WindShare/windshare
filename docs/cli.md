@@ -18,12 +18,13 @@ progress, prompts, and diagnostics go to stderr. See [installation](installation
 ## Share
 
 ```text
-wind share <path...> [--relay <url>]... [--front-url <url>] [--block-size <bytes>] [--split-key] [--browser-trace]
+wind share <path...> [--relay <url>]... [--configured-relays-only] [--front-url <url>] [--block-size <bytes>] [--split-key] [--browser-trace]
 ```
 
 - Commits the selected roots, registers the descriptor with active relays, prints the capability link once a relay admits sessions, and serves catalog pages and file blocks on demand until stopped.
 - Default stdout output is `Link: <link>`. `--split-key` prints `Bare link: <link-without-key>` and `Key: <key>`.
-- `--front-url` and repeatable `--relay` override the saved sharing defaults for that run; `--browser-trace` sets the link query flag that enables browser receiver diagnostics.
+- Default sharing combines saved active relays with the built-in signed network. `--configured-relays-only` excludes network relays; repeatable `--relay` supplies the complete relay set for that run.
+- `--front-url` overrides the saved frontend; otherwise the release's built-in frontend applies. `--browser-trace` enables browser receiver diagnostics.
 
 ### Sharing defaults
 
@@ -35,16 +36,17 @@ wind config import <file|-> [--front-url <url>] [-v|--verbose]
 ```
 
 - `relay add` discovers relay access, runs browser device approval when required, and saves the profile while preserving active-relay and frontend selections.
-- `relay onboard` enrolls a private relay, saves its advertised frontend and managed TURN reference, and selects only that relay in `active_relays`.
+- `relay onboard` enrolls a private relay, saves its managed TURN reference, and selects it in `active_relays`. Relay discovery never changes the frontend choice or configured-only setting.
 - `relay cancel` abandons an unfinished enrollment and revokes its issued credential; it fails when nothing is pending for that relay.
 - `config import` validates and replaces the saved sharing configuration from a JSON file or stdin (`-`).
-- Settings live in `windshare/config.json` under the user configuration directory (or `WINDSHARE_CONFIG`). Rebuildable runtime state lives alongside it in `config.json.state/setup/` (pending enrollment) and `config.json.state/turn/` (managed TURN discovery cache).
+- Settings live in `windshare/config.json` under the user configuration directory (or `WINDSHARE_CONFIG`). Alongside it, `config.json.state/` holds pending enrollment, TURN discovery, and network rollback protection.
 
 ```json
 {
   "front_url": "https://your-site.example",
   "profiles": [{ "url": "https://your-site.example", "access_key": "your-device-key" }],
-  "active_relays": ["https://your-site.example"]
+  "active_relays": ["https://your-site.example"],
+  "configured_relays_only": true
 }
 ```
 

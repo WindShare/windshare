@@ -1464,6 +1464,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64",
+ "chrono",
  "crc32fast",
  "futures-util",
  "getrandom",
@@ -1471,6 +1472,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "rusqlite",
+ "serde",
  "serde_json",
  "sha2",
  "socket2",

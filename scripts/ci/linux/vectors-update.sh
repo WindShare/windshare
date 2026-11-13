@@ -5,6 +5,9 @@ cd "$(dirname "$0")/../../.."
 SECONDS=0
 echo "== vectors-update =="
 
+echo "-- update signed network directory vectors"
+UPDATE_NETWORK_VECTORS=1 go test -count=1 ./core/nodedirectory -run TestBrowserDirectoryVectors
+
 echo "-- update TURN control vectors"
 go test -count=1 ./core/session/turncontrol -update
 

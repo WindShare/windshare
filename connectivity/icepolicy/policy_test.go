@@ -61,7 +61,7 @@ func TestProfilesBoundTrustDiversityAndGeneration(t *testing.T) {
 	if got := SelectAttemptProfile(pool, request, facts.Snapshot()).EndpointIDs(); got[0] != "1" {
 		t.Fatal(got)
 	}
-	facts.RecordProfile(profile, true, time.Millisecond)
+	facts.RecordProfile(profile, true, time.Millisecond, time.Now())
 	if len(facts.Snapshot().Profiles) != 1 {
 		t.Fatal("missing profile fact")
 	}
@@ -111,7 +111,7 @@ func TestCatalogConfiguration(t *testing.T) {
 	if len(SelectAttemptProfile(pool, selection(), GenerationFacts{}).URLs()) != 1 {
 		t.Fatal("local configuration")
 	}
-	if got := SelectAttemptProfile(DefaultPool(), selection(), GenerationFacts{}).URLs(); len(got) != 1 || got[0] != ExistingDefaultSTUNServer {
+	if got := SelectAttemptProfile(DefaultPool(), selection(), GenerationFacts{}).URLs(); len(got) != 2 || got[0] == got[1] {
 		t.Fatal(got)
 	}
 	base.Enabled = false
@@ -163,8 +163,8 @@ func TestFactStoreBoundedAndSnapshotsDetached(t *testing.T) {
 	for i := range MaximumProfileFacts + 1 {
 		request.Sequence = uint64(i)
 		profile := SelectAttemptProfile(pool, request, GenerationFacts{})
-		store.RecordProfile(profile, true, time.Millisecond)
-		store.RecordProfile(profile, false, 2*time.Millisecond)
+		store.RecordProfile(profile, true, time.Millisecond, time.Now())
+		store.RecordProfile(profile, false, 2*time.Millisecond, time.Now())
 	}
 	snapshot := store.Snapshot()
 	if len(snapshot.Profiles) != MaximumProfileFacts {
@@ -175,9 +175,9 @@ func TestFactStoreBoundedAndSnapshotsDetached(t *testing.T) {
 		t.Fatal("snapshot mutable")
 	}
 	profile := SelectAttemptProfile(pool, request, GenerationFacts{})
-	store.RecordProfile(profile, true, -1)
+	store.RecordProfile(profile, true, -1, time.Now())
 	store.SetGeneration("other")
-	store.RecordProfile(profile, true, 1)
+	store.RecordProfile(profile, true, 1, time.Now())
 	if len(store.Snapshot().Profiles) != 0 {
 		t.Fatal("stale profile")
 	}

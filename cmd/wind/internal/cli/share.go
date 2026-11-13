@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"errors"
-	"slices"
 
 	"github.com/windshare/windshare/adapters/filesystem"
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
@@ -88,12 +87,15 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 
 func (a *App) engineShareRequest(request shareRequest, runtime *commandRuntime) engine.ShareRequest {
 	return engine.ShareRequest{
-		Source: filesystem.ShareSource(request.paths), Relays: slices.Clone(request.relays), ChunkSize: request.chunkSize,
+		Source: filesystem.ShareSource(request.paths), RelayIntent: request.relayIntent, Frontend: request.link.frontURL, ChunkSize: request.chunkSize,
 		Diagnostics: runtime.diagnosticSink(),
 	}
 }
 
 func (a *App) publishEngineShare(ready engine.ShareReady, presentation shareLinkPresentation, runtime *commandRuntime, observations *shareObservations) error {
+	if ready.Frontend != "" {
+		presentation.frontURL = ready.Frontend
+	}
 	payload, err := buildShareCapabilityPayload(ready.Capability, presentation)
 	if err != nil {
 		return errors.Join(errShareCapabilityEncoding, err)

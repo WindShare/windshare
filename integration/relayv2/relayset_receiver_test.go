@@ -78,6 +78,8 @@ func TestReceiverFirstUsableSessionRecoversWithFreeOrReassignedLane(t *testing.T
 	if additional == primary || attached.Kind != sendersession.ChannelAttachedLane || runtime.LaneSet().Len() != 2 {
 		t.Fatal("additional relay did not join the winning session")
 	}
+	stopDemand := holdRelaysetNetworkDemand(t, ctx, runtime)
+	defer stopDemand()
 
 	// Exercise both a lane retirement and an entire WebSocket loss. Holding the
 	// replacement dial proves that the healthy lane remains useful during loss.
@@ -169,28 +171,23 @@ func TestReceiverFirstUsableSessionRecoversWithFreeOrReassignedLane(t *testing.T
 		}
 		trace.RequireRecord(t, "relay_lane_recovered", testrun.OutcomeSucceeded, attached)
 	}
+	stopDemand()
 	set.Close()
 	waitRelaysetEvent(t, ctx, runtime.Done())
 	trace.RequireSuccess(t)
 }
 
-func TestReceiverInitiallyFailedRelayRecoversWithoutReplacingHealthyGeneration(t *testing.T) {
+func TestReceiverParksFailedRelayUntilDemandWithoutReplacingHealthyGeneration(t *testing.T) {
 	const outage = 3 * time.Minute
 	ctx, trace, urls := startRelaysetScenario(t, 2)
 	share := prepareRelaysetShare(t, ctx, trace, urls)
 	started := time.Unix(1, 0)
-	clock := &relaysetClock{now: started}
+	clock := &relaysetClock{now: started, waited: make(chan time.Duration, relaysetEventCapacity)}
 	failed := make(chan struct{})
 	connected := make(chan relayset.ReceiverConnection, relaysetEventCapacity)
 	var primaryDials, secondaryDials atomic.Int32
-	var waiting atomic.Bool
 	recovery, err := relayset.NewReceiverRecovery(relayset.ReceiverRecoveryOptions{
 		Clock: clock, Jitter: func(delay time.Duration) time.Duration { return delay },
-		Observe: func(value relayset.ReceiverRecoveryObservation) {
-			if value.Endpoint == urls[1] && value.Phase == relayset.ReceiverRecoveryWaiting {
-				waiting.Store(true)
-			}
-		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -228,17 +225,34 @@ func TestReceiverInitiallyFailedRelayRecoversWithoutReplacingHealthyGeneration(t
 	sessionID := runtime.ProtocolSessionID()
 	var initial session.LaneIdentity
 	initial.ID, initial.Epoch = runtime.LaneIdentity()
-	for range 2 {
-		waitRelaysetEvent(t, ctx, connected)
+	if waitRelaysetEvent(t, ctx, connected) != primary {
+		t.Fatal("unexpected first connection")
 	}
+	// Observe the failure backoff and two idle checks without sleeping. A healthy
+	// browsing session must not keep probing dormant sender candidates.
+	const idleChecks = 3
+	for range idleChecks {
+		waitRelaysetEvent(t, ctx, clock.waited)
+	}
+	if secondaryDials.Load() != 1 {
+		t.Fatalf("idle receiver retried unavailable relay: attempts=%d", secondaryDials.Load())
+	}
+	if err := clock.Wait(ctx, outage); err != nil {
+		t.Fatal(err)
+	}
+	stopDemand := holdRelaysetNetworkDemand(t, ctx, runtime)
+	defer stopDemand()
+	waitRelaysetEvent(t, ctx, connected)
 	requireRelaysetLive(t, runtime, primary, initial)
-	if runtime.LaneSet().Len() != 2 || runtime.ProtocolSessionID() != sessionID || primaryDials.Load() != 1 || secondaryDials.Load() < 2 || !waiting.Load() {
-		t.Fatalf("recovery disturbed healthy generation: primary=%d secondary=%d lanes=%d slow_wait=%v", primaryDials.Load(), secondaryDials.Load(), runtime.LaneSet().Len(), waiting.Load())
+	if runtime.LaneSet().Len() != 2 || runtime.ProtocolSessionID() != sessionID || primaryDials.Load() != 1 || secondaryDials.Load() != 2 {
+		t.Fatalf("recovery disturbed healthy generation: primary=%d secondary=%d lanes=%d", primaryDials.Load(), secondaryDials.Load(), runtime.LaneSet().Len())
 	}
 	trace.RequireRecord(t, "failed_candidate_recovered", testrun.OutcomeSucceeded, struct {
 		Session  [16]byte `json:"protocol_session_id"`
 		Attempts int32    `json:"attempts"`
 	}{sessionID, secondaryDials.Load()})
+	stopDemand()
+	set.Close()
 	trace.RequireSuccess(t)
 }
 

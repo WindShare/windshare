@@ -13,6 +13,7 @@ vi.mock('../../src/crypto/suite02-link', () => ({
     pkHash: new Uint8Array(32),
     readSecret: new Uint8Array(32),
     relays: ['http://relay.test'],
+    nodeAliases: [],
   })),
 }))
 

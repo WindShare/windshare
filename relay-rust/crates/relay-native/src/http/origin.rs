@@ -5,10 +5,22 @@ use url::{Host, Url};
 
 /// Browser origins are explicit deployment policy, independent of the relay's
 /// public endpoint and of untrusted Host/Forwarded request headers.
-#[derive(Clone, Debug, Default)]
-pub struct OriginPolicy {
-    allowed: BTreeSet<String>,
-    allow_localhost: bool,
+#[derive(Clone, Debug)]
+pub enum OriginPolicy {
+    Public,
+    Restricted {
+        allowed: BTreeSet<String>,
+        allow_localhost: bool,
+    },
+}
+
+impl Default for OriginPolicy {
+    fn default() -> Self {
+        Self::Restricted {
+            allowed: BTreeSet::new(),
+            allow_localhost: false,
+        }
+    }
 }
 
 impl OriginPolicy {
@@ -30,7 +42,7 @@ impl OriginPolicy {
                     .with_context(|| format!("invalid allowed origin {raw:?}"))
             })
             .collect::<Result<_>>()?;
-        Ok(Self {
+        Ok(Self::Restricted {
             allowed,
             allow_localhost,
         })
@@ -48,9 +60,12 @@ impl OriginPolicy {
             .to_str()
             .ok()
             .and_then(|raw| Origin::parse(raw).ok())
-            .is_some_and(|origin| {
-                self.allowed.contains(&origin.serialized)
-                    || (self.allow_localhost && origin.localhost)
+            .is_some_and(|origin| match self {
+                Self::Public => true,
+                Self::Restricted {
+                    allowed,
+                    allow_localhost,
+                } => allowed.contains(&origin.serialized) || (*allow_localhost && origin.localhost),
             })
     }
 }

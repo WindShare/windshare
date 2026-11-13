@@ -100,12 +100,20 @@ func (engine *Engine) StartReceive(ctx context.Context, request ReceiveRequest) 
 	request.Capability.ReadSecret = append([]byte(nil), request.Capability.ReadSecret...)
 	request.Capability.PKHash = append([]byte(nil), request.Capability.PKHash...)
 	request.Capability.Relays = append([]string(nil), request.Capability.Relays...)
+	request.Capability.NodeAliases = append([]string(nil), request.Capability.NodeAliases...)
+	known, expand, resolveErr := engine.network.Resolve(request.Capability)
+	if resolveErr != nil {
+		return nil, resolveErr
+	}
+	request.Capability.Relays = known
 	injected := engine.config.Receive
 	dependencies := receive.Dependencies{
 		Clock: injected.Clock, ReceiverDial: receiveDial(injected.ReceiverDial),
 		Recovery: injected.Recovery.native(), PeerFactory: injected.PeerFactory,
-		Connectivity: engine.connectivity,
-		Capacity:     engine.receiveCapacity,
+		Connectivity:     engine.connectivity,
+		Capacity:         engine.receiveCapacity,
+		ResolveEndpoints: expand,
+		ICEPool:          engine.network.ICEPool,
 	}
 	current, err := startWorkflow(engine, ctx, appobs.WorkflowReceive, request.Diagnostics, func(ctx context.Context, control task.Control) task.Completion[receive.Result] {
 		dependencies.Control = control

@@ -8,6 +8,7 @@ import (
 
 	"github.com/windshare/windshare/core/diagnostics"
 
+	"github.com/windshare/windshare/connectivity/icepolicy"
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/connectivity/turnpath"
@@ -42,6 +43,7 @@ type Ready struct {
 	Capability          link.Link
 	SelectedRootSummary liveshare.SelectedRootSummary
 	RelayEndpoint       v2.RelayEndpoint
+	Admissions          []string
 }
 
 type Result struct {
@@ -97,11 +99,14 @@ type Dependencies struct {
 	CatalogBudget    *catalog.BudgetAccount
 	CacheBudget      *contentflow.ProcessCacheBudget
 	Connectivity     *nativeconnectivity.Capacity
+	ICEPool          func() icepolicy.ICEEndpointPool
 	Prepare          func(context.Context, liveshare.SenderConfig) (Prepared, error)
 	Relays           func(context.Context, []string, relayset.SenderFactory) (Relays, error)
 	Relay            func(senderrelay.Config) (Relay, error)
 	Peers            func(nativeconnectivity.SenderConfig) (Peers, error)
 	PollNetwork      func(context.Context, func())
+	Attempts         func(string) senderrelay.AttemptControl
+	ObserveAttempt   func(string, senderrelay.Attempt)
 }
 
 type nativePrepared struct{ *liveshare.PreparedSender }

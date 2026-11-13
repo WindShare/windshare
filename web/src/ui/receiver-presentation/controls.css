@@ -95,3 +95,12 @@
     scroll-behavior: auto !important;
   }
 }
+.in-app-browser-hint {
+  padding: 14px 16px;
+  margin-block: 16px;
+  border: 1px solid var(--receiver-rule);
+  border-radius: 10px;
+  color: var(--receiver-ink);
+  font-size: .875rem;
+}
+.in-app-browser-hint p { margin: 6px 0 0; color: var(--receiver-muted); line-height: 1.5; }

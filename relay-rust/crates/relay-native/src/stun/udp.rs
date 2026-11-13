@@ -45,6 +45,32 @@ impl Datagram for UdpSocket {
     }
 }
 
+pub(super) struct ConfiguredDatagram {
+    pub socket: UdpSocket,
+    pub node: crate::node::Runtime,
+}
+
+impl Datagram for ConfiguredDatagram {
+    async fn receive(&mut self, buffer: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+        loop {
+            let received = self.socket.recv_from(buffer).await?;
+            if self.node.services().stun {
+                return Ok(received);
+            }
+        }
+    }
+
+    async fn send(&mut self, data: &[u8], remote: SocketAddr) -> io::Result<usize> {
+        if !self.node.services().stun {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "STUN service disabled",
+            ));
+        }
+        self.socket.send_to(data, remote).await
+    }
+}
+
 pub(super) fn bind(address: SocketAddr) -> io::Result<UdpSocket> {
     let socket = Socket::new(
         Domain::for_address(address),

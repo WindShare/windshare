@@ -29,13 +29,18 @@ Inputs: [原始需求](../../clarifications/原始需求.md), [中转服务](../
 
 ### Resources
 
+The official link host is `ws.ourworld.top`; `windshare.cc` is the backup entry.
+Keep actual fleet inventories and account details in local operator records.
+Deployment templates and procedures live in
+[network operations](../../../deploy/network/operations.md).
+
 - Overseas VPS with public IPv4 in the US, NZ, KR, JP, SG, AU, UK, VN, IN, and DE at 5, 10, or
   50 Mbps.
 - Two independent mainland servers, CN-A and CN-B, with IPv4 at 100 Mbps each.
-- The existing ICP-filed `.top` domain (`<filed-domain>`), `windshare.link`, and a free Cloudflare
+- The existing ICP-filed `.top` domain (`<filed-domain>`), `windshare.cc`, and a free Cloudflare
   account.
 
-### Current state
+### Baseline before P0
 
 | Area | Today |
 |---|---|
@@ -56,8 +61,8 @@ Inputs: [原始需求](../../clarifications/原始需求.md), [中转服务](../
    ICP-filed names on ports 80 and 443, and most mainland receivers open links inside WeChat or QQ,
    where unfiled domains are more often blocked or interrupted by warnings. Download progress and
    recovery records live in origin-scoped browser storage, so a receiver has to stay on one origin.
-   Links therefore use `s.<filed-domain>`, which resolves to CN-A and CN-B on the mainland line and
-   to Cloudflare elsewhere. `windshare.link` is the official site and the backup entry; a backup
+   Links therefore use `ws.ourworld.top`, which resolves to CN-A and CN-B on the mainland line and
+   to Cloudflare elsewhere. `windshare.cc` is the official site and the backup entry; a backup
    entry helps a link open, never a download resume.
 2. **The frontend is release configuration, never directory data.** The frontend serves the code
    that reads the key in the link fragment, so whoever chooses the frontend can read shared
@@ -122,7 +127,7 @@ Inputs: [原始需求](../../clarifications/原始需求.md), [中转服务](../
 
 | Alternative | Reason |
 |---|---|
-| `windshare.link` as the main link host | The filed host uses the existing mainland deployment. Existing overseas VPS can host `windshare.link` without buying a Hong Kong server; mainland reach needs measurement |
+| `windshare.cc` as the main link host | The filed host uses the existing mainland deployment. Existing overseas VPS can host `windshare.cc` without buying a Hong Kong server; mainland reach needs measurement |
 | Frontend chosen by the sender's zone | Senders cannot know where receivers are |
 | Redirect script or "switch entry" button on the receiver page | A page that fails to load runs no code, and another origin cannot see the download state |
 | Frontends in the signed directory | The directory signer could point new links at a page that reads their keys |
@@ -144,27 +149,27 @@ Inputs: [原始需求](../../clarifications/原始需求.md), [中转服务](../
 
 | Host | Mainland line | Other lines | Serves |
 |---|---|---|---|
-| `s.<filed-domain>` | CN-A, CN-B | Cloudflare | Links, receiver, mainland official site, installers |
+| `ws.ourworld.top` | CN-A, CN-B | Cloudflare | Links, receiver, mainland official site, installers |
 | `api.<filed-domain>` | CN-A, CN-B (proxy) | Cloudflare | Authority API, from P2 |
 | `cn1.`, `cn2.<filed-domain>` | Own server | Own server | Mainland relay and STUN |
-| `<region><n>.windshare.link` | Own server | Own server | Overseas relay and STUN |
-| `windshare.link` | Cloudflare | Cloudflare | Official site, backup entry |
-| `authority.windshare.link` | Cloudflare | Cloudflare | Origin behind the `api.` proxy |
+| `<region><n>.windshare.cc` | Own server | Own server | Overseas relay and STUN |
+| `windshare.cc` | Cloudflare | Cloudflare | Official site, backup entry |
+| `authority.windshare.cc` | Cloudflare | Cloudflare | Origin behind the `api.` proxy |
 
 - The filed domain's DNS stays on a provider with an overseas resolution line, such as DNSPod or
   Aliyun DNS, whose free tiers have it; Cloudflare's free DNS cannot answer by region.
-  `windshare.link` stays on Cloudflare, with node records DNS-only (STUN is UDP, and proxying adds
+  `windshare.cc` stays on Cloudflare, with node records DNS-only (STUN is UDP, and proxying adds
   latency).
-- Workers custom domains require the hostname's zone on Cloudflare, so `s.` and `api.` reach the
-  same Workers as Cloudflare for SaaS custom hostnames on the `windshare.link` zone. They must be
+- Workers custom domains require the hostname's zone on Cloudflare, so `ws.` and `api.` reach the
+  same Workers as Cloudflare for SaaS custom hostnames on the `windshare.cc` zone. They must be
   subdomains, because the free plan cannot take a zone apex as a custom hostname.
-- CN-A and CN-B obtain certificates for `s.` and `api.` through DNS-01, since validators abroad
+- CN-A and CN-B obtain certificates for `ws.` and `api.` through DNS-01, since validators abroad
   resolve those names to Cloudflare. Node hostnames use HTTP-01.
 - Official public relays accept valid HTTP(S) browser origins, including self-hosted frontends.
   Admission and capacity policies apply independently; private deployments may restrict origins.
 - After P2 enables mainland relaying, a link can read
-  `https://s.<filed-domain>/<ShareID>?n=cn1&n=jp1#<key>`.
-- Overseas nodes live under `windshare.link`, so a problem with the filed domain cannot take them
+  `https://ws.ourworld.top/<ShareID>?n=cn1&n=jp1#<key>`.
+- Overseas nodes live under `windshare.cc`, so a problem with the filed domain cannot take them
   down.
 - Keep the filed `.top` domain. Publish the exact official link hostname in the app and website;
   no brand-domain migration is planned.
@@ -187,10 +192,10 @@ Inputs: [原始需求](../../clarifications/原始需求.md), [中转服务](../
 
 | Node | Roles |
 |---|---|
-| CN-A, CN-B (100 Mbps) | Mainland line of `s.` and `api.`; STUN, relay from P2; health vantage points |
+| CN-A, CN-B (100 Mbps) | Mainland line of `ws.` and `api.`; STUN, relay from P2; health vantage points |
 | Overseas 50 Mbps | Relay, optional STUN; one is a health vantage point |
 | Overseas 5–10 Mbps | Low-weight relay, optional STUN |
-| Cloudflare | `windshare.link`, the other lines of `s.` and `api.`, the authority (Worker and Durable Object SQLite), directory mirror |
+| Cloudflare | `windshare.cc`, the other lines of `ws.` and `api.`, the authority (Worker and Durable Object SQLite), directory mirror |
 
 ## 6. Phases
 
@@ -204,12 +209,17 @@ governor and can ship before P4.
 
 Links open fast in both regions, and mainland P2P improves.
 
+Implementation status (2026-11-13): P0/P1 code and release tooling are implemented.
+Full rollout still requires fleet provisioning, operator keys, installer releases,
+and fleet/device measurements; see
+[network operations](../../../deploy/network/operations.md).
+
 - Servers: CN-A, CN-B, and two or three 50 Mbps overseas servers, one each near Asia, Europe, and
   the Americas. Other servers can join through P1's signed directory; P3 automates onboarding.
 - DNS and certificates follow [Hosts and domains](#4-hosts-and-domains); verify split DNS, certificate
   issuance, and Cloudflare for SaaS routing to the Workers.
-- On CN-A and CN-B, one TLS reverse proxy on port 443 routes by hostname: `s.` to the web build and
-  installers, `cnN.` to `wsrelay`, and from P2 `api.` to `authority.windshare.link`.
+- On CN-A and CN-B, one TLS reverse proxy on port 443 routes by hostname: `ws.` to the web build and
+  installers, `cnN.` to `wsrelay`, and from P2 `api.` to `authority.windshare.cc`.
 - Add an explicit public Origin mode to `wsrelay` for official relays. Run it under systemd behind
   TLS ingress on TCP 443 with `--public-endpoint`; selected STUN hosts also open UDP 3478.
   The proxy overwrites a single-IP source header; configure `--trusted-proxies` and
@@ -223,7 +233,7 @@ Links open fast in both regions, and mainland P2P improves.
   unavailability, not share STOP or permanent access denial; preserve progress and other live paths.
   Account classes and fair scheduling arrive in P2.
 - The Cloudflare deployment gains a `frontend` mode beside `full` and `relay-only`: static assets
-  only, serving `windshare.link` and the other lines of `s.`.
+  only, serving `windshare.cc` and the other lines of `ws.`.
 - One release pipeline publishes each web build to Cloudflare and both mainland servers, because
   one origin is served from both sides. `/downloads/` serves installers from CN-A and CN-B on the
   mainland line and redirects to GitHub releases on Cloudflare.
@@ -249,7 +259,7 @@ Directory payload, signed as exact bytes with Ed25519 so no JSON canonicalizatio
 ```json
 {
   "format": 1, "network": "windshare", "generation": 1, "serial": 42,
-  "issued_at": "2026-11-09T00:00:00Z", "expires_at": "2027-02-09T00:00:00Z",
+  "issued_at": "2026-11-09T00:00:00Z", "expires_at": "2027-02-07T00:00:00Z",
   "nodes": [{
     "alias": "cn1", "relay": "https://cn1.<filed-domain>", "stun": ["stun:cn1.<filed-domain>:3478"],
     "roles": ["stun"], "zone": "cn", "region": "cn-east", "provider": "<provider>",
@@ -279,7 +289,7 @@ Directory payload, signed as exact bytes with Ed25519 so no JSON canonicalizatio
 - Signing: the source lives in `deploy/network/`. The operator signs locally with the online key
   and publishes to the mirrors; the repository keeps the signed export as history. P3 moves
   signing into the console.
-- Mirrors: `/.well-known/windshare-network` on `s.<filed-domain>` and `windshare.link`, plus a
+- Mirrors: `/.well-known/windshare-network` on `ws.ourworld.top` and `windshare.cc`, plus a
   GitHub release asset; from P3, every node.
 - `engine/builtinnetwork` (new, imported only by applications such as `cmd/wind` and the desktop
   app): embedded snapshot, pinned root keys, mirrors, and the built-in frontends (link host and
@@ -352,7 +362,7 @@ Directory payload, signed as exact bytes with Ed25519 so no JSON canonicalizatio
 Account admission and fair relaying enable mainland service and public promotion.
 
 - Authority: a new Cloudflare Worker host (`relay-rust/crates/network-authority`, Durable Object
-  SQLite, reusing `relay-access`) at `authority.windshare.link`. Clients and nodes always call
+  SQLite, reusing `relay-access`) at `authority.windshare.cc`. Clients and nodes always call
   `api.<filed-domain>` (see [Hosts and domains](#4-hosts-and-domains)), because `workers.dev` is
   unreachable from mainland China.
 - The first deployment prints a one-time initialization link: open it, set the administrator's
@@ -448,7 +458,7 @@ Adding a server takes one command and one approval.
   install command with a one-time join token. The node installs, generates its key, obtains a
   certificate, and binds with the token. Once vantage-point probes succeed it enters as `canary`,
   and it becomes `active` after a healthy period. The console creates DNS records through the
-  provider API: Cloudflare for `windshare.link`, DNSPod or Aliyun for the filed domain. A new
+  provider API: Cloudflare for `windshare.cc`, DNSPod or Aliyun for the filed domain. A new
   mainland provider also needs filing access.
 - Directory signing moves into the authority: every console change publishes a new serial, and
   frontends and nodes serve the latest signed directory from the authority with caching. The

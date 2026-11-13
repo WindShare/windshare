@@ -148,7 +148,8 @@ func (s *activeShare) start(ctx, resourceContext context.Context, request Reques
 	}
 	s.peers, err = d.Peers(nativeconnectivity.SenderConfig{
 		TURN: d.TURN, Capacity: d.Connectivity,
-		Now: d.Control.Now, Diagnostics: d.Control.Diagnostics.Enabled(), ObserveChannel: o.attachChannel,
+		ICEPool: d.ICEPool,
+		Now:     d.Control.Now, Diagnostics: d.Control.Diagnostics.Enabled(), ObserveChannel: o.attachChannel,
 	})
 	if native, ok := s.peers.(nativePeers); ok {
 		o.attachPeers(native.Factory)
@@ -174,7 +175,11 @@ func (s *activeShare) start(ctx, resourceContext context.Context, request Reques
 	s.server = startSessionServer(resourceContext, s.factory, s.relays, o)
 	s.ready = true
 	o.emit(Observation{Milestone: ShareReady})
-	d.Controller.publish(Ready{Capability: s.prepared.Capability(), SelectedRootSummary: s.prepared.SelectedRootSummary(), RelayEndpoint: endpoint})
+	admitted := []string{s.relays.ReadyRelayURL()}
+	if source, ok := s.relays.(interface{ AdmittedURLs() []string }); ok {
+		admitted = source.AdmittedURLs()
+	}
+	d.Controller.publish(Ready{Capability: s.prepared.Capability(), SelectedRootSummary: s.prepared.SelectedRootSummary(), RelayEndpoint: endpoint, Admissions: admitted})
 	d.Control.NotifyStateChanged()
 	// Optional warming follows readiness and retains its own bounded background
 	// work. A slow scan or a caller that never displays the link cannot hold Ready.

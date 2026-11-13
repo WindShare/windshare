@@ -101,7 +101,8 @@ func (a *runner) connectGetReceiver(ctx context.Context, request preparedRequest
 		owner:       owner,
 		observation: observation,
 		config: relayset.ReceiverConfig{
-			Dial: a.receiverDial,
+			ResolveEndpoints: a.resolveEndpoints,
+			Dial:             a.receiverDial,
 			Receiver: liveshare.ReceiverConfig{
 				Capacity:   a.receiveCapacity,
 				Capability: request.link, ContentRoutePolicy: receiverRoutePolicy(request.connectivity),

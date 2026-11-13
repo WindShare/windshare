@@ -20,7 +20,7 @@ func TestProcessQueueUsesWaveTimeAndPreservesCompleteNativeCheckingOpportunity(t
 	gate := nativepeer.NewAdmission(nativepeer.AdmissionClock{Now: clock.Now})
 	pool, _ := icepolicy.NewICEEndpointPool(nil)
 	captured := make(chan pionpeer.AttemptConfig, 8)
-	native := newTestNative(t, nativepeer.Config{Admission: gate, Now: clock.Now, Pool: &pool, Monitor: networkstate.NewMonitor(fakeNetwork{}, time.Nanosecond),
+	native := newTestNative(t, nativepeer.Config{Admission: gate, Now: clock.Now, Pool: func() icepolicy.ICEEndpointPool { return pool }, Monitor: networkstate.NewMonitor(fakeNetwork{}, time.Nanosecond),
 		Reachability: reachability.New(reachability.Config{Now: clock.Now}), ObservationCapacity: 64,
 		Connect: func(config pion.Configuration, request pionpeer.AttemptConfig) (*pionpeer.Connection, error) {
 			captured <- request

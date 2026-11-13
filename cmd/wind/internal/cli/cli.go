@@ -17,6 +17,7 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/configcommand"
 	"github.com/windshare/windshare/cmd/wind/internal/networkcommand"
 	"github.com/windshare/windshare/engine"
+	"github.com/windshare/windshare/engine/builtinnetwork"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relaysetup"
 	"github.com/windshare/windshare/engine/turncache"
@@ -38,7 +39,8 @@ const usageText = `Usage:
       Commit selected roots, wait for relay registration, print a suite-02 link, and scan descendants on demand.
       --split-key prints a bare link and key string for delivery over separate channels.
       Sharing defaults load from the user config directory's windshare/config.json (or WINDSHARE_CONFIG).
-      --front-url overrides the saved frontend for this share. An explicit frontend and relay selection are required.
+      --front-url overrides the saved frontend; otherwise links use ws.ourworld.top.
+      --configured-relays-only disables built-in candidates for this share.
       --relay overrides the saved candidate set, retaining credentials for matching addresses.
 
   ` + commandmeta.Name + ` get <link> [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only|p2p-only] [-v|--verbose] [--trace <file>|--trace-dir <directory>]
@@ -104,8 +106,19 @@ type App struct {
 // Main 是 os 进程入口的接线:真实标准流 + SIGINT 取消(Ctrl-C 即"停止分享"
 // /"中断下载"语义,§6.9)。
 func Main() int {
+	configPath, err := relayconfig.Path()
+	if err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, err)
+		return ExitFailure
+	}
+	network, err := builtinnetwork.Config(configPath)
+	if err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, err)
+		return ExitFailure
+	}
 	app := &App{
-		Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin,
+		engineConfig: engine.Config{Network: network},
+		Stdout:       os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin,
 		networkSetup:    platformsetup.New(),
 		loadShareConfig: relayconfig.Load,
 		saveShareConfig: relayconfig.Save,

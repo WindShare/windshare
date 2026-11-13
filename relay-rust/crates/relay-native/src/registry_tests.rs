@@ -89,6 +89,7 @@ fn registry() -> (tempfile::TempDir, Registry, Fixture) {
     )
     .unwrap();
     let registry = Registry {
+        metrics: crate::node::Metrics::default(),
         actors: Mutex::new(BTreeMap::new()),
         store,
         endpoint,
@@ -131,6 +132,7 @@ async fn rebuild_waits_for_writer_destruction_and_fences_old_callbacks() {
                     stopping,
                     old.generation.clone(),
                     crate::test_support::socket_admission(),
+                    crate::node::Metrics::default(),
                 ),
             )
             .unwrap(),
@@ -251,6 +253,7 @@ async fn cancelled_connection_supervisor_keeps_host_lease_until_children_exit() 
                     stopping,
                     old.generation.clone(),
                     admission,
+                    crate::node::Metrics::default(),
                 ),
             )
             .unwrap(),

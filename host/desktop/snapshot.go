@@ -71,7 +71,11 @@ func projectTask(view *Share, current running) {
 	switch state.Startup {
 	case engine.ShareReadyReached:
 		view.Startup, view.State = "ready", Sharing
-		view.URL, _ = state.Ready.Capability.URL(current.frontURL)
+		frontend := state.Ready.Frontend
+		if frontend == "" {
+			frontend = current.frontURL
+		}
+		view.URL, _ = state.Ready.Capability.URL(frontend)
 		summary := state.Ready.SelectedRootSummary
 		view.Selection = &Selection{Count: summary.SelectedCount()}
 		if root, ok := summary.SingleRoot(); ok {

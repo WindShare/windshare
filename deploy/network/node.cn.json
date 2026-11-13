@@ -1,0 +1,4 @@
+{
+  "services": { "relay": false, "stun": true },
+  "relay_budget": null
+}

@@ -6,6 +6,7 @@ import {
   SUITE02_READ_SECRET_BYTES,
 } from './suite02-key-derivation'
 import { type CryptoRuntime, defaultCryptoRuntime } from './webcrypto'
+import { validNodeAlias } from '../network/alias'
 
 export const SUITE02 = 0x02
 export const SUITE02_SHARE_ID_BYTES = 12
@@ -28,6 +29,7 @@ export interface Suite02CapabilityKey {
 export interface Suite02CapabilityLink extends Suite02CapabilityKey {
   /** Ordered relay bases, including the link origin when no hints are present. */
   readonly relays: readonly string[]
+  readonly nodeAliases: readonly string[]
 }
 
 async function shareIdentity(
@@ -109,7 +111,17 @@ export async function encodeSuite02CapabilityKey(
 // page origin. A separately entered key uses the page that supplies its route.
 export function capabilityRelays(url: URL): readonly string[] {
   const hints = url.searchParams.getAll('r')
-  return Object.freeze(hints.length > 0 ? hints : [url.origin])
+  capabilityNodeAliases(url)
+  if (hints.length > 0) return Object.freeze(hints.map(hint => hint.includes('://') ? hint : `https://${hint}`))
+  return Object.freeze(url.searchParams.has('n') ? [] : [url.origin])
+}
+
+export function capabilityNodeAliases(url: URL): readonly string[] {
+  const aliases = url.searchParams.getAll('n'), relays = url.searchParams.getAll('r')
+  if (aliases.length + relays.length > 8 || aliases.some(alias => !validNodeAlias(alias)) || new Set(aliases).size !== aliases.length || relays.includes('')) {
+    throw new CryptoError('malformed-link', 'Invalid relay hints')
+  }
+  return Object.freeze(aliases)
 }
 
 export async function parseSuite02CapabilityLink(
@@ -155,5 +167,6 @@ export async function parseSuite02CapabilityLink(
   return Object.freeze({
     ...capability,
     relays: capabilityRelays(url),
+    nodeAliases: capabilityNodeAliases(url),
   })
 }

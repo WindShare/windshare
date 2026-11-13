@@ -216,3 +216,14 @@ jobs:
             "$ASSET_ROOT/release-windows/windshare-$RELEASE_VERSION-windows-amd64.zip" \
             "$ASSET_ROOT/release-linux/SHA256SUMS-linux-amd64" \
             "$ASSET_ROOT/release-windows/SHA256SUMS-windows-amd64"
+
+  official-network:
+    needs: [release, publish]
+    if: vars.OFFICIAL_NETWORK_ENABLED == 'true'
+    uses: ./.github/workflows/official-network.yml
+    permissions:
+      contents: write
+    with:
+      commit_sha: ${{ needs.release.outputs.commit_sha }}
+      version: ${{ needs.release.outputs.version }}
+    secrets: inherit

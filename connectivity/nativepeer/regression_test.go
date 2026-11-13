@@ -66,7 +66,7 @@ func TestProfilesRotateOnceAndNeverLoseSingletonSTUNOnLaterAttempts(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			h.native.config.Pool = &pool
+			h.native.config.Pool = func() icepolicy.ICEEndpointPool { return pool }
 			for i := uint64(1); i <= 3; i++ {
 				_, _ = h.native.NewPeerConnection(context.Background(), request(i))
 			}

@@ -2,6 +2,7 @@ export const ENDPOINTS_PER_PROFILE = 2
 export const ENDPOINTS_PER_WAVE = 4
 export const MAXIMUM_CATALOG_ENDPOINTS = 512
 export const ENDPOINT_FAILURE_COOLDOWN_MS = 30_000
+export const PROFILE_SUCCESS_AGE_MS = 15 * 60 * 1000
 
 export interface ICEEndpoint {
  readonly id: string
@@ -50,7 +51,7 @@ export interface SelectionRequest {
 export interface GenerationFacts {
  readonly networkGenerationID: string
  readonly endpoints: readonly { readonly endpointID: string; readonly failedUntilMs: number }[]
- readonly profiles?: readonly { readonly profileID: string; readonly serverReflexiveProduced: boolean; readonly firstCandidateDelayMs: number }[]
+  readonly profiles?: readonly { readonly profileID: string; readonly serverReflexiveProduced: boolean; readonly firstCandidateDelayMs: number; readonly endpointIDs: readonly string[]; readonly observedAtMs: number }[]
 }
 export interface AttemptICEProfile {
  readonly id: string
@@ -74,6 +75,9 @@ export function selectAttemptProfile(pool: ICEEndpointPool, request: SelectionRe
   (endpoint.family !== 'ipv6' || request.ipv6) && (!endpoint.failureDomain || !domains.has(endpoint.failureDomain)) &&
   !(facts?.networkGenerationID === request.networkGenerationID && facts.endpoints.some(fact => fact.endpointID === endpoint.id && request.nowMs < fact.failedUntilMs)))
  candidates.sort((a, b) => {
+  const successfulMember = (id: string) => facts?.networkGenerationID === request.networkGenerationID && facts.profiles?.some(profile =>
+   profile.serverReflexiveProduced && profile.observedAtMs <= request.nowMs && request.nowMs - profile.observedAtMs <= PROFILE_SUCCESS_AGE_MS && profile.endpointIDs.includes(id)) === true
+  if (successfulMember(a.id) !== successfulMember(b.id)) return successfulMember(a.id) ? -1 : 1
   if (a.trust !== b.trust) return a.trust === 'reviewed' ? -1 : 1
   if (a.priority !== b.priority) return b.priority - a.priority
   return policyHash(seed + '|' + a.id) - policyHash(seed + '|' + b.id) || (a.id < b.id ? -1 : 1)
@@ -98,7 +102,7 @@ function diverseEndpointIndex(candidates: readonly ICEEndpoint[], first: ICEEndp
  let best = -1
  for (let i = 0; i < candidates.length; i++) {
   const endpoint = candidates[i]!
-  const score = (endpoint.failureDomain && endpoint.failureDomain !== first.failureDomain ? 2 : 0) +
+   const score = (endpoint.provider && endpoint.provider !== first.provider ? 4 : 0) + (endpoint.failureDomain && endpoint.failureDomain !== first.failureDomain ? 2 : 0) +
    (endpoint.region && endpoint.region !== first.region ? 1 : 0)
   if (score > best) { index = i; best = score }
  }

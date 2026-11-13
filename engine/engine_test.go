@@ -15,6 +15,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/engine/internal/task"
+	"github.com/windshare/windshare/engine/relayprofile"
 )
 
 func newTestEngine(t *testing.T, config Config) *Engine {
@@ -229,7 +230,10 @@ func TestReceiveFacadeSettlesInvalidRequestAndClosesAdmission(t *testing.T) {
 	if _, err := application.StartReceive(context.Background(), ReceiveRequest{}); !errors.Is(err, ErrClosed) {
 		t.Fatalf("closed receive = %v", err)
 	}
-	if _, err := application.StartShare(context.Background(), ShareRequest{}); !errors.Is(err, ErrClosed) {
+	if _, err := application.StartShare(context.Background(), ShareRequest{RelayIntent: relayprofile.UseExplicit(
+		[]relayprofile.
+			Candidate{{PublicURL: "https://relay.example"}}),
+	}); !errors.Is(err, ErrClosed) {
 		t.Fatalf("closed share = %v", err)
 	}
 	if _, err := application.StartRelaySetup(context.Background(), RelaySetupRequest{}); !errors.Is(err, ErrClosed) {

@@ -36,11 +36,11 @@ func TestConfigImportFeedsOrdinaryShareWithoutStartingAnEngine(t *testing.T) {
 	}
 	expected := []relayprofile.Candidate{{PublicURL: "https://private.example", AccessKey: "private-import-canary"}}
 	request, outcome := app.parseShareRequest([]string{"root"})
-	if outcome != requestParseReady || !reflect.DeepEqual(request.relays, expected) || request.link.frontURL != "https://private.example" {
+	if outcome != requestParseReady || !reflect.DeepEqual(request.relayIntent.Candidates(), expected) || request.link.frontURL != "https://private.example" {
 		t.Fatal("ordinary share did not use the imported complete candidate set")
 	}
 	capability := testShareCapability(t)
-	capability.Relays = []string{request.relays[0].PublicURL}
+	capability.Relays = []string{request.relayIntent.Candidates()[0].PublicURL}
 	payload, err := buildShareCapabilityPayload(capability, request.link)
 	if err != nil {
 		t.Fatal(err)

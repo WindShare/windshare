@@ -35,13 +35,23 @@ func prepareRelay(prepared Prepared, candidate relayprofile.Candidate, d Depende
 	if o.detailed {
 		capacity = relayv2.DefaultLifecycleObservationCapacity
 	}
+	var attempts senderrelay.AttemptControl
+	if d.Attempts != nil {
+		attempts = d.Attempts(candidate.PublicURL)
+	}
 	relay, err := d.Relay(senderrelay.Config{
 		Candidate: senderrelay.Candidate{PublicURL: candidate.PublicURL, AccessKey: candidate.AccessKey}, Fresh: register, ResumeToken: resumeToken,
 		PrivateKey: material.SenderPrivateKey, Descriptor: material.Descriptor,
 		LifecycleObservationCapacity: capacity,
 		ObserveConnection:            o.attachRelay,
+		Attempts:                     attempts,
 		ObserveAttempt: func(attempt senderrelay.Attempt) {
-			o.emit(Observation{RelayRecovery: &RelayRecovery{Endpoint: endpoint, Attempt: attempt}})
+			if attempt.State != senderrelay.AttemptParked && attempt.State != senderrelay.AttemptStage {
+				o.emit(Observation{RelayRecovery: &RelayRecovery{Endpoint: endpoint, Attempt: attempt}})
+			}
+			if d.ObserveAttempt != nil {
+				d.ObserveAttempt(candidate.PublicURL, attempt)
+			}
 		},
 	})
 	if relay != nil {

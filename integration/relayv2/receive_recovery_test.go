@@ -22,6 +22,7 @@ import (
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine"
 	appobs "github.com/windshare/windshare/engine/observation"
+	"github.com/windshare/windshare/engine/relayprofile"
 	"github.com/windshare/windshare/internal/testoutputroot"
 	"github.com/windshare/windshare/internal/testrun"
 	"github.com/windshare/windshare/osfs"
@@ -131,7 +132,7 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 	}
 	sender, err := application.StartShare(ctx, engine.ShareRequest{Source: liveshare.FileSourceFactoryFunc(func(ctx context.Context, source liveshare.FileSourceContext) (liveshare.FileSource, error) {
 		return osfs.NewSelectedFileSource(ctx, osfs.SelectedCatalogSourceConfig{Paths: []string{filename}, SyntheticRoot: source.SyntheticRoot, Identities: osfs.CatalogIdentitySourceFunc(source.NewIdentity)})
-	}), Relays: candidates, ChunkSize: catalog.MinChunkSize})
+	}), RelayIntent: relayprofile.UseExplicit(candidates), ChunkSize: catalog.MinChunkSize})
 	if err != nil {
 		t.Fatal(err)
 	}

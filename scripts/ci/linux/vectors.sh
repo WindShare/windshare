@@ -5,6 +5,9 @@ cd "$(dirname "$0")/../../.."
 SECONDS=0
 echo "== vectors =="
 
+echo "-- verify signed network directory vectors"
+go test -count=1 ./core/nodedirectory -run TestBrowserDirectoryVectors
+
 echo "-- verify TURN control vectors"
 go test -count=1 ./core/session/turncontrol
 

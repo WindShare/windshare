@@ -25,6 +25,7 @@ struct BoundListener {
 
 /// Binds independently, then owns all UDP and admin tasks until joined shutdown.
 pub struct Service {
+    node: crate::node::Runtime,
     config: Config,
     listeners: Vec<BoundListener>,
     statuses: Statuses,
@@ -37,6 +38,12 @@ impl Service {
     /// # Errors
     /// Rejects invalid configuration before binding any listeners.
     pub fn bind(config: Config) -> Result<Self> {
+        Self::bind_with_node(config, crate::node::Runtime::default())
+    }
+
+    /// # Errors
+    /// Rejects invalid listeners before sharing node service policy with ingress.
+    pub fn bind_with_node(config: Config, node: crate::node::Runtime) -> Result<Self> {
         config.validate()?;
         let mut listeners = Vec::new();
         let mut statuses = Vec::new();
@@ -66,6 +73,7 @@ impl Service {
             config.admin_address.and_then(bind_admin)
         };
         Ok(Self {
+            node,
             config,
             listeners,
             statuses: statuses.into(),
@@ -87,6 +95,7 @@ impl Service {
     /// Shutdown interrupts pending UDP/admin writes and joins every owned task.
     pub async fn serve(self, shutdown: impl Future<Output = ()>) {
         let Self {
+            node,
             config,
             listeners,
             statuses,
@@ -95,10 +104,12 @@ impl Service {
         let mut tasks = JoinSet::new();
         for listener in listeners {
             let limits = config.limits;
+            let node = node.clone();
             tasks.spawn(async move {
                 let id = listener.status.id;
                 tracing::info!(event = "stun_listener_started", listener_id = id, address = %listener.address);
-                if let Err(error) = udp::serve(listener.socket, limits, listener.status).await {
+                let socket = udp::ConfiguredDatagram { socket: listener.socket, node };
+                if let Err(error) = udp::serve(socket, limits, listener.status).await {
                     tracing::warn!(event = "stun_listener_failed", listener_id = id, %error);
                 }
             });
