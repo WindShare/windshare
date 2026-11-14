@@ -23,11 +23,15 @@ impl Desktop {
             return;
         }
         session.quit_state = QuitState::Confirming;
+        tracing::info!(
+            event = "desktop.quit_confirmation_opened",
+            session = std::process::id()
+        );
         let locale = language(cx);
         let answer = window.prompt(
             PromptLevel::Warning,
             locale.text(Text::QuitWithShares),
-            None,
+            Some(locale.text(Text::QuitWithSharesDetail)),
             &[
                 PromptButton::Cancel(locale.text(Text::KeepRunning).into()),
                 PromptButton::Other(locale.text(Text::QuitAndStopShares).into()),
@@ -37,7 +41,11 @@ impl Desktop {
         cx.spawn(async move |view, cx| {
             let confirmed = answer.await == Ok(CONFIRM_QUIT);
             let _ = view.update(cx, |this, cx| {
-                tracing::info!(event = "desktop.quit_decision", confirmed);
+                tracing::info!(
+                    event = "desktop.quit_decision",
+                    session = std::process::id(),
+                    confirmed
+                );
                 if confirmed {
                     this.quit(cx);
                 } else if let Runtime::Native(session) = &mut this.runtime {

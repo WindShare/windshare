@@ -170,7 +170,6 @@ impl Desktop {
                 locale,
                 ready,
             ))
-            .when(ready, |el| el.child(self.early_link(share, cx)))
             .when(!ready, |el| {
                 el.child(
                     row()

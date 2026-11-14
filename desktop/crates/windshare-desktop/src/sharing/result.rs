@@ -17,7 +17,6 @@ const RESULT_LINK_HEIGHT: f32 = 32.;
 const LINK_ACTIVITY_WIDTH: f32 = 220.;
 const LINK_ACTIVITY_HEIGHT: f32 = 4.;
 const LINK_ACTIVITY_SEGMENT: f32 = 0.3;
-const SETTLED_CONTENT_VISIBILITY: f32 = 0.95;
 
 impl Desktop {
     pub(super) fn result_share(
@@ -99,10 +98,6 @@ impl Desktop {
             .when(scene.decorations_visible(), |el| {
                 el.child(scene.scenery(self.reduced_motion()))
             })
-            .when(
-                ready && scene.content_visibility() < SETTLED_CONTENT_VISIBILITY,
-                |el| el.child(self.early_link(share, cx)),
-            )
     }
 
     fn result_footer(&self, theme: Theme, share: &Share, cx: &Context<Self>) -> Div {
@@ -196,34 +191,6 @@ impl Desktop {
             );
         }
         actions
-    }
-
-    pub(super) fn early_link(&self, share: &Share, cx: &Context<Self>) -> Div {
-        // Preserve the original flight and landing, but never make those clocks a
-        // prerequisite for using a link returned by the engine.
-        let copied = matches!(self.copy_feedback, crate::flow_state::CopyFeedback::Copied { share_id, .. } if share_id == share.id);
-        row()
-            .absolute()
-            .bottom_0()
-            .w_full()
-            .justify_center()
-            .gap(px(12.))
-            .child(Self::button(
-                ("early-copy", share.id),
-                language(cx).text(if copied { Text::Copied } else { Text::CopyLink }),
-                if copied { Icon::Check } else { Icon::Copy },
-                ButtonStyle::Primary,
-                Action::CopyLink(share.id),
-                cx,
-            ))
-            .child(Self::button(
-                ("early-open", share.id),
-                language(cx).text(Text::OpenInBrowser),
-                Icon::External,
-                ButtonStyle::Secondary,
-                Action::OpenLink(share.id),
-                cx,
-            ))
     }
 
     pub(crate) fn share_notice(theme: Theme, share: &Share, cx: &Context<Self>) -> Div {

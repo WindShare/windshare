@@ -25,8 +25,8 @@ MinGW-w64 GCC on PATH for the Go library, the Rust MSVC target, Visual Studio C+
 DirectX 11 GPU. Windows is the locally verified platform.
 
 Choose files or folders in the native picker, or drop a mixed selection into the
-window as one share. Links are immediately available for copying, opening in a
-browser, or scanning. My shares retains preparing, active and finished tasks across
+window as one share. The result card offers copying, opening in a browser, and
+scanning. My shares retains preparing, active and finished tasks across
 navigation and control reconnects; New share does not stop existing shares.
 The engine supplies selected-root names, types and known file sizes. Directory totals
 remain unknown; selecting a folder does not scan descendants or copy sources.
@@ -46,8 +46,8 @@ Reuse the existing development network's trust identity across source rebuilds.
 Temporary network failures expose the owner's retry cooldown. Official account
 provisioning is a separate P2 dependency, required only when anonymous admission is refused.
 
-Closing with unfinished shares or setup asks whether to keep running or quit and stop
-all shares. Dismissing keeps sharing; confirming joins the engine off the UI thread.
+Closing with unfinished shares or setup shows an in-app confirmation, defaulting to
+Keep running. Dismissing keeps sharing; confirming joins the engine off the UI thread.
 Sharing again after completion creates a new task and link from the retained selection.
 
 `make desktop-package` creates a release archive under `dist/desktop`, including
@@ -63,9 +63,9 @@ Logging is asynchronous and bounded; unavailable log storage does not prevent sh
 
 The default app and `--preview` share the original UI, spirit interactions, flight,
 landing, result card, link disclosure, enlarged QR, and searchable grid/list.
-Native readiness controls link access; a link returned during the introduction is
-immediately usable. Reduced motion and inactive-window scheduling also apply to
-real shares. Receive, transfer, component and SuperShare samples require `--preview`.
+Link actions appear together in the result card; readiness enables them. Reduced
+motion and inactive-window scheduling also apply to real shares. Receive, transfer,
+component and SuperShare samples require `--preview`.
 
 Dev builds optimize GPUI's core and
 Windows renderer for high-refresh animation while keeping application crates unoptimized.
@@ -78,9 +78,9 @@ Windows renderer for high-refresh animation while keeping application crates uno
   click to enlarge. Share details reuse the same controls, with inline copy feedback.
   The 1350 ms flight and 720 ms landing fade into the card. Pending links keep
   an indeterminate activity strip until the link fades in over 180 ms; completed
-  results stop animation. Copy stays disabled until a result exists; an early
-  result exposes copy/open controls during the introduction. Reduced motion skips
-  the introduction and keeps the waiting indicator static.
+  results stop animation. Link actions stay in the card, with copying disabled
+  until a result exists. Reduced motion skips the introduction and keeps the
+  waiting indicator static.
 - Preview latency defaults to 1900 ms. Pass `--share-delay-ms=200` or
   `--share-delay-ms=5000` via `make desktop-preview DESKTOP_ARGS=...` to inspect fast and slow results.
   Motion uses actual completion events, never the configured delay.

@@ -9,6 +9,7 @@ mod icons;
 pub use focus::advance_focus;
 mod input;
 mod primitives;
+mod prompt;
 mod qr_code;
 mod surface;
 mod theme;
@@ -30,6 +31,9 @@ pub use window_controls::{toggle_window_maximize, window_drag_area};
 pub fn init(cx: &mut gpui::App) {
     use std::borrow::Cow;
     cx.set_global(ThemePreference::default());
+    // Keep confirmations inside the themed window on every platform; native
+    // warning dialogs otherwise introduce system styling and alert sounds.
+    cx.set_prompt_builder(prompt::render_prompt);
     cx.text_system()
         .add_fonts(vec![Cow::Borrowed(include_bytes!(
             "../assets/fonts/Manrope.ttf"
