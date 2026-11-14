@@ -1,4 +1,5 @@
 use super::{
+    activity::link_activity,
     link_views::{LINK_COLUMN_GAP, LINK_PANEL_WIDTH, link_columns_fit},
     preparation_message,
 };
@@ -9,6 +10,7 @@ use crate::{
     localization::{Language, Text, language},
     model::{Action, Share, ShareState},
     share_animation::ShareScene,
+    share_timing::{LinkPresentation, lerp},
 };
 use gpui::{Div, div, prelude::*, px, relative};
 use windshare_ui::{
@@ -18,9 +20,6 @@ use windshare_ui::{
 const RESULT_SECTION_GAP: f32 = 24.;
 const RESULT_FILE_ICON_SIZE: f32 = 52.;
 const RESULT_TITLE_SIZE: f32 = 26.;
-const LINK_ACTIVITY_WIDTH: f32 = 220.;
-const LINK_ACTIVITY_HEIGHT: f32 = 4.;
-const LINK_ACTIVITY_SEGMENT: f32 = 0.3;
 
 impl Desktop {
     pub(super) fn running_share(
@@ -40,25 +39,13 @@ impl Desktop {
             return column();
         };
         let ready = share.usable_link().is_some();
-        let columns = link_columns_fit(scene.geometry.width, layout.panel_padding(), Some(share));
-        let (status, tone) = share.status();
+        let columns = link_columns_fit(scene.geometry.width, layout.panel_padding());
+
         let information = column()
             .flex_1()
             .min_w_0()
             .gap(px(RESULT_SECTION_GAP))
-            .child(
-                row()
-                    .gap(px(7.))
-                    .child(
-                        icon(if ready { Icon::Check } else { Icon::Link }, 16.)
-                            .text_color(tone.text(theme)),
-                    )
-                    .child(
-                        theme
-                            .caption(locale.text(if ready { Text::LinkReady } else { status }))
-                            .text_color(tone.text(theme)),
-                    ),
-            )
+            .child(result_status(theme, share, scene.frame.link, locale))
             .child(file_summary(theme, share, locale))
             .when(
                 share.error.is_some() || share.relay_notice().is_some(),
@@ -84,11 +71,10 @@ impl Desktop {
                         column()
                             .items_center()
                             .flex_shrink_0()
-                            .child(Self::share_qr(theme, Some(share), ready, cx))
-                            .when(ready, |el| el.opacity(scene.frame.result_visibility)),
+                            .child(Self::share_qr(theme, share, scene.frame.link, cx)),
                     ),
             )
-            .child(self.result_footer(theme, share, cx));
+            .child(self.result_footer(theme, share, scene.frame.link, cx));
         // The result's natural height owns scrolling; expanded links and stacked QR
         // layouts must not be clipped by the finite animation stage.
         column()
@@ -127,7 +113,13 @@ impl Desktop {
             })
     }
 
-    fn result_footer(&self, theme: Theme, share: &Share, cx: &Context<Self>) -> Div {
+    fn result_footer(
+        &self,
+        theme: Theme,
+        share: &Share,
+        presentation: LinkPresentation,
+        cx: &Context<Self>,
+    ) -> Div {
         let locale = language(cx);
         let pending = matches!(share.state, ShareState::Preparing);
         row()
@@ -149,6 +141,7 @@ impl Desktop {
             .when(!pending, |el| {
                 el.child(
                     row()
+                        .opacity(presentation.details_visibility())
                         .gap(px(8.))
                         .when(!self.runtime.is_preview(), |el| {
                             let (text, symbol, action) = share.control();
@@ -187,24 +180,47 @@ impl Desktop {
         scene: ShareScene,
         cx: &Context<Self>,
     ) -> Div {
-        let mut actions = column().w_full().min_w_0().gap(px(8.)).child(
-            self.share_copy_button(share.id, cx)
-                .focus_handle(&self.primary_focus),
-        );
-        if share.usable_link().is_some() {
-            actions = actions.child(
-                self.share_link_disclosure(theme, share, cx)
-                    .opacity(scene.frame.result_visibility),
-            );
-        } else if matches!(share.state, ShareState::Preparing) {
-            actions = actions.child(
-                row()
-                    .h(px(COMPACT_BUTTON_HEIGHT))
-                    .justify_center()
-                    .child(link_activity(theme, scene)),
-            );
-        }
-        actions
+        let ready = share.usable_link().is_some();
+        let visibility = scene.frame.link.content_visibility();
+        column()
+            .w_full()
+            .min_w_0()
+            .gap(px(8.))
+            .child(
+                div()
+                    .opacity(if ready { lerp(0.4, 1., visibility) } else { 1. })
+                    .child(
+                        self.share_copy_button(share.id, cx)
+                            .focus_handle(&self.primary_focus),
+                    ),
+            )
+            .child(
+                column()
+                    .relative()
+                    .min_h(px(COMPACT_BUTTON_HEIGHT))
+                    .when(ready, |el| {
+                        el.child(
+                            self.share_link_disclosure(theme, share, cx)
+                                .opacity(scene.frame.link.details_visibility()),
+                        )
+                    })
+                    .when(
+                        (matches!(share.state, ShareState::Preparing) || ready)
+                            && scene.frame.link.waiting_visibility() > 0.,
+                        |el| {
+                            el.child(
+                                row()
+                                    .absolute()
+                                    .top_0()
+                                    .left_0()
+                                    .w_full()
+                                    .h(px(COMPACT_BUTTON_HEIGHT))
+                                    .justify_center()
+                                    .child(link_activity(theme, scene.frame.link)),
+                            )
+                        },
+                    ),
+            )
     }
 
     pub(crate) fn share_notice(theme: Theme, share: &Share, cx: &Context<Self>) -> Div {
@@ -227,29 +243,45 @@ impl Desktop {
     }
 }
 
-fn link_activity(theme: Theme, scene: ShareScene) -> Div {
-    let offset =
-        (1. + LINK_ACTIVITY_SEGMENT).mul_add(scene.frame.activity_phase, -LINK_ACTIVITY_SEGMENT);
+fn result_status(
+    theme: Theme,
+    share: &Share,
+    presentation: LinkPresentation,
+    locale: Language,
+) -> Div {
+    let ready = share.usable_link().is_some();
+    let (status, tone) = share.status();
+    let pending = matches!(share.state, ShareState::Preparing);
+    let visibility = presentation.content_visibility();
+    let label = |symbol, text, color| {
+        row()
+            .gap(px(7.))
+            .child(icon(symbol, 16.).text_color(color))
+            .child(theme.caption(locale.text(text)).text_color(color))
+    };
     div()
         .relative()
-        .w(px(LINK_ACTIVITY_WIDTH))
-        .max_w_full()
-        .h(px(LINK_ACTIVITY_HEIGHT))
-        .rounded_full()
-        .overflow_hidden()
-        .bg(Tone::Mint.surface(theme))
-        .opacity(1. - scene.frame.result_visibility)
         .child(
-            div()
-                .absolute()
-                .left(relative(offset))
-                .w(relative(LINK_ACTIVITY_SEGMENT))
-                .h_full()
-                .rounded_full()
-                .bg(theme.accent_text()),
+            label(
+                if ready { Icon::Check } else { Icon::Link },
+                if ready { Text::LinkReady } else { status },
+                if pending {
+                    theme.muted_text()
+                } else {
+                    tone.text(theme)
+                },
+            )
+            .opacity(if ready { visibility } else { 1. }),
         )
+        .when(ready && visibility < 1., |el| {
+            el.child(
+                label(Icon::Link, Text::PreparingLink, theme.muted_text())
+                    .absolute()
+                    .inset_0()
+                    .opacity(1. - visibility),
+            )
+        })
 }
-
 fn file_summary(theme: Theme, share: &Share, locale: Language) -> Div {
     row()
         .gap(px(16.))

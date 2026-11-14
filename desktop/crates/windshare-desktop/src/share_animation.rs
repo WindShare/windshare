@@ -137,7 +137,7 @@ impl ShareScene {
                 el.child(Spirit::new(
                     "share-spirit",
                     SpiritState::Choreographed {
-                        smile: self.reveal(0.02, 0.42) * self.frame.result_visibility,
+                        smile: self.reveal(0.02, 0.42) * self.frame.link.content_visibility(),
                     },
                     center,
                     size,

@@ -4,6 +4,7 @@ use crate::{
     localization::{Language, Text, language},
     model::Share,
     overlays::{OVERLAY_MARGIN, OVERLAY_PADDING},
+    share_timing::LinkPresentation,
 };
 use gpui::{Div, Window, div, prelude::*, px};
 use windshare_ui::{ButtonStyle, Icon, Theme, column, icon, row};
@@ -76,14 +77,14 @@ impl Desktop {
                     .items_center()
                     .gap(px(LINK_COLUMN_GAP))
                     .when(
-                        !link_columns_fit(detail_width(window), OVERLAY_PADDING, Some(share)),
+                        !link_columns_fit(detail_width(window), OVERLAY_PADDING),
                         |el| el.flex_col().items_stretch(),
                     )
                     .child(information)
                     .child(column().items_center().child(Self::share_qr(
                         theme,
-                        Some(share),
-                        true,
+                        share,
+                        LinkPresentation::settled(share.usable_link().is_some()),
                         cx,
                     ))),
             )

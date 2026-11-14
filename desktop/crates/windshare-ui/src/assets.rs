@@ -31,7 +31,10 @@ impl AssetSource for Assets {
             "chevron-up" => r#"<path d="m5 15 7-7 7 7"/>"#,
             "expand" => r#"<path d="M8 3H3v5m13-5h5v5M3 16v5h5m8 0h5v-5"/>"#,
             "link" => {
-                r#"<path d="m10 13 4-4m-7 6-1 1a4 4 0 0 0 6 6l4-4a4 4 0 0 0 0-6M17 9l1-1a4 4 0 0 0-6-6L8 6a4 4 0 0 0 0 6" transform="translate(0 -1)"/>"#
+                r#"<path d="m9 15 6-6M11 7l3-3a4.243 4.243 0 0 1 6 6l-3 3M7 11l-3 3a4.243 4.243 0 0 0 6 6l3-3"/>"#
+            }
+            "qr-code" => {
+                r#"<rect x="3" y="3" width="6" height="6" rx="1"/><rect x="15" y="3" width="6" height="6" rx="1"/><rect x="3" y="15" width="6" height="6" rx="1"/><path d="M15 15h3v3h3m-6 3h3M21 12v2M12 3v3M3 12h3m3 0h3v3"/>"#
             }
             "copy" => {
                 r#"<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H3v13h5"/>"#

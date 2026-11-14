@@ -1,7 +1,9 @@
+mod activity;
 mod detail;
 mod link;
 mod link_views;
 mod preview;
+mod qr;
 mod result;
 
 pub use detail::{detail_width, enlarged_qr_side};
