@@ -37,6 +37,7 @@ TODO
 .cursor/
 .claude/
 .debug/
+docs/clarifications/
 
 # Coverage output directories
 web/coverage/
@@ -96,6 +97,8 @@ node_modules/
 
 # Local MCP server config; holds host-specific SSH credentials.
 /.mcp.json
+
+/.secret/
 
 # Diagnostic dumps and traces from manual `wind` repro runs.
 /cmd/wind/[0-9]/
