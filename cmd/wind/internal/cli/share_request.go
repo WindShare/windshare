@@ -7,6 +7,7 @@ import (
 	"math"
 	"slices"
 
+	"github.com/windshare/windshare/cmd/wind/internal/humanoutput"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relayprofile"
@@ -95,7 +96,7 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		if errors.Is(err, relayconfig.ErrRelayURL) {
 			a.writeCompleteLine("share: %s", err)
 		} else {
-			a.writeCompleteLine("share: configure relay candidates with wind config import <file|->, or pass --relay for this share")
+			a.writeCompleteLine("share: %s", humanoutput.ConfigureRelaysGuidance)
 		}
 		return shareRequest{}, requestParseUsageFailure
 	}

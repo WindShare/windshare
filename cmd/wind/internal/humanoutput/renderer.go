@@ -231,7 +231,11 @@ func (visitor eventVisitor) VisitWarning(event appobs.Warning) error {
 }
 
 func (visitor eventVisitor) VisitCommandFailed(event clievent.CommandFailed) error {
-	visitor.renderer.finish(failureLine("Error", event.Failure(), visitor.symbols().Failure, terminalcanvas.StyleError))
+	message := failureMessage(event.Failure())
+	if clievent.CommandOf(event) == clievent.CommandShare && event.Failure().Code() == appobs.FailureNetworkUnavailable {
+		message += " Alternatively, " + ConfigureRelaysGuidance + "."
+	}
+	visitor.renderer.finish(statusLine(visitor.symbols().Failure, "Error: "+message, terminalcanvas.StyleError))
 	return nil
 }
 

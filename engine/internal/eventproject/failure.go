@@ -14,11 +14,13 @@ import (
 	catalog "github.com/windshare/windshare/core/catalog"
 	transfer "github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
+	networkruntime "github.com/windshare/windshare/engine/internal/networkruntime"
 	receive "github.com/windshare/windshare/engine/internal/receive"
 	share "github.com/windshare/windshare/engine/internal/share"
 	task "github.com/windshare/windshare/engine/internal/task"
 	appobs "github.com/windshare/windshare/engine/observation"
 	output "github.com/windshare/windshare/engine/output"
+	"github.com/windshare/windshare/engine/relayprofile"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	relayv2 "github.com/windshare/windshare/transport/relayv2"
 	wsrtc "github.com/windshare/windshare/transport/webrtc"
@@ -142,7 +144,7 @@ func classifyDirectError(cause error) (appobs.Failure, bool) {
 		)
 		return failure, err == nil
 	}
-	if exactError(cause, share.ErrInvalidChunkSize) {
+	if exactError(cause, share.ErrInvalidChunkSize) || exactError(cause, relayprofile.ErrCandidatesRequired) {
 		return mustFailure(appobs.FailureInvalidInput), true
 	}
 	if exactError(cause, context.DeadlineExceeded) {
@@ -172,6 +174,9 @@ func classifyDirectError(cause error) (appobs.Failure, bool) {
 		return ProjectFault(boundary.Fault())
 	}
 	switch {
+	case exactError(cause, networkruntime.ErrUnavailable):
+		// Planning and alias resolution can fail before any relay connection exists.
+		return mustFailure(appobs.FailureNetworkUnavailable), true
 	case exactError(cause, relayset.ErrReceiverUnavailable):
 		return mustFailure(appobs.FailureRelayNotFound), true
 	case exactError(cause, relayset.ErrReceiverWaitExpired):

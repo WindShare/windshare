@@ -64,7 +64,7 @@ func (a *App) runReceive(ctx context.Context, command receiveCommand, args []str
 	}
 	task, err := a.application.StartReceive(ctx, engine.ReceiveRequest{Admission: request.admission, OperationID: request.operationID, Capability: request.link, Only: request.selection.paths, Connectivity: request.connectivity, WaitTimeout: request.waitTimeout, Output: factory, Destination: destination, Diagnostics: runtime.diagnosticSink(), OnPause: a.receivePauseHandler()})
 	if err != nil {
-		return observation.commandFailure(ExitFailure, err)
+		return runtime.failToStart(err)
 	}
 	if a.networkSetup != nil && request.connectivity != engine.ConnectivityRelayOnly {
 		networkcommand.ObserveStartup(a.networkSetup, runtime, clievent.CommandGet)
