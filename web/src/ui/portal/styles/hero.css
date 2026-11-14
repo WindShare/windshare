@@ -3,9 +3,9 @@
 .portal-hero-copy { position: relative; min-width: 0; animation: portal-arrive 560ms var(--portal-ease) both; }
 .portal-eyebrow { display: flex; align-items: center; gap: 10px; margin: 0 0 22px; color: var(--portal-accent); font-size: 12px; font-weight: 550; letter-spacing: .05em; }
 .portal-eyebrow > span { width: 24px; height: 1px; background: var(--portal-accent); }
-.portal-hero h1 { margin: 0; font-size: clamp(38px, 4.3vw, 60px); line-height: 1.27; font-weight: 650; letter-spacing: -.05em; text-wrap: balance; }
+.portal-hero h1 { margin: 0; font-size: clamp(2.375rem, 1rem + 3.2vw, 3.75rem); line-height: 1.27; font-weight: 650; letter-spacing: -.05em; text-wrap: balance; }
 .portal-hero h1 > span { color: var(--portal-accent); }
-.portal-hero-subtitle { margin: 20px 0 0; font-size: 15px; line-height: 1.85; color: var(--portal-muted); }
+.portal-hero-subtitle { max-width: 34em; margin: 24px 0 0; font-size: .9375rem; line-height: 1.85; color: var(--portal-muted); }
 .portal-hero-assurances { display: flex; align-items: center; gap: 18px; margin-top: 20px; flex-wrap: wrap; }
 .portal-hero-assurances > span { display: inline-flex; align-items: center; gap: 6px; color: var(--portal-muted); font-size: 11px; }
 .portal-hero-assurances svg { color: var(--portal-accent); }
@@ -24,19 +24,19 @@
 @media (max-width: 1100px) {
   .portal-hero-layout { gap: 36px; }
   .portal-hero { padding-top: 48px; }
-  .portal-hero h1 { font-size: 4.3vw; }
+  .portal-hero h1 { font-size: clamp(2.125rem, .875rem + 3vw, 3rem); }
 }
 @media (max-width: 900px) {
   .portal-hero-layout { grid-template-columns: 1fr; max-width: 620px; margin-inline: auto; gap: 34px; }
-  .portal-hero h1 { font-size: clamp(34px, 6.2vw, 48px); padding-inline-end: 130px; }
+  .portal-hero h1 { font-size: clamp(2.125rem, 1rem + 3.6vw, 3rem); padding-inline-end: 130px; }
   .portal-hero-footnote { margin-top: 34px; }
   .portal-console-area { width: 100%; }
 }
 @media (max-width: 600px) {
   .portal-hero { padding-top: 32px; }
   .portal-eyebrow { margin-bottom: 18px; font-size: 10px; }
-  .portal-hero h1 { padding-inline-end: 78px; font-size: clamp(24px, 7.4vw, 34px); line-height: 1.36; letter-spacing: -.06em; }
-  .portal-hero-subtitle { margin-top: 18px; font-size: 13px; }
+  .portal-hero h1 { padding-inline-end: 78px; font-size: clamp(1.5rem, .75rem + 3.8vw, 2.125rem); line-height: 1.36; letter-spacing: -.06em; }
+  .portal-hero-subtitle { margin-top: 18px; font-size: .8125rem; }
   .portal-hero-assurances { gap: 12px; margin-top: 18px; }
   .portal-hero-assurances > span { font-size: 10px; gap: 5px; }
   .portal-hero-layout { gap: 28px; }

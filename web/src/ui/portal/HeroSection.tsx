@@ -20,7 +20,7 @@ export function HeroSection({ controller, downloads, activeTab, onTabChange }: {
           <div className="portal-hero-copy">
             <p className="portal-eyebrow"><span />{t.eyebrow}</p>
             <h1 id="portal-title">{t.titleFirst}<br /><span>{t.titleSecond}</span></h1>
-            <p className="portal-hero-subtitle">{t.subtitleFirst}<br />{t.subtitleSecond}</p>
+            <p className="portal-hero-subtitle">{t.subtitle}</p>
             <div className="portal-hero-assurances">
               <span><PortalIcon name="shield" size={16} />{t.assurancePrivate}</span>
               <span><PortalIcon name="bolt" size={16} />{t.assuranceInstant}</span>
