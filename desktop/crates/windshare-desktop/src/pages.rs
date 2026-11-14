@@ -30,6 +30,9 @@ impl Desktop {
             .gap(px(24.))
             .child(Self::appearance_card(theme, cx))
             .child(Self::language_card(theme, cx))
+            .when(!self.runtime.is_preview(), |el| {
+                el.child(Self::network_settings(cx))
+            })
             .child(
                 theme
                     .card()
@@ -87,27 +90,41 @@ impl Desktop {
                     ),
             )
             .when(self.runtime.is_preview(), |el| {
-                el.child(
-                    row()
-                        .justify_between()
-                        .gap(px(16.))
-                        .p(px(24.))
-                        .child(
-                            column()
-                                .gap(px(7.))
-                                .child(theme.heading(locale.text(Text::DesignComponents), 18.))
-                                .child(theme.caption(locale.text(Text::DesignComponentsDetail))),
-                        )
-                        .child(Self::button(
-                            "view-components",
-                            locale.text(Text::ViewComponents),
-                            Icon::Grid,
-                            ButtonStyle::Secondary,
-                            Action::Navigate(Page::Components),
-                            cx,
-                        )),
-                )
+                el.child(Self::component_preview(theme, cx))
             })
+    }
+
+    fn component_preview(theme: Theme, cx: &Context<Self>) -> Div {
+        let locale = language(cx);
+        row()
+            .justify_between()
+            .gap(px(16.))
+            .p(px(24.))
+            .child(
+                column()
+                    .gap(px(7.))
+                    .child(theme.heading(locale.text(Text::DesignComponents), 18.))
+                    .child(theme.caption(locale.text(Text::DesignComponentsDetail))),
+            )
+            .child(Self::button(
+                "view-components",
+                locale.text(Text::ViewComponents),
+                Icon::Grid,
+                ButtonStyle::Secondary,
+                Action::Navigate(Page::Components),
+                cx,
+            ))
+    }
+
+    fn network_settings(cx: &Context<Self>) -> Div {
+        row().child(Self::button(
+            "network-settings",
+            language(cx).text(Text::SelfHostedRelay),
+            Icon::Settings,
+            ButtonStyle::Quiet,
+            Action::ConfigureNetwork,
+            cx,
+        ))
     }
 
     pub fn components_page(theme: Theme, cx: &Context<Self>) -> Div {

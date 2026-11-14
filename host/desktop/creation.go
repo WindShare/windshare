@@ -56,7 +56,10 @@ func (a *Application) resume(id string) error {
 	if !ok {
 		return errors.New("creation operation not found")
 	}
-	if _, waiting := op.phase.(awaitingConfiguration); waiting {
+	if _, ok := op.phase.(awaitingNetwork); ok && a.deferNetworkRetry(op) {
+		return nil
+	}
+	if waitingForAdmission(op.phase) {
 		a.admit(op)
 	}
 	// Replayed resume never retries a terminal operation.
@@ -87,17 +90,17 @@ func (a *Application) runAdmission(ctx context.Context, op *operation) {
 func (a *Application) prepareAdmission(ctx context.Context, op *operation) operationPhase {
 	config, err := a.deps.load()
 	if err != nil {
-		return awaitingConfiguration{failure: failure("settings_unavailable", err)}
+		return configurationBlocked("settings_unavailable", err)
 	}
 	intent, err := relayconfig.ShareIntent(config, op.relays)
 	if err == nil && config.FrontURL != "" {
 		err = relayconfig.ValidateFrontURL(config.FrontURL)
 	}
 	if err != nil {
-		return awaitingConfiguration{failure: failure("configuration_required", err)}
+		return configurationBlocked("configuration_required", err)
 	}
 	if err := a.deps.configure(config.TURNSettings()); err != nil {
-		return awaitingConfiguration{failure: failure("settings_unavailable", err)}
+		return configurationBlocked("settings_unavailable", err)
 	}
 	if ctx.Err() != nil {
 		return terminal{}
@@ -112,7 +115,7 @@ func (a *Application) prepareAdmission(ctx context.Context, op *operation) opera
 		err = errors.New("engine returned no share task")
 	}
 	if errors.Is(err, engine.ErrNetworkUnavailable) {
-		return awaitingConfiguration{failure: failure("network_unavailable", err)}
+		return networkBlocked(err)
 	}
 	return terminal{result: Completion{Outcome: OutcomeFailed, StopReason: NoStopReason, Error: err.Error()}, error: failure("creation_failed", err)}
 }

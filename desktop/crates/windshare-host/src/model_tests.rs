@@ -1,5 +1,33 @@
 use super::*;
 
+#[test]
+fn blocking_contract_preserves_reason_recovery_and_deadline() {
+    let source = serde_json::json!({
+        "operation_id": "selection", "state": "awaiting_network", "startup": "pending",
+        "blocking": { "reason": "directory_unavailable", "recovery": "retry", "retry_at_ms": 12345 }
+    });
+    let share: Share = serde_json::from_value(source).unwrap();
+    assert_eq!(
+        share.state,
+        ShareState::AwaitingNetwork {
+            blocking: CreationBlock {
+                reason: BlockingReason::DirectoryUnavailable,
+                recovery: RecoveryAction::Retry,
+                retry_at_ms: Some(12345),
+            },
+        }
+    );
+    let invalid = serde_json::json!({
+        "operation_id": "selection", "state": "awaiting_network", "startup": "pending"
+    });
+    assert!(serde_json::from_value::<Share>(invalid).is_err());
+    let setup: Setup = serde_json::from_value(serde_json::json!({
+        "state": "finished", "id": "setup:1"
+    }))
+    .unwrap();
+    assert!(matches!(setup, Setup::Finished { operation_id, .. } if operation_id.is_empty()));
+}
+
 fn snapshot(revision: u64, shares: Vec<Share>) -> Snapshot {
     Snapshot {
         session_id: "first".into(),

@@ -12,7 +12,10 @@ pub fn update_share(share: &mut Share, operation: &Operation) {
         OperationState::Submitting => ShareState::Preparing,
         OperationState::Rejected(_) => ShareState::Failed,
         OperationState::Accepted(task) => match task.state {
-            HostState::AwaitingConfiguration => ShareState::AwaitingConfiguration,
+            HostState::AwaitingConfiguration { blocking } => {
+                ShareState::AwaitingConfiguration(blocking)
+            }
+            HostState::AwaitingNetwork { blocking } => ShareState::AwaitingNetwork(blocking),
             HostState::Admitting | HostState::Preparing => ShareState::Preparing,
             HostState::Sharing => ShareState::Live { viewers: None },
             HostState::Stopping => ShareState::Stopping,

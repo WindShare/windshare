@@ -5,7 +5,7 @@ use crate::{
     model::{Page, ShareSource},
 };
 use gpui::{Context, Window};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use windshare_host::{Connection, Controller, Model};
 
 pub enum Runtime {
@@ -19,6 +19,7 @@ pub struct Session {
     pub picking: bool,
     pub quitting: bool,
     pub error: Option<String>,
+    retry_wakeup: Option<gpui::Task<()>>,
 }
 
 impl Runtime {
@@ -29,6 +30,7 @@ impl Runtime {
             picking: false,
             quitting: false,
             error: None,
+            retry_wakeup: None,
         }))
     }
 
@@ -130,6 +132,31 @@ impl Desktop {
                     super::projection::update_share(share, operation);
                 }
             }
+            // This timer only re-enables presentation at the host's deadline.
+            // It never refreshes the directory or retries an operation.
+            let mut deadlines: Vec<_> = model
+                .operations
+                .iter()
+                .filter_map(|op| op.share())
+                .filter_map(|share| match share.state {
+                    windshare_host::ShareState::AwaitingNetwork { blocking } => {
+                        super::blocking::retry_deadline(blocking)
+                    }
+                    _ => None,
+                })
+                .filter(|at| *at > SystemTime::now())
+                .collect();
+            deadlines.sort_unstable();
+            deadlines.dedup();
+            session.retry_wakeup = Some(cx.spawn(async move |view, cx| {
+                for at in deadlines {
+                    let delay = at.duration_since(SystemTime::now()).unwrap_or_default();
+                    cx.background_executor().timer(delay).await;
+                    if view.update(cx, |_, cx| cx.notify()).is_err() {
+                        break;
+                    }
+                }
+            }));
             session.model = model;
             // Readiness belongs to the task. The view clock may still be in flight,
             // and navigating elsewhere must not discard a result or create a task.
