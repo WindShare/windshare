@@ -75,6 +75,24 @@ fn pipe_exchanges_bound_session_identity_and_preserve_retried_intent() {
 }
 
 #[test]
+fn accept_timeouts_preserve_the_listener_for_a_later_client() {
+    let scope = isolated_scope();
+    let server = pipe::Pipe::listen(&scope.pipe, &scope.sid).unwrap();
+    for _ in 0..3 {
+        let error = server.accept(Instant::now()).unwrap_err();
+        assert_eq!(
+            error.code(),
+            windows::Win32::Foundation::ERROR_TIMEOUT.to_hresult()
+        );
+    }
+    let client = pipe::Pipe::connect(&scope.pipe).unwrap();
+    let deadline = Instant::now() + server::EXCHANGE_TIMEOUT;
+    server.accept(deadline).unwrap();
+    client.send(&Request::Probe, deadline).unwrap();
+    assert!(matches!(server.receive(deadline).unwrap(), Request::Probe));
+}
+
+#[test]
 fn an_incomplete_client_cannot_hold_the_listener_forever() {
     let scope = isolated_scope();
     let server = pipe::Pipe::listen(&scope.pipe, &scope.sid).unwrap();

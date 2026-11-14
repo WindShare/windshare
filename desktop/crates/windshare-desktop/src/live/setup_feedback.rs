@@ -40,14 +40,11 @@ impl Desktop {
         };
         let setup = &session.model.setup;
         let context = setup.context()?;
-        if !setup.unfinished() || context.operation_id == operation {
+        if !setup.unfinished() || operation.is_empty() || context.operation_id == operation {
             return None;
         }
         let original = self.shares.iter().find(|share|
             matches!(&share.source, crate::model::ShareSource::Native { operation_id } if operation_id == &context.operation_id));
-        let action = original.map_or(Action::ConfigureNetwork, |share| {
-            Action::ConfigureShare(share.id)
-        });
         let locale = language(cx);
         let progress = match setup {
             Setup::Running {
@@ -69,7 +66,7 @@ impl Desktop {
                     locale.text(Text::ReturnToSetup),
                     Icon::Settings,
                     ButtonStyle::Secondary,
-                    action,
+                    Action::ReturnToSharingSetup,
                     cx,
                 )),
         )

@@ -8,7 +8,8 @@ use std::time::Instant;
 use windows::{
     Win32::{
         Foundation::{
-            ERROR_IO_PENDING, ERROR_PIPE_CONNECTED, GENERIC_READ, GENERIC_WRITE, WAIT_OBJECT_0,
+            ERROR_IO_PENDING, ERROR_OPERATION_ABORTED, ERROR_PIPE_CONNECTED, ERROR_TIMEOUT,
+            GENERIC_READ, GENERIC_WRITE, WAIT_OBJECT_0, WAIT_TIMEOUT,
         },
         Storage::FileSystem::{
             CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, FILE_SHARE_NONE,
@@ -75,12 +76,15 @@ impl Pipe {
         })
     }
 
-    pub fn accept(&self, deadline: Instant) -> anyhow::Result<()> {
-        self.perform(deadline, |overlapped| {
+    pub fn accept(&self, deadline: Instant) -> windows::core::Result<()> {
+        match self.perform(deadline, |overlapped| {
             // SAFETY: perform keeps the OVERLAPPED alive through completion/cancellation.
             unsafe { ConnectNamedPipe(self.handle.raw(), Some(overlapped)) }
-        })
-        .map(|_| ())
+        }) {
+            // A client can connect before accept; no overlapped operation exists then.
+            Err(error) if error.code() == ERROR_PIPE_CONNECTED.to_hresult() => Ok(()),
+            result => result.map(|_| ()),
+        }
     }
 
     pub fn send<T: Serialize>(&self, value: &T, deadline: Instant) -> anyhow::Result<()> {
@@ -159,7 +163,7 @@ impl Pipe {
         &self,
         deadline: Instant,
         start: impl FnOnce(*mut OVERLAPPED) -> windows::core::Result<()>,
-    ) -> anyhow::Result<usize> {
+    ) -> windows::core::Result<usize> {
         // SAFETY: creates an unnamed, owned manual-reset event.
         let event = Handle::new(unsafe { CreateEventW(None, true, false, None)? })?;
         let mut overlapped = OVERLAPPED {
@@ -167,18 +171,10 @@ impl Pipe {
             ..Default::default()
         };
         let result = start(&raw mut overlapped);
-        // A client can connect before ConnectNamedPipe is issued. In that case
-        // there is no overlapped operation to query or wait for.
-        if result
-            .as_ref()
-            .is_err_and(|error| error.code() == ERROR_PIPE_CONNECTED.to_hresult())
-        {
-            return Ok(0);
-        }
         if let Err(error) = &result
             && error.code() != ERROR_IO_PENDING.to_hresult()
         {
-            return Err(error.clone().into());
+            return Err(error.clone());
         }
         let mut transferred = 0;
         if result.is_err() {
@@ -189,19 +185,36 @@ impl Pipe {
             )
             .unwrap_or(u32::MAX - 1);
             // SAFETY: the event and OVERLAPPED are retained until the kernel completes.
-            if unsafe { WaitForSingleObject(event.raw(), remaining) } != WAIT_OBJECT_0 {
+            let wait = unsafe { WaitForSingleObject(event.raw(), remaining) };
+            if wait != WAIT_OBJECT_0 {
+                let error = if wait == WAIT_TIMEOUT {
+                    windows::core::Error::from_hresult(ERROR_TIMEOUT.to_hresult())
+                } else {
+                    windows::core::Error::from_thread()
+                };
                 // Cancellation must settle before stack buffers can be released.
                 // SAFETY: both operations refer to this still-live pending request.
-                unsafe {
+                let completion = unsafe {
                     let _ = CancelIoEx(self.handle.raw(), Some(&raw const overlapped));
-                    let _ = GetOverlappedResult(
+                    GetOverlappedResult(
                         self.handle.raw(),
                         &raw const overlapped,
                         &raw mut transferred,
                         true,
-                    );
+                    )
+                };
+                if wait == WAIT_TIMEOUT {
+                    // Completion can beat cancellation. Preserve an accepted client or
+                    // transferred bytes, and never hide a broken pipe as an idle poll.
+                    match completion {
+                        Ok(()) => return Ok(transferred as usize),
+                        Err(failure) if failure.code() != ERROR_OPERATION_ABORTED.to_hresult() => {
+                            return Err(failure);
+                        }
+                        Err(_) => {}
+                    }
                 }
-                anyhow::bail!("Activation handoff timed out");
+                return Err(error);
             }
         }
         // SAFETY: the event signalled or the IO completed synchronously.

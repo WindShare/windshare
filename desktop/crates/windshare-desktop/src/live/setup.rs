@@ -73,29 +73,19 @@ impl Desktop {
             })
     }
 
-    pub fn open_sharing_setup(
-        &mut self,
-        id: Option<usize>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let id = if let Some(id) = id {
-            let finished = self
-                .shares
-                .iter()
-                .any(|share| share.id == id && share.finished());
-            if finished {
-                let Some(repeated) = self.repeat_native_share(id, window, cx) else {
-                    return;
-                };
-                Some(repeated)
-            } else {
-                Some(id)
-            }
-        } else {
-            None
+    pub fn configure_share(&mut self, id: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(share) = self.shares.iter().find(|share| share.id == id) else {
+            return;
         };
-        if let Some(share) = id.and_then(|id| self.shares.iter().find(|share| share.id == id))
+        let id = if share.finished() {
+            let Some(repeated) = self.repeat_native_share(id, window, cx) else {
+                return;
+            };
+            repeated
+        } else {
+            id
+        };
+        if let Some(share) = self.shares.iter().find(|share| share.id == id)
             && let Some(windshare_host::ShareAuthorization::SelfHosted { relay_url }) =
                 &share.authorization
         {
@@ -103,7 +93,36 @@ impl Desktop {
                 .relay
                 .update(cx, |input, cx| input.set_value(relay_url.clone(), cx));
         }
+        self.open_sharing_setup(Some(id), window, cx);
+    }
+
+    pub fn open_sharing_setup(
+        &mut self,
+        id: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.open_overlay(Overlay::SharingSetup(id), window, cx);
+    }
+
+    pub fn return_to_sharing_setup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Runtime::Native(session) = &self.runtime else {
+            return;
+        };
+        let setup = &session.model.setup;
+        let Some(context) = setup.context().filter(|_| setup.unfinished()) else {
+            return;
+        };
+        // A finished share cannot own another configuration submission. Its pending
+        // cleanup remains reachable through network settings without a new share.
+        let id = self.shares.iter().find_map(|share| {
+            (matches!(&share.source, ShareSource::Native { operation_id } if operation_id == &context.operation_id)
+                && !share.finished())
+            .then_some(share.id)
+        });
+        tracing::info!(event = "desktop.setup_returned", setup_id = %context.id,
+            operation_id = %context.operation_id, share_id = ?id);
+        self.open_sharing_setup(id, window, cx);
     }
 
     pub fn save_sharing_setup(&self, id: Option<usize>, cx: &Context<Self>) {

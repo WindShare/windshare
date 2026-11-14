@@ -70,8 +70,9 @@ impl Desktop {
             Action::ShareAgain(id) => {
                 self.repeat_native_share(id, window, cx);
             }
-            Action::ConfigureShare(id) => self.open_sharing_setup(Some(id), window, cx),
+            Action::ConfigureShare(id) => self.configure_share(id, window, cx),
             Action::ConfigureNetwork => self.open_sharing_setup(None, window, cx),
+            Action::ReturnToSharingSetup => self.return_to_sharing_setup(window, cx),
             Action::SaveSharingSetup(id) => self.save_sharing_setup(id, cx),
             Action::ResumeShare(id) => self.resume_native_share(id),
             Action::CancelSharingSetup => self.cancel_sharing_setup(),

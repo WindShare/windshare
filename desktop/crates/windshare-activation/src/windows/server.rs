@@ -9,6 +9,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(test)]
+#[path = "server_tests.rs"]
+mod tests;
+
 const ACCEPT_POLL: Duration = Duration::from_millis(100);
 pub(super) const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -24,34 +28,47 @@ impl Server {
         scope: Scope,
         receive: impl Fn(Request) -> Reply + Send + 'static,
     ) -> anyhow::Result<Self> {
-        let mut pipe = Pipe::listen(&scope.pipe, &scope.sid)?;
+        let pipe = Pipe::listen(&scope.pipe, &scope.sid)?;
         let closing = Arc::new(AtomicBool::new(false));
         let stop = closing.clone();
         let worker = std::thread::Builder::new()
             .name("windshare-activation".into())
-            .spawn(move || {
-                while !stop.load(Ordering::Acquire) {
-                    if pipe.accept(Instant::now() + ACCEPT_POLL).is_err() {
-                        continue;
-                    }
-                    let deadline = Instant::now() + EXCHANGE_TIMEOUT;
-                    if let Err(error) = serve(&pipe, deadline, &receive) {
-                        tracing::warn!(event = "activation.connection_failed", %error);
-                    }
-                    drop(pipe);
-                    match Pipe::listen(&scope.pipe, &scope.sid) {
-                        Ok(next) => pipe = next,
-                        Err(error) => {
-                            tracing::error!(event = "activation.listener_failed", %error);
-                            break;
-                        }
-                    }
-                }
-            })?;
+            .spawn(move || run(&scope, pipe, &stop, &receive))?;
         Ok(Self {
             closing,
             worker: Some(worker),
         })
+    }
+}
+
+fn run(scope: &Scope, mut pipe: Pipe, stop: &AtomicBool, receive: &impl Fn(Request) -> Reply) {
+    let span = tracing::info_span!("activation.listener", session = std::process::id(), pipe = %scope.pipe);
+    let _entered = span.enter();
+    while !stop.load(Ordering::Acquire) {
+        match pipe.accept(Instant::now() + ACCEPT_POLL) {
+            Ok(()) => {
+                let deadline = Instant::now() + EXCHANGE_TIMEOUT;
+                if let Err(error) = serve(&pipe, deadline, receive) {
+                    tracing::warn!(event = "activation.connection_failed", %error);
+                }
+            }
+            Err(error)
+                if error.code() == windows::Win32::Foundation::ERROR_TIMEOUT.to_hresult() =>
+            {
+                continue;
+            }
+            Err(error) => tracing::warn!(event = "activation.accept_failed", %error),
+        }
+        // A disconnected client leaves the instance unusable even if accept failed.
+        // Only an idle poll can safely retain it for the next connection.
+        drop(pipe);
+        match Pipe::listen(&scope.pipe, &scope.sid) {
+            Ok(next) => pipe = next,
+            Err(error) => {
+                tracing::error!(event = "activation.listener_failed", %error);
+                break;
+            }
+        }
     }
 }
 

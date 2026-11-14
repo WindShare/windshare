@@ -93,6 +93,7 @@ pub enum Action {
     ShareAgain(usize),
     ConfigureShare(usize),
     ConfigureNetwork,
+    ReturnToSharingSetup,
     SaveSharingSetup(Option<usize>),
     ResumeShare(usize),
     ApproveRelay,
