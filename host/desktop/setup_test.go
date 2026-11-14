@@ -43,7 +43,7 @@ func TestSetupResumesOnlyWaitingIntentAndPreservesExplicitChoice(t *testing.T) {
 				return start(ctx, request)
 			}
 			a.execute(createRequest())
-			awaitShare(t, a, "operation", func(s Share) bool { return s.State == AwaitingConfiguration })
+			awaitShare(t, a, "operation", func(s Share) bool { return s.State == AwaitingNetwork })
 			if reply := a.execute(setupRequest()); reply.Error != nil {
 				t.Fatal(reply.Error)
 			}
@@ -110,7 +110,7 @@ func TestShutdownCancelsAndJoinsSetupWithoutLateAdmission(t *testing.T) {
 		return nil // A provider can finish successfully concurrently with cancellation.
 	}
 	a.execute(createRequest())
-	awaitShare(t, a, "operation", func(s Share) bool { return s.State == AwaitingConfiguration })
+	awaitShare(t, a, "operation", func(s Share) bool { return s.State == AwaitingNetwork })
 	a.execute(setupRequest())
 	<-entered
 	if err := a.close(); err != nil {

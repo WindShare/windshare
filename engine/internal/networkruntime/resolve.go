@@ -2,13 +2,13 @@ package networkruntime
 
 import (
 	"context"
-	"errors"
 	"slices"
 	"sync"
 
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/networkendpoint"
 	"github.com/windshare/windshare/core/nodedirectory"
+	"github.com/windshare/windshare/engine/networkdirectory"
 )
 
 // Resolve returns immediately usable endpoints and optional bounded expansion.
@@ -45,7 +45,7 @@ func (r *Runtime) Resolve(capability link.Link) ([]string, func(context.Context)
 		if len(known) > 0 {
 			return known, nil, nil
 		}
-		return nil, nil, ErrUnavailable
+		return nil, nil, r.noCandidates(AliasUnavailable)
 	}
 	var once sync.Once
 	var expanded []string
@@ -53,12 +53,12 @@ func (r *Runtime) Resolve(capability link.Link) ([]string, func(context.Context)
 	expand := func(ctx context.Context) ([]string, error) {
 		once.Do(func() {
 			if err := r.directory.Refresh(ctx); err != nil {
-				failure = errors.Join(ErrUnavailable, err)
+				failure = unavailable(err, networkdirectory.SnapshotUnavailable)
 				return
 			}
 			snapshot, usable := r.directory.Snapshot()
 			if !usable {
-				failure = ErrUnavailable
+				failure = r.noCandidates(AliasUnavailable)
 				return
 			}
 			for _, alias := range unknown {
@@ -68,7 +68,7 @@ func (r *Runtime) Resolve(capability link.Link) ([]string, func(context.Context)
 			}
 			expanded, failure = uniqueEndpoints(expanded)
 			if len(expanded) == 0 {
-				failure = ErrUnavailable
+				failure = r.noCandidates(AliasUnavailable)
 			}
 		})
 		return slices.Clone(expanded), failure

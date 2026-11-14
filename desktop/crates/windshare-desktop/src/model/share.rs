@@ -13,7 +13,8 @@ pub enum ShareSource {
 
 #[derive(Clone, Copy, Debug)]
 pub enum ShareState {
-    AwaitingConfiguration,
+    AwaitingConfiguration(windshare_host::CreationBlock),
+    AwaitingNetwork(windshare_host::CreationBlock),
     Preparing,
     Live { viewers: Option<usize> },
     Paused,
@@ -64,7 +65,8 @@ impl Share {
 
     pub const fn status(&self) -> (Text, Tone) {
         match self.state {
-            ShareState::AwaitingConfiguration => (Text::SharingSetup, Tone::Peach),
+            ShareState::AwaitingConfiguration(_) => (Text::SharingSetup, Tone::Peach),
+            ShareState::AwaitingNetwork(_) => (Text::NetworkUnavailable, Tone::Peach),
             ShareState::Preparing => (Text::PreparingLink, Tone::Peach),
             ShareState::Live { .. } => (Text::Sharing, Tone::Mint),
             ShareState::Paused => (Text::Paused, Tone::Neutral),
@@ -95,10 +97,15 @@ impl Share {
                 }
             }
             ShareSource::Native { .. } => match self.state {
-                ShareState::AwaitingConfiguration => (
+                ShareState::AwaitingConfiguration(_) => (
                     Text::SharingSetup,
                     Icon::Settings,
                     Action::ConfigureShare(self.id),
+                ),
+                ShareState::AwaitingNetwork(_) => (
+                    Text::RetryConnection,
+                    Icon::Refresh,
+                    Action::ResumeShare(self.id),
                 ),
                 ShareState::Preparing => (Text::Cancel, Icon::Close, Action::StopShare(self.id)),
                 ShareState::Live { .. } | ShareState::Stopping => {

@@ -28,17 +28,25 @@ type shareTask interface {
 }
 
 type dependencies struct {
-	start       func(context.Context, engine.ShareRequest) (shareTask, error)
-	close       func(context.Context) error
-	load        func() (relayconfig.Config, error)
-	configure   func(turn.Settings) error
-	setup       func(context.Context, SetupInput, func(relaysetup.Progress)) error
-	log         func(string, any)
-	diagnostics diagnostics.Sink
+	start         func(context.Context, engine.ShareRequest) (shareTask, error)
+	close         func(context.Context) error
+	load          func() (relayconfig.Config, error)
+	configure     func(turn.Settings) error
+	networkStatus func() *engine.NetworkUnavailableError
+	setup         func(context.Context, SetupInput, func(relaysetup.Progress)) error
+	log           func(string, any)
+	diagnostics   diagnostics.Sink
 }
 
 type operationPhase interface{ operationPhase() }
-type awaitingConfiguration struct{ failure *Failure }
+type awaitingConfiguration struct {
+	block   CreationBlock
+	failure *Failure
+}
+type awaitingNetwork struct {
+	block   CreationBlock
+	failure *Failure
+}
 type admission struct{ cancelling bool }
 type running struct {
 	task     shareTask
@@ -50,6 +58,7 @@ type terminal struct {
 }
 
 func (awaitingConfiguration) operationPhase() {}
+func (awaitingNetwork) operationPhase()       {}
 func (admission) operationPhase()             {}
 func (running) operationPhase()               {}
 func (terminal) operationPhase()              {}

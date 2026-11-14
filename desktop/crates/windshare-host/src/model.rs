@@ -14,6 +14,7 @@ pub struct Share {
     pub operation_id: String,
     #[serde(default)]
     pub task_id: String,
+    #[serde(flatten)]
     pub state: ShareState,
     pub startup: Startup,
     #[serde(default)]
@@ -40,14 +41,47 @@ pub struct RelayAvailability {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(tag = "state", rename_all = "snake_case")]
 pub enum ShareState {
-    AwaitingConfiguration,
+    AwaitingConfiguration { blocking: CreationBlock },
+    AwaitingNetwork { blocking: CreationBlock },
     Admitting,
     Preparing,
     Sharing,
     Stopping,
     Finished,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+pub struct CreationBlock {
+    pub reason: BlockingReason,
+    pub recovery: RecoveryAction,
+    pub retry_at_ms: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BlockingReason {
+    SettingsUnavailable,
+    ConfigurationRequired,
+    Unprovisioned,
+    InvalidNetworkConfiguration,
+    TrustStateUnreadable,
+    TrustStateInvalid,
+    TrustStateUnwritable,
+    DirectoryUnavailable,
+    NoRelayCandidates,
+    AliasUnavailable,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryAction {
+    Retry,
+    Configure,
+    RepairSettings,
+    RepairTrustState,
+    ReplaceBuild,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
@@ -105,6 +139,7 @@ pub enum Setup {
     Idle,
     Running {
         id: String,
+        #[serde(default)]
         operation_id: String,
         #[serde(default)]
         stage: String,
@@ -115,10 +150,12 @@ pub enum Setup {
     },
     Finished {
         id: String,
+        #[serde(default)]
         operation_id: String,
     },
     Failed {
         id: String,
+        #[serde(default)]
         operation_id: String,
         error: Failure,
     },
@@ -142,7 +179,7 @@ pub enum Connection {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OperationState {
     Submitting,
-    Accepted(Share),
+    Accepted(Box<Share>),
     Rejected(Failure),
 }
 
@@ -154,7 +191,7 @@ pub struct Operation {
 }
 
 impl Operation {
-    pub const fn share(&self) -> Option<&Share> {
+    pub fn share(&self) -> Option<&Share> {
         match &self.state {
             OperationState::Accepted(share) => Some(share),
             _ => None,
@@ -232,12 +269,12 @@ impl Model {
                 .iter_mut()
                 .find(|op| op.id == share.operation_id)
             {
-                operation.state = OperationState::Accepted(share);
+                operation.state = OperationState::Accepted(Box::new(share));
             } else {
                 self.operations.push(Operation {
                     id: share.operation_id.clone(),
                     paths: Vec::new(),
-                    state: OperationState::Accepted(share),
+                    state: OperationState::Accepted(Box::new(share)),
                 });
             }
         }

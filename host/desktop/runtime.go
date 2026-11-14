@@ -77,11 +77,17 @@ func Start() (*Host, error) {
 	host := &Host{log: log, diagnosticDone: make(chan struct{})}
 	deps := dependencies{
 		start: func(ctx context.Context, request engine.ShareRequest) (shareTask, error) {
-			return application.StartShare(ctx, request)
+			task, err := application.StartShare(ctx, request)
+			if err != nil {
+				// Preserve absence before converting the concrete pointer to an interface.
+				return nil, err
+			}
+			return task, nil
 		},
 		close: application.Close, load: relayconfig.Load, log: log.Record,
-		configure: application.ConfigureTURN,
-		setup:     nativeSetup,
+		configure:     application.ConfigureTURN,
+		networkStatus: application.NetworkUnavailability,
+		setup:         nativeSetup,
 	}
 	if os.Getenv("WINDSHARE_TRACE") == "1" {
 		host.diagnostics, err = diagnostics.NewStream(diagnosticCapacity, nil)

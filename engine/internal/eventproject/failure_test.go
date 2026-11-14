@@ -12,6 +12,7 @@ import (
 	"github.com/windshare/windshare/connectivity/v2peer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	networkruntime "github.com/windshare/windshare/engine/internal/networkruntime"
+	"github.com/windshare/windshare/engine/networkdirectory"
 	appobs "github.com/windshare/windshare/engine/observation"
 	"github.com/windshare/windshare/engine/relayprofile"
 	"github.com/windshare/windshare/osfs"
@@ -272,6 +273,8 @@ func TestRawProviderTextTerminatesAtFailureProjection(t *testing.T) {
 		{transferfault.Wrap(mustOutputFault(t), opaqueCanaryError{secret}), appobs.FailureOutputStateIO},
 		{wsrtc.ErrPeerProtocol, appobs.FailurePeerProtocol},
 		{networkruntime.ErrUnavailable, appobs.FailureNetworkUnavailable},
+		{&networkdirectory.UnavailableError{Reason: networkdirectory.Unprovisioned, Cause: opaqueCanaryError{secret}}, appobs.FailureNetworkUnavailable},
+		{fmt.Errorf("start share: %w", &networkdirectory.UnavailableError{Reason: networkdirectory.TrustStateInvalid, Cause: hostileAsError{}}), appobs.FailureNetworkUnavailable},
 		{errors.Join(networkruntime.ErrUnavailable, opaqueCanaryError{secret}), appobs.FailureNetworkUnavailable},
 		{fmt.Errorf("start share: %w", errors.Join(networkruntime.ErrUnavailable, opaqueCanaryError{secret})), appobs.FailureNetworkUnavailable},
 		{relayprofile.ErrCandidatesRequired, appobs.FailureInvalidInput},
