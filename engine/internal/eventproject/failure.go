@@ -18,6 +18,7 @@ import (
 	receive "github.com/windshare/windshare/engine/internal/receive"
 	share "github.com/windshare/windshare/engine/internal/share"
 	task "github.com/windshare/windshare/engine/internal/task"
+	"github.com/windshare/windshare/engine/networkdirectory"
 	appobs "github.com/windshare/windshare/engine/observation"
 	output "github.com/windshare/windshare/engine/output"
 	"github.com/windshare/windshare/engine/relayprofile"
@@ -172,6 +173,12 @@ func classifyDirectError(cause error) (appobs.Failure, bool) {
 	//nolint:errorlint
 	if boundary, ok := cause.(*transferfault.BoundaryError); ok && boundary != nil {
 		return ProjectFault(boundary.Fault())
+	}
+	// The directory owner determines availability; incidental I/O causes must not
+	// replace that decision or invoke diagnostic hooks during projection.
+	//nolint:errorlint
+	if blocked, ok := cause.(*networkdirectory.UnavailableError); ok && blocked != nil {
+		return mustFailure(appobs.FailureNetworkUnavailable), true
 	}
 	switch {
 	case exactError(cause, networkruntime.ErrUnavailable):

@@ -4,7 +4,6 @@ package networkruntime
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"strconv"
 	"sync"
@@ -18,8 +17,6 @@ import (
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relayprofile"
 )
-
-var ErrUnavailable = errors.New("built-in network has no usable relay candidates")
 
 type Runtime struct {
 	config          networkconfig.Config
@@ -91,27 +88,19 @@ func (r *Runtime) Plan(ctx context.Context, intent relayprofile.Intent, frontend
 		urls = append(urls, candidate.PublicURL)
 	}
 	only := intent.Mode() != relayprofile.Planned
-	var payload nodedirectory.Payload
-	if !only && r.directory != nil {
-		snapshot, usable := r.directory.Snapshot()
-		if !usable && len(configured) == 0 {
-			if err := r.directory.Refresh(ctx); err != nil {
-				return Selection{}, errors.Join(ErrUnavailable, err)
-			}
-			snapshot, usable = r.directory.Snapshot()
-		}
-		if usable {
-			payload = snapshot.Payload()
-		}
-	}
 	generation := r.generation()
-	plan, err := relayplan.Build(relayplan.Input{Configured: urls, Directory: payload, NetworkGeneration: generation, Now: r.now(),
-		Observations: r.observations.Snapshot(generation, r.now()), Policy: relayplan.Policy{ConfiguredOnly: only, GlobalPairCoversMainland: r.config.GlobalPairCoversMainland}})
+	plan, err := r.buildPlan(urls, only, generation)
+	if err == nil && len(plan.Configured)+len(plan.Network) == 0 && !only && r.directory != nil {
+		if err := r.directory.Refresh(ctx); err != nil {
+			return Selection{}, unavailable(err, networkdirectory.SnapshotUnavailable)
+		}
+		plan, err = r.buildPlan(urls, only, generation)
+	}
 	if err != nil {
 		return Selection{}, err
 	}
 	if len(plan.Configured)+len(plan.Network) == 0 {
-		return Selection{}, errors.Join(ErrUnavailable, r.directoryError)
+		return Selection{}, r.noCandidates(NoRelayCandidates)
 	}
 	result := Selection{Plan: plan, Relays: configured}
 	result.Decision = networkconfig.Decision{DirectoryGeneration: plan.Decision.DirectoryGeneration, DirectorySerial: plan.Decision.DirectorySerial,
@@ -133,6 +122,17 @@ func (r *Runtime) Plan(ctx context.Context, intent relayprofile.Intent, frontend
 		}
 	}
 	return result, nil
+}
+
+func (r *Runtime) buildPlan(configured []string, only bool, generation string) (relayplan.Plan, error) {
+	var payload nodedirectory.Payload
+	if !only && r.directory != nil {
+		if snapshot, usable := r.directory.Snapshot(); usable {
+			payload = snapshot.Payload()
+		}
+	}
+	return relayplan.Build(relayplan.Input{Configured: configured, Directory: payload, NetworkGeneration: generation, Now: r.now(),
+		Observations: r.observations.Snapshot(generation, r.now()), Policy: relayplan.Policy{ConfiguredOnly: only, GlobalPairCoversMainland: r.config.GlobalPairCoversMainland}})
 }
 
 func (r *Runtime) generation() string {

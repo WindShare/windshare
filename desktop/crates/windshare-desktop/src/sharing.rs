@@ -49,9 +49,12 @@ impl Desktop {
                     .shares
                     .iter()
                     .find(|share| share.id == run.selection_id)
-                    && matches!(share.state, crate::model::ShareState::AwaitingConfiguration)
+                    && let crate::model::ShareState::AwaitingConfiguration(blocking)
+                    | crate::model::ShareState::AwaitingNetwork(blocking) = share.state
                 {
-                    return self.sharing_setup(theme, share, cx).into_any_element();
+                    return self
+                        .blocked_share(theme, share, blocking, cx)
+                        .into_any_element();
                 }
                 let now = std::time::Instant::now();
                 let frame = run.sample(now, still);

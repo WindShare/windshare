@@ -76,11 +76,11 @@ func (cache *FileCache) read() (Record, error) {
 		return Record{}, err
 	}
 	if len(data) > maximumCacheBytes {
-		return Record{}, nodedirectory.ErrFormat
+		return Record{}, blocked(TrustStateInvalid, nodedirectory.ErrFormat)
 	}
 	var record Record
 	if err = json.Unmarshal(data, &record); err != nil {
-		return Record{}, err
+		return Record{}, blocked(TrustStateInvalid, err)
 	}
 	return record, nil
 }

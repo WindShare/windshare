@@ -68,6 +68,7 @@ pub enum Overlay {
     Detail(usize),
     ShareQr(usize),
     Help,
+    SharingSetup(Option<usize>),
 }
 #[derive(Clone, Copy, Debug)]
 pub enum Action {
@@ -91,7 +92,8 @@ pub enum Action {
     StopShare(usize),
     ShareAgain(usize),
     ConfigureShare(usize),
-    SaveSharingSetup(usize),
+    ConfigureNetwork,
+    SaveSharingSetup(Option<usize>),
     ResumeShare(usize),
     ApproveRelay,
     OpenLink(usize),

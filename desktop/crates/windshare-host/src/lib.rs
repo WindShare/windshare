@@ -15,8 +15,9 @@ pub fn check_host() -> anyhow::Result<()> {
 }
 
 pub use model::{
-    Completion, Connection, Failure, Model, Operation, OperationState, Outcome, SelectedRoot,
-    Selection, Setup, Share, ShareState, Snapshot, Startup, StopReason,
+    BlockingReason, Completion, Connection, CreationBlock, Failure, Model, Operation,
+    OperationState, Outcome, RecoveryAction, SelectedRoot, Selection, Setup, Share, ShareState,
+    Snapshot, Startup, StopReason,
 };
 
 use request::Command;

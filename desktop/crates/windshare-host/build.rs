@@ -24,6 +24,8 @@ fn main() {
         "connectivity",
         "core",
         "engine",
+        "deploy/network/release.go",
+        "deploy/network/release.json",
         "host",
         "osfs",
         "relay/protocol",

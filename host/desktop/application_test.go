@@ -203,7 +203,7 @@ func TestConfigurationWaitsAndTerminalFailureIsRetained(t *testing.T) {
 			view := awaitShare(t, a, "operation", func(s Share) bool { return s.Error != nil })
 			expected := Finished
 			if configuration {
-				expected = AwaitingConfiguration
+				expected = AwaitingNetwork
 			}
 			if view.State != expected || starts.Load() != 0 {
 				t.Fatalf("%+v", view)

@@ -50,12 +50,10 @@ func (a *Application) configure(request Request) error {
 	if len(a.setupRequests) >= maximumOperations {
 		return errors.New("application setup limit reached")
 	}
-	op, ok := a.operations[request.OperationID]
-	if !ok {
-		return errors.New("creation operation not found")
-	}
-	if _, waiting := op.phase.(awaitingConfiguration); !waiting {
-		return errors.New("share is no longer waiting for configuration")
+	if request.OperationID != "" {
+		if _, ok := a.operations[request.OperationID]; !ok {
+			return errors.New("creation operation not found")
+		}
 	}
 	if input.RelayURL == "" && input.FrontURL == "" {
 		return errors.New("enter a relay or frontend URL")
@@ -67,10 +65,10 @@ func (a *Application) configure(request Request) error {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a.cancelSetup = cancel
-	a.setup = SetupView{State: "running", ID: input.ID, OperationID: op.id}
-	a.setupRequests[input.ID] = setupCommand{input: *input, operationID: op.id}
+	a.setup = SetupView{State: "running", ID: input.ID, OperationID: request.OperationID}
+	a.setupRequests[input.ID] = setupCommand{input: *input, operationID: request.OperationID}
 	a.work.Add(1)
-	go a.runSetup(ctx, op.id, *input)
+	go a.runSetup(ctx, request.OperationID, *input)
 	return nil
 }
 
@@ -94,7 +92,7 @@ func (a *Application) runSetup(ctx context.Context, operationID string, input Se
 	}
 	a.deps.log("host.setup_completed", a.setup)
 	op := a.operations[operationID]
-	if _, waiting := op.phase.(awaitingConfiguration); waiting && completed && !a.closing {
+	if op != nil && waitingForAdmission(op.phase) && completed && !a.closing {
 		// An entered relay is an explicit choice for this intent. The setup
 		// service preserves saved active sets, including disabled defaults.
 		if input.RelayURL != "" {
@@ -103,7 +101,7 @@ func (a *Application) runSetup(ctx context.Context, operationID string, input Se
 	}
 	if completed && !a.closing {
 		for _, pending := range a.operations {
-			if _, waiting := pending.phase.(awaitingConfiguration); waiting {
+			if waitingForAdmission(pending.phase) {
 				a.admit(pending)
 			}
 		}

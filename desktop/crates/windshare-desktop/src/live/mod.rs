@@ -1,3 +1,4 @@
+mod blocking;
 mod projection;
 mod selection;
 mod session;

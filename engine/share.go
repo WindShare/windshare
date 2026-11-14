@@ -19,7 +19,6 @@ import (
 )
 
 var ErrInvalidShareChunkSize = share.ErrInvalidChunkSize
-var ErrNetworkUnavailable = networkruntime.ErrUnavailable
 
 type ShareRequest struct {
 	Source      liveshare.FileSourceFactory

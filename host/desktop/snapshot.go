@@ -48,7 +48,9 @@ func projectShare(op *operation) Share {
 	view := Share{OperationID: op.id, CreatedAt: op.createdAt.UnixMilli(), Startup: "pending"}
 	switch current := op.phase.(type) {
 	case awaitingConfiguration:
-		view.State, view.Error = AwaitingConfiguration, current.failure
+		view.State, view.Error, view.Blocking = AwaitingConfiguration, current.failure, &current.block
+	case awaitingNetwork:
+		view.State, view.Error, view.Blocking = AwaitingNetwork, current.failure, &current.block
 	case admission:
 		view.State = Admitting
 		if current.cancelling {

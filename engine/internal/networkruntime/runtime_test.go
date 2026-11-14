@@ -114,6 +114,9 @@ func TestLibraryRuntimeHasNoImplicitInfrastructure(t *testing.T) {
 	if _, err := r.Plan(context.Background(), relayprofile.Plan(nil), ""); !errors.Is(err, ErrUnavailable) {
 		t.Fatal(err)
 	}
+	if failure := r.Unavailability(); failure == nil || failure.Reason != networkdirectory.Unprovisioned {
+		t.Fatal("unprovisioned runtime was reported as an outage", failure)
+	}
 	if _, _, err := r.Resolve(link.Link{NodeAliases: []string{"jp1"}}); !errors.Is(err, ErrUnavailable) {
 		t.Fatal(err)
 	}
@@ -150,5 +153,8 @@ func TestUnreadableTrustStatePreservesExplicitRelays(t *testing.T) {
 	}
 	if _, err := r.Plan(context.Background(), relayprofile.Plan(nil), ""); !errors.Is(err, ErrUnavailable) || !errors.Is(err, cause) {
 		t.Fatal("directory must fail closed without resetting trust", err)
+	}
+	if failure := r.Unavailability(); failure == nil || failure.Reason != networkdirectory.TrustStateUnreadable || !failure.RetryAt.IsZero() {
+		t.Fatal("local trust failure was reported as a temporary outage", failure)
 	}
 }
