@@ -49,6 +49,14 @@ impl Desktop {
                     .shares
                     .iter()
                     .find(|share| share.id == run.selection_id)
+                    && matches!(share.state, crate::model::ShareState::AwaitingAuthorization)
+                {
+                    return Self::authorization_share(theme, share, cx).into_any_element();
+                }
+                if let Some(share) = self
+                    .shares
+                    .iter()
+                    .find(|share| share.id == run.selection_id)
                     && let crate::model::ShareState::AwaitingConfiguration(blocking)
                     | crate::model::ShareState::AwaitingNetwork(blocking) = share.state
                 {

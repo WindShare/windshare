@@ -21,6 +21,7 @@ type ShareSnapshot struct {
 	Startup           ShareStartupState
 	Ready             ShareReady
 	StartupError      error
+	Authorization     *ShareAuthorization
 	RelayAvailability *appobs.RelayAvailability
 	// Result is present only after Done closes: all task work has joined.
 	Result *TaskResult[ShareResult]
@@ -55,6 +56,9 @@ func (current *ShareTask) Snapshot() ShareSnapshot {
 		result, _ := current.Wait(context.Background())
 		snapshot.Result = &result
 		snapshot.State = TaskFinished
+		if result.Outcome == OutcomeFailed && snapshot.Startup == ShareStartupFailed {
+			snapshot.Authorization = shareAuthorization(snapshot.StartupError, current.selection)
+		}
 	default:
 	}
 	return snapshot

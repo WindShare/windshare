@@ -7,6 +7,10 @@ pub enum Command {
         operation_id: String,
         paths: Vec<String>,
     },
+    Repeat {
+        operation_id: String,
+        source_operation_id: String,
+    },
     Cancel {
         operation_id: String,
     },
@@ -16,6 +20,9 @@ pub enum Command {
     Configure {
         operation_id: String,
         setup: SetupInput,
+    },
+    CancelSetup {
+        setup_id: String,
     },
     Resume {
         operation_id: String,

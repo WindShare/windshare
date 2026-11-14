@@ -28,14 +28,14 @@ type shareTask interface {
 }
 
 type dependencies struct {
-	start         func(context.Context, engine.ShareRequest) (shareTask, error)
-	close         func(context.Context) error
-	load          func() (relayconfig.Config, error)
-	configure     func(turn.Settings) error
-	networkStatus func() *engine.NetworkUnavailableError
-	setup         func(context.Context, SetupInput, func(relaysetup.Progress)) error
-	log           func(string, any)
-	diagnostics   diagnostics.Sink
+	start       func(context.Context, engine.ShareRequest) (shareTask, error)
+	close       func(context.Context) error
+	load        func() (relayconfig.Config, error)
+	configure   func(turn.Settings) error
+	setup       func(context.Context, SetupInput, func(relaysetup.Progress)) (SetupResult, error)
+	cancelSetup func(context.Context, string) error
+	log         func(string, any)
+	diagnostics diagnostics.Sink
 }
 
 type operationPhase interface{ operationPhase() }
@@ -47,6 +47,7 @@ type awaitingNetwork struct {
 	block   CreationBlock
 	failure *Failure
 }
+type awaitingAuthorization struct{ authority engine.ShareAuthorization }
 type admission struct{ cancelling bool }
 type running struct {
 	task     shareTask
@@ -59,35 +60,37 @@ type terminal struct {
 
 func (awaitingConfiguration) operationPhase() {}
 func (awaitingNetwork) operationPhase()       {}
+func (awaitingAuthorization) operationPhase() {}
 func (admission) operationPhase()             {}
 func (running) operationPhase()               {}
 func (terminal) operationPhase()              {}
 
 type operation struct {
-	id        string
-	paths     []string
-	relays    []string
-	createdAt time.Time
-	phase     operationPhase
-	cancel    context.CancelFunc
+	id                string
+	sourceOperationID string
+	paths             []string
+	relays            []string
+	createdAt         time.Time
+	phase             operationPhase
+	cancel            context.CancelFunc
 }
 
 // Application owns intents independently of connections, navigation and startup.
 // Only committed state is observed; slow admission and setup never hold mu.
 type Application struct {
-	mu            sync.Mutex
-	sessionID     string
-	snapshotValue Snapshot
-	operations    map[string]*operation
-	deps          dependencies
-	closing       bool
-	admissions    chan struct{}
-	work          sync.WaitGroup
-	readers       sync.WaitGroup
-	subscribers   map[*subscription]struct{}
-	setup         SetupView
-	setupRequests map[string]setupCommand
-	cancelSetup   context.CancelFunc
+	mu             sync.Mutex
+	sessionID      string
+	snapshotValue  Snapshot
+	operations     map[string]*operation
+	deps           dependencies
+	closing        bool
+	admissions     chan struct{}
+	work           sync.WaitGroup
+	readers        sync.WaitGroup
+	subscribers    map[*subscription]struct{}
+	setup          SetupView
+	setupRequests  map[string]setupCommand
+	interruptSetup context.CancelFunc
 }
 
 func newApplication(sessionID string, deps dependencies) *Application {
@@ -109,8 +112,12 @@ func (a *Application) execute(request Request) Message {
 	switch request.Command {
 	case "create":
 		err = a.create(request)
+	case "repeat":
+		err = a.repeat(request)
 	case "configure":
 		err = a.configure(request)
+	case "cancel_setup":
+		err = a.cancelSetupRequest(request.SetupID)
 	case "resume":
 		err = a.resume(request.OperationID)
 	case "cancel":
@@ -163,6 +170,9 @@ func (a *Application) cancel(id string) error {
 		op = &operation{id: id, createdAt: time.Now()}
 		a.operations[id] = op
 	}
+	if a.setup.OperationID == id {
+		a.cancelSetupLocked()
+	}
 	if op.cancel != nil {
 		op.cancel()
 	}
@@ -181,9 +191,7 @@ func (a *Application) cancel(id string) error {
 func (a *Application) close() error {
 	a.mu.Lock()
 	a.closing = true
-	if a.cancelSetup != nil {
-		a.cancelSetup()
-	}
+	a.cancelSetupLocked()
 	for _, op := range a.operations {
 		if _, admitting := op.phase.(admission); admitting && op.cancel != nil {
 			op.cancel()
@@ -194,6 +202,11 @@ func (a *Application) close() error {
 	// engine so no late worker can escape the application's ownership barrier.
 	a.work.Wait()
 	err := a.deps.close(context.Background())
+	a.mu.Lock()
+	if a.setup.State == "cancel_failed" {
+		err = errors.Join(err, errors.New(a.setup.Error.Message))
+	}
+	a.mu.Unlock()
 	a.readers.Wait()
 	a.deps.log("host.engine_joined", map[string]string{"error": errorText(err)})
 	return err

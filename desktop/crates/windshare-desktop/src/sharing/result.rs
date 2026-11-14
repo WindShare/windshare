@@ -57,9 +57,10 @@ impl Desktop {
                     ),
             )
             .child(file_summary(theme, share, locale))
-            .when(share.error.is_some() || share.relay_reconnecting, |el| {
-                el.child(Self::share_notice(theme, share, cx))
-            })
+            .when(
+                share.error.is_some() || share.relay_notice().is_some(),
+                |el| el.child(Self::share_notice(theme, share, cx)),
+            )
             .child(self.result_action(theme, share, scene, cx));
         let card = theme
             .card()
@@ -235,10 +236,10 @@ impl Desktop {
                         .text_color(Tone::Rose.text(theme)),
                 )
             })
-            .when(share.relay_reconnecting, |el| {
+            .when_some(share.relay_notice(), |el, message| {
                 el.child(
                     theme
-                        .caption(language(cx).text(Text::RelayReconnecting))
+                        .caption(language(cx).text(message))
                         .text_color(Tone::Peach.text(theme)),
                 )
             })

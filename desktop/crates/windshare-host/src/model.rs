@@ -1,3 +1,4 @@
+use crate::Setup;
 use serde::Deserialize;
 
 #[derive(Clone, Debug, Deserialize)]
@@ -25,6 +26,14 @@ pub struct Share {
     pub result: Option<Completion>,
     pub error: Option<Failure>,
     pub relay: Option<RelayObservation>,
+    pub authorization: Option<ShareAuthorization>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ShareAuthorization {
+    SelfHosted { relay_url: String },
+    Official,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -40,9 +49,29 @@ pub struct RelayAvailability {
     pub terminal: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RelayStatus {
+    Available,
+    Recovering,
+    Unavailable,
+}
+
+impl RelayAvailability {
+    pub const fn status(&self) -> RelayStatus {
+        if self.available > 0 {
+            RelayStatus::Available
+        } else if self.total > 0 && self.terminal == self.total {
+            RelayStatus::Unavailable
+        } else {
+            RelayStatus::Recovering
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum ShareState {
+    AwaitingAuthorization,
     AwaitingConfiguration { blocking: CreationBlock },
     AwaitingNetwork { blocking: CreationBlock },
     Admitting,
@@ -132,35 +161,6 @@ pub enum SelectedRoot {
     Directory { name: String },
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
-#[serde(tag = "state", rename_all = "snake_case")]
-pub enum Setup {
-    #[default]
-    Idle,
-    Running {
-        id: String,
-        #[serde(default)]
-        operation_id: String,
-        #[serde(default)]
-        stage: String,
-        #[serde(default)]
-        verification_url: String,
-        #[serde(default)]
-        user_code: String,
-    },
-    Finished {
-        id: String,
-        #[serde(default)]
-        operation_id: String,
-    },
-    Failed {
-        id: String,
-        #[serde(default)]
-        operation_id: String,
-        error: Failure,
-    },
-}
-
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct Failure {
     pub code: String,
@@ -242,6 +242,18 @@ impl Default for Model {
 }
 
 impl Model {
+    pub fn has_unfinished_work(&self) -> bool {
+        self.setup.unfinished()
+            || self
+                .operations
+                .iter()
+                .any(|operation| match &operation.state {
+                    OperationState::Submitting => true,
+                    OperationState::Accepted(share) => share.state != ShareState::Finished,
+                    OperationState::Rejected(_) => false,
+                })
+    }
+
     pub fn reconcile(&mut self, snapshot: Snapshot) {
         if self
             .session_id

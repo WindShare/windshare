@@ -67,11 +67,14 @@ impl Desktop {
             Action::ToggleLink(id) => self.toggle_link(id),
             Action::EnlargeQr(id) => self.enlarge_qr(id, window, cx),
             Action::StopShare(id) => self.stop_native_share(id),
-            Action::ShareAgain(id) => self.repeat_native_share(id, window, cx),
+            Action::ShareAgain(id) => {
+                self.repeat_native_share(id, window, cx);
+            }
             Action::ConfigureShare(id) => self.open_sharing_setup(Some(id), window, cx),
             Action::ConfigureNetwork => self.open_sharing_setup(None, window, cx),
             Action::SaveSharingSetup(id) => self.save_sharing_setup(id, cx),
             Action::ResumeShare(id) => self.resume_native_share(id),
+            Action::CancelSharingSetup => self.cancel_sharing_setup(),
             Action::ApproveRelay => self.approve_relay(cx),
             Action::OpenLink(id) => {
                 if let Some(link) = self

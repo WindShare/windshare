@@ -26,11 +26,11 @@ func TestSetupResumesOnlyWaitingIntentAndPreservesExplicitChoice(t *testing.T) {
 				return relayconfig.Config{}, nil
 			}
 			entered, release := make(chan struct{}), make(chan struct{})
-			a.deps.setup = func(ctx context.Context, input SetupInput, progress func(relaysetup.Progress)) error {
+			a.deps.setup = func(ctx context.Context, input SetupInput, progress func(relaysetup.Progress)) (SetupResult, error) {
 				close(entered)
 				<-release
 				saved.Store(true)
-				return nil
+				return SetupResult{RelayURL: input.RelayURL, RelaySaved: true}, nil
 			}
 			start := a.deps.start
 			a.deps.start = func(ctx context.Context, request engine.ShareRequest) (shareTask, error) {
@@ -103,11 +103,11 @@ func TestShutdownCancelsAndJoinsSetupWithoutLateAdmission(t *testing.T) {
 		return nil, engine.ErrNetworkUnavailable
 	}
 	entered, joined := make(chan struct{}), make(chan struct{})
-	a.deps.setup = func(ctx context.Context, _ SetupInput, _ func(relaysetup.Progress)) error {
+	a.deps.setup = func(ctx context.Context, _ SetupInput, _ func(relaysetup.Progress)) (SetupResult, error) {
 		close(entered)
 		<-ctx.Done()
 		close(joined)
-		return nil // A provider can finish successfully concurrently with cancellation.
+		return SetupResult{}, nil // A provider can finish successfully concurrently with cancellation.
 	}
 	a.execute(createRequest())
 	awaitShare(t, a, "operation", func(s Share) bool { return s.State == AwaitingNetwork })

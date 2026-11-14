@@ -51,6 +51,8 @@ func projectShare(op *operation) Share {
 		view.State, view.Error, view.Blocking = AwaitingConfiguration, current.failure, &current.block
 	case awaitingNetwork:
 		view.State, view.Error, view.Blocking = AwaitingNetwork, current.failure, &current.block
+	case awaitingAuthorization:
+		view.State, view.Authorization = AwaitingAuthorization, &current.authority
 	case admission:
 		view.State = Admitting
 		if current.cancelling {
@@ -69,6 +71,7 @@ func projectShare(op *operation) Share {
 
 func projectTask(view *Share, current running) {
 	state := current.task.Snapshot()
+	view.Authorization = state.Authorization
 	view.TaskID, view.State = string(current.task.ID()), Preparing
 	switch state.Startup {
 	case engine.ShareReadyReached:

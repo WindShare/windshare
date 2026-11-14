@@ -20,6 +20,52 @@ pub fn retry_deadline(blocking: CreationBlock) -> Option<SystemTime> {
 }
 
 impl Desktop {
+    pub fn authorization_share(theme: Theme, share: &Share, cx: &Context<Self>) -> Div {
+        let locale = language(cx);
+        let official = matches!(
+            share.authorization,
+            Some(windshare_host::ShareAuthorization::Official)
+        );
+        column().w_full().items_center().py(px(24.)).child(
+            theme
+                .card()
+                .w_full()
+                .max_w(px(BLOCKED_CARD_WIDTH))
+                .p(px(28.))
+                .gap(px(20.))
+                .child(theme.heading(locale.text(Text::AuthorizationRequired), 24.))
+                .child(theme.label(share.name.clone(), 16.))
+                .when(official, |card| {
+                    card.child(theme.caption(locale.text(Text::OfficialAuthorizationRequired)))
+                })
+                .child(
+                    row()
+                        .gap(px(10.))
+                        .flex_wrap()
+                        .child(Self::button(
+                            "authorize-share",
+                            locale.text(if official {
+                                Text::SelfHostedRelay
+                            } else {
+                                Text::ApproveDevice
+                            }),
+                            Icon::Settings,
+                            ButtonStyle::Primary,
+                            Action::ConfigureShare(share.id),
+                            cx,
+                        ))
+                        .child(Self::button(
+                            "cancel-authorization",
+                            locale.text(Text::Cancel),
+                            Icon::Close,
+                            ButtonStyle::Quiet,
+                            Action::StopShare(share.id),
+                            cx,
+                        )),
+                ),
+        )
+    }
+
     pub fn blocked_share(
         &self,
         theme: Theme,

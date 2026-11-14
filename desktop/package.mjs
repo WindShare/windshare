@@ -25,7 +25,7 @@ await writeFile(join(staging, 'README.txt'),
   'WindShare desktop: keep the executable and Go host library together.\n' +
   'Run windshare to select real files and folders, or drop a selection into the window.\n' +
   'Uses saved wind relay/frontend settings, with in-app manual setup when needed.\n' +
-  'Closing the window stops and joins shares.\n');
+  'Closing asks before stopping unfinished shares, then waits for shutdown.\n');
 const check = spawnSync(join(staging, executable), ['--host-check'], { cwd: staging, timeout: 60_000 });
 if (check.error || check.status !== 0) throw check.error ?? new Error('Packaged host check failed');
 const archive = join(output, `windshare-${process.platform}-${process.arch}-${profile}.tar.gz`);

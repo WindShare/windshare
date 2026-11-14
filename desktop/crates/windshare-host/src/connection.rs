@@ -213,7 +213,7 @@ fn receive(shared: &Shared, pending: &mut BTreeMap<u64, Request>, text: &str) ->
     shared.update(|model| {
         if let Some(error) = message.error {
             if let Some(Request {
-                command: Command::Create { operation_id, .. },
+                command: Command::Create { operation_id, .. } | Command::Repeat { operation_id, .. },
                 ..
             }) = acknowledged
             {

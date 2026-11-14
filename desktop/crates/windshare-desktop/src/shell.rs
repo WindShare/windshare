@@ -58,7 +58,9 @@ impl Desktop {
                                 .compact()
                                 .style(ButtonStyle::Ghost)
                                 .tooltip(locale.text(Text::CloseWindow))
-                                .on_press(cx.listener(|this, (), _, cx| this.quit(cx))),
+                                .on_press(cx.listener(|this, (), window, cx| {
+                                    this.request_quit(window, cx);
+                                })),
                         ),
                 )
             })

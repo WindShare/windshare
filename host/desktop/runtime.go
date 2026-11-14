@@ -75,6 +75,7 @@ func Start() (*Host, error) {
 		return nil, err
 	}
 	host := &Host{log: log, diagnosticDone: make(chan struct{})}
+	setup := newNativeSetup(relayconfig.FileStore{})
 	deps := dependencies{
 		start: func(ctx context.Context, request engine.ShareRequest) (shareTask, error) {
 			task, err := application.StartShare(ctx, request)
@@ -85,9 +86,9 @@ func Start() (*Host, error) {
 			return task, nil
 		},
 		close: application.Close, load: relayconfig.Load, log: log.Record,
-		configure:     application.ConfigureTURN,
-		networkStatus: application.NetworkUnavailability,
-		setup:         nativeSetup,
+		configure:   application.ConfigureTURN,
+		setup:       setup.run,
+		cancelSetup: setup.cancel,
 	}
 	if os.Getenv("WINDSHARE_TRACE") == "1" {
 		host.diagnostics, err = diagnostics.NewStream(diagnosticCapacity, nil)
