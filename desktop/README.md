@@ -40,8 +40,8 @@ disabled defaults. Cancelling stops admission and revokes unfinished device appr
 committed settings survive, and failed cancellation can be retried.
 
 The built-in network uses provisioned release trust roots, a signed directory and
-usable nodes. The main checkout's release manifest remains unprovisioned; use saved
-relays or a [provisioned development build](../deploy/network/README.md) for local use.
+usable nodes. The production release manifest remains unprovisioned; use saved
+relays or `make development-build` with the [development network](../deploy/network/development/README.md) for local use.
 Reuse the existing development network's trust identity across source rebuilds.
 Temporary network failures expose the owner's retry cooldown. Official account
 provisioning is a separate P2 dependency, required only when anonymous admission is refused.
