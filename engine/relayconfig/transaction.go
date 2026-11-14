@@ -1,7 +1,6 @@
 package relayconfig
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -72,5 +71,5 @@ func ReadSettings(tx *statefile.Transaction) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	return Decode(bytes.NewReader(data))
+	return decodeSaved(tx.SettingsPath(), data)
 }

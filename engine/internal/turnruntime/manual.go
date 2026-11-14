@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"io"
 	"slices"
 	"time"
 
 	"github.com/windshare/windshare/connectivity/iceconfig"
+	"github.com/windshare/windshare/engine/internal/configjson"
 	"github.com/windshare/windshare/engine/internal/turnruntime/internal/provider"
 )
 
@@ -214,14 +214,5 @@ func decode(body []byte, target any) error {
 	if len(body) == 0 || bytes.Equal(bytes.TrimSpace(body), []byte("null")) {
 		return ErrConfiguration
 	}
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return err
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		return ErrConfiguration
-	}
-	return nil
+	return configjson.Decode(body, target)
 }
