@@ -14,6 +14,7 @@ import (
 	catalog "github.com/windshare/windshare/core/catalog"
 	transfer "github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
+	networkruntime "github.com/windshare/windshare/engine/internal/networkruntime"
 	receive "github.com/windshare/windshare/engine/internal/receive"
 	share "github.com/windshare/windshare/engine/internal/share"
 	task "github.com/windshare/windshare/engine/internal/task"
@@ -172,6 +173,10 @@ func classifyDirectError(cause error) (appobs.Failure, bool) {
 		return ProjectFault(boundary.Fault())
 	}
 	switch {
+	case exactError(cause, networkruntime.ErrUnavailable):
+		// No configured relay and no usable built-in directory: a network-class
+		// condition, reached through errors.Join/%w wrappers by the traversal above.
+		return mustFailure(appobs.FailureRelayTransport), true
 	case exactError(cause, relayset.ErrReceiverUnavailable):
 		return mustFailure(appobs.FailureRelayNotFound), true
 	case exactError(cause, relayset.ErrReceiverWaitExpired):

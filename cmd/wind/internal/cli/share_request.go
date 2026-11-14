@@ -91,11 +91,15 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		saved.ConfiguredOnly = true
 	}
 	intent, err := relayconfig.ShareIntent(saved, relayURLs)
+	if err == nil && intent.Mode() == relayprofile.ConfiguredOnly && len(intent.Candidates()) == 0 {
+		// Excluding the built-in network leaves nothing to try, and no retry can change that.
+		err = relayconfig.ErrConfig
+	}
 	if err != nil {
 		if errors.Is(err, relayconfig.ErrRelayURL) {
 			a.writeCompleteLine("share: %s", err)
 		} else {
-			a.writeCompleteLine("share: configure relay candidates with wind config import <file|->, or pass --relay for this share")
+			a.writeCompleteLine("share: %s", configureRelaysGuidance)
 		}
 		return shareRequest{}, requestParseUsageFailure
 	}
@@ -106,6 +110,8 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		chunkSize: uint32(*blockSize), observation: observation,
 	}, requestParseReady
 }
+
+const configureRelaysGuidance = "configure relay candidates with wind config import <file|->, or pass --relay for this share"
 
 func shareFrontend(flags *flag.FlagSet, override, saved string) (string, error) {
 	// Presence matters: an explicitly empty override cannot silently restore a

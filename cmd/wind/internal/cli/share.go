@@ -39,6 +39,13 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 	// belongs to the engine and therefore outlives this command's canceled wait.
 	current, err := a.application.StartShare(context.WithoutCancel(ctx), a.engineShareRequest(request, runtime))
 	if err != nil {
+		if errors.Is(err, engine.ErrNetworkUnavailable) {
+			// Planning found neither a configured relay nor a usable built-in network. This
+			// is recoverable by retrying or configuring a relay, not an unexpected fault.
+			a.writeCompleteLine("share: network temporarily unavailable; retry, or %s", configureRelaysGuidance)
+			emitShareCommandFailure(runtime, ExitNetwork, err)
+			return ExitNetwork
+		}
 		emitShareCommandFailure(runtime, ExitFailure, err)
 		return ExitFailure
 	}
