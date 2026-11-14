@@ -14,6 +14,7 @@ const PROMPT_TITLE_HEIGHT: f32 = 34.;
 const PROMPT_DETAIL_SIZE: f32 = 16.;
 const PROMPT_DETAIL_HEIGHT: f32 = 26.;
 const PROMPT_BUTTON_GAP: f32 = 12.;
+const PROMPT_ACTION_MIN_WIDTH: f32 = 104.;
 
 pub fn render_prompt(
     level: PromptLevel,
@@ -142,6 +143,7 @@ impl Render for PromptDialog {
                     .enumerate()
                     .map(|(index, (button, focus))| {
                         Button::new(("prompt-action", index), button.label().clone())
+                            .min_width(px(PROMPT_ACTION_MIN_WIDTH))
                             .style(self.button_style(button))
                             .focus_handle(focus)
                             .on_press(

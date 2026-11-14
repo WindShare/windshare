@@ -1,4 +1,4 @@
-use crate::{Icon, RADIUS, Theme, Tone, icon};
+use crate::{Icon, RADIUS, Theme, Tone, icon, typography::ControlText};
 use gpui::{
     Div, ElementId, FontWeight, Pixels, Point, Role, SharedString, Size, Stateful, Svg, Toggled,
     Transformation, div, prelude::*, px, relative, size, svg,
@@ -52,16 +52,21 @@ impl Theme {
             .border_color(self.border())
     }
     pub fn badge(self, text: impl Into<SharedString>, tone: Tone) -> Div {
-        row()
-            .gap(px(5.))
-            .px(px(8.))
-            .h(px(28.))
-            .rounded(px(6.))
-            .bg(tone.surface(self))
-            .text_color(tone.text(self))
-            .text_size(px(12.))
-            .font_weight(FontWeight::SEMIBOLD)
-            .child(text.into())
+        const HEIGHT: f32 = 28.;
+        const PADDING: f32 = 10.;
+        const RADIUS: f32 = 6.;
+
+        ControlText::Status.apply(
+            row()
+                .justify_center()
+                .flex_shrink_0()
+                .px(px(PADDING))
+                .h(px(HEIGHT))
+                .rounded(px(RADIUS))
+                .bg(tone.surface(self))
+                .text_color(tone.text(self))
+                .child(text.into()),
+        )
     }
     pub fn dot(self, tone: Tone) -> Div {
         div()

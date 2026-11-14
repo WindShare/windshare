@@ -1,12 +1,5 @@
 use gpui::{Hsla, WindowAppearance, rgb};
 
-pub const FONT: &str = "Manrope";
-#[cfg(target_os = "windows")]
-pub const UI_FONT: &str = "Microsoft YaHei UI";
-#[cfg(not(target_os = "windows"))]
-pub const UI_FONT: &str = "Noto Sans CJK SC";
-pub const INPUT_FONT_SIZE: f32 = 16.;
-pub const INPUT_LINE_HEIGHT: f32 = 26.;
 pub const SIDEBAR_WIDTH: f32 = 216.;
 pub const SIDEBAR_COMPACT_WIDTH: f32 = 184.;
 pub const COMPACT_WIDTH: f32 = 1120.;

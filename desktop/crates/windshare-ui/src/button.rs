@@ -1,11 +1,13 @@
-use crate::{Icon, Theme, Tone, icon};
+use crate::{Icon, Theme, Tone, icon, typography::ControlText};
 use gpui::{
-    AnyElement, App, AppContext, ElementId, FocusHandle, FontWeight, Pixels, Role, SharedString,
-    Window, div, prelude::*, px,
+    AnyElement, App, AppContext, ElementId, FocusHandle, Pixels, Role, SharedString, Window, div,
+    prelude::*, px,
 };
 use std::rc::Rc;
 
 pub const LARGE_BUTTON_HEIGHT: f32 = 54.;
+const REGULAR_BUTTON_HEIGHT: f32 = 44.;
+const COMPACT_BUTTON_HEIGHT: f32 = 36.;
 const QUIET_HOVER_OPACITY: f32 = 0.08;
 
 #[derive(Clone, Copy, Default)]
@@ -233,8 +235,8 @@ impl RenderOnce for Button {
             .justify_center()
             .gap(px(8.))
             .h(px(match self.size {
-                ButtonSize::Small => 36.,
-                ButtonSize::Regular => 46.,
+                ButtonSize::Small => COMPACT_BUTTON_HEIGHT,
+                ButtonSize::Regular => REGULAR_BUTTON_HEIGHT,
                 ButtonSize::Large => LARGE_BUTTON_HEIGHT,
             }))
             .when_some(self.min_width, gpui::Styled::min_w)
@@ -249,12 +251,14 @@ impl RenderOnce for Button {
             .border_color(colors.border)
             .bg(colors.background)
             .text_color(colors.foreground)
-            .text_size(px(match self.size {
-                ButtonSize::Small => 13.,
-                ButtonSize::Regular => 15.,
-                ButtonSize::Large => 16.,
-            }))
-            .font_weight(FontWeight::SEMIBOLD)
+            .map(|element| {
+                match self.size {
+                    ButtonSize::Small => ControlText::Compact,
+                    ButtonSize::Regular => ControlText::Regular,
+                    ButtonSize::Large => ControlText::Large,
+                }
+                .apply(element)
+            })
             .when(self.disabled, |el| el.opacity(0.4).cursor_not_allowed())
             .when(!self.disabled, |el| {
                 el.cursor_pointer()
