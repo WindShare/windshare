@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/windshare/windshare/core/networkendpoint"
@@ -185,8 +186,24 @@ func validMemberName(name string) bool {
 	return name != ""
 }
 
+// Text may not start or end with Unicode White_Space (unicode.IsSpace) or
+// U+FEFF. U+FEFF is singled out because it is, with U+0085, exactly where Go's
+// TrimSpace and JavaScript's trim() disagree, and because it is common editor
+// or copy/paste residue that would make "\ufeffaliyun" and "aliyun" compare as
+// different providers. This is not a general invisible-character rule: U+200B,
+// U+2060 or U+200F at an edge, or a BOM inside the text, are still accepted.
+//
+// Both verifiers rely on their runtime's White_Space table, stable since
+// Unicode 6.3. TestTextEdgeVectors pins Go's table byte-for-byte and the web
+// sweep checks the browser's against it, so drift on either side fails tests.
+const byteOrderMark = '\ufeff'
+
+func invisibleEdge(r rune) bool { return unicode.IsSpace(r) || r == byteOrderMark }
+
+// validText is the browser's text() rule too; network-sign verifies before
+// signing, so authors see the rejection instead of publishing it.
 func validText(value string) bool {
-	return value != "" && len(value) <= 128 && strings.TrimSpace(value) == value &&
+	return value != "" && len(value) <= 128 && strings.TrimFunc(value, invisibleEdge) == value &&
 		!strings.ContainsAny(value, "\x00\r\n\t")
 }
 

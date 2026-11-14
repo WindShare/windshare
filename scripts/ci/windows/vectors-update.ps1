@@ -22,7 +22,7 @@ Invoke-Step 'update signed network directory vectors' {
     $previousUpdate = $env:UPDATE_NETWORK_VECTORS
     try {
         $env:UPDATE_NETWORK_VECTORS = '1'
-        go test -count=1 ./core/nodedirectory -run TestBrowserDirectoryVectors
+        go test -count=1 ./core/nodedirectory -run 'Test(BrowserDirectory|TextEdge)Vectors'
     } finally {
         $env:UPDATE_NETWORK_VECTORS = $previousUpdate
     }
