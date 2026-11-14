@@ -4,6 +4,7 @@ use crate::{
     abi::{Endpoint, Host},
 };
 use anyhow::{Context as _, Result, bail};
+use registered_socket::RegisteredSocket;
 use serde::Deserialize;
 use std::{
     collections::BTreeMap,
@@ -13,6 +14,8 @@ use std::{
     time::{Duration, Instant},
 };
 use tungstenite::{Message, WebSocket, client::IntoClientRequest};
+
+mod registered_socket;
 
 #[cfg(test)]
 #[path = "connection_tests.rs"]
@@ -113,19 +116,13 @@ fn connection_loop(
     pending: &mut BTreeMap<u64, Request>,
     sequence: &mut u64,
 ) -> Result<()> {
-    let mut socket = connect(endpoint)?;
+    let socket = connect(endpoint)?;
     socket.get_ref().set_read_timeout(None)?;
     socket.get_ref().set_write_timeout(None)?;
     socket.get_ref().set_nonblocking(true)?;
-    // SAFETY: this worker owns the socket and deletes the registration before
-    // dropping it, including every error path through pump.
-    unsafe {
-        shared
-            .wake
-            .add(socket.get_ref(), polling::Event::readable(0))?;
-    }
+    let mut socket = RegisteredSocket::new(socket, &shared.wake, &endpoint.session_id)?;
     let result = pump(endpoint, shared, commands, pending, sequence, &mut socket);
-    let removed = shared.wake.delete(socket.get_ref());
+    let removed = socket.close();
     result.and_then(|()| removed.map_err(Into::into))
 }
 
@@ -135,7 +132,7 @@ fn pump(
     commands: &Receiver<Command>,
     pending: &mut BTreeMap<u64, Request>,
     sequence: &mut u64,
-    socket: &mut WebSocket<TcpStream>,
+    socket: &mut RegisteredSocket<'_>,
 ) -> Result<()> {
     for command in pending.values() {
         send(socket, command)?;
@@ -173,9 +170,7 @@ fn pump(
             Err(error) if would_block(&error) => true,
             Err(error) => return Err(error.into()),
         };
-        shared
-            .wake
-            .modify(socket.get_ref(), polling::Event::new(0, true, writable))?;
+        socket.rearm(writable)?;
         if pending.len() < pending_before_read {
             continue;
         }
@@ -192,7 +187,7 @@ fn would_block(error: &tungstenite::Error) -> bool {
     matches!(error, tungstenite::Error::Io(error) if error.kind() == ErrorKind::WouldBlock)
 }
 
-fn send(socket: &mut WebSocket<TcpStream>, request: &Request) -> Result<()> {
+fn send(socket: &mut RegisteredSocket<'_>, request: &Request) -> Result<()> {
     match socket.send(Message::Text(serde_json::to_string(request)?.into())) {
         // Tungstenite retains an accepted frame until the next writable event.
         Ok(()) => Ok(()),
