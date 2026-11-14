@@ -1,5 +1,14 @@
 # Zero-configuration network bring-up
 
+Completed on 2026-11-14 in `32cbcc99`. CLI and desktop development builds generated
+links without explicit relays; real Chromium downloads of the 1 MiB fixture matched
+the source SHA-256. The isolated development checkout contains the matching trust
+configuration and builds. The main release manifest remains unprovisioned as planned.
+Public rollout continues under [Global network](../../plans/global-service/global-network.md).
+
+Development keys currently use Windows EFS in the main checkout's gitignored
+`.secret/zero-config/keys`; this differs from the repository-external custody specified below.
+
 ## Purpose and current scope
 
 Make the development build support the everyday flow: select files or folders → first relay admission and local session readiness → usable link → browser download.
