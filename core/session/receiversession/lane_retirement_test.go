@@ -6,10 +6,15 @@ import (
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
 func TestSenderLaneReplacementDoesNotWaitForRetiredTransportDrain(t *testing.T) {
+	synctest.Test(t, testSenderLaneReplacementDoesNotWaitForRetiredTransportDrain)
+}
+
+func testSenderLaneReplacementDoesNotWaitForRetiredTransportDrain(t *testing.T) {
 	fixture := newVerticalFixture(t)
 	sender, receiver := connectVerticalPair(t, fixture.senderFactory, fixture.receiverFactory)
 	defer sender.Close()
@@ -24,7 +29,6 @@ func TestSenderLaneReplacementDoesNotWaitForRetiredTransportDrain(t *testing.T) 
 	base, peer := newMemoryChannelPair()
 	defer peer.Close()
 	drainStarted, releaseDrain := make(chan struct{}), make(chan struct{})
-	drainFinished := make(chan struct{})
 	unblock := sync.OnceFunc(func() { close(releaseDrain) })
 	defer unblock()
 	channel := &reentrantLaneCloseChannel{
@@ -32,7 +36,6 @@ func TestSenderLaneReplacementDoesNotWaitForRetiredTransportDrain(t *testing.T) 
 		onClose: func() {
 			close(drainStarted)
 			<-releaseDrain
-			close(drainFinished)
 		},
 	}
 	attached := make(chan error, 1)
@@ -47,6 +50,10 @@ func TestSenderLaneReplacementDoesNotWaitForRetiredTransportDrain(t *testing.T) 
 	if err := <-attached; err != nil {
 		t.Fatal(err)
 	}
+	laneDone, ok := sender.LaneDone(admission.Lane)
+	if !ok {
+		t.Fatal("sender did not retain the admitted lane")
+	}
 
 	// The receive side is already closed, while physical provider cleanup is
 	// deliberately blocked. A new epoch must not inherit that cleanup latency.
@@ -57,8 +64,15 @@ func TestSenderLaneReplacementDoesNotWaitForRetiredTransportDrain(t *testing.T) 
 		t.Fatal("old channel did not start draining")
 	}
 
+	// Provider cleanup starts concurrently with logical retirement. Let the
+	// writer and pump finish so the admission slot is released while the
+	// transport drain remains blocked.
+	synctest.Wait()
+	if sender.AttachedLanes() != 1 {
+		t.Fatal("retired lane retained its admission slot during physical cleanup")
+	}
 	select {
-	case <-drainFinished:
+	case <-laneDone:
 		t.Fatal("retirement published completion before physical cleanup")
 	default:
 	}
@@ -78,7 +92,7 @@ func TestSenderLaneReplacementDoesNotWaitForRetiredTransportDrain(t *testing.T) 
 	}
 	unblock()
 	select {
-	case <-drainFinished:
+	case <-laneDone:
 	case <-ctx.Done():
 		t.Fatal("retired lane did not complete after its drain was released")
 	}
