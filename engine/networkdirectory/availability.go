@@ -40,8 +40,7 @@ func (err *UnavailableError) Unwrap() error        { return err.Cause }
 func (err *UnavailableError) Is(target error) bool { return target == ErrUnavailable }
 
 func blocked(reason BlockingReason, cause error) *UnavailableError {
-	var previous *UnavailableError
-	if errors.As(cause, &previous) {
+	if previous, ok := errors.AsType[*UnavailableError](cause); ok {
 		return previous
 	}
 	return &UnavailableError{Reason: reason, Cause: cause}
