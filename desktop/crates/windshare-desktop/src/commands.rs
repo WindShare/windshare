@@ -76,16 +76,6 @@ impl Desktop {
             Action::ResumeShare(id) => self.resume_native_share(id),
             Action::CancelSharingSetup => self.cancel_sharing_setup(),
             Action::ApproveRelay => self.approve_relay(cx),
-            Action::OpenLink(id) => {
-                if let Some(link) = self
-                    .shares
-                    .iter()
-                    .find(|share| share.id == id)
-                    .and_then(crate::model::Share::usable_link)
-                {
-                    cx.open_url(&link.url());
-                }
-            }
             Action::ToggleShare(id) => self.toggle_preview_share(id),
             Action::ToggleTransfer(index) => {
                 if let Some(transfer) = self.transfers.get_mut(index) {

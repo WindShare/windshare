@@ -41,7 +41,6 @@ messages! {
     AuthorizationRequired => ("Authorization required", "需要授权"),
     OfficialAuthorizationRequired => ("The official network requires account authorization. You can also use your own relay.", "官方网络需要账号授权，也可以使用自托管中转。"),
     ApproveDevice => ("Approve this device", "授权此设备"),
-    OpenInBrowser => ("Open in browser", "在浏览器中打开"),
     StopSharing => ("Stop sharing", "停止分享"),
     ShareAgain => ("Share again", "重新分享"),
     FinishedShares => ("Finished", "已结束"),

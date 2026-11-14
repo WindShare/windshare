@@ -97,7 +97,6 @@ pub enum Action {
     ResumeShare(usize),
     ApproveRelay,
     CancelSharingSetup,
-    OpenLink(usize),
     ToggleTransfer(usize),
     ToggleGrid,
     Close,

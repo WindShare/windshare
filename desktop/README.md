@@ -25,8 +25,8 @@ MinGW-w64 GCC on PATH for the Go library, the Rust MSVC target, Visual Studio C+
 DirectX 11 GPU. Windows is the locally verified platform.
 
 Choose files or folders in the native picker, or drop a mixed selection into the
-window as one share. The result card offers copying, opening in a browser, and
-scanning. My shares retains preparing, active and finished tasks across
+window as one share. The result card offers link copying and QR scanning.
+My shares retains preparing, active and finished tasks across
 navigation and control reconnects; New share does not stop existing shares.
 The engine supplies selected-root names, types and known file sizes. Directory totals
 remain unknown; selecting a folder does not scan descendants or copy sources.
@@ -74,7 +74,7 @@ Windows renderer for high-refresh animation while keeping application crates uno
   the choice is saved at `WindShare/desktop/appearance` in the OS config directory.
   System default follows appearance changes while the app is open.
 - Share: the result card pairs copying with a local QR code; narrow windows stack them.
-  Long links use middle elision and expand in place. QR size follows payload density;
+  Full links stay behind a labeled disclosure. QR size follows payload density;
   click to enlarge. Share details reuse the same controls, with inline copy feedback.
   The 1350 ms flight and 720 ms landing fade into the card. Pending links keep
   an indeterminate activity strip until the link fades in over 180 ms; completed

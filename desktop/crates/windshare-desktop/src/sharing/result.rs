@@ -144,7 +144,11 @@ impl Desktop {
                                 Text::NewShare
                             }),
                             if pending { Icon::Close } else { Icon::Plus },
-                            ButtonStyle::Quiet,
+                            if pending {
+                                ButtonStyle::Quiet
+                            } else {
+                                ButtonStyle::Secondary
+                            },
                             Action::ResetShare,
                             cx,
                         )
@@ -166,22 +170,10 @@ impl Desktop {
                 .focus_handle(&self.primary_focus),
         );
         if share.usable_link().is_some() {
-            actions = actions
-                .child(
-                    self.share_link_disclosure(theme, share, true, cx)
-                        .opacity(scene.frame.result_visibility),
-                )
-                .child(
-                    Self::button(
-                        "result-open",
-                        language(cx).text(Text::OpenInBrowser),
-                        Icon::External,
-                        ButtonStyle::Quiet,
-                        Action::OpenLink(share.id),
-                        cx,
-                    )
-                    .compact(),
-                );
+            actions = actions.child(
+                self.share_link_disclosure(theme, share, cx)
+                    .opacity(scene.frame.result_visibility),
+            );
         } else if matches!(share.state, ShareState::Preparing) {
             actions = actions.child(
                 row()

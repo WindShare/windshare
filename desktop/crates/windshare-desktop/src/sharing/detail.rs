@@ -2,7 +2,7 @@ use super::link_views::{LINK_COLUMN_GAP, LINK_PANEL_WIDTH, link_columns_fit};
 use crate::{
     desktop::Desktop,
     localization::{Language, Text, language},
-    model::{Action, Share},
+    model::Share,
     overlays::{OVERLAY_MARGIN, OVERLAY_PADDING},
 };
 use gpui::{Div, Window, div, prelude::*, px};
@@ -66,17 +66,7 @@ impl Desktop {
                 column()
                     .gap(px(8.))
                     .child(self.share_copy_button(id, cx))
-                    .child(self.share_link_disclosure(theme, share, true, cx))
-                    .when(share.usable_link().is_some(), |el| {
-                        el.child(Self::button(
-                            "detail-open",
-                            locale.text(Text::OpenInBrowser),
-                            Icon::External,
-                            ButtonStyle::Quiet,
-                            Action::OpenLink(id),
-                            cx,
-                        ))
-                    }),
+                    .child(self.share_link_disclosure(theme, share, cx)),
             );
         column()
             .gap(px(24.))

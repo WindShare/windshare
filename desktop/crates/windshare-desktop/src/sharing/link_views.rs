@@ -59,7 +59,6 @@ impl Desktop {
         &self,
         theme: Theme,
         share: &Share,
-        enabled: bool,
         cx: &Context<Self>,
     ) -> Div {
         let Some(link) = share.usable_link() else {
@@ -77,40 +76,20 @@ impl Desktop {
             .min_w_0()
             .gap(px(8.))
             .child(
-                link_action(
+                Self::button(
                     ("share-link-disclosure", share.id),
                     label,
-                    theme,
-                    enabled,
+                    if expanded {
+                        Icon::ChevronUp
+                    } else {
+                        Icon::ChevronDown
+                    },
+                    ButtonStyle::Quiet,
                     Action::ToggleLink(share.id),
                     cx,
                 )
-                .w_full()
-                .min_w_0()
-                .gap(px(5.))
-                .px(px(2.))
-                .py(px(4.))
-                .child(
-                    theme
-                        .label(link.url(), 13.)
-                        .font_family(FONT)
-                        .flex_1()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .text_ellipsis_middle(),
-                )
-                .child(
-                    icon(
-                        if expanded {
-                            Icon::ChevronUp
-                        } else {
-                            Icon::ChevronDown
-                        },
-                        14.,
-                    )
-                    .text_color(theme.muted_text()),
-                ),
+                .compact()
+                .full_width(),
             )
             .when(expanded, |el| {
                 el.child(
