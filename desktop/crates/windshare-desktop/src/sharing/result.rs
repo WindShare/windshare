@@ -1,4 +1,7 @@
-use super::link_views::{LINK_COLUMN_GAP, LINK_PANEL_WIDTH, link_columns_fit};
+use super::{
+    link_views::{LINK_COLUMN_GAP, LINK_PANEL_WIDTH, link_columns_fit},
+    preparation_message,
+};
 use crate::{
     desktop::Desktop,
     flow_state::ShareRun,
@@ -8,7 +11,9 @@ use crate::{
     share_animation::ShareScene,
 };
 use gpui::{Div, div, prelude::*, px, relative};
-use windshare_ui::{ButtonStyle, COMPACT_BUTTON_HEIGHT, Icon, Theme, Tone, column, icon, row};
+use windshare_ui::{
+    ButtonStyle, COMPACT_BUTTON_HEIGHT, Icon, Theme, Tone, column, icon, reserve_layout, row,
+};
 
 const RESULT_SECTION_GAP: f32 = 24.;
 const RESULT_FILE_ICON_SIZE: f32 = 52.;
@@ -18,7 +23,7 @@ const LINK_ACTIVITY_HEIGHT: f32 = 4.;
 const LINK_ACTIVITY_SEGMENT: f32 = 0.3;
 
 impl Desktop {
-    pub(super) fn result_share(
+    pub(super) fn running_share(
         &self,
         theme: Theme,
         run: ShareRun,
@@ -93,9 +98,32 @@ impl Desktop {
             .flex_shrink_0()
             .items_center()
             .justify_center()
-            .child(card)
+            .child(if scene.content_visibility() > 0. {
+                card.into_any_element()
+            } else {
+                reserve_layout(card).into_any_element()
+            })
             .when(scene.decorations_visible(), |el| {
-                el.child(scene.scenery(self.reduced_motion()))
+                el.child(
+                    // The choreography keeps one centered coordinate space even when
+                    // the result needs more height for a QR code or a wrapped filename.
+                    div()
+                        .id(("share-choreography", run.operation))
+                        .absolute()
+                        .left_0()
+                        .top(relative(0.5))
+                        .mt(px(-scene.geometry.height / 2.))
+                        .w_full()
+                        .h(px(scene.geometry.height))
+                        .child(scene.scenery(self.reduced_motion()))
+                        .child(preparation_message(
+                            theme,
+                            &share.name,
+                            scene.preparation_visibility(),
+                            locale,
+                            ready,
+                        )),
+                )
             })
     }
 

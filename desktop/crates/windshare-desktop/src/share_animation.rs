@@ -3,7 +3,8 @@ use crate::{
     layout::{FlowLayout, task_width},
     motion::{Spirit, SpiritScene, SpiritState},
     share_timing::{
-        FLIGHT_DURATION, LANDING_DURATION, ShareFrame, ease_out, lerp, segment, smooth,
+        FLIGHT_DURATION, LANDING_DURATION, STORY_DURATION, ShareFrame, ease_out, lerp, segment,
+        smooth,
     },
 };
 use gpui::{Div, Point, Window, div, point, prelude::*};
@@ -18,7 +19,7 @@ const SHARE_CHOICE_CONTROLS_HEIGHT: f32 =
 const LANDING_X_FRACTION: f32 = 0.68;
 const LANDING_Y_FRACTION: f32 = 0.24;
 const LANDED_SPIRIT_SIZE: f32 = 52.;
-const CRUISING_SPIRIT_SIZE: f32 = 144.;
+const SPIRIT_FLIGHT_EXPANSION: f32 = 64.;
 const PAPER_COUNT: u16 = 7;
 const PAPER_ASSETS: [Artwork; 3] = [Artwork::Paper, Artwork::Photo, Artwork::Folder];
 
@@ -64,7 +65,7 @@ impl ShareScene {
     pub const fn new(geometry: ShareGeometry, frame: ShareFrame) -> Self {
         Self { geometry, frame }
     }
-    pub fn landing(self) -> bool {
+    fn landing(self) -> bool {
         self.frame.story >= FLIGHT_DURATION
     }
     fn flight_progress(self) -> f32 {
@@ -106,30 +107,23 @@ impl ShareScene {
 
     fn spirit_pose(self) -> (Point<f32>, f32) {
         let g = self.geometry;
-        if self.landing() {
-            let t = smooth(self.arrival_progress());
-            (
-                mix_point(g.flight_end(), g.destination(), t),
-                lerp(CRUISING_SPIRIT_SIZE, LANDED_SPIRIT_SIZE, t),
-            )
-        } else {
-            let t = self.flight_progress();
-            let end = g.flight_end();
-            let cruising_size = lerp(g.initial_spirit_size, CRUISING_SPIRIT_SIZE, smooth(t));
-            let flight_stretch = 64. * (PI * t).sin();
-            (
-                cubic(
-                    [
-                        point(g.width * 0.5, g.initial_spirit_y),
-                        point(g.width * 0.14, g.height * 0.63),
-                        point(end.x - 110., end.y + 36.),
-                        end,
-                    ],
-                    smooth(t),
-                ),
-                cruising_size + flight_stretch,
-            )
-        }
+        // Content phases must not stop and restart the character. One trajectory
+        // carries position and scale through the reveal with continuous velocity.
+        let t = smooth(self.frame.story.as_secs_f32() / STORY_DURATION.as_secs_f32());
+        let end = g.destination();
+        let expansion = SPIRIT_FLIGHT_EXPANSION * (PI * t).sin().powi(2);
+        (
+            cubic(
+                [
+                    point(g.width * 0.5, g.initial_spirit_y),
+                    point(g.width * 0.14, g.height * 0.63),
+                    point(end.x - 110., end.y + 36.),
+                    end,
+                ],
+                t,
+            ),
+            lerp(g.initial_spirit_size, LANDED_SPIRIT_SIZE, t) + expansion,
+        )
     }
 
     fn spirit(self, reduced_motion: bool) -> Div {
@@ -232,9 +226,6 @@ impl ShareScene {
     }
 }
 
-fn mix_point(a: Point<f32>, b: Point<f32>, t: f32) -> Point<f32> {
-    point(lerp(a.x, b.x, t), lerp(a.y, b.y, t))
-}
 #[allow(
     clippy::suboptimal_flops,
     reason = "Keep the Bernstein weights visible instead of nesting fused coordinate operations."

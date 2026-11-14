@@ -10,7 +10,7 @@ pub use link::{LinkDisclosure, ShareLink};
 use crate::localization::{Language, Text, language};
 use crate::{
     desktop::Desktop,
-    flow_state::{ShareFlow, ShareRun},
+    flow_state::ShareFlow,
     layout::FlowLayout,
     model::Action,
     motion::{SpiritMood, scaled_spirit},
@@ -18,7 +18,7 @@ use crate::{
         SHARE_CHOICE_SECTION_GAP, SHARE_CHOICE_TITLE_HEIGHT, ShareGeometry, ShareScene,
     },
 };
-use gpui::{Div, Window, div, prelude::*, px};
+use gpui::{Div, Window, prelude::*, px};
 use windshare_ui::{ButtonStyle, Icon, Theme, Tone, column, row};
 
 const SHARE_CHOICE_BUTTON_MIN_WIDTH: f32 = 160.;
@@ -76,13 +76,8 @@ impl Desktop {
                     window.request_animation_frame();
                 }
                 let scene = ShareScene::new(geometry, frame);
-                if scene.landing() {
-                    self.result_share(theme, run, scene, layout, cx)
-                        .into_any_element()
-                } else {
-                    self.preparing_scene(theme, run, scene, cx)
-                        .into_any_element()
-                }
+                self.running_share(theme, run, scene, layout, cx)
+                    .into_any_element()
             }
         }
     }
@@ -141,37 +136,6 @@ impl Desktop {
                         .disabled(self.runtime.selection_disabled()),
                     ),
             )
-    }
-
-    fn preparing_scene(
-        &self,
-        theme: Theme,
-        run: ShareRun,
-        scene: ShareScene,
-        cx: &Context<Self>,
-    ) -> Div {
-        let locale = language(cx);
-        let visibility = scene.preparation_visibility();
-        let Some(share) = self
-            .shares
-            .iter()
-            .find(|share| share.id == run.selection_id)
-        else {
-            return column();
-        };
-        let ready = share.usable_link().is_some();
-        div()
-            .relative()
-            .w_full()
-            .h(px(scene.geometry.height))
-            .child(scene.scenery(self.reduced_motion()))
-            .child(preparation_message(
-                theme,
-                &share.name,
-                visibility,
-                locale,
-                ready,
-            ))
     }
 }
 
