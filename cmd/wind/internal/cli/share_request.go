@@ -126,7 +126,7 @@ func savedConfigurationFailure(err error) string {
 	case errors.Is(err, relayconfig.ErrFrontURL):
 		return err.Error()
 	case errors.Is(err, relayconfig.ErrRepeatedMember):
-		return err.Error() + "; fix windshare/config.json or WINDSHARE_CONFIG, or re-import a clean configuration with wind config import"
+		return err.Error() + "; alternatively, wind config import <file> replaces all saved settings, including TURN accounts"
 	default:
 		return "cannot load sharing configuration; check windshare/config.json or WINDSHARE_CONFIG"
 	}

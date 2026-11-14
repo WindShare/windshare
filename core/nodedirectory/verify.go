@@ -114,10 +114,6 @@ func decode(data []byte, target any) error {
 	return nil
 }
 
-// uniqueMembers rejects repeated members because encoding/json would keep the
-// last one silently. engine/relayconfig's uniqueMembers applies the same rule to
-// saved sharing configuration, folding case there because that schema, unlike
-// this one, does not restrict names to lowercase ASCII (see validMemberName).
 func uniqueMembers(decoder *json.Decoder) error {
 	var visit func(int) error
 	visit = func(depth int) error {

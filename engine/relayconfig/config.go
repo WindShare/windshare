@@ -4,7 +4,6 @@ package relayconfig
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +11,7 @@ import (
 	"path/filepath"
 
 	"github.com/windshare/windshare/connectivity/relayset"
+	"github.com/windshare/windshare/engine/internal/configjson"
 	"github.com/windshare/windshare/engine/internal/statefile"
 	"github.com/windshare/windshare/engine/relayprofile"
 	"github.com/windshare/windshare/engine/turn"
@@ -21,13 +21,14 @@ import (
 const (
 	PathEnvironment = "WINDSHARE_CONFIG"
 	maxConfigBytes  = 64 * 1024
-	maxConfigDepth  = 64
 	MaximumProfiles = 64
 )
 
 var (
 	ErrConfig   = errors.New("invalid sharing configuration")
 	ErrRelayURL = errors.New("invalid relay URL")
+	// Decode wraps both ErrConfig and ErrRepeatedMember for ambiguous names.
+	ErrRepeatedMember = configjson.ErrRepeatedMember
 )
 
 type Config struct {
@@ -88,7 +89,20 @@ func loadPath(path string, missingAllowed bool) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	return Decode(bytes.NewReader(data))
+	return decodeSaved(path, data)
+}
+
+func decodeSaved(path string, data []byte) (Config, error) {
+	config, err := Decode(bytes.NewReader(data))
+	if errors.Is(err, ErrRepeatedMember) {
+		// Report the file used by this operation, including injected/relative paths.
+		// Editing through a read-modify-write cannot repair a rejected document.
+		if absolute, pathErr := filepath.Abs(path); pathErr == nil {
+			path = absolute
+		}
+		return Config{}, fmt.Errorf("%w; remove repeated members from %+q and retry", err, path)
+	}
+	return config, err
 }
 
 func Decode(reader io.Reader) (Config, error) {
@@ -96,20 +110,11 @@ func Decode(reader io.Reader) (Config, error) {
 	if err != nil || len(data) > maxConfigBytes {
 		return Config{}, ErrConfig
 	}
-	if err := uniqueMembers(json.NewDecoder(bytes.NewReader(data))); err != nil {
-		if errors.Is(err, ErrRepeatedMember) {
-			return Config{}, err
-		}
-		return Config{}, ErrConfig
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
 	var disk document
-	if err := decoder.Decode(&disk); err != nil {
-		return Config{}, ErrConfig
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
+	if err := configjson.Decode(data, &disk); err != nil {
+		if errors.Is(err, ErrRepeatedMember) {
+			return Config{}, fmt.Errorf("%w; %w", ErrConfig, err)
+		}
 		return Config{}, ErrConfig
 	}
 	result := Config{ManagedTURNPolicies: disk.ManagedTURNPolicies, FrontURL: disk.FrontURL, ActiveRelays: disk.ActiveRelays, ConfiguredOnly: disk.ConfiguredOnly}
