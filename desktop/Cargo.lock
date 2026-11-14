@@ -6471,17 +6471,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 
 [[package]]
+name = "windshare-activation"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+ "windows 0.62.2",
+ "windows-core 0.62.2",
+ "windows-future 0.3.2",
+]
+
+[[package]]
 name = "windshare-desktop"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
  "dirs",
  "gpui-pre",
  "gpui-pre-platform",
+ "raw-window-handle",
  "sys-locale",
  "tempfile",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "windshare-activation",
  "windshare-host",
  "windshare-ui",
 ]
@@ -6498,6 +6516,18 @@ dependencies = [
  "serde_json",
  "tracing",
  "tungstenite",
+ "windshare-activation",
+]
+
+[[package]]
+name = "windshare-shell"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "resvg",
+ "windows 0.62.2",
+ "windows-core 0.62.2",
+ "windshare-activation",
 ]
 
 [[package]]

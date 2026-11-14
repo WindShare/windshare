@@ -8,11 +8,14 @@ use gpui::{Context, PromptButton, PromptLevel, Window};
 const CONFIRM_QUIT: usize = 1;
 
 impl Desktop {
-    fn quit(&mut self, window: &mut Window) {
+    fn quit(&mut self, generation: u64, window: &mut Window) {
         if let Runtime::Native(session) = &mut self.runtime {
+            if !session.application.commit_shutdown(generation) {
+                session.quit_state = QuitState::Running;
+                return;
+            }
             session.quit_state = QuitState::Exiting;
             // Seal command admission before the platform processes the quit request.
-            session.controller.begin_shutdown();
         }
         tracing::info!(
             event = "desktop.window_close_requested",
@@ -25,19 +28,21 @@ impl Desktop {
 
     pub fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Runtime::Native(session) = &mut self.runtime else {
-            self.quit(window);
+            self.quit(0, window);
             return;
         };
         if session.quit_state != QuitState::Running {
             return;
         }
+        let generation = session.application.generation();
         // Read application ownership, including queued selections and setup,
         // rather than the currently visible page or a possibly stale projection.
         if !session.controller.model().has_unfinished_work() {
-            self.quit(window);
+            self.quit(generation, window);
             return;
         }
         session.quit_state = QuitState::Confirming;
+        let epoch = session.interaction_epoch;
         tracing::info!(
             event = "desktop.quit_confirmation_opened",
             session = std::process::id()
@@ -56,13 +61,16 @@ impl Desktop {
         cx.spawn_in(window, async move |view, cx| {
             let confirmed = answer.await == Ok(CONFIRM_QUIT);
             let _ = view.update_in(cx, |this, window, cx| {
+                if !matches!(&this.runtime, Runtime::Native(session) if session.interaction_epoch == epoch && session.quit_state == QuitState::Confirming) {
+                    return;
+                }
                 tracing::info!(
                     event = "desktop.quit_decision",
                     session = std::process::id(),
                     confirmed
                 );
                 if confirmed {
-                    this.quit(window);
+                    this.quit(generation, window);
                 } else if let Runtime::Native(session) = &mut this.runtime {
                     session.quit_state = QuitState::Running;
                     cx.notify();

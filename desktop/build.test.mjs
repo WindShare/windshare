@@ -1,6 +1,33 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { desktopArtifacts } from './build.mjs';
+import { identity } from './install/identity.mjs';
+
+test('development and release installations have distinct identities', () => {
+  const development = identity({ version: '0.1.0.1' });
+  const release = identity({ channel: 'release', publisher: 'CN=Official Publisher', version: '1.0.0.0' });
+  assert.notEqual(development.name, release.name);
+  assert.notEqual(development.clsid, release.clsid);
+  assert.notEqual(development.publisher, release.publisher);
+  for (const options of [{ channel: 'release' }, { channel: 'release', publisher: 'CN=Official Publisher' },
+    { channel: 'release', version: '1.0.0.0' }, { version: '1.0.65536.0' }, { architecture: 'ia32' }]) {
+    assert.throws(() => identity(options));
+  }
+});
+
+test('Explorer DLL selection follows matching Cargo artifact, excluding tests and import libraries', () => {
+  const executable = '/custom/debug/windshare.exe';
+  const shell = '/custom/debug/windshare_shell.dll';
+  assert.equal(desktopArtifacts([
+    hostBuild('/custom/host/out'), hostArtifact,
+    compilerArtifact('desktop', 'windshare', 'bin', executable),
+    { ...compilerArtifact('shell', 'windshare_shell', 'cdylib', null, true), filenames: ['/tests/shell.dll'] },
+    { ...compilerArtifact('other', 'unrelated', 'cdylib', null), filenames: ['/wrong/shell.dll'] },
+    { ...compilerArtifact('shell', 'windshare_shell', 'cdylib', null), filenames: [
+      '/custom/debug/windshare_shell.dll.lib', '/custom/debug/windshare_shell.rlib', shell,
+    ] },
+  ]).shell, shell);
+});
 
 const hostPackage = 'path+file:///checkout/desktop/crates/windshare-host#0.1.0';
 const compilerArtifact = (packageId, name, kind, executable, isTest = false) => ({

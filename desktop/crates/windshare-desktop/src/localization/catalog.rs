@@ -38,6 +38,8 @@ messages! {
     SaveAndShare => ("Save and share", "保存并分享"),
     UseSavedSettings => ("Use saved settings", "使用已保存设置"),
     ConnectingRelay => ("Connecting…", "正在连接…"),
+    ReturnToSetup => ("Return to setup", "返回正在进行的设置"),
+    SetupNeedsAttention => ("Setup needs attention", "设置需要处理"),
     AuthorizationRequired => ("Authorization required", "需要授权"),
     OfficialAuthorizationRequired => ("The official network requires account authorization. You can also use your own relay.", "官方网络需要账号授权，也可以使用自托管中转。"),
     ApproveDevice => ("Approve this device", "授权此设备"),

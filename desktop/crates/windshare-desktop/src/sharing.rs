@@ -51,7 +51,9 @@ impl Desktop {
                     .find(|share| share.id == run.selection_id)
                     && matches!(share.state, crate::model::ShareState::AwaitingAuthorization)
                 {
-                    return Self::authorization_share(theme, share, cx).into_any_element();
+                    return self
+                        .authorization_share(theme, share, cx)
+                        .into_any_element();
                 }
                 if let Some(share) = self
                     .shares

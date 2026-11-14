@@ -20,7 +20,37 @@ pub fn retry_deadline(blocking: CreationBlock) -> Option<SystemTime> {
 }
 
 impl Desktop {
-    pub fn authorization_share(theme: Theme, share: &Share, cx: &Context<Self>) -> Div {
+    fn setup_blocked_share(&self, theme: Theme, share: &Share, cx: &Context<Self>) -> Option<Div> {
+        let crate::model::ShareSource::Native { operation_id } = &share.source else {
+            return None;
+        };
+        let progress = self.setup_return(theme, operation_id, cx)?;
+        Some(
+            column().w_full().items_center().py(px(24.)).child(
+                theme
+                    .card()
+                    .w_full()
+                    .max_w(px(BLOCKED_CARD_WIDTH))
+                    .p(px(28.))
+                    .gap(px(20.))
+                    .child(theme.heading(share.name.clone(), 24.))
+                    .child(progress)
+                    .child(Self::button(
+                        "cancel-share-awaiting-setup",
+                        language(cx).text(Text::Cancel),
+                        Icon::Close,
+                        ButtonStyle::Quiet,
+                        Action::StopShare(share.id),
+                        cx,
+                    )),
+            ),
+        )
+    }
+
+    pub fn authorization_share(&self, theme: Theme, share: &Share, cx: &Context<Self>) -> Div {
+        if let Some(progress) = self.setup_blocked_share(theme, share, cx) {
+            return progress;
+        }
         let locale = language(cx);
         let official = matches!(
             share.authorization,
@@ -73,6 +103,9 @@ impl Desktop {
         blocking: CreationBlock,
         cx: &Context<Self>,
     ) -> Div {
+        if let Some(progress) = self.setup_blocked_share(theme, share, cx) {
+            return progress;
+        }
         let locale = language(cx);
         let message = match blocking.reason {
             BlockingReason::SettingsUnavailable => Text::SettingsNeedRepair,

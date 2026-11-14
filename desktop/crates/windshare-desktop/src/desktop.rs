@@ -97,6 +97,7 @@ impl Desktop {
         window.focus(&primary_focus, cx);
         if let Runtime::Native(session) = &runtime {
             Self::observe_runtime(session.controller.clone(), window, cx);
+            Self::observe_activations(session.application.clone(), window, cx);
         }
         Self {
             page: Page::Share,
@@ -350,7 +351,12 @@ impl Render for Desktop {
             .on_drop(
                 cx.listener(|this, paths: &gpui::ExternalPaths, window, cx| {
                     cx.stop_propagation();
-                    this.create_native_share(paths.paths().to_vec(), Icon::Folder, window, cx);
+                    this.submit_native_share(
+                        paths.paths().to_vec(),
+                        windshare_activation::EntrySource::Drop,
+                        window,
+                        cx,
+                    );
                 }),
             )
             .when(self.page == Page::SuperShare, |root| {

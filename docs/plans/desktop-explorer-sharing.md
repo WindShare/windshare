@@ -2,14 +2,23 @@
 
 Make the primary Windows flow: select files and folders in Explorer → choose **Share with WindShare** → open the share view → copy a usable link. This is the next desktop priority because it connects the user's existing selection directly to the working sharing engine.
 
-## Existing foundation
+## Implementation status
 
-| Location | Current behavior and implication |
+Implemented 2026-11-15. [Desktop usage and installation](../../desktop/README.md) describes the supported sources and package channels.
+
+- `make desktop-check`: formatting, strict Clippy, 46 Rust tests, 6 build tests and native build passed. `make sloc` passed with no failures.
+- Windows 11 build 26300.9974: direct Explorer mixed selections, successive shares, minimized-window restoration, picker cancellation and quit-prompt invalidation passed. Signed development installation, repeated installation, deferred update, idle update and removal passed.
+- Windows Share Target: an actual Explorer file activation reached `ReportCompleted`; Explorer then exited, and an independent CLI receiver downloaded the original content with matching SHA-256. Native tests additionally verify file/folder reopening, temporary-item rejection and path containment. An unsupported location produced save-locally guidance before application handoff.
+- On this host, the full Windows share sheet remains unresponsive even with WindShare unregistered. Explorer's **Share with / 共享对象 → WindShare** submenu successfully exercises the Share Target path. System menu availability for folders remains Windows-dependent.
+
+## Ownership
+
+| Location | Responsibility |
 | --- | --- |
-| [Desktop entry point](../../desktop/crates/windshare-desktop/src/main.rs) and [native startup](../../desktop/crates/windshare-desktop/src/live/mod.rs) | `--live-share <path...>` already starts real sharing. Each launch starts its own controller; instance routing belongs before that startup. |
-| [Native selection](../../desktop/crates/windshare-desktop/src/live/selection.rs) and [session](../../desktop/crates/windshare-desktop/src/live/session.rs) | Pickers, drops and startup paths reach the same creation method. Admission currently depends on UI state, including whether a picker is open, so external requests need an application-owned entry point. |
-| [Rust controller](../../desktop/crates/windshare-host/src/lib.rs) and [Go creation owner](../../host/desktop/creation.go) | The controller retains selections and assigns operation IDs. The host already handles repeated creation with the same ID and selection, but calling the controller's current `create` again generates a new ID. |
-| [Desktop packaging](../../desktop/package.mjs) | Produces an executable plus adjacent Go library in an archive. Explorer integration needs an installed location, package identity and shell registration. |
+| [Activation adapter](../../desktop/crates/windshare-activation/src/) | Native paths, instance election, bounded handoff, system-share source lifetime and cancellable native picker |
+| [Application admission](../../desktop/crates/windshare-desktop/src/live/application.rs) | Serialized intent ownership, presentation queue and shutdown lifecycle |
+| [Controller admission](../../desktop/crates/windshare-host/src/admission.rs) | Stable operation identity, retained selections and explicit submission failures |
+| [Desktop packaging](../../desktop/package.mjs) | Matching signed binaries, external-location identity package and current-user installation |
 
 ## Product behavior
 

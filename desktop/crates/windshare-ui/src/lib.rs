@@ -10,6 +10,7 @@ pub use focus::advance_focus;
 mod input;
 mod primitives;
 mod prompt;
+pub use prompt::dismiss_prompts;
 mod qr_code;
 mod surface;
 mod theme;
@@ -35,6 +36,7 @@ pub fn init(cx: &mut gpui::App) {
     cx.set_global(ThemePreference::default());
     // Keep confirmations inside the themed window on every platform; native
     // warning dialogs otherwise introduce system styling and alert sounds.
+    cx.set_global(prompt::ActivePrompts::default());
     cx.set_prompt_builder(prompt::render_prompt);
     cx.text_system()
         .add_fonts(vec![Cow::Borrowed(include_bytes!(

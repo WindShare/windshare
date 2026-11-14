@@ -9,6 +9,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+windshare-activation = { path = "../windshare-activation" }
 anyhow.workspace = true
 async-channel = "2.5.0"
 polling = "3.11.0"

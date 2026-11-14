@@ -1,0 +1,32 @@
+[package]
+name = "windshare-activation"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+async-channel = "2.5.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+tracing.workspace = true
+anyhow.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-core = "0.62.2"
+windows-future = "0.3.2"
+
+windows = { version = "0.62.2", features = [
+  "ApplicationModel", "ApplicationModel_Activation", "ApplicationModel_DataTransfer",
+  "ApplicationModel_DataTransfer_ShareTarget", "Foundation", "Storage",
+  "Storage_FileProperties", "Storage_Streams", "Storage_Search",
+  "Win32_Foundation", "Win32_Globalization", "Win32_Security", "Win32_Security_Authorization",
+  "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_IO",
+  "Win32_System_Memory", "Win32_System_Pipes", "Win32_System_Threading", "Win32_System_Ole",
+  "Win32_System_WinRT", "Win32_System_ApplicationInstallationAndServicing",
+  "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader",
+] }
