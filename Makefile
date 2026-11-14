@@ -80,7 +80,10 @@ rust:
 # Native UI dependencies have their own workspace and CI cache. Staging uses
 # Cargo artifact messages because intermediate directory layouts are private.
 DESKTOP_BUILD = $(RUST_CARGO) build --manifest-path desktop/Cargo.toml --locked --jobs $(RUST_BUILD_JOBS) $(DESKTOP_CARGO_ARGS)
-.PHONY: desktop desktop-preview desktop-package
+.PHONY: desktop desktop-preview desktop-package development-build
+
+development-build:
+	node scripts/build/development.mjs
 
 desktop-package: private export CARGO_BUILD_JOBS := $(RUST_BUILD_JOBS)
 desktop-package:

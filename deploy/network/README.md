@@ -6,7 +6,7 @@ The export remains unprovisioned until operator root keys are installed. Verify
 the configured fleet before publishing a signed directory.
 
 Build the local signer with `go build ./cmd/network-sign`. Generate two offline
-roots on separate storage and one online key; never put private files in this repository:
+roots on separate storage and one online key; keep production private keys outside the checkout:
 
 ```text
 network-sign keygen --id root-a --private <offline-root.pem> --public <root-a.json>
@@ -30,14 +30,12 @@ Publish `windshare-network.json` as `/.well-known/windshare-network` on both
 frontends and as a GitHub release asset. Keep the embedded snapshot current in client
 releases. Cache expiry disables directory use for new work without stopping transfers.
 
-For development, provision a separate checkout with a dedicated network identity.
-Keep private keys in encrypted storage outside all checkouts; reuse its public roots,
-certificate, snapshot, and signed history across builds. Build CLI, desktop, and Web
-from that checkout. Use a reachable development frontend and an isolated
-`WINDSHARE_CONFIG` containing `{"profiles":[]}`, keeping its adjacent
-`.state/network/` directory and a separate browser profile. No public release or
-mirror is required while the embedded snapshot is valid. Never clear only the
-settings file to reset trust.
+For local zero-configuration sharing, run `make development-build` from this
+checkout. The [development profile](development/README.md) contains its own public
+roots and signed history; the CLI, desktop and Web select it explicitly without
+changing the production manifest. Outputs and persistent test state belong in
+`.windshare-dev/`; local development private keys may stay in the ignored `.secret/`.
+Ordinary rebuilds need no signing keys.
 
 Public STUN fallbacks: the existing Google endpoint,
 [Cloudflare](https://developers.cloudflare.com/realtime/turn/), and

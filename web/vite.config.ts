@@ -32,7 +32,7 @@ export default defineConfig(({ command, mode }) => {
         : 'undefined',
       __WIND_BUILD_MODE__: JSON.stringify(buildMode),
     },
-    plugins: [react(), networkAssets()],
+    plugins: [react(), networkAssets(mode)],
     ...(mode === LOCAL_DEVELOPMENT_MODE
       ? {
           server: {
