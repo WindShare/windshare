@@ -13,6 +13,7 @@ const (
 	FailureCanceled
 	FailureDeadline
 	FailureInvalidInput
+	FailureNetworkUnavailable
 	FailureCapabilityInvalid
 	FailureSelectionMissing
 	FailureSelectionCollision
@@ -124,6 +125,8 @@ func workflowFailureDefinition(code FailureCode) (failureDefinition, bool) {
 		return failureDefinition{"deadline", MessageTimedOut}, true
 	case FailureInvalidInput:
 		return failureDefinition{"invalid_input", MessageInvalidRequest}, true
+	case FailureNetworkUnavailable:
+		return failureDefinition{"network_unavailable", MessageNetworkUnavailable}, true
 	case FailureCapabilityInvalid:
 		return failureDefinition{"capability_invalid", MessageCapabilityInvalid}, true
 	case FailureSelectionMissing:

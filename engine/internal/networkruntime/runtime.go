@@ -19,7 +19,7 @@ import (
 	"github.com/windshare/windshare/engine/relayprofile"
 )
 
-var ErrUnavailable = errors.New("network temporarily unavailable; retry or configure a relay")
+var ErrUnavailable = errors.New("built-in network has no usable relay candidates")
 
 type Runtime struct {
 	config          networkconfig.Config
@@ -82,12 +82,12 @@ type Selection struct {
 }
 
 func (r *Runtime) Plan(ctx context.Context, intent relayprofile.Intent, frontend string) (Selection, error) {
+	if err := intent.Validate(); err != nil {
+		return Selection{}, err
+	}
 	configured := intent.Candidates()
 	var urls []string
 	for _, candidate := range configured {
-		if err := candidate.Validate(); err != nil {
-			return Selection{}, err
-		}
 		urls = append(urls, candidate.PublicURL)
 	}
 	only := intent.Mode() != relayprofile.Planned

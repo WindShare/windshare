@@ -140,6 +140,8 @@ func statusLine(symbol, text string, style terminalcanvas.Style) terminalcanvas.
 	)
 }
 
+const ConfigureRelaysGuidance = "configure relay candidates with wind config import <file|->, or pass --relay for this share"
+
 func failureMessage(failure appobs.Failure) string {
 	key, _ := failure.MessageKey()
 	var message string
@@ -150,6 +152,8 @@ func failureMessage(failure appobs.Failure) string {
 		message = "The operation timed out."
 	case appobs.MessageInvalidRequest:
 		message = "The request is invalid."
+	case appobs.MessageNetworkUnavailable:
+		message = "The WindShare network is unavailable. Check your connection and retry."
 	case appobs.MessageCapabilityInvalid:
 		message = "The share link or key is invalid."
 	case appobs.MessageSelectionMissing:

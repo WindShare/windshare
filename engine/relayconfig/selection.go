@@ -18,13 +18,19 @@ func ShareIntent(config Config, override []string) (relayprofile.Intent, error) 
 			return relayprofile.Intent{}, err
 		}
 	}
-	if len(override) > 0 {
-		return relayprofile.UseExplicit(candidates), nil
+	var intent relayprofile.Intent
+	switch {
+	case len(override) > 0:
+		intent = relayprofile.UseExplicit(candidates)
+	case config.ConfiguredOnly:
+		intent = relayprofile.OnlyConfigured(candidates)
+	default:
+		intent = relayprofile.Plan(candidates)
 	}
-	if config.ConfiguredOnly {
-		return relayprofile.OnlyConfigured(candidates), nil
+	if err := intent.Validate(); err != nil {
+		return relayprofile.Intent{}, errors.Join(ErrConfig, err)
 	}
-	return relayprofile.Plan(candidates), nil
+	return intent, nil
 }
 
 // SelectRelays treats a saved list or explicit override as the complete allowed
