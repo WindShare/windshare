@@ -63,7 +63,7 @@ The root `go.mod` owns all production Go packages. Its `ignore ./desktop` direct
 
 Coverage is gated on the core and non-core totals and on each package, with no per-file floor. Verdicts stage only profile-listed sources to avoid scanning build output. The thresholds live in `.testcoverage.yml` and `core/.testcoverage.yml`. `internal/perfevidence`, `spikes/webrtc`, and `testdata/connectivity/sctp-rack-public-20261030` are explicitly approved evidence modules outside the production set.
 
-`make gopls` includes new Go files before `git add`, excluding ignored artifacts and the pinned Pion projection, whose source hashes, root replacements, and patches are reproduced first.
+`make gopls` checks each Go module in its own sequential session, including new, non-ignored files before `git add`. The pinned Pion projection is excluded only after its source hashes, root replacements, and patches are reproduced.
 
 ### Rust relay
 
