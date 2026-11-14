@@ -45,9 +45,25 @@ retains tasks in My shares. Windows verification covered picker cancellation,
 Chinese paths with spaces, repeated shares across navigation, browser download
 with matching SHA-256, explicit stop, and joined quit with another active share.
 In-app relay setup, browser device approval and continuation of retained selections
-are also implemented. Remaining work covers first-run network availability,
-configuration initialization, setup cancellation, accurate recovery states and
-packaged verification.
+are implemented. Recovery now retains configuration commits, cancels unfinished
+approval with retryable cleanup, distinguishes relay recovery from terminal admission,
+and creates new tasks from retained selections after authorization failures. Retries
+reload saved settings before the engine applies its network refresh/backoff policy.
+Quitting prompts for every unfinished selection or setup, with dismissal keeping work alive.
+
+Windows release-package verification (2026-11-14) covered missing-file initialization,
+partial setup failure, recovery of the same selection using saved settings, two browser
+downloads with matching SHA-256, stop/repeat with different links, navigation, and joined
+shutdown. Both Esc and closing the quit prompt preserved preparing or active shares.
+`desktop-check`, `desktop-package`, `hygiene`, `lint`, `vet`, `sloc` and targeted Go race tests passed.
+
+The [development network](../../deploy/network/development/README.md) contains the
+existing two trust roots and verified directory (generation 1 / serial 2).
+`make development-build` builds all three clients from this checkout with that
+identity. Recorded desktop-to-browser evidence used `?n=us1` without explicit
+relays and verified a 1 MiB download. The production `deploy/network/release.json`
+remains unprovisioned; production publication and the separate P2 account workflow
+remain external dependencies.
 
 - Preserve the original shell, animated selection/flight/landing, result card, and share grid/list. Use one presentation for native and preview sessions; replace `SampleBundle`, generated preview links and completion timers with native selection and real tasks. Accept mixed file/folder drops as one share alongside native pickers, without descendant counting or staging copies.
 - Present preparation, sharing, stopping and terminal outcomes from real state. Use owner-provided typed reasons to offer setup for missing configuration, retry for temporary network unavailability, or required authorization only when blocked. The host retains the creation operation and selection. Distinguish active relay recovery from terminal admission failure while preserving existing P2P transfers.

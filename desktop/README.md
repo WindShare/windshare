@@ -36,11 +36,19 @@ one, a frontend URL in the app. Restricted relays may require browser approval.
 The selection resumes automatically after setup. Existing CLI settings are reused;
 after changing them externally, choose **Use saved settings**. `WINDSHARE_CONFIG`
 overrides the shared configuration path. Setup preserves saved relay choices and
-disabled defaults; cancelling the share retains saved configuration.
+disabled defaults. Cancelling stops admission and revokes unfinished device approval;
+committed settings survive, and failed cancellation can be retried.
 
-Manual setup supports development and self-hosting. Default onboarding still needs
-official account provisioning, which is outside this integration. Closing the window
-cancels pending setup/admission, stops all shares and joins the engine off the UI thread.
+The built-in network uses provisioned release trust roots, a signed directory and
+usable nodes. The production release manifest remains unprovisioned; use saved
+relays or `make development-build` with the [development network](../deploy/network/development/README.md) for local use.
+Reuse the existing development network's trust identity across source rebuilds.
+Temporary network failures expose the owner's retry cooldown. Official account
+provisioning is a separate P2 dependency, required only when anonymous admission is refused.
+
+Closing with unfinished shares or setup asks whether to keep running or quit and stop
+all shares. Dismissing keeps sharing; confirming joins the engine off the UI thread.
+Sharing again after completion creates a new task and link from the retained selection.
 
 `make desktop-package` creates a release archive under `dist/desktop`, including
 the executable, Go library, license and instructions. The generated C header stays

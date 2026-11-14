@@ -1,0 +1,44 @@
+{
+  "format": 1,
+  "network": "windshare-development",
+  "generation": 1,
+  "serial": 2,
+  "issued_at": "2026-11-14T08:00:58Z",
+  "expires_at": "2027-01-13T08:00:58Z",
+  "nodes": [
+    {
+      "alias": "cn1",
+      "relay": "https://cn1.ourworld.top",
+      "stun": [
+        "stun:cn1.ourworld.top:3478"
+      ],
+      "roles": [
+        "stun"
+      ],
+      "zone": "cn",
+      "region": "cn-wuhan",
+      "provider": "aliyun",
+      "operator": "official",
+      "capacity_mbps": 200,
+      "status": "canary"
+    },
+    {
+      "alias": "us1",
+      "relay": "https://us1.windshare.cc",
+      "stun": [
+        "stun:us1.windshare.cc:3478"
+      ],
+      "roles": [
+        "relay",
+        "stun"
+      ],
+      "zone": "global",
+      "region": "us-los-angeles",
+      "provider": "quickpacket",
+      "operator": "official",
+      "capacity_mbps": 100,
+      "status": "active"
+    }
+  ],
+  "public_stun": []
+}

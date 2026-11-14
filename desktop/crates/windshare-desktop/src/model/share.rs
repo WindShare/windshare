@@ -13,6 +13,7 @@ pub enum ShareSource {
 
 #[derive(Clone, Copy, Debug)]
 pub enum ShareState {
+    AwaitingAuthorization,
     AwaitingConfiguration(windshare_host::CreationBlock),
     AwaitingNetwork(windshare_host::CreationBlock),
     Preparing,
@@ -37,10 +38,19 @@ pub struct Share {
     pub symbol: Icon,
     pub state: ShareState,
     pub error: Option<String>,
-    pub relay_reconnecting: bool,
+    pub authorization: Option<windshare_host::ShareAuthorization>,
+    pub relay_status: Option<windshare_host::RelayStatus>,
 }
 
 impl Share {
+    pub const fn relay_notice(&self) -> Option<Text> {
+        match self.relay_status {
+            Some(windshare_host::RelayStatus::Recovering) => Some(Text::RelayReconnecting),
+            Some(windshare_host::RelayStatus::Unavailable) => Some(Text::RelayUnavailable),
+            _ => None,
+        }
+    }
+
     pub const fn live(&self) -> bool {
         matches!(self.state, ShareState::Live { .. })
     }
@@ -65,6 +75,7 @@ impl Share {
 
     pub const fn status(&self) -> (Text, Tone) {
         match self.state {
+            ShareState::AwaitingAuthorization => (Text::AuthorizationRequired, Tone::Peach),
             ShareState::AwaitingConfiguration(_) => (Text::SharingSetup, Tone::Peach),
             ShareState::AwaitingNetwork(_) => (Text::NetworkUnavailable, Tone::Peach),
             ShareState::Preparing => (Text::PreparingLink, Tone::Peach),
@@ -88,6 +99,18 @@ impl Share {
     }
 
     pub const fn control(&self) -> (Text, Icon, Action) {
+        if self.authorization.is_some()
+            && matches!(
+                self.state,
+                ShareState::AwaitingAuthorization | ShareState::Failed
+            )
+        {
+            return (
+                Text::AuthorizationRequired,
+                Icon::Settings,
+                Action::ConfigureShare(self.id),
+            );
+        }
         match self.source {
             ShareSource::Preview => {
                 if self.live() {

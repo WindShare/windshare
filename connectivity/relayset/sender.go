@@ -93,7 +93,7 @@ func (s *Sender) run(url string, dial SenderFactory) {
 			s.firstReady = url
 		}
 	} else {
-		s.registrationErrors = append(s.registrationErrors, err)
+		s.registrationErrors = append(s.registrationErrors, &RegistrationFailure{URL: url, Cause: err})
 	}
 	if s.firstReady != "" || s.pendingRegistrations == 0 {
 		s.readyOnce.Do(func() { close(s.ready) })

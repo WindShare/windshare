@@ -2,7 +2,6 @@ package desktop
 
 import (
 	"errors"
-	"time"
 
 	"github.com/windshare/windshare/engine"
 )
@@ -59,32 +58,9 @@ func networkBlocked(err error) operationPhase {
 
 func waitingForAdmission(phase operationPhase) bool {
 	switch phase.(type) {
-	case awaitingConfiguration, awaitingNetwork:
+	case awaitingConfiguration, awaitingNetwork, awaitingAuthorization:
 		return true
 	default:
 		return false
 	}
-}
-
-func (a *Application) deferNetworkRetry(op *operation) bool {
-	// Re-read the owner's decision: background maintenance may have recovered
-	// or extended backoff while this selection remained on screen.
-	if a.deps.networkStatus != nil {
-		if failure := a.deps.networkStatus(); failure != nil {
-			op.phase = networkBlocked(failure)
-		} else {
-			return false
-		}
-	}
-	current, temporary := op.phase.(awaitingNetwork)
-	if !temporary {
-		return true
-	}
-	if current.block.RetryAtMS > time.Now().UnixMilli() {
-		a.deps.log("host.creation_retry_deferred", map[string]any{
-			"operation_id": op.id, "reason": current.block.Reason, "retry_at_ms": current.block.RetryAtMS,
-		})
-		return true
-	}
-	return false
 }

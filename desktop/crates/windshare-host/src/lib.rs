@@ -2,7 +2,13 @@ mod abi;
 mod connection;
 mod model;
 mod request;
+mod setup;
+pub use model::ShareAuthorization;
+pub use setup::{Setup, SetupContext, SetupRecovery};
 
+#[cfg(test)]
+#[path = "lifecycle_tests.rs"]
+mod lifecycle_tests;
 #[cfg(test)]
 #[path = "controller_tests.rs"]
 mod tests;
@@ -16,8 +22,8 @@ pub fn check_host() -> anyhow::Result<()> {
 
 pub use model::{
     BlockingReason, Completion, Connection, CreationBlock, Failure, Model, Operation,
-    OperationState, Outcome, RecoveryAction, SelectedRoot, Selection, Setup, Share, ShareState,
-    Snapshot, Startup, StopReason,
+    OperationState, Outcome, RecoveryAction, RelayStatus, SelectedRoot, Selection, Share,
+    ShareState, Snapshot, Startup, StopReason,
 };
 
 use request::Command;
@@ -127,6 +133,38 @@ impl Controller {
                     .map_err(|_| "A selected path cannot be represented as Unicode".to_owned())
             })
             .collect::<Result<_, _>>()?;
+        let retained_paths = paths.clone();
+        self.submit(retained_paths, |operation_id| Command::Create {
+            operation_id,
+            paths,
+        })
+    }
+
+    /// Starts a new intent from the host's retained selection.
+    /// # Errors
+    /// Returns a missing selection, application lifetime, or queue capacity error.
+    /// # Panics
+    /// Panics if the application model mutex is poisoned.
+    pub fn repeat(&self, source_operation_id: &str) -> Result<String, String> {
+        let paths = self
+            .model()
+            .operations
+            .iter()
+            .find(|operation| operation.id == source_operation_id)
+            .ok_or("Source selection not found")?
+            .paths
+            .clone();
+        self.submit(paths, |operation_id| Command::Repeat {
+            operation_id,
+            source_operation_id: source_operation_id.into(),
+        })
+    }
+
+    fn submit(
+        &self,
+        paths: Vec<String>,
+        make_command: impl FnOnce(String) -> Command,
+    ) -> Result<String, String> {
         let mut model = self.shared.model.lock().expect("model lock");
         if self.shared.closing.load(Ordering::Acquire)
             || matches!(model.connection, Connection::Closed(_))
@@ -140,10 +178,7 @@ impl Controller {
             "share:{}",
             self.sequence.fetch_add(1, Ordering::Relaxed) + 1
         );
-        let command = Command::Create {
-            operation_id: id.clone(),
-            paths: paths.clone(),
-        };
+        let command = make_command(id.clone());
         command.validate()?;
         self.commands
             .try_send(command)
@@ -200,6 +235,12 @@ impl Controller {
                 relay_url,
                 front_url,
             },
+        });
+    }
+
+    pub fn cancel_setup(&self, setup_id: &str) {
+        self.command(Command::CancelSetup {
+            setup_id: setup_id.into(),
         });
     }
 

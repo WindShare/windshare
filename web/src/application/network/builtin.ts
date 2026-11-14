@@ -1,4 +1,4 @@
-import release from '../../../../deploy/network/release.json'
+import release from '@windshare/network-release'
 import { NetworkDirectory } from '../../network/directory'
 import { directoryICEEndpointPool } from '../../connectivity/ice-policy/defaults'
 import type { ICEEndpointPool } from '../../connectivity/ice-policy/endpoints'

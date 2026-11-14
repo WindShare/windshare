@@ -58,9 +58,10 @@ impl Desktop {
                     .child(theme.caption(locale.created(&share.age.description(locale))))
                     .child(theme.badge(locale.text(share.status().0), share.status().1)),
             )
-            .when(share.error.is_some() || share.relay_reconnecting, |el| {
-                el.child(Self::share_notice(theme, share, cx))
-            })
+            .when(
+                share.error.is_some() || share.relay_notice().is_some(),
+                |el| el.child(Self::share_notice(theme, share, cx)),
+            )
             .child(
                 column()
                     .gap(px(8.))

@@ -25,7 +25,7 @@ fn blocking_contract_preserves_reason_recovery_and_deadline() {
         "state": "finished", "id": "setup:1"
     }))
     .unwrap();
-    assert!(matches!(setup, Setup::Finished { operation_id, .. } if operation_id.is_empty()));
+    assert!(matches!(setup, Setup::Finished { context } if context.operation_id.is_empty()));
 }
 
 fn snapshot(revision: u64, shares: Vec<Share>) -> Snapshot {
@@ -49,6 +49,7 @@ fn accepted(id: &str, state: ShareState) -> Share {
         result: None,
         error: None,
         relay: None,
+        authorization: None,
     }
 }
 

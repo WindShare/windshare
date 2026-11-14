@@ -1,6 +1,9 @@
 {
   "compilerOptions": {
     "target": "ES2023",
+    "paths": {
+      "@windshare/network-release": ["../deploy/network/release.json"]
+    },
     "skipLibCheck": true,
     "strict": true,
     "exactOptionalPropertyTypes": true,

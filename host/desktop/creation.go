@@ -30,22 +30,35 @@ func (a *Application) create(request Request) error {
 		}
 		paths[i] = absolute
 	}
-	if previous, ok := a.operations[request.OperationID]; ok {
-		if previous.paths != nil && !slices.Equal(previous.paths, paths) {
-			return errors.New("operation_id already belongs to another selection")
+	op, err := a.registerOperation(request.OperationID, paths, "")
+	if err == nil && op != nil {
+		a.admit(op)
+	}
+	return err
+}
+
+func (a *Application) registerOperation(id string, paths []string, sourceID string) (*operation, error) {
+	if a.closing {
+		return nil, engine.ErrClosed
+	}
+	if !validOperation(id) {
+		return nil, errors.New("operation_id must contain 1–128 bytes")
+	}
+	if previous, ok := a.operations[id]; ok {
+		if previous.paths != nil && (!slices.Equal(previous.paths, paths) || previous.sourceOperationID != sourceID) {
+			return nil, errors.New("operation_id already belongs to another selection")
 		}
-		return nil
+		return nil, nil
 	}
 	if len(paths) == 0 {
-		return errors.New("select at least one file or folder")
+		return nil, errors.New("select at least one file or folder")
 	}
 	if len(a.operations) >= maximumOperations {
-		return errors.New("application operation limit reached; restart after stopping shares")
+		return nil, errors.New("application operation limit reached; restart after stopping shares")
 	}
-	op := &operation{id: request.OperationID, paths: paths, createdAt: time.Now()}
+	op := &operation{id: id, paths: slices.Clone(paths), sourceOperationID: sourceID, createdAt: time.Now()}
 	a.operations[op.id] = op
-	a.admit(op)
-	return nil
+	return op, nil
 }
 
 func (a *Application) resume(id string) error {
@@ -56,9 +69,11 @@ func (a *Application) resume(id string) error {
 	if !ok {
 		return errors.New("creation operation not found")
 	}
-	if _, ok := op.phase.(awaitingNetwork); ok && a.deferNetworkRetry(op) {
+	if a.setup.OperationID == id && a.setup.busy() {
 		return nil
 	}
+	// Reload explicit choices before asking the engine to plan. Directory cooldown
+	// must not prevent a newly configured relay from serving this selection.
 	if waitingForAdmission(op.phase) {
 		a.admit(op)
 	}

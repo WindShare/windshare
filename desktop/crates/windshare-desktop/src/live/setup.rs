@@ -79,6 +79,30 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let id = if let Some(id) = id {
+            let finished = self
+                .shares
+                .iter()
+                .any(|share| share.id == id && share.finished());
+            if finished {
+                let Some(repeated) = self.repeat_native_share(id, window, cx) else {
+                    return;
+                };
+                Some(repeated)
+            } else {
+                Some(id)
+            }
+        } else {
+            None
+        };
+        if let Some(share) = id.and_then(|id| self.shares.iter().find(|share| share.id == id))
+            && let Some(windshare_host::ShareAuthorization::SelfHosted { relay_url }) =
+                &share.authorization
+        {
+            self.setup_form
+                .relay
+                .update(cx, |input, cx| input.set_value(relay_url.clone(), cx));
+        }
         self.open_overlay(Overlay::SharingSetup(id), window, cx);
     }
 
@@ -91,7 +115,8 @@ impl Desktop {
             None => "",
         };
         if let Runtime::Native(session) = &self.runtime
-            && !matches!(session.model.setup, Setup::Running { .. })
+            && !session.model.setup.busy()
+            && !session.model.setup.requires_cancellation()
         {
             session.controller.configure(
                 operation,
@@ -106,6 +131,14 @@ impl Desktop {
             && let Some(operation_id) = self.native_operation(id)
         {
             session.controller.resume(operation_id);
+        }
+    }
+
+    pub fn cancel_sharing_setup(&self) {
+        if let Runtime::Native(session) = &self.runtime
+            && let Some(context) = session.model.setup.context()
+        {
+            session.controller.cancel_setup(&context.id);
         }
     }
 
@@ -148,43 +181,8 @@ impl Desktop {
                     .child(theme.caption(locale.text(Text::FrontendAddress)))
                     .child(self.setup_form.frontend.clone()),
             );
-        match &session.model.setup {
-            Setup::Failed {
-                operation_id,
-                error,
-                ..
-            } if operation == operation_id => {
-                form = form.child(
-                    theme
-                        .label(error.message.clone(), 15.)
-                        .text_color(Tone::Rose.text(theme)),
-                );
-            }
-            Setup::Finished { operation_id, .. } if operation == operation_id => {
-                form = form.child(theme.caption(locale.text(Text::SettingsSaved)));
-            }
-            Setup::Running {
-                verification_url,
-                user_code,
-                ..
-            } if !verification_url.is_empty() => {
-                form = form.child(
-                    row()
-                        .gap(px(12.))
-                        .child(theme.label(user_code.clone(), 18.))
-                        .child(Self::button(
-                            "approve-device",
-                            locale.text(Text::ApproveDevice),
-                            Icon::External,
-                            ButtonStyle::Secondary,
-                            Action::ApproveRelay,
-                            cx,
-                        )),
-                );
-            }
-            _ => {}
-        }
-        let busy = matches!(session.model.setup, Setup::Running { .. });
+        form = form.child(self.setup_feedback(theme, operation, cx));
+        let busy = session.model.setup.busy() || session.model.setup.requires_cancellation();
         let empty = self.setup_form.relay.read(cx).value().trim().is_empty()
             && self.setup_form.frontend.read(cx).value().trim().is_empty();
         form.child(
@@ -206,8 +204,21 @@ impl Desktop {
                         Action::SaveSharingSetup(id),
                         cx,
                     )
-                    .disabled(busy || empty || session.quitting),
+                    .disabled(busy || empty || self.runtime.selection_disabled()),
                 )
+                .when_some(id, |actions, id| {
+                    actions.child(
+                        Self::button(
+                            "use-saved-sharing-settings",
+                            locale.text(Text::UseSavedSettings),
+                            Icon::Refresh,
+                            ButtonStyle::Secondary,
+                            Action::ResumeShare(id),
+                            cx,
+                        )
+                        .disabled(busy || self.runtime.selection_disabled()),
+                    )
+                })
                 .child(Self::button(
                     "close-sharing-setup",
                     locale.text(Text::CloseDialog),
