@@ -301,6 +301,9 @@ impl Desktop {
                         .when(self.page != Page::Share, |el| {
                             el.child(self.page_heading(theme, compact, cx))
                         })
+                        .when_some(self.runtime.setup_cancellation_error(), |el, error| {
+                            el.child(Self::setup_cancellation_notice(theme, error, cx))
+                        })
                         .when_some(self.runtime.notice(), |el, error| {
                             el.child(
                                 theme.card().p(px(18.)).child(

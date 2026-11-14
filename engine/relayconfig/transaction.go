@@ -67,7 +67,7 @@ func (store FileStore) save(config Config) error {
 func ReadSettings(tx *statefile.Transaction) (Config, error) {
 	data, err := tx.Read(statefile.Settings)
 	if errors.Is(err, os.ErrNotExist) {
-		return Config{}, nil
+		return emptyConfig(), nil
 	}
 	if err != nil {
 		return Config{}, err

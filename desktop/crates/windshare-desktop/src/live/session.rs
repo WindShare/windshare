@@ -13,11 +13,18 @@ pub enum Runtime {
     Native(Box<Session>),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum QuitState {
+    Running,
+    Confirming,
+    Closing,
+}
+
 pub struct Session {
     pub controller: Controller,
     pub model: Model,
     pub picking: bool,
-    pub quitting: bool,
+    pub quit_state: QuitState,
     pub error: Option<String>,
     retry_wakeup: Option<gpui::Task<()>>,
 }
@@ -28,7 +35,7 @@ impl Runtime {
             model: controller.model(),
             controller,
             picking: false,
-            quitting: false,
+            quit_state: QuitState::Running,
             error: None,
             retry_wakeup: None,
         }))
@@ -43,7 +50,7 @@ impl Runtime {
             Self::Preview { .. } => false,
             Self::Native(session) => {
                 session.picking
-                    || session.quitting
+                    || matches!(session.quit_state, QuitState::Closing)
                     || matches!(
                         session.model.connection,
                         Connection::Closing | Connection::Closed(_)
@@ -69,11 +76,21 @@ impl Runtime {
             })
     }
 
+    pub fn setup_cancellation_error(&self) -> Option<&str> {
+        if let Self::Native(session) = self
+            && let windshare_host::Setup::CancelFailed { error, .. } = &session.model.setup
+        {
+            Some(&error.message)
+        } else {
+            None
+        }
+    }
+
     pub const fn status(&self) -> Text {
         let Self::Native(session) = self else {
             return Text::PreviewStatus;
         };
-        if session.quitting {
+        if matches!(session.quit_state, QuitState::Closing) {
             return Text::ClosingShares;
         }
         match session.model.connection {
@@ -93,8 +110,8 @@ impl Desktop {
 
     pub fn observe_runtime(controller: Controller, window: &Window, cx: &Context<Self>) {
         let weak = cx.entity().downgrade();
-        window.on_window_should_close(cx, move |_, cx| {
-            let _ = weak.update(cx, Self::quit);
+        window.on_window_should_close(cx, move |window, cx| {
+            let _ = weak.update(cx, |this, cx| this.request_quit(window, cx));
             false
         });
         cx.spawn(async move |view, cx| {
@@ -108,9 +125,9 @@ impl Desktop {
         .detach();
     }
 
-    pub fn quit(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn quit(&mut self, cx: &mut Context<Self>) {
         if let Runtime::Native(session) = &mut self.runtime {
-            session.quitting = true;
+            session.quit_state = QuitState::Closing;
             session.controller.begin_shutdown();
             cx.notify();
         } else {
@@ -180,7 +197,9 @@ impl Desktop {
             }
             cx.notify();
         }
-        if session.quitting && matches!(session.model.connection, Connection::Closed(_)) {
+        if matches!(session.quit_state, QuitState::Closing)
+            && matches!(session.model.connection, Connection::Closed(_))
+        {
             cx.quit();
         }
     }
@@ -189,7 +208,7 @@ impl Desktop {
         let Runtime::Native(session) = &self.runtime else {
             return;
         };
-        if session.quitting {
+        if matches!(session.quit_state, QuitState::Closing) {
             return;
         }
         let Some(share) = self.shares.iter().find(|share| share.id == id) else {

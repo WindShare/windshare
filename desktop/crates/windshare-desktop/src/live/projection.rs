@@ -12,6 +12,7 @@ pub fn update_share(share: &mut Share, operation: &Operation) {
         OperationState::Submitting => ShareState::Preparing,
         OperationState::Rejected(_) => ShareState::Failed,
         OperationState::Accepted(task) => match task.state {
+            HostState::AwaitingAuthorization => ShareState::AwaitingAuthorization,
             HostState::AwaitingConfiguration { blocking } => {
                 ShareState::AwaitingConfiguration(blocking)
             }
@@ -27,6 +28,7 @@ pub fn update_share(share: &mut Share, operation: &Operation) {
         },
     };
     if let Some(task) = operation.share() {
+        share.authorization.clone_from(&task.authorization);
         if let Some(created) =
             SystemTime::UNIX_EPOCH.checked_add(Duration::from_millis(task.created_at_ms))
         {
@@ -60,11 +62,11 @@ pub fn update_share(share: &mut Share, operation: &Operation) {
         {
             share.link = Some(ShareLink::new(task.url.clone()));
         }
-        share.relay_reconnecting = task.state == HostState::Sharing
-            && task
-                .relay
-                .as_ref()
-                .is_some_and(|relay| relay.payload.available == 0);
+        share.relay_status = task
+            .relay
+            .as_ref()
+            .filter(|_| task.state == HostState::Sharing)
+            .map(|relay| relay.payload.status());
     }
 }
 

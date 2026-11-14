@@ -33,7 +33,8 @@ impl Desktop {
                 symbol: bundle.icon(),
                 state: ShareState::Preparing,
                 error: None,
-                relay_reconnecting: false,
+                authorization: None,
+                relay_status: None,
             },
         );
         self.link_disclosure = LinkDisclosure::Summary;

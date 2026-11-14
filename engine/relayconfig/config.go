@@ -38,6 +38,10 @@ type Config struct {
 	ConfiguredOnly      bool
 }
 
+// Missing settings are an editable configuration, with the same explicit empty
+// profile set that the persisted format requires. Malformed documents still fail.
+func emptyConfig() Config { return Config{Profiles: []relayprofile.Candidate{}} }
+
 // TURNSettings projects only authority and policy; unrelated application settings
 // cannot become a dependency of runtime TURN configuration.
 func (config Config) TURNSettings() turn.Settings {
@@ -82,7 +86,7 @@ func Load() (Config, error) {
 func loadPath(path string, missingAllowed bool) (Config, error) {
 	data, err := statefile.ReadSettings(context.Background(), path)
 	if missingAllowed && errors.Is(err, os.ErrNotExist) {
-		return Config{}, nil
+		return emptyConfig(), nil
 	}
 	if err != nil {
 		return Config{}, err

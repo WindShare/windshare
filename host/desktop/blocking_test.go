@@ -29,7 +29,6 @@ func TestNetworkRetryRetainsSelectionAndUsesCurrentOwnerBackoff(t *testing.T) {
 				}
 				return start(ctx, request)
 			}
-			a.deps.networkStatus = func() *engine.NetworkUnavailableError { return next }
 			a.execute(createRequest())
 			view := awaitShare(t, a, "operation", func(s Share) bool { return s.State == AwaitingNetwork })
 			a.work.Wait()
@@ -38,8 +37,13 @@ func TestNetworkRetryRetainsSelectionAndUsesCurrentOwnerBackoff(t *testing.T) {
 			}
 			next = &engine.NetworkUnavailableError{Reason: next.Reason, RetryAt: next.RetryAt.Add(time.Minute)}
 			reply := a.execute(Request{Command: "resume", OperationID: "operation"})
-			if reply.Error != nil || reply.Snapshot.Shares[0].State != AwaitingNetwork || reply.Snapshot.Shares[0].Blocking.RetryAtMS != next.RetryAt.UnixMilli() || attempts.Load() != 1 {
-				t.Fatal("cooldown started admission or retained stale deadline", reply)
+			if reply.Error != nil {
+				t.Fatal(reply.Error)
+			}
+			view = awaitShare(t, a, "operation", func(s Share) bool { return s.State == AwaitingNetwork })
+			a.work.Wait()
+			if view.Blocking.RetryAtMS != next.RetryAt.UnixMilli() || attempts.Load() != 2 || starts.Load() != 0 {
+				t.Fatal("retry did not query the current owner decision", view)
 			}
 			if cancelled {
 				a.execute(Request{Command: "cancel", OperationID: "operation"})
@@ -57,6 +61,33 @@ func TestNetworkRetryRetainsSelectionAndUsesCurrentOwnerBackoff(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestNetworkRetryLoadsNewExplicitSettingsDuringDirectoryCooldown(t *testing.T) {
+	a, _, starts := fixture(t)
+	config := relayconfig.Config{}
+	a.deps.load = func() (relayconfig.Config, error) { return config, nil }
+	start := a.deps.start
+	cooldown := &engine.NetworkUnavailableError{Reason: engine.NetworkDirectoryUnavailable, RetryAt: time.Now().Add(time.Hour)}
+	a.deps.start = func(ctx context.Context, request engine.ShareRequest) (shareTask, error) {
+		candidates := request.RelayIntent.Candidates()
+		if len(candidates) == 0 {
+			return nil, cooldown
+		}
+		if len(candidates) != 1 || candidates[0].PublicURL != configured().ActiveRelays[0] || request.Frontend != configured().FrontURL {
+			t.Error("retry lost the newly saved selection")
+		}
+		return start(ctx, request)
+	}
+	a.execute(createRequest())
+	awaitShare(t, a, "operation", func(s Share) bool { return s.State == AwaitingNetwork })
+	a.work.Wait()
+	config = configured()
+	a.execute(Request{Command: "resume", OperationID: "operation"})
+	admitted(t, a)
+	if starts.Load() != 1 {
+		t.Fatal("directory cooldown blocked an available configured relay")
 	}
 }
 
@@ -97,9 +128,9 @@ func TestSetupDoesNotRequireBlockedCreation(t *testing.T) {
 				request.OperationID = "operation"
 			}
 			var saves atomic.Int32
-			a.deps.setup = func(context.Context, SetupInput, func(relaysetup.Progress)) error {
+			a.deps.setup = func(context.Context, SetupInput, func(relaysetup.Progress)) (SetupResult, error) {
 				saves.Add(1)
-				return nil
+				return SetupResult{}, nil
 			}
 			if reply := a.execute(request); reply.Error != nil {
 				t.Fatal(reply.Error)

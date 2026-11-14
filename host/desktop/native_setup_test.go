@@ -38,7 +38,7 @@ func TestNativeSetupPreservesSavedRelaySelectionAndDisabledDefaults(t *testing.T
 				})
 			}))
 			defer server.Close()
-			if err := nativeSetup(t.Context(), SetupInput{RelayURL: server.URL}, nil); err != nil {
+			if _, err := newNativeSetup(store).run(t.Context(), SetupInput{RelayURL: server.URL}, nil); err != nil {
 				t.Fatal(err)
 			}
 			saved, err := store.Load()

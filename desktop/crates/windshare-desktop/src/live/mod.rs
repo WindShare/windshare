@@ -1,8 +1,10 @@
 mod blocking;
 mod projection;
+mod quit;
 mod selection;
 mod session;
 mod setup;
+mod setup_feedback;
 pub use setup::SetupForm;
 
 use crate::desktop::Desktop;

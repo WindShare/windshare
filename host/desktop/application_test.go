@@ -75,11 +75,12 @@ func fixture(t *testing.T) (*Application, *fakeShare, *atomic.Int32) {
 	task := &fakeShare{state: engine.ShareSnapshot{State: engine.TaskRunning}, events: make(chan engine.Observation, 1), changed: make(chan struct{})}
 	starts := &atomic.Int32{}
 	a := newApplication("session", dependencies{
-		start:     func(context.Context, engine.ShareRequest) (shareTask, error) { starts.Add(1); return task, nil },
-		close:     func(context.Context) error { task.finish(); return nil },
-		configure: func(turn.Settings) error { return nil },
-		load:      func() (relayconfig.Config, error) { return configured(), nil },
-		log:       func(string, any) {},
+		start:       func(context.Context, engine.ShareRequest) (shareTask, error) { starts.Add(1); return task, nil },
+		close:       func(context.Context) error { task.finish(); return nil },
+		configure:   func(turn.Settings) error { return nil },
+		load:        func() (relayconfig.Config, error) { return configured(), nil },
+		log:         func(string, any) {},
+		cancelSetup: func(context.Context, string) error { return nil },
 	})
 	t.Cleanup(func() {
 		if err := a.close(); err != nil {

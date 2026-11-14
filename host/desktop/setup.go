@@ -16,14 +16,20 @@ type SetupInput struct {
 }
 
 type SetupView struct {
-	State           string   `json:"state"`
-	ID              string   `json:"id,omitempty"`
-	OperationID     string   `json:"operation_id,omitempty"`
-	Stage           string   `json:"stage,omitempty"`
-	VerificationURL string   `json:"verification_url,omitempty"`
-	UserCode        string   `json:"user_code,omitempty"`
-	Error           *Failure `json:"error,omitempty"`
+	State           string                    `json:"state"`
+	ID              string                    `json:"id,omitempty"`
+	OperationID     string                    `json:"operation_id,omitempty"`
+	RelayURL        string                    `json:"relay_url,omitempty"`
+	Stage           string                    `json:"stage,omitempty"`
+	VerificationURL string                    `json:"verification_url,omitempty"`
+	UserCode        string                    `json:"user_code,omitempty"`
+	FrontendSaved   bool                      `json:"frontend_saved"`
+	RelaySaved      bool                      `json:"relay_saved"`
+	Recovery        relaysetup.RecoveryAction `json:"recovery,omitempty"`
+	Error           *Failure                  `json:"error,omitempty"`
 }
+
+func (view SetupView) busy() bool { return view.State == "running" || view.State == "cancelling" }
 
 type setupCommand struct {
 	input       SetupInput
@@ -44,15 +50,25 @@ func (a *Application) configure(request Request) error {
 		}
 		return nil
 	}
-	if a.setup.State == "running" {
+	if a.setup.busy() {
 		return errors.New("relay setup is already running")
+	}
+	if a.setup.State == "cancel_failed" || a.setup.Recovery == relaysetup.RecoveryCancel || a.setup.Recovery == relaysetup.RecoveryRetryCancel {
+		return errors.New("cancel the unfinished relay setup before starting another")
+	}
+	if a.setup.State == "failed" && a.setup.Recovery == relaysetup.RecoveryContinue && a.setup.OperationID != request.OperationID {
+		return errors.New("finish or cancel the pending relay setup first")
 	}
 	if len(a.setupRequests) >= maximumOperations {
 		return errors.New("application setup limit reached")
 	}
 	if request.OperationID != "" {
-		if _, ok := a.operations[request.OperationID]; !ok {
+		op, ok := a.operations[request.OperationID]
+		if !ok {
 			return errors.New("creation operation not found")
+		}
+		if _, ended := op.phase.(terminal); ended {
+			return errors.New("creation operation has finished")
 		}
 	}
 	if input.RelayURL == "" && input.FrontURL == "" {
@@ -64,8 +80,8 @@ func (a *Application) configure(request Request) error {
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	a.cancelSetup = cancel
-	a.setup = SetupView{State: "running", ID: input.ID, OperationID: request.OperationID}
+	a.interruptSetup = cancel
+	a.setup = SetupView{State: "running", ID: input.ID, OperationID: request.OperationID, RelayURL: input.RelayURL}
 	a.setupRequests[input.ID] = setupCommand{input: *input, operationID: request.OperationID}
 	a.work.Add(1)
 	go a.runSetup(ctx, request.OperationID, *input)
@@ -74,32 +90,55 @@ func (a *Application) configure(request Request) error {
 
 func (a *Application) runSetup(ctx context.Context, operationID string, input SetupInput) {
 	defer a.work.Done()
-	err := a.deps.setup(ctx, input, func(progress relaysetup.Progress) {
+	result, err := a.deps.setup(ctx, input, func(progress relaysetup.Progress) {
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		a.setup.Stage, a.setup.VerificationURL, a.setup.UserCode = progress.Stage, progress.VerificationURL, progress.UserCode
+		if progress.Stage == "frontend_saved" {
+			a.setup.FrontendSaved = true
+		}
+		if a.setup.State == "running" {
+			a.setup.Stage, a.setup.VerificationURL, a.setup.UserCode = progress.Stage, progress.VerificationURL, progress.UserCode
+		}
 		a.snapshotLocked()
 	})
 	a.mu.Lock()
+	a.setup.FrontendSaved, a.setup.RelaySaved = result.FrontendSaved, result.RelaySaved
+	a.setup.RelayURL = result.RelayURL
+	// Only the completed workflow receipt can identify an enrollment to clean up.
+	// An input URL alone does not mean this intent acquired that relay's approval.
+	if result.RelayURL == "" {
+		a.setup.Recovery = relaysetup.RecoveryRestart
+	}
+	var setupError *relaysetup.SetupError
+	if errors.As(err, &setupError) {
+		a.setup.Recovery = setupError.Recovery.Action
+	}
+	cancelled := ctx.Err() != nil || a.closing
+	a.interruptSetup()
+	a.interruptSetup = nil
+	if cancelled {
+		a.setup.State = "cancelling"
+		a.snapshotLocked()
+		a.mu.Unlock()
+		a.finishSetupCancellation()
+		return
+	}
 	defer a.mu.Unlock()
-	completed := err == nil && ctx.Err() == nil
-	a.cancelSetup()
-	a.cancelSetup = nil
+	a.setup.VerificationURL, a.setup.UserCode = "", ""
 	if err != nil {
 		a.setup.State, a.setup.Error = "failed", failure("setup_failed", err)
+
 	} else {
 		a.setup.State = "finished"
 	}
 	a.deps.log("host.setup_completed", a.setup)
-	op := a.operations[operationID]
-	if op != nil && waitingForAdmission(op.phase) && completed && !a.closing {
-		// An entered relay is an explicit choice for this intent. The setup
-		// service preserves saved active sets, including disabled defaults.
-		if input.RelayURL != "" {
-			op.relays = []string{input.RelayURL}
+	if err == nil {
+		op := a.operations[operationID]
+		if op != nil && waitingForAdmission(op.phase) && result.RelayURL != "" {
+			// A setup choice applies to this retained selection. It does not
+			// replace saved defaults or unrelated selections' explicit choices.
+			op.relays = []string{result.RelayURL}
 		}
-	}
-	if completed && !a.closing {
 		for _, pending := range a.operations {
 			if waitingForAdmission(pending.phase) {
 				a.admit(pending)
@@ -107,25 +146,4 @@ func (a *Application) runSetup(ctx context.Context, operationID string, input Se
 		}
 	}
 	a.snapshotLocked()
-}
-
-func nativeSetup(ctx context.Context, input SetupInput, progress func(relaysetup.Progress)) error {
-	store := relayconfig.FileStore{}
-	if input.FrontURL != "" {
-		if _, err := store.Update(ctx, func(config *relayconfig.Config) error {
-			config.FrontURL = input.FrontURL
-			return nil
-		}); err != nil {
-			return err
-		}
-	}
-	if input.RelayURL == "" {
-		return nil
-	}
-	service := relaysetup.New(relaysetup.Dependencies{Store: relaysetup.FileStore{Settings: store}})
-	_, err := service.Run(ctx, relaysetup.Request{
-		URL: input.RelayURL, Operation: relaysetup.AddProfile,
-		DeviceName: relaysetup.DefaultDeviceName("WindShare desktop"), NoBrowser: true,
-	}, progress)
-	return err
 }
