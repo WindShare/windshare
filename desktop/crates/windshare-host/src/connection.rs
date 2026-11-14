@@ -10,7 +10,7 @@ use std::{
     io::ErrorKind,
     net::{SocketAddr, TcpStream},
     sync::{atomic::Ordering, mpsc::Receiver},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tungstenite::{Message, WebSocket, client::IntoClientRequest};
 
@@ -97,8 +97,12 @@ pub fn run(shared: &Shared, commands: &Receiver<Command>) -> Result<()> {
             .wait(&mut polling::Events::new(), Some(RETRY_INTERVAL))?;
     }
     shared.update(|model| model.connection = Connection::Closing);
+    let session_id = host.endpoint.session_id.clone();
+    let started = Instant::now();
+    tracing::info!(event = "desktop.host_shutdown_started", %session_id);
     let result = host.close();
-    tracing::info!(event = "desktop.host_joined", success = result.is_ok());
+    tracing::info!(event = "desktop.host_joined", %session_id,
+        elapsed_ms = started.elapsed().as_millis(), success = result.is_ok());
     result
 }
 

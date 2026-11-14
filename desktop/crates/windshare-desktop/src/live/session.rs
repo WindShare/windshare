@@ -17,7 +17,7 @@ pub enum Runtime {
 pub enum QuitState {
     Running,
     Confirming,
-    Closing,
+    Exiting,
 }
 
 pub struct Session {
@@ -50,7 +50,7 @@ impl Runtime {
             Self::Preview { .. } => false,
             Self::Native(session) => {
                 session.picking
-                    || matches!(session.quit_state, QuitState::Closing)
+                    || matches!(session.quit_state, QuitState::Exiting)
                     || matches!(
                         session.model.connection,
                         Connection::Closing | Connection::Closed(_)
@@ -90,9 +90,6 @@ impl Runtime {
         let Self::Native(session) = self else {
             return Text::PreviewStatus;
         };
-        if matches!(session.quit_state, QuitState::Closing) {
-            return Text::ClosingShares;
-        }
         match session.model.connection {
             Connection::Starting => Text::StartingHost,
             Connection::Connected => Text::ReadyToShare,
@@ -123,16 +120,6 @@ impl Desktop {
             }
         })
         .detach();
-    }
-
-    pub(super) fn quit(&mut self, cx: &mut Context<Self>) {
-        if let Runtime::Native(session) = &mut self.runtime {
-            session.quit_state = QuitState::Closing;
-            session.controller.begin_shutdown();
-            cx.notify();
-        } else {
-            cx.quit();
-        }
     }
 
     fn refresh_native(&mut self, cx: &mut Context<Self>) {
@@ -197,18 +184,13 @@ impl Desktop {
             }
             cx.notify();
         }
-        if matches!(session.quit_state, QuitState::Closing)
-            && matches!(session.model.connection, Connection::Closed(_))
-        {
-            cx.quit();
-        }
     }
 
     pub fn stop_native_share(&self, id: usize) {
         let Runtime::Native(session) = &self.runtime else {
             return;
         };
-        if matches!(session.quit_state, QuitState::Closing) {
+        if matches!(session.quit_state, QuitState::Exiting) {
             return;
         }
         let Some(share) = self.shares.iter().find(|share| share.id == id) else {

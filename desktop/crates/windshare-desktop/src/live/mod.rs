@@ -18,17 +18,17 @@ pub fn run(paths: Vec<PathBuf>, compact: bool) -> Result<(), String> {
     let application_controller = controller.clone();
     gpui_platform::application()
         .with_assets(crate::DesktopAssets)
+        .with_quit_mode(gpui::QuitMode::LastWindowClosed)
         .run(move |cx| {
             windshare_ui::init(cx);
             crate::preferences::init(cx);
             crate::artwork::Artwork::preload();
             let quit_controller = application_controller.clone();
-            cx.on_app_quit(move |cx| {
+            cx.on_app_quit(move |_| {
+                // OS quit paths also seal admission. Joining belongs after the event
+                // loop so network cleanup cannot exhaust GPUI's short quit budget.
                 quit_controller.begin_shutdown();
-                let controller = quit_controller.clone();
-                cx.background_executor().spawn(async move {
-                    let _ = controller.join();
-                })
+                std::future::ready(())
             })
             .detach();
             let dimensions = if compact {
@@ -60,7 +60,10 @@ pub fn run(paths: Vec<PathBuf>, compact: bool) -> Result<(), String> {
             .expect("open WindShare window");
             cx.activate(true);
         });
-    // GPUI quit handlers have a timeout. Process exit still waits for the host,
-    // including OS quit paths that have already ended the event loop.
+    tracing::info!(
+        event = "desktop.event_loop_stopped",
+        session = std::process::id()
+    );
+    // Keep process ownership until cleanup settles, without keeping a window open.
     controller.join()
 }

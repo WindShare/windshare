@@ -131,8 +131,11 @@ impl Share {
                     Action::ResumeShare(self.id),
                 ),
                 ShareState::Preparing => (Text::Cancel, Icon::Close, Action::StopShare(self.id)),
-                ShareState::Live { .. } | ShareState::Stopping => {
+                ShareState::Live { .. } => {
                     (Text::StopSharing, Icon::Close, Action::StopShare(self.id))
+                }
+                ShareState::Stopping => {
+                    (Text::StoppingShare, Icon::Close, Action::StopShare(self.id))
                 }
                 _ => (Text::ShareAgain, Icon::Refresh, Action::ShareAgain(self.id)),
             },
