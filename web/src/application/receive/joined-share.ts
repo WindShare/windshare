@@ -14,7 +14,7 @@ export interface ActiveReceiveJoinedShare {
     intent: ReceiveIntent,
     connectivity: ConnectivityActivation,
     callbacks?: Partial<Pick<TransferJobOptions,
-      'onProgress' | 'onMeasure' | 'trace' | 'transferJobId' | 'incidentScope' | 'outputSettlementDeadline' | 'onCheckpointObservation'>> &
+      'observeProgress' | 'onMeasure' | 'trace' | 'transferJobId' | 'incidentScope' | 'outputSettlementDeadline' | 'onCheckpointObservation'>> &
       { readonly selection?: FrozenSelectionPolicy },
   ): Pick<TransferJob, 'run'>
 }

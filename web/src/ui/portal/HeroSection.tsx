@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import type { ReceiverController } from '../controller'
+import type { PortalCommands } from './commands'
 import { PortalIcon } from './PortalIcon'
 import { BrandScene } from './BrandScene'
 import { ShareConsole } from './console/ShareConsole'
@@ -7,7 +7,7 @@ import type { PortalTab } from './console/tabs'
 import { usePortalCopy } from './locales/use-portal-copy'
 
 export function HeroSection({ controller, downloads, activeTab, onTabChange }: {
-  readonly controller: ReceiverController
+  readonly controller: PortalCommands
   readonly downloads: ReactNode
   readonly activeTab: PortalTab
   readonly onTabChange: (tab: PortalTab) => void

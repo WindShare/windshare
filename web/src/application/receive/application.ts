@@ -13,6 +13,7 @@ import { RetainedInventoryCoordinator } from './retained/coordinator'
 import type { RetainedReceiveInventorySnapshot } from './retained/model'
 import { BrowserReceiveRuntime } from './runtime'
 import { ReceiveRuntimeState } from './state'
+import { ReceivePresentation, type PresentationClock } from './observation/presentation'
 
 export interface BrowserReceiveApplicationOptions<Share extends ReceivePlanningShare> extends ReceiveObservationOptions {
   readonly receive: ReceiveCompositionPort
@@ -25,6 +26,8 @@ export interface BrowserReceiveApplicationOptions<Share extends ReceivePlanningS
   readonly onChanged: () => void
   readonly onBrowsingReady: (joined: Share) => void
   readonly onActionError: (error: unknown) => void
+  readonly presentationClock?: PresentationClock
+  readonly commitPresentation?: (commit: () => void) => void
 }
 
 /**
@@ -34,7 +37,8 @@ export interface BrowserReceiveApplicationOptions<Share extends ReceivePlanningS
 export class BrowserReceiveApplication<Share extends ReceivePlanningShare> {
   readonly tasks: BrowserReceiveRuntime<Share>
   readonly diagnostics: ControllerObservability
-  readonly #state = new ReceiveRuntimeState()
+  readonly #state = new ReceiveRuntimeState(change => this.#presentation.changed(change))
+  readonly #presentation: ReceivePresentation
   readonly observations: Pick<ReceiveRuntimeState, 'getSnapshot' | 'subscribe'> = this.#state
   readonly #active: ActiveReceiveCoordinator
   readonly #activation: AuthorityActivationCoordinator
@@ -44,12 +48,20 @@ export class BrowserReceiveApplication<Share extends ReceivePlanningShare> {
   #closing: Promise<void> | undefined
 
   constructor(options: BrowserReceiveApplicationOptions<Share>) {
+    this.#presentation = new ReceivePresentation((progress, stateChanged) => {
+      const commit = () => {
+        if (progress !== undefined) options.onProgress(progress.read())
+        if (stateChanged) this.#state.notifyPresentation()
+      }
+      if (options.commitPresentation === undefined) commit()
+      else options.commitPresentation(commit)
+    }, options.presentationClock)
     const disposed = () => this.#closing !== undefined || options.isDisposed()
     this.diagnostics = new ControllerObservability(options)
     this.#active = new ActiveReceiveCoordinator({
       state: this.#state,
       ownsJoinedShare: joined => !disposed() && options.currentJoinedShare() === joined,
-      onProgress: options.onProgress,
+      observeProgress: (source, change) => this.#presentation.observe(source, change),
       ...(options.trace === undefined ? {} : { trace: options.trace }),
       ...(options.incidents === undefined ? {} : { incidents: options.incidents }),
       onActionError: options.onActionError,
@@ -73,6 +85,7 @@ export class BrowserReceiveApplication<Share extends ReceivePlanningShare> {
           choice, intent,
           () => {
             commitOwnership()
+            this.#presentation.reset()
             options.onTaskAdopted(operation.display)
           },
           operation.lifecycle, operation.initialWorkspaceUsage, operation.activeControls,
@@ -119,8 +132,8 @@ export class BrowserReceiveApplication<Share extends ReceivePlanningShare> {
       selectionIsEmpty: () => options.currentJoinedShare()?.selection.intentSummary().empty ?? true,
       onChanged: options.onChanged,
       projection: this.#projection,
-      onTaskAdopted: options.onTaskAdopted,
-      onTaskCleared: options.onTaskCleared,
+      onTaskAdopted: display => { this.#presentation.reset(); options.onTaskAdopted(display) },
+      onTaskCleared: () => { this.#presentation.reset(); options.onTaskCleared() },
       onBrowsingReady: options.onBrowsingReady,
       onActionError: options.onActionError,
     })
@@ -130,6 +143,7 @@ export class BrowserReceiveApplication<Share extends ReceivePlanningShare> {
   }
 
   get active(): boolean { return this.#active.active }
+  flushPresentation(): void { this.#presentation.flush() }
   get operationId(): string | null { return this.#active.operationId }
   get canPreviewAutomatically(): boolean {
     return !this.#active.active && !this.#activation.pending && !this.#retained.pending
@@ -137,6 +151,10 @@ export class BrowserReceiveApplication<Share extends ReceivePlanningShare> {
 
   loadRetained(): Promise<void> {
     return this.#closing === undefined ? this.#retained.load() : Promise.resolve()
+  }
+
+  ensureRetained(): Promise<void> {
+    return this.#closing === undefined ? this.#retained.ensureLoaded() : Promise.resolve()
   }
 
   chooseArtifact(
@@ -165,6 +183,7 @@ export class BrowserReceiveApplication<Share extends ReceivePlanningShare> {
   }
 
   suspendForJoin(reason: unknown): Promise<void> {
+    this.#presentation.reset()
     this.#retained.cancelPending(reason)
     const detached = this.#active.reset(reason)
     if (this.#state.getSnapshot().receiveIntent !== null) this.#state.reset()
@@ -186,6 +205,7 @@ export class BrowserReceiveApplication<Share extends ReceivePlanningShare> {
     // Fence reentrant observers before any coordinator can publish its final state.
     this.#closing = new Promise<void>((resolve, reject) => { settled = resolve; failed = reject })
     try {
+      this.#presentation.close()
       this.#retained.close(reason)
       const detached = this.tasks.resetOwnership(reason)
       this.#unsubscribeActivation()

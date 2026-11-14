@@ -13,7 +13,7 @@ describe('DirectTree recovery UI', () => {
   it('renders reload-safe recovery costs for retained actions', () => {
     const lifecycle = pausedLifecycle()
     const retained: ReceiverSnapshot['retained'] = Object.freeze({
-      kind: 'ready',
+      kind: 'available',
       error: null,
       pending: null,
       operations: Object.freeze([Object.freeze({

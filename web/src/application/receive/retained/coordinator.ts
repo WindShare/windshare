@@ -35,6 +35,7 @@ interface PreparedRetainedFailure {
 }
 
 interface PendingInventoryLoad {
+  readonly boundary: number
   readonly controller: AbortController
   readonly attempt: RetainedAttempt
 }
@@ -80,7 +81,9 @@ export class RetainedInventoryCoordinator {
   #inventory: ResolvedRetainedInventory | undefined
   #snapshot: RetainedReceiveInventorySnapshot = EMPTY_RETAINED_INVENTORY
   #boundary = 0
-  readonly #automaticFinalizations = new Set<string>()
+  #loadWork: Promise<void> | undefined
+  #refreshRequested = false
+  #closed = false
   #pending: PendingRetainedAction | undefined
 
   constructor(options: RetainedInventoryCoordinatorOptions) {
@@ -94,7 +97,23 @@ export class RetainedInventoryCoordinator {
   }
 
   load(): Promise<void> {
-    return this.#loadInventory()
+    if (this.#closed || this.#options.isDisposed()) return Promise.resolve()
+    if (this.#pending !== undefined) {
+      this.#refreshRequested = true
+      return Promise.resolve()
+    }
+    if (this.#loadWork !== undefined) return this.#loadWork
+    const work = Promise.resolve().then(() => this.#loadInventory()).finally(() => {
+      if (this.#loadWork === work) this.#loadWork = undefined
+      this.#scheduleRefresh()
+    })
+    this.#loadWork = work
+    return work
+  }
+
+  ensureLoaded(): Promise<void> {
+    if (this.#loadWork !== undefined) return this.#loadWork
+    return this.#inventory === undefined || this.#snapshot.kind === 'failed' ? this.load() : Promise.resolve()
   }
 
   actionAdmission(
@@ -213,6 +232,8 @@ export class RetainedInventoryCoordinator {
   }
 
   close(reason: unknown): void {
+    this.#closed = true
+    this.#refreshRequested = false
     const load = this.#load
     if (load !== undefined) {
       load.controller.abort(reason)
@@ -226,10 +247,12 @@ export class RetainedInventoryCoordinator {
   }
 
   async #loadInventory(): Promise<void> {
-    this.#cancelPending(new DOMException('Resume inventory reloaded', 'AbortError'), false)
-    this.#replaceInventoryLoad()
+    if (this.#closed || this.#options.isDisposed()) return
+    if (this.#pending !== undefined) {
+      this.#refreshRequested = true
+      return
+    }
     const attempt = this.#newAttempt('retained_inventory')
-    this.#closeInventoryBeforeLoad(attempt)
     const pending = this.#beginInventoryLoad(attempt)
     let loaded: RetainedReceiveInventory | undefined
     try {
@@ -245,6 +268,12 @@ export class RetainedInventoryCoordinator {
         this.#excludeInactiveLoad(pending)
         return
       }
+      if (pending.boundary !== this.#boundary) {
+        this.#closeLoadedInventory(loaded, attempt)
+        this.#exclude(attempt, 'stale_replacement')
+        this.#refreshRequested = true
+        return
+      }
       this.#settleLoadedInventoryPresentation(attempt, loaded)
       this.#publishLoadedInventory(presented)
     } catch {
@@ -252,56 +281,17 @@ export class RetainedInventoryCoordinator {
     } finally {
       this.#finishInventoryLoad(pending)
     }
-    this.#startAuthorizedLocalFinalization()
-  }
-
-  #startAuthorizedLocalFinalization(): void {
-    const inventory = this.#inventory
-    if (inventory === undefined || this.#pending !== undefined || this.#load !== undefined ||
-        this.#options.isDisposed() || (this.#options.localFinalizationBlocked?.() ?? true)) return
-    for (const operation of inventory.operations) {
-      const source = inventory.sourceOperations.get(operation)
-      const key = operation.operationId
-      if (source?.continuation !== 'resume-local-finalization' ||
-          !source.actions.includes('continue') || !operation.actions.includes('continue') ||
-          this.#automaticFinalizations.has(key)) continue
-      // Reopen itself advances the lifecycle generation, even if finalization fails.
-      // An operation gets one automatic attempt; subsequent attempts require user intent.
-      this.#automaticFinalizations.add(key)
-      this.perform(operation, 'continue')
-      return
-    }
-  }
-
-  #replaceInventoryLoad(): void {
-    const replaced = this.#load
-    if (replaced === undefined) return
-    replaced.controller.abort(
-      new DOMException('Resume inventory reloaded', 'AbortError'),
-    )
-    this.#exclude(replaced.attempt, 'stale_replacement')
-    this.#closeAttempt(replaced.attempt)
-  }
-
-  #closeInventoryBeforeLoad(attempt: RetainedAttempt): void {
-    try {
-      this.#inventory?.source.close()
-    } catch (error) {
-      this.#exclude(attempt, 'not_user_visible')
-      this.#closeAttempt(attempt)
-      throw error
-    }
-    this.#inventory = undefined
   }
 
   #beginInventoryLoad(attempt: RetainedAttempt): PendingInventoryLoad {
     const pending: PendingInventoryLoad = {
+      boundary: this.#boundary,
       controller: new AbortController(),
       attempt,
     }
     this.#load = pending
     try {
-      this.#publish(EMPTY_RETAINED_INVENTORY)
+      this.#publish(Object.freeze({ kind: 'loading', operations: this.#snapshot.operations, error: null, pending: null }))
       this.#trace(() => Object.freeze({
         name: 'receive.inventory.load.started',
       }))
@@ -314,7 +304,7 @@ export class RetainedInventoryCoordinator {
   }
 
   #isCurrentLoad(pending: PendingInventoryLoad): boolean {
-    return !this.#options.isDisposed() && this.#load === pending
+    return !this.#closed && !this.#options.isDisposed() && this.#load === pending
   }
 
   #closeLoadedInventory(
@@ -360,6 +350,14 @@ export class RetainedInventoryCoordinator {
   }
 
   #publishLoadedInventory(loaded: ResolvedRetainedInventory): void {
+    // A click may acquire the old inventory while discovery is awaiting storage.
+    // Its live references remain authoritative until that action settles.
+    if (this.#pending !== undefined) {
+      loaded.source.close()
+      this.#refreshRequested = true
+      return
+    }
+    this.#inventory?.source.close()
     this.#inventory = loaded
     this.#trace(() => Object.freeze({
       name: 'receive.inventory.load.completed',
@@ -373,8 +371,8 @@ export class RetainedInventoryCoordinator {
     pending?: PendingRetainedAction,
   ): void {
     this.#publish(Object.freeze({
-      kind: 'ready',
-      operations: Object.freeze([...inventory.operations]),
+      kind: inventory.operations.length === 0 ? 'empty' : 'available',
+      operations: inventory.operations,
       error: null,
       pending: pending === undefined
         ? null
@@ -394,6 +392,14 @@ export class RetainedInventoryCoordinator {
     if (publishClearedSnapshot && this.#inventory === pending.inventory) {
       this.#publishReadyInventory(pending.inventory)
     }
+    this.#scheduleRefresh()
+  }
+
+  #scheduleRefresh(): void {
+    if (!this.#refreshRequested || this.#closed || this.#options.isDisposed() ||
+        this.#pending !== undefined || this.#loadWork !== undefined) return
+    this.#refreshRequested = false
+    void this.load()
   }
 
   #settleInventoryLoadFailure(
@@ -405,10 +411,16 @@ export class RetainedInventoryCoordinator {
       this.#excludeInactiveLoad(pending)
       return
     }
+    if (pending.boundary !== this.#boundary) {
+      this.#exclude(pending.attempt, 'stale_replacement')
+      this.#refreshRequested = true
+      return
+    }
     this.#recordFailure(pending.attempt, 'retained_inventory')
+    if (this.#pending !== undefined) return
     this.#publish(Object.freeze({
       kind: 'failed',
-      operations: Object.freeze([]),
+      operations: this.#inventory?.operations ?? Object.freeze([]),
       error: 'Stored receive tasks could not be loaded.',
       pending: null,
     }))
@@ -531,7 +543,7 @@ export class RetainedInventoryCoordinator {
       }))
       this.#clearPending(pending, false)
       this.#options.onActionCompleted?.(pending.operation.operationId, pending.action)
-      this.#loadInventory().catch(() => undefined)
+      this.load().catch(() => undefined)
     } finally {
       this.#closeAttempt(pending.attempt)
     }
@@ -620,7 +632,7 @@ export class RetainedInventoryCoordinator {
         continuation: pending.operation.continuation,
       }))
       this.#clearPending(pending, false)
-      this.#loadInventory().catch(() => undefined)
+      this.load().catch(() => undefined)
     } finally {
       this.#closeAttempt(pending.attempt)
     }
@@ -665,7 +677,7 @@ export class RetainedInventoryCoordinator {
       throw settlementError
     } finally {
       this.#clearPending(pending, false)
-      this.#loadInventory().catch(() => undefined)
+      this.load().catch(() => undefined)
       this.#closeAttempt(pending.attempt)
     }
   }

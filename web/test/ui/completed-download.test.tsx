@@ -201,7 +201,7 @@ describe('completed download ownership and presentation', () => {
     receive.retainedOperations = []
     controller.performRetainedAction(retained, 'forget')
     await waitFor(() => controller.getSnapshot().output.lifecycle === null &&
-      controller.getSnapshot().retained.kind === 'ready' && controller.getSnapshot().retained.operations.length === 0)
+      controller.getSnapshot().retained.kind === 'empty' && controller.getSnapshot().retained.operations.length === 0)
     expect(composeTasks(controller.getSnapshot()).tasks).toEqual([])
     await controller.dispose()
   })

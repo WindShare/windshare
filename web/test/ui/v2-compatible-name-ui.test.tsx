@@ -1,7 +1,7 @@
 import { presentCompatibleNameRepair } from '../../src/ui/compatible-name-repair-presentation'
 import { TaskDetails } from '../../src/ui/tasks/TaskView'
 import { presentTask, retainedTaskFacts } from '../../src/ui/tasks'
-import { experienceSnapshot } from './receiver-experience-fixture'
+import { experienceController, experienceSnapshot } from './receiver-experience-fixture'
 import { renderToString } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -60,7 +60,7 @@ describe('compatible-name receiver UI', () => {
       <ReceiverApp controller={controller(snapshot({
         output,
         retained: {
-          kind: 'ready', error: null, pending: null,
+          kind: 'available', error: null, pending: null,
           operations: [{
             operationId: lifecycle.operationId,
             receiveIntentDigest: lifecycle.receiveIntentDigest,
@@ -86,7 +86,7 @@ describe('compatible-name receiver UI', () => {
     const lifecycle = receiveLifecycle('published')
     const repairSummary = summary('completed', false)
     const retained: ReceiverSnapshot['retained'] = Object.freeze({
-      kind: 'ready',
+      kind: 'available',
       error: null,
       pending: null,
       operations: Object.freeze([Object.freeze({
@@ -113,7 +113,7 @@ describe('compatible-name receiver UI', () => {
     const lifecycle = receiveLifecycle('receiving')
     const repairSummary = summary('active', true)
     const retained: ReceiverSnapshot['retained'] = Object.freeze({
-      kind: 'ready',
+      kind: 'available',
       error: null,
       pending: null,
       operations: Object.freeze([Object.freeze({
@@ -160,7 +160,7 @@ function snapshot(
     preview: EMPTY_PREVIEW,
     output: EMPTY_OUTPUT_PRESENTATION,
     retained: Object.freeze({
-      kind: 'ready',
+      kind: 'available',
       operations: Object.freeze([]),
       error: null,
       pending: null,
@@ -171,6 +171,7 @@ function snapshot(
 
 function controller(value: ReceiverSnapshot): ReceiverController {
   return {
+    ...experienceController(value),
     subscribe: vi.fn(() => () => undefined),
     getSnapshot: vi.fn(() => value),
     retainedActionAdmission: vi.fn(() => ({ allowed: true, reason: null })),

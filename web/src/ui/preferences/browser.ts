@@ -6,7 +6,7 @@ function readSavedPreferences(): string | null {
 
 const browserLanguages = typeof navigator === 'undefined' ? ['en'] : navigator.languages
 export const browserPreferences = createPreferencesStore(
-  parsePreferences(typeof window === 'undefined' ? null : readSavedPreferences(), browserLanguages),
+  parsePreferences(null, browserLanguages),
   next => {
     try { window.localStorage.setItem(PREFERENCES_KEY, JSON.stringify(next)) } catch {
       // Restricted storage still permits in-memory language and appearance changes.
@@ -19,8 +19,12 @@ function applyPreferences(preferences: UIPreferences): void {
   document.documentElement.dataset.appearance = preferences.appearance
 }
 
-if (typeof document !== 'undefined') {
-  // Apply before React paints; system appearance itself remains a live CSS preference.
+let initialized = false
+export function initializeBrowserPreferences(): void {
+  if (initialized || typeof document === 'undefined') return
+  initialized = true
+  // The document captures and erases its capability before touching browser storage.
+  browserPreferences.replace(parsePreferences(readSavedPreferences(), browserLanguages))
   applyPreferences(browserPreferences.getSnapshot())
   browserPreferences.subscribe(() => applyPreferences(browserPreferences.getSnapshot()))
   window.addEventListener('storage', event => {

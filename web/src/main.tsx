@@ -1,119 +1,40 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import App from './App.tsx'
-import './index.css'
-import { browserBuildSnapshot } from './diagnostics/build-identity'
-import { createBrowserDiagnosticsComposition } from './application/diagnostics/composition'
-import { createBrowserTraceActivationStore } from './diagnostics/browser-trace-activation'
-import { BrowserDiagnosticsSession, observeDiagnosticsPage } from './diagnostics/browser/session'
-import { IndexedDBDiagnosticsArchive } from './diagnostics/browser/indexeddb-archive'
-import { createDiagnosticsDelivery } from './diagnostics/browser/delivery'
-import { DiagnosticsProvider } from './ui/diagnostics/DiagnosticsProvider'
-import { installWindShareDiagnostics } from './diagnostics/export/developer-api'
-import type { IncidentRecordV2 } from './diagnostics/export/incident-record-v2'
-import { createBrowserReceiveOperationMutationPort } from './output/resume/reopen-authority'
-import {
-  createBrowserReceiveComposition,
-  type BrowserReceiveWindow,
-} from './application/browser-receive/composition'
-import { createBrowserDirectZipComposition } from './application/browser-receive/direct-zip/production'
-import { ReceiverController } from './ui/controller'
 import { captureLocation, observeLocation } from './ui/capability/location'
+import { initializeBrowserPreferences } from './ui/preferences/browser'
 import { BrowserCapabilityIntake } from './ui/capability/intake'
-import { BrowserReceiverGateway } from './application/browser-share/gateway'
-import { BuiltinNetwork } from './application/network/builtin'
-import { networkObserver } from './application/network/diagnostics'
-import {
-  createConnectivityTraceSource,
-  createOutputTraceSource,
-  createProtocolTraceSource,
-  createReceiverTraceSource,
-} from './application/diagnostics/receive-trace'
+import { createDocumentDiagnostics } from './document/diagnostics'
+import { DocumentOwner } from './document/owner'
+import { DiagnosticsProvider } from './ui/diagnostics/DiagnosticsProvider'
+import App from './App'
+import './index.css'
 
-// Initialization runs outside React so StrictMode cannot duplicate capability
-// parsing, fragment erasure, or the pre-gesture relay join. Fragment erasure
-// happens before any fallible browser-capability discovery or receiver assembly.
-const initialCapability = captureLocation(window)
-
-// Late binding keeps startup incidents reportable before the controller exists,
-// without exposing the composition root to a temporal-dead-zone lookup.
-const controllerContext: {
-  read:
-    | (() => ReturnType<ReceiverController['getDiagnosticSnapshot']>)
-    | undefined
-} = { read: undefined }
-
-const diagnostics = createBrowserDiagnosticsComposition({
-  build: browserBuildSnapshot(),
-  activationStore: createBrowserTraceActivationStore(() => window.sessionStorage, initialCapability.pageUrl),
-  secureContext: window.isSecureContext,
-  consoleSink: Object.freeze({
-    error: (record: IncidentRecordV2) => console.error(record),
-  }),
-  controllerSnapshot: () => controllerContext.read?.(),
-})
-const diagnosticSession = new BrowserDiagnosticsSession({
-  runtime: diagnostics.runtime,
-  observeCapture: diagnostics.observeEvidence,
-  archive: new IndexedDBDiagnosticsArchive(() => window.indexedDB),
-  pageUrl: initialCapability.pageUrl,
-})
-const diagnosticDelivery = createDiagnosticsDelivery({
-  navigator: window.navigator,
-  document: window.document,
-  urls: URL,
-  defer: (callback, milliseconds) => window.setTimeout(callback, milliseconds),
-})
-const stopDiagnosticsObservation = observeDiagnosticsPage(window, diagnosticSession)
-const receiverTrace = createReceiverTraceSource(diagnostics.trace)
-const outputTrace = createOutputTraceSource(diagnostics.trace)
-const protocolTrace = createProtocolTraceSource(diagnostics.trace, diagnostics.failures)
-const connectivityTrace = createConnectivityTraceSource(diagnostics.trace)
-
-const receiveMutations = createBrowserReceiveOperationMutationPort({ outputTrace })
-const receiveComposition = createBrowserReceiveComposition(
-  window as BrowserReceiveWindow,
-  {
-    directZip: createBrowserDirectZipComposition(window as BrowserReceiveWindow, { outputTrace }),
-    resumeMutations: receiveMutations,
-    outputTrace,
-    localOutputFailures: diagnostics.localOutputFailures,
+// Capture precedes imports of the receiver and all fallible storage discovery.
+const initial = captureLocation(window)
+initializeBrowserPreferences()
+const diagnostics = createDocumentDiagnostics(window, initial.pageUrl)
+const intake = new BrowserCapabilityIntake(() => diagnostics.session.enableFromLink())
+const owner = new DocumentOwner({
+  pageUrl: initial.pageUrl,
+  load: () => import('./document/receiver-runtime').then(module => () =>
+    module.createReceiverRuntime(window, diagnostics, initial.pageUrl)),
+  acceptDiagnostics: location => intake.accept(location),
+  record: event => {
+    performance.mark(`windshare:startup:${event.attempt}:${event.transition}`)
+    if (event.transition === 'failed') console.error({ event: 'document_runtime', ...event })
   },
-)
-const network = new BuiltinNetwork(networkObserver(diagnostics.trace))
-const gateway = new BrowserReceiverGateway({
-  network,
-  protocolTrace,
-  connectivityTrace,
 })
-const controller = new ReceiverController(gateway, {
-  capabilityIntake: new BrowserCapabilityIntake(() => diagnosticSession.enableFromLink()),
-  receive: receiveComposition,
-  trace: receiverTrace,
-  incidents: diagnostics.incidents,
+const stopLocation = observeLocation(window, location => owner.openLocation(location))
+owner.openLocation(initial)
+window.addEventListener('pagehide', event => {
+  if (event.persisted) return
+  stopLocation()
+  void owner.dispose().catch(() => undefined).finally(() => diagnostics.dispose())
 })
-controllerContext.read = () => controller.getDiagnosticSnapshot()
-controller.initialize(initialCapability)
-const stopLocationObservation = observeLocation(window, captured => controller.openLocation(captured))
-installWindShareDiagnostics(window, diagnosticSession)
-
-window.addEventListener('pagehide', (event) => {
-  // A persisted page resumes the same controller from the back-forward cache;
-  // disposing it would leave key entry and transfer actions permanently inert.
-  if (event.persisted) {
-    return
-  }
-  stopLocationObservation()
-  network.close()
-  stopDiagnosticsObservation()
-  diagnosticSession.dispose()
-  controller.dispose().catch(() => undefined)
-})
-
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <DiagnosticsProvider session={diagnosticSession} delivery={diagnosticDelivery}>
-      <App controller={controller} />
+    <DiagnosticsProvider session={diagnostics.session} delivery={diagnostics.delivery}>
+      <App owner={owner} />
     </DiagnosticsProvider>
   </StrictMode>,
 )

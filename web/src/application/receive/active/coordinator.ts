@@ -17,7 +17,6 @@ import type { TransferAdmissionFailureAuthority } from '../../../transfer/job/ad
 import {
   TransferAdmissionFailureError,
   type TransferJobResult,
-  type TransferProgress,
 } from '../../../transfer/job'
 import { type LifecycleUserAction } from '../actions'
 import { isAbortError, ReceiveSourceInvalidatedError } from '../errors'
@@ -38,6 +37,7 @@ import {
 import { ReceiveSettlementDeadline } from './settlement-wait'
 import type { PresentationAttempt } from '../observation/attempt'
 import { isReceiveOutputDelivered } from '../completion'
+import type { TransferProgressObserver } from '../../../transfer/progress/observation'
 
 interface ActiveReceiveOperation extends ActiveReceiveLifecycleOperation {
   readonly boundary: number
@@ -62,7 +62,7 @@ interface ActiveReceiveOperation extends ActiveReceiveLifecycleOperation {
 export interface ActiveReceiveCoordinatorOptions {
   readonly state: ReceiveRuntimeState
   readonly ownsJoinedShare: (joined: ActiveReceiveJoinedShare) => boolean
-  readonly onProgress: (progress: TransferProgress) => void
+  readonly observeProgress: TransferProgressObserver
   readonly trace?: ReceiveObservationOptions['trace']
   readonly incidents?: ReceiveObservationOptions['incidents']
   readonly onActionError: (error: unknown) => void
@@ -87,7 +87,7 @@ export interface PreparedActiveReceiveAdoption {
 export class ActiveReceiveCoordinator {
   readonly #state: ReceiveRuntimeState
   readonly #ownsJoinedShare: (joined: ActiveReceiveJoinedShare) => boolean
-  readonly #onProgress: (progress: TransferProgress) => void
+  readonly #observeProgress: TransferProgressObserver
   readonly #traceSource: ReceiveObservationOptions['trace']
   readonly #observability: ActiveReceiveObservability
   readonly #lifecycle: ActiveReceiveLifecycle
@@ -100,7 +100,7 @@ export class ActiveReceiveCoordinator {
   constructor(options: ActiveReceiveCoordinatorOptions) {
     this.#state = options.state
     this.#ownsJoinedShare = options.ownsJoinedShare
-    this.#onProgress = options.onProgress
+    this.#observeProgress = options.observeProgress
     this.#traceSource = options.trace
     this.#observability = new ActiveReceiveObservability({
       ...(options.trace === undefined ? {} : { trace: options.trace }),
@@ -253,8 +253,8 @@ export class ActiveReceiveCoordinator {
         {
           selection: active.selection,
           transferJobId: active.runtime.transferJobId,
-          onProgress: progress => {
-            if (this.#operationIsCurrent(active)) this.#onProgress(progress)
+          observeProgress: (source, change) => {
+            if (this.#operationIsCurrent(active) && active.transfer === transfer) this.#observeProgress(source, change)
           },
           ...(this.#traceSource === undefined ? {} : { trace: this.#traceSource }),
           ...(attempt.handle === undefined ? {} : { incidentScope: attempt.handle }),

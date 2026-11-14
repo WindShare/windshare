@@ -1,0 +1,4 @@
+.document-opening { max-width: 720px; margin: 12vh auto; padding: 32px; }
+.document-opening > a { color: inherit; text-decoration: none; font-size: 1.125rem; font-weight: 650; }
+.document-opening h1 { font-size: clamp(1.75rem, 5vw, 2.5rem); font-weight: 550; letter-spacing: -.04em; margin-top: 56px; }
+.document-opening p { line-height: 1.6; }

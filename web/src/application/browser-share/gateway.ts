@@ -206,7 +206,7 @@ export class JoinedBrowserShare {
     connectivity: ConnectivityActivation,
     callbacks: Partial<Pick<
       TransferJobOptions,
-      | 'onProgress'
+      | 'observeProgress'
       | 'onMeasure'
       | 'trace'
       | 'transferJobId'

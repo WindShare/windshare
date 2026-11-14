@@ -1,3 +1,4 @@
+import { ReceiverProjections } from '../../src/ui/controller/projections'
 import { vi } from 'vitest'
 import type { ReceiverController } from '../../src/ui/controller'
 import { EMPTY_PREVIEW, EMPTY_PROGRESS, type ReceiverSnapshot } from '../../src/ui/model'
@@ -25,6 +26,8 @@ export function experienceSnapshot(patch: Partial<ReceiverSnapshot> = {}): Recei
 
 export function experienceController(snapshot: ReceiverSnapshot): ReceiverController {
   return {
+    presentation: new ReceiverProjections(snapshot, () => ({ allowed: true, reason: null }), () => ({ allowed: true, reason: null })),
+    ensureDownloads: vi.fn(async () => undefined),
     subscribe: vi.fn(() => () => undefined), getSnapshot: vi.fn(() => snapshot),
     submitKey: vi.fn(), toggleSelection: vi.fn(), openDirectory: vi.fn(), openBreadcrumb: vi.fn(),
     requestReconnect: vi.fn(), continueJoinWaiting: vi.fn(), cancelJoin: vi.fn(),

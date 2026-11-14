@@ -1,4 +1,4 @@
-import { experienceSnapshot } from './receiver-experience-fixture'
+import { experienceController, experienceSnapshot } from './receiver-experience-fixture'
 import { renderToString } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -68,13 +68,14 @@ function render(
     preview: EMPTY_PREVIEW,
     output: { ...output, lifecycle: { kind: 'receiving' as const, operationId: 'operation', receiveIntentDigest: 'intent', generation: 1n, activeLeaseId: 'lease' } },
     retained: Object.freeze({
-      kind: 'ready',
+      kind: 'available',
       operations: Object.freeze([]),
       error: null,
       pending: null,
     }),
   })
   const controller = {
+    ...experienceController(snapshot),
     subscribe: vi.fn(() => () => undefined),
     getSnapshot: vi.fn(() => snapshot),
   } as unknown as ReceiverController

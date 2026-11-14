@@ -43,9 +43,9 @@ class BrowsableTransferShare extends FakeJoinedShare {
   override transferJob(
     plans: PlanExecutionAuthority, intent: ReceiveIntent,
     _connectivity?: ConnectivityActivation,
-    options?: { onProgress?: (progress: TransferProgress) => void },
+    options?: { observeProgress?: import('../../src/transfer/progress/observation').TransferProgressObserver },
   ) {
-    this.onProgress = options?.onProgress
+    this.onProgress = progress => options?.observeProgress?.({ transferJobId: 'test-job', read: () => progress }, 'transition')
     return super.transferJob(plans, intent)
   }
 }

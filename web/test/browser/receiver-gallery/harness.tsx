@@ -1,3 +1,7 @@
+import { ReceiverProjections } from '../../../src/ui/controller/projections'
+import { ReceiverDownloads } from '../../../src/ui/receiver-presentation/ReceiverTasks'
+import { useState } from 'react'
+import { initializeBrowserPreferences } from '../../../src/ui/preferences/browser'
 import { createRoot, type Root } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import { PortalApp } from '../../../src/ui/portal/PortalApp'
@@ -12,6 +16,7 @@ import type { ReceiveLifecycleState } from '../../../src/output/workspace'
 import type { RetainedReceiveAction, RetainedReceiveOperation } from '../../../src/application/receive/contracts'
 import '../../../src/index.css'
 import '../../../src/App.css'
+import { usePortalCopy } from '../../../src/ui/portal/locales/use-portal-copy'
 
 let root: Root | undefined
 let active: GalleryController | undefined
@@ -26,7 +31,12 @@ class GalleryController {
   // controller tracks it for rollback.
   #presentedSeconds = 0
   close = () => { if (this.#videoUrl !== undefined) URL.revokeObjectURL(this.#videoUrl) }
-  constructor(snapshot: ReceiverSnapshot) { this.#snapshot = snapshot }
+  readonly presentation: ReceiverProjections
+  ensureDownloads = async () => undefined
+  constructor(snapshot: ReceiverSnapshot) {
+    this.#snapshot = snapshot
+    this.presentation = new ReceiverProjections(snapshot, this.retainedActionAdmission, this.activeLifecycleActionAdmission)
+  }
   getSnapshot = () => this.#snapshot
   subscribe = (listener: () => void) => {
     this.#listeners.add(listener)
@@ -34,6 +44,7 @@ class GalleryController {
   }
   #publish(patch: Partial<ReceiverSnapshot>) {
     this.#snapshot = { ...this.#snapshot, ...patch }
+    this.presentation.commit(this.#snapshot)
     for (const listener of this.#listeners) listener()
   }
   recordExperienceIntent = (action: string) => { this.intents.push(action) }
@@ -200,8 +211,15 @@ export async function mountGallery(scenario: Scenario = 'folder'): Promise<void>
   root = createRoot(container)
   // Test data supplies snapshots and records intents; every rendered control is
   // the production receiver, with no networking or destination authority.
-  const Surface = scenario.startsWith('portal') ? PortalApp : ReceiverApp
-  flushSync(() => root!.render(<Surface controller={active as unknown as ReceiverController} />))
+  initializeBrowserPreferences()
+  const controller = active as unknown as ReceiverController
+  function PortalSurface() {
+    const [open, setOpen] = useState(false)
+    const copy = usePortalCopy()
+    return <PortalApp controller={controller} downloads={<ReceiverDownloads controller={controller} open={open} onOpenChange={setOpen}
+      entryLabel={copy.downloads} entryDescription={copy.downloadsDescription} />} />
+  }
+  flushSync(() => root!.render(scenario.startsWith('portal') ? <PortalSurface /> : <ReceiverApp controller={controller} />))
 }
 
 export function holdVideoSeeks() { active!.holdVideoSeeks = true }

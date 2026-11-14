@@ -130,7 +130,7 @@ describe('retained inventory local finalization and identity admission', () => {
     expect(harness.actionErrors).toEqual([])
   })
 
-  it('automatically finalizes only source-confirmed local content after competing work releases admission', async () => {
+  it('requires an explicit action to finish local content even after admission becomes available', async () => {
     const original = operation(['continue'], 'resume-local-finalization')
     let blocked = true
     let dispatches = 0
@@ -147,6 +147,8 @@ describe('retained inventory local finalization and identity admission', () => {
     expect(dispatches).toBe(0)
     blocked = false
     await harness.coordinator.load()
+    expect(dispatches).toBe(0)
+    harness.coordinator.perform(harness.publications.at(-1)!.operations[0]!, 'continue')
     expect(dispatches).toBe(1)
     expect(harness.publications.at(-1)?.pending).toEqual({ operationId: original.operationId, action: 'continue' })
     action.resolve({ kind: 'completed' })
@@ -155,7 +157,7 @@ describe('retained inventory local finalization and identity admission', () => {
     expect(dispatches).toBe(1)
   })
 
-  it('does not repeat failed automatic finalization after reopen advances the lifecycle generation', async () => {
+  it('does not retry a failed local finalization on inventory refresh', async () => {
     const original = operation(['continue'], 'resume-local-finalization')
     let generation = original.lifecycleGeneration
     let dispatches = 0
@@ -167,6 +169,7 @@ describe('retained inventory local finalization and identity admission', () => {
       throw new DOMException('Local output is full', 'QuotaExceededError')
     })), undefined, { localFinalizationBlocked: () => false })
     await harness.coordinator.load()
+    harness.coordinator.perform(harness.publications.at(-1)!.operations[0]!, 'continue')
     for (let index = 0; index < 8; index += 1) await Promise.resolve()
     await harness.coordinator.load()
     expect(dispatches).toBe(1)
@@ -208,6 +211,43 @@ describe('retained inventory local finalization and identity admission', () => {
     expect(harness.actionErrors).toHaveLength(1)
   })
 
+})
+
+describe('retained refresh authority', () => {
+  it.each(['before', 'after'] as const)('preserves a live action settling %s an in-flight inventory read', async order => {
+    const original = operation(['save'], 'save-artifact')
+    const action = deferred<RetainedReceiveActionResult>()
+    const refresh = deferred<RetainedReceiveInventory>()
+    let reads = 0
+    let oldClosed = 0
+    let staleClosed = 0
+    const owned = { ...testInventory([original], () => action.promise), close: () => { oldClosed++ } }
+    const harness = retainedHarness(() => {
+      reads++
+      if (reads === 1) return Promise.resolve(owned)
+      if (reads === 2) return refresh.promise
+      return Promise.resolve(testInventory([]))
+    })
+    await harness.coordinator.load()
+    const refreshing = harness.coordinator.load()
+    await Promise.resolve()
+    harness.coordinator.perform(original, 'save')
+    if (order === 'before') { action.resolve({ kind: 'completed' }); await turns() }
+    expect(oldClosed).toBe(0)
+    refresh.resolve({ ...testInventory([original]), close: () => { staleClosed++ } })
+    await refreshing
+    if (order === 'after') {
+      expect(harness.coordinator.pending).toBe(true)
+      expect(oldClosed).toBe(0)
+      action.resolve({ kind: 'completed' })
+    }
+    await turns()
+    expect(staleClosed).toBe(1)
+    expect(reads).toBe(3)
+    expect(oldClosed).toBe(1)
+    expect(harness.coordinator.getSnapshot()).toMatchObject({ kind: 'empty', pending: null })
+    expect(harness.actionErrors).toEqual([])
+  })
 })
 
 describe('retained inventory incident ownership', () => {
@@ -279,39 +319,23 @@ describe('retained inventory incident ownership', () => {
     expect(harness.incidents.owners[0]?.isClosed()).toBe(true)
   })
 
-  it('closes a replaced load as stale without sharing its scope or quota', async () => {
-    const first = deferred<RetainedReceiveInventory>()
-    const second = deferred<RetainedReceiveInventory>()
-    let loadCount = 0
-    const harness = retainedHarness(() => {
-      loadCount += 1
-      return loadCount === 1 ? first.promise : second.promise
-    })
-
-    const stale = harness.coordinator.load()
-    const current = harness.coordinator.load()
-    second.resolve(testInventory([]))
-    await current
-    first.resolve(testInventory([]))
-    await stale
-
-    expect(harness.incidents.decisions).toMatchObject([
-      {
-        scope: { scopeKind: 'retained_inventory', scopeSequence: 1n },
-        decision: {
-          kind: 'excluded',
-          reason: 'stale_replacement',
-        },
-      },
-      {
-        scope: { scopeKind: 'retained_inventory', scopeSequence: 2n },
-        decision: {
-          kind: 'excluded',
-          reason: 'success',
-        },
-      },
-    ])
-    expect(harness.incidents.owners.every((owner) => owner.isClosed())).toBe(true)
+  it('shares a single inventory load and presentation scope between concurrent callers', async () => {
+    const pending = deferred<RetainedReceiveInventory>()
+    let calls = 0
+    const harness = retainedHarness(() => { calls++; return pending.promise })
+    const first = harness.coordinator.ensureLoaded()
+    const second = harness.coordinator.ensureLoaded()
+    expect(first).toBe(second)
+    pending.resolve(testInventory([]))
+    await first
+    expect(calls).toBe(1)
+    expect(harness.incidents.decisions).toMatchObject([{
+      scope: { scopeKind: 'retained_inventory', scopeSequence: 1n },
+      decision: { kind: 'excluded', reason: 'success' },
+    }])
+    expect(harness.incidents.owners.every(owner => owner.isClosed())).toBe(true)
+    await harness.coordinator.ensureLoaded()
+    expect(calls).toBe(1)
   })
 
   it('submits source-reviewed needs-attention facts before publishing ready inventory', async () => {
@@ -336,7 +360,7 @@ describe('retained inventory incident ownership', () => {
       undefined,
       {
         onPublish: published => {
-          if (published.kind === 'ready') order.push('ready')
+          if (published.kind === 'available') order.push('ready')
         },
       },
     )
@@ -346,7 +370,7 @@ describe('retained inventory incident ownership', () => {
 
     expect(order).toEqual(['decision', 'ready'])
     expect(harness.publications.at(-1)).toMatchObject({
-      kind: 'ready',
+      kind: 'available',
       operations: [retained],
     })
     expect(harness.incidents.decisions).toHaveLength(1)
@@ -720,7 +744,7 @@ describe('retained action incident ownership', () => {
       harness.coordinator.perform(retained, action)
 
       expect(snapshotDuringAct).toMatchObject({
-        kind: 'ready',
+        kind: 'available',
         operations: [retained],
         pending: { operationId: retained.operationId, action },
       })
@@ -730,14 +754,14 @@ describe('retained action incident ownership', () => {
       actionGate.resolve(Object.freeze({ kind: 'completed' }))
       await turns()
       expect(harness.publications.at(-1)).toMatchObject({
-        kind: 'ready',
+        kind: 'available',
         pending: null,
       })
       expect(harness.coordinator.pending).toBe(false)
     },
   )
 
-  it('aborts and clears a pending action before replacing its inventory', async () => {
+  it('defers refresh without aborting or replacing a pending action', async () => {
     const retained = operation(['save'], 'save-artifact')
     const actionGate = deferred<RetainedReceiveActionResult>()
     let actionSignal: AbortSignal | undefined
@@ -751,11 +775,11 @@ describe('retained action incident ownership', () => {
     harness.coordinator.perform(retained, 'save')
     await harness.coordinator.load()
 
-    expect(actionSignal?.aborted).toBe(true)
-    expect(harness.coordinator.pending).toBe(false)
+    expect(actionSignal?.aborted).toBe(false)
+    expect(harness.coordinator.pending).toBe(true)
     expect(harness.publications.at(-1)).toMatchObject({
-      kind: 'ready',
-      pending: null,
+      kind: 'available',
+      pending: { operationId: retained.operationId, action: 'save' },
     })
 
     actionGate.resolve(Object.freeze({ kind: 'completed' }))

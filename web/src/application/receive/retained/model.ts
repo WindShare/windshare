@@ -14,13 +14,19 @@ export interface PendingRetainedReceiveActionSnapshot {
 
 export type RetainedReceiveInventorySnapshot =
   | Readonly<{
+      kind: 'unloaded'
+      operations: readonly RetainedReceiveOperationSnapshot[]
+      error: null
+      pending: null
+    }>
+  | Readonly<{
       kind: 'loading'
       operations: readonly RetainedReceiveOperationSnapshot[]
       error: null
       pending: null
     }>
   | Readonly<{
-      kind: 'ready'
+      kind: 'empty' | 'available'
       operations: readonly RetainedReceiveOperationSnapshot[]
       error: null
       pending: PendingRetainedReceiveActionSnapshot | null
@@ -33,7 +39,7 @@ export type RetainedReceiveInventorySnapshot =
     }>
 
 export const EMPTY_RETAINED_INVENTORY: RetainedReceiveInventorySnapshot = Object.freeze({
-  kind: 'loading',
+  kind: 'unloaded',
   operations: Object.freeze([]),
   error: null,
   pending: null,

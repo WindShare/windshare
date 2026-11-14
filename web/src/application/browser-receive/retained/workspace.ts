@@ -1,3 +1,4 @@
+import { continuationMismatch } from './operation-lifetime'
 import { openOriginPrivateRetainedArtifactBackend } from '../../../output/origin-private/session'
 import { TargetOwnershipUnknownError } from '../../../output/persistent-tree/errors'
 import type {
@@ -176,9 +177,4 @@ export async function continueRetainedWorkspaceOperation(
   if (cleanupFailed) throw cleanupFailure
 }
 
-export function continuationMismatch(): DOMException {
-  return new DOMException(
-    'Retained continuation does not match its reopened authority',
-    'InvalidStateError',
-  )
-}
+export { continuationMismatch } from './operation-lifetime'

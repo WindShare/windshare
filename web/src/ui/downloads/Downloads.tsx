@@ -4,7 +4,7 @@ import { TaskCard, TaskDetails, type TaskViewActions } from '../tasks/TaskView'
 import { DetailSheet } from '../controls/DetailSheet'
 import { ReceiverIcon } from '../receiver-presentation/ReceiverIcon'
 
-export function Downloads({ tasks, actions, loading, error, busy, details, entryLabel = 'Downloads', entryDescription, onIntent, open, onOpenChange }: {
+export function Downloads({ tasks, actions, loading, error, busy, details, entryLabel = 'Downloads', entryDescription, onIntent, onRetry, open, onOpenChange }: {
   readonly tasks: readonly TaskPresentation[]
   readonly actions: TaskViewActions
   readonly loading: boolean
@@ -14,6 +14,7 @@ export function Downloads({ tasks, actions, loading, error, busy, details, entry
   readonly entryLabel?: string
   readonly entryDescription?: string
   readonly onIntent: (action: string) => void
+  readonly onRetry?: () => void
   readonly open: boolean
   readonly onOpenChange: (open: boolean) => void
 }) {
@@ -52,7 +53,8 @@ export function Downloads({ tasks, actions, loading, error, busy, details, entry
         <TaskDetails task={selected} actions={actions} busy={busy}>{details?.(selected.operationId)}</TaskDetails>
         : <div ref={index} tabIndex={-1} className="downloads-index">
           {loading && <p role="status">Loading downloads…</p>}
-          {error !== null && <p className="downloads-error" role="alert">{error}</p>}
+          {error !== null && <div className="downloads-error" role="alert"><p>{error}</p>
+            {onRetry !== undefined && <button type="button" onClick={onRetry}>Try again</button>}</div>}
           {!loading && error === null && tasks.length === 0 && <div className="downloads-empty">
             <p>No downloads yet.</p><p>Downloads you start here will appear in this browser.</p>
           </div>}
