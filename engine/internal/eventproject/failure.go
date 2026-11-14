@@ -20,6 +20,7 @@ import (
 	task "github.com/windshare/windshare/engine/internal/task"
 	appobs "github.com/windshare/windshare/engine/observation"
 	output "github.com/windshare/windshare/engine/output"
+	"github.com/windshare/windshare/engine/relayprofile"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	relayv2 "github.com/windshare/windshare/transport/relayv2"
 	wsrtc "github.com/windshare/windshare/transport/webrtc"
@@ -143,7 +144,7 @@ func classifyDirectError(cause error) (appobs.Failure, bool) {
 		)
 		return failure, err == nil
 	}
-	if exactError(cause, share.ErrInvalidChunkSize) {
+	if exactError(cause, share.ErrInvalidChunkSize) || exactError(cause, relayprofile.ErrCandidatesRequired) {
 		return mustFailure(appobs.FailureInvalidInput), true
 	}
 	if exactError(cause, context.DeadlineExceeded) {
@@ -174,9 +175,8 @@ func classifyDirectError(cause error) (appobs.Failure, bool) {
 	}
 	switch {
 	case exactError(cause, networkruntime.ErrUnavailable):
-		// No configured relay and no usable built-in directory: a network-class
-		// condition, reached through errors.Join/%w wrappers by the traversal above.
-		return mustFailure(appobs.FailureRelayTransport), true
+		// Planning and alias resolution can fail before any relay connection exists.
+		return mustFailure(appobs.FailureNetworkUnavailable), true
 	case exactError(cause, relayset.ErrReceiverUnavailable):
 		return mustFailure(appobs.FailureRelayNotFound), true
 	case exactError(cause, relayset.ErrReceiverWaitExpired):

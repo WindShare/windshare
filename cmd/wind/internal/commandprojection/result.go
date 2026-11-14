@@ -79,10 +79,31 @@ func ProjectCommandFailure(
 	exit clievent.ExitCode,
 	cause error,
 ) (clievent.CommandFailed, error) {
-	failure, present := ClassifyError(cause)
-	if !present {
-		failure = mustFailure(appobs.FailureUnexpected)
+	return projectCommandFailure(command, exit, commandFailure(cause))
+}
+
+// ProjectStartFailure owns status for failures before a task exists. Settled task
+// failures retain their authoritative failure class through ProjectCommandFailure.
+func ProjectStartFailure(command clievent.Command, cause error) (clievent.CommandFailed, error) {
+	failure := commandFailure(cause)
+	exit := clievent.ExitFailure
+	switch failure.Code() {
+	case appobs.FailureNetworkUnavailable:
+		exit = clievent.ExitNetwork
+	case appobs.FailureInvalidInput, appobs.FailureCapabilityInvalid:
+		exit = clievent.ExitUsage
 	}
+	return projectCommandFailure(command, exit, failure)
+}
+
+func commandFailure(cause error) appobs.Failure {
+	if failure, present := ClassifyError(cause); present {
+		return failure
+	}
+	return mustFailure(appobs.FailureUnexpected)
+}
+
+func projectCommandFailure(command clievent.Command, exit clievent.ExitCode, failure appobs.Failure) (clievent.CommandFailed, error) {
 	event, err := clievent.NewCommandFailed(command, exit, failure)
 	if err != nil {
 		return clievent.CommandFailed{}, ErrInvalidProjection

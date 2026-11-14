@@ -7,6 +7,7 @@ const (
 	MessageInterrupted
 	MessageTimedOut
 	MessageInvalidRequest
+	MessageNetworkUnavailable
 	MessageCapabilityInvalid
 	MessageSelectionMissing
 	MessageRelayRejected
@@ -49,6 +50,8 @@ func (value SafeMessageKey) Name() (string, bool) {
 		return "timed_out", true
 	case MessageInvalidRequest:
 		return "invalid_request", true
+	case MessageNetworkUnavailable:
+		return "network_unavailable", true
 	case MessageCapabilityInvalid:
 		return "capability_invalid", true
 	case MessageSelectionMissing:
