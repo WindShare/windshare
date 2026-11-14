@@ -75,11 +75,7 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		var err error
 		saved, err = a.loadShareConfig()
 		if err != nil {
-			if errors.Is(err, relayconfig.ErrFrontURL) {
-				a.writeCompleteLine("share: %s", err)
-			} else {
-				a.writeCompleteLine("share: cannot load sharing configuration; check windshare/config.json or WINDSHARE_CONFIG")
-			}
+			a.writeCompleteLine("share: %s", savedConfigurationFailure(err))
 			return shareRequest{}, requestParseUsageFailure
 		}
 	}
@@ -122,4 +118,16 @@ func shareFrontend(flags *flag.FlagSet, override, saved string) (string, error) 
 		}
 	}
 	return override, nil
+}
+
+// Only errors known to carry no configuration values are shown verbatim.
+func savedConfigurationFailure(err error) string {
+	switch {
+	case errors.Is(err, relayconfig.ErrFrontURL):
+		return err.Error()
+	case errors.Is(err, relayconfig.ErrRepeatedMember):
+		return err.Error() + "; fix windshare/config.json or WINDSHARE_CONFIG, or re-import a clean configuration with wind config import"
+	default:
+		return "cannot load sharing configuration; check windshare/config.json or WINDSHARE_CONFIG"
+	}
 }

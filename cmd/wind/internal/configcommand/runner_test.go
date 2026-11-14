@@ -100,6 +100,26 @@ func TestImportFailureDoesNotSaveOrExposePrivateInput(t *testing.T) {
 	}
 }
 
+// jq and python -m json.tool accept repeated members, so the message must name
+// the member for the user to find it.
+func TestImportNamesRepeatedMember(t *testing.T) {
+	var output, trace bytes.Buffer
+	runner := Runner{
+		Input:        strings.NewReader(`{"profiles":[{"url":"https://a.example","access_key":"secret-canary","URL":"https://private.example"}]}`),
+		Output:       bufferLines{buffer: &output},
+		TraceHandler: slog.NewJSONHandler(&trace, nil),
+		Save:         func(relayconfig.Config) error { t.Fatal("rejected import was saved"); return nil },
+	}
+	if result := runner.Run(context.Background(), []string{"import", "-", "--verbose"}); result != ResultUsage {
+		t.Fatal("repeated member was not a usage error:", result)
+	}
+	want := `config import: invalid sharing configuration; member "URL" appears more than once in profiles[0]`
+	if !strings.HasPrefix(output.String(), want) || !strings.Contains(trace.String(), `"reason":"repeated_member"`) {
+		t.Fatalf("output=%q trace=%q", output.String(), trace.String())
+	}
+	assertPrivateOutput(t, output.String()+trace.String())
+}
+
 func TestImportParsePreservesFrontendValidationCause(t *testing.T) {
 	for _, raw := range []string{"", "https://front.example/app\u00a0", "https://front.example/app\u0085", "wss://front.example"} {
 		if _, err := parse([]string{"import", "-", "--front-url", raw}); !errors.Is(err, relayconfig.ErrFrontURL) {
