@@ -104,11 +104,12 @@ Deployment templates and procedures live in
    budgets cover owner and public relay egress; P4 contribution caps cover public relay egress only.
    Exhaustion stops covered traffic, including existing sessions. Control traffic and any finite
    communication reserve count toward the total. P2 adds scheduling within these limits.
-9. **Anonymous senders get the lowest class.** Senders without a ticket may use idle official
-   capacity, are refused first under pressure, and are limited per source; the console switches
-   the class per node. It is off by default on `cn` nodes and on for `global` nodes. Mainland relay
-   service stays disabled until P2 adds account admission. Existing P2P paths continue independently;
-   new P2P negotiation still needs an admitted signaling path.
+9. **Official sharing normally uses accounts; anonymous admission is a fallback.** Clients reuse
+   credentials or start account setup automatically. Permitted anonymous senders use idle capacity
+   at the lowest class, yield under contention, and are refused first under pressure, with per-source
+   limits. The console switches anonymous admission per node: off by default on `cn`, on for `global`.
+   Mainland relay service stays disabled until P2 adds account admission. Existing P2P paths continue
+   independently; new P2P negotiation still needs an admitted signaling path.
 10. **Cloudflare hosts the web and the authority, not relaying.** The official site and the
     non-mainland side of the link host are static assets. The authority runs on Workers and Durable
     Object SQLite. The Cloudflare Workers relay and Cloudflare TURN are not part of the official
@@ -391,9 +392,10 @@ Account admission and fair relaying enable mainland service and public promotion
   controls apply to new account creation, independently of existing accounts and transfers.
 - Engine account component: start account setup on first use of official service, show PoW progress,
   and retain selected files through authorization. Reuse saved credentials and refresh tickets in
-  the background. New shares use an available valid ticket for official nodes; anonymous admission
-  is a fallback when none is available. Usable authorized or permitted anonymous paths need not wait
-  for the account service; otherwise surface authorization/retry. Login applies to new shares;
+  the background. New shares use an available valid ticket for official nodes; permitted anonymous
+  admission is a fallback when none is available, while account setup continues. Choose admission
+  automatically as part of normal sharing. Usable paths need not wait for the account service;
+  otherwise surface authorization/retry. Login applies to new shares;
   existing anonymous registrations retain their attribution for that share's lifetime.
   `senderrelay.Candidate`'s static `AccessKey` becomes a registration-authorization source, either a
   static key or a ticket provider, defined as an interface in `senderrelay`.
