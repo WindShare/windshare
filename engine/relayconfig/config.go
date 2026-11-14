@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/engine/internal/statefile"
@@ -21,6 +22,7 @@ import (
 const (
 	PathEnvironment = "WINDSHARE_CONFIG"
 	maxConfigBytes  = 64 * 1024
+	maxConfigDepth  = 64
 	MaximumProfiles = 64
 )
 
@@ -91,15 +93,18 @@ func loadPath(path string, missingAllowed bool) (Config, error) {
 }
 
 func Decode(reader io.Reader) (Config, error) {
-	limited := &io.LimitedReader{R: reader, N: maxConfigBytes + 1}
-	decoder := json.NewDecoder(limited)
+	data, err := io.ReadAll(io.LimitReader(reader, maxConfigBytes+1))
+	if err != nil || len(data) > maxConfigBytes || uniqueMembers(json.NewDecoder(bytes.NewReader(data))) != nil {
+		return Config{}, ErrConfig
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var disk document
 	if err := decoder.Decode(&disk); err != nil {
 		return Config{}, ErrConfig
 	}
 	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF || limited.N == 0 {
+	if err := decoder.Decode(&trailing); err != io.EOF {
 		return Config{}, ErrConfig
 	}
 	result := Config{ManagedTURNPolicies: disk.ManagedTURNPolicies, FrontURL: disk.FrontURL, ActiveRelays: disk.ActiveRelays, ConfiguredOnly: disk.ConfiguredOnly}
@@ -117,6 +122,54 @@ func Decode(reader io.Reader) (Config, error) {
 	}
 	return result, nil
 }
+
+// uniqueMembers rejects objects that repeat a member name. encoding/json keeps
+// the last repetition and matches names case-insensitively, so "url" followed by
+// "URL" would silently bind an earlier access key to a different relay.
+func uniqueMembers(decoder *json.Decoder) error {
+	var visit func(int) error
+	visit = func(depth int) error {
+		if depth > maxConfigDepth {
+			return ErrConfig
+		}
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		switch token {
+		case json.Delim('{'):
+			seen := map[string]bool{}
+			for decoder.More() {
+				key, err := decoder.Token()
+				if err != nil {
+					return err
+				}
+				name, ok := key.(string)
+				// Fold like encoding/json's field matching, including U+017F and U+212A.
+				folded := strings.ToLower(strings.ToUpper(name))
+				if !ok || seen[folded] {
+					return ErrConfig
+				}
+				seen[folded] = true
+				if err := visit(depth + 1); err != nil {
+					return err
+				}
+			}
+		case json.Delim('['):
+			for decoder.More() {
+				if err := visit(depth + 1); err != nil {
+					return err
+				}
+			}
+		default:
+			return nil
+		}
+		_, err = decoder.Token()
+		return err
+	}
+	return visit(0)
+}
+
 func (config Config) Validate() error {
 	_, err := encode(config)
 	return err
