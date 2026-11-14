@@ -8,12 +8,11 @@ use crate::{
     share_animation::ShareScene,
 };
 use gpui::{Div, div, prelude::*, px, relative};
-use windshare_ui::{ButtonStyle, Icon, Theme, Tone, column, icon, row};
+use windshare_ui::{ButtonStyle, COMPACT_BUTTON_HEIGHT, Icon, Theme, Tone, column, icon, row};
 
 const RESULT_SECTION_GAP: f32 = 24.;
 const RESULT_FILE_ICON_SIZE: f32 = 52.;
 const RESULT_TITLE_SIZE: f32 = 26.;
-const RESULT_LINK_HEIGHT: f32 = 32.;
 const LINK_ACTIVITY_WIDTH: f32 = 220.;
 const LINK_ACTIVITY_HEIGHT: f32 = 4.;
 const LINK_ACTIVITY_SEGMENT: f32 = 0.3;
@@ -112,50 +111,45 @@ impl Desktop {
             .border_color(theme.border())
             .child(
                 row()
+                    // Keep the card settled when result controls become available.
+                    .min_h(px(COMPACT_BUTTON_HEIGHT))
                     .gap(px(7.))
                     .opacity(if share.finished() { 0. } else { 1. })
                     .child(icon(Icon::Monitor, 16.).text_color(theme.muted_text()))
                     .child(theme.caption(locale.text(Text::KeepOpenToReceive))),
             )
-            .child(
-                row()
-                    .gap(px(8.))
-                    .when(!self.runtime.is_preview() && !pending, |el| {
-                        let (text, symbol, action) = share.control();
-                        el.child(
+            .when(!pending, |el| {
+                el.child(
+                    row()
+                        .gap(px(8.))
+                        .when(!self.runtime.is_preview(), |el| {
+                            let (text, symbol, action) = share.control();
+                            el.child(
+                                Self::button(
+                                    "result-control",
+                                    locale.text(text),
+                                    symbol,
+                                    ButtonStyle::Quiet,
+                                    action,
+                                    cx,
+                                )
+                                .compact()
+                                .disabled(matches!(share.state, ShareState::Stopping)),
+                            )
+                        })
+                        .child(
                             Self::button(
-                                "result-control",
-                                locale.text(text),
-                                symbol,
-                                ButtonStyle::Quiet,
-                                action,
+                                "share-again",
+                                locale.text(Text::NewShare),
+                                Icon::Plus,
+                                ButtonStyle::Secondary,
+                                Action::ResetShare,
                                 cx,
                             )
-                            .compact()
-                            .disabled(matches!(share.state, ShareState::Stopping)),
-                        )
-                    })
-                    .child(
-                        Self::button(
-                            "share-again",
-                            locale.text(if pending {
-                                Text::Cancel
-                            } else {
-                                Text::NewShare
-                            }),
-                            if pending { Icon::Close } else { Icon::Plus },
-                            if pending {
-                                ButtonStyle::Quiet
-                            } else {
-                                ButtonStyle::Secondary
-                            },
-                            Action::ResetShare,
-                            cx,
-                        )
-                        .compact()
-                        .when(pending, |button| button.focus_handle(&self.primary_focus)),
-                    ),
-            )
+                            .compact(),
+                        ),
+                )
+            })
     }
 
     fn result_action(
@@ -177,7 +171,7 @@ impl Desktop {
         } else if matches!(share.state, ShareState::Preparing) {
             actions = actions.child(
                 row()
-                    .h(px(RESULT_LINK_HEIGHT))
+                    .h(px(COMPACT_BUTTON_HEIGHT))
                     .justify_center()
                     .child(link_activity(theme, scene)),
             );

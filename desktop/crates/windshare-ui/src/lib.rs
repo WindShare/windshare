@@ -20,7 +20,7 @@ pub use surface::rounded_surface;
 
 pub use artwork::{VectorArtwork, VectorSprite};
 pub use assets::Assets;
-pub use button::{Button, ButtonStyle, LARGE_BUTTON_HEIGHT};
+pub use button::{Button, ButtonStyle, COMPACT_BUTTON_HEIGHT, LARGE_BUTTON_HEIGHT};
 pub use icons::{Icon, icon};
 pub use input::{Input, InputEvent};
 pub use primitives::*;

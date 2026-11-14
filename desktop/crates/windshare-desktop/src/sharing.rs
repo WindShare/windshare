@@ -172,28 +172,6 @@ impl Desktop {
                 locale,
                 ready,
             ))
-            .when(!ready, |el| {
-                el.child(
-                    row()
-                        .absolute()
-                        .bottom_0()
-                        .w_full()
-                        .justify_center()
-                        .opacity(visibility)
-                        .child(
-                            Self::button(
-                                "cancel-share",
-                                locale.text(Text::Cancel),
-                                Icon::Close,
-                                ButtonStyle::Ghost,
-                                Action::ResetShare,
-                                cx,
-                            )
-                            .compact()
-                            .focus_handle(&self.primary_focus),
-                        ),
-                )
-            })
     }
 }
 
@@ -206,7 +184,7 @@ fn preparation_message(
 ) -> Div {
     column()
         .absolute()
-        .bottom(px(44.))
+        .bottom_0()
         .w_full()
         .items_center()
         .gap(px(8.))

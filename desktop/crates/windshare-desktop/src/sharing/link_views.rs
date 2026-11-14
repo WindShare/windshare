@@ -1,7 +1,7 @@
 use crate::{
     desktop::Desktop,
     flow_state::CopyFeedback,
-    localization::{Text, language},
+    localization::{Language, Text, language},
     model::{Action, Overlay, Share},
 };
 use gpui::{Div, Role, Stateful, Window, div, prelude::*, px};
@@ -14,6 +14,7 @@ const QR_INLINE_MIN_SIDE: f32 = 240.;
 const QR_INLINE_MAX_SIDE: f32 = 288.;
 const QR_MODULE_SIDE: f32 = 4.;
 const QR_FRAME_BORDER: f32 = 1.;
+const QR_CAPTION_PADDING: f32 = 6.;
 
 pub(super) fn inline_qr_side(share: Option<&Share>) -> f32 {
     share
@@ -119,6 +120,11 @@ impl Desktop {
                 .items_center()
                 .gap(px(8.))
                 .flex_shrink_0()
+                // Match the ready QR action's border and caption to avoid a result-card jump.
+                .border_1()
+                .border_color(gpui::transparent_black())
+                .text_size(px(13.))
+                .text_color(theme.muted_text())
                 .child(
                     column()
                         .size(px(QR_FRAME_BORDER.mul_add(2., side)))
@@ -128,7 +134,7 @@ impl Desktop {
                         .bg(theme.inset())
                         .child(icon(Icon::Link, 26.).text_color(theme.muted_text())),
                 )
-                .child(theme.caption(locale.text(Text::ScanToReceive)).opacity(0.4));
+                .child(qr_caption(theme, locale, false).opacity(0.4));
         };
         let Some(code) = share.usable_link().and_then(|link| link.qr().ok()) else {
             return column()
@@ -159,13 +165,7 @@ impl Desktop {
                     .overflow_hidden()
                     .child(code.view(side)),
             )
-            .child(
-                row()
-                    .gap(px(7.))
-                    .py(px(6.))
-                    .child(locale.text(Text::ScanToReceive))
-                    .child(icon(Icon::Expand, 14.).text_color(theme.muted_text())),
-            ),
+            .child(qr_caption(theme, locale, true)),
         )
     }
 
@@ -199,6 +199,16 @@ impl Desktop {
         );
         self.open_overlay(Overlay::ShareQr(id), window, cx);
     }
+}
+
+fn qr_caption(theme: Theme, locale: Language, ready: bool) -> Div {
+    row()
+        .gap(px(7.))
+        .py(px(QR_CAPTION_PADDING))
+        .child(locale.text(Text::ScanToReceive))
+        .when(ready, |el| {
+            el.child(icon(Icon::Expand, 14.).text_color(theme.muted_text()))
+        })
 }
 
 fn link_action(
