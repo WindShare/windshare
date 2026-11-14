@@ -109,8 +109,7 @@ func (a *Application) runSetup(ctx context.Context, operationID string, input Se
 	if result.RelayURL == "" {
 		a.setup.Recovery = relaysetup.RecoveryRestart
 	}
-	var setupError *relaysetup.SetupError
-	if errors.As(err, &setupError) {
+	if setupError, ok := errors.AsType[*relaysetup.SetupError](err); ok {
 		a.setup.Recovery = setupError.Recovery.Action
 	}
 	cancelled := ctx.Err() != nil || a.closing

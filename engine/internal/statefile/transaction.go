@@ -34,6 +34,9 @@ type Transaction struct {
 
 func StateDirectory(path string) string { return path + ".state" }
 
+// SettingsPath lets configuration errors identify the same file held by the transaction.
+func (tx *Transaction) SettingsPath() string { return tx.path }
+
 // ReadSettings needs no writable directory in the ordinary sharing path. A
 // pending multi-file commit is recovered first; otherwise atomic replacement
 // guarantees that a concurrent writer exposes either complete settings version.

@@ -4,7 +4,6 @@ package relayconfig
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +11,7 @@ import (
 	"path/filepath"
 
 	"github.com/windshare/windshare/connectivity/relayset"
+	"github.com/windshare/windshare/engine/internal/configjson"
 	"github.com/windshare/windshare/engine/internal/statefile"
 	"github.com/windshare/windshare/engine/relayprofile"
 	"github.com/windshare/windshare/engine/turn"
@@ -27,6 +27,8 @@ const (
 var (
 	ErrConfig   = errors.New("invalid sharing configuration")
 	ErrRelayURL = errors.New("invalid relay URL")
+	// Decode wraps both ErrConfig and ErrRepeatedMember for ambiguous names.
+	ErrRepeatedMember = configjson.ErrRepeatedMember
 )
 
 type Config struct {
@@ -91,19 +93,32 @@ func loadPath(path string, missingAllowed bool) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	return Decode(bytes.NewReader(data))
+	return decodeSaved(path, data)
+}
+
+func decodeSaved(path string, data []byte) (Config, error) {
+	config, err := Decode(bytes.NewReader(data))
+	if errors.Is(err, ErrRepeatedMember) {
+		// Report the file used by this operation, including injected/relative paths.
+		// Editing through a read-modify-write cannot repair a rejected document.
+		if absolute, pathErr := filepath.Abs(path); pathErr == nil {
+			path = absolute
+		}
+		return Config{}, fmt.Errorf("%w; remove repeated members from %+q and retry", err, path)
+	}
+	return config, err
 }
 
 func Decode(reader io.Reader) (Config, error) {
-	limited := &io.LimitedReader{R: reader, N: maxConfigBytes + 1}
-	decoder := json.NewDecoder(limited)
-	decoder.DisallowUnknownFields()
-	var disk document
-	if err := decoder.Decode(&disk); err != nil {
+	data, err := io.ReadAll(io.LimitReader(reader, maxConfigBytes+1))
+	if err != nil || len(data) > maxConfigBytes {
 		return Config{}, ErrConfig
 	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF || limited.N == 0 {
+	var disk document
+	if err := configjson.Decode(data, &disk); err != nil {
+		if errors.Is(err, ErrRepeatedMember) {
+			return Config{}, fmt.Errorf("%w; %w", ErrConfig, err)
+		}
 		return Config{}, ErrConfig
 	}
 	result := Config{ManagedTURNPolicies: disk.ManagedTURNPolicies, FrontURL: disk.FrontURL, ActiveRelays: disk.ActiveRelays, ConfiguredOnly: disk.ConfiguredOnly}
@@ -121,6 +136,7 @@ func Decode(reader io.Reader) (Config, error) {
 	}
 	return result, nil
 }
+
 func (config Config) Validate() error {
 	_, err := encode(config)
 	return err
