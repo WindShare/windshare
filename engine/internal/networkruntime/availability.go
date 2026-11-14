@@ -33,8 +33,7 @@ func (r *Runtime) Unavailability() *networkdirectory.UnavailableError {
 }
 
 func unavailable(cause error, reason networkdirectory.BlockingReason) *networkdirectory.UnavailableError {
-	var failure *networkdirectory.UnavailableError
-	if errors.As(cause, &failure) {
+	if failure, ok := errors.AsType[*networkdirectory.UnavailableError](cause); ok {
 		return failure
 	}
 	return &networkdirectory.UnavailableError{Reason: reason, Cause: cause}
