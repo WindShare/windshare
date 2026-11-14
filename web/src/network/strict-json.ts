@@ -48,8 +48,17 @@ export function object(value: unknown, keys: readonly string[]): Record<string, 
   return value as Record<string, unknown>
 }
 
+// Mirrors Go's validText: no Unicode White_Space (Go's unicode.IsSpace, unlike
+// String.prototype.trim) or U+FEFF at either edge. U+FEFF is singled out because
+// it and U+0085 are exactly where Go TrimSpace and JS trim() disagree, and it is
+// common copy/paste or editor residue. Other invisible characters (U+200B,
+// U+2060, U+200F at an edge, or an inner BOM) are still accepted.
+// \p{White_Space} comes from the engine's Unicode tables (stable since 6.3);
+// test/network/text-edges.test.ts sweeps every code point against Go's list.
+const INVISIBLE_EDGE = /^[\p{White_Space}\uFEFF]|[\p{White_Space}\uFEFF]$/u
+
 export function text(value: unknown): string {
-  if (typeof value !== 'string' || value === '' || new TextEncoder().encode(value).length > 128 || value.trim() !== value || /[\0\r\n\t]/.test(value)) throw new TypeError('Invalid network directory text')
+  if (typeof value !== 'string' || value === '' || new TextEncoder().encode(value).length > 128 || INVISIBLE_EDGE.test(value) || /[\0\r\n\t]/.test(value)) throw new TypeError('Invalid network directory text')
   return value
 }
 

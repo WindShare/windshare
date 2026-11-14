@@ -19,7 +19,7 @@ function Invoke-Step([string]$Label, [scriptblock]$Body) {
 
 Write-Output '== vectors =='
 Invoke-Step 'verify signed network directory vectors' {
-    go test -count=1 ./core/nodedirectory -run TestBrowserDirectoryVectors
+    go test -count=1 ./core/nodedirectory -run 'Test(BrowserDirectory|TextEdge)Vectors'
 }
 Invoke-Step 'verify TURN control vectors' {
     go test -count=1 ./core/session/turncontrol
