@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/windshare/windshare/engine/relayconfig"
@@ -70,6 +71,20 @@ func TestShareConfigurationFailuresDoNotFallBackToLocalhost(t *testing.T) {
 				t.Fatal("configuration failure exposed private input or a capability")
 			}
 		})
+	}
+}
+
+func TestShareNamesRepeatedMemberInSavedConfiguration(t *testing.T) {
+	stderr := new(bytes.Buffer)
+	app := &App{Stdout: new(bytes.Buffer), Stderr: stderr, loadShareConfig: func() (relayconfig.Config, error) {
+		return relayconfig.Decode(strings.NewReader(`{"profiles":[{"url":"https://a.example","access_key":"private-error-token","url":"https://b.example"}]}`))
+	}}
+	t.Cleanup(app.closeTerminalOutput)
+	if _, outcome := app.parseShareRequest([]string{"root", "--front-url", "https://front.example"}); outcome != requestParseUsageFailure {
+		t.Fatal("configuration with a repeated member was accepted")
+	}
+	if !strings.Contains(stderr.String(), `member "url" appears more than once in profiles[0]`) || strings.Contains(stderr.String(), "private-error-token") {
+		t.Fatalf("share did not name only the repeated member: %q", stderr.String())
 	}
 }
 
