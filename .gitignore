@@ -71,7 +71,14 @@ config.yaml
 cmd/switch-a/config.yaml
 tmpclaude-*
 review_agent.md
+# Keep shared repo skills under /.agents/skills while ignoring all other .agents state.
 .agents
+!/.agents/
+/.agents/*
+!/.agents/skills/
+/.agents/skills/*
+!/.agents/skills/gpui-performance/
+!/.agents/skills/modern-web-guidance/
 .tmp
 
 # 第三方参考克隆(仅本地查阅,不入库);锚定仓库根,勿殃及 transport/webrtc/
