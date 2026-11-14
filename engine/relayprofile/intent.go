@@ -1,6 +1,11 @@
 package relayprofile
 
-import "slices"
+import (
+	"errors"
+	"slices"
+)
+
+var ErrCandidatesRequired = errors.New("relay intent excludes the built-in network but has no candidates")
 
 type IntentMode uint8
 
@@ -28,3 +33,16 @@ func UseExplicit(candidates []Candidate) Intent {
 }
 func (i Intent) Mode() IntentMode        { return i.mode }
 func (i Intent) Candidates() []Candidate { return slices.Clone(i.candidates) }
+
+// Validate distinguishes an impossible selection from unavailable infrastructure:
+// retrying cannot supply candidates when the caller excludes the built-in network.
+func (i Intent) Validate() error {
+	if len(i.candidates) == 0 {
+		if i.mode != Planned {
+			return ErrCandidatesRequired
+		}
+		return nil
+	}
+	_, err := PublicURLs(i.candidates)
+	return err
+}

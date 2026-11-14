@@ -11,7 +11,9 @@ import (
 	"github.com/windshare/windshare/adapters/filesystem"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
+	networkruntime "github.com/windshare/windshare/engine/internal/networkruntime"
 	appobs "github.com/windshare/windshare/engine/observation"
+	"github.com/windshare/windshare/engine/relayprofile"
 	"github.com/windshare/windshare/osfs"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
@@ -269,6 +271,10 @@ func TestRawProviderTextTerminatesAtFailureProjection(t *testing.T) {
 		{&url.Error{Op: "dial", URL: secret, Err: opaqueCanaryError{secret}}, appobs.FailureRelayTransport},
 		{transferfault.Wrap(mustOutputFault(t), opaqueCanaryError{secret}), appobs.FailureOutputStateIO},
 		{wsrtc.ErrPeerProtocol, appobs.FailurePeerProtocol},
+		{networkruntime.ErrUnavailable, appobs.FailureNetworkUnavailable},
+		{errors.Join(networkruntime.ErrUnavailable, opaqueCanaryError{secret}), appobs.FailureNetworkUnavailable},
+		{fmt.Errorf("start share: %w", errors.Join(networkruntime.ErrUnavailable, opaqueCanaryError{secret})), appobs.FailureNetworkUnavailable},
+		{relayprofile.ErrCandidatesRequired, appobs.FailureInvalidInput},
 	}
 	for _, test := range tests {
 		failure, present := ClassifyError(test.name)

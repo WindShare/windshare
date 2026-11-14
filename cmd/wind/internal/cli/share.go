@@ -39,8 +39,7 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 	// belongs to the engine and therefore outlives this command's canceled wait.
 	current, err := a.application.StartShare(context.WithoutCancel(ctx), a.engineShareRequest(request, runtime))
 	if err != nil {
-		emitShareCommandFailure(runtime, ExitFailure, err)
-		return ExitFailure
+		return runtime.failToStart(err)
 	}
 	if a.networkSetup != nil {
 		networkcommand.ObserveStartup(a.networkSetup, runtime, clievent.CommandShare)
