@@ -1,4 +1,9 @@
 @import './ui/preferences/appearance.css';
+@import './ui/receiver-presentation/theme.css';
+@import './ui/controls/controls.css';
+@import './ui/controls/detail-sheet.css';
+
+#root { min-height: 100vh; }
 
 :root {
   color: light-dark(#173f35, #edf6ee);

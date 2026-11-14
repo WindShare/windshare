@@ -1,9 +1,6 @@
-@import './ui/receiver-presentation/theme.css';
+@import './ui/receiver-presentation/sheets.css';
 @import './ui/receiver-presentation/controls.css';
 @import './ui/receiver-presentation/chrome.css';
 @import './ui/receiver-presentation/fold.css';
 @import './ui/receiver-presentation/content.css';
 @import './ui/receiver-presentation/tasks.css';
-@import './ui/receiver-presentation/sheets.css';
-
-#root { min-height: 100vh; }

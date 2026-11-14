@@ -40,18 +40,10 @@ import type {
 } from '../receive/contracts'
 import { PresentationSourceError } from '../receive/contracts'
 import type { BrowserReceiveWindow } from '../../output/browser/environment'
-import { FSAArtifactPresentationAuthority } from './fsa/route'
-import { BrowserFolderDeliveryProgress } from './fsa/folder-delivery'
-import { inspectBrowserStagingStorage } from '../../output/capability/staging-storage'
-import { startPortableArtifactAuthority } from './portable/route'
-import {
-  listBrowserRetainedOperations,
-  readBrowserCompatibleNameRepairSummary,
-  type BrowserRetainedCompositionOptions,
-} from './retained/inventory'
+import type { BrowserRetainedCompositionOptions } from './retained/inventory'
+import { deferArtifactAuthority } from './deferred-authority'
 import { portableEnvironmentOffer, quotaAvailability, workspaceEnvironmentOffer } from './environment-offers'
 import { unavailableRoute } from './route-contract'
-import { startWorkspaceArtifactAuthority } from './workspace/route'
 import {
   inspectBrowserDirectZipEnvironment,
   startBrowserDirectZipAuthority,
@@ -92,15 +84,26 @@ export function createBrowserReceiveComposition(
   let nativeSupportProbe: Promise<boolean> | undefined
   const composition: ReceiveCompositionPort = {
     retained: Object.freeze({
-      list: (signal: AbortSignal) => listBrowserRetainedOperations(windowPort, options, signal),
-      readRepairSummary: (operationId: string, signal: AbortSignal) =>
-        readBrowserCompatibleNameRepairSummary(options, operationId, signal),
+      list: async (signal: AbortSignal) => {
+        const retained = await import('./retained/production')
+        signal.throwIfAborted()
+        return retained.listRetainedOperations(windowPort, options, signal)
+      },
+      readRepairSummary: async (operationId: string, signal: AbortSignal) => {
+        const retained = await import('./retained/inventory')
+        signal.throwIfAborted()
+        return retained.readBrowserCompatibleNameRepairSummary(options, operationId, signal)
+      },
     }),
     environment: async (signal) => {
       signal.throwIfAborted()
       nativeSupportProbe ??= probeNativeObjectSupport(windowPort as unknown as NativeSupportRuntime)
       nativeObjectSupported = await nativeSupportProbe
       const registry = await inspectBrowserRouteRegistry(windowPort, options.directZip, nativeObjectSupported, signal)
+      // Preparation is speculative; support facts and acquired authority do not depend on it.
+      if (registry.fsaParent !== null) void import('./fsa/production').catch(() => undefined)
+      if (registry.workspaceOffer !== null) void import('./workspace/route').catch(() => undefined)
+      if (registry.portableOffer !== null) void import('./portable/route').catch(() => undefined)
       installedDirectZip = registry.installedDirectZip
       return probeBrowserEnvironment(registry.runtime, {
         ...(registry.directZipTarget === null ? {} : { targets: [registry.directZipTarget] }),
@@ -300,22 +303,16 @@ function startProductionAuthority(
       } catch (error) {
         throw pickerPresentationError(error)
       }
+      picked.catch(() => undefined)
       const diagnostics = diagnosticsFor('file_system_access', outputTrace, binding.sinks)
       return bindArtifactAuthorityOutputFailures(
-        new FSAArtifactPresentationAuthority({
-          folderDelivery: {
-            preference: recoveryPreference,
-            storage: windowPort.navigator.storage,
-            storageFacts: () => inspectBrowserStagingStorage(windowPort.navigator.storage,
-              nativeObjectSupported && typeof windowPort.navigator.storage?.getDirectory === 'function'),
-            progress: new BrowserFolderDeliveryProgress(),
-          },
+        deferArtifactAuthority(import('./fsa/production').then(module => module.createFSAArtifactAuthority({
           offered,
           picked,
           preClickRanking,
           ...(diagnostics === undefined ? {} : { diagnostics }),
           ...localOutputFailuresOption(localOutputFailures),
-        }),
+        }, windowPort, nativeObjectSupported, recoveryPreference))),
         binding,
         display,
       )
@@ -329,13 +326,13 @@ function startProductionAuthority(
       }
       const diagnostics = diagnosticsFor('origin_private', outputTrace, binding.sinks)
       return bindArtifactAuthorityOutputFailures(
-        startWorkspaceArtifactAuthority({
+        deferArtifactAuthority(import('./workspace/route').then(module => module.startWorkspaceArtifactAuthority({
           windowPort,
           offered,
           preClickRanking,
           ...(trace === undefined ? {} : { trace }),
           ...(diagnostics === undefined ? {} : { diagnostics }),
-        }),
+        }))),
         binding,
         display,
       )
@@ -348,12 +345,12 @@ function startProductionAuthority(
         throw unavailableRoute()
       }
       return bindArtifactAuthorityOutputFailures(
-        startPortableArtifactAuthority(
+        deferArtifactAuthority(import('./portable/route').then(module => module.startPortableArtifactAuthority(
           windowPort,
           offered,
           diagnosticsFor('portable', outputTrace, binding.sinks),
           preClickRanking,
-        ),
+        ))),
         binding,
         display,
       )

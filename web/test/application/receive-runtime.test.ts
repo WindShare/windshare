@@ -25,7 +25,7 @@ async function fixture() {
   const inventoryChanged = vi.fn()
   const active = new ActiveReceiveCoordinator({
     state, ownsJoinedShare: source => source === joined,
-    onProgress: () => undefined, onFailure: error => errors.push(error),
+    observeProgress: () => undefined, onFailure: error => errors.push(error),
     onActionError: error => errors.push(error),
     onOwnershipReleased: () => runtime.ownershipReleased(),
   })

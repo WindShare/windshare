@@ -1,3 +1,4 @@
+import type { ProgressChange, TransferProgressObserver, TransferProgressSource } from '../progress/observation'
 import type { ContentLaneStatus } from '../../content/broker'
 import type { IncidentScopeHandle } from '../../diagnostics/incident'
 import type { DomainTraceSource } from '../../diagnostics/trace/ports'
@@ -29,7 +30,8 @@ export interface TransferObserversOptions {
   }>
   readonly lanes: ContentLaneStatus
   readonly incidentScope?: IncidentScopeHandle
-  readonly onProgress?: (progress: TransferProgress) => void
+  readonly observeProgress?: TransferProgressObserver
+  readonly readProgress: () => TransferProgressState
   readonly onMeasure?: (measure: SelectionMeasure) => void
   readonly trace?: DomainTraceSource<TransferTraceEvent>
 }
@@ -61,9 +63,11 @@ export interface TransferProgressState {
 export class TransferObservers {
   readonly #options: TransferObserversOptions
   #performance: PerformanceSummaryObservations | undefined
+  readonly #progress: TransferProgressSource
 
   constructor(options: TransferObserversOptions) {
     this.#options = options
+    this.#progress = Object.freeze({ transferJobId: options.transferJobId, read: () => this.#readProgress() })
   }
 
   bindPerformance(performance: PerformanceSummaryObservations | undefined): void {
@@ -88,13 +92,11 @@ export class TransferObservers {
     }
   }
 
-  progress(state: TransferProgressState): void {
-    const partial = state.measure.discovery === 'failed' ||
-      state.failedDirectories > 0 ||
-      state.fileErrors > 0 ||
-      state.selectionErrors > 0
-    try {
-      this.#options.onProgress?.(Object.freeze({
+  #readProgress(): TransferProgress {
+    const state = this.#options.readProgress()
+    const partial = state.measure.discovery === 'failed' || state.failedDirectories > 0 ||
+      state.fileErrors > 0 || state.selectionErrors > 0
+    return Object.freeze({
         discoveredFiles: state.measure.discoveredFiles,
         discoveredBytes: state.measure.discoveredBytes,
         phase: state.phase,
@@ -116,11 +118,17 @@ export class TransferObservers {
         partial,
         transferJobId: this.#options.transferJobId,
         ...(state.outputSessionId === undefined ? {} : { outputSessionId: state.outputSessionId }),
-      }))
-    } catch {
+    })
+  }
+
+  progress(change: ProgressChange = 'transition'): void {
+    try { this.#options.observeProgress?.(this.#progress, change) } catch {
       // Product observers cannot alter catalog, output, or settlement authority.
     }
-
+    if (this.#performance === undefined && this.#options.trace?.current === undefined) return
+    const state = this.#options.readProgress()
+    const partial = state.measure.discovery === 'failed' || state.failedDirectories > 0 ||
+      state.fileErrors > 0 || state.selectionErrors > 0
     observePerformance(this.#performance, summary => {
       if (state.writtenBytes > 0n) summary.markMilestone('first_write')
       const discoveryComplete = state.measure.discovery === 'complete'

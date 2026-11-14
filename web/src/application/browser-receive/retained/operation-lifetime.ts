@@ -59,3 +59,10 @@ export async function withRetainedOperationClose<Result>(
   if (cleanupFailed) throw cleanupFailure
   return result!
 }
+
+export function continuationMismatch(): DOMException {
+  return new DOMException(
+    'Retained continuation does not match its reopened authority',
+    'InvalidStateError',
+  )
+}

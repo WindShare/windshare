@@ -1,10 +1,8 @@
-import { useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useRef, useState, useSyncExternalStore, type ReactNode, type ComponentType } from 'react'
 import type { BrowserDiagnosticsSession, BrowserDiagnosticsSnapshot } from '../../diagnostics/browser/session'
 import type { DiagnosticsDelivery } from '../../diagnostics/browser/delivery'
 import { DetailSheet } from '../controls/DetailSheet'
 import { DiagnosticsPanelContext } from './context'
-import { DiagnosticFileActions } from './DiagnosticFileActions'
-import { PreviousDiagnostics } from './PreviousDiagnostics'
 import { diagnosticsCaptureLabel } from './presentation'
 import './diagnostics.css'
 
@@ -15,15 +13,24 @@ export function DiagnosticsProvider({ session, delivery, children }: {
 }) {
   const snapshot = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot)
   const [open, setOpen] = useState(false)
+  const [panel, setPanel] = useState<ComponentType<{ snapshot: BrowserDiagnosticsSnapshot; session: BrowserDiagnosticsSession; delivery: DiagnosticsDelivery }> | null>(null)
+  const [loadFailed, setLoadFailed] = useState(false)
+  const preparePanel = () => {
+    setLoadFailed(false)
+    void import('./DiagnosticsPanel').then(module => setPanel(() => module.DiagnosticsPanel), () => setLoadFailed(true))
+  }
   const invoker = useRef<HTMLElement | null>(null)
   const openPanel = (element: HTMLElement) => {
     invoker.current = element
     // Failure incidents can arrive while detailed trace capture is off.
     session.refresh()
     setOpen(true)
+    if (panel === null) preparePanel()
   }
-  const { capture, activation, previousCaptures, hasCurrentEvidence } = snapshot
-  const label = diagnosticsCaptureLabel(capture)
+  const Panel = panel
+  const pendingPanel = loadFailed
+    ? <p role="alert">Unable to open diagnostics. <button type="button" onClick={preparePanel}>Retry</button></p>
+    : <p role="status">Opening diagnostics&hellip;</p>
 
   return <DiagnosticsPanelContext value={openPanel}>
     <DiagnosticsNotice snapshot={snapshot} onOpen={openPanel} onStop={() => session.disable()} />
@@ -31,22 +38,8 @@ export function DiagnosticsProvider({ session, delivery, children }: {
     {open && <div className="diagnostics-surface">
       <DetailSheet title="Diagnostics" onClose={() => setOpen(false)} returnFocus={invoker}
         returnLabel="Close diagnostics" className="diagnostics-sheet">
-        <p role="status">{label}</p>
-        <p>Record a problem and send the diagnostic file to the person helping you. Recording is local to this tab.</p>
-        <div className="diagnostics-actions">
-          {activation.kind === 'active' && <button type="button" onClick={() => session.disable()}>Stop recording</button>}
-          {!capture.enabled && <button type="button" onClick={() => session.enable()}>Start recording</button>}
-        </div>
-        {activation.kind === 'active' && <p>Recording ends at{' '}
-          {new Date(activation.expiresAtMilliseconds).toLocaleTimeString()}.</p>}
-        {snapshot.archiveUnavailable && <p role="status">Local backup is unavailable. Export diagnostics before leaving this page.</p>}
-        {hasCurrentEvidence ? <section aria-label="Current diagnostics">
-          <h3>Current diagnostics</h3>
-          {snapshot.savedAt !== null && <p>Last saved locally: {new Date(snapshot.savedAt).toLocaleString()}</p>}
-          <DiagnosticFileActions key={capture.capture_generation} readFile={() => session.exportFile()} delivery={delivery} />
-        </section> : <p>No diagnostics have been recorded on this page yet.</p>}
-        <PreviousDiagnostics captures={previousCaptures} readFile={session.readSavedFile} delivery={delivery} />
-        <p>Recent diagnostic files are kept locally for up to 24 hours, within a fixed storage limit.</p>
+        {Panel !== null ? <Panel snapshot={snapshot} session={session} delivery={delivery} />
+          : pendingPanel}
       </DetailSheet>
     </div>}
   </DiagnosticsPanelContext>

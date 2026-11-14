@@ -1,6 +1,6 @@
 import { renderToString } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import App from '../../src/App'
+import { ReceiverApp as App } from '../../src/ui/ReceiverApp'
 import { experienceController, experienceSnapshot } from './receiver-experience-fixture'
 
 describe('receiver experience', () => {
@@ -12,7 +12,7 @@ describe('receiver experience', () => {
       rows: [{ id: 'album', kind: 'directory', name: 'Album', selection: 'mixed' }],
       draft: { mode: 'selection', scope: 'selected', label: 'Album', summary: '1 folder selected, excluding 1 item', empty: false },
       startAdmission: { allowed: false, reason: 'Finish saving the current result first.', canReleaseCurrent: false },
-      retained: { kind: 'ready', operations: [], error: null, pending: { operationId: 'task', action: 'save' } },
+      retained: { kind: 'available', operations: [], error: null, pending: { operationId: 'task', action: 'save' } },
     }))} />)
     expect(html).toContain('Holiday photos</h1>')
     expect(html).toContain('Finish saving the current result first.')
@@ -35,7 +35,7 @@ describe('receiver experience', () => {
   it('keeps admitted local finalization visible as the current task without duplicating its history row', () => {
     const html = renderToString(<App controller={experienceController(experienceSnapshot({
       phase: 'browsing', breadcrumbs: [{ id: 'root', name: 'Shared files' }],
-      retained: { kind: 'ready', error: null, pending: { operationId: 'local-task', action: 'continue' }, operations: [{
+      retained: { kind: 'available', error: null, pending: { operationId: 'local-task', action: 'continue' }, operations: [{
         operationId: 'local-task', receiveIntentDigest: 'intent', lifecycleGeneration: 1n,
         display: { objectLabel: 'Summer photos', createdAtMilliseconds: 1000 },
         lifecycle: { kind: 'resumable-package', operationId: 'local-task', receiveIntentDigest: 'intent', generation: 1n,

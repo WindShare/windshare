@@ -50,8 +50,10 @@ export type { ReceiverTraceEvent, RetainedInventoryTraceEvent } from '../applica
 
 import { ReceiveOperationTransitions } from './operation-ownership/transitions'
 import type { SourceRevisionFailure } from '../transfer/lifecycle/source-revision'
+import { ReceiverProjections } from './controller/projections'
 
 export class ReceiverController {
+  readonly presentation: ReceiverProjections
   readonly #gateway: BrowserReceiverGateway
   readonly #receive: BrowserReceiveApplication<JoinedBrowserShare>
   readonly #capabilityLifecycle: CapabilityInputLifecycle
@@ -74,6 +76,7 @@ export class ReceiverController {
   #joinNavigation: AbortController | undefined
   #joinRecovery: InitialJoinControl | undefined
   #disposed = false
+  #presentationDepth = 0
   readonly #operationTransitions: ReceiveOperationTransitions
 
   constructor(
@@ -89,6 +92,7 @@ export class ReceiverController {
       currentJoinedShare: () => this.#joined,
       isDisposed: () => this.#disposed,
       onProgress: progress => this.#transferProgress(progress),
+      commitPresentation: commit => this.#commitPresentation(commit),
       onRetainedChanged: retained => this.#publish({ ...this.#snapshot, retained }),
       onChanged: () => { if (!this.#disposed) this.#publish(this.#snapshot) },
       onTaskAdopted: display => {
@@ -125,6 +129,9 @@ export class ReceiverController {
       onProtocolGeneration: joined => this.#beginSelectionProjection(joined, 'observation-replacement'),
     })
     this.#snapshot = initialReceiverSnapshot()
+    this.presentation = new ReceiverProjections(this.#snapshot,
+      (operation, action) => this.retainedActionAdmission(operation, action),
+      action => this.activeLifecycleActionAdmission(action))
     this.#unsubscribeOutput = this.#outputs.subscribe(() => {
       if (!this.#disposed) this.#publish({ ...this.#snapshot, output: this.#outputs.getSnapshot() })
     })
@@ -163,8 +170,9 @@ export class ReceiverController {
     if (this.#disposed) return
     this.#pageUrl = captured.pageUrl
     this.openLocation(captured)
-    this.#receive.loadRetained().catch(() => undefined)
   }
+
+  ensureDownloads(): Promise<void> { return this.#receive.ensureRetained() }
 
   openLocation(captured: CapturedLocation): void {
     if (this.#disposed) return
@@ -377,6 +385,7 @@ export class ReceiverController {
       ...(this.#joined === undefined ? [] : [this.#joined.close()]),
     ])
     this.#listeners.clear()
+    this.presentation.close()
   }
 
   #join(input: string, pageUrl = this.#pageUrl): Promise<void> {
@@ -560,6 +569,10 @@ export class ReceiverController {
       const entry = page.entries[0]
       if (entry?.kind === 'file') this.#previews.openAutomaticPhoto(joined, entry)
     }
+    if (!(share?.kind === 'browser' && share.singleFolder && page.directory.idText === joined.descriptor.syntheticRootId)) {
+      // The synthetic wrapper is not the directory the recipient came to browse.
+      queueMicrotask(() => { if (this.#joined === joined && !this.#disposed) void this.ensureDownloads() })
+    }
   }
 
   #refreshDraft(joined: JoinedBrowserShare, page: BrowsePage): void {
@@ -594,11 +607,23 @@ export class ReceiverController {
   #publish(snapshot: ReceiverSnapshot): void {
     this.#diagnosticGeneration += 1n
     const reason = this.#receive.tasks.startBlockedReason()
+    const previousAdmission = this.#snapshot.startAdmission
+    const canReleaseCurrent = this.#receive.tasks.canReleaseCurrent
+    const startAdmission = previousAdmission.reason === reason && previousAdmission.canReleaseCurrent === canReleaseCurrent
+      ? previousAdmission : Object.freeze({ allowed: reason === null, reason, canReleaseCurrent })
     this.#snapshot = Object.freeze({ ...snapshot,
       activeReceiveOperationId: this.#receive.operationId,
-      startAdmission: Object.freeze({ allowed: reason === null, reason,
-        canReleaseCurrent: this.#receive.tasks.canReleaseCurrent }) })
+      startAdmission })
+    if (this.#presentationDepth > 0) return
+    this.#commitPresentation(() => this.#receive.flushPresentation())
+  }
+
+  #commitPresentation(commit: () => void): void {
+    this.#presentationDepth++
+    try { commit() } finally { this.#presentationDepth-- }
+    if (this.#presentationDepth > 0 || this.#disposed) return
     this.#experienceTrace.publish(this.#snapshot)
+    this.presentation.commit(this.#snapshot)
     for (const listener of this.#listeners) listener()
   }
 }

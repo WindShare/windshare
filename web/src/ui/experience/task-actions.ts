@@ -2,7 +2,7 @@ import type { ReceiverController } from '../controller'
 import type { ReceiverSnapshot } from '../model'
 import type { TaskViewActions } from '../tasks/TaskView'
 
-export function taskActions(controller: ReceiverController, snapshot: ReceiverSnapshot): TaskViewActions {
+export function taskActions(controller: ReceiverController, snapshot: Pick<ReceiverSnapshot, 'retained' | 'output'>): TaskViewActions {
   return {
     perform: action => {
       if (action.disabledReason !== null) return

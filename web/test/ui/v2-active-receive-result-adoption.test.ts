@@ -275,7 +275,7 @@ async function resultAdoptionFixture(
   const coordinator = new ActiveReceiveCoordinator({
     state: receiveState,
     ownsJoinedShare: candidate => candidate === share,
-    onProgress: () => undefined,
+    observeProgress: () => undefined,
     onActionError: error => failures.push(error),
     onFailure: error => failures.push(error),
   })

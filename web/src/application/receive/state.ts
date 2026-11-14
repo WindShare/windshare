@@ -27,6 +27,8 @@ import { PersistentWriterOpenPauseRequestedError } from '../../output/execution/
 import type { AuthorityActivationSnapshot } from './activation/model'
 import { type ActiveReceiveControl, type ReceiveSettlementWait, type WorkspaceUsage, type PersistentWriterOpenPauseFact } from './actions'
 import type { DirectZipProgressSnapshot } from './contracts'
+import type { ProgressChange } from '../../transfer/progress/observation'
+import { folderProgressChange, directZipProgressChange } from './observation/progress-change'
 
 const INACTIVE_ACTIVATION: AuthorityActivationSnapshot = Object.freeze({ kind: 'inactive' })
 
@@ -91,6 +93,11 @@ export class ReceiveRuntimeState {
   #snapshot = EMPTY_RECEIVE_RUNTIME
   #activeOfferedChoice: OfferedArtifactChoice | null = null
   #resolvedAction: ResolvedArtifactAction | null = null
+  readonly #changed: (change: ProgressChange) => void
+
+  constructor(changed?: (change: ProgressChange) => void) {
+    this.#changed = changed ?? (() => this.notifyPresentation())
+  }
 
   readonly subscribe = (listener: () => void): (() => void) => {
     this.#listeners.add(listener)
@@ -341,9 +348,9 @@ export class ReceiveRuntimeState {
         progress.summary.receiveIntentDigest !== intent.digest) return false
     const current = this.#snapshot.browserFolderProgress
     if (current != null && progress.generation <= current.generation) return false
-    this.#publishLifecycleSnapshot({
+    this.#publish({
       ...this.#snapshot, browserFolderProgress: Object.freeze({ ...progress }),
-    }, this.#snapshot.lifecycle, this.#snapshot.workspaceUsage)
+    }, folderProgressChange(current, progress))
     return true
   }
 
@@ -354,10 +361,10 @@ export class ReceiveRuntimeState {
     requireDirectZipProgress(progress)
     const current = this.#snapshot.directZipProgress
     if (current !== null && progress.generation <= current.generation) return false
-    this.#publishLifecycleSnapshot({
+    this.#publish({
       ...this.#snapshot,
       directZipProgress: Object.freeze({ ...progress }),
-    }, this.#snapshot.lifecycle, this.#snapshot.workspaceUsage)
+    }, directZipProgressChange(current, progress))
     return true
   }
 
@@ -481,8 +488,14 @@ export class ReceiveRuntimeState {
     this.#publish(snapshot)
   }
 
-  #publish(snapshot: ReceiveRuntimeSnapshot): void {
-    this.#snapshot = snapshot
+  #publish(snapshot: ReceiveRuntimeSnapshot, change: ProgressChange = 'transition'): void {
+    this.#snapshot = Object.freeze(snapshot)
+    try { this.#changed(change) } catch {
+      // Presentation failure cannot roll back facts used by output commands.
+    }
+  }
+
+  notifyPresentation(): void {
     for (const listener of this.#listeners) {
       try { listener() } catch {
         // A view or diagnostics subscriber cannot invalidate accepted task facts.

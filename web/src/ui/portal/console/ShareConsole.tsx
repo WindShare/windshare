@@ -1,5 +1,5 @@
 import type { KeyboardEvent } from 'react'
-import type { ReceiverController } from '../../controller'
+import type { PortalCommands } from '../commands'
 import { PortalIcon } from '../PortalIcon'
 import { usePortalCopy } from '../locales/use-portal-copy'
 import { ReceiveForm } from './ReceiveForm'
@@ -8,7 +8,7 @@ import { ShareGuide } from './ShareGuide'
 import { CONSOLE_TABS, type PortalTab } from './tabs'
 
 export function ShareConsole({ controller, activeTab, onTabChange }: {
-  readonly controller: ReceiverController
+  readonly controller: PortalCommands
   readonly activeTab: PortalTab
   readonly onTabChange: (tab: PortalTab) => void
 }) {

@@ -262,7 +262,7 @@ export interface TransferJobOptions {
     readonly sessionId: string
     readonly generation: number
   }>
-  readonly onProgress?: (progress: TransferProgress) => void
+  readonly observeProgress?: import('../progress/observation').TransferProgressObserver
   readonly onMeasure?: (measure: SelectionMeasure) => void
   readonly trace?: DomainTraceSource<TransferTraceEvent>
   readonly incidentScope?: IncidentScopeHandle

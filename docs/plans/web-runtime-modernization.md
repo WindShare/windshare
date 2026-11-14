@@ -109,6 +109,28 @@ Record a small baseline for share opening (first directory, save readiness, firs
 
 Remove superseded eager imports, whole-page subscriptions, and duplicate presentation throttles as their replacements take ownership. Reuse existing operation, generation, and authority ownership without a parallel business state machine. This work requires no new state-management dependency, service worker, or protocol/Go/Rust transport changes.
 
+## Implementation and local evidence — 2026-11-14
+
+Implemented document-owned lazy receiver startup, explicit retained discovery/actions, prepared output and reauthorization routes, one application-owned progress cadence, independent UI projections, and native overlay fallbacks. Retained action implementations are prepared before discovery exposes their actions, preserving offline local recovery. Diagnostic capture and export formatting remain together because automatic archives and the synchronous developer export API use the same formatter; the optional diagnostic panel loads separately.
+
+`make web`, `make browser`, and `make sloc` pass: 4,008 tests, 3 real sender/relay smoke scenarios, and 196 Chromium browser contracts. Browser coverage includes offline recovery, same-document capability replacement, saved language/appearance, and nested-dialog focus. Production screenshots also verified the cold Downloads loading surface and focus restoration after runtime adoption.
+
+Local comparison: Chromium, production preview served directly, HTTP cache disabled, real Go sender and Rust relay, portable ZIP, 16 files of 1 MiB, tracing enabled. Times below are medians of three alternating runs per build. Directory/save readiness is observed inside the page when rows and an enabled action appear, avoiding automation polling delay.
+
+| Measurement | Before | After |
+| --- | ---: | ---: |
+| Homepage JS, all loaded chunks, minified bytes | 2,661,513 | 502,427 |
+| Same JS compressed with gzip, bytes | 697,942 | 148,758 |
+| First directory rendered, ms from navigation | 144.4 | 160.4 |
+| Download action ready, ms from navigation | 144.5 | 173.9 |
+| Download click request to first bulk relay frame, ms | 83.5 | 89.2 |
+| Longest main-thread task during transfer/interactions, ms | 21.9 | 15.6 |
+| Maximum reported interaction duration per run, ms | 32 | 16 |
+
+The bulk-frame measurement observes the first incoming frame above 32 KiB after the automated click request; it is a transport proxy, not authenticated-content completion. Interaction traces cover eight Downloads open/close cycles; Event Timing has a 16 ms reporting threshold. All six runs completed without page errors or main-thread tasks above 50 ms. These small local samples establish the payload reduction and expose a modest cold-route loading cost; they do not establish field INP improvement or a general share-opening speedup. No additional production performance telemetry, worker, or task scheduler was justified.
+
+Local artifacts are under the ignored `web/test-results/runtime-modernization/`: `summary.json`, `*-observed-*.json`, matching traces/diagnostic exports, production screenshots, gate logs, and the measurement harness.
+
 ## Guidance sources
 
 - [Performance: JavaScript code splitting and main-thread work](https://github.com/GoogleChrome/modern-web-guidance/blob/main/skills/modern-web-guidance/guides/performance/performance.md)

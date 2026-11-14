@@ -27,18 +27,12 @@ import {
 } from '../../transfer/lifecycle/state'
 import { decodeStoredReceiveLifecycleState } from '../workspace/state-codec'
 import { readIncompatibleNameStatus } from './indexeddb/incompatible-name-records'
-import { readSourceRevisionFailures } from '../resume/source-revision-failures'
-import { readProgressiveZipRecoveryRequirement } from '../resume/progressive-checkpoint'
-import { readOriginalFileRecoveryRequirement } from '../resume/original-checkpoint'
-import { readDirectZipRecoveryRequirement } from '../resume/direct-zip-checkpoint'
 import { IndexedDbDirectZipJournalRepository } from '../direct-zip/journal/indexeddb'
+import { readDirectZipRecoveryRequirement } from '../resume/direct-zip-checkpoint'
 import type { ReceiveOperationResumeSource } from '../resume/authority'
 import type {
   RecoverySummary,
 } from '../../transfer/lifecycle/recovery-summary'
-import { repairBrowserDeliveryInventoryLifecycle, readBrowserDeliveryRecoverySummary } from '../browser-delivery/recovery/inventory'
-import { openFSAFileCheckpointRepository } from '../file-system-access/checkpoint-repository'
-import { requireDirectTreeIntent } from '../file-system-access/settlement-proof'
 import { FSA_RESERVED_ROOT_LAYOUT_VERSION } from '../../transfer/intent'
 import {
   DIRECT_ZIP_CANDIDATE_BOOTSTRAP,
@@ -151,8 +145,12 @@ export class IndexedDbReceiveResumeSource implements ReceiveOperationResumeSourc
       throw new DOMException('Receive resume inventory exceeds its bound', 'QuotaExceededError')
     }
 
-    const states = await Promise.all(records.map(async record =>
-      repairBrowserDeliveryInventoryLifecycle(await validateLifecycleRecord(record), this.#databaseName)))
+    const states = await Promise.all(records.map(async record => {
+      const state = await validateLifecycleRecord(record)
+      if (state.kind !== 'resumable-receive' || state.payloadKind !== 'file-set') return state
+      const { repairBrowserDeliveryInventoryLifecycle } = await import('../browser-delivery/recovery/inventory')
+      return repairBrowserDeliveryInventoryLifecycle(state, this.#databaseName)
+    }))
     const operations = new Set<string>()
     for (const state of states) {
       if (operations.has(state.operationId)) {
@@ -191,9 +189,10 @@ export class IndexedDbReceiveResumeSource implements ReceiveOperationResumeSourc
     if (stored === undefined) throw new TypeError('Recovery requires its persisted receive operation')
     const operation = await decodeStoredReceiveOperation(stored as PersistedReceiveRecord)
     if (operation.receiveIntent.digest !== lifecycle.receiveIntentDigest) throw new TypeError('Recovery intent mismatch')
+    if (operation.receiveIntent.plan.kind !== 'workspace-then-publish') return undefined
     return operation.receiveIntent.artifact.kind === 'original-file'
-      ? readOriginalFileRecoveryRequirement(operation.receiveIntent, lifecycle, this.#databaseName)
-      : readProgressiveZipRecoveryRequirement(operation.receiveIntent, lifecycle, this.#databaseName)
+      ? (await import('../resume/original-checkpoint')).readOriginalFileRecoveryRequirement(operation.receiveIntent, lifecycle, this.#databaseName)
+      : (await import('../resume/progressive-checkpoint')).readProgressiveZipRecoveryRequirement(operation.receiveIntent, lifecycle, this.#databaseName)
   }
 
   async readDirectZipRequirement(lifecycle: ReceiveLifecycleState) {
@@ -213,7 +212,7 @@ export class IndexedDbReceiveResumeSource implements ReceiveOperationResumeSourc
     if (stored === undefined) throw new TypeError('Revision failure projection requires its receive operation')
     const operation = await decodeStoredReceiveOperation(stored as PersistedReceiveRecord)
     if (operation.receiveIntent.digest !== lifecycle.receiveIntentDigest) throw new TypeError('Recovery intent mismatch')
-    return readSourceRevisionFailures(operation.receiveIntent, lifecycle, this.#databaseName)
+    return (await import('../resume/source-revision-failures')).readSourceRevisionFailures(operation.receiveIntent, lifecycle, this.#databaseName)
   }
 
   async isCleanupOnly(operationId: string): Promise<boolean> {
@@ -242,6 +241,9 @@ export class IndexedDbReceiveResumeSource implements ReceiveOperationResumeSourc
       throw new TypeError('FSA recovery lifecycle does not belong to its persisted receive intent')
     }
     if (operation.receiveIntent.plan.kind !== 'direct-tree') return undefined
+    const { requireDirectTreeIntent } = await import('../file-system-access/settlement-proof')
+    const { openFSAFileCheckpointRepository } = await import('../file-system-access/checkpoint-repository')
+    const { readBrowserDeliveryRecoverySummary } = await import('../browser-delivery/recovery/inventory')
     const intent = await requireDirectTreeIntent(operation.receiveIntent)
     const reservation = intent.plan.reservation
     if (reservation.kind !== 'named-container-entry' ||

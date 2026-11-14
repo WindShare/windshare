@@ -29,10 +29,14 @@ export function initialJoinStatus(join: import('../../receiver/initial-join').In
   }
 }
 
+const RECONNECTING: TaskBlocking = Object.freeze({ kind: 'reconnecting',
+  description: 'Reconnection is automatic. Keep this page open to preserve the current download and its received progress.' })
+const SHARE_ENDED: TaskBlocking = Object.freeze({ kind: 'share-ended' })
+const UNAVAILABLE: TaskBlocking = Object.freeze({ kind: 'unavailable' })
+
 export function taskConnectionBlocking(connection: ReceiverSnapshot['connection']): TaskBlocking | null {
-  if (connection.kind === 'reconnecting') return { kind: 'reconnecting',
-    description: 'Reconnection is automatic. Keep this page open to preserve the current download and its received progress.' }
-  if (connection.kind === 'ended') return { kind: 'share-ended' }
-  if (connection.kind === 'unavailable') return { kind: 'unavailable' }
+  if (connection.kind === 'reconnecting') return RECONNECTING
+  if (connection.kind === 'ended') return SHARE_ENDED
+  if (connection.kind === 'unavailable') return UNAVAILABLE
   return null
 }

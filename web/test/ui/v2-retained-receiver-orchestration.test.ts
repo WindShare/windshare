@@ -60,7 +60,8 @@ describe('v2 receiver product orchestration', () => {
       { receive },
     )
     controller.initialize({ capabilityInput: null, pageUrl: 'https://receiver.invalid/s/share' })
-    await waitFor(() => controller.getSnapshot().retained.kind === 'ready')
+    await controller.ensureDownloads()
+    await waitFor(() => controller.getSnapshot().retained.kind === 'available')
 
     const presented = controller.getSnapshot().retained.operations[0]
     expect(presented).not.toBe(sourceOperation)
@@ -77,8 +78,7 @@ describe('v2 receiver product orchestration', () => {
     }])
     receive.retainedOperations = Object.freeze([])
     actionGate.resolve(Object.freeze({ kind: 'completed' }))
-    await waitFor(() => controller.getSnapshot().retained.kind === 'ready' &&
-      controller.getSnapshot().retained.operations.length === 0)
+    await waitFor(() => controller.getSnapshot().retained.kind === 'empty')
 
     await controller.dispose()
   })
@@ -93,7 +93,8 @@ describe('v2 receiver product orchestration', () => {
     )
 
     controller.initialize({ capabilityInput: null, pageUrl: 'https://receiver.invalid/s/share' })
-    await waitFor(() => controller.getSnapshot().retained.kind === 'ready')
+    await controller.ensureDownloads()
+    await waitFor(() => controller.getSnapshot().retained.kind === 'available')
 
     expect(controller.getSnapshot().retained.operations).toEqual(receive.retainedOperations)
     expect(receive.startedAuthorities).toHaveLength(0)
@@ -118,7 +119,8 @@ describe('v2 receiver product orchestration', () => {
       { receive, trace: traceSource(event => traces.push(event.name)) },
     )
     controller.initialize({ capabilityInput: null, pageUrl: 'https://receiver.invalid/s/share' })
-    await waitFor(() => controller.getSnapshot().retained.kind === 'ready')
+    await controller.ensureDownloads()
+    await waitFor(() => controller.getSnapshot().retained.kind === 'available')
 
     controller.performRetainedAction(Object.freeze({ ...operation }), 'save')
     expect(receive.retainedActionCalls).toHaveLength(0)
@@ -128,7 +130,7 @@ describe('v2 receiver product orchestration', () => {
     receive.retainedOperations = Object.freeze([])
     actionGate.resolve(Object.freeze({ kind: 'completed' }))
     await waitFor(() => receive.retainedSignals.length === 2 &&
-      controller.getSnapshot().retained.kind === 'ready')
+      controller.getSnapshot().retained.kind === 'empty')
 
     expect(controller.getSnapshot().retained.operations).toEqual([])
     expect(traces).toContain('receive.inventory.action.started')
@@ -145,7 +147,7 @@ describe('v2 receiver product orchestration', () => {
     receive.retainedOperations = Object.freeze([operation])
     receive.retainedActionGate = actionGate.promise
     const controller = controllerFor(joined, receive)
-    await waitFor(() => controller.getSnapshot().retained.kind === 'ready')
+    await waitFor(() => controller.getSnapshot().retained.kind === 'available')
     await waitFor(() => controller.getSnapshot().rows.length > 0)
     await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'choices')
     const before = controller.getSnapshot()
@@ -188,7 +190,8 @@ describe('v2 receiver product orchestration', () => {
       { receive, trace: traceSource(event => traces.push(event.name)) },
     )
     controller.initialize({ capabilityInput: null, pageUrl: 'https://receiver.invalid/s/share' })
-    await waitFor(() => controller.getSnapshot().retained.kind === 'ready')
+    await controller.ensureDownloads()
+    await waitFor(() => controller.getSnapshot().retained.kind === 'available')
 
     controller.performRetainedAction(operation, 'save')
     await controller.dispose()
@@ -211,7 +214,7 @@ describe('v2 receiver product orchestration', () => {
       runtime,
     }))
     const controller = controllerFor(joined, receive)
-    await waitFor(() => controller.getSnapshot().retained.kind === 'ready')
+    await waitFor(() => controller.getSnapshot().retained.kind === 'available')
     await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'choices')
 
     controller.performRetainedAction(operation, 'continue')
@@ -244,7 +247,7 @@ describe('v2 receiver product orchestration', () => {
     receive.retainedOperations = [operation]
     receive.retainedActionGate = Promise.resolve({ kind: 'receive-continuation', runtime: repairedRuntime })
     const controller = controllerFor(joined, receive)
-    await waitFor(() => controller.getSnapshot().retained.kind === 'ready')
+    await waitFor(() => controller.getSnapshot().retained.kind === 'available')
     await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'choices')
     controller.performRetainedAction(operation, 'continue')
     await waitFor(() => controller.getSnapshot().output.lifecycle?.kind === 'receiving')
@@ -300,7 +303,7 @@ describe('v2 receiver product orchestration', () => {
       { receive, trace: traceSource(event => traces.push(event.name)) },
     )
     controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
-    await waitFor(() => controller.getSnapshot().retained.kind === 'ready')
+    await waitFor(() => controller.getSnapshot().retained.kind === 'available')
     await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'choices')
 
     controller.performRetainedAction(operation, 'continue')
@@ -330,7 +333,7 @@ describe('v2 receiver product orchestration', () => {
       runtime,
     }))
     const controller = controllerFor(joined, receive)
-    await waitFor(() => controller.getSnapshot().retained.kind === 'ready')
+    await waitFor(() => controller.getSnapshot().retained.kind === 'available')
     await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'choices')
 
     controller.performRetainedAction(foreignOperation, 'continue')
@@ -352,6 +355,7 @@ describe('v2 receiver product orchestration', () => {
     )
 
     controller.initialize({ capabilityInput: null, pageUrl: 'https://receiver.invalid/s/share' })
+    void controller.ensureDownloads()
     await waitFor(() => receive.retainedSignals.length === 1)
     await controller.dispose()
     const lateInventory = retainedInventory(Object.freeze([retainedOperation()]))

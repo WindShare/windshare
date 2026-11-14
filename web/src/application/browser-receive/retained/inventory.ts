@@ -1,10 +1,8 @@
 import { readRetainedBrowserDeliveries, retainedBrowserDeliveryActions, type BrowserDeliveryRepositoryFactory } from '../fsa/retained-delivery'
 import { hasBrowserDeliveryStaging } from '../../../output/model/browser-delivery'
-import { runRetainedBrowserFolderAction } from '../fsa/local-delivery'
-import { reopenFolderDeliveryContext } from '../fsa/folder-delivery'
+import type { runRetainedBrowserFolderAction } from '../fsa/local-delivery'
 import { canForgetReceiveOperationHistory } from '../../../output/resume/operation-history'
-import { pickPartialExport, saveProgressivePartial, supportsPartialExport } from '../../../output/portable/partial-export'
-import { continueProgressiveZip } from './progressive'
+import { pickPartialExport, supportsPartialExport } from '../../../output/capability/partial-export'
 import { dispatchRetainedAuthorityAction } from './action-dispatch'
 import { lifecycleFailureFact, type FailureFact } from '../../../diagnostics/incident'
 import { IndexedDbReceiveResumeSource } from '../../../output/browser/indexeddb-resume-state'
@@ -16,7 +14,6 @@ import type {
 } from '../../../transfer/lifecycle/name-repair'
 import {
   createOutputFailureBinding,
-  recordOutputException,
   type LocalOutputOperationFailureDiagnosticsPort,
   type OutputFailureSinks,
   type OutputTraceSource,
@@ -32,9 +29,8 @@ import type {
   AuthorityOwnedReceiveOperationMutationResult,
 } from '../../../output/resume/reopen-authority'
 import type { WorkspaceStageTraceListener } from '../../../output/workspace/stages'
-import { recoverWorkspaceActivationCandidates } from '../../../output/workspace/activation-recovery'
+import type { recoverWorkspaceActivationCandidates } from '../../../output/workspace/activation-recovery'
 import type { WorkspaceActivationJournalRepository } from '../../../output/workspace/repository'
-import { catchUpFileSystemAccessCompatibleNames } from '../../../output/file-system-access/settlement'
 import type {
   BoundReceiveOperation,
   RetainedReceiveAction,
@@ -43,11 +39,9 @@ import type {
   RetainedReceiveOperation,
 } from '../../receive/contracts'
 import type { BrowserReceiveWindow } from '../../../output/browser/environment'
-import { FSAReceiveOperation } from '../fsa/operation'
-import { WorkspaceReceiveOperation } from '../workspace/operation'
 import { unavailableRoute } from '../route-contract'
 import type { BrowserDirectZipCompositionPort } from '../direct-zip'
-import { bindRuntimeOutputFailures, diagnosticsFor, diagnosticsOption } from './diagnostics'
+import { bindRuntimeOutputFailures, diagnosticsFor } from './diagnostics'
 import {
   detachRuntimeAfterFailure,
   withFailedRetainedClose,
@@ -55,11 +49,7 @@ import {
 } from './operation-lifetime'
 import { retainedOperationAuthority } from './operation-authority'
 import { observeBrowserReceiveOperationActivity } from '../../../output/browser/session-lease'
-import {
-  continueRetainedWorkspaceOperation,
-  continuationMismatch,
-  resumeWorkspaceReceive,
-} from './workspace'
+import { continuationMismatch } from './operation-lifetime'
 
 
 const READ_ONLY_RESUME_MUTATIONS:
@@ -141,6 +131,7 @@ export interface BrowserRetainedContinuationExecutor {
 }
 
 export interface BrowserRetainedCompositionOptions {
+  readonly prepareActivation?: (operation: RetainedReceiveOperation, signal: AbortSignal) => Promise<import('./activation').RetainedActivation | undefined>
   readonly openBrowserDeliveryRepository?: BrowserDeliveryRepositoryFactory
   readonly runBrowserFolderLocalAction?: typeof runRetainedBrowserFolderAction
   readonly openResumeSource?: () => Promise<ReceiveOperationResumeSource & { close(): void }>
@@ -185,24 +176,7 @@ export async function listBrowserRetainedOperations(
   signal.throwIfAborted()
   if (typeof windowPort.indexedDB?.open !== 'function') return emptyRetainedInventory()
 
-  if (options.openResumeSource === undefined || options.openActivationRepository !== undefined ||
-      options.recoverWorkspaceActivations !== undefined) {
-    const activationRepository = await (
-      options.openActivationRepository ?? (() => IndexedDbReceiveOperationRepository.open())
-    )()
-    try {
-      await (options.recoverWorkspaceActivations ?? recoverWorkspaceActivationCandidates)({
-        repository: activationRepository,
-        storage: windowPort.navigator.storage as StorageManager & {
-          getDirectory(): Promise<FileSystemDirectoryHandle>
-        },
-        locks: windowPort.navigator.locks,
-      })
-    } finally {
-      activationRepository.close()
-    }
-  }
-  signal.throwIfAborted()
+  await repairWorkspaceInventory(windowPort, options, signal)
 
   const source = await (options.openResumeSource ?? (() => IndexedDbReceiveResumeSource.open()))()
   let inventoryClosed = false
@@ -278,6 +252,14 @@ export async function listBrowserRetainedOperations(
         references.set(operation, reference)
         return operation
       }))
+      const activations = new Map<RetainedReceiveOperation, import('./activation').RetainedActivation>()
+      if (options.prepareActivation !== undefined) {
+        for (const operation of operations) {
+          const activation = await options.prepareActivation(operation, signal)
+          signal.throwIfAborted()
+          if (activation !== undefined) activations.set(operation, activation)
+        }
+      }
       const presentationFailures = retainedInventoryPresentationFailures(operations)
       let open = true
       return Object.freeze({
@@ -296,6 +278,9 @@ export async function listBrowserRetainedOperations(
             throw new DOMException('Retained action escaped its inventory authority', 'InvalidStateError')
           }
           references.delete(operation)
+          const activate = activations.get(operation)
+          if (activate !== undefined) await activate(action)
+          actionSignal.throwIfAborted()
           const result = await performRetainedAction(
             windowPort,
             options,
@@ -364,7 +349,9 @@ async function performRetainedAction(
   failures?: OutputFailureSinks,
 ): Promise<RetainedReceiveActionResult> {
   if (isBrowserFolderStorageAction(operation, action)) {
-    await (options.runBrowserFolderLocalAction ?? runRetainedBrowserFolderAction)(
+    const run = options.runBrowserFolderLocalAction ?? (await import('../fsa/local-delivery')).runRetainedBrowserFolderAction
+    signal.throwIfAborted()
+    await run(
       windowPort, operation, browserFolderStorageAction(action), signal,
       diagnosticsFor('file_system_access', options.outputTrace, failures),
     )
@@ -397,7 +384,7 @@ async function performOrdinaryRetainedAction(
   if (dispatch.kind === 'completed') return dispatch
   const { continuation, directZipAction } = dispatch
   const executor = options.continuationExecutor ??
-    browserRetainedContinuationExecutor(
+    (await import('./continuation')).browserRetainedContinuationExecutor(
       windowPort,
       options.onTrace,
       options.outputTrace,
@@ -417,6 +404,8 @@ async function performOrdinaryRetainedAction(
     case 'workspace-progressive-zip-partial':
       if (action === 'save-partial' && partialDestination !== undefined) {
         return withRetainedOperationClose(continuation.operation, async () => {
+          const { saveProgressivePartial } = await import('../../../output/portable/partial-export')
+          signal.throwIfAborted()
           await saveProgressivePartial(continuation.operation.partialContinuation,
             partialDestination, signal)
           return Object.freeze({ kind: 'completed' as const })
@@ -426,6 +415,8 @@ async function performOrdinaryRetainedAction(
     case 'workspace-progressive-zip': {
       if (action !== 'continue') return withFailedRetainedClose(continuation.operation, continuationMismatch())
       const binding = createOutputFailureBinding(failures)
+      const { continueProgressiveZip } = await import('./progressive')
+      signal.throwIfAborted()
       const result = await continueProgressiveZip(windowPort, continuation.operation, signal,
         diagnosticsFor('origin_private', options.outputTrace, binding.sinks))
       return result.kind === 'receive-continuation'
@@ -539,105 +530,6 @@ async function continueRetainedReceive(
   }
 }
 
-function browserRetainedContinuationExecutor(
-  windowPort: BrowserReceiveWindow,
-  trace: WorkspaceStageTraceListener | undefined,
-  outputTrace: OutputTraceSource | undefined,
-  localOutputFailures: LocalOutputOperationFailureDiagnosticsPort | undefined,
-  directZip?: BrowserDirectZipCompositionPort,
-): BrowserRetainedContinuationExecutor {
-  return Object.freeze({
-    catchUpCompatibleNames: async (
-      continuation: DirectTreeCatchUpContinuation,
-      signal: AbortSignal,
-      failures?: OutputFailureSinks,
-    ) => {
-      try {
-        await catchUpFileSystemAccessCompatibleNames({
-          operation: continuation.operation,
-          signal,
-        })
-      } catch (error) {
-        if (!signal.aborted) recordOutputException(failures?.settlement, error)
-        throw error
-      }
-    },
-    resumeReceive: async (
-      continuation: ReceiveContinuation,
-      signal: AbortSignal,
-      failures?: OutputFailureSinks,
-    ): Promise<BoundReceiveOperation> => {
-      signal.throwIfAborted()
-      const binding = createOutputFailureBinding(failures)
-      switch (continuation.kind) {
-        case 'direct-tree-receive':
-          return bindRuntimeOutputFailures(
-            await FSAReceiveOperation.reopen(
-              continuation.operation,
-              diagnosticsFor('file_system_access', outputTrace, binding.sinks),
-              localOutputFailures,
-              undefined,
-              await reopenFolderDeliveryContext(windowPort, continuation.operation.intent.operationId),
-            ),
-            binding,
-          )
-        case 'workspace-receive':
-          return resumeWorkspaceReceive(
-            windowPort,
-            continuation,
-            signal,
-            trace,
-            outputTrace,
-            binding,
-          )
-        case 'workspace-start':
-          return bindRuntimeOutputFailures(await WorkspaceReceiveOperation.reopenStart({
-            windowPort, operation: continuation.operation,
-            ...(trace === undefined ? {} : { trace }),
-            ...diagnosticsOption('origin_private', outputTrace, binding.sinks),
-          }), binding)
-        case 'direct-zip': {
-          if (directZip === undefined) throw unavailableRoute()
-          const runtime = await (failures === undefined
-            ? directZip.runtime.resume(continuation.operation, signal)
-            : directZip.runtime.resume(continuation.operation, signal, failures))
-          return bindRuntimeOutputFailures(runtime, binding)
-        }
-      }
-    },
-    resumePackage: async (
-      continuation: WorkspacePackageContinuation,
-      signal: AbortSignal,
-      failures?: OutputFailureSinks,
-    ) => {
-      try {
-        const result = await continuation.operation.packageContinuation.execute(signal)
-        if (result.kind === 'sealed') {
-          await continueRetainedWorkspaceOperation(
-            windowPort, { ...continuation.operation, lifecycle: result.state }, 'save', signal,
-            diagnosticsFor('origin_private', outputTrace, failures),
-          )
-        }
-      } catch (error) {
-        if (!signal.aborted) recordOutputException(failures?.continuation, error)
-        throw error
-      }
-    },
-    continueRetained: (
-      continuation: WorkspaceRetainedContinuation,
-      action: RetainedContinuationAction,
-      signal: AbortSignal,
-      failures?: OutputFailureSinks,
-    ) => continueRetainedWorkspaceOperation(
-      windowPort,
-      continuation.operation,
-      action,
-      signal,
-      diagnosticsFor('origin_private', outputTrace, failures),
-    ),
-  })
-}
-
 async function dispatchDirectZipBootstrapCandidates(
   source: ReceiveOperationResumeSource,
   directZip: BrowserDirectZipCompositionPort | undefined,
@@ -689,4 +581,30 @@ function sourceWithoutBootstrapCandidates(
           ReceiveOperationResumeSource['readRecoverySummary']
         >>[0]) => source.readRecoverySummary!(lifecycle) }),
   })
+}
+
+async function repairWorkspaceInventory(windowPort: BrowserReceiveWindow, options: BrowserRetainedCompositionOptions, signal: AbortSignal): Promise<void> {
+  if (options.openResumeSource === undefined || options.openActivationRepository !== undefined ||
+      options.recoverWorkspaceActivations !== undefined) {
+    const activationRepository = await (
+      options.openActivationRepository ?? (() => IndexedDbReceiveOperationRepository.open())
+    )()
+    try {
+      // Opening an empty inventory must not load the workspace repair engine.
+      const needsRepair = options.recoverWorkspaceActivations !== undefined ||
+        (await activationRepository.listWorkspaceActivationCandidates()).length > 0 ||
+        (await activationRepository.listInitialWorkspaceActivationOperationIds()).length > 0
+      if (needsRepair) await (options.recoverWorkspaceActivations ?? (await import('../../../output/workspace/activation-recovery')).recoverWorkspaceActivationCandidates)({
+        repository: activationRepository,
+        storage: windowPort.navigator.storage as StorageManager & {
+          getDirectory(): Promise<FileSystemDirectoryHandle>
+        },
+        locks: windowPort.navigator.locks,
+      })
+    } finally {
+      activationRepository.close()
+    }
+  }
+  signal.throwIfAborted()
+
 }

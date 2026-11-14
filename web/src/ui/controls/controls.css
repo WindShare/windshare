@@ -1,0 +1,97 @@
+:where(.receiver-shell, .detail-sheet) button {
+  min-height: 40px;
+  border: 1px solid var(--receiver-rule);
+  border-radius: 4px;
+  background: var(--receiver-paper);
+  color: var(--receiver-ink);
+  padding: 8px 13px;
+  font: inherit;
+  font-size: .875rem;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+:where(.receiver-shell, .detail-sheet) button:hover:not(:disabled) {
+  background: var(--receiver-wash);
+  border-color: var(--receiver-accent);
+}
+:where(.receiver-shell, .detail-sheet) button.primary-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 46px;
+  padding: 12px 18px;
+  background: var(--receiver-accent);
+  color: var(--receiver-on-accent);
+  border-color: transparent;
+  font-size: .8125rem;
+  font-weight: 600;
+}
+:where(.receiver-shell, .detail-sheet) button.primary-action:hover:not(:disabled) {
+  background: var(--receiver-accent-hover);
+}
+:where(.receiver-shell, .detail-sheet) button.danger-action {
+  color: var(--receiver-error);
+  border-color: var(--receiver-error);
+}
+:where(.receiver-shell, .detail-sheet) button.quiet-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  background: transparent;
+  border-color: transparent;
+  padding-inline: 4px;
+}
+:where(.receiver-shell, .detail-sheet) button.quiet-action:hover:not(:disabled) {
+  color: var(--receiver-accent);
+  background: transparent;
+  border-color: transparent;
+}
+:where(.receiver-shell, .detail-sheet) button:disabled {
+  background: var(--receiver-disabled);
+  color: var(--receiver-disabled-ink);
+  border-color: transparent;
+  cursor: default;
+}
+:where(.receiver-shell, .detail-sheet) :is(button, input, a, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--receiver-accent);
+  outline-offset: 3px;
+}
+:where(.receiver-shell, .detail-sheet) input {
+  color: var(--receiver-ink);
+  accent-color: var(--receiver-accent);
+}
+.downloads-entry { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.attention-count {
+  display: inline-grid;
+  place-items: center;
+  border-radius: 20px;
+  min-width: 20px;
+  height: 20px;
+  background: #e5a53d;
+  color: #312408;
+  font-size: 12px;
+  font-weight: 700;
+}
+.receiver-icon {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  vertical-align: middle;
+}
+@media (max-width: 600px), (pointer: coarse) {
+  :where(.receiver-shell, .detail-sheet) button { min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :where(.receiver-shell, .detail-sheet),
+  :where(.receiver-shell, .detail-sheet) *,
+  :where(.receiver-shell, .detail-sheet) *::before,
+  :where(.receiver-shell, .detail-sheet) *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

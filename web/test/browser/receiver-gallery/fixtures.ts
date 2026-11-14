@@ -58,9 +58,9 @@ export function photoPreview(portrait: boolean, fileId = 'photo'): PreviewSnapsh
 
 async function portalInventorySnapshot(scenario: Scenario): Promise<ReceiverSnapshot> {
   const snapshot = await gallerySnapshot(scenario === 'portal-saved' ? 'saved-cleanup' : 'folder')
-  let retained: ReceiverSnapshot['retained'] = { kind: 'ready', operations: [], pending: null, error: null }
+  let retained: ReceiverSnapshot['retained'] = { kind: 'empty', operations: [], pending: null, error: null }
   if (scenario === 'portal-saved') return { ...snapshot, retained }
-  if (scenario === 'portal-loading') retained = { ...retained, kind: 'loading', pending: null }
+  if (scenario === 'portal-loading') retained = { ...retained, kind: 'loading', error: null, pending: null }
   if (scenario === 'portal-failed') retained = { ...retained, kind: 'failed', pending: null, error: 'Stored receive tasks could not be loaded.' }
   return { ...snapshot, retained, output: EMPTY_OUTPUT_PRESENTATION, taskDisplay: null, progress: EMPTY_PROGRESS }
 }
@@ -129,7 +129,7 @@ export async function gallerySnapshot(scenario: Scenario): Promise<ReceiverSnaps
       ...(scenario === 'partial-ready' ? { fileErrors: 1 } : {}) },
     preview: scenario === 'portrait' || scenario === 'landscape' ? photoPreview(scenario === 'portrait') : EMPTY_PREVIEW,
     output,
-    retained: { kind: 'ready', pending: null, error: null, operations: [0, 1].map(index => ({
+    retained: { kind: 'available', pending: null, error: null, operations: [0, 1].map(index => ({
       operationId: 'saved-gallery-' + index, receiveIntentDigest: 'fixture-intent', lifecycleGeneration: 1n,
       lifecycle: { kind: 'waiting-to-save', operationId: 'saved-gallery-' + index,
         receiveIntentDigest: 'fixture-intent', generation: 1n, packageDigest: 'fixture-package' },

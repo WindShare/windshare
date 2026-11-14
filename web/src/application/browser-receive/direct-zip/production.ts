@@ -9,7 +9,6 @@ import {
 } from '../../../output/direct-zip/journal'
 import {
   admitDirectZipRuntimeV1,
-  DEFAULT_DIRECT_ZIP_RUNTIME_POLICY_V1,
   type DirectZipRuntimeFactsV1,
 } from '../../../output/direct-zip/session'
 import {
@@ -48,19 +47,13 @@ import {
   requireBootstrapEnvelope, requestBrowserDirectZipAuthorization, type BrowserDirectZipEnvelope,
 } from '../../../output/direct-zip/browser/resources'
 import { observeBrowserDirectZipFeatureFacts } from '../../../output/direct-zip/browser/features'
+import { browserDirectZipCapabilities, OWNED_TARGET_AUTHORITY } from './capabilities'
 
 export interface BrowserDirectZipProductionOptions {
   readonly openRepository?: () => Promise<ReceiveOperationRepository>
   readonly openJournal?: () => Promise<DirectZipJournalRepository>
   readonly outputTrace?: OutputTraceSource
 }
-
-const OWNED_TARGET_AUTHORITY = Object.freeze({
-  kind: 'owned-target-session-v1' as const,
-  recovery: 'persisted-handle-and-verified-checkpoint' as const,
-  replacement: 'coordinated-no-replace' as const,
-  cleanup: 'ownership-proof-required' as const,
-})
 
 /** Installs the complete FSA/IndexedDB/Web Locks session, with no release-machine identity input. */
 export function createBrowserDirectZipComposition(
@@ -82,21 +75,7 @@ export function createBrowserDirectZipComposition(
     return admitted.facts
   }
   const composition: BrowserDirectZipCompositionPort = {
-    capabilities: {
-      read: async signal => {
-        signal.throwIfAborted()
-        let journal: DirectZipJournalRepository | undefined
-        try {
-          journal = await dependencies.openJournal()
-          signal.throwIfAborted()
-          return { authority: OWNED_TARGET_AUTHORITY, policy: DEFAULT_DIRECT_ZIP_RUNTIME_POLICY_V1 }
-        } catch {
-          // Storage denial disables this installed route without hiding the other browser choices.
-          signal.throwIfAborted()
-          return { authority: { kind: 'unavailable' as const, reason: 'journal-unavailable' as const } }
-        } finally { journal?.close() }
-      },
-    },
+    capabilities: browserDirectZipCapabilities(dependencies.openJournal),
     runtime: {
       startFresh: input => new BrowserDirectZipPresentation(windowPort, input, dependencies),
       dispatchBootstrapCandidate: (candidate, signal) =>

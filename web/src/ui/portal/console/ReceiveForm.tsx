@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import type { ReceiverController } from '../../controller'
+import type { PortalCommands } from '../commands'
 import { PortalIcon } from '../PortalIcon'
 import { usePortalCopy, type PortalMessageKey } from '../locales/use-portal-copy'
 
@@ -11,7 +11,7 @@ const CLIPBOARD_MESSAGES: Record<ClipboardStatus, PortalMessageKey> = {
 }
 
 export function ReceiveForm({ controller }: {
-  readonly controller: Pick<ReceiverController, 'submitKey'>
+  readonly controller: PortalCommands
 }) {
   const t = usePortalCopy()
   const [keyInput, setKeyInput] = useState('')

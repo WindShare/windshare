@@ -9,14 +9,15 @@ import { byteRange } from '../../src/content/geometry'
 import { fileEntry, identity, readerFixture } from './v2-job-fixture'
 
 describe('transfer observer separation', () => {
-  it('coalesces fragment bursts while retaining every byte and preserving output authority', async () => {
-    let now = 0
+  it('retains every receipt without building progress snapshots until the observer reads', async () => {
     const ledger = new TransferProgressLedger()
     const values: Array<{ receivedObjectBytes: bigint; writtenBytes: bigint; recoverableBytes: bigint }> = []
     const observers = new TransferObservers({
       intent: minimalIntent(), transferJobId: 'receipt-job', lanes: { size: 1 },
-      onProgress: value => values.push(value),
+      readProgress: () => snapshot(),
+      observeProgress: value => { source = value },
     })
+    let source: import('../../src/transfer/progress/observation').TransferProgressSource | undefined
     let snapshots = 0
     const snapshot = () => {
       snapshots++
@@ -30,8 +31,8 @@ describe('transfer observer separation', () => {
       },
     }, {
       received: bytes => ledger.receiveObjectBytes(bytes),
-      updated: () => observers.progress(snapshot()),
-    }, () => now)
+      updated: () => observers.progress('counters'),
+    })
     const file = fileEntry(identity(11), 'receipt.bin', 4n)
     const revision = await readerFixture([file]).revisions.open(file.id)
     for (let index = 0; index < 2; index++) {
@@ -39,13 +40,14 @@ describe('transfer observer separation', () => {
     }
     expect(receipts[0]).toBe(receipts[1])
     for (let index = 0; index < 1000; index++) receipts[0]!(1)
-    expect(snapshots).toBe(1)
-    now = 250
+    expect(snapshots).toBe(0)
     receipts[1]!(1)
-    expect(values).toHaveLength(2)
+    values.push(source!.read())
+    expect(snapshots).toBe(1)
     expect(values.at(-1)).toMatchObject({ receivedObjectBytes: 1001n, writtenBytes: 0n, recoverableBytes: 0n })
     ledger.acknowledgeWrite(4n)
-    observers.progress(snapshot())
+    observers.progress()
+    values.push(source!.read())
     expect(values.at(-1)).toMatchObject({ receivedObjectBytes: 1001n, writtenBytes: 4n, recoverableBytes: 0n })
     await revision.release()
   })
@@ -63,11 +65,12 @@ describe('transfer observer separation', () => {
       intent: minimalIntent(),
       transferJobId: 'product-job-id',
       lanes: { size: 2 },
-      onProgress: value => { progress.push(value) },
+      readProgress: () => state,
+      observeProgress: value => { progress.push(value.read()) },
       trace: source,
     })
 
-    observers.progress({
+    const state: import('../../src/transfer/job/observers').TransferProgressState = {
       measure: {
         discovery: 'open',
         discoveredFiles: 1,
@@ -88,7 +91,8 @@ describe('transfer observer separation', () => {
       capacityAccumulatedWaitMilliseconds: 125,
       capacityWaitAttempts: 2,
       capacityWaitVisible: false,
-    })
+    }
+    observers.progress()
 
     let payloadFieldRead = false
     expect(() => observers.directoryAdmitted({

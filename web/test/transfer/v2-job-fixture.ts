@@ -803,7 +803,7 @@ export function transferJobFixture(input: {
   readonly revisions: RevisionReader
   readonly broker: BlockRangeReader
   readonly trace?: ConstructorParameters<typeof TransferJob>[0]['trace']
-  readonly onProgress?: ConstructorParameters<typeof TransferJob>[0]['onProgress']
+  readonly onProgress?: (value: ReturnType<import('../../src/transfer/progress/observation').TransferProgressSource['read']>) => void
   readonly maximumConcurrentFiles?: number
   readonly maximumPendingFiles?: number
   readonly maximumPendingGenerations?: number
@@ -845,7 +845,7 @@ export function transferJobFixture(input: {
     ...(input.checkpointClock === undefined ? {} : { checkpointClock: input.checkpointClock }),
     ...(input.onCheckpointObservation === undefined ? {} : { onCheckpointObservation: input.onCheckpointObservation }),
     ...(input.trace === undefined ? {} : { trace: input.trace }),
-    ...(input.onProgress === undefined ? {} : { onProgress: input.onProgress }),
+    ...(input.onProgress === undefined ? {} : { observeProgress: source => input.onProgress!(source.read()) }),
     ...(input.maximumPendingFiles === undefined ? {} : { maximumPendingFiles: input.maximumPendingFiles }),
     ...(input.maximumPendingGenerations === undefined ? {} : { maximumPendingGenerations: input.maximumPendingGenerations }),
     ...(input.maximumPendingGenerationMetadataBytes === undefined ? {} : { maximumPendingGenerationMetadataBytes: input.maximumPendingGenerationMetadataBytes }),

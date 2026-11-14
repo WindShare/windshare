@@ -75,6 +75,7 @@ import {
 import type { DirectZipIntent } from './direct-zip'
 import { TransferProgressLedger } from './progress/ledger'
 import { observeTransferContent } from './progress/content'
+import type { ProgressChange } from './progress/observation'
 import { createDirectZipProgressObservers, runDirectZipJob } from './job-direct-zip'
 import { JobFailureAuthority } from './job-failure-authority'
 import { TransferJobMaterialization } from './job-materialization'
@@ -144,7 +145,7 @@ export class TransferJob {
           return { bytes: Math.max(0, bytes), known: snapshot.measure.discovery === 'complete' && Number.isSafeInteger(bytes) }
         },
         received: bytes => this.#progress.receiveObjectBytes(bytes),
-        updated: () => this.#emitProgress(),
+        updated: () => this.#emitProgress('counters'),
       }),
     }, {
       ...options.revisionCapacity,
@@ -289,7 +290,8 @@ export class TransferJob {
         ...(this.#options.incidentScope === undefined
           ? {}
           : { incidentScope: this.#options.incidentScope }),
-        ...(this.#options.onProgress === undefined ? {} : { onProgress: this.#options.onProgress }),
+        ...(this.#options.observeProgress === undefined ? {} : { observeProgress: this.#options.observeProgress }),
+        readProgress: () => this.#progress.snapshot(this.#measure.snapshot(), this.#execution?.output.identity.outputSessionId),
         ...(this.#options.onMeasure === undefined ? {} : { onMeasure: this.#options.onMeasure }),
         ...(this.#options.trace === undefined ? {} : { trace: this.#options.trace }),
       })
@@ -393,7 +395,7 @@ export class TransferJob {
       observeSourceOmissions: count => this.#publishMeasure(this.#measure.observeSourceOmissions(count)),
       signal: this.#lifetime.signal,
       observeSelectedFile: exactSize => this.#publishMeasure(this.#measure.observeUniqueFile(exactSize)),
-      ...createDirectZipProgressObservers(this.#progress, () => this.#emitProgress()),
+      ...createDirectZipProgressObservers(this.#progress, () => this.#emitProgress('counters')),
       observeDiscovery: event => this.#observers?.discoveryScheduling(event),
       finishMeasure: () => this.#publishMeasure(this.#measure.complete()),
     })
@@ -410,7 +412,7 @@ export class TransferJob {
 
   #publishMeasure(measure: SelectionMeasure): SelectionMeasure {
     this.#observers?.measure(measure)
-    this.#emitProgress()
+    this.#emitProgress(measure.discovery === 'open' ? 'counters' : 'transition')
     return measure
   }
 
@@ -620,21 +622,21 @@ export class TransferJob {
       onInitialCoverage: coverage => {
         materializedBytes = coverage.acceptedBytes
         this.#progress.observeMaterializedFile(file.entry.idText, materializedBytes)
-        this.#emitProgress()
+        this.#emitProgress('counters')
       },
       onWriteAcknowledged: (bytes) => {
         materializedBytes += bytes
         this.#progress.observeMaterializedFile(file.entry.idText, materializedBytes)
         this.#progress.acknowledgeWrite(bytes)
-        this.#emitProgress()
+        this.#emitProgress('counters')
       },
       onRecoverableAcknowledged: (bytes) => {
         this.#progress.acknowledgeRecoverable(bytes)
-        this.#emitProgress()
+        this.#emitProgress('counters')
       },
       onSettlement: settlement => {
         this.#progress.settleFile(file.entry.idText, settlement)
-        this.#emitProgress()
+        this.#emitProgress(settlement.kind === 'completed' ? 'counters' : 'transition')
       },
     }, file)
   }
@@ -686,12 +688,8 @@ export class TransferJob {
     })
   }
 
-  #emitProgress(): void {
-    const execution = this.#execution
-    this.#observers?.progress(this.#progress.snapshot(
-      this.#measure.snapshot(),
-      execution?.output.identity.outputSessionId,
-    ))
+  #emitProgress(change: ProgressChange = 'transition'): void {
+    this.#observers?.progress(change)
   }
 
   #requireIntent(): TransferJobOptions['intent'] {
