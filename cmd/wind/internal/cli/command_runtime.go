@@ -9,6 +9,7 @@ import (
 	"github.com/windshare/windshare/core/diagnostics"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
 	"github.com/windshare/windshare/cmd/wind/internal/humanoutput"
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
 	appobs "github.com/windshare/windshare/engine/observation"
@@ -213,6 +214,19 @@ func renderTraceOpenFailure(renderer *humanoutput.Renderer, command clievent.Com
 	if err == nil {
 		_ = renderer.RenderTerminal(event)
 	}
+}
+
+// Startup has no settled task result. Derive both process status and the final
+// observation from one projection so share and receive cannot disagree.
+func (runtime *commandRuntime) failToStart(cause error) int {
+	event, err := commandprojection.ProjectStartFailure(runtime.command, cause)
+	if err != nil {
+		runtime.ReportObservationRejection(appobs.ObserverLossCommandAdapter,
+			commandprojection.ObserverLossReason(err), commandprojection.ProjectionRejection(err))
+		return ExitFailure
+	}
+	runtime.StageFinalization(event)
+	return int(event.ExitCode())
 }
 
 // Observe is the bounded, nonblocking ingestion path for provider facts.

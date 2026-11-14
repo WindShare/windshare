@@ -70,7 +70,7 @@ func TestPlanningPreservesExplicitIntentAndFrontendAuthority(t *testing.T) {
 	if got, _ := r.frontend(""); got != r.config.BackupEntry {
 		t.Fatal(got)
 	}
-	if _, err := r.Plan(context.Background(), relayprofile.OnlyConfigured(nil), ""); !errors.Is(err, ErrUnavailable) {
+	if _, err := r.Plan(context.Background(), relayprofile.OnlyConfigured(nil), ""); !errors.Is(err, relayprofile.ErrCandidatesRequired) || errors.Is(err, ErrUnavailable) {
 		t.Fatal(err)
 	}
 	if _, err := r.Plan(context.Background(), relayprofile.UseExplicit([]relayprofile.Candidate{{PublicURL: "bad"}}), ""); err == nil {
