@@ -27,6 +27,7 @@ type ShareState string
 
 const (
 	AwaitingConfiguration ShareState = "awaiting_configuration"
+	AwaitingNetwork       ShareState = "awaiting_network"
 	Admitting             ShareState = "admitting"
 	Preparing             ShareState = "preparing"
 	Sharing               ShareState = "sharing"
@@ -35,16 +36,17 @@ const (
 )
 
 type Share struct {
-	OperationID string        `json:"operation_id"`
-	TaskID      string        `json:"task_id,omitempty"`
-	CreatedAt   int64         `json:"created_at_ms"`
-	State       ShareState    `json:"state"`
-	Startup     string        `json:"startup"`
-	URL         string        `json:"url,omitempty"`
-	Selection   *Selection    `json:"selection,omitempty"`
-	Relay       *wire.Encoded `json:"relay,omitempty"`
-	Result      *Completion   `json:"result,omitempty"`
-	Error       *Failure      `json:"error,omitempty"`
+	OperationID string         `json:"operation_id"`
+	TaskID      string         `json:"task_id,omitempty"`
+	CreatedAt   int64          `json:"created_at_ms"`
+	State       ShareState     `json:"state"`
+	Startup     string         `json:"startup"`
+	URL         string         `json:"url,omitempty"`
+	Selection   *Selection     `json:"selection,omitempty"`
+	Relay       *wire.Encoded  `json:"relay,omitempty"`
+	Result      *Completion    `json:"result,omitempty"`
+	Error       *Failure       `json:"error,omitempty"`
+	Blocking    *CreationBlock `json:"blocking,omitempty"`
 }
 
 type Selection struct {
@@ -94,7 +96,7 @@ func (s Snapshot) active() bool {
 		return true
 	}
 	for _, share := range s.Shares {
-		if share.State != Finished && share.State != AwaitingConfiguration {
+		if share.State != Finished && share.State != AwaitingConfiguration && share.State != AwaitingNetwork {
 			return true
 		}
 	}

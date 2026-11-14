@@ -68,7 +68,8 @@ fn control_reconnect_replays_the_same_request_and_reconciles_full_snapshot() {
                 "session_id": "fixture", "revision": 2,
                 "shares": [{
                     "operation_id":"selection", "paths":["file.txt"],
-                    "state":"awaiting_configuration", "startup":"pending", "created_at_ms":123
+                    "state":"awaiting_network", "startup":"pending", "created_at_ms":123,
+                    "blocking": {"reason":"directory_unavailable","recovery":"retry","retry_at_ms":456}
                 }]
             }
         }).to_string().into())).unwrap();

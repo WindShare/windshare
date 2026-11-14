@@ -30,6 +30,15 @@ Publish `windshare-network.json` as `/.well-known/windshare-network` on both
 frontends and as a GitHub release asset. Keep the embedded snapshot current in client
 releases. Cache expiry disables directory use for new work without stopping transfers.
 
+For development, provision a separate checkout with a dedicated network identity.
+Keep private keys in encrypted storage outside all checkouts; reuse its public roots,
+certificate, snapshot, and signed history across builds. Build CLI, desktop, and Web
+from that checkout. Use a reachable development frontend and an isolated
+`WINDSHARE_CONFIG` containing `{"profiles":[]}`, keeping its adjacent
+`.state/network/` directory and a separate browser profile. No public release or
+mirror is required while the embedded snapshot is valid. Never clear only the
+settings file to reset trust.
+
 Public STUN fallbacks: the existing Google endpoint,
 [Cloudflare](https://developers.cloudflare.com/realtime/turn/), and
 [Twilio](https://www.twilio.com/docs/stun-turn/api). Provider diversity is known;

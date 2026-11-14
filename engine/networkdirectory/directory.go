@@ -5,7 +5,6 @@ package networkdirectory
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"net/url"
@@ -53,12 +52,12 @@ type Directory struct {
 
 func New(config Config) (*Directory, error) {
 	if config.Network == "" || len(config.Mirrors) > MaximumMirrors {
-		return nil, nodedirectory.ErrFormat
+		return nil, blocked(InvalidConfiguration, nodedirectory.ErrFormat)
 	}
 	for _, mirror := range config.Mirrors {
 		address, err := url.Parse(mirror)
 		if err != nil || address.Scheme != "https" || address.Host == "" || address.User != nil || address.Fragment != "" {
-			return nil, nodedirectory.ErrFormat
+			return nil, blocked(InvalidConfiguration, nodedirectory.ErrFormat)
 		}
 	}
 	config.Roots = slices.Clone(config.Roots)
@@ -84,18 +83,18 @@ func New(config Config) (*Directory, error) {
 	record, err := config.Cache.Load(ctx)
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("read network trust state: %w", err)
+		return nil, blocked(TrustStateUnreadable, err)
 	}
 	if len(record.Envelope) > 0 {
 		snapshot, err := nodedirectory.Verify(record.Envelope, config.Network, config.Roots)
 		if err != nil || snapshot.Cursor() != record.Cursor {
 			cancel()
-			return nil, errors.Join(nodedirectory.ErrRollback, err)
+			return nil, blocked(TrustStateInvalid, errors.Join(nodedirectory.ErrRollback, err))
 		}
 		directory.current, directory.highest = snapshot, record.Cursor
 	} else if record.Cursor.Generation != 0 {
 		cancel()
-		return nil, nodedirectory.ErrRollback
+		return nil, blocked(TrustStateInvalid, nodedirectory.ErrRollback)
 	}
 	if len(config.Embedded) > 0 {
 		// An expired embedded export is still verifiable history. It cannot
@@ -103,7 +102,7 @@ func New(config Config) (*Directory, error) {
 		snapshot, err := nodedirectory.Verify(config.Embedded, config.Network, config.Roots)
 		if err != nil {
 			cancel()
-			return nil, err
+			return nil, blocked(InvalidConfiguration, err)
 		}
 		if err := directory.commit(ctx, snapshot); err != nil && !errors.Is(err, nodedirectory.ErrRollback) {
 			cancel()
@@ -128,18 +127,24 @@ func (directory *Directory) install(ctx context.Context, next nodedirectory.Snap
 }
 
 func (directory *Directory) commit(ctx context.Context, next nodedirectory.Snapshot) error {
+	var rejected error
 	record, err := directory.config.Cache.Update(ctx, func(previous Record) (Record, error) {
 		if err := nodedirectory.Compare(previous.Cursor, next.Cursor()); err != nil {
+			rejected = err
 			return Record{}, err
 		}
 		aliases, err := nodedirectory.RetainAliases(previous.Aliases, next)
 		if err != nil {
+			rejected = err
 			return Record{}, err
 		}
 		return Record{Cursor: next.Cursor(), Envelope: next.Envelope(), Aliases: aliases}, nil
 	})
 	if err != nil {
-		return err
+		if rejected != nil {
+			return rejected
+		}
+		return blocked(TrustStateUnwritable, err)
 	}
 	directory.mu.Lock()
 	defer directory.mu.Unlock()
@@ -159,12 +164,10 @@ func (directory *Directory) Refresh(ctx context.Context) error {
 	directory.mu.Lock()
 	done := directory.refreshing
 	if done == nil && directory.failures > 0 && directory.config.Now().Before(directory.nextRefresh) {
-		err := directory.lastError
+		err := directory.unavailableLocked()
 		directory.mu.Unlock()
-		if err == nil {
-			return nil
-		}
-		return errors.Join(nodedirectory.ErrExpired, err)
+		slog.Debug("network_directory_refresh_deferred", "network", directory.config.Network, "reason", err.Reason, "retry_at", err.RetryAt)
+		return err
 	}
 	if done == nil {
 		done = make(chan struct{})
@@ -179,9 +182,11 @@ func (directory *Directory) Refresh(ctx context.Context) error {
 		return directory.ctx.Err()
 	case <-done:
 		directory.mu.Lock()
-		err := directory.lastError
-		directory.mu.Unlock()
-		return err
+		defer directory.mu.Unlock()
+		if directory.lastError != nil {
+			return directory.unavailableLocked()
+		}
+		return nil
 	}
 }
 
@@ -200,13 +205,15 @@ func (directory *Directory) refresh(done chan struct{}) {
 		backoff := min(MinimumBackoff*time.Duration(1<<(directory.failures-1)), MaximumBackoff)
 		directory.nextRefresh = directory.config.Now().Add(backoff)
 	}
+	slog.Debug("network_directory_refresh_completed", "network", directory.config.Network, "generation", directory.highest.Generation,
+		"serial", directory.highest.Serial, "failures", directory.failures, "next_refresh", directory.nextRefresh, "error", err)
 	directory.refreshing = nil
 	close(done)
 }
 
 func (directory *Directory) tryMirrors(ctx context.Context) error {
 	if len(directory.config.Roots) == 0 {
-		return nodedirectory.ErrExpired
+		return blocked(Unprovisioned, nil)
 	}
 	order := directory.config.Order(len(directory.config.Mirrors))
 	var failures []error
