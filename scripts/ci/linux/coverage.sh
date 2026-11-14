@@ -23,12 +23,12 @@ echo "-- non-core short atomic coverage sweep"
 go test -short -count=1 -covermode=atomic -coverprofile="$root_profile" "${non_core_packages[@]}"
 
 echo "-- non-core coverage verdict"
-go-test-coverage --config=.testcoverage.yml --profile="$root_profile"
+go run ./scripts/ci/_coverage --config=.testcoverage.yml --profile="$root_profile"
 
 echo "-- core short atomic coverage sweep"
 go test -short -count=1 -covermode=atomic -coverprofile="$core_profile" "${core_packages[@]}"
 
 echo "-- core coverage verdict"
-go-test-coverage --config=core/.testcoverage.yml --profile="$core_profile"
+go run ./scripts/ci/_coverage --config=core/.testcoverage.yml --profile="$core_profile"
 
 echo "== coverage: PASS in ${SECONDS}s =="
