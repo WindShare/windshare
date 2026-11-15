@@ -172,6 +172,8 @@ func failureMessage(failure appobs.Failure) string {
 		message = "The relay is unavailable."
 	case appobs.MessageShareUnavailable:
 		message = "The share is not currently available. Retry the original link."
+	case appobs.MessageShareStopped:
+		message = "The sender stopped this share. Ask the sender for a new link."
 	case appobs.MessageDirectUnavailable:
 		message = "The direct connection is unavailable."
 	case appobs.MessageDirectPolicy:
