@@ -3,8 +3,7 @@ use crate::{
     layout::{FlowLayout, task_width},
     motion::{SpiritScene, SpiritState, ground_shadow},
     share_timing::{
-        FLIGHT_DURATION, LANDING_DURATION, STORY_DURATION, ShareFrame, ease_out, lerp, segment,
-        smooth,
+        FLIGHT_DURATION, LANDING_DURATION, STORY_DURATION, ShareFrame, lerp, segment, smooth,
     },
 };
 use gpui::{Div, Point, Window, div, point, prelude::*, px, relative};
@@ -23,6 +22,7 @@ const SPIRIT_FLIGHT_EXPANSION: f32 = 64.;
 const WIND_HEAD_START: f32 = 0.18;
 const WIND_HEAD_END: f32 = 1.75;
 const PAPER_COUNT: u16 = 7;
+const PAPER_FADE_START: f32 = 0.90;
 const PAPER_ASSETS: [Artwork; 3] = [Artwork::Paper, Artwork::Photo, Artwork::Folder];
 
 #[derive(Clone, Copy)]
@@ -85,9 +85,6 @@ impl ShareGeometry {
     }
     fn flight_end(self) -> Point<f32> {
         self.destination() + point(-46., 28.)
-    }
-    fn paper_destination(self) -> Point<f32> {
-        point(self.width / 2., self.height / 2.)
     }
 }
 
@@ -206,48 +203,26 @@ impl ShareScene {
     fn paper(self, index: u16) -> Option<Div> {
         let g = self.geometry;
         let seed = f32::from(index);
-        let (center, size, opacity) = if self.landing() {
-            let p = ease_out(segment(
-                self.arrival_progress(),
-                seed * 0.018,
-                0.48 + seed * 0.025,
-            ));
-            let end = g.flight_end();
-            let destination = g.paper_destination();
-            (
-                cubic(
-                    [
-                        end,
-                        point(end.x + 45. - seed * 10., end.y + 95.),
-                        point(destination.x + 100. + seed * 9., destination.y - 70.),
-                        destination,
-                    ],
-                    p,
+        let t = self.flight_progress();
+        let p = smooth(segment(t, seed * 0.028, 0.88 + seed * 0.018));
+        let flank = if index.is_multiple_of(2) { -0.12 } else { 1.10 };
+        let center = cubic(
+            [
+                point(g.width * (0.39 + seed * 0.035), g.height * 0.57),
+                point(g.width * flank, g.height * (0.62 - seed * 0.045)),
+                point(
+                    g.width * (0.12 + seed * 0.115),
+                    g.height * (-0.25 + seed * 0.035),
                 ),
-                lerp(27., 10., p),
-                1. - smooth(segment(p, 0.64, 1.)),
-            )
-        } else {
-            let t = self.flight_progress();
-            let p = smooth(segment(t, seed * 0.028, 0.88 + seed * 0.018));
-            let flank = if index.is_multiple_of(2) { -0.12 } else { 1.10 };
-            (
-                cubic(
-                    [
-                        point(g.width * (0.39 + seed * 0.035), g.height * 0.57),
-                        point(g.width * flank, g.height * (0.62 - seed * 0.045)),
-                        point(
-                            g.width * (0.12 + seed * 0.115),
-                            g.height * (-0.25 + seed * 0.035),
-                        ),
-                        g.flight_end(),
-                    ],
-                    p,
-                ),
-                lerp(54. + seed * 3., 27., p),
-                smooth(segment(t, 0.01, 0.13)),
-            )
-        };
+                g.flight_end(),
+            ],
+            p,
+        );
+        let size = lerp(54. + seed * 3., 27., p);
+        // Fade on the existing approach before the files gather at its endpoint;
+        // a second landing path would restart them and send them back across the result.
+        let opacity =
+            smooth(segment(t, 0.01, 0.13)) * (1. - smooth(segment(p, PAPER_FADE_START, 1.)));
         (opacity > 0.).then(|| {
             div()
                 .absolute()

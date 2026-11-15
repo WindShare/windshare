@@ -144,10 +144,6 @@ pub fn smooth(t: f32) -> f32 {
     t * t * (3. - 2. * t)
 }
 
-pub fn ease_out(t: f32) -> f32 {
-    1. - (1. - t).powi(4)
-}
-
 pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
     (b - a).mul_add(t, a)
 }
