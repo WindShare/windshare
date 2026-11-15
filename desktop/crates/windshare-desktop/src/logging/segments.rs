@@ -85,7 +85,9 @@ impl Segments {
 
 impl Write for Segments {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        if self.bytes == self.limit {
+        // Each call carries one formatted record. Start a fresh segment when the
+        // record would not fit, so only records larger than a segment are split.
+        if self.bytes == self.limit || (self.bytes > 0 && bytes.len() > self.limit - self.bytes) {
             self.rotate()?;
         }
         let count = bytes.len().min(self.limit - self.bytes);
