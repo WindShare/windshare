@@ -20,6 +20,8 @@ const LANDING_X_FRACTION: f32 = 0.68;
 const LANDING_Y_FRACTION: f32 = 0.24;
 const LANDED_SPIRIT_SIZE: f32 = 52.;
 const SPIRIT_FLIGHT_EXPANSION: f32 = 64.;
+const WIND_HEAD_START: f32 = 0.18;
+const WIND_HEAD_END: f32 = 1.75;
 const PAPER_COUNT: u16 = 7;
 const PAPER_ASSETS: [Artwork; 3] = [Artwork::Paper, Artwork::Photo, Artwork::Folder];
 
@@ -101,6 +103,9 @@ impl ShareScene {
     fn landing(self) -> bool {
         self.frame.story >= FLIGHT_DURATION
     }
+    fn story_progress(self) -> f32 {
+        self.frame.story.as_secs_f32() / STORY_DURATION.as_secs_f32()
+    }
     fn flight_progress(self) -> f32 {
         (self.frame.story.as_secs_f32() / FLIGHT_DURATION.as_secs_f32()).min(1.)
     }
@@ -148,7 +153,7 @@ impl ShareScene {
         let g = self.geometry;
         // Content phases must not stop and restart the character. One trajectory
         // carries position and scale through the reveal with continuous velocity.
-        let t = smooth(self.frame.story.as_secs_f32() / STORY_DURATION.as_secs_f32());
+        let t = smooth(self.story_progress());
         let end = g.destination();
         let expansion = SPIRIT_FLIGHT_EXPANSION * (PI * t).sin().powi(2);
         (
@@ -182,7 +187,7 @@ impl ShareScene {
                     SpiritScene::new(
                         "share-spirit",
                         SpiritState::Choreographed {
-                            progress: self.frame.story.as_secs_f32() / STORY_DURATION.as_secs_f32(),
+                            progress: self.story_progress(),
                             smile: self.reveal(0.02, 0.42) * self.frame.link.content_visibility(),
                         },
                         Tone::Mint,
@@ -254,19 +259,20 @@ impl ShareScene {
     }
 
     fn wind_pose(self) -> (f32, f32) {
-        if self.landing() {
-            let t = self.arrival_progress();
-            (
-                lerp(1.15, 1.75, smooth(t)),
-                0.8 * (1. - smooth(segment(t, 0., 0.8))),
-            )
+        // Phase-local easing would stop the visible ribbon at the flight/landing
+        // boundary. Keep its travel on the same uninterrupted clock as the spirit.
+        let head = lerp(
+            WIND_HEAD_START,
+            WIND_HEAD_END,
+            smooth(self.story_progress()),
+        );
+        let strength = if self.landing() {
+            0.8 * (1. - smooth(segment(self.arrival_progress(), 0., 0.8)))
         } else {
             let t = self.flight_progress();
-            (
-                lerp(0.18, 1.15, smooth(t)),
-                smooth(segment(t, 0., 0.14)) * lerp(1., 0.8, segment(t, 0.9, 1.)),
-            )
-        }
+            smooth(segment(t, 0., 0.14)) * lerp(1., 0.8, segment(t, 0.9, 1.))
+        };
+        (head, strength)
     }
     fn wind_field(self) -> impl IntoElement {
         let (head, strength) = self.wind_pose();
