@@ -26,24 +26,9 @@ mod supershare;
 mod transfer_views;
 
 use desktop::Desktop;
-use gpui::{
-    AppContext, AssetSource, Bounds, SharedString, TitlebarOptions, WindowBounds, WindowOptions,
-    px, size,
-};
-use std::{borrow::Cow, time::Duration};
-
-struct DesktopAssets;
-impl AssetSource for DesktopAssets {
-    fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
-        if path == "brand/breeze.svg" {
-            return Ok(Some(Cow::Borrowed(include_bytes!("../assets/breeze.svg"))));
-        }
-        windshare_ui::Assets.load(path)
-    }
-    fn list(&self, _: &str) -> gpui::Result<Vec<SharedString>> {
-        Ok(vec![])
-    }
-}
+use gpui::{AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
+use std::time::Duration;
+use windshare_ui::Assets as DesktopAssets;
 
 fn main() -> std::process::ExitCode {
     let _logs = logging::start();

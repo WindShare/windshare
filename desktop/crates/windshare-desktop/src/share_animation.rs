@@ -1,20 +1,20 @@
 use crate::{
     artwork::Artwork,
     layout::{FlowLayout, task_width},
-    motion::{Spirit, SpiritScene, SpiritState},
+    motion::{SpiritScene, SpiritState, ground_shadow},
     share_timing::{
         FLIGHT_DURATION, LANDING_DURATION, STORY_DURATION, ShareFrame, ease_out, lerp, segment,
         smooth,
     },
 };
-use gpui::{Div, Point, Window, div, point, prelude::*};
+use gpui::{Div, Point, Window, div, point, prelude::*, px, relative};
 use std::f32::consts::PI;
-use windshare_ui::LARGE_BUTTON_HEIGHT;
+use windshare_ui::{LARGE_BUTTON_HEIGHT, Tone};
 
 pub const SHARE_CHOICE_SECTION_GAP: f32 = 24.;
 pub const SHARE_CHOICE_TITLE_HEIGHT: f32 = 36.;
 const SHARE_CHOICE_CONTROLS_HEIGHT: f32 =
-    2.0_f32.mul_add(SHARE_CHOICE_SECTION_GAP, SHARE_CHOICE_TITLE_HEIGHT) + LARGE_BUTTON_HEIGHT;
+    SHARE_CHOICE_TITLE_HEIGHT + SHARE_CHOICE_SECTION_GAP + LARGE_BUTTON_HEIGHT;
 
 const LANDING_X_FRACTION: f32 = 0.68;
 const LANDING_Y_FRACTION: f32 = 0.24;
@@ -27,21 +27,54 @@ const PAPER_ASSETS: [Artwork; 3] = [Artwork::Paper, Artwork::Photo, Artwork::Fol
 pub struct ShareGeometry {
     pub width: f32,
     pub height: f32,
+    scale: f32,
     initial_spirit_size: f32,
     initial_spirit_y: f32,
 }
 impl ShareGeometry {
     pub fn new(window: &Window, layout: FlowLayout) -> Self {
+        let scale = layout.scene_scale();
+        let height = layout
+            .stage_height()
+            .max(SpiritScene::height(scale) + SHARE_CHOICE_CONTROLS_HEIGHT);
         Self {
             width: task_width(window),
-            height: layout.stage_height(),
-            initial_spirit_size: 156. * layout.scene_scale(),
-            // The chooser is centered as a group; launch from the body's visual
-            // center so layout edits do not create a jump at the first frame.
-            initial_spirit_y: (layout.stage_height() - SHARE_CHOICE_CONTROLS_HEIGHT) / 2.
-                + SpiritScene::body_center_offset_y(layout.scene_scale()),
+            height,
+            scale,
+            initial_spirit_size: SpiritScene::body_size(scale),
+            // Layout and the flight share the same origin, including the new
+            // scene height; the first frame must preserve the visible pose.
+            initial_spirit_y: (height - SHARE_CHOICE_CONTROLS_HEIGHT) / 2.
+                + SpiritScene::body_center_offset_y(scale),
         }
     }
+    pub fn spirit_space(self) -> Div {
+        div()
+            .w(px(SpiritScene::width(self.scale)))
+            .h(px(SpiritScene::height(self.scale)))
+            .flex_shrink_0()
+    }
+
+    fn scene_origin(self) -> Div {
+        let chooser_height = SpiritScene::height(self.scale) + SHARE_CHOICE_CONTROLS_HEIGHT;
+        div()
+            .absolute()
+            .left(relative(0.5))
+            .top(relative(0.5))
+            .ml(px(-SpiritScene::width(self.scale) / 2.))
+            .mt(px(-chooser_height / 2.))
+    }
+
+    pub fn spirit(self, state: SpiritState, reduced_motion: bool) -> Div {
+        self.scene_origin().child(SpiritScene::new(
+            "share-spirit",
+            state,
+            Tone::Mint,
+            self.scale,
+            reduced_motion,
+        ))
+    }
+
     fn destination(self) -> Point<f32> {
         point(
             self.width * LANDING_X_FRACTION,
@@ -99,8 +132,14 @@ impl ShareScene {
             .inset_0()
             .size_full()
             .when(self.arrival_progress() < 1., |el| {
-                el.child(self.wind_field())
-                    .children((0..PAPER_COUNT).filter_map(|index| self.paper(index)))
+                el.child(
+                    self.geometry
+                        .scene_origin()
+                        .opacity(1. - smooth(segment(self.flight_progress(), 0., 0.25)))
+                        .child(ground_shadow(Tone::Mint, self.geometry.scale)),
+                )
+                .child(self.wind_field())
+                .children((0..PAPER_COUNT).filter_map(|index| self.paper(index)))
             })
             .child(self.spirit(reduced_motion))
     }
@@ -126,23 +165,32 @@ impl ShareScene {
         )
     }
 
-    fn spirit(self, reduced_motion: bool) -> Div {
+    fn spirit(self, reduced_motion: bool) -> impl IntoElement {
+        let g = self.geometry;
         let (center, size) = self.spirit_pose();
+        let origin = point(
+            (g.width - SpiritScene::width(g.scale)) / 2.,
+            (g.height - SpiritScene::height(g.scale) - SHARE_CHOICE_CONTROLS_HEIGHT) / 2.,
+        );
         let visibility = 1. - self.reveal(0.12, 0.72);
-        div()
-            .absolute()
-            .inset_0()
+        // Preserve the entire keyed component, including its layout origin.
+        // Only the vector pose changes as the character follows the flight path.
+        g.scene_origin()
             .opacity(visibility)
             .when(visibility > 0., |el| {
-                el.child(Spirit::new(
-                    "share-spirit",
-                    SpiritState::Choreographed {
-                        smile: self.reveal(0.02, 0.42) * self.frame.link.content_visibility(),
-                    },
-                    center,
-                    size,
-                    reduced_motion,
-                ))
+                el.child(
+                    SpiritScene::new(
+                        "share-spirit",
+                        SpiritState::Choreographed {
+                            progress: self.frame.story.as_secs_f32() / STORY_DURATION.as_secs_f32(),
+                            smile: self.reveal(0.02, 0.42) * self.frame.link.content_visibility(),
+                        },
+                        Tone::Mint,
+                        g.scale,
+                        reduced_motion,
+                    )
+                    .with_pose(center - origin, size),
+                )
             })
     }
 

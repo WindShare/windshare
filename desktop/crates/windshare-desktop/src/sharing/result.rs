@@ -94,7 +94,6 @@ impl Desktop {
                     // The choreography keeps one centered coordinate space even when
                     // the result needs more height for a QR code or a wrapped filename.
                     div()
-                        .id(("share-choreography", run.operation))
                         .absolute()
                         .left_0()
                         .top(relative(0.5))

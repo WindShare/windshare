@@ -15,7 +15,7 @@ use crate::{
     flow_state::ShareFlow,
     layout::FlowLayout,
     model::Action,
-    motion::{SpiritMood, scaled_spirit},
+    motion::{SpiritMood, SpiritState},
     share_animation::{
         SHARE_CHOICE_SECTION_GAP, SHARE_CHOICE_TITLE_HEIGHT, ShareGeometry, ShareScene,
     },
@@ -38,13 +38,15 @@ impl Desktop {
         let active = window.is_window_active() && window.is_visible();
         match self.share_flow {
             ShareFlow::Choose => column()
-                .id("share-drop-zone")
+                .id("share-stage")
+                .relative()
                 .drag_over::<gpui::ExternalPaths>(move |style, _, _, _| {
                     style.bg(Tone::Mint.surface(theme)).rounded(px(24.))
                 })
-                .h(px(geometry.height))
+                .min_h(px(geometry.height))
                 .justify_center()
-                .child(self.choose_share(theme, layout, still, cx))
+                .child(self.choose_share(theme, geometry, cx))
+                .child(geometry.spirit(SpiritState::Floating(SpiritMood::Idle), still))
                 .into_any_element(),
             ShareFlow::Running(run) => {
                 if let Some(share) = self
@@ -72,40 +74,27 @@ impl Desktop {
                 let frame = run.sample(now, still);
                 let animating = active && !still && frame.needs_animation();
                 self.motion_probe.observe(run, frame, now, animating);
-                // Pending work needs visible activity even after the introduction.
-                // Completed results wake only for user input or feedback deadlines.
                 if animating {
                     window.request_animation_frame();
                 }
                 let scene = ShareScene::new(geometry, frame);
                 self.running_share(theme, run, scene, layout, cx)
+                    .id("share-stage")
                     .into_any_element()
             }
         }
     }
 
-    fn choose_share(
-        &self,
-        theme: Theme,
-        layout: FlowLayout,
-        still: bool,
-        cx: &Context<Self>,
-    ) -> Div {
+    fn choose_share(&self, theme: Theme, geometry: ShareGeometry, cx: &Context<Self>) -> Div {
         let locale = language(cx);
         column()
             .items_center()
-            .gap(px(SHARE_CHOICE_SECTION_GAP))
-            .child(scaled_spirit(
-                "share-choose-spirit",
-                SpiritMood::Idle,
-                Tone::Mint,
-                layout.scene_scale(),
-                still,
-            ))
+            .child(geometry.spirit_space())
             .child(
                 theme
                     .heading(locale.text(Text::ChooseShare), 26.)
-                    .line_height(px(SHARE_CHOICE_TITLE_HEIGHT)),
+                    .line_height(px(SHARE_CHOICE_TITLE_HEIGHT))
+                    .mb(px(SHARE_CHOICE_SECTION_GAP)),
             )
             .child(
                 row()

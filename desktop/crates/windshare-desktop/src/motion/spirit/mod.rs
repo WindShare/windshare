@@ -6,7 +6,7 @@ use crate::artwork::Artwork;
 use behavior::{Behavior, NOMINAL_SIZE, Pose, SMILE_DURATION};
 use gpui::{
     App, Bounds, ElementId, FocusHandle, IntoElement, MouseButton, MouseMoveEvent, Pixels, Point,
-    Radians, Role, Subscription, Task, Window, canvas, div, point, prelude::*, px,
+    Radians, Role, Subscription, Task, Window, canvas, div, prelude::*, px,
 };
 use presentation::Presentation;
 pub use presentation::SpiritState;
@@ -180,8 +180,14 @@ impl SpiritView {
         let now = Instant::now();
         let mode = self.motion_mode(window, cx);
         if self.mode != mode {
-            self.behavior.reset();
-            self.last_frame = now;
+            if self.mode == MotionMode::Animated && mode == MotionMode::Choreographed {
+                // Releasing the spring preserves its velocity and ambient phase.
+                // Resetting here would snap the first flight frame to rest.
+                self.behavior.release();
+            } else {
+                self.behavior.reset();
+                self.last_frame = now;
+            }
             self.mode = mode;
             tracing::info!(
                 event = "desktop.spirit_motion_changed",
@@ -192,7 +198,7 @@ impl SpiritView {
         }
         let elapsed = now.saturating_duration_since(self.last_frame);
         self.last_frame = now;
-        if mode != MotionMode::Animated {
+        if !matches!(mode, MotionMode::Animated | MotionMode::Choreographed) {
             return Pose::default();
         }
         let was_following = self.behavior.following();
@@ -215,7 +221,7 @@ impl Render for SpiritView {
         let pose = self.pose(window, cx);
         let presentation = self.presentation;
         let scale = presentation.width / NOMINAL_SIZE;
-        let center = presentation.center + point(pose.x * scale, pose.y * scale);
+        let (center, width, tilt) = presentation.sprite_pose(pose, scale);
         let smile = presentation.smile(self.behavior.smiling(Instant::now()));
         // Keep the artwork in scene coordinates for its entire lifetime. The
         // stationary focus/hit target is a sibling, so enabling it cannot change
@@ -226,8 +232,8 @@ impl Render for SpiritView {
             .size_full()
             .child(
                 Artwork::Spirit
-                    .blend_to(Artwork::Happy, center, presentation.width, smile)
-                    .rotate(Radians(pose.tilt.to_radians())),
+                    .blend_to(Artwork::Happy, center, width, smile)
+                    .rotate(Radians(tilt.to_radians())),
             )
             .when_some(presentation.hit_center(), |el, anchor| {
                 el.child(self.hit_target(anchor, window, cx))
