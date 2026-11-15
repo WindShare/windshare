@@ -1,5 +1,5 @@
-use crate::{model::ShareContents, share_timing::ShareFrame};
-use std::time::Instant;
+use crate::model::ShareContents;
+use std::time::{Duration, Instant};
 use windshare_ui::{Icon, Tone};
 pub const COPY_FEEDBACK_MS: u64 = 2400;
 
@@ -57,40 +57,24 @@ pub enum ShareFlow {
     Running(ShareRun),
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct ShareRun {
-    pub operation: usize,
-    pub selection_id: usize,
-    pub started_at: Instant,
-    pub readiness: ShareReadiness,
-}
+const SHARE_RESULT_DELAY: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, Debug)]
-pub enum ShareReadiness {
-    Pending,
-    Ready { at: Instant },
-    Finished,
+pub struct ShareRun {
+    pub share_id: usize,
+    result_at: Instant,
 }
 
 impl ShareRun {
-    pub fn sample(self, now: Instant, still: bool) -> ShareFrame {
-        let ready_at = match self.readiness {
-            ShareReadiness::Pending => None,
-            ShareReadiness::Ready { at } => Some(at.saturating_duration_since(self.started_at)),
-            ShareReadiness::Finished => Some(std::time::Duration::ZERO),
-        };
-        ShareFrame::sample(
-            now.saturating_duration_since(self.started_at),
-            ready_at,
-            still || matches!(self.readiness, ShareReadiness::Finished),
-        )
+    pub fn new(share_id: usize, now: Instant) -> Self {
+        Self {
+            share_id,
+            result_at: now + SHARE_RESULT_DELAY,
+        }
     }
 
-    pub const fn share_id(self) -> Option<usize> {
-        match self.readiness {
-            ShareReadiness::Pending | ShareReadiness::Finished => None,
-            ShareReadiness::Ready { .. } => Some(self.selection_id),
-        }
+    pub fn remaining(self, now: Instant) -> Duration {
+        self.result_at.saturating_duration_since(now)
     }
 }
 #[derive(Clone, Copy, Debug)]

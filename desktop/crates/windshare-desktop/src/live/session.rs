@@ -1,6 +1,6 @@
 use crate::{
     desktop::Desktop,
-    flow_state::{ShareFlow, ShareRun},
+    flow_state::ShareRun,
     localization::Text,
     model::{Page, ShareSource},
 };
@@ -142,7 +142,12 @@ impl Desktop {
                     continue;
                 };
                 if let Some(operation) = model.operations.iter().find(|op| &op.id == operation_id) {
+                    let was_ready = share.usable_link().is_some();
                     super::projection::update_share(share, operation);
+                    if !was_ready && share.usable_link().is_some() {
+                        tracing::info!(event = "share.ready", operation = %operation.id,
+                            share_id = share.id, preview = false);
+                    }
                 }
             }
             // This timer only re-enables presentation at the host's deadline.
@@ -171,17 +176,6 @@ impl Desktop {
                 }
             }));
             session.model = model;
-            for share in &self.shares {
-                if let ShareSource::Native { operation_id } = &share.source
-                    && let Some(run) = session.presentations.get_mut(operation_id)
-                {
-                    super::presentation::update_readiness(run, share);
-                    if matches!(self.share_flow, ShareFlow::Running(current) if current.selection_id == share.id)
-                    {
-                        self.share_flow = ShareFlow::Running(*run);
-                    }
-                }
-            }
             cx.notify();
         }
     }

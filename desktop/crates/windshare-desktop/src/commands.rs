@@ -3,12 +3,12 @@ use crate::{
     desktop::Desktop,
     flow_state::{
         COPY_FEEDBACK_MS, CopyFeedback, LinkFeedback, RECEIVE_OPEN_MS, RECEIVE_SAVE_MS,
-        ReceiveFlow, SampleBundle, ShareFlow, ShareReadiness,
+        ReceiveFlow, SampleBundle, ShareFlow,
     },
     model::{Action, Overlay, Page, ShareState, TransferState},
 };
 use gpui::{BorrowAppContext, ClipboardItem, Context, Focusable, Window};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const DEMO_LINK: &str = "https://windshare.example/s/kyoto-weekend";
 
@@ -18,6 +18,7 @@ impl Desktop {
         match action {
             Action::Navigate(page) => self.navigate(page, window, cx),
             Action::NewShare => {
+                self.share_result_wakeup = None;
                 self.share_flow = ShareFlow::Choose;
                 self.navigate(Page::Share, window, cx);
             }
@@ -118,15 +119,25 @@ impl Desktop {
     }
 
     fn reset_share(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.share_result_wakeup = None;
         if let ShareFlow::Running(run) = self.share_flow
-            && matches!(run.readiness, ShareReadiness::Pending)
+            && self.shares.iter().any(|share| {
+                share.id == run.share_id
+                    && matches!(
+                        share.state,
+                        ShareState::Preparing
+                            | ShareState::AwaitingAuthorization
+                            | ShareState::AwaitingConfiguration(_)
+                            | ShareState::AwaitingNetwork(_)
+                    )
+            })
         {
-            self.stop_native_share(run.selection_id);
+            self.stop_native_share(run.share_id);
             if self.runtime.is_preview()
                 && let Some(share) = self
                     .shares
                     .iter_mut()
-                    .find(|share| share.id == run.selection_id)
+                    .find(|share| share.id == run.share_id)
             {
                 share.state = ShareState::Cancelled;
             }
@@ -150,7 +161,7 @@ impl Desktop {
         };
         let inline_feedback = (self.page == Page::Share
             && self.overlays.is_empty()
-            && matches!(self.share_flow, ShareFlow::Running(run) if run.share_id() == Some(id)))
+            && matches!(self.share_flow, ShareFlow::Running(run) if run.share_id == id && run.remaining(Instant::now()).is_zero()))
             || self.overlays.last().is_some_and(
                 |frame| matches!(frame.content, Overlay::Detail(share_id) if share_id == id),
             );

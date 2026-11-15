@@ -1,95 +1,104 @@
-mod activity;
 mod detail;
 mod link;
 mod link_views;
 mod preview;
 mod qr;
 mod result;
+mod result_delay;
 
 pub use detail::{detail_width, enlarged_qr_side};
 pub use link::{LinkDisclosure, ShareLink};
 
-use crate::localization::{Language, Text, language};
 use crate::{
     desktop::Desktop,
     flow_state::ShareFlow,
     layout::FlowLayout,
-    model::Action,
-    motion::{SpiritMood, SpiritState},
-    share_animation::{
-        SHARE_CHOICE_SECTION_GAP, SHARE_CHOICE_TITLE_HEIGHT, ShareGeometry, ShareScene,
-    },
+    localization::{Text, language},
+    model::{Action, ShareState},
+    motion::{SpiritMood, SpiritScene, scaled_spirit},
 };
 use gpui::{Div, Window, prelude::*, px};
-use windshare_ui::{ButtonStyle, Icon, Theme, Tone, column, row};
+use std::time::Instant;
+use windshare_ui::{ButtonStyle, Icon, LARGE_BUTTON_HEIGHT, Theme, Tone, column, row};
 
 const SHARE_CHOICE_BUTTON_MIN_WIDTH: f32 = 160.;
+const SHARE_CHOICE_SECTION_GAP: f32 = 24.;
+const SHARE_CHOICE_TITLE_HEIGHT: f32 = 36.;
+
+fn stage_height(layout: FlowLayout) -> f32 {
+    layout.stage_height().max(
+        SpiritScene::height(layout.scene_scale())
+            + SHARE_CHOICE_TITLE_HEIGHT
+            + SHARE_CHOICE_SECTION_GAP
+            + LARGE_BUTTON_HEIGHT,
+    )
+}
 
 impl Desktop {
     pub fn sharing_page(
-        &mut self,
+        &self,
         layout: FlowLayout,
         window: &Window,
         cx: &Context<Self>,
     ) -> gpui::AnyElement {
         let theme = Theme::current(window, cx);
-        let geometry = ShareGeometry::new(window, layout);
-        let still = self.reduced_motion() || cx.reduce_motion();
-        let active = window.is_window_active() && window.is_visible();
         match self.share_flow {
             ShareFlow::Choose => column()
                 .id("share-stage")
-                .relative()
                 .drag_over::<gpui::ExternalPaths>(move |style, _, _, _| {
                     style.bg(Tone::Mint.surface(theme)).rounded(px(24.))
                 })
-                .min_h(px(geometry.height))
+                .min_h(px(stage_height(layout)))
                 .justify_center()
-                .child(self.choose_share(theme, geometry, cx))
-                .child(geometry.spirit(SpiritState::Floating(SpiritMood::Idle), still))
+                .child(self.choose_share(theme, layout, cx))
                 .into_any_element(),
             ShareFlow::Running(run) => {
-                if let Some(share) = self
-                    .shares
-                    .iter()
-                    .find(|share| share.id == run.selection_id)
-                    && matches!(share.state, crate::model::ShareState::AwaitingAuthorization)
-                {
-                    return self
-                        .authorization_share(theme, share, cx)
+                let Some(share) = self.shares.iter().find(|share| share.id == run.share_id) else {
+                    return column().into_any_element();
+                };
+                match share.state {
+                    ShareState::AwaitingAuthorization => {
+                        return self
+                            .authorization_share(theme, share, cx)
+                            .into_any_element();
+                    }
+                    ShareState::AwaitingConfiguration(blocking)
+                    | ShareState::AwaitingNetwork(blocking) => {
+                        return self
+                            .blocked_share(theme, share, blocking, cx)
+                            .into_any_element();
+                    }
+                    _ => {}
+                }
+                if !share.finished() && !run.remaining(Instant::now()).is_zero() {
+                    return column()
+                        .id("share-stage")
+                        .min_h(px(stage_height(layout)))
+                        .items_center()
+                        .justify_center()
+                        .gap(px(8.))
+                        .child(theme.heading(language(cx).text(Text::PreparingShare), 26.))
+                        .child(theme.caption(share.name.clone()))
                         .into_any_element();
                 }
-                if let Some(share) = self
-                    .shares
-                    .iter()
-                    .find(|share| share.id == run.selection_id)
-                    && let crate::model::ShareState::AwaitingConfiguration(blocking)
-                    | crate::model::ShareState::AwaitingNetwork(blocking) = share.state
-                {
-                    return self
-                        .blocked_share(theme, share, blocking, cx)
-                        .into_any_element();
-                }
-                let now = std::time::Instant::now();
-                let frame = run.sample(now, still);
-                let animating = active && !still && frame.needs_animation();
-                self.motion_probe.observe(run, frame, now, animating);
-                if animating {
-                    window.request_animation_frame();
-                }
-                let scene = ShareScene::new(geometry, frame);
-                self.running_share(theme, run, scene, layout, cx)
+                self.share_result(theme, share, layout, window, cx)
                     .id("share-stage")
                     .into_any_element()
             }
         }
     }
 
-    fn choose_share(&self, theme: Theme, geometry: ShareGeometry, cx: &Context<Self>) -> Div {
+    fn choose_share(&self, theme: Theme, layout: FlowLayout, cx: &Context<Self>) -> Div {
         let locale = language(cx);
         column()
             .items_center()
-            .child(geometry.spirit_space())
+            .child(scaled_spirit(
+                "share-spirit",
+                SpiritMood::Idle,
+                Tone::Mint,
+                layout.scene_scale(),
+                true,
+            ))
             .child(
                 theme
                     .heading(locale.text(Text::ChooseShare), 26.)
@@ -128,33 +137,4 @@ impl Desktop {
                     ),
             )
     }
-}
-
-fn preparation_message(
-    theme: Theme,
-    name: &str,
-    visibility: f32,
-    locale: Language,
-    ready: bool,
-) -> Div {
-    column()
-        .absolute()
-        .bottom_0()
-        .w_full()
-        .items_center()
-        .gap(px(8.))
-        .opacity(visibility)
-        .child(theme.heading(
-            locale.text(if ready {
-                Text::LinkReady
-            } else {
-                Text::PreparingShare
-            }),
-            26.,
-        ))
-        .child(
-            theme
-                .label(name.to_owned(), 16.)
-                .text_color(theme.muted_text()),
-        )
 }

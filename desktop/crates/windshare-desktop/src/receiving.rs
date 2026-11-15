@@ -4,8 +4,7 @@ use crate::{
     flow_state::{LinkFeedback, RECEIVE_SAVE_MS, RECEIVED_FILES, ReceiveFlow, SampleBundle},
     layout::{FlowLayout, RECEIVE_STAGE_HEIGHT},
     model::Action,
-    motion::{SpiritMood, reassurance, reveal, scaled_spirit},
-    share_timing::lerp,
+    motion::{SpiritMood, lerp, reassurance, reveal, scaled_spirit},
 };
 use gpui::{Animation, AnimationExt, Div, FontWeight, div, prelude::*, px, relative};
 use std::time::Duration;

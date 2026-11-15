@@ -2,7 +2,6 @@ use crate::{
     desktop::Desktop,
     localization::{Text, language},
     model::{Action, Share, ShareState},
-    share_timing::{LinkPresentation, lerp},
 };
 use gpui::{Div, Role, div, prelude::*, px};
 use windshare_ui::{Icon, Theme, column, icon, row};
@@ -17,17 +16,12 @@ const SCAN_CORNER_RADIUS: f32 = 7.;
 const WAITING_ICON_SIDE: f32 = 42.;
 
 impl Desktop {
-    pub(crate) fn share_qr(
-        theme: Theme,
-        share: &Share,
-        presentation: LinkPresentation,
-        cx: &Context<Self>,
-    ) -> Div {
+    pub(crate) fn share_qr(theme: Theme, share: &Share, cx: &Context<Self>) -> Div {
         let locale = language(cx);
         let link = share.usable_link();
         let code = link.and_then(|link| link.qr().ok());
         let ready = code.is_some();
-        let waiting = link.is_none() || presentation.waiting_visibility() > 0.;
+        let waiting = code.is_none();
         let unavailable = code.is_none() && !matches!(share.state, ShareState::Preparing);
         let frame = column()
             .relative()
@@ -40,17 +34,12 @@ impl Desktop {
             .rounded(px(QR_FRAME_RADIUS))
             .overflow_hidden()
             .bg(theme.canvas())
-            .when(waiting && !unavailable, |el| {
-                el.child(waiting_qr(theme).opacity(presentation.waiting_visibility()))
-            })
+            .when(waiting && !unavailable, |el| el.child(waiting_qr(theme)))
             .when_some(code, |el, code| {
-                // Keep modules at their final physical-pixel size throughout the
-                // reveal; scaling or sweeping a mask delays reliable scanning.
                 el.child(
                     div()
                         .absolute()
                         .inset_0()
-                        .opacity(presentation.qr_visibility())
                         .child(code.view(QR_INLINE_SIDE).rounded(px(QR_FRAME_RADIUS - 1.))),
                 )
             })
@@ -94,16 +83,11 @@ impl Desktop {
                     row()
                         .gap(px(7.))
                         .py(px(QR_CAPTION_PADDING))
-                        .opacity(lerp(0.65, 1., presentation.content_visibility()))
                         .child(locale.text(Text::ScanToReceive))
                         .child(
                             icon(Icon::Expand, 14.)
                                 .text_color(theme.muted_text())
-                                .opacity(if ready {
-                                    presentation.content_visibility()
-                                } else {
-                                    0.
-                                }),
+                                .opacity(if ready { 1. } else { 0. }),
                         ),
                 ),
         )

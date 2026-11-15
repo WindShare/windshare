@@ -1,9 +1,7 @@
 mod shadow;
 mod spirit;
-mod wind;
 pub use shadow::ground_shadow;
-pub use spirit::{Spirit, SpiritState};
-pub use wind::wind_field;
+pub use spirit::Spirit;
 
 use gpui::{
     Animation, AnimationExt, AnyElement, App, Div, ElementId, IntoElement, Point, Window, div,
@@ -27,7 +25,7 @@ pub enum SpiritMood {
 #[derive(IntoElement)]
 pub struct SpiritScene {
     id: ElementId,
-    state: SpiritState,
+    mood: SpiritMood,
     tone: Tone,
     scale: f32,
     center: Point<f32>,
@@ -38,14 +36,14 @@ pub struct SpiritScene {
 impl SpiritScene {
     pub fn new(
         id: impl Into<ElementId>,
-        state: SpiritState,
+        mood: SpiritMood,
         tone: Tone,
         scale: f32,
         reduced_motion: bool,
     ) -> Self {
         Self {
             id: id.into(),
-            state,
+            mood,
             tone,
             scale,
             center: point(
@@ -55,12 +53,6 @@ impl SpiritScene {
             body_width: Self::body_size(scale),
             reduced_motion,
         }
-    }
-
-    pub const fn with_pose(mut self, center: Point<f32>, width: f32) -> Self {
-        self.center = center;
-        self.body_width = width;
-        self
     }
 
     pub const fn width(scale: f32) -> f32 {
@@ -73,10 +65,6 @@ impl SpiritScene {
 
     pub const fn body_size(scale: f32) -> f32 {
         SPIRIT_SIZE * scale
-    }
-
-    pub const fn body_center_offset_y(scale: f32) -> f32 {
-        (SPIRIT_TOP + SPIRIT_SIZE / 2. - SCENE_HEIGHT / 2.) * scale
     }
 }
 
@@ -96,29 +84,30 @@ pub fn scaled_spirit(
     scale: f32,
     reduced_motion: bool,
 ) -> SpiritScene {
-    SpiritScene::new(id, SpiritState::Floating(mood), tone, scale, reduced_motion)
+    SpiritScene::new(id, mood, tone, scale, reduced_motion)
 }
 
 impl RenderOnce for SpiritScene {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let unit = |value| px(value * self.scale);
         div()
             .id(self.id)
             .relative()
-            .w(unit(SCENE_WIDTH))
-            .h(unit(SCENE_HEIGHT))
+            .w(px(Self::width(self.scale)))
+            .h(px(Self::height(self.scale)))
             .flex_shrink_0()
-            .when(matches!(self.state, SpiritState::Floating(_)), |el| {
-                el.child(ground_shadow(self.tone, self.scale))
-            })
+            .child(ground_shadow(self.tone, self.scale))
             .child(Spirit::new(
                 "body",
-                self.state,
+                self.mood,
                 self.center,
                 self.body_width,
                 self.reduced_motion,
             ))
     }
+}
+
+pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    (b - a).mul_add(t, a)
 }
 
 pub fn reassurance(theme: Theme, symbol: Icon, text: &'static str) -> Div {

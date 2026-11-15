@@ -10,15 +10,12 @@ mod localization;
 mod logging;
 mod model;
 mod motion;
-mod motion_probe;
 mod overlays;
 mod pages;
 mod preferences;
 #[cfg(feature = "motion-profile")]
 mod profiling;
 mod receiving;
-mod share_animation;
-mod share_timing;
 mod share_views;
 mod sharing;
 mod shell;

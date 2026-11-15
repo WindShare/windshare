@@ -8,8 +8,6 @@ mod focus;
 mod icons;
 pub use focus::advance_focus;
 mod input;
-mod layout_reservation;
-pub use layout_reservation::reserve_layout;
 mod primitives;
 mod prompt;
 pub use prompt::dismiss_prompts;

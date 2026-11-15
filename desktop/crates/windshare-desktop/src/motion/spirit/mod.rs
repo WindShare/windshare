@@ -2,6 +2,7 @@ use crate::localization::{LanguageSettings, Text, language};
 mod behavior;
 mod presentation;
 
+use super::SpiritMood;
 use crate::artwork::Artwork;
 use behavior::{Behavior, NOMINAL_SIZE, Pose, SMILE_DURATION};
 use gpui::{
@@ -9,7 +10,6 @@ use gpui::{
     Radians, Role, Subscription, Task, Window, canvas, div, prelude::*, px,
 };
 use presentation::Presentation;
-pub use presentation::SpiritState;
 use std::time::Instant;
 use windshare_ui::Theme;
 
@@ -22,7 +22,7 @@ pub struct Spirit {
 impl Spirit {
     pub fn new(
         id: impl Into<ElementId>,
-        state: SpiritState,
+        mood: SpiritMood,
         center: Point<f32>,
         width: f32,
         reduced_motion: bool,
@@ -30,7 +30,7 @@ impl Spirit {
         Self {
             id: id.into(),
             presentation: Presentation {
-                state,
+                mood,
                 center,
                 width,
                 reduced_motion,
@@ -53,7 +53,6 @@ impl RenderOnce for Spirit {
 enum MotionMode {
     Suspended,
     Reduced,
-    Choreographed,
     Animated,
 }
 
@@ -103,8 +102,6 @@ impl SpiritView {
             MotionMode::Suspended
         } else if self.presentation.reduced_motion || cx.reduce_motion() {
             MotionMode::Reduced
-        } else if matches!(self.presentation.state, SpiritState::Choreographed { .. }) {
-            MotionMode::Choreographed
         } else {
             MotionMode::Animated
         }
@@ -180,14 +177,8 @@ impl SpiritView {
         let now = Instant::now();
         let mode = self.motion_mode(window, cx);
         if self.mode != mode {
-            if self.mode == MotionMode::Animated && mode == MotionMode::Choreographed {
-                // Releasing the spring preserves its velocity and ambient phase.
-                // Resetting here would snap the first flight frame to rest.
-                self.behavior.release();
-            } else {
-                self.behavior.reset();
-                self.last_frame = now;
-            }
+            self.behavior.reset();
+            self.last_frame = now;
             self.mode = mode;
             tracing::info!(
                 event = "desktop.spirit_motion_changed",
@@ -198,7 +189,7 @@ impl SpiritView {
         }
         let elapsed = now.saturating_duration_since(self.last_frame);
         self.last_frame = now;
-        if !matches!(mode, MotionMode::Animated | MotionMode::Choreographed) {
+        if mode != MotionMode::Animated {
             return Pose::default();
         }
         let was_following = self.behavior.following();
@@ -223,9 +214,8 @@ impl Render for SpiritView {
         let scale = presentation.width / NOMINAL_SIZE;
         let (center, width, tilt) = presentation.sprite_pose(pose, scale);
         let smile = presentation.smile(self.behavior.smiling(Instant::now()));
-        // Keep the artwork in scene coordinates for its entire lifetime. The
-        // stationary focus/hit target is a sibling, so enabling it cannot change
-        // rasterization, border insets, or the ambient motion.
+        // A separate stationary hit target keeps interaction offsets from
+        // changing layout, focus geometry, or artwork rasterization.
         div()
             .absolute()
             .inset_0()
@@ -235,9 +225,7 @@ impl Render for SpiritView {
                     .blend_to(Artwork::Happy, center, width, smile)
                     .rotate(Radians(tilt.to_radians())),
             )
-            .when_some(presentation.hit_center(), |el, anchor| {
-                el.child(self.hit_target(anchor, window, cx))
-            })
+            .child(self.hit_target(presentation.center, window, cx))
     }
 }
 

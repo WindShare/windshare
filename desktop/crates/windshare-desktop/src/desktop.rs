@@ -4,8 +4,8 @@ use crate::{
     layout::{FlowLayout, MAX_PAGE_WIDTH, page_gutter},
     live::Runtime,
     model::{Action, Filter, Overlay, Page, Share, Transfer, demo_shares, demo_transfers},
+    motion::lerp,
     overlays::OverlayFrame,
-    share_timing::lerp,
     sharing::LinkDisclosure,
 };
 use gpui::{
@@ -31,7 +31,7 @@ pub struct Desktop {
     pub share_flow: ShareFlow,
     pub runtime: Runtime,
     pub setup_form: crate::live::SetupForm,
-    pub motion_probe: crate::motion_probe::MotionProbe,
+    pub share_result_wakeup: Option<gpui::Task<()>>,
     pub receive_flow: ReceiveFlow,
     pub copy_feedback: CopyFeedback,
     pub primary_focus: FocusHandle,
@@ -115,7 +115,7 @@ impl Desktop {
             share_flow: ShareFlow::Choose,
             runtime,
             setup_form,
-            motion_probe: crate::motion_probe::MotionProbe::default(),
+            share_result_wakeup: None,
             receive_flow: ReceiveFlow::default(),
             copy_feedback: CopyFeedback::Idle,
             primary_focus,
@@ -241,12 +241,7 @@ impl Desktop {
             cx.notify();
         }
     }
-    fn page_content(
-        &mut self,
-        layout: FlowLayout,
-        window: &Window,
-        cx: &Context<Self>,
-    ) -> gpui::Div {
+    fn page_content(&self, layout: FlowLayout, window: &Window, cx: &Context<Self>) -> gpui::Div {
         let theme = Theme::current(window, cx);
         let compact = window.viewport_size().width < px(COMPACT_WIDTH);
         match self.page {
@@ -260,7 +255,7 @@ impl Desktop {
         }
     }
 
-    fn main_pane(&mut self, window: &Window, cx: &Context<Self>) -> gpui::Div {
+    fn main_pane(&self, window: &Window, cx: &Context<Self>) -> gpui::Div {
         let theme = Theme::current(window, cx);
         // A showcase owns its layout; workspace gutters must not crop its visual canvas.
         let body = if self.page == Page::SuperShare {
@@ -276,7 +271,7 @@ impl Desktop {
             .child(self.statusbar(theme, cx))
     }
 
-    fn workspace_page(&mut self, window: &Window, cx: &Context<Self>) -> gpui::Div {
+    fn workspace_page(&self, window: &Window, cx: &Context<Self>) -> gpui::Div {
         let theme = Theme::current(window, cx);
         let compact = window.viewport_size().width < px(COMPACT_WIDTH);
         let layout = FlowLayout::for_window(window);
