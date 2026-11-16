@@ -156,7 +156,6 @@ messages! {
     ChooseFiles => ("Choose files", "选择文件"),
     ChooseFolder => ("Choose folder", "选择文件夹"),
     Cancel => ("Cancel", "取消"),
-    PreparingShare => ("Preparing your share", "正在准备分享"),
     PreparingLink => ("Preparing your link", "正在准备链接"),
     LinkReady => ("Link ready", "链接已就绪"),
     KeepOpenToReceive => ("Keep WindShare running", "需保持 WindShare 运行"),

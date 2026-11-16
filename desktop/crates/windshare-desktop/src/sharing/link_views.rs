@@ -1,4 +1,4 @@
-use super::qr::QR_FRAME_SIDE;
+use super::{ShareLink, qr_slot::QR_FRAME_SIDE};
 use crate::{
     desktop::Desktop,
     flow_state::CopyFeedback,
@@ -16,7 +16,14 @@ pub(super) fn link_columns_fit(width: f32, padding: f32) -> bool {
         >= LINK_TEXT_MIN_WIDTH + LINK_COLUMN_GAP + QR_FRAME_SIDE + 2.
 }
 impl Desktop {
-    pub(crate) fn share_copy_button(&self, id: usize, cx: &Context<Self>) -> Button {
+    /// `link` is the link this surface presents, which a result card still
+    /// arriving withholds even when the share already has one.
+    pub(crate) fn share_copy_button(
+        &self,
+        id: usize,
+        link: Option<&ShareLink>,
+        cx: &Context<Self>,
+    ) -> Button {
         let copied =
             matches!(self.copy_feedback, CopyFeedback::Copied { share_id, .. } if share_id == id);
         Self::button(
@@ -29,25 +36,21 @@ impl Desktop {
         )
         .large()
         .full_width()
-        .disabled(
-            !self
-                .shares
-                .iter()
-                .any(|share| share.id == id && share.usable_link().is_some()),
-        )
+        .disabled(link.is_none())
     }
 
     pub(crate) fn share_link_disclosure(
         &self,
         theme: Theme,
-        share: &Share,
+        id: usize,
+        link: Option<&ShareLink>,
         cx: &Context<Self>,
     ) -> Div {
-        let Some(link) = share.usable_link() else {
+        let Some(link) = link else {
             return column();
         };
         let locale = language(cx);
-        let expanded = self.link_disclosure.expanded(share.id);
+        let expanded = self.link_disclosure.expanded(id);
         let label = locale.text(if expanded {
             Text::HideFullLink
         } else {
@@ -59,7 +62,7 @@ impl Desktop {
             .gap(px(8.))
             .child(
                 Self::button(
-                    ("share-link-disclosure", share.id),
+                    ("share-link-disclosure", id),
                     label,
                     if expanded {
                         Icon::ChevronUp
@@ -67,7 +70,7 @@ impl Desktop {
                         Icon::ChevronDown
                     },
                     ButtonStyle::Quiet,
-                    Action::ToggleLink(share.id),
+                    Action::ToggleLink(id),
                     cx,
                 )
                 .compact()

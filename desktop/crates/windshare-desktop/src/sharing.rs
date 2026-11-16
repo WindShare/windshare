@@ -1,12 +1,14 @@
 mod detail;
+mod intro;
 mod link;
 mod link_views;
 mod preview;
 mod qr;
+mod qr_slot;
 mod result;
-mod result_delay;
 
 pub use detail::{detail_width, enlarged_qr_side};
+pub use intro::{IntroAnchors, Perch};
 pub use link::{LinkDisclosure, ShareLink};
 
 use crate::{
@@ -17,9 +19,9 @@ use crate::{
     model::{Action, ShareState},
     motion::{SpiritMood, SpiritScene, scaled_spirit},
 };
-use gpui::{Div, Window, prelude::*, px};
-use std::time::Instant;
-use windshare_ui::{ButtonStyle, Icon, LARGE_BUTTON_HEIGHT, Theme, Tone, column, row};
+use gpui::{Div, Window, canvas, prelude::*, px};
+use std::rc::Rc;
+use windshare_ui::{Button, ButtonStyle, Icon, LARGE_BUTTON_HEIGHT, Theme, Tone, column, row};
 
 const SHARE_CHOICE_BUTTON_MIN_WIDTH: f32 = 160.;
 const SHARE_CHOICE_SECTION_GAP: f32 = 24.;
@@ -57,48 +59,81 @@ impl Desktop {
                     return column().into_any_element();
                 };
                 match share.state {
-                    ShareState::AwaitingAuthorization => {
-                        return self
-                            .authorization_share(theme, share, cx)
-                            .into_any_element();
-                    }
+                    ShareState::AwaitingAuthorization => self
+                        .authorization_share(theme, share, cx)
+                        .into_any_element(),
                     ShareState::AwaitingConfiguration(blocking)
-                    | ShareState::AwaitingNetwork(blocking) => {
-                        return self
-                            .blocked_share(theme, share, blocking, cx)
-                            .into_any_element();
-                    }
-                    _ => {}
-                }
-                if !share.finished() && !run.remaining(Instant::now()).is_zero() {
-                    return column()
+                    | ShareState::AwaitingNetwork(blocking) => self
+                        .blocked_share(theme, share, blocking, cx)
+                        .into_any_element(),
+                    _ => self
+                        .share_result(theme, share, layout, self.share_intro(run, cx), window, cx)
                         .id("share-stage")
-                        .min_h(px(stage_height(layout)))
-                        .items_center()
-                        .justify_center()
-                        .gap(px(8.))
-                        .child(theme.heading(language(cx).text(Text::PreparingShare), 26.))
-                        .child(theme.caption(share.name.clone()))
-                        .into_any_element();
+                        .into_any_element(),
                 }
-                self.share_result(theme, share, layout, window, cx)
-                    .id("share-stage")
-                    .into_any_element()
             }
         }
     }
 
     fn choose_share(&self, theme: Theme, layout: FlowLayout, cx: &Context<Self>) -> Div {
-        let locale = language(cx);
+        let scene_scale = layout.scene_scale();
+        let perch = Rc::clone(&self.intro_anchors.perch);
         column()
+            .relative()
             .items_center()
             .child(scaled_spirit(
                 "share-spirit",
                 SpiritMood::Idle,
                 Tone::Mint,
-                layout.scene_scale(),
+                scene_scale,
                 true,
             ))
+            .child(self.share_prompt(theme, true, cx))
+            .child(
+                canvas(
+                    move |prompt, _, _| {
+                        perch.set(Some(Perch {
+                            prompt,
+                            scene_scale,
+                        }));
+                    },
+                    |_, (), _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
+    }
+
+    /// The choose page's heading and actions. A copy that is not `live` keeps
+    /// their look but answers nothing: it fades out of a run that has begun.
+    fn share_prompt(&self, theme: Theme, live: bool, cx: &Context<Self>) -> Div {
+        let locale = language(cx);
+        let choice = |id: &'static str, text, symbol, style, action| {
+            let label = locale.text(text);
+            let button = if live {
+                Self::button(id, label, symbol, style, action, cx)
+                    .disabled(self.runtime.selection_disabled())
+            } else {
+                Button::new(id, label).icon(symbol).style(style)
+            };
+            button.large().min_width(px(SHARE_CHOICE_BUTTON_MIN_WIDTH))
+        };
+        let files = choice(
+            "choose-files",
+            Text::ChooseFiles,
+            Icon::Plus,
+            ButtonStyle::Primary,
+            Action::SelectFiles,
+        );
+        let folder = choice(
+            "choose-folder",
+            Text::ChooseFolder,
+            Icon::Folder,
+            ButtonStyle::Secondary,
+            Action::SelectFolder,
+        );
+        column()
+            .items_center()
             .child(
                 theme
                     .heading(locale.text(Text::ChooseShare), 26.)
@@ -108,33 +143,12 @@ impl Desktop {
             .child(
                 row()
                     .gap(px(12.))
-                    .child(
-                        Self::button(
-                            "choose-files",
-                            locale.text(Text::ChooseFiles),
-                            Icon::Plus,
-                            ButtonStyle::Primary,
-                            Action::SelectFiles,
-                            cx,
-                        )
-                        .large()
-                        .min_width(px(SHARE_CHOICE_BUTTON_MIN_WIDTH))
-                        .disabled(self.runtime.selection_disabled())
-                        .focus_handle(&self.primary_focus),
-                    )
-                    .child(
-                        Self::button(
-                            "choose-folder",
-                            locale.text(Text::ChooseFolder),
-                            Icon::Folder,
-                            ButtonStyle::Secondary,
-                            Action::SelectFolder,
-                            cx,
-                        )
-                        .large()
-                        .min_width(px(SHARE_CHOICE_BUTTON_MIN_WIDTH))
-                        .disabled(self.runtime.selection_disabled()),
-                    ),
+                    .child(if live {
+                        files.focus_handle(&self.primary_focus)
+                    } else {
+                        files
+                    })
+                    .child(folder),
             )
     }
 }

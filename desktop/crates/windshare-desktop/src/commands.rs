@@ -8,7 +8,7 @@ use crate::{
     model::{Action, Overlay, Page, ShareState, TransferState},
 };
 use gpui::{BorrowAppContext, ClipboardItem, Context, Focusable, Window};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const DEMO_LINK: &str = "https://windshare.example/s/kyoto-weekend";
 
@@ -18,7 +18,7 @@ impl Desktop {
         match action {
             Action::Navigate(page) => self.navigate(page, window, cx),
             Action::NewShare => {
-                self.share_result_wakeup = None;
+                self.share_reveal_wakeup = None;
                 self.share_flow = ShareFlow::Choose;
                 self.navigate(Page::Share, window, cx);
             }
@@ -119,7 +119,7 @@ impl Desktop {
     }
 
     fn reset_share(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.share_result_wakeup = None;
+        self.share_reveal_wakeup = None;
         if let ShareFlow::Running(run) = self.share_flow
             && self.shares.iter().any(|share| {
                 share.id == run.share_id
@@ -161,7 +161,7 @@ impl Desktop {
         };
         let inline_feedback = (self.page == Page::Share
             && self.overlays.is_empty()
-            && matches!(self.share_flow, ShareFlow::Running(run) if run.share_id == id && run.remaining(Instant::now()).is_zero()))
+            && matches!(self.share_flow, ShareFlow::Running(run) if run.share_id == id))
             || self.overlays.last().is_some_and(
                 |frame| matches!(frame.content, Overlay::Detail(share_id) if share_id == id),
             );

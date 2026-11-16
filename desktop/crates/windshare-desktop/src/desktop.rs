@@ -6,7 +6,7 @@ use crate::{
     model::{Action, Filter, Overlay, Page, Share, Transfer, demo_shares, demo_transfers},
     motion::lerp,
     overlays::OverlayFrame,
-    sharing::LinkDisclosure,
+    sharing::{IntroAnchors, LinkDisclosure},
 };
 use gpui::{
     Animation, AnimationExt, App, AppContext, ElementId, Entity, FocusHandle, Focusable,
@@ -31,7 +31,8 @@ pub struct Desktop {
     pub share_flow: ShareFlow,
     pub runtime: Runtime,
     pub setup_form: crate::live::SetupForm,
-    pub share_result_wakeup: Option<gpui::Task<()>>,
+    pub share_reveal_wakeup: Option<gpui::Task<()>>,
+    pub intro_anchors: IntroAnchors,
     pub receive_flow: ReceiveFlow,
     pub copy_feedback: CopyFeedback,
     pub primary_focus: FocusHandle,
@@ -115,7 +116,8 @@ impl Desktop {
             share_flow: ShareFlow::Choose,
             runtime,
             setup_form,
-            share_result_wakeup: None,
+            share_reveal_wakeup: None,
+            intro_anchors: IntroAnchors::default(),
             receive_flow: ReceiveFlow::default(),
             copy_feedback: CopyFeedback::Idle,
             primary_focus,
@@ -326,9 +328,16 @@ impl Desktop {
     pub const fn reduced_motion(&self) -> bool {
         self.settings[2]
     }
+
+    /// Whether motion that carries meaning must be shown as its end state,
+    /// by the app's own preference or the system's.
+    pub fn still(&self, cx: &App) -> bool {
+        self.reduced_motion() || cx.reduce_motion()
+    }
 }
 impl Render for Desktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.intro_anchors.begin_frame();
         let locale = language(cx);
         let theme = Theme::current(window, cx);
         let compact = window.viewport_size().width < px(COMPACT_WIDTH);

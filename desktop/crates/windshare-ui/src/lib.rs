@@ -24,7 +24,7 @@ pub use button::{Button, ButtonStyle, COMPACT_BUTTON_HEIGHT, LARGE_BUTTON_HEIGHT
 pub use icons::{Icon, icon};
 pub use input::{Input, InputEvent};
 pub use primitives::*;
-pub use qr_code::{QrCodeError, QrCodeImage};
+pub use qr_code::{QrCodeError, QrCodeImage, QrGrid};
 pub use theme::*;
 pub use typography::{FONT, INPUT_FONT_SIZE, INPUT_LINE_HEIGHT, UI_FONT};
 pub use window_controls::{toggle_window_maximize, window_drag_area};

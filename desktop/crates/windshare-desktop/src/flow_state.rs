@@ -1,4 +1,8 @@
-use crate::model::ShareContents;
+use crate::{
+    model::ShareContents,
+    motion::whirl::{HOLD, Wind, seconds_between},
+    sharing::Perch,
+};
 use std::time::{Duration, Instant};
 use windshare_ui::{Icon, Tone};
 pub const COPY_FEEDBACK_MS: u64 = 2400;
@@ -57,24 +61,44 @@ pub enum ShareFlow {
     Running(ShareRun),
 }
 
-const SHARE_RESULT_DELAY: Duration = Duration::from_secs(2);
-
+/// One presentation of a share on the sharing page, and the clock its entrance runs on.
 #[derive(Clone, Copy, Debug)]
 pub struct ShareRun {
     pub share_id: usize,
-    result_at: Instant,
+    started_at: Instant,
+    /// Where the user last saw the spirit, if it was on screen as the run began.
+    pub perch: Option<Perch>,
 }
 
 impl ShareRun {
-    pub fn new(share_id: usize, now: Instant) -> Self {
+    pub const fn new(share_id: usize, started_at: Instant, perch: Option<Perch>) -> Self {
         Self {
             share_id,
-            result_at: now + SHARE_RESULT_DELAY,
+            started_at,
+            perch,
         }
     }
 
-    pub fn remaining(self, now: Instant) -> Duration {
-        self.result_at.saturating_duration_since(now)
+    pub fn seconds(self, now: Instant) -> f32 {
+        seconds_between(self.started_at, now)
+    }
+
+    /// The whirl this run raises for its QR slot: flown in from the perch when
+    /// there is one, risen in place otherwise.
+    pub const fn wind(self) -> Wind {
+        match self.perch {
+            Some(_) => Wind::Carried {
+                since: self.started_at,
+            },
+            None => Wind::Rooted {
+                since: self.started_at,
+            },
+        }
+    }
+
+    /// Time left before the result may present more than "preparing".
+    pub fn until_reveal(self, now: Instant) -> Duration {
+        (self.started_at + Duration::from_secs_f32(HOLD)).saturating_duration_since(now)
     }
 }
 #[derive(Clone, Copy, Debug)]

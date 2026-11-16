@@ -1,12 +1,11 @@
 use crate::{
     desktop::Desktop,
-    flow_state::{SampleBundle, ShareRun},
+    flow_state::SampleBundle,
     live::Runtime,
     model::{Share, ShareAge, ShareSource, ShareState},
     sharing::{LinkDisclosure, ShareLink},
 };
 use gpui::{Context, Window};
-use std::time::Instant;
 
 impl Desktop {
     pub fn prepare_preview_share(
@@ -38,7 +37,7 @@ impl Desktop {
             },
         );
         self.link_disclosure = LinkDisclosure::Summary;
-        self.present_share(ShareRun::new(operation, Instant::now()), window, cx);
+        self.present_share(self.share_run(operation), window, cx);
         tracing::info!(
             event = "share.preparing",
             operation,

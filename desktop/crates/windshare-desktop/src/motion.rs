@@ -1,11 +1,12 @@
 mod shadow;
 mod spirit;
+pub mod whirl;
 pub use shadow::ground_shadow;
 pub use spirit::Spirit;
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, App, Div, ElementId, IntoElement, Point, Window, div,
-    ease_out_quint, point, prelude::*, px,
+    Animation, AnimationExt, AnyElement, App, Canvas, Div, ElementId, IntoElement, Point, Window,
+    canvas, div, ease_out_quint, point, prelude::*, px,
 };
 use std::time::Duration;
 use windshare_ui::{Icon, Theme, Tone, icon, row};
@@ -46,10 +47,7 @@ impl SpiritScene {
             mood,
             tone,
             scale,
-            center: point(
-                SCENE_WIDTH / 2. * scale,
-                (SPIRIT_TOP + SPIRIT_SIZE / 2.) * scale,
-            ),
+            center: Self::body_center(scale),
             body_width: Self::body_size(scale),
             reduced_motion,
         }
@@ -66,6 +64,36 @@ impl SpiritScene {
     pub const fn body_size(scale: f32) -> f32 {
         SPIRIT_SIZE * scale
     }
+
+    /// The resting spirit's center, measured from the scene's corner.
+    pub fn body_center(scale: f32) -> Point<f32> {
+        point(
+            SCENE_WIDTH / 2. * scale,
+            (SPIRIT_TOP + SPIRIT_SIZE / 2.) * scale,
+        )
+    }
+}
+
+/// A scene whose spirit is painted elsewhere: its footprint and the shadow it left.
+pub fn vacated_scene(tone: Tone, scale: f32) -> Div {
+    div()
+        .relative()
+        .w(px(SpiritScene::width(scale)))
+        .h(px(SpiritScene::height(scale)))
+        .flex_shrink_0()
+        .child(ground_shadow(tone, scale))
+}
+
+/// Redraws the enclosing view every frame for as long as it stays in the tree.
+/// Frames can only be requested while drawing, so a view whose content is a
+/// function of the clock mounts this instead of calling from `render`.
+pub fn frame_ticker() -> Canvas<()> {
+    canvas(
+        |_, window, _| window.request_animation_frame(),
+        |_, (), _, _| {},
+    )
+    .absolute()
+    .size_0()
 }
 
 pub fn spirit_scene(

@@ -1,5 +1,8 @@
 use super::{
+    ShareLink,
+    intro::IntroFrame,
     link_views::{LINK_COLUMN_GAP, LINK_PANEL_WIDTH, link_columns_fit},
+    qr_slot::QrSlot,
     stage_height,
 };
 use crate::{
@@ -21,22 +24,38 @@ impl Desktop {
         theme: Theme,
         share: &Share,
         layout: FlowLayout,
+        intro: IntroFrame,
         window: &Window,
         cx: &Context<Self>,
     ) -> Div {
         let locale = language(cx);
         let columns = link_columns_fit(task_width(window), layout.panel_padding());
+        // Until its run is revealed the card says nothing newer than
+        // "preparing", so the status, the copy action and the code all turn on
+        // the beat the whirl opens instead of trickling in under the flight.
+        let revealed = intro.revealed();
+        let link = share.usable_link().filter(|_| revealed);
+        let pending = !revealed || matches!(share.state, ShareState::Preparing);
         let information = column()
             .flex_1()
             .min_w_0()
             .gap(px(RESULT_SECTION_GAP))
-            .child(result_status(theme, share, locale))
+            .child(result_status(theme, share, link.is_some(), pending, locale))
             .child(file_summary(theme, share, locale))
             .when(
-                share.error.is_some() || share.relay_notice().is_some(),
+                revealed && (share.error.is_some() || share.relay_notice().is_some()),
                 |el| el.child(Self::share_notice(theme, share, cx)),
             )
-            .child(self.result_action(theme, share, cx));
+            .child(self.result_action(theme, share.id, link, cx));
+        let slot = QrSlot::new(
+            ("result-qr", share.id),
+            link.and_then(|link| link.qr().ok()).cloned(),
+            pending,
+            locale.text(Text::QrUnavailable),
+        )
+        .wind(intro.run.wind())
+        .anchor(&self.intro_anchors.slot)
+        .still(intro.still);
         let card = theme
             .card()
             .w_full()
@@ -55,10 +74,10 @@ impl Desktop {
                         column()
                             .items_center()
                             .flex_shrink_0()
-                            .child(Self::share_qr(theme, share, cx)),
+                            .child(Self::share_qr(theme, share.id, slot, cx)),
                     ),
             )
-            .child(self.result_footer(theme, share, cx));
+            .child(self.result_footer(theme, share, pending, cx));
         // The result's natural height owns scrolling, including expanded links
         // and the stacked QR layout in a narrow window.
         column()
@@ -67,12 +86,16 @@ impl Desktop {
             .flex_shrink_0()
             .items_center()
             .justify_center()
-            .child(card)
+            .child(
+                card.relative()
+                    .top(px(intro.card_rise()))
+                    .opacity(intro.card_presence()),
+            )
+            .children(self.intro_layers(theme, intro, cx))
     }
 
-    fn result_footer(&self, theme: Theme, share: &Share, cx: &Context<Self>) -> Div {
+    fn result_footer(&self, theme: Theme, share: &Share, pending: bool, cx: &Context<Self>) -> Div {
         let locale = language(cx);
-        let pending = matches!(share.state, ShareState::Preparing);
         row()
             .justify_between()
             .flex_wrap()
@@ -84,7 +107,7 @@ impl Desktop {
                 row()
                     .min_h(px(COMPACT_BUTTON_HEIGHT))
                     .gap(px(7.))
-                    .opacity(if share.finished() { 0. } else { 1. })
+                    .opacity(if !pending && share.finished() { 0. } else { 1. })
                     .child(icon(Icon::Monitor, 16.).text_color(theme.muted_text()))
                     .child(theme.caption(locale.text(Text::KeepOpenToReceive))),
             )
@@ -122,21 +145,25 @@ impl Desktop {
             })
     }
 
-    fn result_action(&self, theme: Theme, share: &Share, cx: &Context<Self>) -> Div {
+    fn result_action(
+        &self,
+        theme: Theme,
+        id: usize,
+        link: Option<&ShareLink>,
+        cx: &Context<Self>,
+    ) -> Div {
         column()
             .w_full()
             .min_w_0()
             .gap(px(8.))
             .child(
-                self.share_copy_button(share.id, cx)
+                self.share_copy_button(id, link, cx)
                     .focus_handle(&self.primary_focus),
             )
             .child(
                 column()
                     .min_h(px(COMPACT_BUTTON_HEIGHT))
-                    .when(share.usable_link().is_some(), |el| {
-                        el.child(self.share_link_disclosure(theme, share, cx))
-                    }),
+                    .child(self.share_link_disclosure(theme, id, link, cx)),
             )
     }
 
@@ -160,22 +187,25 @@ impl Desktop {
     }
 }
 
-fn result_status(theme: Theme, share: &Share, locale: Language) -> Div {
-    let ready = share.usable_link().is_some();
+fn result_status(
+    theme: Theme,
+    share: &Share,
+    link_ready: bool,
+    pending: bool,
+    locale: Language,
+) -> Div {
     let (status, tone) = share.status();
-    let color = if matches!(share.state, ShareState::Preparing) {
-        theme.muted_text()
+    let (symbol, text, color) = if link_ready {
+        (Icon::Check, Text::LinkReady, tone.text(theme))
+    } else if pending {
+        (Icon::Link, Text::PreparingLink, theme.muted_text())
     } else {
-        tone.text(theme)
+        (Icon::Link, status, tone.text(theme))
     };
     row()
         .gap(px(7.))
-        .child(icon(if ready { Icon::Check } else { Icon::Link }, 16.).text_color(color))
-        .child(
-            theme
-                .caption(locale.text(if ready { Text::LinkReady } else { status }))
-                .text_color(color),
-        )
+        .child(icon(symbol, 16.).text_color(color))
+        .child(theme.caption(locale.text(text)).text_color(color))
 }
 
 fn file_summary(theme: Theme, share: &Share, locale: Language) -> Div {

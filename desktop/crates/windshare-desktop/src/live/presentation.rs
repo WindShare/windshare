@@ -111,11 +111,13 @@ impl Desktop {
         let share = &mut self.shares[index];
         super::projection::update_share(share, operation);
         let id = share.id;
-        // Reopening an existing operation keeps its original result deadline.
+        let perch = self.intro_anchors.perch.get();
+        // Reopening an existing operation keeps its original run, so an
+        // entrance that already played is not staged a second time.
         let run = *session
             .presentations
             .entry(operation_id.into())
-            .or_insert_with(|| ShareRun::new(id, Instant::now()));
+            .or_insert_with(|| ShareRun::new(id, Instant::now(), perch));
         self.link_disclosure = LinkDisclosure::Summary;
         self.navigate(Page::Share, window, cx);
         self.present_share(run, window, cx);
