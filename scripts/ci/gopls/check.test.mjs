@@ -6,12 +6,16 @@ import { join, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { pathToFileURL } from 'node:url'
 import test from 'node:test'
-import {
-  CHECK_SETTINGS, checkFiles, checkSessions, clientHandlers, diagnose, formatDiagnostic, sessionSettings,
-} from './check.mjs'
+import { checkFiles, checkSessions, diagnose } from './check.mjs'
+import { CHECK_SETTINGS, clientHandlers, formatDiagnostic, sessionSettings } from './diagnostics.mjs'
 import { LspConnection } from './jsonrpc.mjs'
 
 const root = resolve('fixture root')
+const build = { goos: 'linux', goarch: 'amd64', cgo_enabled: false }
+const session = (directory, files, config = build) => ({
+  directory, profile: (config.tags ?? []).join(',') || 'default', build: config,
+  open_files: files, diagnostic_files: files,
+})
 const range = { start: { line: 2, character: 4 }, end: { line: 2, character: 5 } }
 const capabilities = { executeCommandProvider: { commands: ['gopls.diagnose_files', 'gopls.views'] } }
 
@@ -48,24 +52,17 @@ test('one session submits every file beyond Windows argv limits and awaits final
   assert.equal(finished, true)
 })
 
-test('bounded batches diagnose before close and retain witnesses for loaded build views', async () => {
+test('fixed configurations bound open files and diagnose before every close', async () => {
   const files = Array.from({ length: 14 }, (_, i) => `file-${i}.go`)
   const active = new Set()
   const diagnosed = new Set()
-  const rootURI = pathToFileURL(join(root, files[0])).href
-  const linuxURI = pathToFileURL(join(root, files[4])).href
-  let linuxView = false
   let maxOpen = 0
   const connection = {
     async request(method, params) {
       if (method === 'initialize') return { capabilities }
-      if (params.command === 'gopls.views') {
-        linuxView ||= active.has(linuxURI)
-        if (linuxView) assert.ok(active.has(linuxURI), 'Linux view witness remains open')
-        return linuxView ? [{ ID: 'root' }, { ID: 'linux' }] : [{ ID: 'root' }]
-      }
+      assert.equal(params.command, 'gopls.diagnose_files')
       for (const uri of params.arguments[0].Files) {
-        assert.ok(active.has(uri), 'hints are requested while their file is open')
+        assert.ok(active.has(uri))
         diagnosed.add(uri)
       }
       return null
@@ -73,7 +70,7 @@ test('bounded batches diagnose before close and retain witnesses for loaded buil
     async notify(method, params) {
       if (method === 'textDocument/didOpen') active.add(params.textDocument.uri)
       if (method === 'textDocument/didClose') {
-        assert.ok(diagnosed.has(params.textDocument.uri), 'completion precedes close')
+        assert.ok(diagnosed.has(params.textDocument.uri))
         active.delete(params.textDocument.uri)
       }
       maxOpen = Math.max(maxOpen, active.size)
@@ -81,8 +78,8 @@ test('bounded batches diagnose before close and retain witnesses for loaded buil
   }
   await diagnose(connection, { root, files, batchSize: 3, read: async () => '', log: () => {} })
   assert.equal(diagnosed.size, files.length)
-  assert.ok(maxOpen <= 5)
-  assert.deepEqual([...active], [rootURI, linuxURI])
+  assert.ok(maxOpen <= 3)
+  assert.equal(active.size, 0)
 })
 
 test('missing command support and unreadable sources fail instead of checking a partial set', async () => {
@@ -97,9 +94,10 @@ test('missing command support and unreadable sources fail instead of checking a 
   }), /source gone/)
 })
 
-test('client preserves hint and cross-view diagnostics, excluding unopened and stale publications', () => {
+test('client collects sibling diagnostics while excluding stale and out-of-scope publications', () => {
   const uri = pathToFileURL(join(root, 'a.go')).href
-  const handlers = clientHandlers(root, ['a.go'], () => {}, ['windshare_probe', 'race'])
+  const config = { ...build, tags: ['windshare_probe', 'race'] }
+  const handlers = clientHandlers(root, ['a.go'], ['a.go', 'sibling.go'], () => {}, config)
   const publish = (uri, version, diagnostics) =>
     handlers.onNotification('textDocument/publishDiagnostics', { uri, version, diagnostics })
   const hint = { severity: 4, range, source: 'unusedparams', message: 'unused parameter' }
@@ -110,12 +108,18 @@ test('client preserves hint and cross-view diagnostics, excluding unopened and s
   publish(uri, undefined, [{ ...failure, message: 'unopened view error' }])
   publish(uri, 0, [{ ...failure, message: 'stale' }])
   publish(pathToFileURL(join(root, 'unselected.go')).href, 1, [failure])
-  assert.equal(handlers.diagnostics.size, 2)
-  assert.deepEqual(sessionSettings(), CHECK_SETTINGS)
+  publish(pathToFileURL(join(root, 'sibling.go')).href, 0, [
+    { ...failure, message: 'sibling error' }, { ...hint, message: 'used by another profile' },
+  ])
+  publish(pathToFileURL(join(root, 'sibling.go')).href, undefined, [{ ...failure, message: 'sibling error' }])
+  publish(pathToFileURL(join(root, 'sibling.go')).href, 2, [{ ...failure, message: 'stale sibling' }])
+  assert.equal(handlers.diagnostics.size, 3)
+  assert.equal(sessionSettings(build, ['pkg/a.go']).zeroConfig, false)
+  assert.deepEqual(sessionSettings(build, ['pkg/a.go']).directoryFilters, ['-', '+pkg'])
   assert.deepEqual(handlers.onRequest('workspace/configuration', {
     items: [{ section: 'gopls' }, { section: 'other' }],
   }), {
-    result: [{ ...CHECK_SETTINGS, buildFlags: ['-tags=windshare_probe,race'] }, null],
+    result: [{ ...CHECK_SETTINGS, buildFlags: ['-tags=windshare_probe,race'], directoryFilters: [] }, null],
   })
   handlers.onNotification('window/showMessage', { type: 1, message: 'load failed' })
   assert.deepEqual(handlers.failures, ['load failed'])
@@ -127,11 +131,11 @@ test('diagnostic sessions isolate module roots and build tags, collect every hin
   const root = await mkdtemp(join(tmpdir(), 'windshare-gopls-sessions-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const sessions = [
-    { directory: '.', files: ['a.go'] },
-    { directory: '.', build_tags: ['windshare_probe'], files: ['tagged.go'] },
-    { directory: 'nested evidence', files: ['a.go'] },
+    session('.', ['a.go']),
+    session('.', ['tagged.go'], { ...build, tags: ['windshare_probe'] }),
+    session('nested evidence', ['a.go']),
   ]
-  for (const { directory, files } of sessions) {
+  for (const { directory, open_files: files } of sessions) {
     await mkdir(join(root, directory), { recursive: true })
     for (const file of files) await writeFile(join(root, directory, file), 'package fixture\n')
   }
@@ -144,7 +148,11 @@ test('diagnostic sessions isolate module roots and build tags, collect every hin
       if (servers.length) assert.equal(servers.at(-1).stopped(), true)
       const current = sessions[servers.length]
       assert.equal(options.cwd, resolve(root, current.directory))
-      assert.equal(options.env.GOFLAGS, '')
+      assert.equal(options.env.GOFLAGS.trim(), '')
+      assert.notEqual(options.env.GOFLAGS, '')
+      assert.equal(options.env.GOOS, current.build.goos)
+      assert.equal(options.env.GOARCH, current.build.goarch)
+      assert.equal(options.env.CGO_ENABLED, '0')
       const server = fakeServer('diagnostic', {
         onInitialized: async (connection) => {
           const response = await connection.request('workspace/configuration', { items: [{ section: 'gopls' }] })
@@ -158,9 +166,9 @@ test('diagnostic sessions isolate module roots and build tags, collect every hin
   assert.equal(servers.length, sessions.length)
   assert.ok(servers.every((server) => server.stopped()))
   assert.deepEqual(configs, [
-    CHECK_SETTINGS,
-    { ...CHECK_SETTINGS, buildFlags: ['-tags=windshare_probe'] },
-    CHECK_SETTINGS,
+    sessionSettings(build, ['a.go']),
+    sessionSettings({ ...build, tags: ['windshare_probe'] }, ['tagged.go']),
+    sessionSettings(build, ['a.go']),
   ])
   assert.deepEqual(diagnostics.map(({ uri }) => uri).sort(), [
     pathToFileURL(join(root, 'a.go')).href,
@@ -168,11 +176,11 @@ test('diagnostic sessions isolate module roots and build tags, collect every hin
     pathToFileURL(join(root, 'nested evidence', 'a.go')).href,
   ].sort())
   assert.deepEqual(
-    events.filter(({ event }) => event === 'session_started').map(({ module, build_tags }) => ({ module, build_tags })),
+    events.filter(({ event }) => event === 'session_started').map(({ module, build }) => ({ module, build })),
     [
-      { module: '.', build_tags: [] },
-      { module: '.', build_tags: ['windshare_probe'] },
-      { module: 'nested evidence', build_tags: [] },
+      { module: '.', build },
+      { module: '.', build: { ...build, tags: ['windshare_probe'] } },
+      { module: 'nested evidence', build },
     ],
   )
 })
@@ -181,7 +189,7 @@ test('session failure, cancellation, and an exhausted shared deadline stop furth
   const root = await mkdtemp(join(tmpdir(), 'windshare-gopls-stop-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   await writeFile(join(root, 'a.go'), 'package fixture\n')
-  const sessions = [{ directory: '.', files: ['a.go'] }, { directory: 'unreached', files: ['a.go'] }]
+  const sessions = [session('.', ['a.go']), session('unreached', ['a.go'])]
   for (const mode of ['crash', 'cancelled', 'deadline']) {
     const controller = new AbortController()
     let launches = 0
@@ -256,7 +264,7 @@ test('owned server returns diagnostics and is reaped on success and failures', a
     await t.test(mode, async () => {
       const server = fakeServer(mode)
       const result = checkFiles({
-        root: directory, files: ['a.go'], timeoutMs: mode === 'hung' ? 25 : 5000,
+        root: directory, files: ['a.go'], build, timeoutMs: mode === 'hung' ? 25 : 5000,
         shutdownTimeoutMs: mode === 'shutdown-hung' ? 25 : 5000,
         launch(command, args, options) {
           assert.equal(command, 'gopls')

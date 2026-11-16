@@ -1,7 +1,9 @@
 import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import { checkSessions, formatDiagnostic } from './check.mjs'
+import { checkSessions } from './check.mjs'
+import { formatDiagnostic } from './diagnostics.mjs'
+import { goEnvironment } from './environment.mjs'
 
 const root = fileURLToPath(new URL('../../../', import.meta.url))
 const MAX_DIAGNOSTIC_PLAN_BYTES = 16 * 1024 * 1024
@@ -29,20 +31,20 @@ try {
   // The verified plan carries module ownership, build-tag sessions, and lossless paths.
   const selection = spawnSync('go', ['run', './scripts/ci/_piondeps', '-diagnostic-plan'], {
     cwd: root, encoding: 'utf8', maxBuffer: MAX_DIAGNOSTIC_PLAN_BYTES, windowsHide: true,
-    env: { ...process.env, GOTOOLCHAIN: 'local', GOWORK: 'off', GOFLAGS: '' },
+    env: goEnvironment(),
   })
   if (selection.error) throw selection.error
   if (selection.status !== 0) {
     throw new Error(`Maintained Go source selection failed (${selection.status}): ${selection.stderr}`)
   }
   const sessions = JSON.parse(selection.stdout)
-  const fileCount = sessions.reduce((total, session) => total + session.files.length, 0)
-  const taggedSessions = sessions.filter((session) => (session.build_tags?.length ?? 0) > 0).length
+  const fileCount = sessions.reduce((total, session) => total + session.open_files.length, 0)
+  const taggedSessions = sessions.filter((session) => (session.build.tags?.length ?? 0) > 0).length
   log('sources_selected', {
     files: fileCount,
     sessions: sessions.length,
     tagged_sessions: taggedSessions,
-    order: 'module-tags-native-first',
+    order: 'module-profile-platform',
   })
   const diagnostics = await checkSessions({ root, sessions, log, signal: controller.signal })
   for (const diagnostic of diagnostics) console.error(formatDiagnostic(diagnostic))

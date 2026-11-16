@@ -63,7 +63,7 @@ The root `go.mod` owns all production Go packages. Its `ignore ./desktop` direct
 
 Coverage is gated on the core and non-core totals and on each package, with no per-file floor. Verdicts stage only profile-listed sources to avoid scanning build output. The thresholds live in `.testcoverage.yml` and `core/.testcoverage.yml`. `internal/perfevidence`, `spikes/webrtc`, and `testdata/connectivity/sctp-rack-public-20261030` are explicitly approved evidence modules outside the production set.
 
-`make gopls` checks each Go module and custom build-tag profile in its own sequential session, including new, non-ignored files before `git add`. The pinned Pion projection is excluded only after its source hashes, root replacements, and patches are reproduced.
+`make gopls` checks tracked and non-ignored new Go sources in sequential, fixed platform/tag sessions. Hints cover selected files; compile errors also cover active sibling files in their packages. Additional tag profiles live in `scripts/ci/gopls/profiles.json`; uncovered sources fail with their path. Real-gopls contracts verify cross-platform tags, sibling diagnostics, and environment isolation. Pinned Pion sources are excluded only after hash, replacement, and patch reproduction checks.
 
 ### Rust relay
 
