@@ -3,7 +3,9 @@ package cli
 import (
 	"context"
 	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 )
 
 const (
@@ -12,10 +14,28 @@ const (
 	forcedInterruptExitCode = 130
 )
 
-// runCLIWithInterruptEscalation gives the first interrupt to the durable
-// settlement path, but leaves the operator a second interrupt that cannot be
-// delayed by stuck I/O. The second path deliberately bypasses defers so native
-// output recovery observes the same boundary as an abrupt process stop.
+// notifyTerminationSignals routes every ordinary request to end the process to
+// ch: Ctrl-C, SIGTERM from service managers, containers, and kill, and SIGHUP
+// from a closing terminal or SSH session. Unhandled, the latter two end the
+// process at once, so a sender never publishes its stop marker and receivers
+// are told to retry a link that will never come back.
+//
+// A SIGHUP that was already ignored when the process started (nohup, disown
+// in some shells) stays ignored, because registering a handler would silently
+// override that explicit request to outlive the terminal.
+func notifyTerminationSignals(ch chan<- os.Signal, ignored func(os.Signal) bool) (stop func()) {
+	signals := []os.Signal{os.Interrupt, syscall.SIGTERM}
+	if !ignored(syscall.SIGHUP) {
+		signals = append(signals, syscall.SIGHUP)
+	}
+	signal.Notify(ch, signals...)
+	return func() { signal.Stop(ch) }
+}
+
+// runCLIWithInterruptEscalation gives termination requests to durable settlement.
+// Service-manager notifications remain idempotent: SIGTERM followed by SIGHUP
+// can be one stop request, not an instruction to abandon cleanup. Only a second
+// Ctrl-C forces exit without defers, so an operator can still escape stuck I/O.
 func runCLIWithInterruptEscalation(
 	interrupts <-chan os.Signal,
 	forceExit func(int),
@@ -28,7 +48,7 @@ func runCLIWithInterruptEscalation(
 	monitorDone := make(chan struct{})
 	var stateMu sync.Mutex
 	completed := false
-	interrupted := false
+	interruptReceived := false
 
 	go func() {
 		defer close(monitorDone)
@@ -36,7 +56,7 @@ func runCLIWithInterruptEscalation(
 			select {
 			case <-finished:
 				return
-			case _, ok := <-interrupts:
+			case request, ok := <-interrupts:
 				if !ok {
 					return
 				}
@@ -45,14 +65,14 @@ func runCLIWithInterruptEscalation(
 					stateMu.Unlock()
 					return
 				}
-				if interrupted {
+				if request == os.Interrupt && interruptReceived {
 					// Serialize this decision with normal completion. If completion
 					// wins the lock, no late signal can turn success into a forced exit.
 					stateMu.Unlock()
 					forceExit(forcedInterruptExitCode)
 					return
 				}
-				interrupted = true
+				interruptReceived = interruptReceived || request == os.Interrupt
 				stateMu.Unlock()
 				cancel()
 			}

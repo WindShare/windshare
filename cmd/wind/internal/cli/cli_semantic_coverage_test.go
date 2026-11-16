@@ -204,7 +204,7 @@ func TestGetCapabilityInputStaysLocalAndUnambiguous(t *testing.T) {
 	t.Run("complete link does not request input", func(t *testing.T) {
 		input := strings.NewReader("unused")
 		app, _, stderr := newSemanticTestApp(input)
-		resolved, err := app.resolveLink(bare+"#"+keyString, "")
+		resolved, err := app.resolveLink(context.Background(), bare+"#"+keyString, "")
 		if err != nil || !reflect.DeepEqual(resolved, capability) {
 			t.Fatalf("resolved=%+v error=%v", resolved, err)
 		}
@@ -223,7 +223,7 @@ func TestGetCapabilityInputStaysLocalAndUnambiguous(t *testing.T) {
 		}
 		input := strings.NewReader(keyString + "\n")
 		app, _, stderr := newSemanticTestApp(input)
-		_, err = app.resolveLink(bare+"#"+keyString, otherKey)
+		_, err = app.resolveLink(context.Background(), bare+"#"+keyString, otherKey)
 		if !errors.Is(err, engine.ErrReceiveKeyConflict) {
 			t.Fatalf("error=%v", err)
 		}
@@ -234,7 +234,7 @@ func TestGetCapabilityInputStaysLocalAndUnambiguous(t *testing.T) {
 
 	t.Run("explicit key", func(t *testing.T) {
 		app, _, stderr := newSemanticTestApp(strings.NewReader("ignored"))
-		resolved, err := app.resolveLink(bare, keyString)
+		resolved, err := app.resolveLink(context.Background(), bare, keyString)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -248,7 +248,7 @@ func TestGetCapabilityInputStaysLocalAndUnambiguous(t *testing.T) {
 
 	t.Run("interactive key", func(t *testing.T) {
 		app, _, stderr := newSemanticTestApp(strings.NewReader(keyString + "\n"))
-		resolved, err := app.resolveLink(bare, "")
+		resolved, err := app.resolveLink(context.Background(), bare, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -270,9 +270,9 @@ func TestGetCapabilityInputStaysLocalAndUnambiguous(t *testing.T) {
 			{keyString + "\u0085", false},
 		} {
 			app, _, _ := newSemanticTestApp(strings.NewReader(test.entered + "\r\n"))
-			_, promptErr := app.resolveLink(bare, "")
+			_, promptErr := app.resolveLink(context.Background(), bare, "")
 			flagApp, _, _ := newSemanticTestApp(strings.NewReader(""))
-			_, flagErr := flagApp.resolveLink(bare, test.entered)
+			_, flagErr := flagApp.resolveLink(context.Background(), bare, test.entered)
 			if (promptErr == nil) != test.accepted || (flagErr == nil) != test.accepted {
 				t.Fatalf("entered %q: prompt=%v --key=%v, want accepted=%v", test.entered, promptErr, flagErr, test.accepted)
 			}
@@ -284,27 +284,27 @@ func TestGetCapabilityInputStaysLocalAndUnambiguous(t *testing.T) {
 
 	t.Run("empty entered key", func(t *testing.T) {
 		app, _, _ := newSemanticTestApp(strings.NewReader("\n"))
-		if _, err := app.resolveLink(bare, ""); !errors.Is(err, engine.ErrReceiveKeyRequired) {
+		if _, err := app.resolveLink(context.Background(), bare, ""); !errors.Is(err, engine.ErrReceiveKeyRequired) {
 			t.Fatalf("error=%v", err)
 		}
 	})
 
 	t.Run("key input failure", func(t *testing.T) {
 		app, _, _ := newSemanticTestApp(strings.NewReader(""))
-		if _, err := app.resolveLink(bare, ""); !errors.Is(err, io.EOF) {
+		if _, err := app.resolveLink(context.Background(), bare, ""); !errors.Is(err, io.EOF) {
 			t.Fatalf("error=%v want wrapped EOF", err)
 		}
 	})
 
 	t.Run("invalid link has a stable typed usage diagnostic", func(t *testing.T) {
 		app, _, stderr := newSemanticTestApp(strings.NewReader(""))
-		if _, parse := app.parseReceiveRequest(receiveGet, []string{"not-a-link"}); parse != requestParseUsageFailure {
+		if _, parse := app.parseReceiveRequest(context.Background(), receiveGet, []string{"not-a-link"}); parse != requestParseUsageFailure {
 			t.Fatalf("parse=%d want=%d", parse, requestParseUsageFailure)
 		}
 		if stderr.String() != "get: "+invalidCapabilityDiagnostic+"\n" {
 			t.Fatalf("stderr=%q", stderr.String())
 		}
-		_, err := app.resolveLink("not-a-link", "")
+		_, err := app.resolveLink(context.Background(), "not-a-link", "")
 		if !errors.Is(err, engine.ErrInvalidReceiveLink) {
 			t.Fatalf("error=%#v", err)
 		}
@@ -322,7 +322,7 @@ func TestGetCapabilityInputStaysLocalAndUnambiguous(t *testing.T) {
 		}
 		for _, args := range [][]string{{full}, {bare, "--key", key}} {
 			app, _, stderr := newSemanticTestApp(strings.NewReader(""))
-			request, parse := app.parseReceiveRequest(receiveGet, args)
+			request, parse := app.parseReceiveRequest(context.Background(), receiveGet, args)
 			if parse != requestParseReady || !reflect.DeepEqual(request.link.Relays, []string{"https://relay.example"}) {
 				t.Fatalf("parse=%d relays=%v stderr=%q", parse, request.link.Relays, stderr.String())
 			}

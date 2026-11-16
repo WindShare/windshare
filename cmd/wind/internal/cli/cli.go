@@ -103,8 +103,8 @@ type App struct {
 	saveShareConfig         func(relayconfig.Config) error
 }
 
-// Main 是 os 进程入口的接线:真实标准流 + SIGINT 取消(Ctrl-C 即"停止分享"
-// /"中断下载"语义,§6.9)。
+// Main 是 os 进程入口的接线:真实标准流 + 终止信号取消(Ctrl-C、SIGTERM、
+// SIGHUP 都是"停止分享"/"中断下载"语义,§6.9)。
 func Main() int {
 	configPath, err := relayconfig.Path()
 	if err != nil {
@@ -124,8 +124,7 @@ func Main() int {
 		saveShareConfig: relayconfig.Save,
 	}
 	interrupts := make(chan os.Signal, interruptSignalBuffer)
-	signal.Notify(interrupts, os.Interrupt)
-	defer signal.Stop(interrupts)
+	defer notifyTerminationSignals(interrupts, signal.Ignored)()
 	app.engineConfig.RelaySetup.Store = relaysetup.FileStore{Settings: relayconfig.FileStore{}}
 	app.engineConfig.TURNDependencies.Cache = turncache.FileStore{Settings: relayconfig.FileStore{}}
 	app.engineConfig.RelaySetup.OpenBrowser = openRelayBrowser
@@ -237,6 +236,7 @@ const (
 	requestParseReady requestParseOutcome = iota
 	requestParseHelp
 	requestParseUsageFailure
+	requestParseCancelled
 	requestParseInternalFailure
 )
 
@@ -246,7 +246,7 @@ func (outcome requestParseOutcome) exitCode() int {
 		return ExitOK
 	case requestParseUsageFailure:
 		return ExitUsage
-	case requestParseInternalFailure:
+	case requestParseCancelled, requestParseInternalFailure:
 		return ExitFailure
 	default:
 		return ExitFailure
