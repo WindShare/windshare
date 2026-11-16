@@ -70,6 +70,28 @@ fn numeric_hosts_cannot_be_used_as_dns_identities() {
 }
 
 #[test]
+fn endpoint_hosts_reject_unspecified_addresses_but_allow_local_networks() {
+    for host in ["0.0.0.0", "[::]", "[::ffff:0:0]"] {
+        let endpoint = format!("ws://{host}:8484/v2/ws");
+        let error = Endpoint::parse(&endpoint).expect_err("unspecified endpoint host");
+        assert!(
+            error.to_string().contains("unspecified"),
+            "{endpoint}: {error}"
+        );
+    }
+    for host in [
+        "127.0.0.1",
+        "[::1]",
+        "192.168.1.10",
+        "[fd00::1]",
+        "relay.example",
+    ] {
+        let endpoint = format!("ws://{host}:8484/v2/ws");
+        assert!(Endpoint::parse(&endpoint).is_ok(), "{endpoint}");
+    }
+}
+
+#[test]
 fn endpoint_identity_uses_exact_public_bytes() {
     let endpoint = Endpoint::parse("wss://relay.example/base/v2/ws").unwrap();
     let digest: [u8; 32] = Sha256::new()

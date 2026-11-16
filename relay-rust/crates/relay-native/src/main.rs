@@ -16,7 +16,7 @@ Usage: wsrelay --database <path> [options]
 
   --listen <IP:port>                       Bind address (default 127.0.0.1:8787)
   --public-endpoint <ws(s)://host/v2/ws>    Canonical public WebSocket endpoint;
-                                           required when --listen is 0.0.0.0 or [::]
+                                           required for wildcard --listen addresses
   --origins <HTTP(S) origins>              Comma-separated browser allowlist
   --allow-localhost                       Allow localhost browser origins
   --public-origins                        Accept all valid HTTP(S) browser origins
@@ -37,7 +37,7 @@ Usage: wsrelay --database <path> [options]
 struct Options {
     listen: SocketAddr,
     database: PathBuf,
-    public_endpoint: Option<String>,
+    public_endpoint: Option<Endpoint>,
     origins: OriginPolicy,
     sources: SourcePolicy,
     connections: ConnectionLimits,
@@ -73,7 +73,10 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options> {
             "--listen" => listen = value.parse()?,
             "--database" => database = Some(PathBuf::from(value)),
             "--node-config" => node_config = Some(PathBuf::from(value)),
-            "--public-endpoint" => public_endpoint = Some(value),
+            "--public-endpoint" => {
+                public_endpoint =
+                    Some(Endpoint::parse(&value).context("invalid --public-endpoint")?);
+            }
             "--origins" => origins.extend(value.split(',').map(|origin| origin.trim().to_owned())),
             "--trusted-proxies" => {
                 proxies = Some(
@@ -123,7 +126,7 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options> {
         !public_origins || (origins.is_empty() && !allow_localhost),
         "--public-origins cannot be combined with an origin allowlist"
     );
-    require_dialable_endpoint(listen, public_endpoint.as_deref())?;
+    require_explicit_endpoint_for_wildcard_bind(listen, public_endpoint.as_ref())?;
     let sources = match (proxies, source_header) {
         (None, None) => SourcePolicy::default(),
         (Some(peers), Some(header)) => SourcePolicy::trusted_proxy(peers, &header)?,
@@ -146,9 +149,12 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options> {
 }
 
 /// Senders sign the relay identity of the URL they dial. A wildcard bind
-/// address is never that URL, so deriving the endpoint from it would start a
-/// healthy-looking relay that refuses every registration.
-fn require_dialable_endpoint(listen: SocketAddr, public_endpoint: Option<&str>) -> Result<()> {
+/// address cannot determine that URL, so deriving the endpoint from it would
+/// start a healthy-looking relay that refuses remote registrations.
+fn require_explicit_endpoint_for_wildcard_bind(
+    listen: SocketAddr,
+    public_endpoint: Option<&Endpoint>,
+) -> Result<()> {
     anyhow::ensure!(
         public_endpoint.is_some() || !listen.ip().to_canonical().is_unspecified(),
         "--listen {listen} binds every interface; pass --public-endpoint \
@@ -206,11 +212,10 @@ fn shutdown_signal() -> Result<impl Future<Output = ()>> {
 async fn run(options: Options, shutdown: impl Future<Output = ()>) -> Result<()> {
     let listener = TcpListener::bind(options.listen).await?;
     let address = listener.local_addr()?;
-    let endpoint = Endpoint::parse(
-        &options
-            .public_endpoint
-            .unwrap_or_else(|| format!("ws://{address}/v2/ws")),
-    )?;
+    let endpoint = match options.public_endpoint {
+        Some(endpoint) => endpoint,
+        None => Endpoint::parse(&format!("ws://{address}/v2/ws"))?,
+    };
     tracing::info!(event = "http_policy", origins = ?options.origins);
     tracing::info!(event = "connection_policy", sources = ?options.sources, limits = ?options.connections);
     let settings = options

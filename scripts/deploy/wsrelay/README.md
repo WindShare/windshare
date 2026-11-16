@@ -16,12 +16,19 @@ docker run --rm -p 8484:8484/tcp -p 3478:3478/udp \
   --origins https://app.example.com
 ```
 
+Wildcard binds require `--public-endpoint`. Arguments after the image name replace
+Docker's entire `CMD`; include `--database` and `--listen` as shown above.
 The state volume must be writable by UID 65532. Terminate TLS at a reverse proxy.
 The public endpoint must be the exact canonical WebSocket URL used by clients;
 browser origins require an explicit allowlist. For a local trusted tunnel, add
 `--trusted-proxies 127.0.0.1,::1 --source-ip-header CF-Connecting-IP`.
 See the [native host](../../../relay-rust/crates/relay-native/README.md) for limits,
 source policy and recovery, and [STUN](../../../docs/stun.md) for UDP/admin settings.
+
+If correcting an old wildcard endpoint reports `database belongs to a different
+public endpoint`, stop the host and use a new `--database` path or Docker volume.
+Retain the old database and WAL together; their ownership and STOP history belong
+to the old endpoint identity.
 
 To extract a static Linux/amd64 executable on Windows, install Docker with Linux
 containers, then run:

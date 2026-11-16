@@ -1,6 +1,6 @@
 use anyhow::{Result, bail, ensure};
 use sha2::{Digest, Sha256};
-use std::time::Duration;
+use std::{net::IpAddr, time::Duration};
 use windshare_relay_core::{flow, identifiers::RelayIdentity, share};
 
 pub const MAILBOX_CAPACITY: usize = 32;
@@ -47,7 +47,8 @@ pub struct Endpoint {
 
 impl Endpoint {
     /// # Errors
-    /// Rejects noncanonical URLs instead of silently signing different endpoint bytes.
+    /// Rejects unspecified hosts and noncanonical URLs instead of silently signing
+    /// different endpoint bytes.
     pub fn parse(raw: &str) -> Result<Self> {
         let url = url::Url::parse(raw)?;
         ensure!(
@@ -62,11 +63,11 @@ impl Endpoint {
                 && url.path().ends_with(WEBSOCKET_PATH),
             "expected a canonical ws(s)://host[/base]/v2/ws endpoint without credentials or query"
         );
-        let host = url
-            .host_str()
-            .ok_or_else(|| anyhow::anyhow!("missing host"))?;
-        if !host.starts_with('[') && host.parse::<std::net::Ipv4Addr>().is_err() {
-            validate_dns(host)?;
+        let host = url.host().ok_or_else(|| anyhow::anyhow!("missing host"))?;
+        match host {
+            url::Host::Domain(name) => validate_dns(name)?,
+            url::Host::Ipv4(address) => validate_endpoint_address(address.into())?,
+            url::Host::Ipv6(address) => validate_endpoint_address(address.into())?,
         }
         let digest = Sha256::new()
             .chain_update(RELAY_IDENTITY_DOMAIN)
@@ -83,6 +84,15 @@ impl Endpoint {
     pub fn as_str(&self) -> &str {
         &self.url
     }
+}
+
+fn validate_endpoint_address(address: IpAddr) -> Result<()> {
+    // Wildcards select listening interfaces; they cannot identify a remote relay.
+    ensure!(
+        !address.to_canonical().is_unspecified(),
+        "public endpoint host {address} is unspecified; use the address or DNS name clients connect to"
+    );
+    Ok(())
 }
 
 fn validate_dns(host: &str) -> Result<()> {

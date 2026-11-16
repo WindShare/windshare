@@ -181,9 +181,12 @@ fn wildcard_listen_requires_the_public_endpoint_clients_dial() {
                 .map(|arg| (*arg).to_owned()),
         )
     };
-    // Senders sign the identity of the URL they dial; ws://0.0.0.0 is never it.
+    // A wildcard bind cannot determine the URL clients use.
     for listen in ["0.0.0.0:8484", "[::]:8484", "[::ffff:0.0.0.0]:8484"] {
-        let error = parse(&["--listen", listen]).err().unwrap().to_string();
+        let error = parse(&["--listen", listen])
+            .err()
+            .expect("wildcard bind requires an explicit endpoint")
+            .to_string();
         assert!(error.contains("--public-endpoint"), "{listen}: {error}");
     }
     let explicit = parse(&[
@@ -194,11 +197,25 @@ fn wildcard_listen_requires_the_public_endpoint_clients_dial() {
     ])
     .unwrap();
     assert_eq!(
-        explicit.public_endpoint.as_deref(),
+        explicit.public_endpoint.as_ref().map(Endpoint::as_str),
         Some("wss://relay.example/v2/ws")
     );
     assert!(parse(&["--listen", "127.0.0.1:8484"]).is_ok());
     assert!(parse(&["--listen", "192.0.2.10:8484"]).is_ok());
+}
+
+#[test]
+fn explicit_endpoint_is_validated_during_option_parsing() {
+    for endpoint in ["ws://0.0.0.0:8484/v2/ws", "https://relay.example/v2/ws", ""] {
+        let error = options(
+            ["--database", "relay.sqlite", "--public-endpoint", endpoint]
+                .into_iter()
+                .map(str::to_owned),
+        )
+        .err()
+        .expect("invalid explicit endpoint must fail before startup");
+        assert!(error.to_string().contains("--public-endpoint"));
+    }
 }
 
 #[tokio::test]
@@ -209,7 +226,7 @@ async fn process_composition_shuts_down_and_releases_storage_after_startup_failu
         node_config: None,
         listen: "127.0.0.1:0".parse().unwrap(),
         database: database.clone(),
-        public_endpoint: Some("ws://127.0.0.1:8787/v2/ws".to_owned()),
+        public_endpoint: Some(Endpoint::parse("ws://127.0.0.1:8787/v2/ws").unwrap()),
         origins: OriginPolicy::default(),
         sources: SourcePolicy::default(),
         connections: ConnectionLimits::default(),

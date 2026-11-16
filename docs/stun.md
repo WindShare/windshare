@@ -31,9 +31,9 @@ wsrelay --database relay.sqlite --listen 0.0.0.0:8484 \
 
 The STUN flags show their defaults. A wildcard `--listen` requires the exact
 `--public-endpoint` clients dial. IPv6 sockets are IPv6-only, so both families can
-bind the same port. Addresses must be numeric IP:port pairs; at most 16 distinct
-listeners are accepted. Set `--stun-udp ""` to disable STUN (including admin),
-or `--stun-admin ""` to disable only admin. Listener/admin bind and runtime
+bind the same port. STUN listen addresses must be numeric IP:port pairs; at most
+16 distinct listeners are accepted. Set `--stun-udp ""` to disable STUN (including
+admin), or `--stun-admin ""` to disable only admin. Listener/admin bind and runtime
 failures are isolated from relay traffic; invalid CLI configuration fails startup.
 
 Each listener allows 1,000 requests/second, 20/source IP/second and 4,096 tracked

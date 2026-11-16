@@ -13,4 +13,6 @@ USER 65532:65532
 EXPOSE 8484/tcp 3478/udp
 VOLUME ["/state"]
 ENTRYPOINT ["/wsrelay"]
+# Docker replaces CMD when adding flags: supply --database, --listen and
+# --public-endpoint together. The image cannot infer the URL clients use.
 CMD ["--database", "/state/relay.sqlite", "--listen", "0.0.0.0:8484"]
