@@ -63,6 +63,17 @@ func TestDurationFormattersAreDeterministic(t *testing.T) {
 	}
 }
 
+func TestStoppedShareMessageNamesTheSenderDecision(t *testing.T) {
+	t.Parallel()
+	stopped := failureMessage(mustFailure(t, appobs.FailureRelayStopped))
+	if !strings.Contains(stopped, "stopped by its sender") || strings.Contains(stopped, "relay is unavailable") {
+		t.Fatalf("stopped share message = %q", stopped)
+	}
+	if outage := failureMessage(mustFailure(t, appobs.FailureRelayStarting)); !strings.Contains(outage, "relay is unavailable") {
+		t.Fatalf("relay outage message = %q", outage)
+	}
+}
+
 func TestFailureMessagesCoverClosedVocabulary(t *testing.T) {
 	t.Parallel()
 	codes := []appobs.FailureCode{
