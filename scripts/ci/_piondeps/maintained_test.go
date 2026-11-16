@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"go/build"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -106,13 +107,19 @@ func TestMaintainedGoFilesExcludeOnlyExactVerifiedProjection(t *testing.T) {
 	}
 }
 
-func TestDiagnosticOrderDefersForeignViewsWithoutOmittingSources(t *testing.T) {
+func TestDiagnosticOrderDefersForeignViewsAndIsolatesTaggedSessions(t *testing.T) {
 	root := t.TempDir()
 	contents := map[string]string{
 		"go.mod":                        "module example.test/root\n",
-		"a/platform_linux.go":           "package example\n",
+		"a/platform_linux.go":           "package example\n\n// //go:build ignored_after_package\n",
 		"a/platform_windows.go":         "package example\n",
+		"a/default_profile.go":          "//go:build !windshare_probe\n\npackage example\n",
 		"a/tagged.go":                   "//go:build windshare_probe\n\npackage example\n",
+		"a/tagged_linux.go":             "//go:build linux && windshare_probe\n\npackage example\n",
+		"a/tagged_windows.go":           "//go:build windows && windshare_probe\n\npackage example\n",
+		"a/disjunctive.go":              "//go:build (beta || alpha) && !gamma\n\npackage example\n",
+		"b/race_test.go":                "//go:build race\n\npackage b_test\n",
+		"tools/gen.go":                  "//go:build ignore\n\npackage main\n",
 		"z/native_test.go":              "package example\n",
 		"z/\u6587\u4ef6 with spaces.go": "package example\n",
 		"middle/evidence/go.mod":        "module example.test/nested\n",
@@ -133,22 +140,34 @@ func TestDiagnosticOrderDefersForeignViewsWithoutOmittingSources(t *testing.T) {
 			files = append(files, file)
 		}
 	}
+	ports := []goPort{{goos: "linux", goarch: "amd64"}, {goos: "windows", goarch: "amd64"}}
 	for _, platform := range []string{"windows", "linux"} {
 		t.Run(platform, func(t *testing.T) {
 			context := build.Default
 			context.GOOS, context.GOARCH = platform, "amd64"
-			context.BuildTags = nil
+			context.BuildTags = []string{"ambient_tag_must_be_ignored"}
 			foreign := map[string]string{"windows": "linux", "linux": "windows"}[platform]
-			want := []diagnosticModuleSources{
+			want := []diagnosticSession{
 				{Directory: ".", Files: []string{
-					"a/platform_" + platform + ".go", "z/native_test.go", "z/\u6587\u4ef6 with spaces.go",
-					"a/platform_" + foreign + ".go", "a/tagged.go",
+					"a/default_profile.go",
+					"a/platform_" + platform + ".go",
+					"z/native_test.go",
+					"z/\u6587\u4ef6 with spaces.go",
+					"a/platform_" + foreign + ".go",
+					"tools/gen.go",
+				}},
+				{Directory: ".", BuildTags: []string{"alpha"}, Files: []string{"a/disjunctive.go"}},
+				{Directory: ".", BuildTags: []string{"race"}, Files: []string{"b/race_test.go"}},
+				{Directory: ".", BuildTags: []string{"windshare_probe"}, Files: []string{
+					"a/tagged.go",
+					"a/tagged_" + platform + ".go",
+					"a/tagged_" + foreign + ".go",
 				}},
 				{Directory: "middle/evidence", Files: []string{
 					"a_" + platform + ".go", "z.go", "a_" + foreign + ".go",
 				}},
 			}
-			got, err := planDiagnosticSources(root, files, context)
+			got, err := planDiagnosticSources(root, files, context, ports)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -156,24 +175,49 @@ func TestDiagnosticOrderDefersForeignViewsWithoutOmittingSources(t *testing.T) {
 				t.Fatalf("diagnostic plan = %#v, want %#v", got, want)
 			}
 			slices.Reverse(files)
-			reordered, err := planDiagnosticSources(root, files, context)
+			reordered, err := planDiagnosticSources(root, files, context, ports)
 			if err != nil || !reflect.DeepEqual(reordered, got) {
-				t.Fatalf("input order changed diagnostic plan: %q, %v", reordered, err)
+				t.Fatalf("input order changed diagnostic plan: %#v, %v", reordered, err)
 			}
 		})
 	}
 }
 
-func TestDiagnosticOrderRejectsUnreadableConstraints(t *testing.T) {
+func TestDiagnosticOrderRejectsUnreadableAndUnanalyzableConstraints(t *testing.T) {
 	root := t.TempDir()
-	for _, file := range []string{"missing.go", "malformed.go"} {
-		if file == "malformed.go" {
-			if err := os.WriteFile(filepath.Join(root, file), []byte("//go:build (\n\npackage example\n"), 0600); err != nil {
-				t.Fatal(err)
-			}
+	cases := map[string]string{
+		"malformed.go":              "//go:build (\n\npackage example\n",
+		"contradictory_platform.go": "//go:build linux && windows\n\npackage example\n",
+		"contradictory_custom.go":   "//go:build probe && !probe\n\npackage example\n",
+		"ignored_library.go":        "//go:build ignore\n\npackage example\n",
+		"ignored_test.go":           "//go:build ignore\n\npackage main\n",
+		"_leading_underscore.go":    "package example\n",
+	}
+	ports := []goPort{{goos: "linux", goarch: "amd64"}, {goos: "windows", goarch: "amd64"}}
+	for file, content := range cases {
+		if err := os.WriteFile(filepath.Join(root, file), []byte(content), 0600); err != nil {
+			t.Fatal(err)
 		}
-		if got, err := planDiagnosticSources(root, []string{file}, build.Default); err == nil || got != nil {
-			t.Fatalf("bad source produced a diagnostic plan: %q, %v", got, err)
+	}
+	for _, file := range append([]string{"missing.go"}, slices.Sorted(maps.Keys(cases))...) {
+		if got, err := planDiagnosticSources(root, []string{file}, build.Default, ports); err == nil || got != nil {
+			t.Fatalf("bad source %s produced a diagnostic plan: %#v, %v", file, got, err)
+		}
+	}
+}
+
+func TestGoDistPortsIncludesCoreTargets(t *testing.T) {
+	ports, err := goDistPorts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []goPort{
+		{goos: "linux", goarch: "amd64"},
+		{goos: "windows", goarch: "amd64"},
+		{goos: "darwin", goarch: "amd64"},
+	} {
+		if !slices.Contains(ports, want) {
+			t.Fatalf("goDistPorts() missing %+v", want)
 		}
 	}
 }

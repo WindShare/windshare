@@ -21,8 +21,15 @@ export const CHECK_SETTINGS = {
   analyses: { fillreturns: true, nonewvars: true, noresultvalues: true, undeclaredname: true },
 }
 
-export function clientHandlers(root, files, log) {
+export function sessionSettings(buildTags = []) {
+  return buildTags.length === 0
+    ? CHECK_SETTINGS
+    : { ...CHECK_SETTINGS, buildFlags: [`-tags=${buildTags.join(',')}`] }
+}
+
+export function clientHandlers(root, files, log, buildTags = []) {
   const selected = new Set(files.map((file) => pathToFileURL(resolve(root, file)).href))
+  const settings = sessionSettings(buildTags)
   const diagnostics = new Map()
   const failures = []
   return {
@@ -31,7 +38,7 @@ export function clientHandlers(root, files, log) {
     onRequest(method, params) {
       switch (method) {
         case 'workspace/configuration':
-          return { result: params.items.map(({ section }) => section === 'gopls' ? CHECK_SETTINGS : null) }
+          return { result: params.items.map(({ section }) => section === 'gopls' ? settings : null) }
         case 'window/workDoneProgress/create':
         case 'client/registerCapability':
         case 'client/unregisterCapability':
@@ -133,38 +140,44 @@ export async function diagnose(connection, {
   log('analysis_complete', { files: submitted })
 }
 
-// A module's inferred platform views should not be invalidated while checking
-// an unrelated module. Sequential, owned servers keep one analyzer active and
-// preserve the installed tool's native module graph without a shared daemon.
-export async function checkModules({
-  root, modules, log = () => {}, timeoutMs = ANALYSIS_TIMEOUT_MS, ...options
+// Each module and custom build-tag profile runs in an isolated sequential server.
+// This prevents unrelated modules or mutually exclusive `-tags` profiles from
+// invalidating platform views or orphaning tagged sources.
+export async function checkSessions({
+  root, sessions, log = () => {}, timeoutMs = ANALYSIS_TIMEOUT_MS, ...options
 }) {
-  if (modules.length === 0) throw new Error('Maintained Go module set is empty')
+  if (sessions.length === 0) throw new Error('Maintained Go diagnostic session set is empty')
   const deadline = performance.now() + timeoutMs
   const diagnostics = []
-  for (const { directory, files } of modules) {
+  for (const { directory, build_tags: buildTags = [], files } of sessions) {
     const remaining = deadline - performance.now()
     if (remaining <= 0) throw new Error('gopls analysis timed out')
-    const moduleLog = (event, details) => log(event, { ...details, module: directory })
-    moduleLog('module_started', { files: files.length })
+    const sessionLog = (event, details) =>
+      log(event, { ...details, module: directory, build_tags: buildTags })
+    sessionLog('session_started', { files: files.length })
     diagnostics.push(...await checkFiles({
-      ...options, root: resolve(root, directory), files, log: moduleLog, timeoutMs: remaining,
+      ...options,
+      root: resolve(root, directory),
+      files,
+      buildTags,
+      log: sessionLog,
+      timeoutMs: remaining,
     }))
   }
   return diagnostics.sort(compareDiagnostics)
 }
 
 export async function checkFiles({
-  root, files, log = () => {}, launch = spawn, signal,
+  root, files, buildTags = [], log = () => {}, launch = spawn, signal,
   timeoutMs = ANALYSIS_TIMEOUT_MS, shutdownTimeoutMs = SHUTDOWN_TIMEOUT_MS,
 }) {
   if (files.length === 0) throw new Error('Maintained Go source set is empty')
   signal?.throwIfAborted()
   const child = launch('gopls', ['serve'], {
     cwd: root, windowsHide: true, stdio: ['pipe', 'pipe', 'inherit'],
-    env: { ...process.env, GOTOOLCHAIN: 'local', GOWORK: 'off' },
+    env: { ...process.env, GOTOOLCHAIN: 'local', GOWORK: 'off', GOFLAGS: '' },
   })
-  const handlers = clientHandlers(root, files, log)
+  const handlers = clientHandlers(root, files, log, buildTags)
   const connection = new LspConnection(child.stdout, child.stdin, handlers)
   const exited = new Promise((done) => {
     child.once('error', (error) => { connection.fail(error); done({ error }) })

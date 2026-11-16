@@ -6,7 +6,9 @@ import { join, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { pathToFileURL } from 'node:url'
 import test from 'node:test'
-import { CHECK_SETTINGS, checkFiles, checkModules, clientHandlers, diagnose, formatDiagnostic } from './check.mjs'
+import {
+  CHECK_SETTINGS, checkFiles, checkSessions, clientHandlers, diagnose, formatDiagnostic, sessionSettings,
+} from './check.mjs'
 import { LspConnection } from './jsonrpc.mjs'
 
 const root = resolve('fixture root')
@@ -97,7 +99,7 @@ test('missing command support and unreadable sources fail instead of checking a 
 
 test('client preserves hint and cross-view diagnostics, excluding unopened and stale publications', () => {
   const uri = pathToFileURL(join(root, 'a.go')).href
-  const handlers = clientHandlers(root, ['a.go'], () => {})
+  const handlers = clientHandlers(root, ['a.go'], () => {}, ['windshare_probe', 'race'])
   const publish = (uri, version, diagnostics) =>
     handlers.onNotification('textDocument/publishDiagnostics', { uri, version, diagnostics })
   const hint = { severity: 4, range, source: 'unusedparams', message: 'unused parameter' }
@@ -105,59 +107,86 @@ test('client preserves hint and cross-view diagnostics, excluding unopened and s
   publish(uri, 1, [hint, failure])
   publish(uri, 1, [hint])
   publish(uri, 1, [])
+  publish(uri, undefined, [{ ...failure, message: 'unopened view error' }])
   publish(uri, 0, [{ ...failure, message: 'stale' }])
   publish(pathToFileURL(join(root, 'unselected.go')).href, 1, [failure])
   assert.equal(handlers.diagnostics.size, 2)
+  assert.deepEqual(sessionSettings(), CHECK_SETTINGS)
   assert.deepEqual(handlers.onRequest('workspace/configuration', {
     items: [{ section: 'gopls' }, { section: 'other' }],
-  }), { result: [CHECK_SETTINGS, null] })
+  }), {
+    result: [{ ...CHECK_SETTINGS, buildFlags: ['-tags=windshare_probe,race'] }, null],
+  })
   handlers.onNotification('window/showMessage', { type: 1, message: 'load failed' })
   assert.deepEqual(handlers.failures, ['load failed'])
   assert.equal(handlers.onRequest('workspace/applyEdit', {}).error.code, -32601)
   assert.equal(formatDiagnostic({ uri, ...hint }), `${join(root, 'a.go')}:3:5: unused parameter`)
 })
 
-test('module sessions keep their own roots, collect every hint, and close before the next starts', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'windshare-gopls-modules-'))
+test('diagnostic sessions isolate module roots and build tags, collect every hint, and close sequentially', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'windshare-gopls-sessions-'))
   t.after(() => rm(root, { recursive: true, force: true }))
-  const modules = [
+  const sessions = [
     { directory: '.', files: ['a.go'] },
+    { directory: '.', build_tags: ['windshare_probe'], files: ['tagged.go'] },
     { directory: 'nested evidence', files: ['a.go'] },
   ]
-  for (const { directory } of modules) {
+  for (const { directory, files } of sessions) {
     await mkdir(join(root, directory), { recursive: true })
-    await writeFile(join(root, directory, 'a.go'), 'package fixture\n')
+    for (const file of files) await writeFile(join(root, directory, file), 'package fixture\n')
   }
   const servers = []
+  const configs = []
   const events = []
-  const diagnostics = await checkModules({
-    root, modules, log: (event, details) => events.push({ event, ...details }),
+  const diagnostics = await checkSessions({
+    root, sessions, log: (event, details) => events.push({ event, ...details }),
     launch(command, args, options) {
       if (servers.length) assert.equal(servers.at(-1).stopped(), true)
-      assert.equal(options.cwd, resolve(root, modules[servers.length].directory))
-      const server = fakeServer('diagnostic')
+      const current = sessions[servers.length]
+      assert.equal(options.cwd, resolve(root, current.directory))
+      assert.equal(options.env.GOFLAGS, '')
+      const server = fakeServer('diagnostic', {
+        onInitialized: async (connection) => {
+          const response = await connection.request('workspace/configuration', { items: [{ section: 'gopls' }] })
+          configs.push(response[0])
+        },
+      })
       servers.push(server)
       return server.child
     },
   })
-  assert.equal(servers.length, modules.length)
+  assert.equal(servers.length, sessions.length)
   assert.ok(servers.every((server) => server.stopped()))
-  assert.deepEqual(diagnostics.map(({ uri }) => uri).sort(),
-    modules.map(({ directory }) => pathToFileURL(join(root, directory, 'a.go')).href).sort())
-  assert.deepEqual(events.filter(({ event }) => event === 'module_started').map(({ module }) => module),
-    modules.map(({ directory }) => directory))
+  assert.deepEqual(configs, [
+    CHECK_SETTINGS,
+    { ...CHECK_SETTINGS, buildFlags: ['-tags=windshare_probe'] },
+    CHECK_SETTINGS,
+  ])
+  assert.deepEqual(diagnostics.map(({ uri }) => uri).sort(), [
+    pathToFileURL(join(root, 'a.go')).href,
+    pathToFileURL(join(root, 'tagged.go')).href,
+    pathToFileURL(join(root, 'nested evidence', 'a.go')).href,
+  ].sort())
+  assert.deepEqual(
+    events.filter(({ event }) => event === 'session_started').map(({ module, build_tags }) => ({ module, build_tags })),
+    [
+      { module: '.', build_tags: [] },
+      { module: '.', build_tags: ['windshare_probe'] },
+      { module: 'nested evidence', build_tags: [] },
+    ],
+  )
 })
 
-test('module failure, cancellation, and an exhausted shared deadline stop further sessions', async (t) => {
+test('session failure, cancellation, and an exhausted shared deadline stop further sessions', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'windshare-gopls-stop-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   await writeFile(join(root, 'a.go'), 'package fixture\n')
-  const modules = [{ directory: '.', files: ['a.go'] }, { directory: 'unreached', files: ['a.go'] }]
+  const sessions = [{ directory: '.', files: ['a.go'] }, { directory: 'unreached', files: ['a.go'] }]
   for (const mode of ['crash', 'cancelled', 'deadline']) {
     const controller = new AbortController()
     let launches = 0
-    await assert.rejects(checkModules({
-      root, modules, signal: controller.signal, timeoutMs: mode === 'deadline' ? 0 : 5000,
+    await assert.rejects(checkSessions({
+      root, sessions, signal: controller.signal, timeoutMs: mode === 'deadline' ? 0 : 5000,
       launch() {
         launches++
         const server = fakeServer(mode === 'crash' ? 'crash' : 'clean')
@@ -167,10 +196,10 @@ test('module failure, cancellation, and an exhausted shared deadline stop furthe
     }), /exited|cancelled|timed out/)
     assert.equal(launches, mode === 'deadline' ? 0 : 1)
   }
-  await assert.rejects(checkModules({ root, modules: [] }), /module set is empty/)
+  await assert.rejects(checkSessions({ root, sessions: [] }), /session set is empty/)
 })
 
-function fakeServer(mode) {
+function fakeServer(mode, hooks = {}) {
   const child = new EventEmitter()
   child.stdout = new PassThrough()
   child.stdin = new PassThrough()
@@ -195,6 +224,9 @@ function fakeServer(mode) {
       return { result: null }
     },
     onNotification(method, params) {
+      if (method === 'initialized' && hooks.onInitialized) {
+        void hooks.onInitialized(server).catch(() => {})
+      }
       if (method === 'textDocument/didOpen') {
         if (mode === 'diagnostic') {
           void server.notify('textDocument/publishDiagnostics', {

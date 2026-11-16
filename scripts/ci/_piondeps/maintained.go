@@ -12,13 +12,15 @@ import (
 	"strings"
 )
 
-type diagnosticModuleSources struct {
+type diagnosticSession struct {
 	Directory string   `json:"directory"`
+	BuildTags []string `json:"build_tags,omitempty"`
 	Files     []string `json:"files"`
 }
 
-// Owning modules are part of the diagnostic contract: a fresh session must use
-// that module's graph, while pinned providers remain verified dependencies.
+// Owning modules and custom build-tag profiles are part of the diagnostic contract:
+// each session uses its module graph and `-tags` configuration, while pinned providers
+// remain verified dependencies.
 func writeDiagnosticPlan(root string, output io.Writer) error {
 	if err := verify(root, true); err != nil {
 		return err
@@ -39,7 +41,11 @@ func writeDiagnosticPlan(root string, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	plan, err := planDiagnosticSources(root, files, build.Default)
+	ports, err := goDistPorts()
+	if err != nil {
+		return err
+	}
+	plan, err := planDiagnosticSources(root, files, build.Default, ports)
 	if err != nil {
 		return err
 	}
@@ -47,7 +53,7 @@ func writeDiagnosticPlan(root string, output io.Writer) error {
 		return fmt.Errorf("maintained Go source set is empty")
 	}
 	// Publish only a complete verified plan. JSON preserves every path character
-	// and keeps module ownership inseparable from the files selected for analysis.
+	// and keeps session configuration inseparable from the files selected for analysis.
 	return json.NewEncoder(output).Encode(plan)
 }
 
@@ -93,17 +99,22 @@ func maintainedGoFiles(root string, candidates []string, verified manifest) ([]s
 	return files, nil
 }
 
-// Opening a foreign-platform file makes gopls retain another build view. Every
-// subsequent open/close invalidates snapshots across those views, even when the
-// source is unchanged. Finish each module's native files before paying that cost.
-// MatchFile only determines order: foreign, tagged, and ignored files all remain.
-func planDiagnosticSources(root string, files []string, context build.Context) ([]diagnosticModuleSources, error) {
+// Opening a foreign-platform file makes gopls retain another build view, and files
+// requiring custom build tags need a `-tags` session so they are analyzed instead
+// of orphaned. Within each session, finish host-native files before foreign views.
+func planDiagnosticSources(
+	root string,
+	files []string,
+	context build.Context,
+	ports []goPort,
+) ([]diagnosticSession, error) {
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
 	}
 	type source struct {
 		path, module string
+		tags         []string
 		native       bool
 	}
 	sources := make([]source, 0, len(files))
@@ -115,15 +126,18 @@ func planDiagnosticSources(root string, files []string, context build.Context) (
 		if err != nil {
 			return nil, err
 		}
-		native, err := context.MatchFile(dir, filepath.Base(path))
+		tags, native, err := resolveDiagnosticSource(dir, filepath.Base(path), file, context, ports)
 		if err != nil {
-			return nil, fmt.Errorf("read diagnostic source constraints %s: %w", file, err)
+			return nil, err
 		}
-		sources = append(sources, source{file, module, native})
+		sources = append(sources, source{file, module, tags, native})
 	}
 	slices.SortFunc(sources, func(a, b source) int {
 		if a.module != b.module {
 			return strings.Compare(a.module, b.module)
+		}
+		if tagOrder := slices.Compare(a.tags, b.tags); tagOrder != 0 {
+			return tagOrder
 		}
 		if a.native != b.native {
 			if a.native {
@@ -133,7 +147,7 @@ func planDiagnosticSources(root string, files []string, context build.Context) (
 		}
 		return strings.Compare(a.path, b.path)
 	})
-	var plan []diagnosticModuleSources
+	var plan []diagnosticSession
 	for _, source := range sources {
 		directory, err := filepath.Rel(root, source.module)
 		if err != nil {
@@ -144,8 +158,8 @@ func planDiagnosticSources(root string, files []string, context build.Context) (
 		if err != nil {
 			return nil, err
 		}
-		if len(plan) == 0 || plan[len(plan)-1].Directory != directory {
-			plan = append(plan, diagnosticModuleSources{Directory: directory})
+		if len(plan) == 0 || plan[len(plan)-1].Directory != directory || !slices.Equal(plan[len(plan)-1].BuildTags, source.tags) {
+			plan = append(plan, diagnosticSession{Directory: directory, BuildTags: source.tags})
 		}
 		group := &plan[len(plan)-1]
 		group.Files = append(group.Files, filepath.ToSlash(file))

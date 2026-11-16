@@ -46,7 +46,7 @@ var providerModules = map[string]string{
 func main() {
 	root := flag.String("root", ".", "repository root")
 	reproduce := flag.Bool("reproduce", false, "replay patches against checksum-verified upstream modules")
-	diagnostics := flag.Bool("diagnostic-plan", false, "emit module-owned Go sources as JSON after verifying and reproducing dependency exclusions")
+	diagnostics := flag.Bool("diagnostic-plan", false, "emit module and build-tag Go diagnostic sessions as JSON after verifying dependency exclusions")
 	flag.Parse()
 	if *diagnostics {
 		if err := writeDiagnosticPlan(*root, os.Stdout); err != nil {
