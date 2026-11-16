@@ -88,6 +88,33 @@ func TestShareNamesRepeatedMemberInSavedConfiguration(t *testing.T) {
 	}
 }
 
+func TestShareReportsNumericHostAndSavedFieldBeforeStartingWork(t *testing.T) {
+	for _, saved := range []bool{false, true} {
+		stderr := new(bytes.Buffer)
+		app := &App{Stdout: new(bytes.Buffer), Stderr: stderr}
+		t.Cleanup(app.closeTerminalOutput)
+		args := []string{"root", "--relay", "https://relay.123"}
+		if saved {
+			app.loadShareConfig = func() (relayconfig.Config, error) {
+				return relayconfig.Decode(strings.NewReader(`{"profiles":[{"url":"https://good.example"},{"url":"https://relay.123"}],"active_relays":["https://good.example"]}`))
+			}
+			args = []string{"root", "--relay", "https://other.example"}
+		}
+		if _, outcome := app.parseShareRequest(args); outcome != requestParseUsageFailure || app.application != nil {
+			t.Fatal("invalid address reached a sharing workflow")
+		}
+		details := []string{"relay.123", "canonical IP address"}
+		if saved {
+			details = append(details, "profiles[1].url")
+		}
+		for _, detail := range details {
+			if !strings.Contains(stderr.String(), detail) {
+				t.Errorf("share lost repair detail %q: %s", detail, stderr.String())
+			}
+		}
+	}
+}
+
 func TestShareRelayConfigurationIsPluralBoundedAndDeduplicated(t *testing.T) {
 	app := testApp("")
 	t.Cleanup(app.closeTerminalOutput)

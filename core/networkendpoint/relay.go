@@ -17,13 +17,12 @@ const (
 	WebSocketPath       = "/v2/ws"
 	ShareRouteQuery     = "share_id"
 	relayIdentityDomain = "windshare/v2 relay-identity\x00"
-	hexNumberPrefix     = "0x"
 )
+
+var ErrInvalid = errors.New("invalid network endpoint")
 
 // ErrWhitespace identifies rejected spacing at the validation source,
 // so callers do not mistake otherwise valid path contents for the failure cause.
-var ErrInvalid = errors.New("invalid network endpoint")
-
 var ErrWhitespace = fmt.Errorf("%w: relay whitespace", ErrInvalid)
 
 type Relay struct {
@@ -127,8 +126,8 @@ func canonicalizeRelayAuthority(parsed *url.URL) error {
 		host = ip.Unmap().String()
 	} else if strings.HasPrefix(parsed.Host, "[") {
 		return fmt.Errorf("%w: bracketed relay host must be an IP literal", ErrInvalid)
-	} else if !validRelayDNSName(host) || endsInNumber(host) {
-		return fmt.Errorf("%w: relay host", ErrInvalid)
+	} else if err := validateDNSHost(host); err != nil {
+		return err
 	}
 	if parsed.Scheme == "ws" && port == "80" || parsed.Scheme == "wss" && port == "443" {
 		port = ""
@@ -141,55 +140,6 @@ func canonicalizeRelayAuthority(parsed *url.URL) error {
 	}
 	parsed.Host = host
 	return nil
-}
-
-func validRelayDNSName(hostname string) bool {
-	name := strings.TrimSuffix(hostname, ".")
-	if name == "" || len(name) > 253 {
-		return false
-	}
-	for label := range strings.SplitSeq(name, ".") {
-		if len(label) == 0 || len(label) > 63 || strings.HasPrefix(label, "-") ||
-			strings.HasSuffix(label, "-") ||
-			len(label) > 3 && label[2:4] == "--" && !strings.HasPrefix(label, "xn--") {
-			return false
-		}
-		for index := range len(label) {
-			if !asciiAlphaNumeric(label[index]) && label[index] != '-' {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-// endsInNumber applies the WHATWG URL host rule: a name whose last label is a
-// decimal or 0x-prefixed hex number is parsed as IPv4, so browsers and the
-// relay's URL parser either rewrite it (0x7f.0.0.1 -> 127.0.0.1) or reject it
-// (relay.123). Go would instead resolve it through DNS under an identity no
-// other runtime produces. Canonical dotted-quad literals never reach this check.
-func endsInNumber(hostname string) bool {
-	name := strings.TrimSuffix(hostname, ".")
-	last := name[strings.LastIndexByte(name, '.')+1:]
-	if last == "" {
-		return false
-	}
-	digits := last
-	if len(last) >= len(hexNumberPrefix) && strings.EqualFold(last[:len(hexNumberPrefix)], hexNumberPrefix) {
-		digits = last[len(hexNumberPrefix):]
-		for index := range len(digits) {
-			if !asciiHex(digits[index]) {
-				return false
-			}
-		}
-		return true
-	}
-	for index := range len(digits) {
-		if digits[index] < '0' || digits[index] > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 func validRelayQuery(query string) bool {

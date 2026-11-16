@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/windshare/windshare/connectivity/relayset"
+	"github.com/windshare/windshare/core/networkendpoint"
 	"github.com/windshare/windshare/engine/relayprofile"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
@@ -47,7 +48,7 @@ func SelectRelays(config Config, override []string) ([]relayprofile.Candidate, e
 	for _, candidate := range saved {
 		endpoint, err := v2.NormalizeRelayEndpoint(candidate.PublicURL)
 		if err != nil {
-			return nil, relayURLError(err)
+			return nil, relayAddressError{cause: err}
 		}
 		credentials[endpoint.DialURL] = candidate.AccessKey
 	}
@@ -56,7 +57,7 @@ func SelectRelays(config Config, override []string) ([]relayprofile.Candidate, e
 	for _, address := range override {
 		endpoint, err := v2.NormalizeRelayEndpoint(address)
 		if err != nil {
-			return nil, relayURLError(err)
+			return nil, relayAddressError{cause: err}
 		}
 		if seen[endpoint.DialURL] {
 			continue
@@ -74,9 +75,21 @@ func SelectRelays(config Config, override []string) ([]relayprofile.Candidate, e
 	return candidates, nil
 }
 
-func relayURLError(cause error) error {
-	if errors.Is(cause, v2.ErrRelayEndpointWhitespace) {
-		return fmt.Errorf("%w: contains whitespace or invisible spacing; remove it from the address", ErrRelayURL)
+// Preserve the domain cause while presenting only the address detail relevant
+// to repair; protocol wrapper errors are not useful configuration instructions.
+type relayAddressError struct{ cause error }
+
+func (err relayAddressError) Error() string {
+	var detail string
+	if host, ok := errors.AsType[*networkendpoint.NumericHostError](err.cause); ok {
+		detail = fmt.Sprintf("host %q ends in a number; use a DNS name or a canonical IP address", host.Host)
+	} else if errors.Is(err.cause, v2.ErrRelayEndpointWhitespace) {
+		detail = "contains whitespace or invisible spacing; remove it from the address"
+	} else {
+		detail = "not an accepted relay address; use an absolute http, https, ws, or wss URL with a host and no user:password@ or #fragment"
 	}
-	return fmt.Errorf("%w: not an accepted relay address; use an absolute http, https, ws, or wss URL with a host and no user:password@ or #fragment", ErrRelayURL)
+	return ErrRelayURL.Error() + ": " + detail
 }
+
+func (err relayAddressError) Is(target error) bool { return target == ErrRelayURL }
+func (err relayAddressError) Unwrap() error        { return err.cause }
