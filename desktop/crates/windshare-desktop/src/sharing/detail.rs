@@ -57,7 +57,7 @@ impl Desktop {
             matches!(share.state, ShareState::Preparing),
             locale.text(Text::QrUnavailable),
         )
-        .still(self.still(cx));
+        .still(cx.reduce_motion());
         let information = column()
             .flex_1()
             .min_w_0()

@@ -20,11 +20,6 @@ impl Desktop {
                 locale.text(Text::TransferDetailsDescription),
                 Icon::Activity,
             ),
-            (
-                locale.text(Text::ReducedMotion),
-                locale.text(Text::ReducedMotionDetail),
-                Icon::Sun,
-            ),
         ];
         column()
             .gap(px(24.))

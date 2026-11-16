@@ -91,9 +91,6 @@ impl Desktop {
             Action::ToggleSetting(index) => {
                 if let Some(setting) = self.settings.get_mut(index) {
                     *setting = !*setting;
-                    self.super_share.update(cx, |view, cx| {
-                        view.set_reduced_motion(self.settings[2], cx);
-                    });
                 }
             }
             Action::SetAppearance(choice) => crate::preferences::select_appearance(choice, cx),

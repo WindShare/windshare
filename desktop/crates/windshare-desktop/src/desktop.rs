@@ -40,7 +40,7 @@ pub struct Desktop {
     pub overlays: Vec<OverlayFrame>,
     pub link_disclosure: LinkDisclosure,
     pub toast: Option<(usize, Text)>,
-    pub settings: [bool; 3],
+    pub settings: [bool; 2],
     pub dialog_sequence: usize,
     toast_sequence: usize,
     pub focus: FocusHandle,
@@ -125,7 +125,7 @@ impl Desktop {
             overlays: Vec::new(),
             link_disclosure: LinkDisclosure::default(),
             toast: None,
-            settings: [true, true, false],
+            settings: [true, true],
             dialog_sequence: 0,
             toast_sequence: 0,
             focus,
@@ -312,7 +312,7 @@ impl Desktop {
                         .child(
                             content.with_animation(
                                 ("page-enter", self.page as usize),
-                                Animation::new(Duration::from_millis(if self.reduced_motion() {
+                                Animation::new(Duration::from_millis(if cx.reduce_motion() {
                                     1
                                 } else {
                                     260
@@ -323,16 +323,6 @@ impl Desktop {
                         ),
                 ),
         )
-    }
-
-    pub const fn reduced_motion(&self) -> bool {
-        self.settings[2]
-    }
-
-    /// Whether motion that carries meaning must be shown as its end state,
-    /// by the app's own preference or the system's.
-    pub fn still(&self, cx: &App) -> bool {
-        self.reduced_motion() || cx.reduce_motion()
     }
 }
 impl Render for Desktop {
@@ -399,7 +389,7 @@ impl Render for Desktop {
                         )
                         .with_animation(
                             ("toast", id),
-                            Animation::new(Duration::from_millis(if self.reduced_motion() {
+                            Animation::new(Duration::from_millis(if cx.reduce_motion() {
                                 1
                             } else {
                                 280

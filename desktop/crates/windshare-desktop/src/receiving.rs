@@ -97,7 +97,7 @@ impl Desktop {
                         SpiritMood::Idle,
                         Tone::Lavender,
                         0.58,
-                        self.reduced_motion(),
+                        cx.reduce_motion(),
                     )),
             )
             .child(
@@ -168,7 +168,7 @@ impl Desktop {
                 SpiritMood::Receiving,
                 Tone::Lavender,
                 layout.scene_scale(),
-                self.reduced_motion(),
+                cx.reduce_motion(),
             ))
             .child(theme.heading(locale.text(Text::OpeningShare), 26.))
             .child(
@@ -214,7 +214,7 @@ impl Desktop {
                     )
                     .child(theme.badge(locale.text(Text::SenderOnline), Tone::Mint)),
                 "receive-files",
-                self.reduced_motion(),
+                cx.reduce_motion(),
             ))
             .child(
                 column().children(RECEIVED_FILES.into_iter().enumerate().map(
@@ -284,7 +284,7 @@ impl Desktop {
             .w(relative(0.05))
             .rounded_full()
             .bg(Tone::Lavender.accent(theme));
-        let progress_bar = if self.reduced_motion() {
+        let progress_bar = if cx.reduce_motion() {
             progress_bar.w(relative(0.65)).into_any_element()
         } else {
             progress_bar
@@ -303,7 +303,7 @@ impl Desktop {
                 SpiritMood::Receiving,
                 Tone::Lavender,
                 layout.scene_scale(),
-                self.reduced_motion(),
+                cx.reduce_motion(),
             ))
             .child(theme.heading(locale.text(Text::ReceivingFiles), 26.))
             .child(
@@ -366,7 +366,7 @@ impl Desktop {
                         SpiritMood::Happy,
                         Tone::Lavender,
                         layout.scene_scale(),
-                        self.reduced_motion(),
+                        cx.reduce_motion(),
                     ))
                     .child(theme.heading(locale.text(Text::ReceiveComplete), 26.))
                     .child(
@@ -383,7 +383,7 @@ impl Desktop {
                             .text_color(theme.muted_text()),
                     ),
                 "receive-complete",
-                self.reduced_motion(),
+                cx.reduce_motion(),
             ))
             .child(theme.badge(locale.text(Text::PreviewComplete), Tone::Lavender))
             .child(

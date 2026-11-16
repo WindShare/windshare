@@ -30,7 +30,7 @@ impl SuperShare {
         let emblem = emblem(
             theme,
             stage.emblem_size,
-            self.reduced_motion || !window.is_window_active(),
+            cx.reduce_motion() || !window.is_window_active(),
         );
         let purchase = self.purchase_controls(theme, plan, cx);
         let composition = match stage.layout {
@@ -195,11 +195,11 @@ impl SuperShare {
                 emblem(
                     theme,
                     stage.emblem_size,
-                    self.reduced_motion || !window.is_window_active(),
+                    cx.reduce_motion() || !window.is_window_active(),
                 )
                 .with_animation(
                     ("super-enabled", self.sequence),
-                    Animation::new(if self.reduced_motion {
+                    Animation::new(if cx.reduce_motion() {
                         Duration::from_millis(1)
                     } else {
                         ENABLE_ENTRANCE
