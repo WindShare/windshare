@@ -13,8 +13,11 @@ From `relay-rust/`:
 cargo run --locked -p windshare-relay-native --bin relay-native -- --database relay.sqlite --listen 127.0.0.1:8787
 ```
 
-For a reverse proxy, add `--public-endpoint wss://relay.example/v2/ws` (a canonical
-full WebSocket URL, including any base path). TLS terminates at that proxy.
+For a wildcard bind or reverse proxy, add
+`--public-endpoint wss://relay.example/v2/ws`: the canonical full WebSocket URL
+clients use, including any base path. Loopback and LAN addresses are valid;
+unspecified addresses such as `0.0.0.0` and `[::]` are not endpoints.
+TLS terminates at the reverse proxy.
 The database is bound to this endpoint identity and exclusively leased by one host.
 Keep the SQLite database and its WAL together; deleting storage deletes STOP history.
 The parent directory must exist. JSON readiness goes to stdout; structured traces
