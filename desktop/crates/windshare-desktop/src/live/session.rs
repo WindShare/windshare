@@ -1,11 +1,11 @@
 use crate::{
     desktop::Desktop,
-    flow_state::{ShareFlow, ShareReadiness},
+    flow_state::ShareRun,
     localization::Text,
     model::{Page, ShareSource},
 };
 use gpui::{Context, Window};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 use windshare_host::{Connection, Controller, Model};
 
 pub enum Runtime {
@@ -24,17 +24,27 @@ pub struct Session {
     pub controller: Controller,
     pub model: Model,
     pub picking: bool,
+    #[cfg(windows)]
+    pub picker: Option<windshare_activation::windows::picker::Picker>,
+    pub interaction_epoch: u64,
+    pub application: super::application::Application,
+    pub presentations: std::collections::HashMap<String, ShareRun>,
     pub quit_state: QuitState,
     pub error: Option<String>,
     retry_wakeup: Option<gpui::Task<()>>,
 }
 
 impl Runtime {
-    pub fn native(controller: Controller) -> Self {
+    pub fn native(controller: Controller, application: super::application::Application) -> Self {
         Self::Native(Box::new(Session {
             model: controller.model(),
             controller,
             picking: false,
+            #[cfg(windows)]
+            picker: None,
+            interaction_epoch: 0,
+            application,
+            presentations: std::collections::HashMap::new(),
             quit_state: QuitState::Running,
             error: None,
             retry_wakeup: None,
@@ -49,8 +59,7 @@ impl Runtime {
         match self {
             Self::Preview { .. } => false,
             Self::Native(session) => {
-                session.picking
-                    || matches!(session.quit_state, QuitState::Exiting)
+                matches!(session.quit_state, QuitState::Exiting)
                     || matches!(
                         session.model.connection,
                         Connection::Closing | Connection::Closed(_)
@@ -133,7 +142,12 @@ impl Desktop {
                     continue;
                 };
                 if let Some(operation) = model.operations.iter().find(|op| &op.id == operation_id) {
+                    let was_ready = share.usable_link().is_some();
                     super::projection::update_share(share, operation);
+                    if !was_ready && share.usable_link().is_some() {
+                        tracing::info!(event = "share.ready", operation = %operation.id,
+                            share_id = share.id, preview = false);
+                    }
                 }
             }
             // This timer only re-enables presentation at the host's deadline.
@@ -162,26 +176,6 @@ impl Desktop {
                 }
             }));
             session.model = model;
-            // Readiness belongs to the task. The view clock may still be in flight,
-            // and navigating elsewhere must not discard a result or create a task.
-            if let ShareFlow::Running(run) = &mut self.share_flow
-                && let Some(share) = self
-                    .shares
-                    .iter()
-                    .find(|share| share.id == run.selection_id)
-            {
-                if share.finished() {
-                    run.readiness = ShareReadiness::Finished;
-                } else if share.usable_link().is_some()
-                    && matches!(run.readiness, ShareReadiness::Pending)
-                {
-                    let at = Instant::now();
-                    run.readiness = ShareReadiness::Ready { at };
-                    tracing::info!(event = "share.ready", operation = run.operation,
-                        source = ?share.source, elapsed_ms = at.duration_since(run.started_at).as_millis(),
-                        preview = false);
-                }
-            }
             cx.notify();
         }
     }

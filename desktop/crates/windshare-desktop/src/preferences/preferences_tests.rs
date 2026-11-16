@@ -1,5 +1,6 @@
 use super::*;
 use crate::localization::LanguageChoice;
+use crate::motion::ShareAnimation;
 use gpui::WindowAppearance;
 use windshare_ui::{Theme, ThemePreference};
 
@@ -39,6 +40,12 @@ fn assert_round_trip<C: PreferenceChoice + PartialEq + std::fmt::Debug>(choices:
 fn preferences_default_to_system_and_survive_restart() {
     assert_round_trip(&LanguageChoice::ALL);
     assert_round_trip(&ThemePreference::ALL);
+}
+
+#[test]
+fn share_animation_defaults_to_whirl_and_survives_restart() {
+    assert_eq!(ShareAnimation::default(), ShareAnimation::Whirl);
+    assert_round_trip(&ShareAnimation::ALL);
 }
 
 #[test]

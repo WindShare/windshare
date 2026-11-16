@@ -16,6 +16,9 @@ motion-profile = ["gpui/profiler"]
 workspace = true
 
 [dependencies]
+windshare-activation = { path = "../windshare-activation" }
+async-channel = "2.5.0"
+raw-window-handle = "0.6.2"
 windshare-host = { path = "../windshare-host" }
 tracing-appender = "0.2.5"
 dirs.workspace = true

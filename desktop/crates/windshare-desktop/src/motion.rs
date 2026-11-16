@@ -1,28 +1,25 @@
+pub mod paper;
+mod placement;
+mod shadow;
+mod share;
 mod spirit;
-mod wind;
-pub use spirit::{Spirit, SpiritState};
-pub use wind::wind_field;
+pub mod whirl;
+pub use placement::{SpiritAnchor, SpiritPlacement};
+pub use shadow::ground_shadow;
+pub use share::ShareAnimation;
+pub use spirit::Spirit;
 
-use crate::{artwork::Artwork, share_timing::lerp};
 use gpui::{
-    Animation, AnimationExt, AnyElement, App, Div, ElementId, IntoElement, Window, div,
-    ease_out_quint, point, prelude::*, px, size,
+    Animation, AnimationExt, AnyElement, App, Canvas, Div, ElementId, IntoElement, Point, Window,
+    canvas, div, ease_out_quint, point, prelude::*, px,
 };
-use std::{
-    f32::consts::{PI, TAU},
-    time::Duration,
-};
-use windshare_ui::{Icon, Theme, Tone, icon, row, vector_sprite};
+use std::time::Duration;
+use windshare_ui::{Icon, Theme, Tone, icon, row};
 
 const SCENE_WIDTH: f32 = 340.;
-const SCENE_HEIGHT: f32 = 176.;
-const SPIRIT_SIZE: f32 = 156.;
-const SPIRIT_TOP: f32 = 4.;
-const FLOAT_CYCLE_MS: u64 = 3400;
-const FLIGHT_CYCLE_MS: u64 = 1500;
-const PAPER_WIDTH: f32 = 36.;
-const PAPER_HEIGHT: f32 = 41.;
-const PAPERS: [Artwork; 3] = [Artwork::Paper, Artwork::Photo, Artwork::Folder];
+const SCENE_HEIGHT: f32 = 250.;
+const SPIRIT_SIZE: f32 = 190.;
+const SPIRIT_TOP: f32 = 25.;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SpiritMood {
@@ -37,13 +34,82 @@ pub struct SpiritScene {
     mood: SpiritMood,
     tone: Tone,
     scale: f32,
+    center: Point<f32>,
+    body_width: f32,
     reduced_motion: bool,
+    anchor: Option<SpiritAnchor>,
 }
 
 impl SpiritScene {
-    pub fn body_center_offset_y(scale: f32) -> f32 {
-        (SPIRIT_TOP + SPIRIT_SIZE / 2. - SCENE_HEIGHT / 2.) * scale
+    pub fn new(
+        id: impl Into<ElementId>,
+        mood: SpiritMood,
+        tone: Tone,
+        scale: f32,
+        reduced_motion: bool,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            mood,
+            tone,
+            scale,
+            center: Self::body_center(scale),
+            body_width: Self::body_size(scale),
+            reduced_motion,
+            anchor: None,
+        }
     }
+
+    pub fn anchor(mut self, anchor: &SpiritAnchor) -> Self {
+        self.anchor = Some(anchor.clone());
+        self
+    }
+
+    pub const fn width(scale: f32) -> f32 {
+        SCENE_WIDTH * scale
+    }
+
+    pub const fn height(scale: f32) -> f32 {
+        SCENE_HEIGHT * scale
+    }
+
+    pub const fn body_size(scale: f32) -> f32 {
+        SPIRIT_SIZE * scale
+    }
+
+    /// The resting spirit's center, measured from the scene's corner.
+    pub fn body_center(scale: f32) -> Point<f32> {
+        point(
+            SCENE_WIDTH / 2. * scale,
+            (SPIRIT_TOP + SPIRIT_SIZE / 2.) * scale,
+        )
+    }
+}
+
+/// A scene whose spirit is painted elsewhere: its footprint and the shadow it left.
+pub fn vacated_scene(tone: Tone, scale: f32) -> Div {
+    div()
+        .relative()
+        .w(px(SpiritScene::width(scale)))
+        .h(px(SpiritScene::height(scale)))
+        .flex_shrink_0()
+        .child(ground_shadow(tone, scale))
+}
+
+/// Redraws the enclosing view every frame for as long as it stays in the tree.
+/// Frames can only be requested while drawing, so a view whose content is a
+/// function of the clock mounts this instead of calling from `render`.
+pub fn frame_ticker() -> Canvas<()> {
+    canvas(
+        |_, window, _| {
+            if window.is_visible() && window.is_window_active() {
+                window.request_animation_frame();
+            }
+        },
+        |_, (), _, _| {},
+    )
+    .absolute()
+    .size_0()
 }
 
 pub fn spirit_scene(
@@ -62,103 +128,33 @@ pub fn scaled_spirit(
     scale: f32,
     reduced_motion: bool,
 ) -> SpiritScene {
-    SpiritScene {
-        id: id.into(),
-        mood,
-        tone,
-        scale,
-        reduced_motion,
-    }
+    SpiritScene::new(id, mood, tone, scale, reduced_motion)
 }
 
 impl RenderOnce for SpiritScene {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = Theme::current(window, cx);
-        let Self {
-            id,
-            mood,
-            tone,
-            scale,
-            reduced_motion,
-        } = self;
-        let receiving = mood == SpiritMood::Receiving;
-        let still = reduced_motion || cx.reduce_motion() || !window.is_window_active();
-        let unit = |value| px(value * scale);
-        // Open wind lines connect the character to the files without isolating it in a badge.
-        let mut scene = div()
-            .id(id)
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        div()
+            .id(self.id)
             .relative()
-            .w(unit(SCENE_WIDTH))
-            .h(unit(SCENE_HEIGHT))
+            .w(px(Self::width(self.scale)))
+            .h(px(Self::height(self.scale)))
             .flex_shrink_0()
+            .child(ground_shadow(self.tone, self.scale))
             .child(
-                vector_sprite(
-                    "brand/breeze.svg",
-                    size(px(SCENE_WIDTH), px(SCENE_HEIGHT)),
-                    point(unit(SCENE_WIDTH / 2.), unit(SCENE_HEIGHT / 2.)),
-                    scale,
+                Spirit::new(
+                    "body",
+                    self.mood,
+                    self.center,
+                    self.body_width,
+                    self.reduced_motion,
                 )
-                .text_color(tone.accent(theme)),
-            );
-        for (index, asset) in (0_u16..).zip(PAPERS) {
-            let paper = div().absolute().inset_0().size_full();
-            let paper_at = move |x: f32, y: f32| {
-                asset.sprite(
-                    point(
-                        (x + PAPER_WIDTH / 2.) * scale,
-                        (y + PAPER_HEIGHT / 2.) * scale,
-                    ),
-                    PAPER_WIDTH * scale,
-                )
-            };
-            let element = if receiving && !still {
-                paper
-                    .with_animation(
-                        ("flying-file", usize::from(index)),
-                        Animation::new(Duration::from_millis(FLIGHT_CYCLE_MS)).repeat(),
-                        move |el, delta| {
-                            let phase = (delta + f32::from(index) / 3.) % 1.;
-                            let travel = 1. - phase;
-                            let arc = (phase * PI).sin();
-                            el.child(paper_at(lerp(12., 294., travel), arc.mul_add(-73., 96.)))
-                                .opacity(arc * 0.95)
-                        },
-                    )
-                    .into_any_element()
-            } else {
-                let (x, y) = [(31., 63.), (268., 26.), (265., 123.)][usize::from(index)];
-                if still {
-                    paper.child(paper_at(x, y)).into_any_element()
-                } else {
-                    paper
-                        .with_animation(
-                            ("paper-drift", usize::from(index)),
-                            Animation::new(Duration::from_millis(
-                                FLOAT_CYCLE_MS + u64::from(index) * 450,
-                            ))
-                            .repeat(),
-                            move |el, delta| {
-                                let drift = (delta.mul_add(TAU, f32::from(index))).sin() * 3.;
-                                el.child(paper_at(x, y + drift))
-                            },
-                        )
-                        .into_any_element()
-                }
-            };
-            scene = scene.child(element);
-        }
-        // File paths pass behind the character so its face remains unobstructed.
-        scene.child(Spirit::new(
-            "body",
-            SpiritState::Floating(mood),
-            point(
-                SCENE_WIDTH / 2. * scale,
-                (SPIRIT_TOP + SPIRIT_SIZE / 2.) * scale,
-            ),
-            SPIRIT_SIZE * scale,
-            reduced_motion,
-        ))
+                .anchor(self.anchor),
+            )
     }
+}
+
+pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    (b - a).mul_add(t, a)
 }
 
 pub fn reassurance(theme: Theme, symbol: Icon, text: &'static str) -> Div {

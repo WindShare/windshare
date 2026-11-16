@@ -186,7 +186,7 @@ pub enum OperationState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Operation {
     pub id: String,
-    pub paths: Vec<String>,
+    pub paths: Vec<std::path::PathBuf>,
     pub state: OperationState,
 }
 
@@ -281,6 +281,15 @@ impl Model {
                 .iter_mut()
                 .find(|op| op.id == share.operation_id)
             {
+                if share.startup == Startup::Ready
+                    && operation
+                        .share()
+                        .is_none_or(|previous| previous.startup != Startup::Ready)
+                {
+                    tracing::info!(event = "share.engine_ready", host_session = ?self.session_id,
+                        intent = %share.operation_id, operation = %share.operation_id,
+                        task = %share.task_id, "Host made the share link usable");
+                }
                 operation.state = OperationState::Accepted(Box::new(share));
             } else {
                 self.operations.push(Operation {

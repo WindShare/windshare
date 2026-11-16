@@ -10,15 +10,12 @@ mod localization;
 mod logging;
 mod model;
 mod motion;
-mod motion_probe;
 mod overlays;
 mod pages;
 mod preferences;
 #[cfg(feature = "motion-profile")]
 mod profiling;
 mod receiving;
-mod share_animation;
-mod share_timing;
 mod share_views;
 mod sharing;
 mod shell;
@@ -26,65 +23,76 @@ mod supershare;
 mod transfer_views;
 
 use desktop::Desktop;
-use gpui::{
-    AppContext, AssetSource, Bounds, SharedString, TitlebarOptions, WindowBounds, WindowOptions,
-    px, size,
-};
-use std::{borrow::Cow, time::Duration};
-
-const DEFAULT_PREVIEW_SHARE_MS: u64 = 1900;
-
-struct DesktopAssets;
-impl AssetSource for DesktopAssets {
-    fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
-        if path == "brand/breeze.svg" {
-            return Ok(Some(Cow::Borrowed(include_bytes!("../assets/breeze.svg"))));
-        }
-        windshare_ui::Assets.load(path)
-    }
-    fn list(&self, _: &str) -> gpui::Result<Vec<SharedString>> {
-        Ok(vec![])
-    }
-}
+use gpui::{AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
+use std::time::Duration;
+use windshare_ui::Assets as DesktopAssets;
 
 fn main() -> std::process::ExitCode {
     let _logs = logging::start();
     #[cfg(feature = "motion-profile")]
     let _capture = profiling::start();
-    let arguments: Vec<String> = std::env::args().skip(1).collect();
-    if arguments.iter().any(|arg| arg == "--host-check") {
-        if let Err(error) = windshare_host::check_host() {
-            tracing::error!(event = "desktop.host_check_failed", %error);
-            return std::process::ExitCode::FAILURE;
+    match run() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            tracing::error!(event = "desktop.launch_failed", %error);
+            #[cfg(windows)]
+            if !std::env::args_os()
+                .nth(1)
+                .is_some_and(|arg| arg == "--host-check" || arg == "--identity-check")
+            {
+                windshare_activation::windows::show_failure(&error);
+            }
+            std::process::ExitCode::FAILURE
         }
-        return std::process::ExitCode::SUCCESS;
     }
-    if !arguments.iter().any(|arg| arg == "--preview") {
-        let paths = arguments
-            .iter()
-            .position(|arg| arg == "--live-share")
-            .map_or_default(|index| {
-                arguments[index + 1..]
-                    .iter()
-                    .map(std::path::PathBuf::from)
-                    .collect()
-            });
-        let compact = arguments.iter().any(|arg| arg == "--compact");
-        if let Err(error) = live::run(paths, compact) {
-            tracing::error!(event = "desktop.live_share_failed", %error);
-            return std::process::ExitCode::FAILURE;
+}
+
+fn run() -> Result<(), String> {
+    use windshare_activation::launch::{self, Launch};
+    let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+    let diagnostic = arguments.len() == 1
+        && (arguments[0] == "--host-check" || arguments[0] == "--identity-check");
+    #[cfg(windows)]
+    if !diagnostic
+        && windshare_activation::windows::share_target::handle_activation()
+            .map_err(|error| error.to_string())?
+    {
+        return Ok(());
+    }
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    #[cfg(not(windows))]
+    let _ = diagnostic;
+    match launch::parse(arguments, &cwd)? {
+        Launch::HostCheck => windshare_host::check_host().map_err(|error| error.to_string()),
+        Launch::IdentityCheck => {
+            #[cfg(windows)]
+            return windshare_activation::windows::identity_check()
+                .map_err(|error| error.to_string());
+            #[cfg(not(windows))]
+            Err("Package identity is only supported on Windows".into())
         }
-        return std::process::ExitCode::SUCCESS;
+        Launch::Dispatch { endpoint } => {
+            #[cfg(windows)]
+            return windshare_activation::windows::dispatch::receive(&endpoint)
+                .map_err(|error| error.to_string());
+            #[cfg(not(windows))]
+            {
+                let _ = endpoint;
+                Err("Explorer dispatch is only supported on Windows".into())
+            }
+        }
+        Launch::Application {
+            activation,
+            compact,
+        } => live::run(activation, compact),
+        Launch::Preview { compact, delay_ms } => {
+            run_preview(compact, delay_ms);
+            Ok(())
+        }
     }
-    let compact = std::env::args().any(|arg| arg == "--compact");
-    let share_delay_ms = std::env::args()
-        .find_map(|arg| arg.strip_prefix("--share-delay-ms=").map(str::to_owned))
-        .map(|value| {
-            value
-                .parse::<u32>()
-                .expect("--share-delay-ms requires an unsigned integer")
-        })
-        .map_or(DEFAULT_PREVIEW_SHARE_MS, u64::from);
+}
+
+fn run_preview(compact: bool, share_delay_ms: u64) {
     let preview_share_delay = Duration::from_millis(share_delay_ms);
     gpui_platform::application()
         .with_assets(DesktopAssets)
@@ -140,5 +148,4 @@ fn main() -> std::process::ExitCode {
             .detach();
             cx.activate(true);
         });
-    std::process::ExitCode::SUCCESS
 }

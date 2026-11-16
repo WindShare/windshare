@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 pub const LARGE_BUTTON_HEIGHT: f32 = 54.;
 const REGULAR_BUTTON_HEIGHT: f32 = 44.;
-const COMPACT_BUTTON_HEIGHT: f32 = 36.;
+pub const COMPACT_BUTTON_HEIGHT: f32 = 36.;
 const QUIET_HOVER_OPACITY: f32 = 0.08;
 
 #[derive(Clone, Copy, Default)]

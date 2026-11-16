@@ -105,7 +105,7 @@ impl SuperShare {
                     .justify_center()
                     .gap(px(9.))
                     .when(confirmation.busy(), |el| {
-                        el.child(visuals::progress(theme, self.reduced_motion))
+                        el.child(visuals::progress(theme, cx.reduce_motion()))
                     })
                     .when(confirmation == Confirmation::Unconfirmed, |el| {
                         el.child(

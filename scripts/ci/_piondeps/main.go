@@ -46,11 +46,10 @@ var providerModules = map[string]string{
 func main() {
 	root := flag.String("root", ".", "repository root")
 	reproduce := flag.Bool("reproduce", false, "replay patches against checksum-verified upstream modules")
-	maintained := flag.Bool("maintained-go-files", false, "list working-tree Go sources after verifying and reproducing dependency exclusions")
-	nul := flag.Bool("0", false, "separate maintained Go paths with NUL instead of newline")
+	diagnostics := flag.Bool("diagnostic-plan", false, "emit module-owned Go sources as JSON after verifying and reproducing dependency exclusions")
 	flag.Parse()
-	if *maintained {
-		if err := writeMaintainedGoFiles(*root, *nul, os.Stdout); err != nil {
+	if *diagnostics {
+		if err := writeDiagnosticPlan(*root, os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}

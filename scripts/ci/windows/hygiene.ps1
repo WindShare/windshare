@@ -87,6 +87,7 @@ Invoke-Step 'Transport dependency boundary tests' { go test ./scripts/ci/_transp
 Invoke-Step 'Transport dependency boundary' { go run ./scripts/ci/_transportboundary }
 Invoke-Step 'Engine application dependency boundary tests' { go test ./scripts/ci/_engineboundary }
 Invoke-Step 'Engine application dependency boundary' { go run ./scripts/ci/_engineboundary }
+Invoke-Step 'Coverage source projection contracts' { go test ./scripts/ci/_coverage }
 Invoke-Step 'Go validation package ownership tests' { go test ./scripts/ci/_gopackages }
 Invoke-Step 'Go validation package ownership' {
     go run ./scripts/ci/_gopackages -set all | Out-Null

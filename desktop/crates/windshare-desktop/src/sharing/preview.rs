@@ -1,12 +1,11 @@
 use crate::{
     desktop::Desktop,
-    flow_state::{SampleBundle, ShareFlow, ShareReadiness, ShareRun},
+    flow_state::SampleBundle,
     live::Runtime,
     model::{Share, ShareAge, ShareSource, ShareState},
     sharing::{LinkDisclosure, ShareLink},
 };
 use gpui::{Context, Window};
-use std::time::Instant;
 
 impl Desktop {
     pub fn prepare_preview_share(
@@ -38,13 +37,7 @@ impl Desktop {
             },
         );
         self.link_disclosure = LinkDisclosure::Summary;
-        self.share_flow = ShareFlow::Running(ShareRun {
-            operation,
-            selection_id: operation,
-            started_at: Instant::now(),
-            readiness: ShareReadiness::Pending,
-        });
-        self.focus_task(window, cx);
+        self.present_share(self.share_run(operation, cx), window, cx);
         tracing::info!(
             event = "share.preparing",
             operation,
@@ -63,11 +56,6 @@ impl Desktop {
                 }
                 share.link = Some(ShareLink::preview(operation));
                 share.state = ShareState::Live { viewers: Some(0) };
-                if let ShareFlow::Running(run) = &mut this.share_flow
-                    && run.selection_id == operation
-                {
-                    run.readiness = ShareReadiness::Ready { at: Instant::now() };
-                }
                 tracing::info!(event = "share.ready", operation, preview = true);
                 cx.notify();
             });

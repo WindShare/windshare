@@ -50,12 +50,12 @@ impl SuperShare {
                                 .disabled(busy || self.code.read(cx).value().trim().is_empty())
                                 .focus_handle(&self.primary_focus),
                             )
-                            .child(self.redemption_feedback(theme, status, cx)),
+                            .child(Self::redemption_feedback(theme, status, cx)),
                     ),
             )
     }
 
-    fn redemption_feedback(&self, theme: Theme, status: Redemption, cx: &Context<Self>) -> Div {
+    fn redemption_feedback(theme: Theme, status: Redemption, cx: &Context<Self>) -> Div {
         let locale = language(cx);
         let message = match status {
             Redemption::Invalid => Some(Text::SuperCodeInvalid),
@@ -67,7 +67,7 @@ impl SuperShare {
             .items_center()
             .justify_center()
             .when(matches!(status, Redemption::Checking { .. }), |el| {
-                el.child(visuals::progress(theme, self.reduced_motion))
+                el.child(visuals::progress(theme, cx.reduce_motion()))
             })
             .when_some(message, |el, text| {
                 el.child(

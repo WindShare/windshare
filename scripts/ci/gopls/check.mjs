@@ -133,6 +133,27 @@ export async function diagnose(connection, {
   log('analysis_complete', { files: submitted })
 }
 
+// A module's inferred platform views should not be invalidated while checking
+// an unrelated module. Sequential, owned servers keep one analyzer active and
+// preserve the installed tool's native module graph without a shared daemon.
+export async function checkModules({
+  root, modules, log = () => {}, timeoutMs = ANALYSIS_TIMEOUT_MS, ...options
+}) {
+  if (modules.length === 0) throw new Error('Maintained Go module set is empty')
+  const deadline = performance.now() + timeoutMs
+  const diagnostics = []
+  for (const { directory, files } of modules) {
+    const remaining = deadline - performance.now()
+    if (remaining <= 0) throw new Error('gopls analysis timed out')
+    const moduleLog = (event, details) => log(event, { ...details, module: directory })
+    moduleLog('module_started', { files: files.length })
+    diagnostics.push(...await checkFiles({
+      ...options, root: resolve(root, directory), files, log: moduleLog, timeoutMs: remaining,
+    }))
+  }
+  return diagnostics.sort(compareDiagnostics)
+}
+
 export async function checkFiles({
   root, files, log = () => {}, launch = spawn, signal,
   timeoutMs = ANALYSIS_TIMEOUT_MS, shutdownTimeoutMs = SHUTDOWN_TIMEOUT_MS,
@@ -162,9 +183,7 @@ export async function checkFiles({
     if (handlers.failures.length) throw new Error(handlers.failures.join('\n'))
     log('diagnostics_collected', { files: files.length, diagnostics: handlers.diagnostics.size })
     completed = true
-    return [...handlers.diagnostics.values()].sort((a, b) =>
-      a.uri.localeCompare(b.uri) || a.range.start.line - b.range.start.line ||
-      a.range.start.character - b.range.start.character || a.message.localeCompare(b.message))
+    return [...handlers.diagnostics.values()].sort(compareDiagnostics)
   } finally {
     clearTimeout(deadline)
     signal?.removeEventListener('abort', abort)
@@ -198,6 +217,11 @@ export async function checkFiles({
       clearTimeout(shutdownDeadline)
     }
   }
+}
+
+function compareDiagnostics(a, b) {
+  return a.uri.localeCompare(b.uri) || a.range.start.line - b.range.start.line ||
+    a.range.start.character - b.range.start.character || a.message.localeCompare(b.message)
 }
 
 export function formatDiagnostic(diagnostic) {

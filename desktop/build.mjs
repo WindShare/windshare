@@ -18,7 +18,9 @@ export function desktopArtifacts(messages) {
   const output = messages.find(message =>
     message.reason === 'build-script-executed' && message.package_id === host?.package_id)?.out_dir;
   if (!executable || !output) throw new Error('Cargo did not report the desktop and native host artifacts');
-  return { executable, hostDirectory: output };
+  const shell = artifacts.find(message => message.target.name === 'windshare_shell' &&
+    message.target.kind.includes('cdylib'))?.filenames?.find(path => path.endsWith('.dll'));
+  return { executable, hostDirectory: output, ...(shell ? { shell } : {}) };
 }
 
 export async function buildDesktop(command, { cwd, env } = {}) {
@@ -35,13 +37,13 @@ export async function buildDesktop(command, { cwd, env } = {}) {
     }
   }
   if (build.status !== 0) throw new Error(`Cargo build failed: ${build.status ?? build.signal}`);
-  const { executable, hostDirectory } = desktopArtifacts(messages);
+  const { executable, hostDirectory, shell } = desktopArtifacts(messages);
   // Cargo's intermediate layout is private; its messages bind the library from
   // this build to the executable, including fresh builds and custom target dirs.
   const library = join(dirname(executable), hostLibrary);
   await copyFile(join(hostDirectory, hostLibrary), library);
   console.log(JSON.stringify({ event: 'desktop.host_staged', executable, library, hostDirectory }));
-  return { executable, library };
+  return { executable, library, ...(shell ? { shell } : {}) };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

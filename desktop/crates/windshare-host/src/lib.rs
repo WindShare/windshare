@@ -1,4 +1,5 @@
 mod abi;
+mod admission;
 mod connection;
 mod model;
 mod request;
@@ -28,7 +29,6 @@ pub use model::{
 
 use request::Command;
 use std::{
-    path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -115,88 +115,6 @@ impl Controller {
         let _ = self.updates.recv().await;
     }
 
-    /// Registers a selection before sending it; reconnects reuse this identity.
-    /// No filesystem traversal or metadata lookup runs on the caller's thread.
-    /// # Errors
-    /// Returns a selection, application lifetime, or queue capacity error.
-    /// # Panics
-    /// Panics if the application model mutex is poisoned.
-    pub fn create(&self, paths: Vec<PathBuf>) -> Result<String, String> {
-        if paths.is_empty() {
-            return Err("Select at least one file or folder".into());
-        }
-        let paths: Vec<String> = paths
-            .into_iter()
-            .map(|path| {
-                path.into_os_string()
-                    .into_string()
-                    .map_err(|_| "A selected path cannot be represented as Unicode".to_owned())
-            })
-            .collect::<Result<_, _>>()?;
-        let retained_paths = paths.clone();
-        self.submit(retained_paths, |operation_id| Command::Create {
-            operation_id,
-            paths,
-        })
-    }
-
-    /// Starts a new intent from the host's retained selection.
-    /// # Errors
-    /// Returns a missing selection, application lifetime, or queue capacity error.
-    /// # Panics
-    /// Panics if the application model mutex is poisoned.
-    pub fn repeat(&self, source_operation_id: &str) -> Result<String, String> {
-        let paths = self
-            .model()
-            .operations
-            .iter()
-            .find(|operation| operation.id == source_operation_id)
-            .ok_or("Source selection not found")?
-            .paths
-            .clone();
-        self.submit(paths, |operation_id| Command::Repeat {
-            operation_id,
-            source_operation_id: source_operation_id.into(),
-        })
-    }
-
-    fn submit(
-        &self,
-        paths: Vec<String>,
-        make_command: impl FnOnce(String) -> Command,
-    ) -> Result<String, String> {
-        let mut model = self.shared.model.lock().expect("model lock");
-        if self.shared.closing.load(Ordering::Acquire)
-            || matches!(model.connection, Connection::Closed(_))
-        {
-            return Err("WindShare is closing".into());
-        }
-        if model.operations.len() >= MAXIMUM_OPERATIONS {
-            return Err("Share limit reached; restart after stopping shares".into());
-        }
-        let id = format!(
-            "share:{}",
-            self.sequence.fetch_add(1, Ordering::Relaxed) + 1
-        );
-        let command = make_command(id.clone());
-        command.validate()?;
-        self.commands
-            .try_send(command)
-            .map_err(|error| error.to_string())?;
-        // The worker also takes this lock before reconciliation, so it cannot
-        // publish a reply before the application owns the selection.
-        model.operations.push(Operation {
-            id: id.clone(),
-            paths,
-            state: OperationState::Submitting,
-        });
-        model.command_error = None;
-        drop(model);
-        self.shared.notify();
-        tracing::info!(event = "desktop.share_submitted", operation_id = %id);
-        Ok(id)
-    }
-
     fn command(&self, command: Command) {
         let error = if self.shared.closing.load(Ordering::Acquire) {
             Some("WindShare is closing".into())
@@ -250,7 +168,10 @@ impl Controller {
         });
     }
 
+    /// # Panics
+    /// Panics if the application model mutex is poisoned.
     pub fn begin_shutdown(&self) {
+        let _admission = self.shared.model.lock().expect("model lock");
         self.shared.closing.store(true, Ordering::Release);
         let _ = self.shared.wake.notify();
     }

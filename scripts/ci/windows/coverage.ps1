@@ -38,13 +38,13 @@ try {
         go test -short -count=1 -covermode=atomic "-coverprofile=$rootProfile" $nonCorePackages
     }
     Invoke-Step 'non-core coverage verdict' {
-        go-test-coverage --config=.testcoverage.yml "--profile=$rootProfile"
+        go run ./scripts/ci/_coverage --config=.testcoverage.yml "--profile=$rootProfile"
     }
     Invoke-Step 'core short atomic coverage sweep' {
         go test -short -count=1 -covermode=atomic "-coverprofile=$coreProfile" $corePackages
     }
     Invoke-Step 'core coverage verdict' {
-        go-test-coverage --config=core/.testcoverage.yml "--profile=$coreProfile"
+        go run ./scripts/ci/_coverage --config=core/.testcoverage.yml "--profile=$coreProfile"
     }
 
     Write-Output ('== coverage: PASS in {0:mm\:ss} ==' -f $gateStopwatch.Elapsed)

@@ -168,7 +168,7 @@ jobs:
             "${WINDSHARE_GO_PACKAGES[@]}"
       - name: Enforce non-core and package coverage floors
         run: >-
-          go-test-coverage --config=.testcoverage.yml
+          go run ./scripts/ci/_coverage --config=.testcoverage.yml
           --profile="$RUNNER_TEMP/root.cover.out"
       - name: Verify production output on the release ext4 fixture
         run: |
@@ -214,7 +214,7 @@ jobs:
             "${WINDSHARE_GO_PACKAGES[@]}"
       - name: Enforce core and package coverage floors
         run: >-
-          go-test-coverage --config=core/.testcoverage.yml
+          go run ./scripts/ci/_coverage --config=core/.testcoverage.yml
           --profile="$RUNNER_TEMP/core.cover.out"
       - name: Verify protocol vectors once
         run: make vectors

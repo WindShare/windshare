@@ -139,22 +139,25 @@ func TestDiagnosticOrderDefersForeignViewsWithoutOmittingSources(t *testing.T) {
 			context.GOOS, context.GOARCH = platform, "amd64"
 			context.BuildTags = nil
 			foreign := map[string]string{"windows": "linux", "linux": "windows"}[platform]
-			want := []string{
-				"a/platform_" + platform + ".go", "z/native_test.go", "z/\u6587\u4ef6 with spaces.go",
-				"a/platform_" + foreign + ".go", "a/tagged.go",
-				"middle/evidence/a_" + platform + ".go", "middle/evidence/z.go",
-				"middle/evidence/a_" + foreign + ".go",
+			want := []diagnosticModuleSources{
+				{Directory: ".", Files: []string{
+					"a/platform_" + platform + ".go", "z/native_test.go", "z/\u6587\u4ef6 with spaces.go",
+					"a/platform_" + foreign + ".go", "a/tagged.go",
+				}},
+				{Directory: "middle/evidence", Files: []string{
+					"a_" + platform + ".go", "z.go", "a_" + foreign + ".go",
+				}},
 			}
-			got, err := orderDiagnosticSources(root, files, context)
+			got, err := planDiagnosticSources(root, files, context)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !slices.Equal(got, want) {
-				t.Fatalf("diagnostic order = %q, want %q", got, want)
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("diagnostic plan = %#v, want %#v", got, want)
 			}
 			slices.Reverse(files)
-			reordered, err := orderDiagnosticSources(root, files, context)
-			if err != nil || !slices.Equal(reordered, got) {
+			reordered, err := planDiagnosticSources(root, files, context)
+			if err != nil || !reflect.DeepEqual(reordered, got) {
 				t.Fatalf("input order changed diagnostic plan: %q, %v", reordered, err)
 			}
 		})
@@ -169,7 +172,7 @@ func TestDiagnosticOrderRejectsUnreadableConstraints(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if got, err := orderDiagnosticSources(root, []string{file}, build.Default); err == nil || got != nil {
+		if got, err := planDiagnosticSources(root, []string{file}, build.Default); err == nil || got != nil {
 			t.Fatalf("bad source produced a diagnostic plan: %q, %v", got, err)
 		}
 	}
@@ -210,7 +213,7 @@ func TestMaintainedOutputRejectsUnverifiedProjection(t *testing.T) {
 				t.Fatal(err)
 			}
 			var output bytes.Buffer
-			if err := writeMaintainedGoFiles(root, false, &output); err == nil {
+			if err := writeDiagnosticPlan(root, &output); err == nil {
 				t.Fatal("unverified source selection succeeded")
 			}
 			if output.Len() != 0 {

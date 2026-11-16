@@ -29,10 +29,56 @@ impl Desktop {
             ))
     }
 
+    pub(super) fn setup_return(
+        &self,
+        theme: Theme,
+        operation: &str,
+        cx: &Context<Self>,
+    ) -> Option<Div> {
+        let Runtime::Native(session) = &self.runtime else {
+            return None;
+        };
+        let setup = &session.model.setup;
+        let context = setup.context()?;
+        if !setup.unfinished() || operation.is_empty() || context.operation_id == operation {
+            return None;
+        }
+        let original = self.shares.iter().find(|share|
+            matches!(&share.source, crate::model::ShareSource::Native { operation_id } if operation_id == &context.operation_id));
+        let locale = language(cx);
+        let progress = match setup {
+            Setup::Running {
+                verification_url, ..
+            } if !verification_url.is_empty() => Text::AuthorizationRequired,
+            Setup::Cancelling { .. } => Text::CancellingSetup,
+            Setup::Failed { .. } | Setup::CancelFailed { .. } => Text::SetupNeedsAttention,
+            _ => Text::ConnectingRelay,
+        };
+        Some(
+            column()
+                .gap(px(12.))
+                .child(theme.caption(locale.text(progress)))
+                .when_some(original, |view, share| {
+                    view.child(theme.label(share.name.clone(), 16.))
+                })
+                .child(Self::button(
+                    "return-to-running-setup",
+                    locale.text(Text::ReturnToSetup),
+                    Icon::Settings,
+                    ButtonStyle::Secondary,
+                    Action::ReturnToSharingSetup,
+                    cx,
+                )),
+        )
+    }
+
     pub(super) fn setup_feedback(&self, theme: Theme, operation: &str, cx: &Context<Self>) -> Div {
         let Runtime::Native(session) = &self.runtime else {
             return column();
         };
+        if let Some(progress) = self.setup_return(theme, operation, cx) {
+            return progress;
+        }
         let locale = language(cx);
         let mut form = column().gap(px(12.));
         let setup = &session.model.setup;

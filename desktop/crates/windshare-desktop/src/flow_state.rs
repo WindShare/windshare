@@ -1,5 +1,12 @@
-use crate::{model::ShareContents, share_timing::ShareFrame};
-use std::time::Instant;
+use crate::{
+    model::ShareContents,
+    motion::{
+        ShareAnimation,
+        whirl::{Wind, seconds_between},
+    },
+    sharing::Perch,
+};
+use std::time::{Duration, Instant};
 use windshare_ui::{Icon, Tone};
 pub const COPY_FEEDBACK_MS: u64 = 2400;
 
@@ -57,40 +64,52 @@ pub enum ShareFlow {
     Running(ShareRun),
 }
 
+/// One presentation of a share on the sharing page, and the clock its entrance runs on.
 #[derive(Clone, Copy, Debug)]
 pub struct ShareRun {
-    pub operation: usize,
-    pub selection_id: usize,
-    pub started_at: Instant,
-    pub readiness: ShareReadiness,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum ShareReadiness {
-    Pending,
-    Ready { at: Instant },
-    Finished,
+    pub share_id: usize,
+    started_at: Instant,
+    /// Where the user last saw the spirit, if it was on screen as the run began.
+    pub perch: Option<Perch>,
+    pub animation: ShareAnimation,
 }
 
 impl ShareRun {
-    pub fn sample(self, now: Instant, still: bool) -> ShareFrame {
-        let ready_at = match self.readiness {
-            ShareReadiness::Pending => None,
-            ShareReadiness::Ready { at } => Some(at.saturating_duration_since(self.started_at)),
-            ShareReadiness::Finished => Some(std::time::Duration::ZERO),
-        };
-        ShareFrame::sample(
-            now.saturating_duration_since(self.started_at),
-            ready_at,
-            still || matches!(self.readiness, ShareReadiness::Finished),
-        )
+    pub const fn new(
+        share_id: usize,
+        started_at: Instant,
+        perch: Option<Perch>,
+        animation: ShareAnimation,
+    ) -> Self {
+        Self {
+            share_id,
+            started_at,
+            perch,
+            animation,
+        }
     }
 
-    pub const fn share_id(self) -> Option<usize> {
-        match self.readiness {
-            ShareReadiness::Pending | ShareReadiness::Finished => None,
-            ShareReadiness::Ready { .. } => Some(self.selection_id),
+    pub fn seconds(self, now: Instant) -> f32 {
+        seconds_between(self.started_at, now)
+    }
+
+    /// The whirl this run raises for its QR slot: flown in from the perch when
+    /// there is one, risen in place otherwise.
+    pub const fn wind(self) -> Wind {
+        match self.perch {
+            Some(_) => Wind::Carried {
+                since: self.started_at,
+            },
+            None => Wind::Rooted {
+                since: self.started_at,
+            },
         }
+    }
+
+    /// Time left before the result may present more than "preparing".
+    pub fn until_reveal(self, now: Instant) -> Duration {
+        (self.started_at + Duration::from_secs_f32(self.animation.duration()))
+            .saturating_duration_since(now)
     }
 }
 #[derive(Clone, Copy, Debug)]
