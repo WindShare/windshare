@@ -33,6 +33,8 @@ use windshare_ui::{Theme, Tone, column};
 const CARD_ENTRANCE: f32 = 0.42;
 /// Pixels the card rises while it arrives.
 const CARD_RISE: f32 = 12.;
+// Let the spirit leave the text's area before bringing that information forward.
+const INFORMATION_ENTRANCE: (f32, f32) = (0.30, 0.82);
 
 /// Where the choose page last painted its prompt, in window coordinates.
 #[derive(Clone, Copy, Debug)]
@@ -97,6 +99,14 @@ impl IntroFrame {
 
     pub fn card_rise(self) -> f32 {
         CARD_RISE * (1. - self.card_presence())
+    }
+
+    pub fn information_presence(self) -> f32 {
+        if self.still {
+            1.
+        } else {
+            smoothstep(INFORMATION_ENTRANCE.0, INFORMATION_ENTRANCE.1, self.seconds)
+        }
     }
 
     const fn running(self) -> bool {

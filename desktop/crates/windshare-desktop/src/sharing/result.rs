@@ -11,12 +11,16 @@ use crate::{
     localization::{Language, Text, language},
     model::{Action, Share, ShareState},
 };
-use gpui::{Div, Window, div, prelude::*, px};
+use gpui::{
+    AnimationExt, Div, SpringAnimation, SpringConfig, SpringPlayback, Window, div, prelude::*, px,
+};
 use windshare_ui::{ButtonStyle, COMPACT_BUTTON_HEIGHT, Icon, Theme, Tone, column, icon, row};
 
 const RESULT_SECTION_GAP: f32 = 24.;
 const RESULT_FILE_ICON_SIZE: f32 = 52.;
 const RESULT_TITLE_SIZE: f32 = 26.;
+// Critical damping lets readiness arrive softly without overshooting opacity.
+const READINESS_FADE: SpringConfig = SpringConfig::new(400., 40., 1.);
 
 impl Desktop {
     pub(super) fn share_result(
@@ -36,17 +40,49 @@ impl Desktop {
         let revealed = intro.revealed();
         let link = share.usable_link().filter(|_| revealed);
         let pending = !revealed || matches!(share.state, ShareState::Preparing);
+        let playback = if intro.still || !window.is_visible() || !window.is_window_active() {
+            SpringPlayback::Completed
+        } else {
+            SpringPlayback::Running
+        };
+        let readiness = |ready| {
+            SpringAnimation::new(READINESS_FADE)
+                .to(if ready { 1. } else { 0. })
+                .playback(playback)
+        };
+        let settled_status = result_status(theme, share, link.is_some(), false, locale);
+        let preparing_status = result_status(theme, share, false, true, locale);
+        let status = column().relative().with_spring(
+            ("result-status-reveal", share.id),
+            readiness(!pending),
+            move |el, presence| {
+                // Only the changing status crossfades; the filename and its
+                // geometry stay fixed, including when the link arrives late.
+                el.child(settled_status.opacity(presence)).child(
+                    preparing_status
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .opacity(1. - presence),
+                )
+            },
+        );
         let information = column()
             .flex_1()
             .min_w_0()
             .gap(px(RESULT_SECTION_GAP))
-            .child(result_status(theme, share, link.is_some(), pending, locale))
+            .opacity(intro.information_presence())
+            .child(status)
             .child(file_summary(theme, share, locale))
             .when(
                 revealed && (share.error.is_some() || share.relay_notice().is_some()),
                 |el| el.child(Self::share_notice(theme, share, cx)),
             )
-            .child(self.result_action(theme, share.id, link, cx));
+            .child(self.result_action(theme, share.id, link, cx).with_spring(
+                ("result-action-reveal", share.id),
+                readiness(link.is_some()),
+                gpui::Styled::opacity,
+            ));
         let slot = QrSlot::new(
             ("result-qr", share.id),
             link.and_then(|link| link.qr().ok()).cloned(),
