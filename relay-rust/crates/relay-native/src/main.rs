@@ -15,7 +15,8 @@ const USAGE: &str = "WindShare native relay
 Usage: wsrelay --database <path> [options]
 
   --listen <IP:port>                       Bind address (default 127.0.0.1:8787)
-  --public-endpoint <ws(s)://host/v2/ws>    Canonical public WebSocket endpoint
+  --public-endpoint <ws(s)://host/v2/ws>    Canonical public WebSocket endpoint;
+                                           required when --listen is 0.0.0.0 or [::]
   --origins <HTTP(S) origins>              Comma-separated browser allowlist
   --allow-localhost                       Allow localhost browser origins
   --public-origins                        Accept all valid HTTP(S) browser origins
@@ -45,7 +46,7 @@ struct Options {
 }
 
 fn options(mut args: impl Iterator<Item = String>) -> Result<Options> {
-    let mut listen = DEFAULT_LISTEN.parse()?;
+    let mut listen: SocketAddr = DEFAULT_LISTEN.parse()?;
     let mut database = None;
     let mut public_endpoint = None;
     let mut origins = Vec::new();
@@ -122,6 +123,7 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options> {
         !public_origins || (origins.is_empty() && !allow_localhost),
         "--public-origins cannot be combined with an origin allowlist"
     );
+    require_dialable_endpoint(listen, public_endpoint.as_deref())?;
     let sources = match (proxies, source_header) {
         (None, None) => SourcePolicy::default(),
         (Some(peers), Some(header)) => SourcePolicy::trusted_proxy(peers, &header)?,
@@ -141,6 +143,18 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options> {
         stun,
         node_config,
     })
+}
+
+/// Senders sign the relay identity of the URL they dial. A wildcard bind
+/// address is never that URL, so deriving the endpoint from it would start a
+/// healthy-looking relay that refuses every registration.
+fn require_dialable_endpoint(listen: SocketAddr, public_endpoint: Option<&str>) -> Result<()> {
+    anyhow::ensure!(
+        public_endpoint.is_some() || !listen.ip().to_canonical().is_unspecified(),
+        "--listen {listen} binds every interface; pass --public-endpoint \
+         ws(s)://<host>[/base]/v2/ws with the exact URL clients dial"
+    );
+    Ok(())
 }
 
 #[tokio::main]

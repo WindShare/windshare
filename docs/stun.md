@@ -25,10 +25,12 @@ The Rust native host is shipped as `wsrelay`. Build it using
 
 ```sh
 wsrelay --database relay.sqlite --listen 0.0.0.0:8484 \
+  --public-endpoint ws://relay.example.com:8484/v2/ws \
   --stun-udp '0.0.0.0:3478,[::]:3478' --stun-admin 127.0.0.1:8081
 ```
 
-These are the STUN defaults. IPv6 sockets are IPv6-only, so both families can
+The STUN flags show their defaults. A wildcard `--listen` requires the exact
+`--public-endpoint` clients dial. IPv6 sockets are IPv6-only, so both families can
 bind the same port. Addresses must be numeric IP:port pairs; at most 16 distinct
 listeners are accepted. Set `--stun-udp ""` to disable STUN (including admin),
 or `--stun-admin ""` to disable only admin. Listener/admin bind and runtime

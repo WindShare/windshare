@@ -171,6 +171,36 @@ fn stun_options_validate_positive_limits_and_explicit_listener_families() {
     }
 }
 
+#[test]
+fn wildcard_listen_requires_the_public_endpoint_clients_dial() {
+    let parse = |args: &[&str]| {
+        options(
+            ["--database", "relay.sqlite"]
+                .iter()
+                .chain(args)
+                .map(|arg| (*arg).to_owned()),
+        )
+    };
+    // Senders sign the identity of the URL they dial; ws://0.0.0.0 is never it.
+    for listen in ["0.0.0.0:8484", "[::]:8484", "[::ffff:0.0.0.0]:8484"] {
+        let error = parse(&["--listen", listen]).err().unwrap().to_string();
+        assert!(error.contains("--public-endpoint"), "{listen}: {error}");
+    }
+    let explicit = parse(&[
+        "--listen",
+        "0.0.0.0:8484",
+        "--public-endpoint",
+        "wss://relay.example/v2/ws",
+    ])
+    .unwrap();
+    assert_eq!(
+        explicit.public_endpoint.as_deref(),
+        Some("wss://relay.example/v2/ws")
+    );
+    assert!(parse(&["--listen", "127.0.0.1:8484"]).is_ok());
+    assert!(parse(&["--listen", "192.0.2.10:8484"]).is_ok());
+}
+
 #[tokio::test]
 async fn process_composition_shuts_down_and_releases_storage_after_startup_failure() {
     let directory = tempfile::tempdir().unwrap();
