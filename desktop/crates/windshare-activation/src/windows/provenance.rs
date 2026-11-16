@@ -10,7 +10,7 @@ use windows::{
     Win32::{
         Storage::FileSystem::{
             FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TEMPORARY, GetDriveTypeW,
-            GetFileAttributesW, INVALID_FILE_ATTRIBUTES,
+            GetFileAttributesW, GetLongPathNameW, INVALID_FILE_ATTRIBUTES,
         },
         System::Com::CoTaskMemFree,
         UI::Shell::{
@@ -34,7 +34,7 @@ pub struct Provenance {
 }
 impl Provenance {
     pub fn new() -> Self {
-        let durable_roots = [
+        let roots = [
             FOLDERID_Desktop,
             FOLDERID_Documents,
             FOLDERID_Downloads,
@@ -53,12 +53,22 @@ impl Provenance {
             }
         })
         .collect();
+        Self::from_roots(roots)
+    }
+
+    fn from_roots(roots: Vec<PathBuf>) -> Self {
+        // Canonicalize 8.3 short aliases once so shell-resolved item paths match known roots.
+        let durable_roots = roots
+            .into_iter()
+            .map(|root| long_path(&root).unwrap_or(root))
+            .collect();
         Self { durable_roots }
     }
 
     pub fn acquire(&self, item: &IStorageItem, deadline: Instant) -> anyhow::Result<PathBuf> {
         let native_path = item.Path()?;
-        let path = PathBuf::from(OsString::from_wide(&native_path));
+        let raw_path = PathBuf::from(OsString::from_wide(&native_path));
+        let path = long_path(&raw_path).ok_or_else(|| anyhow::anyhow!(SAVE_LOCALLY))?;
         anyhow::ensure!(
             self.durable_roots.iter().any(|root| beneath(&path, root)),
             "{SAVE_LOCALLY}"
@@ -86,13 +96,50 @@ impl Provenance {
     }
 }
 
-fn beneath(path: &Path, root: &Path) -> bool {
-    use windows::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
-    if !path.is_absolute()
-        || path
+fn is_direct_absolute(path: &Path) -> bool {
+    path.is_absolute()
+        && !path
             .components()
             .any(|part| matches!(part, Component::ParentDir))
-    {
+}
+
+fn resolve_win32_path(
+    path: &Path,
+    query: impl Fn(PCWSTR, Option<&mut [u16]>) -> u32,
+) -> Option<PathBuf> {
+    let input = wide(path);
+    let mut capacity = 0usize;
+    for _ in 0..4 {
+        let mut buffer = vec![0u16; capacity];
+        let output = (!buffer.is_empty()).then_some(buffer.as_mut_slice());
+        let result = query(PCWSTR(input.as_ptr()), output) as usize;
+        if result == 0 {
+            return None;
+        }
+        if result < capacity {
+            buffer.truncate(result);
+            return Some(PathBuf::from(OsString::from_wide(&buffer)));
+        }
+        capacity = result;
+    }
+    None
+}
+
+/// Expands 8.3 short components without resolving reparse points (`std::fs::canonicalize`
+/// follows junctions, which must remain intact for `validate_local_chain`).
+fn long_path(path: &Path) -> Option<PathBuf> {
+    if !is_direct_absolute(path) {
+        return None;
+    }
+    resolve_win32_path(path, |input, output| {
+        // SAFETY: `input` is NUL-terminated; `output` is a valid mutable slice when `Some`.
+        unsafe { GetLongPathNameW(input, output) }
+    })
+}
+
+fn beneath(path: &Path, root: &Path) -> bool {
+    use windows::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
+    if !is_direct_absolute(path) || !is_direct_absolute(root) {
         return false;
     }
     let mut parts = path.components();
