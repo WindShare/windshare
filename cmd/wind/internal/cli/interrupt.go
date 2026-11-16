@@ -36,6 +36,11 @@ func notifyTerminationSignals(ch chan<- os.Signal, ignored func(os.Signal) bool)
 // settlement path, but leaves the operator a second interrupt that cannot be
 // delayed by stuck I/O. The second path deliberately bypasses defers so native
 // output recovery observes the same boundary as an abrupt process stop.
+//
+// Any two termination signals count, not only two Ctrl-C presses: signals sent
+// in quick succession (for example SIGHUP then SIGTERM, or a service manager
+// with SendSIGHUP=yes) make the second one force an exit with code 130 and no
+// stop marker.
 func runCLIWithInterruptEscalation(
 	interrupts <-chan os.Signal,
 	forceExit func(int),
