@@ -93,6 +93,7 @@ pub enum Action {
     ShareAgain(usize),
     ConfigureShare(usize),
     ConfigureNetwork,
+    ReturnToSharingSetup,
     SaveSharingSetup(Option<usize>),
     ResumeShare(usize),
     ApproveRelay,
@@ -104,6 +105,7 @@ pub enum Action {
     ToggleSetting(usize),
     SetLanguage(LanguageChoice),
     SetAppearance(windshare_ui::ThemePreference),
+    SetShareAnimation(crate::motion::ShareAnimation),
     Toast(Text),
 }
 pub fn demo_shares() -> Vec<Share> {

@@ -12,10 +12,14 @@ import (
 	"strings"
 )
 
-// gopls must open maintained files in their owning modules. Opening a pinned
-// dependency as a workspace file instead selects its standalone upstream graph,
-// losing the root module's provider replacements and inferring unsupported JS views.
-func writeMaintainedGoFiles(root string, nul bool, output io.Writer) error {
+type diagnosticModuleSources struct {
+	Directory string   `json:"directory"`
+	Files     []string `json:"files"`
+}
+
+// Owning modules are part of the diagnostic contract: a fresh session must use
+// that module's graph, while pinned providers remain verified dependencies.
+func writeDiagnosticPlan(root string, output io.Writer) error {
 	if err := verify(root, true); err != nil {
 		return err
 	}
@@ -35,27 +39,16 @@ func writeMaintainedGoFiles(root string, nul bool, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	files, err = orderDiagnosticSources(root, files, build.Default)
+	plan, err := planDiagnosticSources(root, files, build.Default)
 	if err != nil {
 		return err
 	}
-	separator := "\n"
-	if nul {
-		separator = "\x00"
+	if len(plan) == 0 {
+		return fmt.Errorf("maintained Go source set is empty")
 	}
-	// Validate the complete list before writing so a failed selector never feeds
-	// a partial analysis set to either platform launcher.
-	for _, file := range files {
-		if !nul && strings.ContainsAny(file, "\r\n") {
-			return fmt.Errorf("Go source path requires NUL output: %q", file)
-		}
-	}
-	for _, file := range files {
-		if _, err = io.WriteString(output, file+separator); err != nil {
-			return err
-		}
-	}
-	return nil
+	// Publish only a complete verified plan. JSON preserves every path character
+	// and keeps module ownership inseparable from the files selected for analysis.
+	return json.NewEncoder(output).Encode(plan)
 }
 
 func goSourceCandidates(root string) ([]string, error) {
@@ -104,7 +97,7 @@ func maintainedGoFiles(root string, candidates []string, verified manifest) ([]s
 // subsequent open/close invalidates snapshots across those views, even when the
 // source is unchanged. Finish each module's native files before paying that cost.
 // MatchFile only determines order: foreign, tagged, and ignored files all remain.
-func orderDiagnosticSources(root string, files []string, context build.Context) ([]string, error) {
+func planDiagnosticSources(root string, files []string, context build.Context) ([]diagnosticModuleSources, error) {
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
@@ -140,11 +133,24 @@ func orderDiagnosticSources(root string, files []string, context build.Context) 
 		}
 		return strings.Compare(a.path, b.path)
 	})
-	ordered := make([]string, len(sources))
-	for i, source := range sources {
-		ordered[i] = source.path
+	var plan []diagnosticModuleSources
+	for _, source := range sources {
+		directory, err := filepath.Rel(root, source.module)
+		if err != nil {
+			return nil, err
+		}
+		directory = filepath.ToSlash(directory)
+		file, err := filepath.Rel(source.module, filepath.Join(root, filepath.FromSlash(source.path)))
+		if err != nil {
+			return nil, err
+		}
+		if len(plan) == 0 || plan[len(plan)-1].Directory != directory {
+			plan = append(plan, diagnosticModuleSources{Directory: directory})
+		}
+		group := &plan[len(plan)-1]
+		group.Files = append(group.Files, filepath.ToSlash(file))
 	}
-	return ordered, nil
+	return plan, nil
 }
 
 func diagnosticModule(root, dir string, modules map[string]string) (string, error) {

@@ -28,12 +28,12 @@ echo "-- non-core short race and atomic coverage"
 go test -short -race -covermode=atomic -coverprofile="$root_profile" "${non_core_packages[@]}"
 
 echo "-- non-core coverage verdict"
-go-test-coverage --config=.testcoverage.yml --profile="$root_profile"
+go run ./scripts/ci/_coverage --config=.testcoverage.yml --profile="$root_profile"
 
 echo "-- core short race and atomic coverage"
 go test -short -race -covermode=atomic -coverprofile="$core_profile" "${core_packages[@]}"
 
 echo "-- core coverage verdict"
-go-test-coverage --config=core/.testcoverage.yml --profile="$core_profile"
+go run ./scripts/ci/_coverage --config=core/.testcoverage.yml --profile="$core_profile"
 
 echo "== short-go: PASS in ${SECONDS}s =="

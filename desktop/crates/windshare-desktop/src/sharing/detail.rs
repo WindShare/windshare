@@ -1,8 +1,11 @@
-use super::link_views::{LINK_COLUMN_GAP, LINK_PANEL_WIDTH, link_columns_fit};
+use super::{
+    link_views::{LINK_COLUMN_GAP, LINK_PANEL_WIDTH, link_columns_fit},
+    qr_slot::QrSlot,
+};
 use crate::{
     desktop::Desktop,
     localization::{Language, Text, language},
-    model::Share,
+    model::{Share, ShareState},
     overlays::{OVERLAY_MARGIN, OVERLAY_PADDING},
 };
 use gpui::{Div, Window, div, prelude::*, px};
@@ -45,6 +48,16 @@ impl Desktop {
         let Some(share) = self.shares.iter().find(|share| share.id == id) else {
             return column();
         };
+        let link = share.usable_link();
+        // No run arrives in a dialog: its slot raises a whirl of its own while
+        // the link is pending and opens the moment the link exists.
+        let slot = QrSlot::new(
+            ("detail-qr", id),
+            link.and_then(|link| link.qr().ok()).cloned(),
+            matches!(share.state, ShareState::Preparing),
+            locale.text(Text::QrUnavailable),
+        )
+        .still(cx.reduce_motion());
         let information = column()
             .flex_1()
             .min_w_0()
@@ -65,8 +78,8 @@ impl Desktop {
             .child(
                 column()
                     .gap(px(8.))
-                    .child(self.share_copy_button(id, cx))
-                    .child(self.share_link_disclosure(theme, share, cx)),
+                    .child(self.share_copy_button(id, link, cx))
+                    .child(self.share_link_disclosure(theme, id, link, cx)),
             );
         column()
             .gap(px(24.))
@@ -76,16 +89,15 @@ impl Desktop {
                     .items_center()
                     .gap(px(LINK_COLUMN_GAP))
                     .when(
-                        !link_columns_fit(detail_width(window), OVERLAY_PADDING, Some(share)),
+                        !link_columns_fit(detail_width(window), OVERLAY_PADDING),
                         |el| el.flex_col().items_stretch(),
                     )
                     .child(information)
-                    .child(column().items_center().child(Self::share_qr(
-                        theme,
-                        Some(share),
-                        true,
-                        cx,
-                    ))),
+                    .child(
+                        column()
+                            .items_center()
+                            .child(Self::share_qr(theme, id, slot, cx)),
+                    ),
             )
             .child(
                 row()
@@ -112,7 +124,7 @@ impl Desktop {
                             cx,
                         )
                         .compact()
-                        .disabled(matches!(share.state, crate::model::ShareState::Stopping)),
+                        .disabled(matches!(share.state, ShareState::Stopping)),
                     ),
             )
     }

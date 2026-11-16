@@ -1,12 +1,10 @@
-use gpui::{Bounds, Div, canvas, div, fill, point, prelude::*, px, rgb, size};
+use gpui::{Bounds, Div, Pixels, Point, canvas, div, fill, point, prelude::*, px, rgb, size};
 use qrcode::{Color, EcLevel, QrCode};
 use std::sync::Arc;
 
 pub use qrcode::types::QrError as QrCodeError;
 
 const QUIET_MODULES: u16 = 4;
-const QR_BACKGROUND: u32 = 0xff_ffff;
-const QR_FOREGROUND: u32 = 0x00_0000;
 
 #[derive(Clone, Copy)]
 struct ModuleRun {
@@ -22,7 +20,28 @@ pub struct QrCodeImage {
     runs: Arc<[ModuleRun]>,
 }
 
+/// Where a code's modules land inside the square it is drawn in.
+#[derive(Clone, Copy, Debug)]
+pub struct QrGrid {
+    pub origin: Point<Pixels>,
+    pub cell: Pixels,
+}
+
+impl QrGrid {
+    pub fn module_center(&self, x: u16, y: u16) -> Point<Pixels> {
+        self.origin
+            + point(
+                self.cell * (f32::from(x) + 0.5),
+                self.cell * (f32::from(y) + 0.5),
+            )
+    }
+}
+
 impl QrCodeImage {
+    /// Dark themes must preserve the scanner's white quiet zone.
+    pub const GROUND: u32 = 0xff_ffff;
+    pub const INK: u32 = 0x00_0000;
+
     /// # Errors
     /// Returns the encoder error if the complete payload cannot fit a QR code.
     pub fn encode(payload: &str) -> Result<Self, QrCodeError> {
@@ -61,47 +80,59 @@ impl QrCodeImage {
         f32::from(self.modules) * module_side
     }
 
-    pub fn view(&self, side: f32) -> Div {
+    /// Snaps both module size and origin in physical pixels. Scaling a bitmap
+    /// or antialiasing cell edges blurs dense links at fractional Windows DPI.
+    /// Every painter of this code shares the grid, so motion that ends on it
+    /// lands on exactly the pixels the static view fills.
+    pub fn grid(&self, bounds: Bounds<Pixels>, scale_factor: f32) -> QrGrid {
         let modules = f32::from(self.modules);
-        let runs = Arc::clone(&self.runs);
+        let available = f32::from(bounds.size.width.min(bounds.size.height));
+        let cell = (available * scale_factor / modules).floor() / scale_factor;
+        let drawn = cell * modules;
+        let snapped = |start: Pixels, extent: Pixels| {
+            px(
+                ((f32::from(start) + (f32::from(extent) - drawn) / 2.) * scale_factor).round()
+                    / scale_factor,
+            )
+        };
+        QrGrid {
+            origin: point(
+                snapped(bounds.left(), bounds.size.width),
+                snapped(bounds.top(), bounds.size.height),
+            ),
+            cell: px(cell),
+        }
+    }
+
+    /// Column and row of every dark module, counted from the quiet zone's corner.
+    pub fn dark_modules(&self) -> impl Iterator<Item = (u16, u16)> + '_ {
+        self.runs
+            .iter()
+            .flat_map(|run| (run.x..run.x + run.width).map(move |x| (x, run.y)))
+    }
+
+    pub fn view(&self, side: f32) -> Div {
+        let code = self.clone();
         div()
             .size(px(side))
             .flex_shrink_0()
-            // Dark themes must preserve the scanner's white quiet zone.
-            .bg(rgb(QR_BACKGROUND))
+            .bg(rgb(Self::GROUND))
             .child(
                 canvas(
                     |_, _, _| (),
                     move |bounds, (), window, _| {
-                        let scale = window.scale_factor();
-                        let available = f32::from(bounds.size.width.min(bounds.size.height));
-                        let cell = (available * scale / modules).floor() / scale;
-                        let drawn = cell * modules;
-                        // Snap both module size and origin in physical pixels. Scaling a bitmap
-                        // or antialiasing cell edges blurs dense links at fractional Windows DPI.
-                        let origin = point(
-                            px(((f32::from(bounds.left())
-                                + (f32::from(bounds.size.width) - drawn) / 2.)
-                                * scale)
-                                .round()
-                                / scale),
-                            px(((f32::from(bounds.top())
-                                + (f32::from(bounds.size.height) - drawn) / 2.)
-                                * scale)
-                                .round()
-                                / scale),
-                        );
-                        for run in runs.iter() {
+                        let grid = code.grid(bounds, window.scale_factor());
+                        for run in code.runs.iter() {
                             window.paint_quad(fill(
                                 Bounds::new(
-                                    origin
+                                    grid.origin
                                         + point(
-                                            px(f32::from(run.x) * cell),
-                                            px(f32::from(run.y) * cell),
+                                            grid.cell * f32::from(run.x),
+                                            grid.cell * f32::from(run.y),
                                         ),
-                                    size(px(f32::from(run.width) * cell), px(cell)),
+                                    size(grid.cell * f32::from(run.width), grid.cell),
                                 ),
-                                rgb(QR_FOREGROUND),
+                                rgb(Self::INK),
                             ));
                         }
                     },
@@ -110,3 +141,7 @@ impl QrCodeImage {
             )
     }
 }
+
+#[cfg(test)]
+#[path = "qr_code_tests.rs"]
+mod tests;

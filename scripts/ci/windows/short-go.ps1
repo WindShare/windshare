@@ -43,13 +43,13 @@ try {
         go test -short -race -covermode=atomic "-coverprofile=$rootProfile" $nonCorePackages
     }
     Invoke-Step 'non-core coverage verdict' {
-        go-test-coverage --config=.testcoverage.yml "--profile=$rootProfile"
+        go run ./scripts/ci/_coverage --config=.testcoverage.yml "--profile=$rootProfile"
     }
     Invoke-Step 'core short race and atomic coverage' {
         go test -short -race -covermode=atomic "-coverprofile=$coreProfile" $corePackages
     }
     Invoke-Step 'core coverage verdict' {
-        go-test-coverage --config=core/.testcoverage.yml "--profile=$coreProfile"
+        go run ./scripts/ci/_coverage --config=core/.testcoverage.yml "--profile=$coreProfile"
     }
 
     Write-Output ('== short-go: PASS in {0:mm\:ss} ==' -f $gateStopwatch.Elapsed)

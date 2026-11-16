@@ -16,6 +16,18 @@ const PROMPT_DETAIL_HEIGHT: f32 = 26.;
 const PROMPT_BUTTON_GAP: f32 = 12.;
 const PROMPT_ACTION_MIN_WIDTH: f32 = 104.;
 
+#[derive(Default)]
+pub struct ActivePrompts(Vec<gpui::WeakEntity<PromptDialog>>);
+impl gpui::Global for ActivePrompts {}
+
+/// Cancels application confirmations when a newer explicit action supersedes them.
+pub fn dismiss_prompts(cx: &mut App) {
+    let pending = std::mem::take(&mut cx.global_mut::<ActivePrompts>().0);
+    for prompt in pending {
+        let _ = prompt.update(cx, |prompt, cx| prompt.dismiss(cx));
+    }
+}
+
 pub fn render_prompt(
     level: PromptLevel,
     message: &str,
@@ -36,6 +48,9 @@ pub fn render_prompt(
         scope: cx.focus_handle(),
         dismiss_focus: cx.focus_handle(),
     });
+    let prompts = &mut cx.global_mut::<ActivePrompts>().0;
+    prompts.retain(|prompt| prompt.upgrade().is_some());
+    prompts.push(view.downgrade());
     // GPUI owns the response channel and restores the previous focus, including
     // when a confirmation is opened above an existing application dialog.
     handle.with_view(view, window, cx)

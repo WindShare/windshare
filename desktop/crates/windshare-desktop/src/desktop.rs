@@ -4,9 +4,9 @@ use crate::{
     layout::{FlowLayout, MAX_PAGE_WIDTH, page_gutter},
     live::Runtime,
     model::{Action, Filter, Overlay, Page, Share, Transfer, demo_shares, demo_transfers},
+    motion::lerp,
     overlays::OverlayFrame,
-    share_timing::lerp,
-    sharing::LinkDisclosure,
+    sharing::{IntroAnchors, LinkDisclosure},
 };
 use gpui::{
     Animation, AnimationExt, App, AppContext, ElementId, Entity, FocusHandle, Focusable,
@@ -31,7 +31,8 @@ pub struct Desktop {
     pub share_flow: ShareFlow,
     pub runtime: Runtime,
     pub setup_form: crate::live::SetupForm,
-    pub motion_probe: crate::motion_probe::MotionProbe,
+    pub share_reveal_wakeup: Option<gpui::Task<()>>,
+    pub intro_anchors: IntroAnchors,
     pub receive_flow: ReceiveFlow,
     pub copy_feedback: CopyFeedback,
     pub primary_focus: FocusHandle,
@@ -39,7 +40,7 @@ pub struct Desktop {
     pub overlays: Vec<OverlayFrame>,
     pub link_disclosure: LinkDisclosure,
     pub toast: Option<(usize, Text)>,
-    pub settings: [bool; 3],
+    pub settings: [bool; 2],
     pub dialog_sequence: usize,
     toast_sequence: usize,
     pub focus: FocusHandle,
@@ -97,6 +98,7 @@ impl Desktop {
         window.focus(&primary_focus, cx);
         if let Runtime::Native(session) = &runtime {
             Self::observe_runtime(session.controller.clone(), window, cx);
+            Self::observe_activations(session.application.clone(), window, cx);
         }
         Self {
             page: Page::Share,
@@ -114,7 +116,8 @@ impl Desktop {
             share_flow: ShareFlow::Choose,
             runtime,
             setup_form,
-            motion_probe: crate::motion_probe::MotionProbe::default(),
+            share_reveal_wakeup: None,
+            intro_anchors: IntroAnchors::default(),
             receive_flow: ReceiveFlow::default(),
             copy_feedback: CopyFeedback::Idle,
             primary_focus,
@@ -122,7 +125,7 @@ impl Desktop {
             overlays: Vec::new(),
             link_disclosure: LinkDisclosure::default(),
             toast: None,
-            settings: [true, true, false],
+            settings: [true, true],
             dialog_sequence: 0,
             toast_sequence: 0,
             focus,
@@ -240,12 +243,7 @@ impl Desktop {
             cx.notify();
         }
     }
-    fn page_content(
-        &mut self,
-        layout: FlowLayout,
-        window: &Window,
-        cx: &Context<Self>,
-    ) -> gpui::Div {
+    fn page_content(&self, layout: FlowLayout, window: &Window, cx: &Context<Self>) -> gpui::Div {
         let theme = Theme::current(window, cx);
         let compact = window.viewport_size().width < px(COMPACT_WIDTH);
         match self.page {
@@ -259,7 +257,7 @@ impl Desktop {
         }
     }
 
-    fn main_pane(&mut self, window: &Window, cx: &Context<Self>) -> gpui::Div {
+    fn main_pane(&self, window: &Window, cx: &Context<Self>) -> gpui::Div {
         let theme = Theme::current(window, cx);
         // A showcase owns its layout; workspace gutters must not crop its visual canvas.
         let body = if self.page == Page::SuperShare {
@@ -275,7 +273,7 @@ impl Desktop {
             .child(self.statusbar(theme, cx))
     }
 
-    fn workspace_page(&mut self, window: &Window, cx: &Context<Self>) -> gpui::Div {
+    fn workspace_page(&self, window: &Window, cx: &Context<Self>) -> gpui::Div {
         let theme = Theme::current(window, cx);
         let compact = window.viewport_size().width < px(COMPACT_WIDTH);
         let layout = FlowLayout::for_window(window);
@@ -314,7 +312,7 @@ impl Desktop {
                         .child(
                             content.with_animation(
                                 ("page-enter", self.page as usize),
-                                Animation::new(Duration::from_millis(if self.reduced_motion() {
+                                Animation::new(Duration::from_millis(if cx.reduce_motion() {
                                     1
                                 } else {
                                     260
@@ -326,13 +324,10 @@ impl Desktop {
                 ),
         )
     }
-
-    pub const fn reduced_motion(&self) -> bool {
-        self.settings[2]
-    }
 }
 impl Render for Desktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.intro_anchors.begin_frame();
         let locale = language(cx);
         let theme = Theme::current(window, cx);
         let compact = window.viewport_size().width < px(COMPACT_WIDTH);
@@ -350,7 +345,12 @@ impl Render for Desktop {
             .on_drop(
                 cx.listener(|this, paths: &gpui::ExternalPaths, window, cx| {
                     cx.stop_propagation();
-                    this.create_native_share(paths.paths().to_vec(), Icon::Folder, window, cx);
+                    this.submit_native_share(
+                        paths.paths().to_vec(),
+                        windshare_activation::EntrySource::Drop,
+                        window,
+                        cx,
+                    );
                 }),
             )
             .when(self.page == Page::SuperShare, |root| {
@@ -389,7 +389,7 @@ impl Render for Desktop {
                         )
                         .with_animation(
                             ("toast", id),
-                            Animation::new(Duration::from_millis(if self.reduced_motion() {
+                            Animation::new(Duration::from_millis(if cx.reduce_motion() {
                                 1
                             } else {
                                 280

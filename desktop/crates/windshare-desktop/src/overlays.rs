@@ -71,7 +71,7 @@ impl Desktop {
             Overlay::Help => (
                 locale.text(Text::About),
                 DEFAULT_OVERLAY_WIDTH,
-                self.about_preview(theme, cx),
+                Self::about_preview(theme, cx),
             ),
         };
         let modal = theme
@@ -123,7 +123,7 @@ impl Desktop {
             .child(
                 modal.with_animation(
                     ("dialog-enter", frame.sequence),
-                    Animation::new(Duration::from_millis(if self.reduced_motion() {
+                    Animation::new(Duration::from_millis(if cx.reduce_motion() {
                         1
                     } else {
                         MOTION_MS
@@ -134,7 +134,7 @@ impl Desktop {
             )
     }
 
-    fn about_preview(&self, theme: Theme, cx: &Context<Self>) -> Div {
+    fn about_preview(theme: Theme, cx: &Context<Self>) -> Div {
         let locale = language(cx);
         column()
             .gap(px(20.))
@@ -143,7 +143,7 @@ impl Desktop {
                 "about-spirit",
                 SpiritMood::Happy,
                 Tone::Mint,
-                self.reduced_motion(),
+                cx.reduce_motion(),
             ))
             .child(theme.heading(locale.text(Text::AboutTagline), 24.))
             .child(

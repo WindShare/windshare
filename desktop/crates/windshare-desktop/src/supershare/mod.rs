@@ -28,7 +28,6 @@ pub struct SuperShare {
     code: Entity<Input>,
     primary_focus: FocusHandle,
     sequence: usize,
-    reduced_motion: bool,
     copied_address: Option<Coin>,
     _subscriptions: Vec<Subscription>,
 }
@@ -68,7 +67,6 @@ impl SuperShare {
             code,
             primary_focus: cx.focus_handle(),
             sequence: 0,
-            reduced_motion: false,
             copied_address: None,
             _subscriptions: subscriptions,
         }
@@ -76,11 +74,6 @@ impl SuperShare {
 
     pub const fn enabled(&self) -> bool {
         self.state.enabled()
-    }
-
-    pub fn set_reduced_motion(&mut self, reduced: bool, cx: &mut Context<Self>) {
-        self.reduced_motion = reduced;
-        cx.notify();
     }
 
     pub fn enter(&mut self, cx: &mut Context<Self>) {

@@ -82,59 +82,54 @@ impl VectorSprite {
         self.rotation = rotation;
         self
     }
+
+    /// Paints with the sprite's center measured from `origin`. Painters that
+    /// only learn their geometry during paint call this directly; as an
+    /// element the sprite paints itself from its parent's origin.
+    pub fn paint(&self, origin: Point<Pixels>, window: &mut Window) {
+        let center = origin + self.center;
+        let (sin, cos) = self.rotation.0.sin_cos();
+        let (width, height) = (f32::from(self.size.width), f32::from(self.size.height));
+        let transform = TransformationMatrix {
+            rotation_scale: [[cos * width, -sin * height], [sin * width, cos * height]],
+            translation: [f32::from(center.x), f32::from(center.y)],
+        };
+        // Antialias after the final transform. Shrinking a cached SVG mask
+        // loses edge coverage because the atlas has no minification levels.
+        // Path painting also preserves fractional motion and applies DPI once.
+        let mut paint = |layers: &[Layer], opacity: f32| {
+            for layer in layers {
+                window.paint_path(
+                    transformed_mesh(&layer.mesh, transform),
+                    layer.color.opacity(opacity),
+                );
+            }
+        };
+        if let Some(blend) = &self.blend {
+            // Fading two complete, overlapping sprites changes body coverage
+            // and edge contrast. Only their differing paint suffix may fade.
+            let shared = self
+                .layers
+                .iter()
+                .zip(blend.layers.iter())
+                .take_while(|(a, b)| {
+                    a.color == b.color && a.fill_rule == b.fill_rule && a.outline == b.outline
+                })
+                .count();
+            paint(&self.layers[..shared], 1.);
+            paint(&self.layers[shared..], 1. - blend.progress);
+            paint(&blend.layers[shared..], blend.progress);
+        } else {
+            paint(&self.layers, 1.);
+        }
+    }
 }
 
 impl RenderOnce for VectorSprite {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let Self {
-            layers,
-            blend,
-            size,
-            center,
-            rotation,
-        } = self;
         canvas(
             |_, _, _| (),
-            move |bounds, (), window, _| {
-                let center = bounds.origin + center;
-                let (sin, cos) = rotation.0.sin_cos();
-                let transform = TransformationMatrix {
-                    rotation_scale: [
-                        [cos * f32::from(size.width), -sin * f32::from(size.height)],
-                        [sin * f32::from(size.width), cos * f32::from(size.height)],
-                    ],
-                    translation: [f32::from(center.x), f32::from(center.y)],
-                };
-                // Antialias after the final transform. Shrinking a cached SVG mask
-                // loses edge coverage because the atlas has no minification levels.
-                // Path painting also preserves fractional motion and applies DPI once.
-                let mut paint = |layers: &[Layer], opacity: f32| {
-                    for layer in layers {
-                        window.paint_path(
-                            transformed_mesh(&layer.mesh, transform),
-                            layer.color.opacity(opacity),
-                        );
-                    }
-                };
-                if let Some(blend) = blend {
-                    // Fading two complete, overlapping sprites changes body coverage
-                    // and edge contrast. Only their differing paint suffix may fade.
-                    let shared = layers
-                        .iter()
-                        .zip(blend.layers.iter())
-                        .take_while(|(a, b)| {
-                            a.color == b.color
-                                && a.fill_rule == b.fill_rule
-                                && a.outline == b.outline
-                        })
-                        .count();
-                    paint(&layers[..shared], 1.);
-                    paint(&layers[shared..], 1. - blend.progress);
-                    paint(&blend.layers[shared..], blend.progress);
-                } else {
-                    paint(&layers, 1.);
-                }
-            },
+            move |bounds, (), window, _| self.paint(bounds.origin, window),
         )
         .absolute()
         .inset_0()

@@ -85,6 +85,9 @@ go test ./scripts/ci/_engineboundary
 echo "-- Engine application dependency boundary"
 go run ./scripts/ci/_engineboundary
 
+echo "-- Coverage source projection contracts"
+go test ./scripts/ci/_coverage
+
 echo "-- Go validation package ownership tests"
 go test ./scripts/ci/_gopackages
 

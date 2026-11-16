@@ -82,14 +82,17 @@ fn reconnect_keeps_selections_and_creates_not_yet_admitted() {
     for id in ["one", "two"] {
         model.operations.push(Operation {
             id: id.into(),
-            paths: vec![format!("{id}.txt")],
+            paths: vec![format!("{id}.txt").into()],
             state: OperationState::Submitting,
         });
     }
     model.reconcile(snapshot(1, vec![]));
     model.reconcile(snapshot(2, vec![accepted("one", ShareState::Sharing)]));
     assert_eq!(model.operations.len(), 2);
-    assert_eq!(model.operations[0].paths, ["one.txt"]);
+    assert_eq!(
+        model.operations[0].paths,
+        [std::path::PathBuf::from("one.txt")]
+    );
     assert!(matches!(
         model.operations[1].state,
         OperationState::Submitting

@@ -1,225 +1,159 @@
 mod detail;
+mod intro;
 mod link;
 mod link_views;
 mod preview;
+mod qr;
+mod qr_slot;
 mod result;
 
 pub use detail::{detail_width, enlarged_qr_side};
+pub use intro::{IntroAnchors, Perch};
 pub use link::{LinkDisclosure, ShareLink};
 
-use crate::localization::{Language, Text, language};
 use crate::{
     desktop::Desktop,
-    flow_state::{ShareFlow, ShareRun},
+    flow_state::ShareFlow,
     layout::FlowLayout,
-    model::Action,
-    motion::{SpiritMood, scaled_spirit},
-    share_animation::{
-        SHARE_CHOICE_SECTION_GAP, SHARE_CHOICE_TITLE_HEIGHT, ShareGeometry, ShareScene,
-    },
+    localization::{Text, language},
+    model::{Action, ShareState},
+    motion::{SpiritMood, SpiritScene, scaled_spirit},
 };
-use gpui::{Div, Window, div, prelude::*, px};
-use windshare_ui::{ButtonStyle, Icon, Theme, Tone, column, row};
+use gpui::{Div, Window, canvas, prelude::*, px};
+use std::rc::Rc;
+use windshare_ui::{Button, ButtonStyle, Icon, LARGE_BUTTON_HEIGHT, Theme, Tone, column, row};
 
 const SHARE_CHOICE_BUTTON_MIN_WIDTH: f32 = 160.;
+const SHARE_CHOICE_SECTION_GAP: f32 = 24.;
+const SHARE_CHOICE_TITLE_HEIGHT: f32 = 36.;
+
+fn stage_height(layout: FlowLayout) -> f32 {
+    layout.stage_height().max(
+        SpiritScene::height(layout.scene_scale())
+            + SHARE_CHOICE_TITLE_HEIGHT
+            + SHARE_CHOICE_SECTION_GAP
+            + LARGE_BUTTON_HEIGHT,
+    )
+}
 
 impl Desktop {
     pub fn sharing_page(
-        &mut self,
+        &self,
         layout: FlowLayout,
         window: &Window,
         cx: &Context<Self>,
     ) -> gpui::AnyElement {
         let theme = Theme::current(window, cx);
-        let geometry = ShareGeometry::new(window, layout);
-        let still = self.reduced_motion() || cx.reduce_motion();
-        let active = window.is_window_active() && window.is_visible();
         match self.share_flow {
             ShareFlow::Choose => column()
-                .id("share-drop-zone")
+                .id("share-stage")
                 .drag_over::<gpui::ExternalPaths>(move |style, _, _, _| {
                     style.bg(Tone::Mint.surface(theme)).rounded(px(24.))
                 })
-                .h(px(geometry.height))
+                .min_h(px(stage_height(layout)))
                 .justify_center()
-                .child(self.choose_share(theme, layout, still, cx))
+                .child(self.choose_share(theme, layout, cx))
                 .into_any_element(),
             ShareFlow::Running(run) => {
-                if let Some(share) = self
-                    .shares
-                    .iter()
-                    .find(|share| share.id == run.selection_id)
-                    && matches!(share.state, crate::model::ShareState::AwaitingAuthorization)
-                {
-                    return Self::authorization_share(theme, share, cx).into_any_element();
-                }
-                if let Some(share) = self
-                    .shares
-                    .iter()
-                    .find(|share| share.id == run.selection_id)
-                    && let crate::model::ShareState::AwaitingConfiguration(blocking)
-                    | crate::model::ShareState::AwaitingNetwork(blocking) = share.state
-                {
-                    return self
+                let Some(share) = self.shares.iter().find(|share| share.id == run.share_id) else {
+                    return column().into_any_element();
+                };
+                match share.state {
+                    ShareState::AwaitingAuthorization => self
+                        .authorization_share(theme, share, cx)
+                        .into_any_element(),
+                    ShareState::AwaitingConfiguration(blocking)
+                    | ShareState::AwaitingNetwork(blocking) => self
                         .blocked_share(theme, share, blocking, cx)
-                        .into_any_element();
-                }
-                let now = std::time::Instant::now();
-                let frame = run.sample(now, still);
-                let animating = active && !still && frame.needs_animation();
-                self.motion_probe.observe(run, frame, now, animating);
-                // Pending work needs visible activity even after the introduction.
-                // Completed results wake only for user input or feedback deadlines.
-                if animating {
-                    window.request_animation_frame();
-                }
-                let scene = ShareScene::new(geometry, frame);
-                if scene.landing() {
-                    self.result_share(theme, run, scene, layout, cx)
-                        .into_any_element()
-                } else {
-                    self.preparing_scene(theme, run, scene, cx)
-                        .into_any_element()
+                        .into_any_element(),
+                    _ => self
+                        .share_result(theme, share, layout, Self::share_intro(run, cx), window, cx)
+                        .id("share-stage")
+                        .into_any_element(),
                 }
             }
         }
     }
 
-    fn choose_share(
-        &self,
-        theme: Theme,
-        layout: FlowLayout,
-        still: bool,
-        cx: &Context<Self>,
-    ) -> Div {
+    fn choose_share(&self, theme: Theme, layout: FlowLayout, cx: &Context<Self>) -> Div {
+        let scene_scale = layout.scene_scale();
+        let perch = Rc::clone(&self.intro_anchors.perch);
+        let spirit = Rc::clone(&self.intro_anchors.spirit);
+        column()
+            .relative()
+            .items_center()
+            .child(
+                scaled_spirit(
+                    "share-spirit",
+                    SpiritMood::Idle,
+                    Tone::Mint,
+                    scene_scale,
+                    cx.reduce_motion(),
+                )
+                .anchor(&spirit),
+            )
+            .child(self.share_prompt(theme, true, cx))
+            .child(
+                canvas(
+                    move |prompt, _, _| {
+                        perch.set(spirit.get().map(|spirit| Perch {
+                            prompt,
+                            scene_scale,
+                            spirit,
+                        }));
+                    },
+                    |_, (), _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
+    }
+
+    /// The choose page's heading and actions. A copy that is not `live` keeps
+    /// their look but answers nothing: it fades out of a run that has begun.
+    fn share_prompt(&self, theme: Theme, live: bool, cx: &Context<Self>) -> Div {
         let locale = language(cx);
+        let choice = |id: &'static str, text, symbol, style, action| {
+            let label = locale.text(text);
+            let button = if live {
+                Self::button(id, label, symbol, style, action, cx)
+                    .disabled(self.runtime.selection_disabled())
+            } else {
+                Button::new(id, label).icon(symbol).style(style)
+            };
+            button.large().min_width(px(SHARE_CHOICE_BUTTON_MIN_WIDTH))
+        };
+        let files = choice(
+            "choose-files",
+            Text::ChooseFiles,
+            Icon::Plus,
+            ButtonStyle::Primary,
+            Action::SelectFiles,
+        );
+        let folder = choice(
+            "choose-folder",
+            Text::ChooseFolder,
+            Icon::Folder,
+            ButtonStyle::Secondary,
+            Action::SelectFolder,
+        );
         column()
             .items_center()
-            .gap(px(SHARE_CHOICE_SECTION_GAP))
-            .child(scaled_spirit(
-                "share-choose-spirit",
-                SpiritMood::Idle,
-                Tone::Mint,
-                layout.scene_scale(),
-                still,
-            ))
             .child(
                 theme
                     .heading(locale.text(Text::ChooseShare), 26.)
-                    .line_height(px(SHARE_CHOICE_TITLE_HEIGHT)),
+                    .line_height(px(SHARE_CHOICE_TITLE_HEIGHT))
+                    .mb(px(SHARE_CHOICE_SECTION_GAP)),
             )
             .child(
                 row()
                     .gap(px(12.))
-                    .child(
-                        Self::button(
-                            "choose-files",
-                            locale.text(Text::ChooseFiles),
-                            Icon::Plus,
-                            ButtonStyle::Primary,
-                            Action::SelectFiles,
-                            cx,
-                        )
-                        .large()
-                        .min_width(px(SHARE_CHOICE_BUTTON_MIN_WIDTH))
-                        .disabled(self.runtime.selection_disabled())
-                        .focus_handle(&self.primary_focus),
-                    )
-                    .child(
-                        Self::button(
-                            "choose-folder",
-                            locale.text(Text::ChooseFolder),
-                            Icon::Folder,
-                            ButtonStyle::Secondary,
-                            Action::SelectFolder,
-                            cx,
-                        )
-                        .large()
-                        .min_width(px(SHARE_CHOICE_BUTTON_MIN_WIDTH))
-                        .disabled(self.runtime.selection_disabled()),
-                    ),
+                    .child(if live {
+                        files.focus_handle(&self.primary_focus)
+                    } else {
+                        files
+                    })
+                    .child(folder),
             )
     }
-
-    fn preparing_scene(
-        &self,
-        theme: Theme,
-        run: ShareRun,
-        scene: ShareScene,
-        cx: &Context<Self>,
-    ) -> Div {
-        let locale = language(cx);
-        let visibility = scene.preparation_visibility();
-        let Some(share) = self
-            .shares
-            .iter()
-            .find(|share| share.id == run.selection_id)
-        else {
-            return column();
-        };
-        let ready = share.usable_link().is_some();
-        div()
-            .relative()
-            .w_full()
-            .h(px(scene.geometry.height))
-            .child(scene.scenery(self.reduced_motion()))
-            .child(preparation_message(
-                theme,
-                &share.name,
-                visibility,
-                locale,
-                ready,
-            ))
-            .when(!ready, |el| {
-                el.child(
-                    row()
-                        .absolute()
-                        .bottom_0()
-                        .w_full()
-                        .justify_center()
-                        .opacity(visibility)
-                        .child(
-                            Self::button(
-                                "cancel-share",
-                                locale.text(Text::Cancel),
-                                Icon::Close,
-                                ButtonStyle::Ghost,
-                                Action::ResetShare,
-                                cx,
-                            )
-                            .compact()
-                            .focus_handle(&self.primary_focus),
-                        ),
-                )
-            })
-    }
-}
-
-fn preparation_message(
-    theme: Theme,
-    name: &str,
-    visibility: f32,
-    locale: Language,
-    ready: bool,
-) -> Div {
-    column()
-        .absolute()
-        .bottom(px(44.))
-        .w_full()
-        .items_center()
-        .gap(px(8.))
-        .opacity(visibility)
-        .child(theme.heading(
-            locale.text(if ready {
-                Text::LinkReady
-            } else {
-                Text::PreparingShare
-            }),
-            26.,
-        ))
-        .child(
-            theme
-                .label(name.to_owned(), 16.)
-                .text_color(theme.muted_text()),
-        )
 }

@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { pathToFileURL } from 'node:url'
 import test from 'node:test'
-import { CHECK_SETTINGS, checkFiles, clientHandlers, diagnose, formatDiagnostic } from './check.mjs'
+import { CHECK_SETTINGS, checkFiles, checkModules, clientHandlers, diagnose, formatDiagnostic } from './check.mjs'
 import { LspConnection } from './jsonrpc.mjs'
 
 const root = resolve('fixture root')
@@ -115,6 +115,59 @@ test('client preserves hint and cross-view diagnostics, excluding unopened and s
   assert.deepEqual(handlers.failures, ['load failed'])
   assert.equal(handlers.onRequest('workspace/applyEdit', {}).error.code, -32601)
   assert.equal(formatDiagnostic({ uri, ...hint }), `${join(root, 'a.go')}:3:5: unused parameter`)
+})
+
+test('module sessions keep their own roots, collect every hint, and close before the next starts', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'windshare-gopls-modules-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const modules = [
+    { directory: '.', files: ['a.go'] },
+    { directory: 'nested evidence', files: ['a.go'] },
+  ]
+  for (const { directory } of modules) {
+    await mkdir(join(root, directory), { recursive: true })
+    await writeFile(join(root, directory, 'a.go'), 'package fixture\n')
+  }
+  const servers = []
+  const events = []
+  const diagnostics = await checkModules({
+    root, modules, log: (event, details) => events.push({ event, ...details }),
+    launch(command, args, options) {
+      if (servers.length) assert.equal(servers.at(-1).stopped(), true)
+      assert.equal(options.cwd, resolve(root, modules[servers.length].directory))
+      const server = fakeServer('diagnostic')
+      servers.push(server)
+      return server.child
+    },
+  })
+  assert.equal(servers.length, modules.length)
+  assert.ok(servers.every((server) => server.stopped()))
+  assert.deepEqual(diagnostics.map(({ uri }) => uri).sort(),
+    modules.map(({ directory }) => pathToFileURL(join(root, directory, 'a.go')).href).sort())
+  assert.deepEqual(events.filter(({ event }) => event === 'module_started').map(({ module }) => module),
+    modules.map(({ directory }) => directory))
+})
+
+test('module failure, cancellation, and an exhausted shared deadline stop further sessions', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'windshare-gopls-stop-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  await writeFile(join(root, 'a.go'), 'package fixture\n')
+  const modules = [{ directory: '.', files: ['a.go'] }, { directory: 'unreached', files: ['a.go'] }]
+  for (const mode of ['crash', 'cancelled', 'deadline']) {
+    const controller = new AbortController()
+    let launches = 0
+    await assert.rejects(checkModules({
+      root, modules, signal: controller.signal, timeoutMs: mode === 'deadline' ? 0 : 5000,
+      launch() {
+        launches++
+        const server = fakeServer(mode === 'crash' ? 'crash' : 'clean')
+        if (mode === 'cancelled') server.child.once('exit', () => controller.abort(new Error('cancelled')))
+        return server.child
+      },
+    }), /exited|cancelled|timed out/)
+    assert.equal(launches, mode === 'deadline' ? 0 : 1)
+  }
+  await assert.rejects(checkModules({ root, modules: [] }), /module set is empty/)
 })
 
 function fakeServer(mode) {
