@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"errors"
 	"io"
@@ -91,7 +92,7 @@ func TestPublishedLinksPreserveCapabilityAndResolveRelays(t *testing.T) {
 						args = append(args, "--key", strings.TrimPrefix(lines[1], "Key: "))
 					}
 					app, _, stderr := newSemanticTestApp(strings.NewReader(""))
-					request, outcome := app.parseReceiveRequest(receiveGet, args)
+					request, outcome := app.parseReceiveRequest(context.Background(), receiveGet, args)
 					want := capability
 					want.Relays = test.wantRelays
 					if outcome != requestParseReady || !reflect.DeepEqual(request.link, want) {

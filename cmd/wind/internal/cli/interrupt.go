@@ -32,15 +32,10 @@ func notifyTerminationSignals(ch chan<- os.Signal, ignored func(os.Signal) bool)
 	return func() { signal.Stop(ch) }
 }
 
-// runCLIWithInterruptEscalation gives the first interrupt to the durable
-// settlement path, but leaves the operator a second interrupt that cannot be
-// delayed by stuck I/O. The second path deliberately bypasses defers so native
-// output recovery observes the same boundary as an abrupt process stop.
-//
-// Any two termination signals count, not only two Ctrl-C presses: signals sent
-// in quick succession (for example SIGHUP then SIGTERM, or a service manager
-// with SendSIGHUP=yes) make the second one force an exit with code 130 and no
-// stop marker.
+// runCLIWithInterruptEscalation gives termination requests to durable settlement.
+// Service-manager notifications remain idempotent: SIGTERM followed by SIGHUP
+// can be one stop request, not an instruction to abandon cleanup. Only a second
+// Ctrl-C forces exit without defers, so an operator can still escape stuck I/O.
 func runCLIWithInterruptEscalation(
 	interrupts <-chan os.Signal,
 	forceExit func(int),
@@ -53,7 +48,7 @@ func runCLIWithInterruptEscalation(
 	monitorDone := make(chan struct{})
 	var stateMu sync.Mutex
 	completed := false
-	interrupted := false
+	interruptReceived := false
 
 	go func() {
 		defer close(monitorDone)
@@ -61,7 +56,7 @@ func runCLIWithInterruptEscalation(
 			select {
 			case <-finished:
 				return
-			case _, ok := <-interrupts:
+			case request, ok := <-interrupts:
 				if !ok {
 					return
 				}
@@ -70,14 +65,14 @@ func runCLIWithInterruptEscalation(
 					stateMu.Unlock()
 					return
 				}
-				if interrupted {
+				if request == os.Interrupt && interruptReceived {
 					// Serialize this decision with normal completion. If completion
 					// wins the lock, no late signal can turn success into a forced exit.
 					stateMu.Unlock()
 					forceExit(forcedInterruptExitCode)
 					return
 				}
-				interrupted = true
+				interruptReceived = interruptReceived || request == os.Interrupt
 				stateMu.Unlock()
 				cancel()
 			}

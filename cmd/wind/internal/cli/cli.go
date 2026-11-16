@@ -236,6 +236,7 @@ const (
 	requestParseReady requestParseOutcome = iota
 	requestParseHelp
 	requestParseUsageFailure
+	requestParseCancelled
 	requestParseInternalFailure
 )
 
@@ -245,7 +246,7 @@ func (outcome requestParseOutcome) exitCode() int {
 		return ExitOK
 	case requestParseUsageFailure:
 		return ExitUsage
-	case requestParseInternalFailure:
+	case requestParseCancelled, requestParseInternalFailure:
 		return ExitFailure
 	default:
 		return ExitFailure

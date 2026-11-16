@@ -89,6 +89,8 @@ wind resume discard -o <directory> --item <N>
 - `resume list` shows recovery state and blocked items. Capability loss keeps existing operations visible as `needs-attention` with `recovery-unavailable`.
 - `resume discard` re-lists the inventory and confirms the selected operation before removing proven-owned unfinished state. Published and unrecognized files remain.
 
+Ctrl-C, SIGTERM, and SIGHUP request graceful shutdown and return the command's normal exit status. Repeated SIGTERM/SIGHUP keep cleanup running; a second Ctrl-C forces exit 130. `nohup` keeps ignoring SIGHUP.
+
 ## Diagnostics
 
 - `-v`, `--verbose`: writes milestone and connection diagnostics to stderr (`share`, `get`, `config import`).

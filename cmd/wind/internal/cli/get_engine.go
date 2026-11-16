@@ -11,6 +11,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	"github.com/windshare/windshare/cmd/wind/internal/commandinput"
 	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/engine"
@@ -231,25 +232,15 @@ func (a *App) receivePauseHandler() func(context.Context, engine.ReceivePause) (
 			}
 			choices, keys := receiveRecoveryChoices(pause)
 			a.writeCompleteLine("Choose %s [%s]:", choices, keys)
-			type answer struct {
-				line string
-				err  error
+			line, err := commandinput.ReadLine(ctx, reader)
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					return engine.ReceiveRecoveryExit, nil
+				}
+				return engine.ReceiveRecoveryExit, err
 			}
-			answered := make(chan answer, 1)
-			go func() { line, err := reader.ReadString('\n'); answered <- answer{line, err} }()
-			select {
-			case <-ctx.Done():
-				return engine.ReceiveRecoveryExit, ctx.Err()
-			case response := <-answered:
-				if response.err != nil {
-					if errors.Is(response.err, io.EOF) {
-						return engine.ReceiveRecoveryExit, nil
-					}
-					return engine.ReceiveRecoveryExit, response.err
-				}
-				if action, allowed := parseReceiveRecoveryAction(pause, response.line); allowed {
-					return action, nil
-				}
+			if action, allowed := parseReceiveRecoveryAction(pause, line); allowed {
+				return action, nil
 			}
 		}
 	}
