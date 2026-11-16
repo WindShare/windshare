@@ -121,6 +121,7 @@ impl Desktop {
         // The result's natural height owns scrolling, including expanded links
         // and the stacked QR layout in a narrow window.
         column()
+            .relative()
             .w_full()
             .min_h(px(stage_height(layout)))
             .flex_shrink_0()
@@ -131,7 +132,7 @@ impl Desktop {
                     .top(px(intro.card_rise()))
                     .opacity(intro.card_presence()),
             )
-            .children(self.intro_layers(theme, intro, cx))
+            .children(self.intro_layers(theme, intro, layout, cx))
     }
 
     fn result_footer(&self, theme: Theme, share: &Share, pending: bool, cx: &Context<Self>) -> Div {

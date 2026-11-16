@@ -2,7 +2,7 @@
 //! Artwork stays in paint coordinates; only the result owns layout.
 mod wind;
 
-use super::{SpiritPlacement, lerp, whirl::easing::smoothstep};
+use super::{SpiritOrigin, SpiritPlacement, lerp, whirl::easing::smoothstep};
 use crate::artwork::Artwork;
 use gpui::{Bounds, Div, Pixels, Point, Radians, canvas, div, point, prelude::*};
 use std::f32::consts::PI;
@@ -28,7 +28,7 @@ fn destination(width: f32, height: f32) -> Point<f32> {
     point(width * 0.68, height * 0.24)
 }
 
-pub fn scenery(launch: Option<SpiritPlacement>, seconds: f32) -> Div {
+pub fn scenery(origin: SpiritOrigin, seconds: f32) -> Div {
     let progress = (seconds / FLIGHT).clamp(0., 1.);
     // One continuous clock keeps the ribbon moving across the landing boundary.
     let head = lerp(0.18, 1.75, smoothstep(0., DURATION, seconds));
@@ -37,31 +37,29 @@ pub fn scenery(launch: Option<SpiritPlacement>, seconds: f32) -> Div {
     } else {
         smoothstep(0., 0.14, progress) * lerp(1., 0.8, ((progress - 0.9) / 0.1).clamp(0., 1.))
     };
+    let presence = 1. - smoothstep(0.12, 0.72, landing(seconds));
     div()
         .absolute()
         .inset_0()
         .size_full()
         .child(wind::wind_field(head, strength))
         .children((0..PAPER_COUNT).filter_map(|index| paper(index, progress)))
-        .when_some(launch, |el, launch| {
-            let presence = 1. - smoothstep(0.12, 0.72, landing(seconds));
-            el.child(
-                div().absolute().inset_0().opacity(presence).child(
-                    canvas(
-                        |_, _, _| (),
-                        move |bounds, (), window, _| {
-                            let pose = spirit_pose(launch, bounds, seconds);
-                            Artwork::Spirit
-                                .blend_to(Artwork::Happy, pose.center, pose.width, pose.smile)
-                                .rotate(Radians(pose.tilt.to_radians()))
-                                .paint(Point::default(), window);
-                        },
-                    )
-                    .absolute()
-                    .inset_0(),
-                ),
-            )
-        })
+        .child(
+            div().absolute().inset_0().opacity(presence).child(
+                canvas(
+                    |_, _, _| (),
+                    move |bounds, (), window, _| {
+                        let pose = spirit_pose(origin.resolve(bounds), bounds, seconds);
+                        Artwork::Spirit
+                            .blend_to(Artwork::Happy, pose.center, pose.width, pose.smile)
+                            .rotate(Radians(pose.tilt.to_radians()))
+                            .paint(Point::default(), window);
+                    },
+                )
+                .absolute()
+                .inset_0(),
+            ),
+        )
 }
 
 fn spirit_pose(launch: SpiritPlacement, bounds: Bounds<Pixels>, seconds: f32) -> SpiritPlacement {

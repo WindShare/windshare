@@ -69,7 +69,8 @@ pub enum ShareFlow {
 pub struct ShareRun {
     pub share_id: usize,
     started_at: Instant,
-    /// Where the user last saw the spirit, if it was on screen as the run began.
+    /// The choose prompt to depart from. Without one, the spirit enters from
+    /// a fresh scene in the result stage.
     pub perch: Option<Perch>,
     pub animation: ShareAnimation,
 }
@@ -93,16 +94,11 @@ impl ShareRun {
         seconds_between(self.started_at, now)
     }
 
-    /// The whirl this run raises for its QR slot: flown in from the perch when
-    /// there is one, risen in place otherwise.
+    /// Every entrance flies into the slot, whether launched from the choose
+    /// prompt or staged directly by an external activation.
     pub const fn wind(self) -> Wind {
-        match self.perch {
-            Some(_) => Wind::Carried {
-                since: self.started_at,
-            },
-            None => Wind::Rooted {
-                since: self.started_at,
-            },
+        Wind::Carried {
+            since: self.started_at,
         }
     }
 

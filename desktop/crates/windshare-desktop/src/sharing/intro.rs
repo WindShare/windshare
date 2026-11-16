@@ -7,9 +7,11 @@ use super::qr_slot::SlotAnchor;
 use crate::{
     desktop::Desktop,
     flow_state::{ShareFlow, ShareRun},
+    layout::FlowLayout,
     model::Page,
     motion::{
-        ShareAnimation, SpiritAnchor, SpiritPlacement, frame_ticker, paper, vacated_scene,
+        ShareAnimation, SpiritAnchor, SpiritOrigin, SpiritPlacement, frame_ticker, paper,
+        vacated_scene,
         whirl::{
             self, Tones,
             easing::{ease_out_quint, smoothstep},
@@ -86,8 +88,7 @@ impl IntroFrame {
             return paper::card_presence(self.seconds);
         }
         // A card arriving under a spirit that is still gathering itself would upstage the takeoff.
-        let delay = if self.run.perch.is_some() { WINDUP } else { 0. };
-        ease_out_quint((self.seconds - delay) / CARD_ENTRANCE)
+        ease_out_quint((self.seconds - WINDUP) / CARD_ENTRANCE)
     }
 
     pub fn card_rise(self) -> f32 {
@@ -128,10 +129,17 @@ impl IntroFrame {
             .map(|perch| (perch, 1. - smoothstep(0., duration, self.seconds)))
     }
 
-    fn flying(self) -> Option<Perch> {
-        self.run.perch.filter(|_| {
-            self.run.animation == ShareAnimation::Whirl && self.running() && self.seconds < HOME
-        })
+    fn origin(self, layout: FlowLayout) -> SpiritOrigin {
+        self.run.perch.map_or_else(
+            || SpiritOrigin::Scene {
+                scale: layout.scene_scale(),
+            },
+            |perch| SpiritOrigin::Inherited(perch.spirit),
+        )
+    }
+
+    fn flying(self) -> bool {
+        self.run.animation == ShareAnimation::Whirl && self.running() && self.seconds < HOME
     }
 }
 
@@ -163,7 +171,11 @@ impl Desktop {
             event = "share.intro_started",
             session = std::process::id(),
             share_id = run.share_id,
-            carried = run.perch.is_some(),
+            origin = if run.perch.is_some() {
+                "choose_prompt"
+            } else {
+                "share_stage"
+            },
             animation = run.animation.code(),
             wait_ms = wait.as_millis(),
         );
@@ -217,6 +229,7 @@ impl Desktop {
         &self,
         theme: Theme,
         intro: IntroFrame,
+        layout: FlowLayout,
         cx: &Context<Self>,
     ) -> Vec<AnyElement> {
         let mut layers = Vec::new();
@@ -242,14 +255,15 @@ impl Desktop {
                     .into_any_element(),
             );
         }
-        if let Some(perch) = intro.flying() {
+        let origin = intro.origin(layout);
+        if intro.flying() {
             let slot = Rc::clone(&self.intro_anchors.slot);
             let tones = Tones::of(theme);
             let (seconds, rise) = (intro.seconds, intro.card_rise());
             layers.push(
                 canvas(
                     |_, _, _| (),
-                    move |_, (), window, _| {
+                    move |bounds, (), window, _| {
                         // The slot measures itself during prepaint. A card that
                         // shows none leaves the flight nowhere to go.
                         let Some(slot) = slot.get() else {
@@ -257,7 +271,13 @@ impl Desktop {
                         };
                         // Aim at where the rising card comes to rest.
                         let settled = slot - point(px(0.), px(rise));
-                        whirl::paint_flight(window, tones, perch.spirit, settled, seconds);
+                        whirl::paint_flight(
+                            window,
+                            tones,
+                            origin.resolve(bounds),
+                            settled,
+                            seconds,
+                        );
                     },
                 )
                 .absolute()
@@ -266,10 +286,7 @@ impl Desktop {
             );
         }
         if intro.run.animation == ShareAnimation::Paper {
-            layers.push(
-                paper::scenery(intro.run.perch.map(|perch| perch.spirit), intro.seconds)
-                    .into_any_element(),
-            );
+            layers.push(paper::scenery(origin, intro.seconds).into_any_element());
         }
         layers
     }

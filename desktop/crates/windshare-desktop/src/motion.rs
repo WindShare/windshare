@@ -4,7 +4,7 @@ mod shadow;
 mod share;
 mod spirit;
 pub mod whirl;
-pub use placement::{SpiritAnchor, SpiritPlacement};
+pub use placement::{SpiritAnchor, SpiritOrigin, SpiritPlacement};
 pub use shadow::ground_shadow;
 pub use share::ShareAnimation;
 pub use spirit::Spirit;

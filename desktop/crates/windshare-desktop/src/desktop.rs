@@ -278,6 +278,25 @@ impl Desktop {
         let compact = window.viewport_size().width < px(COMPACT_WIDTH);
         let layout = FlowLayout::for_window(window);
         let content = self.page_content(layout, window, cx);
+        // A share entrance owns its reveal. Fading the whole page as well hides
+        // the spirit's windup when Explorer opens or restores the sharing page.
+        let content =
+            if self.page == Page::Share && matches!(self.share_flow, ShareFlow::Running(_)) {
+                content.into_any_element()
+            } else {
+                content
+                    .with_animation(
+                        ("page-enter", self.page as usize),
+                        Animation::new(Duration::from_millis(if cx.reduce_motion() {
+                            1
+                        } else {
+                            260
+                        }))
+                        .with_easing(ease_out_quint()),
+                        gpui::Styled::opacity,
+                    )
+                    .into_any_element()
+            };
         column().flex_1().min_h_0().child(
             column()
                 .id(("page-scroll", self.page as usize))
@@ -309,18 +328,7 @@ impl Desktop {
                                 ),
                             )
                         })
-                        .child(
-                            content.with_animation(
-                                ("page-enter", self.page as usize),
-                                Animation::new(Duration::from_millis(if cx.reduce_motion() {
-                                    1
-                                } else {
-                                    260
-                                }))
-                                .with_easing(ease_out_quint()),
-                                gpui::Styled::opacity,
-                            ),
-                        ),
+                        .child(content),
                 ),
         )
     }
