@@ -85,8 +85,9 @@ impl Segments {
 
 impl Write for Segments {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        // Each call carries one formatted record. Start a fresh segment when the
-        // record would not fit, so only records larger than a segment are split.
+        // The tracing worker calls write_all with a formatted record; retries
+        // reach write with the remaining bytes. Rotating before the first byte
+        // keeps records within the segment limit whole across rotation.
         if self.bytes == self.limit || (self.bytes > 0 && bytes.len() > self.limit - self.bytes) {
             self.rotate()?;
         }

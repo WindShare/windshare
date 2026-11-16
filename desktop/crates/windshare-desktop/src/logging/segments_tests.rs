@@ -32,6 +32,36 @@ fn unavailable_log_directory_is_a_recoverable_error() {
 }
 
 #[test]
+fn oversized_record_starts_fresh_after_a_nonempty_segment() {
+    const SEGMENT_BYTES: usize = 32;
+    const OVERSIZED_RECORD_BYTES: usize = 80;
+    let directory = tempfile::tempdir().unwrap();
+    let mut writer = Segments::open(directory.path().to_owned()).unwrap();
+    writer.limit = SEGMENT_BYTES;
+    let first = b"prefix123\n";
+    let oversized = [b'x'; OVERSIZED_RECORD_BYTES];
+    writer.write_all(first).unwrap();
+    writer.write_all(&oversized).unwrap();
+    writer.flush().unwrap();
+    let mut paths = fs::read_dir(directory.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    paths.sort();
+    let contents = paths
+        .into_iter()
+        .map(|path| fs::read(path).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(contents[0], first);
+    assert!(
+        contents
+            .iter()
+            .all(|segment| segment.len() <= SEGMENT_BYTES)
+    );
+    assert_eq!(contents.concat(), [first.as_slice(), &oversized].concat());
+}
+
+#[test]
 fn records_that_fit_a_fresh_segment_are_not_torn_across_segments() {
     let directory = tempfile::tempdir().unwrap();
     let mut writer = Segments::open(directory.path().to_owned()).unwrap();
