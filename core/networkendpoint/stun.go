@@ -35,8 +35,8 @@ func NormalizeSTUN(raw string) (string, error) {
 		host = ip.Unmap().String()
 	} else if strings.HasPrefix(parsed.Host, "[") {
 		return "", fmt.Errorf("%w: bracketed STUN host must be an IP literal", ErrInvalid)
-	} else if !validRelayDNSName(host) || numericHost(host) {
-		return "", fmt.Errorf("%w: STUN host", ErrInvalid)
+	} else if err := validateDNSHost(host); err != nil {
+		return "", err
 	}
 	if strings.ContainsRune(host, ':') {
 		host = "[" + host + "]"

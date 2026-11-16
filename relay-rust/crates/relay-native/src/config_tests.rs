@@ -34,6 +34,42 @@ fn canonical_endpoint_identities_match_shared_vectors() {
 }
 
 #[test]
+fn numeric_hosts_cannot_be_used_as_dns_identities() {
+    // The shared rejected vectors contain base URLs, while Endpoint consumes
+    // canonical WebSocket endpoints. Exercise host rejection at its own boundary.
+    for host in [
+        "0x7f.0.0.1",
+        "0x7f000001",
+        "relay.123",
+        "relay.0x10",
+        "relay.0X1f",
+        "relay.0x",
+        "relay.123.",
+        "0x",
+        "0X",
+        "0xcafe",
+        "relay.09",
+    ] {
+        let endpoint = format!("wss://{host}:8443/v2/ws");
+        assert!(Endpoint::parse(&endpoint).is_err(), "{endpoint}");
+    }
+    for host in [
+        "relay123",
+        "123.example",
+        "relay.0x1g",
+        "relay.x10",
+        "0xg",
+        "relay.1e3",
+        "relay.0x0x1",
+        "192.0.2.1",
+        "[::1]",
+    ] {
+        let endpoint = format!("wss://{host}:8443/v2/ws");
+        assert!(Endpoint::parse(&endpoint).is_ok(), "{endpoint}");
+    }
+}
+
+#[test]
 fn endpoint_identity_uses_exact_public_bytes() {
     let endpoint = Endpoint::parse("wss://relay.example/base/v2/ws").unwrap();
     let digest: [u8; 32] = Sha256::new()

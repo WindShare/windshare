@@ -120,6 +120,27 @@ func TestImportNamesRepeatedMember(t *testing.T) {
 	assertPrivateOutput(t, output.String()+trace.String())
 }
 
+func TestImportReportsTheRejectedRelayField(t *testing.T) {
+	var output, trace bytes.Buffer
+	runner := Runner{
+		Input:  strings.NewReader(`{"profiles":[{"url":"https://good.example"},{"url":"https://relay.123?token=secret-canary","access_key":"secret-canary"}]}`),
+		Output: bufferLines{buffer: &output}, TraceHandler: slog.NewJSONHandler(&trace, nil),
+		Save: func(relayconfig.Config) error { t.Fatal("rejected import was saved"); return nil },
+	}
+	if result := runner.Run(context.Background(), []string{"import", "-", "--verbose"}); result != ResultUsage {
+		t.Fatal("invalid relay was not a usage error:", result)
+	}
+	for _, detail := range []string{"profiles[1].url", "relay.123", "canonical IP address"} {
+		if !strings.Contains(output.String(), detail) {
+			t.Errorf("import lost repair detail %q: %s", detail, output.String())
+		}
+	}
+	if !strings.Contains(trace.String(), `"reason":"invalid_relay"`) {
+		t.Fatalf("trace lost the rejection category: %s", trace.String())
+	}
+	assertPrivateOutput(t, output.String()+trace.String())
+}
+
 func TestImportParsePreservesFrontendValidationCause(t *testing.T) {
 	for _, raw := range []string{"", "https://front.example/app\u00a0", "https://front.example/app\u0085", "wss://front.example"} {
 		if _, err := parse([]string{"import", "-", "--front-url", raw}); !errors.Is(err, relayconfig.ErrFrontURL) {

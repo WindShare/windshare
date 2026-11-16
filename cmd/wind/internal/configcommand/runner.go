@@ -85,6 +85,11 @@ func (runner Runner) Run(ctx context.Context, args []string) Result {
 			runner.writeLine("config import: %s", err)
 			return ResultUsage
 		}
+		if errors.Is(err, relayconfig.ErrRelayURL) {
+			log.Info("failed", "stage", "validate", "reason", "invalid_relay", "error", err)
+			runner.writeLine("config import: %s", err)
+			return ResultUsage
+		}
 		if errors.Is(err, relayconfig.ErrConfig) {
 			log.Info("failed", "stage", "validate", "reason", "invalid_configuration")
 			runner.writeLine("config import: invalid sharing configuration; expected at most %d profiles, active_relays selected from those profiles, and an optional HTTP(S) front_url", relayconfig.MaximumProfiles)

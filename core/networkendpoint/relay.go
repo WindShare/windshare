@@ -19,10 +19,10 @@ const (
 	relayIdentityDomain = "windshare/v2 relay-identity\x00"
 )
 
-// ErrWhitespace identifies rejected spacing at the validation source,
-// so callers do not mistake otherwise valid path contents for the failure cause.
 var ErrInvalid = errors.New("invalid network endpoint")
 
+// ErrWhitespace identifies rejected spacing at the validation source,
+// so callers do not mistake otherwise valid path contents for the failure cause.
 var ErrWhitespace = fmt.Errorf("%w: relay whitespace", ErrInvalid)
 
 type Relay struct {
@@ -126,8 +126,8 @@ func canonicalizeRelayAuthority(parsed *url.URL) error {
 		host = ip.Unmap().String()
 	} else if strings.HasPrefix(parsed.Host, "[") {
 		return fmt.Errorf("%w: bracketed relay host must be an IP literal", ErrInvalid)
-	} else if !validRelayDNSName(host) || numericHost(host) {
-		return fmt.Errorf("%w: relay host", ErrInvalid)
+	} else if err := validateDNSHost(host); err != nil {
+		return err
 	}
 	if parsed.Scheme == "ws" && port == "80" || parsed.Scheme == "wss" && port == "443" {
 		port = ""
@@ -140,35 +140,6 @@ func canonicalizeRelayAuthority(parsed *url.URL) error {
 	}
 	parsed.Host = host
 	return nil
-}
-
-func validRelayDNSName(hostname string) bool {
-	name := strings.TrimSuffix(hostname, ".")
-	if name == "" || len(name) > 253 {
-		return false
-	}
-	for label := range strings.SplitSeq(name, ".") {
-		if len(label) == 0 || len(label) > 63 || strings.HasPrefix(label, "-") ||
-			strings.HasSuffix(label, "-") ||
-			len(label) > 3 && label[2:4] == "--" && !strings.HasPrefix(label, "xn--") {
-			return false
-		}
-		for index := range len(label) {
-			if !asciiAlphaNumeric(label[index]) && label[index] != '-' {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func numericHost(hostname string) bool {
-	for _, character := range hostname {
-		if character != '.' && (character < '0' || character > '9') {
-			return false
-		}
-	}
-	return true
 }
 
 func validRelayQuery(query string) bool {
