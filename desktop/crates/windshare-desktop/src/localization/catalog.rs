@@ -119,8 +119,6 @@ messages! {
     NotificationsDetail => ("Show a brief notification when an action finishes.", "操作完成后显示轻量通知。"),
     TransferDetails => ("Transfer details", "传输详情"),
     TransferDetailsDescription => ("Show speed and estimated time remaining.", "显示速度与预计剩余时间。"),
-    ReducedMotion => ("Reduce motion", "减少动态效果"),
-    ReducedMotionDetail => ("Skip decorative animations and use instant transitions.", "关闭装饰动画，使用即时过渡。"),
     InterfaceExperience => ("Interface & experience", "界面与体验"),
     ShareAnimation => ("Share animation", "分享动画"),
     WhirlAnimation => ("Whirl", "旋风"),

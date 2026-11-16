@@ -169,7 +169,7 @@ func relayFailureDefinition(code FailureCode) (failureDefinition, bool) {
 	case FailureRelayAdmission:
 		return failureDefinition{"relay_admission", MessageRelayUnavailable}, true
 	case FailureRelayStopped:
-		return failureDefinition{"relay_stopped", MessageRelayUnavailable}, true
+		return failureDefinition{"relay_stopped", MessageShareStopped}, true
 	case FailureRelayProtocol:
 		return failureDefinition{"relay_protocol", MessageRelayUnavailable}, true
 	case FailureRelayClosed:

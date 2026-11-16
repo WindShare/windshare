@@ -120,10 +120,11 @@ func shareFrontend(flags *flag.FlagSet, override, saved string) (string, error) 
 	return override, nil
 }
 
-// Only errors known to carry no configuration values are shown verbatim.
+// Configuration validators own repair diagnostics; arbitrary storage errors
+// still use the generic fallback.
 func savedConfigurationFailure(err error) string {
 	switch {
-	case errors.Is(err, relayconfig.ErrFrontURL):
+	case errors.Is(err, relayconfig.ErrFrontURL), errors.Is(err, relayconfig.ErrRelayURL):
 		return err.Error()
 	case errors.Is(err, relayconfig.ErrRepeatedMember):
 		return err.Error() + "; alternatively, wind config import <file> replaces all saved settings, including TURN accounts"

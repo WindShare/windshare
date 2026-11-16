@@ -67,7 +67,7 @@ impl Desktop {
                         .blocked_share(theme, share, blocking, cx)
                         .into_any_element(),
                     _ => self
-                        .share_result(theme, share, layout, self.share_intro(run, cx), window, cx)
+                        .share_result(theme, share, layout, Self::share_intro(run, cx), window, cx)
                         .id("share-stage")
                         .into_any_element(),
                 }
@@ -88,7 +88,7 @@ impl Desktop {
                     SpiritMood::Idle,
                     Tone::Mint,
                     scene_scale,
-                    self.still(cx),
+                    cx.reduce_motion(),
                 )
                 .anchor(&spirit),
             )

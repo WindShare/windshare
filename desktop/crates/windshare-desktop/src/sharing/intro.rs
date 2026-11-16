@@ -154,7 +154,7 @@ impl Desktop {
     ) {
         self.share_flow = ShareFlow::Running(run);
         self.share_reveal_wakeup = None;
-        let wait = if self.still(cx) {
+        let wait = if cx.reduce_motion() {
             Duration::ZERO
         } else {
             run.until_reveal(Instant::now())
@@ -204,11 +204,11 @@ impl Desktop {
         cx.notify();
     }
 
-    pub(super) fn share_intro(&self, run: ShareRun, cx: &App) -> IntroFrame {
+    pub(super) fn share_intro(run: ShareRun, cx: &App) -> IntroFrame {
         IntroFrame {
             run,
             seconds: run.seconds(Instant::now()),
-            still: self.still(cx),
+            still: cx.reduce_motion(),
         }
     }
 

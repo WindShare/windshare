@@ -1,7 +1,7 @@
 use super::*;
 use std::time::Duration;
 use windows::Win32::{
-    Storage::FileSystem::{FILE_ATTRIBUTE_NORMAL, SetFileAttributesW},
+    Storage::FileSystem::{FILE_ATTRIBUTE_NORMAL, GetShortPathNameW, SetFileAttributesW},
     System::WinRT::RO_INIT_MULTITHREADED,
 };
 
@@ -42,9 +42,7 @@ fn local_storage_items_reopen_independently_and_temporary_items_are_rejected() {
     std::fs::write(&file_path, b"independent local storage").unwrap();
     std::fs::create_dir(&folder_path).unwrap();
     // Inject the test-owned location so the contract probe never writes user libraries.
-    let provenance = Provenance {
-        durable_roots: vec![fixture.0.clone()],
-    };
+    let provenance = Provenance::from_roots(vec![fixture.0.clone()]);
     let deadline = Instant::now() + Duration::from_secs(5);
     let native_file = windows::core::HSTRING::from(file_path.as_os_str());
     let native_folder = windows::core::HSTRING::from(folder_path.as_os_str());
@@ -62,8 +60,8 @@ fn local_storage_items_reopen_independently_and_temporary_items_are_rejected() {
     let acquired_folder = provenance
         .acquire(&folder.cast().unwrap(), deadline)
         .unwrap();
-    assert_eq!(acquired_file, file_path);
-    assert_eq!(acquired_folder, folder_path);
+    assert_eq!(acquired_file, long_path(&file_path).unwrap());
+    assert_eq!(acquired_folder, long_path(&folder_path).unwrap());
     drop(file);
     drop(folder);
     assert_eq!(
@@ -90,4 +88,66 @@ fn local_storage_items_reopen_independently_and_temporary_items_are_rejected() {
     unsafe {
         SetFileAttributesW(PCWSTR(native.as_ptr()), FILE_ATTRIBUTE_NORMAL).unwrap();
     }
+}
+
+fn short_path(path: &Path) -> Option<PathBuf> {
+    resolve_win32_path(path, |input, output| {
+        // SAFETY: `input` is NUL-terminated; `output` is a valid mutable slice when `Some`.
+        unsafe { GetShortPathNameW(input, output) }
+    })
+}
+
+#[test]
+fn short_path_aliases_normalize_across_roots_and_items() {
+    let _apartment = super::super::handles::Apartment::new(RO_INIT_MULTITHREADED).unwrap();
+    let fixture = Fixture(
+        std::env::temp_dir().join(format!("windshare-provenance-{}", crate::IntentId::new())),
+    );
+    std::fs::create_dir(&fixture.0).unwrap();
+    let root_dir = fixture.0.join("long-provenance-directory");
+    std::fs::create_dir(&root_dir).unwrap();
+    let file_dir = root_dir.join("long-source-file.txt");
+    std::fs::write(&file_dir, b"short alias").unwrap();
+
+    let canonical_root = long_path(&root_dir).unwrap();
+    let canonical_file = long_path(&file_dir).unwrap();
+    assert!(long_path(&root_dir.join("..")).is_none());
+    assert!(long_path(Path::new(r"relative\source.txt")).is_none());
+
+    let short_root = short_path(&canonical_root).unwrap();
+    let short_file = short_path(&canonical_file).unwrap();
+    if short_root == canonical_root && short_file == canonical_file {
+        return;
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let from_long = wait(
+        &StorageFile::GetFileFromPathAsync(&windows::core::HSTRING::from(
+            canonical_file.as_os_str(),
+        ))
+        .unwrap(),
+        deadline,
+    )
+    .unwrap();
+    let from_short = wait(
+        &StorageFile::GetFileFromPathAsync(&windows::core::HSTRING::from(short_file.as_os_str()))
+            .unwrap(),
+        deadline,
+    )
+    .unwrap();
+
+    let short_root_provenance = Provenance::from_roots(vec![short_root]);
+    let long_root_provenance = Provenance::from_roots(vec![canonical_root]);
+    assert_eq!(
+        short_root_provenance
+            .acquire(&from_long.cast().unwrap(), deadline)
+            .unwrap(),
+        canonical_file
+    );
+    assert_eq!(
+        long_root_provenance
+            .acquire(&from_short.cast().unwrap(), deadline)
+            .unwrap(),
+        canonical_file
+    );
 }

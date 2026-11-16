@@ -38,6 +38,7 @@ const (
 	MessageOutputRecoveryUnavailable
 	MessageRetainedOutputMissing
 	MessageSelectionCollision
+	MessageShareStopped
 )
 
 func (value SafeMessageKey) Name() (string, bool) {
@@ -112,6 +113,8 @@ func (value SafeMessageKey) Name() (string, bool) {
 		return "retained_output_missing", true
 	case MessageSelectionCollision:
 		return "selection_collision", true
+	case MessageShareStopped:
+		return "share_stopped", true
 	default:
 		return "", false
 	}

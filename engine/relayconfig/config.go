@@ -98,13 +98,13 @@ func loadPath(path string, missingAllowed bool) (Config, error) {
 
 func decodeSaved(path string, data []byte) (Config, error) {
 	config, err := Decode(bytes.NewReader(data))
-	if errors.Is(err, ErrRepeatedMember) {
+	if errors.Is(err, ErrRepeatedMember) || errors.Is(err, ErrRelayURL) {
 		// Report the file used by this operation, including injected/relative paths.
 		// Editing through a read-modify-write cannot repair a rejected document.
 		if absolute, pathErr := filepath.Abs(path); pathErr == nil {
 			path = absolute
 		}
-		return Config{}, fmt.Errorf("%w; remove repeated members from %+q and retry", err, path)
+		return Config{}, fmt.Errorf("%w; edit %+q and retry", err, path)
 	}
 	return config, err
 }
@@ -143,9 +143,6 @@ func (config Config) Validate() error {
 }
 
 func (config Config) validateFields() error {
-	if err := config.TURNSettings().Validate(); err != nil {
-		return errors.Join(ErrConfig, err)
-	}
 	if config.FrontURL != "" {
 		if err := ValidateFrontURL(config.FrontURL); err != nil {
 			return fmt.Errorf("%w: %w", ErrConfig, err)
@@ -155,18 +152,29 @@ func (config Config) validateFields() error {
 		len(config.ActiveRelays) > relayset.MaximumEndpoints {
 		return ErrConfig
 	}
+	// Diagnose saved addresses before projecting them into TURN settings, where
+	// an unrelated wrapper would obscure the profile the user needs to repair.
+	saved := map[string]bool{}
+	for index, profile := range config.Profiles {
+		endpoint, err := v2.NormalizeRelayEndpoint(profile.PublicURL)
+		if err != nil {
+			return fmt.Errorf("%w: profiles[%d].url: %w", ErrConfig, index, relayAddressError{cause: err})
+		}
+		saved[endpoint.DialURL] = true
+	}
 	if _, err := relayprofile.PublicURLs(config.Profiles); err != nil {
 		return ErrConfig
 	}
-	saved := map[string]bool{}
-	for _, profile := range config.Profiles {
-		endpoint, _ := v2.NormalizeRelayEndpoint(profile.PublicURL)
-		saved[endpoint.DialURL] = true
+	if err := config.TURNSettings().Validate(); err != nil {
+		return errors.Join(ErrConfig, err)
 	}
 	seen := map[string]bool{}
-	for _, address := range config.ActiveRelays {
+	for index, address := range config.ActiveRelays {
 		endpoint, err := v2.NormalizeRelayEndpoint(address)
-		if err != nil || !saved[endpoint.DialURL] || seen[endpoint.DialURL] {
+		if err != nil {
+			return fmt.Errorf("%w: active_relays[%d]: %w", ErrConfig, index, relayAddressError{cause: err})
+		}
+		if !saved[endpoint.DialURL] || seen[endpoint.DialURL] {
 			return ErrConfig
 		}
 		seen[endpoint.DialURL] = true

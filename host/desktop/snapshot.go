@@ -20,8 +20,14 @@ func (a *Application) snapshotLocked() Snapshot {
 		return a.snapshotValue
 	}
 	next.Revision++
-	for i, view := range next.Shares {
-		if i >= len(a.snapshotValue.Shares) || !reflect.DeepEqual(view, a.snapshotValue.Shares[i]) {
+	// Shares are sorted by operation ID, so a new share can shift later
+	// positions. Compare by identity so only real state changes are logged.
+	previous := make(map[string]*Share, len(a.snapshotValue.Shares))
+	for i := range a.snapshotValue.Shares {
+		previous[a.snapshotValue.Shares[i].OperationID] = &a.snapshotValue.Shares[i]
+	}
+	for _, view := range next.Shares {
+		if before, ok := previous[view.OperationID]; !ok || !reflect.DeepEqual(view, *before) {
 			a.deps.log("host.share_state", view)
 		}
 	}

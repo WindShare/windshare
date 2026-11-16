@@ -21,6 +21,28 @@ import (
 	wsrtc "github.com/windshare/windshare/transport/webrtc"
 )
 
+// A stopped share is a deliberate sender decision. Its relay is healthy, so the
+// safe message must not tell the receiver that the relay itself is unavailable.
+func TestStoppedShareIsNotReportedAsRelayUnavailable(t *testing.T) {
+	stopped, ok := ProjectRelayErrorCode(v2.ErrorStopped)
+	if !ok {
+		t.Fatal("stopped relay code is unmapped")
+	}
+	key, ok := stopped.MessageKey()
+	if !ok || key != appobs.MessageShareStopped {
+		t.Fatalf("stopped share message key = %v,%t; want %v", key, ok, appobs.MessageShareStopped)
+	}
+	for _, code := range []v2.ErrorCode{v2.ErrorStarting, v2.ErrorAdmission} {
+		unavailable, ok := ProjectRelayErrorCode(code)
+		if !ok {
+			t.Fatalf("relay code %d is unmapped", code)
+		}
+		if other, _ := unavailable.MessageKey(); other != appobs.MessageRelayUnavailable {
+			t.Fatalf("relay code %d message key = %v; want %v", code, other, appobs.MessageRelayUnavailable)
+		}
+	}
+}
+
 func TestEveryRelayAndPeerCodeHasAnExplicitSafeMapping(t *testing.T) {
 	relayCodes := []v2.ErrorCode{
 		v2.ErrorMalformed, v2.ErrorUnsupportedMode, v2.ErrorShareIDCollision,
