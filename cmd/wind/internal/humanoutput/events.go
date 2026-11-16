@@ -39,6 +39,10 @@ func formatFallback(event appobs.Fallback, symbols Symbols) terminalcanvas.Line 
 }
 
 func formatRelayRecovery(event appobs.RelayRecovering, symbols Symbols) terminalcanvas.Line {
+	if failure, ok := event.Failure(); ok && failure.Code() == appobs.FailureRelayStopped {
+		// A permanent STOP needs a new share, so relay recovery guidance would be misleading.
+		return statusLine(symbols.Warning, failureMessage(failure), terminalcanvas.StyleWarning)
+	}
 	state := eventName(event.State())
 	message := "Relay recovery attempt " + strconv.FormatUint(uint64(event.Attempt()), 10) + " " + state + "."
 	if details, ok := event.Details(); ok {
