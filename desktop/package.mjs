@@ -1,4 +1,4 @@
-import { copyFile, cp, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -40,11 +40,11 @@ if (process.platform === 'win32') {
   if (!artifacts.shell) throw new Error('Cargo did not report the Explorer DLL');
   const identityDirectory = join(staging, 'identity');
   await writeIdentity(identityDirectory, configuration);
+  const assetDirectory = join(staging, 'Assets');
   const assets = spawnSync(cargo[0], [...cargo.slice(1), 'run', '--manifest-path', join(desktop, 'Cargo.toml'),
-    '--locked', '-p', 'windshare-shell', '--example', 'package_assets', '--', join(identityDirectory, 'Assets')], { stdio: 'inherit' });
+    '--locked', '-p', 'windshare-shell', '--example', 'package_assets', '--', assetDirectory], { stdio: 'inherit' });
   if (assets.error || assets.status !== 0) throw assets.error ?? new Error('Icon rendering failed');
-  await cp(join(identityDirectory, 'Assets'), join(staging, 'Assets'), { recursive: true });
-  await copyFile(join(identityDirectory, 'Assets', 'windshare.ico'), join(staging, 'windshare.ico'));
+  await copyFile(join(assetDirectory, 'windshare.ico'), join(staging, 'windshare.ico'));
   for (const script of ['install.ps1', 'uninstall.ps1', 'lifetime.ps1']) {
     await copyFile(join(desktop, 'install', script), join(staging, script));
   }

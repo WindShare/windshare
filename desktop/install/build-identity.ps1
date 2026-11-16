@@ -24,6 +24,32 @@ try {
 } finally {
     if (Test-Path -LiteralPath $baseline) { Remove-Item -LiteralPath $baseline }
 }
+# Sparse packages resolve visual resources from the external content root, not the
+# identity manifest directory. The index must live beside the executable and Assets.
+$identityDirectory = Join-Path $Directory 'identity'
+$resourceConfig = Join-Path $Directory 'priconfig.xml'
+$resourceFiles = Join-Path $Directory 'resources.resfiles'
+try {
+    Invoke-Sdk 'makepri.exe' @('createconfig', '/cf', $resourceConfig, '/dq', 'en-US', '/pv', '10.0.0', '/o')
+    $resourceConfiguration = [xml](Get-Content -LiteralPath $resourceConfig -Raw)
+    # Explicit relative paths preserve the manifest's Assets namespace and exclude
+    # binaries or old indexes. All themes and sizes belong in one runtime index.
+    [void]$resourceConfiguration.resources.RemoveChild($resourceConfiguration.resources.packaging)
+    $resourceConfiguration.resources.index.startIndexAt = 'resources.resfiles'
+    $fileIndexer = $resourceConfiguration.CreateElement('indexer-config')
+    $fileIndexer.SetAttribute('type', 'resfiles')
+    $fileIndexer.SetAttribute('qualifierDelimiter', '.')
+    [void]$resourceConfiguration.resources.index.AppendChild($fileIndexer)
+    $resourceConfiguration.Save($resourceConfig)
+    Get-ChildItem -LiteralPath (Join-Path $Directory 'Assets') -Filter '*.png' -File |
+        Sort-Object Name | ForEach-Object { 'Assets\' + $_.Name } |
+        Set-Content -LiteralPath $resourceFiles -Encoding utf8
+    Invoke-Sdk 'makepri.exe' @('new', '/pr', $Directory, '/mn', (Join-Path $identityDirectory 'AppxManifest.xml'), '/cf', $resourceConfig, '/of', (Join-Path $Directory 'resources.pri'), '/o')
+} finally {
+    foreach ($temporary in @($resourceConfig, $resourceFiles)) {
+        if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary }
+    }
+}
 $developmentCertificate = $null
 try {
     if (!$SigningThumbprint) {

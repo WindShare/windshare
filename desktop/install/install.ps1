@@ -24,7 +24,7 @@ if (-not (Test-Path -LiteralPath $destination)) {
     $staging = Join-Path $root ("install-" + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $staging -Force | Out-Null
     try {
-        foreach ($name in @('windshare.exe', 'windshare_host.dll', 'windshare_shell.dll', 'windshare.ico', 'identity.msix', 'LICENSE', 'README.txt', 'install.ps1', 'uninstall.ps1', 'lifetime.ps1')) {
+        foreach ($name in @('windshare.exe', 'windshare_host.dll', 'windshare_shell.dll', 'windshare.ico', 'resources.pri', 'identity.msix', 'LICENSE', 'README.txt', 'install.ps1', 'uninstall.ps1', 'lifetime.ps1')) {
             Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $staging $name)
         }
         foreach ($name in @('identity', 'Assets')) {

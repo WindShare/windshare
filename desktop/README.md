@@ -27,13 +27,13 @@ Make targets build [`cmd/windshare-host`](../cmd/windshare-host/) (`c-shared`) a
 
 ## Windows installation
 
-Windows 11 packaging requires the Windows SDK tools (`mt`, `makeappx`, `signtool`). Ordinary builds need no signing or registration.
+Windows 11 packaging requires the Windows SDK tools (`mt`, `makepri`, `makeappx`, `signtool`). Ordinary builds need no signing or registration.
 
 - Development: `make desktop-package` signs with a temporary development certificate. On a machine already in Developer Mode, run `powershell.exe -File install.ps1 -DevelopmentRegistration` from the extracted archive.
 - Release: set `WINDSHARE_INSTALL_CHANNEL=release`, `WINDSHARE_PACKAGE_PUBLISHER`, `WINDSHARE_PACKAGE_VERSION` (four components), and `WINDSHARE_SIGNING_THUMBPRINT` before packaging. The signing certificate must match the publisher and be trusted by Windows. Run `powershell.exe -File install.ps1`.
 - Remove: run the installed `uninstall.ps1`. Updates and removal wait for active app/shell ownership to end; `-WaitTimeoutSeconds` bounds the wait. Saved configuration remains.
 
-Installation uses immutable version directories under `%LOCALAPPDATA%/Programs/WindShare/<channel>`. Development and release have distinct package, COM and instance identities. Official network provisioning remains a separate [release dependency](../deploy/network/README.md).
+Installation keeps binaries, visual assets and `resources.pri` together in immutable version directories under `%LOCALAPPDATA%/Programs/WindShare/<channel>`. Development and release have distinct package, COM and instance identities. Official network provisioning remains a separate [release dependency](../deploy/network/README.md).
 
 ## Behavior
 
