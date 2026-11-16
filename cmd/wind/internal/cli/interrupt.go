@@ -3,7 +3,9 @@ package cli
 import (
 	"context"
 	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 )
 
 const (
@@ -11,6 +13,24 @@ const (
 	// Shells conventionally report SIGINT termination as 128 + signal 2.
 	forcedInterruptExitCode = 130
 )
+
+// notifyTerminationSignals routes every ordinary request to end the process to
+// ch: Ctrl-C, SIGTERM from service managers, containers, and kill, and SIGHUP
+// from a closing terminal or SSH session. Unhandled, the latter two end the
+// process at once, so a sender never publishes its stop marker and receivers
+// are told to retry a link that will never come back.
+//
+// A SIGHUP that was already ignored when the process started (nohup, disown
+// in some shells) stays ignored, because registering a handler would silently
+// override that explicit request to outlive the terminal.
+func notifyTerminationSignals(ch chan<- os.Signal, ignored func(os.Signal) bool) (stop func()) {
+	signals := []os.Signal{os.Interrupt, syscall.SIGTERM}
+	if !ignored(syscall.SIGHUP) {
+		signals = append(signals, syscall.SIGHUP)
+	}
+	signal.Notify(ch, signals...)
+	return func() { signal.Stop(ch) }
+}
 
 // runCLIWithInterruptEscalation gives the first interrupt to the durable
 // settlement path, but leaves the operator a second interrupt that cannot be
