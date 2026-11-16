@@ -2,7 +2,7 @@ use super::{
     ShareLink,
     intro::IntroFrame,
     link_views::{LINK_COLUMN_GAP, LINK_PANEL_WIDTH, link_columns_fit},
-    qr_slot::QrSlot,
+    qr_slot::{Arrival, QrSlot},
     stage_height,
 };
 use crate::{
@@ -10,6 +10,7 @@ use crate::{
     layout::{FlowLayout, task_width},
     localization::{Language, Text, language},
     model::{Action, Share, ShareState},
+    motion::ShareAnimation,
 };
 use gpui::{
     AnimationExt, Div, SpringAnimation, SpringConfig, SpringPlayback, Window, div, prelude::*, px,
@@ -36,7 +37,7 @@ impl Desktop {
         let columns = link_columns_fit(task_width(window), layout.panel_padding());
         // Until its run is revealed the card says nothing newer than
         // "preparing", so the status, the copy action and the code all turn on
-        // the beat the whirl opens instead of trickling in under the flight.
+        // the beat the entrance finishes instead of trickling in under the flight.
         let revealed = intro.revealed();
         let link = share.usable_link().filter(|_| revealed);
         let pending = !revealed || matches!(share.state, ShareState::Preparing);
@@ -89,7 +90,10 @@ impl Desktop {
             pending,
             locale.text(Text::QrUnavailable),
         )
-        .wind(intro.run.wind())
+        .arrival(match intro.run.animation {
+            ShareAnimation::Whirl => Arrival::Whirl(Some(intro.run.wind())),
+            ShareAnimation::Paper => Arrival::Fade,
+        })
         .anchor(&self.intro_anchors.slot)
         .still(intro.still);
         let card = theme

@@ -1,20 +1,22 @@
-//! The QR frame of a share. While the link is pending it holds the eye of a
-//! whirl; when the link arrives the eye opens into the code.
+//! A stable QR frame with a whirl bloom or a plain fade when the link arrives.
+mod pending;
+mod state;
+
+use pending::waiting_qr;
+pub(super) use state::Arrival;
+use state::{FADE, Phase, Signal};
 
 use crate::motion::whirl::{
-    self, Opening, Standing, Tones, Wind,
+    self, Opening, Standing, Tones,
     bloom::{self, BLOOM},
+    easing::smoothstep,
     seconds_between,
 };
 use gpui::{
     App, Bounds, BoxShadow, Context, ElementId, IntoElement, Pixels, SharedString, Subscription,
     Window, canvas, div, point, prelude::*, px,
 };
-use std::{
-    cell::Cell,
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{cell::Cell, rc::Rc, time::Instant};
 use windshare_ui::{Icon, QrCodeImage, Theme, column, icon};
 
 pub(super) const QR_INLINE_SIDE: f32 = 288.;
@@ -39,7 +41,7 @@ struct Face {
     code: Option<QrCodeImage>,
     /// A link is still expected.
     pending: bool,
-    wind: Option<Wind>,
+    arrival: Arrival,
     still: bool,
     unavailable: SharedString,
 }
@@ -50,7 +52,7 @@ impl Face {
             code: self.code.is_some(),
             pending: self.pending,
             still: self.still,
-            wind: self.wind,
+            arrival: self.arrival,
         }
     }
 }
@@ -67,7 +69,7 @@ impl QrSlot {
             face: Face {
                 code,
                 pending,
-                wind: None,
+                arrival: Arrival::Whirl(None),
                 still: false,
                 unavailable: unavailable.into(),
             },
@@ -75,10 +77,8 @@ impl QrSlot {
         }
     }
 
-    /// The whirl a run already raised for this slot. Without one the slot
-    /// raises its own when it first has to wait.
-    pub const fn wind(mut self, wind: Wind) -> Self {
-        self.face.wind = Some(wind);
+    pub const fn arrival(mut self, arrival: Arrival) -> Self {
+        self.face.arrival = arrival;
         self
     }
 
@@ -110,69 +110,6 @@ impl RenderOnce for QrSlot {
     }
 }
 
-/// What a slot needs to know to move between phases.
-#[derive(Clone, Copy, Debug)]
-struct Signal {
-    code: bool,
-    pending: bool,
-    still: bool,
-    wind: Option<Wind>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Phase {
-    /// A whirl stands in the slot, or is on its way, while the link is pending.
-    Gathering { wind: Wind },
-    /// The eye is opening into the code.
-    Blooming { wind: Wind, since: Instant },
-    /// The static code. `bloomed` is when a bloom ended here, for its halo; a
-    /// code that was simply present has none.
-    Settled { bloomed: Option<Instant> },
-    /// No link to encode and none expected.
-    Unavailable,
-}
-
-impl Phase {
-    fn enter(signal: Signal, now: Instant) -> Self {
-        if signal.code {
-            Self::Settled { bloomed: None }
-        } else if signal.pending {
-            Self::Gathering {
-                wind: signal.wind.unwrap_or(Wind::Rooted { since: now }),
-            }
-        } else {
-            Self::Unavailable
-        }
-    }
-
-    fn advance(self, signal: Signal, now: Instant) -> Self {
-        match self {
-            // A code can only bloom out of a whirl that already stands here.
-            // One still in flight keeps the slot waiting for its arrival.
-            Self::Gathering { wind } if signal.code && !signal.still => {
-                if wind.standing(now).is_some() {
-                    Self::Blooming { wind, since: now }
-                } else {
-                    self
-                }
-            }
-            Self::Gathering { .. } if !signal.code && signal.pending => self,
-            Self::Blooming { since, .. } if signal.code => {
-                if seconds_between(since, now) < BLOOM {
-                    self
-                } else {
-                    Self::Settled {
-                        bloomed: Some(since + Duration::from_secs_f32(BLOOM)),
-                    }
-                }
-            }
-            Self::Settled { .. } if signal.code => self,
-            Self::Unavailable if !signal.code && !signal.pending => self,
-            _ => Self::enter(signal, now),
-        }
-    }
-}
-
 /// What the slot's canvas draws for one frame.
 enum Painting {
     Standing(Standing),
@@ -188,7 +125,7 @@ struct SlotView {
     face: Face,
     phase: Phase,
     anchor: Option<SlotAnchor>,
-    _visibility: Subscription,
+    _subscriptions: [Subscription; 2],
 }
 
 impl SlotView {
@@ -207,7 +144,10 @@ impl SlotView {
             anchor: None,
             // A hidden window stops asking for frames. Becoming visible again
             // must restart a wait that is still running.
-            _visibility: cx.observe_window_visibility(window, |_, _, _, cx| cx.notify()),
+            _subscriptions: [
+                cx.observe_window_visibility(window, |_, _, _, cx| cx.notify()),
+                cx.observe_window_activation(window, |_, _, cx| cx.notify()),
+            ],
         }
     }
 
@@ -242,7 +182,8 @@ impl SlotView {
                 }),
                 true,
             ),
-            Phase::Settled { .. } | Phase::Unavailable => (None, false),
+            Phase::Fading { .. } => (None, true),
+            Phase::Settled { .. } | Phase::Unavailable | Phase::Waiting => (None, false),
         }
     }
 }
@@ -264,7 +205,7 @@ impl Render for SlotView {
                 if let Some(anchor) = &anchor {
                     anchor.set(Some(bounds));
                 }
-                if animating && window.is_visible() {
+                if animating && window.is_visible() && window.is_window_active() {
                     window.request_animation_frame();
                 }
             },
@@ -292,10 +233,12 @@ impl Render for SlotView {
         )
         .absolute()
         .inset_0();
-        let settled = match self.phase {
-            Phase::Settled { .. } => self.face.code.as_ref(),
-            _ => None,
+        let presence = match self.phase {
+            Phase::Settled { .. } => 1.,
+            Phase::Fading { since } => smoothstep(0., FADE, seconds_between(since, now)),
+            _ => 0.,
         };
+        let settled = self.face.code.as_ref().filter(|_| presence > 0.);
         column()
             .relative()
             // Reserve the largest inline size before encoding. Link density must not
@@ -317,11 +260,16 @@ impl Render for SlotView {
                 }])
             })
             .child(motion)
+            .when(
+                matches!(self.phase, Phase::Waiting | Phase::Fading { .. }),
+                |el| el.child(waiting_qr(theme).opacity(1. - presence)),
+            )
             .when_some(settled, |el, code| {
                 el.child(
                     div()
                         .absolute()
                         .inset_0()
+                        .opacity(presence)
                         .child(code.view(QR_INLINE_SIDE).rounded(px(QR_CODE_RADIUS))),
                 )
             })
@@ -341,7 +289,3 @@ impl Render for SlotView {
             })
     }
 }
-
-#[cfg(test)]
-#[path = "qr_slot_tests.rs"]
-mod tests;

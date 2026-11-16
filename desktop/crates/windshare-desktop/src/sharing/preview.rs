@@ -37,7 +37,7 @@ impl Desktop {
             },
         );
         self.link_disclosure = LinkDisclosure::Summary;
-        self.present_share(self.share_run(operation), window, cx);
+        self.present_share(self.share_run(operation, cx), window, cx);
         tracing::info!(
             event = "share.preparing",
             operation,

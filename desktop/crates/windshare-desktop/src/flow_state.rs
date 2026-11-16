@@ -1,6 +1,9 @@
 use crate::{
     model::ShareContents,
-    motion::whirl::{HOLD, Wind, seconds_between},
+    motion::{
+        ShareAnimation,
+        whirl::{Wind, seconds_between},
+    },
     sharing::Perch,
 };
 use std::time::{Duration, Instant};
@@ -68,14 +71,21 @@ pub struct ShareRun {
     started_at: Instant,
     /// Where the user last saw the spirit, if it was on screen as the run began.
     pub perch: Option<Perch>,
+    pub animation: ShareAnimation,
 }
 
 impl ShareRun {
-    pub const fn new(share_id: usize, started_at: Instant, perch: Option<Perch>) -> Self {
+    pub const fn new(
+        share_id: usize,
+        started_at: Instant,
+        perch: Option<Perch>,
+        animation: ShareAnimation,
+    ) -> Self {
         Self {
             share_id,
             started_at,
             perch,
+            animation,
         }
     }
 
@@ -98,7 +108,8 @@ impl ShareRun {
 
     /// Time left before the result may present more than "preparing".
     pub fn until_reveal(self, now: Instant) -> Duration {
-        (self.started_at + Duration::from_secs_f32(HOLD)).saturating_duration_since(now)
+        (self.started_at + Duration::from_secs_f32(self.animation.duration()))
+            .saturating_duration_since(now)
     }
 }
 #[derive(Clone, Copy, Debug)]

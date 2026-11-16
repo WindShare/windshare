@@ -2,12 +2,12 @@ use crate::localization::{LanguageSettings, Text, language};
 mod behavior;
 mod presentation;
 
-use super::SpiritMood;
+use super::{SpiritAnchor, SpiritMood, SpiritPlacement};
 use crate::artwork::Artwork;
 use behavior::{Behavior, NOMINAL_SIZE, Pose, SMILE_DURATION};
 use gpui::{
     App, Bounds, ElementId, FocusHandle, IntoElement, MouseButton, MouseMoveEvent, Pixels, Point,
-    Radians, Role, Subscription, Task, Window, canvas, div, prelude::*, px,
+    Radians, Role, Subscription, Task, Window, canvas, div, point, prelude::*, px,
 };
 use presentation::Presentation;
 use std::time::Instant;
@@ -17,6 +17,7 @@ use windshare_ui::Theme;
 pub struct Spirit {
     id: ElementId,
     presentation: Presentation,
+    anchor: Option<SpiritAnchor>,
 }
 
 impl Spirit {
@@ -35,7 +36,13 @@ impl Spirit {
                 width,
                 reduced_motion,
             },
+            anchor: None,
         }
+    }
+
+    pub(super) fn anchor(mut self, anchor: Option<SpiritAnchor>) -> Self {
+        self.anchor = anchor;
+        self
     }
 }
 
@@ -44,7 +51,10 @@ impl RenderOnce for Spirit {
         let view = window.use_keyed_state(self.id, cx, |window, cx| {
             SpiritView::new(self.presentation, window, cx)
         });
-        view.update(cx, |view, _| view.presentation = self.presentation);
+        view.update(cx, |view, _| {
+            view.presentation = self.presentation;
+            view.anchor = self.anchor;
+        });
         view
     }
 }
@@ -58,6 +68,7 @@ enum MotionMode {
 
 struct SpiritView {
     presentation: Presentation,
+    anchor: Option<SpiritAnchor>,
     behavior: Behavior,
     mode: MotionMode,
     last_frame: Instant,
@@ -86,6 +97,7 @@ impl SpiritView {
         ];
         Self {
             presentation,
+            anchor: None,
             behavior: Behavior::default(),
             mode: MotionMode::Suspended,
             last_frame: Instant::now(),
@@ -214,6 +226,7 @@ impl Render for SpiritView {
         let scale = presentation.width / NOMINAL_SIZE;
         let (center, width, tilt) = presentation.sprite_pose(pose, scale);
         let smile = presentation.smile(self.behavior.smiling(Instant::now()));
+        let anchor = self.anchor.clone();
         // A separate stationary hit target keeps interaction offsets from
         // changing layout, focus geometry, or artwork rasterization.
         div()
@@ -226,6 +239,24 @@ impl Render for SpiritView {
                     .rotate(Radians(tilt.to_radians())),
             )
             .child(self.hit_target(presentation.center, window, cx))
+            .child(
+                canvas(
+                    move |bounds, _, _| {
+                        if let Some(anchor) = &anchor {
+                            anchor.set(Some(SpiritPlacement {
+                                center: center
+                                    + point(f32::from(bounds.left()), f32::from(bounds.top())),
+                                width,
+                                tilt,
+                                smile,
+                            }));
+                        }
+                    },
+                    |_, (), _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
     }
 }
 

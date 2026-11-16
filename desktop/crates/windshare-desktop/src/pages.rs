@@ -39,6 +39,7 @@ impl Desktop {
                     .p(px(28.))
                     .gap(px(10.))
                     .child(theme.heading(locale.text(Text::InterfaceExperience), 22.))
+                    .child(Self::share_animation_setting(theme, cx))
                     .children(
                         settings
                             .into_iter()
@@ -48,9 +49,8 @@ impl Desktop {
                                 row()
                                     .gap(px(18.))
                                     .py(px(24.))
-                                    .when(index > 0, |el| {
-                                        el.border_t_1().border_color(theme.border())
-                                    })
+                                    .border_t_1()
+                                    .border_color(theme.border())
                                     .child(theme.icon_tile(symbol, Tone::Neutral, 44.))
                                     .child(
                                         column()

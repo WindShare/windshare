@@ -1,8 +1,7 @@
-//! A share run's entrance: the spirit leaves the choose prompt and flies its
-//! whirl into the result card's QR slot while the card arrives beneath it.
+//! A share run's entrance, captured with its animation preference and launch pose.
 //!
-//! Both ends of the flight are measured where they were painted rather than
-//! derived from the two pages' layouts, so the handover holds in any window.
+//! The launch pose and the whirl's destination are measured where they were
+//! painted, so the handover holds in any window.
 
 use super::qr_slot::SlotAnchor;
 use crate::{
@@ -10,13 +9,14 @@ use crate::{
     flow_state::{ShareFlow, ShareRun},
     model::Page,
     motion::{
-        SpiritScene, frame_ticker, vacated_scene,
+        ShareAnimation, SpiritAnchor, SpiritPlacement, frame_ticker, paper, vacated_scene,
         whirl::{
-            self, HOLD, Launch, Tones,
+            self, Tones,
             easing::{ease_out_quint, smoothstep},
             flight::{HOME, WINDUP},
         },
     },
+    preferences::{PreferenceChoice, ShareAnimationSettings},
 };
 use gpui::{
     AnyElement, App, Bounds, Context, IntoElement, Pixels, Window, anchored, canvas, point,
@@ -42,25 +42,14 @@ pub struct Perch {
     /// The whole prompt column, so a departing copy lands on the same pixels.
     pub prompt: Bounds<Pixels>,
     pub scene_scale: f32,
-}
-
-impl Perch {
-    fn launch(self) -> Launch {
-        let spirit = SpiritScene::body_center(self.scene_scale);
-        Launch {
-            center: point(
-                f32::from(self.prompt.center().x),
-                f32::from(self.prompt.top()) + spirit.y,
-            ),
-            width: SpiritScene::body_size(self.scene_scale),
-        }
-    }
+    pub spirit: SpiritPlacement,
 }
 
 /// Places measured during paint that a run's entrance moves between.
 #[derive(Default)]
 pub struct IntroAnchors {
     pub perch: Rc<Cell<Option<Perch>>>,
+    pub spirit: SpiritAnchor,
     pub slot: SlotAnchor,
 }
 
@@ -69,6 +58,7 @@ impl IntroAnchors {
     /// measures anew and a stale place can never start or end a flight.
     pub fn begin_frame(&self) {
         self.perch.set(None);
+        self.spirit.set(None);
         self.slot.set(None);
     }
 }
@@ -85,12 +75,15 @@ pub(super) struct IntroFrame {
 impl IntroFrame {
     /// Whether the card may present more than "preparing".
     pub fn revealed(self) -> bool {
-        self.still || self.seconds >= HOLD
+        self.still || self.seconds >= self.run.animation.duration()
     }
 
     pub fn card_presence(self) -> f32 {
         if self.still {
             return 1.;
+        }
+        if self.run.animation == ShareAnimation::Paper {
+            return paper::card_presence(self.seconds);
         }
         // A card arriving under a spirit that is still gathering itself would upstage the takeoff.
         let delay = if self.run.perch.is_some() { WINDUP } else { 0. };
@@ -105,34 +98,52 @@ impl IntroFrame {
         if self.still {
             1.
         } else {
-            smoothstep(INFORMATION_ENTRANCE.0, INFORMATION_ENTRANCE.1, self.seconds)
+            match self.run.animation {
+                ShareAnimation::Whirl => {
+                    smoothstep(INFORMATION_ENTRANCE.0, INFORMATION_ENTRANCE.1, self.seconds)
+                }
+                ShareAnimation::Paper => smoothstep(
+                    INFORMATION_ENTRANCE.0,
+                    paper::LANDING,
+                    self.seconds - paper::FLIGHT,
+                ),
+            }
         }
     }
 
     const fn running(self) -> bool {
-        !self.still && self.seconds < HOLD
+        !self.still && self.seconds < self.run.animation.duration()
     }
 
     /// The prompt the spirit is leaving and how much of it is still there. It
     /// is gone by the time the spirit takes off.
     fn departing(self) -> Option<(Perch, f32)> {
+        let duration = match self.run.animation {
+            ShareAnimation::Whirl => WINDUP,
+            ShareAnimation::Paper => paper::PROMPT_DEPARTURE,
+        };
         self.run
             .perch
-            .filter(|_| self.running() && self.seconds < WINDUP)
-            .map(|perch| (perch, 1. - smoothstep(0., WINDUP, self.seconds)))
+            .filter(|_| self.running() && self.seconds < duration)
+            .map(|perch| (perch, 1. - smoothstep(0., duration, self.seconds)))
     }
 
     fn flying(self) -> Option<Perch> {
-        self.run
-            .perch
-            .filter(|_| self.running() && self.seconds < HOME)
+        self.run.perch.filter(|_| {
+            self.run.animation == ShareAnimation::Whirl && self.running() && self.seconds < HOME
+        })
     }
 }
 
 impl Desktop {
     /// A run starts from the spirit's perch when the user was looking at it.
-    pub(crate) fn share_run(&self, share_id: usize) -> ShareRun {
-        ShareRun::new(share_id, Instant::now(), self.intro_anchors.perch.get())
+    pub(crate) fn share_run(&self, share_id: usize, cx: &App) -> ShareRun {
+        ShareRun::new(
+            share_id,
+            Instant::now(),
+            self.intro_anchors.perch.get(),
+            cx.global::<ShareAnimationSettings>().choice,
+        )
     }
 
     pub(crate) fn present_share(
@@ -153,6 +164,7 @@ impl Desktop {
             session = std::process::id(),
             share_id = run.share_id,
             carried = run.perch.is_some(),
+            animation = run.animation.code(),
             wait_ms = wait.as_millis(),
         );
         #[cfg(feature = "motion-profile")]
@@ -245,12 +257,18 @@ impl Desktop {
                         };
                         // Aim at where the rising card comes to rest.
                         let settled = slot - point(px(0.), px(rise));
-                        whirl::paint_flight(window, tones, perch.launch(), settled, seconds);
+                        whirl::paint_flight(window, tones, perch.spirit, settled, seconds);
                     },
                 )
                 .absolute()
                 .inset_0()
                 .into_any_element(),
+            );
+        }
+        if intro.run.animation == ShareAnimation::Paper {
+            layers.push(
+                paper::scenery(intro.run.perch.map(|perch| perch.spirit), intro.seconds)
+                    .into_any_element(),
             );
         }
         layers

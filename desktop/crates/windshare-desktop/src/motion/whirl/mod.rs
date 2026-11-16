@@ -10,7 +10,10 @@ pub mod easing;
 pub mod flight;
 mod mesh;
 
-use crate::{artwork::Artwork, motion::lerp};
+use crate::{
+    artwork::Artwork,
+    motion::{SpiritPlacement, lerp},
+};
 use cyclone::{MOTES, Mote, Shade, Whirl};
 use flight::{ARRIVAL, Flight, HOME, TRAIL};
 use gpui::{
@@ -114,18 +117,11 @@ pub struct Opening<'a> {
     pub progress: f32,
 }
 
-/// Where a flight starts: the spirit as the user last saw it, in window coordinates.
-#[derive(Clone, Copy)]
-pub struct Launch {
-    pub center: Point<f32>,
-    pub width: f32,
-}
-
 /// The whirl in the air: motes trail the spirit from `launch` into `slot`.
 pub fn paint_flight(
     window: &mut Window,
     tones: Tones,
-    launch: Launch,
+    launch: SpiritPlacement,
     slot: Bounds<Pixels>,
     seconds: f32,
 ) {
@@ -144,7 +140,14 @@ pub fn paint_flight(
         flight.eye(mote.drag.mul_add(-TRAIL, seconds))
     });
     let pose = flight.pose(seconds);
-    paint_spirit(window, pose.center, pose.width, pose.tilt, 0.);
+    let handoff = 1. - easing::smoothstep(0., flight::WINDUP, seconds);
+    paint_spirit(
+        window,
+        pose.center,
+        pose.width,
+        launch.tilt.mul_add(handoff, pose.tilt),
+        launch.smile * handoff,
+    );
 }
 
 /// The whirl standing in `slot` around the resting spirit.

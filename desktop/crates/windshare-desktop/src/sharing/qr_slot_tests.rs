@@ -5,7 +5,7 @@ const WAITING: Signal = Signal {
     code: false,
     pending: true,
     still: false,
-    wind: None,
+    arrival: Arrival::Whirl(None),
 };
 const READY: Signal = Signal {
     code: true,
@@ -58,7 +58,7 @@ fn code_waits_for_a_whirl_that_is_still_in_flight() {
     let start = Instant::now();
     let wind = Wind::Carried { since: start };
     let run = Signal {
-        wind: Some(wind),
+        arrival: Arrival::Whirl(Some(wind)),
         ..READY
     };
     let waiting = Phase::Gathering { wind };
@@ -100,6 +100,41 @@ fn share_that_ends_without_a_link_stops_waiting() {
     );
     assert_eq!(
         Phase::Unavailable.advance(READY, later),
+        Phase::Settled { bloomed: None }
+    );
+}
+
+#[test]
+fn paper_waits_for_a_late_link_then_fades_and_settles() {
+    let start = Instant::now();
+    let pending = Signal {
+        arrival: Arrival::Fade,
+        ..WAITING
+    };
+    let ready = Signal {
+        code: true,
+        ..pending
+    };
+    let waiting = Phase::enter(pending, start);
+    assert_eq!(waiting, Phase::Waiting);
+    let opened = after(start, 4.);
+    assert_eq!(waiting.advance(pending, opened), waiting);
+    let fading = waiting.advance(ready, opened);
+    assert_eq!(fading, Phase::Fading { since: opened });
+    assert_eq!(fading.advance(ready, after(opened, FADE / 2.)), fading);
+    assert_eq!(
+        fading.advance(ready, after(opened, FADE)),
+        Phase::Settled { bloomed: None }
+    );
+    assert_eq!(waiting.advance(CLOSED, opened), Phase::Unavailable);
+    assert_eq!(
+        fading.advance(
+            Signal {
+                still: true,
+                ..ready
+            },
+            opened
+        ),
         Phase::Settled { bloomed: None }
     );
 }

@@ -78,23 +78,28 @@ impl Desktop {
     fn choose_share(&self, theme: Theme, layout: FlowLayout, cx: &Context<Self>) -> Div {
         let scene_scale = layout.scene_scale();
         let perch = Rc::clone(&self.intro_anchors.perch);
+        let spirit = Rc::clone(&self.intro_anchors.spirit);
         column()
             .relative()
             .items_center()
-            .child(scaled_spirit(
-                "share-spirit",
-                SpiritMood::Idle,
-                Tone::Mint,
-                scene_scale,
-                true,
-            ))
+            .child(
+                scaled_spirit(
+                    "share-spirit",
+                    SpiritMood::Idle,
+                    Tone::Mint,
+                    scene_scale,
+                    self.still(cx),
+                )
+                .anchor(&spirit),
+            )
             .child(self.share_prompt(theme, true, cx))
             .child(
                 canvas(
                     move |prompt, _, _| {
-                        perch.set(Some(Perch {
+                        perch.set(spirit.get().map(|spirit| Perch {
                             prompt,
                             scene_scale,
+                            spirit,
                         }));
                     },
                     |_, (), _, _| {},

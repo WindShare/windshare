@@ -1,7 +1,10 @@
 mod appearance;
+mod share_animation;
+mod share_animation_view;
 mod view;
 
 pub use appearance::{AppearanceSettings, select_appearance};
+pub use share_animation::{ShareAnimationSettings, select_share_animation};
 
 use std::{
     fs,
@@ -131,6 +134,7 @@ pub fn init(cx: &mut gpui::App) {
     let appearance = AppearanceSettings::load();
     cx.set_global(appearance.choice);
     cx.set_global(appearance);
+    cx.set_global(ShareAnimationSettings::load());
 }
 
 #[cfg(test)]

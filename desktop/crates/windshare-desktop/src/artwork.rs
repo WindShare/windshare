@@ -2,12 +2,15 @@ use gpui::{Point, point, px, size};
 use std::sync::LazyLock;
 use windshare_ui::{VectorArtwork, VectorSprite};
 
-static ARTWORK: LazyLock<[VectorArtwork; 4]> = LazyLock::new(|| {
+static ARTWORK: LazyLock<[VectorArtwork; 7]> = LazyLock::new(|| {
     [
         include_bytes!("../assets/spirit.svg").as_slice(),
         include_bytes!("../assets/spirit-happy.svg").as_slice(),
         include_bytes!("../assets/spirit-mark.svg").as_slice(),
         include_bytes!("../assets/spirit-super.svg").as_slice(),
+        include_bytes!("../assets/paper.svg").as_slice(),
+        include_bytes!("../assets/photo.svg").as_slice(),
+        include_bytes!("../assets/folder.svg").as_slice(),
     ]
     .map(|source| VectorArtwork::from_svg(source).expect("bundled vector artwork must be valid"))
 });
@@ -18,6 +21,9 @@ pub enum Artwork {
     Happy,
     BrandMark,
     Super,
+    Paper,
+    Photo,
+    Folder,
 }
 
 impl Artwork {

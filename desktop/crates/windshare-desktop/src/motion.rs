@@ -1,7 +1,12 @@
+pub mod paper;
+mod placement;
 mod shadow;
+mod share;
 mod spirit;
 pub mod whirl;
+pub use placement::{SpiritAnchor, SpiritPlacement};
 pub use shadow::ground_shadow;
+pub use share::ShareAnimation;
 pub use spirit::Spirit;
 
 use gpui::{
@@ -32,6 +37,7 @@ pub struct SpiritScene {
     center: Point<f32>,
     body_width: f32,
     reduced_motion: bool,
+    anchor: Option<SpiritAnchor>,
 }
 
 impl SpiritScene {
@@ -50,7 +56,13 @@ impl SpiritScene {
             center: Self::body_center(scale),
             body_width: Self::body_size(scale),
             reduced_motion,
+            anchor: None,
         }
+    }
+
+    pub fn anchor(mut self, anchor: &SpiritAnchor) -> Self {
+        self.anchor = Some(anchor.clone());
+        self
     }
 
     pub const fn width(scale: f32) -> f32 {
@@ -89,7 +101,11 @@ pub fn vacated_scene(tone: Tone, scale: f32) -> Div {
 /// function of the clock mounts this instead of calling from `render`.
 pub fn frame_ticker() -> Canvas<()> {
     canvas(
-        |_, window, _| window.request_animation_frame(),
+        |_, window, _| {
+            if window.is_visible() && window.is_window_active() {
+                window.request_animation_frame();
+            }
+        },
         |_, (), _, _| {},
     )
     .absolute()
@@ -124,13 +140,16 @@ impl RenderOnce for SpiritScene {
             .h(px(Self::height(self.scale)))
             .flex_shrink_0()
             .child(ground_shadow(self.tone, self.scale))
-            .child(Spirit::new(
-                "body",
-                self.mood,
-                self.center,
-                self.body_width,
-                self.reduced_motion,
-            ))
+            .child(
+                Spirit::new(
+                    "body",
+                    self.mood,
+                    self.center,
+                    self.body_width,
+                    self.reduced_motion,
+                )
+                .anchor(self.anchor),
+            )
     }
 }
 
