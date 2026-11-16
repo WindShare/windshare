@@ -165,6 +165,16 @@
           "accepted": false
         },
         {
+          "name": "decimal-final-label",
+          "relayBaseUrl": "https://relay.123",
+          "accepted": false
+        },
+        {
+          "name": "hex-final-label",
+          "relayBaseUrl": "https://relay.0x10:8443",
+          "accepted": false
+        },
+        {
           "name": "userinfo",
           "relayBaseUrl": "https://user:pass@relay.example/base",
           "accepted": false

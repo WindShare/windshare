@@ -118,6 +118,8 @@ func v2RelayEndpointCases() []v2RelayEndpointVector {
 		rejected("unicode-with-empty-punycode-label", "https://b\u00fccher.xn--.example"),
 		rejected("unicode-with-ascii-only-punycode-label", "https://b\u00fccher.xn--abc-.example"),
 		rejected("reserved-ascii-label", "https://ab--cd.example"),
+		rejected("decimal-final-label", "https://relay.123"),
+		rejected("hex-final-label", "https://relay.0x10:8443"),
 		rejected("userinfo", "https://user:pass@relay.example/base"),
 		rejected("fragment", "https://relay.example/base#redirect"),
 		rejected("dot-segment", "https://relay.example/a/../base"),
@@ -208,7 +210,7 @@ func canonicalizeV2RelayAuthority(u *url.URL) error {
 	canonicalHost := strings.ToLower(hostname)
 	if ip := net.ParseIP(hostname); ip != nil {
 		canonicalHost = strings.ToLower(ip.String())
-	} else if !validV2RelayDNSName(canonicalHost) || numericRelayHost(canonicalHost) {
+	} else if !validV2RelayDNSName(canonicalHost) || relayHostEndsInNumber(canonicalHost) {
 		return fmt.Errorf("relay host is invalid")
 	}
 	if (u.Scheme == "ws" && port == "80") || (u.Scheme == "wss" && port == "443") {
@@ -245,13 +247,15 @@ func validV2RelayDNSName(hostname string) bool {
 	return true
 }
 
-func numericRelayHost(hostname string) bool {
-	for _, character := range hostname {
-		if character != '.' && (character < '0' || character > '9') {
-			return false
-		}
+// relayHostEndsInNumber mirrors the WHATWG "ends in a number" host rule:
+// such names are IPv4 to browsers and the Rust relay, never DNS names.
+func relayHostEndsInNumber(hostname string) bool {
+	labels := strings.Split(strings.TrimSuffix(hostname, "."), ".")
+	last := labels[len(labels)-1]
+	if hex, ok := strings.CutPrefix(strings.ToLower(last), "0x"); ok {
+		return strings.Trim(hex, "0123456789abcdef") == ""
 	}
-	return true
+	return last != "" && strings.Trim(last, "0123456789") == ""
 }
 
 func validV2RelayQuery(query string) bool {

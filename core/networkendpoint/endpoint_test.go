@@ -75,3 +75,22 @@ func TestSTUNAuthorityCannotAcquireTransportOrCredentials(t *testing.T) {
 		}
 	}
 }
+
+// WHATWG URL parsers (the browser receiver and the Rust relay) treat a host
+// whose last label is a decimal or 0x-hex number as IPv4. Go must not send
+// such a name to DNS under an identity no other runtime can produce.
+func TestHostsEndingInNumberAreNotDNSNames(t *testing.T) {
+	for _, host := range []string{"0x7f.0.0.1", "relay.123", "relay.0x10", "relay.0X1f", "relay.0x", "relay.123.", "0x7f000001"} {
+		if got, err := NormalizeRelay("https://" + host + ":8443"); err == nil {
+			t.Errorf("relay %s accepted as %s", host, got.DialURL)
+		}
+		if got, err := NormalizeSTUN("stun:" + host + ":3478"); err == nil {
+			t.Errorf("STUN %s accepted as %s", host, got)
+		}
+	}
+	for _, host := range []string{"relay.example", "123.example", "relay.0x1g", "relay.x10", "192.0.2.1"} {
+		if _, err := NormalizeRelay("https://" + host); err != nil {
+			t.Errorf("relay %s rejected: %v", host, err)
+		}
+	}
+}
