@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -39,7 +40,7 @@ func TestReceiveCommandsKeepSeparateAdmissionContracts(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			app := &App{Stderr: &bytes.Buffer{}}
-			request, outcome := app.parseReceiveRequest(test.command, append([]string{encoded}, test.options...))
+			request, outcome := app.parseReceiveRequest(context.Background(), test.command, append([]string{encoded}, test.options...))
 			if outcome != test.outcome {
 				t.Fatalf("parse=%v want=%v", outcome, test.outcome)
 			}
@@ -60,7 +61,7 @@ func TestReceiveCommandsNormalizeEquivalentCatalogSelections(t *testing.T) {
 	for _, command := range []receiveCommand{receiveGet, receiveResumeRetry} {
 		t.Run(string(command), func(t *testing.T) {
 			app := &App{Stderr: &bytes.Buffer{}}
-			request, outcome := app.parseReceiveRequest(command, []string{
+			request, outcome := app.parseReceiveRequest(context.Background(), command, []string{
 				encoded, "--only", "tree/", "--only", "cafe\u0301/",
 				"--only", "tree", "--only", "caf\u00e9", "--only", " spaced ",
 			})
@@ -88,7 +89,7 @@ func TestInvalidReceiveSelectionReportsTheOptionBeforeRequestingAKey(t *testing.
 			var stderr bytes.Buffer
 			// No input stream or engine: invalid paths must stop at argument parsing.
 			app := &App{Stderr: &stderr}
-			_, outcome := app.parseReceiveRequest(command, []string{bare, "--only", path})
+			_, outcome := app.parseReceiveRequest(context.Background(), command, []string{bare, "--only", path})
 			if outcome != requestParseUsageFailure || !strings.Contains(stderr.String(), "--only") {
 				t.Fatalf("path=%q outcome=%d diagnostic=%q", path, outcome, stderr.String())
 			}

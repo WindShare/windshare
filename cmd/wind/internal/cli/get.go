@@ -12,6 +12,7 @@ import (
 
 	"github.com/windshare/windshare/adapters/filesystem"
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	"github.com/windshare/windshare/cmd/wind/internal/commandinput"
 	"github.com/windshare/windshare/cmd/wind/internal/networkcommand"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/link"
@@ -44,7 +45,7 @@ func (a *App) runGet(ctx context.Context, args []string) int {
 }
 
 func (a *App) runReceive(ctx context.Context, command receiveCommand, args []string) int {
-	request, parsed := a.parseReceiveRequest(command, args)
+	request, parsed := a.parseReceiveRequest(ctx, command, args)
 	if parsed != requestParseReady {
 		return parsed.exitCode()
 	}
@@ -85,7 +86,7 @@ const (
 	missingCapabilityKeyDiagnostic = "key string is required"
 )
 
-func (a *App) parseReceiveRequest(command receiveCommand, args []string) (receiveRequest, requestParseOutcome) {
+func (a *App) parseReceiveRequest(ctx context.Context, command receiveCommand, args []string) (receiveRequest, requestParseOutcome) {
 	name := string(command)
 	flags := a.newFlagSet(name)
 	admission := engine.ReceiveCreateOrResume
@@ -162,7 +163,11 @@ func (a *App) parseReceiveRequest(command receiveCommand, args []string) (receiv
 		a.writeCompleteLine("%s: connectivity must be auto, relay-only, or p2p-only", name)
 		return receiveRequest{}, requestParseUsageFailure
 	}
-	capability, err := a.resolveLink(positional[0], *keyString)
+	capability, err := a.resolveLink(ctx, positional[0], *keyString)
+	if ctx.Err() != nil {
+		a.writeCompleteLine("%s: cancelled", name)
+		return receiveRequest{}, requestParseCancelled
+	}
 	if err != nil {
 		if errors.Is(err, engine.ErrReceiveKeyRequired) {
 			a.writeCompleteLine("%s: %s", name, missingCapabilityKeyDiagnostic)
@@ -223,14 +228,14 @@ func normalizeReceiveSelection(requested []string) (receiveSelection, error) {
 	return receiveSelection{paths: paths, typed: typed}, nil
 }
 
-func (a *App) resolveLink(raw, keyString string) (link.Link, error) {
+func (a *App) resolveLink(ctx context.Context, raw, keyString string) (link.Link, error) {
 	input := engine.ReceiveLinkInput{URL: raw, SeparateKey: keyString}
 	capability, err := engine.ResolveReceiveLink(input)
 	if !errors.Is(err, engine.ErrReceiveKeyRequired) {
 		return capability, err
 	}
 	a.stderrLines().WriteLines("Link has no key; enter the key string: ")
-	line, readErr := bufio.NewReader(a.Stdin).ReadString('\n')
+	line, readErr := commandinput.ReadLine(ctx, bufio.NewReader(a.Stdin))
 	// Use the same trimming as --key and the browser key box.
 	line = link.TrimCopiedText(line)
 	if line == "" {

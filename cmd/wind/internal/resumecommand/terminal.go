@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/windshare/windshare/cmd/wind/internal/commandinput"
 	"golang.org/x/term"
 )
 
@@ -46,7 +47,7 @@ func (terminal stdioResumeConfirmationTerminal) ReadLine(
 		return "", err
 	}
 	terminal.output.WriteLines(prompt)
-	line, err := bufio.NewReader(terminal.input).ReadString('\n')
+	line, err := commandinput.ReadLine(ctx, bufio.NewReader(terminal.input))
 	if err != nil {
 		return "", errors.Join(errResumeConfirmationInput, err)
 	}

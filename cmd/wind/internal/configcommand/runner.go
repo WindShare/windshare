@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/windshare/windshare/cmd/wind/internal/commandinput"
 	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/turn"
@@ -72,7 +73,14 @@ func (runner Runner) Run(ctx context.Context, args []string) Result {
 		runner.writeLine("config import: cancelled; saved configuration was not changed")
 		return ResultFailure
 	}
-	config, err := runner.read(request.source)
+	config, err := commandinput.Read(ctx, func() (relayconfig.Config, error) {
+		return runner.read(request.source)
+	})
+	if ctx.Err() != nil {
+		log.Info("failed", "stage", "read", "reason", "cancelled")
+		runner.writeLine("config import: cancelled; saved configuration was not changed")
+		return ResultFailure
+	}
 	if err != nil {
 		if errors.Is(err, relayconfig.ErrFrontURL) {
 			log.Info("failed", "stage", "validate", "reason", "invalid_frontend", "error", err)
