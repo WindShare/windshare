@@ -104,14 +104,15 @@ func TestFailureContextCannotBeAttachedToTheWrongSemanticCode(t *testing.T) {
 	}
 }
 
-// Contention with another download must not share the unsafe-state message keys
-// used for real destination or checkpoint faults.
+// Storage contention does not identify its owner. Only operation admission can
+// report a matching download; neither case implies damaged output state.
 func TestDestinationContentionHasItsOwnMessageKey(t *testing.T) {
 	for code, want := range map[FailureCode]SafeMessageKey{
-		FailureOutputFileAlreadyActive: MessageOutputBusy,
-		FailureCheckpointBusy:          MessageOutputBusy,
-		FailureOutputStateIO:           MessageOutputFailed,
-		FailureCheckpointStateIO:       MessageCheckpointFailed,
+		FailureOutputOperationAlreadyRunning: MessageOutputOperationAlreadyRunning,
+		FailureOutputFileAlreadyActive:       MessageOutputBusy,
+		FailureCheckpointBusy:                MessageOutputBusy,
+		FailureOutputStateIO:                 MessageOutputFailed,
+		FailureCheckpointStateIO:             MessageCheckpointFailed,
 	} {
 		if got, ok := code.MessageKey(); !ok || got != want {
 			t.Errorf("%v message key = %v,%t; want %v", code, got, ok, want)

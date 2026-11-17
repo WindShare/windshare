@@ -21,7 +21,7 @@ type FailureCode uint8
 const (
 	FailureInvalidInput FailureCode = iota + 1
 	FailureOutputContract
-	FailureOutputFileAlreadyActive
+	FailureOutputOperationAlreadyRunning
 	FailureOutputNeedsAttention
 	FailureOutputOwnership
 	FailureOutputRecoveryUnavailable

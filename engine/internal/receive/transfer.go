@@ -487,7 +487,7 @@ func reportGetOutputAdmissionFailure(observation getObservation, err error) step
 	case errors.Is(err, ErrRetainedOutputMissing):
 		return observation.failCode(stepLocalFailure, FailureRetainedOutputMissing)
 	case errors.Is(err, errGetOutputOperationAlreadyRunning):
-		return observation.failCode(stepLocalFailure, FailureOutputFileAlreadyActive)
+		return observation.failCode(stepLocalFailure, FailureOutputOperationAlreadyRunning)
 	case errors.Is(err, errGetOutputOperationNeedsAttention):
 		return observation.failCode(stepLocalFailure, FailureOutputNeedsAttention)
 	case errors.Is(err, errGetOutputOperationAmbiguous):

@@ -79,6 +79,7 @@ const (
 	FailureOutputResourceBudget
 	FailureOutputMutationAmbiguous
 	FailureOutputContract
+	FailureOutputOperationAlreadyRunning
 	FailureOutputNeedsAttention
 	FailureDestinationCollision
 	FailureCheckpointRevisionConflict
@@ -283,6 +284,8 @@ func outputFailureDefinition(code FailureCode) (failureDefinition, bool) {
 		return failureDefinition{"output_mutation_ambiguous", MessageOutputFailed}, true
 	case FailureOutputContract:
 		return failureDefinition{"output_contract", MessageOutputFailed}, true
+	case FailureOutputOperationAlreadyRunning:
+		return failureDefinition{"output_operation_already_running", MessageOutputOperationAlreadyRunning}, true
 	case FailureOutputNeedsAttention:
 		return failureDefinition{"output_needs_attention", MessageOutputNeedsAttention}, true
 	case FailureDestinationCollision:

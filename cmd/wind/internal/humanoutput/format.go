@@ -189,30 +189,17 @@ func failureMessage(failure appobs.Failure) string {
 		message = "The content catalog is unavailable."
 	case appobs.MessageSessionFailed:
 		message = "The transfer session failed."
-	case appobs.MessageOutputFailed:
-		message = "The destination could not be updated safely."
-	case appobs.MessageOutputBusy:
-		message = "Another WindShare download is already using this destination. Let it finish there; nothing needs to be retried. If you stop it, run this command again to resume from its saved progress."
-	case appobs.MessageOutputRecoveryUnavailable:
-		message = "This destination supports retry only while WindShare stays open. Exiting discards unfinished progress; completed files stay."
-	case appobs.MessageCheckpointFailed:
-		message = "The recovery checkpoint could not be updated safely."
+	case appobs.MessageOutputFailed, appobs.MessageOutputBusy, appobs.MessageOutputOperationAlreadyRunning,
+		appobs.MessageOutputRecoveryUnavailable, appobs.MessageCheckpointFailed,
+		appobs.MessageOutputNeedsAttention, appobs.MessageDestinationCollision,
+		appobs.MessageCheckpointRevisionConflict, appobs.MessageCheckpointInvalid, appobs.MessageOwnedObjectUnknown:
+		message = outputFailureMessage(key)
 	case appobs.MessagePublicationFailed:
 		message = "The share link could not be published."
 	case appobs.MessageTraceIncomplete:
 		message = "The trace is incomplete."
 	case appobs.MessageTraceExists:
 		message = "The trace path already exists; prior evidence was preserved and command/output state was untouched. Choose a new --trace path, use --trace-dir, or omit tracing."
-	case appobs.MessageOutputNeedsAttention:
-		message = "The destination needs attention before the transfer can continue."
-	case appobs.MessageDestinationCollision:
-		message = "Existing destinations prevented one or more files from completing."
-	case appobs.MessageCheckpointRevisionConflict:
-		message = "Local resume data belongs to another source revision; no destination was replaced."
-	case appobs.MessageCheckpointInvalid:
-		message = "Local resume data has an invalid checkpoint binding; existing evidence was preserved."
-	case appobs.MessageOwnedObjectUnknown:
-		message = "Local resume data disagrees about which destination object it owns; no automatic change was made."
 	default:
 		message = "An unexpected error occurred."
 	}
@@ -224,6 +211,31 @@ func failureMessage(failure appobs.Failure) string {
 		message += " Path: " + escapedDisplay(path.Text())
 	}
 	return message
+}
+
+func outputFailureMessage(key appobs.SafeMessageKey) string {
+	switch key {
+	case appobs.MessageOutputBusy:
+		return "The destination is busy. Check for another WindShare command or a program holding its files open before retrying."
+	case appobs.MessageOutputOperationAlreadyRunning:
+		return "This download is already running at this destination. Check the running command; if the download stops before completing, rerun this command to resume."
+	case appobs.MessageOutputRecoveryUnavailable:
+		return "This destination supports retry only while WindShare stays open. Exiting discards unfinished progress; completed files stay."
+	case appobs.MessageCheckpointFailed:
+		return "The recovery checkpoint could not be updated safely."
+	case appobs.MessageOutputNeedsAttention:
+		return "The destination needs attention before the transfer can continue."
+	case appobs.MessageDestinationCollision:
+		return "Existing destinations prevented one or more files from completing."
+	case appobs.MessageCheckpointRevisionConflict:
+		return "Local resume data belongs to another source revision; no destination was replaced."
+	case appobs.MessageCheckpointInvalid:
+		return "Local resume data has an invalid checkpoint binding; existing evidence was preserved."
+	case appobs.MessageOwnedObjectUnknown:
+		return "Local resume data disagrees about which destination object it owns; no automatic change was made."
+	default:
+		return "The destination could not be updated safely."
+	}
 }
 
 func sourceFailureMessage(failure appobs.Failure) string {
