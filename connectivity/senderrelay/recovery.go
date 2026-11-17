@@ -190,8 +190,7 @@ func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, res
 	})
 	// Delivery uncertainty survives later failures: a lost acknowledgement can
 	// leave a registration that must be resumed and permanently revoked on stop.
-	var notSent *relayv2.RegistrationNotSentError
-	if !errors.As(err, &notSent) {
+	if _, notSent := errors.AsType[*relayv2.RegistrationNotSentError](err); !notSent {
 		lifecycle.mayHaveRegistered = true
 		lifecycle.resumeNext = true
 	}
@@ -222,8 +221,7 @@ func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, res
 }
 
 func classifyRegistrationFailure(resume bool, failure error) (resumeNext, terminal bool) {
-	var notSent *relayv2.RegistrationNotSentError
-	if errors.As(failure, &notSent) {
+	if _, notSent := errors.AsType[*relayv2.RegistrationNotSentError](failure); notSent {
 		// No new registration uncertainty was introduced. Keep the mode selected
 		// by earlier attempts, including an authenticated absent RESUME.
 		return resume, errors.Is(failure, relayv2.ErrProtocol)
