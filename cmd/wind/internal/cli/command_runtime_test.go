@@ -737,7 +737,7 @@ func newRuntimeTestSettlement(t *testing.T) clievent.TransferSettled {
 
 func newRuntimeTestSharingStopped(t *testing.T) clievent.SharingStopped {
 	t.Helper()
-	result, err := clievent.NewShareResult(clievent.ShareResultSpec{
+	result, err := clievent.NewShareResult(clievent.ShareResultSpec{Publication: clievent.SharePublished,
 		ExitCode: clievent.ExitSuccess,
 		Elapsed:  time.Second,
 	})

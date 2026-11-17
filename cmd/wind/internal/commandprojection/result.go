@@ -68,7 +68,11 @@ func ProjectShareResult(input engine.TaskResult[engine.ShareResult]) (clievent.S
 		return clievent.ShareResult{}, ErrInvalidProjection
 	}
 	failure := input.Failure
-	result, err := clievent.NewShareResult(clievent.ShareResultSpec{ExitCode: exit, Elapsed: input.Value.Elapsed, Failure: failure})
+	publication := clievent.ShareUnpublished
+	if input.Value.Ready {
+		publication = clievent.SharePublished
+	}
+	result, err := clievent.NewShareResult(clievent.ShareResultSpec{Publication: publication, ExitCode: exit, Elapsed: input.Value.Elapsed, Failure: failure})
 	if err != nil {
 		return clievent.ShareResult{}, ErrInvalidProjection
 	}

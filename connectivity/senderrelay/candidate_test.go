@@ -3,10 +3,13 @@ package senderrelay
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/windshare/windshare/transport/relayv2"
 )
@@ -84,5 +87,81 @@ func TestStopDoesNotUseDeploymentRegistrationAuthority(t *testing.T) {
 	}
 	if len(requests) != 1 || <-requests != "" {
 		t.Fatal("STOP used deployment registration authority")
+	}
+}
+
+func TestCleanupSkipsStopWhenNoUpgradeReachedRelay(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	clock := newSenderRelayTestClock()
+	ctx, stop := context.WithCancel(t.Context())
+	clock.wait = func(context.Context, time.Duration) error { stop(); return context.Canceled }
+	config := newSenderRelayTestConfig(t, nil, nil, clock)
+	config.Candidate = Candidate{PublicURL: server.URL}
+	lifecycle, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lifecycle.WaitReady(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("startup wait = %v, want caller cancellation", err)
+	}
+	if err := lifecycle.Cleanup(t.Context()); err != nil {
+		t.Fatalf("cleanup after rejected upgrades = %v", err)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("relay requests = %d, want only the rejected registration upgrade", got)
+	}
+}
+
+func TestCleanupStopsAfterUpgradeEvenWhenRegistrationFails(t *testing.T) {
+	clock := newSenderRelayTestClock()
+	ctx, stop := context.WithCancel(t.Context())
+	clock.wait = func(context.Context, time.Duration) error { stop(); return context.Canceled }
+	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
+		return Connection{}, errors.New("register acknowledgement lost")
+	}}
+	lifecycle, err := New(newSenderRelayTestConfig(t, nil, dialer, clock))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lifecycle.WaitReady(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("startup wait = %v, want caller cancellation", err)
+	}
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := lifecycle.Cleanup(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cleanup = %v, want an attempted STOP for possibly delivered registration", err)
+	}
+}
+
+func TestCleanupKeepsStopAfterLaterUpgradeFailure(t *testing.T) {
+	ctx, stop := context.WithCancel(t.Context())
+	var attempts atomic.Int32
+	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
+		if attempts.Add(1) == 1 {
+			return Connection{}, errors.New("register acknowledgement lost")
+		}
+		failure := &relayv2.RegistrationNotSentError{Cause: errors.New("websocket upgrade refused")}
+		stop()
+		return Connection{}, failure
+	}}
+	lifecycle, err := New(newSenderRelayTestConfig(t, nil, dialer, newSenderRelayTestClock()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lifecycle.WaitReady(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("startup wait = %v, want caller cancellation", err)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("registration attempts = %d, want an upgraded attempt then a failed upgrade", got)
+	}
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := lifecycle.Cleanup(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cleanup = %v, want STOP for the earlier possibly delivered registration", err)
 	}
 }

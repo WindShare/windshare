@@ -266,8 +266,13 @@ func TestGetResultUsesSettlementOwnedCountsAndDropsDiagnosticPathsAndCauses(t *t
 func TestShareAndCommandFailureProjectionNeverDeriveExitFromRenderer(t *testing.T) {
 	clean, err := ProjectShareResult(engine.TaskResult[engine.ShareResult]{
 		Outcome: engine.OutcomeStopped, Value: engine.ShareResult{Elapsed: time.Second}})
-	if err != nil || clean.ExitCode() != clievent.ExitSuccess || !clean.StoppedCleanly() {
+	if err != nil || clean.ExitCode() != clievent.ExitSuccess || !clean.StoppedCleanly() || clean.Publication() != clievent.ShareUnpublished {
 		t.Fatalf("clean share result = %+v err=%v", clean, err)
+	}
+	published, err := ProjectShareResult(engine.TaskResult[engine.ShareResult]{
+		Outcome: engine.OutcomeStopped, Value: engine.ShareResult{Ready: true}})
+	if err != nil || !published.StoppedCleanly() || published.Publication() != clievent.SharePublished {
+		t.Fatalf("published share result = %+v err=%v", published, err)
 	}
 	failed, err := ProjectShareResult(engine.TaskResult[engine.ShareResult]{
 		Outcome: engine.OutcomeFailed, FailureClass: engine.FailureNetwork, Err: opaqueCanaryError{"provider-secret"}, Failure: mustFailure(appobs.FailureUnexpected),

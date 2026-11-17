@@ -40,6 +40,28 @@ func TestTraceDistinguishesHistoricalDeliveryFromVerifiedContent(t *testing.T) {
 	}
 }
 
+func TestShareStopTraceDistinguishesPublicationFromCleanShutdown(t *testing.T) {
+	for _, publication := range []clievent.SharePublication{clievent.ShareUnpublished, clievent.SharePublished} {
+		result, err := clievent.NewShareResult(clievent.ShareResultSpec{Publication: publication, ExitCode: clievent.ExitSuccess})
+		if err != nil {
+			t.Fatal(err)
+		}
+		event, err := clievent.NewSharingStopped(result)
+		if err != nil {
+			t.Fatal(err)
+		}
+		record, err := encode(testRunIdentity(0x10), entryMetadata{sequence: 1, time: time.Unix(1, 0)}, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload, ok := record.Payload.(sharingStoppedPayload)
+		name, _ := publication.Name()
+		if !ok || payload.Publication != name || !payload.StoppedCleanly || payload.ExitCode != 0 {
+			t.Fatalf("share stop payload = %+v, want publication %q with clean exit", record.Payload, name)
+		}
+	}
+}
+
 func TestEncodeVisitsEveryEventWithSealedPayloads(t *testing.T) {
 	events := allTraceEvents(t)
 	if got, want := len(events), 15; got != want {
@@ -346,7 +368,7 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 		CountersExact:       false,
 		Failure:             failure,
 	}))
-	shareResult := mustValue(clievent.NewShareResult(clievent.ShareResultSpec{
+	shareResult := mustValue(clievent.NewShareResult(clievent.ShareResultSpec{Publication: clievent.SharePublished,
 		ExitCode: clievent.ExitSuccess,
 		Elapsed:  2 * time.Second,
 	}))

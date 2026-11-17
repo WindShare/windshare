@@ -8,6 +8,9 @@ import (
 	"time"
 )
 
+// DialStageWebSocket identifies WebSocket handshake timing observations.
+const DialStageWebSocket = "websocket"
+
 type DialStage struct {
 	Stage    string
 	Duration time.Duration

@@ -177,7 +177,6 @@ func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, res
 		descriptor = lifecycle.config.Descriptor
 	}
 	dialContext, cancel := context.WithTimeout(recovery, senderRelayAttemptTimeout)
-	lifecycle.resumeNext, lifecycle.attempted = true, true
 	dialOptions := lifecycle.config.Candidate.registrationDialOptions(lifecycle.config.LifecycleObservationCapacity, resume)
 	dialOptions.ObserveStage = func(stage relayv2.DialStage) {
 		event := attempt
@@ -189,6 +188,12 @@ func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, res
 		ResumeToken: lifecycle.config.ResumeToken, Descriptor: descriptor,
 		Dial: dialOptions,
 	})
+	// Delivery uncertainty survives later failures: a lost acknowledgement can
+	// leave a registration that must be resumed and permanently revoked on stop.
+	if _, notSent := errors.AsType[*relayv2.RegistrationNotSentError](err); !notSent {
+		lifecycle.mayHaveRegistered = true
+		lifecycle.resumeNext = true
+	}
 	if err == nil {
 		err = dialContext.Err()
 	}
@@ -216,6 +221,11 @@ func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, res
 }
 
 func classifyRegistrationFailure(resume bool, failure error) (resumeNext, terminal bool) {
+	if _, notSent := errors.AsType[*relayv2.RegistrationNotSentError](failure); notSent {
+		// No new registration uncertainty was introduced. Keep the mode selected
+		// by earlier attempts, including an authenticated absent RESUME.
+		return resume, errors.Is(failure, relayv2.ErrProtocol)
+	}
 	var relayError *relayv2.RelayError
 	if !errors.As(failure, &relayError) {
 		return true, errors.Is(failure, relayv2.ErrProtocol)

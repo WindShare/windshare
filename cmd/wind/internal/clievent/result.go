@@ -125,40 +125,66 @@ func (result TransferResult) Valid() bool {
 	return err == nil
 }
 
+type SharePublication uint8
+
+const (
+	ShareUnpublished SharePublication = iota + 1
+	SharePublished
+)
+
+func (publication SharePublication) Name() (string, bool) {
+	switch publication {
+	case ShareUnpublished:
+		return "unpublished", true
+	case SharePublished:
+		return "published", true
+	default:
+		return "", false
+	}
+}
+
 type ShareResultSpec struct {
-	ExitCode ExitCode
-	Elapsed  time.Duration
-	Failure  appobs.Failure
+	Publication SharePublication
+	ExitCode    ExitCode
+	Elapsed     time.Duration
+	Failure     appobs.Failure
 }
 
 type ShareResult struct {
-	exitCode   ExitCode
-	elapsed    time.Duration
-	failure    appobs.Failure
-	hasFailure bool
+	publication SharePublication
+	exitCode    ExitCode
+	elapsed     time.Duration
+	failure     appobs.Failure
+	hasFailure  bool
 }
 
 func NewShareResult(spec ShareResultSpec) (ShareResult, error) {
+	if _, valid := spec.Publication.Name(); !valid {
+		return ShareResult{}, ErrInvalidResult
+	}
 	hasFailure := spec.Failure.Valid()
 	if !spec.ExitCode.Valid() || spec.Elapsed < 0 ||
 		(spec.ExitCode == ExitSuccess) != !hasFailure || spec.ExitCode == ExitUsage || spec.ExitCode == ExitDrift {
 		return ShareResult{}, ErrInvalidResult
 	}
 	return ShareResult{
-		exitCode: spec.ExitCode, elapsed: spec.Elapsed,
+		publication: spec.Publication,
+		exitCode:    spec.ExitCode, elapsed: spec.Elapsed,
 		failure: spec.Failure, hasFailure: hasFailure,
 	}, nil
 }
 
-func (result ShareResult) ExitCode() ExitCode     { return result.exitCode }
-func (result ShareResult) Elapsed() time.Duration { return result.elapsed }
-func (result ShareResult) StoppedCleanly() bool   { return result.exitCode == ExitSuccess }
+func (result ShareResult) Publication() SharePublication { return result.publication }
+func (result ShareResult) ExitCode() ExitCode            { return result.exitCode }
+func (result ShareResult) Elapsed() time.Duration        { return result.elapsed }
+func (result ShareResult) StoppedCleanly() bool          { return result.exitCode == ExitSuccess }
 func (result ShareResult) Failure() (appobs.Failure, bool) {
 	return result.failure, result.hasFailure
 }
 func (result ShareResult) Valid() bool {
 	_, err := NewShareResult(ShareResultSpec{
-		ExitCode: result.exitCode, Elapsed: result.elapsed,
+		Publication: result.publication,
+		ExitCode:    result.exitCode, Elapsed: result.elapsed,
 		Failure: func() appobs.Failure {
 			if result.hasFailure {
 				return result.failure

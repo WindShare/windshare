@@ -91,11 +91,16 @@ func (enc *cliEncoder) encodeTransferSettled(event clievent.TransferSettled) err
 
 func (enc *cliEncoder) encodeSharingStopped(event clievent.SharingStopped) error {
 	result := event.Result()
+	publication, err := nameOf(result.Publication())
+	if err != nil {
+		return err
+	}
 	exitCode, ok := result.ExitCode().ProcessCode()
 	if !ok {
 		return errInvalidSchemaEvent
 	}
 	payload := sharingStoppedPayload{
+		Publication:     publication,
 		ExitCode:        exitCode,
 		ResultElapsedMS: signedDecimal(result.Elapsed().Milliseconds()),
 		StoppedCleanly:  result.StoppedCleanly(),

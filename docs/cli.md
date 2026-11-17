@@ -91,6 +91,8 @@ wind resume discard -o <directory> --item <N>
 
 Ctrl-C, SIGTERM, and SIGHUP request graceful shutdown and return the command's normal exit status. Repeated SIGTERM/SIGHUP keep cleanup running; a second Ctrl-C forces exit 130. `nohup` keeps ignoring SIGHUP.
 
+Canceling `share` before publication exits 0 after successful cleanup and reports that no link was published. The `sharing_stopped` trace event records `publication` as `unpublished` or `published`; exit 0 alone does not prove publication.
+
 ## Diagnostics
 
 - `-v`, `--verbose`: writes milestone and connection diagnostics to stderr (`share`, `get`, `config import`).

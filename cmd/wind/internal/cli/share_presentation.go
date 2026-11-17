@@ -24,11 +24,8 @@ func reportShareResult(runtime *commandRuntime, result engine.TaskResult[engine.
 		emitShareCommandFailure(runtime, ExitFailure, publicationErr)
 		return ExitFailure
 	}
-	if !result.Value.Ready {
+	if !result.Value.Ready && (result.Err != nil || result.CleanupError != nil) {
 		code := shareExitCode(result.FailureClass)
-		if result.Err == nil && result.CleanupError == nil {
-			code = ExitOK
-		}
 		if code != ExitOK {
 			emitShareCommandFailure(runtime, code, result.Err)
 		}

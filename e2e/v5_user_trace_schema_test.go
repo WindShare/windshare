@@ -202,6 +202,7 @@ func buildV5TracePayloadSchemas() map[string]*v5TraceObjectSchema {
 			v5TraceObjectField("failure", failure, true),
 		),
 		"sharing_stopped": v5TraceSchema(
+			v5TraceFields(v5TraceString, "publication"),
 			v5TraceFields(v5TraceInteger, "exit_code"),
 			v5TraceFields(v5TraceDecimal, "result_elapsed_ms"),
 			v5TraceFields(v5TraceBool, "stopped_cleanly"),
