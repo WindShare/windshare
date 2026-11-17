@@ -121,8 +121,7 @@ func TestCleanupStopsAfterUpgradeEvenWhenRegistrationFails(t *testing.T) {
 	clock := newSenderRelayTestClock()
 	ctx, stop := context.WithCancel(t.Context())
 	clock.wait = func(context.Context, time.Duration) error { stop(); return context.Canceled }
-	dialer := &senderRelayTestDialer{dial: func(_ context.Context, config relayv2.SenderConfig) (Connection, error) {
-		config.Dial.ObserveStage(relayv2.DialStage{Stage: relayv2.DialStageWebSocket})
+	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
 		return Connection{}, errors.New("register acknowledgement lost")
 	}}
 	lifecycle, err := New(newSenderRelayTestConfig(t, nil, dialer, clock))
@@ -142,13 +141,11 @@ func TestCleanupStopsAfterUpgradeEvenWhenRegistrationFails(t *testing.T) {
 func TestCleanupKeepsStopAfterLaterUpgradeFailure(t *testing.T) {
 	ctx, stop := context.WithCancel(t.Context())
 	var attempts atomic.Int32
-	dialer := &senderRelayTestDialer{dial: func(_ context.Context, config relayv2.SenderConfig) (Connection, error) {
+	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
 		if attempts.Add(1) == 1 {
-			config.Dial.ObserveStage(relayv2.DialStage{Stage: relayv2.DialStageWebSocket})
 			return Connection{}, errors.New("register acknowledgement lost")
 		}
-		failure := errors.New("websocket upgrade refused")
-		config.Dial.ObserveStage(relayv2.DialStage{Stage: relayv2.DialStageWebSocket, Failure: failure})
+		failure := &relayv2.RegistrationNotSentError{Cause: errors.New("websocket upgrade refused")}
 		stop()
 		return Connection{}, failure
 	}}

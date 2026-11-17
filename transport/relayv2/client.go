@@ -81,25 +81,39 @@ type SenderConnection struct {
 	stats    RegistrationStats
 }
 
+// RegistrationNotSentError proves this DialSender call failed before attempting
+// any REGISTER/RESUME writes. Other failures may have left a remote registration.
+// Wrappers that retry must retain uncertainty from every attempt, independently
+// of whether dial observations are enabled.
+type RegistrationNotSentError struct {
+	Cause error
+}
+
+func (err *RegistrationNotSentError) Error() string {
+	return "relay registration not sent: " + err.Cause.Error()
+}
+
+func (err *RegistrationNotSentError) Unwrap() error { return err.Cause }
+
 func DialSender(ctx context.Context, config SenderConfig) (_ *SenderConnection, failure error) {
 	capacity, err := normalizeReceiveCapacity(config.Dial.ReceiveCapacity)
 	if err != nil {
-		return nil, err
+		return nil, &RegistrationNotSentError{Cause: err}
 	}
 	config.Dial.ReceiveCapacity = capacity
 	if config.Dial.LifecycleObservationCapacity < 0 {
-		return nil, ErrLifecycleObservationCapacity
+		return nil, &RegistrationNotSentError{Cause: ErrLifecycleObservationCapacity}
 	}
 	if _, err := config.Dial.Heartbeat.Normalize(); err != nil {
-		return nil, err
+		return nil, &RegistrationNotSentError{Cause: err}
 	}
 	endpoint, err := validateSenderRegistration(config)
 	if err != nil {
-		return nil, err
+		return nil, &RegistrationNotSentError{Cause: err}
 	}
 	socket, err := config.Dial.dial(ctx, endpoint.DialURL)
 	if err != nil {
-		return nil, err
+		return nil, &RegistrationNotSentError{Cause: err}
 	}
 	socket.SetReadLimit(registrationReadLimit)
 	admissionStarted := time.Now()

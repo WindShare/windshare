@@ -163,7 +163,7 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 	if err != nil {
 		t.Fatal(err)
 	}
-	shareResult, err := clievent.NewShareResult(clievent.ShareResultSpec{ExitCode: clievent.ExitSuccess})
+	shareResult, err := clievent.NewShareResult(clievent.ShareResultSpec{Publication: clievent.SharePublished, ExitCode: clievent.ExitSuccess})
 	if err != nil {
 		t.Fatal(err)
 	}

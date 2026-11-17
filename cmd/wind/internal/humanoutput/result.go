@@ -135,6 +135,9 @@ func countedResultNoun(result clievent.TransferResult, count uint64, singular, p
 
 func formatShareResult(result clievent.ShareResult, symbols Symbols) terminalcanvas.Line {
 	if result.StoppedCleanly() {
+		if result.Publication() == clievent.ShareUnpublished {
+			return statusLine(symbols.Success, "Sharing canceled; no link was published", terminalcanvas.StyleSuccess)
+		}
 		// No sender traffic total exists with stable multi-receiver semantics yet.
 		return statusLine(symbols.Success, "Sharing stopped", terminalcanvas.StyleSuccess)
 	}

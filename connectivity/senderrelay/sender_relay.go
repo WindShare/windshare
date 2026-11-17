@@ -84,7 +84,7 @@ type Lifecycle struct {
 	generation        uint64
 	wake              chan struct{}
 	availability      func(bool)
-	attempted         bool
+	mayHaveRegistered bool
 }
 
 func New(config Config) (*Lifecycle, error) {
@@ -120,15 +120,15 @@ func New(config Config) (*Lifecycle, error) {
 	config.Initial = nil
 	recoveryContext, cancel := context.WithCancel(context.Background())
 	lifecycle := &Lifecycle{
-		config:          config,
-		resume:          resume,
-		stopID:          stopID,
-		connection:      connection,
-		recoveryContext: recoveryContext,
-		cancelRecovery:  cancel,
-		resumeNext:      connection.valid(),
-		attempted:       connection.valid(),
-		wake:            make(chan struct{}, 1),
+		config:            config,
+		resume:            resume,
+		stopID:            stopID,
+		connection:        connection,
+		recoveryContext:   recoveryContext,
+		cancelRecovery:    cancel,
+		resumeNext:        connection.valid(),
+		mayHaveRegistered: connection.valid(),
+		wake:              make(chan struct{}, 1),
 	}
 	lifecycle.connection = lifecycle.trackObservationConnection(connection)
 	if connection.valid() {
@@ -297,7 +297,7 @@ func (lifecycle *Lifecycle) Cleanup(ctx context.Context) error {
 		lifecycle.recoveryMu.Lock()
 		defer lifecycle.recoveryMu.Unlock()
 		var stopErr error
-		if lifecycle.attempted {
+		if lifecycle.mayHaveRegistered {
 			stopErr = relayv2.Stop(ctx, relayv2.StopConfig{
 				RelayBaseURL:     lifecycle.config.Candidate.PublicURL,
 				ShareID:          lifecycle.config.Fresh.ShareID,

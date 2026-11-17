@@ -78,7 +78,7 @@ func TestTransferResultVocabularyAndOutcomeAuthority(t *testing.T) {
 
 func TestShareResultNeverInfersTrafficTotals(t *testing.T) {
 	t.Parallel()
-	clean, err := clievent.NewShareResult(clievent.ShareResultSpec{ExitCode: clievent.ExitSuccess, Elapsed: time.Hour})
+	clean, err := clievent.NewShareResult(clievent.ShareResultSpec{Publication: clievent.SharePublished, ExitCode: clievent.ExitSuccess, Elapsed: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestShareResultNeverInfersTrafficTotals(t *testing.T) {
 		t.Fatalf("clean share result = %q", text)
 	}
 
-	failed, err := clievent.NewShareResult(clievent.ShareResultSpec{
+	failed, err := clievent.NewShareResult(clievent.ShareResultSpec{Publication: clievent.SharePublished,
 		ExitCode: clievent.ExitNetwork, Failure: mustFailure(t, appobs.FailureRelayTransport),
 	})
 	if err != nil {

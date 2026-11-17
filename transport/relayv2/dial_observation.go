@@ -8,8 +8,7 @@ import (
 	"time"
 )
 
-// DialStageWebSocket reports the WebSocket upgrade. Its failure proves no
-// relay control bytes were written on that attempt.
+// DialStageWebSocket identifies WebSocket handshake timing observations.
 const DialStageWebSocket = "websocket"
 
 type DialStage struct {

@@ -256,7 +256,7 @@ func terminalTransfer(t *testing.T, status clievent.ResultStatus) clievent.Trans
 func terminalShareFailure(t *testing.T) clievent.SharingStopped {
 	t.Helper()
 	failure, _ := appobs.NewFailure(appobs.FailureRelayTransport)
-	result, err := clievent.NewShareResult(clievent.ShareResultSpec{
+	result, err := clievent.NewShareResult(clievent.ShareResultSpec{Publication: clievent.SharePublished,
 		ExitCode: clievent.ExitNetwork, Elapsed: time.Second, Failure: failure,
 	})
 	if err != nil {

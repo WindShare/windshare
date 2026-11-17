@@ -27,7 +27,7 @@ func TestApplicationFactsAndCommandResultsValidate(t *testing.T) {
 		Destination: appobs.NewDisplayPath("result"), CountersExact: true,
 	})
 	settled, _ := NewTransferSettled(transferResult)
-	shareResult, _ := NewShareResult(ShareResultSpec{ExitCode: ExitSuccess})
+	shareResult, _ := NewShareResult(ShareResultSpec{Publication: SharePublished, ExitCode: ExitSuccess})
 	stopped, _ := NewSharingStopped(shareResult)
 	incomplete, _ := NewTraceIncomplete(CommandGet, TraceIncompleteWriter, TraceLoss{})
 	sessionID, _ := appobs.NewProtocolSessionID(bytes16(3))

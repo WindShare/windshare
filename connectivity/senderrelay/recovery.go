@@ -5,7 +5,6 @@ import (
 	"errors"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
-	"sync/atomic"
 	"time"
 )
 
@@ -178,13 +177,8 @@ func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, res
 		descriptor = lifecycle.config.Descriptor
 	}
 	dialContext, cancel := context.WithTimeout(recovery, senderRelayAttemptTimeout)
-	lifecycle.resumeNext = true
-	var upgradeFailed atomic.Bool
 	dialOptions := lifecycle.config.Candidate.registrationDialOptions(lifecycle.config.LifecycleObservationCapacity, resume)
 	dialOptions.ObserveStage = func(stage relayv2.DialStage) {
-		if stage.Stage == relayv2.DialStageWebSocket && stage.Failure != nil {
-			upgradeFailed.Store(true)
-		}
 		event := attempt
 		event.State, event.Stage, event.Duration, event.Failure = AttemptStage, stage.Stage, stage.Duration, stage.Failure
 		lifecycle.observeRecoveryAttempt(event)
@@ -194,11 +188,12 @@ func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, res
 		ResumeToken: lifecycle.config.ResumeToken, Descriptor: descriptor,
 		Dial: dialOptions,
 	})
-	// Only an attempt that could have delivered REGISTER/RESUME needs a STOP.
-	// Sending one after a failed upgrade cannot revoke anything, yet it makes
-	// shutdown wait on, and report, the same unreachable relay.
-	if !upgradeFailed.Load() {
-		lifecycle.attempted = true
+	// Delivery uncertainty survives later failures: a lost acknowledgement can
+	// leave a registration that must be resumed and permanently revoked on stop.
+	var notSent *relayv2.RegistrationNotSentError
+	if !errors.As(err, &notSent) {
+		lifecycle.mayHaveRegistered = true
+		lifecycle.resumeNext = true
 	}
 	if err == nil {
 		err = dialContext.Err()
@@ -227,6 +222,12 @@ func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, res
 }
 
 func classifyRegistrationFailure(resume bool, failure error) (resumeNext, terminal bool) {
+	var notSent *relayv2.RegistrationNotSentError
+	if errors.As(failure, &notSent) {
+		// No new registration uncertainty was introduced. Keep the mode selected
+		// by earlier attempts, including an authenticated absent RESUME.
+		return resume, errors.Is(failure, relayv2.ErrProtocol)
+	}
 	var relayError *relayv2.RelayError
 	if !errors.As(failure, &relayError) {
 		return true, errors.Is(failure, relayv2.ErrProtocol)

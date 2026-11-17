@@ -65,6 +65,8 @@ func (connection Connection) CompleteObservations() relayv2.LifecycleObservation
 	return completer.CompleteObservations()
 }
 
+// Dialer owns the complete attempt outcome. RegistrationNotSentError proves no
+// registration was sent by any internal attempt; observations never own policy.
 type Dialer interface {
 	Dial(context.Context, relayv2.SenderConfig) (Connection, error)
 }

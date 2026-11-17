@@ -41,6 +41,7 @@ type transferSettledPayload struct {
 func (transferSettledPayload) ObservationPayload() {}
 
 type sharingStoppedPayload struct {
+	Publication     string        `json:"publication"`
 	ExitCode        int           `json:"exit_code"`
 	ResultElapsedMS string        `json:"result_elapsed_ms"`
 	StoppedCleanly  bool          `json:"stopped_cleanly"`
