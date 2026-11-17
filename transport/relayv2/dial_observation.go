@@ -8,6 +8,10 @@ import (
 	"time"
 )
 
+// DialStageWebSocket reports the WebSocket upgrade. Its failure proves no
+// relay control bytes were written on that attempt.
+const DialStageWebSocket = "websocket"
+
 type DialStage struct {
 	Stage    string
 	Duration time.Duration

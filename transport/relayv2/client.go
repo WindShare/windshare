@@ -46,7 +46,7 @@ func (options DialOptions) dial(ctx context.Context, target string) (_ BinarySoc
 	started := time.Now()
 	if options.ObserveStage != nil {
 		defer func() {
-			options.ObserveStage(DialStage{Stage: "websocket", Duration: time.Since(started), Failure: failure})
+			options.ObserveStage(DialStage{Stage: DialStageWebSocket, Duration: time.Since(started), Failure: failure})
 		}()
 		ctx = traceDial(ctx, options.ObserveStage)
 	}
