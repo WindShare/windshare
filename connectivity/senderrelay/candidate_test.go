@@ -138,3 +138,33 @@ func TestCleanupStopsAfterUpgradeEvenWhenRegistrationFails(t *testing.T) {
 		t.Fatalf("cleanup = %v, want an attempted STOP for possibly delivered registration", err)
 	}
 }
+
+func TestCleanupKeepsStopAfterLaterUpgradeFailure(t *testing.T) {
+	ctx, stop := context.WithCancel(t.Context())
+	var attempts atomic.Int32
+	dialer := &senderRelayTestDialer{dial: func(_ context.Context, config relayv2.SenderConfig) (Connection, error) {
+		if attempts.Add(1) == 1 {
+			config.Dial.ObserveStage(relayv2.DialStage{Stage: relayv2.DialStageWebSocket})
+			return Connection{}, errors.New("register acknowledgement lost")
+		}
+		failure := errors.New("websocket upgrade refused")
+		config.Dial.ObserveStage(relayv2.DialStage{Stage: relayv2.DialStageWebSocket, Failure: failure})
+		stop()
+		return Connection{}, failure
+	}}
+	lifecycle, err := New(newSenderRelayTestConfig(t, nil, dialer, newSenderRelayTestClock()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lifecycle.WaitReady(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("startup wait = %v, want caller cancellation", err)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("registration attempts = %d, want an upgraded attempt then a failed upgrade", got)
+	}
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := lifecycle.Cleanup(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cleanup = %v, want STOP for the earlier possibly delivered registration", err)
+	}
+}
