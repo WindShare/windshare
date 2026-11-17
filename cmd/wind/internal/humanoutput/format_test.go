@@ -74,6 +74,24 @@ func TestStoppedShareMessageNamesTheSenderDecision(t *testing.T) {
 	}
 }
 
+// A second download into a destination that another download is still using is
+// lock contention, not unsafe destination or checkpoint state.
+func TestBusyDestinationMessageNamesTheOtherDownload(t *testing.T) {
+	t.Parallel()
+	for _, code := range []appobs.FailureCode{appobs.FailureOutputFileAlreadyActive, appobs.FailureCheckpointBusy} {
+		message := failureMessage(mustFailure(t, code))
+		if !strings.Contains(message, "Another download is already using this destination") ||
+			strings.Contains(message, "could not be updated safely") {
+			t.Errorf("failureMessage(%v) = %q", code, message)
+		}
+	}
+	for _, code := range []appobs.FailureCode{appobs.FailureOutputStateIO, appobs.FailureCheckpointStateIO} {
+		if message := failureMessage(mustFailure(t, code)); !strings.Contains(message, "could not be updated safely") {
+			t.Errorf("failureMessage(%v) = %q", code, message)
+		}
+	}
+}
+
 func TestFailureMessagesCoverClosedVocabulary(t *testing.T) {
 	t.Parallel()
 	codes := []appobs.FailureCode{

@@ -191,6 +191,8 @@ func failureMessage(failure appobs.Failure) string {
 		message = "The transfer session failed."
 	case appobs.MessageOutputFailed:
 		message = "The destination could not be updated safely."
+	case appobs.MessageOutputBusy:
+		message = "Another download is already using this destination. Wait for it to finish or stop it, then retry."
 	case appobs.MessageOutputRecoveryUnavailable:
 		message = "This destination supports retry only while WindShare stays open. Exiting discards unfinished progress; completed files stay."
 	case appobs.MessageCheckpointFailed:
