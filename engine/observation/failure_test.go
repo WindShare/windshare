@@ -103,3 +103,19 @@ func TestFailureContextCannotBeAttachedToTheWrongSemanticCode(t *testing.T) {
 		t.Fatal("accepted retry context for non-retryable relay code")
 	}
 }
+
+// Storage contention does not identify its owner. Only operation admission can
+// report a matching download; neither case implies damaged output state.
+func TestDestinationContentionHasItsOwnMessageKey(t *testing.T) {
+	for code, want := range map[FailureCode]SafeMessageKey{
+		FailureOutputOperationAlreadyRunning: MessageOutputOperationAlreadyRunning,
+		FailureOutputFileAlreadyActive:       MessageOutputBusy,
+		FailureCheckpointBusy:                MessageOutputBusy,
+		FailureOutputStateIO:                 MessageOutputFailed,
+		FailureCheckpointStateIO:             MessageCheckpointFailed,
+	} {
+		if got, ok := code.MessageKey(); !ok || got != want {
+			t.Errorf("%v message key = %v,%t; want %v", code, got, ok, want)
+		}
+	}
+}

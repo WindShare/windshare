@@ -10,18 +10,18 @@ type ReceiveLocalStopReason = receive.ReceiverLocalStopReason
 type ReceiveContentPath = receive.ContentPath
 
 const (
-	ReceiveFailureInvalidInput              = receive.FailureInvalidInput
-	ReceiveFailureOutputContract            = receive.FailureOutputContract
-	ReceiveFailureOutputFileAlreadyActive   = receive.FailureOutputFileAlreadyActive
-	ReceiveFailureOutputNeedsAttention      = receive.FailureOutputNeedsAttention
-	ReceiveFailureOutputOwnership           = receive.FailureOutputOwnership
-	ReceiveFailureOutputRecoveryUnavailable = receive.FailureOutputRecoveryUnavailable
-	ReceiveFailureRetainedOutputMissing     = receive.FailureRetainedOutputMissing
-	ReceiveFailurePeerConfiguration         = receive.FailurePeerConfiguration
-	ReceiveFailurePeerNegotiation           = receive.FailurePeerNegotiation
-	ReceiveFailurePeerProtocol              = receive.FailurePeerProtocol
-	ReceiveFailurePeerSignaling             = receive.FailurePeerSignaling
-	ReceiveFailurePeerStopped               = receive.FailurePeerStopped
+	ReceiveFailureInvalidInput                  = receive.FailureInvalidInput
+	ReceiveFailureOutputContract                = receive.FailureOutputContract
+	ReceiveFailureOutputOperationAlreadyRunning = receive.FailureOutputOperationAlreadyRunning
+	ReceiveFailureOutputNeedsAttention          = receive.FailureOutputNeedsAttention
+	ReceiveFailureOutputOwnership               = receive.FailureOutputOwnership
+	ReceiveFailureOutputRecoveryUnavailable     = receive.FailureOutputRecoveryUnavailable
+	ReceiveFailureRetainedOutputMissing         = receive.FailureRetainedOutputMissing
+	ReceiveFailurePeerConfiguration             = receive.FailurePeerConfiguration
+	ReceiveFailurePeerNegotiation               = receive.FailurePeerNegotiation
+	ReceiveFailurePeerProtocol                  = receive.FailurePeerProtocol
+	ReceiveFailurePeerSignaling                 = receive.FailurePeerSignaling
+	ReceiveFailurePeerStopped                   = receive.FailurePeerStopped
 
 	ReceiveLocalStopNone                  = receive.ReceiverLocalStopNone
 	ReceiveLocalStopCaller                = receive.ReceiverLocalStopCaller

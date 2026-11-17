@@ -79,6 +79,7 @@ const (
 	FailureOutputResourceBudget
 	FailureOutputMutationAmbiguous
 	FailureOutputContract
+	FailureOutputOperationAlreadyRunning
 	FailureOutputNeedsAttention
 	FailureDestinationCollision
 	FailureCheckpointRevisionConflict
@@ -276,13 +277,15 @@ func outputFailureDefinition(code FailureCode) (failureDefinition, bool) {
 	case FailureOutputDirectoryMetadata:
 		return failureDefinition{"output_directory_metadata", MessageOutputFailed}, true
 	case FailureOutputFileAlreadyActive:
-		return failureDefinition{"output_file_already_active", MessageOutputFailed}, true
+		return failureDefinition{"output_file_already_active", MessageOutputBusy}, true
 	case FailureOutputResourceBudget:
 		return failureDefinition{"output_resource_budget", MessageOutputFailed}, true
 	case FailureOutputMutationAmbiguous:
 		return failureDefinition{"output_mutation_ambiguous", MessageOutputFailed}, true
 	case FailureOutputContract:
 		return failureDefinition{"output_contract", MessageOutputFailed}, true
+	case FailureOutputOperationAlreadyRunning:
+		return failureDefinition{"output_operation_already_running", MessageOutputOperationAlreadyRunning}, true
 	case FailureOutputNeedsAttention:
 		return failureDefinition{"output_needs_attention", MessageOutputNeedsAttention}, true
 	case FailureDestinationCollision:
@@ -294,7 +297,7 @@ func outputFailureDefinition(code FailureCode) (failureDefinition, bool) {
 	case FailureOwnedObjectUnknown:
 		return failureDefinition{"owned_object_unknown", MessageOwnedObjectUnknown}, true
 	case FailureCheckpointBusy:
-		return failureDefinition{"checkpoint_busy", MessageCheckpointFailed}, true
+		return failureDefinition{"checkpoint_busy", MessageOutputBusy}, true
 	case FailureCheckpointCorruptRecord:
 		return failureDefinition{"checkpoint_corrupt_record", MessageCheckpointFailed}, true
 	case FailureCheckpointUnsafeInstall:

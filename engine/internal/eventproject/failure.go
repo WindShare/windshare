@@ -328,8 +328,8 @@ func ReceiveFailureCode(code receive.FailureCode) (appobs.FailureCode, bool) {
 		return appobs.FailureInvalidInput, true
 	case receive.FailureOutputContract:
 		return appobs.FailureOutputContract, true
-	case receive.FailureOutputFileAlreadyActive:
-		return appobs.FailureOutputFileAlreadyActive, true
+	case receive.FailureOutputOperationAlreadyRunning:
+		return appobs.FailureOutputOperationAlreadyRunning, true
 	case receive.FailureOutputNeedsAttention:
 		return appobs.FailureOutputNeedsAttention, true
 	case receive.FailureOutputOwnership:

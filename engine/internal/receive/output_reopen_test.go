@@ -179,6 +179,11 @@ func TestResolveGetOutputOperationReopensBeforeShapeAndRefusesConcurrentLease(t 
 	if !errors.Is(err, errGetOutputOperationAlreadyRunning) || contendingResolver.calls != 0 {
 		t.Fatalf("contending error=%v shape_calls=%d", err, contendingResolver.calls)
 	}
+	observation := getObservation{observationState: &observationState{}}
+	if result := reportGetOutputAdmissionFailure(observation, err); result != stepLocalFailure ||
+		observation.failureSnapshot().Code != FailureOutputOperationAlreadyRunning {
+		t.Fatalf("matching operation lost its admission failure: %+v", observation.failureSnapshot())
+	}
 	if err := contendingAuthority.Close(); err != nil {
 		t.Fatal(err)
 	}
