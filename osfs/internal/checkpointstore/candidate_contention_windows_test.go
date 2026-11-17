@@ -45,7 +45,10 @@ func TestForeignReadHandleReportsCheckpointContentionWithoutRunningOperation(t *
 	foreignReader := os.NewFile(uintptr(handle), lockPath)
 	defer foreignReader.Close()
 	blocked, lookup, err := registry.BeginActive(fixture.key)
-	defer blocked.Close()
+	if err == nil {
+		_ = blocked.Close()
+		t.Fatal("admitted a download while the foreign handle denies write sharing")
+	}
 	if !errors.Is(err, windows.ERROR_SHARING_VIOLATION) || lookup.State().Valid() {
 		t.Fatalf("foreign handle became an active operation: lookup=%v err=%v", lookup.State(), err)
 	}
@@ -58,8 +61,11 @@ func TestForeignReadHandleReportsCheckpointContentionWithoutRunningOperation(t *
 		t.Fatal(err)
 	}
 	admission, lookup, err := registry.BeginActive(fixture.key)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer admission.Close()
-	if err != nil || lookup.State() != ActiveLookupNone {
-		t.Fatalf("released foreign handle did not allow a new download: %v, %v", lookup.State(), err)
+	if lookup.State() != ActiveLookupNone {
+		t.Fatalf("released foreign handle did not allow a new download: %v", lookup.State())
 	}
 }
