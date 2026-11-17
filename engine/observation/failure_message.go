@@ -40,6 +40,9 @@ const (
 	MessageSelectionCollision
 	MessageShareStopped
 	MessageOutputBusy
+
+	// messageKeyLimit must stay last; it is not a valid key.
+	messageKeyLimit
 )
 
 var safeMessageKeyNames = [...]string{
@@ -81,6 +84,10 @@ var safeMessageKeyNames = [...]string{
 	MessageShareStopped:               "share_stopped",
 	MessageOutputBusy:                 "output_busy",
 }
+
+// Every declared key must have a table entry: this fails to compile when the
+// table and the constant list differ in length.
+var _ [0]struct{} = [len(safeMessageKeyNames) - int(messageKeyLimit)]struct{}{}
 
 func (value SafeMessageKey) Name() (string, bool) {
 	if value < MessageUnexpected || int(value) >= len(safeMessageKeyNames) {

@@ -80,7 +80,12 @@ func TestBusyDestinationMessageNamesTheOtherDownload(t *testing.T) {
 	t.Parallel()
 	for _, code := range []appobs.FailureCode{appobs.FailureOutputFileAlreadyActive, appobs.FailureCheckpointBusy} {
 		message := failureMessage(mustFailure(t, code))
-		if !strings.Contains(message, "Another download is already using this destination") ||
+		// Rerunning after the other download completes starts a second copy, so
+		// the message may only suggest running again after stopping it.
+		if !strings.Contains(message, "Another WindShare download is already using this destination") ||
+			!strings.Contains(message, "nothing needs to be retried") ||
+			!strings.Contains(message, "If you stop it, run this command again to resume") ||
+			strings.Contains(message, "finish or stop it, then retry") ||
 			strings.Contains(message, "could not be updated safely") {
 			t.Errorf("failureMessage(%v) = %q", code, message)
 		}

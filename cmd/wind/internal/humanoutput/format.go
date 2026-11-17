@@ -192,7 +192,7 @@ func failureMessage(failure appobs.Failure) string {
 	case appobs.MessageOutputFailed:
 		message = "The destination could not be updated safely."
 	case appobs.MessageOutputBusy:
-		message = "Another download is already using this destination. Wait for it to finish or stop it, then retry."
+		message = "Another WindShare download is already using this destination. Let it finish there; nothing needs to be retried. If you stop it, run this command again to resume from its saved progress."
 	case appobs.MessageOutputRecoveryUnavailable:
 		message = "This destination supports retry only while WindShare stays open. Exiting discards unfinished progress; completed files stay."
 	case appobs.MessageCheckpointFailed:
