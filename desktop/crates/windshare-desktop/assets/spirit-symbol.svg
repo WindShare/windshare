@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">
+  <title>WindShare</title>
+  <!-- A single-layer luminous mint silhouette and low-set tilted eyes maximize graphic clarity at 16–20 px without an inner face boundary. -->
+  <defs>
+    <radialGradient id="spirit-mint" cx="14.4" cy="12.6" r="10.8" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#D4FAE6"/>
+      <stop offset="0.58" stop-color="#9EEBC2"/>
+      <stop offset="1" stop-color="#6FD4A2"/>
+    </radialGradient>
+  </defs>
+  <path d="M7.77 19.77
+    C4.45 20 1.97 18.42 0.79 16
+    C2.59 16.68 4.28 16.28 5.35 15.04
+    C3.61 14.93 2.37 13.92 1.92 12.39
+    C3.21 13.18 4.51 12.96 5.46 12.06
+    C4.06 9.86 5.52 7.15 8 6.93
+    C7.83 4.68 9.52 2.93 11.72 3.27
+    C12.9 1.52 15.38 1.41 16.9 2.93
+    C18.03 4.06 18.31 5.52 17.8 6.76
+    C20.56 7.1 22.59 9.18 22.59 11.83
+    C23.77 13.58 23.21 15.83 21.63 17.07
+    C21.52 19.55 19.32 21.35 16.79 20.85
+    C14.48 22.59 10.03 22.14 7.77 19.77Z"
+    fill="url(#spirit-mint)" stroke="#27654E" stroke-width="1.24" stroke-linejoin="round"/>
+  <g transform="rotate(-6 14.45 13.35)" fill="#153D2E">
+    <ellipse cx="11.9" cy="13.35" rx="1.12" ry="1.62"/>
+    <ellipse cx="17" cy="13.35" rx="1.12" ry="1.62"/>
+  </g>
+</svg>
