@@ -1,3 +1,5 @@
+import { message } from '../ui/locale'
+import { relayCopy } from './locales'
 import { request, RequestError } from '../ui/request'
 
 export interface Capabilities {
@@ -25,15 +27,15 @@ export interface TurnStatus {
 }
 export interface TurnUsage { first_date: string; last_date: string; ingress_bytes: number; egress_bytes: number }
 
-const messages: Record<string, string> = {
-  invalid_password: 'The password was not accepted.',
-  initialization_consumed: 'This setup link is no longer available. Sign in with the owner password.',
-  slow_down: 'Please wait before trying again.',
-  access_denied: 'This request is no longer available. Check progress on the device.',
-  already_completed: 'This request has already been completed. Check progress on the device.',
-  credential_capacity: 'This node has reached its credential limit.',
-  invalid_name: 'Enter a short, descriptive name.',
-  analytics_unavailable: 'Usage estimates are currently unavailable.',
+const messages = {
+  invalid_password: message(relayCopy, 'invalidPassword'),
+  initialization_consumed: message(relayCopy, 'setupLinkUsed'),
+  slow_down: message(relayCopy, 'slowDown'),
+  access_denied: message(relayCopy, 'accessDenied'),
+  already_completed: message(relayCopy, 'alreadyCompleted'),
+  credential_capacity: message(relayCopy, 'credentialLimit'),
+  invalid_name: message(relayCopy, 'invalidName'),
+  analytics_unavailable: message(relayCopy, 'analyticsUnavailable'),
 }
 
 export class RelayClient {

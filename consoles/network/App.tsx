@@ -2,6 +2,10 @@ import { useMemo, useState } from 'react'
 import { useAction, useResource } from '../ui/activity'
 import { Login } from '../ui/forms'
 import { Frame, Notice, ReadError, SessionWait } from '../ui/layout'
+import type { Message } from '../ui/locale'
+import { useCopy } from '../ui/use-locale'
+import { sharedCopy } from '../ui/locales'
+import { networkCopy } from './locales'
 import { usePage } from '../ui/location'
 import { AuthorityClient } from './api'
 import { useDirectory } from './directory'
@@ -45,8 +49,9 @@ function DashboardView({ api, snapshot, page, id, reports, directory, saveNode, 
 
 function Dashboard({ api, snapshot, update, refresh, refreshing, error }: {
   api: AuthorityClient; snapshot: Snapshot; update: (merge: (current: Snapshot) => Snapshot) => void
-  refresh: () => void; refreshing: boolean; error: string
+  refresh: () => void; refreshing: boolean; error: Message | null
 }) {
+  const t = useCopy(networkCopy)
   const [page, id] = usePage().split('/')
   const directory = useDirectory(snapshot.directory)
   const editor = usePolicyEditor()
@@ -58,11 +63,11 @@ function Dashboard({ api, snapshot, update, refresh, refreshing, error }: {
     saved: (restrictions: Restrictions) => update(current => restrictions.version < current.restrictions.version
       ? current : { ...current, restrictions }),
   }
-  return <><nav className="tabs" aria-label="Network management"><div>
-    <a href="#nodes" aria-current={!reports && !policy ? 'page' : undefined}>Nodes</a>
-    <a href="#reports" aria-current={reports ? 'page' : undefined}>Reports</a>
-    <a href="#policy" aria-current={policy ? 'page' : undefined}>Policy</a>
-    <button className="quiet refresh-snapshot" onClick={refresh} disabled={refreshing}>{refreshing ? 'Refreshing…' : 'Refresh snapshot'}</button>
+  return <><nav className="tabs" aria-label={t.management}><div>
+    <a href="#nodes" aria-current={!reports && !policy ? 'page' : undefined}>{t.nodes}</a>
+    <a href="#reports" aria-current={reports ? 'page' : undefined}>{t.reports}</a>
+    <a href="#policy" aria-current={policy ? 'page' : undefined}>{t.policy}</a>
+    <button className="quiet refresh-snapshot" onClick={refresh} disabled={refreshing}>{refreshing ? t.refreshing : t.refreshSnapshot}</button>
   </div></nav>
     <div className="workspace">
       <ReadError error={error} retry={refresh} />
@@ -79,9 +84,10 @@ function ConsoleBody({ api, state, token, clearToken, resetSession }: {
   clearToken: () => void
   resetSession: () => void
 }) {
+  const t = useCopy(networkCopy)
   if (state.value === undefined) return <SessionWait error={state.error} retry={state.reload} />
   if (state.value === null) {
-    return <Login area="Network administrator" username initialize={!!token} cancelSetup={clearToken}
+    return <Login area={t.administrator} username initialize={!!token} cancelSetup={clearToken}
       submit={async (password, name) => { await api.signIn(name, password, token); resetSession() }} />
   }
   return <Dashboard api={api} snapshot={state.value} refreshing={state.busy} refresh={state.reload} error={state.error}
@@ -93,8 +99,10 @@ function Console({ api, token, clearToken, resetSession }: {
 }) {
   const state = useResource(api.snapshot)
   const logout = useAction()
-  return <Frame area="Network console" tools={state.value && <button className="quiet" disabled={logout.busy}
-    onClick={() => void logout.run(async () => { await api.signOut(); resetSession() })}>Sign out</button>}>
+  const t = useCopy(networkCopy)
+  const shared = useCopy(sharedCopy)
+  return <Frame area={t.title} tools={state.value && <button className="quiet" disabled={logout.busy}
+    onClick={() => void logout.run(async () => { await api.signOut(); resetSession() })}>{shared.signOut}</button>}>
     <Notice feedback={logout.feedback} />
     <ConsoleBody api={api} state={state} token={token} clearToken={clearToken} resetSession={resetSession} />
   </Frame>

@@ -1,10 +1,15 @@
 import { useLayoutEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { ValidatedForm } from './ValidatedForm'
+import { useCopy } from './use-locale'
+import { sharedCopy } from './locales'
 import { useAction } from './activity'
 import { FocusPage, Notice } from './layout'
 
-function loginTitle(initialize: boolean, username?: boolean): string {
-  if (!initialize) return 'Sign in'
-  return username ? 'Create administrator' : 'Set owner password'
+const MIN_PASSWORD_LENGTH = 12
+
+function loginTitle(t: typeof sharedCopy.en, initialize: boolean, username?: boolean): string {
+  if (!initialize) return t.signIn
+  return username ? t.createAdmin : t.ownerSetupTitle
 }
 
 export function Login({ area, username, initialize, submit, cancelSetup }: {
@@ -16,34 +21,36 @@ export function Login({ area, username, initialize, submit, cancelSetup }: {
 }) {
   const [visible, setVisible] = useState(false)
   const action = useAction()
-  const title = loginTitle(initialize, username)
+  const t = useCopy(sharedCopy)
+  const title = loginTitle(t, initialize, username)
   return <FocusPage label={area} title={title}>
-    <form className="stack" method="post" onSubmit={event => {
+    <ValidatedForm className="stack" method="post" onSubmit={event => {
       event.preventDefault()
       const data = new FormData(event.currentTarget)
       void action.run(() => submit(String(data.get('password')), String(data.get('username') ?? '')))
     }}>
-      {username && <div className="field"><label htmlFor="username">Username</label>
+      {username && <div className="field"><label htmlFor="username">{t.username}</label>
         <input id="username" name="username" autoComplete="username" autoCapitalize="none" spellCheck={false}
-          maxLength={64} pattern={initialize ? '[a-zA-Z0-9._\\-]+' : undefined} required /></div>}
-      <div className="field"><label htmlFor="password">{initialize ? 'New password' : 'Password'}</label>
+          maxLength={64} title={initialize ? t.usernameFormat : undefined} pattern={initialize ? '[a-zA-Z0-9._\\-]+' : undefined} required /></div>}
+      <div className="field"><label htmlFor="password">{initialize ? t.newPassword : t.password}</label>
         <div className="password"><input id="password" name="password" type={visible ? 'text' : 'password'} required
-          minLength={initialize ? 12 : undefined} maxLength={256} autoComplete={initialize ? 'new-password' : 'current-password'}
+          minLength={initialize ? MIN_PASSWORD_LENGTH : undefined} maxLength={256} autoComplete={initialize ? 'new-password' : 'current-password'}
           aria-describedby={initialize ? 'password-minimum' : undefined} />
-          <button className="quiet" type="button" aria-label={visible ? 'Hide password' : 'Show password'}
-            onClick={() => setVisible(!visible)}>{visible ? 'Hide' : 'Show'}</button></div>
-        {initialize && <small id="password-minimum">Use at least 12 characters.</small>}
+          <button className="quiet" type="button" aria-label={visible ? t.hidePassword : t.showPassword}
+            onClick={() => setVisible(!visible)}>{visible ? t.hide : t.show}</button></div>
+        {initialize && <small id="password-minimum">{t.minLength(MIN_PASSWORD_LENGTH)}</small>}
       </div>
       <Notice feedback={action.feedback} />
-      <button disabled={action.busy}>{action.busy ? 'Signing in…' : title}</button>
-      {initialize && <button className="quiet" type="button" onClick={cancelSetup}>Use existing password</button>}
-    </form>
+      <button disabled={action.busy}>{action.busy ? t.signingIn : title}</button>
+      {initialize && <button className="quiet" type="button" onClick={cancelSetup}>{t.usePassword}</button>}
+    </ValidatedForm>
   </FocusPage>
 }
 
 export function Confirm({ title, children, confirm, onCancel, onConfirm }: {
   title: string; children: ReactNode; confirm: string; onCancel: () => void; onConfirm: () => void
 }) {
+  const t = useCopy(sharedCopy)
   const ref = useRef<HTMLDialogElement>(null)
   const cancel = useRef<HTMLButtonElement>(null)
   const id = useId()
@@ -56,7 +63,7 @@ export function Confirm({ title, children, confirm, onCancel, onConfirm }: {
   return <dialog ref={ref} aria-labelledby={id} onCancel={event => { event.preventDefault(); onCancel() }}>
     <h2 id={id}>{title}</h2>{children}
     <div className="dialog-actions">
-      <button type="button" ref={cancel} autoFocus className="secondary" onClick={onCancel}>Cancel</button>
+      <button type="button" ref={cancel} autoFocus className="secondary" onClick={onCancel}>{t.cancel}</button>
       <button type="button" className="destructive" onClick={onConfirm}>{confirm}</button>
     </div>
   </dialog>

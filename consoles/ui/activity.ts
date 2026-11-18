@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { Message } from './locale'
 import { messageOf } from './request'
 
 export function useResource<T>(read: (signal: AbortSignal) => Promise<T>) {
   const active = useRef<AbortController | null>(null)
   const [value, setValue] = useState<T>()
-  const [error, setError] = useState('')
+  const [error, setError] = useState<Message | null>(null)
   const [busy, setBusy] = useState(true)
   const start = useCallback(() => {
     active.current?.abort()
@@ -13,7 +14,7 @@ export function useResource<T>(read: (signal: AbortSignal) => Promise<T>) {
     void read(controller.signal).then(result => {
       if (!controller.signal.aborted) {
         setValue(result)
-        setError('')
+        setError(null)
       }
     }).catch(reason => {
       if (!controller.signal.aborted) setError(messageOf(reason))
@@ -23,7 +24,7 @@ export function useResource<T>(read: (signal: AbortSignal) => Promise<T>) {
   }, [read])
   const reload = useCallback(() => {
     setBusy(true)
-    setError('')
+    setError(null)
     start()
   }, [start])
   useEffect(() => {
@@ -36,21 +37,21 @@ export function useResource<T>(read: (signal: AbortSignal) => Promise<T>) {
     active.current?.abort()
     setValue(previous => previous === undefined ? previous : merge(previous))
     setBusy(false)
-    setError('')
+    setError(null)
   }
   return { value, busy, error, reload, update }
 }
 
 export interface Feedback {
   kind: 'success' | 'error'
-  message: string
+  message: Message
 }
 
 export function useAction() {
   const [busy, setBusy] = useState(false)
   const [feedback, setFeedback] = useState<Feedback | null>(null)
   const running = useRef(false)
-  async function run(operation: () => Promise<string | void>) {
+  async function run(operation: () => Promise<Message | void>) {
     if (running.current) return
     running.current = true
     setBusy(true)

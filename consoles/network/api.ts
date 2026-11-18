@@ -1,12 +1,14 @@
+import { message } from '../ui/locale'
+import { networkCopy } from './locales'
 import { request, RequestError } from '../ui/request'
 import type { Enrollment, PolicyField, RelayNode, Restrictions, Settings, Snapshot, Target } from './model'
 
 const messages = {
-  credentials: 'The username or password was not accepted.',
-  initialization_consumed: 'This setup link is no longer available. Use your administrator credentials.',
-  rate_limited: 'Too many requests. Please try again later.',
-  invalid: 'The service could not accept these values. Check the form and try again.',
-  csrf: 'Your session has changed. Refresh the console and try again.',
+  credentials: message(networkCopy, 'invalidCredentials'),
+  initialization_consumed: message(networkCopy, 'setupLinkUsed'),
+  rate_limited: message(networkCopy, 'rateLimited'),
+  invalid: message(networkCopy, 'invalidValues'),
+  csrf: message(networkCopy, 'sessionChanged'),
 }
 
 export class AuthorityClient {

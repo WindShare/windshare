@@ -1,14 +1,18 @@
+import { message, MessageError, type Message } from './locale'
+import { sharedCopy } from './locales'
+
+const requestFailed = message(sharedCopy, 'requestFailed')
 const REQUEST_TIMEOUT_MS = 15_000
 
-export class RequestError extends Error {
-  constructor(readonly status: number, readonly code: string, message: string) {
-    super(message)
+export class RequestError extends MessageError {
+  constructor(readonly status: number, readonly code: string, description: Message) {
+    super(description)
   }
 }
 
 interface RequestOptions extends RequestInit {
   data?: unknown
-  messages?: Record<string, string>
+  messages?: Readonly<Record<string, Message>>
 }
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -25,14 +29,16 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   if (!response.ok) {
     const fault = await response.json().catch(() => null)
     const code = fault?.error ?? fault?.reason ?? fault?.kind ?? ''
-    throw new RequestError(response.status, code, messages?.[code] ?? 'The request failed. Please try again.')
+    const description = messages && Object.hasOwn(messages, code) ? messages[code] : requestFailed
+    throw new RequestError(response.status, code, description)
   }
   return response.json() as Promise<T>
 }
 
-export function messageOf(error: unknown): string {
+export function messageOf(error: unknown): Message {
+  if (error instanceof MessageError) return error.userMessage
   if (error instanceof TypeError || (error instanceof DOMException && error.name === 'TimeoutError')) {
-    return 'Could not reach the service. Check your connection and try again.'
+    return message(sharedCopy, 'unreachable')
   }
-  return error instanceof Error ? error.message : 'The request failed. Please try again.'
+  return requestFailed
 }

@@ -36,4 +36,3 @@ export interface Snapshot {
   reviews: number[]
 }
 export const GIB = 1024 ** 3
-export const zoneName = (zone: Zone) => zone === 'cn' ? 'Mainland China' : 'Global'

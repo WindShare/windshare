@@ -1,4 +1,8 @@
 import { formValues, type Draft, type usePolicyEditor } from './policy-editor'
+import { ValidatedForm } from '../ui/ValidatedForm'
+import { message, MessageError } from '../ui/locale'
+import { useLocale } from '../ui/use-locale'
+import { networkCopy } from './locales'
 import { Notice } from '../ui/layout'
 import type { AuthorityClient } from './api'
 import { GIB, type Settings, type Snapshot } from './model'
@@ -9,6 +13,8 @@ export function PolicySettings({ snapshot, api, saved, editor }: {
   editor: ReturnType<typeof usePolicyEditor>
   snapshot: Snapshot; api: AuthorityClient; saved: (settings: Settings) => void
 }) {
+  const { locale } = useLocale()
+  const t = networkCopy[locale]
   const { draft, setDraft, action } = editor
   const value = draft ?? formValues(snapshot.settings)
   function field(key: NumberField, label: string, min: number, max?: number) {
@@ -16,10 +22,10 @@ export function PolicySettings({ snapshot, api, saved, editor }: {
       step={key === 'gib' ? 'any' : 1} max={max ?? (key === 'gib' ? Number.MAX_SAFE_INTEGER / GIB : Number.MAX_SAFE_INTEGER)} value={value[key]}
       onChange={event => setDraft({ ...value, [key]: event.target.value })} /></div>
   }
-  return <div className="view editor"><div className="page-title"><h1>Network policy</h1></div>
-    <div className="panel padded account-count"><span>Registered accounts</span><strong>{snapshot.account_count.toLocaleString()}</strong>
-      {snapshot.reviews.length > 0 && <p>A registration milestone has been reached. Review registration policy and node capacity.</p>}</div>
-    <form className="panel padded" onSubmit={event => {
+  return <div className="view editor"><div className="page-title"><h1>{t.networkPolicy}</h1></div>
+    <div className="panel padded account-count"><span>{t.registeredAccounts}</span><strong>{snapshot.account_count.toLocaleString(locale)}</strong>
+      {snapshot.reviews.length > 0 && <p>{t.milestone}</p>}</div>
+    <ValidatedForm className="panel padded" onSubmit={event => {
       event.preventDefault()
       void action.run(async () => {
         const settings: Settings = {
@@ -27,28 +33,28 @@ export function PolicySettings({ snapshot, api, saved, editor }: {
           source_rate: { burst: Number(value.sourceBurst), refill_seconds: Number(value.sourceRefill) },
           global_rate: { burst: Number(value.globalBurst), refill_seconds: Number(value.globalRefill) },
         }
-        if (!Number.isSafeInteger(settings.daily_bytes) || settings.daily_bytes <= 0) throw new Error('Enter a daily allowance within the supported range.')
+        if (!Number.isSafeInteger(settings.daily_bytes) || settings.daily_bytes <= 0) throw new MessageError(message(networkCopy, 'invalidAllowance'))
         await api.settings(settings)
         saved(settings)
         setDraft(null)
-        return 'Network policy saved.'
+        return message(networkCopy, 'settingsSaved')
       })
-    }}><fieldset disabled={action.busy} className="stack"><legend>Account registration</legend>
-        <div className="field"><label htmlFor="registration">Registration method</label><select id="registration" value={value.mode}
+    }}><fieldset disabled={action.busy} className="stack"><legend>{t.registration}</legend>
+        <div className="field"><label htmlFor="registration">{t.registrationMethod}</label><select id="registration" value={value.mode}
           onChange={event => setDraft({ ...value, mode: event.target.value as Settings['registration'] })}>
-          <option value="automatic">Automatic</option><option value="proof_of_work">Proof of work</option>
+          <option value="automatic">{t.automatic}</option><option value="proof_of_work">{t.proofOfWork}</option>
           <option value="email" disabled={!snapshot.email_configured}>
-            {snapshot.email_configured ? 'Email verification' : 'Email verification · mail service required'}</option>
+            {snapshot.email_configured ? t.verifyEmail : t.mailRequired}</option>
         </select></div>
-        {value.mode === 'proof_of_work' && field('bits', 'Proof-of-work difficulty (bits)', 16, 30)}
-        {field('gib', 'Daily relay allowance per account (GiB)', 1 / GIB)}
-        <fieldset className="rate-grid"><legend>Registration rate limits</legend>
-          {field('sourceBurst', 'Burst per source', 1)}{field('sourceRefill', 'Seconds per new account, per source', 1)}
-          {field('globalBurst', 'Network-wide burst', 1)}{field('globalRefill', 'Seconds per new account, network-wide', 1)}
+        {value.mode === 'proof_of_work' && field('bits', t.difficulty, 16, 30)}
+        {field('gib', t.allowance, 1 / GIB)}
+        <fieldset className="rate-grid"><legend>{t.rateLimits}</legend>
+          {field('sourceBurst', t.sourceBurst, 1)}{field('sourceRefill', t.sourceRefill, 1)}
+          {field('globalBurst', t.networkBurst, 1)}{field('globalRefill', t.networkRefill, 1)}
         </fieldset>
         <div className="actions"><button disabled={!draft || (value.mode === 'email' && !snapshot.email_configured)}>
-          {action.busy ? 'Saving…' : 'Save policy'}</button>
-          {draft && <button className="quiet" type="button" onClick={() => setDraft(null)}>Discard changes</button>}</div>
+          {action.busy ? t.saving : t.savePolicy}</button>
+          {draft && <button className="quiet" type="button" onClick={() => setDraft(null)}>{t.discard}</button>}</div>
       </fieldset><Notice feedback={action.feedback} />
-    </form></div>
+    </ValidatedForm></div>
 }

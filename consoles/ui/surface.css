@@ -12,7 +12,7 @@
   --focus: #19745d;
   --danger: #9a3b30;
   --radius: .75rem;
-  font: 100%/1.5 Inter, "Segoe UI", system-ui, sans-serif;
+  font: 100%/1.5 Inter, "Segoe UI", system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
   color: var(--ink);
   background: var(--wash);
 }
@@ -22,6 +22,7 @@ h1, h2, h3, p, dl, dd { margin: 0; }
 h1, h2, h3 { text-wrap: balance; }
 h1 { font-size: clamp(2rem, 4vw, 2.8rem); line-height: 1.12; letter-spacing: -.048em; font-weight: 650; overflow-wrap: anywhere; }
 h2 { font-size: 1.25rem; line-height: 1.35; letter-spacing: -.028em; font-weight: 640; }
+:is(h1, h2):lang(zh) { letter-spacing: normal; }
 h3 { font-size: 1rem; font-weight: 640; }
 p, small, dt { color: var(--muted); }
 small { font-size: .83rem; }
@@ -35,6 +36,9 @@ code { overflow-wrap: anywhere; font-size: .91em; }
 .masthead { background: var(--paper); border-bottom: 1px solid var(--line); }
 .mast-inner, .tabs > div, .workspace { width: min(73rem, calc(100% - 3rem)); margin-inline: auto; }
 .mast-inner { min-height: 4.1rem; display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+.mast-tools { display: flex; align-items: center; gap: .5rem; }
+.language-select { width: auto; min-height: 2.3rem; padding: .3rem .45rem; font-size: .9rem; cursor: pointer; }
+.language-select:hover { border-color: var(--muted); }
 .brand { display: flex; align-items: center; gap: .9rem; }
 .wordmark { font-size: 1.23rem; font-weight: 740; letter-spacing: -.065em; }
 .brand-rule { width: 1px; height: 1.15rem; background: var(--line); transform: rotate(15deg); }
@@ -84,7 +88,8 @@ code { overflow-wrap: anywhere; font-size: .91em; }
 .read-error { display: flex; align-items: center; justify-content: space-between; gap: .7rem; }
 @media (max-width: 40rem) {
   .mast-inner, .tabs > div, .workspace { width: calc(100% - 2rem); }
-  .mast-inner { min-height: 3.55rem; }
+  .mast-inner { min-height: 3.55rem; flex-wrap: wrap; padding-block: .45rem; }
+  .mast-tools { margin-inline-start: auto; }
   .brand { gap: .6rem; }
   .tabs > div { gap: 1rem; }
   .focus-page { padding-top: 1.7rem; }
