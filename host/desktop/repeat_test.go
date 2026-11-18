@@ -11,14 +11,13 @@ import (
 
 func TestRepeatAuthorizationRetainsSelectionWithoutResurrectingFailedTask(t *testing.T) {
 	a, original, starts := fixture(t)
-	a.execute(createRequest())
-	admitted(t, a)
+	// Repeat consumes a settled task. Prepare its result before admission publishes it to observers.
 	original.finish()
-	original.mu.Lock()
 	original.state.Startup = engine.ShareStartupFailed
 	original.state.Result.Outcome = engine.OutcomeFailed
 	original.state.Authorization = &engine.ShareAuthorization{Kind: engine.ShareSelfHostedAuthorization, RelayURL: "https://chosen.example"}
-	original.mu.Unlock()
+	a.execute(createRequest())
+	admitted(t, a)
 	request := Request{Command: "repeat", OperationID: "repeat:1", SourceOperationID: "operation"}
 	reply := a.execute(request)
 	if reply.Error != nil {

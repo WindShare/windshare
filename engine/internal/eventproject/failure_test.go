@@ -1,13 +1,18 @@
 package eventproject
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"net/url"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/windshare/windshare/adapters/filesystem"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
@@ -325,6 +330,65 @@ func TestRawProviderTextTerminatesAtFailureProjection(t *testing.T) {
 	joined, present := ClassifyError(errors.Join(opaqueCanaryError{secret}, relayv2.ErrClosed))
 	if !present || joined.Code() != appobs.FailureRelayClosed {
 		t.Fatalf("trusted join mapping = %+v,%t", joined, present)
+	}
+}
+
+// A sender that cannot reach its relay is reporting the same condition a
+// receiver reports for the same address, so both must reach the same safe code
+// instead of the sender falling back to "unexpected error".
+func TestSenderRegistrationNotSentKeepsTheClassOfItsCause(t *testing.T) {
+	const secret = "wss://relay.example/private?token=AUTH-TOKEN-CANARY"
+	tests := []struct {
+		name  string
+		cause error
+		want  appobs.FailureCode
+	}{
+		{"transport", fmt.Errorf("failed to WebSocket dial: %w", &url.Error{Op: "Get", URL: secret, Err: opaqueCanaryError{secret}}), appobs.FailureRelayTransport},
+		{"protocol", relayv2.ErrProtocol, appobs.FailureRelayProtocol},
+		{"canceled", context.Canceled, appobs.FailureCanceled},
+		{"deadline", context.DeadlineExceeded, appobs.FailureDeadline},
+		{"invalid registration endpoint", errors.Join(relayv2.ErrProtocol, v2.ErrIdentity), appobs.FailureRelayProtocol},
+		{"unclassified", opaqueCanaryError{secret}, appobs.FailureUnexpected},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			wrapped := &relayv2.RegistrationNotSentError{Cause: test.cause}
+			for _, cause := range []error{wrapped, fmt.Errorf("register: %w", wrapped)} {
+				failure, present := ClassifyError(cause)
+				if !present || !failure.Valid() || failure.Code() != test.want {
+					t.Fatalf("ClassifyError(%v) = %+v,%t; want code %d", cause, failure, present, test.want)
+				}
+				if strings.Contains(fmt.Sprintf("%#v", failure), "AUTH-TOKEN-CANARY") {
+					t.Fatalf("safe failure retained provider text: %#v", failure)
+				}
+			}
+		})
+	}
+}
+
+func TestSenderWebSocketDialFailureIsRelayTransport(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		cause error
+	}{
+		{"refused", syscall.ECONNREFUSED},
+		{"dial deadline", context.DeadlineExceeded},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			// Inject at the TCP boundary so HTTP and WebSocket supply their real error wrappers.
+			transport := &http.Transport{DialContext: func(context.Context, string, string) (net.Conn, error) {
+				return nil, test.cause
+			}}
+			options := websocket.DialOptions{HTTPClient: &http.Client{Transport: transport}}
+			_, _, err := websocket.Dial(t.Context(), "ws://relay.example"+v2.WebSocketPath, &options) //nolint:bodyclose
+			if !errors.Is(err, test.cause) {
+				t.Fatalf("WebSocket dial = %v; want cause %v", err, test.cause)
+			}
+			failure, present := ClassifyError(&relayv2.RegistrationNotSentError{Cause: err})
+			if !present || failure.Code() != appobs.FailureRelayTransport {
+				t.Fatalf("ClassifyError(%v) = %+v,%t; want relay transport", err, failure, present)
+			}
+		})
 	}
 }
 
