@@ -57,4 +57,4 @@ CLI 和桌面按引擎结果显示节点是否启用、当前策略和分享域�
 
 当两个宿主共用的节点管理页需要组件化时，再复用 `web` 的 React、TypeScript、Vite 和依赖锁。接收页和管理页各有构建入口。`full` 交付两者，`relay-only` 只交付节点管理页，`frontend` 只交付接收页。前端构建放在页面开发与打包环节，日常 Rust 开发沿用 Cargo 入口。[现有构建入口](../../../web/vite.config.ts) · [私有中转工作流](../../../.github/workflows/cloudflare-relay.yml)
 
-网络管理页继续使用现有实现。以后若有组件值得共用，再独立迁移，保留 `/console#initialize=…`、现有管理操作、同源会话、CSRF token 和独立的公共 `/report` 入口。[现有页面行为](../../../relay-rust/crates/network-authority/console/console.js) · [Worker 路由](../../../relay-rust/crates/network-authority/src/host/edge.rs)
+网络管理页继续使用现有实现。以后若有组件值得共用，再独立迁移，保留 `/console#initialize=…`、现有管理操作、同源会话、CSRF token 和独立的公共 `/report` 入口。[现有页面行为](../../../consoles/network/App.tsx) · [Worker 路由](../../../relay-rust/crates/network-authority/src/host/edge.rs)

@@ -4,6 +4,7 @@ mod administrator;
 mod admission;
 mod governance;
 mod model;
+mod nodes;
 mod public_blocks;
 mod registration;
 mod signing;
@@ -14,6 +15,7 @@ mod usage;
 use anyhow::Result;
 pub use governance::Block;
 pub use model::*;
+pub use nodes::{Node, NodeEnrollment, NodePolicyChange, Zone};
 pub use signing::Signing;
 pub use store::{Environment, Store};
 

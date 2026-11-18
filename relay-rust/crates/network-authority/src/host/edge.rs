@@ -12,29 +12,13 @@ pub async fn fetch(request: Request, env: Env, _context: Context) -> Result<Resp
     let mut response = if request.method() == Method::Options {
         Response::empty()?.with_status(204)
     } else if request.method() == Method::Get {
-        match request.path().as_str() {
-            "/" | "/console" => asset(
-                include_str!("../../console/index.html"),
-                "text/html; charset=utf-8",
-            )?,
-            "/console.js" => asset(
-                include_str!("../../console/console.js"),
-                "text/javascript; charset=utf-8",
-            )?,
-            "/console.css" => asset(
-                include_str!("../../console/console.css"),
-                "text/css; charset=utf-8",
-            )?,
-            "/report" => asset(
-                include_str!("../../console/report.html"),
-                "text/html; charset=utf-8",
-            )?,
-            "/report.js" => asset(
-                include_str!("../../console/report.js"),
-                "text/javascript; charset=utf-8",
-            )?,
-            "/healthz" => Response::from_json(&json!({"status":"ok"}))?,
-            _ => forward(request, &env).await?,
+        let path = request.path();
+        if let Some((body, kind)) = console_asset(&path) {
+            asset(body, kind)?
+        } else if path == "/healthz" {
+            Response::from_json(&json!({"status":"ok"}))?
+        } else {
+            forward(request, &env).await?
         }
     } else {
         if request.path().starts_with("/v1/admin/") && origin.is_none() {
@@ -90,6 +74,9 @@ pub async fn fetch(request: Request, env: Env, _context: Context) -> Result<Resp
         response.headers_mut().set("Vary", "Origin")?;
     }
     Ok(response)
+}
+fn console_asset(path: &str) -> Option<(&'static str, &'static str)> {
+    include!("../../console-dist/routes.rs")
 }
 fn asset(body: &str, kind: &str) -> Result<Response> {
     let mut response = Response::ok(body)?;

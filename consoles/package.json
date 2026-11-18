@@ -6,7 +6,9 @@
   "packageManager": "pnpm@12.5.1",
   "scripts": {
     "dev:relay": "vite --mode relay",
-    "build:relay": "tsc -p relay && vite build --mode relay"
+    "dev:network": "vite --mode network",
+    "build:relay": "tsc -p relay && vite build --mode relay",
+    "build:network": "tsc -p network && vite build --mode network"
   },
   "dependencies": {
     "react": "19.2.7",

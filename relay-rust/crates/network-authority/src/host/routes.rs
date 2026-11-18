@@ -1,5 +1,5 @@
 use super::{Clock, failure, storage::Database};
-use crate::{Authority, Block, Fault, Node, Settings};
+use crate::{Authority, Block, Fault, NodeEnrollment, NodePolicyChange, Settings};
 use anyhow::{Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
@@ -60,6 +60,12 @@ struct Initialize {
     token: String,
     username: String,
     password: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NodePolicyRequest {
+    key: [u8; 32],
+    change: NodePolicyChange,
 }
 #[derive(Deserialize)]
 struct Revoke {
@@ -161,13 +167,20 @@ pub fn dispatch(
             authority.set_settings(&session, &parse::<Settings>(bytes)?, email)?;
             serde_json::json!({})
         }
-        (Method::Post, "/v1/admin/nodes") => {
-            authority.enroll_node(&session, &parse::<Node>(bytes)?)?;
-            serde_json::json!({})
+        (Method::Post, "/v1/admin/nodes") => serde_json::to_value(
+            authority.enroll_node(&session, &parse::<NodeEnrollment>(bytes)?)?,
+        )?,
+        (Method::Put, "/v1/admin/nodes/policy") => {
+            let update = parse::<NodePolicyRequest>(bytes)?;
+            serde_json::to_value(authority.set_node_policy(
+                &session,
+                &update.key,
+                update.change,
+            )?)?
         }
         (Method::Post, "/v1/admin/blocks") => {
             authority.block(&session, parse::<Block>(bytes)?)?;
-            serde_json::json!({})
+            serde_json::to_value(authority.restrictions()?)?
         }
         _ => return Response::error("not found", 404).map_err(|error| anyhow::anyhow!("{error}")),
     };

@@ -58,7 +58,15 @@ const privateKey = createPrivateKey({ key: Buffer.concat([
   Buffer.from('302e020100300506032b657004220420', 'hex'), randomBytes(32),
 ]), type: 'pkcs8', format: 'der' });
 const node = [...createPublicKey(privateKey).export({ type: 'spki', format: 'der' }).subarray(-32)];
-await call('/v1/admin/nodes', { key: node, zone: 'cn', region: 'local-proof', anonymous: false, enabled: true }, { admin: true });
+const enrollment = { key: node, zone: 'cn', region: 'local-proof' };
+const enrolled = (await call('/v1/admin/nodes', enrollment, { admin: true })).value;
+assert(enrolled.enabled && !enrolled.anonymous && enrolled.version === 1);
+// Independent operator sessions can edit these fields against the same saved snapshot.
+const update = (field, value) => call('/v1/admin/nodes/policy', { key: node, change: { field, value } }, { admin: true, method: 'PUT' });
+await Promise.all([update('public_relay', false), update('anonymous_sharing', true)]);
+const existing = (await call('/v1/admin/nodes', { ...enrollment, zone: 'global' }, { admin: true })).value;
+assert.equal(existing.zone, 'cn');
+assert(!existing.enabled && existing.anonymous && existing.version === 3);
 const batch = {
   id: [...randomBytes(16)], node, issuer: [...Buffer.from(trust.root, 'base64url')],
   created_at: Math.floor(Date.now() / 1000), records: [], resident_accounts: [first.account], shares: [],
@@ -107,7 +115,7 @@ console.log(JSON.stringify({
   event: 'authority_worker_probe_passed', account: Buffer.from(first.account).toString('base64url'),
   node: Buffer.from(node).toString('base64url'), checks: [
     'one-time initialization', 'session cookies and CORS', 'idempotent registration', 'stable refresh identity',
-    'password login', 'signed node reports', 'idempotent UTC usage', 'independent revocation',
+    'password login', 'concurrent node policy updates', 'idempotent enrollment', 'signed node reports', 'idempotent UTC usage', 'independent revocation',
     'account block and restoration', 'public share restrictions',
   ],
 }));

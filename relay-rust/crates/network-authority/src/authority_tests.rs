@@ -163,7 +163,7 @@ fn late_reports_charge_the_original_day_and_restart_retries_do_not_double_charge
         &Node {
             version: 1,
             key: node.verifying_key().to_bytes(),
-            zone: "global".into(),
+            zone: Zone::Global,
             region: "test".into(),
             anonymous: true,
             enabled: true,

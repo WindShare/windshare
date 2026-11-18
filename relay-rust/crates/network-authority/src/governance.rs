@@ -1,5 +1,5 @@
 use crate::{
-    Authority, Environment, Fault, Node, RegistrationMode, Settings, Store,
+    Authority, Environment, Fault, RegistrationMode, Settings, Store,
     store::{key, load, save},
 };
 use anyhow::{Result, ensure};
@@ -43,27 +43,6 @@ impl<R: Store, E: Environment> Authority<R, E> {
         );
         save(&mut self.store, "settings", settings)?;
         tracing::info!(event="authority_policy_changed",mode=?settings.registration,pow_bits=settings.pow_bits);
-        Ok(())
-    }
-    /// # Errors
-    /// Requires a live administrator session and a valid node public key/zone.
-    pub fn enroll_node(&mut self, session: &str, node: &Node) -> Result<()> {
-        self.require_admin(session)?;
-        ensure!(
-            node.key != [0; 32]
-                && matches!(node.zone.as_str(), "cn" | "global")
-                && node.region.len() <= 128,
-            Fault::Invalid
-        );
-        let node_key = key("node", &node.key);
-        let mut next = node.clone();
-        // The caller cannot select or roll back the policy revision.
-        next.version = load::<Node>(&self.store, &node_key)?
-            .map_or(0, |node| node.version)
-            .checked_add(1)
-            .ok_or(Fault::Invalid)?;
-        save(&mut self.store, &node_key, &next)?;
-        tracing::info!(event="node_enrolled",node=?node.key,zone=node.zone,anonymous=node.anonymous);
         Ok(())
     }
     /// # Errors

@@ -20,11 +20,17 @@ const applications = {
       }
     },
   },
+  network: {
+    crate: 'crates/network-authority',
+    pages: { '/': 'index.html', '/console': 'index.html', '/report': 'report.html' },
+    port: 5175,
+    proxy: () => ({ '/v1/': { target: process.env.AUTHORITY_BACKEND || 'http://127.0.0.1:8787', changeOrigin: false } }),
+  },
 }
 
 export default defineConfig(({ mode }) => {
   const app = applications[mode]
-  if (!app) throw new Error('Select relay with --mode.')
+  if (!app) throw new Error('Select relay or network with --mode.')
   const root = resolve(workspace, mode)
   return {
     root,

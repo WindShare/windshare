@@ -65,16 +65,6 @@ pub struct Credential {
     pub revoked: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Node {
-    #[serde(default)]
-    pub version: u64,
-    pub key: [u8; 32],
-    pub zone: String,
-    pub region: String,
-    pub anonymous: bool,
-    pub enabled: bool,
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Challenge {
     pub id: String,
     pub mode: RegistrationMode,

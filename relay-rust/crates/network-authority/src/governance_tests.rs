@@ -24,31 +24,47 @@ fn node_policy_versions_survive_same_second_changes_and_disabled_reports() {
         .initialize("once", "once", "admin", "correct horse battery")
         .unwrap();
     let node = SigningKey::from_bytes(&[43; 32]);
-    let mut policy = Node {
-        version: u64::MAX,
-        key: node.verifying_key().to_bytes(),
-        zone: "cn".into(),
+    let key = node.verifying_key().to_bytes();
+    let enrollment = |zone| NodeEnrollment {
+        key,
+        zone,
         region: "cn-test".into(),
-        anonymous: false,
-        enabled: true,
     };
-    authority.enroll_node(&admin, &policy).unwrap();
+    let enrolled = authority
+        .enroll_node(&admin, &enrollment(Zone::Cn))
+        .unwrap();
+    assert!(enrolled.enabled && !enrolled.anonymous);
     let account = authority
         .register("source", registration(1))
         .unwrap()
         .account;
     let bytes = batch(&authority, &node, account, 1, 2, 0);
     assert_eq!(reply(&mut authority, &bytes).policy.version, 1);
-    policy.enabled = false;
-    authority.enroll_node(&admin, &policy).unwrap();
+    authority
+        .set_node_policy(&admin, &key, NodePolicyChange::PublicRelay(false))
+        .unwrap();
     let disabled = reply(&mut authority, &bytes).policy;
     assert_eq!(disabled.version, 2);
     assert!(!disabled.enabled);
-    policy.enabled = true;
-    policy.anonymous = true;
-    authority.enroll_node(&admin, &policy).unwrap();
+    let existing = authority
+        .enroll_node(&admin, &enrollment(Zone::Global))
+        .unwrap();
+    assert_eq!(existing.zone, Zone::Cn);
+    assert!(!existing.enabled && !existing.anonymous);
+    let changed = authority
+        .set_node_policy(&admin, &key, NodePolicyChange::AnonymousSharing(true))
+        .unwrap();
+    assert!(!changed.enabled && changed.anonymous);
+    assert_eq!(changed.version, 3);
+    let repeated = authority
+        .set_node_policy(&admin, &key, NodePolicyChange::AnonymousSharing(true))
+        .unwrap();
+    assert_eq!(repeated.version, 3);
+    authority
+        .set_node_policy(&admin, &key, NodePolicyChange::PublicRelay(true))
+        .unwrap();
     let restored = reply(&mut authority, &bytes).policy;
-    assert_eq!(restored.version, 3);
+    assert_eq!(restored.version, 4);
     assert!(restored.enabled && restored.anonymous);
 }
 

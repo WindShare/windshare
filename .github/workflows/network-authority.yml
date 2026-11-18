@@ -2,6 +2,18 @@ name: Deploy network authority
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/console-bundle.yml
+      - consoles/network/**
+      - consoles/ui/**
+      - consoles/build/**
+      - consoles/vite.config.mjs
+      - consoles/tsconfig.json
+      - consoles/package.json
+      - consoles/pnpm-lock.yaml
+      - relay-rust/crates/network-authority/**
+      - .github/workflows/network-authority.yml
   push:
     branches: [main]
     paths:
@@ -11,6 +23,14 @@ on:
       - relay-rust/rust-toolchain.toml
       - relay-rust/.cargo/**
       - relay-rust/crates/relay-access/**
+      - .github/workflows/console-bundle.yml
+      - consoles/network/**
+      - consoles/ui/**
+      - consoles/build/**
+      - consoles/vite.config.mjs
+      - consoles/tsconfig.json
+      - consoles/package.json
+      - consoles/pnpm-lock.yaml
       - relay-rust/crates/network-authority/**
       - relay-rust/crates/relay-cloudflare/package-lock.json
       - deploy/network/release.json
@@ -20,11 +40,16 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: network-authority
+  group: ${{ github.event.pull_request.number && format('network-authority-pr-{0}', github.event.pull_request.number) || 'network-authority' }}
   cancel-in-progress: false
 
 jobs:
+  console:
+    uses: ./.github/workflows/console-bundle.yml
+    with:
+      app: network
   deploy:
+    needs: console
     if: >-
       github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
       (github.event_name == 'workflow_dispatch' || vars.NETWORK_AUTHORITY_ENABLED == 'true')
