@@ -79,8 +79,7 @@ func (service *Service) RequestEmail(ctx context.Context, email string) error {
 		return err
 	}
 	if challenge.ID == "" || len(challenge.ID) > 128 || challenge.Mode != "email" ||
-		challenge.ExpiresAt <= uint64(service.config.Now().Unix()) ||
-		challenge.ExpiresAt > uint64(service.config.Now().Unix())+15*60 {
+		!service.challengeCurrent(challenge.ExpiresAt) {
 		return errors.New("invalid email challenge")
 	}
 	if err := service.saveProof(ctx, previous, &Proof{Challenge: challenge}); err != nil {

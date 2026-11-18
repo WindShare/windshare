@@ -5,7 +5,11 @@ import (
 	"errors"
 	"reflect"
 	"time"
+
+	"github.com/windshare/windshare/core/serviceauthority"
 )
+
+const maximumChallengeLifetime = 15 * time.Minute
 
 func (service *Service) run() {
 	retry := MinimumRetry
@@ -150,11 +154,8 @@ func (service *Service) requestIssuance(ctx context.Context, record Record, path
 }
 
 func (service *Service) acceptChallenge(ctx context.Context, record Record, challenge Challenge) error {
-	const maximumChallengeLifetime = 15 * time.Minute
-	now := uint64(service.config.Now().Unix())
 	if challenge.Mode != "email" && challenge.Mode != "proof_of_work" ||
-		challenge.ExpiresAt <= now || challenge.ExpiresAt > now+uint64(maximumChallengeLifetime/time.Second) ||
-		challenge.Bits > 32 {
+		!service.challengeCurrent(challenge.ExpiresAt) || challenge.Bits > 32 {
 		return errors.New("invalid account challenge")
 	}
 	if err := service.saveProof(ctx, record, &Proof{Challenge: challenge}); err != nil {
@@ -167,6 +168,14 @@ func (service *Service) acceptChallenge(ctx context.Context, record Record, chal
 		service.Retry()
 	}
 	return nil
+}
+
+// The authority stamps a fresh challenge's expiry with its own clock. A local
+// clock running behind it must not refuse every fresh challenge, so the upper
+// bound tolerates the same skew as ticket and certificate acceptance.
+func (service *Service) challengeCurrent(expiresAt uint64) bool {
+	now := uint64(service.config.Now().Unix())
+	return expiresAt > now && expiresAt <= now+uint64(maximumChallengeLifetime/time.Second)+serviceauthority.ClockSkew
 }
 
 func (service *Service) saveProof(ctx context.Context, previous Record, proof *Proof) error {
