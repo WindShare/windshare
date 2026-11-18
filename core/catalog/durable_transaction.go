@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/windshare/windshare/core/catalog/internal/dirpublish"
 )
 
 type fileCatalogTransaction struct {
@@ -349,7 +351,7 @@ func (t *fileCatalogTransaction) Publish(ctx context.Context) (CommittedDirector
 			return CommittedDirectory{}, fmt.Errorf("sync catalog transaction directory: %w", err)
 		}
 	}
-	if err := os.Rename(t.path, target); err != nil {
+	if err := dirpublish.Rename(ctx, t.path, target); err != nil {
 		return CommittedDirectory{}, fmt.Errorf("publish catalog generation: %w", err)
 	}
 	if err := syncCatalogDirectory(t.backend.committedDir); err != nil {

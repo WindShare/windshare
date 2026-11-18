@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/windshare/windshare/core/catalog/internal/dirpublish"
 )
 
 const (
@@ -151,7 +153,7 @@ func (b *FileCatalogBackend) CommitFailure(
 		return FailurePreparation{}, err
 	}
 	target := b.failurePath(record.directory, record.attempt)
-	if err := b.publishFailureLocked(transactionPath, target, directoryPath); err != nil {
+	if err := b.publishFailureLocked(ctx, transactionPath, target, directoryPath); err != nil {
 		return FailurePreparation{}, err
 	}
 	committed = true
@@ -249,13 +251,13 @@ func (b *FileCatalogBackend) cleanUnpublishedFailureDirectory(path string, creat
 	}
 }
 
-func (b *FileCatalogBackend) publishFailureLocked(transactionPath, target, directoryPath string) error {
+func (b *FileCatalogBackend) publishFailureLocked(ctx context.Context, transactionPath, target, directoryPath string) error {
 	if b.faults != nil {
 		if err := b.faults.Fail(FileFaultPublishFailure); err != nil {
 			return err
 		}
 	}
-	if err := os.Rename(transactionPath, target); err != nil {
+	if err := dirpublish.Rename(ctx, transactionPath, target); err != nil {
 		return err
 	}
 	if err := syncCatalogDirectory(directoryPath); err != nil {
