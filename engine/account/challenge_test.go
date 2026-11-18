@@ -3,10 +3,13 @@ package account
 import (
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/windshare/windshare/core/serviceauthority"
 )
 
 // The authority stamps expiry from its own clock. A client a few seconds behind
@@ -48,7 +51,57 @@ func TestFreshChallengesSurviveLocalClockBehindAuthority(t *testing.T) {
 		t.Fatalf("email challenge was not saved: %+v", proof)
 	}
 	expiresAt.Store(uint64(config.Now().Unix()) + 60*60)
-	if err := service.RequestEmail(t.Context(), "person@example.com"); err == nil {
-		t.Fatal("accepted a challenge lifetime beyond the authority's")
+	if err := service.RequestEmail(t.Context(), "person@example.com"); err == nil || err.Error() != "invalid email challenge" {
+		t.Fatalf("challenge lifetime beyond the authority's: %v", err)
+	}
+}
+
+// Pins the accepted expiry window to (now, now + 15 min + ClockSkew] on both
+// the registration and the email-request path.
+func TestChallengeExpiryBoundaries(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		offset uint64
+		accept bool
+	}{
+		{"expires now", 0, false},
+		{"one second left", 1, true},
+		{"full lifetime", 15 * 60, true},
+		{"full lifetime plus skew", 15*60 + serviceauthority.ClockSkew, true},
+		{"beyond skew", 15*60 + serviceauthority.ClockSkew + 1, false},
+		{"maximum", math.MaxUint64, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, path := range []string{"registration", "email"} {
+				config, _ := accountFixture(t)
+				expiresAt := uint64(config.Now().Unix()) + test.offset
+				if test.offset == math.MaxUint64 {
+					expiresAt = math.MaxUint64
+				}
+				config.Client = clientFunc(func(request *http.Request) (*http.Response, error) {
+					status, body := http.StatusOK, any(Challenge{ID: "email-challenge", Mode: "email", ExpiresAt: expiresAt})
+					if request.URL.Path == "/v1/accounts" {
+						status = http.StatusPreconditionRequired
+						body = map[string]any{"kind": "verification", "challenge": Challenge{Mode: "email", ExpiresAt: expiresAt}}
+					}
+					data, _ := json.Marshal(body)
+					return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(string(data)))}, nil
+				})
+				service := testService(t, config)
+				var err error
+				want := "invalid account challenge"
+				if path == "registration" {
+					err = service.step(t.Context())
+				} else {
+					err, want = service.RequestEmail(t.Context(), "person@example.com"), "invalid email challenge"
+				}
+				if test.accept && err != nil {
+					t.Fatalf("%s rejected expiry offset %d: %v", path, test.offset, err)
+				}
+				if !test.accept && (err == nil || err.Error() != want) {
+					t.Fatalf("%s expiry offset %d: got %v, want %q", path, test.offset, err, want)
+				}
+			}
+		})
 	}
 }
