@@ -3,6 +3,8 @@ package relayconfig
 import (
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
 
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/networkendpoint"
@@ -56,6 +58,9 @@ func SelectRelays(config Config, override []string) ([]relayprofile.Candidate, e
 	seen := make(map[string]bool, len(override))
 	for _, address := range override {
 		endpoint, err := v2.NormalizeRelayEndpoint(address)
+		if err == nil && repeatsWebSocketPath(endpoint) {
+			err = errRelayWebSocketPath
+		}
 		if err != nil {
 			return nil, relayAddressError{cause: err}
 		}
@@ -75,17 +80,32 @@ func SelectRelays(config Config, override []string) ([]relayprofile.Candidate, e
 	return candidates, nil
 }
 
+// Relays print the WebSocket endpoint they serve, but candidates are base URLs
+// to which normalization appends that path. The doubled path fails every
+// upgrade, and relay discovery cannot advertise such a base either, so reject
+// the copied endpoint before a share retries it indefinitely.
+var errRelayWebSocketPath = fmt.Errorf("%w: %w: relay base ends in %s", v2.ErrIdentity, networkendpoint.ErrInvalid, v2.WebSocketPath)
+
+func repeatsWebSocketPath(endpoint v2.RelayEndpoint) bool {
+	parsed, err := url.Parse(endpoint.IdentityURL)
+	return err == nil && strings.HasSuffix(parsed.EscapedPath(), v2.WebSocketPath+v2.WebSocketPath)
+}
+
 // Preserve the domain cause while presenting only the address detail relevant
 // to repair; protocol wrapper errors are not useful configuration instructions.
 type relayAddressError struct{ cause error }
 
 func (err relayAddressError) Error() string {
 	var detail string
-	if host, ok := errors.AsType[*networkendpoint.NumericHostError](err.cause); ok {
+	host, numeric := errors.AsType[*networkendpoint.NumericHostError](err.cause)
+	switch {
+	case numeric:
 		detail = fmt.Sprintf("host %q ends in a number; use a DNS name or a canonical IP address", host.Host)
-	} else if errors.Is(err.cause, v2.ErrRelayEndpointWhitespace) {
+	case errors.Is(err.cause, errRelayWebSocketPath):
+		detail = "the address path ends in " + v2.WebSocketPath + ", which WindShare adds itself; remove it to use the relay base URL"
+	case errors.Is(err.cause, v2.ErrRelayEndpointWhitespace):
 		detail = "contains whitespace or invisible spacing; remove it from the address"
-	} else {
+	default:
 		detail = "not an accepted relay address; use an absolute http, https, ws, or wss URL with a host and no user:password@ or #fragment"
 	}
 	return ErrRelayURL.Error() + ": " + detail

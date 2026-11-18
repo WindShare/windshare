@@ -130,3 +130,15 @@ func TestShareRelayConfigurationIsPluralBoundedAndDeduplicated(t *testing.T) {
 		t.Fatal("unbounded relay configuration accepted")
 	}
 }
+
+func TestShareRejectsRelayEndpointCopiedFromStartupOutput(t *testing.T) {
+	stderr := new(bytes.Buffer)
+	app := &App{Stdout: new(bytes.Buffer), Stderr: stderr}
+	t.Cleanup(app.closeTerminalOutput)
+	if _, outcome := app.parseShareRequest([]string{"root", "--relay", "ws://127.0.0.1:41871/v2/ws"}); outcome != requestParseUsageFailure || app.application != nil {
+		t.Fatal("an address that dials /v2/ws/v2/ws reached a sharing workflow")
+	}
+	if !strings.Contains(stderr.String(), "share: invalid relay URL: the address path ends in /v2/ws") {
+		t.Fatalf("share did not explain the copied endpoint: %q", stderr.String())
+	}
+}
