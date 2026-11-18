@@ -23,10 +23,13 @@ func TestNativeReleaseSelectsStandaloneTargets(t *testing.T) {
 	environment := nativeReleaseEnvironment([]string{
 		"PATH=tools", "CARGO_HOME=registry", "RUSTFLAGS=ambient",
 		"CARGO_ENCODED_RUSTFLAGS=ambient", "CARGO_BUILD_TARGET=ambient", "CARGO_TARGET_DIR=ambient",
-	})
+		"CFLAGS=-march=ambient", "TARGET_CFLAGS=-mbmi", "CXXFLAGS_x86_64-unknown-linux-musl=-march=ambient",
+	}, linuxRelayTarget)
 	joined := strings.Join(environment, "\n")
 	if strings.Contains(joined, "ambient") || !strings.Contains(joined, "PATH=tools") ||
-		!strings.Contains(joined, "CARGO_HOME=registry") || !strings.Contains(joined, "+crt-static") {
+		!strings.Contains(joined, "CARGO_HOME=registry") || !strings.Contains(joined, "+crt-static") ||
+		strings.Contains(joined, "-mbmi") || !strings.Contains(joined, "CFLAGS="+linuxBaselineCFlags) ||
+		!strings.Contains(joined, "CXXFLAGS="+linuxBaselineCFlags) {
 		t.Fatalf("release build inherited target or flag overrides: %q", environment)
 	}
 }
