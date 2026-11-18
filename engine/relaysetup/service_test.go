@@ -94,6 +94,20 @@ func TestOrdinaryAdditionPreservesSelectionAndFrontend(t *testing.T) {
 	}
 }
 
+func TestDiscoveryIdentifiesTheEndpointOfTheAdvertisedRelay(t *testing.T) {
+	const base = "https://relay.example/team/v2/ws"
+	store := &memoryStore{saved: prior()}
+	service := New(Dependencies{Store: store, HTTP: fakeHTTP(func(*http.Request) (*http.Response, error) {
+		return response(200, map[string]any{"version": 1, "access": "open", "relay_url": base})
+	})})
+	if _, err := service.Run(t.Context(), Request{URL: base + "/v2/ws", Operation: AddProfile}, nil); err == nil || !strings.Contains(err.Error(), base) || len(store.saved.Profiles) != 1 {
+		t.Fatalf("copied endpoint: %v, profiles %v", err, store.saved.Profiles)
+	}
+	if _, err := service.Run(t.Context(), Request{URL: base, Operation: AddProfile}, nil); err != nil || len(store.saved.Profiles) != 2 {
+		t.Fatalf("advertised nested mount: %v", err)
+	}
+}
+
 func TestFirstRelayDoesNotAcquireFrontendAuthorityFromDiscovery(t *testing.T) {
 	store := &memoryStore{saved: Snapshot{ConfiguredOnly: true}}
 	service := New(Dependencies{Store: store, HTTP: fakeHTTP(func(*http.Request) (*http.Response, error) {

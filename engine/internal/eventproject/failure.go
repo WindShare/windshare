@@ -116,7 +116,7 @@ func classifyErrorAtDepth(cause error, depth int, traversal *errorTraversal) (ap
 				return failure, true
 			}
 		}
-	case trustedWrapType:
+	case trustedWrapType, reflect.TypeFor[*relayset.RegistrationFailure](), reflect.TypeFor[*relayv2.RegistrationNotSentError]():
 		child, ok := cause.(interface{ Unwrap() error })
 		if !ok {
 			return appobs.Failure{}, false
@@ -144,6 +144,10 @@ func classifyDirectError(cause error) (appobs.Failure, bool) {
 			appobs.NewDisplayPath(collision.FirstLabel), appobs.NewDisplayPath(collision.SecondLabel),
 		)
 		return failure, err == nil
+	}
+	//nolint:errorlint // Only the transport can identify a 404 on the requested upgrade.
+	if route, ok := cause.(*relayv2.WebSocketRouteError); ok {
+		return appobs.NewRelayRouteFailure(route.BaseHint), true
 	}
 	if exactError(cause, share.ErrInvalidChunkSize) || exactError(cause, relayprofile.ErrCandidatesRequired) {
 		return mustFailure(appobs.FailureInvalidInput), true

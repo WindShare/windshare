@@ -170,9 +170,9 @@ func (config Config) validateFields() error {
 	}
 	seen := map[string]bool{}
 	for index, address := range config.ActiveRelays {
-		endpoint, err := normalizeSelectedRelay(address)
+		endpoint, err := v2.NormalizeRelayEndpoint(address)
 		if err != nil {
-			return fmt.Errorf("%w: active_relays[%d]: %w", ErrConfig, index, err)
+			return fmt.Errorf("%w: active_relays[%d]: %w", ErrConfig, index, relayAddressError{cause: err})
 		}
 		if !saved[endpoint.DialURL] || seen[endpoint.DialURL] {
 			return ErrConfig

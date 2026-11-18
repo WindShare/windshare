@@ -20,8 +20,9 @@ unspecified addresses such as `0.0.0.0` and `[::]` are not endpoints.
 TLS terminates at the reverse proxy.
 The database is bound to this endpoint identity and exclusively leased by one host.
 Keep the SQLite database and its WAL together; deleting storage deletes STOP history.
-The parent directory must exist. JSON readiness goes to stdout; structured traces
-go to stderr, with kernel decisions enabled by `RUST_LOG=debug`.
+The parent directory must exist. Copy `relay_url` from the startup JSON into
+`wind share --relay` or `wind relay add`. Discovery advertises the same base URL.
+Structured traces go to stderr, with kernel decisions enabled by `RUST_LOG=debug`.
 
 `GET /healthz` returns `200 ok`; `HEAD /healthz` returns the same status without a
 body. This is HTTP liveness, independent of share capacity, at the root path even

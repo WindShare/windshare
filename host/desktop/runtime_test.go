@@ -4,8 +4,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -100,32 +98,5 @@ func TestUnavailableLogStorageDoesNotPreventSharingHostStartup(t *testing.T) {
 	}
 	if err := host.Close(); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestHostAsksToRepairSavedRelayEndpointCopiedWithWebSocketPath(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("LOCALAPPDATA", root)
-	t.Setenv("XDG_CACHE_HOME", root)
-	configPath := filepath.Join(root, "config.json")
-	t.Setenv("WINDSHARE_CONFIG", configPath)
-	document := `{"profiles":[{"url":"ws://127.0.0.1:41871/v2/ws"}],"active_relays":["ws://127.0.0.1:41871/v2/ws"]}`
-	if err := os.WriteFile(configPath, []byte(document), 0600); err != nil {
-		t.Fatal(err)
-	}
-	host, err := Start()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = host.Close() })
-	host.app.execute(createRequest())
-	view := awaitShare(t, host.app, "operation", func(s Share) bool { return s.State == AwaitingConfiguration })
-	if view.Blocking == nil || view.Blocking.Recovery != RepairSettings || view.Error == nil || view.Error.Code != "settings_unavailable" {
-		t.Fatalf("copied endpoint did not ask to repair settings: %+v", view)
-	}
-	for _, detail := range []string{"active_relays[0]", "ends in /v2/ws", strconv.QuoteToASCII(configPath)} {
-		if !strings.Contains(view.Error.Message, detail) {
-			t.Errorf("repair detail %q missing: %q", detail, view.Error.Message)
-		}
 	}
 }

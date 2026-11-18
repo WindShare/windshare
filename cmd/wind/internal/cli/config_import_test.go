@@ -80,25 +80,3 @@ func TestConfigImportMapsStorageFailure(t *testing.T) {
 		t.Fatal("storage error did not fail the command:", code)
 	}
 }
-
-func TestConfigImportRejectsActiveRelayEndpointNamingTheField(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	t.Setenv(relayconfig.PathEnvironment, path)
-	stderr := new(bytes.Buffer)
-	app := &App{
-		Stdin: strings.NewReader(`{"profiles":[{"url":"https://good.example"},{"url":"ws://127.0.0.1:41871/v2/ws"}],` +
-			`"active_relays":["https://good.example","ws://127.0.0.1:41871/v2/ws"]}`),
-		Stdout: new(bytes.Buffer), Stderr: stderr,
-		saveShareConfig: relayconfig.Save, loadShareConfig: relayconfig.Load,
-	}
-	t.Cleanup(app.closeTerminalOutput)
-	if code := app.Run(context.Background(), []string{"config", "import", "-"}); code != ExitUsage {
-		t.Fatal("import accepted an active relay that dials /v2/ws/v2/ws:", code)
-	}
-	if !strings.Contains(stderr.String(), `active_relays[1]: invalid relay URL: address "ws://127.0.0.1:41871/v2/ws" ends in /v2/ws`) {
-		t.Fatalf("import did not name the field to repair: %q", stderr.String())
-	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatal("rejected import wrote settings:", err)
-	}
-}

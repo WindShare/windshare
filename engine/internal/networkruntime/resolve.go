@@ -11,6 +11,25 @@ import (
 	"github.com/windshare/windshare/engine/networkdirectory"
 )
 
+// PublishRelayHints retains pending registrations so a healthy relay can publish
+// immediately. An initial registration that has already ended cannot serve this share.
+func (selection Selection) PublishRelayHints(capability *link.Link, rejected []string) {
+	if len(selection.Plan.Network) == 0 && len(rejected) == 0 {
+		return
+	}
+	capability.Relays, capability.NodeAliases = nil, nil
+	for _, candidate := range selection.Plan.Configured {
+		if !slices.Contains(rejected, candidate.URL) {
+			capability.Relays = append(capability.Relays, candidate.URL)
+		}
+	}
+	for _, candidate := range selection.Plan.Network {
+		if !slices.Contains(rejected, candidate.URL) {
+			capability.NodeAliases = append(capability.NodeAliases, candidate.Alias)
+		}
+	}
+}
+
 // Resolve returns immediately usable endpoints and optional bounded expansion.
 // The relay race owns expansion so known paths never wait for an unknown alias.
 func (r *Runtime) Resolve(capability link.Link) ([]string, func(context.Context) ([]string, error), error) {

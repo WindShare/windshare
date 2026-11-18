@@ -1,6 +1,9 @@
 package relayset
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // RegistrationFailure retains endpoint identity across the aggregate readiness
 // result, so applications can recover the rejected authority without parsing text.
@@ -10,7 +13,8 @@ type RegistrationFailure struct {
 }
 
 func (failure *RegistrationFailure) Error() string {
-	return fmt.Sprintf("register %s: %v", failure.URL, failure.Cause)
+	address, _, _ := strings.Cut(failure.URL, "?")
+	return fmt.Sprintf("register %s: %v", address, failure.Cause)
 }
 
 func (failure *RegistrationFailure) Unwrap() error { return failure.Cause }

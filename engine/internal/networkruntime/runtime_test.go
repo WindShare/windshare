@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/relayplan"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/nodedirectory"
 	"github.com/windshare/windshare/engine/networkconfig"
@@ -78,6 +80,18 @@ func TestPlanningPreservesExplicitIntentAndFrontendAuthority(t *testing.T) {
 	}
 	if _, err := r.Plan(context.Background(), relayprofile.Plan(nil), "invalid"); err == nil {
 		t.Fatal("invalid explicit frontend")
+	}
+}
+
+func TestPublicationKeepsPendingHintsAndOmitsRejectedRegistrations(t *testing.T) {
+	selection := Selection{Plan: relayplan.Plan{
+		Configured: []relayplan.Candidate{{URL: "ready"}, {URL: "rejected"}, {URL: "pending"}},
+		Network:    []relayplan.Candidate{{URL: "failed-node", Alias: "one"}, {URL: "pending-node", Alias: "two"}},
+	}}
+	capability := link.Link{Relays: []string{"ready", "rejected", "pending", "failed-node", "pending-node"}}
+	selection.PublishRelayHints(&capability, []string{"rejected", "failed-node"})
+	if !slices.Equal(capability.Relays, []string{"ready", "pending"}) || !slices.Equal(capability.NodeAliases, []string{"two"}) {
+		t.Fatal(capability.Relays, capability.NodeAliases)
 	}
 }
 

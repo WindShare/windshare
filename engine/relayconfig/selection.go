@@ -3,8 +3,6 @@ package relayconfig
 import (
 	"errors"
 	"fmt"
-	"net/url"
-	"strings"
 
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/networkendpoint"
@@ -57,9 +55,9 @@ func SelectRelays(config Config, override []string) ([]relayprofile.Candidate, e
 	candidates := make([]relayprofile.Candidate, 0, len(override))
 	seen := make(map[string]bool, len(override))
 	for _, address := range override {
-		endpoint, err := normalizeSelectedRelay(address)
+		endpoint, err := v2.NormalizeRelayEndpoint(address)
 		if err != nil {
-			return nil, err
+			return nil, relayAddressError{cause: err}
 		}
 		if seen[endpoint.DialURL] {
 			continue
@@ -77,46 +75,14 @@ func SelectRelays(config Config, override []string) ([]relayprofile.Candidate, e
 	return candidates, nil
 }
 
-// Relays print the WebSocket endpoint they serve, but candidates are base URLs
-// to which normalization appends that path. The doubled path fails every
-// upgrade, so both explicit overrides and saved active relays reject the copied
-// endpoint before a share retries it indefinitely. Inactive profiles are not
-// dialed and keep their existing validation.
-func normalizeSelectedRelay(address string) (v2.RelayEndpoint, error) {
-	endpoint, err := v2.NormalizeRelayEndpoint(address)
-	if err == nil && repeatsWebSocketPath(endpoint) {
-		err = &relayWebSocketPathError{address: redactRelayAddress(address)}
+// RelayRouteGuidance applies to an observed HTTP failure. The same spelling can
+// still name a working mount or an unused profile.
+func RelayRouteGuidance(hint networkendpoint.RelayBaseHint) string {
+	message := "WebSocket upgrade returned HTTP 404. Use the advertised relay_url"
+	if hint.URL() != "" {
+		message += fmt.Sprintf(" (check base %q)", hint.URL())
 	}
-	if err != nil {
-		return v2.RelayEndpoint{}, relayAddressError{cause: err}
-	}
-	return endpoint, nil
-}
-
-func repeatsWebSocketPath(endpoint v2.RelayEndpoint) bool {
-	parsed, err := url.Parse(endpoint.IdentityURL)
-	return err == nil && strings.HasSuffix(parsed.EscapedPath(), v2.WebSocketPath+v2.WebSocketPath)
-}
-
-// Name the address so one bad entry is identifiable in a multi-relay list,
-// without echoing routing queries or other secrets it may carry.
-type relayWebSocketPathError struct{ address string }
-
-func (err *relayWebSocketPathError) Error() string {
-	return "relay base " + err.address + " ends in " + v2.WebSocketPath
-}
-func (err *relayWebSocketPathError) Unwrap() []error {
-	return []error{v2.ErrIdentity, networkendpoint.ErrInvalid}
-}
-
-func redactRelayAddress(address string) string {
-	parsed, err := url.Parse(address)
-	if err != nil {
-		return "(unparseable address)"
-	}
-	parsed.User, parsed.RawQuery, parsed.ForceQuery = nil, "", false
-	parsed.Fragment, parsed.RawFragment = "", ""
-	return parsed.String()
+	return message + ". Keep any routing query. For saved settings, update the matching profiles[].url and active_relays[] together."
 }
 
 // Preserve the domain cause while presenting only the address detail relevant
@@ -125,16 +91,11 @@ type relayAddressError struct{ cause error }
 
 func (err relayAddressError) Error() string {
 	var detail string
-	host, numeric := errors.AsType[*networkendpoint.NumericHostError](err.cause)
-	copied, endpoint := errors.AsType[*relayWebSocketPathError](err.cause)
-	switch {
-	case numeric:
+	if host, ok := errors.AsType[*networkendpoint.NumericHostError](err.cause); ok {
 		detail = fmt.Sprintf("host %q ends in a number; use a DNS name or a canonical IP address", host.Host)
-	case endpoint:
-		detail = fmt.Sprintf("address %q ends in %s, which WindShare adds itself; remove it to use the relay base URL", copied.address, v2.WebSocketPath)
-	case errors.Is(err.cause, v2.ErrRelayEndpointWhitespace):
+	} else if errors.Is(err.cause, v2.ErrRelayEndpointWhitespace) {
 		detail = "contains whitespace or invisible spacing; remove it from the address"
-	default:
+	} else {
 		detail = "not an accepted relay address; use an absolute http, https, ws, or wss URL with a host and no user:password@ or #fragment"
 	}
 	return ErrRelayURL.Error() + ": " + detail
