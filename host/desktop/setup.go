@@ -25,6 +25,7 @@ type SetupView struct {
 	RelayURL        string                    `json:"relay_url,omitempty"`
 	Stage           string                    `json:"stage,omitempty"`
 	VerificationURL string                    `json:"verification_url,omitempty"`
+	ServiceLogin    *relaysetup.ServiceLogin  `json:"service_login,omitempty"`
 	UserCode        string                    `json:"user_code,omitempty"`
 	FrontendSaved   bool                      `json:"frontend_saved"`
 	RelaySaved      bool                      `json:"relay_saved"`
@@ -105,7 +106,7 @@ func (a *Application) runSetup(ctx context.Context, input SetupInput) {
 		if a.setup.State == "running" {
 			a.setup.Stage = progress.Stage
 			if progress.VerificationURL != "" {
-				a.setup.VerificationURL, a.setup.UserCode = progress.VerificationURL, progress.UserCode
+				a.setup.VerificationURL, a.setup.UserCode, a.setup.ServiceLogin = progress.VerificationURL, progress.UserCode, progress.ServiceLogin
 			}
 		}
 		a.snapshotLocked()
@@ -136,7 +137,7 @@ func (a *Application) runSetup(ctx context.Context, input SetupInput) {
 		return
 	}
 	defer a.mu.Unlock()
-	a.setup.VerificationURL, a.setup.UserCode = "", ""
+	a.setup.VerificationURL, a.setup.UserCode, a.setup.ServiceLogin = "", "", nil
 	if err != nil {
 		a.setup.State, a.setup.Error = "failed", failure("setup_failed", err)
 	} else {

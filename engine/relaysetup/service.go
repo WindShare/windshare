@@ -77,6 +77,7 @@ type Result struct {
 }
 type Progress struct {
 	Stage, OperationID, EnrollmentID, VerificationURL, UserCode string
+	ServiceLogin                                                *ServiceLogin
 	RetryAfter                                                  time.Duration
 }
 

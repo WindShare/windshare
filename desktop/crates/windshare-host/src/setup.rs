@@ -14,6 +14,7 @@ pub enum Setup {
         verification_url: String,
         #[serde(default)]
         user_code: String,
+        service_login: Option<ServiceLogin>,
     },
     Finished {
         #[serde(flatten)]
@@ -38,6 +39,12 @@ pub enum Setup {
         context: SetupContext,
         error: crate::Failure,
     },
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct ServiceLogin {
+    pub url: String,
+    pub host: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]

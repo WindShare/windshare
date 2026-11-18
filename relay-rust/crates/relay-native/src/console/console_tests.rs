@@ -10,7 +10,7 @@ fn open(path: &Path, identity: &Identity, policy: &Policy) -> Console {
     let db = Database::open(path, endpoint.identity).unwrap();
     let access = Service::default();
     access.configure(policy.clone()).unwrap();
-    Console::open(&endpoint, &db, access, identity)
+    Console::open(&endpoint, &db, access, identity, None)
         .unwrap()
         .unwrap()
 }

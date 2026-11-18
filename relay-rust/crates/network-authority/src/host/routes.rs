@@ -11,6 +11,7 @@ pub struct Context {
     source: String,
     bearer: String,
     session: String,
+    device_session: String,
     csrf: String,
     initialization: String,
     email: bool,
@@ -37,6 +38,11 @@ impl Context {
                 .and_then(|value| value.strip_prefix("Bearer ").map(str::to_owned))
                 .unwrap_or_default(),
             session,
+            device_session: cookie
+                .split(';')
+                .find_map(|part| part.trim().strip_prefix(super::device_login::COOKIE))
+                .unwrap_or_default()
+                .to_owned(),
             csrf: request.headers().get("X-CSRF-Token")?.unwrap_or_default(),
             initialization: env
                 .secret("INITIALIZATION_TOKEN")
@@ -88,29 +94,21 @@ pub fn dispatch(
     context: Context,
     bytes: &[u8],
 ) -> Result<Response> {
+    if context.path.starts_with("/v1/admin/") {
+        return admin_routes(authority, context, bytes);
+    }
     let Context {
-        path,
         method,
+        path,
         source,
         bearer,
-        session,
-        csrf: provided,
-        initialization,
-        email,
-        directory,
+        device_session,
+        ..
     } = context;
-    if path.starts_with("/v1/admin/")
-        && method != Method::Get
-        && !matches!(path.as_str(), "/v1/admin/initialize" | "/v1/admin/login")
-    {
-        ensure!(
-            !session.is_empty() && provided == csrf(&session),
-            Fault::Denied {
-                reason: "csrf".into()
-            }
-        );
-    }
     let value = match (method, path.as_str()) {
+        (Method::Post, "/v1/device/preview" | "/v1/device/approve") => {
+            return super::device_login::handle(authority, &path, &source, &device_session, bytes);
+        }
         (Method::Post, "/v1/accounts") => {
             serde_json::to_value(authority.register(&source, parse(bytes)?)?)?
         }
@@ -139,6 +137,37 @@ pub fn dispatch(
             let report: Report = parse(bytes)?;
             serde_json::json!({"id":authority.report(&source,report.share,report.reason)?})
         }
+        _ => return Response::error("not found", 404).map_err(|error| anyhow::anyhow!("{error}")),
+    };
+    Response::from_json(&value).map_err(|error| anyhow::anyhow!("{error}"))
+}
+
+fn admin_routes(
+    authority: &mut Authority<Database, Clock>,
+    context: Context,
+    bytes: &[u8],
+) -> Result<Response> {
+    let Context {
+        path,
+        method,
+        source,
+        session,
+        csrf: provided,
+        initialization,
+        email,
+        directory,
+        ..
+    } = context;
+    if method != Method::Get && !matches!(path.as_str(), "/v1/admin/initialize" | "/v1/admin/login")
+    {
+        ensure!(
+            !session.is_empty() && provided == csrf(&session),
+            Fault::Denied {
+                reason: "csrf".into()
+            }
+        );
+    }
+    let value = match (method, path.as_str()) {
         (Method::Post, "/v1/admin/initialize") => {
             let value: Initialize = parse(bytes)?;
             return signed_in(&authority.initialize(

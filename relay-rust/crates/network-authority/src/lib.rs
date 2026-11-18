@@ -2,6 +2,8 @@
 mod accounts;
 mod administrator;
 mod admission;
+#[cfg(any(test, target_arch = "wasm32"))]
+mod device_login;
 mod governance;
 mod model;
 mod nodes;

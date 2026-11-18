@@ -29,17 +29,19 @@ type setupIntent struct {
 	RelayURL         string    `json:"relay_url"`
 	ConsoleURL       string    `json:"console_url"`
 	OfferedFrontend  string    `json:"offered_frontend,omitempty"`
+	AccountLoginPage string    `json:"account_login_page,omitempty"`
 	DeviceName       string    `json:"device_name"`
 	ClaimSecret      string    `json:"claim_secret"`
 	Operation        Operation `json:"operation"`
 }
 
 type enrollment struct {
-	ID              string `json:"id"`
-	UserCode        string `json:"user_code"`
-	VerificationURL string `json:"verification_url"`
-	ExpiresAt       int64  `json:"expires_at"`
-	IntervalMS      int64  `json:"interval_ms"`
+	ID                string `json:"id"`
+	UserCode          string `json:"user_code"`
+	VerificationURL   string `json:"verification_url"`
+	ExpiresAt         int64  `json:"expires_at"`
+	IntervalMS        int64  `json:"interval_ms"`
+	AccountInvitation string `json:"account_invitation,omitempty"`
 }
 type credential struct {
 	AccessKey string `json:"access_key"`
@@ -106,6 +108,9 @@ func (pending *PendingSetup) validate() error {
 		ValidateDeviceName(pending.DeviceName) != nil {
 		return invalid
 	}
+	if pending.AccountLoginPage != "" && !secureEndpoint(pending.AccountLoginPage) {
+		return invalid
+	}
 	if relayconfig.ValidateFrontURL(pending.ConsoleURL) != nil {
 		return invalid
 	}
@@ -131,6 +136,9 @@ func (pending *PendingSetup) validate() error {
 		return invalid
 	}
 	approval := pending.enrollment()
+	if _, err := pending.serviceLogin(approval.AccountInvitation); err != nil {
+		return invalid
+	}
 	verification, err := url.Parse(approval.VerificationURL)
 	if err != nil || verification.User != nil || verification.Scheme != console.Scheme || verification.Host != console.Host ||
 		approval.ID == "" || approval.UserCode == "" || approval.ExpiresAt <= 0 ||

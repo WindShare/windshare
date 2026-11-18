@@ -1,5 +1,9 @@
 //! One management transaction owns enrollment, installation receipts and revocation.
 mod database;
+mod device_login;
+#[cfg(test)]
+#[path = "device_login_tests.rs"]
+mod device_login_tests;
 mod devices;
 mod http;
 mod sessions;
@@ -27,6 +31,8 @@ struct Inner {
     origin: String,
     relay: String,
     owner: [u8; 16],
+    node_key: ed25519_dalek::SigningKey,
+    account_service: Option<crate::node::usage::Authority>,
     bootstrap: Digest,
 }
 
@@ -117,6 +123,7 @@ impl Console {
         store: &Database,
         access: Service,
         identity: &Identity,
+        authority: Option<crate::node::usage::Authority>,
     ) -> Result<Option<Self>> {
         let url = url::Url::parse(endpoint.relay_url())?;
         if url.scheme() != "https"
@@ -146,6 +153,8 @@ impl Console {
             origin,
             relay: endpoint.relay_url().to_owned(),
             owner: identity.owner().principal,
+            node_key: identity.key(),
+            account_service: authority,
             bootstrap: Digest::of(token.as_bytes()),
         }))))
     }
@@ -171,6 +180,7 @@ impl Console {
         let result = match (method, path) {
             (&Method::POST, "/api/initialize") => self.initialize(&tx, body, now),
             (&Method::POST, "/api/login") => Self::login(&tx, body, now),
+            (&Method::POST, "/api/enrollments/account") => self.approve_account(&tx, body, now),
             (&Method::POST, path) if claimant(path) => self.device(&tx, path, body, now),
             _ if !sessions::authenticated(&tx, session, now)? => {
                 Err(Rejected(StatusCode::UNAUTHORIZED, "login_required", 0).into())

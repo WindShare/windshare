@@ -20,6 +20,9 @@ macro_rules! messages {
 messages! {
     SharingNetwork => ("Sharing network", "分享网络"),
     RelayChoice => ("Relay selection", "中转方式"),
+    ServiceLogin => ("Sign in to this service", "登录此服务"),
+    ApproveAsOwner => ("Pair as node owner", "作为节点主人配对"),
+    ServiceCodeDetail => ("Match this code in your browser.", "请在浏览器中核对配对码。"),
     ChooseRelays => ("Choose relays", "选择中转"),
     AutomaticRelays => ("Automatic", "自动选择"),
     AutomaticRelayDetail => ("WindShare picks relays to help recipients connect to you.", "WindShare 自动选择中转，帮助接收方连接到你。"),

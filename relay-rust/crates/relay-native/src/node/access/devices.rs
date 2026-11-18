@@ -1,10 +1,46 @@
 use super::{Service, State};
-use windshare_relay_access::{Credential, CredentialState};
+use std::collections::BTreeMap;
+use windshare_relay_access::{
+    AccountId, Credential, CredentialId, CredentialState, Issuer, trust::Generation,
+};
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct BoundAccount {
+    pub issuer: Issuer,
+    pub account: AccountId,
+}
 
 #[derive(Default)]
-pub struct DeviceKeys(pub Vec<Credential>);
+pub struct DeviceKeys {
+    pub keys: Vec<Credential>,
+    pub accounts: BTreeMap<CredentialId, BoundAccount>,
+}
 
 impl Service {
+    pub(crate) fn observe_device_login(&self, issuer: Issuer, supported: bool) {
+        let mut state = self.state.lock().expect("node access state");
+        if state.controller == Some(issuer) {
+            state.login_issuer = supported.then_some(issuer);
+        }
+    }
+    pub(crate) fn login_generation(&self, issuer: Issuer, now: u64) -> Option<Generation> {
+        let state = self.state.lock().expect("node access state");
+        if state.login_issuer != Some(issuer)
+            || state.controller != Some(issuer)
+            || !state.active_issuers.contains(&issuer)
+            || !state
+                .node_policies
+                .get(&issuer)
+                .is_some_and(|policy| policy.enabled)
+        {
+            return None;
+        }
+        state
+            .trusted
+            .generations()
+            .into_iter()
+            .find(|g| g.issuer == issuer && g.usable(now))
+    }
     pub(crate) fn apply_devices(&self, devices: DeviceKeys) {
         let mut state = self.state.lock().expect("node access state");
         state.devices = devices;
@@ -26,7 +62,7 @@ impl State {
     pub(super) fn rebuild_credentials(&mut self) {
         let previous = std::mem::take(&mut self.credentials);
         self.credentials.clone_from(&self.policy.credentials);
-        for device in &self.devices.0 {
+        for device in &self.devices.keys {
             // Either the configured identifier or the key material can survive a reload.
             if matches!(device.state, CredentialState::Revoked { .. }) {
                 for c in &mut self.credentials {

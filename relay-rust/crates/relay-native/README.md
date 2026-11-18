@@ -11,8 +11,8 @@ the device name and code at the approval URL. Public guests can use `wind relay 
 The first start creates a durable Ed25519 node identity and prints its owner access
 key. Back up the identity, relay SQLite database and its sibling `.console.sqlite`
 using a consistent SQLite backup. The console stores sessions, per-device installation
-receipts and revocations. Paired devices share the owner priority and have separate
-keys. The console can issue a service key for a separate principal. Revoking a key
+receipts and revocations. Owner-approved devices share owner priority. Devices approved
+through a service account use that account?s allowance and receive a key scoped to this node. The console can issue a service key for a separate principal. Revoking a key
 also stops its active shares on this node. One host
 owns each database; its endpoint identity and permanent STOP history cannot be reset
 by changing configuration. JSON readiness goes to stdout; traces go to stderr.

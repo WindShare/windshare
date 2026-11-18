@@ -40,11 +40,12 @@ func (failure *apiFailure) temporary() bool {
 }
 
 type discovery struct {
-	Version         int    `json:"version"`
-	Access          string `json:"access"`
-	RelayURL        string `json:"relay_url"`
-	ConsoleURL      string `json:"console_url"`
-	OfferedFrontend string `json:"frontend_url"`
+	Version          int    `json:"version"`
+	Access           string `json:"access"`
+	RelayURL         string `json:"relay_url"`
+	ConsoleURL       string `json:"console_url"`
+	OfferedFrontend  string `json:"frontend_url"`
+	AccountLoginPage string `json:"account_login_page"`
 }
 
 func (run *workflow) call(ctx context.Context, method, address string, body, out any) error {
@@ -145,6 +146,9 @@ func (run *workflow) discover(ctx context.Context, address string) (discovery, e
 	}
 	if result.ConsoleURL != "" && !secureEndpoint(parsed.Scheme+"://"+parsed.Host) {
 		return result, errors.New("restricted relay discovery requires HTTPS")
+	}
+	if result.AccountLoginPage != "" && (result.ConsoleURL == "" || !secureEndpoint(result.AccountLoginPage)) {
+		return result, errors.New("invalid service account login page")
 	}
 	if result.OfferedFrontend != "" && !secureEndpoint(result.OfferedFrontend) {
 		result.OfferedFrontend = ""

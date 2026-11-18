@@ -22,15 +22,18 @@ impl Runtime {
         endpoint: &crate::Endpoint,
         store: &crate::Database,
     ) -> Result<()> {
-        let identity = self
-            .state
-            .lock()
-            .map_err(|_| anyhow!("node state"))?
-            .identity
-            .clone();
+        let state = self.state.lock().map_err(|_| anyhow!("node state"))?;
+        let identity = state.identity.clone();
+        let authority = state.settings.authority.clone();
+        drop(state);
         if let Some(identity) = identity
-            && let Some(console) =
-                crate::console::Console::open(endpoint, store, self.access.clone(), &identity)?
+            && let Some(console) = crate::console::Console::open(
+                endpoint,
+                store,
+                self.access.clone(),
+                &identity,
+                authority,
+            )?
         {
             self.console
                 .set(console)
@@ -105,6 +108,11 @@ impl Runtime {
             .as_ref()
             .ok_or_else(|| anyhow!("missing node identity"))?;
         let now = super::now().unsigned_abs();
+        let login_page = self
+            .console
+            .get()
+            .filter(|_| state.settings.services.relay)
+            .and_then(|console| console.login_page(now));
         let descriptor = serde_json::json!({
             "version":2, "node_id":identity.id(), "node_key":URL_SAFE_NO_PAD.encode(identity.key().verifying_key().to_bytes()),
             "relay_endpoint":endpoint.as_str(), "services":state.settings.services,
@@ -112,6 +120,7 @@ impl Runtime {
             "capacity_bytes_per_second":state.settings.capacity_bytes_per_second,
             "classes":["owner","standard","lowest"], "issued_at":now, "expires_at":now+DESCRIPTOR_SECONDS,
             "relay_available":!state.unavailable && self.access.public_enabled(), "anonymous":self.access.anonymous(),
+            "account_login_page":login_page,
             "console_url": self.console.get().map(crate::console::Console::origin), "authority":state.settings.authority
         });
         let payload = serde_json::to_vec(&descriptor)?;

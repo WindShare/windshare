@@ -69,7 +69,7 @@ func (run *workflow) execute(ctx context.Context, request Request, progress func
 	saved.Pending = &PendingSetup{
 		SettingsRevision: saved.SettingsRevision(), OperationID: encode(operation),
 		RelayURL: discovery.RelayURL, ConsoleURL: discovery.ConsoleURL, OfferedFrontend: discovery.OfferedFrontend,
-		DeviceName: request.DeviceName, ClaimSecret: encode(secret), Operation: request.Operation, phase: requesting{}}
+		AccountLoginPage: discovery.AccountLoginPage, DeviceName: request.DeviceName, ClaimSecret: encode(secret), Operation: request.Operation, phase: requesting{}}
 
 	// Persist the claimant before the first request; a lost response can recover by digest.
 	pending := saved.Pending

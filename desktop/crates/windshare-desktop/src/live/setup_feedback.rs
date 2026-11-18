@@ -89,23 +89,54 @@ impl Desktop {
             Setup::Running {
                 verification_url,
                 user_code,
+                service_login,
                 ..
             } if !verification_url.is_empty() => {
-                panel = panel
-                    .child(theme.caption(locale.text(Text::RelayApprovalDetail)))
-                    .child(
-                        row()
-                            .gap(px(12.))
-                            .child(theme.heading(user_code.clone(), 18.))
-                            .child(Self::button(
-                                "approve-device",
-                                locale.text(Text::ApproveDevice),
-                                Icon::External,
-                                ButtonStyle::Primary,
-                                Action::ApproveRelay,
-                                cx,
-                            )),
-                    );
+                if let Some(login) = service_login {
+                    let url = login.url.clone();
+                    panel = panel
+                        .child(theme.label(login.host.clone(), 15.))
+                        .child(theme.caption(locale.text(Text::ServiceCodeDetail)))
+                        .child(theme.heading(user_code.clone(), 18.))
+                        .child(
+                            row()
+                                .gap(px(8.))
+                                .flex_wrap()
+                                .child(
+                                    windshare_ui::Button::new(
+                                        "service-login",
+                                        locale.text(Text::ServiceLogin),
+                                    )
+                                    .icon(Icon::External)
+                                    .style(ButtonStyle::Primary)
+                                    .on_press(move |(), _, cx| cx.open_url(&url)),
+                                )
+                                .child(Self::button(
+                                    "approve-owner",
+                                    locale.text(Text::ApproveAsOwner),
+                                    Icon::Shield,
+                                    ButtonStyle::Quiet,
+                                    Action::ApproveRelay,
+                                    cx,
+                                )),
+                        );
+                } else {
+                    panel = panel
+                        .child(theme.caption(locale.text(Text::RelayApprovalDetail)))
+                        .child(
+                            row()
+                                .gap(px(12.))
+                                .child(theme.heading(user_code.clone(), 18.))
+                                .child(Self::button(
+                                    "approve-device",
+                                    locale.text(Text::ApproveDevice),
+                                    Icon::External,
+                                    ButtonStyle::Primary,
+                                    Action::ApproveRelay,
+                                    cx,
+                                )),
+                        );
+                }
             }
             Setup::Running { .. } => {
                 panel = panel.child(theme.caption(locale.text(Text::ConnectingRelay)));

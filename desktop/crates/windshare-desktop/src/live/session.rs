@@ -194,7 +194,9 @@ impl Desktop {
                 }
             }));
             if let windshare_host::Setup::Running {
-                verification_url, ..
+                verification_url,
+                service_login: None,
+                ..
             } = &model.setup
                 && !verification_url.is_empty()
                 && !matches!(&session.model.setup, windshare_host::Setup::Running { verification_url: previous, .. } if previous == verification_url)

@@ -3,7 +3,7 @@ mod cache;
 mod devices;
 mod policy;
 pub(crate) use cache::Cache;
-pub(crate) use devices::DeviceKeys;
+pub(crate) use devices::{BoundAccount, DeviceKeys};
 mod residency;
 #[cfg(test)]
 #[path = "access_tests.rs"]
@@ -36,6 +36,7 @@ struct State {
     policy: Policy,
     node_policies: BTreeMap<Issuer, windshare_relay_access::usage::NodePolicy>,
     controller: Option<Issuer>,
+    login_issuer: Option<Issuer>,
     trusted: TrustStore,
     active_issuers: std::collections::BTreeSet<Issuer>,
     devices: DeviceKeys,
@@ -53,6 +54,7 @@ impl Default for Service {
                 policy: Policy::default(),
                 node_policies: BTreeMap::new(),
                 controller: None,
+                login_issuer: None,
                 trusted: TrustStore::default(),
                 active_issuers: std::collections::BTreeSet::new(),
                 devices: DeviceKeys::default(),
@@ -103,6 +105,7 @@ impl Service {
             state.credentials.iter().any(|credential| {
                 credential.digest == digest
                     && credential.state == CredentialState::Active
+                    && !state.devices.accounts.contains_key(&credential.id)
                     && state.owners.contains(&credential.principal)
             })
         });
@@ -154,7 +157,16 @@ impl Service {
                     else {
                         return RegistrationDecision::Denied;
                     };
-                    attribution
+                    let id = credential.id;
+                    state
+                        .devices
+                        .accounts
+                        .get(&id)
+                        .map_or(attribution, |binding| Attribution::Account {
+                            issuer: binding.issuer,
+                            account: binding.account,
+                            credential: id,
+                        })
                 } else {
                     let Some(ticket) = URL_SAFE_NO_PAD
                         .decode(token)
@@ -347,13 +359,30 @@ impl State {
                         Attribution::Credential { .. } => false,
                     }
             });
+        let local_key = match attribution {
+            Attribution::Credential { credential, .. } => Some(credential),
+            Attribution::Account {
+                issuer,
+                account,
+                credential,
+            } if self.devices.accounts.get(&credential)
+                == Some(&BoundAccount { issuer, account }) =>
+            {
+                Some(credential)
+            }
+            _ => None,
+        };
         disabled
+            || local_key.is_some_and(|id| {
+                !self
+                    .credentials
+                    .iter()
+                    .any(|entry| entry.id == id && entry.state == CredentialState::Active)
+            })
             || matches!(attribution, Attribution::Account { issuer, .. } if !self.active_issuers.contains(&issuer))
             || self.restrictions.iter().any(|(issuer, restrictions)| {
                 restrictions.denied(*issuer, *share.as_bytes(), attribution)
             })
-            || matches!(attribution, Attribution::Credential { credential, .. }
-                if !self.credentials.iter().any(|entry| entry.id == credential && entry.state == CredentialState::Active))
     }
 
     fn owner(&self, attribution: Attribution) -> bool {

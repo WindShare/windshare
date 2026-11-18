@@ -7,6 +7,8 @@ publish.workspace = true
 description = "I/O-free relay access and enrollment decisions"
 
 [dependencies]
+base64 = { version = "0.23.1", default-features = false, features = ["alloc"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 sha2 = { version = "0.11.1", default-features = false }
 ed25519-dalek = { version = "3.0.0", default-features = false, features = ["alloc"] }

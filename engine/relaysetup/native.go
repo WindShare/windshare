@@ -20,5 +20,9 @@ func (run *workflow) discoverNative(raw []byte) (discovery, error) {
 	if descriptor.Anonymous {
 		access = "open"
 	}
-	return discovery{Version: 2, Access: access, RelayURL: descriptor.RelayBaseURL(), ConsoleURL: descriptor.ConsoleURL}, nil
+	result := discovery{Version: 2, Access: access, RelayURL: descriptor.RelayBaseURL(), ConsoleURL: descriptor.ConsoleURL}
+	if descriptor.Services.Relay {
+		result.AccountLoginPage = descriptor.AccountLoginPage
+	}
+	return result, nil
 }

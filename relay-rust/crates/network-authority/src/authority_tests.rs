@@ -1,6 +1,8 @@
 use super::*;
 #[path = "contract_vectors_tests.rs"]
 mod contract_vectors;
+#[path = "device_login_tests.rs"]
+mod device_login;
 #[path = "governance_tests.rs"]
 mod governance;
 use crate::store::{key, load, save};

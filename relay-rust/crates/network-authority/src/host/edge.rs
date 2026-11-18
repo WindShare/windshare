@@ -4,6 +4,7 @@ use worker::{Context, Env, Method, Request, Response, Result, event};
 const POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 #[event(fetch)]
 pub async fn fetch(request: Request, env: Env, _context: Context) -> Result<Response> {
+    let usage_report = request.method() == Method::Post && request.path() == "/v1/node/usage";
     let origin = request.headers().get("Origin")?;
     let own = request.url()?.origin().ascii_serialization();
     if !allowed_origin(&request.path(), origin.as_deref(), &own, &env) {
@@ -21,8 +22,10 @@ pub async fn fetch(request: Request, env: Env, _context: Context) -> Result<Resp
             forward(request, &env).await?
         }
     } else {
-        if request.path().starts_with("/v1/admin/") && origin.is_none() {
-            return Response::error("administrator mutations require an origin", 403);
+        if (request.path().starts_with("/v1/admin/") || request.path().starts_with("/v1/device/"))
+            && origin.is_none()
+        {
+            return Response::error("browser requests require an origin", 403);
         }
         if request.path() != "/v1/node/usage"
             && request
@@ -38,6 +41,12 @@ pub async fn fetch(request: Request, env: Env, _context: Context) -> Result<Resp
     // and cookies while taking ownership of the edge response policy.
     let headers = response.headers().clone();
     response = response.with_headers(headers);
+    if usage_report && response.status_code() == 200 {
+        response.headers_mut().set(
+            windshare_relay_access::device_login::CAPABILITY_HEADER,
+            windshare_relay_access::device_login::CAPABILITY_VERSION,
+        )?;
+    }
     response.headers_mut().set("Cache-Control", "no-store")?;
     let policy = env.var("DIRECTORY_ORIGIN").map_or_else(
         |_| POLICY.to_owned(),
@@ -101,7 +110,7 @@ async fn forward(request: Request, env: &Env) -> Result<Response> {
 }
 
 fn allowed_origin(path: &str, origin: Option<&str>, own: &str, env: &Env) -> bool {
-    let admin = path.starts_with("/v1/admin/");
+    let admin = path.starts_with("/v1/admin/") || path.starts_with("/v1/device/");
     let api_origin = env.var("API_ORIGIN").ok().map(|v| v.to_string());
     if admin && origin.is_some_and(|v| v != own && Some(v) != api_origin.as_deref()) {
         return false;

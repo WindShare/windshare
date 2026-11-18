@@ -14,11 +14,12 @@ import (
 )
 
 type enrollmentResponse struct {
-	ID              string `json:"enrollment_id"`
-	UserCode        string `json:"user_code"`
-	VerificationURL string `json:"verification_uri_complete"`
-	ExpiresAt       int64  `json:"expires_at"`
-	IntervalMS      int64  `json:"interval_ms"`
+	ID                string `json:"enrollment_id"`
+	UserCode          string `json:"user_code"`
+	VerificationURL   string `json:"verification_uri_complete"`
+	ExpiresAt         int64  `json:"expires_at"`
+	IntervalMS        int64  `json:"interval_ms"`
+	AccountInvitation string `json:"account_invitation,omitempty"`
 }
 type credentialResponse struct {
 	AccessKey string `json:"access_key"`
@@ -63,6 +64,11 @@ func (run *workflow) enroll(ctx context.Context, saved Snapshot, progress func(P
 	}
 	event := Progress{Stage: "approval_required", OperationID: pending.OperationID, EnrollmentID: pending.enrollment().ID,
 		VerificationURL: pending.enrollment().VerificationURL, UserCode: pending.enrollment().UserCode}
+	login, err := pending.serviceLogin(pending.enrollment().AccountInvitation)
+	if err != nil {
+		return Result{}, err
+	}
+	event.ServiceLogin = login
 	run.emit(progress, event)
 	if !noBrowser && run.dependencies.OpenBrowser != nil {
 		if err := run.dependencies.OpenBrowser(ctx, pending.enrollment().VerificationURL); err != nil {

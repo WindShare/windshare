@@ -23,16 +23,17 @@ type Descriptor struct {
 		Relay bool `json:"relay"`
 		STUN  bool `json:"stun"`
 	} `json:"services"`
-	STUN       []string `json:"stun"`
-	Zone       string   `json:"zone"`
-	Region     string   `json:"region"`
-	Capacity   *uint64  `json:"capacity_bytes_per_second"`
-	Classes    []string `json:"classes"`
-	IssuedAt   uint64   `json:"issued_at"`
-	ExpiresAt  uint64   `json:"expires_at"`
-	Available  bool     `json:"relay_available"`
-	Anonymous  bool     `json:"anonymous"`
-	ConsoleURL string   `json:"console_url"`
+	STUN             []string `json:"stun"`
+	Zone             string   `json:"zone"`
+	Region           string   `json:"region"`
+	Capacity         *uint64  `json:"capacity_bytes_per_second"`
+	Classes          []string `json:"classes"`
+	IssuedAt         uint64   `json:"issued_at"`
+	ExpiresAt        uint64   `json:"expires_at"`
+	Available        bool     `json:"relay_available"`
+	Anonymous        bool     `json:"anonymous"`
+	ConsoleURL       string   `json:"console_url"`
+	AccountLoginPage string   `json:"account_login_page,omitempty"`
 }
 type descriptorEnvelope struct {
 	Version    int    `json:"version"`

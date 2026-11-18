@@ -5,6 +5,7 @@ extern crate alloc;
 mod attribution;
 mod cbor;
 mod credential;
+pub mod device_login;
 pub mod entitlement;
 pub mod governor;
 pub mod restrictions;

@@ -123,6 +123,12 @@ impl Reporter {
             .send()
             .await?
             .error_for_status()?;
+        let login = response
+            .headers()
+            .get(windshare_relay_access::device_login::CAPABILITY_HEADER)
+            .is_some_and(|header| {
+                header == windshare_relay_access::device_login::CAPABILITY_VERSION
+            });
         let mut bytes = Vec::new();
         while let Some(chunk) = response.chunk().await? {
             ensure!(
@@ -151,6 +157,7 @@ impl Reporter {
         })
         .await??;
         self.node.access.apply_cache(cache)?;
+        self.node.access.observe_device_login(batch.issuer, login);
         tracing::info!(event="usage_batch_acknowledged", batch=?batch.id, node=?batch.node,
             records=batch.records.len(), resident_accounts=batch.resident_accounts.len(), durable);
         Ok(())

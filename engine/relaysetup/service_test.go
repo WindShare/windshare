@@ -136,14 +136,15 @@ func TestPrivateEnrollmentResumesClaimedInstallationWithoutChangingSelectionsEar
 		switch req.URL.Path {
 		case "/.well-known/windshare":
 			return response(200, map[string]any{"version": 1, "access": "restricted", "relay_url": "https://private.example",
-				"console_url": "https://console.example", "frontend_url": "https://suggested.example"})
+				"console_url": "https://console.example", "frontend_url": "https://suggested.example",
+				"account_login_page": "https://accounts.example/device"})
 		case "/api/enrollments":
 			requests++
 			claimDigest = body["claim_digest"]
 			if store.saved.Pending == nil || claimDigest == "" {
 				t.Fatal("request not durably bound to client")
 			}
-			return response(200, map[string]any{"enrollment_id": "enrollment", "user_code": "ABCD-EFGH", "verification_uri_complete": "https://console.example/?code=ABCD-EFGH", "expires_at": now.Add(time.Minute).UnixMilli(), "interval_ms": 5000})
+			return response(200, map[string]any{"enrollment_id": "enrollment", "user_code": "ABCD-EFGH", "account_invitation": "aW52aXRl", "verification_uri_complete": "https://console.example/?code=ABCD-EFGH", "expires_at": now.Add(time.Minute).UnixMilli(), "interval_ms": 5000})
 		case "/api/enrollments/claim":
 			claims++
 			if claims == 1 {
@@ -178,8 +179,16 @@ func TestPrivateEnrollmentResumesClaimedInstallationWithoutChangingSelectionsEar
 			return nil
 		}}
 	request := Request{URL: "https://private.example", DeviceName: "Laptop", Operation: PrivateOnboarding}
-	if _, err := New(dependencies).Run(t.Context(), request, nil); err == nil {
+	var login *ServiceLogin
+	if _, err := New(dependencies).Run(t.Context(), request, func(event Progress) {
+		if event.Stage == "approval_required" {
+			login = event.ServiceLogin
+		}
+	}); err == nil {
 		t.Fatal("disk failure was not surfaced")
+	}
+	if login == nil || login.URL != "https://accounts.example/device#invite=aW52aXRl" {
+		t.Fatalf("lost the account login destination during enrollment: %v", login)
 	}
 	if store.saved.Pending == nil || store.saved.Pending.credential().AccessKey != "client-only-key" || len(store.saved.Profiles) != 1 {
 		t.Fatal("lost pending installation")

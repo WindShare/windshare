@@ -64,7 +64,11 @@ impl Console {
             tracing::info!(event="enrollment_requested",enrollment_id=%text_id(&e.id), device_name=%e.device_name);
             e
         };
-        Ok(Reply::ok(enrollment_response(&e, self.origin())))
+        let mut response = enrollment_response(&e, self.origin());
+        if let Some(token) = self.account_invitation(&e, now)? {
+            response["account_invitation"] = token.into();
+        }
+        Ok(Reply::ok(response))
     }
 
     pub(super) fn device(
@@ -124,7 +128,14 @@ impl Console {
                         available(db)?;
                         database::save_key(
                             db,
-                            &issue(credential, self.0.owner, e.device_name.clone(), &key, now),
+                            &issue(
+                                credential,
+                                database::binding(db, &credential)?
+                                    .map_or(self.0.owner, |binding| binding.account),
+                                e.device_name.clone(),
+                                &key,
+                                now,
+                            ),
                         )?;
                         tracing::info!(event="enrollment_installed",enrollment_id=%text_id(&eid),credential_id=%text_id(&credential));
                     }

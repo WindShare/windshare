@@ -51,7 +51,8 @@ func TestNativeDiscoveryVerifiesEndpointAndUsesLocalKeyAdmission(t *testing.T) {
 			signature := ed25519.Sign(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{43}, 32)),
 				append([]byte(serviceauthority.DescriptorDomain), payload...))
 			envelope := map[string]any{"version": 2, "descriptor": base64.RawURLEncoding.EncodeToString(payload),
-				"signature": base64.RawURLEncoding.EncodeToString(signature), "relay_url": "https://unrelated.example"}
+				"signature": base64.RawURLEncoding.EncodeToString(signature), "relay_url": "https://unrelated.example",
+				"account_login_page": "https://unsigned.example/device"}
 			store := &memoryStore{saved: prior()}
 			service := New(Dependencies{Store: store, Now: func() time.Time { return time.Unix(fixture.Now, 0) },
 				HTTP: fakeHTTP(func(request *http.Request) (*http.Response, error) {

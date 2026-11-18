@@ -8,7 +8,7 @@ const workspace = fileURLToPath(new URL('.', import.meta.url))
 const applications = {
   relay: {
     crate: 'console',
-    pages: { '/': 'index.html' },
+    pages: { '/': 'index.html', '/device/complete': 'device.html' },
     port: 5174,
     proxy: () => {
       const target = process.env.RELAY_BACKEND || 'http://127.0.0.1:8484'
@@ -22,7 +22,7 @@ const applications = {
   },
   network: {
     crate: 'crates/network-authority',
-    pages: { '/': 'index.html', '/console': 'index.html', '/report': 'report.html' },
+    pages: { '/': 'index.html', '/console': 'index.html', '/report': 'report.html', '/device': 'device.html' },
     port: 5175,
     proxy: () => ({ '/v1/': { target: process.env.AUTHORITY_BACKEND || 'http://127.0.0.1:8787', changeOrigin: false } }),
   },

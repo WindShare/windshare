@@ -1,5 +1,5 @@
 use super::{Rejected, Result};
-use crate::node::access::DeviceKeys;
+use crate::node::access::{BoundAccount, DeviceKeys};
 use hyper::StatusCode;
 use rusqlite::{Connection, OptionalExtension, params};
 use windshare_relay_access::{Credential, Enrollment, EnrollmentState};
@@ -8,6 +8,7 @@ pub(super) fn initialize(db: &Connection) -> Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS console_owner (id INTEGER PRIMARY KEY CHECK(id=1), password TEXT NOT NULL) STRICT;
         CREATE TABLE IF NOT EXISTS console_sessions (digest BLOB PRIMARY KEY, expires INTEGER NOT NULL) STRICT;
         CREATE TABLE IF NOT EXISTS console_enrollments (id BLOB PRIMARY KEY, claimant BLOB UNIQUE NOT NULL, expires INTEGER, body TEXT NOT NULL) STRICT;
+        CREATE TABLE IF NOT EXISTS console_account_bindings (credential BLOB PRIMARY KEY, issuer BLOB NOT NULL, account BLOB NOT NULL) STRICT;
         CREATE TABLE IF NOT EXISTS console_credentials (id BLOB PRIMARY KEY, body TEXT NOT NULL) STRICT;
         CREATE TABLE IF NOT EXISTS console_attempts (scope TEXT PRIMARY KEY, expires INTEGER NOT NULL, attempts INTEGER NOT NULL) STRICT;")?;
     Ok(())
@@ -15,6 +16,7 @@ pub(super) fn initialize(db: &Connection) -> Result<()> {
 
 pub(super) fn cleanup(db: &Connection, now: u64) -> Result<()> {
     let now = i64::try_from(now)?;
+    db.execute("DELETE FROM console_account_bindings WHERE credential IN (SELECT id FROM console_enrollments WHERE expires<=?1) AND credential NOT IN (SELECT id FROM console_credentials)", [now])?;
     db.execute("DELETE FROM console_enrollments WHERE expires <= ?1", [now])?;
     db.execute("DELETE FROM console_sessions WHERE expires <= ?1", [now])?;
     db.execute("DELETE FROM console_attempts WHERE expires <= ?1", [now])?;
@@ -56,11 +58,37 @@ pub(super) fn save_key(db: &Connection, c: &Credential) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn binding(db: &Connection, credential: &[u8; 16]) -> Result<Option<BoundAccount>> {
+    Ok(db
+        .query_row(
+            "SELECT issuer, account FROM console_account_bindings WHERE credential=?1",
+            [credential.as_slice()],
+            |row| {
+                Ok(BoundAccount {
+                    issuer: row.get(0)?,
+                    account: row.get(1)?,
+                })
+            },
+        )
+        .optional()?)
+}
 pub(super) fn keys(db: &Connection) -> Result<DeviceKeys> {
     let mut statement = db.prepare("SELECT body FROM console_credentials ORDER BY rowid")?;
     let mut keys = Vec::new();
     for s in statement.query_map([], |r| r.get::<_, String>(0))? {
         keys.push(serde_json::from_str(&s?)?);
     }
-    Ok(DeviceKeys(keys))
+    let mut bindings = db.prepare("SELECT credential,issuer,account FROM console_account_bindings INNER JOIN console_credentials ON id=credential")?;
+    let accounts = bindings
+        .query_map([], |r| {
+            Ok((
+                r.get(0)?,
+                BoundAccount {
+                    issuer: r.get(1)?,
+                    account: r.get(2)?,
+                },
+            ))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(DeviceKeys { keys, accounts })
 }

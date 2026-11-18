@@ -126,6 +126,12 @@ impl<R: Store, E: Environment> Authority<R, E> {
     /// # Errors
     /// Refuses incorrect passwords or blocked accounts and propagates credential persistence failures.
     pub fn login(&mut self, name: &str, password: &str) -> Result<Session> {
+        let account = self.password_account(name, password)?;
+        let secret = URL_SAFE_NO_PAD.encode(self.environment.random::<32>()?);
+        self.new_credential(account.id, secret)
+    }
+
+    pub(crate) fn password_account(&self, name: &str, password: &str) -> Result<Account> {
         let name = username(name)?;
         let id = load::<[u8; 16]>(&self.store, &format!("username/{name}"))?.ok_or_else(|| {
             Fault::Denied {
@@ -142,9 +148,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 reason: "credentials".into()
             }
         );
-        self.ensure_account(id)?;
-        let secret = URL_SAFE_NO_PAD.encode(self.environment.random::<32>()?);
-        self.new_credential(id, secret)
+        self.ensure_account(id)
     }
 
     /// # Errors

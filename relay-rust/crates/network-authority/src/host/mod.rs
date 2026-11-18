@@ -2,6 +2,7 @@
     clippy::future_not_send,
     reason = "Workers run JS futures on one isolate thread"
 )]
+mod device_login;
 mod edge;
 mod mail;
 mod routes;
