@@ -57,7 +57,7 @@ func New(config Config) (*Service, error) {
 		config.Store = &MemoryStore{}
 	}
 	if config.Client == nil {
-		config.Client = &http.Client{Timeout: RequestTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		config.Client = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	service := &Service{operation: make(chan struct{}, 1), config: config, ctx: ctx, cancel: cancel, state: Pending,
@@ -145,6 +145,10 @@ func (service *Service) Snapshot() (Snapshot, <-chan struct{}) {
 		value.Account = base64.RawURLEncoding.EncodeToString(credential.Account[:])
 		value.Credential = base64.RawURLEncoding.EncodeToString(credential.ID[:])
 		value.Username = credential.Username
+		value.Profile = service.record.Profile
+		if pending := service.record.PendingEmail; pending.Challenge.ExpiresAt > uint64(now.Unix()) && pending.Address != value.Profile.Email {
+			value.PendingEmail = pending
+		}
 	}
 	if generation, err := serviceauthority.VerifyGeneration(service.record.Certificate, service.config.Root); err == nil {
 		if ticket, err := serviceauthority.VerifyTicket(service.record.Ticket, generation, now); err == nil {

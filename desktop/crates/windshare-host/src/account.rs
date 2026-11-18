@@ -1,14 +1,32 @@
 use crate::Failure;
 use serde::{Deserialize, Serialize};
+use std::time::{Duration, SystemTime};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct AccountView {
     pub status: AccountStatus,
     pub reset_local: String,
+    #[serde(default)]
+    pub nickname_change_local: String,
     pub operation: Option<AccountOperation>,
 }
 
 impl AccountView {
+    pub fn nickname_deadline(&self) -> Option<SystemTime> {
+        let nickname = self.status.profile.nickname.as_ref()?;
+        SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(nickname.next_change_at))
+    }
+
+    pub fn nickname_locked_until(&self) -> Option<&str> {
+        self.nickname_deadline()
+            .filter(|at| *at > SystemTime::now())
+            .map(|_| self.nickname_change_local.as_str())
+    }
+
+    pub fn can_edit_profile(&self) -> bool {
+        !self.status.account.is_empty() && self.status.state != AccountState::Denied
+    }
+
     pub const fn busy(&self) -> bool {
         matches!(
             self.operation,
@@ -47,6 +65,9 @@ pub struct AccountStatus {
     pub credential: String,
     #[serde(default)]
     pub username: String,
+    #[serde(default)]
+    pub profile: AccountProfile,
+    pub pending_email: Option<PendingEmail>,
     pub allowance: Allowance,
     pub remaining_bytes: u64,
     pub reset_at: String,
@@ -56,6 +77,30 @@ pub struct AccountStatus {
     pub proof_elapsed: u64,
     #[serde(default)]
     pub reason: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct AccountProfile {
+    pub nickname: Option<Nickname>,
+    #[serde(default)]
+    pub email: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct Nickname {
+    pub value: String,
+    pub next_change_at: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct PendingEmail {
+    pub address: String,
+    pub challenge: EmailChallenge,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct EmailChallenge {
+    pub id: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
@@ -81,9 +126,34 @@ pub enum Allowance {
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum AccountCommand {
     Retry,
-    Login { username: String, password: String },
-    Password { username: String, password: String },
-    Email { email: String },
-    Verify { code: String },
-    Revoke { credential: String },
+    Login {
+        username: String,
+        password: String,
+    },
+    Password {
+        username: String,
+        password: String,
+    },
+    Nickname {
+        account_id: String,
+        nickname: String,
+    },
+    RequestProfileEmail {
+        account_id: String,
+        email: String,
+    },
+    ConfirmProfileEmail {
+        account_id: String,
+        challenge: String,
+        code: String,
+    },
+    Email {
+        email: String,
+    },
+    Verify {
+        code: String,
+    },
+    Revoke {
+        credential: String,
+    },
 }

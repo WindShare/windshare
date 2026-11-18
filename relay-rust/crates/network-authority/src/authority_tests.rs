@@ -5,6 +5,8 @@ mod contract_vectors;
 mod device_login;
 #[path = "governance_tests.rs"]
 mod governance;
+#[path = "profile_tests.rs"]
+mod profile;
 use crate::store::{key, load, save};
 use anyhow::Result;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -86,6 +88,19 @@ fn registration(secret: u8) -> Registration {
         solution: None,
         username: None,
         password: None,
+    }
+}
+
+impl Authority<Memory, Clock> {
+    fn deliver_email(
+        &mut self,
+        source: &str,
+        bearer: Option<&str>,
+        address: &Mailbox,
+    ) -> Result<(Challenge, String)> {
+        let delivery = self.prepare_email(source, bearer, address)?;
+        let code = delivery.code().to_owned();
+        Ok((delivery.accepted(&mut self.store)?, code))
     }
 }
 fn batch(

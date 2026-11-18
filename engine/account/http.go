@@ -8,17 +8,23 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/windshare/windshare/core/serviceauthority"
 )
 
 func (service *Service) call(ctx context.Context, route, bearer string, input, output any) error {
+	return service.callWithTimeout(ctx, route, bearer, input, output, RequestTimeout)
+}
+
+func (service *Service) callWithTimeout(ctx context.Context, route, bearer string, input, output any, timeout time.Duration) error {
 	data, err := json.Marshal(input)
 	if err != nil {
 		return err
 	}
-	requestContext, cancel := context.WithTimeout(ctx, RequestTimeout)
+	requestContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	request, err := http.NewRequestWithContext(requestContext, http.MethodPost,
 		strings.TrimRight(service.config.URL, "/")+route, bytes.NewReader(data))
@@ -42,13 +48,15 @@ func (service *Service) call(ctx context.Context, route, bearer string, input, o
 		var failure fault
 		if json.Unmarshal(data, &failure) == nil {
 			switch {
-			case failure.Kind == "invalid" && response.StatusCode == http.StatusBadRequest:
+			case response.StatusCode == http.StatusBadRequest && slices.Contains([]string{"invalid", "invalid_nickname", "invalid_email", "unsupported_email", "email_code_rejected"}, failure.Kind):
 				return &failure
 			case failure.Kind == "denied" && response.StatusCode == http.StatusForbidden:
 				return &failure
 			case failure.Kind == "verification" && response.StatusCode == http.StatusPreconditionRequired:
 				return &failure
-			case failure.Kind == "rate_limited" && response.StatusCode == http.StatusTooManyRequests:
+			case (failure.Kind == "rate_limited" || failure.Kind == "nickname_cooldown") && response.StatusCode == http.StatusTooManyRequests:
+				return &failure
+			case failure.Kind == "email_delivery_unavailable" && response.StatusCode == http.StatusServiceUnavailable:
 				return &failure
 			}
 		}

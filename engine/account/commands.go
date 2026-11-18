@@ -15,16 +15,22 @@ func CommandErrorCode(err error) string {
 	if errors.Is(err, errEmailCodeRejected) {
 		return "email_code_rejected"
 	}
+	if errors.Is(err, ErrSuperseded) {
+		return "account_changed"
+	}
 	if remote, ok := errors.AsType[*fault](err); ok {
-		switch {
-		case remote.Kind == "denied" && remote.Reason == "credentials":
-			return "invalid_credentials"
-		case remote.Kind == "denied" && remote.Reason == "username_taken":
-			return "username_taken"
-		case remote.Kind == "rate_limited":
-			return "rate_limited"
-		case remote.Kind == "invalid":
+		switch remote.Kind {
+		case "denied":
+			switch remote.Reason {
+			case "credentials":
+				return "invalid_credentials"
+			case "username_taken":
+				return "username_taken"
+			}
+		case "invalid":
 			return "invalid_account_input"
+		case "rate_limited", "invalid_nickname", "nickname_cooldown", "invalid_email", "unsupported_email", "email_code_rejected", "email_delivery_unavailable":
+			return remote.Kind
 		}
 	}
 	if _, ok := errors.AsType[*url.Error](err); ok {
@@ -100,13 +106,12 @@ func (service *Service) RequestEmail(ctx context.Context, email string) error {
 		return errors.New("account is already registered")
 	}
 	var challenge Challenge
-	if err := service.call(ctx, "/v1/accounts/email", "", struct {
+	if err := service.callWithTimeout(ctx, "/v1/accounts/email", "", struct {
 		Email string `json:"email"`
-	}{email}, &challenge); err != nil {
+	}{email}, &challenge, EmailRequestTimeout); err != nil {
 		return err
 	}
-	if challenge.ID == "" || len(challenge.ID) > 128 || challenge.Mode != "email" ||
-		!service.acceptsChallengeExpiry(challenge.ExpiresAt) {
+	if !service.validEmailChallenge(challenge) {
 		return errors.New("invalid email challenge")
 	}
 	// Issuing the email replaces the authority's previous challenge.

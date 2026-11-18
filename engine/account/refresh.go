@@ -9,7 +9,7 @@ import (
 	"github.com/windshare/windshare/core/serviceauthority"
 )
 
-// authorityChallengeLifetime matches CHALLENGE_SECONDS in network-authority's admission policy.
+// authorityChallengeLifetime matches CHALLENGE_SECONDS in the authority's challenge policy.
 const authorityChallengeLifetime = 15 * time.Minute
 
 func (service *Service) run() {

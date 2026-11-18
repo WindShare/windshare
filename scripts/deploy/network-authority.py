@@ -65,6 +65,15 @@ def deploy(args):
         config += "\n[[routes]]\npattern = " + json.dumps(host + "/*") + "\nzone_name = " + json.dumps(args.zone) + "\n"
     values = {"AUTHORITY_ROOT": trust["root"], "AUTHORITY_CERTIFICATE": trust["certificate"], "API_ORIGIN": api,
               "ALLOWED_ORIGINS": ",".join(dict.fromkeys([api, *origins])), "TRUSTED_PROXY_IPS": ",".join(proxies)}
+    secrets_to_upload = {"AUTHORITY_SIGNING_SEED": seed, "INITIALIZATION_TOKEN": token}
+    mail_url = os.environ.get("EMAIL_WEBHOOK_URL", "").strip()
+    mail_token = os.environ.get("EMAIL_WEBHOOK_TOKEN", "").strip()
+    if mail_url or mail_token:
+        endpoint = urlsplit(mail_url)
+        if endpoint.scheme != "https" or not endpoint.hostname or endpoint.username is not None or endpoint.fragment or not mail_token:
+            raise ValueError("Email delivery requires an HTTPS EMAIL_WEBHOOK_URL and EMAIL_WEBHOOK_TOKEN")
+        values["EMAIL_WEBHOOK_URL"] = mail_url
+        secrets_to_upload["EMAIL_WEBHOOK_TOKEN"] = mail_token
     if args.directory_release:
         release = json.loads(args.directory_release.read_text(encoding="utf-8"))
         index = json.loads(subprocess.check_output(
@@ -85,7 +94,7 @@ def deploy(args):
         subprocess.run(["cargo", "run", "--quiet", "--locked", "--bin", "network-authority-keys", "--",
                         "verify", str(trust_path), str(seed_path)], cwd=CRATE, check=True)
         uploads = Path(private) / "secrets.json"
-        uploads.write_text(json.dumps({"AUTHORITY_SIGNING_SEED": seed, "INITIALIZATION_TOKEN": token}), encoding="utf-8")
+        uploads.write_text(json.dumps(secrets_to_upload), encoding="utf-8")
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".toml", prefix="wrangler.generated.", dir=CRATE, delete=False) as generated:
             generated.write(config)
         try:

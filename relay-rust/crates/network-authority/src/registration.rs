@@ -1,5 +1,5 @@
 use crate::{
-    Account, Authority, Credential, Environment, Fault, Registration, Session, Store,
+    Account, Authority, Credential, Environment, Fault, Profile, Registration, Session, Store,
     store::{key, load, save},
 };
 use anyhow::{Result, ensure};
@@ -85,7 +85,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 Fault::Invalid
             );
         }
-        self.creation_admission(
+        let email = self.creation_admission(
             source,
             request.challenge.as_deref(),
             request.solution.as_deref(),
@@ -103,6 +103,11 @@ impl<R: Store, E: Environment> Authority<R, E> {
             created_at: self.environment.now(),
             username: name.clone(),
             password,
+            profile: Profile {
+                revision: u64::from(email.is_some()),
+                email,
+                ..Profile::default()
+            },
             version: 0,
         };
         if let Some(name) = name {
@@ -154,8 +159,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
     /// # Errors
     /// Only a live credential can change its account login, and names remain unique.
     pub fn set_password(&mut self, secret: &str, name: &str, password: &str) -> Result<Session> {
-        let credential = self.authenticate(secret)?;
-        let mut account = self.ensure_account(credential.account)?;
+        let (credential, mut account) = self.authenticate(secret)?;
         let name = username(name)?;
         let owner = load::<[u8; 16]>(&self.store, &format!("username/{name}"))?;
         ensure!(

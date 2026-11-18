@@ -2,43 +2,57 @@ use super::{
     Clock, NetworkAuthority, failure,
     storage::{self, Database},
 };
-use crate::{Authority, Fault, Signing};
-use futures_util::future::{Either, select};
+use crate::{Authority, Fault, Mailbox, Signing, challenges::CHALLENGE_SECONDS};
 use serde::Deserialize;
-use std::time::Duration;
 use worker::{
-    AbortController, Delay, Fetch, Method, Request, RequestInit, RequestRedirect, Response, Result,
+    AbortSignal, Fetch, Method, Request, RequestInit, RequestRedirect, Response, Result, web_sys,
 };
 
-const DELIVERY_TIMEOUT: Duration = Duration::from_secs(15);
+const DELIVERY_TIMEOUT_MS: u32 = 15_000;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Email {
     email: String,
 }
+fn unavailable() -> Result<Response> {
+    super::routes::fault(&Fault::EmailDeliveryUnavailable).map_err(failure)
+}
 impl NetworkAuthority {
-    pub(super) async fn email(&self, request: &Request, bytes: &[u8]) -> Result<Response> {
+    pub(super) async fn email(
+        &self,
+        request: &Request,
+        bytes: &[u8],
+        bearer: Option<String>,
+    ) -> Result<Response> {
         if request.method() != Method::Post {
             return Response::error("POST required", 405);
         }
-        let email: Email = serde_json::from_slice(bytes).map_err(failure)?;
-        if email.email.len() > 254
-            || !email.email.contains('@')
-            || email.email.contains(['\r', '\n'])
-        {
-            return Response::error("invalid email", 400);
-        }
-        let url = self.env.var("EMAIL_WEBHOOK_URL")?.to_string();
+        let Ok(input) = serde_json::from_slice::<Email>(bytes) else {
+            return super::routes::fault(&Fault::InvalidEmail).map_err(failure);
+        };
+        let email = match Mailbox::parse(&input.email) {
+            Ok(mailbox) => mailbox,
+            Err(fault) => return super::routes::fault(&fault).map_err(failure),
+        };
+        let (Ok(url), Ok(token)) = (
+            self.env.var("EMAIL_WEBHOOK_URL"),
+            self.env.secret("EMAIL_WEBHOOK_TOKEN"),
+        ) else {
+            return unavailable();
+        };
+        let url = url.to_string();
         if !url.starts_with("https://") {
-            return Response::error("email delivery unavailable", 503);
+            return unavailable();
         }
-        let token = self.env.secret("EMAIL_WEBHOOK_TOKEN")?.to_string();
+        let recipient = email.as_str().to_owned();
+        let profile_change = bearer.is_some();
         let source = request
             .headers()
             .get("X-Authority-Source")?
             .unwrap_or_default();
-        let database = Database::open(&self.state).map_err(failure)?;
+        let mut database = Database::open(&self.state).map_err(failure)?;
+        let admission_store = database.clone();
         let signing = Signing::load(
             &self.env.var("AUTHORITY_ROOT")?.to_string(),
             &self.env.var("AUTHORITY_CERTIFICATE")?.to_string(),
@@ -46,16 +60,16 @@ impl NetworkAuthority {
         )
         .map_err(failure)?;
         let outcome = storage::transaction(&self.state, move || {
-            let mut authority = Authority::new(database, Clock, signing)?;
+            let mut authority = Authority::new(admission_store, Clock, signing)?;
             // Expected admission refusals commit their limiter state.
-            match authority.email_challenge(&source) {
+            match authority.prepare_email(&source, bearer.as_deref(), &email) {
                 Ok(value) => Ok(Ok(value)),
                 Err(error) if error.downcast_ref::<Fault>().is_some() => Ok(Err(error)),
                 Err(error) => Err(error),
             }
         })
         .map_err(failure)?;
-        let (challenge, secret) = match outcome {
+        let delivery = match outcome {
             Ok(value) => value,
             Err(error) => {
                 return error.downcast_ref::<Fault>().map_or_else(
@@ -64,15 +78,18 @@ impl NetworkAuthority {
                 );
             }
         };
-        let body =
-            serde_json::json!({"to":email.email,"subject":"Your WindShare verification code",
-            "text":format!("Verification code: {secret}\nThis code expires in 15 minutes.")})
-            .to_string();
+        let body = serde_json::json!({
+            "to": recipient,
+            "subject": "Your WindShare verification code",
+            "text": format!("Verification code: {}\nThis code expires in {} minutes.", delivery.code(), CHALLENGE_SECONDS / 60),
+        })
+        .to_string();
         let mut request = Request::new_with_init(
             &url,
             RequestInit::new()
                 .with_method(Method::Post)
-                .with_redirect(RequestRedirect::Error)
+                // Workers exposes redirects in manual mode so only the configured provider receives the bearer.
+                .with_redirect(RequestRedirect::Manual)
                 .with_body(Some(body.into())),
         )?;
         request
@@ -81,24 +98,28 @@ impl NetworkAuthority {
         request
             .headers_mut()?
             .set("Content-Type", "application/json")?;
-        let controller = AbortController::default();
-        let signal = controller.signal();
-        let fetch = Fetch::Request(request);
-        let response = match select(
-            Box::pin(fetch.send_with_signal(&signal)),
-            Box::pin(Delay::from(DELIVERY_TIMEOUT)),
-        )
-        .await
-        {
-            Either::Left((response, _)) => response?,
-            Either::Right(((), _)) => {
-                controller.abort();
-                return Response::error("email delivery unavailable", 503);
+        let signal = AbortSignal::from(web_sys::AbortSignal::timeout_with_u32(DELIVERY_TIMEOUT_MS));
+        let response = match Fetch::Request(request).send_with_signal(&signal).await {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::warn!(event = "email_delivery_failed", challenge = delivery.challenge_id(), %error);
+                return unavailable();
             }
         };
         if !(200..300).contains(&response.status_code()) {
-            return Response::error("email delivery unavailable", 503);
+            tracing::warn!(
+                event = "email_delivery_rejected",
+                challenge = delivery.challenge_id(),
+                status = response.status_code()
+            );
+            return unavailable();
         }
-        Response::from_json(&challenge)
+        let challenge = storage::transaction(&self.state, move || delivery.accepted(&mut database))
+            .map_err(failure)?;
+        if profile_change {
+            Response::from_json(&serde_json::json!({"address":recipient,"challenge":challenge}))
+        } else {
+            Response::from_json(&challenge)
+        }
     }
 }

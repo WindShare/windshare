@@ -5,6 +5,9 @@ use sha2::{Digest, Sha256};
 fn account_contract_vectors_match_go_and_browser() {
     let mut authority = fixture();
     let session = authority.register("vector", registration(90)).unwrap();
+    authority
+        .set_nickname(&registration(90).client_secret, "春风")
+        .unwrap();
     let refreshed = authority.refresh(&registration(90).client_secret).unwrap();
     let root = SigningKey::from_bytes(&[41; 32]);
     let node = SigningKey::from_bytes(&[43; 32]);
@@ -69,13 +72,16 @@ fn email_requires_delivered_secret_and_password_setup_keeps_account_identity() {
     save(&mut authority.store, "settings", &settings).unwrap();
     let request = registration(7);
     assert!(authority.register("source", request.clone()).is_err());
-    let (challenge, secret) = authority.email_challenge("source").unwrap();
+    let (challenge, secret) = authority
+        .deliver_email("source", None, &Mailbox::parse("alice@qq.com").unwrap())
+        .unwrap();
     let mut proof = request.clone();
     proof.challenge = Some(challenge.id);
     proof.solution = Some("anything".into());
     assert!(authority.register("source", proof.clone()).is_err());
     proof.solution = Some(secret);
     let session = authority.register("source", proof).unwrap();
+    assert_eq!(session.profile.email.as_deref(), Some("alice@qq.com"));
     let updated = authority
         .set_password(&request.client_secret, "Alice", "correct horse battery")
         .unwrap();
@@ -83,4 +89,38 @@ fn email_requires_delivered_secret_and_password_setup_keeps_account_identity() {
     let sibling = authority.login("alice", "correct horse battery").unwrap();
     assert_eq!(sibling.account, session.account);
     assert_ne!(sibling.credential, session.credential);
+}
+
+#[test]
+fn retrying_work_registration_reuses_its_challenge_and_creates_a_profile_without_email() {
+    let mut authority = fixture();
+    let settings = Settings {
+        registration: RegistrationMode::ProofOfWork,
+        pow_bits: 4,
+        ..Settings::default()
+    };
+    save(&mut authority.store, "settings", &settings).unwrap();
+    let mut request = registration(9);
+    let pending = |error: anyhow::Error| match error.downcast::<Fault>().unwrap() {
+        Fault::Verification { challenge } => challenge,
+        other => panic!("expected a work challenge, got {other}"),
+    };
+    let challenge = pending(authority.register("source", request.clone()).unwrap_err());
+    let retried = pending(authority.register("source", request.clone()).unwrap_err());
+    assert_eq!(challenge.id, retried.id);
+    assert_eq!(challenge.mode, RegistrationMode::ProofOfWork);
+    let solution = (0..4096)
+        .map(|nonce| nonce.to_string())
+        .find(|nonce| {
+            let hash = Sha256::new()
+                .chain_update(challenge.id.as_bytes())
+                .chain_update(nonce.as_bytes())
+                .finalize();
+            hash[0].leading_zeros() >= u32::from(challenge.bits)
+        })
+        .unwrap();
+    request.challenge = Some(challenge.id);
+    request.solution = Some(solution);
+    let registered = authority.register("source", request).unwrap();
+    assert_eq!(registered.profile, Profile::default());
 }

@@ -140,7 +140,7 @@ impl Desktop {
             let previous_page = self.setup_form.page;
             let previous_field = self.account_form.field_focus(&session.model, cx);
             self.setup_form.reconcile(&model, cx);
-            self.account_form.reconcile(&model, cx);
+            self.account_form.reconcile(&session.model, &model, cx);
             if let Some(frame) = self.overlays.last() {
                 match frame.content {
                     Overlay::Account => {
@@ -180,6 +180,12 @@ impl Desktop {
                     }
                     _ => None,
                 })
+                .chain(
+                    model
+                        .account
+                        .as_ref()
+                        .and_then(windshare_host::AccountView::nickname_deadline),
+                )
                 .filter(|at| *at > SystemTime::now())
                 .collect();
             deadlines.sort_unstable();

@@ -1,5 +1,5 @@
 use super::{Clock, failure, storage::Database};
-use crate::{Authority, Block, Fault, NodeEnrollment, NodePolicyChange, Settings};
+use crate::{Authority, Block, Fault, Mailbox, NodeEnrollment, NodePolicyChange, Settings};
 use anyhow::{Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
@@ -32,11 +32,7 @@ impl Context {
                 .headers()
                 .get("X-Authority-Source")?
                 .unwrap_or_default(),
-            bearer: request
-                .headers()
-                .get("Authorization")?
-                .and_then(|value| value.strip_prefix("Bearer ").map(str::to_owned))
-                .unwrap_or_default(),
+            bearer: bearer(request)?,
             session,
             device_session: cookie
                 .split(';')
@@ -55,6 +51,25 @@ impl Context {
                 && env.secret("EMAIL_WEBHOOK_TOKEN").is_ok(),
         })
     }
+}
+pub(super) fn bearer(request: &Request) -> worker::Result<String> {
+    Ok(request
+        .headers()
+        .get("Authorization")?
+        .and_then(|value| value.strip_prefix("Bearer ").map(str::to_owned))
+        .unwrap_or_default())
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetNickname {
+    nickname: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConfirmEmail {
+    email: String,
+    challenge: String,
+    code: String,
 }
 #[derive(Deserialize)]
 struct Login {
@@ -124,6 +139,19 @@ pub fn dispatch(
                 &bearer,
                 &login.username,
                 &login.password,
+            )?)?
+        }
+        (Method::Post, "/v1/accounts/profile/nickname") => {
+            let input: SetNickname = parse(bytes)?;
+            serde_json::to_value(authority.set_nickname(&bearer, &input.nickname)?)?
+        }
+        (Method::Post, "/v1/accounts/profile/email/verify") => {
+            let input: ConfirmEmail = parse(bytes)?;
+            serde_json::to_value(authority.confirm_email(
+                &bearer,
+                Mailbox::parse(&input.email)?,
+                &input.challenge,
+                &input.code,
             )?)?
         }
         (Method::Post, "/v1/accounts/credentials/revoke") => {
@@ -224,10 +252,15 @@ fn signed_in(session: &str) -> Result<Response> {
 }
 pub fn fault(fault: &Fault) -> Result<Response> {
     let status = match fault {
-        Fault::Invalid => 400,
+        Fault::Invalid
+        | Fault::InvalidNickname
+        | Fault::InvalidEmail
+        | Fault::UnsupportedEmail
+        | Fault::EmailCodeRejected => 400,
         Fault::Denied { .. } => 403,
-        Fault::RateLimited { .. } => 429,
+        Fault::RateLimited { .. } | Fault::NicknameCooldown { .. } => 429,
         Fault::Verification { .. } => 428,
+        Fault::EmailDeliveryUnavailable => 503,
     };
     Response::from_json(fault)
         .map(|response| response.with_status(status))

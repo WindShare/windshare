@@ -36,7 +36,8 @@ Mainland DNS points to trusted API ingress hosts; use the
 certificate renewal. Pass their outbound IPs in `--trusted-proxy-ips` so the Worker
 can apply source limits to original clients.
 
-Email mode requires `EMAIL_WEBHOOK_URL` and secret `EMAIL_WEBHOOK_TOKEN`.
+For email registration and account email changes, set variable `EMAIL_WEBHOOK_URL` and secret `EMAIL_WEBHOOK_TOKEN` in the same environment.
+Both use the same [consumer mailbox domain allowlist](src/profile.rs).
 The HTTPS webhook receives bearer-authenticated JSON `{to,subject,text}`; a 2xx
 response confirms acceptance. Its timeout is 15 seconds.
 
@@ -80,3 +81,5 @@ For an isolated local Worker with generation-1 test keys, run
 `node relay-rust/crates/network-authority/tests/worker.mjs <loopback-url> <trust-1.json> <initialization-token>`.
 It verifies the Wasm/SQLite API, cookies, usage signatures, retries and access decisions.
 It uses disposable `local-operator` credentials and refuses non-loopback destinations.
+
+After `worker-build --dev`, run `node --test tests/mail.test.mjs` from this crate to exercise email delivery with a local webhook. It uses the relay-cloudflare npm dependencies.

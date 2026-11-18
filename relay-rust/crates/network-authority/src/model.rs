@@ -54,7 +54,20 @@ pub struct Account {
     pub created_at: u64,
     pub username: Option<String>,
     pub password: Option<String>,
+    #[serde(default)]
+    pub profile: Profile,
     pub version: u64,
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Profile {
+    pub revision: u64,
+    pub nickname: Option<Nickname>,
+    pub email: Option<String>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Nickname {
+    pub value: String,
+    pub next_change_at: u64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Credential {
@@ -86,6 +99,7 @@ pub struct Session {
     pub credential: CredentialId,
     pub credential_secret: Option<String>,
     pub username: Option<String>,
+    pub profile: Profile,
     pub ticket: String,
     pub expires_at: u64,
     pub entitlement: Entitlement,
@@ -95,6 +109,12 @@ pub struct Session {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Fault {
     Invalid,
+    InvalidNickname,
+    UnsupportedEmail,
+    InvalidEmail,
+    EmailCodeRejected,
+    EmailDeliveryUnavailable,
+    NicknameCooldown { profile: Profile },
     Denied { reason: String },
     RateLimited { retry_after: u64 },
     Verification { challenge: Challenge },

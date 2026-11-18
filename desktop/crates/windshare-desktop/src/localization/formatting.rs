@@ -1,6 +1,20 @@
 use super::Language;
 
 impl Language {
+    pub fn nickname_next_change(self, at: &str) -> String {
+        match self {
+            Self::English => format!("Next nickname change · {at}"),
+            Self::SimplifiedChinese => format!("下次可改昵称 · {at}"),
+        }
+    }
+
+    pub fn code_sent_to(self, email: &str) -> String {
+        match self {
+            Self::English => format!("Enter the code sent to {email}."),
+            Self::SimplifiedChinese => format!("请输入发送到 {email} 的验证码。"),
+        }
+    }
+
     pub fn files(self, count: usize) -> String {
         match self {
             Self::English => format!("{count} {}", if count == 1 { "file" } else { "files" }),

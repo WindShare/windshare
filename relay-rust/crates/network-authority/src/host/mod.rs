@@ -49,8 +49,13 @@ impl DurableObject for NetworkAuthority {
                 bytes.extend_from_slice(&chunk);
             }
         }
-        if request.path() == "/v1/accounts/email" {
-            return self.email(&request, &bytes).await;
+        match request.path().as_str() {
+            "/v1/accounts/email" => return self.email(&request, &bytes, None).await,
+            "/v1/accounts/profile/email" => {
+                let bearer = routes::bearer(&request)?;
+                return self.email(&request, &bytes, Some(bearer)).await;
+            }
+            _ => {}
         }
         let database = Database::open(&self.state).map_err(failure)?;
         let env = self.env.clone();

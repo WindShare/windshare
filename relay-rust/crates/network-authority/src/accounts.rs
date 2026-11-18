@@ -30,7 +30,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
             .into()
         })
     }
-    pub(crate) fn authenticate(&self, secret: &str) -> Result<Credential> {
+    pub(crate) fn authenticate(&self, secret: &str) -> Result<(Credential, Account)> {
         ensure!(secret.len() <= 128, Fault::Invalid);
         let credential = load::<Credential>(&self.store, &key("credential", &digest(secret)))?
             .ok_or_else(|| Fault::Denied {
@@ -42,13 +42,13 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 reason: "credential_revoked".into()
             }
         );
-        self.ensure_account(credential.account)?;
-        Ok(credential)
+        let account = self.ensure_account(credential.account)?;
+        Ok((credential, account))
     }
     /// # Errors
     /// Revoked credentials and blocked accounts cannot obtain tickets; signing and storage failures propagate.
     pub fn refresh(&mut self, secret: &str) -> Result<Session> {
-        let credential = self.authenticate(secret)?;
+        let (credential, account) = self.authenticate(secret)?;
         let entitlement = self.entitlement(credential.account)?;
         let now = self.environment.now();
         let expires_at = now
@@ -71,7 +71,8 @@ impl<R: Store, E: Environment> Authority<R, E> {
             account: credential.account,
             credential: credential.id,
             credential_secret: None,
-            username: self.ensure_account(credential.account)?.username,
+            username: account.username,
+            profile: account.profile,
             ticket: URL_SAFE_NO_PAD.encode(signed),
             expires_at,
             entitlement,
@@ -102,7 +103,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
     /// # Errors
     /// Only a live credential belonging to the same account can revoke a sibling.
     pub fn revoke_credential(&mut self, secret: &str, id: CredentialId) -> Result<()> {
-        let caller = self.authenticate(secret)?;
+        let (caller, _) = self.authenticate(secret)?;
         let digest =
             load::<[u8; 32]>(&self.store, &key("credential-id", &id))?.ok_or(Fault::Invalid)?;
         let mut credential =

@@ -58,6 +58,14 @@
       "version": 2
     },
     "expires_at": 216000,
+    "profile": {
+      "email": null,
+      "nickname": {
+        "next_change_at": 2764800,
+        "value": "春风"
+      },
+      "revision": 1
+    },
     "ticket": "iQFYIPpINBR_bmkMNpPv9hM2BGQDzYrioU8xs8QHNYVpI5VlAVALCwsLCwsLCwsLCwsLCwsLUAwMDAwMDAwMDAwMDAwMDAwaAAKjABoAA0vAaG9mZmljaWFshAICGgACpCwbAAAAAoAAAADqRgKXIcdUE_ynA19cGHLDFY99LU7DJUtNBsQ0kvjL2OLnhn4-WX19jFUrdTPqSKDThCWmgC5rLjANrhRxYmsE",
     "username": null
   },
@@ -108,6 +116,11 @@
       "version": 1
     },
     "expires_at": 216000,
+    "profile": {
+      "email": null,
+      "nickname": null,
+      "revision": 0
+    },
     "ticket": "iQFYIPpINBR_bmkMNpPv9hM2BGQDzYrioU8xs8QHNYVpI5VlAVALCwsLCwsLCwsLCwsLCwsLUAwMDAwMDAwMDAwMDAwMDAwaAAKjABoAA0vAaG9mZmljaWFshAECGgACpCwbAAAAAoAAAAAJsBuGStVry9vk51IeE-dR3cbuI6CVQ_nydhcS4WCdKkQxfSTTKOqiIbkRfaF-5RsiLWqs3qBRxO1dimuztU8C",
     "username": null
   }

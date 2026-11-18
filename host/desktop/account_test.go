@@ -27,10 +27,15 @@ func (service *controlledAccount) Login(ctx context.Context, _, _ string) error 
 	service.finished.Store(true)
 	return ctx.Err()
 }
-func (*controlledAccount) SetPassword(context.Context, string, string) error { return nil }
-func (*controlledAccount) RequestEmail(context.Context, string) error        { return nil }
-func (*controlledAccount) VerifyEmail(context.Context, string) error         { return nil }
-func (*controlledAccount) RevokeCredential(context.Context, [16]byte) error  { return nil }
+func (*controlledAccount) SetPassword(context.Context, string, string) error         { return nil }
+func (*controlledAccount) SetNickname(context.Context, string, string) error         { return nil }
+func (*controlledAccount) RequestProfileEmail(context.Context, string, string) error { return nil }
+func (*controlledAccount) ConfirmProfileEmail(context.Context, string, string, string) error {
+	return nil
+}
+func (*controlledAccount) RequestEmail(context.Context, string) error       { return nil }
+func (*controlledAccount) VerifyEmail(context.Context, string) error        { return nil }
+func (*controlledAccount) RevokeCredential(context.Context, [16]byte) error { return nil }
 
 // The desktop may only observe the final snapshot, including when two submissions have the same outcome.
 func TestAccountCompletionIdentifiesItsSubmission(t *testing.T) {
@@ -40,7 +45,9 @@ func TestAccountCompletionIdentifiesItsSubmission(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = app.close() })
 	for _, test := range []struct{ id, action, state string }{
-		{"email-1", "email", "succeeded"}, {"email-2", "email", "succeeded"}, {"invalid", "unknown", "failed"},
+		{"email-1", "email", "succeeded"}, {"email-2", "email", "succeeded"},
+		{"nickname", "nickname", "succeeded"}, {"send-code", "request_profile_email", "succeeded"},
+		{"confirm-code", "confirm_profile_email", "succeeded"}, {"invalid", "unknown", "failed"},
 	} {
 		result := app.execute(Request{ID: "transport-" + test.id, OperationID: test.id, Command: "account", Account: &AccountInput{Action: test.action}})
 		if result.Error != nil {

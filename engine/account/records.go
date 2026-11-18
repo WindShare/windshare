@@ -117,13 +117,11 @@ func (service *Service) install(ctx context.Context, previous Record, response s
 		if err := service.checkGeneration(current.Certificate, generation); err != nil {
 			return Record{}, err
 		}
-		entitlement := response.Entitlement
-		if current.Credential != nil && current.Credential.Account == response.Account {
-			entitlement = serviceauthority.Advance(current.Entitlement, entitlement)
-		}
-		return Record{Issuer: base64.RawURLEncoding.EncodeToString(service.config.Root[:]),
+		next := Record{Issuer: base64.RawURLEncoding.EncodeToString(service.config.Root[:]),
 			Credential:  &Credential{Account: response.Account, ID: response.Credential, Secret: secret, Username: response.Username},
-			Certificate: response.Certificate, Ticket: response.Ticket, Entitlement: entitlement}, nil
+			Certificate: response.Certificate, Ticket: response.Ticket, Entitlement: response.Entitlement, Profile: response.Profile}
+		next.mergeIssuance(current)
+		return next, nil
 	})
 	if err != nil {
 		return err

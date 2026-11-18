@@ -33,6 +33,9 @@ type accountService interface {
 	Retry()
 	Login(context.Context, string, string) error
 	SetPassword(context.Context, string, string) error
+	SetNickname(context.Context, string, string) error
+	RequestProfileEmail(context.Context, string, string) error
+	ConfirmProfileEmail(context.Context, string, string, string) error
 	RequestEmail(context.Context, string) error
 	VerifyEmail(context.Context, string) error
 	RevokeCredential(context.Context, [16]byte) error

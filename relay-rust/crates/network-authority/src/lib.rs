@@ -2,11 +2,13 @@
 mod accounts;
 mod administrator;
 mod admission;
+mod challenges;
 #[cfg(any(test, target_arch = "wasm32"))]
 mod device_login;
 mod governance;
 mod model;
 mod nodes;
+mod profile;
 mod public_blocks;
 mod registration;
 mod signing;
@@ -15,9 +17,11 @@ mod source;
 mod store;
 mod usage;
 use anyhow::Result;
+pub use challenges::EmailDelivery;
 pub use governance::Block;
 pub use model::*;
 pub use nodes::{Node, NodeEnrollment, NodePolicyChange, Zone};
+pub use profile::Mailbox;
 pub use signing::Signing;
 pub use store::{Environment, Store};
 

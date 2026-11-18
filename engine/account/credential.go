@@ -123,7 +123,7 @@ func (service *Service) refreshRetained(config Config) (Record, error) {
 			return Record{}, err
 		}
 		if sameIdentity(selected, record) {
-			record.Entitlement = serviceauthority.Advance(selected.Entitlement, record.Entitlement)
+			record.mergeIssuance(selected)
 			return record, nil
 		}
 		if selected.Credential != nil && selected.Credential.Account == record.Credential.Account && selected.Denial == "account_blocked" {

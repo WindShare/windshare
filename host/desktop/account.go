@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/account"
@@ -12,6 +13,9 @@ import (
 
 type AccountInput struct {
 	Action     string `json:"action"`
+	AccountID  string `json:"account_id,omitempty"`
+	Nickname   string `json:"nickname,omitempty"`
+	Challenge  string `json:"challenge,omitempty"`
 	Username   string `json:"username,omitempty"`
 	Password   string `json:"password,omitempty"`
 	Email      string `json:"email,omitempty"`
@@ -19,9 +23,10 @@ type AccountInput struct {
 	Credential string `json:"credential,omitempty"`
 }
 type AccountView struct {
-	ResetLocal string            `json:"reset_local"`
-	Account    account.Snapshot  `json:"status"`
-	Operation  *AccountOperation `json:"operation,omitempty"`
+	ResetLocal          string            `json:"reset_local"`
+	NicknameChangeLocal string            `json:"nickname_change_local,omitempty"`
+	Account             account.Snapshot  `json:"status"`
+	Operation           *AccountOperation `json:"operation,omitempty"`
 }
 
 type AccountOperation struct {
@@ -39,6 +44,10 @@ func (a *Application) syncAccountLocked() <-chan struct{} {
 	view := *a.accountView
 	view.Account = status
 	view.ResetLocal = status.ResetAt.Local().Format("2006-01-02 15:04 MST")
+	view.NicknameChangeLocal = ""
+	if at := status.Profile.Nickname.NextChangeAt; at > 0 {
+		view.NicknameChangeLocal = time.Unix(at, 0).Local().Format("2006-01-02 15:04:05 MST")
+	}
 	a.accountView = &view
 	return changed
 }
@@ -123,6 +132,12 @@ func (a *Application) runAccountCommand(input AccountInput) error {
 		return service.Login(ctx, input.Username, input.Password)
 	case "password":
 		return service.SetPassword(ctx, input.Username, input.Password)
+	case "nickname":
+		return service.SetNickname(ctx, input.AccountID, input.Nickname)
+	case "request_profile_email":
+		return service.RequestProfileEmail(ctx, input.AccountID, input.Email)
+	case "confirm_profile_email":
+		return service.ConfirmProfileEmail(ctx, input.AccountID, input.Challenge, input.Code)
 	case "email":
 		return service.RequestEmail(ctx, input.Email)
 	case "verify":

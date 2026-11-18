@@ -1,7 +1,5 @@
 package account
 
-import "github.com/windshare/windshare/core/serviceauthority"
-
 // Denials are remembered before persistence. Losing a cache write or loading an
 // older record cannot turn an explicit refusal into anonymous admission.
 func (service *Service) rememberDenialLocked(record Record, reason string) {
@@ -47,9 +45,7 @@ func (service *Service) adoptLocked(record Record) {
 	if !service.currentGenerationLocked(record) {
 		record.Certificate, record.Ticket = service.record.Certificate, ""
 	}
-	if record.Credential != nil && service.record.Credential != nil && record.Credential.Account == service.record.Credential.Account {
-		record.Entitlement = serviceauthority.Advance(service.record.Entitlement, record.Entitlement)
-	}
+	record.advanceAccountState(service.record)
 	if record.Denial != "" {
 		service.rememberDenialLocked(record, record.Denial)
 	}

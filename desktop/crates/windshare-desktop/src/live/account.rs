@@ -13,14 +13,48 @@ pub enum AccountPage {
     Overview,
     Login,
     Credentials,
-    VerifyEmail,
-    RequestEmail,
+    Nickname,
+    Email(EmailPurpose, EmailStep),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EmailPurpose {
+    Registration,
+    Profile,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EmailStep {
+    Address,
+    Code,
+}
+
+impl EmailPurpose {
+    pub(super) const fn has_code(self, view: &AccountView) -> bool {
+        match self {
+            Self::Registration => view.status.email_code_pending,
+            Self::Profile => view.status.pending_email.is_some(),
+        }
+    }
+
+    pub(super) const fn entry(self, view: &AccountView) -> AccountPage {
+        AccountPage::Email(
+            self,
+            if self.has_code(view) {
+                EmailStep::Code
+            } else {
+                EmailStep::Address
+            },
+        )
+    }
 }
 
 impl AccountPage {
     pub(super) const fn entry(view: &AccountView) -> (Self, Text) {
         match view.status.state {
-            AccountState::EmailRequired => (Self::VerifyEmail, Text::AccountEmail),
+            AccountState::EmailRequired => {
+                (EmailPurpose::Registration.entry(view), Text::AccountEmail)
+            }
             AccountState::PendingSetup if !view.status.active && view.status.account.is_empty() => {
                 (Self::Login, Text::LoginExisting)
             }
@@ -37,6 +71,7 @@ pub enum AccountAction {
 }
 
 pub struct AccountForm {
+    pub(super) nickname: Entity<Input>,
     pub(super) username: Entity<Input>,
     pub(super) password: Entity<Input>,
     pub(super) email: Entity<Input>,
@@ -50,12 +85,13 @@ pub struct AccountForm {
 impl AccountForm {
     pub fn new(cx: &mut Context<Desktop>) -> Self {
         let locale = language(cx);
+        let nickname = cx.new(|cx| Input::new(locale.text(Text::Nickname), cx));
         let username = cx.new(|cx| Input::new(locale.text(Text::AccountUsername), cx));
         let password =
             cx.new(|cx| Input::new(locale.text(Text::AccountPasswordLabel), cx).password());
         let email = cx.new(|cx| Input::new(locale.text(Text::AccountEmailLabel), cx));
         let code = cx.new(|cx| Input::new(locale.text(Text::AccountCode), cx));
-        let subscriptions = [&username, &password, &email, &code]
+        let subscriptions = [&nickname, &username, &password, &email, &code]
             .into_iter()
             .map(|input| {
                 cx.subscribe(input, |this, _, event, cx| {
@@ -72,6 +108,7 @@ impl AccountForm {
             })
             .collect();
         Self {
+            nickname,
             username,
             password,
             email,
@@ -86,6 +123,7 @@ impl AccountForm {
     pub fn localize(&self, cx: &mut Context<Desktop>) {
         let locale = language(cx);
         for (input, text) in [
+            (&self.nickname, Text::Nickname),
             (&self.username, Text::AccountUsername),
             (&self.password, Text::AccountPasswordLabel),
             (&self.email, Text::AccountEmailLabel),
@@ -96,11 +134,12 @@ impl AccountForm {
     }
 
     pub(super) fn field_focus(&self, model: &Model, cx: &Context<Desktop>) -> Option<FocusHandle> {
-        let view = model.account.as_ref()?;
+        model.account.as_ref()?;
         let input = match self.page {
             AccountPage::Login | AccountPage::Credentials => &self.username,
-            AccountPage::VerifyEmail if self.entering_code(view) => &self.code,
-            AccountPage::RequestEmail | AccountPage::VerifyEmail => &self.email,
+            AccountPage::Nickname => &self.nickname,
+            AccountPage::Email(_, EmailStep::Code) => &self.code,
+            AccountPage::Email(_, EmailStep::Address) => &self.email,
             AccountPage::Overview => return None,
         };
         Some(input.read(cx).focus_handle(cx))
@@ -108,10 +147,6 @@ impl AccountForm {
 
     pub(super) const fn busy(&self, view: &AccountView) -> bool {
         self.pending.is_some() || view.busy()
-    }
-
-    pub(super) const fn entering_code(&self, view: &AccountView) -> bool {
-        matches!(self.page, AccountPage::VerifyEmail) && view.status.email_code_pending
     }
 
     pub(super) fn can_submit(&self, view: &AccountView, cx: &Context<Desktop>) -> bool {
@@ -125,19 +160,55 @@ impl AccountForm {
                 !self.username.read(cx).value().trim().is_empty()
                     && !self.password.read(cx).value().is_empty()
             }
-            AccountPage::VerifyEmail | AccountPage::RequestEmail => {
-                view.status.state == AccountState::EmailRequired
-                    && if self.entering_code(view) {
-                        !self.code.read(cx).value().trim().is_empty()
-                    } else {
-                        !self.email.read(cx).value().trim().is_empty()
+            AccountPage::Nickname => {
+                let value = self.nickname.read(cx).value().trim();
+                view.can_edit_profile()
+                    && view.nickname_locked_until().is_none()
+                    && !value.is_empty()
+                    && view
+                        .status
+                        .profile
+                        .nickname
+                        .as_ref()
+                        .is_none_or(|current| current.value != value)
+            }
+            AccountPage::Email(purpose, step) => {
+                let available = match purpose {
+                    EmailPurpose::Registration => view.status.state == AccountState::EmailRequired,
+                    EmailPurpose::Profile => view.can_edit_profile(),
+                };
+                available
+                    && match step {
+                        EmailStep::Code => {
+                            purpose.has_code(view) && !self.code.read(cx).value().trim().is_empty()
+                        }
+                        EmailStep::Address => {
+                            let address = self.email.read(cx).value().trim();
+                            !address.is_empty()
+                                && (purpose == EmailPurpose::Registration
+                                    || !address.eq_ignore_ascii_case(&view.status.profile.email))
+                        }
                     }
             }
         }
     }
 
-    pub(super) fn reconcile(&mut self, model: &Model, cx: &mut Context<Desktop>) {
+    pub(super) fn reconcile(&mut self, previous: &Model, model: &Model, cx: &mut Context<Desktop>) {
         let Some(view) = &model.account else { return };
+        let switched = previous
+            .account
+            .as_ref()
+            .is_none_or(|old| old.status.account != view.status.account);
+        if switched
+            && matches!(
+                self.page,
+                AccountPage::Nickname | AccountPage::Email(EmailPurpose::Profile, _)
+            )
+        {
+            self.page = AccountPage::Overview;
+            self.feedback = None;
+            self.pending = None;
+        }
         if let Some(id) = &self.pending {
             if let Some(op) = view.operation.as_ref().filter(|op| &op.id == id) {
                 match &op.outcome {
@@ -155,27 +226,41 @@ impl AccountForm {
             self.pending = None;
         }
         // A CLI login or a background registration can resolve a challenge while the dialog is open.
-        if matches!(
-            self.page,
-            AccountPage::VerifyEmail | AccountPage::RequestEmail
-        ) && view.status.state != AccountState::EmailRequired
-        {
-            self.page = AccountPage::Overview;
-        }
+        self.page = match self.page {
+            AccountPage::Email(EmailPurpose::Registration, _)
+                if view.status.state != AccountState::EmailRequired =>
+            {
+                AccountPage::Overview
+            }
+            AccountPage::Nickname | AccountPage::Email(EmailPurpose::Profile, _)
+                if !view.can_edit_profile() =>
+            {
+                AccountPage::Overview
+            }
+            AccountPage::Nickname if view.nickname_locked_until().is_some() => {
+                AccountPage::Overview
+            }
+            AccountPage::Email(purpose, EmailStep::Code) if !purpose.has_code(view) => {
+                AccountPage::Email(purpose, EmailStep::Address)
+            }
+            page => page,
+        };
     }
 
     fn completed(&mut self, view: &AccountView, cx: &mut Context<Desktop>) {
         let message = match self.page {
             AccountPage::Login => Text::AccountSignedIn,
             AccountPage::Credentials => Text::AccountLoginSaved,
-            AccountPage::RequestEmail | AccountPage::VerifyEmail
-                if view.status.state == AccountState::EmailRequired =>
-            {
-                self.page = AccountPage::VerifyEmail;
+            AccountPage::Nickname => Text::NicknameSaved,
+            AccountPage::Email(purpose, EmailStep::Address) => {
+                self.page = purpose.entry(view);
                 self.code.update(cx, |input, cx| input.set_value("", cx));
                 return;
             }
-            AccountPage::VerifyEmail | AccountPage::RequestEmail => Text::AccountVerified,
+            AccountPage::Email(EmailPurpose::Registration, EmailStep::Code) => {
+                Text::AccountVerified
+            }
+            AccountPage::Email(EmailPurpose::Profile, EmailStep::Code) => Text::ProfileEmailSaved,
             AccountPage::Overview => return,
         };
         self.password
@@ -215,8 +300,40 @@ impl Desktop {
         } else {
             String::new()
         };
+        let nickname = view
+            .status
+            .profile
+            .nickname
+            .as_ref()
+            .map_or_default(|nickname| nickname.value.clone());
+        let email = match page {
+            AccountPage::Email(EmailPurpose::Profile, EmailStep::Address) => Some(
+                view.status
+                    .pending_email
+                    .as_ref()
+                    .map_or(&view.status.profile.email, |pending| &pending.address)
+                    .clone(),
+            ),
+            AccountPage::Email(EmailPurpose::Registration, EmailStep::Address)
+                if !matches!(
+                    self.account_form.page,
+                    AccountPage::Email(EmailPurpose::Registration, _)
+                ) =>
+            {
+                Some(String::new())
+            }
+            _ => None,
+        };
         let form = &mut self.account_form;
         form.page = page;
+        if page == AccountPage::Nickname {
+            form.nickname
+                .update(cx, |input, cx| input.set_value(nickname, cx));
+        }
+        if let Some(email) = email {
+            form.email
+                .update(cx, |input, cx| input.set_value(email, cx));
+        }
         form.feedback = None;
         form.password
             .update(cx, |input, cx| input.set_value("", cx));
@@ -271,12 +388,36 @@ impl Desktop {
                     AccountCommand::Password { username, password }
                 }
             }
-            AccountPage::VerifyEmail if form.entering_code(view) => AccountCommand::Verify {
-                code: form.code.read(cx).value().trim().into(),
+            AccountPage::Nickname => AccountCommand::Nickname {
+                account_id: view.status.account.clone(),
+                nickname: form.nickname.read(cx).value().trim().into(),
             },
-            AccountPage::RequestEmail | AccountPage::VerifyEmail => AccountCommand::Email {
-                email: form.email.read(cx).value().trim().into(),
-            },
+            AccountPage::Email(EmailPurpose::Registration, EmailStep::Code) => {
+                AccountCommand::Verify {
+                    code: form.code.read(cx).value().trim().into(),
+                }
+            }
+            AccountPage::Email(EmailPurpose::Registration, EmailStep::Address) => {
+                AccountCommand::Email {
+                    email: form.email.read(cx).value().trim().into(),
+                }
+            }
+            AccountPage::Email(EmailPurpose::Profile, EmailStep::Address) => {
+                AccountCommand::RequestProfileEmail {
+                    account_id: view.status.account.clone(),
+                    email: form.email.read(cx).value().trim().into(),
+                }
+            }
+            AccountPage::Email(EmailPurpose::Profile, EmailStep::Code) => {
+                let Some(pending) = &view.status.pending_email else {
+                    return;
+                };
+                AccountCommand::ConfirmProfileEmail {
+                    account_id: view.status.account.clone(),
+                    challenge: pending.challenge.id.clone(),
+                    code: form.code.read(cx).value().trim().into(),
+                }
+            }
         };
         self.send_account_command(command);
     }
