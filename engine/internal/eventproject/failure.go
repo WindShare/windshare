@@ -38,6 +38,7 @@ var (
 	trustedWrapType      = reflect.TypeOf(fmt.Errorf("workflow projection wrapper: %w", errStructuralProbe))
 	trustedMultiWrapType = reflect.TypeOf(fmt.Errorf("workflow projection wrappers: %w %w", errStructuralProbe, errStructuralProbe))
 	trustedPathErrorType = reflect.TypeFor[*fs.PathError]()
+	trustedNotSentType   = reflect.TypeFor[*relayv2.RegistrationNotSentError]()
 	trustedURLErrorType  = reflect.TypeFor[*url.Error]()
 	trustedNetErrorType  = reflect.TypeFor[*net.OpError]()
 )
@@ -116,7 +117,10 @@ func classifyErrorAtDepth(cause error, depth int, traversal *errorTraversal) (ap
 				return failure, true
 			}
 		}
-	case trustedWrapType:
+	// Single-wrapper types only add context: the cause underneath decides the
+	// failure. A registration that never reached the relay merely says when it
+	// happened.
+	case trustedWrapType, trustedNotSentType:
 		child, ok := cause.(interface{ Unwrap() error })
 		if !ok {
 			return appobs.Failure{}, false
