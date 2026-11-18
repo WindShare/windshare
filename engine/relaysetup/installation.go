@@ -26,7 +26,7 @@ func (run *workflow) install(ctx context.Context, revision string, candidate rel
 		if current.SettingsRevision() != revision {
 			return errSettingsChangedBeforePending
 		}
-		next, err := current.Config.MergeRelay(candidate)
+		next, err := current.MergeRelay(candidate)
 		if err == nil {
 			current.Config = next
 		}
@@ -48,7 +48,7 @@ func pendingInstallation(current Snapshot, pending *PendingSetup) (relayconfig.C
 	if current.SettingsRevision() != pending.SettingsRevision {
 		return relayconfig.Config{}, errSettingsChangedWhilePending
 	}
-	return current.Config.MergeRelay(pending.profile(pending.credential().AccessKey))
+	return current.MergeRelay(pending.profile(pending.credential().AccessKey))
 }
 
 func (pending *PendingSetup) profile(accessKey string) relayprofile.Candidate {

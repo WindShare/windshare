@@ -39,7 +39,7 @@ func (run *workflow) execute(ctx context.Context, request Request, progress func
 		return run.continueEnrollment(ctx, saved, progress, request.NoBrowser)
 	}
 	if request.AccessKey != "" {
-		return run.install(ctx, saved.SettingsRevision(), saved.Config.CredentialProfile(request.URL, request.AccessKey))
+		return run.install(ctx, saved.SettingsRevision(), saved.CredentialProfile(request.URL, request.AccessKey))
 	}
 	discovery, err := run.discover(ctx, request.URL)
 	if err != nil {
@@ -81,7 +81,7 @@ func (run *workflow) execute(ctx context.Context, request Request, progress func
 			return errSettingsChangedBeforePending
 		}
 		// Detect capacity and selection failures before asking anyone to approve.
-		if _, err := current.Config.MergeRelay(pending.profile("")); err != nil {
+		if _, err := current.MergeRelay(pending.profile("")); err != nil {
 			return err
 		}
 		current.Pending = pending

@@ -67,6 +67,7 @@ pub struct Runtime {
     pub(crate) console: Arc<OnceLock<crate::console::Console>>,
     pub(crate) governor: governor::Governor,
     state: Arc<Mutex<State>>,
+    settings_writer: Arc<Mutex<()>>,
     reporting_authority: Arc<OnceLock<Option<usage::Authority>>>,
     revocations: watch::Sender<u64>,
     pub(crate) metrics: Metrics,
@@ -89,6 +90,7 @@ impl Default for Runtime {
                 storage_failed: false,
                 budget_revision: 0,
             })),
+            settings_writer: Arc::default(),
             reporting_authority: Arc::default(),
             revocations: watch::channel(0).0,
             metrics: Metrics::default(),
@@ -214,6 +216,25 @@ impl Runtime {
     /// # Errors
     /// Configuration changes cannot reset a billing ledger or revive spent quota.
     pub fn update(&self, settings: Settings, timestamp: i64) -> Result<()> {
+        self.apply_settings(Some(settings), timestamp)
+    }
+
+    fn apply_settings(&self, next: Option<Settings>, timestamp: i64) -> Result<()> {
+        // Admission policy and the signed descriptor must describe the same
+        // revision. A periodic budget refresh may only reapply the latest one.
+        let writer = self
+            .settings_writer
+            .lock()
+            .map_err(|_| anyhow!("node settings poisoned"))?;
+        let settings = match next {
+            Some(settings) => settings,
+            None => self
+                .state
+                .lock()
+                .map_err(|_| anyhow!("node state poisoned"))?
+                .settings
+                .clone(),
+        };
         settings.validate()?;
         anyhow::ensure!(
             self.reporting_authority
@@ -263,6 +284,7 @@ impl Runtime {
         }
         state.settings = settings;
         drop(state);
+        drop(writer);
         Ok(())
     }
 
@@ -287,17 +309,8 @@ impl Runtime {
             let runtime = self.clone();
             let path = path.clone();
             let result = tokio::task::spawn_blocking(move || {
-                let settings = if let Some(path) = path {
-                    Settings::read(&path)?
-                } else {
-                    runtime
-                        .state
-                        .lock()
-                        .map_err(|_| anyhow!("node state poisoned"))?
-                        .settings
-                        .clone()
-                };
-                runtime.update(settings, now())
+                let requested = path.as_deref().map(Settings::read).transpose()?;
+                runtime.apply_settings(requested, now())
             })
             .await;
             if !matches!(result, Ok(Ok(()))) {

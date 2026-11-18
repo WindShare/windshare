@@ -30,7 +30,7 @@ export class AuthorityBlockFeed {
     const url = new URL(options.url)
     if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.hostname.endsWith('.workers.dev')) throw new TypeError('Invalid authority endpoint')
     this.#options = options
-    this.#cache = options.cache ?? (typeof indexedDB === 'undefined' ? new MemoryBlockCache() : new BrowserBlockCache(options.root))
+    this.#cache = options.cache ?? (!('indexedDB' in globalThis) ? new MemoryBlockCache() : new BrowserBlockCache(options.root))
     this.ready = this.#load().catch(failure => this.#observe({ operationId: 'authority-cache', transition: 'rejected', endpoint: options.url, failure }))
     void this.ready.then(() => this.refresh())
   }
