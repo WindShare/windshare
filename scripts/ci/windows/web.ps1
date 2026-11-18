@@ -18,7 +18,9 @@ function Invoke-Step([string]$Label, [scriptblock]$Body) {
 }
 
 Write-Output '== web =='
-Invoke-Step 'ESLint' { pnpm -C web lint }
+Invoke-Step 'Web ESLint' { pnpm -C web lint }
+Invoke-Step 'Consoles ESLint' { pnpm -C consoles lint }
+Invoke-Step 'Consoles TypeScript' { pnpm -C consoles typecheck }
 Invoke-Step 'TypeScript and Vite build' { pnpm -C web build }
 Invoke-Step 'Vitest' { pnpm -C web test }
 Write-Output ('== web: PASS in {0:mm\:ss} ==' -f $gateStopwatch.Elapsed)

@@ -20,7 +20,7 @@ Make targets operate on the repository root and use the installed Go, Rust, Node
 
 | Command | Runs |
 |---|---|
-| `make check` | `rust` and `desktop-check`, then Go short tests, Web typecheck, and Web unit tests. |
+| `make check` | `rust` and `desktop-check`, then Go short tests, Web/Consoles typecheck, Consoles ESLint, and Web unit tests. |
 | `make ci` | The ordinary gate set, serially. |
 | `make ci-parallel` | The same gates in three concurrent lanes: `short-go vectors rust desktop-check e2e hygiene workflow-lint sloc`, `web browser`, and `gopls lint vet`. |
 | `make ci-full` | `ci`, `long-go`, and the weekly browser supplement. |
@@ -31,7 +31,7 @@ Make targets operate on the repository root and use the installed Go, Rust, Node
 | `make vectors-update` | Regenerates protocol vectors. |
 | `make rust` | Cargo fmt, Clippy, native tests, doctests, coverage, and wasm builds. |
 | `make desktop-check` | Desktop workspace: Cargo fmt, strict Clippy, non-UI tests (including native host ABI and artifact staging), and native build; requires Node.js, Go, a C compiler, and GPUI prerequisites. |
-| `make web` | ESLint, TypeScript/Vite build, Vitest. |
+| `make web` | Web and Consoles ESLint, Consoles typecheck, Web TypeScript/Vite build, and Vitest. |
 | `make e2e` | `TestUserTraceCriticalSenderRelayReceiver` over real CLI processes. |
 | `make browser` | Chromium relay smoke and short browser contracts. |
 | `make browser-weekly` | `browser` plus Firefox/WebKit contracts, Chromium periodic contracts, progressive catalog, direct/TURN routes, and Pion interop. |
@@ -89,7 +89,7 @@ Coverage is gated on the core and non-core totals and on each package, with no p
 | Rust relay (Linux) | Full `make rust` gate. |
 | Rust relay (Windows) | `cargo test -p windshare-relay-native --locked`: native unit and process integration tests, without workspace coverage or Wasm builds. |
 | Rust desktop (Windows) | `make desktop-check`, then package the executable with its Go library and verify authenticated host startup and joined shutdown from the relocated package. |
-| Web | Lint, build, and unit tests. |
+| Web | Lint, build, and unit tests (Web and Consoles). |
 | Go E2E | The critical sender/relay/receiver process test. |
 | Chromium relay smoke | Relay smoke, sustained native-size block bursts, and session isolation. |
 | Chromium browser contracts | Short component contracts, independently of native toolchains and smoke tests. |

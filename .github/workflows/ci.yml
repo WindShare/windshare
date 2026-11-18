@@ -330,10 +330,14 @@ jobs:
         with:
           node-version: latest
           cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
+          cache-dependency-path: |
+            web/pnpm-lock.yaml
+            consoles/pnpm-lock.yaml
       - name: Install frozen Web dependencies
         run: pnpm -C web install --frozen-lockfile
-      - name: Lint, build, and test the Web application once
+      - name: Install frozen Consoles dependencies
+        run: pnpm -C consoles install --frozen-lockfile
+      - name: Lint, build, and test the Web and Consoles applications once
         run: make web
 
   go-e2e:

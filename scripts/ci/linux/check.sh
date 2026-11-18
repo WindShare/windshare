@@ -14,6 +14,12 @@ go test -short "${all_packages[@]}"
 echo "-- Web typecheck"
 pnpm -C web exec tsc -b --force
 
+echo "-- Consoles typecheck"
+pnpm -C consoles typecheck
+
+echo "-- Consoles ESLint"
+pnpm -C consoles lint
+
 echo "-- Web unit tests"
 pnpm -C web test
 

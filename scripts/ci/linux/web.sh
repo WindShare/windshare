@@ -5,8 +5,14 @@ cd "$(dirname "$0")/../../.."
 SECONDS=0
 echo "== web =="
 
-echo "-- ESLint"
+echo "-- Web ESLint"
 pnpm -C web lint
+
+echo "-- Consoles ESLint"
+pnpm -C consoles lint
+
+echo "-- Consoles TypeScript"
+pnpm -C consoles typecheck
 
 echo "-- TypeScript and Vite build"
 pnpm -C web build
