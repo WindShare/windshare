@@ -15,6 +15,8 @@ import (
 	"time"
 )
 
+const linuxRelayTarget = "x86_64-unknown-linux-musl"
+const linuxBaselineCFlags = "-march=x86-64 -mtune=generic"
 const nativeRelayPackage = "windshare-relay-native"
 const nativeRelayBinary = "relay-native"
 const nativeRelayProbeTimeout = 5 * time.Second
@@ -22,7 +24,7 @@ const nativeRelayProbeTimeout = 5 * time.Second
 func nativeReleaseTarget(goos, goarch string) (string, error) {
 	switch goos + "/" + goarch {
 	case "linux/amd64":
-		return "x86_64-unknown-linux-musl", nil
+		return linuxRelayTarget, nil
 	case "windows/amd64":
 		return "x86_64-pc-windows-msvc", nil
 	default:
@@ -41,7 +43,7 @@ func buildNativeRelay(source, destination string) error {
 		"--target", target, "--target-dir", filepath.Join(workspace, ".target"),
 		"--message-format=json-render-diagnostics")
 	command.Dir = workspace
-	command.Env = nativeReleaseEnvironment(os.Environ())
+	command.Env = nativeReleaseEnvironment(os.Environ(), target)
 	var output bytes.Buffer
 	command.Stdout, command.Stderr = &output, os.Stderr
 	if err := command.Run(); err != nil {
@@ -67,19 +69,29 @@ func buildNativeRelay(source, destination string) error {
 	return nil
 }
 
-func nativeReleaseEnvironment(inherited []string) []string {
+func nativeReleaseEnvironment(inherited []string, target string) []string {
 	environment := make([]string, 0, len(inherited)+1)
 	for _, item := range inherited {
 		key, _, _ := strings.Cut(item, "=")
-		switch strings.ToUpper(key) {
+		switch strings.ToUpper(strings.ReplaceAll(key, "-", "_")) {
 		case "CARGO_BUILD_TARGET", "CARGO_TARGET_DIR", "CARGO_ENCODED_RUSTFLAGS", "RUSTFLAGS":
 			continue
+		case "CFLAGS", "CXXFLAGS", "TARGET_CFLAGS", "TARGET_CXXFLAGS",
+			"CFLAGS_X86_64_UNKNOWN_LINUX_MUSL", "CXXFLAGS_X86_64_UNKNOWN_LINUX_MUSL":
+			if target == linuxRelayTarget {
+				continue
+			}
 		}
 		environment = append(environment, item)
 	}
 	// Release ZIPs must run without a separately installed C runtime. The
 	// explicit Cargo target also keeps this flag off host build scripts.
-	return append(environment, "RUSTFLAGS=-C target-feature=+crt-static")
+	if target == linuxRelayTarget {
+		// The distribution compiler can default to x86-64-v3. Bundled SQLite
+		// runs before CPU dispatch and must open databases on baseline amd64.
+		environment = append(environment, "CFLAGS="+linuxBaselineCFlags, "CXXFLAGS="+linuxBaselineCFlags)
+	}
+	return append(environment, "RUSTFLAGS=-C target-cpu=x86-64 -C target-feature=+crt-static")
 }
 
 func nativeReleaseArtifact(output io.Reader) (string, error) {

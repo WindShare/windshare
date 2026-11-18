@@ -80,7 +80,7 @@ jobs:
         run: |
           rustup target add --toolchain stable x86_64-unknown-linux-musl
           sudo apt-get update
-          sudo apt-get install -y musl-tools
+          sudo apt-get install -y musl-tools qemu-user
       - name: Install latest govulncheck
         env:
           GOBIN: ${{ runner.temp }}/go-tools
@@ -97,6 +97,10 @@ jobs:
           RELEASE_COMMIT_SHA: ${{ needs.release.outputs.commit_sha }}
           WINDSHARE_RELEASE_ASSETS: ${{ runner.temp }}/release-assets
         run: bash scripts/ci/linux/release.sh "$RELEASE_VERSION" "$RELEASE_COMMIT_SHA" linux-ext4
+      - name: Reopen the packaged relay database on baseline amd64
+        env:
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
+        run: python3 scripts/ci/linux/relay-baseline.py "$RUNNER_TEMP/release-assets" "$RELEASE_VERSION"
       - uses: actions/upload-artifact@v7
         with:
           name: release-linux
