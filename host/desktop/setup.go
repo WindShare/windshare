@@ -90,11 +90,11 @@ func (a *Application) configure(request Request) error {
 	a.setup = SetupView{State: "running", ID: input.ID, OperationID: request.OperationID, RelayURL: input.RelayURL}
 	a.setupRequests[input.ID] = setupCommand{input: *input, operationID: request.OperationID}
 	a.work.Add(1)
-	go a.runSetup(ctx, request.OperationID, *input)
+	go a.runSetup(ctx, *input)
 	return nil
 }
 
-func (a *Application) runSetup(ctx context.Context, operationID string, input SetupInput) {
+func (a *Application) runSetup(ctx context.Context, input SetupInput) {
 	defer a.work.Done()
 	result, err := a.deps.setup(ctx, input, func(progress relaysetup.Progress) {
 		a.mu.Lock()
@@ -139,7 +139,6 @@ func (a *Application) runSetup(ctx context.Context, operationID string, input Se
 	a.setup.VerificationURL, a.setup.UserCode = "", ""
 	if err != nil {
 		a.setup.State, a.setup.Error = "failed", failure("setup_failed", err)
-
 	} else {
 		a.setup.State = "finished"
 	}
