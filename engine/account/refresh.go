@@ -5,7 +5,12 @@ import (
 	"errors"
 	"reflect"
 	"time"
+
+	"github.com/windshare/windshare/core/serviceauthority"
 )
+
+// authorityChallengeLifetime matches CHALLENGE_SECONDS in network-authority's admission policy.
+const authorityChallengeLifetime = 15 * time.Minute
 
 func (service *Service) run() {
 	retry := MinimumRetry
@@ -91,15 +96,29 @@ func (service *Service) register(ctx context.Context, record Record) error {
 		}
 		record.Proof = proof
 	}
+	_, err := service.submitRegistration(ctx, record, record.Proof)
+	return err
+}
+
+// submitRegistration installs a session or saves and returns the next challenge.
+// Interactive callers need that outcome independently of background account state.
+func (service *Service) submitRegistration(ctx context.Context, record Record, proof *Proof) (*Challenge, error) {
 	request := struct {
 		Secret    string  `json:"client_secret"`
 		Challenge *string `json:"challenge"`
 		Solution  *string `json:"solution"`
 	}{Secret: record.SetupSecret}
-	if record.Proof != nil && record.Proof.Solution != "" {
-		request.Challenge, request.Solution = &record.Proof.Challenge.ID, &record.Proof.Solution
+	if proof != nil && proof.Solution != "" {
+		request.Challenge, request.Solution = &proof.Challenge.ID, &proof.Solution
 	}
-	return service.requestIssuance(ctx, record, "/v1/accounts", "", request)
+	err := service.requestIssuance(ctx, record, "/v1/accounts", "", request)
+	if failure, ok := errors.AsType[*fault](err); ok && failure.Kind == "verification" {
+		if err := service.acceptChallenge(ctx, record, failure.Challenge); err != nil {
+			return nil, err
+		}
+		return &failure.Challenge, nil
+	}
+	return nil, err
 }
 
 func (service *Service) solveProof(ctx context.Context, record Record) (*Proof, error) {
@@ -125,36 +144,26 @@ func (service *Service) requestIssuance(ctx context.Context, record Record, path
 	if err == nil {
 		return service.install(ctx, record, result, false)
 	}
-	var failure *fault
-	if !errors.As(err, &failure) {
+	failure, ok := errors.AsType[*fault](err)
+	if !ok || failure.Kind != "denied" {
 		return err
 	}
-	switch failure.Kind {
-	case "verification":
-		return service.acceptChallenge(ctx, record, failure.Challenge)
-	case "denied":
-		service.mu.Lock()
-		service.rememberDenialLocked(record, failure.Reason)
-		service.mu.Unlock()
-		_, storeErr := service.config.Store.Update(ctx, func(current Record) (Record, error) {
-			if !sameIdentity(current, record) {
-				return Record{}, ErrSuperseded
-			}
-			current.Denial = failure.Reason
-			return current, nil
-		})
-		return errors.Join(err, storeErr)
-	default:
-		return err
-	}
+	service.mu.Lock()
+	service.rememberDenialLocked(record, failure.Reason)
+	service.mu.Unlock()
+	_, storeErr := service.config.Store.Update(ctx, func(current Record) (Record, error) {
+		if !sameIdentity(current, record) {
+			return Record{}, ErrSuperseded
+		}
+		current.Denial = failure.Reason
+		return current, nil
+	})
+	return errors.Join(err, storeErr)
 }
 
 func (service *Service) acceptChallenge(ctx context.Context, record Record, challenge Challenge) error {
-	const maximumChallengeLifetime = 15 * time.Minute
-	now := uint64(service.config.Now().Unix())
 	if challenge.Mode != "email" && challenge.Mode != "proof_of_work" ||
-		challenge.ExpiresAt <= now || challenge.ExpiresAt > now+uint64(maximumChallengeLifetime/time.Second) ||
-		challenge.Bits > 32 {
+		!service.acceptsChallengeExpiry(challenge.ExpiresAt) || challenge.Bits > 32 {
 		return errors.New("invalid account challenge")
 	}
 	if err := service.saveProof(ctx, record, &Proof{Challenge: challenge}); err != nil {
@@ -169,10 +178,32 @@ func (service *Service) acceptChallenge(ctx context.Context, record Record, chal
 	return nil
 }
 
+// The authority stamps a fresh challenge's expiry with its own clock. A local
+// clock running behind it must not refuse every fresh challenge, so the upper
+// bound tolerates the same skew as ticket and certificate acceptance.
+func (service *Service) acceptsChallengeExpiry(expiresAt uint64) bool {
+	now := uint64(service.config.Now().Unix())
+	return expiresAt > now && expiresAt <= now+uint64(authorityChallengeLifetime/time.Second)+serviceauthority.ClockSkew
+}
+
 func (service *Service) saveProof(ctx context.Context, previous Record, proof *Proof) error {
+	return service.updateProof(ctx, previous, func(current *Proof) (*Proof, error) {
+		// Another process can replace the challenge while a request is in flight.
+		if !reflect.DeepEqual(current, previous.Proof) {
+			return nil, ErrSuperseded
+		}
+		return proof, nil
+	})
+}
+
+func (service *Service) updateProof(ctx context.Context, previous Record, update func(*Proof) (*Proof, error)) error {
 	record, err := service.config.Store.Update(ctx, func(current Record) (Record, error) {
 		if !sameIdentity(current, previous) {
 			return Record{}, ErrSuperseded
+		}
+		proof, err := update(current.Proof)
+		if err != nil {
+			return Record{}, err
 		}
 		current.Proof = proof
 		return current, nil

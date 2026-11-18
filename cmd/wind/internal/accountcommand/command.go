@@ -62,7 +62,11 @@ func (runner Runner) Run(ctx context.Context, args []string) int {
 		return ResultFailure
 	}
 	snapshot, _ := runner.Service.Snapshot()
-	runner.Output.WriteLines(Describe(snapshot))
+	if args[0] == "verify" {
+		runner.Output.WriteLines("Account setup complete.")
+	} else {
+		runner.Output.WriteLines(Describe(snapshot))
+	}
 	if snapshot.Account != "" {
 		runner.Output.WriteLines("Account: "+snapshot.Account, "Credential: "+snapshot.Credential)
 	}
@@ -96,10 +100,7 @@ func (runner Runner) execute(ctx context.Context, args []string) error {
 		}
 	case "verify":
 		if len(args) == 2 {
-			if err := runner.Service.VerifyEmail(ctx, args[1]); err != nil {
-				return err
-			}
-			return runner.wait(ctx)
+			return runner.Service.VerifyEmail(ctx, args[1])
 		}
 	case "revoke":
 		if len(args) == 2 {
