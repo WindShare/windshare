@@ -2,6 +2,8 @@ package account
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -29,7 +31,9 @@ func TestFreshChallengesSurviveLocalClockBehindAuthority(t *testing.T) {
 		case "/v1/accounts/email":
 			status, body = http.StatusOK, Challenge{ID: "email-challenge", Mode: "email", ExpiresAt: expiresAt.Load()}
 		default:
-			t.Fatalf("unexpected route %s", request.URL.Path)
+			err := fmt.Errorf("unexpected route %s", request.URL.Path)
+			t.Error(err)
+			return nil, err
 		}
 		data, _ := json.Marshal(body)
 		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(string(data)))}, nil
@@ -53,6 +57,80 @@ func TestFreshChallengesSurviveLocalClockBehindAuthority(t *testing.T) {
 	expiresAt.Store(uint64(config.Now().Unix()) + 60*60)
 	if err := service.RequestEmail(t.Context(), "person@example.com"); err == nil || err.Error() != "invalid email challenge" {
 		t.Fatalf("challenge lifetime beyond the authority's: %v", err)
+	}
+}
+
+func TestVerifyEmailReturnsRegistrationOutcome(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		want       error
+		superseded bool
+	}{
+		{name: "registered"},
+		{name: "expired at the authority", want: errEmailCodeRejected},
+		{name: "email replaced during verification", want: ErrSuperseded, superseded: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config, session := accountFixture(t)
+			now := uint64(config.Now().Unix())
+			// A faster authority can reject the code while it is still current locally.
+			original := Challenge{ID: "original", Mode: "email", ExpiresAt: now + 1}
+			prompt := Challenge{Mode: "email", ExpiresAt: now + uint64(authorityChallengeLifetime.Seconds()) + 2}
+			newEmail := Challenge{ID: "new-email", Mode: "email", ExpiresAt: prompt.ExpiresAt}
+			config.Store = &MemoryStore{record: Record{SetupSecret: session.Secret, Proof: &Proof{Challenge: original}}}
+			config.Client = clientFunc(func(request *http.Request) (*http.Response, error) {
+				var input struct {
+					Secret    string `json:"client_secret"`
+					Challenge string `json:"challenge"`
+					Solution  string `json:"solution"`
+				}
+				if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+					return nil, err
+				}
+				if request.URL.Path != "/v1/accounts" || input.Secret != session.Secret ||
+					input.Challenge != original.ID || input.Solution != "local-code" {
+					return nil, errors.New("unexpected registration request")
+				}
+				if test.superseded {
+					if _, err := config.Store.Update(request.Context(), func(record Record) (Record, error) {
+						record.Proof = &Proof{Challenge: newEmail}
+						return record, nil
+					}); err != nil {
+						return nil, err
+					}
+				}
+				status, body := http.StatusOK, any(session)
+				if test.want != nil {
+					status, body = http.StatusPreconditionRequired, fault{Kind: "verification", Challenge: prompt}
+				}
+				data, err := json.Marshal(body)
+				if err != nil {
+					return nil, err
+				}
+				return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(string(data)))}, nil
+			})
+			service := testService(t, config)
+			if err := service.VerifyEmail(t.Context(), "local-code"); !errors.Is(err, test.want) {
+				t.Fatalf("VerifyEmail = %v, want %v", err, test.want)
+			}
+			record, err := service.load(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.want == nil {
+				if snapshot, _ := service.Snapshot(); snapshot.State != Ready || record.Credential == nil || record.Proof != nil {
+					t.Fatalf("verification returned before installing the account: state=%s", snapshot.State)
+				}
+				return
+			}
+			wantProof := Proof{Challenge: prompt}
+			if test.superseded {
+				wantProof.Challenge = newEmail
+			}
+			if record.Proof == nil || *record.Proof != wantProof || record.Credential != nil {
+				t.Fatal("rejected verification left the wrong challenge")
+			}
+		})
 	}
 }
 

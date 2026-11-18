@@ -3,8 +3,11 @@ package account
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 )
+
+var errEmailCodeRejected = errors.New("verification code is invalid or expired; request a new verification email")
 
 func (service *Service) Login(ctx context.Context, username, password string) error {
 	if service == nil {
@@ -79,10 +82,13 @@ func (service *Service) RequestEmail(ctx context.Context, email string) error {
 		return err
 	}
 	if challenge.ID == "" || len(challenge.ID) > 128 || challenge.Mode != "email" ||
-		!service.challengeCurrent(challenge.ExpiresAt) {
+		!service.acceptsChallengeExpiry(challenge.ExpiresAt) {
 		return errors.New("invalid email challenge")
 	}
-	if err := service.saveProof(ctx, previous, &Proof{Challenge: challenge}); err != nil {
+	// Issuing the email replaces the authority's previous challenge.
+	if err := service.updateProof(ctx, previous, func(*Proof) (*Proof, error) {
+		return &Proof{Challenge: challenge}, nil
+	}); err != nil {
 		return err
 	}
 	service.transition(EmailRequired, "", time.Time{})
@@ -90,6 +96,7 @@ func (service *Service) RequestEmail(ctx context.Context, email string) error {
 	return nil
 }
 
+// VerifyEmail completes registration with the authority before reporting success.
 func (service *Service) VerifyEmail(ctx context.Context, code string) error {
 	if service == nil {
 		return ErrNotConfigured
@@ -108,13 +115,19 @@ func (service *Service) VerifyEmail(ctx context.Context, code string) error {
 	if len(code) == 0 || len(code) > 128 {
 		return errors.New("invalid verification code")
 	}
+	// The setup secret makes retries idempotent, so the submitted email code
+	// can stay in memory while we wait for the authority's decision.
 	proof := *previous.Proof
 	proof.Solution = code
-	if err := service.saveProof(ctx, previous, &proof); err != nil {
+	challenge, err := service.submitRegistration(ctx, previous, &proof)
+	if err != nil || challenge == nil {
 		return err
 	}
-	service.Retry()
-	return nil
+	slog.Debug("account_email_verification_challenge_replaced", "challenge_id", proof.Challenge.ID, "next_mode", challenge.Mode)
+	if challenge.Mode == "email" {
+		return errEmailCodeRejected
+	}
+	return errors.New("registration requirements changed; retry account setup")
 }
 
 func (service *Service) RevokeCredential(ctx context.Context, credential [16]byte) error {
