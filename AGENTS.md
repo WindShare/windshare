@@ -53,25 +53,8 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 ```text
 .
 ├── .github/workflows/             CI, weekly suites, source/binary releases, and Cloudflare deployment
-├── core/                         Network-free reusable package subtree
-│   ├── link/, urlhost/            Capability links and shared URL host normalization
-│   ├── networkendpoint/          Relay, STUN, and WebSocket endpoint normalization
-│   ├── nodedirectory/, serviceauthority/ Signed network directory and node descriptor verification
-│   ├── senderobject/, senderauth/ Sealed transport-neutral objects and sender-signature acceptance
-│   ├── catalog/                  Committed directory generations/pages, durable storage/recovery
-│   ├── content/                  File revisions, ranges, leases/capacity, keys, authenticated records
-│   ├── capacityledger/            Shared capacity accounting
-│   ├── session/                  Shared contracts, sendersession/receiversession runtimes, catalog/content flows, TURN controls
-│   ├── framechannel/             Transport-neutral frame contract
-│   ├── observationstream/        Bounded producer-owned observation queues
-│   ├── diagnostics/              Source-owned diagnostic records and injected sinks
-│   ├── diagnosticerror/          Bounded immutable error snapshots
-│   ├── connectionpath/           Transport-neutral path lifecycle facts
-│   ├── downloadmetrics/          Per-download authenticated content accounting
-│   ├── transfer/                 Receive contracts/discovery, jobs, lane scheduling, output settlement
-│   ├── liveshare/                Runtime assembly and injected file-source ownership
-│   ├── testvectors/              Canonical Go↔TypeScript contract vectors
-│   └── internal/                 HKDF, pinned Unicode 15, protocol contracts, and test fixtures
+├── core/                         Network-free domain/protocol packages (links, directory/node auth, catalog/content, sessions, transfer, liveshare)
+│   └── testvectors/, internal/   Canonical Go↔TypeScript contract vectors, HKDF, pinned Unicode 15, and test fixtures
 ├── osfs/                         Native file sources, filesystem output, checkpoints/recovery
 ├── adapters/filesystem/          Native output/recovery assembly and provider diagnostics
 ├── engine/                       Shared native application API, tasks, observations, aggregate budgets
@@ -89,18 +72,7 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 │   ├── windshare-host/           Go shared library; C ABI for desktop host lifetime and result buffers
 │   ├── network-sign/             Offline root authorization and online directory signing CLI
 │   └── testprocessowner/         Test-only bounded process supervisor
-├── connectivity/
-│   ├── v2signal/                 Canonical E2E signaling schema, codec, and validation
-│   ├── v2peer/                   Peer negotiation/admission and demand-driven PeerSet orchestration
-│   ├── throughput/                Throughput-driven path growth and retirement
-│   ├── nativepeer/, pionpeer/    Native resource ownership and Pion connection adaptation
-│   ├── networkstate/             Network snapshots and generation tracking
-│   ├── socketauthority/          UDP/TCP socket ownership and capability snapshots
-│   ├── reachability/, icepolicy/ Gateway mapping leases and ICE endpoint policy
-│   ├── iceconfig/, turnpath/      ICE configuration and TURN delegation, renewal, recovery, and retirement
-│   ├── turncapacity/, turnroute/  Shared TURN admission and route planning
-│   ├── relayplan/                Bounded deterministic relay candidate selection
-│   └── senderrelay/, relayset/    Relay registration/recovery, independent lifecycles, and coordinated session admission
+├── connectivity/                 E2E signaling, PeerSet/Pion orchestration, ICE/TURN/socket/gateway policies, and relay admission
 ├── transport/
 │   ├── relayv2/                  Relay registration and multiplexed FrameChannel lifecycle
 │   └── webrtc/                   Pion FrameChannels and terminal lifecycle
@@ -123,24 +95,8 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 │   ├── crates/windshare-shell/    Windows Explorer Share with WindShare COM command
 │   └── install/                  Windows package identity, installation, and uninstallation scripts
 ├── web/                          React/TypeScript landing portal and browser receiver
-│   ├── src/crypto/, protocol/    Suite-02 links/key hierarchy, sealed-object auth, canonical CBOR/text
-│   ├── src/contracts/, session/  Browser FrameChannel contract and ReceiverSessionRuntime
-│   ├── src/catalog/, content/    Progressive catalog, revisions/ranges, leases, lane scheduling
-│   ├── src/unicode/              Pinned Unicode 15 path normalization and case folding
-│   ├── src/transport/            Relay/WebRTC channels and frame adapters
-│   ├── src/connectivity/         Signaling, path policy, lane adoption, and TURN delegation/renewal
-│   ├── src/receiver/             Reconnect and protocol-generation supervision
-│   ├── src/network/              Signed node directory and network authority verification/caching
-│   ├── src/document/             Portal/receiver document lifecycle and runtime ownership
-│   ├── src/application/          Browser receiver assembly, task commands, output-route coordination
-│   ├── src/transfer/             Intent/discovery, jobs, Direct ZIP coordination, backpressure/checkpoints/settlement
-│   ├── src/output/               Artifact authority, storage providers, Direct ZIP writing/journals, publication/recovery
-│   ├── src/diagnostics/          Bounded tracing, incident correlation, and developer export
-│   ├── src/security/             Capability redaction and bounded diagnostic formatting
-│   ├── src/preview/, ui/         Media preview, receiver UI, and landing portal
-│   ├── scripts/                  Browser/Pion interop and output/diagnostic evidence
-│   ├── test/                     Unit and browser component-contract tests
-│   └── e2e/                      Direct smoke and scheduled product scenarios
+│   ├── src/                      Protocol/crypto, session/connectivity, transfer/output, network/document, preview, and UI
+│   └── scripts/, test/, e2e/     Boundary/evidence scripts, unit/contract tests, and Playwright scenarios
 ├── internal/                     Connection liveness, platform setup, process ownership, performance evidence, test support
 ├── integration/                  Native relayv2, v2peer, and Direct ZIP integration scenarios
 ├── e2e/                          Process-level Go end-to-end tests
