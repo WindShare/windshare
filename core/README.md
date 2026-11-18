@@ -1,60 +1,42 @@
 # WindShare core
 
-`github.com/windshare/windshare/core/...` is WindShare's network-free package
-subtree inside the single production Go module. It owns capability links,
-catalog and content contracts, authenticated session state, transfer
-orchestration, and root-confined filesystem adapters. The native application
-[engine](../engine/) owns task lifecycles and composes core with signaling and
-concrete transports outside this package boundary.
+> This page outlines the `core` subtree's shape and boundaries. Package sources, [`docs/protocol.md`](../docs/protocol.md), and [`docs/validation.md`](../docs/validation.md) are the sources of truth for specifics.
 
-An explicit dependency-graph gate prevents core packages from importing
-non-core WindShare packages or concrete networking and transport capabilities.
-The project may reconsider a separate core module after real external consumers
-exist and need an independent compatibility and release lifecycle; the current
-pre-v1 package API makes no compatibility promise for that possible split.
+`github.com/windshare/windshare/core/...` is WindShare's network-free package subtree inside the root production Go module. It owns protocol identities, sealed object formats, directory/authority verification, catalog and content contracts, session state, transfer orchestration, and shared capacity and observability primitives. Concrete transports ([`connectivity/`](../connectivity/), [`transport/`](../transport/)) and native filesystem implementations ([`osfs/`](../osfs/), [`adapters/filesystem/`](../adapters/filesystem/)) live outside `core` and are composed by [`engine/`](../engine/) and hosts.
 
-## File sources and ownership
+The pre-v1 package API makes no compatibility promise; a separate module would only be reconsidered when external consumers require an independent release lifecycle.
 
-`liveshare.PrepareSender` consumes a `FileSourceFactory`. Each acquired source
-owns one share's selection and combines selected-root metadata,
-`catalog.DirectoryScanner`, `content.RevisionSource`, and `Close`. The native
-`osfs.SelectedFileSource` adapter accepts paths; other adapters can use provider
-object IDs. `catalog.SourceReference` stores bounded opaque private references;
-only the source adapter interprets them. Catalog names and protocol identities
-remain independent of host lookup. Native selections stay bound to their acquired
-root handles and cannot expand a selected file's authority to its siblings.
+## Package layout
 
-Acquisition reads selected-root metadata without traversing descendants or
-reading file content. Catalog and content work finish before the sender closes
-the source; each `content.StableFile` owns its own handle lifetime. Adapters must
-preserve optional `content.RevisionContinuitySource` semantics, including sources
-that prove stability only while a handle remains open. `catalog.SourceError`
-distinguishes missing objects, access denial, unsupported capability, and stale
-evidence while retaining the underlying error.
+| Packages | Responsibility |
+|---|---|
+| `link/`, `urlhost/`, `networkendpoint/` | Capability links, IDNA host normalization, relay/STUN/WebSocket endpoint normalization |
+| `nodedirectory/`, `serviceauthority/` | Signed network directory, account ticket, and node descriptor verification (no I/O) |
+| `senderobject/`, `senderauth/` | Sealed sender-object envelopes and canonical Ed25519 signature acceptance |
+| `catalog/` | Directory generations/pages, durable catalog backend and spill, path policy, source errors/omissions |
+| `content/`, `content/records/`, `content/revisioncapacity/` | File revisions, range leases, key tree, authenticated records, revision capacity reclamation |
+| `framechannel/`, `session/` | Transport-neutral channels, `sendersession`/`receiversession` runtimes, `catalogflow`/`contentflow`, TURN controls |
+| `transfer/` | Receive contracts (`receivecontract/`, `ordinaryoutput/`), job lifecycle, `BlockBroker`, `lanes/` scheduling, `fault/` |
+| `liveshare/` | Composition of sender and receiver runtimes (`PrepareSender`, `PrepareReceiver`, `ReceiveCapacity`) |
+| `capacityledger/`, `observationstream/`, `diagnostics/`, `diagnosticerror/`, `connectionpath/`, `downloadmetrics/` | Scalar capacity ledgers, bounded observation queues, source diagnostics, path milestones, download metrics |
+| [`testvectors/`](testvectors/), `internal/` | Go/TypeScript/Rust interoperability vectors (`inventory.txt`), HKDF, pinned Unicode 15, contract harnesses |
 
-The application supplies the revision coordinator, process catalog account, and
-process content-cache budget. Shares retain their own quotas and release their
-own reservations; the native engine owns the aggregate budgets across tasks.
+## Ownership and boundaries
 
-## Transfer ownership
-
-`transfer` owns receive jobs, block brokering, and output settlement.
-`transfer/lanes` owns lane admission, block attempts, cancellation, and lane
-settlement under one lifecycle. Brokers consume `BlockFetcher`; they cannot
-access lane state or locks. The receiver runtime binds availability and delivery
-metrics to their respective producers. Both layers share closed failure
-normalization in `transfer/internal/failurestate`.
+- **Dependency gates**: CI (`_coreboundary`) blocks non-core WindShare imports in production (allowing `osfs` only in test-graph deltas) and concrete networking or transport capabilities, and enforces isolation across `session/` role packages (`sendersession`, `receiversession`, `sessioncore`, `observation`).
+- **File sources**: `liveshare.PrepareSender` consumes an injected `FileSourceFactory` (natively `osfs.SelectedFileSource` via `adapters/filesystem`). Acquisition reads selected-root metadata on demand without traversing descendants; `catalog.SourceReference` stays private to the adapter, `content.StableFile` owns handle lifetimes, and handle-only stability sources implement `content.RevisionContinuitySource`.
+- **Budgets**: The application supplies process-wide sender budgets (`revisioncapacity.Coordinator`, `catalog.BudgetAccount`, `contentflow.ProcessCacheBudget`) and receiver capacity (`liveshare.ReceiveCapacity`); shares and receivers retain and release their own reservations.
+- **Transfer**: `transfer` owns receive jobs, `BlockBroker`, and output settlement contracts; `transfer/lanes` owns lane admission, block attempts, cancellation, and lane settlement. Brokers consume `BlockFetcher`, `receiversession` binds `downloadmetrics.Metrics` to both producers, and both layers normalize closed failures in `transfer/internal/failurestate`.
 
 ## Validate
 
-From the repository root:
+From the repository root (see [`docs/validation.md`](../docs/validation.md) for full `make ci` / `make ci-parallel` gates):
 
 ```sh
 GOWORK=off go test ./core/...
-make ci
+make short-go
+make vectors
+make hygiene
 ```
 
-`testvectors/` is the single canonical Go↔TypeScript protocol-vector
-inventory and is included in the root module release archive.
-
-Licensed under AGPL-3.0-or-later. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+[`testvectors/`](testvectors/) is included in the root module release archive. Licensed under AGPL-3.0-or-later; see [LICENSE](LICENSE) and [NOTICE](NOTICE).
