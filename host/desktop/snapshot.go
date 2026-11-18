@@ -8,6 +8,7 @@ import (
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/observation/wire"
+	"github.com/windshare/windshare/engine/relayconfig"
 )
 
 func (a *Application) snapshotLocked() Snapshot {
@@ -124,10 +125,13 @@ func projectTask(view *Share, current running) {
 }
 
 func errorText(err error) string {
-	if err != nil {
-		return err.Error()
+	if err == nil {
+		return ""
 	}
-	return ""
+	if reason, ok := engine.DescribeFailure(err); ok && reason.RelayBaseHint().URL() != "" {
+		return relayconfig.RelayRouteGuidance(reason.RelayBaseHint())
+	}
+	return err.Error()
 }
 
 func outcomeName(value engine.Outcome) Outcome {

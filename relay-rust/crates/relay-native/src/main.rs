@@ -83,9 +83,12 @@ async fn run(
     let stun = stun::Service::bind_with_node(config.stun, configured.node())?;
     println!(
         "{}",
-        serde_json::json!({ "event":"listening", "address":address.to_string(), "endpoint":endpoint.as_str(),
-        "capabilities":["registration","resume","join","delivery","stop","heartbeat","healthz","stun","account_admission"],
-        "stun_udp":stun.udp_addresses(), "stun_admin":stun.admin_address() })
+        serde_json::json!({
+            "event": "listening", "address": address.to_string(), "endpoint": endpoint.as_str(),
+            "relay_url": endpoint.relay_url(),
+            "capabilities": ["registration", "resume", "join", "delivery", "stop", "heartbeat", "healthz", "stun", "account_admission"],
+            "stun_udp": stun.udp_addresses(), "stun_admin": stun.admin_address(),
+        })
     );
     let stopping = CancellationToken::new();
     let stopped = stopping.clone();

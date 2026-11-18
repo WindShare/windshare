@@ -76,7 +76,7 @@ impl Runtime {
         Reporter::new(self.clone(), store, identity, authority).map(Some)
     }
 
-    pub(crate) fn descriptor(&self, endpoint: &str) -> Result<serde_json::Value> {
+    pub(crate) fn descriptor(&self, endpoint: &crate::Endpoint) -> Result<serde_json::Value> {
         let state = self.state.lock().map_err(|_| anyhow!("node state"))?;
         let identity = state
             .identity
@@ -85,7 +85,7 @@ impl Runtime {
         let now = super::now().unsigned_abs();
         let descriptor = serde_json::json!({
             "version":2, "node_id":identity.id(), "node_key":URL_SAFE_NO_PAD.encode(identity.key().verifying_key().to_bytes()),
-            "relay_endpoint":endpoint, "services":state.settings.services,
+            "relay_endpoint":endpoint.as_str(), "services":state.settings.services,
             "stun":state.settings.stun_urls, "zone":state.settings.zone, "region":state.settings.region,
             "capacity_bytes_per_second":state.settings.capacity_bytes_per_second,
             "classes":["owner","standard","lowest"], "issued_at":now, "expires_at":now+DESCRIPTOR_SECONDS,
@@ -96,7 +96,7 @@ impl Runtime {
         let signed = trust::sign(DESCRIPTOR_DOMAIN, &payload, &identity.key());
         drop(state);
         Ok(
-            serde_json::json!({"version":2,"descriptor":URL_SAFE_NO_PAD.encode(&payload),
+            serde_json::json!({"version":2,"relay_url":endpoint.relay_url(),"descriptor":URL_SAFE_NO_PAD.encode(&payload),
             "signature":URL_SAFE_NO_PAD.encode(&signed[payload.len()..])}),
         )
     }

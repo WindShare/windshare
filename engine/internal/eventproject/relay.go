@@ -4,12 +4,12 @@ import (
 	"errors"
 	url "net/url"
 	strconv "strconv"
-	strings "strings"
 
 	"github.com/windshare/windshare/core/framechannel"
 
 	relayset "github.com/windshare/windshare/connectivity/relayset"
 	senderrelay "github.com/windshare/windshare/connectivity/senderrelay"
+	"github.com/windshare/windshare/core/networkendpoint"
 	share "github.com/windshare/windshare/engine/internal/share"
 	appobs "github.com/windshare/windshare/engine/observation"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
@@ -27,16 +27,12 @@ func RelayOrigin(endpoint v2.RelayEndpoint) (appobs.RelayOrigin, error) {
 	// Re-normalization proves that the exported endpoint struct was not assembled
 	// or mutated by a caller. Only origin components survive this boundary.
 	dial, err := url.Parse(endpoint.DialURL)
-	if err != nil || !strings.HasSuffix(dial.Path, v2.WebSocketPath) {
+	if err != nil {
 		return appobs.RelayOrigin{}, ErrInvalidProjection
 	}
-	base := *dial
-	base.Path = strings.TrimSuffix(base.Path, v2.WebSocketPath)
-	if base.RawPath != "" {
-		if !strings.HasSuffix(base.RawPath, v2.WebSocketPath) {
-			return appobs.RelayOrigin{}, ErrInvalidProjection
-		}
-		base.RawPath = strings.TrimSuffix(base.RawPath, v2.WebSocketPath)
+	base, ok := networkendpoint.BaseFromWebSocketURL(*dial)
+	if !ok {
+		return appobs.RelayOrigin{}, ErrInvalidProjection
 	}
 	normalized, err := v2.NormalizeRelayEndpoint(base.String())
 	if err != nil || normalized.DialURL != endpoint.DialURL ||
@@ -99,6 +95,11 @@ func projectSenderRecovery(value share.RelayRecovery) (appobs.RelayRecovering, e
 	var failure appobs.Failure
 	if state == appobs.RelayRecoveryFailed {
 		failure, _ = ClassifyError(attempt.Failure)
+		// A previously usable route remains eligible for recovery. Editing its
+		// configuration on a temporary 404 would interrupt a working deployment.
+		if failure.Code() == appobs.FailureRelayRouteNotFound && !attempt.Terminal {
+			failure = mustFailure(appobs.FailureRelayTransport)
+		}
 		if !failure.Valid() {
 			failure = mustFailure(appobs.FailureUnexpected)
 		}

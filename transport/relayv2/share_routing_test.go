@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
@@ -67,6 +68,40 @@ func TestEveryRelayDialRoutesTheUpgradeByShare(t *testing.T) {
 			}
 			if err := operation.dial(base+"&share%5fid="+share, options); !errors.Is(err, v2.ErrIdentity) || !errors.Is(err, ErrProtocol) || calls != 1 {
 				t.Fatalf("preconfigured route reached dial: calls=%d error=%v", calls, err)
+			}
+		})
+	}
+}
+
+func TestSenderSuggestsBaseOnlyForDirect404OnEndpointShapedCandidate(t *testing.T) {
+	fixture := newClientFixture(t)
+	for _, test := range []struct {
+		name, address, wantBase string
+		status                  int
+		redirect                bool
+	}{
+		{"missing route", "https://relay.example/team%2Fone/v2/ws/?token=secret-canary", "https://relay.example/team%2Fone", http.StatusNotFound, false},
+		{"single label host", "https://v2/ws", "", http.StatusNotFound, false},
+		{"temporarily unavailable", "https://relay.example/v2/ws", "", http.StatusServiceUnavailable, false},
+		{"redirected route", "https://relay.example/v2/ws", "", http.StatusNotFound, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: relayUpgradeRoundTripper(func(req *http.Request) (*http.Response, error) {
+				resp := &http.Response{Request: req, StatusCode: test.status, Header: make(http.Header), Body: http.NoBody}
+				if test.redirect && req.URL.Path != "/elsewhere" {
+					resp.StatusCode = http.StatusFound
+					resp.Header.Set("Location", "/elsewhere")
+				}
+				return resp, nil
+			})}
+			_, err := DialSender(t.Context(), SenderConfig{RelayBaseURL: test.address, Init: fixture.fresh,
+				SenderPrivateKey: fixture.privateKey, Descriptor: fixture.descriptor, Dial: DialOptions{HTTPClient: client}})
+			if _, unsent := errors.AsType[*RegistrationNotSentError](err); !unsent {
+				t.Fatalf("failed upgrade lost its delivery state: %v", err)
+			}
+			hint, ok := errors.AsType[*WebSocketRouteError](err)
+			if ok != (test.wantBase != "") || ok && (hint.BaseHint.URL() != test.wantBase || strings.Contains(err.Error(), "secret-canary")) {
+				t.Fatalf("unexpected route guidance: %v", err)
 			}
 		})
 	}

@@ -3,7 +3,9 @@
 Run `wsrelay --config node.json`. Copy the [example](../../../deploy/wsrelay/node.example.json),
 set the public WebSocket endpoint, browser origins and capacity, and terminate TLS
 at a reverse proxy. Relative database and identity paths resolve beside the config.
-A wildcard listen address requires an explicit endpoint.
+A wildcard listen address requires an explicit endpoint. Copy `relay_url` from
+the startup JSON or `/.well-known/windshare` into `wind share --relay` or
+`wind relay add`.
 
 The first start creates a durable Ed25519 node identity and prints its owner access
 key. Keep the identity file private and back it up with SQLite and its WAL. One host

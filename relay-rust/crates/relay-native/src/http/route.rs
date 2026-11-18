@@ -54,7 +54,7 @@ impl Ingress {
             return Route::Reply(reply(StatusCode::OK, "ok\n"));
         }
         if path == DISCOVERY_PATH {
-            let Ok(body) = self.node.descriptor(self.endpoint.as_str()) else {
+            let Ok(body) = self.node.descriptor(&self.endpoint) else {
                 return Route::Reply(reply(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "node identity unavailable\n",

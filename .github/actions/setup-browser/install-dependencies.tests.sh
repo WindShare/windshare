@@ -98,6 +98,8 @@ SOURCES
   cat >"$fixture_root/sources.list.d/vendor.list" <<'SOURCES'
 deb https://packages.microsoft.com/repos/azure-cli/ noble main
 deb https://azure.archive.ubuntu.com.example/ubuntu noble main
+deb https://ec2.archive.ubuntu.com/ubuntu-ports noble main
+# deb http://us-east-2.ec2.archive.ubuntu.com/ubuntu/ noble main
 SOURCES
   cp "$fixture_root/sources.list.d/vendor.list" "$fixture_root/vendor.before"
   use_fallback_ubuntu_mirror "$fixture_root"
@@ -116,14 +118,17 @@ SOURCES
   if use_fallback_ubuntu_mirror "$fixture_root"; then fail 'same mirror can be retried indefinitely'; fi
   echo 'PASS: both APT formats preserve repository identity and unrelated sources'
 
-  # Reproduce the runner's local mirror list, including repeated references from
-  # both source formats. Recovery must change the actual origin exactly once.
+  # Reproduce the runner's local mirror list for EC2 and other regional mirrors,
+  # including repeated references from both source formats. Recovery must change
+  # the active origins exactly once while leaving comments and unrelated entries intact.
   mirror_list="$fixture_root/apt-mirrors.txt"
-  printf '%s\t%s\n' 'http://azure.archive.ubuntu.com/ubuntu/' 'priority:1 type:deb' >"$mirror_list"
+  printf '%s\t%s\n' 'http://us-east-2.ec2.archive.ubuntu.com/ubuntu' 'priority:1 type:deb' >"$mirror_list"
   cat >>"$mirror_list" <<'MIRRORS'
-https://archive.ubuntu.com/ubuntu/	priority:2
+https://nova.clouds.archive.ubuntu.com/ubuntu/	priority:2
+https://archive.ubuntu.com/ubuntu/	priority:3
 http://security.ubuntu.com/ubuntu/
 https://packages.microsoft.com/repos/azure-cli/
+# http://azure.archive.ubuntu.com/ubuntu/
 MIRRORS
   printf 'deb mirror+file:%s noble main\n' "$mirror_list" >"$fixture_root/sources.list"
   cat >"$fixture_root/sources.list.d/ubuntu.sources" <<SOURCES
@@ -148,10 +153,12 @@ SOURCES
   use_fallback_ubuntu_mirror "$fixture_root"
   [[ "$rewritten_files" == 1 ]] || fail 'shared mirror list was not deduplicated'
   diff -u "$mirror_list" - <<'MIRRORS'
-http://archive.ubuntu.com/ubuntu/	priority:1 type:deb
+http://archive.ubuntu.com/ubuntu	priority:1 type:deb
 https://archive.ubuntu.com/ubuntu/	priority:2
+https://archive.ubuntu.com/ubuntu/	priority:3
 http://security.ubuntu.com/ubuntu/
 https://packages.microsoft.com/repos/azure-cli/
+# http://azure.archive.ubuntu.com/ubuntu/
 MIRRORS
   diff -u "$fixture_root/source.before" "$fixture_root/sources.list"
   diff -u "$fixture_root/deb822.before" "$fixture_root/sources.list.d/ubuntu.sources"

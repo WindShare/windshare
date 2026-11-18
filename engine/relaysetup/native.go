@@ -12,13 +12,10 @@ var ErrLocalCredentialRequired = errors.New("this node requires an access key fr
 
 // Native nodes attest their own identity. Cloudflare private relays separately
 // advertise browser device enrollment; a native key never implies that workflow.
-func (run *workflow) discoverNative(raw []byte, address string) (discovery, error) {
+func (run *workflow) discoverNative(raw []byte) (discovery, error) {
 	descriptor, err := serviceauthority.InspectDescriptor(raw, run.dependencies.Now())
 	if err != nil {
 		return discovery{}, err
-	}
-	if !sameRelay(address, descriptor.RelayBaseURL()) {
-		return discovery{}, errors.New("node descriptor does not match the requested relay")
 	}
 	access := nativeKeyAccess
 	if descriptor.Anonymous {

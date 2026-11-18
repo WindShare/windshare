@@ -107,20 +107,11 @@ func (current *ShareTask) Ready(ctx context.Context) (ShareReady, error) {
 	if err != nil {
 		return ShareReady{}, err
 	}
-	if len(current.selection.Plan.Network) > 0 {
-		value.Capability.Relays = nil
-		value.Capability.NodeAliases = nil
-		for _, candidate := range current.selection.Plan.Configured {
-			value.Capability.Relays = append(value.Capability.Relays, candidate.URL)
-		}
-		for _, candidate := range current.selection.Plan.Network {
-			value.Capability.NodeAliases = append(value.Capability.NodeAliases, candidate.Alias)
-		}
-	}
+	current.selection.PublishRelayHints(&value.Capability, value.Registrations.Rejected)
 	decision := current.selection.Decision
 	decision.Candidates, decision.Filters = slices.Clone(decision.Candidates), slices.Clone(decision.Filters)
 	return ShareReady{Capability: value.Capability, SelectedRootSummary: value.SelectedRootSummary, RelayOrigin: origin,
-		FrozenCandidates: slices.Clone(decision.Candidates), InitialAdmissions: slices.Clone(value.Admissions), Frontend: current.selection.Frontend, Decision: decision}, nil
+		FrozenCandidates: slices.Clone(decision.Candidates), InitialAdmissions: slices.Clone(value.Registrations.Admitted), Frontend: current.selection.Frontend, Decision: decision}, nil
 }
 
 func (current *ShareTask) StopShare() { current.current.Stop(task.ShareStopped) }

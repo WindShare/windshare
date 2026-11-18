@@ -157,6 +157,7 @@ async fn disabling_service_closes_active_websockets_and_rejects_new_upgrades() {
     http.read_to_string(&mut response).await.unwrap();
     let body: serde_json::Value =
         serde_json::from_str(response.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(body["relay_url"], format!("http://{address}"));
     let descriptor = URL_SAFE_NO_PAD
         .decode(body["descriptor"].as_str().unwrap())
         .unwrap();

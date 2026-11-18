@@ -75,6 +75,16 @@ func SelectRelays(config Config, override []string) ([]relayprofile.Candidate, e
 	return candidates, nil
 }
 
+// RelayRouteGuidance applies to an observed HTTP failure. The same spelling can
+// still name a working mount or an unused profile.
+func RelayRouteGuidance(hint networkendpoint.RelayBaseHint) string {
+	message := "WebSocket upgrade returned HTTP 404. Use the advertised relay_url"
+	if hint.URL() != "" {
+		message += fmt.Sprintf(" (check base %q)", hint.URL())
+	}
+	return message + ". Keep any routing query. For saved settings, update the matching profiles[].url and active_relays[] together."
+}
+
 // Preserve the domain cause while presenting only the address detail relevant
 // to repair; protocol wrapper errors are not useful configuration instructions.
 type relayAddressError struct{ cause error }

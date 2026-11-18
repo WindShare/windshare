@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/windshare/windshare/core/networkendpoint"
 	"github.com/windshare/windshare/engine/relayconfig"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
@@ -123,10 +125,19 @@ func (run *workflow) discover(ctx context.Context, address string) (discovery, e
 		return result, err
 	}
 	if result.Version == 2 {
-		return run.discoverNative(raw, address)
+		// Enrollment takes its address and policy from the signed payload.
+		result, err = run.discoverNative(raw)
+		if err != nil {
+			return result, err
+		}
+	} else if result.Version != 1 || (result.Access != "open" && result.Access != "restricted") {
+		return result, errors.New("relay discovery returned an unsupported version or access policy")
 	}
-	if result.Version != 1 || (result.Access != "open" && result.Access != "restricted") || !sameRelay(address, result.RelayURL) {
-		return result, errors.New("relay discovery returned an inconsistent identity or policy")
+	if !sameRelay(address, result.RelayURL) {
+		if hint, ok := networkendpoint.WebSocketBaseHint(address); ok && sameRelay(hint.URL(), result.RelayURL) {
+			return result, fmt.Errorf("this is the WebSocket endpoint. Use the advertised relay_url %q", result.RelayURL)
+		}
+		return result, errors.New("relay discovery returned a different relay identity")
 	}
 	if result.Access == "restricted" && !secureEndpoint(result.ConsoleURL) {
 		return result, errors.New("restricted relay requires HTTPS access endpoints")

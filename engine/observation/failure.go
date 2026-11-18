@@ -2,6 +2,8 @@ package observation
 
 import (
 	errors "errors"
+
+	"github.com/windshare/windshare/core/networkendpoint"
 )
 
 var ErrInvalidFailure = errors.New("engine observation failure is invalid")
@@ -92,6 +94,7 @@ const (
 	FailureCheckpointStateIO
 	FailureOutputRecoveryUnavailable
 	FailureRetainedOutputMissing
+	FailureRelayRouteNotFound
 )
 
 type failureDefinition struct {
@@ -105,6 +108,8 @@ func (code FailureCode) definition() (failureDefinition, bool) {
 		return workflowFailureDefinition(code)
 	case code >= FailureRelayMalformed && code <= FailureRelayTransport:
 		return relayFailureDefinition(code)
+	case code == FailureRelayRouteNotFound:
+		return failureDefinition{"relay_route_not_found", MessageRelayRouteNotFound}, true
 	case code >= FailurePeerNegotiation && code <= FailurePeerProtocol:
 		return peerFailureDefinition(code)
 	case code >= FailureSourceUnavailable && code <= FailureSessionDependencyContract:
@@ -415,6 +420,7 @@ func (collision SelectionCollision) Valid() bool {
 type Failure struct {
 	code               FailureCode
 	sourcePath         DisplayPath
+	relayBaseHint      networkendpoint.RelayBaseHint
 	selectionCollision SelectionCollision
 	fault              FaultContext
 	hasFault           bool
@@ -428,6 +434,12 @@ func NewFailure(code FailureCode) (Failure, error) {
 	}
 	return Failure{code: code}, nil
 }
+
+func NewRelayRouteFailure(hint networkendpoint.RelayBaseHint) Failure {
+	return Failure{code: FailureRelayRouteNotFound, relayBaseHint: hint}
+}
+
+func (failure Failure) RelayBaseHint() networkendpoint.RelayBaseHint { return failure.relayBaseHint }
 
 func NewSourcePathFailure(code FailureCode, path DisplayPath) (Failure, error) {
 	if !sourcePathFailureCode(code) || path.Empty() {
@@ -499,6 +511,9 @@ func (failure Failure) RetryAfterMillis() (uint64, bool) {
 
 func (failure Failure) Valid() bool {
 	if _, ok := failure.code.definition(); !ok {
+		return false
+	}
+	if failure.relayBaseHint.URL() != "" && failure.code != FailureRelayRouteNotFound {
 		return false
 	}
 	if !failure.sourcePath.Empty() && (!sourcePathFailureCode(failure.code) || failure.hasFault || failure.hasRetryAfter) {

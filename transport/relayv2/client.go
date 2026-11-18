@@ -55,9 +55,15 @@ func (options DialOptions) dial(ctx context.Context, target string) (_ BinarySoc
 	}
 	// coder/websocket owns the handshake response body on every outcome, so
 	// closing it here would violate the dialer's transport ownership contract.
-	socket, _, err := websocket.Dial(ctx, target, &websocket.DialOptions{ //nolint:bodyclose
+	socket, response, err := websocket.Dial(ctx, target, &websocket.DialOptions{ //nolint:bodyclose
 		HTTPClient: options.HTTPClient, HTTPHeader: options.Header,
 	})
+	// A redirected response describes a different route and cannot diagnose
+	// the address the user supplied.
+	if err != nil && response != nil && response.StatusCode == http.StatusNotFound &&
+		response.Request != nil && response.Request.Response == nil {
+		err = fmt.Errorf("%w: %w", errUpgradeNotFound, err)
+	}
 	return socket, err
 }
 
@@ -113,7 +119,7 @@ func DialSender(ctx context.Context, config SenderConfig) (_ *SenderConnection, 
 	}
 	socket, err := config.Dial.dial(ctx, endpoint.DialURL)
 	if err != nil {
-		return nil, &RegistrationNotSentError{Cause: err}
+		return nil, &RegistrationNotSentError{Cause: senderUpgradeFailure(config.RelayBaseURL, err)}
 	}
 	socket.SetReadLimit(registrationReadLimit)
 	admissionStarted := time.Now()

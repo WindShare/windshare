@@ -13,6 +13,7 @@ import (
 
 func TestRegistrationDeliveryPreservesRecoveryMode(t *testing.T) {
 	notSent := fmt.Errorf("dial wrapper: %w", &relayv2.RegistrationNotSentError{Cause: errors.New("upgrade refused")})
+	missingRoute := &relayv2.RegistrationNotSentError{Cause: &relayv2.WebSocketRouteError{}}
 	uncertain := errors.New("register acknowledgement lost")
 	absent := &relayv2.RelayError{Code: v2.ErrorNotFound}
 	for _, test := range []struct {
@@ -20,6 +21,7 @@ func TestRegistrationDeliveryPreservesRecoveryMode(t *testing.T) {
 		failures []error
 		modes    []v2.RegistrationMode
 	}{
+		{"route missing after uncertain delivery", []error{uncertain, missingRoute}, []v2.RegistrationMode{v2.RegistrationFresh, v2.RegistrationResume, v2.RegistrationResume}},
 		{"initial outage", []error{notSent}, []v2.RegistrationMode{v2.RegistrationFresh, v2.RegistrationFresh}},
 		{"uncertain registration then outage", []error{uncertain, notSent}, []v2.RegistrationMode{v2.RegistrationFresh, v2.RegistrationResume, v2.RegistrationResume}},
 		{"absent registration then outage", []error{uncertain, absent, notSent}, []v2.RegistrationMode{v2.RegistrationFresh, v2.RegistrationResume, v2.RegistrationFresh, v2.RegistrationFresh}},
@@ -48,6 +50,22 @@ func TestRegistrationDeliveryPreservesRecoveryMode(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestInitialMissingWebSocketRouteRetiresOnlyThisLifecycle(t *testing.T) {
+	failure := &relayv2.RegistrationNotSentError{Cause: &relayv2.WebSocketRouteError{}}
+	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
+		return Connection{}, failure
+	}}
+	clock := newSenderRelayTestClock()
+	clock.wait = func(context.Context, time.Duration) error {
+		return errors.New("missing initial route retried")
+	}
+	lifecycle := newSenderRelayTestLifecycle(t, nil, dialer, clock)
+	t.Cleanup(lifecycle.StopRecovery)
+	if err := lifecycle.WaitReady(t.Context()); !errors.Is(err, failure) {
+		t.Fatal(err)
 	}
 }
 

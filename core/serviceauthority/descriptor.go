@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
-	"strings"
+	"net/url"
 	"time"
 
 	"github.com/windshare/windshare/core/networkendpoint"
@@ -66,7 +66,23 @@ func InspectDescriptor(data []byte, now time.Time) (Descriptor, error) {
 // RelayBaseURL is for APIs that append their protocol path. The signed descriptor
 // carries the complete canonical WebSocket endpoint, never an ambiguous base.
 func (descriptor Descriptor) RelayBaseURL() string {
-	return strings.TrimSuffix(descriptor.RelayEndpoint, networkendpoint.WebSocketPath)
+	endpoint, err := url.Parse(descriptor.RelayEndpoint)
+	if err != nil {
+		return ""
+	}
+	base, ok := networkendpoint.BaseFromWebSocketURL(*endpoint)
+	if !ok {
+		return ""
+	}
+	switch base.Scheme {
+	case "ws":
+		base.Scheme = "http"
+	case "wss":
+		base.Scheme = "https"
+	default:
+		return ""
+	}
+	return base.String()
 }
 
 func VerifyDescriptor(data []byte, key [32]byte, now time.Time) (Descriptor, error) {

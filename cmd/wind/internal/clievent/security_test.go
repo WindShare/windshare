@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/diagnosticerror"
+	"github.com/windshare/windshare/core/networkendpoint"
 
 	appobs "github.com/windshare/windshare/engine/observation"
 )
@@ -65,7 +66,9 @@ func assertSafePayloadType(t *testing.T, value reflect.Type, seen map[reflect.Ty
 				// aggregate/per-value byte bounds; raw errors are never retained.
 				diagnostic = diagnostic || value == reflect.TypeFor[appobs.ObservationRejection]() ||
 					value == reflect.TypeFor[appobs.RejectionField]()
-				if !diagnostic && owner != "DisplayName" && owner != "DisplayPath" && owner != "RelayOrigin" && owner != "CapacityStoreID" && owner != "CapacityShareID" {
+				// RelayBaseHint can hold only a validated address without a routing query.
+				relayHint := value == reflect.TypeFor[networkendpoint.RelayBaseHint]()
+				if !diagnostic && !relayHint && owner != "DisplayName" && owner != "DisplayPath" && owner != "RelayOrigin" && owner != "CapacityStoreID" && owner != "CapacityShareID" {
 					t.Fatalf("unreviewed string field %s.%s", owner, field.Name)
 				}
 			}
