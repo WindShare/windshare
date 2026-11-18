@@ -2,6 +2,18 @@ name: Deploy private relay
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/console-bundle.yml
+      - consoles/relay/**
+      - consoles/ui/**
+      - consoles/build/**
+      - consoles/vite.config.mjs
+      - consoles/tsconfig.json
+      - consoles/package.json
+      - consoles/pnpm-lock.yaml
+      - relay-rust/console/**
+      - .github/workflows/cloudflare-relay.yml
   push:
     branches:
       - main
@@ -12,6 +24,14 @@ on:
       - relay-rust/Cargo.*
       - relay-rust/rust-toolchain.toml
       - relay-rust/.cargo/**
+      - .github/workflows/console-bundle.yml
+      - consoles/relay/**
+      - consoles/ui/**
+      - consoles/build/**
+      - consoles/vite.config.mjs
+      - consoles/tsconfig.json
+      - consoles/package.json
+      - consoles/pnpm-lock.yaml
       - relay-rust/console/**
       - relay-rust/crates/relay-core/**
       - relay-rust/crates/relay-access/**
@@ -28,13 +48,18 @@ permissions:
   contents: read
 
 # Do not interrupt an upload between publishing code and verifying retained state.
-# All runs for this repository serialize, including manual runs.
+# Manual and default-branch deployments share one queue.
 concurrency:
-  group: cloudflare-relay
+  group: ${{ github.event.pull_request.number && format('cloudflare-relay-pr-{0}', github.event.pull_request.number) || 'cloudflare-relay' }}
   cancel-in-progress: false
 
 jobs:
+  console:
+    uses: ./.github/workflows/console-bundle.yml
+    with:
+      app: relay
   deploy:
+    needs: console
     if: >-
       vars.CLOUDFLARE_RELAY_ENABLED == 'true' &&
       github.ref == format('refs/heads/{0}', github.event.repository.default_branch)

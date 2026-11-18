@@ -1,0 +1,38 @@
+name: Verify embedded console
+on:
+  workflow_call:
+    inputs:
+      app:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      APP: ${{ inputs.app }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: consoles/package.json
+      - run: pnpm -C consoles install --frozen-lockfile
+      - name: Compare every embedded file with a clean rebuild
+        run: |
+          case "$APP" in
+            relay) bundle=relay-rust/console/console-dist ;;
+            network) bundle=relay-rust/crates/network-authority/console-dist ;;
+            *) exit 1 ;;
+          esac
+          cp -R "$bundle" "$RUNNER_TEMP/checked-in"
+          pnpm -C consoles run "build:$APP"
+          diff -qr "$RUNNER_TEMP/checked-in" "$bundle"

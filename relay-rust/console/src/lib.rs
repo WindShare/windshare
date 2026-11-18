@@ -14,15 +14,7 @@ mod tests;
 const KEY_DOMAIN: &[u8] = b"windshare/access-key/v1\0";
 
 pub fn asset(path: &str) -> Option<(&'static str, &'static str)> {
-    match path {
-        "/" => Some((include_str!("../index.html"), "text/html; charset=utf-8")),
-        "/console.js" => Some((
-            include_str!("../console.js"),
-            "text/javascript; charset=utf-8",
-        )),
-        "/console.css" => Some((include_str!("../console.css"), "text/css; charset=utf-8")),
-        _ => None,
-    }
+    include!("../console-dist/routes.rs")
 }
 
 pub fn text_id(bytes: &[u8]) -> String {
