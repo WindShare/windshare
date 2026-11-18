@@ -7,6 +7,7 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
 	appobs "github.com/windshare/windshare/engine/observation"
+	"github.com/windshare/windshare/engine/relayconfig"
 )
 
 const (
@@ -166,6 +167,8 @@ func failureMessage(failure appobs.Failure) string {
 			message = "Selected names collide: " + escapedDisplay(collision.FirstPath().Text()) + " and " +
 				escapedDisplay(collision.SecondPath().Text()) + ". " + message
 		}
+	case appobs.MessageRelayRouteNotFound:
+		message = relayconfig.RelayRouteGuidance(failure.RelayBaseHint())
 	case appobs.MessageRelayRejected:
 		message = "The relay rejected the request."
 	case appobs.MessageRelayUnavailable:

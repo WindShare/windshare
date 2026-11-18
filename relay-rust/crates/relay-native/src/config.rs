@@ -41,6 +41,7 @@ const WEBSOCKET_PATH: &str = "/v2/ws";
 #[derive(Clone, Debug)]
 pub struct Endpoint {
     pub(crate) url: String,
+    relay_url: String,
     pub(crate) path: String,
     pub(crate) identity: RelayIdentity,
 }
@@ -59,10 +60,12 @@ impl Endpoint {
                 && url.password().is_none()
                 && url.query().is_none()
                 && url.fragment().is_none()
-                && url.port() != Some(0)
-                && url.path().ends_with(WEBSOCKET_PATH),
+                && url.port() != Some(0),
             "expected a canonical ws(s)://host[/base]/v2/ws endpoint without credentials or query"
         );
+        let mount = url.path().strip_suffix(WEBSOCKET_PATH).ok_or_else(|| {
+            anyhow::anyhow!("expected a canonical ws(s)://host[/base]/v2/ws endpoint")
+        })?;
         let host = url.host().ok_or_else(|| anyhow::anyhow!("missing host"))?;
         match host {
             url::Host::Domain(name) => validate_dns(name)?,
@@ -74,11 +77,28 @@ impl Endpoint {
             .chain_update(raw.as_bytes())
             .finalize()
             .into();
+        let scheme = if url.scheme() == "wss" {
+            "https"
+        } else {
+            "http"
+        };
+        let authority = &url[url::Position::BeforeHost..url::Position::AfterPort];
+        let mut relay_url = format!("{scheme}://{authority}{mount}");
+        // Clients trim one optional trailing slash before appending the route.
+        // Preserve an empty path segment that belongs to the mount itself.
+        if mount.ends_with('/') {
+            relay_url.push('/');
+        }
         Ok(Self {
             url: raw.to_owned(),
+            relay_url,
             path: url.path().to_owned(),
             identity: RelayIdentity::new(digest).ok_or_else(|| anyhow::anyhow!("zero identity"))?,
         })
+    }
+
+    pub fn relay_url(&self) -> &str {
+        &self.relay_url
     }
 
     pub fn as_str(&self) -> &str {

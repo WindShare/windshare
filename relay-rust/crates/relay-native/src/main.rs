@@ -237,6 +237,7 @@ async fn run(options: Options, shutdown: impl Future<Output = ()>) -> Result<()>
         "{}",
         serde_json::json!({
             "event": "listening", "address": address.to_string(), "endpoint": endpoint.as_str(),
+            "relay_url": endpoint.relay_url(),
             "capabilities": ["registration", "resume", "join", "delivery", "stop", "heartbeat", "healthz", "stun"],
             "stun_udp": stun.udp_addresses(), "stun_admin": stun.admin_address(),
         })

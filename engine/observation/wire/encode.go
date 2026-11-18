@@ -75,7 +75,7 @@ func EncodeFailure(failure appobs.Failure) (Failure, error) {
 	if err != nil {
 		return Failure{}, err
 	}
-	projected := Failure{Code: code, MessageKey: message}
+	projected := Failure{Code: code, MessageKey: message, RelayBaseHint: failure.RelayBaseHint().URL()}
 	if fault, ok := failure.Fault(); ok {
 		domain, domainErr := nameOf(fault.Domain())
 		scope, scopeErr := nameOf(fault.Scope())

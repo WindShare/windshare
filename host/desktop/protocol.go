@@ -123,5 +123,5 @@ type Observation struct {
 	Event       wire.Encoded `json:"event"`
 }
 
-func failure(code string, err error) *Failure { return &Failure{Code: code, Message: err.Error()} }
+func failure(code string, err error) *Failure { return &Failure{Code: code, Message: errorText(err)} }
 func (m Message) bytes() ([]byte, error)      { return json.Marshal(m) }

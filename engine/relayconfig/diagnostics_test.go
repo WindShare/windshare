@@ -13,6 +13,23 @@ import (
 	"github.com/windshare/windshare/engine/relayprofile"
 )
 
+func TestSavedWebSocketMountDoesNotBlockOrLendCredentialsToAnOverride(t *testing.T) {
+	document := `{"profiles":[{"url":"https://relay.example/v2/ws","access_key":"nested"},{"url":"https://relay.example","access_key":"root"}],"active_relays":["https://relay.example/v2/ws"]}`
+	config, err := Decode(strings.NewReader(document))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		override []string
+		key      string
+	}{{nil, "nested"}, {[]string{"https://relay.example"}, "root"}} {
+		selected, err := SelectRelays(config, test.override)
+		if err != nil || len(selected) != 1 || selected[0].AccessKey != test.key {
+			t.Fatalf("selection %v: %v, %v", test.override, selected, err)
+		}
+	}
+}
+
 func TestRelayAddressDiagnosticsPreserveCauseAndConfigurationField(t *testing.T) {
 	const host = "relay.123"
 	for _, test := range []struct {

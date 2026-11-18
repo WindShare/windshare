@@ -3,6 +3,7 @@ package relayset
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -87,6 +88,9 @@ func TestSenderFirstRegistrationDoesNotWaitForSlowEndpoint(t *testing.T) {
 	if err := waitValue(t, ready); err != nil {
 		t.Fatal(err)
 	}
+	if snapshot := set.Registrations(); !slices.Equal(snapshot.Admitted, []string{"fast"}) || len(snapshot.Rejected) != 0 {
+		t.Fatalf("pending endpoint changed publication: %+v", snapshot)
+	}
 	close(release)
 	// The first endpoint can disappear without revoking the shared ingress or
 	// sessions already served through another relay/direct lane.
@@ -111,6 +115,9 @@ func TestSenderAllInitialFailuresAreReportedTogether(t *testing.T) {
 	defer cancel()
 	if err := set.WaitReady(ctx); !errors.Is(err, unavailable) {
 		t.Fatalf("failure=%v", err)
+	}
+	if snapshot := set.Registrations(); !slices.Equal(snapshot.Rejected, []string{"one", "two"}) || len(snapshot.Admitted) != 0 {
+		t.Fatalf("terminal initial registrations missing: %+v", snapshot)
 	}
 }
 

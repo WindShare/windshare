@@ -41,6 +41,7 @@ const (
 	MessageShareStopped
 	MessageOutputBusy
 	MessageOutputOperationAlreadyRunning
+	MessageRelayRouteNotFound
 
 	// messageKeyLimit must stay last; it is not a valid key.
 	messageKeyLimit
@@ -85,6 +86,7 @@ var safeMessageKeyNames = [...]string{
 	MessageShareStopped:                  "share_stopped",
 	MessageOutputBusy:                    "output_busy",
 	MessageOutputOperationAlreadyRunning: "output_operation_already_running",
+	MessageRelayRouteNotFound:            "relay_route_not_found",
 }
 
 // The sentinel guards the table length; the registry test also rejects holes

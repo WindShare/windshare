@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -56,6 +57,35 @@ func TestProtocolEndpointVectorsRemainStableAfterExtraction(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Fatal("no endpoint vectors found")
+	}
+}
+
+func TestWebSocketBasePreservesTheDialTargetAndSanitizesRepairHints(t *testing.T) {
+	for _, address := range []string{
+		"wss://relay.example/v2/ws",
+		"ws://[::1]:8080/v2/ws/v2/ws",
+		"wss://relay.example/a%2Fb/v2/ws?route=private",
+		"wss://relay.example/team//v2/ws",
+	} {
+		endpoint, err := url.Parse(address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		base, ok := BaseFromWebSocketURL(*endpoint)
+		relay, err := NormalizeRelay(base.String())
+		if !ok || err != nil || relay.DialURL != address {
+			t.Fatalf("endpoint %q did not round-trip via %q: %v", address, base.String(), err)
+		}
+		hint, ok := WebSocketBaseHint(address)
+		base.RawQuery = ""
+		if !ok || hint.URL() != base.String() {
+			t.Fatalf("display hint for %q = %q", address, hint.URL())
+		}
+	}
+	for _, address := range []string{"https://u:p@relay.example/v2/ws", "https://relay.example/v2/ws#key", "https://v2/ws", "https://relay.example/v2%2Fws"} {
+		if hint, ok := WebSocketBaseHint(address); ok {
+			t.Errorf("invalid hint for %q: %q", address, hint.URL())
+		}
 	}
 }
 
