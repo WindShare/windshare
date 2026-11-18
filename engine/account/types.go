@@ -41,13 +41,14 @@ type Config struct {
 type State string
 
 const (
-	Pending       State = "pending_setup"
-	Verifying     State = "proof_of_work"
-	EmailRequired State = "email_required"
-	Ready         State = "ready"
-	Refreshing    State = "refreshing"
-	Unavailable   State = "temporarily_unavailable"
-	Denied        State = "denied"
+	Pending              State = "pending_setup"
+	RegistrationRequired State = "registration_required"
+	Registering          State = "registering"
+	EmailRequired        State = "email_required"
+	Ready                State = "ready"
+	Refreshing           State = "refreshing"
+	Unavailable          State = "temporarily_unavailable"
+	Denied               State = "denied"
 )
 
 type Challenge struct {
@@ -61,23 +62,22 @@ type Proof struct {
 	Solution  string    `json:"solution"`
 }
 type Snapshot struct {
-	Active           bool                       `json:"active"`
-	State            State                      `json:"state"`
-	EmailCodePending bool                       `json:"email_code_pending,omitempty"`
-	Account          string                     `json:"account,omitempty"`
-	Credential       string                     `json:"credential,omitempty"`
-	Username         string                     `json:"username,omitempty"`
-	Profile          Profile                    `json:"profile"`
-	PendingEmail     PendingEmail               `json:"pending_email,omitzero"`
-	Allowance        serviceauthority.Allowance `json:"allowance"`
-	RemainingBytes   uint64                     `json:"remaining_bytes"`
-	ResetAt          time.Time                  `json:"reset_at"`
-	ValidUntil       time.Time                  `json:"valid_until"`
-	TicketExpires    time.Time                  `json:"ticket_expires"`
-	RetryAt          time.Time                  `json:"retry_at"`
-	Hashes           uint64                     `json:"hashes,omitempty"`
-	ProofElapsed     time.Duration              `json:"proof_elapsed,omitempty"`
-	Reason           string                     `json:"reason,omitempty"`
+	Active               bool                       `json:"active"`
+	State                State                      `json:"state"`
+	EmailCodePending     bool                       `json:"email_code_pending,omitempty"`
+	Account              string                     `json:"account,omitempty"`
+	Credential           string                     `json:"credential,omitempty"`
+	Username             string                     `json:"username,omitempty"`
+	Profile              Profile                    `json:"profile"`
+	PendingEmail         PendingEmail               `json:"pending_email,omitzero"`
+	Allowance            serviceauthority.Allowance `json:"allowance"`
+	RemainingBytes       uint64                     `json:"remaining_bytes"`
+	ResetAt              time.Time                  `json:"reset_at"`
+	ValidUntil           time.Time                  `json:"valid_until"`
+	TicketExpires        time.Time                  `json:"ticket_expires"`
+	RetryAt              time.Time                  `json:"retry_at"`
+	RegistrationPermille uint16                     `json:"registration_permille,omitempty"`
+	Reason               string                     `json:"reason,omitempty"`
 }
 
 type Credential struct {

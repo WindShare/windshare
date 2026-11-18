@@ -132,7 +132,6 @@ func (service *Service) install(ctx context.Context, previous Record, response s
 		return serviceauthority.ErrSignature
 	}
 	service.issuedLocked(record)
-	service.hashes, service.proofElapsed = 0, 0
 	service.mu.Unlock()
 	service.transition(Ready, "", service.config.Now().Add(RefreshInterval))
 	return nil

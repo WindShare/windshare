@@ -18,9 +18,29 @@ pub fn rounded_surface(
     radius: Pixels,
     color: Hsla,
 ) -> impl IntoElement + Styled {
+    sized_surface(move |_| size, radius, color)
+}
+
+pub fn progress_fill(fraction: f32, radius: Pixels, color: Hsla) -> impl IntoElement {
+    sized_surface(
+        move |track| gpui::size(track.width * fraction.clamp(0., 1.), track.height),
+        radius,
+        color,
+    )
+}
+
+fn sized_surface(
+    measure: impl Fn(Size<Pixels>) -> Size<Pixels> + 'static,
+    radius: Pixels,
+    color: Hsla,
+) -> impl IntoElement + Styled {
     canvas(
         |_, _, _| (),
         move |bounds, (), window, _| {
+            let size = measure(bounds.size);
+            if size.width <= gpui::px(0.) {
+                return;
+            }
             let left = bounds.origin.x;
             let top = bounds.origin.y;
             let right = left + size.width;

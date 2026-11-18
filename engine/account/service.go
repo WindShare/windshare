@@ -19,27 +19,26 @@ var ErrNotConfigured = errors.New("official account service is not configured")
 var ErrSuperseded = errors.New("account changed while the operation was in progress")
 
 type Service struct {
-	config            Config
-	ctx               context.Context
-	cancel            context.CancelFunc
-	mu                sync.Mutex
-	operation         chan struct{}
-	record            Record
-	active            bool
-	loaded            bool
-	credentials       map[[16]byte]*credentialSession
-	credentialDenials map[[16]byte]string
-	accountDenials    map[[16]byte]string
-	state             State
-	reason            string
-	hashes            uint64
-	proofElapsed      time.Duration
-	retryAt           time.Time
-	changed           chan struct{}
-	wake              chan struct{}
-	start             sync.Once
-	workers           sync.WaitGroup
-	nodes             map[string]*nodeState
+	config               Config
+	ctx                  context.Context
+	cancel               context.CancelFunc
+	mu                   sync.Mutex
+	operation            chan struct{}
+	record               Record
+	active               bool
+	loaded               bool
+	credentials          map[[16]byte]*credentialSession
+	credentialDenials    map[[16]byte]string
+	accountDenials       map[[16]byte]string
+	state                State
+	reason               string
+	registrationPermille uint16
+	retryAt              time.Time
+	changed              chan struct{}
+	wake                 chan struct{}
+	start                sync.Once
+	workers              sync.WaitGroup
+	nodes                map[string]*nodeState
 }
 
 func New(config Config) (*Service, error) {
@@ -74,6 +73,8 @@ func New(config Config) (*Service, error) {
 		service.state, service.reason = Denied, record.Denial
 	} else if service.validTicket(record) {
 		service.state = Ready
+	} else if record.Credential == nil && record.Proof != nil {
+		service.state = record.Proof.Challenge.requiredState()
 	}
 	return service, nil
 }
@@ -136,7 +137,7 @@ func (service *Service) Snapshot() (Snapshot, <-chan struct{}) {
 	value := Snapshot{Active: service.active, State: service.state, Allowance: service.record.Entitlement.Allowance(now),
 		RemainingBytes: service.record.Entitlement.RemainingBytes, ResetAt: service.record.Entitlement.ResetAt(),
 		ValidUntil: time.Unix(int64(service.record.Entitlement.ValidUntil), 0), RetryAt: service.retryAt,
-		Hashes: service.hashes, ProofElapsed: service.proofElapsed, Reason: service.reason}
+		RegistrationPermille: service.registrationPermille, Reason: service.reason}
 	// Email admission first returns an empty challenge. Only a delivered code has an ID.
 	if proof := service.record.Proof; proof != nil && proof.Challenge.Mode == "email" {
 		value.EmailCodePending = proof.Challenge.ID != "" && proof.Challenge.ExpiresAt > uint64(now.Unix())
@@ -165,6 +166,9 @@ func (service *Service) transition(state State, reason string, retry time.Time) 
 		state, reason = Denied, service.record.Denial
 	}
 	service.state, service.reason, service.retryAt = state, reason, retry
+	if state != Registering {
+		service.registrationPermille = 0
+	}
 	service.notifyLocked()
 	service.mu.Unlock()
 	if previous != state {

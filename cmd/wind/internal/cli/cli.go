@@ -63,7 +63,7 @@ const usageText = `Usage:
   ` + commandmeta.Name + ` relay cancel <url>
       Cancel a pending enrollment.
 
-  ` + commandmeta.Name + ` account status [--json] | retry
+  ` + commandmeta.Name + ` account status [--json] | register | retry
   ` + commandmeta.Name + ` account login <username> | password <username> [--password-stdin]
   ` + commandmeta.Name + ` account email <address> | verify <code> | revoke <credential>
       Manage the account shared with the desktop app. Login applies to new shares.

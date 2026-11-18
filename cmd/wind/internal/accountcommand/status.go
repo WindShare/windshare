@@ -14,13 +14,15 @@ import (
 
 func Describe(value account.Snapshot) string {
 	switch value.State {
-	case account.Verifying:
-		return fmt.Sprintf("Setting up account access · %ds · %dM proof attempts", int(value.ProofElapsed.Seconds()), value.Hashes/1_000_000)
+	case account.Registering:
+		return fmt.Sprintf("Creating your account · about %d%%", value.RegistrationPermille/10)
+	case account.RegistrationRequired:
+		return "Create your official relay account in desktop Settings or run wind account register."
 	case account.EmailRequired:
 		return "Email verification required: wind account email <address>, then wind account verify <code>"
 	case account.Pending:
 		if !value.Active {
-			return "Account setup starts when you first use official service."
+			return "To create an official relay account, run wind account register."
 		}
 		return "Setting up official-service access…"
 	case account.Refreshing:

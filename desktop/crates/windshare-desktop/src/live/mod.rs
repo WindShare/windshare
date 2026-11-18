@@ -6,6 +6,7 @@ mod blocking;
 mod presentation;
 mod projection;
 mod quit;
+mod registration;
 mod relay_preferences;
 mod selection;
 mod session;

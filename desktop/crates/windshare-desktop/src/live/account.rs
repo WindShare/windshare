@@ -11,6 +11,7 @@ use windshare_ui::{Input, InputEvent};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AccountPage {
     Overview,
+    Registration,
     Login,
     Credentials,
     Nickname,
@@ -55,8 +56,15 @@ impl AccountPage {
             AccountState::EmailRequired => {
                 (EmailPurpose::Registration.entry(view), Text::AccountEmail)
             }
-            AccountState::PendingSetup if !view.status.active && view.status.account.is_empty() => {
-                (Self::Login, Text::LoginExisting)
+            AccountState::Registering { .. } => {
+                (Self::Registration, Text::ViewRegistrationProgress)
+            }
+            AccountState::PendingSetup
+            | AccountState::RegistrationRequired
+            | AccountState::TemporarilyUnavailable
+                if view.status.account.is_empty() =>
+            {
+                (Self::Registration, Text::SetUpAccount)
             }
             _ => (Self::Overview, Text::ViewAccount),
         }
@@ -140,7 +148,7 @@ impl AccountForm {
             AccountPage::Nickname => &self.nickname,
             AccountPage::Email(_, EmailStep::Code) => &self.code,
             AccountPage::Email(_, EmailStep::Address) => &self.email,
-            AccountPage::Overview => return None,
+            AccountPage::Overview | AccountPage::Registration => return None,
         };
         Some(input.read(cx).focus_handle(cx))
     }
@@ -155,6 +163,13 @@ impl AccountForm {
         }
         match self.page {
             AccountPage::Overview => false,
+            AccountPage::Registration => {
+                view.status.account.is_empty()
+                    && !matches!(
+                        view.status.state,
+                        AccountState::Registering { .. } | AccountState::Denied
+                    )
+            }
             AccountPage::Credentials if view.status.account.is_empty() => false,
             AccountPage::Login | AccountPage::Credentials => {
                 !self.username.read(cx).value().trim().is_empty()
@@ -225,12 +240,16 @@ impl AccountForm {
             }
             self.pending = None;
         }
-        // A CLI login or a background registration can resolve a challenge while the dialog is open.
+        // A CLI login or a change in admission policy can resolve the current step.
         self.page = match self.page {
+            AccountPage::Registration if !view.status.account.is_empty() => AccountPage::Overview,
+            AccountPage::Registration if view.status.state == AccountState::EmailRequired => {
+                EmailPurpose::Registration.entry(view)
+            }
             AccountPage::Email(EmailPurpose::Registration, _)
                 if view.status.state != AccountState::EmailRequired =>
             {
-                AccountPage::Overview
+                AccountPage::entry(view).0
             }
             AccountPage::Nickname | AccountPage::Email(EmailPurpose::Profile, _)
                 if !view.can_edit_profile() =>
@@ -249,6 +268,11 @@ impl AccountForm {
 
     fn completed(&mut self, view: &AccountView, cx: &mut Context<Desktop>) {
         let message = match self.page {
+            AccountPage::Registration if view.status.state == AccountState::EmailRequired => {
+                self.page = EmailPurpose::Registration.entry(view);
+                return;
+            }
+            AccountPage::Registration => Text::AccountCreated,
             AccountPage::Login => Text::AccountSignedIn,
             AccountPage::Credentials => Text::AccountLoginSaved,
             AccountPage::Nickname => Text::NicknameSaved,
@@ -286,7 +310,9 @@ impl Desktop {
         };
         let page = AccountPage::entry(view).0;
         self.open_overlay(Overlay::Account, window, cx);
-        if self.account_form.pending.is_none() {
+        if self.account_form.pending.is_none()
+            && !(page == AccountPage::Registration && self.account_form.page == page)
+        {
             self.set_account_page(page, window, cx);
         }
     }
@@ -363,7 +389,16 @@ impl Desktop {
         }
         match action {
             AccountAction::Open(page) => self.set_account_page(page, window, cx),
-            AccountAction::Submit => self.submit_account(cx),
+            AccountAction::Submit => {
+                self.submit_account(cx);
+                // The primary button leaves the tree while the account is being created.
+                if self.account_form.page == AccountPage::Registration
+                    && self.account_form.pending.is_some()
+                    && let Some(frame) = self.overlays.last()
+                {
+                    window.focus(&frame.scope, cx);
+                }
+            }
             AccountAction::Retry => self.send_account_command(AccountCommand::Retry),
         }
         cx.notify();
@@ -379,6 +414,7 @@ impl Desktop {
         }
         let command = match form.page {
             AccountPage::Overview => return,
+            AccountPage::Registration => AccountCommand::Register,
             AccountPage::Login | AccountPage::Credentials => {
                 let username = form.username.read(cx).value().trim().to_owned();
                 let password = form.password.read(cx).value().to_owned();

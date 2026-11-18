@@ -172,7 +172,7 @@ func TestProofOfWorkAndCancellation(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err := service.solve(ctx, Challenge{ID: "test", Bits: 32, ExpiresAt: uint64(config.Now().Unix()) + 900}); !errors.Is(err, context.Canceled) {
+	if _, err := service.solve(ctx, Challenge{ID: "test", Mode: workChallenge, Bits: 32, ExpiresAt: uint64(config.Now().Unix()) + 900}); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 }

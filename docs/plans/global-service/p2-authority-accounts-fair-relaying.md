@@ -33,10 +33,11 @@ Account admission and fair relaying enable mainland service and public promotion
   handshake deadlines. Reuse valid tickets immediately and refresh in the background. Choose
   admission automatically: new shares use a valid ticket, or permitted anonymous admission while
   setup or refresh continues. Usable paths never wait for the account service; when none is available,
-  retain selected files, show authorization/retry or PoW progress, and continue the pending share
-  automatically once authorized. Login applies to new shares; existing anonymous registrations
-  retain their attribution for that share's lifetime. In-place account binding is deferred pending
-  evidence of user impact.
+  retain selected files and continue the pending share automatically once authorized. When device
+  verification is required, wait for the user to create the account in Settings or with
+  `wind account register`. Show estimated progress during that attempt. Login applies to new shares.
+  Existing anonymous registrations retain their attribution for that share's lifetime. In-place
+  account binding is deferred pending evidence of user impact.
   `senderrelay.Candidate`'s static `AccessKey` becomes a registration-authorization source, either a
   static key or a ticket provider, defined as an interface in `senderrelay`.
 - Authorization outcomes distinguish pending setup, refreshable ticket expiry, temporary service

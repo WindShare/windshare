@@ -56,6 +56,7 @@ pub enum AccountOutcome {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct AccountStatus {
     pub active: bool,
+    #[serde(flatten)]
     pub state: AccountState,
     #[serde(default)]
     pub email_code_pending: bool,
@@ -71,10 +72,6 @@ pub struct AccountStatus {
     pub allowance: Allowance,
     pub remaining_bytes: u64,
     pub reset_at: String,
-    #[serde(default)]
-    pub hashes: u64,
-    #[serde(default)]
-    pub proof_elapsed: u64,
     #[serde(default)]
     pub reason: String,
 }
@@ -104,10 +101,14 @@ pub struct EmailChallenge {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(tag = "state", rename_all = "snake_case")]
 pub enum AccountState {
     PendingSetup,
-    ProofOfWork,
+    RegistrationRequired,
+    Registering {
+        #[serde(default)]
+        registration_permille: u16,
+    },
     EmailRequired,
     Ready,
     Refreshing,
@@ -125,6 +126,7 @@ pub enum Allowance {
 #[derive(Debug, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum AccountCommand {
+    Register,
     Retry,
     Login {
         username: String,

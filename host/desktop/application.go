@@ -31,6 +31,7 @@ type shareTask interface {
 type accountService interface {
 	Snapshot() (account.Snapshot, <-chan struct{})
 	Retry()
+	Register(context.Context) error
 	Login(context.Context, string, string) error
 	SetPassword(context.Context, string, string) error
 	SetNickname(context.Context, string, string) error

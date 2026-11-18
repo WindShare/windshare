@@ -19,7 +19,8 @@ type controlledAccount struct {
 func (service *controlledAccount) Snapshot() (account.Snapshot, <-chan struct{}) {
 	return account.Snapshot{State: account.Pending}, service.changed
 }
-func (*controlledAccount) Retry() {}
+func (*controlledAccount) Retry()                         {}
+func (*controlledAccount) Register(context.Context) error { return nil }
 func (service *controlledAccount) Login(ctx context.Context, _, _ string) error {
 	service.calls.Add(1)
 	close(service.started)
@@ -45,7 +46,7 @@ func TestAccountCompletionIdentifiesItsSubmission(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = app.close() })
 	for _, test := range []struct{ id, action, state string }{
-		{"email-1", "email", "succeeded"}, {"email-2", "email", "succeeded"},
+		{"register", "register", "succeeded"}, {"email-1", "email", "succeeded"}, {"email-2", "email", "succeeded"},
 		{"nickname", "nickname", "succeeded"}, {"send-code", "request_profile_email", "succeeded"},
 		{"confirm-code", "confirm_profile_email", "succeeded"}, {"invalid", "unknown", "failed"},
 	} {

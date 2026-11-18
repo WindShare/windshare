@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-func profileReply(t *testing.T, status int, body any) *http.Response {
+func accountReply(t *testing.T, status int, body any) *http.Response {
 	t.Helper()
 	data, err := json.Marshal(body)
 	if err != nil {
@@ -41,18 +41,18 @@ func TestProfileEmailRequiresDeliveredCodeAndSurvivesRestartAndRefresh(t *testin
 			if err := json.NewDecoder(request.Body).Decode(&input); err != nil || input.Email != target {
 				t.Fatalf("unexpected delivery request: %+v, %v", input, err)
 			}
-			return profileReply(t, http.StatusOK, pending), nil
+			return accountReply(t, http.StatusOK, pending), nil
 		case "/v1/accounts/ticket":
-			return profileReply(t, http.StatusOK, issued), nil
+			return accountReply(t, http.StatusOK, issued), nil
 		case "/v1/accounts/profile/email/verify":
 			var input struct{ Email, Challenge, Code string }
 			if err := json.NewDecoder(request.Body).Decode(&input); err != nil || input.Email != target || input.Challenge != pending.Challenge.ID {
 				t.Fatalf("unexpected confirmation: %+v, %v", input, err)
 			}
 			if input.Code != "delivered" {
-				return profileReply(t, http.StatusBadRequest, fault{Kind: "email_code_rejected"}), nil
+				return accountReply(t, http.StatusBadRequest, fault{Kind: "email_code_rejected"}), nil
 			}
-			return profileReply(t, http.StatusOK, Profile{Revision: 2, Email: target}), nil
+			return accountReply(t, http.StatusOK, Profile{Revision: 2, Email: target}), nil
 		default:
 			t.Fatalf("unexpected route %s", request.URL.Path)
 			return nil, nil
@@ -110,9 +110,9 @@ func TestNicknameCooldownSynchronizesAuthorityProfileWithoutSwitchingAccount(t *
 			t.Fatalf("unexpected nickname request: %s, %v", request.URL.Path, err)
 		}
 		if input.Nickname == profile.Nickname.Value {
-			return profileReply(t, http.StatusOK, profile), nil
+			return accountReply(t, http.StatusOK, profile), nil
 		}
-		return profileReply(t, http.StatusTooManyRequests, fault{Kind: "nickname_cooldown", Profile: profile}), nil
+		return accountReply(t, http.StatusTooManyRequests, fault{Kind: "nickname_cooldown", Profile: profile}), nil
 	})
 	service := testService(t, config)
 	before, _ := service.Snapshot()

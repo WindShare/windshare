@@ -125,6 +125,8 @@ func (a *Application) accountCommand(request Request) error {
 func (a *Application) runAccountCommand(input AccountInput) error {
 	service, ctx := a.deps.accounts, a.accountContext
 	switch input.Action {
+	case "register":
+		return service.Register(ctx)
 	case "retry":
 		service.Retry()
 		return nil

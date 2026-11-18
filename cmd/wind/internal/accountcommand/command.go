@@ -28,6 +28,7 @@ type LineOutput interface{ WriteLines(...string) }
 type Service interface {
 	Snapshot() (account.Snapshot, <-chan struct{})
 	Retry()
+	Register(context.Context) error
 	Login(context.Context, string, string) error
 	SetPassword(context.Context, string, string) error
 	RequestEmail(context.Context, string) error
@@ -74,6 +75,10 @@ func (runner Runner) Run(ctx context.Context, args []string) int {
 }
 func (runner Runner) execute(ctx context.Context, args []string) error {
 	switch args[0] {
+	case "register":
+		if len(args) == 1 {
+			return runner.register(ctx)
+		}
 	case "status":
 		if len(args) == 1 {
 			return nil
@@ -111,8 +116,44 @@ func (runner Runner) execute(ctx context.Context, args []string) error {
 			return runner.Service.RevokeCredential(ctx, [16]byte(raw))
 		}
 	}
-	return errors.New("use wind account status [--json], retry, login <username>, password <username>, email <address>, verify <code>, or revoke <credential>")
+	return errors.New("use wind account status [--json], register, retry, login <username>, password <username>, email <address>, verify <code>, or revoke <credential>")
 }
+
+func (runner Runner) register(ctx context.Context) error {
+	runner.Output.WriteLines("Creating your account…")
+	done := make(chan error, 1)
+	go func() { done <- runner.Service.Register(ctx) }()
+	// A redirected terminal should get a few useful milestones, even on slow devices.
+	const milestone = 100 // ten percent, in thousandths
+	var previous uint16
+	for {
+		value, changed := runner.Service.Snapshot()
+		if step := value.RegistrationPermille / milestone; value.State == account.Registering && step > previous {
+			runner.Output.WriteLines(Describe(value))
+			previous = step
+		}
+		select {
+		case err := <-done:
+			if err == nil || ctx.Err() != nil {
+				return err
+			}
+			switch account.CommandErrorCode(err) {
+			case "rate_limited":
+				return errors.New("too many attempts, please try again later")
+			case "account_service_unreachable":
+				return errors.New("could not reach the official relay service, please try again")
+			case "account_changed":
+				return errors.New("the account changed, run wind account status to check it")
+			case "account_denied":
+				return errors.New("this account was denied access to the official relay service")
+			default:
+				return errors.New("could not create your account, please try again")
+			}
+		case <-changed:
+		}
+	}
+}
+
 func (runner Runner) password(ctx context.Context, stdin bool) (string, error) {
 	if stdin {
 		text, err := commandinput.ReadLine(ctx, bufio.NewReader(io.LimitReader(runner.Input, 258)))
@@ -141,7 +182,7 @@ func (runner Runner) wait(ctx context.Context) error {
 		if value.State == account.Ready {
 			return nil
 		}
-		if value.State == account.EmailRequired {
+		if value.State == account.EmailRequired || value.State == account.RegistrationRequired {
 			return nil
 		}
 		if value.State == account.Denied {

@@ -4,6 +4,10 @@ package account
 // older record cannot turn an explicit refusal into anonymous admission.
 func (service *Service) rememberDenialLocked(record Record, reason string) {
 	if record.Credential == nil {
+		// A lost issuance reply can leave a denied account identified only by its setup secret.
+		if record.SetupSecret != "" && sameIdentity(service.record, record) {
+			service.record.Denial = reason
+		}
 		return
 	}
 	if service.credentialDenials == nil {
@@ -35,6 +39,8 @@ func (service *Service) withDenialLocked(record Record) Record {
 		if reason := service.accountDenials[credential.Account]; reason != "" {
 			record.Denial = reason
 		}
+	} else if record.SetupSecret != "" && record.Denial == "" && sameIdentity(service.record, record) {
+		record.Denial = service.record.Denial
 	}
 	return record
 }

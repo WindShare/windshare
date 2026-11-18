@@ -27,6 +27,7 @@ func CommandErrorCode(err error) string {
 			case "username_taken":
 				return "username_taken"
 			}
+			return "account_denied"
 		case "invalid":
 			return "invalid_account_input"
 		case "rate_limited", "invalid_nickname", "nickname_cooldown", "invalid_email", "unsupported_email", "email_code_rejected", "email_delivery_unavailable":
@@ -153,6 +154,7 @@ func (service *Service) VerifyEmail(ctx context.Context, code string) error {
 		return err
 	}
 	slog.Debug("account_email_verification_challenge_replaced", "challenge_id", proof.Challenge.ID, "next_mode", challenge.Mode)
+	service.transition(challenge.requiredState(), "", time.Time{})
 	if challenge.Mode == "email" {
 		return errEmailCodeRejected
 	}

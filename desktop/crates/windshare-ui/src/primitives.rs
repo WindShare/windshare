@@ -1,7 +1,7 @@
 use crate::{Icon, RADIUS, Theme, Tone, icon, typography::ControlText};
 use gpui::{
     Div, ElementId, FontWeight, Pixels, Point, Role, SharedString, Size, Stateful, Svg, Toggled,
-    Transformation, div, prelude::*, px, relative, size, svg,
+    Transformation, div, prelude::*, px, size, svg,
 };
 
 pub fn vector_sprite(
@@ -86,19 +86,19 @@ impl Theme {
             .child(icon(symbol, size * 0.44).text_color(tone.text(self)))
     }
     pub fn progress(self, value: f32, tone: Tone) -> Div {
+        const HEIGHT: f32 = 5.;
         div()
-            .h(px(5.))
+            .relative()
+            .h(px(HEIGHT))
             .w_full()
             .rounded_full()
             .bg(tone.surface(self))
             .overflow_hidden()
-            .child(
-                div()
-                    .h_full()
-                    .w(relative(value.clamp(0., 1.)))
-                    .rounded_full()
-                    .bg(tone.accent(self)),
-            )
+            .child(crate::surface::progress_fill(
+                value,
+                px(HEIGHT / 2.),
+                tone.accent(self),
+            ))
     }
     pub fn separator(self) -> Div {
         div().w_full().h(px(1.)).bg(self.border()).flex_shrink_0()

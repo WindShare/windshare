@@ -5,34 +5,13 @@ import (
 	"errors"
 	"reflect"
 	"time"
-
-	"github.com/windshare/windshare/core/serviceauthority"
 )
-
-// authorityChallengeLifetime matches CHALLENGE_SECONDS in the authority's challenge policy.
-const authorityChallengeLifetime = 15 * time.Minute
 
 func (service *Service) run() {
 	retry := MinimumRetry
 	next := service.config.Now()
-	for {
-		current, err := service.load(service.ctx)
-		if err == nil {
-			service.mu.Lock()
-			service.loaded = true
-			current = service.withDenialLocked(current)
-			if !reflect.DeepEqual(service.record, current) {
-				service.adoptLocked(current)
-				next = service.config.Now()
-				service.notifyLocked()
-			}
-			service.mu.Unlock()
-		}
-		now := service.config.Now()
-		if err != nil || !now.Before(next) {
-			if err == nil {
-				err = service.step(service.ctx)
-			}
+	for service.lockOperation(service.ctx) == nil {
+		if updated, err := service.refreshLocked(service.ctx, next); updated || err != nil {
 			delay := RefreshInterval
 			if err != nil {
 				delay = retry
@@ -43,6 +22,7 @@ func (service *Service) run() {
 			}
 			next = service.config.Now().Add(delay)
 		}
+		<-service.operation
 		timer := time.NewTimer(min(PollInterval, max(MinimumRetry, next.Sub(service.config.Now()))))
 		select {
 		case <-service.ctx.Done():
@@ -61,81 +41,48 @@ func (service *Service) step(ctx context.Context) error {
 		return err
 	}
 	defer func() { <-service.operation }()
-	record, err := service.initialize(ctx)
+	_, err := service.refreshLocked(ctx, time.Time{})
+	return err
+}
+
+// The caller owns the command lock through the failure transition. A late poll
+// or retry must never replace a newer interactive registration state.
+func (service *Service) refreshLocked(ctx context.Context, next time.Time) (bool, error) {
+	record, err := service.load(ctx)
 	if err != nil {
-		return err
+		return false, err
+	}
+	// The CLI and desktop must agree on the setup secret before either contacts the authority.
+	if record.Credential == nil && record.SetupSecret == "" {
+		record, err = service.initialize(ctx)
+		if err != nil {
+			return false, err
+		}
 	}
 	service.mu.Lock()
-	service.adoptLocked(record)
+	service.loaded = true
+	record = service.withDenialLocked(record)
+	changed := !reflect.DeepEqual(service.record, record)
+	if changed {
+		service.adoptLocked(record)
+		service.notifyLocked()
+	}
 	record = service.record
 	service.mu.Unlock()
+	if !changed && service.config.Now().Before(next) {
+		return false, nil
+	}
 	if record.Credential == nil {
-		return service.register(ctx, record)
+		proof, err := service.pendingRegistration(ctx, record)
+		if proof != nil {
+			service.transition(proof.Challenge.requiredState(), "", time.Time{})
+		}
+		return true, err
 	}
 	if record.Denial == "" && !service.validTicket(record) {
 		service.transition(Refreshing, "", time.Time{})
 	}
-	return service.requestIssuance(ctx, record, "/v1/accounts/ticket", record.Credential.Secret, struct{}{})
-}
-
-func (service *Service) register(ctx context.Context, record Record) error {
-	if record.Proof != nil && uint64(service.config.Now().Unix()) >= record.Proof.Challenge.ExpiresAt {
-		if err := service.saveProof(ctx, record, nil); err != nil {
-			return err
-		}
-		record.Proof = nil
-	}
-	if record.Proof != nil && record.Proof.Solution == "" {
-		if record.Proof.Challenge.Mode == "email" {
-			service.transition(EmailRequired, "", time.Time{})
-			return nil
-		}
-		proof, err := service.solveProof(ctx, record)
-		if err != nil {
-			return err
-		}
-		record.Proof = proof
-	}
-	_, err := service.submitRegistration(ctx, record, record.Proof)
-	return err
-}
-
-// submitRegistration installs a session or saves and returns the next challenge.
-// Interactive callers need that outcome independently of background account state.
-func (service *Service) submitRegistration(ctx context.Context, record Record, proof *Proof) (*Challenge, error) {
-	request := struct {
-		Secret    string  `json:"client_secret"`
-		Challenge *string `json:"challenge"`
-		Solution  *string `json:"solution"`
-	}{Secret: record.SetupSecret}
-	if proof != nil && proof.Solution != "" {
-		request.Challenge, request.Solution = &proof.Challenge.ID, &proof.Solution
-	}
-	err := service.requestIssuance(ctx, record, "/v1/accounts", "", request)
-	if failure, ok := errors.AsType[*fault](err); ok && failure.Kind == "verification" {
-		if err := service.acceptChallenge(ctx, record, failure.Challenge); err != nil {
-			return nil, err
-		}
-		return &failure.Challenge, nil
-	}
-	return nil, err
-}
-
-func (service *Service) solveProof(ctx context.Context, record Record) (*Proof, error) {
-	if record.Proof.Challenge.Mode != "proof_of_work" {
-		return nil, errors.New("invalid account challenge")
-	}
-	service.transition(Verifying, "", time.Time{})
-	proof := *record.Proof
-	var err error
-	proof.Solution, err = service.solve(ctx, proof.Challenge)
-	if err != nil {
-		return nil, err
-	}
-	if err := service.saveProof(ctx, record, &proof); err != nil {
-		return nil, err
-	}
-	return &proof, nil
+	return true, service.requestIssuance(ctx, record, "/v1/accounts/ticket", record.Credential.Secret, struct{}{})
 }
 
 func (service *Service) requestIssuance(ctx context.Context, record Record, path, secret string, request any) error {
@@ -159,31 +106,6 @@ func (service *Service) requestIssuance(ctx context.Context, record Record, path
 		return current, nil
 	})
 	return errors.Join(err, storeErr)
-}
-
-func (service *Service) acceptChallenge(ctx context.Context, record Record, challenge Challenge) error {
-	if challenge.Mode != "email" && challenge.Mode != "proof_of_work" ||
-		!service.acceptsChallengeExpiry(challenge.ExpiresAt) || challenge.Bits > 32 {
-		return errors.New("invalid account challenge")
-	}
-	if err := service.saveProof(ctx, record, &Proof{Challenge: challenge}); err != nil {
-		return err
-	}
-	if challenge.Mode == "email" {
-		service.transition(EmailRequired, "", time.Time{})
-	} else {
-		service.transition(Verifying, "", time.Time{})
-		service.Retry()
-	}
-	return nil
-}
-
-// The authority stamps a fresh challenge's expiry with its own clock. A local
-// clock running behind it must not refuse every fresh challenge, so the upper
-// bound tolerates the same skew as ticket and certificate acceptance.
-func (service *Service) acceptsChallengeExpiry(expiresAt uint64) bool {
-	now := uint64(service.config.Now().Unix())
-	return expiresAt > now && expiresAt <= now+uint64(authorityChallengeLifetime/time.Second)+serviceauthority.ClockSkew
 }
 
 func (service *Service) saveProof(ctx context.Context, previous Record, proof *Proof) error {

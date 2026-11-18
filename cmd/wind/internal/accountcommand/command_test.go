@@ -32,6 +32,10 @@ func (service *commandService) Retry() {
 		service.onRetry()
 	}
 }
+func (service *commandService) Register(context.Context) error {
+	service.action = "register"
+	return service.failure
+}
 func (service *commandService) Login(_ context.Context, username, password string) error {
 	service.action, service.username, service.secret = "login", username, password
 	return service.failure
@@ -68,6 +72,7 @@ func TestAccountCommandsDispatchSecretsWithoutEcho(t *testing.T) {
 		args                     []string
 		action, username, secret string
 	}{
+		{[]string{"register"}, "register", "", ""},
 		{[]string{"login", "alice", "--password-stdin"}, "login", "alice", "a local password"},
 		{[]string{"password", "alice", "--password-stdin"}, "password", "alice", "a local password"},
 		{[]string{"email", "alice@example.test"}, "email", "alice@example.test", ""},
@@ -109,7 +114,7 @@ func TestAccountCommandsRejectInvalidInputBeforeMutation(t *testing.T) {
 }
 
 func TestAccountRetryHonorsCancellationAndExplicitDenial(t *testing.T) {
-	for _, state := range []account.State{account.Pending, account.Verifying, account.Refreshing, account.Unavailable, account.Denied} {
+	for _, state := range []account.State{account.Pending, account.Registering, account.Refreshing, account.Unavailable, account.Denied} {
 		t.Run(string(state), func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -126,7 +131,7 @@ func TestAccountRetryHonorsCancellationAndExplicitDenial(t *testing.T) {
 			}
 		})
 	}
-	for _, state := range []account.State{account.Ready, account.EmailRequired} {
+	for _, state := range []account.State{account.Ready, account.EmailRequired, account.RegistrationRequired} {
 		service := &commandService{value: account.Snapshot{State: state}}
 		if code := (Runner{Service: service, Output: &lines{}}).Run(context.Background(), []string{"retry"}); code != ResultOK {
 			t.Fatal("ready or interactive verification remained blocked")

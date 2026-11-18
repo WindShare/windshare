@@ -8,27 +8,16 @@ use crate::{
     localization::{Language, Text, language},
     model::{Action, Page, ShareState},
 };
-use gpui::{Div, Entity, prelude::*, px};
-use std::time::Duration;
+use gpui::{Div, Entity, Role, prelude::*, px};
 use windshare_host::{AccountState, AccountView, Allowance};
 use windshare_ui::{ButtonStyle, Icon, Input, Theme, Tone, column, row};
 
 fn status(view: &AccountView, locale: Language) -> String {
     let value = &view.status;
     let text = match value.state {
-        AccountState::PendingSetup if !value.active && value.account.is_empty() => {
-            Text::AccountDormant
-        }
         AccountState::PendingSetup if !value.account.is_empty() => Text::AccountRefreshing,
-        AccountState::PendingSetup => Text::AccountSetup,
-        AccountState::ProofOfWork => {
-            let elapsed = Duration::from_nanos(value.proof_elapsed).as_secs();
-            let label = locale.text(Text::AccountProof);
-            return match locale {
-                Language::English => format!("{label} {elapsed} s"),
-                Language::SimplifiedChinese => format!("{label} {elapsed} 秒"),
-            };
-        }
+        AccountState::PendingSetup | AccountState::RegistrationRequired => Text::AccountDormant,
+        AccountState::Registering { .. } => Text::AccountSetup,
         AccountState::EmailRequired => Text::AccountEmailNeeded,
         AccountState::Refreshing => Text::AccountRefreshing,
         AccountState::TemporarilyUnavailable => Text::AccountUnavailable,
@@ -64,7 +53,7 @@ fn identity(view: &AccountView, locale: Language) -> Option<&str> {
 impl AccountPage {
     const fn title(self, view: &AccountView) -> Text {
         match self {
-            Self::Overview => Text::Account,
+            Self::Overview | Self::Registration => Text::Account,
             Self::Login => Text::LoginExisting,
             Self::Credentials if view.status.username.is_empty() => Text::SetAccountLogin,
             Self::Credentials => Text::EditAccountLogin,
@@ -85,7 +74,14 @@ impl Desktop {
     pub(super) fn account_setting(&self, theme: Theme, cx: &Context<Self>) -> Option<Div> {
         let view = self.account_view()?;
         let locale = language(cx);
-        let status = status(view, locale);
+        let status = if self.account_form.page == AccountPage::Registration
+            && matches!(self.account_form.feedback, Some(Err(_)))
+            && view.status.state == AccountState::RegistrationRequired
+        {
+            locale.text(Text::AccountRegistrationFailed).to_owned()
+        } else {
+            status(view, locale)
+        };
         let detail = match identity(view, locale) {
             Some(name) => format!("{name} · {status}"),
             None => status,
@@ -117,7 +113,9 @@ impl Desktop {
         }
         if matches!(
             view.status.state,
-            AccountState::PendingSetup | AccountState::ProofOfWork
+            AccountState::PendingSetup
+                | AccountState::RegistrationRequired
+                | AccountState::Registering { .. }
         ) && !self
             .shares
             .iter()
@@ -155,10 +153,10 @@ impl Desktop {
             return column();
         };
         let locale = language(cx);
-        let mut panel = if self.account_form.page == AccountPage::Overview {
-            self.account_overview(theme, view, cx)
-        } else {
-            self.account_editor(theme, view, cx)
+        let mut panel = match self.account_form.page {
+            AccountPage::Registration => self.registration_panel(theme, view, cx),
+            AccountPage::Overview => self.account_overview(theme, view, cx),
+            _ => self.account_editor(theme, view, cx),
         };
         if let Some(result) = &self.account_form.feedback {
             let (message, tone) = match result {
@@ -173,10 +171,19 @@ impl Desktop {
                         "unsupported_email" => Text::UnsupportedEmail,
                         "email_delivery_unavailable" => Text::EmailDeliveryUnavailable,
                         "account_changed" => Text::AccountChanged,
+                        "account_denied" => Text::AccountDenied,
                         "email_code_rejected" => Text::EmailCodeRejected,
                         "rate_limited" => Text::AccountRateLimited,
                         "invalid_account_input" => Text::InvalidAccountInput,
                         "account_service_unreachable" => Text::AccountUnavailable,
+                        _ if matches!(
+                            self.account_form.page,
+                            AccountPage::Registration
+                                | AccountPage::Email(EmailPurpose::Registration, _)
+                        ) =>
+                        {
+                            Text::AccountRegistrationFailed
+                        }
                         _ => {
                             return panel.child(
                                 theme
@@ -188,7 +195,18 @@ impl Desktop {
                     (locale.text(text).to_owned(), Tone::Rose)
                 }
             };
-            panel = panel.child(theme.caption(message).text_color(tone.text(theme)));
+            panel = panel.child(
+                theme
+                    .caption(message.clone())
+                    .id("account-feedback")
+                    .role(if result.is_err() {
+                        Role::Alert
+                    } else {
+                        Role::Status
+                    })
+                    .aria_label(message)
+                    .text_color(tone.text(theme)),
+            );
         }
         panel
     }
@@ -397,7 +415,7 @@ impl Desktop {
                     .child(theme.caption(locale.text(Text::SupportedEmailProviders)));
                 Text::AccountSendCode
             }
-            AccountPage::Overview => return panel,
+            AccountPage::Overview | AccountPage::Registration => return panel,
         };
         panel.child(self.account_editor_actions(view, submit, cx))
     }
@@ -460,6 +478,9 @@ impl Desktop {
             }
             AccountPage::Email(EmailPurpose::Registration, _) => {
                 (Text::LoginExisting, AccountPage::Login, Icon::Arrow)
+            }
+            AccountPage::Login if view.status.account.is_empty() => {
+                (Text::SetUpAccount, AccountPage::entry(view).0, Icon::Shield)
             }
             _ => return None,
         };
