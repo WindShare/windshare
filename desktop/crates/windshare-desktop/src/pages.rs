@@ -23,12 +23,9 @@ impl Desktop {
         ];
         column()
             .gap(px(24.))
+            .when_some(self.network_settings(theme, cx), gpui::ParentElement::child)
             .child(Self::appearance_card(theme, cx))
             .child(Self::language_card(theme, cx))
-            .when_some(self.account_card(theme, cx), gpui::ParentElement::child)
-            .when(!self.runtime.is_preview(), |el| {
-                el.child(Self::network_settings(cx))
-            })
             .child(
                 theme
                     .card()
@@ -110,17 +107,6 @@ impl Desktop {
                 Action::Navigate(Page::Components),
                 cx,
             ))
-    }
-
-    fn network_settings(cx: &Context<Self>) -> Div {
-        row().child(Self::button(
-            "network-settings",
-            language(cx).text(Text::SelfHostedRelay),
-            Icon::Settings,
-            ButtonStyle::Quiet,
-            Action::ConfigureNetwork,
-            cx,
-        ))
     }
 
     pub fn components_page(theme: Theme, cx: &Context<Self>) -> Div {

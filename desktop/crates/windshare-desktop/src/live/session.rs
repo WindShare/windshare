@@ -2,7 +2,7 @@ use crate::{
     desktop::Desktop,
     flow_state::ShareRun,
     localization::Text,
-    model::{Page, ShareSource},
+    model::{Overlay, Page, ShareSource},
 };
 use gpui::{Context, Window};
 use std::time::{Duration, SystemTime};
@@ -120,10 +120,10 @@ impl Desktop {
             let _ = weak.update(cx, |this, cx| this.request_quit(window, cx));
             false
         });
-        cx.spawn(async move |view, cx| {
+        cx.spawn_in(window, async move |view, cx| {
             loop {
                 controller.changed().await;
-                if view.update(cx, Self::refresh_native).is_err() {
+                if view.update_in(cx, Self::refresh_native).is_err() {
                     break;
                 }
             }
@@ -131,20 +131,29 @@ impl Desktop {
         .detach();
     }
 
-    fn refresh_native(&mut self, cx: &mut Context<Self>) {
+    fn refresh_native(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Runtime::Native(session) = &mut self.runtime else {
             return;
         };
         let model = session.controller.model();
         if model != session.model {
-            if model.setup != session.model.setup
-                && matches!(
-                    model.setup,
-                    windshare_host::Setup::Finished { .. }
-                        | windshare_host::Setup::Cancelled { .. }
-                )
-            {
-                self.setup_form.clear_key(cx);
+            let previous_page = self.setup_form.page;
+            let previous_field = self.account_form.field_focus(&session.model, cx);
+            self.setup_form.reconcile(&model, cx);
+            self.account_form.reconcile(&model, cx);
+            if let Some(frame) = self.overlays.last() {
+                match frame.content {
+                    Overlay::Account => {
+                        let next_field = self.account_form.field_focus(&model, cx);
+                        if previous_field != next_field {
+                            window.focus(next_field.as_ref().unwrap_or(&frame.scope), cx);
+                        }
+                    }
+                    Overlay::SharingSetup(_) if self.setup_form.page != previous_page => {
+                        window.focus(&frame.scope, cx);
+                    }
+                    _ => {}
+                }
             }
             for share in &mut self.shares {
                 let ShareSource::Native { operation_id } = &share.source else {

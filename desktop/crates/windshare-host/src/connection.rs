@@ -211,14 +211,19 @@ fn receive(shared: &Shared, pending: &mut BTreeMap<u64, Request>, text: &str) ->
     }
     shared.update(|model| {
         if let Some(error) = message.error {
-            if let Some(Request {
-                command: Command::Create { operation_id, .. } | Command::Repeat { operation_id, .. },
-                ..
-            }) = acknowledged
-            {
-                model.reject(&operation_id, error);
-            } else {
-                model.command_error = Some(error.message);
+            match acknowledged.map(|request| request.command) {
+                Some(
+                    Command::Create { operation_id, .. } | Command::Repeat { operation_id, .. },
+                ) => {
+                    model.reject(&operation_id, error);
+                }
+                Some(Command::Account { operation_id, .. }) => {
+                    model.rejected_account = Some((operation_id, error));
+                }
+                Some(Command::Configure { setup, .. }) => {
+                    model.rejected_setup = Some((setup.id, error));
+                }
+                _ => model.command_error = Some(error.message),
             }
         }
         if let Some(snapshot) = message.snapshot {

@@ -56,6 +56,15 @@ impl Desktop {
             share.authorization,
             Some(windshare_host::ShareAuthorization::Official)
         );
+        let account = self.account_view().filter(|_| official);
+        let (label, action) = match (official, account) {
+            (_, Some(view)) => (
+                super::account::AccountPage::entry(view).1,
+                Action::ConfigureShare(share.id),
+            ),
+            (true, None) => (Text::ChooseRelays, Action::ChooseShareRelays(share.id)),
+            (false, None) => (Text::ApproveDevice, Action::ConfigureShare(share.id)),
+        };
         column().w_full().items_center().py(px(24.)).child(
             theme
                 .card()
@@ -74,16 +83,22 @@ impl Desktop {
                         .flex_wrap()
                         .child(Self::button(
                             "authorize-share",
-                            locale.text(if official {
-                                Text::SelfHostedRelay
-                            } else {
-                                Text::ApproveDevice
-                            }),
-                            Icon::Settings,
+                            locale.text(label),
+                            Icon::Shield,
                             ButtonStyle::Primary,
-                            Action::ConfigureShare(share.id),
+                            action,
                             cx,
                         ))
+                        .when(account.is_some(), |row| {
+                            row.child(Self::button(
+                                "other-relays",
+                                locale.text(Text::ChooseRelays),
+                                Icon::Sliders,
+                                ButtonStyle::Secondary,
+                                Action::ChooseShareRelays(share.id),
+                                cx,
+                            ))
+                        })
                         .child(Self::button(
                             "cancel-authorization",
                             locale.text(Text::Cancel),
@@ -165,7 +180,7 @@ impl Desktop {
             actions
                 .child(Self::button(
                     "configure-relay",
-                    locale.text(Text::SelfHostedRelay),
+                    locale.text(Text::ChooseRelays),
                     Icon::Settings,
                     ButtonStyle::Secondary,
                     Action::ConfigureShare(share.id),

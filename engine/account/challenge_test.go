@@ -42,11 +42,14 @@ func TestFreshChallengesSurviveLocalClockBehindAuthority(t *testing.T) {
 	if err := service.step(t.Context()); err != nil {
 		t.Fatalf("registration challenge rejected: %v", err)
 	}
-	if snapshot, _ := service.Snapshot(); snapshot.State != EmailRequired {
+	if snapshot, _ := service.Snapshot(); snapshot.State != EmailRequired || snapshot.EmailCodePending {
 		t.Fatalf("state=%s reason=%q", snapshot.State, snapshot.Reason)
 	}
 	if err := service.RequestEmail(t.Context(), "person@example.com"); err != nil {
 		t.Fatalf("email challenge rejected: %v", err)
+	}
+	if snapshot, _ := service.Snapshot(); !snapshot.EmailCodePending {
+		t.Fatal("delivered code missing from account snapshot")
 	}
 	service.mu.Lock()
 	proof := service.record.Proof
@@ -112,6 +115,8 @@ func TestVerifyEmailReturnsRegistrationOutcome(t *testing.T) {
 			service := testService(t, config)
 			if err := service.VerifyEmail(t.Context(), "local-code"); !errors.Is(err, test.want) {
 				t.Fatalf("VerifyEmail = %v, want %v", err, test.want)
+			} else if errors.Is(err, errEmailCodeRejected) && CommandErrorCode(err) != "email_code_rejected" {
+				t.Fatalf("wrong email verification failure: %v", err)
 			}
 			record, err := service.load(t.Context())
 			if err != nil {

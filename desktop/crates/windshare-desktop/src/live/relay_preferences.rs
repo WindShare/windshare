@@ -1,164 +1,307 @@
-use super::Runtime;
+use super::{Runtime, SetupPage};
 use crate::{
     desktop::Desktop,
     localization::{Text, language},
-    model::Action,
+    model::{Action, Overlay},
 };
-use gpui::{Div, prelude::*, px};
-use windshare_host::PreferenceEdit;
-use windshare_ui::{ButtonStyle, Icon, Theme, column, row};
-
-#[derive(Clone, Copy, Debug)]
-pub enum RelayAction {
-    Mode(bool),
-    Toggle(usize),
-    Manage(usize),
-    UseFrontend(usize),
-    DefaultFrontend,
-}
+use gpui::{Div, ElementId, KeyDownEvent, Role, Toggled, prelude::*, px};
+use windshare_host::{PreferenceEdit, RelayMode, RelayPreferences};
+use windshare_ui::{Button, ButtonStyle, Icon, Theme, Tone, column, icon, row};
 
 impl Desktop {
-    pub fn relay_action(&self, action: RelayAction, cx: &Context<Self>) {
+    pub(super) fn apply_preference(&mut self, edit: PreferenceEdit, cx: &mut Context<Self>) {
         let Runtime::Native(session) = &self.runtime else {
             return;
         };
-        let relays = &session.model.preferences.relays;
-        let edit = match action {
-            RelayAction::Mode(selected) => {
-                PreferenceEdit::Mode(if selected { "selected" } else { "automatic" }.into())
-            }
-            RelayAction::Toggle(i) => {
-                let Some(relay) = relays.get(i) else { return };
-                if relay.enabled {
-                    PreferenceEdit::Disable(relay.url.clone())
-                } else {
-                    PreferenceEdit::Enable(relay.url.clone())
-                }
-            }
-            RelayAction::Manage(i) => {
-                if let Some(url) = relays.get(i).and_then(|r| r.console_url.as_deref()) {
-                    cx.open_url(url);
-                }
-                return;
-            }
-            RelayAction::DefaultFrontend => PreferenceEdit::Frontend(String::new()),
-            RelayAction::UseFrontend(i) => {
-                let Some(url) = relays.get(i).and_then(|r| r.offered_frontend.clone()) else {
+        let Some(Overlay::SharingSetup(share_id)) =
+            self.overlays.last().map(|frame| &frame.content)
+        else {
+            return;
+        };
+        if self.setup_form.pending.is_some()
+            || session.model.setup.unfinished()
+            || self.runtime.selection_disabled()
+        {
+            return;
+        }
+        let operation = match share_id {
+            Some(id) => {
+                let Some(op) = self.native_operation(*id) else {
                     return;
                 };
-                PreferenceEdit::Frontend(url)
+                op
             }
+            None => "",
         };
-        session.controller.edit_preference(edit);
+        tracing::info!(event = "desktop.relay_preference", session = ?session.model.session_id, operation, ?edit);
+        self.setup_form.pending = session.controller.edit_preference(operation, edit);
+        self.setup_form.feedback = None;
+        cx.notify();
     }
 
-    pub(super) fn relay_preferences(&self, theme: Theme, cx: &Context<Self>) -> Div {
-        let Runtime::Native(session) = &self.runtime else {
-            return column();
-        };
-        let prefs = &session.model.preferences;
+    pub(super) fn preference_button(
+        id: impl Into<ElementId>,
+        label: &'static str,
+        symbol: Icon,
+        edit: PreferenceEdit,
+        cx: &Context<Self>,
+    ) -> Button {
+        Button::new(id, label)
+            .icon(symbol)
+            .compact()
+            .on_press(cx.listener(move |this, (), _, cx| {
+                this.apply_preference(edit.clone(), cx);
+            }))
+    }
+
+    pub(super) fn relay_preferences(
+        theme: Theme,
+        prefs: &RelayPreferences,
+        busy: bool,
+        cx: &Context<Self>,
+    ) -> Div {
         let locale = language(cx);
-        let busy = session.model.setup.unfinished();
-        let selected = prefs.mode == "selected";
-        let mut view = column()
-            .gap(px(8.))
-            .child(Self::relay_mode(selected, busy, cx))
-            .child(theme.caption(format!(
-                "{} · {}",
-                locale.text(Text::FrontendAddress),
-                prefs.frontend
-            )));
-        if prefs.custom_frontend {
-            view = view.child(
-                Self::button(
-                    "default-receiver",
-                    locale.text(Text::DefaultReceiver),
-                    Icon::Link,
-                    ButtonStyle::Quiet,
-                    Action::Relay(RelayAction::DefaultFrontend),
-                    cx,
-                )
-                .disabled(busy),
-            );
-        }
-        if !selected && prefs.at_capacity {
-            view = view.child(theme.caption(locale.text(Text::RelaySlotsFull)));
-        }
-        for (index, relay) in prefs.relays.iter().enumerate() {
-            let mut actions = row().gap(px(8.)).flex_wrap().child(
-                Self::button(
-                    ("relay-enabled", index),
-                    locale.text(if relay.enabled {
-                        Text::RelayEnabled
-                    } else {
-                        Text::RelayDisabled
-                    }),
-                    if relay.enabled {
-                        Icon::Check
-                    } else {
-                        Icon::Link
-                    },
-                    ButtonStyle::Secondary,
-                    Action::Relay(RelayAction::Toggle(index)),
-                    cx,
-                )
-                .disabled(busy || !relay.enabled && prefs.at_capacity),
-            );
-            if relay.console_url.is_some() {
-                actions = actions.child(Self::button(
-                    ("relay-manage", index),
-                    locale.text(Text::ManageRelay),
-                    Icon::External,
-                    ButtonStyle::Quiet,
-                    Action::Relay(RelayAction::Manage(index)),
-                    cx,
-                ));
-            }
-            if let Some(url) = relay
-                .offered_frontend
-                .as_ref()
-                .filter(|url| **url != prefs.frontend)
-            {
-                actions = actions.child(
+        let enabled = prefs.relays.iter().any(|relay| relay.enabled);
+        let mut list = column().gap(px(12.)).child(
+            row()
+                .justify_between()
+                .gap(px(12.))
+                .child(theme.heading(locale.text(Text::CustomRelays), 17.))
+                .child(
                     Self::button(
-                        ("relay-frontend", index),
-                        format!("{} · {url}", locale.text(Text::UseReceiver)),
-                        Icon::Link,
-                        ButtonStyle::Quiet,
-                        Action::Relay(RelayAction::UseFrontend(index)),
+                        "add-relay",
+                        locale.text(Text::AddRelay),
+                        Icon::Plus,
+                        ButtonStyle::Secondary,
+                        Action::SetupPage(SetupPage::ConnectRelay),
                         cx,
                     )
+                    .compact()
                     .disabled(busy),
-                );
-            }
-            view = view
-                .child(theme.label(relay.url.clone(), 14.))
-                .child(actions);
+                ),
+        );
+        if prefs.relays.is_empty() && prefs.mode == RelayMode::Automatic {
+            list = list.child(theme.caption(locale.text(Text::NoCustomRelays)));
         }
-        view
+        if !enabled && prefs.mode == RelayMode::Selected {
+            list = list.child(
+                theme
+                    .caption(locale.text(Text::NoEnabledRelays))
+                    .text_color(Tone::Peach.text(theme)),
+            );
+        }
+        if prefs.at_capacity {
+            list = list.child(theme.caption(locale.text(Text::RelaySlotsFull)));
+        }
+        list = list.children(prefs.relays.iter().enumerate().map(|(index, relay)| {
+            Self::saved_relay(
+                theme,
+                relay,
+                index,
+                busy || !relay.enabled && prefs.at_capacity,
+                cx,
+            )
+        }));
+        column()
+            .gap(px(20.))
+            .child(
+                column()
+                    .id("relay-modes")
+                    .role(Role::RadioGroup)
+                    .aria_label(locale.text(Text::RelayChoice))
+                    .gap(px(8.))
+                    .child(Self::relay_mode_option(
+                        theme,
+                        prefs,
+                        RelayMode::Automatic,
+                        busy,
+                        cx,
+                    ))
+                    .child(Self::relay_mode_option(
+                        theme,
+                        prefs,
+                        RelayMode::Selected,
+                        busy,
+                        cx,
+                    )),
+            )
+            .child(list)
+            .child(theme.separator())
+            .child(
+                row()
+                    .justify_between()
+                    .gap(px(12.))
+                    .child(
+                        column()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(px(4.))
+                            .child(theme.heading(locale.text(Text::ReceiverSite), 15.))
+                            .child(theme.caption(prefs.frontend.clone()).line_clamp(2)),
+                    )
+                    .child(
+                        Self::button(
+                            "edit-receiver-site",
+                            locale.text(Text::ChangeWebsite),
+                            Icon::Link,
+                            ButtonStyle::Quiet,
+                            Action::SetupPage(SetupPage::ReceiverSite),
+                            cx,
+                        )
+                        .compact()
+                        .disabled(busy),
+                    ),
+            )
     }
 
-    fn relay_mode(selected: bool, busy: bool, cx: &Context<Self>) -> Div {
+    fn saved_relay(
+        theme: Theme,
+        relay: &windshare_host::SavedRelay,
+        index: usize,
+        disabled: bool,
+        cx: &Context<Self>,
+    ) -> Div {
         let locale = language(cx);
-        row().gap(px(8.)).children(
-            [(false, Text::AutomaticRelays), (true, Text::SelectedRelays)]
-                .into_iter()
-                .enumerate()
-                .map(|(index, (only, label))| {
-                    Self::button(
-                        ("relay-mode", index),
+        let (label, symbol, edit) = if relay.enabled {
+            (
+                Text::DisableRelay,
+                Icon::Pause,
+                PreferenceEdit::Disable(relay.url.clone()),
+            )
+        } else {
+            (
+                Text::EnableRelay,
+                Icon::Play,
+                PreferenceEdit::Enable(relay.url.clone()),
+            )
+        };
+        let mut actions = row().gap(px(6.));
+        if let Some(url) = relay.console_url.clone() {
+            actions = actions.child(
+                Button::new(("relay-console", index), "")
+                    .icon(Icon::External)
+                    .compact()
+                    .style(ButtonStyle::Ghost)
+                    .tooltip(locale.text(Text::ManageRelay))
+                    .on_press(move |(), _, cx| cx.open_url(&url)),
+            );
+        }
+        row()
+            .gap(px(10.))
+            .pt(px(10.))
+            .border_t_1()
+            .border_color(theme.border())
+            .child(theme.dot(if relay.enabled {
+                Tone::Mint
+            } else {
+                Tone::Neutral
+            }))
+            .child(
+                theme
+                    .label(relay.url.clone(), 14.)
+                    .flex_1()
+                    .min_w_0()
+                    .line_clamp(2),
+            )
+            .child(
+                actions.child(
+                    Self::preference_button(
+                        ("relay-toggle", index),
                         locale.text(label),
-                        Icon::Link,
-                        if selected == only {
-                            ButtonStyle::Primary
-                        } else {
-                            ButtonStyle::Secondary
-                        },
-                        Action::Relay(RelayAction::Mode(only)),
+                        symbol,
+                        edit,
                         cx,
                     )
-                    .disabled(busy || selected == only)
-                }),
-        )
+                    .disabled(disabled),
+                ),
+            )
+    }
+
+    fn relay_mode_option(
+        theme: Theme,
+        prefs: &RelayPreferences,
+        mode: RelayMode,
+        busy: bool,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let locale = language(cx);
+        let (label, description) = match mode {
+            RelayMode::Automatic => (
+                Text::AutomaticRelays,
+                if prefs.relays.is_empty() {
+                    Text::AutomaticRelayDetail
+                } else {
+                    Text::AutomaticWithCustom
+                },
+            ),
+            RelayMode::Selected => (Text::SelectedRelays, Text::SelectedRelayDetail),
+        };
+        let selected = prefs.mode == mode;
+        let accent = Tone::Mint.text(theme);
+        let indicator = row()
+            .size(px(18.))
+            .flex_shrink_0()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .border_1()
+            .border_color(if selected { accent } else { theme.muted_text() })
+            .when(selected, |el| {
+                el.bg(accent)
+                    .child(icon(Icon::Check, 12.).text_color(theme.surface()))
+            });
+        row()
+            .id(("relay-choice", mode as usize))
+            .role(Role::RadioButton)
+            .aria_label(format!(
+                "{} {}",
+                locale.text(label),
+                locale.text(description)
+            ))
+            .aria_toggled(if selected {
+                Toggled::True
+            } else {
+                Toggled::False
+            })
+            .gap(px(14.))
+            .px(px(16.))
+            .py(px(12.))
+            .rounded(px(10.))
+            .border_1()
+            .border_color(if selected {
+                accent.opacity(0.55)
+            } else {
+                theme.border()
+            })
+            .when(selected, |el| el.bg(Tone::Mint.surface(theme)))
+            .when(!busy, |el| {
+                el.focusable()
+                    .tab_index(0)
+                    .cursor_pointer()
+                    .hover(|style| style.border_color(accent))
+                    .focus_visible(|style| style.border_color(theme.focus_ring()).border_2())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !selected {
+                            this.apply_preference(PreferenceEdit::Mode(mode), cx);
+                        }
+                    }))
+                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                        if matches!(event.keystroke.key.as_str(), "space" | "enter") {
+                            cx.stop_propagation();
+                            if !selected {
+                                this.apply_preference(PreferenceEdit::Mode(mode), cx);
+                            }
+                        }
+                    }))
+            })
+            .child(indicator)
+            .child(
+                column()
+                    .min_w_0()
+                    .flex_1()
+                    .gap(px(3.))
+                    .child(theme.heading(locale.text(label), 16.))
+                    .child(theme.caption(locale.text(description))),
+            )
     }
 }

@@ -210,6 +210,11 @@ impl Desktop {
             self.super_share
                 .update(cx, crate::supershare::SuperShare::leave);
         }
+        if page == Page::Settings
+            && let Runtime::Native(session) = &self.runtime
+        {
+            session.controller.refresh_preferences();
+        }
         self.page = page;
         self.overlays.clear();
         self.link_disclosure = LinkDisclosure::Summary;

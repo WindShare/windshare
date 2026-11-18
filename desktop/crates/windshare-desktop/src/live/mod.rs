@@ -10,9 +10,10 @@ mod relay_preferences;
 mod selection;
 mod session;
 mod setup;
-pub use relay_preferences::RelayAction;
 mod setup_feedback;
-pub use setup::SetupForm;
+pub use setup::{SetupForm, SetupPage};
+mod network_settings;
+mod setup_view;
 
 use crate::desktop::Desktop;
 use gpui::{AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};

@@ -4,10 +4,34 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/url"
 	"time"
 )
 
 var errEmailCodeRejected = errors.New("verification code is invalid or expired; request a new verification email")
+
+// CommandErrorCode lets interactive clients localize a recovery action without parsing authority messages.
+func CommandErrorCode(err error) string {
+	if errors.Is(err, errEmailCodeRejected) {
+		return "email_code_rejected"
+	}
+	if remote, ok := errors.AsType[*fault](err); ok {
+		switch {
+		case remote.Kind == "denied" && remote.Reason == "credentials":
+			return "invalid_credentials"
+		case remote.Kind == "denied" && remote.Reason == "username_taken":
+			return "username_taken"
+		case remote.Kind == "rate_limited":
+			return "rate_limited"
+		case remote.Kind == "invalid":
+			return "invalid_account_input"
+		}
+	}
+	if _, ok := errors.AsType[*url.Error](err); ok {
+		return "account_service_unreachable"
+	}
+	return "account_operation_failed"
+}
 
 func (service *Service) Login(ctx context.Context, username, password string) error {
 	if service == nil {

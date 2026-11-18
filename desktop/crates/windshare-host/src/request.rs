@@ -5,6 +5,7 @@ use serde::Serialize;
 pub enum Command {
     Preferences,
     Account {
+        operation_id: String,
         account: crate::AccountCommand,
     },
     Create {

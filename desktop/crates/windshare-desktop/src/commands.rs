@@ -73,13 +73,14 @@ impl Desktop {
             }
             Action::ConfigureShare(id) => self.configure_share(id, window, cx),
             Action::OpenAccount => self.open_account(window, cx),
-            Action::Account(action) => self.account_action(action, cx),
+            Action::Account(action) => self.account_action(action, window, cx),
             Action::ConfigureNetwork => self.open_sharing_setup(None, window, cx),
+            Action::ChooseShareRelays(id) => self.open_sharing_setup(Some(id), window, cx),
+            Action::SetupPage(page) => self.edit_setup_page(page, window, cx),
             Action::ReturnToSharingSetup => self.return_to_sharing_setup(window, cx),
             Action::SaveSharingSetup(id) => self.save_sharing_setup(id, cx),
             Action::ResumeShare(id) => self.resume_native_share(id),
             Action::CancelSharingSetup => self.cancel_sharing_setup(),
-            Action::Relay(action) => self.relay_action(action, cx),
             Action::ApproveRelay => self.approve_relay(cx),
             Action::ToggleShare(id) => self.toggle_preview_share(id),
             Action::ToggleTransfer(index) => {

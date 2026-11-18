@@ -72,84 +72,60 @@ impl Desktop {
         )
     }
 
-    pub(super) fn setup_feedback(&self, theme: Theme, operation: &str, cx: &Context<Self>) -> Div {
-        let Runtime::Native(session) = &self.runtime else {
-            return column();
-        };
-        if let Some(progress) = self.setup_return(theme, operation, cx) {
-            return progress;
-        }
+    pub(super) fn setup_progress(theme: Theme, setup: &Setup, cx: &Context<Self>) -> Div {
         let locale = language(cx);
-        let mut form = column().gap(px(12.));
-        let setup = &session.model.setup;
-        let related = setup
-            .context()
-            .is_some_and(|context| operation.is_empty() || operation == context.operation_id);
-        if related {
-            if setup
-                .context()
-                .is_some_and(|context| context.frontend_saved)
-                && !matches!(setup, Setup::Finished { .. })
-            {
-                form = form.child(theme.caption(locale.text(Text::FrontendSaved)));
+        let mut panel = column().gap(px(12.));
+        match setup {
+            Setup::Failed { error, .. } | Setup::CancelFailed { error, .. } => {
+                panel = panel.child(
+                    theme
+                        .label(error.message.clone(), 15.)
+                        .text_color(Tone::Rose.text(theme)),
+                );
             }
-            match setup {
-                Setup::Failed { error, .. } | Setup::CancelFailed { error, .. } => {
-                    form = form.child(
-                        theme
-                            .label(error.message.clone(), 15.)
-                            .text_color(Tone::Rose.text(theme)),
-                    );
-                }
-                Setup::Finished { .. } => {
-                    form = form.child(theme.caption(locale.text(Text::SettingsSaved)));
-                }
-                Setup::Cancelling { .. } | Setup::Cancelled { .. } => {
-                    form = form.child(theme.caption(locale.text(if setup.busy() {
-                        Text::CancellingSetup
-                    } else {
-                        Text::SetupCancelled
-                    })));
-                }
-                Setup::Running {
-                    verification_url,
-                    user_code,
-                    ..
-                } if !verification_url.is_empty() => {
-                    form = form.child(
+            Setup::Cancelling { .. } => {
+                panel = panel.child(theme.caption(locale.text(Text::CancellingSetup)));
+            }
+            Setup::Running {
+                verification_url,
+                user_code,
+                ..
+            } if !verification_url.is_empty() => {
+                panel = panel
+                    .child(theme.caption(locale.text(Text::RelayApprovalDetail)))
+                    .child(
                         row()
                             .gap(px(12.))
-                            .child(theme.label(user_code.clone(), 18.))
+                            .child(theme.heading(user_code.clone(), 18.))
                             .child(Self::button(
                                 "approve-device",
                                 locale.text(Text::ApproveDevice),
                                 Icon::External,
-                                ButtonStyle::Secondary,
+                                ButtonStyle::Primary,
                                 Action::ApproveRelay,
                                 cx,
                             )),
                     );
-                }
-                _ => {}
             }
-            if setup.unfinished() {
-                form = form.child(
-                    Self::button(
-                        "cancel-sharing-setup",
-                        locale.text(if matches!(setup, Setup::CancelFailed { .. }) {
-                            Text::RetrySetupCancellation
-                        } else {
-                            Text::CancelSetup
-                        }),
-                        Icon::Close,
-                        ButtonStyle::Secondary,
-                        Action::CancelSharingSetup,
-                        cx,
-                    )
-                    .disabled(matches!(setup, Setup::Cancelling { .. })),
-                );
+            Setup::Running { .. } => {
+                panel = panel.child(theme.caption(locale.text(Text::ConnectingRelay)));
             }
+            _ => return panel,
         }
-        form
+        panel.child(
+            Self::button(
+                "cancel-sharing-setup",
+                locale.text(if matches!(setup, Setup::CancelFailed { .. }) {
+                    Text::RetrySetupCancellation
+                } else {
+                    Text::CancelSetup
+                }),
+                Icon::Close,
+                ButtonStyle::Secondary,
+                Action::CancelSharingSetup,
+                cx,
+            )
+            .disabled(matches!(setup, Setup::Cancelling { .. })),
+        )
     }
 }

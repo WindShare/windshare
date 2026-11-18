@@ -48,6 +48,8 @@ pub struct SetupContext {
     #[serde(default)]
     pub frontend_saved: bool,
     #[serde(default)]
+    pub relay_url: String,
+    #[serde(default)]
     pub relay_saved: bool,
 }
 
@@ -90,6 +92,15 @@ impl Setup {
         }
     }
 
+    pub fn can_configure(&self, operation: &str) -> bool {
+        !self.busy()
+            && !self.requires_cancellation()
+            && (!self.unfinished()
+                || self
+                    .context()
+                    .is_some_and(|context| context.operation_id == operation))
+    }
+
     pub const fn requires_cancellation(&self) -> bool {
         matches!(
             self,
@@ -105,7 +116,7 @@ impl Setup {
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 pub struct RelayPreferences {
-    pub mode: String,
+    pub mode: RelayMode,
     pub frontend: String,
     #[serde(default)]
     pub custom_frontend: bool,
@@ -121,10 +132,18 @@ pub struct SavedRelay {
     pub offered_frontend: Option<String>,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RelayMode {
+    #[default]
+    Automatic,
+    Selected,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
 #[serde(tag = "action", content = "value", rename_all = "snake_case")]
 pub enum PreferenceEdit {
-    Mode(String),
+    Mode(RelayMode),
     Enable(String),
     Disable(String),
     Frontend(String),

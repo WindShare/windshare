@@ -1,13 +1,17 @@
 mod abi;
 mod account;
-pub use account::{AccountCommand, AccountState, AccountStatus, AccountView, Allowance};
+pub use account::{
+    AccountCommand, AccountOutcome, AccountState, AccountStatus, AccountView, Allowance,
+};
 mod admission;
 mod connection;
 mod model;
 mod request;
 mod setup;
 pub use model::ShareAuthorization;
-pub use setup::{PreferenceEdit, RelayPreferences, Setup, SetupContext, SetupRecovery};
+pub use setup::{
+    PreferenceEdit, RelayMode, RelayPreferences, SavedRelay, Setup, SetupContext, SetupRecovery,
+};
 
 #[cfg(test)]
 #[path = "lifecycle_tests.rs"]
@@ -117,7 +121,7 @@ impl Controller {
         let _ = self.updates.recv().await;
     }
 
-    fn command(&self, command: Command) {
+    fn command(&self, command: Command) -> bool {
         let error = if self.shared.closing.load(Ordering::Acquire) {
             Some("WindShare is closing".into())
         } else {
@@ -128,12 +132,24 @@ impl Controller {
                     .map(|error| error.to_string())
             })
         };
+        let queued = error.is_none();
         self.shared.update(|model| model.command_error = error);
         let _ = self.shared.wake.notify();
+        queued
     }
 
-    pub fn account(&self, account: AccountCommand) {
-        self.command(Command::Account { account });
+    fn operation_id(&self, kind: &str) -> String {
+        let sequence = self.sequence.fetch_add(1, Ordering::Relaxed) + 1;
+        format!("{kind}:{sequence}")
+    }
+
+    pub fn account(&self, account: AccountCommand) -> Option<String> {
+        let id = self.operation_id("account");
+        self.command(Command::Account {
+            operation_id: id.clone(),
+            account,
+        })
+        .then_some(id)
     }
 
     pub fn cancel(&self, operation_id: &str) {
@@ -152,45 +168,42 @@ impl Controller {
         self.command(Command::Preferences);
     }
 
-    pub fn edit_preference(&self, edit: PreferenceEdit) {
+    pub fn edit_preference(&self, operation_id: &str, edit: PreferenceEdit) -> Option<String> {
         self.submit_setup(
-            "",
+            operation_id,
             request::SetupInput {
                 preference: Some(edit),
                 ..Default::default()
             },
-        );
+        )
     }
 
-    pub fn configure(
+    pub fn connect_relay(
         &self,
         operation_id: &str,
         relay_url: String,
-        front_url: String,
         access_key: String,
-    ) {
+    ) -> Option<String> {
         self.submit_setup(
             operation_id,
             request::SetupInput {
                 relay_url,
-                front_url,
                 access_key,
                 ..Default::default()
             },
-        );
+        )
     }
 
-    fn submit_setup(&self, operation_id: &str, input: request::SetupInput) {
+    fn submit_setup(&self, operation_id: &str, input: request::SetupInput) -> Option<String> {
+        let id = self.operation_id("setup");
         self.command(Command::Configure {
             operation_id: operation_id.into(),
             setup: request::SetupInput {
-                id: format!(
-                    "setup:{}",
-                    self.sequence.fetch_add(1, Ordering::Relaxed) + 1
-                ),
+                id: id.clone(),
                 ..input
             },
-        });
+        })
+        .then_some(id)
     }
 
     pub fn cancel_setup(&self, setup_id: &str) {

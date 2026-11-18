@@ -59,20 +59,21 @@ type Proof struct {
 	Solution  string    `json:"solution"`
 }
 type Snapshot struct {
-	Active         bool                       `json:"active"`
-	State          State                      `json:"state"`
-	Account        string                     `json:"account,omitempty"`
-	Credential     string                     `json:"credential,omitempty"`
-	Username       string                     `json:"username,omitempty"`
-	Allowance      serviceauthority.Allowance `json:"allowance"`
-	RemainingBytes uint64                     `json:"remaining_bytes"`
-	ResetAt        time.Time                  `json:"reset_at"`
-	ValidUntil     time.Time                  `json:"valid_until"`
-	TicketExpires  time.Time                  `json:"ticket_expires"`
-	RetryAt        time.Time                  `json:"retry_at"`
-	Hashes         uint64                     `json:"hashes,omitempty"`
-	ProofElapsed   time.Duration              `json:"proof_elapsed,omitempty"`
-	Reason         string                     `json:"reason,omitempty"`
+	Active           bool                       `json:"active"`
+	State            State                      `json:"state"`
+	EmailCodePending bool                       `json:"email_code_pending,omitempty"`
+	Account          string                     `json:"account,omitempty"`
+	Credential       string                     `json:"credential,omitempty"`
+	Username         string                     `json:"username,omitempty"`
+	Allowance        serviceauthority.Allowance `json:"allowance"`
+	RemainingBytes   uint64                     `json:"remaining_bytes"`
+	ResetAt          time.Time                  `json:"reset_at"`
+	ValidUntil       time.Time                  `json:"valid_until"`
+	TicketExpires    time.Time                  `json:"ticket_expires"`
+	RetryAt          time.Time                  `json:"retry_at"`
+	Hashes           uint64                     `json:"hashes,omitempty"`
+	ProofElapsed     time.Duration              `json:"proof_elapsed,omitempty"`
+	Reason           string                     `json:"reason,omitempty"`
 }
 
 type Credential struct {

@@ -42,6 +42,8 @@ func (service *Service) call(ctx context.Context, route, bearer string, input, o
 		var failure fault
 		if json.Unmarshal(data, &failure) == nil {
 			switch {
+			case failure.Kind == "invalid" && response.StatusCode == http.StatusBadRequest:
+				return &failure
 			case failure.Kind == "denied" && response.StatusCode == http.StatusForbidden:
 				return &failure
 			case failure.Kind == "verification" && response.StatusCode == http.StatusPreconditionRequired:

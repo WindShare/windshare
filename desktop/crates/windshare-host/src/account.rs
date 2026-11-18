@@ -5,14 +5,42 @@ use serde::{Deserialize, Serialize};
 pub struct AccountView {
     pub status: AccountStatus,
     pub reset_local: String,
-    pub busy: bool,
-    pub error: Option<Failure>,
+    pub operation: Option<AccountOperation>,
+}
+
+impl AccountView {
+    pub const fn busy(&self) -> bool {
+        matches!(
+            self.operation,
+            Some(AccountOperation {
+                outcome: AccountOutcome::Running,
+                ..
+            })
+        )
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct AccountOperation {
+    pub id: String,
+    #[serde(flatten)]
+    pub outcome: AccountOutcome,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum AccountOutcome {
+    Running,
+    Succeeded,
+    Failed { error: Failure },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct AccountStatus {
     pub active: bool,
     pub state: AccountState,
+    #[serde(default)]
+    pub email_code_pending: bool,
     #[serde(default)]
     pub account: String,
     #[serde(default)]

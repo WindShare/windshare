@@ -64,12 +64,12 @@ impl Desktop {
                 self.share_qr_detail(theme, *id, window, cx),
             ),
             Overlay::SharingSetup(id) => (
-                locale.text(Text::SelfHostedRelay),
+                locale.text(self.setup_form.page.title()),
                 DEFAULT_OVERLAY_WIDTH,
                 self.sharing_setup(theme, *id, cx),
             ),
             Overlay::Account => (
-                locale.text(Text::Account),
+                locale.text(self.account_title()),
                 DEFAULT_OVERLAY_WIDTH,
                 self.account_panel(theme, cx),
             ),

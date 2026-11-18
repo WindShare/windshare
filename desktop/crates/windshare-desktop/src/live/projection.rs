@@ -41,7 +41,7 @@ pub fn update_share(share: &mut Share, operation: &Operation) {
                 Some(SelectedRoot::File { name, file_size }) => {
                     share.name.clone_from(name);
                     share.symbol = Icon::File;
-                    share.size = Some(file_size_label(*file_size));
+                    share.size = Some(byte_size(*file_size));
                 }
                 Some(SelectedRoot::Directory { name }) => {
                     share.name.clone_from(name);
@@ -70,7 +70,7 @@ pub fn update_share(share: &mut Share, operation: &Operation) {
     }
 }
 
-fn file_size_label(bytes: u64) -> String {
+pub(super) fn byte_size(bytes: u64) -> String {
     const KIB: u64 = 1024;
     const UNITS: [(u64, &str); 4] = [
         (KIB.pow(4), "TiB"),

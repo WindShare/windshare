@@ -103,7 +103,7 @@ type Snapshot struct {
 }
 
 func (s Snapshot) active() bool {
-	if s.Setup.busy() || s.Account != nil && s.Account.Busy {
+	if s.Setup.busy() || s.Account.busy() {
 		return true
 	}
 	for _, share := range s.Shares {

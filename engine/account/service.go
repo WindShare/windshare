@@ -137,6 +137,10 @@ func (service *Service) Snapshot() (Snapshot, <-chan struct{}) {
 		RemainingBytes: service.record.Entitlement.RemainingBytes, ResetAt: service.record.Entitlement.ResetAt(),
 		ValidUntil: time.Unix(int64(service.record.Entitlement.ValidUntil), 0), RetryAt: service.retryAt,
 		Hashes: service.hashes, ProofElapsed: service.proofElapsed, Reason: service.reason}
+	// Email admission first returns an empty challenge. Only a delivered code has an ID.
+	if proof := service.record.Proof; proof != nil && proof.Challenge.Mode == "email" {
+		value.EmailCodePending = proof.Challenge.ID != "" && proof.Challenge.ExpiresAt > uint64(now.Unix())
+	}
 	if credential := service.record.Credential; credential != nil {
 		value.Account = base64.RawURLEncoding.EncodeToString(credential.Account[:])
 		value.Credential = base64.RawURLEncoding.EncodeToString(credential.ID[:])

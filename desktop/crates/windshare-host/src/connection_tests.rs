@@ -60,3 +60,44 @@ fn rejected_creation_settles_its_selection_instead_of_preparing_forever() {
     assert_eq!(model.operations[0].error(), Some("selection rejected"));
     assert!(pending.is_empty());
 }
+
+#[test]
+fn a_rejected_settings_submission_retains_its_own_failure() {
+    let (shared, mut pending) = pending_create();
+    let commands = [
+        Command::Account {
+            operation_id: "account:1".into(),
+            account: crate::AccountCommand::Retry,
+        },
+        Command::Configure {
+            operation_id: String::new(),
+            setup: crate::request::SetupInput {
+                id: "setup:2".into(),
+                ..Default::default()
+            },
+        },
+        Command::Preferences,
+    ];
+    for (i, command) in commands.into_iter().enumerate() {
+        let sequence = u64::try_from(i).unwrap() + 2;
+        let id = sequence.to_string();
+        pending.insert(
+            sequence,
+            Request {
+                id: id.clone(),
+                command,
+            },
+        );
+        let response = serde_json::json!({
+            "version": 1,
+            "id": id,
+            "error": { "code": "request_rejected", "message": id },
+        });
+        receive(&shared, &mut pending, &response.to_string()).unwrap();
+    }
+    let model = shared.model.lock().unwrap();
+    assert_eq!(model.settings_rejection("account:1").unwrap().message, "2");
+    assert_eq!(model.settings_rejection("setup:2").unwrap().message, "3");
+    assert!(model.settings_rejection("account:3").is_none());
+    assert_eq!(model.command_error.as_deref(), Some("4"));
+}

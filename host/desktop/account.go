@@ -19,26 +19,40 @@ type AccountInput struct {
 	Credential string `json:"credential,omitempty"`
 }
 type AccountView struct {
-	ResetLocal string           `json:"reset_local"`
-	Account    account.Snapshot `json:"status"`
-	Busy       bool             `json:"busy"`
-	Error      *Failure         `json:"error,omitempty"`
+	ResetLocal string            `json:"reset_local"`
+	Account    account.Snapshot  `json:"status"`
+	Operation  *AccountOperation `json:"operation,omitempty"`
+}
+
+type AccountOperation struct {
+	ID    string   `json:"id"`
+	State string   `json:"state"`
+	Error *Failure `json:"error,omitempty"`
+}
+
+func (view *AccountView) busy() bool {
+	return view != nil && view.Operation != nil && view.Operation.State == "running"
+}
+
+func (a *Application) syncAccountLocked() <-chan struct{} {
+	status, changed := a.deps.accounts.Snapshot()
+	view := *a.accountView
+	view.Account = status
+	view.ResetLocal = status.ResetAt.Local().Format("2006-01-02 15:04 MST")
+	a.accountView = &view
+	return changed
 }
 
 func (a *Application) watchAccount() {
 	if a.deps.accounts == nil {
 		return
 	}
-	initial, _ := a.deps.accounts.Snapshot()
-	a.accountView = &AccountView{Account: initial, ResetLocal: initial.ResetAt.Local().Format("Jan 2 15:04 MST")}
+	a.accountView = &AccountView{}
+	a.syncAccountLocked()
 	a.readers.Go(func() {
 		for {
-			status, changed := a.deps.accounts.Snapshot()
 			a.mu.Lock()
-			view := *a.accountView
-			view.Account = status
-			view.ResetLocal = status.ResetAt.Local().Format("Jan 2 15:04 MST")
-			a.accountView = &view
+			changed := a.syncAccountLocked()
 			a.snapshotLocked()
 			a.mu.Unlock()
 			select {
@@ -56,7 +70,7 @@ func (a *Application) accountCommand(request Request) error {
 	if a.deps.accounts == nil {
 		return account.ErrNotConfigured
 	}
-	if request.Account == nil || !validOperation(request.ID) {
+	if request.Account == nil || !validOperation(request.OperationID) {
 		return errors.New("account command is required")
 	}
 	encoded, err := json.Marshal(request.Account)
@@ -65,34 +79,36 @@ func (a *Application) accountCommand(request Request) error {
 	}
 	digest := sha256.Sum256(encoded)
 	clear(encoded)
-	if previous, exists := a.accountRequests[request.ID]; exists {
+	if previous, exists := a.accountRequests[request.OperationID]; exists {
 		if previous != digest {
-			return errors.New("account request ID reused")
+			return errors.New("account operation ID reused")
 		}
 		return nil
 	}
-	if a.accountView.Busy {
+	if a.accountView.busy() {
 		return errors.New("an account operation is already running")
 	}
 	if len(a.accountRequests) >= maximumOperations {
 		return errors.New("account operation limit reached")
 	}
-	a.accountRequests[request.ID] = digest
+	a.accountRequests[request.OperationID] = digest
 	view := *a.accountView
-	view.Busy, view.Error = true, nil
+	view.Operation = &AccountOperation{ID: request.OperationID, State: "running"}
 	a.accountView = &view
 	input := *request.Account
-	a.deps.log("host.account_operation", map[string]string{"request_id": request.ID, "action": input.Action})
+	a.deps.log("host.account_operation", map[string]string{"request_id": request.ID, "operation_id": request.OperationID, "action": input.Action})
 	a.work.Go(func() {
 		err := a.runAccountCommand(input)
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		view := *a.accountView
-		view.Busy, view.Error = false, nil
+		// Publish the identity and its command receipt together even if the observer coalesces updates.
+		a.syncAccountLocked()
+		result := &AccountOperation{ID: request.OperationID, State: "succeeded"}
 		if err != nil {
-			view.Error = failure("account_operation_failed", err)
+			result.State, result.Error = "failed", failure(account.CommandErrorCode(err), err)
 		}
-		a.accountView = &view
+		a.accountView.Operation = result
+		a.deps.log("host.account_completed", map[string]string{"operation_id": request.OperationID, "action": input.Action, "state": result.State})
 		a.snapshotLocked()
 	})
 	return nil

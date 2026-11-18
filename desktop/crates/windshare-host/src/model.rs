@@ -171,6 +171,15 @@ pub struct Failure {
     pub message: String,
 }
 
+impl From<String> for Failure {
+    fn from(message: String) -> Self {
+        Self {
+            code: "request_rejected".into(),
+            message,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Connection {
     Starting,
@@ -229,6 +238,8 @@ pub struct Model {
     pub revision: u64,
     pub operations: Vec<Operation>,
     pub command_error: Option<String>,
+    pub(crate) rejected_setup: Option<(String, Failure)>,
+    pub(crate) rejected_account: Option<(String, Failure)>,
     pub setup: Setup,
     pub preferences: crate::RelayPreferences,
     pub account: Option<crate::AccountView>,
@@ -242,6 +253,8 @@ impl Default for Model {
             revision: 0,
             operations: Vec::new(),
             command_error: None,
+            rejected_setup: None,
+            rejected_account: None,
             setup: Setup::Idle,
             preferences: crate::RelayPreferences::default(),
             account: None,
@@ -250,8 +263,18 @@ impl Default for Model {
 }
 
 impl Model {
+    // A preference refresh can fail while another form is submitting. Only the
+    // matching request may release that form, even when snapshots coalesce.
+    pub fn settings_rejection(&self, id: &str) -> Option<&Failure> {
+        self.rejected_setup
+            .iter()
+            .chain(&self.rejected_account)
+            .find(|(rejected, _)| rejected == id)
+            .map(|(_, error)| error)
+    }
+
     pub fn has_unfinished_work(&self) -> bool {
-        self.account.as_ref().is_some_and(|account| account.busy)
+        self.account.as_ref().is_some_and(crate::AccountView::busy)
             || self.setup.unfinished()
             || self
                 .operations
