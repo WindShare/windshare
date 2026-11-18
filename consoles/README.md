@@ -1,6 +1,8 @@
 # Management consoles
 
-The node console, network console and public report form support English and Simplified Chinese. The header language selector remembers the choice for that origin. The first visit uses the browser’s preferred supported language, falling back to English. To add a language, register it in `ui/locale.ts` and translate the catalogs under `ui/locales/`, `relay/locales/` and `network/locales/`.
+The node console, network console and public report form follow the system color scheme and the browser’s preferred supported language (English or Simplified Chinese, with English as the fallback). Use the header to change languages or choose a light or dark theme. Both preferences are saved per origin.
+
+To add a language, register it in `ui/locale.ts` and translate the catalogs under `ui/locales/`, `relay/locales/` and `network/locales/`.
 
 From `consoles/`, run `pnpm install --frozen-lockfile`. Each app uses its host’s real API and administrator cookie.
 

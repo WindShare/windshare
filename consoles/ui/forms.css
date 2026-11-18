@@ -1,22 +1,22 @@
 button, input, select, textarea, .button { font: inherit; }
-button, .button { display: inline-flex; align-items: center; justify-content: center; min-height: 2.65rem; padding: .52rem 1rem; border-radius: .45rem; border: 1px solid transparent; color: white; background: var(--accent); font-size: .93rem; font-weight: 600; text-decoration: none; line-height: 1.3; cursor: pointer; }
+button, .button { display: inline-flex; align-items: center; justify-content: center; min-height: 2.65rem; padding: .52rem 1rem; border-radius: .45rem; border: 1px solid transparent; color: var(--on-accent); background: var(--accent); font-size: .93rem; font-weight: 600; text-decoration: none; line-height: 1.3; cursor: pointer; }
 button:hover, .button:hover { background: var(--accent-hover); }
 button:disabled { cursor: default; opacity: .6; }
-button.secondary, .button.secondary { background: var(--paper); border-color: #bfcfc5; color: var(--ink); }
-button.secondary:hover, .button.secondary:hover, button.quiet:hover { background: #edf2ee; }
+button.secondary, .button.secondary { background: var(--paper); border-color: var(--control-border); color: var(--ink); }
+button.secondary:hover, .button.secondary:hover, button.quiet:hover { background: var(--surface-muted); }
 button.quiet { background: transparent; color: var(--muted); padding-inline: .65rem; }
 button.danger-text { color: var(--danger); }
-button.destructive { background: var(--danger); }
-button.destructive:hover { background: #792d23; }
+button.destructive { background: var(--danger); color: var(--on-danger); }
+button.destructive:hover { background: var(--danger-hover); }
 button.wide { width: 100%; }
 .stack { display: grid; gap: 1.1rem; }
 .field { display: grid; align-content: start; gap: .35rem; min-width: 0; }
 label, legend { font-size: .91rem; font-weight: 600; }
-:where(input:not([type="checkbox"]):not([type="radio"])), select, textarea { width: 100%; min-width: 0; min-height: 2.75rem; padding: .55rem .75rem; border: 1px solid #a9bcb2; background: var(--paper); color: var(--ink); border-radius: .4rem; }
-input::placeholder { color: #687b71; }
+:where(input:not([type="checkbox"]):not([type="radio"])), select, textarea { width: 100%; min-width: 0; min-height: 2.75rem; padding: .55rem .75rem; border: 1px solid var(--control-border); background: var(--paper); color: var(--ink); border-radius: .4rem; }
+:is(input, textarea)::placeholder { color: var(--muted); }
 input.code-input { width: 9.5rem; letter-spacing: .06em; text-transform: uppercase; }
 textarea { resize: vertical; }
-.password { display: flex; border: 1px solid #a9bcb2; border-radius: .4rem; }
+.password { display: flex; border: 1px solid var(--control-border); border-radius: .4rem; }
 .password input:not([type="checkbox"]):not([type="radio"]) { border: none; }
 .password button { margin: .2rem; min-height: 2rem; }
 fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
@@ -24,7 +24,7 @@ fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
 input:is([type="checkbox"], [type="radio"]) { accent-color: var(--accent); }
 dialog { width: min(27rem,calc(100% - 2rem)); padding: 1.65rem; color: var(--ink); max-height: calc(100dvh - 2rem); overflow: auto; overscroll-behavior: contain; }
 dialog p, dialog .check { margin-top: .8rem; }
-dialog::backdrop { background: rgb(18 36 30 / 42%); }
+dialog::backdrop { background: var(--backdrop); }
 .dialog-actions { margin-top: 1.5rem; justify-content: flex-end; }
 @media (prefers-reduced-motion: no-preference) {
   button, .button, .tabs a { transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease; }

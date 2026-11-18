@@ -4,7 +4,7 @@
 .table-wrap { container-type: inline-size; max-height: 72vh; overflow: auto; }
 table { width: 100%; border-spacing: 0; text-align: left; font-size: .93rem; }
 th, td { padding: 1.1rem; vertical-align: top; }
-thead th { position: sticky; top: 0; z-index: 1; background: #ecf1ed; color: var(--muted); font-size: .8rem; font-weight: 600; }
+thead th { position: sticky; top: 0; z-index: 1; background: var(--surface-muted); color: var(--muted); font-size: .8rem; font-weight: 600; }
 tbody tr + tr > * { border-top: 1px solid var(--line); }
 tbody th { position: sticky; inset-inline-start: 0; background: var(--paper); font-weight: 640; max-width: 19rem; overflow-wrap: anywhere; }
 table small, .facts dd > small { display: block; margin-top: .27rem; color: var(--muted); font-weight: 400; }

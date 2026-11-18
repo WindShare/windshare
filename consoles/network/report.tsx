@@ -1,5 +1,5 @@
 import { createRoot } from 'react-dom/client'
-import { LocaleProvider } from '../ui/LocaleProvider'
+import { PreferencesProvider } from '../ui/PreferencesProvider'
 import { takeFragment } from '../ui/location'
 import { ReportForm } from './ReportForm'
 import { decode, encode } from './identity'
@@ -11,4 +11,4 @@ function publicShareFragment() {
 }
 const initialShare = publicShareFragment()
 
-createRoot(document.getElementById('root')!).render(<LocaleProvider><ReportForm initialShare={initialShare} /></LocaleProvider>)
+createRoot(document.getElementById('root')!).render(<PreferencesProvider><ReportForm initialShare={initialShare} /></PreferencesProvider>)

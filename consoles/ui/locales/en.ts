@@ -1,5 +1,7 @@
 export const en = {
   language: 'Language',
+  appearance: 'Appearance',
+  appearanceOptions: { system: 'System theme', light: 'Light theme', dark: 'Dark theme' },
   skip: 'Skip to content',
   retry: 'Retry',
   openFailed: 'Could not open the console',

@@ -2,6 +2,8 @@ import type { en } from './en'
 
 export const zhCN = {
   language: '语言',
+  appearance: '外观',
+  appearanceOptions: { system: '跟随系统', light: '亮色主题', dark: '暗色主题' },
   skip: '跳到主要内容',
   retry: '重试',
   openFailed: '无法打开管理台',

@@ -1,0 +1,31 @@
+:root {
+  color-scheme: light dark;
+  --wash: light-dark(#f6f8f6, #101915);
+  --paper: light-dark(#fff, #19241f);
+  --surface-muted: light-dark(#edf2ee, #27372f);
+  --ink: light-dark(#192e2a, #e7efe9);
+  --muted: light-dark(#536660, #adc0b6);
+  --line: light-dark(#d5ded9, #394b41);
+  --control-border: light-dark(#7e9287, #71877a);
+
+  --accent: light-dark(#19664f, #82d1ae);
+  --accent-hover: light-dark(#104d3b, #a4e1c4);
+  --on-accent: light-dark(#fff, #11231b);
+  --accent-surface: light-dark(#edf4ef, #20352b);
+  --accent-border: light-dark(#cbded3, #3b604d);
+  --focus: light-dark(#19745d, #92dbb9);
+  --danger: light-dark(#9a3b30, #f1a399);
+  --danger-hover: light-dark(#792d23, #ffc0b5);
+  --on-danger: light-dark(#fff, #321914);
+
+  --success-ink: light-dark(#205c44, #9dd9b6);
+  --success-surface: light-dark(#e6f3eb, #1e382c);
+  --warning-ink: light-dark(#79511d, #efc888);
+  --warning-surface: light-dark(#faf0d9, #3b3020);
+  --error-ink: light-dark(#87382c, #f2b2a9);
+  --error-surface: light-dark(#fff0ed, #402825);
+  --backdrop: light-dark(rgb(18 36 30 / 42%), rgb(4 10 7 / 72%));
+}
+
+:root[data-appearance="light"] { color-scheme: light; }
+:root[data-appearance="dark"] { color-scheme: dark; }

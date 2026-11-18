@@ -1,4 +1,5 @@
 import { useId, useLayoutEffect, type ReactNode } from 'react'
+import { appearances, parseAppearance, useAppearance } from './appearance'
 import { isLocale, languageNames, supportedLocales, type Message } from './locale'
 import { useCopy, useLocale } from './use-locale'
 import { sharedCopy } from './locales'
@@ -10,12 +11,21 @@ function LanguageSelect() {
   const id = useId()
   return <>
     <label className="sr-only" htmlFor={id}>{sharedCopy[locale].language}</label>
-    <select className="language-select" id={id} value={locale} onChange={event => {
+    <select id={id} value={locale} onChange={event => {
       if (isLocale(event.target.value)) selectLocale(event.target.value)
     }}>
       {supportedLocales.map(value => <option key={value} value={value} lang={value}>{languageNames[value]}</option>)}
     </select>
   </>
+}
+
+function AppearanceSelect() {
+  const { appearance, selectAppearance } = useAppearance()
+  const t = useCopy(sharedCopy)
+  return <select aria-label={t.appearance} value={appearance}
+    onChange={event => selectAppearance(parseAppearance(event.currentTarget.value))}>
+    {appearances.map(value => <option key={value} value={value}>{t.appearanceOptions[value]}</option>)}
+  </select>
 }
 
 export function Frame({ area, tools, children }: { area: string; tools?: ReactNode; children: ReactNode }) {
@@ -32,7 +42,7 @@ export function Frame({ area, tools, children }: { area: string; tools?: ReactNo
     <header className="masthead"><div className="mast-inner">
       <div className="brand"><span className="wordmark">WindShare</span><span className="brand-rule" />
         <span className="area">{area}</span></div>
-      <div className="mast-tools"><LanguageSelect />{tools}</div>
+      <div className="mast-tools"><LanguageSelect /><AppearanceSelect />{tools}</div>
     </div></header>
     <main id="main-content" tabIndex={-1}>{children}</main>
   </>
