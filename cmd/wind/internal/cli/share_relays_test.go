@@ -132,13 +132,19 @@ func TestShareRelayConfigurationIsPluralBoundedAndDeduplicated(t *testing.T) {
 }
 
 func TestShareRejectsRelayEndpointCopiedFromStartupOutput(t *testing.T) {
-	stderr := new(bytes.Buffer)
-	app := &App{Stdout: new(bytes.Buffer), Stderr: stderr}
-	t.Cleanup(app.closeTerminalOutput)
-	if _, outcome := app.parseShareRequest([]string{"root", "--relay", "ws://127.0.0.1:41871/v2/ws"}); outcome != requestParseUsageFailure || app.application != nil {
-		t.Fatal("an address that dials /v2/ws/v2/ws reached a sharing workflow")
-	}
-	if !strings.Contains(stderr.String(), "share: invalid relay URL: the address path ends in /v2/ws") {
-		t.Fatalf("share did not explain the copied endpoint: %q", stderr.String())
+	for _, args := range [][]string{
+		{"root", "--relay", "ws://127.0.0.1:41871/v2/ws?token=secret-canary"},
+		{"root", "--relay", "ws://127.0.0.1:41871", "--relay", "ws://127.0.0.1:41871/v2/ws"},
+	} {
+		stderr := new(bytes.Buffer)
+		app := &App{Stdout: new(bytes.Buffer), Stderr: stderr}
+		t.Cleanup(app.closeTerminalOutput)
+		if _, outcome := app.parseShareRequest(args); outcome != requestParseUsageFailure || app.application != nil {
+			t.Fatal("an address that dials /v2/ws/v2/ws reached a sharing workflow")
+		}
+		const expected = `share: invalid relay URL: address "ws://127.0.0.1:41871/v2/ws" ends in /v2/ws`
+		if !strings.Contains(stderr.String(), expected) || strings.Contains(stderr.String(), "secret-canary") {
+			t.Fatalf("share did not identify the copied endpoint: %q", stderr.String())
+		}
 	}
 }

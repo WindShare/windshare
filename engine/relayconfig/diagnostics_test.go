@@ -84,24 +84,28 @@ func TestSavedRelayAddressDiagnosticsIdentifyTheRepairFile(t *testing.T) {
 }
 
 func TestSelectRelaysRejectsCopiedWebSocketEndpoint(t *testing.T) {
-	for _, address := range []string{
-		"ws://127.0.0.1:41871/v2/ws", "wss://relay.example/v2/ws/", "https://relay.example/base/v2/ws?auth=secret-canary",
+	for _, test := range []struct{ address, shown string }{
+		{"ws://127.0.0.1:41871/v2/ws", "ws://127.0.0.1:41871/v2/ws"},
+		{"wss://relay.example/v2/ws/", "wss://relay.example/v2/ws/"},
+		{"https://relay.example/base/v2/ws?auth=secret-canary", "https://relay.example/base/v2/ws"},
 	} {
 		for _, config := range []struct {
 			name     string
 			config   Config
 			override []string
 		}{
-			{name: "explicit override", override: []string{address}},
-			{name: "active selection", config: Config{Profiles: []relayprofile.Candidate{{PublicURL: address}}, ActiveRelays: []string{address}}},
+			{name: "explicit override", override: []string{test.address}},
+			{name: "good and bad overrides", override: []string{"https://good.example", test.address}},
+			{name: "active selection", config: Config{Profiles: []relayprofile.Candidate{{PublicURL: test.address}}, ActiveRelays: []string{test.address}}},
 		} {
-			t.Run(config.name+" "+address, func(t *testing.T) {
+			t.Run(config.name+" "+test.address, func(t *testing.T) {
 				_, err := ShareIntent(config.config, config.override)
 				if !errors.Is(err, ErrRelayURL) || !errors.Is(err, networkendpoint.ErrInvalid) {
 					t.Fatalf("copied endpoint was not rejected as a relay address: %v", err)
 				}
-				if !strings.Contains(err.Error(), "ends in /v2/ws") || strings.Contains(err.Error(), "secret-canary") {
-					t.Fatalf("diagnostic does not explain the repair: %v", err)
+				if !strings.Contains(err.Error(), fmt.Sprintf("address %q ends in /v2/ws", test.shown)) ||
+					strings.Contains(err.Error(), "secret-canary") || strings.Contains(err.Error(), "good.example") {
+					t.Fatalf("diagnostic does not identify the address to repair: %v", err)
 				}
 			})
 		}
@@ -110,5 +114,40 @@ func TestSelectRelaysRejectsCopiedWebSocketEndpoint(t *testing.T) {
 		if _, err := SelectRelays(Config{}, []string{address}); err != nil {
 			t.Errorf("relay base %q was rejected: %v", address, err)
 		}
+	}
+}
+
+func TestSavedActiveRelayEndpointIsRejectedWithItsFieldAndFile(t *testing.T) {
+	const bad = "ws://127.0.0.1:41871/v2/ws?token=secret-canary"
+	document := `{"profiles":[{"url":"https://good.example"},{"url":"` + bad + `","access_key":"secret-canary"}],` +
+		`"active_relays":["https://good.example","` + bad + `"]}`
+	_, decodeErr := Decode(strings.NewReader(document))
+	directory := t.TempDir()
+	store := FileStore{Path: filepath.Join(directory, "config.json")}
+	if err := os.WriteFile(store.Path, []byte(document), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, loadErr := store.Load()
+	for _, err := range []error{decodeErr, loadErr} {
+		if !errors.Is(err, ErrConfig) || !errors.Is(err, ErrRelayURL) {
+			t.Fatalf("saved endpoint lost its error categories: %v", err)
+		}
+		for _, detail := range []string{"active_relays[1]", `"ws://127.0.0.1:41871/v2/ws" ends in /v2/ws`} {
+			if !strings.Contains(err.Error(), detail) {
+				t.Errorf("repair detail %q missing: %v", detail, err)
+			}
+		}
+		if strings.Contains(err.Error(), "secret-canary") {
+			t.Fatalf("diagnostic includes a secret: %v", err)
+		}
+	}
+	if !strings.Contains(loadErr.Error(), fmt.Sprintf("edit %+q and retry", store.Path)) {
+		t.Fatalf("load error does not name the file: %v", loadErr)
+	}
+	// Like other addresses that only affect dialing, an inactive profile is not
+	// selected for sharing and continues to load.
+	inactive := `{"profiles":[{"url":"https://good.example"},{"url":"` + bad + `"}],"active_relays":["https://good.example"]}`
+	if _, err := Decode(strings.NewReader(inactive)); err != nil {
+		t.Fatal("inactive profile stopped loading:", err)
 	}
 }

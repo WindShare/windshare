@@ -57,12 +57,9 @@ func SelectRelays(config Config, override []string) ([]relayprofile.Candidate, e
 	candidates := make([]relayprofile.Candidate, 0, len(override))
 	seen := make(map[string]bool, len(override))
 	for _, address := range override {
-		endpoint, err := v2.NormalizeRelayEndpoint(address)
-		if err == nil && repeatsWebSocketPath(endpoint) {
-			err = errRelayWebSocketPath
-		}
+		endpoint, err := normalizeSelectedRelay(address)
 		if err != nil {
-			return nil, relayAddressError{cause: err}
+			return nil, err
 		}
 		if seen[endpoint.DialURL] {
 			continue
@@ -82,13 +79,44 @@ func SelectRelays(config Config, override []string) ([]relayprofile.Candidate, e
 
 // Relays print the WebSocket endpoint they serve, but candidates are base URLs
 // to which normalization appends that path. The doubled path fails every
-// upgrade, and relay discovery cannot advertise such a base either, so reject
-// the copied endpoint before a share retries it indefinitely.
-var errRelayWebSocketPath = fmt.Errorf("%w: %w: relay base ends in %s", v2.ErrIdentity, networkendpoint.ErrInvalid, v2.WebSocketPath)
+// upgrade, so both explicit overrides and saved active relays reject the copied
+// endpoint before a share retries it indefinitely. Inactive profiles are not
+// dialed and keep their existing validation.
+func normalizeSelectedRelay(address string) (v2.RelayEndpoint, error) {
+	endpoint, err := v2.NormalizeRelayEndpoint(address)
+	if err == nil && repeatsWebSocketPath(endpoint) {
+		err = &relayWebSocketPathError{address: redactRelayAddress(address)}
+	}
+	if err != nil {
+		return v2.RelayEndpoint{}, relayAddressError{cause: err}
+	}
+	return endpoint, nil
+}
 
 func repeatsWebSocketPath(endpoint v2.RelayEndpoint) bool {
 	parsed, err := url.Parse(endpoint.IdentityURL)
 	return err == nil && strings.HasSuffix(parsed.EscapedPath(), v2.WebSocketPath+v2.WebSocketPath)
+}
+
+// Name the address so one bad entry is identifiable in a multi-relay list,
+// without echoing routing queries or other secrets it may carry.
+type relayWebSocketPathError struct{ address string }
+
+func (err *relayWebSocketPathError) Error() string {
+	return "relay base " + err.address + " ends in " + v2.WebSocketPath
+}
+func (err *relayWebSocketPathError) Unwrap() []error {
+	return []error{v2.ErrIdentity, networkendpoint.ErrInvalid}
+}
+
+func redactRelayAddress(address string) string {
+	parsed, err := url.Parse(address)
+	if err != nil {
+		return "(unparseable address)"
+	}
+	parsed.User, parsed.RawQuery, parsed.ForceQuery = nil, "", false
+	parsed.Fragment, parsed.RawFragment = "", ""
+	return parsed.String()
 }
 
 // Preserve the domain cause while presenting only the address detail relevant
@@ -98,11 +126,12 @@ type relayAddressError struct{ cause error }
 func (err relayAddressError) Error() string {
 	var detail string
 	host, numeric := errors.AsType[*networkendpoint.NumericHostError](err.cause)
+	copied, endpoint := errors.AsType[*relayWebSocketPathError](err.cause)
 	switch {
 	case numeric:
 		detail = fmt.Sprintf("host %q ends in a number; use a DNS name or a canonical IP address", host.Host)
-	case errors.Is(err.cause, errRelayWebSocketPath):
-		detail = "the address path ends in " + v2.WebSocketPath + ", which WindShare adds itself; remove it to use the relay base URL"
+	case endpoint:
+		detail = fmt.Sprintf("address %q ends in %s, which WindShare adds itself; remove it to use the relay base URL", copied.address, v2.WebSocketPath)
 	case errors.Is(err.cause, v2.ErrRelayEndpointWhitespace):
 		detail = "contains whitespace or invisible spacing; remove it from the address"
 	default:
