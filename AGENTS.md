@@ -55,6 +55,8 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 ├── .github/workflows/             CI, weekly suites, source/binary releases, and Cloudflare deployment
 ├── core/                         Network-free reusable package subtree
 │   ├── link/, urlhost/            Capability links and shared URL host normalization
+│   ├── networkendpoint/          Relay, STUN, and WebSocket endpoint normalization
+│   ├── nodedirectory/, serviceauthority/ Signed network directory and node descriptor verification
 │   ├── senderobject/, senderauth/ Sealed transport-neutral objects and sender-signature acceptance
 │   ├── catalog/                  Committed directory generations/pages, durable storage/recovery
 │   ├── content/                  File revisions, ranges, leases/capacity, keys, authenticated records
@@ -75,14 +77,17 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 ├── engine/                       Shared native application API, tasks, observations, aggregate budgets
 │   ├── observation/              Typed product observation contracts
 │   ├── output/, recovery/        Platform-neutral destination and recovery inventory ports
+│   ├── account/                  Official network account registration, login, and credentials
+│   ├── builtinnetwork/, networkconfig/, networkdirectory/ Built-in network wiring, trust config, and directory refresh
 │   ├── relayprofile/              Relay selection and saved credentials
 │   ├── relayconfig/, relaysetup/  Saved relay/frontend settings, discovery, device enrollment, and installation
 │   ├── turn/, turncache/          TURN settings/status contracts and relay-scoped capability cache
-│   └── internal/                 Share/receive/recovery workflows, native connectivity, and TURN runtime
+│   └── internal/                 Share/receive/recovery workflows, native connectivity, network, and TURN runtime
 ├── host/desktop/                 Go engine ownership, share/setup commands, authenticated loopback control
 ├── cmd/
 │   ├── wind/                     CLI requests, presentation, recovery interaction, and exit-code mapping
 │   ├── windshare-host/           Go shared library; C ABI for desktop host lifetime and result buffers
+│   ├── network-sign/             Offline root authorization and online directory signing CLI
 │   └── testprocessowner/         Test-only bounded process supervisor
 ├── connectivity/
 │   ├── v2signal/                 Canonical E2E signaling schema, codec, and validation
@@ -94,21 +99,29 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 │   ├── reachability/, icepolicy/ Gateway mapping leases and ICE endpoint policy
 │   ├── iceconfig/, turnpath/      ICE configuration and TURN delegation, renewal, recovery, and retirement
 │   ├── turncapacity/, turnroute/  Shared TURN admission and route planning
+│   ├── relayplan/                Bounded deterministic relay candidate selection
 │   └── senderrelay/, relayset/    Relay registration/recovery, independent lifecycles, and coordinated session admission
 ├── transport/
 │   ├── relayv2/                  Relay registration and multiplexed FrameChannel lifecycle
 │   └── webrtc/                   Pion FrameChannels and terminal lifecycle
 ├── relay/protocol/v2/            Go wire contracts, authenticated proofs, and opaque routes
-├── relay-rust/                   Production relay Cargo workspace
-│   ├── console/                  Cloudflare access console assets
+├── relay-rust/                   Production relay and network authority Cargo workspace
+│   ├── console/                  Shared node access console crate and embedded assets
 │   ├── crates/relay-access/      Service credential and device enrollment policy
 │   ├── crates/relay-core/        No-I/O kernel with strict sender-signature verification
 │   ├── crates/relay-native/      Native wsrelay host, SQLite, HTTP/WebSocket, and STUN
-│   └── crates/relay-cloudflare/  Worker/DO host, access console, credential management, and managed TURN
+│   ├── crates/relay-cloudflare/  Worker/DO host, access console, credential management, and managed TURN
+│   └── crates/network-authority/ Official account admission, tickets, usage accounting, and authority Worker/DO
+├── consoles/                     React/TypeScript management consoles built into Rust console-dist
+│   ├── relay/, network/          Node device console, network authority console, and public report form
+│   └── ui/, build/               Shared UI, themes, locales, and embedded asset build helpers
 ├── desktop/                      GPUI app with native sharing; receive/transfer/SuperShare require --preview
 │   ├── crates/windshare-desktop/  Application lifecycle, live share projection, views and previews
 │   ├── crates/windshare-host/     Native ABI ownership, reconnecting control client, task snapshots
-│   └── crates/windshare-ui/       UI components, themes, icons, typography, native input
+│   ├── crates/windshare-ui/       UI components, themes, icons, typography, native input
+│   ├── crates/windshare-activation/ Native share intents, instance election/IPC, and Windows Share acquisition
+│   ├── crates/windshare-shell/    Windows Explorer Share with WindShare COM command
+│   └── install/                  Windows package identity, installation, and uninstallation scripts
 ├── web/                          React/TypeScript landing portal and browser receiver
 │   ├── src/crypto/, protocol/    Suite-02 links/key hierarchy, sealed-object auth, canonical CBOR/text
 │   ├── src/contracts/, session/  Browser FrameChannel contract and ReceiverSessionRuntime
@@ -117,6 +130,8 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 │   ├── src/transport/            Relay/WebRTC channels and frame adapters
 │   ├── src/connectivity/         Signaling, path policy, lane adoption, and TURN delegation/renewal
 │   ├── src/receiver/             Reconnect and protocol-generation supervision
+│   ├── src/network/              Signed node directory and network authority verification/caching
+│   ├── src/document/             Portal/receiver document lifecycle and runtime ownership
 │   ├── src/application/          Browser receiver assembly, task commands, output-route coordination
 │   ├── src/transfer/             Intent/discovery, jobs, Direct ZIP coordination, backpressure/checkpoints/settlement
 │   ├── src/output/               Artifact authority, storage providers, Direct ZIP writing/journals, publication/recovery
@@ -127,14 +142,18 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 │   ├── test/                     Unit and browser component-contract tests
 │   └── e2e/                      Direct smoke and scheduled product scenarios
 ├── internal/                     Connection liveness, platform setup, process ownership, performance evidence, test support
-├── integration/                  Native relayv2 and v2peer integration scenarios
+├── integration/                  Native relayv2, v2peer, and Direct ZIP integration scenarios
 ├── e2e/                          Process-level Go end-to-end tests
 ├── spikes/                       R0 feasibility and isolated Pion↔Chromium evidence
 ├── testdata/                     Browser/output evidence, ICE policy/topology, and provider capabilities
 ├── third_party/pion/              Pinned ICE/WebRTC/TURN/SCTP sources, patches, and reproducibility manifest
-├── deploy/wsrelay/               Native relay container image
+├── deploy/
+│   ├── network/                  Signed network manifests, history, and Caddy templates
+│   └── wsrelay/                  Native relay container image
 └── scripts/
+    ├── build/                    Development network multi-target build script
     ├── ci/                       CI gates, validation tooling, and release certification
-    ├── deploy/                   Native relay and Cloudflare deployment, managed TURN provisioning
-    └── install/                  CLI installers and Windows network setup
+    ├── deploy/                   Native relay, network authority, and Cloudflare deployment
+    ├── install/                  CLI installers and Windows network setup
+    └── unicode15/                Pinned Unicode 15 Go table generator
 ```
