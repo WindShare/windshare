@@ -1,0 +1,25 @@
+# Render API_TLS_DIR. The authority origin remains on Cloudflare.
+server {
+    listen 80;
+    server_name api.ourworld.top;
+    return 308 https://$host$request_uri;
+}
+server {
+    listen 443 ssl;
+    server_name api.ourworld.top;
+    ssl_certificate ${API_TLS_DIR}/fullchain.pem;
+    ssl_certificate_key ${API_TLS_DIR}/privkey.pem;
+    location / {
+        proxy_pass https://authority.windshare.cc;
+        proxy_ssl_server_name on;
+        proxy_ssl_name authority.windshare.cc;
+        proxy_ssl_verify on;
+        proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
+        proxy_set_header Host authority.windshare.cc;
+        proxy_set_header X-Windshare-Source-Ip $remote_addr;
+        proxy_read_timeout 30s;
+        proxy_send_timeout 30s;
+        proxy_buffering off;
+        client_max_body_size 512k;
+    }
+}

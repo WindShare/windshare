@@ -134,13 +134,13 @@ func comparePending(left, right *pendingAdmission, now time.Time) int {
 }
 
 func (s *Set) allocateOneLocked(pending *pendingAdmission, now time.Time) {
+	pending.blocked, pending.probeAt, pending.capacityChanged = CapacityNetwork, time.Time{}, nil
 	remaining := MaxDemandAttempts - len(pending.attempted)
 	ordered, suspended := s.eligiblePendingLanesLocked(pending)
 	if remaining <= 0 || (len(ordered) == 0 && !suspended) {
 		pending.exhausted, pending.done = true, true
 		return
 	}
-	pending.blocked, pending.probeAt, pending.capacityChanged = CapacityNetwork, time.Time{}, nil
 	if pending.request.Ready != nil {
 		readiness := pending.request.Ready()
 		if readiness.Kind != CapacityReady {
@@ -206,6 +206,13 @@ func (s *Set) eligiblePendingLanesLocked(pending *pendingAdmission) ([]*laneStat
 		}
 		if s.contentSuspensions[state.identity.ID] != nil {
 			suspended = true
+			continue
+		}
+		if s.now().Before(state.capacityWaitUntil) {
+			suspended = true
+			if pending.probeAt.IsZero() || state.capacityWaitUntil.Before(pending.probeAt) {
+				pending.probeAt = state.capacityWaitUntil
+			}
 			continue
 		}
 		ordered = append(ordered, state)

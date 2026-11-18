@@ -1,0 +1,114 @@
+{
+  "blocks": {
+    "body": "eyJhY2NvdW50cyI6W10sImlzc3VlZF9hdCI6MTcyODAwLCJzaGFyZXMiOltdLCJ2ZXJzaW9uIjowfQaPl1efAbBh6OqUbZ1YOSBv3hYPWzB-KlybRlkRRb-CnbnftKmEaqF05q9AyeRaCm_JU515UI7zhDbf-9vsdAw",
+    "certificate": "hgFYIPpINBR_bmkMNpPv9hM2BGQDzYrioU8xs8QHNYVpI5VlAVggGX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWEaAAFRgBoAJ40AT813fzu3pG5SN0IlcnRwZl7GnVhXmb6VB7riK3SYUrHWHuaR7j0_g-iuLwfHlN85j-FK5QzfZj0XNFEUPuK5BQ"
+  },
+  "descriptor": {
+    "descriptor": "eyJhbm9ueW1vdXMiOnRydWUsImNhcGFjaXR5X2J5dGVzX3Blcl9zZWNvbmQiOjEwMDAwMDAsImNsYXNzZXMiOlsib3duZXIiLCJzdGFuZGFyZCIsImxvd2VzdCJdLCJleHBpcmVzX2F0IjoxNzMxMDAsImlzc3VlZF9hdCI6MTcyODAwLCJub2RlX2lkIjoiQXozM3ZIdVJ1Z2tUNXFXc3RHZlJEcnZqcDFMWExFLWIweld0dEU4X3A1byIsIm5vZGVfa2V5IjoiUlFpZ2VxbEJjSDgtc3R1VXlJbDZnTExCR1hSMnR0NGhPc0p6MzMyR3hQOCIsInJlZ2lvbiI6InRlc3QiLCJyZWxheV9hdmFpbGFibGUiOnRydWUsInJlbGF5X2VuZHBvaW50Ijoid3NzOi8vbm9kZS5leGFtcGxlL3YyL3dzIiwic2VydmljZXMiOnsicmVsYXkiOnRydWUsInN0dW4iOmZhbHNlfSwic3R1biI6W10sInZlcnNpb24iOjIsInpvbmUiOiJnbG9iYWwifQ",
+    "signature": "-B_B-zSjfYWHO93LM5a4iiDNwVZZgrGnwWH-m1ZCH-Yltd4d20sjAf0K0HrYBkJ5JLPIO1GsOIngPvPqJSTPDw",
+    "version": 2
+  },
+  "next_certificate": "hgFYIPpINBR_bmkMNpPv9hM2BGQDzYrioU8xs8QHNYVpI5VlAlggGX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWEaAAFRgBoAJ40AoG-JeaQCh8VO-6a60OXpoWSOtBLIO8PzbTzhX7yU_L7fwUAvjSoRuWJQeqFDKiJr_eqB7FLkUCIIPfTYuy9cBA",
+  "node_key": "RQigeqlBcH8-stuUyIl6gLLBGXR2tt4hOsJz332GxP8",
+  "noncanonical_ticket": "iRgBWCD6SDQUf25pDDaT7_YTNgRkA82K4qFPMbPEBzWFaSOVZQFQCwsLCwsLCwsLCwsLCwsLC1AMDAwMDAwMDAwMDAwMDAwMGgACowAaAANLwGhvZmZpY2lhbIQBAhoAAqQsGwAAAAKAAAAA1TPjbI_5ekPoYuqAVrd77wEhXF6LZA4kQtOzWNZDQZoq4vsLTCvEZFFU6C_lgI2dOsOXLubnnWlZkY2bmOH4Dw",
+  "now": 172800,
+  "refreshed": {
+    "account": [
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11
+    ],
+    "certificate": "hgFYIPpINBR_bmkMNpPv9hM2BGQDzYrioU8xs8QHNYVpI5VlAVggGX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWEaAAFRgBoAJ40AT813fzu3pG5SN0IlcnRwZl7GnVhXmb6VB7riK3SYUrHWHuaR7j0_g-iuLwfHlN85j-FK5QzfZj0XNFEUPuK5BQ",
+    "credential": [
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12
+    ],
+    "credential_secret": null,
+    "entitlement": {
+      "day": 2,
+      "remaining_bytes": 10737418240,
+      "valid_until": 173100,
+      "version": 2
+    },
+    "expires_at": 216000,
+    "ticket": "iQFYIPpINBR_bmkMNpPv9hM2BGQDzYrioU8xs8QHNYVpI5VlAVALCwsLCwsLCwsLCwsLCwsLUAwMDAwMDAwMDAwMDAwMDAwaAAKjABoAA0vAaG9mZmljaWFshAICGgACpCwbAAAAAoAAAADqRgKXIcdUE_ynA19cGHLDFY99LU7DJUtNBsQ0kvjL2OLnhn4-WX19jFUrdTPqSKDThCWmgC5rLjANrhRxYmsE",
+    "username": null
+  },
+  "root": "-kg0FH9uaQw2k-_2EzYEZAPNiuKhTzGzxAc1hWkjlWU",
+  "session": {
+    "account": [
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11
+    ],
+    "certificate": "hgFYIPpINBR_bmkMNpPv9hM2BGQDzYrioU8xs8QHNYVpI5VlAVggGX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWEaAAFRgBoAJ40AT813fzu3pG5SN0IlcnRwZl7GnVhXmb6VB7riK3SYUrHWHuaR7j0_g-iuLwfHlN85j-FK5QzfZj0XNFEUPuK5BQ",
+    "credential": [
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12
+    ],
+    "credential_secret": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo",
+    "entitlement": {
+      "day": 2,
+      "remaining_bytes": 10737418240,
+      "valid_until": 173100,
+      "version": 1
+    },
+    "expires_at": 216000,
+    "ticket": "iQFYIPpINBR_bmkMNpPv9hM2BGQDzYrioU8xs8QHNYVpI5VlAVALCwsLCwsLCwsLCwsLCwsLUAwMDAwMDAwMDAwMDAwMDAwaAAKjABoAA0vAaG9mZmljaWFshAECGgACpCwbAAAAAoAAAAAJsBuGStVry9vk51IeE-dR3cbuI6CVQ_nydhcS4WCdKkQxfSTTKOqiIbkRfaF-5RsiLWqs3qBRxO1dimuztU8C",
+    "username": null
+  }
+}

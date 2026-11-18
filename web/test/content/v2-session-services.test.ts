@@ -372,6 +372,7 @@ describe('v2 session block lane deadlines', () => {
     let cancellations = 0
     const session = {
       beginOperation: async () => operation,
+      classifyCapacityWait: (_laneId: number, cause: unknown) => cause,
       cancelOperation: async () => { cancellations += 1 },
     } as unknown as ReceiverSessionRuntime
     const lane = new SessionBlockLane(
@@ -511,6 +512,7 @@ describe('v2 session queued block responses', () => {
     const cancelOperation = vi.fn(async () => undefined)
     const session = {
       beginOperation: async () => operations.shift()!,
+      classifyCapacityWait: (_laneId: number, cause: unknown) => cause,
       cancelOperation,
     } as unknown as ReceiverSessionRuntime
     const lane = new SessionBlockLane(1, session, share, new Uint8Array(16).fill(9),

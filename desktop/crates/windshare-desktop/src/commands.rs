@@ -72,6 +72,8 @@ impl Desktop {
                 self.repeat_native_share(id, window, cx);
             }
             Action::ConfigureShare(id) => self.configure_share(id, window, cx),
+            Action::OpenAccount => self.open_account(window, cx),
+            Action::Account(action) => self.account_action(action, cx),
             Action::ConfigureNetwork => self.open_sharing_setup(None, window, cx),
             Action::ReturnToSharingSetup => self.return_to_sharing_setup(window, cx),
             Action::SaveSharingSetup(id) => self.save_sharing_setup(id, cx),

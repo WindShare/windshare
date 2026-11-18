@@ -1,9 +1,12 @@
 package eventproject
 
 import (
+	"errors"
 	url "net/url"
 	strconv "strconv"
 	strings "strings"
+
+	"github.com/windshare/windshare/core/framechannel"
 
 	relayset "github.com/windshare/windshare/connectivity/relayset"
 	senderrelay "github.com/windshare/windshare/connectivity/senderrelay"
@@ -83,6 +86,11 @@ func projectSenderRecovery(value share.RelayRecovery) (appobs.RelayRecovering, e
 		state = appobs.RelayRecoverySucceeded
 	case senderrelay.AttemptFailed:
 		state = appobs.RelayRecoveryFailed
+	case senderrelay.AttemptAuthorization:
+		state = appobs.RelayRecoveryWaiting
+		if attempt.Terminal {
+			state = appobs.RelayRecoveryFailed
+		}
 	case senderrelay.AttemptWaiting:
 		state = appobs.RelayRecoveryWaiting
 	default:
@@ -97,7 +105,7 @@ func projectSenderRecovery(value share.RelayRecovery) (appobs.RelayRecovering, e
 	}
 	instance, _ := appobs.NewSharingInstanceID(attempt.ShareInstance[:])
 	return appobs.NewRelayRecoveryObservation(appobs.WorkflowShare, origin, attempt.Number, state, failure,
-		appobs.RelayRecoveryDetails{ShareInstance: instance, Generation: attempt.Generation, Slow: attempt.Slow, Resume: attempt.Resume, Terminal: attempt.Terminal, NextDelay: attempt.NextDelay})
+		appobs.RelayRecoveryDetails{Authorization: attempt.Authorization, ShareInstance: instance, Generation: attempt.Generation, Slow: attempt.Slow, Resume: attempt.Resume, Terminal: attempt.Terminal, NextDelay: attempt.NextDelay})
 }
 
 func projectReceiverRecovery(value relayset.ReceiverRecoveryObservation) (appobs.RelayRecovering, bool, error) {
@@ -127,6 +135,9 @@ func projectReceiverRecovery(value relayset.ReceiverRecoveryObservation) (appobs
 		return appobs.RelayRecovering{}, false, nil
 	}
 	details := appobs.RelayRecoveryDetails{Generation: value.ConnectionGeneration, Slow: value.Phase == relayset.ReceiverRecoveryWaiting, Terminal: value.Phase == relayset.ReceiverRecoveryTerminal, NextDelay: value.Delay}
+	if _, waiting := errors.AsType[*framechannel.BandwidthWaitError](value.Err); waiting {
+		details.WaitReason = appobs.RelayWaitBandwidth
+	}
 	if value.ProtocolSessionID != ([16]byte{}) {
 		details.ProtocolSessionID, _ = appobs.NewProtocolSessionID(value.ProtocolSessionID[:])
 	}

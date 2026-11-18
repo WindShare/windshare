@@ -27,7 +27,7 @@ Make targets operate on the repository root and use the installed Go, Rust, Node
 | `make short-go` | Pinned ICE/TURN/SCTP state tests, then non-core and core short tests with race detection and coverage verdicts. |
 | `make race` | Short tests with race detection. |
 | `make coverage` | Short tests with coverage verdicts. |
-| `make vectors` | Shared protocol, signed network directory, TURN control, signaling, and CLI trace vectors. |
+| `make vectors` | Shared protocol, signed network directory/authority, TURN control, signaling, and CLI trace vectors. |
 | `make vectors-update` | Regenerates protocol vectors. |
 | `make rust` | Cargo fmt, Clippy, native tests, doctests, coverage, and wasm builds. |
 | `make desktop-check` | Desktop workspace: Cargo fmt, strict Clippy, non-UI tests (including native host ABI and artifact staging), and native build; requires Node.js, Go, a C compiler, and GPUI prerequisites. |
@@ -72,10 +72,10 @@ Coverage is gated on the core and non-core totals and on each package, with no p
 `make rust` runs:
 
 - `cargo fmt --all -- --check`;
-- Clippy over native targets with `-D warnings`, and over the Cloudflare adapter for `wasm32-unknown-unknown`;
+- Clippy over native targets with `-D warnings`, and over the Cloudflare relay and account authority for `wasm32-unknown-unknown`;
 - native tests with line-coverage verdicts for the workspace and each package;
 - doctests;
-- wasm builds of `windshare-relay-core` and `windshare-relay-cloudflare`.
+- wasm builds of `windshare-relay-core`, `windshare-relay-cloudflare` and `windshare-network-authority`.
 
 ## Ordinary GitHub CI
 

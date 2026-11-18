@@ -41,14 +41,15 @@ pub async fn serve(
     let epoch = node.epoch();
     anyhow::ensure!(node.available(), "relay temporarily unavailable");
     let socket = WebSocketStream::from_partially_read(
-        crate::node::Metered::new(upgrade.stream, node.clone(), epoch),
+        crate::node::Metered::new(upgrade.stream, node.clone(), epoch)
+            .with_usage(upgrade.admission.usage.clone()),
         upgrade.buffered,
         Role::Server,
         Some(config),
     )
     .await;
     let share = upgrade.share;
-    let handle = registry.attach(share)?;
+    let handle = registry.attach(share, upgrade.admission.priority())?;
     tracing::debug!(event = "socket_connected", ?share, ?connection);
     let (stop, stopping) = watch::channel(false);
     let running = handle.generation.admit(
@@ -60,7 +61,7 @@ pub async fn serve(
             stopping,
             handle.generation.clone(),
             upgrade.admission,
-            node.metrics.clone(),
+            node.clone(),
         ),
     )?;
     tokio::pin!(running);

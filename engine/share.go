@@ -27,7 +27,7 @@ type ShareRequest struct {
 	ChunkSize   uint32
 	Diagnostics diagnostics.Sink
 }
-type ShareRelayCandidate = relayprofile.Candidate
+type ShareRelayCandidate = relayprofile.Registration
 type ShareResult = share.Result
 type ShareReady struct {
 	Capability          link.Link
@@ -82,7 +82,7 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 		dependencies.ObserveAttempt = engine.network.Observer(control.Diagnostics)
 		admissions.Observe(func(value relayset.Admission) { control.Diagnostics.Emit(networkruntime.AdmissionRecord(value)) })
 		var stopDiscovery func()
-		dependencies.TURN, stopDiscovery = engine.turn.ForShare(ctx, execution.Relays)
+		dependencies.TURN, stopDiscovery = engine.turn.ForShare(ctx, request.RelayIntent.Candidates())
 		defer stopDiscovery()
 		dependencies.Control = control
 		execution.Diagnostics = control.Diagnostics

@@ -7,6 +7,7 @@ use tokio_tungstenite::tungstenite::Message;
 use windshare_relay_core::lifecycle::ConnectionRef;
 
 pub(super) struct Frame {
+    attribution: windshare_relay_access::Attribution,
     bytes: Vec<u8>,
     _slot: OwnedSemaphorePermit,
     _bytes: Option<OwnedSemaphorePermit>,
@@ -14,6 +15,13 @@ pub(super) struct Frame {
 }
 
 impl Frame {
+    pub(super) const fn attributed(
+        mut self,
+        attribution: windshare_relay_access::Attribution,
+    ) -> Self {
+        self.attribution = attribution;
+        self
+    }
     pub(super) const fn new(
         bytes: Vec<u8>,
         slot: OwnedSemaphorePermit,
@@ -22,6 +30,7 @@ impl Frame {
     ) -> Self {
         Self {
             bytes,
+            attribution: windshare_relay_access::Attribution::Anonymous,
             _slot: slot,
             _bytes: byte_charge,
             session,
@@ -30,16 +39,25 @@ impl Frame {
 }
 
 pub struct Writer {
+    usage: crate::node::usage::Meter,
     ordered: mpsc::Receiver<Frame>,
     probes: watch::Receiver<Option<Vec<u8>>>,
 }
 
 impl Writer {
-    pub(super) const fn new(
+    pub(crate) fn with_usage(mut self, usage: crate::node::usage::Meter) -> Self {
+        self.usage = usage;
+        self
+    }
+    pub(super) fn new(
         ordered: mpsc::Receiver<Frame>,
         probes: watch::Receiver<Option<Vec<u8>>>,
     ) -> Self {
-        Self { ordered, probes }
+        Self {
+            ordered,
+            probes,
+            usage: crate::node::usage::Meter::default(),
+        }
     }
 
     pub async fn run<S>(
@@ -77,7 +95,9 @@ impl Writer {
                     };
                     let start = Instant::now();
                     let bytes = frame.bytes.len() as u64;
+                    let scope = frame.session.map(|_| self.usage.enter(frame.attribution));
                     send(&mut sink, std::mem::take(&mut frame.bytes)).await?;
+                    drop(scope);
                     if let Some(session) = frame.session {
                         metrics.forwarded(session, bytes, start, Instant::now());
                     }

@@ -1,0 +1,10 @@
+# Import only on trusted mainland API ingress hosts after DNS-01 issuance.
+api.ourworld.top {
+    tls /etc/windshare-network/api-tls/fullchain.pem /etc/windshare-network/api-tls/privkey.pem
+    reverse_proxy https://authority.windshare.cc {
+        header_up Host authority.windshare.cc
+        # The Worker accepts this only from TRUSTED_PROXY_IPS, using Cloudflare's peer address.
+        header_up X-Windshare-Source-Ip {remote_host}
+    }
+    log
+}

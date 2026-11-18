@@ -11,12 +11,12 @@ import (
 )
 
 func (a *Application) snapshotLocked() Snapshot {
-	next := Snapshot{SessionID: a.sessionID, Revision: a.snapshotValue.Revision, Shares: make([]Share, 0, len(a.operations)), Setup: a.setup}
+	next := Snapshot{SessionID: a.sessionID, Revision: a.snapshotValue.Revision, Shares: make([]Share, 0, len(a.operations)), Setup: a.setup, Account: a.accountView}
 	for _, op := range a.operations {
 		next.Shares = append(next.Shares, projectShare(op))
 	}
 	slices.SortFunc(next.Shares, func(left, right Share) int { return cmp.Compare(left.OperationID, right.OperationID) })
-	if next.Revision != 0 && reflect.DeepEqual(next.Shares, a.snapshotValue.Shares) && reflect.DeepEqual(next.Setup, a.snapshotValue.Setup) {
+	if next.Revision != 0 && reflect.DeepEqual(next.Shares, a.snapshotValue.Shares) && reflect.DeepEqual(next.Setup, a.snapshotValue.Setup) && reflect.DeepEqual(next.Account, a.snapshotValue.Account) {
 		return a.snapshotValue
 	}
 	next.Revision++

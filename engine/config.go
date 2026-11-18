@@ -26,7 +26,7 @@ type SharePeers = share.Peers
 // task's ownership.
 type ShareDependencies struct {
 	Prepare     func(context.Context, liveshare.SenderConfig) (PreparedShare, error)
-	Relays      func(context.Context, []relayprofile.Candidate) (ShareRelays, error)
+	Relays      func(context.Context, []relayprofile.Registration) (ShareRelays, error)
 	Peers       func() (SharePeers, error)
 	PollNetwork func(context.Context, func())
 }

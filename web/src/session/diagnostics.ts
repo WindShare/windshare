@@ -150,7 +150,7 @@ export type ConnectionRecoveryTraceEvent = Readonly<{
   phase: 'initial' | 'fast' | 'waiting'
   transition: 'attempt_started' | 'attempt_failed' | 'waiting' | 'connected' | 'terminal' | 'retry_requested'
   delayMilliseconds?: number
-  waitReason?: 'backoff' | 'capacity' | 'server'
+  waitReason?: 'backoff' | 'capacity' | 'server' | 'bandwidth' | 'authorization'
   failure?: unknown
 }>
 

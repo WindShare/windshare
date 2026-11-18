@@ -550,20 +550,22 @@ export class SessionBlockLane implements BlockLane {
         )
       }
     } catch (error) {
-      this.#failBlockReceive(operation, assembler,
+      return await this.#failBlockReceive(operation, assembler,
         error instanceof FragmentInactivityError ? wait.inactivityError({ cause: error }) : error)
     } finally {
       wait.close()
     }
   }
 
-  #failBlockReceive(
+  async #failBlockReceive(
     operation: SessionOperation,
     assembler: FragmentAssembler,
     error: unknown,
-  ): never {
+  ): Promise<never> {
     assembler.cancel()
-    this.#session.cancelOperation(
+    const failure = error instanceof BlockInactivityTimeoutError
+      ? this.#session.classifyCapacityWait(this.id, error) : error
+    await this.#session.cancelOperation(
       operation,
       {
         protocolReason: error instanceof BlockInactivityTimeoutError
@@ -588,7 +590,7 @@ export class SessionBlockLane implements BlockLane {
         { cause: error },
       )
     }
-    throw error
+    throw failure
   }
 }
 

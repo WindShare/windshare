@@ -16,7 +16,12 @@ struct DestructionProbe {
 
 impl Drop for DestructionProbe {
     fn drop(&mut self) {
-        let attempt = self.capacity.accept(SOURCE, connection(2), UnixMillis(0));
+        let attempt = self.capacity.accept(
+            SOURCE,
+            connection(2),
+            UnixMillis(0),
+            crate::connection::AdmissionPriority::Authenticated,
+        );
         if self.business {
             assert!(
                 attempt
@@ -45,7 +50,12 @@ fn unpolled_transport_retains_both_budgets_through_its_destructor() {
         )
         .unwrap();
         let admission = capacity
-            .accept(SOURCE, connection(1), UnixMillis(0))
+            .accept(
+                SOURCE,
+                connection(1),
+                UnixMillis(0),
+                crate::connection::AdmissionPriority::Authenticated,
+            )
             .unwrap();
         if business {
             admission
@@ -61,7 +71,12 @@ fn unpolled_transport_retains_both_budgets_through_its_destructor() {
         );
         drop(socket);
         let replacement = capacity
-            .accept(SOURCE, connection(3), UnixMillis(0))
+            .accept(
+                SOURCE,
+                connection(3),
+                UnixMillis(0),
+                crate::connection::AdmissionPriority::Authenticated,
+            )
             .unwrap();
         replacement
             .inspect(&Fixture::new().bytes("registerInitB64"))

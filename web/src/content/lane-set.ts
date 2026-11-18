@@ -1,3 +1,4 @@
+import { BandwidthWaitError } from '../contracts/capacity'
 import { ContentAttemptLifetimes } from './scheduling/attempt-lifetimes'
 import { BlockAttempts, type BlockRetryDecision } from './scheduling/attempts'
 import { LanePerformance } from './scheduling/performance'
@@ -114,6 +115,11 @@ interface PendingLane {
 }
 
 export type RemainingWorkObservation = () => { bytes: number; known: boolean }
+
+function attemptOutcome(signal: AbortSignal): SamplingOutcome {
+  if (signal.reason instanceof ContentRaceWon) return 'superseded'
+  return signal.aborted ? 'cancelled' : 'failed'
+}
 
 export class LaneSet {
   readonly #remaining = new Map<RemainingWorkObservation, number>()
@@ -348,7 +354,7 @@ export class LaneSet {
         return winner.record
       } catch (error) {
         if (signal.aborted) throw signal.reason ?? error
-        failures.push(...retryableLaneFailures(error))
+        failures.push(...retryableLaneFailures(error).filter(failure => !(failure instanceof BandwidthWaitError)))
       }
     }
   }
@@ -446,9 +452,12 @@ export class LaneSet {
       state.failed = false
       return { state, observation, record }
     } catch (error) {
-      outcome = signal.aborted ? 'cancelled' : 'failed'
-      if (signal.reason instanceof ContentRaceWon) outcome = 'superseded'
-      if (!signal.aborted && isRetryableLaneFailure(error)) {
+      outcome = attemptOutcome(signal)
+      if (!signal.aborted && error instanceof BandwidthWaitError) {
+        attempts.waiting(state)
+        this.#admissions.deferCapacity(state, error.retryAfterMilliseconds)
+        outcome = 'cancelled'
+      } else if (!signal.aborted && isRetryableLaneFailure(error)) {
         state.failed = true
         attempts.failed(state)
       }
@@ -592,6 +601,6 @@ function retryableLaneFailures(error: unknown): readonly unknown[] {
 }
 
 function isRetryableLaneFailure(error: unknown): boolean {
-  return (error instanceof SessionRuntimeError && error.scope === 'lane') ||
+  return error instanceof BandwidthWaitError || (error instanceof SessionRuntimeError && error.scope === 'lane') ||
     (error instanceof DOMException && error.name === 'AbortError')
 }

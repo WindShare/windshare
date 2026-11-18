@@ -6,8 +6,7 @@ Wants=network-online.target
 [Service]
 User=windshare-network
 Group=windshare-network
-EnvironmentFile=/etc/windshare-network/node.env
-ExecStart=/opt/windshare-network/current/wsrelay --listen 127.0.0.1:8484 --database /var/lib/windshare-network/relay.sqlite --node-config /etc/windshare-network/node.json --public-endpoint ${PUBLIC_ENDPOINT} --public-origins --trusted-proxies 127.0.0.1 --source-ip-header x-windshare-source-ip --stun-udp ${STUN_LISTEN}
+ExecStart=/opt/windshare-network/current/wsrelay --config /etc/windshare-network/node.json
 Restart=on-failure
 RestartSec=3
 StateDirectory=windshare-network

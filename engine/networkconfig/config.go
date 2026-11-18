@@ -1,9 +1,13 @@
 // Package networkconfig describes application-injected network and frontend trust.
 package networkconfig
 
-import "github.com/windshare/windshare/engine/networkdirectory"
+import (
+	"github.com/windshare/windshare/engine/account"
+	"github.com/windshare/windshare/engine/networkdirectory"
+)
 
 type Config struct {
+	Authority                *account.Config
 	Directory                networkdirectory.Config
 	LinkHost                 string
 	BackupEntry              string

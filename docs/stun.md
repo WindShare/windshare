@@ -24,21 +24,20 @@ The Rust native host is shipped as `wsrelay`. Build it using
 [installation](installation.md#build-from-source) or use a release binary:
 
 ```sh
-wsrelay --database relay.sqlite --listen 0.0.0.0:8484 \
-  --public-endpoint ws://relay.example.com:8484/v2/ws \
-  --stun-udp '0.0.0.0:3478,[::]:3478' --stun-admin 127.0.0.1:8081
+wsrelay --config node.json
 ```
 
-The STUN flags show their defaults. A wildcard `--listen` requires the exact
-`--public-endpoint` clients dial. IPv6 sockets are IPv6-only, so both families can
-bind the same port. STUN listen addresses must be numeric IP:port pairs; at most
-16 distinct listeners are accepted. Set `--stun-udp ""` to disable STUN (including
-admin), or `--stun-admin ""` to disable only admin. Listener/admin bind and runtime
-failures are isolated from relay traffic; invalid CLI configuration fails startup.
+The [node configuration](../relay-rust/crates/relay-native/README.md) has a `stun`
+object. `udp_addresses` defaults to `["0.0.0.0:3478","[::]:3478"]` and
+`admin_address` to `"127.0.0.1:8081"`. IPv6 sockets are IPv6-only, so both families
+can bind the same port. Numeric IP:port pairs are required; at most 16 distinct
+listeners are accepted. An empty `udp_addresses` list disables STUN;
+`admin_address: null` disables only admin. Listener/runtime failures remain
+isolated from relay traffic; invalid configuration fails startup.
 
 Each listener allows 1,000 requests/second, 20/source IP/second and 4,096 tracked
-IPs per one-second window. Override with `--stun-requests-per-second`,
-`--stun-source-requests-per-second` and `--stun-max-sources`; values must be positive.
+IPs per one-second window. Override `stun.limits.requests_per_second`,
+`source_requests_per_second` and `max_sources`; values must be positive.
 Malformed datagrams spend the same budget. Source ports do not create new quotas,
 and a full source table refuses new IPs until the next window.
 

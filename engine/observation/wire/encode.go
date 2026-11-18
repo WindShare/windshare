@@ -193,7 +193,7 @@ func (enc *encoder) encodeRelayRecovering(event appobs.RelayRecovering) error {
 	}
 	var correlation *CorrelationV1
 	if details, ok := event.Details(); ok {
-		payload.Details = &RelayRecoveryDetails{Generation: decimal(details.Generation), Slow: details.Slow, Resume: details.Resume, Terminal: details.Terminal, NextDelayMS: signedDecimal(details.NextDelay.Milliseconds())}
+		payload.Details = &RelayRecoveryDetails{WaitReason: details.WaitReason.Name(), Authorization: details.Authorization.Name(), Generation: decimal(details.Generation), Slow: details.Slow, Resume: details.Resume, Terminal: details.Terminal, NextDelayMS: signedDecimal(details.NextDelay.Milliseconds())}
 		if details.ShareInstance.Valid() {
 			identity := EncodeIdentity(details.ShareInstance.Bytes())
 			payload.Details.ShareInstance = &identity

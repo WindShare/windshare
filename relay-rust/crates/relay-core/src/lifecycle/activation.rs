@@ -54,7 +54,7 @@ impl<O: Observer> ShareLifecycle<O> {
     pub(super) const fn activate(
         &mut self,
         id: OperationId,
-        registration: PublishedRegistration,
+        registration: &PublishedRegistration,
         deadline: UnixMillis,
         replaced: Option<ConnectionRef>,
     ) -> OwnershipCommit {

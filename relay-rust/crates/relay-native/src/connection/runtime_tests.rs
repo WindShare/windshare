@@ -95,7 +95,7 @@ impl Harness {
             stopping,
             generation.clone(),
             crate::test_support::socket_admission(),
-            crate::node::Metrics::default(),
+            crate::node::Runtime::default(),
         )));
         let Event::Connected(_, port) = events.recv().await.unwrap() else {
             panic!("connection admission")
@@ -110,7 +110,7 @@ impl Harness {
                 dropped,
                 _directory: directory,
             },
-            port,
+            *port,
         )
     }
 

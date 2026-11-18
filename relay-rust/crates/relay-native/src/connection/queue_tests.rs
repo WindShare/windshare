@@ -4,6 +4,7 @@ use crate::{
     environment::Trace,
     test_support::{Fixture, connection},
 };
+use std::collections::VecDeque;
 use windshare_relay_core::{
     flow::Counts,
     sessions::{OpaqueHeader, SessionKey},
@@ -161,10 +162,34 @@ impl Scenario {
 }
 
 #[tokio::test]
+async fn pressure_is_bounded_directional_and_clears_after_submission() {
+    let mut scenario = Scenario::new();
+    let (mut outbox, _writer, _) = channel(connection(3), crate::node::Runtime::default());
+    scenario.queue(&mut outbox, 1);
+    let now = tokio::time::Instant::now();
+    assert_eq!(outbox.capacity_updates(now), vec![]);
+    let later = now + std::time::Duration::from_secs(2);
+    assert_eq!(
+        outbox.capacity_updates(later),
+        vec![(scenario.flow, 15_000)]
+    );
+    assert_eq!(outbox.capacity_updates(later), vec![]);
+    assert_eq!(
+        outbox.capacity_updates(later + std::time::Duration::from_secs(5)),
+        vec![(scenario.flow, 15_000)]
+    );
+    assert!(scenario.submit(&mut outbox).is_some());
+    assert_eq!(
+        outbox.capacity_updates(later + std::time::Duration::from_secs(6)),
+        vec![(scenario.flow, 0)]
+    );
+}
+
+#[tokio::test]
 async fn submission_is_fifo_bounded_and_old_receipts_cannot_cross_stop() {
     let mut scenario = Scenario::new();
     scenario.grant(3);
-    let (mut outbox, mut writer, _) = channel(connection(3));
+    let (mut outbox, mut writer, _) = channel(connection(3), crate::node::Runtime::default());
     for _ in 0..4 {
         scenario.queue(&mut outbox, 1);
     }
@@ -235,7 +260,7 @@ async fn submission_is_fifo_bounded_and_old_receipts_cannot_cross_stop() {
 fn byte_limit_rejects_before_growing_the_pending_queue() {
     let mut scenario = Scenario::new();
     scenario.grant(8);
-    let (mut outbox, _writer, _) = channel(connection(3));
+    let (mut outbox, _writer, _) = channel(connection(3), crate::node::Runtime::default());
     outbox.pending_limit = Counts::new(
         DATA_QUEUE_FRAMES as u64,
         8 * u64::from(OpaqueHeader::MAX_ENCODED_BYTES),
@@ -259,10 +284,10 @@ fn byte_limit_rejects_before_growing_the_pending_queue() {
 #[test]
 fn queue_rejects_mismatched_payload_and_destination() {
     let mut scenario = Scenario::new();
-    let (mut wrong, _writer, _) = channel(connection(4));
+    let (mut wrong, _writer, _) = channel(connection(4), crate::node::Runtime::default());
     let (receipt, bytes) = scenario.receive(1);
     assert!(wrong.queue(receipt, bytes).is_err());
-    let (mut outbox, _writer, _) = channel(connection(3));
+    let (mut outbox, _writer, _) = channel(connection(3), crate::node::Runtime::default());
     scenario.grant(1);
     let (receipt, _) = scenario.receive(1);
     assert!(outbox.queue(receipt, vec![1]).is_err());
@@ -270,7 +295,7 @@ fn queue_rejects_mismatched_payload_and_destination() {
 
 #[tokio::test]
 async fn control_capacity_includes_in_flight_and_probe_coalesces_separately() {
-    let (outbox, mut writer, _) = channel(connection(3));
+    let (outbox, mut writer, _) = channel(connection(3), crate::node::Runtime::default());
     for _ in 0..CONTROL_QUEUE_FRAMES {
         outbox.control(vec![1]).unwrap();
     }
@@ -287,7 +312,7 @@ async fn control_capacity_includes_in_flight_and_probe_coalesces_separately() {
 fn frame_limit_is_independent_of_byte_capacity() {
     let mut scenario = Scenario::new();
     scenario.grant(2);
-    let (mut outbox, _writer, _) = channel(connection(3));
+    let (mut outbox, _writer, _) = channel(connection(3), crate::node::Runtime::default());
     outbox.pending_limit.frames = 2;
     scenario.queue(&mut outbox, 1);
     scenario.queue(&mut outbox, 1);
@@ -300,7 +325,7 @@ fn frame_limit_is_independent_of_byte_capacity() {
 #[test]
 fn byte_reservation_failure_does_not_consume_a_frame_slot_or_commit() {
     let mut scenario = Scenario::new();
-    let (mut outbox, _writer, _) = channel(connection(3));
+    let (mut outbox, _writer, _) = channel(connection(3), crate::node::Runtime::default());
     scenario.queue(&mut outbox, 1);
     let held = Arc::clone(&outbox.data_bytes)
         .try_acquire_many_owned(u32::try_from(SUBMITTED_DATA_BYTES - 20).unwrap())

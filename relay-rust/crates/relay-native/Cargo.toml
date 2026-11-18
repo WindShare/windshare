@@ -12,6 +12,8 @@ path = "src/main.rs"
 
 [dependencies]
 windshare-relay-core = { path = "../relay-core" }
+windshare-relay-access = { path = "../relay-access" }
+ed25519-dalek = { version = "3.0.0", default-features = false, features = ["alloc"] }
 anyhow = "1"
 base64 = "0.23.1"
 crc32fast = "1"
@@ -21,6 +23,7 @@ http-body-util = "0.1"
 hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 sha2 = "0.11.1"
 socket2 = "0.6"
 tokio = { version = "1.53.3", features = ["macros", "rt-multi-thread", "net", "sync", "time", "signal", "io-util"] }

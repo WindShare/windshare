@@ -126,9 +126,9 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 	// share CI resources. This watchdog bounds hangs, not recovery latency.
 	ctx, cancel := context.WithTimeout(t.Context(), recoveryIntegrationTimeout)
 	defer cancel()
-	candidates := make([]engine.ShareRelayCandidate, 0, len(relayURLs))
+	candidates := make([]relayprofile.Candidate, 0, len(relayURLs))
 	for _, address := range relayURLs {
-		candidates = append(candidates, engine.ShareRelayCandidate{PublicURL: address})
+		candidates = append(candidates, relayprofile.Candidate{PublicURL: address})
 	}
 	sender, err := application.StartShare(ctx, engine.ShareRequest{Source: liveshare.FileSourceFactoryFunc(func(ctx context.Context, source liveshare.FileSourceContext) (liveshare.FileSource, error) {
 		return osfs.NewSelectedFileSource(ctx, osfs.SelectedCatalogSourceConfig{Paths: []string{filename}, SyntheticRoot: source.SyntheticRoot, Identities: osfs.CatalogIdentitySourceFunc(source.NewIdentity)})

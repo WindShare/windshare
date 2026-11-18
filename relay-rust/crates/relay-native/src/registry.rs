@@ -53,7 +53,7 @@ impl Handle {
 }
 
 pub struct Registry {
-    metrics: crate::node::Metrics,
+    node: crate::node::Runtime,
     actors: Mutex<BTreeMap<ShareId, Arc<Handle>>>,
     store: Database,
     endpoint: Endpoint,
@@ -61,7 +61,11 @@ pub struct Registry {
 }
 
 impl Registry {
-    pub fn attach(&self, share: ShareId) -> Result<Arc<Handle>> {
+    pub fn attach(
+        &self,
+        share: ShareId,
+        priority: crate::connection::AdmissionPriority,
+    ) -> Result<Arc<Handle>> {
         let mut actors = self
             .actors
             .lock()
@@ -89,10 +93,8 @@ impl Registry {
             }
             true
         });
-        ensure!(
-            actors.len() < MAX_RESIDENT_SHARES,
-            "resident share capacity exhausted"
-        );
+        let limit = self.node.access.share_limit(priority);
+        ensure!(actors.len() < limit, "resident share capacity exhausted");
         let identity = Identity {
             relay: self.endpoint.identity,
             share,
@@ -111,7 +113,7 @@ impl Registry {
             activity,
             generation.clone(),
             recovery,
-            self.metrics.clone(),
+            self.node.clone(),
         )));
         let task = generation.supervise(task);
         let handle = Arc::new(Handle {
@@ -167,7 +169,7 @@ impl Server {
         let records = store.recoverable_records(MAX_RESIDENT_SHARES)?;
         let node = crate::node::Runtime::default();
         let registry = Arc::new(Registry {
-            metrics: node.metrics.clone(),
+            node: node.clone(),
             actors: Mutex::new(BTreeMap::new()),
             store,
             endpoint,
@@ -177,7 +179,7 @@ impl Server {
         // Permanent STOP facts stay on disk without retaining an idle actor each.
         for record in records {
             if !matches!(record, Record::Stopped(_)) {
-                registry.attach(record.share())?;
+                registry.attach(record.share(), crate::connection::AdmissionPriority::Owner)?;
             }
         }
         Ok(Self {
@@ -237,10 +239,23 @@ impl Server {
         tokio::pin!(shutdown);
         let maintenance = self.node.maintain(self.settings_path);
         tokio::pin!(maintenance);
+        let scheduling = self.node.governor.run();
+        tokio::pin!(scheduling);
+        let reporter = self.node.reporter()?;
+        let reporting = async {
+            if let Some(reporter) = &reporter {
+                reporter.run().await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        };
+        tokio::pin!(reporting);
         let result = loop {
             tokio::select! {
                 () = &mut shutdown => break Ok(()),
                 () = &mut maintenance => unreachable!("node maintenance runs until server shutdown"),
+                () = &mut scheduling => unreachable!("node scheduler runs until server shutdown"),
+                () = &mut reporting => unreachable!("authority reporting runs until server shutdown"),
                 result = tasks.join_next(), if !tasks.is_empty() => {
                     if let Some(Err(error)) = result {
                         tracing::error!(event = "socket_task_failed", %error);
@@ -280,6 +295,9 @@ impl Server {
         stop_connections.send_replace(true);
         while tasks.join_next().await.is_some() {}
         self.registry.shutdown().await?;
+        if let Some(reporter) = &reporter {
+            reporter.shutdown().await?;
+        }
         result
     }
 }

@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"strings"
 
+	"github.com/windshare/windshare/cmd/wind/internal/accountcommand"
 	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
 	"github.com/windshare/windshare/cmd/wind/internal/configcommand"
 	"github.com/windshare/windshare/cmd/wind/internal/networkcommand"
@@ -60,6 +61,11 @@ const usageText = `Usage:
       Discover relay access and approve this device in the browser. Onboard selects only that private relay.
   ` + commandmeta.Name + ` relay cancel <url>
       Cancel a pending enrollment.
+
+  ` + commandmeta.Name + ` account status [--json] | retry
+  ` + commandmeta.Name + ` account login <username> | password <username> [--password-stdin]
+  ` + commandmeta.Name + ` account email <address> | verify <code> | revoke <credential>
+      Manage the account shared with the desktop app. Login applies to new shares.
 
   ` + commandmeta.Name + ` config import <file|-> [--front-url <url>] [-v|--verbose]
       Validate and replace sharing defaults. --front-url saves the website address; '-' reads JSON from stdin.
@@ -184,6 +190,12 @@ func (a *App) Run(ctx context.Context, args []string) (code int) {
 		return ExitUsage
 	}
 	switch args[0] {
+	case "account":
+		runner := accountcommand.Runner{Input: a.Stdin, Output: a.stderrLines(), JSONOutput: a.Stdout}
+		if service := a.application.Accounts(); service != nil {
+			runner.Service = service
+		}
+		return runner.Run(ctx, args[1:])
 	case "relay":
 		return a.runRelay(ctx, args[1:])
 	case "share":

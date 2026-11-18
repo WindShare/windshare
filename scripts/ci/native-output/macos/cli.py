@@ -115,10 +115,14 @@ def relay_ready(path):
 def verify_downloads(processes, wind, relay_binary, root, evidence):
     with (evidence / "cli-filesystem.txt").open("w") as environment:
         subprocess.run(["df", str(root)], stdout=environment, check=True)
-    relay, ready = processes.start("relay", [
-        relay_binary, "--listen", "127.0.0.1:0", "--database", str(root / "relay.sqlite"),
-        "--stun-udp", "127.0.0.1:0", "--stun-admin", "127.0.0.1:0",
-    ])
+    configuration = root / "node.json"
+    configuration.write_text(json.dumps({
+        "listen": "127.0.0.1:0", "database": str(root / "relay.sqlite"),
+        "identity_file": str(root / "identity.json"),
+        "stun": {"udp_addresses": ["127.0.0.1:0"], "admin_address": "127.0.0.1:0"},
+        "node": {"services": {"relay": True, "stun": True}, "relay_budget": None},
+    }))
+    relay, ready = processes.start("relay", [relay_binary, "--config", str(configuration)])
     endpoint = await_value(relay, lambda: relay_ready(ready), "relay readiness")
 
     source = root / "single.bin"

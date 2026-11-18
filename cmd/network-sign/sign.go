@@ -20,6 +20,7 @@ type releaseManifest struct {
 	Mirrors                  []string        `json:"mirrors"`
 	Roots                    []publicKey     `json:"roots"`
 	Snapshot                 json.RawMessage `json:"snapshot"`
+	Authority                json.RawMessage `json:"authority,omitempty"`
 	GlobalPairCoversMainland bool            `json:"global_pair_covers_mainland"`
 }
 
@@ -94,11 +95,11 @@ func validateHistory(directory string, next nodedirectory.Snapshot, manifest rel
 	var highest nodedirectory.Cursor
 	aliases := map[string]string{}
 	accept := func(data []byte) error {
-		prior, err := nodedirectory.Verify(data, manifest.Network, roots)
+		prior, err := nodedirectory.VerifyHistory(data, manifest.Network, roots)
 		if err != nil {
 			return err
 		}
-		aliases, err = nodedirectory.RetainAliases(aliases, prior)
+		aliases, err = prior.RetainAliases(aliases)
 		if err != nil {
 			return err
 		}

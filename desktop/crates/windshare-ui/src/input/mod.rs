@@ -1,5 +1,6 @@
 mod editing;
 mod paint;
+mod purpose;
 
 use crate::{INPUT_FONT_SIZE, INPUT_LINE_HEIGHT, Theme, Tone};
 use gpui::{
@@ -21,6 +22,7 @@ pub enum InputEvent {
 pub struct Input {
     focus: FocusHandle,
     value: String,
+    purpose: purpose::Purpose,
     label: SharedString,
     placeholder: SharedString,
     accent: Option<Tone>,
@@ -45,6 +47,7 @@ impl Input {
         Self {
             focus: cx.focus_handle(),
             value: String::new(),
+            purpose: purpose::Purpose::Text,
             // The accessible name remains available when the field needs no hint.
             label: label.into(),
             placeholder: SharedString::default(),
@@ -153,9 +156,8 @@ impl Input {
     }
     fn index_at(&self, position: Point<Pixels>) -> usize {
         match (&self.layout, self.bounds) {
-            (Some(line), Some(bounds)) if !self.value.is_empty() => line
-                .closest_index_for_x(position.x - bounds.left() + self.scroll)
-                .min(self.value.len()),
+            (Some(line), Some(bounds)) if !self.value.is_empty() => self
+                .value_offset(line.closest_index_for_x(position.x - bounds.left() + self.scroll)),
             _ => 0,
         }
     }
@@ -170,7 +172,7 @@ impl Input {
                     self.cursor = self.value.len();
                 }
                 "c" | "x" => {
-                    if !range.is_empty() {
+                    if !range.is_empty() && self.purpose == purpose::Purpose::Text {
                         cx.write_to_clipboard(ClipboardItem::new_string(
                             self.value[range.clone()].into(),
                         ));
@@ -236,7 +238,7 @@ impl Render for Input {
             .role(Role::TextInput)
             .aria_label(self.label.clone())
             .aria_placeholder(self.placeholder.clone())
-            .aria_value(self.value.clone())
+            .aria_value(self.display_value())
             .w_full()
             .min_w_0()
             .h(px(52.))

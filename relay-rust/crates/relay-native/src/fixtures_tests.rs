@@ -180,6 +180,7 @@ pub fn socket_admission() -> std::sync::Arc<crate::connection::Admission> {
         "127.0.0.1".parse().unwrap(),
         connection(1),
         windshare_relay_core::clock::UnixMillis(0),
+        crate::connection::AdmissionPriority::Authenticated,
     )
     .unwrap()
 }

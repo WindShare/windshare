@@ -5,7 +5,7 @@ use std::{
     collections::BTreeMap,
     fmt,
     net::IpAddr,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
 };
 use windshare_relay_core::{
     clock::UnixMillis,
@@ -13,6 +13,26 @@ use windshare_relay_core::{
     lifecycle::ConnectionRef,
     share::{AttemptLimiter, AttemptRate},
 };
+
+const OWNER_CAPACITY_DIVISOR: usize = 8;
+const AUTHENTICATED_CAPACITY_DIVISOR: usize = 8;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AdmissionPriority {
+    Anonymous,
+    Authenticated,
+    Owner,
+}
+
+const fn admission_limit(total: usize, priority: AdmissionPriority) -> usize {
+    match priority {
+        AdmissionPriority::Owner => total,
+        AdmissionPriority::Authenticated => total - total / OWNER_CAPACITY_DIVISOR,
+        AdmissionPriority::Anonymous => {
+            total - total / OWNER_CAPACITY_DIVISOR - total / AUTHENTICATED_CAPACITY_DIVISOR
+        }
+    }
+}
 
 pub struct Capacity {
     limits: ConnectionLimits,
@@ -61,10 +81,13 @@ impl fmt::Display for Refusal {
 impl std::error::Error for Refusal {}
 
 pub struct Admission {
+    pub(crate) usage: crate::node::usage::Meter,
+    priority: AdmissionPriority,
     capacity: Arc<Capacity>,
     source: IpAddr,
     connection: ConnectionRef,
     slot: Mutex<Slot>,
+    bearer: OnceLock<String>,
 }
 
 impl Capacity {
@@ -90,19 +113,23 @@ impl Capacity {
         source: IpAddr,
         connection: ConnectionRef,
         now: UnixMillis,
+        priority: AdmissionPriority,
     ) -> Result<Arc<Admission>, Refusal> {
         let source = source.to_canonical();
         let mut state = self.state.lock().expect("admission lock");
-        state.accept(self.limits, source, now).inspect_err(|reason| {
+        state.accept(self.limits, source, now, priority).inspect_err(|reason| {
             tracing::debug!(event = "connection_admission_refused", ?connection, %source, %reason);
         })?;
         drop(state);
         tracing::debug!(event = "control_connection_admitted", ?connection, %source);
         Ok(Arc::new(Admission {
+            usage: crate::node::usage::Meter::default(),
+            priority,
             capacity: Arc::clone(self),
             source,
             connection,
             slot: Mutex::new(Slot::Control),
+            bearer: OnceLock::new(),
         }))
     }
 }
@@ -113,8 +140,9 @@ impl State {
         limits: ConnectionLimits,
         source: IpAddr,
         now: UnixMillis,
+        priority: AdmissionPriority,
     ) -> Result<(), Refusal> {
-        if self.total.controls >= limits.controls {
+        if self.total.controls >= admission_limit(limits.controls, priority) {
             return Err(Refusal::GlobalControl);
         }
         if self
@@ -123,7 +151,7 @@ impl State {
             .copied()
             .unwrap_or_default()
             .controls
-            >= limits.controls_per_source
+            >= admission_limit(limits.controls_per_source, priority)
         {
             return Err(Refusal::SourceControl);
         }
@@ -135,12 +163,17 @@ impl State {
         Ok(())
     }
 
-    fn promote(&mut self, limits: ConnectionLimits, source: IpAddr) -> Result<(), Refusal> {
-        if self.total.business >= limits.business {
+    fn promote(
+        &mut self,
+        limits: ConnectionLimits,
+        source: IpAddr,
+        priority: AdmissionPriority,
+    ) -> Result<(), Refusal> {
+        if self.total.business >= admission_limit(limits.business, priority) {
             return Err(Refusal::GlobalBusiness);
         }
         let usage = self.sources.get_mut(&source).expect("admitted source");
-        if usage.business >= limits.business_per_source {
+        if usage.business >= admission_limit(limits.business_per_source, priority) {
             return Err(Refusal::SourceBusiness);
         }
         self.total.business += 1;
@@ -169,6 +202,20 @@ impl State {
 }
 
 impl Admission {
+    pub const fn priority(&self) -> AdmissionPriority {
+        self.priority
+    }
+
+    pub fn set_bearer(&self, bearer: String) {
+        let _ = self.bearer.set(bearer);
+    }
+    pub fn bearer(&self) -> Option<&str> {
+        self.bearer.get().map(String::as_str)
+    }
+    pub const fn source(&self) -> IpAddr {
+        self.source
+    }
+
     pub fn inspect(&self, frame: &[u8]) -> Result<(), Refusal> {
         // Parsing here reserves resources only. The kernel remains the sole
         // authority for authentication, phase ordering and per-share admission.
@@ -183,7 +230,7 @@ impl Admission {
             .state
             .lock()
             .expect("admission lock")
-            .promote(self.capacity.limits, self.source)
+            .promote(self.capacity.limits, self.source, self.priority)
             .inspect_err(|reason| {
                 tracing::debug!(event = "connection_admission_refused",
                     connection = ?self.connection, source = %self.source, %reason);
@@ -209,6 +256,9 @@ impl Drop for Admission {
     }
 }
 
+#[cfg(test)]
+#[path = "admission_priority_tests.rs"]
+mod priority_tests;
 #[cfg(test)]
 #[path = "admission_tests.rs"]
 mod tests;

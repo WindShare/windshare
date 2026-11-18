@@ -20,8 +20,8 @@ func TestReadinessPreservesPublicEndpoint(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Native stdout may use CRLF; unrelated non-JSON output is not readiness.
-		match := readinessLine.FindStringSubmatch("starting\r\n" + string(line) + "\r\n")
+		// Identity initialization is a separate startup event, not listener readiness.
+		match := readinessLine.FindStringSubmatch("starting\r\n{\"event\":\"node_initialized\"}\r\n" + string(line) + "\r\n")
 		if len(match) != 2 {
 			t.Fatalf("listening event not found in %q", line)
 		}

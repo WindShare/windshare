@@ -32,12 +32,13 @@ func TestOfflineAuthorityAndImmutableDirectoryHistory(t *testing.T) {
 		"--generation", "1", "--not-before", now.Add(-time.Hour).Format(time.RFC3339), "--expires", now.Add(48 * time.Hour).Format(time.RFC3339), "--out", path("certificate.json")}); err != nil {
 		t.Fatal(err)
 	}
-	manifest := releaseManifest{Network: "windshare", Roots: roots, Snapshot: json.RawMessage("null"), LinkHost: "https://front.example"}
+	authority := json.RawMessage(`{"url":"https://api.example","roots":["account-root"]}`)
+	manifest := releaseManifest{Network: "windshare", Roots: roots, Snapshot: json.RawMessage("null"), LinkHost: "https://front.example", Authority: authority}
 	if err := writeJSON(path("release.json"), manifest); err != nil {
 		t.Fatal(err)
 	}
 	payload := nodedirectory.Payload{Format: 1, Network: "windshare", Generation: 1, Serial: 2, IssuedAt: now, ExpiresAt: now.Add(24 * time.Hour),
-		Nodes: []nodedirectory.Node{{Alias: "a", Relay: "https://a.example", Roles: []string{"relay"}, Zone: "global", Region: "jp", Provider: "p", Operator: "o", CapacityMbps: 50, Status: nodedirectory.Active}}}
+		Nodes: []nodedirectory.Node{{Alias: "a", NodeKey: roots[0].Key, Relay: "https://a.example", Roles: []string{"relay"}, Zone: "global", Region: "jp", Provider: "p", Operator: "o", CapacityMbps: 50, Status: nodedirectory.Active}}}
 	arguments := []string{"sign", "--source", path("source.json"), "--release", path("release.json"), "--history", path("history"),
 		"--online-private", path("online.pem"), "--certificate", path("certificate.json"), "--out", path("mirror.json")}
 	issue := func() error {
@@ -56,6 +57,10 @@ func TestOfflineAuthorityAndImmutableDirectoryHistory(t *testing.T) {
 	var updated releaseManifest
 	if err := readJSON(path("release.json"), &updated); err != nil {
 		t.Fatal(err)
+	}
+	var preserved bytes.Buffer
+	if err := json.Compact(&preserved, updated.Authority); err != nil || !bytes.Equal(preserved.Bytes(), authority) {
+		t.Fatalf("directory signing replaced account authority: %s, %v", updated.Authority, err)
 	}
 	var embedded, exported any
 	_ = json.Unmarshal(updated.Snapshot, &embedded)
@@ -91,7 +96,7 @@ func TestOfflineAuthorityAndImmutableDirectoryHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload.Serial = 4
-	payload.Nodes = []nodedirectory.Node{{Alias: "a", Relay: "https://replacement.example", Roles: []string{"relay"}, Zone: "global", Region: "jp", Provider: "p", Operator: "o", CapacityMbps: 50, Status: nodedirectory.Active}}
+	payload.Nodes = []nodedirectory.Node{{Alias: "a", NodeKey: roots[0].Key, Relay: "https://replacement.example", Roles: []string{"relay"}, Zone: "global", Region: "jp", Provider: "p", Operator: "o", CapacityMbps: 50, Status: nodedirectory.Active}}
 	if err := issue(); err == nil {
 		t.Fatal("removed alias reassigned")
 	}

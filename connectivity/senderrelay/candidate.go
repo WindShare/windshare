@@ -17,8 +17,8 @@ var ErrCandidate = errors.New("invalid sender relay candidate")
 // Candidate binds deployment registration authority to one public relay address.
 // Only PublicURL may enter a capability; the token is not session/STOP authority.
 type Candidate struct {
-	PublicURL string
-	AccessKey string `json:"-"`
+	PublicURL     string
+	Authorization AuthorizationSource `json:"-"`
 }
 
 func (candidate Candidate) Validate() error {
@@ -37,13 +37,8 @@ func (candidate Candidate) Validate() error {
 			return ErrCandidate
 		}
 	}
-	if len(candidate.AccessKey) > MaxAccessKeyBytes {
+	if authorization := candidate.authorization(); authorization.State == AuthorizationReady && !validBearer(authorization.Bearer) {
 		return ErrCandidate
-	}
-	for _, character := range candidate.AccessKey {
-		if character < '!' || character > '~' {
-			return ErrCandidate
-		}
 	}
 	return nil
 }
@@ -67,10 +62,10 @@ func PublicURLs(candidates []Candidate) ([]string, error) {
 	return urls, nil
 }
 
-func (candidate Candidate) registrationDialOptions(capacity int, resume bool) relayv2.DialOptions {
+func registrationDialOptions(capacity int, resume bool, authorization Authorization) relayv2.DialOptions {
 	options := relayv2.DialOptions{LifecycleObservationCapacity: capacity}
-	if !resume && candidate.AccessKey != "" {
-		options.Header = http.Header{"Authorization": {"Bearer " + candidate.AccessKey}}
+	if !resume && authorization.Bearer != "" {
+		options.Header = http.Header{"Authorization": {"Bearer " + authorization.Bearer}}
 		// Even same-host redirects can target another relay deployment. Credentials
 		// authorize the configured candidate, never a redirect-selected endpoint.
 		options.HTTPClient = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {

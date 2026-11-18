@@ -7,7 +7,7 @@ export type ReceiverReconnectActivity =
   | Readonly<{ kind: 'connecting' }>
   | Readonly<{
       kind: 'waiting'
-      reason: 'backoff' | 'capacity' | 'server'
+      reason: 'backoff' | 'capacity' | 'server' | 'bandwidth' | 'authorization'
       /** Deadline on the reconnect clock; rendering must not restart the wait. */
       retryAt: number
     }>

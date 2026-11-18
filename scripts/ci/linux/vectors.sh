@@ -8,6 +8,9 @@ echo "== vectors =="
 echo "-- verify signed network directory vectors"
 go test -count=1 ./core/nodedirectory -run 'Test(BrowserDirectory|TextEdge)Vectors'
 
+echo "-- verify account authority vectors"
+go test -count=1 ./core/serviceauthority
+
 echo "-- verify TURN control vectors"
 go test -count=1 ./core/session/turncontrol
 

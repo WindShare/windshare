@@ -3,9 +3,10 @@ package senderrelay
 import (
 	"context"
 	"errors"
+	"time"
+
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
-	"time"
 )
 
 const (
@@ -62,6 +63,10 @@ func (lifecycle *Lifecycle) recoverOwned(callerContext context.Context) error {
 	recoveryContext, cancel := context.WithCancel(lifecycle.recoveryContext)
 	stopCallerCancellation := context.AfterFunc(callerContext, cancel)
 	defer func() { stopCallerCancellation(); cancel() }()
+	return lifecycle.recoverRegistration(callerContext, recoveryContext)
+}
+
+func (lifecycle *Lifecycle) recoverRegistration(callerContext, recoveryContext context.Context) error {
 	deadline := lifecycle.config.Clock.Now().Add(senderRelayRecoveryWindow)
 	delay := senderRelayRetryInitial
 	attempt := uint32(1)
@@ -72,6 +77,10 @@ func (lifecycle *Lifecycle) recoverOwned(callerContext context.Context) error {
 			return err
 		}
 		resume := lifecycle.resumeNext
+		authorization, err := lifecycle.attemptAuthorization(recoveryContext, resume, attempt)
+		if err != nil {
+			return err
+		}
 		permit, err := lifecycle.beginAttempt(recoveryContext)
 		if err != nil {
 			return err
@@ -79,7 +88,7 @@ func (lifecycle *Lifecycle) recoverOwned(callerContext context.Context) error {
 		started := lifecycle.config.Clock.Now()
 		event := Attempt{ShareInstance: lifecycle.config.Fresh.ShareInstance, Number: attempt, State: AttemptStarted, Generation: lifecycle.generation, Slow: slow, Resume: resume}
 		lifecycle.observeRecoveryAttempt(event)
-		dialErr := lifecycle.connectAttempt(callerContext, recoveryContext, resume, permit, event)
+		dialErr := lifecycle.connectAttempt(callerContext, recoveryContext, resume, permit, event, authorization)
 		if permit != nil {
 			permit.Release()
 		}
@@ -122,6 +131,13 @@ func (lifecycle *Lifecycle) recoverOwned(callerContext context.Context) error {
 			attempt++
 		}
 	}
+}
+
+func (lifecycle *Lifecycle) attemptAuthorization(ctx context.Context, resume bool, attempt uint32) (Authorization, error) {
+	if resume {
+		return Authorization{}, nil
+	}
+	return lifecycle.waitAuthorization(ctx, attempt)
 }
 
 func (lifecycle *Lifecycle) beginAttempt(ctx context.Context) (AttemptPermit, error) {
@@ -168,7 +184,7 @@ func (lifecycle *Lifecycle) wait(caller, ctx context.Context, delay time.Duratio
 
 // connectAttempt contains ownership arbitration around one bounded handshake.
 // A success observed after cancellation is retired before it can advertise readiness.
-func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, resume bool, permit AttemptPermit, attempt Attempt) error {
+func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, resume bool, permit AttemptPermit, attempt Attempt, authorization Authorization) error {
 	init := lifecycle.config.Fresh
 	var descriptor []byte
 	if resume {
@@ -177,7 +193,7 @@ func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, res
 		descriptor = lifecycle.config.Descriptor
 	}
 	dialContext, cancel := context.WithTimeout(recovery, senderRelayAttemptTimeout)
-	dialOptions := lifecycle.config.Candidate.registrationDialOptions(lifecycle.config.LifecycleObservationCapacity, resume)
+	dialOptions := registrationDialOptions(lifecycle.config.LifecycleObservationCapacity, resume, authorization)
 	dialOptions.ObserveStage = func(stage relayv2.DialStage) {
 		event := attempt
 		event.State, event.Stage, event.Duration, event.Failure = AttemptStage, stage.Stage, stage.Duration, stage.Failure
@@ -191,6 +207,9 @@ func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, res
 	// Delivery uncertainty survives later failures: a lost acknowledgement can
 	// leave a registration that must be resumed and permanently revoked on stop.
 	if _, notSent := errors.AsType[*relayv2.RegistrationNotSentError](err); !notSent {
+		if !resume && lifecycle.releaseAuthorization == nil && authorization.Retain != nil {
+			lifecycle.releaseAuthorization = authorization.Retain()
+		}
 		lifecycle.mayHaveRegistered = true
 		lifecycle.resumeNext = true
 	}

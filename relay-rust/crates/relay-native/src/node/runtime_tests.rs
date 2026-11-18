@@ -1,5 +1,6 @@
 use super::*;
 use crate::{ConnectionLimits, Endpoint, OriginPolicy, Server, SourcePolicy};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures_util::{SinkExt, StreamExt};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -11,6 +12,12 @@ fn runtime(bytes: u64) -> (tempfile::TempDir, Runtime) {
     let endpoint = Endpoint::parse("wss://node.example/v2/ws").unwrap();
     let store = Database::open(&directory.path().join("node.sqlite"), endpoint.identity).unwrap();
     let settings = Settings {
+        authority: None,
+        zone: "global".into(),
+        region: String::new(),
+        stun_urls: Vec::new(),
+        access: super::access::Policy::default(),
+        capacity_bytes_per_second: None,
         services: Services::default(),
         relay_budget: Some(MonthlyBudget {
             bytes,
@@ -45,6 +52,12 @@ async fn service_revocation_is_not_lost_when_immediately_reenabled() {
     let epoch = node.epoch();
     node.update(
         Settings {
+            authority: None,
+            zone: "global".into(),
+            region: String::new(),
+            stun_urls: Vec::new(),
+            access: super::access::Policy::default(),
+            capacity_bytes_per_second: None,
             services: Services {
                 relay: false,
                 stun: true,
@@ -85,6 +98,7 @@ async fn disabling_service_closes_active_websockets_and_rejects_new_upgrades() {
     .configure(Settings::default(), None)
     .unwrap();
     let node = server.node();
+    node.identify(Identity::generate().unwrap()).unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(async move {
         server
@@ -107,6 +121,12 @@ async fn disabling_service_closes_active_websockets_and_rejects_new_upgrades() {
         .unwrap();
     node.update(
         Settings {
+            authority: None,
+            zone: "global".into(),
+            region: String::new(),
+            stun_urls: Vec::new(),
+            access: super::access::Policy::default(),
+            capacity_bytes_per_second: None,
             services: Services {
                 relay: false,
                 stun: true,
@@ -137,8 +157,12 @@ async fn disabling_service_closes_active_websockets_and_rejects_new_upgrades() {
     http.read_to_string(&mut response).await.unwrap();
     let body: serde_json::Value =
         serde_json::from_str(response.split("\r\n\r\n").nth(1).unwrap()).unwrap();
-    assert_eq!(body["services"]["relay"], false);
-    assert_eq!(body["services"]["stun"], true);
+    let descriptor = URL_SAFE_NO_PAD
+        .decode(body["descriptor"].as_str().unwrap())
+        .unwrap();
+    let descriptor: serde_json::Value = serde_json::from_slice(&descriptor).unwrap();
+    assert_eq!(descriptor["services"]["relay"], false);
+    assert_eq!(descriptor["services"]["stun"], true);
     stop.send(()).unwrap();
     task.await.unwrap().unwrap();
 }

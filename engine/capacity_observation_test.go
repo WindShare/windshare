@@ -31,7 +31,7 @@ func TestConcurrentShareCapacityObservationsKeepTheirTaskAndSharedBudget(t *test
 				return &preparedFacadeShare{}, nil
 			},
 			Peers:       func() (SharePeers, error) { return &facadePeers{}, nil },
-			Relays:      func(context.Context, []relayprofile.Candidate) (ShareRelays, error) { return &facadeRelays{}, nil },
+			Relays:      func(context.Context, []ShareRelayCandidate) (ShareRelays, error) { return &facadeRelays{}, nil },
 			PollNetwork: func(ctx context.Context, _ func()) { <-ctx.Done() },
 		},
 	})

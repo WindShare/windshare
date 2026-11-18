@@ -31,6 +31,15 @@
 }
 /* Enlarged text may need a second header row; neither entry can lose its label. */
 .receiver-header-actions { display: flex; align-items: center; gap: 20px; min-width: 0; max-width: 100%; margin-left: auto; }
+.share-report-link {
+  color: var(--receiver-muted);
+  font-size: .8125rem;
+  padding-block: 10px;
+  text-underline-offset: 4px;
+  white-space: nowrap;
+}
+.share-report-link:hover { color: var(--receiver-accent); }
+.share-report-link:focus-visible { outline: 2px solid var(--receiver-accent); outline-offset: 4px; border-radius: 2px; }
 .receiver-shell .downloads-entry {
   min-height: 40px;
   max-width: 100%;

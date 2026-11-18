@@ -12,7 +12,14 @@ impl EntityInputHandler for Input {
     ) -> Option<String> {
         let bytes = self.byte_range(range);
         *actual = Some(self.utf16_range(bytes.clone()));
-        Some(self.value[bytes].to_owned())
+        Some(match self.purpose {
+            super::purpose::Purpose::Text => self.value[bytes].to_owned(),
+            // Native IME and accessibility queries keep UTF-16 coordinates without
+            // receiving the password as surrounding text.
+            super::purpose::Purpose::Password => {
+                "?".repeat(self.value[bytes].encode_utf16().count())
+            }
+        })
     }
     fn selected_text_range(
         &mut self,
@@ -95,11 +102,11 @@ impl EntityInputHandler for Input {
         let line = self.layout.as_ref()?;
         Some(Bounds::from_corners(
             point(
-                bounds.left() + line.x_for_index(bytes.start) - self.scroll,
+                bounds.left() + line.x_for_index(self.display_offset(bytes.start)) - self.scroll,
                 bounds.top(),
             ),
             point(
-                bounds.left() + line.x_for_index(bytes.end) - self.scroll,
+                bounds.left() + line.x_for_index(self.display_offset(bytes.end)) - self.scroll,
                 bounds.bottom(),
             ),
         ))

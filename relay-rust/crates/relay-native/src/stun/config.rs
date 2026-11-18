@@ -14,7 +14,8 @@ const DEFAULT_MAX_SOURCES: usize = 4_096;
 const MAX_LISTENERS: usize = 16;
 
 /// Independent, per-listener fixed-window budgets. Zero never means unlimited.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct Limits {
     pub requests_per_second: NonZeroU32,
     pub source_requests_per_second: NonZeroU32,
@@ -33,7 +34,8 @@ impl Default for Limits {
 }
 
 /// Numeric socket addresses avoid DNS work in listener startup and recovery.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub udp_addresses: Vec<SocketAddr>,
     pub admin_address: Option<SocketAddr>,

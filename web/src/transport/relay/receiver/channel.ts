@@ -1,4 +1,6 @@
 import type { ChannelState, Frame, FrameChannel } from '../../../contracts/channel'
+import { capacityWaitFailure } from '../../../contracts/capacity'
+import { CAPACITY_WAIT_MAGIC, decodeCapacityWait } from '../capacity-wait-codec'
 import { equalBytes } from '../../../crypto/bytes'
 import { decodeOpaqueRoute, encodeOpaqueRoute } from '../protocol'
 import { decodeSettlementNotice } from '../delivery-settlement-codec'
@@ -30,6 +32,7 @@ export class OpaqueRelayFrameChannel implements FrameChannel {
   #closeTask: Promise<void> | undefined
   #feedbackTask: Promise<void> | undefined
   #feedbackRequested = false
+  readonly #capacityUntil = [0, 0]
 
   constructor(socket: WebSocketPort, relaySessionId: Uint8Array, capacity: RelayReceiveCapacity,
     heartbeatTrace?: (event: RelayHeartbeatTrace) => void, receiveTrace?: (event: ReceiveLedgerEvent) => void) {
@@ -46,6 +49,10 @@ export class OpaqueRelayFrameChannel implements FrameChannel {
     socket.addEventListener('close', this.#onClose)
     socket.addEventListener('error', this.#onError)
     this.#heartbeat = new RelayHeartbeat(socket, error => this.#fail(error, RELAY_HEARTBEAT_CLOSE_CODE, 'relay heartbeat failed'), heartbeatTrace)
+  }
+
+  get capacityWaitMilliseconds(): number {
+    return Math.max(0, ...this.#capacityUntil.map(until => until - performance.now()))
   }
 
   get unavailable(): AbortSignal { return this.#lifetime.signal }
@@ -98,7 +105,10 @@ export class OpaqueRelayFrameChannel implements FrameChannel {
     // Aborting a queued caller must be prompt without letting its successor
     // overtake the still-active writer that preceded it.
     this.#sendTail = Promise.all([previous, operation.catch(() => undefined)]).then(() => undefined)
-    return operation
+    return operation.catch((error: unknown) => {
+      if (error instanceof DOMException && error.name === 'TimeoutError') throw capacityWaitFailure(this, error)
+      throw error
+    })
   }
 
   readonly #onMessage = (event: MessageEvent): void => {
@@ -118,6 +128,14 @@ export class OpaqueRelayFrameChannel implements FrameChannel {
 
   #dispatch(encoded: Uint8Array): void {
     if (this.#heartbeat.receive(encoded) || this.#credit.receive(encoded)) return
+    if (String.fromCharCode(...encoded.subarray(0, 4)) === CAPACITY_WAIT_MAGIC) {
+      const wait = decodeCapacityWait(encoded)
+      if (!equalBytes(wait.relaySessionId, this.#relaySessionId)) {
+        throw new RelayReceiverError('Relay reported capacity for another session')
+      }
+      this.#capacityUntil[wait.direction] = performance.now() + wait.milliseconds
+      return
+    }
     const relayError = decodeRelayErrorIfPresent(encoded)
     if (relayError !== undefined) {
       throw new RelayReceiverError(relayErrorMessage(relayError), { relayError })

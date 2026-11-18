@@ -22,7 +22,7 @@ func newFixture() fixture {
 }
 func (f fixture) payload(generation, serial uint64) Payload {
 	return Payload{Format: Format, Network: "test", Generation: generation, Serial: serial, IssuedAt: f.now.Add(-time.Hour), ExpiresAt: f.now.Add(24 * time.Hour),
-		Nodes: []Node{{Alias: "jp1", Relay: "https://jp1.example", Roles: []string{"relay"}, Zone: "global", Region: "jp", Provider: "provider", Operator: "operator", CapacityMbps: 50, Status: Active}}}
+		Nodes: []Node{{Alias: "jp1", NodeKey: encoding.EncodeToString(f.online.Public().(ed25519.PublicKey)), Relay: "https://jp1.example", Roles: []string{"relay"}, Zone: "global", Region: "jp", Provider: "provider", Operator: "operator", CapacityMbps: 50, Status: Active}}}
 }
 func (f fixture) certificate(generation uint64) SignedCertificate {
 	certificate, _ := Certify(Certificate{Format: Format, Network: "test", Generation: generation, Key: encoding.EncodeToString(f.online.Public().(ed25519.PublicKey)),

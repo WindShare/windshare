@@ -41,6 +41,7 @@ const (
 
 type Node struct {
 	Alias        string   `json:"alias"`
+	NodeKey      string   `json:"node_key"`
 	Relay        string   `json:"relay"`
 	STUN         []string `json:"stun"`
 	Roles        []string `json:"roles"`

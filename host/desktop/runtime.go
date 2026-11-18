@@ -90,6 +90,9 @@ func Start() (*Host, error) {
 		setup:       setup.run,
 		cancelSetup: setup.cancel,
 	}
+	if accounts := application.Accounts(); accounts != nil {
+		deps.accounts = accounts
+	}
 	if os.Getenv("WINDSHARE_TRACE") == "1" {
 		host.diagnostics, err = diagnostics.NewStream(diagnosticCapacity, nil)
 		if err != nil {

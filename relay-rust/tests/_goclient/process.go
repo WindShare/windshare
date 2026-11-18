@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"time"
 )
@@ -17,8 +18,14 @@ type child struct {
 }
 
 func start(binary, database, address string) *child {
-	process := &child{command: exec.Command(binary, "--database", database, "--listen", address,
-		"--stun-udp", "127.0.0.1:0,[::1]:0", "--stun-admin", "127.0.0.1:0")}
+	configuration, err := json.Marshal(map[string]any{
+		"listen": address, "database": database, "identity_file": database + ".identity.json",
+		"stun": map[string]any{"udp_addresses": []string{"127.0.0.1:0", "[::1]:0"}, "admin_address": "127.0.0.1:0"},
+		"node": map[string]any{"services": map[string]bool{"relay": true, "stun": true}, "relay_budget": nil},
+	})
+	check(err)
+	check(os.WriteFile(database+".config.json", configuration, 0o600))
+	process := &child{command: exec.Command(binary, "--config", database+".config.json")}
 	stdout, err := process.command.StdoutPipe()
 	check(err)
 	process.command.Stderr = &process.stderr
@@ -32,11 +39,14 @@ func start(binary, database, address string) *child {
 	ready := make(chan []byte, 1)
 	go func() {
 		scanner := bufio.NewScanner(stdout)
-		if scanner.Scan() {
-			ready <- bytes.Clone(scanner.Bytes())
-		} else {
-			ready <- nil
+		for scanner.Scan() {
+			var event struct{ Event string }
+			if json.Unmarshal(scanner.Bytes(), &event) == nil && event.Event == "listening" {
+				ready <- bytes.Clone(scanner.Bytes())
+				return
+			}
 		}
+		ready <- nil
 	}()
 	select {
 	case bytes := <-ready:

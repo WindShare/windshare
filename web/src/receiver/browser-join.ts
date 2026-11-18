@@ -5,6 +5,7 @@ import { ReceiverSessionRuntime } from '../session/runtime'
 import { dialRelayReceiver } from '../transport/relay/receiver'
 import type { ProtocolGenerationCore } from './session-factory'
 import { firstUsableRelay, RelayEndpointFailure } from './relay-race'
+import { admittedRelay } from './relay-admission'
 import { relayCandidates, type RelayCandidateSource } from './relay-candidates'
 import { runInitialJoin, type InitialJoinOptions } from './initial-join'
 import { isShareRecoveryFailure, isTerminalRecoveryFailure } from './recovery-failure'
@@ -46,16 +47,14 @@ export function joinBrowserRelays(
     const ownedCapability = { ...capability, readSecret: capability.readSecret.slice() }
     try {
       let session: ReceiverSessionRuntime | undefined
-      const relay = await dialRelayReceiver(relayBase, ownedCapability, { signal: attemptSignal,
-        receiveTrace: event => emitRelayDelivery(protocolTrace, event, relayBase, () => ({
-          correlation: session === undefined ? {} : { protocolSessionId: session.protocolSessionIdentity },
-          shareId: capability.shareId,
-        })),
-        heartbeatTrace: event => emitRelayHeartbeat(protocolTrace, event, relayBase, () => ({
-          correlation: session === undefined ? {} : { protocolSessionId: session.protocolSessionIdentity },
-          shareId: capability.shareId,
-        })),
+      const traceContext = () => ({
+        correlation: session === undefined ? {} : { protocolSessionId: session.protocolSessionIdentity },
+        shareId: capability.shareId,
       })
+      const relay = await admittedRelay(candidates.admission, relayBase, attemptSignal, signal => dialRelayReceiver(relayBase, ownedCapability, { signal,
+        receiveTrace: event => emitRelayDelivery(protocolTrace, event, relayBase, traceContext),
+        heartbeatTrace: event => emitRelayHeartbeat(protocolTrace, event, relayBase, traceContext),
+      }))
       try {
         const descriptor = await openShareDescriptor(relay.descriptorObject, ownedCapability, {
           observe: event => protocolTrace?.current?.({

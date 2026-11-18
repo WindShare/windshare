@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/windshare/windshare/engine/relayprofile"
+
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/liveshare"
@@ -13,7 +15,6 @@ import (
 	sendersession "github.com/windshare/windshare/core/session/sendersession"
 	"github.com/windshare/windshare/engine/internal/nativeconnectivity"
 	"github.com/windshare/windshare/engine/internal/task"
-	"github.com/windshare/windshare/engine/relayprofile"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
@@ -80,11 +81,11 @@ func (s *activeShare) start(ctx, resourceContext context.Context, request Reques
 		return task.FailureUsage, fmt.Errorf("%w: %d; use 0 for the default or a power of two from %d to %d bytes",
 			ErrInvalidChunkSize, request.ChunkSize, catalog.MinChunkSize, catalog.MaxChunkSize)
 	}
-	urls, err := relayprofile.PublicURLs(request.Relays)
+	urls, err := relayprofile.RegistrationURLs(request.Relays)
 	if err != nil || len(urls) > relayset.MaximumEndpoints {
 		return task.FailureUsage, errors.Join(ErrConfiguration, err)
 	}
-	candidates := make(map[string]relayprofile.Candidate, len(request.Relays))
+	candidates := make(map[string]relayprofile.Registration, len(request.Relays))
 	for _, candidate := range request.Relays {
 		candidates[candidate.PublicURL] = candidate
 	}

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/windshare/windshare/engine/relayprofile"
+
 	"github.com/windshare/windshare/core/diagnostics"
 
 	"github.com/windshare/windshare/connectivity/icepolicy"
@@ -23,7 +25,6 @@ import (
 	sendersession "github.com/windshare/windshare/core/session/sendersession"
 	"github.com/windshare/windshare/engine/internal/nativeconnectivity"
 	"github.com/windshare/windshare/engine/internal/task"
-	"github.com/windshare/windshare/engine/relayprofile"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 )
@@ -34,7 +35,7 @@ var ErrInvalidChunkSize = errors.New("invalid share block size")
 
 type Request struct {
 	Source      liveshare.FileSourceFactory
-	Relays      []relayprofile.Candidate
+	Relays      []relayprofile.Registration
 	ChunkSize   uint32
 	Diagnostics diagnostics.Sink
 }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::connection::AdmissionPriority::Authenticated;
 use crate::{
     connection,
     test_support::{Fixture, connection as reference},
@@ -78,31 +79,15 @@ impl AsyncWrite for HeldTransport {
     }
 }
 
-fn registry() -> (tempfile::TempDir, Registry, Fixture) {
-    let fixture = Fixture::new();
-    let directory = tempfile::tempdir().unwrap();
-    let mut endpoint = Endpoint::parse("ws://localhost:8787/v2/ws").unwrap();
-    endpoint.identity = fixture.identity().relay;
-    let store = Database::open(
-        &directory.path().join("authority.sqlite"),
-        endpoint.identity,
-    )
-    .unwrap();
-    let registry = Registry {
-        metrics: crate::node::Metrics::default(),
-        actors: Mutex::new(BTreeMap::new()),
-        store,
-        endpoint,
-        environment: NativeEnvironment::new().unwrap(),
-    };
-    (directory, registry, fixture)
+struct HeldSocket {
+    server: WebSocketStream<HeldTransport>,
+    client: WebSocketStream<DuplexStream>,
+    blocked: Arc<Notify>,
+    started: oneshot::Receiver<()>,
+    release: std::sync::mpsc::Sender<()>,
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn rebuild_waits_for_writer_destruction_and_fences_old_callbacks() {
-    let (_directory, registry, fixture) = registry();
-    let share = fixture.identity().share;
-    let old = registry.attach(share).unwrap();
+async fn held_socket() -> HeldSocket {
     let (server, client) = tokio::io::duplex(PIPE_BYTES);
     let blocked = Arc::new(Notify::new());
     let (dropping, started) = oneshot::channel();
@@ -118,7 +103,48 @@ async fn rebuild_waits_for_writer_destruction_and_fences_old_callbacks() {
         Some(WebSocketConfig::default().write_buffer_size(0)),
     )
     .await;
-    let mut client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
+    let client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
+    HeldSocket {
+        server,
+        client,
+        blocked,
+        started,
+        release,
+    }
+}
+
+fn registry() -> (tempfile::TempDir, Registry, Fixture) {
+    let fixture = Fixture::new();
+    let directory = tempfile::tempdir().unwrap();
+    let mut endpoint = Endpoint::parse("ws://localhost:8787/v2/ws").unwrap();
+    endpoint.identity = fixture.identity().relay;
+    let store = Database::open(
+        &directory.path().join("authority.sqlite"),
+        endpoint.identity,
+    )
+    .unwrap();
+    let registry = Registry {
+        node: crate::node::Runtime::default(),
+        actors: Mutex::new(BTreeMap::new()),
+        store,
+        endpoint,
+        environment: NativeEnvironment::new().unwrap(),
+    };
+    (directory, registry, fixture)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rebuild_waits_for_writer_destruction_and_fences_old_callbacks() {
+    let (_directory, registry, fixture) = registry();
+    let share = fixture.identity().share;
+    let old = registry.attach(share, Authenticated).unwrap();
+    let HeldSocket {
+        server,
+        mut client,
+        blocked,
+        started,
+        release,
+    } = held_socket().await;
     let (_shutdown, stopping) = watch::channel(false);
     let connection = reference(1);
     let socket = tokio::spawn(
@@ -132,7 +158,7 @@ async fn rebuild_waits_for_writer_destruction_and_fences_old_callbacks() {
                     stopping,
                     old.generation.clone(),
                     crate::test_support::socket_admission(),
-                    crate::node::Metrics::default(),
+                    crate::node::Runtime::default(),
                 ),
             )
             .unwrap(),
@@ -148,14 +174,14 @@ async fn rebuild_waits_for_writer_destruction_and_fences_old_callbacks() {
     timeout(TEST_BUDGET, started).await.unwrap().unwrap();
     assert!(!socket.is_finished());
     assert!(
-        registry.attach(share).is_err(),
+        registry.attach(share, Authenticated).is_err(),
         "closed mailbox bypassed live writer"
     );
     let sibling = ShareId::new([2; 12]).unwrap();
-    let _sibling = registry.attach(sibling).unwrap();
+    let _sibling = registry.attach(sibling, Authenticated).unwrap();
     assert_eq!(registry.actors.lock().unwrap().len(), 2);
     assert!(
-        registry.attach(share).is_err(),
+        registry.attach(share, Authenticated).is_err(),
         "another share's eviction sweep lost the barrier"
     );
     assert!(old.generation.admit(&old.tx, async {}).is_err());
@@ -169,7 +195,7 @@ async fn rebuild_waits_for_writer_destruction_and_fences_old_callbacks() {
     timeout(TEST_BUDGET, old.generation.wait_released())
         .await
         .unwrap();
-    let next = registry.attach(share).unwrap();
+    let next = registry.attach(share, Authenticated).unwrap();
     assert_ne!(
         next.generation.identity().incarnation,
         old.generation.identity().incarnation
@@ -177,9 +203,9 @@ async fn rebuild_waits_for_writer_destruction_and_fences_old_callbacks() {
 
     // Deliberately reuse the numeric reference: mailbox ownership must fence the
     // old callback independently of the production connection-ID allocator.
-    let (port, mut writer, _) = connection::channel(connection);
+    let (port, mut writer, _) = connection::channel(connection, crate::node::Runtime::default());
     next.tx
-        .send(Event::Connected(connection, port))
+        .send(Event::Connected(connection, Box::new(port)))
         .await
         .unwrap();
     let (receipt, applied) = oneshot::channel();
@@ -222,25 +248,18 @@ async fn cancelled_connection_supervisor_keeps_host_lease_until_children_exit() 
     let capacity = two_source_capacity(now);
     let source = "192.0.2.1".parse().unwrap();
     let admission = capacity
-        .accept(source, reference(1), registry.environment.now())
+        .accept(source, reference(1), now, Authenticated)
         .unwrap();
-    let old = registry.attach(fixture.identity().share).unwrap();
-    let (server, client) = tokio::io::duplex(PIPE_BYTES);
-    let blocked = Arc::new(Notify::new());
-    let (dropping, started) = oneshot::channel();
-    let (release, released) = std::sync::mpsc::channel();
-    let server = WebSocketStream::from_raw_socket(
-        HeldTransport {
-            stream: server,
-            blocked: Arc::clone(&blocked),
-            dropping: Some(dropping),
-            release: released,
-        },
-        Role::Server,
-        Some(WebSocketConfig::default().write_buffer_size(0)),
-    )
-    .await;
-    let mut client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
+    let old = registry
+        .attach(fixture.identity().share, Authenticated)
+        .unwrap();
+    let HeldSocket {
+        server,
+        mut client,
+        blocked,
+        started,
+        release,
+    } = held_socket().await;
     let (_shutdown, stopping) = watch::channel(false);
     let socket = tokio::spawn(
         old.generation
@@ -253,7 +272,7 @@ async fn cancelled_connection_supervisor_keeps_host_lease_until_children_exit() 
                     stopping,
                     old.generation.clone(),
                     admission,
-                    crate::node::Metrics::default(),
+                    crate::node::Runtime::default(),
                 ),
             )
             .unwrap(),
@@ -275,7 +294,7 @@ async fn cancelled_connection_supervisor_keeps_host_lease_until_children_exit() 
     let actor = old.task.clone();
     assert!(
         capacity
-            .accept(source, reference(2), registry.environment.now())
+            .accept(source, reference(2), now, Authenticated)
             .is_err()
     );
     let other = capacity
@@ -283,6 +302,7 @@ async fn cancelled_connection_supervisor_keeps_host_lease_until_children_exit() 
             "192.0.2.2".parse().unwrap(),
             reference(3),
             registry.environment.now(),
+            Authenticated,
         )
         .unwrap();
     assert!(
@@ -290,7 +310,8 @@ async fn cancelled_connection_supervisor_keeps_host_lease_until_children_exit() 
             .accept(
                 "192.0.2.3".parse().unwrap(),
                 reference(4),
-                registry.environment.now()
+                now,
+                Authenticated
             )
             .is_err()
     );
@@ -317,5 +338,9 @@ async fn cancelled_connection_supervisor_keeps_host_lease_until_children_exit() 
     .await
     .unwrap();
     assert!(reopened.generation() > NonZeroU64::MIN);
-    assert!(capacity.accept(source, reference(5), now).is_ok());
+    assert!(
+        capacity
+            .accept(source, reference(5), now, Authenticated)
+            .is_ok()
+    );
 }

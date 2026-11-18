@@ -1,0 +1,186 @@
+use super::{Clock, failure, storage::Database};
+use crate::{Authority, Block, Fault, Node, Settings};
+use anyhow::{Result, ensure};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use serde::Deserialize;
+use worker::{Env, Method, Request, Response};
+
+pub struct Context {
+    path: String,
+    method: Method,
+    source: String,
+    bearer: String,
+    session: String,
+    csrf: String,
+    initialization: String,
+    email: bool,
+}
+impl Context {
+    pub fn new(request: &Request, env: &Env) -> worker::Result<Self> {
+        let cookie = request.headers().get("Cookie")?.unwrap_or_default();
+        let session = cookie
+            .split(';')
+            .find_map(|part| part.trim().strip_prefix("authority_session="))
+            .unwrap_or_default()
+            .to_owned();
+        Ok(Self {
+            path: request.path(),
+            method: request.method(),
+            source: request
+                .headers()
+                .get("X-Authority-Source")?
+                .unwrap_or_default(),
+            bearer: request
+                .headers()
+                .get("Authorization")?
+                .and_then(|value| value.strip_prefix("Bearer ").map(str::to_owned))
+                .unwrap_or_default(),
+            session,
+            csrf: request.headers().get("X-CSRF-Token")?.unwrap_or_default(),
+            initialization: env
+                .secret("INITIALIZATION_TOKEN")
+                .map_or_else(|_| String::new(), |value| value.to_string()),
+            email: env.var("EMAIL_WEBHOOK_URL").is_ok()
+                && env.secret("EMAIL_WEBHOOK_TOKEN").is_ok(),
+        })
+    }
+}
+#[derive(Deserialize)]
+struct Login {
+    username: String,
+    password: String,
+}
+#[derive(Deserialize)]
+struct Initialize {
+    token: String,
+    username: String,
+    password: String,
+}
+#[derive(Deserialize)]
+struct Revoke {
+    credential: [u8; 16],
+}
+#[derive(Deserialize)]
+struct Report {
+    share: [u8; 12],
+    reason: String,
+}
+fn parse<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
+    serde_json::from_slice(bytes).map_err(|_| Fault::Invalid.into())
+}
+pub fn csrf(session: &str) -> String {
+    URL_SAFE_NO_PAD.encode(crate::registration::digest(&format!("csrf/{session}")))
+}
+
+pub fn dispatch(
+    authority: &mut Authority<Database, Clock>,
+    context: Context,
+    bytes: &[u8],
+) -> Result<Response> {
+    let Context {
+        path,
+        method,
+        source,
+        bearer,
+        session,
+        csrf: provided,
+        initialization,
+        email,
+    } = context;
+    if path.starts_with("/v1/admin/")
+        && method != Method::Get
+        && !matches!(path.as_str(), "/v1/admin/initialize" | "/v1/admin/login")
+    {
+        ensure!(
+            !session.is_empty() && provided == csrf(&session),
+            Fault::Denied {
+                reason: "csrf".into()
+            }
+        );
+    }
+    let value = match (method, path.as_str()) {
+        (Method::Post, "/v1/accounts") => {
+            serde_json::to_value(authority.register(&source, parse(bytes)?)?)?
+        }
+        (Method::Post, "/v1/accounts/ticket") => serde_json::to_value(authority.refresh(&bearer)?)?,
+        (Method::Post, "/v1/accounts/login") => {
+            authority.throttle(&source, "account-login", 10, 60)?;
+            let login: Login = parse(bytes)?;
+            serde_json::to_value(authority.login(&login.username, &login.password)?)?
+        }
+        (Method::Post, "/v1/accounts/password") => {
+            let login: Login = parse(bytes)?;
+            serde_json::to_value(authority.set_password(
+                &bearer,
+                &login.username,
+                &login.password,
+            )?)?
+        }
+        (Method::Post, "/v1/accounts/credentials/revoke") => {
+            let value: Revoke = parse(bytes)?;
+            authority.revoke_credential(&bearer, value.credential)?;
+            serde_json::json!({})
+        }
+        (Method::Post, "/v1/node/usage") => serde_json::to_value(authority.usage(bytes)?)?,
+        (Method::Get, "/v1/blocks") => authority.public_blocks()?,
+        (Method::Post, "/v1/reports") => {
+            let report: Report = parse(bytes)?;
+            serde_json::json!({"id":authority.report(&source,report.share,report.reason)?})
+        }
+        (Method::Post, "/v1/admin/initialize") => {
+            let value: Initialize = parse(bytes)?;
+            return signed_in(&authority.initialize(
+                &value.token,
+                &initialization,
+                &value.username,
+                &value.password,
+            )?);
+        }
+        (Method::Post, "/v1/admin/login") => {
+            let value: Login = parse(bytes)?;
+            return signed_in(&authority.admin_login(&source, &value.username, &value.password)?);
+        }
+        (Method::Post, "/v1/admin/logout") => {
+            authority.logout(&session)?;
+            return signed_in("");
+        }
+        (Method::Get, "/v1/admin/console") => {
+            let mut value = authority.console(&session)?;
+            value["csrf"] = csrf(&session).into();
+            value["email_configured"] = email.into();
+            value
+        }
+        (Method::Put, "/v1/admin/settings") => {
+            authority.set_settings(&session, &parse::<Settings>(bytes)?, email)?;
+            serde_json::json!({})
+        }
+        (Method::Post, "/v1/admin/nodes") => {
+            authority.enroll_node(&session, &parse::<Node>(bytes)?)?;
+            serde_json::json!({})
+        }
+        (Method::Post, "/v1/admin/blocks") => {
+            authority.block(&session, parse::<Block>(bytes)?)?;
+            serde_json::json!({})
+        }
+        _ => return Response::error("not found", 404).map_err(|error| anyhow::anyhow!("{error}")),
+    };
+    Response::from_json(&value).map_err(|error| anyhow::anyhow!("{error}"))
+}
+fn signed_in(session: &str) -> Result<Response> {
+    let mut response =
+        Response::from_json(&serde_json::json!({"csrf":csrf(session)})).map_err(failure)?;
+    response.headers_mut().set("Set-Cookie",&format!("authority_session={session}; HttpOnly; Secure; SameSite=Strict; Path=/v1/admin; Max-Age={}",
+        if session.is_empty(){0}else{43200})).map_err(failure)?;
+    Ok(response)
+}
+pub fn fault(fault: &Fault) -> Result<Response> {
+    let status = match fault {
+        Fault::Invalid => 400,
+        Fault::Denied { .. } => 403,
+        Fault::RateLimited { .. } => 429,
+        Fault::Verification { .. } => 428,
+    };
+    Response::from_json(fault)
+        .map(|response| response.with_status(status))
+        .map_err(|error| anyhow::anyhow!("{error}"))
+}

@@ -32,7 +32,7 @@ use super::{
 
 /// Persisted layout version. Decoders refuse every other value, so a future
 /// layout can never be misread as this one.
-const FORMAT: u8 = 6;
+const FORMAT: u8 = 7;
 
 const PUBLISHED: u8 = 2;
 const GRACE: u8 = 3;

@@ -10,6 +10,8 @@
 //! restoring a route. Payloads, transport queues and timers remain outside it.
 
 mod authority;
+mod capacity;
+pub use capacity::CapacityWait;
 mod effect;
 mod frames;
 mod observation;
@@ -93,7 +95,7 @@ pub struct Session {
 impl Session {
     pub(crate) const fn new(
         admission: OperationId,
-        published: PublishedRegistration,
+        published: &PublishedRegistration,
         wire_id: RelaySessionId,
         deadline: UnixMillis,
     ) -> Self {

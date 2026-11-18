@@ -1,167 +1,14 @@
-use anyhow::{Context, Result, anyhow, bail};
-use std::{
-    future::Future,
-    net::{IpAddr, SocketAddr},
-    path::PathBuf,
-};
+use anyhow::{Result, bail};
+use std::{future::Future, path::PathBuf};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use windshare_relay_native::{
-    ConnectionLimits, Endpoint, OriginPolicy, Server, SourcePolicy, stun,
+    Endpoint, Server,
+    node::{Configuration, Identity},
+    stun,
 };
 
-const DEFAULT_LISTEN: &str = "127.0.0.1:8787";
-const USAGE: &str = "WindShare native relay
-Usage: wsrelay --database <path> [options]
-
-  --listen <IP:port>                       Bind address (default 127.0.0.1:8787)
-  --public-endpoint <ws(s)://host/v2/ws>    Canonical public WebSocket endpoint;
-                                           required for wildcard --listen addresses
-  --origins <HTTP(S) origins>              Comma-separated browser allowlist
-  --allow-localhost                       Allow localhost browser origins
-  --public-origins                        Accept all valid HTTP(S) browser origins
-  --node-config <path>                     Reloadable services and monthly relay budget
-  --trusted-proxies <IPs>                 Peers trusted to supply source IP
-  --source-ip-header <name>               Required with --trusted-proxies
-  --max-business-connections <count>      Global business budget (default 256)
-  --max-control-connections <count>       Global control budget (default 32)
-  --max-business-connections-per-source <count>  Default 128
-  --max-control-connections-per-source <count>   Default 8
-  --stun-udp <IP:port,...>                 Empty disables STUN
-  --stun-admin <IP:port>                   Empty disables STUN admin HTTP
-  --stun-requests-per-second <count>       Per listener (default 1000)
-  --stun-source-requests-per-second <count> Per source (default 20)
-  --stun-max-sources <count>               Tracked sources (default 4096)
-  --help                                 Print this help without opening storage";
-
-struct Options {
-    listen: SocketAddr,
-    database: PathBuf,
-    public_endpoint: Option<Endpoint>,
-    origins: OriginPolicy,
-    sources: SourcePolicy,
-    connections: ConnectionLimits,
-    stun: stun::Config,
-    node_config: Option<PathBuf>,
-}
-
-fn options(mut args: impl Iterator<Item = String>) -> Result<Options> {
-    let mut listen: SocketAddr = DEFAULT_LISTEN.parse()?;
-    let mut database = None;
-    let mut public_endpoint = None;
-    let mut origins = Vec::new();
-    let mut allow_localhost = false;
-    let mut public_origins = false;
-    let mut node_config = None;
-    let mut proxies: Option<Vec<IpAddr>> = None;
-    let mut source_header = None;
-    let mut connections = ConnectionLimits::default();
-    let mut stun = stun::Config::default();
-    while let Some(arg) = args.next() {
-        if arg == "--public-origins" {
-            public_origins = true;
-            continue;
-        }
-        if arg == "--allow-localhost" {
-            allow_localhost = true;
-            continue;
-        }
-        let value = args
-            .next()
-            .ok_or_else(|| anyhow!("missing value for {arg}"))?;
-        match arg.as_str() {
-            "--listen" => listen = value.parse()?,
-            "--database" => database = Some(PathBuf::from(value)),
-            "--node-config" => node_config = Some(PathBuf::from(value)),
-            "--public-endpoint" => {
-                public_endpoint =
-                    Some(Endpoint::parse(&value).context("invalid --public-endpoint")?);
-            }
-            "--origins" => origins.extend(value.split(',').map(|origin| origin.trim().to_owned())),
-            "--trusted-proxies" => {
-                proxies = Some(
-                    value
-                        .split(',')
-                        .map(|peer| peer.trim().parse())
-                        .collect::<std::result::Result<_, _>>()?,
-                );
-            }
-            "--source-ip-header" => source_header = Some(value),
-            "--max-business-connections" => connections.business = value.parse()?,
-            "--max-control-connections" => connections.controls = value.parse()?,
-            "--max-business-connections-per-source" => {
-                connections.business_per_source = value.parse()?;
-            }
-            "--max-control-connections-per-source" => {
-                connections.controls_per_source = value.parse()?;
-            }
-            "--stun-udp" => {
-                stun.udp_addresses = if value.trim().is_empty() {
-                    Vec::new()
-                } else {
-                    value
-                        .split(',')
-                        .map(|address| address.trim().parse())
-                        .collect::<std::result::Result<_, _>>()?
-                };
-            }
-            "--stun-admin" => {
-                stun.admin_address = if value.trim().is_empty() {
-                    None
-                } else {
-                    Some(value.parse()?)
-                };
-            }
-            "--stun-requests-per-second" => stun.limits.requests_per_second = value.parse()?,
-            "--stun-source-requests-per-second" => {
-                stun.limits.source_requests_per_second = value.parse()?;
-            }
-            "--stun-max-sources" => stun.limits.max_sources = value.parse()?,
-            _ => bail!("unknown option {arg}"),
-        }
-    }
-    stun.validate()?;
-    connections.validate()?;
-    anyhow::ensure!(
-        !public_origins || (origins.is_empty() && !allow_localhost),
-        "--public-origins cannot be combined with an origin allowlist"
-    );
-    require_explicit_endpoint_for_wildcard_bind(listen, public_endpoint.as_ref())?;
-    let sources = match (proxies, source_header) {
-        (None, None) => SourcePolicy::default(),
-        (Some(peers), Some(header)) => SourcePolicy::trusted_proxy(peers, &header)?,
-        _ => bail!("--trusted-proxies and --source-ip-header must be configured together"),
-    };
-    Ok(Options {
-        listen,
-        database: database.context("required: --database <path>")?,
-        public_endpoint,
-        origins: if public_origins {
-            OriginPolicy::Public
-        } else {
-            OriginPolicy::new(origins, allow_localhost)?
-        },
-        sources,
-        connections,
-        stun,
-        node_config,
-    })
-}
-
-/// Senders sign the relay identity of the URL they dial. A wildcard bind
-/// address cannot determine that URL, so deriving the endpoint from it would
-/// start a healthy-looking relay that refuses remote registrations.
-fn require_explicit_endpoint_for_wildcard_bind(
-    listen: SocketAddr,
-    public_endpoint: Option<&Endpoint>,
-) -> Result<()> {
-    anyhow::ensure!(
-        public_endpoint.is_some() || !listen.ip().to_canonical().is_unspecified(),
-        "--listen {listen} binds every interface; pass --public-endpoint \
-         ws(s)://<host>[/base]/v2/ws with the exact URL clients dial"
-    );
-    Ok(())
-}
+const USAGE: &str = "WindShare native relay\nUsage: wsrelay --config <node.json>";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -177,13 +24,18 @@ async fn main() -> Result<()> {
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
-    let options = options(args.into_iter())?;
-    run(options, shutdown_signal()?).await
+    let [flag, path] = args.as_slice() else {
+        bail!("{USAGE}")
+    };
+    if flag != "--config" {
+        bail!("{USAGE}");
+    }
+    let path = PathBuf::from(path);
+    let config = Configuration::read(&path)?;
+    run(config, path, shutdown_signal()?).await
 }
 
 fn shutdown_signal() -> Result<impl Future<Output = ()>> {
-    // Service managers stop Unix daemons with SIGTERM; it must cross the same
-    // joined cleanup barrier as an interactive Ctrl-C.
     #[cfg(unix)]
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     #[cfg(unix)]
@@ -192,10 +44,7 @@ fn shutdown_signal() -> Result<impl Future<Output = ()>> {
     let mut interrupt = tokio::signal::windows::ctrl_c()?;
     Ok(async move {
         #[cfg(unix)]
-        let signal = tokio::select! {
-            _ = interrupt.recv() => "interrupt",
-            _ = terminate.recv() => "terminate",
-        };
+        let signal = tokio::select! { _ = interrupt.recv() => "interrupt", _ = terminate.recv() => "terminate" };
         #[cfg(windows)]
         let signal = {
             interrupt.recv().await;
@@ -207,56 +56,49 @@ fn shutdown_signal() -> Result<impl Future<Output = ()>> {
 
 #[expect(
     clippy::significant_drop_tightening,
-    reason = "the server remains owned by its async serve future through joined shutdown"
+    reason = "The host lease moves into configure and serve and must outlive transport children."
 )]
-async fn run(options: Options, shutdown: impl Future<Output = ()>) -> Result<()> {
-    let listener = TcpListener::bind(options.listen).await?;
+async fn run(
+    config: Configuration,
+    path: PathBuf,
+    shutdown: impl Future<Output = ()>,
+) -> Result<()> {
+    let listener = TcpListener::bind(config.listen).await?;
     let address = listener.local_addr()?;
-    let endpoint = match options.public_endpoint {
-        Some(endpoint) => endpoint,
-        None => Endpoint::parse(&format!("ws://{address}/v2/ws"))?,
-    };
-    tracing::info!(event = "http_policy", origins = ?options.origins);
-    tracing::info!(event = "connection_policy", sources = ?options.sources, limits = ?options.connections);
-    let settings = options
-        .node_config
-        .as_deref()
-        .map(windshare_relay_native::node::Settings::read)
-        .transpose()?
-        .unwrap_or_default();
+    let endpoint = config.endpoint.as_ref().map_or_else(
+        || Endpoint::parse(&format!("ws://{address}/v2/ws")),
+        |endpoint| Endpoint::parse(endpoint),
+    )?;
     let server = Server::open(
         endpoint.clone(),
-        options.origins,
-        options.sources,
-        options.connections,
-        &options.database,
-    )?
-    .configure(settings, options.node_config)?;
-    let stun = stun::Service::bind_with_node(options.stun, server.node())?;
+        config.origin_policy()?,
+        config.source_policy()?,
+        config.connections,
+        &config.database,
+    )?;
+    server
+        .node()
+        .identify(Identity::open(&config.identity_file)?)?;
+    let configured = server.configure(config.node, Some(path))?;
+    let stun = stun::Service::bind_with_node(config.stun, configured.node())?;
     println!(
         "{}",
-        serde_json::json!({
-            "event": "listening", "address": address.to_string(), "endpoint": endpoint.as_str(),
-            "capabilities": ["registration", "resume", "join", "delivery", "stop", "heartbeat", "healthz", "stun"],
-            "stun_udp": stun.udp_addresses(), "stun_admin": stun.admin_address(),
-        })
+        serde_json::json!({ "event":"listening", "address":address.to_string(), "endpoint":endpoint.as_str(),
+        "capabilities":["registration","resume","join","delivery","stop","heartbeat","healthz","stun","account_admission"],
+        "stun_udp":stun.udp_addresses(), "stun_admin":stun.admin_address() })
     );
     let stopping = CancellationToken::new();
-    let relay = async {
-        let result = server
+    let stopped = stopping.clone();
+    let relay = async move {
+        let result = configured
             .serve(listener, async {
                 shutdown.await;
                 stopping.cancel();
             })
             .await;
-        // Listener failure must also retire STUN, even without an OS signal.
         stopping.cancel();
         result
     };
-    let (result, ()) = tokio::join!(relay, stun.serve(stopping.cancelled()));
+    let (result, ()) = tokio::join!(relay, stun.serve(stopped.cancelled()));
     result
 }
-
-#[cfg(test)]
-#[path = "main_tests.rs"]
-mod tests;

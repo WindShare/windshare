@@ -40,6 +40,9 @@ func (run *workflow) execute(ctx context.Context, request Request, progress func
 	if err != nil {
 		return Result{}, err
 	}
+	if discovery.Access == nativeKeyAccess {
+		return Result{}, ErrLocalCredentialRequired
+	}
 	if request.Operation == PrivateOnboarding && discovery.Access != "restricted" {
 		return Result{}, errors.New("private onboarding requires a restricted relay")
 	}

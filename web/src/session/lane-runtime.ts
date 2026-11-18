@@ -1,6 +1,7 @@
 import { observeProtocolFailure } from './failure-diagnostics'
 import { bindFailureEvidence, captureFailureEvidence } from '../diagnostics/failure/evidence'
 import type { ShareDescriptor } from '../catalog/records'
+import { capacityWaitFailure } from '../contracts/capacity'
 import type { FrameChannel } from '../contracts/channel'
 import { CborError } from '../protocol/cbor'
 import { EnvelopeError, EnvelopeOpener, EnvelopeSealer } from './envelope'
@@ -18,6 +19,8 @@ import { SessionRuntimeError, type LaneCloseReason, type LaneTermination } from 
 import type { SessionKeys } from './transcript'
 
 export class SessionLane {
+  classifyCapacityWait(cause: unknown): unknown { return capacityWaitFailure(this.#channel, cause) }
+
   readonly id: number
   readonly epoch: number
   readonly writer: SessionWriter

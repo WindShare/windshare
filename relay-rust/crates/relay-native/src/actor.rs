@@ -3,7 +3,7 @@ use crate::{
     connection::Outbox,
     environment::Environment,
     generation::{Generation, Recovery},
-    node::{Metrics, NodeTrace},
+    node::{NodeTrace, Runtime, access::Residency},
     storage::Persistence,
 };
 use anyhow::{Result, anyhow};
@@ -27,13 +27,15 @@ use windshare_relay_core::{
     share::{Identity, Input, ShareRelay, WorkId, WorkResult},
 };
 
+mod access;
+mod capacity;
 mod ingress;
 mod outputs;
 mod windows;
 use windows::Windows;
 
 pub enum Event {
-    Connected(ConnectionRef, Outbox),
+    Connected(ConnectionRef, Box<Outbox>),
     Control(ConnectionRef, Vec<u8>),
     Frame(ConnectionRef, Vec<u8>),
     Unsupported(ConnectionRef),
@@ -58,6 +60,9 @@ pub struct Actor<S, E> {
     retry: Option<(Instant, WorkId)>,
     idle: Arc<AtomicBool>,
     generation: Generation,
+    node: Runtime,
+    residency: Option<Residency>,
+    scheduling: Arc<tokio::sync::Notify>,
 }
 
 impl<S: Persistence, E: Environment> Actor<S, E> {
@@ -68,7 +73,7 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
         idle: Arc<AtomicBool>,
         generation: Generation,
         recovery: Recovery,
-        metrics: Metrics,
+        node: Runtime,
     ) -> Result<()> {
         let identity = generation.identity();
         let reader = store.clone();
@@ -81,7 +86,7 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
             identity,
             limits(),
             &restored,
-            NodeTrace::new(metrics),
+            NodeTrace::new(node.metrics.clone()),
             environment.now(),
         )
         .map_err(|error| anyhow!("restore refused: {error:?}"))?;
@@ -98,13 +103,24 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
             retry: None,
             idle,
             generation,
+            node,
+            residency: None,
+            scheduling: Arc::new(tokio::sync::Notify::new()),
         };
+        actor.restore_residency()?;
         actor.outputs(initial)?;
         actor.run().await
     }
 
     async fn run(&mut self) -> Result<()> {
+        let mut access_changes = self.node.access.changes();
+        let mut capacity_tick = tokio::time::interval(Duration::from_secs(1));
+        capacity_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
+            self.enforce_access()?;
+            if self.authority.is_none() && self.ports.is_empty() && self.commit.is_none() {
+                self.residency = None;
+            }
             self.idle.store(
                 self.ports.is_empty()
                     && self.commit.is_none()
@@ -114,7 +130,21 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
                 Ordering::Release,
             );
             let wake = self.wake();
+            let scheduling = Arc::clone(&self.scheduling);
             let step = tokio::select! {
+                _ = capacity_tick.tick(), if !self.ports.is_empty() => {
+                    self.report_capacity()?;
+                    continue;
+                }
+                () = scheduling.notified() => {
+                    let connections: Vec<_> = self.ports.keys().copied().collect();
+                    for connection in connections { self.pump(connection)?; }
+                    continue;
+                }
+                changed = access_changes.changed() => {
+                    if changed.is_err() { return Err(anyhow!("node access service ended")); }
+                    continue;
+                }
                 event = self.inbox.recv() => {
                     let Some(event) = event else { return Ok(()); };
                     self.event(event)?;

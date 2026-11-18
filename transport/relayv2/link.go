@@ -178,6 +178,13 @@ func (l *link) receive(messageType websocket.MessageType, encoded []byte) error 
 		return ErrProtocol
 	}
 	switch string(encoded[:4]) {
+	case v2.CapacityWaitMagic:
+		wait, err := v2.ParseCapacityWait(encoded)
+		if err != nil {
+			return ErrProtocol
+		}
+		l.observeCapacityWait(wait)
+		return nil
 	case v2.SettlementNoticeMagic:
 		notice, err := v2.ParseSettlementNotice(encoded)
 		if err != nil {

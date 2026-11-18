@@ -5,7 +5,7 @@ import { createBrowserReceiveComposition, type BrowserReceiveWindow } from '../a
 import { createLazyBrowserDirectZipComposition } from '../application/browser-receive/direct-zip/loading'
 import { BrowserReceiverGateway } from '../application/browser-share/gateway'
 import { BuiltinNetwork } from '../application/network/builtin'
-import { networkObserver } from '../application/network/diagnostics'
+import { networkObserver, authorityObserver } from '../application/network/diagnostics'
 import { createConnectivityTraceSource, createOutputTraceSource, createProtocolTraceSource, createReceiverTraceSource } from '../application/diagnostics/receive-trace'
 import { ReceiverController } from '../ui/controller'
 import { ReceiverApp } from '../ui/ReceiverApp'
@@ -18,7 +18,7 @@ export function createReceiverRuntime(windowPort: Window, diagnosticOwner: Docum
     directZip: createLazyBrowserDirectZipComposition(windowPort as BrowserReceiveWindow, { outputTrace }),
     outputTrace, localOutputFailures: diagnostics.localOutputFailures,
   })
-  const network = new BuiltinNetwork(networkObserver(diagnostics.trace))
+  const network = new BuiltinNetwork(networkObserver(diagnostics.trace), authorityObserver(diagnostics.trace))
   const controller = new ReceiverController(new BrowserReceiverGateway({
     network, protocolTrace: createProtocolTraceSource(diagnostics.trace, diagnostics.failures),
     connectivityTrace: createConnectivityTraceSource(diagnostics.trace),
@@ -29,9 +29,9 @@ export function createReceiverRuntime(windowPort: Window, diagnosticOwner: Docum
   controller.initialize({ capabilityInput: null, pageUrl })
   return {
     surface: controller.presentation.surface,
-    openLocation: captured => controller.openLocation(captured),
+    openLocation: captured => { network.clearReport(); controller.openLocation(captured) },
     ensureDownloads: () => controller.ensureDownloads(),
-    View: function ReceiverSurface() { return <ReceiverApp controller={controller} /> },
+    View: function ReceiverSurface() { return <ReceiverApp controller={controller} report={network} /> },
     Downloads: function RuntimeDownloads(props) {
       return <ReceiverDownloads controller={controller} {...props} />
     },

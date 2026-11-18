@@ -272,6 +272,7 @@ fn stored_bytes_that_this_kernel_did_not_write_are_refused() {
         edited[range].fill(value);
         edited
     };
+    let ownership = HEADER_BYTES + REGISTRATION_BYTES;
     let cases = [
         (Vec::new(), RecordError::Length),
         (
@@ -292,12 +293,30 @@ fn stored_bytes_that_this_kernel_did_not_write_are_refused() {
         (edit(&published, 46..62, 0), RecordError::Field),
         // The owner's epoch, connection slot and generation, also after a
         // grace deadline, and the stop ID.
-        (edit(&published, 175..183, 0), RecordError::Field),
-        (edit(&published, 183..191, 0), RecordError::Field),
-        (edit(&published, 191..199, 0), RecordError::Field),
-        (edit(&grace, 183..191, 0), RecordError::Field),
-        (edit(&grace, 191..199, 0), RecordError::Field),
-        (edit(&grace, 199..207, 0), RecordError::Field),
+        (
+            edit(&published, ownership..ownership + 8, 0),
+            RecordError::Field,
+        ),
+        (
+            edit(&published, ownership + 8..ownership + 16, 0),
+            RecordError::Field,
+        ),
+        (
+            edit(&published, ownership + 16..ownership + 24, 0),
+            RecordError::Field,
+        ),
+        (
+            edit(&grace, ownership + 8..ownership + 16, 0),
+            RecordError::Field,
+        ),
+        (
+            edit(&grace, ownership + 16..ownership + 24, 0),
+            RecordError::Field,
+        ),
+        (
+            edit(&grace, ownership + 24..ownership + 32, 0),
+            RecordError::Field,
+        ),
         (edit(&stopped, 78..94, 0), RecordError::Field),
     ];
     for (bytes, error) in cases {

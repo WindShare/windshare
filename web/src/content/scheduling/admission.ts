@@ -42,12 +42,18 @@ export class ContentAdmissions {
   readonly #now: () => number
   readonly #pending = new Set<PendingAdmission>()
   readonly #allocation = new ContentAllocation()
+  readonly #capacityUntil = new WeakMap<ContentLane, number>()
   #scheduled = false
   #deadline: ReturnType<typeof setTimeout> | undefined
 
   constructor(lanes: () => readonly ContentLane[], now: () => number) {
     this.#lanes = lanes
     this.#now = now
+  }
+
+  deferCapacity(lane: ContentLane, milliseconds: number): void {
+    this.#capacityUntil.set(lane, Math.max(this.#capacityUntil.get(lane) ?? 0, this.#now() + milliseconds))
+    this.wake()
   }
 
   request(work: ContentWork, signal: AbortSignal, eligible: (lane: ContentLane) => boolean): Promise<ContentAdmission> {
@@ -113,6 +119,7 @@ export class ContentAdmissions {
       const selection = this.#select()
       if (selection.kind === 'dispatch' && this.#commit(selection.assignment)) continue
       let at = selection.kind === 'probe-deadline' ? selection.at : Infinity
+      at = Math.min(at, this.#nextCapacityDeadline())
       // One owner also revisits silent rescue intents. No duplicate reservation
       // is held while waiting; fresh receipts can withdraw their justification.
       if ([...this.#pending].some(item => item.intent.kind === 'rescue')) {
@@ -126,6 +133,16 @@ export class ContentAdmissions {
     }
   }
 
+  #nextCapacityDeadline(): number {
+    const now = this.#now()
+    let at = Infinity
+    for (const lane of this.#lanes()) {
+      const until = this.#capacityUntil.get(lane) ?? 0
+      if (until > now) at = Math.min(at, until)
+    }
+    return at
+  }
+
   #reject(pending: PendingAdmission, error: unknown): void {
     this.#pending.delete(pending)
     pending.cleanup()
@@ -134,6 +151,7 @@ export class ContentAdmissions {
 
   #select(): ContentSelection<PendingAdmission> {
     const now = this.#now()
+    const lanes = this.#lanes().filter(lane => now >= (this.#capacityUntil.get(lane) ?? 0))
     const candidates = [...this.#pending].filter(item => item.capacity === undefined || item.capacity.readiness() === 'ready').sort((a, b) => {
       const agedA = now - a.queuedAt >= PRIORITY_AGING_MILLISECONDS
       const agedB = now - b.queuedAt >= PRIORITY_AGING_MILLISECONDS
@@ -146,12 +164,12 @@ export class ContentAdmissions {
     // into a long, irrevocable duplicate.
     for (const work of candidates) {
       if (work.intent.kind !== 'rescue') continue
-      const lane = orderedContentLanes(this.#lanes(), work).find(work.intent.eligible)
+      const lane = orderedContentLanes(lanes, work).find(work.intent.eligible)
       if (lane === undefined || !lane.receive.available) continue
       const reason = work.intent.decide(lane)
       if (reason !== undefined) return { kind: 'dispatch', assignment: { work, lane, purpose: 'rescue', reason } }
     }
-    return this.#allocation.select(candidates.filter(work => work.intent.kind === 'content'), this.#lanes(), now,
+    return this.#allocation.select(candidates.filter(work => work.intent.kind === 'content'), lanes, now,
       (lane, work) => work.intent.kind === 'content' && work.intent.eligible(lane))
   }
 

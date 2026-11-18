@@ -1,7 +1,6 @@
 use super::{Actor, Environment, Event, Persistence};
 use anyhow::Result;
 use windshare_relay_core::{
-    access::{Attribution, RegistrationDecision},
     ingress::Control,
     lifecycle::ConnectionRef,
     sessions::OpaqueHeader,
@@ -10,10 +9,12 @@ use windshare_relay_core::{
 
 impl<S: Persistence, E: Environment> Actor<S, E> {
     pub(super) fn event(&mut self, event: Event) -> Result<()> {
+        self.enforce_access()?;
         let now = self.environment.now();
         let step = match event {
-            Event::Connected(connection, writer) => {
-                self.ports.insert(connection, writer);
+            Event::Connected(connection, mut writer) => {
+                writer.set_wake(std::sync::Arc::clone(&self.scheduling));
+                self.ports.insert(connection, *writer);
                 self.relay.handle(Input::Connected(connection), now)
             }
             Event::Control(connection, frame) => {
@@ -21,9 +22,10 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
                     return Ok(());
                 }
                 let input = match Control::inspect(connection, &frame) {
-                    Control::Authorize(request) => Input::Register(
-                        request.resolve(RegistrationDecision::Granted(Attribution::Anonymous), now),
-                    ),
+                    Control::Authorize(request) => {
+                        let decision = self.authorize(&request);
+                        Input::Register(request.resolve(decision, now))
+                    }
                     Control::Ready(input) => input,
                 };
                 let mut step = self.relay.handle(input, now);
@@ -78,10 +80,11 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
             .map(|index| step.outputs.remove(index));
         let destination = if let Some(Output::Received(receipt)) = receipt {
             let destination = receipt.flow().destination();
-            let queued = self
-                .ports
-                .get_mut(&destination)
-                .is_some_and(|port| port.queue(receipt, bytes).is_ok());
+            let attribution = self.attribution();
+            let queued = self.ports.get_mut(&destination).is_some_and(|port| {
+                port.set_attribution(attribution);
+                port.queue(receipt, bytes).is_ok()
+            });
             if !queued {
                 tracing::warn!(event = "payload_queue_unavailable", share = ?self.identity.share,
                     ?source, ?destination, session = ?header.session());
@@ -117,7 +120,8 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
         }
     }
 
-    fn pump(&mut self, connection: ConnectionRef) -> Result<()> {
+    pub(super) fn pump(&mut self, connection: ConnectionRef) -> Result<()> {
+        self.enforce_access()?;
         while let Some(step) = self
             .ports
             .get_mut(&connection)

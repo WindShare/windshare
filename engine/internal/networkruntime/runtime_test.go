@@ -147,7 +147,7 @@ func TestUnreadableTrustStatePreservesExplicitRelays(t *testing.T) {
 	candidate := relayprofile.Candidate{PublicURL: "https://own.example"}
 	for _, intent := range []relayprofile.Intent{relayprofile.Plan([]relayprofile.Candidate{candidate}), relayprofile.UseExplicit([]relayprofile.Candidate{candidate})} {
 		selected, err := r.Plan(context.Background(), intent, "https://front.example")
-		if err != nil || len(selected.Relays) != 1 || selected.Relays[0] != candidate {
+		if err != nil || len(selected.Relays) != 1 || selected.Relays[0] != candidate.Registration() {
 			t.Fatal(selected, err)
 		}
 	}

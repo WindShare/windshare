@@ -15,10 +15,11 @@ use windshare_relay_core::{
 };
 
 pub mod budget;
+pub mod node_control;
 mod transactions;
 use transactions::read;
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub trait Persistence: Clone + Send + Sync + 'static {

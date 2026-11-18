@@ -25,23 +25,84 @@ pub struct MonthlyBudget {
     pub reset_day_utc: u8,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
+    #[serde(default)]
+    pub authority: Option<super::usage::Authority>,
+    #[serde(default = "global_zone")]
+    pub zone: String,
+    #[serde(default)]
+    pub region: String,
+    #[serde(default)]
+    pub stun_urls: Vec<String>,
+    #[serde(default)]
+    pub access: super::access::Policy,
+    #[serde(default)]
+    pub capacity_bytes_per_second: Option<u64>,
     pub services: Services,
     pub relay_budget: Option<MonthlyBudget>,
+}
+
+pub(super) fn zone_defaults(node: &mut serde_json::Value) {
+    if node.get("zone").and_then(serde_json::Value::as_str) == Some("cn") {
+        let access = node
+            .as_object_mut()
+            .expect("object with zone")
+            .entry("access")
+            .or_insert_with(|| serde_json::json!({}));
+        if let Some(access) = access.as_object_mut() {
+            access
+                .entry("anonymous")
+                .or_insert(serde_json::Value::Bool(false));
+        }
+    }
+}
+fn global_zone() -> String {
+    "global".into()
+}
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            authority: None,
+            zone: global_zone(),
+            region: String::new(),
+            stun_urls: Vec::new(),
+            access: super::access::Policy::default(),
+            capacity_bytes_per_second: None,
+            services: Services::default(),
+            relay_budget: None,
+        }
+    }
 }
 
 impl Settings {
     /// # Errors
     /// Refuses malformed configuration rather than enabling services implicitly.
     pub fn read(path: &Path) -> Result<Self> {
-        let settings: Self = serde_json::from_slice(&std::fs::read(path)?)?;
-        settings.validate()?;
-        Ok(settings)
+        Ok(super::Configuration::read(path)?.node)
     }
 
     pub(super) fn validate(&self) -> Result<()> {
+        ensure!(
+            matches!(self.zone.as_str(), "global" | "cn"),
+            "invalid node zone"
+        );
+        super::access::Service::default().configure(self.access.clone())?;
+        if let Some(authority) = &self.authority {
+            authority.validate()?;
+            ensure!(
+                self.access
+                    .trusted_issuers
+                    .iter()
+                    .any(|trusted| trusted.root == authority.issuer),
+                "reporting authority must be a trusted issuer"
+            );
+        }
+        ensure!(
+            self.capacity_bytes_per_second != Some(0),
+            "relay capacity must be positive"
+        );
         if let Some(budget) = self.relay_budget {
             ensure!(
                 (1..=28).contains(&budget.reset_day_utc),

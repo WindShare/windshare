@@ -55,6 +55,7 @@ export { validateCorrelationV1 } from './trace-payload-validation'
 
 const EVENT_PAYLOAD_VALIDATORS = Object.freeze({
   network_directory: validateNetworkDirectory,
+  authority_blocks: validateAuthorityBlocks,
   join_transition: validateJoin,
   receiver_experience: validateReceiverExperience,
   browse_transition: validateBrowse,
@@ -95,6 +96,17 @@ const EVENT_PAYLOAD_VALIDATORS = Object.freeze({
   retained_inventory: validateRetainedInventory,
   retained_action: validateRetainedAction,
 } satisfies Record<TraceDomainEventNameV2, (payload: UnknownRecord) => void>)
+
+function validateAuthorityBlocks(payload: UnknownRecord): void {
+  exactKeys(payload, ['operation_id', 'endpoint', 'transition'], ['generation', 'version', 'failure_detail'], 'authority blocks')
+  member(payload.transition, ['accepted', 'rejected'], 'authority transition')
+  for (const field of ['operation_id', 'endpoint', 'failure_detail']) {
+    if (payload[field] !== undefined && (typeof payload[field] !== 'string' || payload[field].length > 2048)) throw new TypeError('Invalid authority trace text')
+  }
+  for (const field of ['generation', 'version']) {
+    if (payload[field] !== undefined) integerBetween(payload[field], 0, Number.MAX_SAFE_INTEGER, field)
+  }
+}
 
 function validateNetworkDirectory(payload: UnknownRecord): void {
   exactKeys(payload, ['operation_id', 'mirror', 'transition'], ['generation', 'serial', 'trusted_until_ms', 'failure_detail'], 'network directory')

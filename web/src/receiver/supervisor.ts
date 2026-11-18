@@ -1,4 +1,4 @@
-import { isTerminalRecoveryFailure, isShareRecoveryFailure, isLaneRecoveryFailure, isSessionFailure, recoveryRetryAfter } from './recovery-failure'
+import { isTerminalRecoveryFailure, isShareRecoveryFailure, isLaneRecoveryFailure, isSessionFailure, recoveryRetryAfter, recoveryBandwidthWait, recoveryPolicyDenied } from './recovery-failure'
 import {
   defaultReconnectBackoff, generationReconnectBackoff, reconnectPhase, requireBackoff,
   systemReconnectClock, waitingReconnectBackoff, type ReconnectClock,
@@ -358,6 +358,13 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
       await this.#ready(signal)
       return
     }
+    const bandwidthDelay = recoveryBandwidthWait(error)
+    if (bandwidthDelay > 0) {
+      this.#traceOperationRecovery(generation, operationSequence, recovery,
+        { transition: 'wait_for_availability', delayMilliseconds: bandwidthDelay })
+      await this.#waitForOperationRetry(bandwidthDelay, signal)
+      return
+    }
     const availability = generation.availability
     const decision = recovery.decide(this.isCurrent(generation) ? availability : undefined)
     this.#traceOperationRecovery(generation, operationSequence, recovery, decision)
@@ -455,7 +462,7 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
     }
     this.#observeRecoveryError(error)
     const now = this.#clock.now()
-    this.#recoveryPhase = error instanceof GenerationRecoveryExhaustedError
+    this.#recoveryPhase = error instanceof GenerationRecoveryExhaustedError || recoveryBandwidthWait(error) > 0
       ? 'waiting' : reconnectPhase(this.#recoveryAttempt, now - startedAt)
     const capacityDelay = this.#generationRecovery.nextCapacityMilliseconds(now)
     const serverDelay = recoveryRetryAfter(error)
@@ -464,11 +471,14 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
       : requireBackoff(this.#generationBackoffMilliseconds(this.#recoveryAttempt - 1))
     const delay = Math.max(requiredDelay, backoff)
     const retryAt = now + delay
+    let reason: 'bandwidth' | 'server' | 'capacity' | 'authorization' = serverDelay >= capacityDelay ? 'server' : 'capacity'
+    if (recoveryBandwidthWait(error) > 0) reason = 'bandwidth'
+    if (recoveryPolicyDenied(error)) reason = 'authorization'
     try {
       // A manual request can skip backoff, but cannot manufacture capacity or
       // override the service's retry deadline. Publish that same distinction to UI.
       if (requiredDelay > 0) await this.#waitForReconnect(requiredDelay, {
-        kind: 'waiting', reason: serverDelay >= capacityDelay ? 'server' : 'capacity', retryAt,
+        kind: 'waiting', reason, retryAt,
       }, error)
       const remaining = Math.max(0, retryAt - this.#clock.now())
       if (remaining > 0) await this.#waitForReconnect(remaining, {

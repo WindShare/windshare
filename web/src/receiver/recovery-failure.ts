@@ -1,3 +1,5 @@
+import { RelayPolicyDeniedError, RELAY_POLICY_RETRY_MS } from './relay-admission'
+import { BandwidthWaitError } from '../contracts/capacity'
 import { RelayEndpointFailure } from './relay-race'
 import { BlockLaneAttemptsError } from '../content/broker'
 import { SessionRuntimeError } from '../session/runtime-types'
@@ -35,14 +37,29 @@ function isRejectedRelayData(error: unknown): boolean {
     error instanceof RelayProtocolError
 }
 
+export function recoveryBandwidthWait(error: unknown, depth = 0): number {
+  if (depth >= 8) return 0
+  if (error instanceof BandwidthWaitError) return error.retryAfterMilliseconds
+  if (error instanceof AggregateError) return Math.max(0, ...error.errors.map(cause => recoveryBandwidthWait(cause, depth + 1)))
+  return error instanceof Error ? recoveryBandwidthWait(error.cause, depth + 1) : 0
+}
+
+export function recoveryPolicyDenied(error: unknown, depth = 0): boolean {
+  if (depth >= 8) return false
+  if (error instanceof RelayPolicyDeniedError) return true
+  if (error instanceof AggregateError) return error.errors.some(cause => recoveryPolicyDenied(cause, depth + 1))
+  return error instanceof Error && recoveryPolicyDenied(error.cause, depth + 1)
+}
+
 export function recoveryRetryAfter(error: unknown): number {
+  if (error instanceof RelayPolicyDeniedError) return RELAY_POLICY_RETRY_MS
   if (error instanceof RelayEndpointFailure) return recoveryRetryAfter(error.cause)
   if (error instanceof AggregateError) return Math.max(0, ...error.errors.map(recoveryRetryAfter))
-  return error instanceof RelayReceiverError ? error.relayError?.retryAfterMilliseconds ?? 0 : 0
+  return Math.max(recoveryBandwidthWait(error), error instanceof RelayReceiverError ? error.relayError?.retryAfterMilliseconds ?? 0 : 0)
 }
 
 export function isLaneRecoveryFailure(error: unknown): boolean {
-  return error instanceof BlockLaneAttemptsError ||
+  return error instanceof BandwidthWaitError || error instanceof BlockLaneAttemptsError ||
     (error instanceof SessionRuntimeError && error.scope === 'lane')
 }
 

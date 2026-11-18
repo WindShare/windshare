@@ -115,8 +115,15 @@ func (run *workflow) discover(ctx context.Context, address string) (discovery, e
 		return result, errors.New("relay discovery requires an HTTP(S) base URL")
 	}
 	parsed.Path = "/.well-known/windshare"
-	if err = run.call(ctx, http.MethodGet, parsed.String(), nil, &result); err != nil {
+	var raw json.RawMessage
+	if err = run.call(ctx, http.MethodGet, parsed.String(), nil, &raw); err != nil {
 		return result, err
+	}
+	if err = json.Unmarshal(raw, &result); err != nil {
+		return result, err
+	}
+	if result.Version == 2 {
+		return run.discoverNative(raw, address)
 	}
 	if result.Version != 1 || (result.Access != "open" && result.Access != "restricted") || !sameRelay(address, result.RelayURL) {
 		return result, errors.New("relay discovery returned an inconsistent identity or policy")

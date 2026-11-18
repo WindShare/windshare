@@ -2,8 +2,11 @@ package lanes
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
+
+	"github.com/windshare/windshare/core/framechannel"
 
 	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/transfer/internal/failurestate"
@@ -11,7 +14,11 @@ import (
 )
 
 // The wake cadence trades native scheduler overhead against rescue latency.
-const rescuePollInterval = 100 * time.Millisecond
+const (
+	rescuePollInterval   = 100 * time.Millisecond
+	minimumCapacityRetry = 30 * time.Second
+	maximumCapacityRetry = time.Minute
+)
 
 type laneResult struct {
 	state        *laneState
@@ -97,6 +104,13 @@ func (s *Set) Fetch(
 			failures, reassignable = reduceLaneFailures(failures, round.failures)
 			if !reassignable {
 				return Block{}, failurestate.BoundaryError(failures.failure, failures.diagnostic)
+			}
+			// A completed cancellation boundary permits retrying this same live
+			// lane after its cooldown. Congestion consumes no failure budget.
+			for _, failure := range round.failures {
+				if _, waiting := errors.AsType[*framechannel.BandwidthWaitError](failure.err); waiting && failure.reassignable {
+					delete(attempted, failure.state.identity)
+				}
 			}
 			pendingReassignments = round.failures
 		}
@@ -275,6 +289,12 @@ func (s *Set) fetchLane(
 	}
 	admission.permit.Close()
 	state.performance.Complete(s.now(), bytes, fetchErr == nil)
+	if pressure, waiting := errors.AsType[*framechannel.BandwidthWaitError](fetchErr); waiting && reassignable {
+		state.capacityWaitUntil = maxTime(state.capacityWaitUntil, s.now().Add(min(maximumCapacityRetry, max(minimumCapacityRetry, pressure.RetryAfter))))
+		slog.DebugContext(ctx, "content lane waiting for relay bandwidth",
+			"protocol_session_id", s.sessionID, "lane_id", state.identity.ID,
+			"lane_epoch", state.identity.Epoch, "retry_at", state.capacityWaitUntil)
+	}
 	// Completion can change preferred-lane ordering even if receipt capacity
 	// was already available; capacity-only edge notifications cannot replace it.
 	s.notifyAdmissionChangedLocked()
@@ -297,10 +317,11 @@ func (s *Set) fetchLane(
 	}
 	if purpose != lanescheduling.Rescue {
 		outcome := lanescheduling.SampleCompleted
+		_, capacityWaiting := errors.AsType[*framechannel.BandwidthWaitError](fetchErr)
 		switch {
 		case canceled && decision.winner != nil && decision.winner != state:
 			outcome = lanescheduling.SampleSuperseded
-		case canceled || notAdmitted:
+		case canceled || notAdmitted || capacityWaiting:
 			outcome = lanescheduling.SampleCancelled
 		case fetchErr != nil:
 			outcome = lanescheduling.SampleFailed
@@ -329,7 +350,8 @@ func (s *Set) finish(
 	}
 	state.inflight--
 	if err != nil {
-		state.recordFailure(canceled)
+		_, waiting := errors.AsType[*framechannel.BandwidthWaitError](err)
+		state.recordFailure(canceled || waiting)
 	} else {
 		state.failures = 0
 	}

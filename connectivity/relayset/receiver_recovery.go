@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/windshare/windshare/core/framechannel"
+
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	"github.com/windshare/windshare/transport/relayv2"
 )
@@ -278,6 +280,10 @@ func (recovery *ReceiverRecovery) delay(started time.Time, attempt uint32, cause
 	}
 	if rejection, ok := errors.AsType[*relayv2.RelayError](cause); ok {
 		delay = max(delay, rejection.RetryAfter)
+	}
+	if pressure, ok := errors.AsType[*framechannel.BandwidthWaitError](cause); ok {
+		phase = ReceiverRecoveryWaiting
+		delay = max(receiverSlowRetryDelay, pressure.RetryAfter)
 	}
 	delay = min(delay, receiverMaximumRetryDelay)
 	// A supplied jitter source cannot introduce an immediate busy loop or

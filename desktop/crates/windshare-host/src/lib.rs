@@ -1,4 +1,6 @@
 mod abi;
+mod account;
+pub use account::{AccountCommand, AccountState, AccountStatus, AccountView, Allowance};
 mod admission;
 mod connection;
 mod model;
@@ -128,6 +130,10 @@ impl Controller {
         };
         self.shared.update(|model| model.command_error = error);
         let _ = self.shared.wake.notify();
+    }
+
+    pub fn account(&self, account: AccountCommand) {
+        self.command(Command::Account { account });
     }
 
     pub fn cancel(&self, operation_id: &str) {

@@ -159,9 +159,42 @@ impl RequestService<'_> {
                 return reply(StatusCode::BAD_REQUEST, "invalid proxy source identity\n");
             }
         };
+        let bearer = match request
+            .headers()
+            .get_all(hyper::header::AUTHORIZATION)
+            .iter()
+            .collect::<Vec<_>>()
+            .as_slice()
+        {
+            [] => None,
+            [header] => match header
+                .to_str()
+                .ok()
+                .and_then(|value| value.strip_prefix("Bearer "))
+            {
+                Some(value)
+                    if !value.is_empty()
+                        && value.len() <= 4096
+                        && value.bytes().all(|byte| (b'!'..=b'~').contains(&byte)) =>
+                {
+                    Some(value.to_owned())
+                }
+                _ => return reply(StatusCode::BAD_REQUEST, "invalid authorization header\n"),
+            },
+            _ => return reply(StatusCode::BAD_REQUEST, "duplicate authorization header\n"),
+        };
         self.ingress
             .capacity
-            .accept(source, self.connection, self.ingress.environment.now())
+            .accept(
+                source,
+                self.connection,
+                self.ingress.environment.now(),
+                self.ingress.node.access.priority(
+                    share,
+                    bearer.as_deref(),
+                    self.ingress.environment.now().0 / 1000,
+                ),
+            )
             .map_or_else(
                 |_| {
                     self.ingress.node.metrics.admission_refused();
@@ -171,6 +204,9 @@ impl RequestService<'_> {
                     )
                 },
                 |admission| {
+                    if let Some(bearer) = bearer {
+                        admission.set_bearer(bearer);
+                    }
                     *self.upgrade.borrow_mut() = Some((share, admission));
                     response
                 },

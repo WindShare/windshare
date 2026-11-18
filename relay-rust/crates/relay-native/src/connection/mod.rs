@@ -7,8 +7,11 @@ use crate::config::{
     CONTROL_QUEUE_FRAMES, DATA_QUEUE_BYTES, DATA_QUEUE_FRAMES, MAX_CONTROL_BYTES,
     SUBMITTED_DATA_BYTES, SUBMITTED_DATA_FRAMES,
 };
+use crate::node::Runtime;
 use anyhow::{Result, ensure};
-use std::{collections::VecDeque, sync::Arc};
+use std::sync::Arc;
+use windshare_relay_access::Attribution;
+mod pending;
 use tokio::sync::{Semaphore, mpsc, watch};
 use windshare_relay_core::{
     clock::UnixMillis,
@@ -20,7 +23,7 @@ use windshare_relay_core::{
 
 mod admission;
 mod limits;
-pub use admission::{Admission, Capacity};
+pub use admission::{Admission, AdmissionPriority, Capacity};
 pub use limits::ConnectionLimits;
 mod runtime;
 mod transport;
@@ -35,16 +38,16 @@ pub enum Closure {
     Abort,
 }
 
-struct Pending {
-    receipt: ReceivedFrame,
-    bytes: Box<[u8]>,
-}
-
 /// A share actor's exclusive owner of one destination's unsubmitted payloads.
 /// Dropping it aborts the connection; orderly terminal replies use `finish`.
 pub struct Outbox {
+    bearer: Option<String>,
+    source: Option<std::net::IpAddr>,
     connection: ConnectionRef,
-    pending: VecDeque<Pending>,
+    pending: pending::Queues,
+    node: Runtime,
+    attribution: Attribution,
+    wake: Arc<tokio::sync::Notify>,
     pending_bytes: usize,
     pending_limit: Counts,
     ordered: mpsc::Sender<writer::Frame>,
@@ -55,13 +58,21 @@ pub struct Outbox {
     data_bytes: Arc<Semaphore>,
 }
 
-pub fn channel(connection: ConnectionRef) -> (Outbox, Writer, watch::Receiver<Closure>) {
+pub fn channel(
+    connection: ConnectionRef,
+    node: Runtime,
+) -> (Outbox, Writer, watch::Receiver<Closure>) {
     let (ordered, incoming) = mpsc::channel(CONTROL_QUEUE_FRAMES + SUBMITTED_DATA_FRAMES);
     let (probe, probes) = watch::channel(None);
     let (closure, closing) = watch::channel(Closure::Open);
     let outbox = Outbox {
+        bearer: None,
+        source: None,
         connection,
-        pending: VecDeque::new(),
+        pending: pending::Queues::default(),
+        node,
+        attribution: Attribution::Anonymous,
+        wake: Arc::new(tokio::sync::Notify::new()),
         pending_bytes: 0,
         pending_limit: Counts::new(DATA_QUEUE_FRAMES as u64, DATA_QUEUE_BYTES as u64),
         ordered,
@@ -75,6 +86,24 @@ pub fn channel(connection: ConnectionRef) -> (Outbox, Writer, watch::Receiver<Cl
 }
 
 impl Outbox {
+    pub fn set_wake(&mut self, wake: Arc<tokio::sync::Notify>) {
+        self.wake = wake;
+    }
+    pub const fn set_attribution(&mut self, attribution: Attribution) {
+        self.attribution = attribution;
+    }
+    pub fn with_admission(mut self, admission: &Admission) -> Self {
+        self.bearer = admission.bearer().map(str::to_owned);
+        self.source = Some(admission.source());
+        self
+    }
+    pub fn bearer(&self) -> Option<&str> {
+        self.bearer.as_deref()
+    }
+    pub const fn source(&self) -> Option<std::net::IpAddr> {
+        self.source
+    }
+
     /// Retains a kernel receipt and its exact payload until submission or discard.
     ///
     /// # Errors
@@ -97,12 +126,19 @@ impl Outbox {
                         .saturating_sub(self.pending_bytes as u64),
             "unsubmitted output capacity exhausted"
         );
-        self.pending_bytes += bytes.len();
+        let length = bytes.len();
         // Retain exactly the charged bytes, not excess capacity from an ingress buffer.
-        self.pending.push_back(Pending {
-            receipt,
-            bytes: bytes.into_boxed_slice(),
-        });
+        self.pending.push(
+            pending::Pending {
+                receipt,
+                bytes: bytes.into_boxed_slice(),
+                queued_at: tokio::time::Instant::now(),
+            },
+            &self.node.governor,
+            self.attribution,
+            &self.wake,
+        )?;
+        self.pending_bytes += length;
         Ok(())
     }
 
@@ -113,38 +149,50 @@ impl Outbox {
         relay: &mut ShareRelay<O>,
         now: UnixMillis,
     ) -> Option<RelayStep> {
-        let next = self.pending.front()?;
         let slot = Arc::clone(&self.data_slots).try_acquire_owned().ok()?;
-        let size = u32::try_from(next.bytes.len()).ok()?;
+        let (index, size) = self.pending.next()?;
+        let size = u32::try_from(size).ok()?;
         let bytes = Arc::clone(&self.data_bytes)
             .try_acquire_many_owned(size)
             .ok()?;
         let reserved = self.ordered.try_reserve().ok()?;
-        let pending = self.pending.pop_front().expect("inspected front");
+        let pending = self.pending.pop(index);
         self.pending_bytes -= pending.bytes.len();
         // This bounded mailbox is the host handoff, not a cached permit. Anything
         // inside it is already charged as submitted and may outlive revocation.
-        Some(relay.submit(&pending.receipt, now, |_| {
-            reserved.send(writer::Frame::new(
-                pending.bytes.into_vec(),
-                slot,
-                Some(bytes),
-                Some(pending.receipt.flow().session()),
-            ));
-            Submission::Complete
+        let result = self.node.access.with_forwarding(
+            pending.receipt.flow().session().share(),
+            self.attribution,
+            || {
+                relay.submit(&pending.receipt, now, |_| {
+                    reserved.send(
+                        writer::Frame::new(
+                            pending.bytes.into_vec(),
+                            slot,
+                            Some(bytes),
+                            Some(pending.receipt.flow().session()),
+                        )
+                        .attributed(self.attribution),
+                    );
+                    Submission::Complete
+                })
+            },
+        );
+        Some(result.unwrap_or_else(|| {
+            relay.handle(
+                windshare_relay_core::share::Input::Disconnected(self.connection),
+                now,
+            )
         }))
     }
 
     /// Drops only this exact flow's unsubmitted payloads before its discard receipt.
     pub fn discard(&mut self, flow: FlowKey) {
-        self.pending.retain(|pending| {
-            if pending.receipt.flow() == flow {
-                self.pending_bytes -= pending.bytes.len();
-                false
-            } else {
-                true
-            }
-        });
+        self.pending_bytes -= self.pending.discard(flow);
+    }
+
+    pub fn capacity_updates(&mut self, now: tokio::time::Instant) -> Vec<(FlowKey, u32)> {
+        self.pending.capacity_updates(now)
     }
 
     pub fn control_available(&self) -> bool {

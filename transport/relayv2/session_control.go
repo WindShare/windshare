@@ -2,10 +2,32 @@ package relayv2
 
 import (
 	"context"
+	"time"
 
 	"github.com/windshare/windshare/core/framechannel"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
+
+// CapacityWait retains pressure briefly across local retirement so a completed
+// handshake timeout can still be classified by its recovery owner.
+func (c *Channel) CapacityWait() time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := time.Now()
+	return max(0, c.capacityUntil[0].Sub(now), c.capacityUntil[1].Sub(now))
+}
+
+func (l *link) observeCapacityWait(wait v2.CapacityWait) {
+	l.channelMu.Lock()
+	channel := l.channels[wait.RelaySessionID]
+	l.channelMu.Unlock()
+	if channel == nil {
+		return
+	}
+	channel.mu.Lock()
+	defer channel.mu.Unlock()
+	channel.capacityUntil[wait.Direction] = time.Now().Add(time.Duration(wait.Milliseconds) * time.Millisecond)
+}
 
 type sendWindow struct{ frames, bytes int }
 

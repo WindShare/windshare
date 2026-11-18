@@ -33,7 +33,7 @@ func (f signingFixture) envelope(t *testing.T, generation, serial uint64, age ti
 		t.Fatal(err)
 	}
 	payload := nodedirectory.Payload{Format: 1, Network: "fixture", Generation: generation, Serial: serial, IssuedAt: f.now.Add(-age), ExpiresAt: f.now.Add(-age + 24*time.Hour),
-		Nodes: []nodedirectory.Node{{Alias: "jp1", Relay: "https://jp1.example", Roles: []string{"relay"}, Zone: "global", Region: "jp", Provider: "provider", Operator: "operator", CapacityMbps: 50, Status: nodedirectory.Active}}}
+		Nodes: []nodedirectory.Node{{Alias: "jp1", NodeKey: base64.RawURLEncoding.EncodeToString(f.online.Public().(ed25519.PublicKey)), Relay: "https://jp1.example", Roles: []string{"relay"}, Zone: "global", Region: "jp", Provider: "provider", Operator: "operator", CapacityMbps: 50, Status: nodedirectory.Active}}}
 	data, err := nodedirectory.Sign(payload, certificate, f.online, f.roots)
 	if err != nil {
 		t.Fatal(err)

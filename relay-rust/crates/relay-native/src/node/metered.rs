@@ -12,6 +12,7 @@ use tokio::{
 
 pub struct Metered<S> {
     stream: S,
+    usage: super::usage::Meter,
     node: Runtime,
     epoch: u64,
     credit: u64,
@@ -20,9 +21,14 @@ pub struct Metered<S> {
 }
 
 impl<S> Metered<S> {
+    pub fn with_usage(mut self, usage: super::usage::Meter) -> Self {
+        self.usage = usage;
+        self
+    }
     pub fn new(stream: S, node: Runtime, epoch: u64) -> Self {
         Self {
             stream,
+            usage: super::usage::Meter::default(),
             budget_epoch: node.budget_epoch(),
             node,
             epoch,
@@ -110,6 +116,8 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for Metered<S> {
             Poll::Ready(Ok(written)) => {
                 self.credit -= written as u64;
                 self.node.metrics.wire(written);
+                self.usage
+                    .record(&self.node.usage, written, super::now().unsigned_abs());
                 Poll::Ready(Ok(written))
             }
             result => result,

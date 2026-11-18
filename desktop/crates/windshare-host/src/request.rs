@@ -3,6 +3,9 @@ use serde::Serialize;
 #[derive(Debug, Serialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum Command {
+    Account {
+        account: crate::AccountCommand,
+    },
     Create {
         operation_id: String,
         paths: Vec<String>,
