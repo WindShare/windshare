@@ -23,6 +23,7 @@ type Failure struct {
 	Fault              *Fault              `json:"fault,omitempty"`
 	RetryAfterMS       *string             `json:"retry_after_ms,omitempty"`
 	SourcePath         string              `json:"source_path,omitempty"`
+	RelayBaseHint      string              `json:"relay_base_hint,omitempty"`
 	SelectionCollision *SelectionCollision `json:"selection_collision,omitempty"`
 }
 

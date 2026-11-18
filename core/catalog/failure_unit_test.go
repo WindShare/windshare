@@ -573,7 +573,7 @@ func TestFileFailureNamespaceHelpersRollbackEveryUnpublishedRename(t *testing.T)
 	if err := os.Remove(fileCollision); err != nil {
 		t.Fatal(err)
 	}
-	if err := backend.publishFailureLocked(
+	if err := backend.publishFailureLocked(t.Context(),
 		filepath.Join(root, "missing-transaction"), filepath.Join(root, "target"), root,
 	); err == nil {
 		t.Fatal("missing failure transaction was published")
@@ -583,7 +583,7 @@ func TestFileFailureNamespaceHelpersRollbackEveryUnpublishedRename(t *testing.T)
 		t.Fatal(err)
 	}
 	target := filepath.Join(root, "published")
-	if err := backend.publishFailureLocked(transaction, target, filepath.Join(root, "missing-sync-directory")); err == nil {
+	if err := backend.publishFailureLocked(t.Context(), transaction, target, filepath.Join(root, "missing-sync-directory")); err == nil {
 		t.Fatal("unsynced failure rename was reported as published")
 	}
 	if _, err := os.Stat(transaction); err != nil {

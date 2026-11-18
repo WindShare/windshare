@@ -43,7 +43,7 @@ type Ready struct {
 	Capability          link.Link
 	SelectedRootSummary liveshare.SelectedRootSummary
 	RelayEndpoint       v2.RelayEndpoint
-	Admissions          []string
+	Registrations       relayset.SenderRegistrations
 }
 
 type Result struct {

@@ -175,11 +175,13 @@ func (s *activeShare) start(ctx, resourceContext context.Context, request Reques
 	s.server = startSessionServer(resourceContext, s.factory, s.relays, o)
 	s.ready = true
 	o.emit(Observation{Milestone: ShareReady})
-	admitted := []string{s.relays.ReadyRelayURL()}
-	if source, ok := s.relays.(interface{ AdmittedURLs() []string }); ok {
-		admitted = source.AdmittedURLs()
+	registrations := relayset.SenderRegistrations{Admitted: []string{s.relays.ReadyRelayURL()}}
+	if source, ok := s.relays.(interface {
+		Registrations() relayset.SenderRegistrations
+	}); ok {
+		registrations = source.Registrations()
 	}
-	d.Controller.publish(Ready{Capability: s.prepared.Capability(), SelectedRootSummary: s.prepared.SelectedRootSummary(), RelayEndpoint: endpoint, Admissions: admitted})
+	d.Controller.publish(Ready{Capability: s.prepared.Capability(), SelectedRootSummary: s.prepared.SelectedRootSummary(), RelayEndpoint: endpoint, Registrations: registrations})
 	d.Control.NotifyStateChanged()
 	// Optional warming follows readiness and retains its own bounded background
 	// work. A slow scan or a caller that never displays the link cannot hold Ready.

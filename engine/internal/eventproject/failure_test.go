@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -344,9 +346,8 @@ func TestSenderRegistrationNotSentKeepsTheClassOfItsCause(t *testing.T) {
 		{"transport", fmt.Errorf("failed to WebSocket dial: %w", &url.Error{Op: "Get", URL: secret, Err: opaqueCanaryError{secret}}), appobs.FailureRelayTransport},
 		{"protocol", relayv2.ErrProtocol, appobs.FailureRelayProtocol},
 		{"canceled", context.Canceled, appobs.FailureCanceled},
-		// A local relay address that collides with another keeps reading as an
-		// unavailable-relay problem, the same as a bare protocol error.
-		{"joined local address conflict", errors.Join(relayv2.ErrProtocol, errors.New("relay address conflicts with local relay")), appobs.FailureRelayProtocol},
+		{"deadline", context.DeadlineExceeded, appobs.FailureDeadline},
+		{"invalid registration endpoint", errors.Join(relayv2.ErrProtocol, v2.ErrIdentity), appobs.FailureRelayProtocol},
 		{"unclassified", opaqueCanaryError{secret}, appobs.FailureUnexpected},
 	}
 	for _, test := range tests {
@@ -365,27 +366,29 @@ func TestSenderRegistrationNotSentKeepsTheClassOfItsCause(t *testing.T) {
 	}
 }
 
-// An unreachable relay is the commonest registration failure; it must classify
-// from the error the real WebSocket client returns, not from a hand-built value.
-func TestSenderDialToClosedPortIsRelayTransport(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	socket, _, err := websocket.Dial(ctx, "ws://"+address+v2.WebSocketPath, nil) //nolint:bodyclose
-	if err == nil {
-		_ = socket.CloseNow()
-		t.Fatal("WebSocket dial reached a closed port")
-	}
-	failure, present := ClassifyError(&relayv2.RegistrationNotSentError{Cause: err})
-	if !present || failure.Code() != appobs.FailureRelayTransport {
-		t.Fatalf("ClassifyError(closed port) = %+v,%t; want relay transport", failure, present)
+func TestSenderWebSocketDialFailureIsRelayTransport(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		cause error
+	}{
+		{"refused", syscall.ECONNREFUSED},
+		{"dial deadline", context.DeadlineExceeded},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			// Inject at the TCP boundary so HTTP and WebSocket supply their real error wrappers.
+			transport := &http.Transport{DialContext: func(context.Context, string, string) (net.Conn, error) {
+				return nil, test.cause
+			}}
+			options := websocket.DialOptions{HTTPClient: &http.Client{Transport: transport}}
+			_, _, err := websocket.Dial(t.Context(), "ws://relay.example"+v2.WebSocketPath, &options) //nolint:bodyclose
+			if !errors.Is(err, test.cause) {
+				t.Fatalf("WebSocket dial = %v; want cause %v", err, test.cause)
+			}
+			failure, present := ClassifyError(&relayv2.RegistrationNotSentError{Cause: err})
+			if !present || failure.Code() != appobs.FailureRelayTransport {
+				t.Fatalf("ClassifyError(%v) = %+v,%t; want relay transport", err, failure, present)
+			}
+		})
 	}
 }
 

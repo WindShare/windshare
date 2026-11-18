@@ -54,11 +54,7 @@ impl Ingress {
             return Route::Reply(reply(StatusCode::OK, "ok\n"));
         }
         if path == DISCOVERY_PATH {
-            let base = self.endpoint.as_str().trim_end_matches("/v2/ws");
-            let base = base
-                .replacen("wss://", "https://", 1)
-                .replacen("ws://", "http://", 1);
-            let body = serde_json::json!({"version":1,"access":"open","relay_url":base,
+            let body = serde_json::json!({"version":1,"access":"open","relay_url":self.endpoint.relay_url(),
                 "services": self.node.services(), "relay_available": self.node.available()});
             return Route::Reply(
                 Response::builder()

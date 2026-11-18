@@ -92,6 +92,27 @@ fn endpoint_hosts_reject_unspecified_addresses_but_allow_local_networks() {
 }
 
 #[test]
+fn relay_url_removes_only_the_protocol_route() {
+    for (endpoint, base) in [
+        ("ws://[::1]:8787/v2/ws", "http://[::1]:8787"),
+        (
+            "wss://relay.example/team/v2/ws/v2/ws",
+            "https://relay.example/team/v2/ws",
+        ),
+        (
+            "wss://relay.example/team%2Fone/v2/ws",
+            "https://relay.example/team%2Fone",
+        ),
+        (
+            "ws://relay.example/team//v2/ws",
+            "http://relay.example/team//",
+        ),
+    ] {
+        assert_eq!(Endpoint::parse(endpoint).unwrap().relay_url(), base);
+    }
+}
+
+#[test]
 fn endpoint_identity_uses_exact_public_bytes() {
     let endpoint = Endpoint::parse("wss://relay.example/base/v2/ws").unwrap();
     let digest: [u8; 32] = Sha256::new()

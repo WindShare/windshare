@@ -160,9 +160,14 @@ func TestCurrentAvailabilityClearsDuringRecoveryAndReturnsOnAcknowledgement(t *t
 	initial := &senderRelayTestEndpoint{accept: func(context.Context) (*relayv2.Channel, error) { return nil, relayv2.ErrClosed }}
 	dialStarted, release := make(chan struct{}), make(chan struct{})
 	endpoint := &senderRelayTestEndpoint{accept: func(context.Context) (*relayv2.Channel, error) { return new(relayv2.Channel), nil }}
+	attempts := 0
 	lifecycle := newSenderRelayTestLifecycle(t, initial, &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
-		close(dialStarted)
-		<-release
+		attempts++
+		if attempts == 1 {
+			close(dialStarted)
+			<-release
+			return Connection{}, &relayv2.RegistrationNotSentError{Cause: &relayv2.WebSocketRouteError{}}
+		}
 		return NewConnection(endpoint), nil
 	}}, newSenderRelayTestClock())
 	var mu sync.Mutex

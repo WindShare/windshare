@@ -31,7 +31,7 @@ type Sender struct {
 	mu                    sync.Mutex
 	endpoints             []SenderEndpoint
 	pendingRegistrations  int
-	registrationErrors    []error
+	registrationErrors    []*RegistrationFailure
 	current               map[string]bool
 	terminal              map[string]bool
 	stopping              bool
@@ -200,17 +200,28 @@ func (s *Sender) ReadyRelayURL() string {
 	return s.firstReady
 }
 
-func (s *Sender) AdmittedURLs() []string {
+type SenderRegistrations struct {
+	Admitted []string
+	Rejected []string
+}
+
+// Registrations freezes what is known at publication. Pending candidates can
+// still become useful after the first relay releases the share link.
+func (s *Sender) Registrations() SenderRegistrations {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var urls []string
+	var snapshot SenderRegistrations
 	for url, admitted := range s.current {
 		if admitted {
-			urls = append(urls, url)
+			snapshot.Admitted = append(snapshot.Admitted, url)
 		}
 	}
-	slices.Sort(urls)
-	return urls
+	for _, failure := range s.registrationErrors {
+		snapshot.Rejected = append(snapshot.Rejected, failure.URL)
+	}
+	slices.Sort(snapshot.Admitted)
+	slices.Sort(snapshot.Rejected)
+	return snapshot
 }
 
 func (s *Sender) WaitReady(ctx context.Context) error {
@@ -223,7 +234,11 @@ func (s *Sender) WaitReady(ctx context.Context) error {
 		if s.firstReady != "" {
 			return nil
 		}
-		return errors.Join(s.registrationErrors...)
+		failures := make([]error, len(s.registrationErrors))
+		for index, failure := range s.registrationErrors {
+			failures[index] = failure
+		}
+		return errors.Join(failures...)
 	}
 }
 

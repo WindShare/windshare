@@ -134,6 +134,12 @@ func (lifecycle *Lifecycle) beginAttempt(ctx context.Context) (AttemptPermit, er
 func (lifecycle *Lifecycle) registrationFailed(event *Attempt, failure error) bool {
 	event.State, event.Failure = AttemptFailed, failure
 	lifecycle.resumeNext, event.Terminal = classifyRegistrationFailure(event.Resume, failure)
+	// A previously admitted route can return 404 during a proxy restart. Only
+	// an initial, unsent registration can retire this ambiguous candidate.
+	if !lifecycle.mayHaveRegistered {
+		_, missingRoute := errors.AsType[*relayv2.WebSocketRouteError](failure)
+		event.Terminal = event.Terminal || missingRoute
+	}
 	if event.Terminal {
 		lifecycle.observeRecoveryAttempt(*event)
 		lifecycle.mu.Lock()
