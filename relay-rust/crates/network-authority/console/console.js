@@ -73,16 +73,25 @@ async function load() {
     $(scope + '-refill').value = settings[scope + '_rate'].refill_seconds;
   }
   $('nodes').replaceChildren();
+  const publication = verifyPublished(snapshot.directory);
   for (const node of snapshot.nodes) {
     const row = document.createElement('div'); row.className = 'node';
     row.append(text('strong', node.region + ' · ' + node.zone), text('code', encode(node.key)),
       text('span', node.anonymous ? 'Anonymous allowed' : 'Account required'),
       button(node.anonymous ? 'Require account' : 'Allow anonymous', () => api('/v1/admin/nodes', { ...node, anonymous: !node.anonymous })),
       button(node.enabled ? 'Disable node' : 'Enable node', () => api('/v1/admin/nodes', { ...node, enabled: !node.enabled })));
+    const listed = text('small', snapshot.directory ? 'Checking published directory…' : 'Directory unverified');
+    row.append(text('small', 'Enrolled'), listed);
+    void publication.then(directory => {
+      listed.textContent = directory
+        ? (directory.keys.includes(encode(node.key)) ? 'Listed' : 'Absent') + ' in directory ' + directory.generation + '.' + directory.serial
+        : 'Directory unverified';
+    });
     const latest = snapshot.load.find((entry) => entry.node === encode(node.key));
     const load = latest?.load;
-    row.append(text('small', latest
-      ? `${load.active_sessions} sessions · ${(load.forwarded_bytes / 1024 ** 3).toFixed(2)} GiB relayed · ${load.admission_refusals} refusals · ${new Date(latest.created_at * 1000).toLocaleString()}`
+    row.append(text('small', latest?.reported_at ? 'Last report ' + new Date(latest.reported_at * 1000).toLocaleString() : 'Awaiting first report'));
+    if (latest) row.append(text('small', latest
+      ? `${load.active_sessions} sessions · ${(load.forwarded_bytes / 1024 ** 3).toFixed(2)} GiB relayed · ${load.admission_refusals} refusals`
       : 'Awaiting first node report'));
     $('nodes').append(row);
   }
@@ -98,6 +107,28 @@ async function load() {
     $('reports').append(row);
   }
   if (!snapshot.reports.length) $('reports').append(text('li', 'No reports.'));
+}
+async function verifyPublished(expected) {
+  if (!expected || Date.now() >= expected.expires * 1000) return null;
+  try {
+    const response = await fetch(expected.mirror, { mode: 'cors', credentials: 'omit', redirect: 'error',
+      signal: AbortSignal.timeout(5000), cache: 'no-store' });
+    const maximum = 512 * 1024;
+    if (!response.ok || !response.body || Number(response.headers.get('Content-Length')) > maximum) return null;
+    const reader = response.body.getReader(), chunks = [];
+    let length = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.length;
+      if (length > maximum) { await reader.cancel(); return null; }
+      chunks.push(value);
+    }
+    const e = JSON.parse(await new Blob(chunks).text()), c = e.certificate;
+    const signed = JSON.stringify([c.root, c.payload, c.signature, e.payload, e.signature]);
+    const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(signed));
+    return encode(new Uint8Array(hash)) === expected.digest ? expected : null;
+  } catch { return null; }
 }
 submit('login', async (data) => {
   const body = { username: data.get('username'), password: data.get('password') };

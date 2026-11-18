@@ -29,6 +29,7 @@ pub trait Persistence: Clone + Send + Sync + 'static {
 
 struct State {
     connection: Mutex<Connection>,
+    path: std::path::PathBuf,
     // Generation-owned clones retain this lock through transport teardown and
     // blocking transactions, even when their actor or server has disappeared.
     _lease: File,
@@ -69,16 +70,27 @@ impl Database {
             .try_lock()
             .context("another native host owns this database")?;
         drop(file);
-        let mut connection = Connection::open(path)?;
+        let mut connection = Connection::open(&path)?;
         connection.busy_timeout(BUSY_TIMEOUT)?;
         connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
         let generation = initialize(&mut connection, relay)?;
         Ok(Self(Arc::new(State {
             connection: Mutex::new(connection),
+            path,
             _lease: lease,
             relay,
             generation,
         })))
+    }
+
+    // Argon2 and credential writes must never hold the share ledger's SQLite writer lock.
+    pub(crate) fn console_connection(&self) -> Result<Connection> {
+        let mut path = self.0.path.as_os_str().to_os_string();
+        path.push(".console.sqlite");
+        let db = Connection::open(path)?;
+        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
+        db.busy_timeout(BUSY_TIMEOUT)?;
+        Ok(db)
     }
 
     pub(crate) fn generation(&self) -> NonZeroU64 {

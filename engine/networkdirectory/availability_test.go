@@ -108,7 +108,7 @@ func TestTrustFailuresRemainTypedAndDoNotResetLocalState(t *testing.T) {
 			}
 		})
 	}
-	cache := NewFileCache(filepath.Join(t.TempDir(), "config.json"))
+	cache := NewFileCache(filepath.Join(t.TempDir(), "config.json"), f.config().Network)
 	if err := os.MkdirAll(filepath.Dir(cache.path), 0700); err != nil {
 		t.Fatal(err)
 	}

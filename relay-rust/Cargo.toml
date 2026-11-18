@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/relay-access", "crates/relay-core", "crates/relay-native", "crates/relay-cloudflare", "crates/network-authority"]
+members = ["console", "crates/relay-access", "crates/relay-core", "crates/relay-native", "crates/relay-cloudflare", "crates/network-authority"]
 resolver = "3"
 
 [workspace.package]

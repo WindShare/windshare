@@ -61,8 +61,10 @@ type document struct {
 	ConfiguredOnly      bool                 `json:"configured_relays_only,omitempty"`
 }
 type savedRelay struct {
-	URL       string `json:"url"`
-	AccessKey string `json:"access_key,omitempty"`
+	URL             string `json:"url"`
+	ConsoleURL      string `json:"console_url,omitempty"`
+	OfferedFrontend string `json:"offered_frontend,omitempty"`
+	AccessKey       string `json:"access_key,omitempty"`
 }
 
 func configurationPath() (path string, explicit bool, err error) {
@@ -129,7 +131,7 @@ func Decode(reader io.Reader) (Config, error) {
 		result.Profiles = make([]relayprofile.Candidate, 0, len(disk.Profiles))
 	}
 	for _, profile := range disk.Profiles {
-		result.Profiles = append(result.Profiles, relayprofile.Candidate{PublicURL: profile.URL, AccessKey: profile.AccessKey})
+		result.Profiles = append(result.Profiles, relayprofile.Candidate{PublicURL: profile.URL, AccessKey: profile.AccessKey, ConsoleURL: profile.ConsoleURL, OfferedFrontend: profile.OfferedFrontend})
 	}
 	if err := result.Validate(); err != nil {
 		return Config{}, err
@@ -159,6 +161,11 @@ func (config Config) validateFields() error {
 		endpoint, err := v2.NormalizeRelayEndpoint(profile.PublicURL)
 		if err != nil {
 			return fmt.Errorf("%w: profiles[%d].url: %w", ErrConfig, index, relayAddressError{cause: err})
+		}
+		for _, page := range []string{profile.ConsoleURL, profile.OfferedFrontend} {
+			if page != "" && ValidateFrontURL(page) != nil {
+				return fmt.Errorf("%w: invalid relay management or frontend address", ErrConfig)
+			}
 		}
 		saved[endpoint.DialURL] = true
 	}

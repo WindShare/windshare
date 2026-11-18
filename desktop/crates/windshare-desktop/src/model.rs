@@ -100,6 +100,7 @@ pub enum Action {
     SaveSharingSetup(Option<usize>),
     ResumeShare(usize),
     ApproveRelay,
+    Relay(crate::live::RelayAction),
     CancelSharingSetup,
     ToggleTransfer(usize),
     ToggleGrid,

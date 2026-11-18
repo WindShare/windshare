@@ -29,14 +29,16 @@ wind share <path...> [--relay <url>]... [--configured-relays-only] [--front-url 
 ### Sharing defaults
 
 ```text
-wind relay add <url> [--name <device>] [--no-browser]
+wind relay add <url> [--access-key <key>] [--name <device>] [--no-browser]
 wind relay onboard <url> [--name <device>] [--no-browser]
+wind relay list | mode <automatic|selected> | enable <url> | disable <url>
+wind relay frontend <url|default>
 wind relay cancel <url>
 wind config import <file|-> [--front-url <url>] [-v|--verbose]
 ```
 
-- `relay add` discovers relay access, runs browser device approval when required, and saves the profile while preserving active-relay and frontend selections.
-- `relay onboard` enrolls a private relay, saves its managed TURN reference, and selects it in `active_relays`. Relay discovery never changes the frontend choice or configured-only setting.
+- `relay onboard` pairs this device with the relay owner. Confirm the device name and code in the browser. `relay add` uses public admission when available, or accepts a service key with `--access-key`.
+- In automatic mode, new relays are enabled while a candidate slot is free. In selected mode, new relays start disabled. `relay list` shows the shared CLI/desktop settings. Use `relay frontend` to select a receiver website after pairing.
 - `relay cancel` abandons an unfinished enrollment and revokes its issued credential; it fails when nothing is pending for that relay.
 - `config import` validates and replaces the saved sharing configuration from a JSON file or stdin (`-`).
 - Settings live in `windshare/config.json` under the user configuration directory (or `WINDSHARE_CONFIG`). Alongside it, `config.json.state/` holds pending enrollment, TURN discovery, and network rollback protection.

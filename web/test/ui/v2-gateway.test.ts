@@ -51,7 +51,7 @@ vi.mock('../../src/catalog/client', () => ({
 
 vi.mock('../../src/transport/relay/receiver', () => ({
   dialRelayReceiver: vi.fn(async () => ({
-    channel: {},
+    channel: { unavailable: new AbortController().signal },
     descriptorObject: new Uint8Array([1]),
     close: async () => undefined,
   })),
@@ -92,6 +92,8 @@ vi.mock('../../src/receiver/supervisor', () => ({
 }))
 
 import { encodeBase64Url } from '../../src/crypto/bytes'
+import { defaultICEEndpointPool } from '../../src/connectivity/ice-policy/defaults'
+import { resolveLinkRelays } from '../../src/application/network/resolve'
 import type { CommittedDirectory } from '../../src/catalog/page-store'
 import type { CatalogPage } from '../../src/catalog/records'
 import { offerArtifacts } from '../../src/output/planning/offers'
@@ -137,6 +139,7 @@ describe('v2 browser gateway connectivity injection', () => {
     const onContentLaneAdmitted = vi.fn()
     const onContentLaneDetached = vi.fn()
     const gateway = new BrowserReceiverGateway({
+      network: { resolve: resolveLinkRelays, icePool: defaultICEEndpointPool },
       offersFactory,
       nativePeerUsable,
       protocolTrace,

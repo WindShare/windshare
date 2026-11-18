@@ -11,6 +11,8 @@ name = "relay-native"
 path = "src/main.rs"
 
 [dependencies]
+windshare-relay-console = { path = "../../console" }
+argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
 windshare-relay-core = { path = "../relay-core" }
 windshare-relay-access = { path = "../relay-access" }
 ed25519-dalek = { version = "3.0.0", default-features = false, features = ["alloc"] }

@@ -132,7 +132,7 @@ func (runner Runner) Run(ctx context.Context, args []string) Result {
 		runner.writeLine("%s", turn.DelegationNotice)
 	}
 	if config.FrontURL == "" {
-		runner.writeLine("No frontend configured. Re-import with --front-url <url>, or pass --front-url when sharing.")
+		runner.writeLine("Sharing uses the built-in receiver website.")
 	} else {
 		runner.writeLine("Frontend: %s. Future shares use these defaults.", config.FrontURL)
 	}

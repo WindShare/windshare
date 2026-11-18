@@ -77,6 +77,7 @@ func Start() (*Host, error) {
 	host := &Host{log: log, diagnosticDone: make(chan struct{})}
 	setup := newNativeSetup(relayconfig.FileStore{})
 	deps := dependencies{
+		defaultFrontend: network.LinkHost,
 		start: func(ctx context.Context, request engine.ShareRequest) (shareTask, error) {
 			task, err := application.StartShare(ctx, request)
 			if err != nil {

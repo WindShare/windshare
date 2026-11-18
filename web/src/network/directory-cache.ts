@@ -33,9 +33,10 @@ export class MemoryDirectoryCache implements DirectoryCache {
 
 const DATABASE = 'windshare-network'
 const STORE = 'trust'
-const KEY = 'directory'
 
 export class BrowserDirectoryCache implements DirectoryCache {
+  readonly #key: string[]
+  constructor(network: string) { this.#key = ['directory', network] }
   async #open(): Promise<IDBDatabase> {
     return new Promise((resolve, reject) => {
       let blocked = false
@@ -51,7 +52,7 @@ export class BrowserDirectoryCache implements DirectoryCache {
     const db = await this.#open()
     try {
       return await new Promise((resolve, reject) => {
-        const tx = db.transaction(STORE, 'readonly'), request = tx.objectStore(STORE).get(KEY)
+        const tx = db.transaction(STORE, 'readonly'), request = tx.objectStore(STORE).get(this.#key)
         request.onsuccess = () => resolve(request.result as DirectoryRecord | undefined)
         request.onerror = () => reject(request.error)
       })
@@ -62,11 +63,11 @@ export class BrowserDirectoryCache implements DirectoryCache {
     const db = await this.#open()
     try {
       await new Promise<void>((resolve, reject) => {
-        const tx = db.transaction(STORE, 'readwrite'), store = tx.objectStore(STORE), request = store.get(KEY)
+        const tx = db.transaction(STORE, 'readwrite'), store = tx.objectStore(STORE), request = store.get(this.#key)
         // Verification is finished before this transaction; rollback state and
         // alias history commit atomically even when two tabs refresh together.
         request.onsuccess = () => {
-          try { store.put(nextRecord(request.result as DirectoryRecord | undefined, snapshot), KEY) }
+          try { store.put(nextRecord(request.result as DirectoryRecord | undefined, snapshot), this.#key) }
           catch (error) { reject(error); tx.abort() }
         }
         tx.oncomplete = () => resolve()

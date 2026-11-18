@@ -6,9 +6,11 @@ mod blocking;
 mod presentation;
 mod projection;
 mod quit;
+mod relay_preferences;
 mod selection;
 mod session;
 mod setup;
+pub use relay_preferences::RelayAction;
 mod setup_feedback;
 pub use setup::SetupForm;
 

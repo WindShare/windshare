@@ -14,6 +14,7 @@ pub struct Context {
     csrf: String,
     initialization: String,
     email: bool,
+    directory: Option<serde_json::Value>,
 }
 impl Context {
     pub fn new(request: &Request, env: &Env) -> worker::Result<Self> {
@@ -40,6 +41,10 @@ impl Context {
             initialization: env
                 .secret("INITIALIZATION_TOKEN")
                 .map_or_else(|_| String::new(), |value| value.to_string()),
+            directory: env
+                .var("DIRECTORY_PUBLICATION")
+                .ok()
+                .and_then(|v| serde_json::from_str(&v.to_string()).ok()),
             email: env.var("EMAIL_WEBHOOK_URL").is_ok()
                 && env.secret("EMAIL_WEBHOOK_TOKEN").is_ok(),
         })
@@ -86,6 +91,7 @@ pub fn dispatch(
         csrf: provided,
         initialization,
         email,
+        directory,
     } = context;
     if path.starts_with("/v1/admin/")
         && method != Method::Get
@@ -148,6 +154,7 @@ pub fn dispatch(
             let mut value = authority.console(&session)?;
             value["csrf"] = csrf(&session).into();
             value["email_configured"] = email.into();
+            value["directory"] = directory.into();
             value
         }
         (Method::Put, "/v1/admin/settings") => {

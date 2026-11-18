@@ -200,6 +200,8 @@ impl Server {
         path: Option<std::path::PathBuf>,
     ) -> Result<Self> {
         self.node.configure(settings, self.registry.store.clone())?;
+        self.node
+            .open_console(&self.registry.endpoint, &self.registry.store)?;
         self.settings_path = path;
         Ok(self)
     }

@@ -81,7 +81,7 @@ func TestOrdinaryAdditionPreservesSelectionAndFrontend(t *testing.T) {
 	})})
 	result, err := service.Run(t.Context(), Request{URL: "https://open.example", Operation: AddProfile}, nil)
 	if err != nil || len(store.saved.Profiles) != 2 || result.FrontURL != "https://chosen.example" ||
-		!slices.Equal(result.ActiveRelays, []string{"https://public.example"}) {
+		!slices.Equal(result.ActiveRelays, []string{"https://public.example", "https://open.example"}) || !result.Enabled {
 		t.Fatalf("unexpected installation: %+v %v", result, err)
 	}
 	store.saved.ActiveRelays = nil
@@ -89,8 +89,8 @@ func TestOrdinaryAdditionPreservesSelectionAndFrontend(t *testing.T) {
 	if err != nil || len(result.ActiveRelays) != 0 {
 		t.Fatalf("ordinary addition replaced an explicit empty selection: %+v %v", result, err)
 	}
-	if _, err = service.Run(t.Context(), Request{URL: "https://open.example", Operation: PrivateOnboarding}, nil); err == nil {
-		t.Fatal("open relay accepted as private onboarding")
+	if _, err = service.Run(t.Context(), Request{URL: "https://open.example", Operation: PrivateOnboarding}, nil); err != nil {
+		t.Fatal("open relay cannot be added anonymously", err)
 	}
 }
 
@@ -114,7 +114,7 @@ func TestFirstRelayDoesNotAcquireFrontendAuthorityFromDiscovery(t *testing.T) {
 		return response(200, map[string]any{"version": 1, "access": "open", "relay_url": "https://open.example", "frontend_url": "https://suggested.example"})
 	})})
 	result, err := service.Run(t.Context(), Request{URL: "https://open.example", Operation: AddProfile}, nil)
-	if err != nil || result.FrontURL != "" || store.saved.FrontURL != "" || !store.saved.ConfiguredOnly || !slices.Equal(result.ActiveRelays, []string{"https://open.example"}) {
+	if err != nil || result.FrontURL != "" || store.saved.FrontURL != "" || !store.saved.ConfiguredOnly || len(result.ActiveRelays) != 0 || result.Enabled {
 		t.Fatal(result, store.saved.Config, err)
 	}
 }
@@ -190,7 +190,7 @@ func TestPrivateEnrollmentResumesClaimedInstallationWithoutChangingSelectionsEar
 		t.Fatalf("recovery repeated enrollment: %+v %v", result, err)
 	}
 	if len(store.saved.Profiles) != 2 || store.saved.Pending != nil || store.saved.FrontURL != "https://chosen.example" ||
-		!slices.Equal(store.saved.ActiveRelays, []string{"https://private.example"}) {
+		!slices.Equal(store.saved.ActiveRelays, []string{"https://public.example", "https://private.example"}) {
 		t.Fatal("private selection did not commit atomically")
 	}
 }

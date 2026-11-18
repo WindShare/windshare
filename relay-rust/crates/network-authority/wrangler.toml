@@ -17,7 +17,4 @@ new_sqlite_classes = ["NetworkAuthority"]
 [observability]
 enabled = true
 
-[limits]
-cpu_ms = 30000
-
 # The deploy helper writes the API custom domain, trust certificate and allowed origins.

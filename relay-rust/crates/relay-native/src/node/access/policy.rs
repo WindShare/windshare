@@ -82,9 +82,9 @@ impl Service {
         }
         state.trusted = trusted;
         state.active_issuers = active_issuers;
-        state.credentials.clone_from(&policy.credentials);
         state.owners.clone_from(&policy.owner_principals);
         state.policy = policy;
+        state.rebuild_credentials();
         drop(state);
         self.changes.send_modify(|version| *version += 1);
         Ok(())

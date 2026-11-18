@@ -10,8 +10,10 @@ const MaximumEndpoints = relayset.MaximumEndpoints
 const MaxAccessKeyBytes = senderrelay.MaxAccessKeyBytes
 
 type Candidate struct {
-	PublicURL string
-	AccessKey string `json:"-"`
+	PublicURL       string
+	ConsoleURL      string `json:"-"`
+	OfferedFrontend string `json:"-"`
+	AccessKey       string `json:"-"`
 }
 
 func (candidate Candidate) Validate() error {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+
+	"github.com/windshare/windshare/engine/relayprofile"
 )
 
 // workflow executes against one dependency set. Service owns admission and
@@ -36,18 +38,22 @@ func (run *workflow) execute(ctx context.Context, request Request, progress func
 		}
 		return run.continueEnrollment(ctx, saved, progress, request.NoBrowser)
 	}
+	if request.AccessKey != "" {
+		return run.install(ctx, saved.SettingsRevision(), saved.Config.CredentialProfile(request.URL, request.AccessKey))
+	}
 	discovery, err := run.discover(ctx, request.URL)
 	if err != nil {
 		return Result{}, err
 	}
-	if discovery.Access == nativeKeyAccess {
-		return Result{}, ErrLocalCredentialRequired
+	candidate := relayprofile.Candidate{PublicURL: discovery.RelayURL, ConsoleURL: discovery.ConsoleURL, OfferedFrontend: discovery.OfferedFrontend}
+	if discovery.Access == "open" && (request.Operation == AddProfile || discovery.ConsoleURL == "") {
+		return run.install(ctx, saved.SettingsRevision(), candidate)
 	}
-	if request.Operation == PrivateOnboarding && discovery.Access != "restricted" {
-		return Result{}, errors.New("private onboarding requires a restricted relay")
-	}
-	if discovery.Access == "open" {
-		return run.install(ctx, saved.SettingsRevision(), discovery.RelayURL, "", "", request.Operation)
+	if discovery.ConsoleURL == "" {
+		if discovery.Access == nativeKeyAccess {
+			return Result{}, ErrLocalCredentialRequired
+		}
+		return Result{}, errors.New("this relay does not support device pairing")
 	}
 	if err := ValidateDeviceName(request.DeviceName); err != nil {
 		return Result{}, err
@@ -62,7 +68,7 @@ func (run *workflow) execute(ctx context.Context, request Request, progress func
 	}
 	saved.Pending = &PendingSetup{
 		SettingsRevision: saved.SettingsRevision(), OperationID: encode(operation),
-		RelayURL: discovery.RelayURL, ConsoleURL: discovery.ConsoleURL,
+		RelayURL: discovery.RelayURL, ConsoleURL: discovery.ConsoleURL, OfferedFrontend: discovery.OfferedFrontend,
 		DeviceName: request.DeviceName, ClaimSecret: encode(secret), Operation: request.Operation, phase: requesting{}}
 
 	// Persist the claimant before the first request; a lost response can recover by digest.
@@ -75,7 +81,7 @@ func (run *workflow) execute(ctx context.Context, request Request, progress func
 			return errSettingsChangedBeforePending
 		}
 		// Detect capacity and selection failures before asking anyone to approve.
-		if _, err := installation(current.Config, pending.RelayURL, "", request.Operation); err != nil {
+		if _, err := current.Config.MergeRelay(pending.profile("")); err != nil {
 			return err
 		}
 		current.Pending = pending

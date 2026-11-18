@@ -1,4 +1,4 @@
-name: Deploy WindShare to Cloudflare
+name: Deploy private relay
 
 on:
   workflow_dispatch:
@@ -9,7 +9,13 @@ on:
       - .github/workflows/cloudflare-relay.yml
       - scripts/deploy/cloudflare/**
       - deploy/network/**
-      - relay-rust/**
+      - relay-rust/Cargo.*
+      - relay-rust/rust-toolchain.toml
+      - relay-rust/.cargo/**
+      - relay-rust/console/**
+      - relay-rust/crates/relay-core/**
+      - relay-rust/crates/relay-access/**
+      - relay-rust/crates/relay-cloudflare/**
       - web/src/**
       - web/public/**
       - web/index.html

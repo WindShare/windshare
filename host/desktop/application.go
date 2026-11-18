@@ -39,15 +39,16 @@ type accountService interface {
 }
 
 type dependencies struct {
-	accounts    accountService
-	start       func(context.Context, engine.ShareRequest) (shareTask, error)
-	close       func(context.Context) error
-	load        func() (relayconfig.Config, error)
-	configure   func(turn.Settings) error
-	setup       func(context.Context, SetupInput, func(relaysetup.Progress)) (SetupResult, error)
-	cancelSetup func(context.Context, string) error
-	log         func(string, any)
-	diagnostics diagnostics.Sink
+	defaultFrontend string
+	accounts        accountService
+	start           func(context.Context, engine.ShareRequest) (shareTask, error)
+	close           func(context.Context) error
+	load            func() (relayconfig.Config, error)
+	configure       func(turn.Settings) error
+	setup           func(context.Context, SetupInput, func(relaysetup.Progress)) (SetupResult, error)
+	cancelSetup     func(context.Context, string) error
+	log             func(string, any)
+	diagnostics     diagnostics.Sink
 }
 
 type operationPhase interface{ operationPhase() }
@@ -62,8 +63,9 @@ type awaitingNetwork struct {
 type awaitingAuthorization struct{ authority engine.ShareAuthorization }
 type admission struct{ cancelling bool }
 type running struct {
-	task     shareTask
-	frontURL string
+	task           shareTask
+	frontURL       string
+	selectedRelays bool
 }
 type terminal struct {
 	result Completion
@@ -100,6 +102,7 @@ type Application struct {
 	work            sync.WaitGroup
 	readers         sync.WaitGroup
 	subscribers     map[*subscription]struct{}
+	preferences     relayconfig.Preferences
 	setup           SetupView
 	setupRequests   map[string]setupCommand
 	interruptSetup  context.CancelFunc
@@ -117,12 +120,27 @@ func newApplication(sessionID string, deps dependencies) *Application {
 		setup:         SetupView{State: "idle"},
 		setupRequests: make(map[string]setupCommand),
 	}
+	a.preferences = (relayconfig.Config{}).Preferences(deps.defaultFrontend)
 	a.accountContext, a.cancelAccount = context.WithCancel(context.Background())
 	a.watchAccount()
 	return a
 }
 
 func (a *Application) execute(request Request) Message {
+	if request.Command == "preferences" {
+		settings, err := a.deps.load()
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		reply := Message{Version: ProtocolVersion, ID: request.ID}
+		if err != nil {
+			reply.Error = failure("settings_unavailable", err)
+			return reply
+		}
+		a.preferences = settings.Preferences(a.deps.defaultFrontend)
+		snapshot := a.snapshotLocked()
+		reply.Snapshot = &snapshot
+		return reply
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if request.Command != "list" && request.Command != "query" && request.Command != "account" {

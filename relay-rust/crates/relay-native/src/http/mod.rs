@@ -21,11 +21,7 @@ use hyper::{
 use hyper_util::rt::TokioIo;
 use route::{Route, reply};
 use std::{
-    cell::RefCell,
-    convert::Infallible,
-    future::{Ready, ready},
-    net::SocketAddr,
-    sync::Arc,
+    cell::RefCell, convert::Infallible, future::Future, net::SocketAddr, pin::Pin, sync::Arc,
 };
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use windshare_relay_core::{identifiers::ShareId, lifecycle::ConnectionRef};
@@ -217,9 +213,15 @@ impl RequestService<'_> {
 impl Service<Request<Incoming>> for RequestService<'_> {
     type Response = Response<ResponseBody>;
     type Error = Infallible;
-    type Future = Ready<Result<Self::Response, Self::Error>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
     fn call(&self, request: Request<Incoming>) -> Self::Future {
+        if let Some(console) = self.ingress.node.console.get()
+            && crate::console::Console::handles(request.uri().path())
+        {
+            let console = console.clone();
+            return Box::pin(async move { Ok(console.handle(request).await) });
+        }
         let response = match self.ingress.route(&request) {
             Route::Reply(response) => response,
             Route::Upgrade { share, response } => self.upgrade(&request, share, response),
@@ -227,7 +229,7 @@ impl Service<Request<Incoming>> for RequestService<'_> {
         tracing::debug!(event = "http_request", connection = ?self.connection, peer = %self.peer,
             method = %request.method(), path = request.uri().path(),
             origin = ?request.headers().get_all(hyper::header::ORIGIN), status = response.status().as_u16());
-        ready(Ok(response))
+        Box::pin(std::future::ready(Ok(response)))
     }
 }
 

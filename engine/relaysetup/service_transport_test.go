@@ -167,7 +167,7 @@ func TestSetupTransportCancellationRetainsResumableEnrollment(t *testing.T) {
 					t.Fatalf("resume changed enrollment identity: enrollments=%d claims=%v confirmations=%d", enrollments, claims, confirmations)
 				}
 				if store.saved.Pending != nil || len(store.saved.Profiles) != len(initial.Profiles)+1 ||
-					store.saved.FrontURL != initial.FrontURL || !slices.Equal(store.saved.ActiveRelays, []string{relayURL}) {
+					store.saved.FrontURL != initial.FrontURL || !slices.Equal(store.saved.ActiveRelays, append(slices.Clone(initial.ActiveRelays), relayURL)) {
 					t.Fatal("resumed installation did not commit the private relay selection")
 				}
 			})

@@ -84,7 +84,7 @@ func TestPlanningPreservesExplicitIntentAndFrontendAuthority(t *testing.T) {
 }
 
 func TestPublicationKeepsPendingHintsAndOmitsRejectedRegistrations(t *testing.T) {
-	selection := Selection{Plan: relayplan.Plan{
+	selection := Selection{useAliases: true, Plan: relayplan.Plan{
 		Configured: []relayplan.Candidate{{URL: "ready"}, {URL: "rejected"}, {URL: "pending"}},
 		Network:    []relayplan.Candidate{{URL: "failed-node", Alias: "one"}, {URL: "pending-node", Alias: "two"}},
 	}}
@@ -92,6 +92,12 @@ func TestPublicationKeepsPendingHintsAndOmitsRejectedRegistrations(t *testing.T)
 	selection.PublishRelayHints(&capability, []string{"rejected", "failed-node"})
 	if !slices.Equal(capability.Relays, []string{"ready", "pending"}) || !slices.Equal(capability.NodeAliases, []string{"two"}) {
 		t.Fatal(capability.Relays, capability.NodeAliases)
+	}
+	selection.useAliases = false
+	custom := link.Link{Relays: []string{"ready", "pending-node"}}
+	selection.PublishRelayHints(&custom, nil)
+	if !slices.Contains(custom.Relays, "pending-node") || len(custom.NodeAliases) != 0 {
+		t.Fatal("custom frontend lost the explicit network endpoint", custom)
 	}
 }
 

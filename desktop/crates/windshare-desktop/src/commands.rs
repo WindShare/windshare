@@ -79,6 +79,7 @@ impl Desktop {
             Action::SaveSharingSetup(id) => self.save_sharing_setup(id, cx),
             Action::ResumeShare(id) => self.resume_native_share(id),
             Action::CancelSharingSetup => self.cancel_sharing_setup(),
+            Action::Relay(action) => self.relay_action(action, cx),
             Action::ApproveRelay => self.approve_relay(cx),
             Action::ToggleShare(id) => self.toggle_preview_share(id),
             Action::ToggleTransfer(index) => {

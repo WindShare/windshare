@@ -115,6 +115,7 @@ impl Desktop {
             BlockingReason::TrustStateUnreadable => Text::TrustStateUnreadable,
             BlockingReason::TrustStateInvalid => Text::TrustStateInvalid,
             BlockingReason::TrustStateUnwritable => Text::TrustStateUnwritable,
+            BlockingReason::SelectedRelaysUnavailable => Text::SelectedRelaysUnavailable,
             BlockingReason::NoRelayCandidates => Text::NoRelayCandidates,
             BlockingReason::DirectoryUnavailable | BlockingReason::AliasUnavailable => {
                 Text::DirectoryUnavailable

@@ -1,0 +1,14 @@
+[package]
+name = "windshare-relay-console"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64 = "0.23.1"
+serde_json = "1"
+windshare-relay-access = { path = "../crates/relay-access" }
+
+[lints]
+workspace = true

@@ -2,6 +2,7 @@ package desktop
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 
@@ -16,7 +17,9 @@ func TestRepeatAuthorizationRetainsSelectionWithoutResurrectingFailedTask(t *tes
 	original.state.Startup = engine.ShareStartupFailed
 	original.state.Result.Outcome = engine.OutcomeFailed
 	original.state.Authorization = &engine.ShareAuthorization{Kind: engine.ShareSelfHostedAuthorization, RelayURL: "https://chosen.example"}
-	a.execute(createRequest())
+	create := createRequest()
+	create.Relays = []string{"https://chosen.example"}
+	a.execute(create)
 	admitted(t, a)
 	request := Request{Command: "repeat", OperationID: "repeat:1", SourceOperationID: "operation"}
 	reply := a.execute(request)
@@ -54,6 +57,35 @@ func TestRepeatAuthorizationRetainsSelectionWithoutResurrectingFailedTask(t *tes
 	a.work.Wait()
 	if newStarts != 1 || a.operations["operation"].phase.(running).task.Snapshot().Result.Outcome != engine.OutcomeFailed {
 		t.Fatal("setup did not create a fresh task attempt or overwrote the old result")
+	}
+}
+
+func TestExplicitRelayOutageRetainsFilesAndRetriesTheOriginalSelection(t *testing.T) {
+	a, task, _ := fixture(t)
+	task.finish()
+	task.state.Startup = engine.ShareStartupFailed
+	task.state.Result.Outcome = engine.OutcomeFailed
+	task.state.Result.FailureClass = engine.FailureNetwork
+	task.state.Result.Err = errors.New("relay offline")
+	create := createRequest()
+	create.Relays = []string{"https://chosen.example"}
+	a.execute(create)
+	waiting := awaitShare(t, a, create.OperationID, func(s Share) bool { return s.State == AwaitingNetwork })
+	if waiting.Blocking == nil || waiting.Blocking.Reason != "selected_relays_unavailable" || waiting.TaskID != "" {
+		t.Fatal(waiting)
+	}
+	a.deps.start = func(_ context.Context, req engine.ShareRequest) (shareTask, error) {
+		if candidates := req.RelayIntent.Candidates(); len(candidates) != 1 || candidates[0].PublicURL != create.Relays[0] {
+			t.Error("retry changed the selected relay")
+		}
+		return nil, errors.New("retry observed")
+	}
+	a.execute(Request{Command: "resume", OperationID: create.OperationID})
+	a.work.Wait()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.operations[create.OperationID].paths) != 1 {
+		t.Fatal("retry lost the chosen files")
 	}
 }
 

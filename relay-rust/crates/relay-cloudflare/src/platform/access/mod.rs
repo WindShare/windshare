@@ -17,8 +17,7 @@ pub const NAMESPACE: &str = "ACCESS";
 pub const OBJECT_NAME: &str = "authority";
 pub const CREDENTIAL_HEADER: &str = "x-windshare-credential-digest";
 pub const CREDENTIAL_TAG: &str = "credential:";
-const MAX_BODY_BYTES: usize = 4096;
-const MAX_RECORDS: usize = 1000;
+use windshare_relay_console::{MAX_BODY_BYTES, MAX_RECORDS};
 const CLEANUP_INTERVAL_MS: u64 = 60_000;
 const MINIMUM_ALARM_DELAY_MS: u64 = 1_000;
 const COOKIE_NAME: &str = "__Host-windshare_admin";
@@ -217,39 +216,15 @@ impl AccessObject {
     }
 
     fn asset(path: &str) -> Result<Response> {
-        let (content, kind) = match path {
-            "/" => (
-                include_str!(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../console/index.html"
-                )),
-                "text/html; charset=utf-8",
-            ),
-            "/console.js" => (
-                include_str!(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../console/console.js"
-                )),
-                "text/javascript; charset=utf-8",
-            ),
-            "/console.css" => (
-                include_str!(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../console/console.css"
-                )),
-                "text/css; charset=utf-8",
-            ),
-            _ => return Response::error("not found", 404),
+        let Some((content, kind)) = windshare_relay_console::asset(path) else {
+            return Response::error("not found", 404);
         };
         let mut response = Response::ok(content)?;
         for (name, value) in [
             ("Content-Type", kind),
             ("Cache-Control", "no-store"),
             ("X-Content-Type-Options", "nosniff"),
-            (
-                "Content-Security-Policy",
-                "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
-            ),
+            ("Content-Security-Policy", windshare_relay_console::POLICY),
             ("Referrer-Policy", "no-referrer"),
             ("Cross-Origin-Opener-Policy", "same-origin"),
         ] {

@@ -10,6 +10,7 @@ use windshare_ui::{ButtonStyle, Icon, Input, InputEvent, Theme, Tone, column, ro
 
 pub struct SetupForm {
     relay: Entity<Input>,
+    access_key: Entity<Input>,
     frontend: Entity<Input>,
     _subscriptions: Vec<Subscription>,
 }
@@ -23,7 +24,8 @@ impl SetupForm {
         let frontend = cx.new(|cx| {
             Input::new(locale.text(Text::FrontendAddress), cx).placeholder("https://share.example")
         });
-        let subscriptions = [&relay, &frontend]
+        let access_key = cx.new(|cx| Input::new(locale.text(Text::ServiceKey), cx).password());
+        let subscriptions = [&relay, &frontend, &access_key]
             .into_iter()
             .map(|input| {
                 cx.subscribe(input, |this, _, event, cx| {
@@ -39,15 +41,24 @@ impl SetupForm {
             .collect();
         Self {
             relay,
+            access_key,
             frontend,
             _subscriptions: subscriptions,
         }
+    }
+
+    pub(super) fn clear_key(&self, cx: &mut Context<Desktop>) {
+        self.access_key
+            .update(cx, |input, cx| input.set_value(String::new(), cx));
     }
 
     pub fn localize(&self, cx: &mut Context<Desktop>) {
         let locale = language(cx);
         self.relay.update(cx, |input, cx| {
             input.set_labels(locale.text(Text::RelayAddress), "https://relay.example", cx);
+        });
+        self.access_key.update(cx, |input, cx| {
+            input.set_labels(locale.text(Text::ServiceKey), "", cx);
         });
         self.frontend.update(cx, |input, cx| {
             input.set_labels(
@@ -102,6 +113,9 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Runtime::Native(session) = &self.runtime {
+            session.controller.refresh_preferences();
+        }
         self.open_overlay(Overlay::SharingSetup(id), window, cx);
     }
 
@@ -141,6 +155,7 @@ impl Desktop {
                 operation,
                 self.setup_form.relay.read(cx).value().trim().into(),
                 self.setup_form.frontend.read(cx).value().trim().into(),
+                self.setup_form.access_key.read(cx).value().trim().into(),
             );
         }
     }
@@ -178,7 +193,9 @@ impl Desktop {
         };
         let locale = language(cx);
         let operation = id.and_then(|id| self.native_operation(id)).unwrap_or("");
-        let mut form = column().gap(px(20.));
+        let mut form = column()
+            .gap(px(16.))
+            .child(self.relay_preferences(theme, cx));
         if let Some(share) = id.and_then(|id| self.shares.iter().find(|share| share.id == id)) {
             form = form.child(
                 row()
@@ -192,7 +209,9 @@ impl Desktop {
                 column()
                     .gap(px(8.))
                     .child(theme.caption(locale.text(Text::RelayAddress)))
-                    .child(self.setup_form.relay.clone()),
+                    .child(self.setup_form.relay.clone())
+                    .child(theme.caption(locale.text(Text::ServiceKey)))
+                    .child(self.setup_form.access_key.clone()),
             )
             .child(
                 column()

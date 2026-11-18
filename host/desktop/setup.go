@@ -3,6 +3,7 @@ package desktop
 import (
 	"context"
 	"errors"
+	"reflect"
 
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/relayconfig"
@@ -10,9 +11,11 @@ import (
 )
 
 type SetupInput struct {
-	ID       string `json:"id"`
-	RelayURL string `json:"relay_url"`
-	FrontURL string `json:"front_url"`
+	ID         string                      `json:"id"`
+	RelayURL   string                      `json:"relay_url"`
+	FrontURL   string                      `json:"front_url"`
+	AccessKey  string                      `json:"access_key,omitempty"`
+	Preference *relayconfig.PreferenceEdit `json:"preference,omitempty"`
 }
 
 type SetupView struct {
@@ -45,7 +48,7 @@ func (a *Application) configure(request Request) error {
 		return errors.New("setup identity is required")
 	}
 	if previous, ok := a.setupRequests[input.ID]; ok {
-		if previous.input != *input || previous.operationID != request.OperationID {
+		if !reflect.DeepEqual(previous.input, *input) || previous.operationID != request.OperationID {
 			return errors.New("setup identity already belongs to another configuration")
 		}
 		return nil
@@ -71,7 +74,10 @@ func (a *Application) configure(request Request) error {
 			return errors.New("creation operation has finished")
 		}
 	}
-	if input.RelayURL == "" && input.FrontURL == "" {
+	if input.Preference != nil && (input.RelayURL != "" || input.FrontURL != "") || input.AccessKey != "" && input.RelayURL == "" {
+		return errors.New("invalid sharing settings request")
+	}
+	if input.Preference == nil && input.RelayURL == "" && input.FrontURL == "" {
 		return errors.New("enter a relay or frontend URL")
 	}
 	if input.FrontURL != "" {
@@ -97,11 +103,18 @@ func (a *Application) runSetup(ctx context.Context, operationID string, input Se
 			a.setup.FrontendSaved = true
 		}
 		if a.setup.State == "running" {
-			a.setup.Stage, a.setup.VerificationURL, a.setup.UserCode = progress.Stage, progress.VerificationURL, progress.UserCode
+			a.setup.Stage = progress.Stage
+			if progress.VerificationURL != "" {
+				a.setup.VerificationURL, a.setup.UserCode = progress.VerificationURL, progress.UserCode
+			}
 		}
 		a.snapshotLocked()
 	})
+	preferences, preferencesErr := a.deps.load()
 	a.mu.Lock()
+	if preferencesErr == nil {
+		a.preferences = preferences.Preferences(a.deps.defaultFrontend)
+	}
 	a.setup.FrontendSaved, a.setup.RelaySaved = result.FrontendSaved, result.RelaySaved
 	a.setup.RelayURL = result.RelayURL
 	// Only the completed workflow receipt can identify an enrollment to clean up.
@@ -132,12 +145,6 @@ func (a *Application) runSetup(ctx context.Context, operationID string, input Se
 	}
 	a.deps.log("host.setup_completed", a.setup)
 	if err == nil {
-		op := a.operations[operationID]
-		if op != nil && waitingForAdmission(op.phase) && result.RelayURL != "" {
-			// A setup choice applies to this retained selection. It does not
-			// replace saved defaults or unrelated selections' explicit choices.
-			op.relays = []string{result.RelayURL}
-		}
 		for _, pending := range a.operations {
 			if waitingForAdmission(pending.phase) {
 				a.admit(pending)

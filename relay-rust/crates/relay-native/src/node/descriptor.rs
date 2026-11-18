@@ -17,6 +17,28 @@ impl Runtime {
         Ok(())
     }
 
+    pub(crate) fn open_console(
+        &self,
+        endpoint: &crate::Endpoint,
+        store: &crate::Database,
+    ) -> Result<()> {
+        let identity = self
+            .state
+            .lock()
+            .map_err(|_| anyhow!("node state"))?
+            .identity
+            .clone();
+        if let Some(identity) = identity
+            && let Some(console) =
+                crate::console::Console::open(endpoint, store, self.access.clone(), &identity)?
+        {
+            self.console
+                .set(console)
+                .map_err(|_| anyhow!("console already initialized"))?;
+        }
+        Ok(())
+    }
+
     pub(super) fn configure_access(&self, settings: &Settings) -> Result<()> {
         let state = self.state.lock().map_err(|_| anyhow!("node state"))?;
         let mut policy = settings.access.clone();
@@ -90,7 +112,7 @@ impl Runtime {
             "capacity_bytes_per_second":state.settings.capacity_bytes_per_second,
             "classes":["owner","standard","lowest"], "issued_at":now, "expires_at":now+DESCRIPTOR_SECONDS,
             "relay_available":!state.unavailable && self.access.public_enabled(), "anonymous":self.access.anonymous(),
-            "authority":state.settings.authority
+            "console_url": self.console.get().map(crate::console::Console::origin), "authority":state.settings.authority
         });
         let payload = serde_json::to_vec(&descriptor)?;
         let signed = trust::sign(DESCRIPTOR_DOMAIN, &payload, &identity.key());

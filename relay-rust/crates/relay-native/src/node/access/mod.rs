@@ -1,7 +1,9 @@
 //! Local admission and entitlement decisions; authority I/O never enters a share actor.
 mod cache;
+mod devices;
 mod policy;
 pub(crate) use cache::Cache;
+pub(crate) use devices::DeviceKeys;
 mod residency;
 #[cfg(test)]
 #[path = "access_tests.rs"]
@@ -36,6 +38,7 @@ struct State {
     controller: Option<Issuer>,
     trusted: TrustStore,
     active_issuers: std::collections::BTreeSet<Issuer>,
+    devices: DeviceKeys,
     credentials: Vec<Credential>,
     owners: Vec<[u8; 16]>,
     entitlements: BTreeMap<(Issuer, AccountId), Entitlement>,
@@ -52,6 +55,7 @@ impl Default for Service {
                 controller: None,
                 trusted: TrustStore::default(),
                 active_issuers: std::collections::BTreeSet::new(),
+                devices: DeviceKeys::default(),
                 credentials: Vec::new(),
                 owners: Vec::new(),
                 entitlements: BTreeMap::new(),
@@ -146,7 +150,8 @@ impl Service {
                     .iter_mut()
                     .find(|entry| entry.digest == digest)
                 {
-                    let Ok(attribution) = credential.authorize(digest, now) else {
+                    let Ok(attribution) = credential.authorize(digest, now.saturating_mul(1000))
+                    else {
                         return RegistrationDecision::Denied;
                     };
                     attribution

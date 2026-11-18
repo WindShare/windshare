@@ -60,7 +60,7 @@ func TestHostRetainsSelectionWhenEngineCannotPlanNetwork(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte(`{"profiles":[]}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	trustPath := filepath.Join(configPath+".state", "network", "directory.json")
+	trustPath := filepath.Join(configPath+".state", "network", "directory-windshare.json")
 	if err := os.MkdirAll(filepath.Dir(trustPath), 0700); err != nil {
 		t.Fatal(err)
 	}

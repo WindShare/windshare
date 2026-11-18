@@ -4,6 +4,7 @@ use super::{
 };
 use serde_json::{Value, json};
 use windshare_relay_access::{Credential, CredentialState, Enrollment, EnrollmentState};
+use windshare_relay_console::{credential_view, service_configuration};
 use worker::{Method, Request, Response, Result};
 
 impl AccessObject {
@@ -62,7 +63,7 @@ impl AccessObject {
         let access_key = format!("wsak_{}", text_id(&random::<32>()?));
         let credential = Credential {
             id: random()?,
-            principal: Self::principal(db)?,
+            principal: random()?,
             name: name.to_string(),
             digest: Digest::of(access_key.as_bytes()),
             created_at: now,
@@ -75,13 +76,7 @@ impl AccessObject {
             &json!({"credential_id":text_id(&credential.id),"principal_id":text_id(&credential.principal)}),
         );
         let relay = self.env.var("RELAY_URL")?.to_string();
-        let mut configuration =
-            json!({"profiles":[{"url":relay,"access_key":access_key}], "active_relays":[relay]});
-        if let Ok(frontend) = self.env.var("FRONTEND_URL")
-            && !frontend.to_string().is_empty()
-        {
-            configuration["front_url"] = json!(frontend.to_string());
-        }
+        let configuration = service_configuration(&relay, &access_key);
         reply(
             &json!({"credential":credential_view(&credential),"access_key":access_key,"configuration":configuration}),
             201,
@@ -165,9 +160,4 @@ impl AccessObject {
         );
         reply(&json!({"attribution":attribution}), 200)
     }
-}
-fn credential_view(credential: &Credential) -> Value {
-    json!({"credential_id":text_id(&credential.id),"principal_id":text_id(&credential.principal),
-        "name":credential.name,"created_at":credential.created_at,"last_used_at":credential.last_used_at,
-        "revoked":matches!(credential.state,CredentialState::Revoked { .. })})
 }

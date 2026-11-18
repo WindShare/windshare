@@ -6,16 +6,7 @@ const POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self'; c
 pub async fn fetch(request: Request, env: Env, _context: Context) -> Result<Response> {
     let origin = request.headers().get("Origin")?;
     let own = request.url()?.origin().ascii_serialization();
-    let allowed = origin.as_ref().is_none_or(|origin| {
-        *origin == own
-            || env.var("ALLOWED_ORIGINS").is_ok_and(|value| {
-                value
-                    .to_string()
-                    .split(',')
-                    .any(|allowed| allowed.trim() == origin)
-            })
-    });
-    if !allowed {
+    if !allowed_origin(&request.path(), origin.as_deref(), &own, &env) {
         return Response::error("origin refused", 403);
     }
     let mut response = if request.method() == Method::Options {
@@ -64,9 +55,18 @@ pub async fn fetch(request: Request, env: Env, _context: Context) -> Result<Resp
     let headers = response.headers().clone();
     response = response.with_headers(headers);
     response.headers_mut().set("Cache-Control", "no-store")?;
+    let policy = env.var("DIRECTORY_ORIGIN").map_or_else(
+        |_| POLICY.to_owned(),
+        |origin| {
+            POLICY.replace(
+                "connect-src 'self'",
+                &format!("connect-src 'self' {origin}"),
+            )
+        },
+    );
     response
         .headers_mut()
-        .set("Content-Security-Policy", POLICY)?;
+        .set("Content-Security-Policy", &policy)?;
     response
         .headers_mut()
         .set("X-Content-Type-Options", "nosniff")?;
@@ -111,4 +111,21 @@ async fn forward(request: Request, env: &Env) -> Result<Response> {
         .get_stub()?
         .fetch_with_request(request)
         .await
+}
+
+fn allowed_origin(path: &str, origin: Option<&str>, own: &str, env: &Env) -> bool {
+    let admin = path.starts_with("/v1/admin/");
+    let api_origin = env.var("API_ORIGIN").ok().map(|v| v.to_string());
+    if admin && origin.is_some_and(|v| v != own && Some(v) != api_origin.as_deref()) {
+        return false;
+    }
+    origin.is_none_or(|origin| {
+        origin == own
+            || env.var("ALLOWED_ORIGINS").is_ok_and(|value| {
+                value
+                    .to_string()
+                    .split(',')
+                    .any(|allowed| allowed.trim() == origin)
+            })
+    })
 }

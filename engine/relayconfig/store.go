@@ -22,7 +22,7 @@ func (config Config) document() document {
 	}
 	for _, candidate := range config.Profiles {
 		disk.Profiles = append(disk.Profiles, savedRelay{
-			URL: candidate.PublicURL, AccessKey: candidate.AccessKey,
+			URL: candidate.PublicURL, AccessKey: candidate.AccessKey, ConsoleURL: candidate.ConsoleURL, OfferedFrontend: candidate.OfferedFrontend,
 		})
 	}
 	return disk

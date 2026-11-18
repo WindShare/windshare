@@ -103,6 +103,16 @@ impl Identity {
         SigningKey::from_bytes(&self.seed)
     }
 
+    pub(crate) fn initialization_token(&self) -> String {
+        use ed25519_dalek::Signer;
+        // A restart can reprint the pending link without storing another plaintext secret.
+        URL_SAFE_NO_PAD.encode(Sha256::digest(
+            self.key()
+                .sign(b"windshare/node-console/initialize/v1")
+                .to_bytes(),
+        ))
+    }
+
     pub fn id(&self) -> String {
         URL_SAFE_NO_PAD.encode(
             Sha256::new()

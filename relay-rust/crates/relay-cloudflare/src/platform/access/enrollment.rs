@@ -3,12 +3,8 @@ use super::{
     required, text_id, trace,
 };
 use serde_json::{Value, json};
-use windshare_relay_access::{
-    Credential, CredentialState, Enrollment, EnrollmentState, POLL_INTERVAL_MS, Poll,
-};
+use windshare_relay_access::{Credential, CredentialState, Enrollment, EnrollmentState, Poll};
 use worker::{Request, Response, Result};
-const CODE_ALPHABET: &[u8; 32] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-const KEY_DOMAIN: &[u8] = b"windshare/access-key/v1\0";
 const ENROLLMENT_ATTEMPTS: u32 = 30;
 const GLOBAL_ENROLLMENT_ATTEMPTS: u32 = 1000;
 
@@ -38,19 +34,7 @@ impl AccessObject {
         {
             return reply(&json!({"error":"slow_down","retry_after_ms":60_000}), 429);
         }
-        let entropy = random::<8>()?;
-        let code: String = entropy
-            .iter()
-            .enumerate()
-            .flat_map(|(index, byte)| {
-                let character = CODE_ALPHABET[usize::from(byte & 31)] as char;
-                if index == 4 {
-                    vec!['-', character]
-                } else {
-                    vec![character]
-                }
-            })
-            .collect();
+        let code = windshare_relay_console::user_code(random()?);
         let enrollment = match Enrollment::new(
             random()?,
             code,
@@ -79,10 +63,7 @@ impl AccessObject {
     }
     fn enrollment_response(&self, enrollment: &Enrollment) -> Result<Response> {
         reply(
-            &json!({"enrollment_id":text_id(&enrollment.id),"user_code":enrollment.user_code,
-            "verification_uri":format!("{}/",self.console_origin()?),
-            "verification_uri_complete":format!("{}/?code={}",self.console_origin()?,enrollment.user_code),
-            "expires_at":enrollment.expires_at,"interval_ms":POLL_INTERVAL_MS}),
+            &windshare_relay_console::enrollment_response(enrollment, &self.console_origin()?),
             200,
         )
     }
@@ -108,8 +89,7 @@ impl AccessObject {
             Poll::Approved { credential } | Poll::Installed { credential } => {
                 // Derivation lets a lost response recover exactly the same credential;
                 // only digests and public identifiers survive in server storage.
-                let material = [KEY_DOMAIN, &secret].concat();
-                let access_key = format!("wsak_{}", text_id(&Digest::of(&material).0));
+                let access_key = windshare_relay_console::claimed_key(&secret);
                 let saved = db.get::<Credential>(&key("credential", &credential))?;
                 if let Some(saved) = &saved {
                     if saved.state != CredentialState::Active {

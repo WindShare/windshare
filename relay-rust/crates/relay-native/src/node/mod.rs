@@ -64,6 +64,7 @@ impl State {
 #[derive(Clone)]
 pub struct Runtime {
     pub(crate) access: access::Service,
+    pub(crate) console: Arc<OnceLock<crate::console::Console>>,
     pub(crate) governor: governor::Governor,
     state: Arc<Mutex<State>>,
     reporting_authority: Arc<OnceLock<Option<usage::Authority>>>,
@@ -78,6 +79,7 @@ impl Default for Runtime {
         Self {
             governor: governor::Governor::new(access.clone()),
             access,
+            console: Arc::default(),
             state: Arc::new(Mutex::new(State {
                 settings: Settings::default(),
                 identity: None,

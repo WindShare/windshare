@@ -40,10 +40,11 @@ func (failure *apiFailure) temporary() bool {
 }
 
 type discovery struct {
-	Version    int    `json:"version"`
-	Access     string `json:"access"`
-	RelayURL   string `json:"relay_url"`
-	ConsoleURL string `json:"console_url"`
+	Version         int    `json:"version"`
+	Access          string `json:"access"`
+	RelayURL        string `json:"relay_url"`
+	ConsoleURL      string `json:"console_url"`
+	OfferedFrontend string `json:"frontend_url"`
 }
 
 func (run *workflow) call(ctx context.Context, method, address string, body, out any) error {
@@ -139,11 +140,14 @@ func (run *workflow) discover(ctx context.Context, address string) (discovery, e
 		}
 		return result, errors.New("relay discovery returned a different relay identity")
 	}
-	if result.Access == "restricted" && !secureEndpoint(result.ConsoleURL) {
+	if (result.Access == "restricted" || result.ConsoleURL != "") && !secureEndpoint(result.ConsoleURL) {
 		return result, errors.New("restricted relay requires HTTPS access endpoints")
 	}
-	if result.Access == "restricted" && !secureEndpoint(parsed.Scheme+"://"+parsed.Host) {
+	if result.ConsoleURL != "" && !secureEndpoint(parsed.Scheme+"://"+parsed.Host) {
 		return result, errors.New("restricted relay discovery requires HTTPS")
+	}
+	if result.OfferedFrontend != "" && !secureEndpoint(result.OfferedFrontend) {
+		result.OfferedFrontend = ""
 	}
 	return result, nil
 }

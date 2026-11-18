@@ -3,7 +3,7 @@
   "database": "relay.sqlite",
   "identity_file": "identity.json",
   "endpoint": "wss://relay.example.com/v2/ws",
-  "origins": { "kind": "allowlist", "origins": ["https://app.example.com"] },
+  "origins": { "kind": "allowlist", "origins": ["https://ws.ourworld.top", "https://windshare.cc", "https://app.example.com"] },
   "node": {
     "zone": "global",
     "region": "",

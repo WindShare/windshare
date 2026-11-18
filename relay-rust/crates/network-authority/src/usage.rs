@@ -77,12 +77,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
             save(&mut self.store, &receipt, &digest)?;
         }
         self.remember_shares(&batch.shares)?;
-        let load_key = key("node-load", &batch.node);
-        let previous_load =
-            load::<(u64, windshare_relay_access::usage::Load)>(&self.store, &load_key)?;
-        if previous_load.is_none_or(|(time, _)| batch.created_at >= time) {
-            save(&mut self.store, &load_key, &(batch.created_at, &batch.load))?;
-        }
+        self.record_load(&batch)?;
         let accounts: BTreeSet<_> = batch
             .resident_accounts
             .iter()
@@ -122,5 +117,20 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 &self.signing.key,
             )),
         })
+    }
+
+    fn record_load(&mut self, batch: &Batch) -> Result<()> {
+        save(
+            &mut self.store,
+            &key("node-report", &batch.node),
+            &self.environment.now(),
+        )?;
+        let load_key = key("node-load", &batch.node);
+        let previous_load =
+            load::<(u64, windshare_relay_access::usage::Load)>(&self.store, &load_key)?;
+        if previous_load.is_none_or(|(time, _)| batch.created_at >= time) {
+            save(&mut self.store, &load_key, &(batch.created_at, &batch.load))?;
+        }
+        Ok(())
     }
 }

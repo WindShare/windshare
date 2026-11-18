@@ -10,6 +10,7 @@ import (
 	"github.com/windshare/windshare/adapters/filesystem"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/relayprofile"
 )
 
 func (a *Application) create(request Request) error {
@@ -30,14 +31,14 @@ func (a *Application) create(request Request) error {
 		}
 		paths[i] = absolute
 	}
-	op, err := a.registerOperation(request.OperationID, paths, "")
+	op, err := a.registerOperation(request.OperationID, paths, request.Relays, "")
 	if err == nil && op != nil {
 		a.admit(op)
 	}
 	return err
 }
 
-func (a *Application) registerOperation(id string, paths []string, sourceID string) (*operation, error) {
+func (a *Application) registerOperation(id string, paths, relays []string, sourceID string) (*operation, error) {
 	if a.closing {
 		return nil, engine.ErrClosed
 	}
@@ -45,7 +46,7 @@ func (a *Application) registerOperation(id string, paths []string, sourceID stri
 		return nil, errors.New("operation_id must contain 1–128 bytes")
 	}
 	if previous, ok := a.operations[id]; ok {
-		if previous.paths != nil && (!slices.Equal(previous.paths, paths) || previous.sourceOperationID != sourceID) {
+		if previous.paths != nil && (!slices.Equal(previous.paths, paths) || !slices.Equal(previous.relays, relays) || previous.sourceOperationID != sourceID) {
 			return nil, errors.New("operation_id already belongs to another selection")
 		}
 		return nil, nil
@@ -56,7 +57,7 @@ func (a *Application) registerOperation(id string, paths []string, sourceID stri
 	if len(a.operations) >= maximumOperations {
 		return nil, errors.New("application operation limit reached; restart after stopping shares")
 	}
-	op := &operation{id: id, paths: slices.Clone(paths), sourceOperationID: sourceID, createdAt: time.Now()}
+	op := &operation{id: id, paths: slices.Clone(paths), relays: slices.Clone(relays), sourceOperationID: sourceID, createdAt: time.Now()}
 	a.operations[op.id] = op
 	return op, nil
 }
@@ -124,7 +125,7 @@ func (a *Application) prepareAdmission(ctx context.Context, op *operation) opera
 		Source: filesystem.ShareSource(op.paths), RelayIntent: intent, Frontend: config.FrontURL, Diagnostics: a.deps.diagnostics,
 	})
 	if task != nil {
-		return running{task: task, frontURL: config.FrontURL}
+		return running{task: task, frontURL: config.FrontURL, selectedRelays: intent.Mode() != relayprofile.Planned}
 	}
 	if err == nil {
 		err = errors.New("engine returned no share task")

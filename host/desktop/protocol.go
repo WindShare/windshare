@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/windshare/windshare/engine"
+	"github.com/windshare/windshare/engine/relayconfig"
 
 	"github.com/windshare/windshare/engine/observation/wire"
 )
@@ -17,6 +18,7 @@ type Request struct {
 	SourceOperationID string        `json:"source_operation_id,omitempty"`
 	OperationID       string        `json:"operation_id,omitempty"`
 	TaskID            string        `json:"task_id,omitempty"`
+	Relays            []string      `json:"relays,omitempty"`
 	Paths             []string      `json:"paths,omitempty"`
 	Setup             *SetupInput   `json:"setup,omitempty"`
 	SetupID           string        `json:"setup_id,omitempty"`
@@ -92,11 +94,12 @@ type Completion struct {
 }
 
 type Snapshot struct {
-	SessionID string       `json:"session_id"`
-	Revision  uint64       `json:"revision"`
-	Shares    []Share      `json:"shares"`
-	Setup     SetupView    `json:"setup"`
-	Account   *AccountView `json:"account,omitempty"`
+	SessionID   string                  `json:"session_id"`
+	Revision    uint64                  `json:"revision"`
+	Shares      []Share                 `json:"shares"`
+	Preferences relayconfig.Preferences `json:"preferences"`
+	Setup       SetupView               `json:"setup"`
+	Account     *AccountView            `json:"account,omitempty"`
 }
 
 func (s Snapshot) active() bool {

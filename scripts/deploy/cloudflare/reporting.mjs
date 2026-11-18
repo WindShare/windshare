@@ -36,7 +36,7 @@ export function deploymentReporter({ githubActions, operationId, mode, write = c
 }
 
 export function deploymentReport(result, { githubActions, mode, revision, outputDirectory }) {
-  const heading = ['### WindShare Cloudflare deployment', '', 'Mode: ' + mode, '',
+  const heading = ['### Private relay deployed', '', 'Mode: ' + mode, '',
     result.turn?.status === 'incomplete' ? 'TURN setup incomplete: ' + result.turn.reason + ' Rerun deployment to retry.' :
       'Managed TURN is available automatically when enabled in the console. Cloudflare Realtime usage is billed separately.',
     'Local TURN budgets default to unlimited and apply per Engine; they are not account-wide spending caps.', ''];
@@ -64,10 +64,10 @@ export function deploymentReport(result, { githubActions, mode, revision, output
     file,
     summary: [...heading,
       'Relay: ' + result.state.endpoint, '', 'Console: ' + result.state.consoleEndpoint, '',
-      frontendUrl ? 'Frontend: ' + frontendUrl : 'Frontend: hosted separately (pass --front-url when sharing).', '',
+      frontendUrl ? 'Frontend: ' + frontendUrl : 'Frontend: uses your configured receiving website.', '',
       'Run this command and approve the device in the console with your owner password:', '',
       '    ' + onboarding, '    wind share <path>', '',
-      'Onboarding keeps existing profiles and selects only this private relay. P2P stays enabled.',
+      'Run `wind relay list` to see enabled relays and your receiving website.',
       'Updates preserve relay identity, enrolled credentials and share storage. Changing the owner password signs administrators out.', '',
     ].join('\n'),
   };

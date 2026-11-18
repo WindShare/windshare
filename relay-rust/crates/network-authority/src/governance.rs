@@ -131,7 +131,9 @@ impl<R: Store, E: Environment> Authority<R, E> {
             serde_json::json!({"settings":self.settings()?,"account_count":load::<u64>(&self.store,"account-count")?.unwrap_or(0),
             "reviews":read("review/")?,"nodes":read("node/")?,"load":self.store.scan("node-load/", Some(MAX_CONSOLE_ROWS))?.into_iter().map(|(key,value)| {
                 let (created_at, load): (u64, windshare_relay_access::usage::Load) = serde_json::from_str(&value)?;
-                Ok(serde_json::json!({"node":key.trim_start_matches("node-load/"),"created_at":created_at,"load":load}))
+                let node=key.trim_start_matches("node-load/");
+                let reported_at=crate::store::load::<u64>(&self.store,&format!("node-report/{node}"))?;
+                Ok(serde_json::json!({"node":node,"created_at":created_at,"reported_at":reported_at,"load":load}))
             }).collect::<Result<Vec<_>>>()?,"reports":read("report/")?,
             "restrictions":self.restrictions()?}),
         )

@@ -27,6 +27,11 @@ func newNativeSetup(settings relayconfig.FileStore) nativeSetup {
 
 func (setup nativeSetup) run(ctx context.Context, input SetupInput, progress func(relaysetup.Progress)) (SetupResult, error) {
 	var result SetupResult
+	if input.Preference != nil {
+		_, err := setup.settings.Update(ctx, input.Preference.Apply)
+		result.FrontendSaved = err == nil && input.Preference.Action == "frontend"
+		return result, err
+	}
 	if input.FrontURL != "" {
 		if _, err := setup.settings.Update(ctx, func(config *relayconfig.Config) error {
 			config.FrontURL = input.FrontURL
@@ -45,7 +50,7 @@ func (setup nativeSetup) run(ctx context.Context, input SetupInput, progress fun
 		return result, nil
 	}
 	installed, err := setup.service.Run(ctx, relaysetup.Request{
-		URL: input.RelayURL, Operation: relaysetup.AddProfile,
+		URL: input.RelayURL, Operation: relaysetup.PrivateOnboarding, AccessKey: input.AccessKey,
 		DeviceName: relaysetup.DefaultDeviceName("WindShare desktop"), NoBrowser: true,
 	}, progress)
 	if err == nil {

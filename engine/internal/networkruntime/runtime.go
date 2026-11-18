@@ -89,10 +89,11 @@ func (r *Runtime) Close() {
 }
 
 type Selection struct {
-	Relays   []relayprofile.Registration
-	Plan     relayplan.Plan
-	Frontend string
-	Decision networkconfig.Decision
+	Relays     []relayprofile.Registration
+	Plan       relayplan.Plan
+	Frontend   string
+	useAliases bool
+	Decision   networkconfig.Decision
 }
 
 func (r *Runtime) Plan(ctx context.Context, intent relayprofile.Intent, frontend string) (Selection, error) {
@@ -133,6 +134,8 @@ func (r *Runtime) Plan(ctx context.Context, intent relayprofile.Intent, frontend
 		result.Decision.Filters = append(result.Decision.Filters, networkconfig.Filter{Endpoint: filter.Endpoint, Reason: filter.Reason})
 	}
 	result.Frontend, result.Decision.FrontendReason = r.frontend(frontend)
+	// Only these release frontends are built against this directory's trust roots.
+	result.useAliases = result.Frontend != "" && (result.Frontend == r.config.LinkHost || result.Frontend == r.config.BackupEntry)
 	if result.Frontend != "" {
 		if err := relayconfig.ValidateFrontURL(result.Frontend); err != nil {
 			return Selection{}, err

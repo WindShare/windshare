@@ -4,11 +4,16 @@ Run `wsrelay --config node.json`. Copy the [example](../../../deploy/wsrelay/nod
 set the public WebSocket endpoint, browser origins and capacity, and terminate TLS
 at a reverse proxy. Relative database and identity paths resolve beside the config.
 A wildcard listen address requires an explicit endpoint. Copy `relay_url` from
-the startup JSON or `/.well-known/windshare` into `wind share --relay` or
-`wind relay add`.
+the startup JSON or `/.well-known/windshare` into `wind relay onboard <url>`.
+Use the one-time administrator URL printed at startup to set a password. Confirm
+the device name and code at the approval URL. Public guests can use `wind relay add`.
 
 The first start creates a durable Ed25519 node identity and prints its owner access
-key. Keep the identity file private and back it up with SQLite and its WAL. One host
+key. Back up the identity, relay SQLite database and its sibling `.console.sqlite`
+using a consistent SQLite backup. The console stores sessions, per-device installation
+receipts and revocations. Paired devices share the owner priority and have separate
+keys. The console can issue a service key for a separate principal. Revoking a key
+also stops its active shares on this node. One host
 owns each database; its endpoint identity and permanent STOP history cannot be reset
 by changing configuration. JSON readiness goes to stdout; traces go to stderr.
 `RUST_LOG=debug` includes kernel decisions.

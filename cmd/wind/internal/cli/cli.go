@@ -56,9 +56,10 @@ const usageText = `Usage:
       -v and --verbose show static diagnostic milestones; --trace creates one exact file and --trace-dir generates one run-specific file.
       Trace targets are mutually exclusive; '-' is unsupported because trace data never shares a human or capability stream.
 
-  ` + commandmeta.Name + ` relay add <url> [--name <device>] [--no-browser]
+  ` + commandmeta.Name + ` relay add <url> [--access-key <key>] [--name <device>] [--no-browser]
   ` + commandmeta.Name + ` relay onboard <url> [--name <device>] [--no-browser]
-      Discover relay access and approve this device in the browser. Onboard selects only that private relay.
+      Pair this device in the relay console. New profiles follow the saved relay mode.
+  ` + commandmeta.Name + ` relay list | mode <automatic|selected> | enable|disable <url> | frontend <url|default>
   ` + commandmeta.Name + ` relay cancel <url>
       Cancel a pending enrollment.
 

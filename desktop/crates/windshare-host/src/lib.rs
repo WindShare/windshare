@@ -7,7 +7,7 @@ mod model;
 mod request;
 mod setup;
 pub use model::ShareAuthorization;
-pub use setup::{Setup, SetupContext, SetupRecovery};
+pub use setup::{PreferenceEdit, RelayPreferences, Setup, SetupContext, SetupRecovery};
 
 #[cfg(test)]
 #[path = "lifecycle_tests.rs"]
@@ -148,7 +148,39 @@ impl Controller {
         });
     }
 
-    pub fn configure(&self, operation_id: &str, relay_url: String, front_url: String) {
+    pub fn refresh_preferences(&self) {
+        self.command(Command::Preferences);
+    }
+
+    pub fn edit_preference(&self, edit: PreferenceEdit) {
+        self.submit_setup(
+            "",
+            request::SetupInput {
+                preference: Some(edit),
+                ..Default::default()
+            },
+        );
+    }
+
+    pub fn configure(
+        &self,
+        operation_id: &str,
+        relay_url: String,
+        front_url: String,
+        access_key: String,
+    ) {
+        self.submit_setup(
+            operation_id,
+            request::SetupInput {
+                relay_url,
+                front_url,
+                access_key,
+                ..Default::default()
+            },
+        );
+    }
+
+    fn submit_setup(&self, operation_id: &str, input: request::SetupInput) {
         self.command(Command::Configure {
             operation_id: operation_id.into(),
             setup: request::SetupInput {
@@ -156,8 +188,7 @@ impl Controller {
                     "setup:{}",
                     self.sequence.fetch_add(1, Ordering::Relaxed) + 1
                 ),
-                relay_url,
-                front_url,
+                ..input
             },
         });
     }

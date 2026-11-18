@@ -2,44 +2,23 @@ package relaysetup
 
 import (
 	"context"
-	"fmt"
-	"slices"
 
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relayprofile"
 )
 
-// installation is shared by preflight and commit so the acknowledgement cannot
-// bypass a constraint discovered only when publishing settings.
-func installation(saved relayconfig.Config, address, accessKey string, operation Operation) (relayconfig.Config, error) {
-	firstProfile := len(saved.Profiles) == 0
-	candidate := relayprofile.Candidate{PublicURL: address, AccessKey: accessKey}
-	if err := candidate.Validate(); err != nil {
-		return relayconfig.Config{}, err
-	}
-	saved.Profiles = slices.Clone(saved.Profiles)
-	index := slices.IndexFunc(saved.Profiles, func(profile relayprofile.Candidate) bool { return sameRelay(profile.PublicURL, address) })
-	if index < 0 {
-		if len(saved.Profiles) >= relayconfig.MaximumProfiles {
-			return relayconfig.Config{}, fmt.Errorf("%w: limit of %d relay profiles reached; import fewer profiles before adding another relay",
-				relayconfig.ErrConfig, relayconfig.MaximumProfiles)
-		}
-		saved.Profiles = append(saved.Profiles, candidate)
-	} else {
-		saved.Profiles[index] = candidate
-	}
-	if operation == PrivateOnboarding || (firstProfile && len(saved.ActiveRelays) == 0) {
-		saved.ActiveRelays = []string{address}
-	}
-	// Discovery authorizes relay use, never the frontend that receives link keys.
-	return saved, saved.Validate()
-}
-
 func installationResult(saved relayconfig.Config, address, credentialID string) Result {
-	return Result{RelayURL: address, CredentialID: credentialID, FrontURL: saved.FrontURL, ActiveRelays: saved.ActiveRelays}
+	result := Result{RelayURL: address, CredentialID: credentialID, FrontURL: saved.FrontURL, ActiveRelays: saved.ActiveRelays, ConfiguredOnly: saved.ConfiguredOnly}
+	for _, relay := range saved.Preferences("").Relays {
+		if sameRelay(relay.URL, address) {
+			result.Enabled, result.ConsoleURL, result.OfferedFrontend = relay.Enabled, relay.ConsoleURL, relay.OfferedFrontend
+			break
+		}
+	}
+	return result
 }
 
-func (run *workflow) install(ctx context.Context, revision, address, accessKey, credentialID string, operation Operation) (Result, error) {
+func (run *workflow) install(ctx context.Context, revision string, candidate relayprofile.Candidate) (Result, error) {
 	saved, err := run.dependencies.Store.Update(ctx, func(current *Snapshot) error {
 		if current.Pending != nil {
 			return ErrPendingSetup
@@ -47,7 +26,7 @@ func (run *workflow) install(ctx context.Context, revision, address, accessKey, 
 		if current.SettingsRevision() != revision {
 			return errSettingsChangedBeforePending
 		}
-		next, err := installation(current.Config, address, accessKey, operation)
+		next, err := current.Config.MergeRelay(candidate)
 		if err == nil {
 			current.Config = next
 		}
@@ -56,7 +35,7 @@ func (run *workflow) install(ctx context.Context, revision, address, accessKey, 
 	if err != nil {
 		return Result{}, err
 	}
-	return installationResult(saved.Config, address, credentialID), nil
+	return installationResult(saved.Config, candidate.PublicURL, ""), nil
 }
 
 func pendingInstallation(current Snapshot, pending *PendingSetup) (relayconfig.Config, error) {
@@ -69,5 +48,9 @@ func pendingInstallation(current Snapshot, pending *PendingSetup) (relayconfig.C
 	if current.SettingsRevision() != pending.SettingsRevision {
 		return relayconfig.Config{}, errSettingsChangedWhilePending
 	}
-	return installation(current.Config, pending.RelayURL, pending.credential().AccessKey, pending.Operation)
+	return current.Config.MergeRelay(pending.profile(pending.credential().AccessKey))
+}
+
+func (pending *PendingSetup) profile(accessKey string) relayprofile.Candidate {
+	return relayprofile.Candidate{PublicURL: pending.RelayURL, AccessKey: accessKey, ConsoleURL: pending.ConsoleURL, OfferedFrontend: pending.OfferedFrontend}
 }

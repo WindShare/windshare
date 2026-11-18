@@ -49,7 +49,7 @@ func parse(data []byte, configPath string) (*networkconfig.Config, error) {
 	result := &networkconfig.Config{LinkHost: source.LinkHost, BackupEntry: source.BackupEntry, GlobalPairCoversMainland: source.GlobalPairCoversMainland,
 		Directory: networkdirectory.Config{Network: source.Network, Mirrors: source.Mirrors}}
 	if configPath != "" {
-		result.Directory.Cache = networkdirectory.NewFileCache(configPath)
+		result.Directory.Cache = networkdirectory.NewFileCache(configPath, source.Network)
 	}
 	for _, root := range source.Roots {
 		key, err := base64.RawURLEncoding.Strict().DecodeString(root.Key)

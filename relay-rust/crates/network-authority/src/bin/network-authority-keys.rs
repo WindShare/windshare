@@ -37,6 +37,22 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
+    if let [command, document, seed] = args.as_slice()
+        && command == "verify"
+    {
+        let trust: serde_json::Value = serde_json::from_slice(&std::fs::read(document)?)?;
+        let key = windshare_network_authority::Signing::load(
+            trust["root"].as_str().context("trust root")?,
+            trust["certificate"].as_str().context("trust certificate")?,
+            std::fs::read_to_string(seed)?.trim(),
+        )?;
+        ensure!(
+            key.generation
+                .usable(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs()),
+            "certificate outside validity"
+        );
+        return Ok(());
+    }
     let [directory, generation] = args.as_slice() else {
         anyhow::bail!("Usage: network-authority-keys <offline-key-directory> <generation>")
     };

@@ -2247,8 +2247,18 @@ dependencies = [
  "wasm-bindgen",
  "web-sys",
  "windshare-relay-access",
+ "windshare-relay-console",
  "windshare-relay-core",
  "worker",
+]
+
+[[package]]
+name = "windshare-relay-console"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "serde_json",
+ "windshare-relay-access",
 ]
 
 [[package]]
@@ -2269,6 +2279,7 @@ name = "windshare-relay-native"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "argon2",
  "base64",
  "chrono",
  "crc32fast",
@@ -2292,6 +2303,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "windshare-relay-access",
+ "windshare-relay-console",
  "windshare-relay-core",
 ]
 
