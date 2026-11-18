@@ -17,6 +17,12 @@ async fn pending_unlimited_write_cannot_spend_credit_after_budget_is_enabled() {
     );
     node.update(
         Settings {
+            authority: None,
+            zone: "global".into(),
+            region: String::new(),
+            stun_urls: Vec::new(),
+            access: super::access::Policy::default(),
+            capacity_bytes_per_second: None,
             services: Services::default(),
             relay_budget: Some(MonthlyBudget {
                 bytes: 2,

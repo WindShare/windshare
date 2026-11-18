@@ -20,14 +20,14 @@ pub fn run<I>(
     shutdown: watch::Receiver<bool>,
     generation: Generation,
     admission: Arc<Admission>,
-    metrics: crate::node::Metrics,
+    node: crate::node::Runtime,
 ) -> impl Future<Output = Result<()>>
 where
     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let socket = AdmittedSocket::new(socket, Arc::clone(&admission));
     supervise(
-        socket, events, connection, shutdown, generation, admission, metrics,
+        socket, events, connection, shutdown, generation, admission, node,
     )
 }
 
@@ -38,14 +38,16 @@ async fn supervise<I>(
     mut shutdown: watch::Receiver<bool>,
     generation: Generation,
     admission: Arc<Admission>,
-    metrics: crate::node::Metrics,
+    node: crate::node::Runtime,
 ) -> Result<()>
 where
     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let (outbox, writer, mut closure) = channel(connection);
+    let (outbox, writer, mut closure) = channel(connection, node.clone());
+    let writer = writer.with_usage(admission.usage.clone());
+    let outbox = outbox.with_admission(&admission);
     tokio::select! {
-        result = events.send(Event::Connected(connection, outbox)) => {
+        result = events.send(Event::Connected(connection, Box::new(outbox))) => {
             // SendError owns the rejected event. Do not let an Outbox escape
             // tracked cleanup inside a task's returned error value.
             result.map_err(|_| anyhow!("share actor unavailable"))?;
@@ -65,7 +67,7 @@ where
     let write_events = events.clone();
     let writer = tasks.spawn(generation.track(async move {
         writer
-            .run(sink, flush, write_events, connection, metrics)
+            .run(sink, flush, write_events, connection, node.metrics.clone())
             .await?;
         Ok(Closure::Drain)
     }));

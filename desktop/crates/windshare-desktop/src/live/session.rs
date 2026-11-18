@@ -137,6 +137,15 @@ impl Desktop {
         };
         let model = session.controller.model();
         if model != session.model {
+            if model.setup != session.model.setup
+                && matches!(
+                    model.setup,
+                    windshare_host::Setup::Finished { .. }
+                        | windshare_host::Setup::Cancelled { .. }
+                )
+            {
+                self.setup_form.clear_key(cx);
+            }
             for share in &mut self.shares {
                 let ShareSource::Native { operation_id } = &share.source else {
                     continue;
@@ -175,6 +184,14 @@ impl Desktop {
                     }
                 }
             }));
+            if let windshare_host::Setup::Running {
+                verification_url, ..
+            } = &model.setup
+                && !verification_url.is_empty()
+                && !matches!(&session.model.setup, windshare_host::Setup::Running { verification_url: previous, .. } if previous == verification_url)
+            {
+                cx.open_url(verification_url);
+            }
             session.model = model;
             cx.notify();
         }

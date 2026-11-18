@@ -2,48 +2,7 @@ use alloc::string::String;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-/// Stable service ownership, distinct from the sender's cryptographic share identity.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum Attribution {
-    Anonymous,
-    Credential {
-        principal: [u8; 16],
-        credential: [u8; 16],
-    },
-}
-
-impl Attribution {
-    pub const ENCODED_BYTES: usize = 33;
-
-    pub fn encode(self) -> [u8; Self::ENCODED_BYTES] {
-        let mut bytes = [0; Self::ENCODED_BYTES];
-        if let Self::Credential {
-            principal,
-            credential,
-        } = self
-        {
-            bytes[0] = 1;
-            bytes[1..17].copy_from_slice(&principal);
-            bytes[17..].copy_from_slice(&credential);
-        }
-        bytes
-    }
-
-    pub fn decode(bytes: [u8; Self::ENCODED_BYTES]) -> Option<Self> {
-        match bytes[0] {
-            0 if bytes[1..].iter().all(|byte| *byte == 0) => Some(Self::Anonymous),
-            1 => {
-                let principal = bytes[1..17].try_into().ok()?;
-                let credential = bytes[17..].try_into().ok()?;
-                (principal != [0; 16] && credential != [0; 16]).then_some(Self::Credential {
-                    principal,
-                    credential,
-                })
-            }
-            _ => None,
-        }
-    }
-}
+use crate::Attribution;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Digest(pub [u8; 32]);

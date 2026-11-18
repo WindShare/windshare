@@ -2,6 +2,8 @@ package sessioncore
 
 import (
 	"context"
+	"time"
+
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -26,6 +28,22 @@ type HandedOffChannel struct {
 }
 
 func (channel *HandedOffChannel) Recv() <-chan framechannel.Frame { return channel.receive }
+func (channel *HandedOffChannel) CapacityWait() time.Duration {
+	if pressure, ok := channel.FrameChannel.(framechannel.CapacityPressure); ok {
+		return pressure.CapacityWait()
+	}
+	return 0
+}
+
+// ClassifyLaneWait is restricted to progress deadlines; ordinary failures retain
+// their original semantics even when a relay has recently reported congestion.
+func (runtime *Runtime) ClassifyLaneWait(identity session.LaneIdentity, cause error) error {
+	selected, err := runtime.lanes.selectLane(&identity)
+	if err != nil {
+		return cause
+	}
+	return framechannel.WithCapacityWait(selected.channel, cause)
+}
 
 func ReceiveHandshake(ctx context.Context, receive <-chan framechannel.Frame) ([]byte, error) {
 	select {

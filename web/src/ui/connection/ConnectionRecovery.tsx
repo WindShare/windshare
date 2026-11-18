@@ -30,6 +30,8 @@ function recoveryMessage(activity: ReceiverReconnectActivity): string {
   if (activity.kind === 'connecting') return 'Reconnecting to the sender…'
   switch (activity.reason) {
     case 'backoff': return 'Waiting to reconnect. You can retry now.'
+    case 'authorization': return 'Official relay access is restricted for this share.'
+    case 'bandwidth': return 'Relay bandwidth is busy. Your download will resume automatically.'
     case 'capacity': return 'Taking a short pause after repeated connection attempts.'
     case 'server': return 'The connection service asked us to wait before retrying.'
   }

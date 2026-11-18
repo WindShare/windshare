@@ -14,7 +14,7 @@ import (
 
 const maximumPort = 65_535
 
-var readinessLine = regexp.MustCompile(`(?m)^(\{[^\r\n]*\})\r?$`)
+var readinessLine = regexp.MustCompile(`(?m)^(\{[^\r\n]*"event"\s*:\s*"listening"[^\r\n]*\})\r?$`)
 
 type Readiness struct {
 	Address  string `json:"address"`

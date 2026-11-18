@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/internal/failurestate"
 )
@@ -86,6 +87,9 @@ func reduceLaneFailures(current laneFailureSet, results []laneResult) (laneFailu
 	})
 	reassignable := true
 	for _, result := range ordered {
+		if _, waiting := errors.AsType[*framechannel.BandwidthWaitError](result.err); waiting && result.reassignable {
+			continue // Renewable congestion must not accumulate an unbounded error chain.
+		}
 		diagnostic := fmt.Errorf(
 			"lane %d/%d: %w", result.state.identity.ID, result.state.identity.Epoch, result.err,
 		)

@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Report a share · WindShare</title><link rel="stylesheet" href="/console.css"><script type="module" src="/report.js"></script></head>
+<body><header>WindShare</header><main><h1>Report a share</h1><p id="status" role="status"></p>
+<form id="report" action="/v1/reports" method="post">
+<label for="share">Share ID</label><input id="share" name="share" required maxlength="16" autocorrect="off" autocapitalize="none" spellcheck="false">
+<label for="reason">Reason</label><textarea id="reason" name="reason" rows="5" maxlength="2000" required></textarea>
+<button type="submit">Send report</button></form></main></body></html>

@@ -2,7 +2,6 @@ package desktop
 
 import (
 	"errors"
-	"slices"
 )
 
 // A repeat owns a new identity and eventual engine task. The source remains a
@@ -16,11 +15,10 @@ func (a *Application) repeat(request Request) error {
 	if view.State != Finished {
 		return errors.New("stop the existing share before sharing again")
 	}
-	op, err := a.registerOperation(request.OperationID, source.paths, source.id)
+	op, err := a.registerOperation(request.OperationID, source.paths, source.relays, source.id)
 	if err != nil || op == nil {
 		return err
 	}
-	op.relays = slices.Clone(source.relays)
 	if view.Authorization != nil {
 		op.phase = awaitingAuthorization{authority: *view.Authorization}
 	} else {

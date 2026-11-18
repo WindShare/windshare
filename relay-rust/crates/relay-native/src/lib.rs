@@ -3,6 +3,7 @@
 mod actor;
 mod config;
 mod connection;
+mod console;
 mod environment;
 mod generation;
 mod http;

@@ -1,4 +1,19 @@
 {
-  "services": { "relay": false, "stun": true },
-  "relay_budget": { "bytes": 1000000000000, "reset_day_utc": 1 }
+  "listen": "127.0.0.1:8484",
+  "database": "/var/lib/windshare-network/relay.sqlite",
+  "identity_file": "/var/lib/windshare-network/identity.json",
+  "endpoint": "wss://relay.example.com/v2/ws",
+  "origins": { "kind": "public" },
+  "proxy": { "peers": ["127.0.0.1"], "header": "x-windshare-source-ip" },
+  "stun": { "udp_addresses": ["0.0.0.0:3478"], "admin_address": "127.0.0.1:8081" },
+  "node": {
+    "zone": "global",
+    "region": "",
+    "services": { "relay": true, "stun": true },
+    "relay_budget": { "bytes": 1000000000000, "reset_day_utc": 1 },
+    "capacity_bytes_per_second": 12500000,
+    "stun_urls": ["stun:relay.example.com:3478"],
+    "authority": null,
+    "access": { "anonymous": true, "trusted_issuers": [] }
+  }
 }

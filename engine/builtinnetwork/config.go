@@ -9,12 +9,18 @@ import (
 	"errors"
 
 	"github.com/windshare/windshare/core/nodedirectory"
+	"github.com/windshare/windshare/core/serviceauthority"
 	release "github.com/windshare/windshare/deploy/network"
+	"github.com/windshare/windshare/engine/account"
 	"github.com/windshare/windshare/engine/networkconfig"
 	"github.com/windshare/windshare/engine/networkdirectory"
 )
 
 type releaseConfig struct {
+	Authority *struct {
+		URL  string `json:"url"`
+		Root string `json:"root"`
+	} `json:"authority"`
 	Network     string   `json:"network"`
 	LinkHost    string   `json:"link_host"`
 	BackupEntry string   `json:"backup_entry"`
@@ -43,7 +49,7 @@ func parse(data []byte, configPath string) (*networkconfig.Config, error) {
 	result := &networkconfig.Config{LinkHost: source.LinkHost, BackupEntry: source.BackupEntry, GlobalPairCoversMainland: source.GlobalPairCoversMainland,
 		Directory: networkdirectory.Config{Network: source.Network, Mirrors: source.Mirrors}}
 	if configPath != "" {
-		result.Directory.Cache = networkdirectory.NewFileCache(configPath)
+		result.Directory.Cache = networkdirectory.NewFileCache(configPath, source.Network)
 	}
 	for _, root := range source.Roots {
 		key, err := base64.RawURLEncoding.Strict().DecodeString(root.Key)
@@ -64,6 +70,16 @@ func parse(data []byte, configPath string) (*networkconfig.Config, error) {
 	// unsigned mirrors or manufacture an official signing authority on first run.
 	if len(result.Directory.Roots) == 0 {
 		result.Directory.Mirrors = nil
+	}
+	if source.Authority != nil {
+		root, err := serviceauthority.PublicKey(source.Authority.Root)
+		if err != nil {
+			return nil, err
+		}
+		result.Authority = &account.Config{URL: source.Authority.URL, Root: root}
+		if configPath != "" {
+			result.Authority.Store = account.FileStore{Path: configPath + ".account.json"}
+		}
 	}
 	return result, nil
 }

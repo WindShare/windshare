@@ -5,15 +5,16 @@ import (
 	"io"
 	"time"
 
+	"github.com/windshare/windshare/engine/relayprofile"
+
 	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/core/liveshare"
-	"github.com/windshare/windshare/engine/relayprofile"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
-func prepareRelay(prepared Prepared, candidate relayprofile.Candidate, d Dependencies, o *observations) (Relay, error) {
+func prepareRelay(prepared Prepared, candidate relayprofile.Registration, d Dependencies, o *observations) (Relay, error) {
 	material := prepared.Registration()
 	shareID, shareInstance, pkHash, err := relayRegistrationIdentity(material)
 	if err != nil {
@@ -40,7 +41,7 @@ func prepareRelay(prepared Prepared, candidate relayprofile.Candidate, d Depende
 		attempts = d.Attempts(candidate.PublicURL)
 	}
 	relay, err := d.Relay(senderrelay.Config{
-		Candidate: senderrelay.Candidate{PublicURL: candidate.PublicURL, AccessKey: candidate.AccessKey}, Fresh: register, ResumeToken: resumeToken,
+		Candidate: senderrelay.Candidate{PublicURL: candidate.PublicURL, Authorization: candidate.Authorization}, Fresh: register, ResumeToken: resumeToken,
 		PrivateKey: material.SenderPrivateKey, Descriptor: material.Descriptor,
 		LifecycleObservationCapacity: capacity,
 		ObserveConnection:            o.attachRelay,

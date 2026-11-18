@@ -25,7 +25,11 @@ func (selection Selection) PublishRelayHints(capability *link.Link, rejected []s
 	}
 	for _, candidate := range selection.Plan.Network {
 		if !slices.Contains(rejected, candidate.URL) {
-			capability.NodeAliases = append(capability.NodeAliases, candidate.Alias)
+			if selection.useAliases {
+				capability.NodeAliases = append(capability.NodeAliases, candidate.Alias)
+			} else {
+				capability.Relays = append(capability.Relays, candidate.URL)
+			}
 		}
 	}
 }

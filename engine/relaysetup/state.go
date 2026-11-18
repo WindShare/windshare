@@ -28,6 +28,7 @@ type setupIntent struct {
 	OperationID      string    `json:"operation_id"`
 	RelayURL         string    `json:"relay_url"`
 	ConsoleURL       string    `json:"console_url"`
+	OfferedFrontend  string    `json:"offered_frontend,omitempty"`
 	DeviceName       string    `json:"device_name"`
 	ClaimSecret      string    `json:"claim_secret"`
 	Operation        Operation `json:"operation"`

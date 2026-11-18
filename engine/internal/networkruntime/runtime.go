@@ -12,13 +12,17 @@ import (
 	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/connectivity/relayplan"
 	"github.com/windshare/windshare/core/nodedirectory"
+	"github.com/windshare/windshare/core/serviceauthority"
+	"github.com/windshare/windshare/engine/account"
 	"github.com/windshare/windshare/engine/networkconfig"
 	"github.com/windshare/windshare/engine/networkdirectory"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relayprofile"
+	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
 type Runtime struct {
+	accounts        *account.Service
 	config          networkconfig.Config
 	directory       *networkdirectory.Directory
 	directoryError  error
@@ -59,12 +63,25 @@ func New(config *networkconfig.Config, now func() time.Time) (*Runtime, error) {
 		r.directoryError = err
 		slog.Warn("network_directory_initialization_failed", "error", err)
 	}
+	if config.Authority != nil {
+		authority := *config.Authority
+		authority.Now, authority.ResolveNode = now, r.officialNode
+		r.accounts, err = account.New(authority)
+		if err != nil {
+			cancel()
+			if r.directory != nil {
+				r.directory.Close()
+			}
+			return nil, err
+		}
+	}
 	go r.run()
 	return r, nil
 }
 
 func (r *Runtime) Close() {
 	r.cancel()
+	r.accounts.Close()
 	if r.directory != nil {
 		r.directory.Close()
 	}
@@ -72,10 +89,11 @@ func (r *Runtime) Close() {
 }
 
 type Selection struct {
-	Relays   []relayprofile.Candidate
-	Plan     relayplan.Plan
-	Frontend string
-	Decision networkconfig.Decision
+	Relays     []relayprofile.Registration
+	Plan       relayplan.Plan
+	Frontend   string
+	useAliases bool
+	Decision   networkconfig.Decision
 }
 
 func (r *Runtime) Plan(ctx context.Context, intent relayprofile.Intent, frontend string) (Selection, error) {
@@ -102,20 +120,22 @@ func (r *Runtime) Plan(ctx context.Context, intent relayprofile.Intent, frontend
 	if len(plan.Configured)+len(plan.Network) == 0 {
 		return Selection{}, r.noCandidates(NoRelayCandidates)
 	}
-	result := Selection{Plan: plan, Relays: configured}
+	result := Selection{Plan: plan, Relays: relayprofile.Registrations(configured)}
 	result.Decision = networkconfig.Decision{DirectoryGeneration: plan.Decision.DirectoryGeneration, DirectorySerial: plan.Decision.DirectorySerial,
 		NetworkGeneration: generation, ConfiguredOnly: only}
 	for _, candidate := range plan.Configured {
 		result.Decision.Candidates = append(result.Decision.Candidates, networkconfig.Candidate{URL: candidate.URL, Configured: true})
 	}
 	for _, candidate := range plan.Network {
-		result.Relays = append(result.Relays, relayprofile.Candidate{PublicURL: candidate.URL})
+		result.Relays = append(result.Relays, relayprofile.Registration{PublicURL: candidate.URL, Authorization: r.accounts.Source(candidate.URL)})
 		result.Decision.Candidates = append(result.Decision.Candidates, networkconfig.Candidate{URL: candidate.URL, Alias: candidate.Alias})
 	}
 	for _, filter := range plan.Decision.Filters {
 		result.Decision.Filters = append(result.Decision.Filters, networkconfig.Filter{Endpoint: filter.Endpoint, Reason: filter.Reason})
 	}
 	result.Frontend, result.Decision.FrontendReason = r.frontend(frontend)
+	// Only these release frontends are built against this directory's trust roots.
+	result.useAliases = result.Frontend != "" && (result.Frontend == r.config.LinkHost || result.Frontend == r.config.BackupEntry)
 	if result.Frontend != "" {
 		if err := relayconfig.ValidateFrontURL(result.Frontend); err != nil {
 			return Selection{}, err
@@ -133,6 +153,30 @@ func (r *Runtime) buildPlan(configured []string, only bool, generation string) (
 	}
 	return relayplan.Build(relayplan.Input{Configured: configured, Directory: payload, NetworkGeneration: generation, Now: r.now(),
 		Observations: r.observations.Snapshot(generation, r.now()), Policy: relayplan.Policy{ConfiguredOnly: only, GlobalPairCoversMainland: r.config.GlobalPairCoversMainland}})
+}
+
+func (r *Runtime) Accounts() *account.Service { return r.accounts }
+
+func (r *Runtime) officialNode(address string) (account.Node, bool) {
+	if r.directory == nil {
+		return account.Node{}, false
+	}
+	snapshot, usable := r.directory.Snapshot()
+	if !usable {
+		return account.Node{}, false
+	}
+	endpoint, err := v2.NormalizeRelayEndpoint(address)
+	if err != nil {
+		return account.Node{}, false
+	}
+	for _, node := range snapshot.Payload().Nodes {
+		other, err := v2.NormalizeRelayEndpoint(node.Relay)
+		if err == nil && endpoint.Identity == other.Identity && node.Status != nodedirectory.Draining && node.HasRole("relay") {
+			key, err := serviceauthority.PublicKey(node.NodeKey)
+			return account.Node{Key: key}, err == nil
+		}
+	}
+	return account.Node{}, false
 }
 
 func (r *Runtime) generation() string {

@@ -18,9 +18,12 @@ fn peer() -> SocketAddr {
 }
 
 fn admission(ingress: &Ingress) -> Result<Arc<Admission>> {
-    Ok(ingress
-        .capacity
-        .accept(peer().ip(), connection(1), ingress.environment.now())?)
+    Ok(ingress.capacity.accept(
+        peer().ip(),
+        connection(1),
+        ingress.environment.now(),
+        crate::connection::AdmissionPriority::Authenticated,
+    )?)
 }
 
 fn ingress(burst: u32) -> Ingress {

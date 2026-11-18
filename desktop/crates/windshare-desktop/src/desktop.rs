@@ -31,6 +31,7 @@ pub struct Desktop {
     pub share_flow: ShareFlow,
     pub runtime: Runtime,
     pub setup_form: crate::live::SetupForm,
+    pub account_form: crate::live::AccountForm,
     pub share_reveal_wakeup: Option<gpui::Task<()>>,
     pub intro_anchors: IntroAnchors,
     pub receive_flow: ReceiveFlow,
@@ -58,6 +59,7 @@ impl Desktop {
             cx.new(|cx| Input::new(locale.text(Text::ShareLink), cx).accent(Tone::Lavender));
         let super_share = cx.new(|cx| crate::supershare::SuperShare::new(window, cx));
         let setup_form = crate::live::SetupForm::new(cx);
+        let account_form = crate::live::AccountForm::new(cx);
         let mut subscriptions = vec![
             cx.observe(&super_share, |_, _, cx| cx.notify()),
             cx.subscribe_in(&super_share, window, |this, _, _, window, cx| {
@@ -78,6 +80,7 @@ impl Desktop {
                     input.set_labels(locale.text(Text::ShareLink), "", cx);
                 });
                 this.setup_form.localize(cx);
+                this.account_form.localize(cx);
                 cx.notify();
             }),
             cx.subscribe(&search, |_, _, _, cx| cx.notify()),
@@ -116,6 +119,7 @@ impl Desktop {
             share_flow: ShareFlow::Choose,
             runtime,
             setup_form,
+            account_form,
             share_reveal_wakeup: None,
             intro_anchors: IntroAnchors::default(),
             receive_flow: ReceiveFlow::default(),
@@ -320,6 +324,9 @@ impl Desktop {
                         })
                         .when_some(self.runtime.setup_cancellation_error(), |el, error| {
                             el.child(Self::setup_cancellation_notice(theme, error, cx))
+                        })
+                        .when_some(self.account_notice(theme, cx), |el, notice| {
+                            el.child(notice)
                         })
                         .when_some(self.runtime.notice(), |el, error| {
                             el.child(

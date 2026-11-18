@@ -1,9 +1,17 @@
 //! Node authority is shared by admission, discovery and every existing transport.
+pub mod access;
 mod budget;
+pub(crate) mod governor;
+mod identity;
 mod metered;
 mod metrics;
+pub(crate) mod usage;
+pub use identity::Identity;
+mod configuration;
+mod descriptor;
 mod settings;
 mod trace;
+pub use configuration::Configuration;
 
 pub(crate) use metered::Metered;
 pub(crate) use metrics::Metrics;
@@ -15,7 +23,7 @@ use crate::storage::Database;
 use anyhow::{Result, anyhow};
 use std::{
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::watch;
@@ -25,6 +33,8 @@ const SUMMARY_INTERVAL: Duration = Duration::from_secs(60);
 
 struct State {
     settings: Settings,
+    identity: Option<Identity>,
+    control: Option<Database>,
     budget: Option<budget::Budget>,
     unavailable: bool,
     storage_failed: bool,
@@ -53,23 +63,38 @@ impl State {
 
 #[derive(Clone)]
 pub struct Runtime {
+    pub(crate) access: access::Service,
+    pub(crate) console: Arc<OnceLock<crate::console::Console>>,
+    pub(crate) governor: governor::Governor,
     state: Arc<Mutex<State>>,
+    settings_writer: Arc<Mutex<()>>,
+    reporting_authority: Arc<OnceLock<Option<usage::Authority>>>,
     revocations: watch::Sender<u64>,
     pub(crate) metrics: Metrics,
+    pub(crate) usage: usage::Collector,
 }
 
 impl Default for Runtime {
     fn default() -> Self {
+        let access = access::Service::default();
         Self {
+            governor: governor::Governor::new(access.clone()),
+            access,
+            console: Arc::default(),
             state: Arc::new(Mutex::new(State {
                 settings: Settings::default(),
+                identity: None,
+                control: None,
                 budget: None,
                 unavailable: false,
                 storage_failed: false,
                 budget_revision: 0,
             })),
+            settings_writer: Arc::default(),
+            reporting_authority: Arc::default(),
             revocations: watch::channel(0).0,
             metrics: Metrics::default(),
+            usage: usage::Collector::default(),
         }
     }
 }
@@ -83,6 +108,11 @@ impl Runtime {
     }
 
     pub(crate) fn configure(&self, settings: Settings, store: Database) -> Result<()> {
+        self.access.apply_cache(store.initialize_control()?)?;
+        self.state
+            .lock()
+            .map_err(|_| anyhow!("node state"))?
+            .control = Some(store.clone());
         self.state
             .lock()
             .map_err(|_| anyhow!("node state poisoned"))?
@@ -186,7 +216,34 @@ impl Runtime {
     /// # Errors
     /// Configuration changes cannot reset a billing ledger or revive spent quota.
     pub fn update(&self, settings: Settings, timestamp: i64) -> Result<()> {
+        self.apply_settings(Some(settings), timestamp)
+    }
+
+    fn apply_settings(&self, next: Option<Settings>, timestamp: i64) -> Result<()> {
+        // Admission policy and the signed descriptor must describe the same
+        // revision. A periodic budget refresh may only reapply the latest one.
+        let writer = self
+            .settings_writer
+            .lock()
+            .map_err(|_| anyhow!("node settings poisoned"))?;
+        let settings = match next {
+            Some(settings) => settings,
+            None => self
+                .state
+                .lock()
+                .map_err(|_| anyhow!("node state poisoned"))?
+                .settings
+                .clone(),
+        };
         settings.validate()?;
+        anyhow::ensure!(
+            self.reporting_authority
+                .get()
+                .is_none_or(|authority| *authority == settings.authority),
+            "changing the accounting authority requires a node restart"
+        );
+        self.configure_access(&settings)?;
+        self.governor.configure(settings.capacity_bytes_per_second);
         let mut state = self
             .state
             .lock()
@@ -227,6 +284,7 @@ impl Runtime {
         }
         state.settings = settings;
         drop(state);
+        drop(writer);
         Ok(())
     }
 
@@ -251,17 +309,8 @@ impl Runtime {
             let runtime = self.clone();
             let path = path.clone();
             let result = tokio::task::spawn_blocking(move || {
-                let settings = if let Some(path) = path {
-                    Settings::read(&path)?
-                } else {
-                    runtime
-                        .state
-                        .lock()
-                        .map_err(|_| anyhow!("node state poisoned"))?
-                        .settings
-                        .clone()
-                };
-                runtime.update(settings, now())
+                let requested = path.as_deref().map(Settings::read).transpose()?;
+                runtime.apply_settings(requested, now())
             })
             .await;
             if !matches!(result, Ok(Ok(()))) {

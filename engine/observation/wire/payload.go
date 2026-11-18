@@ -92,6 +92,8 @@ type RelayRecoveringPayload struct {
 }
 
 type RelayRecoveryDetails struct {
+	WaitReason    string  `json:"wait_reason,omitempty"`
+	Authorization string  `json:"authorization,omitempty"`
 	ShareInstance *string `json:"share_instance,omitempty"`
 	Generation    string  `json:"connection_generation"`
 	Slow          bool    `json:"slow_wait"`

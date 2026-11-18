@@ -9,6 +9,7 @@ description = "I/O-free relay access and enrollment decisions"
 [dependencies]
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 sha2 = { version = "0.11.1", default-features = false }
+ed25519-dalek = { version = "3.0.0", default-features = false, features = ["alloc"] }
 
 [lints]
 workspace = true

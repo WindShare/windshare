@@ -1,0 +1,14 @@
+{
+  "listen": "0.0.0.0:8484",
+  "database": "relay.sqlite",
+  "identity_file": "identity.json",
+  "endpoint": "wss://relay.example.com/v2/ws",
+  "origins": { "kind": "allowlist", "origins": ["https://ws.ourworld.top", "https://windshare.cc", "https://app.example.com"] },
+  "node": {
+    "zone": "global",
+    "region": "",
+    "services": { "relay": true, "stun": true },
+    "capacity_bytes_per_second": 12500000,
+    "access": { "anonymous": true }
+  }
+}

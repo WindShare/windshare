@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
+	"github.com/windshare/windshare/core/serviceauthority"
 	appobs "github.com/windshare/windshare/engine/observation"
 )
 
@@ -46,6 +47,19 @@ func formatRelayRecovery(event appobs.RelayRecovering, symbols Symbols) terminal
 	state := eventName(event.State())
 	message := "Relay recovery attempt " + strconv.FormatUint(uint64(event.Attempt()), 10) + " " + state + "."
 	if details, ok := event.Details(); ok {
+		if details.WaitReason == appobs.RelayWaitBandwidth {
+			return statusLine(symbols.Relay, "Relay bandwidth is busy; your download will resume automatically.", terminalcanvas.StyleDefault)
+		}
+		switch details.Authorization {
+		case serviceauthority.AdmissionPendingSetup:
+			return statusLine(symbols.Relay, "Setting up official-service access; your selection is retained.", terminalcanvas.StyleDefault)
+		case serviceauthority.AdmissionExpired:
+			return statusLine(symbols.Relay, "Refreshing account access; this share will continue automatically.", terminalcanvas.StyleDefault)
+		case serviceauthority.AdmissionTemporaryFailure:
+			return statusLine(symbols.Warning, "Account service unavailable; retrying automatically.", terminalcanvas.StyleWarning)
+		case serviceauthority.AdmissionDenied:
+			return statusLine(symbols.Warning, "Official-service access denied. Check your account.", terminalcanvas.StyleWarning)
+		}
 		relay := event.Origin().Host() + ":" + strconv.FormatUint(uint64(event.Origin().Port()), 10)
 		switch event.State() {
 		case appobs.RelayRecoverySucceeded:

@@ -14,6 +14,8 @@ export type ChannelState = 'connecting' | 'open' | 'closed'
  */
 export interface FrameChannel {
   readonly state: ChannelState
+  /** Remaining advisory pressure lease, independent of authority and liveness. */
+  readonly capacityWaitMilliseconds?: number
 
   /**
    * Aborts once the channel can no longer accept application sends. Accepted

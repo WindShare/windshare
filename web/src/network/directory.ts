@@ -46,7 +46,7 @@ export class NetworkDirectory {
   constructor(options: NetworkDirectoryOptions) {
     if (options.mirrors.length > 8) throw new TypeError('Too many network mirrors')
     this.#options = options
-    this.#cache = options.cache ?? (typeof indexedDB === 'undefined' ? new MemoryDirectoryCache() : new BrowserDirectoryCache())
+    this.#cache = options.cache ?? (!('indexedDB' in globalThis) ? new MemoryDirectoryCache() : new BrowserDirectoryCache(options.network))
     this.#now = options.now ?? Date.now
     this.ready = this.#initialize()
     this.ready.then(() => this.refresh()).catch(() => undefined)

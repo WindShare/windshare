@@ -41,18 +41,18 @@ impl RegistrationRequest {
     }
 
     /// Resolve after policy I/O and revocation checks, using the decision's time.
-    pub const fn resolve(
+    pub fn resolve(
         self,
         decision: RegistrationDecision,
         now: UnixMillis,
     ) -> RegistrationAuthorization {
         match decision {
             RegistrationDecision::Granted(attribution) => {
-                RegistrationAuthorization::Granted(RegistrationGrant {
+                RegistrationAuthorization::Granted(alloc::boxed::Box::new(RegistrationGrant {
                     request: self,
                     attribution,
                     expires_at: UnixMillis(now.0.saturating_add(REGISTRATION_GRANT_LIFETIME_MS)),
-                })
+                }))
             }
             RegistrationDecision::Denied => RegistrationAuthorization::Denied(self.connection),
             RegistrationDecision::Unavailable => {
@@ -65,7 +65,7 @@ impl RegistrationRequest {
 /// A resolved request is consumed exactly once by the protocol engine.
 #[derive(Debug)]
 pub enum RegistrationAuthorization {
-    Granted(RegistrationGrant),
+    Granted(alloc::boxed::Box<RegistrationGrant>),
     Denied(ConnectionRef),
     Unavailable(ConnectionRef),
 }

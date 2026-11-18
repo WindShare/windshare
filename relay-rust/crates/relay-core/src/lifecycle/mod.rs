@@ -328,7 +328,7 @@ impl<O: Observer> ShareLifecycle<O> {
             owner: route.ownership(OwnershipEpoch::FIRST, pending.id.connection),
             route,
         };
-        let ownership = self.activate(pending.id, registration, pending.deadline, None);
+        let ownership = self.activate(pending.id, &registration, pending.deadline, None);
         Action::Register(RegistrationCommit {
             ownership,
             descriptor: publication.descriptor.object(),
@@ -409,7 +409,7 @@ impl<O: Observer> ShareLifecycle<O> {
         };
         Action::CommitOwnership(self.activate(
             attempt.id,
-            registration,
+            &registration,
             attempt.deadline,
             current.live.then_some(current.ownership.connection),
         ))

@@ -17,9 +17,10 @@ async fn joined(host: &mut Harness, id: u64) -> (Writer, RelaySessionId) {
     // The vector declares 16 frames: 14 ordinary plus this flow's startup
     // allowance, leaving one protected startup slot for a later receiver.
     const INITIAL_GRANTED_FRAMES: u64 = 15;
-    let (port, mut receiver, _) = crate::connection::channel(connection(id));
+    let (port, mut receiver, _) =
+        crate::connection::channel(connection(id), crate::node::Runtime::default());
     host.tx
-        .send(Event::Connected(connection(id), port))
+        .send(Event::Connected(connection(id), Box::new(port)))
         .await
         .unwrap();
     host.tx
@@ -98,9 +99,10 @@ async fn unrelated_ingress_is_isolated_and_wire_settlement_reclaims_shared_sende
     let mut host = published().await;
     let (receiver, session) = joined(&mut host, 3).await;
     let frame = opaque(session);
-    let (intruder, mut refused, _) = crate::connection::channel(connection(4));
+    let (intruder, mut refused, _) =
+        crate::connection::channel(connection(4), crate::node::Runtime::default());
     host.tx
-        .send(Event::Connected(connection(4), intruder))
+        .send(Event::Connected(connection(4), Box::new(intruder)))
         .await
         .unwrap();
     host.tx
@@ -148,9 +150,10 @@ async fn unrelated_ingress_is_isolated_and_wire_settlement_reclaims_shared_sende
 async fn receiver_loss_discards_late_data_and_admission_without_closing_shared_connections() {
     let mut host = published().await;
     let (receiver, retired) = joined(&mut host, 3).await;
-    let (port, mut healthy, _) = crate::connection::channel(connection(4));
+    let (port, mut healthy, _) =
+        crate::connection::channel(connection(4), crate::node::Runtime::default());
     host.tx
-        .send(Event::Connected(connection(4), port))
+        .send(Event::Connected(connection(4), Box::new(port)))
         .await
         .unwrap();
     host.tx

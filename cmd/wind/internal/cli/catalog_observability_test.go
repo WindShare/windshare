@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/windshare/windshare/adapters/filesystem"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"github.com/windshare/windshare/adapters/filesystem"
 
 	"github.com/windshare/windshare/core/diagnostics"
 
@@ -38,7 +39,7 @@ func TestPrepareShareSenderEmitsSourceCatalogStorageMilestonesWithoutSlog(t *tes
 	}
 	defer stream.Close()
 	application, err := engine.New(engine.Config{Share: engine.ShareDependencies{
-		Relays: func(context.Context, []relayprofile.Candidate) (engine.ShareRelays, error) {
+		Relays: func(context.Context, []relayprofile.Registration) (engine.ShareRelays, error) {
 			return nil, errors.New("test ends after source preparation")
 		},
 	}})
@@ -47,7 +48,7 @@ func TestPrepareShareSenderEmitsSourceCatalogStorageMilestonesWithoutSlog(t *tes
 	}
 	defer func() { _ = application.Close(context.Background()) }()
 	current, err := application.StartShare(context.Background(), engine.ShareRequest{Diagnostics: stream.Sink(),
-		Source: filesystem.ShareSource([]string{sharedPath}), RelayIntent: relayprofile.UseExplicit([]engine.ShareRelayCandidate{{PublicURL: "https://relay.example"}}), ChunkSize: catalog.MinChunkSize,
+		Source: filesystem.ShareSource([]string{sharedPath}), RelayIntent: relayprofile.UseExplicit([]relayprofile.Candidate{{PublicURL: "https://relay.example"}}), ChunkSize: catalog.MinChunkSize,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -102,7 +102,7 @@ test('SQLite access authority survives restart, approval retry, cancellation and
     await request('enrollments/cancel', cancelClaim);
     await authorize(abandoned.access_key, 403);
     const { data: manual } = await request('credentials', { name: 'Automation' }, 201, true);
-    assert.equal(manual.configuration.profiles[0].access_key, manual.access_key);
+    assert.equal(manual.configuration.access_key, manual.access_key);
 
     await mf.setOptions(options('rotated-local-access-password'));
     consoleWorker = await mf.getWorker('console');

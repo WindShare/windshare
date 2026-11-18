@@ -121,11 +121,12 @@ impl Harness {
             Arc::new(AtomicBool::new(false)),
             generation.clone(),
             Recovery::vacant(&store),
-            Metrics::default(),
+            Runtime::default(),
         )));
         let task = generation.supervise(task);
-        let (stop_tx, mut stopper, _stop_closure) = crate::connection::channel(connection(2));
-        tx.send(Event::Connected(connection(2), stop_tx))
+        let (stop_tx, mut stopper, _stop_closure) =
+            crate::connection::channel(connection(2), crate::node::Runtime::default());
+        tx.send(Event::Connected(connection(2), Box::new(stop_tx)))
             .await
             .unwrap();
         tx.send(Event::Control(connection(2), fixture.bytes("stopInitB64")))
@@ -135,8 +136,9 @@ impl Harness {
         environment
             .now
             .store(fixture.now(false).0, Ordering::Release);
-        let (sender_tx, mut sender, _sender_closure) = crate::connection::channel(connection(1));
-        tx.send(Event::Connected(connection(1), sender_tx))
+        let (sender_tx, mut sender, _sender_closure) =
+            crate::connection::channel(connection(1), crate::node::Runtime::default());
+        tx.send(Event::Connected(connection(1), Box::new(sender_tx)))
             .await
             .unwrap();
         tx.send(Event::Control(
@@ -289,7 +291,7 @@ async fn startup_recovers_committed_registration_and_interrupted_stop_from_sqlit
             Arc::clone(&idle),
             generation.clone(),
             Recovery::vacant(&store),
-            Metrics::default(),
+            Runtime::default(),
         )));
         timeout(Duration::from_secs(3), async {
             while !matches!(
@@ -328,9 +330,10 @@ async fn startup_recovers_committed_registration_and_interrupted_stop_from_sqlit
 async fn failed_actor_closes_mailbox_but_storage_still_fences_recovery() {
     let mut host = Harness::new().await;
     let publication = host.attempt().await;
-    let (port, mut incoming, _) = crate::connection::channel(connection(3));
+    let (port, mut incoming, _) =
+        crate::connection::channel(connection(3), crate::node::Runtime::default());
     host.tx
-        .send(Event::Connected(connection(3), port))
+        .send(Event::Connected(connection(3), Box::new(port)))
         .await
         .unwrap();
     host.tx
@@ -397,7 +400,7 @@ async fn cancelled_actor_cannot_lose_a_blocking_commit() {
         Arc::clone(&idle),
         generation.clone(),
         host.generation.recovery().unwrap(),
-        Metrics::default(),
+        Runtime::default(),
     )));
     let abort = generation.supervise(task);
     timeout(Duration::from_secs(3), async {

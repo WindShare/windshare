@@ -42,7 +42,9 @@ func TestSetupResumesOnlyWaitingIntentAndPreservesExplicitChoice(t *testing.T) {
 				}
 				return start(ctx, request)
 			}
-			a.execute(createRequest())
+			create := createRequest()
+			create.Relays = []string{"https://chosen.example"}
+			a.execute(create)
 			awaitShare(t, a, "operation", func(s Share) bool { return s.State == AwaitingNetwork })
 			if reply := a.execute(setupRequest()); reply.Error != nil {
 				t.Fatal(reply.Error)

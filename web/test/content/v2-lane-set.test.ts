@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { BandwidthWaitError } from '../../src/contracts/capacity'
 import { FileGeometry } from '../../src/content/geometry'
 import {
   BlockDispatchSequenceAuthority,
@@ -103,7 +104,47 @@ class ImmediateLane implements BlockLane {
   }
 }
 
+afterEach(() => vi.useRealTimers())
+
 describe('v2 receiver LaneSet', () => {
+  it('waits for bandwidth without spending retries and immediately uses an added direct path', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    const lanes = new LaneSet()
+    let calls = 0
+    lanes.add({ id: 1, fetchBlock: async () => {
+      calls++
+      throw new BandwidthWaitError(1_000, new Error('fragment inactivity'))
+    } }, 'application-relay')
+    const result = lanes.fetch(demand(0n), ALL_ROUTES, new AbortController().signal)
+    await vi.advanceTimersByTimeAsync(0)
+    for (let round = 0; round < 17; round++) {
+      const before = calls
+      await vi.advanceTimersByTimeAsync(29_999)
+      expect(calls).toBe(before)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(calls).toBe(before + 1)
+    }
+    lanes.add(new ImmediateLane(2), 'direct')
+    await expect(result).resolves.toMatchObject({ data: Uint8Array.of(2) })
+    lanes.close()
+  })
+
+  it('cancels a bandwidth wait and releases its timer', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    const lanes = new LaneSet()
+    lanes.add({ id: 1, fetchBlock: async () => {
+      throw new BandwidthWaitError(15_000, new Error('fragment inactivity'))
+    } }, 'application-relay')
+    const abort = new AbortController()
+    const result = lanes.fetch(demand(0n), ALL_ROUTES, abort.signal)
+    const rejection = expect(result).rejects.toThrow('user stopped')
+    await vi.advanceTimersByTimeAsync(0)
+    abort.abort(new Error('user stopped'))
+    await rejection
+    lanes.close()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('keeps a valid late block but does not attribute traffic to a retired route attestation', async () => {
     const observations: BlockRouteObservation[] = []
     const lanes = new LaneSet({ onBlockFetched: (fact) => observations.push(fact) })

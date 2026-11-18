@@ -9,6 +9,14 @@ import type { TraceEventObservationV2 } from './model'
 import { TRACE_FAILURE_DETAIL_MAX_CHARACTERS } from './lane-payload'
 
 export interface ConnectionTracePayloads {
+  readonly authority_blocks: Readonly<{
+    operation_id: string
+    endpoint: string
+    transition: 'accepted' | 'rejected'
+    generation?: number
+    version?: number
+    failure_detail?: string
+  }>
   readonly network_directory: Readonly<{
     operation_id: string
     mirror: string
@@ -27,7 +35,7 @@ export interface ConnectionTracePayloads {
     phase: 'initial' | 'fast' | 'waiting'
     transition: 'attempt_started' | 'attempt_failed' | 'waiting' | 'connected' | 'terminal' | 'retry_requested'
     delay_ms?: number
-    wait_reason?: 'backoff' | 'capacity' | 'server'
+    wait_reason?: 'backoff' | 'capacity' | 'server' | 'bandwidth' | 'authorization'
     failure_detail?: string
   }>
   readonly relay_heartbeat: Readonly<{

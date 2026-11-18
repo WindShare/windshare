@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""Deploy the network authority with one certified signing generation."""
+import argparse
+import ipaddress
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import subprocess
+import tempfile
+from urllib.parse import urlsplit
+
+ROOT = Path(__file__).resolve().parents[2]
+CRATE = ROOT / "relay-rust/crates/network-authority"
+WRANGLER = ROOT / "relay-rust/crates/relay-cloudflare/node_modules/wrangler/bin/wrangler.js"
+HOST = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}\Z")
+WORKER = re.compile(r"[a-z0-9][a-z0-9-]{0,62}\Z")
+
+
+def https_origin(address):
+    url = urlsplit(address)
+    if url.scheme != "https" or not HOST.fullmatch(url.netloc) or url.query or url.fragment or url.path not in ("", "/"):
+        raise ValueError("Expected an HTTPS origin with a DNS hostname")
+    return "https://" + url.netloc
+
+
+def prepare_token(path, host):
+    if os.environ.get("CI"):
+        raise ValueError("Prepare the administrator link on the operator machine")
+    if not path.exists():
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as output:
+            output.write(secrets.token_urlsafe(32))
+    token = path.read_text(encoding="utf-8").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", token):
+        raise ValueError("Invalid initialization token file")
+    print(f"https://{host}/console#initialize={token}")
+
+
+def deploy(args):
+    host = args.api_host
+    api = https_origin("https://" + host)
+    if args.prepare_initialization:
+        prepare_token(args.prepare_initialization, host)
+        return
+    worker = args.worker_name
+    if not WORKER.fullmatch(worker):
+        raise ValueError("Invalid worker name")
+    origin = args.origin_host or host
+    https_origin("https://" + origin)
+    if origin != host and (not args.zone or not HOST.fullmatch(args.zone) or not origin.endswith("." + args.zone)):
+        raise ValueError("The SaaS origin must belong to the selected zone")
+    trust = json.loads(args.trust.read_text(encoding="utf-8") if args.trust else os.environ["AUTHORITY_TRUST"])
+    seed = args.online_seed.read_text(encoding="utf-8").strip() if args.online_seed else os.environ["AUTHORITY_SIGNING_SEED"].strip()
+    token = args.initialization_token.read_text(encoding="utf-8").strip() if args.initialization_token else os.environ.get("INITIALIZATION_TOKEN", "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", token):
+        raise ValueError("A persisted initialization token is required")
+    origins = [https_origin(v.strip()) for v in args.allowed_origins.split(",") if v.strip()]
+    proxies = [str(ipaddress.ip_address(v.strip())) for v in args.trusted_proxy_ips.split(",") if v.strip()]
+    config = (CRATE / "wrangler.toml").read_text(encoding="utf-8")
+    config = re.sub(r"(?m)^name = .*?$", "name = " + json.dumps(worker), config, count=1)
+    config += "\n[[routes]]\npattern = " + json.dumps(origin) + "\ncustom_domain = true\n"
+    if origin != host:
+        config += "\n[[routes]]\npattern = " + json.dumps(host + "/*") + "\nzone_name = " + json.dumps(args.zone) + "\n"
+    values = {"AUTHORITY_ROOT": trust["root"], "AUTHORITY_CERTIFICATE": trust["certificate"], "API_ORIGIN": api,
+              "ALLOWED_ORIGINS": ",".join(dict.fromkeys([api, *origins])), "TRUSTED_PROXY_IPS": ",".join(proxies)}
+    if args.directory_release:
+        release = json.loads(args.directory_release.read_text(encoding="utf-8"))
+        index = json.loads(subprocess.check_output(
+            ["go", "run", "./cmd/network-sign", "publication", "--release", str(args.directory_release.resolve())], cwd=ROOT))
+        if index:
+            mirror = args.directory_mirror or release["mirrors"][0]
+            url = urlsplit(mirror)
+            values["DIRECTORY_ORIGIN"] = https_origin(f"{url.scheme}://{url.netloc}")
+            values["DIRECTORY_PUBLICATION"] = json.dumps(dict(index, mirror=mirror), separators=(",", ":"))
+    config += "\n[vars]\n" + "".join(f"{k} = {json.dumps(v)}\n" for k, v in values.items())
+    # Keep the config beside the template for Worker build paths. Credentials only enter
+    # Wrangler's atomic code-and-secrets upload after local signature verification.
+    with tempfile.TemporaryDirectory(prefix="windshare-authority-") as private:
+        trust_path = Path(private) / "trust.json"
+        trust_path.write_text(json.dumps(trust), encoding="utf-8")
+        seed_path = Path(private) / "online.seed"
+        seed_path.write_text(seed, encoding="utf-8")
+        subprocess.run(["cargo", "run", "--quiet", "--locked", "--bin", "network-authority-keys", "--",
+                        "verify", str(trust_path), str(seed_path)], cwd=CRATE, check=True)
+        uploads = Path(private) / "secrets.json"
+        uploads.write_text(json.dumps({"AUTHORITY_SIGNING_SEED": seed, "INITIALIZATION_TOKEN": token}), encoding="utf-8")
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".toml", prefix="wrangler.generated.", dir=CRATE, delete=False) as generated:
+            generated.write(config)
+        try:
+            subprocess.run(["node", str(WRANGLER), "deploy", "--config", generated.name, "--secrets-file", str(uploads)], cwd=CRATE, check=True)
+        finally:
+            Path(generated.name).unlink(missing_ok=True)
+    print(f"Network authority deployed at {api}/console")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--api-host", default=os.environ.get("AUTHORITY_API_HOST"), required=not os.environ.get("AUTHORITY_API_HOST"))
+    parser.add_argument("--worker-name", default=os.environ.get("AUTHORITY_WORKER_NAME") or "windshare-network-authority")
+    parser.add_argument("--origin-host", default=os.environ.get("AUTHORITY_ORIGIN_HOST"))
+    parser.add_argument("--zone", default=os.environ.get("AUTHORITY_ZONE"))
+    parser.add_argument("--trusted-proxy-ips", default=os.environ.get("AUTHORITY_TRUSTED_PROXY_IPS", ""))
+    parser.add_argument("--allowed-origins", default=os.environ.get("AUTHORITY_ALLOWED_ORIGINS", ""))
+    parser.add_argument("--trust", type=Path)
+    parser.add_argument("--online-seed", type=Path)
+    parser.add_argument("--initialization-token", type=Path)
+    parser.add_argument("--prepare-initialization", type=Path)
+    parser.add_argument("--directory-release", type=Path)
+    parser.add_argument("--directory-mirror", default=os.environ.get("AUTHORITY_DIRECTORY_MIRROR"))
+    deploy(parser.parse_args())
+
+
+if __name__ == "__main__":
+    main()

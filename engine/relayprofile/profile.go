@@ -1,4 +1,4 @@
-// Package relayprofile describes application relay selection and saved credentials.
+// Package relayprofile describes application relay selection and saved service credentials.
 package relayprofile
 
 import (
@@ -10,18 +10,21 @@ const MaximumEndpoints = relayset.MaximumEndpoints
 const MaxAccessKeyBytes = senderrelay.MaxAccessKeyBytes
 
 type Candidate struct {
-	PublicURL string
-	AccessKey string `json:"-"`
+	PublicURL       string
+	ConsoleURL      string `json:"-"`
+	OfferedFrontend string `json:"-"`
+	AccessKey       string `json:"-"`
 }
 
 func (candidate Candidate) Validate() error {
-	return (senderrelay.Candidate{PublicURL: candidate.PublicURL, AccessKey: candidate.AccessKey}).Validate()
+	return (senderrelay.Candidate{PublicURL: candidate.PublicURL, Authorization: senderrelay.StaticKey(candidate.AccessKey)}).Validate()
 }
 
 func PublicURLs(candidates []Candidate) ([]string, error) {
-	native := make([]senderrelay.Candidate, len(candidates))
-	for i, candidate := range candidates {
-		native[i] = senderrelay.Candidate{PublicURL: candidate.PublicURL, AccessKey: candidate.AccessKey}
+	for _, candidate := range candidates {
+		if err := candidate.Validate(); err != nil {
+			return nil, err
+		}
 	}
-	return senderrelay.PublicURLs(native)
+	return RegistrationURLs(Registrations(candidates))
 }

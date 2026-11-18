@@ -33,7 +33,7 @@ func (f signingFixture) envelope(t *testing.T, generation, serial uint64, age ti
 		t.Fatal(err)
 	}
 	payload := nodedirectory.Payload{Format: 1, Network: "fixture", Generation: generation, Serial: serial, IssuedAt: f.now.Add(-age), ExpiresAt: f.now.Add(-age + 24*time.Hour),
-		Nodes: []nodedirectory.Node{{Alias: "jp1", Relay: "https://jp1.example", Roles: []string{"relay"}, Zone: "global", Region: "jp", Provider: "provider", Operator: "operator", CapacityMbps: 50, Status: nodedirectory.Active}}}
+		Nodes: []nodedirectory.Node{{Alias: "jp1", NodeKey: base64.RawURLEncoding.EncodeToString(f.online.Public().(ed25519.PublicKey)), Relay: "https://jp1.example", Roles: []string{"relay"}, Zone: "global", Region: "jp", Provider: "provider", Operator: "operator", CapacityMbps: 50, Status: nodedirectory.Active}}}
 	data, err := nodedirectory.Sign(payload, certificate, f.online, f.roots)
 	if err != nil {
 		t.Fatal(err)
@@ -149,7 +149,8 @@ func TestMirrorFallbackBackoffAndAliasRefresh(t *testing.T) {
 
 func TestFileCacheSerializesCompetingDirectoryUpdates(t *testing.T) {
 	f := signing()
-	cache := NewFileCache(filepath.Join(t.TempDir(), "config.json"))
+	path := filepath.Join(t.TempDir(), "config.json")
+	cache := NewFileCache(path, f.config().Network)
 	config := f.config()
 	config.Cache = cache
 	config.Embedded = f.envelope(t, 1, 10, 0)
@@ -171,6 +172,10 @@ func TestFileCacheSerializesCompetingDirectoryUpdates(t *testing.T) {
 	record, err := cache.Load(context.Background())
 	if err != nil {
 		t.Fatal(err)
+	}
+	other, err := NewFileCache(path, "other-network").Load(t.Context())
+	if err != nil || len(other.Envelope) != 0 {
+		t.Fatal("independent networks shared a trust history", err)
 	}
 	if record.Cursor.Serial != 10 || record.Aliases["jp1"] != "wss://jp1.example/v2/ws" {
 		t.Fatal(record)

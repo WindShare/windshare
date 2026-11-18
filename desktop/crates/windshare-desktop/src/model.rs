@@ -69,6 +69,7 @@ pub enum Overlay {
     ShareQr(usize),
     Help,
     SharingSetup(Option<usize>),
+    Account,
 }
 #[derive(Clone, Copy, Debug)]
 pub enum Action {
@@ -93,10 +94,13 @@ pub enum Action {
     ShareAgain(usize),
     ConfigureShare(usize),
     ConfigureNetwork,
+    OpenAccount,
+    Account(crate::live::AccountAction),
     ReturnToSharingSetup,
     SaveSharingSetup(Option<usize>),
     ResumeShare(usize),
     ApproveRelay,
+    Relay(crate::live::RelayAction),
     CancelSharingSetup,
     ToggleTransfer(usize),
     ToggleGrid,

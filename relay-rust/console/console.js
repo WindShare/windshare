@@ -64,25 +64,44 @@ function renderEnrollments() {
     row.append(info, approve); root.append(row);
   }
 }
-function renderCredentials(credentials) {
+function confirmRevocation(credential, stopsShares) {
+  const dialog = element('confirm-revoke');
+  const forced = stopsShares || credential.revoked;
+  element('revoke-title').textContent = credential.revoked ? 'Stop remaining shares?' : 'Revoke ' + credential.name + '?';
+  element('revoke-detail').textContent = forced
+    ? 'Existing shares from this device will stop on this relay. Direct transfers can continue.'
+    : 'This credential will no longer be able to start shares on this relay.';
+  element('stop-option').hidden = forced;
+  element('stop-shares').checked = forced;
+  element('revoke-confirm').textContent = credential.revoked ? 'Stop shares' : 'Revoke access';
+  dialog.returnValue = '';
+  return new Promise(resolve => {
+    dialog.addEventListener('close', () => resolve(dialog.returnValue === 'revoke'
+      ? { terminate_shares: element('stop-shares').checked } : null), { once: true });
+    dialog.showModal();
+  });
+}
+function renderCredentials(credentials, stopsShares) {
   const root = element('credentials'); root.replaceChildren();
   if (!credentials.length) root.append(node('p', 'Approved devices will appear here.'));
   for (const credential of credentials) {
     const row = node('div', undefined, 'row');
     const info = node('div');
     info.append(node('strong', credential.name), node('div', 'Created ' + date(credential.created_at), 'meta'),
-      node('div', 'Last use: ' + date(credential.last_used_at), 'meta'));
+      node('div', 'Last used ' + date(credential.last_used_at), 'meta'));
     if (credential.revoked) info.append(node('span', 'Revoked', 'badge revoked'));
-    const actions = node('div', undefined, 'actions');
-    const label = node('label'); const terminate = node('input'); terminate.type = 'checkbox';
-    label.append(terminate, document.createTextNode('Also stop existing shares'));
-    const revoke = node('button', credential.revoked ? 'Stop remaining shares' : 'Revoke', 'danger');
-    revoke.addEventListener('click', () => action(revoke, async () => {
-      await api('credentials/revoke', { credential_id: credential.credential_id, terminate_shares: credential.revoked || terminate.checked });
-      await refresh(); status(credential.revoked || terminate.checked ? 'Access revoked. Existing relay shares are being stopped.' : 'Access revoked for new shares.');
-    }));
-    if (!credential.revoked) actions.append(label);
-    actions.append(revoke); row.append(info, actions); root.append(row);
+    row.append(info);
+    if (!credential.revoked || !stopsShares) {
+      const revoke = node('button', credential.revoked ? 'Stop remaining shares' : 'Revoke', 'danger');
+      revoke.addEventListener('click', () => action(revoke, async () => {
+        const decision = await confirmRevocation(credential, stopsShares);
+        if (!decision) return;
+        await api('credentials/revoke', { credential_id: credential.credential_id, ...decision });
+        await refresh(); status(decision.terminate_shares ? 'Existing shares on this relay are being stopped.' : 'Access revoked for new shares.');
+      }));
+      row.append(revoke);
+    }
+    root.append(row);
   }
 }
 let turnEnabled = true;
@@ -100,7 +119,7 @@ function renderTURN(value) {
 }
 async function refresh() {
   const [enrollments, credentials, session] = await Promise.all([api('enrollments'), api('credentials'), api('session')]);
-  pending = enrollments.enrollments; renderEnrollments(); renderCredentials(credentials.credentials);
+  pending = enrollments.enrollments; renderEnrollments(); renderCredentials(credentials.credentials, session.capabilities?.revocation_stops_shares === true);
   if (session.capabilities?.managed_turn) renderTURN(await api('turn/status'));
 }
 element('turn-toggle').addEventListener('click', event => action(event.target, async () => {
@@ -114,10 +133,24 @@ element('turn-usage').addEventListener('click', event => action(event.target, as
 }));
 element('code').value = new URL(location.href).searchParams.get('code') || '';
 element('code').addEventListener('input', renderEnrollments);
+let initialization = new URLSearchParams(location.hash.slice(1)).get('initialize');
+if (initialization) {
+  history.replaceState(null, '', location.pathname + location.search);
+  element('login-heading').textContent = 'Set up your relay';
+  element('sign-in').textContent = 'Set owner password';
+  element('password').autocomplete = 'new-password';
+  element('password').minLength = 12;
+}
 element('login').addEventListener('submit', event => {
   event.preventDefault();
   action(event.submitter, async () => {
-    await api('login', { password: element('password').value });
+    const password = element('password').value;
+    await api(initialization ? 'initialize' : 'login', initialization ? { token: initialization, password } : { password });
+    initialization = null;
+    element('login-heading').textContent = 'Sign in to your relay';
+    element('sign-in').textContent = 'Sign in';
+    element('password').autocomplete = 'current-password';
+    element('password').removeAttribute('minlength');
     element('password').value = ''; signedIn(true); await refresh();
   });
 });

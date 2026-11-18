@@ -3,6 +3,10 @@ use serde::Serialize;
 #[derive(Debug, Serialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum Command {
+    Preferences,
+    Account {
+        account: crate::AccountCommand,
+    },
     Create {
         operation_id: String,
         paths: Vec<String>,
@@ -29,11 +33,13 @@ pub enum Command {
     },
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 pub struct SetupInput {
     pub id: String,
     pub relay_url: String,
     pub front_url: String,
+    pub access_key: String,
+    pub preference: Option<crate::PreferenceEdit>,
 }
 
 #[derive(Debug, Serialize)]

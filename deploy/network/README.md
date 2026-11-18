@@ -2,8 +2,8 @@
 
 `release.json` is shared by Go and the browser build. The link host is
 `https://ws.ourworld.top`; frontend hosts never come from directory data.
-The export remains unprovisioned until operator root keys are installed. Verify
-the configured fleet before publishing a signed directory.
+The production manifest pins two directory roots and the account authority.
+`cn1` and `us1` advertise relay and STUN. Verify with `go run ./cmd/network-sign verify`.
 
 Build the local signer with `go build ./cmd/network-sign`. Generate two offline
 roots on separate storage and one online key; keep production private keys outside the checkout:
@@ -18,8 +18,8 @@ network-sign verify
 ```
 
 Copy the two public root records into `release.json.roots`. Edit `directory.json`
-with actual nodes and current validity dates; mainland nodes advertise only STUN
-until account admission is deployed. Keep both root storage and the online key
+with verified node keys and current validity dates. Publish a mainland relay role
+after its account admission and usage reports have been verified. Keep both root storage and the online key
 outside the checkout. Increase serial for each update; an offline root must
 authorize every higher generation. Signing checks all historical alias bindings,
 updates the shared embedded snapshot, and writes an immutable export under `history/`.

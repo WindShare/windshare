@@ -2,8 +2,10 @@ package testrelaynative
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -59,10 +61,14 @@ func (fixture *Fixture) Start(ctx context.Context, owner processStarter, launch 
 	}
 	ctx, cancel := context.WithTimeout(ctx, readinessTimeout)
 	defer cancel()
+	arguments, err := fixture.arguments()
+	if err != nil {
+		return nil, err
+	}
 	process, err := owner.Start(ctx, testprocess.Spec{
 		Identity: launch.Identity,
 		Command: testprocess.Command{
-			Executable: launch.Executable, Arguments: fixture.arguments(),
+			Executable: launch.Executable, Arguments: arguments,
 			WorkingDirectory: launch.WorkingDirectory, Environment: environment,
 		},
 		Deadline: processDeadline, TerminationGrace: terminationGrace,
@@ -85,16 +91,31 @@ func (fixture *Fixture) Start(ctx context.Context, owner processStarter, launch 
 	return host, nil
 }
 
-func (fixture *Fixture) arguments() []string {
-	arguments := []string{
-		"--listen", fixture.listenAddress, "--database", fixture.database,
-		// Default STUN ports would couple otherwise isolated parallel scenarios.
-		"--stun-udp", loopbackAddress, "--stun-admin", loopbackAddress,
+func (fixture *Fixture) configuration() map[string]any {
+	config := map[string]any{
+		"listen": fixture.listenAddress, "database": fixture.database,
+		"identity_file": fixture.database + ".identity.json",
+		"origins":       map[string]any{"kind": "public"},
+		// Ephemeral ports keep independently scheduled scenarios isolated.
+		"stun": map[string]any{"udp_addresses": []string{loopbackAddress}, "admin_address": loopbackAddress},
+		"node": map[string]any{"services": map[string]bool{"relay": true, "stun": true}, "relay_budget": nil},
 	}
 	if fixture.publicEndpoint != "" {
-		arguments = append(arguments, "--public-endpoint", fixture.publicEndpoint)
+		config["endpoint"] = fixture.publicEndpoint
 	}
-	return arguments
+	return config
+}
+
+func (fixture *Fixture) arguments() ([]string, error) {
+	path := fixture.database + ".config.json"
+	bytes, err := json.Marshal(fixture.configuration())
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(path, bytes, 0o600); err != nil {
+		return nil, err
+	}
+	return []string{"--config", path}, nil
 }
 
 func awaitReadiness(ctx context.Context, process *testprocess.Process) (Readiness, error) {

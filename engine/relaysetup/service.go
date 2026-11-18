@@ -65,12 +65,15 @@ type Dependencies struct {
 }
 type Request struct {
 	URL, DeviceName string
+	AccessKey       string
 	Operation       Operation
 	NoBrowser       bool
 }
 type Result struct {
 	RelayURL, CredentialID, FrontURL string
 	ActiveRelays                     []string
+	Enabled, ConfiguredOnly          bool
+	ConsoleURL, OfferedFrontend      string
 }
 type Progress struct {
 	Stage, OperationID, EnrollmentID, VerificationURL, UserCode string

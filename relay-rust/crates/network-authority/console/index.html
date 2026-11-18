@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Network console · WindShare</title><link rel="stylesheet" href="/console.css"><script type="module" src="/console.js"></script></head>
+<body>
+<header><a href="/console">WindShare <span>Network</span></a><button id="logout" type="button" hidden>Sign out</button></header>
+<main>
+<h1 id="title" tabindex="-1">Network console</h1>
+<p id="status" role="status"></p>
+<form id="login" action="/v1/admin/login" method="post" aria-labelledby="login-title">
+<h2 id="login-title">Sign in</h2>
+<label for="username">Username</label><input id="username" name="username" autocomplete="username" autocorrect="off" autocapitalize="none" spellcheck="false" required maxlength="64">
+<label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required maxlength="256">
+<button id="show-password" type="button" aria-pressed="false">Show password</button>
+<button id="login-submit" type="submit">Sign in</button>
+</form>
+<div id="console" hidden>
+<p id="account-count" class="metric"></p><p id="reviews"></p>
+<form id="policy" action="/v1/admin/settings" method="post" aria-labelledby="policy-title">
+<h2 id="policy-title">Account registration</h2>
+<fieldset><legend>Registration mode</legend>
+<div><input id="automatic" name="registration" type="radio" value="automatic"><label for="automatic">Automatic</label></div>
+<div><input id="proof_of_work" name="registration" type="radio" value="proof_of_work"><label for="proof_of_work">Proof of work</label></div>
+<div><input id="email" name="registration" type="radio" value="email"><label for="email">Email verification</label></div></fieldset>
+<label for="pow-bits">Proof of work difficulty</label><input id="pow-bits" name="pow_bits" type="number" min="16" max="30" required>
+<label for="daily-bytes">Daily traffic per account (GiB)</label><input id="daily-bytes" name="daily_gib" type="number" min="0.001" step="any" required>
+<details><summary>Registration rate limits</summary>
+<label for="source-burst">New accounts per source · burst</label><input id="source-burst" name="source_burst" type="number" min="1" required>
+<label for="source-refill">Source recovery (seconds per account)</label><input id="source-refill" name="source_refill" type="number" min="1" required>
+<label for="global-burst">Global burst</label><input id="global-burst" name="global_burst" type="number" min="1" required>
+<label for="global-refill">Global recovery (seconds per account)</label><input id="global-refill" name="global_refill" type="number" min="1" required>
+</details><button type="submit">Save registration policy</button>
+</form>
+<section><h2>Nodes</h2><div id="nodes"></div>
+<form id="enroll" action="/v1/admin/nodes" method="post" aria-labelledby="enroll-title">
+<h3 id="enroll-title">Enroll a node</h3>
+<label for="node-key">Node public key</label><input id="node-key" name="key" required spellcheck="false" autocapitalize="none">
+<fieldset><legend>Zone</legend><input id="zone-global" name="zone" type="radio" value="global" checked><label for="zone-global">Global</label>
+<input id="zone-cn" name="zone" type="radio" value="cn"><label for="zone-cn">Mainland China</label></fieldset>
+<label for="node-region">Region</label><input id="node-region" name="region" maxlength="128" required>
+<button type="submit">Enroll node</button>
+</form></section>
+<section><h2>Reports</h2><ul id="reports"></ul></section>
+<form id="blocks" action="/v1/admin/blocks" method="post" aria-labelledby="blocks-title">
+<h2 id="blocks-title">Official relay access</h2>
+<fieldset><legend>Block type</legend><input id="block-share" name="kind" type="radio" value="share" checked><label for="block-share">Share</label>
+<input id="block-account" name="kind" type="radio" value="account"><label for="block-account">Account</label></fieldset>
+<label for="block-id">ID</label><input id="block-id" name="id" required spellcheck="false" autocapitalize="none">
+<button type="submit" name="action" value="block">Block</button><button type="submit" name="action" value="unblock" class="secondary">Restore access</button>
+</form>
+</div>
+</main>
+</body></html>

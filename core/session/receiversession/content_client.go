@@ -3,6 +3,9 @@ package receiversession
 import (
 	"context"
 	"errors"
+	"sync"
+	"time"
+
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
@@ -14,8 +17,6 @@ import (
 	"github.com/windshare/windshare/core/session/revisionaccess"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
-	"sync"
-	"time"
 )
 
 const remoteLeaseCleanupTimeout = 5 * time.Second
@@ -565,6 +566,7 @@ func (operation *receiverBlockOperation) receiveFailure(cause error) (records.Bl
 	if !errors.Is(cause, contentflow.ErrFragmentInactivity) && !errors.Is(cause, contentflow.ErrBlockResponseInactivity) {
 		return records.BlockRecord{}, cause
 	}
+	cause = operation.lane.rpc.Runtime().ClassifyLaneWait(operation.lane.identity, cause)
 	return operation.reassignAfterRetirement(cause, contentflow.CancelReasonTimeout)
 }
 

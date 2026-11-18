@@ -11,10 +11,11 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
 	"github.com/windshare/windshare/engine"
+	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relaysetup"
 )
 
-const relayUsage = "Usage: wind relay add <url> [--name <device>] [--no-browser] | wind relay onboard <url> [--name <device>] [--no-browser] | wind relay cancel <url>"
+const relayUsage = "Usage: wind relay add <url> [--access-key <key>] [--name <device>] [--no-browser] | wind relay onboard <url> [--name <device>] [--no-browser] | wind relay cancel <url> | wind relay list | wind relay mode <automatic|selected> | wind relay enable|disable <url> | wind relay frontend <url|default>"
 
 func (app *App) runRelay(ctx context.Context, args []string) int {
 	if len(args) == 0 {
@@ -31,6 +32,8 @@ func (app *App) runRelay(ctx context.Context, args []string) int {
 			return outcome.exitCode()
 		}
 		return app.runRelaySetup(ctx, request)
+	case "list", "mode", "enable", "disable", "frontend":
+		return app.relayPreferences(ctx, args)
 	case "cancel":
 		flags := app.newFlagSet("relay cancel")
 		address, outcome := app.parseRelayURL(flags, "relay cancel <url>", args[1:])
@@ -55,6 +58,9 @@ func (app *App) parseRelaySetupRequest(operation string, args []string) (engine.
 		request.Operation = relaysetup.PrivateOnboarding
 	}
 	flags := app.newFlagSet("relay " + operation)
+	if operation == "add" {
+		flags.StringVar(&request.AccessKey, "access-key", "", "merge this service key into the saved relay")
+	}
 	hostname, _ := os.Hostname()
 	flags.BoolVar(&request.NoBrowser, "no-browser", false, "display the approval URL without opening a browser")
 	flags.StringVar(&request.DeviceName, "name", relaysetup.DefaultDeviceName(hostname), "device name displayed for browser approval")
@@ -110,12 +116,19 @@ func (app *App) runRelaySetup(ctx context.Context, request engine.RelaySetupRequ
 		}
 		return code
 	}
-	app.writeCompleteLine("Relay saved: %s", result.Value.RelayURL)
-	if request.Operation == relaysetup.PrivateOnboarding {
-		app.writeCompleteLine("Only this private relay is selected. P2P remains enabled.")
+	receipt := result.Value
+	mode := relayconfig.Automatic
+	if receipt.ConfiguredOnly {
+		mode = relayconfig.Selected
 	}
-	if result.Value.FrontURL == "" {
-		app.writeCompleteLine("No share frontend was advertised. Pass --front-url when sharing.")
+	app.writeCompleteLine("Relay saved: %s (%s)", receipt.RelayURL, relayEnabledLabel(receipt.Enabled))
+	front := receipt.FrontURL
+	if front == "" {
+		front = app.defaultFrontend()
+	}
+	app.writeCompleteLine("Relay mode: %s. Share website: %s", mode, front)
+	if receipt.OfferedFrontend != "" && receipt.OfferedFrontend != front {
+		app.writeCompleteLine("Use your receiver website: wind relay frontend %s", receipt.OfferedFrontend)
 	}
 	return ExitOK
 }

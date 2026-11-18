@@ -97,7 +97,7 @@ func TestShareReadinessAndFinalizationUseDurableAuthority(t *testing.T) {
 		Share: ShareDependencies{
 			Peers:       func() (SharePeers, error) { return peers, nil },
 			Prepare:     func(context.Context, liveshare.SenderConfig) (PreparedShare, error) { return prepared, nil },
-			Relays:      func(context.Context, []relayprofile.Candidate) (ShareRelays, error) { return relays, nil },
+			Relays:      func(context.Context, []ShareRelayCandidate) (ShareRelays, error) { return relays, nil },
 			PollNetwork: func(ctx context.Context, _ func()) { <-ctx.Done() },
 		},
 	})
@@ -140,7 +140,7 @@ func TestShareStartsWithoutReadinessConsumer(t *testing.T) {
 	application := newTestEngine(t, Config{Share: ShareDependencies{
 		Peers:   func() (SharePeers, error) { return &facadePeers{}, nil },
 		Prepare: func(context.Context, liveshare.SenderConfig) (PreparedShare, error) { return prepared, nil },
-		Relays: func(context.Context, []relayprofile.Candidate) (ShareRelays, error) {
+		Relays: func(context.Context, []ShareRelayCandidate) (ShareRelays, error) {
 			return &facadeRelays{}, nil
 		},
 		PollNetwork: func(ctx context.Context, _ func()) { <-ctx.Done() },
@@ -232,7 +232,7 @@ func TestShareReleasesInjectedPeerAuthorityAfterPartialConstruction(t *testing.T
 		Prepare: func(context.Context, liveshare.SenderConfig) (PreparedShare, error) {
 			return &preparedFacadeShare{}, nil
 		},
-		Relays:      func(context.Context, []relayprofile.Candidate) (ShareRelays, error) { return &facadeRelays{}, nil },
+		Relays:      func(context.Context, []ShareRelayCandidate) (ShareRelays, error) { return &facadeRelays{}, nil },
 		Peers:       func() (SharePeers, error) { return peers, failure },
 		PollNetwork: func(ctx context.Context, _ func()) { <-ctx.Done() },
 	}})

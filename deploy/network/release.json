@@ -7,7 +7,28 @@
     "https://windshare.cc/.well-known/windshare-network",
     "https://github.com/windshare/windshare/releases/latest/download/windshare-network.json"
   ],
-  "roots": [],
-  "snapshot": null,
+  "roots": [
+    {
+      "id": "root-a",
+      "key": "tJTRyYJ8oz0-18-1WkN0U_33u321A_3i56yDUJsTgVQ"
+    },
+    {
+      "id": "root-b",
+      "key": "63ubAd7qVUIwW-EXjKe0J5H9UYu3lGfXk68cURnyho0"
+    }
+  ],
+  "snapshot": {
+    "payload": "eyJmb3JtYXQiOjEsIm5ldHdvcmsiOiJ3aW5kc2hhcmUiLCJnZW5lcmF0aW9uIjoxLCJzZXJpYWwiOjMsImlzc3VlZF9hdCI6IjIwMjYtMTEtMThUMDU6NTE6MTZaIiwiZXhwaXJlc19hdCI6IjIwMjctMDItMTFUMDU6NTE6MTZaIiwibm9kZXMiOlt7ImFsaWFzIjoiY24xIiwibm9kZV9rZXkiOiJZQVBtN1RKb1I1WFplaE1ickxWbDhBbU5BNnlYRV9Lc1c3eHFfYmVWeW1FIiwicmVsYXkiOiJodHRwczovL2NuMS5vdXJ3b3JsZC50b3AiLCJzdHVuIjpbInN0dW46Y24xLm91cndvcmxkLnRvcDozNDc4Il0sInJvbGVzIjpbInJlbGF5Iiwic3R1biJdLCJ6b25lIjoiY24iLCJyZWdpb24iOiJjbi13dWhhbiIsInByb3ZpZGVyIjoiYWxpeXVuIiwib3BlcmF0b3IiOiJvZmZpY2lhbCIsImNhcGFjaXR5X21icHMiOjIwMCwic3RhdHVzIjoiYWN0aXZlIn0seyJhbGlhcyI6InVzMSIsIm5vZGVfa2V5IjoieU0wcWR5cWhJLUZuSkx1OUhnRFNxaGtLYlk2VFZDU0NEWTVsT1lnOXlmTSIsInJlbGF5IjoiaHR0cHM6Ly91czEud2luZHNoYXJlLmNjIiwic3R1biI6WyJzdHVuOnVzMS53aW5kc2hhcmUuY2M6MzQ3OCJdLCJyb2xlcyI6WyJyZWxheSIsInN0dW4iXSwiem9uZSI6Imdsb2JhbCIsInJlZ2lvbiI6InVzLWxvcy1hbmdlbGVzIiwicHJvdmlkZXIiOiJxdWlja3BhY2tldCIsIm9wZXJhdG9yIjoib2ZmaWNpYWwiLCJjYXBhY2l0eV9tYnBzIjoxMDAsInN0YXR1cyI6ImFjdGl2ZSJ9XSwicHVibGljX3N0dW4iOltdfQ",
+    "certificate": {
+      "root": "root-a",
+      "payload": "eyJmb3JtYXQiOjEsIm5ldHdvcmsiOiJ3aW5kc2hhcmUiLCJnZW5lcmF0aW9uIjoxLCJrZXkiOiJhX1FGaW1lNHRLZVlMdUIyMXBGR1JFZ1RlRXpreUlhT1diNmhDZ3RVY2ZRIiwibm90X2JlZm9yZSI6IjIwMjYtMTEtMThUMDU6MTE6MjRaIiwiZXhwaXJlc19hdCI6IjIwMjctMDUtMTZUMDU6MTE6MjRaIn0",
+      "signature": "QogTToEFmaY3EUYLoZ_T9VITS4UKJUJwesVcMJIbFKOWTU0FnyxtpvygIcFbZSrPtnDkVzCjTvYZtgvBqudfBw"
+    },
+    "signature": "TuvfCi-BTd5NfMXrBcTkWn1Fg2oPhInOJEZTH6BkXxyYawWDNDGO6m12pqIQ9rYG6sF8mHMIOmbI7XTqJVhZAg"
+  },
+  "authority": {
+    "url": "https://api.ourworld.top",
+    "root": "muqKKR27_yRzv0BaLIdgHTVQZQAIWC9NoiEQS2J5qUs"
+  },
   "global_pair_covers_mainland": false
 }

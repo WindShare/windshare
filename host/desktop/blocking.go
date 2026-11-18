@@ -56,6 +56,29 @@ func networkBlocked(err error) operationPhase {
 	return awaitingNetwork{block: block, failure: failure}
 }
 
+// A fresh attempt must own a new engine task, while the file selection and any
+// per-share override remain owned by the original desktop operation.
+func (a *Application) retainFailedSelection(op *operation) {
+	current, ok := op.phase.(running)
+	if !ok || !current.selectedRelays || a.closing {
+		return
+	}
+	state := current.task.Snapshot()
+	if state.Startup != engine.ShareStartupFailed || state.Authorization != nil || state.Result == nil ||
+		state.Result.Outcome != engine.OutcomeFailed || state.Result.FailureClass != engine.FailureNetwork {
+		return
+	}
+	if op.cancel != nil {
+		op.cancel()
+		op.cancel = nil
+	}
+	op.phase = awaitingNetwork{
+		block:   CreationBlock{Reason: "selected_relays_unavailable", Recovery: RetryCreation},
+		failure: failure("selected_relays_unavailable", state.Result.Err),
+	}
+	a.deps.log("host.share_waiting_for_selected_relays", map[string]string{"operation_id": op.id, "task_id": string(current.task.ID())})
+}
+
 func waitingForAdmission(phase operationPhase) bool {
 	switch phase.(type) {
 	case awaitingConfiguration, awaitingNetwork, awaitingAuthorization:

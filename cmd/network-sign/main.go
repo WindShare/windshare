@@ -15,7 +15,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: network-sign keygen|authorize|sign|verify [options]")
+		return fmt.Errorf("usage: network-sign keygen|authorize|sign|verify|publication [options]")
 	}
 	switch args[0] {
 	case "keygen":
@@ -24,6 +24,8 @@ func run(args []string) error {
 		return authorize(args[1:])
 	case "sign":
 		return sign(args[1:])
+	case "publication":
+		return publication(args[1:])
 	case "verify":
 		return verify(args[1:])
 	default:

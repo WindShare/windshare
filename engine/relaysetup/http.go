@@ -40,10 +40,11 @@ func (failure *apiFailure) temporary() bool {
 }
 
 type discovery struct {
-	Version    int    `json:"version"`
-	Access     string `json:"access"`
-	RelayURL   string `json:"relay_url"`
-	ConsoleURL string `json:"console_url"`
+	Version         int    `json:"version"`
+	Access          string `json:"access"`
+	RelayURL        string `json:"relay_url"`
+	ConsoleURL      string `json:"console_url"`
+	OfferedFrontend string `json:"frontend_url"`
 }
 
 func (run *workflow) call(ctx context.Context, method, address string, body, out any) error {
@@ -117,10 +118,20 @@ func (run *workflow) discover(ctx context.Context, address string) (discovery, e
 		return result, errors.New("relay discovery requires an HTTP(S) base URL")
 	}
 	parsed.Path = "/.well-known/windshare"
-	if err = run.call(ctx, http.MethodGet, parsed.String(), nil, &result); err != nil {
+	var raw json.RawMessage
+	if err = run.call(ctx, http.MethodGet, parsed.String(), nil, &raw); err != nil {
 		return result, err
 	}
-	if result.Version != 1 || (result.Access != "open" && result.Access != "restricted") {
+	if err = json.Unmarshal(raw, &result); err != nil {
+		return result, err
+	}
+	if result.Version == 2 {
+		// Enrollment takes its address and policy from the signed payload.
+		result, err = run.discoverNative(raw)
+		if err != nil {
+			return result, err
+		}
+	} else if result.Version != 1 || (result.Access != "open" && result.Access != "restricted") {
 		return result, errors.New("relay discovery returned an unsupported version or access policy")
 	}
 	if !sameRelay(address, result.RelayURL) {
@@ -129,11 +140,14 @@ func (run *workflow) discover(ctx context.Context, address string) (discovery, e
 		}
 		return result, errors.New("relay discovery returned a different relay identity")
 	}
-	if result.Access == "restricted" && !secureEndpoint(result.ConsoleURL) {
+	if (result.Access == "restricted" || result.ConsoleURL != "") && !secureEndpoint(result.ConsoleURL) {
 		return result, errors.New("restricted relay requires HTTPS access endpoints")
 	}
-	if result.Access == "restricted" && !secureEndpoint(parsed.Scheme+"://"+parsed.Host) {
+	if result.ConsoleURL != "" && !secureEndpoint(parsed.Scheme+"://"+parsed.Host) {
 		return result, errors.New("restricted relay discovery requires HTTPS")
+	}
+	if result.OfferedFrontend != "" && !secureEndpoint(result.OfferedFrontend) {
+		result.OfferedFrontend = ""
 	}
 	return result, nil
 }

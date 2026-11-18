@@ -269,18 +269,15 @@ export class DirectProductStack {
     const stateDirectory = join(this.#requireRoot(), 'relay-state')
     await mkdir(stateDirectory, { recursive: true })
     const operationId = `${this.#scenarioId}-relay`
-    const relay = this.#track(new DirectProcess(binaries.relay, [
-      '--listen',
-      '127.0.0.1:0',
-      '--database',
-      join(stateDirectory, 'relay.sqlite'),
-      '--origins',
-      this.baseURL,
-      '--stun-udp',
-      '127.0.0.1:0',
-      '--stun-admin',
-      '127.0.0.1:0',
-    ], {
+    const configuration = join(stateDirectory, 'node.json')
+    await writeFile(configuration, JSON.stringify({
+      listen: '127.0.0.1:0', database: join(stateDirectory, 'relay.sqlite'),
+      identity_file: join(stateDirectory, 'identity.json'),
+      origins: { kind: 'allowlist', origins: [this.baseURL] },
+      stun: { udp_addresses: ['127.0.0.1:0'], admin_address: '127.0.0.1:0' },
+      node: { services: { relay: true, stun: true }, relay_budget: null },
+    }))
+    const relay = this.#track(new DirectProcess(binaries.relay, ['--config', configuration], {
       cwd: REPOSITORY_ROOT,
       environment: localGoEnvironment(),
       operationId,

@@ -1,6 +1,10 @@
 import type { LaneGrant, LaneRejection } from './lane-codec'
 import { createProtocolOperationIdentity, type ProtocolOperationIdentity } from './identities'
-import { SessionRuntimeError } from './runtime-types'
+import { SessionRuntimeError, SessionHandshakeTimeoutError, type ReceiverSessionOptions } from './runtime-types'
+import { capacityWaitFailure } from '../contracts/capacity'
+import { createReceiverHandshake, type ReceiverHandshake, type ReceiverHandshakeOptions, type SessionKeys } from './transcript'
+
+export const SESSION_HANDSHAKE_TIMEOUT_MILLISECONDS = 30_000
 
 export class LaneAdmissionRejectedError extends SessionRuntimeError {
   readonly rejection: LaneRejection
@@ -113,6 +117,40 @@ export function laneAdmissionIdentity(grant: LaneGrant): LaneAdmissionIdentity {
     laneId: grant.laneId,
     laneEpoch: grant.laneEpoch,
   })
+}
+
+// Installation transfers reader ownership only after authentication. Every failure,
+// including installation, retires the same channel and handshake secret.
+export async function establishReceiver<T>(
+  options: ReceiverSessionOptions,
+  install: (keys: SessionKeys, receiverInstanceId: Uint8Array, reader: ReadableStreamDefaultReader<Uint8Array>) => T,
+): Promise<T> {
+  const deadline = deadlineSignal(options.signal, SESSION_HANDSHAKE_TIMEOUT_MILLISECONDS,
+    new SessionHandshakeTimeoutError(SESSION_HANDSHAKE_TIMEOUT_MILLISECONDS))
+  const handshakeOptions: ReceiverHandshakeOptions = {
+    descriptor: options.descriptor, readSecret: options.readSecret,
+    ...(options.randomBytes === undefined ? {} : { randomBytes: options.randomBytes }),
+  }
+  let handshake: ReceiverHandshake | undefined
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+  try {
+    deadline.signal.throwIfAborted()
+    handshake = await createReceiverHandshake(handshakeOptions)
+    reader = options.initialChannel.frames.getReader()
+    await options.initialChannel.send(handshake.clientHello, deadline.signal)
+    const response = await readLaneAdmission(reader, deadline.signal)
+    const keys = await handshake.acceptServerHello(response)
+    deadline.signal.throwIfAborted()
+    return install(keys, handshake.receiverInstanceId, reader)
+  } catch (error) {
+    const failure = error instanceof SessionHandshakeTimeoutError
+      ? capacityWaitFailure(options.initialChannel, error) : error
+    handshake?.discard()
+    await reader?.cancel(error).catch(() => undefined)
+    reader?.releaseLock()
+    await options.initialChannel.close().catch(() => undefined)
+    throw failure
+  } finally { deadline.close() }
 }
 
 export function deadlineSignal(

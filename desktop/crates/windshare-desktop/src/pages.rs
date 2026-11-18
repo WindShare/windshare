@@ -25,6 +25,7 @@ impl Desktop {
             .gap(px(24.))
             .child(Self::appearance_card(theme, cx))
             .child(Self::language_card(theme, cx))
+            .when_some(self.account_card(theme, cx), gpui::ParentElement::child)
             .when(!self.runtime.is_preview(), |el| {
                 el.child(Self::network_settings(cx))
             })

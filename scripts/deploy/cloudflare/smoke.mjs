@@ -79,7 +79,8 @@ try {
   consoleClient = turnConsoleClient({ origin: before.consoleUrl, password: env.WINDSHARE_OWNER_PASSWORD });
   ownedTURN = await consoleClient.call('turn/provision');
   const credential = await createCredential(before);
-  command('go', ['run', './cmd/wind', 'config', 'import', '-', '--front-url', before.frontendUrl], JSON.stringify(credential.configuration));
+  command('go', ['run', './cmd/wind', 'relay', 'add', credential.configuration.url, '--access-key', credential.configuration.access_key]);
+  command('go', ['run', './cmd/wind', 'relay', 'frontend', before.frontendUrl]);
   const imported = JSON.parse(await readFile(savedConfig, 'utf8'));
   assert.equal(imported.profiles[0].url, before.endpoint);
   assert.equal(imported.managed_turn, undefined);

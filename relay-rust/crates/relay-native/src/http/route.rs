@@ -54,8 +54,12 @@ impl Ingress {
             return Route::Reply(reply(StatusCode::OK, "ok\n"));
         }
         if path == DISCOVERY_PATH {
-            let body = serde_json::json!({"version":1,"access":"open","relay_url":self.endpoint.relay_url(),
-                "services": self.node.services(), "relay_available": self.node.available()});
+            let Ok(body) = self.node.descriptor(&self.endpoint) else {
+                return Route::Reply(reply(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "node identity unavailable\n",
+                ));
+            };
             return Route::Reply(
                 Response::builder()
                     .status(StatusCode::OK)

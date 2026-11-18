@@ -27,11 +27,12 @@ records. Private keys and API credentials stay outside the checkout.
    frontend role use `nginx-node.conf.template`, rendering only `${NODE_HOST}`.
 3. Create a `windshare-network` system user, install each `wsrelay` under
    `/opt/windshare-network/releases/`, and point `current` to the selected release.
-   Install `windshare-network.service`. Put `PUBLIC_ENDPOINT=wss://<node>/v2/ws`
-   and `STUN_LISTEN=0.0.0.0:3478` in `/etc/windshare-network/node.env`.
-   Install `node.cn.json` as `/etc/windshare-network/node.json` on mainland servers.
+   Install `windshare-network.service` and the complete node configuration at
+   `/etc/windshare-network/node.json`; replace `REPLACE_NODE_HOST`, set purchased
+   capacity, and preserve its generated identity file across upgrades.
    Keep unit/config files root-owned with mode 0644 and the binary executable.
-   Keep relay service disabled there until P2 account admission is deployed.
+   Follow [authority enrollment](../../relay-rust/crates/network-authority/README.md)
+   before enabling mainland relay service and publishing its relay role.
 4. For a metered overseas node, set the purchased byte allowance and UTC reset day
    (1–28) in `node.metered.example.json` before enabling relay service. The example
    is not a purchased quota. Configuration reloads every second; budget storage

@@ -102,3 +102,30 @@ impl Setup {
         )
     }
 }
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct RelayPreferences {
+    pub mode: String,
+    pub frontend: String,
+    #[serde(default)]
+    pub custom_frontend: bool,
+    pub relays: Vec<SavedRelay>,
+    pub at_capacity: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct SavedRelay {
+    pub url: String,
+    pub enabled: bool,
+    pub console_url: Option<String>,
+    pub offered_frontend: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "action", content = "value", rename_all = "snake_case")]
+pub enum PreferenceEdit {
+    Mode(String),
+    Enable(String),
+    Disable(String),
+    Frontend(String),
+}

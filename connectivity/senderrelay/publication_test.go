@@ -29,7 +29,7 @@ func TestInitialPublicationUncertaintyKeepsOriginalCredentialsAndDescriptor(t *t
 				}
 			}}
 			config := newSenderRelayTestConfig(t, nil, dialer, newSenderRelayTestClock())
-			config.Candidate.AccessKey = "candidate-private-token"
+			config.Candidate.Authorization = StaticKey("candidate-private-token")
 			descriptor := bytes.Clone(config.Descriptor)
 			lifecycle, err := New(config)
 			if err != nil {
@@ -54,7 +54,7 @@ func TestInitialPublicationUncertaintyKeepsOriginalCredentialsAndDescriptor(t *t
 				t.Fatal("republish changed descriptor bytes")
 			}
 			for _, attempt := range configs {
-				wantAuthorization := "Bearer " + config.Candidate.AccessKey
+				wantAuthorization := "Bearer " + config.Candidate.authorization().Bearer
 				if attempt.Init.Mode == v2.RegistrationResume {
 					wantAuthorization = ""
 				}

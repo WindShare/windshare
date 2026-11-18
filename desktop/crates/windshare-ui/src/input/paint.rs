@@ -1,53 +1,66 @@
 use super::*;
 
+fn shape(
+    field: &Input,
+    bounds: Bounds<Pixels>,
+    theme: Theme,
+    window: &Window,
+) -> (ShapedLine, Pixels) {
+    let style = window.text_style();
+    let text: SharedString = if field.value.is_empty() {
+        field.placeholder.clone()
+    } else {
+        field.display_value().into()
+    };
+    let run = TextRun {
+        len: text.len(),
+        font: style.font(),
+        color: if field.value.is_empty() {
+            theme.muted_text()
+        } else {
+            style.color
+        },
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let line = window
+        .text_system()
+        .shape_line(text, px(INPUT_FONT_SIZE), &[run], None);
+    let caret = line.x_for_index(field.display_offset(field.cursor));
+    let scroll = if field.value.is_empty() {
+        px(0.)
+    } else {
+        field
+            .scroll
+            .max(caret - bounds.size.width + px(2.))
+            .min(caret)
+            .max(px(0.))
+    };
+    (line, scroll)
+}
+
 pub(super) fn text_canvas(input: Entity<Input>) -> impl IntoElement {
     let layout_input = input.clone();
     canvas(
         move |bounds, window, cx| {
             let theme = Theme::current(window, cx);
-            let field = layout_input.read(cx);
-            let style = window.text_style();
-            let text: SharedString = if field.value.is_empty() {
-                field.placeholder.clone()
-            } else {
-                field.value.clone().into()
-            };
-            let run = TextRun {
-                len: text.len(),
-                font: style.font(),
-                color: if field.value.is_empty() {
-                    theme.muted_text()
-                } else {
-                    style.color
-                },
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            };
-            let line = window
-                .text_system()
-                .shape_line(text, px(INPUT_FONT_SIZE), &[run], None);
-            let caret = line.x_for_index(field.cursor);
-            let scroll = if field.value.is_empty() {
-                px(0.)
-            } else {
-                field
-                    .scroll
-                    .max(caret - bounds.size.width + px(2.))
-                    .min(caret)
-                    .max(px(0.))
-            };
-            (line, scroll)
+            shape(layout_input.read(cx), bounds, theme, window)
         },
         move |bounds, (line, scroll), window, cx| {
             let theme = Theme::current(window, cx);
             let field = input.read(cx);
             let accent_color = field.accent_color(theme);
             let selection_color = field.selection_color(theme);
-            let selection = field.selection();
+            let selected = field.selection();
+            let selection =
+                field.display_offset(selected.start)..field.display_offset(selected.end);
             let focused = field.focus.is_focused(window);
-            let cursor = field.cursor;
-            let marked = field.marked.clone();
+            let cursor = field.display_offset(field.cursor);
+            let marked = field
+                .marked
+                .as_ref()
+                .map(|range| field.display_offset(range.start)..field.display_offset(range.end));
             let origin = point(bounds.left() - scroll, bounds.top());
             window.handle_input(
                 &field.focus,

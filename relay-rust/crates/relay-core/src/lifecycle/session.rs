@@ -57,7 +57,7 @@ impl<O: Observer> ShareLifecycle<O> {
         let admission = self.operation(request.connection(), sequence);
         Action::Joined(Joined {
             registration,
-            session: Session::new(admission, registration, wire_id, request.deadline()),
+            session: Session::new(admission, &registration, wire_id, request.deadline()),
         })
     }
 

@@ -18,7 +18,7 @@ import {
   verifyLaneReject,
 } from './lane-codec'
 import {
-  deadlineSignal,
+  establishReceiver,
   laneAdmissionIdentity,
   readLaneAdmission,
   LaneAdmissionRejectedError,
@@ -57,16 +57,10 @@ import {
   type ReceiverSessionOptions,
   type SessionOperation,
   SessionRuntimeError,
-  SessionHandshakeTimeoutError,
 } from './runtime-types'
-import {
-  createReceiverHandshake,
-  type ReceiverHandshake,
-  type ReceiverHandshakeOptions,
-  type SessionKeys,
-} from './transcript'
+import type { SessionKeys } from './transcript'
 
-export const SESSION_HANDSHAKE_TIMEOUT_MILLISECONDS = 30_000
+export { SESSION_HANDSHAKE_TIMEOUT_MILLISECONDS } from './lane-admission'
 
 export {
   LaneAdmissionRejectedError,
@@ -127,36 +121,11 @@ export class ReceiverSessionRuntime {
   }
 
   static async connect(options: ReceiverSessionOptions): Promise<ReceiverSessionRuntime> {
-    const deadline = deadlineSignal(
-      options.signal,
-      SESSION_HANDSHAKE_TIMEOUT_MILLISECONDS,
-      new SessionHandshakeTimeoutError(SESSION_HANDSHAKE_TIMEOUT_MILLISECONDS),
-    )
-    const handshakeOptions: ReceiverHandshakeOptions = {
-      descriptor: options.descriptor,
-      readSecret: options.readSecret,
-      ...(options.randomBytes === undefined ? {} : { randomBytes: options.randomBytes }),
-    }
-    let handshake: ReceiverHandshake | undefined
-    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
-    try {
-      deadline.signal.throwIfAborted()
-      handshake = await createReceiverHandshake(handshakeOptions)
-      reader = options.initialChannel.frames.getReader()
-      await options.initialChannel.send(handshake.clientHello, deadline.signal)
-      const response = await readLaneAdmission(reader, deadline.signal)
-      const keys = await handshake.acceptServerHello(response)
-      deadline.signal.throwIfAborted()
-      return new ReceiverSessionRuntime(options, keys, handshake.receiverInstanceId, reader)
-    } catch (error) {
-      handshake?.discard()
-      await reader?.cancel(error).catch(() => undefined)
-      reader?.releaseLock()
-      await options.initialChannel.close().catch(() => undefined)
-      throw error
-    } finally {
-      deadline.close()
-    }
+    return establishReceiver(options, (keys, instance, reader) => new ReceiverSessionRuntime(options, keys, instance, reader))
+  }
+
+  classifyCapacityWait(laneId: number, cause: unknown): unknown {
+    return this.#lanes.get(laneId)?.classifyCapacityWait(cause) ?? cause
   }
 
   get initialLaneId(): number {

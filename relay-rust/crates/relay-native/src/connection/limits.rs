@@ -6,7 +6,8 @@ const DEFAULT_BUSINESS_PER_SOURCE: usize = 128;
 const DEFAULT_CONTROLS_PER_SOURCE: usize = 8;
 
 /// Concurrent relay resources, charged until the last transport owner is destroyed.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct ConnectionLimits {
     pub business: usize,
     pub controls: usize,

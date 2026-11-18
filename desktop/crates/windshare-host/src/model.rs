@@ -8,6 +8,9 @@ pub struct Snapshot {
     pub shares: Vec<Share>,
     #[serde(default)]
     pub setup: Setup,
+    #[serde(default)]
+    pub preferences: crate::RelayPreferences,
+    pub account: Option<crate::AccountView>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -100,6 +103,7 @@ pub enum BlockingReason {
     TrustStateUnwritable,
     DirectoryUnavailable,
     NoRelayCandidates,
+    SelectedRelaysUnavailable,
     AliasUnavailable,
 }
 
@@ -226,6 +230,8 @@ pub struct Model {
     pub operations: Vec<Operation>,
     pub command_error: Option<String>,
     pub setup: Setup,
+    pub preferences: crate::RelayPreferences,
+    pub account: Option<crate::AccountView>,
 }
 
 impl Default for Model {
@@ -237,13 +243,16 @@ impl Default for Model {
             operations: Vec::new(),
             command_error: None,
             setup: Setup::Idle,
+            preferences: crate::RelayPreferences::default(),
+            account: None,
         }
     }
 }
 
 impl Model {
     pub fn has_unfinished_work(&self) -> bool {
-        self.setup.unfinished()
+        self.account.as_ref().is_some_and(|account| account.busy)
+            || self.setup.unfinished()
             || self
                 .operations
                 .iter()
@@ -266,6 +275,8 @@ impl Model {
         self.session_id = Some(snapshot.session_id);
         self.revision = snapshot.revision;
         self.setup = snapshot.setup;
+        self.preferences = snapshot.preferences;
+        self.account = snapshot.account;
         // A full snapshot replaces accepted state, but cannot erase unsent local
         // intents whose commands have not yet reached the host.
         self.operations.retain(|operation| {

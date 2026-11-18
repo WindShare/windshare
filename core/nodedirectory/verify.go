@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/windshare/windshare/core/networkendpoint"
+	"github.com/windshare/windshare/core/serviceauthority"
 )
 
 var encoding = base64.RawURLEncoding.Strict()
@@ -20,6 +21,17 @@ var encoding = base64.RawURLEncoding.Strict()
 // Verify authenticates expired snapshots too, so persisted rollback protection
 // survives offline time. Usable/Accept separately decide whether new use is allowed.
 func Verify(data []byte, network string, roots []Root) (Snapshot, error) {
+	snapshot, err := verifySigned(data, network, roots)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if err := validateNodeKeys(snapshot.payload); err != nil {
+		return Snapshot{}, err
+	}
+	return snapshot, nil
+}
+
+func verifySigned(data []byte, network string, roots []Root) (Snapshot, error) {
 	if len(data) == 0 || len(data) > MaximumEnvelopeBytes {
 		return Snapshot{}, ErrFormat
 	}
@@ -71,7 +83,7 @@ func Verify(data []byte, network string, roots []Root) (Snapshot, error) {
 		payload.IssuedAt.Before(certificate.NotBefore) {
 		return Snapshot{}, ErrFormat
 	}
-	if err := Validate(payload); err != nil {
+	if err := validateTopology(payload); err != nil {
 		return Snapshot{}, err
 	}
 	return Snapshot{payload: payload, certificate: certificate, digest: sha256.Sum256(payloadBytes), envelope: bytes.Clone(data)}, nil
@@ -220,6 +232,22 @@ func ValidAlias(alias string) bool {
 }
 
 func Validate(payload Payload) error {
+	if err := validateTopology(payload); err != nil {
+		return err
+	}
+	return validateNodeKeys(payload)
+}
+
+func validateNodeKeys(payload Payload) error {
+	for _, node := range payload.Nodes {
+		if _, err := serviceauthority.PublicKey(node.NodeKey); err != nil {
+			return ErrFormat
+		}
+	}
+	return nil
+}
+
+func validateTopology(payload Payload) error {
 	if payload.Format != Format || !validText(payload.Network) || !validCounter(payload.Generation) || !validCounter(payload.Serial) ||
 		payload.IssuedAt.IsZero() || !payload.ExpiresAt.After(payload.IssuedAt) || payload.ExpiresAt.Sub(payload.IssuedAt) > MaximumPayloadLifetime ||
 		len(payload.Nodes) > MaximumNodes || len(payload.PublicSTUN) > MaximumPublicSTUN {

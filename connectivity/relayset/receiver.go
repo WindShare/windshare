@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/windshare/windshare/core/framechannel"
+
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
@@ -237,7 +239,7 @@ func (receiver *Receiver) run(url string) {
 		if err == nil {
 			recovery.observe(url, attempt, ReceiverRecoveryConnected, 0, receiver.current(), nil)
 			receiver.waitLane(connection, lane)
-			err = connection.Err()
+			err = retiredLaneError(connection)
 			recovery.rejected(url, err)
 			if !receiverEndpointRetryable(err) {
 				recovery.observe(url, attempt, ReceiverRecoveryTerminal, 0, receiver.current(), err)
@@ -274,6 +276,16 @@ func (receiver *Receiver) run(url string) {
 			return
 		}
 	}
+}
+
+func retiredLaneError(connection ReceiverConnection) error {
+	if err := connection.Err(); err != nil {
+		return err
+	}
+	if connection.Channel().State() == framechannel.Closed {
+		return framechannel.WithCapacityWait(connection.Channel(), errors.New("relay lane retired during capacity wait"))
+	}
+	return nil
 }
 
 func (receiver *Receiver) current() *receiversession.Runtime {
@@ -314,7 +326,9 @@ func (receiver *Receiver) admit(ctx context.Context, connection ReceiverConnecti
 	if err != nil {
 		return err
 	}
-	_, err = runtime.AttachLane(ctx, grant, connection.Channel(), transferlanes.RouteRelay)
+	channel := connection.Channel()
+	_, err = runtime.AttachLane(ctx, grant, channel, transferlanes.RouteRelay)
+	err = framechannel.ClassifyDeadline(channel, err)
 	if err == nil {
 		lane.ID = grant.LaneID
 		lane.Epoch = grant.LaneEpoch
@@ -359,10 +373,11 @@ func (receiver *Receiver) dial(ctx context.Context, url string) (ReceiverConnect
 }
 
 func (receiver *Receiver) connectInitial(ctx context.Context, prepared *liveshare.PreparedReceiver, connection ReceiverConnection, lane *session.LaneIdentity) error {
-	candidate, connectErr := prepared.Connect(ctx, connection.Channel(), transferlanes.RouteRelay)
+	channel := connection.Channel()
+	candidate, connectErr := prepared.Connect(ctx, channel, transferlanes.RouteRelay)
 	if connectErr != nil {
 		prepared.Close()
-		return connectErr
+		return framechannel.ClassifyDeadline(channel, connectErr)
 	}
 	if err := receiver.publishInitial(ctx, candidate, prepared, connection, lane); err != nil {
 		candidate.Close()

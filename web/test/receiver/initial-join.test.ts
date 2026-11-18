@@ -69,6 +69,29 @@ describe('initial receiver waiting', () => {
     expect(connect).toHaveBeenCalledTimes(calls)
   })
 
+  it('preserves the node retry deadline when users retry during bandwidth waits', async () => {
+    vi.useFakeTimers()
+    const control = new InitialJoinControl()
+    const connect = vi.fn()
+      .mockRejectedValueOnce(new RelayReceiverError('capacity exhausted', { relayError: {
+        code: RELAY_ERROR.admission, retryAfterMilliseconds: 30_000,
+      } }))
+      .mockResolvedValue('authenticated-session')
+    const task = runInitialJoin({
+      signal: new AbortController().signal,
+      clock: { now: () => Date.now(), sleep: systemReconnectClock.sleep },
+      windowMilliseconds: 60_000, control, connect, close: async () => undefined,
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    control.request('retry')
+    await vi.advanceTimersByTimeAsync(29_999)
+    expect(connect).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    await expect(task).resolves.toBe('authenticated-session')
+    expect(connect).toHaveBeenCalledTimes(2)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('rejects descriptor authentication failures immediately', async () => {
     const failure = new SenderObjectError('signature', 'Invalid sender signature')
     const connect = vi.fn(async () => { throw failure })

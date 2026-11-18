@@ -8,6 +8,7 @@ import (
 
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/engine"
+	"github.com/windshare/windshare/engine/account"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relaysetup"
 	"github.com/windshare/windshare/engine/turn"
@@ -27,15 +28,27 @@ type shareTask interface {
 	StopShare()
 }
 
+type accountService interface {
+	Snapshot() (account.Snapshot, <-chan struct{})
+	Retry()
+	Login(context.Context, string, string) error
+	SetPassword(context.Context, string, string) error
+	RequestEmail(context.Context, string) error
+	VerifyEmail(context.Context, string) error
+	RevokeCredential(context.Context, [16]byte) error
+}
+
 type dependencies struct {
-	start       func(context.Context, engine.ShareRequest) (shareTask, error)
-	close       func(context.Context) error
-	load        func() (relayconfig.Config, error)
-	configure   func(turn.Settings) error
-	setup       func(context.Context, SetupInput, func(relaysetup.Progress)) (SetupResult, error)
-	cancelSetup func(context.Context, string) error
-	log         func(string, any)
-	diagnostics diagnostics.Sink
+	defaultFrontend string
+	accounts        accountService
+	start           func(context.Context, engine.ShareRequest) (shareTask, error)
+	close           func(context.Context) error
+	load            func() (relayconfig.Config, error)
+	configure       func(turn.Settings) error
+	setup           func(context.Context, SetupInput, func(relaysetup.Progress)) (SetupResult, error)
+	cancelSetup     func(context.Context, string) error
+	log             func(string, any)
+	diagnostics     diagnostics.Sink
 }
 
 type operationPhase interface{ operationPhase() }
@@ -50,8 +63,9 @@ type awaitingNetwork struct {
 type awaitingAuthorization struct{ authority engine.ShareAuthorization }
 type admission struct{ cancelling bool }
 type running struct {
-	task     shareTask
-	frontURL string
+	task           shareTask
+	frontURL       string
+	selectedRelays bool
 }
 type terminal struct {
 	result Completion
@@ -78,38 +92,64 @@ type operation struct {
 // Application owns intents independently of connections, navigation and startup.
 // Only committed state is observed; slow admission and setup never hold mu.
 type Application struct {
-	mu             sync.Mutex
-	sessionID      string
-	snapshotValue  Snapshot
-	operations     map[string]*operation
-	deps           dependencies
-	closing        bool
-	admissions     chan struct{}
-	work           sync.WaitGroup
-	readers        sync.WaitGroup
-	subscribers    map[*subscription]struct{}
-	setup          SetupView
-	setupRequests  map[string]setupCommand
-	interruptSetup context.CancelFunc
+	mu              sync.Mutex
+	sessionID       string
+	snapshotValue   Snapshot
+	operations      map[string]*operation
+	deps            dependencies
+	closing         bool
+	admissions      chan struct{}
+	work            sync.WaitGroup
+	readers         sync.WaitGroup
+	subscribers     map[*subscription]struct{}
+	preferences     relayconfig.Preferences
+	setup           SetupView
+	setupRequests   map[string]setupCommand
+	interruptSetup  context.CancelFunc
+	accountContext  context.Context
+	cancelAccount   context.CancelFunc
+	accountView     *AccountView
+	accountRequests map[string][32]byte
 }
 
 func newApplication(sessionID string, deps dependencies) *Application {
-	return &Application{
-		sessionID: sessionID, operations: make(map[string]*operation), deps: deps,
+	a := &Application{
+		accountRequests: make(map[string][32]byte),
+		sessionID:       sessionID, operations: make(map[string]*operation), deps: deps,
 		admissions: make(chan struct{}, 1), subscribers: make(map[*subscription]struct{}),
 		setup:         SetupView{State: "idle"},
 		setupRequests: make(map[string]setupCommand),
 	}
+	a.preferences = (relayconfig.Config{}).Preferences(deps.defaultFrontend)
+	a.accountContext, a.cancelAccount = context.WithCancel(context.Background())
+	a.watchAccount()
+	return a
 }
 
 func (a *Application) execute(request Request) Message {
+	if request.Command == "preferences" {
+		settings, err := a.deps.load()
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		reply := Message{Version: ProtocolVersion, ID: request.ID}
+		if err != nil {
+			reply.Error = failure("settings_unavailable", err)
+			return reply
+		}
+		a.preferences = settings.Preferences(a.deps.defaultFrontend)
+		snapshot := a.snapshotLocked()
+		reply.Snapshot = &snapshot
+		return reply
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if request.Command != "list" && request.Command != "query" {
+	if request.Command != "list" && request.Command != "query" && request.Command != "account" {
 		a.deps.log("host.request", request)
 	}
 	var err error
 	switch request.Command {
+	case "account":
+		err = a.accountCommand(request)
 	case "create":
 		err = a.create(request)
 	case "repeat":
@@ -191,6 +231,7 @@ func (a *Application) cancel(id string) error {
 func (a *Application) close() error {
 	a.mu.Lock()
 	a.closing = true
+	a.cancelAccount()
 	a.cancelSetupLocked()
 	for _, op := range a.operations {
 		if _, admitting := op.phase.(admission); admitting && op.cancel != nil {

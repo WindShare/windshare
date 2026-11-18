@@ -3,6 +3,8 @@ package observation
 import (
 	errors "errors"
 	time "time"
+
+	"github.com/windshare/windshare/core/serviceauthority"
 )
 
 var ErrInvalidEvent = errors.New("engine observation is invalid")
@@ -305,7 +307,23 @@ func (value RelayAvailability) Validate() error {
 	return nil
 }
 
+type RelayWaitReason uint8
+
+const (
+	RelayWaitConnection RelayWaitReason = iota
+	RelayWaitBandwidth
+)
+
+func (reason RelayWaitReason) Name() string {
+	if reason == RelayWaitBandwidth {
+		return "bandwidth"
+	}
+	return ""
+}
+
 type RelayRecoveryDetails struct {
+	WaitReason        RelayWaitReason
+	Authorization     serviceauthority.AdmissionState
 	ShareInstance     SharingInstanceID
 	Generation        uint64
 	Slow              bool
@@ -328,7 +346,7 @@ func (id SharingInstanceID) Valid() bool { return id.value.valid() }
 
 func NewRelayRecoveryObservation(workflow Workflow, origin RelayOrigin, attempt uint32, state RelayRecoveryState, failure Failure, details RelayRecoveryDetails) (RelayRecovering, error) {
 	event, err := NewRelayRecovering(workflow, origin, attempt, state, failure)
-	if err != nil || details.NextDelay < 0 {
+	if err != nil || details.WaitReason > RelayWaitBandwidth || details.NextDelay < 0 || details.Authorization != 0 && details.Authorization.Name() == "" {
 		return RelayRecovering{}, ErrInvalidEvent
 	}
 	event.details, event.hasDetails = details, true

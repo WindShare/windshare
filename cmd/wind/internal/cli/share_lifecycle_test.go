@@ -52,7 +52,7 @@ func TestSharePublicationFailureStopsAndJoinsService(t *testing.T) {
 						return &publicationPreparedShare{PreparedSender: prepared, invalidCapability: test.invalidCapability,
 							prefetchStarted: prefetchStarted, closed: sourceClosed}, err
 					},
-					Relays:      func(context.Context, []relayprofile.Candidate) (engine.ShareRelays, error) { return relays, nil },
+					Relays:      func(context.Context, []relayprofile.Registration) (engine.ShareRelays, error) { return relays, nil },
 					PollNetwork: func(ctx context.Context, _ func()) { <-ctx.Done() },
 				}},
 				openUserTrace: func(runtrace.Target, clievent.Command, runtrace.Config, runtrace.Dependencies) (userTraceRecorder, error) {

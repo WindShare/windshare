@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/windshare/windshare/core/framechannel"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
@@ -186,11 +187,12 @@ func (l *link) settleTerminal(
 }
 
 type Channel struct {
-	id        v2.RelaySessionID
-	link      *link
-	recv      chan framechannel.Frame
-	receive   *receiveFlow
-	announced bool
+	id            v2.RelaySessionID
+	link          *link
+	recv          chan framechannel.Frame
+	receive       *receiveFlow
+	announced     bool
+	capacityUntil [2]time.Time
 
 	mu             sync.Mutex
 	state          framechannel.ChannelState
@@ -214,7 +216,7 @@ func (c *Channel) Send(ctx context.Context, frame framechannel.Frame) error {
 	if err != nil {
 		return err
 	}
-	return c.link.enqueue(ctx, c, request)
+	return framechannel.ClassifyDeadline(c, c.link.enqueue(ctx, c, request))
 }
 
 func (c *Channel) SendTerminal(ctx context.Context, frame framechannel.Frame) error {

@@ -1,6 +1,6 @@
 # Cloudflare deployment
 
-Fork the repository and run **Deploy WindShare to Cloudflare** in GitHub Actions.
+Fork the repository and run **Deploy private relay** in GitHub Actions.
 The default `full` mode hosts the receiver frontend and private relay together.
 A separate console origin handles owner sign-in, device approval and credentials.
 `relay-only` omits the receiver frontend but keeps the console. Both modes provision
@@ -48,17 +48,16 @@ to publish one build to Cloudflare and mainland hosts. The steps below cover pri
 
    ```sh
    wind relay onboard https://<relay-address>
-   wind share <path> --configured-relays-only --front-url https://<frontend-address>
+   wind share <path>
    ```
 
    Sign in to the console with the owner password, verify the device name and code,
-   and approve. The client saves its credential and managed TURN reference, and selects
-   this private relay in `active_relays`. Existing profiles and frontend choices remain
-   saved; P2P stays enabled. Use the relay address as the frontend in `full` mode, or a
-   separate frontend in `relay-only` mode. Omitting `--front-url` uses the saved or built-in
-   frontend. Headless clients can display the URL and code with `--no-browser`.
+   and approve. Automatic mode enables the relay if a slot is free. In selected mode,
+   use `wind relay enable <relay-address>`. Pairing keeps the current receiving website.
+   The `full` setup receipt offers `wind relay frontend <frontend-address>`. Headless
+   clients can display the approval URL and code with `--no-browser`.
 
-The console supports named manual credentials and a JSON configuration for automation.
+The console issues named service keys for automation. Install one with `wind relay add <url> --access-key <key>`.
 See [sharing defaults](../cli.md#sharing-defaults). Actions masks deployment addresses,
 omits them from summaries, and uploads no address artifact. Local deployments retain
 their onboarding output. Receiver links never contain access keys; receivers need no account.

@@ -1,0 +1,20 @@
+name = "windshare-network-authority"
+main = "build/worker/shim.mjs"
+compatibility_date = "2026-09-28"
+workers_dev = false
+
+[build]
+command = "worker-build --release"
+
+[[durable_objects.bindings]]
+name = "AUTHORITY"
+class_name = "NetworkAuthority"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["NetworkAuthority"]
+
+[observability]
+enabled = true
+
+# The deploy helper writes the API custom domain, trust certificate and allowed origins.

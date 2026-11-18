@@ -15,7 +15,7 @@ const decoder = new TextDecoder('utf-8', { fatal: true })
 
 export interface NetworkRoot { readonly id: string; readonly key: string }
 export interface NetworkNode {
-  readonly alias: string; readonly relay: string; readonly identity: string; readonly stun: readonly string[]
+  readonly alias: string; readonly nodeKey: string; readonly relay: string; readonly identity: string; readonly stun: readonly string[]
   readonly roles: readonly string[]; readonly zone: 'cn' | 'global'; readonly region: string
   readonly provider: string; readonly operator: string; readonly capacityMbps: number
   readonly status: 'active' | 'canary' | 'draining'
@@ -69,9 +69,11 @@ export async function verifyDirectory(envelopeText: string, network: string, roo
   }
   const nodes: NetworkNode[] = []
   for (const value of array(payload.nodes, 256)) {
-    const node = object(value, ['alias', 'relay', 'stun', 'roles', 'zone', 'region', 'provider', 'operator', 'capacity_mbps', 'status'])
+    const node = object(value, ['alias', 'node_key', 'relay', 'stun', 'roles', 'zone', 'region', 'provider', 'operator', 'capacity_mbps', 'status'])
     if (typeof node.relay !== 'string') throw new TypeError('Invalid relay endpoint')
     const alias = text(node.alias), relay = node.relay
+    const key = base64(node.node_key, 32), nodeKey = encodeBase64Url(key)
+    if (key.length !== 32 || key.every(byte => byte === 0) || nodeKey !== node.node_key) throw new TypeError('Invalid node key')
     const identity = (await canonicalRelayEndpoint(relay)).relayIdentityEndpoint
     const roles = array(node.roles, 2).map(text), stuns = array(node.stun, 4).map(stun)
     const capacityMbps = counter(node.capacity_mbps)
@@ -79,7 +81,7 @@ export async function verifyDirectory(envelopeText: string, network: string, roo
       !['cn', 'global'].includes(String(node.zone)) || !['active', 'canary', 'draining'].includes(String(node.status)) || capacityMbps > 0xffffffff ||
       roles.length === 0 || new Set(roles).size !== roles.length || roles.some(role => role !== 'stun' && role !== 'relay') || roles.includes('stun') !== (stuns.length > 0)) throw new TypeError('Invalid network node')
     aliases.add(alias); identities.add(identity)
-    nodes.push(Object.freeze({ alias, relay, identity, roles: Object.freeze(roles), stun: Object.freeze(stuns), capacityMbps,
+    nodes.push(Object.freeze({ alias, nodeKey, relay, identity, roles: Object.freeze(roles), stun: Object.freeze(stuns), capacityMbps,
       zone: node.zone as NetworkNode['zone'], status: node.status as NetworkNode['status'], region: text(node.region), provider: text(node.provider), operator: text(node.operator) }))
   }
   const publicSTUN = array(payload.public_stun, 128).map(value => {

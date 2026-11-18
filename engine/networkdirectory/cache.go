@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"maps"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -57,8 +58,10 @@ func (cache *MemoryCache) Update(_ context.Context, change func(Record) (Record,
 
 type FileCache struct{ path string }
 
-func NewFileCache(configPath string) *FileCache {
-	return &FileCache{path: filepath.Join(statefile.StateDirectory(configPath), "network", "directory.json")}
+// Separate trust histories by network, including builds sharing the same user settings.
+// A key rotation within a network must still respect its previous rollback cursor.
+func NewFileCache(configPath, network string) *FileCache {
+	return &FileCache{path: filepath.Join(statefile.StateDirectory(configPath), "network", "directory-"+url.PathEscape(network)+".json")}
 }
 
 func (cache *FileCache) Load(context.Context) (Record, error) { return cache.read() }

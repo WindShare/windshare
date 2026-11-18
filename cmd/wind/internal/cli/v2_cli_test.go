@@ -124,7 +124,7 @@ func testShareCancellation(t *testing.T, cleanupError error, exitCode int) {
 	app := &App{
 		Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader(""),
 		engineConfig: engine.Config{Share: engine.ShareDependencies{
-			Relays: func(context.Context, []relayprofile.Candidate) (engine.ShareRelays, error) {
+			Relays: func(context.Context, []relayprofile.Registration) (engine.ShareRelays, error) {
 				return relays, nil
 			},
 			PollNetwork: func(ctx context.Context, _ func()) { <-ctx.Done() },

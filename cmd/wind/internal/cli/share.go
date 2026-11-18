@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/windshare/windshare/adapters/filesystem"
+	"github.com/windshare/windshare/cmd/wind/internal/accountcommand"
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
 	"github.com/windshare/windshare/cmd/wind/internal/networkcommand"
@@ -60,7 +61,10 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 		})
 	})
 
+	finishAccountProgress := accountcommand.Watch(ctx, a.application.Accounts(), a.terminalOutput().canvas)
+	defer finishAccountProgress()
 	ready, readyErr := current.Ready(context.Background())
+	finishAccountProgress()
 	var publicationErr error
 	if readyErr == nil {
 		publicationErr = a.publishEngineShare(ready, request.link, runtime, observations)

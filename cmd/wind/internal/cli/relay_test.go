@@ -77,10 +77,7 @@ func TestRelayCommandsInstallThroughEngineWithoutAdministratorAuthority(t *testi
 				saved.Profiles[1].AccessKey != "cli-access-key-canary" || saved.FrontURL != initial.FrontURL {
 				t.Fatal("setup did not persist a complete profile", err)
 			}
-			expectedSelection := initial.ActiveRelays
-			if operation == "onboard" {
-				expectedSelection = []string{relayURL}
-			}
+			expectedSelection := append(slices.Clone(initial.ActiveRelays), relayURL)
 			if !slices.Equal(saved.ActiveRelays, expectedSelection) {
 				t.Fatalf("selection = %v, expected %v", saved.ActiveRelays, expectedSelection)
 			}

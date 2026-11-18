@@ -1,7 +1,10 @@
 # Development network
 
-This public profile reuses the existing `windshare-development` identity:
-two roots, generation 1 / serial 2, cn1 for STUN and us1 for relay + STUN.
+This profile retains the `windshare-development` identity and immutable P1 history.
+Before rebuilding for P2, upgrade cn1/us1, copy their signed discovery v2 `node_key`
+values into `directory.json`, increase its serial, and re-sign using the command below.
+Do not replace old history entries or substitute test keys. The current P1 snapshot
+(generation 1 / serial 2) is historical and cannot authorize P2 nodes.
 The directory expires on **2027-01-13T08:00:58Z**. Its frontend is
 `http://localhost:4173`, so generated links are for receiving on this computer.
 

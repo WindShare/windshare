@@ -1,150 +1,68 @@
 # Native relay host
 
-This host runs REGISTER/RESUME, JOIN, bidirectional opaque forwarding, cumulative
-consumption, settlement, independent STOP and heartbeats through `ShareRelay` on
-real WebSockets. It requires the capacity-bearing handshake and cumulative feedback;
-the Go `relayv2` runtime and browser receiver implement both. This is the default
-server; release ZIPs ship it as `wsrelay`. Go process E2E, integration and browser
-product tests use this host alongside Go `wind`. The legacy Go server is retired.
+Run `wsrelay --config node.json`. Copy the [example](../../../deploy/wsrelay/node.example.json),
+set the public WebSocket endpoint, browser origins and capacity, and terminate TLS
+at a reverse proxy. Relative database and identity paths resolve beside the config.
+A wildcard listen address requires an explicit endpoint. Copy `relay_url` from
+the startup JSON or `/.well-known/windshare` into `wind relay onboard <url>`.
+Use the one-time administrator URL printed at startup to set a password. Confirm
+the device name and code at the approval URL. Public guests can use `wind relay add`.
 
-From `relay-rust/`:
+The first start creates a durable Ed25519 node identity and prints its owner access
+key. Back up the identity, relay SQLite database and its sibling `.console.sqlite`
+using a consistent SQLite backup. The console stores sessions, per-device installation
+receipts and revocations. Paired devices share the owner priority and have separate
+keys. The console can issue a service key for a separate principal. Revoking a key
+also stops its active shares on this node. One host
+owns each database; its endpoint identity and permanent STOP history cannot be reset
+by changing configuration. JSON readiness goes to stdout; traces go to stderr.
+`RUST_LOG=debug` includes kernel decisions.
 
-```sh
-cargo run --locked -p windshare-relay-native --bin relay-native -- --database relay.sqlite --listen 127.0.0.1:8787
-```
+## Configuration
 
-For a wildcard bind or reverse proxy, add
-`--public-endpoint wss://relay.example/v2/ws`: the canonical full WebSocket URL
-clients use, including any base path. Loopback and LAN addresses are valid;
-unspecified addresses such as `0.0.0.0` and `[::]` are not endpoints.
-TLS terminates at the reverse proxy.
-The database is bound to this endpoint identity and exclusively leased by one host.
-Keep the SQLite database and its WAL together; deleting storage deletes STOP history.
-The parent directory must exist. Copy `relay_url` from the startup JSON into
-`wind share --relay` or `wind relay add`. Discovery advertises the same base URL.
-Structured traces go to stderr, with kernel decisions enabled by `RUST_LOG=debug`.
+- `listen`, `endpoint`, `database`, `identity_file`: listener and durable identity.
+- `origins`: `{"kind":"native"}`, `{"kind":"public"}`, or an `allowlist` with
+  exact HTTP(S) `origins` and optional `allow_localhost`. Origin policy is separate
+  from sender authorization.
+- `proxy`: optional `{"peers":["127.0.0.1","::1"],"header":"CF-Connecting-IP"}`.
+  Only these socket peers may supply one source IP; malformed trusted headers fail.
+- `connections`: `business` (256), `controls` (32), `business_per_source` (128),
+  `controls_per_source` (8). Public load leaves owner capacity; anonymous admission
+  is refused before authenticated admission. STOP has separate control capacity.
+- `stun`: `udp_addresses`, optional `admin_address`, and `limits`;
+  see [STUN](../../../docs/stun.md).
+- `node`: enabled `services`, `zone`, `region`, `stun_urls`,
+  `capacity_bytes_per_second`, optional `relay_budget`, and `access`.
+  Anonymous admission defaults off for `cn`, on for `global`.
+- `node.access`: local credentials/owner principals, trusted issuer certificates,
+  `shares_per_principal` and `owner_reserved_shares`.
+- `node.authority`: official usage endpoint and issuer; see
+  [Authority setup](../network-authority/README.md). Local owners require no authority.
 
-`GET /healthz` returns `200 ok`; `HEAD /healthz` returns the same status without a
-body. This is HTTP liveness, independent of share capacity, at the root path even
-when the public WebSocket endpoint has a base path. Unknown paths return 404 and
-unsupported methods return 405. HTTP bodies are rejected; ordinary replies close
-the connection. HTTP ingress has 64 concurrent slots, a 5-second read/write deadline,
-and a 16 KiB / 64-header limit, separate from relay admission.
+Node settings reload from the same file. Listener, storage, identity and reporting
+authority changes require restart. Unknown fields and invalid policies fail validation.
 
-Independent UDP STUN Binding listeners default to `0.0.0.0:3478` and `[::]:3478`;
-their private health/metrics HTTP listener defaults to `127.0.0.1:8081`.
-UDP/admin failures leave relay traffic available. Ctrl-C (or SIGTERM on Unix)
-joins STUN and relay teardown. See [STUN configuration](../../../docs/stun.md#stun-service-in-wsrelay)
-for flags, protocol boundaries, limits and health semantics.
+## Runtime
 
-Browser WebSocket access requires `--origins https://app.example,https://other.example`.
-Entries are full HTTP(S) origins without paths, credentials, queries or fragments;
-host/scheme case and default ports are normalized. Invalid entries fail startup.
-Missing Origin is allowed for native clients; empty, `null`, repeated and unlisted
-origins are rejected with 403. Origin is browser policy, not client authentication.
-`--allow-localhost` additionally allows HTTP(S) origins on `localhost`, `127.0.0.1`
-and `[::1]` at any port for development; it is off by default. Neither Host nor
-proxy forwarding headers grant origin access.
+`/.well-known/windshare` publishes the signed v2 node descriptor. `/healthz` reports
+HTTP liveness independently of relay capacity; UDP STUN has its own private health
+endpoint. Ctrl-C or SIGTERM joins relay, reporter and STUN teardown.
 
-REGISTER creates ownership and descriptor in one SQLite transaction. The kernel
-permits REGISTERED only after that exact write is confirmed; ambiguous results retry
-the same write. STOP follows earlier writes, retains its permanent intent through
-cleanup and commits the final fact before acknowledgement. Startup recovers committed
-ownership even if its receipt was lost, enters grace when the owner is gone and
-preserves already-persisted grace deadlines. Schema version 2 rejects older databases.
-Generation allocation is durable; challenge entropy comes from the OS.
-JOIN reads its sealed descriptor from the confirmed authority cached by the actor,
-including after RESUME. Opaque forwarding and consumption never perform SQL.
+A node-wide governor schedules owner, standard and lowest classes, then principals
+and sessions. Idle capacity is shared. Bounded flow queues preserve order; scheduling
+and writer capacity are obtained before synchronous forwarding authorization.
+Bandwidth-pressure controls let clients back off without losing downloaded progress.
 
-Validated WebSocket upgrades reserve global and source control capacity before the
-101 response; saturation returns 503. REGISTER/RESUME/JOIN initiations atomically
-exchange both control charges for business charges. STOP keeps its independent
-control capacity when global or source business capacity is full. Each share also
-keeps 32 business and 8 control slots. New connections remain rate-limited.
+Actual forwarded account bytes are split by UTC day. Durable signed minute batches
+retry idempotently, independently of zero-byte entitlement refreshes. Expired or spent
+allowance lowers scheduling priority without dropping account attribution. Blocks and
+credential revocations independently stop registration, join, resume and active
+forwarding. Local owner credentials remain independent of official account policy.
 
-| Connection option | Default |
-| --- | --- |
-| `--max-business-connections` | 256 |
-| `--max-control-connections` | 32 |
-| `--max-business-connections-per-source` | 128 |
-| `--max-control-connections-per-source` | 8 |
+REGISTER acknowledgements follow committed SQLite receipts. STOP retains its permanent
+intent through cleanup; process restart recovers committed ownership and grace.
+Schema version 3 rejects older databases. Unsubmitted frames are discarded on closure;
+already submitted bytes may still arrive. Slow socket writes cannot block share actors.
 
-Limits must be positive, with each source limit no larger than its global limit.
-Sources are socket IPs by default, without ports; IPv4-mapped IPv6 uses the same
-budget as IPv4. Users sharing a NAT share these budgets. Forwarded headers are
-ignored unless **both** `--trusted-proxies <comma-separated proxy IPs>` and
-`--source-ip-header <header-name>` are configured. Only exact matching socket peers
-may supply that header; it must contain exactly one IP, without a port or list.
-Missing, repeated or invalid trusted headers return 400, without fallback to the
-proxy IP. Other peers still use their socket IP. Health checks require no source header.
-
-For a local Cloudflare Tunnel connector, for example, add:
-
-```sh
---trusted-proxies 127.0.0.1,::1 --source-ip-header CF-Connecting-IP
-```
-
-Trust only connector addresses under your control and restrict origin access to
-that connector. A general reverse proxy must overwrite the configured header;
-client-supplied forwarding chains are not parsed. With Cloudflare, keep Pseudo IPv4
-out of `Overwrite Headers` mode so
-[`CF-Connecting-IP`](https://developers.cloudflare.com/fundamentals/reference/http-headers/#cf-connecting-ip)
-retains the native client address. Worker subrequests can change its meaning.
-
-Health checks and rejected HTTP requests do not spend relay attempt tokens or
-allocate share actors. Upgrades transfer the transport and pre-read bytes to the
-connection supervisor, releasing the HTTP slot. Supervisor, reader and writer retain
-both relay charges until the last resource owner is destroyed; idle source entries
-are then removed. Failed admission never partially charges either budget, and closing
-does not refund attempt tokens. Structured `connection_admission_refused` traces
-include connection identity, source IP and distinct global/source/control/business
-or attempt-rate reasons; `connection_policy` records startup limits and proxy trust.
-
-Per-share actors serialize decisions; each connection supervisor owns separate reader
-and writer tasks. Slow writes cannot block inbound controls. Output has independent
-frame/byte bounds, reserved control capacity and coalesced priority heartbeat replies.
-Unsubmitted payloads stay with the actor. The connection foundation rechecks a receipt
-through `ShareRelay::submit` and hands it to the bounded writer synchronously; those
-bytes are then submitted responsibility and may still arrive after STOP.
-Native scheduling maintains a 16-frame window, bounded by the destination declaration
-and available ordinary capacity. It reads kernel occupancy instead of duplicating
-cumulative counters, rotates flows sharing a destination, and defers grants until
-their control writer has space. Consumption replay cannot replenish twice.
-
-Queue discard precedes its kernel receipt; the resulting settlement enters the ordered
-writer before closure. Closure aborts both tasks, or gives ordered
-terminal replies and the WebSocket close handshake one bounded interval; shutdown
-interrupts that drain.
-Only joined tasks, dropped queues and abortive TCP teardown justify `Closed`;
-shutdown waits until the share actor has processed that receipt.
-An independent generation supervisor tracks the actor, connection supervisors,
-reader/writer descendants and blocking storage work. Failure, cancellation and idle
-eviction retain the registry slot until every tracked task has destroyed its resources;
-a closed mailbox alone never permits reconstruction. Each generation has its own mailbox,
-so delayed old receipts cannot enter the replacement.
-
-Recovery evidence depends on the boundary:
-
-- A first share requires an authoritative absent record and an empty host inventory.
-- Same-host reconstruction requires the old generation's completed cleanup barrier,
-  including storage work, before reading authority again.
-- Host/process restart requires the exclusive database lease, held by every tracked
-  resource owner until teardown, and a new durable connection generation. Native
-  transports use abortive TCP close and retain no buffers in an external host.
-
-Previously submitted network bytes may still arrive; release does not mean delivery
-or recall. These native ownership guarantees do not apply to Cloudflare buffers.
-
-`make rust` covers STUN Binding with Pion on IPv4/IPv6, malformed/oversized datagrams,
-virtual-time limits and I/O deadlines, listener/admin fault isolation and socket release.
-It also covers HTTP routing, Origin policy, bounded headers, virtual-time HTTP
-read/write deadlines, source isolation, trusted-header validation, admission rollback,
-STOP under full business budgets and upgrade handoff, plus blocked-write ingress,
-bounded queues, STOP submission fencing,
-joined teardown, held writer destruction, actor reconstruction, stale-receipt isolation,
-cancelled-supervisor lease retention and fault-injected commit ordering. The existing
-Go-client process scenario calls `DialSender`, `DialReceiver` and `Channel` directly.
-It transfers mixed-size frames beyond asymmetric receive windows, verifies sparse
-feedback, isolates a slow receiver, releases cancelled queues through `WS2S`, and
-leaves submitted debt outstanding for STOP. It also kills/restarts the binary,
-resumes and transfers again, then verifies permanent STOP across another restart.
+`make rust` covers protocol, persistence, fair scheduling, admission, usage, HTTP/STUN,
+fault-injected teardown and Go-client process interop.

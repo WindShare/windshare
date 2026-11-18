@@ -20,6 +20,7 @@ sha2 = "0.11.1"
 url = "2"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+windshare-relay-console = { path = "../../console" }
 worker = "=0.8.7"
 js-sys = "0.3"
 wasm-bindgen = "0.2"

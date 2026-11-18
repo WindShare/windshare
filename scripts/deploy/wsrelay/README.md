@@ -10,23 +10,22 @@ Build the container from the repository root:
 ```sh
 docker build -f deploy/wsrelay/Dockerfile -t windshare-wsrelay .
 docker run --rm -p 8484:8484/tcp -p 3478:3478/udp \
-  -v windshare-relay-state:/state windshare-wsrelay \
-  --database /state/relay.sqlite --listen 0.0.0.0:8484 \
-  --public-endpoint wss://relay.example.com/v2/ws \
-  --origins https://app.example.com
+  -v windshare-relay-state:/state \
+  -v /absolute/path/node.json:/state/node.json:ro windshare-wsrelay
 ```
 
-Wildcard binds require `--public-endpoint`. Arguments after the image name replace
-Docker's entire `CMD`; include `--database` and `--listen` as shown above.
+Copy [node.example.json](../../../deploy/wsrelay/node.example.json) and set its
+endpoint, origins and capacity before starting. The container runs
+`wsrelay --config /state/node.json`; relative identity and SQLite paths stay in the volume.
 The state volume must be writable by UID 65532. Terminate TLS at a reverse proxy.
 The public endpoint must be the exact canonical WebSocket URL used by clients;
 browser origins require an explicit allowlist. For a local trusted tunnel, add
-`--trusted-proxies 127.0.0.1,::1 --source-ip-header CF-Connecting-IP`.
+`"proxy":{"peers":["127.0.0.1","::1"],"header":"CF-Connecting-IP"}`.
 See the [native host](../../../relay-rust/crates/relay-native/README.md) for limits,
 source policy and recovery, and [STUN](../../../docs/stun.md) for UDP/admin settings.
 
 If correcting an old wildcard endpoint reports `database belongs to a different
-public endpoint`, stop the host and use a new `--database` path or Docker volume.
+public endpoint`, stop the host and use a new configuration `database` path or Docker volume.
 Retain the old database and WAL together; their ownership and STOP history belong
 to the old endpoint identity.
 
@@ -50,7 +49,7 @@ sudo install -o root -g root -m 0755 scripts/deploy/wsrelay/install.sh \
 ```
 
 Configure `windshare-relay.service` to run `/usr/local/bin/wsrelay` with the Rust
-options above, listening on `127.0.0.1:8484`. Upload `wsrelay-linux-amd64`, then:
+`--config /etc/windshare-relay/node.json`, listening on `127.0.0.1:8484`. Upload `wsrelay-linux-amd64`, then:
 
 ```sh
 sudo /usr/local/sbin/windshare-install-wsrelay \

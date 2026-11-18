@@ -124,13 +124,15 @@ class InitialJoinRecovery<T> {
       throw error
     }
     this.#failure = error
-    const delay = Math.max(recoveryRetryAfter(error), this.#continuous
-      ? waitingReconnectBackoff() : defaultReconnectBackoff(this.#attempt - 1))
-    const wait = this.#continuous ? delay : Math.max(0, Math.min(delay, this.#deadline - this.#clock.now()))
+    const required = recoveryRetryAfter(error)
+    const delay = this.#continuous ? waitingReconnectBackoff() : defaultReconnectBackoff(this.#attempt - 1)
+    const backoff = this.#continuous ? delay : Math.max(0, Math.min(delay, this.#deadline - this.#clock.now()))
+    const wait = Math.max(required, backoff)
     this.#observe({ transition: 'waiting', delayMilliseconds: wait, failure: error })
     const { control, signal } = this.#options
-    if (control !== undefined) await control.sleep(this.#clock, wait, signal)
-    else await this.#clock.sleep(wait, signal)
+    // A retry click cannot bypass the node's capacity or authorization deadline.
+    if (required > 0 || control === undefined) await this.#clock.sleep(wait, signal)
+    else await control.sleep(this.#clock, wait, signal)
   }
 
   #publish(state: InitialJoinState): void {

@@ -68,6 +68,11 @@ impl Desktop {
                 DEFAULT_OVERLAY_WIDTH,
                 self.sharing_setup(theme, *id, cx),
             ),
+            Overlay::Account => (
+                locale.text(Text::Account),
+                DEFAULT_OVERLAY_WIDTH,
+                self.account_panel(theme, cx),
+            ),
             Overlay::Help => (
                 locale.text(Text::About),
                 DEFAULT_OVERLAY_WIDTH,

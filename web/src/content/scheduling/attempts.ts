@@ -66,6 +66,14 @@ export class BlockAttempts {
     })
   }
 
+  waiting(lane: ContentLane): void {
+    // The operation owner has retired its request before reporting pressure.
+    // A capacity wait consumes no network-failure retry budget.
+    if (this.#lanes.get(lane)?.kind !== 'active') throw new Error('Capacity wait has no active attempt')
+    this.#lanes.delete(lane)
+    this.#count--
+  }
+
   failed(lane: ContentLane): void {
     // Snapshot at failure, not dispatch: a concurrent success that predates the
     // failure cannot justify retrying the same stalled read.

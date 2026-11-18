@@ -17,7 +17,7 @@ func TestNativeSetupPreservesSavedRelaySelectionAndDisabledDefaults(t *testing.T
 		t.Run(map[bool]string{false: "disabled", true: "explicit"}[enabled], func(t *testing.T) {
 			t.Setenv(relayconfig.PathEnvironment, filepath.Join(t.TempDir(), "settings.json"))
 			store := relayconfig.FileStore{}
-			initial := relayconfig.Config{
+			initial := relayconfig.Config{ConfiguredOnly: true,
 				Profiles: []relayprofile.Candidate{{PublicURL: "https://saved.example"}},
 				FrontURL: "https://saved-front.example",
 			}

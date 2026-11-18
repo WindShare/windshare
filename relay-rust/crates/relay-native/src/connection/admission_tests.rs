@@ -27,10 +27,20 @@ fn full_business_capacity_preserves_bounded_stop_ingress() {
     let fixture = Fixture::new();
     let capacity = capacity();
     let first = capacity
-        .accept(SOURCE_A, connection(1), UnixMillis(0))
+        .accept(
+            SOURCE_A,
+            connection(1),
+            UnixMillis(0),
+            crate::connection::AdmissionPriority::Authenticated,
+        )
         .unwrap();
     let second = capacity
-        .accept(SOURCE_B, connection(2), UnixMillis(0))
+        .accept(
+            SOURCE_B,
+            connection(2),
+            UnixMillis(0),
+            crate::connection::AdmissionPriority::Authenticated,
+        )
         .unwrap();
     first.inspect(&fixture.bytes("registerInitB64")).unwrap();
     second.inspect(&fixture.bytes("registerInitB64")).unwrap();
@@ -42,11 +52,21 @@ fn full_business_capacity_preserves_bounded_stop_ingress() {
         }
     );
     let stop = capacity
-        .accept(SOURCE_A, connection(3), UnixMillis(0))
+        .accept(
+            SOURCE_A,
+            connection(3),
+            UnixMillis(0),
+            crate::connection::AdmissionPriority::Authenticated,
+        )
         .unwrap();
     stop.inspect(&fixture.bytes("stopInitB64")).unwrap();
     let competing = capacity
-        .accept(SOURCE_B, connection(4), UnixMillis(0))
+        .accept(
+            SOURCE_B,
+            connection(4),
+            UnixMillis(0),
+            crate::connection::AdmissionPriority::Authenticated,
+        )
         .unwrap();
     assert_eq!(
         competing.inspect(&fixture.bytes("registerInitB64")),
@@ -54,7 +74,12 @@ fn full_business_capacity_preserves_bounded_stop_ingress() {
     );
     let other = "192.0.2.2".parse().unwrap();
     assert!(matches!(
-        capacity.accept(other, connection(5), UnixMillis(0)),
+        capacity.accept(
+            other,
+            connection(5),
+            UnixMillis(0),
+            crate::connection::AdmissionPriority::Authenticated
+        ),
         Err(Refusal::GlobalControl)
     ));
     assert!(!capacity.state.lock().unwrap().sources.contains_key(&other));
@@ -77,19 +102,39 @@ fn source_rejections_preserve_other_sources_and_do_not_partially_charge_budgets(
     let fixture = Fixture::new();
     let capacity = capacity();
     let first = capacity
-        .accept(SOURCE_A, connection(1), UnixMillis(0))
+        .accept(
+            SOURCE_A,
+            connection(1),
+            UnixMillis(0),
+            crate::connection::AdmissionPriority::Authenticated,
+        )
         .unwrap();
     assert!(matches!(
-        capacity.accept(SOURCE_A, connection(2), UnixMillis(0)),
+        capacity.accept(
+            SOURCE_A,
+            connection(2),
+            UnixMillis(0),
+            crate::connection::AdmissionPriority::Authenticated
+        ),
         Err(Refusal::SourceControl)
     ));
     let second = capacity
-        .accept(SOURCE_B, connection(3), UnixMillis(0))
+        .accept(
+            SOURCE_B,
+            connection(3),
+            UnixMillis(0),
+            crate::connection::AdmissionPriority::Authenticated,
+        )
         .unwrap();
     first.inspect(&fixture.bytes("registerInitB64")).unwrap();
     first.inspect(&fixture.bytes("registerInitB64")).unwrap();
     let competing = capacity
-        .accept(SOURCE_A, connection(4), UnixMillis(0))
+        .accept(
+            SOURCE_A,
+            connection(4),
+            UnixMillis(0),
+            crate::connection::AdmissionPriority::Authenticated,
+        )
         .unwrap();
     assert_eq!(
         competing.inspect(&fixture.bytes("registerInitB64")),
@@ -114,12 +159,22 @@ fn source_rejections_preserve_other_sources_and_do_not_partially_charge_budgets(
     for id in 5..10 {
         drop(
             capacity
-                .accept(SOURCE_A, connection(id), UnixMillis(0))
+                .accept(
+                    SOURCE_A,
+                    connection(id),
+                    UnixMillis(0),
+                    crate::connection::AdmissionPriority::Authenticated,
+                )
                 .unwrap(),
         );
     }
     assert!(matches!(
-        capacity.accept(SOURCE_B, connection(10), UnixMillis(0)),
+        capacity.accept(
+            SOURCE_B,
+            connection(10),
+            UnixMillis(0),
+            crate::connection::AdmissionPriority::Authenticated
+        ),
         Err(Refusal::AttemptRate)
     ));
     assert!(capacity.state.lock().unwrap().sources.is_empty());
@@ -131,7 +186,12 @@ fn socket_descendants_keep_both_budgets_until_the_last_owner_is_destroyed() {
     for business in [false, true] {
         let capacity = capacity();
         let supervisor = capacity
-            .accept(SOURCE_A, connection(1), UnixMillis(0))
+            .accept(
+                SOURCE_A,
+                connection(1),
+                UnixMillis(0),
+                crate::connection::AdmissionPriority::Authenticated,
+            )
             .unwrap();
         if business {
             supervisor
@@ -152,7 +212,12 @@ fn socket_descendants_keep_both_budgets_until_the_last_owner_is_destroyed() {
         assert_eq!(capacity.state.lock().unwrap().total, Usage::default());
         assert!(capacity.state.lock().unwrap().sources.is_empty());
         let replacement = capacity
-            .accept(SOURCE_A, connection(2), UnixMillis(0))
+            .accept(
+                SOURCE_A,
+                connection(2),
+                UnixMillis(0),
+                crate::connection::AdmissionPriority::Authenticated,
+            )
             .unwrap();
         replacement
             .inspect(&fixture.bytes("registerInitB64"))
@@ -166,23 +231,43 @@ fn closing_does_not_refund_the_attempt_rate() {
     for id in 1..=8 {
         drop(
             capacity
-                .accept(SOURCE_A, connection(id), UnixMillis(0))
+                .accept(
+                    SOURCE_A,
+                    connection(id),
+                    UnixMillis(0),
+                    crate::connection::AdmissionPriority::Authenticated,
+                )
                 .unwrap(),
         );
     }
     assert!(matches!(
-        capacity.accept(SOURCE_B, connection(9), UnixMillis(0)),
+        capacity.accept(
+            SOURCE_B,
+            connection(9),
+            UnixMillis(0),
+            crate::connection::AdmissionPriority::Authenticated
+        ),
         Err(Refusal::AttemptRate)
     ));
     assert!(matches!(
-        capacity.accept(SOURCE_B, connection(10), UnixMillis(99)),
+        capacity.accept(
+            SOURCE_B,
+            connection(10),
+            UnixMillis(99),
+            crate::connection::AdmissionPriority::Authenticated
+        ),
         Err(Refusal::AttemptRate)
     ));
     assert_eq!(capacity.state.lock().unwrap().total, Usage::default());
     assert!(capacity.state.lock().unwrap().sources.is_empty());
     assert!(
         capacity
-            .accept(SOURCE_B, connection(11), UnixMillis(100))
+            .accept(
+                SOURCE_B,
+                connection(11),
+                UnixMillis(100),
+                crate::connection::AdmissionPriority::Authenticated
+            )
             .is_ok()
     );
 }
@@ -191,13 +276,19 @@ fn closing_does_not_refund_the_attempt_rate() {
 fn mapped_ipv4_cannot_create_a_second_source_budget() {
     let capacity = capacity();
     let _first = capacity
-        .accept(SOURCE_A, connection(1), UnixMillis(0))
+        .accept(
+            SOURCE_A,
+            connection(1),
+            UnixMillis(0),
+            crate::connection::AdmissionPriority::Authenticated,
+        )
         .unwrap();
     assert!(matches!(
         capacity.accept(
             "::ffff:192.0.2.1".parse().unwrap(),
             connection(2),
-            UnixMillis(0)
+            UnixMillis(0),
+            crate::connection::AdmissionPriority::Authenticated
         ),
         Err(Refusal::SourceControl)
     ));
