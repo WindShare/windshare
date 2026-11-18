@@ -7,8 +7,8 @@ readonly APT_DOWNLOAD_RETRIES=1
 readonly PROCESS_KILL_GRACE_SECONDS=10
 readonly DPKG_RECOVERY_TIMEOUT_SECONDS=30
 readonly APT_DIRECTORY=/etc/apt
-readonly AZURE_UBUNTU_MIRROR_PATTERN='(https?://)azure\.archive\.ubuntu\.com/ubuntu(/?)([[:space:]]|$)'
-readonly UBUNTU_MIRROR_REPLACEMENT='\1archive.ubuntu.com/ubuntu\2\3'
+readonly REGIONAL_UBUNTU_MIRROR_PATTERN='(https?://)([[:alnum:]-]+\.)+archive\.ubuntu\.com/ubuntu(/?)([[:space:]]|$)'
+readonly UBUNTU_MIRROR_REPLACEMENT='\1archive.ubuntu.com/ubuntu\3\4'
 readonly LOCAL_MIRROR_LIST_URI_PATTERN='mirror\+file:/[^[:space:]#]+'
 
 configure_apt_downloads() {
@@ -16,6 +16,7 @@ configure_apt_downloads() {
 Acquire::http::Timeout "$APT_IDLE_TIMEOUT_SECONDS";
 Acquire::https::Timeout "$APT_IDLE_TIMEOUT_SECONDS";
 Acquire::Retries "$APT_DOWNLOAD_RETRIES";
+DPkg::Lock::Timeout "$APT_IDLE_TIMEOUT_SECONDS";
 APT
 }
 
@@ -32,12 +33,13 @@ use_fallback_ubuntu_mirror() {
       candidates+=("${mirror_uri#mirror+file:}")
     done < <(sed '/^[[:space:]]*#/d' "$source" | grep -Eo "$LOCAL_MIRROR_LIST_URI_PATTERN" || true)
   done
-  # Match only Ubuntu's Azure archive, preserving mirror priorities, security
-  # updates and third-party repositories. Unreferenced lists are not authority.
+  # Match only regional/cloud Ubuntu archive mirrors (e.g. azure or *.ec2),
+  # preserving mirror priorities, security updates, comments, and third-party
+  # repositories. Unreferenced lists are not authority.
   for source in "${candidates[@]}"; do
     [[ -f "$source" && -z "${seen[$source]+present}" ]] || continue
     seen["$source"]=1
-    if grep -Eq "$AZURE_UBUNTU_MIRROR_PATTERN" "$source"; then
+    if sed '/^[[:space:]]*#/d' "$source" | grep -Eq "$REGIONAL_UBUNTU_MIRROR_PATTERN"; then
       sources+=("$source")
     fi
   done
@@ -45,7 +47,7 @@ use_fallback_ubuntu_mirror() {
     echo 'browser-setup phase=mirror-fallback outcome=unavailable'
     return 1
   fi
-  sudo sed -E -i "s#$AZURE_UBUNTU_MIRROR_PATTERN#$UBUNTU_MIRROR_REPLACEMENT#g" "${sources[@]}" || return $?
+  sudo sed -E -i "/^[[:space:]]*#/!s#$REGIONAL_UBUNTU_MIRROR_PATTERN#$UBUNTU_MIRROR_REPLACEMENT#g" "${sources[@]}" || return $?
   printf 'browser-setup phase=mirror-fallback outcome=selected mirror=archive.ubuntu.com source_files=%s\n' "${#sources[@]}"
 }
 
