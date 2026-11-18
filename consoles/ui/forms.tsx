@@ -3,7 +3,9 @@ import { ValidatedForm } from './ValidatedForm'
 import { useCopy } from './use-locale'
 import { sharedCopy } from './locales'
 import { useAction } from './activity'
-import { FocusPage, Notice } from './layout'
+import { Notice } from './layout'
+import { EntryPage } from './FocusPage'
+import { Icon } from './Icon'
 
 const MIN_PASSWORD_LENGTH = 12
 
@@ -23,7 +25,7 @@ export function Login({ area, username, initialize, submit, cancelSetup }: {
   const action = useAction()
   const t = useCopy(sharedCopy)
   const title = loginTitle(t, initialize, username)
-  return <FocusPage label={area} title={title}>
+  return <EntryPage icon="shield" label={area} title={title}>
     <ValidatedForm className="stack" method="post" onSubmit={event => {
       event.preventDefault()
       const data = new FormData(event.currentTarget)
@@ -36,15 +38,16 @@ export function Login({ area, username, initialize, submit, cancelSetup }: {
         <div className="password"><input id="password" name="password" type={visible ? 'text' : 'password'} required
           minLength={initialize ? MIN_PASSWORD_LENGTH : undefined} maxLength={256} autoComplete={initialize ? 'new-password' : 'current-password'}
           aria-describedby={initialize ? 'password-minimum' : undefined} />
-          <button className="quiet" type="button" aria-label={visible ? t.hidePassword : t.showPassword}
-            onClick={() => setVisible(!visible)}>{visible ? t.hide : t.show}</button></div>
+          <button className="quiet reveal" type="button" aria-label={visible ? t.hidePassword : t.showPassword}
+            title={visible ? t.hidePassword : t.showPassword} onClick={() => setVisible(!visible)}>
+            <Icon name={visible ? 'eyeOff' : 'eye'} size={18} /></button></div>
         {initialize && <small id="password-minimum">{t.minLength(MIN_PASSWORD_LENGTH)}</small>}
       </div>
       <Notice feedback={action.feedback} />
-      <button disabled={action.busy}>{action.busy ? t.signingIn : title}</button>
+      <button disabled={action.busy}>{action.busy ? t.signingIn : title}<Icon name={action.busy ? 'loader' : 'arrow'} size={16} /></button>
       {initialize && <button className="quiet" type="button" onClick={cancelSetup}>{t.usePassword}</button>}
     </ValidatedForm>
-  </FocusPage>
+  </EntryPage>
 }
 
 export function Confirm({ title, children, confirm, onCancel, onConfirm }: {

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useAction, useResource } from '../ui/activity'
 import { Badge, Notice, ReadError } from '../ui/layout'
+import { Icon } from '../ui/Icon'
 import { message } from '../ui/locale'
 import { useLocale } from '../ui/use-locale'
 import { sharedCopy } from '../ui/locales'
@@ -42,20 +43,21 @@ export function ManagedTurn({ api }: { api: RelayClient }) {
   const [estimate, setEstimate] = useState<TurnUsage | null>(null)
   const current = status.value
   const summary = current ? describeTurnStatus(current, t) : null
-  return <div className="workspace narrow">
+  return <div className="view turn-view">
     <div className="page-title"><h1>{t.managedTurn}</h1>
-      <button className="secondary" onClick={status.reload} disabled={status.busy}>{sharedCopy[locale].refresh}</button></div>
+      <button className="secondary" onClick={status.reload} disabled={status.busy}><Icon name={status.busy ? 'loader' : 'refresh'} size={16} />{sharedCopy[locale].refresh}</button></div>
     <ReadError error={status.error} retry={status.reload} />
-    {!current && status.busy && <p>{t.loadingSettings}</p>}
-    {current && summary && <>
-      <section className="panel padded"><div className="section-title"><h2>{t.service}</h2>
-        <Badge tone={current.ready && current.enabled ? 'good' : 'neutral'}>{summary.label}</Badge></div>
-        <p>{summary.description}</p>
+    {!current && status.busy && <p className="pending" role="status"><Icon name="loader" />{t.loadingSettings}</p>}
+    {current && summary && <div className="turn-sections">
+      <section className="panel padded turn-service"><div className="service-controls"><div>
+        <div className="service-title"><h2>{t.service}</h2>
+          <Badge tone={current.ready && current.enabled ? 'good' : 'neutral'}>{summary.label}</Badge></div>
+        <p>{summary.description}</p></div>
         <button className="secondary" disabled={action.busy} onClick={() => void action.run(async () => {
           const next = await api.setTurn(!current.enabled)
           status.update(() => next)
           return message(relayCopy, 'turnSaved')
-        })}>{current.enabled ? t.disableTurn : t.enableTurn}</button>
+        })}>{current.enabled ? t.disableTurn : t.enableTurn}</button></div>
         <Notice feedback={action.feedback} />
       </section>
       <section className="panel padded"><h2>{t.leases}</h2><dl className="metrics">
@@ -67,6 +69,6 @@ export function ManagedTurn({ api }: { api: RelayClient }) {
         <button className="secondary" disabled={usage.busy} onClick={() => void usage.run(async () => setEstimate(await api.turnUsage()))}>
           {usage.busy ? t.loading : t.queryUsage}</button><Notice feedback={usage.feedback} />
       </section>}
-    </>}
+    </div>}
   </div>
 }

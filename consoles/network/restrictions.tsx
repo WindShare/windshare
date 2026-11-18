@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { ValidatedForm } from '../ui/ValidatedForm'
 import { useAction } from '../ui/activity'
-import { Badge, DateStamp, Notice } from '../ui/layout'
+import { BackLink, Badge, DateStamp, EmptyState, Notice } from '../ui/layout'
+import { Icon } from '../ui/Icon'
 import { message } from '../ui/locale'
 import { useCopy } from '../ui/use-locale'
 import { networkCopy } from './locales'
@@ -36,16 +37,19 @@ function DirectRestriction({ target, api, restrictions, saved }: AccessProps & {
 export function Reports({ reports, selectedId, ...access }: AccessProps & { reports: Report[]; selectedId?: string }) {
   const t = useCopy(networkCopy)
   const report = reports.find(item => encode(item.id) === selectedId)
-  if (report) return <div className="view editor"><a href="#reports">{t.backToReports}</a><h1>{t.shareReport}</h1>
+  if (report) return <div className="view editor"><BackLink href="#reports">{t.backToReports}</BackLink><h1>{t.shareReport}</h1>
     <article className="panel padded"><div className="section-title"><h2>{t.reason}</h2><DateStamp millis={report.created_at * 1000} /></div>
       <p className="report-reason">{report.reason}</p><dl className="facts"><dt>{t.shareId}</dt><dd><code>{encode(report.share)}</code></dd></dl>
       <DirectRestriction key={encode(report.share)} {...access} target={{ kind: 'share', id: report.share }} />
     </article></div>
   return <div className="view"><div className="page-title"><h1>{t.reports}</h1><div className="actions">
-    <a href="#share-access" className="button secondary">{t.findShare}</a><a href="#account-access" className="button secondary">{t.accountRestrictions}</a></div></div>
-    {reports.length === 0 ? <div className="panel empty"><h2>{t.noReports}</h2><p>{t.reportHint}</p></div>
+    <a href="#share-access" className="button secondary"><Icon name="search" size={16} />{t.findShare}</a>
+    <a href="#account-access" className="button secondary"><Icon name="user" size={16} />{t.accountRestrictions}</a></div></div>
+    {reports.length === 0 ? <div className="panel"><EmptyState icon="report" title={t.noReports}><p>{t.reportHint}</p></EmptyState></div>
       : <ul className="panel report-list">{[...reports].sort((a, b) => b.created_at - a.created_at).map(item => <li key={encode(item.id)}>
-        <a href={'#report/' + encode(item.id)}><span>{item.reason}</span><small><code>{encode(item.share)}</code> · <DateStamp millis={item.created_at * 1000} /></small></a>
+        <a href={'#report/' + encode(item.id)}><span className="row-icon"><Icon name="report" size={19} /></span>
+          <span className="report-entry"><strong>{item.reason}</strong><small><code>{encode(item.share)}</code> · <DateStamp millis={item.created_at * 1000} /></small></span>
+          <Icon name="right" size={16} /></a>
       </li>)}</ul>}
   </div>
 }
@@ -55,7 +59,7 @@ export function LookupAccess({ kind, ...access }: AccessProps & { kind: Target['
   const t = useCopy(networkCopy)
   const lookup = useAction()
   const label = kind === 'account' ? t.accountId : t.shareId
-  return <div className="view editor"><a href="#reports">{t.backToReports}</a><h1>{kind === 'account' ? t.accountRestrictions : t.shareRestrictions}</h1>
+  return <div className="view editor"><BackLink href="#reports">{t.backToReports}</BackLink><h1>{kind === 'account' ? t.accountRestrictions : t.shareRestrictions}</h1>
     <ValidatedForm className="panel padded stack" onSubmit={event => {
       event.preventDefault()
       const text = String(new FormData(event.currentTarget).get('id'))

@@ -2,10 +2,11 @@ import { useState } from 'react'
 import { ValidatedForm } from '../ui/ValidatedForm'
 import { useAction } from '../ui/activity'
 import { message } from '../ui/locale'
-import { useCopy } from '../ui/use-locale'
+import { useCopy, useLocale } from '../ui/use-locale'
 import { networkCopy } from './locales'
 import { Confirm } from '../ui/forms'
-import { Badge, DateStamp, Notice } from '../ui/layout'
+import { BackLink, Badge, DateStamp, EmptyState, Notice } from '../ui/layout'
+import { Icon, type IconName } from '../ui/Icon'
 import type { AuthorityClient } from './api'
 import { encode, requireIdentity } from './identity'
 import { GIB, type LoadReport, type PolicyField, type Publication, type RelayNode, type Zone } from './model'
@@ -17,7 +18,7 @@ function Listing({ directory, id }: { directory: Directory; id: string }) {
   if (directory === undefined) return <span>{t.checkingMirror}</span>
   if (directory === null) return <span>{t.unverified}</span>
   const listed = directory.keys.includes(id)
-  return <><Badge tone={listed ? 'good' : 'neutral'}>{listed ? t.listed : t.notListed}</Badge>
+  return <><Badge tone={listed ? 'info' : 'neutral'}>{listed ? t.listed : t.notListed}</Badge>
     <small>{t.directoryVersion(directory.generation, directory.serial)}</small></>
 }
 
@@ -32,35 +33,58 @@ function Latest({ report }: { report?: LoadReport }) {
   return <><ReportTime report={report} /><small>{t.recentLoad(report.load.active_sessions, report.load.forwarded_bytes / GIB)}</small></>
 }
 
+function NodeOverview({ nodes, byKey, directory }: {
+  nodes: RelayNode[]; byKey: ReadonlyMap<string, LoadReport>; directory: Directory
+}) {
+  const { locale } = useLocale()
+  const t = networkCopy[locale]
+  const enrolled = nodes.map(node => encode(node.key))
+  const published = new Set(directory?.keys)
+  const listed = directory ? enrolled.filter(key => published.has(key)).length : null
+  const metrics: { icon: IconName; label: string; value: number | null }[] = [
+    { icon: 'server', label: t.enrolledCount, value: enrolled.length },
+    { icon: 'clock', label: t.awaitingReport, value: enrolled.filter(key => !byKey.has(key)).length },
+    { icon: 'book', label: t.listedCount, value: listed },
+  ]
+  return <dl className="panel node-overview">{metrics.map(({ icon, label, value }) => <div key={icon}>
+    <dt><span className="metric-icon"><Icon name={icon} /></span>{label}</dt>
+    <dd>{value === null ? <small>{directory === undefined ? t.checkingMirror : t.unverified}</small> : value.toLocaleString(locale)}</dd>
+  </div>)}</dl>
+}
+
 export function Nodes({ nodes, reports, directory }: { nodes: RelayNode[]; reports: LoadReport[]; directory: Directory }) {
   const t = useCopy(networkCopy)
   const byKey = new Map(reports.map(item => [item.node, item]))
+  const enroll = <a className="button" href="#enroll"><Icon name="plus" size={17} />{t.enroll}</a>
   return <div className="view"><div className="page-title"><h1 id="node-heading">{t.nodes}</h1>
-    {nodes.length > 0 && <a className="button" href="#enroll">{t.enroll}</a>}</div>
-    {nodes.length === 0 ? <div className="panel empty"><h2>{t.noNodes}</h2>
-      <p>{t.registerHint}</p><a className="button" href="#enroll">{t.enroll}</a></div>
-      : <div className="table-wrap panel" role="region" aria-labelledby="node-heading" tabIndex={0}>
+    {nodes.length > 0 && enroll}</div>
+    {nodes.length === 0 ? <div className="panel"><EmptyState icon="network" title={t.noNodes}>
+      <p>{t.registerHint}</p>{enroll}</EmptyState></div>
+      : <><NodeOverview nodes={nodes} byKey={byKey} directory={directory} />
+        <div className="table-wrap panel" role="region" aria-labelledby="node-heading" tabIndex={0}>
         <table><caption className="sr-only">{t.nodeTable}</caption>
           <thead><tr>{[t.region, t.savedRelayPolicy, t.lastReport, t.directory].map(title => <th scope="col" key={title}>{title}</th>)}</tr></thead>
           <tbody>{nodes.map(node => {
             const id = encode(node.key)
             return <tr key={id}>
-              <th scope="row"><a href={'#node/' + id}>{node.region || t.zones[node.zone]}</a><small>{t.zones[node.zone]} · <code>{id.slice(0, 8)}</code></small></th>
-              <td data-label={t.savedRelayPolicy}><Badge tone={node.enabled ? 'good' : 'warning'}>{node.enabled ? t.enabled : t.paused}</Badge>
-                <small>{node.anonymous ? t.anonymousAllowed : t.accountRequired} · v{node.version}</small></td>
-              <td data-label={t.lastReport}><Latest report={byKey.get(id)} /></td>
-              <td data-label={t.directory}><Listing directory={directory} id={id} /></td>
+              <th scope="row"><a className="node-link" href={'#node/' + id}>
+                <span className="row-icon"><Icon name="server" size={19} /></span>
+                <span>{node.region || t.zones[node.zone]}<small>{t.zones[node.zone]} · <code>{id.slice(0, 8)}</code></small></span></a></th>
+              <td data-label={t.savedRelayPolicy}><div><Badge tone={node.enabled ? 'good' : 'warning'}>{node.enabled ? t.enabled : t.paused}</Badge>
+                <small>{node.anonymous ? t.anonymousAllowed : t.accountRequired} · v{node.version}</small></div></td>
+              <td data-label={t.lastReport}><div><Latest report={byKey.get(id)} /></div></td>
+              <td data-label={t.directory}><div><Listing directory={directory} id={id} /></div></td>
             </tr>
           })}</tbody>
         </table>
-      </div>}
+      </div></>}
   </div>
 }
 
 export function EnrollNode({ api, saved }: { api: AuthorityClient; saved: (node: RelayNode) => void }) {
   const t = useCopy(networkCopy)
   const action = useAction()
-  return <div className="view editor"><a href="#nodes">{t.backToNodes}</a><h1>{t.enroll}</h1>
+  return <div className="view editor"><BackLink href="#nodes">{t.backToNodes}</BackLink><h1>{t.enroll}</h1>
     <ValidatedForm className="panel padded stack" onSubmit={event => {
       event.preventDefault()
       const data = new FormData(event.currentTarget)
@@ -93,9 +117,9 @@ export function NodeDetail({ node, report, directory, api, saved }: {
       return message(networkCopy, 'nodePolicySaved')
     })
   }
-  return <div className="view editor"><a href="#nodes">{t.backToNodes}</a>
+  return <div className="view"><BackLink href="#nodes">{t.backToNodes}</BackLink>
     <h1>{node.region || t.zones[node.zone]}</h1>
-    <section className="panel padded"><h2>{t.nodeDetails}</h2>
+    <div className="node-detail-grid"><section className="panel padded"><h2>{t.nodeDetails}</h2>
       <dl className="facts"><dt>{t.zone}</dt><dd>{t.zones[node.zone]}</dd><dt>{t.publicKey}</dt><dd><code>{id}</code></dd>
         <dt>{t.directory}</dt><dd><Listing directory={directory} id={id} /></dd>
         <dt>{t.lastReport}</dt><dd>{report ? <ReportTime report={report} /> : t.awaitingReport}</dd>
@@ -110,7 +134,7 @@ export function NodeDetail({ node, report, directory, api, saved }: {
         <button className="secondary" disabled={action.busy} onClick={() => change('anonymous_sharing', !node.anonymous)}>
           {node.anonymous ? t.requireAccount : t.allowAnonymous}</button></div>
       <Notice feedback={action.feedback} />
-    </section>
+    </section></div>
     {confirmPause && <Confirm title={t.confirmPause} confirm={t.pauseRelay} onCancel={() => setConfirmPause(false)}
       onConfirm={() => { setConfirmPause(false); change('public_relay', false) }}>
       <p>{t.pauseConsequences}</p>

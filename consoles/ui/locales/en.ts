@@ -14,8 +14,6 @@ export const en = {
   password: 'Password',
   hidePassword: 'Hide password',
   showPassword: 'Show password',
-  hide: 'Hide',
-  show: 'Show',
   requiredField: 'Fill in this field.',
   usernameFormat: 'Use letters A–Z, numbers, periods, underscores or hyphens.',
   invalidNumber: 'Enter a number.',

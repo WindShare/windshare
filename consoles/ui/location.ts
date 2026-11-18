@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react'
+import { useLayoutEffect, useRef, useSyncExternalStore } from 'react'
 
 export function takeFragment(name: string) {
   const params = new URLSearchParams(location.hash.slice(1))
@@ -13,5 +13,17 @@ const subscribe = (listener: () => void) => {
 }
 
 export function usePage() {
-  return useSyncExternalStore(subscribe, () => location.hash.slice(1))
+  const page = useSyncExternalStore(subscribe, () => location.hash.slice(1))
+  const previous = useRef(page)
+  useLayoutEffect(() => {
+    // The route owner has just committed the destination heading. Focus it so keyboard reading resumes there.
+    if (previous.current === page) return
+    previous.current = page
+    const heading = document.querySelector<HTMLElement>('main h1')
+    if (heading) {
+      heading.tabIndex = -1
+      heading.focus()
+    }
+  }, [page])
+  return page
 }

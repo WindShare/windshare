@@ -16,8 +16,6 @@ export const zhCN = {
   password: '密码',
   hidePassword: '隐藏密码',
   showPassword: '显示密码',
-  hide: '隐藏',
-  show: '显示',
   requiredField: '请填写此字段。',
   usernameFormat: '用户名仅可包含英文字母、数字、点、下划线或连字符。',
   invalidNumber: '请输入数字。',

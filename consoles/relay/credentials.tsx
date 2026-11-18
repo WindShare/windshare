@@ -6,16 +6,13 @@ import { useCopy } from '../ui/use-locale'
 import { sharedCopy } from '../ui/locales'
 import { relayCopy } from './locales'
 import { Confirm } from '../ui/forms'
-import { Badge, DateStamp, FocusPage, Notice, ReadError } from '../ui/layout'
+import { BackLink, Badge, DateStamp, EmptyState, Notice, ReadError } from '../ui/layout'
+import { FocusPage } from '../ui/FocusPage'
+import { Icon } from '../ui/Icon'
 import type { Capabilities, Credential, RelayClient, ServiceConfiguration } from './api'
 
 function markCredentialRevoked(items: Credential[], credentialId: string): Credential[] {
   return items.map(item => item.credential_id === credentialId ? { ...item, revoked: true } : item)
-}
-
-function emptyCredentialsTitle(t: typeof relayCopy.en, list: ReturnType<typeof useResource<Credential[]>>): string {
-  if (list.value) return t.noCredentials
-  return list.busy ? t.loadingCredentials : t.credentialsUnavailable
 }
 
 export function Credentials({ api, capabilities }: { api: RelayClient; capabilities: Capabilities }) {
@@ -35,22 +32,27 @@ export function Credentials({ api, capabilities }: { api: RelayClient; capabilit
       return message(relayCopy, target.revoked ? 'stoppingShares' : 'credentialRevoked')
     })
   }
-  return <section aria-labelledby="credentials-title">
+  return <section className="panel inventory" aria-labelledby="credentials-title">
     <div className="section-title"><h2 id="credentials-title">{t.credentials}</h2>
-      <div className="actions"><button className="quiet" disabled={list.busy} onClick={list.reload}>{shared.refresh}</button>
-        <a className="button secondary" href="#service-key">{t.createServiceKey}</a></div></div>
+      <div className="actions"><button className="quiet icon-button" aria-label={shared.refresh} title={shared.refresh}
+        disabled={list.busy} onClick={list.reload}><Icon name={list.busy ? 'loader' : 'refresh'} size={17} /></button>
+        <a className="button secondary" href="#service-key"><Icon name="plus" size={16} />{t.createServiceKey}</a></div></div>
     <Notice feedback={action.feedback} /><ReadError error={list.error} retry={list.reload} />
-    <div className="panel inventory">
-      {!list.value?.length && <div className="empty"><h3>{emptyCredentialsTitle(t, list)}</h3>
-        {list.value && <p>{t.grantAccess}</p>}</div>}
-      {list.value?.map(item => <div className="credential-row" key={item.credential_id}>
-        <div><strong>{item.name}</strong><small>{t.lastUsed} {item.last_used_at == null ? '—' : <DateStamp millis={item.last_used_at} />}</small></div>
-        <Badge tone={item.revoked ? 'neutral' : 'good'}>{item.revoked ? t.revoked : t.active}</Badge>
-        {(!item.revoked || !forced) && <button type="button" className="quiet danger-text" disabled={action.busy}
+    {list.value === undefined && list.busy && <p className="pending" role="status"><Icon name="loader" />{t.loadingCredentials}</p>}
+    {list.value?.length === 0 && <EmptyState icon="key" title={t.noCredentials}><p>{t.grantAccess}</p></EmptyState>}
+    {!!list.value?.length && <table className="credential-table" aria-labelledby="credentials-title">
+      <thead><tr><th scope="col">{t.credentialName}</th><th scope="col">{t.lastUsed}</th>
+        <th scope="col">{t.status}</th><th scope="col"><span className="sr-only">{t.actions}</span></th></tr></thead>
+      <tbody>{list.value.map(item => <tr key={item.credential_id}>
+        <th scope="row"><div className="credential-name"><span className="row-icon"><Icon name="key" size={19} /></span>{item.name}</div></th>
+        <td className="credential-used">{item.last_used_at == null ? t.neverUsed : <>
+          <span className="mobile-label">{t.lastUsed} </span><DateStamp millis={item.last_used_at} /></>}</td>
+        <td className="credential-status"><Badge tone={item.revoked ? 'neutral' : 'good'}>{item.revoked ? t.revoked : t.active}</Badge></td>
+        <td className="credential-action">{(!item.revoked || !forced) && <button type="button" className="quiet danger-text" disabled={action.busy}
           aria-label={item.revoked ? t.stopNamed(item.name) : t.revokeNamed(item.name)}
-          onClick={() => { setStop(false); setSelected(item) }}>{item.revoked ? t.stopShares : t.revoke}</button>}
-      </div>)}
-    </div>
+          onClick={() => { setStop(false); setSelected(item) }}>{item.revoked ? t.stopShares : t.revoke}</button>}</td>
+      </tr>)}</tbody>
+    </table>}
     {selected && <Confirm title={selected.revoked ? t.confirmStop : t.confirmRevoke(selected.name)} confirm={confirm}
       onCancel={() => setSelected(null)} onConfirm={() => revokeSelected(selected)}>
       {forced || selected.revoked
@@ -66,7 +68,7 @@ export function ServiceKey({ api }: { api: RelayClient }) {
   const t = useCopy(relayCopy)
   const [configuration, setConfiguration] = useState<ServiceConfiguration | null>(null)
   const action = useAction()
-  return <FocusPage label={t.access} title={configuration ? t.keyCreated : t.createServiceKey}>
+  return <FocusPage icon={configuration ? 'check' : 'key'} label={t.access} title={configuration ? t.keyCreated : t.createServiceKey}>
     {configuration
       ? <><p className="lead">{t.copyNow}</p>
         <dl className="facts"><dt>{t.relayAddress}</dt><dd><code>{configuration.url}</code></dd>
@@ -78,7 +80,7 @@ export function ServiceKey({ api }: { api: RelayClient }) {
             throw new MessageError(message(relayCopy, 'copyFailed'))
           }
           return message(relayCopy, 'configCopied')
-        })}>{t.copyConfig}</button></>
+        })}><Icon name="copy" size={16} />{t.copyConfig}</button></>
       : <ValidatedForm className="stack" onSubmit={event => {
         event.preventDefault()
         const name = String(new FormData(event.currentTarget).get('name')).trim()
@@ -88,6 +90,6 @@ export function ServiceKey({ api }: { api: RelayClient }) {
           <input id="key-name" name="name" maxLength={128} required /></div>
         <button disabled={action.busy}>{action.busy ? t.creating : t.createKey}</button>
       </ValidatedForm>}
-    <Notice feedback={action.feedback} /><div className="foot-link"><a href="/">{t.backToAccess}</a></div>
+    <Notice feedback={action.feedback} /><BackLink href="/">{t.backToAccess}</BackLink>
   </FocusPage>
 }

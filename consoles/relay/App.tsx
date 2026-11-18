@@ -1,6 +1,9 @@
 import { useMemo, useState } from 'react'
 import { useAction, useResource } from '../ui/activity'
 import { Login } from '../ui/forms'
+import { Icon } from '../ui/Icon'
+import { WorkspaceNav } from '../ui/chrome/WorkspaceNav'
+import './relay.css'
 import { Frame, Notice, SessionWait } from '../ui/layout'
 import { useCopy } from '../ui/use-locale'
 import { sharedCopy } from '../ui/locales'
@@ -29,17 +32,17 @@ function RelayContent({ api, session, capabilities, code, token, clearToken, res
   }
   if (code) return <Pairing api={api} code={code} />
   if (page === 'service-key') return <ServiceKey api={api} />
-  const turn = page === 'turn' && capabilities.managed_turn
-  return <>
-    {capabilities.managed_turn && <nav className="tabs" aria-label={t.management}><div>
-      <a href="#access" aria-current={!turn ? 'page' : undefined}>{t.access}</a>
-      <a href="#turn" aria-current={turn ? 'page' : undefined}>{t.managedTurn}</a>
-    </div></nav>}
+  const turn = page === 'turn' && capabilities.managed_turn === true
+  return <div className="workspace">
+    {capabilities.managed_turn && <WorkspaceNav label={t.management} destinations={[
+      { href: '#access', label: t.access, icon: 'access', current: !turn },
+      { href: '#turn', label: t.managedTurn, icon: 'network', current: turn },
+    ]} />}
     {turn
       ? <ManagedTurn api={api} />
-      : <div className="workspace narrow"><div className="page-title"><h1>{t.access}</h1></div>
+      : <div className="view"><div className="page-title"><h1>{t.access}</h1></div>
         <CodeEntry /><Credentials api={api} capabilities={capabilities} /></div>}
-  </>
+  </div>
 }
 
 function Console({ api, code, token, clearToken, resetSession }: {
@@ -50,8 +53,8 @@ function Console({ api, code, token, clearToken, resetSession }: {
   const t = useCopy(relayCopy)
   const shared = useCopy(sharedCopy)
   const capabilities = session.value
-  return <Frame area={t.title} tools={capabilities && <button className="quiet" disabled={logout.busy}
-    onClick={() => void logout.run(async () => { await api.signOut(); resetSession() })}>{shared.signOut}</button>}>
+  return <Frame area={t.title} tools={capabilities && <button className="quiet sign-out" aria-label={shared.signOut} title={shared.signOut} disabled={logout.busy}
+    onClick={() => void logout.run(async () => { await api.signOut(); resetSession() })}><Icon name="logout" size={16} /><span>{shared.signOut}</span></button>}>
     <Notice feedback={logout.feedback} />
     <RelayContent api={api} session={session} capabilities={capabilities} code={code}
       token={token} clearToken={clearToken} resetSession={resetSession} />

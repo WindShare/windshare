@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { ValidatedForm } from '../ui/ValidatedForm'
 import { useAction } from '../ui/activity'
-import { FocusPage, Frame, Notice } from '../ui/layout'
+import { Frame, Notice } from '../ui/layout'
+import { EntryPage } from '../ui/FocusPage'
+import { Icon } from '../ui/Icon'
 import { message, MessageError } from '../ui/locale'
 import { useCopy } from '../ui/use-locale'
 import { reportCopy } from './locales/report'
@@ -14,7 +16,7 @@ export function ReportForm({ initialShare }: { initialShare: string }) {
   const t = useCopy(reportCopy)
   const [sent, setSent] = useState(false)
   const action = useAction()
-  return <Frame area={t.title}><FocusPage label={t.network} title={sent ? t.received : t.title}>
+  return <Frame area={t.title}><EntryPage icon={sent ? 'check' : 'report'} label={t.network} title={sent ? t.received : t.title}>
     {sent ? <p className="lead" role="status">{t.review}</p>
       : <ValidatedForm className="stack" onSubmit={event => {
         event.preventDefault()
@@ -33,7 +35,7 @@ export function ReportForm({ initialShare }: { initialShare: string }) {
           <input id="share" name="share" defaultValue={initialShare} autoCapitalize="none" spellCheck={false} required /></div>
         <div className="field"><label htmlFor="reason">{t.reason}</label>
           <textarea id="reason" name="reason" rows={5} maxLength={MAX_REASON_BYTES} required /></div>
-        <Notice feedback={action.feedback} /><button disabled={action.busy}>{action.busy ? t.submitting : t.submit}</button>
+        <Notice feedback={action.feedback} /><button disabled={action.busy}>{action.busy ? t.submitting : t.submit}<Icon name={action.busy ? 'loader' : 'arrow'} size={16} /></button>
       </ValidatedForm>}
-  </FocusPage></Frame>
+  </EntryPage></Frame>
 }

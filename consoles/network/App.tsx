@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react'
 import { useAction, useResource } from '../ui/activity'
 import { Login } from '../ui/forms'
+import { Icon } from '../ui/Icon'
+import { WorkspaceNav } from '../ui/chrome/WorkspaceNav'
 import { Frame, Notice, ReadError, SessionWait } from '../ui/layout'
 import type { Message } from '../ui/locale'
 import { useCopy } from '../ui/use-locale'
@@ -63,18 +65,19 @@ function Dashboard({ api, snapshot, update, refresh, refreshing, error }: {
     saved: (restrictions: Restrictions) => update(current => restrictions.version < current.restrictions.version
       ? current : { ...current, restrictions }),
   }
-  return <><nav className="tabs" aria-label={t.management}><div>
-    <a href="#nodes" aria-current={!reports && !policy ? 'page' : undefined}>{t.nodes}</a>
-    <a href="#reports" aria-current={reports ? 'page' : undefined}>{t.reports}</a>
-    <a href="#policy" aria-current={policy ? 'page' : undefined}>{t.policy}</a>
-    <button className="quiet refresh-snapshot" onClick={refresh} disabled={refreshing}>{refreshing ? t.refreshing : t.refreshSnapshot}</button>
-  </div></nav>
-    <div className="workspace">
-      <ReadError error={error} retry={refresh} />
-      {policy ? <PolicySettings api={api} snapshot={snapshot} editor={editor} saved={settings => update(current => ({ ...current, settings }))} />
-        : <DashboardView api={api} snapshot={snapshot} page={page} id={id} reports={reports}
-          directory={directory} saveNode={saveNode} access={access} />}
-    </div></>
+  const refreshLabel = refreshing ? t.refreshing : t.refreshSnapshot
+  return <div className="workspace">
+    <WorkspaceNav label={t.management} destinations={[
+      { href: '#nodes', label: t.nodes, icon: 'server', current: !reports && !policy },
+      { href: '#reports', label: t.reports, icon: 'report', current: reports },
+      { href: '#policy', label: t.policy, icon: 'policy', current: policy },
+    ]} action={<button className="quiet" onClick={refresh} disabled={refreshing} aria-label={refreshLabel} title={refreshLabel}>
+      <Icon name={refreshing ? 'loader' : 'refresh'} size={16} /><span className="action-text">{refreshLabel}</span></button>} />
+    <ReadError error={error} retry={refresh} />
+    {policy ? <PolicySettings api={api} snapshot={snapshot} editor={editor} saved={settings => update(current => ({ ...current, settings }))} />
+      : <DashboardView api={api} snapshot={snapshot} page={page} id={id} reports={reports}
+        directory={directory} saveNode={saveNode} access={access} />}
+  </div>
 }
 
 function ConsoleBody({ api, state, token, clearToken, resetSession }: {
@@ -101,8 +104,8 @@ function Console({ api, token, clearToken, resetSession }: {
   const logout = useAction()
   const t = useCopy(networkCopy)
   const shared = useCopy(sharedCopy)
-  return <Frame area={t.title} tools={state.value && <button className="quiet" disabled={logout.busy}
-    onClick={() => void logout.run(async () => { await api.signOut(); resetSession() })}>{shared.signOut}</button>}>
+  return <Frame area={t.title} tools={state.value && <button className="quiet sign-out" aria-label={shared.signOut} title={shared.signOut} disabled={logout.busy}
+    onClick={() => void logout.run(async () => { await api.signOut(); resetSession() })}><Icon name="logout" size={16} /><span>{shared.signOut}</span></button>}>
     <Notice feedback={logout.feedback} />
     <ConsoleBody api={api} state={state} token={token} clearToken={clearToken} resetSession={resetSession} />
   </Frame>

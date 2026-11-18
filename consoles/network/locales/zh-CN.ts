@@ -7,6 +7,8 @@ export const zhCN = {
   administrator: '网络管理员',
   management: '网络管理',
   nodes: '节点',
+  enrolledCount: '已登记节点',
+  listedCount: '目录已收录',
   reports: '举报',
   policy: '策略',
   refreshing: '正在刷新…',

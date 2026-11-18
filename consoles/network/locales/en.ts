@@ -6,6 +6,8 @@ export const en = {
   administrator: 'Network administrator',
   management: 'Network management',
   nodes: 'Nodes',
+  enrolledCount: 'Enrolled nodes',
+  listedCount: 'Listed in directory',
   reports: 'Reports',
   policy: 'Policy',
   refreshing: 'Refreshing…',

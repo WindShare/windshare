@@ -4,6 +4,7 @@ import { message, MessageError } from '../ui/locale'
 import { useLocale } from '../ui/use-locale'
 import { networkCopy } from './locales'
 import { Notice } from '../ui/layout'
+import { Icon } from '../ui/Icon'
 import type { AuthorityClient } from './api'
 import { GIB, type Settings, type Snapshot } from './model'
 
@@ -22,9 +23,10 @@ export function PolicySettings({ snapshot, api, saved, editor }: {
       step={key === 'gib' ? 'any' : 1} max={max ?? (key === 'gib' ? Number.MAX_SAFE_INTEGER / GIB : Number.MAX_SAFE_INTEGER)} value={value[key]}
       onChange={event => setDraft({ ...value, [key]: event.target.value })} /></div>
   }
-  return <div className="view editor"><div className="page-title"><h1>{t.networkPolicy}</h1></div>
-    <div className="panel padded account-count"><span>{t.registeredAccounts}</span><strong>{snapshot.account_count.toLocaleString(locale)}</strong>
-      {snapshot.reviews.length > 0 && <p>{t.milestone}</p>}</div>
+  return <div className="view"><div className="page-title"><h1>{t.networkPolicy}</h1>
+    <dl className="account-count"><dt><Icon name="user" size={17} />{t.registeredAccounts}</dt>
+      <dd>{snapshot.account_count.toLocaleString(locale)}</dd></dl></div>
+    {snapshot.reviews.length > 0 && <p className="milestone">{t.milestone}</p>}
     <ValidatedForm className="panel padded" onSubmit={event => {
       event.preventDefault()
       void action.run(async () => {
@@ -39,15 +41,18 @@ export function PolicySettings({ snapshot, api, saved, editor }: {
         setDraft(null)
         return message(networkCopy, 'settingsSaved')
       })
-    }}><fieldset disabled={action.busy} className="stack"><legend>{t.registration}</legend>
-        <div className="field"><label htmlFor="registration">{t.registrationMethod}</label><select id="registration" value={value.mode}
-          onChange={event => setDraft({ ...value, mode: event.target.value as Settings['registration'] })}>
-          <option value="automatic">{t.automatic}</option><option value="proof_of_work">{t.proofOfWork}</option>
-          <option value="email" disabled={!snapshot.email_configured}>
-            {snapshot.email_configured ? t.verifyEmail : t.mailRequired}</option>
-        </select></div>
-        {value.mode === 'proof_of_work' && field('bits', t.difficulty, 16, 30)}
-        {field('gib', t.allowance, 1 / GIB)}
+    }}><fieldset disabled={action.busy} className="policy-fields" aria-label={t.networkPolicy}>
+        <fieldset className="stack"><legend>{t.registration}</legend>
+          <div className="field"><label htmlFor="registration">{t.registrationMethod}</label>
+            <select id="registration" value={value.mode}
+              onChange={event => setDraft({ ...value, mode: event.target.value as Settings['registration'] })}>
+              <option value="automatic">{t.automatic}</option><option value="proof_of_work">{t.proofOfWork}</option>
+              <option value="email" disabled={!snapshot.email_configured}>
+                {snapshot.email_configured ? t.verifyEmail : t.mailRequired}</option>
+            </select></div>
+          {value.mode === 'proof_of_work' && field('bits', t.difficulty, 16, 30)}
+          {field('gib', t.allowance, 1 / GIB)}
+        </fieldset>
         <fieldset className="rate-grid"><legend>{t.rateLimits}</legend>
           {field('sourceBurst', t.sourceBurst, 1)}{field('sourceRefill', t.sourceRefill, 1)}
           {field('globalBurst', t.networkBurst, 1)}{field('globalRefill', t.networkRefill, 1)}

@@ -1,0 +1,54 @@
+.pairing-entry { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1.25rem 2rem; padding: clamp(1.35rem, 3vw, 2.15rem); background: var(--accent-surface); border-color: transparent; }
+.pairing-intro, .credential-name, .pairing-form, .pending { display: flex; align-items: center; }
+.pairing-intro { gap: 1.1rem; }
+.pairing-icon { width: 3.3rem; height: 3.3rem; display: grid; flex: none; place-items: center; border-radius: 1rem; color: var(--accent); background: var(--paper); }
+.pairing-entry h2 { font-size: 1.35rem; }
+.pairing-entry p { margin-top: .35rem; font-size: .9rem; }
+.pairing-form { flex-wrap: wrap; gap: .55rem; }
+.pairing-form .code-input { width: 9.4rem; min-height: 2.75rem; text-align: center; letter-spacing: .09em; text-transform: uppercase; }
+.pairing-form button { min-height: 2.75rem; }
+.inventory > .section-title { padding: 1.1rem clamp(1.1rem, 2.5vw, 1.75rem); gap: .6rem; }
+.inventory .actions { gap: .3rem; }
+.inventory .notice, .inventory .read-error { margin: 0 1rem 1rem; }
+.credential-table { width: 100%; border-spacing: 0; }
+.credential-table :is(th, td) { padding: .85rem 1rem; text-align: start; }
+.credential-table :is(th, td):first-child { padding-inline-start: clamp(1.1rem, 2.5vw, 1.75rem); }
+.credential-table :is(th, td):last-child { padding-inline-end: clamp(1.1rem, 2.5vw, 1.75rem); }
+.credential-table thead th { background: var(--surface-hover); color: var(--muted); font-size: .79rem; font-weight: 550; }
+.credential-table tr + tr > * { border-top: 1px solid var(--line); }
+.credential-name { gap: .8rem; max-width: 25rem; overflow-wrap: anywhere; font-size: .97rem; font-weight: 610; }
+.credential-name .row-icon { background: var(--lilac); color: var(--lilac-ink); }
+.credential-used { color: var(--muted); font-size: .87rem; }
+.credential-table .credential-action { text-align: end; }
+.credential-action button { font-size: .85rem; }
+.mobile-label { display: none; }
+.inventory .empty, .inventory .pending { border-top: 1px solid var(--line); }
+.pending { justify-content: center; gap: .75rem; padding: 1.75rem 1rem; }
+.turn-sections { display: grid; grid-template-columns: 1fr 1fr; gap: 1.1rem; }
+.turn-service { grid-column: 1/-1; }
+.turn-service .service-controls { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; }
+.service-title { display: flex; align-items: center; flex-wrap: wrap; gap: .7rem; }
+.service-controls p { max-width: 60ch; margin-top: .55rem; }
+.turn-sections > :nth-child(2):last-child { grid-column: 1/-1; }
+.turn-view .metrics { grid-template-columns: repeat(auto-fit, minmax(min(10rem, 100%), 1fr)); }
+@media (max-width: 46rem) {
+  .turn-sections { grid-template-columns: 1fr; }
+  .pairing-form { flex: 1 1 100%; }
+  .pairing-form .code-input { flex: 1; }
+}
+@media (max-width: 45rem) {
+  .credential-table, .credential-table tbody { display: block; }
+  .credential-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .credential-table tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name status" "used action"; align-items: center; gap: .25rem .6rem; padding: .9rem 1.1rem .65rem; border-top: 1px solid var(--line); }
+  .credential-table tbody tr > :is(th, td) { padding: 0; border: 0; }
+  .credential-table tbody th { grid-area: name; }
+  .credential-status { grid-area: status; justify-self: end; }
+  .credential-used { grid-area: used; font-size: .81rem; }
+  .credential-action { grid-area: action; }
+  .credential-action button { padding-inline: .25rem; }
+  .mobile-label { display: inline; }
+  .credential-name { gap: .65rem; }
+  .credential-name .row-icon { width: 2rem; height: 2rem; }
+  .inventory > .section-title { align-items: center; }
+  .pairing-intro { gap: .8rem; }
+}

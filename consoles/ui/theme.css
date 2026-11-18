@@ -1,30 +1,45 @@
 :root {
   color-scheme: light dark;
-  --wash: light-dark(#f6f8f6, #101915);
-  --paper: light-dark(#fff, #19241f);
-  --surface-muted: light-dark(#edf2ee, #27372f);
-  --ink: light-dark(#192e2a, #e7efe9);
-  --muted: light-dark(#536660, #adc0b6);
-  --line: light-dark(#d5ded9, #394b41);
-  --control-border: light-dark(#7e9287, #71877a);
-
-  --accent: light-dark(#19664f, #82d1ae);
-  --accent-hover: light-dark(#104d3b, #a4e1c4);
-  --on-accent: light-dark(#fff, #11231b);
-  --accent-surface: light-dark(#edf4ef, #20352b);
-  --accent-border: light-dark(#cbded3, #3b604d);
-  --focus: light-dark(#19745d, #92dbb9);
-  --danger: light-dark(#9a3b30, #f1a399);
-  --danger-hover: light-dark(#792d23, #ffc0b5);
-  --on-danger: light-dark(#fff, #321914);
-
-  --success-ink: light-dark(#205c44, #9dd9b6);
-  --success-surface: light-dark(#e6f3eb, #1e382c);
-  --warning-ink: light-dark(#79511d, #efc888);
-  --warning-surface: light-dark(#faf0d9, #3b3020);
-  --error-ink: light-dark(#87382c, #f2b2a9);
-  --error-surface: light-dark(#fff0ed, #402825);
-  --backdrop: light-dark(rgb(18 36 30 / 42%), rgb(4 10 7 / 72%));
+  --wash: light-dark(#f8f9f6, #171c19);
+  --paper: light-dark(#fff, #1e2521);
+  --surface-muted: light-dark(#eef1eb, #2a322c);
+  --surface-hover: light-dark(#f3f5f1, #262e29);
+  --ink: light-dark(#29382f, #e6ece5);
+  --muted: light-dark(#5f6d63, #acb9ad);
+  --line: light-dark(#dce3da, #364239);
+  --control-border: light-dark(#88988d, #63756a);
+  --accent: light-dark(#3e6253, #aed0b9);
+  --accent-hover: light-dark(#2f5042, #c2dec9);
+  --on-accent: light-dark(#fff, #172b20);
+  --accent-surface: light-dark(#e7efe6, #2a3a30);
+  --focus: light-dark(#46765e, #a3d2b2);
+  --spirit: light-dark(#bbddc2, #abcdaf);
+  --spirit-ink: #344f41;
+  --lilac: light-dark(#edeaf3, #37333f);
+  --lilac-ink: light-dark(#6b617f, #ccbfdd);
+  --sand: light-dark(#f3ebdc, #3b3529);
+  --sand-ink: light-dark(#806638, #deca9e);
+  --success-ink: light-dark(#3f664c, #b4d7b9);
+  --success-surface: light-dark(#e6f0e5, #2b4031);
+  --warning-ink: light-dark(#7e5c2a, #e9cb97);
+  --warning-surface: light-dark(#f7eedc, #423827);
+  --danger: light-dark(#904b43, #e2a69e);
+  --danger-hover: light-dark(#753d36, #ecc0b8);
+  --on-danger: light-dark(#fff, #34211e);
+  --error-ink: light-dark(#85443c, #eeb9af);
+  --error-surface: light-dark(#fbede8, #3c2c29);
+  --backdrop: light-dark(rgb(28 42 32 / 28%), rgb(6 12 8 / 65%));
+  --map-paper: light-dark(#e8efe2, #27372d);
+  --map-line: light-dark(#bfceb9, #435b49);
+  --map-ink: light-dark(#526b52, #9ab29a);
+  --map-top: light-dark(#fafbf1, #97a995);
+  --map-front: light-dark(#dbe5cf, #607760);
+  --map-side: light-dark(#afc4a5, #455f4b);
+  --radius: 1rem;
+  --gutter: clamp(1rem, 4vw, 3.5rem);
+  --layout: 70rem;
+  --mono: ui-monospace, "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  --ease: cubic-bezier(.2,.7,.25,1);
 }
 
 :root[data-appearance="light"] { color-scheme: light; }
