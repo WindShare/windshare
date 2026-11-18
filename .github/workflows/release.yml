@@ -88,6 +88,9 @@ jobs:
           mkdir -p "$GOBIN"
           go install golang.org/x/vuln/cmd/govulncheck@latest
           echo "$GOBIN" >> "$GITHUB_PATH"
+      - name: Verify signed directory for official distribution
+        if: vars.OFFICIAL_NETWORK_ENABLED == 'true'
+        run: go run ./cmd/network-sign verify
       - name: Verify root artifact and Linux/ext4 semantics
         env:
           RELEASE_VERSION: ${{ needs.release.outputs.version }}
@@ -196,6 +199,11 @@ jobs:
               "$ASSET_ROOT/release-windows/windshare-$RELEASE_VERSION-source.zip"
           (cd "$ASSET_ROOT/release-linux" && sha256sum -c SHA256SUMS-linux-amd64)
           (cd "$ASSET_ROOT/release-windows" && sha256sum -c SHA256SUMS-windows-amd64)
+      - name: Read the directory from the certified revision
+        if: vars.OFFICIAL_NETWORK_ENABLED == 'true'
+        env:
+          RELEASE_SHA: ${{ needs.release.outputs.commit_sha }}
+        run: git show "$RELEASE_SHA:deploy/network/windshare-network.json" > "$RUNNER_TEMP/verified-release/windshare-network.json"
       - name: Create immutable root release tag
         env:
           RELEASE_VERSION: ${{ needs.release.outputs.version }}
@@ -209,20 +217,25 @@ jobs:
           ASSET_ROOT: ${{ runner.temp }}/verified-release
         run: |
           set -euo pipefail
+          directory=()
+          if [[ -f "$ASSET_ROOT/windshare-network.json" ]]; then
+            directory+=("$ASSET_ROOT/windshare-network.json")
+          fi
           gh release create "$RELEASE_VERSION" --verify-tag --title "WindShare $RELEASE_VERSION" \
             --notes 'Includes wind and wsrelay binaries, the complete source bundle with pinned Pion dependencies, and SHA-256 checksums. Follow docs/installation.md inside the bundle for installation and optional first setup.' \
             "$ASSET_ROOT/release-linux/windshare-$RELEASE_VERSION-source.zip" \
             "$ASSET_ROOT/release-linux/windshare-$RELEASE_VERSION-linux-amd64.zip" \
             "$ASSET_ROOT/release-windows/windshare-$RELEASE_VERSION-windows-amd64.zip" \
             "$ASSET_ROOT/release-linux/SHA256SUMS-linux-amd64" \
-            "$ASSET_ROOT/release-windows/SHA256SUMS-windows-amd64"
+            "$ASSET_ROOT/release-windows/SHA256SUMS-windows-amd64" \
+            "${directory[@]}"
 
   official-network:
     needs: [release, publish]
     if: vars.OFFICIAL_NETWORK_ENABLED == 'true'
     uses: ./.github/workflows/official-network.yml
     permissions:
-      contents: write
+      contents: read
     with:
       commit_sha: ${{ needs.release.outputs.commit_sha }}
       version: ${{ needs.release.outputs.version }}

@@ -31,8 +31,6 @@ jobs:
     if: vars.OFFICIAL_NETWORK_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -66,7 +64,7 @@ jobs:
           pnpm -C web build
           mkdir -p official/web
           cp -a web/dist/. official/web/
-      - name: Bundle identical installer files and publish signed mirror
+      - name: Bundle installers and verify the published directory
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
@@ -75,7 +73,7 @@ jobs:
           mkdir -p "official/downloads/$RELEASE_VERSION"
           gh release download "$RELEASE_VERSION" --dir "official/downloads/$RELEASE_VERSION"
           cp -a "official/downloads/$RELEASE_VERSION" official/downloads/latest
-          gh release upload "$RELEASE_VERSION" deploy/network/windshare-network.json --clobber
+          cmp deploy/network/windshare-network.json "official/downloads/$RELEASE_VERSION/windshare-network.json"
           tar -czf official-network.tar.gz -C official web downloads
           sha256sum official-network.tar.gz > official-network.sha256
       - uses: actions/upload-artifact@v7
