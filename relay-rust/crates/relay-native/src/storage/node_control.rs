@@ -1,8 +1,12 @@
-use super::Database;
-use crate::node::access::AccessSnapshot;
+use super::{
+    Database,
+    access_control::save_authority,
+    budget::{BudgetRecord, write_budget},
+};
+use crate::node::access::{AccessSnapshot, AuthorityState};
 use anyhow::{Result, anyhow, ensure};
 use rusqlite::{OptionalExtension, params};
-use windshare_relay_access::{Issuer, usage::Batch};
+use windshare_relay_access::{Issuer, trust::Generation, usage::Batch};
 
 impl Database {
     pub(crate) fn initialize_control(&self, now: u64) -> Result<AccessSnapshot> {
@@ -21,6 +25,36 @@ impl Database {
         transaction.commit()?;
         drop(connection);
         Ok(snapshot)
+    }
+
+    pub(crate) fn persist_node_settings<T>(
+        &self,
+        budget: Option<BudgetRecord>,
+        generations: &[Generation],
+        prepare_access: impl FnOnce(Vec<AuthorityState>) -> Result<T>,
+    ) -> Result<T> {
+        if budget.is_none() && generations.is_empty() {
+            return prepare_access(Vec::new());
+        }
+        let mut connection = self
+            .0
+            .connection
+            .lock()
+            .map_err(|_| anyhow!("database lock"))?;
+        let transaction = connection.transaction()?;
+        if let Some(record) = budget {
+            write_budget(&transaction, record)?;
+        }
+        let authorities = generations
+            .iter()
+            .map(|&generation| save_authority(&transaction, generation.into()))
+            .collect::<Result<_>>()?;
+        // The live trust cache may reject a merged record. Keep it inside the
+        // transaction so the ledger cannot advance for a rejected configuration.
+        let prepared = prepare_access(authorities)?;
+        transaction.commit()?;
+        drop(connection);
+        Ok(prepared)
     }
 
     pub(crate) fn enqueue_usage(&self, batches: &[Batch]) -> Result<()> {

@@ -1,6 +1,7 @@
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use windshare_relay_access::trust::Generation;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -83,12 +84,11 @@ impl Settings {
         Ok(super::Configuration::read(path)?.node)
     }
 
-    pub(super) fn validate(&self) -> Result<()> {
+    pub(super) fn validate(&self) -> Result<Vec<Generation>> {
         ensure!(
             matches!(self.zone.as_str(), "global" | "cn"),
             "invalid node zone"
         );
-        super::access::Service::default().configure(self.access.clone())?;
         if let Some(authority) = &self.authority {
             authority.validate()?;
             ensure!(
@@ -113,6 +113,6 @@ impl Settings {
                 "relay budget exceeds storage range"
             );
         }
-        Ok(())
+        self.access.generations()
     }
 }

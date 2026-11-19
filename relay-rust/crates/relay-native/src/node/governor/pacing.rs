@@ -22,8 +22,12 @@ struct Bucket {
 }
 
 impl Pacing {
+    pub(super) fn capacity(&self) -> Option<u64> {
+        self.bucket.as_ref().map(|bucket| bucket.bytes_per_second)
+    }
+
     pub(super) fn configure(&mut self, bytes_per_second: Option<u64>, now: Instant) -> bool {
-        if bytes_per_second == self.bucket.as_ref().map(|bucket| bucket.bytes_per_second) {
+        if bytes_per_second == self.capacity() {
             return false;
         }
 

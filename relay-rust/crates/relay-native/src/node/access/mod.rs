@@ -5,6 +5,7 @@ mod policy;
 mod quota;
 pub(crate) use control::{AccessSnapshot, AccessUpdate, AuthorityState};
 pub(crate) use devices::{BoundAccount, DeviceKeys};
+pub(super) use policy::PreparedPolicy;
 mod residency;
 #[cfg(test)]
 #[path = "access_tests.rs"]
@@ -25,7 +26,6 @@ use windshare_relay_access::{
     entitlement::{Allowance, Class, DAY_SECONDS, Entitlement},
     restrictions::Restrictions,
     ticket::Ticket,
-    trust::TrustStore,
 };
 use windshare_relay_core::{access::RegistrationDecision, identifiers::ShareId};
 
@@ -37,10 +37,9 @@ pub(crate) struct Service {
 
 struct State {
     policy: Policy,
-    node_policies: BTreeMap<Issuer, windshare_relay_access::usage::NodePolicy>,
+    authorities: control::Authorities,
     controller: Option<Issuer>,
     login_issuer: Option<Issuer>,
-    trusted: TrustStore,
     active_issuers: std::collections::BTreeSet<Issuer>,
     devices: DeviceKeys,
     credentials: devices::CredentialIndex,
@@ -55,10 +54,9 @@ impl Default for Service {
         Self {
             state: Arc::new(Mutex::new(State {
                 policy: Policy::default(),
-                node_policies: BTreeMap::new(),
+                authorities: control::Authorities::default(),
                 controller: None,
                 login_issuer: None,
-                trusted: TrustStore::default(),
                 active_issuers: std::collections::BTreeSet::new(),
                 devices: DeviceKeys::default(),
                 credentials: devices::CredentialIndex::default(),
@@ -73,6 +71,7 @@ impl Default for Service {
 }
 
 impl Service {
+    #[cfg(test)]
     pub fn set_controller(&self, issuer: Option<Issuer>) {
         self.state.lock().expect("node access state").controller = issuer;
     }
@@ -82,7 +81,7 @@ impl Service {
         state
             .controller
             .filter(|issuer| state.active_issuers.contains(issuer))
-            .and_then(|issuer| state.node_policies.get(&issuer))
+            .and_then(|issuer| state.authorities.policies.get(&issuer))
             .is_none_or(|policy| policy.enabled)
     }
 
@@ -166,11 +165,9 @@ impl Service {
                             credential: id,
                         })
                 } else {
-                    let Some(ticket) = URL_SAFE_NO_PAD
-                        .decode(token)
-                        .ok()
-                        .and_then(|bytes| Ticket::verify(&bytes, &state.trusted, now).ok())
-                    else {
+                    let Some(ticket) = URL_SAFE_NO_PAD.decode(token).ok().and_then(|bytes| {
+                        Ticket::verify(&bytes, &state.authorities.trusted, now).ok()
+                    }) else {
                         return RegistrationDecision::Denied;
                     };
                     if !state.active_issuers.contains(&ticket.issuer) {
@@ -347,7 +344,7 @@ impl State {
     fn anonymous(&self) -> bool {
         self.controller
             .filter(|issuer| self.active_issuers.contains(issuer))
-            .and_then(|issuer| self.node_policies.get(&issuer))
+            .and_then(|issuer| self.authorities.policies.get(&issuer))
             .map_or(self.policy.anonymous, |policy| {
                 policy.enabled && policy.anonymous
             })
@@ -358,7 +355,8 @@ impl State {
             .controller
             .filter(|issuer| self.active_issuers.contains(issuer))
             .and_then(|issuer| {
-                self.node_policies
+                self.authorities
+                    .policies
                     .get(&issuer)
                     .map(|policy| (issuer, policy))
             })

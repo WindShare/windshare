@@ -79,12 +79,25 @@ impl Governor {
         }
     }
 
-    pub fn configure(&self, bytes_per_second: Option<u64>) {
+    pub(super) fn publish_capacity<T>(
+        &self,
+        bytes_per_second: Option<u64>,
+        publish_node: impl FnOnce() -> T,
+    ) -> T {
         let mut state = self.state.lock().expect("governor");
-        if state.pacing.configure(bytes_per_second, Instant::now()) {
-            drop(state);
+        let changed = state.pacing.configure(bytes_per_second, Instant::now());
+        // A scheduler pass must see the new rate and its admission policy together.
+        let result = publish_node();
+        drop(state);
+        if changed {
             tracing::info!(event = "governor_capacity_changed", ?bytes_per_second);
         }
+        result
+    }
+
+    #[cfg(test)]
+    pub(super) fn capacity(&self) -> Option<u64> {
+        self.state.lock().unwrap().pacing.capacity()
     }
 
     pub fn register(

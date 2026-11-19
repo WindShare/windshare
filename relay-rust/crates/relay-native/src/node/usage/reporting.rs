@@ -174,10 +174,16 @@ impl Reporter {
 
     pub(super) async fn persist_generation(&self, generation: Generation) -> Result<()> {
         let store = self.store.clone();
-        // Persist the generation rollback barrier before the reply takes effect.
-        let authority =
-            tokio::task::spawn_blocking(move || store.save_authority(generation)).await??;
-        self.node.access.apply_authority(authority)
+        let node = self.node.clone();
+        tokio::task::spawn_blocking(move || {
+            let writer = node.lock_control()?;
+            // Persist the generation rollback barrier before the reply takes effect.
+            let authority = store.save_authority(generation)?;
+            let result = node.access.apply_authority(authority);
+            drop(writer);
+            result
+        })
+        .await?
     }
 
     pub(super) async fn persist_status(
@@ -187,17 +193,20 @@ impl Reporter {
         entitlements: Vec<AccountEntitlement>,
     ) -> Result<()> {
         let store = self.store.clone();
+        let node = self.node.clone();
         let authority = AuthorityState {
             generation,
             policy: Some(policy),
         };
-        let update = tokio::task::spawn_blocking(move || {
-            store.save_status(authority, entitlements, super::super::now().unsigned_abs())
+        tokio::task::spawn_blocking(move || {
+            let writer = node.lock_control()?;
+            let now = super::super::now().unsigned_abs();
+            let update = store.save_status(authority, entitlements, now)?;
+            let result = node.access.apply_access_update(update, now);
+            drop(writer);
+            result
         })
-        .await??;
-        self.node
-            .access
-            .apply_access_update(update, super::super::now().unsigned_abs())
+        .await?
     }
 
     async fn prune_quotas(&self, now: u64) -> Result<()> {

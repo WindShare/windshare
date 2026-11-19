@@ -23,38 +23,32 @@ impl Budget {
         })
     }
 
-    pub fn update(&mut self, config: MonthlyBudget, now: i64) -> Result<()> {
+    pub fn next_record(&self, config: MonthlyBudget, now: i64) -> Result<Option<BudgetRecord>> {
         let period = period_start(now, config.reset_day_utc)?;
-        let record = match self.record {
-            Some(record) => {
-                ensure!(
-                    record.reset_day == config.reset_day_utc,
-                    "billing reset day cannot change for an existing ledger"
-                );
-                if period <= record.period {
-                    return Ok(());
-                }
-                BudgetRecord {
-                    period,
-                    reserved: 0,
-                    ..record
-                }
+        if let Some(record) = self.record {
+            ensure!(
+                record.reset_day == config.reset_day_utc,
+                "billing reset day cannot change for an existing ledger"
+            );
+            if period <= record.period {
+                return Ok(None);
             }
-            None => BudgetRecord {
-                period,
-                reset_day: config.reset_day_utc,
-                reserved: 0,
-            },
-        };
-        self.store.save_budget(record)?;
+        }
+        Ok(Some(BudgetRecord {
+            period,
+            reset_day: config.reset_day_utc,
+            reserved: 0,
+        }))
+    }
+
+    pub fn advance(&mut self, record: BudgetRecord) {
         self.record = Some(record);
         self.available = 0;
         tracing::info!(
             event = "relay_budget_period",
-            period,
-            reset_day = config.reset_day_utc
+            period = record.period,
+            reset_day = record.reset_day
         );
-        Ok(())
     }
 
     pub fn remaining(&self, limit: u64) -> u64 {

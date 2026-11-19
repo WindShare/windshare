@@ -1,6 +1,14 @@
 use super::*;
 use crate::Endpoint;
 
+fn advance(budget: &mut Budget, config: MonthlyBudget, timestamp: i64) -> Result<()> {
+    if let Some(record) = budget.next_record(config, timestamp)? {
+        budget.store.save_budget(record)?;
+        budget.advance(record);
+    }
+    Ok(())
+}
+
 fn timestamp(raw: &str) -> i64 {
     chrono::DateTime::parse_from_rfc3339(raw)
         .unwrap()
@@ -34,18 +42,18 @@ fn ledger_survives_restart_clock_rollback_and_service_changes() {
     {
         let store = Database::open(&path, endpoint.identity).unwrap();
         let mut budget = Budget::new(store).unwrap();
-        budget.update(config, now).unwrap();
+        advance(&mut budget, config, now).unwrap();
         assert_eq!(budget.reserve(100, 60).unwrap(), 60);
         assert_eq!(budget.reserve(100, 60).unwrap(), 40);
         assert_eq!(budget.reserve(100, 1).unwrap(), 0);
     }
     let store = Database::open(&path, endpoint.identity).unwrap();
     let mut budget = Budget::new(store).unwrap();
-    budget.update(config, now - 86400 * 40).unwrap();
+    advance(&mut budget, config, now - 86400 * 40).unwrap();
     assert_eq!(budget.reserve(100, 1).unwrap(), 0);
     assert!(
         budget
-            .update(
+            .next_record(
                 MonthlyBudget {
                     reset_day_utc: 1,
                     ..config
@@ -54,9 +62,7 @@ fn ledger_survives_restart_clock_rollback_and_service_changes() {
             )
             .is_err()
     );
-    budget
-        .update(config, timestamp("2026-12-15T00:00:00Z"))
-        .unwrap();
+    advance(&mut budget, config, timestamp("2026-12-15T00:00:00Z")).unwrap();
     assert_eq!(budget.reserve(100, 80).unwrap(), 80);
 }
 
@@ -72,10 +78,10 @@ fn interrupted_reservations_fail_closed() {
     let now = timestamp("2026-11-16T00:00:00Z");
     {
         let mut budget = Budget::new(Database::open(&path, endpoint.identity).unwrap()).unwrap();
-        budget.update(config, now).unwrap();
+        advance(&mut budget, config, now).unwrap();
         assert_eq!(budget.reserve(config.bytes, 5).unwrap(), 5);
     }
     let mut budget = Budget::new(Database::open(&path, endpoint.identity).unwrap()).unwrap();
-    budget.update(config, now).unwrap();
+    advance(&mut budget, config, now).unwrap();
     assert_eq!(budget.remaining(config.bytes), RESERVATION_BYTES * 2);
 }

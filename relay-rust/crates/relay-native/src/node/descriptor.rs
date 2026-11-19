@@ -1,7 +1,7 @@
-use super::{Identity, Runtime, Settings, usage::Reporter};
+use super::{Identity, Runtime, usage::Reporter};
 use anyhow::{Result, anyhow};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use windshare_relay_access::trust::{self, Generation};
+use windshare_relay_access::trust;
 
 const DESCRIPTOR_DOMAIN: &[u8] = b"windshare/node-descriptor/v2\0";
 const DESCRIPTOR_SECONDS: u64 = 300;
@@ -10,10 +10,12 @@ impl Runtime {
     /// # Errors
     /// The identity must be installed before ingress starts.
     pub fn identify(&self, identity: Identity) -> Result<()> {
+        let writer = self.lock_control()?;
         self.state
             .lock()
             .map_err(|_| anyhow!("node state"))?
             .identity = Some(identity);
+        drop(writer);
         Ok(())
     }
 
@@ -42,48 +44,8 @@ impl Runtime {
         Ok(())
     }
 
-    pub(super) fn configure_access(&self, settings: &Settings) -> Result<()> {
-        let state = self.state.lock().map_err(|_| anyhow!("node state"))?;
-        let mut policy = settings.access.clone();
-        if let Some(identity) = &state.identity {
-            let owner = identity.owner();
-            policy.owner_principals.push(owner.principal);
-            policy.credentials.push(owner);
-        }
-        let store = state.control.clone();
-        drop(state);
-        self.access.set_controller(
-            settings
-                .authority
-                .as_ref()
-                .map(super::usage::Authority::issuer)
-                .transpose()?,
-        );
-        if self.access.policy_matches(&policy) {
-            return Ok(());
-        }
-        if let Some(store) = store {
-            let mut generations = Vec::with_capacity(policy.trusted_issuers.len());
-            for issuer in &policy.trusted_issuers {
-                let root = URL_SAFE_NO_PAD
-                    .decode(&issuer.root)?
-                    .try_into()
-                    .map_err(|_| anyhow!("issuer width"))?;
-                let generation =
-                    Generation::verify(&URL_SAFE_NO_PAD.decode(&issuer.certificate)?, root)
-                        .map_err(|error| anyhow!("issuer certificate: {error:?}"))?;
-                generations.push(generation);
-            }
-            // SQLite merges monotonically, so an old bootstrap certificate cannot
-            // undo a generation learned from an authenticated authority response.
-            for authority in store.save_authorities(generations)? {
-                self.access.apply_authority(authority)?;
-            }
-        }
-        self.access.configure(policy)
-    }
-
     pub(crate) fn reporter(&self) -> Result<Option<Reporter>> {
+        let writer = self.lock_control()?;
         let state = self.state.lock().map_err(|_| anyhow!("node state"))?;
         self.reporting_authority
             .get_or_init(|| state.settings.authority.clone());
@@ -99,6 +61,7 @@ impl Runtime {
             .clone()
             .ok_or_else(|| anyhow!("authority requires persistent storage"))?;
         drop(state);
+        drop(writer);
         Reporter::new(self.clone(), store, identity, authority).map(Some)
     }
 

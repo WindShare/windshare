@@ -21,25 +21,6 @@ const SCHEMA: &str = "
         issuer BLOB PRIMARY KEY, version BLOB NOT NULL, body BLOB NOT NULL) STRICT;";
 
 impl Database {
-    pub(crate) fn save_authorities(
-        &self,
-        generations: Vec<Generation>,
-    ) -> Result<Vec<AuthorityState>> {
-        let mut connection = self
-            .0
-            .connection
-            .lock()
-            .map_err(|_| anyhow!("database lock"))?;
-        let transaction = connection.transaction()?;
-        let authorities = generations
-            .into_iter()
-            .map(|generation| save_authority(&transaction, generation.into()))
-            .collect::<Result<_>>()?;
-        transaction.commit()?;
-        drop(connection);
-        Ok(authorities)
-    }
-
     pub(crate) fn save_authority(&self, generation: Generation) -> Result<AuthorityState> {
         let connection = self
             .0
@@ -135,7 +116,7 @@ pub(super) fn restore(db: &Connection, now: u64) -> Result<AccessSnapshot> {
     })
 }
 
-fn save_authority(db: &Connection, next: AuthorityState) -> Result<AuthorityState> {
+pub(super) fn save_authority(db: &Connection, next: AuthorityState) -> Result<AuthorityState> {
     let issuer = next.generation.issuer;
     let body: Option<Vec<u8>> = db
         .query_row(

@@ -2,6 +2,7 @@ use super::*;
 use crate::{ConnectionLimits, Endpoint, OriginPolicy, Server, SourcePolicy};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures_util::{SinkExt, StreamExt};
+use std::time::Duration;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},

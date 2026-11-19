@@ -9,6 +9,7 @@ pub(crate) mod usage;
 pub use identity::Identity;
 mod configuration;
 mod descriptor;
+mod reload;
 mod settings;
 mod trace;
 pub use configuration::Configuration;
@@ -22,14 +23,10 @@ pub(crate) use trace::NodeTrace;
 use crate::storage::Database;
 use anyhow::{Result, anyhow};
 use std::{
-    path::PathBuf,
-    sync::{Arc, Mutex, OnceLock},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    sync::{Arc, Mutex, MutexGuard, OnceLock},
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::watch;
-
-const SETTINGS_INTERVAL: Duration = Duration::from_secs(1);
-const SUMMARY_INTERVAL: Duration = Duration::from_secs(60);
 
 struct State {
     settings: Settings,
@@ -67,7 +64,7 @@ pub struct Runtime {
     pub(crate) console: Arc<OnceLock<crate::console::Console>>,
     pub(crate) governor: governor::Governor,
     state: Arc<Mutex<State>>,
-    settings_writer: Arc<Mutex<()>>,
+    control_writer: Arc<Mutex<()>>,
     reporting_authority: Arc<OnceLock<Option<usage::Authority>>>,
     revocations: watch::Sender<u64>,
     pub(crate) metrics: Metrics,
@@ -90,7 +87,7 @@ impl Default for Runtime {
                 storage_failed: false,
                 budget_revision: 0,
             })),
-            settings_writer: Arc::default(),
+            control_writer: Arc::default(),
             reporting_authority: Arc::default(),
             revocations: watch::channel(0).0,
             metrics: Metrics::default(),
@@ -108,18 +105,28 @@ impl Runtime {
     }
 
     pub(crate) fn configure(&self, settings: Settings, store: Database) -> Result<()> {
-        let access_now = now().unsigned_abs();
+        let generations = settings.validate()?;
+        let writer = self.lock_control()?;
+        let timestamp = now();
+        let access_now = timestamp.unsigned_abs();
         self.access
             .restore_access(store.initialize_control(access_now)?, access_now)?;
-        self.state
+        let budget = budget::Budget::new(store.clone())?;
+        let mut state = self.state.lock().map_err(|_| anyhow!("node state"))?;
+        state.control = Some(store);
+        state.budget = Some(budget);
+        drop(state);
+        let result = self.apply_settings(settings, &generations, timestamp);
+        drop(writer);
+        result
+    }
+
+    // Durable reservations and authority updates must not replace records
+    // between preparing a configuration and publishing its committed state.
+    fn lock_control(&self) -> Result<MutexGuard<'_, ()>> {
+        self.control_writer
             .lock()
-            .map_err(|_| anyhow!("node state"))?
-            .control = Some(store.clone());
-        self.state
-            .lock()
-            .map_err(|_| anyhow!("node state poisoned"))?
-            .budget = Some(budget::Budget::new(store)?);
-        self.update(settings, now())
+            .map_err(|_| anyhow!("node control writer poisoned"))
     }
 
     pub fn services(&self) -> Services {
@@ -182,13 +189,15 @@ impl Runtime {
         }
     }
 
-    pub(crate) fn reserve(&self, requested: u64) -> Result<u64> {
+    pub(crate) fn reserve_for_period(&self, requested: u64) -> Result<Grant> {
+        let writer = self.lock_control()?;
         let mut state = self
             .state
             .lock()
             .map_err(|_| anyhow!("node state poisoned"))?;
+        let epoch = state.budget_epoch();
         if state.unavailable {
-            return Ok(0);
+            return Ok(Grant { epoch, bytes: 0 });
         }
         let result = if let Some(config) = state.settings.relay_budget {
             state
@@ -204,90 +213,10 @@ impl Runtime {
             self.revoke(&mut state, "budget_exhausted_or_storage_failure");
         }
         drop(state);
-        result
-    }
-
-    pub(crate) fn reserve_for_period(&self, requested: u64) -> Result<Grant> {
-        // The grant carries its accounting period, so an interrupted write cannot
-        // spend last month's permission after the ledger has advanced.
-        let epoch = self.budget_epoch();
-        let bytes = self.reserve(requested)?;
-        Ok(Grant { epoch, bytes })
-    }
-
-    /// # Errors
-    /// Configuration changes cannot reset a billing ledger or revive spent quota.
-    pub fn update(&self, settings: Settings, timestamp: i64) -> Result<()> {
-        self.apply_settings(Some(settings), timestamp)
-    }
-
-    fn apply_settings(&self, next: Option<Settings>, timestamp: i64) -> Result<()> {
-        // Admission policy and the signed descriptor must describe the same
-        // revision. A periodic budget refresh may only reapply the latest one.
-        let writer = self
-            .settings_writer
-            .lock()
-            .map_err(|_| anyhow!("node settings poisoned"))?;
-        let settings = match next {
-            Some(settings) => settings,
-            None => self
-                .state
-                .lock()
-                .map_err(|_| anyhow!("node state poisoned"))?
-                .settings
-                .clone(),
-        };
-        settings.validate()?;
-        anyhow::ensure!(
-            self.reporting_authority
-                .get()
-                .is_none_or(|authority| *authority == settings.authority),
-            "changing the accounting authority requires a node restart"
-        );
-        self.configure_access(&settings)?;
-        self.governor.configure(settings.capacity_bytes_per_second);
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| anyhow!("node state poisoned"))?;
-        if let Some(config) = settings.relay_budget {
-            state
-                .budget
-                .as_mut()
-                .ok_or_else(|| anyhow!("missing persistent relay ledger"))?
-                .update(config, timestamp)?;
-        }
-        let exhausted = settings.relay_budget.is_some_and(|config| {
-            state
-                .budget
-                .as_ref()
-                .is_none_or(|budget| budget.remaining(config.bytes) == 0)
-        });
-        if !settings.services.relay || exhausted || state.storage_failed {
-            self.revoke(
-                &mut state,
-                if exhausted {
-                    "budget_exhausted"
-                } else {
-                    "service_disabled"
-                },
-            );
-        } else if state.unavailable {
-            state.unavailable = false;
-            tracing::info!(event = "relay_service_available", timestamp);
-        }
-        if state.settings != settings {
-            tracing::info!(event = "node_settings_changed", ?settings, timestamp);
-        }
-        if state.settings.relay_budget != settings.relay_budget {
-            // Pending socket writes must not reuse unlimited credit after a
-            // budget is enabled or reduced, even within the same billing period.
-            state.budget_revision += 1;
-        }
-        state.settings = settings;
-        drop(state);
         drop(writer);
-        Ok(())
+        // Pair the grant with the period that was charged, so a pending socket
+        // write cannot spend the credit after the ledger advances.
+        result.map(|bytes| Grant { epoch, bytes })
     }
 
     fn revoke(&self, state: &mut State, reason: &str) {
@@ -295,29 +224,6 @@ impl Runtime {
             state.unavailable = true;
             self.revocations.send_modify(|epoch| *epoch += 1);
             tracing::warn!(event = "relay_service_unavailable", reason);
-        }
-    }
-
-    pub(crate) async fn maintain(&self, path: Option<PathBuf>) {
-        let mut tick = tokio::time::interval(SETTINGS_INTERVAL);
-        let mut summary = std::time::Instant::now();
-        loop {
-            tick.tick().await;
-            if summary.elapsed() >= SUMMARY_INTERVAL {
-                let snapshot = self.snapshot();
-                tracing::info!(event = "node_load_summary", summary = ?snapshot);
-                summary = std::time::Instant::now();
-            }
-            let runtime = self.clone();
-            let path = path.clone();
-            let result = tokio::task::spawn_blocking(move || {
-                let requested = path.as_deref().map(Settings::read).transpose()?;
-                runtime.apply_settings(requested, now())
-            })
-            .await;
-            if !matches!(result, Ok(Ok(()))) {
-                tracing::warn!(event = "node_settings_refresh_failed", ?result);
-            }
         }
     }
 }

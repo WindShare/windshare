@@ -1,7 +1,8 @@
-use super::{Service, State};
+use super::Service;
 use anyhow::{Result, anyhow, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use std::collections::BTreeMap;
 use windshare_relay_access::{
     Issuer,
     restrictions::Restrictions,
@@ -60,8 +61,14 @@ pub struct AccessSnapshot {
     pub quota_day_floor: u64,
 }
 
-impl State {
-    fn apply_authority(&mut self, authority: AuthorityState) -> Result<bool> {
+#[derive(Clone, Default)]
+pub(super) struct Authorities {
+    pub(super) trusted: TrustStore,
+    pub(super) policies: BTreeMap<Issuer, NodePolicy>,
+}
+
+impl Authorities {
+    pub(super) fn apply(&mut self, authority: AuthorityState) -> Result<bool> {
         let generation = authority.generation;
         let issuer = generation.issuer;
         let previous = self
@@ -76,11 +83,11 @@ impl State {
         }
         if let Some(policy) = authority.policy
             && self
-                .node_policies
+                .policies
                 .get(&issuer)
                 .is_none_or(|old| policy.version > old.version)
         {
-            self.node_policies.insert(issuer, policy);
+            self.policies.insert(issuer, policy);
             return Ok(true);
         }
         Ok(previous.is_none_or(|entry| generation.number > entry.number))
@@ -91,7 +98,7 @@ impl Service {
     pub(crate) fn restore_access(&self, snapshot: AccessSnapshot, now: u64) -> Result<()> {
         let mut state = self.state.lock().expect("node access state");
         for authority in snapshot.authorities {
-            state.apply_authority(authority)?;
+            state.authorities.apply(authority)?;
         }
         for (issuer, restrictions) in snapshot.restrictions {
             state
@@ -114,7 +121,8 @@ impl Service {
             .state
             .lock()
             .expect("node access state")
-            .apply_authority(authority)?;
+            .authorities
+            .apply(authority)?;
         if changed {
             self.changes.send_modify(|version| *version += 1);
         }
@@ -123,7 +131,7 @@ impl Service {
 
     pub(crate) fn apply_access_update(&self, update: AccessUpdate, now: u64) -> Result<()> {
         let mut state = self.state.lock().expect("node access state");
-        let changed = state.apply_authority(update.authority)?;
+        let changed = state.authorities.apply(update.authority)?;
         state.quotas.retire_before(update.quota_day_floor, now);
         let mut advanced = 0;
         for (key, quota) in update.quotas {
@@ -153,7 +161,7 @@ impl Service {
     ) -> Result<(Generation, Reply<T>)> {
         let state = self.state.lock().expect("node access state");
         ensure!(state.active_issuers.contains(&issuer), "inactive authority");
-        let mut trusted: TrustStore = state.trusted.clone();
+        let mut trusted: TrustStore = state.authorities.trusted.clone();
         drop(state);
         let generation = Generation::verify(&URL_SAFE_NO_PAD.decode(signed.certificate)?, issuer)
             .map_err(|error| anyhow!("authority certificate: {error:?}"))?;

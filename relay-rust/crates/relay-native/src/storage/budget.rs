@@ -46,19 +46,24 @@ impl Database {
     }
 
     pub(crate) fn save_budget(&self, record: BudgetRecord) -> Result<()> {
-        let reserved = i64::try_from(record.reserved)?;
         let connection = self
             .0
             .connection
             .lock()
             .map_err(|_| anyhow!("database poisoned"))?;
-        connection.execute(
-            "INSERT INTO relay_budget VALUES (1, ?1, ?2, ?3)
-             ON CONFLICT(singleton) DO UPDATE SET period=excluded.period,
-                 reset_day=excluded.reset_day, reserved=excluded.reserved",
-            params![record.period, record.reset_day, reserved],
-        )?;
+        write_budget(&connection, record)?;
         drop(connection);
         Ok(())
     }
+}
+
+pub(super) fn write_budget(connection: &rusqlite::Connection, record: BudgetRecord) -> Result<()> {
+    let reserved = i64::try_from(record.reserved)?;
+    connection.execute(
+        "INSERT INTO relay_budget VALUES (1, ?1, ?2, ?3)
+         ON CONFLICT(singleton) DO UPDATE SET period=excluded.period,
+             reset_day=excluded.reset_day, reserved=excluded.reserved",
+        params![record.period, record.reset_day, reserved],
+    )?;
+    Ok(())
 }

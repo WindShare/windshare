@@ -85,13 +85,15 @@ impl Service {
             || state.controller != Some(issuer)
             || !state.active_issuers.contains(&issuer)
             || !state
-                .node_policies
+                .authorities
+                .policies
                 .get(&issuer)
                 .is_some_and(|policy| policy.enabled)
         {
             return None;
         }
         state
+            .authorities
             .trusted
             .generations()
             .into_iter()
