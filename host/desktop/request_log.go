@@ -36,10 +36,20 @@ func (a *Application) logRequestResult(request Request, rejection *Failure) {
 	case "configure":
 		if request.Setup != nil {
 			fields.SetupID = request.Setup.ID
-			fields.RelayOrigin = endpointOrigin(request.Setup.RelayURL)
-			fields.FrontendOrigin = endpointOrigin(request.Setup.FrontURL)
 			if edit := request.Setup.Preference; edit != nil {
-				fields.Action = edit.Action
+				switch edit.Action {
+				case "enable", "disable":
+					fields.Action = edit.Action
+					fields.RelayOrigin = endpointOrigin(edit.Value)
+				case "frontend":
+					fields.Action = edit.Action
+					fields.FrontendOrigin = endpointOrigin(edit.Value)
+				case "mode":
+					fields.Action = edit.Action
+				}
+			} else {
+				fields.RelayOrigin = endpointOrigin(request.Setup.RelayURL)
+				fields.FrontendOrigin = endpointOrigin(request.Setup.FrontURL)
 			}
 		}
 	}

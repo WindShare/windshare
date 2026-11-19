@@ -131,6 +131,7 @@ impl Command {
             } => {
                 fields.operation_id = (!operation_id.is_empty()).then_some(operation_id.as_str());
                 fields.setup_id = Some(&setup.id);
+                fields.action = setup.preference.as_ref().map(crate::PreferenceEdit::action);
                 "configure"
             }
             Self::CancelSetup { setup_id } => {

@@ -157,11 +157,22 @@ pub enum RelayMode {
     Selected,
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, serde::Serialize)]
 #[serde(tag = "action", content = "value", rename_all = "snake_case")]
 pub enum PreferenceEdit {
     Mode(RelayMode),
     Enable(String),
     Disable(String),
     Frontend(String),
+}
+
+impl PreferenceEdit {
+    pub(crate) const fn action(&self) -> &'static str {
+        match self {
+            Self::Mode(_) => "mode",
+            Self::Enable(_) => "enable",
+            Self::Disable(_) => "disable",
+            Self::Frontend(_) => "frontend",
+        }
+    }
 }

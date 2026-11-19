@@ -1,5 +1,36 @@
 use super::{Command, SetupInput};
-use crate::{AccountCommand, RelayOperation};
+use crate::{AccountCommand, PreferenceEdit, RelayOperation};
+
+#[test]
+fn preference_commands_log_the_action_and_keep_the_address_on_the_wire() {
+    let address = "https://relay.example/private?route=query-fixture";
+    let cases = [
+        (PreferenceEdit::Enable(address.into()), "enable"),
+        (PreferenceEdit::Disable(address.into()), "disable"),
+        (PreferenceEdit::Frontend(address.into()), "frontend"),
+    ];
+    for (edit, action) in cases {
+        let command = Command::Configure {
+            operation_id: "share-operation".into(),
+            setup: SetupInput {
+                id: "preference-setup".into(),
+                preference: Some(edit),
+                ..SetupInput::default()
+            },
+        };
+        let fields = command.log_fields();
+        assert_eq!(fields.command, "configure");
+        assert_eq!(fields.action, Some(action));
+        assert_eq!(fields.operation_id, Some("share-operation"));
+        assert_eq!(fields.setup_id, Some("preference-setup"));
+        assert!(!format!("{fields:?}").contains("query-fixture"));
+        let wire = serde_json::to_value(&command).unwrap();
+        assert_eq!(
+            wire["setup"]["preference"],
+            serde_json::json!({ "action": action, "value": address })
+        );
+    }
+}
 
 #[test]
 fn credential_commands_project_only_diagnostic_fields() {

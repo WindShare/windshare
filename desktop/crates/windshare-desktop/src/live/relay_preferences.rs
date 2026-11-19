@@ -33,7 +33,6 @@ impl Desktop {
             }
             None => "",
         };
-        tracing::info!(event = "desktop.relay_preference", session = ?session.model.session_id, operation, ?edit);
         self.setup_form.pending = session.controller.edit_preference(operation, edit);
         self.setup_form.feedback = None;
         cx.notify();

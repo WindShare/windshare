@@ -8,9 +8,49 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relaysetup"
 	"github.com/windshare/windshare/host/desktop/logstore"
 )
+
+func TestPreferenceRequestLogsUseOnlyDiagnosticFields(t *testing.T) {
+	const relay = "wss://user:password@relay.example:8443/private?route=relay-token#relay-fragment"
+	const frontend = "https://user:password@frontend.example/private?token=frontend-token#frontend-fragment"
+	tests := []struct {
+		name           string
+		edit           relayconfig.PreferenceEdit
+		action         string
+		relayOrigin    string
+		frontendOrigin string
+	}{
+		{"enable", relayconfig.PreferenceEdit{Action: "enable", Value: relay}, "enable", "wss://relay.example:8443", ""},
+		{"disable", relayconfig.PreferenceEdit{Action: "disable", Value: relay}, "disable", "wss://relay.example:8443", ""},
+		{"frontend", relayconfig.PreferenceEdit{Action: "frontend", Value: frontend}, "frontend", "", "https://frontend.example"},
+		{"invalid address", relayconfig.PreferenceEdit{Action: "frontend", Value: "private text"}, "frontend", "", ""},
+		{"restore default", relayconfig.PreferenceEdit{Action: "frontend"}, "frontend", "", ""},
+		{"mode", relayconfig.PreferenceEdit{Action: "mode", Value: "selected"}, "mode", "", ""},
+		{"unknown action", relayconfig.PreferenceEdit{Action: "private text", Value: relay}, "", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var logged requestResultLog
+			a := Application{deps: dependencies{log: func(_ string, fields any) {
+				logged = fields.(requestResultLog)
+			}}}
+			a.logRequestResult(Request{
+				ID: "request-id", Command: "configure", OperationID: "share-id",
+				Setup: &SetupInput{ID: "setup-id", Preference: &tt.edit},
+			}, nil)
+			want := requestResultLog{
+				RequestID: "request-id", Command: "configure", OperationID: "share-id", SetupID: "setup-id",
+				Action: tt.action, RelayOrigin: tt.relayOrigin, FrontendOrigin: tt.frontendOrigin, Accepted: true,
+			}
+			if logged != want {
+				t.Fatalf("log fields = %+v, want %+v", logged, want)
+			}
+		})
+	}
+}
 
 func TestControlLogsExcludeCredentialsFromAcceptedAndRejectedRequests(t *testing.T) {
 	const key = "relay-key-fixture"
