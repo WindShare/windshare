@@ -53,10 +53,10 @@ test('discovers deployment TURN and renews native/browser paths after applicatio
     expect((await managed.provision()).status).toBe('ready')
     const credential = await managed.admin('credentials', { name: 'browser sender' })
     // Begin with no cached capability: discovery must add it without blocking the share.
-    const configuration = credential.configuration
-    const proxy = await stack.createRelayCutProxy(managed.origin.replace(/^http:/u, 'ws:'))
+    const relayProfile = credential.configuration
+    const proxy = await stack.createRelayCutProxy(relayProfile.url.replace(/^http:/u, 'ws:'))
     const path = await stack.createFile(FILE_NAME, payload)
-    const share = await stack.share(path, { relayUrl: managed.origin, configuration, senderTrace: true })
+    const share = await stack.share(path, { relayProfile, senderTrace: true })
     readSenderTrace = () => stack.senderTraceRecords(share)
     const navigationUrl = relayReceiverUrl(share, proxy.url)
     redactor = createCapabilityRedactor({

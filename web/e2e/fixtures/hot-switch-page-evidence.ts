@@ -5,19 +5,18 @@ import type {
   HotSwitchPeerAttemptEvidence,
   HotSwitchPeerRecoveryEvidence,
 } from './hot-switch-contract'
-import { OutputFence } from './hot-switch-page-transfer'
+import type { OutputFence } from './hot-switch-page-transfer'
 import type {
   PeerAttemptTraceEvent,
   PeerRecoveryTraceEvent,
 } from '../../src/connectivity/diagnostics'
+import { SingleFileStreamOutputSession } from '../../src/output/streams/single-file'
 import type {
   BeginOutputFileResult,
   OutputFileRequest,
   OutputFileTransaction,
   OutputSession,
 } from '../../src/transfer/output/session'
-
-type StreamModule = typeof import('../../src/output/streams/single-file')
 
 export class EvidenceBridge {
   readonly #bridge: (event: HotSwitchPageEvent) => Promise<void>
@@ -108,11 +107,10 @@ export class DeliveryBuffer {
   readonly #chunks: Uint8Array[] = []
 
   outputSession(
-    stream: StreamModule,
     outputSessionId: string,
     outputFence: OutputFence,
   ): DirectAtomicStreamOutput {
-    const session = new stream.SingleFileStreamOutputSession(
+    const session = new SingleFileStreamOutputSession(
       outputSessionId,
       new WritableStream<Uint8Array>({
         write: async (chunk) => {

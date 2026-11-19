@@ -230,16 +230,14 @@ export async function startPageTransfer(
     readonly transferBytes: number
   },
 ): Promise<void> {
-  await page.evaluate(async (runtimeInput) => {
-    const runtime = await import(runtimeInput.runtimePath) as typeof import(
-      './hot-switch-page-runtime'
-    )
+  // The browser entry's static imports let Vite resolve one module graph for
+  // product factories and consumers that share instance-local authority.
+  await page.evaluate(async ({ runtimePath, runtimeInput }) => {
+    const runtime = await import(runtimePath) as typeof import('./hot-switch-page-runtime')
     runtime.startHotSwitchPageTransfer(runtimeInput)
   }, {
-    ...input,
-    failureDiagnosticMaximumDepth: FAILURE_DIAGNOSTIC_MAXIMUM_DEPTH,
     runtimePath: PAGE_TRANSFER_RUNTIME_PATH,
-    transferBytes: input.transferBytes,
+    runtimeInput: { ...input, failureDiagnosticMaximumDepth: FAILURE_DIAGNOSTIC_MAXIMUM_DEPTH },
   })
 }
 

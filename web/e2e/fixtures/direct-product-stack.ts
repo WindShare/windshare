@@ -20,12 +20,15 @@ const BARE_LINK_PATTERN = /^Bare link: (.+)$/mu
 const SEPARATE_KEY_PATTERN = /^Key: (.+)$/mu
 export const DIRECT_TEST_BLOCK_BYTES = 64 * 1024
 
+interface DirectRelayProfile {
+  readonly url: string
+  readonly access_key: string
+}
+
 export interface DirectShareOptions {
   readonly blockSizeBytes?: number
-  readonly relayUrl?: string
+  readonly relayProfile?: DirectRelayProfile
   readonly senderTrace?: boolean
-  readonly turn?: object
-  readonly configuration?: object
 }
 
 export interface DirectStackTrace {
@@ -109,7 +112,8 @@ export class DirectProductStack {
 
   async share(path: string, options: DirectShareOptions = {}): Promise<DirectShare> {
     const binaries = this.#requireBinaries()
-    const relayUrl = options.relayUrl ?? this.#requireRelayUrl()
+    const { relayProfile } = options
+    const relayUrl = relayProfile?.url ?? this.#requireRelayUrl()
     const blockSizeBytes = options.blockSizeBytes ?? DIRECT_TEST_BLOCK_BYTES
     validateBlockSize(blockSizeBytes)
     this.#senderSequence += 1
@@ -134,7 +138,9 @@ export class DirectProductStack {
     }
     // Keep test relay authority independent of the developer's saved profiles.
     const configPath = join(this.#requireRoot(), `${operationId}-config.json`)
-    await writeFile(configPath, JSON.stringify(options.configuration ?? { profiles: [], active_relays: [], ...(options.turn === undefined ? {} : { turn: options.turn }) }), { mode: 0o600 })
+    const profiles = relayProfile === undefined ? [] : [relayProfile]
+    const configuration = { profiles, active_relays: profiles.map(({ url }) => url) }
+    await writeFile(configPath, JSON.stringify(configuration), { mode: 0o600 })
     const sender = this.#track(new DirectProcess(binaries.wind, commandArguments, {
       cwd: REPOSITORY_ROOT,
       environment: { ...localGoEnvironment(), WINDSHARE_CONFIG: configPath },

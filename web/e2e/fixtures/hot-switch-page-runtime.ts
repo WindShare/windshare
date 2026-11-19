@@ -1,10 +1,40 @@
+import { BrowserReceiverGateway } from '../../src/application/browser-share/gateway'
+import type { FrozenSelectionPolicy } from '../../src/catalog/selection'
+import { BrowserOfferChannelFactory } from '../../src/connectivity/peer-offer'
+import { encodeBase64Url } from '../../src/crypto/bytes'
+import { bindReceiveIntent } from '../../src/output/planning/binding'
+import type { EnvironmentOffers, ResolvedArtifactAction } from '../../src/output/planning/contracts'
+import { createEnvironmentOffers, materializationRouteIdentity } from '../../src/output/planning/guarantees'
+import { offerArtifacts } from '../../src/output/planning/offers'
+import { reconcileArtifactChoice } from '../../src/output/planning/reconciliation'
+import {
+  AUTHORITY_REFERENCE_BYTES,
+  createDestinationReservationID,
+  createManagedAtomicReservation,
+  createOperationID,
+  createOutputSessionID,
+  createSelectionSpec,
+  managedAtomicGuarantees,
+  selectionRulesSpecFromPolicy,
+  type ReceiveIntent,
+  type SelectionSpec,
+} from '../../src/transfer/intent'
+import {
+  initialReceiveLifecycleState,
+  nextReceiveLifecycleState,
+  type ReceiveLifecycleState,
+  type ReceiveLifecycleStatePayload,
+} from '../../src/transfer/lifecycle/state'
+import type { DirectAtomicExecution, PlanExecutionAuthority } from '../../src/transfer/output/session'
+import { discoverAuthenticatedSelection, SelectionProjectionController } from '../../src/transfer/projection'
+import type { SelectionProjectionState } from '../../src/transfer/projection/contracts'
+import { createPlanExecutionAuthority } from '../../src/transfer/settlement/plan-authority'
+
 import type {
   HotSwitchPageEvent,
   HotSwitchRecoveryControl,
   ObservedTransferFailure,
 } from './hot-switch-contract'
-import type { FrozenSelectionPolicy } from '../../src/catalog/selection'
-import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
   DeliveryBuffer,
   EvidenceBridge,
@@ -17,48 +47,12 @@ import {
   OutputFence,
   PagePeerRecoveryHarness,
 } from './hot-switch-page-transfer'
-import type {
-  ReceiveLifecycleState,
-  ReceiveLifecycleStatePayload,
-} from '../../src/transfer/lifecycle/state'
-import type { ReceiveIntent, SelectionSpec } from '../../src/transfer/intent'
-import type { EnvironmentOffers, ResolvedArtifactAction } from '../../src/output/planning/contracts'
-import type { SelectionProjectionState } from '../../src/transfer/projection/contracts'
-import type {
-  DirectAtomicExecution,
-  PlanExecutionAuthority,
-} from '../../src/transfer/output/session'
 
-const GATEWAY_MODULE_PATH = '/src/application/browser-share/gateway.ts'
-const INTENT_MODULE_PATH = '/src/transfer/intent.ts'
-const OFFER_MODULE_PATH = '/src/connectivity/peer-offer.ts'
-const PLAN_AUTHORITY_MODULE_PATH = '/src/transfer/settlement/plan-authority.ts'
-const GUARANTEES_MODULE_PATH = '/src/output/planning/guarantees.ts'
-const BINDING_MODULE_PATH = '/src/output/planning/binding.ts'
-const ARTIFACT_OFFERS_MODULE_PATH = '/src/output/planning/offers.ts'
-const RECONCILIATION_MODULE_PATH = '/src/output/planning/reconciliation.ts'
-const PROJECTION_MODULE_PATH = '/src/transfer/projection/index.ts'
-const STREAM_MODULE_PATH = '/src/output/streams/single-file.ts'
-const WORKSPACE_STATE_MODULE_PATH = '/src/transfer/lifecycle/state.ts'
-const AUTHORITY_REFERENCE_BYTES = 32
 const HOT_SWITCH_RECEIPT_DOMAIN = 'windshare/e2e/hot-switch-receipt/v1'
 const STREAM_TARGET_OFFER_ID = 'hot-switch-managed-atomic-stream'
 const TEXT_ENCODER = new TextEncoder()
 
-type GatewayModule = typeof import('../../src/application/browser-share/gateway')
-type IntentModule = typeof import('../../src/transfer/intent')
-type OfferModule = typeof import('../../src/connectivity/peer-offer')
-type PlanAuthorityModule = typeof import('../../src/transfer/settlement/plan-authority')
-type GuaranteesModule = typeof import('../../src/output/planning/guarantees')
-type BindingModule = typeof import('../../src/output/planning/binding')
-type ArtifactOffersModule = typeof import('../../src/output/planning/offers')
-type ReconciliationModule = typeof import('../../src/output/planning/reconciliation')
-type ProjectionModule = typeof import('../../src/transfer/projection')
-type StreamModule = typeof import('../../src/output/streams/single-file')
-type WorkspaceStateModule = typeof import('../../src/transfer/lifecycle/state')
-type JoinedReceiver = Awaited<ReturnType<
-  InstanceType<GatewayModule['BrowserReceiverGateway']>['join']
->>
+type JoinedReceiver = Awaited<ReturnType<BrowserReceiverGateway['join']>>
 type DownloadActivation = ReturnType<JoinedReceiver['beginDownloadConnectivity']>
 
 export interface HotSwitchPageTransferRuntimeInput {
@@ -68,7 +62,6 @@ export interface HotSwitchPageTransferRuntimeInput {
   readonly nativePeerUsable: boolean
   readonly peerRecovery?: HotSwitchRecoveryControl
   readonly rtcConfiguration: RTCConfiguration
-  readonly runtimePath: string
   readonly transferBytes: number
 }
 
@@ -81,26 +74,11 @@ interface HotSwitchWindow extends Window {
   __windshareSealHotSwitchRelayCut?: () => Promise<void>
 }
 
-interface ProductModules {
-  readonly gateway: GatewayModule
-  readonly intent: IntentModule
-  readonly offer: OfferModule
-  readonly planAuthority: PlanAuthorityModule
-  readonly guarantees: GuaranteesModule
-  readonly binding: BindingModule
-  readonly artifactOffers: ArtifactOffersModule
-  readonly reconciliation: ReconciliationModule
-  readonly projection: ProjectionModule
-  readonly stream: StreamModule
-  readonly workspaceState: WorkspaceStateModule
-}
-
 interface BoundDirectAtomicOperation {
   readonly intent: ReceiveIntent
   readonly plans: PlanExecutionAuthority
   readonly selection: FrozenSelectionPolicy
 }
-
 
 export function startHotSwitchPageTransfer(input: HotSwitchPageTransferRuntimeInput): void {
   const hotSwitchWindow = window as HotSwitchWindow
@@ -146,7 +124,6 @@ async function runTransfer(
   peerHarness: PagePeerRecoveryHarness,
   markRuntimeTerminalPublished: () => void,
 ): Promise<void> {
-  const modules = await loadProductModules()
   let joined: JoinedReceiver | undefined
   let activation: DownloadActivation | undefined
   const delivery = new DeliveryBuffer()
@@ -154,12 +131,11 @@ async function runTransfer(
   let runtimeError: string | undefined
 
   try {
-    const gateway = createGateway(input, modules, bridge, relayCut, peerRelease, peerHarness)
+    const gateway = createGateway(input, bridge, relayCut, peerRelease, peerHarness)
     joined = await gateway.join(input.key, window.location.href)
     const operation = await bindDirectAtomicOperation(
       input,
       joined,
-      modules,
       delivery,
       outputFence,
     )
@@ -227,21 +203,20 @@ async function runTransfer(
 async function bindDirectAtomicOperation(
   input: HotSwitchPageTransferRuntimeInput,
   joined: JoinedReceiver,
-  modules: ProductModules,
   delivery: DeliveryBuffer,
   outputFence: OutputFence,
 ): Promise<BoundDirectAtomicOperation> {
   const selection = joined.selection.snapshot()
-  const selectionSpec = await modules.intent.createSelectionSpec({
+  const selectionSpec = await createSelectionSpec({
     shareInstance: joined.descriptor.shareInstanceId,
     syntheticRoot: joined.descriptor.syntheticRootId,
-    rules: modules.intent.selectionRulesSpecFromPolicy(selection),
+    rules: selectionRulesSpecFromPolicy(selection),
   })
-  const projection = new modules.projection.SelectionProjectionController()
+  const projection = new SelectionProjectionController()
   let current = projection.beginSelection(selectionSpec, Object.freeze({
     protocolSessionId: joined.protocolSessionIdentity,
   }))
-  for await (const state of modules.projection.discoverAuthenticatedSelection(
+  for await (const state of discoverAuthenticatedSelection(
     projection,
     joined.projectionSource(selection),
     new AbortController().signal,
@@ -254,25 +229,24 @@ async function bindDirectAtomicOperation(
     throw new Error('Hot-switch fixture requires a complete single-file projection')
   }
 
-  const environment = modules.guarantees.createEnvironmentOffers({
+  const environment = createEnvironmentOffers({
     targets: [{
       routeId: STREAM_TARGET_OFFER_ID,
       kind: 'managed-atomic-file-target',
-      guarantees: modules.intent.managedAtomicGuarantees('application-chosen'),
+      guarantees: managedAtomicGuarantees('application-chosen'),
       persistence: 'operation-scoped',
       hardMaximumOutputBytes: BigInt(input.transferBytes),
     }],
   })
   const { action, suggestedName } = await resolveHotSwitchDirectAtomicChoice(
-    modules,
     selectionSpec,
     current,
     environment,
   )
 
-  const reservation = await modules.intent.createManagedAtomicReservation({
-    operationId: modules.intent.createOperationID(),
-    reservationId: modules.intent.createDestinationReservationID(),
+  const reservation = await createManagedAtomicReservation({
+    operationId: createOperationID(),
+    reservationId: createDestinationReservationID(),
     artifact: action.artifact,
     authorityRef: randomAuthorityReference(),
     nameChooser: 'application-chosen',
@@ -280,7 +254,7 @@ async function bindDirectAtomicOperation(
     reservedName: suggestedName,
     collisionIndex: 0,
   })
-  const bound = await modules.binding.bindReceiveIntent({
+  const bound = await bindReceiveIntent({
     selection: selectionSpec,
     action,
     candidate: {
@@ -293,17 +267,13 @@ async function bindDirectAtomicOperation(
     throw new Error('Hot-switch intent binding did not remain direct-atomic')
   }
   const intent = bound.intent
-  const plans = await modules.planAuthority.createPlanExecutionAuthority({
+  const plans = await createPlanExecutionAuthority({
     intent,
     routes: {
       directAtomic: {
         open: async (routeIntent, signal) => {
           signal.throwIfAborted()
-          const output = delivery.outputSession(
-            modules.stream,
-            modules.intent.createOutputSessionID(),
-            outputFence,
-          )
+          const output = delivery.outputSession(createOutputSessionID(), outputFence)
           return Object.freeze({
             planKind: 'direct-atomic' as const,
             output,
@@ -312,7 +282,7 @@ async function bindDirectAtomicOperation(
               settlementSignal: AbortSignal,
             ) => {
               settlementSignal.throwIfAborted()
-              return lifecycleState(modules, routeIntent, {
+              return lifecycleState(routeIntent, {
                 kind: 'published',
                 receiptDigest: await operationReceipt(routeIntent, 'published'),
                 cleanupState: 'clean',
@@ -325,7 +295,7 @@ async function bindDirectAtomicOperation(
               settlementSignal.throwIfAborted()
               await output.pauseActiveTransaction(request.reason)
               settlementSignal.throwIfAborted()
-              return lifecycleState(modules, routeIntent, {
+              return lifecycleState(routeIntent, {
                 kind: 'restart-required',
                 reason: 'direct-atomic-rolled-back',
                 receiptDigest: await operationReceipt(routeIntent, 'rolled-back'),
@@ -337,14 +307,14 @@ async function bindDirectAtomicOperation(
       lifecycle: {
         settleExecutionAdmissionFailure: async (routeIntent, _reason, signal) => {
           signal.throwIfAborted()
-          return lifecycleState(modules, routeIntent, {
+          return lifecycleState(routeIntent, {
             kind: 'discarded',
             cleanupReceiptDigest: await operationReceipt(routeIntent, 'discarded'),
           })
         },
         recordSettlementUnknown: async (routeIntent, signal) => {
           signal.throwIfAborted()
-          const state = lifecycleState(modules, routeIntent, {
+          const state = lifecycleState(routeIntent, {
             kind: 'needs-attention',
             reason: 'target-ownership-unknown',
             lastVerifiedRecordDigest: await operationReceipt(routeIntent, 'settlement-unknown'),
@@ -361,7 +331,6 @@ async function bindDirectAtomicOperation(
 }
 
 async function resolveHotSwitchDirectAtomicChoice(
-  modules: ProductModules,
   selection: SelectionSpec,
   state: SelectionProjectionState,
   environment: EnvironmentOffers,
@@ -369,7 +338,7 @@ async function resolveHotSwitchDirectAtomicChoice(
   action: ResolvedArtifactAction
   suggestedName: string
 }>> {
-  const offers = await modules.artifactOffers.offerArtifacts(
+  const offers = await offerArtifacts(
     state.projection,
     state.discovery,
     environment,
@@ -383,9 +352,9 @@ async function resolveHotSwitchDirectAtomicChoice(
       offered.choice.artifactKind !== 'original-file' || offered.suggestedName === null) {
     throw new Error('Hot-switch fixture received an incompatible artifact choice')
   }
-  const resolution = await modules.reconciliation.reconcileArtifactChoice({
+  const resolution = await reconcileArtifactChoice({
     choice: offered.choice,
-    preferredRoute: modules.guarantees.materializationRouteIdentity(offered.route),
+    preferredRoute: materializationRouteIdentity(offered.route),
     expectedSelectionDigest: selection.digest,
     projection: state.projection,
     discovery: state.discovery,
@@ -399,12 +368,11 @@ async function resolveHotSwitchDirectAtomicChoice(
 }
 
 function lifecycleState(
-  modules: ProductModules,
   intent: ReceiveIntent,
   payload: ReceiveLifecycleStatePayload,
 ): ReceiveLifecycleState {
-  return modules.workspaceState.nextReceiveLifecycleState(
-    modules.workspaceState.initialReceiveLifecycleState({
+  return nextReceiveLifecycleState(
+    initialReceiveLifecycleState({
       operationId: intent.operationId,
       receiveIntentDigest: intent.digest,
     }),
@@ -426,16 +394,14 @@ async function operationReceipt(intent: ReceiveIntent, purpose: string): Promise
   return encodeBase64Url(new Uint8Array(digest))
 }
 
-
 function createGateway(
   input: HotSwitchPageTransferRuntimeInput,
-  modules: ProductModules,
   bridge: EvidenceBridge,
   relayCut: RelayCutEvidence,
   peerRelease: OneShotRelease,
   peerHarness: PagePeerRecoveryHarness,
-): InstanceType<GatewayModule['BrowserReceiverGateway']> {
-  const realOffers = new modules.offer.BrowserOfferChannelFactory({
+): BrowserReceiverGateway {
+  const realOffers = new BrowserOfferChannelFactory({
     configuration: input.rtcConfiguration,
   })
   const gatedOffers = {
@@ -453,7 +419,7 @@ function createGateway(
       return peerHarness.wrap(peer)
     },
   }
-  return new modules.gateway.BrowserReceiverGateway({
+  return new BrowserReceiverGateway({
     offersFactory: () => gatedOffers,
     nativePeerUsable: () => input.nativePeerUsable,
     connectivityTrace: {
@@ -486,36 +452,6 @@ function createGateway(
       relayCut.detach(observation)
       peerHarness.observeDetachment(observation)
     },
-  })
-}
-
-async function loadProductModules(): Promise<ProductModules> {
-  const [gateway, intent, offer, planAuthority, guarantees, binding, artifactOffers, reconciliation, projection, stream, workspaceState] =
-    await Promise.all([
-    import(GATEWAY_MODULE_PATH) as Promise<GatewayModule>,
-    import(INTENT_MODULE_PATH) as Promise<IntentModule>,
-    import(OFFER_MODULE_PATH) as Promise<OfferModule>,
-    import(PLAN_AUTHORITY_MODULE_PATH) as Promise<PlanAuthorityModule>,
-    import(GUARANTEES_MODULE_PATH) as Promise<GuaranteesModule>,
-    import(BINDING_MODULE_PATH) as Promise<BindingModule>,
-    import(ARTIFACT_OFFERS_MODULE_PATH) as Promise<ArtifactOffersModule>,
-    import(RECONCILIATION_MODULE_PATH) as Promise<ReconciliationModule>,
-    import(PROJECTION_MODULE_PATH) as Promise<ProjectionModule>,
-    import(STREAM_MODULE_PATH) as Promise<StreamModule>,
-    import(WORKSPACE_STATE_MODULE_PATH) as Promise<WorkspaceStateModule>,
-  ])
-  return Object.freeze({
-    gateway,
-    intent,
-    offer,
-    planAuthority,
-    guarantees,
-    binding,
-    artifactOffers,
-    reconciliation,
-    projection,
-    stream,
-    workspaceState,
   })
 }
 

@@ -30,14 +30,12 @@ import {
   withCapabilityRedaction,
   type CapabilityRedactor,
 } from './capability-redactor'
+import { NetworkEventLog } from './network-event-log'
 
 /** One extra block makes the post-cut dispatch observable without a timing race. */
 export const HOT_SWITCH_TRANSFER_BYTES =
   HOT_SWITCH_TRANSFER_BLOCKS * DIRECT_TEST_BLOCK_BYTES
 export const HOT_SWITCH_FILE_NAME = 'hot-switch.bin'
-
-const EVENT_TIMEOUT_MILLISECONDS = 30_000
-const MAXIMUM_RETAINED_EVENTS = 1_024
 
 export type HotSwitchRouteMode = 'native-capability' | 'direct' | 'relay-fallback'
 
@@ -82,7 +80,7 @@ export async function runHotSwitchScenario(options: HotSwitchScenarioOptions): P
     stackTraces.push(trace)
     console.info(JSON.stringify(trace))
   })
-  const events = new HotSwitchEventLog()
+  const events = new NetworkEventLog()
   let redactor: CapabilityRedactor | undefined
   let routeMode: ResolvedHotSwitchRoute | undefined
   let capability: NativeRtcCapabilityDiagnostic | undefined
@@ -240,7 +238,7 @@ async function determineRoutePlan(
 async function settleHotSwitchRoute(
   options: HotSwitchScenarioOptions,
   proxy: { readonly cut: () => Promise<void> },
-  events: HotSwitchEventLog,
+  events: NetworkEventLog,
   routeMode: ResolvedHotSwitchRoute,
   dynamicWebKitNativeAttempt: boolean,
 ): Promise<HotSwitchRouteSettlement> {
@@ -291,7 +289,7 @@ function nativeRouteMode(
   return capability.rtcCapability === 'available' ? 'direct' : 'relay-fallback'
 }
 
-async function waitForNativePeerOutcome(events: HotSwitchEventLog): Promise<NativePeerOutcome> {
+async function waitForNativePeerOutcome(events: NetworkEventLog): Promise<NativePeerOutcome> {
   const event = await events.waitForAny(
     isNativePeerOutcomeEvent,
     'peer lane admission or typed native attempt failure',
@@ -315,7 +313,7 @@ function isNativePeerOutcomeEvent(event: HotSwitchPageEvent): event is NativePee
 async function completePeerHotSwitch(
   options: HotSwitchScenarioOptions,
   proxy: { readonly cut: () => Promise<void> },
-  events: HotSwitchEventLog,
+  events: NetworkEventLog,
   peerLaneAdmission?: PeerLaneAdmission,
 ): Promise<void> {
   const peerAttempt = await events.waitFor(
@@ -382,7 +380,7 @@ function assertDelivery(
 }
 
 function assertRelayFallback(
-  events: HotSwitchEventLog,
+  events: NetworkEventLog,
   expectedFailure: PeerAttemptFailure | undefined,
 ): void {
   const snapshot = events.snapshot()
@@ -438,99 +436,4 @@ function assertStackIdentity(
 
 function deterministicBytes(length: number): Uint8Array {
   return Uint8Array.from({ length }, (_value, index) => (index * 31 + 17) & 0xff)
-}
-
-type MatchingEvent<T extends HotSwitchPageEvent['kind']> = Extract<HotSwitchPageEvent, { kind: T }>
-
-interface EventWaiter {
-  readonly kind: HotSwitchPageEvent['kind'] | undefined
-  readonly predicate: (event: HotSwitchPageEvent) => boolean
-  readonly resolve: (event: HotSwitchPageEvent) => void
-  readonly reject: (reason: unknown) => void
-  readonly timer: ReturnType<typeof setTimeout>
-}
-
-export class HotSwitchEventLog {
-  readonly #events: HotSwitchPageEvent[] = []
-  readonly #waiters = new Set<EventWaiter>()
-
-  accept(value: unknown): void {
-    const event = requireHotSwitchEvent(value)
-    if (this.#events.length >= MAXIMUM_RETAINED_EVENTS) {
-      throw new Error('Direct hot-switch event log exceeded its diagnostic bound')
-    }
-    this.#events.push(event)
-    for (const waiter of [...this.#waiters]) {
-      if ((waiter.kind !== undefined && event.kind !== waiter.kind) || !waiter.predicate(event)) continue
-      clearTimeout(waiter.timer)
-      this.#waiters.delete(waiter)
-      waiter.resolve(event)
-    }
-  }
-
-  waitForAny<T extends HotSwitchPageEvent>(
-    predicate: (event: HotSwitchPageEvent) => event is T,
-    label: string,
-  ): Promise<T> {
-    const existing = this.#events.find(predicate)
-    if (existing !== undefined) return Promise.resolve(existing)
-    return new Promise<T>((resolve, reject) => {
-      const waiter: EventWaiter = {
-        kind: undefined,
-        predicate,
-        resolve: (event) => resolve(event as T),
-        reject,
-        timer: setTimeout(() => {
-          this.#waiters.delete(waiter)
-          reject(new Error(`Timed out waiting for ${label}`))
-        }, EVENT_TIMEOUT_MILLISECONDS),
-      }
-      this.#waiters.add(waiter)
-    })
-  }
-
-  waitFor<T extends HotSwitchPageEvent['kind']>(
-    kind: T,
-    predicate: (event: MatchingEvent<T>) => boolean,
-    label: string,
-  ): Promise<MatchingEvent<T>> {
-    const existing = this.#events.find(
-      (event): event is MatchingEvent<T> => event.kind === kind && predicate(event as MatchingEvent<T>),
-    )
-    if (existing !== undefined) return Promise.resolve(existing)
-    return new Promise<MatchingEvent<T>>((resolve, reject) => {
-      const waiter: EventWaiter = {
-        kind,
-        predicate: (event) => predicate(event as MatchingEvent<T>),
-        resolve: (event) => resolve(event as MatchingEvent<T>),
-        reject,
-        timer: setTimeout(() => {
-          this.#waiters.delete(waiter)
-          reject(new Error(`Timed out waiting for ${label}`))
-        }, EVENT_TIMEOUT_MILLISECONDS),
-      }
-      this.#waiters.add(waiter)
-    })
-  }
-
-  snapshot(): readonly HotSwitchPageEvent[] {
-    return Object.freeze([...this.#events])
-  }
-
-  latestDispatchSequence(): number {
-    return this.#events.reduce(
-      (latest, event) => event.kind === 'dispatch'
-        ? Math.max(latest, event.observation.dispatchSequence)
-        : latest,
-      0,
-    )
-  }
-}
-
-function requireHotSwitchEvent(value: unknown): HotSwitchPageEvent {
-  if (value === null || typeof value !== 'object' || Array.isArray(value) ||
-      !Object.hasOwn(value, 'kind') || typeof (value as { kind?: unknown }).kind !== 'string') {
-    throw new TypeError('Direct hot-switch bridge received an invalid event')
-  }
-  return value as HotSwitchPageEvent
 }

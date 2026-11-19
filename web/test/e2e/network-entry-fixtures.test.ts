@@ -286,6 +286,25 @@ describe('direct weekly network fixtures', () => {
     expect(log.snapshot()).toHaveLength(2)
   })
 
+  it('reports a runtime failure to pending and later milestone waits', async () => {
+    const log = new NetworkEventLog()
+    const error = 'TypeError: transfer planning failed'
+    log.accept({
+      kind: 'dispatch',
+      observation: { dispatchSequence: 7, laneId: 1, laneEpoch: 1, route: 'application-relay' },
+    })
+    const pending = expect(log.waitFor('lane-admitted', () => true, 'peer admission')).rejects.toThrow(error)
+
+    log.accept({ kind: 'runtime-settled', error })
+
+    await pending
+    await expect(log.waitFor('delivery', () => true, 'delivery')).rejects.toThrow(error)
+    await expect(log.waitFor('dispatch', () => true, 'relay dispatch')).resolves.toMatchObject({
+      observation: { dispatchSequence: 7 },
+    })
+    await expect(log.waitFor('runtime-settled', () => true, 'runtime settlement')).resolves.toMatchObject({ error })
+  })
+
   it.each(['retained', 'live'] as const)(
     'correlates %s renewal traffic with its exact lane incarnation and cut boundary',
     async (arrival) => {

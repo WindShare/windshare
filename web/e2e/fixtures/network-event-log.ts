@@ -20,16 +20,10 @@ const PAGE_EVENT_KINDS: ReadonlySet<unknown> = new Set<HotSwitchPageEvent['kind'
 
 type MatchingEvent<T extends HotSwitchPageEvent['kind']> = Extract<HotSwitchPageEvent, { kind: T }>
 
-interface EventWaiter {
-  readonly kind: HotSwitchPageEvent['kind']
-  readonly predicate: (event: HotSwitchPageEvent) => boolean
-  readonly resolve: (event: HotSwitchPageEvent) => void
-  readonly timer: ReturnType<typeof setTimeout>
-}
-
 export class NetworkEventLog {
   readonly #events: HotSwitchPageEvent[] = []
-  readonly #waiters = new Set<EventWaiter>()
+  readonly #waiters = new Set<(event: HotSwitchPageEvent) => void>()
+  #runtimeFailure: Error | undefined
 
   accept(value: unknown): void {
     const event = requirePageEvent(value)
@@ -37,12 +31,10 @@ export class NetworkEventLog {
       throw new Error('Network route event log exceeded its diagnostic bound')
     }
     this.#events.push(event)
-    for (const waiter of [...this.#waiters]) {
-      if (event.kind !== waiter.kind || !waiter.predicate(event)) continue
-      clearTimeout(waiter.timer)
-      this.#waiters.delete(waiter)
-      waiter.resolve(event)
+    if (event.kind === 'runtime-settled' && event.error !== undefined) {
+      this.#runtimeFailure ??= new Error(`Browser transfer failed: ${event.error}`)
     }
+    for (const inspect of [...this.#waiters]) inspect(event)
   }
 
   waitFor<T extends HotSwitchPageEvent['kind']>(
@@ -50,21 +42,39 @@ export class NetworkEventLog {
     predicate: (event: MatchingEvent<T>) => boolean,
     label: string,
   ): Promise<MatchingEvent<T>> {
-    const existing = this.#events.find(
+    return this.waitForAny(
       (event): event is MatchingEvent<T> => event.kind === kind && predicate(event as MatchingEvent<T>),
+      label,
     )
+  }
+
+  waitForAny<T extends HotSwitchPageEvent>(
+    predicate: (event: HotSwitchPageEvent) => event is T,
+    label: string,
+  ): Promise<T> {
+    const existing = this.#events.find(predicate)
     if (existing !== undefined) return Promise.resolve(existing)
-    return new Promise<MatchingEvent<T>>((resolve, reject) => {
-      const waiter: EventWaiter = {
-        kind,
-        predicate: (event) => predicate(event as MatchingEvent<T>),
-        resolve: (event) => resolve(event as MatchingEvent<T>),
-        timer: setTimeout(() => {
-          this.#waiters.delete(waiter)
-          reject(new Error(`Timed out waiting for ${label}`))
-        }, EVENT_TIMEOUT_MILLISECONDS),
+    // Once the page has failed, missing milestones cannot provide more evidence.
+    if (this.#runtimeFailure !== undefined) return Promise.reject(this.#runtimeFailure)
+    return new Promise<T>((resolve, reject) => {
+      const cleanup = () => {
+        clearTimeout(timer)
+        this.#waiters.delete(inspect)
       }
-      this.#waiters.add(waiter)
+      const inspect = (event: HotSwitchPageEvent) => {
+        if (predicate(event)) {
+          cleanup()
+          resolve(event)
+        } else if (this.#runtimeFailure !== undefined) {
+          cleanup()
+          reject(this.#runtimeFailure)
+        }
+      }
+      const timer = setTimeout(() => {
+        cleanup()
+        reject(new Error(`Timed out waiting for ${label}`))
+      }, EVENT_TIMEOUT_MILLISECONDS)
+      this.#waiters.add(inspect)
     })
   }
 
