@@ -173,11 +173,12 @@ fn released_clients_redeem_registration_email_by_challenge() {
     save(&mut authority.store, "settings", &settings).unwrap();
     let address = Mailbox::parse("carol@qq.com").unwrap();
     // v0.1.3 requests the code without its setup secret.
-    let released = EmailVerification::Registration {
-        client_secret: None,
-    };
     let (delivered, code) = authority
-        .deliver_email("source", released, &address)
+        .deliver_email(
+            "source",
+            EmailVerification::RegistrationByChallenge,
+            &address,
+        )
         .unwrap();
     let mut proof = registration(10);
     proof.challenge = Some(delivered.id.clone());
@@ -202,7 +203,12 @@ fn released_clients_redeem_registration_email_by_challenge() {
     let mut other = proof.clone();
     other.challenge = Some(bound.id);
     other.solution = Some(bound_code);
-    assert!(authority.register("other-source", other).is_err());
+    let rejected = authority
+        .register("other-source", other)
+        .unwrap_err()
+        .downcast::<Fault>()
+        .unwrap();
+    assert!(matches!(rejected, Fault::Verification { challenge } if challenge.id.is_empty()));
     proof.solution = Some(code);
     let session = authority.register("source", proof).unwrap();
     assert_eq!(session.profile.email.as_deref(), Some("carol@qq.com"));

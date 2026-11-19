@@ -42,19 +42,25 @@ impl ProofKind {
 }
 
 pub enum EmailOwner {
-    Registration(RegistrationAttempt),
-    // Released clients (v0.1.3) send their setup secret only with the code, so the
-    // challenge id returned to the requester binds the proof instead.
-    ReleasedRegistration,
+    RegistrationAttempt(RegistrationAttempt),
+    RegistrationByChallenge,
     Account(AccountId),
 }
 
 impl EmailOwner {
     fn key(&self, challenge: &str) -> String {
         match self {
-            Self::Registration(attempt) => ProofKind::Email.registration_key(*attempt),
-            Self::ReleasedRegistration => released_registration_email_key(challenge),
+            Self::RegistrationAttempt(attempt) => ProofKind::Email.registration_key(*attempt),
+            Self::RegistrationByChallenge => registration_email_key_by_challenge(challenge),
             Self::Account(id) => account_email_key(id),
+        }
+    }
+
+    const fn binding(&self) -> &'static str {
+        match self {
+            Self::RegistrationAttempt(_) => "registration_attempt",
+            Self::RegistrationByChallenge => "registration_challenge",
+            Self::Account(_) => "account",
         }
     }
 }
@@ -64,7 +70,7 @@ fn account_email_key(id: &AccountId) -> String {
 }
 
 // The domain prefix keeps a challenge digest distinct from a setup secret digest.
-fn released_registration_email_key(challenge: &str) -> String {
+fn registration_email_key_by_challenge(challenge: &str) -> String {
     key(
         ProofKind::Email.registration_prefix(),
         &digest(&format!("challenge/{challenge}")),
@@ -116,6 +122,11 @@ impl Proof {
         }
     }
 
+    fn challenge_fingerprint(&self) -> String {
+        // A challenge ID can authorize registration together with a mailed code.
+        URL_SAFE_NO_PAD.encode(digest(&self.id))
+    }
+
     fn accepts(&self, solution: &str) -> bool {
         match &self.method {
             ProofMethod::Email { code_digest, .. } => digest(solution) == *code_digest,
@@ -153,18 +164,25 @@ impl EmailDelivery {
         &self.code
     }
 
-    pub fn challenge_id(&self) -> &str {
-        &self.proof.id
+    pub fn challenge_fingerprint(&self) -> String {
+        self.proof.challenge_fingerprint()
     }
 
+    /// Commit after provider acceptance so a failed resend leaves the previous code usable.
+    /// Requests bound by challenge have no attempt identity, so each delivery keeps its own proof.
+    ///
     /// # Errors
-    /// Only a successful provider delivery should replace the previously usable code.
+    /// Propagates errors while pruning expired proofs or saving the delivered proof.
     pub fn accepted(self, store: &mut impl Store, now: u64) -> Result<Challenge> {
         if !matches!(self.owner, EmailOwner::Account(_)) {
             store.prune_registration_proofs(ProofKind::Email, now)?;
         }
         save(store, &self.owner.key(&self.proof.id), &self.proof)?;
-        tracing::info!(event = "email_verification_delivered", challenge = %self.proof.id);
+        tracing::info!(
+            event = "email_verification_delivered",
+            binding = self.owner.binding(),
+            challenge_fingerprint = %self.proof.challenge_fingerprint(),
+        );
         Ok(self.proof.into_challenge())
     }
 }
@@ -202,7 +220,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
         save(&mut self.store, &storage_key, &proof)?;
         tracing::debug!(
             event = "registration_work_challenge_issued",
-            challenge = %proof.id,
+            challenge_fingerprint = %proof.challenge_fingerprint(),
             bits,
             expires_at = proof.expires_at
         );
@@ -230,7 +248,11 @@ impl<R: Store, E: Environment> Authority<R, E> {
             code_digest: digest(&code),
         };
         let proof = self.new_proof(method)?;
-        tracing::info!(event = "email_verification_requested", challenge = %proof.id);
+        tracing::info!(
+            event = "email_verification_requested",
+            binding = owner.binding(),
+            challenge_fingerprint = %proof.challenge_fingerprint(),
+        );
         Ok(EmailDelivery { owner, proof, code })
     }
 
@@ -248,15 +270,12 @@ impl<R: Store, E: Environment> Authority<R, E> {
             id.len() <= MAX_CHALLENGE_ID_BYTES && solution.len() <= MAX_SOLUTION_BYTES,
             Fault::Invalid
         );
-        let redemption = self.redeem_proof(&kind.registration_key(attempt), solution, |proof| {
-            proof.id == id && proof.method.kind() == kind
-        })?;
+        let matches = |proof: &Proof| proof.id == id && proof.method.kind() == kind;
+        let redemption = self.redeem_proof(&kind.registration_key(attempt), solution, matches)?;
         if kind != ProofKind::Email || !matches!(redemption, ProofRedemption::Unavailable) {
             return Ok(redemption);
         }
-        self.redeem_proof(&released_registration_email_key(id), solution, |proof| {
-            proof.id == id && proof.method.kind() == kind
-        })
+        self.redeem_proof(&registration_email_key_by_challenge(id), solution, matches)
     }
 
     pub(crate) fn verify_mailbox(
@@ -294,7 +313,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
             proof.attempts += 1;
             tracing::info!(
                 event = "verification_proof_rejected",
-                challenge = %proof.id,
+                challenge_fingerprint = %proof.challenge_fingerprint(),
                 mode = ?proof.method.kind().mode(),
                 attempts = proof.attempts
             );
@@ -309,7 +328,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
         self.store.delete(storage_key)?;
         tracing::debug!(
             event = "verification_proof_redeemed",
-            challenge = %proof.id,
+            challenge_fingerprint = %proof.challenge_fingerprint(),
             mode = ?proof.method.kind().mode()
         );
         Ok(match proof.method {

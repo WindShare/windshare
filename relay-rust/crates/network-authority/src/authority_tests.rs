@@ -148,8 +148,8 @@ fn registration(secret: u8) -> Registration {
 }
 
 fn registration_email(request: &Registration) -> EmailVerification {
-    EmailVerification::Registration {
-        client_secret: Some(request.client_secret.clone()),
+    EmailVerification::RegistrationAttempt {
+        client_secret: request.client_secret.clone(),
     }
 }
 

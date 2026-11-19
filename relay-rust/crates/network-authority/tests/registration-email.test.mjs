@@ -68,44 +68,54 @@ test('the Worker isolates registration email challenges while tracking retries',
 
   const secret = randomBytes(32).toString('base64url');
   const otherSecret = randomBytes(32).toString('base64url');
-  const register = async (challenge, solution, status, clientSecret = secret) =>
-    (await call('/v1/accounts', { client_secret: clientSecret, challenge, solution }, { status })).value;
-  const email = async (address, clientSecret = secret) => {
-    const challenge = (await call('/v1/accounts/email', { email: address, client_secret: clientSecret })).value;
-    assert.equal(delivered.to, address);
+  const register = async (challenge, solution, { status, source, clientSecret = secret } = {}) =>
+    (await call('/v1/accounts', { client_secret: clientSecret, challenge, solution }, { status, source })).value;
+  const email = async (body, options) => {
+    const challenge = (await call('/v1/accounts/email', body, options)).value;
+    assert.equal(delivered.to, body.email);
     return { challenge, code: delivered.text.match(/Verification code: (\S+)/)[1] };
   };
 
-  const first = await email('alice@qq.com');
+  const verificationRequired = { status: 428 };
+  const alice = { email: 'alice@qq.com', client_secret: secret };
+  const bob = { email: 'bob@qq.com', client_secret: otherSecret };
+  const first = await email(alice);
   // Both attempts share the Worker's local source and must keep their own codes.
-  const other = await email('bob@qq.com', otherSecret);
-  assert.equal((await register(other.challenge.id, other.code, 428)).challenge.id, '');
-  assert.equal((await register('unknown', 'typo', 428)).challenge.id, '');
+  const other = await email(bob);
+  assert.equal((await register(other.challenge.id, other.code, verificationRequired)).challenge.id, '');
+  assert.equal((await register('unknown', 'typo', verificationRequired)).challenge.id, '');
 
   // Each retry is its own Durable Object transaction, so the attempts must persist.
   for (let attempt = 1; attempt < 5; attempt++) {
-    assert.deepEqual(await register(first.challenge.id, 'typo', 428), { kind: 'verification', challenge: first.challenge });
+    assert.deepEqual(await register(first.challenge.id, 'typo', verificationRequired), { kind: 'verification', challenge: first.challenge });
   }
-  assert.equal((await register(first.challenge.id, 'typo', 428)).challenge.id, '');
-  assert.equal((await register(first.challenge.id, first.code, 428)).challenge.id, '');
+  assert.equal((await register(first.challenge.id, 'typo', verificationRequired)).challenge.id, '');
+  assert.equal((await register(first.challenge.id, first.code, verificationRequired)).challenge.id, '');
 
-  const second = await email('alice@qq.com');
-  assert.equal((await call('/v1/accounts/email', { email: 'bob@qq.com', client_secret: otherSecret }, { status: 429 })).value.kind, 'rate_limited');
-  assert.deepEqual(await register(second.challenge.id, 'typo', 428), { kind: 'verification', challenge: second.challenge });
-  assert.equal((await register(first.challenge.id, 'typo', 428)).challenge.id, '');
-  assert.equal((await register(second.challenge.id, second.code)).profile.email, 'alice@qq.com');
-  assert.equal((await register(other.challenge.id, other.code, 200, otherSecret)).profile.email, 'bob@qq.com');
+  const second = await email(alice);
+  assert.equal((await call('/v1/accounts/email', bob, { status: 429 })).value.kind, 'rate_limited');
+  assert.deepEqual(await register(second.challenge.id, 'typo', verificationRequired), { kind: 'verification', challenge: second.challenge });
+  assert.equal((await register(first.challenge.id, 'typo', verificationRequired)).challenge.id, '');
+  assert.equal((await register(second.challenge.id, second.code)).profile.email, alice.email);
+  assert.equal((await register(other.challenge.id, other.code, { clientSecret: otherSecret })).profile.email, bob.email);
 
-  // Released clients (v0.1.3) request the email without their setup secret and
-  // then register with the delivered challenge id and code.
-  const released = { source: '198.51.100.7' };
-  const releasedSecret = randomBytes(32).toString('base64url');
-  const releasedRegister = (challenge, solution, status = 200) => call('/v1/accounts',
-    { client_secret: releasedSecret, challenge, solution }, { ...released, status });
-  assert.equal((await releasedRegister(null, null, 428)).value.challenge.id, '');
-  const legacy = (await call('/v1/accounts/email', { email: 'carol@qq.com' }, released)).value;
-  assert.equal(delivered.to, 'carol@qq.com');
-  const legacyCode = delivered.text.match(/Verification code: (\S+)/)[1];
-  assert.deepEqual((await releasedRegister(legacy.id, 'typo', 428)).value, { kind: 'verification', challenge: legacy });
-  assert.equal((await releasedRegister(legacy.id, legacyCode)).value.profile.email, 'carol@qq.com');
+  // v0.1.3 sends only an email address when it requests a code.
+  const sharedNetwork = { source: '198.51.100.7' };
+  const carol = { email: 'carol@qq.com' };
+  const dave = { email: 'dave@qq.com' };
+  const carolOnNewNetwork = { source: '203.0.113.7', clientSecret: randomBytes(32).toString('base64url') };
+  const daveOnSharedNetwork = { ...sharedNetwork, clientSecret: randomBytes(32).toString('base64url') };
+  const invalid = await call('/v1/accounts/email',
+    { ...carol, client_secret: null }, { ...sharedNetwork, status: 400 });
+  assert.equal(invalid.value.kind, 'invalid');
+  const carolCode = await email(carol, sharedNetwork);
+  const daveCode = await email(dave, sharedNetwork);
+  const resent = await email(carol, sharedNetwork);
+  assert.notEqual(resent.challenge.id, carolCode.challenge.id);
+
+  // The shared network and the resend must leave the original proofs usable.
+  const mistyped = await register(carolCode.challenge.id, 'typo', { ...carolOnNewNetwork, ...verificationRequired });
+  assert.deepEqual(mistyped, { kind: 'verification', challenge: carolCode.challenge });
+  assert.equal((await register(carolCode.challenge.id, carolCode.code, carolOnNewNetwork)).profile.email, carol.email);
+  assert.equal((await register(daveCode.challenge.id, daveCode.code, daveOnSharedNetwork)).profile.email, dave.email);
 });
