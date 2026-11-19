@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"time"
 
 	"github.com/windshare/windshare/core/serviceauthority"
 )
@@ -43,15 +44,20 @@ func (service *Service) initialize(ctx context.Context) (Record, error) {
 }
 
 func (service *Service) validTicket(record Record) bool {
+	_, valid := service.usableTicket(record, service.config.Now())
+	return valid
+}
+
+func (service *Service) usableTicket(record Record, now time.Time) (serviceauthority.Ticket, bool) {
 	if record.Credential == nil || record.Denial != "" {
-		return false
+		return serviceauthority.Ticket{}, false
 	}
 	generation, err := serviceauthority.VerifyGeneration(record.Certificate, service.config.Root)
 	if err != nil {
-		return false
+		return serviceauthority.Ticket{}, false
 	}
-	ticket, err := serviceauthority.VerifyTicket(record.Ticket, generation, service.config.Now().Add(TicketMargin))
-	return err == nil && ticket.Account == record.Credential.Account && ticket.Credential == record.Credential.ID
+	ticket, err := serviceauthority.VerifyTicket(record.Ticket, generation, now.Add(TicketMargin))
+	return ticket, err == nil && ticket.Account == record.Credential.Account && ticket.Credential == record.Credential.ID
 }
 
 func sameIdentity(a, b Record) bool {

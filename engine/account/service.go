@@ -119,11 +119,11 @@ func (service *Service) Retry() {
 	if service == nil {
 		return
 	}
-	service.Start()
 	select {
 	case service.wake <- struct{}{}:
 	default:
 	}
+	service.Start()
 }
 
 func (service *Service) notifyLocked() {

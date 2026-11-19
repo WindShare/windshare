@@ -3,37 +3,110 @@ package account
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"reflect"
 	"time"
 )
 
+type refreshSchedule struct {
+	observed Record
+	next     time.Time
+	retry    time.Duration
+}
+
 func (service *Service) run() {
-	retry := MinimumRetry
-	next := service.config.Now()
+	schedule := refreshSchedule{retry: MinimumRetry}
+	requested := false
 	for service.lockOperation(service.ctx) == nil {
-		if updated, err := service.refreshLocked(service.ctx, next); updated || err != nil {
-			delay := RefreshInterval
-			if err != nil {
-				delay = retry
-				retry = min(retry*2, MaximumRetry)
-				delay = service.failure(err, delay)
-			} else {
-				retry = MinimumRetry
-			}
-			next = service.config.Now().Add(delay)
+		// A retry can already be queued when the worker starts or the timer fires.
+		select {
+		case <-service.wake:
+			requested = true
+		default:
 		}
+		service.pollLocked(service.ctx, &schedule, requested)
 		<-service.operation
-		timer := time.NewTimer(min(PollInterval, max(MinimumRetry, next.Sub(service.config.Now()))))
+		requested = false
+		timer := time.NewTimer(min(PollInterval, max(MinimumRetry, schedule.next.Sub(service.config.Now()))))
 		select {
 		case <-service.ctx.Done():
 			timer.Stop()
 			return
 		case <-service.wake:
 			timer.Stop()
-			next = service.config.Now()
+			requested = true
 		case <-timer.C:
 		}
 	}
+}
+
+// The command lock spans the failure transition so a late poll cannot
+// replace a newer interactive registration state.
+func (service *Service) pollLocked(ctx context.Context, schedule *refreshSchedule, requested bool) {
+	record, err := service.syncRecord(ctx)
+	if err == nil {
+		now := service.config.Now()
+		service.observeRefresh(schedule, record, now)
+		if !requested && now.Before(schedule.next) {
+			return
+		}
+		err = service.refreshRecord(ctx, record)
+	}
+	delay := RefreshInterval
+	if err != nil {
+		delay = service.failure(err, schedule.retry)
+		schedule.retry = min(schedule.retry*2, MaximumRetry)
+	} else {
+		schedule.retry = MinimumRetry
+	}
+	schedule.next = service.config.Now().Add(delay)
+}
+
+func (service *Service) observeRefresh(schedule *refreshSchedule, record Record, now time.Time) {
+	previous := schedule.observed
+	schedule.observed = record
+	newIdentity := !sameIdentity(previous, record)
+	newGeneration := previous.Certificate != record.Certificate
+	if newIdentity || newGeneration {
+		schedule.next, schedule.retry = time.Time{}, MinimumRetry
+	}
+	if record.Credential == nil {
+		if !reflect.DeepEqual(previous.Proof, record.Proof) {
+			schedule.next = time.Time{}
+		}
+		return
+	}
+	// Profile edits are independent of ticket freshness and retry backoff.
+	if !newIdentity && !newGeneration && previous.Ticket == record.Ticket && previous.Denial == record.Denial {
+		return
+	}
+	if next := service.cachedRefreshAt(record, now); next.After(now) {
+		schedule.next, schedule.retry = next, MinimumRetry
+		service.transition(Ready, "", next)
+		slog.Debug("account_refresh_satisfied_by_ticket", "credential", record.Credential.ID, "refresh_at", next)
+	}
+}
+
+func (service *Service) cachedRefreshAt(record Record, now time.Time) time.Time {
+	ticket, valid := service.usableTicket(record, now)
+	if !valid {
+		return time.Time{}
+	}
+	// A signer ahead of the local clock must not lengthen the refresh cadence.
+	issuedAt := time.Unix(int64(ticket.IssuedAt), 0)
+	if issuedAt.After(now) {
+		issuedAt = now
+	}
+	next := issuedAt.Add(RefreshInterval)
+	for _, cutoff := range []time.Time{
+		time.Unix(int64(ticket.ExpiresAt), 0).Add(-TicketMargin),
+		time.Unix(int64(ticket.Entitlement.ValidUntil), 0),
+	} {
+		if cutoff.Before(next) {
+			next = cutoff
+		}
+	}
+	return next
 }
 
 func (service *Service) step(ctx context.Context) error {
@@ -41,48 +114,48 @@ func (service *Service) step(ctx context.Context) error {
 		return err
 	}
 	defer func() { <-service.operation }()
-	_, err := service.refreshLocked(ctx, time.Time{})
-	return err
+	record, err := service.syncRecord(ctx)
+	if err != nil {
+		return err
+	}
+	return service.refreshRecord(ctx, record)
 }
 
-// The caller owns the command lock through the failure transition. A late poll
-// or retry must never replace a newer interactive registration state.
-func (service *Service) refreshLocked(ctx context.Context, next time.Time) (bool, error) {
+func (service *Service) syncRecord(ctx context.Context) (Record, error) {
 	record, err := service.load(ctx)
 	if err != nil {
-		return false, err
+		return Record{}, err
 	}
 	// The CLI and desktop must agree on the setup secret before either contacts the authority.
 	if record.Credential == nil && record.SetupSecret == "" {
 		record, err = service.initialize(ctx)
 		if err != nil {
-			return false, err
+			return Record{}, err
 		}
 	}
 	service.mu.Lock()
+	defer service.mu.Unlock()
 	service.loaded = true
 	record = service.withDenialLocked(record)
-	changed := !reflect.DeepEqual(service.record, record)
-	if changed {
+	if !reflect.DeepEqual(service.record, record) {
 		service.adoptLocked(record)
 		service.notifyLocked()
 	}
-	record = service.record
-	service.mu.Unlock()
-	if !changed && service.config.Now().Before(next) {
-		return false, nil
-	}
+	return service.record, nil
+}
+
+func (service *Service) refreshRecord(ctx context.Context, record Record) error {
 	if record.Credential == nil {
 		proof, err := service.pendingRegistration(ctx, record)
 		if proof != nil {
 			service.transition(proof.Challenge.requiredState(), "", time.Time{})
 		}
-		return true, err
+		return err
 	}
 	if record.Denial == "" && !service.validTicket(record) {
 		service.transition(Refreshing, "", time.Time{})
 	}
-	return true, service.requestIssuance(ctx, record, "/v1/accounts/ticket", record.Credential.Secret, struct{}{})
+	return service.requestIssuance(ctx, record, "/v1/accounts/ticket", record.Credential.Secret, struct{}{})
 }
 
 func (service *Service) requestIssuance(ctx context.Context, record Record, path, secret string, request any) error {

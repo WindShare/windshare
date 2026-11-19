@@ -68,7 +68,7 @@ func (service *Service) Login(ctx context.Context, username, password string) er
 	if err := service.install(ctx, previous, result, true); err != nil {
 		return err
 	}
-	service.Retry()
+	service.Start()
 	return nil
 }
 
