@@ -87,24 +87,30 @@ func (service *Service) pollLocked(ctx context.Context, schedule *refreshSchedul
 		read = service.loadOrInitialize
 	}
 	record, err := service.syncSelection(ctx, read, nil)
-	if err == nil {
-		if scope == refreshExisting && record.Credential == nil {
-			if !schedule.next.IsZero() {
-				service.transition(Pending, "", time.Time{})
-			}
-			*schedule = refreshSchedule{retry: MinimumRetry}
-			return
-		}
-		now := service.config.Now()
-		service.observeRefresh(schedule, record, now)
-		if !requested && now.Before(schedule.next) {
-			return
-		}
-		if record.Credential != nil && record.Denial == "" && !service.validTicket(record) {
-			service.transition(Refreshing, "", time.Time{})
-		}
-		_, err = service.refreshRecord(ctx, record)
+	if err != nil {
+		service.scheduleNextRefresh(schedule, err)
+		return
 	}
+	if scope == refreshExisting && record.Credential == nil {
+		if !schedule.next.IsZero() {
+			service.transition(Pending, "", time.Time{})
+		}
+		*schedule = refreshSchedule{retry: MinimumRetry}
+		return
+	}
+	now := service.config.Now()
+	service.observeRefresh(schedule, record, now)
+	if !requested && now.Before(schedule.next) {
+		return
+	}
+	if record.Credential != nil && record.Denial == "" && !service.validTicket(record) {
+		service.transition(Refreshing, "", time.Time{})
+	}
+	_, err = service.refreshRecord(ctx, record)
+	service.scheduleNextRefresh(schedule, err)
+}
+
+func (service *Service) scheduleNextRefresh(schedule *refreshSchedule, err error) {
 	delay := RefreshInterval
 	if err != nil {
 		delay = service.failure(err, schedule.retry)
