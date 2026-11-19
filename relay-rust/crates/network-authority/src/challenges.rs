@@ -94,7 +94,7 @@ impl Proof {
     }
 }
 
-pub(crate) enum ProofRedemption {
+pub enum ProofRedemption {
     WorkVerified,
     EmailVerified(String),
     Retry(Challenge),
