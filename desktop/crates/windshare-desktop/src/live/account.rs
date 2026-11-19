@@ -8,20 +8,50 @@ use gpui::{Entity, FocusHandle, Focusable, Subscription, Window, prelude::*};
 use windshare_host::{AccountCommand, AccountOutcome, AccountState, AccountView, Failure, Model};
 use windshare_ui::{Input, InputEvent};
 
+// Navigation selects a page. An open editor also owns the account it was opened for.
+pub type AccountPage = AccountScreen<()>;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AccountPage {
+pub enum AccountScreen<Target> {
     Overview,
     Registration,
     Login,
-    Credentials,
-    Nickname,
-    Email(EmailPurpose, EmailStep),
+    Credentials(Target),
+    Nickname(Target),
+    Email(EmailPurpose<Target>, EmailStep),
+}
+
+impl<Target> AccountScreen<Target> {
+    fn map_target<T>(&self, map: impl FnOnce(&Target) -> T) -> AccountScreen<T> {
+        match self {
+            Self::Overview => AccountScreen::Overview,
+            Self::Registration => AccountScreen::Registration,
+            Self::Login => AccountScreen::Login,
+            Self::Credentials(target) => AccountScreen::Credentials(map(target)),
+            Self::Nickname(target) => AccountScreen::Nickname(map(target)),
+            Self::Email(EmailPurpose::Registration, step) => {
+                AccountScreen::Email(EmailPurpose::Registration, *step)
+            }
+            Self::Email(EmailPurpose::Profile(target), step) => {
+                AccountScreen::Email(EmailPurpose::Profile(map(target)), *step)
+            }
+        }
+    }
+
+    const fn target(&self) -> Option<&Target> {
+        match self {
+            Self::Credentials(target)
+            | Self::Nickname(target)
+            | Self::Email(EmailPurpose::Profile(target), _) => Some(target),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EmailPurpose {
+pub enum EmailPurpose<Target = ()> {
     Registration,
-    Profile,
+    Profile(Target),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,27 +60,29 @@ pub enum EmailStep {
     Code,
 }
 
-impl EmailPurpose {
-    pub(super) const fn has_code(self, view: &AccountView) -> bool {
+impl<Target> EmailPurpose<Target> {
+    pub(super) const fn has_code(&self, view: &AccountView) -> bool {
         match self {
             Self::Registration => view.status.email_code_pending,
-            Self::Profile => view.status.pending_email.is_some(),
+            Self::Profile(_) => view.status.pending_email.is_some(),
         }
     }
 
-    pub(super) const fn entry(self, view: &AccountView) -> AccountPage {
-        AccountPage::Email(
-            self,
-            if self.has_code(view) {
-                EmailStep::Code
-            } else {
-                EmailStep::Address
-            },
-        )
+    const fn step(&self, view: &AccountView) -> EmailStep {
+        if self.has_code(view) {
+            EmailStep::Code
+        } else {
+            EmailStep::Address
+        }
+    }
+
+    pub(super) const fn entry(self, view: &AccountView) -> AccountScreen<Target> {
+        let step = self.step(view);
+        AccountScreen::Email(self, step)
     }
 }
 
-impl AccountPage {
+impl<Target> AccountScreen<Target> {
     pub(super) const fn entry(view: &AccountView) -> (Self, Text) {
         match view.status.state {
             AccountState::EmailRequired => {
@@ -78,15 +110,30 @@ pub enum AccountAction {
     Retry,
 }
 
+pub(super) enum AccountFormError {
+    AccountChanged,
+    Command(Failure),
+}
+
+impl From<Failure> for AccountFormError {
+    fn from(error: Failure) -> Self {
+        if error.code == "account_changed" {
+            Self::AccountChanged
+        } else {
+            Self::Command(error)
+        }
+    }
+}
+
 pub struct AccountForm {
     pub(super) nickname: Entity<Input>,
     pub(super) username: Entity<Input>,
     pub(super) password: Entity<Input>,
     pub(super) email: Entity<Input>,
     pub(super) code: Entity<Input>,
-    pub(super) page: AccountPage,
+    page: AccountScreen<String>,
     pending: Option<String>,
-    pub(super) feedback: Option<Result<Text, Failure>>,
+    pub(super) feedback: Option<Result<Text, AccountFormError>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -121,7 +168,7 @@ impl AccountForm {
             password,
             email,
             code,
-            page: AccountPage::Overview,
+            page: AccountScreen::Overview,
             pending: None,
             feedback: None,
             _subscriptions: subscriptions,
@@ -141,14 +188,24 @@ impl AccountForm {
         }
     }
 
+    pub(super) fn page(&self) -> AccountPage {
+        self.page.map_target(|_| ())
+    }
+
+    fn target_changed(&self, view: &AccountView) -> bool {
+        self.page
+            .target()
+            .is_some_and(|target| target != &view.status.account)
+    }
+
     pub(super) fn field_focus(&self, model: &Model, cx: &Context<Desktop>) -> Option<FocusHandle> {
         model.account.as_ref()?;
         let input = match self.page {
-            AccountPage::Login | AccountPage::Credentials => &self.username,
-            AccountPage::Nickname => &self.nickname,
-            AccountPage::Email(_, EmailStep::Code) => &self.code,
-            AccountPage::Email(_, EmailStep::Address) => &self.email,
-            AccountPage::Overview | AccountPage::Registration => return None,
+            AccountScreen::Login | AccountScreen::Credentials(_) => &self.username,
+            AccountScreen::Nickname(_) => &self.nickname,
+            AccountScreen::Email(_, EmailStep::Code) => &self.code,
+            AccountScreen::Email(_, EmailStep::Address) => &self.email,
+            AccountScreen::Overview | AccountScreen::Registration => return None,
         };
         Some(input.read(cx).focus_handle(cx))
     }
@@ -158,10 +215,10 @@ impl AccountForm {
     }
 
     pub(super) fn can_submit(&self, view: &AccountView, cx: &Context<Desktop>) -> bool {
-        if self.busy(view) {
+        if self.busy(view) || self.target_changed(view) {
             return false;
         }
-        match self.page {
+        match self.page() {
             AccountPage::Overview => false,
             AccountPage::Registration => {
                 view.status.account.is_empty()
@@ -170,12 +227,11 @@ impl AccountForm {
                         AccountState::Registering { .. } | AccountState::Denied
                     )
             }
-            AccountPage::Credentials if view.status.account.is_empty() => false,
-            AccountPage::Login | AccountPage::Credentials => {
+            AccountPage::Login | AccountPage::Credentials(()) => {
                 !self.username.read(cx).value().trim().is_empty()
                     && !self.password.read(cx).value().is_empty()
             }
-            AccountPage::Nickname => {
+            AccountPage::Nickname(()) => {
                 let value = self.nickname.read(cx).value().trim();
                 view.can_edit_profile()
                     && view.nickname_locked_until().is_none()
@@ -190,7 +246,7 @@ impl AccountForm {
             AccountPage::Email(purpose, step) => {
                 let available = match purpose {
                     EmailPurpose::Registration => view.status.state == AccountState::EmailRequired,
-                    EmailPurpose::Profile => view.can_edit_profile(),
+                    EmailPurpose::Profile(()) => view.can_edit_profile(),
                 };
                 available
                     && match step {
@@ -208,89 +264,100 @@ impl AccountForm {
         }
     }
 
-    pub(super) fn reconcile(&mut self, previous: &Model, model: &Model, cx: &mut Context<Desktop>) {
+    pub(super) fn reconcile(&mut self, model: &Model, cx: &mut Context<Desktop>) {
         let Some(view) = &model.account else { return };
-        let switched = previous
-            .account
-            .as_ref()
-            .is_none_or(|old| old.status.account != view.status.account);
-        if switched
-            && matches!(
-                self.page,
-                AccountPage::Nickname | AccountPage::Email(EmailPurpose::Profile, _)
-            )
-        {
-            self.page = AccountPage::Overview;
-            self.feedback = None;
-            self.pending = None;
+        if self.target_changed(view) {
+            self.close_stale_edit(cx);
+            return;
         }
         if let Some(id) = &self.pending {
             if let Some(op) = view.operation.as_ref().filter(|op| &op.id == id) {
                 match &op.outcome {
                     AccountOutcome::Running => return,
                     AccountOutcome::Failed { error } => {
-                        self.feedback = Some(Err(error.clone()));
+                        let error = AccountFormError::from(error.clone());
+                        if self.page.target().is_some()
+                            && matches!(error, AccountFormError::AccountChanged)
+                        {
+                            self.close_stale_edit(cx);
+                            return;
+                        }
+                        self.feedback = Some(Err(error));
                     }
                     AccountOutcome::Succeeded => self.completed(view, cx),
                 }
             } else if let Some(error) = model.settings_rejection(id) {
-                self.feedback = Some(Err(error.clone()));
+                self.feedback = Some(Err(error.clone().into()));
             } else {
                 return;
             }
             self.pending = None;
         }
-        // A CLI login or a change in admission policy can resolve the current step.
-        self.page = match self.page {
-            AccountPage::Registration if !view.status.account.is_empty() => AccountPage::Overview,
-            AccountPage::Registration if view.status.state == AccountState::EmailRequired => {
-                EmailPurpose::Registration.entry(view)
+        match &mut self.page {
+            AccountScreen::Registration if !view.status.account.is_empty() => {
+                self.page = AccountScreen::Overview;
             }
-            AccountPage::Email(EmailPurpose::Registration, _)
+            AccountScreen::Registration if view.status.state == AccountState::EmailRequired => {
+                self.page = EmailPurpose::Registration.entry(view);
+            }
+            AccountScreen::Email(EmailPurpose::Registration, _)
                 if view.status.state != AccountState::EmailRequired =>
             {
-                AccountPage::entry(view).0
+                self.page = AccountScreen::entry(view).0;
             }
-            AccountPage::Nickname | AccountPage::Email(EmailPurpose::Profile, _)
+            AccountScreen::Nickname(_) | AccountScreen::Email(EmailPurpose::Profile(_), _)
                 if !view.can_edit_profile() =>
             {
-                AccountPage::Overview
+                self.page = AccountScreen::Overview;
             }
-            AccountPage::Nickname if view.nickname_locked_until().is_some() => {
-                AccountPage::Overview
+            AccountScreen::Nickname(_) if view.nickname_locked_until().is_some() => {
+                self.page = AccountScreen::Overview;
             }
-            AccountPage::Email(purpose, EmailStep::Code) if !purpose.has_code(view) => {
-                AccountPage::Email(purpose, EmailStep::Address)
+            AccountScreen::Email(purpose, step @ EmailStep::Code) if !purpose.has_code(view) => {
+                *step = EmailStep::Address;
             }
-            page => page,
-        };
+            _ => {}
+        }
     }
 
-    fn completed(&mut self, view: &AccountView, cx: &mut Context<Desktop>) {
-        let message = match self.page {
-            AccountPage::Registration if view.status.state == AccountState::EmailRequired => {
-                self.page = EmailPurpose::Registration.entry(view);
-                return;
-            }
-            AccountPage::Registration => Text::AccountCreated,
-            AccountPage::Login => Text::AccountSignedIn,
-            AccountPage::Credentials => Text::AccountLoginSaved,
-            AccountPage::Nickname => Text::NicknameSaved,
-            AccountPage::Email(purpose, EmailStep::Address) => {
-                self.page = purpose.entry(view);
-                self.code.update(cx, |input, cx| input.set_value("", cx));
-                return;
-            }
-            AccountPage::Email(EmailPurpose::Registration, EmailStep::Code) => {
-                Text::AccountVerified
-            }
-            AccountPage::Email(EmailPurpose::Profile, EmailStep::Code) => Text::ProfileEmailSaved,
-            AccountPage::Overview => return,
-        };
+    fn close_stale_edit(&mut self, cx: &mut Context<Desktop>) {
+        self.page = AccountScreen::Overview;
+        self.pending = None;
+        self.feedback = Some(Err(AccountFormError::AccountChanged));
+        self.clear_secrets(cx);
+    }
+
+    fn clear_secrets(&self, cx: &mut Context<Desktop>) {
         self.password
             .update(cx, |input, cx| input.set_value("", cx));
         self.code.update(cx, |input, cx| input.set_value("", cx));
-        self.page = AccountPage::Overview;
+    }
+
+    fn completed(&mut self, view: &AccountView, cx: &mut Context<Desktop>) {
+        let message = match &mut self.page {
+            AccountScreen::Registration if view.status.state == AccountState::EmailRequired => {
+                self.page = EmailPurpose::Registration.entry(view);
+                return;
+            }
+            AccountScreen::Registration => Text::AccountCreated,
+            AccountScreen::Login => Text::AccountSignedIn,
+            AccountScreen::Credentials(_) => Text::AccountLoginSaved,
+            AccountScreen::Nickname(_) => Text::NicknameSaved,
+            AccountScreen::Email(purpose, step @ EmailStep::Address) => {
+                *step = purpose.step(view);
+                self.code.update(cx, |input, cx| input.set_value("", cx));
+                return;
+            }
+            AccountScreen::Email(EmailPurpose::Registration, EmailStep::Code) => {
+                Text::AccountVerified
+            }
+            AccountScreen::Email(EmailPurpose::Profile(_), EmailStep::Code) => {
+                Text::ProfileEmailSaved
+            }
+            AccountScreen::Overview => return,
+        };
+        self.clear_secrets(cx);
+        self.page = AccountScreen::Overview;
         self.feedback = Some(Ok(message));
     }
 }
@@ -311,7 +378,7 @@ impl Desktop {
         let page = AccountPage::entry(view).0;
         self.open_overlay(Overlay::Account, window, cx);
         if self.account_form.pending.is_none()
-            && !(page == AccountPage::Registration && self.account_form.page == page)
+            && !(page == AccountPage::Registration && self.account_form.page() == page)
         {
             self.set_account_page(page, window, cx);
         }
@@ -321,7 +388,12 @@ impl Desktop {
         let Some(view) = self.account_view() else {
             return;
         };
-        let username = if page == AccountPage::Credentials {
+        if page.target().is_some()
+            && (view.status.account.is_empty() || self.account_form.target_changed(view))
+        {
+            return;
+        }
+        let username = if page == AccountPage::Credentials(()) {
             view.status.username.clone()
         } else {
             String::new()
@@ -333,7 +405,7 @@ impl Desktop {
             .as_ref()
             .map_or_default(|nickname| nickname.value.clone());
         let email = match page {
-            AccountPage::Email(EmailPurpose::Profile, EmailStep::Address) => Some(
+            AccountPage::Email(EmailPurpose::Profile(()), EmailStep::Address) => Some(
                 view.status
                     .pending_email
                     .as_ref()
@@ -342,7 +414,7 @@ impl Desktop {
             ),
             AccountPage::Email(EmailPurpose::Registration, EmailStep::Address)
                 if !matches!(
-                    self.account_form.page,
+                    self.account_form.page(),
                     AccountPage::Email(EmailPurpose::Registration, _)
                 ) =>
             {
@@ -350,9 +422,10 @@ impl Desktop {
             }
             _ => None,
         };
+        let target_page = page.map_target(|()| view.status.account.clone());
         let form = &mut self.account_form;
-        form.page = page;
-        if page == AccountPage::Nickname {
+        form.page = target_page;
+        if page == AccountPage::Nickname(()) {
             form.nickname
                 .update(cx, |input, cx| input.set_value(nickname, cx));
         }
@@ -361,11 +434,9 @@ impl Desktop {
                 .update(cx, |input, cx| input.set_value(email, cx));
         }
         form.feedback = None;
-        form.password
-            .update(cx, |input, cx| input.set_value("", cx));
+        form.clear_secrets(cx);
         form.username
             .update(cx, |input, cx| input.set_value(username, cx));
-        form.code.update(cx, |input, cx| input.set_value("", cx));
         if let Runtime::Native(session) = &self.runtime
             && let Some(focus) = form
                 .field_focus(&session.model, cx)
@@ -392,7 +463,7 @@ impl Desktop {
             AccountAction::Submit => {
                 self.submit_account(cx);
                 // The primary button leaves the tree while the account is being created.
-                if self.account_form.page == AccountPage::Registration
+                if self.account_form.page() == AccountPage::Registration
                     && self.account_form.pending.is_some()
                     && let Some(frame) = self.overlays.last()
                 {
@@ -412,44 +483,48 @@ impl Desktop {
         if !form.can_submit(view, cx) {
             return;
         }
-        let command = match form.page {
-            AccountPage::Overview => return,
-            AccountPage::Registration => AccountCommand::Register,
-            AccountPage::Login | AccountPage::Credentials => {
+        let command = match &form.page {
+            AccountScreen::Overview => return,
+            AccountScreen::Registration => AccountCommand::Register,
+            AccountScreen::Login | AccountScreen::Credentials(_) => {
                 let username = form.username.read(cx).value().trim().to_owned();
                 let password = form.password.read(cx).value().to_owned();
-                if form.page == AccountPage::Login {
-                    AccountCommand::Login { username, password }
+                if let AccountScreen::Credentials(account_id) = &form.page {
+                    AccountCommand::Password {
+                        account_id: account_id.clone(),
+                        username,
+                        password,
+                    }
                 } else {
-                    AccountCommand::Password { username, password }
+                    AccountCommand::Login { username, password }
                 }
             }
-            AccountPage::Nickname => AccountCommand::Nickname {
-                account_id: view.status.account.clone(),
+            AccountScreen::Nickname(account_id) => AccountCommand::Nickname {
+                account_id: account_id.clone(),
                 nickname: form.nickname.read(cx).value().trim().into(),
             },
-            AccountPage::Email(EmailPurpose::Registration, EmailStep::Code) => {
+            AccountScreen::Email(EmailPurpose::Registration, EmailStep::Code) => {
                 AccountCommand::Verify {
                     code: form.code.read(cx).value().trim().into(),
                 }
             }
-            AccountPage::Email(EmailPurpose::Registration, EmailStep::Address) => {
+            AccountScreen::Email(EmailPurpose::Registration, EmailStep::Address) => {
                 AccountCommand::Email {
                     email: form.email.read(cx).value().trim().into(),
                 }
             }
-            AccountPage::Email(EmailPurpose::Profile, EmailStep::Address) => {
+            AccountScreen::Email(EmailPurpose::Profile(account_id), EmailStep::Address) => {
                 AccountCommand::RequestProfileEmail {
-                    account_id: view.status.account.clone(),
+                    account_id: account_id.clone(),
                     email: form.email.read(cx).value().trim().into(),
                 }
             }
-            AccountPage::Email(EmailPurpose::Profile, EmailStep::Code) => {
+            AccountScreen::Email(EmailPurpose::Profile(account_id), EmailStep::Code) => {
                 let Some(pending) = &view.status.pending_email else {
                     return;
                 };
                 AccountCommand::ConfirmProfileEmail {
-                    account_id: view.status.account.clone(),
+                    account_id: account_id.clone(),
                     challenge: pending.challenge.id.clone(),
                     code: form.code.read(cx).value().trim().into(),
                 }
@@ -470,7 +545,7 @@ impl Desktop {
                 .controller
                 .model()
                 .command_error
-                .map(|error| Err(Failure::from(error)))
+                .map(|error| Err(Failure::from(error).into()))
         };
     }
 }

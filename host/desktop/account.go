@@ -136,7 +136,7 @@ func (a *Application) runAccountCommand(input AccountInput) error {
 	case "login":
 		return service.Login(ctx, input.Username, input.Password)
 	case "password":
-		return service.SetPassword(ctx, input.Username, input.Password)
+		return service.SetPassword(ctx, input.AccountID, input.Username, input.Password)
 	case "nickname":
 		return service.SetNickname(ctx, input.AccountID, input.Nickname)
 	case "request_profile_email":

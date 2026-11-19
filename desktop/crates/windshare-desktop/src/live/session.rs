@@ -140,7 +140,7 @@ impl Desktop {
             let previous_page = self.setup_form.page;
             let previous_field = self.account_form.field_focus(&session.model, cx);
             self.setup_form.reconcile(&model, cx);
-            self.account_form.reconcile(&session.model, &model, cx);
+            self.account_form.reconcile(&model, cx);
             if let Some(frame) = self.overlays.last() {
                 match frame.content {
                     Overlay::Account => {

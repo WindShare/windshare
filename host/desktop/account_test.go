@@ -28,7 +28,7 @@ func (service *controlledAccount) Login(ctx context.Context, _, _ string) error 
 	service.finished.Store(true)
 	return ctx.Err()
 }
-func (*controlledAccount) SetPassword(context.Context, string, string) error         { return nil }
+func (*controlledAccount) SetPassword(context.Context, string, string, string) error { return nil }
 func (*controlledAccount) SetNickname(context.Context, string, string) error         { return nil }
 func (*controlledAccount) RequestProfileEmail(context.Context, string, string) error { return nil }
 func (*controlledAccount) ConfirmProfileEmail(context.Context, string, string, string) error {

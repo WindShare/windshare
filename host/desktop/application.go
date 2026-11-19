@@ -33,7 +33,7 @@ type accountService interface {
 	Retry()
 	Register(context.Context) error
 	Login(context.Context, string, string) error
-	SetPassword(context.Context, string, string) error
+	SetPassword(context.Context, string, string, string) error
 	SetNickname(context.Context, string, string) error
 	RequestProfileEmail(context.Context, string, string) error
 	ConfirmProfileEmail(context.Context, string, string, string) error

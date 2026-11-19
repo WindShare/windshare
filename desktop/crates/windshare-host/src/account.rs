@@ -133,6 +133,7 @@ pub enum AccountCommand {
         password: String,
     },
     Password {
+        account_id: String,
         username: String,
         password: String,
     },

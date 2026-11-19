@@ -19,6 +19,7 @@ fn credential_commands_project_only_diagnostic_fields() {
         ),
         (
             account(AccountCommand::Password {
+                account_id: "target-account".into(),
                 username: "user".into(),
                 password: "new-password-fixture".into(),
             }),
@@ -41,13 +42,11 @@ fn credential_commands_project_only_diagnostic_fields() {
         assert_eq!(fields.action, Some(action));
         assert_eq!(fields.operation_id, Some("account-operation"));
         assert!(!format!("{fields:?}").contains(secret));
-        assert_eq!(
-            serde_json::to_value(&command)
-                .unwrap()
-                .pointer(pointer)
-                .unwrap(),
-            secret
-        );
+        let request = serde_json::to_value(&command).unwrap();
+        assert_eq!(request.pointer(pointer).unwrap(), secret);
+        if action == "password" {
+            assert_eq!(request["account"]["account_id"], "target-account");
+        }
     }
 
     let command = Command::Configure {

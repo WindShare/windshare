@@ -2,7 +2,6 @@ package account
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 
 	"github.com/windshare/windshare/core/serviceauthority"
@@ -52,27 +51,8 @@ func (service *Service) validEmailChallenge(challenge Challenge) bool {
 	return challenge.ID != "" && len(challenge.ID) <= 128 && challenge.Mode == "email" && service.acceptsChallengeExpiry(challenge.ExpiresAt)
 }
 
-// A CLI login can switch the shared store between opening a desktop editor and pressing Save.
-func (service *Service) editProfile(ctx context.Context, accountID string, submit func(Record) error) error {
-	if service == nil {
-		return ErrNotConfigured
-	}
-	if err := service.lockOperation(ctx); err != nil {
-		return err
-	}
-	defer func() { <-service.operation }()
-	record, err := service.load(ctx)
-	if err != nil {
-		return err
-	}
-	if record.Credential == nil || base64.RawURLEncoding.EncodeToString(record.Credential.Account[:]) != accountID {
-		return ErrSuperseded
-	}
-	return submit(record)
-}
-
 func (service *Service) SetNickname(ctx context.Context, accountID, nickname string) error {
-	return service.editProfile(ctx, accountID, func(record Record) error {
+	return service.editAccount(ctx, accountID, func(record Record) error {
 		return service.submitProfile(ctx, record, "/v1/accounts/profile/nickname", struct {
 			Nickname string `json:"nickname"`
 		}{nickname})
@@ -80,7 +60,7 @@ func (service *Service) SetNickname(ctx context.Context, accountID, nickname str
 }
 
 func (service *Service) RequestProfileEmail(ctx context.Context, accountID, address string) error {
-	return service.editProfile(ctx, accountID, func(record Record) error {
+	return service.editAccount(ctx, accountID, func(record Record) error {
 		var pending PendingEmail
 		err := service.callWithTimeout(ctx, "/v1/accounts/profile/email", record.Credential.Secret, struct {
 			Email string `json:"email"`
@@ -98,7 +78,7 @@ func (service *Service) RequestProfileEmail(ctx context.Context, accountID, addr
 }
 
 func (service *Service) ConfirmProfileEmail(ctx context.Context, accountID, challengeID, code string) error {
-	return service.editProfile(ctx, accountID, func(record Record) error {
+	return service.editAccount(ctx, accountID, func(record Record) error {
 		pending := record.PendingEmail
 		if challengeID == "" || challengeID != pending.Challenge.ID {
 			return errEmailCodeRejected

@@ -2,6 +2,7 @@ package account
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"log/slog"
 	"net/url"
@@ -72,7 +73,9 @@ func (service *Service) Login(ctx context.Context, username, password string) er
 	return nil
 }
 
-func (service *Service) SetPassword(ctx context.Context, username, password string) error {
+// Resolve the credential from the shared store because another process may have
+// switched accounts while the caller was preparing the edit.
+func (service *Service) editAccount(ctx context.Context, accountID string, submit func(Record) error) error {
 	if service == nil {
 		return ErrNotConfigured
 	}
@@ -80,21 +83,27 @@ func (service *Service) SetPassword(ctx context.Context, username, password stri
 		return err
 	}
 	defer func() { <-service.operation }()
-	previous, err := service.load(ctx)
+	record, err := service.load(ctx)
 	if err != nil {
 		return err
 	}
-	if previous.Credential == nil {
-		return errors.New("account setup is still pending")
+	if record.Credential == nil || base64.RawURLEncoding.EncodeToString(record.Credential.Account[:]) != accountID {
+		return ErrSuperseded
 	}
-	var result session
-	if err := service.call(ctx, "/v1/accounts/password", previous.Credential.Secret, struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}{username, password}, &result); err != nil {
-		return err
-	}
-	return service.install(ctx, previous, result, false)
+	return submit(record)
+}
+
+func (service *Service) SetPassword(ctx context.Context, accountID, username, password string) error {
+	return service.editAccount(ctx, accountID, func(record Record) error {
+		var result session
+		if err := service.call(ctx, "/v1/accounts/password", record.Credential.Secret, struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+		}{username, password}, &result); err != nil {
+			return err
+		}
+		return service.install(ctx, record, result, false)
+	})
 }
 
 func (service *Service) RequestEmail(ctx context.Context, email string) error {

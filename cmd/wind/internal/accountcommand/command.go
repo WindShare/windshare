@@ -30,7 +30,7 @@ type Service interface {
 	Retry()
 	Register(context.Context) error
 	Login(context.Context, string, string) error
-	SetPassword(context.Context, string, string) error
+	SetPassword(context.Context, string, string, string) error
 	RequestEmail(context.Context, string) error
 	VerifyEmail(context.Context, string) error
 	RevokeCredential(context.Context, [16]byte) error
@@ -90,6 +90,15 @@ func (runner Runner) execute(ctx context.Context, args []string) error {
 		}
 	case "login", "password":
 		if len(args) == 2 || len(args) == 3 && args[2] == "--password-stdin" {
+			var accountID string
+			if args[0] == "password" {
+				// Password entry can block while another process switches accounts.
+				snapshot, _ := runner.Service.Snapshot()
+				if snapshot.Account == "" {
+					return errors.New("account setup is still pending")
+				}
+				accountID = snapshot.Account
+			}
 			password, err := runner.password(ctx, len(args) == 3)
 			if err != nil {
 				return err
@@ -97,7 +106,7 @@ func (runner Runner) execute(ctx context.Context, args []string) error {
 			if args[0] == "login" {
 				return runner.Service.Login(ctx, args[1], password)
 			}
-			return runner.Service.SetPassword(ctx, args[1], password)
+			return runner.Service.SetPassword(ctx, accountID, args[1], password)
 		}
 	case "email":
 		if len(args) == 2 {

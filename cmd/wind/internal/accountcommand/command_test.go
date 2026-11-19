@@ -17,6 +17,7 @@ type commandService struct {
 	changed  chan struct{}
 	action   string
 	username string
+	target   string
 	secret   string
 	revoked  [16]byte
 	failure  error
@@ -40,8 +41,8 @@ func (service *commandService) Login(_ context.Context, username, password strin
 	service.action, service.username, service.secret = "login", username, password
 	return service.failure
 }
-func (service *commandService) SetPassword(_ context.Context, username, password string) error {
-	service.action, service.username, service.secret = "password", username, password
+func (service *commandService) SetPassword(_ context.Context, accountID, username, password string) error {
+	service.action, service.target, service.username, service.secret = "password", accountID, username, password
 	return service.failure
 }
 func (service *commandService) RequestEmail(_ context.Context, email string) error {
@@ -67,6 +68,7 @@ func (output *lines) WriteLines(values ...string) {
 }
 
 func TestAccountCommandsDispatchSecretsWithoutEcho(t *testing.T) {
+	const activeAccount = "active-account"
 	id := [16]byte{17}
 	for _, scenario := range []struct {
 		args                     []string
@@ -80,7 +82,7 @@ func TestAccountCommandsDispatchSecretsWithoutEcho(t *testing.T) {
 		{[]string{"revoke", base64.RawURLEncoding.EncodeToString(id[:])}, "revoke", "", ""},
 	} {
 		t.Run(scenario.action, func(t *testing.T) {
-			service := &commandService{value: account.Snapshot{State: account.Ready}}
+			service := &commandService{value: account.Snapshot{State: account.Ready, Account: activeAccount}}
 			output := &lines{}
 			runner := Runner{Service: service, Input: strings.NewReader("a local password\r\n"), Output: output}
 			if code := runner.Run(context.Background(), scenario.args); code != ResultOK {
@@ -88,6 +90,9 @@ func TestAccountCommandsDispatchSecretsWithoutEcho(t *testing.T) {
 			}
 			if service.action != scenario.action || service.username != scenario.username || service.secret != scenario.secret {
 				t.Fatalf("wrong operation: %+v", service)
+			}
+			if scenario.action == "password" && service.target != activeAccount {
+				t.Fatal("password edit lost its account target")
 			}
 			if scenario.action == "revoke" && service.revoked != id {
 				t.Fatal("credential identity changed")

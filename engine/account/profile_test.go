@@ -87,6 +87,44 @@ func TestProfileEmailRequiresDeliveredCodeAndSurvivesRestartAndRefresh(t *testin
 	}
 }
 
+func TestPasswordEditRejectsAnAccountSwitchBeforeSending(t *testing.T) {
+	config, selected := accountFixture(t)
+	replacement := otherAccount(t, config, selected)
+	replacement.Username = "new-login"
+	store := &MemoryStore{record: cachedRecord(selected)}
+	config.Store = store
+	calls := 0
+	config.Client = clientFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		if request.URL.Path != "/v1/accounts/password" || request.Header.Get("Authorization") != "Bearer "+replacement.Secret {
+			t.Fatalf("unexpected login edit request: %s", request.URL.Path)
+		}
+		return accountReply(t, http.StatusOK, replacement), nil
+	})
+	service := testService(t, config)
+	opened, _ := service.Snapshot()
+
+	// Another process selects a new account while this process still shows the old one.
+	if _, err := store.Update(t.Context(), func(Record) (Record, error) {
+		return cachedRecord(replacement), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err := service.SetPassword(t.Context(), opened.Account, "new-login", "new-password")
+	if !errors.Is(err, ErrSuperseded) || calls != 0 {
+		t.Fatalf("stale edit sent an account write: err = %v, requests = %d", err, calls)
+	}
+
+	current, _ := testService(t, config).Snapshot()
+	if err := service.SetPassword(t.Context(), current.Account, "new-login", "new-password"); err != nil {
+		t.Fatal(err)
+	}
+	updated, _ := service.Snapshot()
+	if calls != 1 || updated.Account != current.Account || updated.Username != "new-login" {
+		t.Fatalf("login edit did not update the selected account: requests = %d, account = %s, username = %s", calls, updated.Account, updated.Username)
+	}
+}
+
 func TestNicknameCooldownSynchronizesAuthorityProfileWithoutSwitchingAccount(t *testing.T) {
 	config, issued := accountFixture(t)
 	config.Store = &MemoryStore{record: cachedRecord(issued)}
