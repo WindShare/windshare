@@ -7,6 +7,7 @@ import { encodeBody, encodeMessage, MESSAGE_KIND, type MessageKind } from '../..
 import type { ReceiverSessionRuntime } from '../../src/session/runtime'
 import { createProtocolOperationIdentity, createProtocolSessionIdentity } from '../../src/session/identities'
 import { transferDirectZipFileV1, type DirectZipOrderedFileV1, type DirectZipOutputSessionV1 } from '../../src/transfer/direct-zip'
+import { contentPayload } from '../protocol/delivery-vectors'
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
 import { deferred, id, SHARE } from '../session/v2-send-fixture'
 
@@ -15,11 +16,8 @@ interface IdentityVector extends VectorCase {
   readonly shareInstanceB64: string
   readonly fileIdB64: string
 }
-interface ObjectVector extends VectorCase { readonly domain: string; readonly canonicalCborB64: string }
 const identity = loadVectorFile(new URL('../../../core/testvectors/v2-identity.json', import.meta.url))
   .cases[0] as IdentityVector
-const revision = loadVectorFile(new URL('../../../core/testvectors/v2-sender-objects.json', import.meta.url))
-  .cases.find(value => (value as ObjectVector).domain === 'windshare/v2 object/file-revision') as ObjectVector
 const bytes = (value: string) => new Uint8Array(b64ToBytes(value))
 const ROUTES: BlockRouteEligibility = {
   active: true, allows: () => true, assertActive: () => undefined, subscribe: () => () => undefined,
@@ -45,7 +43,7 @@ function fixture() {
     if (kind === MESSAGE_KIND.openRevisions) {
       response = MESSAGE_KIND.openResults
       body = encodeBody(new Map<number, unknown>([
-        [0, 1], [1, [[fileId, 0, bytes(revision.canonicalCborB64), leaseId, 120_000, 60_000]]],
+        [0, 1], [1, [[fileId, 0, contentPayload('file-revision'), leaseId, 120_000, 60_000]]],
       ]))
     } else if (kind === MESSAGE_KIND.renewLease) {
       response = MESSAGE_KIND.leaseResult

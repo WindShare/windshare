@@ -36,7 +36,6 @@ const (
 	chunkSize                           = 1 << 20
 	minChunkSize                        = 1 << 10
 	maxChunkSize                        = 4 << 20
-	segmentBytes                 uint64 = 16 << 30
 	maxFrameBytes                       = 64 << 10
 	maxOperationPlaintext               = 65492
 	maxFragmentPayload                  = 65440
@@ -106,11 +105,6 @@ const (
 	domainSenderKey       = "windshare/v2 sender-key\x00"
 	domainShareID         = "windshare/v2 share-id\x00"
 	domainDescriptor      = "windshare/v2 object/descriptor"
-	domainCatalogPage     = "windshare/v2 object/catalog-page"
-	domainDirectoryError  = "windshare/v2 object/directory-error"
-	domainRevision        = "windshare/v2 object/file-revision"
-	domainBlockRecord     = "windshare/v2 object/block-record"
-	domainOfflineCommit   = "windshare/v2 object/offline-commit"
 	domainClientHello     = "windshare/v2 client-hello\x00"
 	domainServerHello     = "windshare/v2 server-hello\x00"
 	domainProtocolSession = "windshare/v2 protocol-session\x00"
@@ -125,10 +119,6 @@ const (
 	domainRelayIdentity   = "windshare/v2 relay-identity\x00"
 
 	labelDescriptor  = "windshare/v2 descriptor"
-	labelCatalog     = "windshare/v2 catalog"
-	labelFileObject  = "windshare/v2 file-object"
-	labelRevision    = "windshare/v2 file-revision"
-	labelFileSegment = "windshare/v2 file-segment"
 	labelSessionAuth = "windshare/v2 session-auth"
 	labelTrafficR2S  = "windshare/v2 traffic/receiver-to-sender"
 	labelTrafficS2R  = "windshare/v2 traffic/sender-to-receiver"
@@ -142,29 +132,25 @@ type vectorFile struct {
 }
 
 type fixture struct {
-	readSecret     []byte
-	edSeed         []byte
-	edPrivate      ed25519.PrivateKey
-	edPublic       ed25519.PublicKey
-	pkHash         []byte
-	shareInstance  []byte
-	shareIDRaw     []byte
-	shareID        string
-	syntheticRoot  []byte
-	directoryID    []byte
-	fileID         []byte
-	generation     []byte
-	fileRevision   []byte
-	operationID    []byte
-	receiverID     []byte
-	descriptorKey  []byte
-	catalogKey     []byte
-	fileObjectKey  []byte
-	revisionKey    []byte
-	fileSegmentKey []byte
+	readSecret    []byte
+	edSeed        []byte
+	edPrivate     ed25519.PrivateKey
+	edPublic      ed25519.PublicKey
+	pkHash        []byte
+	shareInstance []byte
+	shareIDRaw    []byte
+	shareID       string
+	syntheticRoot []byte
+	directoryID   []byte
+	fileID        []byte
+	generation    []byte
+	fileRevision  []byte
+	operationID   []byte
+	receiverID    []byte
+	descriptorKey []byte
 }
 
-type senderObjectVector struct {
+type descriptorObjectVector struct {
 	Name                 string `json:"name"`
 	Domain               string `json:"domain"`
 	ContextB64           string `json:"contextB64"`
@@ -177,8 +163,7 @@ type senderObjectVector struct {
 	ObjectB64            string `json:"objectB64"`
 }
 
-type sealedObject struct {
-	domain            string
+type sealedDescriptor struct {
 	context           []byte
 	key               []byte
 	nonce             []byte
@@ -275,28 +260,15 @@ func TestCanonicalCBORHostileVariantsRejected(t *testing.T) {
 
 func buildVectorFiles(t *testing.T) []vectorFile {
 	f := newFixture(t)
-	objects := buildSenderObjects(t, f)
-	objectCases := make([]any, 0, len(objects))
-	for _, object := range objects {
-		objectCases = append(objectCases, senderObjectVector{
-			Name:                 object.domain,
-			Domain:               object.domain,
-			ContextB64:           b64(object.context),
-			ContextHashB64:       b64(hash(object.context)),
-			KeyB64:               b64(object.key),
-			NonceB64:             b64(object.nonce),
-			CanonicalCBORB64:     b64(object.plain),
-			AADB64:               b64(object.aad),
-			SignaturePreimageB64: b64(object.signaturePreimage),
-			ObjectB64:            b64(object.encoded),
-		})
-	}
+	descriptor := buildDescriptorObject(t, f)
+	block := canonicalBlockRecord(t, f)
 	return []vectorFile{
 		{Version: 1, Kind: "v2-identity", Description: "Suite 0x02 link identity and domain-separated HKDF contract.", Cases: []any{identityCase(t, f)}},
-		{Version: 1, Kind: "v2-sender-objects", Description: "Version-3 sender objects: canonical CBOR, AES-GCM and Ed25519 over SHA-256 identity and sealed-object commitments.", Cases: objectCases},
-		{Version: 1, Kind: "v2-session", Description: "Canonical v2 relay endpoint/identity, purpose-bound register/resume/stop proofs, relay control-frame and proof refusals, connection probes, route controls, lane admission, X25519 transcript, traffic keys and sender controls.", Cases: sessionCases(t, f, objects)},
+		{Version: 1, Kind: "v2-descriptor-object", Description: "Version-3 bootstrap descriptor with canonical CBOR, AES-GCM and a sender signature.", Cases: []any{descriptor.vector()}},
+		{Version: 1, Kind: "v2-content-payloads", Description: "Canonical CBOR payloads carried by authenticated online sessions.", Cases: contentPayloadCases(t, f, block)},
+		{Version: 1, Kind: "v2-session", Description: "Canonical v2 relay endpoint/identity, purpose-bound register/resume/stop proofs, relay control-frame and proof refusals, connection probes, route controls, lane admission, X25519 transcript, traffic keys and sender controls.", Cases: sessionCases(t, f, descriptor.encoded)},
 		{Version: 1, Kind: "v2-session-controls", Description: "Independent reachability and TURN session messages, with envelope authentication and distinct message kinds.", Cases: sessionControlCases(t, f)},
-		{Version: 1, Kind: "v2-fragment", Description: "Authenticated BLOCK_FRAGMENT fixed layout and allocation limits.", Cases: fragmentCases(t, f, objects)},
+		{Version: 1, Kind: "v2-fragment", Description: "Authenticated BLOCK_FRAGMENT fixed layout and allocation limits.", Cases: fragmentCases(f, block)},
 		{Version: 1, Kind: "name-collision-v1", Description: "Deterministic collision names preserve extensions when a complete stem scalar fits; otherwise the full name is shortened on UTF-8 scalar boundaries.", Cases: buildNameCollisionVectorCases(t)},
 		{Version: 1, Kind: "v2-semantics", Description: "R0 resource, operation-final, selection/timing, ZIP member, lifecycle and crash-commit state contracts.", Cases: semanticCases(t)},
 	}
@@ -320,30 +292,23 @@ func newFixture(t *testing.T) *fixture {
 	readSecret := sequence(0x00, 16)
 	fileID := sequence(0x70, 16)
 	revision := sequence(0x90, 16)
-	fileObjectKey := derive(t, readSecret, labelFileObject, slices.Concat(shareInstance, fileID))
-	revisionKey := derive(t, fileObjectKey, labelRevision, revision)
-	var segment [8]byte
 	return &fixture{
-		readSecret:     readSecret,
-		edSeed:         seed,
-		edPrivate:      private,
-		edPublic:       public,
-		pkHash:         pkHash,
-		shareInstance:  shareInstance,
-		shareIDRaw:     shareIDRaw,
-		shareID:        base64.RawURLEncoding.EncodeToString(shareIDRaw),
-		syntheticRoot:  sequence(0x50, 16),
-		directoryID:    sequence(0x60, 16),
-		fileID:         fileID,
-		generation:     sequence(0x80, 16),
-		fileRevision:   revision,
-		operationID:    sequence(0xb0, 16),
-		receiverID:     sequence(0xc0, 16),
-		descriptorKey:  derive(t, readSecret, labelDescriptor, pkHash),
-		catalogKey:     derive(t, readSecret, labelCatalog, shareInstance),
-		fileObjectKey:  fileObjectKey,
-		revisionKey:    revisionKey,
-		fileSegmentKey: derive(t, revisionKey, labelFileSegment, segment[:]),
+		readSecret:    readSecret,
+		edSeed:        seed,
+		edPrivate:     private,
+		edPublic:      public,
+		pkHash:        pkHash,
+		shareInstance: shareInstance,
+		shareIDRaw:    shareIDRaw,
+		shareID:       base64.RawURLEncoding.EncodeToString(shareIDRaw),
+		syntheticRoot: sequence(0x50, 16),
+		directoryID:   sequence(0x60, 16),
+		fileID:        fileID,
+		generation:    sequence(0x80, 16),
+		fileRevision:  revision,
+		operationID:   sequence(0xb0, 16),
+		receiverID:    sequence(0xc0, 16),
+		descriptorKey: derive(t, readSecret, labelDescriptor, pkHash),
 	}
 }
 
@@ -364,103 +329,21 @@ func identityCase(t *testing.T, f *fixture) any {
 		"links":              capabilityLinkCases(t, f),
 		"copiedLinks":        copiedCapabilityLinkCases(t, f),
 		"descriptorKeyB64":   b64(f.descriptorKey),
-		"catalogKeyB64":      b64(f.catalogKey),
 		"fileIdB64":          b64(f.fileID),
-		"fileObjectKeyB64":   b64(f.fileObjectKey),
-		"fileRevisionB64":    b64(f.fileRevision),
-		"revisionKeyB64":     b64(f.revisionKey),
-		"segment":            "0",
-		"fileSegmentKeyB64":  b64(f.fileSegmentKey),
 	}
 }
 
-func buildSenderObjects(t *testing.T, f *fixture) []sealedObject {
+func buildDescriptorObject(t *testing.T, f *fixture) sealedDescriptor {
 	t.Helper()
 	descriptor := map[uint64]any{
 		0: uint64(1), 1: uint64(2), 2: uint64(2), 3: f.shareInstance,
 		4: f.syntheticRoot, 5: uint64(chunkSize), 6: uint64(0x07),
 		7: []byte(f.edPublic), 8: uint64(1700000000), 9: "windshare/path/v3-unicode-15.0.0",
 	}
-	descriptorContext := slices.Concat([]byte{suite}, f.pkHash, f.shareIDRaw)
-
-	entries := []any{
-		[]any{uint64(1), f.directoryID, "photos", nil, int64(1700000100), uint64(0), uint64(1)},
-		[]any{uint64(2), f.fileID, "readme.txt", uint64(2097175), int64(1700000200), uint64(123000000), uint64(2)},
-	}
-	page := map[uint64]any{
-		0: uint64(1), 1: f.shareInstance, 2: f.syntheticRoot, 3: f.generation,
-		4: uint64(0), 5: true, 6: make([]byte, 32), 7: entries, 8: uint64(0),
-	}
-	pageContext := slices.Concat(f.shareInstance, f.syntheticRoot, u32(0))
-	directoryError := map[uint64]any{
-		0: uint64(2), 1: f.shareInstance, 2: f.directoryID, 3: fixed(0xa0, 16),
-		4: uint64(0x2007), 5: true, 6: uint64(1000),
-	}
-	directoryErrorContext := slices.Concat(f.shareInstance, f.directoryID)
-
-	revision := map[uint64]any{
-		0: uint64(2), 1: f.shareInstance, 2: f.fileID, 3: f.fileRevision,
-		4: uint64(2097175), 5: int64(1700000200), 6: uint64(123000000), 7: uint64(2),
-		8: fixed(0xa4, 32),
-	}
-	revisionContext := slices.Concat(f.shareInstance, f.fileID)
-
-	data := []byte("WindShare v2 last block")
-	block := map[uint64]any{
-		0: uint64(1), 1: f.shareInstance, 2: f.fileID, 3: f.fileRevision,
-		4: uint64(2), 5: data,
-	}
-	blockContext := slices.Concat(f.shareInstance, f.fileID, f.fileRevision, u64(2), u32(uint32(len(data))))
-	objects := []sealedObject{
-		sealObject(t, f, domainDescriptor, descriptorContext, f.descriptorKey, fixed(0xd0, 12), canonical(t, descriptor)),
-		sealObject(t, f, domainCatalogPage, pageContext, f.catalogKey, fixed(0xdc, 12), canonical(t, page)),
-		sealObject(t, f, domainDirectoryError, directoryErrorContext, f.catalogKey, fixed(0x08, 12), canonical(t, directoryError)),
-		sealObject(t, f, domainRevision, revisionContext, f.fileObjectKey, fixed(0xe8, 12), canonical(t, revision)),
-		sealObject(t, f, domainBlockRecord, blockContext, f.fileSegmentKey, fixed(0xf4, 12), canonical(t, block)),
-	}
-	digests := make([][]byte, 0, len(objects))
-	var totalCipherBytes uint64
-	for _, object := range objects {
-		digests = append(digests, hash(object.encoded))
-		totalCipherBytes += uint64(len(object.encoded))
-	}
-	offlineCommit := map[uint64]any{
-		0: uint64(1), 1: f.shareInstance, 2: offlineMerkleRoot(digests), 3: uint64(1700003600),
-		4: fixed(0x30, 32), 5: uint64(len(objects)), 6: totalCipherBytes,
-	}
-	return append(objects, sealObject(
-		t, f, domainOfflineCommit, slices.Clone(f.shareInstance), f.descriptorKey,
-		fixed(0x14, 12), canonical(t, offlineCommit),
-	))
-}
-
-func offlineMerkleRoot(objectDigests [][]byte) []byte {
-	digests := make([][]byte, len(objectDigests))
-	for index, digest := range objectDigests {
-		digests[index] = slices.Clone(digest)
-	}
-	slices.SortFunc(digests, bytes.Compare)
-	nodes := make([][]byte, len(digests))
-	for index, digest := range digests {
-		nodes[index] = hash(slices.Concat([]byte{0}, digest))
-	}
-	for len(nodes) > 1 {
-		next := make([][]byte, 0, (len(nodes)+1)/2)
-		for index := 0; index < len(nodes); index += 2 {
-			right := nodes[index]
-			if index+1 < len(nodes) {
-				right = nodes[index+1]
-			}
-			next = append(next, hash(slices.Concat([]byte{1}, nodes[index], right)))
-		}
-		nodes = next
-	}
-	return slices.Clone(nodes[0])
-}
-
-func sealObject(t *testing.T, f *fixture, domain string, context, key, nonce, plain []byte) sealedObject {
-	t.Helper()
-	block, err := aes.NewCipher(key)
+	context := slices.Concat([]byte{suite}, f.pkHash, f.shareIDRaw)
+	plain := canonical(t, descriptor)
+	nonce := fixed(0xd0, 12)
+	block, err := aes.NewCipher(f.descriptorKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -472,19 +355,79 @@ func sealObject(t *testing.T, f *fixture, domain string, context, key, nonce, pl
 	header[0] = senderObjectWireVersion
 	binary.BigEndian.PutUint32(header[4:], uint32(len(plain)+aead.Overhead()))
 	contextHash := hash(context)
-	aad := slices.Concat([]byte(domain), []byte{0}, contextHash, header)
+	aad := slices.Concat([]byte(domainDescriptor), []byte{0}, contextHash, header)
 	sealed := aead.Seal(nil, nonce, plain, aad)
 	prefix := slices.Concat(header, nonce, sealed)
-	preimage := slices.Concat([]byte(domain), []byte{0}, contextHash, hash(prefix))
+	preimage := slices.Concat([]byte(domainDescriptor), []byte{0}, contextHash, hash(prefix))
 	signature := ed25519.Sign(f.edPrivate, preimage)
-	return sealedObject{
-		domain: domain, context: slices.Clone(context), key: slices.Clone(key), nonce: slices.Clone(nonce),
-		plain: slices.Clone(plain), aad: aad, signaturePreimage: preimage,
-		encoded: slices.Concat(prefix, signature),
+	return sealedDescriptor{
+		context: context, key: f.descriptorKey, nonce: nonce, plain: plain, aad: aad,
+		signaturePreimage: preimage, encoded: slices.Concat(prefix, signature),
 	}
 }
 
-func sessionCases(t *testing.T, f *fixture, objects []sealedObject) []any {
+func (descriptor sealedDescriptor) vector() descriptorObjectVector {
+	return descriptorObjectVector{
+		Name:                 domainDescriptor,
+		Domain:               domainDescriptor,
+		ContextB64:           b64(descriptor.context),
+		ContextHashB64:       b64(hash(descriptor.context)),
+		KeyB64:               b64(descriptor.key),
+		NonceB64:             b64(descriptor.nonce),
+		CanonicalCBORB64:     b64(descriptor.plain),
+		AADB64:               b64(descriptor.aad),
+		SignaturePreimageB64: b64(descriptor.signaturePreimage),
+		ObjectB64:            b64(descriptor.encoded),
+	}
+}
+
+func contentPayloadCases(t *testing.T, f *fixture, block []byte) []any {
+	t.Helper()
+	entries := []any{
+		[]any{uint64(1), f.directoryID, "photos", nil, int64(1700000100), uint64(0), uint64(1)},
+		[]any{uint64(2), f.fileID, "readme.txt", uint64(2097175), int64(1700000200), uint64(123000000), uint64(2)},
+	}
+	page := map[uint64]any{
+		0: uint64(1), 1: f.shareInstance, 2: f.syntheticRoot, 3: f.generation,
+		4: uint64(0), 5: true, 6: make([]byte, 32), 7: entries, 8: uint64(0),
+	}
+	directoryFailure := map[uint64]any{
+		0: uint64(2), 1: f.shareInstance, 2: f.directoryID, 3: fixed(0xa0, 16),
+		4: uint64(0x2007), 5: true, 6: uint64(1000),
+	}
+	type contentPayloadVector struct {
+		Name             string `json:"name"`
+		CanonicalCBORB64 string `json:"canonicalCborB64"`
+	}
+	return []any{
+		contentPayloadVector{"catalog-page", b64(canonical(t, page))},
+		contentPayloadVector{"directory-failure", b64(canonical(t, directoryFailure))},
+		contentPayloadVector{"file-revision", b64(canonicalFileRevision(t, f))},
+		contentPayloadVector{"block-record", b64(block)},
+	}
+}
+
+func canonicalFileRevision(t *testing.T, f *fixture) []byte {
+	t.Helper()
+	revision := map[uint64]any{
+		0: uint64(2), 1: f.shareInstance, 2: f.fileID, 3: f.fileRevision,
+		4: uint64(2097175), 5: int64(1700000200), 6: uint64(123000000), 7: uint64(2),
+		8: fixed(0xa4, 32),
+	}
+	return canonical(t, revision)
+}
+
+func canonicalBlockRecord(t *testing.T, f *fixture) []byte {
+	t.Helper()
+	data := []byte("WindShare v2 last block")
+	block := map[uint64]any{
+		0: uint64(1), 1: f.shareInstance, 2: f.fileID, 3: f.fileRevision,
+		4: uint64(2), 5: data,
+	}
+	return canonical(t, block)
+}
+
+func sessionCases(t *testing.T, f *fixture, descriptor []byte) []any {
 	t.Helper()
 	receiverPrivate := fixed(0x11, 32)
 	senderPrivate := fixed(0x51, 32)
@@ -571,20 +514,11 @@ func sessionCases(t *testing.T, f *fixture, objects []sealedObject) []any {
 	laneRejectSignature := ed25519.Sign(f.edPrivate, slices.Concat([]byte(domainLaneReject), hash(laneRejectBody)))
 	laneReject := slices.Concat(laneRejectBody, laneRejectSignature)
 
-	var revisionObject []byte
-	for _, candidate := range objects {
-		if candidate.domain == domainRevision {
-			revisionObject = candidate.plain
-			break
-		}
-	}
-	if revisionObject == nil {
-		t.Fatal("file-revision vector object is missing")
-	}
+	revisionPayload := canonicalFileRevision(t, f)
 	openOperationID := fixed(0xe1, 16)
 	leaseID := fixed(0xb1, 16)
 	openResultsUnsigned := map[uint64]any{
-		0: uint64(1), 1: []any{[]any{f.fileID, uint64(0), revisionObject, leaseID, uint64(leaseTTLSeconds * 1000), uint64(leaseRenewWindowSeconds * 1000)}},
+		0: uint64(1), 1: []any{[]any{f.fileID, uint64(0), revisionPayload, leaseID, uint64(leaseTTLSeconds * 1000), uint64(leaseRenewWindowSeconds * 1000)}},
 	}
 	openResultsUnsignedBytes := canonical(t, openResultsUnsigned)
 	openResultsPlain := canonical(t, map[uint64]any{0: uint64(4), 1: openOperationID, 2: cbor.RawMessage(openResultsUnsignedBytes)})
@@ -603,7 +537,7 @@ func sessionCases(t *testing.T, f *fixture, objects []sealedObject) []any {
 		1, 1, fixed(0xa1, 12), leaseResultPlain,
 	)
 
-	descriptorDigest := hash(objects[0].encoded)
+	descriptorDigest := hash(descriptor)
 	resumeToken := fixed(0xa1, 32)
 	resumeHash := hash(resumeToken)
 	relayBaseURL := "HTTPS://RELAY.EXAMPLE:443/base/?token=a%20b"
@@ -632,8 +566,8 @@ func sessionCases(t *testing.T, f *fixture, objects []sealedObject) []any {
 		[]byte("WS2K"), []byte{wireVersion, 0, 0, 0}, f.shareIDRaw, f.shareInstance, descriptorDigest,
 	)
 	join := slices.Concat([]byte("WS2J"), []byte{wireVersion, 0, 0, 0}, f.shareIDRaw)
-	descriptorUpload := encodeDescriptorUpload(objects[0].encoded)
-	descriptorDelivery := encodeDescriptorDelivery(fixed(0xe1, 8), objects[0].encoded)
+	descriptorUpload := encodeDescriptorUpload(descriptor)
+	descriptorDelivery := encodeDescriptorDelivery(fixed(0xe1, 8), descriptor)
 	resumeChallengeID := fixed(0x02, 16)
 	resumeChallengeNonce := fixed(0x42, 32)
 	resumeExpires := expires + 1
@@ -707,7 +641,7 @@ func sessionCases(t *testing.T, f *fixture, objects []sealedObject) []any {
 		[]byte("WS2A"), []byte{wireVersion, 0, 0, 0}, u64(connectionProbeNonce),
 	)
 	relayControls := relayControlFixture{
-		f: f, descriptor: objects[0].encoded, relayIdentity: relayIdentity, resumeHash: resumeHash, expires: expires,
+		f: f, descriptor: descriptor, relayIdentity: relayIdentity, resumeHash: resumeHash, expires: expires,
 	}
 
 	registrationVector := map[string]any{
@@ -759,12 +693,12 @@ func sessionCases(t *testing.T, f *fixture, objects []sealedObject) []any {
 		},
 		registrationVector,
 		relayCapacityRegistrationVector(f, registrationVector),
-		descriptorUploadAuthorizationVectors(f, objects[0].encoded, relayIdentity, resumeHash, expires),
+		descriptorUploadAuthorizationVectors(f, descriptor, relayIdentity, resumeHash, expires),
 		relayControlFrameDecodingVectors(relayControls),
 		relayControlProofVectors(relayControls),
 		relayCapacityDecodingVectors(relayControls),
 		relayCapacityProofVectors(relayControls),
-		relayCapacityDescriptorVectors(f, descriptorUploadAuthorizationVectors(f, objects[0].encoded, relayIdentity, resumeHash, expires)),
+		relayCapacityDescriptorVectors(f, descriptorUploadAuthorizationVectors(f, descriptor, relayIdentity, resumeHash, expires)),
 		relaySessionCreditVectors(opaqueRelaySessionID),
 		relayDeliveryConsumedVectors(opaqueRelaySessionID),
 		relayDeliveryTotalsVectors(opaqueRelaySessionID, "relay-settlement-notice", "WS2N"),
@@ -792,7 +726,7 @@ func sessionCases(t *testing.T, f *fixture, objects []sealedObject) []any {
 		map[string]any{
 			"name": "relative-lease-open-results", "shareInstanceB64": b64(f.shareInstance),
 			"protocolSessionIdB64": b64(protocolSessionID), "laneId": attachedLaneID, "laneEpoch": attachedLaneEpoch, "sequence": "0",
-			"operationIdB64": b64(openOperationID), "fileIdB64": b64(f.fileID), "revisionObjectB64": b64(revisionObject),
+			"operationIdB64": b64(openOperationID), "fileIdB64": b64(f.fileID), "revisionObjectB64": b64(revisionPayload),
 			"leaseIdB64": b64(leaseID), "leaseTtlMilliseconds": fmt.Sprint(leaseTTLSeconds * 1000), "renewAfterMilliseconds": fmt.Sprint(leaseRenewWindowSeconds * 1000),
 			"trafficKeyB64": b64(s2r), "semanticBodyCborB64": b64(openResultsUnsignedBytes),
 			"plaintextB64": b64(openResultsPlain), "nonceB64": b64(fixed(0x91, 12)), "aadB64": b64(openResultsAAD), "envelopeB64": b64(openResultsEnvelope),
@@ -836,28 +770,17 @@ func sealEnvelope(t *testing.T, key, shareInstance, protocolSessionID []byte, la
 	return slices.Concat(header, nonce, ciphertext), aad
 }
 
-func fragmentCases(t *testing.T, f *fixture, objects []sealedObject) []any {
-	return []any{singleFragmentCase(t, f, objects), maximumFragmentCase(f)}
+func fragmentCases(f *fixture, block []byte) []any {
+	return []any{singleFragmentCase(f, block), maximumFragmentCase(f)}
 }
 
-func singleFragmentCase(t *testing.T, f *fixture, objects []sealedObject) any {
-	t.Helper()
-	var object []byte
-	for _, candidate := range objects {
-		if candidate.domain == domainBlockRecord {
-			object = candidate.plain
-			break
-		}
-	}
-	if object == nil {
-		t.Fatal("block-record vector object is missing")
-	}
-	recordID := first(hash(object), 16)
-	fragment := encodeSingleFragment(f.operationID, recordID, object)
+func singleFragmentCase(f *fixture, block []byte) any {
+	recordID := first(hash(block), 16)
+	fragment := encodeSingleFragment(f.operationID, recordID, block)
 	return map[string]any{
 		"name": "single-fragment-block-record", "operationIdB64": b64(f.operationID), "recordIdB64": b64(recordID),
-		"fragmentIndex": uint32(0), "fragmentCount": uint32(1), "totalLength": fmt.Sprint(len(object)),
-		"payloadLength": fmt.Sprint(len(object)), "fragmentPlaintextB64": b64(fragment),
+		"fragmentIndex": uint32(0), "fragmentCount": uint32(1), "totalLength": fmt.Sprint(len(block)),
+		"payloadLength": fmt.Sprint(len(block)), "fragmentPlaintextB64": b64(fragment),
 		"maxFrameBytes": maxFrameBytes, "maxOperationPlaintextBytes": maxOperationPlaintext,
 		"maxFragmentPayloadBytes": maxFragmentPayload, "maxBlockRecordBytes": maxBlockRecordBytes,
 		"fragmentTimeoutSeconds": fragmentTimeoutSeconds, "tombstoneSeconds": fragmentTombstoneSeconds,

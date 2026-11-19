@@ -32,15 +32,22 @@ export interface Suite02CapabilityLink extends Suite02CapabilityKey {
   readonly nodeAliases: readonly string[]
 }
 
-async function shareIdentity(
+export async function suite02ShareIdRaw(
   pkHash: Uint8Array,
   runtime: CryptoRuntime,
-): Promise<{ readonly raw: Uint8Array<ArrayBuffer>; readonly text: string }> {
+): Promise<Uint8Array<ArrayBuffer>> {
   if (pkHash.byteLength !== SUITE02_PK_HASH_BYTES) {
     throw new CryptoError('malformed-key', 'Suite-02 pkHash must be exactly 16 bytes')
   }
   const digest = await sha256(concatBytes([SHARE_ID_DOMAIN, pkHash]), runtime)
-  const raw = digest.slice(0, SUITE02_SHARE_ID_BYTES)
+  return digest.slice(0, SUITE02_SHARE_ID_BYTES)
+}
+
+async function shareIdentity(
+  pkHash: Uint8Array,
+  runtime: CryptoRuntime,
+): Promise<{ readonly raw: Uint8Array<ArrayBuffer>; readonly text: string }> {
+  const raw = await suite02ShareIdRaw(pkHash, runtime)
   return { raw, text: encodeBase64Url(raw) }
 }
 

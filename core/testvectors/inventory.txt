@@ -5,11 +5,12 @@ name-collision-v1.json
 path-policy.json
 portable-path-vectors.json
 turn-control-v4.json
+v2-content-payloads.json
+v2-descriptor-object.json
 v2-fragment.json
 v2-identity.json
 v2-peer-signaling.json
 v2-semantics.json
-v2-sender-objects.json
 v2-session-controls.json
 v2-session.json
 # ArtifactChoiceIdentity, ReceiveIntent, DirectoryAdmissionV2, FileCheckpointV2, its local lineage index,

@@ -26,7 +26,7 @@ func semanticCases(t *testing.T) []any {
 	t.Helper()
 	limits := map[string]string{
 		"minChunkBytes": fmt.Sprint(minChunkSize), "maxChunkBytes": fmt.Sprint(maxChunkSize),
-		"segmentBytes": fmt.Sprint(segmentBytes), "maxFileBytes": fmt.Sprint(maxFileBytes),
+		"maxFileBytes":        fmt.Sprint(maxFileBytes),
 		"maxCatalogPageBytes": fmt.Sprint(maxCatalogPageBytes), "maxCatalogPageEntries": fmt.Sprint(maxCatalogPageEntries),
 		"maxDirectoryEntries": fmt.Sprint(maxDirectoryEntries), "maxSelectedRoots": fmt.Sprint(maxSelectedRoots),
 		"maxSelectedRootNameBytes": fmt.Sprint(maxSelectedRootNameBytes), "maxDescriptorBytes": fmt.Sprint(maxDescriptorBytes),

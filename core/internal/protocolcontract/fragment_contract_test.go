@@ -9,17 +9,7 @@ import (
 
 func TestBlockFragmentMutationMatrix(t *testing.T) {
 	f := newFixture(t)
-	objects := buildSenderObjects(t, f)
-	var record []byte
-	for _, candidate := range objects {
-		if candidate.domain == domainBlockRecord {
-			record = candidate.encoded
-			break
-		}
-	}
-	if record == nil {
-		t.Fatal("block record fixture is missing")
-	}
+	record := canonicalBlockRecord(t, f)
 	recordID := first(hash(record), 16)
 	fragment := encodeSingleFragment(f.operationID, recordID, record)
 	if !validSingleFragment(fragment, f.operationID, recordID) {

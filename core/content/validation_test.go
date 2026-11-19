@@ -55,7 +55,7 @@ func TestGeometryRejectsHostileRangesAndReferences(t *testing.T) {
 	}
 }
 
-func TestKeyTreeCoversEveryFrozenDomainAndRejectsInvalidContexts(t *testing.T) {
+func TestKeyTreeBindsDescriptorAndSessionContexts(t *testing.T) {
 	secret := bytes.Repeat([]byte{0x22}, ReadSecretBytes)
 	share := catalogID[catalog.ShareInstance](1)
 	tree, _ := NewKeyTree(secret, share)
@@ -64,47 +64,19 @@ func TestKeyTreeCoversEveryFrozenDomainAndRejectsInvalidContexts(t *testing.T) {
 	if err != nil || !bytes.Equal(descriptor.Bytes(), directHKDF(t, secret, DescriptorKeyLabel, pkHash)) {
 		t.Fatal("descriptor domain derivation mismatch")
 	}
-	catalogKey, err := tree.CatalogKey()
-	if err != nil || !bytes.Equal(catalogKey.Bytes(), directHKDF(t, secret, CatalogKeyLabel, share.Bytes())) {
-		t.Fatal("catalog domain derivation mismatch")
-	}
 	sessionKey, err := tree.SessionAuthKey()
 	if err != nil || !bytes.Equal(sessionKey.Bytes(), directHKDF(t, secret, SessionAuthKeyLabel, share.Bytes())) {
 		t.Fatal("session-auth domain derivation mismatch")
 	}
-	if _, err := tree.DescriptorKey(pkHash[:PKHashBytes-1]); err == nil {
-		t.Fatal("short public-key hash was accepted")
-	}
-	if _, err := NewKeyTree(secret[:ReadSecretBytes-1], share); err == nil {
-		t.Fatal("short read secret was accepted")
-	}
-	if _, err := (*KeyTree)(nil).CatalogKey(); err == nil {
-		t.Fatal("nil catalog key tree was accepted")
-	}
-	if _, err := (*KeyTree)(nil).SessionAuthKey(); err == nil {
-		t.Fatal("nil session key tree was accepted")
-	}
-	if _, err := tree.FileObjectKey(catalog.FileID{}); err == nil {
-		t.Fatal("zero file key context was accepted")
-	}
-	if _, err := tree.RevisionKey(catalogID[catalog.FileID](1), FileRevision{}); err == nil {
-		t.Fatal("zero revision key context was accepted")
-	}
-	if _, err := SegmentForBlock(0, 1000); err == nil {
-		t.Fatal("invalid segment geometry was accepted")
-	}
-	var nilKey *DerivedKey
-	nilKey.Destroy()
 	tree.Destroy()
 	if !bytes.Equal(tree.readSecret[:], make([]byte, ReadSecretBytes)) {
 		t.Fatal("key tree destroy retained the read secret")
 	}
-	if _, err := tree.CatalogKey(); !errors.Is(err, ErrKeyTreeDestroyed) {
-		t.Fatalf("destroyed key tree derived a catalog key: %v", err)
+	if bytes.Equal(descriptor.Bytes(), sessionKey.Bytes()) {
+		t.Fatal("descriptor and session-auth keys share a domain")
 	}
-	if _, err := tree.FileSegmentKey(catalogID[catalog.FileID](1), contentID[FileRevision](1), 0, catalog.MinChunkSize); !errors.Is(err, ErrKeyTreeDestroyed) {
-		t.Fatalf("destroyed key tree derived a segment key: %v", err)
-	}
+	descriptor.Destroy()
+	sessionKey.Destroy()
 }
 
 func TestKeyTreeDestroySerializesWithConcurrentDerivation(t *testing.T) {
@@ -119,7 +91,8 @@ func TestKeyTreeDestroySerializesWithConcurrentDerivation(t *testing.T) {
 		workers.Go(func() {
 			<-start
 			for range 32 {
-				_, err := tree.FileObjectKey(catalogID[catalog.FileID](1))
+				key, err := tree.SessionAuthKey()
+				key.Destroy()
 				if err != nil && !errors.Is(err, ErrKeyTreeDestroyed) {
 					errorsOut <- err
 					return

@@ -12,6 +12,7 @@ import { decode, encode, rfc8949EncodeOptions } from 'cborg'
 import { expect } from 'vitest'
 
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
+import { descriptorObjectVector } from './delivery-vectors'
 
 const textEncoder = new TextEncoder()
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex')
@@ -23,7 +24,6 @@ const SENDER_OBJECT_NONCE_BYTES = 12
 const SENDER_OBJECT_SIGNATURE_BYTES = 64
 const OPERATION_HEADER_BYTES = 16
 const OPERATION_NONCE_BYTES = 12
-const OBJECT_DOMAIN_PREFIX = 'windshare/v2 object/'
 
 interface IdentityVector extends VectorCase {
   readonly suite: number
@@ -35,25 +35,7 @@ interface IdentityVector extends VectorCase {
   readonly shareId: string
   readonly keyString: string
   readonly descriptorKeyB64: string
-  readonly catalogKeyB64: string
-  readonly fileIdB64: string
-  readonly fileObjectKeyB64: string
-  readonly fileRevisionB64: string
-  readonly revisionKeyB64: string
-  readonly segment: string
-  readonly fileSegmentKeyB64: string
-}
 
-interface SenderObjectVector extends VectorCase {
-  readonly domain: string
-  readonly contextB64: string
-  readonly contextHashB64: string
-  readonly keyB64: string
-  readonly nonceB64: string
-  readonly canonicalCborB64: string
-  readonly aadB64: string
-  readonly signaturePreimageB64: string
-  readonly objectB64: string
 }
 
 export interface SenderControlVector {
@@ -79,10 +61,6 @@ export interface OpenedControl {
 export const identity = loadVectorFile(
   new URL('../../../core/testvectors/v2-identity.json', import.meta.url),
 ).cases[0] as IdentityVector
-export const senderObjects = loadVectorFile(
-  new URL('../../../core/testvectors/v2-sender-objects.json', import.meta.url),
-).cases as SenderObjectVector[]
-
 export function bytes(value: string): Uint8Array {
   return b64ToBytes(value)
 }
@@ -175,23 +153,6 @@ export function expectCanonicalCBOR(encoded: Uint8Array): void {
   expect(Uint8Array.from(encode(decoded, rfc8949EncodeOptions))).toEqual(encoded)
 }
 
-export function offlineMerkleRoot(objectDigests: readonly Uint8Array[]): Uint8Array {
-  let nodes = objectDigests
-    .map((digest) => digest.slice())
-    .sort((left, right) => Buffer.compare(left, right))
-    .map((digest) => sha256(concat(Uint8Array.of(0), digest)))
-  while (nodes.length > 1) {
-    const next: Uint8Array[] = []
-    for (let index = 0; index < nodes.length; index += 2) {
-      const left = nodes[index]!
-      const right = nodes[index + 1] ?? left
-      next.push(sha256(concat(Uint8Array.of(1), left, right)))
-    }
-    nodes = next
-  }
-  return nodes[0]!
-}
-
 function requireMap(value: unknown, label: string): Map<number, unknown> {
   if (!(value instanceof Map)) throw new TypeError(`${label} must be a CBOR map`)
   return value as Map<number, unknown>
@@ -217,12 +178,6 @@ interface ContextAxis {
   readonly offset: number
 }
 
-interface SenderObjectBinding {
-  readonly context: Uint8Array
-  readonly key: Uint8Array
-  readonly axes: readonly ContextAxis[]
-}
-
 function bindContext(parts: readonly (readonly [string, Uint8Array])[]): {
   readonly context: Uint8Array
   readonly axes: readonly ContextAxis[]
@@ -236,99 +191,19 @@ function bindContext(parts: readonly (readonly [string, Uint8Array])[]): {
   return { context: concat(...parts.map(([, value]) => value)), axes }
 }
 
-function descriptorSemantics(): Map<number, unknown> {
-  return requireMap(
-    decode(bytes(senderObjects[0]!.canonicalCborB64), { useMaps: true }),
-    'descriptor',
-  )
-}
-
-function senderIdentityFromDescriptor(): {
-  readonly pkHash: Uint8Array
-  readonly shareIdRaw: Uint8Array
-} {
-  const descriptor = descriptorSemantics()
-  const senderPublicKey = requireBytes(descriptor.get(7), 'descriptor sender key', 32)
-  const pkHash = sha256(concat(utf8('windshare/v2 sender-key\0'), senderPublicKey)).subarray(0, 16)
-  const shareIdRaw = sha256(concat(utf8('windshare/v2 share-id\0'), pkHash)).subarray(0, 12)
-  return { pkHash, shareIdRaw }
-}
-
-function senderObjectBinding(
-  domain: string,
-  semanticBody: Map<number, unknown>,
-): SenderObjectBinding {
-  const readSecret = bytes(identity.readSecretB64)
-  const { pkHash, shareIdRaw } = senderIdentityFromDescriptor()
-  if (domain === `${OBJECT_DOMAIN_PREFIX}descriptor`) {
-    const suite = requireNumber(semanticBody.get(2), 'descriptor suite')
-    const bound = bindContext([
+function descriptorBinding(semanticBody: Map<number, unknown>) {
+  const senderKey = requireBytes(semanticBody.get(7), 'descriptor sender key', 32)
+  const pkHash = sha256(concat(utf8('windshare/v2 sender-key\0'), senderKey)).subarray(0, 16)
+  const shareId = sha256(concat(utf8('windshare/v2 share-id\0'), pkHash)).subarray(0, 12)
+  const suite = requireNumber(semanticBody.get(2), 'descriptor suite')
+  return {
+    ...bindContext([
       ['suite', Uint8Array.of(suite)],
       ['pk-hash', pkHash],
-      ['share-id', shareIdRaw],
-    ])
-    return { ...bound, key: derive(readSecret, 'windshare/v2 descriptor', pkHash) }
+      ['share-id', shareId],
+    ]),
+    key: derive(bytes(identity.readSecretB64), 'windshare/v2 descriptor', pkHash),
   }
-  const shareInstance = requireBytes(semanticBody.get(1), `${domain} ShareInstance`, 16)
-  if (domain === `${OBJECT_DOMAIN_PREFIX}catalog-page`) {
-    const directoryId = requireBytes(semanticBody.get(2), 'catalog DirectoryID', 16)
-    const pageIndex = requireNumber(semanticBody.get(4), 'catalog page index')
-    const bound = bindContext([
-      ['share-instance', shareInstance],
-      ['directory-id', directoryId],
-      ['page-index', u32(pageIndex)],
-    ])
-    return { ...bound, key: derive(readSecret, 'windshare/v2 catalog', shareInstance) }
-  }
-  if (domain === `${OBJECT_DOMAIN_PREFIX}directory-error`) {
-    const directoryId = requireBytes(semanticBody.get(2), 'directory error DirectoryID', 16)
-    const bound = bindContext([
-      ['share-instance', shareInstance],
-      ['directory-id', directoryId],
-    ])
-    return { ...bound, key: derive(readSecret, 'windshare/v2 catalog', shareInstance) }
-  }
-  if (domain === `${OBJECT_DOMAIN_PREFIX}file-revision`) {
-    const fileId = requireBytes(semanticBody.get(2), 'revision FileID', 16)
-    const bound = bindContext([
-      ['share-instance', shareInstance],
-      ['file-id', fileId],
-    ])
-    return {
-      ...bound,
-      key: derive(readSecret, 'windshare/v2 file-object', concat(shareInstance, fileId)),
-    }
-  }
-  if (domain === `${OBJECT_DOMAIN_PREFIX}block-record`) {
-    const fileId = requireBytes(semanticBody.get(2), 'block FileID', 16)
-    const fileRevision = requireBytes(semanticBody.get(3), 'block FileRevision', 16)
-    const localBlockIndex = BigInt(requireNumber(semanticBody.get(4), 'local block index'))
-    const data = requireBytes(semanticBody.get(5), 'block data')
-    const bound = bindContext([
-      ['share-instance', shareInstance],
-      ['file-id', fileId],
-      ['file-revision', fileRevision],
-      ['local-block-index', u64(localBlockIndex)],
-      ['data-length', u32(data.byteLength)],
-    ])
-    const fileObjectKey = derive(
-      readSecret,
-      'windshare/v2 file-object',
-      concat(shareInstance, fileId),
-    )
-    const revisionKey = derive(fileObjectKey, 'windshare/v2 file-revision', fileRevision)
-    const chunkSize = BigInt(requireNumber(descriptorSemantics().get(5), 'descriptor chunk size'))
-    const segment = (localBlockIndex * chunkSize) / (16n << 30n)
-    return {
-      ...bound,
-      key: derive(revisionKey, 'windshare/v2 file-segment', u64(segment)),
-    }
-  }
-  if (domain === `${OBJECT_DOMAIN_PREFIX}offline-commit`) {
-    const bound = bindContext([['share-instance', shareInstance]])
-    return { ...bound, key: derive(readSecret, 'windshare/v2 descriptor', pkHash) }
-  }
-  throw new TypeError(`unknown sender object domain ${domain}`)
 }
 
 function flipped(value: Uint8Array): Uint8Array {
@@ -337,14 +212,12 @@ function flipped(value: Uint8Array): Uint8Array {
   return result
 }
 
-export function expectSenderObject(
-  vector: SenderObjectVector,
-  senderPublicKey: ReturnType<typeof ed25519Public>,
-): void {
+export function expectDescriptorObject(senderPublicKey: ReturnType<typeof ed25519Public>): void {
+  const vector = descriptorObjectVector
   const object = bytes(vector.objectB64)
   const semanticBytes = bytes(vector.canonicalCborB64)
   const semanticBody = requireMap(decode(semanticBytes, { useMaps: true }), vector.domain)
-  const binding = senderObjectBinding(vector.domain, semanticBody)
+  const binding = descriptorBinding(semanticBody)
   const contextHash = sha256(binding.context)
   const cipherLength = Buffer.from(object).readUInt32BE(4)
   const cipherEnd = SENDER_OBJECT_HEADER_BYTES + SENDER_OBJECT_NONCE_BYTES + cipherLength
@@ -401,7 +274,7 @@ export function expectSenderObject(
     utf8(vector.domain),
     Uint8Array.of(0),
     contextHash,
-    hostilePrefix,
+    sha256(hostilePrefix),
   )
   expect(verify(null, hostilePreimage, senderPublicKey, signature)).toBe(false)
   const hostileSignature = signature.slice()

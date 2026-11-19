@@ -17,6 +17,7 @@ import {
   type CatalogPage,
   type ShareDescriptor,
 } from '../../src/catalog/records'
+import { contentPayload } from '../protocol/delivery-vectors'
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
 import { createSignedRootCollisionFixture } from './signed-root-collision-fixture'
 import { runSignedCatalogOwnershipProbe } from './signed-catalog-ownership-probe'
@@ -25,11 +26,6 @@ interface IdentityVector extends VectorCase {
 
   readonly senderPublicKeyB64: string
   readonly shareInstanceB64: string
-}
-
-interface SenderObjectVector extends VectorCase {
-  readonly domain: string
-  readonly canonicalCborB64: string
 }
 
 function bytes(encoded: string): Uint8Array<ArrayBuffer> {
@@ -140,7 +136,7 @@ describe('v2 catalog multi-receiver ownership', () => {
     const store = new ObservedCatalogStore(stageGate.promise)
     const client = new CatalogClient({
       descriptor: fixture.descriptor,
-      operations: { fetchPage: async () => fixture.catalogObject },
+      operations: { fetchPage: async () => fixture.catalogPayload },
       store,
     })
     const cancellation = new AbortController()
@@ -166,7 +162,7 @@ describe('v2 catalog multi-receiver ownership', () => {
     })
     const publisher = new CatalogClient({
       descriptor: fixture.descriptor,
-      operations: { fetchPage: async () => fixture.catalogObject },
+      operations: { fetchPage: async () => fixture.catalogPayload },
       store,
     })
     const observer = new CatalogClient({
@@ -200,7 +196,7 @@ describe('v2 catalog multi-receiver ownership', () => {
     const client = new CatalogClient({
       descriptor: fixture.descriptor,
       operations: {
-        fetchPage: async () => fixture.catalogObject,
+        fetchPage: async () => fixture.catalogPayload,
         failProtocol: async (reason) => { protocolFailures.push(reason) },
       },
       store,
@@ -215,10 +211,7 @@ describe('v2 catalog multi-receiver ownership', () => {
     const identity = loadVectorFile(
       new URL('../../../core/testvectors/v2-identity.json', import.meta.url),
     ).cases[0] as IdentityVector
-    const catalogObject = loadVectorFile(
-      new URL('../../../core/testvectors/v2-sender-objects.json', import.meta.url),
-    ).cases.find((candidate) => (candidate as SenderObjectVector).domain ===
-      'windshare/v2 object/catalog-page') as SenderObjectVector
+    const catalogPayload = contentPayload('catalog-page')
     const directoryId = Uint8Array.from({ length: 16 }, (_, index) => 0x50 + index)
     const descriptor: ShareDescriptor = Object.freeze({
       wireVersion: 2,
@@ -239,7 +232,7 @@ describe('v2 catalog multi-receiver ownership', () => {
       fetchPage: async () => {
         fetches += 1
         await Promise.resolve()
-        return bytes(catalogObject.canonicalCborB64)
+        return catalogPayload
       },
     }
     const options = {
@@ -272,7 +265,7 @@ describe('v2 catalog multi-receiver ownership', () => {
       operations: {
         fetchPage: async () => {
           fetches += 1
-          return fixture.catalogObject
+          return fixture.catalogPayload
         },
       },
       store,
@@ -337,10 +330,7 @@ describe('v2 catalog multi-receiver ownership', () => {
     const identity = loadVectorFile(
       new URL('../../../core/testvectors/v2-identity.json', import.meta.url),
     ).cases[0] as IdentityVector
-    const catalogObject = loadVectorFile(
-      new URL('../../../core/testvectors/v2-sender-objects.json', import.meta.url),
-    ).cases.find((candidate) => (candidate as SenderObjectVector).domain ===
-      'windshare/v2 object/catalog-page') as SenderObjectVector
+    const catalogPayload = contentPayload('catalog-page')
     const directoryId = Uint8Array.from({ length: 16 }, (_, index) => 0x50 + index)
     const descriptor: ShareDescriptor = Object.freeze({
       wireVersion: 2,
@@ -364,7 +354,7 @@ describe('v2 catalog multi-receiver ownership', () => {
             attemptId: Uint8Array.from({ length: 16 }, () => 0x31),
             discoveredEntries: 257n,
           })
-          return bytes(catalogObject.canonicalCborB64)
+          return catalogPayload
         },
       },
       store: new MemoryCatalogPageStore(),
@@ -386,15 +376,12 @@ function catalogVectorFixture(): {
   readonly descriptor: ShareDescriptor
 
   readonly directoryId: Uint8Array<ArrayBuffer>
-  readonly catalogObject: Uint8Array<ArrayBuffer>
+  readonly catalogPayload: Uint8Array<ArrayBuffer>
 } {
   const identity = loadVectorFile(
     new URL('../../../core/testvectors/v2-identity.json', import.meta.url),
   ).cases[0] as IdentityVector
-  const catalogObject = loadVectorFile(
-    new URL('../../../core/testvectors/v2-sender-objects.json', import.meta.url),
-  ).cases.find((candidate) => (candidate as SenderObjectVector).domain ===
-    'windshare/v2 object/catalog-page') as SenderObjectVector
+  const catalogPayload = contentPayload('catalog-page')
   const directoryId = Uint8Array.from({ length: 16 }, (_, index) => 0x50 + index)
   return Object.freeze({
     descriptor: Object.freeze({
@@ -412,7 +399,7 @@ function catalogVectorFixture(): {
     }),
 
     directoryId,
-    catalogObject: bytes(catalogObject.canonicalCborB64),
+    catalogPayload,
   })
 }
 

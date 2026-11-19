@@ -18,7 +18,8 @@ import { joinBrowserRelays } from '../../src/receiver/browser-join'
 import { InitialJoinControl, type InitialJoinState } from '../../src/receiver/initial-join'
 import type { RecoveryObservation } from '../../src/receiver/recovery-observation'
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
-import { identity, namedCase, senderObjects } from '../protocol/r0-contract-support'
+import { descriptorObjectVector } from '../protocol/delivery-vectors'
+import { identity, namedCase } from '../protocol/r0-contract-support'
 import { deferred } from './v2-supervisor-fixture'
 
 type Response = 'silent' | 'valid' | 'signature' | 'version' | 'key-agreement'
@@ -81,7 +82,7 @@ class HandshakeChannel implements FrameChannel {
 async function shareFixture() {
   const capability = { suite: 2 as const, readSecret: b64ToBytes(identity.readSecretB64).slice(),
     pkHash: b64ToBytes(identity.pkHashB64).slice(), shareIdRaw: b64ToBytes(identity.shareIdRawB64).slice(), shareId: identity.shareId }
-  const descriptorObject = b64ToBytes(senderObjects.find(value => value.domain === 'windshare/v2 object/descriptor')!.objectB64).slice()
+  const descriptorObject = b64ToBytes(descriptorObjectVector.objectB64).slice()
   const descriptor = await openShareDescriptor(descriptorObject, capability)
   return { capability, descriptorObject, descriptor }
 }

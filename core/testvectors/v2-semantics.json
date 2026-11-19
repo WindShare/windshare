@@ -67,7 +67,6 @@
         "scanWorkShare": "4194304",
         "sealedCacheProcess": "2147483648",
         "sealedCacheShare": "268435456",
-        "segmentBytes": "17179869184",
         "senderCrashGraceSeconds": "60",
         "stableHandlesProcess": "1024",
         "stableHandlesSession": "32",

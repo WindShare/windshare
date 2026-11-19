@@ -296,12 +296,8 @@ func newRelayProtocolFixture() (relayProtocolFixture, error) {
 	if err != nil {
 		return relayProtocolFixture{}, fmt.Errorf("convert relay sender key hash: %w", err)
 	}
-	binding, err := senderobject.NewDescriptorBinding(pkHash[:], shareID[:])
-	if err != nil {
-		return relayProtocolFixture{}, fmt.Errorf("bind relay descriptor: %w", err)
-	}
-	descriptor, err := senderobject.Seal(
-		binding,
+	descriptor, err := senderobject.SealDescriptor(
+		pkHash[:], shareID[:],
 		bytes.Repeat([]byte{relayDescriptorKeyByte}, sha256.Size),
 		privateKey,
 		bytes.Repeat([]byte{relayDescriptorNonceByte}, senderobject.NonceBytes),

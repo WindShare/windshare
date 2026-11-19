@@ -1,46 +1,27 @@
-import { concatBytes, copyBytes, encodeUint32, equalBytes } from './bytes'
-import type { Ed25519Verifier } from './ed25519'
+import { concatBytes, copyBytes, equalBytes } from './bytes'
 import { sha256 } from './digest'
-import { suite02SenderKeyHash } from './suite02-link'
-import { SUITE02_DERIVED_KEY_BYTES } from './suite02-key-derivation'
+import type { Ed25519Verifier } from './ed25519'
+import { SUITE02_DERIVED_KEY_BYTES, SUITE02_PK_HASH_BYTES } from './suite02-key-derivation'
+import {
+  SUITE02,
+  SUITE02_SHARE_ID_BYTES,
+  suite02SenderKeyHash,
+  suite02ShareIdRaw,
+  type Suite02CapabilityKey,
+} from './suite02-link'
 import { type CryptoRuntime, defaultCryptoRuntime, importAesGcmKey } from './webcrypto'
 
-// Object signature revisions are independent of the v2 session wire and suite-02 keys.
-export const SENDER_OBJECT_WIRE_VERSION = 3
-export const SENDER_OBJECT_HEADER_BYTES = 8
-export const SENDER_OBJECT_NONCE_BYTES = 12
-export const SENDER_OBJECT_SIGNATURE_BYTES = 64
-export const SENDER_OBJECT_TAG_BYTES = 16
-export const SENDER_OBJECT_FIXED_BYTES =
-  SENDER_OBJECT_HEADER_BYTES + SENDER_OBJECT_NONCE_BYTES + SENDER_OBJECT_SIGNATURE_BYTES
+export const DESCRIPTOR_OBJECT_BYTES = 16 << 10
 
-export const SENDER_OBJECT_DOMAIN = Object.freeze({
-  descriptor: 'windshare/v2 object/descriptor',
-  catalogPage: 'windshare/v2 object/catalog-page',
-  directoryError: 'windshare/v2 object/directory-error',
-  revision: 'windshare/v2 object/file-revision',
-  blockRecord: 'windshare/v2 object/block-record',
-  offlineCommit: 'windshare/v2 object/offline-commit',
-} as const)
-
-export type SenderObjectDomain = (typeof SENDER_OBJECT_DOMAIN)[keyof typeof SENDER_OBJECT_DOMAIN]
-
-const OBJECT_LIMITS: Readonly<Record<SenderObjectDomain, number>> = Object.freeze({
-  [SENDER_OBJECT_DOMAIN.descriptor]: 16 << 10,
-  [SENDER_OBJECT_DOMAIN.catalogPage]: 60 << 10,
-  [SENDER_OBJECT_DOMAIN.directoryError]: 16 << 10,
-  [SENDER_OBJECT_DOMAIN.revision]: 16 << 10,
-  [SENDER_OBJECT_DOMAIN.blockRecord]: (4 << 20) + 512,
-  [SENDER_OBJECT_DOMAIN.offlineCommit]: 16 << 10,
-})
-
-const TEXT_ENCODER = new TextEncoder()
-const SHARE_ID_DOMAIN = TEXT_ENCODER.encode('windshare/v2 share-id\0')
-const IDENTITY_BYTES = 16
-const PK_HASH_BYTES = 16
-const SHARE_ID_BYTES = 12
-const MAX_UINT32 = 0xffff_ffff
-const MAX_UINT64 = 0xffff_ffff_ffff_ffffn
+// Descriptor signature revisions are independent of the session wire and suite-02 keys.
+const WIRE_VERSION = 3
+const HEADER_BYTES = 8
+const NONCE_BYTES = 12
+const SIGNATURE_BYTES = 64
+const TAG_BYTES = 16
+const PREFIX_BYTES = HEADER_BYTES + NONCE_BYTES
+const FIXED_BYTES = PREFIX_BYTES + SIGNATURE_BYTES
+const DESCRIPTOR_DOMAIN = new TextEncoder().encode('windshare/v2 object/descriptor\0')
 
 export type SenderObjectErrorKind =
   | 'authentication'
@@ -60,34 +41,7 @@ export class SenderObjectError extends Error {
   }
 }
 
-const BINDING_CONSTRUCTOR = Symbol('sender-object-binding')
-
-export class SenderObjectBinding {
-  readonly domain: SenderObjectDomain
-  readonly maxBytes: number
-  readonly #context: Uint8Array<ArrayBuffer>
-
-  constructor(
-    constructorAuthority: symbol,
-    domain: SenderObjectDomain,
-    context: Uint8Array,
-    maxBytes: number,
-  ) {
-    if (constructorAuthority !== BINDING_CONSTRUCTOR) {
-      throw new SenderObjectError('binding', 'sender object bindings must use a typed factory')
-    }
-    this.domain = domain
-    this.maxBytes = maxBytes
-    this.#context = context.slice()
-    Object.freeze(this)
-  }
-
-  get context(): Uint8Array<ArrayBuffer> {
-    return this.#context.slice()
-  }
-}
-
-interface ParsedSenderObject {
+interface DescriptorEnvelope {
   readonly header: Uint8Array<ArrayBuffer>
   readonly nonce: Uint8Array<ArrayBuffer>
   readonly ciphertextAndTag: Uint8Array<ArrayBuffer>
@@ -95,331 +49,108 @@ interface ParsedSenderObject {
   readonly signature: Uint8Array<ArrayBuffer>
 }
 
-function nonzeroIdentity(value: Uint8Array, label: string): Uint8Array<ArrayBuffer> {
-  if (value.byteLength !== IDENTITY_BYTES || !value.some((item) => item !== 0)) {
-    throw new SenderObjectError('binding', `${label} must be a nonzero 16-byte identity`)
-  }
-  return value.slice()
-}
-
-function boundedUint32(value: number, label: string): number {
-  if (!Number.isInteger(value) || value < 0 || value > MAX_UINT32) {
-    throw new SenderObjectError('binding', `${label} must be an unsigned 32-bit integer`)
-  }
-  return value
-}
-
-function encodeUint64(value: bigint): Uint8Array<ArrayBuffer> {
-  if (value < 0n || value > MAX_UINT64) {
-    throw new SenderObjectError('binding', 'local block index must be an unsigned 64-bit integer')
-  }
-  const encoded = new Uint8Array(8)
-  new DataView(encoded.buffer).setBigUint64(0, value, false)
-  return encoded
-}
-
-function binding(domain: SenderObjectDomain, context: Uint8Array): SenderObjectBinding {
-  return new SenderObjectBinding(BINDING_CONSTRUCTOR, domain, context, OBJECT_LIMITS[domain])
-}
-
-export async function createDescriptorObjectBinding(
-  pkHash: Uint8Array,
-  shareIdRaw: Uint8Array,
-  runtime: CryptoRuntime = defaultCryptoRuntime(),
-): Promise<SenderObjectBinding> {
-  if (pkHash.byteLength !== PK_HASH_BYTES || shareIdRaw.byteLength !== SHARE_ID_BYTES) {
-    throw new SenderObjectError('binding', 'descriptor route identity has an invalid width')
-  }
-  const expected = (await sha256(concatBytes([SHARE_ID_DOMAIN, pkHash]), runtime)).subarray(
-    0,
-    SHARE_ID_BYTES,
-  )
-  if (!equalBytes(expected, shareIdRaw)) {
-    throw new SenderObjectError('binding', 'descriptor share ID does not match pkHash')
-  }
-  return binding(
-    SENDER_OBJECT_DOMAIN.descriptor,
-    concatBytes([Uint8Array.of(2), pkHash, shareIdRaw]),
-  )
-}
-
-export function createCatalogPageObjectBinding(
-  shareInstance: Uint8Array,
-  directoryId: Uint8Array,
-  pageIndex: number,
-): SenderObjectBinding {
-  return binding(
-    SENDER_OBJECT_DOMAIN.catalogPage,
-    concatBytes([
-      nonzeroIdentity(shareInstance, 'share instance'),
-      nonzeroIdentity(directoryId, 'directory ID'),
-      encodeUint32(boundedUint32(pageIndex, 'page index')),
-    ]),
-  )
-}
-
-export function createDirectoryErrorObjectBinding(
-  shareInstance: Uint8Array,
-  directoryId: Uint8Array,
-): SenderObjectBinding {
-  return binding(
-    SENDER_OBJECT_DOMAIN.directoryError,
-    concatBytes([
-      nonzeroIdentity(shareInstance, 'share instance'),
-      nonzeroIdentity(directoryId, 'directory ID'),
-    ]),
-  )
-}
-
-export function createRevisionObjectBinding(
-  shareInstance: Uint8Array,
-  fileId: Uint8Array,
-): SenderObjectBinding {
-  return binding(
-    SENDER_OBJECT_DOMAIN.revision,
-    concatBytes([
-      nonzeroIdentity(shareInstance, 'share instance'),
-      nonzeroIdentity(fileId, 'file ID'),
-    ]),
-  )
-}
-
-export function createBlockRecordObjectBinding(
-  shareInstance: Uint8Array,
-  fileId: Uint8Array,
-  fileRevision: Uint8Array,
-  localBlockIndex: bigint,
-  dataLength: number,
-): SenderObjectBinding {
-  return binding(
-    SENDER_OBJECT_DOMAIN.blockRecord,
-    concatBytes([
-      nonzeroIdentity(shareInstance, 'share instance'),
-      nonzeroIdentity(fileId, 'file ID'),
-      nonzeroIdentity(fileRevision, 'file revision'),
-      encodeUint64(localBlockIndex),
-      encodeUint32(boundedUint32(dataLength, 'data length')),
-    ]),
-  )
-}
-
-export function createOfflineCommitObjectBinding(
-  shareInstance: Uint8Array,
-): SenderObjectBinding {
-  return binding(
-    SENDER_OBJECT_DOMAIN.offlineCommit,
-    nonzeroIdentity(shareInstance, 'share instance'),
-  )
-}
-
-function parseSenderObject(
-  input: Uint8Array,
-  expectedBinding: SenderObjectBinding,
-): ParsedSenderObject {
-  if (input.byteLength > expectedBinding.maxBytes) {
-    throw new SenderObjectError('too-large', 'sender object exceeds its domain limit')
+function parseDescriptorObject(input: Uint8Array): DescriptorEnvelope {
+  if (input.byteLength > DESCRIPTOR_OBJECT_BYTES) {
+    throw new SenderObjectError('too-large', 'descriptor object exceeds its byte limit')
   }
   const object = copyBytes(input)
-  if (object.byteLength < SENDER_OBJECT_FIXED_BYTES + SENDER_OBJECT_TAG_BYTES) {
-    throw new SenderObjectError('malformed', 'sender object is truncated')
+  if (object.byteLength < FIXED_BYTES + TAG_BYTES) {
+    throw new SenderObjectError('malformed', 'descriptor object is truncated')
   }
-  if (
-    object[0] !== SENDER_OBJECT_WIRE_VERSION ||
-    object[1] !== 0 ||
-    object[2] !== 0 ||
-    object[3] !== 0
-  ) {
-    throw new SenderObjectError('malformed', 'sender object header is not canonical')
+  if (object[0] !== WIRE_VERSION || object[1] !== 0 || object[2] !== 0 || object[3] !== 0) {
+    throw new SenderObjectError('malformed', 'descriptor object header is invalid')
   }
-  const ciphertextLength = new DataView(
-    object.buffer,
-    object.byteOffset,
-    SENDER_OBJECT_HEADER_BYTES,
-  ).getUint32(4, false)
-  const prefixLength = SENDER_OBJECT_HEADER_BYTES + SENDER_OBJECT_NONCE_BYTES + ciphertextLength
-  if (
-    ciphertextLength < SENDER_OBJECT_TAG_BYTES ||
-    prefixLength + SENDER_OBJECT_SIGNATURE_BYTES !== object.byteLength
-  ) {
-    throw new SenderObjectError('malformed', 'sender object length is inconsistent')
+
+  const ciphertextLength = new DataView(object.buffer).getUint32(4, false)
+  const prefixEnd = PREFIX_BYTES + ciphertextLength
+  if (ciphertextLength < TAG_BYTES || prefixEnd + SIGNATURE_BYTES !== object.byteLength) {
+    throw new SenderObjectError('malformed', 'descriptor object length is invalid')
   }
+
   return {
-    header: object.subarray(0, SENDER_OBJECT_HEADER_BYTES),
-    nonce: object.subarray(
-      SENDER_OBJECT_HEADER_BYTES,
-      SENDER_OBJECT_HEADER_BYTES + SENDER_OBJECT_NONCE_BYTES,
-    ),
-    ciphertextAndTag: object.subarray(
-      SENDER_OBJECT_HEADER_BYTES + SENDER_OBJECT_NONCE_BYTES,
-      prefixLength,
-    ),
-    prefix: object.subarray(0, prefixLength),
-    signature: object.subarray(prefixLength),
+    header: object.subarray(0, HEADER_BYTES),
+    nonce: object.subarray(HEADER_BYTES, PREFIX_BYTES),
+    ciphertextAndTag: object.subarray(PREFIX_BYTES, prefixEnd),
+    prefix: object.subarray(0, prefixEnd),
+    signature: object.subarray(prefixEnd),
   }
 }
 
-async function contextHash(
-  expectedBinding: SenderObjectBinding,
-  runtime: CryptoRuntime,
-): Promise<Uint8Array<ArrayBuffer>> {
-  if (
-    !(expectedBinding instanceof SenderObjectBinding) ||
-    expectedBinding.context.byteLength === 0 ||
-    OBJECT_LIMITS[expectedBinding.domain] !== expectedBinding.maxBytes
-  ) {
-    throw new SenderObjectError('binding', 'sender object binding is invalid')
-  }
-  return sha256(expectedBinding.context, runtime)
-}
-
-export async function senderObjectAuthenticationData(
-  expectedBinding: SenderObjectBinding,
-  header: Uint8Array,
-  runtime: CryptoRuntime = defaultCryptoRuntime(),
-): Promise<Uint8Array<ArrayBuffer>> {
-  if (header.byteLength !== SENDER_OBJECT_HEADER_BYTES) {
-    throw new SenderObjectError('malformed', 'sender object header has an invalid width')
-  }
-  return concatBytes([
-    TEXT_ENCODER.encode(expectedBinding.domain),
-    Uint8Array.of(0),
-    await contextHash(expectedBinding, runtime),
-    header,
-  ])
-}
-
-export async function senderObjectSignaturePreimage(
-  expectedBinding: SenderObjectBinding,
-  prefix: Uint8Array,
-  runtime: CryptoRuntime = defaultCryptoRuntime(),
-): Promise<Uint8Array<ArrayBuffer>> {
-  // Native hashing keeps full block data out of the portable Ed25519 path.
-  // These independent commitments must not add two serial WebCrypto waits.
-  const [bindingHash, objectHash] = await Promise.all([
-    contextHash(expectedBinding, runtime),
-    sha256(prefix, runtime),
-  ])
-  return concatBytes([
-    TEXT_ENCODER.encode(expectedBinding.domain),
-    Uint8Array.of(0),
-    bindingHash,
-    objectHash,
-  ])
-}
-
-interface PreparedSenderObject extends ParsedSenderObject {
-  readonly aad: Uint8Array<ArrayBuffer>
-  readonly signaturePreimage: Uint8Array<ArrayBuffer>
-}
-
-async function prepareSenderObject(
-  expectedBinding: SenderObjectBinding,
-  object: Uint8Array,
-  runtime: CryptoRuntime,
-): Promise<PreparedSenderObject> {
-  const parsed = parseSenderObject(object, expectedBinding)
-  const [bindingHash, objectHash] = await Promise.all([
-    contextHash(expectedBinding, runtime),
-    sha256(parsed.prefix, runtime),
-  ])
-  const domain = concatBytes([TEXT_ENCODER.encode(expectedBinding.domain), Uint8Array.of(0), bindingHash])
-  return {
-    ...parsed,
-    aad: concatBytes([domain, parsed.header]),
-    signaturePreimage: concatBytes([domain, objectHash]),
-  }
-}
-
-async function verifyPreparedObject(
-  sender: Ed25519Verifier,
-  prepared: PreparedSenderObject,
-): Promise<void> {
-  let valid: boolean
-  try {
-    valid = await sender.verify(prepared.signaturePreimage, prepared.signature)
-  } catch (cause) {
-    throw new SenderObjectError('key', 'Unable to verify Ed25519 sender signature', { cause })
-  }
-  if (!valid) throw new SenderObjectError('signature', 'sender object signature is invalid')
-}
-
-export async function verifySenderObject(
-  expectedBinding: SenderObjectBinding,
-  sender: Ed25519Verifier,
-  object: Uint8Array,
-  runtime: CryptoRuntime = defaultCryptoRuntime(),
-): Promise<void> {
-  await verifyPreparedObject(sender, await prepareSenderObject(expectedBinding, object, runtime))
-}
-
-async function decryptSenderObject(
-  prepared: PreparedSenderObject,
+async function decryptDescriptor(
+  envelope: DescriptorEnvelope,
   keyBytes: Uint8Array,
+  aad: Uint8Array<ArrayBuffer>,
   runtime: CryptoRuntime,
 ): Promise<Uint8Array<ArrayBuffer>> {
-  if (keyBytes.byteLength !== SUITE02_DERIVED_KEY_BYTES) {
-    throw new SenderObjectError('key', 'sender object key must be 32 bytes')
-  }
+  let plaintext: ArrayBuffer
   try {
     const key = await importAesGcmKey(keyBytes, runtime)
-    const plaintext = await runtime.subtle.decrypt(
+    plaintext = await runtime.subtle.decrypt(
       {
         name: 'AES-GCM',
-        iv: prepared.nonce,
-        additionalData: prepared.aad,
-        tagLength: SENDER_OBJECT_TAG_BYTES * 8,
+        iv: envelope.nonce,
+        additionalData: aad,
+        tagLength: TAG_BYTES * 8,
       },
       key,
-      prepared.ciphertextAndTag,
+      envelope.ciphertextAndTag,
     )
-    if (plaintext.byteLength === 0) {
-      throw new SenderObjectError('malformed', 'sender object plaintext is empty')
-    }
-    return new Uint8Array(plaintext)
   } catch (cause) {
-    if (cause instanceof SenderObjectError) throw cause
-    throw new SenderObjectError('authentication', 'sender object ciphertext is invalid', { cause })
+    throw new SenderObjectError('authentication', 'descriptor ciphertext is invalid', { cause })
   }
-}
-
-export async function openSenderObject(
-  expectedBinding: SenderObjectBinding,
-  key: Uint8Array,
-  sender: Ed25519Verifier,
-  object: Uint8Array,
-  runtime: CryptoRuntime = defaultCryptoRuntime(),
-): Promise<Uint8Array<ArrayBuffer>> {
-  const ownedKey = copyBytes(key)
-  try {
-    // One private snapshot defines both the verified commitment and decryption.
-    const prepared = await prepareSenderObject(expectedBinding, object, runtime)
-    await verifyPreparedObject(sender, prepared)
-    return await decryptSenderObject(prepared, ownedKey, runtime)
-  } finally {
-    ownedKey.fill(0)
+  if (plaintext.byteLength === 0) {
+    throw new SenderObjectError('malformed', 'descriptor plaintext is empty')
   }
+  return new Uint8Array(plaintext)
 }
 
 export async function openDescriptorObjectBootstrap(
-  expectedBinding: SenderObjectBinding,
+  route: Pick<Suite02CapabilityKey, 'pkHash' | 'shareIdRaw'>,
   key: Uint8Array,
   object: Uint8Array,
   senderIdentity: (plaintext: Uint8Array) => Ed25519Verifier,
   runtime: CryptoRuntime = defaultCryptoRuntime(),
 ): Promise<Uint8Array<ArrayBuffer>> {
-  if (expectedBinding.domain !== SENDER_OBJECT_DOMAIN.descriptor) {
-    throw new SenderObjectError('binding', 'descriptor bootstrap requires a descriptor binding')
+  if (route.pkHash.byteLength !== SUITE02_PK_HASH_BYTES ||
+      route.shareIdRaw.byteLength !== SUITE02_SHARE_ID_BYTES) {
+    throw new SenderObjectError('binding', 'descriptor route identity has an invalid width')
   }
+  if (key.byteLength !== SUITE02_DERIVED_KEY_BYTES) {
+    throw new SenderObjectError('key', 'descriptor key must be 32 bytes')
+  }
+
+  // Decryption and verification must use the same snapshot across WebCrypto awaits.
+  const envelope = parseDescriptorObject(object)
+  const pkHash = copyBytes(route.pkHash)
+  const shareIdRaw = copyBytes(route.shareIdRaw)
   const ownedKey = copyBytes(key)
   try {
-    const prepared = await prepareSenderObject(expectedBinding, object, runtime)
-    const plaintext = await decryptSenderObject(prepared, ownedKey, runtime)
+    const context = concatBytes([Uint8Array.of(SUITE02), pkHash, shareIdRaw])
+    const [expectedShareId, bindingHash, objectHash] = await Promise.all([
+      suite02ShareIdRaw(pkHash, runtime),
+      sha256(context, runtime),
+      sha256(envelope.prefix, runtime),
+    ])
+    if (!equalBytes(expectedShareId, shareIdRaw)) {
+      throw new SenderObjectError('binding', 'descriptor share ID does not match pkHash')
+    }
+
+    const domain = concatBytes([DESCRIPTOR_DOMAIN, bindingHash])
+    const aad = concatBytes([domain, envelope.header])
+    // The descriptor carries the public key, so decryption precedes verification.
+    const plaintext = await decryptDescriptor(envelope, ownedKey, aad, runtime)
     const sender = senderIdentity(plaintext)
-    const expectedPKHash = expectedBinding.context.subarray(1, 1 + PK_HASH_BYTES)
-    if (!equalBytes(await suite02SenderKeyHash(sender.publicKey, runtime), expectedPKHash)) {
+    if (!equalBytes(await suite02SenderKeyHash(sender.publicKey, runtime), pkHash)) {
       throw new SenderObjectError('signature', 'descriptor sender key does not match link pkHash')
     }
-    await verifyPreparedObject(sender, prepared)
+
+    let valid: boolean
+    try {
+      valid = await sender.verify(concatBytes([domain, objectHash]), envelope.signature)
+    } catch (cause) {
+      throw new SenderObjectError('key', 'Unable to verify Ed25519 sender signature', { cause })
+    }
+    if (!valid) throw new SenderObjectError('signature', 'descriptor sender signature is invalid')
     return plaintext
   } finally {
     ownedKey.fill(0)

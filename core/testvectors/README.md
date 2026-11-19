@@ -1,7 +1,7 @@
 # Cross-runtime contracts
 
-This directory contains interoperability contracts: wire messages, sealed sender
-objects, capability links, canonical paths, naming and diagnostic identities.
+This directory contains interoperability contracts for wire messages, bootstrap
+descriptors, content payloads, capability links, paths, naming and diagnostics.
 Go generates protocol vectors; TypeScript and Rust consume the relevant cases.
 
 Scheduling and retry policies belong to each receiver. Their regressions live in
@@ -21,7 +21,8 @@ Web consumers run under `make web`; Rust consumers run under `make rust`.
 
 ## Contract families
 
-- `v2-*`: sender objects, links, sessions, authenticated content and protocol semantics.
+- `v2-*`: capability links, signed bootstrap descriptors, authenticated sessions,
+  canonical content payloads and protocol semantics.
 - `ed25519-acceptance.json`: independent public-key and signature acceptance decisions
   shared by Go, TypeScript and Rust.
 - `diagnostic-correlation-v1.json`: protocol/session/path/lane identities and their

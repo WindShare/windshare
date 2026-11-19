@@ -1,10 +1,6 @@
 package content
 
 import (
-	"bytes"
-	"crypto/hkdf"
-	"crypto/sha256"
-	"encoding/binary"
 	"errors"
 	"testing"
 	"time"
@@ -144,58 +140,6 @@ func TestBlockRefBindsFileRevisionAndLocalIndex(t *testing.T) {
 	if _, err := NewBlockRef(file, revision, 3, geometry); !errors.Is(err, ErrBlockOutOfRange) {
 		t.Fatalf("invalid ref error = %v", err)
 	}
-}
-
-func TestKeyTreeUsesFrozenDomainSeparatedContexts(t *testing.T) {
-	readSecret := bytes.Repeat([]byte{0x11}, ReadSecretBytes)
-	share := catalogID[catalog.ShareInstance](1)
-	file := catalogID[catalog.FileID](2)
-	revision := contentID[FileRevision](3)
-	tree, err := NewKeyTree(readSecret, share)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fileKey, err := tree.FileObjectKey(file)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantFileKey := directHKDF(t, readSecret, FileObjectKeyLabel, append(share.Bytes(), file.Bytes()...))
-	if !bytes.Equal(fileKey.Bytes(), wantFileKey) {
-		t.Fatalf("file key = %x, want %x", fileKey.Bytes(), wantFileKey)
-	}
-	revisionKey, _ := tree.RevisionKey(file, revision)
-	wantRevisionKey := directHKDF(t, wantFileKey, RevisionKeyLabel, revision.Bytes())
-	if !bytes.Equal(revisionKey.Bytes(), wantRevisionKey) {
-		t.Fatal("revision derivation did not use the frozen hierarchy")
-	}
-
-	segment, err := SegmentForBlock((SegmentPlaintextBytes/uint64(catalog.DefaultChunkSize))*2-1, catalog.DefaultChunkSize)
-	if err != nil || segment != 1 {
-		t.Fatalf("segment = %d, %v", segment, err)
-	}
-	segmentKey, _ := tree.FileSegmentKey(file, revision, (SegmentPlaintextBytes/uint64(catalog.DefaultChunkSize))*2-1, catalog.DefaultChunkSize)
-	var context [8]byte
-	binary.BigEndian.PutUint64(context[:], 1)
-	wantSegmentKey := directHKDF(t, wantRevisionKey, FileSegmentKeyLabel, context[:])
-	if !bytes.Equal(segmentKey.Bytes(), wantSegmentKey) {
-		t.Fatal("segment derivation did not bind its big-endian segment number")
-	}
-
-	otherRevision := contentID[FileRevision](4)
-	otherKey, _ := tree.RevisionKey(file, otherRevision)
-	if bytes.Equal(revisionKey.Bytes(), otherKey.Bytes()) {
-		t.Fatal("different revision identity reused a key")
-	}
-}
-
-func directHKDF(t *testing.T, secret []byte, label string, context []byte) []byte {
-	t.Helper()
-	info := append(append([]byte(label), 0), context...)
-	key, err := hkdf.Key(sha256.New, secret, nil, string(info), DerivedKeyBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return key
 }
 
 func TestFileGeometryBlockPlainLength(t *testing.T) {

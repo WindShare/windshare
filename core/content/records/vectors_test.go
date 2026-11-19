@@ -11,11 +11,11 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 )
 
-type senderObjectVectors struct {
-	Cases []senderObjectVector `json:"cases"`
+type contentPayloadVectors struct {
+	Cases []contentPayloadVector `json:"cases"`
 }
 
-type senderObjectVector struct {
+type contentPayloadVector struct {
 	Name             string `json:"name"`
 	CanonicalCBORB64 string `json:"canonicalCborB64"`
 }
@@ -24,7 +24,7 @@ func TestSessionPayloadsMatchCanonicalCrossRuntimeVectors(t *testing.T) {
 	byName := readPayloadVectors(t)
 	// The record carries both identities. They become expectations for this
 	// codec test after reading the independent fixture values.
-	revision := byName["windshare/v2 object/file-revision"]
+	revision := byName["file-revision"]
 	if len(revision) == 0 {
 		t.Fatal("revision vector is missing")
 	}
@@ -39,7 +39,7 @@ func TestSessionPayloadsMatchCanonicalCrossRuntimeVectors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	block := byName["windshare/v2 object/block-record"]
+	block := byName["block-record"]
 	decoded, err := decoder.DecodeBlock(descriptor, 2, block)
 	if err != nil {
 		t.Fatal(err)
@@ -52,11 +52,11 @@ func TestSessionPayloadsMatchCanonicalCrossRuntimeVectors(t *testing.T) {
 
 func readPayloadVectors(t *testing.T) map[string][]byte {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", "testvectors", "v2-sender-objects.json"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "testvectors", "v2-content-payloads.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var fixtures senderObjectVectors
+	var fixtures contentPayloadVectors
 	if err := json.Unmarshal(raw, &fixtures); err != nil {
 		t.Fatal(err)
 	}

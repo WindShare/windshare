@@ -34,6 +34,7 @@ import {
 import { SessionRuntimeError } from '../../src/session/runtime-types'
 import { fragmentRecord } from './v2-fragment-fixture'
 import { delayWithAbort } from '../../src/content/scheduling/deadlines'
+import { contentPayload } from '../protocol/delivery-vectors'
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
 
 const ALL_ROUTES: BlockRouteEligibility = Object.freeze({
@@ -94,11 +95,6 @@ interface IdentityVector extends VectorCase {
   readonly senderPublicKeyB64: string
   readonly shareInstanceB64: string
   readonly fileIdB64: string
-}
-
-interface SenderObjectVector extends VectorCase {
-  readonly domain: string
-  readonly canonicalCborB64: string
 }
 
 function delayedBlockOperation(first: number, delays: readonly number[], duplicate = false): SessionOperation {
@@ -623,10 +619,7 @@ describe('v2 session block delivery and lease recovery', () => {
     const identityVector = loadVectorFile(
       new URL('../../../core/testvectors/v2-identity.json', import.meta.url),
     ).cases[0] as IdentityVector
-    const revisionVector = loadVectorFile(
-      new URL('../../../core/testvectors/v2-sender-objects.json', import.meta.url),
-    ).cases.find((candidate) => (candidate as SenderObjectVector).domain ===
-      'windshare/v2 object/file-revision') as SenderObjectVector
+    const revisionPayload = contentPayload('file-revision')
     const fileId = vectorBytes(identityVector.fileIdB64)
     const leaseId = identity(24)
     const vectorShare: ShareDescriptor = Object.freeze({
@@ -647,7 +640,7 @@ describe('v2 session block delivery and lease recovery', () => {
               [1, [[
                 fileId,
                 0,
-                vectorBytes(revisionVector.canonicalCborB64),
+                revisionPayload,
                 leaseId,
                 120_000,
                 60_000,

@@ -2,7 +2,6 @@ package content
 
 import (
 	"errors"
-	"fmt"
 	"sync"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -10,16 +9,11 @@ import (
 )
 
 const (
-	ReadSecretBytes       = keyderiv.V2ReadSecretBytes
-	PKHashBytes           = keyderiv.V2PKHashBytes
-	DerivedKeyBytes       = keyderiv.KeyBytes
-	SegmentPlaintextBytes = uint64(16) << 30
+	ReadSecretBytes = keyderiv.V2ReadSecretBytes
+	PKHashBytes     = keyderiv.V2PKHashBytes
+	DerivedKeyBytes = keyderiv.KeyBytes
 
 	DescriptorKeyLabel  = keyderiv.V2DescriptorLabel
-	CatalogKeyLabel     = keyderiv.V2CatalogLabel
-	FileObjectKeyLabel  = keyderiv.V2FileObjectLabel
-	RevisionKeyLabel    = keyderiv.V2RevisionLabel
-	FileSegmentKeyLabel = keyderiv.V2FileSegmentLabel
 	SessionAuthKeyLabel = keyderiv.V2SessionAuthLabel
 )
 
@@ -77,18 +71,6 @@ func (t *KeyTree) DescriptorKey(pkHash []byte) (DerivedKey, error) {
 	return ownDerivedKey(keyderiv.V2DescriptorKey(t.readSecret[:], pkHash))
 }
 
-func (t *KeyTree) CatalogKey() (DerivedKey, error) {
-	if t == nil {
-		return DerivedKey{}, errors.New("content key tree is nil")
-	}
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	if t.destroyed {
-		return DerivedKey{}, ErrKeyTreeDestroyed
-	}
-	return ownDerivedKey(keyderiv.V2CatalogKey(t.readSecret[:], t.share.Bytes()))
-}
-
 func (t *KeyTree) SessionAuthKey() (DerivedKey, error) {
 	if t == nil {
 		return DerivedKey{}, errors.New("content key tree is nil")
@@ -99,79 +81,6 @@ func (t *KeyTree) SessionAuthKey() (DerivedKey, error) {
 		return DerivedKey{}, ErrKeyTreeDestroyed
 	}
 	return ownDerivedKey(keyderiv.V2SessionAuthKey(t.readSecret[:], t.share.Bytes()))
-}
-
-func (t *KeyTree) FileObjectKey(file catalog.FileID) (DerivedKey, error) {
-	if t == nil || file.IsZero() {
-		return DerivedKey{}, errors.New("content file-object key requires a file identity")
-	}
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	if t.destroyed {
-		return DerivedKey{}, ErrKeyTreeDestroyed
-	}
-	return t.fileObjectKey(file)
-}
-
-func (t *KeyTree) fileObjectKey(file catalog.FileID) (DerivedKey, error) {
-	return ownDerivedKey(keyderiv.V2FileObjectKey(t.readSecret[:], t.share.Bytes(), file.Bytes()))
-}
-
-func (t *KeyTree) RevisionKey(file catalog.FileID, revision FileRevision) (DerivedKey, error) {
-	if t == nil {
-		return DerivedKey{}, errors.New("content key tree is nil")
-	}
-	if revision.IsZero() {
-		return DerivedKey{}, errors.New("content revision key requires a revision identity")
-	}
-	if file.IsZero() {
-		return DerivedKey{}, errors.New("content file-object key requires a file identity")
-	}
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	if t.destroyed {
-		return DerivedKey{}, ErrKeyTreeDestroyed
-	}
-	return t.revisionKey(file, revision)
-}
-
-func (t *KeyTree) revisionKey(file catalog.FileID, revision FileRevision) (DerivedKey, error) {
-	fileKey, err := t.fileObjectKey(file)
-	if err != nil {
-		return DerivedKey{}, err
-	}
-	defer fileKey.Destroy()
-	return ownDerivedKey(keyderiv.V2RevisionKey(fileKey.value[:], revision.Bytes()))
-}
-
-func SegmentForBlock(localBlockIndex uint64, chunkSize uint32) (uint64, error) {
-	if !catalog.ValidChunkSize(chunkSize) || SegmentPlaintextBytes%uint64(chunkSize) != 0 {
-		return 0, fmt.Errorf("%w: segment chunk size %d", ErrInvalidGeometry, chunkSize)
-	}
-	// All allowed chunks divide the 16 GiB segment. Dividing the block index
-	// avoids overflowing LocalBlockIndex*chunkSize at the u64 boundary.
-	return localBlockIndex / (SegmentPlaintextBytes / uint64(chunkSize)), nil
-}
-
-func (t *KeyTree) FileSegmentKey(file catalog.FileID, revision FileRevision, localBlockIndex uint64, chunkSize uint32) (DerivedKey, error) {
-	if t == nil || file.IsZero() || revision.IsZero() {
-		return DerivedKey{}, errors.New("content file-segment key requires file and revision identities")
-	}
-	segment, err := SegmentForBlock(localBlockIndex, chunkSize)
-	if err != nil {
-		return DerivedKey{}, err
-	}
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	if t.destroyed {
-		return DerivedKey{}, ErrKeyTreeDestroyed
-	}
-	revisionKey, err := t.revisionKey(file, revision)
-	if err != nil {
-		return DerivedKey{}, err
-	}
-	defer revisionKey.Destroy()
-	return ownDerivedKey(keyderiv.V2FileSegmentKey(revisionKey.value[:], segment))
 }
 
 func (t *KeyTree) Destroy() {

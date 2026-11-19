@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "kind": "v2-content-payloads",
+  "description": "Canonical CBOR payloads carried by authenticated online sessions.",
+  "cases": [
+    {
+      "name": "catalog-page",
+      "canonicalCborB64": "qQABAVBAQUJDREVGR0hJSktMTU5PAlBQUVJTVFVWV1hZWltcXV5fA1CAgYKDhIWGh4iJiouMjY6PBAAF9QZYIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB4KHAVBgYWJjZGVmZ2hpamtsbW5vZnBob3Rvc/YaZVPxZAABhwJQcHFyc3R1dnd4eXp7fH1+f2pyZWFkbWUudHh0GgAgABcaZVPxyBoHVNTAAggA"
+    },
+    {
+      "name": "directory-failure",
+      "canonicalCborB64": "pwACAVBAQUJDREVGR0hJSktMTU5PAlBgYWJjZGVmZ2hpamtsbW5vA1CgoaKjpKWmp6ipqqusra6vBBkgBwX1BhkD6A=="
+    },
+    {
+      "name": "file-revision",
+      "canonicalCborB64": "qQACAVBAQUJDREVGR0hJSktMTU5PAlBwcXJzdHV2d3h5ent8fX5/A1CQkZKTlJWWl5iZmpucnZ6fBBoAIAAXBRplU/HIBhoHVNTABwIIWCCkpaanqKmqq6ytrq+wsbKztLW2t7i5uru8vb6/wMHCww=="
+    },
+    {
+      "name": "block-record",
+      "canonicalCborB64": "pgABAVBAQUJDREVGR0hJSktMTU5PAlBwcXJzdHV2d3h5ent8fX5/A1CQkZKTlJWWl5iZmpucnZ6fBAIFV1dpbmRTaGFyZSB2MiBsYXN0IGJsb2Nr"
+    }
+  ]
+}

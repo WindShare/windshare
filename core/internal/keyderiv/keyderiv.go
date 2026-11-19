@@ -27,10 +27,6 @@ const (
 
 const (
 	V2DescriptorLabel  = "windshare/v2 descriptor"
-	V2CatalogLabel     = "windshare/v2 catalog"
-	V2FileObjectLabel  = "windshare/v2 file-object"
-	V2RevisionLabel    = "windshare/v2 file-revision"
-	V2FileSegmentLabel = "windshare/v2 file-segment"
 	V2SessionAuthLabel = "windshare/v2 session-auth"
 )
 
@@ -63,41 +59,6 @@ func V2DescriptorKey(readSecret, pkHash []byte) ([]byte, error) {
 		return nil, ErrV2KeyMaterial
 	}
 	return deriveV2(readSecret, V2DescriptorLabel, pkHash), nil
-}
-
-// V2CatalogKey scopes all catalog generations to one share instance.
-func V2CatalogKey(readSecret, shareInstance []byte) ([]byte, error) {
-	if len(readSecret) != V2ReadSecretBytes || len(shareInstance) != V2IdentityBytes {
-		return nil, ErrV2KeyMaterial
-	}
-	return deriveV2(readSecret, V2CatalogLabel, shareInstance), nil
-}
-
-// V2FileObjectKey isolates revision descriptors by share and file identities.
-func V2FileObjectKey(readSecret, shareInstance, fileID []byte) ([]byte, error) {
-	if len(readSecret) != V2ReadSecretBytes || len(shareInstance) != V2IdentityBytes || len(fileID) != V2IdentityBytes {
-		return nil, ErrV2KeyMaterial
-	}
-	context := append(append(make([]byte, 0, V2IdentityBytes*2), shareInstance...), fileID...)
-	return deriveV2(readSecret, V2FileObjectLabel, context), nil
-}
-
-// V2RevisionKey ensures a revision change rotates the complete block-key subtree.
-func V2RevisionKey(fileObjectKey, fileRevision []byte) ([]byte, error) {
-	if len(fileObjectKey) != KeyBytes || len(fileRevision) != V2IdentityBytes {
-		return nil, ErrV2KeyMaterial
-	}
-	return deriveV2(fileObjectKey, V2RevisionLabel, fileRevision), nil
-}
-
-// V2FileSegmentKey rotates block keys every 16 GiB without narrowing the segment index.
-func V2FileSegmentKey(revisionKey []byte, segment uint64) ([]byte, error) {
-	if len(revisionKey) != KeyBytes {
-		return nil, ErrV2KeyMaterial
-	}
-	var context [8]byte
-	binary.BigEndian.PutUint64(context[:], segment)
-	return deriveV2(revisionKey, V2FileSegmentLabel, context[:]), nil
 }
 
 // V2SessionAuthKey authenticates the transcript before sender resource admission.

@@ -38,6 +38,6 @@ export function loadVectorFile(url: URL): VectorFile {
   return f as VectorFile;
 }
 
-export function b64ToBytes(b64: string): Uint8Array {
+export function b64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
   return Uint8Array.from(Buffer.from(b64, "base64"));
 }

@@ -1,4 +1,4 @@
-// Package senderobject implements the transport-neutral suite-0x02 object envelope.
+// Package senderobject seals and authenticates the suite-0x02 bootstrap descriptor.
 package senderobject
 
 import (
@@ -10,311 +10,154 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
-	"fmt"
 
+	"github.com/windshare/windshare/core/internal/keyderiv"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/senderauth"
 )
 
 const (
-	// The object version owns the signature construction independently of the v2 session wire.
-	WireVersion    = byte(3)
-	HeaderBytes    = 8
+	// The descriptor version owns the signature construction independently of the session wire.
+	wireVersion    = byte(3)
+	headerBytes    = 8
 	NonceBytes     = 12
-	SignatureBytes = ed25519.SignatureSize
-	TagBytes       = 16
-	FixedBytes     = HeaderBytes + NonceBytes + SignatureBytes
+	signatureBytes = ed25519.SignatureSize
+	tagBytes       = 16
+	prefixBytes    = headerBytes + NonceBytes
+	fixedBytes     = prefixBytes + signatureBytes
 
-	MaxDescriptorBytes     = 16 << 10
-	MaxCatalogPageBytes    = 60 << 10
-	MaxDirectoryErrorBytes = 16 << 10
-	MaxRevisionBytes       = 16 << 10
-	MaxBlockRecordBytes    = (4 << 20) + 512
-	MaxOfflineCommitBytes  = 16 << 10
-)
-
-type Domain string
-
-const (
-	DomainDescriptor     Domain = "windshare/v2 object/descriptor"
-	DomainCatalogPage    Domain = "windshare/v2 object/catalog-page"
-	DomainDirectoryError Domain = "windshare/v2 object/directory-error"
-	DomainRevision       Domain = "windshare/v2 object/file-revision"
-	DomainBlockRecord    Domain = "windshare/v2 object/block-record"
-	DomainOfflineCommit  Domain = "windshare/v2 object/offline-commit"
+	maxDescriptorBytes = 16 << 10
+	descriptorDomain   = "windshare/v2 object/descriptor\x00"
 )
 
 var (
-	ErrBinding   = errors.New("senderobject: invalid semantic binding")
+	ErrBinding   = errors.New("senderobject: invalid descriptor route binding")
 	ErrKey       = errors.New("senderobject: invalid key material")
-	ErrMalformed = errors.New("senderobject: malformed object")
-	ErrTooLarge  = errors.New("senderobject: object exceeds its domain limit")
+	ErrMalformed = errors.New("senderobject: malformed descriptor object")
+	ErrTooLarge  = errors.New("senderobject: descriptor object exceeds its byte limit")
 	ErrSignature = errors.New("senderobject: sender signature is invalid")
 	ErrAuth      = errors.New("senderobject: ciphertext authentication failed")
 )
 
-// Binding owns the exact domain, context, and byte ceiling for one semantic object.
-// Callers cannot construct an unbounded or context-free envelope.
-type Binding struct {
-	domain   Domain
-	context  []byte
-	maxBytes int
+type descriptorBinding struct {
+	pkHash      [link.PKHashBytes]byte
+	contextHash [sha256.Size]byte
 }
 
-func (b Binding) Domain() Domain  { return b.domain }
-func (b Binding) Context() []byte { return bytes.Clone(b.context) }
-func (b Binding) MaxBytes() int   { return b.maxBytes }
-
-func NewDescriptorBinding(pkHash, shareIDRaw []byte) (Binding, error) {
+func bindDescriptor(pkHash, shareIDRaw []byte) (descriptorBinding, error) {
 	if len(pkHash) != link.PKHashBytes || len(shareIDRaw) != link.SenderAuthenticatedShareIDBytes {
-		return Binding{}, ErrBinding
+		return descriptorBinding{}, ErrBinding
 	}
 	expected, err := link.ShareIDForSenderKeyHash(pkHash)
 	if err != nil {
-		return Binding{}, ErrBinding
+		return descriptorBinding{}, ErrBinding
 	}
 	decoded, err := base64.RawURLEncoding.Strict().DecodeString(expected)
-	if err != nil {
-		return Binding{}, ErrBinding
+	if err != nil || !bytes.Equal(decoded, shareIDRaw) {
+		return descriptorBinding{}, ErrBinding
 	}
-	if !bytes.Equal(decoded, shareIDRaw) {
-		return Binding{}, ErrBinding
-	}
-	context := make([]byte, 1+len(pkHash)+len(shareIDRaw))
-	context[0] = link.SuiteSenderAuthenticated
+	context := [1 + link.PKHashBytes + link.SenderAuthenticatedShareIDBytes]byte{link.SuiteSenderAuthenticated}
 	copy(context[1:], pkHash)
-	copy(context[1+len(pkHash):], shareIDRaw)
-	return newBinding(DomainDescriptor, context, MaxDescriptorBytes), nil
+	copy(context[1+link.PKHashBytes:], shareIDRaw)
+	return descriptorBinding{pkHash: [link.PKHashBytes]byte(pkHash), contextHash: sha256.Sum256(context[:])}, nil
 }
 
-func NewCatalogPageBinding(shareInstance, directoryID []byte, page uint32) (Binding, error) {
-	context, err := twoIdentities(shareInstance, directoryID)
+func SealDescriptor(pkHash, shareIDRaw, key []byte, signingKey ed25519.PrivateKey, nonce, plaintext []byte) ([]byte, error) {
+	binding, err := bindDescriptor(pkHash, shareIDRaw)
 	if err != nil {
-		return Binding{}, err
-	}
-	context = binary.BigEndian.AppendUint32(context, page)
-	return newBinding(DomainCatalogPage, context, MaxCatalogPageBytes), nil
-}
-
-func NewDirectoryErrorBinding(shareInstance, directoryID []byte) (Binding, error) {
-	context, err := twoIdentities(shareInstance, directoryID)
-	if err != nil {
-		return Binding{}, err
-	}
-	return newBinding(DomainDirectoryError, context, MaxDirectoryErrorBytes), nil
-}
-
-func NewRevisionBinding(shareInstance, fileID []byte) (Binding, error) {
-	context, err := twoIdentities(shareInstance, fileID)
-	if err != nil {
-		return Binding{}, err
-	}
-	return newBinding(DomainRevision, context, MaxRevisionBytes), nil
-}
-
-func NewBlockRecordBinding(shareInstance, fileID, revision []byte, localBlock uint64, dataLength uint32) (Binding, error) {
-	if !identity(shareInstance) || !identity(fileID) || !identity(revision) {
-		return Binding{}, ErrBinding
-	}
-	context := make([]byte, 0, 16*3+8+4)
-	context = append(context, shareInstance...)
-	context = append(context, fileID...)
-	context = append(context, revision...)
-	context = binary.BigEndian.AppendUint64(context, localBlock)
-	context = binary.BigEndian.AppendUint32(context, dataLength)
-	return newBinding(DomainBlockRecord, context, MaxBlockRecordBytes), nil
-}
-
-func NewOfflineCommitBinding(shareInstance []byte) (Binding, error) {
-	if !identity(shareInstance) {
-		return Binding{}, ErrBinding
-	}
-	return newBinding(DomainOfflineCommit, bytes.Clone(shareInstance), MaxOfflineCommitBytes), nil
-}
-
-func newBinding(domain Domain, context []byte, maxBytes int) Binding {
-	return Binding{domain: domain, context: bytes.Clone(context), maxBytes: maxBytes}
-}
-
-func twoIdentities(left, right []byte) ([]byte, error) {
-	if !identity(left) || !identity(right) {
-		return nil, ErrBinding
-	}
-	result := make([]byte, 0, 32)
-	result = append(result, left...)
-	return append(result, right...), nil
-}
-
-func identity(value []byte) bool {
-	if len(value) != 16 {
-		return false
-	}
-	for _, item := range value {
-		if item != 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func Seal(binding Binding, key []byte, signingKey ed25519.PrivateKey, nonce, plaintext []byte) ([]byte, error) {
-	if err := validateBinding(binding); err != nil {
 		return nil, err
 	}
-	if len(key) != 32 || len(signingKey) != ed25519.PrivateKeySize || len(nonce) != NonceBytes {
+	if len(key) != keyderiv.KeyBytes || len(signingKey) != ed25519.PrivateKeySize || len(nonce) != NonceBytes {
 		return nil, ErrKey
 	}
 	if len(plaintext) == 0 {
 		return nil, ErrMalformed
 	}
-	if len(plaintext) > binding.maxBytes-(FixedBytes+TagBytes) {
+	if len(plaintext) > maxDescriptorBytes-(fixedBytes+tagBytes) {
 		return nil, ErrTooLarge
 	}
-	aead, err := objectAEAD(key)
+	aead, err := descriptorAEAD(key)
 	if err != nil {
 		return nil, ErrKey
 	}
-	header := make([]byte, HeaderBytes)
-	header[0] = WireVersion
+	header := [headerBytes]byte{wireVersion}
 	binary.BigEndian.PutUint32(header[4:], uint32(len(plaintext)+aead.Overhead()))
-	contextHash := sha256.Sum256(binding.context)
-	aad := authenticationData(binding.domain, contextHash, header)
-	prefix := make([]byte, 0, FixedBytes+TagBytes+len(plaintext))
-	prefix = append(prefix, header...)
+	prefix := make([]byte, 0, fixedBytes+tagBytes+len(plaintext))
+	prefix = append(prefix, header[:]...)
 	prefix = append(prefix, nonce...)
-	prefix = aead.Seal(prefix, nonce, plaintext, aad)
-	preimage := signaturePreimage(binding.domain, contextHash, prefix)
-	return append(prefix, ed25519.Sign(signingKey, preimage)...), nil
-}
-
-func Verify(binding Binding, sender *senderauth.Verifier, object []byte) error {
-	if err := validateBinding(binding); err != nil {
-		return err
-	}
-	if !sender.Valid() {
-		return ErrKey
-	}
-	prefix, signature, _, _, _, err := split(binding, object)
-	if err != nil {
-		return err
-	}
-	contextHash := sha256.Sum256(binding.context)
-	if !sender.Verify(signaturePreimage(binding.domain, contextHash, prefix), signature) {
-		return ErrSignature
-	}
-	return nil
-}
-
-func Open(binding Binding, key []byte, sender *senderauth.Verifier, object []byte) ([]byte, error) {
-	if err := Verify(binding, sender, object); err != nil {
-		return nil, err
-	}
-	return decrypt(binding, key, object)
+	prefix = aead.Seal(prefix, nonce, plaintext, binding.authenticate(header[:]))
+	objectHash := sha256.Sum256(prefix)
+	return append(prefix, ed25519.Sign(signingKey, binding.authenticate(objectHash[:]))...), nil
 }
 
 // OpenDescriptorBootstrap decrypts only to discover the sender key, then checks
 // pkHash and the outer signature before releasing plaintext to the caller.
-func OpenDescriptorBootstrap(binding Binding, key []byte, object []byte, senderIdentity func([]byte) (*senderauth.Verifier, error)) ([]byte, error) {
-	if binding.domain != DomainDescriptor || senderIdentity == nil {
+func OpenDescriptorBootstrap(pkHash, shareIDRaw, key, object []byte, senderIdentity func([]byte) (*senderauth.Verifier, error)) ([]byte, error) {
+	if senderIdentity == nil {
 		return nil, ErrBinding
 	}
-	plaintext, err := decrypt(binding, key, object)
+	binding, err := bindDescriptor(pkHash, shareIDRaw)
 	if err != nil {
 		return nil, err
 	}
+	if len(key) != keyderiv.KeyBytes {
+		return nil, ErrKey
+	}
+	prefixEnd, err := descriptorPrefixEnd(object)
+	if err != nil {
+		return nil, err
+	}
+	aead, err := descriptorAEAD(key)
+	if err != nil {
+		return nil, ErrKey
+	}
+	plaintext, err := aead.Open(nil, object[headerBytes:prefixBytes], object[prefixBytes:prefixEnd], binding.authenticate(object[:headerBytes]))
+	if err != nil {
+		return nil, ErrAuth
+	}
+	// The callback can run caller code. Authenticate the same sealed bytes that
+	// produced plaintext even if the caller reuses its input buffer.
+	objectHash := sha256.Sum256(object[:prefixEnd])
+	signature := [signatureBytes]byte(object[prefixEnd:])
 	sender, err := senderIdentity(plaintext)
 	if err != nil || !sender.Valid() {
 		return nil, ErrKey
 	}
 	hash, err := link.SenderKeyHash(sender.PublicKey())
-	if err != nil || !bytes.Equal(hash[:], binding.context[1:1+link.PKHashBytes]) {
+	if err != nil || hash != binding.pkHash || !sender.Verify(binding.authenticate(objectHash[:]), signature[:]) {
 		return nil, ErrSignature
 	}
-	if err := Verify(binding, sender, object); err != nil {
-		return nil, err
-	}
 	return plaintext, nil
 }
 
-func decrypt(binding Binding, key, object []byte) ([]byte, error) {
-	if err := validateBinding(binding); err != nil {
-		return nil, err
+func descriptorPrefixEnd(object []byte) (int, error) {
+	if len(object) > maxDescriptorBytes {
+		return 0, ErrTooLarge
 	}
-	if len(key) != 32 {
-		return nil, ErrKey
+	if len(object) < fixedBytes+tagBytes {
+		return 0, ErrMalformed
 	}
-	_, _, header, nonce, ciphertext, err := split(binding, object)
-	if err != nil {
-		return nil, err
+	if object[0] != wireVersion || object[1] != 0 || object[2] != 0 || object[3] != 0 {
+		return 0, ErrMalformed
 	}
-	aead, err := objectAEAD(key)
-	if err != nil {
-		return nil, ErrKey
+	ciphertextLength := binary.BigEndian.Uint32(object[4:headerBytes])
+	if ciphertextLength < tagBytes || uint64(fixedBytes)+uint64(ciphertextLength) != uint64(len(object)) {
+		return 0, ErrMalformed
 	}
-	contextHash := sha256.Sum256(binding.context)
-	plaintext, err := aead.Open(nil, nonce, ciphertext, authenticationData(binding.domain, contextHash, header))
-	if err != nil {
-		return nil, ErrAuth
-	}
-	return plaintext, nil
+	return len(object) - signatureBytes, nil
 }
 
-func split(binding Binding, object []byte) (prefix, signature, header, nonce, ciphertext []byte, err error) {
-	if len(object) > binding.maxBytes {
-		return nil, nil, nil, nil, nil, ErrTooLarge
-	}
-	if len(object) < FixedBytes+TagBytes {
-		return nil, nil, nil, nil, nil, ErrMalformed
-	}
-	header = object[:HeaderBytes]
-	if header[0] != WireVersion || header[1] != 0 || header[2] != 0 || header[3] != 0 {
-		return nil, nil, nil, nil, nil, ErrMalformed
-	}
-	ciphertextLength := binary.BigEndian.Uint32(header[4:])
-	if ciphertextLength < TagBytes {
-		return nil, nil, nil, nil, nil, ErrMalformed
-	}
-	prefixLength := uint64(HeaderBytes+NonceBytes) + uint64(ciphertextLength)
-	if prefixLength+SignatureBytes != uint64(len(object)) {
-		return nil, nil, nil, nil, nil, ErrMalformed
-	}
-	prefix = object[:prefixLength]
-	signature = object[prefixLength:]
-	nonce = object[HeaderBytes : HeaderBytes+NonceBytes]
-	ciphertext = object[HeaderBytes+NonceBytes : prefixLength]
-	return prefix, signature, header, nonce, ciphertext, nil
+func (binding descriptorBinding) authenticate(suffix []byte) []byte {
+	result := make([]byte, 0, len(descriptorDomain)+sha256.Size+len(suffix))
+	result = append(result, descriptorDomain...)
+	result = append(result, binding.contextHash[:]...)
+	return append(result, suffix...)
 }
 
-func validateBinding(binding Binding) error {
-	if binding.domain == "" || len(binding.context) == 0 || binding.maxBytes < FixedBytes+TagBytes+1 {
-		return ErrBinding
-	}
-	return nil
-}
-
-func authenticationData(domain Domain, contextHash [sha256.Size]byte, header []byte) []byte {
-	result := make([]byte, 0, len(domain)+1+sha256.Size+HeaderBytes)
-	result = append(result, domain...)
-	result = append(result, 0)
-	result = append(result, contextHash[:]...)
-	return append(result, header...)
-}
-
-func signaturePreimage(domain Domain, contextHash [sha256.Size]byte, prefix []byte) []byte {
-	// Committing to every sealed byte lets receivers hash large blocks natively
-	// while keeping ordinary Ed25519 verification independent of the block size.
-	objectHash := sha256.Sum256(prefix)
-	result := make([]byte, 0, len(domain)+1+sha256.Size*2)
-	result = append(result, domain...)
-	result = append(result, 0)
-	result = append(result, contextHash[:]...)
-	return append(result, objectHash[:]...)
-}
-
-func objectAEAD(key []byte) (cipher.AEAD, error) {
+func descriptorAEAD(key []byte) (cipher.AEAD, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, fmt.Errorf("senderobject: create AES: %w", err)
+		return nil, err
 	}
 	return cipher.NewGCM(block)
 }

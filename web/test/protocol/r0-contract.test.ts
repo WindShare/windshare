@@ -17,13 +17,11 @@ import {
   ed25519Public,
   expectCanonicalCBOR,
   expectSenderControl,
-  expectSenderObject,
+  expectDescriptorObject,
   fragmentDuplicateConflicts,
   hmacSha256,
   identity,
   namedCase,
-  offlineMerkleRoot,
-  senderObjects,
   sha256,
   u32,
   u64,
@@ -32,6 +30,7 @@ import {
   x25519Private,
   x25519Public,
 } from './r0-contract-support'
+import { CONTENT_PAYLOAD_NAMES, contentPayload, descriptorObjectVector } from './delivery-vectors'
 import { semantics, type SemanticsVector } from './r0-semantics-fixture'
 
 const AES_GCM_TAG_BYTES = 16
@@ -236,17 +235,6 @@ describe('R0 Go to TypeScript protocol contract', () => {
     const shareIdRaw = sha256(
       concat(utf8('windshare/v2 share-id\0'), pkHash),
     ).subarray(0, 12)
-    const fileObjectKey = derive(
-      readSecret,
-      'windshare/v2 file-object',
-      concat(shareInstance, bytes(identity.fileIdB64)),
-    )
-    const revisionKey = derive(
-      fileObjectKey,
-      'windshare/v2 file-revision',
-      bytes(identity.fileRevisionB64),
-    )
-
     expect(identity.suite).toBe(2)
     expect(readSecret).toHaveLength(16)
     expect(pkHash).toEqual(bytes(identity.pkHashB64))
@@ -262,30 +250,19 @@ describe('R0 Go to TypeScript protocol contract', () => {
     expect(derive(readSecret, 'windshare/v2 descriptor', pkHash)).toEqual(
       bytes(identity.descriptorKeyB64),
     )
-    expect(derive(readSecret, 'windshare/v2 catalog', shareInstance)).toEqual(
-      bytes(identity.catalogKeyB64),
-    )
-    expect(fileObjectKey).toEqual(bytes(identity.fileObjectKeyB64))
-    expect(revisionKey).toEqual(bytes(identity.revisionKeyB64))
-    expect(derive(revisionKey, 'windshare/v2 file-segment', u64(BigInt(identity.segment)))).toEqual(
-      bytes(identity.fileSegmentKeyB64),
+    const transcript = namedCase<TranscriptVector>(sessionCases, 'sender-authenticated-x25519-transcript')
+    expect(derive(readSecret, 'windshare/v2 session-auth', shareInstance)).toEqual(
+      bytes(transcript.sessionAuthKeyB64),
     )
   })
 
-  it('authenticates, opens, and canonically re-encodes every sender object', () => {
+  it('authenticates the bootstrap descriptor and checks canonical online content payloads', () => {
     const senderPublicKey = ed25519Public(bytes(identity.senderPublicKeyB64))
-    expect(senderObjects.map((vector) => vector.domain)).toEqual([
-      'windshare/v2 object/descriptor',
-      'windshare/v2 object/catalog-page',
-      'windshare/v2 object/directory-error',
-      'windshare/v2 object/file-revision',
-      'windshare/v2 object/block-record',
-      'windshare/v2 object/offline-commit',
-    ])
-    for (const vector of senderObjects) {
-      expectSenderObject(vector, senderPublicKey)
+    expectDescriptorObject(senderPublicKey)
+    for (const name of CONTENT_PAYLOAD_NAMES) {
+      expectCanonicalCBOR(contentPayload(name))
     }
-    const canonicalDescriptor = bytes(senderObjects[0]!.canonicalCborB64)
+    const canonicalDescriptor = bytes(descriptorObjectVector.canonicalCborB64)
     expect((decode(canonicalDescriptor, { useMaps: true }) as Map<number, unknown>).get(6)).toBe(7)
     const nonMinimalFirstKey = concat(
       canonicalDescriptor.subarray(0, 1),
@@ -294,16 +271,6 @@ describe('R0 Go to TypeScript protocol contract', () => {
     )
     expect(() => expectCanonicalCBOR(nonMinimalFirstKey)).toThrow()
 
-    const inventoryObjects = senderObjects.slice(0, -1)
-    const offlineCommit = decode(bytes(senderObjects.at(-1)!.canonicalCborB64), {
-      useMaps: true,
-    }) as Map<number, unknown>
-    const inventoryDigests = inventoryObjects.map((value) => sha256(bytes(value.objectB64)))
-    expect(offlineCommit.get(2)).toEqual(offlineMerkleRoot(inventoryDigests))
-    expect(offlineCommit.get(5)).toBe(inventoryObjects.length)
-    expect(offlineCommit.get(6)).toBe(
-      inventoryObjects.reduce((total, value) => total + bytes(value.objectB64).byteLength, 0),
-    )
   })
 
 })
@@ -425,7 +392,7 @@ describe('R0 relay and ProtocolSession contract', () => {
       dialEndpoint: registration.dialEndpoint,
       relayIdentityEndpoint: registration.relayIdentityEndpoint,
     })
-    const descriptorDigest = sha256(bytes(senderObjects[0]!.objectB64))
+    const descriptorDigest = sha256(bytes(descriptorObjectVector.objectB64))
     const relayIdentity = sha256(
       concat(
         utf8('windshare/v2 relay-identity\0'),
@@ -481,7 +448,7 @@ describe('R0 relay and ProtocolSession contract', () => {
         bytes(registration.signatureB64),
       ),
     ).toEqual(bytes(registration.registerProofB64))
-    const descriptorObject = bytes(senderObjects[0]!.objectB64)
+    const descriptorObject = bytes(descriptorObjectVector.objectB64)
     expect(
       concat(
         utf8('WS2U'),
@@ -854,7 +821,6 @@ describe('R0 resource and state-machine contract', () => {
       scanWorkShare: '4194304',
       sealedCacheProcess: '2147483648',
       sealedCacheShare: '268435456',
-      segmentBytes: '17179869184',
       senderCrashGraceSeconds: '60',
       stableHandlesProcess: '1024',
       stableHandlesSession: '32',

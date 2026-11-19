@@ -1,7 +1,7 @@
 import { catalogFailure } from './failure-evidence'
 import { createEd25519Verifier, type Ed25519Verifier, type Ed25519VerifierOptions } from '../crypto/ed25519'
 import {
-  createDescriptorObjectBinding,
+  DESCRIPTOR_OBJECT_BYTES,
   openDescriptorObjectBootstrap,
 } from '../crypto/sender-object'
 import { encodeBase64Url, equalBytes } from '../crypto/bytes'
@@ -32,7 +32,6 @@ export const CATALOG_PAGE_ENTRIES = 256
 export const CATALOG_DIRECTORY_ENTRIES = 1_048_576
 export const MAX_CATALOG_PAYLOAD_BYTES = 60 << 10
 export const DIRECTORY_ERROR_OBJECT_BYTES = 16 << 10
-export const DESCRIPTOR_OBJECT_BYTES = 16 << 10
 export const MINIMUM_CHUNK_BYTES = 1 << 10
 export const MAXIMUM_CHUNK_BYTES = 4 << 20
 
@@ -137,12 +136,12 @@ export async function openShareDescriptor(
   if (object.byteLength === 0 || object.byteLength > DESCRIPTOR_OBJECT_BYTES) {
     throw catalogFailure(new CborError('Share descriptor object exceeds its limit'), { invariant: 'descriptor-bytes', actual: object.byteLength, maximum: DESCRIPTOR_OBJECT_BYTES })
   }
-  const binding = await createDescriptorObjectBinding(capability.pkHash, capability.shareIdRaw)
-  const key = await deriveSuite02DescriptorKey(capability.readSecret, capability.pkHash)
+  const route = { pkHash: capability.pkHash.slice(), shareIdRaw: capability.shareIdRaw.slice() }
+  const key = await deriveSuite02DescriptorKey(capability.readSecret, route.pkHash)
   try {
     let decoded: ShareDescriptor | undefined
     const plaintext = await openDescriptorObjectBootstrap(
-      binding,
+      route,
       key,
       object,
       (candidate) => {

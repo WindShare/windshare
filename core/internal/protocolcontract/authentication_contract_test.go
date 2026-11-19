@@ -10,28 +10,21 @@ import (
 	"testing"
 )
 
-type identityAxis struct {
-	name   string
-	offset int
-}
-
-func TestSenderObjectVectorsAuthenticateAndOpen(t *testing.T) {
+func TestDescriptorVectorAuthenticatesAndOpens(t *testing.T) {
 	f := newFixture(t)
-	for _, object := range buildSenderObjects(t, f) {
-		t.Run(object.domain, func(t *testing.T) {
-			assertSenderObjectAuthenticates(t, f, object)
-			for _, axis := range senderObjectContextAxes(object) {
-				t.Run(axis.name, func(t *testing.T) {
-					mutatedContext := slices.Clone(object.context)
-					mutatedContext[axis.offset] ^= 1
-					assertSenderObjectContextRejected(t, f, object, mutatedContext)
-				})
-			}
-			wrongKey := slices.Clone(object.key)
-			wrongKey[0] ^= 1
-			assertSenderObjectKeyRejected(t, object, wrongKey)
+	object := buildDescriptorObject(t, f)
+	assertDescriptorAuthenticates(t, f, object)
+	for _, axis := range []struct {
+		name   string
+		offset int
+	}{{"suite", 0}, {"pk-hash", 1}, {"share-id", 17}} {
+		t.Run(axis.name, func(t *testing.T) {
+			mutatedContext := slices.Clone(object.context)
+			mutatedContext[axis.offset] ^= 1
+			assertDescriptorContextRejected(t, f, object, mutatedContext)
 		})
 	}
+	assertDescriptorKeyRejected(t, object, flipped(object.key))
 }
 
 func TestOperationEnvelopeAuthenticationBindsEveryAxis(t *testing.T) {
@@ -84,7 +77,7 @@ func TestOperationEnvelopeAuthenticationBindsEveryAxis(t *testing.T) {
 	)
 }
 
-func assertSenderObjectAuthenticates(t *testing.T, f *fixture, object sealedObject) {
+func assertDescriptorAuthenticates(t *testing.T, f *fixture, object sealedDescriptor) {
 	t.Helper()
 	if len(object.encoded) < 84 {
 		t.Fatalf("object is shorter than fixed overhead")
@@ -111,12 +104,12 @@ func assertSenderObjectAuthenticates(t *testing.T, f *fixture, object sealedObje
 	}
 }
 
-func assertSenderObjectContextRejected(t *testing.T, f *fixture, object sealedObject, context []byte) {
+func assertDescriptorContextRejected(t *testing.T, f *fixture, object sealedDescriptor, context []byte) {
 	t.Helper()
 	ciphertextLength := int(binary.BigEndian.Uint32(object.encoded[4:8]))
 	prefixEnd := 20 + ciphertextLength
 	contextHash := hash(context)
-	aad := slices.Concat([]byte(object.domain), []byte{0}, contextHash, object.encoded[:8])
+	aad := slices.Concat([]byte(domainDescriptor), []byte{0}, contextHash, object.encoded[:8])
 	block, err := aes.NewCipher(object.key)
 	if err != nil {
 		t.Fatal(err)
@@ -128,13 +121,13 @@ func assertSenderObjectContextRejected(t *testing.T, f *fixture, object sealedOb
 	if _, err := aead.Open(nil, object.encoded[8:20], object.encoded[20:prefixEnd], aad); err == nil {
 		t.Fatal("AEAD accepted a mutated object identity")
 	}
-	preimage := slices.Concat([]byte(object.domain), []byte{0}, contextHash, hash(object.encoded[:prefixEnd]))
+	preimage := slices.Concat([]byte(domainDescriptor), []byte{0}, contextHash, hash(object.encoded[:prefixEnd]))
 	if ed25519.Verify(f.edPublic, preimage, object.encoded[prefixEnd:]) {
 		t.Fatal("signature accepted a mutated object identity")
 	}
 }
 
-func assertSenderObjectKeyRejected(t *testing.T, object sealedObject, key []byte) {
+func assertDescriptorKeyRejected(t *testing.T, object sealedDescriptor, key []byte) {
 	t.Helper()
 	ciphertextLength := int(binary.BigEndian.Uint32(object.encoded[4:8]))
 	prefixEnd := 20 + ciphertextLength
@@ -149,35 +142,6 @@ func assertSenderObjectKeyRejected(t *testing.T, object sealedObject, key []byte
 	if _, err := aead.Open(nil, object.encoded[8:20], object.encoded[20:prefixEnd], object.aad); err == nil {
 		t.Fatal("AEAD accepted a different object key")
 	}
-}
-
-func senderObjectContextAxes(object sealedObject) []identityAxis {
-	var axes []identityAxis
-	switch object.domain {
-	case domainDescriptor:
-		axes = []identityAxis{{"suite", 0}, {"pk-hash", 1}, {"share-id", 17}}
-	case domainCatalogPage:
-		axes = []identityAxis{{"share-instance", 0}, {"directory-id", 16}, {"page-index", 32}}
-	case domainDirectoryError:
-		axes = []identityAxis{{"share-instance", 0}, {"directory-id", 16}}
-	case domainRevision:
-		axes = []identityAxis{{"share-instance", 0}, {"file-id", 16}}
-	case domainBlockRecord:
-		axes = []identityAxis{
-			{"share-instance", 0}, {"file-id", 16}, {"file-revision", 32},
-			{"local-block-index", 48}, {"data-length", 56},
-		}
-	case domainOfflineCommit:
-		axes = []identityAxis{{"share-instance", 0}}
-	default:
-		panic("unknown sender object domain")
-	}
-	for _, axis := range axes {
-		if axis.offset >= len(object.context) {
-			panic("sender object context layout is shorter than its frozen identity axes")
-		}
-	}
-	return axes
 }
 
 func operationAAD(

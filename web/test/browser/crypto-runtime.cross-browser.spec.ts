@@ -1,10 +1,8 @@
 import { readFileSync } from 'node:fs'
-import { createCipheriv, createHash, generateKeyPairSync, sign } from 'node:crypto'
 import { expect, test } from '@playwright/test'
+import { descriptorObjectVector } from '../protocol/delivery-vectors'
+import { loadVectorFile } from '../vectors'
 import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
-
-const BLOCK_SIGNATURE_MESSAGE_BYTES = 1024 * 1024
-const BLOCK_SIGNATURE_MESSAGE_FILL = 0x5a
 
 const RFC8032_EMPTY_MESSAGE_PUBLIC_KEY =
   'd75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a'
@@ -65,43 +63,24 @@ test('production curve boundary works with the active browser capabilities', asy
   })
 })
 
-test('opens committed blocks even when native Ed25519 rejects valid signatures', async ({ page }) => {
-  // Node builds the complete object independently so a shared browser encoder
-  // cannot hide omitted identity, nonce, ciphertext, or tag commitments.
-  const { publicKey, privateKey } = generateKeyPairSync('ed25519')
-  const publicKeyJwk = publicKey.export({ format: 'jwk' })
-  if (publicKeyJwk.x === undefined) throw new Error('Ed25519 public key has no raw coordinate')
-  const domain = Buffer.from('windshare/v2 object/block-record\0')
-  const context = Buffer.concat([
-    Buffer.alloc(16, 1), Buffer.alloc(16, 2), Buffer.alloc(16, 3), Buffer.alloc(12),
-  ])
-  context.writeBigUInt64BE(9n, 48)
-  context.writeUInt32BE(BLOCK_SIGNATURE_MESSAGE_BYTES, 56)
-  const contextHash = createHash('sha256').update(context).digest()
-  const header = Buffer.alloc(8)
-  header[0] = 3
-  header.writeUInt32BE(BLOCK_SIGNATURE_MESSAGE_BYTES + 16, 4)
-  const key = Buffer.alloc(32, 0x41)
-  const nonce = Buffer.alloc(12, 0x61)
-  const cipher = createCipheriv('aes-256-gcm', key, nonce)
-  cipher.setAAD(Buffer.concat([domain, contextHash, header]))
-  const message = Buffer.alloc(BLOCK_SIGNATURE_MESSAGE_BYTES, BLOCK_SIGNATURE_MESSAGE_FILL)
-  const prefix = Buffer.concat([header, nonce, cipher.update(message), cipher.final(), cipher.getAuthTag()])
-  const preimage = Buffer.concat([domain, contextHash, createHash('sha256').update(prefix).digest()])
-  const object = Buffer.concat([prefix, sign(null, preimage, privateKey)])
+test('authenticates the bootstrap descriptor even when native Ed25519 rejects valid signatures', async ({ page }) => {
+  const identity = loadVectorFile(new URL('../../../core/testvectors/v2-identity.json', import.meta.url)).cases[0]
+  const keyString = identity?.keyString
+  const senderPublicKeyB64 = identity?.senderPublicKeyB64
+  if (typeof keyString !== 'string' || typeof senderPublicKeyB64 !== 'string') {
+    throw new Error('missing descriptor capability vector')
+  }
 
   await page.goto(BROWSER_CONTRACT_HOST_PATH)
-  const result = await page.evaluate(async ({ publicKey, key, encodedObject, messageBytes, fill }) => {
+  const result = await page.evaluate(async ({ encodedKey, encodedDescriptor }) => {
+    const linkPath = '/src/crypto/suite02-link.ts'
+    const links = await import(linkPath) as typeof import('../../src/crypto/suite02-link')
+    const recordsPath = '/src/catalog/records.ts'
+    const records = await import(recordsPath) as typeof import('../../src/catalog/records')
     const objectPath = '/src/crypto/sender-object.ts'
     const objects = await import(objectPath) as typeof import('../../src/crypto/sender-object')
-    const verifierPath = '/src/crypto/ed25519.ts'
-    const verifiers = await import(verifierPath) as typeof import('../../src/crypto/ed25519')
-    const publicBytes = Uint8Array.from(publicKey)
-    const content = Uint8Array.from(atob(encodedObject), character => character.charCodeAt(0))
-    const share = new Uint8Array(16).fill(1)
-    const file = new Uint8Array(16).fill(2)
-    const revision = new Uint8Array(16).fill(3)
-    const binding = objects.createBlockRecordObjectBinding(share, file, revision, 9n, messageBytes)
+    const capability = await links.decodeSuite02CapabilityKey(encodedKey)
+    const descriptor = Uint8Array.from(atob(encodedDescriptor), character => character.charCodeAt(0))
     let nativeEd25519Calls = 0
     const runtime = { subtle: new Proxy(crypto.subtle, {
       get(target, property) {
@@ -110,48 +89,37 @@ test('opens committed blocks even when native Ed25519 rejects valid signatures',
         return typeof value === 'function' ? value.bind(target) : value
       },
     }) }
-    const sender = verifiers.createEd25519Verifier(publicBytes, { runtime })
-    {
-      const opened = await objects.openSenderObject(binding, Uint8Array.from(key), sender, content)
-      const signatureInput = await objects.senderObjectSignaturePreimage(binding, content.subarray(0, -64))
-      const changedContent = content.slice()
-      changedContent[changedContent.length - 65] = changedContent[changedContent.length - 65]! ^ 1
-      const changedSignature = content.slice()
-      changedSignature[changedSignature.length - 1] = changedSignature[changedSignature.length - 1]! ^ 1
-      const wrongIdentity = objects.createBlockRecordObjectBinding(share, file, revision, 10n, messageBytes)
-      const rejectionKinds: string[] = []
-      for (const [bound, encoded] of [
-        [binding, changedContent], [binding, changedSignature], [wrongIdentity, content],
-      ] as const) {
-        try {
-          await objects.verifySenderObject(bound, sender, encoded)
-          rejectionKinds.push('accepted')
-        } catch (cause) {
-          if (!(cause instanceof objects.SenderObjectError)) throw cause
-          rejectionKinds.push(cause.kind)
-        }
-      }
-      return {
-        valid: opened.byteLength === messageBytes && opened.every(byte => byte === fill),
-        signatureInput: [...signatureInput],
-        rejectionKinds,
-        nativeEd25519Calls,
+    const opened = await records.openShareDescriptor(descriptor, capability, { runtime })
+    const validDescriptorNativeCalls = nativeEd25519Calls
+
+    const changedContent = descriptor.slice()
+    changedContent[changedContent.length - 65] = changedContent[changedContent.length - 65]! ^ 1
+    const changedSignature = descriptor.slice()
+    changedSignature[changedSignature.length - 1] = changedSignature[changedSignature.length - 1]! ^ 1
+    const wrongRoute = { ...capability, shareIdRaw: capability.shareIdRaw.slice() }
+    wrongRoute.shareIdRaw[0] = wrongRoute.shareIdRaw[0]! ^ 1
+    const rejectionKinds: string[] = []
+    for (const [input, route] of [
+      [changedContent, capability], [changedSignature, capability], [descriptor, wrongRoute],
+    ] as const) {
+      try {
+        await records.openShareDescriptor(input, route, { runtime })
+        rejectionKinds.push('accepted')
+      } catch (cause) {
+        if (!(cause instanceof objects.SenderObjectError)) throw cause
+        rejectionKinds.push(cause.kind)
       }
     }
-  }, {
-    publicKey: [...Buffer.from(publicKeyJwk.x, 'base64url')],
-    key: [...key],
-    encodedObject: object.toString('base64'),
-    messageBytes: BLOCK_SIGNATURE_MESSAGE_BYTES,
-    fill: BLOCK_SIGNATURE_MESSAGE_FILL,
-  })
-  expect(result.nativeEd25519Calls).toBeLessThanOrEqual(1)
-  expect(result).toEqual({
-    valid: true,
-    signatureInput: [...preimage],
-    rejectionKinds: ['signature', 'signature', 'signature'],
-    nativeEd25519Calls: expect.any(Number),
-  })
+    return {
+      publicKey: btoa(String.fromCharCode(...opened.sender.publicKey)),
+      rejectionKinds,
+      validDescriptorNativeCalls,
+    }
+  }, { encodedKey: keyString, encodedDescriptor: descriptorObjectVector.objectB64 })
+
+  expect(result.publicKey).toBe(senderPublicKeyB64)
+  expect(result.rejectionKinds).toEqual(['authentication', 'signature', 'binding'])
+  expect(result.validDescriptorNativeCalls).toBeLessThanOrEqual(1)
 })
 
 test('native and portable backends enforce the same frozen sender acceptance rules', async ({ page }) => {

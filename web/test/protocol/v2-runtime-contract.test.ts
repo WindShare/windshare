@@ -1,29 +1,10 @@
 import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import { decodeReceiveCredit, encodeReceiveCredit } from '../../src/transport/relay/receive-credit-codec'
-import { decode } from 'cborg'
+import { decodeShareDescriptor } from '../../src/catalog/records'
 import { describe, expect, it } from 'vitest'
 
-import {
-  createBlockRecordObjectBinding,
-  createCatalogPageObjectBinding,
-  createDescriptorObjectBinding,
-  createDirectoryErrorObjectBinding,
-  createOfflineCommitObjectBinding,
-  createRevisionObjectBinding,
-  openDescriptorObjectBootstrap,
-  openSenderObject,
-  senderObjectAuthenticationData,
-  senderObjectSignaturePreimage,
-  SenderObjectBinding,
-} from '../../src/crypto/sender-object'
-import {
-  deriveSuite02CatalogKey,
-  deriveSuite02DescriptorKey,
-  deriveSuite02FileObjectKey,
-  deriveSuite02FileSegmentKey,
-  deriveSuite02RevisionKey,
-  deriveSuite02SessionAuthKey,
-} from '../../src/crypto/suite02-key-derivation'
+import { openDescriptorObjectBootstrap } from '../../src/crypto/sender-object'
+import { deriveSuite02DescriptorKey, deriveSuite02SessionAuthKey } from '../../src/crypto/suite02-key-derivation'
 import {
   decodeSuite02CapabilityKey,
   encodeSuite02CapabilityKey,
@@ -88,6 +69,7 @@ import {
   type StopInit,
 } from '../../src/transport/relay/protocol'
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
+import { descriptorObjectVector } from './delivery-vectors'
 
 interface IdentityVector extends VectorCase {
   readonly readSecretB64: string
@@ -105,23 +87,7 @@ interface IdentityVector extends VectorCase {
     readonly relays?: readonly string[]
   }[]
   readonly descriptorKeyB64: string
-  readonly catalogKeyB64: string
-  readonly fileIdB64: string
-  readonly fileObjectKeyB64: string
-  readonly fileRevisionB64: string
-  readonly revisionKeyB64: string
-  readonly segment: string
-  readonly fileSegmentKeyB64: string
-}
 
-interface SenderObjectVector extends VectorCase {
-  readonly domain: string
-  readonly contextB64: string
-  readonly keyB64: string
-  readonly canonicalCborB64: string
-  readonly aadB64: string
-  readonly signaturePreimageB64: string
-  readonly objectB64: string
 }
 
 interface RegistrationVector extends VectorCase {
@@ -225,9 +191,6 @@ interface TranscriptVector extends VectorCase {
 const identity = loadVectorFile(
   new URL('../../../core/testvectors/v2-identity.json', import.meta.url),
 ).cases[0] as IdentityVector
-const senderObjects = loadVectorFile(
-  new URL('../../../core/testvectors/v2-sender-objects.json', import.meta.url),
-).cases as SenderObjectVector[]
 const sessionCases = loadVectorFile(
   new URL('../../../core/testvectors/v2-session.json', import.meta.url),
 ).cases
@@ -245,32 +208,6 @@ function named<T extends VectorCase>(name: string): T {
   return result as T
 }
 
-function mapBody(encoded: string): Map<number, unknown> {
-  return mapBodyBytes(bytes(encoded))
-}
-
-function mapBodyBytes(encoded: Uint8Array): Map<number, unknown> {
-  const decoded = decode(encoded, { useMaps: true })
-  if (!(decoded instanceof Map)) throw new TypeError('sender object body must be a map')
-  return decoded as Map<number, unknown>
-}
-
-function mapBytes(body: Map<number, unknown>, key: number, length?: number): Uint8Array {
-  const value = body.get(key)
-  if (!(value instanceof Uint8Array) || (length !== undefined && value.byteLength !== length)) {
-    throw new TypeError(`CBOR key ${key} has an invalid byte value`)
-  }
-  return value
-}
-
-function mapNumber(body: Map<number, unknown>, key: number): number {
-  const value = body.get(key)
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
-    throw new TypeError(`CBOR key ${key} has an invalid numeric value`)
-  }
-  return value
-}
-
 async function verifyEd25519(
   preimage: Uint8Array,
   signature: Uint8Array,
@@ -284,138 +221,6 @@ function flip(value: Uint8Array, offset = 0): Uint8Array<ArrayBuffer> {
   const result = value.slice()
   result[offset] = result[offset]! ^ 1
   return result
-}
-
-async function objectBindingAndKey(
-  vector: SenderObjectVector,
-): Promise<{ readonly binding: SenderObjectBinding; readonly key: Uint8Array }> {
-  const body = mapBody(vector.canonicalCborB64)
-  const readSecret = bytes(identity.readSecretB64)
-  switch (vector.domain) {
-    case 'windshare/v2 object/descriptor':
-      return {
-        binding: await createDescriptorObjectBinding(
-          bytes(identity.pkHashB64),
-          bytes(identity.shareIdRawB64),
-        ),
-        key: await deriveSuite02DescriptorKey(readSecret, bytes(identity.pkHashB64)),
-      }
-    case 'windshare/v2 object/catalog-page': {
-      const shareInstance = mapBytes(body, 1, 16)
-      return {
-        binding: createCatalogPageObjectBinding(
-          shareInstance,
-          mapBytes(body, 2, 16),
-          mapNumber(body, 4),
-        ),
-        key: await deriveSuite02CatalogKey(readSecret, shareInstance),
-      }
-    }
-    case 'windshare/v2 object/directory-error': {
-      const shareInstance = mapBytes(body, 1, 16)
-      return {
-        binding: createDirectoryErrorObjectBinding(shareInstance, mapBytes(body, 2, 16)),
-        key: await deriveSuite02CatalogKey(readSecret, shareInstance),
-      }
-    }
-    case 'windshare/v2 object/file-revision': {
-      const shareInstance = mapBytes(body, 1, 16)
-      const fileId = mapBytes(body, 2, 16)
-      return {
-        binding: createRevisionObjectBinding(shareInstance, fileId),
-        key: await deriveSuite02FileObjectKey(readSecret, shareInstance, fileId),
-      }
-    }
-    case 'windshare/v2 object/block-record': {
-      const shareInstance = mapBytes(body, 1, 16)
-      const fileId = mapBytes(body, 2, 16)
-      const revision = mapBytes(body, 3, 16)
-      const localBlock = BigInt(mapNumber(body, 4))
-      const data = mapBytes(body, 5)
-      const fileObjectKey = await deriveSuite02FileObjectKey(readSecret, shareInstance, fileId)
-      const revisionKey = await deriveSuite02RevisionKey(fileObjectKey, revision)
-      const descriptor = mapBody(senderObjects[0]!.canonicalCborB64)
-      const segment = (localBlock * BigInt(mapNumber(descriptor, 5))) / (16n << 30n)
-      return {
-        binding: createBlockRecordObjectBinding(
-          shareInstance,
-          fileId,
-          revision,
-          localBlock,
-          data.byteLength,
-        ),
-        key: await deriveSuite02FileSegmentKey(revisionKey, segment),
-      }
-    }
-    case 'windshare/v2 object/offline-commit': {
-      const shareInstance = mapBytes(body, 1, 16)
-      return {
-        binding: createOfflineCommitObjectBinding(shareInstance),
-        key: await deriveSuite02DescriptorKey(readSecret, bytes(identity.pkHashB64)),
-      }
-    }
-    default:
-      throw new TypeError(`unknown sender object domain ${vector.domain}`)
-  }
-}
-
-async function hostileObjectBindings(
-  vector: SenderObjectVector,
-): Promise<readonly SenderObjectBinding[]> {
-  const body = mapBody(vector.canonicalCborB64)
-  const shareInstance = vector.domain === 'windshare/v2 object/descriptor'
-    ? undefined
-    : mapBytes(body, 1, 16)
-  switch (vector.domain) {
-    case 'windshare/v2 object/descriptor': {
-      const hostilePKHash = flip(bytes(identity.pkHashB64))
-      const hostileRoute = await encodeSuite02CapabilityKey(
-        bytes(identity.readSecretB64),
-        hostilePKHash,
-      )
-      return [await createDescriptorObjectBinding(hostilePKHash, hostileRoute.shareIdRaw)]
-    }
-    case 'windshare/v2 object/catalog-page': {
-      const directory = mapBytes(body, 2, 16)
-      const page = mapNumber(body, 4)
-      return [
-        createCatalogPageObjectBinding(flip(shareInstance!), directory, page),
-        createCatalogPageObjectBinding(shareInstance!, flip(directory), page),
-        createCatalogPageObjectBinding(shareInstance!, directory, page + 1),
-      ]
-    }
-    case 'windshare/v2 object/directory-error': {
-      const directory = mapBytes(body, 2, 16)
-      return [
-        createDirectoryErrorObjectBinding(flip(shareInstance!), directory),
-        createDirectoryErrorObjectBinding(shareInstance!, flip(directory)),
-      ]
-    }
-    case 'windshare/v2 object/file-revision': {
-      const fileId = mapBytes(body, 2, 16)
-      return [
-        createRevisionObjectBinding(flip(shareInstance!), fileId),
-        createRevisionObjectBinding(shareInstance!, flip(fileId)),
-      ]
-    }
-    case 'windshare/v2 object/block-record': {
-      const fileId = mapBytes(body, 2, 16)
-      const revision = mapBytes(body, 3, 16)
-      const block = BigInt(mapNumber(body, 4))
-      const dataLength = mapBytes(body, 5).byteLength
-      return [
-        createBlockRecordObjectBinding(flip(shareInstance!), fileId, revision, block, dataLength),
-        createBlockRecordObjectBinding(shareInstance!, flip(fileId), revision, block, dataLength),
-        createBlockRecordObjectBinding(shareInstance!, fileId, flip(revision), block, dataLength),
-        createBlockRecordObjectBinding(shareInstance!, fileId, revision, block + 1n, dataLength),
-        createBlockRecordObjectBinding(shareInstance!, fileId, revision, block, dataLength + 1),
-      ]
-    }
-    case 'windshare/v2 object/offline-commit':
-      return [createOfflineCommitObjectBinding(flip(shareInstance!))]
-    default:
-      throw new TypeError(`unknown sender object domain ${vector.domain}`)
-  }
 }
 
 describe('suite-02 Web runtime contract', () => {
@@ -443,7 +248,7 @@ describe('suite-02 Web runtime contract', () => {
     }
   })
 
-  it('derives capability identity and all six HKDF branches independently', async () => {
+  it('derives capability identity and the descriptor and session-auth keys', async () => {
     const capability = await decodeSuite02CapabilityKey(identity.keyString)
     expect(capability.readSecret).toEqual(bytes(identity.readSecretB64))
     expect(capability.pkHash).toEqual(bytes(identity.pkHashB64))
@@ -458,22 +263,8 @@ describe('suite-02 Web runtime contract', () => {
     expect(parsed.shareId).toBe(identity.shareId)
     expect(parsed.relays).toEqual(['https://relay.example'])
 
-    const fileObject = await deriveSuite02FileObjectKey(
-      capability.readSecret,
-      bytes(identity.shareInstanceB64),
-      bytes(identity.fileIdB64),
-    )
-    const revision = await deriveSuite02RevisionKey(fileObject, bytes(identity.fileRevisionB64))
     expect(await deriveSuite02DescriptorKey(capability.readSecret, capability.pkHash)).toEqual(
       bytes(identity.descriptorKeyB64),
-    )
-    expect(
-      await deriveSuite02CatalogKey(capability.readSecret, bytes(identity.shareInstanceB64)),
-    ).toEqual(bytes(identity.catalogKeyB64))
-    expect(fileObject).toEqual(bytes(identity.fileObjectKeyB64))
-    expect(revision).toEqual(bytes(identity.revisionKeyB64))
-    expect(await deriveSuite02FileSegmentKey(revision, BigInt(identity.segment))).toEqual(
-      bytes(identity.fileSegmentKeyB64),
     )
     const transcript = named<TranscriptVector>('sender-authenticated-x25519-transcript')
     expect(
@@ -486,53 +277,41 @@ describe('suite-02 Web runtime contract', () => {
         `https://share.example/s/${flip(capability.shareIdRaw)[0]}#${identity.keyString}`,
       ),
     ).rejects.toThrow()
-    await expect(deriveSuite02FileSegmentKey(revision, -1n)).rejects.toThrow()
     await expect(deriveSuite02DescriptorKey(new Uint8Array(16), new Uint8Array(15))).rejects.toThrow()
   })
 
-  it('reconstructs and authenticates sender objects from semantic bindings', async () => {
-    const senderPublicKey = bytes(identity.senderPublicKeyB64)
-    for (const vector of senderObjects) {
-      const { binding, key } = await objectBindingAndKey(vector)
-      const object = bytes(vector.objectB64)
-      const ciphertextLength = new DataView(object.buffer, object.byteOffset).getUint32(4, false)
-      const prefix = object.slice(0, 20 + ciphertextLength)
-      expect(binding.context).toEqual(bytes(vector.contextB64))
-      expect(key).toEqual(bytes(vector.keyB64))
-      expect(await senderObjectAuthenticationData(binding, object.subarray(0, 8))).toEqual(
-        bytes(vector.aadB64),
-      )
-      expect(await senderObjectSignaturePreimage(binding, prefix)).toEqual(
-        bytes(vector.signaturePreimageB64),
-      )
-      const plaintext = vector === senderObjects[0]
-        ? await openDescriptorObjectBootstrap(binding, key, object, (opened) => {
-          return createEd25519Verifier(mapBytes(mapBodyBytes(opened), 7, 32))
-        })
-        : await openSenderObject(binding, key, createEd25519Verifier(senderPublicKey), object)
-      expect(plaintext).toEqual(bytes(vector.canonicalCborB64))
+  it('opens the Go descriptor and rejects corrupted seal, sender, and route', async () => {
+    const route = await decodeSuite02CapabilityKey(identity.keyString)
+    const key = await deriveSuite02DescriptorKey(route.readSecret, route.pkHash)
+    const object = bytes(descriptorObjectVector.objectB64)
+    const identifySender = (candidate: Uint8Array) => decodeShareDescriptor(candidate).sender
+    const open = (encoded: Uint8Array, material = key) =>
+      openDescriptorObjectBootstrap(route, material, encoded, identifySender)
 
-      for (const offset of [8, 20, prefix.length - 17, prefix.length - 1, object.length - 1]) {
-        await expect(openSenderObject(binding, key, createEd25519Verifier(senderPublicKey), flip(object, offset)))
-          .rejects.toMatchObject({ kind: 'signature' })
-      }
-      const previousVersion = object.slice()
-      previousVersion[0] = 2
-      await expect(openSenderObject(binding, key, createEd25519Verifier(senderPublicKey), previousVersion))
-        .rejects.toMatchObject({ kind: 'malformed' })
-      for (const hostileBinding of await hostileObjectBindings(vector)) {
-        await expect(
-          openSenderObject(hostileBinding, key, createEd25519Verifier(senderPublicKey), object),
-        ).rejects.toThrow()
-      }
-      await expect(openSenderObject(binding, flip(key), createEd25519Verifier(senderPublicKey), object)).rejects.toThrow()
+    expect(key).toEqual(bytes(descriptorObjectVector.keyB64))
+    await expect(open(object)).resolves.toEqual(bytes(descriptorObjectVector.canonicalCborB64))
+    const prefixEnd = object.length - 64
+    for (const offset of [8, 20, prefixEnd - 17, prefixEnd - 1]) {
+      await expect(open(flip(object, offset))).rejects.toMatchObject({ kind: 'authentication' })
     }
-    await expect(
-      createDescriptorObjectBinding(bytes(identity.pkHashB64), flip(bytes(identity.shareIdRawB64))),
-    ).rejects.toThrow()
-    expect(
-      () => new SenderObjectBinding(Symbol('forged'), 'windshare/v2 object/descriptor', new Uint8Array(29), 16 << 10),
-    ).toThrow(/typed factory/u)
+    await expect(open(flip(object, object.length - 1))).rejects.toMatchObject({ kind: 'signature' })
+    const previousVersion = object.slice()
+    previousVersion[0] = 2
+    await expect(open(previousVersion)).rejects.toMatchObject({ kind: 'malformed' })
+    await expect(open(object, flip(key))).rejects.toMatchObject({ kind: 'authentication' })
+    const wrongSender = {
+      publicKey: flip(bytes(identity.senderPublicKeyB64)),
+      verify: async () => true,
+    }
+    await expect(openDescriptorObjectBootstrap(route, key, object, () => wrongSender))
+      .rejects.toMatchObject({ kind: 'signature' })
+
+    const wrongShare = { ...route, shareIdRaw: flip(route.shareIdRaw) }
+    await expect(openDescriptorObjectBootstrap(wrongShare, key, object, identifySender))
+      .rejects.toMatchObject({ kind: 'binding' })
+    const otherRoute = await encodeSuite02CapabilityKey(route.readSecret, flip(route.pkHash))
+    await expect(openDescriptorObjectBootstrap(otherRoute, key, object, identifySender))
+      .rejects.toMatchObject({ kind: 'authentication' })
   })
 
 })
@@ -650,7 +429,7 @@ describe('suite-02 relay runtime contract', () => {
       bytes(vector.stopSignatureB64),
     )
 
-    const descriptor = bytes(senderObjects[0]!.objectB64)
+    const descriptor = bytes(descriptorObjectVector.objectB64)
     expect(encodeDescriptorUpload(descriptor)).toEqual(bytes(vector.descriptorUploadB64))
     expect(decodeDescriptorUpload(bytes(vector.descriptorUploadB64))).toEqual(descriptor)
     expect(

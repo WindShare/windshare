@@ -21,11 +21,7 @@ func SealDescriptor(descriptor catalog.ShareDescriptor, config DescriptorObjectC
 	if err != nil {
 		return nil, err
 	}
-	binding, err := senderobject.NewDescriptorBinding(config.PKHash, config.ShareIDRaw)
-	if err != nil {
-		return nil, err
-	}
-	return senderobject.Seal(binding, config.DescriptorKey, config.SenderPrivateKey, config.Nonce, plaintext)
+	return senderobject.SealDescriptor(config.PKHash, config.ShareIDRaw, config.DescriptorKey, config.SenderPrivateKey, config.Nonce, plaintext)
 }
 
 // OpenedDescriptor keeps the authenticated sender identity with the data it
@@ -36,12 +32,8 @@ type OpenedDescriptor struct {
 }
 
 func OpenDescriptor(object []byte, pkHash, shareIDRaw, descriptorKey []byte) (OpenedDescriptor, error) {
-	binding, err := senderobject.NewDescriptorBinding(pkHash, shareIDRaw)
-	if err != nil {
-		return OpenedDescriptor{}, err
-	}
 	var opened OpenedDescriptor
-	_, err = senderobject.OpenDescriptorBootstrap(binding, descriptorKey, object, func(plaintext []byte) (*senderauth.Verifier, error) {
+	_, err := senderobject.OpenDescriptorBootstrap(pkHash, shareIDRaw, descriptorKey, object, func(plaintext []byte) (*senderauth.Verifier, error) {
 		descriptor, decodeErr := decodeShareDescriptor(plaintext)
 		if decodeErr != nil {
 			return nil, decodeErr
