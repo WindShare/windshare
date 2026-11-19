@@ -110,6 +110,7 @@ messages! {
     InvalidCredentials => ("Check your username and password and try again.", "用户名或密码有误，请检查后重试。"),
     UsernameTaken => ("This username is taken. Choose another.", "这个用户名已被使用，请换一个。"),
     EmailCodeRejected => ("The code is invalid or has expired. Request a new one.", "验证码无效或已过期，请重新获取。"),
+    EmailCodeIncorrect => ("The code is incorrect. Check it and try again.", "验证码不正确，请检查后重新输入。"),
     AccountRateLimited => ("Too many attempts. Try again later.", "尝试次数过多，请稍后重试。"),
     InvalidAccountInput => ("Check the details you entered and try again.", "请检查填写的信息后重试。"),
     AccountSignedIn => ("Signed in", "已登录"),

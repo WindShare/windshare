@@ -155,7 +155,7 @@ func TestMistypedEmailCodeKeepsDeliveredChallenge(t *testing.T) {
 		return accountReply(t, http.StatusOK, session), nil
 	})
 	service := testService(t, config)
-	if err := service.VerifyEmail(t.Context(), "mistyped"); !errors.Is(err, errEmailCodeRejected) || CommandErrorCode(err) != "email_code_rejected" {
+	if err := service.VerifyEmail(t.Context(), "mistyped"); !errors.Is(err, errEmailCodeIncorrect) || CommandErrorCode(err) != "email_code_rejected" {
 		t.Fatalf("mistyped code: %v", err)
 	}
 	if snapshot, _ := service.Snapshot(); snapshot.State != EmailRequired || !snapshot.EmailCodePending {

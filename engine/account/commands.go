@@ -8,11 +8,15 @@ import (
 	"time"
 )
 
-var errEmailCodeRejected = errors.New("verification code is invalid or expired; request a new verification email")
+var (
+	errEmailCodeRejected = errors.New("verification code is invalid or expired; request a new verification email")
+	// errEmailCodeIncorrect reports a mistyped code whose challenge the authority kept for another attempt.
+	errEmailCodeIncorrect = errors.New("verification code is incorrect; check it and try again")
+)
 
 // CommandErrorCode lets interactive clients localize a recovery action without parsing authority messages.
 func CommandErrorCode(err error) string {
-	if errors.Is(err, errEmailCodeRejected) {
+	if errors.Is(err, errEmailCodeRejected) || errors.Is(err, errEmailCodeIncorrect) {
 		return "email_code_rejected"
 	}
 	if errors.Is(err, ErrSuperseded) {
@@ -152,7 +156,7 @@ func (service *Service) VerifyEmail(ctx context.Context, code string) error {
 	challenge, err := service.submitRegistration(ctx, previous, &proof)
 	if remote, ok := errors.AsType[*fault](err); ok && remote.Kind == "email_code_rejected" {
 		// The authority kept the delivered challenge, so the saved proof stays for another attempt.
-		return errEmailCodeRejected
+		return errEmailCodeIncorrect
 	}
 	if err != nil || challenge == nil {
 		return err
