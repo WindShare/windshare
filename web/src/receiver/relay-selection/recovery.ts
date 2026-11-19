@@ -3,7 +3,7 @@ import { firstUsableRelay, RelayEndpointFailure } from './race'
 import { systemReconnectClock, type ReconnectClock } from '../recovery-clock'
 import {
   isShareRecoveryFailure, isTerminalRecoveryFailure, latestRecoveryRetry, recoveryRetry,
-  RelayCooldownError, type RecoveryRetry,
+  AllRelaysRestrictedError, RelayCooldownError, type RecoveryRetry,
 } from '../recovery-failure'
 
 type EndpointRejection =
@@ -32,17 +32,7 @@ export class RelayRecovery {
         close, isShareRecoveryFailure, base => this.#blockingRejection(base, this.#clock.now()) === undefined)
     } catch (failure) {
       signal.throwIfAborted()
-      if (isShareRecoveryFailure(failure)) throw failure
-      const rejections = this.candidates.bases.map(base => this.#rejections.get(base))
-      if (rejections.length > 0 && rejections.every(rejection => rejection?.kind === 'terminal')) {
-        if (rejections.length === 1) throw rejections[0]!.failure
-        throw new AggregateError(rejections.map(rejection => rejection.failure), 'All relay endpoints rejected this share', { cause: failure })
-      }
-      const cooling = rejections.filter(rejection => rejection?.kind === 'cooldown').map(rejection => rejection.failure)
-      if (cooling.length > 0 && isTerminalRecoveryFailure(failure)) {
-        throw new AggregateError([failure, ...cooling], 'Some relay endpoints are cooling down', { cause: failure })
-      }
-      throw failure
+      throw this.#selectionFailure(failure)
     }
   }
 
@@ -85,6 +75,27 @@ export class RelayRecovery {
       }
     }
     return earliest
+  }
+
+  #selectionFailure(failure: unknown): unknown {
+    if (isShareRecoveryFailure(failure)) return failure
+    const rejections = this.candidates.bases.map(base => this.#rejections.get(base))
+    if (rejections.length > 0 && rejections.every(rejection => rejection?.kind === 'terminal')) {
+      if (rejections.length === 1) return rejections[0]!.failure
+      return new AggregateError(rejections.map(rejection => rejection.failure),
+        'All relay endpoints rejected this share', { cause: failure })
+    }
+    const cooldowns = rejections.filter(rejection => rejection?.kind === 'cooldown')
+    const allRestricted = cooldowns.length > 0 && cooldowns.length === rejections.length &&
+      cooldowns.every(({ retry }) => retry.reason === 'authorization')
+    // Pending discovery and expired cooldowns can still yield other routes.
+    const retry = allRestricted ? this.nextRetry() : undefined
+    if (retry !== undefined) return new AllRelaysRestrictedError(retry.retryAt, failure)
+    if (cooldowns.length > 0 && isTerminalRecoveryFailure(failure)) {
+      return new AggregateError([failure, ...cooldowns.map(rejection => rejection.failure)],
+        'Some relay endpoints are cooling down', { cause: failure })
+    }
+    return failure
   }
 
   #blockingRejection(base: string, now: number): EndpointRejection | undefined {

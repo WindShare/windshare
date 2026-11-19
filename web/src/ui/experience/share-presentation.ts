@@ -1,3 +1,4 @@
+import type { InitialJoinState } from '../../receiver/initial-join'
 import type { ReceiverSnapshot } from '../model'
 import type { TaskBlocking } from '../tasks'
 
@@ -14,18 +15,25 @@ export function shareConnectionLabel(connection: ReceiverSnapshot['connection'],
     case 'ended': return 'Share ended — a new link is needed'
     case 'unavailable': return 'Connection unavailable'
     case 'idle': {
-      if (connection.join?.kind === 'paused') {
-        return connection.join.reason === 'bandwidth' ? 'Relay bandwidth unavailable' : 'Sender temporarily unreachable'
-      }
-      if (connection.join?.kind === 'waiting') {
-        return connection.join.reason === 'bandwidth' ? 'Waiting for relay bandwidth' : 'Waiting for the sender; reconnecting automatically'
-      }
+      const join = connection.join
+      if (join?.kind === 'paused' || join?.kind === 'waiting') return initialJoinHoldLabel(join)
       return phase === 'joining' ? 'Connecting to the sender…' : status
     }
   }
 }
 
-export function initialJoinStatus(join: import('../../receiver/initial-join').InitialJoinState): string {
+function initialJoinHoldLabel(join: Exclude<InitialJoinState, { kind: 'connecting' }>): string {
+  if (join.reason === 'authorization') return 'Official relay access restricted'
+  if (join.kind === 'paused') {
+    return join.reason === 'bandwidth' ? 'Relay bandwidth unavailable' : 'Sender temporarily unreachable'
+  }
+  return join.reason === 'bandwidth' ? 'Waiting for relay bandwidth' : 'Waiting for the sender; reconnecting automatically'
+}
+
+export function initialJoinStatus(join: InitialJoinState): string {
+  if (join.kind !== 'connecting' && join.reason === 'authorization') {
+    return 'This share is temporarily unavailable through official relays.'
+  }
   switch (join.kind) {
     case 'paused': return join.reason === 'bandwidth'
       ? 'The connection timed out while waiting for relay bandwidth.'

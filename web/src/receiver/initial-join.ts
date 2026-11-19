@@ -1,23 +1,29 @@
 import { runInitialJoinAttempt, type InitialJoinAttempt } from './connection-attempt/initial'
 import { defaultReconnectBackoff, systemReconnectClock, waitingReconnectBackoff, type ReconnectClock } from './recovery-clock'
-import { isTerminalRecoveryFailure, latestRecoveryRetry, recoveryRetry } from './recovery-failure'
+import { AllRelaysRestrictedError, isTerminalRecoveryFailure, latestRecoveryRetry, recoveryRetry } from './recovery-failure'
 import type { RelayRecovery } from './relay-selection/recovery'
 import { RecoveryWake } from './recovery-wake'
 import type { RecoveryObservation } from './recovery-observation'
 
 const INITIAL_JOIN_WINDOW_MILLISECONDS = 30_000
 
+type JoinHoldReason = 'bandwidth' | 'authorization'
+type JoinPauseReason = 'unreachable' | JoinHoldReason
 export type InitialJoinState =
   | { readonly kind: 'connecting' }
-  | { readonly kind: 'waiting'; readonly reason: 'sender' | 'bandwidth' }
-  | { readonly kind: 'paused'; readonly reason: 'unreachable' | 'bandwidth' }
+  | { readonly kind: 'waiting'; readonly reason: 'sender' | JoinHoldReason }
+  | { readonly kind: 'paused'; readonly reason: JoinPauseReason }
 type JoinChoice = 'retry' | 'continue'
 
+const UNAVAILABLE_MESSAGES = {
+  authorization: 'This share is temporarily unavailable through official relays.',
+  bandwidth: 'The connection timed out while waiting for relay bandwidth.',
+  unreachable: 'The sender is temporarily unreachable. Retry or continue waiting; the link may still be valid.',
+} satisfies Record<JoinPauseReason, string>
+
 export class InitialJoinUnavailableError extends Error {
-  constructor(cause: unknown, waitingForBandwidth: boolean) {
-    super(waitingForBandwidth
-      ? 'The connection timed out while waiting for relay bandwidth.'
-      : 'The sender is temporarily unreachable. Retry or continue waiting; the link may still be valid.', { cause })
+  constructor(cause: unknown, reason: JoinPauseReason) {
+    super(UNAVAILABLE_MESSAGES[reason], { cause })
     this.name = 'InitialJoinUnavailableError'
   }
 }
@@ -79,8 +85,7 @@ class InitialJoinRecovery<T> {
   #deadline: number
   #continuous = false
   #attempt = 0
-  #failure: unknown
-  #waitingForBandwidth = false
+  #failure: { readonly error: unknown; readonly reason: JoinPauseReason } | undefined
 
   constructor(options: InitialJoinAttemptOptions<T>) {
     this.#options = options
@@ -101,11 +106,12 @@ class InitialJoinRecovery<T> {
 
   async #ensureWindow(): Promise<void> {
     if (this.#continuous || this.#clock.now() < this.#deadline) return
-    if (this.#options.control === undefined) throw new InitialJoinUnavailableError(this.#failure, this.#waitingForBandwidth)
-    const bandwidth = this.#waitingForBandwidth
-    this.#observe({ transition: 'waiting', failure: this.#failure, ...(bandwidth && { waitReason: 'bandwidth' }) })
+    const failure = this.#failure?.error
+    const reason = this.#failure?.reason ?? 'unreachable'
+    if (this.#options.control === undefined) throw new InitialJoinUnavailableError(failure, reason)
+    this.#observe({ transition: 'waiting', failure, ...(reason !== 'unreachable' && { waitReason: reason }) })
     const choice = await this.#options.control.wait(this.#options.signal, () => {
-      this.#publish({ kind: 'paused', reason: bandwidth ? 'bandwidth' : 'unreachable' })
+      this.#publish({ kind: 'paused', reason })
     })
     this.#continuous = choice === 'continue'
     this.#deadline = this.#clock.now() + this.#window
@@ -137,16 +143,16 @@ class InitialJoinRecovery<T> {
       this.#observe({ transition: 'terminal', failure: error })
       throw error
     }
-    this.#failure = error
     const now = this.#clock.now()
     const retry = latestRecoveryRetry(this.#options.relayRecovery?.nextRetry(), recoveryRetry(error, now))
-    const bandwidth = retry?.reason === 'bandwidth'
-    this.#waitingForBandwidth = bandwidth
+    const bandwidthWait = retry?.reason === 'bandwidth' ? 'bandwidth' : undefined
+    const reason = error instanceof AllRelaysRestrictedError ? 'authorization' : bandwidthWait ?? 'unreachable'
+    this.#failure = { error, reason }
     const required = Math.max(0, (retry?.retryAt ?? now) - now)
     const delay = this.#continuous ? waitingReconnectBackoff() : defaultReconnectBackoff(this.#attempt - 1)
     const backoff = this.#continuous ? delay : Math.max(0, Math.min(delay, this.#deadline - now))
     const wait = Math.max(required, backoff)
-    if (bandwidth) this.#publish({ kind: 'waiting', reason: 'bandwidth' })
+    if (reason !== 'unreachable') this.#publish({ kind: 'waiting', reason })
     this.#observe({ transition: 'waiting', delayMilliseconds: wait, failure: error,
       waitReason: retry?.reason ?? 'backoff' })
     const { control, signal } = this.#options

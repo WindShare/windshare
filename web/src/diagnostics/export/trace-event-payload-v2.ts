@@ -99,7 +99,7 @@ const EVENT_PAYLOAD_VALIDATORS = Object.freeze({
 
 function validateAuthorityBlocks(payload: UnknownRecord): void {
   exactKeys(payload, ['operation_id', 'endpoint', 'transition'], ['generation', 'version', 'failure_detail'], 'authority blocks')
-  member(payload.transition, ['accepted', 'rejected'], 'authority transition')
+  member(payload.transition, ['accepted', 'rejected', 'storage_fallback'], 'authority transition')
   for (const field of ['operation_id', 'endpoint', 'failure_detail']) {
     if (payload[field] !== undefined && (typeof payload[field] !== 'string' || payload[field].length > 2048)) throw new TypeError('Invalid authority trace text')
   }

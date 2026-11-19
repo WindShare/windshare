@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import { firstUsableRelay, RelayEndpointFailure } from '../../src/receiver/relay-selection/race'
 import { StaleShareInstanceError } from '../../src/receiver/session-factory'
-import { isShareRecoveryFailure, isTerminalRecoveryFailure } from '../../src/receiver/recovery-failure'
+import { AllRelaysRestrictedError, isShareRecoveryFailure, isTerminalRecoveryFailure } from '../../src/receiver/recovery-failure'
+import { BandwidthWaitError } from '../../src/contracts/capacity'
 import { receiverRelayBases, RelayCandidates } from '../../src/receiver/relay-selection/candidates'
 import { RelayRecovery } from '../../src/receiver/relay-selection/recovery'
-import { RelayPolicyDeniedError } from '../../src/receiver/relay-admission'
+import { RelayPolicyDeniedError, RELAY_POLICY_RETRY_MS } from '../../src/receiver/relay-admission'
 import { RelayProtocolError } from '../../src/transport/relay/protocol'
 
 function deferred<T>() {
@@ -97,6 +98,18 @@ describe('first usable relay', () => {
     now = 60_000
     await expect(recovery.race(signal, connect, close)).resolves.toBe('official')
     expect(connect.mock.calls.map(([base]) => base)).toEqual(['official', 'independent', 'independent', 'official'])
+  })
+
+  it('does not infer a full policy restriction from the earliest retry alone', async () => {
+    const recovery = new RelayRecovery(['official', 'independent'], { now: () => 0 })
+    const task = recovery.race(new AbortController().signal, async base => {
+      if (base === 'official') throw new RelayPolicyDeniedError()
+      throw new BandwidthWaitError(RELAY_POLICY_RETRY_MS + 1_000, new Error('Independent relay bandwidth is busy'))
+    }, async () => undefined)
+    const failure: unknown = await task.catch((cause: unknown) => cause)
+    expect(failure).toBeInstanceOf(AggregateError)
+    expect(failure).not.toBeInstanceOf(AllRelaysRestrictedError)
+    expect(recovery.nextRetry()).toEqual({ retryAt: RELAY_POLICY_RETRY_MS, reason: 'authorization' })
   })
 
   it('allows a failed endpoint without delaying a healthy one and bounds configuration fanout', async () => {

@@ -5,6 +5,13 @@ export interface BlockCache {
   load(): Promise<BlockRecord | undefined>
   commit(snapshot: BlockSnapshot): Promise<void>
 }
+export class BlockCacheAccessDeniedError extends Error {
+  constructor(cause: DOMException) {
+    super('IndexedDB access denied for the authority cache', { cause })
+    this.name = 'BlockCacheAccessDeniedError'
+  }
+}
+
 export class MemoryBlockCache implements BlockCache {
   #record: BlockRecord | undefined
   load(): Promise<BlockRecord | undefined> { return Promise.resolve(this.#record) }
@@ -19,13 +26,16 @@ export class BrowserBlockCache implements BlockCache {
   readonly #root: string
   constructor(root: string) { this.#root = root }
   #open(): Promise<IDBDatabase> {
-    return new Promise((resolve, reject) => {
+    return new Promise<IDBDatabase>((resolve, reject) => {
       let blocked = false
       const request = indexedDB.open(DATABASE, 1)
       request.onupgradeneeded = () => { request.result.createObjectStore(STORE) }
       request.onsuccess = () => { if (blocked) request.result.close(); else resolve(request.result) }
       request.onerror = () => reject(request.error)
       request.onblocked = () => { blocked = true; reject(new Error('Authority cache upgrade blocked')) }
+    }).catch((failure: unknown) => {
+      if (failure instanceof DOMException && failure.name === 'SecurityError') throw new BlockCacheAccessDeniedError(failure)
+      throw failure
     })
   }
   async load(): Promise<BlockRecord | undefined> {
