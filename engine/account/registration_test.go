@@ -51,14 +51,14 @@ func TestWorkRegistrationRequiresUserAfterDiscoveryAndRestart(t *testing.T) {
 		}
 	})
 	service = testService(t, config)
-	if err := service.step(t.Context()); err != nil {
-		t.Fatal(err)
+	if outcome, err := service.RefreshOnce(t.Context()); err != nil || outcome != RefreshNeedsRegistration {
+		t.Fatalf("account setup did not require registration: %s, %v", outcome, err)
 	}
 	// First share, cache polling and a process restart must all stop at the same boundary.
 	for _, expectedRequests := range []int{1, 2} {
 		service = testService(t, config)
-		if err := service.step(t.Context()); err != nil {
-			t.Fatal(err)
+		if outcome, err := service.RefreshOnce(t.Context()); err != nil || outcome != RefreshNeedsRegistration {
+			t.Fatalf("account setup did not require registration: %s, %v", outcome, err)
 		}
 		status, _ := service.Snapshot()
 		if status.State != RegistrationRequired || status.RegistrationPermille != 0 || requests != expectedRequests {

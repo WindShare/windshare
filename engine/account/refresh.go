@@ -100,7 +100,10 @@ func (service *Service) pollLocked(ctx context.Context, schedule *refreshSchedul
 		if !requested && now.Before(schedule.next) {
 			return
 		}
-		err = service.refreshRecord(ctx, record)
+		if record.Credential != nil && record.Denial == "" && !service.validTicket(record) {
+			service.transition(Refreshing, "", time.Time{})
+		}
+		_, err = service.refreshRecord(ctx, record)
 	}
 	delay := RefreshInterval
 	if err != nil {
@@ -159,16 +162,30 @@ func (service *Service) cachedRefreshAt(record Record, now time.Time) time.Time 
 	return next
 }
 
-func (service *Service) step(ctx context.Context) error {
+// RefreshOnce runs one explicit attempt without activating background maintenance.
+// A usable cached ticket can coexist with an unfinished or failed attempt.
+func (service *Service) RefreshOnce(ctx context.Context) (RefreshOutcome, error) {
+	if service == nil {
+		return "", ErrNotConfigured
+	}
+	// Bound the wait for the operation and the store as well as the request.
+	ctx, cancel := context.WithTimeout(ctx, RequestTimeout)
+	defer cancel()
 	if err := service.lockOperation(ctx); err != nil {
-		return err
+		return "", err
 	}
 	defer func() { <-service.operation }()
 	record, err := service.syncRecord(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
-	return service.refreshRecord(ctx, record)
+	logger := slog.Default()
+	if record.Credential != nil {
+		logger = logger.With("credential", record.Credential.ID)
+	}
+	outcome, err := service.refreshRecord(ctx, record)
+	logger.DebugContext(ctx, "account_refresh_attempt_completed", "outcome", outcome, "error", err)
+	return outcome, err
 }
 
 func (service *Service) syncRecord(ctx context.Context) (Record, error) {
@@ -184,18 +201,29 @@ func (service *Service) loadOrInitialize(ctx context.Context) (Record, error) {
 	return record, err
 }
 
-func (service *Service) refreshRecord(ctx context.Context, record Record) error {
-	if record.Credential == nil {
-		proof, err := service.pendingRegistration(ctx, record)
-		if proof != nil {
-			service.transition(proof.Challenge.requiredState(), "", time.Time{})
+func (service *Service) refreshRecord(ctx context.Context, record Record) (RefreshOutcome, error) {
+	if record.Credential != nil {
+		if err := service.requestIssuance(ctx, record, "/v1/accounts/ticket", record.Credential.Secret, struct{}{}); err != nil {
+			return "", err
 		}
-		return err
+		return RefreshSucceeded, nil
 	}
-	if record.Denial == "" && !service.validTicket(record) {
-		service.transition(Refreshing, "", time.Time{})
+	proof, err := service.pendingRegistration(ctx, record)
+	if err != nil {
+		return "", err
 	}
-	return service.requestIssuance(ctx, record, "/v1/accounts/ticket", record.Credential.Secret, struct{}{})
+	if proof == nil {
+		return RefreshSucceeded, nil
+	}
+	state := proof.Challenge.requiredState()
+	service.transition(state, "", time.Time{})
+	if record.Denial != "" {
+		return "", &fault{Kind: "denied", Reason: record.Denial}
+	}
+	if state == EmailRequired {
+		return RefreshNeedsEmail, nil
+	}
+	return RefreshNeedsRegistration, nil
 }
 
 func (service *Service) requestIssuance(ctx context.Context, record Record, path, secret string, request any) error {

@@ -8,30 +8,28 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"testing/synctest"
 
 	"github.com/windshare/windshare/engine/account"
 )
 
 type commandService struct {
 	value    account.Snapshot
-	changed  chan struct{}
 	action   string
 	username string
 	target   string
 	secret   string
 	revoked  [16]byte
 	failure  error
-	onRetry  func()
+	refresh  func(context.Context) (account.RefreshOutcome, error)
 }
 
 func (service *commandService) Snapshot() (account.Snapshot, <-chan struct{}) {
-	return service.value, service.changed
+	return service.value, nil
 }
-func (service *commandService) Retry() {
+func (service *commandService) RefreshOnce(ctx context.Context) (account.RefreshOutcome, error) {
 	service.action = "retry"
-	if service.onRetry != nil {
-		service.onRetry()
-	}
+	return service.refresh(ctx)
 }
 func (service *commandService) Register(context.Context) error {
 	service.action = "register"
@@ -118,30 +116,73 @@ func TestAccountCommandsRejectInvalidInputBeforeMutation(t *testing.T) {
 	}
 }
 
-func TestAccountRetryHonorsCancellationAndExplicitDenial(t *testing.T) {
-	for _, state := range []account.State{account.Pending, account.Registering, account.RefreshRequired, account.Refreshing, account.Unavailable, account.Denied} {
-		t.Run(string(state), func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			service := &commandService{value: account.Snapshot{State: state, Active: true, Reason: "account_blocked"}, changed: make(chan struct{})}
-			if state != account.Denied {
-				service.onRetry = cancel
+func TestAccountRetryUsesAttemptResult(t *testing.T) {
+	denied := errors.New("account_blocked")
+	for _, scenario := range []struct {
+		name    string
+		outcome account.RefreshOutcome
+		err     error
+		code    int
+		hint    string
+	}{
+		{name: "refreshed", outcome: account.RefreshSucceeded, code: ResultOK},
+		{name: "denied", err: denied, code: ResultFailure, hint: denied.Error()},
+		{name: "timed out", err: context.DeadlineExceeded, code: ResultFailure},
+		{name: "register", outcome: account.RefreshNeedsRegistration, code: ResultFailure, hint: "wind account register"},
+		{name: "verify email", outcome: account.RefreshNeedsEmail, code: ResultFailure, hint: "wind account verify"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			service := &commandService{
+				value: account.Snapshot{State: account.Ready},
+				refresh: func(context.Context) (account.RefreshOutcome, error) {
+					return scenario.outcome, scenario.err
+				},
 			}
 			output := &lines{}
-			if code := (Runner{Service: service, Output: output}).Run(ctx, []string{"retry"}); code != ResultFailure {
-				t.Fatal("retry discarded denial/cancellation")
+			code := (Runner{Service: service, Output: output}).Run(t.Context(), []string{"retry"})
+			if code != scenario.code || service.action != "retry" {
+				t.Fatalf("retry returned %d without the expected attempt result: %s", code, output)
 			}
-			if service.action != "retry" {
-				t.Fatal("setup was not requested")
+			if scenario.hint != "" && !strings.Contains(output.String(), scenario.hint) {
+				t.Fatalf("retry omitted recovery guidance: %s", output)
 			}
 		})
 	}
-	for _, state := range []account.State{account.Ready, account.EmailRequired, account.RegistrationRequired} {
-		service := &commandService{value: account.Snapshot{State: state}}
-		if code := (Runner{Service: service, Output: &lines{}}).Run(context.Background(), []string{"retry"}); code != ResultOK {
-			t.Fatal("ready or interactive verification remained blocked")
+}
+
+func TestAccountRetryWaitsForAttemptDespiteCachedReadiness(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		started := make(chan struct{})
+		service := &commandService{
+			value: account.Snapshot{State: account.Ready},
+			refresh: func(ctx context.Context) (account.RefreshOutcome, error) {
+				close(started)
+				<-ctx.Done()
+				return "", ctx.Err()
+			},
 		}
-	}
+		done := make(chan int, 1)
+		go func() {
+			done <- (Runner{Service: service, Output: &lines{}}).Run(ctx, []string{"retry"})
+		}()
+		synctest.Wait()
+		select {
+		case <-started:
+		default:
+			t.Fatal("retry never started the refresh attempt")
+		}
+		select {
+		case code := <-done:
+			t.Fatalf("retry returned %d while the attempt was still in flight", code)
+		default:
+		}
+		cancel()
+		if code := <-done; code != ResultFailure {
+			t.Fatalf("canceled retry returned %d", code)
+		}
+	})
 }
 
 func TestAccountStatusAndErrors(t *testing.T) {

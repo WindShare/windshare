@@ -137,14 +137,14 @@ func TestRegistrationRetriesReusePersistedEntropyAndRefreshKeepsCredential(t *te
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(data)))}, nil
 	})
 	service := testService(t, config)
-	if service.step(t.Context()) == nil {
+	if _, err := service.RefreshOnce(t.Context()); err == nil {
 		t.Fatal("expected response loss")
 	}
-	if err := service.step(t.Context()); err != nil {
-		t.Fatal(err)
+	if outcome, err := service.RefreshOnce(t.Context()); err != nil || outcome != RefreshSucceeded {
+		t.Fatalf("account refresh: %s, %v", outcome, err)
 	}
-	if err := service.step(t.Context()); err != nil {
-		t.Fatal(err)
+	if outcome, err := service.RefreshOnce(t.Context()); err != nil || outcome != RefreshSucceeded {
+		t.Fatalf("account refresh: %s, %v", outcome, err)
 	}
 	if calls != 3 || service.record.Credential.ID != response.Credential || service.record.SetupSecret != "" {
 		t.Fatal("credential changed")

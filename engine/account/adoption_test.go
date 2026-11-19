@@ -40,7 +40,7 @@ func TestDenialSurvivesFailedWriteAndCacheReload(t *testing.T) {
 	if got := source.RegistrationAuthorization(); got.State != serviceauthority.AdmissionReady {
 		t.Fatal(got.State, got.Cause)
 	}
-	if err := service.step(t.Context()); err == nil || !strings.Contains(err.Error(), "disk full") {
+	if _, err := service.RefreshOnce(t.Context()); err == nil || !strings.Contains(err.Error(), "disk full") {
 		t.Fatalf("failed persistence: %v", err)
 	}
 	service.mu.Lock()
@@ -53,6 +53,23 @@ func TestDenialSurvivesFailedWriteAndCacheReload(t *testing.T) {
 		if got := source.RegistrationAuthorization(); got.State != serviceauthority.AdmissionDenied || got.Bearer != "" {
 			t.Fatalf("denial lost: %+v", got)
 		}
+	}
+}
+
+func TestRefreshOnceReportsDenialWithCachedSetupChallenge(t *testing.T) {
+	config, response := accountFixture(t)
+	config.Store = &MemoryStore{record: Record{
+		SetupSecret: response.Secret,
+		Denial:      "account_blocked",
+		Proof:       &Proof{Challenge: Challenge{Mode: emailChallenge, ExpiresAt: uint64(config.Now().Add(time.Minute).Unix())}},
+	}}
+	config.Client = clientFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("live setup challenge should be evaluated from the store")
+		return nil, nil
+	})
+	service := testService(t, config)
+	if outcome, err := service.RefreshOnce(t.Context()); outcome != "" || err == nil || CommandErrorCode(err) != "account_denied" {
+		t.Fatalf("known denial returned a setup outcome: %s, %v", outcome, err)
 	}
 }
 

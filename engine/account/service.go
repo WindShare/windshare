@@ -130,6 +130,7 @@ func (service *Service) Close() {
 	service.workers.Wait()
 }
 
+// Retry wakes background maintenance and returns before the attempt completes.
 func (service *Service) Retry() {
 	if service == nil {
 		return

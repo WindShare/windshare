@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -27,7 +26,7 @@ type LineOutput interface{ WriteLines(...string) }
 
 type Service interface {
 	Snapshot() (account.Snapshot, <-chan struct{})
-	Retry()
+	RefreshOnce(context.Context) (account.RefreshOutcome, error)
 	Register(context.Context) error
 	Login(context.Context, string, string) error
 	SetPassword(context.Context, string, string, string) error
@@ -85,8 +84,7 @@ func (runner Runner) execute(ctx context.Context, args []string) error {
 		}
 	case "retry":
 		if len(args) == 1 {
-			runner.Service.Retry()
-			return runner.wait(ctx)
+			return runner.refresh(ctx)
 		}
 	case "login", "password":
 		if len(args) != 2 && (len(args) != 3 || args[2] != "--password-stdin") {
@@ -189,28 +187,20 @@ func (runner Runner) password(ctx context.Context, stdin bool) (string, error) {
 	}
 	return string(secret), nil
 }
-func (runner Runner) wait(ctx context.Context) error {
-	var previous string
-	for {
-		value, changed := runner.Service.Snapshot()
-		message := Describe(value)
-		if value.State == account.Ready {
-			return nil
-		}
-		if value.State == account.EmailRequired || value.State == account.RegistrationRequired {
-			return nil
-		}
-		if value.State == account.Denied {
-			return fmt.Errorf("access denied: %s", value.Reason)
-		}
-		if message != previous {
-			runner.Output.WriteLines(message)
-			previous = message
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-changed:
-		}
+func (runner Runner) refresh(ctx context.Context) error {
+	runner.Output.WriteLines(Describe(account.Snapshot{State: account.Refreshing}))
+	outcome, err := runner.Service.RefreshOnce(ctx)
+	if err != nil {
+		return err
+	}
+	switch outcome {
+	case account.RefreshSucceeded:
+		return nil
+	case account.RefreshNeedsRegistration:
+		return errors.New(Describe(account.Snapshot{State: account.RegistrationRequired}))
+	case account.RefreshNeedsEmail:
+		return errors.New(Describe(account.Snapshot{State: account.EmailRequired}))
+	default:
+		return errors.New("account refresh did not complete")
 	}
 }

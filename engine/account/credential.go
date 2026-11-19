@@ -102,7 +102,7 @@ func (service *Service) refreshRetained(config Config) (Record, error) {
 		return Record{}, err
 	}
 	defer isolated.Close()
-	if err := isolated.step(service.ctx); err != nil {
+	if _, err := isolated.RefreshOnce(service.ctx); err != nil {
 		return Record{}, err
 	}
 	return isolated.record, nil

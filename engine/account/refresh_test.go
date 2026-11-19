@@ -144,8 +144,18 @@ func TestSharedTicketSatisfiesBackgroundRefresh(t *testing.T) {
 			t.Fatalf("startup issued %d tickets with a fresh cache", got)
 		}
 
-		first.Retry()
-		synctest.Wait()
+		if snapshot, _ := first.Snapshot(); snapshot.State != Ready {
+			t.Fatalf("manual refresh should start with a usable cache: %+v", snapshot)
+		}
+		if outcome, err := first.RefreshOnce(t.Context()); err != nil || outcome != RefreshSucceeded {
+			t.Fatalf("manual refresh did not complete: %s, %v", outcome, err)
+		}
+		if got := requests.Load(); got != 1 {
+			t.Fatalf("manual refresh returned after %d authority requests", got)
+		}
+		if stored, err := first.load(t.Context()); err != nil || stored.Ticket != vector.Refreshed.Ticket {
+			t.Fatalf("manual refresh returned before storing the issued ticket: %v", err)
+		}
 		time.Sleep(PollInterval)
 		synctest.Wait()
 		snapshot, _ := second.Snapshot()

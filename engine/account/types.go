@@ -38,6 +38,15 @@ type Config struct {
 	ResolveNode func(string) (Node, bool)
 }
 
+// RefreshOutcome describes what a completed attempt achieved for its caller.
+type RefreshOutcome string
+
+const (
+	RefreshSucceeded         RefreshOutcome = "refreshed"
+	RefreshNeedsRegistration RefreshOutcome = "registration_required"
+	RefreshNeedsEmail        RefreshOutcome = "email_required"
+)
+
 type State string
 
 const (

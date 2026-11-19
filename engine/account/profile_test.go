@@ -64,7 +64,7 @@ func TestProfileEmailRequiresDeliveredCodeAndSurvivesRestartAndRefresh(t *testin
 		t.Fatal(err)
 	}
 	reopened := testService(t, config)
-	if err := reopened.step(t.Context()); err != nil {
+	if _, err := reopened.RefreshOnce(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if err := reopened.ConfirmProfileEmail(t.Context(), start.Account, pending.Challenge.ID, "wrong"); CommandErrorCode(err) != "email_code_rejected" {
@@ -78,7 +78,7 @@ func TestProfileEmailRequiresDeliveredCodeAndSurvivesRestartAndRefresh(t *testin
 		t.Fatal(err)
 	}
 	// A delayed issuance carries the previously verified address.
-	if err := reopened.step(t.Context()); err != nil {
+	if _, err := reopened.RefreshOnce(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	updated, _ := testService(t, config).Snapshot()

@@ -47,8 +47,8 @@ func TestFreshChallengesSurviveLocalClockBehindAuthority(t *testing.T) {
 		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(string(data)))}, nil
 	})
 	service := testService(t, config)
-	if err := service.step(t.Context()); err != nil {
-		t.Fatalf("registration challenge rejected: %v", err)
+	if outcome, err := service.RefreshOnce(t.Context()); err != nil || outcome != RefreshNeedsEmail {
+		t.Fatalf("registration did not require email: %s, %v", outcome, err)
 	}
 	if snapshot, _ := service.Snapshot(); snapshot.State != EmailRequired || snapshot.EmailCodePending {
 		t.Fatalf("state=%s reason=%q", snapshot.State, snapshot.Reason)
@@ -281,7 +281,7 @@ func TestChallengeExpiryBoundaries(t *testing.T) {
 				var err error
 				want := "invalid account challenge"
 				if path == "registration" {
-					err = service.step(t.Context())
+					_, err = service.RefreshOnce(t.Context())
 				} else {
 					err, want = service.RequestEmail(t.Context(), "person@example.com"), "invalid email challenge"
 				}
