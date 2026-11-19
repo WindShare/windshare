@@ -22,17 +22,21 @@ use windshare_relay_access::{
 };
 
 #[derive(Clone, Default)]
-struct Memory(BTreeMap<String, String>);
+struct Memory {
+    records: BTreeMap<String, String>,
+    put_count: usize,
+}
 impl Store for Memory {
     fn get(&self, key: &str) -> Result<Option<String>> {
-        Ok(self.0.get(key).cloned())
+        Ok(self.records.get(key).cloned())
     }
     fn put(&mut self, key: &str, value: &str) -> Result<()> {
-        self.0.insert(key.into(), value.into());
+        self.records.insert(key.into(), value.into());
+        self.put_count += 1;
         Ok(())
     }
     fn delete(&mut self, key: &str) -> Result<()> {
-        self.0.remove(key);
+        self.records.remove(key);
         Ok(())
     }
     fn scan_after(
@@ -42,7 +46,7 @@ impl Store for Memory {
         limit: Option<usize>,
     ) -> Result<Vec<(String, String)>> {
         Ok(self
-            .0
+            .records
             .iter()
             .filter(|(key, _)| {
                 key.starts_with(prefix) && after.is_none_or(|after| key.as_str() > after)
@@ -78,28 +82,31 @@ impl Environment for Clock {
         Ok([self.next; N])
     }
 }
-fn fixture() -> Authority<Memory, Clock> {
+fn signing_fixture(number: u64) -> Signing {
     let root = SigningKey::from_bytes(&[41; 32]);
-    let signing = SigningKey::from_bytes(&[42; 32]);
+    let key = SigningKey::from_bytes(&[42; 32]);
     let generation = Generation {
         issuer: root.verifying_key().to_bytes(),
-        number: 1,
-        key: signing.verifying_key().to_bytes(),
+        number,
+        key: key.verifying_key().to_bytes(),
         not_before: DAY_SECONDS,
         expires_at: DAY_SECONDS * 30,
     };
     let certificate = URL_SAFE_NO_PAD.encode(generation.certify(&root).unwrap());
+    Signing {
+        generation,
+        key,
+        certificate,
+    }
+}
+fn fixture() -> Authority<Memory, Clock> {
     Authority::new(
         Memory::default(),
         Clock {
             now: DAY_SECONDS * 2,
             next: 10,
         },
-        Signing {
-            generation,
-            key: signing,
-            certificate,
-        },
+        signing_fixture(1),
     )
     .unwrap()
 }
@@ -345,6 +352,30 @@ fn creation_bursts_do_not_limit_existing_accounts_and_milestones_do_not_change_m
     authority.environment.now += 60;
     assert!(authority.register("source", registration(2)).is_ok());
 }
+#[test]
+fn signing_activation_writes_only_when_generation_changes() {
+    let mut authority = fixture();
+    let now = authority.environment.now();
+    let signing = &authority.signing;
+    let store = &mut authority.store;
+    assert_eq!(store.put_count, 1);
+
+    signing.activate(store, now).unwrap();
+    assert_eq!(store.put_count, 1);
+    assert!(
+        signing
+            .activate(store, signing.generation.expires_at)
+            .is_err()
+    );
+    assert_eq!(store.put_count, 1);
+
+    let next = signing_fixture(2);
+    next.activate(store, now).unwrap();
+    assert_eq!(store.put_count, 2);
+    assert!(signing.activate(store, now).is_err());
+    assert_eq!(store.put_count, 2);
+}
+
 #[test]
 fn initialization_is_consumed_and_signing_rollback_is_refused_after_expiry() {
     let mut authority = fixture();

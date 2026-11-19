@@ -4,6 +4,8 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::SigningKey;
 use windshare_relay_access::trust::{Generation, TrustStore};
 
+const SIGNING_GENERATION_KEY: &str = "signing-generation";
+
 pub struct Signing {
     pub generation: Generation,
     pub key: SigningKey,
@@ -36,8 +38,9 @@ impl Signing {
         })
     }
     pub(crate) fn activate(&self, store: &mut impl Store, now: u64) -> Result<()> {
+        let previous = load(store, SIGNING_GENERATION_KEY)?;
         let mut trusted = TrustStore::default();
-        if let Some(generation) = load(store, "signing-generation")? {
+        if let Some(generation) = previous {
             trusted
                 .remember(generation)
                 .map_err(|error| anyhow!("{error:?}"))?;
@@ -45,6 +48,16 @@ impl Signing {
         trusted
             .accept(self.generation, now)
             .map_err(|error| anyhow!("{error:?}"))?;
-        save(store, "signing-generation", &self.generation)
+
+        // Revalidating the active certificate does not advance the rollback barrier.
+        if previous != Some(self.generation) {
+            save(store, SIGNING_GENERATION_KEY, &self.generation)?;
+            tracing::info!(
+                event = "authority_signing_generation_activated",
+                previous_generation = ?previous.map(|generation| generation.number),
+                generation = self.generation.number,
+            );
+        }
+        Ok(())
     }
 }
