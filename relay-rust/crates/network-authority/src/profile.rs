@@ -40,7 +40,8 @@ const PROVIDER_DOMAINS: &[&str] = &[
 ];
 
 pub enum EmailVerification {
-    Registration { client_secret: String },
+    RegistrationAttempt { client_secret: String },
+    RegistrationByChallenge,
     Profile { bearer: String },
 }
 
@@ -122,9 +123,10 @@ impl<R: Store, E: Environment> Authority<R, E> {
         address: &Mailbox,
     ) -> Result<EmailDelivery> {
         let owner = match verification {
-            EmailVerification::Registration { client_secret } => {
-                EmailOwner::Registration(RegistrationAttempt::from_secret(&client_secret)?)
+            EmailVerification::RegistrationAttempt { client_secret } => {
+                EmailOwner::RegistrationAttempt(RegistrationAttempt::from_secret(&client_secret)?)
             }
+            EmailVerification::RegistrationByChallenge => EmailOwner::RegistrationByChallenge,
             EmailVerification::Profile { bearer } => {
                 EmailOwner::Account(self.authenticate(&bearer)?.1.id)
             }

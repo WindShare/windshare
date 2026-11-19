@@ -34,10 +34,17 @@ struct ProfileEmail {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RegistrationEmail {
-    email: String,
-    client_secret: String,
+#[serde(untagged, deny_unknown_fields)]
+enum RegistrationEmail {
+    WithSetupSecret {
+        email: String,
+        client_secret: String,
+    },
+    // v0.1.3 first sends its setup secret when it redeems the mailed code.
+    // Retire this wire shape and the challenge binding when v0.1.3 support ends.
+    EmailOnly {
+        email: String,
+    },
 }
 fn parse_request(
     bytes: &[u8],
@@ -47,13 +54,18 @@ fn parse_request(
         let input: ProfileEmail = serde_json::from_slice(bytes).map_err(|_| Fault::InvalidEmail)?;
         (input.email, EmailVerification::Profile { bearer })
     } else {
-        let input: RegistrationEmail = serde_json::from_slice(bytes).map_err(|_| Fault::Invalid)?;
-        (
-            input.email,
-            EmailVerification::Registration {
-                client_secret: input.client_secret,
-            },
-        )
+        match serde_json::from_slice(bytes).map_err(|_| Fault::Invalid)? {
+            RegistrationEmail::WithSetupSecret {
+                email,
+                client_secret,
+            } => (
+                email,
+                EmailVerification::RegistrationAttempt { client_secret },
+            ),
+            RegistrationEmail::EmailOnly { email } => {
+                (email, EmailVerification::RegistrationByChallenge)
+            }
+        }
     };
     Ok((Mailbox::parse(&address)?, verification))
 }
@@ -138,14 +150,18 @@ impl NetworkAuthority {
         let response = match Fetch::Request(request).send_with_signal(&signal).await {
             Ok(response) => response,
             Err(error) => {
-                tracing::warn!(event = "email_delivery_failed", challenge = delivery.challenge_id(), %error);
+                tracing::warn!(
+                    event = "email_delivery_failed",
+                    challenge_fingerprint = %delivery.challenge_fingerprint(),
+                    %error,
+                );
                 return unavailable();
             }
         };
         if !(200..300).contains(&response.status_code()) {
             tracing::warn!(
                 event = "email_delivery_rejected",
-                challenge = delivery.challenge_id(),
+                challenge_fingerprint = %delivery.challenge_fingerprint(),
                 status = response.status_code()
             );
             return unavailable();
