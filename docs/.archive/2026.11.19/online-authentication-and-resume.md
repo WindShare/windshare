@@ -50,4 +50,4 @@ Keep the current link format and its separate-key check against the bare URL. Mo
 
 ## Delivery order
 
-Prioritize automatic metadata-based continuation within the running task. Centralize control authentication independently and address cache and recovery contracts before removing object signatures. Measure time to resume, reused and retransmitted bytes, and ordinary transfer throughput. The [native receive workload](../performance.md#native-receive-continuation) reports these measurements over a loopback relay.
+Prioritize automatic metadata-based continuation within the running task. Centralize control authentication independently and address cache and recovery contracts before removing object signatures. Measure time to resume, reused and retransmitted bytes, and ordinary transfer throughput. The [native receive workload](../../performance.md#native-receive-continuation) reports these measurements over a loopback relay.
