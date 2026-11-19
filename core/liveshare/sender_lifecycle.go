@@ -6,9 +6,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
-	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/link"
-	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
 )
 
@@ -21,8 +19,6 @@ type senderOwnedResources struct {
 	runtimeFactory  senderRuntimeLifecycle
 	cache           *contentflow.SharedBlockCache
 	catalogAccess   *senderCatalogAccess
-	catalogObjects  *catalogflow.SealedCatalogStore
-	recordSealer    *records.Sealer
 	revisionStore   *content.RevisionStore
 	revisionDeriver senderRevisionIdentityDeriver
 	catalogStore    *catalog.CatalogStore
@@ -47,8 +43,6 @@ func (sender *PreparedSender) Stop() error {
 		runtimeFactory:  sender.runtimeFactory,
 		cache:           sender.cache,
 		catalogAccess:   sender.catalogAccess,
-		catalogObjects:  sender.catalogObjects,
-		recordSealer:    sender.recordSealer,
 		revisionStore:   sender.revisionStore,
 		revisionDeriver: sender.revisionDeriver,
 		catalogStore:    sender.catalogStore,
@@ -119,12 +113,6 @@ func (sender *PreparedSender) finishClose(
 	}
 	// Quiescence precedes destruction because both sealers retain cloned key
 	// authority that active catalog or content work may still dereference.
-	if resources.catalogObjects != nil {
-		resources.catalogObjects.Destroy()
-	}
-	if resources.recordSealer != nil {
-		resources.recordSealer.Destroy()
-	}
 
 	sender.mu.Lock()
 	clear(sender.capability.ReadSecret)
@@ -145,8 +133,6 @@ func (sender *PreparedSender) finishClose(
 	sender.runtimeFactory = nil
 	sender.cache = nil
 	sender.catalogAccess = nil
-	sender.catalogObjects = nil
-	sender.recordSealer = nil
 	sender.revisionStore = nil
 	sender.revisionDeriver = nil
 	sender.catalogStore = nil

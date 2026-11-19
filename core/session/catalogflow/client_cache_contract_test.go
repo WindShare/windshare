@@ -21,11 +21,7 @@ func TestClientSingleflightAndDirectoryFailureIsolation(t *testing.T) {
 		healthy: SnapshotResult(healthySnapshot),
 		failed:  FailureResult(failure),
 	}}
-	service, err := NewSenderService(instance, source, codec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	transport := &serviceTransport{service: service}
+	transport := &serviceTransport{source: source, codec: codec}
 	client, err := NewClient(ClientConfig{ShareInstance: instance, Transport: transport, Verifier: codec})
 	if err != nil {
 		t.Fatal(err)

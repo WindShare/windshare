@@ -170,7 +170,10 @@ func (r *Reader) replace(ctx context.Context, b *binding) error {
 		return b.failure
 	}
 	if next.Descriptor != b.lease.Descriptor {
-		b.failure = errors.Join(content.ErrRevisionDrift, r.release(ctx, next.LeaseID))
+		b.failure = content.NewRevisionReopenedError(b.lease.Descriptor, next.Descriptor)
+		if cleanupErr := r.release(ctx, next.LeaseID); cleanupErr != nil {
+			b.failure = errors.Join(b.failure, cleanupErr)
+		}
 		return b.failure
 	}
 	if err = ctx.Err(); err != nil {

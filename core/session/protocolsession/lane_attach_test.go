@@ -2,7 +2,6 @@ package protocolsession
 
 import (
 	"bytes"
-	"crypto/ed25519"
 	"encoding/hex"
 	"errors"
 	"testing"
@@ -69,7 +68,7 @@ func loadLaneGrantVector(t *testing.T) (laneControlVector, LaneGrant) {
 
 func TestLaneGrantCodecMatchesSharedWireVector(t *testing.T) {
 	vector, grant := loadLaneGrantVector(t)
-	want := decodeB64(t, vector.GrantSemanticBodyB64)
+	want := decodeB64(t, vector.GrantSemanticBodyCborB64)
 	body, err := EncodeLaneGrant(grant)
 	if err != nil || !bytes.Equal(body, want) {
 		t.Fatalf("grant wire representation = %x, want %x: %v", body, want, err)
@@ -135,52 +134,6 @@ func TestLaneGrantRejectsInvalidFields(t *testing.T) {
 	}
 }
 
-func TestLaneGrantAuthenticationOwnsSchemaWithoutRuntimeRegistration(t *testing.T) {
-	vector, grant := loadLaneGrantVector(t)
-	sessionID, err := ProtocolSessionIDFromBytes(decodeB64(t, vector.ProtocolSessionIDB64))
-	if err != nil {
-		t.Fatal(err)
-	}
-	base := ControlBinding{
-		ShareInstance: mustShare(t, decodeB64(t, vector.ShareInstanceB64)), ProtocolSessionID: sessionID,
-		LaneID: vector.GrantLaneID, LaneEpoch: vector.GrantLaneEpoch, Direction: DirectionSenderToReceiver,
-	}
-	signingKey := vectorSenderSigningKey()
-	sequence := parseSequence(t, vector.GrantSequence)
-	message, err := DecodeMessage(decodeB64(t, vector.GrantPlaintextB64))
-	if err != nil {
-		t.Fatal(err)
-	}
-	binding := base
-	binding.Sequence, binding.MessageKind = sequence, MessageLaneAttach
-	binding.OperationID, binding.HasOperationID = grant.OperationID, true
-	malformed := mustControlBody(t, map[uint64]any{0: uint64(1), 1: uint64(1), 2: uint64(0), 3: uint64(1), 4: grant.AttachNonce[:]})
-	signed, err := SignControlBody(signingKey, ControlDomainLaneAttach, binding, malformed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	invalidMessage, err := NewMessage(MessageLaneAttach, &grant.OperationID, signed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	external := SenderControlSemanticValidatorFunc(func(MessageKind, OperationID, []byte) error {
-		t.Fatal("lane authorization schema delegated to runtime")
-		return nil
-	})
-	for _, validator := range []SenderControlSemanticValidator{nil, external} {
-		authenticator, err := NewSenderControlAuthenticator(checkedSender(t, signingKey.Public().(ed25519.PublicKey)), base, validator)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := authenticator.Verify(sequence, message); err != nil {
-			t.Fatalf("valid signed grant: %v", err)
-		}
-		if err := authenticator.Verify(sequence, invalidMessage); !errors.Is(err, ErrControlSemantic) || !errors.Is(err, ErrLaneMalformed) {
-			t.Fatalf("signed malformed grant: %v", err)
-		}
-	}
-}
-
 func TestLaneGrantRoundTripPreservesRegistryRevocationAuthority(t *testing.T) {
 	now := time.Unix(100, 0)
 	registry, _, _, _, _ := newLifecycleLaneRegistry(t, &now)
@@ -199,4 +152,30 @@ func TestLaneGrantRoundTripPreservesRegistryRevocationAuthority(t *testing.T) {
 	if !registry.RevokeGrant(decoded) {
 		t.Fatal("wire grant lost its exact registry identity")
 	}
+}
+
+func TestSessionLaneGrantAdmissionValidatesItsSchema(t *testing.T) {
+	id := testOperationID(129)
+	message := mustMessage(t, MessageLaneAttach, &id, map[uint64]any{
+		0: uint64(1), 1: uint64(1), 2: uint64(0), 3: uint64(1), 4: make([]byte, LaneAttachNonceBytes),
+	})
+	if _, err := SenderMessageValidator(nil).ValidateInbound(message); !errors.Is(err, ErrControlSemantic) {
+		t.Fatalf("invalid lane grant was admitted: %v", err)
+	}
+}
+
+type laneControlVector struct {
+	LaneHelloB64                     string
+	LaneAckB64                       string
+	LaneRejectB64                    string
+	ShareInstanceB64                 string
+	ProtocolSessionIDB64             string
+	AttachedLaneID                   uint32
+	AttachedLaneEpoch                uint32
+	GrantOperationIDB64              string
+	GrantSemanticBodyCborB64         string
+	AttachNonceB64                   string
+	ReceiverToSenderKeyB64           string
+	LaneRejectCode                   uint8
+	LaneRejectRetryAfterMilliseconds uint32
 }

@@ -221,9 +221,9 @@ func (writer *SessionWriter) deliver(ctx context.Context, item *queuedMessage) e
 		return nil
 	}
 
-	sequence, err := writer.prepareSequencedDelivery(item)
+	sequence, err := writer.sealer.NextSequence()
 	if err != nil {
-		return item.completePreparationFailure(err)
+		return item.completePreparationFailure(fmt.Errorf("write message kind %d: %w", item.message.kind, err))
 	}
 	permit := item.replay
 	if item.class != classTerminal && !policyPrepared {
@@ -271,20 +271,6 @@ func (writer *SessionWriter) acceptsClaimedDelivery(item *queuedMessage) bool {
 	item.settleContinuation(false)
 	item.result.complete(SendOutcomeDropped, item.replay, false, ErrWriterTerminal)
 	return false
-}
-
-func (writer *SessionWriter) prepareSequencedDelivery(item *queuedMessage) (uint64, error) {
-	sequence, err := writer.sealer.NextSequence()
-	if err == nil {
-		err = writer.materializeSequenced(item, sequence)
-	}
-	if err == nil && len(item.plaintext) != item.frameSize-EnvelopeOverheadBytes {
-		err = ErrSequencedSize
-	}
-	if err != nil {
-		return 0, fmt.Errorf("write message kind %d: %w", item.message.kind, err)
-	}
-	return sequence, nil
 }
 
 func (item *queuedMessage) completePreparationFailure(err error) error {
@@ -430,40 +416,4 @@ func physicalSendOutcome(transportDisposition framechannel.SendDisposition, err 
 		return SendOutcomeUnknown
 	}
 	return SendOutcomeTransportConfirmed
-}
-
-func (writer *SessionWriter) materializeSequenced(item *queuedMessage, sequence uint64) error {
-	if item.builder == nil {
-		return nil
-	}
-	message, err := item.builder(sequence)
-	if err != nil {
-		return fmt.Errorf("%w: %w", ErrSequencedBuild, err)
-	}
-	if !messageMatchesClass(message, item.class) {
-		return ErrMessageClass
-	}
-	plaintext, err := EncodeMessage(message)
-	if err != nil {
-		return fmt.Errorf("%w: %w", ErrSequencedBuild, err)
-	}
-	if len(plaintext) != item.frameSize-EnvelopeOverheadBytes {
-		return ErrSequencedSize
-	}
-	item.message = message
-	item.plaintext = plaintext
-	return nil
-}
-
-func messageMatchesClass(message Message, class messageClass) bool {
-	switch class {
-	case classControl:
-		return !message.IsData() && message.kind != MessageSessionTerminal
-	case classData:
-		return message.IsData()
-	case classTerminal:
-		return message.kind == MessageSessionTerminal
-	default:
-		return false
-	}
 }

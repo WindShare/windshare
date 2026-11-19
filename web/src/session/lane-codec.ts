@@ -1,3 +1,4 @@
+import { SESSION_WIRE_VERSION } from './version'
 import { concatBytes, copyBytes, encodeUint32, equalBytes } from '../crypto/bytes'
 import type { Ed25519Verifier } from '../crypto/ed25519'
 import { sha256 } from '../crypto/digest'
@@ -10,7 +11,6 @@ import {
   requireUnsigned,
 } from '../protocol/cbor'
 
-export const LANE_WIRE_VERSION = 2
 export const LANE_HELLO_BODY_BYTES = 77
 export const LANE_HELLO_BYTES = 109
 export const LANE_ACCEPT_BODY_BYTES = 53
@@ -180,7 +180,7 @@ async function verifyEd25519(
 function laneHelloBody(fields: LaneHelloFields): Uint8Array<ArrayBuffer> {
   return concatBytes([
     LANE_HELLO_MAGIC,
-    Uint8Array.of(LANE_WIRE_VERSION),
+    Uint8Array.of(SESSION_WIRE_VERSION),
     requireIdentity(fields.shareInstance, 'share instance'),
     requireIdentity(fields.protocolSessionId, 'protocol session ID'),
     encodeUint32(requireUint32(fields.laneId, 'lane ID', true)),
@@ -212,7 +212,7 @@ export async function decodeLaneHello(
   if (
     encoded.byteLength !== LANE_HELLO_BYTES ||
     !hasMagic(encoded, LANE_HELLO_MAGIC) ||
-    encoded[4] !== LANE_WIRE_VERSION
+    encoded[4] !== SESSION_WIRE_VERSION
   ) {
     throw new LaneCodecError('malformed', 'LaneHello has an invalid header or length')
   }
@@ -251,7 +251,7 @@ export async function laneAcceptBody(
   }
   return concatBytes([
     LANE_ACCEPT_MAGIC,
-    Uint8Array.of(LANE_WIRE_VERSION),
+    Uint8Array.of(SESSION_WIRE_VERSION),
     await sha256(hello, runtime),
     senderNonce,
   ])
@@ -274,7 +274,7 @@ export async function verifyLaneAccept(
   if (
     encoded.byteLength !== LANE_ACCEPT_BYTES ||
     !hasMagic(encoded, LANE_ACCEPT_MAGIC) ||
-    encoded[4] !== LANE_WIRE_VERSION
+    encoded[4] !== SESSION_WIRE_VERSION
   ) {
     throw new LaneCodecError('malformed', 'LaneAccept has an invalid header or length')
   }
@@ -321,7 +321,7 @@ export async function laneRejectBody(
   }
   return concatBytes([
     LANE_REJECT_MAGIC,
-    Uint8Array.of(LANE_WIRE_VERSION, rejection.code, 0, 0),
+    Uint8Array.of(SESSION_WIRE_VERSION, rejection.code, 0, 0),
     await sha256(hello, runtime),
     encodeUint32(rejection.retryAfterMilliseconds),
   ])
@@ -336,7 +336,7 @@ export async function verifyLaneReject(
   if (
     encoded.byteLength !== LANE_REJECT_BYTES ||
     !hasMagic(encoded, LANE_REJECT_MAGIC) ||
-    encoded[4] !== LANE_WIRE_VERSION ||
+    encoded[4] !== SESSION_WIRE_VERSION ||
     encoded[6] !== 0 ||
     encoded[7] !== 0
   ) {

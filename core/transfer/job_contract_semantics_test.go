@@ -432,13 +432,13 @@ func TestTransferJobRejectsInvalidAdmissionAndRevisionIdentityTransitions(t *tes
 			file: selected, artifactPath: artifactPath,
 			expectedSize: entry.ExpectedSize(), modified: entry.ModifiedTime(),
 		}
-		_, ready, err := run.openSelectedRevision(context.Background(), plan)
-		if ready || err != nil || len(run.files) != 1 ||
-			run.files[0].Fault != mustSourceFault(fault.ScopeFileLocal, fault.SourceRevisionChanged) ||
+		_, stage, err := run.openSelectedRevision(context.Background(), plan)
+		if stage != FailureRevisionIdentity ||
+			failurestate.FaultOf(err) != mustSourceFault(fault.ScopeFileLocal, fault.SourceRevisionChanged) ||
 			len(run.revisionCleanupFailures) != 1 ||
 			run.revisionCleanupFailures[0].Fault != mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol) ||
 			len(revisions.released) != 1 || revisions.released[0] != lease {
-			t.Fatalf("rejected revision ready=%v error=%v released=%v", ready, err, revisions.released)
+			t.Fatalf("rejected revision stage=%v error=%v released=%v", stage, err, revisions.released)
 		}
 	})
 }

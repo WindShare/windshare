@@ -11,45 +11,21 @@ import (
 	"sync/atomic"
 )
 
-func (outbound *Responses) controlBinding(lane session.LaneIdentity) protocolsession.ControlBinding {
-	runtime := outbound.runtime
-	return protocolsession.ControlBinding{
-		ShareInstance: runtime.share, ProtocolSessionID: runtime.sessionID,
-		LaneID: lane.ID, LaneEpoch: lane.Epoch,
-		Direction: protocolsession.DirectionSenderToReceiver,
-	}
-}
-
-// SenderControlPreparer supplies signing authority without transferring key
-// ownership to the shared runtime. The writer still chooses the sealed sequence.
-type SenderControlPreparer interface {
-	PrepareSenderControl(protocolsession.ControlBinding, protocolsession.MessageKind, *protocolsession.OperationID, []byte) (protocolsession.PreparedSenderControl, error)
-}
-
 type ResponseConfig struct {
-	ControlPreparer  SenderControlPreparer
 	Settlements      observationstream.Producer[protocolsession.SendAttemptSettlement]
 	TerminalObserver func(TerminalSendObservation)
 }
 
 type Responses struct {
 	runtime          *Runtime
-	controlPreparer  SenderControlPreparer
 	sequence         atomic.Uint64
 	settlements      observationstream.Producer[protocolsession.SendAttemptSettlement]
 	terminalObserver func(TerminalSendObservation)
 }
 
 func NewResponses(runtime *Runtime, config ResponseConfig) *Responses {
-	return &Responses{runtime: runtime, controlPreparer: config.ControlPreparer,
+	return &Responses{runtime: runtime,
 		settlements: config.Settlements, terminalObserver: config.TerminalObserver}
-}
-
-func (outbound *Responses) prepareControl(binding protocolsession.ControlBinding, kind protocolsession.MessageKind, id *protocolsession.OperationID, body []byte) (protocolsession.PreparedSenderControl, error) {
-	if outbound.controlPreparer == nil {
-		return protocolsession.PreparedSenderControl{}, protocolsession.ErrControlSigningKey
-	}
-	return outbound.controlPreparer.PrepareSenderControl(binding, kind, id, body)
 }
 
 func (outbound *Responses) sendControl(
@@ -59,24 +35,15 @@ func (outbound *Responses) sendControl(
 	body []byte,
 ) (protocolsession.ResponseSendResult, error) {
 	return outbound.executeResponse(ctx, kind, operationID, sessionobs.ProtocolErrorForResponse(kind, body), func(transaction *outboundTransaction) (outboundLaneAttempt, error) {
-		prepared, err := outbound.prepareControl(outbound.controlBinding(transaction.lane.identity), kind, &operationID, body)
+		message, err := protocolsession.NewMessage(kind, &operationID, body)
 		if err != nil {
 			return nil, err
 		}
-		initial := transaction.lane.identity
 		return func(lane selectedLane, permit protocolsession.OutboundReplayPermit) (protocolsession.SendReceipt, error) {
-			control := prepared
-			if lane.identity != initial {
-				var prepareErr error
-				control, prepareErr = outbound.prepareControl(outbound.controlBinding(lane.identity), kind, &operationID, body)
-				if prepareErr != nil {
-					return protocolsession.SendReceipt{}, prepareErr
-				}
-			}
 			if !permit.IsZero() {
-				return lane.writer.TrySenderControlReplay(control, permit)
+				return lane.writer.TryControlReplay(message, permit)
 			}
-			return lane.writer.TryAuthorizedSenderControl(control, transaction.authority)
+			return lane.writer.TryAuthorizedControl(message, transaction.authority)
 		}, nil
 	})
 }

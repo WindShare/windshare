@@ -105,7 +105,7 @@ func New(config Config) (*Engine, error) {
 		config.CatalogLimits = catalog.DefaultProcessBudgetLimits()
 	}
 	if config.CacheBytes == 0 {
-		config.CacheBytes = contentflow.DefaultProcessSealedCacheBytes
+		config.CacheBytes = contentflow.DefaultProcessBlockCacheBytes
 	}
 	connectivity, err := nativeconnectivity.NewCapacity(nativepeer.AdmissionClock{Now: config.Now})
 	if err != nil {

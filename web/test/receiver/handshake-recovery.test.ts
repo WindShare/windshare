@@ -58,7 +58,7 @@ class HandshakeChannel implements FrameChannel {
   reply(response: Exclude<Response, 'silent'> = 'valid'): void {
     const body = b64ToBytes(transcript.serverBodyB64)
     body.set(createHash('sha256').update(this.#clientHello).digest(), 5)
-    if (response === 'version') body[4] = 3
+    if (response === 'version') body[4] = 2
     if (response === 'key-agreement') body.fill(0, 69, 101)
     const preimage = Buffer.concat([Buffer.from('windshare/v2 server-hello\0'), createHash('sha256').update(body).digest()])
     const signature = sign(null, preimage, signingKey)

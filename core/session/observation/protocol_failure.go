@@ -94,10 +94,7 @@ func ProtocolErrorForAuthenticatedReceive(message protocolsession.Message) (Prot
 	if message.Kind() != protocolsession.MessageOperationError {
 		return ProtocolErrorContent{}, false
 	}
-	semantic, err := protocolsession.SenderControlSemanticBody(message)
-	if err != nil {
-		return ProtocolErrorContent{}, false
-	}
+	semantic := message.Body()
 	wire, err := protocolsession.DecodeOperationFailure(semantic)
 	if err != nil {
 		return ProtocolErrorContent{}, false

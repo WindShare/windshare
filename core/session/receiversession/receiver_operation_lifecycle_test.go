@@ -397,27 +397,27 @@ func exerciseReceiverCatalogCallbackLifecycle(
 }
 
 type gatedRevisionOpener struct {
-	RecordOpener
+	RecordDecoder
 	gate  *receiverOperationGate
 	calls atomic.Int32
 }
 
-func (opener *gatedRevisionOpener) OpenRevision(
+func (opener *gatedRevisionOpener) DecodeRevision(
 	fileID catalog.FileID,
 	chunkSize uint32,
 	object []byte,
 ) (content.FileRevisionDescriptor, error) {
 	opener.calls.Add(1)
 	opener.gate.blockAndBeginClose()
-	return opener.RecordOpener.OpenRevision(fileID, chunkSize, object)
+	return opener.RecordDecoder.DecodeRevision(fileID, chunkSize, object)
 }
 
-func (opener *gatedRevisionOpener) OpenBlock(
+func (opener *gatedRevisionOpener) DecodeBlock(
 	descriptor content.FileRevisionDescriptor,
 	index uint64,
 	object []byte,
 ) (records.BlockRecord, error) {
-	return opener.RecordOpener.OpenBlock(descriptor, index, object)
+	return opener.RecordDecoder.DecodeBlock(descriptor, index, object)
 }
 
 func TestReceiverCloseJoinsRevisionOpenerBeforeResourceRelease(t *testing.T) {
@@ -426,8 +426,8 @@ func TestReceiverCloseJoinsRevisionOpenerBeforeResourceRelease(t *testing.T) {
 		gate := newReceiverOperationGate()
 		resourceLease := newReceiverOperationLease()
 		config := fixture.receiverConfig
-		opener := &gatedRevisionOpener{RecordOpener: config.RecordOpener, gate: gate}
-		config.RecordOpener = opener
+		opener := &gatedRevisionOpener{RecordDecoder: config.RecordDecoder, gate: gate}
+		config.RecordDecoder = opener
 		config.RuntimeResources = receiverOperationResourceSource{lease: resourceLease}
 		receiverFactory, err := NewFactory(config)
 		if err == nil {
@@ -502,7 +502,7 @@ func assertReceiverBorrowedGraphReleased(
 ) {
 	t.Helper()
 	receiver.revisions.mu.Lock()
-	retainedRevisionGraph := receiver.revisions.rpc != nil || receiver.revisions.opener != nil ||
+	retainedRevisionGraph := receiver.revisions.rpc != nil || receiver.revisions.decoder != nil ||
 		receiver.revisions.after != nil || receiver.revisions.ctx != nil ||
 		receiver.revisions.cancel != nil || receiver.revisions.leases != nil
 	revisionsClosed := receiver.revisions.closed
@@ -514,7 +514,7 @@ func assertReceiverBorrowedGraphReleased(
 			retainedRevisionGraph,
 		)
 	}
-	if receiver.opener != nil || receiver.semantic != nil || receiver.sender != nil {
+	if receiver.decoder != nil || receiver.semantic != nil || receiver.sender != nil {
 		t.Fatal("closed receiver runtime retained opener, semantic validator, or public-key aliases")
 	}
 	if !retainedSender.Valid() {

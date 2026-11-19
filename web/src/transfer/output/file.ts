@@ -211,6 +211,8 @@ export interface OutputSession {
   readonly capabilities: OutputCapabilities
   readonly executionProfile: OutputExecutionProfile
   beginFile(file: OutputFileRequest, signal: AbortSignal): Promise<BeginOutputFileResult>
+  /** Reopens an independently checkpointed file through the backend's existing admission policy. */
+  readmitFile?(file: OutputFileRequest, paused: VerifiedDurableRanges, signal: AbortSignal): Promise<BeginOutputFileResult>
 }
 
 export class OutputSessionBindingError extends Error {
@@ -318,8 +320,9 @@ export function snapshotOutputFileRequest(
       )) {
     throw new TypeError('output file coordinates must identify a file')
   }
+  const source = snapshotOutputCatalogFileIdentity(file.source)
   return Object.freeze({
-    source: snapshotOutputCatalogFileIdentity(file.source),
+    source,
     sourceAuthenticationPath,
     logicalArtifactPath,
     materializationRelativePath,

@@ -1,8 +1,6 @@
 package v2signal
 
 import (
-	"bytes"
-	"crypto/ed25519"
 	"errors"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"testing"
@@ -59,22 +57,7 @@ func TestRetiredPeerContinuationSurvivesOperationGC(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		// Different lane identities sign one immutable negotiation binding.
-		key := ed25519.NewKeyFromSeed(peerVectorBytes(0xa1, ed25519.SeedSize))
-		base := protocolsession.ControlBinding{ShareInstance: mustPeerShare(t, peerVectorBytes(0x41, 16)), ProtocolSessionID: mustPeerSession(t, peerVectorBytes(0x61, 16)), LaneID: uint32(id[0]), LaneEpoch: 1, Sequence: 1, Direction: protocolsession.DirectionSenderToReceiver, MessageKind: kind, OperationID: id, HasOperationID: true}
-		domain := protocolsession.ControlDomainOperation
-		if kind == protocolsession.MessageOperationError {
-			domain = protocolsession.ControlDomainOperation
-		}
-		signed, e := protocolsession.SignControlBody(key, domain, base, body)
-		if e != nil {
-			t.Fatal(e)
-		}
-		verified, e := protocolsession.VerifyControlBody(checkedSender(t, key.Public().(ed25519.PublicKey)), domain, base, signed)
-		if e != nil || !bytes.Equal(verified, body) {
-			t.Fatal("signature verification", e)
-		}
-		m, e := protocolsession.NewMessage(kind, &id, signed)
+		m, e := protocolsession.NewMessage(kind, &id, body)
 		if e != nil {
 			t.Fatal(e)
 		}

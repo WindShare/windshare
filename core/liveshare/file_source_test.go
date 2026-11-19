@@ -13,7 +13,6 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
-	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/session/contentflow"
 )
 
@@ -405,7 +404,7 @@ func TestFileSourceRollbackOwnsReturnedSourceAndPreservesCleanupFailure(t *testi
 				config.CatalogStorage = CatalogStorageFactoryFunc(func(context.Context, catalog.ShareInstance) (catalog.CatalogBackend, error) { return nil, injected })
 			case "content":
 				config.preparation = productionSenderPreparationDependencies()
-				config.preparation.newRecordSealer = func(records.SealerConfig) (*records.Sealer, error) { return nil, injected }
+				config.preparation.sessionAuthKey = func(*content.KeyTree) (content.DerivedKey, error) { return content.DerivedKey{}, injected }
 			}
 			sender, err := PrepareSender(context.Background(), config)
 			if sender != nil || !errors.Is(err, injected) || !errors.Is(err, cleanup) {

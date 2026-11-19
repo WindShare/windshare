@@ -16,6 +16,13 @@ export type RevisionComparison =
   | Readonly<{ kind: 'observed-change'; reason: 'size-changed' | 'metadata-changed' }>
   | Readonly<{ kind: 'unavailable'; reason: 'metadata-unavailable' }>
 
+export class RevisionEvidenceUnavailableError extends Error {
+  constructor() {
+    super('File source evidence is unavailable for saved-range admission')
+    this.name = 'RevisionEvidenceUnavailableError'
+  }
+}
+
 /** Callers bind share/file/task independently before consulting source applicability. */
 export function compareRevisionMetadata(
   previous: RevisionSourceEvidence, current: RevisionSourceEvidence,
@@ -59,6 +66,7 @@ export function compareRevisionDescriptors(previous: FileRevisionDescriptor, cur
     return { kind: 'observed-change', reason: 'metadata-changed' }
   }
   return compareRevisionMetadata(
-    { ...previous, fileRevision: previous.fileRevisionText }, { ...current, fileRevision: current.fileRevisionText },
+    { ...previous, fileRevision: encodeBase64Url(previous.fileRevision) },
+    { ...current, fileRevision: encodeBase64Url(current.fileRevision) },
   )
 }

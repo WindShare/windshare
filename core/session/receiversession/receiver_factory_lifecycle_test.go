@@ -128,7 +128,7 @@ func TestReceiverFactoryClosePreservesConnectedRuntime(t *testing.T) {
 	factory.Close()
 	factory.mu.Lock()
 	retainedDependencies := factory.sender != nil || !factory.descriptor.ShareInstance().IsZero() ||
-		factory.verifier != nil || factory.opener != nil || factory.processReassembly != nil ||
+		factory.verifier != nil || factory.decoder != nil || factory.processReassembly != nil ||
 		factory.shareReassembly != nil || factory.plaintextProcess != nil || factory.random != nil ||
 		factory.instances != nil ||
 		factory.catalogProgress != nil || factory.semantic != nil || factory.resources != nil ||

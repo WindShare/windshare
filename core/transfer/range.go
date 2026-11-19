@@ -429,6 +429,9 @@ func (r *jobRun) transferRequestedRange(
 		err = bufferedErr
 	}
 	if err != nil {
+		if _, reopened := err.(*content.RevisionReopenedError); reopened {
+			return false, err
+		}
 		policy := lifecyclePolicyFor(err)
 		if invalidator, ok := r.job.blocks.(interface {
 			InvalidateRevision(catalog.FileID, content.FileRevision)
@@ -552,6 +555,11 @@ func (r *jobRun) readRequestedRange(ctx context.Context, plan plannedFile, opene
 			return buffered, waitErr
 		}
 		attempt.finishWait(ctx, rawErr)
+		// This typed result precedes fault normalization because it is a request
+		// to settle and readmit a file, with evidence needed by that transition.
+		if reopened, ok := rawErr.(*content.RevisionReopenedError); ok {
+			return buffered, reopened
+		}
 		return buffered, normalizeSourceBoundary(ctx, rawErr)
 	}
 }

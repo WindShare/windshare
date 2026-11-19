@@ -2,7 +2,6 @@ package sessioncore
 
 import (
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -25,8 +24,7 @@ func TestTerminalFanoutPreservesCallerCancellationBeforeAdmission(t *testing.T) 
 	callerContext, cancelCaller := context.WithCancel(context.Background())
 	cancelCaller()
 	outbound := &Responses{
-		runtime:         runtime,
-		controlPreparer: testControlPreparer(ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))),
+		runtime: runtime,
 	}
 	err = outbound.sendTerminalRecipients(
 		callerContext,

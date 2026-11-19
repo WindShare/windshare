@@ -98,7 +98,7 @@ interface IdentityVector extends VectorCase {
 
 interface SenderObjectVector extends VectorCase {
   readonly domain: string
-  readonly objectB64: string
+  readonly canonicalCborB64: string
 }
 
 function delayedBlockOperation(first: number, delays: readonly number[], duplicate = false): SessionOperation {
@@ -198,7 +198,6 @@ async function openRevisionFailure(input: {
   const revisions = new RevisionService(
     session,
     share,
-    new Uint8Array(16).fill(9),
     lanes,
   )
   let error: unknown
@@ -265,7 +264,6 @@ describe('v2 authenticated revision capacity results', () => {
     const revisions = new RevisionService(
       session,
       share,
-      new Uint8Array(16).fill(9),
       lanes,
     )
 
@@ -335,7 +333,6 @@ describe('v2 session block lane deadlines', () => {
     const revisions = new RevisionService(
       session,
       share,
-      new Uint8Array(16).fill(9),
       lanes,
     )
 
@@ -378,8 +375,6 @@ describe('v2 session block lane deadlines', () => {
     const lane = new SessionBlockLane(
       1,
       session,
-      share,
-      new Uint8Array(16).fill(9),
       { leaseError: () => undefined } as never,
     )
 
@@ -418,8 +413,6 @@ describe('v2 session block lane deadlines', () => {
     const lane = new SessionBlockLane(
       1,
       session,
-      share,
-      new Uint8Array(32).fill(9),
       { leaseError: () => undefined } as never,
     )
 
@@ -480,8 +473,6 @@ describe('v2 session block lane deadlines', () => {
     const lane = new SessionBlockLane(
       1,
       session,
-      share,
-      new Uint8Array(16).fill(9),
       { leaseError: () => undefined } as never,
     )
 
@@ -492,7 +483,7 @@ describe('v2 session block lane deadlines', () => {
     }, new AbortController().signal)
     const rejected = expect(pending).rejects.toMatchObject({
       name: 'BlockOperationError',
-      code: 'object-auth',
+      code: 'fragment-conflict',
     })
     await vi.advanceTimersByTimeAsync(20_000)
 
@@ -515,7 +506,7 @@ describe('v2 session queued block responses', () => {
       classifyCapacityWait: (_laneId: number, cause: unknown) => cause,
       cancelOperation,
     } as unknown as ReceiverSessionRuntime
-    const lane = new SessionBlockLane(1, session, share, new Uint8Array(16).fill(9),
+    const lane = new SessionBlockLane(1, session,
       { leaseError: () => undefined } as never)
     const descriptor = { ...revision, exactSize: 150_000n, geometry: new FileGeometry(150_000n, 150_000n) }
     const demand = { descriptor, leaseId: identity(6), localBlockIndex: 0n }
@@ -535,10 +526,10 @@ describe('v2 session queued block responses', () => {
       }] })
     } else {
       await vi.advanceTimersByTimeAsync(15_000)
-      // Deliberately unsigned records reach object authentication after their
-      // valid fragment streams; queue policy must never bypass that boundary.
+      // The fragment streams pass reassembly. Their malformed record bodies
+      // still fail before the broker can accept a block.
       for (const result of await Promise.all([first, queued])) {
-        expect(result).toMatchObject({ name: 'BlockOperationError', code: 'object-auth' })
+        expect(result).toMatchObject({ name: 'BlockOperationError', code: 'fragment-conflict' })
       }
     }
     lane.close()
@@ -561,8 +552,6 @@ describe('v2 session block delivery and lease recovery', () => {
     const incomplete = new SessionBlockLane(
       1,
       session,
-      share,
-      new Uint8Array(32).fill(9),
       { leaseError: () => undefined } as never,
     )
     let peerCalls = 0
@@ -604,8 +593,6 @@ describe('v2 session block delivery and lease recovery', () => {
     const invalid = new SessionBlockLane(
       1,
       session,
-      share,
-      new Uint8Array(32).fill(9),
       { leaseError: () => undefined } as never,
     )
     let peerCalls = 0
@@ -660,7 +647,7 @@ describe('v2 session block delivery and lease recovery', () => {
               [1, [[
                 fileId,
                 0,
-                vectorBytes(revisionVector.objectB64),
+                vectorBytes(revisionVector.canonicalCborB64),
                 leaseId,
                 120_000,
                 60_000,
@@ -703,7 +690,6 @@ describe('v2 session block delivery and lease recovery', () => {
     const revisions = new RevisionService(
       session,
       vectorShare,
-      vectorBytes(identityVector.readSecretB64),
       lanes,
       { now: () => Date.now() },
     )

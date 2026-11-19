@@ -426,7 +426,7 @@ function committedCatalogGeneration(input: {
     entries: input.entries,
     omittedCount: 0n,
     objectCommitment: terminalCommitment,
-    senderObjectBytes: 128,
+    encodedBytes: 128,
   })
   return Object.freeze({
     committed: Object.freeze({

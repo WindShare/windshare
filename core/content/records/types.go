@@ -7,37 +7,20 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
-	"github.com/windshare/windshare/core/senderobject"
 )
 
 const (
 	RevisionSchemaVersion     = 2
 	SchemaVersion             = 1
-	ObjectWireVersion         = senderobject.WireVersion
-	ObjectNonceBytes          = senderobject.NonceBytes
-	ObjectHeaderBytes         = senderobject.HeaderBytes
-	ObjectSignatureBytes      = senderobject.SignatureBytes
-	ObjectFixedOverheadBytes  = senderobject.FixedBytes
-	ObjectAuthenticationBytes = senderobject.TagBytes
-	MaxBlockRecordObjectBytes = senderobject.MaxBlockRecordBytes
-	MaxSealsPerAEADKey        = uint64(1) << 32
-)
-
-const (
-	RevisionObjectDomain = string(senderobject.DomainRevision)
-	BlockRecordDomain    = string(senderobject.DomainBlockRecord)
+	MaxRevisionPayloadBytes   = 16 << 10
+	MaxBlockRecordObjectBytes = (4 << 20) + 512
 )
 
 var (
 	ErrInvalidRecord      = errors.New("content record is invalid")
-	ErrObjectMalformed    = errors.New("sender object is malformed")
-	ErrObjectTooLarge     = errors.New("sender object exceeds its frozen limit")
-	ErrObjectSignature    = errors.New("sender object signature is invalid")
-	ErrObjectAuth         = errors.New("sender object authentication failed")
-	ErrObjectIdentity     = errors.New("sender object has the wrong semantic identity")
-	ErrNonCanonicalObject = errors.New("sender object plaintext is not canonical CBOR")
-	ErrNonceSource        = errors.New("sender object nonce source failed")
-	ErrSealLimit          = errors.New("sender object AEAD key seal limit is exhausted")
+	ErrObjectTooLarge     = errors.New("content record exceeds its limit")
+	ErrObjectIdentity     = errors.New("content record has the wrong identity")
+	ErrNonCanonicalObject = errors.New("content record is not canonical CBOR")
 )
 
 type RecordID [catalog.IdentityBytes]byte
@@ -62,7 +45,7 @@ func (id RecordID) Bytes() []byte { return append([]byte(nil), id[:]...) }
 func (id RecordID) IsZero() bool  { return id == RecordID{} }
 
 // BlockRecord owns plaintext from exactly one file-local block. Its identity is
-// semantic; RecordID is deliberately derived later from one concrete seal.
+// semantic; RecordID commits to its canonical encoded payload.
 type BlockRecord struct {
 	descriptor content.FileRevisionDescriptor
 	index      uint64
@@ -87,8 +70,3 @@ func (r BlockRecord) Descriptor() content.FileRevisionDescriptor { return r.desc
 func (r BlockRecord) LocalBlockIndex() uint64                    { return r.index }
 func (r BlockRecord) DataLength() int                            { return len(r.data) }
 func (r BlockRecord) Data() []byte                               { return append([]byte(nil), r.data...) }
-
-type SealedBlock struct {
-	ID     RecordID
-	Object []byte
-}

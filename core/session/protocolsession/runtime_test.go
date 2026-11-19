@@ -412,30 +412,19 @@ func TestPeerSignalingOperationBindsOneOfferAndBidirectionalCandidates(t *testin
 	}
 }
 
-func TestOperationTableTreatsResignedSemanticFinalAsIdempotent(t *testing.T) {
+func TestOperationTableTreatsIdenticalFinalAsIdempotent(t *testing.T) {
 	table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTracked: 2}, nil)
 	operationID := testOperationID(127)
 	request := mustMessage(t, MessageOpenRevisions, &operationID, map[uint64]any{0: uint64(1)})
 	if _, err := table.Observe(DirectionReceiverToSender, request); err != nil {
 		t.Fatal(err)
 	}
-	prepared := mustPreparedControl(t, MessageOpenResults, &operationID)
-	first, err := prepared.build(11)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := prepared.build(12)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Equal(first.Body(), second.Body()) {
-		t.Fatal("different delivery sequences unexpectedly produced the same signature")
-	}
-	if disposition, err := table.Observe(DirectionSenderToReceiver, first); err != nil || disposition != OperationDeliver {
+	final := mustWriterControl(t, MessageOpenResults, &operationID)
+	if disposition, err := table.Observe(DirectionSenderToReceiver, final); err != nil || disposition != OperationDeliver {
 		t.Fatalf("first final = %d, %v", disposition, err)
 	}
-	if disposition, err := table.Observe(DirectionSenderToReceiver, second); err != nil || disposition != OperationDrop {
-		t.Fatalf("resigned semantic duplicate = %d, %v", disposition, err)
+	if disposition, err := table.Observe(DirectionSenderToReceiver, final); err != nil || disposition != OperationDrop {
+		t.Fatalf("identical duplicate = %d, %v", disposition, err)
 	}
 }
 
@@ -698,8 +687,8 @@ func TestProtocolPumpOwnsRecvAndFailsLocally(t *testing.T) {
 	if err := pump.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if channel.recvCalls.Load() != 1 || opener.calls != 1 || authenticator.sequence != 7 || router.message.Kind() != MessageListChildren {
-		t.Fatalf("pump calls recv=%d open=%d auth=%d kind=%d", channel.recvCalls.Load(), opener.calls, authenticator.sequence, router.message.Kind())
+	if channel.recvCalls.Load() != 1 || opener.calls != 1 || authenticator.message.Kind() != MessageListChildren || router.message.Kind() != MessageListChildren {
+		t.Fatalf("pump calls recv=%d open=%d validated=%d kind=%d", channel.recvCalls.Load(), opener.calls, authenticator.message.Kind(), router.message.Kind())
 	}
 	if err := pump.Run(context.Background()); !errors.Is(err, ErrPumpReused) {
 		t.Fatalf("pump reuse: %v", err)
@@ -712,7 +701,7 @@ func TestProtocolPumpOwnsRecvAndFailsLocally(t *testing.T) {
 		"decode": func(open *stubOpener, _ *stubAuthenticator, _ *stubInboundRouter) {
 			open.opened.Plaintext = []byte{0xff}
 		},
-		"authenticate": func(_ *stubOpener, auth *stubAuthenticator, _ *stubInboundRouter) { auth.err = ErrControlSignature },
+		"authenticate": func(_ *stubOpener, auth *stubAuthenticator, _ *stubInboundRouter) { auth.err = ErrControlSemantic },
 		"route":        func(_ *stubOpener, _ *stubAuthenticator, route *stubInboundRouter) { route.err = ErrUnknownOperation },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -733,7 +722,7 @@ func TestProtocolPumpOwnsRecvAndFailsLocally(t *testing.T) {
 		})
 	}
 
-	if _, err := (InboundMessageAuthenticatorFunc(nil)).AuthenticateInbound(0, message); !errors.Is(err, ErrNilRuntimeDependency) {
+	if _, err := (InboundMessageValidatorFunc(nil)).ValidateInbound(message); !errors.Is(err, ErrNilRuntimeDependency) {
 		t.Fatalf("nil authenticator function: %v", err)
 	}
 	if _, err := NewProtocolPump(nil, opener, authenticator, router); !errors.Is(err, ErrNilRuntimeDependency) {
@@ -763,11 +752,11 @@ func TestProtocolPumpHonorsCancellationAndAuthenticatorFunction(t *testing.T) {
 	operationID := testOperationID(123)
 	message := mustMessage(t, MessageListChildren, &operationID, map[uint64]any{0: uint64(1)})
 	called := false
-	authenticator := InboundMessageAuthenticatorFunc(func(sequence uint64, got Message) (InboundAuthenticationResult, error) {
-		called = sequence == 3 && got.Kind() == MessageListChildren
-		return InboundAuthenticationResult{}, nil
+	authenticator := InboundMessageValidatorFunc(func(got Message) (InboundValidationResult, error) {
+		called = got.Kind() == MessageListChildren
+		return InboundValidationResult{}, nil
 	})
-	if _, err := authenticator.AuthenticateInbound(3, message); err != nil || !called {
+	if _, err := authenticator.ValidateInbound(message); err != nil || !called {
 		t.Fatalf("authenticator function = called %v err %v", called, err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -795,17 +784,15 @@ func (o *stubOpener) Open([]byte) (OpenedEnvelope, error) {
 }
 
 type stubAuthenticator struct {
-	sequence uint64
-	message  Message
-	result   InboundAuthenticationResult
-	err      error
+	message Message
+	result  InboundValidationResult
+	err     error
 }
 
-func (a *stubAuthenticator) AuthenticateInbound(
-	sequence uint64,
+func (a *stubAuthenticator) ValidateInbound(
 	message Message,
-) (InboundAuthenticationResult, error) {
-	a.sequence, a.message = sequence, message
+) (InboundValidationResult, error) {
+	a.message = message
 	return a.result, a.err
 }
 
@@ -915,11 +902,7 @@ func mustSessionTerminalMessage(t *testing.T) Message {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signed, err := encodeSignedControlWrapper(semantic, make([]byte, 64))
-	if err != nil {
-		t.Fatal(err)
-	}
-	message, err := NewMessage(MessageSessionTerminal, nil, signed)
+	message, err := NewMessage(MessageSessionTerminal, nil, semantic)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,7 +2,6 @@ package receiversession
 
 import (
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"github.com/windshare/windshare/core/catalog"
@@ -12,24 +11,13 @@ import (
 	"testing"
 )
 
-func TestReceiverSemanticRegistryRejectsEverySignedMalformedSenderControl(t *testing.T) {
+func TestReceiverSemanticRegistryRejectsEveryAuthenticatedMalformedSenderControl(t *testing.T) {
 	validator, err := newReceiverSenderControlValidator(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	publicKey, privateKey, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 	operationID := id16[protocolsession.OperationID](1)
-	base := protocolsession.ControlBinding{
-		ShareInstance: id16Share(2), ProtocolSessionID: id16[protocolsession.ProtocolSessionID](3),
-		LaneID: 4, LaneEpoch: 5, Direction: protocolsession.DirectionSenderToReceiver,
-	}
-	authenticator, err := protocolsession.NewSenderControlAuthenticator(checkedSender(t, publicKey), base, validator)
-	if err != nil {
-		t.Fatal(err)
-	}
+	authenticator := protocolsession.SenderMessageValidator(validator)
 	kinds := []protocolsession.MessageKind{
 		protocolsession.MessageCatalogResult,
 		protocolsession.MessageOpenResults,
@@ -42,34 +30,17 @@ func TestReceiverSemanticRegistryRejectsEverySignedMalformedSenderControl(t *tes
 		protocolsession.MessagePeerAnswer,
 		protocolsession.MessagePeerCandidate,
 	}
-	for index, kind := range kinds {
+	for _, kind := range kinds {
 		t.Run(fmt.Sprintf("kind-%d", kind), func(t *testing.T) {
-			sequence := uint64(index + 1)
-			binding := base
-			binding.Sequence = sequence
-			binding.MessageKind = kind
 			var messageOperation *protocolsession.OperationID
-			domain := protocolsession.ControlDomainOperation
-			switch kind {
-			case protocolsession.MessageSessionTerminal:
-				domain = protocolsession.ControlDomainSessionTerminal
-			case protocolsession.MessageLaneAttach:
-				domain = protocolsession.ControlDomainLaneAttach
-				fallthrough
-			default:
+			if kind != protocolsession.MessageSessionTerminal {
 				messageOperation = &operationID
-				binding.OperationID = operationID
-				binding.HasOperationID = true
 			}
-			signed, err := protocolsession.SignControlBody(privateKey, domain, binding, []byte{0xf6})
+			message, err := protocolsession.NewMessage(kind, messageOperation, []byte{0xf6})
 			if err != nil {
 				t.Fatal(err)
 			}
-			message, err := protocolsession.NewMessage(kind, messageOperation, signed)
-			if err != nil {
-				t.Fatal(err)
-			}
-			result, err := authenticator.AuthenticateInbound(sequence, message)
+			result, err := authenticator.ValidateInbound(message)
 			switch kind {
 			case protocolsession.MessageOperationError,
 				protocolsession.MessagePeerAnswer,
@@ -86,7 +57,7 @@ func TestReceiverSemanticRegistryRejectsEverySignedMalformedSenderControl(t *tes
 	}
 }
 
-func TestMalformedSignedFinalTerminatesBeforeOperationTransition(t *testing.T) {
+func TestMalformedAuthenticatedFinalTerminatesBeforeOperationTransition(t *testing.T) {
 	operations, err := protocolsession.NewOperationTable(
 		protocolsession.OperationLimits{MaxActive: 4, MaxTracked: 4}, nil,
 	)
@@ -105,21 +76,8 @@ func TestMalformedSignedFinalTerminatesBeforeOperationTransition(t *testing.T) {
 	}
 
 	validator, _ := newReceiverSenderControlValidator(nil)
-	publicKey, privateKey, _ := ed25519.GenerateKey(nil)
-	base := protocolsession.ControlBinding{
-		ShareInstance: id16Share(7), ProtocolSessionID: id16[protocolsession.ProtocolSessionID](8),
-		LaneID: 9, LaneEpoch: 10, Direction: protocolsession.DirectionSenderToReceiver,
-	}
-	authenticator, _ := protocolsession.NewSenderControlAuthenticator(checkedSender(t, publicKey), base, validator)
-	binding := base
-	binding.Sequence = 1
-	binding.MessageKind = protocolsession.MessageOpenResults
-	binding.OperationID = operationID
-	binding.HasOperationID = true
-	signed, _ := protocolsession.SignControlBody(
-		privateKey, protocolsession.ControlDomainOperation, binding, []byte{0xf6},
-	)
-	malformed, _ := protocolsession.NewMessage(protocolsession.MessageOpenResults, &operationID, signed)
+	authenticator := protocolsession.SenderMessageValidator(validator)
+	malformed, _ := protocolsession.NewMessage(protocolsession.MessageOpenResults, &operationID, []byte{0xf6})
 	plaintext, _ := protocolsession.EncodeMessage(malformed)
 
 	receiver, peer := newMemoryChannelPair()
@@ -136,7 +94,7 @@ func TestMalformedSignedFinalTerminatesBeforeOperationTransition(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = pump.Run(context.Background())
-	if !errors.Is(err, protocolsession.ErrInboundAuthentication) ||
+	if !errors.Is(err, protocolsession.ErrInboundSemantic) ||
 		!errors.Is(err, protocolsession.ErrControlSemantic) {
 		t.Fatalf("malformed final rejection = %v", err)
 	}

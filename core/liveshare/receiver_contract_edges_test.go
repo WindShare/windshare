@@ -29,7 +29,7 @@ func TestPreparedReceiverZeroValueCloseProvidesIdempotentJoin(t *testing.T) {
 
 	receiver.mu.Lock()
 	closed, closeDone := receiver.closed, receiver.closeDone
-	factory, resources := receiver.factory, receiver.resources
+	factory := receiver.factory
 	receiver.mu.Unlock()
 	if !closed || closeDone == nil {
 		t.Fatalf("zero-value receiver close state = closed %v, done %v", closed, closeDone)
@@ -39,7 +39,7 @@ func TestPreparedReceiverZeroValueCloseProvidesIdempotentJoin(t *testing.T) {
 	default:
 		t.Fatal("all close joins returned before the shared completion signal closed")
 	}
-	if factory != nil || resources != nil {
+	if factory != nil {
 		t.Fatal("zero-value receiver close manufactured runtime ownership")
 	}
 }

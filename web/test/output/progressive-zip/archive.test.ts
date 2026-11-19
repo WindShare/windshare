@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { encodeBase64Url } from '../../../src/crypto/bytes'
+import { RevisionEvidenceUnavailableError } from '../../../src/content/revision-comparison'
 import { deferred, manualSettlementDeadline } from '../../transfer/settlement-deadline'
 import { BoundaryFaultError, FaultScope, SourceFaultCode, sourceFault } from '../../../src/transfer/failure/fault'
 import { SelectionPolicy } from '../../../src/catalog/selection'
@@ -631,7 +632,7 @@ describe('progressive native ZIP archive', () => {
     await expect(archive.admitFile({
       entryId: 'a', path: ['a'], source,
       revision: { fileId: 'a', fileRevision: 'replacement', exactSize: 2n },
-    })).rejects.toThrow('requires fresh admission')
+    })).rejects.toBeInstanceOf(RevisionEvidenceUnavailableError)
     await archive.writeRange('b', 0n, bytes('ok'))
     await archive.checkpoint('unrelated-completion')
     expect((await archive.entry('a')).revisionFailure).toBeUndefined()

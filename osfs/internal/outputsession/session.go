@@ -64,9 +64,10 @@ type directoryFinalizationOperation struct {
 }
 
 type fileBeginOperation struct {
-	done  chan struct{}
-	start transfer.FileStart
-	err   error
+	done     chan struct{}
+	start    transfer.FileStart
+	err      error
+	previous *fileEntry
 }
 
 type fileTransactionOperation struct {

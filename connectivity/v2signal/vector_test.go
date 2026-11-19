@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/fxamacker/cbor/v2"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/senderauth"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -56,34 +55,16 @@ type peerControlBindingVector struct {
 }
 
 type peerDescriptionVector struct {
-	SDP                    string `json:"sdp"`
-	BodyB64                string `json:"bodyB64"`
-	Sequence               string `json:"sequence,omitempty"`
-	UnsignedWrapperCBORB64 string `json:"unsignedWrapperCborB64,omitempty"`
-	ControlPreimageB64     string `json:"controlPreimageB64,omitempty"`
-	ControlSignatureB64    string `json:"controlSignatureB64,omitempty"`
-	SignedBodyB64          string `json:"signedBodyB64,omitempty"`
+	SDP     string `json:"sdp"`
+	BodyB64 string `json:"bodyB64"`
 }
 
 type peerCandidateVector struct {
-	Candidate              string  `json:"candidate"`
-	SDPMid                 *string `json:"sdpMid"`
-	SDPMLineIndex          *uint16 `json:"sdpMLineIndex"`
-	UsernameFragment       *string `json:"usernameFragment"`
-	BodyB64                string  `json:"bodyB64"`
-	Sequence               string  `json:"sequence"`
-	UnsignedWrapperCBORB64 string  `json:"unsignedWrapperCborB64"`
-	ControlPreimageB64     string  `json:"controlPreimageB64"`
-	ControlSignatureB64    string  `json:"controlSignatureB64"`
-	SignedBodyB64          string  `json:"signedBodyB64"`
-}
-
-type peerControlBytes struct {
-	sequence        uint64
-	unsignedWrapper []byte
-	preimage        []byte
-	signature       []byte
-	signedBody      []byte
+	Candidate        string  `json:"candidate"`
+	SDPMid           *string `json:"sdpMid"`
+	SDPMLineIndex    *uint16 `json:"sdpMLineIndex"`
+	UsernameFragment *string `json:"usernameFragment"`
+	BodyB64          string  `json:"bodyB64"`
 }
 
 func TestPeerSignalingVectorUpToDate(t *testing.T) {
@@ -136,20 +117,18 @@ func buildPeerSignalingVector(t *testing.T) peerSignalingVector {
 	share := mustPeerShare(t, peerVectorBytes(0x41, protocolsession.IdentityBytes))
 	sessionID := mustPeerSession(t, peerVectorBytes(0x61, protocolsession.IdentityBytes))
 	operationID := mustPeerOperation(t, peerVectorBytes(0x81, protocolsession.IdentityBytes))
-	base := protocolsession.ControlBinding{
+	base := protocolsession.EnvelopeBinding{
 		ShareInstance: share, ProtocolSessionID: sessionID, LaneID: 0x01020304, LaneEpoch: 2,
 		Direction: protocolsession.DirectionSenderToReceiver,
 	}
-	answerControl := buildPeerControl(t, signingKey, base, protocolsession.MessagePeerAnswer, operationID, 9, answerBody)
-	candidateControl := buildPeerControl(t, signingKey, base, protocolsession.MessagePeerCandidate, operationID, 10, candidateBody)
 
 	return peerSignalingVector{
 		SchemaVersion:   SignalingSchemaVersion,
 		AttemptSequence: strconv.FormatUint(binding.AttemptSequence, 10),
 		PeerSlot:        binding.PeerSlot,
 		FailureScopes:   buildPeerFailureVectors(),
-		PeerErrors:      buildPeerBoundErrorVectors(t, signingKey, base, operationID),
-		PathControls:    buildPeerPathControlVectors(t, signingKey, base),
+		PeerErrors:      buildPeerBoundErrorVectors(t),
+		PathControls:    buildPeerPathControlVectors(t),
 		MessageKinds: peerMessageKinds{
 			Offer: uint8(MessagePeerOffer), Answer: uint8(MessagePeerAnswer), Candidate: uint8(MessagePeerCandidate),
 		},
@@ -165,78 +144,12 @@ func buildPeerSignalingVector(t *testing.T) peerSignalingVector {
 		Offer: peerDescriptionVector{SDP: offer.SDP, BodyB64: base64.StdEncoding.EncodeToString(offerBody)},
 		Answer: peerDescriptionVector{
 			SDP: answer.SDP, BodyB64: base64.StdEncoding.EncodeToString(answerBody),
-			Sequence:               strconv.FormatUint(answerControl.sequence, 10),
-			UnsignedWrapperCBORB64: base64.StdEncoding.EncodeToString(answerControl.unsignedWrapper),
-			ControlPreimageB64:     base64.StdEncoding.EncodeToString(answerControl.preimage),
-			ControlSignatureB64:    base64.StdEncoding.EncodeToString(answerControl.signature),
-			SignedBodyB64:          base64.StdEncoding.EncodeToString(answerControl.signedBody),
 		},
 		Candidate: peerCandidateVector{
 			Candidate: candidate.Candidate, SDPMid: candidate.SDPMid, SDPMLineIndex: candidate.SDPMLineIndex,
 			UsernameFragment: candidate.UsernameFragment, BodyB64: base64.StdEncoding.EncodeToString(candidateBody),
-			Sequence:               strconv.FormatUint(candidateControl.sequence, 10),
-			UnsignedWrapperCBORB64: base64.StdEncoding.EncodeToString(candidateControl.unsignedWrapper),
-			ControlPreimageB64:     base64.StdEncoding.EncodeToString(candidateControl.preimage),
-			ControlSignatureB64:    base64.StdEncoding.EncodeToString(candidateControl.signature),
-			SignedBodyB64:          base64.StdEncoding.EncodeToString(candidateControl.signedBody),
 		},
 	}
-}
-
-func buildPeerControl(
-	t *testing.T,
-	signingKey ed25519.PrivateKey,
-	base protocolsession.ControlBinding,
-	kind protocolsession.MessageKind,
-	operationID protocolsession.OperationID,
-	sequence uint64,
-	semanticBody []byte,
-) peerControlBytes {
-	t.Helper()
-	binding := base
-	binding.Sequence = sequence
-	binding.MessageKind = kind
-	binding.OperationID = operationID
-	binding.HasOperationID = true
-	unsignedWrapper := mustPeerCanonical(t, map[uint64]any{
-		0: uint64(1), 1: cbor.RawMessage(semanticBody),
-	})
-	preimage, err := protocolsession.ControlSignaturePreimage(
-		protocolsession.ControlDomainOperation, binding, semanticBody,
-	)
-	if err != nil {
-		t.Fatalf("build peer control preimage: %v", err)
-	}
-	signature := ed25519.Sign(signingKey, preimage)
-	signedBody, err := protocolsession.SignControlBody(
-		signingKey, protocolsession.ControlDomainOperation, binding, semanticBody,
-	)
-	if err != nil {
-		t.Fatalf("sign peer control: %v", err)
-	}
-	verified, err := protocolsession.VerifyControlBody(
-		checkedSender(t, signingKey.Public().(ed25519.PublicKey)), protocolsession.ControlDomainOperation, binding, signedBody,
-	)
-	if err != nil || !bytes.Equal(verified, semanticBody) {
-		t.Fatalf("verify peer control: semantic body changed: %v", err)
-	}
-	return peerControlBytes{
-		sequence: sequence, unsignedWrapper: unsignedWrapper, preimage: preimage,
-		signature: signature, signedBody: signedBody,
-	}
-}
-
-func mustPeerCanonical(t *testing.T, value any) []byte {
-	t.Helper()
-	mode, err := cbor.CoreDetEncOptions().EncMode()
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded, err := mode.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return encoded
 }
 
 func mustPeerShare(t *testing.T, raw []byte) catalog.ShareInstance {

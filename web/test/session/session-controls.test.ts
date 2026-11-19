@@ -1,12 +1,11 @@
 import { readFileSync } from 'node:fs'
 import { expect, it } from 'vitest'
-import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import { equalBytes } from '../../src/crypto/bytes'
 import { decodeTurnControl, encodeTurnControl } from '../../src/protocol/turn-control'
 import { decodePeerPathControl, encodePeerPathControl } from '../../src/protocol/peer-path-control'
 import {
-  decodeMessage, encodeMessage, MESSAGE_KIND, validateSenderControlBody, verifySenderControl,
-  type ControlBinding, type MessageKind,
+  decodeMessage, encodeMessage, MESSAGE_KIND, validateSenderControlBody,
+  type MessageKind,
 } from '../../src/session/message'
 import { OperationRouter } from '../../src/session/operation-router'
 import { openSent, runtimeFixture } from './v2-send-fixture'
@@ -14,15 +13,8 @@ import { openSent, runtimeFixture } from './v2-send-fixture'
 interface ControlVector {
   readonly name: string
   readonly kind: MessageKind
-  readonly direction: number
   readonly bodyB64: string
   readonly plaintextB64: string
-  readonly senderPublicKeyB64: string
-  readonly shareInstanceB64: string
-  readonly protocolSessionIdB64: string
-  readonly laneId: number
-  readonly laneEpoch: number
-  readonly sequence: string
 }
 
 const { cases } = JSON.parse(readFileSync(new URL('../../../core/testvectors/v2-session-controls.json', import.meta.url), 'utf8')) as {
@@ -30,7 +22,7 @@ const { cases } = JSON.parse(readFileSync(new URL('../../../core/testvectors/v2-
 }
 const bytes = (value: string) => Uint8Array.from(Buffer.from(value, 'base64'))
 
-it.each(cases)('reconstructs the Go $name session message and verifies its authority', async (vector) => {
+it.each(cases)('reconstructs the Go $name session message with its canonical body', (vector) => {
   const body = bytes(vector.bodyB64)
   const message = decodeMessage(bytes(vector.plaintextB64))
   expect(message.kind).toBe(vector.kind)
@@ -43,21 +35,7 @@ it.each(cases)('reconstructs the Go $name session message and verifies its autho
   } else {
     expect(equalBytes(encodePeerPathControl(decodePeerPathControl(body)), body)).toBe(true)
   }
-  if (vector.direction === 0) {
-    expect(equalBytes(message.body, body)).toBe(true)
-    return
-  }
-  const binding: ControlBinding = {
-    shareInstance: bytes(vector.shareInstanceB64), protocolSessionId: bytes(vector.protocolSessionIdB64),
-    laneId: vector.laneId, laneEpoch: vector.laneEpoch, direction: 1, sequence: BigInt(vector.sequence),
-  }
-  const verifier = createEd25519Verifier(bytes(vector.senderPublicKeyB64))
-  expect(equalBytes(await verifySenderControl(message, binding, verifier), body)).toBe(true)
-  const otherKind = message.kind === MESSAGE_KIND.turnControl ? MESSAGE_KIND.peerPathControl : MESSAGE_KIND.turnControl
-  const substituted = encodeMessage(otherKind, undefined, message.body)
-  await expect(verifySenderControl(substituted, binding, verifier)).rejects.toThrow(/signature/)
-  const unsigned = encodeMessage(message.kind, undefined, body)
-  await expect(verifySenderControl(unsigned, binding, verifier)).rejects.toThrow()
+  expect(equalBytes(message.body, body)).toBe(true)
 })
 
 it('rejects another control family or an unsupported schema without changing decoders', () => {

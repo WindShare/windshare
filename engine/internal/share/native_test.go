@@ -57,7 +57,7 @@ func nativeDependencies(t *testing.T) Dependencies {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cache, err := contentflow.NewProcessCacheBudget(contentflow.DefaultProcessSealedCacheBytes)
+	cache, err := contentflow.NewProcessCacheBudget(contentflow.DefaultProcessBlockCacheBytes)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,7 +2,6 @@ package sessioncore
 
 import (
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session"
@@ -117,8 +116,7 @@ func TestSenderControlTransactionAggregatesAttemptsAndDrainsAuthority(t *testing
 			operationContext, _ := testOutboundOperationContext(t, runtime, firstIdentity, request)
 			body, _ := contentflow.EncodeOperationComplete(1)
 			outbound := &Responses{
-				runtime:         runtime,
-				controlPreparer: testControlPreparer(ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))),
+				runtime: runtime,
 			}
 			outcome, sendErr := outbound.SendControl(
 				operationContext, protocolsession.MessageOperationComplete, operationID, body,
@@ -329,8 +327,7 @@ func TestFragmentFailureRetainsRouteUntilOperationErrorDrainsAuthority(t *testin
 	operationContext, _ := testOutboundOperationContext(t, runtime, firstIdentity, request)
 	fragments, _ := contentflow.FragmentRecord(operationID, []byte("record"))
 	outbound := &Responses{
-		runtime:         runtime,
-		controlPreparer: testControlPreparer(ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))),
+		runtime: runtime,
 	}
 	if err := outbound.SendFragment(operationContext, fragments[0]); err == nil {
 		t.Fatal("all-lane fragment failure unexpectedly succeeded")
@@ -423,7 +420,6 @@ func TestUnsettledCallerCancelDoesNotMigrateOrTerminateSession(t *testing.T) {
 		t.Fatalf("second operation fragment: %v", err)
 	}
 	completeBody, _ := contentflow.EncodeOperationComplete(1)
-	outbound.controlPreparer = testControlPreparer(ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)))
 	if outcome, err := outbound.SendControl(
 		secondContext, protocolsession.MessageOperationComplete, secondOperation, completeBody,
 	); err != nil || outcome.Evidence() != protocolsession.ResponseSendEvidenceTransportConfirmed {

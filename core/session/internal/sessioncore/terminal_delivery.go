@@ -53,6 +53,10 @@ func (outbound *Responses) sendTerminalRecipients(
 		// same naturally ended transport that produced the empty snapshot.
 		return callerContext.Err()
 	}
+	message, err := protocolsession.NewMessage(protocolsession.MessageSessionTerminal, nil, body)
+	if err != nil {
+		return err
+	}
 	type terminalReceipt struct {
 		lane    session.LaneIdentity
 		receipt protocolsession.SendReceipt
@@ -66,18 +70,9 @@ func (outbound *Responses) sendTerminalRecipients(
 	var hardAdmissionError error
 	onlyStoppedBeforeAdmission := true
 	for _, lane := range lanes {
-		prepared, err := outbound.prepareControl(
-			outbound.controlBinding(lane.identity),
-			protocolsession.MessageSessionTerminal,
-			nil,
-			body,
-		)
+		receipt, err := lane.writer.TryTerminal(message)
 		if err == nil {
-			var receipt protocolsession.SendReceipt
-			receipt, err = lane.writer.TrySenderControl(prepared)
-			if err == nil {
-				receipts = append(receipts, terminalReceipt{lane: lane.identity, receipt: receipt})
-			}
+			receipts = append(receipts, terminalReceipt{lane: lane.identity, receipt: receipt})
 		}
 		if err != nil && !errorTreeContainsOnly(err, protocolsession.ErrWriterStopped) {
 			onlyStoppedBeforeAdmission = false

@@ -103,7 +103,7 @@ func contentWorkload() Workload {
 	for _, blockBytes := range []int{1_024, 64 << 10, 1 << 20, 4 << 20} {
 		contracts = append(contracts, contract(
 			fmt.Sprintf("BenchmarkFileLocalBlock/block_bytes=%07d", blockBytes),
-			"MB/s", "file-local-blocks/op", "sealed-bytes/op", "record-overhead-bytes/op",
+			"MB/s", "file-local-blocks/op", "record-bytes/op", "record-overhead-bytes/op",
 		))
 	}
 	return Workload{

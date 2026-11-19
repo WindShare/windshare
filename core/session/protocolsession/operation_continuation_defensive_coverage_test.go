@@ -37,7 +37,7 @@ func TestOperationContinuationRejectsInvalidStateBeforeReplayAdmission(t *testin
 	}
 
 	var nilState *operationContinuationState
-	if _, tracked, err := nilState.classify(DirectionReceiverToSender, Message{}); tracked ||
+	if _, tracked, err := nilState.classify(Message{}); tracked ||
 		!errors.Is(err, ErrContinuationContract) {
 		t.Fatalf("nil continuation state classification = tracked %t, err %v", tracked, err)
 	}
@@ -47,7 +47,7 @@ func TestOperationContinuationRejectsInvalidStateBeforeReplayAdmission(t *testin
 		t.Fatal(err)
 	}
 	malformedControl := Message{kind: MessagePeerCandidate, body: []byte{0xff}}
-	if _, tracked, err := state.classify(DirectionSenderToReceiver, malformedControl); tracked || err == nil {
+	if _, tracked, err := state.classify(malformedControl); !tracked || err == nil {
 		t.Fatalf("malformed sender control classification = tracked %t, err %v", tracked, err)
 	}
 }
@@ -147,7 +147,7 @@ func TestReplayContinuationAdmissionPreservesPendingAndOverflowSemantics(t *test
 			t.Fatal(err)
 		}
 		message := testContinuationCandidate(t, testOperationID(241), 23, value)
-		key, tracked, err := state.classify(DirectionReceiverToSender, message)
+		key, tracked, err := state.classify(message)
 		if err != nil || !tracked {
 			t.Fatalf("classify replay fixture = tracked %t, err %v", tracked, err)
 		}
@@ -253,7 +253,7 @@ func TestContinuationContractFailuresRecordOnlyAuthenticatedSenderTraffic(t *tes
 			t.Fatal(err)
 		}
 		authority := &operationAuthority{continuations: state}
-		message := testSignedContinuationCandidate(t, testOperationID(242), 32, "wrong-binding")
+		message := testContinuationCandidate(t, testOperationID(242), 32, "wrong-binding")
 		if reservation, drop, err := (&OperationTable{}).reserveActiveContinuationLocked(
 			authority, DirectionSenderToReceiver, message,
 		); reservation != nil || drop || !errors.Is(err, errTestContinuationBinding) {
@@ -270,7 +270,7 @@ func TestContinuationContractFailuresRecordOnlyAuthenticatedSenderTraffic(t *tes
 			t.Fatal(err)
 		}
 		authority := &operationAuthority{continuations: state}
-		message := testSignedContinuationCandidate(t, testOperationID(243), 34, "wrong-binding")
+		message := testContinuationCandidate(t, testOperationID(243), 34, "wrong-binding")
 		if tracked, err := (&OperationTable{}).acceptLateContinuationLocked(
 			authority, DirectionSenderToReceiver, message,
 		); !tracked || !errors.Is(err, errTestContinuationBinding) {
@@ -287,7 +287,7 @@ func TestContinuationContractFailuresRecordOnlyAuthenticatedSenderTraffic(t *tes
 			t.Fatal(err)
 		}
 		message := testContinuationCandidate(t, testOperationID(244), 35, "overflow")
-		key, tracked, err := state.classify(DirectionReceiverToSender, message)
+		key, tracked, err := state.classify(message)
 		if err != nil || !tracked {
 			t.Fatal(err)
 		}
@@ -302,25 +302,15 @@ func TestContinuationContractFailuresRecordOnlyAuthenticatedSenderTraffic(t *tes
 	})
 }
 
-func TestUnboundLateContinuationRejectsUnauthenticatedOrConflictingScope(t *testing.T) {
+func TestUnboundLateContinuationRejectsInvalidOrConflictingScope(t *testing.T) {
 	operationID := testOperationID(245)
-
-	t.Run("malformed-sender-wrapper", func(t *testing.T) {
-		table := &OperationTable{continuations: defensiveContinuationClassifier{tracked: true}}
-		message := Message{kind: MessagePeerCandidate, body: []byte{0xff}}
-		if tracked, err := table.acceptUnboundLateContinuationLocked(
-			&operationAuthority{}, DirectionSenderToReceiver, message,
-		); tracked || err == nil {
-			t.Fatalf("malformed sender wrapper = tracked %t, err %v", tracked, err)
-		}
-	})
 
 	t.Run("classifier-error", func(t *testing.T) {
 		table := &OperationTable{continuations: defensiveContinuationClassifier{
 			scope: testContinuationScope(41), tracked: true, err: errDefensiveContinuationClassification,
 		}}
 		authority := &operationAuthority{}
-		message := testSignedContinuationCandidate(t, operationID, 41, "candidate")
+		message := testContinuationCandidate(t, operationID, 41, "candidate")
 		if tracked, err := table.acceptUnboundLateContinuationLocked(
 			authority, DirectionSenderToReceiver, message,
 		); !tracked || !errors.Is(err, errDefensiveContinuationClassification) {
@@ -346,7 +336,7 @@ func TestUnboundLateContinuationRejectsUnauthenticatedOrConflictingScope(t *test
 		candidate := testContinuationScope(44)
 		table := &OperationTable{continuations: defensiveContinuationClassifier{scope: candidate, tracked: true}}
 		authority := &operationAuthority{deferredContinuationScope: learned, hasDeferredContinuationScope: true}
-		message := testSignedContinuationCandidate(t, operationID, 44, "candidate")
+		message := testContinuationCandidate(t, operationID, 44, "candidate")
 		if tracked, err := table.acceptUnboundLateContinuationLocked(
 			authority, DirectionSenderToReceiver, message,
 		); !tracked || !errors.Is(err, ErrConflictingContinuation) {

@@ -1,16 +1,6 @@
 import type { CatalogModifiedTime, ShareDescriptor } from '../catalog/records'
 import { encodeBase64Url, equalBytes } from '../crypto/bytes'
 import {
-  createBlockRecordObjectBinding,
-  createRevisionObjectBinding,
-  openSenderObject,
-} from '../crypto/sender-object'
-import {
-  deriveSuite02FileObjectKey,
-  deriveSuite02FileSegmentKey,
-  deriveSuite02RevisionKey,
-} from '../crypto/suite02-key-derivation'
-import {
   decodeCanonicalCbor,
   requireBytes,
   requireNumericMap,
@@ -45,77 +35,17 @@ export interface BlockRecord {
   readonly data: Uint8Array<ArrayBuffer>
 }
 
-export async function openRevisionObject(
-  object: Uint8Array,
-  descriptor: ShareDescriptor,
-  readSecret: Uint8Array,
-  fileId: Uint8Array,
-): Promise<FileRevisionDescriptor> {
-  if (object.byteLength === 0 || object.byteLength > MAXIMUM_REVISION_OBJECT_BYTES) {
-    throw new CborError('File revision object exceeds its limit')
-  }
-  const fileObjectKey = await deriveSuite02FileObjectKey(
-    readSecret,
-    descriptor.shareInstance,
-    fileId,
-  )
-  try {
-    const binding = createRevisionObjectBinding(descriptor.shareInstance, fileId)
-    const plaintext = await openSenderObject(
-      binding,
-      fileObjectKey,
-      descriptor.sender,
-      object,
-    )
-    return decodeRevision(plaintext, descriptor, fileId)
-  } finally {
-    fileObjectKey.fill(0)
-  }
+export function decodeRevisionPayload(
+  payload: Uint8Array, share: ShareDescriptor, fileId: Uint8Array,
+): FileRevisionDescriptor {
+  return decodeRevision(payload, share, fileId)
 }
 
-export async function openBlockRecord(
-  object: Uint8Array,
-  share: ShareDescriptor,
-  readSecret: Uint8Array,
-  descriptor: FileRevisionDescriptor,
-  localBlockIndex: bigint,
-): Promise<BlockRecord> {
-  const blockRange = descriptor.geometry.blockPlaintext(localBlockIndex)
-  const dataLength = Number(blockRange.end - blockRange.start)
-  if (object.byteLength === 0 || object.byteLength > MAXIMUM_BLOCK_RECORD_OBJECT_BYTES) {
-    throw new CborError('Block record object exceeds its limit')
-  }
-  const fileObjectKey = await deriveSuite02FileObjectKey(
-    readSecret,
-    share.shareInstance,
-    descriptor.fileId,
-  )
-  let revisionKey: Uint8Array<ArrayBuffer> | undefined
-  let segmentKey: Uint8Array<ArrayBuffer> | undefined
-  try {
-    revisionKey = await deriveSuite02RevisionKey(fileObjectKey, descriptor.fileRevision)
-    const blocksPerSegment = CONTENT_SEGMENT_BYTES / BigInt(share.chunkSize)
-    const segment = localBlockIndex / blocksPerSegment
-    segmentKey = await deriveSuite02FileSegmentKey(revisionKey, segment)
-    const binding = createBlockRecordObjectBinding(
-      descriptor.shareInstance,
-      descriptor.fileId,
-      descriptor.fileRevision,
-      localBlockIndex,
-      dataLength,
-    )
-    const plaintext = await openSenderObject(
-      binding,
-      segmentKey,
-      share.sender,
-      object,
-    )
-    return decodeBlock(plaintext, descriptor, localBlockIndex, dataLength)
-  } finally {
-    segmentKey?.fill(0)
-    revisionKey?.fill(0)
-    fileObjectKey.fill(0)
-  }
+export function decodeBlockPayload(
+  payload: Uint8Array, descriptor: FileRevisionDescriptor, localBlockIndex: bigint,
+): BlockRecord {
+  const range = descriptor.geometry.blockPlaintext(localBlockIndex)
+  return decodeBlock(payload, descriptor, localBlockIndex, Number(range.end - range.start))
 }
 
 function decodeRevision(

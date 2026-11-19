@@ -19,7 +19,6 @@ func (runtime *Runtime) SetTURNControlHandler(handler func(context.Context, []by
 // Each control family owns its callback while sharing authentication and lane
 // delivery. Replacing a path handler cannot disconnect TURN delegation.
 type sessionControlHandler struct {
-	runtime  *Runtime
 	mu       sync.RWMutex
 	callback func(context.Context, []byte) error
 }
@@ -32,16 +31,6 @@ func (handler *sessionControlHandler) set(callback func(context.Context, []byte)
 
 func (handler *sessionControlHandler) HandleMessage(ctx context.Context, message protocolsession.Message) error {
 	body := message.Body()
-	if handler.runtime.role == protocolsession.RoleReceiver {
-		var err error
-		body, err = protocolsession.SenderControlSemanticBody(message)
-		if err != nil {
-			return err
-		}
-	}
-	if err := protocolsession.ValidateSessionControlBody(message.Kind(), body); err != nil {
-		return err
-	}
 	handler.mu.RLock()
 	callback := handler.callback
 	handler.mu.RUnlock()
@@ -52,26 +41,7 @@ func (handler *sessionControlHandler) HandleMessage(ctx context.Context, message
 }
 
 func (outbound *Responses) SendSessionControl(ctx context.Context, kind protocolsession.MessageKind, body []byte) error {
-	if outbound.runtime == nil || ctx == nil {
-		return session.ErrRuntimeConfig
-	}
-	if err := protocolsession.ValidateSessionControlBody(kind, body); err != nil {
-		return err
-	}
-	lane, err := outbound.runtime.lanes.selectLane(nil)
-	if err != nil {
-		return err
-	}
-	prepared, err := outbound.prepareControl(outbound.controlBinding(lane.identity), kind, nil, body)
-	if err != nil {
-		return err
-	}
-	receipt, err := lane.writer.TrySenderControl(prepared)
-	if err != nil {
-		return err
-	}
-	_, err = receipt.Wait(ctx)
-	return err
+	return outbound.runtime.SendSessionControl(ctx, kind, body)
 }
 
 func (runtime *Runtime) SendSessionControl(ctx context.Context, kind protocolsession.MessageKind, body []byte) error {

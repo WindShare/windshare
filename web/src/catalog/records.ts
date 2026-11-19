@@ -1,16 +1,12 @@
-import { catalogAlternativesFailure, catalogFailure } from './failure-evidence'
+import { catalogFailure } from './failure-evidence'
 import { createEd25519Verifier, type Ed25519Verifier, type Ed25519VerifierOptions } from '../crypto/ed25519'
 import {
-  createCatalogPageObjectBinding,
   createDescriptorObjectBinding,
-  createDirectoryErrorObjectBinding,
   openDescriptorObjectBootstrap,
-  openSenderObject,
 } from '../crypto/sender-object'
 import { encodeBase64Url, equalBytes } from '../crypto/bytes'
 import { sha256 } from '../crypto/digest'
 import {
-  deriveSuite02CatalogKey,
   deriveSuite02DescriptorKey,
 } from '../crypto/suite02-key-derivation'
 import type { Suite02CapabilityKey } from '../crypto/suite02-link'
@@ -41,6 +37,8 @@ export const MINIMUM_CHUNK_BYTES = 1 << 10
 export const MAXIMUM_CHUNK_BYTES = 4 << 20
 
 const MAXIMUM_SAFE_INTEGER = BigInt(Number.MAX_SAFE_INTEGER)
+const CATALOG_PAGE_SCHEMA = 1n
+const DIRECTORY_FAILURE_SCHEMA = 2n
 const ACTIVE_CAPABILITIES = 0b111n
 
 export interface ShareDescriptor {
@@ -81,6 +79,8 @@ export type CatalogEntry =
       readonly modifiedTime?: CatalogModifiedTime
     }
 
+type DecodedCatalogPage = Omit<CatalogPage, 'objectCommitment' | 'encodedBytes'>
+
 export interface CatalogPage {
   readonly shareInstance: Uint8Array<ArrayBuffer>
   readonly directoryId: Uint8Array<ArrayBuffer>
@@ -93,8 +93,8 @@ export interface CatalogPage {
   readonly entries: readonly CatalogEntry[]
   readonly omittedCount: bigint
   readonly objectCommitment: Uint8Array<ArrayBuffer>
-  /** Exact authenticated sender-object bytes charged to durable catalog spill. */
-  readonly senderObjectBytes: number
+  /** Exact canonical payload bytes charged to catalog spill. */
+  readonly encodedBytes: number
 }
 
 export type DirectoryFailureKind =
@@ -216,90 +216,62 @@ export function decodeShareDescriptor(plaintext: Uint8Array, verification: Ed255
   })
 }
 
-export async function openCatalogObject(
-  object: Uint8Array,
-  descriptor: ShareDescriptor,
-  readSecret: Uint8Array,
-  request: CatalogPageRequest,
+export async function decodeCatalogPayload(
+  payload: Uint8Array, descriptor: ShareDescriptor, request: CatalogPageRequest,
 ): Promise<CatalogObject> {
   requirePageRequest(request)
-  if (object.byteLength === 0 || object.byteLength > CATALOG_PAGE_OBJECT_BYTES) {
-    throw catalogFailure(new CborError('Catalog sender object exceeds its page limit'), { invariant: 'page-object-bytes', actual: object.byteLength, maximum: CATALOG_PAGE_OBJECT_BYTES })
-  }
-  const key = await deriveSuite02CatalogKey(readSecret, descriptor.shareInstance)
-  try {
-    const pageBinding = createCatalogPageObjectBinding(
-      descriptor.shareInstance,
-      request.directoryId,
-      request.pageIndex,
-    )
-    let rejectedPage: unknown
-    try {
-      const plaintext = await openSenderObject(
-        pageBinding,
-        key,
-        descriptor.sender,
-        object,
-      )
-      const page = await decodeCatalogPage(plaintext, object)
-      requireCatalogPageIdentity(page, descriptor, request)
-      return Object.freeze({ kind: 'page', page })
-    } catch (pageError) {
-      if (request.pageIndex !== 0 || request.generation !== undefined) throw pageError
-      rejectedPage = pageError
-    }
-    try {
-      const failureBinding = createDirectoryErrorObjectBinding(
-        descriptor.shareInstance,
-        request.directoryId,
-      )
-      const plaintext = await openSenderObject(
-        failureBinding,
-        key,
-        descriptor.sender,
-        object,
-      )
-      const failure = decodeDirectoryFailure(plaintext)
-      if (
-        !equalBytes(failure.shareInstance, descriptor.shareInstance) ||
-        !equalBytes(failure.directoryId, request.directoryId)
-      ) {
-        throw catalogFailure(new CborError('Directory failure does not answer its authenticated request'), { invariant: 'directory-failure-binding', expectedDirectory: encodeBase64Url(request.directoryId), actualDirectory: failure.directoryIdText, expectedShare: descriptor.shareInstanceId, actualShare: encodeBase64Url(failure.shareInstance) })
+  const decoded = decodeCanonicalCborWithSchema(
+    payload, CATALOG_PAGE_OBJECT_BYTES, 'catalog payload', value => {
+      if (!(value instanceof Map)) throw new CborError('Catalog payload is not a record')
+      const schema = requireUnsigned(value.get(0), 'catalog payload schema')
+      switch (schema) {
+        case CATALOG_PAGE_SCHEMA:
+          return { kind: 'page', page: decodeCatalogPageFields(value) } as const
+        case DIRECTORY_FAILURE_SCHEMA:
+          if (request.pageIndex !== 0 || request.generation !== undefined ||
+              payload.byteLength > DIRECTORY_ERROR_OBJECT_BYTES) throw new CborError('Unexpected directory failure')
+          return { kind: 'failure', failure: decodeDirectoryFailureFields(value) } as const
+        default:
+          throw new CborError('Catalog payload schema is unsupported')
       }
-      return Object.freeze({ kind: 'failure', failure })
-    } catch (error) {
-      throw catalogAlternativesFailure(error, [rejectedPage], {
-        invariant: 'catalog-object-type', directoryId: encodeBase64Url(request.directoryId), pageIndex: request.pageIndex,
-      })
-    }
-  } finally {
-    key.fill(0)
+    },
+  )
+  if (decoded.kind === 'page') {
+    const page = await commitCatalogPage(decoded.page, payload)
+    requireCatalogPageIdentity(page, descriptor, request)
+    return Object.freeze({ kind: 'page', page })
   }
+  const { failure } = decoded
+  if (!equalBytes(failure.shareInstance, descriptor.shareInstance) ||
+      !equalBytes(failure.directoryId, request.directoryId)) {
+    throw catalogFailure(new CborError('Directory failure does not answer its authenticated request'), {
+      invariant: 'directory-failure-binding', expectedDirectory: encodeBase64Url(request.directoryId),
+      actualDirectory: failure.directoryIdText, expectedShare: descriptor.shareInstanceId,
+      actualShare: encodeBase64Url(failure.shareInstance),
+    })
+  }
+  return Object.freeze({ kind: 'failure', failure })
 }
 
-export async function decodeCatalogPage(
-  plaintext: Uint8Array,
-  senderObject: Uint8Array,
-): Promise<CatalogPage> {
-  const page = decodeCanonicalCborWithSchema(
-    plaintext, CATALOG_PAGE_OBJECT_BYTES, 'catalog page', decodeCatalogPageFields,
-  )
-  return Object.freeze({
-    ...page,
-    objectCommitment: await sha256(senderObject),
-    senderObjectBytes: senderObject.byteLength,
-  })
+export async function decodeCatalogPage(payload: Uint8Array): Promise<CatalogPage> {
+  return commitCatalogPage(decodeCanonicalCborWithSchema(
+    payload, CATALOG_PAGE_OBJECT_BYTES, 'catalog page', decodeCatalogPageFields,
+  ), payload)
+}
+
+async function commitCatalogPage(page: DecodedCatalogPage, payload: Uint8Array): Promise<CatalogPage> {
+  return Object.freeze({ ...page, objectCommitment: await sha256(payload), encodedBytes: payload.byteLength })
 }
 
 // Only entry names use the frozen path policy. Every other field is non-text;
 // descriptor policy strings and session/control text keep generic CBOR NFC.
-function decodeCatalogPageFields(value: unknown): Omit<CatalogPage, 'objectCommitment' | 'senderObjectBytes'> {
+function decodeCatalogPageFields(value: unknown): DecodedCatalogPage {
   const fields = requireNumericMap(
     value,
     [0, 1, 2, 3, 4, 5, 6, 7, 8],
     'catalog page',
   )
-  if (requireUnsigned(fields.get(0), 'catalog schema') !== 1n) {
+  if (requireUnsigned(fields.get(0), 'catalog schema') !== CATALOG_PAGE_SCHEMA) {
     throw catalogFailure(new CborError('Catalog page schema is unsupported'), { invariant: 'page-schema', expected: '1', actual: String(fields.get(0)) })
   }
   const shareInstance = requireBytes(fields.get(1), 16, 'catalog share instance', true)
@@ -329,14 +301,18 @@ function decodeCatalogPageFields(value: unknown): Omit<CatalogPage, 'objectCommi
   }
 }
 
-export function decodeDirectoryFailure(plaintext: Uint8Array): DirectoryFailure {
+export function decodeDirectoryFailure(payload: Uint8Array): DirectoryFailure {
+  return decodeDirectoryFailureFields(decodeCanonicalCbor(payload, DIRECTORY_ERROR_OBJECT_BYTES, 'directory failure'))
+}
+
+function decodeDirectoryFailureFields(value: unknown): DirectoryFailure {
   const fields = requireNumericMap(
-    decodeCanonicalCbor(plaintext, DIRECTORY_ERROR_OBJECT_BYTES, 'directory failure'),
+    value,
     [0, 1, 2, 3, 4, 5, 6],
     'directory failure',
   )
-  if (requireUnsigned(fields.get(0), 'directory failure schema') !== 1n) {
-    throw catalogFailure(new CborError('Directory failure schema is unsupported'), { invariant: 'directory-failure-schema', expected: '1', actual: String(fields.get(0)) })
+  if (requireUnsigned(fields.get(0), 'directory failure schema') !== DIRECTORY_FAILURE_SCHEMA) {
+    throw catalogFailure(new CborError('Directory failure schema is unsupported'), { invariant: 'directory-failure-schema', expected: String(DIRECTORY_FAILURE_SCHEMA), actual: String(fields.get(0)) })
   }
   const shareInstance = requireBytes(fields.get(1), 16, 'failure share instance', true)
   const directoryId = requireBytes(fields.get(2), 16, 'failure directory ID', true)

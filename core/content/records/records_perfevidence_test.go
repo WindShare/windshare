@@ -2,8 +2,6 @@ package records
 
 import (
 	"bytes"
-	"crypto/ed25519"
-	"encoding/binary"
 	"fmt"
 	"testing"
 
@@ -18,21 +16,6 @@ var fileLocalBlockSizes = [...]uint32{
 	catalog.MaxChunkSize,
 }
 
-type benchmarkNonceSource struct{ next uint64 }
-
-func (source *benchmarkNonceSource) Read(destination []byte) (int, error) {
-	clear(destination)
-	source.next++
-	if len(destination) >= 8 {
-		binary.BigEndian.PutUint64(destination[len(destination)-8:], source.next)
-	} else {
-		for index := range destination {
-			destination[index] = byte(source.next >> (8 * index))
-		}
-	}
-	return len(destination), nil
-}
-
 func benchmarkRecordsIdentity[T ~[catalog.IdentityBytes]byte](seed byte) T {
 	var identity T
 	for index := range identity {
@@ -44,8 +27,8 @@ func benchmarkRecordsIdentity[T ~[catalog.IdentityBytes]byte](seed byte) T {
 type benchmarkBlock struct {
 	record     BlockRecord
 	descriptor content.FileRevisionDescriptor
-	sealer     *Sealer
-	opener     *Opener
+	encoder    Encoder
+	decoder    Decoder
 }
 
 func prepareBenchmarkBlock(b *testing.B, blockBytes uint32) benchmarkBlock {
@@ -65,28 +48,8 @@ func prepareBenchmarkBlock(b *testing.B, blockBytes uint32) benchmarkBlock {
 	if err != nil {
 		b.Fatal(err)
 	}
-	readSecret := bytes.Repeat([]byte{0x5a}, content.ReadSecretBytes)
-	keys, err := content.NewKeyTree(readSecret, share)
-	if err != nil {
-		b.Fatal(err)
-	}
-	b.Cleanup(keys.Destroy)
-	seed := bytes.Repeat([]byte{0x3c}, ed25519.SeedSize)
-	privateKey := ed25519.NewKeyFromSeed(seed)
-	publicKey := privateKey.Public().(ed25519.PublicKey)
-	sealer, err := NewSealer(SealerConfig{
-		ShareInstance: share, Keys: keys, SigningKey: privateKey,
-		NonceSource: &benchmarkNonceSource{}, MaxSealsPerKey: ^uint64(0),
-	})
-	if err != nil {
-		b.Fatal(err)
-	}
-	opener, err := NewOpener(OpenerConfig{ShareInstance: share, Keys: keys, Sender: checkedSender(b, publicKey)})
-	if err != nil {
-		b.Fatal(err)
-	}
+	return benchmarkBlock{record: record, descriptor: descriptor, decoder: Decoder{ShareInstance: share}}
 
-	return benchmarkBlock{record: record, descriptor: descriptor, sealer: sealer, opener: opener}
 }
 
 func BenchmarkFileLocalBlock(b *testing.B) {
@@ -95,22 +58,22 @@ func BenchmarkFileLocalBlock(b *testing.B) {
 			fixture := prepareBenchmarkBlock(b, blockBytes)
 			b.ReportAllocs()
 			b.SetBytes(int64(blockBytes))
-			var last SealedBlock
+			var last []byte
 			b.ResetTimer()
 			for b.Loop() {
 				var err error
-				last, err = fixture.sealer.SealBlock(fixture.record)
+				last, err = fixture.encoder.EncodeBlock(fixture.record)
 				if err != nil {
 					b.Fatal(err)
 				}
-				opened, err := fixture.opener.OpenBlock(fixture.descriptor, 0, last.Object)
+				opened, err := fixture.decoder.DecodeBlock(fixture.descriptor, 0, last)
 				if err != nil {
 					b.Fatal(err)
 				}
 				checkBenchmarkBlock(b, opened, fixture.descriptor, blockBytes)
 			}
-			b.ReportMetric(float64(len(last.Object)), "sealed-bytes/op")
-			b.ReportMetric(float64(len(last.Object)-int(blockBytes)), "record-overhead-bytes/op")
+			b.ReportMetric(float64(len(last)), "record-bytes/op")
+			b.ReportMetric(float64(len(last)-int(blockBytes)), "record-overhead-bytes/op")
 			b.ReportMetric(1, "file-local-blocks/op")
 		})
 	}
@@ -120,14 +83,14 @@ func BenchmarkOpenBlock(b *testing.B) {
 	for _, blockBytes := range fileLocalBlockSizes {
 		b.Run(fmt.Sprintf("block_bytes=%07d", blockBytes), func(b *testing.B) {
 			fixture := prepareBenchmarkBlock(b, blockBytes)
-			sealed, err := fixture.sealer.SealBlock(fixture.record)
+			encoded, err := fixture.encoder.EncodeBlock(fixture.record)
 			if err != nil {
 				b.Fatal(err)
 			}
 			b.ReportAllocs()
 			b.SetBytes(int64(blockBytes))
 			for b.Loop() {
-				opened, err := fixture.opener.OpenBlock(fixture.descriptor, 0, sealed.Object)
+				opened, err := fixture.decoder.DecodeBlock(fixture.descriptor, 0, encoded)
 				if err != nil {
 					b.Fatal(err)
 				}

@@ -443,7 +443,7 @@ func newUnstartedRuntimeWithContinuations(
 	t.Cleanup(func() { _ = peer.Close() })
 	runtime, err := New(Config{
 		Share: share, Role: role, Keys: keys, LaneID: 1, Channel: channel,
-		Random: &deterministicReader{next: 99}, Authenticator: permissiveInboundAuthenticator(),
+		Random: &deterministicReader{next: 99}, Validator: permissiveInboundAuthenticator(),
 		Continuations: continuations, OperationLimits: limits, Now: now,
 	})
 	if err != nil {
@@ -454,10 +454,10 @@ func newUnstartedRuntimeWithContinuations(
 	return runtime, channel
 }
 
-func permissiveInboundAuthenticator() protocolsession.InboundMessageAuthenticator {
-	return protocolsession.InboundMessageAuthenticatorFunc(
-		func(uint64, protocolsession.Message) (protocolsession.InboundAuthenticationResult, error) {
-			return protocolsession.InboundAuthenticationResult{}, nil
+func permissiveInboundAuthenticator() protocolsession.InboundMessageValidator {
+	return protocolsession.InboundMessageValidatorFunc(
+		func(protocolsession.Message) (protocolsession.InboundValidationResult, error) {
+			return protocolsession.InboundValidationResult{}, nil
 		},
 	)
 }

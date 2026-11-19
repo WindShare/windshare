@@ -123,7 +123,7 @@ describe('request cancellation across send backpressure', () => {
     const dispatched = vi.fn()
     const lanes = new LaneSet({ onBlockDispatched: dispatched })
     const revisions = { leaseError: () => undefined } as unknown as RevisionService
-    lanes.add(new SessionBlockLane(1, runtime, SHARE, KEY_BYTES, revisions), 'direct')
+    lanes.add(new SessionBlockLane(1, runtime, revisions), 'direct')
     const broker = new BlockBroker(lanes, { maximumUpstreamReads: 1 })
     const routes: BlockRouteEligibility = {
       active: true, allows: () => true, assertActive: () => undefined, subscribe: () => () => undefined,
@@ -156,5 +156,3 @@ describe('request cancellation across send backpressure', () => {
     }
   })
 })
-
-const KEY_BYTES = new Uint8Array(32).fill(4)

@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
-	"crypto/sha256"
 	"encoding/base64"
 	"errors"
-	"io"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -17,24 +15,6 @@ import (
 	"github.com/windshare/windshare/core/senderauth"
 	"github.com/windshare/windshare/core/senderobject"
 )
-
-type nonceCounter struct {
-	next  byte
-	reads atomic.Int32
-	err   error
-}
-
-func (reader *nonceCounter) Read(destination []byte) (int, error) {
-	reader.reads.Add(1)
-	if reader.err != nil {
-		return 0, reader.err
-	}
-	for index := range destination {
-		destination[index] = reader.next
-		reader.next++
-	}
-	return len(destination), nil
-}
 
 type catalogObjectFixture struct {
 	share      catalog.ShareInstance
@@ -50,18 +30,6 @@ func newCatalogObjectFixture(t *testing.T) catalogObjectFixture {
 		share: shareInstance(t, 90), key: bytes.Repeat([]byte{0x42}, 32), privateKey: privateKey,
 		publicKey: privateKey.Public().(ed25519.PublicKey),
 	}
-}
-
-func newObjectStore(t *testing.T, fixture catalogObjectFixture, nonces io.Reader) *SealedCatalogStore {
-	t.Helper()
-	store, err := NewSealedCatalogStore(SealedCatalogStoreConfig{
-		ShareInstance: fixture.share, CatalogKey: fixture.key,
-		SenderPrivateKey: fixture.privateKey, NonceSource: nonces,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return store
 }
 
 func TestDescriptorAndControlCodecsAuthenticateCanonicalValues(t *testing.T) {
@@ -107,7 +75,7 @@ func TestDescriptorAndControlCodecsAuthenticateCanonicalValues(t *testing.T) {
 		t.Fatal("authenticated descriptor changed identity")
 	}
 	tampered := bytes.Clone(object)
-	tampered[len(tampered)-1] ^= 1
+	tampered = append(tampered, 0)
 	if _, err := OpenDescriptor(tampered, pkHash[:], shareIDRaw, descriptorKey); err == nil {
 		t.Fatal("tampered descriptor object was accepted")
 	}
@@ -244,186 +212,54 @@ func TestCatalogPageCodecPreservesEntriesTimesAndRejectsHostileCBOR(t *testing.T
 	}
 }
 
-func TestSealedPageObjectsVerifyAndCacheEvictionCannotAffectAddressedServing(t *testing.T) {
-	fixture := newCatalogObjectFixture(t)
-	nonces := &nonceCounter{next: 1}
-	objects := newObjectStore(t, fixture, nonces)
+func TestAddressedSenderServesOnlyTheCommittedPage(t *testing.T) {
+	ctx := t.Context()
+	share := shareInstance(t, 90)
 	directory := directoryID(t, 110)
-	generation := generationID(t, 111)
-	entry, err := catalog.NewFileEntry(fileID(t, 112), "first.bin", 1, catalog.ModifiedTime{})
+	entry, err := catalog.NewFileEntry(fileID(t, 112), "expected.bin", 1, catalog.ModifiedTime{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := catalog.PageCommitInput{
-		ShareInstance: fixture.share, DirectoryID: directory, Generation: generation,
-		Entries: []catalog.Entry{entry},
+	spec := catalog.CatalogPageSpec{
+		ShareInstance: share, DirectoryID: directory, Generation: generationID(t, 111),
+		Entries: []catalog.Entry{entry}, Terminal: true,
 	}
-	sealed, err := objects.Seal(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	page, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
-		ShareInstance: fixture.share, DirectoryID: directory, Generation: generation,
-		Entries: input.Entries,
-	}, catalog.PageCommitterFunc(func(catalog.PageCommitInput) (catalog.PageCommitment, error) {
-		return sealed.Commitment(), nil
-	}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := objects.LoadSealedPage(context.Background(), page)
-	if err != nil || !bytes.Equal(loaded, sealed.Bytes()) {
-		t.Fatalf("cached page object changed: err=%v", err)
-	}
-	verifier, err := NewCatalogObjectVerifier(CatalogObjectVerifierConfig{
-		ShareInstance: fixture.share, CatalogKey: fixture.key, Sender: checkedSender(t, fixture.publicKey),
+	payload, err := encodeCatalogPageInput(catalog.PageCommitInput{
+		ShareInstance: spec.ShareInstance, DirectoryID: spec.DirectoryID, Generation: spec.Generation,
+		Entries: spec.Entries, Terminal: spec.Terminal,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	request, _ := NewListRequest(directory, nil, 0)
-	verified, err := verifier.Verify(context.Background(), fixture.share, request, sealed.Bytes())
-	if err != nil || verified.Page.DirectoryID() != directory || verified.Page.Commitment() != sealed.Commitment() {
-		t.Fatalf("verified page = %+v err=%v", verified, err)
-	}
-	tampered := sealed.Bytes()
-	tampered[len(tampered)-1] ^= 1
-	if _, err := verifier.Verify(context.Background(), fixture.share, request, tampered); err == nil {
-		t.Fatal("tampered page object was verified")
-	}
-	if _, err := verifier.Verify(context.Background(), shareInstance(t, 113), request, sealed.Bytes()); !errors.Is(err, ErrObjectIdentity) {
-		t.Fatalf("wrong-share verification = %v", err)
-	}
-	objects.mu.Lock()
-	objects.maxCacheBytes = objects.pageCacheBytes
-	objects.mu.Unlock()
-	secondInput := input
-	secondInput.PageIndex = 1
-	secondInput.Previous = sealed.Commitment()
-	secondInput.Terminal = true
-	second, err := objects.Seal(secondInput)
+	decoder := CatalogPayloadDecoder{}
+	verified, err := decoder.Verify(ctx, share, request, payload)
 	if err != nil {
 		t.Fatal(err)
 	}
-	objects.cachePage(second)
-	if _, err := objects.LoadSealedPage(context.Background(), page); !errors.Is(err, ErrCatalogObjectMissing) {
-		t.Fatalf("old page remained after bounded eviction: %v", err)
+	page := verified.Page
+	source := addressedSourceFunc(func(context.Context, ListRequest) (PageResult, error) {
+		return PageResult{Page: page, Payload: payload}, nil
+	})
+	service, _ := NewAddressedSenderService(share, source)
+	if got, err := service.Serve(ctx, request, nil); err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("committed catalog payload did not round trip: %v", err)
 	}
-	if nonces.reads.Load() != 2 {
-		t.Fatalf("page sealing nonce reads = %d", nonces.reads.Load())
-	}
-	if _, err := NewSealedCatalogStore(SealedCatalogStoreConfig{}); err == nil {
-		t.Fatal("invalid object store configuration was accepted")
-	}
-	if _, err := NewCatalogObjectVerifier(CatalogObjectVerifierConfig{}); err == nil {
-		t.Fatal("invalid verifier configuration was accepted")
+	other, _ := catalog.NewFileEntry(fileID(t, 112), "different.bin", 1, catalog.ModifiedTime{})
+	changed, _ := encodeCatalogPageInput(catalog.PageCommitInput{
+		ShareInstance: spec.ShareInstance, DirectoryID: spec.DirectoryID, Generation: spec.Generation,
+		Entries: []catalog.Entry{other}, Terminal: spec.Terminal,
+	})
+	payload = changed
+	if _, err := service.Serve(ctx, request, nil); !errors.Is(err, catalog.ErrCorruptCatalogStorage) {
+		t.Fatalf("uncommitted catalog payload reached sending authority: %v", err)
 	}
 }
 
-func TestAddressedPageServiceUsesDurableBackendAfterObjectCacheEviction(t *testing.T) {
-	fixture := newCatalogObjectFixture(t)
-	objects := newObjectStore(t, fixture, &nonceCounter{next: 20})
-	process, _ := catalog.NewBudgetAccount("process", catalog.DefaultProcessBudgetLimits())
-	shareBudget, _ := catalog.NewBudgetAccount("share", catalog.DefaultShareBudgetLimits())
-	session, _ := catalog.NewBudgetAccount("session", catalog.DefaultSessionBudgetLimits())
-	store, err := catalog.NewCatalogStore(catalog.StoreConfig{
-		ShareInstance: fixture.share, Backend: catalog.NewMemoryCatalogBackend(),
-		ProcessBudget: process, ShareBudget: shareBudget, PageSealer: objects,
-		AttemptIDs: catalog.ScanAttemptIDGeneratorFunc(func() (catalog.ScanAttemptID, error) {
-			return scanAttemptID(t, 120), nil
-		}),
-		Generations: catalog.DirectoryGenerationGeneratorFunc(func() (catalog.DirectoryGeneration, error) {
-			return generationID(t, 121), nil
-		}),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	root := directoryID(t, 122)
-	directory := directoryID(t, 123)
-	unscanned := directoryID(t, 126)
-	commitSelectedDirectories(t, store, fixture.share, root, []catalog.DirectoryID{directory, unscanned}, session)
-	var scans atomic.Int32
-	scanner := catalog.DirectoryScannerFunc(func(ctx context.Context, request catalog.ScanRequest) (catalog.ScanResult, error) {
-		scans.Add(1)
-		locator, _ := catalog.NewSourceReference([]byte("object:" + "served.bin"))
-		identity, _ := catalog.NewSourceIdentity([]byte("served-source"))
-		version, _ := catalog.NewVersionCandidate([]byte("served-version"))
-		return catalog.ScanResult{}, request.Children.Add(ctx, catalog.ScannedChild{
-			FileID: fileID(t, 124), Name: "served.bin", SourceReference: locator,
-			SourceIdentity: identity, VersionCandidate: version, ExpectedSize: 5,
-		})
-	})
-	source, err := NewCatalogStoreSource(CatalogStoreSourceConfig{
-		ShareInstance: fixture.share, Store: store, SessionBudget: session, Scanner: scanner,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	request, _ := NewListRequest(directory, nil, 0)
-	result, err := source.LoadPage(context.Background(), request, nil)
-	if err != nil || result.Page.DirectoryID() != directory || len(result.SealedObject) == 0 {
-		t.Fatalf("addressed page result = %+v err=%v", result, err)
-	}
-	objects.mu.Lock()
-	objects.pageCache = make(map[catalog.PageCommitment][]byte)
-	objects.pageCacheOrder = nil
-	objects.pageCacheBytes = 0
-	objects.mu.Unlock()
-	service, err := NewAddressedSenderService(fixture.share, source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	served, err := service.Serve(context.Background(), request, nil)
-	if err != nil || !bytes.Equal(served, result.SealedObject) || scans.Load() != 1 {
-		t.Fatalf("durable addressed serving changed object: err=%v scans=%d", err, scans.Load())
-	}
-	verifier, _ := NewCatalogObjectVerifier(CatalogObjectVerifierConfig{
-		ShareInstance: fixture.share, CatalogKey: fixture.key, Sender: checkedSender(t, fixture.publicKey),
-	})
-	if _, err := verifier.Verify(context.Background(), fixture.share, request, served); err != nil {
-		t.Fatal(err)
-	}
-	currentGeneration := result.Page.Generation()
-	outOfRange, _ := NewListRequest(directory, &currentGeneration, 9)
-	if _, err := source.LoadPage(context.Background(), outOfRange, nil); !errors.Is(err, ErrPageOutOfRange) {
-		t.Fatalf("out-of-range page = %v", err)
-	}
-	stale := generationID(t, 125)
-	staleRequest, _ := NewListRequest(directory, &stale, 0)
-	if _, err := source.LoadPage(context.Background(), staleRequest, nil); !errors.Is(err, ErrGenerationMismatch) {
-		t.Fatalf("stale generation = %v", err)
-	}
-	unscannedGeneration := generationID(t, 127)
-	unscannedLater, _ := NewListRequest(unscanned, &unscannedGeneration, 1)
-	if _, err := source.LoadPage(context.Background(), unscannedLater, nil); !errors.Is(err, ErrGenerationMismatch) {
-		t.Fatalf("later page triggered an uncommitted scan: %v", err)
-	}
-	wrongSource, _ := NewCatalogStoreSource(CatalogStoreSourceConfig{
-		ShareInstance: shareInstance(t, 128), Store: store, SessionBudget: session, Scanner: scanner,
-	})
-	if _, err := wrongSource.LoadPage(context.Background(), request, nil); !errors.Is(err, ErrObjectIdentity) {
-		t.Fatalf("source accepted another share's committed page: %v", err)
-	}
-	cancelled, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := source.LoadPage(cancelled, request, nil); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled page load = %v", err)
-	}
-	if _, err := NewCatalogStoreSource(CatalogStoreSourceConfig{}); err == nil {
-		t.Fatal("invalid catalog store source was accepted")
-	}
-	if _, err := NewAddressedSenderService(catalog.ShareInstance{}, source); err == nil {
-		t.Fatal("invalid addressed service was accepted")
-	}
-}
-
-func TestDurableFailureObjectSurvivesCacheEvictionAndRestartWithoutReseal(t *testing.T) {
+func TestCommittedFailurePayloadSurvivesRestart(t *testing.T) {
 	fixture := newCatalogObjectFixture(t)
 	rootPath := t.TempDir()
-	nonces := &nonceCounter{next: 40}
-	objects := newObjectStore(t, fixture, nonces)
+	objects := CatalogPayloadEncoder{}
 	process, _ := catalog.NewBudgetAccount("process", catalog.DefaultProcessBudgetLimits())
 	shareBudget, _ := catalog.NewBudgetAccount("share", catalog.DefaultShareBudgetLimits())
 	session, _ := catalog.NewBudgetAccount("session", catalog.DefaultSessionBudgetLimits())
@@ -463,25 +299,14 @@ func TestDurableFailureObjectSurvivesCacheEvictionAndRestartWithoutReseal(t *tes
 	if err != nil || !found {
 		t.Fatalf("first durable object: found=%v err=%v", found, err)
 	}
-	objects.mu.Lock()
-	objects.maxFailureBytes = objects.failureBytes
-	objects.mu.Unlock()
 	if _, err := store.ListChildren(context.Background(), secondDirectory, session, catalog.ScanOptions{}, scanner); err == nil {
 		t.Fatal("second permanent failure was accepted")
-	}
-	firstWire := DirectoryFailure{
-		ShareInstance: fixture.share, DirectoryID: firstDirectory, AttemptID: firstFailure.AttemptID,
-		Code: DirectoryCodePermanentIO,
-	}
-	if _, err := objects.LoadSealedFailure(context.Background(), firstWire); !errors.Is(err, ErrCatalogObjectMissing) {
-		t.Fatalf("first failure cache entry was not evicted: %v", err)
 	}
 	if err := backend.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	restartNonces := &nonceCounter{err: errors.New("restart attempted to reseal")}
-	restartObjects := newObjectStore(t, fixture, restartNonces)
+	restartObjects := CatalogPayloadEncoder{}
 	recoveredProcess, _ := catalog.NewBudgetAccount("recovered-process", catalog.DefaultProcessBudgetLimits())
 	recoveredShare, _ := catalog.NewBudgetAccount("recovered-share", catalog.DefaultShareBudgetLimits())
 	recoveredSession, _ := catalog.NewBudgetAccount("recovered-session", catalog.DefaultSessionBudgetLimits())
@@ -513,7 +338,7 @@ func TestDurableFailureObjectSurvivesCacheEvictionAndRestartWithoutReseal(t *tes
 	request, _ := NewListRequest(firstDirectory, nil, 0)
 	result, err := source.LoadPage(context.Background(), request, nil)
 	if err != nil || result.Failure == nil || result.Failure.AttemptID != firstFailure.AttemptID ||
-		!bytes.Equal(result.SealedObject, firstObject.Bytes()) {
+		!bytes.Equal(result.Payload, firstObject.Bytes()) {
 		t.Fatalf("recovered failure result = %+v err=%v", result, err)
 	}
 	service, _ := NewAddressedSenderService(fixture.share, source)
@@ -521,20 +346,18 @@ func TestDurableFailureObjectSurvivesCacheEvictionAndRestartWithoutReseal(t *tes
 	if err != nil || !bytes.Equal(served, firstObject.Bytes()) {
 		t.Fatalf("restarted service changed failure bytes: %v", err)
 	}
-	verifier, _ := NewCatalogObjectVerifier(CatalogObjectVerifierConfig{
-		ShareInstance: fixture.share, CatalogKey: fixture.key, Sender: checkedSender(t, fixture.publicKey),
-	})
+	verifier := CatalogPayloadDecoder{}
 	verified, err := verifier.Verify(context.Background(), fixture.share, request, served)
 	if err != nil || verified.Failure == nil || verified.Failure.AttemptID != firstFailure.AttemptID {
 		t.Fatalf("verified recovered failure = %+v err=%v", verified, err)
 	}
 	failureGeneration := generationID(t, 153)
 	laterRequest, _ := NewListRequest(firstDirectory, &failureGeneration, 1)
-	if _, err := verifier.Verify(context.Background(), fixture.share, laterRequest, served); !errors.Is(err, senderobject.ErrSignature) {
+	if _, err := verifier.Verify(context.Background(), fixture.share, laterRequest, served); !errors.Is(err, ErrObjectIdentity) {
 		t.Fatalf("failure object answered a later-page request: %v", err)
 	}
-	if restartNonces.reads.Load() != 0 || rescans.Load() != 0 {
-		t.Fatalf("restart resealed/rescanned: nonce reads=%d scans=%d", restartNonces.reads.Load(), rescans.Load())
+	if rescans.Load() != 0 {
+		t.Fatalf("restart rescanned: %d", rescans.Load())
 	}
 	if recoveredShare.Snapshot().Used == (catalog.ResourceUsage{}) {
 		t.Fatal("recovered durable authority was not budgeted")
@@ -564,72 +387,8 @@ func TestHostileCatalogObjectsAndWireFieldsFailClosed(t *testing.T) {
 	directory := directoryID(t, 170)
 	generation := generationID(t, 171)
 	entry, _ := catalog.NewFileEntry(fileID(t, 172), "hostile.bin", 1, catalog.ModifiedTime{})
-	input := catalog.PageCommitInput{
-		ShareInstance: fixture.share, DirectoryID: directory, Generation: generation,
-		Entries: []catalog.Entry{entry}, Terminal: true,
-	}
-	objects := newObjectStore(t, fixture, &nonceCounter{next: 70})
-	if _, err := (*SealedCatalogStore)(nil).Seal(input); !errors.Is(err, ErrObjectIdentity) {
-		t.Fatalf("nil page sealer = %v", err)
-	}
-	wrongShare := input
-	wrongShare.ShareInstance = shareInstance(t, 173)
-	if _, err := objects.Seal(wrongShare); !errors.Is(err, ErrObjectIdentity) {
-		t.Fatalf("wrong-share page seal = %v", err)
-	}
-	badNonces := newObjectStore(t, fixture, &nonceCounter{err: errors.New("nonce failed")})
-	if _, err := badNonces.Seal(input); err == nil {
-		t.Fatal("nonce failure was ignored")
-	}
-	badDirectory := input
-	badDirectory.DirectoryID = catalog.DirectoryID{}
-	if _, err := objects.Seal(badDirectory); err == nil {
-		t.Fatal("zero-directory page was sealed")
-	}
-	sealed, err := objects.Seal(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	objects.mu.Lock()
-	objects.pageCache = make(map[catalog.PageCommitment][]byte)
-	objects.pageCacheOrder = nil
-	objects.pageCacheBytes = 0
-	objects.maxCacheBytes = 1
-	objects.mu.Unlock()
-	objects.cachePage(sealed)
-	if _, err := objects.LoadSealedPage(context.Background(), catalogPageForSealedObject(t, input, sealed)); !errors.Is(err, ErrCatalogObjectMissing) {
-		t.Fatalf("oversized page cache entry was retained: %v", err)
-	}
-	objects.mu.Lock()
-	objects.maxFailureBytes = 1
-	objects.cacheFailureLocked(
-		failureObjectIdentity{directory: directory, attempt: scanAttemptID(t, 177)},
-		sha256.Sum256([]byte("failure")), []byte("failure"),
-	)
-	if len(objects.failures) != 0 {
-		objects.mu.Unlock()
-		t.Fatal("oversized failure cache entry was retained")
-	}
-	objects.mu.Unlock()
-	if _, err := objects.LoadSealedPage(context.Background(), catalog.CatalogPage{}); !errors.Is(err, ErrCatalogObjectMissing) {
-		t.Fatalf("zero cached page = %v", err)
-	}
-	if _, err := (*SealedCatalogStore)(nil).LoadSealedFailure(context.Background(), DirectoryFailure{}); !errors.Is(err, ErrCatalogObjectMissing) {
-		t.Fatalf("nil failure cache = %v", err)
-	}
-	if _, err := objects.LoadSealedFailure(context.Background(), DirectoryFailure{
-		ShareInstance: shareInstance(t, 175), DirectoryID: directory, AttemptID: scanAttemptID(t, 176),
-	}); !errors.Is(err, ErrCatalogObjectMissing) {
-		t.Fatalf("failure cache accepted another share: %v", err)
-	}
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := objects.LoadSealedPage(cancelled, catalog.CatalogPage{}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled cache read = %v", err)
-	}
-	if _, err := objects.LoadSealedFailure(cancelled, DirectoryFailure{}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled failure cache read = %v", err)
-	}
 
 	for kind, want := range map[catalog.FailureKind]uint16{
 		catalog.FailureKindStale:       DirectoryCodeStale,
@@ -720,7 +479,7 @@ func TestHostileCatalogObjectsAndWireFieldsFailClosed(t *testing.T) {
 	}
 	invalidFailureService, _ := NewAddressedSenderService(fixture.share, addressedSourceFunc(
 		func(context.Context, ListRequest) (PageResult, error) {
-			return PageResult{Failure: &DirectoryFailure{}, Page: page, SealedObject: []byte{1}}, nil
+			return PageResult{Failure: &DirectoryFailure{}, Page: page, Payload: []byte{1}}, nil
 		},
 	))
 	if _, err := invalidFailureService.Serve(context.Background(), request, nil); !errors.Is(err, ErrObjectIdentity) {
@@ -728,10 +487,10 @@ func TestHostileCatalogObjectsAndWireFieldsFailClosed(t *testing.T) {
 	}
 	invalidPageService, _ := NewAddressedSenderService(fixture.share, addressedSourceFunc(
 		func(context.Context, ListRequest) (PageResult, error) {
-			return PageResult{Page: page, SealedObject: []byte{1}}, nil
+			return PageResult{Page: page, Payload: []byte{1}}, nil
 		},
 	))
-	if _, err := invalidPageService.Serve(context.Background(), request, nil); !errors.Is(err, ErrObjectIdentity) {
+	if _, err := invalidPageService.Serve(context.Background(), request, nil); !errors.Is(err, catalog.ErrCorruptCatalogStorage) {
 		t.Fatalf("uncommitted page object = %v", err)
 	}
 	otherPage, _ := catalog.NewCatalogPage(catalog.CatalogPageSpec{
@@ -740,16 +499,14 @@ func TestHostileCatalogObjectsAndWireFieldsFailClosed(t *testing.T) {
 	}, testCommitter{})
 	wrongShareService, _ := NewAddressedSenderService(fixture.share, addressedSourceFunc(
 		func(context.Context, ListRequest) (PageResult, error) {
-			return PageResult{Page: otherPage, SealedObject: []byte{1}}, nil
+			return PageResult{Page: otherPage, Payload: []byte{1}}, nil
 		},
 	))
 	if _, err := wrongShareService.Serve(context.Background(), request, nil); !errors.Is(err, ErrObjectIdentity) {
 		t.Fatalf("another share's page result = %v", err)
 	}
 
-	verifier, _ := NewCatalogObjectVerifier(CatalogObjectVerifierConfig{
-		ShareInstance: fixture.share, CatalogKey: fixture.key, Sender: checkedSender(t, fixture.publicKey),
-	})
+	verifier := CatalogPayloadDecoder{}
 	if _, err := verifier.Verify(cancelled, fixture.share, request, []byte{1}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled verification = %v", err)
 	}

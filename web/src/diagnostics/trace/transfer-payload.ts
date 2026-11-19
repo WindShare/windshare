@@ -11,6 +11,20 @@ export interface DownloadConnectivitySnapshot {
   readonly final: boolean
 }
 
+export type FileRevisionReadmissionPayloadV1 = Readonly<{
+  transition: 'file_revision_readmission'
+  operation_id: string
+  transfer_job_id: string
+  file_id: string
+  previous_revision: string
+  current_revision: string
+  decision: import('../../transfer/job/file-authority').FileRevisionReadmissionObservation['decision']
+  comparison_reason: import('../../content/revision-comparison').RevisionComparison['reason']
+  retained_bytes: string
+  reused_bytes: string
+  elapsed_ms: number
+}>
+
 export type CapacityWaitTransitionPayloadV1 = Readonly<{
   transition:
     | 'capacity_retry_scheduled'

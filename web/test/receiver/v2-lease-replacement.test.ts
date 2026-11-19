@@ -5,7 +5,6 @@ import { ConnectivityRouteAuthority } from '../../src/connectivity/receiver-poli
 import type { FileRevisionDescriptor } from '../../src/content/records'
 import {
   RemoteOperationError,
-  RevisionChangedDuringRecoveryError,
   RevisionReopenedDuringRecoveryError,
   RevisionLeaseExpiredError,
   type RevisionService,
@@ -138,12 +137,16 @@ describe('lease replacement within a healthy protocol generation', () => {
         if (count === 1) return value
         if (field === 'revision') return { ...value, fileRevision: id(42) }
         if (field === 'geometry') return { ...value, geometry: new FileGeometry(4n, 2n) }
-        return { ...value, modifiedTime: { seconds: 1n, nanoseconds: 0, precision: 1, milliseconds: 1000n } }
+        return { ...value, fileRevision: id(42),
+          modifiedTime: { seconds: 1n, nanoseconds: 0, precision: 1, milliseconds: 1000n } }
       },
     })
     const opened = await f.scoped.revisions.open(f.stable.fileId)
     await expect(collect(f.scoped.broker.readRange(opened.descriptor, opened.leaseId, byteRange(0n, 4n))))
-      .rejects.toBeInstanceOf(field === 'revision' || field === 'modification evidence' ? RevisionReopenedDuringRecoveryError : RevisionChangedDuringRecoveryError)
+      .rejects.toMatchObject({
+        name: RevisionReopenedDuringRecoveryError.name,
+        comparison: { kind: field === 'revision' || field === 'modification evidence' ? 'unavailable' : 'observed-change' },
+      })
     await opened.release()
     expect(f.events).toContain('release:2')
     expect(f.events).toContain('release:1')

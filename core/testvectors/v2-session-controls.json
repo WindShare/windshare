@@ -1,7 +1,7 @@
 {
   "version": 1,
   "kind": "v2-session-controls",
-  "description": "Independent reachability and TURN session messages, with sender signatures bound to their outer message kinds.",
+  "description": "Independent reachability and TURN session messages, with envelope authentication and distinct message kinds.",
   "cases": [
     {
       "name": "peer-path-demand",
@@ -21,7 +21,7 @@
       "kind": 19,
       "direction": 1,
       "bodyB64": "iAJQAgAAAAAAAAAAAAAAAAAAAFADAAAAAAAAAAAAAAAAAAAABAMZ6mAAYA==",
-      "plaintextB64": "owATAfYCowABAYgCUAIAAAAAAAAAAAAAAAAAAABQAwAAAAAAAAAAAAAAAAAAAAQDGepgAGAY/1hAJXxe+HNrQphI+bWQ8v9RUitWd1Vxr9bqJhYTV0FN9jMI0gHoGyMoLG22pNzhmpGQtsLqWShnMamubkE1pTnVDA==",
+      "plaintextB64": "owATAfYCiAJQAgAAAAAAAAAAAAAAAAAAAFADAAAAAAAAAAAAAAAAAAAABAMZ6mAAYA==",
       "senderPublicKeyB64": "Kay64UG8yvCyLhqU000LxzYeUm0L/hLIl5S8kyKWbdc=",
       "shareInstanceB64": "QEFCQ0RFRkdISUpLTE1OTw==",
       "protocolSessionIdB64": "AQAAAAAAAAAAAAAAAAAAAA==",
@@ -47,7 +47,7 @@
       "kind": 20,
       "direction": 1,
       "bodyB64": "jwQCUAEAAAAAAAAAAAAAAAAAAABQAgAAAAAAAAAAAAAAAAAAAANQBAAAAAAAAAAAAAAAAAAAAFAAAAAAAAAAAAAAAAAAAAAAZmNvdHVybmRob21lZ3ByaW1hcnkCaDEyMzp1c2VycmRlbGVnYXRlZC1wYXNzd29yZBoANu6AgXgjdHVybjpleGFtcGxlLm9yZzozNDc4P3RyYW5zcG9ydD11ZHA=",
-      "plaintextB64": "owAUAfYCowABAY8EAlABAAAAAAAAAAAAAAAAAAAAUAIAAAAAAAAAAAAAAAAAAAADUAQAAAAAAAAAAAAAAAAAAABQAAAAAAAAAAAAAAAAAAAAAGZjb3R1cm5kaG9tZWdwcmltYXJ5AmgxMjM6dXNlcnJkZWxlZ2F0ZWQtcGFzc3dvcmQaADbugIF4I3R1cm46ZXhhbXBsZS5vcmc6MzQ3OD90cmFuc3BvcnQ9dWRwGP9YQMq+L3gZtjrm8wVDS0nUzaXx0UE6i3a+Qj6FR77gyLB8nfqySYYLd4Mxiauwk7IiLH7dV8kAjhOP5ysKCPsBeg4=",
+      "plaintextB64": "owAUAfYCjwQCUAEAAAAAAAAAAAAAAAAAAABQAgAAAAAAAAAAAAAAAAAAAANQBAAAAAAAAAAAAAAAAAAAAFAAAAAAAAAAAAAAAAAAAAAAZmNvdHVybmRob21lZ3ByaW1hcnkCaDEyMzp1c2VycmRlbGVnYXRlZC1wYXNzd29yZBoANu6AgXgjdHVybjpleGFtcGxlLm9yZzozNDc4P3RyYW5zcG9ydD11ZHA=",
       "senderPublicKeyB64": "Kay64UG8yvCyLhqU000LxzYeUm0L/hLIl5S8kyKWbdc=",
       "shareInstanceB64": "QEFCQ0RFRkdISUpLTE1OTw==",
       "protocolSessionIdB64": "AQAAAAAAAAAAAAAAAAAAAA==",

@@ -66,18 +66,9 @@ func (r *jobRun) pauseFailedFile(
 	policy := lifecyclePolicyFor(cause)
 	isolatedOutputFailure := policy.outputCanContinueAfterFileSettlement(r.output.Capabilities())
 	isolatedSourceFailure := policy.sourceFileLocal() && !policy.jobTerminal()
-	reason := filePauseReason(cause)
-	settleContext, cancel := r.job.newSettlementContext(ctx)
-	settlement, rawSettlementErr := transaction.Pause(settleContext, reason)
-	settlementErr := normalizeOutputBoundary(settleContext, rawSettlementErr)
-	cancel()
-	r.releaseRevision(ctx, plan, opened.Handle)
-	if settlementErr == nil && (!settlement.matchesBinding(transaction.Binding()) ||
-		settlement.Kind() != FilePaused && settlement.Kind() != FileItemBlocked && settlement.Kind() != FileFailed) {
-		settlementErr = outputContractFault(nil)
-	}
+	settlement, settlementErr := r.pauseFileTransaction(ctx, plan, opened, transaction, filePauseReason(cause), progress)
 	if settlementErr == nil {
-		settlementErr = r.acceptTransactionFileSettlement(plan, transaction, progress, settlement)
+		r.job.progress.acceptFileSettlement(settlement, plan.expectedSize)
 	}
 	r.recordFileFailure(FileJobFailure{
 		FileID: plan.file, Path: plan.failurePath(), Stage: stage, Cause: cause,
@@ -95,6 +86,25 @@ func (r *jobRun) pauseFailedFile(
 		return nil
 	}
 	return cause
+}
+
+func (r *jobRun) pauseFileTransaction(
+	ctx context.Context, plan plannedFile, opened OpenedRevision, transaction FileTransaction,
+	reason FilePauseReason, progress *fileTransferProgress,
+) (FileSettlement, error) {
+	settleContext, cancel := r.job.newSettlementContext(ctx)
+	settlement, rawSettlementErr := transaction.Pause(settleContext, reason)
+	settlementErr := normalizeOutputBoundary(settleContext, rawSettlementErr)
+	cancel()
+	r.releaseRevision(ctx, plan, opened.Handle)
+	if settlementErr == nil && (!settlement.matchesBinding(transaction.Binding()) ||
+		settlement.Kind() != FilePaused && settlement.Kind() != FileItemBlocked && settlement.Kind() != FileFailed) {
+		settlementErr = outputContractFault(nil)
+	}
+	if settlementErr == nil {
+		settlementErr = r.reconcileTransactionCoverage(transaction, progress, settlement)
+	}
+	return settlement, settlementErr
 }
 
 func (r *jobRun) commitTransferredFile(
@@ -482,6 +492,17 @@ func (r *jobRun) acceptTransactionFileSettlement(
 	progress *fileTransferProgress,
 	settlement FileSettlement,
 ) error {
+	if err := r.reconcileTransactionCoverage(transaction, progress, settlement); err != nil {
+		return err
+	}
+	// Outcome and publication counters move together before lifecycle emission.
+	r.job.progress.acceptFileSettlement(settlement, plan.expectedSize)
+	return nil
+}
+
+func (r *jobRun) reconcileTransactionCoverage(
+	transaction FileTransaction, progress *fileTransferProgress, settlement FileSettlement,
+) error {
 	if _, hasCheckpoint := settlement.VerifiedProgress(); progress == nil && hasCheckpoint {
 		return outputContractFault(nil)
 	}
@@ -499,10 +520,8 @@ func (r *jobRun) acceptTransactionFileSettlement(
 			retained, _ = rangeSetByteCount(checkpoint.Ranges())
 		}
 		r.job.progress.replaceRestartReusable(priorPersisted, retained)
+		progress.persistedBytes = retained
 	}
-	// Outcome and publication counters move together before lifecycle emission,
-	// preventing observers from seeing a settled file with stale progress.
-	r.job.progress.acceptFileSettlement(settlement, plan.expectedSize)
 	return nil
 }
 

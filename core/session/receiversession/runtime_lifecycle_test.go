@@ -236,7 +236,7 @@ func newUnstartedRuntimeWithContinuations(
 	auth := &switchableAuthenticator{current: permissiveInboundAuthenticator()}
 	runtime, err := sessioncore.New(sessioncore.Config{
 		Share: share, Role: role, Keys: keys, LaneID: 1, Channel: channel,
-		Random: &deterministicReader{next: 99}, Authenticator: auth,
+		Random: &deterministicReader{next: 99}, Validator: auth,
 		Continuations: continuations, OperationLimits: limits, Now: now, ProtocolObservations: producer,
 	})
 	if err != nil {
@@ -248,10 +248,10 @@ func newUnstartedRuntimeWithContinuations(
 	return runtime, channel
 }
 
-func permissiveInboundAuthenticator() protocolsession.InboundMessageAuthenticator {
-	return protocolsession.InboundMessageAuthenticatorFunc(
-		func(uint64, protocolsession.Message) (protocolsession.InboundAuthenticationResult, error) {
-			return protocolsession.InboundAuthenticationResult{}, nil
+func permissiveInboundAuthenticator() protocolsession.InboundMessageValidator {
+	return protocolsession.InboundMessageValidatorFunc(
+		func(protocolsession.Message) (protocolsession.InboundValidationResult, error) {
+			return protocolsession.InboundValidationResult{}, nil
 		},
 	)
 }

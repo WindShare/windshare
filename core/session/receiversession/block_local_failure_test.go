@@ -7,7 +7,6 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/framechannel"
-	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -23,11 +22,11 @@ import (
 const localFailureTestReadSecretByte = byte(5)
 
 type blockFailureOpener struct {
-	RecordOpener
+	RecordDecoder
 	err error
 }
 
-func (opener blockFailureOpener) OpenBlock(
+func (opener blockFailureOpener) DecodeBlock(
 	content.FileRevisionDescriptor,
 	uint64,
 	[]byte,
@@ -238,36 +237,17 @@ func newContextCapturingContentFactory(
 	started chan context.Context,
 ) sendersession.ContentFactory {
 	t.Helper()
-	readSecret := bytes.Repeat([]byte{localFailureTestReadSecretByte}, link.ReadSecretBytes)
-	keys, err := content.NewKeyTree(readSecret, fixture.share)
-	clear(readSecret)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sealer, err := records.NewSealer(records.SealerConfig{
-		ShareInstance: fixture.share, Keys: keys, SigningKey: fixture.senderConfig.SenderPrivateKey,
-		NonceSource: &deterministicReader{next: 51},
-	})
-	if err != nil {
-		keys.Destroy()
-		t.Fatal(err)
-	}
+	sealer := records.Encoder{}
 	processBudget, err := contentflow.NewProcessCacheBudget(64 << 20)
 	if err != nil {
-		sealer.Destroy()
-		keys.Destroy()
 		t.Fatal(err)
 	}
 	cache, err := contentflow.NewSharedBlockCache(fixture.share, 16<<20, processBudget)
 	if err != nil {
-		sealer.Destroy()
-		keys.Destroy()
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		cache.Close()
-		sealer.Destroy()
-		keys.Destroy()
 	})
 	store := &contextCapturingContentStore{verticalContentStore: fixture.contentStore, started: started}
 	return sendersession.ContentFactoryFunc(func(sessionID protocolsession.ProtocolSessionID) (*contentflow.SenderService, error) {
@@ -276,7 +256,7 @@ func newContextCapturingContentFactory(
 			return nil, err
 		}
 		return contentflow.NewSenderService(contentflow.SenderServiceConfig{
-			Store: store, SessionCapacity: sessionCapacity, Sealer: sealer, Cache: cache,
+			Store: store, SessionCapacity: sessionCapacity, Encoder: sealer, Cache: cache,
 		})
 	})
 }
@@ -354,7 +334,7 @@ func TestBlockLocalFailuresCancelExactOperationAndPreserveSibling(t *testing.T) 
 				receiverFactory := newLocalFailureReceiverFactory(t, fixture, func(config *FactoryConfig) {
 					config.After = func(time.Duration) <-chan time.Time { return make(chan time.Time) }
 					if test.failOpening {
-						config.RecordOpener = blockFailureOpener{RecordOpener: config.RecordOpener, err: test.want}
+						config.RecordDecoder = blockFailureOpener{RecordDecoder: config.RecordDecoder, err: test.want}
 					}
 				})
 				pair := connectAuditedVerticalPair(t, senderFactory, receiverFactory)

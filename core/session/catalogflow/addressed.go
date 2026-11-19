@@ -1,7 +1,9 @@
 package catalogflow
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 
@@ -9,9 +11,9 @@ import (
 )
 
 type PageResult struct {
-	Page         catalog.CatalogPage
-	SealedObject []byte
-	Failure      *DirectoryFailure
+	Page    catalog.CatalogPage
+	Payload []byte
+	Failure *DirectoryFailure
 }
 
 type PageAddressedSource interface {
@@ -95,7 +97,7 @@ func (source *CatalogStoreSource) loadFirstPage(
 	if !found {
 		return PageResult{}, catalog.ErrCorruptCatalogStorage
 	}
-	return PageResult{Failure: &wireFailure, SealedObject: object.Bytes()}, nil
+	return PageResult{Failure: &wireFailure, Payload: object.Bytes()}, nil
 }
 
 func (source *CatalogStoreSource) loadCommittedPage(
@@ -126,7 +128,7 @@ func (source *CatalogStoreSource) loadCommittedPage(
 	if !found || object.Commitment() != page.Commitment() {
 		return PageResult{}, catalog.ErrCorruptCatalogStorage
 	}
-	return PageResult{Page: page, SealedObject: object.Bytes()}, nil
+	return PageResult{Page: page, Payload: object.Bytes()}, nil
 }
 
 func (source *CatalogStoreSource) translateFailure(failure *catalog.DirectoryFailure) (DirectoryFailure, error) {
@@ -160,22 +162,44 @@ func (service *AddressedSenderService) Serve(
 	request ListRequest,
 	progress catalog.ScanProgressObserver,
 ) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if request.directory.IsZero() || (request.pageIndex > 0 && request.generation == nil) {
+		return nil, ErrInvalidRequest
+	}
 	result, err := service.source.LoadPage(ctx, request, progress)
 	if err != nil {
 		return nil, fmt.Errorf("load addressed catalog page: %w", err)
 	}
+	var expected []byte
 	if result.Failure != nil {
-		if !result.Page.ShareInstance().IsZero() || len(result.SealedObject) == 0 {
+		if !result.Page.ShareInstance().IsZero() || result.Failure.ShareInstance != service.share ||
+			result.Failure.DirectoryID != request.DirectoryID() {
 			return nil, ErrObjectIdentity
 		}
-		return validateSealedObject(result.SealedObject, nil)
+		if _, pinned := request.Generation(); request.PageIndex() != 0 || pinned {
+			return nil, ErrGenerationMismatch
+		}
+		expected, err = EncodeDirectoryFailure(*result.Failure)
+	} else {
+		page := result.Page
+		if page.ShareInstance() != service.share || page.DirectoryID() != request.DirectoryID() ||
+			page.PageIndex() != request.PageIndex() {
+			return nil, ErrObjectIdentity
+		}
+		if generation, pinned := request.Generation(); pinned && page.Generation() != generation {
+			return nil, ErrGenerationMismatch
+		}
+		if catalog.PageCommitment(sha256.Sum256(result.Payload)) != page.Commitment() {
+			return nil, catalog.ErrCorruptCatalogStorage
+		}
+		expected, err = encodeCatalogPage(page)
 	}
-	if result.Page.ShareInstance() != service.share {
-		return nil, ErrObjectIdentity
+	// A successful read from the backend is insufficient to let the sender
+	// authenticate bytes. They must represent the committed record verbatim.
+	if err != nil || !bytes.Equal(result.Payload, expected) {
+		return nil, errors.Join(catalog.ErrCorruptCatalogStorage, err)
 	}
-	object, err := catalog.NewSealedPageObject(result.SealedObject)
-	if err != nil || object.Commitment() != result.Page.Commitment() {
-		return nil, errors.Join(ErrObjectIdentity, err)
-	}
-	return object.Bytes(), nil
+	return expected, nil
 }

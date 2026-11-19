@@ -172,7 +172,7 @@ function catalogPage(fixture: CatalogDirectoryFixture): CatalogPage {
     entries: Object.freeze(entries),
     omittedCount: fixture.omittedCount ?? 0n,
     objectCommitment: catalogCommitment(fixture.id[0] ?? 1),
-    senderObjectBytes: 1,
+    encodedBytes: 1,
   })
 }
 

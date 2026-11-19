@@ -3,7 +3,7 @@ import { FileGeometry } from '../../src/content/geometry'
 import { LaneSet, type BlockRouteEligibility } from '../../src/content/broker'
 import { SessionBlockLane, type RevisionService } from '../../src/content/session-services'
 import { encodeBody, MESSAGE_KIND } from '../../src/session/message'
-import { id, KEY, runtimeFixture, SHARE } from './v2-send-fixture'
+import { id, runtimeFixture, SHARE } from './v2-send-fixture'
 
 it('keeps physical send failure within the lane boundary for in-flight requests', async () => {
   const { runtime, channel } = runtimeFixture()
@@ -36,7 +36,7 @@ it.each(['send', 'receive', 'retirement'] as const)('retries %s lane loss on the
   const dispatched = vi.fn()
   const lanes = new LaneSet({ onBlockDispatched: dispatched })
   const revisions = { leaseError: () => undefined } as unknown as RevisionService
-  lanes.add(new SessionBlockLane(1, runtime, SHARE, KEY, revisions), 'application-relay')
+  lanes.add(new SessionBlockLane(1, runtime, revisions), 'application-relay')
   const descriptor = {
     shareInstance: SHARE.shareInstance, shareInstanceId: SHARE.shareInstanceId,
     fileId: id(30), fileIdText: 'file', fileRevision: id(31), fileRevisionText: 'revision',

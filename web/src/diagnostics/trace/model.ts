@@ -15,6 +15,7 @@ import type { CheckpointPayloadV1 } from './checkpoint-payload'
 import type { RetainedActionPayloadV1, RetainedInventoryPayloadV1 } from './retained-payload'
 import type {
   CapacityWaitTransitionPayloadV1,
+  FileRevisionReadmissionPayloadV1,
   PerformancePhasePayloadV1,
   PerformanceSummaryPayloadV1,
   TransferProgressPayloadV1,
@@ -475,6 +476,7 @@ export interface TraceEventPayloadByNameV2 extends ConnectionTracePayloads {
       }>
   readonly lane_transition: LaneTransitionPayloadV1
   readonly receive_transition:
+    | FileRevisionReadmissionPayloadV1
     | Readonly<{
         transition: 'discovery_scheduling'
         operation_id: string

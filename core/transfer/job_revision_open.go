@@ -8,7 +8,7 @@ import (
 	"github.com/windshare/windshare/core/transfer/revisionwait"
 )
 
-func (r *jobRun) openSelectedRevision(ctx context.Context, plan plannedFile) (OpenedRevision, bool, error) {
+func (r *jobRun) openSelectedRevision(ctx context.Context, plan plannedFile) (OpenedRevision, FailureStage, error) {
 	attempt := revisionOpenAttempt{run: r, plan: plan}
 	for {
 		opened, rawOpenErr := r.job.revisions.OpenRevision(ctx, plan.file)
@@ -18,7 +18,7 @@ func (r *jobRun) openSelectedRevision(ctx context.Context, plan plannedFile) (Op
 			if retry {
 				continue
 			}
-			return OpenedRevision{}, false, err
+			return OpenedRevision{}, FailureRevisionOpen, err
 		}
 		attempt.finishWait(ctx, rawOpenErr)
 		return r.finishRevisionOpen(ctx, plan, opened, rawOpenErr)
@@ -135,42 +135,17 @@ func (attempt *revisionOpenAttempt) stopWait() {
 }
 
 func (r *jobRun) finishRevisionOpen(
-	ctx context.Context,
-	plan plannedFile,
-	opened OpenedRevision,
-	rawOpenErr error,
-) (OpenedRevision, bool, error) {
-	err := normalizeSourceBoundary(ctx, rawOpenErr)
-	if err == nil {
-		return r.validateOpenedRevision(ctx, plan, opened)
+	ctx context.Context, plan plannedFile, opened OpenedRevision, rawOpenErr error,
+) (OpenedRevision, FailureStage, error) {
+	if err := normalizeSourceBoundary(ctx, rawOpenErr); err != nil {
+		if !opened.Handle.IsZero() {
+			r.releaseRevision(ctx, plan, opened.Handle)
+		}
+		return OpenedRevision{}, FailureRevisionOpen, err
 	}
-	if !opened.Handle.IsZero() {
+	if err := validateOpenedPlanFile(r.job.share, plan.file, plan.expectedSize, plan.modified, opened); err != nil {
 		r.releaseRevision(ctx, plan, opened.Handle)
+		return OpenedRevision{}, FailureRevisionIdentity, normalizeSourceBoundary(ctx, err)
 	}
-	if isJobTerminalError(err) {
-		return OpenedRevision{}, false, err
-	}
-	r.recordFileFailure(FileJobFailure{
-		FileID: plan.file, Path: plan.failurePath(), Stage: FailureRevisionOpen, Cause: err,
-	})
-	return OpenedRevision{}, false, nil
-}
-
-func (r *jobRun) validateOpenedRevision(
-	ctx context.Context,
-	plan plannedFile,
-	opened OpenedRevision,
-) (OpenedRevision, bool, error) {
-	if err := validateOpenedPlanFile(
-		r.job.share, plan.file, plan.expectedSize, plan.modified, opened,
-	); err != nil {
-		err = sourceChangedFailure(err)
-		r.releaseRevision(ctx, plan, opened.Handle)
-		r.recordFileFailure(FileJobFailure{
-			FileID: plan.file, Path: plan.failurePath(), Stage: FailureRevisionIdentity,
-			Cause: err,
-		})
-		return OpenedRevision{}, false, nil
-	}
-	return opened, true, nil
+	return opened, 0, nil
 }

@@ -330,6 +330,14 @@ function projectTransferTraceEvent(
         layout_class: snake(event.layoutClass),
         plan_kind: snake(event.planKind),
       })
+    case 'file_revision_readmission':
+      return observation(event.name, {
+        transition: event.transition, operation_id: event.operationId, transfer_job_id: event.transferJobId,
+        file_id: event.fileId, previous_revision: event.previousRevision, current_revision: event.currentRevision,
+        decision: event.decision, comparison_reason: event.comparisonReason,
+        retained_bytes: decimal(event.retainedBytes), reused_bytes: decimal(event.reusedBytes),
+        elapsed_ms: event.elapsedMilliseconds,
+      })
     case 'discovery_scheduling':
       return observation(event.name, {
         transition: event.transition, operation_id: event.operationId, transfer_job_id: event.transferJobId,

@@ -58,7 +58,6 @@ export async function runSignedCatalogOwnershipProbe(
   const protocolFailures: unknown[] = []
   const client = new CatalogClient({
     descriptor: fixture.descriptor,
-    readSecret: fixture.readSecret,
     operations: {
       fetchPage: async (request) => {
         const object = objects.get(requestKey(request))

@@ -73,20 +73,6 @@ func (f DirectoryFailure) Error() string {
 // and budget errors remain fatal to the consuming operation.
 func (f DirectoryFailure) DirectoryFailure() {}
 
-type DirectoryResult struct {
-	Snapshot catalog.DirectorySnapshot
-	Failure  *DirectoryFailure
-}
-
-func SnapshotResult(snapshot catalog.DirectorySnapshot) DirectoryResult {
-	return DirectoryResult{Snapshot: snapshot}
-}
-
-func FailureResult(failure DirectoryFailure) DirectoryResult {
-	copy := failure
-	return DirectoryResult{Failure: &copy}
-}
-
 type VerifiedObject struct {
 	Page    catalog.CatalogPage
 	Failure *DirectoryFailure
@@ -99,18 +85,6 @@ func VerifiedPage(page catalog.CatalogPage) VerifiedObject {
 func VerifiedFailure(failure DirectoryFailure) VerifiedObject {
 	copy := failure
 	return VerifiedObject{Failure: &copy}
-}
-
-type DirectorySource interface {
-	LoadDirectory(ctx context.Context, directory catalog.DirectoryID) (DirectoryResult, error)
-}
-
-// SealedObjectStore returns the exact bytes committed for an immutable page or
-// scan attempt. Catalog chaining hashes complete sender-object bytes, so serving
-// code must never reseal on demand with a new nonce.
-type SealedObjectStore interface {
-	LoadSealedPage(context.Context, catalog.CatalogPage) ([]byte, error)
-	LoadSealedFailure(context.Context, DirectoryFailure) ([]byte, error)
 }
 
 type ObjectVerifier interface {

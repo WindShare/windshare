@@ -202,21 +202,21 @@ func NewAuthenticatedOperationViolation(code AuthenticatedOperationViolationCode
 	return violation, nil
 }
 
-// InboundAuthenticationResult is a sealed result of authenticating one opened
+// InboundValidationResult is a sealed result of validating one authenticated
 // message. Its zero value means ordinary authenticated traffic. A non-zero
 // result is consumed by ProtocolPump before generic runtime shutdown.
-type InboundAuthenticationResult struct {
+type InboundValidationResult struct {
 	operationViolation AuthenticatedOperationViolation
 }
 
-func (result InboundAuthenticationResult) HasOperationViolation() bool {
+func (result InboundValidationResult) HasOperationViolation() bool {
 	return result.operationViolation.valid()
 }
 
 func authenticatedOperationViolationResult(
 	code AuthenticatedOperationViolationCode,
-) InboundAuthenticationResult {
-	return InboundAuthenticationResult{
+) InboundValidationResult {
+	return InboundValidationResult{
 		operationViolation: AuthenticatedOperationViolation{code: code},
 	}
 }

@@ -248,17 +248,19 @@ export class OutputResourceBudget {
   }
 
   bind(output: OutputSession): OutputSession {
+    const bindTransaction = (begun: Awaited<ReturnType<OutputSession['beginFile']>>) => Object.freeze({
+      ...begun,
+      transaction: budgetedOutputTransaction(begun.transaction, this),
+    })
+    const readmit = output.readmitFile?.bind(output)
     const scheduled: OutputSession = {
       identity: output.identity,
       capabilities: output.capabilities,
       executionProfile: output.executionProfile,
-      beginFile: async (file, signal) => {
-        const begun = await output.beginFile(file, signal)
-        return Object.freeze({
-          ...begun,
-          transaction: budgetedOutputTransaction(begun.transaction, this),
-        })
-      },
+      beginFile: async (file, signal) => bindTransaction(await output.beginFile(file, signal)),
+      ...(readmit === undefined ? {} : {
+        readmitFile: async (file, paused, signal) => bindTransaction(await readmit(file, paused, signal)),
+      }),
     }
     return Object.freeze(scheduled)
   }

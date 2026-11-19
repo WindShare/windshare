@@ -5,18 +5,13 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
-	mathrand "math/rand"
-	"os"
-	"path/filepath"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
-	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/link"
-	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
 )
 
@@ -202,57 +197,6 @@ func TestPreparedSenderConcurrentCloseJoinsCacheBeforeSourceTeardown(t *testing.
 			t.Fatal(err)
 		}
 	})
-}
-
-func TestPreparedSenderRollbackDestroysPartiallyBuiltSealers(t *testing.T) {
-	filename := filepath.Join(t.TempDir(), "selected.bin")
-	if err := os.WriteFile(filename, []byte("rollback"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	dependencies := productionSenderPreparationDependencies()
-	newCatalogObjects := dependencies.newCatalogObjects
-	newRecordSealer := dependencies.newRecordSealer
-	var catalogObjects *catalogflow.SealedCatalogStore
-	var recordSealer *records.Sealer
-	dependencies.newCatalogObjects = func(config catalogflow.SealedCatalogStoreConfig) (*catalogflow.SealedCatalogStore, error) {
-		created, err := newCatalogObjects(config)
-		if err == nil {
-			catalogObjects = created
-		}
-		return created, err
-	}
-	dependencies.newRecordSealer = func(config records.SealerConfig) (*records.Sealer, error) {
-		created, err := newRecordSealer(config)
-		if err == nil {
-			recordSealer = created
-		}
-		return created, err
-	}
-	lateFailure := errors.New("forced session authority failure")
-	dependencies.sessionAuthKey = func(*content.KeyTree) (content.DerivedKey, error) {
-		return content.DerivedKey{}, lateFailure
-	}
-
-	sender, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
-		RevisionCapacity: newTestRevisionCapacity(t),
-		Source:           testFileSource([]string{filename}), Relays: []string{"ws://127.0.0.1:8484"},
-		ChunkSize: catalog.MinChunkSize, Random: mathrand.New(mathrand.NewSource(7)),
-		preparation: dependencies,
-	})
-	if sender != nil || !errors.Is(err, lateFailure) {
-		t.Fatalf("late preparation result = %v, %v", sender, err)
-	}
-	if catalogObjects == nil || recordSealer == nil {
-		t.Fatal("late failure occurred before helper ownership transferred")
-	}
-	// The test never calls Close: only PrepareSender's error rollback can revoke
-	// the helper authority retained by these constructor observers.
-	if _, err := catalogObjects.LoadSealedPage(context.Background(), catalog.CatalogPage{}); !errors.Is(err, catalogflow.ErrSealedCatalogStoreDestroyed) {
-		t.Fatalf("automatic rollback retained catalog sealer authority: %v", err)
-	}
-	if _, err := recordSealer.SealRevision(content.FileRevisionDescriptor{}); !errors.Is(err, records.ErrSealerDestroyed) {
-		t.Fatalf("automatic rollback retained record sealer authority: %v", err)
-	}
 }
 
 func TestPreparedSenderStopFreezesRuntimeBeforeAsyncJoin(t *testing.T) {

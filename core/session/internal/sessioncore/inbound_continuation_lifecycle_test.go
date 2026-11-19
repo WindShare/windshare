@@ -1,9 +1,7 @@
 package sessioncore
 
 import (
-	"bytes"
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -37,19 +35,6 @@ func TestInboundRetiredPeerCandidateUsesOperationAuthorityWithoutResponseRoute(t
 				direction = protocolsession.DirectionReceiverToSender
 			}
 			body := []byte{0xf6}
-			if terminal == protocolsession.MessageOperationError {
-				binding := (&Responses{runtime: runtime}).controlBinding(runtime.initial)
-				binding.Sequence, binding.MessageKind = 1, terminal
-				binding.OperationID, binding.HasOperationID = id, true
-				var err error
-				body, err = protocolsession.SignControlBody(
-					ed25519.NewKeyFromSeed(bytes.Repeat([]byte{97}, ed25519.SeedSize)),
-					protocolsession.ControlDomainOperation, binding, body,
-				)
-				if err != nil {
-					t.Fatal(err)
-				}
-			}
 			final := operationMessageForTest(t, terminal, id, body)
 			if disposition, err := runtime.operations.Observe(direction, final); err != nil || disposition != protocolsession.OperationDeliver {
 				t.Fatalf("operation retirement = %d, %v", disposition, err)

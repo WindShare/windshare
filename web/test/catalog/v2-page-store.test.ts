@@ -38,7 +38,7 @@ function page(index: number, directory: string, entries: readonly CatalogEntry[]
     entries,
     omittedCount: 0n,
     objectCommitment: new Uint8Array(32),
-    senderObjectBytes: 1_024,
+    encodedBytes: 1_024,
   }
 }
 
@@ -56,7 +56,7 @@ describe('v2 catalog page store', () => {
         { length: CATALOG_PAGE_ENTRIES },
         () => entry(1, 'maximum'),
       )),
-      senderObjectBytes: CATALOG_PAGE_OBJECT_BYTES,
+      encodedBytes: CATALOG_PAGE_OBJECT_BYTES,
     })
     expect(maximumPageCharge).toBe(393_216)
     expect(
@@ -64,7 +64,7 @@ describe('v2 catalog page store', () => {
     ).toBeLessThanOrEqual(DEFAULT_CATALOG_CACHE_BUDGET_LIMITS.metadataBytesPerShare)
     expect(() => catalogPageMetadataCharge({
       ...page(0, 'root', []),
-      senderObjectBytes: 0,
+      encodedBytes: 0,
     })).toThrow(/durable footprint/iu)
   })
 

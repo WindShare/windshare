@@ -2,22 +2,20 @@ import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import type { FrameChannel, ChannelState } from '../../src/contracts/channel'
 import { PATH_POLICY, type ShareDescriptor } from '../../src/catalog/records'
 import { concatBytes, encodeBase64Url } from '../../src/crypto/bytes'
-import { SENDER_OBJECT_WIRE_VERSION, createRevisionObjectBinding, senderObjectAuthenticationData, senderObjectSignaturePreimage } from '../../src/crypto/sender-object'
-import { deriveSuite02FileObjectKey } from '../../src/crypto/suite02-key-derivation'
 import { encodeCanonicalCbor } from '../../src/protocol/cbor'
 import { ReceiverSessionRuntime } from '../../src/session/runtime'
 import type { ReceiverSessionOptions } from '../../src/session/runtime-types'
 import type { SessionKeys } from '../../src/session/transcript'
 import { EnvelopeOpener, EnvelopeSealer } from '../../src/session/envelope'
 import { laneAcceptBody } from '../../src/session/lane-codec'
-import { decodeMessage, encodeBody, MESSAGE_KIND, type SessionMessage, type MessageKind } from '../../src/session/message'
+import { decodeMessage, encodeBody, encodeMessage, MESSAGE_KIND, type SessionMessage, type MessageKind } from '../../src/session/message'
 import type { ProtocolTraceEvent } from '../../src/session/diagnostics'
 import { LaneSet } from '../../src/content/broker'
 import { RevisionService } from '../../src/content/session-services'
 import type { LeaseRetirementObservation } from '../../src/content/scheduling/lease-retirement'
 import { SupervisedContent, type ContentGenerationProvider } from '../../src/receiver/supervised-content'
 import { ConnectivityRouteAuthority } from '../../src/connectivity/receiver-policy'
-import { senderControlKeyPair, signSenderOperationControl } from '../session/signed-control-fixture'
+import { senderControlKeyPair } from '../session/signed-control-fixture'
 import { deferred } from '../session/v2-send-fixture'
 import { identity, fileEntry, readerFixture } from './v2-job-fixture'
 
@@ -93,13 +91,8 @@ class ScriptedWire implements FrameChannel {
   }
 
   async #respond(message: SessionMessage, kind: MessageKind, body: Uint8Array): Promise<void> {
-    const signed = await signSenderOperationControl({
-      kind, operationId: message.operationId!, semanticBody: body,
-      binding: { shareInstance: this.share.shareInstance, protocolSessionId: SESSION_ID,
-        laneId: this.id, laneEpoch: this.epoch, direction: 1, sequence: this.#sealer.nextSequence },
-      privateKey: this.signing.privateKey,
-    })
-    const sealed = await this.#sealer.seal(signed.message.plaintext)
+    const response = encodeMessage(kind, message.operationId!, body)
+    const sealed = await this.#sealer.seal(response.plaintext)
     if (this.state !== 'closed') this.#controller.enqueue(sealed)
   }
 
@@ -113,24 +106,11 @@ class ScriptedWire implements FrameChannel {
   }
 }
 
-async function sealedRevision(share: ShareDescriptor, fileId: Uint8Array, signing: Awaited<ReturnType<typeof senderControlKeyPair>>) {
-  const body = encodeCanonicalCbor(new Map<number, unknown>([
+function revisionPayload(share: ShareDescriptor, fileId: Uint8Array) {
+  return encodeCanonicalCbor(new Map<number, unknown>([
     [0, 2n], [1, share.shareInstance], [2, fileId], [3, identity(fileId[0]! + 40)],
     [4, FILE_BYTES], [5, null], [6, 0n], [7, 0n], [8, new Uint8Array(32)],
   ]))
-  const binding = createRevisionObjectBinding(share.shareInstance, fileId)
-  const header = new Uint8Array(8)
-  header[0] = SENDER_OBJECT_WIRE_VERSION
-  new DataView(header.buffer).setUint32(4, body.byteLength + 16, false)
-  const nonce = crypto.getRandomValues(new Uint8Array(12))
-  const keyBytes = await deriveSuite02FileObjectKey(SECRET, share.shareInstance, fileId)
-  const key = await crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['encrypt'])
-  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce,
-    additionalData: await senderObjectAuthenticationData(binding, header), tagLength: 128 }, key, body))
-  const prefix = concatBytes([header, nonce, ciphertext])
-  const signature = new Uint8Array(await crypto.subtle.sign('Ed25519', signing.privateKey,
-    await senderObjectSignaturePreimage(binding, prefix)))
-  return concatBytes([prefix, signature])
 }
 
 export async function wireFixture(options: {
@@ -144,7 +124,7 @@ export async function wireFixture(options: {
     capabilities: 0n, sender: createEd25519Verifier(signing.publicKey), createdAtSeconds: 1n, pathPolicy: PATH_POLICY,
   }
   const files = [fileEntry(identity(11), 'first.bin', FILE_BYTES), fileEntry(identity(12), 'second.bin', FILE_BYTES)]
-  const objects = new Map(await Promise.all(files.map(async file => [file.idText, await sealedRevision(share, file.id, signing)] as const)))
+  const objects = new Map(files.map(file => [file.idText, revisionPayload(share, file.id)]))
   const releaseReached = deferred<void>()
   let releaseReply: (() => Promise<void>) | undefined
   const releaseCompletion = () => encodeBody(new Map([[0, 1], [1, options.releaseCompletion === 'invalid' ? 1 : 0]]))
@@ -190,7 +170,7 @@ export async function wireFixture(options: {
   lanes.requests.add({ id: DIRECT, epoch: DIRECT_EPOCH, route: 'direct', content: { estimateQueueMilliseconds: () => DIRECT_BUSY_MS } })
   runtime.subscribeLaneChanges(change => { if (change.type === 'detached') lanes.remove(change.laneId) })
   const retirements: LeaseRetirementObservation[] = []
-  const revisions = new RevisionService(runtime, share, SECRET, lanes, {
+  const revisions = new RevisionService(runtime, share, lanes, {
     ...options, onLeaseRetirement: event => retirements.push(event),
   })
   const readers = readerFixture(files)

@@ -30,9 +30,9 @@ import (
 	"time"
 )
 
-type RecordOpener interface {
-	OpenRevision(catalog.FileID, uint32, []byte) (content.FileRevisionDescriptor, error)
-	OpenBlock(content.FileRevisionDescriptor, uint64, []byte) (records.BlockRecord, error)
+type RecordDecoder interface {
+	DecodeRevision(catalog.FileID, uint32, []byte) (content.FileRevisionDescriptor, error)
+	DecodeBlock(content.FileRevisionDescriptor, uint64, []byte) (records.BlockRecord, error)
 }
 
 type InstanceSource interface {
@@ -67,7 +67,7 @@ type FactoryConfig struct {
 	SessionAuthKey                    []byte
 	Sender                            *senderauth.Verifier
 	CatalogVerifier                   catalogflow.ObjectVerifier
-	RecordOpener                      RecordOpener
+	RecordDecoder                     RecordDecoder
 	ReassemblyProcess                 *contentflow.ReassemblyAccount
 	ReassemblyShare                   *contentflow.ReassemblyAccount
 	PlaintextProcess                  *transfer.PlaintextBudget
@@ -91,7 +91,7 @@ type Factory struct {
 	authKey                           []byte
 	sender                            *senderauth.Verifier
 	verifier                          catalogflow.ObjectVerifier
-	opener                            RecordOpener
+	decoder                           RecordDecoder
 	processReassembly                 *contentflow.ReassemblyAccount
 	shareReassembly                   *contentflow.ReassemblyAccount
 	plaintextProcess                  *transfer.PlaintextBudget
@@ -118,7 +118,7 @@ func NewFactory(config FactoryConfig) (*Factory, error) {
 		len(config.SessionAuthKey) != protocolsession.SessionAuthKeyBytes ||
 		!config.Sender.Valid() ||
 		!ed25519.PublicKey(config.Descriptor.SenderPublicKey()).Equal(config.Sender.PublicKey()) ||
-		config.CatalogVerifier == nil || config.RecordOpener == nil ||
+		config.CatalogVerifier == nil || config.RecordDecoder == nil ||
 		config.ReassemblyProcess == nil || config.ReassemblyShare == nil || config.PlaintextProcess == nil {
 		return nil, session.ErrRuntimeConfig
 	}
@@ -151,7 +151,7 @@ func NewFactory(config FactoryConfig) (*Factory, error) {
 		},
 		descriptor: config.Descriptor, authKey: append([]byte(nil), config.SessionAuthKey...),
 		sender:   config.Sender,
-		verifier: config.CatalogVerifier, opener: config.RecordOpener,
+		verifier: config.CatalogVerifier, decoder: config.RecordDecoder,
 		processReassembly: config.ReassemblyProcess, shareReassembly: config.ReassemblyShare,
 		plaintextProcess: config.PlaintextProcess, random: lockedRandom,
 		instances:          config.ReceiverInstances,
@@ -195,7 +195,7 @@ func (factory *Factory) Connect(ctx context.Context, channel protocolsession.Fra
 	wire, err := sessioncore.New(sessioncore.Config{
 		Share: factory.descriptor.ShareInstance(), Role: protocolsession.RoleReceiver, Keys: keys,
 		LaneID: handshake.lane.ID, LaneEpoch: handshake.lane.Epoch, Channel: handOff,
-		Random: factory.random, Authenticator: handshake.authenticator,
+		Random: factory.random, Validator: protocolsession.SenderMessageValidator(factory.semantic),
 		Continuations:   factory.peerSemantics,
 		OperationLimits: factory.operationLimits, RouterLimits: factory.routerLimits, Now: factory.now,
 		ProtocolObservations: factory.protocolObservations,
@@ -247,10 +247,10 @@ func (factory *Factory) Connect(ctx context.Context, channel protocolsession.Fra
 			assembler.Close()
 		}
 	}()
-	revisions := newReceiverRevisionClient(rpc, factory.opener, factory.descriptor.ChunkSize(), factory.after)
+	revisions := newReceiverRevisionClient(rpc, factory.decoder, factory.descriptor.ChunkSize(), factory.after)
 	initialLane := handshake.lane
 	blockLane := &receiverBlockLane{
-		identity: initialLane, rpc: rpc, assembler: assembler, opener: factory.opener, revisions: revisions,
+		identity: initialLane, rpc: rpc, assembler: assembler, decoder: factory.decoder, revisions: revisions,
 	}
 	lanes, err := transferlanes.New(transferlanes.Config{
 		ProtocolSessionID: keys.ProtocolSessionID(), Now: factory.now, After: factory.after,
@@ -288,7 +288,7 @@ func (factory *Factory) Connect(ctx context.Context, channel protocolsession.Fra
 	receiver := &Runtime{
 		core: wire, lifecycle: wire, descriptor: factory.descriptor, rpc: rpc,
 		catalog: catalogClient, revisions: revisions, assembler: assembler, laneSet: lanes, broker: broker,
-		sender: factory.sender, opener: factory.opener,
+		sender: factory.sender, decoder: factory.decoder,
 		semantic: factory.semantic, resourceLease: resourceLease,
 	}
 	if err := receiver.bindRevisionAccess(); err != nil {
@@ -304,11 +304,10 @@ func (factory *Factory) Connect(ctx context.Context, channel protocolsession.Fra
 }
 
 type receiverHandshake struct {
-	responseTime  time.Duration
-	keys          protocolsession.SessionKeys
-	lane          session.LaneIdentity
-	receive       <-chan framechannel.Frame
-	authenticator *protocolsession.SenderControlAuthenticator
+	responseTime time.Duration
+	keys         protocolsession.SessionKeys
+	lane         session.LaneIdentity
+	receive      <-chan framechannel.Frame
 }
 
 func (factory *Factory) completeReceiverHandshake(
@@ -352,17 +351,8 @@ func (factory *Factory) completeReceiverHandshake(
 		return receiverHandshake{}, sessionProtocolBoundaryError(errors.Join(session.ErrHandshake, err))
 	}
 	lane := session.LaneIdentity{ID: server.InitialLaneID(), Epoch: server.InitialLaneEpoch()}
-	base := protocolsession.ControlBinding{
-		ShareInstance: factory.descriptor.ShareInstance(), ProtocolSessionID: keys.ProtocolSessionID(),
-		LaneID: lane.ID, LaneEpoch: lane.Epoch, Direction: protocolsession.DirectionSenderToReceiver,
-	}
-	authenticator, err := protocolsession.NewSenderControlAuthenticator(factory.sender, base, factory.semantic)
-	if err != nil {
-		keys.Destroy()
-		return receiverHandshake{}, err
-	}
 	return receiverHandshake{
-		keys: keys, lane: lane, receive: receive, authenticator: authenticator, responseTime: responseTime,
+		keys: keys, lane: lane, receive: receive, responseTime: responseTime,
 	}, nil
 }
 
@@ -385,7 +375,7 @@ type Runtime struct {
 	core          *sessioncore.Runtime
 	descriptor    catalog.ShareDescriptor
 	sender        *senderauth.Verifier
-	opener        RecordOpener
+	decoder       RecordDecoder
 	rpc           requestClient
 	catalog       *catalogflow.Client
 	revisions     *receiverRevisionClient
@@ -503,7 +493,7 @@ func (runtime *Runtime) releaseOwnedResources() {
 		runtime.assembler.Close()
 		// Every callback that can use these aliases has joined. Shed them before the
 		// resource lease is released so this closed runtime cannot pin shared crypto.
-		runtime.opener = nil
+		runtime.decoder = nil
 		runtime.semantic = nil
 		runtime.sender = nil
 		if runtime.resourceLease != nil {

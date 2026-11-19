@@ -3,7 +3,6 @@ package receiversession
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/session"
@@ -103,18 +102,7 @@ func TestMissingBlockCompletionRequiresAuthenticatedCarrierMigration(t *testing.
 				if err != nil {
 					t.Fatal(err)
 				}
-				signed, err := protocolsession.SignControlBody(
-					ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)),
-					protocolsession.ControlDomainOperation,
-					protocolsession.ControlBinding{
-						ShareInstance: fixture.demand.Descriptor.ShareInstance(), ProtocolSessionID: fixture.runtime.ProtocolSessionID(),
-						LaneID: carrier.ID, LaneEpoch: carrier.Epoch, Direction: protocolsession.DirectionSenderToReceiver,
-						Sequence: 1, MessageKind: protocolsession.MessageOperationComplete, OperationID: call.ID(), HasOperationID: true,
-					}, body)
-				if err != nil {
-					t.Fatal(err)
-				}
-				message, err := protocolsession.NewMessage(protocolsession.MessageOperationComplete, new(call.ID()), signed)
+				message, err := protocolsession.NewMessage(protocolsession.MessageOperationComplete, new(call.ID()), body)
 				if err != nil {
 					t.Fatal(err)
 				}

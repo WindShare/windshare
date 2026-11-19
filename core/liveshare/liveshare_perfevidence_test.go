@@ -135,7 +135,7 @@ func prepareVirtualReady(descendants uint64) (readyMeasurement, func() error, er
 	catalogState, err := prepareSenderCatalog(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
 		ChunkSize: catalog.DefaultChunkSize,
 		Now:       func() time.Time { return time.Unix(1_700_000_000, 0) },
-	}, random, sender, authority, readyUnusedSpillFactory{}, productionSenderPreparationDependencies())
+	}, random, sender, authority, readyUnusedSpillFactory{})
 	if err != nil {
 		authority.destroy()
 		return readyMeasurement{}, nil, errors.Join(err, sender.Close())

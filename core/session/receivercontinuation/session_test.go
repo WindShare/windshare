@@ -40,6 +40,11 @@ type fixture struct {
 
 func newFixture(t *testing.T, directory ...bool) *fixture {
 	t.Helper()
+	return newFixtureWithSource(t, len(directory) != 0 && directory[0], nil)
+}
+
+func newFixtureWithSource(t *testing.T, directory bool, wrap func(liveshare.FileSource) liveshare.FileSource) *fixture {
+	t.Helper()
 	owner, err := revisioncapacity.NewProcessOwner(revisioncapacity.DefaultProcessConfig())
 	if err != nil {
 		t.Fatal(err)
@@ -55,10 +60,23 @@ func newFixture(t *testing.T, directory ...bool) *fixture {
 		t.Fatal(err)
 	}
 	source := filename
-	if len(directory) != 0 && directory[0] {
+	if directory {
 		source = filepath.Dir(filename)
 	}
-	sender, err := liveshare.PrepareSender(context.Background(), sourceBoundarySenderConfig([]string{source}, liveshare.SenderConfig{Relays: []string{"ws://local.invalid"}, ChunkSize: catalog.MinChunkSize, RevisionCapacity: owner.Coordinator()}))
+	config := sourceBoundarySenderConfig([]string{source}, liveshare.SenderConfig{
+		Relays: []string{"ws://local.invalid"}, ChunkSize: catalog.MinChunkSize, RevisionCapacity: owner.Coordinator(),
+	})
+	if wrap != nil {
+		factory := config.Source
+		config.Source = liveshare.FileSourceFactoryFunc(func(ctx context.Context, request liveshare.FileSourceContext) (liveshare.FileSource, error) {
+			opened, err := factory.OpenFileSource(ctx, request)
+			if err != nil {
+				return opened, err
+			}
+			return wrap(opened), nil
+		})
+	}
+	sender, err := liveshare.PrepareSender(context.Background(), config)
 	if err != nil {
 		t.Fatal(err)
 	}

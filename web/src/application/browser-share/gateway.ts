@@ -388,7 +388,6 @@ export class BrowserReceiverGateway {
       const store = await IndexedDbCatalogPageStore.open(recoveryIdentity)
       catalog = new CatalogClient({
         descriptor,
-        readSecret: capability.readSecret,
         operations: supervisor.catalogOperations,
         store,
         storageIdentity: recoveryIdentity,

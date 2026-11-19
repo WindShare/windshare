@@ -138,6 +138,13 @@ export type ArtifactLayoutClass = DirectoryAdmissionLayout | 'original-file'
 export type TransferTraceEvent =
   | (Readonly<{
       name: 'receive_transition'
+      transition: 'file_revision_readmission'
+      operationId: string
+      transferJobId: string
+      fileId: string
+    }> & import('./file-authority').FileRevisionReadmissionObservation)
+  | (Readonly<{
+      name: 'receive_transition'
       transition: 'discovery_scheduling'
       operationId: string
       transferJobId: string

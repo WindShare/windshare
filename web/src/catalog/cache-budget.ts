@@ -74,9 +74,9 @@ type StoredBudget = StoredBudgetPolicy | StoredProfileBudget | StoredShareBudget
 
 export function catalogPageMetadataCharge(page: CatalogPage): number {
   if (
-    !Number.isSafeInteger(page.senderObjectBytes) ||
-    page.senderObjectBytes <= 0 ||
-    page.senderObjectBytes > CATALOG_PAGE_OBJECT_BYTES ||
+    !Number.isSafeInteger(page.encodedBytes) ||
+    page.encodedBytes <= 0 ||
+    page.encodedBytes > CATALOG_PAGE_OBJECT_BYTES ||
     page.entries.length > CATALOG_PAGE_ENTRIES
   ) {
     throw new CatalogPageStoreError('local-storage', 'Catalog page has an invalid durable footprint')
@@ -86,7 +86,7 @@ export function catalogPageMetadataCharge(page: CatalogPage): number {
   // cover the IndexedDB page and entry record structure.
   return CATALOG_PAGE_RECORD_BASE_BYTES +
     page.entries.length * CATALOG_ENTRY_RECORD_BYTES +
-    page.senderObjectBytes * CATALOG_AUTHENTICATED_BYTES_MULTIPLIER
+    page.encodedBytes * CATALOG_AUTHENTICATED_BYTES_MULTIPLIER
 }
 
 export function validateCatalogBudgetLimits(

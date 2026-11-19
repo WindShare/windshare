@@ -50,7 +50,7 @@ func TestCatalogControlDecodersRejectSemanticAndCanonicalityViolations(t *testin
 	unknownCode := cloneIntegerFields(validFailureFields)
 	unknownCode[4] = uint64(DirectoryCodeCancelled) + 1
 	wrongSchema := cloneIntegerFields(validFailureFields)
-	wrongSchema[0] = catalogControlSchema + 1
+	wrongSchema[0] = catalogControlSchema
 
 	for name, encoded := range map[string][]byte{
 		"wrong schema":   mustCBOR(t, catalogFlowEnc, wrongSchema),

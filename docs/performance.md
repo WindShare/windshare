@@ -54,7 +54,8 @@ The metrics include feedback controls per data frame and sends exceeding 1 ms;
 send duration includes socket work and credit waits, not just credit waits.
 This isolates transport into memory, without encryption, disk output or WAN
 latency. Use `BenchmarkOpenBlock` in `./core/content/records` to measure the
-production decode/authentication path separately.
+canonical block decoder separately. The authenticated envelope path is measured by the
+native and browser content workloads below.
 
 ## Progressive discovery
 

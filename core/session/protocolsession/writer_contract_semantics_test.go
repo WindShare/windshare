@@ -171,14 +171,14 @@ func TestSessionWriterContinuationAdmissionCommitsOnlyQueuedDelivery(t *testing.
 	})
 
 	t.Run("sender replay and replay requirement", func(t *testing.T) {
-		prepared := preparedWriterControl(t, candidate)
+		prepared := candidate
 		permit := testReplayPermit(candidate, DirectionSenderToReceiver)
 		missing := &writerAdmissionPolicy{
 			direction: DirectionSenderToReceiver,
 			admission: OutboundAdmission{Disposition: OperationDeliver},
 		}
 		writer, _ := NewSessionWriter(newRuntimeChannel(0), &passthroughSealer{}, missing)
-		if _, err := writer.TrySenderControl(prepared); !errors.Is(err, ErrOutboundReplayPermit) {
+		if _, err := writer.TryControl(prepared); !errors.Is(err, ErrOutboundReplayPermit) {
 			t.Fatalf("permit-less sender continuation error=%v", err)
 		}
 
@@ -187,7 +187,7 @@ func TestSessionWriterContinuationAdmissionCommitsOnlyQueuedDelivery(t *testing.
 			replayAdmission: OutboundAdmission{Disposition: OperationDeliver, Replay: permit},
 		}
 		writer, _ = NewSessionWriter(newRuntimeChannel(0), &passthroughSealer{}, replayPolicy)
-		receipt, err := writer.TrySenderControlReplay(prepared, permit)
+		receipt, err := writer.TryControlReplay(prepared, permit)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -294,9 +294,6 @@ func TestSessionWriterReplayWrappersAndPreparationContracts(t *testing.T) {
 	if _, err := receiverWriter.TryData(invalidData); !errors.Is(err, ErrInvalidMessage) {
 		t.Fatalf("invalid data preparation error=%v", err)
 	}
-	if _, err := receiverWriter.TrySenderControl(PreparedSenderControl{}); !errors.Is(err, ErrSequenceBoundControl) {
-		t.Fatalf("invalid sender control error=%v", err)
-	}
 
 	oversized := Message{
 		kind:      MessageListChildren,
@@ -305,28 +302,7 @@ func TestSessionWriterReplayWrappersAndPreparationContracts(t *testing.T) {
 	if _, err := prepareQueuedMessage(oversized, classControl); !errors.Is(err, ErrEnvelopeTooLarge) {
 		t.Fatalf("oversized queued message error=%v", err)
 	}
-	if _, err := prepareSequencedMessage(
-		MaxEnvelopePlaintextBytes+1,
-		classControl,
-		func(uint64) (Message, error) { return request, nil },
-	); !errors.Is(err, ErrEnvelopeTooLarge) {
-		t.Fatalf("oversized sequenced message error=%v", err)
-	}
-	oversizedControl := PreparedSenderControl{
-		plaintextBytes: MaxEnvelopePlaintextBytes + 1,
-		kind:           MessageOperationComplete,
-		intent:         response,
-		build:          func(uint64) (Message, error) { return response, nil },
-	}
-	senderWriter, _ := NewSessionWriter(
-		newRuntimeChannel(0),
-		&passthroughSealer{},
-		&writerAdmissionPolicy{direction: DirectionSenderToReceiver},
-	)
-	if _, err := senderWriter.TrySenderControl(oversizedControl); !errors.Is(err, ErrEnvelopeTooLarge) {
-		t.Fatalf("oversized sender control error=%v", err)
-	}
-
+	senderWriter, _ := NewSessionWriter(newRuntimeChannel(0), &passthroughSealer{}, &permissivePolicy{direction: DirectionSenderToReceiver})
 	stoppedContext, stop := context.WithCancel(context.Background())
 	stop()
 	if err := senderWriter.Run(stoppedContext); !errors.Is(err, context.Canceled) {
@@ -335,19 +311,8 @@ func TestSessionWriterReplayWrappersAndPreparationContracts(t *testing.T) {
 	if _, err := senderWriter.TryData(fragment); !errors.Is(err, ErrWriterStopped) {
 		t.Fatalf("post-stop data error=%v", err)
 	}
-	if _, err := senderWriter.TrySenderControl(mustPreparedControl(t, MessageSessionTerminal, nil)); !errors.Is(err, ErrWriterStopped) {
+	if _, err := senderWriter.TryTerminal(mustWriterControl(t, MessageSessionTerminal, nil)); !errors.Is(err, ErrWriterStopped) {
 		t.Fatalf("post-stop terminal error=%v", err)
-	}
-}
-
-func preparedWriterControl(t *testing.T, message Message) PreparedSenderControl {
-	t.Helper()
-	plaintext := mustPlaintext(t, message)
-	return PreparedSenderControl{
-		plaintextBytes: len(plaintext),
-		kind:           message.Kind(),
-		intent:         message,
-		build:          func(uint64) (Message, error) { return message, nil },
 	}
 }
 

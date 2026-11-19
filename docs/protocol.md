@@ -29,7 +29,7 @@ structured messages use deterministic CBOR.
 - **Relay control** (visible to the relay): `REGISTER`/`RESUME`, `JOIN`, `STOP`, connection liveness, and per-session flow control.
 - **Lane**: a logical channel of a protocol session, carried by a `FrameChannel` (a relay session or a WebRTC DataChannel) that delivers ordered frames.
 - **Protocol session** (end-to-end): handshake, `OperationEnvelope` framing, and operation messages.
-- **Sender objects** (end-to-end, sender-signed): descriptor, catalog pages, directory errors, revision descriptors, and block records, sealed independently of any session or lane.
+- **Bootstrap descriptor** (end-to-end, independently sender-signed): establishes the share and sender before session admission.
 
 Private source locators preserve native bytes; catalog names use a versioned Unicode grammar. ZIP retains logical names, while disk output preserves supported spellings and records compatible replacements when needed. Checkpoints and download resumption remain receiver-local.
 
@@ -37,8 +37,8 @@ Private source locators preserve native bytes; catalog names use a versioned Uni
 
 1. **Share**: the sender seals the descriptor and registers it with a relay by signing a relay challenge; the relay then publishes the route. `RESUME` restores the route of the same share after a reconnect, using a resume token and a new signed challenge.
 2. **Join**: the receiver sends `JOIN` with the `shareId`, receives the sealed descriptor on a new relay session, and verifies it against `pkHash`.
-3. **Handshake**: `ClientHello` (HMAC proof of the read capability, ephemeral X25519) and the sender-signed `ServerHello` establish a `ProtocolSessionID` and per-direction traffic keys. The relay session becomes the first lane.
-4. **Operate**: the receiver lists directories, leases file revisions, and requests blocks. `PEER_*` negotiation binds a path's initial-connectivity, recovery, or throughput purpose for admission on both peers. A DataChannel joins the session after a sender-signed `LANE_ATTACH` grant and a `LaneHello`/`LaneAccept` exchange.
+3. **Handshake**: `ClientHello` (HMAC proof of the read capability, ephemeral X25519) and the sender-signed `ServerHello` bind session wire version 3 and establish a `ProtocolSessionID` and per-direction traffic keys. Version mismatches fail before operation admission. The relay session becomes the first lane.
+4. **Operate**: the receiver lists directories, leases file revisions, and requests blocks. `PEER_*` negotiation binds a path's initial-connectivity, recovery, or throughput purpose for admission on both peers. A DataChannel joins the session after an authenticated `LANE_ATTACH` grant and a `LaneHello`/sender-signed `LaneAccept` exchange.
 5. **Stop**: a signed `STOP` permanently revokes the relay route of that `ShareInstance`.
 
 ## Capability link
@@ -49,21 +49,23 @@ fragment = base64url(suite 0x02 || readSecret[16] || pkHash[16])
 ```
 
 - `pkHash` hashes the sender's Ed25519 public key; `shareId` is derived from `pkHash` and names the relay route.
-- `readSecret` is the only secret. Content and session-authentication keys are derived from it per purpose.
+- `readSecret` is the only secret. The descriptor key and session admission key are derived from it per purpose.
 - `?r=` lists relay base URLs; without it, the link's origin is the relay. Browsers do not send the fragment in HTTP requests.
 
 ## Content model
 
 - **Descriptor**: `ShareInstance`, synthetic root directory, chunk size, capabilities, and sender public key. It has no directory tree, file count, or total size.
-- **Catalog**: per-directory pages bound to a `DirectoryGeneration`. Each page references the previous one; the terminal page completes the generation. Entries carry kind, ID, name, expected size, and an optional modified time.
+- **Catalog**: per-directory pages bound to a `DirectoryGeneration`. Each page carries the hash of the preceding canonical page; the terminal page completes the generation. Entries carry kind, ID, name, expected size, and an optional modified time.
 - **Revision**: `OPEN_REVISIONS` returns, per file, a revision descriptor (`FileRevision`, exact size, modified time, source metadata) with a time-limited lease, or a file error.
-- **Blocks**: `BlockRef = (FileID, FileRevision, LocalBlockIndex)`. Blocks have the descriptor's chunk size; the last one may be shorter. Byte ranges `[offset, end)` select blocks. Each block is a sealed `BlockRecord` carried by one or more `BLOCK_FRAGMENT` messages.
+- **Blocks**: `BlockRef = (FileID, FileRevision, LocalBlockIndex)`. Blocks have the descriptor's chunk size; the last one may be shorter. Byte ranges `[offset, end)` select blocks. A canonical `BlockRecord` is carried by one or more `BLOCK_FRAGMENT` messages identified by its payload hash. The completion message closes the result set.
 
-Revision record schema 2 carries a 32-byte opaque source-metadata token (zero means unavailable), authenticated with the descriptor. It binds share/file, provider identity/version, size, modification evidence and chunk geometry independently of open-instance nonces. Equal tokens permit best-effort plaintext reuse, not byte equality or reuse of old encrypted blocks. Resident handles retain their revision during reconnect; weak-provider reopen requires a fresh revision and checkpoint admission.
+Revision record schema 2 carries a 32-byte opaque source-metadata token (zero means unavailable), authenticated with the descriptor. It binds share/file, provider identity/version, size, modification evidence and chunk geometry independently of open-instance nonces. Equal tokens support best-effort reuse of locally verified plaintext ranges. `RevisionContinuity` determines the lifetime of a revision identity, which can be limited to one open handle. A new identity requires checkpoint admission using the current lease.
+
+The sender cache can serve canonical payloads across recipients. Catalog reloads verify payloads against the committed record and page hash. The block cache verifies each reload against the record identity committed by the revision read. Delivery authenticates either payload in the destination session.
 
 ## Session messages
 
-After the handshake, lane frames are `OperationEnvelope`s: AES-256-GCM bound to the `ShareInstance`, `ProtocolSessionID`, lane, epoch, direction, and sequence. The plaintext is CBOR `{kind, OperationID, body}`, except for the binary `BLOCK_FRAGMENT`. Sender results and controls also carry an Ed25519 sender signature.
+After the handshake, every lane frame is an AES-256-GCM `OperationEnvelope` bound to the `ShareInstance`, `ProtocolSessionID`, lane, epoch, direction, and sequence. Its authenticated plaintext binds the message kind, operation identity and body, including the binary `BLOCK_FRAGMENT`. Sender controls and content share this boundary.
 
 | Group | Messages |
 |---|---|
@@ -79,8 +81,8 @@ After the handshake, lane frames are `OperationEnvelope`s: AES-256-GCM bound to 
 `PEER_PATH_CONTROL` (kind 19) carries reachability demand, revocation, mapping-ready
 and network-change notices. `TURN_CONTROL` (kind 20) carries availability, demand,
 credential grants, readiness, retirement, usage reports and recovery. Both are
-session-scoped with no `OperationID`; the outer kind selects the decoder and
-sender-signature domain. Body schema versions evolve independently.
+session-scoped controls whose message kind selects the decoder. Body schema
+versions evolve independently.
 
 ## Identities
 
@@ -90,7 +92,7 @@ sender-signature domain. Body schema versions evolve independently.
 | `ShareInstance` | One shared content instance, spanning descriptor, catalog, revisions, and sessions |
 | `DirectoryID`, `FileID` | Catalog nodes |
 | `DirectoryGeneration` | One committed scan of a directory |
-| `FileRevision` | One verified version of a source file |
+| `FileRevision` | One read identity within its source continuity scope |
 | `LeaseID` | One read grant on an opened revision |
 | `ProtocolSessionID` | One authenticated receiver–sender session |
 | `OperationID` | One request and its responses within a session |
@@ -103,7 +105,7 @@ sender-signature domain. Body schema versions evolve independently.
 
 | Topic | Go | Browser |
 |---|---|---|
-| Link, keys, sender objects | `core/link`, `core/internal/keyderiv`, `core/senderobject` | `web/src/crypto` |
+| Link, keys, signed descriptor | `core/link`, `core/internal/keyderiv`, `core/senderobject` | `web/src/crypto` |
 | Catalog and content | `core/catalog`, `core/content`, `core/session/{catalogflow,contentflow}` | `web/src/catalog`, `web/src/content` |
 | Session, envelope, lanes | `core/session/protocolsession`, `core/session/sendersession`, `core/session/receiversession` | `web/src/session` |
 | Peer signaling | `connectivity/v2signal`, `core/session/peerslot` | `web/src/connectivity`, `web/src/session/peer-slots` |

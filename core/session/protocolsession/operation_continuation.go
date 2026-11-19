@@ -100,30 +100,16 @@ func (state *operationContinuationState) direction(
 }
 
 func (state *operationContinuationState) classify(
-	direction Direction,
 	message Message,
 ) (operationContinuationKey, bool, error) {
 	if state == nil || state.contract == nil {
 		return operationContinuationKey{}, false, ErrContinuationContract
 	}
-	body, err := operationContinuationSemanticBody(direction, message)
-	if err != nil {
-		return operationContinuationKey{}, false, err
-	}
-	fingerprint, tracked, err := state.contract.ClassifyOperationContinuation(message.kind, body)
+	fingerprint, tracked, err := state.contract.ClassifyOperationContinuation(message.kind, message.body)
 	if err != nil || !tracked {
 		return operationContinuationKey{}, tracked, err
 	}
 	return operationContinuationKey{kind: message.kind, fingerprint: fingerprint}, true, nil
-}
-
-func operationContinuationSemanticBody(direction Direction, message Message) ([]byte, error) {
-	if direction == DirectionSenderToReceiver {
-		if _, err := senderControlDomain(message.kind); err == nil {
-			return SenderControlSemanticBody(message)
-		}
-	}
-	return message.Body(), nil
 }
 
 type operationContinuationReservation struct {
@@ -213,7 +199,7 @@ func (table *OperationTable) reserveActiveContinuationLocked(
 	if authority == nil || authority.continuations == nil {
 		return nil, false, nil
 	}
-	key, tracked, err := authority.continuations.classify(direction, message)
+	key, tracked, err := authority.continuations.classify(message)
 	if err != nil || !tracked {
 		if err != nil && tracked {
 			authority.recordSenderOperationViolationLocked(
@@ -267,7 +253,7 @@ func (table *OperationTable) reserveReplayContinuationLocked(
 	if authority == nil || authority.continuations == nil {
 		return nil, false, nil
 	}
-	key, tracked, err := authority.continuations.classify(direction, message)
+	key, tracked, err := authority.continuations.classify(message)
 	if err != nil || !tracked {
 		return nil, false, err
 	}
@@ -303,7 +289,7 @@ func (table *OperationTable) acceptLateContinuationLocked(
 	if authority == nil || authority.continuations == nil {
 		return false, nil
 	}
-	key, tracked, err := authority.continuations.classify(direction, message)
+	key, tracked, err := authority.continuations.classify(message)
 	if err != nil || !tracked {
 		if err != nil && tracked {
 			authority.recordSenderOperationViolationLocked(
@@ -327,10 +313,7 @@ func (table *OperationTable) acceptUnboundLateContinuationLocked(
 	if table.continuations == nil || authority == nil || authority.continuations != nil {
 		return false, nil
 	}
-	body, err := operationContinuationSemanticBody(direction, message)
-	if err != nil {
-		return false, err
-	}
+	body := message.body
 	scope, tracked, err := table.continuations.ClassifyUnboundOperationContinuation(message.kind, body)
 	if err != nil || !tracked {
 		if err != nil && tracked {
@@ -467,14 +450,11 @@ func (table *OperationTable) retirePeerAttemptLocked(authority *operationAuthori
 	}
 }
 
-func (table *OperationTable) peerContinuationBinding(direction Direction, message Message) (PeerAttemptBinding, bool, error) {
+func (table *OperationTable) peerContinuationBinding(message Message) (PeerAttemptBinding, bool, error) {
 	if message.kind != MessagePeerOffer && message.kind != MessagePeerAnswer && message.kind != MessagePeerCandidate && message.kind != MessageOperationError {
 		return PeerAttemptBinding{}, false, nil
 	}
-	body, err := operationContinuationSemanticBody(direction, message)
-	if err != nil {
-		return PeerAttemptBinding{}, true, err
-	}
+	body := message.body
 	if message.kind == MessageOperationError {
 		failure, err := DecodeOperationFailure(body)
 		if err != nil {
@@ -497,7 +477,7 @@ func (table *OperationTable) validatePeerAttemptLocked(authority *operationAutho
 	if !ok || message.kind == MessagePeerOffer {
 		return nil
 	}
-	actual, tracked, err := table.peerContinuationBinding(direction, message)
+	actual, tracked, err := table.peerContinuationBinding(message)
 	if err == nil && tracked && actual != expected {
 		err = ErrConflictingContinuation
 	}
@@ -508,7 +488,7 @@ func (table *OperationTable) validatePeerAttemptLocked(authority *operationAutho
 }
 
 func (table *OperationTable) dropsRetiredPeerLocked(direction Direction, message Message) bool {
-	binding, tracked, err := table.peerContinuationBinding(direction, message)
+	binding, tracked, err := table.peerContinuationBinding(message)
 	if err != nil || !tracked {
 		return false
 	}

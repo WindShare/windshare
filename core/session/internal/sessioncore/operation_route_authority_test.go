@@ -2,7 +2,6 @@ package sessioncore
 
 import (
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
@@ -95,7 +94,7 @@ func TestConcurrentSameIDRequestsAdmitExactlyOneRouteAuthority(t *testing.T) {
 	writerDone := make(chan error, 1)
 	go func() { writerDone <- lane.writer.Run(writerContext) }()
 	outbound := &Responses{
-		runtime: runtime, controlPreparer: testControlPreparer(ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))),
+		runtime: runtime,
 	}
 	outcome, err := outbound.SendControl(
 		operationContext,
@@ -158,7 +157,7 @@ func testForcedHostileSameIDReuseRejectsDelayedOldRouteContext(t *testing.T) {
 	oldRoute := runtime.routes.current(operationID)
 	oldContext := dispatchTestOperationContext(t, runtime, handlerContexts)
 	outbound := &Responses{
-		runtime: runtime, controlPreparer: testControlPreparer(ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))),
+		runtime: runtime,
 	}
 	if outcome, err := outbound.SendControl(
 		oldContext, protocolsession.MessageOpenResults, operationID, body,

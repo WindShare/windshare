@@ -24,7 +24,7 @@ const (
 	failureDirectoryReadBatch = 128
 )
 
-var failureMagic = [4]byte{'W', 'S', 'F', '2'}
+var failureMagic = [4]byte{'W', 'S', 'F', '3'}
 
 type fileFailureMeta struct {
 	record     DirectoryFailureRecord

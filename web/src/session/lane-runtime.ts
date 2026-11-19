@@ -12,7 +12,7 @@ export * from './writer'
 import {
   decodeMessage,
   MessageError,
-  verifySenderControl,
+  validateSenderControlBody,
 } from './message'
 import type { OperationRouter } from './operation-router'
 import { SessionRuntimeError, type LaneCloseReason, type LaneTermination } from './runtime-types'
@@ -28,7 +28,6 @@ export class SessionLane {
   readonly #reader: ReadableStreamDefaultReader<Uint8Array>
   readonly #opener: EnvelopeOpener
   readonly #router: OperationRouter
-  readonly #descriptor: ShareDescriptor
   readonly #sessionId: Uint8Array<ArrayBuffer>
   readonly #onInputEnded: (lane: SessionLane, termination: LaneTermination) => Promise<void>
   readonly #onUnavailable: (lane: SessionLane) => void
@@ -57,7 +56,6 @@ export class SessionLane {
     this.#channel = options.channel
     this.#reader = options.reader
     this.#router = options.router
-    this.#descriptor = options.descriptor
     this.#sessionId = options.keys.protocolSessionId.slice()
     this.#onInputEnded = options.onInputEnded
     this.#onUnavailable = options.onUnavailable
@@ -185,25 +183,9 @@ export class SessionLane {
         if (result.done) break
         const opened = await this.#opener.open(result.value)
         const message = decodeMessage(opened.plaintext)
-        const authenticatedBody = await verifySenderControl(
-          message,
-          {
-            shareInstance: this.#descriptor.shareInstance,
-            protocolSessionId: this.#sessionId,
-            laneId: this.id,
-            laneEpoch: this.epoch,
-            direction: 1,
-            sequence: opened.sequence,
-          },
-          this.#descriptor.sender,
-        )
-        await this.#router.route(
-          message.data
-            ? message
-            : Object.freeze({ ...message, body: authenticatedBody }),
-          this.id,
-          this.epoch,
-        )
+        // Only the session opener can introduce a frame into the router.
+        if (!message.data) validateSenderControlBody(message.kind, message.body)
+        await this.#router.route(message, this.id, this.epoch)
       }
     } catch (error) {
       this.#recordFailure(error)

@@ -16,9 +16,9 @@ import (
 	"time"
 )
 
-type invalidRevisionRecordOpener struct{}
+type invalidRevisionRecordDecoder struct{}
 
-func (invalidRevisionRecordOpener) OpenRevision(
+func (invalidRevisionRecordDecoder) DecodeRevision(
 	catalog.FileID,
 	uint32,
 	[]byte,
@@ -26,7 +26,7 @@ func (invalidRevisionRecordOpener) OpenRevision(
 	return content.FileRevisionDescriptor{}, nil
 }
 
-func (invalidRevisionRecordOpener) OpenBlock(
+func (invalidRevisionRecordDecoder) DecodeBlock(
 	content.FileRevisionDescriptor,
 	uint64,
 	[]byte,
@@ -39,7 +39,7 @@ func TestOpenRevisionCompensatesLocallyMalformedDescriptorIdentity(t *testing.T)
 	ended := make(chan verticalLeaseEnd, 1)
 	fixture.contentStore.ended = ended
 	receiverConfig := fixture.receiverConfig
-	receiverConfig.RecordOpener = invalidRevisionRecordOpener{}
+	receiverConfig.RecordDecoder = invalidRevisionRecordDecoder{}
 	receiverFactory, err := NewFactory(receiverConfig)
 	if err == nil {
 		trackReceiverFactory(receiverFactory)

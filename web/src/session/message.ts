@@ -1,10 +1,7 @@
 import { decodePeerPathControl } from '../protocol/peer-path-control'
 import { decodeTurnControl } from '../protocol/turn-control'
 import { requirePeerSlot } from './peer-slots/slots'
-import { concatBytes, equalBytes } from '../crypto/bytes'
-import type { Ed25519Verifier } from '../crypto/ed25519'
-import { sha256 } from '../crypto/digest'
-import { type CryptoRuntime, defaultCryptoRuntime } from '../crypto/webcrypto'
+import { equalBytes } from '../crypto/bytes'
 import { isWellFormedUnicode } from '../protocol/text'
 import {
   decodeCanonicalCbor,
@@ -62,10 +59,6 @@ export type MessageKind = (typeof MESSAGE_KIND)[keyof typeof MESSAGE_KIND]
 const MESSAGE_KINDS: ReadonlySet<number> = new Set(Object.values(MESSAGE_KIND))
 
 const MAXIMUM_PLAINTEXT_BYTES = 65_536 - 44
-export const SENDER_CONTROL_SCHEMA_VERSION = 1
-const CONTROL_SCHEMA_KEY = 0
-const CONTROL_BODY_KEY = 1
-const CONTROL_SIGNATURE_KEY = 255
 const FRAGMENT_ROUTING_HEADER_BYTES = 20
 const MAXIMUM_REMOTE_ERROR_MESSAGE_BYTES = 512
 const MINIMUM_RETRY_DELAY_MILLISECONDS = 1n
@@ -78,29 +71,12 @@ const MAXIMUM_SIGNALING_SDP_BYTES = 60 * 1024
 const MAXIMUM_SIGNALING_CANDIDATE_BYTES = 4 * 1024
 const MAXIMUM_SIGNALING_TEXT_BYTES = 256
 const TEXT_ENCODER = new TextEncoder()
-const CONTROL_DOMAIN = Object.freeze({
-  operation: 'windshare/v2 control/operation',
-  terminal: 'windshare/v2 control/session-terminal',
-  lane: 'windshare/v2 control/lane-attach',
-  peerPath: 'windshare/v2 control/peer-path',
-  turn: 'windshare/v2 control/turn',
-})
-
 export interface SessionMessage {
   readonly kind: MessageKind
   readonly operationId?: Uint8Array<ArrayBuffer>
   readonly body: Uint8Array<ArrayBuffer>
   readonly plaintext: Uint8Array<ArrayBuffer>
   readonly data: boolean
-}
-
-export interface ControlBinding {
-  readonly shareInstance: Uint8Array
-  readonly protocolSessionId: Uint8Array
-  readonly laneId: number
-  readonly laneEpoch: number
-  readonly direction: 1
-  readonly sequence: bigint
 }
 
 export class MessageError extends Error {
@@ -164,44 +140,6 @@ export function decodeMessage(plaintext: Uint8Array): SessionMessage {
     plaintext: plaintext.slice(),
     data: false,
   })
-}
-
-export async function verifySenderControl(
-  message: SessionMessage,
-  binding: ControlBinding,
-  sender: Ed25519Verifier,
-  runtime: CryptoRuntime = defaultCryptoRuntime(),
-): Promise<Uint8Array<ArrayBuffer>> {
-  if (message.data) return message.body.slice()
-  const domain = controlDomain(message.kind)
-  const signed = requireNumericMap(
-    decodeCanonicalCbor(message.body, MAXIMUM_PLAINTEXT_BYTES, 'sender control wrapper'),
-    [CONTROL_SCHEMA_KEY, CONTROL_BODY_KEY, CONTROL_SIGNATURE_KEY],
-    'sender control wrapper',
-  )
-  if (
-    requireUnsigned(signed.get(CONTROL_SCHEMA_KEY), 'sender control wrapper schema') !==
-      BigInt(SENDER_CONTROL_SCHEMA_VERSION)
-  ) {
-    throw new MessageError('Sender control wrapper schema is unsupported')
-  }
-  const signature = requireBytes(
-    signed.get(CONTROL_SIGNATURE_KEY),
-    64,
-    'sender control signature',
-  )
-  const semanticValue = signed.get(CONTROL_BODY_KEY)
-  const semanticBody = encodeCanonicalCbor(semanticValue)
-  const unsignedWrapper = encodeCanonicalCbor(new Map<number, unknown>([
-    [CONTROL_SCHEMA_KEY, SENDER_CONTROL_SCHEMA_VERSION],
-    [CONTROL_BODY_KEY, semanticValue],
-  ]))
-  const preimage = await controlPreimage(message, binding, domain, unsignedWrapper, runtime)
-  if (!(await verifyEd25519(sender, preimage, signature))) {
-    throw new MessageError('Sender control signature is invalid')
-  }
-  validateSenderControlBody(message.kind, semanticBody)
-  return semanticBody
 }
 
 export interface ScanProgress {
@@ -346,67 +284,6 @@ function decodeFragmentMessage(plaintext: Uint8Array): SessionMessage {
     plaintext: plaintext.slice(),
     data: true,
   })
-}
-
-async function controlPreimage(
-  message: SessionMessage,
-  binding: ControlBinding,
-  domain: string,
-  unsignedWrapper: Uint8Array,
-  runtime: CryptoRuntime,
-): Promise<Uint8Array<ArrayBuffer>> {
-  const share = requireBytes(binding.shareInstance, 16, 'control share instance', true)
-  const session = requireBytes(binding.protocolSessionId, 16, 'control protocol session', true)
-  if (
-    !Number.isInteger(binding.laneId) || binding.laneId <= 0 || binding.laneId > 0xffff_ffff ||
-    !Number.isInteger(binding.laneEpoch) || binding.laneEpoch < 0 || binding.laneEpoch > 0xffff_ffff ||
-    binding.direction !== 1 ||
-    binding.sequence < 0n || binding.sequence > 0xffff_ffff_ffff_ffffn
-  ) {
-    throw new MessageError('Sender control delivery identity is invalid')
-  }
-  const lane = new Uint8Array(8)
-  const laneView = new DataView(lane.buffer)
-  laneView.setUint32(0, binding.laneId, false)
-  laneView.setUint32(4, binding.laneEpoch, false)
-  const sequence = new Uint8Array(8)
-  new DataView(sequence.buffer).setBigUint64(0, binding.sequence, false)
-  return concatBytes([
-    TEXT_ENCODER.encode(domain),
-    Uint8Array.of(0),
-    share,
-    session,
-    lane,
-    Uint8Array.of(binding.direction),
-    sequence,
-    Uint8Array.of(message.kind),
-    message.operationId ?? new Uint8Array(16),
-    await sha256(unsignedWrapper, runtime),
-  ])
-}
-
-function controlDomain(kind: MessageKind): string {
-  switch (kind) {
-    case MESSAGE_KIND.peerPathControl:
-      return CONTROL_DOMAIN.peerPath
-    case MESSAGE_KIND.turnControl:
-      return CONTROL_DOMAIN.turn
-    case MESSAGE_KIND.sessionTerminal:
-      return CONTROL_DOMAIN.terminal
-    case MESSAGE_KIND.laneAttach:
-      return CONTROL_DOMAIN.lane
-    case MESSAGE_KIND.catalogResult:
-    case MESSAGE_KIND.openResults:
-    case MESSAGE_KIND.operationError:
-    case MESSAGE_KIND.scanProgress:
-    case MESSAGE_KIND.operationComplete:
-    case MESSAGE_KIND.leaseResult:
-    case MESSAGE_KIND.peerAnswer:
-    case MESSAGE_KIND.peerCandidate:
-      return CONTROL_DOMAIN.operation
-    default:
-      throw new MessageError('Inbound sender message is not a signed control or data record')
-  }
 }
 
 export function validateSenderControlBody(kind: MessageKind, body: Uint8Array): void {
@@ -663,18 +540,6 @@ function requireMessageIdentity(kind: MessageKind, operationId: Uint8Array | und
   }
   if (operationId === undefined) throw new MessageError('Operation message has no operation ID')
   requireBytes(operationId, 16, 'operation ID', true)
-}
-
-async function verifyEd25519(
-  sender: Ed25519Verifier,
-  preimage: Uint8Array,
-  signature: Uint8Array,
-): Promise<boolean> {
-  try {
-    return await sender.verify(preimage, signature)
-  } catch (cause) {
-    throw new MessageError('Unable to verify sender control signature', { cause })
-  }
 }
 
 export function sameOperationId(left: Uint8Array | undefined, right: Uint8Array): boolean {

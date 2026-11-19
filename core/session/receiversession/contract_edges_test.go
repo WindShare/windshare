@@ -436,11 +436,12 @@ func TestMalformedPeerResponseCancelsExactGenerationAndDrainsSenderAttempt(t *te
 			}
 			siblingGeneration, _ := sibling.call.OperationAuthority()
 
-			message, err := protocolsession.NewMessage(malformedKind, &malformedID, []byte{1})
-			if err != nil {
+			handler.mu.Lock()
+			malformedContext := handler.attempts[malformedID].ctx
+			handler.mu.Unlock()
+			if _, err := handler.session.SendPeerControl(malformedContext, malformedKind, malformedID, []byte{1}); err != nil {
 				t.Fatal(err)
 			}
-			enqueueCallResponse(malformedCall, message)
 			malformedTermination := requireReceiverPeerTermination(
 				t,
 				malformed.Receive(context.Background()),
@@ -557,19 +558,7 @@ func signedPeerOperationControl(
 	semantic []byte,
 ) protocolsession.Message {
 	t.Helper()
-	laneID, laneEpoch := receiver.core.LaneIdentity()
-	binding := protocolsession.ControlBinding{ShareInstance: receiver.core.ShareInstance(), ProtocolSessionID: receiver.core.ProtocolSessionID(), LaneID: laneID, LaneEpoch: laneEpoch, Direction: protocolsession.DirectionSenderToReceiver}
-	binding.Sequence = 1
-	binding.MessageKind = kind
-	binding.OperationID = operationID
-	binding.HasOperationID = true
-	signed, err := protocolsession.SignControlBody(
-		privateKey, protocolsession.ControlDomainOperation, binding, semantic,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	message, err := protocolsession.NewMessage(kind, &operationID, signed)
+	message, err := protocolsession.NewMessage(kind, &operationID, semantic)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -577,6 +566,7 @@ func signedPeerOperationControl(
 }
 
 type trackedSenderPeerAttempt struct {
+	ctx  context.Context
 	done chan struct{}
 }
 
@@ -621,7 +611,7 @@ func (handler *trackedSenderPeerHandler) HandleMessage(
 	if message.Kind() != protocolsession.MessagePeerOffer {
 		return session.ErrRuntimeConfig
 	}
-	attempt := &trackedSenderPeerAttempt{done: make(chan struct{})}
+	attempt := &trackedSenderPeerAttempt{ctx: ctx, done: make(chan struct{})}
 	handler.mu.Lock()
 	if handler.stopping || handler.attempts[operationID] != nil {
 		handler.mu.Unlock()

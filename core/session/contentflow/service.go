@@ -27,22 +27,22 @@ type RevisionStore interface {
 	ReadBlock(context.Context, content.LeaseID, content.BlockRef) ([]byte, error)
 }
 
-type RecordSealer interface {
-	SealRevision(content.FileRevisionDescriptor) ([]byte, error)
-	SealBlock(records.BlockRecord) (records.SealedBlock, error)
+type RecordEncoder interface {
+	EncodeRevision(content.FileRevisionDescriptor) ([]byte, error)
+	EncodeBlock(records.BlockRecord) ([]byte, error)
 }
 
 type SenderServiceConfig struct {
 	Store           RevisionStore
 	SessionCapacity *revisioncapacity.SessionRegistration
-	Sealer          RecordSealer
+	Encoder         RecordEncoder
 	Cache           *SharedBlockCache
 }
 
 type SenderService struct {
 	store           RevisionStore
 	sessionCapacity *revisioncapacity.SessionRegistration
-	sealer          RecordSealer
+	encoder         RecordEncoder
 	cache           *SharedBlockCache
 
 	mu             sync.Mutex
@@ -57,11 +57,11 @@ type SenderService struct {
 
 func NewSenderService(config SenderServiceConfig) (*SenderService, error) {
 	if config.Store == nil || config.SessionCapacity == nil || config.SessionCapacity.SessionID() == "" ||
-		config.Sealer == nil || config.Cache == nil {
-		return nil, errors.New("content sender service requires store, revision-capacity session, sealer, and share cache")
+		config.Encoder == nil || config.Cache == nil {
+		return nil, errors.New("content sender service requires store, revision-capacity session, encoder, and share cache")
 	}
 	return &SenderService{
-		store: config.Store, sessionCapacity: config.SessionCapacity, sealer: config.Sealer, cache: config.Cache,
+		store: config.Store, sessionCapacity: config.SessionCapacity, encoder: config.Encoder, cache: config.Cache,
 		leases: make(map[content.LeaseID]content.FileRevisionDescriptor), released: make(map[content.LeaseID]struct{}),
 	}, nil
 }
@@ -164,7 +164,7 @@ func (s *SenderService) prepareOpenResult(
 		return OpenResult{}, false, fmt.Errorf("%w: lease identity reused within one batch", ErrRevisionStoreContract)
 	}
 	seen[result.Lease.ID()] = struct{}{}
-	object, err := s.sealer.SealRevision(result.Lease.Descriptor())
+	object, err := s.encoder.EncodeRevision(result.Lease.Descriptor())
 	if err != nil {
 		_ = s.store.EndLease(result.Lease.ID(), content.LeaseUndelivered)
 		failure := classifyRevisionError(err)
@@ -289,14 +289,14 @@ func (s *SenderService) ServeBlocks(
 		if err := context.Cause(workContext); err != nil {
 			return uint32(delivered), s.normalizeWorkCause(descriptor, err)
 		}
-		object, err := s.blockObject(workContext, validated.leaseID, descriptor, index)
+		object, err := s.blockPayload(workContext, validated.leaseID, descriptor, index)
 		if err != nil {
 			if cause := context.Cause(workContext); cause != nil {
 				return uint32(delivered), s.normalizeWorkCause(descriptor, cause)
 			}
 			return uint32(delivered), err
 		}
-		if err := emitBlockObject(workContext, operationID, object, emit); err != nil {
+		if err := emitBlockPayload(workContext, operationID, object, emit); err != nil {
 			if cause := context.Cause(workContext); cause != nil {
 				return uint32(delivered), s.normalizeWorkCause(descriptor, cause)
 			}
@@ -314,30 +314,30 @@ func (s *SenderService) normalizeWorkCause(descriptor content.FileRevisionDescri
 	return cause
 }
 
-func (s *SenderService) blockObject(
+func (s *SenderService) blockPayload(
 	ctx context.Context,
 	leaseID content.LeaseID,
 	descriptor content.FileRevisionDescriptor,
 	index uint64,
-) ([]byte, error) {
+) (cachedBlock, error) {
 	if err := s.store.ValidateLease(leaseID, descriptor); err != nil {
 		if errors.Is(err, content.ErrRevisionDrift) || errors.Is(err, content.ErrSourceDrift) {
 			s.invalidateOwnedRevision(descriptor)
 		} else if errors.Is(err, content.ErrLeaseExpired) || errors.Is(err, content.ErrInvalidLease) {
 			s.detachLease(leaseID)
 		}
-		return nil, errors.Join(errRevisionOperationScope, err)
+		return cachedBlock{}, errors.Join(errRevisionOperationScope, err)
 	}
 	ref, err := content.NewBlockRef(descriptor.FileID(), descriptor.FileRevision(), index, descriptor.Geometry())
 	if err != nil {
-		return nil, err
+		return cachedBlock{}, err
 	}
 	cacheKey, err := NewBlockCacheKey(descriptor, index)
 	if err != nil {
-		return nil, err
+		return cachedBlock{}, err
 	}
-	object, err := s.cache.Get(ctx, cacheKey, func(loadContext context.Context) ([]byte, error) {
-		return s.readAndSealBlock(loadContext, leaseID, descriptor, index, ref)
+	object, err := s.cache.get(ctx, cacheKey, func(loadContext context.Context) ([]byte, error) {
+		return s.readAndEncodeBlock(loadContext, leaseID, descriptor, index, ref)
 	})
 	if errors.Is(err, content.ErrRevisionDrift) || errors.Is(err, content.ErrSourceDrift) {
 		s.invalidateOwnedRevision(descriptor)
@@ -346,7 +346,7 @@ func (s *SenderService) blockObject(
 	return object, err
 }
 
-func (s *SenderService) readAndSealBlock(
+func (s *SenderService) readAndEncodeBlock(
 	ctx context.Context,
 	leaseID content.LeaseID,
 	descriptor content.FileRevisionDescriptor,
@@ -361,20 +361,20 @@ func (s *SenderService) readAndSealBlock(
 	if err != nil {
 		return nil, errors.Join(errRevisionOperationScope, err)
 	}
-	sealed, err := s.sealer.SealBlock(record)
+	encoded, err := s.encoder.EncodeBlock(record)
 	if err != nil {
 		return nil, errors.Join(errRevisionOperationScope, err)
 	}
-	return sealed.Object, nil
+	return encoded, nil
 }
 
-func emitBlockObject(
+func emitBlockPayload(
 	ctx context.Context,
 	operationID protocolsession.OperationID,
-	object []byte,
+	block cachedBlock,
 	emit func(context.Context, protocolsession.Message) error,
 ) error {
-	fragments, err := FragmentRecord(operationID, object)
+	fragments, err := fragmentRecord(operationID, block.recordID, block.payload)
 	if err != nil {
 		return err
 	}
@@ -536,7 +536,7 @@ func classifyBlockError(err error) uint16 {
 		return BlockCodeInvalidRef
 	case errors.Is(err, content.ErrBlockOutOfRange):
 		return BlockCodeOutOfRange
-	case errors.Is(err, records.ErrObjectAuth), errors.Is(err, records.ErrObjectSignature), errors.Is(err, ErrRecordDigest):
+	case errors.Is(err, records.ErrNonCanonicalObject), errors.Is(err, records.ErrObjectIdentity), errors.Is(err, ErrRecordDigest):
 		return BlockCodeObjectAuth
 	case errors.Is(err, ErrFragmentConflict):
 		return BlockCodeFragmentConflict

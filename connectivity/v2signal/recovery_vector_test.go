@@ -1,9 +1,7 @@
 package v2signal
 
 import (
-	"crypto/ed25519"
 	"encoding/base64"
-	"strconv"
 	"testing"
 	"time"
 
@@ -24,13 +22,11 @@ func buildPeerFailureVectors() []peerFailureVector {
 }
 
 type peerPathControlVector struct {
-	Kind          protocolsession.PeerPathControlKind `json:"kind"`
-	BodyB64       string                              `json:"bodyB64"`
-	SignedBodyB64 string                              `json:"signedBodyB64"`
-	Sequence      string                              `json:"sequence"`
+	Kind    protocolsession.PeerPathControlKind `json:"kind"`
+	BodyB64 string                              `json:"bodyB64"`
 }
 
-func buildPeerPathControlVectors(t *testing.T, key ed25519.PrivateKey, base protocolsession.ControlBinding) []peerPathControlVector {
+func buildPeerPathControlVectors(t *testing.T) []peerPathControlVector {
 	t.Helper()
 	var result []peerPathControlVector
 	for kind := protocolsession.PeerPathDemand; kind <= protocolsession.PeerPathNetworkChanged; kind++ {
@@ -45,43 +41,26 @@ func buildPeerPathControlVectors(t *testing.T, key ed25519.PrivateKey, base prot
 		if err != nil {
 			t.Fatal(err)
 		}
-		binding := base
-		binding.MessageKind = protocolsession.MessagePeerPathControl
-		binding.Sequence = 20 + uint64(kind)
-		signed, err := protocolsession.SignControlBody(key, protocolsession.ControlDomainPeerPath, binding, body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		result = append(result, peerPathControlVector{kind, base64.StdEncoding.EncodeToString(body), base64.StdEncoding.EncodeToString(signed), strconv.FormatUint(binding.Sequence, 10)})
+		result = append(result, peerPathControlVector{kind, base64.StdEncoding.EncodeToString(body)})
 	}
 	return result
 }
 
 type peerBoundErrorVector struct {
-	Code          uint16 `json:"code"`
-	BodyB64       string `json:"bodyB64"`
-	SignedBodyB64 string `json:"signedBodyB64"`
-	Sequence      string `json:"sequence"`
+	Code    uint16 `json:"code"`
+	BodyB64 string `json:"bodyB64"`
 }
 
-func buildPeerBoundErrorVectors(t *testing.T, key ed25519.PrivateKey, base protocolsession.ControlBinding, operationID protocolsession.OperationID) []peerBoundErrorVector {
+func buildPeerBoundErrorVectors(t *testing.T) []peerBoundErrorVector {
 	t.Helper()
 	binding := protocolBinding(testBinding())
 	var result []peerBoundErrorVector
-	for index, code := range []uint16{protocolsession.PeerOperationCodeTimeout, protocolsession.PeerOperationCodeAuthentication, 0x5fff} {
+	for _, code := range []uint16{protocolsession.PeerOperationCodeTimeout, protocolsession.PeerOperationCodeAuthentication, 0x5fff} {
 		body, err := protocolsession.EncodeOperationFailure(protocolsession.OperationFailure{Scope: protocolsession.OperationScopePeer, Code: code, Message: "Peer attempt failed", PeerAttempt: &binding})
 		if err != nil {
 			t.Fatal(err)
 		}
-		base.MessageKind = protocolsession.MessageOperationError
-		base.OperationID = operationID
-		base.HasOperationID = true
-		base.Sequence = uint64(40 + index)
-		signed, err := protocolsession.SignControlBody(key, protocolsession.ControlDomainOperation, base, body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		result = append(result, peerBoundErrorVector{code, base64.StdEncoding.EncodeToString(body), base64.StdEncoding.EncodeToString(signed), strconv.FormatUint(base.Sequence, 10)})
+		result = append(result, peerBoundErrorVector{code, base64.StdEncoding.EncodeToString(body)})
 	}
 	return result
 }

@@ -500,10 +500,13 @@ func validateOpenedPlanFile(
 	if file.IsZero() || opened.Handle.IsZero() || descriptor.ShareInstance() != share ||
 		descriptor.FileID() != file || descriptor.FileRevision().IsZero() ||
 		descriptor.ExactSize() != expectedSize {
-		return ErrRevisionIdentity
+		return errors.Join(ErrRevisionIdentity, content.ErrRevisionStale)
+	}
+	if modified.Present() && !descriptor.ModifiedTime().Present() {
+		return errors.Join(ErrRevisionIdentity, content.ErrRevisionReopened)
 	}
 	if modified.Present() && descriptor.ModifiedTime() != modified {
-		return ErrRevisionIdentity
+		return errors.Join(ErrRevisionIdentity, content.ErrRevisionStale)
 	}
 	return nil
 }

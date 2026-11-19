@@ -1,8 +1,6 @@
 package sendersession
 
 import (
-	"crypto/ed25519"
-
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
@@ -10,20 +8,8 @@ import (
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
-type responseSigner struct{ privateKey ed25519.PrivateKey }
-
-func (signer responseSigner) PrepareSenderControl(
-	binding protocolsession.ControlBinding,
-	kind protocolsession.MessageKind,
-	id *protocolsession.OperationID,
-	body []byte,
-) (protocolsession.PreparedSenderControl, error) {
-	return protocolsession.PrepareSenderControl(signer.privateKey, binding, kind, id, body)
-}
-
 func newResponses(
 	runtime *sessioncore.Runtime,
-	key ed25519.PrivateKey,
 	terminalObserver sessionobs.SenderTerminalSendObserver,
 	output observationstream.Producer[sessionobs.ProtocolObservation],
 ) (*sessioncore.Responses, error) {
@@ -31,7 +17,7 @@ func newResponses(
 		return nil, session.ErrRuntimeConfig
 	}
 	observations := newResponseObservations(output)
-	config := sessioncore.ResponseConfig{ControlPreparer: responseSigner{privateKey: key}}
+	var config sessioncore.ResponseConfig
 	if observations != nil {
 		// The core joins response handlers and physical writers before finalizers.
 		// Draining here preserves late settlements without a receiver-side worker.

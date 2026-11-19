@@ -1,9 +1,7 @@
 package sessioncore
 
 import (
-	"bytes"
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"github.com/windshare/windshare/core/session"
 
@@ -31,7 +29,7 @@ func TestDeliveredTerminalPreservesCallerAndHardAdmissionFailures(t *testing.T) 
 		sender, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
 		sender.start()
 		t.Cleanup(sender.close)
-		outbound := &Responses{runtime: sender, controlPreparer: testControlPreparer(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, ed25519.SeedSize)))}
+		outbound := &Responses{runtime: sender}
 		callerContext, cancelCaller := context.WithCancel(context.Background())
 		cancelCaller()
 		err := outbound.sendTerminalRecipients(
@@ -41,24 +39,11 @@ func TestDeliveredTerminalPreservesCallerAndHardAdmissionFailures(t *testing.T) 
 			t.Fatalf("delivered terminal erased caller cancellation: %v", err)
 		}
 	})
-	t.Run("hard preparation failure", func(t *testing.T) {
-		sender, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
-		sender.start()
-		t.Cleanup(sender.close)
-		outbound := &Responses{runtime: sender, controlPreparer: testControlPreparer(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, ed25519.SeedSize)))}
-		recipients := append([]selectedLane{{identity: session.LaneIdentity{}}}, sender.lanes.snapshot()...)
-		err := outbound.sendTerminalRecipients(
-			context.Background(), body, recipients,
-		)
-		if !errors.Is(err, protocolsession.ErrControlBinding) {
-			t.Fatalf("delivered terminal erased hard preparation failure: %v", err)
-		}
-	})
 	t.Run("accepted seal failure", func(t *testing.T) {
 		sender, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
 		sender.start()
 		t.Cleanup(sender.close)
-		outbound := &Responses{runtime: sender, controlPreparer: testControlPreparer(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, ed25519.SeedSize)))}
+		outbound := &Responses{runtime: sender}
 		policyRuntime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
 		failedChannel := newMemoryChannel(t)
 		sealErr := errors.New("terminal seal failed")

@@ -91,28 +91,6 @@ func TestFacadeAndRuntimeResourceShutdownAreNilSafeAndIdempotent(t *testing.T) {
 	receiver.WaitClosed()
 	receiver.Close()
 
-	var absentResources *receiverRuntimeResources
-	absentResources.Close()
-	var absentLease *receiverRuntimeResourceLease
-	absentLease.Release()
-
-	resources := newReceiverRuntimeResources(nil, nil)
-	lease, err := resources.AcquireReceiverRuntimeResources()
-	if err != nil {
-		t.Fatal(err)
-	}
-	resources.Close()
-	lease.Release()
-	lease.Release()
-	resources.mu.Lock()
-	active, closed := resources.active, resources.closed
-	resources.mu.Unlock()
-	if active != 0 || !closed {
-		t.Fatalf("released runtime resources active=%d closed=%v", active, closed)
-	}
-	if _, err := resources.AcquireReceiverRuntimeResources(); !errors.Is(err, errReceiverClosed) {
-		t.Fatalf("closed runtime resource admission = %v", err)
-	}
 }
 
 func TestRandomIdentityRejectsZeroEntropyWithoutWeakeningIdentityType(t *testing.T) {

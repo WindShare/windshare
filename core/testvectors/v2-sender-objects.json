@@ -34,10 +34,10 @@
       "contextHashB64": "gX9LuuMHmhL9v6qtdvIpz49i8N3etSsB0PlX1Lb5og0=",
       "keyB64": "r9W4bwpszHnYVwoyRjZxuUXGtSTKZ00/CkDK544TWRA=",
       "nonceB64": "CAkKCwwNDg8QERIT",
-      "canonicalCborB64": "pwABAVBAQUJDREVGR0hJSktMTU5PAlBgYWJjZGVmZ2hpamtsbW5vA1CgoaKjpKWmp6ipqqusra6vBBkgBwX1BhkD6A==",
+      "canonicalCborB64": "pwACAVBAQUJDREVGR0hJSktMTU5PAlBgYWJjZGVmZ2hpamtsbW5vA1CgoaKjpKWmp6ipqqusra6vBBkgBwX1BhkD6A==",
       "aadB64": "d2luZHNoYXJlL3YyIG9iamVjdC9kaXJlY3RvcnktZXJyb3IAgX9LuuMHmhL9v6qtdvIpz49i8N3etSsB0PlX1Lb5og0DAAAAAAAAUw==",
-      "signaturePreimageB64": "d2luZHNoYXJlL3YyIG9iamVjdC9kaXJlY3RvcnktZXJyb3IAgX9LuuMHmhL9v6qtdvIpz49i8N3etSsB0PlX1Lb5og2wkWYOaYsnruaNnfAwn2IGWtY2IzakDUZOu974vQpwqw==",
-      "objectB64": "AwAAAAAAAFMICQoLDA0ODxAREhOcjbTUz6qJR52VWmgslsL59Ar5lp+AVk1cHZAhhfWfY7w63TQjCbZFBskssAA/Q6pNVVoiXeKMxQAjFoF1SL9QNzQxkuP7zRDvzIgO/77NDcO0oHnszGqEYH2DLnOggGGVG3svG9GN3+MDBfq9QtDiDIyUhhU3SRRouSL5Xzcm4z+NaENGkR87jet7Bf4cYRKIEQU="
+      "signaturePreimageB64": "d2luZHNoYXJlL3YyIG9iamVjdC9kaXJlY3RvcnktZXJyb3IAgX9LuuMHmhL9v6qtdvIpz49i8N3etSsB0PlX1Lb5og1fFuCG2TTcYQg8uiFlji0BT1ggifRWcwzI7wpRlKPd5w==",
+      "objectB64": "AwAAAAAAAFMICQoLDA0ODxAREhOcjbfUz6qJR52VWmgslsL59Ar5lp+AVk1cHZAhhfWfY7w63TQjCbZFBskssAA/Q6pNVVoiXeKMxQAjFoF1SL9QNzQxN0jfM/Lze9eMOfwzepFcxnt0oWI5c2xJ0R/GuF3RUCXO6Vkdt5VfgSwyIVTb1Rdzo4B1bAKKclDwHyqqNutXWfnRgxPNFmx/HVTZEQG1Uwc="
     },
     {
       "name": "windshare/v2 object/file-revision",
@@ -70,10 +70,10 @@
       "contextHashB64": "uiK33JX2zIdldXvkvM83zZLs5tSYfcJqMeJ0yb4jaSE=",
       "keyB64": "QJf/rkymcTqujczmpzms5e8PRSI08a/0Fm7ica6GlQ4=",
       "nonceB64": "FBUWFxgZGhscHR4f",
-      "canonicalCborB64": "pwABAVBAQUJDREVGR0hJSktMTU5PAlggSjIQMGstaPSQI/pa1seIH++iqlEl+KEANSc+bKe6AP0DGmVT/xAEWCAwMTIzNDU2Nzg5Ojs8PT4/QEFCQ0RFRkdISUpLTE1OTwUFBhkELg==",
+      "canonicalCborB64": "pwABAVBAQUJDREVGR0hJSktMTU5PAlggiBBUZYIUDnHanoyKR6WodRoLwBxdlJ0z5ISP2wRIeBoDGmVT/xAEWCAwMTIzNDU2Nzg5Ojs8PT4/QEFCQ0RFRkdISUpLTE1OTwUFBhkELg==",
       "aadB64": "d2luZHNoYXJlL3YyIG9iamVjdC9vZmZsaW5lLWNvbW1pdAC6IrfclfbMh2V1e+S8zzfNkuzm1Jh9wmox4nTJviNpIQMAAAAAAAB3",
-      "signaturePreimageB64": "d2luZHNoYXJlL3YyIG9iamVjdC9vZmZsaW5lLWNvbW1pdAC6IrfclfbMh2V1e+S8zzfNkuzm1Jh9wmox4nTJviNpIRmYkW0vhpbdbOHL4RetLS8NrnubgOa3isHDHQTaSf0N",
-      "objectB64": "AwAAAAAAAHcUFRYXGBkaGxwdHh8UZHq/gYEXNS2JSmiCMDtZOd0Qwh+iDH1XrdzzkBJqLaOKx+gnDi1Ut9papH1JyLTZzdQeCKfKLNG6jSE/paCz0pY+qqsSs/pQpo4WPbRXoy+84lPPZdOWy+S58c3NoI1p7fFp20svwymmDdgWJoRoaSbbWm8Gqd2oy5iw8hvwdu5hE90Btx8WU/mniW3vS/E+ndMNROkWqZCk9jqLX0M/ggtit9gisoT2RN2xcU/CBwi7yYMcUgs="
+      "signaturePreimageB64": "d2luZHNoYXJlL3YyIG9iamVjdC9vZmZsaW5lLWNvbW1pdAC6IrfclfbMh2V1e+S8zzfNkuzm1Jh9wmox4nTJviNpISaXu0KWKJQ3bFUEmEtc86vE2O/1Db5RAzE9SNoeljDg",
+      "objectB64": "AwAAAAAAAHcUFRYXGBkaGxwdHh8UZHq/gYEXNS2JSmiCMDtZOd0Qwh+iDH2Vj5imeSsMqOk3sTi2bA0+QnMw6QUl9IcIbmWpq1Wyy9G6jSE/paCz0pY+qqsSs/pQpo4WPbRXoy+84lPPZdOWy+S58c3NoI1p7fFp20sv2hKwhV3EU1Tx8bntTN4KQa3wfJgSimgA43mclPRDuKTpV/biP1D/ZbB+l5ZtgBhGXxoOKy+r3WVstMgyNA95GSyEyyywHTqcBjjbawNZCAo="
     }
   ]
 }

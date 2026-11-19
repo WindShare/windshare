@@ -77,7 +77,7 @@ func TestListRequestRejectsHostileCBOR(t *testing.T) {
 	}
 }
 
-func TestSenderServiceAndClientCommitOnlyTerminalGeneration(t *testing.T) {
+func TestClientCommitsOnlyTerminalGeneration(t *testing.T) {
 	instance := shareInstance(t, 4)
 	directory := directoryID(t, 5)
 	sibling := directoryID(t, 6)
@@ -87,12 +87,8 @@ func TestSenderServiceAndClientCommitOnlyTerminalGeneration(t *testing.T) {
 		directory: SnapshotResult(snapshot),
 		sibling:   SnapshotResult(onePageSnapshot(t, instance, sibling, 8, "sibling")),
 	}}
-	service, err := NewSenderService(instance, source, codec)
-	if err != nil {
-		t.Fatal(err)
-	}
 	gate := make(chan struct{})
-	transport := &serviceTransport{service: service, beforeSecond: gate, secondReached: make(chan struct{})}
+	transport := &serviceTransport{source: source, codec: codec, beforeSecond: gate, secondReached: make(chan struct{})}
 	client, err := NewClient(ClientConfig{ShareInstance: instance, Transport: transport, Verifier: codec})
 	if err != nil {
 		t.Fatal(err)
@@ -126,16 +122,7 @@ func TestSenderServiceAndClientCommitOnlyTerminalGeneration(t *testing.T) {
 	if !client.ReleaseDirectory(directory) || client.CachedBytes() != 0 {
 		t.Fatal("directory cache release did not return its budget")
 	}
-	staleGeneration := generationID(t, 99)
-	staleRequest, _ := NewListRequest(directory, &staleGeneration, 1)
-	if _, err := service.Serve(context.Background(), staleRequest); !errors.Is(err, ErrGenerationMismatch) {
-		t.Fatalf("stale generation error = %v", err)
-	}
-	currentGeneration := snapshot.Generation()
-	outOfRange, _ := NewListRequest(directory, &currentGeneration, 9)
-	if _, err := service.Serve(context.Background(), outOfRange); !errors.Is(err, ErrPageOutOfRange) {
-		t.Fatalf("out-of-range page error = %v", err)
-	}
+
 }
 func TestAssemblerRejectsGapConflictIdentityAndPostTerminal(t *testing.T) {
 	instance := shareInstance(t, 14)
@@ -226,7 +213,7 @@ func TestCatalogFlowConstructorsAndRequestEdgesFailClosed(t *testing.T) {
 	if _, err := NewAssembler(catalog.ShareInstance{}, directory, 1); err == nil {
 		t.Fatal("assembler accepted a zero share")
 	}
-	if _, err := NewSenderService(instance, nil, newMemoryObjectCodec()); err == nil {
+	if _, err := NewAddressedSenderService(instance, nil); err == nil {
 		t.Fatal("sender accepted a nil source")
 	}
 	if _, err := NewListRequest(catalog.DirectoryID{}, nil, 0); !errors.Is(err, ErrInvalidRequest) {
@@ -301,42 +288,44 @@ func TestAssemblerRejectsUnverifiedAndCrossPageStateWithoutMutation(t *testing.T
 	}
 }
 
-func TestSenderServiceRejectsAmbiguousAndMisbindingSources(t *testing.T) {
+func TestAddressedSenderRejectsInvalidSourceResults(t *testing.T) {
 	instance := shareInstance(t, 38)
 	directory := directoryID(t, 39)
 	request, _ := NewListRequest(directory, nil, 0)
-	codec := newMemoryObjectCodec()
+	loadErr := errors.New("load failed")
+	source := addressedSourceFunc(func(context.Context, ListRequest) (PageResult, error) {
+		return PageResult{}, loadErr
+	})
+	service, _ := NewAddressedSenderService(instance, source)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	service, _ := NewSenderService(instance, &recordingSource{}, codec)
-	if _, err := service.Serve(ctx, request); !errors.Is(err, context.Canceled) {
+	if _, err := service.Serve(ctx, request, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled serve = %v", err)
 	}
-	if _, err := service.Serve(context.Background(), ListRequest{}); !errors.Is(err, ErrInvalidRequest) {
+	if _, err := service.Serve(context.Background(), ListRequest{}, nil); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("invalid serve request = %v", err)
 	}
-
-	loadError := DirectorySourceFunc(func(context.Context, catalog.DirectoryID) (DirectoryResult, error) {
-		return DirectoryResult{}, errors.New("load failed")
-	})
-	service, _ = NewSenderService(instance, loadError, codec)
-	if _, err := service.Serve(context.Background(), request); err == nil {
-		t.Fatal("source error was hidden")
+	if _, err := service.Serve(context.Background(), request, nil); !errors.Is(err, loadErr) {
+		t.Fatalf("source error was hidden: %v", err)
 	}
 
-	snapshot := onePageSnapshot(t, instance, directory, 40, "item")
+	page := onePageSnapshot(t, instance, directory, 40, "item").Pages()[0]
+	foreign := onePageSnapshot(t, shareInstance(t, 42), directory, 43, "item").Pages()[0]
 	failure := mustDirectoryFailure(t, instance, directory, 41, DirectoryCodePermanentIO, false)
-	for name, result := range map[string]DirectoryResult{
-		"neither":              {},
-		"both":                 {Snapshot: snapshot, Failure: &failure},
-		"wrong share snapshot": SnapshotResult(onePageSnapshot(t, shareInstance(t, 42), directory, 43, "item")),
-		"wrong share failure":  FailureResult(withFailure(failure, func(value *DirectoryFailure) { value.ShareInstance = shareInstance(t, 44) })),
+	wrongShare := withFailure(failure, func(value *DirectoryFailure) { value.ShareInstance = shareInstance(t, 44) })
+	for name, result := range map[string]PageResult{
+		"no outcome":      {},
+		"both outcomes":   {Page: page, Failure: &failure},
+		"foreign page":    {Page: foreign},
+		"foreign failure": {Failure: &wrongShare},
 	} {
 		t.Run(name, func(t *testing.T) {
-			source := DirectorySourceFunc(func(context.Context, catalog.DirectoryID) (DirectoryResult, error) { return result, nil })
-			candidate, _ := NewSenderService(instance, source, codec)
-			if _, err := candidate.Serve(context.Background(), request); err == nil {
-				t.Fatal("invalid source result was accepted")
+			source := addressedSourceFunc(func(context.Context, ListRequest) (PageResult, error) {
+				return result, nil
+			})
+			candidate, _ := NewAddressedSenderService(instance, source)
+			if _, err := candidate.Serve(context.Background(), request, nil); !errors.Is(err, ErrObjectIdentity) {
+				t.Fatalf("invalid source result error = %v", err)
 			}
 		})
 	}

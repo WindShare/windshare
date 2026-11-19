@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content"
 	framechannel "github.com/windshare/windshare/core/framechannel"
 
 	"github.com/windshare/windshare/core/session"
@@ -31,12 +30,8 @@ func (channel *beginReceiverCloseOnSendChannel) Send(ctx context.Context, frame 
 func TestPreparedReceiverConcurrentCloseJoinsConnectAdmissionBeforeSecretTeardown(t *testing.T) {
 	receiver := newPreparedReceiverForLifecycleTest(t)
 	receiver.mu.Lock()
-	resources := receiver.resources
 	factory := receiver.factory
 	receiver.mu.Unlock()
-	resources.mu.Lock()
-	keyTree := resources.keyTree
-	resources.mu.Unlock()
 	receiverChannel, peerChannel := newFacadeChannelPair()
 	t.Cleanup(func() {
 		_ = receiverChannel.Close()
@@ -66,14 +61,11 @@ func TestPreparedReceiverConcurrentCloseJoinsConnectAdmissionBeforeSecretTeardow
 			t.Fatalf("concurrent Close %d did not join", index)
 		}
 	}
-	if _, err := keyTree.CatalogKey(); !errors.Is(err, content.ErrKeyTreeDestroyed) {
-		t.Fatalf("closed facade retained idle receiver key tree: %v", err)
-	}
 	receiver.mu.Lock()
-	retainedFactory, retainedResources := receiver.factory, receiver.resources
+	retainedFactory := receiver.factory
 	receiver.mu.Unlock()
-	if retainedFactory != nil || retainedResources != nil {
-		t.Fatal("closed facade retained its factory or secret-resource graph")
+	if retainedFactory != nil {
+		t.Fatal("closed facade retained its runtime factory")
 	}
 	if _, err := receiver.Connect(context.Background(), receiverChannel, transferlanes.RouteRelay); !errors.Is(err, errReceiverClosed) {
 		t.Fatalf("facade Connect after Close error=%v", err)

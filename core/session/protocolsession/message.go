@@ -305,7 +305,7 @@ func validateCBORValue(value any) error {
 }
 
 func (m Message) operationFingerprint(direction Direction) [sha256.Size]byte {
-	body := m.operationFingerprintBody(direction)
+	body := m.body
 	preimage := make([]byte, 0, 2+IdentityBytes+len(body))
 	preimage = append(preimage, byte(direction), byte(m.kind))
 	if m.hasID {
@@ -315,28 +315,6 @@ func (m Message) operationFingerprint(direction Direction) [sha256.Size]byte {
 	}
 	preimage = append(preimage, body...)
 	return sha256.Sum256(preimage)
-}
-
-func (m Message) operationFingerprintBody(direction Direction) []byte {
-	// Sender-control signatures bind lane, epoch, and sequence. Those delivery
-	// axes necessarily change when the same semantic final is retried on another
-	// lane, so operation idempotency must compare the authenticated unsigned body
-	// rather than the per-delivery signature bytes.
-	if direction != DirectionSenderToReceiver {
-		return m.body
-	}
-	if _, err := senderControlDomain(m.kind); err != nil {
-		return m.body
-	}
-	semantic, _, err := decodeSignedControlBody(m.body)
-	if err != nil {
-		return m.body
-	}
-	unsigned, err := encodeUnsignedControlWrapper(semantic)
-	if err != nil {
-		return m.body
-	}
-	return unsigned
 }
 
 func (kind MessageKind) valid() bool {

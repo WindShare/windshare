@@ -1,8 +1,6 @@
 package sessioncore
 
 import (
-	"bytes"
-	"crypto/ed25519"
 	"errors"
 	"github.com/windshare/windshare/core/session/contentflow"
 
@@ -28,7 +26,7 @@ func TestSenderStopDuringResponseRetirement(t *testing.T) {
 				sender, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
 				sender.start()
 				t.Cleanup(sender.close)
-				outbound := NewResponses(sender, ResponseConfig{ControlPreparer: testControlPreparer(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, ed25519.SeedSize)))})
+				outbound := NewResponses(sender, ResponseConfig{})
 				// Keep the operation owner alive through stop so finalization cannot
 				// clear its route before the delayed response retires it.
 				_, release, err := sender.beginExternalAdmission(t.Context())

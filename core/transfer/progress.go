@@ -153,6 +153,25 @@ func (tracker *receiveProgressTracker) replaceRestartReusable(previous, next uin
 	tracker.publishLocked()
 }
 
+func (tracker *receiveProgressTracker) replaceReadmittedCoverage(
+	previousVerified, previousNewly, previousPersisted, verified, newly, persisted uint64,
+) {
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	snapshot := &tracker.snapshot
+	if snapshot.VerifiedBytes < previousVerified || snapshot.NewlyVerifiedBytes < previousNewly ||
+		snapshot.RestartReusableBytes < previousPersisted {
+		snapshot.CountersExact = false
+		tracker.publishLocked()
+		return
+	}
+	snapshot.VerifiedBytes, snapshot.CountersExact = saturatingAdd(snapshot.VerifiedBytes-previousVerified, verified, snapshot.CountersExact)
+	snapshot.NewlyVerifiedBytes, snapshot.CountersExact = saturatingAdd(snapshot.NewlyVerifiedBytes-previousNewly, newly, snapshot.CountersExact)
+	snapshot.RestartReusableBytes, snapshot.CountersExact = saturatingAdd(snapshot.RestartReusableBytes-previousPersisted, persisted, snapshot.CountersExact)
+	tracker.validateExactLocked()
+	tracker.publishLocked()
+}
+
 func (tracker *receiveProgressTracker) acceptFileSettlement(
 	settlement FileSettlement,
 	expectedSize uint64,
@@ -382,6 +401,7 @@ func rangeSetByteCount(ranges content.RangeSet) (uint64, bool) {
 // acknowledged, so its bytes may or may not have reached the output. The
 // operation tracker therefore never becomes a second file/range manifest.
 type fileTransferProgress struct {
+	initial        content.RangeSet
 	persisted      VerifiedRanges
 	persistedBytes uint64
 	retainsRanges  bool
@@ -404,7 +424,9 @@ func newFileTransferProgress(
 	if !exact || bytes > transaction.Binding().ExactSize() {
 		return fileTransferProgress{}, 0, false
 	}
-	progress := fileTransferProgress{retainsRanges: checkpoint.Retention() != RangesTransient, trusted: checkpoint}
+	progress := fileTransferProgress{
+		initial: checkpoint.Ranges(), retainsRanges: checkpoint.Retention() != RangesTransient, trusted: checkpoint,
+	}
 	if restart {
 		progress.persisted, progress.persistedBytes = checkpoint, bytes
 	}

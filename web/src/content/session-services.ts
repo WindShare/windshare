@@ -1,3 +1,4 @@
+import { compareRevisionDescriptors, type RevisionComparison } from './revision-comparison'
 import { linkAbortSignals, operationDeadlineSignal, delayWithAbort } from './scheduling/deadlines'
 import { BlockResponseQueue, BlockInactivityTimeoutError } from './scheduling/block-response-wait'
 import {
@@ -5,7 +6,6 @@ import {
   type LeaseRetirementObservation, type LeaseRetirementOwner,
 } from './scheduling/lease-retirement'
 import type { ShareDescriptor } from '../catalog/records'
-import { SenderObjectError } from '../crypto/sender-object'
 import { equalBytes } from '../crypto/bytes'
 import { createReceivedProtocolError, type ReceivedProtocolError } from '../diagnostics/incident/protocol-error'
 import { protocolFailureFact, type FailureFact } from '../diagnostics/incident/fact'
@@ -41,8 +41,8 @@ import {
   type RevisionFailure,
 } from './flow'
 import {
-  openBlockRecord,
-  openRevisionObject,
+  decodeBlockPayload,
+  decodeRevisionPayload,
   type BlockRecord,
   type FileRevisionDescriptor,
 } from './records'
@@ -113,24 +113,27 @@ export function requiresRevisionLeaseReplacement(error: unknown): boolean {
 }
 
 export class RevisionReopenedDuringRecoveryError extends Error {
-  constructor() {
-    super('File access reopened; saved plaintext requires fresh admission')
-    this.name = 'RevisionReopenedDuringRecoveryError'
-  }
-}
+  readonly comparison: RevisionComparison
+  readonly previous: FileRevisionDescriptor
+  readonly current: FileRevisionDescriptor
 
-export class RevisionChangedDuringRecoveryError extends Error {
-  constructor() {
-    super('File revision changed while renewing file access')
-    this.name = 'RevisionChangedDuringRecoveryError'
+  constructor(previous: FileRevisionDescriptor, current: FileRevisionDescriptor) {
+    const comparison = compareRevisionDescriptors(previous, current)
+    super(comparison.kind === 'observed-change'
+      ? 'File source evidence changed while renewing file access'
+      : 'File access reopened; saved plaintext requires fresh admission')
+    this.name = 'RevisionReopenedDuringRecoveryError'
+    this.comparison = comparison
+    this.previous = previous
+    this.current = current
   }
 }
 
 export class BlockOperationError extends Error {
-  readonly code: 'object-auth' | 'fragment-conflict'
+  readonly code: 'fragment-conflict'
 
   constructor(
-    code: 'object-auth' | 'fragment-conflict',
+    code: 'fragment-conflict',
     message: string,
     options: ErrorOptions,
   ) {
@@ -165,7 +168,6 @@ export interface RevisionReader {
 export class RevisionService {
   readonly #session: ReceiverSessionRuntime
   readonly #share: ShareDescriptor
-  readonly #readSecret: Uint8Array<ArrayBuffer>
   readonly #lanes: LaneSet
   readonly #beforeLeaseRelease: (leaseId: Uint8Array<ArrayBuffer>) => Promise<void>
   readonly #retirementOwner: LeaseRetirementOwner
@@ -178,7 +180,6 @@ export class RevisionService {
   constructor(
     session: ReceiverSessionRuntime,
     share: ShareDescriptor,
-    readSecret: Uint8Array,
     lanes: LaneSet,
     options: {
       readonly beforeLeaseRelease?: (leaseId: Uint8Array<ArrayBuffer>) => Promise<void>
@@ -188,7 +189,6 @@ export class RevisionService {
   ) {
     this.#session = session
     this.#share = share
-    this.#readSecret = readSecret.slice()
     this.#lanes = lanes
     this.#beforeLeaseRelease = options.beforeLeaseRelease ?? (() => Promise.resolve())
     this.#retirementOwner = { signal: this.#lifetime.signal,
@@ -239,15 +239,14 @@ export class RevisionService {
     }
     let descriptor
     try {
-      descriptor = await openRevisionObject(
+      descriptor = decodeRevisionPayload(
         result.revisionObject,
         this.#share,
-        this.#readSecret,
         fileId,
       )
     } catch (error) {
       if (isProtocolContentFailure(error)) {
-        return this.#failProtocol(error, 'File revision sender object failed authentication')
+        return this.#failProtocol(error, 'Authenticated file revision violated its record contract')
       }
       throw error
     }
@@ -351,7 +350,6 @@ export class RevisionService {
     if (this.#closed) return
     this.#closed = true
     this.#lifetime.abort(new DOMException('Revision service closed', 'AbortError'))
-    this.#readSecret.fill(0)
     for (const state of this.#leases.values()) {
       state.released = true
       state.lifetime.abort(new DOMException('Revision service closed', 'AbortError'))
@@ -470,8 +468,6 @@ export class RevisionService {
 export class SessionBlockLane implements BlockLane {
   readonly id: number
   readonly #session: ReceiverSessionRuntime
-  readonly #share: ShareDescriptor
-  readonly #readSecret: Uint8Array<ArrayBuffer>
   readonly #revisions: RevisionService
   readonly #responses = new BlockResponseQueue()
   readonly #lifetime = new AbortController()
@@ -479,14 +475,10 @@ export class SessionBlockLane implements BlockLane {
   constructor(
     id: number,
     session: ReceiverSessionRuntime,
-    share: ShareDescriptor,
-    readSecret: Uint8Array,
     revisions: RevisionService,
   ) {
     this.id = id
     this.#session = session
-    this.#share = share
-    this.#readSecret = readSecret.slice()
     this.#revisions = revisions
   }
 
@@ -512,7 +504,6 @@ export class SessionBlockLane implements BlockLane {
 
   close(): void {
     this.#lifetime.abort(new DOMException('Content lane closed', 'AbortError'))
-    this.#readSecret.fill(0)
   }
 
   async #receiveBlock(
@@ -541,10 +532,8 @@ export class SessionBlockLane implements BlockLane {
         if (message.kind === MESSAGE_KIND.operationError) {
           throw remoteOperationErrorFor(this.#session, message)
         }
-        return await openBlockRecord(
+        return decodeBlockPayload(
           requireCompletedBlockObject(message, object),
-          this.#share,
-          this.#readSecret,
           demand.descriptor,
           demand.localBlockIndex,
         )
@@ -576,17 +565,10 @@ export class SessionBlockLane implements BlockLane {
         laneId: this.id,
       },
     ).catch(() => undefined)
-    if (error instanceof SenderObjectError) {
-      throw new BlockOperationError(
-        'object-auth',
-        'Block sender object failed authentication',
-        { cause: error },
-      )
-    }
     if (error instanceof CborError) {
       throw new BlockOperationError(
         'fragment-conflict',
-        'Authenticated block fragments violated their operation geometry',
+        'Authenticated block content violated its record or fragment contract',
         { cause: error },
       )
     }
@@ -681,7 +663,7 @@ function isRetryableLeaseLaneFailure(error: unknown): boolean {
 }
 
 function isProtocolContentFailure(error: unknown): boolean {
-  return error instanceof SenderObjectError || error instanceof CborError
+  return error instanceof CborError
 }
 
 class IncompleteBlockDeliveryError extends SessionRuntimeError {

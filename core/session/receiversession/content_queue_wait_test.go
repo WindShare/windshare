@@ -2,7 +2,6 @@ package receiversession
 
 import (
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
@@ -15,12 +14,12 @@ import (
 	"time"
 )
 
-type queueWaitRecordOpener struct {
-	RecordOpener
+type queueWaitRecordDecoder struct {
+	RecordDecoder
 	delay time.Duration
 }
 
-func (opener queueWaitRecordOpener) OpenBlock(descriptor content.FileRevisionDescriptor, index uint64, _ []byte) (records.BlockRecord, error) {
+func (opener queueWaitRecordDecoder) DecodeBlock(descriptor content.FileRevisionDescriptor, index uint64, _ []byte) (records.BlockRecord, error) {
 	if opener.delay > 0 {
 		time.Sleep(opener.delay)
 	}
@@ -37,7 +36,7 @@ func TestBlockReceiverWaitsBehindProductiveRequests(t *testing.T) {
 				if name == "slow local validation" {
 					validationDelay = 20 * time.Second
 				}
-				fixture.lane.opener = queueWaitRecordOpener{delay: validationDelay}
+				fixture.lane.decoder = queueWaitRecordDecoder{delay: validationDelay}
 				start := func() (*receiverBlockOperation, <-chan error) {
 					operation, err := fixture.lane.beginBlockOperation(t.Context(), fixture.demand)
 					if err != nil {
@@ -100,20 +99,7 @@ func TestBlockReceiverWaitsBehindProductiveRequests(t *testing.T) {
 				deliver(earlier, fragments[2])
 				body, _ := contentflow.EncodeOperationComplete(1)
 				complete := func(operation *receiverBlockOperation) {
-					signed, err := protocolsession.SignControlBody(
-						ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)),
-						protocolsession.ControlDomainOperation,
-						protocolsession.ControlBinding{
-							ShareInstance:     fixture.demand.Descriptor.ShareInstance(),
-							ProtocolSessionID: fixture.runtime.ProtocolSessionID(), LaneID: fixture.lane.identity.ID,
-							LaneEpoch: fixture.lane.identity.Epoch, Direction: protocolsession.DirectionSenderToReceiver,
-							Sequence: 1, MessageKind: protocolsession.MessageOperationComplete,
-							OperationID: operation.call.ID(), HasOperationID: true,
-						}, body)
-					if err != nil {
-						t.Fatal(err)
-					}
-					message, err := protocolsession.NewMessage(protocolsession.MessageOperationComplete, new(operation.call.ID()), signed)
+					message, err := protocolsession.NewMessage(protocolsession.MessageOperationComplete, new(operation.call.ID()), body)
 					if err != nil {
 						t.Fatal(err)
 					}

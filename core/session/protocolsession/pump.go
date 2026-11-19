@@ -10,37 +10,30 @@ import (
 )
 
 var (
-	ErrPumpReused            = errors.New("protocolsession: pump Run may only be called once")
-	ErrEnvelopeRejected      = errors.New("protocolsession: inbound envelope rejected")
-	ErrInboundAuthentication = errors.New("protocolsession: inbound message authentication failed")
-	ErrInboundRejected       = errors.New("protocolsession: inbound message rejected")
-	ErrPeerSessionTerminal   = errors.New("protocolsession: peer ended the session")
+	ErrPumpReused          = errors.New("protocolsession: pump Run may only be called once")
+	ErrEnvelopeRejected    = errors.New("protocolsession: inbound envelope rejected")
+	ErrInboundSemantic     = errors.New("protocolsession: inbound message semantic validation failed")
+	ErrInboundRejected     = errors.New("protocolsession: inbound message rejected")
+	ErrPeerSessionTerminal = errors.New("protocolsession: peer ended the session")
 )
 
 type InboundEnvelopeOpener interface {
 	Open(frame []byte) (OpenedEnvelope, error)
 }
 
-// InboundMessageAuthenticator verifies authority that AEAD alone cannot grant.
-// In particular, a capability holder knows traffic keys but cannot forge sender
-// control signatures. It runs before operation state or dispatch is touched.
-type InboundMessageAuthenticator interface {
-	AuthenticateInbound(sequence uint64, message Message) (InboundAuthenticationResult, error)
+// InboundMessageValidator checks the role's message schemas after the lane
+// authenticates the frame. It cannot grant authority to an unopened frame.
+type InboundMessageValidator interface {
+	ValidateInbound(message Message) (InboundValidationResult, error)
 }
 
-type InboundMessageAuthenticatorFunc func(
-	sequence uint64,
-	message Message,
-) (InboundAuthenticationResult, error)
+type InboundMessageValidatorFunc func(Message) (InboundValidationResult, error)
 
-func (authenticate InboundMessageAuthenticatorFunc) AuthenticateInbound(
-	sequence uint64,
-	message Message,
-) (InboundAuthenticationResult, error) {
-	if authenticate == nil {
-		return InboundAuthenticationResult{}, ErrNilRuntimeDependency
+func (validate InboundMessageValidatorFunc) ValidateInbound(message Message) (InboundValidationResult, error) {
+	if validate == nil {
+		return InboundValidationResult{}, ErrNilRuntimeDependency
 	}
-	return authenticate(sequence, message)
+	return validate(message)
 }
 
 // PeerSessionTerminalError retains the authenticated message for a caller that
@@ -56,10 +49,10 @@ func (terminal *PeerSessionTerminalError) Message() Message {
 }
 
 type ProtocolPump struct {
-	channel       FrameChannel
-	opener        InboundEnvelopeOpener
-	authenticator InboundMessageAuthenticator
-	router        InboundMessageRouter
+	channel   FrameChannel
+	opener    InboundEnvelopeOpener
+	validator InboundMessageValidator
+	router    InboundMessageRouter
 
 	started atomic.Bool
 }
@@ -67,14 +60,14 @@ type ProtocolPump struct {
 func NewProtocolPump(
 	channel FrameChannel,
 	opener InboundEnvelopeOpener,
-	authenticator InboundMessageAuthenticator,
+	validator InboundMessageValidator,
 	router InboundMessageRouter,
 ) (*ProtocolPump, error) {
-	if channel == nil || opener == nil || authenticator == nil || router == nil {
+	if channel == nil || opener == nil || validator == nil || router == nil {
 		return nil, ErrNilRuntimeDependency
 	}
 	return &ProtocolPump{
-		channel: channel, opener: opener, authenticator: authenticator, router: router,
+		channel: channel, opener: opener, validator: validator, router: router,
 	}, nil
 }
 
@@ -112,26 +105,26 @@ func (pump *ProtocolPump) acceptFrame(ctx context.Context, frame framechannel.Fr
 	if err != nil {
 		return pump.rejectLocally(fmt.Errorf("%w: %w", ErrInboundRejected, err))
 	}
-	authentication, err := pump.authenticator.AuthenticateInbound(opened.Sequence, message)
+	validation, err := pump.validator.ValidateInbound(message)
 	if err != nil {
-		return pump.rejectLocally(fmt.Errorf("%w: %w", ErrInboundAuthentication, err))
+		return pump.rejectLocally(fmt.Errorf("%w: %w", ErrInboundSemantic, err))
 	}
-	if authentication.operationViolation.valid() {
+	if validation.operationViolation.valid() {
 		bound, routeErr := pump.router.RouteAuthenticatedOperationViolation(
 			ctx,
 			message,
-			authentication.operationViolation,
+			validation.operationViolation,
 		)
 		cause := fmt.Errorf(
 			"%w: code=%d bound=%t",
 			ErrAuthenticatedOperationViolation,
-			authentication.operationViolation.code,
+			validation.operationViolation.code,
 			bound,
 		)
 		if routeErr != nil {
 			cause = fmt.Errorf("%w: route violation: %w", cause, routeErr)
 		}
-		if authentication.operationViolation.code == AuthenticatedOperationViolationMalformedPeerControl &&
+		if validation.operationViolation.code == AuthenticatedOperationViolationMalformedPeerControl &&
 			bound && routeErr == nil {
 			return nil
 		}
@@ -142,13 +135,6 @@ func (pump *ProtocolPump) acceptFrame(ctx context.Context, frame framechannel.Fr
 		return pump.rejectLocally(fmt.Errorf("%w: %w", ErrInboundRejected, err))
 	}
 	if disposition == OperationSessionTerminal {
-		semantic, semanticErr := SenderControlSemanticBody(message)
-		if semanticErr == nil {
-			_, semanticErr = DecodeSessionTerminal(semantic)
-		}
-		if semanticErr != nil {
-			return pump.rejectLocally(fmt.Errorf("%w: %w", ErrInboundRejected, semanticErr))
-		}
 		return &PeerSessionTerminalError{message: message}
 	}
 	return nil

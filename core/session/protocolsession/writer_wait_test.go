@@ -73,7 +73,7 @@ func TestSessionWriterWaitPathDeliversEveryQueueClass(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		receipt, err := writer.TrySenderControl(mustPreparedControl(t, MessageSessionTerminal, nil))
+		receipt, err := writer.TryTerminal(mustWriterControl(t, MessageSessionTerminal, nil))
 		if err != nil {
 			t.Fatal(err)
 		}

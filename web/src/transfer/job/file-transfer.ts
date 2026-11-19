@@ -1,4 +1,4 @@
-import { sourceMetadataFields } from '../../content/revision-comparison'
+import { compareRevisionDescriptors, sourceMetadataFields } from '../../content/revision-comparison'
 import { OutputCapacityBlockedError } from '../capacity-pressure/drain'
 import type { ShareDescriptor } from '../../catalog/records'
 import { ByteRangeSet, bigintToSafeNumber, byteRange, type ByteRange } from '../../content/geometry'
@@ -6,10 +6,16 @@ import {
   BLOCK_BROKER_PARALLEL_READS,
   type BlockRangeReader,
 } from '../../content/broker'
-import type {
-  OpenedRevision,
-  RevisionReader,
+import {
+  RevisionReopenedDuringRecoveryError,
+  type OpenedRevision,
+  type RevisionReader,
 } from '../../content/session-services'
+import {
+  observeReadmittedCoverage, observeRevisionReadmission, settleReopenedFile,
+  UNCONFIRMED_FILE_SETTLEMENT, rangeBytes, releaseRevisionLease, validateOpenedFileRevision,
+  type FileRevisionReadmission, type FileRevisionReadmissionObservation,
+} from './file-authority'
 import { encodeBase64Url } from '../../crypto/bytes'
 import type { IncidentScopeHandle } from '../../diagnostics/incident'
 import {
@@ -31,6 +37,7 @@ import {
   snapshotOutputFile,
   snapshotOutputFileRequest,
   type OutputFile,
+  type OutputFileTransaction,
   type OpenedOutputRevision,
   type OutputSession,
 } from '../output/session'
@@ -56,7 +63,6 @@ import {
   outputFault,
   promoteFaultScope,
 } from '../failure/fault'
-import { validateOpenedFileRevision } from './file-authority'
 import type { DirectTreeCoordinateContract } from './coordinate/direct-tree'
 import { withOutputSettlementTimeout } from '../settlement/output'
 import type { PerformanceFilePipelineObservation } from '../../diagnostics/performance/performance-runtime-observations'
@@ -67,8 +73,6 @@ export class RangeReaderContractError extends Error {
     this.name = 'RangeReaderContractError'
   }
 }
-
-const UNCONFIRMED_FILE_SETTLEMENT: FileTransferSettlement = Object.freeze({ kind: 'unconfirmed' })
 
 interface SettledFileFailure {
   readonly failure: NormalizedFileTransferFailure
@@ -90,168 +94,241 @@ export interface FileTransferOptions {
   readonly onWriteAcknowledged: (bytes: bigint, firstWrite: boolean) => void
   readonly onRecoverableAcknowledged?: (
     bytes: bigint,
-    transition: 'automatic-checkpoint' | 'final' | 'pause',
+    transition: 'automatic-checkpoint' | 'final' | 'pause' | 'readmission',
   ) => void
   readonly onSettlement: (settlement: FileTransferSettlement) => void
+  readonly onRevisionReadmission?: (event: FileRevisionReadmissionObservation) => void
   readonly checkpointClock?: CheckpointClock
   readonly onCheckpointObservation?: (event: CheckpointObservation) => void
 }
 
-type BoundOutputFileTransaction = ReturnType<typeof bindOutputFileTransaction>['transaction']
+/** Each attempt owns one lease and transaction. The file settles after its last attempt. */
+export async function transferFile(options: FileTransferOptions, pending: PendingFile): Promise<void> {
+  const retry = await transferFileAttempt(options, pending)
+  if (retry !== undefined) await transferFileAttempt(options, pending, retry)
+}
 
-/** Owns one revision lease and one output transaction from acquisition through settlement. */
-export async function transferFile(
+interface FileAttempt {
+  acquired?: OpenedRevision
+  transaction?: OutputFileTransaction
+  initialDurable?: ByteRangeSet
+  checkpoint?: FileCheckpointController
+  admitted: boolean
+}
+
+interface FileAttemptOutcome {
+  readonly settlement: FileTransferSettlement
+  readonly failure?: NormalizedFileTransferFailure
+  readonly capacityBlocked?: OutputCapacityBlockedError
+  readonly retry?: FileRevisionReadmission
+}
+
+async function transferFileAttempt(
   options: FileTransferOptions,
   pending: PendingFile,
-): Promise<void> {
-  const callerSignal = options.signal
+  previous?: FileRevisionReadmission,
+): Promise<FileRevisionReadmission | undefined> {
   const checkpointFailure = new AbortController()
-  options = { ...options, signal: AbortSignal.any([options.signal, checkpointFailure.signal]) }
-  let checkpoint: FileCheckpointController | undefined
-  let acquired: OpenedRevision | undefined
-  let opened: OpenedRevision | undefined
-  let transaction: BoundOutputFileTransaction | undefined
-  let primaryFailure: NormalizedFileTransferFailure | undefined
-  let capacityBlocked: OutputCapacityBlockedError | undefined
-  let settlement = UNCONFIRMED_FILE_SETTLEMENT
+  const active = { ...options, signal: AbortSignal.any([options.signal, checkpointFailure.signal]) }
+  const attempt: FileAttempt = { admitted: false }
+  let outcome: FileAttemptOutcome = { settlement: UNCONFIRMED_FILE_SETTLEMENT }
   try {
-    let revisionOpenAttempted = false
-    let revisionOpenFailure: Readonly<{ readonly reason: unknown }> | undefined
-    const request = snapshotOutputFileRequest({
-      source: {
-        shareInstance: encodeBase64Url(options.descriptor.shareInstance),
-        fileId: pending.entry.idText,
-      },
-      sourceAuthenticationPath: pending.sourceAuthenticationPath,
-      logicalArtifactPath: pending.logicalArtifactPath,
-      materializationRelativePath: pending.materializationRelativePath,
-      expectedSize: pending.entry.expectedSize,
-      ...(pending.parent.kind === 'materialized'
-        ? { parentAdmission: pending.parent.admission }
-        : {}),
-      ...(pending.modifiedTime === undefined || !options.output.capabilities.modificationTime
-        ? {}
-        : { modifiedTime: pending.modifiedTime }),
-      ...(options.performancePipeline === undefined
-        ? {}
-        : { performancePipeline: options.performancePipeline }),
-      openRevision: async (signal) => {
-        if (revisionOpenAttempted) {
-          throw new OutputTransactionContractError(
-            'output adapter invoked the authenticated revision callback more than once',
-          )
-        }
-        revisionOpenAttempted = true
-        options.performancePipeline?.transition('revision_open')
-        try {
-          acquired = await options.revisions.open(pending.entry.id, signal)
-          opened = validateOpenedFileRevision(options.descriptor, pending.entry, acquired)
-          return snapshotOpenedOutputRevision({
-            shareInstance: opened.descriptor.shareInstanceId,
-            fileId: opened.descriptor.fileIdText,
-            fileRevision: opened.descriptor.fileRevisionText,
-            ...sourceMetadataFields(opened.descriptor),
-            exactSize: opened.descriptor.exactSize,
-          })
-        } catch (reason) {
-          // Opening happens inside the adapter call, but remains source authority.
-          // Preserve that boundary so a file-local source fault is never promoted
-          // into an output mutation fault merely because the adapter awaited it.
-          revisionOpenFailure = Object.freeze({ reason })
-          throw reason
-        } finally {
-          options.performancePipeline?.transition('initial_lineage')
-        }
-      },
-    }, options.directTreeCoordinates)
-    const begun = await outputOperation(
-      options.signal,
-      'Unable to begin the output file transaction',
-      'output-write-failed',
-      () => options.output.beginFile(request, options.signal),
-      () => revisionOpenFailure,
-    )
-    const revision = snapshotOpenedOutputRevision(begun.revision)
-    if (revision.shareInstance !== request.source.shareInstance || revision.fileId !== request.source.fileId ||
-        (opened !== undefined && (revision.fileRevision !== opened.descriptor.fileRevisionText ||
-          revision.exactSize !== opened.descriptor.exactSize))) {
-      throw new OutputTransactionContractError('output adapter returned a different authenticated revision')
-    }
-    const outputFile = outputFileFor(
-      options.output,
-      pending,
-      revision,
-      options.directTreeCoordinates,
-    )
-    transaction = ownOutputFileTransaction(begun)
-    const bound = bindOutputFileTransaction(begun, outputFile, options.output)
-    transaction = bound.transaction
-    const activeTransaction = bound.transaction
-    options.performancePipeline?.transition('block_read_authentication')
-    const wanted = new ByteRangeSet(outputFile.exactSize, [byteRange(0n, outputFile.exactSize)])
-    const initialDurable = bound.initialDurable.asRangeSet()
-    const missing = bound.initialAccepted.missingFrom(wanted)
-    if (opened === undefined && (revisionOpenAttempted || options.output.capabilities.durability === 'None' || !initialDurable.missingFrom(wanted).empty)) {
-      throw new OutputTransactionContractError('output adapter omitted revision open without complete durable coverage')
-    }
-    options.onInitialCoverage?.({ durableBytes: rangeBytes(initialDurable), acceptedBytes: rangeBytes(bound.initialAccepted) })
-    const initialPendingBytes = rangeBytes(bound.initialAccepted) - rangeBytes(initialDurable)
-    checkpoint = registerFileCheckpoint(options.output, {
-      object: begun.checkpoint ?? { objectId: begun.durableRanges.ownership.ownedFileIdentity,
-        policy: { kind: 'disabled' } },
-      durableBytes: rangeBytes(initialDurable), pendingBytes: initialPendingBytes,
-      remainingBytes: rangeBytes(missing), signal: options.signal,
-      clock: options.checkpointClock ?? systemCheckpointClock,
-      checkpoint: async trigger => {
-        const result = await outputOperation(options.signal, 'Unable to checkpoint the output file',
-          'output-write-failed', () => activeTransaction.automaticCheckpoint(trigger, options.signal))
-        return result.kind === 'advanced'
-          ? { kind: 'advanced', durableBytes: rangeBytes(result.durable.asRangeSet()) } : result
-      },
-      onAdvanced: bytes => options.onRecoverableAcknowledged?.(bytes, 'automatic-checkpoint'),
-      onFailure: error => checkpointFailure.abort(error),
-      ...(options.onCheckpointObservation === undefined ? {} : { observe: options.onCheckpointObservation }),
-    })
-    let wrote = initialPendingBytes > 0n
-    for (const missingRange of missing.ranges) {
-      if (opened === undefined) throw new OutputTransactionContractError('missing bytes require a live revision lease')
-      wrote = await transferMissingRange(
-        options,
-        opened,
-        activeTransaction,
-        missingRange,
-        wrote,
-        checkpoint,
-      )
-    }
-    await checkpoint.drain()
-    options.performancePipeline?.transition('final_transaction')
-    await outputOperation(
-      options.signal,
-      'Unable to commit the output file',
-      'output-commit-failed',
-      () => activeTransaction.commit(options.signal),
-    )
-    settlement = Object.freeze({ kind: 'completed', exactSize: outputFile.exactSize })
-  } catch (error) {
-    const settlementError = await drainCheckpointFailure(checkpoint, error)
-    // The internal abort wakes a blocked reader; it must not recast a storage failure as user cancellation.
-    const settled = await settleTransferError({ ...options, signal: callerSignal }, transaction, settlementError)
-    primaryFailure = settled.failure
-    capacityBlocked = settled.capacityBlocked
-    settlement = settled.settlement
-  } finally {
     try {
-      // Storage progress is settled before remote cleanup, which can fail or wait
-      // for capacity without revoking the output transaction's durable evidence.
-      observeFileSettlement(options, settlement, checkpoint)
-    } finally {
-      await finishTransferFile(options, acquired, primaryFailure, capacityBlocked)
+      const admission = await admitFileAttempt(active, pending, attempt, previous)
+      outcome = { settlement: await writeFileAttempt(active, attempt, admission, checkpointFailure) }
+    } catch (error) {
+      outcome = await settleFileAttemptError(options, attempt, error, previous)
     }
+    return outcome.retry
+  } finally {
+    await finishFileAttempt(active, attempt, outcome)
   }
 }
 
-function observeFileSettlement(
+interface FileAttemptAdmission {
+  readonly opened: OpenedRevision | undefined
+  readonly outputFile: OutputFile
+  readonly bound: ReturnType<typeof bindOutputFileTransaction>
+  readonly checkpoint: Awaited<ReturnType<OutputSession['beginFile']>>['checkpoint']
+}
+
+interface OutputRevisionAdmission {
+  attempted: boolean
+  opened?: OpenedRevision
+  failure?: Readonly<{ reason: unknown }>
+}
+
+async function admitFileAttempt(
+  options: FileTransferOptions, pending: PendingFile, attempt: FileAttempt, previous?: FileRevisionReadmission,
+): Promise<FileAttemptAdmission> {
+  options.signal.throwIfAborted()
+  const revisionAdmission: OutputRevisionAdmission = { attempted: false }
+  const request = snapshotOutputFileRequest({
+    source: {
+      shareInstance: encodeBase64Url(options.descriptor.shareInstance),
+      fileId: pending.entry.idText,
+    },
+    sourceAuthenticationPath: pending.sourceAuthenticationPath,
+    logicalArtifactPath: pending.logicalArtifactPath,
+    materializationRelativePath: pending.materializationRelativePath,
+    expectedSize: pending.entry.expectedSize,
+    ...(pending.parent.kind === 'materialized' ? { parentAdmission: pending.parent.admission } : {}),
+    ...(pending.modifiedTime === undefined || !options.output.capabilities.modificationTime
+      ? {} : { modifiedTime: pending.modifiedTime }),
+    ...(options.performancePipeline === undefined ? {} : { performancePipeline: options.performancePipeline }),
+    openRevision: signal => openRevisionForOutput(options, pending, signal, attempt, revisionAdmission, previous),
+  }, options.directTreeCoordinates)
+  const begun = await outputOperation(
+    options.signal, 'Unable to begin the output file transaction', 'output-write-failed',
+    () => previous === undefined
+      ? options.output.beginFile(request, options.signal)
+      : options.output.readmitFile!(request, previous.paused, options.signal),
+    () => revisionAdmission.failure,
+  )
+  // A collaborator can return an invalid binding after acquiring a writer.
+  // Take ownership first so the attempt can still settle that writer.
+  attempt.transaction = ownOutputFileTransaction(begun)
+  const revision = snapshotOpenedOutputRevision(begun.revision)
+  const opened = revisionAdmission.opened
+  if (revision.shareInstance !== request.source.shareInstance || revision.fileId !== request.source.fileId ||
+      (opened !== undefined && (revision.fileRevision !== opened.descriptor.fileRevisionText ||
+        revision.exactSize !== opened.descriptor.exactSize))) {
+    throw new OutputTransactionContractError('output adapter returned a different authenticated revision')
+  }
+  const outputFile = outputFileFor(options.output, pending, revision, options.directTreeCoordinates)
+  const bound = bindOutputFileTransaction(begun, outputFile, options.output)
+  attempt.transaction = bound.transaction
+  options.performancePipeline?.transition('block_read_authentication')
+  const initialDurable = bound.initialDurable.asRangeSet()
+  attempt.initialDurable = initialDurable
+  if (opened === undefined && (previous !== undefined || revisionAdmission.attempted ||
+      options.output.capabilities.durability === 'None' || !initialDurable.covers(byteRange(0n, outputFile.exactSize)))) {
+    throw new OutputTransactionContractError('output adapter omitted revision open without complete durable coverage')
+  }
+  if (previous !== undefined && opened !== undefined) {
+    observeReadmittedCoverage(options, previous, opened.descriptor, initialDurable)
+  }
+  attempt.admitted = true
+  options.onInitialCoverage?.({ durableBytes: rangeBytes(initialDurable), acceptedBytes: rangeBytes(bound.initialAccepted) })
+  return { opened, outputFile, bound, checkpoint: begun.checkpoint }
+}
+
+async function openRevisionForOutput(
+  options: FileTransferOptions, pending: PendingFile, signal: AbortSignal, attempt: FileAttempt,
+  admission: OutputRevisionAdmission, previous?: FileRevisionReadmission,
+): Promise<OpenedOutputRevision> {
+  if (admission.attempted) {
+    throw new OutputTransactionContractError('output adapter invoked the authenticated revision callback more than once')
+  }
+  admission.attempted = true
+  options.performancePipeline?.transition('revision_open')
+  try {
+    attempt.acquired = await options.revisions.open(pending.entry.id, signal)
+    const opened = validateOpenedFileRevision(options.descriptor, pending.entry, attempt.acquired)
+    if (previous !== undefined && compareRevisionDescriptors(previous.previous, opened.descriptor).kind !== 'metadata-agreement') {
+      throw new RevisionReopenedDuringRecoveryError(previous.previous, opened.descriptor)
+    }
+    admission.opened = opened
+    return snapshotOpenedOutputRevision({
+      shareInstance: opened.descriptor.shareInstanceId,
+      fileId: opened.descriptor.fileIdText,
+      fileRevision: opened.descriptor.fileRevisionText,
+      ...sourceMetadataFields(opened.descriptor),
+      exactSize: opened.descriptor.exactSize,
+    })
+  } catch (reason) {
+    // Keep source authority through the adapter await so a source error cannot
+    // be mistaken for an output mutation failure.
+    admission.failure = Object.freeze({ reason })
+    throw reason
+  } finally {
+    options.performancePipeline?.transition('initial_lineage')
+  }
+}
+
+async function writeFileAttempt(
+  options: FileTransferOptions, attempt: FileAttempt, admission: FileAttemptAdmission,
+  checkpointFailure: AbortController,
+): Promise<FileTransferSettlement> {
+  const { bound, opened, outputFile } = admission
+  const transaction = bound.transaction
+  const wanted = new ByteRangeSet(outputFile.exactSize, [byteRange(0n, outputFile.exactSize)])
+  const missing = bound.initialAccepted.missingFrom(wanted)
+  const initialDurable = bound.initialDurable.asRangeSet()
+  const initialBytes = rangeBytes(initialDurable)
+  const initialPendingBytes = rangeBytes(bound.initialAccepted) - initialBytes
+  const checkpoint = registerFileCheckpoint(options.output, {
+    object: admission.checkpoint ?? { objectId: bound.initialDurable.ownership.ownedFileIdentity,
+      policy: { kind: 'disabled' } },
+    durableBytes: initialBytes, pendingBytes: initialPendingBytes,
+    remainingBytes: rangeBytes(missing), signal: options.signal,
+    clock: options.checkpointClock ?? systemCheckpointClock,
+    checkpoint: async trigger => {
+      const result = await outputOperation(options.signal, 'Unable to checkpoint the output file',
+        'output-write-failed', () => transaction.automaticCheckpoint(trigger, options.signal))
+      return result.kind === 'advanced'
+        ? { kind: 'advanced', durableBytes: rangeBytes(result.durable.asRangeSet()) } : result
+    },
+    onAdvanced: bytes => options.onRecoverableAcknowledged?.(bytes, 'automatic-checkpoint'),
+    onFailure: error => checkpointFailure.abort(error),
+    ...(options.onCheckpointObservation === undefined ? {} : { observe: options.onCheckpointObservation }),
+  })
+  attempt.checkpoint = checkpoint
+  options.signal.throwIfAborted()
+  let wrote = initialPendingBytes > 0n
+  for (const missingRange of missing.ranges) {
+    if (opened === undefined) throw new OutputTransactionContractError('missing bytes require a live revision lease')
+    wrote = await transferMissingRange(options, opened, transaction, missingRange, wrote, checkpoint)
+  }
+  await checkpoint.drain()
+  options.performancePipeline?.transition('final_transaction')
+  await outputOperation(options.signal, 'Unable to commit the output file', 'output-commit-failed',
+    () => transaction.commit(options.signal))
+  return Object.freeze({ kind: 'completed', exactSize: outputFile.exactSize })
+}
+
+async function settleFileAttemptError(
+  options: FileTransferOptions, attempt: FileAttempt, error: unknown, previous?: FileRevisionReadmission,
+): Promise<FileAttemptOutcome> {
+  const started = performance.now()
+  const failure = await drainCheckpointFailure(attempt.checkpoint, error)
+  // The checkpoint controller can abort the reader to drain it. The caller's
+  // signal still decides whether to start another attempt.
+  const outcome = failure instanceof RevisionReopenedDuringRecoveryError && attempt.transaction !== undefined &&
+      attempt.initialDurable !== undefined && options.output.readmitFile !== undefined
+    ? await settleReopenedFile(options, attempt.transaction, failure, attempt.initialDurable, started, previous !== undefined)
+    : await settleTransferError(options, attempt.transaction, failure)
+  if (previous === undefined || attempt.admitted || outcome.settlement.kind !== 'unconfirmed') return outcome
+  const compared = error instanceof RevisionReopenedDuringRecoveryError ? error : previous
+  const retainedBytes = rangeBytes(previous.paused.asRangeSet())
+  observeRevisionReadmission(options, previous.previous, compared.current, compared.comparison,
+    'admission-failed', retainedBytes, 0n, previous.started)
+  return { ...outcome, settlement: { kind: 'paused', retainedBytes } }
+}
+
+async function finishFileAttempt(
+  options: FileTransferOptions, attempt: FileAttempt, outcome: FileAttemptOutcome,
+): Promise<void> {
+  try {
+    observeSettlementCoverage(options, outcome.settlement, attempt.checkpoint)
+    if (outcome.retry === undefined) options.onSettlement(outcome.settlement)
+  } finally {
+    await retireFileAttemptLease(options, attempt, outcome)
+  }
+}
+
+async function retireFileAttemptLease(
+  options: FileTransferOptions, attempt: FileAttempt, outcome: FileAttemptOutcome,
+): Promise<void> {
+  try {
+    await finishTransferFile(options, attempt.acquired, outcome.failure, outcome.capacityBlocked)
+  } catch (error) {
+    if (outcome.retry !== undefined) options.onSettlement(outcome.settlement)
+    throw error
+  }
+}
+
+function observeSettlementCoverage(
   options: FileTransferOptions,
   settlement: FileTransferSettlement,
   checkpoint: FileCheckpointController | undefined,
@@ -263,7 +340,6 @@ function observeFileSettlement(
       options.onRecoverableAcknowledged?.(advancedBytes, settlement.kind === 'paused' ? 'pause' : 'final')
     }
   }
-  options.onSettlement(settlement)
 }
 
 async function drainCheckpointFailure(
@@ -275,7 +351,7 @@ async function drainCheckpointFailure(
 
 async function settleTransferError(
   options: FileTransferOptions,
-  transaction: BoundOutputFileTransaction | undefined,
+  transaction: OutputFileTransaction | undefined,
   error: unknown,
 ): Promise<SettledFileFailure> {
   if (error instanceof OutputCapacityBlockedError && !options.signal.aborted) {
@@ -323,7 +399,7 @@ function isWholeOutputFault(scope: FaultScope): boolean {
 
 async function persistSourceFailure(
   options: FileTransferOptions,
-  transaction: BoundOutputFileTransaction,
+  transaction: OutputFileTransaction,
   failure: Extract<NormalizedFileTransferFailure, { kind: 'fault' }>,
 ): Promise<NormalizedFileTransferFailure | undefined> {
   const fault = failure.fault
@@ -338,7 +414,7 @@ async function persistSourceFailure(
 
 async function settleFailedFileTransfer(
   options: FileTransferOptions,
-  transaction: BoundOutputFileTransaction | undefined,
+  transaction: OutputFileTransaction | undefined,
   failure: NormalizedFileTransferFailure,
 ): Promise<SettledFileFailure> {
   if (transaction === undefined) return { failure, settlement: UNCONFIRMED_FILE_SETTLEMENT }
@@ -352,7 +428,7 @@ async function settleFailedFileTransfer(
 
 async function settleFileFault(
   options: FileTransferOptions,
-  transaction: BoundOutputFileTransaction,
+  transaction: OutputFileTransaction,
   failure: Extract<NormalizedFileTransferFailure, { kind: 'fault' }>,
 ): Promise<NormalizedFileTransferFailure> {
   const authorization = authorizeFileRetirement(failure.fault)
@@ -368,7 +444,7 @@ async function settleFileFault(
       materializationFailureReason: failure.materializationFailureReason,
     })
   }
-  let disposition: Awaited<ReturnType<BoundOutputFileTransaction['retire']>>
+  let disposition: Awaited<ReturnType<OutputFileTransaction['retire']>>
   try {
     disposition = await withOutputSettlementTimeout(
       'retire output file transaction',
@@ -412,7 +488,7 @@ async function settleFileFault(
 
 async function pauseCanceledFileTransfer(
   options: FileTransferOptions,
-  transaction: BoundOutputFileTransaction,
+  transaction: OutputFileTransaction,
   failure: Extract<NormalizedFileTransferFailure, { kind: 'canceled' }>,
 ): Promise<SettledFileFailure> {
   try {
@@ -446,20 +522,6 @@ async function pauseCanceledFileTransfer(
       ),
       settlement: UNCONFIRMED_FILE_SETTLEMENT,
     }
-  }
-}
-
-async function releaseRevisionLease(
-  acquired: OpenedRevision | undefined,
-): Promise<NormalizedFileTransferFailure | undefined> {
-  if (acquired === undefined) return undefined
-  try {
-    // Release waits for shared-read safety and hands reclamation to the session.
-    // Remote acknowledgments cannot delay already-settled output.
-    await acquired.release()
-    return undefined
-  } catch (error) {
-    return normalizeFileTransferFailure(error, { stage: 'settlement' })
   }
 }
 
@@ -544,7 +606,7 @@ function outputFileFor(
 async function transferMissingRange(
   options: FileTransferOptions,
   opened: OpenedRevision,
-  transaction: BoundOutputFileTransaction,
+  transaction: OutputFileTransaction,
   requested: ByteRange,
   wrote: boolean,
   checkpoint: FileCheckpointController,
@@ -613,7 +675,7 @@ async function transferMissingRange(
 
 async function acceptAtomicOutputRange(
   options: FileTransferOptions,
-  transaction: BoundOutputFileTransaction,
+  transaction: OutputFileTransaction,
   offset: bigint,
   data: Uint8Array<ArrayBuffer>,
   wrote: boolean,
@@ -642,7 +704,7 @@ function atomicRangeAt(blockSize: bigint, offset: bigint, requestedEnd: bigint):
 
 async function writeAtomicRange(
   options: FileTransferOptions,
-  transaction: BoundOutputFileTransaction,
+  transaction: OutputFileTransaction,
   offset: bigint,
   data: Uint8Array<ArrayBuffer>,
 ): Promise<void> {
@@ -652,10 +714,6 @@ async function writeAtomicRange(
     'output-write-failed',
     () => transaction.writeRange(offset, data, options.signal),
   )
-}
-
-function rangeBytes(ranges: ByteRangeSet): bigint {
-  return ranges.ranges.reduce((total, range) => total + range.end - range.start, 0n)
 }
 
 async function outputOperation<T>(

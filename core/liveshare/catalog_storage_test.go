@@ -193,7 +193,6 @@ func TestPrepareSenderCatalogTracesUnusableStorageRoot(t *testing.T) {
 		harness.sender,
 		harness.authority,
 		nil,
-		harness.dependencies,
 	)
 	if err == nil {
 		t.Fatal("unusable catalog registry was accepted")
@@ -235,7 +234,6 @@ func TestPrepareSenderCatalogTracesCreationRecoveryAndBudgetRejection(t *testing
 		harness.sender,
 		harness.authority,
 		nil,
-		harness.dependencies,
 	)
 	if !errors.Is(err, catalog.ErrBudgetExceeded) {
 		t.Fatalf("recovered catalog budget error = %v", err)

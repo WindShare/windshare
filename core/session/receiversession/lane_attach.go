@@ -35,10 +35,7 @@ func (runtime *Runtime) RequestLane(
 	if message.Kind() != protocolsession.MessageLaneAttach {
 		return protocolsession.LaneGrant{}, session.ErrOperationMissing
 	}
-	unsigned, err := protocolsession.SenderControlSemanticBody(message)
-	if err != nil {
-		return protocolsession.LaneGrant{}, err
-	}
+	unsigned := message.Body()
 	return protocolsession.DecodeLaneGrant(unsigned, call.ID())
 }
 

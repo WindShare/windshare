@@ -2,7 +2,6 @@ package sessioncore
 
 import (
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session"
@@ -49,7 +48,6 @@ func TestTerminalPreAdmissionWriterStopRequiresNoUsableReplacement(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	privateKey := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
 	for _, test := range []struct {
 		name           string
 		addReplacement bool
@@ -97,7 +95,7 @@ func TestTerminalPreAdmissionWriterStopRequiresNoUsableReplacement(t *testing.T)
 				t.Fatalf("stopped-writer authority: usable=%v snapshot=%+v selected=%+v err=%v",
 					usable, current, selected, selectErr)
 			}
-			err := (&Responses{runtime: runtime, controlPreparer: testControlPreparer(privateKey)}).sendTerminalRecipients(
+			err := (&Responses{runtime: runtime}).sendTerminalRecipients(
 				context.Background(), body, recipients,
 			)
 			if test.wantError {
@@ -118,7 +116,6 @@ func TestTerminalPostAdmissionWriterStopRequiresNoUsableReplacement(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	privateKey := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
 	for _, test := range []struct {
 		name           string
 		addReplacement bool
@@ -150,7 +147,7 @@ func TestTerminalPostAdmissionWriterStopRequiresNoUsableReplacement(t *testing.T
 				result := make(chan error, 1)
 				go func() {
 					result <- (&Responses{
-						runtime: runtime, controlPreparer: testControlPreparer(privateKey),
+						runtime:          runtime,
 						terminalObserver: func(observation TerminalSendObservation) { observed <- observation },
 					}).sendTerminalRecipients(
 						context.Background(), body, recipients,
@@ -191,7 +188,6 @@ func TestTerminalClaimRejectedByLaneCancellationRequiresNoUsableReplacement(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	privateKey := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
 	for _, test := range []struct {
 		name           string
 		addReplacement bool
@@ -236,7 +232,7 @@ func TestTerminalClaimRejectedByLaneCancellationRequiresNoUsableReplacement(t *t
 				terminalResult := make(chan error, 1)
 				go func() {
 					terminalResult <- (&Responses{
-						runtime: runtime, controlPreparer: testControlPreparer(privateKey),
+						runtime:          runtime,
 						terminalObserver: func(observation TerminalSendObservation) { observed <- observation },
 					}).sendTerminalRecipients(
 						context.Background(), body, recipients,

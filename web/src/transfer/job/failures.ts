@@ -1,3 +1,4 @@
+import { RevisionEvidenceUnavailableError } from '../../content/revision-comparison'
 import { recordScopedFailure } from '../../diagnostics/incident/scope'
 import { withFailureEvidence } from '../../diagnostics/failure/attach'
 import type { FailureEvidenceInput } from '../../diagnostics/failure/evidence'
@@ -10,7 +11,6 @@ import {
   RemoteOperationError,
   RemoteRevisionError,
   RevisionCapacityBusyError,
-  RevisionChangedDuringRecoveryError,
   RevisionReopenedDuringRecoveryError,
   RevisionLeaseExpiredError,
 } from '../../content/session-services'
@@ -266,7 +266,7 @@ export function transferFileOutcomeEvidence(
     }
     const outputEvidence = declaredOutputFailure(error)?.fileOutcomeEvidence
     if (outputEvidence !== undefined) return outputEvidence
-    if (error instanceof RevisionChangedDuringRecoveryError ||
+    if (observedReopenedRevisionChange(error) ||
         error instanceof FileRevisionChangedError ||
         (error instanceof RemoteRevisionError &&
           (error.failure.code === REVISION_FAILURE_DRIFT ||
@@ -396,12 +396,17 @@ function remoteTransferFault(error: unknown): Fault | undefined {
   }
 }
 
+function observedReopenedRevisionChange(error: unknown): boolean {
+  return error instanceof RevisionReopenedDuringRecoveryError && error.comparison.kind === 'observed-change'
+}
+
 function sourceTransferFault(error: unknown): Fault | undefined {
   if (error instanceof RevisionReopenedDuringRecoveryError) {
-    return sourceFault(FaultScope.FileLocal, SourceFaultCode.Unavailable)
+    return sourceFault(FaultScope.FileLocal, observedReopenedRevisionChange(error)
+      ? SourceFaultCode.RevisionChanged : SourceFaultCode.Unavailable)
   }
-  if (error instanceof RevisionChangedDuringRecoveryError) {
-    return sourceFault(FaultScope.FileLocal, SourceFaultCode.RevisionInvalidated)
+  if (error instanceof RevisionEvidenceUnavailableError) {
+    return sourceFault(FaultScope.FileLocal, SourceFaultCode.Unavailable)
   }
   if (error instanceof FileRevisionChangedError) {
     return sourceFault(FaultScope.FileLocal, SourceFaultCode.RevisionChanged)
@@ -597,7 +602,7 @@ export function materializationFailureReason(
   }
   if (
     input instanceof FileRevisionChangedError ||
-    input instanceof RevisionChangedDuringRecoveryError
+    observedReopenedRevisionChange(input)
   ) {
     return 'source-revision-changed'
   }

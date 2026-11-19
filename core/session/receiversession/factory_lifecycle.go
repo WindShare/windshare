@@ -22,7 +22,7 @@ func (factory *Factory) finishClose() {
 	factory.sender = nil
 	factory.descriptor = catalog.ShareDescriptor{}
 	factory.verifier = nil
-	factory.opener = nil
+	factory.decoder = nil
 	factory.processReassembly = nil
 	factory.shareReassembly = nil
 	factory.plaintextProcess = nil

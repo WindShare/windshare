@@ -51,8 +51,7 @@ func receiverEndpointRetryable(err error) bool {
 	}
 	for _, terminal := range []error{ErrReceiverAuthentication, ErrReceiverShareChanged, relayv2.ErrProtocol,
 		protocolsession.ErrServerHelloMalformed, protocolsession.ErrServerHelloSignature,
-		protocolsession.ErrLaneSignature, protocolsession.ErrEnvelopeAuthentication,
-		protocolsession.ErrInboundAuthentication, protocolsession.ErrControlSignature} {
+		protocolsession.ErrLaneSignature, protocolsession.ErrEnvelopeAuthentication} {
 		if errors.Is(err, terminal) {
 			return false
 		}

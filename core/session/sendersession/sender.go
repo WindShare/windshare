@@ -298,11 +298,7 @@ func (factory *Factory) acceptClient(
 	wire, err := sessioncore.New(sessioncore.Config{
 		Share: factory.share, Role: protocolsession.RoleSender, Keys: keys,
 		LaneID: laneID, LaneEpoch: 0, Channel: handOff, Random: factory.random,
-		Authenticator: protocolsession.InboundMessageAuthenticatorFunc(
-			func(uint64, protocolsession.Message) (protocolsession.InboundAuthenticationResult, error) {
-				return protocolsession.InboundAuthenticationResult{}, nil
-			},
-		),
+		Validator:       protocolsession.InboundMessageValidatorFunc(protocolsession.ValidateReceiverMessage),
 		Continuations:   factory.peers,
 		OperationLimits: factory.operationLimits, RouterLimits: factory.routerLimits, Now: factory.now,
 		ProtocolObservations: factory.protocolObservations,
@@ -326,7 +322,7 @@ func (factory *Factory) acceptClient(
 		return nil, err
 	}
 	contentTransferred = true
-	outbound, err := newResponses(wire, factory.privateKey, factory.terminalObserver.sendObserver(), factory.protocolObservations)
+	outbound, err := newResponses(wire, factory.terminalObserver.sendObserver(), factory.protocolObservations)
 	if err != nil {
 		return nil, err
 	}

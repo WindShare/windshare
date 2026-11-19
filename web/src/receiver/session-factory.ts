@@ -39,7 +39,6 @@ export interface ReceiverSessionFactory {
     signal: AbortSignal,
     relayBase: string,
   ): Promise<AttachedRelay>
-  copyReadSecret(): Uint8Array<ArrayBuffer>
   close(): void
 }
 
@@ -165,11 +164,6 @@ export class BrowserSessionFactory implements ReceiverSessionFactory {
     } finally {
       admission.close()
     }
-  }
-
-  copyReadSecret(): Uint8Array<ArrayBuffer> {
-    this.#requireOpen()
-    return this.#capability.readSecret.slice()
   }
 
   close(): void {

@@ -22,14 +22,14 @@ import { createSignedRootCollisionFixture } from './signed-root-collision-fixtur
 import { runSignedCatalogOwnershipProbe } from './signed-catalog-ownership-probe'
 
 interface IdentityVector extends VectorCase {
-  readonly readSecretB64: string
+
   readonly senderPublicKeyB64: string
   readonly shareInstanceB64: string
 }
 
 interface SenderObjectVector extends VectorCase {
   readonly domain: string
-  readonly objectB64: string
+  readonly canonicalCborB64: string
 }
 
 function bytes(encoded: string): Uint8Array<ArrayBuffer> {
@@ -37,7 +37,7 @@ function bytes(encoded: string): Uint8Array<ArrayBuffer> {
 }
 
 describe('v2 catalog multi-receiver ownership', () => {
-  it('reports signed cross-page and cross-directory ownership collisions as protocol failures', async () => {
+  it('reports cross-page and cross-directory ownership collisions as protocol failures', async () => {
     await expect(runSignedCatalogOwnershipProbe(new MemoryCatalogPageStore())).resolves.toEqual({
       crossPageNameRejected: true,
       crossPageNodeRejected: true,
@@ -53,7 +53,6 @@ describe('v2 catalog multi-receiver ownership', () => {
     const protocolFailures: unknown[] = []
     const client = new CatalogClient({
       descriptor: fixture.descriptor,
-      readSecret: fixture.readSecret,
       operations: {
         fetchPage: async () => fixture.catalogObject,
         failProtocol: async (reason) => { protocolFailures.push(reason) },
@@ -82,7 +81,6 @@ describe('v2 catalog multi-receiver ownership', () => {
     const store = new ObservedCatalogStore()
     const client = new CatalogClient({
       descriptor: fixture.descriptor,
-      readSecret: fixture.readSecret,
       operations: {
         fetchPage: async () => {
           fetchStarted.resolve()
@@ -114,7 +112,6 @@ describe('v2 catalog multi-receiver ownership', () => {
     const store = new ObservedCatalogStore()
     const client = new CatalogClient({
       descriptor: fixture.descriptor,
-      readSecret: fixture.readSecret,
       operations: {
         fetchPage: async () => {
           fetchStarted.resolve()
@@ -143,7 +140,6 @@ describe('v2 catalog multi-receiver ownership', () => {
     const store = new ObservedCatalogStore(stageGate.promise)
     const client = new CatalogClient({
       descriptor: fixture.descriptor,
-      readSecret: fixture.readSecret,
       operations: { fetchPage: async () => fixture.catalogObject },
       store,
     })
@@ -170,13 +166,11 @@ describe('v2 catalog multi-receiver ownership', () => {
     })
     const publisher = new CatalogClient({
       descriptor: fixture.descriptor,
-      readSecret: fixture.readSecret,
       operations: { fetchPage: async () => fixture.catalogObject },
       store,
     })
     const observer = new CatalogClient({
       descriptor: fixture.descriptor,
-      readSecret: fixture.readSecret,
       operations: { fetchPage: async () => { throw new Error('committed directory was refetched') } },
       store,
     })
@@ -205,7 +199,6 @@ describe('v2 catalog multi-receiver ownership', () => {
     const protocolFailures: unknown[] = []
     const client = new CatalogClient({
       descriptor: fixture.descriptor,
-      readSecret: fixture.readSecret,
       operations: {
         fetchPage: async () => fixture.catalogObject,
         failProtocol: async (reason) => { protocolFailures.push(reason) },
@@ -246,12 +239,12 @@ describe('v2 catalog multi-receiver ownership', () => {
       fetchPage: async () => {
         fetches += 1
         await Promise.resolve()
-        return bytes(catalogObject.objectB64)
+        return bytes(catalogObject.canonicalCborB64)
       },
     }
     const options = {
       descriptor,
-      readSecret: bytes(identity.readSecretB64),
+
       operations,
       store,
       storageIdentity: 'capability-authority',
@@ -276,7 +269,6 @@ describe('v2 catalog multi-receiver ownership', () => {
     let fetches = 0
     const client = new CatalogClient({
       descriptor: fixture.descriptor,
-      readSecret: fixture.readSecret,
       operations: {
         fetchPage: async () => {
           fetches += 1
@@ -365,7 +357,6 @@ describe('v2 catalog multi-receiver ownership', () => {
     })
     const client = new CatalogClient({
       descriptor,
-      readSecret: bytes(identity.readSecretB64),
       operations: {
         fetchPage: async (_request, _signal, onProgress) => {
           onProgress?.({
@@ -373,7 +364,7 @@ describe('v2 catalog multi-receiver ownership', () => {
             attemptId: Uint8Array.from({ length: 16 }, () => 0x31),
             discoveredEntries: 257n,
           })
-          return bytes(catalogObject.objectB64)
+          return bytes(catalogObject.canonicalCborB64)
         },
       },
       store: new MemoryCatalogPageStore(),
@@ -393,7 +384,7 @@ describe('v2 catalog multi-receiver ownership', () => {
 
 function catalogVectorFixture(): {
   readonly descriptor: ShareDescriptor
-  readonly readSecret: Uint8Array<ArrayBuffer>
+
   readonly directoryId: Uint8Array<ArrayBuffer>
   readonly catalogObject: Uint8Array<ArrayBuffer>
 } {
@@ -419,9 +410,9 @@ function catalogVectorFixture(): {
       createdAtSeconds: 1n,
       pathPolicy: PATH_POLICY,
     }),
-    readSecret: bytes(identity.readSecretB64),
+
     directoryId,
-    catalogObject: bytes(catalogObject.objectB64),
+    catalogObject: bytes(catalogObject.canonicalCborB64),
   })
 }
 

@@ -42,7 +42,6 @@ type PreparedReceiver struct {
 
 	descriptor catalog.ShareDescriptor
 	factory    *receiversession.Factory
-	resources  *receiverRuntimeResources
 	closed     bool
 	closeDone  chan struct{}
 }
@@ -79,64 +78,37 @@ func PrepareReceiver(config ReceiverConfig) (*PreparedReceiver, error) {
 	if err != nil {
 		return nil, err
 	}
-	var resources *receiverRuntimeResources
-	fail := func(cause error) (*PreparedReceiver, error) {
-		if resources == nil {
-			keyTree.Destroy()
-		} else {
-			resources.Close()
-		}
-		return nil, cause
-	}
-	catalogKey, err := keyTree.CatalogKey()
-	if err != nil {
-		return fail(err)
-	}
-	verifier, err := catalogflow.NewCatalogObjectVerifier(catalogflow.CatalogObjectVerifierConfig{
-		ShareInstance: descriptor.ShareInstance(), CatalogKey: catalogKey.Bytes(), Sender: sender,
-	})
-	catalogKey.Destroy()
-	if err != nil {
-		return fail(err)
-	}
-	resources = newReceiverRuntimeResources(keyTree, verifier)
-	opener, err := records.NewOpener(records.OpenerConfig{
-		ShareInstance: descriptor.ShareInstance(), Keys: keyTree, Sender: sender,
-	})
-	if err != nil {
-		return fail(err)
-	}
+	defer keyTree.Destroy()
 	shareReassembly, err := contentflow.NewReassemblyAccount("live-get-share", contentflow.ReassemblyLimits{
 		Bytes: contentflow.DefaultShareReassemblyBytes, Records: contentflow.DefaultShareReassemblyRecords,
 	})
 	if err != nil {
-		return fail(err)
+		return nil, err
 	}
 	sessionAuthKey, err := keyTree.SessionAuthKey()
 	if err != nil {
-		return fail(err)
+		return nil, err
 	}
 	authKey := sessionAuthKey.Bytes()
 	sessionAuthKey.Destroy()
 	factory, err := receiversession.NewFactory(receiversession.FactoryConfig{
 		ContentRoutePolicy: config.ContentRoutePolicy,
 		Descriptor:         descriptor, SessionAuthKey: authKey, Sender: sender,
-		CatalogVerifier: verifier, RecordOpener: opener,
+		CatalogVerifier: catalogflow.CatalogPayloadDecoder{}, RecordDecoder: records.Decoder{ShareInstance: descriptor.ShareInstance()},
 		ReassemblyProcess: config.Capacity.reassembly, ReassemblyShare: shareReassembly, PlaintextProcess: config.Capacity.plaintext,
 		Random: config.Random, CatalogProgress: config.CatalogProgress, PeerControls: config.PeerControls,
 		ProtocolObservations:              config.ProtocolObservations,
 		LaneSettlementObservationCapacity: config.LaneSettlementObservationCapacity,
-		RuntimeResources:                  resources,
 	})
 	if err != nil {
 		clear(authKey)
-		return fail(err)
+		return nil, err
 	}
 	// The factory owns the only post-construction copy; retaining a facade alias
 	// would expand the secret lifetime without serving any receiver operation.
 	clear(authKey)
 	return &PreparedReceiver{
-		descriptor: descriptor, factory: factory, resources: resources,
+		descriptor: descriptor, factory: factory,
 		closeDone: make(chan struct{}),
 	}, nil
 }
@@ -183,19 +155,18 @@ func (receiver *PreparedReceiver) BeginClose() {
 	if receiver.closeDone == nil {
 		receiver.closeDone = make(chan struct{})
 	}
-	done, factory, resources := receiver.closeDone, receiver.factory, receiver.resources
+	done, factory := receiver.closeDone, receiver.factory
 	if factory != nil {
 		// Factory initiation is callback-free. Keeping it inside this transition
 		// lock makes every concurrent BeginClose return imply frozen handshakes.
 		factory.BeginClose()
 	}
 	receiver.mu.Unlock()
-	go receiver.finishClose(factory, resources, done)
+	go receiver.finishClose(factory, done)
 }
 
 func (receiver *PreparedReceiver) finishClose(
 	factory *receiversession.Factory,
-	resources *receiverRuntimeResources,
 	done chan struct{},
 ) {
 	if factory != nil {
@@ -203,12 +174,6 @@ func (receiver *PreparedReceiver) finishClose(
 	}
 	receiver.mu.Lock()
 	receiver.factory = nil
-	receiver.mu.Unlock()
-	if resources != nil {
-		resources.Close()
-	}
-	receiver.mu.Lock()
-	receiver.resources = nil
 	close(done)
 	receiver.mu.Unlock()
 }
@@ -223,88 +188,4 @@ func (receiver *PreparedReceiver) WaitClosed() {
 	if done != nil {
 		<-done
 	}
-}
-
-// receiverRuntimeResources delays secret destruction until every runtime that
-// can still authenticate content has released its lease. Closing the facade
-// still closes admission immediately; it must not invalidate an in-flight job.
-type receiverRuntimeResources struct {
-	mu       sync.Mutex
-	keyTree  *content.KeyTree
-	verifier *catalogflow.CatalogObjectVerifier
-	active   int
-	closed   bool
-}
-
-func newReceiverRuntimeResources(
-	keyTree *content.KeyTree,
-	verifier *catalogflow.CatalogObjectVerifier,
-) *receiverRuntimeResources {
-	return &receiverRuntimeResources{keyTree: keyTree, verifier: verifier}
-}
-
-func (resources *receiverRuntimeResources) AcquireReceiverRuntimeResources() (
-	receiversession.RuntimeResourceLease,
-	error,
-) {
-	resources.mu.Lock()
-	defer resources.mu.Unlock()
-	if resources.closed {
-		return nil, errReceiverClosed
-	}
-	resources.active++
-	return &receiverRuntimeResourceLease{resources: resources}, nil
-}
-
-func (resources *receiverRuntimeResources) Close() {
-	if resources == nil {
-		return
-	}
-	resources.mu.Lock()
-	resources.closed = true
-	keyTree, verifier := resources.takeSecretsIfIdle()
-	resources.mu.Unlock()
-	destroyReceiverSecrets(keyTree, verifier)
-}
-
-func (resources *receiverRuntimeResources) release() {
-	resources.mu.Lock()
-	resources.active--
-	keyTree, verifier := resources.takeSecretsIfIdle()
-	resources.mu.Unlock()
-	destroyReceiverSecrets(keyTree, verifier)
-}
-
-func (resources *receiverRuntimeResources) takeSecretsIfIdle() (
-	*content.KeyTree,
-	*catalogflow.CatalogObjectVerifier,
-) {
-	if !resources.closed || resources.active != 0 {
-		return nil, nil
-	}
-	keyTree, verifier := resources.keyTree, resources.verifier
-	resources.keyTree = nil
-	resources.verifier = nil
-	return keyTree, verifier
-}
-
-func destroyReceiverSecrets(keyTree *content.KeyTree, verifier *catalogflow.CatalogObjectVerifier) {
-	if verifier != nil {
-		verifier.Destroy()
-	}
-	if keyTree != nil {
-		keyTree.Destroy()
-	}
-}
-
-type receiverRuntimeResourceLease struct {
-	resources *receiverRuntimeResources
-	once      sync.Once
-}
-
-func (lease *receiverRuntimeResourceLease) Release() {
-	if lease == nil {
-		return
-	}
-	lease.once.Do(lease.resources.release)
 }

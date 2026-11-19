@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/turncontrol"
 )
@@ -57,26 +56,14 @@ func sessionControlCases(t *testing.T, f *fixture) []any {
 		name      string
 		kind      protocolsession.MessageKind
 		direction protocolsession.Direction
-		domain    protocolsession.ControlDomain
 		body      []byte
 	}{
-		{"peer-path-demand", protocolsession.MessagePeerPathControl, protocolsession.DirectionReceiverToSender, protocolsession.ControlDomainPeerPath, demand},
-		{"peer-path-mapping-ready", protocolsession.MessagePeerPathControl, protocolsession.DirectionSenderToReceiver, protocolsession.ControlDomainPeerPath, ready},
-		{"turn-demand", protocolsession.MessageTURNControl, protocolsession.DirectionReceiverToSender, protocolsession.ControlDomainTURN, turnDemand},
-		{"turn-grant", protocolsession.MessageTURNControl, protocolsession.DirectionSenderToReceiver, protocolsession.ControlDomainTURN, grant},
+		{"peer-path-demand", protocolsession.MessagePeerPathControl, protocolsession.DirectionReceiverToSender, demand},
+		{"peer-path-mapping-ready", protocolsession.MessagePeerPathControl, protocolsession.DirectionSenderToReceiver, ready},
+		{"turn-demand", protocolsession.MessageTURNControl, protocolsession.DirectionReceiverToSender, turnDemand},
+		{"turn-grant", protocolsession.MessageTURNControl, protocolsession.DirectionSenderToReceiver, grant},
 	} {
-		binding := protocolsession.ControlBinding{
-			ShareInstance: catalog.ShareInstance(f.shareInstance), ProtocolSessionID: protocolsession.ProtocolSessionID(header.SessionID),
-			LaneID: 7, LaneEpoch: 2, Direction: control.direction, Sequence: uint64(index + 10), MessageKind: control.kind,
-		}
-		body := control.body
-		if control.direction == protocolsession.DirectionSenderToReceiver {
-			body, err = protocolsession.SignControlBody(f.edPrivate, control.domain, binding, body)
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-		message, err := protocolsession.NewMessage(control.kind, nil, body)
+		message, err := protocolsession.NewMessage(control.kind, nil, control.body)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -87,8 +74,8 @@ func sessionControlCases(t *testing.T, f *fixture) []any {
 		result = append(result, sessionControlVector{
 			Name: control.name, Kind: control.kind, Direction: control.direction,
 			BodyB64: b64(control.body), PlaintextB64: b64(plaintext), SenderPublicKeyB64: b64(f.edPublic),
-			ShareInstanceB64: b64(binding.ShareInstance.Bytes()), ProtocolSessionIDB64: b64(binding.ProtocolSessionID.Bytes()),
-			LaneID: binding.LaneID, LaneEpoch: binding.LaneEpoch, Sequence: strconv.FormatUint(binding.Sequence, 10),
+			ShareInstanceB64: b64(f.shareInstance), ProtocolSessionIDB64: b64(header.SessionID[:]),
+			LaneID: 7, LaneEpoch: 2, Sequence: strconv.Itoa(index + 10),
 		})
 	}
 	return result

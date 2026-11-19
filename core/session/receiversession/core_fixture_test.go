@@ -71,16 +71,16 @@ func (reader *switchableReader) fail(err error) {
 
 type switchableAuthenticator struct {
 	mu      sync.Mutex
-	current protocolsession.InboundMessageAuthenticator
+	current protocolsession.InboundMessageValidator
 }
 
-func (auth *switchableAuthenticator) AuthenticateInbound(sequence uint64, message protocolsession.Message) (protocolsession.InboundAuthenticationResult, error) {
+func (auth *switchableAuthenticator) ValidateInbound(message protocolsession.Message) (protocolsession.InboundValidationResult, error) {
 	auth.mu.Lock()
 	current := auth.current
 	auth.mu.Unlock()
-	return current.AuthenticateInbound(sequence, message)
+	return current.ValidateInbound(message)
 }
-func sendAuthenticatedTestMessage(t *testing.T, runtime *sessioncore.Runtime, message protocolsession.Message, auth protocolsession.InboundMessageAuthenticator) {
+func sendAuthenticatedTestMessage(t *testing.T, runtime *sessioncore.Runtime, message protocolsession.Message, auth protocolsession.InboundMessageValidator) {
 	t.Helper()
 	fixture := testCore(runtime)
 	fixture.auth.mu.Lock()

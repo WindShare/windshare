@@ -245,8 +245,7 @@ func TestReceiverRuntimeCrossScopeOperationErrorIsRemoteSessionUnsafe(t *testing
 		t.Fatalf("decrypted receiver offer SDP=%q", offer.SDP)
 	}
 
-	// A valid block failure isolates the peer-scope check from generic CBOR, signature,
-	// and operation-error validation, so only the cross-scope authority is adversarial.
+	// A valid block failure isolates the peer-scope check from generic CBOR and operation-error validation, so only the cross-scope authority is adversarial.
 	failureBody, err := protocolsession.EncodeOperationFailure(protocolsession.OperationFailure{
 		Scope:   contentflow.BlockErrorScope,
 		Code:    contentflow.BlockCodeInvalidRef,
@@ -259,25 +258,10 @@ func TestReceiverRuntimeCrossScopeOperationErrorIsRemoteSessionUnsafe(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	signedFailureBody, err := protocolsession.SignControlBody(
-		registration.SenderPrivateKey,
-		protocolsession.ControlDomainOperation,
-		protocolsession.ControlBinding{
-			ShareInstance: share, ProtocolSessionID: sessionID,
-			LaneID: receiverRuntimeScopeInitialLaneID, LaneEpoch: serverHello.InitialLaneEpoch(),
-			Direction: protocolsession.DirectionSenderToReceiver,
-			Sequence:  responseSequence, MessageKind: protocolsession.MessageOperationError,
-			OperationID: operationID, HasOperationID: true,
-		},
-		failureBody,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	failureMessage, err := protocolsession.NewMessage(
 		protocolsession.MessageOperationError,
 		&operationID,
-		signedFailureBody,
+		failureBody,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -291,7 +275,7 @@ func TestReceiverRuntimeCrossScopeOperationErrorIsRemoteSessionUnsafe(t *testing
 		t.Fatal(err)
 	}
 	if sealedFailure.Sequence != responseSequence {
-		t.Fatalf("sealed response sequence=%d, signed sequence=%d", sealedFailure.Sequence, responseSequence)
+		t.Fatalf("sealed response sequence=%d, expected sequence=%d", sealedFailure.Sequence, responseSequence)
 	}
 	if err := senderLane.Send(ctx, framechannel.Frame(sealedFailure.Frame)); err != nil {
 		t.Fatal(err)

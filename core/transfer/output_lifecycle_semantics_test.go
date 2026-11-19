@@ -107,7 +107,7 @@ func TestHistoricalDeliveryCannotBecomeContentOrCommitEvidence(t *testing.T) {
 }
 
 func TestOutputLifecycleReasonsAndAuthorityFunctionAreClosedDomains(t *testing.T) {
-	if FilePauseReason(0).valid() || !FilePauseInterrupted.valid() || (FilePauseDependencyContract + 1).valid() {
+	if FilePauseReason(0).Valid() || !FilePauseInterrupted.Valid() || (FilePauseDependencyContract + 1).Valid() {
 		t.Fatal("file pause reason admitted a value outside its closed domain")
 	}
 	if JobPauseReason(0).valid() || !JobPauseInterrupted.valid() || (JobPauseDependencyContract + 1).valid() {

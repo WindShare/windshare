@@ -195,7 +195,7 @@ func (function PageCommitterFunc) Commit(input PageCommitInput) (PageCommitment,
 	return function(input)
 }
 
-// PageSealer is a consumer-side cryptographic boundary. Catalog owns atomic
+// PageSealer encodes immutable page payloads. Catalog owns atomic
 // persistence and replay of the returned bytes, but never interprets them.
 type PageSealer interface {
 	Seal(PageCommitInput) (SealedPageObject, error)

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { encode, rfc8949EncodeOptions } from 'cborg'
-import { decodeCatalogPage, decodeDirectoryFailure, decodeShareDescriptor, openCatalogObject, PATH_POLICY } from '../../src/catalog/records'
+import { decodeCatalogPage, decodeDirectoryFailure, decodeShareDescriptor, decodeCatalogPayload, PATH_POLICY } from '../../src/catalog/records'
 import { canonicalizeCatalogPath, snapshotCatalogPath } from '../../src/catalog/path-policy'
 import { sha256 } from '../../src/crypto/digest'
 import { decodeCanonicalCbor, encodeCanonicalCbor } from '../../src/protocol/cbor'
@@ -22,7 +22,7 @@ describe('catalog field-owned NFC', () => {
     expect(() => canonicalizeCatalogPath(text)).toThrow()
   })
 
-  it('authenticates a name in an opaque catalog result without changing its bytes', async () => {
+  it('carries a canonical catalog name through a session message without changing its bytes', async () => {
     const fixture = await createSignedCatalogFixture()
     try {
       const directoryId = fixture.descriptor.syntheticRoot
@@ -36,7 +36,7 @@ describe('catalog field-owned NFC', () => {
       const fields = decodeCanonicalCbor(decoded.body, 65536, 'catalog result') as Map<number, Uint8Array>
       const object = fields.get(1)!
       expect(object).toEqual(sealed.object)
-      const result = await openCatalogObject(object, fixture.descriptor, fixture.readSecret, { directoryId, pageIndex: 0, generation: id(3) })
+      const result = await decodeCatalogPayload(object, fixture.descriptor, { directoryId, pageIndex: 0, generation: id(3) })
       expect(result.kind).toBe('page')
       if (result.kind !== 'page') throw new Error('Expected a catalog page')
       expect(result.page.entries[0]?.name).toBe(name)
@@ -44,15 +44,15 @@ describe('catalog field-owned NFC', () => {
       expect(snapshotCatalogPath([name])).toEqual([name])
       expect(canonicalizeCatalogPath(`${name}/child`)).toBe(`${name}/child`)
       const corrupt = object.slice()
-      corrupt[corrupt.length - 1]! ^= 1
-      await expect(openCatalogObject(corrupt, fixture.descriptor, fixture.readSecret, { directoryId, pageIndex: 0, generation: id(3) })).rejects.toThrow()
+      corrupt[2] = 0
+      await expect(decodeCatalogPayload(corrupt, fixture.descriptor, { directoryId, pageIndex: 0, generation: id(3) })).rejects.toThrow()
     } finally { fixture.close() }
   })
 
   it.each(['e\u0301', '\ufeffa.txt', 'a\ufeff.txt', '../x', 'a/b', 'a\\b', '..', ''])('rejects unsafe name %j', async (text) => {
     const fields = page()
     fields.set(7, [[2, id(4), text, 12, null, 0, 0]])
-    await expect(decodeCatalogPage(wire(fields), id(1))).rejects.toThrow()
+    await expect(decodeCatalogPage(wire(fields))).rejects.toThrow()
   })
 
   it('rejects malformed UTF-8 instead of decoding a replacement scalar', async () => {
@@ -61,26 +61,26 @@ describe('catalog field-owned NFC', () => {
     const offset = encoded.indexOf(0x2e, encoded.length - 12)
     expect(offset).toBeGreaterThan(0)
     encoded[offset] = 0x80
-    await expect(decodeCatalogPage(encoded, id(1))).rejects.toThrow(/strict CBOR/)
+    await expect(decodeCatalogPage(encoded)).rejects.toThrow(/strict CBOR/)
   })
 
   it('does not admit text into any non-name page or entry field', async () => {
     for (const key of [0, 1, 2, 3, 4, 5, 6, 8]) {
       const fields = page()
       fields.set(key, name)
-      await expect(decodeCatalogPage(wire(fields), id(1))).rejects.toThrow()
+      await expect(decodeCatalogPage(wire(fields))).rejects.toThrow()
     }
     for (const index of [0, 1, 3, 4, 5, 6]) {
       const fields = page()
       const invalid = [...entry]
       invalid[index] = name
       fields.set(7, [invalid])
-      await expect(decodeCatalogPage(wire(fields), id(1))).rejects.toThrow()
+      await expect(decodeCatalogPage(wire(fields))).rejects.toThrow()
     }
     for (const invalid of [null, id(1), [name], new Map([[0, name]])]) {
       const fields = page()
       fields.set(7, [[2, id(4), invalid, 12, null, 0, 0]])
-      await expect(decodeCatalogPage(wire(fields), id(1))).rejects.toThrow()
+      await expect(decodeCatalogPage(wire(fields))).rejects.toThrow()
     }
   })
 
@@ -91,7 +91,7 @@ describe('catalog field-owned NFC', () => {
     ])
     descriptor.set(9, name)
     expect(() => decodeShareDescriptor(wire(descriptor))).toThrow()
-    const failure = new Map<number, unknown>([[0, 1], [1, id(1)], [2, id(2)], [3, id(3)], [4, 0x2001], [5, false], [6, null]])
+    const failure = new Map<number, unknown>([[0, 2], [1, id(1)], [2, id(2)], [3, id(3)], [4, 0x2001], [5, false], [6, null]])
     for (const key of failure.keys()) {
       const invalid = new Map(failure)
       invalid.set(key, name)

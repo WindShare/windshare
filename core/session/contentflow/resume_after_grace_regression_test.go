@@ -1,9 +1,7 @@
 package contentflow
 
 import (
-	"bytes"
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"io"
 	"slices"
@@ -186,23 +184,9 @@ func TestResumeAfterRelinquishmentReopensRevisionAndReusesCachedPrefix(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	readSecret := bytes.Repeat([]byte{0x6a}, content.ReadSecretBytes)
-	keys, err := content.NewKeyTree(readSecret, share)
-	if err != nil {
-		t.Fatal(err)
-	}
-	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x7b}, ed25519.SeedSize))
-	sealer, err := records.NewSealer(records.SealerConfig{
-		ShareInstance: share,
-		Keys:          keys,
-		SigningKey:    privateKey,
-		NonceSource:   bytes.NewReader(bytes.Repeat([]byte{0x8c}, records.ObjectNonceBytes*16)),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	sealer := records.Encoder{}
 	firstService, err := NewSenderService(SenderServiceConfig{
-		Store: store, SessionCapacity: firstSessionCapacity, Sealer: sealer, Cache: cache,
+		Store: store, SessionCapacity: firstSessionCapacity, Encoder: sealer, Cache: cache,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -217,7 +201,6 @@ func TestResumeAfterRelinquishmentReopensRevisionAndReusesCachedPrefix(t *testin
 		_ = store.Close()
 		_ = capacityOwner.Close()
 		revisionDeriver.Destroy()
-		keys.Destroy()
 	})
 
 	opened, err := firstService.Open(context.Background(), mustOpenRequest(t, file))
@@ -275,7 +258,7 @@ func TestResumeAfterRelinquishmentReopensRevisionAndReusesCachedPrefix(t *testin
 	}
 
 	secondService, err = NewSenderService(SenderServiceConfig{
-		Store: store, SessionCapacity: secondSessionCapacity, Sealer: sealer, Cache: cache,
+		Store: store, SessionCapacity: secondSessionCapacity, Encoder: sealer, Cache: cache,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -43,14 +43,17 @@ type Fragment struct {
 }
 
 func FragmentRecord(operationID protocolsession.OperationID, object []byte) ([]protocolsession.Message, error) {
-	if operationID.IsZero() || len(object) == 0 || len(object) > records.MaxBlockRecordObjectBytes {
+	return fragmentRecord(operationID, records.RecordIDFromObject(object), object)
+}
+
+func fragmentRecord(operationID protocolsession.OperationID, recordID records.RecordID, object []byte) ([]protocolsession.Message, error) {
+	if operationID.IsZero() || recordID.IsZero() || len(object) == 0 || len(object) > records.MaxBlockRecordObjectBytes {
 		return nil, ErrFragmentMalformed
 	}
 	count := (len(object) + MaxFragmentPayloadBytes - 1) / MaxFragmentPayloadBytes
 	if count == 0 || count > MaxFragmentCount {
 		return nil, ErrFragmentMalformed
 	}
-	recordID := records.RecordIDFromObject(object)
 	messages := make([]protocolsession.Message, count)
 	for index := range count {
 		start := index * MaxFragmentPayloadBytes

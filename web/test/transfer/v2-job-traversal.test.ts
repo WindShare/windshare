@@ -179,7 +179,7 @@ function page(
     entries,
     omittedCount: 0n,
     objectCommitment: terminal ? TERMINAL_COMMITMENT : FIRST_COMMITMENT,
-    senderObjectBytes: 1,
+    encodedBytes: 1,
   })
 }
 

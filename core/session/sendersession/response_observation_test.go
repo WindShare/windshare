@@ -60,7 +60,7 @@ func TestResponseObservationOwnershipFollowsSenderConstruction(t *testing.T) {
 		sender.Close()
 		// Both normal finalization and failed attachment must join their worker;
 		// synctest detects a constructor leaving either worker behind.
-		if outbound, err := newResponses(sender.core, fixture.senderFactory.privateKey, nil, output); !errors.Is(err, session.ErrRuntimeClosed) || outbound != nil {
+		if outbound, err := newResponses(sender.core, nil, output); !errors.Is(err, session.ErrRuntimeClosed) || outbound != nil {
 			t.Fatalf("closed runtime accepted response ownership: %v, %v", outbound, err)
 		}
 		output.Complete()

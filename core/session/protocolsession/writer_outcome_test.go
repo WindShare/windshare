@@ -211,8 +211,8 @@ func TestSendReceiptKeepsTransportFailureAndCallerTimeoutUncertain(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		second, err := writer.TryAuthorizedSenderControl(
-			mustPreparedControl(t, MessageOpenResults, &secondID), admission.Outbound,
+		second, err := writer.TryAuthorizedControl(
+			mustWriterControl(t, MessageOpenResults, &secondID), admission.Outbound,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -399,7 +399,7 @@ func TestSenderWriterRejectsDeliveredAdmissionWithoutReplayPermit(t *testing.T) 
 		t.Fatal(err)
 	}
 	operationID := testOperationID(212)
-	receipt, err := writer.TrySenderControl(mustPreparedControl(t, MessageOpenResults, &operationID))
+	receipt, err := writer.TryControl(mustWriterControl(t, MessageOpenResults, &operationID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,8 +442,8 @@ func queuedOpenResult(
 	if err != nil {
 		t.Fatal(err)
 	}
-	receipt, err := writer.TryAuthorizedSenderControl(
-		mustPreparedControl(t, MessageOpenResults, &operationID), admission.Outbound,
+	receipt, err := writer.TryAuthorizedControl(
+		mustWriterControl(t, MessageOpenResults, &operationID), admission.Outbound,
 	)
 	if err != nil {
 		t.Fatal(err)

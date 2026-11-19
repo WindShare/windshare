@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/content"
 )
 
 func TestSharedBlockCacheCloseCancelsAndJoinsLoader(t *testing.T) {
@@ -32,7 +33,7 @@ func TestSharedBlockCacheCloseCancelsAndJoinsLoader(t *testing.T) {
 		loaderExited := make(chan struct{})
 		getDone := make(chan error, 1)
 		go func() {
-			_, getErr := cache.Get(context.Background(), key, func(loadContext context.Context) ([]byte, error) {
+			_, getErr := cache.get(context.Background(), key, func(loadContext context.Context) ([]byte, error) {
 				close(loadStarted)
 				<-loadContext.Done()
 				close(cancellationObserved)
@@ -71,7 +72,7 @@ func TestSharedBlockCacheCloseCancelsAndJoinsLoader(t *testing.T) {
 		}
 
 		unexpectedLoad := false
-		if _, err := cache.Get(context.Background(), key, func(context.Context) ([]byte, error) {
+		if _, err := cache.get(context.Background(), key, func(context.Context) ([]byte, error) {
 			unexpectedLoad = true
 			return []byte{1}, nil
 		}); !errors.Is(err, ErrServiceClosed) {
@@ -114,7 +115,7 @@ func TestSharedBlockCacheLoaderCanStopWithoutSelfJoin(t *testing.T) {
 		stopReturned := make(chan struct{})
 		getDone := make(chan error, 1)
 		go func() {
-			_, getErr := cache.Get(context.Background(), key, func(context.Context) ([]byte, error) {
+			_, getErr := cache.get(context.Background(), key, func(context.Context) ([]byte, error) {
 				cache.Stop()
 				close(stopReturned)
 				return nil, ErrServiceClosed
@@ -134,4 +135,33 @@ func TestSharedBlockCacheLoaderCanStopWithoutSelfJoin(t *testing.T) {
 			t.Fatalf("self-stopped cache retained bytes: cache=%d process=%d", cache.UsedBytes(), process.Used())
 		}
 	})
+}
+
+func TestBlockCacheRejectsPayloadThatDiffersFromCommittedRecord(t *testing.T) {
+	share := flowID[catalog.ShareInstance](1)
+	budget, err := NewProcessCacheBudget(64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache, err := NewSharedBlockCache(share, 64, budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+	key := BlockCacheKey{ShareInstance: share, FileID: flowID[catalog.FileID](2), FileRevision: flowID[content.FileRevision](3)}
+	load := func(context.Context) ([]byte, error) { return []byte("committed"), nil }
+	first, err := cache.get(t.Context(), key, load)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	entry := cache.entries[key].Value.(*cacheEntry)
+	entry.block.payload[0] ^= 1
+	if _, err := cache.get(t.Context(), key, load); !errors.Is(err, errBlockCacheIntegrity) {
+		t.Fatalf("corrupted block was not refused: %v", err)
+	}
+	reloaded, err := cache.get(t.Context(), key, load)
+	if err != nil || reloaded.recordID != first.recordID || string(reloaded.payload) != "committed" {
+		t.Fatalf("reloaded payload=%q id=%x err=%v", reloaded.payload, reloaded.recordID, err)
+	}
 }

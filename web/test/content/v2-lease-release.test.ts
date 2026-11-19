@@ -11,12 +11,11 @@ import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
 import { deferred, id, SHARE } from '../session/v2-send-fixture'
 
 interface IdentityVector extends VectorCase {
-  readonly readSecretB64: string
   readonly senderPublicKeyB64: string
   readonly shareInstanceB64: string
   readonly fileIdB64: string
 }
-interface ObjectVector extends VectorCase { readonly domain: string; readonly objectB64: string }
+interface ObjectVector extends VectorCase { readonly domain: string; readonly canonicalCborB64: string }
 const identity = loadVectorFile(new URL('../../../core/testvectors/v2-identity.json', import.meta.url))
   .cases[0] as IdentityVector
 const revision = loadVectorFile(new URL('../../../core/testvectors/v2-sender-objects.json', import.meta.url))
@@ -46,7 +45,7 @@ function fixture() {
     if (kind === MESSAGE_KIND.openRevisions) {
       response = MESSAGE_KIND.openResults
       body = encodeBody(new Map<number, unknown>([
-        [0, 1], [1, [[fileId, 0, bytes(revision.objectB64), leaseId, 120_000, 60_000]]],
+        [0, 1], [1, [[fileId, 0, bytes(revision.canonicalCborB64), leaseId, 120_000, 60_000]]],
       ]))
     } else if (kind === MESSAGE_KIND.renewLease) {
       response = MESSAGE_KIND.leaseResult
@@ -69,7 +68,7 @@ function fixture() {
   } as unknown as ReceiverSessionRuntime
   const lanes = new LaneSet()
   lanes.add({ id: 1, fetchBlock: async () => { throw new Error('unused') } }, 'direct')
-  const revisions = new RevisionService(session, share, bytes(identity.readSecretB64), lanes, {
+  const revisions = new RevisionService(session, share, lanes, {
     now: () => Date.now(), beforeLeaseRelease: () => barrier.promise,
     onLeaseRetirement: event => retirements.push(event),
   })

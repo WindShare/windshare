@@ -132,9 +132,7 @@ func (session *Session) reserveFile(
 	}
 	if exists {
 		entry := session.fileClaims[reference.id]
-		if reference.kind != ClaimFile || entry == nil || entry.claim.file != file ||
-
-			entry.claim.destination != destination ||
+		if reference.kind != ClaimFile || entry == nil || entry.claim.destination != destination ||
 			entry.claim.destinationLocatorKey != destinationLocatorKey {
 			return nil, nil, false, session.fileBindingTraceLocked(operationID, reference.id),
 				session.rejectDirectoryBindingLocked(ErrDirectoryBinding)
@@ -142,6 +140,13 @@ func (session *Session) reserveFile(
 		if owner, claimed := session.destinationClaims[destinationLocatorKey]; !claimed || owner != reference {
 			return nil, nil, false, session.fileBindingTraceLocked(operationID, reference.id),
 				session.markInvariantFailureLocked()
+		}
+		if entry.retryablePause() && sameFileSlot(entry.claim.file, file) {
+			return session.reserveReopenedFileLocked(operationID, entry, file, sourceParent)
+		}
+		if entry.claim.file != file {
+			return nil, nil, false, session.fileBindingTraceLocked(operationID, reference.id),
+				session.rejectDirectoryBindingLocked(ErrDirectoryBinding)
 		}
 		switch {
 		case entry.beginOperation != nil:
@@ -209,6 +214,54 @@ func (session *Session) reserveFile(
 	return entry, nil, false,
 		session.traceLocked(operationID, OperationBeginFile, TraceReserved, claimID, ClaimFile,
 			ClaimPending, ClaimPending, fault.Fault{}), nil
+}
+
+func (entry *fileEntry) retryablePause() bool {
+	return entry.state == fileSettled && entry.terminalAction == actionPause &&
+		entry.terminalArgument == uint8(transfer.FilePauseRevisionReopened) &&
+		entry.settlement.Kind() == transfer.FilePaused
+}
+
+func sameFileSlot(previous, current transfer.MaterializationFile) bool {
+	return previous.SourcePath() == current.SourcePath() && previous.ArtifactPath() == current.ArtifactPath() &&
+		previous.MaterializationRelativePath() == current.MaterializationRelativePath() &&
+		previous.Parent() == current.Parent() && previous.Target().Locator() == current.Target().Locator() &&
+		previous.Descriptor().ShareInstance() == current.Descriptor().ShareInstance() &&
+		previous.Descriptor().FileID() == current.Descriptor().FileID() &&
+		previous.ExpectedSize() == current.ExpectedSize()
+}
+
+func (session *Session) reserveReopenedFileLocked(
+	operationID uint64, previous *fileEntry, file transfer.MaterializationFile, parent *directoryEntry,
+) (*fileEntry, *fileBeginOperation, bool, TraceEvent, error) {
+	claim := previous.claim
+	if err := session.operationRejectionLocked(); err != nil {
+		return nil, nil, false, session.fileBindingTraceLocked(operationID, claim.id), err
+	}
+	if parent != nil && (parent.state != directoryAdmitted || parent.uncertain) {
+		return nil, nil, false, session.fileBindingTraceLocked(operationID, claim.id),
+			session.rejectDirectoryBindingLocked(ErrDirectoryBinding)
+	}
+	if session.fileSlots >= session.limits.ActiveFileClaims {
+		value, _ := fault.NewOutput(fault.ScopeOutputPause, fault.OutputResourceBudget)
+		session.requirePauseLocked(value, false)
+		return nil, nil, false, session.fileBindingTraceLocked(operationID, claim.id), resourceBudgetError()
+	}
+	// Keeping the same logical claim prevents a second owner taking the name.
+	// The closed transaction retains its own entry for terminal replay.
+	claim.file = file
+	entry := &fileEntry{
+		claim: claim, state: filePending,
+		beginOperation: &fileBeginOperation{done: make(chan struct{}), previous: previous},
+	}
+	session.fileClaims[claim.id] = entry
+	session.fileSlots++
+	if err := session.adjustActiveAncestorsLocked(claim.parent, true); err != nil {
+		return nil, nil, false, session.fileBindingTraceLocked(operationID, claim.id),
+			session.markInvariantFailureLocked()
+	}
+	return entry, nil, false, session.traceLocked(operationID, OperationBeginFile, TraceReserved,
+		claim.id, ClaimFile, ClaimSettled, ClaimPending, fault.Fault{}), nil
 }
 
 func (session *Session) validateFileParentLocked(
@@ -298,7 +351,7 @@ func (session *Session) commitFileBegin(
 			)
 		}
 		transaction = &guardedTransaction{
-			session: session, claimID: entry.claim.id, executor: observation.Transaction, binding: binding,
+			session: session, entry: entry, executor: observation.Transaction, binding: binding,
 		}
 		var err error
 		start, err = transfer.NewFileTransactionStart(transaction, observation.Progress)
@@ -409,7 +462,12 @@ func (session *Session) completeFileBeginRollbackLocked(
 		err = joinFailures(ctx, err, session.markInvariantFailureLocked())
 	}
 	operation.err = err
-	session.removeFileReservationLocked(entry)
+	if operation.previous == nil {
+		session.removeFileReservationLocked(entry)
+	} else {
+		session.fileClaims[entry.claim.id] = operation.previous
+		session.fileSlots--
+	}
 	close(operation.done)
 	return err
 }

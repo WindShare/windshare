@@ -1,9 +1,7 @@
 package protocolsession
 
 import (
-	"bytes"
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"sync"
@@ -14,99 +12,6 @@ import (
 
 	"github.com/windshare/windshare/core/senderauth"
 )
-
-func TestSessionWriterSignsTheExactEmittedSequence(t *testing.T) {
-	vector, key, envelopeBinding := loadEnvelopeVector(t, "sender-signed-operation-error")
-	operationID, err := OperationIDFromBytes(decodeB64(t, vector.OperationIDB64))
-	if err != nil {
-		t.Fatal(err)
-	}
-	operations, _ := NewOperationTable(OperationLimits{MaxActive: 4, MaxTracked: 4}, nil)
-	router, _ := NewRoleRouter(RoleSender, operations)
-	request := mustMessage(t, MessageListChildren, &operationID, map[uint64]any{0: uint64(1)})
-	operationAdmission, err := operations.ObserveInbound(DirectionReceiverToSender, request)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	sealer, err := NewEnvelopeSealer(key, envelopeBinding, bytes.NewReader(sequentialBytes(0x40, EnvelopeNonceBytes)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	const emittedSequence = uint64(41)
-	sealer.next = emittedSequence
-	channel := newRuntimeChannel(0)
-	writer, err := NewSessionWriter(channel, sealer, router)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	signingKey := vectorSenderSigningKey()
-	publicKey := append(ed25519.PublicKey(nil), signingKey.Public().(ed25519.PublicKey)...)
-	unsigned, err := EncodeOperationFailure(OperationFailure{
-		Scope: OperationScopePeer, PeerAttempt: testPeerAttemptBinding(), Code: PeerOperationCodeNegotiation, Message: "Peer negotiation failed",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	base := ControlBinding{
-		ShareInstance: envelopeBinding.ShareInstance, ProtocolSessionID: envelopeBinding.ProtocolSessionID,
-		LaneID: envelopeBinding.LaneID, LaneEpoch: envelopeBinding.LaneEpoch, Direction: DirectionSenderToReceiver,
-	}
-	prepared, err := PrepareSenderControl(signingKey, base, MessageOperationError, &operationID, unsigned)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Prepared controls own their signing material and body until the writer
-	// invokes the callback.
-	signingKey[0] ^= 1
-	unsigned[0] ^= 1
-	receipt, err := writer.TryAuthorizedSenderControl(prepared, operationAdmission.Outbound)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	runDone := make(chan error, 1)
-	go func() { runDone <- writer.Run(ctx) }()
-	if outcome, err := receipt.Wait(context.Background()); err != nil || outcome != SendOutcomeTransportConfirmed {
-		t.Fatalf("send signed control: outcome=%d err=%v", outcome, err)
-	}
-	cancel()
-	if err := <-runDone; !errors.Is(err, context.Canceled) {
-		t.Fatalf("writer stop = %v", err)
-	}
-
-	channel.mu.Lock()
-	if len(channel.sent) != 1 {
-		channel.mu.Unlock()
-		t.Fatalf("sent frames = %d", len(channel.sent))
-	}
-	frame := append([]byte(nil), channel.sent[0]...)
-	channel.mu.Unlock()
-	opener := mustOpener(t, key, envelopeBinding)
-	opener.next = emittedSequence
-	opened, err := opener.Open(frame)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if opened.Sequence != emittedSequence {
-		t.Fatalf("emitted sequence = %d, want %d", opened.Sequence, emittedSequence)
-	}
-	message, err := DecodeMessage(opened.Plaintext)
-	if err != nil {
-		t.Fatal(err)
-	}
-	authenticator, err := NewSenderControlAuthenticator(checkedSender(t, publicKey), base, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := authenticator.AuthenticateInbound(opened.Sequence, message); err != nil {
-		t.Fatalf("signature did not bind emitted sequence: %v", err)
-	}
-	if _, err := authenticator.AuthenticateInbound(opened.Sequence+1, message); !errors.Is(err, ErrControlSignature) {
-		t.Fatalf("signature accepted a different sequence: %v", err)
-	}
-}
 
 func TestSessionWriterControlPriorityAndFairDataBurst(t *testing.T) {
 	policy := &permissivePolicy{direction: DirectionSenderToReceiver}
@@ -127,8 +32,8 @@ func TestSessionWriterControlPriorityAndFairDataBurst(t *testing.T) {
 	go func() { runDone <- writer.Run(ctx) }()
 	<-channel.firstStarted
 
-	prepared := mustPreparedControl(t, MessageOperationError, &operationID)
-	controlReceipt, err := writer.TrySenderControl(prepared)
+	prepared := mustWriterControl(t, MessageOperationError, &operationID)
+	controlReceipt, err := writer.TryControl(prepared)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +74,7 @@ func TestSessionWriterSustainedControlStillAdvancesData(t *testing.T) {
 	}
 	operationID := testOperationID(61)
 	for range MaximumControlBurst * 2 {
-		if _, err := writer.TrySenderControl(mustPreparedControl(t, MessageOperationError, &operationID)); err != nil {
+		if _, err := writer.TryControl(mustWriterControl(t, MessageOperationError, &operationID)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -221,8 +126,8 @@ func TestSessionWriterTerminalAdmissionIsImmediateAndOutOfBand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	terminal := mustPreparedControl(t, MessageSessionTerminal, nil)
-	terminalReceipt, err := writer.TrySenderControl(terminal)
+	terminal := mustWriterControl(t, MessageSessionTerminal, nil)
+	terminalReceipt, err := writer.TryTerminal(terminal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +143,7 @@ func TestSessionWriterTerminalAdmissionIsImmediateAndOutOfBand(t *testing.T) {
 	if _, err := writer.TryData(mustFragmentMessage(t, operationID, 2)); !errors.Is(err, ErrWriterTerminal) {
 		t.Fatalf("post-terminal data = %v", err)
 	}
-	if _, err := writer.TrySenderControl(terminal); !errors.Is(err, ErrWriterTerminal) {
+	if _, err := writer.TryTerminal(terminal); !errors.Is(err, ErrWriterTerminal) {
 		t.Fatalf("duplicate terminal = %v", err)
 	}
 	if err := writer.Run(context.Background()); err != nil {
@@ -303,13 +208,6 @@ func TestSessionWriterBoundedQueuesClassesAndStopReceipts(t *testing.T) {
 	if _, err := dataWriter.TryData(data); !errors.Is(err, ErrDataQueueFull) {
 		t.Fatalf("data frame bound: %v", err)
 	}
-	unsignedSenderControl := mustMessage(t, MessageOperationError, &operationID, map[uint64]any{0: uint64(1)})
-	if _, err := dataWriter.TryControl(unsignedSenderControl); !errors.Is(err, ErrSequenceBoundControl) {
-		t.Fatalf("unsigned sender control = %v", err)
-	}
-	if _, err := dataWriter.tryControlWithSequence(1, func(uint64) (Message, error) { return controlMessage, nil }); !errors.Is(err, ErrSequenceBoundControl) {
-		t.Fatalf("raw sender builder = %v", err)
-	}
 	if _, err := dataWriter.TryControl(data); !errors.Is(err, ErrMessageClass) {
 		t.Fatalf("data through control queue = %v", err)
 	}
@@ -324,100 +222,13 @@ func TestSessionWriterBoundedQueuesClassesAndStopReceipts(t *testing.T) {
 	}
 }
 
-func TestSessionWriterPropagatesBuilderSealerAndTransportFailures(t *testing.T) {
-	operationID := testOperationID(90)
-	policy := &permissivePolicy{direction: DirectionReceiverToSender}
-	tests := []struct {
-		name    string
-		sealer  OutboundEnvelopeSealer
-		channel FrameChannel
-		build   sequencedMessageBuilder
-		size    int
-		want    error
-	}{
-		{
-			name: "builder", sealer: &passthroughSealer{}, channel: newRuntimeChannel(0),
-			build: func(uint64) (Message, error) { return Message{}, errors.New("build failed") }, size: 1, want: ErrSequencedBuild,
-		},
-		{
-			name: "sealer sequence", sealer: &wrongSequenceSealer{}, channel: newRuntimeChannel(0),
-			build: func(uint64) (Message, error) {
-				return mustMessage(t, MessageListChildren, &operationID, map[uint64]any{0: uint64(1)}), nil
-			},
-			size: len(mustPlaintext(t, mustMessage(t, MessageListChildren, &operationID, map[uint64]any{0: uint64(1)}))), want: ErrSealerSequence,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			writer, _ := NewSessionWriter(test.channel, test.sealer, policy)
-			receipt, err := writer.tryControlWithSequence(test.size, test.build)
-			if err != nil {
-				t.Fatal(err)
-			}
-			runErr := writer.Run(context.Background())
-			if !errors.Is(runErr, test.want) {
-				t.Fatalf("run error = %v, want %v", runErr, test.want)
-			}
-			if outcome, err := receipt.Wait(context.Background()); !errors.Is(err, test.want) || outcome != SendOutcomeDropped {
-				t.Fatalf("receipt outcome=%d error=%v, want %v", outcome, err, test.want)
-			}
-		})
-	}
-	if _, err := NewSessionWriter(nil, &passthroughSealer{}, policy); !errors.Is(err, ErrNilRuntimeDependency) {
-		t.Fatalf("nil writer dependency = %v", err)
-	}
-	if _, err := PrepareSenderControl(nil, ControlBinding{}, MessageOperationError, &operationID, []byte{0xa0}); !errors.Is(err, ErrControlSigningKey) {
-		t.Fatalf("invalid prepared key = %v", err)
-	}
-}
-
-func TestSessionWriterRejectsSequencedMismatchAndPolicyDropsWithoutConsumingSequence(t *testing.T) {
+func TestSessionWriterDropsWithoutConsumingSequence(t *testing.T) {
 	operationID := testOperationID(124)
 	message := mustMessage(t, MessageListChildren, &operationID, map[uint64]any{0: uint64(1)})
-	plaintext := mustPlaintext(t, message)
-	for name, candidate := range map[string]struct {
-		reserved int
-		build    sequencedMessageBuilder
-		want     error
-	}{
-		"nil builder":      {reserved: len(plaintext)},
-		"zero reservation": {build: func(uint64) (Message, error) { return message, nil }},
-		"size mismatch": {
-			reserved: len(plaintext) + 1,
-			build:    func(uint64) (Message, error) { return message, nil },
-			want:     ErrSequencedSize,
-		},
-		"wrong class": {
-			reserved: len(mustPlaintext(t, mustFragmentMessage(t, operationID, 1))),
-			build:    func(uint64) (Message, error) { return mustFragmentMessage(t, operationID, 1), nil },
-			want:     ErrMessageClass,
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			writer, _ := NewSessionWriter(newRuntimeChannel(0), &passthroughSealer{}, &permissivePolicy{direction: DirectionReceiverToSender})
-			receipt, err := writer.tryControlWithSequence(candidate.reserved, candidate.build)
-			if candidate.want == nil {
-				if !errors.Is(err, ErrSequencedBuild) {
-					t.Fatalf("admission error = %v", err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := writer.Run(context.Background()); !errors.Is(err, candidate.want) {
-				t.Fatalf("run error = %v, want %v", err, candidate.want)
-			}
-			if outcome, err := receipt.Wait(context.Background()); !errors.Is(err, candidate.want) || outcome != SendOutcomeDropped {
-				t.Fatalf("receipt outcome=%d err=%v", outcome, err)
-			}
-		})
-	}
-
 	dropPolicy := &dispositionPolicy{direction: DirectionReceiverToSender, disposition: OperationDrop}
 	sealer := &passthroughSealer{next: 9}
 	writer, _ := NewSessionWriter(newRuntimeChannel(0), sealer, dropPolicy)
-	receipt, err := writer.tryControlWithSequence(len(plaintext), func(uint64) (Message, error) { return message, nil })
+	receipt, err := writer.TryControl(message)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,7 +248,6 @@ func TestSessionWriterRejectsSequencedMismatchAndPolicyDropsWithoutConsumingSequ
 func TestSessionWriterPropagatesSequenceTransportAndPolicyErrors(t *testing.T) {
 	operationID := testOperationID(125)
 	message := mustMessage(t, MessageListChildren, &operationID, map[uint64]any{0: uint64(1)})
-	plaintext := mustPlaintext(t, message)
 	tests := []struct {
 		name    string
 		sealer  OutboundEnvelopeSealer
@@ -453,7 +263,7 @@ func TestSessionWriterPropagatesSequenceTransportAndPolicyErrors(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			writer, _ := NewSessionWriter(test.channel, test.sealer, test.policy)
-			receipt, err := writer.tryControlWithSequence(len(plaintext), func(uint64) (Message, error) { return message, nil })
+			receipt, err := writer.TryControl(message)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -477,7 +287,7 @@ func TestSessionWriterPropagatesSequenceTransportAndPolicyErrors(t *testing.T) {
 
 	terminalPolicy := &dispositionPolicy{direction: DirectionSenderToReceiver, terminalErr: errors.New("terminal policy")}
 	terminalWriter, _ := NewSessionWriter(newRuntimeChannel(0), &passthroughSealer{}, terminalPolicy)
-	if _, err := terminalWriter.TrySenderControl(mustPreparedControl(t, MessageSessionTerminal, nil)); err == nil {
+	if _, err := terminalWriter.TryTerminal(mustWriterControl(t, MessageSessionTerminal, nil)); err == nil {
 		t.Fatal("terminal policy error was ignored")
 	}
 
@@ -645,21 +455,12 @@ func (c *gatedWriterChannel) frames() []framechannel.Frame {
 	return result
 }
 
-func mustPreparedControl(t *testing.T, kind MessageKind, operationID *OperationID) PreparedSenderControl {
+func mustWriterControl(t *testing.T, kind MessageKind, operationID *OperationID) Message {
 	t.Helper()
-	_, _, envelopeBinding := loadEnvelopeVector(t, "sender-signed-operation-error")
-	base := ControlBinding{
-		ShareInstance: envelopeBinding.ShareInstance, ProtocolSessionID: envelopeBinding.ProtocolSessionID,
-		LaneID: envelopeBinding.LaneID, LaneEpoch: envelopeBinding.LaneEpoch, Direction: DirectionSenderToReceiver,
+	if kind == MessageSessionTerminal {
+		return mustSessionTerminalMessage(t)
 	}
-	prepared, err := PrepareSenderControl(
-		vectorSenderSigningKey(), base, kind, operationID,
-		mustControlBody(t, map[uint64]any{0: uint64(1), 1: uint64(2)}),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return prepared
+	return mustMessage(t, kind, operationID, map[uint64]any{0: uint64(1), 1: uint64(2)})
 }
 
 func mustPlaintext(t *testing.T, message Message) []byte {

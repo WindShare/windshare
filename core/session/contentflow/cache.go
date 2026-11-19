@@ -9,14 +9,18 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/content/records"
 )
 
 const (
-	DefaultShareSealedCacheBytes   = uint64(256) << 20
-	DefaultProcessSealedCacheBytes = uint64(2) << 30
+	DefaultShareBlockCacheBytes   = uint64(256) << 20
+	DefaultProcessBlockCacheBytes = uint64(2) << 30
 )
 
-var ErrInvalidCacheKey = errors.New("sealed block cache key is invalid")
+var (
+	ErrInvalidCacheKey     = errors.New("block payload cache key is invalid")
+	errBlockCacheIntegrity = errors.New("cached block payload differs from its committed record")
+)
 
 type BlockCacheKey struct {
 	ShareInstance   catalog.ShareInstance
@@ -51,10 +55,19 @@ func NewBlockCacheKey(descriptor content.FileRevisionDescriptor, index uint64) (
 	}, nil
 }
 
+type cachedBlock struct {
+	payload  []byte
+	recordID records.RecordID
+}
+
+func (block cachedBlock) clone() cachedBlock {
+	return cachedBlock{payload: slices.Clone(block.payload), recordID: block.recordID}
+}
+
 type cacheEntry struct {
-	key    BlockCacheKey
-	object []byte
-	bytes  uint64
+	key   BlockCacheKey
+	block cachedBlock
+	bytes uint64
 }
 
 type cacheCall struct {
@@ -63,7 +76,7 @@ type cacheCall struct {
 	done      chan struct{}
 	waiters   int
 	completed bool
-	object    []byte
+	block     cachedBlock
 	err       error
 }
 
@@ -85,10 +98,10 @@ type SharedBlockCache struct {
 
 func NewSharedBlockCache(share catalog.ShareInstance, maxBytes uint64, process *ProcessCacheBudget) (*SharedBlockCache, error) {
 	if share.IsZero() || process == nil {
-		return nil, errors.New("sealed block cache requires share identity and process budget")
+		return nil, errors.New("block payload cache requires share identity and process budget")
 	}
 	if maxBytes == 0 {
-		maxBytes = DefaultShareSealedCacheBytes
+		maxBytes = DefaultShareBlockCacheBytes
 	}
 	return &SharedBlockCache{
 		share: share, maxBytes: maxBytes, reservation: cacheReservation{budget: process},
@@ -98,26 +111,41 @@ func NewSharedBlockCache(share catalog.ShareInstance, maxBytes uint64, process *
 }
 
 func (c *SharedBlockCache) Get(ctx context.Context, key BlockCacheKey, load func(context.Context) ([]byte, error)) ([]byte, error) {
+	block, err := c.get(ctx, key, load)
+	return block.payload, err
+}
+
+func (c *SharedBlockCache) get(ctx context.Context, key BlockCacheKey, load func(context.Context) ([]byte, error)) (cachedBlock, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return cachedBlock{}, err
 	}
 	if load == nil || key.ShareInstance != c.share || key.FileID.IsZero() || key.FileRevision.IsZero() {
-		return nil, ErrInvalidCacheKey
+		return cachedBlock{}, ErrInvalidCacheKey
 	}
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
-		return nil, ErrServiceClosed
+		return cachedBlock{}, ErrServiceClosed
 	}
 	if _, invalid := c.invalid[key.revisionIdentity()]; invalid {
 		c.mu.Unlock()
-		return nil, content.ErrRevisionDrift
+		return cachedBlock{}, content.ErrRevisionDrift
 	}
 	if element := c.entries[key]; element != nil {
 		c.lru.MoveToFront(element)
-		object := slices.Clone(element.Value.(*cacheEntry).object)
+		block := element.Value.(*cacheEntry).block.clone()
 		c.mu.Unlock()
-		return object, nil
+		// The commitment was fixed by the authenticated revision read. Do not
+		// generate a new identity for stale or corrupted cache bytes.
+		if !recordDigestMatches(block.recordID, block.payload) {
+			c.mu.Lock()
+			if c.entries[key] == element {
+				c.removeEntryLocked(element)
+			}
+			c.mu.Unlock()
+			return cachedBlock{}, errBlockCacheIntegrity
+		}
+		return block, nil
 	}
 	call := c.inflight[key]
 	if call == nil {
@@ -173,10 +201,10 @@ func (c *SharedBlockCache) watchRevision(
 	}, nil
 }
 
-func (c *SharedBlockCache) await(ctx context.Context, key BlockCacheKey, call *cacheCall) ([]byte, error) {
+func (c *SharedBlockCache) await(ctx context.Context, key BlockCacheKey, call *cacheCall) (cachedBlock, error) {
 	select {
 	case <-call.done:
-		return slices.Clone(call.object), call.err
+		return call.block.clone(), call.err
 	case <-ctx.Done():
 		c.mu.Lock()
 		if c.inflight[key] == call && !call.completed {
@@ -187,13 +215,22 @@ func (c *SharedBlockCache) await(ctx context.Context, key BlockCacheKey, call *c
 			}
 		}
 		c.mu.Unlock()
-		return nil, ctx.Err()
+		return cachedBlock{}, ctx.Err()
 	}
 }
 
 func (c *SharedBlockCache) runLoad(key BlockCacheKey, call *cacheCall, load func(context.Context) ([]byte, error)) {
 	defer c.loads.Done()
-	object, err := load(call.ctx)
+	payload, err := load(call.ctx)
+	var block cachedBlock
+	if err == nil {
+		if len(payload) == 0 {
+			err = errors.New("block loader returned an empty payload")
+		} else {
+			block.payload = slices.Clone(payload)
+			block.recordID = records.RecordIDFromObject(block.payload)
+		}
+	}
 	c.mu.Lock()
 	if call.completed {
 		c.mu.Unlock()
@@ -204,15 +241,12 @@ func (c *SharedBlockCache) runLoad(key BlockCacheKey, call *cacheCall, load func
 	if active {
 		delete(c.inflight, key)
 	}
-	if err == nil && len(object) == 0 {
-		err = errors.New("sealed block loader returned an empty object")
-	}
 	// Invalidation removes the call before cancelling it. A loader that ignores
 	// cancellation must not repopulate the cache with the invalidated revision.
 	if err == nil && active && call.waiters > 0 && !c.closed {
-		c.storeLocked(key, object)
+		c.storeLocked(key, block)
 	}
-	call.object, call.err = slices.Clone(object), err
+	call.block, call.err = block, err
 	close(call.done)
 	call.cancel()
 	c.mu.Unlock()
@@ -223,13 +257,13 @@ func (c *SharedBlockCache) completeTerminatedCallLocked(call *cacheCall, err err
 		return
 	}
 	call.completed = true
-	call.object, call.err = nil, err
+	call.block, call.err = cachedBlock{}, err
 	close(call.done)
 	call.cancel()
 }
 
-func (c *SharedBlockCache) storeLocked(key BlockCacheKey, object []byte) {
-	bytes := uint64(len(object))
+func (c *SharedBlockCache) storeLocked(key BlockCacheKey, block cachedBlock) {
+	bytes := uint64(len(block.payload))
 	if bytes > c.maxBytes {
 		return
 	}
@@ -241,7 +275,7 @@ func (c *SharedBlockCache) storeLocked(key BlockCacheKey, object []byte) {
 	if !c.reservation.grow(bytes) {
 		return
 	}
-	entry := &cacheEntry{key: key, object: slices.Clone(object), bytes: bytes}
+	entry := &cacheEntry{key: key, block: block, bytes: bytes}
 	element := c.lru.PushFront(entry)
 	c.entries[key] = element
 	c.used += bytes
@@ -252,12 +286,16 @@ func (c *SharedBlockCache) evictOldestLocked() bool {
 	if element == nil {
 		return false
 	}
+	c.removeEntryLocked(element)
+	return true
+}
+
+func (c *SharedBlockCache) removeEntryLocked(element *list.Element) {
 	entry := element.Value.(*cacheEntry)
 	delete(c.entries, entry.key)
 	c.lru.Remove(element)
 	c.used -= entry.bytes
 	c.reservation.shrink(entry.bytes)
-	return true
 }
 
 func (c *SharedBlockCache) InvalidateRevision(file catalog.FileID, revision content.FileRevision) {
@@ -266,11 +304,7 @@ func (c *SharedBlockCache) InvalidateRevision(file catalog.FileID, revision cont
 	c.invalid[identity] = struct{}{}
 	for key, element := range c.entries {
 		if key.FileID == file && key.FileRevision == revision {
-			entry := element.Value.(*cacheEntry)
-			delete(c.entries, key)
-			c.lru.Remove(element)
-			c.used -= entry.bytes
-			c.reservation.shrink(entry.bytes)
+			c.removeEntryLocked(element)
 		}
 	}
 	for key, call := range c.inflight {

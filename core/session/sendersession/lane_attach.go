@@ -323,12 +323,7 @@ func (runtime *Runtime) acceptCandidate(
 		return result, &session.LaneRejectedError{Rejection: admission.Rejection}
 	}
 	identity := session.LaneIdentity{ID: admission.LaneID, Epoch: admission.LaneEpoch}
-	authenticator := protocolsession.InboundMessageAuthenticatorFunc(
-		func(uint64, protocolsession.Message) (protocolsession.InboundAuthenticationResult, error) {
-			return protocolsession.InboundAuthenticationResult{}, nil
-		},
-	)
-	if err := runtime.core.InstallLane(identity, channel, authenticator, nil, nil); err != nil {
+	if err := runtime.core.InstallLane(identity, channel, protocolsession.InboundMessageValidatorFunc(protocolsession.ValidateReceiverMessage), nil, nil); err != nil {
 		runtime.lanesRegistry.Release(identity.ID, identity.Epoch)
 		result.LaneAttachment = PeerLaneAttachmentFailed
 		return result, err

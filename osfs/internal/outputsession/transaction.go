@@ -24,7 +24,7 @@ func (action transactionAction) terminal() bool {
 
 type guardedTransaction struct {
 	session  *Session
-	claimID  ClaimID
+	entry    *fileEntry
 	executor FileTransactionExecutor
 	binding  transfer.MaterializedFileBinding
 }
@@ -116,7 +116,7 @@ func (transaction *guardedTransaction) Pause(
 	ctx context.Context,
 	reason transfer.FilePauseReason,
 ) (transfer.FileSettlement, error) {
-	if reason < transfer.FilePauseInterrupted || reason > transfer.FilePauseDependencyContract {
+	if !reason.Valid() {
 		return transfer.FileSettlement{}, executorContractError(transfer.ErrInvalidOutputSettlement)
 	}
 	return transaction.terminalOperation(ctx, actionPause, uint8(reason), func() (transfer.FileSettlement, MutationCut, error) {
@@ -156,13 +156,7 @@ func (transaction *guardedTransaction) reserve(
 	session := transaction.session
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	entry := session.fileClaims[transaction.claimID]
-	if entry == nil || entry.transaction != transaction {
-		err := session.markInvariantFailureLocked()
-		event := session.traceLocked(operationID, operationKindForAction(action), TraceRejected,
-			transaction.claimID, ClaimFile, ClaimActive, ClaimActive, session.requiredFault)
-		return nil, nil, false, event, err
-	}
+	entry := transaction.entry
 	state := fileClaimState(entry.state)
 	if entry.state == fileSettled {
 		if action.terminal() && entry.terminalAction == action && entry.terminalArgument == argument {
@@ -176,7 +170,7 @@ func (transaction *guardedTransaction) reserve(
 			entry.claim.id, ClaimFile, state, state, value)
 		return nil, nil, false, event, err
 	}
-	if entry.state != fileActive {
+	if entry.state != fileActive || session.fileClaims[entry.claim.id] != entry || entry.transaction != transaction {
 		err := session.markInvariantFailureLocked()
 		event := session.traceLocked(operationID, operationKindForAction(action), TraceRejected,
 			entry.claim.id, ClaimFile, state, state, session.requiredFault)
@@ -427,7 +421,7 @@ func (transaction *guardedTransaction) pauseForClose(
 ) (transfer.FileSettlement, error) {
 	session := transaction.session
 	session.mu.Lock()
-	entry := session.fileClaims[transaction.claimID]
+	entry := session.fileClaims[transaction.entry.claim.id]
 	if entry == nil || entry.transaction != transaction || entry.state != fileActive || entry.operation != nil {
 		err := session.markInvariantFailureLocked()
 		session.mu.Unlock()

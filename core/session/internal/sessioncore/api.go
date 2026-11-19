@@ -72,8 +72,8 @@ func (runtime *Runtime) ConfigureLanes(queued func(session.LaneIdentity) time.Du
 
 // InstallLane publishes both protocol and role ownership under the same registry
 // lock. A failed role admission cannot leave a protocol-only lane visible.
-func (runtime *Runtime) InstallLane(identity session.LaneIdentity, channel protocolsession.FrameChannel, authenticator protocolsession.InboundMessageAuthenticator, requests *requestlane.Lane, admit func() error) error {
-	_, err := runtime.lanes.addWithAdmission(identity, channel, authenticator, false, func(lane *RuntimeLane) error {
+func (runtime *Runtime) InstallLane(identity session.LaneIdentity, channel protocolsession.FrameChannel, validator protocolsession.InboundMessageValidator, requests *requestlane.Lane, admit func() error) error {
+	_, err := runtime.lanes.addWithAdmission(identity, channel, validator, false, func(lane *RuntimeLane) error {
 		if requests != nil {
 			lane.requests = requests
 		}

@@ -1,4 +1,3 @@
-import { compareRevisionDescriptors } from '../content/revision-comparison'
 import type { DownloadMetrics } from './download-metrics'
 import { encodeBase64Url, equalBytes } from '../crypto/bytes'
 import { byteRange, type ByteRange } from '../content/geometry'
@@ -14,7 +13,6 @@ import {
 import {
   type OpenedRevision,
   type RevisionReader,
-  RevisionChangedDuringRecoveryError,
   RevisionReopenedDuringRecoveryError,
   requiresRevisionLeaseReplacement,
   RevisionService,
@@ -430,11 +428,7 @@ class RevisionAuthorization {
       }
       if (!sameRevision(this.#descriptor, result.value.descriptor)) {
         await result.value.release().catch(() => undefined)
-        const comparison = compareRevisionDescriptors(this.#descriptor, result.value.descriptor)
-        if (comparison.kind === 'observed-change') {
-          throw new RevisionChangedDuringRecoveryError()
-        }
-        throw new RevisionReopenedDuringRecoveryError()
+        throw new RevisionReopenedDuringRecoveryError(this.#descriptor, result.value.descriptor)
       }
       const next = { generation: result.generation, opened: result.value }
       this.#current = next

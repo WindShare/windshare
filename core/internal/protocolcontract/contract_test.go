@@ -30,6 +30,7 @@ const (
 	updateVectorsCommand = "make vectors-update"
 
 	wireVersion                         = 2
+	sessionWireVersion                  = 3
 	senderObjectWireVersion             = 3
 	suite                               = 2
 	chunkSize                           = 1 << 20
@@ -297,7 +298,7 @@ func buildVectorFiles(t *testing.T) []vectorFile {
 		{Version: 1, Kind: "v2-identity", Description: "Suite 0x02 link identity and domain-separated HKDF contract.", Cases: []any{identityCase(t, f)}},
 		{Version: 1, Kind: "v2-sender-objects", Description: "Version-3 sender objects: canonical CBOR, AES-GCM and Ed25519 over SHA-256 identity and sealed-object commitments.", Cases: objectCases},
 		{Version: 1, Kind: "v2-session", Description: "Canonical v2 relay endpoint/identity, purpose-bound register/resume/stop proofs, relay control-frame and proof refusals, connection probes, route controls, lane admission, X25519 transcript, traffic keys and sender controls.", Cases: sessionCases(t, f, objects)},
-		{Version: 1, Kind: "v2-session-controls", Description: "Independent reachability and TURN session messages, with sender signatures bound to their outer message kinds.", Cases: sessionControlCases(t, f)},
+		{Version: 1, Kind: "v2-session-controls", Description: "Independent reachability and TURN session messages, with envelope authentication and distinct message kinds.", Cases: sessionControlCases(t, f)},
 		{Version: 1, Kind: "v2-fragment", Description: "Authenticated BLOCK_FRAGMENT fixed layout and allocation limits.", Cases: fragmentCases(t, f, objects)},
 		{Version: 1, Kind: "name-collision-v1", Description: "Deterministic collision names preserve extensions when a complete stem scalar fits; otherwise the full name is shortened on UTF-8 scalar boundaries.", Cases: buildNameCollisionVectorCases(t)},
 		{Version: 1, Kind: "v2-semantics", Description: "R0 resource, operation-final, selection/timing, ZIP member, lifecycle and crash-commit state contracts.", Cases: semanticCases(t)},
@@ -395,7 +396,7 @@ func buildSenderObjects(t *testing.T, f *fixture) []sealedObject {
 	}
 	pageContext := slices.Concat(f.shareInstance, f.syntheticRoot, u32(0))
 	directoryError := map[uint64]any{
-		0: uint64(1), 1: f.shareInstance, 2: f.directoryID, 3: fixed(0xa0, 16),
+		0: uint64(2), 1: f.shareInstance, 2: f.directoryID, 3: fixed(0xa0, 16),
 		4: uint64(0x2007), 5: true, 6: uint64(1000),
 	}
 	directoryErrorContext := slices.Concat(f.shareInstance, f.directoryID)
@@ -501,14 +502,14 @@ func sessionCases(t *testing.T, f *fixture, objects []sealedObject) []any {
 	}
 	sessionAuth := derive(t, f.readSecret, labelSessionAuth, f.shareInstance)
 	clientBody := slices.Concat(
-		[]byte("WS2C"), []byte{wireVersion}, f.shareInstance, f.receiverID,
+		[]byte("WS2C"), []byte{sessionWireVersion}, f.shareInstance, f.receiverID,
 		fixed(0x91, 32), receiverKey.PublicKey().Bytes(),
 	)
 	clientProof := hmacSHA256(sessionAuth, slices.Concat([]byte(domainClientHello), hash(clientBody)))
 	clientHello := slices.Concat(clientBody, clientProof)
 	laneID := uint32(0x01020304)
 	serverBody := slices.Concat(
-		[]byte("WS2S"), []byte{wireVersion}, hash(clientHello), fixed(0x71, 32),
+		[]byte("WS2S"), []byte{sessionWireVersion}, hash(clientHello), fixed(0x71, 32),
 		senderKey.PublicKey().Bytes(), u32(laneID), u32(0),
 	)
 	serverSignature := ed25519.Sign(f.edPrivate, slices.Concat([]byte(domainServerHello), hash(serverBody)))
@@ -529,13 +530,7 @@ func sessionCases(t *testing.T, f *fixture, objects []sealedObject) []any {
 
 	terminalUnsigned := map[uint64]any{0: uint64(1), 1: uint64(sessionCodeSenderStopped), 2: "Sender stopped"}
 	terminalUnsignedBytes := canonical(t, terminalUnsigned)
-	terminalUnsignedWrapper := unsignedControlWrapper(t, terminalUnsignedBytes)
-	controlPreimage := controlSignaturePreimage(
-		domainTerminal, f.shareInstance, protocolSessionID, laneID, 0, 1, 2, 11, nil, terminalUnsignedWrapper,
-	)
-	terminalSignature := ed25519.Sign(f.edPrivate, controlPreimage)
-	terminalBody := signedControlWrapper(t, terminalUnsignedBytes, terminalSignature)
-	terminalPlain := canonical(t, map[uint64]any{0: uint64(11), 1: nil, 2: cbor.RawMessage(terminalBody)})
+	terminalPlain := canonical(t, map[uint64]any{0: uint64(11), 1: nil, 2: cbor.RawMessage(terminalUnsignedBytes)})
 	envelopeNonce := fixed(0x31, 12)
 	envelope, envelopeAAD := sealEnvelope(t, s2r, f.shareInstance, protocolSessionID, laneID, 0, 1, 2, envelopeNonce, terminalPlain)
 
@@ -543,13 +538,7 @@ func sessionCases(t *testing.T, f *fixture, objects []sealedObject) []any {
 		0: uint64(1), 1: uint64(3), 2: uint64(0x3007), 3: false, 4: nil, 5: "Source revision drifted",
 	}
 	operationErrorUnsignedBytes := canonical(t, operationErrorUnsigned)
-	operationErrorUnsignedWrapper := unsignedControlWrapper(t, operationErrorUnsignedBytes)
-	operationErrorPreimage := controlSignaturePreimage(
-		domainControlOperation, f.shareInstance, protocolSessionID, laneID, 0, 1, 0, 10, f.operationID, operationErrorUnsignedWrapper,
-	)
-	operationErrorSignature := ed25519.Sign(f.edPrivate, operationErrorPreimage)
-	operationErrorBody := signedControlWrapper(t, operationErrorUnsignedBytes, operationErrorSignature)
-	operationErrorPlain := canonical(t, map[uint64]any{0: uint64(10), 1: f.operationID, 2: cbor.RawMessage(operationErrorBody)})
+	operationErrorPlain := canonical(t, map[uint64]any{0: uint64(10), 1: f.operationID, 2: cbor.RawMessage(operationErrorUnsignedBytes)})
 	operationErrorNonce := fixed(0x41, 12)
 	operationErrorEnvelope, operationErrorAAD := sealEnvelope(
 		t, s2r, f.shareInstance, protocolSessionID, laneID, 0, 1, 0, operationErrorNonce, operationErrorPlain,
@@ -563,29 +552,23 @@ func sessionCases(t *testing.T, f *fixture, objects []sealedObject) []any {
 		0: uint64(1), 1: uint64(1), 2: uint64(attachedLaneID), 3: uint64(attachedLaneEpoch), 4: attachNonce,
 	}
 	grantUnsignedBytes := canonical(t, grantUnsigned)
-	grantUnsignedWrapper := unsignedControlWrapper(t, grantUnsignedBytes)
-	grantPreimage := controlSignaturePreimage(
-		domainLaneAttach, f.shareInstance, protocolSessionID, laneID, 0, 1, 1, 12, grantOperationID, grantUnsignedWrapper,
-	)
-	grantSignature := ed25519.Sign(f.edPrivate, grantPreimage)
-	grantBody := signedControlWrapper(t, grantUnsignedBytes, grantSignature)
-	grantPlain := canonical(t, map[uint64]any{0: uint64(12), 1: grantOperationID, 2: cbor.RawMessage(grantBody)})
+	grantPlain := canonical(t, map[uint64]any{0: uint64(12), 1: grantOperationID, 2: cbor.RawMessage(grantUnsignedBytes)})
 	grantEnvelope, grantAAD := sealEnvelope(
 		t, s2r, f.shareInstance, protocolSessionID, laneID, 0, 1, 1, fixed(0x51, 12), grantPlain,
 	)
 	laneHelloBase := slices.Concat(
-		[]byte("WS2A"), []byte{wireVersion}, f.shareInstance, protocolSessionID,
+		[]byte("WS2A"), []byte{sessionWireVersion}, f.shareInstance, protocolSessionID,
 		u32(attachedLaneID), u32(attachedLaneEpoch), grantOperationID, attachNonce,
 	)
 	laneHelloProof := hmacSHA256(r2s, slices.Concat([]byte(domainLaneHello), laneHelloBase))
 	laneHello := slices.Concat(laneHelloBase, laneHelloProof)
-	laneAckBody := slices.Concat([]byte("WS2B"), []byte{wireVersion}, hash(laneHello), fixed(0x81, 16))
+	laneAckBody := slices.Concat([]byte("WS2B"), []byte{sessionWireVersion}, hash(laneHello), fixed(0x81, 16))
 	laneAckSignature := ed25519.Sign(f.edPrivate, slices.Concat([]byte(domainLaneAccept), hash(laneAckBody)))
 	laneAck := slices.Concat(laneAckBody, laneAckSignature)
 	laneRejectCode := byte(5)
 	laneRejectRetryMilliseconds := uint32(1000)
 	laneRejectBody := slices.Concat(
-		[]byte("WS2N"), []byte{wireVersion, laneRejectCode, 0, 0}, hash(laneHello),
+		[]byte("WS2N"), []byte{sessionWireVersion, laneRejectCode, 0, 0}, hash(laneHello),
 		u32(laneRejectRetryMilliseconds),
 	)
 	laneRejectSignature := ed25519.Sign(f.edPrivate, slices.Concat([]byte(domainLaneReject), hash(laneRejectBody)))
@@ -594,7 +577,7 @@ func sessionCases(t *testing.T, f *fixture, objects []sealedObject) []any {
 	var revisionObject []byte
 	for _, candidate := range objects {
 		if candidate.domain == domainRevision {
-			revisionObject = candidate.encoded
+			revisionObject = candidate.plain
 			break
 		}
 	}
@@ -607,14 +590,7 @@ func sessionCases(t *testing.T, f *fixture, objects []sealedObject) []any {
 		0: uint64(1), 1: []any{[]any{f.fileID, uint64(0), revisionObject, leaseID, uint64(leaseTTLSeconds * 1000), uint64(leaseRenewWindowSeconds * 1000)}},
 	}
 	openResultsUnsignedBytes := canonical(t, openResultsUnsigned)
-	openResultsUnsignedWrapper := unsignedControlWrapper(t, openResultsUnsignedBytes)
-	openResultsPreimage := controlSignaturePreimage(
-		domainControlOperation, f.shareInstance, protocolSessionID, attachedLaneID, attachedLaneEpoch,
-		1, 0, 4, openOperationID, openResultsUnsignedWrapper,
-	)
-	openResultsSignature := ed25519.Sign(f.edPrivate, openResultsPreimage)
-	openResultsBody := signedControlWrapper(t, openResultsUnsignedBytes, openResultsSignature)
-	openResultsPlain := canonical(t, map[uint64]any{0: uint64(4), 1: openOperationID, 2: cbor.RawMessage(openResultsBody)})
+	openResultsPlain := canonical(t, map[uint64]any{0: uint64(4), 1: openOperationID, 2: cbor.RawMessage(openResultsUnsignedBytes)})
 	openResultsEnvelope, openResultsAAD := sealEnvelope(
 		t, s2r, f.shareInstance, protocolSessionID, attachedLaneID, attachedLaneEpoch, 1, 0, fixed(0x91, 12), openResultsPlain,
 	)
@@ -624,14 +600,7 @@ func sessionCases(t *testing.T, f *fixture, objects []sealedObject) []any {
 		0: uint64(1), 1: leaseID, 2: uint64(leaseTTLSeconds * 1000), 3: uint64(leaseRenewWindowSeconds * 1000),
 	}
 	leaseResultUnsignedBytes := canonical(t, leaseResultUnsigned)
-	leaseResultUnsignedWrapper := unsignedControlWrapper(t, leaseResultUnsignedBytes)
-	leaseResultPreimage := controlSignaturePreimage(
-		domainControlOperation, f.shareInstance, protocolSessionID, attachedLaneID, attachedLaneEpoch,
-		1, 1, 15, renewOperationID, leaseResultUnsignedWrapper,
-	)
-	leaseResultSignature := ed25519.Sign(f.edPrivate, leaseResultPreimage)
-	leaseResultBody := signedControlWrapper(t, leaseResultUnsignedBytes, leaseResultSignature)
-	leaseResultPlain := canonical(t, map[uint64]any{0: uint64(15), 1: renewOperationID, 2: cbor.RawMessage(leaseResultBody)})
+	leaseResultPlain := canonical(t, map[uint64]any{0: uint64(15), 1: renewOperationID, 2: cbor.RawMessage(leaseResultUnsignedBytes)})
 	leaseResultEnvelope, leaseResultAAD := sealEnvelope(
 		t, s2r, f.shareInstance, protocolSessionID, attachedLaneID, attachedLaneEpoch,
 		1, 1, fixed(0xa1, 12), leaseResultPlain,
@@ -807,19 +776,16 @@ func sessionCases(t *testing.T, f *fixture, objects []sealedObject) []any {
 			"name": "sender-signed-operation-error", "shareInstanceB64": b64(f.shareInstance),
 			"protocolSessionIdB64": b64(protocolSessionID), "laneId": laneID, "laneEpoch": uint32(0), "sequence": "0",
 			"operationIdB64": b64(f.operationID), "trafficKeyB64": b64(s2r),
-			"semanticBodyCborB64": b64(operationErrorUnsignedBytes), "unsignedControlCborB64": b64(operationErrorUnsignedWrapper),
-			"controlPreimageB64": b64(operationErrorPreimage), "controlSignatureB64": b64(operationErrorSignature),
-			"signedControlCborB64": b64(operationErrorBody),
-			"plaintextB64":         b64(operationErrorPlain), "nonceB64": b64(operationErrorNonce), "aadB64": b64(operationErrorAAD), "envelopeB64": b64(operationErrorEnvelope),
+			"semanticBodyCborB64": b64(operationErrorUnsignedBytes),
+			"plaintextB64":        b64(operationErrorPlain), "nonceB64": b64(operationErrorNonce), "aadB64": b64(operationErrorAAD), "envelopeB64": b64(operationErrorEnvelope),
 		},
 		map[string]any{
 			"name": "sender-granted-lane-attach", "shareInstanceB64": b64(f.shareInstance),
 			"protocolSessionIdB64": b64(protocolSessionID), "grantLaneId": laneID, "grantLaneEpoch": uint32(0), "grantSequence": "1",
 			"attachedLaneId": attachedLaneID, "attachedLaneEpoch": attachedLaneEpoch, "grantOperationIdB64": b64(grantOperationID),
 			"attachNonceB64": b64(attachNonce), "receiverToSenderKeyB64": b64(r2s), "senderToReceiverKeyB64": b64(s2r),
-			"grantSemanticBodyCborB64": b64(grantUnsignedBytes), "unsignedGrantCborB64": b64(grantUnsignedWrapper),
-			"grantPreimageB64": b64(grantPreimage), "grantSignatureB64": b64(grantSignature), "grantSignedBodyB64": b64(grantBody),
-			"grantPlaintextB64": b64(grantPlain), "grantAadB64": b64(grantAAD), "grantEnvelopeB64": b64(grantEnvelope),
+			"grantSemanticBodyCborB64": b64(grantUnsignedBytes),
+			"grantPlaintextB64":        b64(grantPlain), "grantAadB64": b64(grantAAD), "grantEnvelopeB64": b64(grantEnvelope),
 			"laneHelloBaseB64": b64(laneHelloBase), "laneHelloProofB64": b64(laneHelloProof), "laneHelloB64": b64(laneHello),
 			"laneAckBodyB64": b64(laneAckBody), "laneAckSignatureB64": b64(laneAckSignature), "laneAckB64": b64(laneAck),
 			"laneRejectCode": laneRejectCode, "laneRejectRetryAfterMilliseconds": laneRejectRetryMilliseconds,
@@ -832,10 +798,7 @@ func sessionCases(t *testing.T, f *fixture, objects []sealedObject) []any {
 			"operationIdB64": b64(openOperationID), "fileIdB64": b64(f.fileID), "revisionObjectB64": b64(revisionObject),
 			"leaseIdB64": b64(leaseID), "leaseTtlMilliseconds": fmt.Sprint(leaseTTLSeconds * 1000), "renewAfterMilliseconds": fmt.Sprint(leaseRenewWindowSeconds * 1000),
 			"trafficKeyB64": b64(s2r), "semanticBodyCborB64": b64(openResultsUnsignedBytes),
-			"unsignedControlCborB64": b64(openResultsUnsignedWrapper),
-			"controlPreimageB64":     b64(openResultsPreimage), "controlSignatureB64": b64(openResultsSignature),
-			"signedControlCborB64": b64(openResultsBody),
-			"plaintextB64":         b64(openResultsPlain), "nonceB64": b64(fixed(0x91, 12)), "aadB64": b64(openResultsAAD), "envelopeB64": b64(openResultsEnvelope),
+			"plaintextB64": b64(openResultsPlain), "nonceB64": b64(fixed(0x91, 12)), "aadB64": b64(openResultsAAD), "envelopeB64": b64(openResultsEnvelope),
 		},
 		map[string]any{
 			"name": "renew-lease-result", "shareInstanceB64": b64(f.shareInstance),
@@ -844,20 +807,14 @@ func sessionCases(t *testing.T, f *fixture, objects []sealedObject) []any {
 			"leaseIdB64": b64(leaseID), "leaseTtlMilliseconds": fmt.Sprint(leaseTTLSeconds * 1000),
 			"renewAfterMilliseconds": fmt.Sprint(leaseRenewWindowSeconds * 1000),
 			"trafficKeyB64":          b64(s2r), "semanticBodyCborB64": b64(leaseResultUnsignedBytes),
-			"unsignedControlCborB64": b64(leaseResultUnsignedWrapper),
-			"controlPreimageB64":     b64(leaseResultPreimage), "controlSignatureB64": b64(leaseResultSignature),
-			"signedControlCborB64": b64(leaseResultBody),
-			"plaintextB64":         b64(leaseResultPlain), "nonceB64": b64(fixed(0xa1, 12)),
+			"plaintextB64": b64(leaseResultPlain), "nonceB64": b64(fixed(0xa1, 12)),
 			"aadB64": b64(leaseResultAAD), "envelopeB64": b64(leaseResultEnvelope),
 		},
 		map[string]any{
 			"name": "sender-signed-session-terminal", "shareInstanceB64": b64(f.shareInstance),
 			"protocolSessionIdB64": b64(protocolSessionID), "laneId": laneID, "laneEpoch": uint32(0), "sequence": "2",
 			"trafficKeyB64": b64(s2r), "semanticBodyCborB64": b64(terminalUnsignedBytes),
-			"unsignedControlCborB64": b64(terminalUnsignedWrapper),
-			"controlPreimageB64":     b64(controlPreimage), "controlSignatureB64": b64(terminalSignature),
-			"signedControlCborB64": b64(terminalBody),
-			"plaintextB64":         b64(terminalPlain), "nonceB64": b64(envelopeNonce), "aadB64": b64(envelopeAAD), "envelopeB64": b64(envelope),
+			"plaintextB64": b64(terminalPlain), "nonceB64": b64(envelopeNonce), "aadB64": b64(envelopeAAD), "envelopeB64": b64(envelope),
 		},
 	}
 }
@@ -874,7 +831,7 @@ func sealEnvelope(t *testing.T, key, shareInstance, protocolSessionID []byte, la
 	}
 	ctLen := uint32(len(plain) + aead.Overhead())
 	header := make([]byte, 16)
-	header[0], header[1] = wireVersion, direction
+	header[0], header[1] = sessionWireVersion, direction
 	binary.BigEndian.PutUint64(header[4:12], sequence)
 	binary.BigEndian.PutUint32(header[12:16], ctLen)
 	aad := operationAAD(shareInstance, protocolSessionID, laneID, epoch, direction, sequence, ctLen)
@@ -891,7 +848,7 @@ func singleFragmentCase(t *testing.T, f *fixture, objects []sealedObject) any {
 	var object []byte
 	for _, candidate := range objects {
 		if candidate.domain == domainBlockRecord {
-			object = candidate.encoded
+			object = candidate.plain
 			break
 		}
 	}

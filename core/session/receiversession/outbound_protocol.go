@@ -94,10 +94,7 @@ func NewRemoteOperationError(failure RemoteOperationFailureSnapshot) RemoteOpera
 func decodeRemoteOperationFailure(
 	message protocolsession.Message,
 ) (RemoteOperationFailureSnapshot, error) {
-	body, err := protocolsession.SenderControlSemanticBody(message)
-	if err != nil {
-		return RemoteOperationFailureSnapshot{}, err
-	}
+	body := message.Body()
 	failure, err := protocolsession.DecodeOperationFailure(body)
 	if err != nil {
 		return RemoteOperationFailureSnapshot{}, err

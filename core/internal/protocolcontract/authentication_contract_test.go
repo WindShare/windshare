@@ -84,65 +84,6 @@ func TestOperationEnvelopeAuthenticationBindsEveryAxis(t *testing.T) {
 	)
 }
 
-func TestSenderControlSignatureBindsEveryAxis(t *testing.T) {
-	f := newFixture(t)
-	shareInstance := f.shareInstance
-	protocolSessionID := fixed(0x11, 16)
-	operationID := fixed(0x31, 16)
-	semanticBody := canonical(t, map[uint64]any{0: uint64(1), 1: uint64(3), 2: uint64(0x3007)})
-	body := unsignedControlWrapper(t, semanticBody)
-	laneID, laneEpoch, direction, sequence, kind := uint32(3), uint32(5), byte(1), uint64(7), byte(10)
-	preimage := controlSignaturePreimage(
-		domainControlOperation, shareInstance, protocolSessionID, laneID, laneEpoch, direction, sequence, kind, operationID, body,
-	)
-	signature := ed25519.Sign(f.edPrivate, preimage)
-
-	mutations := map[string][]byte{
-		"domain": controlSignaturePreimage(
-			domainTerminal, shareInstance, protocolSessionID, laneID, laneEpoch, direction, sequence, kind, operationID, body,
-		),
-		"share-instance": controlSignaturePreimage(
-			domainControlOperation, flipped(shareInstance), protocolSessionID, laneID, laneEpoch, direction, sequence, kind, operationID, body,
-		),
-		"protocol-session": controlSignaturePreimage(
-			domainControlOperation, shareInstance, flipped(protocolSessionID), laneID, laneEpoch, direction, sequence, kind, operationID, body,
-		),
-		"lane-id": controlSignaturePreimage(
-			domainControlOperation, shareInstance, protocolSessionID, laneID+1, laneEpoch, direction, sequence, kind, operationID, body,
-		),
-		"lane-epoch": controlSignaturePreimage(
-			domainControlOperation, shareInstance, protocolSessionID, laneID, laneEpoch+1, direction, sequence, kind, operationID, body,
-		),
-		"direction": controlSignaturePreimage(
-			domainControlOperation, shareInstance, protocolSessionID, laneID, laneEpoch, direction^1, sequence, kind, operationID, body,
-		),
-		"sequence": controlSignaturePreimage(
-			domainControlOperation, shareInstance, protocolSessionID, laneID, laneEpoch, direction, sequence+1, kind, operationID, body,
-		),
-		"message-kind": controlSignaturePreimage(
-			domainControlOperation, shareInstance, protocolSessionID, laneID, laneEpoch, direction, sequence, kind+1, operationID, body,
-		),
-		"operation-id": controlSignaturePreimage(
-			domainControlOperation, shareInstance, protocolSessionID, laneID, laneEpoch, direction, sequence, kind, flipped(operationID), body,
-		),
-		"body": controlSignaturePreimage(
-			domainControlOperation, shareInstance, protocolSessionID, laneID, laneEpoch, direction, sequence, kind, operationID, flipped(body),
-		),
-	}
-	for name, candidate := range mutations {
-		t.Run(name, func(t *testing.T) {
-			if ed25519.Verify(f.edPublic, candidate, signature) {
-				t.Fatal("signature accepted a mutated delivery axis")
-			}
-		})
-	}
-	wrongPublic := slices.Clone(f.edPublic)
-	wrongPublic[0] ^= 1
-	if ed25519.Verify(wrongPublic, preimage, signature) {
-		t.Fatal("signature accepted a different sender key")
-	}
-}
-
 func assertSenderObjectAuthenticates(t *testing.T, f *fixture, object sealedObject) {
 	t.Helper()
 	if len(object.encoded) < 84 {
@@ -247,7 +188,7 @@ func operationAAD(
 	ciphertextLength uint32,
 ) []byte {
 	return slices.Concat(
-		[]byte(domainOperation), []byte{wireVersion, direction}, shareInstance, protocolSessionID,
+		[]byte(domainOperation), []byte{sessionWireVersion, direction}, shareInstance, protocolSessionID,
 		u32(laneID), u32(epoch), u64(sequence), u32(ciphertextLength),
 	)
 }
@@ -269,24 +210,6 @@ func assertEnvelopeOpenFails(t *testing.T, key, envelope, aad []byte) {
 	if _, err := aead.Open(nil, envelope[16:28], envelope[28:], aad); err == nil {
 		t.Fatal("operation envelope accepted a mutated delivery axis")
 	}
-}
-
-func controlSignaturePreimage(
-	domain string,
-	shareInstance, protocolSessionID []byte,
-	laneID, laneEpoch uint32,
-	direction byte,
-	sequence uint64,
-	messageKind byte,
-	operationID, unsignedBody []byte,
-) []byte {
-	if operationID == nil {
-		operationID = make([]byte, 16)
-	}
-	return slices.Concat(
-		[]byte(domain), []byte{0}, shareInstance, protocolSessionID, u32(laneID), u32(laneEpoch),
-		[]byte{direction}, u64(sequence), []byte{messageKind}, operationID, hash(unsignedBody),
-	)
 }
 
 func flipped(value []byte) []byte {

@@ -153,21 +153,11 @@ func newSyntheticCapacityFixture(t *testing.T, fileCount uint64) *syntheticCapac
 	privateKey := ed25519.NewKeyFromSeed(seed)
 	publicKey := privateKey.Public().(ed25519.PublicKey)
 	readSecret := bytes.Repeat([]byte{0x41}, link.ReadSecretBytes)
-	catalogKey, err := keyderiv.V2CatalogKey(readSecret, share.Bytes())
-	if err != nil {
-		t.Fatal(err)
-	}
 	sessionAuthKey, err := keyderiv.V2SessionAuthKey(readSecret, share.Bytes())
 	if err != nil {
 		t.Fatal(err)
 	}
-	sealedCatalog, err := catalogflow.NewSealedCatalogStore(catalogflow.SealedCatalogStoreConfig{
-		ShareInstance: share, CatalogKey: catalogKey, SenderPrivateKey: privateKey,
-		NonceSource: &deterministicReader{next: 71},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	sealedCatalog := catalogflow.CatalogPayloadEncoder{}
 	processBudget, err := catalog.NewBudgetAccount("synthetic-capacity-process", catalog.DefaultProcessBudgetLimits())
 	if err != nil {
 		t.Fatal(err)
@@ -297,19 +287,8 @@ func newSyntheticCapacityFixture(t *testing.T, fileCount uint64) *syntheticCapac
 	if err != nil {
 		t.Fatal(err)
 	}
-	recordSealer, err := records.NewSealer(records.SealerConfig{
-		ShareInstance: share, Keys: keyTree, SigningKey: privateKey,
-		NonceSource: &deterministicReader{next: 73},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	recordOpener, err := records.NewOpener(records.OpenerConfig{
-		ShareInstance: share, Keys: keyTree, Sender: checkedSender(t, publicKey),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	recordEncoder := records.Encoder{}
+	recordDecoder := records.Decoder{ShareInstance: share}
 	cacheBudget, err := contentflow.NewProcessCacheBudget(64 << 20)
 	if err != nil {
 		t.Fatal(err)
@@ -327,7 +306,7 @@ func newSyntheticCapacityFixture(t *testing.T, fileCount uint64) *syntheticCapac
 			return nil, registerErr
 		}
 		service, serviceErr := contentflow.NewSenderService(contentflow.SenderServiceConfig{
-			Store: revisionStore, SessionCapacity: sessionCapacity, Sealer: recordSealer, Cache: cache,
+			Store: revisionStore, SessionCapacity: sessionCapacity, Encoder: recordEncoder, Cache: cache,
 		})
 		if serviceErr != nil {
 			return nil, errors.Join(serviceErr, sessionCapacity.Close())
@@ -343,12 +322,7 @@ func newSyntheticCapacityFixture(t *testing.T, fileCount uint64) *syntheticCapac
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifier, err := catalogflow.NewCatalogObjectVerifier(catalogflow.CatalogObjectVerifierConfig{
-		ShareInstance: share, CatalogKey: catalogKey, Sender: checkedSender(t, publicKey),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	verifier := catalogflow.CatalogPayloadDecoder{}
 	processReassembly, err := contentflow.NewReassemblyAccount(
 		"synthetic-capacity-process", contentflow.ReassemblyLimits{Bytes: 1 << 30, Records: 256},
 	)
@@ -367,7 +341,7 @@ func newSyntheticCapacityFixture(t *testing.T, fileCount uint64) *syntheticCapac
 	}
 	receiverFactory, err := NewFactory(FactoryConfig{
 		Descriptor: descriptor, SessionAuthKey: sessionAuthKey, Sender: checkedSender(t, publicKey),
-		CatalogVerifier: verifier, RecordOpener: recordOpener,
+		CatalogVerifier: verifier, RecordDecoder: recordDecoder,
 		ReassemblyProcess: processReassembly, ReassemblyShare: shareReassembly, PlaintextProcess: plaintext,
 		Random: &deterministicReader{next: 83},
 	})

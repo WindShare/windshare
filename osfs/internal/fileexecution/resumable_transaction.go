@@ -249,7 +249,7 @@ func (transaction *resumablePartialFileTransaction) Pause(
 	ctx context.Context,
 	reason transfer.FilePauseReason,
 ) (transfer.FileSettlement, error) {
-	if reason < transfer.FilePauseInterrupted || reason > transfer.FilePauseDependencyContract {
+	if !reason.Valid() {
 		return transfer.FileSettlement{}, fileContractError(transfer.ErrInvalidOutputSettlement)
 	}
 	if transaction == nil || transaction.engine == nil {

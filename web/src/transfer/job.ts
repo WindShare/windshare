@@ -619,6 +619,7 @@ export class TransferJob {
       ...(this.#options.incidentScope === undefined
         ? {}
         : { incidentScope: this.#options.incidentScope }),
+      onRevisionReadmission: event => this.#observers?.revisionReadmission(file.entry.idText, event),
       onInitialCoverage: coverage => {
         materializedBytes = coverage.acceptedBytes
         this.#progress.observeMaterializedFile(file.entry.idText, materializedBytes)

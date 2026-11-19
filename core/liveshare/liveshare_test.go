@@ -3,7 +3,6 @@ package liveshare
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"io"
@@ -14,14 +13,11 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content"
-	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/internal/testoutputroot"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/senderauth"
-	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
 	sendersession "github.com/windshare/windshare/core/session/sendersession"
@@ -72,7 +68,6 @@ func TestPreparedSenderAndReceiverOwnSuite02Bootstrap(t *testing.T) {
 	if sender.Capability().ReadSecret[0] == copyOfCapability.ReadSecret[0] {
 		t.Fatal("sender leaked mutable capability secret storage")
 	}
-	recordSealer, catalogObjects := sender.recordSealer, sender.catalogObjects
 	readSecretAlias, sessionAuthAlias, privateKeyAlias := sender.capability.ReadSecret, sender.sessionAuthKey, sender.privateKey
 	if len(readSecretAlias) == 0 || len(sessionAuthAlias) == 0 || len(privateKeyAlias) == 0 ||
 		bytes.Equal(readSecretAlias, make([]byte, len(readSecretAlias))) ||
@@ -83,20 +78,13 @@ func TestPreparedSenderAndReceiverOwnSuite02Bootstrap(t *testing.T) {
 	if err := sender.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := recordSealer.SealRevision(content.FileRevisionDescriptor{}); !errors.Is(err, records.ErrSealerDestroyed) {
-		t.Fatalf("closed sender retained record sealer authority: %v", err)
-	}
-	if _, err := catalogObjects.LoadSealedPage(context.Background(), catalog.CatalogPage{}); !errors.Is(err, catalogflow.ErrSealedCatalogStoreDestroyed) {
-		t.Fatalf("closed sender retained catalog sealer authority: %v", err)
-	}
 	if !bytes.Equal(readSecretAlias, make([]byte, len(readSecretAlias))) ||
 		!bytes.Equal(sessionAuthAlias, make([]byte, len(sessionAuthAlias))) ||
 		!bytes.Equal(privateKeyAlias, make([]byte, len(privateKeyAlias))) {
 		t.Fatal("closed sender left secret bytes in retained parent aliases")
 	}
 	sender.mu.Lock()
-	retainedOwnedGraph := sender.runtimeFactory != nil || sender.cache != nil || sender.catalogAccess != nil || sender.catalogObjects != nil ||
-		sender.recordSealer != nil || sender.revisionStore != nil ||
+	retainedOwnedGraph := sender.runtimeFactory != nil || sender.cache != nil || sender.catalogAccess != nil || sender.revisionStore != nil ||
 		sender.catalogStore != nil || sender.source != nil || sender.keyTree != nil || sender.random != nil
 	sender.mu.Unlock()
 	if retainedOwnedGraph {
@@ -198,7 +186,7 @@ func TestLiveShareFacadeTransfersProgressiveDirectoryToDurableOutput(t *testing.
 		t.Fatalf("output authority created its root before terminal selection: %v", statErr)
 	}
 	// Closing the facade ends admission, but the connected runtime must retain
-	// its content-authentication resources until its own lifecycle ends.
+	// its authenticated session until its own lifecycle ends.
 	receiver.Close()
 	rules, _ := transfer.NewSelectionRules(true, nil)
 	selection, err := transfer.NewSelectionSpec(
@@ -250,54 +238,6 @@ func TestLiveShareFacadeTransfersProgressiveDirectoryToDurableOutput(t *testing.
 	stops, cleanups := terminal.snapshot()
 	if stops != 1 || cleanups != 1 {
 		t.Fatalf("terminal calls = stop %d cleanup %d", stops, cleanups)
-	}
-}
-
-func TestReceiverRuntimeResourcesDestroySecretsAfterLastLease(t *testing.T) {
-	share := catalog.ShareInstance{1}
-	keyTree, err := content.NewKeyTree(bytes.Repeat([]byte{2}, content.ReadSecretBytes), share)
-	if err != nil {
-		t.Fatal(err)
-	}
-	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{3}, ed25519.SeedSize))
-	verifier, err := catalogflow.NewCatalogObjectVerifier(catalogflow.CatalogObjectVerifierConfig{
-		ShareInstance: share, CatalogKey: bytes.Repeat([]byte{4}, 32),
-		Sender: checkedSender(t, privateKey.Public().(ed25519.PublicKey)),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	resources := newReceiverRuntimeResources(keyTree, verifier)
-	first, err := resources.AcquireReceiverRuntimeResources()
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := resources.AcquireReceiverRuntimeResources()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	resources.Close()
-	if _, err := keyTree.CatalogKey(); err != nil {
-		t.Fatalf("active lease lost key tree: %v", err)
-	}
-	if _, err := verifier.Verify(context.Background(), share, catalogflow.ListRequest{}, []byte{1}); errors.Is(err, catalogflow.ErrCatalogObjectVerifierDestroyed) {
-		t.Fatal("active lease lost catalog verifier")
-	}
-	if _, err := resources.AcquireReceiverRuntimeResources(); !errors.Is(err, errReceiverClosed) {
-		t.Fatalf("closed resources admitted a runtime: %v", err)
-	}
-	first.Release()
-	if _, err := keyTree.CatalogKey(); err != nil {
-		t.Fatalf("remaining lease lost key tree: %v", err)
-	}
-	second.Release()
-	second.Release()
-	if _, err := keyTree.CatalogKey(); !errors.Is(err, content.ErrKeyTreeDestroyed) {
-		t.Fatalf("last lease did not destroy key tree: %v", err)
-	}
-	if _, err := verifier.Verify(context.Background(), share, catalogflow.ListRequest{}, []byte{1}); !errors.Is(err, catalogflow.ErrCatalogObjectVerifierDestroyed) {
-		t.Fatalf("last lease did not destroy catalog verifier: %v", err)
 	}
 }
 

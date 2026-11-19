@@ -1,5 +1,3 @@
-import { createEd25519Verifier } from '../../src/crypto/ed25519'
-import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 
 import { describe, expect, it } from 'vitest'
@@ -13,22 +11,13 @@ import {
   encodePeerOffer,
   samePeerBinding,
 } from '../../src/connectivity/signaling-codec'
-import { concatBytes } from '../../src/crypto/bytes'
-import { decodeCanonicalCbor, encodeCanonicalCbor, requireBytes, requireNumericMap } from '../../src/protocol/cbor'
+import { decodeCanonicalCbor, encodeCanonicalCbor } from '../../src/protocol/cbor'
 import {
   encodeMessage,
-  type ControlBinding,
-  verifySenderControl,
+  decodeMessage,
+  validateSenderControlBody,
   MESSAGE_KIND,
 } from '../../src/session/message'
-
-interface SignedControlVector {
-  readonly sequence: string
-  readonly unsignedWrapperCborB64: string
-  readonly controlPreimageB64: string
-  readonly controlSignatureB64: string
-  readonly signedBodyB64: string
-}
 
 interface SignalingVector {
   readonly schemaVersion: number
@@ -37,24 +26,18 @@ interface SignalingVector {
   readonly messageKinds: { readonly offer: number; readonly answer: number; readonly candidate: number }
   readonly peerPathIdB64: string
   readonly attemptIdB64: string
-  readonly senderPublicKeyB64: string
   readonly controlBinding: {
-    readonly shareInstanceB64: string
-    readonly protocolSessionIdB64: string
-    readonly laneId: number
-    readonly laneEpoch: number
-    readonly direction: number
     readonly operationIdB64: string
   }
   readonly offer: { readonly sdp: string; readonly bodyB64: string }
-  readonly answer: SignedControlVector & { readonly sdp: string; readonly bodyB64: string }
+  readonly answer: { readonly sdp: string; readonly bodyB64: string }
   readonly candidate: {
     readonly candidate: string
     readonly sdpMid: string
     readonly sdpMLineIndex: number
     readonly usernameFragment: string
     readonly bodyB64: string
-  } & SignedControlVector
+  }
 }
 
 const vector = JSON.parse(readFileSync(
@@ -109,51 +92,19 @@ describe('v2 E2E peer signaling codec', () => {
     expect(decodePeerCandidate(bytes(vector.candidate.bodyB64))).toEqual(candidate)
   })
 
-  it('opens the Go-authored signed answer and candidate wrappers as their typed bodies', async () => {
-    expect(vector.controlBinding.direction).toBe(1)
+  it('decodes Go answer and candidate bodies from session messages', () => {
     const operationId = bytes(vector.controlBinding.operationIdB64)
-    const baseBinding = {
-      shareInstance: bytes(vector.controlBinding.shareInstanceB64),
-      protocolSessionId: bytes(vector.controlBinding.protocolSessionIdB64),
-      laneId: vector.controlBinding.laneId,
-      laneEpoch: vector.controlBinding.laneEpoch,
-      direction: 1 as const,
-    }
     const cases = [
       [MESSAGE_KIND.peerAnswer, vector.answer, decodePeerAnswer],
       [MESSAGE_KIND.peerCandidate, vector.candidate, decodePeerCandidate],
     ] as const
 
     for (const [kind, control, decodeBody] of cases) {
-      const semanticBody = bytes(control.bodyB64)
-      const binding: ControlBinding = {
-        ...baseBinding,
-        sequence: BigInt(control.sequence),
-      }
-      const expectedWrapper = encodeCanonicalCbor(new Map<number, unknown>([
-        [0, 1],
-        [1, decodeCanonicalCbor(semanticBody, 65_536, 'peer signaling vector body')],
-      ]))
-      expect(expectedWrapper).toEqual(bytes(control.unsignedWrapperCborB64))
-      expect(peerControlPreimage(kind, operationId, binding, expectedWrapper)).toEqual(
-        bytes(control.controlPreimageB64),
-      )
-      const signedBody = bytes(control.signedBodyB64)
-      const signedFields = requireNumericMap(
-        decodeCanonicalCbor(signedBody, 65_536, 'signed peer control vector'),
-        [0, 1, 255],
-        'signed peer control vector',
-      )
-      expect(requireBytes(signedFields.get(255), 64, 'peer control signature')).toEqual(
-        bytes(control.controlSignatureB64),
-      )
-      const verified = await verifySenderControl(
-        encodeMessage(kind, operationId, signedBody),
-        binding,
-        createEd25519Verifier(bytes(vector.senderPublicKeyB64)),
-      )
-      expect(verified).toEqual(semanticBody)
-      expect(decodeBody(verified)).toMatchObject({
+      const encoded = encodeMessage(kind, operationId, bytes(control.bodyB64))
+      const message = decodeMessage(encoded.plaintext)
+      validateSenderControlBody(message.kind, message.body)
+      expect(message.operationId).toEqual(operationId)
+      expect(decodeBody(message.body)).toMatchObject({
         peerPathId: bytes(vector.peerPathIdB64),
         attemptId: bytes(vector.attemptIdB64),
         purpose: 'initial' as const,
@@ -184,28 +135,3 @@ describe('v2 E2E peer signaling codec', () => {
     })).toThrow()
   })
 })
-
-function peerControlPreimage(
-  kind: number,
-  operationId: Uint8Array,
-  binding: ControlBinding,
-  unsignedWrapper: Uint8Array,
-): Uint8Array<ArrayBuffer> {
-  const lane = new Uint8Array(8)
-  const laneView = new DataView(lane.buffer)
-  laneView.setUint32(0, binding.laneId, false)
-  laneView.setUint32(4, binding.laneEpoch, false)
-  const sequence = new Uint8Array(8)
-  new DataView(sequence.buffer).setBigUint64(0, binding.sequence, false)
-  return concatBytes([
-    new TextEncoder().encode('windshare/v2 control/operation\0'),
-    binding.shareInstance,
-    binding.protocolSessionId,
-    lane,
-    Uint8Array.of(binding.direction),
-    sequence,
-    Uint8Array.of(kind),
-    operationId,
-    createHash('sha256').update(unsignedWrapper).digest(),
-  ])
-}

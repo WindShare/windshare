@@ -119,20 +119,12 @@ func (runtime *Runtime) AttachLane(
 	settlement.Disposition = LaneAdmissionAccepted
 	settlement.LaneInstallation = LaneInstallationFailed
 	identity := settlement.Lane
-	base := protocolsession.ControlBinding{
-		ShareInstance: runtime.descriptor.ShareInstance(), ProtocolSessionID: runtime.ProtocolSessionID(),
-		LaneID: identity.ID, LaneEpoch: identity.Epoch, Direction: protocolsession.DirectionSenderToReceiver,
-	}
-	authenticator, err := protocolsession.NewSenderControlAuthenticator(runtime.sender, base, runtime.semantic)
-	if err != nil {
-		return settlement, err
-	}
 	handOff := sessioncore.HandOff(owner, owner.Recv())
 	blockLane := &receiverBlockLane{
 		identity: identity, rpc: runtime.rpc, assembler: runtime.assembler,
-		opener: runtime.opener, revisions: runtime.revisions,
+		decoder: runtime.decoder, revisions: runtime.revisions,
 	}
-	err = runtime.core.InstallLane(identity, handOff, authenticator, requestlane.New(responseTime), func() error {
+	err = runtime.core.InstallLane(identity, handOff, protocolsession.SenderMessageValidator(runtime.semantic), requestlane.New(responseTime), func() error {
 		return runtime.laneSet.Add(
 			transferlanes.Identity{ID: identity.ID, Epoch: identity.Epoch},
 			route,

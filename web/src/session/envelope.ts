@@ -1,3 +1,4 @@
+import { SESSION_WIRE_VERSION } from './version'
 import { concatBytes, copyBytes } from '../crypto/bytes'
 import { type CryptoRuntime, defaultCryptoRuntime } from '../crypto/webcrypto'
 
@@ -70,7 +71,7 @@ export class EnvelopeSealer {
     const ciphertextLength = plaintext.byteLength + ENVELOPE_TAG_BYTES
     const header = new Uint8Array(ENVELOPE_HEADER_BYTES)
     const view = new DataView(header.buffer)
-    header[0] = 2
+    header[0] = SESSION_WIRE_VERSION
     header[1] = this.#binding.direction
     view.setBigUint64(4, sequence, false)
     view.setUint32(12, ciphertextLength, false)
@@ -166,7 +167,7 @@ function parseHeader(frame: Uint8Array, direction: EnvelopeDirection): ParsedHea
   if (
     frame.byteLength < ENVELOPE_HEADER_BYTES + ENVELOPE_TAG_BYTES ||
     frame.byteLength > ENVELOPE_MAXIMUM_BYTES ||
-    frame[0] !== 2 ||
+    frame[0] !== SESSION_WIRE_VERSION ||
     frame[1] !== direction ||
     frame[2] !== 0 ||
     frame[3] !== 0
@@ -223,7 +224,7 @@ function envelopeAuthenticationData(
   new DataView(length.buffer).setUint32(0, ciphertextLength, false)
   return concatBytes([
     ENVELOPE_DOMAIN,
-    Uint8Array.of(2, binding.direction),
+    Uint8Array.of(SESSION_WIRE_VERSION, binding.direction),
     binding.shareInstance,
     binding.protocolSessionId,
     geometry,

@@ -3,7 +3,6 @@ package sessioncore
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session"
@@ -122,8 +121,7 @@ func TestSenderProtocolOperationTraceCorrelatesRequestAndResponse(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x72}, ed25519.SeedSize))
-	outbound := &Responses{runtime: runtime, controlPreparer: testControlPreparer(privateKey)}
+	outbound := &Responses{runtime: runtime}
 	responseBody, err := contentflow.EncodeOperationComplete(0)
 	if err != nil {
 		t.Fatal(err)
@@ -197,8 +195,7 @@ func TestSenderProtocolOperationTraceCapturesFailureSendSettlement(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x77}, ed25519.SeedSize))
-	outbound := &Responses{runtime: runtime, controlPreparer: testControlPreparer(privateKey)}
+	outbound := &Responses{runtime: runtime}
 	failureBody, err := protocolsession.EncodeOperationFailure(protocolsession.OperationFailure{
 		Scope:      protocolsession.OperationScopeRevision,
 		Code:       0x3008,
@@ -326,25 +323,10 @@ func TestProtocolOperationTraceCapturesAuthenticatedReceivedFailureAtSource(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding := (&Responses{runtime: runtime}).controlBinding(runtime.initial)
-	binding.Sequence = 1
-	binding.MessageKind = protocolsession.MessageOperationError
-	binding.OperationID = call.id
-	binding.HasOperationID = true
-	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{97}, ed25519.SeedSize))
-	signed, err := protocolsession.SignControlBody(
-		privateKey,
-		protocolsession.ControlDomainOperation,
-		binding,
-		semantic,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	message, err := protocolsession.NewMessage(
 		protocolsession.MessageOperationError,
 		&call.id,
-		signed,
+		semantic,
 	)
 	if err != nil {
 		t.Fatal(err)

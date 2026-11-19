@@ -35,7 +35,7 @@ func TestLongNamesFitSealedPagesAndSurviveRestart(t *testing.T) {
 				share, _ := catalog.NewBudgetAccount("share", catalog.DefaultShareBudgetLimits())
 				store, err := catalog.NewCatalogStore(catalog.StoreConfig{
 					ShareInstance: fixture.share, Backend: backend, ProcessBudget: process, ShareBudget: share,
-					PageSealer:   newObjectStore(t, fixture, &nonceCounter{}),
+					PageSealer:   CatalogPayloadEncoder{},
 					SpillFactory: catalog.NewFileSpillFactory(filepath.Join(disk, "sort")),
 				})
 				if err != nil {
@@ -74,12 +74,7 @@ func TestLongNamesFitSealedPagesAndSurviveRestart(t *testing.T) {
 			if committed.EntryCount() != uint64(scenario.childCount) || committed.PageCount() < 2 {
 				t.Fatalf("long-name pages did not split by byte budget: %+v", committed)
 			}
-			verifier, err := NewCatalogObjectVerifier(CatalogObjectVerifierConfig{
-				ShareInstance: fixture.share, CatalogKey: fixture.key, Sender: checkedSender(t, fixture.publicKey),
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
+			verifier := CatalogPayloadDecoder{}
 			generation := committed.Generation()
 			before := make([][]byte, committed.PageCount())
 			total := 0

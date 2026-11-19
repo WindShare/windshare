@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { encodeCatalogName } from '../../src/catalog/path-policy'
-import { openCatalogObject } from '../../src/catalog/records'
+import { decodeCatalogPayload } from '../../src/catalog/records'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import { createSignedCatalogFixture } from '../catalog/signed-catalog-fixture'
 import {
@@ -44,7 +44,7 @@ describe('frozen catalog names throughout output ownership', () => {
         directoryId, generation, pageIndex: 0, terminal: true, previousCommitment: new Uint8Array(32),
         entries: [{ kind: 'file', id: id(4), name: NAME, expectedSize: 12n }],
       })
-      const opened = await openCatalogObject(sealed.object, fixture.descriptor, fixture.readSecret,
+      const opened = await decodeCatalogPayload(sealed.object, fixture.descriptor,
         { directoryId, generation, pageIndex: 0 })
       if (opened.kind !== 'page') throw new Error('Expected an authenticated page')
       const name = opened.page.entries[0]!.name

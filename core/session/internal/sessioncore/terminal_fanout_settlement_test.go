@@ -2,7 +2,6 @@ package sessioncore
 
 import (
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session"
@@ -63,7 +62,7 @@ func TestTerminalFanoutWaitsForReceiptsAfterLifecycleCancellation(t *testing.T) 
 				defer cancel()
 				go func() {
 					result <- (&Responses{
-						runtime: runtime, controlPreparer: testControlPreparer(ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))),
+						runtime: runtime,
 					}).sendTerminalRecipients(callerContext, body, recipients)
 				}()
 				for _, channel := range channels {

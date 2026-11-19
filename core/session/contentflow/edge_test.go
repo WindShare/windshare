@@ -329,26 +329,26 @@ func (store *stubRevisionStore) ReadBlock(context.Context, content.LeaseID, cont
 	return slices.Clone(store.read), store.readErr
 }
 
-type stubRecordSealer struct {
+type stubRecordEncoder struct {
 	revision    []byte
 	revisionErr error
 	block       []byte
 	blockErr    error
 }
 
-func (sealer stubRecordSealer) SealRevision(content.FileRevisionDescriptor) ([]byte, error) {
+func (sealer stubRecordEncoder) EncodeRevision(content.FileRevisionDescriptor) ([]byte, error) {
 	return slices.Clone(sealer.revision), sealer.revisionErr
 }
-func (sealer stubRecordSealer) SealBlock(records.BlockRecord) (records.SealedBlock, error) {
-	return records.SealedBlock{Object: slices.Clone(sealer.block)}, sealer.blockErr
+func (sealer stubRecordEncoder) EncodeBlock(records.BlockRecord) ([]byte, error) {
+	return slices.Clone(sealer.block), sealer.blockErr
 }
 
-func stubService(t *testing.T, descriptor content.FileRevisionDescriptor, store RevisionStore, sealer RecordSealer) (*SenderService, *SharedBlockCache) {
+func stubService(t *testing.T, descriptor content.FileRevisionDescriptor, store RevisionStore, sealer RecordEncoder) (*SenderService, *SharedBlockCache) {
 	t.Helper()
 	process, _ := NewProcessCacheBudget(1 << 20)
 	cache, _ := NewSharedBlockCache(descriptor.ShareInstance(), 1<<20, process)
 	service, err := NewSenderService(SenderServiceConfig{
-		Store: store, SessionCapacity: testSessionCapacity(t), Sealer: sealer, Cache: cache,
+		Store: store, SessionCapacity: testSessionCapacity(t), Encoder: sealer, Cache: cache,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -429,7 +429,7 @@ func TestSenderServiceRollsBackMalformedStoreAndSealOutcomes(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			store := &stubRevisionStore{results: test.results, openErr: test.openErr}
-			service, cache := stubService(t, lease.Descriptor(), store, stubRecordSealer{revision: []byte{1}})
+			service, cache := stubService(t, lease.Descriptor(), store, stubRecordEncoder{revision: []byte{1}})
 			defer cache.Close()
 			defer service.Close()
 			if _, err := service.Open(context.Background(), requests); err == nil {
@@ -444,7 +444,7 @@ func TestSenderServiceRollsBackMalformedStoreAndSealOutcomes(t *testing.T) {
 	}
 
 	sealStore := &stubRevisionStore{results: []content.OpenRevisionResult{{FileID: file, Lease: lease}}}
-	service, cache := stubService(t, lease.Descriptor(), sealStore, stubRecordSealer{revisionErr: records.ErrSealLimit})
+	service, cache := stubService(t, lease.Descriptor(), sealStore, stubRecordEncoder{revisionErr: records.ErrInvalidRecord})
 	defer cache.Close()
 	defer service.Close()
 	one, _ := NewOpenRequest([]OpenItem{{FileID: file}})
@@ -458,7 +458,7 @@ func TestSenderServiceRollsBackMalformedStoreAndSealOutcomes(t *testing.T) {
 	}
 
 	reuseStore := &stubRevisionStore{results: []content.OpenRevisionResult{{FileID: file, Lease: lease}}}
-	reuseService, reuseCache := stubService(t, lease.Descriptor(), reuseStore, stubRecordSealer{revision: []byte{1}})
+	reuseService, reuseCache := stubService(t, lease.Descriptor(), reuseStore, stubRecordEncoder{revision: []byte{1}})
 	defer reuseCache.Close()
 	if _, err := reuseService.Open(context.Background(), one); err != nil {
 		t.Fatal(err)
@@ -492,7 +492,7 @@ func TestStubbedServiceCoversBlockErrorAndEmitterBoundaries(t *testing.T) {
 		results: []content.OpenRevisionResult{{FileID: base.file, Lease: lease}},
 		renew:   lease, read: make([]byte, catalog.MinChunkSize),
 	}
-	sealer := stubRecordSealer{revision: []byte{1}, block: []byte("sealed")}
+	sealer := stubRecordEncoder{revision: []byte{1}, block: []byte("sealed")}
 	service, cache := stubService(t, lease.Descriptor(), store, sealer)
 	defer cache.Close()
 	defer service.Close()
@@ -542,21 +542,21 @@ func TestCacheAdmissionEvictionCancellationAndCloseEdges(t *testing.T) {
 	cache, _ := NewSharedBlockCache(descriptor.ShareInstance(), 5, process)
 	key0, _ := NewBlockCacheKey(descriptor, 0)
 	key1, _ := NewBlockCacheKey(descriptor, 1)
-	if _, err := cache.Get(context.Background(), BlockCacheKey{}, func(context.Context) ([]byte, error) { return []byte{1}, nil }); !errors.Is(err, ErrInvalidCacheKey) {
+	if _, err := cache.get(context.Background(), BlockCacheKey{}, func(context.Context) ([]byte, error) { return []byte{1}, nil }); !errors.Is(err, ErrInvalidCacheKey) {
 		t.Fatalf("invalid key get error=%v", err)
 	}
-	if _, err := cache.Get(context.Background(), key0, nil); !errors.Is(err, ErrInvalidCacheKey) {
+	if _, err := cache.get(context.Background(), key0, nil); !errors.Is(err, ErrInvalidCacheKey) {
 		t.Fatalf("nil loader error=%v", err)
 	}
-	if _, err := cache.Get(context.Background(), key0, func(context.Context) ([]byte, error) { return nil, nil }); err == nil {
+	if _, err := cache.get(context.Background(), key0, func(context.Context) ([]byte, error) { return nil, nil }); err == nil {
 		t.Fatal("empty loader result accepted")
 	}
-	_, _ = cache.Get(context.Background(), key0, func(context.Context) ([]byte, error) { return []byte{1, 2, 3, 4}, nil })
-	_, _ = cache.Get(context.Background(), key1, func(context.Context) ([]byte, error) { return []byte{5, 6, 7, 8}, nil })
+	_, _ = cache.get(context.Background(), key0, func(context.Context) ([]byte, error) { return []byte{1, 2, 3, 4}, nil })
+	_, _ = cache.get(context.Background(), key1, func(context.Context) ([]byte, error) { return []byte{5, 6, 7, 8}, nil })
 	if cache.UsedBytes() != 4 || process.Used() != 4 {
 		t.Fatalf("LRU usage cache=%d process=%d", cache.UsedBytes(), process.Used())
 	}
-	if _, err := cache.Get(context.Background(), key0, func(context.Context) ([]byte, error) { return bytes.Repeat([]byte{1}, 6), nil }); err != nil {
+	if _, err := cache.get(context.Background(), key0, func(context.Context) ([]byte, error) { return bytes.Repeat([]byte{1}, 6), nil }); err != nil {
 		t.Fatal(err)
 	}
 	if cache.UsedBytes() != 4 {
@@ -572,7 +572,7 @@ func TestCacheAdmissionEvictionCancellationAndCloseEdges(t *testing.T) {
 	}
 	cache.mu.Unlock()
 	go func() {
-		_, err := cache.Get(ctx, key0, func(loadContext context.Context) ([]byte, error) {
+		_, err := cache.get(ctx, key0, func(loadContext context.Context) ([]byte, error) {
 			close(started)
 			<-loadContext.Done()
 			close(cancelled)
@@ -588,7 +588,7 @@ func TestCacheAdmissionEvictionCancellationAndCloseEdges(t *testing.T) {
 	<-cancelled
 	cache.Close()
 	cache.Close()
-	if _, err := cache.Get(context.Background(), key0, func(context.Context) ([]byte, error) { return []byte{1}, nil }); !errors.Is(err, ErrServiceClosed) {
+	if _, err := cache.get(context.Background(), key0, func(context.Context) ([]byte, error) { return []byte{1}, nil }); !errors.Is(err, ErrServiceClosed) {
 		t.Fatalf("closed cache error=%v", err)
 	}
 }

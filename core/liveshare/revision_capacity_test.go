@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content/records"
+	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 )
 
@@ -106,10 +106,10 @@ func TestPrepareSenderFailureUnregistersStoreBeforeReturning(t *testing.T) {
 	if err := os.WriteFile(path, []byte("partial preparation"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	injected := errors.New("record sealer construction failed")
+	injected := errors.New("session key derivation failed")
 	dependencies := productionSenderPreparationDependencies()
-	dependencies.newRecordSealer = func(records.SealerConfig) (*records.Sealer, error) {
-		return nil, injected
+	dependencies.sessionAuthKey = func(*content.KeyTree) (content.DerivedKey, error) {
+		return content.DerivedKey{}, injected
 	}
 
 	sender, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),

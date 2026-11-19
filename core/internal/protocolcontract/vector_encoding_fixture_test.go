@@ -6,10 +6,9 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"github.com/fxamacker/cbor/v2"
 	"slices"
 	"testing"
-
-	"github.com/fxamacker/cbor/v2"
 )
 
 func canonical(t *testing.T, value any) []byte {
@@ -24,18 +23,6 @@ func canonical(t *testing.T, value any) []byte {
 		t.Fatal(err)
 	}
 	return encoded
-}
-
-func unsignedControlWrapper(t *testing.T, semanticBody []byte) []byte {
-	t.Helper()
-	return canonical(t, map[uint64]any{0: uint64(1), 1: cbor.RawMessage(semanticBody)})
-}
-
-func signedControlWrapper(t *testing.T, semanticBody, signature []byte) []byte {
-	t.Helper()
-	return canonical(t, map[uint64]any{
-		0: uint64(1), 1: cbor.RawMessage(semanticBody), 255: signature,
-	})
 }
 
 func derive(t *testing.T, secret []byte, label string, context []byte) []byte {

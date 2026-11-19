@@ -73,8 +73,6 @@ type senderRevisionIdentityDeriver interface {
 }
 
 type senderPreparationDependencies struct {
-	newCatalogObjects  func(catalogflow.SealedCatalogStoreConfig) (*catalogflow.SealedCatalogStore, error)
-	newRecordSealer    func(records.SealerConfig) (*records.Sealer, error)
 	newRevisionDeriver func(content.RevisionIdentityKey) (senderRevisionIdentityDeriver, error)
 	newRevisionStore   func(content.RevisionStoreConfig) (*content.RevisionStore, error)
 	sessionAuthKey     func(*content.KeyTree) (content.DerivedKey, error)
@@ -82,8 +80,6 @@ type senderPreparationDependencies struct {
 
 func productionSenderPreparationDependencies() senderPreparationDependencies {
 	return senderPreparationDependencies{
-		newCatalogObjects: catalogflow.NewSealedCatalogStore,
-		newRecordSealer:   records.NewSealer,
 		newRevisionDeriver: func(key content.RevisionIdentityKey) (senderRevisionIdentityDeriver, error) {
 			return content.NewHMACRevisionIdentityDeriver(key)
 		},
@@ -115,8 +111,6 @@ type PreparedSender struct {
 	keyTree         *content.KeyTree
 	cache           *contentflow.SharedBlockCache
 	catalogAccess   *senderCatalogAccess
-	catalogObjects  *catalogflow.SealedCatalogStore
-	recordSealer    *records.Sealer
 	runtimeFactory  senderRuntimeLifecycle
 	closed          bool
 	closeDone       chan struct{}
@@ -148,9 +142,7 @@ type senderCatalog struct {
 
 func PrepareSender(ctx context.Context, config SenderConfig) (*PreparedSender, error) {
 	dependencies := config.preparation
-	if dependencies.newCatalogObjects == nil &&
-		dependencies.newRecordSealer == nil &&
-		dependencies.newRevisionDeriver == nil &&
+	if dependencies.newRevisionDeriver == nil &&
 		dependencies.newRevisionStore == nil &&
 		dependencies.sessionAuthKey == nil {
 		dependencies = productionSenderPreparationDependencies()
@@ -163,9 +155,7 @@ func prepareSender(
 	config SenderConfig,
 	dependencies senderPreparationDependencies,
 ) (result *PreparedSender, resultErr error) {
-	if dependencies.newCatalogObjects == nil ||
-		dependencies.newRecordSealer == nil ||
-		dependencies.newRevisionDeriver == nil ||
+	if dependencies.newRevisionDeriver == nil ||
 		dependencies.newRevisionStore == nil ||
 		dependencies.sessionAuthKey == nil {
 		return nil, errors.New("live share sender preparation dependencies are incomplete")
@@ -206,7 +196,7 @@ func prepareSender(
 		return nil, err
 	}
 	defer authority.destroy()
-	catalogState, err := prepareSenderCatalog(ctx, config, random, sender, authority, nil, dependencies)
+	catalogState, err := prepareSenderCatalog(ctx, config, random, sender, authority, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -281,21 +271,7 @@ func prepareSenderCatalog(
 	sender *PreparedSender,
 	authority senderAuthority,
 	spillFactory catalog.SpillFactory,
-	dependencies senderPreparationDependencies,
 ) (senderCatalog, error) {
-	catalogKey, err := sender.keyTree.CatalogKey()
-	if err != nil {
-		return senderCatalog{}, err
-	}
-	defer catalogKey.Destroy()
-	objects, err := dependencies.newCatalogObjects(catalogflow.SealedCatalogStoreConfig{
-		ShareInstance: authority.shareInstance, CatalogKey: catalogKey.Bytes(),
-		SenderPrivateKey: authority.privateKey, NonceSource: random,
-	})
-	if err != nil {
-		return senderCatalog{}, err
-	}
-	sender.catalogObjects = objects
 	shareBudget, err := catalog.NewBudgetAccount("live-share", catalog.DefaultShareBudgetLimits())
 	if err != nil {
 		return senderCatalog{}, err
@@ -330,7 +306,7 @@ func prepareSenderCatalog(
 	}
 	sender.catalogStore, err = catalog.NewCatalogStore(catalog.StoreConfig{
 		ShareInstance: authority.shareInstance, Backend: backend,
-		ProcessBudget: config.CatalogBudget, ShareBudget: shareBudget, PageSealer: objects, SpillFactory: spillFactory,
+		ProcessBudget: config.CatalogBudget, ShareBudget: shareBudget, PageSealer: catalogflow.CatalogPayloadEncoder{}, SpillFactory: spillFactory,
 	})
 	if err != nil {
 		if catalogStorageCause(err) == CatalogStorageCauseBudgetExceeded {
@@ -439,13 +415,6 @@ func prepareSenderContent(
 		CapacityStore:   senderRevisionCapacityStoreConfig(authority.shareInstance, config.CapacityTracer),
 		RevisionDeriver: sender.revisionDeriver, MetadataBudget: metadataBudget,
 		CacheInvalidator: sender.cache, Tracer: config.RevisionTracer,
-	})
-	if err != nil {
-		return err
-	}
-	sender.recordSealer, err = dependencies.newRecordSealer(records.SealerConfig{
-		ShareInstance: authority.shareInstance, Keys: sender.keyTree,
-		SigningKey: authority.privateKey, NonceSource: random,
 	})
 	if err != nil {
 		return err
@@ -560,7 +529,7 @@ func (sender *PreparedSender) NewRuntimeFactory(config RuntimeFactoryConfig) (*s
 			return nil, err
 		}
 		service, err := contentflow.NewSenderService(contentflow.SenderServiceConfig{
-			Store: sender.revisionStore, SessionCapacity: sessionCapacity, Sealer: sender.recordSealer, Cache: sender.cache,
+			Store: sender.revisionStore, SessionCapacity: sessionCapacity, Encoder: records.Encoder{}, Cache: sender.cache,
 		})
 		if err != nil {
 			return nil, errors.Join(err, sessionCapacity.Close())

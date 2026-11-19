@@ -25,9 +25,6 @@ var (
 	ErrWriterStopped        = errors.New("protocolsession: writer is stopped")
 	ErrWriterReused         = errors.New("protocolsession: writer Run may only be called once")
 	ErrMessageClass         = errors.New("protocolsession: message submitted to the wrong writer queue")
-	ErrSequenceBoundControl = errors.New("protocolsession: sender control must be built with its envelope sequence")
-	ErrSequencedBuild       = errors.New("protocolsession: sequenced message builder failed")
-	ErrSequencedSize        = errors.New("protocolsession: sequenced message size differs from its reservation")
 	ErrSealerSequence       = errors.New("protocolsession: envelope sealer returned a different sequence")
 	ErrSealingReservation   = errors.New("protocolsession: reserved delivery lost sealing authority")
 	ErrOutboundReplayPermit = errors.New("protocolsession: sender response admission returned no replay permit")
@@ -53,8 +50,6 @@ type OutboundEnvelopeSealer interface {
 	Seal(plaintext []byte) (SealedEnvelope, error)
 }
 
-type sequencedMessageBuilder func(sequence uint64) (Message, error)
-
 type messageClass uint8
 
 const (
@@ -66,7 +61,6 @@ const (
 type queuedMessage struct {
 	message                       Message
 	plaintext                     []byte
-	builder                       sequencedMessageBuilder
 	class                         messageClass
 	replay                        OutboundReplayPermit
 	authority                     OutboundOperationPermit
@@ -212,10 +206,6 @@ func (writer *SessionWriter) tryControlWithViolationHandler(
 	if message.IsData() || message.kind == MessageSessionTerminal {
 		return SendReceipt{}, ErrMessageClass
 	}
-	if writer.policy.OutboundDirection() == DirectionSenderToReceiver &&
-		(isOperationControl(message.kind) || message.kind == MessageLaneAttach || message.kind.isSessionControl()) {
-		return SendReceipt{}, ErrSequenceBoundControl
-	}
 	item, err := prepareQueuedMessage(message, classControl)
 	if err != nil {
 		return SendReceipt{}, err
@@ -321,73 +311,18 @@ func (writer *SessionWriter) enqueueContinuation(item *queuedMessage) (SendRecei
 	return item.result.receipt(), nil
 }
 
-// TryControlWithSequence reserves the exact final plaintext size, then invokes
-// builder in the writer goroutine with the sealer's next sequence. This is the
-// only safe point to add a sender-control signature whose preimage binds it.
-func (writer *SessionWriter) tryControlWithSequence(
-	plaintextBytes int,
-	builder sequencedMessageBuilder,
-) (SendReceipt, error) {
-	if writer.policy.OutboundDirection() == DirectionSenderToReceiver {
-		return SendReceipt{}, ErrSequenceBoundControl
+func (writer *SessionWriter) TryTerminal(message Message) (SendReceipt, error) {
+	if message.kind != MessageSessionTerminal || writer.policy.OutboundDirection() != DirectionSenderToReceiver {
+		return SendReceipt{}, ErrMessageClass
 	}
-	item, err := prepareSequencedMessage(plaintextBytes, classControl, builder)
+	if _, err := DecodeSessionTerminal(message.body); err != nil {
+		return SendReceipt{}, err
+	}
+	item, err := prepareQueuedMessage(message, classTerminal)
 	if err != nil {
 		return SendReceipt{}, err
 	}
-	return writer.enqueue(item)
-}
-
-// TrySenderControl is the only sender-to-receiver control admission path. The
-// prepared callback signs inside the writer goroutine with the exact sequence
-// read immediately before envelope sealing.
-func (writer *SessionWriter) TrySenderControl(control PreparedSenderControl) (SendReceipt, error) {
-	return writer.trySenderControl(control, OutboundReplayPermit{}, OutboundOperationPermit{})
-}
-
-func (writer *SessionWriter) TryAuthorizedSenderControl(
-	control PreparedSenderControl,
-	authority OutboundOperationPermit,
-) (SendReceipt, error) {
-	return writer.trySenderControl(control, OutboundReplayPermit{}, authority)
-}
-
-// TrySenderControlReplay rebuilds one previously attempted semantic response
-// with this writer's lane binding and sequence. Operation policy admits only an
-// exact permit for the same operation generation and canonical fingerprint.
-func (writer *SessionWriter) TrySenderControlReplay(
-	control PreparedSenderControl,
-	permit OutboundReplayPermit,
-) (SendReceipt, error) {
-	return writer.trySenderControl(control, permit, OutboundOperationPermit{})
-}
-
-func (writer *SessionWriter) trySenderControl(
-	control PreparedSenderControl,
-	permit OutboundReplayPermit,
-	authority OutboundOperationPermit,
-) (SendReceipt, error) {
-	if writer.policy.OutboundDirection() != DirectionSenderToReceiver || control.build == nil || control.plaintextBytes <= 0 {
-		return SendReceipt{}, ErrSequenceBoundControl
-	}
-	class := classControl
-	if control.kind == MessageSessionTerminal {
-		class = classTerminal
-	}
-	item, err := prepareSequencedMessage(control.plaintextBytes, class, control.build)
-	if err != nil {
-		return SendReceipt{}, err
-	}
-	item.replay = permit
-	item.authority = authority
-	if class == classTerminal {
-		return writer.acceptTerminal(item)
-	}
-	item.message = control.intent
-	if control.kind == MessagePeerCandidate {
-		return writer.enqueueContinuation(item)
-	}
-	return writer.enqueue(item)
+	return writer.acceptTerminal(item)
 }
 
 func (writer *SessionWriter) TryData(message Message) (SendReceipt, error) {
@@ -492,22 +427,5 @@ func prepareQueuedMessage(message Message, class messageClass) (*queuedMessage, 
 	return &queuedMessage{
 		message: message, plaintext: plaintext, class: class,
 		frameSize: frameSize, result: newDeliveryResult(),
-	}, nil
-}
-
-func prepareSequencedMessage(
-	plaintextBytes int,
-	class messageClass,
-	builder sequencedMessageBuilder,
-) (*queuedMessage, error) {
-	if builder == nil || plaintextBytes <= 0 {
-		return nil, ErrSequencedBuild
-	}
-	frameSize, err := EnvelopeFrameSize(plaintextBytes)
-	if err != nil {
-		return nil, err
-	}
-	return &queuedMessage{
-		builder: builder, class: class, frameSize: frameSize, result: newDeliveryResult(),
 	}, nil
 }

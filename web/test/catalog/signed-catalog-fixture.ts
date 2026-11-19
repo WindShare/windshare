@@ -2,17 +2,7 @@ import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import { ed25519 } from '@noble/curves/ed25519.js'
 
 import { PATH_POLICY, type ShareDescriptor } from '../../src/catalog/records'
-import { concatBytes, copyBytes, encodeBase64Url } from '../../src/crypto/bytes'
-import {
-  createCatalogPageObjectBinding,
-  SENDER_OBJECT_HEADER_BYTES,
-  SENDER_OBJECT_NONCE_BYTES,
-  SENDER_OBJECT_TAG_BYTES,
-  SENDER_OBJECT_WIRE_VERSION,
-  senderObjectAuthenticationData,
-  senderObjectSignaturePreimage,
-} from '../../src/crypto/sender-object'
-import { deriveSuite02CatalogKey } from '../../src/crypto/suite02-key-derivation'
+import { encodeBase64Url } from '../../src/crypto/bytes'
 import { defaultCryptoRuntime } from '../../src/crypto/webcrypto'
 import { encode, rfc8949EncodeOptions } from 'cborg'
 
@@ -48,19 +38,16 @@ export interface SignedCatalogFixture {
   close(): void
 }
 
-export async function createSignedCatalogFixture(): Promise<SignedCatalogFixture> {
+export function createSignedCatalogFixture(): SignedCatalogFixture {
   const shareInstance = fixedIdentity(0x11)
   const syntheticRoot = fixedIdentity(0x22)
   const readSecret = new Uint8Array(16).fill(0x44)
   const signingSeed = new Uint8Array(32).fill(0x55)
   const signing = ed25519.keygen(signingSeed)
-  const signingSecret = signing.secretKey.slice()
   const senderPublicKey = signing.publicKey.slice()
   signing.secretKey.fill(0)
   signingSeed.fill(0)
-  const catalogKeyBytes = await deriveSuite02CatalogKey(readSecret, shareInstance)
   const subtle = defaultCryptoRuntime().subtle
-  const catalogKey = await subtle.importKey('raw', catalogKeyBytes, 'AES-GCM', false, ['encrypt'])
   const descriptor: ShareDescriptor = Object.freeze({
     wireVersion: 2,
     suite: 2,
@@ -74,14 +61,13 @@ export async function createSignedCatalogFixture(): Promise<SignedCatalogFixture
     createdAtSeconds: 1n,
     pathPolicy: PATH_POLICY,
   })
-  let nonceSequence = 1
   let closed = false
 
   return Object.freeze({
     descriptor,
     readSecret,
     sealPage: async (input: SignedCatalogPageInput): Promise<SealedCatalogPage> => {
-      if (closed) throw new Error('Signed catalog fixture is closed')
+      if (closed) throw new Error('Catalog fixture is closed')
       // The Go catalog codec encodes schema-validated names, not generic session text.
       const plaintext = encode(new Map<number, unknown>([
         [0, 1n],
@@ -94,26 +80,7 @@ export async function createSignedCatalogFixture(): Promise<SignedCatalogFixture
         [7, input.entries.map(catalogEntryRecord)],
         [8, 0n],
       ]), rfc8949EncodeOptions)
-      const binding = createCatalogPageObjectBinding(shareInstance, input.directoryId, input.pageIndex)
-      const header = new Uint8Array(SENDER_OBJECT_HEADER_BYTES)
-      header[0] = SENDER_OBJECT_WIRE_VERSION
-      new DataView(header.buffer).setUint32(4, plaintext.byteLength + SENDER_OBJECT_TAG_BYTES, false)
-      const nonce = new Uint8Array(SENDER_OBJECT_NONCE_BYTES)
-      nonce[0] = 0x73
-      new DataView(nonce.buffer).setUint32(SENDER_OBJECT_NONCE_BYTES - 4, nonceSequence, false)
-      nonceSequence += 1
-      const ciphertext = new Uint8Array(await subtle.encrypt({
-        name: 'AES-GCM',
-        iv: nonce,
-        additionalData: await senderObjectAuthenticationData(binding, header),
-        tagLength: SENDER_OBJECT_TAG_BYTES * 8,
-      }, catalogKey, copyBytes(plaintext)))
-      const prefix = concatBytes([header, nonce, ciphertext])
-      const signature = ed25519.sign(
-        await senderObjectSignaturePreimage(binding, prefix),
-        signingSecret,
-      )
-      const object = concatBytes([prefix, signature])
+      const object = Uint8Array.from(plaintext)
       const commitment = new Uint8Array(await subtle.digest('SHA-256', object))
       return Object.freeze({ object, commitment })
     },
@@ -121,8 +88,6 @@ export async function createSignedCatalogFixture(): Promise<SignedCatalogFixture
       if (closed) return
       closed = true
       readSecret.fill(0)
-      signingSecret.fill(0)
-      catalogKeyBytes.fill(0)
     },
   })
 }

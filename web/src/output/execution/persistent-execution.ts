@@ -38,6 +38,7 @@ import {
   snapshotOpenedOutputRevision,
   snapshotDirectoryMaterializationRequest,
   snapshotOutputFileRequest,
+  VerifiedDurableRanges,
   type BeginOutputFileResult,
   type DirectTreeExecution,
   type ExactSingleFileEvidence,
@@ -425,9 +426,28 @@ class PersistentMaterializationOutput implements OutputSession {
     return Object.freeze(directories)
   }
 
-  async beginFile(input: OutputFileRequest, signal: AbortSignal): Promise<BeginOutputFileResult> {
-    signal.throwIfAborted()
+  beginFile(input: OutputFileRequest, signal: AbortSignal): Promise<BeginOutputFileResult> {
+    return this.#beginFile(snapshotOutputFileRequest(input, this.#directTreeCoordinates), this.#recovery, signal)
+  }
+
+  async readmitFile(input: OutputFileRequest, paused: VerifiedDurableRanges, signal: AbortSignal): Promise<BeginOutputFileResult> {
     const request = snapshotOutputFileRequest(input, this.#directTreeCoordinates)
+    if (!(paused instanceof VerifiedDurableRanges) ||
+        paused.ownership.backend !== this.identity.backend ||
+        paused.ownership.outputSessionId !== this.identity.outputSessionId ||
+        paused.source.shareInstance !== request.source.shareInstance ||
+        paused.source.fileId !== request.source.fileId ||
+        paused.fileSize !== request.expectedSize ||
+        !samePath(paused.ownership.canonicalPath, request.materializationRelativePath)) {
+      throw new TypeError('paused attempt does not belong to this output file')
+    }
+    return this.#beginFile(request, { pausedFile: 'preserve' }, signal)
+  }
+
+  async #beginFile(
+    request: OutputFileRequest, recovery: PersistentExecutionRecoveryPolicy, signal: AbortSignal,
+  ): Promise<BeginOutputFileResult> {
+    signal.throwIfAborted()
     const automaticCheckpointAdmission = this.#automaticCheckpointAdmission?.enrollFile(
       request.materializationRelativePath,
     )
@@ -446,9 +466,7 @@ class PersistentMaterializationOutput implements OutputSession {
         materializationRelativePath: request.materializationRelativePath,
         shareInstance: request.source.shareInstance,
         outputSession: this.identity,
-        recovery: Object.freeze({
-          pausedFile: this.#recovery.pausedFile,
-        }),
+        recovery,
         ...(automaticCheckpointAdmission === undefined
           ? {}
           : { automaticCheckpointAdmission }),
@@ -489,7 +507,8 @@ class PersistentMaterializationOutput implements OutputSession {
           }
         },
       })
-      signal.throwIfAborted()
+      // Return the opened transaction even if cancellation won the storage
+      // race so its owner can settle and drain it.
       if (!callbackInvoked || opened === undefined) {
         throw new TypeError('persistent materializer bypassed authenticated revision authority')
       }

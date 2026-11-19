@@ -42,7 +42,7 @@ import type {
   SessionOperation,
 } from '../../src/session/runtime-types'
 import type { SessionKeys } from '../../src/session/transcript'
-import { senderControlKeyPair, signSenderOperationControl } from '../session/signed-control-fixture'
+import { senderControlKeyPair, senderOperationControl } from '../session/signed-control-fixture'
 
 const EXACT_CANDIDATE_REPLAY_STRESS_COUNT = 300
 
@@ -196,7 +196,7 @@ describe('v2 authenticated session signaling', () => {
     await route.close()
   })
 
-  it('carries an offer through signed answer and candidate delivery on the production path', async () => {
+  it('carries an offer through authenticated answer and candidate delivery on the production path', async () => {
     const senderKeys = await senderControlKeyPair()
     const descriptor = shareDescriptor(senderKeys.publicKey)
     const sessionKeys = protocolKeys()
@@ -242,12 +242,10 @@ describe('v2 authenticated session signaling', () => {
     })
 
     const answerBody = [4, binding.peerPathId, binding.attemptId, binding.attemptSequence, binding.peerSlot, 0, 'v=0\r\na=setup:active\r\n']
-    const answer = await signSenderOperationControl({
+    const answer = senderOperationControl({
       kind: MESSAGE_KIND.peerAnswer,
       operationId: requireValue(session.operation).id,
       semanticBody: encodeCanonicalCbor(answerBody),
-      binding: controlBinding(descriptor, sessionKeys, 0n),
-      privateKey: senderKeys.privateKey,
     })
     channel.receive(await senderSealer.seal(answer.message.plaintext))
     await expect(incoming.read()).resolves.toEqual({
@@ -258,12 +256,10 @@ describe('v2 authenticated session signaling', () => {
       },
     })
 
-    const replayedAnswer = await signSenderOperationControl({
+    const replayedAnswer = senderOperationControl({
       kind: MESSAGE_KIND.peerAnswer,
       operationId: requireValue(session.operation).id,
       semanticBody: encodeCanonicalCbor(answerBody),
-      binding: controlBinding(descriptor, sessionKeys, 1n),
-      privateKey: senderKeys.privateKey,
     })
     channel.receive(await senderSealer.seal(replayedAnswer.message.plaintext))
 
@@ -272,19 +268,17 @@ describe('v2 authenticated session signaling', () => {
       binding.peerPathId,
       binding.attemptId,
       binding.attemptSequence,
-    binding.peerSlot,
+      binding.peerSlot,
       0,
       'candidate:1 1 udp 1 192.0.2.1 5000 typ host',
       'data',
       0,
       'windshare',
     ]
-    const candidate = await signSenderOperationControl({
+    const candidate = senderOperationControl({
       kind: MESSAGE_KIND.peerCandidate,
       operationId: requireValue(session.operation).id,
       semanticBody: encodeCanonicalCbor(candidateBody),
-      binding: controlBinding(descriptor, sessionKeys, 2n),
-      privateKey: senderKeys.privateKey,
     })
     channel.receive(await senderSealer.seal(candidate.message.plaintext))
     await expect(incoming.read()).resolves.toEqual({
@@ -300,31 +294,27 @@ describe('v2 authenticated session signaling', () => {
       },
     })
 
-    const replayedCandidate = await signSenderOperationControl({
+    const replayedCandidate = senderOperationControl({
       kind: MESSAGE_KIND.peerCandidate,
       operationId: requireValue(session.operation).id,
       semanticBody: encodeCanonicalCbor(candidateBody),
-      binding: controlBinding(descriptor, sessionKeys, 3n),
-      privateKey: senderKeys.privateKey,
     })
     const distinctCandidateBody = [
       4,
       binding.peerPathId,
       binding.attemptId,
       binding.attemptSequence,
-    binding.peerSlot,
+      binding.peerSlot,
       0,
       'candidate:3 1 udp 1 192.0.2.3 5002 typ host',
       'data',
       0,
       'windshare',
     ]
-    const distinctCandidate = await signSenderOperationControl({
+    const distinctCandidate = senderOperationControl({
       kind: MESSAGE_KIND.peerCandidate,
       operationId: requireValue(session.operation).id,
       semanticBody: encodeCanonicalCbor(distinctCandidateBody),
-      binding: controlBinding(descriptor, sessionKeys, 4n),
-      privateKey: senderKeys.privateKey,
     })
     channel.receive(await senderSealer.seal(replayedCandidate.message.plaintext))
     channel.receive(await senderSealer.seal(distinctCandidate.message.plaintext))
@@ -552,21 +542,6 @@ describe('v2 authenticated signaling contract failures', () => {
   })
 })
 
-function controlBinding(
-  descriptor: ShareDescriptor,
-  keys: SessionKeys,
-  sequence: bigint,
-) {
-  return Object.freeze({
-    shareInstance: descriptor.shareInstance,
-    protocolSessionId: keys.protocolSessionId,
-    laneId: keys.initialLaneId,
-    laneEpoch: keys.initialLaneEpoch,
-    direction: 1 as const,
-    sequence,
-  })
-}
-
 function protocolKeys(): SessionKeys {
   return Object.freeze({
     protocolSessionId: identity(30),
@@ -611,7 +586,7 @@ function encodedCandidateBody(binding: PeerBinding, seed: number): Uint8Array<Ar
     binding.peerPathId,
     binding.attemptId,
     binding.attemptSequence,
-    binding.peerSlot,
+      binding.peerSlot,
       0,
     `candidate:${seed} 1 udp 1 192.0.2.${seed} ${5_000 + seed} typ host`,
     'data',

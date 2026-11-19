@@ -18,7 +18,8 @@ import (
 )
 
 const (
-	WireVersion          = byte(catalog.WireVersionV2)
+	// The signed hello binds the online message contract independently of links.
+	WireVersion          = byte(3)
 	HandshakeNonceBytes  = 32
 	X25519KeyBytes       = 32
 	SessionAuthKeyBytes  = sha256.Size

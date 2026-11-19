@@ -14,10 +14,17 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 )
 
-type DirectorySourceFunc func(context.Context, catalog.DirectoryID) (DirectoryResult, error)
+type DirectoryResult struct {
+	Snapshot catalog.DirectorySnapshot
+	Failure  *DirectoryFailure
+}
 
-func (f DirectorySourceFunc) LoadDirectory(ctx context.Context, directory catalog.DirectoryID) (DirectoryResult, error) {
-	return f(ctx, directory)
+func SnapshotResult(snapshot catalog.DirectorySnapshot) DirectoryResult {
+	return DirectoryResult{Snapshot: snapshot}
+}
+
+func FailureResult(failure DirectoryFailure) DirectoryResult {
+	return DirectoryResult{Failure: &failure}
 }
 
 type ObjectVerifierFunc func(context.Context, catalog.ShareInstance, ListRequest, []byte) (VerifiedObject, error)
@@ -146,7 +153,8 @@ func (c *memoryObjectCodec) Verify(
 }
 
 type serviceTransport struct {
-	service       *SenderService
+	source        *recordingSource
+	codec         *memoryObjectCodec
 	beforeSecond  <-chan struct{}
 	secondReached chan struct{}
 	once          sync.Once
@@ -167,7 +175,18 @@ func (t *serviceTransport) FetchPage(ctx context.Context, request ListRequest) (
 		case <-t.beforeSecond:
 		}
 	}
-	return t.service.Serve(ctx, request)
+	result, err := t.source.LoadDirectory(ctx, request.DirectoryID())
+	if err != nil {
+		return nil, err
+	}
+	if result.Failure != nil {
+		return t.codec.LoadSealedFailure(ctx, *result.Failure)
+	}
+	page, found := result.Snapshot.Page(request.PageIndex())
+	if !found {
+		return nil, ErrPageOutOfRange
+	}
+	return t.codec.LoadSealedPage(ctx, page)
 }
 
 func (t *serviceTransport) CallCount() int {

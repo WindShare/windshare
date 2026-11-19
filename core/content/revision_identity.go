@@ -22,7 +22,7 @@ var ErrRevisionIdentityDestroyed = errors.New("revision identity authority is de
 type RevisionIdentityKey [RevisionIdentityKeyBytes]byte
 
 // RevisionEvidence binds normalized catalog evidence to the source's continuity
-// guarantee. An open-instance nonce prevents weak metadata from reusing encrypted
+// guarantee. An open-instance nonce prevents weak metadata from reusing cached
 // content records after the write-excluding handle has been released.
 type RevisionEvidence struct {
 	shareInstance    catalog.ShareInstance
@@ -104,7 +104,7 @@ func evidenceForSourceContinuity(source RevisionSource, record catalog.NodeRecor
 	case OpenHandleRevisionContinuity:
 		// The instance belongs to one coalesced open, so all resident leases still
 		// share its revision. A reopen receives a new identity before capacity is
-		// charged and cannot reuse old ciphertext. Saved plaintext requires a
+		// charged and cannot reuse cached records. Saved plaintext requires a
 		// separate current-source applicability decision before resuming.
 		for evidence.openInstance == [sha256.Size]byte{} {
 			_, _ = rand.Read(evidence.openInstance[:])

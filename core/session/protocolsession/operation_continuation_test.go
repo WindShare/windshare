@@ -130,32 +130,6 @@ func testContinuationCandidate(
 	return message
 }
 
-func testSignedContinuationCandidate(
-	t *testing.T,
-	operationID OperationID,
-	binding byte,
-	value string,
-) Message {
-	t.Helper()
-	semantic := testContinuationCandidate(t, operationID, binding, value).Body()
-	_, _, envelopeBinding := loadEnvelopeVector(t, "sender-signed-operation-error")
-	prepared, err := PrepareSenderControl(
-		vectorSenderSigningKey(),
-		ControlBinding{
-			ShareInstance: envelopeBinding.ShareInstance, ProtocolSessionID: envelopeBinding.ProtocolSessionID,
-			LaneID: envelopeBinding.LaneID, LaneEpoch: envelopeBinding.LaneEpoch,
-			Direction: DirectionSenderToReceiver,
-		},
-		MessagePeerCandidate,
-		&operationID,
-		semantic,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return prepared.intent
-}
-
 func newTestContinuationTable(
 	t *testing.T,
 	now func() time.Time,
@@ -270,7 +244,7 @@ func TestOperationContinuationTombstoneDropsBindingCompatibleCrossLaneRace(t *te
 		t.Fatalf("candidate reservation = %+v, %v", candidateAdmission, err)
 	}
 	candidateAdmission.continuation.commit()
-	outboundExact := testSignedContinuationCandidate(t, operationID, 9, "known-outbound")
+	outboundExact := testContinuationCandidate(t, operationID, 9, "known-outbound")
 	outboundAdmission, err := table.AdmitOutbound(
 		DirectionSenderToReceiver, outboundExact, admission.Outbound,
 	)
@@ -289,7 +263,7 @@ func TestOperationContinuationTombstoneDropsBindingCompatibleCrossLaneRace(t *te
 	if disposition, err := table.Observe(DirectionReceiverToSender, distinct); disposition != OperationDrop || err != nil {
 		t.Fatalf("late distinct = %d, %v", disposition, err)
 	}
-	outboundDistinct := testSignedContinuationCandidate(t, operationID, 9, "late-outbound")
+	outboundDistinct := testContinuationCandidate(t, operationID, 9, "late-outbound")
 	if disposition, err := table.Observe(DirectionSenderToReceiver, outboundDistinct); disposition != OperationDrop || err != nil {
 		t.Fatalf("late outbound distinct = %d, %v", disposition, err)
 	}

@@ -3,8 +3,6 @@ package contentflow
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -140,7 +138,7 @@ type runtimeFixture struct {
 	revisionDeriver *content.HMACRevisionIdentityDeriver
 	cache           *SharedBlockCache
 	service         *SenderService
-	opener          *records.Opener
+	opener          *records.Decoder
 	capacityOwner   *revisioncapacity.ProcessOwner
 }
 
@@ -161,7 +159,7 @@ func newRuntimeFixture(t *testing.T, blocks int) runtimeFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	processCache, _ := NewProcessCacheBudget(DefaultProcessSealedCacheBytes)
+	processCache, _ := NewProcessCacheBudget(DefaultProcessBlockCacheBytes)
 	cache, _ := NewSharedBlockCache(share, uint64(catalog.MinChunkSize)*4, processCache)
 	clock := &runtimeClock{now: time.Unix(1_000, 0)}
 	stable := &runtimeStableFile{data: data}
@@ -204,20 +202,10 @@ func newRuntimeFixture(t *testing.T, blocks int) runtimeFixture {
 		revisionDeriver.Destroy()
 		t.Fatal(err)
 	}
-	readSecret := bytes.Repeat([]byte{0x66}, content.ReadSecretBytes)
-	keys, _ := content.NewKeyTree(readSecret, share)
-	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x77}, ed25519.SeedSize))
-	sealer, err := records.NewSealer(records.SealerConfig{
-		ShareInstance: share, Keys: keys, SigningKey: privateKey, NonceSource: rand.Reader,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	opener, _ := records.NewOpener(records.OpenerConfig{
-		ShareInstance: share, Keys: keys, Sender: checkedSender(t, privateKey.Public().(ed25519.PublicKey)),
-	})
+	sealer := records.Encoder{}
+	opener := &records.Decoder{ShareInstance: share}
 	service, err := NewSenderService(SenderServiceConfig{
-		Store: store, SessionCapacity: sessionCapacity, Sealer: sealer, Cache: cache,
+		Store: store, SessionCapacity: sessionCapacity, Encoder: sealer, Cache: cache,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -270,12 +258,9 @@ func TestSenderServicePreservesPerItemOpenLeaseAndBlockSemantics(t *testing.T) {
 	if _, err := DecodeOpenResults(wireResults, []catalog.FileID{fixture.file, missing}); !errors.Is(err, ErrInvalidOpenResults) {
 		t.Fatalf("reordered open results error=%v", err)
 	}
-	descriptor, err := fixture.opener.OpenRevision(fixture.file, catalog.MinChunkSize, items[1].RevisionObject)
+	descriptor, err := fixture.opener.DecodeRevision(fixture.file, catalog.MinChunkSize, items[1].RevisionObject)
 	if err != nil || descriptor != lease.Descriptor() {
 		t.Fatalf("revision object descriptor=%+v err=%v", descriptor, err)
-	}
-	if bytes.Contains(items[1].RevisionObject, fixture.file.Bytes()) {
-		t.Fatal("OPEN_RESULTS exposed FileID outside the encrypted revision object body")
 	}
 
 	if _, err := fixture.service.Renew(lease.ID()); !errors.Is(err, content.ErrRenewTooEarly) {
@@ -317,7 +302,7 @@ func TestSenderServicePreservesPerItemOpenLeaseAndBlockSemantics(t *testing.T) {
 			object = assembled.Object
 		}
 	}
-	opened, err := fixture.opener.OpenBlock(descriptor, 1, object)
+	opened, err := fixture.opener.DecodeBlock(descriptor, 1, object)
 	if err != nil || len(opened.Data()) != catalog.MinChunkSize || opened.Data()[0] != 1 {
 		t.Fatalf("opened block bytes=%d err=%v", len(opened.Data()), err)
 	}
@@ -476,15 +461,15 @@ func testSharedBlockCacheIsolatesConsumerCancellationAndInvalidation(t *testing.
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-release:
-			return []byte("sealed"), nil
+			return []byte("payload"), nil
 		}
 	}
 	firstContext, cancelFirst := context.WithCancel(context.Background())
 	firstResult := make(chan error, 1)
-	go func() { _, err := cache.Get(firstContext, key, loader); firstResult <- err }()
+	go func() { _, err := cache.get(firstContext, key, loader); firstResult <- err }()
 	<-started
 	secondResult := make(chan []byte, 1)
-	go func() { object, _ := cache.Get(context.Background(), key, loader); secondResult <- object }()
+	go func() { object, _ := cache.get(context.Background(), key, loader); secondResult <- object.payload }()
 	synctest.Wait()
 	cache.mu.Lock()
 	joined := cache.inflight[key] != nil && cache.inflight[key].waiters == 2
@@ -497,10 +482,10 @@ func testSharedBlockCacheIsolatesConsumerCancellationAndInvalidation(t *testing.
 		t.Fatalf("first consumer error=%v", err)
 	}
 	close(release)
-	if object := <-secondResult; !bytes.Equal(object, []byte("sealed")) {
+	if object := <-secondResult; !bytes.Equal(object, []byte("payload")) {
 		t.Fatalf("second consumer object=%q", object)
 	}
-	if object, err := cache.Get(context.Background(), key, loader); err != nil || !bytes.Equal(object, []byte("sealed")) || loads.Load() != 1 {
+	if object, err := cache.get(context.Background(), key, loader); err != nil || !bytes.Equal(object.payload, []byte("payload")) || loads.Load() != 1 {
 		t.Fatalf("cache hit object=%q loads=%d err=%v", object, loads.Load(), err)
 	}
 
@@ -509,7 +494,7 @@ func testSharedBlockCacheIsolatesConsumerCancellationAndInvalidation(t *testing.
 	ignoredCancelRelease := make(chan struct{})
 	staleDone := make(chan error, 1)
 	go func() {
-		_, err := cache.Get(context.Background(), keyOne, func(context.Context) ([]byte, error) {
+		_, err := cache.get(context.Background(), keyOne, func(context.Context) ([]byte, error) {
 			close(ignoredCancelStarted)
 			<-ignoredCancelRelease
 			return []byte("stale"), nil
@@ -527,11 +512,11 @@ func testSharedBlockCacheIsolatesConsumerCancellationAndInvalidation(t *testing.
 		t.Fatal("cache invalidation waited for a loader that ignored cancellation")
 	}
 	loadsBefore := loads.Load()
-	object, err := cache.Get(context.Background(), keyOne, func(context.Context) ([]byte, error) {
+	object, err := cache.get(context.Background(), keyOne, func(context.Context) ([]byte, error) {
 		loads.Add(1)
 		return []byte("fresh"), nil
 	})
-	if !errors.Is(err, content.ErrRevisionDrift) || object != nil || loads.Load() != loadsBefore {
+	if !errors.Is(err, content.ErrRevisionDrift) || object.payload != nil || loads.Load() != loadsBefore {
 		t.Fatalf("permanently invalidated revision object=%q loads=%d err=%v", object, loads.Load(), err)
 	}
 	close(ignoredCancelRelease)
@@ -791,12 +776,12 @@ func TestErrorClassificationPreservesOperationScope(t *testing.T) {
 		}
 	}
 	for err, expected := range map[error]uint16{
-		content.ErrInvalidBlockRef: BlockCodeInvalidRef,
-		content.ErrBlockOutOfRange: BlockCodeOutOfRange,
-		records.ErrObjectAuth:      BlockCodeObjectAuth,
-		ErrFragmentConflict:        BlockCodeFragmentConflict,
-		ErrFragmentInactivity:      BlockCodeTimeout,
-		context.Canceled:           BlockCodeCancelled,
+		content.ErrInvalidBlockRef:    BlockCodeInvalidRef,
+		content.ErrBlockOutOfRange:    BlockCodeOutOfRange,
+		records.ErrNonCanonicalObject: BlockCodeObjectAuth,
+		ErrFragmentConflict:           BlockCodeFragmentConflict,
+		ErrFragmentInactivity:         BlockCodeTimeout,
+		context.Canceled:              BlockCodeCancelled,
 	} {
 		if code := classifyBlockError(err); code != expected {
 			t.Fatalf("block error %v code=%#x", err, code)
@@ -851,7 +836,7 @@ func TestRevisionErrorClassificationGrantsRetryAuthorityOnlyToTypedCapacity(t *t
 	descriptor := flowDescriptor(t, uint64(catalog.MinChunkSize))
 	service, cache := stubService(t, descriptor, &stubRevisionStore{results: []content.OpenRevisionResult{{
 		FileID: descriptor.FileID(), Err: fmt.Errorf("store open: %w", busyErr),
-	}}}, stubRecordSealer{revision: []byte{1}})
+	}}}, stubRecordEncoder{revision: []byte{1}})
 	defer cache.Close()
 	defer service.Close()
 	results, err := service.Open(context.Background(), mustOpenRequest(t, descriptor.FileID()))
@@ -870,7 +855,7 @@ func TestRevisionErrorClassificationGrantsRetryAuthorityOnlyToTypedCapacity(t *t
 	}
 	for name, permanent := range map[string]error{
 		"metadata quota": fmt.Errorf("metadata stopped: %w", content.ErrQuotaExceeded),
-		"seal limit":     records.ErrSealLimit,
+		"seal limit":     records.ErrInvalidRecord,
 		"missing source": content.ErrRevisionNotFound,
 		"unreadable":     content.ErrRevisionUnreadable,
 		"source drift":   content.ErrSourceDrift,
@@ -906,7 +891,7 @@ func TestBlockHandlerKeepsRevisionFailuresOutOfTheBlockErrorDomain(t *testing.T)
 		results:     []content.OpenRevisionResult{{FileID: base.file, Lease: lease}},
 		validateErr: content.ErrRevisionDrift,
 	}
-	service, cache := stubService(t, lease.Descriptor(), store, stubRecordSealer{revision: []byte("revision")})
+	service, cache := stubService(t, lease.Descriptor(), store, stubRecordEncoder{revision: []byte("revision")})
 	defer cache.Close()
 	defer service.Close()
 	if _, err := service.Open(context.Background(), mustOpenRequest(t, base.file)); err != nil {

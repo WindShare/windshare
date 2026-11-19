@@ -208,23 +208,23 @@ func newRuntimeLanes(runtime *Runtime) *runtimeLanes {
 func (lanes *runtimeLanes) add(
 	identity session.LaneIdentity,
 	channel protocolsession.FrameChannel,
-	authenticator protocolsession.InboundMessageAuthenticator,
+	validator protocolsession.InboundMessageValidator,
 	initial bool,
 ) (*RuntimeLane, error) {
-	return lanes.addWithAdmission(identity, channel, authenticator, initial, nil)
+	return lanes.addWithAdmission(identity, channel, validator, initial, nil)
 }
 
 func (lanes *runtimeLanes) addWithAdmission(
 	identity session.LaneIdentity,
 	channel protocolsession.FrameChannel,
-	authenticator protocolsession.InboundMessageAuthenticator,
+	validator protocolsession.InboundMessageValidator,
 	initial bool,
 	admit func(*RuntimeLane) error,
 ) (*RuntimeLane, error) {
-	if lanes == nil || !identity.Valid(initial) || channel == nil || authenticator == nil {
+	if lanes == nil || !identity.Valid(initial) || channel == nil || validator == nil {
 		return nil, session.ErrRuntimeConfig
 	}
-	lane, err := lanes.build(identity, channel, authenticator)
+	lane, err := lanes.build(identity, channel, validator)
 	if err != nil {
 		return nil, err
 	}
@@ -276,7 +276,7 @@ func (lanes *runtimeLanes) addWithAdmission(
 func (lanes *runtimeLanes) build(
 	identity session.LaneIdentity,
 	channel protocolsession.FrameChannel,
-	authenticator protocolsession.InboundMessageAuthenticator,
+	validator protocolsession.InboundMessageValidator,
 ) (*RuntimeLane, error) {
 	outboundDirection, err := lanes.runtime.role.OutboundDirection()
 	if err != nil {
@@ -307,7 +307,7 @@ func (lanes *runtimeLanes) build(
 		return nil, err
 	}
 	pump, err := protocolsession.NewProtocolPump(
-		channel, opener, authenticator,
+		channel, opener, validator,
 		laneInboundRouter{runtime: lanes.runtime, identity: identity},
 	)
 	if err != nil {

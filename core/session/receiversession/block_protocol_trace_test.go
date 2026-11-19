@@ -202,13 +202,13 @@ func TestBlockProtocolTraceRetainsUnownedCancellationAndDeadline(t *testing.T) {
 }
 
 type gatedBlockProtocolOpener struct {
-	RecordOpener
+	RecordDecoder
 	started chan struct{}
 	release <-chan struct{}
 	err     error
 }
 
-func (opener gatedBlockProtocolOpener) OpenBlock(content.FileRevisionDescriptor, uint64, []byte) (records.BlockRecord, error) {
+func (opener gatedBlockProtocolOpener) DecodeBlock(content.FileRevisionDescriptor, uint64, []byte) (records.BlockRecord, error) {
 	close(opener.started)
 	<-opener.release
 	return records.BlockRecord{}, opener.err
@@ -219,7 +219,7 @@ func TestBlockProtocolTraceWaitsForDecodingAfterRPCShutdown(t *testing.T) {
 		fixture := newBlockProtocolFixture(t, true)
 		decodeFailure := errors.New("authenticated block failed local validation")
 		started, release := make(chan struct{}), make(chan struct{})
-		fixture.lane.opener = gatedBlockProtocolOpener{
+		fixture.lane.decoder = gatedBlockProtocolOpener{
 			started: started, release: release, err: errors.Join(context.Canceled, decodeFailure),
 		}
 		done := make(chan error, 1)

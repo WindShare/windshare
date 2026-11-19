@@ -117,8 +117,17 @@ func TestReplacementChecksImmutableIdentityBeforeWriting(t *testing.T) {
 			}
 			sink := transfer.RangeSinkFunc(func(context.Context, uint64, []byte) error { t.Fatal("mixed versions"); return nil })
 			for range 2 {
-				if err := reader.ReadRange(context.Background(), opened.Handle, opened.Descriptor, content.Range{End: 6}, sink); !errors.Is(err, content.ErrRevisionDrift) {
-					t.Fatal(err)
+				err := reader.ReadRange(context.Background(), opened.Handle, opened.Descriptor, content.Range{End: 6}, sink)
+				reopened, ok := errors.AsType[*content.RevisionReopenedError](err)
+				if !ok {
+					t.Fatalf("replacement changed the immutable descriptor: %v", err)
+				}
+				want := content.RevisionComparisonMismatch
+				if change == "revision" {
+					want = content.RevisionComparisonUnavailable
+				}
+				if reopened.Comparison().Comparison != want {
+					t.Fatalf("comparison = %+v, want %v", reopened.Comparison(), want)
 				}
 			}
 			if source.opens != 2 || len(source.released) != 1 || source.released[0][0] != 2 {

@@ -18,10 +18,9 @@ describe('v2 catalog text boundaries', () => {
       [5, true], [6, new Uint8Array(32)],
       [7, [[2, identity(4), name, 12, null, 0, 0]]], [8, 0],
     ]))
-    const senderObject = Uint8Array.of(1)
-    const decoded = await decodeCatalogPage(page('a.txt'), senderObject)
+    const decoded = await decodeCatalogPage(page('a.txt'))
     expect(decoded.entries[0]?.name).toBe('a.txt')
-    await expect(decodeCatalogPage(page('\ufeffa.txt'), senderObject)).rejects.toThrow(/safe path segment/)
+    await expect(decodeCatalogPage(page('\ufeffa.txt'))).rejects.toThrow(/safe path segment/)
   })
 
   it('accepts a catalog entry name that is NFC under the pinned Unicode 15 path policy', async () => {
@@ -33,7 +32,7 @@ describe('v2 catalog text boundaries', () => {
       [5, true], [6, new Uint8Array(32)],
       [7, [[2, identity(4), name, 12, null, 0, 0]]], [8, 0],
     ]), rfc8949EncodeOptions)
-    const decoded = await decodeCatalogPage(page, Uint8Array.of(1))
+    const decoded = await decodeCatalogPage(page)
     expect(decoded.entries[0]?.name).toBe(name)
   })
 
@@ -51,7 +50,7 @@ describe('v2 catalog text boundaries', () => {
 describe('v2 directory failure retry semantics', () => {
   const failure = (code: number, retryable: boolean, retryAfter: number | null) =>
     encodeCanonicalCbor(new Map<number, unknown>([
-      [0, 1],
+      [0, 2],
       [1, identity(1)],
       [2, identity(2)],
       [3, identity(3)],

@@ -95,7 +95,7 @@ func TestOpenResultDeliverySettlesLeaseWithExactEvidence(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			store := &stubRevisionStore{results: []content.OpenRevisionResult{{FileID: base.file, Lease: lease}}}
-			service, cache := stubService(t, lease.Descriptor(), store, stubRecordSealer{revision: []byte("revision")})
+			service, cache := stubService(t, lease.Descriptor(), store, stubRecordEncoder{revision: []byte("revision")})
 			defer cache.Close()
 			handler, err := NewSenderHandler(SenderHandlerConfig{
 				Service:  service,
@@ -195,7 +195,7 @@ func TestRenewResultDeliveryDetachesEveryAmbiguousLease(t *testing.T) {
 				results: []content.OpenRevisionResult{{FileID: base.file, Lease: lease}},
 				renew:   lease,
 			}
-			service, cache := stubService(t, lease.Descriptor(), store, stubRecordSealer{revision: []byte("revision")})
+			service, cache := stubService(t, lease.Descriptor(), store, stubRecordEncoder{revision: []byte("revision")})
 			defer cache.Close()
 			defer service.Close()
 			if _, err := service.Open(context.Background(), mustOpenRequest(t, base.file)); err != nil {
@@ -247,7 +247,7 @@ func TestRenewRetiresLeaseWhenStoreChangesItsIdentity(t *testing.T) {
 		results: []content.OpenRevisionResult{{FileID: base.file, Lease: first}},
 		renew:   second,
 	}
-	service, cache := stubService(t, first.Descriptor(), store, stubRecordSealer{revision: []byte("revision")})
+	service, cache := stubService(t, first.Descriptor(), store, stubRecordEncoder{revision: []byte("revision")})
 	defer cache.Close()
 	defer service.Close()
 	if _, err := service.Open(context.Background(), mustOpenRequest(t, base.file)); err != nil {
@@ -294,7 +294,7 @@ func TestRenewFailureRetiresOnlyTerminalLeaseState(t *testing.T) {
 		results:  []content.OpenRevisionResult{{FileID: base.file, Lease: driftLease}},
 		renewErr: content.ErrRevisionDrift,
 	}
-	service, cache := stubService(t, driftLease.Descriptor(), store, stubRecordSealer{revision: []byte("revision")})
+	service, cache := stubService(t, driftLease.Descriptor(), store, stubRecordEncoder{revision: []byte("revision")})
 	defer cache.Close()
 	defer service.Close()
 	if _, err := service.Open(context.Background(), mustOpenRequest(t, base.file)); err != nil {
@@ -325,7 +325,7 @@ func TestSenderServiceUsesRelinquishedDetachedAndGlobalInvalidationBoundaries(t 
 		results: []content.OpenRevisionResult{{FileID: base.file, Lease: first}},
 		renew:   first,
 	}
-	service, cache := stubService(t, first.Descriptor(), store, stubRecordSealer{revision: []byte("revision")})
+	service, cache := stubService(t, first.Descriptor(), store, stubRecordEncoder{revision: []byte("revision")})
 	defer cache.Close()
 	if _, err := service.Open(context.Background(), mustOpenRequest(t, base.file)); err != nil {
 		t.Fatal(err)
@@ -353,7 +353,7 @@ func TestSenderServiceUsesRelinquishedDetachedAndGlobalInvalidationBoundaries(t 
 		results:  []content.OpenRevisionResult{{FileID: base.file, Lease: first}},
 		renewErr: content.ErrRevisionDrift,
 	}
-	invalidationService, invalidationCache := stubService(t, first.Descriptor(), invalidationStore, stubRecordSealer{revision: []byte("revision")})
+	invalidationService, invalidationCache := stubService(t, first.Descriptor(), invalidationStore, stubRecordEncoder{revision: []byte("revision")})
 	defer invalidationCache.Close()
 	defer invalidationService.Close()
 	if _, err := invalidationService.Open(context.Background(), mustOpenRequest(t, base.file)); err != nil {
@@ -379,7 +379,7 @@ func TestOpenRejectsAReleasedLeaseIdentityReusedByTheStore(t *testing.T) {
 	}
 	lease := opened.Items()[0].Lease
 	store := &stubRevisionStore{results: []content.OpenRevisionResult{{FileID: base.file, Lease: lease}}}
-	service, cache := stubService(t, lease.Descriptor(), store, stubRecordSealer{revision: []byte("revision")})
+	service, cache := stubService(t, lease.Descriptor(), store, stubRecordEncoder{revision: []byte("revision")})
 	defer cache.Close()
 	defer service.Close()
 	if _, err := service.Open(context.Background(), mustOpenRequest(t, base.file)); err != nil {
@@ -399,7 +399,7 @@ func TestOpenRejectsAReleasedLeaseIdentityReusedByTheStore(t *testing.T) {
 func TestReleaseReplayRemainsIdempotentAfterIdentityTombstoneRotation(t *testing.T) {
 	descriptor := flowDescriptor(t, 1)
 	store := &stubRevisionStore{}
-	service, cache := stubService(t, descriptor, store, stubRecordSealer{})
+	service, cache := stubService(t, descriptor, store, stubRecordEncoder{})
 	defer cache.Close()
 	defer service.Close()
 	var oldest content.LeaseID

@@ -29,10 +29,7 @@ func TestMalformedDirectoryRequestUsesSharedFailureSchema(t *testing.T) {
 	if message.Kind() != protocolsession.MessageOperationError {
 		t.Fatalf("malformed catalog response kind = %d", message.Kind())
 	}
-	unsigned, err := protocolsession.SenderControlSemanticBody(message)
-	if err != nil {
-		t.Fatal(err)
-	}
+	unsigned := message.Body()
 	want, err := protocolsession.EncodeOperationFailure(protocolsession.OperationFailure{
 		Scope: protocolsession.OperationScopeDirectory,
 		Code:  catalogflow.DirectoryCodePermanentIO, Message: "Catalog operation failed",

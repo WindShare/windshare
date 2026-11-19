@@ -11,7 +11,10 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 )
 
-const catalogControlSchema = uint64(1)
+const (
+	catalogControlSchema   = uint64(1)
+	directoryFailureSchema = uint64(2)
+)
 
 var ErrCatalogCodec = errors.New("catalog flow object is malformed")
 
@@ -74,7 +77,7 @@ func EncodeDirectoryFailure(failure DirectoryFailure) ([]byte, error) {
 		retry = uint64(validated.RetryAfter / time.Millisecond)
 	}
 	return catalogFlowEnc.Marshal(map[uint64]any{
-		0: catalogControlSchema,
+		0: directoryFailureSchema,
 		1: validated.ShareInstance.Bytes(),
 		2: validated.DirectoryID.Bytes(),
 		3: validated.AttemptID.Bytes(),
@@ -96,7 +99,7 @@ func DecodeDirectoryFailure(encoded []byte) (DirectoryFailure, error) {
 	code, codeErr := catalogUint(fields[4])
 	var retryable bool
 	retryableErr := catalogFlowDec.Unmarshal(fields[5], &retryable)
-	if schemaErr != nil || schema != catalogControlSchema || shareErr != nil || directoryErr != nil ||
+	if schemaErr != nil || schema != directoryFailureSchema || shareErr != nil || directoryErr != nil ||
 		attemptErr != nil || codeErr != nil || code > math.MaxUint16 || retryableErr != nil {
 		return DirectoryFailure{}, ErrCatalogCodec
 	}

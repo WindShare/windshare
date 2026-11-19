@@ -2,13 +2,12 @@ package receiversession
 
 import (
 	"context"
-	"crypto/ed25519"
 
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"testing"
 )
 
-func TestSignedMalformedPeerFailurePublishesUnsafeExactOperationBeforeShutdown(t *testing.T) {
+func TestAuthenticatedMalformedPeerFailurePublishesUnsafeExactOperationBeforeShutdown(t *testing.T) {
 	fixture := newReceiverPeerTerminalFixture(t, 0xd4)
 	received := make(chan PeerReceiveResult, 1)
 	go func() { received <- fixture.operation.Receive(context.Background()) }()
@@ -21,39 +20,13 @@ func TestSignedMalformedPeerFailurePublishesUnsafeExactOperationBeforeShutdown(t
 		return receiving
 	})
 
-	publicKey, privateKey, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	base := protocolsession.ControlBinding{
-		ShareInstance: fixture.runtime.ShareInstance(), ProtocolSessionID: fixture.runtime.ProtocolSessionID(),
-		LaneID: 1, LaneEpoch: 0, Direction: protocolsession.DirectionSenderToReceiver,
-	}
 	validator, err := newReceiverSenderControlValidator(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	authenticator, err := protocolsession.NewSenderControlAuthenticator(checkedSender(t, publicKey), base, validator)
-	if err != nil {
-		t.Fatal(err)
-	}
+	authenticator := protocolsession.SenderMessageValidator(validator)
 	operationID := fixture.operation.OperationID()
-	binding := base
-	binding.Sequence = 0
-	binding.MessageKind = protocolsession.MessageOperationError
-	binding.OperationID = operationID
-	binding.HasOperationID = true
-	// Canonical null is valid signed control payload but not an OperationFailure.
-	signed, err := protocolsession.SignControlBody(
-		privateKey,
-		protocolsession.ControlDomainOperation,
-		binding,
-		[]byte{0xf6},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	message, err := protocolsession.NewMessage(protocolsession.MessageOperationError, &operationID, signed)
+	message, err := protocolsession.NewMessage(protocolsession.MessageOperationError, &operationID, []byte{0xf6})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +48,7 @@ func TestSignedMalformedPeerFailurePublishesUnsafeExactOperationBeforeShutdown(t
 	}
 }
 
-func TestSignedMalformedPeerControlTerminatesOnlyExactOperation(t *testing.T) {
+func TestAuthenticatedMalformedPeerControlTerminatesOnlyExactOperation(t *testing.T) {
 	testCases := []struct {
 		name string
 		kind protocolsession.MessageKind
@@ -98,41 +71,13 @@ func TestSignedMalformedPeerControlTerminatesOnlyExactOperation(t *testing.T) {
 				return receiving
 			})
 
-			publicKey, privateKey, err := ed25519.GenerateKey(nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			base := protocolsession.ControlBinding{
-				ShareInstance:     id16Share(testCase.seed + 1),
-				ProtocolSessionID: id16[protocolsession.ProtocolSessionID](testCase.seed + 2),
-				LaneID:            7, LaneEpoch: 8, Direction: protocolsession.DirectionSenderToReceiver,
-			}
 			validator, err := newReceiverSenderControlValidator(nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			authenticator, err := protocolsession.NewSenderControlAuthenticator(checkedSender(t, publicKey), base, validator)
-			if err != nil {
-				t.Fatal(err)
-			}
+			authenticator := protocolsession.SenderMessageValidator(validator)
 			operationID := fixture.operation.OperationID()
-			binding := base
-			binding.Sequence = 0
-			binding.MessageKind = testCase.kind
-			binding.OperationID = operationID
-			binding.HasOperationID = true
-			// Canonical null proves authentication completed while leaving the
-			// connectivity-specific peer control structurally malformed.
-			signed, err := protocolsession.SignControlBody(
-				privateKey,
-				protocolsession.ControlDomainOperation,
-				binding,
-				[]byte{0xf6},
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			message, err := protocolsession.NewMessage(testCase.kind, &operationID, signed)
+			message, err := protocolsession.NewMessage(testCase.kind, &operationID, []byte{0xf6})
 			if err != nil {
 				t.Fatal(err)
 			}

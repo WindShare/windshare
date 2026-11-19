@@ -1,3 +1,4 @@
+import { SESSION_WIRE_VERSION } from './version'
 import type { Ed25519Verifier } from '../crypto/ed25519'
 import { concatBytes, copyBytes, equalBytes } from '../crypto/bytes'
 import {
@@ -82,7 +83,7 @@ export async function createReceiverHandshake(
   try {
     const body = concatBytes([
       CLIENT_HELLO_MAGIC,
-      Uint8Array.of(2),
+      Uint8Array.of(SESSION_WIRE_VERSION),
       options.descriptor.shareInstance,
       receiverInstanceId,
       receiverNonce,
@@ -142,7 +143,7 @@ async function acceptServerHello(
   if (
     encoded.byteLength !== SERVER_HELLO_BYTES ||
     !equalBytes(encoded.subarray(0, 4), SERVER_HELLO_MAGIC) ||
-    encoded[4] !== 2
+    encoded[4] !== SESSION_WIRE_VERSION
   ) {
     throw new TranscriptError('ServerHello has an invalid header or length')
   }

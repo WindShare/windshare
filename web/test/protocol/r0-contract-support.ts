@@ -24,9 +24,6 @@ const SENDER_OBJECT_SIGNATURE_BYTES = 64
 const OPERATION_HEADER_BYTES = 16
 const OPERATION_NONCE_BYTES = 12
 const OBJECT_DOMAIN_PREFIX = 'windshare/v2 object/'
-const CONTROL_OPERATION_DOMAIN = 'windshare/v2 control/operation'
-const CONTROL_TERMINAL_DOMAIN = 'windshare/v2 control/session-terminal'
-const CONTROL_LANE_ATTACH_DOMAIN = 'windshare/v2 control/lane-attach'
 
 interface IdentityVector extends VectorCase {
   readonly suite: number
@@ -67,10 +64,6 @@ export interface SenderControlVector {
   readonly sequence: string
   readonly trafficKeyB64: string
   readonly semanticBodyCborB64: string
-  readonly unsignedControlCborB64: string
-  readonly signedControlCborB64: string
-  readonly controlPreimageB64: string
-  readonly controlSignatureB64: string
   readonly plaintextB64: string
   readonly aadB64: string
   readonly envelopeB64: string
@@ -440,49 +433,11 @@ function operationAAD(axes: OperationAxes): Uint8Array {
   )
 }
 
-function controlDomain(messageKind: number): string {
-  if (messageKind === 11) return CONTROL_TERMINAL_DOMAIN
-  if (messageKind === 12) return CONTROL_LANE_ATTACH_DOMAIN
-  return CONTROL_OPERATION_DOMAIN
-}
-
-interface ControlAxes {
-  readonly domain: string
-  readonly shareInstance: Uint8Array
-  readonly protocolSessionId: Uint8Array
-  readonly laneId: number
-  readonly laneEpoch: number
-  readonly direction: number
-  readonly sequence: bigint
-  readonly messageKind: number
-  readonly operationId: Uint8Array
-  readonly unsignedBody: Uint8Array
-}
-
-function controlPreimage(axes: ControlAxes): Uint8Array {
-  return concat(
-    utf8(axes.domain),
-    Uint8Array.of(0),
-    axes.shareInstance,
-    axes.protocolSessionId,
-    u32(axes.laneId),
-    u32(axes.laneEpoch),
-    Uint8Array.of(axes.direction),
-    u64(axes.sequence),
-    Uint8Array.of(axes.messageKind),
-    axes.operationId,
-    sha256(axes.unsignedBody),
-  )
-}
-
-export function expectSenderControl(
-  vector: SenderControlVector,
-  senderPublicKey: ReturnType<typeof ed25519Public>,
-): OpenedControl {
+export function expectSenderControl(vector: SenderControlVector): OpenedControl {
   const envelope = bytes(vector.envelopeB64)
   const cipherLength = Buffer.from(envelope).readUInt32BE(12)
   const baseAxes: OperationAxes = {
-    wire: 2,
+    wire: 3,
     direction: 1,
     shareInstance: bytes(vector.shareInstanceB64),
     protocolSessionId: bytes(vector.protocolSessionIdB64),
@@ -498,7 +453,7 @@ export function expectSenderControl(
   )
   const ciphertext = envelope.subarray(OPERATION_HEADER_BYTES + OPERATION_NONCE_BYTES)
   const trafficKey = bytes(vector.trafficKeyB64)
-  expect(envelope.subarray(0, 2)).toEqual(Uint8Array.of(2, 1))
+  expect(envelope.subarray(0, 2)).toEqual(Uint8Array.of(3, 1))
   expect(envelope.subarray(2, 4)).toEqual(Uint8Array.of(0, 0))
   expect(Buffer.from(envelope).readBigUInt64BE(4)).toBe(baseAxes.sequence)
   expect(envelope.byteLength).toBe(
@@ -510,7 +465,7 @@ export function expectSenderControl(
   expectCanonicalCBOR(plaintext)
 
   const envelopeMutations: readonly (readonly [string, OperationAxes])[] = [
-    ['wire', { ...baseAxes, wire: 3 }],
+    ['wire', { ...baseAxes, wire: 2 }],
     ['direction', { ...baseAxes, direction: 0 }],
     ['share-instance', { ...baseAxes, shareInstance: flipped(baseAxes.shareInstance) }],
     ['protocol-session', { ...baseAxes, protocolSessionId: flipped(baseAxes.protocolSessionId) }],
@@ -530,61 +485,10 @@ export function expectSenderControl(
   const operationId = rawOperationId === null
     ? null
     : requireBytes(rawOperationId, 'operation ID', 16)
-  const wrapper = requireMap(message.get(2), 'signed control wrapper')
-  expect([...wrapper.keys()].sort((left, right) => Number(left) - Number(right))).toEqual([0, 1, 255])
-  expect(requireNumber(wrapper.get(0), 'signed control wrapper schema')).toBe(1)
-  expect(Uint8Array.from(encode(wrapper, rfc8949EncodeOptions))).toEqual(
-    bytes(vector.signedControlCborB64),
-  )
-  expect(Uint8Array.from(encode(wrapper.get(1), rfc8949EncodeOptions))).toEqual(
-    bytes(vector.semanticBodyCborB64),
-  )
-  const signature = requireBytes(wrapper.get(255), 'control signature', 64)
-  const unsigned = new Map(wrapper)
-  unsigned.delete(255)
-  const unsignedBody = Uint8Array.from(encode(unsigned, rfc8949EncodeOptions))
-  const baseControlAxes: ControlAxes = {
-    domain: controlDomain(messageKind),
-    shareInstance: baseAxes.shareInstance,
-    protocolSessionId: baseAxes.protocolSessionId,
-    laneId: baseAxes.laneId,
-    laneEpoch: baseAxes.laneEpoch,
-    direction: baseAxes.direction,
-    sequence: baseAxes.sequence,
-    messageKind,
-    operationId: operationId ?? new Uint8Array(16),
-    unsignedBody,
-  }
-  const preimage = controlPreimage(baseControlAxes)
-  expect(unsignedBody).toEqual(bytes(vector.unsignedControlCborB64))
-  expect(preimage).toEqual(bytes(vector.controlPreimageB64))
-  expect(signature).toEqual(bytes(vector.controlSignatureB64))
-  expect(verify(null, preimage, senderPublicKey, signature)).toBe(true)
-
-  const alternateDomain = baseControlAxes.domain === CONTROL_OPERATION_DOMAIN
-    ? CONTROL_TERMINAL_DOMAIN
-    : CONTROL_OPERATION_DOMAIN
-  const controlMutations: readonly (readonly [string, ControlAxes])[] = [
-    ['domain', { ...baseControlAxes, domain: alternateDomain }],
-    ['share-instance', { ...baseControlAxes, shareInstance: flipped(baseControlAxes.shareInstance) }],
-    ['protocol-session', { ...baseControlAxes, protocolSessionId: flipped(baseControlAxes.protocolSessionId) }],
-    ['lane-id', { ...baseControlAxes, laneId: baseControlAxes.laneId + 1 }],
-    ['lane-epoch', { ...baseControlAxes, laneEpoch: baseControlAxes.laneEpoch + 1 }],
-    ['direction', { ...baseControlAxes, direction: baseControlAxes.direction ^ 1 }],
-    ['sequence', { ...baseControlAxes, sequence: baseControlAxes.sequence + 1n }],
-    ['message-kind', { ...baseControlAxes, messageKind: baseControlAxes.messageKind + 1 }],
-    ['operation-id', { ...baseControlAxes, operationId: flipped(baseControlAxes.operationId) }],
-    ['body', { ...baseControlAxes, unsignedBody: flipped(baseControlAxes.unsignedBody) }],
-  ]
-  for (const [name, candidate] of controlMutations) {
-    expect(verify(null, controlPreimage(candidate), senderPublicKey, signature), name).toBe(false)
-  }
-  return {
-    plaintext,
-    messageKind,
-    operationId,
-    body: requireMap(wrapper.get(1), 'sender control semantic body'),
-  }
+  const body = requireMap(message.get(2), 'sender control body')
+  expect(Uint8Array.from(encode(body, rfc8949EncodeOptions))).toEqual(bytes(vector.semanticBodyCborB64))
+  expect(() => opensGCM(trafficKey, nonce, flipped(ciphertext), aad), 'ciphertext').toThrow()
+  return { plaintext, messageKind, operationId, body }
 }
 
 export function validSingleFragment(

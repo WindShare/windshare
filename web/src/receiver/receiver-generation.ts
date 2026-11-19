@@ -99,18 +99,15 @@ export class ReceiverGenerationFactory {
     )
     lanes.requests.add({ id: core.session.initialLaneId, epoch: core.session.keys.initialLaneEpoch, route: 'application-relay' })
     const brokerOwner: { current?: BlockBroker } = {}
-    const readSecret = options.factory.copyReadSecret()
     let revisions: RevisionService | undefined
     let broker: BlockBroker | undefined
     let connectivity: ReceiverConnectivity | undefined
-    let laneSecret: Uint8Array<ArrayBuffer> | undefined
     let unsubscribe: (() => void) | undefined
     let closeTask: Promise<void> | undefined
     try {
       revisions = new RevisionService(
         core.session,
         options.descriptor,
-        readSecret,
         lanes,
         {
           onLeaseRetirement: fact => options.protocolTrace?.current?.({
@@ -126,8 +123,6 @@ export class ReceiverGenerationFactory {
         validateDemand: (demand) => revisionService.leaseError(demand.leaseId),
       })
       brokerOwner.current = broker
-      const contentSecret = readSecret.slice()
-      laneSecret = contentSecret
       connectivity = new ReceiverConnectivity({
         policy: options.policy,
         session: core.session,
@@ -136,8 +131,6 @@ export class ReceiverGenerationFactory {
         createBlockLane: (laneId) => new SessionBlockLane(
           laneId,
           core.session,
-          options.descriptor,
-          contentSecret,
           revisionService,
         ),
         ...(options.offersFactory === undefined ? {} : { offers: options.offersFactory() }),
@@ -202,7 +195,7 @@ export class ReceiverGenerationFactory {
         availability: Object.freeze({ generationId, revision: 0 }),
         retired: false,
         close: () => {
-          closeTask ??= closeGeneration(generation, contentSecret, unsubscribe)
+          closeTask ??= closeGeneration(generation, unsubscribe)
           return closeTask
         },
       }
@@ -215,22 +208,17 @@ export class ReceiverGenerationFactory {
       broker?.close()
       revisions?.close()
       lanes.close()
-      laneSecret?.fill(0)
       throw error
-    } finally {
-      readSecret.fill(0)
     }
   }
 }
 
 async function closeGeneration(
   generation: ReceiverGeneration,
-  laneSecret: Uint8Array<ArrayBuffer>,
   unsubscribe: (() => void) | undefined,
 ): Promise<void> {
   generation.retired = true
   unsubscribe?.()
-  laneSecret.fill(0)
   generation.broker.close()
   generation.revisions.close()
   generation.lanes.close()

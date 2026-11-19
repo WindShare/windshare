@@ -89,7 +89,7 @@ func (validate SenderControlSemanticValidatorFunc) ValidateSenderControl(
 	return validate(kind, operationID, semantic)
 }
 
-// SenderControlSemanticRule binds one signed sender control kind to its typed
+// SenderControlSemanticRule binds one sender control kind to its typed
 // decoder. Keeping this registry at the authentication boundary prevents a new
 // final kind from silently bypassing semantic validation before routing.
 type SenderControlSemanticRule struct {
@@ -112,8 +112,8 @@ func NewSenderControlSemanticRegistry(
 		if rule.Validate == nil {
 			return nil, ErrControlSemantic
 		}
-		if _, err := senderControlDomain(rule.Kind); err != nil {
-			return nil, errors.Join(ErrControlSemantic, err)
+		if !isSenderControl(rule.Kind) {
+			return nil, ErrControlSemantic
 		}
 		if _, exists := validators[rule.Kind]; exists {
 			return nil, ErrControlSemantic
@@ -138,7 +138,7 @@ func (registry *SenderControlSemanticRegistry) ValidateSenderControl(
 	return validate(kind, operationID, semantic)
 }
 
-// Core control schemas are owned here so every authenticator validates them
+// Core control schemas are validated before operation admission
 // even when the composing runtime has no catalog, content, or peer dependency.
 func validateSenderControlSemantic(
 	external SenderControlSemanticValidator,

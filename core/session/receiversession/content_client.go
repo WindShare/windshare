@@ -59,7 +59,7 @@ func (state *remoteLeaseState) Err() error {
 
 type receiverRevisionClient struct {
 	rpc       requestClient
-	opener    RecordOpener
+	decoder   RecordDecoder
 	chunkSize uint32
 	after     func(time.Duration) <-chan time.Time
 	ctx       context.Context
@@ -73,13 +73,13 @@ type receiverRevisionClient struct {
 
 func newReceiverRevisionClient(
 	rpc requestClient,
-	opener RecordOpener,
+	decoder RecordDecoder,
 	chunkSize uint32,
 	after func(time.Duration) <-chan time.Time,
 ) *receiverRevisionClient {
 	ctx, cancel := context.WithCancel(rpc.Runtime().Lifetime())
 	return &receiverRevisionClient{
-		rpc: rpc, opener: opener, chunkSize: chunkSize, after: after,
+		rpc: rpc, decoder: decoder, chunkSize: chunkSize, after: after,
 		ctx: ctx, cancel: cancel, leases: make(map[content.LeaseID]*remoteLeaseState),
 	}
 }
@@ -88,7 +88,7 @@ func (client *receiverRevisionClient) OpenRevision(
 	ctx context.Context,
 	fileID catalog.FileID,
 ) (revisionaccess.Lease, error) {
-	// RecordOpener has no context and may execute application-controlled crypto.
+	// RecordDecoder has no context and may execute application-controlled crypto.
 	// Runtime admission is therefore the ownership boundary that keeps its key
 	// resources alive even when the session is cancelled from inside the callback.
 	ctx, rpc, endAdmission, err := client.beginExternalOperation(ctx)
@@ -119,10 +119,7 @@ func (client *receiverRevisionClient) OpenRevision(
 	if message.Kind() != protocolsession.MessageOpenResults {
 		return revisionaccess.Lease{}, session.ErrOperationMissing
 	}
-	unsigned, err := protocolsession.SenderControlSemanticBody(message)
-	if err != nil {
-		return revisionaccess.Lease{}, err
-	}
+	unsigned := message.Body()
 	results, err := contentflow.DecodeOpenResults(unsigned, []catalog.FileID{fileID})
 	if err != nil || len(results) != 1 {
 		return revisionaccess.Lease{}, errors.Join(session.ErrOperationMissing, err)
@@ -136,7 +133,7 @@ func (client *receiverRevisionClient) OpenRevision(
 	if lifecycleErr := client.operationLifecycleError(ctx); lifecycleErr != nil {
 		return revisionaccess.Lease{}, client.compensateRemoteLease(ctx, results[0].Lease.ID, lifecycleErr)
 	}
-	descriptor, err := client.opener.OpenRevision(fileID, client.chunkSize, results[0].RevisionObject)
+	descriptor, err := client.decoder.DecodeRevision(fileID, client.chunkSize, results[0].RevisionObject)
 	if err != nil {
 		return revisionaccess.Lease{}, client.compensateRemoteLease(ctx, results[0].Lease.ID, err)
 	}
@@ -298,10 +295,7 @@ func (client *receiverRevisionClient) releaseRemoteLease(ctx context.Context, le
 	if message.Kind() != protocolsession.MessageOperationComplete {
 		return session.ErrOperationMissing
 	}
-	unsigned, err := protocolsession.SenderControlSemanticBody(message)
-	if err != nil {
-		return err
-	}
+	unsigned := message.Body()
 	count, err := contentflow.DecodeOperationComplete(unsigned)
 	if err != nil || count != 0 {
 		return errors.Join(session.ErrOperationMissing, err)
@@ -364,10 +358,7 @@ func (client *receiverRevisionClient) renew(ctx context.Context, leaseID content
 	if message.Kind() != protocolsession.MessageLeaseResult {
 		return contentflow.RemoteLease{}, session.ErrOperationMissing
 	}
-	unsigned, err := protocolsession.SenderControlSemanticBody(message)
-	if err != nil {
-		return contentflow.RemoteLease{}, err
-	}
+	unsigned := message.Body()
 	return contentflow.DecodeLeaseResult(unsigned, leaseID)
 }
 
@@ -413,9 +404,9 @@ func (client *receiverRevisionClient) close() {
 	client.work.Wait()
 	client.mu.Lock()
 	// Public closed handles remain callable, but no post-close path needs the RPC,
-	// crypto opener, timer, or lifecycle graph they borrowed from the runtime.
+	// crypto decoder, timer, or lifecycle graph they borrowed from the runtime.
 	client.rpc = nil
-	client.opener = nil
+	client.decoder = nil
 	client.after = nil
 	client.ctx = nil
 	client.cancel = nil
@@ -427,7 +418,7 @@ type receiverBlockLane struct {
 	identity                  session.LaneIdentity
 	rpc                       requestClient
 	assembler                 *contentflow.Assembler
-	opener                    RecordOpener
+	decoder                   RecordDecoder
 	revisions                 *receiverRevisionClient
 	fragmentInactivityTimeout time.Duration
 	responses                 contentflow.BlockResponseQueue
@@ -542,7 +533,7 @@ func (operation *receiverBlockOperation) receive(
 		case protocolsession.MessageBlockFragment:
 			next, progressed, err := operation.acceptBlockFragment(demand, message, record, received)
 			if err != nil {
-				// Decoding has no cancelable wait. Even a lifecycle-shaped opener
+				// Decoding has no cancelable wait. Even a lifecycle-shaped decoder
 				// error is a validation fault, regardless of a concurrent race winner.
 				operation.call.RecordTraceCause(sessionobs.ProtocolOperationCauseProtocolFailure)
 				return operation.receiveFailure(err)
@@ -595,7 +586,7 @@ func (operation *receiverBlockOperation) acceptBlockFragment(
 	if result.Status != contentflow.RecordComplete {
 		return current, progressed, nil
 	}
-	record, err := operation.lane.opener.OpenBlock(demand.Descriptor, demand.Index, result.Object)
+	record, err := operation.lane.decoder.DecodeBlock(demand.Descriptor, demand.Index, result.Object)
 	return record, progressed, err
 }
 

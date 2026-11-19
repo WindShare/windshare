@@ -52,7 +52,7 @@ it.each([true, false])('preserves OPEN_RESULTS receive context after finalizatio
   const fileId = identity(4)
   const lanes = new LaneSet()
   lanes.add({ id: 1, fetchBlock: async () => { throw new Error('unused') } }, 'application-relay')
-  const revisions = new RevisionService(session, share, new Uint8Array(16).fill(9), lanes)
+  const revisions = new RevisionService(session, share, lanes)
   try {
     const opened = revisions.open(fileId, {
       active: true, allows: () => true, assertActive: () => undefined,

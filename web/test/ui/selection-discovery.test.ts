@@ -42,7 +42,7 @@ function fixture(directories: readonly { id: Uint8Array<ArrayBuffer>; entries: r
     const page: CatalogPage = {
       shareInstance, directoryId: id, directoryIdText, generation, generationText,
       pageIndex: 0, terminal: true, previousCommitment: new Uint8Array(32), entries,
-      omittedCount: 0n, objectCommitment: terminalCommitment, senderObjectBytes: 128,
+      omittedCount: 0n, objectCommitment: terminalCommitment, encodedBytes: 128,
     }
     return [directoryIdText, { committed, page }] as const
   }))

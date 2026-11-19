@@ -352,38 +352,6 @@ func TestClientRetryTransportFailurePreservesAuthenticatedFailure(t *testing.T) 
 	}
 }
 
-func TestSenderServiceBoundsAndOwnsStoredObjectBytes(t *testing.T) {
-	stored := []byte{1, 2, 3}
-	encoded, err := validateSealedObject(stored, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stored[0] = 9
-	if encoded[0] != 1 {
-		t.Fatal("sender exposed sealed-object store backing memory")
-	}
-	for name, run := range map[string]func() error{
-		"store error": func() error {
-			_, err := validateSealedObject(nil, errors.New("load"))
-			return err
-		},
-		"empty": func() error {
-			_, err := validateSealedObject(nil, nil)
-			return err
-		},
-		"oversize": func() error {
-			_, err := validateSealedObject(make([]byte, catalog.MaxCatalogPageObjectBytes+1), nil)
-			return err
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if err := run(); err == nil {
-				t.Fatal("invalid sealed object was accepted")
-			}
-		})
-	}
-}
-
 func TestClientBoundsDistinctInflightDirectories(t *testing.T) {
 	instance := shareInstance(t, 97)
 	started := make(chan catalog.DirectoryID, 2)

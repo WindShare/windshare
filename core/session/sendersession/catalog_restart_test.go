@@ -3,7 +3,6 @@ package sendersession
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/session/catalogflow"
@@ -11,23 +10,14 @@ import (
 	"testing"
 )
 
-func TestCatalogServiceReplaysExactOpaquePageAfterEvictionAndRestart(t *testing.T) {
+func TestCatalogServiceReplaysCommittedPageAfterEvictionAndRestart(t *testing.T) {
 	ctx := context.Background()
 	share := id16[catalog.ShareInstance](41)
 	rootID := id16[catalog.DirectoryID](42)
 	directoryID := id16[catalog.DirectoryID](43)
-	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{44}, ed25519.SeedSize))
-	publicKey := privateKey.Public().(ed25519.PublicKey)
-	catalogKey := bytes.Repeat([]byte{45}, 32)
 	rootPath := t.TempDir()
 
-	objects, err := catalogflow.NewSealedCatalogStore(catalogflow.SealedCatalogStoreConfig{
-		ShareInstance: share, CatalogKey: catalogKey, SenderPrivateKey: privateKey,
-		NonceSource: &deterministicReader{next: 46}, MaxPageCacheBytes: 1,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	objects := catalogflow.CatalogPayloadEncoder{}
 	rawBackend, err := catalog.NewFileCatalogBackend(catalog.FileCatalogBackendConfig{
 		Root: rootPath, ShareInstance: share,
 	})
@@ -78,25 +68,11 @@ func TestCatalogServiceReplaysExactOpaquePageAfterEvictionAndRestart(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	page, found, err := store.Page(ctx, directoryID, committed.Generation(), 0)
-	if err != nil || !found {
-		t.Fatalf("committed page = %v, %v", found, err)
-	}
-	if _, err := objects.LoadSealedPage(ctx, page); !errors.Is(err, catalogflow.ErrCatalogObjectMissing) {
-		t.Fatalf("one-byte cache unexpectedly retained page: %v", err)
-	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	recoveredNonces := &rejectNonceReader{}
-	recoveredObjects, err := catalogflow.NewSealedCatalogStore(catalogflow.SealedCatalogStoreConfig{
-		ShareInstance: share, CatalogKey: catalogKey, SenderPrivateKey: privateKey,
-		NonceSource: recoveredNonces, MaxPageCacheBytes: 1,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	recoveredObjects := catalogflow.CatalogPayloadEncoder{}
 	recoveredBackend, err := catalog.NewFileCatalogBackend(catalog.FileCatalogBackendConfig{
 		Root: rootPath, ShareInstance: share,
 	})
@@ -116,19 +92,11 @@ func TestCatalogServiceReplaysExactOpaquePageAfterEvictionAndRestart(t *testing.
 		t.Fatal(err)
 	}
 	if !bytes.Equal(before, after) {
-		t.Fatal("restart changed random-nonce sender-object bytes")
+		t.Fatal("restart changed committed page bytes")
 	}
-	if recoveredNonces.calls.Load() != 0 {
-		t.Fatalf("durable replay resealed page %d times", recoveredNonces.calls.Load())
-	}
-	verifier, err := catalogflow.NewCatalogObjectVerifier(catalogflow.CatalogObjectVerifierConfig{
-		ShareInstance: share, CatalogKey: catalogKey, Sender: checkedSender(t, publicKey),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	verifier := catalogflow.CatalogPayloadDecoder{}
 	verified, err := verifier.Verify(ctx, share, request, after)
-	if err != nil || verified.Failure != nil || verified.Page.Commitment() != page.Commitment() {
+	if err != nil || verified.Failure != nil || verified.Page.Generation() != generation {
 		t.Fatalf("replayed object verification = %+v, %v", verified, err)
 	}
 	if err := recovered.Close(); err != nil {

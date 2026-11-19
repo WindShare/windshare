@@ -20,7 +20,7 @@ const (
 	fileCatalogObjectsName   = "objects"
 )
 
-var fileCatalogMagic = [4]byte{'W', 'S', 'C', '2'}
+var fileCatalogMagic = [4]byte{'W', 'S', 'C', '3'}
 
 type FileBackendFaultPoint string
 

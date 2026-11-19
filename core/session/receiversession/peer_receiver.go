@@ -163,16 +163,7 @@ func (operation *PeerOperation) Receive(ctx context.Context) PeerReceiveResult {
 	}
 	switch message.Kind() {
 	case protocolsession.MessagePeerAnswer, protocolsession.MessagePeerCandidate:
-		body, err := protocolsession.SenderControlSemanticBody(message)
-		if err != nil {
-			return operation.terminateFromReceive(call, newReceiverPeerTerminalEvidence(
-				PeerTerminalAuthorityRemote,
-				PeerProvenanceRemoteControlMalformed,
-				PeerTerminalOperationOnly,
-				receiverPeerDiagnostic(PeerDiagnosticControlMalformed),
-			))
-		}
-		return operation.completeControlReceive(PeerControl{kind: message.Kind(), body: body})
+		return operation.completeControlReceive(PeerControl{kind: message.Kind(), body: message.Body()})
 	case protocolsession.MessageOperationError:
 		evidence := receiverPeerRemoteFailureEvidence(message)
 		result := operation.terminateFromReceive(call, evidence)

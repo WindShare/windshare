@@ -32,7 +32,6 @@ import {
   validatePreview,
   validateProjection,
   validatePublication,
-  validateReceive,
   validateReopen,
   validateRetainedAction,
   validateRetainedInventory,
@@ -50,6 +49,7 @@ import {
 } from './trace-payload-performance'
 import { exactKeys, integerBetween, member, recordValue, type UnknownRecord } from './trace-payload-validation'
 import { validateBrowserDelivery } from './trace-payload-browser-delivery'
+import { validateReceive } from './receive/payload'
 
 export { validateCorrelationV1 } from './trace-payload-validation'
 

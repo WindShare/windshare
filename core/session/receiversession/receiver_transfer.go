@@ -290,7 +290,8 @@ func (dependencies receiverTransferDependencies) classifySource(ctx context.Cont
 		case errors.Is(cause, content.ErrRevisionNotFound), errors.Is(cause, content.ErrRevisionUnreadable),
 			errors.Is(cause, content.ErrUnsupportedStability):
 			return sourceBoundaryError(transferfault.SourcePermanent, cause)
-		case errors.Is(cause, content.ErrQuotaExceeded), errors.Is(cause, content.ErrLeaseExpired),
+		case errors.Is(cause, content.ErrRevisionReopened), errors.Is(cause, content.ErrQuotaExceeded),
+			errors.Is(cause, content.ErrLeaseExpired),
 			errors.Is(cause, content.ErrInvalidLease):
 			return sourceBoundaryError(transferfault.SourceUnavailable, cause)
 		case errors.Is(cause, transfer.ErrBlockIdentity):
@@ -405,10 +406,7 @@ func (transport rpcCatalogTransport) receivePage(ctx context.Context, request ca
 		}
 		switch message.Kind() {
 		case protocolsession.MessageScanProgress:
-			unsigned, err := protocolsession.SenderControlSemanticBody(message)
-			if err != nil {
-				return nil, sessionProtocolBoundaryError(err)
-			}
+			unsigned := message.Body()
 			progress, err := protocolsession.DecodeScanProgress(unsigned)
 			notify, progressErr := progressState.observe(progress)
 			if err != nil || progressErr != nil {
@@ -429,10 +427,7 @@ func (transport rpcCatalogTransport) receivePage(ctx context.Context, request ca
 		case protocolsession.MessageOperationError:
 			return nil, remoteDirectoryOperationError(message)
 		case protocolsession.MessageCatalogResult:
-			unsigned, err := protocolsession.SenderControlSemanticBody(message)
-			if err != nil {
-				return nil, err
-			}
+			unsigned := message.Body()
 			return catalogflow.DecodeCatalogResult(unsigned)
 		default:
 			return nil, session.ErrOperationMissing
@@ -490,6 +485,9 @@ func (dependencies receiverTransferDependencies) RecordOutput(bytes uint64) {
 
 func (dependencies receiverTransferDependencies) ReadRange(ctx context.Context, handle transfer.RevisionHandle, descriptor content.FileRevisionDescriptor, requested content.Range, sink transfer.RangeSink) error {
 	err := dependencies.runtime.access.ReadRange(ctx, handle, descriptor, requested, sink)
+	if _, reopened := err.(*content.RevisionReopenedError); reopened && ctx.Err() == nil {
+		return err
+	}
 	if errors.Is(err, revisionaccess.ErrClosed) {
 		err = errors.Join(transfer.ErrBrokerClosed, err)
 	}
@@ -510,10 +508,7 @@ func (dependencies receiverTransferDependencies) classifyAccess(ctx context.Cont
 const maximumBlockObjectOverhead = records.MaxBlockRecordObjectBytes - catalog.MaxChunkSize
 
 func (operation *receiverBlockOperation) complete(message protocolsession.Message, record records.BlockRecord) (records.BlockRecord, error) {
-	unsigned, err := protocolsession.SenderControlSemanticBody(message)
-	if err != nil {
-		return operation.rejectCompletion(err)
-	}
+	unsigned := message.Body()
 	count, err := contentflow.DecodeOperationComplete(unsigned)
 	if err != nil || count != 1 {
 		return operation.rejectCompletion(errors.Join(session.ErrOperationMissing, err))

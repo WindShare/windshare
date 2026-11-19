@@ -95,13 +95,9 @@ func TestSessionWriterSettlementLeaseAnchorsTombstoneAfterPhysicalSend(t *testin
 			if err != nil {
 				t.Fatal(err)
 			}
-			preparedFinal := mustPreparedControl(t, MessageOpenResults, &operationID)
-			canonicalFinal, err := preparedFinal.build(0)
-			if err != nil {
-				t.Fatal(err)
-			}
-			receipt, err := writer.TryAuthorizedSenderControl(
-				preparedFinal,
+			canonicalFinal := mustWriterControl(t, MessageOpenResults, &operationID)
+			receipt, err := writer.TryAuthorizedControl(
+				canonicalFinal,
 				admission.Outbound,
 			)
 			if err != nil {
@@ -199,8 +195,8 @@ func TestSessionWriterDropsQueuedStaleGenerationBeforePolicyMutation(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	staleReceipt, err := writer.TryAuthorizedSenderControl(
-		mustPreparedControl(t, MessageOpenResults, &operationID),
+	staleReceipt, err := writer.TryAuthorizedControl(
+		mustWriterControl(t, MessageOpenResults, &operationID),
 		generationA.Outbound,
 	)
 	if err != nil {
@@ -238,8 +234,8 @@ func TestSessionWriterDropsQueuedStaleGenerationBeforePolicyMutation(t *testing.
 		)
 	}
 
-	currentReceipt, err := writer.TryAuthorizedSenderControl(
-		mustPreparedControl(t, MessageOpenResults, &operationID),
+	currentReceipt, err := writer.TryAuthorizedControl(
+		mustWriterControl(t, MessageOpenResults, &operationID),
 		generationB.Outbound,
 	)
 	if err != nil {

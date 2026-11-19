@@ -1,5 +1,4 @@
-import { RevisionReopenedDuringRecoveryError } from '../../content/session-services'
-import { compareRevisionMetadata } from '../../content/revision-comparison'
+import { RevisionEvidenceUnavailableError, compareRevisionMetadata } from '../../content/revision-comparison'
 import { zipMemberCoordinates } from '../zip-layout/member'
 import { SourceRevisionChangedError } from '../persistent-tree/errors'
 import { receiveContentWarningFields, snapshotReceiveContentWarning, type ReceiveContentWarning } from '../../transfer/lifecycle/content-warning'
@@ -139,7 +138,7 @@ export class ProgressiveZipArchive {
     const previous = await this.#input.store.readEntry(input.entryId)
     if (previous !== undefined && !sameAdmission(previous, kind, input)) {
       const error = admissionFailure(previous, kind, input)
-      if (error instanceof RevisionReopenedDuringRecoveryError) {
+      if (error instanceof RevisionEvidenceUnavailableError) {
         this.#trace('source_comparison_retained', {
           entryId: previous.entryId, fileId: previous.revision!.fileId,
           previousRevision: previous.revision!.fileRevision,
@@ -497,7 +496,7 @@ function admissionFailure(entry: TaskEntry, kind: TaskEntry['kind'],
   if (sameEntryContext(entry, kind, input) && entry.revision !== undefined &&
       input.revision !== undefined &&
       compareRevisionMetadata(entry.revision, input.revision).kind !== 'observed-change') {
-    return new RevisionReopenedDuringRecoveryError()
+    return new RevisionEvidenceUnavailableError()
   }
   return new SourceRevisionChangedError({ cause: new Error('ZIP source evidence changed') })
 }

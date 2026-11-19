@@ -14,9 +14,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
-	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/link"
-	"github.com/windshare/windshare/core/session/catalogflow"
 )
 
 type senderPreparationCatalogSource struct {
@@ -150,7 +148,7 @@ func newSenderPreparationHarness(t *testing.T) senderPreparationHarness {
 
 func TestPrepareSenderRejectsPartiallyInjectedDependencies(t *testing.T) {
 	dependencies := productionSenderPreparationDependencies()
-	dependencies.newRecordSealer = nil
+	dependencies.sessionAuthKey = nil
 
 	sender, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
 		RevisionCapacity: newTestRevisionCapacity(t),
@@ -164,61 +162,19 @@ func TestPrepareSenderRejectsPartiallyInjectedDependencies(t *testing.T) {
 }
 
 func TestPrepareSenderCatalogRejectsInvalidDependencyAndStateBoundaries(t *testing.T) {
-	t.Run("destroyed key tree", func(t *testing.T) {
-		harness := newSenderPreparationHarness(t)
-		harness.sender.keyTree.Destroy()
-
-		_, err := prepareSenderCatalog(
-			context.Background(), harness.config, harness.random, harness.sender,
-			harness.authority, nil, harness.dependencies,
-		)
-		if !errors.Is(err, content.ErrKeyTreeDestroyed) {
-			t.Fatalf("destroyed catalog key authority = %v", err)
-		}
-		if harness.sender.catalogObjects != nil || harness.sender.catalogStore != nil {
-			t.Fatal("catalog preparation transferred resources after key derivation failed")
-		}
-	})
-
-	t.Run("catalog object constructor failure", func(t *testing.T) {
-		harness := newSenderPreparationHarness(t)
-		injected := errors.New("injected catalog object constructor failure")
-		harness.dependencies.newCatalogObjects = func(catalogflow.SealedCatalogStoreConfig) (*catalogflow.SealedCatalogStore, error) {
-			return nil, injected
-		}
-
-		_, err := prepareSenderCatalog(
-			context.Background(), harness.config, harness.random, harness.sender,
-			harness.authority, nil, harness.dependencies,
-		)
-		if !errors.Is(err, injected) {
-			t.Fatalf("catalog object constructor failure = %v", err)
-		}
-		if harness.sender.catalogStore != nil {
-			t.Fatal("catalog store was constructed after its page sealer failed")
-		}
-	})
 
 	t.Run("zero catalog store share identity", func(t *testing.T) {
 		harness := newSenderPreparationHarness(t)
-		validShare := harness.authority.shareInstance
-		constructor := harness.dependencies.newCatalogObjects
-		harness.dependencies.newCatalogObjects = func(config catalogflow.SealedCatalogStoreConfig) (*catalogflow.SealedCatalogStore, error) {
-			// Preserve a valid sealer so this test reaches the store's own authority
-			// boundary instead of failing in the dependency constructor first.
-			config.ShareInstance = validShare
-			return constructor(config)
-		}
 		harness.authority.shareInstance = catalog.ShareInstance{}
 
 		_, err := prepareSenderCatalog(
 			context.Background(), harness.config, harness.random, harness.sender,
-			harness.authority, nil, harness.dependencies,
+			harness.authority, nil,
 		)
 		if err == nil {
 			t.Fatal("a catalog store without share authority was accepted")
 		}
-		if harness.sender.catalogObjects == nil || harness.sender.catalogStore != nil {
+		if harness.sender.catalogStore != nil {
 			t.Fatal("store validation failed outside its resource ownership boundary")
 		}
 	})
@@ -229,7 +185,7 @@ func TestPrepareSenderCatalogRejectsInvalidDependencyAndStateBoundaries(t *testi
 
 		_, err := prepareSenderCatalog(
 			context.Background(), harness.config, harness.random, harness.sender,
-			harness.authority, nil, harness.dependencies,
+			harness.authority, nil,
 		)
 		if err == nil {
 			t.Fatal("a synthetic root without a generation was accepted")
@@ -246,7 +202,7 @@ func TestPrepareSenderCatalogRejectsInvalidDependencyAndStateBoundaries(t *testi
 
 		_, err := prepareSenderCatalog(
 			ctx, harness.config, harness.random, harness.sender,
-			harness.authority, nil, harness.dependencies,
+			harness.authority, nil,
 		)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancelled root commit = %v", err)
@@ -262,7 +218,7 @@ func TestPrepareSenderCatalogRejectsInvalidDependencyAndStateBoundaries(t *testi
 
 		_, err := prepareSenderCatalog(
 			context.Background(), harness.config, harness.random, harness.sender,
-			harness.authority, nil, harness.dependencies,
+			harness.authority, nil,
 		)
 		if err == nil || !strings.Contains(err.Error(), "descriptor key") {
 			t.Fatalf("invalid descriptor authority = %v", err)
@@ -316,7 +272,7 @@ func TestPrepareSenderContentRejectsZeroShareAuthority(t *testing.T) {
 	}
 	defer authority.destroy()
 	if _, err := prepareSenderCatalog(
-		context.Background(), config, random, sender, authority, nil, dependencies,
+		context.Background(), config, random, sender, authority, nil,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -331,32 +287,8 @@ func TestPrepareSenderContentRejectsZeroShareAuthority(t *testing.T) {
 	if sender.catalogStore == nil || sender.source == nil {
 		t.Fatal("zero-share test did not retain valid prior-stage resources")
 	}
-	if sender.revisionStore != nil || sender.recordSealer != nil || sender.cache != nil {
+	if sender.revisionStore != nil || sender.cache != nil {
 		t.Fatal("content preparation transferred resources after revision-store validation failed")
-	}
-}
-
-func TestPrepareSenderRollsBackRecordSealerConstructorFailure(t *testing.T) {
-	filename := filepath.Join(t.TempDir(), "selected.bin")
-	if err := os.WriteFile(filename, []byte("record-sealer-constructor"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	dependencies := productionSenderPreparationDependencies()
-	injected := errors.New("injected record sealer constructor failure")
-	dependencies.newRecordSealer = func(records.SealerConfig) (*records.Sealer, error) {
-		return nil, injected
-	}
-
-	sender, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
-		RevisionCapacity: newTestRevisionCapacity(t),
-		Source:           testFileSource([]string{filename}),
-		Relays:           []string{"ws://127.0.0.1:8484"},
-		ChunkSize:        catalog.MinChunkSize,
-		Random:           mathrand.New(mathrand.NewSource(23)),
-		preparation:      dependencies,
-	})
-	if sender != nil || !errors.Is(err, injected) {
-		t.Fatalf("record sealer constructor result = %v, %v", sender, err)
 	}
 }
 

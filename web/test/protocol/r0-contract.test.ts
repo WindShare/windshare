@@ -6,6 +6,7 @@ import {
 
 import { decode, encode, rfc8949EncodeOptions } from 'cborg'
 import { describe, expect, it } from 'vitest'
+import { EnvelopeOpener } from '../../src/session/envelope'
 import { canonicalRelayEndpoint } from '../../src/transport/relay/endpoint'
 
 import { loadVectorFile, type VectorCase } from '../vectors'
@@ -127,10 +128,6 @@ interface TerminalVector extends VectorCase {
   readonly sequence: string
   readonly trafficKeyB64: string
   readonly semanticBodyCborB64: string
-  readonly unsignedControlCborB64: string
-  readonly signedControlCborB64: string
-  readonly controlPreimageB64: string
-  readonly controlSignatureB64: string
   readonly plaintextB64: string
   readonly nonceB64: string
   readonly aadB64: string
@@ -168,10 +165,6 @@ interface LaneAttachVector extends VectorCase {
   readonly receiverToSenderKeyB64: string
   readonly senderToReceiverKeyB64: string
   readonly grantSemanticBodyCborB64: string
-  readonly unsignedGrantCborB64: string
-  readonly grantSignedBodyB64: string
-  readonly grantPreimageB64: string
-  readonly grantSignatureB64: string
   readonly grantPlaintextB64: string
   readonly grantAadB64: string
   readonly grantEnvelopeB64: string
@@ -313,6 +306,24 @@ describe('R0 Go to TypeScript protocol contract', () => {
     )
   })
 
+})
+
+it('opens the authenticated Go session envelope with the runtime codec', async () => {
+  const vector = namedCase<OpenResultsVector>(sessionCases, 'relative-lease-open-results')
+  const opener = new EnvelopeOpener(bytes(vector.trafficKeyB64), {
+    shareInstance: bytes(vector.shareInstanceB64),
+    protocolSessionId: bytes(vector.protocolSessionIdB64),
+    laneId: vector.laneId,
+    laneEpoch: vector.laneEpoch,
+    direction: 1,
+  })
+  const frame = bytes(vector.envelopeB64)
+  const oldVersion = frame.slice()
+  oldVersion[0] = 2
+  await expect(opener.open(oldVersion)).rejects.toThrow(/header/i)
+  await expect(opener.open(frame)).resolves.toEqual({
+    sequence: 0n, plaintext: bytes(vector.plaintextB64),
+  })
 })
 
 describe('R0 relay and ProtocolSession contract', () => {
@@ -575,7 +586,7 @@ describe('R0 relay and ProtocolSession contract', () => {
       ),
     ).toEqual(bytes(registration.stoppedB64))
 
-    const openedOperationError = expectSenderControl(operationError, senderPublicKey)
+    const openedOperationError = expectSenderControl(operationError)
     expect(openedOperationError.messageKind).toBe(10)
     expect(openedOperationError.operationId).toEqual(bytes(operationError.operationIdB64))
 
@@ -587,14 +598,10 @@ describe('R0 relay and ProtocolSession contract', () => {
       sequence: laneAttach.grantSequence,
       trafficKeyB64: laneAttach.senderToReceiverKeyB64,
       semanticBodyCborB64: laneAttach.grantSemanticBodyCborB64,
-      unsignedControlCborB64: laneAttach.unsignedGrantCborB64,
-      signedControlCborB64: laneAttach.grantSignedBodyB64,
-      controlPreimageB64: laneAttach.grantPreimageB64,
-      controlSignatureB64: laneAttach.grantSignatureB64,
       plaintextB64: laneAttach.grantPlaintextB64,
       aadB64: laneAttach.grantAadB64,
       envelopeB64: laneAttach.grantEnvelopeB64,
-    }, senderPublicKey)
+    })
     expect(openedGrant.messageKind).toBe(12)
     expect(openedGrant.operationId).toEqual(bytes(laneAttach.grantOperationIdB64))
     expect(laneAttach.attachedLaneEpoch).toBe(laneAttach.grantLaneEpoch + 1)
@@ -636,14 +643,14 @@ describe('R0 relay and ProtocolSession contract', () => {
         ])
     const expectedOpenResults = Uint8Array.from(
       encode(
-        new Map<number, unknown>([[0, 1], [1, expectedOpenResultsBody]]),
+        expectedOpenResultsBody,
         rfc8949EncodeOptions,
       ),
     )
-    expect(expectedOpenResults).toEqual(bytes(openResults.unsignedControlCborB64))
+    expect(expectedOpenResults).toEqual(bytes(openResults.semanticBodyCborB64))
     expect(Number(openResults.leaseTtlMilliseconds)).toBe(120_000)
     expect(Number(openResults.renewAfterMilliseconds)).toBe(60_000)
-    const openedOpenResults = expectSenderControl(openResults, senderPublicKey)
+    const openedOpenResults = expectSenderControl(openResults)
     expect(openedOpenResults.messageKind).toBe(4)
     expect(openedOpenResults.operationId).toEqual(bytes(openResults.operationIdB64))
 
@@ -655,16 +662,16 @@ describe('R0 relay and ProtocolSession contract', () => {
     ])
     const expectedLeaseResult = Uint8Array.from(
       encode(
-        new Map<number, unknown>([[0, 1], [1, expectedLeaseResultBody]]),
+        expectedLeaseResultBody,
         rfc8949EncodeOptions,
       ),
     )
-    expect(expectedLeaseResult).toEqual(bytes(leaseResult.unsignedControlCborB64))
-    const openedLeaseResult = expectSenderControl(leaseResult, senderPublicKey)
+    expect(expectedLeaseResult).toEqual(bytes(leaseResult.semanticBodyCborB64))
+    const openedLeaseResult = expectSenderControl(leaseResult)
     expect(openedLeaseResult.messageKind).toBe(15)
     expect(openedLeaseResult.operationId).toEqual(bytes(leaseResult.operationIdB64))
 
-    const openedTerminal = expectSenderControl(terminal, senderPublicKey)
+    const openedTerminal = expectSenderControl(terminal)
     expect(openedTerminal.messageKind).toBe(11)
     expect(openedTerminal.operationId).toBeNull()
     expect(openedTerminal.body.get(1)).toBe(0x1008)

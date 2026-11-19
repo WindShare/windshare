@@ -459,7 +459,7 @@ func testOpenRevisionLocalFailureCompensatesTheRemoteLease(t *testing.T) {
 	fixture.contentStore.ended = ended
 	localFailure := errors.New("local revision descriptor rejected")
 	receiverConfig := fixture.receiverConfig
-	receiverConfig.RecordOpener = failingRecordOpener{err: localFailure}
+	receiverConfig.RecordDecoder = failingRecordDecoder{err: localFailure}
 	receiverFactory, err := NewFactory(receiverConfig)
 	if err == nil {
 		trackReceiverFactory(receiverFactory)
@@ -604,17 +604,10 @@ func newVerticalFixtureWithContent(t *testing.T, data []byte, chunkSize uint32) 
 	}
 	fixture.pkHash, fixture.shareIDRaw = pkHash[:], shareIDRaw
 	readSecret := bytes.Repeat([]byte{5}, link.ReadSecretBytes)
-	catalogKey, _ := keyderiv.V2CatalogKey(readSecret, fixture.share.Bytes())
 	descriptorKey, _ := keyderiv.V2DescriptorKey(readSecret, pkHash[:])
 	sessionAuthKey, _ := keyderiv.V2SessionAuthKey(readSecret, fixture.share.Bytes())
 	fixture.descriptorKey = descriptorKey
-	objects, err := catalogflow.NewSealedCatalogStore(catalogflow.SealedCatalogStoreConfig{
-		ShareInstance: fixture.share, CatalogKey: catalogKey, SenderPrivateKey: privateKey,
-		NonceSource: &deterministicReader{next: 11},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	objects := catalogflow.CatalogPayloadEncoder{}
 	processBudget, _ := catalog.NewBudgetAccount("process", catalog.DefaultProcessBudgetLimits())
 	shareBudget, _ := catalog.NewBudgetAccount("share", catalog.DefaultShareBudgetLimits())
 	startupBudget, _ := catalog.NewBudgetAccount("startup", catalog.DefaultSessionBudgetLimits())
@@ -696,14 +689,8 @@ func newVerticalFixtureWithContent(t *testing.T, data []byte, chunkSize uint32) 
 		t.Fatal(err)
 	}
 	catalogService, _ := catalogflow.NewAddressedSenderService(fixture.share, source)
-	keyTree, _ := content.NewKeyTree(readSecret, fixture.share)
-	recordSealer, _ := records.NewSealer(records.SealerConfig{
-		ShareInstance: fixture.share, Keys: keyTree, SigningKey: privateKey,
-		NonceSource: &deterministicReader{next: 13},
-	})
-	recordOpener, _ := records.NewOpener(records.OpenerConfig{
-		ShareInstance: fixture.share, Keys: keyTree, Sender: sender,
-	})
+	recordEncoder := records.Encoder{}
+	recordDecoder := records.Decoder{ShareInstance: fixture.share}
 	geometry, _ := content.NewFileGeometry(uint64(len(fixture.fileData)), chunkSize)
 	revisionDescriptor, _ := content.NewFileRevisionDescriptor(
 		fixture.share, fixture.fileID, id16[content.FileRevision](8), geometry, catalog.ModifiedTime{},
@@ -737,7 +724,7 @@ func newVerticalFixtureWithContent(t *testing.T, data []byte, chunkSize uint32) 
 			return nil, err
 		}
 		return contentflow.NewSenderService(contentflow.SenderServiceConfig{
-			Store: fixture.contentStore, SessionCapacity: sessionCapacity, Sealer: recordSealer, Cache: cache,
+			Store: fixture.contentStore, SessionCapacity: sessionCapacity, Encoder: recordEncoder, Cache: cache,
 		})
 	})
 	fixture.senderConfig = sendersession.FactoryConfig{
@@ -751,15 +738,13 @@ func newVerticalFixtureWithContent(t *testing.T, data []byte, chunkSize uint32) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifier, _ := catalogflow.NewCatalogObjectVerifier(catalogflow.CatalogObjectVerifierConfig{
-		ShareInstance: fixture.share, CatalogKey: catalogKey, Sender: sender,
-	})
+	verifier := catalogflow.CatalogPayloadDecoder{}
 	processReassembly, _ := contentflow.NewReassemblyAccount("process", contentflow.ReassemblyLimits{Bytes: 1 << 30, Records: 256})
 	shareReassembly, _ := contentflow.NewReassemblyAccount("share", contentflow.ReassemblyLimits{Bytes: 256 << 20, Records: 64})
 	plaintext, _ := transfer.NewPlaintextBudget(256 << 20)
 	fixture.receiverConfig = FactoryConfig{
 		Descriptor: descriptor, SessionAuthKey: sessionAuthKey, Sender: sender,
-		CatalogVerifier: verifier, RecordOpener: recordOpener,
+		CatalogVerifier: verifier, RecordDecoder: recordDecoder,
 		ReassemblyProcess: processReassembly, ReassemblyShare: shareReassembly, PlaintextProcess: plaintext,
 		Random: &deterministicReader{next: 19},
 	}
@@ -792,9 +777,9 @@ type verticalLeaseEnd struct {
 	kind content.LeaseEndKind
 }
 
-type failingRecordOpener struct{ err error }
+type failingRecordDecoder struct{ err error }
 
-func (opener failingRecordOpener) OpenRevision(
+func (opener failingRecordDecoder) DecodeRevision(
 	catalog.FileID,
 	uint32,
 	[]byte,
@@ -802,7 +787,7 @@ func (opener failingRecordOpener) OpenRevision(
 	return content.FileRevisionDescriptor{}, opener.err
 }
 
-func (opener failingRecordOpener) OpenBlock(
+func (opener failingRecordDecoder) DecodeBlock(
 	content.FileRevisionDescriptor,
 	uint64,
 	[]byte,

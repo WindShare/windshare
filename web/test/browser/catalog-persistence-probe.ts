@@ -203,7 +203,6 @@ export async function probeSignedRootCollision(): Promise<Readonly<Record<string
   const protocolFailures: unknown[] = []
   const client = new CatalogClient({
     descriptor: fixture.descriptor,
-    readSecret: fixture.readSecret,
     operations: {
       fetchPage: async () => fixture.catalogObject,
       failProtocol: async (reason) => { protocolFailures.push(reason) },
@@ -333,7 +332,6 @@ export async function probeFailurePersistence(): Promise<Readonly<Record<string,
   let fetches = 0
   const client = new CatalogClient({
     descriptor: fixture.descriptor,
-    readSecret: fixture.readSecret,
     operations: {
       fetchPage: async () => {
         fetches += 1
@@ -615,7 +613,7 @@ function page(
     entries: Object.freeze(entries),
     omittedCount: 0n,
     objectCommitment: new Uint8Array(32),
-    senderObjectBytes: 1_024,
+    encodedBytes: 1_024,
   })
 }
 

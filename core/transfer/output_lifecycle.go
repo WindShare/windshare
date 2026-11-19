@@ -390,10 +390,11 @@ const (
 	FilePauseSessionFailure
 	FilePauseOutputFailure
 	FilePauseResourceBudget
+	FilePauseRevisionReopened
 	FilePauseDependencyContract
 )
 
-func (reason FilePauseReason) valid() bool {
+func (reason FilePauseReason) Valid() bool {
 	return reason >= FilePauseInterrupted && reason <= FilePauseDependencyContract
 }
 

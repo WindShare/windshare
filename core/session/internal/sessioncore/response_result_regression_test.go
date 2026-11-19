@@ -2,7 +2,6 @@ package sessioncore
 
 import (
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session"
@@ -16,7 +15,7 @@ import (
 )
 
 func TestResponsePreparationFailureOwnsNoAttempt(t *testing.T) {
-	for _, mode := range []string{"authority", "signing", "encoding"} {
+	for _, mode := range []string{"authority", "encoding"} {
 		t.Run(mode, func(t *testing.T) {
 			runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
 			recorder := newProtocolTraceRecorder(runtime)
@@ -199,7 +198,7 @@ func TestResponseSequencesDistinguishStreamingResponses(t *testing.T) {
 	id := id16[protocolsession.OperationID](144)
 	request, _ := protocolsession.NewMessage(protocolsession.MessageRequestBlocks, &id, []byte{0xa0})
 	ctx, _ := testOutboundOperationContext(t, runtime, runtime.initial, request)
-	outbound := &Responses{runtime: runtime, controlPreparer: testControlPreparer(ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)))}
+	outbound := &Responses{runtime: runtime}
 	fragments, _ := contentflow.FragmentRecord(id, []byte("record"))
 	for range 2 {
 		_, _ = outbound.executeResponse(ctx, fragments[0].Kind(), id, sessionobs.ProtocolErrorContent{}, func(*outboundTransaction) (outboundLaneAttempt, error) {

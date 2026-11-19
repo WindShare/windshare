@@ -1,7 +1,6 @@
 import { captureFailureEvidence } from '../diagnostics/failure/evidence'
 import { catalogFailure } from './failure-evidence'
 import { encodeBase64Url, equalBytes } from '../crypto/bytes'
-import { SenderObjectError } from '../crypto/sender-object'
 import { CborError } from '../protocol/cbor'
 import type {
   CatalogEntry,
@@ -11,7 +10,7 @@ import type {
   ShareDescriptor,
 } from './records'
 import {
-  openCatalogObject,
+  decodeCatalogPayload,
   CATALOG_DIRECTORY_ENTRIES,
   CATALOG_PAGE_OBJECT_BYTES,
 } from './records'
@@ -46,7 +45,6 @@ export interface CatalogOperationClient {
 
 export interface CatalogClientOptions {
   readonly descriptor: ShareDescriptor
-  readonly readSecret: Uint8Array
   readonly operations: CatalogOperationClient
   readonly store: CatalogPageStore
   readonly storageIdentity?: string
@@ -83,7 +81,6 @@ export class CatalogClientError extends Error {
  */
 export class CatalogClient {
   readonly #descriptor: ShareDescriptor
-  readonly #readSecret: Uint8Array<ArrayBuffer>
   readonly #operations: CatalogOperationClient
   readonly #store: CatalogPageStore
   readonly #storageIdentity: string
@@ -99,7 +96,6 @@ export class CatalogClient {
       throw new RangeError('Catalog concurrent-load limit exceeds the protocol-session budget')
     }
     this.#descriptor = options.descriptor
-    this.#readSecret = options.readSecret.slice()
     this.#operations = options.operations
     this.#store = options.store
     this.#storageIdentity = options.storageIdentity ?? options.descriptor.shareInstanceId
@@ -228,7 +224,6 @@ export class CatalogClient {
   close(): void {
     if (this.#closed) return
     this.#closed = true
-    this.#readSecret.fill(0)
     const calls = [...this.#inflight.values()]
     for (const call of calls) {
       call.controller.abort(new DOMException('Catalog client closed', 'AbortError'))
@@ -342,7 +337,7 @@ export class CatalogClient {
     signal: AbortSignal,
     previousSpoolBytes: number,
   ): Promise<{
-    readonly opened: Awaited<ReturnType<typeof openCatalogObject>>
+    readonly opened: Awaited<ReturnType<typeof decodeCatalogPayload>>
     readonly spoolBytes: number
   }> {
     const object = await this.#operations.fetchPage(
@@ -363,7 +358,7 @@ export class CatalogClient {
         actualSpoolBytes: spoolBytes, maximumSpoolBytes: MAXIMUM_CATALOG_SPOOL_BYTES, directoryId: encodeBase64Url(request.directoryId), pageIndex: request.pageIndex }))
     }
     try {
-      const opened = await openCatalogObject(object, this.#descriptor, this.#readSecret, request)
+      const opened = await decodeCatalogPayload(object, this.#descriptor, request)
       signal.throwIfAborted()
       return {
         opened,
@@ -371,7 +366,7 @@ export class CatalogClient {
       }
     } catch (error) {
       signal.throwIfAborted()
-      if (error instanceof SenderObjectError || error instanceof CborError) {
+      if (error instanceof CborError) {
         return this.#failProtocol(error)
       }
       throw error

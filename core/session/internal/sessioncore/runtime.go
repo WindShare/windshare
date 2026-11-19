@@ -69,7 +69,7 @@ type Config struct {
 	LaneEpoch            uint32
 	Channel              protocolsession.FrameChannel
 	Random               io.Reader
-	Authenticator        protocolsession.InboundMessageAuthenticator
+	Validator            protocolsession.InboundMessageValidator
 	Continuations        protocolsession.OperationContinuationClassifier
 	OperationLimits      protocolsession.OperationLimits
 	RouterLimits         protocolsession.RouterLimits
@@ -80,7 +80,7 @@ type Config struct {
 
 func New(config Config) (*Runtime, error) {
 	if config.Share.IsZero() || config.Keys.ProtocolSessionID().IsZero() || config.LaneID == 0 ||
-		config.Channel == nil || config.Random == nil || config.Authenticator == nil {
+		config.Channel == nil || config.Random == nil || config.Validator == nil {
 		return nil, session.ErrRuntimeConfig
 	}
 	if config.OperationLimits == (protocolsession.OperationLimits{}) {
@@ -121,14 +121,13 @@ func New(config Config) (*Runtime, error) {
 		protocolsession.MessagePeerPathControl: &runtime.peerPathControls,
 		protocolsession.MessageTURNControl:     &runtime.turnControls,
 	} {
-		handler.runtime = runtime
 		if err := router.RegisterHandler(kind, handler); err != nil {
 			cancelLifecycle()
 			return nil, err
 		}
 	}
 	runtime.lanes = newRuntimeLanes(runtime)
-	if _, err := runtime.lanes.add(runtime.initial, config.Channel, config.Authenticator, true); err != nil {
+	if _, err := runtime.lanes.add(runtime.initial, config.Channel, config.Validator, true); err != nil {
 		cancelLifecycle()
 		config.Keys.Destroy()
 		return nil, err

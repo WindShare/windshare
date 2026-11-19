@@ -168,6 +168,13 @@ export class TransferObservers {
     }))
   }
 
+  revisionReadmission(fileId: string, event: import('./file-authority').FileRevisionReadmissionObservation): void {
+    this.#emit(() => Object.freeze({
+      ...event, name: 'receive_transition', transition: 'file_revision_readmission', fileId,
+      operationId: this.#options.intent.operationId, transferJobId: this.#options.transferJobId,
+    }))
+  }
+
   intentFrozen(layoutClass: ArtifactLayoutClass): void {
     this.#emit(() => Object.freeze({
       name: 'receive_transition',

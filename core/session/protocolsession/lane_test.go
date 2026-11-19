@@ -29,15 +29,16 @@ func laneSequence(first byte, length int) []byte {
 }
 
 func TestLaneHelloAndAcceptMatchFrozenVector(t *testing.T) {
-	share, _ := catalog.ShareInstanceFromBytes(laneB64(t, "QEFCQ0RFRkdISUpLTE1OTw=="))
-	session, _ := ProtocolSessionIDFromBytes(laneB64(t, "bx6dUla4+OmakbGs5HxWMA=="))
-	operation, _ := OperationIDFromBytes(laneB64(t, "0dLT1NXW19jZ2tvc3d7f4A=="))
-	traffic, _ := TrafficKeyFromBytes(laneB64(t, "NkHzTW7/u+4V6KLR1bszmC3HFKREKe/0bLjVtMhrNPk="), DirectionReceiverToSender)
-	hello, err := NewLaneHello(share, session, 0x05060708, 1, operation, laneB64(t, "YWJjZGVmZ2hpamtsbW5vcA=="), traffic)
+	vector, grant := loadLaneGrantVector(t)
+	share, _ := catalog.ShareInstanceFromBytes(laneB64(t, vector.ShareInstanceB64))
+	session, _ := ProtocolSessionIDFromBytes(laneB64(t, vector.ProtocolSessionIDB64))
+	operation := grant.OperationID
+	traffic, _ := TrafficKeyFromBytes(laneB64(t, vector.ReceiverToSenderKeyB64), DirectionReceiverToSender)
+	hello, err := NewLaneHello(share, session, grant.LaneID, grant.LaneEpoch, operation, grant.AttachNonce[:], traffic)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantHello := laneB64(t, "V1MyQQJAQUJDREVGR0hJSktMTU5Pbx6dUla4+OmakbGs5HxWMAUGBwgAAAAB0dLT1NXW19jZ2tvc3d7f4GFiY2RlZmdoaWprbG1ub3CK5vKIALOUUri9tV3K20/JjkjmqjEFvayxXsEg8tM24w==")
+	wantHello := laneB64(t, vector.LaneHelloB64)
 	if !bytes.Equal(hello.Encoded(), wantHello) {
 		t.Fatal("lane hello diverged from frozen vector")
 	}
@@ -56,7 +57,7 @@ func TestLaneHelloAndAcceptMatchFrozenVector(t *testing.T) {
 		t.Fatalf("zero route identity error = %v", err)
 	}
 	parsed, err := ParseLaneHello(wantHello, traffic)
-	if err != nil || parsed.LaneID() != 0x05060708 || parsed.LaneEpoch() != 1 || parsed.OperationID() != operation {
+	if err != nil || parsed.LaneID() != grant.LaneID || parsed.LaneEpoch() != grant.LaneEpoch || parsed.OperationID() != operation {
 		t.Fatalf("parse lane hello = %+v, %v", parsed, err)
 	}
 	privateKey := ed25519.NewKeyFromSeed(laneSequence(0x20, ed25519.SeedSize))
@@ -64,7 +65,7 @@ func TestLaneHelloAndAcceptMatchFrozenVector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantAccept := laneB64(t, "V1MyQgJ0h+5q1A0tcXynT84Il+UT8GYbLIQqVL9FQLRvsb0snIGCg4SFhoeIiYqLjI2Oj5B2MCOk1ovq9SZHx6VGzLovaRUq3bzz9bAMeP8OoApS/Ad+V/6Rq9WYTphtTJio0O3YJEKGy9HNNqP7uoetwjoD")
+	wantAccept := laneB64(t, vector.LaneAckB64)
 	if !bytes.Equal(accept, wantAccept) {
 		t.Fatal("lane accept diverged from frozen vector")
 	}
@@ -76,7 +77,7 @@ func TestLaneHelloAndAcceptMatchFrozenVector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantReject := laneB64(t, "V1MyTgIFAAB0h+5q1A0tcXynT84Il+UT8GYbLIQqVL9FQLRvsb0snAAAA+jpb7fjwnH++p2jDca5KXyWzMcUfQQvLPukK7OUNYtsH+YEkgeUQRJGovGazCKa0gXlW3LhRGhtIxWnZxA3ZXgF")
+	wantReject := laneB64(t, vector.LaneRejectB64)
 	if !bytes.Equal(reject, wantReject) {
 		t.Fatal("lane rejection diverged from frozen vector")
 	}

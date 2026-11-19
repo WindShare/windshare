@@ -136,7 +136,7 @@ func (s *RevisionStore) EndLease(id LeaseID, kind LeaseEndKind) error {
 	return err
 }
 
-// ValidateLease is the authorization boundary for cache hits. A sealed object
+// ValidateLease is the authorization boundary for cache hits. A cached payload
 // may outlive the lease that populated the cache, so serving it without
 // consulting RevisionStore would silently bypass expiry and drift revocation.
 func (s *RevisionStore) ValidateLease(id LeaseID, descriptor FileRevisionDescriptor) error {
