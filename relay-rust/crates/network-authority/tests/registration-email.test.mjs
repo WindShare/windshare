@@ -57,8 +57,13 @@ test('the Worker isolates registration email challenges while tracking retries',
   csrf = console.csrf;
   assert.equal(console.settings.registration, 'by_account_count');
   assert.equal(console.registration_mode, 'automatic');
-  const override = await call('/v1/admin/settings', { ...console.settings, registration: 'email' }, { method: 'PUT', admin: true });
+  const patchSettings = body => call('/v1/admin/settings', body, { method: 'PATCH', admin: true });
+  const override = await patchSettings({ registration: 'email' });
   assert.equal(override.value.registration_mode, 'email');
+  const daily_bytes = console.settings.daily_bytes + 1;
+  const quota = await patchSettings({ daily_bytes });
+  assert.equal(quota.value.registration_mode, 'email');
+  assert.deepEqual(quota.value.settings, { ...console.settings, registration: 'email', daily_bytes });
 
   const secret = randomBytes(32).toString('base64url');
   const otherSecret = randomBytes(32).toString('base64url');

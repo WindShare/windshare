@@ -1,4 +1,5 @@
 use super::*;
+use serde_json::json;
 use windshare_relay_access::usage::ShareAttribution;
 
 fn public(authority: &Authority<Memory, Clock>) -> serde_json::Value {
@@ -15,6 +16,54 @@ fn public(authority: &Authority<Memory, Clock>) -> serde_json::Value {
         .unwrap(),
     )
     .unwrap()
+}
+
+#[test]
+fn policy_updates_merge_only_specified_fields() {
+    let mut authority = fixture();
+    let admin = authority
+        .initialize("once", "once", "admin", "correct horse battery")
+        .unwrap();
+    let initial = authority.settings().unwrap();
+    let parse = |body| serde_json::from_value::<SettingsChanges>(body).unwrap();
+
+    let refill_seconds = initial.source_rate.refill_seconds + 1;
+    let admission = parse(json!({
+        "registration": "proof_of_work",
+        "source_rate": { "refill_seconds": refill_seconds },
+    }));
+    authority.update_settings(&admin, &admission).unwrap();
+
+    let daily_bytes = initial.daily_bytes + 1;
+    let quota = parse(json!({ "daily_bytes": daily_bytes }));
+    let (after_quota, mode) = authority.update_settings(&admin, &quota).unwrap();
+    assert_eq!(mode, RegistrationMode::ProofOfWork);
+    assert_eq!(after_quota.registration, RegistrationPolicy::ProofOfWork);
+    assert_eq!(after_quota.daily_bytes, daily_bytes);
+    assert_eq!(after_quota.pow_bits, initial.pow_bits);
+
+    let burst = initial.source_rate.burst + 1;
+    let rate = parse(json!({ "source_rate": { "burst": burst } }));
+    let (saved, _) = authority.update_settings(&admin, &rate).unwrap();
+    assert_eq!(
+        saved,
+        Settings {
+            source_rate: Rate {
+                burst,
+                refill_seconds
+            },
+            ..after_quota
+        }
+    );
+
+    let invalid = parse(json!({ "daily_bytes": daily_bytes + 1, "global_rate": { "burst": 0 } }));
+    let error = authority.update_settings(&admin, &invalid).unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<Fault>(),
+        Some(Fault::Invalid)
+    ));
+    assert_eq!(authority.settings().unwrap(), saved);
+    assert!(serde_json::from_value::<SettingsChanges>(json!({ "daily_bytes": null })).is_err());
 }
 
 #[test]

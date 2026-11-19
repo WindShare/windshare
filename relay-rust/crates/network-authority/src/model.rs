@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use windshare_relay_access::{
     AccountId, CredentialId,
     entitlement::{DEFAULT_DAILY_BYTES, Entitlement},
@@ -47,13 +47,13 @@ impl RegistrationPolicy {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Rate {
     pub burst: u64,
     pub refill_seconds: u64,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
     pub registration: RegistrationPolicy,
@@ -78,6 +78,56 @@ impl Default for Settings {
             },
         }
     }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SettingsChanges {
+    #[serde(deserialize_with = "specified")]
+    pub registration: Option<RegistrationPolicy>,
+    #[serde(deserialize_with = "specified")]
+    pub pow_bits: Option<u8>,
+    #[serde(deserialize_with = "specified")]
+    pub daily_bytes: Option<u64>,
+    pub source_rate: RateChanges,
+    pub global_rate: RateChanges,
+}
+
+impl SettingsChanges {
+    pub(crate) fn apply_to(&self, current: &Settings) -> Settings {
+        Settings {
+            registration: self.registration.unwrap_or(current.registration),
+            pow_bits: self.pow_bits.unwrap_or(current.pow_bits),
+            daily_bytes: self.daily_bytes.unwrap_or(current.daily_bytes),
+            source_rate: self.source_rate.apply_to(&current.source_rate),
+            global_rate: self.global_rate.apply_to(&current.global_rate),
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RateChanges {
+    #[serde(deserialize_with = "specified")]
+    pub burst: Option<u64>,
+    #[serde(deserialize_with = "specified")]
+    pub refill_seconds: Option<u64>,
+}
+
+impl RateChanges {
+    fn apply_to(&self, current: &Rate) -> Rate {
+        Rate {
+            burst: self.burst.unwrap_or(current.burst),
+            refill_seconds: self.refill_seconds.unwrap_or(current.refill_seconds),
+        }
+    }
+}
+
+// Stored settings are required, so a request can omit fields but cannot clear them.
+fn specified<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+    deserializer: D,
+) -> Result<Option<T>, D::Error> {
+    T::deserialize(deserializer).map(Some)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

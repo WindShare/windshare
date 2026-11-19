@@ -79,9 +79,10 @@ pub async fn fetch(request: Request, env: Env, _context: Context) -> Result<Resp
             "Access-Control-Allow-Headers",
             "Content-Type, Authorization, X-CSRF-Token",
         )?;
-        response
-            .headers_mut()
-            .set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")?;
+        response.headers_mut().set(
+            "Access-Control-Allow-Methods",
+            "GET, POST, PUT, PATCH, OPTIONS",
+        )?;
         response.headers_mut().set("Vary", "Origin")?;
     }
     Ok(response)

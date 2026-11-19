@@ -1,6 +1,7 @@
 use super::{WorkerEnvironment, failure, storage::Database};
 use crate::{
-    Authority, Block, Fault, Mailbox, NodeEnrollment, NodePolicyChange, ReportPosition, Settings,
+    Authority, Block, Fault, Mailbox, NodeEnrollment, NodePolicyChange, ReportPosition,
+    SettingsChanges,
 };
 use anyhow::{Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -249,9 +250,10 @@ fn admin_routes(
             let id = report_id(&path["/v1/admin/reports/".len()..])?;
             serde_json::to_value(authority.report_by_id(&session, id)?)?
         }
-        (Method::Put, "/v1/admin/settings") => {
-            let mode = authority.set_settings(&session, &parse::<Settings>(bytes)?)?;
-            serde_json::json!({"registration_mode": mode})
+        (Method::Patch, "/v1/admin/settings") => {
+            let (settings, mode) =
+                authority.update_settings(&session, &parse::<SettingsChanges>(bytes)?)?;
+            serde_json::json!({"settings": settings, "registration_mode": mode})
         }
         (Method::Post, "/v1/admin/nodes") => serde_json::to_value(
             authority.enroll_node(&session, &parse::<NodeEnrollment>(bytes)?)?,

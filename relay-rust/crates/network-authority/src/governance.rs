@@ -1,5 +1,6 @@
 use crate::{
-    Authority, Environment, Fault, RegistrationMode, RegistrationPolicy, Settings, Store,
+    Authority, Environment, Fault, RegistrationMode, RegistrationPolicy, Settings, SettingsChanges,
+    Store,
     store::{key, save},
 };
 use anyhow::{Result, ensure};
@@ -46,8 +47,14 @@ pub struct ReportPage {
 impl<R: Store, E: Environment> Authority<R, E> {
     /// # Errors
     /// Requires a live administrator session and a valid registration policy.
-    pub fn set_settings(&mut self, session: &str, settings: &Settings) -> Result<RegistrationMode> {
+    pub fn update_settings(
+        &mut self,
+        session: &str,
+        changes: &SettingsChanges,
+    ) -> Result<(Settings, RegistrationMode)> {
         self.require_admin(session)?;
+        let current = self.settings()?;
+        let settings = changes.apply_to(&current);
         let email_configured = self.environment.registration_email_configured();
         ensure!(
             (16..=30).contains(&settings.pow_bits)
@@ -61,9 +68,18 @@ impl<R: Store, E: Environment> Authority<R, E> {
         );
         let account_count = self.account_count()?;
         let mode = settings.registration.mode(account_count, email_configured);
-        save(&mut self.store, "settings", settings)?;
-        tracing::info!(event="authority_policy_changed",policy=?settings.registration,?mode,account_count,pow_bits=settings.pow_bits);
-        Ok(mode)
+        if settings != current {
+            save(&mut self.store, "settings", &settings)?;
+            tracing::info!(
+                event = "authority_policy_changed",
+                ?changes,
+                policy = ?settings.registration,
+                ?mode,
+                account_count,
+                pow_bits = settings.pow_bits
+            );
+        }
+        Ok((settings, mode))
     }
     /// # Errors
     /// Requires a live administrator session and a nonzero target identity.

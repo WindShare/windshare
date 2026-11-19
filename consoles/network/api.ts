@@ -1,7 +1,7 @@
 import { message } from '../ui/locale'
 import { networkCopy } from './locales'
 import { request, RequestError } from '../ui/request'
-import type { Enrollment, PolicyField, RelayNode, Report, ReportPage, Restrictions, Settings, Snapshot, Target } from './model'
+import type { Enrollment, PolicyField, PolicySnapshot, RelayNode, Report, ReportPage, Restrictions, SettingsChanges, Snapshot, Target } from './model'
 
 const messages = {
   credentials: message(networkCopy, 'invalidCredentials'),
@@ -62,6 +62,6 @@ export class AuthorityClient {
   signOut = () => this.write('logout', {})
   enroll = (node: Enrollment) => this.write<RelayNode>('nodes', node)
   policy = (key: number[], field: PolicyField, value: boolean) => this.write<RelayNode>('nodes/policy', { key, change: { field, value } }, 'PUT')
-  settings = (value: Settings) => this.write<Pick<Snapshot, 'registration_mode'>>('settings', value, 'PUT')
+  updateSettings = (changes: SettingsChanges) => this.write<PolicySnapshot>('settings', changes, 'PATCH')
   restrict = (target: Target, blocked: boolean) => this.write<Restrictions>('blocks', { ...target, blocked })
 }

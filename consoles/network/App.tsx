@@ -57,7 +57,7 @@ function Dashboard({ api, snapshot, update, refresh, refreshing, error }: {
   const t = useCopy(networkCopy)
   const [page, id] = usePage().split('/')
   const directory = useDirectory(snapshot.directory)
-  const editor = usePolicyEditor()
+  const editor = usePolicyEditor(snapshot.settings)
   const policy = page === 'policy'
   const reports = ['reports', 'report', 'account-access', 'share-access'].includes(page)
   const saveNode = (next: RelayNode) => update(current => ({ ...current, nodes: upsertNode(current.nodes, next) }))
@@ -82,7 +82,7 @@ function Dashboard({ api, snapshot, update, refresh, refreshing, error }: {
       <Icon name={refreshing ? 'loader' : 'refresh'} size={16} /><span className="action-text">{refreshLabel}</span></button>} />
     <ReadError error={error} retry={refresh} />
     {policy ? <PolicySettings api={api} snapshot={snapshot} editor={editor}
-      saved={(settings, registration_mode) => update(current => ({ ...current, settings, registration_mode }))} />
+      saved={({ settings, registration_mode }) => update(current => ({ ...current, settings, registration_mode }))} />
       : <DashboardView api={api} snapshot={snapshot} page={page} id={id} reports={reports}
         reportRevision={reportRevision} directory={directory} saveNode={saveNode} access={access} />}
   </div>

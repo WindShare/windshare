@@ -40,7 +40,7 @@ csrf = login.value.csrf;
 assert.match(login.response.headers.get('set-cookie'), /HttpOnly; Secure; SameSite=Strict/);
 await call('/v1/admin/initialize', { ...administrator, token: initialization }, { status: 403 });
 const badCsrf = await call('/v1/admin/settings', {}, {
-  admin: true, method: 'PUT', headers: { 'X-CSRF-Token': 'invalid' }, status: 403,
+  admin: true, method: 'PATCH', headers: { 'X-CSRF-Token': 'invalid' }, status: 403,
 });
 assert.equal(badCsrf.value.reason, 'csrf');
 const missingCookie = await call('/v1/admin/logout', {}, {
@@ -48,7 +48,7 @@ const missingCookie = await call('/v1/admin/logout', {}, {
 });
 assert.equal(missingCookie.value.reason, 'administrator_session');
 const consoleState = (await call('/v1/admin/console', undefined, { admin: true, method: 'GET' })).value;
-await call('/v1/admin/settings', { ...consoleState.settings, registration: 'automatic' }, { admin: true, method: 'PUT' });
+await call('/v1/admin/settings', { registration: 'automatic' }, { admin: true, method: 'PATCH' });
 const secret = randomBytes(32).toString('base64url');
 const first = (await call('/v1/accounts', { client_secret: secret })).value;
 const repeated = (await call('/v1/accounts', { client_secret: secret })).value;
