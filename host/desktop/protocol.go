@@ -13,17 +13,18 @@ import (
 const ProtocolVersion = 1
 
 type Request struct {
-	ID                string        `json:"id"`
-	Command           string        `json:"command"`
-	SourceOperationID string        `json:"source_operation_id,omitempty"`
-	OperationID       string        `json:"operation_id,omitempty"`
-	TaskID            string        `json:"task_id,omitempty"`
-	Relays            []string      `json:"relays,omitempty"`
-	RelayURL          string        `json:"relay_url,omitempty"`
-	Paths             []string      `json:"paths,omitempty"`
-	Setup             *SetupInput   `json:"setup,omitempty"`
-	SetupID           string        `json:"setup_id,omitempty"`
-	Account           *AccountInput `json:"account,omitempty"`
+	ID                 string        `json:"id"`
+	Command            string        `json:"command"`
+	SourceOperationID  string        `json:"source_operation_id,omitempty"`
+	OperationID        string        `json:"operation_id,omitempty"`
+	TaskID             string        `json:"task_id,omitempty"`
+	Relays             []string      `json:"relays,omitempty"`
+	RelayURL           string        `json:"relay_url,omitempty"`
+	Paths              []string      `json:"paths,omitempty"`
+	Setup              *SetupInput   `json:"setup,omitempty"`
+	SetupID            string        `json:"setup_id,omitempty"`
+	Account            *AccountInput `json:"account,omitempty"`
+	AccountViewVisible *bool         `json:"account_view_visible,omitempty"`
 }
 
 type Failure struct {

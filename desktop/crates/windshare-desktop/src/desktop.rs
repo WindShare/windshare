@@ -102,6 +102,11 @@ impl Desktop {
         if let Runtime::Native(session) = &runtime {
             Self::observe_runtime(session.controller.clone(), window, cx);
             Self::observe_activations(session.application.clone(), window, cx);
+            let view = cx.entity().downgrade();
+            // Visibility can change while the window is no longer drawing frames.
+            subscriptions.push(window.observe_window_visibility(move |_, window, cx| {
+                let _ = view.update(cx, |this, _| this.sync_account_view_visibility(window));
+            }));
         }
         Self {
             page: Page::Share,
@@ -347,6 +352,7 @@ impl Desktop {
 }
 impl Render for Desktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_account_view_visibility(window);
         self.intro_anchors.begin_frame();
         let locale = language(cx);
         let theme = Theme::current(window, cx);

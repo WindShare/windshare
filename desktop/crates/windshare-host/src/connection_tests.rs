@@ -12,6 +12,7 @@ fn pending_create() -> (Shared, BTreeMap<u64, Request>) {
     let shared = Shared {
         model: Mutex::new(model),
         closing: AtomicBool::new(false),
+        account_view_visible: AtomicBool::new(false),
         updates: async_channel::bounded(1).0,
         wake: polling::Poller::new().unwrap(),
     };

@@ -7,8 +7,9 @@ mod edge;
 mod mail;
 mod routes;
 mod storage;
-use crate::{Authority, Environment, Fault, Signing};
+use crate::{Authority, Environment, Fault, Signing, public_blocks::PublicBlockFeed};
 use futures_util::StreamExt;
+use std::{cell::RefCell, rc::Rc};
 use storage::Database;
 use worker::{DurableObject, Env, Method, Request, Response, Result, State, durable_object};
 
@@ -39,10 +40,15 @@ impl Environment for WorkerEnvironment {
 pub struct NetworkAuthority {
     state: State,
     env: Env,
+    public_blocks: Rc<RefCell<PublicBlockFeed>>,
 }
 impl DurableObject for NetworkAuthority {
     fn new(state: State, env: Env) -> Self {
-        Self { state, env }
+        Self {
+            state,
+            env,
+            public_blocks: Rc::default(),
+        }
     }
     async fn fetch(&self, mut request: Request) -> Result<Response> {
         let mut bytes = Vec::new();
@@ -71,6 +77,7 @@ impl DurableObject for NetworkAuthority {
         let environment = WorkerEnvironment {
             registration_email_configured: mail::Webhook::configured(&env).is_some(),
         };
+        let public_blocks = self.public_blocks.clone();
         let result = storage::transaction(&self.state, move || {
             let signing = Signing::load(
                 &env.var("AUTHORITY_ROOT")?.to_string(),
@@ -79,7 +86,12 @@ impl DurableObject for NetworkAuthority {
             )
             .map_err(|error| anyhow::anyhow!("{error}"))?;
             let mut authority = Authority::new(database, environment, signing)?;
-            match routes::dispatch(&mut authority, context, &bytes) {
+            match routes::dispatch(
+                &mut authority,
+                context,
+                &bytes,
+                &mut public_blocks.borrow_mut(),
+            ) {
                 Ok(response) => Ok(response),
                 Err(error) => {
                     if let Some(fault) = error.downcast_ref::<Fault>() {

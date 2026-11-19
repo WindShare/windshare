@@ -70,8 +70,9 @@ func (share *ShareAuthorization) Close() {
 		share.attribution = attributionClosed
 		share.reservation = nil
 		delete(service.unconfirmedShares, share)
+		delete(service.officialShares, share)
 		share.releaseCredentialLocked()
-		service.notifyLocked()
+		service.refreshDemandChangedLocked()
 	}
 }
 
@@ -84,9 +85,26 @@ func (share *ShareAuthorization) Source(address string) *Source {
 	if share == nil {
 		return nil
 	}
-	share.service.Start()
+	share.beginOfficialUse()
 	share.service.startNode(address)
 	return &Source{share: share, address: address}
+}
+
+func (share *ShareAuthorization) beginOfficialUse() {
+	service := share.service
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if share.attribution == attributionClosed || service.ctx.Err() != nil {
+		return
+	}
+	if _, active := service.officialShares[share]; active {
+		return
+	}
+	if service.officialShares == nil {
+		service.officialShares = make(map[*ShareAuthorization]struct{})
+	}
+	service.officialShares[share] = struct{}{}
+	service.refreshDemandChangedLocked()
 }
 
 func (source *Source) ReserveRegistrationAuthorization() serviceauthority.RegistrationAuthorization {
@@ -165,7 +183,7 @@ func (share *ShareAuthorization) reserveAttributionLocked(bearer string) service
 		share.reservation = nil
 		if share.attribution == attributionAnonymous {
 			share.releaseCredentialLocked()
-			service.notifyLocked()
+			service.refreshDemandChangedLocked()
 		}
 	}
 }
@@ -202,7 +220,9 @@ func (source *Source) selectAuthorizationLocked(node Node) serviceauthority.Regi
 	authorization := serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionPendingSetup, Changed: service.changed}
 	switch {
 	case identity == attributionAccount || share.credential != nil && !sameIdentity(record, service.record):
-		service.refreshCredentialLocked(share.credential)
+		if !sameIdentity(record, service.record) {
+			service.refreshCredentialLocked(share.credential)
+		}
 		authorization.State = serviceauthority.AdmissionExpired
 	case service.state == Unavailable:
 		authorization.State, authorization.Cause = serviceauthority.AdmissionTemporaryFailure, errors.New(service.reason)

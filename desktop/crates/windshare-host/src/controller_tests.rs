@@ -9,6 +9,7 @@ fn controller() -> (Controller, mpsc::Receiver<Command>) {
             shared: Arc::new(Shared {
                 model: Mutex::new(Model::default()),
                 closing: AtomicBool::new(false),
+                account_view_visible: AtomicBool::new(false),
                 updates,
                 wake: polling::Poller::new().unwrap(),
             }),

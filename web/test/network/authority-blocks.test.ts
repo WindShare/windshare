@@ -112,6 +112,30 @@ describe('official authority blocks', () => {
       expect(feed.blocked(shareId)).toBe(false)
     } finally { feed.close() }
   })
+  it('reuses verified bytes while still adopting a newer revision from another tab', async () => {
+    const shared = new MemoryBlockCache()
+    const original = envelope(1, [])
+    await shared.commit(await verifyBlocks(original, fixture.root))
+    const feed = new AuthorityBlockFeed({
+      url: 'https://authority.example', root: fixture.root, now: () => fixture.now * 1000,
+      request: async () => new Response(original),
+      cache: {
+        load: () => shared.load(),
+        commit: () => Promise.reject(new Error('An identical response needs no write')),
+      },
+    })
+    const transitions: string[] = []
+    try {
+      await feed.ready
+      feed.observe(() => transitions.push(feed.blocked(shareId) ? 'blocked' : 'unblocked'))
+      await feed.refresh()
+      expect(transitions).toEqual([])
+      await shared.commit(await verifyBlocks(envelope(2), fixture.root))
+      await feed.refresh()
+      expect(transitions).toEqual(['blocked'])
+      expect(feed.blocked(shareId)).toBe(true)
+    } finally { feed.close() }
+  })
   it('applies a fresh unblock and never lets an older cached reply restore it', async () => {
     const cache = new MemoryBlockCache()
     await cache.commit(await verifyBlocks(envelope(3), fixture.root))

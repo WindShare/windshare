@@ -20,8 +20,13 @@ type controlledAccount struct {
 func (service *controlledAccount) Snapshot() (account.Snapshot, <-chan struct{}) {
 	return account.Snapshot{State: account.Pending}, service.changed
 }
-func (service *controlledAccount) StartRenewal()          { service.renewals++ }
-func (*controlledAccount) Retry()                         {}
+func (service *controlledAccount) ObserveAccount() func() {
+	service.renewals++
+	return func() { service.renewals-- }
+}
+func (*controlledAccount) RefreshOnce(context.Context) (account.RefreshOutcome, error) {
+	return account.RefreshSucceeded, nil
+}
 func (*controlledAccount) Register(context.Context) error { return nil }
 func (service *controlledAccount) Login(ctx context.Context, _, _ string) error {
 	service.calls.Add(1)
@@ -40,7 +45,7 @@ func (*controlledAccount) RequestEmail(context.Context, string) error       { re
 func (*controlledAccount) VerifyEmail(context.Context, string) error        { return nil }
 func (*controlledAccount) RevokeCredential(context.Context, [16]byte) error { return nil }
 
-func TestAccountSyncStartsRenewalWithoutAnInteractiveOperation(t *testing.T) {
+func TestAccountViewRenewalFollowsItsControlSubscription(t *testing.T) {
 	service := &controlledAccount{changed: make(chan struct{})}
 	app := newApplication("test", dependencies{
 		accounts: service, log: func(string, any) {}, close: func(context.Context) error { return nil },
@@ -50,9 +55,27 @@ func TestAccountSyncStartsRenewalWithoutAnInteractiveOperation(t *testing.T) {
 	if result := app.execute(Request{Command: "list"}); result.Error != nil || service.renewals != 0 {
 		t.Fatal("reading a snapshot started account renewal")
 	}
-	result := app.execute(Request{ID: "1", Command: "start_account_sync"})
-	if result.Error != nil || service.renewals != 1 || result.Snapshot.Account.Operation != nil {
-		t.Fatalf("account sync was not accepted independently of the form: %+v", result)
+	first, disconnectFirst := app.subscribe()
+	defer disconnectFirst()
+	second, disconnectSecond := app.subscribe()
+	defer disconnectSecond()
+	visible := true
+	request := Request{ID: "1", Command: "set_account_view", AccountViewVisible: &visible}
+	for _, current := range []*subscription{first, first, second} {
+		if result := app.setAccountView(current, request); result.Error != nil {
+			t.Fatalf("account view rejected: %+v", result)
+		}
+	}
+	if service.renewals != 2 || app.snapshot().Account.Operation != nil {
+		t.Fatalf("view should own one renewal independently of the form: %d", service.renewals)
+	}
+	visible = false
+	if result := app.setAccountView(first, request); result.Error != nil || service.renewals != 1 {
+		t.Fatalf("hiding a view affected another subscription: %+v", result)
+	}
+	disconnectSecond()
+	if service.renewals != 0 {
+		t.Fatal("disconnect left a renewal running")
 	}
 }
 

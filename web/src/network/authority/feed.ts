@@ -48,7 +48,7 @@ export class AuthorityBlockFeed {
   }
   async #load(): Promise<void> {
     const cached = await this.#cache.load()
-    if (!cached) return
+    if (!cached || cached.envelope === this.#snapshot?.envelope && !this.#pendingCursor) return
     const verified = await verifyBlocks(cached.envelope, this.#options.root)
     rejectBlockRollback(cached.cursor, verified.cursor)
     rejectBlockRollback(verified.cursor, cached.cursor)
@@ -93,7 +93,7 @@ export class AuthorityBlockFeed {
     const mirror = new URL('/v1/blocks', this.#options.url).href
     const signal = AbortSignal.any([this.#lifetime.signal, AbortSignal.timeout(REFRESH_TIMEOUT_MS)])
     try {
-      const response = await (this.#options.request ?? fetch)(mirror, { signal, redirect: 'error', credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store' })
+      const response = await (this.#options.request ?? fetch)(mirror, { signal, redirect: 'error', credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-cache' })
       if (!response.ok || !response.body) throw new Error('Authority policy unavailable')
       const reader = response.body.getReader(), chunks: Uint8Array[] = []
       let size = 0
@@ -106,24 +106,34 @@ export class AuthorityBlockFeed {
           chunks.push(chunk.value)
         }
       } finally { await reader.cancel().catch(() => undefined); reader.releaseLock() }
-      const next = await verifyBlocks(new TextDecoder('utf-8', { fatal: true }).decode(concatBytes(chunks)), this.#options.root)
+      const envelope = new TextDecoder('utf-8', { fatal: true }).decode(concatBytes(chunks))
+      const previous = this.#snapshot
+      const next = previous?.envelope === envelope ? previous : await verifyBlocks(envelope, this.#options.root)
       signal.throwIfAborted()
       if (!freshBlocks(next, (this.#options.now ?? Date.now)())) throw new Error('Authority policy expired')
-      rejectBlockRollback(this.#snapshot?.cursor, next.cursor)
-      rejectBlockRollback(this.#pendingCursor, next.cursor)
-      // Denials survive failed writes, but unblocking must cross the shared cache's
-      // atomic revision barrier so an older response cannot bypass another tab.
-      this.#pendingCursor = next.cursor
-      for (const share of next.shares) this.#pendingDenials.add(share)
-      for (const listener of this.#listeners) listener()
-      await this.#cache.commit(next)
-      this.#adopt(next)
+      if (next === previous && !this.#pendingCursor) {
+        // Another tab may have learned newer restrictions while this poll was in flight.
+        await this.#load()
+      } else {
+        await this.#commit(next)
+      }
       this.#observe({ operationId, transition: 'accepted', endpoint: mirror, generation: next.cursor.generation, version: next.cursor.version })
     } catch (failure) {
       this.#observe({ operationId, transition: 'rejected', endpoint: mirror, failure })
       // Another tab may have committed a newer revision during our request.
       await this.#load().catch(() => undefined)
     }
+  }
+  async #commit(next: BlockSnapshot): Promise<void> {
+    rejectBlockRollback(this.#snapshot?.cursor, next.cursor)
+    rejectBlockRollback(this.#pendingCursor, next.cursor)
+    // Denials survive failed writes, but unblocking must cross the shared cache's
+    // atomic revision barrier so an older response cannot bypass another tab.
+    this.#pendingCursor = next.cursor
+    for (const share of next.shares) this.#pendingDenials.add(share)
+    for (const listener of this.#listeners) listener()
+    await this.#cache.commit(next)
+    this.#adopt(next)
   }
   #observe(event: AuthorityObservation): void {
     try { this.#options.observe?.(event) } catch { /* Diagnostics do not own policy. */ }

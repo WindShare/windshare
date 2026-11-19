@@ -72,15 +72,35 @@ func (a *Application) watchAccount() {
 		}
 	})
 }
-func (a *Application) startAccountSync() error {
-	if a.closing {
-		return engine.ErrClosed
+func (subscription *subscription) hideAccountView() {
+	if subscription.releaseAccountView != nil {
+		subscription.releaseAccountView()
+		subscription.releaseAccountView = nil
 	}
-	if a.deps.accounts == nil {
-		return account.ErrNotConfigured
+}
+
+func (a *Application) setAccountView(subscription *subscription, request Request) Message {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var err error
+	switch {
+	case request.AccountViewVisible == nil:
+		err = errors.New("account_view_visible is required")
+	case !*request.AccountViewVisible:
+		subscription.hideAccountView()
+	case a.closing:
+		err = engine.ErrClosed
+	case a.deps.accounts == nil:
+		err = account.ErrNotConfigured
+	case subscription.releaseAccountView == nil:
+		subscription.releaseAccountView = a.deps.accounts.ObserveAccount()
 	}
-	a.deps.accounts.StartRenewal()
-	return nil
+	reply := Message{Version: ProtocolVersion, ID: request.ID}
+	if err != nil {
+		reply.Error = failure("request_rejected", err)
+	}
+	a.logRequestResult(request, reply.Error)
+	return reply
 }
 
 func (a *Application) accountCommand(request Request) error {
@@ -142,8 +162,8 @@ func (a *Application) runAccountCommand(input AccountInput) error {
 	case "register":
 		return service.Register(ctx)
 	case "retry":
-		service.Retry()
-		return nil
+		_, err := service.RefreshOnce(ctx)
+		return err
 	case "login":
 		return service.Login(ctx, input.Username, input.Password)
 	case "password":

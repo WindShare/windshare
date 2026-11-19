@@ -134,13 +134,24 @@ fn pump(
     sequence: &mut u64,
     socket: &mut RegisteredSocket<'_>,
 ) -> Result<()> {
+    // Visibility is owned by each socket. Replay only application commands.
+    pending.retain(|_, request| !matches!(request.command, Command::SetAccountView { .. }));
     for command in pending.values() {
         send(socket, command)?;
     }
     shared.update(|model| model.connection = Connection::Connected);
+    let mut visible = false;
     while !shared.closing.load(Ordering::Acquire) {
         while pending.len() < MAX_PENDING {
-            let Ok(command) = commands.try_recv() else {
+            let desired = shared.account_view_visible.load(Ordering::Acquire);
+            let command = if desired != visible {
+                visible = desired;
+                Command::SetAccountView {
+                    account_view_visible: visible,
+                }
+            } else if let Ok(command) = commands.try_recv() {
+                command
+            } else {
                 break;
             };
             *sequence += 1;

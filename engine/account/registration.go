@@ -55,7 +55,6 @@ func (service *Service) Register(ctx context.Context) (err error) {
 			service.transition(Ready, "", service.config.Now().Add(RefreshInterval))
 			return nil
 		}
-		service.Retry()
 		return ErrSuperseded
 	}
 	service.transition(Registering, "", time.Time{})
@@ -67,9 +66,6 @@ func (service *Service) Register(ctx context.Context) (err error) {
 			}
 			slog.Warn("account_registration_failed", "challenge_id", challengeID, "error", err)
 			service.transition(RegistrationRequired, "", time.Time{})
-			if errors.Is(err, ErrSuperseded) {
-				service.Retry()
-			}
 		}
 	}()
 	record.Proof, err = service.pendingRegistration(ctx, record)

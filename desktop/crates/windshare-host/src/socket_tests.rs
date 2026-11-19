@@ -13,6 +13,7 @@ fn shared() -> Arc<Shared> {
             ..Model::default()
         }),
         closing: AtomicBool::new(false),
+        account_view_visible: AtomicBool::new(false),
         updates: async_channel::bounded(1).0,
         wake: polling::Poller::new().unwrap(),
     })

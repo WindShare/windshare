@@ -46,8 +46,7 @@ func TestOpeningExistingAccountRenewsExpiredTicketAndPreservesBackoff(t *testing
 			t.Fatalf("reading expired account sent %d requests", got)
 		}
 
-		service.StartRenewal()
-		service.StartRenewal()
+		closeView := service.ObserveAccount()
 		synctest.Wait()
 		snapshot, _ := service.Snapshot()
 		if got := requests.Load(); got != 1 || !snapshot.Active || snapshot.State != Refreshing {
@@ -61,7 +60,11 @@ func TestOpeningExistingAccountRenewsExpiredTicketAndPreservesBackoff(t *testing
 			t.Fatalf("failed renewal did not publish a retry deadline: %+v", snapshot)
 		}
 
-		service.StartRenewal()
+		closeView()
+		if snapshot, _ := service.Snapshot(); snapshot.Active {
+			t.Fatal("closed view still owns renewal")
+		}
+		defer service.ObserveAccount()()
 		time.Sleep(PollInterval)
 		synctest.Wait()
 		if got := requests.Load(); got != 1 {
@@ -83,7 +86,7 @@ func TestRenewalDoesNotSetUpAnAccountWhenTheStoreIsCleared(t *testing.T) {
 			return accountReply(t, http.StatusServiceUnavailable, fault{}), nil
 		})
 		service := testService(t, config)
-		service.StartRenewal()
+		defer service.ObserveAccount()()
 		synctest.Wait()
 		if _, err := config.Store.Update(t.Context(), func(Record) (Record, error) { return Record{}, nil }); err != nil {
 			t.Fatal(err)
@@ -94,16 +97,100 @@ func TestRenewalDoesNotSetUpAnAccountWhenTheStoreIsCleared(t *testing.T) {
 		if got := requests.Load(); got != 0 || snapshot.State != Pending || snapshot.Account != "" {
 			t.Fatalf("renewal should only observe an empty store: requests=%d snapshot=%+v", got, snapshot)
 		}
-		empty := testService(t, config)
-		empty.StartRenewal()
-		if snapshot, _ := empty.Snapshot(); snapshot.Active {
-			t.Fatal("opened an account worker without a saved account")
-		}
-
-		service.Start()
+		share := service.NewShareAuthorization(t.Context())
+		defer share.Close()
+		share.beginOfficialUse()
 		synctest.Wait()
 		if got := requests.Load(); got != 1 {
 			t.Fatalf("official use did not wake the existing worker for setup: %d requests", got)
+		}
+	})
+}
+
+func TestOfficialRenewalStopsWithLastShareOrView(t *testing.T) {
+	config, initial := accountFixture(t)
+	synctest.Test(t, func(t *testing.T) {
+		issuedAt, start := config.Now(), time.Now()
+		config.Now = func() time.Time { return issuedAt.Add(time.Since(start)) }
+		config.Store = &MemoryStore{record: cachedRecord(initial)}
+		config.ResolveNode = nil
+		var requests atomic.Int32
+		config.Client = clientFunc(func(request *http.Request) (*http.Response, error) {
+			if request.URL.Path != "/v1/accounts/ticket" {
+				t.Errorf("unexpected route %s", request.URL.Path)
+			}
+			requests.Add(1)
+			return accountReply(t, http.StatusOK, initial), nil
+		})
+
+		service := testService(t, config)
+		first, second := service.NewShareAuthorization(t.Context()), service.NewShareAuthorization(t.Context())
+		first.Source("https://first.example")
+		first.Source("https://second.example")
+		second.Source("https://second.example")
+		closeView := service.ObserveAccount()
+		synctest.Wait()
+		if got := requests.Load(); got != 0 {
+			t.Fatalf("opening with a fresh cache issued %d tickets", got)
+		}
+
+		first.Close()
+		time.Sleep(RefreshInterval)
+		synctest.Wait()
+		if got := requests.Load(); got != 1 {
+			t.Fatalf("remaining share and view issued %d tickets", got)
+		}
+		closeView()
+		closeView()
+		time.Sleep(RefreshInterval)
+		synctest.Wait()
+		if got := requests.Load(); got != 2 {
+			t.Fatalf("closing the view stopped the remaining share: %d tickets", got)
+		}
+		second.Close()
+		time.Sleep(3 * RefreshInterval)
+		synctest.Wait()
+		snapshot, _ := service.Snapshot()
+		if got := requests.Load(); got != 2 || snapshot.Active || snapshot.Account == "" {
+			t.Fatalf("idle service: %d tickets, active=%t, account=%q", got, snapshot.Active, snapshot.Account)
+		}
+		defer service.ObserveAccount()()
+		synctest.Wait()
+		if got := requests.Load(); got != 3 {
+			t.Fatalf("reopening after the refresh deadline issued %d tickets", got)
+		}
+	})
+}
+
+func TestLoginAndExplicitRefreshDoNotStartMaintenance(t *testing.T) {
+	config, session := accountFixture(t)
+	synctest.Test(t, func(t *testing.T) {
+		issuedAt, start := config.Now(), time.Now()
+		config.Now = func() time.Time { return issuedAt.Add(time.Since(start)) }
+		var ticketRequests atomic.Int32
+		config.Client = clientFunc(func(request *http.Request) (*http.Response, error) {
+			if request.URL.Path == "/v1/accounts/ticket" {
+				ticketRequests.Add(1)
+			}
+			return accountReply(t, http.StatusOK, session), nil
+		})
+
+		service := testService(t, config)
+		if err := service.Login(t.Context(), "alice", "secret"); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(2 * RefreshInterval)
+		synctest.Wait()
+		if got := ticketRequests.Load(); got != 0 {
+			t.Fatalf("idle login triggered %d renewals", got)
+		}
+		if outcome, err := service.RefreshOnce(t.Context()); err != nil || outcome != RefreshSucceeded {
+			t.Fatalf("explicit renewal did not complete: %s, %v", outcome, err)
+		}
+		time.Sleep(2 * RefreshInterval)
+		synctest.Wait()
+		if got := ticketRequests.Load(); got != 1 {
+			t.Fatalf("explicit renewal triggered %d requests", got)
 		}
 	})
 }
@@ -137,8 +224,8 @@ func TestSharedTicketSatisfiesBackgroundRefresh(t *testing.T) {
 		})
 
 		first, second := testService(t, config), testService(t, config)
-		first.Start()
-		second.Start()
+		defer first.ObserveAccount()()
+		defer second.ObserveAccount()()
 		synctest.Wait()
 		if got := requests.Load(); got != 0 {
 			t.Fatalf("startup issued %d tickets with a fresh cache", got)
@@ -191,7 +278,9 @@ func TestSharedTicketSatisfiesBackgroundRefresh(t *testing.T) {
 			t.Fatalf("profile edit during backoff: requests=%d state=%s profile=%+v", got, snapshot.State, snapshot.Profile)
 		}
 
-		second.Retry()
+		if outcome, err := second.RefreshOnce(t.Context()); err != nil || outcome != RefreshSucceeded {
+			t.Fatalf("manual recovery did not complete: %s, %v", outcome, err)
+		}
 		synctest.Wait()
 		snapshot, _ = second.Snapshot()
 		if got := requests.Load(); got != 3 || snapshot.State != Ready || snapshot.Profile != profile {

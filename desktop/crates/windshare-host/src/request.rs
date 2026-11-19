@@ -8,7 +8,9 @@ mod tests;
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum Command {
     Preferences,
-    StartAccountSync,
+    SetAccountView {
+        account_view_visible: bool,
+    },
     Account {
         operation_id: String,
         account: crate::AccountCommand,
@@ -101,7 +103,16 @@ impl Command {
         let mut fields = CommandLog::default();
         let command = match self {
             Self::Preferences => "preferences",
-            Self::StartAccountSync => "start_account_sync",
+            Self::SetAccountView {
+                account_view_visible,
+            } => {
+                fields.action = Some(if *account_view_visible {
+                    "show"
+                } else {
+                    "hide"
+                });
+                "set_account_view"
+            }
             Self::Account {
                 operation_id,
                 account,

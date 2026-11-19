@@ -66,11 +66,7 @@ func (service *Service) Login(ctx context.Context, username, password string) er
 	}{username, password}, &result); err != nil {
 		return err
 	}
-	if err := service.install(ctx, previous, result, true); err != nil {
-		return err
-	}
-	service.Start()
-	return nil
+	return service.install(ctx, previous, result, true)
 }
 
 // Resolve the credential from the shared store because another process may have
@@ -138,7 +134,6 @@ func (service *Service) RequestEmail(ctx context.Context, email string) error {
 		return err
 	}
 	service.transition(EmailRequired, "", time.Time{})
-	service.Retry()
 	return nil
 }
 
@@ -211,6 +206,5 @@ func (service *Service) RevokeCredential(ctx context.Context, credential [16]byt
 		}
 		return current, nil
 	})
-	service.Retry()
 	return err
 }

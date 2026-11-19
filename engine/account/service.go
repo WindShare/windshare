@@ -24,7 +24,8 @@ type Service struct {
 	operation            chan struct{}
 	local                chan struct{}
 	record               Record
-	refreshScope         refreshScope
+	officialShares       map[*ShareAuthorization]struct{}
+	accountViews         int
 	unconfirmedShares    map[*ShareAuthorization]struct{}
 	credentials          map[[16]byte]*credentialSession
 	credentialDenials    map[[16]byte]string
@@ -35,7 +36,6 @@ type Service struct {
 	retryAt              time.Time
 	changed              chan struct{}
 	wake                 chan struct{}
-	retryRequested       bool
 	workers              sync.WaitGroup
 	nodes                map[string]*nodeState
 }
@@ -61,6 +61,7 @@ func New(config Config) (*Service, error) {
 	service := &Service{operation: make(chan struct{}, 1), local: make(chan struct{}, 1),
 		config: config, ctx: ctx, cancel: cancel, state: Pending,
 		changed: make(chan struct{}), wake: make(chan struct{}, 1), nodes: make(map[string]*nodeState)}
+	defer service.workers.Go(service.run)
 	cacheContext, cancelCache := context.WithTimeout(ctx, CacheLoadTimeout)
 	record, err := service.load(cacheContext)
 	cancelCache()
@@ -101,23 +102,21 @@ func acquire(ctx context.Context, gate chan<- struct{}) error {
 	}
 }
 
-// Start enables account maintenance and automatic setup for official use.
-func (service *Service) Start() {
-	if service == nil {
-		return
-	}
+// ObserveAccount maintains the selected account for the lifetime of a visible view.
+func (service *Service) ObserveAccount() func() {
 	service.mu.Lock()
 	defer service.mu.Unlock()
-	service.startRefreshLocked(refreshWithSetup)
-}
-
-// StartRenewal lets the account page keep an existing account current.
-func (service *Service) StartRenewal() {
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	if service.record.Credential != nil && service.record.Denial == "" {
-		service.startRefreshLocked(refreshExisting)
+	if service.ctx.Err() != nil {
+		return func() {}
 	}
+	service.accountViews++
+	service.refreshDemandChangedLocked()
+	return sync.OnceFunc(func() {
+		service.mu.Lock()
+		defer service.mu.Unlock()
+		service.accountViews--
+		service.refreshDemandChangedLocked()
+	})
 }
 
 func (service *Service) Close() {
@@ -130,18 +129,6 @@ func (service *Service) Close() {
 	service.workers.Wait()
 }
 
-// Retry wakes background maintenance and returns before the attempt completes.
-func (service *Service) Retry() {
-	if service == nil {
-		return
-	}
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	service.startRefreshLocked(refreshWithSetup)
-	service.retryRequested = true
-	service.wakeRefreshLocked()
-}
-
 func (service *Service) notifyLocked() {
 	close(service.changed)
 	service.changed = make(chan struct{})
@@ -151,7 +138,7 @@ func (service *Service) Snapshot() (Snapshot, <-chan struct{}) {
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	now := service.config.Now()
-	value := Snapshot{Active: service.refreshScope != refreshInactive, State: service.state, Allowance: service.record.Entitlement.Allowance(now),
+	value := Snapshot{Active: service.refreshScopeLocked() != refreshInactive, State: service.state, Allowance: service.record.Entitlement.Allowance(now),
 		RemainingBytes: service.record.Entitlement.RemainingBytes, ResetAt: service.record.Entitlement.ResetAt(),
 		ValidUntil: time.Unix(int64(service.record.Entitlement.ValidUntil), 0), RetryAt: service.retryAt,
 		RegistrationPermille: service.registrationPermille, Reason: service.reason}

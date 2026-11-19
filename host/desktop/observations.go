@@ -9,9 +9,10 @@ import (
 const notificationCapacity = 64
 
 type subscription struct {
-	snapshots chan Snapshot
-	evidence  chan Message
-	dropped   uint64
+	snapshots          chan Snapshot
+	evidence           chan Message
+	dropped            uint64
+	releaseAccountView func()
 }
 
 func (a *Application) observe(operationID string, task shareTask) {
@@ -70,6 +71,7 @@ func (a *Application) subscribe() (*subscription, func()) {
 	return queue, func() {
 		a.mu.Lock()
 		delete(a.subscribers, queue)
+		queue.hideAccountView()
 		dropped := queue.dropped
 		a.mu.Unlock()
 		if dropped != 0 {

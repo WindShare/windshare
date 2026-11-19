@@ -1,9 +1,12 @@
 use super::*;
+use crate::public_blocks::{PublicBlockFeed, RENEW_AFTER_SECONDS};
 use serde_json::json;
 use windshare_relay_access::usage::ShareAttribution;
 
 fn public(authority: &Authority<Memory, Clock>) -> serde_json::Value {
-    let envelope = authority.public_blocks().unwrap();
+    let mut feed = PublicBlockFeed::default();
+    let envelope: serde_json::Value =
+        serde_json::from_str(&feed.snapshot(authority).unwrap().body).unwrap();
     let signed = URL_SAFE_NO_PAD
         .decode(envelope["body"].as_str().unwrap())
         .unwrap();
@@ -179,6 +182,47 @@ fn account_blocks_cover_observed_shares_without_polluting_explicit_share_blocks(
         serde_json::to_value(vec![[1; 12]]).unwrap()
     );
     assert_eq!(authority.blocks().unwrap().shares.len(), 1);
+}
+
+#[test]
+fn public_snapshot_reuses_bytes_until_renewal_or_policy_change() {
+    let mut authority = fixture();
+    let admin = authority
+        .initialize("once", "once", "admin", "correct horse battery")
+        .unwrap();
+    let mut feed = PublicBlockFeed::default();
+    let initial = feed.snapshot(&authority).unwrap();
+    let initial_tag = initial.etag.clone();
+    let initial_body = initial.body.clone();
+    let writes = authority.store.put_count;
+
+    authority.environment.now += RENEW_AFTER_SECONDS - 1;
+    let reused = feed.snapshot(&authority).unwrap();
+    assert!(reused.not_modified(&format!("W/{initial_tag}")));
+    assert_eq!(reused.body, initial_body);
+
+    authority.environment.now += 1;
+    let renewed = feed.snapshot(&authority).unwrap();
+    assert!(!renewed.not_modified(&initial_tag));
+    let renewed_tag = renewed.etag.clone();
+    assert_eq!(authority.store.put_count, writes);
+
+    authority
+        .block(
+            &admin,
+            Block::Share {
+                id: [7; 12],
+                blocked: true,
+            },
+        )
+        .unwrap();
+    let updated = feed.snapshot(&authority).unwrap();
+    assert!(!updated.not_modified(&renewed_tag));
+    let updated_tag = updated.etag.clone();
+
+    authority.signing = signing_fixture(2);
+    let rotated = feed.snapshot(&authority).unwrap();
+    assert!(!rotated.not_modified(&updated_tag));
 }
 
 #[test]

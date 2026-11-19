@@ -56,7 +56,11 @@ func (service *Service) adoptLocked(record Record) {
 		service.rememberDenialLocked(record, record.Denial)
 	}
 	record = service.withDenialLocked(record)
+	selectionChanged := !sameIdentity(service.record, record)
 	service.record = record
+	if selectionChanged {
+		service.wakeRefreshLocked()
+	}
 	if record.Credential != nil {
 		if retained := service.credentials[record.Credential.ID]; retained != nil {
 			retained.record = cloneRecord(record)

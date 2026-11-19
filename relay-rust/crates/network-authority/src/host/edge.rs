@@ -5,6 +5,8 @@ const POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self'; c
 #[event(fetch)]
 pub async fn fetch(request: Request, env: Env, _context: Context) -> Result<Response> {
     let usage_report = request.method() == Method::Post && request.path() == "/v1/node/usage";
+    let public_blocks =
+        request.method() == Method::Get && request.path() == super::routes::PUBLIC_BLOCKS_PATH;
     let origin = request.headers().get("Origin")?;
     let own = request.url()?.origin().ascii_serialization();
     if !allowed_origin(&request.path(), origin.as_deref(), &own, &env) {
@@ -49,7 +51,13 @@ pub async fn fetch(request: Request, env: Env, _context: Context) -> Result<Resp
             windshare_relay_access::device_login::CAPABILITY_VERSION,
         )?;
     }
-    response.headers_mut().set("Cache-Control", "no-store")?;
+    let cache_control = if public_blocks && matches!(response.status_code(), 200 | 304) {
+        // Revalidate on each poll so normal browser caching adds no delay to blocks.
+        "private, no-cache"
+    } else {
+        "no-store"
+    };
+    response.headers_mut().set("Cache-Control", cache_control)?;
     let policy = env.var("DIRECTORY_ORIGIN").map_or_else(
         |_| POLICY.to_owned(),
         |origin| {

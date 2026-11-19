@@ -144,7 +144,11 @@ func (s *server) control(conn *websocket.Conn) {
 			if !ok {
 				return
 			}
-			message = s.app.execute(request)
+			if request.Command == "set_account_view" {
+				message = s.app.setAccountView(notifications, request)
+			} else {
+				message = s.app.execute(request)
+			}
 		case next := <-notifications.snapshots:
 			if next.Revision <= snapshot.Revision {
 				continue

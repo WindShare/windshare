@@ -16,20 +16,34 @@ const (
 	refreshWithSetup
 )
 
-func (service *Service) startRefreshLocked(scope refreshScope) {
-	previous := service.refreshScope
-	if service.ctx.Err() != nil || scope <= previous {
-		return
+func (service *Service) refreshScopeLocked() refreshScope {
+	if service.ctx.Err() != nil {
+		return refreshInactive
 	}
-	service.refreshScope = scope
-	slog.Debug("account_refresh_activated", "automatic_setup", scope == refreshWithSetup, "worker_started", previous == refreshInactive)
-	if previous == refreshInactive {
-		service.notifyLocked()
-		service.workers.Go(service.run)
-	} else {
-		// A share may need setup after the renewal worker found the store empty.
-		service.wakeRefreshLocked()
+	for share := range service.officialShares {
+		// A share retaining a previous login refreshes that credential on demand.
+		if share.credential == nil || sameIdentity(share.credential.record, service.record) {
+			return refreshWithSetup
+		}
 	}
+	if service.accountViews != 0 {
+		return refreshExisting
+	}
+	return refreshInactive
+}
+
+func (service *Service) refreshScope() refreshScope {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	return service.refreshScopeLocked()
+}
+
+func (service *Service) refreshDemandChangedLocked() {
+	scope := service.refreshScopeLocked()
+	slog.Debug("account_refresh_demand_changed", "official_shares", len(service.officialShares),
+		"account_views", service.accountViews, "active", scope != refreshInactive, "automatic_setup", scope == refreshWithSetup)
+	service.notifyLocked()
+	service.wakeRefreshLocked()
 }
 
 func (service *Service) wakeRefreshLocked() {
@@ -37,18 +51,6 @@ func (service *Service) wakeRefreshLocked() {
 	case service.wake <- struct{}{}:
 	default:
 	}
-}
-
-func (service *Service) refreshRequest() (refreshScope, bool) {
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	select {
-	case <-service.wake:
-	default:
-	}
-	requested := service.retryRequested
-	service.retryRequested = false
-	return service.refreshScope, requested
 }
 
 type refreshSchedule struct {
@@ -59,21 +61,36 @@ type refreshSchedule struct {
 
 func (service *Service) run() {
 	schedule := refreshSchedule{retry: MinimumRetry}
-	for service.lockOperation(service.ctx) == nil {
-		service.pollLocked(service.ctx, &schedule)
-		<-service.operation
-		delay := PollInterval
-		if !schedule.next.IsZero() {
-			delay = min(PollInterval, max(MinimumRetry, schedule.next.Sub(service.config.Now())))
-		}
-		timer := time.NewTimer(delay)
+	timer := time.NewTimer(PollInterval)
+	timer.Stop()
+	defer timer.Stop()
+	var due <-chan time.Time
+	for {
 		select {
 		case <-service.ctx.Done():
-			timer.Stop()
 			return
 		case <-service.wake:
-			timer.Stop()
-		case <-timer.C:
+		case <-due:
+		}
+		timer.Stop()
+		due = nil
+
+		if service.refreshScope() == refreshInactive {
+			continue
+		}
+		if service.lockOperation(service.ctx) != nil {
+			return
+		}
+		service.pollLocked(service.ctx, &schedule)
+		<-service.operation
+		// Keep deadlines across idle periods so reopening respects backoff.
+		if service.refreshScope() != refreshInactive {
+			delay := PollInterval
+			if !schedule.next.IsZero() {
+				delay = min(PollInterval, max(MinimumRetry, schedule.next.Sub(service.config.Now())))
+			}
+			timer.Reset(delay)
+			due = timer.C
 		}
 	}
 }
@@ -81,7 +98,10 @@ func (service *Service) run() {
 // The command lock spans the failure transition so a late poll cannot
 // replace a newer interactive registration state.
 func (service *Service) pollLocked(ctx context.Context, schedule *refreshSchedule) {
-	scope, requested := service.refreshRequest()
+	scope := service.refreshScope()
+	if scope == refreshInactive {
+		return
+	}
 	read := service.load
 	if scope == refreshWithSetup {
 		read = service.loadOrInitialize
@@ -100,7 +120,13 @@ func (service *Service) pollLocked(ctx context.Context, schedule *refreshSchedul
 	}
 	now := service.config.Now()
 	service.observeRefresh(schedule, record, now)
-	if !requested && now.Before(schedule.next) {
+	if now.Before(schedule.next) {
+		return
+	}
+	// Recheck after the store read. A view can disappear or a share can finish
+	// while the worker waits for local state.
+	scope = service.refreshScope()
+	if scope == refreshInactive || scope == refreshExisting && record.Credential == nil {
 		return
 	}
 	if record.Credential != nil && record.Denial == "" && !service.validTicket(record) {

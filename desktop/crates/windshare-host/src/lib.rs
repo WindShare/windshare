@@ -50,6 +50,7 @@ const MAXIMUM_OPERATIONS: usize = 1024;
 struct Shared {
     model: Mutex<Model>,
     closing: AtomicBool,
+    account_view_visible: AtomicBool,
     updates: async_channel::Sender<()>,
     wake: polling::Poller,
 }
@@ -90,6 +91,7 @@ impl Controller {
         let shared = Arc::new(Shared {
             model: Mutex::new(Model::default()),
             closing: AtomicBool::new(false),
+            account_view_visible: AtomicBool::new(false),
             updates,
             wake: polling::Poller::new()?,
         });
@@ -144,8 +146,17 @@ impl Controller {
         format!("{kind}:{sequence}")
     }
 
-    pub fn start_account_sync(&self) {
-        self.command(Command::StartAccountSync);
+    pub fn set_account_view_visible(&self, visible: bool) {
+        // A reconnect needs the latest view, even if the command queue was full
+        // when the window changed.
+        if self
+            .shared
+            .account_view_visible
+            .swap(visible, Ordering::AcqRel)
+            != visible
+        {
+            let _ = self.shared.wake.notify();
+        }
     }
 
     pub fn account(&self, account: AccountCommand) -> Option<String> {
