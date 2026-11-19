@@ -24,9 +24,10 @@ type Service struct {
 	cancel               context.CancelFunc
 	mu                   sync.Mutex
 	operation            chan struct{}
+	local                chan struct{}
 	record               Record
 	active               bool
-	loaded               bool
+	unconfirmedShares    map[*ShareAuthorization]struct{}
 	credentials          map[[16]byte]*credentialSession
 	credentialDenials    map[[16]byte]string
 	accountDenials       map[[16]byte]string
@@ -59,7 +60,8 @@ func New(config Config) (*Service, error) {
 		config.Client = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	service := &Service{operation: make(chan struct{}, 1), config: config, ctx: ctx, cancel: cancel, state: Pending,
+	service := &Service{operation: make(chan struct{}, 1), local: make(chan struct{}, 1),
+		config: config, ctx: ctx, cancel: cancel, state: Pending,
 		changed: make(chan struct{}), wake: make(chan struct{}, 1), nodes: make(map[string]*nodeState)}
 	cacheContext, cancelCache := context.WithTimeout(ctx, CacheLoadTimeout)
 	record, err := service.load(cacheContext)
@@ -81,8 +83,18 @@ func New(config Config) (*Service, error) {
 }
 
 func (service *Service) lockOperation(ctx context.Context) error {
+	return acquire(ctx, service.operation)
+}
+
+// The local gate orders store reads and writes with their in-memory projections
+// without making share creation wait for a remote account operation.
+func (service *Service) lockLocal(ctx context.Context) error {
+	return acquire(ctx, service.local)
+}
+
+func acquire(ctx context.Context, gate chan<- struct{}) error {
 	select {
-	case service.operation <- struct{}{}:
+	case gate <- struct{}{}:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()

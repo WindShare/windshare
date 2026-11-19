@@ -138,7 +138,7 @@ func (r *Runtime) Plan(ctx context.Context, intent relayprofile.Intent, frontend
 		result.Decision.Candidates = append(result.Decision.Candidates, networkconfig.Candidate{URL: candidate.URL, Configured: true})
 	}
 	if len(plan.Network) != 0 {
-		result.authorization = r.accounts.NewShareAuthorization()
+		result.authorization = r.accounts.NewShareAuthorization(ctx)
 	}
 	for _, candidate := range plan.Network {
 		result.Relays = append(result.Relays, relayprofile.Registration{PublicURL: candidate.URL, Authorization: result.authorization.Source(candidate.URL)})

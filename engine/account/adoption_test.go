@@ -34,7 +34,7 @@ func TestDenialSurvivesFailedWriteAndCacheReload(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader(`{"kind":"denied","reason":"account_blocked"}`))}, nil
 	})
 	service := testService(t, config)
-	share := service.NewShareAuthorization()
+	share := service.NewShareAuthorization(t.Context())
 	defer share.Close()
 	source := &Source{share: share, address: "node"}
 	if got := source.RegistrationAuthorization(); got.State != serviceauthority.AdmissionReady {
@@ -47,7 +47,7 @@ func TestDenialSurvivesFailedWriteAndCacheReload(t *testing.T) {
 	service.adoptLocked(cached)
 	service.nodes["node"] = &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)}
 	service.mu.Unlock()
-	newShare := service.NewShareAuthorization()
+	newShare := service.NewShareAuthorization(t.Context())
 	defer newShare.Close()
 	for _, source := range []*Source{source, {share: newShare, address: "node"}} {
 		if got := source.RegistrationAuthorization(); got.State != serviceauthority.AdmissionDenied || got.Bearer != "" {
@@ -60,7 +60,7 @@ func TestAdoptionUpdatesRetainedCredentialBeforeLoginChanges(t *testing.T) {
 	config, response := accountFixture(t)
 	config.Store = &MemoryStore{record: cachedRecord(response)}
 	service := testService(t, config)
-	share := service.NewShareAuthorization()
+	share := service.NewShareAuthorization(t.Context())
 	defer share.Close()
 	source := &Source{share: share, address: "node"}
 	if got := source.RegistrationAuthorization(); got.State != serviceauthority.AdmissionReady {

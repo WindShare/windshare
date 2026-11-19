@@ -56,7 +56,7 @@ func (service *Service) adoptLocked(record Record) {
 		service.rememberDenialLocked(record, record.Denial)
 	}
 	record = service.withDenialLocked(record)
-	service.record, service.loaded = record, true
+	service.record = record
 	if record.Credential != nil {
 		if retained := service.credentials[record.Credential.ID]; retained != nil {
 			retained.record = cloneRecord(record)

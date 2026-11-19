@@ -46,14 +46,10 @@ func (service *Service) Register(ctx context.Context) (err error) {
 		return err
 	}
 	defer func() { <-service.operation }()
-	record, err := service.initialize(ctx)
+	record, err := service.syncSelection(ctx, service.initialize, nil)
 	if err != nil {
 		return err
 	}
-	service.mu.Lock()
-	service.adoptLocked(record)
-	record = service.record
-	service.mu.Unlock()
 	if record.Credential != nil {
 		if service.validTicket(record) {
 			service.transition(Ready, "", service.config.Now().Add(RefreshInterval))

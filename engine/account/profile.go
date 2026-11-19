@@ -119,6 +119,10 @@ func (service *Service) submitProfile(ctx context.Context, record Record, path s
 }
 
 func (service *Service) saveProfileEdit(ctx context.Context, previous Record, apply func(*Record)) error {
+	if err := service.lockLocal(ctx); err != nil {
+		return err
+	}
+	defer func() { <-service.local }()
 	record, err := service.config.Store.Update(ctx, func(current Record) (Record, error) {
 		if !sameIdentity(current, previous) {
 			return Record{}, ErrSuperseded

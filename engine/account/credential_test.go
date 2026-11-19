@@ -24,9 +24,9 @@ func TestShareAttributionSurvivesLoginAcrossOfficialNodes(t *testing.T) {
 	previous := cachedRecord(first)
 	config.Store = &MemoryStore{record: previous}
 	service := testService(t, config)
-	published := service.NewShareAuthorization()
+	published := service.NewShareAuthorization(t.Context())
 	defer published.Close()
-	starting := service.NewShareAuthorization()
+	starting := service.NewShareAuthorization(t.Context())
 	defer starting.Close()
 	requireBearer(t, &Source{share: published, address: "primary"}, first.Ticket)
 
@@ -36,7 +36,7 @@ func TestShareAttributionSurvivesLoginAcrossOfficialNodes(t *testing.T) {
 	requireBearer(t, &Source{share: published, address: "backup"}, first.Ticket)
 	requireBearer(t, &Source{share: starting, address: "primary"}, first.Ticket)
 
-	newShare := service.NewShareAuthorization()
+	newShare := service.NewShareAuthorization(t.Context())
 	defer newShare.Close()
 	requireBearer(t, &Source{share: newShare, address: "primary"}, second.Ticket)
 
@@ -55,9 +55,9 @@ func TestShareAttributionSurvivesLoginAcrossOfficialNodes(t *testing.T) {
 func TestAnonymousShareKeepsAttributionWhenSetupFinishes(t *testing.T) {
 	config, response := accountFixture(t)
 	service := testService(t, config)
-	anonymous := service.NewShareAuthorization()
+	anonymous := service.NewShareAuthorization(t.Context())
 	defer anonymous.Close()
-	waiting := service.NewShareAuthorization()
+	waiting := service.NewShareAuthorization(t.Context())
 	defer waiting.Close()
 	primary := &Source{share: anonymous, address: "primary"}
 	backup := &Source{share: anonymous, address: "backup"}
@@ -123,7 +123,7 @@ func TestOldPublicationRefreshCannotReplaceNewShareAccount(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(body)))}, nil
 	})
 	service := testService(t, config)
-	share := service.NewShareAuthorization()
+	share := service.NewShareAuthorization(t.Context())
 	defer share.Close()
 	primary := &Source{share: share, address: "primary"}
 	backup := &Source{share: share, address: "backup"}
@@ -159,7 +159,7 @@ func TestUnreadableAccountCacheDoesNotBlockEngineOrAssumeAnonymous(t *testing.T)
 	config.Store = unavailableStore{}
 	service := testService(t, config)
 	service.nodes["node"] = &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)}
-	share := service.NewShareAuthorization()
+	share := service.NewShareAuthorization(t.Context())
 	defer share.Close()
 	source := &Source{share: share, address: "node"}
 	if source.RegistrationAuthorization().State != serviceauthority.AdmissionTemporaryFailure {

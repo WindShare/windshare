@@ -122,26 +122,16 @@ func (service *Service) step(ctx context.Context) error {
 }
 
 func (service *Service) syncRecord(ctx context.Context) (Record, error) {
+	return service.syncSelection(ctx, service.loadOrInitialize, nil)
+}
+
+func (service *Service) loadOrInitialize(ctx context.Context) (Record, error) {
 	record, err := service.load(ctx)
-	if err != nil {
-		return Record{}, err
-	}
 	// The CLI and desktop must agree on the setup secret before either contacts the authority.
-	if record.Credential == nil && record.SetupSecret == "" {
-		record, err = service.initialize(ctx)
-		if err != nil {
-			return Record{}, err
-		}
+	if err == nil && record.Credential == nil && record.SetupSecret == "" {
+		return service.initialize(ctx)
 	}
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	service.loaded = true
-	record = service.withDenialLocked(record)
-	if !reflect.DeepEqual(service.record, record) {
-		service.adoptLocked(record)
-		service.notifyLocked()
-	}
-	return service.record, nil
+	return record, err
 }
 
 func (service *Service) refreshRecord(ctx context.Context, record Record) error {
@@ -192,6 +182,10 @@ func (service *Service) saveProof(ctx context.Context, previous Record, proof *P
 }
 
 func (service *Service) updateProof(ctx context.Context, previous Record, update func(*Proof) (*Proof, error)) error {
+	if err := service.lockLocal(ctx); err != nil {
+		return err
+	}
+	defer func() { <-service.local }()
 	record, err := service.config.Store.Update(ctx, func(current Record) (Record, error) {
 		if !sameIdentity(current, previous) {
 			return Record{}, ErrSuperseded

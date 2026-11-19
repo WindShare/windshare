@@ -66,7 +66,7 @@ func TestCachedTicketDoesNotWaitForAuthorityAndBlockedAccountNeverBecomesAnonymo
 		t.Fatal(err)
 	}
 	service := testService(t, config)
-	share := service.NewShareAuthorization()
+	share := service.NewShareAuthorization(t.Context())
 	defer share.Close()
 	source := &Source{share: share, address: "https://node.example"}
 	if authorization := source.RegistrationAuthorization(); authorization.State != serviceauthority.AdmissionReady || authorization.Bearer != response.Ticket {
@@ -91,7 +91,7 @@ func TestCachedTicketDoesNotWaitForAuthorityAndBlockedAccountNeverBecomesAnonymo
 func TestAnonymousAdmissionDuringSetupRequiresFreshSignedNodePolicy(t *testing.T) {
 	config, _ := accountFixture(t)
 	service := testService(t, config)
-	share := service.NewShareAuthorization()
+	share := service.NewShareAuthorization(t.Context())
 	defer share.Close()
 	source := &Source{share: share, address: "https://node.example"}
 	if source.RegistrationAuthorization().State != serviceauthority.AdmissionPendingSetup {

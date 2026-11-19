@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"maps"
+	"reflect"
 	"time"
 
 	"github.com/windshare/windshare/core/serviceauthority"
@@ -23,6 +25,44 @@ func (service *Service) load(ctx context.Context) (Record, error) {
 		}
 		return record, nil
 	})
+}
+
+// syncSelection publishes the stored identity and binds any waiting shares to
+// the same snapshot. A read already in flight may predate a newly queued share.
+func (service *Service) syncSelection(ctx context.Context, read func(context.Context) (Record, error), capture func(Record)) (Record, error) {
+	if err := service.lockLocal(ctx); err != nil {
+		return Record{}, err
+	}
+	defer func() { <-service.local }()
+
+	service.mu.Lock()
+	waiting := maps.Clone(service.unconfirmedShares)
+	service.mu.Unlock()
+	record, err := read(ctx)
+	if err != nil {
+		return Record{}, err
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	record = service.withDenialLocked(record)
+	changed := !reflect.DeepEqual(service.record, record)
+	if changed {
+		service.adoptLocked(record)
+	}
+	for share := range waiting {
+		if share.attribution != attributionClosed {
+			share.bindSelectionLocked(service.record)
+			delete(service.unconfirmedShares, share)
+			changed = true
+		}
+	}
+	if capture != nil {
+		capture(service.record)
+	}
+	if changed {
+		service.notifyLocked()
+	}
+	return service.record, nil
 }
 
 func (service *Service) initialize(ctx context.Context) (Record, error) {
@@ -116,6 +156,10 @@ func (service *Service) install(ctx context.Context, previous Record, response s
 	if err != nil {
 		return err
 	}
+	if err := service.lockLocal(ctx); err != nil {
+		return err
+	}
+	defer func() { <-service.local }()
 	record, err := service.config.Store.Update(ctx, func(current Record) (Record, error) {
 		if !sameIdentity(current, previous) {
 			return Record{}, ErrSuperseded

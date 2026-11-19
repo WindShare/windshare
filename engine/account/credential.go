@@ -65,6 +65,13 @@ func (service *Service) refreshCredentialLocked(current *credentialSession) {
 	config.Store = &MemoryStore{record: cloneRecord(current.record)}
 	service.workers.Go(func() {
 		record, err := service.refreshRetained(config)
+		if err == nil {
+			err = service.lockLocal(service.ctx)
+			if err == nil {
+				defer func() { <-service.local }()
+				record, err = service.persistRetained(record)
+			}
+		}
 		service.mu.Lock()
 		defer service.mu.Unlock()
 		if err == nil && !service.currentGenerationLocked(record) {
@@ -98,7 +105,10 @@ func (service *Service) refreshRetained(config Config) (Record, error) {
 	if err := isolated.step(service.ctx); err != nil {
 		return Record{}, err
 	}
-	record := isolated.record
+	return isolated.record, nil
+}
+
+func (service *Service) persistRetained(record Record) (Record, error) {
 	generation, err := serviceauthority.VerifyGeneration(record.Certificate, service.config.Root)
 	if err != nil {
 		return Record{}, err

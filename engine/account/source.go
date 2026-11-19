@@ -1,7 +1,9 @@
 package account
 
 import (
+	"context"
 	"errors"
+	"fmt"
 
 	"github.com/windshare/windshare/core/serviceauthority"
 )
@@ -18,20 +20,37 @@ const (
 // ShareAuthorization owns the identity shared by all official relay registrations
 // in one share. Its state and credential references are guarded by Service.mu.
 type ShareAuthorization struct {
-	service     *Service
-	attribution shareAttribution
-	credential  *credentialSession
+	service      *Service
+	attribution  shareAttribution
+	credential   *credentialSession
+	selectionErr error
 }
 
-func (service *Service) NewShareAuthorization() *ShareAuthorization {
+// NewShareAuthorization binds the selected local credential before any official
+// relay attempts registration. Setup and ticket renewal can finish in the background.
+func (service *Service) NewShareAuthorization(ctx context.Context) *ShareAuthorization {
 	if service == nil {
 		return nil
 	}
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	// A selected credential belongs to this share even if its ticket needs
-	// refresh before the first registration. Setup can still finish in the background.
-	return &ShareAuthorization{service: service, credential: service.retainCredentialLocked(service.record)}
+	share := &ShareAuthorization{service: service}
+	bounded, cancel := context.WithTimeout(ctx, CacheLoadTimeout)
+	defer cancel()
+	_, err := service.syncSelection(bounded, service.load, share.bindSelectionLocked)
+	if err != nil {
+		service.mu.Lock()
+		share.selectionErr = fmt.Errorf("read selected account: %w", err)
+		if service.unconfirmedShares == nil {
+			service.unconfirmedShares = make(map[*ShareAuthorization]struct{})
+		}
+		service.unconfirmedShares[share] = struct{}{}
+		service.mu.Unlock()
+	}
+	return share
+}
+
+func (share *ShareAuthorization) bindSelectionLocked(record Record) {
+	share.credential = share.service.retainCredentialLocked(record)
+	share.selectionErr = nil
 }
 
 func (share *ShareAuthorization) Close() {
@@ -43,6 +62,7 @@ func (share *ShareAuthorization) Close() {
 	defer service.mu.Unlock()
 	if share.attribution != attributionClosed {
 		share.attribution = attributionClosed
+		delete(service.unconfirmedShares, share)
 		share.releaseCredentialLocked()
 		service.notifyLocked()
 	}
@@ -84,6 +104,12 @@ func (source *Source) RegistrationAuthorization() serviceauthority.RegistrationA
 		// The relay enforces its current anonymous policy. A stale discovery
 		// result need not hold up recovery once the share is already anonymous.
 		return serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionReady}
+	}
+	if share.selectionErr != nil {
+		// Unreadable state can conceal a different login or an explicit denial.
+		return serviceauthority.RegistrationAuthorization{
+			State: serviceauthority.AdmissionTemporaryFailure, Changed: service.changed, Cause: share.selectionErr,
+		}
 	}
 	return source.selectAuthorizationLocked(node)
 }
@@ -132,9 +158,7 @@ func (source *Source) selectAuthorizationLocked(node Node) serviceauthority.Regi
 func (source *Source) permitsAnonymousLocked(node Node) bool {
 	service := source.share.service
 	cached := service.nodes[source.address]
-	// An unreadable account cache might conceal a denial. Use anonymous
-	// admission only after loading local state and verifying the node's policy.
-	return service.loaded && cached != nil && cached.key == node.Key &&
+	return cached != nil && cached.key == node.Key &&
 		cached.expires.After(service.config.Now()) && cached.anonymous && cached.available
 }
 
