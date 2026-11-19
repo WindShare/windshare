@@ -80,12 +80,14 @@ describe('one native object checkpoint boundary', () => {
     })
     let dirty = false
     let generation = 0
-    const checkpoint = () => coordinator.checkpointIfChanged('members-due', () => dirty,
-      () => generation, async () => {
-        events.push('metadata')
-        dirty = false
-        return ++generation
-      })
+    const commit = async () => {
+      events.push('metadata')
+      dirty = false
+      return ++generation
+    }
+    const checkpoint = () => coordinator.checkpointFromPlan(() => dirty
+      ? { kind: 'commit', reason: 'members-due', commit }
+      : { kind: 'unchanged', result: generation })
     const write = coordinator.mutate(async writer => {
       await writer.writeAt(0n, Uint8Array.of(1))
       dirty = true

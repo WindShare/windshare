@@ -8,6 +8,10 @@ export type NativeObjectTrace = (event: Readonly<{
   operationId: string; objectId: string; stage: string; reason?: string
 }>) => void
 
+type CheckpointPlan<T> =
+  | Readonly<{ kind: 'unchanged'; result: T }>
+  | Readonly<{ kind: 'commit'; reason: string; commit: () => Promise<T> }>
+
 /** One queue owns the cut across every entry sharing an object's native handle. */
 export class ObjectCheckpointCoordinator implements NativeObjectIO {
   readonly #io: NativeObjectIO
@@ -56,11 +60,12 @@ export class ObjectCheckpointCoordinator implements NativeObjectIO {
     return this.#enqueue(() => this.#flushAndCommit(reason, commit))
   }
 
-  /** The queue decides dirtiness after all prior writes, so sibling requests share one flush. */
-  checkpointIfChanged<T>(
-    reason: string, changed: () => boolean, committed: () => T, commit: () => Promise<T>,
-  ): Promise<T> {
-    return this.#enqueue(async () => changed() ? this.#flushAndCommit(reason, commit) : committed())
+  /** Decide from the latest queued state before incurring a native flush. */
+  checkpointFromPlan<T>(plan: () => CheckpointPlan<T> | Promise<CheckpointPlan<T>>): Promise<T> {
+    return this.#enqueue(async () => {
+      const cut = await plan()
+      return cut.kind === 'commit' ? this.#flushAndCommit(cut.reason, cut.commit) : cut.result
+    })
   }
 
   async #flushAndCommit<T>(reason: string, commit: () => Promise<T>): Promise<T> {

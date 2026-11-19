@@ -1,6 +1,7 @@
-import { RevisionEvidenceUnavailableError, compareRevisionMetadata } from '../../content/revision-comparison'
+import { compareRevisionMetadata, type RevisionComparison } from '../../content/revision-comparison'
+import { SourceFaultCode } from '../../transfer/failure/fault'
 import { zipMemberCoordinates } from '../zip-layout/member'
-import { SourceRevisionChangedError } from '../persistent-tree/errors'
+import { CheckpointSourceEvidenceUnavailableError, SourceRevisionChangedError } from '../persistent-tree/errors'
 import { receiveContentWarningFields, snapshotReceiveContentWarning, type ReceiveContentWarning } from '../../transfer/lifecycle/content-warning'
 import type { NativeObjectIO } from '../origin-private/native-object/contracts'
 import { writeObjectBatch, type NativeObjectWrite, type ObjectWriteBatchCapacity } from '../origin-private/native-object/write-batch'
@@ -20,6 +21,8 @@ const MAX_PENDING_ENTRIES = 128
 const MAX_ENTRY_RANGES = 16_384
 const RANGE_METADATA_BYTES = 64n
 const ENTRY_METADATA_BYTES = 4096n
+const ENTRY_ALLOCATION_CHECKPOINT = 'zip-entry-allocation'
+const REVISION_FAILURE_CHECKPOINT = 'zip-revision-unavailable'
 
 export type ZipObjectCapacity = ObjectWriteBatchCapacity
 
@@ -38,6 +41,20 @@ export interface ZipEntryAdmission {
   readonly source: TaskEntry['source']
   readonly modifiedTimeMilliseconds?: bigint
 }
+
+type ZipEntryRevision = NonNullable<TaskEntry['revision']>
+type ZipEntryRequest = ZipEntryAdmission & { readonly revision?: ZipEntryRevision }
+
+type ZipEntryComparison =
+  | Readonly<{ kind: 'same' }>
+  | Readonly<{ kind: 'reuse'; previous: ZipEntryRevision; current: ZipEntryRevision }>
+  | Readonly<{
+      kind: 'deferred'; previous: ZipEntryRevision; current: ZipEntryRevision
+      reason: 'metadata-unavailable' | 'complete-revision-retained'
+    }>
+  | Extract<RevisionComparison, { kind: 'observed-change' }>
+
+type ZipEntryRejection = Extract<ZipEntryComparison, { kind: 'deferred' | 'observed-change' }>
 
 export interface CompleteZipEntrySpan {
   readonly entry: TaskEntry
@@ -124,7 +141,7 @@ export class ProgressiveZipArchive {
     return entry
   }
 
-  admitFile(input: ZipEntryAdmission & { readonly revision: NonNullable<TaskEntry['revision']> }): Promise<TaskEntry> {
+  admitFile(input: ZipEntryAdmission & { readonly revision: ZipEntryRevision }): Promise<TaskEntry> {
     return this.#admit('file', input)
   }
 
@@ -132,84 +149,93 @@ export class ProgressiveZipArchive {
     return this.#admit('directory', input)
   }
 
-  async #admit(kind: TaskEntry['kind'], input: ZipEntryAdmission & {
-    readonly revision?: TaskEntry['revision']
-  }): Promise<TaskEntry> {
-    const previous = await this.#input.store.readEntry(input.entryId)
-    if (previous !== undefined && !sameAdmission(previous, kind, input)) {
-      const error = admissionFailure(previous, kind, input)
-      if (error instanceof RevisionEvidenceUnavailableError) {
+  async #admit(kind: TaskEntry['kind'], input: ZipEntryRequest): Promise<TaskEntry> {
+    const result = await this.#input.coordinator.checkpointFromPlan<TaskEntry | ZipEntryRejection>(async () => {
+      const committed = await this.#input.store.readEntry(input.entryId)
+      if (committed === undefined) {
+        return { kind: 'commit', reason: ENTRY_ALLOCATION_CHECKPOINT, commit: () => this.#allocate(kind, input) }
+      }
+      const existing = this.#dirty.get(input.entryId) ?? committed
+      const comparison = compareZipEntry(existing, kind, input)
+      if (comparison.kind === 'deferred') {
         this.#trace('source_comparison_retained', {
-          entryId: previous.entryId, fileId: previous.revision!.fileId,
-          previousRevision: previous.revision!.fileRevision,
-          currentRevision: input.revision!.fileRevision, reason: 'metadata-unavailable',
-          retainedBytes: previous.ranges.reduce((total, range) => total + range.end - range.start, 0n),
+          entryId: committed.entryId, fileId: comparison.previous.fileId,
+          previousRevision: comparison.previous.fileRevision, currentRevision: comparison.current.fileRevision,
+          reason: comparison.reason,
+          retainedBytes: committed.ranges.reduce((total, range) => total + range.end - range.start, 0n),
         })
-        throw error
+        return { kind: 'unchanged', result: comparison }
       }
-      await this.markRevisionFailure(input.entryId, 'Source evidence changed; saved ranges remain candidates')
-      throw new SourceRevisionChangedError({ cause: new Error('ZIP entry revision changed; start a new download') })
-    }
-    // A common checkpoint boundary serializes allocation with all existing entry writes.
-    return this.#input.coordinator.checkpoint('zip-entry-allocation', async () => {
-      const existing = await this.#input.store.readEntry(input.entryId)
-      if (existing !== undefined) {
-        if (!sameAdmission(existing, kind, input)) {
-          throw admissionFailure(existing, kind, input)
-        }
-        const { revisionFailure, ...retained } = existing
-        const changedIdentity = existing.revision?.fileRevision !== input.revision?.fileRevision
-        const restored = changedIdentity ? { ...retained, revision: {
-          ...input.revision!, reusedFrom: existing.revision!.fileRevision,
-        } } : retained
-        if (changedIdentity) {
-          await this.#commit({}, [restored])
-          this.#trace('source_metadata_reused', {
-            entryId: existing.entryId, previousRevision: existing.revision!.fileRevision,
-            currentRevision: input.revision!.fileRevision, reason: 'metadata-agreement',
-            reusedBytes: existing.ranges.reduce((total, range) => total + range.end - range.start, 0n),
-          })
-          return restored
-        }
-        if (revisionFailure !== undefined) {
-          await this.#commit({}, [restored])
-          return restored
-        }
-        await this.#commit({})
-        return existing
+      if (comparison.kind === 'observed-change') {
+        return { kind: 'commit', reason: REVISION_FAILURE_CHECKPOINT, commit: async () => {
+          await this.#commitRevisionFailure(existing, SourceFaultCode.RevisionChanged)
+          return comparison
+        } }
       }
-      if (this.#checkpoint.discoveryComplete || this.#checkpoint.artifactState !== 'receiving') {
-        throw new Error('ZIP discovery is closed')
-      }
-      if (kind === 'file' && input.revision === undefined) {
-        throw new TypeError('ZIP allocation requires an authenticated opened revision')
-      }
-      const normalized = normalizeZipEntry({
-        kind, path: input.path, exactSize: input.revision?.exactSize ?? 0n,
-        ...(input.modifiedTimeMilliseconds === undefined ? {} : {
-          modifiedTimeMilliseconds: input.modifiedTimeMilliseconds,
-        }),
-      })
-      const plan = planZipEntry(normalized, this.#checkpoint.allocatedLength)
-      const { payloadOffset, descriptorOffset, endOffset } = zipMemberCoordinates(plan)
-      const entry: TaskEntry = {
-        entryId: input.entryId, kind, path: normalized.path, source: input.source,
-        ...(input.revision === undefined ? {} : { revision: input.revision }),
-        zipPlan: plan,
-        zipLayout: {
-          entryId: input.entryId, sequence: this.#checkpoint.entryCount,
-          localHeaderOffset: plan.localHeaderOffset, payloadOffset, exactSize: plan.exactSize,
-          descriptorOffset, endOffset, encodingVersion: 1,
-        },
-        ranges: [],
-      }
-      // Atomic topology validation and immutable offsets happen before any payload is admitted.
-      await this.#commit({
-        allocatedLength: endOffset, entryCount: this.#checkpoint.entryCount + 1n,
-      }, [entry])
-      this.#trace('zip_entry_allocated', { entryId: entry.entryId, endOffset })
-      return entry
+      return { kind: 'commit', reason: ENTRY_ALLOCATION_CHECKPOINT, commit: () => this.#restoreEntry(existing, comparison) }
     })
+    // A known entry refusal must leave the shared writer available for other entries.
+    if (result.kind === 'deferred') throw new CheckpointSourceEvidenceUnavailableError()
+    if (result.kind === 'observed-change') {
+      throw new SourceRevisionChangedError({ cause: new Error(`ZIP source evidence changed (${result.reason})`) })
+    }
+    return result
+  }
+
+  async #restoreEntry(
+    entry: TaskEntry, comparison: Extract<ZipEntryComparison, { kind: 'same' | 'reuse' }>,
+  ): Promise<TaskEntry> {
+    const { revisionFailure, ...retained } = entry
+    if (comparison.kind === 'reuse') {
+      const restored = { ...retained, revision: { ...comparison.current, reusedFrom: comparison.previous.fileRevision } }
+      await this.#commit({}, [restored])
+      this.#trace('source_metadata_reused', {
+        entryId: entry.entryId, previousRevision: comparison.previous.fileRevision,
+        currentRevision: comparison.current.fileRevision, reason: 'metadata-agreement',
+        reusedBytes: entry.ranges.reduce((total, range) => total + range.end - range.start, 0n),
+      })
+      return restored
+    }
+    if (revisionFailure !== undefined) {
+      await this.#commit({}, [retained])
+      return retained
+    }
+    await this.#commit({})
+    return entry
+  }
+
+  async #allocate(kind: TaskEntry['kind'], input: ZipEntryRequest): Promise<TaskEntry> {
+    if (this.#checkpoint.discoveryComplete || this.#checkpoint.artifactState !== 'receiving') {
+      throw new Error('ZIP discovery is closed')
+    }
+    if (kind === 'file' && input.revision === undefined) {
+      throw new TypeError('ZIP allocation requires an authenticated opened revision')
+    }
+    const normalized = normalizeZipEntry({
+      kind, path: input.path, exactSize: input.revision?.exactSize ?? 0n,
+      ...(input.modifiedTimeMilliseconds === undefined ? {} : {
+        modifiedTimeMilliseconds: input.modifiedTimeMilliseconds,
+      }),
+    })
+    const plan = planZipEntry(normalized, this.#checkpoint.allocatedLength)
+    const { payloadOffset, descriptorOffset, endOffset } = zipMemberCoordinates(plan)
+    const entry: TaskEntry = {
+      entryId: input.entryId, kind, path: normalized.path, source: input.source,
+      ...(input.revision === undefined ? {} : { revision: input.revision }),
+      zipPlan: plan,
+      zipLayout: {
+        entryId: input.entryId, sequence: this.#checkpoint.entryCount,
+        localHeaderOffset: plan.localHeaderOffset, payloadOffset, exactSize: plan.exactSize,
+        descriptorOffset, endOffset, encodingVersion: 1,
+      },
+      ranges: [],
+    }
+    // Atomic topology validation and immutable offsets happen before any payload is admitted.
+    await this.#commit({
+      allocatedLength: endOffset, entryCount: this.#checkpoint.entryCount + 1n,
+    }, [entry])
+    this.#trace('zip_entry_allocated', { entryId: entry.entryId, endOffset })
+    return entry
   }
 
   async writeRange(entryId: string, offset: bigint, bytes: Uint8Array): Promise<void> {
@@ -256,8 +282,9 @@ export class ProgressiveZipArchive {
   }
 
   checkpoint(reason: string): Promise<TaskCheckpoint> {
-    return this.#input.coordinator.checkpointIfChanged(reason, () => this.#dirty.size > 0,
-      () => this.#checkpoint, () => this.#commit({}))
+    return this.#input.coordinator.checkpointFromPlan(() => this.#dirty.size === 0
+      ? { kind: 'unchanged', result: this.#checkpoint }
+      : { kind: 'commit', reason, commit: () => this.#commit({}) })
   }
 
   async pinDirectory(directoryId: string, generation: string, sourcePath: readonly string[]): Promise<void> {
@@ -283,12 +310,14 @@ export class ProgressiveZipArchive {
     })
   }
 
-  async markRevisionFailure(entryId: string, reason: string): Promise<void> {
-    await this.#input.coordinator.checkpoint('zip-revision-unavailable', async () => {
-      const entry = await this.entry(entryId)
-      await this.#commit({}, [{ ...entry, revisionFailure: reason }])
-      this.#trace('zip_revision_unavailable', { entryId, path: entry.path.join('/') })
-    })
+  markRevisionFailure(entryId: string, reason: SourceFaultCode): Promise<void> {
+    return this.#input.coordinator.checkpoint(REVISION_FAILURE_CHECKPOINT, async () =>
+      this.#commitRevisionFailure(await this.entry(entryId), reason))
+  }
+
+  async #commitRevisionFailure(entry: TaskEntry, reason: SourceFaultCode): Promise<void> {
+    await this.#commit({}, [{ ...entry, revisionFailure: reason }])
+    this.#trace('zip_revision_unavailable', { entryId: entry.entryId, path: entry.path.join('/'), reason })
   }
 
   async *completeEntries(): AsyncGenerator<CompleteZipEntrySpan> {
@@ -472,31 +501,29 @@ export class ProgressiveZipArchive {
   }
 }
 
-function sameAdmission(entry: TaskEntry, kind: TaskEntry['kind'],
-  input: ZipEntryAdmission & { readonly revision?: TaskEntry['revision'] }): boolean {
-  if (!sameEntryContext(entry, kind, input)) return false
-  if (entry.revision === undefined || input.revision === undefined) return entry.revision === input.revision
-  return compareRevisionMetadata(entry.revision, input.revision).kind === 'metadata-agreement' &&
-    (entry.revision.fileRevision === input.revision.fileRevision ||
-      completeZipEntryCrc(entry.ranges, entry.revision.exactSize) === undefined)
+function compareZipEntry(entry: TaskEntry, kind: TaskEntry['kind'], input: ZipEntryRequest): ZipEntryComparison {
+  const previous = entry.revision
+  const current = input.revision
+  if (!sameEntryContext(entry, kind, input) || previous?.fileId !== current?.fileId) {
+    return { kind: 'observed-change', reason: 'context-changed' }
+  }
+  if (previous === undefined || current === undefined) return { kind: 'same' }
+
+  const comparison = compareRevisionMetadata(previous, current)
+  if (comparison.kind === 'observed-change') return comparison
+  if (comparison.kind === 'unavailable') return { kind: 'deferred', reason: comparison.reason, previous, current }
+  if (comparison.reason === 'same-revision') return { kind: 'same' }
+  // A completed payload keeps the revision under which it was authenticated.
+  if (completeZipEntryCrc(entry.ranges, previous.exactSize) !== undefined) {
+    return { kind: 'deferred', reason: 'complete-revision-retained', previous, current }
+  }
+  return { kind: 'reuse', previous, current }
 }
 
-function sameEntryContext(entry: TaskEntry, kind: TaskEntry['kind'],
-  input: ZipEntryAdmission & { readonly revision?: TaskEntry['revision'] }): boolean {
+function sameEntryContext(entry: TaskEntry, kind: TaskEntry['kind'], input: ZipEntryRequest): boolean {
   return entry.kind === kind && entry.path.join('/') === input.path.join('/') &&
-    entry.revision?.fileId === input.revision?.fileId &&
     entry.source.shareInstance === input.source.shareInstance &&
     entry.source.directoryId === input.source.directoryId &&
     entry.source.generation === input.source.generation &&
     entry.source.sourcePath.join('/') === input.source.sourcePath.join('/')
-}
-
-function admissionFailure(entry: TaskEntry, kind: TaskEntry['kind'],
-  input: ZipEntryAdmission & { readonly revision?: TaskEntry['revision'] }): Error {
-  if (sameEntryContext(entry, kind, input) && entry.revision !== undefined &&
-      input.revision !== undefined &&
-      compareRevisionMetadata(entry.revision, input.revision).kind !== 'observed-change') {
-    return new RevisionEvidenceUnavailableError()
-  }
-  return new SourceRevisionChangedError({ cause: new Error('ZIP source evidence changed') })
 }

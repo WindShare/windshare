@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { encodeBase64Url } from '../../../src/crypto/bytes'
-import { RevisionEvidenceUnavailableError } from '../../../src/content/revision-comparison'
+import { CheckpointSourceEvidenceUnavailableError, SourceRevisionChangedError } from '../../../src/output/persistent-tree/errors'
 import { RevisionReopenedDuringRecoveryError } from '../../../src/content/session-services'
 import { deferred, manualSettlementDeadline } from '../../transfer/settlement-deadline'
-import { BoundaryFaultError, FaultScope, SourceFaultCode, sourceFault } from '../../../src/transfer/failure/fault'
+import { BoundaryFaultError, FaultDomain, FaultScope, SourceFaultCode, sourceFault } from '../../../src/transfer/failure/fault'
 import { SelectionPolicy } from '../../../src/catalog/selection'
 import { createProgressiveWorkspaceExecution } from '../../../src/output/execution/progressive-workspace-execution'
 import { createProgressiveZipOutput } from '../../../src/output/progressive-zip/output'
@@ -13,7 +13,7 @@ import {
 import { catalogFixture, digestIdentity, directoryEntry, fileEntry, identity, identityText, planAuthorityFixture, readerFixture,
   receiveIntentFixture, transferJobFixture } from '../../transfer/v2-job-fixture'
 import { ZipReader, Uint8ArrayReader, Uint8ArrayWriter } from '@zip.js/zip.js'
-import { ProgressiveZipArchive, type ZipObjectCapacity } from '../../../src/output/progressive-zip/archive'
+import { ProgressiveZipArchive, type ProgressiveZipInput, type ZipObjectCapacity } from '../../../src/output/progressive-zip/archive'
 import { ObjectCheckpointCoordinator } from '../../../src/output/origin-private/native-object/coordinator'
 import type { NativeObjectIO } from '../../../src/output/origin-private/native-object/contracts'
 import type { TaskCheckpoint, TaskEntry, TaskDirectoryPin } from '../../../src/output/origin-private/task-checkpoint/model'
@@ -108,12 +108,12 @@ function fixture(store = new MemoryStore(), io = new MemoryIO(), maximumLength?:
       }
     },
   }
-  const open = async () => {
+  const open = async (trace?: ProgressiveZipInput['trace']) => {
     occupiedLength = await io.size()
     return ProgressiveZipArchive.open({
       object: { ...object, operationId }, store, selectedPaths: [['z'], ['a']],
       coordinator: new ObjectCheckpointCoordinator({ io, ...object, operationId }),
-      capacity,
+      capacity, ...(trace === undefined ? {} : { trace }),
     })
   }
   return { store, io, growth, open, pressure, headroom: () => retainedHeadroom }
@@ -402,6 +402,104 @@ describe('progressive native ZIP missing-file results', () => {
 })
 
 describe('progressive ZIP readmission', () => {
+  it('finishes healthy files before pausing for unavailable evidence on a retained entry', async () => {
+    const root = identity(2)
+    const generation = identity(3)
+    const blocked = fileEntry(identity(16), 'a.bin', 4n)
+    const healthy = fileEntry(identity(17), 'b.bin', 2n)
+    const selection = new SelectionPolicy(true)
+    const intent = await receiveIntentFixture({ planKind: 'workspace-then-publish', artifactKind: 'zip-archive', selection })
+    const f = fixture(new MemoryStore(), new MemoryIO(), undefined, intent.operationId)
+    const first = await f.open()
+    const parent = { shareInstance: intent.shareInstance, directoryId: encodeBase64Url(root), generation: encodeBase64Url(generation) }
+    await first.admitDirectory({ entryId: `directory:${parent.directoryId}`, path: ['windshare'],
+      source: { ...parent, sourcePath: [] } })
+    const blockedId = `file:${blocked.idText}`
+    const revision = { fileId: blocked.idText, fileRevision: identityText(71),
+      exactSize: blocked.expectedSize, sourceMetadata: digestIdentity(81) }
+    await first.admitFile({ entryId: blockedId, path: ['windshare', blocked.name],
+      source: { ...parent, sourcePath: [blocked.name] }, revision })
+    await first.writeRange(blockedId, 0n, Uint8Array.of(1, 2))
+    await first.checkpoint('pause')
+    const retained = await first.committedEntry(blockedId)
+    await first.close()
+
+    const archive = await f.open()
+    const execution = await createProgressiveWorkspaceExecution({
+      archive, intent, outputIdentity: { backend: 'native-zip', outputSessionId: 'evidence-unavailable-session' },
+      settlement: {
+        pause: async (request, evidence) => {
+          expect(evidence.kind).toBe('checkpoint-committed')
+          const { checkpoint } = evidence
+          return {
+            operationId: intent.operationId, receiveIntentDigest: intent.digest, generation: 2n,
+            kind: 'resumable-receive', payloadKind: 'workspace-archive', objectId: checkpoint.object.objectId,
+            checkpointGeneration: checkpoint.generation, occupiedBytes: checkpoint.physicalLength,
+            discoveryComplete: checkpoint.discoveryComplete, completedFileCount: request.materialization.fileCount,
+            completedBytes: request.materialization.rawBytes,
+          }
+        },
+        settle: async () => { throw new Error('Incomplete ZIP must remain resumable') },
+      },
+    })
+    const plans = planAuthorityFixture()
+    plans.openWorkspaceZip = async () => ({ kind: 'accepted', execution })
+    const readers = readerFixture([blocked, healthy])
+    const result = await transferJobFixture({
+      catalog: catalogFixture([{ id: root, generation, entries: [blocked, healthy] }]).catalog,
+      selection, intent, plans, revisions: readers.revisions, broker: readers.broker, maximumConcurrentFiles: 1,
+    }).run()
+
+    expect(readers.revisionRequests).toEqual([blocked.idText, healthy.idText])
+    expect(readers.blockRequests).toEqual([healthy.idText])
+    expect(result.worker).toMatchObject({ status: 'Paused', fileOutcomes: { failedFiles: 1, sourceDriftFiles: 0 } })
+    expect(result.failureTrigger).toMatchObject({
+      fault: { scope: FaultScope.FileLocal, domain: FaultDomain.Source, code: SourceFaultCode.Unavailable },
+      fact: { recoveryDisposition: 'resumable_receive' },
+    })
+    expect(result.lifecycle).toMatchObject({
+      kind: 'resumable-receive', completedFileCount: 1n, completedBytes: healthy.expectedSize, discoveryComplete: true,
+    })
+    expect(await archive.committedEntry(blockedId)).toEqual(retained)
+    expect(archive.state.contentWarning).toMatchObject({
+      missingFiles: [{ path: ['windshare', blocked.name], reason: 'source-unavailable' }],
+    })
+  })
+
+  it.each([
+    { name: 'unavailable evidence', sourceMetadata: undefined, error: CheckpointSourceEvidenceUnavailableError,
+      stage: 'source_comparison_retained', reason: 'metadata-unavailable', marker: undefined, flushes: 1 },
+    { name: 'confirmed source change', sourceMetadata: digestIdentity(82), error: SourceRevisionChangedError,
+      stage: 'zip_revision_unavailable', reason: SourceFaultCode.RevisionChanged,
+      marker: SourceFaultCode.RevisionChanged, flushes: 2 },
+  ])('keeps the shared writer after a queued admission with $name', async test => {
+    const f = fixture()
+    const trace = vi.fn()
+    const archive = await f.open(trace)
+    await admit(archive, 'b', 2n)
+    const flushesBefore = f.io.flushes
+    const initial = { entryId: 'a', path: ['a'], source,
+      revision: { fileId: 'a', fileRevision: 'initial', exactSize: 2n, sourceMetadata: digestIdentity(81) } }
+    const first = archive.admitFile(initial)
+    const reopened = archive.admitFile({
+      ...initial,
+      revision: { fileId: 'a', fileRevision: 'reopened', exactSize: 2n,
+        ...(test.sourceMetadata === undefined ? {} : { sourceMetadata: test.sourceMetadata }) },
+    })
+    await Promise.all([first, expect(reopened).rejects.toBeInstanceOf(test.error)])
+
+    const retained = await archive.committedEntry('a')
+    expect(retained.revisionFailure).toBe(test.marker)
+    expect(retained.revision).toEqual(initial.revision)
+    expect(trace).toHaveBeenCalledWith(test.stage, expect.objectContaining({ entryId: 'a', reason: test.reason }))
+    expect(f.io.flushes - flushesBefore).toBe(test.flushes)
+    expect(archive.failed).toBe(false)
+    await archive.writeRange('b', 0n, bytes('ok'))
+    await archive.checkpoint('sibling')
+    expect((await archive.committedEntry('b')).ranges).toMatchObject([{ start: 0n, end: 2n }])
+    await archive.close()
+  })
+
   it('publishes a complete ZIP after readmitting a reopened file in the same job', async () => {
     const file = fileEntry(identity(16), 'reopened.bin', 4n)
     const selection = new SelectionPolicy(true)
@@ -750,7 +848,7 @@ describe('progressive native ZIP archive', () => {
     expect(f.io.closed).toBe(true)
   })
 
-  it('trusts only committed CRC coverage when bytes flush but the metadata transaction fails', async () => {
+  it.each(['checkpoint', 'confirmed revision change'])('retains committed CRC coverage when %s cannot commit metadata', async trigger => {
     const f = fixture()
     let archive = await f.open()
     await admit(archive, 'z', 6n)
@@ -758,12 +856,15 @@ describe('progressive native ZIP archive', () => {
     await archive.checkpoint('first')
     await archive.writeRange('z', 3n, bytes('456'))
     f.store.failCommit = true
-    await expect(archive.checkpoint('failure')).rejects.toThrow('metadata')
+    const cut = trigger === 'checkpoint' ? archive.checkpoint('failure') : admit(archive, 'z', 7n)
+    await expect(cut).rejects.toThrow('metadata')
     expect(archive.failed).toBe(true)
     expect(f.io.closed).toBe(true)
     f.store.failCommit = false
     archive = await f.open()
-    expect((await archive.entry('z')).ranges.map(r => [r.start, r.end])).toEqual([[0n, 3n]])
+    const retained = await archive.entry('z')
+    expect(retained.revisionFailure).toBeUndefined()
+    expect(retained.ranges.map(r => [r.start, r.end])).toEqual([[0n, 3n]])
     await archive.writeRange('z', 3n, bytes('456'))
     await archive.markDiscoveryComplete()
     expect((await archive.finalize()).artifactState).toBe('sealed')
@@ -810,7 +911,7 @@ describe('progressive native ZIP archive', () => {
     await expect(archive.admitFile({
       entryId: 'a', path: ['a'], source,
       revision: { fileId: 'a', fileRevision: 'replacement', exactSize: 2n },
-    })).rejects.toBeInstanceOf(RevisionEvidenceUnavailableError)
+    })).rejects.toBeInstanceOf(CheckpointSourceEvidenceUnavailableError)
     await archive.writeRange('b', 0n, bytes('ok'))
     await archive.checkpoint('unrelated-completion')
     expect((await archive.entry('a')).revisionFailure).toBeUndefined()
