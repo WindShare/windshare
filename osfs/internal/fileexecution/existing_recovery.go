@@ -70,8 +70,13 @@ func (engine *Engine) beginExisting(
 		return recovery.failStart(ctx, err)
 	}
 	if recovery.record.FileRevision() != file.Descriptor().FileRevision() {
-		if owned.Condition() != OwnedReady || (final.Condition() != FinalAbsent && final.Condition() != FinalCollision) {
+		if final.Condition() != FinalAbsent && final.Condition() != FinalCollision {
 			return recovery.failStart(ctx, bindingError(ErrTargetOwnershipUnknown))
+		}
+		if owned.Condition() != OwnedReady {
+			// A durable record can outlive its stage. Settle the affected file
+			// before moving any checkpoint coverage to the new revision.
+			return recovery.start(ctx, RecoveryDecision{action: RecoveryReturnOwnershipBlocked})
 		}
 		previous := recovery.record
 		next, err := checkpointmodel.AdmitMetadataReuse(previous, file.Descriptor())

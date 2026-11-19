@@ -255,7 +255,12 @@ func (a *App) reportBlockedReceiveItems(result transfer.JobResult) {
 			reason = "destination collision"
 		}
 		if _, blocked, ok := item.Settlement.ItemBlock(); ok {
-			reason = blocked.DiagnosticName()
+			switch blocked {
+			case transfer.ItemBlockOwnedObjectUnknown, transfer.ItemBlockOwnershipUnknown:
+				reason = "staged data could not be verified for resume"
+			default:
+				reason = blocked.DiagnosticName()
+			}
 		}
 		a.writeCompleteLine("  %q: %s", item.Path, reason)
 	}

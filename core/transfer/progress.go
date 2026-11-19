@@ -41,8 +41,8 @@ type ReceiveProgressSnapshot struct {
 	PreviouslyPublishedBytes uint64
 	VerifiedBytes            uint64
 	NewlyVerifiedBytes       uint64
-	// RestartReusableBytes counts the last observed persisted partial ranges.
-	// Delivered files are accounted for separately and no longer retain partials.
+	// RestartReusableBytes counts persisted partial ranges backed by the last
+	// confirmed output state. A later ownership block can withdraw that evidence.
 	RestartReusableBytes uint64
 	FileOutcomes         FileOutcomeSummary
 	CapacityWait         revisionwait.Snapshot

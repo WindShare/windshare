@@ -61,8 +61,14 @@ func (r *jobRun) transferFileAttempt(
 				r.traceFileLifecycle(TransferFileAdmitted, plan, contractFailure)
 				return nil, r.rejectImmediateSettlement(ctx, plan, opened, settlement, contractFailure)
 			}
-			r.admitFileCoverage(retry, checkpoint.Ranges(), 0, recovered)
+			r.reconcileFileCoverage(retry, checkpoint.Ranges(), 0, recovered)
 		} else if retry != nil {
+			if _, reason, blocked := settlement.ItemBlock(); blocked &&
+				(reason == ItemBlockOwnedObjectUnknown || reason == ItemBlockOwnershipUnknown) {
+				// The pause proved durable coverage at the time. The new
+				// ownership result withdraws it for this file alone.
+				r.reconcileFileCoverage(retry, content.RangeSet{}, 0, 0)
+			}
 			r.traceFileRevisionRetry(plan, retry.reopened, "admission-blocked", retry.progress.persistedBytes, 0, retry.started)
 		}
 		r.traceFileLifecycle(TransferFileAdmitted, plan, nil)
@@ -88,7 +94,7 @@ func (r *jobRun) transferFileAttempt(
 			ctx, plan, opened, transaction, FailureFileOutput, contractFailure, 0, nil,
 		)
 	}
-	r.admitFileCoverage(retry, fileProgress.initial, fileProgress.persistedBytes, recovered)
+	r.reconcileFileCoverage(retry, fileProgress.initial, fileProgress.persistedBytes, recovered)
 	if retry != nil {
 		reused := overlapBytes(fileProgress.initial, retry.progress.trusted.Ranges())
 		r.traceFileRevisionRetry(plan, retry.reopened, "readmitted", retry.progress.persistedBytes, reused, retry.started)
@@ -255,7 +261,7 @@ func (r *jobRun) rejectFileAdmission(plan plannedFile, retry *fileRevisionRetry,
 	return nil
 }
 
-func (r *jobRun) admitFileCoverage(retry *fileRevisionRetry, admitted content.RangeSet, persisted, verified uint64) {
+func (r *jobRun) reconcileFileCoverage(retry *fileRevisionRetry, admitted content.RangeSet, persisted, verified uint64) {
 	if retry == nil {
 		r.job.progress.addRecoveredVerified(verified)
 		r.job.progress.replaceRestartReusable(0, persisted)
