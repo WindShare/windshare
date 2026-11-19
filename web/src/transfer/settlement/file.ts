@@ -29,20 +29,31 @@ interface FileSettlementOptions {
 }
 
 type FileFault = Extract<NormalizedFileTransferFailure, { kind: 'fault' }>
+type PausedFileSettlement = Extract<FileTransferSettlement, { kind: 'paused' }>
 
 interface SettledFileFailure {
+  readonly kind: 'failed'
   readonly failure: NormalizedFileTransferFailure
   readonly settlement: FileTransferSettlement
   readonly capacityBlocked?: OutputCapacityBlockedError
 }
 
+export interface FileContinuationRequired {
+  readonly kind: 'continuation-required'
+  readonly settlement: PausedFileSettlement
+  readonly failure: FileFault
+}
+
+export type FileAttemptInterruption = SettledFileFailure | FileContinuationRequired | {
+  readonly kind: 'readmit'
+  readonly settlement: PausedFileSettlement
+  readonly readmission: FileRevisionReadmission
+}
+
 export async function settleReopenedFile(
   options: FileSettlementOptions, transaction: OutputFileTransaction,
   error: RevisionReopenedDuringRecoveryError, initialDurable: ByteRangeSet, started: number, retried: boolean,
-): Promise<SettledFileFailure | {
-  readonly settlement: FileTransferSettlement
-  readonly retry: FileRevisionReadmission
-}> {
+): Promise<FileAttemptInterruption> {
   const { previous, current, comparison } = error
   const readmit = options.output.readmitFile?.bind(options.output)
   const decision = readmissionDecision(options.signal, comparison, retried, readmit !== undefined)
@@ -67,20 +78,28 @@ export async function settleReopenedFile(
   const finalDecision = options.signal.aborted ? 'canceled' : decision
   observeRevisionReadmission(options, previous, current, comparison, finalDecision, settlement.retainedBytes, 0n, started)
   if (finalDecision === 'readmit' && readmit !== undefined) {
-    return { settlement, retry: {
-      previous, current, comparison, started, paused, initialDurable,
-      beginFile: (request, signal) => readmit(request, paused, signal),
-    } }
+    return {
+      kind: 'readmit',
+      settlement,
+      readmission: {
+        previous, current, comparison, started, paused, initialDurable,
+        beginFile: (request, signal) => readmit(request, paused, signal),
+      },
+    }
   }
 
   const terminalFailure = finalDecision === 'canceled'
     ? normalizeFileTransferFailure(options.signal.reason, failureOptions)
     : failure ?? normalizeFileTransferFailure(error, failureOptions)
-  return {
-    settlement,
-    failure: terminalFailure.kind === 'fault' && !options.output.capabilities.fileFailureIsolation
-      ? promoteFileFaultToOutputPause(options, terminalFailure) : terminalFailure,
+  if (terminalFailure.kind === 'fault') {
+    if (!options.output.capabilities.fileFailureIsolation) {
+      return { kind: 'failed', settlement, failure: promoteFileFaultToOutputPause(options, terminalFailure) }
+    }
+    if (finalDecision === 'retry-limit') {
+      return { kind: 'continuation-required', settlement, failure: terminalFailure }
+    }
   }
+  return { kind: 'failed', settlement, failure: terminalFailure }
 }
 
 function readmissionDecision(
@@ -104,7 +123,6 @@ function classifyReopenedFileFailure(
       ...(options.incidentScope === undefined ? {} : { incidentScope: options.incidentScope }),
       error,
       recoveryDisposition: 'resumable_receive',
-      fileOutcomeEvidence: { kind: 'deferred-revision-readmission' },
     })
   }
   return normalizeFileTransferFailure(error, options)
@@ -123,11 +141,15 @@ export async function settleTransferError(
         await withOutputSettlementTimeout('checkpoint capacity-blocked file',
           options.outputSettlementTimeoutMilliseconds, () => transaction.pause(error)),
       )
-      return { capacityBlocked: error, settlement,
-        failure: normalizeFileTransferFailure(error, { stage: 'output_write' }) }
+      return {
+        kind: 'failed', capacityBlocked: error, settlement,
+        failure: normalizeFileTransferFailure(error, { stage: 'output_write' }),
+      }
     } catch (settlementFailure) {
-      return { failure: normalizeFileTransferFailure(settlementFailure, { stage: 'settlement' }),
-        settlement: UNCONFIRMED_FILE_SETTLEMENT }
+      return {
+        kind: 'failed', settlement: UNCONFIRMED_FILE_SETTLEMENT,
+        failure: normalizeFileTransferFailure(settlementFailure, { stage: 'settlement' }),
+      }
     }
   }
 
@@ -135,17 +157,19 @@ export async function settleTransferError(
     signal: options.signal,
     ...(options.incidentScope === undefined ? {} : { incidentScope: options.incidentScope }),
   })
-  if (transaction === undefined) return { failure, settlement: UNCONFIRMED_FILE_SETTLEMENT }
+  if (transaction === undefined) return { kind: 'failed', failure, settlement: UNCONFIRMED_FILE_SETTLEMENT }
   if (failure.kind === 'canceled') return pauseCanceledFileTransfer(options, transaction, failure)
   try {
     await persistSourceFailure(options, transaction, failure.fault)
   } catch (error) {
     return {
+      kind: 'failed',
       failure: normalizeFileTransferFailure(error, { stage: 'settlement' }),
       settlement: UNCONFIRMED_FILE_SETTLEMENT,
     }
   }
   return {
+    kind: 'failed',
     failure: await settleFileFault(options, transaction, failure),
     settlement: UNCONFIRMED_FILE_SETTLEMENT,
   }
@@ -200,7 +224,7 @@ async function pauseCanceledFileTransfer(
 ): Promise<SettledFileFailure> {
   try {
     const durable = await pauseOutputFile(options, transaction, failure.diagnostic)
-    return { failure, settlement: pausedFileSettlement(durable) }
+    return { kind: 'failed', failure, settlement: pausedFileSettlement(durable) }
   } catch (pauseFailure) {
     normalizeFileTransferFailure(pauseFailure, {
       ...(options.incidentScope === undefined ? {} : { incidentScope: options.incidentScope }),
@@ -219,12 +243,13 @@ function pauseOutputFile(
   )
 }
 
-function pausedFileSettlement(durable: VerifiedDurableRanges): Extract<FileTransferSettlement, { kind: 'paused' }> {
+function pausedFileSettlement(durable: VerifiedDurableRanges): PausedFileSettlement {
   return Object.freeze({ kind: 'paused', retainedBytes: rangeBytes(durable.asRangeSet()) })
 }
 
 function unconfirmedPause(options: FileSettlementOptions, reason: unknown): SettledFileFailure {
   return {
+    kind: 'failed',
     failure: ambiguousOutputMutation(options, reason, 'output-write-failed'),
     settlement: UNCONFIRMED_FILE_SETTLEMENT,
   }

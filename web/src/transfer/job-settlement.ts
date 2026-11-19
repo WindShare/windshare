@@ -1,3 +1,4 @@
+import type { CatalogEntry } from '../catalog/records'
 import {
   snapshotRecoverySelectionFacts,
   type ReceiveLifecycleState,
@@ -34,6 +35,7 @@ import {
   type PlanExecution,
 } from './output/session'
 import type { TransferProgressLedger } from './progress/ledger'
+import type { FileContinuationRequired } from './settlement/file'
 import {
   pauseFailedExecution,
   withOutputSettlementTimeout,
@@ -69,20 +71,29 @@ export interface TransferJobSettlementContext {
 export class TransferJobSettlement {
   readonly #context: TransferJobSettlementContext
   #lastWorker: TransferWorkerSettlement | undefined
+  #continuationTrigger: ClassifiedTransferFailure | undefined
 
   constructor(context: TransferJobSettlementContext) {
     this.#context = context
   }
 
+  recordFileContinuation(
+    entry: Extract<CatalogEntry, { kind: 'file' }>, continuation: FileContinuationRequired,
+  ): void {
+    this.#context.lifetime.signal.throwIfAborted()
+    const reason = continuation.failure.diagnostic
+    this.#continuationTrigger ??= reason.classification
+    this.#context.failures.recordFile(entry, reason)
+  }
+
   async completeWorkers(measure: SelectionMeasure): Promise<TransferJobResult> {
     const execution = this.#requireExecution()
     const failures = this.#context.failures
-    const deferredReadmission = failures.deferredRevisionReadmission
-    if (execution.planKind === 'direct-tree' && deferredReadmission !== undefined) {
+    if (this.#continuationTrigger !== undefined) {
       this.#context.lifetime.signal.throwIfAborted()
       // File-local isolation lets the other files finish before the resumable cut.
       const worker = transferWorkerSettlement('Paused', failures.snapshot())
-      return this.#pauseIncompleteMaterialization(worker, measure, deferredReadmission)
+      return this.#pauseIncompleteMaterialization(worker, measure, this.#continuationTrigger)
     }
     const worker = failures.failureCount === 0
       ? transferWorkerSettlement('Succeeded', EMPTY_TRANSFER_FAILURE_SUMMARY)

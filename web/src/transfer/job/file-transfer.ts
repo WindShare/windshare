@@ -1,5 +1,4 @@
 import { compareRevisionDescriptors, sourceMetadataFields } from '../../content/revision-comparison'
-import { OutputCapacityBlockedError } from '../capacity-pressure/drain'
 import type { ShareDescriptor } from '../../catalog/records'
 import { ByteRangeSet, bigintToSafeNumber, byteRange, type ByteRange } from '../../content/geometry'
 import {
@@ -16,7 +15,10 @@ import {
   rangeBytes, releaseRevisionLease, validateOpenedFileRevision,
   type FileRevisionReadmission, type FileRevisionReadmissionObservation,
 } from './file-authority'
-import { settleReopenedFile, settleTransferError, UNCONFIRMED_FILE_SETTLEMENT } from '../settlement/file'
+import {
+  settleReopenedFile, settleTransferError, UNCONFIRMED_FILE_SETTLEMENT,
+  type FileAttemptInterruption, type FileContinuationRequired,
+} from '../settlement/file'
 import { encodeBase64Url } from '../../crypto/bytes'
 import type { IncidentScopeHandle } from '../../diagnostics/incident'
 import {
@@ -53,7 +55,7 @@ import {
   normalizedFileTransferFault,
   type NormalizedFileTransferFailure,
 } from './failures'
-import { BoundaryFaultError, joinFaults } from '../failure/fault'
+import { BoundaryFaultError, FaultScope, joinFaults } from '../failure/fault'
 import type { DirectTreeCoordinateContract } from './coordinate/direct-tree'
 import type { PerformanceFilePipelineObservation } from '../../diagnostics/performance/performance-runtime-observations'
 
@@ -87,9 +89,12 @@ export interface FileTransferOptions {
 }
 
 /** Each attempt owns one lease and transaction. The file settles after its last attempt. */
-export async function transferFile(options: FileTransferOptions, pending: PendingFile): Promise<void> {
-  const retry = await transferFileAttempt(options, pending)
-  if (retry !== undefined) await transferFileAttempt(options, pending, retry)
+export async function transferFile(
+  options: FileTransferOptions, pending: PendingFile,
+): Promise<FileContinuationRequired | undefined> {
+  const first = await transferFileAttempt(options, pending)
+  const outcome = first.kind === 'readmit' ? await transferFileAttempt(options, pending, first.readmission) : first
+  return outcome.kind === 'continuation-required' ? outcome : undefined
 }
 
 interface FileAttempt {
@@ -100,30 +105,28 @@ interface FileAttempt {
   admitted: boolean
 }
 
-interface FileAttemptOutcome {
+type FileAttemptOutcome = FileAttemptInterruption | {
+  readonly kind: 'finished'
   readonly settlement: FileTransferSettlement
-  readonly failure?: NormalizedFileTransferFailure
-  readonly capacityBlocked?: OutputCapacityBlockedError
-  readonly retry?: FileRevisionReadmission
 }
 
 async function transferFileAttempt(
   options: FileTransferOptions,
   pending: PendingFile,
   previous?: FileRevisionReadmission,
-): Promise<FileRevisionReadmission | undefined> {
+): Promise<FileAttemptOutcome> {
   const checkpointFailure = new AbortController()
   const active = { ...options, signal: AbortSignal.any([options.signal, checkpointFailure.signal]) }
   const attempt: FileAttempt = { admitted: false }
-  let outcome: FileAttemptOutcome = { settlement: UNCONFIRMED_FILE_SETTLEMENT }
+  let outcome: FileAttemptOutcome = { kind: 'finished', settlement: UNCONFIRMED_FILE_SETTLEMENT }
   try {
     try {
       const admission = await admitFileAttempt(active, pending, attempt, previous)
-      outcome = { settlement: await writeFileAttempt(active, attempt, admission, checkpointFailure) }
+      outcome = { kind: 'finished', settlement: await writeFileAttempt(active, attempt, admission, checkpointFailure) }
     } catch (error) {
       outcome = await settleFileAttemptError(options, attempt, error, previous)
     }
-    return outcome.retry
+    return outcome
   } finally {
     await finishFileAttempt(active, attempt, outcome)
   }
@@ -295,7 +298,7 @@ async function finishFileAttempt(
 ): Promise<void> {
   try {
     observeSettlementCoverage(options, outcome.settlement, attempt.checkpoint)
-    if (outcome.retry === undefined) options.onSettlement(outcome.settlement)
+    if (outcome.kind !== 'readmit') options.onSettlement(outcome.settlement)
   } finally {
     await retireFileAttemptLease(options, attempt, outcome)
   }
@@ -304,12 +307,25 @@ async function finishFileAttempt(
 async function retireFileAttemptLease(
   options: FileTransferOptions, attempt: FileAttempt, outcome: FileAttemptOutcome,
 ): Promise<void> {
-  try {
-    await finishTransferFile(options, attempt.acquired, outcome.failure, outcome.capacityBlocked)
-  } catch (error) {
-    if (outcome.retry !== undefined) options.onSettlement(outcome.settlement)
-    throw error
+  const releaseFailure = await releaseRevisionLease(attempt.acquired)
+  if (outcome.kind === 'readmit' && releaseFailure !== undefined) options.onSettlement(outcome.settlement)
+  if (outcome.kind === 'continuation-required') {
+    if (releaseFailure?.kind !== 'fault') return
+    if (releaseFailure.fault.scope === FaultScope.FileLocal) {
+      // The verified checkpoint remains available after a fault isolated to this lease.
+      materializeClassifiedTransferFailure(releaseFailure.diagnostic.classification, options.incidentScope, 'consequence')
+      return
+    }
   }
+
+  let primaryFailure = outcome.kind === 'failed' || outcome.kind === 'continuation-required'
+    ? outcome.failure : undefined
+  if (outcome.kind === 'failed' && outcome.capacityBlocked !== undefined && releaseFailure === undefined) {
+    try { await outcome.capacityBlocked.waitForDrain(options.signal) } catch (error) {
+      primaryFailure = normalizeFileTransferFailure(error, { signal: options.signal })
+    }
+  }
+  throwTransferOrReleaseFailure(options.incidentScope, primaryFailure, releaseFailure)
 }
 
 function observeSettlementCoverage(
@@ -331,21 +347,6 @@ async function drainCheckpointFailure(
 ): Promise<unknown> {
   try { await checkpoint?.drain() } catch (checkpointError) { return checkpointError }
   return failure
-}
-
-async function finishTransferFile(
-  options: FileTransferOptions,
-  acquired: OpenedRevision | undefined,
-  primaryFailure: NormalizedFileTransferFailure | undefined,
-  capacityBlocked: OutputCapacityBlockedError | undefined,
-): Promise<void> {
-  const releaseFailure = await releaseRevisionLease(acquired)
-  if (capacityBlocked !== undefined && releaseFailure === undefined) {
-    try { await capacityBlocked.waitForDrain(options.signal) } catch (error) {
-      primaryFailure = normalizeFileTransferFailure(error, { signal: options.signal })
-    }
-  }
-  throwTransferOrReleaseFailure(options.incidentScope, primaryFailure, releaseFailure)
 }
 
 function throwTransferOrReleaseFailure(

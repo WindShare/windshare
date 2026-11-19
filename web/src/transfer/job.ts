@@ -600,7 +600,7 @@ export class TransferJob {
       throw new TypeError('direct ZIP content must pass through its ordered coordinator')
     }
     let materializedBytes = 0n
-    await transferFile({
+    const continuation = await transferFile({
       descriptor: this.#options.descriptor,
       revisions: this.#capacity.revisions,
       broker: this.#capacity.broker,
@@ -640,6 +640,7 @@ export class TransferJob {
         this.#emitProgress(settlement.kind === 'completed' ? 'counters' : 'transition')
       },
     }, file)
+    if (continuation !== undefined) this.#settlement.recordFileContinuation(file.entry, continuation)
   }
 
   #admissionFailure(error: unknown): TransferAdmissionFailureError {

@@ -3,7 +3,6 @@ import type { CatalogEntry } from '../catalog/records'
 import type { FrozenSelectionPolicy } from '../catalog/selection'
 import { decodeBase64Url } from '../crypto/bytes'
 import type { TransferJobOptions } from './job/contract'
-import type { ClassifiedTransferFailure } from './failure/classification'
 import {
   normalizeFileTransferFailure,
   type TransferFailureClassificationOptions,
@@ -37,7 +36,6 @@ export class JobFailureAuthority {
   readonly #failures = new TransferFailureAccumulator()
   readonly #options: JobFailureAuthorityOptions
   #discoveryFailed = false
-  #deferredRevisionReadmission: ClassifiedTransferFailure | undefined
 
   constructor(options: JobFailureAuthorityOptions) {
     this.#options = options
@@ -46,10 +44,6 @@ export class JobFailureAuthority {
 
   get failureCount(): number {
     return this.#failures.failureCount
-  }
-
-  get deferredRevisionReadmission(): ClassifiedTransferFailure | undefined {
-    return this.#deferredRevisionReadmission
   }
 
   snapshot(): TransferFailureSummary {
@@ -83,9 +77,6 @@ export class JobFailureAuthority {
     if (normalized.kind === 'canceled') throw normalized.diagnostic
     const evidence = normalized.diagnostic.fileOutcomeEvidence ??
       Object.freeze({ kind: 'residual-failure' as const })
-    if (evidence.kind === 'deferred-revision-readmission') {
-      this.#deferredRevisionReadmission ??= normalized.diagnostic.classification
-    }
     this.#failures.record(
       Object.freeze({
         kind: 'file',

@@ -1,7 +1,9 @@
 import { expect, it } from 'vitest'
+import { SelectionPolicy } from '../../src/catalog/selection'
 import { byteRange, type ByteRange } from '../../src/content/geometry'
 import type { BlockRangeReader } from '../../src/content/broker'
 import { RevisionReopenedDuringRecoveryError, type RevisionReader } from '../../src/content/session-services'
+import { BoundaryFaultError, FaultScope, SourceFaultCode, sourceFault } from '../../src/transfer/failure/fault'
 import type { TransferProgress, TransferTraceEvent } from '../../src/transfer/job/contract'
 import type { OutputSession } from '../../src/transfer/output/session'
 import { deferred } from '../session/v2-send-fixture'
@@ -117,5 +119,59 @@ it.each(['agreement', 'unavailable', 'changed-on-retry'] as const)(
       })
       expect(opens).toBe(scenario === 'unavailable' ? 1 : 2)
     }
+  },
+)
+
+it.each([FaultScope.FileLocal, FaultScope.OutputPause])(
+  'honors a %s release fault after checkpointing an exhausted readmission',
+  async scope => {
+    const payload = fileEntry(identity(11), 'payload.bin', 6n)
+    const sibling = fileEntry(identity(12), 'sibling.bin', 2n)
+    const selection = new SelectionPolicy(true)
+    const catalog = catalogFixture([{ id: identity(2), entries: [payload, sibling] }])
+    const readers = readerFixture([payload, sibling])
+    const versions = [71, 72, 73].map(seed => ({
+      fileRevision: identity(seed), fileRevisionText: identityText(seed), sourceMetadata: digestIdentity(74),
+    }))
+    let payloadOpens = 0
+    const firstOutput = testOutput([], { durability: 'ProcessRestart' })
+    const output = {
+      ...firstOutput,
+      readmitFile: (file, paused, signal) =>
+        testOutput([], { durability: 'ProcessRestart', initialRanges: paused.ranges }).beginFile(file, signal),
+    } satisfies OutputSession
+    const plans = planAuthorityFixture({ output })
+    const intent = await receiveIntentFixture({ planKind: 'direct-tree', artifactKind: 'directory-tree', selection })
+    const result = await transferJobFixture({
+      catalog: catalog.catalog, selection, intent, plans, maximumConcurrentFiles: 1,
+      revisions: { open: async (file, signal) => {
+        const opened = await readers.revisions.open(file, signal)
+        if (opened.descriptor.fileIdText !== payload.idText) return opened
+        const attempt = payloadOpens++
+        return {
+          ...opened,
+          descriptor: { ...opened.descriptor, ...versions[attempt]! },
+          leaseId: identity(81 + attempt),
+          release: async () => {
+            await opened.release()
+            if (attempt === 1) throw new BoundaryFaultError(sourceFault(scope, SourceFaultCode.Unavailable))
+          },
+        }
+      } },
+      broker: { readRange: async function* (descriptor, lease, range, request) {
+        if (descriptor.fileIdText !== payload.idText) {
+          yield* readers.broker.readRange(descriptor, lease, range, request)
+          return
+        }
+        yield { offset: range.start, data: Uint8Array.of(1, 2) }
+        throw new RevisionReopenedDuringRecoveryError(descriptor, { ...descriptor, ...versions[payloadOpens]! })
+      } },
+    }).run()
+
+    expect(payloadOpens).toBe(2)
+    expect(result.worker.status).toBe('Paused')
+    expect(result.failureTrigger?.fault.scope).toBe(scope)
+    expect(plans.pauseRequests).toHaveLength(1)
+    expect(firstOutput.commits).toEqual(scope === FaultScope.FileLocal ? [sibling.idText] : [])
   },
 )
