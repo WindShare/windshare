@@ -73,7 +73,9 @@ func accessScenario(endpoint, console string) {
 	store := relaysetup.FileStore{Settings: relayconfig.FileStore{Path: path}}
 	service := relaysetup.New(relaysetup.Dependencies{Store: store})
 	installed, err := service.Run(context.Background(), relaysetup.Request{
-		URL: strings.TrimSuffix(endpoint, v2.WebSocketPath), DeviceName: "Enrolled device", Operation: relaysetup.PrivateOnboarding,
+		URL:        strings.TrimSuffix(endpoint, v2.WebSocketPath),
+		DeviceName: "Enrolled device",
+		Operation:  relaysetup.AuthorizeDevice,
 	}, func(progress relaysetup.Progress) {
 		if progress.Stage == "approval_required" {
 			admin.call("enrollments/approve", map[string]string{"enrollment_id": progress.EnrollmentID, "user_code": progress.UserCode}, nil)

@@ -77,6 +77,22 @@ func (a *Application) configure(request Request) error {
 			return errors.New("creation operation has finished")
 		}
 	}
+	if err := input.validate(); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.interruptSetup = cancel
+	a.setup = SetupView{
+		State: "running", ID: input.ID, OperationID: request.OperationID,
+		RelayURL: input.RelayURL, RelayOperation: input.RelayOperation,
+	}
+	a.setupRequests[input.ID] = setupCommand{input: *input, operationID: request.OperationID}
+	a.work.Add(1)
+	go a.runSetup(ctx, *input)
+	return nil
+}
+
+func (input SetupInput) validate() error {
 	if input.Preference != nil && (input.RelayURL != "" || input.FrontURL != "") {
 		return errors.New("invalid sharing settings request")
 	}
@@ -91,19 +107,8 @@ func (a *Application) configure(request Request) error {
 		return errors.New("enter a relay or frontend URL")
 	}
 	if input.FrontURL != "" {
-		if err := relayconfig.ValidateFrontURL(input.FrontURL); err != nil {
-			return err
-		}
+		return relayconfig.ValidateFrontURL(input.FrontURL)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	a.interruptSetup = cancel
-	a.setup = SetupView{
-		State: "running", ID: input.ID, OperationID: request.OperationID,
-		RelayURL: input.RelayURL, RelayOperation: input.RelayOperation,
-	}
-	a.setupRequests[input.ID] = setupCommand{input: *input, operationID: request.OperationID}
-	a.work.Add(1)
-	go a.runSetup(ctx, *input)
 	return nil
 }
 
