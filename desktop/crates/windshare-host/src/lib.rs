@@ -146,6 +146,10 @@ impl Controller {
         format!("{kind}:{sequence}")
     }
 
+    pub fn reload_account_selection(&self) {
+        self.command(Command::ReloadAccountSelection);
+    }
+
     pub fn set_account_view_visible(&self, visible: bool) {
         // A reconnect needs the latest view, even if the command queue was full
         // when the window changed.

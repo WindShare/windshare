@@ -12,6 +12,14 @@ import (
 	"github.com/windshare/windshare/core/serviceauthority"
 )
 
+// ReloadSelection publishes the shared local selection to observers independently of authority operations.
+func (service *Service) ReloadSelection(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, CacheLoadTimeout)
+	defer cancel()
+	_, err := service.syncSelection(ctx, service.load, nil)
+	return err
+}
+
 func (service *Service) load(ctx context.Context) (Record, error) {
 	return service.config.Store.Update(ctx, func(record Record) (Record, error) {
 		issuer := base64.RawURLEncoding.EncodeToString(service.config.Root[:])
@@ -191,6 +199,6 @@ func (service *Service) install(ctx context.Context, previous Record, response s
 	}
 	service.issuedLocked(record)
 	service.mu.Unlock()
-	service.transition(Ready, "", service.config.Now().Add(RefreshInterval))
+	service.transition(record, Ready, "", service.config.Now().Add(RefreshInterval))
 	return nil
 }

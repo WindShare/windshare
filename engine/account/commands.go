@@ -133,7 +133,7 @@ func (service *Service) RequestEmail(ctx context.Context, email string) error {
 	}); err != nil {
 		return err
 	}
-	service.transition(EmailRequired, "", time.Time{})
+	service.transition(previous, EmailRequired, "", time.Time{})
 	return nil
 }
 
@@ -167,7 +167,7 @@ func (service *Service) VerifyEmail(ctx context.Context, code string) error {
 	if *challenge != proof.Challenge {
 		slog.Debug("account_email_verification_challenge_replaced", "challenge_id", proof.Challenge.ID, "next_mode", challenge.Mode)
 	}
-	service.transition(challenge.requiredState(), "", time.Time{})
+	service.transition(previous, challenge.requiredState(), "", time.Time{})
 	if challenge.Mode == emailChallenge {
 		// A reply can cross the locally visible deadline while the authority still accepts the code.
 		if *challenge == proof.Challenge && challenge.hasEmailCode(service.config.Now()) {

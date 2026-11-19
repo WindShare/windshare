@@ -57,6 +57,7 @@ func (a *Application) watchAccount() {
 		return
 	}
 	a.accountView = &AccountView{}
+	a.accountReloads = make(chan string, 1)
 	a.syncAccountLocked()
 	a.readers.Go(func() {
 		for {
@@ -68,10 +69,31 @@ func (a *Application) watchAccount() {
 			case <-a.accountContext.Done():
 				return
 			case <-changed:
+			case requestID := <-a.accountReloads:
+				err := a.deps.accounts.ReloadSelection(a.accountContext)
+				a.deps.log("host.account_selection_reload_completed", map[string]string{
+					"request_id": requestID, "error": errorText(err),
+				})
 			}
 		}
 	})
 }
+
+func (a *Application) requestAccountReload(requestID string) error {
+	if a.closing {
+		return engine.ErrClosed
+	}
+	if a.deps.accounts == nil {
+		return account.ErrNotConfigured
+	}
+	// The pending read covers any further openings before it starts.
+	select {
+	case a.accountReloads <- requestID:
+	default:
+	}
+	return nil
+}
+
 func (subscription *subscription) hideAccountView() {
 	if subscription.releaseAccountView != nil {
 		subscription.releaseAccountView()

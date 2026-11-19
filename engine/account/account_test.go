@@ -95,11 +95,11 @@ func TestAnonymousAdmissionDuringSetupRequiresFreshSignedNodePolicy(t *testing.T
 	if source.ReserveRegistrationAuthorization().State != serviceauthority.AdmissionPendingSetup {
 		t.Fatal("unknown anonymous policy was assumed")
 	}
-	service.transition(RegistrationRequired, "", time.Time{})
+	service.transition(Record{}, RegistrationRequired, "", time.Time{})
 	if got := source.ReserveRegistrationAuthorization().State; got != serviceauthority.AdmissionUserActionRequired {
 		t.Fatalf("manual registration authorization = %v", got)
 	}
-	service.transition(Pending, "", time.Time{})
+	service.transition(Record{}, Pending, "", time.Time{})
 	service.nodes[source.address] = &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now()}
 	if source.ReserveRegistrationAuthorization().State != serviceauthority.AdmissionPendingSetup {
 		t.Fatal("expired policy permitted anonymous admission")

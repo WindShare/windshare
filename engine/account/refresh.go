@@ -98,7 +98,9 @@ func (service *Service) run() {
 // The command lock spans the failure transition so a late poll cannot
 // replace a newer interactive registration state.
 func (service *Service) pollLocked(ctx context.Context, schedule *refreshSchedule) {
-	scope := service.refreshScope()
+	service.mu.Lock()
+	scope, beforeRead := service.refreshScopeLocked(), service.record
+	service.mu.Unlock()
 	if scope == refreshInactive {
 		return
 	}
@@ -108,12 +110,13 @@ func (service *Service) pollLocked(ctx context.Context, schedule *refreshSchedul
 	}
 	record, err := service.syncSelection(ctx, read, nil)
 	if err != nil {
-		service.scheduleNextRefresh(schedule, err)
+		service.scheduleNextRefresh(schedule, beforeRead, err)
 		return
 	}
 	if scope == refreshExisting && record.Credential == nil {
 		if !schedule.next.IsZero() {
-			service.transition(Pending, "", time.Time{})
+			state, reason := service.cachedState(record)
+			service.transition(record, state, reason, time.Time{})
 		}
 		*schedule = refreshSchedule{retry: MinimumRetry}
 		return
@@ -130,16 +133,16 @@ func (service *Service) pollLocked(ctx context.Context, schedule *refreshSchedul
 		return
 	}
 	if record.Credential != nil && record.Denial == "" && !service.validTicket(record) {
-		service.transition(Refreshing, "", time.Time{})
+		service.transition(record, Refreshing, "", time.Time{})
 	}
 	_, err = service.refreshRecord(ctx, record)
-	service.scheduleNextRefresh(schedule, err)
+	service.scheduleNextRefresh(schedule, record, err)
 }
 
-func (service *Service) scheduleNextRefresh(schedule *refreshSchedule, err error) {
+func (service *Service) scheduleNextRefresh(schedule *refreshSchedule, record Record, err error) {
 	delay := RefreshInterval
 	if err != nil {
-		delay = service.failure(err, schedule.retry)
+		delay = service.failure(record, err, schedule.retry)
 		schedule.retry = min(schedule.retry*2, MaximumRetry)
 	} else {
 		schedule.retry = MinimumRetry
@@ -167,7 +170,7 @@ func (service *Service) observeRefresh(schedule *refreshSchedule, record Record,
 	}
 	if next := service.cachedRefreshAt(record, now); next.After(now) {
 		schedule.next, schedule.retry = next, MinimumRetry
-		service.transition(Ready, "", next)
+		service.transition(record, Ready, "", next)
 		slog.Debug("account_refresh_satisfied_by_ticket", "credential", record.Credential.ID, "refresh_at", next)
 	}
 }
@@ -248,7 +251,7 @@ func (service *Service) refreshRecord(ctx context.Context, record Record) (Refre
 		return RefreshSucceeded, nil
 	}
 	state := proof.Challenge.requiredState()
-	service.transition(state, "", time.Time{})
+	service.transition(record, state, "", time.Time{})
 	if record.Denial != "" {
 		return "", &fault{Kind: "denied", Reason: record.Denial}
 	}
@@ -316,7 +319,7 @@ func (service *Service) updateProof(ctx context.Context, previous Record, update
 	return err
 }
 
-func (service *Service) failure(err error, delay time.Duration) time.Duration {
+func (service *Service) failure(record Record, err error, delay time.Duration) time.Duration {
 	state := Unavailable
 	reason := err.Error()
 	if remote, ok := errors.AsType[*fault](err); ok {
@@ -328,6 +331,6 @@ func (service *Service) failure(err error, delay time.Duration) time.Duration {
 			delay = max(delay, time.Duration(min(remote.RetryAfter, 3600))*time.Second)
 		}
 	}
-	service.transition(state, reason, service.config.Now().Add(delay))
+	service.transition(record, state, reason, service.config.Now().Add(delay))
 	return delay
 }

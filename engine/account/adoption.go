@@ -1,5 +1,10 @@
 package account
 
+import (
+	"log/slog"
+	"time"
+)
+
 // Denials are remembered before persistence. Losing a cache write or loading an
 // older record cannot turn an explicit refusal into anonymous admission.
 func (service *Service) rememberDenialLocked(record Record, reason string) {
@@ -58,13 +63,35 @@ func (service *Service) adoptLocked(record Record) {
 	record = service.withDenialLocked(record)
 	selectionChanged := !sameIdentity(service.record, record)
 	service.record = record
+	if selectionChanged || service.state == "" {
+		// Progress and retry deadlines belong to the previous selection.
+		service.state, service.reason = service.cachedState(record)
+		service.registrationPermille, service.retryAt = 0, time.Time{}
+	}
 	if selectionChanged {
+		slog.Debug("account_selection_adopted", "state", service.state, "has_credential", record.Credential != nil)
 		service.wakeRefreshLocked()
 	}
 	if record.Credential != nil {
 		if retained := service.credentials[record.Credential.ID]; retained != nil {
 			retained.record = cloneRecord(record)
 		}
+	}
+}
+
+func (service *Service) cachedState(record Record) (State, string) {
+	switch {
+	case record.Denial != "":
+		return Denied, record.Denial
+	case record.Credential != nil:
+		if service.validTicket(record) {
+			return Ready, ""
+		}
+		return RefreshRequired, ""
+	case record.Proof != nil:
+		return record.Proof.Challenge.requiredState(), ""
+	default:
+		return Pending, ""
 	}
 }
 
