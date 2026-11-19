@@ -80,7 +80,8 @@ func (store *interruptedSelectionStore) Update(ctx context.Context, change func(
 func TestShareWaitsForConfirmedSelectionAfterLocalReadFailure(t *testing.T) {
 	config, first := accountFixture(t)
 	second := otherAccount(t, config, first)
-	store := &interruptedSelectionStore{MemoryStore: MemoryStore{record: cachedRecord(first)}}
+	store := &interruptedSelectionStore{}
+	store.record = cachedRecord(first)
 	config.Store = store
 	service := testService(t, config)
 	service.nodes["primary"] = &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)}
