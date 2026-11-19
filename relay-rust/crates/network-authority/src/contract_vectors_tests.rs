@@ -92,6 +92,68 @@ fn email_requires_delivered_secret_and_password_setup_keeps_account_identity() {
 }
 
 #[test]
+fn mistyped_registration_email_code_keeps_its_challenge_until_attempts_run_out() {
+    let mut authority = fixture();
+    let mut settings = authority.settings().unwrap();
+    settings.registration = RegistrationMode::Email;
+    save(&mut authority.store, "settings", &settings).unwrap();
+    let address = Mailbox::parse("alice@qq.com").unwrap();
+    let (delivered, code) = authority.deliver_email("source", None, &address).unwrap();
+    let mut proof = registration(8);
+    proof.challenge = Some(delivered.id.clone());
+    proof.solution = Some("mistyped".into());
+    let prompt = |authority: &mut Authority<Memory, Clock>, proof: &Registration| match authority
+        .register("source", proof.clone())
+        .unwrap_err()
+        .downcast::<Fault>()
+        .unwrap()
+    {
+        Fault::Verification { challenge } => challenge,
+        other => panic!("expected a verification prompt, got {other:?}"),
+    };
+    let same = |left: &Challenge, right: &Challenge| {
+        (&left.id, left.mode, left.bits, left.expires_at)
+            == (&right.id, right.mode, right.bits, right.expires_at)
+    };
+    // A typo answers with the delivered challenge itself (same id, mode and original
+    // expiry), so every client keeps it. Each attempt still counts and persists.
+    for _ in 0..4 {
+        authority.environment.now += 10;
+        assert!(same(&prompt(&mut authority, &proof), &delivered));
+    }
+    // The 5th wrong code uses the challenge up: back to the id-less email prompt.
+    let used = prompt(&mut authority, &proof);
+    assert!(used.id.is_empty() && used.mode == RegistrationMode::Email);
+    proof.solution = Some(code);
+    assert_eq!(prompt(&mut authority, &proof).id, "");
+
+    // Unknown ids and expired challenges keep the id-less prompt too.
+    let (delivered, code) = authority.deliver_email("source", None, &address).unwrap();
+    proof.challenge = Some("unknown".into());
+    proof.solution = Some("mistyped".into());
+    assert_eq!(prompt(&mut authority, &proof).id, "");
+    proof.challenge = Some(delivered.id.clone());
+    assert!(same(&prompt(&mut authority, &proof), &delivered));
+    proof.solution = Some(code);
+    let session = authority.register("source", proof.clone()).unwrap();
+    assert_eq!(session.profile.email.as_deref(), Some("alice@qq.com"));
+
+    let (delivered, _) = authority
+        .deliver_email("other-source", None, &address)
+        .unwrap();
+    proof.client_secret = registration(9).client_secret;
+    proof.challenge = Some(delivered.id.clone());
+    proof.solution = Some("mistyped".into());
+    authority.environment.now = delivered.expires_at;
+    let expired = authority
+        .register("other-source", proof)
+        .unwrap_err()
+        .downcast::<Fault>()
+        .unwrap();
+    assert!(matches!(expired, Fault::Verification { challenge } if challenge.id.is_empty()));
+}
+
+#[test]
 fn retrying_work_registration_reuses_its_challenge_and_creates_a_profile_without_email() {
     let mut authority = fixture();
     let settings = Settings {

@@ -172,6 +172,7 @@ impl Desktop {
                         "email_delivery_unavailable" => Text::EmailDeliveryUnavailable,
                         "account_changed" => Text::AccountChanged,
                         "account_denied" => Text::AccountDenied,
+                        "email_code_incorrect" => Text::EmailCodeIncorrect,
                         "email_code_rejected" => Text::EmailCodeRejected,
                         "rate_limited" => Text::AccountRateLimited,
                         "invalid_account_input" => Text::InvalidAccountInput,

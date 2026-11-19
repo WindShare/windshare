@@ -1,6 +1,6 @@
 use crate::{
     Authority, Challenge, Environment, Fault, Rate, RegistrationMode, Store,
-    challenges::{CHALLENGE_SECONDS, Verified},
+    challenges::{CHALLENGE_SECONDS, ProofRedemption},
     store::{key, load, save},
 };
 use anyhow::Result;
@@ -56,32 +56,36 @@ impl<R: Store, E: Environment> Authority<R, E> {
         } else {
             settings.registration
         };
-        let proof = if mode == RegistrationMode::Automatic {
+        let email = if mode == RegistrationMode::Automatic {
             None
         } else {
-            self.registration_proof(source_id, mode, challenge, solution)?
-        };
-        if mode != RegistrationMode::Automatic && proof.is_none() {
-            let challenge = if mode == RegistrationMode::Email {
-                Challenge {
-                    id: String::new(),
-                    mode,
-                    bits: 0,
-                    expires_at: now + CHALLENGE_SECONDS,
+            match self.registration_proof(source_id, mode, challenge, solution)? {
+                ProofRedemption::WorkVerified => None,
+                ProofRedemption::EmailVerified(address) => Some(address),
+                ProofRedemption::Retry(challenge) if mode == RegistrationMode::Email => {
+                    return Err(Fault::Verification { challenge }.into());
                 }
-            } else {
-                self.work_challenge(source_id, settings.pow_bits)?
-            };
-            return Err(Fault::Verification { challenge }.into());
-        }
+                // Proof-of-work retries must still match the configured difficulty.
+                ProofRedemption::Retry(_) | ProofRedemption::Unavailable => {
+                    let challenge = if mode == RegistrationMode::Email {
+                        Challenge {
+                            id: String::new(),
+                            mode,
+                            bits: 0,
+                            expires_at: now + CHALLENGE_SECONDS,
+                        }
+                    } else {
+                        self.work_challenge(source_id, settings.pow_bits)?
+                    };
+                    return Err(Fault::Verification { challenge }.into());
+                }
+            }
+        };
         local.credit -= 1;
         global.credit -= 1;
         save(&mut self.store, &source_key, &local)?;
         save(&mut self.store, "creation-global", &global)?;
-        Ok(match proof {
-            Some(Verified::Email(address)) => Some(address),
-            _ => None,
-        })
+        Ok(email)
     }
 }
 fn recover(bucket: &mut Bucket, rate: &Rate, now: u64) {

@@ -8,14 +8,20 @@ import (
 	"time"
 )
 
-var errEmailCodeRejected = errors.New("verification code is invalid or expired; request a new verification email")
+var (
+	errEmailCodeRejected = errors.New("verification code is invalid or expired; request a new verification email")
+	// errEmailCodeIncorrect reports a mistyped code whose still-live challenge the authority returned for another attempt.
+	errEmailCodeIncorrect = errors.New("verification code is incorrect; check it and try again")
+)
 
 // CommandErrorCode lets interactive clients localize a recovery action without parsing authority messages.
 func CommandErrorCode(err error) string {
-	if errors.Is(err, errEmailCodeRejected) {
+	switch {
+	case errors.Is(err, errEmailCodeIncorrect):
+		return "email_code_incorrect"
+	case errors.Is(err, errEmailCodeRejected):
 		return "email_code_rejected"
-	}
-	if errors.Is(err, ErrSuperseded) {
+	case errors.Is(err, ErrSuperseded):
 		return "account_changed"
 	}
 	if remote, ok := errors.AsType[*fault](err); ok {
@@ -153,9 +159,15 @@ func (service *Service) VerifyEmail(ctx context.Context, code string) error {
 	if err != nil || challenge == nil {
 		return err
 	}
-	slog.Debug("account_email_verification_challenge_replaced", "challenge_id", proof.Challenge.ID, "next_mode", challenge.Mode)
+	if *challenge != proof.Challenge {
+		slog.Debug("account_email_verification_challenge_replaced", "challenge_id", proof.Challenge.ID, "next_mode", challenge.Mode)
+	}
 	service.transition(challenge.requiredState(), "", time.Time{})
-	if challenge.Mode == "email" {
+	if challenge.Mode == emailChallenge {
+		// A reply can cross the locally visible deadline while the authority still accepts the code.
+		if *challenge == proof.Challenge && challenge.hasEmailCode(service.config.Now()) {
+			return errEmailCodeIncorrect
+		}
 		return errEmailCodeRejected
 	}
 	return errors.New("registration requirements changed; retry account setup")

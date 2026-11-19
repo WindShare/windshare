@@ -82,4 +82,4 @@ For an isolated local Worker with generation-1 test keys, run
 It verifies the Wasm/SQLite API, cookies, usage signatures, retries and access decisions.
 It uses disposable `local-operator` credentials and refuses non-loopback destinations.
 
-After `worker-build --dev`, run `node --test tests/mail.test.mjs` from this crate to exercise email delivery with a local webhook. It uses the relay-cloudflare npm dependencies.
+From this crate, run `worker-build --dev --locked` followed by `node --test tests/mail.test.mjs tests/registration-email.test.mjs`. The tests use the relay-cloudflare npm dependencies and a local mail webhook. CI runs the registration test on authority pull requests.

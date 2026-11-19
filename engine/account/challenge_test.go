@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/windshare/windshare/core/serviceauthority"
 )
@@ -134,6 +135,105 @@ func TestVerifyEmailReturnsRegistrationOutcome(t *testing.T) {
 			}
 			if record.Proof == nil || *record.Proof != wantProof || record.Credential != nil {
 				t.Fatal("rejected verification left the wrong challenge")
+			}
+		})
+	}
+}
+
+func TestVerifyEmailDistinguishesRetryFromReplacement(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		prompt   func(Challenge) Challenge
+		replyLag time.Duration
+		want     error
+		wantCode string
+		pending  bool
+	}{
+		{
+			name: "same challenge", want: errEmailCodeIncorrect,
+			wantCode: "email_code_incorrect", pending: true,
+		},
+		{
+			name:     "local deadline crossed while waiting for the same challenge",
+			replyLag: time.Second, want: errEmailCodeRejected, wantCode: "email_code_rejected",
+		},
+		{
+			name: "id-less prompt", prompt: func(delivered Challenge) Challenge {
+				return Challenge{Mode: emailChallenge, ExpiresAt: delivered.ExpiresAt + 60}
+			},
+			want: errEmailCodeRejected, wantCode: "email_code_rejected",
+		},
+		{
+			name: "undelivered challenge", prompt: func(delivered Challenge) Challenge {
+				delivered.ID = "other"
+				return delivered
+			},
+			want: errInvalidRegistrationChallenge, wantCode: "account_operation_failed", pending: true,
+		},
+		{
+			name: "changed expiry on the same ID", prompt: func(delivered Challenge) Challenge {
+				delivered.ExpiresAt++
+				return delivered
+			},
+			want: errInvalidRegistrationChallenge, wantCode: "account_operation_failed", pending: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config, session := accountFixture(t)
+			now := config.Now()
+			config.Now = func() time.Time { return now }
+			delivered := Challenge{ID: "delivered", Mode: emailChallenge, ExpiresAt: uint64(now.Unix()) + 1}
+			prompt := delivered
+			if test.prompt != nil {
+				prompt = test.prompt(delivered)
+			}
+			config.Store = &MemoryStore{record: Record{SetupSecret: session.Secret, Proof: &Proof{Challenge: delivered}}}
+			var submitted []string
+			config.Client = clientFunc(func(request *http.Request) (*http.Response, error) {
+				var input struct{ Challenge, Solution string }
+				if err := json.NewDecoder(request.Body).Decode(&input); err != nil || request.URL.Path != "/v1/accounts" || input.Challenge != delivered.ID {
+					return nil, fmt.Errorf("unexpected registration request %s %+v: %v", request.URL.Path, input, err)
+				}
+				submitted = append(submitted, input.Solution)
+				if input.Solution == "code" {
+					return accountReply(t, http.StatusOK, session), nil
+				}
+				now = now.Add(test.replyLag)
+				return accountReply(t, http.StatusPreconditionRequired, fault{Kind: "verification", Challenge: prompt}), nil
+			})
+			service := testService(t, config)
+			if err := service.VerifyEmail(t.Context(), "mistyped"); !errors.Is(err, test.want) || CommandErrorCode(err) != test.wantCode {
+				t.Fatalf("mistyped code: %v (%s), want %v (%s)", err, CommandErrorCode(err), test.want, test.wantCode)
+			}
+			record, err := service.load(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantProof := Proof{Challenge: prompt}
+			if test.want == errInvalidRegistrationChallenge {
+				wantProof.Challenge = delivered
+			}
+			if record.Proof == nil || *record.Proof != wantProof {
+				t.Fatalf("saved proof = %+v, want %+v", record.Proof, wantProof)
+			}
+			if snapshot, _ := service.Snapshot(); snapshot.State != EmailRequired || snapshot.EmailCodePending != test.pending {
+				t.Fatalf("after a mistyped code: %+v", snapshot)
+			}
+			if len(submitted) != 1 {
+				t.Fatalf("submissions = %q", submitted)
+			}
+			if test.want != errEmailCodeIncorrect {
+				return
+			}
+			// An account setup pass must not resubmit the wrong code.
+			if err := service.Register(t.Context()); err != nil {
+				t.Fatalf("account setup: %v", err)
+			}
+			if err := service.VerifyEmail(t.Context(), "code"); err != nil {
+				t.Fatalf("corrected code: %v", err)
+			}
+			if snapshot, _ := service.Snapshot(); snapshot.State != Ready || len(submitted) != 2 || submitted[0] != "mistyped" {
+				t.Fatalf("corrected code did not register: %s after %q", snapshot.State, submitted)
 			}
 		})
 	}
