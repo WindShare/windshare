@@ -1,3 +1,5 @@
+import { runAbortableConnection } from './connection-attempt/lifetime'
+
 const RECOVERY_ATTEMPT_CAPACITY = 8
 const RECOVERY_TIME_CAPACITY_MILLISECONDS = 180_000
 const RECOVERY_REFILL_MILLISECONDS = 600_000
@@ -71,25 +73,11 @@ export async function runGenerationRecovery<T>(options: {
   const timer = setTimeout(() => controller.abort(new Error('Connection recovery attempt timed out')),
     options.reservation.milliseconds)
   if (options.parent.aborted) abort()
-  let interrupt: (() => void) | undefined
   try {
-    controller.signal.throwIfAborted()
-    const interrupted = new Promise<never>((_resolve, reject) => {
-      interrupt = () => reject(controller.signal.reason)
-      controller.signal.addEventListener('abort', interrupt, { once: true })
-    })
-    const work = options.connect(controller.signal).then(async (value) => {
-      if (controller.signal.aborted) {
-        await options.close(value).catch(() => undefined)
-        throw controller.signal.reason
-      }
-      return value
-    })
-    return await Promise.race([work, interrupted])
+    return await runAbortableConnection(controller.signal, () => options.connect(controller.signal), options.close)
   } finally {
     clearTimeout(timer)
     options.parent.removeEventListener('abort', abort)
-    if (interrupt !== undefined) controller.signal.removeEventListener('abort', interrupt)
     options.reservation.finish(options.now())
   }
 }

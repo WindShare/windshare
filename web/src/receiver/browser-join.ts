@@ -8,6 +8,7 @@ import { firstUsableRelay, RelayEndpointFailure } from './relay-race'
 import { admittedRelay } from './relay-admission'
 import { relayCandidates, type RelayCandidateSource } from './relay-candidates'
 import { runInitialJoin, type InitialJoinOptions } from './initial-join'
+import type { InitialJoinAttempt } from './connection-attempt/initial'
 import { isShareRecoveryFailure, isTerminalRecoveryFailure } from './recovery-failure'
 import { observeRecovery } from './recovery-observation'
 import { emitRelayHeartbeat, emitRelayDelivery } from '../diagnostics/trace/connection-payload'
@@ -25,24 +26,27 @@ export function joinBrowserRelays(
 ): Promise<BrowserRelayJoin> {
   const disabled = new Map<string, RelayEndpointFailure>()
   const candidates = relayCandidates(relayBases)
-  return runInitialJoin({ ...options, signal,
+  return runInitialJoin({
+    ...options, signal, close,
     observe: observation => {
       observeRecovery(protocolTrace, { correlation: {}, generationId: 0, shareId: capability.shareId }, observation)
       options.observe?.(observation)
-    }, connect: async attemptSignal => {
-    if (!candidates.bases.some(base => !disabled.has(base))) {
-      const all = await candidates.all()
-      if (!all.some(base => !disabled.has(base))) throw new AggregateError([...disabled.values()], 'All relay endpoints rejected this share')
-    }
-    const eligible = candidates.filter(base => !disabled.has(base))
-    return firstUsableRelay(eligible, attemptSignal, (relayBase, relaySignal) =>
-      connect(relayBase, relaySignal).catch((cause: unknown) => {
-        if (isTerminalRecoveryFailure(cause)) disabled.set(relayBase, new RelayEndpointFailure(relayBase, cause))
-        throw cause
-      }), close, isShareRecoveryFailure)
-  }, close })
+    },
+    connect: async attempt => {
+      if (!candidates.bases.some(base => !disabled.has(base))) {
+        const all = await candidates.all()
+        if (!all.some(base => !disabled.has(base))) throw new AggregateError([...disabled.values()], 'All relay endpoints rejected this share')
+      }
+      const eligible = candidates.filter(base => !disabled.has(base))
+      return firstUsableRelay(eligible, attempt.signal, (relayBase, relaySignal) =>
+        connect(relayBase, relaySignal, attempt).catch((cause: unknown) => {
+          if (isTerminalRecoveryFailure(cause)) disabled.set(relayBase, new RelayEndpointFailure(relayBase, cause))
+          throw cause
+        }), close, isShareRecoveryFailure)
+    },
+  })
 
-  async function connect(relayBase: string, attemptSignal: AbortSignal): Promise<BrowserRelayJoin> {
+  async function connect(relayBase: string, attemptSignal: AbortSignal, attempt: InitialJoinAttempt): Promise<BrowserRelayJoin> {
     // Losing joins may settle after publication; they never borrow the winner's erased secret.
     const ownedCapability = { ...capability, readSecret: capability.readSecret.slice() }
     try {
@@ -63,14 +67,17 @@ export function joinBrowserRelays(
           }),
         })
         attemptSignal.throwIfAborted()
-        session = await ReceiverSessionRuntime.connect({
-          descriptor,
-          readSecret: ownedCapability.readSecret,
-          initialChannel: relay.channel,
-          signal: attemptSignal,
-          ...(protocolTrace === undefined ? {} : { protocolTrace }),
-        })
-        return Object.freeze({ relayBase, relay, descriptor, session, relayLaneId: session.initialLaneId })
+        const untrack = attempt.trackHandshake(relay.channel, attemptSignal)
+        try {
+          session = await ReceiverSessionRuntime.connect({
+            descriptor,
+            readSecret: ownedCapability.readSecret,
+            initialChannel: relay.channel,
+            signal: attemptSignal,
+            ...(protocolTrace === undefined ? {} : { protocolTrace }),
+          })
+          return Object.freeze({ relayBase, relay, descriptor, session, relayLaneId: session.initialLaneId })
+        } finally { untrack() }
       } catch (error) {
         await relay.close().catch(() => undefined)
         throw error

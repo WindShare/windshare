@@ -2,6 +2,7 @@ import { createHash, createPrivateKey, sign } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { openShareDescriptor } from '../../src/catalog/records'
 import type { FrameChannel } from '../../src/contracts/channel'
+import { BandwidthWaitError } from '../../src/contracts/capacity'
 import { BrowserSessionFactory } from '../../src/receiver/session-factory'
 import { ReceiverReconnectSupervisor } from '../../src/receiver/supervisor'
 import { systemReconnectClock } from '../../src/receiver/recovery-clock'
@@ -13,6 +14,8 @@ import * as relayReceiver from '../../src/transport/relay/receiver'
 import type { RelayReceiverConnection } from '../../src/transport/relay/receiver'
 import { decodeDescriptorDelivery } from '../../src/transport/relay/protocol'
 import { joinBrowserRelays } from '../../src/receiver/browser-join'
+import { InitialJoinControl, type InitialJoinState } from '../../src/receiver/initial-join'
+import type { RecoveryObservation } from '../../src/receiver/recovery-observation'
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
 import { identity, namedCase, senderObjects } from '../protocol/r0-contract-support'
 import { deferred } from './v2-supervisor-fixture'
@@ -34,6 +37,8 @@ class HandshakeChannel implements FrameChannel {
   readonly frames: ReadableStream<Uint8Array>
   readonly helloSent = deferred<void>()
   state: FrameChannel['state'] = 'open'
+  capacityWaitMilliseconds = 0
+  #clientHello!: Uint8Array
   #controller!: ReadableStreamDefaultController<Uint8Array>
   readonly #response: Response
 
@@ -44,17 +49,20 @@ class HandshakeChannel implements FrameChannel {
 
   async send(clientHello: Uint8Array, signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted()
-    if (this.#response !== 'silent') {
-      const body = b64ToBytes(transcript.serverBodyB64)
-      body.set(createHash('sha256').update(clientHello).digest(), 5)
-      if (this.#response === 'version') body[4] = 3
-      if (this.#response === 'key-agreement') body.fill(0, 69, 101)
-      const preimage = Buffer.concat([Buffer.from('windshare/v2 server-hello\0'), createHash('sha256').update(body).digest()])
-      const signature = sign(null, preimage, signingKey)
-      if (this.#response === 'signature') signature[0] = signature[0]! ^ 1
-      this.#controller.enqueue(Uint8Array.from(Buffer.concat([body, signature])))
-    }
+    this.#clientHello = clientHello
+    if (this.#response !== 'silent') this.reply(this.#response)
     this.helloSent.resolve()
+  }
+
+  reply(response: Exclude<Response, 'silent'> = 'valid'): void {
+    const body = b64ToBytes(transcript.serverBodyB64)
+    body.set(createHash('sha256').update(this.#clientHello).digest(), 5)
+    if (response === 'version') body[4] = 3
+    if (response === 'key-agreement') body.fill(0, 69, 101)
+    const preimage = Buffer.concat([Buffer.from('windshare/v2 server-hello\0'), createHash('sha256').update(body).digest()])
+    const signature = sign(null, preimage, signingKey)
+    if (response === 'signature') signature[0] = signature[0]! ^ 1
+    this.#controller.enqueue(Uint8Array.from(Buffer.concat([body, signature])))
   }
 
   async sendTerminal(frame: Uint8Array, signal?: AbortSignal): Promise<void> { await this.send(frame, signal) }
@@ -94,7 +102,94 @@ async function factoryFixture() {
   return { factory, descriptor, channels, control }
 }
 
+async function initialJoinFixture(candidates: Readonly<Record<string, HandshakeChannel>>, allowDial?: Promise<void>) {
+  const { capability, descriptorObject } = await shareFixture()
+  const dial = vi.spyOn(relayReceiver, 'dialRelayReceiver').mockImplementation(async base => {
+    if (allowDial !== undefined) await allowDial
+    const channel = candidates[base]!
+    return { endpoint: {} as RelayReceiverConnection['endpoint'], relaySessionId: new Uint8Array(8),
+      descriptorObject, channel, close: () => channel.close() }
+  })
+  const parent = new AbortController()
+  const control = new InitialJoinControl()
+  const states: InitialJoinState[] = []
+  const observations: RecoveryObservation[] = []
+  const task = joinBrowserRelays(Object.keys(candidates), capability, parent.signal, undefined, {
+    control,
+    clock: { now: () => Date.now(), sleep: systemReconnectClock.sleep },
+    onState: state => { states.push(state) },
+    observe: observation => { observations.push(observation) },
+  })
+  void task.catch(() => undefined)
+  return { parent, control, task, dial, states, observations }
+}
+
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
+
+describe('initial browser handshake under relay congestion', () => {
+  it.each(['queued', 'alternate'] as const)('accepts the %s relay during bounded capacity waiting', async winner => {
+    vi.useFakeTimers()
+    const channels = { queued: new HandshakeChannel('silent'), alternate: new HandshakeChannel('silent') }
+    const fixture = await initialJoinFixture(channels)
+    await Promise.all(Object.values(channels).map(channel => channel.helloSent.promise))
+    channels.queued.capacityWaitMilliseconds = 15_000
+
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(fixture.states.at(-1)).toEqual({ kind: 'waiting', reason: 'bandwidth' })
+    expect(fixture.dial).toHaveBeenCalledTimes(2)
+    expect(channels.queued.state).toBe('open')
+    channels[winner].reply()
+
+    const joined = await fixture.task
+    expect(joined.relayBase).toBe(winner)
+    await joined.session.close()
+    await joined.relay.close()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('keeps the fast retry deadline for a handshake with no capacity evidence', async () => {
+    vi.useFakeTimers()
+    const channel = new HandshakeChannel('silent')
+    const fixture = await initialJoinFixture({ relay: channel })
+    await channel.helloSent.promise
+
+    await vi.advanceTimersByTimeAsync(14_999)
+    expect(channel.state).toBe('open')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(channel.state).toBe('closed')
+    expect(fixture.observations.some(event => event.waitReason === 'bandwidth')).toBe(false)
+    fixture.parent.abort()
+    await expect(fixture.task).rejects.toBe(fixture.parent.signal.reason)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('limits a congested handshake and retains the capacity cause through the retry delay', async () => {
+    vi.useFakeTimers()
+    const channel = new HandshakeChannel('silent')
+    const allowDial = deferred<void>()
+    const fixture = await initialJoinFixture({ relay: channel }, allowDial.promise)
+    // Dialing spends part of the initial window, so it ends before the handshake's own timeout.
+    await vi.advanceTimersByTimeAsync(5_000)
+    allowDial.resolve()
+    await channel.helloSent.promise
+    channel.capacityWaitMilliseconds = 15_000
+
+    await vi.advanceTimersByTimeAsync(24_999)
+    expect(channel.state).toBe('open')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(channel.state).toBe('closed')
+    expect(fixture.observations.find(event => event.transition === 'attempt_failed')?.failure).toBeInstanceOf(BandwidthWaitError)
+    fixture.control.request('retry')
+    await vi.advanceTimersByTimeAsync(29_999)
+    expect(fixture.dial).toHaveBeenCalledTimes(1)
+    expect(fixture.states.at(-1)).toEqual({ kind: 'waiting', reason: 'bandwidth' })
+    await vi.advanceTimersByTimeAsync(1)
+    expect(fixture.states.at(-1)).toEqual({ kind: 'paused', reason: 'bandwidth' })
+    fixture.parent.abort()
+    await expect(fixture.task).rejects.toBe(fixture.parent.signal.reason)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+})
 
 describe('production browser handshake recovery', () => {
   it.each(['malformed', 'signature'] as const)('joins through a healthy relay after another supplies %s data', async failure => {

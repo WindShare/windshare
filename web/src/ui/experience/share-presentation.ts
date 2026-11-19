@@ -14,17 +14,25 @@ export function shareConnectionLabel(connection: ReceiverSnapshot['connection'],
     case 'ended': return 'Share ended — a new link is needed'
     case 'unavailable': return 'Connection unavailable'
     case 'idle': {
-      if (connection.join === 'waiting-for-choice') return 'Sender temporarily unreachable'
-      if (connection.join === 'waiting-for-sender') return 'Waiting for the sender; reconnecting automatically'
+      if (connection.join?.kind === 'paused') {
+        return connection.join.reason === 'bandwidth' ? 'Relay bandwidth unavailable' : 'Sender temporarily unreachable'
+      }
+      if (connection.join?.kind === 'waiting') {
+        return connection.join.reason === 'bandwidth' ? 'Waiting for relay bandwidth' : 'Waiting for the sender; reconnecting automatically'
+      }
       return phase === 'joining' ? 'Connecting to the sender…' : status
     }
   }
 }
 
 export function initialJoinStatus(join: import('../../receiver/initial-join').InitialJoinState): string {
-  switch (join) {
-    case 'waiting-for-choice': return 'The sender is temporarily unreachable. The link may still be valid.'
-    case 'waiting-for-sender': return 'Waiting for the sender. Reconnection is automatic.'
+  switch (join.kind) {
+    case 'paused': return join.reason === 'bandwidth'
+      ? 'The connection timed out while waiting for relay bandwidth.'
+      : 'The sender is temporarily unreachable. The link may still be valid.'
+    case 'waiting': return join.reason === 'bandwidth'
+      ? 'Relay bandwidth is busy. Waiting automatically.'
+      : 'Waiting for the sender. Reconnection is automatic.'
     case 'connecting': return 'Connecting to the sender…'
   }
 }

@@ -43,7 +43,7 @@ export function ReceiverHeading({ controller }: { readonly controller: ReceiverC
     {snapshot.phase === 'awaiting-key' && <KeyForm controller={controller} />}
     {share === null && breadcrumbs.length === 0 && snapshot.phase === 'joining' && <div className="share-loading">
       <p role="status">{snapshot.status}</p>
-      {snapshot.connection.kind === 'idle' && snapshot.connection.join === 'waiting-for-choice' && <>
+      {snapshot.connection.kind === 'idle' && snapshot.connection.join?.kind === 'paused' && <>
         <button type="button" onClick={() => controller.requestReconnect()}>Retry now</button>
         <button type="button" onClick={() => controller.continueJoinWaiting()}>Continue waiting</button>
       </>}

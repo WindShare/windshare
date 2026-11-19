@@ -99,7 +99,7 @@ it('keeps a paused task paused when the connection returns or the user requests 
 })
 
 it('offers bounded initial waiting choices and same-page recovery controls', () => {
-  const waiting = experienceSnapshot({ phase: 'joining', connection: { kind: 'idle', join: 'waiting-for-choice' },
+  const waiting = experienceSnapshot({ phase: 'joining', connection: { kind: 'idle', join: { kind: 'paused', reason: 'unreachable' } },
     status: 'The sender is temporarily unreachable. The link may still be valid.' })
   const html = renderToString(<ReceiverApp controller={experienceController(waiting)} />)
   expect(html).toContain('Retry now')

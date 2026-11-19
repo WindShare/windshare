@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { InitialJoinControl, InitialJoinUnavailableError, runInitialJoin } from '../../src/receiver/initial-join'
+import { InitialJoinControl, InitialJoinUnavailableError, runInitialJoin, type InitialJoinState } from '../../src/receiver/initial-join'
 import { RelayReceiverError } from '../../src/transport/relay/receiver'
 import { RELAY_ERROR } from '../../src/transport/relay/protocol'
 import { SenderObjectError } from '../../src/crypto/sender-object'
@@ -34,7 +34,7 @@ describe('initial receiver waiting', () => {
     const control = new InitialJoinControl()
     let continuing = false
     let attemptsAfterChoice = 0
-    const states: string[] = []
+    const states: InitialJoinState[] = []
     const result = await runInitialJoin({ signal: new AbortController().signal, clock: advancingClock(),
       windowMilliseconds: 1_000, control, close: async () => undefined,
       connect: async () => {
@@ -43,15 +43,15 @@ describe('initial receiver waiting', () => {
       },
       onState: state => {
         states.push(state)
-        if (state === 'waiting-for-choice') {
+        if (state.kind === 'paused') {
           continuing = true
           control.request('continue')
         }
       },
     })
     expect(result).toBe('authenticated-session')
-    expect(states.filter(state => state === 'waiting-for-choice')).toHaveLength(1)
-    expect(states).toContain('waiting-for-sender')
+    expect(states.filter(state => state.kind === 'paused')).toHaveLength(1)
+    expect(states).toContainEqual({ kind: 'waiting', reason: 'sender' })
   })
 
   it('cancels paused join ownership without another dial', async () => {
@@ -61,7 +61,7 @@ describe('initial receiver waiting', () => {
     const reason = new DOMException('Cancelled by user', 'AbortError')
     const task = runInitialJoin({ signal: controller.signal, clock: advancingClock(), windowMilliseconds: 100,
       connect, close: async () => undefined, control,
-      onState: state => { if (state === 'waiting-for-choice') controller.abort(reason) },
+      onState: state => { if (state.kind === 'paused') controller.abort(reason) },
     })
     await expect(task).rejects.toBe(reason)
     const calls = connect.mock.calls.length
