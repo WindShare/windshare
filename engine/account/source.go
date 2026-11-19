@@ -6,86 +6,138 @@ import (
 	"github.com/windshare/windshare/core/serviceauthority"
 )
 
-type Source struct {
-	service    *Service
-	address    string
-	bound      bool
-	credential *credentialSession
+type shareAttribution uint8
+
+const (
+	attributionPending shareAttribution = iota
+	attributionAnonymous
+	attributionAccount
+	attributionClosed
+)
+
+// ShareAuthorization owns the identity shared by all official relay registrations
+// in one share. Its state and credential references are guarded by Service.mu.
+type ShareAuthorization struct {
+	service     *Service
+	attribution shareAttribution
+	credential  *credentialSession
 }
 
-func (service *Service) Source(address string) *Source {
+func (service *Service) NewShareAuthorization() *ShareAuthorization {
 	if service == nil {
 		return nil
 	}
-	service.Start()
-	service.startNode(address)
-	return &Source{service: service, address: address}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	// A selected credential belongs to this share even if its ticket needs
+	// refresh before the first registration. Setup can still finish in the background.
+	return &ShareAuthorization{service: service, credential: service.retainCredentialLocked(service.record)}
+}
+
+func (share *ShareAuthorization) Close() {
+	if share == nil {
+		return
+	}
+	service := share.service
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if share.attribution != attributionClosed {
+		share.attribution = attributionClosed
+		share.releaseCredentialLocked()
+		service.notifyLocked()
+	}
+}
+
+type Source struct {
+	share   *ShareAuthorization
+	address string
+}
+
+func (share *ShareAuthorization) Source(address string) *Source {
+	if share == nil {
+		return nil
+	}
+	share.service.Start()
+	share.service.startNode(address)
+	return &Source{share: share, address: address}
 }
 
 func (source *Source) RegistrationAuthorization() serviceauthority.RegistrationAuthorization {
 	if source == nil {
 		return serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionReady}
 	}
-	service := source.service
+	share := source.share
+	service := share.service
 	if service.config.ResolveNode == nil {
-		return serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionDenied, Cause: errors.New("official node resolver missing")}
+		return deniedAuthorization("official node resolver missing")
 	}
 	node, official := service.config.ResolveNode(source.address)
 	if !official {
-		return serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionDenied, Cause: errors.New("relay is no longer a current official node")}
+		return deniedAuthorization("relay is no longer a current official node")
 	}
 	service.mu.Lock()
 	defer service.mu.Unlock()
-	authorization := serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionPendingSetup, Changed: service.changed}
+	switch share.attribution {
+	case attributionClosed:
+		return deniedAuthorization("share authorization is closed")
+	case attributionAnonymous:
+		// The relay enforces its current anonymous policy. A stale discovery
+		// result need not hold up recovery once the share is already anonymous.
+		return serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionReady}
+	}
+	return source.selectAuthorizationLocked(node)
+}
+
+func (source *Source) selectAuthorizationLocked(node Node) serviceauthority.RegistrationAuthorization {
+	share := source.share
+	service := share.service
 	record := service.record
-	if source.bound {
-		if source.credential == nil {
-			// A publication that reached the relay anonymously never adopts a later login.
-			authorization.State = serviceauthority.AdmissionReady
-			return authorization
-		}
-		record = source.credential.record
-		if sameIdentity(record, service.record) {
-			source.credential.record = cloneRecord(service.record)
-			record = service.record
-		}
-		if service.record.Denial == "account_blocked" && service.record.Credential != nil &&
-			service.record.Credential.Account == record.Credential.Account {
-			record.Denial = service.record.Denial
-		}
+	if share.credential != nil {
+		record = share.credential.record
 	}
 	record = service.withDenialLocked(record)
 	if record.Denial != "" {
-		if source.bound {
-			service.refreshCredentialLocked(source.credential)
-		}
-		authorization.State, authorization.Cause = serviceauthority.AdmissionDenied, errors.New(record.Denial)
-		return authorization
+		return deniedAuthorization(record.Denial)
 	}
 	if service.validTicket(record) && service.currentGenerationLocked(record) {
-		authorization.State, authorization.Bearer = serviceauthority.AdmissionReady, record.Ticket
-		authorization.Retain = source.retain(record)
-		return authorization
-	}
-	if source.bound {
-		service.refreshCredentialLocked(source.credential)
-		authorization.State = serviceauthority.AdmissionExpired
-		return authorization
-	}
-	// Unknown local state might conceal a block. A corrupt or locked cache must
-	// neither block independent relays nor silently discard a previous denial.
-	if service.loaded {
-		if cached := service.nodes[source.address]; cached != nil && cached.key == node.Key &&
-			cached.expires.After(service.config.Now()) && cached.anonymous && cached.available {
-			authorization.State = serviceauthority.AdmissionReady
-			authorization.Retain = source.retain(Record{})
-			return authorization
+		if share.attribution == attributionPending {
+			if share.credential == nil {
+				share.credential = service.retainCredentialLocked(record)
+			}
+			share.attribution = attributionAccount
 		}
+		return serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionReady, Bearer: record.Ticket}
 	}
-	if service.state == Unavailable {
+	if share.attribution == attributionPending && source.permitsAnonymousLocked(node) {
+		// Commit before returning a usable authorization so concurrent nodes
+		// cannot send different identities, even if one reply is lost.
+		share.attribution = attributionAnonymous
+		share.releaseCredentialLocked()
+		service.notifyLocked()
+		return serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionReady}
+	}
+	authorization := serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionPendingSetup, Changed: service.changed}
+	switch {
+	case share.attribution == attributionAccount || share.credential != nil && !sameIdentity(record, service.record):
+		service.refreshCredentialLocked(share.credential)
+		authorization.State = serviceauthority.AdmissionExpired
+	case service.state == Unavailable:
 		authorization.State, authorization.Cause = serviceauthority.AdmissionTemporaryFailure, errors.New(service.reason)
-	} else if record.Credential != nil {
+	case record.Credential != nil:
 		authorization.State = serviceauthority.AdmissionExpired
 	}
 	return authorization
+}
+
+func (source *Source) permitsAnonymousLocked(node Node) bool {
+	service := source.share.service
+	cached := service.nodes[source.address]
+	// An unreadable account cache might conceal a denial. Use anonymous
+	// admission only after loading local state and verifying the node's policy.
+	return service.loaded && cached != nil && cached.key == node.Key &&
+		cached.expires.After(service.config.Now()) && cached.anonymous && cached.available
+}
+
+func deniedAuthorization(reason string) serviceauthority.RegistrationAuthorization {
+	return serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionDenied, Cause: errors.New(reason)}
 }

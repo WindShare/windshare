@@ -2,7 +2,6 @@ package account
 
 import (
 	"errors"
-	"sync"
 	"time"
 
 	"github.com/windshare/windshare/core/serviceauthority"
@@ -15,44 +14,32 @@ type credentialSession struct {
 	retryAt    time.Time
 }
 
-// A credential is retained only by live publications. Refreshing an old login
-// uses a separate store, so it cannot replace the account selected for new shares.
-func (source *Source) retain(record Record) func() func() {
-	return func() func() {
-		service := source.service
-		service.mu.Lock()
-		if source.bound {
-			service.mu.Unlock()
-			return func() {}
-		}
-		source.bound = true
-		if record.Credential != nil {
-			if service.credentials == nil {
-				service.credentials = make(map[[16]byte]*credentialSession)
-			}
-			id := record.Credential.ID
-			current := service.credentials[id]
-			if current == nil {
-				current = &credentialSession{record: cloneRecord(service.withDenialLocked(record))}
-				service.credentials[id] = current
-			}
-			current.references++
-			source.credential = current
-		}
-		service.mu.Unlock()
-		var once sync.Once
-		return func() {
-			once.Do(func() {
-				service.mu.Lock()
-				defer service.mu.Unlock()
-				if current := source.credential; current != nil {
-					current.references--
-					if current.references == 0 {
-						delete(service.credentials, current.record.Credential.ID)
-					}
-				}
-			})
-		}
+func (service *Service) retainCredentialLocked(record Record) *credentialSession {
+	if record.Credential == nil {
+		return nil
+	}
+	if service.credentials == nil {
+		service.credentials = make(map[[16]byte]*credentialSession)
+	}
+	id := record.Credential.ID
+	current := service.credentials[id]
+	if current == nil {
+		current = &credentialSession{record: cloneRecord(service.withDenialLocked(record))}
+		service.credentials[id] = current
+	}
+	current.references++
+	return current
+}
+
+func (share *ShareAuthorization) releaseCredentialLocked() {
+	current := share.credential
+	if current == nil {
+		return
+	}
+	share.credential = nil
+	current.references--
+	if current.references == 0 {
+		delete(share.service.credentials, current.record.Credential.ID)
 	}
 }
 

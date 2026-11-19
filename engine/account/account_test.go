@@ -66,19 +66,21 @@ func TestCachedTicketDoesNotWaitForAuthorityAndBlockedAccountNeverBecomesAnonymo
 		t.Fatal(err)
 	}
 	service := testService(t, config)
-	source := &Source{service: service, address: "https://node.example"}
+	share := service.NewShareAuthorization()
+	defer share.Close()
+	source := &Source{share: share, address: "https://node.example"}
 	if authorization := source.RegistrationAuthorization(); authorization.State != serviceauthority.AdmissionReady || authorization.Bearer != response.Ticket {
 		t.Fatal(authorization.State)
 	}
 	service.mu.Lock()
 	service.nodes[source.address] = &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)}
-	service.record.Denial = "account_blocked"
+	service.rememberDenialLocked(service.record, "account_blocked")
 	service.mu.Unlock()
 	if authorization := source.RegistrationAuthorization(); authorization.State != serviceauthority.AdmissionDenied || authorization.Bearer != "" {
 		t.Fatal("blocked account fell back to anonymous")
 	}
 	service.mu.Lock()
-	service.record.Denial = ""
+	service.issuedLocked(cachedRecord(response))
 	service.mu.Unlock()
 	service.config.ResolveNode = func(string) (Node, bool) { return Node{}, false }
 	if source.RegistrationAuthorization().State != serviceauthority.AdmissionDenied {
@@ -89,17 +91,19 @@ func TestCachedTicketDoesNotWaitForAuthorityAndBlockedAccountNeverBecomesAnonymo
 func TestAnonymousAdmissionDuringSetupRequiresFreshSignedNodePolicy(t *testing.T) {
 	config, _ := accountFixture(t)
 	service := testService(t, config)
-	source := &Source{service: service, address: "https://node.example"}
+	share := service.NewShareAuthorization()
+	defer share.Close()
+	source := &Source{share: share, address: "https://node.example"}
 	if source.RegistrationAuthorization().State != serviceauthority.AdmissionPendingSetup {
 		t.Fatal("unknown anonymous policy was assumed")
 	}
-	service.nodes[source.address] = &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Minute)}
-	if source.RegistrationAuthorization().State != serviceauthority.AdmissionReady {
-		t.Fatal("usable anonymous admission waited for setup")
-	}
-	service.nodes[source.address].expires = config.Now()
+	service.nodes[source.address] = &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now()}
 	if source.RegistrationAuthorization().State != serviceauthority.AdmissionPendingSetup {
 		t.Fatal("expired policy permitted anonymous admission")
+	}
+	service.nodes[source.address].expires = config.Now().Add(time.Minute)
+	if source.RegistrationAuthorization().State != serviceauthority.AdmissionReady {
+		t.Fatal("usable anonymous admission waited for setup")
 	}
 }
 

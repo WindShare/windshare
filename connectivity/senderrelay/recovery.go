@@ -77,11 +77,7 @@ func (lifecycle *Lifecycle) recoverRegistration(callerContext, recoveryContext c
 			return err
 		}
 		resume := lifecycle.resumeNext
-		authorization, err := lifecycle.attemptAuthorization(recoveryContext, resume, attempt)
-		if err != nil {
-			return err
-		}
-		permit, err := lifecycle.beginAttempt(recoveryContext)
+		permit, authorization, err := lifecycle.acquireRegistrationAttempt(recoveryContext, resume, attempt)
 		if err != nil {
 			return err
 		}
@@ -131,13 +127,6 @@ func (lifecycle *Lifecycle) recoverRegistration(callerContext, recoveryContext c
 			attempt++
 		}
 	}
-}
-
-func (lifecycle *Lifecycle) attemptAuthorization(ctx context.Context, resume bool, attempt uint32) (Authorization, error) {
-	if resume {
-		return Authorization{}, nil
-	}
-	return lifecycle.waitAuthorization(ctx, attempt)
 }
 
 func (lifecycle *Lifecycle) beginAttempt(ctx context.Context) (AttemptPermit, error) {
@@ -213,9 +202,6 @@ func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, res
 	// Delivery uncertainty survives later failures: a lost acknowledgement can
 	// leave a registration that must be resumed and permanently revoked on stop.
 	if _, notSent := errors.AsType[*relayv2.RegistrationNotSentError](err); !notSent {
-		if !resume && lifecycle.releaseAuthorization == nil && authorization.Retain != nil {
-			lifecycle.releaseAuthorization = authorization.Retain()
-		}
 		lifecycle.mayHaveRegistered = true
 		lifecycle.resumeNext = true
 	}

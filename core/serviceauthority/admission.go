@@ -27,14 +27,11 @@ func (state AdmissionState) Name() string {
 	}
 }
 
-// RegistrationAuthorization and Changed describe one immutable source revision.
-// No caller needs to acquire credentials inside a transport handshake.
+// A waiting RegistrationAuthorization and its Changed signal describe the
+// same revision so progress cannot be missed while starting a wait.
 type RegistrationAuthorization struct {
 	State   AdmissionState
 	Bearer  string          `json:"-"`
 	Changed <-chan struct{} `json:"-"`
 	Cause   error           `json:"-"`
-	// Retain fixes attribution after a registration may have reached the relay.
-	// Its returned release belongs to the publication, including uncertain sends.
-	Retain func() func() `json:"-"`
 }

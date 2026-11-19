@@ -37,7 +37,8 @@ func (candidate Candidate) Validate() error {
 			return ErrCandidate
 		}
 	}
-	if authorization := candidate.authorization(); authorization.State == AuthorizationReady && !validBearer(authorization.Bearer) {
+	// Dynamic authorization is acquired only for a registration attempt.
+	if key, ok := candidate.Authorization.(StaticKey); ok && !validBearer(string(key)) {
 		return ErrCandidate
 	}
 	return nil

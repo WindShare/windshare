@@ -14,14 +14,8 @@ type Registration struct {
 	Authorization AuthorizationSource `json:"-"`
 }
 
-type StaticKey string
-
-func (key StaticKey) RegistrationAuthorization() serviceauthority.RegistrationAuthorization {
-	return serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionReady, Bearer: string(key)}
-}
-
 func (candidate Candidate) Registration() Registration {
-	return Registration{PublicURL: candidate.PublicURL, Authorization: StaticKey(candidate.AccessKey)}
+	return Registration{PublicURL: candidate.PublicURL, Authorization: senderrelay.StaticKey(candidate.AccessKey)}
 }
 
 func Registrations(profiles []Candidate) []Registration {

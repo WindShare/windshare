@@ -71,23 +71,22 @@ type Lifecycle struct {
 	recoveryMu sync.Mutex
 	acceptMu   sync.Mutex
 
-	config               Config
-	resume               v2.RegisterInit
-	stopID               v2.StopID
-	connection           Connection
-	recoveryContext      context.Context
-	cancelRecovery       context.CancelFunc
-	stopping             bool
-	cleanupOnce          sync.Once
-	cleanupErr           error
-	retiredCompletion    relayv2.LifecycleObservationCompletion
-	resumeNext           bool
-	terminalErr          error
-	generation           uint64
-	wake                 chan struct{}
-	availability         func(bool)
-	mayHaveRegistered    bool
-	releaseAuthorization func()
+	config            Config
+	resume            v2.RegisterInit
+	stopID            v2.StopID
+	connection        Connection
+	recoveryContext   context.Context
+	cancelRecovery    context.CancelFunc
+	stopping          bool
+	cleanupOnce       sync.Once
+	cleanupErr        error
+	retiredCompletion relayv2.LifecycleObservationCompletion
+	resumeNext        bool
+	terminalErr       error
+	generation        uint64
+	wake              chan struct{}
+	availability      func(bool)
+	mayHaveRegistered bool
 }
 
 func New(config Config) (*Lifecycle, error) {
@@ -299,9 +298,6 @@ func (lifecycle *Lifecycle) Cleanup(ctx context.Context) error {
 		lifecycle.StopRecovery()
 		lifecycle.recoveryMu.Lock()
 		defer lifecycle.recoveryMu.Unlock()
-		if lifecycle.releaseAuthorization != nil {
-			defer lifecycle.releaseAuthorization()
-		}
 		var stopErr error
 		if lifecycle.mayHaveRegistered {
 			stopErr = relayv2.Stop(ctx, relayv2.StopConfig{

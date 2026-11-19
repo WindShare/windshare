@@ -78,6 +78,7 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 		dependencies.Peers = func(nativeconnectivity.SenderConfig) (share.Peers, error) { return injected.Peers() }
 	}
 	current, err := startWorkflow(engine, ctx, appobs.WorkflowShare, request.Diagnostics, func(ctx context.Context, control task.Control) task.Completion[share.Result] {
+		defer selection.ReleaseAuthorization()
 		control.Diagnostics.Record(selection)
 		dependencies.ObserveAttempt = engine.network.Observer(control.Diagnostics)
 		admissions.Observe(func(value relayset.Admission) { control.Diagnostics.Emit(networkruntime.AdmissionRecord(value)) })
@@ -89,6 +90,7 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 		return share.Run(ctx, execution, dependencies)
 	})
 	if err != nil {
+		selection.ReleaseAuthorization()
 		return nil, err
 	}
 	return &ShareTask{Task: current, controller: controller, selection: selection}, nil

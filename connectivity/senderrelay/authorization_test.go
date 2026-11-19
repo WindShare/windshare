@@ -11,6 +11,76 @@ import (
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
+type authorizationFunc func() Authorization
+
+func (source authorizationFunc) RegistrationAuthorization() Authorization { return source() }
+
+func TestCandidateValidationDoesNotSelectDynamicAuthorization(t *testing.T) {
+	config := newSenderRelayTestConfig(t, nil, nil, nil)
+	config.Candidate.Authorization = authorizationFunc(func() Authorization {
+		t.Fatal("candidate validation selected dynamic authorization")
+		return Authorization{}
+	})
+	if _, err := PublicURLs([]Candidate{config.Candidate}); err != nil {
+		t.Fatal(err)
+	}
+	lifecycle, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lifecycle.StopRecovery()
+}
+
+type attemptControlFunc func(context.Context) (AttemptPermit, error)
+
+func (control attemptControlFunc) Begin(ctx context.Context) (AttemptPermit, error) {
+	return control(ctx)
+}
+func (attemptControlFunc) Unavailable() {}
+
+func TestFreshRegistrationReadsTicketAfterWaitingForAnAttemptSlot(t *testing.T) {
+	source := &changingAuthorization{
+		value: Authorization{State: AuthorizationReady, Bearer: "old-ticket"}, changed: make(chan struct{}),
+	}
+	endpoint := &senderRelayTestEndpoint{accept: func(context.Context) (*relayv2.Channel, error) { return nil, nil }}
+	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) { return NewConnection(endpoint), nil }}
+	config := newSenderRelayTestConfig(t, nil, dialer, nil)
+	config.Candidate.Authorization = source
+	queued, admit := make(chan struct{}), make(chan struct{})
+	config.Attempts = attemptControlFunc(func(ctx context.Context) (AttemptPermit, error) {
+		close(queued)
+		select {
+		case <-admit:
+			return nil, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	})
+	lifecycle, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lifecycle.StopRecovery()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- lifecycle.WaitReady(ctx) }()
+	select {
+	case <-queued:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	source.set(Authorization{State: AuthorizationReady, Bearer: "refreshed-ticket"})
+	close(admit)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	calls, _ := dialer.Snapshot()
+	if len(calls) != 1 || calls[0].Dial.Header.Get("Authorization") != "Bearer refreshed-ticket" {
+		t.Fatal("first registration used a ticket from before the slot wait")
+	}
+}
+
 type changingAuthorization struct {
 	mu      sync.Mutex
 	value   Authorization
