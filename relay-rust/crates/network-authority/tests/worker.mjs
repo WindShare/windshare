@@ -39,7 +39,14 @@ cookie = login.response.headers.get('set-cookie').split(';')[0];
 csrf = login.value.csrf;
 assert.match(login.response.headers.get('set-cookie'), /HttpOnly; Secure; SameSite=Strict/);
 await call('/v1/admin/initialize', { ...administrator, token: initialization }, { status: 403 });
-await call('/v1/admin/settings', {}, { admin: true, method: 'PUT', headers: { 'X-CSRF-Token': 'invalid' }, status: 403 });
+const badCsrf = await call('/v1/admin/settings', {}, {
+  admin: true, method: 'PUT', headers: { 'X-CSRF-Token': 'invalid' }, status: 403,
+});
+assert.equal(badCsrf.value.reason, 'csrf');
+const missingCookie = await call('/v1/admin/logout', {}, {
+  admin: true, headers: { Cookie: '' }, status: 403,
+});
+assert.equal(missingCookie.value.reason, 'administrator_session');
 const consoleState = (await call('/v1/admin/console', undefined, { admin: true, method: 'GET' })).value;
 await call('/v1/admin/settings', { ...consoleState.settings, registration: 'automatic' }, { admin: true, method: 'PUT' });
 const secret = randomBytes(32).toString('base64url');
@@ -127,6 +134,10 @@ await call('/v1/accounts/ticket', {}, { secret, status: 403 });
 await call('/v1/admin/blocks', { kind: 'share', id: share, blocked: true }, { admin: true });
 const publicBlocks = (await call('/v1/blocks', undefined, { method: 'GET' })).value;
 assert(publicBlocks.body && publicBlocks.certificate);
+const logout = await call('/v1/admin/logout', {}, { admin: true });
+assert.match(logout.response.headers.get('set-cookie'), /Max-Age=0/);
+const revokedSession = await call('/v1/admin/console', undefined, { admin: true, method: 'GET', status: 403 });
+assert.equal(revokedSession.value.reason, 'administrator_session');
 console.log(JSON.stringify({
   event: 'authority_worker_probe_passed', account: Buffer.from(first.account).toString('base64url'),
   node: Buffer.from(node).toString('base64url'), checks: [

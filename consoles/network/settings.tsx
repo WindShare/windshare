@@ -1,4 +1,4 @@
-import { formValues, type Draft, type usePolicyEditor } from './policy-editor'
+import { formValues, settingsFromDraft, type Draft, type usePolicyEditor } from './policy-editor'
 import { ValidatedForm } from '../ui/ValidatedForm'
 import { message, MessageError } from '../ui/locale'
 import { useLocale } from '../ui/use-locale'
@@ -30,11 +30,7 @@ export function PolicySettings({ snapshot, api, saved, editor }: {
     <ValidatedForm className="panel padded" onSubmit={event => {
       event.preventDefault()
       void action.run(async () => {
-        const settings: Settings = {
-          registration: value.mode, pow_bits: Number(value.bits), daily_bytes: Math.round(Number(value.gib) * GIB),
-          source_rate: { burst: Number(value.sourceBurst), refill_seconds: Number(value.sourceRefill) },
-          global_rate: { burst: Number(value.globalBurst), refill_seconds: Number(value.globalRefill) },
-        }
+        const settings = settingsFromDraft(value, snapshot.settings)
         if (!Number.isSafeInteger(settings.daily_bytes) || settings.daily_bytes <= 0) throw new MessageError(message(networkCopy, 'invalidAllowance'))
         await api.settings(settings)
         saved(settings)

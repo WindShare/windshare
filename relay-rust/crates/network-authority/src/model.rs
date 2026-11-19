@@ -119,6 +119,13 @@ pub enum Fault {
     RateLimited { retry_after: u64 },
     Verification { challenge: Challenge },
 }
+impl Fault {
+    pub(crate) fn administrator_session_required() -> Self {
+        Self::Denied {
+            reason: "administrator_session".into(),
+        }
+    }
+}
 impl std::fmt::Display for Fault {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{self:?}")

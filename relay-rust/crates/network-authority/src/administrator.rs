@@ -101,9 +101,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
             session.len() <= 128
                 && load::<u64>(&self.store, &key("admin-session", &digest(session)))?
                     .is_some_and(|expires| expires > self.environment.now()),
-            Fault::Denied {
-                reason: "administrator_session".into()
-            }
+            Fault::administrator_session_required()
         );
         Ok(())
     }

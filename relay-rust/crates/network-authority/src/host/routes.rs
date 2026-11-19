@@ -191,8 +191,9 @@ fn admin_routes(
     } = context;
     if method != Method::Get && !matches!(path.as_str(), "/v1/admin/initialize" | "/v1/admin/login")
     {
+        ensure!(!session.is_empty(), Fault::administrator_session_required());
         ensure!(
-            !session.is_empty() && provided == csrf(&session),
+            provided == csrf(&session),
             Fault::Denied {
                 reason: "csrf".into()
             }
