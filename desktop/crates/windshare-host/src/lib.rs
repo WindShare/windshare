@@ -225,6 +225,12 @@ impl Controller {
         });
     }
 
+    pub fn use_saved_settings(&self, operation_id: &str) {
+        self.command(Command::UseSavedSettings {
+            operation_id: operation_id.into(),
+        });
+    }
+
     pub fn switch_relay(&self, operation_id: &str, relay_url: &str) -> bool {
         self.command(Command::SwitchRelay {
             operation_id: operation_id.into(),

@@ -80,6 +80,7 @@ impl Desktop {
             Action::ReturnToSharingSetup => self.return_to_sharing_setup(window, cx),
             Action::SaveSharingSetup(id) => self.save_sharing_setup(id, cx),
             Action::ResumeShare(id) => self.resume_native_share(id),
+            Action::UseSavedSettings(id) => self.use_saved_settings(id),
             Action::CancelSharingSetup => self.cancel_sharing_setup(),
             Action::ApproveRelay => self.approve_relay(cx),
             Action::ToggleShare(id) => self.toggle_preview_share(id),

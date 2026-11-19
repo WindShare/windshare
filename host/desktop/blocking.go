@@ -56,8 +56,8 @@ func networkBlocked(err error) operationPhase {
 	return awaitingNetwork{block: block, failure: failure}
 }
 
-// A fresh attempt must own a new engine task, while the file selection and any
-// per-share override remain owned by the original desktop operation.
+// A fresh attempt must own a new engine task. Keeping the file and relay
+// selections on the operation lets recovery change the relay without reselecting files.
 func (a *Application) retainFailedSelection(op *operation) {
 	current, ok := op.phase.(running)
 	if !ok || !current.selectedRelays || a.closing {

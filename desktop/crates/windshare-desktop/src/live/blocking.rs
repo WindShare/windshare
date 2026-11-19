@@ -136,10 +136,13 @@ impl Desktop {
                 Text::DirectoryUnavailable
             }
         };
-        let retryable = matches!(
-            blocking.recovery,
-            RecoveryAction::Retry | RecoveryAction::RepairSettings
-        );
+        let continuation = match blocking.recovery {
+            RecoveryAction::Retry => Some((Text::RetryConnection, Action::ResumeShare(share.id))),
+            RecoveryAction::RepairSettings => {
+                Some((Text::UseSavedSettings, Action::UseSavedSettings(share.id)))
+            }
+            _ => None,
+        };
         let cooling_down = retry_deadline(blocking).is_some_and(|at| at > SystemTime::now());
         let mut card = theme
             .card()
@@ -159,18 +162,14 @@ impl Desktop {
             card = card.child(theme.caption(error.clone()));
         }
         let mut actions = row().gap(px(10.)).flex_wrap();
-        if retryable {
+        if let Some((label, action)) = continuation {
             actions = actions.child(
                 Self::button(
                     "retry-share",
-                    locale.text(if blocking.recovery == RecoveryAction::RepairSettings {
-                        Text::UseSavedSettings
-                    } else {
-                        Text::RetryConnection
-                    }),
+                    locale.text(label),
                     Icon::Refresh,
                     ButtonStyle::Primary,
-                    Action::ResumeShare(share.id),
+                    action,
                     cx,
                 )
                 .disabled(cooling_down || self.runtime.selection_disabled()),

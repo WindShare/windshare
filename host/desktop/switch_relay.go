@@ -35,7 +35,7 @@ func (a *Application) switchRelay(id, relayURL string) error {
 	op.cancel()
 	// Only this operation opts into the relay. A replay of Create still uses
 	// the original request identity, while retries retain this explicit choice.
-	op.relayOverride = []string{relayURL}
+	op.explicitRelays = []string{relayURL}
 	a.admitAfter(op, current.task.Done())
 	a.deps.log("host.share_switching_relay", map[string]string{
 		"operation_id": op.id, "previous_task_id": string(current.task.ID()), "relay_origin": endpointOrigin(relayURL),

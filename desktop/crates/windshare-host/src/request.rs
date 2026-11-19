@@ -37,6 +37,9 @@ pub enum Command {
     Resume {
         operation_id: String,
     },
+    UseSavedSettings {
+        operation_id: String,
+    },
     SwitchRelay {
         operation_id: String,
         relay_url: String,
@@ -147,6 +150,10 @@ impl Command {
             Self::Resume { operation_id } => {
                 fields.operation_id = Some(operation_id);
                 "resume"
+            }
+            Self::UseSavedSettings { operation_id } => {
+                fields.operation_id = Some(operation_id);
+                "use_saved_settings"
             }
             Self::SwitchRelay { operation_id, .. } => {
                 fields.operation_id = Some(operation_id);

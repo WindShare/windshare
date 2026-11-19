@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 
+	"github.com/windshare/windshare/core/networkendpoint"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relaysetup"
@@ -17,6 +19,31 @@ type SetupInput struct {
 	AccessKey      string                      `json:"access_key,omitempty"`
 	RelayOperation relaysetup.Operation        `json:"relay_operation,omitempty"`
 	Preference     *relayconfig.PreferenceEdit `json:"preference,omitempty"`
+}
+
+type SetupResult struct {
+	FrontendSaved bool
+	RelayURL      string
+	RelaySaved    bool
+}
+
+func (result SetupResult) affectsAdmission(explicitRelays []string) bool {
+	// A pinned share uses the shared frontend and credentials for its own routes.
+	// Its relay choice is independent of changes to saved defaults.
+	if len(explicitRelays) == 0 || result.FrontendSaved {
+		return true
+	}
+	if !result.RelaySaved {
+		return false
+	}
+	saved, err := networkendpoint.NormalizeRelay(result.RelayURL)
+	if err != nil {
+		return false
+	}
+	return slices.ContainsFunc(explicitRelays, func(address string) bool {
+		current, err := networkendpoint.NormalizeRelay(address)
+		return err == nil && current.DialURL == saved.DialURL
+	})
 }
 
 type SetupView struct {
@@ -163,7 +190,7 @@ func (a *Application) runSetup(ctx context.Context, input SetupInput) {
 	a.logSetupResult("host.setup_completed")
 	if err == nil {
 		for _, pending := range a.operations {
-			if waitingForAdmission(pending.phase) {
+			if waitingForAdmission(pending.phase) && result.affectsAdmission(pending.explicitRelays) {
 				a.admit(pending)
 			}
 		}

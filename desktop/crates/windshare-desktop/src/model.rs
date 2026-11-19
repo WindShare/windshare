@@ -117,6 +117,7 @@ pub enum Action {
     ReturnToSharingSetup,
     SaveSharingSetup(Option<usize>),
     ResumeShare(usize),
+    UseSavedSettings(usize),
     ApproveRelay,
     CancelSharingSetup,
     ToggleTransfer(usize),

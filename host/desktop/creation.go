@@ -58,12 +58,19 @@ func (a *Application) registerOperation(id string, paths, relays []string, sourc
 		return nil, errors.New("application operation limit reached; restart after stopping shares")
 	}
 	relays = slices.Clone(relays)
-	op := &operation{id: id, paths: slices.Clone(paths), requestedRelays: relays, relayOverride: relays, sourceOperationID: sourceID, createdAt: time.Now()}
+	op := &operation{id: id, paths: slices.Clone(paths), requestedRelays: relays, explicitRelays: relays, sourceOperationID: sourceID, createdAt: time.Now()}
 	a.operations[op.id] = op
 	return op, nil
 }
 
-func (a *Application) resume(id string) error {
+type resumeAction uint8
+
+const (
+	resumeWithCurrentSelection resumeAction = iota
+	resumeWithSavedSettings
+)
+
+func (a *Application) resume(id string, action resumeAction) error {
 	if a.closing {
 		return engine.ErrClosed
 	}
@@ -71,15 +78,15 @@ func (a *Application) resume(id string) error {
 	if !ok {
 		return errors.New("creation operation not found")
 	}
-	if a.setup.OperationID == id && a.setup.busy() {
+	// A replay can arrive after the share has started or been cancelled.
+	if !waitingForAdmission(op.phase) || (a.setup.OperationID == id && a.setup.busy()) {
 		return nil
 	}
-	// Reload explicit choices before asking the engine to plan. Directory cooldown
-	// must not prevent a newly configured relay from serving this selection.
-	if waitingForAdmission(op.phase) {
-		a.admit(op)
+	if action == resumeWithSavedSettings {
+		op.explicitRelays = nil
+		a.deps.log("host.share_using_saved_settings", map[string]string{"operation_id": id})
 	}
-	// Replayed resume never retries a terminal operation.
+	a.admit(op)
 	return nil
 }
 
@@ -121,7 +128,7 @@ func (a *Application) prepareAdmission(ctx context.Context, op *operation) opera
 	if err != nil {
 		return configurationBlocked("settings_unavailable", err)
 	}
-	intent, err := relayconfig.ShareIntent(config, op.relayOverride)
+	intent, err := relayconfig.ShareIntent(config, op.explicitRelays)
 	if err == nil && config.FrontURL != "" {
 		err = relayconfig.ValidateFrontURL(config.FrontURL)
 	}

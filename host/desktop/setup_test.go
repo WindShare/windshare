@@ -2,6 +2,7 @@ package desktop
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -15,8 +16,18 @@ func setupRequest() Request {
 }
 
 func TestSetupResumesOnlyWaitingIntentAndPreservesExplicitChoice(t *testing.T) {
-	for _, cancelled := range []bool{false, true} {
-		t.Run(map[bool]string{false: "resume", true: "cancelled"}[cancelled], func(t *testing.T) {
+	const explicitRelay = "https://chosen.example?route=one"
+	for _, test := range []struct {
+		name          string
+		setupRelay    string
+		cancelled     bool
+		wantAdmission bool
+	}{
+		{name: "same route", setupRelay: "wss://CHOSEN.EXAMPLE:443/?route=one", wantAdmission: true},
+		{name: "different route", setupRelay: "https://chosen.example?route=two"},
+		{name: "cancelled", setupRelay: explicitRelay, cancelled: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			a, _, starts := fixture(t)
 			var saved atomic.Bool
 			a.deps.load = func() (relayconfig.Config, error) {
@@ -26,6 +37,8 @@ func TestSetupResumesOnlyWaitingIntentAndPreservesExplicitChoice(t *testing.T) {
 				return relayconfig.Config{}, nil
 			}
 			entered, release := make(chan struct{}), make(chan struct{})
+			released := sync.OnceFunc(func() { close(release) })
+			defer released()
 			a.deps.setup = func(ctx context.Context, input SetupInput, progress func(relaysetup.Progress)) (SetupResult, error) {
 				close(entered)
 				<-release
@@ -37,37 +50,46 @@ func TestSetupResumesOnlyWaitingIntentAndPreservesExplicitChoice(t *testing.T) {
 				if !saved.Load() {
 					return nil, engine.ErrNetworkUnavailable
 				}
-				if candidates := request.RelayIntent.Candidates(); len(candidates) != 1 || candidates[0].PublicURL != "https://chosen.example" {
+				if candidates := request.RelayIntent.Candidates(); len(candidates) != 1 || candidates[0].PublicURL != explicitRelay {
 					t.Error("explicit relay lost")
 				}
 				return start(ctx, request)
 			}
 			create := createRequest()
-			create.Relays = []string{"https://chosen.example"}
+			create.Relays = []string{explicitRelay}
 			a.execute(create)
 			awaitShare(t, a, "operation", func(s Share) bool { return s.State == AwaitingNetwork })
-			if reply := a.execute(setupRequest()); reply.Error != nil {
+			setup := setupRequest()
+			setup.Setup.RelayURL = test.setupRelay
+			if reply := a.execute(setup); reply.Error != nil {
 				t.Fatal(reply.Error)
 			}
 			<-entered
-			if reply := a.execute(setupRequest()); reply.Error != nil {
+			if reply := a.execute(setup); reply.Error != nil {
 				t.Fatal("setup replay was rejected")
 			}
-			if cancelled {
+			if test.cancelled {
 				a.execute(Request{Command: "cancel", OperationID: "operation"})
 			}
-			close(release)
+			released()
 			a.work.Wait()
 			if !saved.Load() {
 				t.Fatal("share cancellation discarded saved settings")
 			}
 			view := a.snapshot().Shares[0]
-			if cancelled {
-				if starts.Load() != 0 || view.Result.Outcome != "cancelled" {
+			switch {
+			case test.cancelled:
+				if starts.Load() != 0 || view.Result == nil || view.Result.Outcome != OutcomeCancelled {
 					t.Fatal("late setup resurrected share")
 				}
-			} else if starts.Load() != 1 || view.OperationID != "operation" || view.TaskID == "" {
-				t.Fatal("setup replaced operation identity")
+			case test.wantAdmission:
+				if starts.Load() != 1 || view.OperationID != create.OperationID || view.TaskID == "" {
+					t.Fatal("setup did not resume the original share")
+				}
+			default:
+				if starts.Load() != 0 || view.State != AwaitingNetwork {
+					t.Fatal("saving a different route restarted an explicit share")
+				}
 			}
 		})
 	}

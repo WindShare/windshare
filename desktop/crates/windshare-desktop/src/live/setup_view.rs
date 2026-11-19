@@ -71,7 +71,7 @@ impl Desktop {
                             locale.text(Text::UseSavedSettings),
                             Icon::Refresh,
                             ButtonStyle::Secondary,
-                            Action::ResumeShare(share.id),
+                            Action::UseSavedSettings(share.id),
                             cx,
                         )
                         .disabled(busy),

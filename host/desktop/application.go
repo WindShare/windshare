@@ -91,7 +91,7 @@ type operation struct {
 	sourceOperationID string
 	paths             []string
 	requestedRelays   []string
-	relayOverride     []string
+	explicitRelays    []string
 	createdAt         time.Time
 	phase             operationPhase
 	cancel            context.CancelFunc
@@ -166,7 +166,9 @@ func (a *Application) execute(request Request) Message {
 	case "cancel_setup":
 		err = a.cancelSetupRequest(request.SetupID)
 	case "resume":
-		err = a.resume(request.OperationID)
+		err = a.resume(request.OperationID, resumeWithCurrentSelection)
+	case "use_saved_settings":
+		err = a.resume(request.OperationID, resumeWithSavedSettings)
 	case "switch_relay":
 		err = a.switchRelay(request.OperationID, request.RelayURL)
 	case "cancel":

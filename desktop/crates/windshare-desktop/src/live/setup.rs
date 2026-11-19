@@ -378,6 +378,14 @@ impl Desktop {
         }
     }
 
+    pub fn use_saved_settings(&self, id: usize) {
+        if let Runtime::Native(session) = &self.runtime
+            && let Some(id) = self.native_operation(id)
+        {
+            session.controller.use_saved_settings(id);
+        }
+    }
+
     pub fn cancel_sharing_setup(&mut self) {
         if let Runtime::Native(session) = &self.runtime
             && let Some(context) = session.model.setup.context()

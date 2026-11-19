@@ -8,12 +8,6 @@ import (
 	"github.com/windshare/windshare/engine/relaysetup"
 )
 
-type SetupResult struct {
-	FrontendSaved bool
-	RelayURL      string
-	RelaySaved    bool
-}
-
 type nativeSetup struct {
 	settings relayconfig.FileStore
 	service  *relaysetup.Service
