@@ -216,8 +216,11 @@ impl Service<Request<Incoming>> for RequestService<'_> {
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
     fn call(&self, request: Request<Incoming>) -> Self::Future {
+        let path = request.uri().path();
+        // A configured relay mount can share the console's /api/ prefix.
         if let Some(console) = self.ingress.node.console.get()
-            && crate::console::Console::handles(request.uri().path())
+            && path != self.ingress.endpoint.path
+            && crate::console::Console::handles(path)
         {
             let console = console.clone();
             return Box::pin(async move { Ok(console.handle(request).await) });
@@ -227,7 +230,7 @@ impl Service<Request<Incoming>> for RequestService<'_> {
             Route::Upgrade { share, response } => self.upgrade(&request, share, response),
         };
         tracing::debug!(event = "http_request", connection = ?self.connection, peer = %self.peer,
-            method = %request.method(), path = request.uri().path(),
+            method = %request.method(), path,
             origin = ?request.headers().get_all(hyper::header::ORIGIN), status = response.status().as_u16());
         Box::pin(std::future::ready(Ok(response)))
     }

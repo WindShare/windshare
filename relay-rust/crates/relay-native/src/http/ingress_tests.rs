@@ -158,6 +158,41 @@ async fn http_routes_health_methods_and_canonical_upgrade_path() {
 }
 
 #[tokio::test]
+async fn configured_relay_endpoint_takes_precedence_over_console_api_prefix() {
+    let directory = tempfile::tempdir().unwrap();
+    let ingress = Ingress {
+        endpoint: Endpoint::parse("wss://relay.test/api/sharing/v2/ws").unwrap(),
+        ..ingress(32)
+    };
+    let store = crate::Database::open(
+        &directory.path().join("node.sqlite"),
+        ingress.endpoint.identity,
+    )
+    .unwrap();
+    ingress
+        .node
+        .identify(crate::node::Identity::generate().unwrap())
+        .unwrap();
+    ingress
+        .node
+        .open_console(&ingress.endpoint, &store)
+        .unwrap();
+
+    let (response, upgraded) = exchange(
+        &ingress,
+        "GET /api/session HTTP/1.1\r\nHost: relay.test\r\n\r\n",
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 401 "), "{response}");
+    assert!(upgraded.unwrap().is_none());
+
+    let request = UPGRADE_REQUEST.replace("/base/v2/ws", &ingress.endpoint.path);
+    let (response, upgraded) = exchange(&ingress, &format!("{request}\r\n")).await;
+    assert!(response.starts_with("HTTP/1.1 101 "), "{response}");
+    assert!(upgraded.unwrap().is_some());
+}
+
+#[tokio::test]
 async fn health_and_rejections_do_not_consume_upgrade_attempts() {
     let ingress = ingress(1);
     for request in [
