@@ -47,7 +47,6 @@ pub struct Outbox {
     connection: ConnectionRef,
     pending: pending::Queues,
     node: Runtime,
-    attribution: Attribution,
     wake: Arc<tokio::sync::Notify>,
     pending_bytes: usize,
     pending_limit: Counts,
@@ -74,7 +73,6 @@ pub fn channel(
         connection,
         pending: pending::Queues::default(),
         node,
-        attribution: Attribution::Anonymous,
         wake: Arc::new(tokio::sync::Notify::new()),
         pending_bytes: 0,
         pending_limit: Counts::new(DATA_QUEUE_FRAMES as u64, DATA_QUEUE_BYTES as u64),
@@ -93,9 +91,6 @@ impl Outbox {
     pub fn set_wake(&mut self, wake: Arc<tokio::sync::Notify>) {
         self.wake = wake;
     }
-    pub const fn set_attribution(&mut self, attribution: Attribution) {
-        self.attribution = attribution;
-    }
     pub fn with_admission(mut self, admission: &Admission) -> Self {
         self.bearer = admission.bearer().map(str::to_owned);
         self.source = Some(admission.source());
@@ -112,7 +107,12 @@ impl Outbox {
     ///
     /// # Errors
     /// Refuses a different destination, mismatched size or exhausted frame/byte budget.
-    pub fn queue(&mut self, receipt: ReceivedFrame, bytes: Vec<u8>) -> Result<()> {
+    pub fn queue(
+        &mut self,
+        receipt: ReceivedFrame,
+        bytes: Vec<u8>,
+        attribution: Attribution,
+    ) -> Result<()> {
         ensure!(
             receipt.flow().destination() == self.connection,
             "wrong output destination"
@@ -139,7 +139,7 @@ impl Outbox {
                 queued_at: tokio::time::Instant::now(),
             },
             &self.node.governor,
-            self.attribution,
+            attribution,
             &self.wake,
         )?;
         self.pending_bytes += length;
@@ -152,6 +152,7 @@ impl Outbox {
         &mut self,
         relay: &mut ShareRelay<O>,
         now: UnixMillis,
+        attribution: Attribution,
     ) -> Option<RelayStep> {
         let slot = Arc::clone(&self.data_slots).try_acquire_owned().ok()?;
         let (index, size) = self.pending.next()?;
@@ -166,7 +167,7 @@ impl Outbox {
         // inside it is already charged as submitted and may outlive revocation.
         let result = self.node.access.with_forwarding(
             pending.receipt.flow().session().share(),
-            self.attribution,
+            attribution,
             || {
                 relay.submit(&pending.receipt, now, |_| {
                     reserved.send(
@@ -176,7 +177,7 @@ impl Outbox {
                             Some(bytes),
                             Some(pending.receipt.flow().session()),
                         )
-                        .attributed(self.attribution),
+                        .attributed(attribution),
                     );
                     Submission::Complete
                 })

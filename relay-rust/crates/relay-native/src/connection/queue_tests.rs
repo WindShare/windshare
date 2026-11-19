@@ -144,11 +144,17 @@ impl Scenario {
 
     fn queue(&mut self, outbox: &mut Outbox, payload: usize) {
         let (receipt, bytes) = self.receive(payload);
-        outbox.queue(receipt, bytes).unwrap();
+        outbox
+            .queue(receipt, bytes, Attribution::Anonymous)
+            .unwrap();
     }
 
     fn submit(&mut self, outbox: &mut Outbox) -> Option<RelayStep> {
-        outbox.submit_next(&mut self.relay, self.fixture.now(false))
+        outbox.submit_next(
+            &mut self.relay,
+            self.fixture.now(false),
+            Attribution::Anonymous,
+        )
     }
 
     fn stop(&mut self) -> RelayStep {
@@ -271,7 +277,11 @@ fn byte_limit_rejects_before_growing_the_pending_queue() {
         scenario.queue(&mut outbox, payload);
     }
     let (receipt, bytes) = scenario.receive(1);
-    assert!(outbox.queue(receipt, bytes).is_err());
+    assert!(
+        outbox
+            .queue(receipt, bytes, Attribution::Anonymous)
+            .is_err()
+    );
     assert_eq!(
         outbox.pending_bytes as u64,
         outbox.pending_limit.encoded_bytes
@@ -287,11 +297,15 @@ fn queue_rejects_mismatched_payload_and_destination() {
     let mut scenario = Scenario::new();
     let (mut wrong, _writer, _) = channel(connection(4), crate::node::Runtime::default());
     let (receipt, bytes) = scenario.receive(1);
-    assert!(wrong.queue(receipt, bytes).is_err());
+    assert!(wrong.queue(receipt, bytes, Attribution::Anonymous).is_err());
     let (mut outbox, _writer, _) = channel(connection(3), crate::node::Runtime::default());
     scenario.grant(1);
     let (receipt, _) = scenario.receive(1);
-    assert!(outbox.queue(receipt, vec![1]).is_err());
+    assert!(
+        outbox
+            .queue(receipt, vec![1], Attribution::Anonymous)
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -332,7 +346,11 @@ fn frame_limit_is_independent_of_byte_capacity() {
     scenario.queue(&mut outbox, 1);
     scenario.queue(&mut outbox, 1);
     let (receipt, bytes) = scenario.receive(1);
-    assert!(outbox.queue(receipt, bytes).is_err());
+    assert!(
+        outbox
+            .queue(receipt, bytes, Attribution::Anonymous)
+            .is_err()
+    );
     assert_eq!(outbox.pending.len(), 2);
     assert!(outbox.pending_bytes < DATA_QUEUE_BYTES);
 }

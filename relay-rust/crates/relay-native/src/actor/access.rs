@@ -7,11 +7,10 @@ use windshare_relay_core::{
 };
 
 impl<S: Persistence, E: Environment> Actor<S, E> {
-    pub(super) fn attribution(&self) -> Attribution {
-        self.residency.as_ref().map_or_else(
-            || self.stored_attribution().unwrap_or(Attribution::Anonymous),
-            crate::node::access::Residency::attribution,
-        )
+    pub(super) fn attribution(&self) -> Option<Attribution> {
+        self.residency
+            .as_ref()
+            .map(crate::node::access::Residency::attribution)
     }
 
     fn stored_attribution(&self) -> Option<Attribution> {
@@ -62,7 +61,10 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
     }
 
     pub(super) fn enforce_access(&mut self) -> Result<()> {
-        let attribution = self.attribution();
+        // Fresh registration resolves the bearer before live policy can revoke a share.
+        let Some(attribution) = self.attribution() else {
+            return Ok(());
+        };
         if self.node.access.allowed(self.identity.share, attribution) {
             return Ok(());
         }

@@ -13,6 +13,8 @@ use windshare_relay_core::{
     challenge::ChallengeSeed, clock::UnixMillis, lifecycle::Record, share::Storage,
 };
 
+#[path = "actor_access_tests.rs"]
+mod access;
 #[path = "actor_delivery_tests.rs"]
 mod delivery;
 

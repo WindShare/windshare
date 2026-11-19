@@ -1,5 +1,5 @@
 use super::{Actor, Environment, Event, Persistence};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use windshare_relay_core::{
     ingress::Control,
     lifecycle::ConnectionRef,
@@ -80,11 +80,13 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
             .map(|index| step.outputs.remove(index));
         let destination = if let Some(Output::Received(receipt)) = receipt {
             let destination = receipt.flow().destination();
-            let attribution = self.attribution();
-            let queued = self.ports.get_mut(&destination).is_some_and(|port| {
-                port.set_attribution(attribution);
-                port.queue(receipt, bytes).is_ok()
-            });
+            let attribution = self
+                .attribution()
+                .context("accepted relay payload has no resident attribution")?;
+            let queued = self
+                .ports
+                .get_mut(&destination)
+                .is_some_and(|port| port.queue(receipt, bytes, attribution).is_ok());
             if !queued {
                 tracing::warn!(event = "payload_queue_unavailable", share = ?self.identity.share,
                     ?source, ?destination, session = ?header.session());
@@ -122,10 +124,13 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
 
     pub(super) fn pump(&mut self, connection: ConnectionRef) -> Result<()> {
         self.enforce_access()?;
+        let Some(attribution) = self.attribution() else {
+            return Ok(());
+        };
         while let Some(step) = self
             .ports
             .get_mut(&connection)
-            .and_then(|port| port.submit_next(&mut self.relay, self.environment.now()))
+            .and_then(|port| port.submit_next(&mut self.relay, self.environment.now(), attribution))
         {
             self.outputs(step)?;
         }
