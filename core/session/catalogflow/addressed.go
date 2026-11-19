@@ -3,7 +3,6 @@ package catalogflow
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 
@@ -11,9 +10,18 @@ import (
 )
 
 type PageResult struct {
-	Page    catalog.CatalogPage
-	Payload []byte
-	Failure *DirectoryFailure
+	page    catalog.PagePayload
+	failure *addressedDirectoryFailure
+}
+
+// CatalogPageResult exposes only payloads whose canonical bytes and address are bound.
+func CatalogPageResult(page catalog.PagePayload) PageResult {
+	return PageResult{page: page}
+}
+
+type addressedDirectoryFailure struct {
+	record  DirectoryFailure
+	payload []byte
 }
 
 type PageAddressedSource interface {
@@ -90,14 +98,14 @@ func (source *CatalogStoreSource) loadFirstPage(
 	if err != nil {
 		return PageResult{}, err
 	}
-	payload, found, err := source.store.FailurePayload(ctx, failure.DirectoryID, failure.AttemptID)
+	object, found, err := source.store.FailurePayload(ctx, failure.DirectoryID, failure.AttemptID)
 	if err != nil {
 		return PageResult{}, err
 	}
 	if !found {
 		return PageResult{}, catalog.ErrCorruptCatalogStorage
 	}
-	return PageResult{Failure: &wireFailure, Payload: payload.Bytes()}, nil
+	return PageResult{failure: &addressedDirectoryFailure{record: wireFailure, payload: object.Bytes()}}, nil
 }
 
 func (source *CatalogStoreSource) loadCommittedPage(
@@ -114,21 +122,14 @@ func (source *CatalogStoreSource) loadCommittedPage(
 	if hasGeneration && committed.Generation() != generation {
 		return PageResult{}, ErrGenerationMismatch
 	}
-	page, found, err := source.store.Page(ctx, directoryID, committed.Generation(), request.PageIndex())
+	page, found, err := source.store.PagePayload(ctx, directoryID, committed.Generation(), request.PageIndex())
 	if err != nil {
 		return PageResult{}, err
 	}
 	if !found {
 		return PageResult{}, ErrPageOutOfRange
 	}
-	payload, found, err := source.store.PagePayload(ctx, directoryID, committed.Generation(), request.PageIndex())
-	if err != nil {
-		return PageResult{}, err
-	}
-	if !found || payload.Commitment() != page.Commitment() {
-		return PageResult{}, catalog.ErrCorruptCatalogStorage
-	}
-	return PageResult{Page: page, Payload: payload.Bytes()}, nil
+	return CatalogPageResult(page), nil
 }
 
 func (source *CatalogStoreSource) translateFailure(failure *catalog.DirectoryFailure) (DirectoryFailure, error) {
@@ -172,34 +173,27 @@ func (service *AddressedSenderService) Serve(
 	if err != nil {
 		return nil, fmt.Errorf("load addressed catalog page: %w", err)
 	}
-	var expected []byte
-	if result.Failure != nil {
-		if !result.Page.ShareInstance().IsZero() || result.Failure.ShareInstance != service.share ||
-			result.Failure.DirectoryID != request.DirectoryID() {
+	if failure := result.failure; failure != nil {
+		if !result.page.IsZero() || failure.record.ShareInstance != service.share ||
+			failure.record.DirectoryID != request.DirectoryID() {
 			return nil, ErrObjectIdentity
 		}
 		if _, pinned := request.Generation(); request.PageIndex() != 0 || pinned {
 			return nil, ErrGenerationMismatch
 		}
-		expected, err = EncodeDirectoryFailure(*result.Failure)
-	} else {
-		page := result.Page
-		if page.ShareInstance() != service.share || page.DirectoryID() != request.DirectoryID() ||
-			page.PageIndex() != request.PageIndex() {
-			return nil, ErrObjectIdentity
+		expected, err := EncodeDirectoryFailure(failure.record)
+		if err != nil || !bytes.Equal(failure.payload, expected) {
+			return nil, errors.Join(catalog.ErrCorruptCatalogStorage, err)
 		}
-		if generation, pinned := request.Generation(); pinned && page.Generation() != generation {
-			return nil, ErrGenerationMismatch
-		}
-		if catalog.PageCommitment(sha256.Sum256(result.Payload)) != page.Commitment() {
-			return nil, catalog.ErrCorruptCatalogStorage
-		}
-		expected, err = encodeCatalogPage(page)
+		return expected, nil
 	}
-	// A successful read from the backend is insufficient to let the sender
-	// authenticate bytes. They must represent the committed record verbatim.
-	if err != nil || !bytes.Equal(result.Payload, expected) {
-		return nil, errors.Join(catalog.ErrCorruptCatalogStorage, err)
+	address := result.page.Address()
+	if result.page.IsZero() || address.ShareInstance != service.share || address.DirectoryID != request.DirectoryID() ||
+		address.PageIndex != request.PageIndex() {
+		return nil, ErrObjectIdentity
 	}
-	return expected, nil
+	if generation, pinned := request.Generation(); pinned && address.Generation != generation {
+		return nil, ErrGenerationMismatch
+	}
+	return result.page.Bytes(), nil
 }

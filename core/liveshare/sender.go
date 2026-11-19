@@ -306,7 +306,7 @@ func prepareSenderCatalog(
 	}
 	sender.catalogStore, err = catalog.NewCatalogStore(catalog.StoreConfig{
 		ShareInstance: authority.shareInstance, Backend: backend,
-		ProcessBudget: config.CatalogBudget, ShareBudget: shareBudget, PageEncoder: catalogflow.CatalogPayloadEncoder{}, SpillFactory: spillFactory,
+		ProcessBudget: config.CatalogBudget, ShareBudget: shareBudget, FailureEncoder: catalogflow.CatalogFailureEncoder{}, SpillFactory: spillFactory,
 	})
 	if err != nil {
 		if catalogStorageCause(err) == CatalogStorageCauseBudgetExceeded {

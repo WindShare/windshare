@@ -607,13 +607,13 @@ func newVerticalFixtureWithContent(t *testing.T, data []byte, chunkSize uint32) 
 	descriptorKey, _ := keyderiv.V2DescriptorKey(readSecret, pkHash[:])
 	sessionAuthKey, _ := keyderiv.V2SessionAuthKey(readSecret, fixture.share.Bytes())
 	fixture.descriptorKey = descriptorKey
-	objects := catalogflow.CatalogPayloadEncoder{}
+	objects := catalogflow.CatalogFailureEncoder{}
 	processBudget, _ := catalog.NewBudgetAccount("process", catalog.DefaultProcessBudgetLimits())
 	shareBudget, _ := catalog.NewBudgetAccount("share", catalog.DefaultShareBudgetLimits())
 	startupBudget, _ := catalog.NewBudgetAccount("startup", catalog.DefaultSessionBudgetLimits())
 	store, err := catalog.NewCatalogStore(catalog.StoreConfig{
 		ShareInstance: fixture.share, Backend: catalog.NewMemoryCatalogBackend(),
-		ProcessBudget: processBudget, ShareBudget: shareBudget, PageEncoder: objects,
+		ProcessBudget: processBudget, ShareBudget: shareBudget, FailureEncoder: objects,
 	})
 	if err != nil {
 		t.Fatal(err)

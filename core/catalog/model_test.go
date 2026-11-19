@@ -33,7 +33,7 @@ func committedRootForTest(t *testing.T, share ShareInstance, root DirectoryID) C
 	store, err := NewCatalogStore(StoreConfig{
 		ShareInstance: share, Backend: backend,
 		ProcessBudget: generousBudget(t, "descriptor-process"), ShareBudget: generousBudget(t, "descriptor-share"),
-		PageEncoder: semanticTestCommitter{},
+		FailureEncoder: testFailureEncoder{},
 	})
 	if err != nil {
 		t.Fatal(err)

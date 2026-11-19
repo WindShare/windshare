@@ -211,10 +211,10 @@ func TestFileTransactionRejectsPrivateMutationAndMisaddressedFirstPage(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
-		page, err := NewCatalogPage(CatalogPageSpec{
+		page, _, err := NewCatalogPage(CatalogPageSpec{
 			ShareInstance: share, DirectoryID: directoryID, Generation: generation,
 			Entries: []Entry{other.Entry()}, Terminal: true,
-		}, semanticTestCommitter{})
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -237,10 +237,10 @@ func TestFileTransactionRejectsPrivateMutationAndMisaddressedFirstPage(t *testin
 		transaction := stageFileTransactionThroughChild(t, backend, directory, generation, child, meter)
 		var previous PageCommitment
 		previous[0] = 1
-		page, err := NewCatalogPage(CatalogPageSpec{
+		page, _, err := NewCatalogPage(CatalogPageSpec{
 			ShareInstance: share, DirectoryID: directoryID, Generation: generation,
 			PageIndex: 1, Previous: previous, Entries: []Entry{child.Entry()}, Terminal: true,
-		}, semanticTestCommitter{})
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -292,7 +292,12 @@ func TestDurableRecoveryCancellationAndTruncatedFrameAreExplicit(t *testing.T) {
 	t.Run("validation cancellation", func(t *testing.T) {
 		_, backend, path, _ := durableRecoveryFixture(t)
 		defer backend.Destroy()
-		meta, directoryBytes, err := backend.readCommittedIdentity(path)
+		metadata, meta, err := openFileCatalogMeta(filepath.Join(path, fileCatalogMetaName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer metadata.Close()
+		directoryBytes, err := backend.readCommittedDirectory(path, meta)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -303,7 +308,7 @@ func TestDurableRecoveryCancellationAndTruncatedFrameAreExplicit(t *testing.T) {
 		defer children.Close()
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		if _, err := validateCommittedContents(ctx, path, meta, directoryBytes, children); !errors.Is(err, context.Canceled) {
+		if _, err := validateCommittedContents(ctx, path, meta, metadata, directoryBytes, children); !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancelled committed validation = %v", err)
 		}
 	})

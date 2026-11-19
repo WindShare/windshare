@@ -366,17 +366,11 @@ func (s *CatalogStore) validateExistingPage(
 	pageIndex uint32,
 	iterator NodeRecordIterator,
 ) (uint64, error) {
-	page, pageFound, err := s.backend.LoadPage(ctx, directoryID, commit.generation, pageIndex)
+	page, found, err := s.Page(ctx, directoryID, commit.generation, pageIndex)
 	if err != nil {
 		return 0, err
 	}
-	payload, payloadFound, err := s.backend.LoadPagePayload(ctx, directoryID, commit.generation, pageIndex)
-	if err != nil {
-		return 0, err
-	}
-	if !pageFound || !payloadFound || payload.Commitment() != page.Commitment() ||
-		page.ShareInstance() != s.shareInstance || page.DirectoryID() != directoryID ||
-		page.Generation() != commit.generation || page.PageIndex() != pageIndex {
+	if !found {
 		return 0, ErrCorruptCatalogStorage
 	}
 	for _, entry := range page.entries {
@@ -435,14 +429,14 @@ func (s *CatalogStore) stageEmptyPage(transaction BackendTransaction, commit Dir
 		return err
 	}
 	defer memory.Release()
-	page, payload, err := encodeCatalogPagePayload(CatalogPageSpec{
+	page, object, err := NewCatalogPage(CatalogPageSpec{
 		ShareInstance: s.shareInstance, DirectoryID: commit.directory.directoryID,
 		Generation: commit.generation, Terminal: true, OmittedCount: commit.omittedCount,
-	}, s.pageEncoder)
+	})
 	if err != nil {
 		return err
 	}
-	return transaction.PutPage(page, payload)
+	return transaction.PutPage(page, object)
 }
 
 func (s *CatalogStore) stageNonEmptyPage(
@@ -473,14 +467,14 @@ func (s *CatalogStore) stageNonEmptyPage(
 	if terminal {
 		omittedCount = commit.omittedCount
 	}
-	page, payload, err := encodeCatalogPagePayload(CatalogPageSpec{
+	page, object, err := NewCatalogPage(CatalogPageSpec{
 		ShareInstance: s.shareInstance, DirectoryID: commit.directory.directoryID, Generation: commit.generation,
 		PageIndex: pageIndex, Previous: state.previous, Entries: entries, Terminal: terminal, OmittedCount: omittedCount,
-	}, s.pageEncoder)
+	})
 	if err != nil {
 		return err
 	}
-	if err := transaction.PutPage(page, payload); err != nil {
+	if err := transaction.PutPage(page, object); err != nil {
 		return err
 	}
 	state.previous = page.Commitment()
@@ -497,11 +491,11 @@ func collectPageEntries(
 	state *pageStagingState,
 ) ([]Entry, error) {
 	entries := make([]Entry, 0, count)
-	// Budget for the encoded page fields and each entry's fixed fields.
-	// Leave room for one maximum-sized next name so the iterator never needs
-	// an unaccounted lookahead record.
-	const pageEncodingBudgetBytes, entryEncodingBudgetBytes = 512, 128
-	remainingBytes := MaxCatalogPayloadBytes - pageEncodingBudgetBytes
+	// Bounds cover the canonical entry fields and sealed envelope, independent
+	// of native filename limits. Leave room for one maximum-sized next name so
+	// the iterator never needs an unaccounted lookahead record.
+	const pageEnvelopeBudgetBytes, entryEncodingBudgetBytes = 512, 128
+	remainingBytes := MaxCatalogPayloadBytes - pageEnvelopeBudgetBytes
 	for range count {
 		record, ok, err := iterator.Next(ctx)
 		if err != nil {

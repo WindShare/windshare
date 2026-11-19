@@ -1,7 +1,6 @@
 package catalog
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -11,47 +10,11 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
-	"time"
 )
 
 const catalogSortRunBytes = uint64(1 << 20)
 
 var catalogWidths = [...]int{10_000, 100_000}
-
-type performancePageEncoder struct{}
-
-func (performancePageEncoder) EncodePage(input PageCommitInput) (PagePayload, error) {
-	var encoded bytes.Buffer
-	_, _ = encoded.Write(input.ShareInstance.Bytes())
-	_, _ = encoded.Write(input.DirectoryID.Bytes())
-	_, _ = encoded.Write(input.Generation.Bytes())
-	var number [4]byte
-	binary.BigEndian.PutUint32(number[:], input.PageIndex)
-	_, _ = encoded.Write(number[:])
-	_, _ = encoded.Write(input.Previous.Bytes())
-	for _, entry := range input.Entries {
-		_, _ = encoded.WriteString(entry.Name())
-		_, _ = encoded.Write(entry.NodeID().Bytes())
-	}
-	if input.Terminal {
-		_ = encoded.WriteByte(1)
-	}
-	return NewPagePayload(encoded.Bytes())
-}
-
-func (performancePageEncoder) EncodeFailure(record DirectoryFailureRecord) (FailurePayload, error) {
-	var encoded bytes.Buffer
-	_, _ = encoded.Write(record.ShareInstance().Bytes())
-	_, _ = encoded.Write(record.DirectoryID().Bytes())
-	_, _ = encoded.Write(record.AttemptID().Bytes())
-	_, _ = encoded.Write(record.Generation().Bytes())
-	_, _ = encoded.Write(record.PreviousAttemptID().Bytes())
-	_ = encoded.WriteByte(byte(record.Kind()))
-	var retry [8]byte
-	binary.BigEndian.PutUint64(retry[:], uint64(record.RetryAfter()/time.Millisecond))
-	_, _ = encoded.Write(retry[:])
-	return NewFailurePayload(encoded.Bytes())
-}
 
 type spillProbe struct {
 	delegate     *FileSpillFactory
@@ -210,7 +173,7 @@ func wideCatalogStore(
 	var generations atomic.Uint32
 	store, err := NewCatalogStore(StoreConfig{
 		ShareInstance: share, Backend: backend, ProcessBudget: process, ShareBudget: shareBudget,
-		PageEncoder: performancePageEncoder{}, SpillFactory: spill, SortRunBytes: sortRunBytes,
+		FailureEncoder: testFailureEncoder{}, SpillFactory: spill, SortRunBytes: sortRunBytes,
 		AttemptIDs: ScanAttemptIDGeneratorFunc(func() (ScanAttemptID, error) {
 			id := wideCatalogIdentity[ScanAttemptID](79)
 			binary.BigEndian.PutUint32(id[12:], attempts.Add(1))
@@ -263,17 +226,13 @@ func benchmarkWideScannedFile(index int) (ScannedChild, error) {
 	}, nil
 }
 
-func pagePayloadDigest(tb testing.TB, store *CatalogStore, directory CommittedDirectory) [sha256.Size]byte {
+func pageObjectDigest(tb testing.TB, store *CatalogStore, directory CommittedDirectory) [sha256.Size]byte {
 	tb.Helper()
 	hash := sha256.New()
 	var frame [12]byte
 	for pageIndex := uint32(0); pageIndex < directory.PageCount(); pageIndex++ {
-		page, found, err := store.Page(context.Background(), directory.DirectoryID(), directory.Generation(), pageIndex)
-		if err != nil || !found {
-			tb.Fatalf("load page %d: found=%v err=%v", pageIndex, found, err)
-		}
 		object, found, err := store.PagePayload(context.Background(), directory.DirectoryID(), directory.Generation(), pageIndex)
-		if err != nil || !found || object.Commitment() != page.Commitment() {
+		if err != nil || !found {
 			tb.Fatalf("load page object %d: found=%v err=%v", pageIndex, found, err)
 		}
 		bytes := object.Bytes()
@@ -355,7 +314,7 @@ func exerciseCatalogWidth(tb testing.TB, root string, width int, sortRunBytes ui
 	if err != nil || !found || !lastPage.Terminal() || len(lastEntries) == 0 || lastEntries[len(lastEntries)-1].Name() != wantLast {
 		tb.Fatalf("last sorted page: found=%v terminal=%v err=%v", found, lastPage.Terminal(), err)
 	}
-	beforeDigest := pagePayloadDigest(tb, store, committed)
+	beforeDigest := pageObjectDigest(tb, store, committed)
 	if spill.commits.Load() < 3 {
 		tb.Fatalf("width %d did not exercise external spill: commits=%d", width, spill.commits.Load())
 	}
@@ -369,7 +328,7 @@ func exerciseCatalogWidth(tb testing.TB, root string, width int, sortRunBytes ui
 	}
 
 	// Closing only the backend models handle eviction. Reopening must re-admit
-	// the durable catalog and replay byte-identical page payloads.
+	// the durable catalog and replay byte-identical sealed page objects.
 	if err := backend.Close(); err != nil {
 		tb.Fatal(err)
 	}
@@ -390,8 +349,8 @@ func exerciseCatalogWidth(tb testing.TB, root string, width int, sortRunBytes ui
 	if err != nil || !found || replayed != committed {
 		tb.Fatalf("recovered directory: found=%v err=%v", found, err)
 	}
-	if afterDigest := pagePayloadDigest(tb, recovered, replayed); afterDigest != beforeDigest {
-		tb.Fatal("restart changed page payload bytes")
+	if afterDigest := pageObjectDigest(tb, recovered, replayed); afterDigest != beforeDigest {
+		tb.Fatal("restart changed sealed page object bytes")
 	}
 	if recoveredShare.Snapshot().Used.Entries != uint64(width+1) ||
 		recoveredShare.Snapshot().Used.SpillBytes != retainedCatalogDisk {

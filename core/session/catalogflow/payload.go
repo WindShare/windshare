@@ -2,25 +2,14 @@ package catalogflow
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 
 	"github.com/windshare/windshare/core/catalog"
 )
 
-// CatalogPayloadEncoder freezes canonical catalog bytes as part of committing
-// the directory. Every recipient receives those same bytes in its own session.
-type CatalogPayloadEncoder struct{}
+type CatalogFailureEncoder struct{}
 
-func (CatalogPayloadEncoder) EncodePage(input catalog.PageCommitInput) (catalog.PagePayload, error) {
-	payload, err := encodeCatalogPageInput(input)
-	if err != nil {
-		return catalog.PagePayload{}, err
-	}
-	return catalog.NewPagePayload(payload)
-}
-
-func (CatalogPayloadEncoder) EncodeFailure(record catalog.DirectoryFailureRecord) (catalog.FailurePayload, error) {
+func (CatalogFailureEncoder) EncodeFailure(record catalog.DirectoryFailureRecord) (catalog.FailurePayload, error) {
 	failure, err := directoryFailureFromCatalogRecord(record)
 	if err != nil {
 		return catalog.FailurePayload{}, err
@@ -82,13 +71,13 @@ func (CatalogPayloadDecoder) Verify(ctx context.Context, share catalog.ShareInst
 		return VerifiedObject{}, errors.Join(ErrWireObject, err)
 	}
 	switch header.Schema {
-	case wireSchemaVersion:
-		digest := sha256.Sum256(payload)
-		page, err := decodeCatalogPage(payload, catalog.PageCommitterFunc(func(catalog.PageCommitInput) (catalog.PageCommitment, error) {
-			return catalog.NewPageCommitment(digest[:])
-		}))
+	case catalog.PagePayloadSchema:
+		page, err := catalog.DecodeCatalogPage(payload)
+		if errors.Is(err, catalog.ErrNonCanonicalPagePayload) {
+			return VerifiedObject{}, ErrNonCanonicalWire
+		}
 		if err != nil {
-			return VerifiedObject{}, err
+			return VerifiedObject{}, errors.Join(ErrWireObject, err)
 		}
 		generation, pinned := request.Generation()
 		if page.ShareInstance() != share || page.DirectoryID() != request.DirectoryID() ||

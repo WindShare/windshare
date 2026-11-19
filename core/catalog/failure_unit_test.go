@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -665,7 +666,7 @@ func TestFileFailureRecoveryStreamsBeyondOneDirectoryBatch(t *testing.T) {
 	}
 }
 
-func TestCatalogStorePagePayloadRejectsMissingAndMismatchedAuthority(t *testing.T) {
+func TestCatalogStorePagePayloadOwnsBytesAndRejectsWrongAddress(t *testing.T) {
 	backend := NewMemoryCatalogBackend()
 	store, _, _ := newStore(t, backend, nil)
 	session := generousBudget(t, "page-object-session")
@@ -683,10 +684,20 @@ func TestCatalogStorePagePayloadRejectsMissingAndMismatchedAuthority(t *testing.
 	); err != nil || found {
 		t.Fatalf("missing generation object = found=%v err=%v", found, err)
 	}
+	payload, found, err := store.PagePayload(context.Background(), root, committed.Generation(), 0)
+	if err != nil || !found {
+		t.Fatalf("read committed page: found=%v err=%v", found, err)
+	}
+	mutated := payload.Bytes()
+	mutated[0] ^= 0xff
+	reloaded, found, err := store.PagePayload(context.Background(), root, committed.Generation(), 0)
+	if err != nil || !found || bytes.Equal(reloaded.Bytes(), mutated) {
+		t.Fatalf("mutable byte copy affected committed page: found=%v err=%v", found, err)
+	}
+
 	backend.mu.Lock()
-	directory := backend.directories[root]
-	directory.pagePayloads[0] = []byte("different committed object")
-	backend.directories[root] = directory
+	payload.address.PageIndex++
+	backend.directories[root].pages[0] = payload
 	backend.mu.Unlock()
 	if _, _, err := store.PagePayload(
 		context.Background(), root, committed.Generation(), 0,

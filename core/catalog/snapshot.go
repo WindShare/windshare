@@ -31,13 +31,6 @@ var (
 
 type PageCommitment [PageCommitmentBytes]byte
 
-// PagePayload carries the encoded bytes committed alongside a catalog page.
-// The commitment lets the backend check that replay uses those exact bytes.
-type PagePayload struct {
-	encoded    []byte
-	commitment PageCommitment
-}
-
 var (
 	ErrCommittedRootUnavailable = errors.New("catalog committed-root capability is unavailable")
 	ErrCommittedRootMismatch    = errors.New("catalog committed-root capability does not match the descriptor")
@@ -140,21 +133,6 @@ func NewSyntheticRootCommit(spec SyntheticRootCommitSpec) (DirectoryCommit, erro
 	}, nil
 }
 
-func NewPagePayload(encoded []byte) (PagePayload, error) {
-	if len(encoded) == 0 || len(encoded) > MaxCatalogPayloadBytes {
-		return PagePayload{}, fmt.Errorf("catalog page payload has invalid length %d", len(encoded))
-	}
-	digest := sha256.Sum256(encoded)
-	return PagePayload{
-		encoded: append([]byte(nil), encoded...), commitment: PageCommitment(digest),
-	}, nil
-}
-
-func (o PagePayload) Bytes() []byte                { return append([]byte(nil), o.encoded...) }
-func (o PagePayload) Commitment() PageCommitment   { return o.commitment }
-func (o PagePayload) IsZero() bool                 { return len(o.encoded) == 0 }
-func (o PagePayload) EstimatedMemoryBytes() uint64 { return uint64(len(o.encoded)) }
-
 func NewPageCommitment(raw []byte) (PageCommitment, error) {
 	if len(raw) != PageCommitmentBytes {
 		return PageCommitment{}, fmt.Errorf("catalog page commitment must be %d bytes", PageCommitmentBytes)
@@ -168,42 +146,6 @@ func (c PageCommitment) Bytes() []byte { return append([]byte(nil), c[:]...) }
 func (c PageCommitment) IsZero() bool {
 	var zero PageCommitment
 	return subtle.ConstantTimeCompare(c[:], zero[:]) == 1
-}
-
-type PageCommitInput struct {
-	ShareInstance ShareInstance
-	DirectoryID   DirectoryID
-	Generation    DirectoryGeneration
-	PageIndex     uint32
-	Previous      PageCommitment
-	Entries       []Entry
-	Terminal      bool
-	OmittedCount  uint64
-}
-
-type PageCommitter interface {
-	Commit(PageCommitInput) (PageCommitment, error)
-}
-
-type PageCommitterFunc func(PageCommitInput) (PageCommitment, error)
-
-func (function PageCommitterFunc) Commit(input PageCommitInput) (PageCommitment, error) {
-	if function == nil {
-		return PageCommitment{}, errors.New("catalog page committer is nil")
-	}
-	return function(input)
-}
-
-// PageEncoder encodes immutable page payloads. Catalog owns atomic
-// persistence and replay of the returned bytes, but never interprets them.
-type PageEncoder interface {
-	EncodePage(PageCommitInput) (PagePayload, error)
-}
-
-type PageEncoderFunc func(PageCommitInput) (PagePayload, error)
-
-func (function PageEncoderFunc) EncodePage(input PageCommitInput) (PagePayload, error) {
-	return function(input)
 }
 
 type CatalogPageSpec struct {
@@ -229,80 +171,51 @@ type CatalogPage struct {
 	commitment    PageCommitment
 }
 
-func NewCatalogPage(spec CatalogPageSpec, committer PageCommitter) (CatalogPage, error) {
-	entries, input, err := prepareCatalogPage(spec)
-	if err != nil {
-		return CatalogPage{}, err
-	}
-	if committer == nil {
-		return CatalogPage{}, errors.New("catalog page requires a semantic committer")
-	}
-	commitment, err := committer.Commit(input)
-	if err != nil {
-		return CatalogPage{}, fmt.Errorf("commit catalog page: %w", err)
-	}
-	return catalogPageWithCommitment(spec, entries, commitment)
-}
-
-func encodeCatalogPagePayload(spec CatalogPageSpec, encoder PageEncoder) (CatalogPage, PagePayload, error) {
-	entries, input, err := prepareCatalogPage(spec)
+func NewCatalogPage(spec CatalogPageSpec) (CatalogPage, PagePayload, error) {
+	page, err := prepareCatalogPage(spec)
 	if err != nil {
 		return CatalogPage{}, PagePayload{}, err
 	}
-	if encoder == nil {
-		return CatalogPage{}, PagePayload{}, errors.New("catalog page requires a page encoder")
-	}
-	payload, err := encoder.EncodePage(input)
+	payload, err := encodePagePayload(page)
 	if err != nil {
-		return CatalogPage{}, PagePayload{}, fmt.Errorf("encode catalog page: %w", err)
+		return CatalogPage{}, PagePayload{}, err
 	}
-	if payload.IsZero() || payload.Commitment().IsZero() {
-		return CatalogPage{}, PagePayload{}, errors.New("catalog page encoder returned an empty payload")
-	}
-	page, err := catalogPageWithCommitment(spec, entries, payload.Commitment())
-	return page, payload, err
+	page.commitment = payload.Commitment()
+	return page, payload, nil
 }
 
-func prepareCatalogPage(spec CatalogPageSpec) ([]Entry, PageCommitInput, error) {
+func prepareCatalogPage(spec CatalogPageSpec) (CatalogPage, error) {
 	if spec.ShareInstance.IsZero() || spec.DirectoryID.IsZero() || spec.Generation.IsZero() {
-		return nil, PageCommitInput{}, errors.New("catalog page requires share, directory, and generation identities")
+		return CatalogPage{}, errors.New("catalog page requires share, directory, and generation identities")
 	}
 	if len(spec.Entries) > MaxCatalogPageEntries {
-		return nil, PageCommitInput{}, fmt.Errorf("%w: got %d", ErrPageLimit, len(spec.Entries))
+		return CatalogPage{}, fmt.Errorf("%w: got %d entries", ErrPageLimit, len(spec.Entries))
 	}
 	if len(spec.Entries) == 0 && (!spec.Terminal || spec.PageIndex != 0) {
-		return nil, PageCommitInput{}, fmt.Errorf("%w: only an empty directory may have an empty page", ErrPageSequence)
+		return CatalogPage{}, fmt.Errorf("%w: only an empty directory may have an empty page", ErrPageSequence)
 	}
 	if !spec.Terminal && spec.OmittedCount != 0 {
-		return nil, PageCommitInput{}, fmt.Errorf("%w: omitted count is only valid on the terminal page", ErrPageSequence)
+		return CatalogPage{}, fmt.Errorf("%w: omitted count is only valid on the terminal page", ErrPageSequence)
 	}
-	if spec.PageIndex == 0 && !spec.Previous.IsZero() {
-		return nil, PageCommitInput{}, fmt.Errorf("%w: first page has a predecessor", ErrPageSequence)
-	}
-	if spec.PageIndex > 0 && spec.Previous.IsZero() {
-		return nil, PageCommitInput{}, fmt.Errorf("%w: later page has no predecessor", ErrPageSequence)
+	if (spec.PageIndex == 0) != spec.Previous.IsZero() {
+		return CatalogPage{}, fmt.Errorf("%w: predecessor does not match the page index", ErrPageSequence)
 	}
 	entries := slices.Clone(spec.Entries)
 	if err := validateEntryOrder(entries); err != nil {
-		return nil, PageCommitInput{}, err
-	}
-	input := PageCommitInput{
-		ShareInstance: spec.ShareInstance, DirectoryID: spec.DirectoryID, Generation: spec.Generation,
-		PageIndex: spec.PageIndex, Previous: spec.Previous, Entries: slices.Clone(entries), Terminal: spec.Terminal,
-		OmittedCount: spec.OmittedCount,
-	}
-	return entries, input, nil
-}
-
-func catalogPageWithCommitment(spec CatalogPageSpec, entries []Entry, commitment PageCommitment) (CatalogPage, error) {
-	if commitment.IsZero() {
-		return CatalogPage{}, errors.New("catalog page committer returned an empty commitment")
+		return CatalogPage{}, err
 	}
 	return CatalogPage{
 		shareInstance: spec.ShareInstance, directoryID: spec.DirectoryID, generation: spec.Generation,
 		pageIndex: spec.PageIndex, previous: spec.Previous, entries: entries,
-		terminal: spec.Terminal, omittedCount: spec.OmittedCount, commitment: commitment,
+		terminal: spec.Terminal, omittedCount: spec.OmittedCount,
 	}, nil
+}
+
+func (p CatalogPage) Address() PageAddress {
+	return PageAddress{
+		ShareInstance: p.shareInstance, DirectoryID: p.directoryID,
+		Generation: p.generation, PageIndex: p.pageIndex,
+	}
 }
 
 func validateEntryOrder(entries []Entry) error {

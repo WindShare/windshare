@@ -62,7 +62,7 @@ func newStore(t *testing.T, backend CatalogBackend, clock Clock) (*CatalogStore,
 	var nextGeneration atomic.Uint32
 	store, err := NewCatalogStore(StoreConfig{
 		ShareInstance: idValue[ShareInstance](1), Backend: backend,
-		ProcessBudget: process, ShareBudget: share, PageEncoder: semanticTestCommitter{},
+		ProcessBudget: process, ShareBudget: share, FailureEncoder: testFailureEncoder{},
 		Clock: clock, SortRunBytes: 512,
 		AttemptIDs: ScanAttemptIDGeneratorFunc(func() (ScanAttemptID, error) {
 			return idValue[ScanAttemptID](byte(nextAttempt.Add(1))), nil
@@ -516,7 +516,7 @@ func TestShareBudgetSurvivesSessionReconnect(t *testing.T) {
 	var generation atomic.Uint32
 	store, err := NewCatalogStore(StoreConfig{
 		ShareInstance: idValue[ShareInstance](1), Backend: NewMemoryCatalogBackend(),
-		ProcessBudget: process, ShareBudget: share, PageEncoder: semanticTestCommitter{}, SortRunBytes: 256,
+		ProcessBudget: process, ShareBudget: share, FailureEncoder: testFailureEncoder{}, SortRunBytes: 256,
 		AttemptIDs: ScanAttemptIDGeneratorFunc(func() (ScanAttemptID, error) {
 			return idValue[ScanAttemptID](byte(attempt.Add(1))), nil
 		}),

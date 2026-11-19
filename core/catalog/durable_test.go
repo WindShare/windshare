@@ -76,7 +76,7 @@ func fileStore(
 	var generations atomic.Uint32
 	store, err := NewCatalogStore(StoreConfig{
 		ShareInstance: share, Backend: backend, ProcessBudget: process, ShareBudget: shareBudget,
-		PageEncoder: semanticTestCommitter{}, SpillFactory: NewFileSpillFactory(filepath.Join(root, "sort")),
+		FailureEncoder: testFailureEncoder{}, SpillFactory: NewFileSpillFactory(filepath.Join(root, "sort")),
 		SortRunBytes: 1024,
 		AttemptIDs: ScanAttemptIDGeneratorFunc(func() (ScanAttemptID, error) {
 			id := idValue[ScanAttemptID](attemptByte)
@@ -115,7 +115,7 @@ func replayPageBytes(t *testing.T, store *CatalogStore, directory CommittedDirec
 		if err != nil || !ok {
 			t.Fatalf("load page %d: ok=%v err=%v", index, ok, err)
 		}
-		result[index], err = encodeCatalogPage(page)
+		result[index], err = marshalCatalogPage(page)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -123,7 +123,7 @@ func replayPageBytes(t *testing.T, store *CatalogStore, directory CommittedDirec
 	return result
 }
 
-func replayPagePayloads(t *testing.T, store *CatalogStore, directory CommittedDirectory) [][]byte {
+func replayPageObjects(t *testing.T, store *CatalogStore, directory CommittedDirectory) [][]byte {
 	t.Helper()
 	result := make([][]byte, directory.PageCount())
 	for index := uint32(0); index < directory.PageCount(); index++ {
@@ -183,7 +183,7 @@ func TestLongFileCatalogBackendWideSortReplayAndRecoveryAccounting(t *testing.T)
 		t.Fatalf("sort memory peak %d exceeded limit", peakMemory.Load())
 	}
 	before := replayPageBytes(t, store, committed)
-	beforeObjects := replayPagePayloads(t, store, committed)
+	beforeObjects := replayPageObjects(t, store, committed)
 	if session.Snapshot().Used != (ResourceUsage{}) {
 		t.Fatalf("completed scan retained session usage: %+v", session.Snapshot().Used)
 	}
@@ -212,7 +212,7 @@ func TestLongFileCatalogBackendWideSortReplayAndRecoveryAccounting(t *testing.T)
 		t.Fatalf("recovered directory = %+v ok=%v err=%v", afterDirectory, ok, err)
 	}
 	after := replayPageBytes(t, recovered, afterDirectory)
-	afterObjects := replayPagePayloads(t, recovered, afterDirectory)
+	afterObjects := replayPageObjects(t, recovered, afterDirectory)
 	if len(before) != len(after) {
 		t.Fatal("restart changed page count")
 	}
@@ -221,7 +221,7 @@ func TestLongFileCatalogBackendWideSortReplayAndRecoveryAccounting(t *testing.T)
 			t.Fatalf("page %d changed bytes after restart", index)
 		}
 		if !bytes.Equal(beforeObjects[index], afterObjects[index]) {
-			t.Fatalf("page payload %d changed bytes after restart", index)
+			t.Fatalf("sealed page object %d changed bytes after restart", index)
 		}
 	}
 	node, ok, err := recovered.Node(context.Background(), wideFileID(childCount/2).NodeID())
@@ -242,7 +242,7 @@ func TestLongFileCatalogBackendWideSortReplayAndRecoveryAccounting(t *testing.T)
 
 func TestFileCatalogBackendFaultsNeverPublishHalfGeneration(t *testing.T) {
 	for _, point := range []FileBackendFaultPoint{
-		FileFaultStageDirectory, FileFaultStageChild, FileFaultStagePage, FileFaultStagePagePayload,
+		FileFaultStageDirectory, FileFaultStageChild, FileFaultStagePage, FileFaultStagePageCommitment,
 		FileFaultStageNodeIndex, FileFaultPrepare, FileFaultPublish,
 	} {
 		t.Run(string(point), func(t *testing.T) {
@@ -261,7 +261,7 @@ func TestFileCatalogBackendFaultsNeverPublishHalfGeneration(t *testing.T) {
 			), session)
 			baseline := shareBudget.Snapshot().Used
 			faultErr := errors.New("injected disk fault")
-			if point == FileFaultStagePage || point == FileFaultStagePagePayload {
+			if point == FileFaultStagePage || point == FileFaultStagePageCommitment {
 				faultErr = errInjectedCatalogStorageCapacity
 			}
 			faults.set(point, faultErr)
@@ -276,7 +276,7 @@ func TestFileCatalogBackendFaultsNeverPublishHalfGeneration(t *testing.T) {
 			_, scanErr := store.ListChildren(context.Background(), directory, session, ScanOptions{}, scanner)
 			if scanErr == nil {
 				t.Fatal("injected backend fault was accepted")
-			} else if (point == FileFaultStagePage || point == FileFaultStagePagePayload) && !errors.Is(scanErr, errInjectedCatalogStorageCapacity) {
+			} else if (point == FileFaultStagePage || point == FileFaultStagePageCommitment) && !errors.Is(scanErr, errInjectedCatalogStorageCapacity) {
 				t.Fatalf("disk-full cause was lost: %v", scanErr)
 			}
 			var failure *DirectoryFailure
@@ -393,7 +393,7 @@ func TestFileCatalogRecoveryCleansCrashDebrisAndRejectsCorruption(t *testing.T) 
 	}
 	recoveredStore, err := NewCatalogStore(StoreConfig{
 		ShareInstance: share, Backend: recoveredBackend, ProcessBudget: generousBudget(t, "rp"),
-		ShareBudget: generousBudget(t, "rs"), PageEncoder: semanticTestCommitter{}, SpillFactory: spillFactory,
+		ShareBudget: generousBudget(t, "rs"), FailureEncoder: testFailureEncoder{}, SpillFactory: spillFactory,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -425,7 +425,7 @@ func TestFileCatalogRecoveryCleansCrashDebrisAndRejectsCorruption(t *testing.T) 
 	}
 	if _, err := NewCatalogStore(StoreConfig{
 		ShareInstance: share, Backend: corruptBackend, ProcessBudget: generousBudget(t, "cp"),
-		ShareBudget: generousBudget(t, "cs"), PageEncoder: semanticTestCommitter{},
+		ShareBudget: generousBudget(t, "cs"), FailureEncoder: testFailureEncoder{},
 	}); !errors.Is(err, ErrCorruptCatalogStorage) {
 		t.Fatalf("corrupt committed page was accepted: %v", err)
 	}
@@ -448,7 +448,7 @@ func TestInjectedSpillFailureIsAtomicAndBudgetClean(t *testing.T) {
 	backend := NewMemoryCatalogBackend()
 	store, err := NewCatalogStore(StoreConfig{
 		ShareInstance: idValue[ShareInstance](1), Backend: backend,
-		ProcessBudget: process, ShareBudget: share, PageEncoder: semanticTestCommitter{},
+		ProcessBudget: process, ShareBudget: share, FailureEncoder: testFailureEncoder{},
 		SpillFactory: failingSpillFactory{err: errors.New("spill unavailable")},
 		AttemptIDs: ScanAttemptIDGeneratorFunc(func() (ScanAttemptID, error) {
 			return idValue[ScanAttemptID](1), nil
@@ -571,11 +571,8 @@ func TestFileBackendRejectsInvalidLifecycleAndCorruptFrames(t *testing.T) {
 	if _, _, err := backend.LoadDirectory(cancelled, idValue[DirectoryID](1)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled directory load = %v", err)
 	}
-	if _, _, err := backend.LoadPage(cancelled, idValue[DirectoryID](1), idValue[DirectoryGeneration](2), 0); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled page load = %v", err)
-	}
 	if _, _, err := backend.LoadPagePayload(cancelled, idValue[DirectoryID](1), idValue[DirectoryGeneration](2), 0); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled page-object load = %v", err)
+		t.Fatalf("cancelled page load = %v", err)
 	}
 	if _, _, err := backend.LoadNode(cancelled, idValue[NodeID](1)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled node load = %v", err)
@@ -583,11 +580,8 @@ func TestFileBackendRejectsInvalidLifecycleAndCorruptFrames(t *testing.T) {
 	if _, ok, err := backend.LoadDirectory(context.Background(), idValue[DirectoryID](1)); err != nil || ok {
 		t.Fatalf("unknown directory = ok=%v err=%v", ok, err)
 	}
-	if _, ok, err := backend.LoadPage(context.Background(), idValue[DirectoryID](1), idValue[DirectoryGeneration](2), 0); err != nil || ok {
-		t.Fatalf("unknown page = ok=%v err=%v", ok, err)
-	}
 	if _, ok, err := backend.LoadPagePayload(context.Background(), idValue[DirectoryID](1), idValue[DirectoryGeneration](2), 0); err != nil || ok {
-		t.Fatalf("unknown page object = ok=%v err=%v", ok, err)
+		t.Fatalf("unknown page = ok=%v err=%v", ok, err)
 	}
 
 	transaction, err := backend.BeginDirectory(
@@ -686,11 +680,8 @@ func TestFileBackendRejectsInvalidLifecycleAndCorruptFrames(t *testing.T) {
 	if _, _, err := backend.LoadDirectory(context.Background(), idValue[DirectoryID](1)); !errors.Is(err, ErrCatalogClosed) {
 		t.Fatalf("closed load = %v", err)
 	}
-	if _, _, err := backend.LoadPage(context.Background(), idValue[DirectoryID](1), idValue[DirectoryGeneration](2), 0); !errors.Is(err, ErrCatalogClosed) {
-		t.Fatalf("closed page load = %v", err)
-	}
 	if _, _, err := backend.LoadPagePayload(context.Background(), idValue[DirectoryID](1), idValue[DirectoryGeneration](2), 0); !errors.Is(err, ErrCatalogClosed) {
-		t.Fatalf("closed page-object load = %v", err)
+		t.Fatalf("closed page load = %v", err)
 	}
 	if err := backend.Destroy(); err != nil {
 		t.Fatal(err)

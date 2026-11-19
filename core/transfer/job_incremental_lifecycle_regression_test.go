@@ -306,18 +306,18 @@ func TestTransferJobCatalogLedgerRejectsDuplicateUnselectedNodeBeforeOutputAdmis
 	root := transferID[catalog.DirectoryID](0xe2)
 	file := transferID[catalog.FileID](0xe3)
 	generation := transferID[catalog.DirectoryGeneration](0xe4)
-	first, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+	first, _, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
 		ShareInstance: share, DirectoryID: root, Generation: generation,
 		Entries: []catalog.Entry{jobEntry(t, file, "a.bin", 0)},
-	}, jobPageCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+	second, _, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
 		ShareInstance: share, DirectoryID: root, Generation: generation,
 		PageIndex: 1, Previous: first.Commitment(), Terminal: true,
 		Entries: []catalog.Entry{jobEntry(t, file, "b.bin", 0)},
-	}, jobPageCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,12 +396,12 @@ func multiPageJobSnapshot(
 	pages := make([]catalog.CatalogPage, 0, len(entries))
 	var previous catalog.PageCommitment
 	for index, entry := range entries {
-		page, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+		page, _, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
 			ShareInstance: share, DirectoryID: directory,
 			Generation: transferID[catalog.DirectoryGeneration](generation),
 			PageIndex:  uint32(index), Previous: previous, Entries: []catalog.Entry{entry},
 			Terminal: index == len(entries)-1,
-		}, jobPageCommitter{})
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -541,11 +541,11 @@ func TestTransferJobFailsClosedForUnknownChildCursorFailureWithoutPhantomSelecti
 	root := transferID[catalog.DirectoryID](241)
 	branch := transferID[catalog.DirectoryID](242)
 	partial := transferID[catalog.FileID](243)
-	first, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+	first, _, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
 		ShareInstance: share, DirectoryID: branch,
 		Generation: transferID[catalog.DirectoryGeneration](2),
 		Entries:    []catalog.Entry{jobEntry(t, partial, "partial.bin", 7)},
-	}, jobPageCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

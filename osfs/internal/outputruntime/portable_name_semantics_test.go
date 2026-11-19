@@ -251,12 +251,10 @@ func testPortableOutputNames(t *testing.T, rootName, subdir string, names []stri
 		}
 	}
 	// The regression must remain reachable through authenticated catalog policy.
-	if _, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+	if _, _, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
 		ShareInstance: intent.ShareInstance(), DirectoryID: source.DirectoryID, Generation: source.Generation,
 		Entries: entries, Terminal: true,
-	}, catalog.PageCommitterFunc(func(catalog.PageCommitInput) (catalog.PageCommitment, error) {
-		return catalog.PageCommitment{1}, nil
-	})); err != nil {
+	}); err != nil {
 		t.Fatalf("test names are not a valid catalog: %v", err)
 	}
 	if _, err := session.FinalizeDirectory(ctx, admission); err != nil {

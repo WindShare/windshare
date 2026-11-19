@@ -3,9 +3,11 @@ package catalog
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -17,23 +19,23 @@ const (
 	fileCatalogDirectoryName = "directory.node"
 	fileCatalogChildrenName  = "children.nodes"
 	fileCatalogMetaName      = "meta.bin"
-	fileCatalogPayloadsName  = "objects"
+	fileCatalogPagesName     = "pages"
 )
 
-var fileCatalogMagic = [4]byte{'W', 'S', 'C', '3'}
+var fileCatalogMagic = [4]byte{'W', 'S', 'C', '4'}
 
 type FileBackendFaultPoint string
 
 const (
-	FileFaultStageDirectory   FileBackendFaultPoint = "stage-directory"
-	FileFaultStageChild       FileBackendFaultPoint = "stage-child"
-	FileFaultStagePage        FileBackendFaultPoint = "stage-page"
-	FileFaultStagePagePayload FileBackendFaultPoint = "stage-page-object"
-	FileFaultStageNodeIndex   FileBackendFaultPoint = "stage-node-index"
-	FileFaultPrepare          FileBackendFaultPoint = "prepare"
-	FileFaultPublish          FileBackendFaultPoint = "publish"
-	FileFaultStageFailure     FileBackendFaultPoint = "stage-failure"
-	FileFaultPublishFailure   FileBackendFaultPoint = "publish-failure"
+	FileFaultStageDirectory      FileBackendFaultPoint = "stage-directory"
+	FileFaultStageChild          FileBackendFaultPoint = "stage-child"
+	FileFaultStagePage           FileBackendFaultPoint = "stage-page"
+	FileFaultStagePageCommitment FileBackendFaultPoint = "stage-page-commitment"
+	FileFaultStageNodeIndex      FileBackendFaultPoint = "stage-node-index"
+	FileFaultPrepare             FileBackendFaultPoint = "prepare"
+	FileFaultPublish             FileBackendFaultPoint = "publish"
+	FileFaultStageFailure        FileBackendFaultPoint = "stage-failure"
+	FileFaultPublishFailure      FileBackendFaultPoint = "publish-failure"
 )
 
 type FileBackendFaults interface {
@@ -146,13 +148,8 @@ func (b *FileCatalogBackend) BeginDirectory(ctx context.Context, directory Direc
 	if err != nil {
 		return nil, fmt.Errorf("create catalog transaction: %w", err)
 	}
-	pagesPath := filepath.Join(path, "pages")
+	pagesPath := filepath.Join(path, fileCatalogPagesName)
 	if err := os.Mkdir(pagesPath, 0o700); err != nil {
-		_ = os.RemoveAll(path)
-		return nil, err
-	}
-	payloadsPath := filepath.Join(path, fileCatalogPayloadsName)
-	if err := os.Mkdir(payloadsPath, 0o700); err != nil {
 		_ = os.RemoveAll(path)
 		return nil, err
 	}
@@ -161,9 +158,15 @@ func (b *FileCatalogBackend) BeginDirectory(ctx context.Context, directory Direc
 		_ = os.RemoveAll(path)
 		return nil, err
 	}
+	metadata, err := os.OpenFile(filepath.Join(path, fileCatalogMetaName), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		_ = children.Close()
+		_ = os.RemoveAll(path)
+		return nil, err
+	}
 	return &fileCatalogTransaction{
 		backend: b, directory: directory, generation: generation, meter: meter,
-		path: path, pagesPath: pagesPath, payloadsPath: payloadsPath, children: children, digest: sha256.New(),
+		path: path, pagesPath: pagesPath, children: children, metadata: metadata, digest: sha256.New(),
 	}, nil
 }
 
@@ -189,36 +192,6 @@ func (b *FileCatalogBackend) LoadDirectory(ctx context.Context, directory Direct
 	return meta.committed(), true, nil
 }
 
-func (b *FileCatalogBackend) LoadPage(ctx context.Context, directory DirectoryID, generation DirectoryGeneration, index uint32) (CatalogPage, bool, error) {
-	if err := ctx.Err(); err != nil {
-		return CatalogPage{}, false, err
-	}
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	if b.closed {
-		return CatalogPage{}, false, ErrCatalogClosed
-	}
-	meta, err := readFileCatalogMeta(filepath.Join(b.directoryPath(directory), fileCatalogMetaName))
-	if errors.Is(err, os.ErrNotExist) || err == nil && (meta.generation != generation || index >= meta.pageCount) {
-		return CatalogPage{}, false, nil
-	}
-	if err != nil {
-		return CatalogPage{}, false, err
-	}
-	encoded, err := readCatalogObject(b.pagePath(directory, index))
-	if err != nil {
-		return CatalogPage{}, false, err
-	}
-	page, err := decodeCatalogPage(encoded)
-	if err != nil {
-		return CatalogPage{}, false, err
-	}
-	if page.DirectoryID() != directory || page.Generation() != generation || page.PageIndex() != index {
-		return CatalogPage{}, false, ErrCorruptCatalogStorage
-	}
-	return page, true, nil
-}
-
 func (b *FileCatalogBackend) LoadPagePayload(ctx context.Context, directory DirectoryID, generation DirectoryGeneration, index uint32) (PagePayload, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return PagePayload{}, false, err
@@ -228,33 +201,98 @@ func (b *FileCatalogBackend) LoadPagePayload(ctx context.Context, directory Dire
 	if b.closed {
 		return PagePayload{}, false, ErrCatalogClosed
 	}
-	meta, err := readFileCatalogMeta(filepath.Join(b.directoryPath(directory), fileCatalogMetaName))
-	if errors.Is(err, os.ErrNotExist) || err == nil && (meta.generation != generation || index >= meta.pageCount) {
+	path := b.directoryPath(directory)
+	metadata, meta, err := openFileCatalogMeta(filepath.Join(path, fileCatalogMetaName))
+	if errors.Is(err, os.ErrNotExist) {
 		return PagePayload{}, false, nil
 	}
 	if err != nil {
 		return PagePayload{}, false, err
 	}
-	encoded, err := readCatalogObject(b.pagePayloadPath(directory, index))
-	if err != nil {
-		return PagePayload{}, false, err
-	}
-	payload, err := NewPagePayload(encoded)
-	if err != nil {
-		return PagePayload{}, false, errors.Join(ErrCorruptCatalogStorage, err)
-	}
-	pageBytes, err := readCatalogObject(b.pagePath(directory, index))
-	if err != nil {
-		return PagePayload{}, false, err
-	}
-	page, err := decodeCatalogPage(pageBytes)
-	if err != nil || page.DirectoryID() != directory || page.Generation() != generation || page.PageIndex() != index {
+	defer metadata.Close()
+	if meta.share != b.share || meta.directory != directory {
 		return PagePayload{}, false, ErrCorruptCatalogStorage
 	}
-	if payload.Commitment() != page.Commitment() {
-		return PagePayload{}, false, ErrCorruptCatalogStorage
+	if meta.generation != generation || index >= meta.pageCount {
+		return PagePayload{}, false, nil
 	}
-	return payload, true, nil
+	payload, err := readFilePagePayload(path, meta, metadata, index)
+	return payload, err == nil, err
+}
+
+func readFileCatalogMeta(path string) (fileCatalogMeta, error) {
+	file, meta, err := openFileCatalogMeta(path)
+	if err != nil {
+		return fileCatalogMeta{}, err
+	}
+	return meta, file.Close()
+}
+
+// Only the fixed header and the requested digest are needed to serve a page,
+// even when the directory has many committed pages.
+func openFileCatalogMeta(path string) (*os.File, fileCatalogMeta, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fileCatalogMeta{}, err
+	}
+	var header [fileCatalogMetaBytes]byte
+	if _, err := io.ReadFull(file, header[:]); err != nil {
+		_ = file.Close()
+		return nil, fileCatalogMeta{}, errors.Join(ErrCorruptCatalogStorage, err)
+	}
+	meta, err := decodeFileCatalogMeta(header[:])
+	if err != nil {
+		_ = file.Close()
+		return nil, fileCatalogMeta{}, err
+	}
+	info, err := file.Stat()
+	if err != nil || info.Size() != filePageDigestOffset(meta.pageCount) {
+		_ = file.Close()
+		return nil, fileCatalogMeta{}, errors.Join(ErrCorruptCatalogStorage, err)
+	}
+	return file, meta, nil
+}
+
+func filePageDigestOffset(index uint32) int64 {
+	return fileCatalogMetaBytes + int64(index)*sha256.Size
+}
+
+// The storage digest covers the address so that moving a payload and its digest
+// together cannot grant it authority at another slot. PageCommitment remains
+// the protocol digest over the canonical bytes alone.
+func filePageDigest(address PageAddress, commitment PageCommitment) [sha256.Size]byte {
+	var binding [3*IdentityBytes + 4 + PageCommitmentBytes]byte
+	copy(binding[:IdentityBytes], address.ShareInstance[:])
+	copy(binding[IdentityBytes:2*IdentityBytes], address.DirectoryID[:])
+	copy(binding[2*IdentityBytes:3*IdentityBytes], address.Generation[:])
+	indexEnd := 3*IdentityBytes + 4
+	binary.BigEndian.PutUint32(binding[3*IdentityBytes:indexEnd], address.PageIndex)
+	copy(binding[indexEnd:], commitment[:])
+	return sha256.Sum256(binding[:])
+}
+
+func fileCatalogPageName(index uint32) string {
+	return fmt.Sprintf("%08x.page", index)
+}
+
+func readFilePagePayload(path string, meta fileCatalogMeta, metadata io.ReaderAt, index uint32) (PagePayload, error) {
+	var expected [sha256.Size]byte
+	if _, err := metadata.ReadAt(expected[:], filePageDigestOffset(index)); err != nil {
+		return PagePayload{}, errors.Join(ErrCorruptCatalogStorage, err)
+	}
+	encoded, err := readCatalogObject(filepath.Join(path, fileCatalogPagesName, fileCatalogPageName(index)))
+	if err != nil {
+		return PagePayload{}, errors.Join(ErrCorruptCatalogStorage, err)
+	}
+	if len(encoded) == 0 || len(encoded) > MaxCatalogPayloadBytes {
+		return PagePayload{}, ErrCorruptCatalogStorage
+	}
+	address := PageAddress{ShareInstance: meta.share, DirectoryID: meta.directory, Generation: meta.generation, PageIndex: index}
+	commitment := PageCommitment(sha256.Sum256(encoded))
+	if filePageDigest(address, commitment) != expected || index == meta.pageCount-1 && commitment != meta.terminal {
+		return PagePayload{}, ErrCorruptCatalogStorage
+	}
+	return PagePayload{address: address, commitment: commitment, encoded: encoded}, nil
 }
 
 func (b *FileCatalogBackend) Close() error {
@@ -283,12 +321,4 @@ func (b *FileCatalogBackend) CatalogSpillRoot() string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return filepath.Join(b.root, "sort")
-}
-
-func (b *FileCatalogBackend) pagePath(directory DirectoryID, index uint32) string {
-	return filepath.Join(b.directoryPath(directory), "pages", fmt.Sprintf("%08x.page", index))
-}
-
-func (b *FileCatalogBackend) pagePayloadPath(directory DirectoryID, index uint32) string {
-	return filepath.Join(b.directoryPath(directory), fileCatalogPayloadsName, fmt.Sprintf("%08x.object", index))
 }

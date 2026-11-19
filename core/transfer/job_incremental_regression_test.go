@@ -150,18 +150,18 @@ func TestTransferJobRejectsCrossPageDuplicateNodeIDBeforeAdmission(t *testing.T)
 	file := transferID[catalog.FileID](203)
 	firstEntry := jobEntry(t, file, "a.bin", 0)
 	secondEntry := jobEntry(t, file, "b.bin", 0)
-	first, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+	first, _, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
 		ShareInstance: share, DirectoryID: root,
 		Generation: transferID[catalog.DirectoryGeneration](1), Entries: []catalog.Entry{firstEntry},
-	}, jobPageCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+	second, _, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
 		ShareInstance: share, DirectoryID: root,
 		Generation: transferID[catalog.DirectoryGeneration](1), PageIndex: 1,
 		Previous: first.Commitment(), Entries: []catalog.Entry{secondEntry}, Terminal: true,
-	}, jobPageCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,18 +202,18 @@ func TestTransferJobRejectsCrossPageNameSequenceViolationsBeforeAdmission(t *tes
 			share := transferID[catalog.ShareInstance](211)
 			root := transferID[catalog.DirectoryID](212)
 			generation := transferID[catalog.DirectoryGeneration](2)
-			first, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+			first, _, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
 				ShareInstance: share, DirectoryID: root, Generation: generation,
 				Entries: []catalog.Entry{jobEntry(t, transferID[catalog.FileID](213), test.firstName, 0)},
-			}, jobPageCommitter{})
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			second, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+			second, _, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
 				ShareInstance: share, DirectoryID: root, Generation: generation, PageIndex: 1,
 				Previous: first.Commitment(), Terminal: true,
 				Entries: []catalog.Entry{jobEntry(t, transferID[catalog.FileID](214), test.secondName, 0)},
-			}, jobPageCommitter{})
+			})
 			if err != nil {
 				t.Fatal(err)
 			}

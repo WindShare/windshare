@@ -136,6 +136,10 @@ func TestCatalogWireDecodersRejectAuthenticatedSemanticConfusion(t *testing.T) {
 	invalidSequence[4] = uint64(1)
 	invalidSequence[6] = bytes.Repeat([]byte{1}, catalog.PageCommitmentBytes)
 
+	request, err := NewListRequest(directory, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for name, test := range map[string]struct {
 		encoded []byte
 		want    error
@@ -150,7 +154,7 @@ func TestCatalogWireDecodersRejectAuthenticatedSemanticConfusion(t *testing.T) {
 		},
 	} {
 		t.Run("page "+name, func(t *testing.T) {
-			if _, err := decodeCatalogPage(test.encoded, testCommitter{}); !errors.Is(err, test.want) {
+			if _, err := (CatalogPayloadDecoder{}).Verify(t.Context(), fixture.share, request, test.encoded); !errors.Is(err, test.want) {
 				t.Fatalf("page error = %v, want %v", err, test.want)
 			}
 		})
@@ -158,46 +162,34 @@ func TestCatalogWireDecodersRejectAuthenticatedSemanticConfusion(t *testing.T) {
 }
 
 func TestCatalogEntryDecoderRejectsAmbiguousIdentityAndTimeFields(t *testing.T) {
+	share := shareInstance(t, 204)
 	directory := directoryID(t, 205)
 	file := fileID(t, 206)
+	generation := generationID(t, 207)
 	zeroIdentity := make([]byte, catalog.IdentityBytes)
-
-	for name, encoded := range map[string][]byte{
-		"wrong arity": mustRawCBOR(t, []any{
-			uint64(catalog.NodeKindDirectory), directory.Bytes(), "dir", nil, nil, uint64(0),
-		}),
-		"identity type": mustRawCBOR(t, []any{
-			uint64(catalog.NodeKindDirectory), "identity", "dir", nil, nil, uint64(0), uint64(0),
-		}),
-		"modified type": mustRawCBOR(t, []any{
-			uint64(catalog.NodeKindDirectory), directory.Bytes(), "dir", nil, "seconds", uint64(0), uint64(0),
-		}),
-		"zero directory": mustRawCBOR(t, []any{
-			uint64(catalog.NodeKindDirectory), zeroIdentity, "dir", nil, nil, uint64(0), uint64(0),
-		}),
-		"zero file": mustRawCBOR(t, []any{
-			uint64(catalog.NodeKindFile), zeroIdentity, "file", uint64(1), nil, uint64(0), uint64(0),
-		}),
-		"file size type": mustRawCBOR(t, []any{
-			uint64(catalog.NodeKindFile), file.Bytes(), "file", "one", nil, uint64(0), uint64(0),
-		}),
+	for name, entry := range map[string][]any{
+		"wrong arity":               {uint64(catalog.NodeKindDirectory), directory.Bytes(), "dir", nil, nil, uint64(0)},
+		"identity type":             {uint64(catalog.NodeKindDirectory), "identity", "dir", nil, nil, uint64(0), uint64(0)},
+		"zero directory":            {uint64(catalog.NodeKindDirectory), zeroIdentity, "dir", nil, nil, uint64(0), uint64(0)},
+		"directory has size":        {uint64(catalog.NodeKindDirectory), directory.Bytes(), "dir", uint64(1), nil, uint64(0), uint64(0)},
+		"zero file":                 {uint64(catalog.NodeKindFile), zeroIdentity, "file", uint64(1), nil, uint64(0), uint64(0)},
+		"file size type":            {uint64(catalog.NodeKindFile), file.Bytes(), "file", "one", nil, uint64(0), uint64(0)},
+		"file size limit":           {uint64(catalog.NodeKindFile), file.Bytes(), "file", uint64(catalog.MaxFileSize) + 1, nil, uint64(0), uint64(0)},
+		"modified type":             {uint64(catalog.NodeKindDirectory), directory.Bytes(), "dir", nil, "seconds", uint64(0), uint64(0)},
+		"absent modified seconds":   {uint64(catalog.NodeKindDirectory), directory.Bytes(), "dir", nil, nil, uint64(1), uint64(0)},
+		"overflowed signed seconds": {uint64(catalog.NodeKindDirectory), directory.Bytes(), "dir", nil, ^uint64(0), uint64(0), uint64(0)},
+		"overflowed nanos":          {uint64(catalog.NodeKindDirectory), directory.Bytes(), "dir", nil, int64(0), uint64(^uint32(0)) + 1, uint64(catalog.TimePrecisionNanoseconds)},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := decodeWireEntry(encoded); err == nil {
+			encoded := mustCBOR(t, catalogWireEnc, map[uint64]any{
+				0: catalog.PagePayloadSchema, 1: share.Bytes(), 2: directory.Bytes(), 3: generation.Bytes(),
+				4: uint64(0), 5: true, 6: make([]byte, catalog.PageCommitmentBytes),
+				7: [][]any{entry}, 8: uint64(0),
+			})
+			if _, err := catalog.DecodeCatalogPage(encoded); !errors.Is(err, catalog.ErrInvalidPagePayload) {
 				t.Fatalf("entry error = %v", err)
 			}
 		})
-	}
-
-	if _, err := decodeWireModified([]byte{0xff}, mustRawCBOR(t, uint64(0)), mustRawCBOR(t, uint64(0))); !errors.Is(err, ErrWireObject) {
-		t.Fatalf("invalid signed timestamp error = %v", err)
-	}
-	if _, err := decodeWireModified(
-		mustRawCBOR(t, int64(0)),
-		mustRawCBOR(t, uint64(^uint32(0))+1),
-		mustRawCBOR(t, uint64(catalog.TimePrecisionNanoseconds)),
-	); !errors.Is(err, ErrWireObject) {
-		t.Fatalf("overflowed timestamp error = %v", err)
 	}
 }
 
@@ -343,7 +335,7 @@ func assemblyPage(
 	if err != nil {
 		t.Fatal(err)
 	}
-	page, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+	page, _, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
 		ShareInstance: share,
 		DirectoryID:   directory,
 		Generation:    generation,
@@ -351,7 +343,7 @@ func assemblyPage(
 		Previous:      previous,
 		Entries:       []catalog.Entry{entry},
 		Terminal:      true,
-	}, testCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

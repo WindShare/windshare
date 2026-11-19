@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -174,14 +175,14 @@ func TestFileBackendTransactionsPropagateBudgetFailuresBeforePublication(t *test
 		})
 	}
 
-	page, err := NewCatalogPage(CatalogPageSpec{
+	page, _, err := NewCatalogPage(CatalogPageSpec{
 		ShareInstance: share, DirectoryID: directoryID, Generation: generation,
 		Entries: []Entry{child.Entry()}, Terminal: true,
-	}, semanticTestCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	pagePayload := mustTestPagePayload(t, page)
+	pageObject := mustTestPagePayload(t, page)
 	pageCases := []struct {
 		name          string
 		failConsumeAt int
@@ -209,7 +210,7 @@ func TestFileBackendTransactionsPropagateBudgetFailuresBeforePublication(t *test
 				failReleaseAt: testCase.failReleaseAt,
 				err:           injected,
 			}
-			if err := transaction.PutPage(page, pagePayload); !errors.Is(err, injected) {
+			if err := transaction.PutPage(page, pageObject); !errors.Is(err, injected) {
 				t.Fatalf("page meter failure = %v", err)
 			}
 			if err := transaction.Abort(); err != nil {
@@ -245,7 +246,7 @@ func stageFileTransactionThroughChild(
 	return transaction.(*fileCatalogTransaction)
 }
 
-func TestFileBackendLoadsRejectMissingOrMisaddressedObjects(t *testing.T) {
+func TestFileBackendLoadsRejectMissingOrCorruptPages(t *testing.T) {
 	t.Run("directory metadata identity", func(t *testing.T) {
 		_, backend, path, meta := durableRecoveryFixture(t)
 		defer backend.Destroy()
@@ -263,7 +264,7 @@ func TestFileBackendLoadsRejectMissingOrMisaddressedObjects(t *testing.T) {
 		if err := os.Remove(filepath.Join(path, "pages", "00000000.page")); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := backend.LoadPage(context.Background(), meta.directory, meta.generation, 0); !errors.Is(err, os.ErrNotExist) {
+		if _, _, err := backend.LoadPagePayload(context.Background(), meta.directory, meta.generation, 0); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("missing addressed page = %v", err)
 		}
 	})
@@ -279,21 +280,10 @@ func TestFileBackendLoadsRejectMissingOrMisaddressedObjects(t *testing.T) {
 		}
 	})
 
-	t.Run("missing page object", func(t *testing.T) {
+	t.Run("empty page", func(t *testing.T) {
 		_, backend, path, meta := durableRecoveryFixture(t)
 		defer backend.Destroy()
-		if err := os.Remove(filepath.Join(path, fileCatalogPayloadsName, "00000000.object")); err != nil {
-			t.Fatal(err)
-		}
-		if _, _, err := backend.LoadPagePayload(context.Background(), meta.directory, meta.generation, 0); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("missing addressed page object = %v", err)
-		}
-	})
-
-	t.Run("empty page object", func(t *testing.T) {
-		_, backend, path, meta := durableRecoveryFixture(t)
-		defer backend.Destroy()
-		if err := os.WriteFile(filepath.Join(path, fileCatalogPayloadsName, "00000000.object"), nil, 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(path, fileCatalogPagesName, fileCatalogPageName(0)), nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if _, _, err := backend.LoadPagePayload(context.Background(), meta.directory, meta.generation, 0); !errors.Is(err, ErrCorruptCatalogStorage) {
@@ -301,36 +291,14 @@ func TestFileBackendLoadsRejectMissingOrMisaddressedObjects(t *testing.T) {
 		}
 	})
 
-	t.Run("missing page behind object", func(t *testing.T) {
+	t.Run("truncated page digest", func(t *testing.T) {
 		_, backend, path, meta := durableRecoveryFixture(t)
 		defer backend.Destroy()
-		if err := os.Remove(filepath.Join(path, "pages", "00000000.page")); err != nil {
+		if err := os.Truncate(filepath.Join(path, fileCatalogMetaName), fileCatalogMetaBytes); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := backend.LoadPagePayload(context.Background(), meta.directory, meta.generation, 0); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("page object without addressed page = %v", err)
-		}
-	})
-
-	t.Run("misaddressed page behind object", func(t *testing.T) {
-		_, backend, path, meta := durableRecoveryFixture(t)
-		defer backend.Destroy()
-		other, err := NewCatalogPage(CatalogPageSpec{
-			ShareInstance: meta.share, DirectoryID: idValue[DirectoryID](42),
-			Generation: meta.generation, Terminal: true,
-		}, semanticTestCommitter{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		encoded, err := encodeCatalogPage(other)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(path, "pages", "00000000.page"), encoded, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if _, _, err := backend.LoadPagePayload(context.Background(), meta.directory, meta.generation, 0); !errors.Is(err, ErrCorruptCatalogStorage) {
-			t.Fatalf("page object with misaddressed page = %v", err)
+		if _, _, err := backend.LoadPagePayload(t.Context(), meta.directory, meta.generation, 0); !errors.Is(err, ErrCorruptCatalogStorage) {
+			t.Fatalf("missing page digest = %v", err)
 		}
 	})
 }
@@ -365,43 +333,81 @@ func TestFileBackendRecoveryRejectsMissingIdentityAndPageSequenceAuthority(t *te
 		}
 	})
 
-	t.Run("page storage address", func(t *testing.T) {
-		_, backend, path, _ := durableRecoveryFixture(t)
-		defer backend.Destroy()
-		pagePath := filepath.Join(path, "pages", "00000000.page")
-		encoded, err := readCatalogObject(pagePath)
+}
+
+func TestFileBackendVerifiesOnlyRequestedPageAndRejectsRelocatedRecord(t *testing.T) {
+	ctx := t.Context()
+	share := idValue[ShareInstance](1)
+	directory := idValue[DirectoryID](2)
+	generation := idValue[DirectoryGeneration](3)
+	backend, err := NewFileCatalogBackend(FileCatalogBackendConfig{Root: t.TempDir(), ShareInstance: share})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	meter := backendTestMeter(t)
+	defer meter.Close()
+	tx, err := backend.BeginDirectory(ctx, directory, generation, meter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Abort()
+	if err := tx.PutDirectory(backendDirectoryRecord(t, directory, idValue[DirectoryID](4), "directory", 1)); err != nil {
+		t.Fatal(err)
+	}
+
+	var previous PageCommitment
+	var second PagePayload
+	for index, name := range []string{"a", "b"} {
+		child, err := scannedFile(t, byte(50+index), name, 1).nodeRecord(directory)
 		if err != nil {
 			t.Fatal(err)
 		}
-		original, err := decodeCatalogPage(encoded)
+		if err := tx.PutChild(child); err != nil {
+			t.Fatal(err)
+		}
+		page, payload, err := NewCatalogPage(CatalogPageSpec{
+			ShareInstance: share, DirectoryID: directory, Generation: generation,
+			PageIndex: uint32(index), Previous: previous, Entries: []Entry{child.Entry()}, Terminal: index == 1,
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		misaddressed, err := NewCatalogPage(CatalogPageSpec{
-			ShareInstance: original.ShareInstance(), DirectoryID: original.DirectoryID(),
-			Generation: original.Generation(), PageIndex: 1, Previous: original.Commitment(),
-			Entries: original.Entries(), Terminal: true,
-		}, semanticTestCommitter{})
-		if err != nil {
+		if err := tx.PutPage(page, payload); err != nil {
 			t.Fatal(err)
 		}
-		encoded, err = encodeCatalogPage(misaddressed)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(pagePath, encoded, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		object := mustTestPagePayload(t, misaddressed)
-		if err := os.WriteFile(
-			filepath.Join(path, fileCatalogPayloadsName, "00000000.object"), object.Bytes(), 0o600,
-		); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := backend.Recover(context.Background()); !errors.Is(err, ErrPageSequence) {
-			t.Fatalf("misaddressed stored page = %v", err)
-		}
-	})
+		previous = page.Commitment()
+		second = payload
+	}
+	publishBackendGeneration(t, tx)
+
+	path := backend.directoryPath(directory)
+	firstPath := filepath.Join(path, fileCatalogPagesName, fileCatalogPageName(0))
+	if err := os.Remove(firstPath); err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := backend.LoadPagePayload(ctx, directory, generation, 1)
+	if err != nil || !found || !bytes.Equal(got.Bytes(), second.Bytes()) {
+		t.Fatalf("healthy page depended on a missing sibling: found=%v err=%v", found, err)
+	}
+	if err := os.WriteFile(firstPath, second.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	metaPath := filepath.Join(path, fileCatalogMetaName)
+	metadata, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copy(metadata[filePageDigestOffset(0):filePageDigestOffset(1)], metadata[filePageDigestOffset(1):])
+	if err := os.WriteFile(metaPath, metadata, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := backend.LoadPagePayload(ctx, directory, generation, 0); !errors.Is(err, ErrCorruptCatalogStorage) {
+		t.Fatalf("page and its digest were accepted at the wrong index: %v", err)
+	}
+	if _, err := backend.Recover(ctx); !errors.Is(err, ErrCorruptCatalogStorage) {
+		t.Fatalf("recovery accepted the relocated page: %v", err)
+	}
 }
 
 func TestFileBackendRecoversEmptyPublishedGeneration(t *testing.T) {
@@ -436,9 +442,13 @@ func TestFileBackendRecoversEmptyPublishedGeneration(t *testing.T) {
 	if err != nil || !found || loaded != published || loaded.EntryCount() != 0 || loaded.PageCount() != 1 {
 		t.Fatalf("empty recovered directory = %+v found=%v err=%v", loaded, found, err)
 	}
-	page, found, err := recovered.LoadPage(context.Background(), directoryID, generation, 0)
-	if err != nil || !found || !page.Terminal() || page.EntryCount() != 0 {
-		t.Fatalf("empty recovered page = %+v found=%v err=%v", page, found, err)
+	payload, found, err := recovered.LoadPagePayload(context.Background(), directoryID, generation, 0)
+	if err != nil || !found {
+		t.Fatalf("empty recovered payload: found=%v err=%v", found, err)
+	}
+	page, err := payload.decode()
+	if err != nil || !page.Terminal() || page.EntryCount() != 0 {
+		t.Fatalf("empty recovered page = %+v err=%v", page, err)
 	}
 }
 

@@ -17,7 +17,7 @@ func TestCatalogServiceReplaysCommittedPageAfterEvictionAndRestart(t *testing.T)
 	directoryID := id16[catalog.DirectoryID](43)
 	rootPath := t.TempDir()
 
-	objects := catalogflow.CatalogPayloadEncoder{}
+	objects := catalogflow.CatalogFailureEncoder{}
 	rawBackend, err := catalog.NewFileCatalogBackend(catalog.FileCatalogBackendConfig{
 		Root: rootPath, ShareInstance: share,
 	})
@@ -72,7 +72,7 @@ func TestCatalogServiceReplaysCommittedPageAfterEvictionAndRestart(t *testing.T)
 		t.Fatal(err)
 	}
 
-	recoveredObjects := catalogflow.CatalogPayloadEncoder{}
+	recoveredObjects := catalogflow.CatalogFailureEncoder{}
 	recoveredBackend, err := catalog.NewFileCatalogBackend(catalog.FileCatalogBackendConfig{
 		Root: rootPath, ShareInstance: share,
 	})
@@ -120,13 +120,13 @@ func newRestartCatalogStore(
 	t *testing.T,
 	share catalog.ShareInstance,
 	backend catalog.CatalogBackend,
-	encoder catalog.PageEncoder,
+	sealer catalog.FailureEncoder,
 ) *catalog.CatalogStore {
 	t.Helper()
 	process := newRestartBudget(t, "process")
 	shareBudget := newRestartBudget(t, "share")
 	store, err := catalog.NewCatalogStore(catalog.StoreConfig{
-		ShareInstance: share, Backend: backend, ProcessBudget: process, ShareBudget: shareBudget, PageEncoder: encoder,
+		ShareInstance: share, Backend: backend, ProcessBudget: process, ShareBudget: shareBudget, FailureEncoder: sealer,
 	})
 	if err != nil {
 		t.Fatal(err)

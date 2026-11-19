@@ -162,18 +162,27 @@ func TestCatalogPageCodecPreservesEntriesTimesAndRejectsHostileCBOR(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	page, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+	_, payload, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
 		ShareInstance: instance, DirectoryID: directory, Generation: generation,
 		Entries: []catalog.Entry{fileEntry, directoryEntry}, Terminal: true, OmittedCount: 7,
-	}, testCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded, err := encodeCatalogPage(page)
-	if err != nil {
-		t.Fatal(err)
+	encoded := payload.Bytes()
+	wire := mustCBOR(t, catalogWireEnc, map[uint64]any{
+		0: uint64(1), 1: instance.Bytes(), 2: directory.Bytes(), 3: generation.Bytes(),
+		4: uint64(0), 5: true, 6: make([]byte, catalog.PageCommitmentBytes),
+		7: [][]any{
+			{uint64(catalog.NodeKindFile), fileEntry.NodeID().Bytes(), "file.bin", uint64(99), nil, uint64(0), uint64(0)},
+			{uint64(catalog.NodeKindDirectory), directoryEntry.NodeID().Bytes(), "folder", nil, int64(-123), uint64(456_000_000), uint64(catalog.TimePrecisionMilliseconds)},
+		},
+		8: uint64(7),
+	})
+	if !bytes.Equal(encoded, wire) {
+		t.Fatalf("committed page changed protocol bytes: got %x want %x", encoded, wire)
 	}
-	decoded, err := decodeCatalogPage(encoded, testCommitter{})
+	decoded, err := catalog.DecodeCatalogPage(encoded)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,9 +190,6 @@ func TestCatalogPageCodecPreservesEntriesTimesAndRejectsHostileCBOR(t *testing.T
 	if len(entries) != 2 || entries[0].ExpectedSize() != 99 || entries[1].Name() != "folder" ||
 		entries[1].ModifiedTime() != modified || !decoded.Terminal() || decoded.OmittedCount() != 7 {
 		t.Fatalf("decoded page changed semantics: %+v", decoded)
-	}
-	if _, err := decodeCatalogPage(encoded, nil); !errors.Is(err, ErrWireObject) {
-		t.Fatalf("nil committer = %v", err)
 	}
 	for name, hostile := range map[string][]byte{
 		"empty":         nil,
@@ -199,16 +205,10 @@ func TestCatalogPageCodecPreservesEntriesTimesAndRejectsHostileCBOR(t *testing.T
 		}),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := decodeCatalogPage(hostile, testCommitter{}); err == nil {
+			if _, err := catalog.DecodeCatalogPage(hostile); err == nil {
 				t.Fatal("hostile page was accepted")
 			}
 		})
-	}
-	if _, err := encodeCatalogPage(catalog.CatalogPage{}); !errors.Is(err, ErrWireObject) {
-		t.Fatalf("zero page encoding = %v", err)
-	}
-	if _, err := decodeWireModified(mustRawCBOR(t, nil), mustRawCBOR(t, uint64(1)), mustRawCBOR(t, uint64(0))); err == nil {
-		t.Fatal("absent modified time with nonzero nanos was accepted")
 	}
 }
 
@@ -224,42 +224,39 @@ func TestAddressedSenderServesOnlyTheCommittedPage(t *testing.T) {
 		ShareInstance: share, DirectoryID: directory, Generation: generationID(t, 111),
 		Entries: []catalog.Entry{entry}, Terminal: true,
 	}
-	payload, err := encodeCatalogPageInput(catalog.PageCommitInput{
-		ShareInstance: spec.ShareInstance, DirectoryID: spec.DirectoryID, Generation: spec.Generation,
-		Entries: spec.Entries, Terminal: spec.Terminal,
-	})
+	page, payload, err := catalog.NewCatalogPage(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
 	request, _ := NewListRequest(directory, nil, 0)
-	decoder := CatalogPayloadDecoder{}
-	verified, err := decoder.Verify(ctx, share, request, payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	page := verified.Page
 	source := addressedSourceFunc(func(context.Context, ListRequest) (PageResult, error) {
-		return PageResult{Page: page, Payload: payload}, nil
+		return CatalogPageResult(payload), nil
 	})
 	service, _ := NewAddressedSenderService(share, source)
-	if got, err := service.Serve(ctx, request, nil); err != nil || !bytes.Equal(got, payload) {
+	served, err := service.Serve(ctx, request, nil)
+	if err != nil || !bytes.Equal(served, payload.Bytes()) {
 		t.Fatalf("committed catalog payload did not round trip: %v", err)
 	}
-	other, _ := catalog.NewFileEntry(fileID(t, 112), "different.bin", 1, catalog.ModifiedTime{})
-	changed, _ := encodeCatalogPageInput(catalog.PageCommitInput{
-		ShareInstance: spec.ShareInstance, DirectoryID: spec.DirectoryID, Generation: spec.Generation,
-		Entries: []catalog.Entry{other}, Terminal: spec.Terminal,
-	})
-	payload = changed
-	if _, err := service.Serve(ctx, request, nil); !errors.Is(err, catalog.ErrCorruptCatalogStorage) {
-		t.Fatalf("uncommitted catalog payload reached sending authority: %v", err)
+	verified, err := (CatalogPayloadDecoder{}).Verify(ctx, share, request, served)
+	if err != nil || verified.Page.Commitment() != page.Commitment() {
+		t.Fatalf("served catalog commitment changed: %v", err)
+	}
+	served[0] ^= 0xff
+	servedAgain, err := service.Serve(ctx, request, nil)
+	if err != nil || !bytes.Equal(servedAgain, payload.Bytes()) || bytes.Equal(served, servedAgain) {
+		t.Fatalf("caller was able to mutate committed catalog bytes: %v", err)
+	}
+	wrongGeneration := generationID(t, 113)
+	wrongRequest, _ := NewListRequest(directory, &wrongGeneration, 0)
+	if _, err := service.Serve(ctx, wrongRequest, nil); !errors.Is(err, ErrGenerationMismatch) {
+		t.Fatalf("served page from a different generation: %v", err)
 	}
 }
 
 func TestCommittedFailurePayloadSurvivesRestart(t *testing.T) {
 	fixture := newCatalogObjectFixture(t)
 	rootPath := t.TempDir()
-	objects := CatalogPayloadEncoder{}
+	objects := CatalogFailureEncoder{}
 	process, _ := catalog.NewBudgetAccount("process", catalog.DefaultProcessBudgetLimits())
 	shareBudget, _ := catalog.NewBudgetAccount("share", catalog.DefaultShareBudgetLimits())
 	session, _ := catalog.NewBudgetAccount("session", catalog.DefaultSessionBudgetLimits())
@@ -272,7 +269,7 @@ func TestCommittedFailurePayloadSurvivesRestart(t *testing.T) {
 	var attempts atomic.Uint32
 	store, err := catalog.NewCatalogStore(catalog.StoreConfig{
 		ShareInstance: fixture.share, Backend: backend, ProcessBudget: process, ShareBudget: shareBudget,
-		PageEncoder: objects, SpillFactory: catalog.NewFileSpillFactory(filepath.Join(rootPath, "sort")),
+		FailureEncoder: objects, SpillFactory: catalog.NewFileSpillFactory(filepath.Join(rootPath, "sort")),
 		AttemptIDs: catalog.ScanAttemptIDGeneratorFunc(func() (catalog.ScanAttemptID, error) {
 			return scanAttemptID(t, byte(130+attempts.Add(1))), nil
 		}),
@@ -306,7 +303,7 @@ func TestCommittedFailurePayloadSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	restartObjects := CatalogPayloadEncoder{}
+	restartObjects := CatalogFailureEncoder{}
 	recoveredProcess, _ := catalog.NewBudgetAccount("recovered-process", catalog.DefaultProcessBudgetLimits())
 	recoveredShare, _ := catalog.NewBudgetAccount("recovered-share", catalog.DefaultShareBudgetLimits())
 	recoveredSession, _ := catalog.NewBudgetAccount("recovered-session", catalog.DefaultSessionBudgetLimits())
@@ -318,7 +315,7 @@ func TestCommittedFailurePayloadSurvivesRestart(t *testing.T) {
 	}
 	recovered, err := catalog.NewCatalogStore(catalog.StoreConfig{
 		ShareInstance: fixture.share, Backend: recoveredBackend,
-		ProcessBudget: recoveredProcess, ShareBudget: recoveredShare, PageEncoder: restartObjects,
+		ProcessBudget: recoveredProcess, ShareBudget: recoveredShare, FailureEncoder: restartObjects,
 		SpillFactory: catalog.NewFileSpillFactory(filepath.Join(rootPath, "sort")),
 	})
 	if err != nil {
@@ -337,8 +334,8 @@ func TestCommittedFailurePayloadSurvivesRestart(t *testing.T) {
 	}
 	request, _ := NewListRequest(firstDirectory, nil, 0)
 	result, err := source.LoadPage(context.Background(), request, nil)
-	if err != nil || result.Failure == nil || result.Failure.AttemptID != firstFailure.AttemptID ||
-		!bytes.Equal(result.Payload, firstObject.Bytes()) {
+	if err != nil || result.failure == nil || result.failure.record.AttemptID != firstFailure.AttemptID ||
+		!bytes.Equal(result.failure.payload, firstObject.Bytes()) {
 		t.Fatalf("recovered failure result = %+v err=%v", result, err)
 	}
 	service, _ := NewAddressedSenderService(fixture.share, source)
@@ -416,44 +413,12 @@ func TestHostileCatalogObjectsAndWireFieldsFailClosed(t *testing.T) {
 	if _, err := wireUint(mustRawCBOR(t, "not uint")); !errors.Is(err, ErrWireObject) {
 		t.Fatalf("text uint = %v", err)
 	}
-	if value, err := wireInt(mustRawCBOR(t, int64(-7))); err != nil || value != -7 {
-		t.Fatalf("signed integer = %d err=%v", value, err)
-	}
-	if value, err := wireInt(mustRawCBOR(t, uint64(7))); err != nil || value != 7 {
-		t.Fatalf("unsigned integer = %d err=%v", value, err)
-	}
-	if _, err := wireInt(mustRawCBOR(t, uint64(^uint64(0)))); !errors.Is(err, ErrWireObject) {
-		t.Fatalf("overflow integer = %v", err)
-	}
-	if _, err := wireInt(mustRawCBOR(t, "not int")); !errors.Is(err, ErrWireObject) {
-		t.Fatalf("text integer = %v", err)
-	}
 	if _, err := wireBytes(mustRawCBOR(t, []byte{1}), 2); !errors.Is(err, ErrWireObject) {
 		t.Fatalf("wrong-length bytes = %v", err)
 	}
 	if _, err := wireText(mustRawCBOR(t, uint64(1))); !errors.Is(err, ErrWireObject) {
 		t.Fatalf("integer text = %v", err)
 	}
-	if _, err := wireBool(mustRawCBOR(t, uint64(1))); !errors.Is(err, ErrWireObject) {
-		t.Fatalf("integer bool = %v", err)
-	}
-	if _, err := encodeCatalogPageFields(catalog.PageCommitInput{Entries: []catalog.Entry{{}}}); !errors.Is(err, ErrWireObject) {
-		t.Fatalf("zero entry encoding = %v", err)
-	}
-	badDirectoryEntry := mustRawCBOR(t, []any{
-		uint64(catalog.NodeKindDirectory), directory.Bytes(), "directory", uint64(1), nil, uint64(0), uint64(0),
-	})
-	if _, err := decodeWireEntry(badDirectoryEntry); !errors.Is(err, ErrWireObject) {
-		t.Fatalf("directory with size = %v", err)
-	}
-	badFileEntry := mustRawCBOR(t, []any{
-		uint64(catalog.NodeKindFile), fileID(t, 174).Bytes(), "file", uint64(catalog.MaxFileSize) + 1,
-		nil, uint64(0), uint64(0),
-	})
-	if _, err := decodeWireEntry(badFileEntry); !errors.Is(err, ErrWireObject) {
-		t.Fatalf("oversized file entry = %v", err)
-	}
-
 	if _, err := decodeCatalogMap(mustCBOR(t, catalogFlowEnc, map[uint64]any{1: uint64(1)}), 1); !errors.Is(err, ErrCatalogCodec) {
 		t.Fatalf("gapped control map = %v", err)
 	}
@@ -464,10 +429,10 @@ func TestHostileCatalogObjectsAndWireFieldsFailClosed(t *testing.T) {
 		t.Fatalf("wrong-length control bytes = %v", err)
 	}
 
-	page, _ := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+	_, page, _ := catalog.NewCatalogPage(catalog.CatalogPageSpec{
 		ShareInstance: fixture.share, DirectoryID: directory, Generation: generation,
 		Entries: []catalog.Entry{entry}, Terminal: true,
-	}, testCommitter{})
+	})
 	request, _ := NewListRequest(directory, nil, 0)
 	errorService, _ := NewAddressedSenderService(fixture.share, addressedSourceFunc(
 		func(context.Context, ListRequest) (PageResult, error) {
@@ -479,27 +444,19 @@ func TestHostileCatalogObjectsAndWireFieldsFailClosed(t *testing.T) {
 	}
 	invalidFailureService, _ := NewAddressedSenderService(fixture.share, addressedSourceFunc(
 		func(context.Context, ListRequest) (PageResult, error) {
-			return PageResult{Failure: &DirectoryFailure{}, Page: page, Payload: []byte{1}}, nil
+			return PageResult{failure: &addressedDirectoryFailure{}, page: page}, nil
 		},
 	))
 	if _, err := invalidFailureService.Serve(context.Background(), request, nil); !errors.Is(err, ErrObjectIdentity) {
 		t.Fatalf("mixed page/failure result = %v", err)
 	}
-	invalidPageService, _ := NewAddressedSenderService(fixture.share, addressedSourceFunc(
-		func(context.Context, ListRequest) (PageResult, error) {
-			return PageResult{Page: page, Payload: []byte{1}}, nil
-		},
-	))
-	if _, err := invalidPageService.Serve(context.Background(), request, nil); !errors.Is(err, catalog.ErrCorruptCatalogStorage) {
-		t.Fatalf("uncommitted page object = %v", err)
-	}
-	otherPage, _ := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+	_, otherPage, _ := catalog.NewCatalogPage(catalog.CatalogPageSpec{
 		ShareInstance: shareInstance(t, 178), DirectoryID: directory, Generation: generation,
 		Entries: []catalog.Entry{entry}, Terminal: true,
-	}, testCommitter{})
+	})
 	wrongShareService, _ := NewAddressedSenderService(fixture.share, addressedSourceFunc(
 		func(context.Context, ListRequest) (PageResult, error) {
-			return PageResult{Page: otherPage, Payload: []byte{1}}, nil
+			return CatalogPageResult(otherPage), nil
 		},
 	))
 	if _, err := wrongShareService.Serve(context.Background(), request, nil); !errors.Is(err, ErrObjectIdentity) {
@@ -510,25 +467,6 @@ func TestHostileCatalogObjectsAndWireFieldsFailClosed(t *testing.T) {
 	if _, err := verifier.Verify(cancelled, fixture.share, request, []byte{1}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled verification = %v", err)
 	}
-}
-
-func catalogPageForPayload(
-	t *testing.T,
-	input catalog.PageCommitInput,
-	object catalog.PagePayload,
-) catalog.CatalogPage {
-	t.Helper()
-	page, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
-		ShareInstance: input.ShareInstance, DirectoryID: input.DirectoryID, Generation: input.Generation,
-		PageIndex: input.PageIndex, Previous: input.Previous, Entries: input.Entries,
-		Terminal: input.Terminal, OmittedCount: input.OmittedCount,
-	}, catalog.PageCommitterFunc(func(catalog.PageCommitInput) (catalog.PageCommitment, error) {
-		return object.Commitment(), nil
-	}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return page
 }
 
 func commitSelectedDirectories(

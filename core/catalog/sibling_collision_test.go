@@ -14,12 +14,12 @@ func newTinyRunStore(t *testing.T) *CatalogStore {
 	var attempt atomic.Uint32
 	var generation atomic.Uint32
 	store, err := NewCatalogStore(StoreConfig{
-		ShareInstance: idValue[ShareInstance](1),
-		Backend:       NewMemoryCatalogBackend(),
-		ProcessBudget: generousBudget(t, "process"),
-		ShareBudget:   generousBudget(t, "share"),
-		PageEncoder:   semanticTestCommitter{},
-		SpillFactory:  NewFileSpillFactory(t.TempDir()),
+		ShareInstance:  idValue[ShareInstance](1),
+		Backend:        NewMemoryCatalogBackend(),
+		ProcessBudget:  generousBudget(t, "process"),
+		ShareBudget:    generousBudget(t, "share"),
+		FailureEncoder: testFailureEncoder{},
+		SpillFactory:   NewFileSpillFactory(t.TempDir()),
 		// Force every record to flush and merge through external spill runs so
 		// multi-run portable-name collision groups are exercised deterministically.
 		SortRunBytes: 1,

@@ -1,7 +1,6 @@
 package osfs
 
 import (
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -16,32 +15,11 @@ import (
 	diag "github.com/windshare/windshare/core/diagnostics"
 )
 
-type testCatalogEncoder struct{}
+type testCatalogSealer struct{}
 
-func (testCatalogEncoder) Commit(input catalog.PageCommitInput) (catalog.PageCommitment, error) {
-	digest := sha256.Sum256(testPageBytes(input))
-	return catalog.NewPageCommitment(digest[:])
-}
-
-func (testCatalogEncoder) EncodePage(input catalog.PageCommitInput) (catalog.PagePayload, error) {
-	return catalog.NewPagePayload(testPageBytes(input))
-}
-
-func (testCatalogEncoder) EncodeFailure(record catalog.DirectoryFailureRecord) (catalog.FailurePayload, error) {
+func (testCatalogSealer) EncodeFailure(record catalog.DirectoryFailureRecord) (catalog.FailurePayload, error) {
 	payload := fmt.Appendf(nil, "%x:%x:%x:%d", record.ShareInstance(), record.DirectoryID(), record.AttemptID(), record.Kind())
 	return catalog.NewFailurePayload(payload)
-}
-
-func testPageBytes(input catalog.PageCommitInput) []byte {
-	payload := fmt.Appendf(
-		nil, "%x:%x:%x:%d:%t:%d:%d",
-		input.ShareInstance, input.DirectoryID, input.Generation,
-		input.PageIndex, input.Terminal, input.OmittedCount, len(input.Entries),
-	)
-	for _, entry := range input.Entries {
-		payload = fmt.Appendf(payload, "|%s:%x", entry.Name(), entry.NodeID())
-	}
-	return payload
 }
 
 func commitSourceDirectory(
@@ -64,12 +42,12 @@ func commitSourceDirectory(
 		t.Fatal(err)
 	}
 	store, err := catalog.NewCatalogStore(catalog.StoreConfig{
-		ShareInstance: share,
-		Backend:       catalog.NewMemoryCatalogBackend(),
-		ProcessBudget: process,
-		ShareBudget:   shareBudget,
-		PageEncoder:   testCatalogEncoder{},
-		SpillFactory:  catalog.NewFileSpillFactory(t.TempDir()),
+		ShareInstance:  share,
+		Backend:        catalog.NewMemoryCatalogBackend(),
+		ProcessBudget:  process,
+		ShareBudget:    shareBudget,
+		FailureEncoder: testCatalogSealer{},
+		SpillFactory:   catalog.NewFileSpillFactory(t.TempDir()),
 	})
 	if err != nil {
 		t.Fatal(err)

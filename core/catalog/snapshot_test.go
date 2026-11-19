@@ -2,25 +2,15 @@ package catalog
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"testing"
 	"time"
 )
 
-type semanticTestCommitter struct{}
+type testFailureEncoder struct{}
 
-func (semanticTestCommitter) Commit(input PageCommitInput) (PageCommitment, error) {
-	digest := sha256.Sum256(semanticTestPageBytes(input))
-	return NewPageCommitment(digest[:])
-}
-
-func (semanticTestCommitter) EncodePage(input PageCommitInput) (PagePayload, error) {
-	return NewPagePayload(semanticTestPageBytes(input))
-}
-
-func (semanticTestCommitter) EncodeFailure(record DirectoryFailureRecord) (FailurePayload, error) {
+func (testFailureEncoder) EncodeFailure(record DirectoryFailureRecord) (FailurePayload, error) {
 	var encoded bytes.Buffer
 	_, _ = encoded.Write(record.ShareInstance().Bytes())
 	_, _ = encoded.Write(record.DirectoryID().Bytes())
@@ -34,36 +24,13 @@ func (semanticTestCommitter) EncodeFailure(record DirectoryFailureRecord) (Failu
 	return NewFailurePayload(encoded.Bytes())
 }
 
-func semanticTestPageBytes(input PageCommitInput) []byte {
-	var encoded bytes.Buffer
-	_, _ = encoded.Write(input.ShareInstance.Bytes())
-	_, _ = encoded.Write(input.DirectoryID.Bytes())
-	_, _ = encoded.Write(input.Generation.Bytes())
-	var number [4]byte
-	binary.BigEndian.PutUint32(number[:], input.PageIndex)
-	_, _ = encoded.Write(number[:])
-	_, _ = encoded.Write(input.Previous.Bytes())
-	for _, entry := range input.Entries {
-		_, _ = encoded.Write([]byte(entry.Name()))
-		_, _ = encoded.Write(entry.NodeID().Bytes())
-	}
-	if input.Terminal {
-		_ = encoded.WriteByte(1)
-	}
-	return encoded.Bytes()
-}
-
 func mustTestPagePayload(t *testing.T, page CatalogPage) PagePayload {
 	t.Helper()
-	object, err := semanticTestCommitter{}.EncodePage(PageCommitInput{
-		ShareInstance: page.ShareInstance(), DirectoryID: page.DirectoryID(), Generation: page.Generation(),
-		PageIndex: page.PageIndex(), Previous: page.Previous(), Entries: page.Entries(),
-		Terminal: page.Terminal(), OmittedCount: page.OmittedCount(),
-	})
+	payload, err := encodePagePayload(page)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return object
+	return payload
 }
 
 func testEntries(t *testing.T, start, count int) []Entry {
@@ -84,18 +51,18 @@ func TestDirectorySnapshotValidatesPageChainAndOwnsEntries(t *testing.T) {
 	instance := idValue[ShareInstance](1)
 	directory := idValue[DirectoryID](2)
 	generation := idValue[DirectoryGeneration](3)
-	first, err := NewCatalogPage(CatalogPageSpec{
+	first, _, err := NewCatalogPage(CatalogPageSpec{
 		ShareInstance: instance,
 		DirectoryID:   directory,
 		Generation:    generation,
 		PageIndex:     0,
 		Entries:       testEntries(t, 0, 2),
-	}, semanticTestCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	secondEntries := testEntries(t, 2, 1)
-	second, err := NewCatalogPage(CatalogPageSpec{
+	second, _, err := NewCatalogPage(CatalogPageSpec{
 		ShareInstance: instance,
 		DirectoryID:   directory,
 		Generation:    generation,
@@ -104,7 +71,7 @@ func TestDirectorySnapshotValidatesPageChainAndOwnsEntries(t *testing.T) {
 		Previous:      first.Commitment(),
 		Entries:       secondEntries,
 		OmittedCount:  4,
-	}, semanticTestCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +116,7 @@ func TestDirectorySnapshotRejectsGapsConflictsAndNonTerminalTail(t *testing.T) {
 	instance := idValue[ShareInstance](1)
 	directory := idValue[DirectoryID](2)
 	generation := idValue[DirectoryGeneration](3)
-	page, err := NewCatalogPage(CatalogPageSpec{
+	page, _, err := NewCatalogPage(CatalogPageSpec{
 		ShareInstance: instance,
 		DirectoryID:   directory,
 		Generation:    generation,
@@ -157,7 +124,7 @@ func TestDirectorySnapshotRejectsGapsConflictsAndNonTerminalTail(t *testing.T) {
 		Previous:      mustPageCommitment(t, bytes.Repeat([]byte{0x7f}, PageCommitmentBytes)),
 		Terminal:      true,
 		Entries:       testEntries(t, 0, 1),
-	}, semanticTestCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,12 +132,12 @@ func TestDirectorySnapshotRejectsGapsConflictsAndNonTerminalTail(t *testing.T) {
 		t.Fatalf("gap error = %v", err)
 	}
 
-	nonTerminal, err := NewCatalogPage(CatalogPageSpec{
+	nonTerminal, _, err := NewCatalogPage(CatalogPageSpec{
 		ShareInstance: instance,
 		DirectoryID:   directory,
 		Generation:    generation,
 		Entries:       testEntries(t, 0, 1),
-	}, semanticTestCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,14 +163,14 @@ func TestCatalogPageEnforcesEntryAndSiblingBounds(t *testing.T) {
 		Terminal:      true,
 	}
 	base.Entries = make([]Entry, MaxCatalogPageEntries+1)
-	if _, err := NewCatalogPage(base, semanticTestCommitter{}); !errors.Is(err, ErrPageLimit) {
+	if _, _, err := NewCatalogPage(base); !errors.Is(err, ErrPageLimit) {
 		t.Fatalf("page limit error = %v", err)
 	}
 
 	first, _ := NewFileEntry(idValue[FileID](1), "Readme", 1, ModifiedTime{})
 	second, _ := NewFileEntry(idValue[FileID](2), "README", 1, ModifiedTime{})
 	base.Entries = []Entry{first, second}
-	if _, err := NewCatalogPage(base, semanticTestCommitter{}); !errors.Is(err, ErrSiblingCollision) {
+	if _, _, err := NewCatalogPage(base); !errors.Is(err, ErrSiblingCollision) {
 		t.Fatalf("collision error = %v", err)
 	}
 }

@@ -101,15 +101,6 @@ func TestCanonicalPathRejectsEveryContainmentShape(t *testing.T) {
 	}
 }
 
-type failingPageCommitter struct{ empty bool }
-
-func (c failingPageCommitter) Commit(PageCommitInput) (PageCommitment, error) {
-	if c.empty {
-		return PageCommitment{}, nil
-	}
-	return PageCommitment{}, errors.New("commit failure")
-}
-
 func TestSnapshotConstructorsRejectMalformedSemanticChains(t *testing.T) {
 	if _, err := NewPageCommitment(make([]byte, PageCommitmentBytes-1)); err == nil {
 		t.Fatal("short commitment was accepted")
@@ -118,37 +109,28 @@ func TestSnapshotConstructorsRejectMalformedSemanticChains(t *testing.T) {
 		ShareInstance: idValue[ShareInstance](1), DirectoryID: idValue[DirectoryID](2),
 		Generation: idValue[DirectoryGeneration](3), Terminal: true,
 	}
-	if _, err := NewCatalogPage(CatalogPageSpec{}, semanticTestCommitter{}); err == nil {
+	if _, _, err := NewCatalogPage(CatalogPageSpec{}); err == nil {
 		t.Fatal("identity-free page was accepted")
-	}
-	if _, err := NewCatalogPage(base, nil); err == nil {
-		t.Fatal("page without a committer was accepted")
 	}
 	withPrevious := base
 	withPrevious.Previous = mustPageCommitment(t, bytes.Repeat([]byte{1}, PageCommitmentBytes))
-	if _, err := NewCatalogPage(withPrevious, semanticTestCommitter{}); err == nil {
+	if _, _, err := NewCatalogPage(withPrevious); err == nil {
 		t.Fatal("page zero predecessor was accepted")
 	}
 	later := base
 	later.PageIndex = 1
-	if _, err := NewCatalogPage(later, semanticTestCommitter{}); err == nil {
+	if _, _, err := NewCatalogPage(later); err == nil {
 		t.Fatal("later page without predecessor was accepted")
-	}
-	if _, err := NewCatalogPage(base, failingPageCommitter{}); err == nil {
-		t.Fatal("committer failure was accepted")
-	}
-	if _, err := NewCatalogPage(base, failingPageCommitter{empty: true}); err == nil {
-		t.Fatal("zero commitment was accepted")
 	}
 	nonterminalEmpty := base
 	nonterminalEmpty.Terminal = false
-	if _, err := NewCatalogPage(nonterminalEmpty, semanticTestCommitter{}); err == nil {
+	if _, _, err := NewCatalogPage(nonterminalEmpty); err == nil {
 		t.Fatal("empty nonterminal page was accepted")
 	}
 	unsorted := base
 	unsorted.Entries = testEntries(t, 0, 2)
 	unsorted.Entries[0], unsorted.Entries[1] = unsorted.Entries[1], unsorted.Entries[0]
-	if _, err := NewCatalogPage(unsorted, semanticTestCommitter{}); err == nil {
+	if _, _, err := NewCatalogPage(unsorted); err == nil {
 		t.Fatal("unsorted entries were accepted")
 	}
 	if _, err := NewDirectorySnapshot(nil); err == nil {
@@ -156,7 +138,7 @@ func TestSnapshotConstructorsRejectMalformedSemanticChains(t *testing.T) {
 	}
 	omittedOverflow := base
 	omittedOverflow.OmittedCount = MaxDirectoryEntries + 1
-	overflowPage, err := NewCatalogPage(omittedOverflow, semanticTestCommitter{})
+	overflowPage, _, err := NewCatalogPage(omittedOverflow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +194,7 @@ func TestMemoryBackendRejectsInvalidTransactionLifecycles(t *testing.T) {
 	if _, _, err := backend.LoadDirectory(cancelled, idValue[DirectoryID](1)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled directory load = %v", err)
 	}
-	if _, _, err := backend.LoadPage(cancelled, idValue[DirectoryID](1), idValue[DirectoryGeneration](2), 0); !errors.Is(err, context.Canceled) {
+	if _, _, err := backend.LoadPagePayload(cancelled, idValue[DirectoryID](1), idValue[DirectoryGeneration](2), 0); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled page load = %v", err)
 	}
 	if _, _, err := backend.LoadNode(cancelled, idValue[NodeID](1)); !errors.Is(err, context.Canceled) {
@@ -230,7 +212,7 @@ func TestMemoryBackendRejectsInvalidTransactionLifecycles(t *testing.T) {
 	if _, _, err := backend.LoadDirectory(context.Background(), idValue[DirectoryID](1)); !errors.Is(err, ErrCatalogClosed) {
 		t.Fatalf("closed directory load = %v", err)
 	}
-	if _, _, err := backend.LoadPage(context.Background(), idValue[DirectoryID](1), idValue[DirectoryGeneration](2), 0); !errors.Is(err, ErrCatalogClosed) {
+	if _, _, err := backend.LoadPagePayload(context.Background(), idValue[DirectoryID](1), idValue[DirectoryGeneration](2), 0); !errors.Is(err, ErrCatalogClosed) {
 		t.Fatalf("closed page load = %v", err)
 	}
 	if _, _, err := backend.LoadNode(context.Background(), idValue[NodeID](1)); !errors.Is(err, ErrCatalogClosed) {
@@ -273,10 +255,10 @@ func TestDirectorySnapshotRejectsCrossPageIdentityAndChainMutations(t *testing.T
 	instance := idValue[ShareInstance](1)
 	directory := idValue[DirectoryID](2)
 	generation := idValue[DirectoryGeneration](3)
-	first, err := NewCatalogPage(CatalogPageSpec{
+	first, _, err := NewCatalogPage(CatalogPageSpec{
 		ShareInstance: instance, DirectoryID: directory, Generation: generation,
 		Entries: testEntries(t, 0, 1),
-	}, semanticTestCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +266,7 @@ func TestDirectorySnapshotRejectsCrossPageIdentityAndChainMutations(t *testing.T
 		ShareInstance: instance, DirectoryID: directory, Generation: generation, PageIndex: 1,
 		Previous: first.Commitment(), Entries: testEntries(t, 1, 1), Terminal: true,
 	}
-	validSecond, _ := NewCatalogPage(secondSpec, semanticTestCommitter{})
+	validSecond, _, _ := NewCatalogPage(secondSpec)
 	mutations := []func(*CatalogPage){
 		func(page *CatalogPage) { page.shareInstance = idValue[ShareInstance](9) },
 		func(page *CatalogPage) { page.pageIndex = 2 },

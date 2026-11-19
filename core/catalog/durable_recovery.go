@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"hash"
 	"io"
 	"os"
@@ -89,14 +88,6 @@ func minimumCatalogPageCount(entries uint64) uint32 {
 	return uint32((entries + MaxCatalogPageEntries - 1) / MaxCatalogPageEntries)
 }
 
-func readFileCatalogMeta(path string) (fileCatalogMeta, error) {
-	encoded, err := readCatalogObject(path)
-	if err != nil {
-		return fileCatalogMeta{}, err
-	}
-	return decodeFileCatalogMeta(encoded)
-}
-
 func (b *FileCatalogBackend) LoadNode(ctx context.Context, id NodeID) (NodeRecord, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return NodeRecord{}, false, err
@@ -130,7 +121,12 @@ func (b *FileCatalogBackend) loadNodeLocked(ctx context.Context, id NodeID, excl
 }
 
 func (b *FileCatalogBackend) validateCommittedPath(ctx context.Context, path string) (fileCatalogMeta, error) {
-	meta, directoryBytes, err := b.readCommittedIdentity(path)
+	metadata, meta, err := openFileCatalogMeta(filepath.Join(path, fileCatalogMetaName))
+	if err != nil {
+		return fileCatalogMeta{}, err
+	}
+	defer metadata.Close()
+	directoryBytes, err := b.readCommittedDirectory(path, meta)
 	if err != nil {
 		return fileCatalogMeta{}, err
 	}
@@ -138,7 +134,7 @@ func (b *FileCatalogBackend) validateCommittedPath(ctx context.Context, path str
 	if err != nil {
 		return fileCatalogMeta{}, err
 	}
-	computed, validationErr := validateCommittedContents(ctx, path, meta, directoryBytes, children)
+	computed, validationErr := validateCommittedContents(ctx, path, meta, metadata, directoryBytes, children)
 	closeErr := children.Close()
 	if err := errors.Join(validationErr, closeErr); err != nil {
 		return fileCatalogMeta{}, err
@@ -153,32 +149,29 @@ func (b *FileCatalogBackend) validateCommittedPath(ctx context.Context, path str
 	return meta, nil
 }
 
-func (b *FileCatalogBackend) readCommittedIdentity(path string) (fileCatalogMeta, []byte, error) {
-	meta, err := readFileCatalogMeta(filepath.Join(path, fileCatalogMetaName))
-	if err != nil {
-		return fileCatalogMeta{}, nil, err
-	}
+func (b *FileCatalogBackend) readCommittedDirectory(path string, meta fileCatalogMeta) ([]byte, error) {
 	if meta.share != b.share || filepath.Base(path) != hex.EncodeToString(meta.directory[:]) {
-		return fileCatalogMeta{}, nil, ErrCorruptCatalogStorage
+		return nil, ErrCorruptCatalogStorage
 	}
 	directoryBytes, err := readCatalogObject(filepath.Join(path, fileCatalogDirectoryName))
 	if err != nil {
-		return fileCatalogMeta{}, nil, err
+		return nil, err
 	}
 	directory, err := decodeNodeRecord(directoryBytes)
 	if err != nil {
-		return fileCatalogMeta{}, nil, err
+		return nil, err
 	}
 	if id, ok := directory.DirectoryID(); !ok || id != meta.directory {
-		return fileCatalogMeta{}, nil, ErrCorruptCatalogStorage
+		return nil, ErrCorruptCatalogStorage
 	}
-	return meta, directoryBytes, nil
+	return directoryBytes, nil
 }
 
 func validateCommittedContents(
 	ctx context.Context,
 	path string,
 	meta fileCatalogMeta,
+	metadata io.ReaderAt,
 	directoryBytes []byte,
 	children io.Reader,
 ) ([sha256.Size]byte, error) {
@@ -189,7 +182,7 @@ func validateCommittedContents(
 		if err := ctx.Err(); err != nil {
 			return [sha256.Size]byte{}, err
 		}
-		if err := validateCommittedPage(path, meta.directory, index, children, digest, &sequence); err != nil {
+		if err := validateCommittedPage(path, meta, metadata, index, children, digest, &sequence); err != nil {
 			return [sha256.Size]byte{}, err
 		}
 	}
@@ -211,27 +204,20 @@ func validateCommittedContents(
 
 func validateCommittedPage(
 	path string,
-	directory DirectoryID,
+	meta fileCatalogMeta,
+	metadata io.ReaderAt,
 	index uint32,
 	children io.Reader,
 	digest hash.Hash,
 	sequence *DirectoryGenerationValidator,
 ) error {
-	pageBytes, err := readCatalogObject(filepath.Join(path, "pages", fmt.Sprintf("%08x.page", index)))
+	payload, err := readFilePagePayload(path, meta, metadata, index)
 	if err != nil {
 		return err
 	}
-	page, err := decodeCatalogPage(pageBytes)
+	page, err := payload.decode()
 	if err != nil {
 		return err
-	}
-	payloadBytes, err := readCatalogObject(filepath.Join(path, fileCatalogPayloadsName, fmt.Sprintf("%08x.object", index)))
-	if err != nil {
-		return err
-	}
-	payload, err := NewPagePayload(payloadBytes)
-	if err != nil || payload.Commitment() != page.Commitment() {
-		return ErrCorruptCatalogStorage
 	}
 	for _, entry := range page.entries {
 		nodeBytes, ok, err := readNodeFrame(children)
@@ -239,7 +225,7 @@ func validateCommittedPage(
 			return ErrCorruptCatalogStorage
 		}
 		node, err := decodeNodeRecord(nodeBytes)
-		if err != nil || !node.MatchesEntry(entry) || node.Parent() != directory {
+		if err != nil || !node.MatchesEntry(entry) || node.Parent() != meta.directory {
 			return ErrCorruptCatalogStorage
 		}
 		hashCatalogObject(digest, 2, nodeBytes)
@@ -247,8 +233,7 @@ func validateCommittedPage(
 	if err := sequence.AcceptPage(page); err != nil {
 		return err
 	}
-	hashCatalogObject(digest, 3, pageBytes)
-	hashCatalogObject(digest, 4, payloadBytes)
+	hashCatalogObject(digest, 3, payload.encoded)
 	return nil
 }
 

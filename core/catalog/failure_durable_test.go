@@ -47,11 +47,11 @@ func openFailureStore(
 		t.Fatal(err)
 	}
 	if encoder == nil {
-		encoder = semanticTestCommitter{}
+		encoder = testFailureEncoder{}
 	}
 	store, err := NewCatalogStore(StoreConfig{
 		ShareInstance: idValue[ShareInstance](1), Backend: backend,
-		ProcessBudget: process, ShareBudget: share, PageEncoder: semanticTestCommitter{},
+		ProcessBudget: process, ShareBudget: share,
 		FailureEncoder: encoder, SpillFactory: NewFileSpillFactory(filepath.Join(root, "sort")),
 		Clock: clock, AttemptIDs: attempts, Generations: generations,
 	})
@@ -131,7 +131,7 @@ func TestTransientFailureCooldownAndAttemptChainSurviveRestarts(t *testing.T) {
 		t, rootPath, generousBudget(t, "process-a"), generousBudget(t, "share-a"), clockA,
 		ScanAttemptIDGeneratorFunc(func() (ScanAttemptID, error) { return attemptA, nil }),
 		DirectoryGenerationGeneratorFunc(func() (DirectoryGeneration, error) { return generationA, nil }),
-		semanticTestCommitter{}, nil,
+		testFailureEncoder{}, nil,
 	)
 	sessionA := generousBudget(t, "session-a")
 	directory := prepareScannableDirectory(t, store, sessionA, 43, 45)
@@ -154,7 +154,7 @@ func TestTransientFailureCooldownAndAttemptChainSurviveRestarts(t *testing.T) {
 	clockB := &fakeClock{now: time.Unix(200, 0)}
 	attemptB := idValue[ScanAttemptID](46)
 	generationB := idValue[DirectoryGeneration](47)
-	encodeB := &failureEncoderProbe{delegate: semanticTestCommitter{}}
+	encodeB := &failureEncoderProbe{delegate: testFailureEncoder{}}
 	recoveredB, backendB := openFailureStore(
 		t, rootPath, generousBudget(t, "process-b"), generousBudget(t, "share-b"), clockB,
 		ScanAttemptIDGeneratorFunc(func() (ScanAttemptID, error) { return attemptB, nil }),
@@ -369,7 +369,7 @@ func TestFailureRecoveryRejectsCorruptObjectsMetadataAndChains(t *testing.T) {
 			_, err = NewCatalogStore(StoreConfig{
 				ShareInstance: idValue[ShareInstance](1), Backend: corruptBackend,
 				ProcessBudget: generousBudget(t, "rp"), ShareBudget: generousBudget(t, "rs"),
-				PageEncoder: semanticTestCommitter{},
+				FailureEncoder: testFailureEncoder{},
 			})
 			if !errors.Is(err, ErrCorruptCatalogStorage) {
 				t.Fatalf("corrupt failure authority was accepted: %v", err)

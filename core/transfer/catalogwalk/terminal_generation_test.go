@@ -293,13 +293,11 @@ func walkPage(
 	omitted uint64,
 ) catalog.CatalogPage {
 	t.Helper()
-	page, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+	page, _, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
 		ShareInstance: share, DirectoryID: directory,
 		Generation: walkID[catalog.DirectoryGeneration](4),
 		Entries:    entries, Terminal: terminal, OmittedCount: omitted,
-	}, catalog.PageCommitterFunc(func(catalog.PageCommitInput) (catalog.PageCommitment, error) {
-		return walkCommitment(5), nil
-	}))
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +314,7 @@ func walkSequencedPage(
 	terminal bool,
 ) catalog.CatalogPage {
 	t.Helper()
-	page, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+	page, _, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
 		ShareInstance: share,
 		DirectoryID:   directory,
 		Generation:    walkID[catalog.DirectoryGeneration](4),
@@ -324,9 +322,7 @@ func walkSequencedPage(
 		Previous:      previous,
 		Entries:       entries,
 		Terminal:      terminal,
-	}, catalog.PageCommitterFunc(func(catalog.PageCommitInput) (catalog.PageCommitment, error) {
-		return walkCommitment(byte(10 + index)), nil
-	}))
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

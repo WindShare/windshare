@@ -35,8 +35,8 @@ func TestLongNamesFitPagePayloadsAndSurviveRestart(t *testing.T) {
 				share, _ := catalog.NewBudgetAccount("share", catalog.DefaultShareBudgetLimits())
 				store, err := catalog.NewCatalogStore(catalog.StoreConfig{
 					ShareInstance: fixture.share, Backend: backend, ProcessBudget: process, ShareBudget: share,
-					PageEncoder:  CatalogPayloadEncoder{},
-					SpillFactory: catalog.NewFileSpillFactory(filepath.Join(disk, "sort")),
+					FailureEncoder: CatalogFailureEncoder{},
+					SpillFactory:   catalog.NewFileSpillFactory(filepath.Join(disk, "sort")),
 				})
 				if err != nil {
 					t.Fatal(err)

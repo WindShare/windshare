@@ -364,7 +364,6 @@ type StoreConfig struct {
 	Backend        CatalogBackend
 	ProcessBudget  *BudgetAccount
 	ShareBudget    *BudgetAccount
-	PageEncoder    PageEncoder
 	FailureEncoder FailureEncoder
 	SpillFactory   SpillFactory
 	SortRunBytes   uint64

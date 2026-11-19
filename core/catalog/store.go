@@ -17,7 +17,6 @@ type CatalogStore struct {
 	backend        CatalogBackend
 	processBudget  *BudgetAccount
 	shareBudget    *BudgetAccount
-	pageEncoder    PageEncoder
 	failureEncoder FailureEncoder
 	spillFactory   SpillFactory
 	sortRunBytes   uint64
@@ -43,12 +42,9 @@ type scanAttemptIdentity struct {
 }
 
 func NewCatalogStore(config StoreConfig) (result *CatalogStore, resultErr error) {
-	if config.FailureEncoder == nil {
-		config.FailureEncoder, _ = config.PageEncoder.(FailureEncoder)
-	}
 	if config.ShareInstance.IsZero() || config.Backend == nil || config.ProcessBudget == nil ||
-		config.ShareBudget == nil || config.PageEncoder == nil || config.FailureEncoder == nil {
-		return nil, errors.New("catalog store requires share identity, backend, budgets, and payload encoders")
+		config.ShareBudget == nil || config.FailureEncoder == nil {
+		return nil, errors.New("catalog store requires share identity, backend, budgets, and failure sealer")
 	}
 	if config.ProcessBudget == config.ShareBudget {
 		return nil, errors.New("catalog store process and share budgets must be distinct")
@@ -102,8 +98,8 @@ func NewCatalogStore(config StoreConfig) (result *CatalogStore, resultErr error)
 	store := &CatalogStore{
 		shareInstance: config.ShareInstance, backend: config.Backend,
 		processBudget: config.ProcessBudget, shareBudget: config.ShareBudget,
-		pageEncoder: config.PageEncoder, failureEncoder: config.FailureEncoder,
-		spillFactory: config.SpillFactory, sortRunBytes: config.SortRunBytes,
+		failureEncoder: config.FailureEncoder,
+		spillFactory:   config.SpillFactory, sortRunBytes: config.SortRunBytes,
 		clock: config.Clock, attemptIDs: config.AttemptIDs, generations: config.Generations,
 		attempts: make(map[DirectoryID]*scanAttempt), usedAttempts: make(map[scanAttemptIdentity]struct{}),
 		usedGenerations: make(map[DirectoryGeneration]struct{}), recoveredReservation: recoveredReservation,
@@ -137,15 +133,12 @@ func (s *CatalogStore) Directory(ctx context.Context, directory DirectoryID) (Co
 }
 
 func (s *CatalogStore) Page(ctx context.Context, directory DirectoryID, generation DirectoryGeneration, index uint32) (CatalogPage, bool, error) {
-	if s.isClosed() {
-		return CatalogPage{}, false, ErrCatalogClosed
+	payload, found, err := s.PagePayload(ctx, directory, generation, index)
+	if err != nil || !found {
+		return CatalogPage{}, false, err
 	}
-	page, found, err := s.backend.LoadPage(ctx, directory, generation, index)
-	if err == nil && found && (page.ShareInstance() != s.shareInstance || page.DirectoryID() != directory ||
-		page.Generation() != generation || page.PageIndex() != index) {
-		return CatalogPage{}, false, ErrCorruptCatalogStorage
-	}
-	return page, found, err
+	page, err := payload.decode()
+	return page, err == nil, err
 }
 
 func (s *CatalogStore) PagePayload(ctx context.Context, directory DirectoryID, generation DirectoryGeneration, index uint32) (PagePayload, bool, error) {
@@ -154,14 +147,10 @@ func (s *CatalogStore) PagePayload(ctx context.Context, directory DirectoryID, g
 	}
 	payload, found, err := s.backend.LoadPagePayload(ctx, directory, generation, index)
 	if err != nil || !found {
-		return PagePayload{}, found, err
-	}
-	page, pageFound, err := s.backend.LoadPage(ctx, directory, generation, index)
-	if err != nil {
 		return PagePayload{}, false, err
 	}
-	if !pageFound || page.ShareInstance() != s.shareInstance || page.DirectoryID() != directory ||
-		page.Generation() != generation || page.PageIndex() != index || payload.Commitment() != page.Commitment() {
+	address := PageAddress{ShareInstance: s.shareInstance, DirectoryID: directory, Generation: generation, PageIndex: index}
+	if payload.IsZero() || payload.Address() != address {
 		return PagePayload{}, false, ErrCorruptCatalogStorage
 	}
 	return payload, true, nil

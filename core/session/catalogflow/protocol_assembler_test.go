@@ -158,10 +158,10 @@ func TestAssemblerRejectsGapConflictIdentityAndPostTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	extra, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+	extra, _, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
 		ShareInstance: instance, DirectoryID: directory, Generation: snapshot.Generation(),
 		PageIndex: 2, Previous: pages[1].Commitment(), Entries: []catalog.Entry{extraEntry}, Terminal: true,
-	}, testCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,15 +309,25 @@ func TestAddressedSenderRejectsInvalidSourceResults(t *testing.T) {
 		t.Fatalf("source error was hidden: %v", err)
 	}
 
-	page := onePageSnapshot(t, instance, directory, 40, "item").Pages()[0]
-	foreign := onePageSnapshot(t, shareInstance(t, 42), directory, 43, "item").Pages()[0]
+	newPayload := func(instance catalog.ShareInstance) catalog.PagePayload {
+		t.Helper()
+		_, payload, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+			ShareInstance: instance, DirectoryID: directory, Generation: generationID(t, 40), Terminal: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return payload
+	}
+	page := newPayload(instance)
+	foreign := newPayload(shareInstance(t, 42))
 	failure := mustDirectoryFailure(t, instance, directory, 41, DirectoryCodePermanentIO, false)
 	wrongShare := withFailure(failure, func(value *DirectoryFailure) { value.ShareInstance = shareInstance(t, 44) })
 	for name, result := range map[string]PageResult{
 		"no outcome":      {},
-		"both outcomes":   {Page: page, Failure: &failure},
-		"foreign page":    {Page: foreign},
-		"foreign failure": {Failure: &wrongShare},
+		"both outcomes":   {page: page, failure: &addressedDirectoryFailure{record: failure}},
+		"foreign page":    CatalogPageResult(foreign),
+		"foreign failure": {failure: &addressedDirectoryFailure{record: wrongShare}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			source := addressedSourceFunc(func(context.Context, ListRequest) (PageResult, error) {

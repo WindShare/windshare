@@ -15,7 +15,10 @@ var (
 	ErrGenerationConflict = errors.New("catalog directory generation conflicts with committed state")
 )
 
-const memoryObjectOverhead = uint64(64)
+const (
+	memoryObjectOverhead = uint64(64)
+	memoryPageOverhead   = uint64(128)
+)
 
 type BackendPreparation struct {
 	Directory CommittedDirectory
@@ -42,7 +45,6 @@ type CatalogBackend interface {
 	Recover(context.Context) (ResourceUsage, error)
 	BeginDirectory(context.Context, DirectoryID, DirectoryGeneration, ResourceMeter) (BackendTransaction, error)
 	LoadDirectory(context.Context, DirectoryID) (CommittedDirectory, bool, error)
-	LoadPage(context.Context, DirectoryID, DirectoryGeneration, uint32) (CatalogPage, bool, error)
 	LoadPagePayload(context.Context, DirectoryID, DirectoryGeneration, uint32) (PagePayload, bool, error)
 	CommitFailure(context.Context, DirectoryFailureRecord, FailurePayload, ResourceMeter, func(ResourceUsage) error) (FailurePreparation, error)
 	LoadFailurePayload(context.Context, DirectoryID, ScanAttemptID) (FailurePayload, bool, error)
@@ -56,8 +58,7 @@ type memoryDirectory struct {
 	digest        [sha256.Size]byte
 	directoryNode []byte
 	children      map[NodeID][]byte
-	pages         map[uint32][]byte
-	pagePayloads  map[uint32][]byte
+	pages         map[uint32]PagePayload
 	usage         ResourceUsage
 }
 
@@ -125,7 +126,7 @@ func (b *MemoryCatalogBackend) BeginDirectory(ctx context.Context, directory Dir
 	}
 	return &memoryCatalogTransaction{
 		backend: b, directory: directory, generation: generation, meter: meter,
-		children: make(map[NodeID][]byte), pages: make(map[uint32][]byte), pagePayloads: make(map[uint32][]byte),
+		children: make(map[NodeID][]byte), pages: make(map[uint32]PagePayload),
 		digest: sha256.New(),
 	}, nil
 }
@@ -143,58 +144,24 @@ func (b *MemoryCatalogBackend) LoadDirectory(ctx context.Context, directory Dire
 	return value.committed, ok, nil
 }
 
-func (b *MemoryCatalogBackend) LoadPage(ctx context.Context, directory DirectoryID, generation DirectoryGeneration, index uint32) (CatalogPage, bool, error) {
-	if err := ctx.Err(); err != nil {
-		return CatalogPage{}, false, err
-	}
-	b.mu.RLock()
-	if b.closed {
-		b.mu.RUnlock()
-		return CatalogPage{}, false, ErrCatalogClosed
-	}
-	value, ok := b.directories[directory]
-	if !ok || value.committed.generation != generation {
-		b.mu.RUnlock()
-		return CatalogPage{}, false, nil
-	}
-	encoded, ok := value.pages[index]
-	owned := append([]byte(nil), encoded...)
-	b.mu.RUnlock()
-	if !ok {
-		return CatalogPage{}, false, nil
-	}
-	page, err := decodeCatalogPage(owned)
-	if err != nil {
-		return CatalogPage{}, false, err
-	}
-	return page, true, nil
-}
-
 func (b *MemoryCatalogBackend) LoadPagePayload(ctx context.Context, directory DirectoryID, generation DirectoryGeneration, index uint32) (PagePayload, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return PagePayload{}, false, err
 	}
 	b.mu.RLock()
+	defer b.mu.RUnlock()
 	if b.closed {
-		b.mu.RUnlock()
 		return PagePayload{}, false, ErrCatalogClosed
 	}
 	value, ok := b.directories[directory]
-	if !ok || value.committed.generation != generation {
-		b.mu.RUnlock()
+	if !ok || value.committed.generation != generation || index >= value.committed.pageCount {
 		return PagePayload{}, false, nil
 	}
-	encoded, ok := value.pagePayloads[index]
-	owned := append([]byte(nil), encoded...)
-	b.mu.RUnlock()
+	page, ok := value.pages[index]
 	if !ok {
-		return PagePayload{}, false, nil
+		return PagePayload{}, false, ErrCorruptCatalogStorage
 	}
-	payload, err := NewPagePayload(owned)
-	if err != nil {
-		return PagePayload{}, false, errors.Join(ErrCorruptCatalogStorage, err)
-	}
-	return payload, true, nil
+	return page, true, nil
 }
 
 func (b *MemoryCatalogBackend) LoadNode(ctx context.Context, id NodeID) (NodeRecord, bool, error) {
@@ -240,8 +207,7 @@ type memoryCatalogTransaction struct {
 	children        map[NodeID][]byte
 	pending         []NodeRecord
 	pendingMemory   uint64
-	pages           map[uint32][]byte
-	pagePayloads    map[uint32][]byte
+	pages           map[uint32]PagePayload
 	sequence        DirectoryGenerationValidator
 	digest          hash.Hash
 	usage           ResourceUsage
@@ -257,8 +223,8 @@ func (t *memoryCatalogTransaction) ensureOpen() error {
 	return nil
 }
 
-func (t *memoryCatalogTransaction) chargeBytes(encoded []byte) error {
-	charge := ResourceUsage{MemoryBytes: memoryObjectOverhead + uint64(len(encoded))}
+func (t *memoryCatalogTransaction) chargeMemory(bytes uint64) error {
+	charge := ResourceUsage{MemoryBytes: bytes}
 	if err := t.meter.Consume(charge); err != nil {
 		return err
 	}
@@ -291,7 +257,7 @@ func (t *memoryCatalogTransaction) PutDirectory(record NodeRecord) (resultErr er
 	if err != nil {
 		return err
 	}
-	if err := t.chargeBytes(encoded); err != nil {
+	if err := t.chargeMemory(memoryObjectOverhead + uint64(len(encoded))); err != nil {
 		return err
 	}
 	t.directoryRecord = record
@@ -320,7 +286,7 @@ func (t *memoryCatalogTransaction) PutChild(record NodeRecord) error {
 	if err != nil {
 		return err
 	}
-	if err := t.chargeBytes(encoded); err != nil {
+	if err := t.chargeMemory(memoryObjectOverhead + uint64(len(encoded))); err != nil {
 		return err
 	}
 	if err := t.meter.Consume(ResourceUsage{Entries: 1}); err != nil {
@@ -341,7 +307,7 @@ func (t *memoryCatalogTransaction) PutPage(page CatalogPage, payload PagePayload
 		return err
 	}
 	if t.prepared || page.DirectoryID() != t.directory || page.Generation() != t.generation ||
-		payload.IsZero() || payload.Commitment() != page.Commitment() {
+		payload.IsZero() || payload.Address() != page.Address() || payload.Commitment() != page.Commitment() {
 		return errors.New("catalog transaction page does not match its target")
 	}
 	if len(t.pending) != len(page.entries) {
@@ -362,26 +328,16 @@ func (t *memoryCatalogTransaction) PutPage(page CatalogPage, payload PagePayload
 	defer func() {
 		resultErr = errors.Join(resultErr, t.meter.Release(temporary))
 	}()
-	encoded, err := encodeCatalogPage(page)
-	if err != nil {
+	if err := t.chargeMemory(memoryPageOverhead + uint64(len(payload.encoded))); err != nil {
 		return err
 	}
-	if err := t.chargeBytes(encoded); err != nil {
-		return err
-	}
-	payloadBytes := payload.Bytes()
-	if err := t.chargeBytes(payloadBytes); err != nil {
-		return err
-	}
-	t.pages[page.pageIndex] = encoded
-	t.pagePayloads[page.pageIndex] = payloadBytes
+	t.pages[page.pageIndex] = payload
 	if err := t.meter.Release(ResourceUsage{MemoryBytes: t.pendingMemory}); err != nil {
 		return err
 	}
 	t.pendingMemory = 0
 	t.pending = t.pending[:0]
-	hashCatalogObject(t.digest, 3, encoded)
-	hashCatalogObject(t.digest, 4, payloadBytes)
+	hashCatalogObject(t.digest, 3, payload.encoded)
 	return nil
 }
 
@@ -462,8 +418,7 @@ func (t *memoryCatalogTransaction) Publish(ctx context.Context) (CommittedDirect
 	t.backend.directories[t.directory] = memoryDirectory{
 		committed: t.preparation.Directory, digest: digest,
 		directoryNode: append([]byte(nil), t.directoryBytes...),
-		children:      cloneEncodedMap(t.children), pages: clonePageMap(t.pages),
-		pagePayloads: clonePageMap(t.pagePayloads), usage: t.usage,
+		children:      cloneEncodedMap(t.children), pages: t.pages, usage: t.usage,
 	}
 	t.finished = true
 	return t.preparation.Directory, nil
@@ -474,7 +429,6 @@ func (t *memoryCatalogTransaction) Abort() error {
 	t.finished = true
 	t.children = nil
 	t.pages = nil
-	t.pagePayloads = nil
 	t.pending = nil
 	t.mu.Unlock()
 	return nil
@@ -496,14 +450,6 @@ func cloneEncodedMap(source map[NodeID][]byte) map[NodeID][]byte {
 	result := make(map[NodeID][]byte, len(source))
 	for id, encoded := range source {
 		result[id] = append([]byte(nil), encoded...)
-	}
-	return result
-}
-
-func clonePageMap(source map[uint32][]byte) map[uint32][]byte {
-	result := make(map[uint32][]byte, len(source))
-	for index, encoded := range source {
-		result[index] = append([]byte(nil), encoded...)
 	}
 	return result
 }

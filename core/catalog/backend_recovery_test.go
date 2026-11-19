@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -69,10 +70,10 @@ func stageBackendGeneration(
 		}
 		entries[index] = child.Entry()
 	}
-	page, err := NewCatalogPage(CatalogPageSpec{
+	page, _, err := NewCatalogPage(CatalogPageSpec{
 		ShareInstance: share, DirectoryID: directoryID, Generation: generation,
 		Entries: entries, Terminal: true,
-	}, semanticTestCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,10 +118,10 @@ func TestMemoryBackendAtomicRaceRecoveryAndCorruptReplay(t *testing.T) {
 	if err != nil || !ok || loaded != committed {
 		t.Fatalf("memory directory = %+v ok=%v err=%v", loaded, ok, err)
 	}
-	if _, ok, err := backend.LoadPage(context.Background(), directoryID, idValue[DirectoryGeneration](99), 0); err != nil || ok {
+	if _, ok, err := backend.LoadPagePayload(context.Background(), directoryID, idValue[DirectoryGeneration](99), 0); err != nil || ok {
 		t.Fatalf("wrong-generation page = ok=%v err=%v", ok, err)
 	}
-	if _, ok, err := backend.LoadPage(context.Background(), directoryID, generation, 9); err != nil || ok {
+	if _, ok, err := backend.LoadPagePayload(context.Background(), directoryID, generation, 9); err != nil || ok {
 		t.Fatalf("unknown page = ok=%v err=%v", ok, err)
 	}
 	if _, ok, err := backend.LoadNode(context.Background(), idValue[NodeID](99)); err != nil || ok {
@@ -130,11 +131,11 @@ func TestMemoryBackendAtomicRaceRecoveryAndCorruptReplay(t *testing.T) {
 	backend.mu.Lock()
 	savedDirectory := backend.directories[directoryID]
 	corruptDirectory := savedDirectory
-	corruptDirectory.pages = clonePageMap(savedDirectory.pages)
-	corruptDirectory.pages[0] = []byte{0xff}
+	corruptDirectory.pages = maps.Clone(savedDirectory.pages)
+	delete(corruptDirectory.pages, 0)
 	backend.directories[directoryID] = corruptDirectory
 	backend.mu.Unlock()
-	if _, _, err := backend.LoadPage(context.Background(), directoryID, generation, 0); !errors.Is(err, ErrCorruptCatalogStorage) {
+	if _, _, err := backend.LoadPagePayload(context.Background(), directoryID, generation, 0); !errors.Is(err, ErrCorruptCatalogStorage) {
 		t.Fatalf("corrupt memory page = %v", err)
 	}
 	backend.mu.Lock()
@@ -184,7 +185,7 @@ func TestMemoryBackendAtomicRaceRecoveryAndCorruptReplay(t *testing.T) {
 	if err := backend.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := backend.LoadPage(context.Background(), directoryID, generation, 0); !errors.Is(err, ErrCatalogClosed) {
+	if _, _, err := backend.LoadPagePayload(context.Background(), directoryID, generation, 0); !errors.Is(err, ErrCatalogClosed) {
 		t.Fatalf("closed memory page load = %v", err)
 	}
 	if _, _, err := backend.LoadNode(context.Background(), child.NodeID()); !errors.Is(err, ErrCatalogClosed) {
@@ -502,7 +503,7 @@ func TestFileBackendPublishRacesForeignCollisionsAndClosedPublication(t *testing
 	}
 	_ = closed.Abort()
 	closedMeter.Close()
-	if _, _, err := backend.LoadPage(context.Background(), closedDirectoryID, idValue[DirectoryGeneration](87), 0); !errors.Is(err, ErrCatalogClosed) {
+	if _, _, err := backend.LoadPagePayload(context.Background(), closedDirectoryID, idValue[DirectoryGeneration](87), 0); !errors.Is(err, ErrCatalogClosed) {
 		t.Fatalf("closed file page load = %v", err)
 	}
 	if _, _, err := backend.LoadNode(context.Background(), baseChild.NodeID()); !errors.Is(err, ErrCatalogClosed) {
@@ -535,13 +536,13 @@ func TestFileBackendRecoveryRejectsSemanticAndPhysicalCorruption(t *testing.T) {
 				t.Fatal(err)
 			}
 		},
-		"missing page object": func(t *testing.T, path string, _ *FileCatalogBackend, _ fileCatalogMeta) {
-			if err := os.Remove(filepath.Join(path, fileCatalogPayloadsName, "00000000.object")); err != nil {
+		"missing page digest": func(t *testing.T, path string, _ *FileCatalogBackend, _ fileCatalogMeta) {
+			if err := os.Truncate(filepath.Join(path, fileCatalogMetaName), fileCatalogMetaBytes); err != nil {
 				t.Fatal(err)
 			}
 		},
-		"conflicting page object": func(t *testing.T, path string, _ *FileCatalogBackend, _ fileCatalogMeta) {
-			objectPath := filepath.Join(path, fileCatalogPayloadsName, "00000000.object")
+		"conflicting page payload": func(t *testing.T, path string, _ *FileCatalogBackend, _ fileCatalogMeta) {
+			objectPath := filepath.Join(path, fileCatalogPagesName, fileCatalogPageName(0))
 			object, err := os.ReadFile(objectPath)
 			if err != nil {
 				t.Fatal(err)
@@ -626,7 +627,12 @@ func durableRecoveryFixture(t *testing.T) (string, *FileCatalogBackend, string, 
 
 func writeBackendMeta(t *testing.T, path string, meta fileCatalogMeta) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(path, fileCatalogMetaName), encodeFileCatalogMeta(meta), 0o600); err != nil {
+	file, err := os.OpenFile(filepath.Join(path, fileCatalogMetaName), os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, writeErr := file.WriteAt(encodeFileCatalogMeta(meta), 0)
+	if err := errors.Join(writeErr, file.Close()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -647,7 +653,7 @@ func TestFileBackendLoadRejectsCorruptMetadataPageAndNodeStream(t *testing.T) {
 	if _, _, err := backend.LoadDirectory(context.Background(), directory); !errors.Is(err, ErrCorruptCatalogStorage) {
 		t.Fatalf("corrupt load metadata = %v", err)
 	}
-	if _, _, err := backend.LoadPage(context.Background(), directory, generation, 0); !errors.Is(err, ErrCorruptCatalogStorage) {
+	if _, _, err := backend.LoadPagePayload(context.Background(), directory, generation, 0); !errors.Is(err, ErrCorruptCatalogStorage) {
 		t.Fatalf("corrupt page metadata = %v", err)
 	}
 	if err := os.WriteFile(metaPath, originalMeta, 0o600); err != nil {
@@ -661,39 +667,33 @@ func TestFileBackendLoadRejectsCorruptMetadataPageAndNodeStream(t *testing.T) {
 	if err := os.WriteFile(pagePath, []byte{0xff}, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := backend.LoadPage(context.Background(), directory, generation, 0); !errors.Is(err, ErrCorruptCatalogStorage) {
+	if _, _, err := backend.LoadPagePayload(context.Background(), directory, generation, 0); !errors.Is(err, ErrCorruptCatalogStorage) {
 		t.Fatalf("corrupt page payload = %v", err)
 	}
-	otherPage, err := NewCatalogPage(CatalogPageSpec{
+	_, otherPage, err := NewCatalogPage(CatalogPageSpec{
 		ShareInstance: meta.share, DirectoryID: idValue[DirectoryID](94), Generation: generation, Terminal: true,
-	}, semanticTestCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	encodedOther, _ := encodeCatalogPage(otherPage)
-	if err := os.WriteFile(pagePath, encodedOther, 0o600); err != nil {
+	if err := os.WriteFile(pagePath, otherPage.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := backend.LoadPage(context.Background(), directory, generation, 0); !errors.Is(err, ErrCorruptCatalogStorage) {
+	if _, _, err := backend.LoadPagePayload(context.Background(), directory, generation, 0); !errors.Is(err, ErrCorruptCatalogStorage) {
 		t.Fatalf("misaddressed page = %v", err)
 	}
 	if err := os.WriteFile(pagePath, originalPage, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	objectPath := filepath.Join(path, fileCatalogPayloadsName, "00000000.object")
-	originalObject, err := os.ReadFile(objectPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	conflictingObject := append([]byte(nil), originalObject...)
-	conflictingObject[0] ^= 0xff
-	if err := os.WriteFile(objectPath, conflictingObject, 0o600); err != nil {
+	conflictingMeta := bytes.Clone(originalMeta)
+	conflictingMeta[fileCatalogMetaBytes] ^= 0xff
+	if err := os.WriteFile(metaPath, conflictingMeta, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := backend.LoadPagePayload(context.Background(), directory, generation, 0); !errors.Is(err, ErrCorruptCatalogStorage) {
-		t.Fatalf("conflicting page object = %v", err)
+		t.Fatalf("conflicting page digest = %v", err)
 	}
-	if err := os.WriteFile(objectPath, originalObject, 0o600); err != nil {
+	if err := os.WriteFile(metaPath, originalMeta, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	childrenPath := filepath.Join(path, fileCatalogChildrenName)

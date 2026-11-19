@@ -106,9 +106,6 @@ func TestCatalogCodecRoundTripsPrivateRecordsAndRejectsCorruption(t *testing.T) 
 	if _, err := restoreModifiedTime(storedModifiedTime{Present: true, Precision: 99}); !errors.Is(err, ErrCorruptCatalogStorage) {
 		t.Fatalf("invalid modified precision = %v", err)
 	}
-	if _, err := restoreEntry(storedEntry{Kind: 99}); !errors.Is(err, ErrCorruptCatalogStorage) {
-		t.Fatalf("invalid stored entry = %v", err)
-	}
 
 	valid, err := encodeNodeRecord(fileRecord)
 	if err != nil {
@@ -146,10 +143,10 @@ func TestCatalogCodecRoundTripsPrivateRecordsAndRejectsCorruption(t *testing.T) 
 		t.Fatalf("non-canonical node accepted: %v", err)
 	}
 
-	page, err := NewCatalogPage(CatalogPageSpec{
+	page, payload, err := NewCatalogPage(CatalogPageSpec{
 		ShareInstance: idValue[ShareInstance](1), DirectoryID: parent,
 		Generation: idValue[DirectoryGeneration](144), Entries: []Entry{fileRecord.Entry()}, Terminal: true,
-	}, semanticTestCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,23 +157,23 @@ func TestCatalogCodecRoundTripsPrivateRecordsAndRejectsCorruption(t *testing.T) 
 	if _, present := page.Entry(1); present {
 		t.Fatal("page entry accessor accepted an out-of-range index")
 	}
-	pageBytes, _ := encodeCatalogPage(page)
-	replayed, err := decodeCatalogPage(pageBytes)
+	pageBytes := payload.Bytes()
+	replayed, err := DecodeCatalogPage(pageBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reencoded, _ := encodeCatalogPage(replayed)
+	reencoded, _ := marshalCatalogPage(replayed)
 	if !bytes.Equal(pageBytes, reencoded) {
 		t.Fatal("page codec changed canonical bytes")
 	}
-	var stored storedPage
-	if err := catalogStorageDec.Unmarshal(pageBytes, &stored); err != nil {
+	var stored wireCatalogPage
+	if err := pageWireDec.Unmarshal(pageBytes, &stored); err != nil {
 		t.Fatal(err)
 	}
-	stored.PageIndex = 1
+	stored.Index = 1
 	stored.Previous = make([]byte, PageCommitmentBytes)
-	malformed, _ := catalogStorageEnc.Marshal(stored)
-	if _, err := decodeCatalogPage(malformed); !errors.Is(err, ErrCorruptCatalogStorage) {
+	malformed, _ := pageWireEnc.Marshal(stored)
+	if _, err := DecodeCatalogPage(malformed); !errors.Is(err, ErrInvalidPagePayload) {
 		t.Fatalf("malformed page sequence accepted: %v", err)
 	}
 }
@@ -328,7 +325,7 @@ func TestScanFailureConstructorsAndAttemptAdmissionAxes(t *testing.T) {
 			share := generousBudget(t, "share")
 			store, err := NewCatalogStore(StoreConfig{
 				ShareInstance: idValue[ShareInstance](1), Backend: NewMemoryCatalogBackend(),
-				ProcessBudget: process, ShareBudget: share, PageEncoder: semanticTestCommitter{},
+				ProcessBudget: process, ShareBudget: share, FailureEncoder: testFailureEncoder{},
 				AttemptIDs: generators.attemptIDs, Generations: generators.generations,
 			})
 			if err != nil {
@@ -385,7 +382,7 @@ func TestAttemptFailureReuseConcurrencyAndWorkAdmission(t *testing.T) {
 			var generations byte
 			store, err := NewCatalogStore(StoreConfig{
 				ShareInstance: idValue[ShareInstance](1), Backend: NewMemoryCatalogBackend(),
-				ProcessBudget: process, ShareBudget: share, PageEncoder: semanticTestCommitter{}, Clock: clock,
+				ProcessBudget: process, ShareBudget: share, FailureEncoder: testFailureEncoder{}, Clock: clock,
 				AttemptIDs: ScanAttemptIDGeneratorFunc(func() (ScanAttemptID, error) {
 					if !reuseAttempt {
 						attempts++
@@ -484,7 +481,7 @@ func TestStoreRejectsInvalidAndClosedOperations(t *testing.T) {
 	}
 	if _, err := NewCatalogStore(StoreConfig{
 		ShareInstance: idValue[ShareInstance](1), Backend: NewMemoryCatalogBackend(),
-		ProcessBudget: process, ShareBudget: process, PageEncoder: semanticTestCommitter{},
+		ProcessBudget: process, ShareBudget: process, FailureEncoder: testFailureEncoder{},
 	}); err == nil {
 		t.Fatal("aliased budgets were accepted")
 	}

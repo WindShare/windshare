@@ -726,17 +726,11 @@ func shapePageWithOmissions(
 	generationSeed int,
 	omitted uint64,
 ) catalog.CatalogPage {
-	page, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+	page, _, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
 		ShareInstance: share, DirectoryID: directory,
 		Generation: shapeID[catalog.DirectoryGeneration](byte(20 + generationSeed)),
 		Entries:    entries, Terminal: true, OmittedCount: omitted,
-	}, catalog.PageCommitterFunc(func(catalog.PageCommitInput) (catalog.PageCommitment, error) {
-		raw := make([]byte, catalog.PageCommitmentBytes)
-		for index := range raw {
-			raw[index] = byte(40 + generationSeed)
-		}
-		return catalog.NewPageCommitment(raw)
-	}))
+	})
 	if err != nil {
 		panic(err)
 	}

@@ -11,7 +11,6 @@ type contractReadBackend struct {
 	recover         func(context.Context) (ResourceUsage, error)
 	replayFailures  func(context.Context, func(DirectoryFailureRecord, bool) error) error
 	loadDirectory   func(context.Context, DirectoryID) (CommittedDirectory, bool, error)
-	loadPage        func(context.Context, DirectoryID, DirectoryGeneration, uint32) (CatalogPage, bool, error)
 	loadPagePayload func(context.Context, DirectoryID, DirectoryGeneration, uint32) (PagePayload, bool, error)
 	loadNode        func(context.Context, NodeID) (NodeRecord, bool, error)
 }
@@ -35,13 +34,6 @@ func (b contractReadBackend) LoadDirectory(ctx context.Context, directory Direct
 		return b.loadDirectory(ctx, directory)
 	}
 	return b.CatalogBackend.LoadDirectory(ctx, directory)
-}
-
-func (b contractReadBackend) LoadPage(ctx context.Context, directory DirectoryID, generation DirectoryGeneration, index uint32) (CatalogPage, bool, error) {
-	if b.loadPage != nil {
-		return b.loadPage(ctx, directory, generation, index)
-	}
-	return b.CatalogBackend.LoadPage(ctx, directory, generation, index)
 }
 
 func (b contractReadBackend) LoadPagePayload(ctx context.Context, directory DirectoryID, generation DirectoryGeneration, index uint32) (PagePayload, bool, error) {
@@ -216,13 +208,6 @@ func TestExistingCommitReplayValidatesEveryDurableBinding(t *testing.T) {
 		},
 		{
 			name: "page read failure", backend: contractReadBackend{CatalogBackend: backend,
-				loadPage: func(context.Context, DirectoryID, DirectoryGeneration, uint32) (CatalogPage, bool, error) {
-					return CatalogPage{}, false, injected
-				}},
-			commit: commit, existing: existing, want: injected,
-		},
-		{
-			name: "page object read failure", backend: contractReadBackend{CatalogBackend: backend,
 				loadPagePayload: func(context.Context, DirectoryID, DirectoryGeneration, uint32) (PagePayload, bool, error) {
 					return PagePayload{}, false, injected
 				}},
@@ -230,8 +215,8 @@ func TestExistingCommitReplayValidatesEveryDurableBinding(t *testing.T) {
 		},
 		{
 			name: "page missing", backend: contractReadBackend{CatalogBackend: backend,
-				loadPage: func(context.Context, DirectoryID, DirectoryGeneration, uint32) (CatalogPage, bool, error) {
-					return CatalogPage{}, false, nil
+				loadPagePayload: func(context.Context, DirectoryID, DirectoryGeneration, uint32) (PagePayload, bool, error) {
+					return PagePayload{}, false, nil
 				}},
 			commit: commit, existing: existing, want: ErrCorruptCatalogStorage,
 		},
@@ -303,11 +288,6 @@ func TestCatalogReadAPIsRejectBackendIdentitySubstitution(t *testing.T) {
 	injected := errors.New("injected page read failure")
 	directory := idValue[DirectoryID](217)
 	generation := idValue[DirectoryGeneration](218)
-	object, err := NewPagePayload([]byte("object"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	store.backend = contractReadBackend{CatalogBackend: backend,
 		loadDirectory: func(context.Context, DirectoryID) (CommittedDirectory, bool, error) {
 			return CommittedDirectory{shareInstance: store.shareInstance, directoryID: idValue[DirectoryID](219)}, true, nil
@@ -317,25 +297,29 @@ func TestCatalogReadAPIsRejectBackendIdentitySubstitution(t *testing.T) {
 		t.Fatalf("substituted directory error = %v", err)
 	}
 
+	_, other, err := NewCatalogPage(CatalogPageSpec{
+		ShareInstance: store.shareInstance, DirectoryID: idValue[DirectoryID](219),
+		Generation: generation, Terminal: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	store.backend = contractReadBackend{CatalogBackend: backend,
-		loadPage: func(context.Context, DirectoryID, DirectoryGeneration, uint32) (CatalogPage, bool, error) {
-			return CatalogPage{shareInstance: store.shareInstance, directoryID: directory, generation: generation, pageIndex: 1}, true, nil
+		loadPagePayload: func(context.Context, DirectoryID, DirectoryGeneration, uint32) (PagePayload, bool, error) {
+			return other, true, nil
 		},
 	}
-	if _, _, err := store.Page(context.Background(), directory, generation, 0); !errors.Is(err, ErrCorruptCatalogStorage) {
+	if _, _, err := store.PagePayload(context.Background(), directory, generation, 0); !errors.Is(err, ErrCorruptCatalogStorage) {
 		t.Fatalf("substituted page error = %v", err)
 	}
 
 	store.backend = contractReadBackend{CatalogBackend: backend,
 		loadPagePayload: func(context.Context, DirectoryID, DirectoryGeneration, uint32) (PagePayload, bool, error) {
-			return object, true, nil
-		},
-		loadPage: func(context.Context, DirectoryID, DirectoryGeneration, uint32) (CatalogPage, bool, error) {
-			return CatalogPage{}, false, injected
+			return PagePayload{}, false, injected
 		},
 	}
 	if _, _, err := store.PagePayload(context.Background(), directory, generation, 0); !errors.Is(err, injected) {
-		t.Fatalf("page-object authority read error = %v", err)
+		t.Fatalf("page payload read error = %v", err)
 	}
 
 	record := selectedDirectory(t, idValue[DirectoryID](220), 221, "substitute")
@@ -370,7 +354,7 @@ func contractStoreConfig(t *testing.T, backend CatalogBackend, spill SpillFactor
 	return StoreConfig{
 		ShareInstance: idValue[ShareInstance](230), Backend: backend,
 		ProcessBudget: generousBudget(t, "contract-process"), ShareBudget: generousBudget(t, "contract-share"),
-		PageEncoder: semanticTestCommitter{}, SpillFactory: spill,
+		FailureEncoder: testFailureEncoder{}, SpillFactory: spill,
 	}
 }
 

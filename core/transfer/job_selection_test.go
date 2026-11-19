@@ -110,12 +110,12 @@ func TestTransferJobRollsBackSelectedPrefixOfFailedGeneration(t *testing.T) {
 	// Keep the failed prefix distinct from the surviving sibling. Identity claims
 	// are rejected at discovery time, before a failed branch can be isolated.
 	partial := transferID[catalog.FileID](143)
-	first, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+	first, _, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
 		ShareInstance: share,
 		DirectoryID:   branch,
 		Generation:    transferID[catalog.DirectoryGeneration](2),
 		Entries:       []catalog.Entry{jobEntry(t, partial, "partial.bin", 0)},
-	}, jobPageCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,12 +162,12 @@ func TestTransferJobPausesWithoutAdmittingFailedRootPrefix(t *testing.T) {
 	share := transferID[catalog.ShareInstance](130)
 	root := transferID[catalog.DirectoryID](131)
 	file := transferID[catalog.FileID](132)
-	first, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+	first, _, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
 		ShareInstance: share,
 		DirectoryID:   root,
 		Generation:    transferID[catalog.DirectoryGeneration](2),
 		Entries:       []catalog.Entry{jobEntry(t, file, "prefix.bin", 0)},
-	}, jobPageCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

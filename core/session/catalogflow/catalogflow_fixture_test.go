@@ -2,8 +2,6 @@ package catalogflow
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"sync"
@@ -195,27 +193,6 @@ func (t *serviceTransport) CallCount() int {
 	return t.calls
 }
 
-type testCommitter struct{}
-
-func (testCommitter) Commit(input catalog.PageCommitInput) (catalog.PageCommitment, error) {
-	hash := sha256.New()
-	_, _ = hash.Write(input.ShareInstance.Bytes())
-	_, _ = hash.Write(input.DirectoryID.Bytes())
-	_, _ = hash.Write(input.Generation.Bytes())
-	var index [4]byte
-	binary.BigEndian.PutUint32(index[:], input.PageIndex)
-	_, _ = hash.Write(index[:])
-	_, _ = hash.Write(input.Previous.Bytes())
-	for _, entry := range input.Entries {
-		_, _ = hash.Write(entry.NodeID().Bytes())
-		_, _ = hash.Write([]byte(entry.Name()))
-	}
-	if input.Terminal {
-		_, _ = hash.Write([]byte{1})
-	}
-	return catalog.NewPageCommitment(hash.Sum(nil))
-}
-
 func twoPageSnapshot(t *testing.T, instance catalog.ShareInstance, directory catalog.DirectoryID, generationByte byte, firstName, secondName string) catalog.DirectorySnapshot {
 	t.Helper()
 	generation := generationID(t, generationByte)
@@ -223,10 +200,10 @@ func twoPageSnapshot(t *testing.T, instance catalog.ShareInstance, directory cat
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+	first, _, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
 		ShareInstance: instance, DirectoryID: directory, Generation: generation,
 		PageIndex: 0, Entries: []catalog.Entry{firstEntry},
-	}, testCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,10 +211,10 @@ func twoPageSnapshot(t *testing.T, instance catalog.ShareInstance, directory cat
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+	second, _, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
 		ShareInstance: instance, DirectoryID: directory, Generation: generation,
 		PageIndex: 1, Previous: first.Commitment(), Entries: []catalog.Entry{secondEntry}, Terminal: true,
-	}, testCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,10 +232,10 @@ func onePageSnapshot(t *testing.T, instance catalog.ShareInstance, directory cat
 	if err != nil {
 		t.Fatal(err)
 	}
-	page, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+	page, _, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
 		ShareInstance: instance, DirectoryID: directory, Generation: generation,
 		PageIndex: 0, Entries: []catalog.Entry{entry}, Terminal: true,
-	}, testCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

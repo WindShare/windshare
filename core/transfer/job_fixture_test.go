@@ -22,16 +22,6 @@ import (
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
-type jobPageCommitter struct{}
-
-func (jobPageCommitter) Commit(input catalog.PageCommitInput) (catalog.PageCommitment, error) {
-	var commitment catalog.PageCommitment
-	commitment[0] = input.DirectoryID.Bytes()[0]
-	commitment[1] = byte(input.PageIndex + 1)
-	commitment[2] = byte(len(input.Entries) + 1)
-	return commitment, nil
-}
-
 func jobSnapshot(t *testing.T, share catalog.ShareInstance, directory catalog.DirectoryID, generation byte, entries ...catalog.Entry) catalog.DirectorySnapshot {
 	t.Helper()
 	slices.SortFunc(entries, func(left, right catalog.Entry) int {
@@ -43,10 +33,10 @@ func jobSnapshot(t *testing.T, share catalog.ShareInstance, directory catalog.Di
 		}
 		return 0
 	})
-	page, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+	page, _, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
 		ShareInstance: share, DirectoryID: directory, Generation: transferID[catalog.DirectoryGeneration](generation),
 		Entries: entries, Terminal: true,
-	}, jobPageCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,11 +59,11 @@ func jobSnapshotWithOmissions(
 	slices.SortFunc(entries, func(left, right catalog.Entry) int {
 		return strings.Compare(left.Name(), right.Name())
 	})
-	page, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+	page, _, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
 		ShareInstance: share, DirectoryID: directory,
 		Generation: transferID[catalog.DirectoryGeneration](generation),
 		Entries:    entries, Terminal: true, OmittedCount: omitted,
-	}, jobPageCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

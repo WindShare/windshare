@@ -17,15 +17,6 @@ import (
 	"time"
 )
 
-type revisionTransferCommitter struct{}
-
-func (revisionTransferCommitter) Commit(input catalog.PageCommitInput) (catalog.PageCommitment, error) {
-	var commitment catalog.PageCommitment
-	commitment[0] = input.DirectoryID.Bytes()[0]
-	commitment[1] = byte(input.PageIndex + 1)
-	return commitment, nil
-}
-
 type revisionTransferCatalog struct{ snapshot catalog.DirectorySnapshot }
 
 func (source revisionTransferCatalog) OpenDirectoryPages(
@@ -452,10 +443,10 @@ func runContentTransferIsolationCase(
 		}
 		entries = append(entries, entry)
 	}
-	page, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+	page, _, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
 		ShareInstance: share, DirectoryID: root,
 		Generation: id16[catalog.DirectoryGeneration](214), Entries: entries, Terminal: true,
-	}, revisionTransferCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

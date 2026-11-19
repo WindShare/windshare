@@ -89,10 +89,10 @@ func TestMemoryTransactionRejectsOrderingMeterAndLifecycleFaults(t *testing.T) {
 			return transaction.(*memoryCatalogTransaction), meter
 		}
 		makePage := func(t *testing.T, entries []Entry) CatalogPage {
-			page, err := NewCatalogPage(CatalogPageSpec{
+			page, _, err := NewCatalogPage(CatalogPageSpec{
 				ShareInstance: share, DirectoryID: directoryID, Generation: generation,
 				Entries: entries, Terminal: true,
-			}, semanticTestCommitter{})
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -197,7 +197,7 @@ func TestMemoryTransactionRejectsOrderingMeterAndLifecycleFaults(t *testing.T) {
 		_ = valid.Abort()
 
 		overflow := &memoryCatalogTransaction{meter: &scriptedResourceMeter{}, usage: ResourceUsage{MemoryBytes: math.MaxUint64}}
-		if err := overflow.chargeBytes(nil); !errors.Is(err, ErrBudgetExceeded) {
+		if err := overflow.chargeMemory(memoryObjectOverhead); !errors.Is(err, ErrBudgetExceeded) {
 			t.Fatalf("memory transaction accounting overflow = %v", err)
 		}
 	})
@@ -236,26 +236,9 @@ func TestCatalogCodecRejectsHostilePrivateRecordsAndPages(t *testing.T) {
 	file, _ := scannedFile(t, 111, "file", 1).nodeRecord(parent)
 	directory, _ := scannedDirectory(t, 112, "directory").nodeRecord(parent)
 	modified := storedModifiedTime{Present: true, Precision: 99}
-	for name, entry := range map[string]storedEntry{
-		"modified":       {Kind: uint8(NodeKindFile), ID: file.fileID.Bytes(), Name: "file", Modified: modified},
-		"directory-id":   {Kind: uint8(NodeKindDirectory), ID: []byte{1}, Name: "directory"},
-		"directory-name": {Kind: uint8(NodeKindDirectory), ID: directory.directoryID.Bytes(), Name: "."},
-		"file-id":        {Kind: uint8(NodeKindFile), ID: []byte{1}, Name: "file"},
-		"file-name":      {Kind: uint8(NodeKindFile), ID: file.fileID.Bytes(), Name: "."},
-	} {
-		t.Run("entry-"+name, func(t *testing.T) {
-			if _, err := restoreEntry(entry); !errors.Is(err, ErrCorruptCatalogStorage) {
-				t.Fatalf("hostile entry accepted: %v", err)
-			}
-		})
-	}
 	if _, err := encodeNodeRecord(NodeRecord{}); err == nil {
 		t.Fatal("invalid node encoded")
 	}
-	if _, err := encodeCatalogPage(CatalogPage{}); err == nil {
-		t.Fatal("invalid page encoded")
-	}
-
 	base := storedNode{
 		Schema: catalogStorageSchema, Kind: uint8(NodeKindFile), ID: file.nodeID.Bytes(),
 		Parent: parent.Bytes(), Name: file.name, SourceReference: file.sourceReference.Bytes(), SourceIdentity: file.sourceIdentity.Bytes(),
@@ -292,43 +275,42 @@ func TestCatalogCodecRejectsHostilePrivateRecordsAndPages(t *testing.T) {
 		})
 	}
 
-	validPage, err := NewCatalogPage(CatalogPageSpec{
+	_, validPage, err := NewCatalogPage(CatalogPageSpec{
 		ShareInstance: idValue[ShareInstance](1), DirectoryID: parent,
 		Generation: idValue[DirectoryGeneration](113), Entries: []Entry{file.Entry()}, Terminal: true,
-	}, semanticTestCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded, _ := encodeCatalogPage(validPage)
-	var stored storedPage
-	if err := catalogStorageDec.Unmarshal(encoded, &stored); err != nil {
+	var stored wireCatalogPage
+	if err := pageWireDec.Unmarshal(validPage.Bytes(), &stored); err != nil {
 		t.Fatal(err)
 	}
-	pageMutations := map[string]func(*storedPage){
-		"schema":   func(value *storedPage) { value.Schema++ },
-		"identity": func(value *storedPage) { value.ShareInstance = nil },
-		"entry":    func(value *storedPage) { value.Entries[0].Name = "." },
-		"order": func(value *storedPage) {
+	pageMutations := map[string]func(*wireCatalogPage){
+		"schema":   func(value *wireCatalogPage) { value.Schema++ },
+		"identity": func(value *wireCatalogPage) { value.Share = nil },
+		"entry":    func(value *wireCatalogPage) { value.Entries[0].Name = "." },
+		"order": func(value *wireCatalogPage) {
 			second := value.Entries[0]
-			second.ID = idValue[FileID](114).Bytes()
-			value.Entries = []storedEntry{second, value.Entries[0]}
+			second.Node = idValue[FileID](114).Bytes()
+			value.Entries = []wireCatalogEntry{second, value.Entries[0]}
 		},
 	}
 	for name, mutate := range pageMutations {
 		t.Run("page-"+name, func(t *testing.T) {
 			value := stored
-			value.Entries = append([]storedEntry(nil), stored.Entries...)
+			value.Entries = append([]wireCatalogEntry(nil), stored.Entries...)
 			mutate(&value)
-			encoded, err := catalogStorageEnc.Marshal(value)
+			encoded, err := pageWireEnc.Marshal(value)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := decodeCatalogPage(encoded); !errors.Is(err, ErrCorruptCatalogStorage) {
+			if _, err := DecodeCatalogPage(encoded); !errors.Is(err, ErrInvalidPagePayload) {
 				t.Fatalf("hostile page accepted: %v", err)
 			}
 		})
 	}
-	if err := decodeCanonicalStorage([]byte{0xff}, &storedPage{}); !errors.Is(err, ErrCorruptCatalogStorage) {
+	if err := decodeCanonicalStorage([]byte{0xff}, &storedNode{}); !errors.Is(err, ErrCorruptCatalogStorage) {
 		t.Fatalf("invalid durable CBOR = %v", err)
 	}
 }
@@ -341,7 +323,7 @@ func TestDirectorySequenceRejectsCrossPageIdentityOrderAndLimitViolations(t *tes
 	entryZ, _ := NewFileEntry(idValue[FileID](123), "zeta", 1, ModifiedTime{})
 	page := func(t *testing.T, spec CatalogPageSpec) CatalogPage {
 		t.Helper()
-		value, err := NewCatalogPage(spec, semanticTestCommitter{})
+		value, _, err := NewCatalogPage(spec)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -420,7 +420,7 @@ func catalogPageWithChain(
 	previous catalog.PageCommitment,
 ) catalog.CatalogPage {
 	t.Helper()
-	changed, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+	changed, _, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
 		ShareInstance: page.ShareInstance(),
 		DirectoryID:   page.DirectoryID(),
 		Generation:    generation,
@@ -428,7 +428,7 @@ func catalogPageWithChain(
 		Previous:      previous,
 		Entries:       page.Entries(),
 		Terminal:      page.Terminal(),
-	}, testCommitter{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
