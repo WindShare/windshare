@@ -5,7 +5,7 @@ import type { ICEEndpointPool } from '../../connectivity/ice-policy/endpoints'
 import type { DirectoryObservation } from '../../network/directory'
 import type { Suite02CapabilityLink } from '../../crypto/suite02-link'
 import { resolveLinkRelays } from './resolve'
-import { RelayCandidates } from '../../receiver/relay-candidates'
+import { RelayCandidates } from '../../receiver/relay-selection/candidates'
 import { OfficialRelayAuthority } from './authority'
 import type { AuthorityConfig, AuthorityObservation } from '../../network/authority/feed'
 

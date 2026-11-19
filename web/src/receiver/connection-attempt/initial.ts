@@ -1,5 +1,6 @@
 import { BandwidthWaitError } from '../../contracts/capacity'
 import type { FrameChannel } from '../../contracts/channel'
+import { RelayEndpointFailure } from '../relay-selection/race'
 import { runAbortableConnection } from './lifetime'
 
 const FAST_ATTEMPT_MILLISECONDS = 15_000
@@ -7,7 +8,7 @@ const MAXIMUM_ATTEMPT_MILLISECONDS = 30_000
 
 export interface InitialJoinAttempt {
   readonly signal: AbortSignal
-  trackHandshake(channel: FrameChannel, signal: AbortSignal): () => void
+  trackHandshake(relayBase: string, channel: FrameChannel, signal: AbortSignal): () => void
 }
 
 interface AttemptOptions<T> {
@@ -17,6 +18,7 @@ interface AttemptOptions<T> {
   readonly connect: (attempt: InitialJoinAttempt) => Promise<T>
   readonly close: (value: T) => Promise<void>
   readonly onBandwidthWait: (milliseconds: number) => void
+  readonly onRelayFailure: (relayBase: string, failure: BandwidthWaitError) => void
 }
 
 export async function runInitialJoinAttempt<T>(options: AttemptOptions<T>): Promise<T> {
@@ -25,40 +27,48 @@ export async function runInitialJoinAttempt<T>(options: AttemptOptions<T>): Prom
   const finalDeadline = Math.min(options.deadline, startedAt + MAXIMUM_ATTEMPT_MILLISECONDS)
   const timeout = new AbortController()
   const signal = AbortSignal.any([options.parent, timeout.signal])
-  const handshakes = new Map<FrameChannel, AbortSignal>()
+  const handshakes = new Map<FrameChannel, { relayBase: string; signal: AbortSignal }>()
   const attempt: InitialJoinAttempt = {
     signal,
-    trackHandshake(channel, candidateSignal) {
-      handshakes.set(channel, candidateSignal)
+    trackHandshake(relayBase, channel, candidateSignal) {
+      handshakes.set(channel, { relayBase, signal: candidateSignal })
       return () => { handshakes.delete(channel) }
     },
   }
 
-  function capacityWait(): number {
-    let remaining = 0
-    for (const [channel, candidateSignal] of handshakes) {
-      if (!candidateSignal.aborted && channel.state === 'open') {
-        remaining = Math.max(remaining, channel.capacityWaitMilliseconds ?? 0)
+  function congestedHandshakes(): { relayBase: string; milliseconds: number }[] {
+    const congested = []
+    for (const [channel, handshake] of handshakes) {
+      const milliseconds = channel.capacityWaitMilliseconds ?? 0
+      if (!handshake.signal.aborted && channel.state === 'open' && milliseconds > 0) {
+        congested.push({ relayBase: handshake.relayBase, milliseconds })
       }
     }
-    return remaining
+    return congested
   }
 
-  function expire(milliseconds: number): void {
+  function expire(congested: ReturnType<typeof congestedHandshakes>): void {
     const failure = new Error('Initial connection attempt timed out')
-    timeout.abort(milliseconds > 0 ? new BandwidthWaitError(milliseconds, failure) : failure)
+    const rejections = congested.map(({ relayBase, milliseconds }) => {
+      const wait = new BandwidthWaitError(milliseconds, failure)
+      // The round's abort would otherwise erase evidence from a queued handshake.
+      options.onRelayFailure(relayBase, wait)
+      return new RelayEndpointFailure(relayBase, wait)
+    })
+    timeout.abort(rejections.length > 0
+      ? new AggregateError(rejections, failure.message, { cause: failure }) : failure)
   }
 
   let timer = setTimeout(() => {
-    const wait = capacityWait()
+    const congested = congestedHandshakes()
     const remaining = finalDeadline - options.now()
-    if (wait === 0 || remaining <= 0) {
-      expire(wait)
+    if (congested.length === 0 || remaining <= 0) {
+      expire(congested)
       return
     }
     // Keeping the race alive gives an already queued handshake time to finish.
     // Renewed pressure notices cannot move the hard deadline or extend authority.
-    timer = setTimeout(() => expire(capacityWait()), remaining)
+    timer = setTimeout(() => expire(congestedHandshakes()), remaining)
     options.onBandwidthWait(remaining)
   }, Math.max(0, fastDeadline - startedAt))
   try {

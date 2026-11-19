@@ -1,6 +1,6 @@
 import type { Suite02CapabilityLink } from '../../crypto/suite02-link'
 import type { NetworkDirectory } from '../../network/directory'
-import { RelayCandidates } from '../../receiver/relay-candidates'
+import { RelayCandidates } from '../../receiver/relay-selection/candidates'
 import { canonicalRelayIdentity } from '../../network/relay-endpoint'
 
 export function resolveLinkRelays(capability: Suite02CapabilityLink, directory?: NetworkDirectory): RelayCandidates {

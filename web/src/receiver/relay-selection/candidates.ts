@@ -1,4 +1,4 @@
-import type { RelayAdmission } from './relay-admission'
+import type { RelayAdmission } from '../relay-admission'
 
 export const MAXIMUM_RECEIVER_RELAYS = 8
 export type RelayCandidateSource = readonly string[] | RelayCandidates
@@ -16,17 +16,21 @@ export class RelayCandidates {
   readonly settled: Promise<void>
   readonly admission: RelayAdmission | undefined
   #failure: unknown
+  #expanding: boolean
 
   constructor(initial: readonly string[], expansion?: Promise<readonly string[]>, admission?: RelayAdmission) {
     this.admission = admission
+    this.#expanding = expansion !== undefined
     this.#bases = initial.length === 0 && expansion ? [] : receiverRelayBases(initial)
     this.settled = expansion ? expansion.then(additional => {
       this.#bases = receiverRelayBases([...this.#bases, ...additional])
       for (const listener of this.#listeners) listener(this.#bases)
-    }).catch((error: unknown) => { this.#failure = error }) : Promise.resolve()
+    }).catch((error: unknown) => { this.#failure = error })
+      .finally(() => { this.#expanding = false }) : Promise.resolve()
   }
 
   get bases(): readonly string[] { return this.#bases }
+  get expanding(): boolean { return this.#expanding }
 
   async all(): Promise<readonly string[]> {
     await this.settled
@@ -38,10 +42,6 @@ export class RelayCandidates {
     this.#listeners.add(listener)
     listener(this.#bases)
     return () => { this.#listeners.delete(listener) }
-  }
-
-  filter(accept: (base: string) => boolean): RelayCandidates {
-    return new RelayCandidates(this.#bases.filter(accept), this.all().then(bases => bases.filter(accept)), this.admission)
   }
 }
 

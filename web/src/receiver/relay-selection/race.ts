@@ -1,5 +1,4 @@
-import { relayCandidates, type RelayCandidateSource } from './relay-candidates'
-export { MAXIMUM_RECEIVER_RELAYS, receiverRelayBases } from './relay-candidates'
+import { relayCandidates, type RelayCandidateSource } from './candidates'
 
 export class RelayEndpointFailure extends Error {
   readonly relayBase: string
@@ -17,9 +16,10 @@ export async function firstUsableRelay<T>(
   connect: (relayBase: string, signal: AbortSignal) => Promise<T>,
   close: (value: T) => Promise<void>,
   fatal?: (error: unknown) => boolean,
+  eligible: (relayBase: string) => boolean = () => true,
 ): Promise<T> {
   signal.throwIfAborted()
-  const candidates = relayCandidates(source), initial = candidates.bases
+  const candidates = relayCandidates(source), initial = candidates.bases.filter(eligible)
   const controllers: AbortController[] = []
   let claimed = false
   let fail!: (error: unknown) => void
@@ -56,7 +56,7 @@ export async function firstUsableRelay<T>(
     const attempts = initial.map(attempt)
     attempts.push(candidates.all().then(bases => {
       signal.throwIfAborted()
-      return Promise.any(bases.filter(base => !initial.includes(base)).map(attempt))
+      return Promise.any(bases.filter(base => !initial.includes(base) && eligible(base)).map(attempt))
     }))
     const result = await Promise.race([terminal, Promise.any(attempts)])
     return result

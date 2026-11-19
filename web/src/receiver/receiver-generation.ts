@@ -23,7 +23,7 @@ import type { LaneChange } from '../session/runtime-types'
 import type { OperationAvailability } from './operation-recovery'
 import type { ReceiverPathActivity } from './path-activity'
 import { reconnectPhase, requireBackoff, waitingReconnectBackoff, type ReconnectClock } from './recovery-clock'
-import { recoveryRetryAfter, recoveryBandwidthWait } from './recovery-failure'
+import { recoveryRetry } from './recovery-failure'
 import { observeRecovery } from './recovery-observation'
 import type { RecoveryWake } from './recovery-wake'
 import { ReceiverRelaySet } from './relay-set'
@@ -175,13 +175,17 @@ export class ReceiverGenerationFactory {
           },
           admit: (laneId) => connectivity!.addRelayLane(laneId),
           sleep: (attempt, signal, elapsed, error, relayBase) => {
-            const phase = recoveryBandwidthWait(error) > 0 ? 'waiting' : reconnectPhase(attempt, elapsed)
-            const delay = Math.max(recoveryRetryAfter(error), phase === 'waiting'
+            const now = options.clock.now()
+            const retry = recoveryRetry(error, now)
+            const required = Math.max(0, (retry?.retryAt ?? now) - now)
+            const phase = retry?.reason === 'bandwidth' ? 'waiting' : reconnectPhase(attempt, elapsed)
+            const delay = Math.max(required, phase === 'waiting'
               ? waitingReconnectBackoff() : requireBackoff(options.backoffMilliseconds(attempt)))
             observeRecovery(options.protocolTrace, { generationId, relayBase, shareInstanceId: options.descriptor.shareInstanceId,
               correlation: { protocolSessionId: core.session.protocolSessionIdentity } },
-            { attempt, phase, transition: 'waiting', delayMilliseconds: delay, failure: error })
-            return recoveryRetryAfter(error) > 0
+            { attempt, phase, transition: 'waiting', delayMilliseconds: delay, failure: error,
+               waitReason: retry?.reason ?? 'backoff' })
+            return required > 0
               ? options.clock.sleep(delay, signal) : options.recoveryWake.sleep(options.clock, delay, signal)
           },
           now: () => options.clock.now(),

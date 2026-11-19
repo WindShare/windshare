@@ -4,17 +4,17 @@ import type { ProtocolTraceSource } from '../session/diagnostics'
 import { ReceiverSessionRuntime } from '../session/runtime'
 import { dialRelayReceiver } from '../transport/relay/receiver'
 import type { ProtocolGenerationCore } from './session-factory'
-import { firstUsableRelay, RelayEndpointFailure } from './relay-race'
+import { RelayRecovery } from './relay-selection/recovery'
 import { admittedRelay } from './relay-admission'
-import { relayCandidates, type RelayCandidateSource } from './relay-candidates'
+import type { RelayCandidateSource } from './relay-selection/candidates'
 import { runInitialJoin, type InitialJoinOptions } from './initial-join'
 import type { InitialJoinAttempt } from './connection-attempt/initial'
-import { isShareRecoveryFailure, isTerminalRecoveryFailure } from './recovery-failure'
 import { observeRecovery } from './recovery-observation'
 import { emitRelayHeartbeat, emitRelayDelivery } from '../diagnostics/trace/connection-payload'
 
 export interface BrowserRelayJoin extends ProtocolGenerationCore {
   readonly descriptor: ShareDescriptor
+  readonly relayRecovery: RelayRecovery
 }
 
 export function joinBrowserRelays(
@@ -24,26 +24,15 @@ export function joinBrowserRelays(
   protocolTrace?: ProtocolTraceSource,
   options: InitialJoinOptions = {},
 ): Promise<BrowserRelayJoin> {
-  const disabled = new Map<string, RelayEndpointFailure>()
-  const candidates = relayCandidates(relayBases)
+  const relayRecovery = new RelayRecovery(relayBases, options.clock)
   return runInitialJoin({
-    ...options, signal, close,
+    ...options, signal, close, relayRecovery,
     observe: observation => {
       observeRecovery(protocolTrace, { correlation: {}, generationId: 0, shareId: capability.shareId }, observation)
       options.observe?.(observation)
     },
-    connect: async attempt => {
-      if (!candidates.bases.some(base => !disabled.has(base))) {
-        const all = await candidates.all()
-        if (!all.some(base => !disabled.has(base))) throw new AggregateError([...disabled.values()], 'All relay endpoints rejected this share')
-      }
-      const eligible = candidates.filter(base => !disabled.has(base))
-      return firstUsableRelay(eligible, attempt.signal, (relayBase, relaySignal) =>
-        connect(relayBase, relaySignal, attempt).catch((cause: unknown) => {
-          if (isTerminalRecoveryFailure(cause)) disabled.set(relayBase, new RelayEndpointFailure(relayBase, cause))
-          throw cause
-        }), close, isShareRecoveryFailure)
-    },
+    connect: attempt => relayRecovery.race(attempt.signal,
+      (relayBase, relaySignal) => connect(relayBase, relaySignal, attempt), close),
   })
 
   async function connect(relayBase: string, attemptSignal: AbortSignal, attempt: InitialJoinAttempt): Promise<BrowserRelayJoin> {
@@ -55,7 +44,7 @@ export function joinBrowserRelays(
         correlation: session === undefined ? {} : { protocolSessionId: session.protocolSessionIdentity },
         shareId: capability.shareId,
       })
-      const relay = await admittedRelay(candidates.admission, relayBase, attemptSignal, signal => dialRelayReceiver(relayBase, ownedCapability, { signal,
+      const relay = await admittedRelay(relayRecovery.candidates.admission, relayBase, attemptSignal, signal => dialRelayReceiver(relayBase, ownedCapability, { signal,
         receiveTrace: event => emitRelayDelivery(protocolTrace, event, relayBase, traceContext),
         heartbeatTrace: event => emitRelayHeartbeat(protocolTrace, event, relayBase, traceContext),
       }))
@@ -67,7 +56,7 @@ export function joinBrowserRelays(
           }),
         })
         attemptSignal.throwIfAborted()
-        const untrack = attempt.trackHandshake(relay.channel, attemptSignal)
+        const untrack = attempt.trackHandshake(relayBase, relay.channel, attemptSignal)
         try {
           session = await ReceiverSessionRuntime.connect({
             descriptor,
@@ -76,7 +65,7 @@ export function joinBrowserRelays(
             signal: attemptSignal,
             ...(protocolTrace === undefined ? {} : { protocolTrace }),
           })
-          return Object.freeze({ relayBase, relay, descriptor, session, relayLaneId: session.initialLaneId })
+          return Object.freeze({ relayBase, relay, descriptor, session, relayLaneId: session.initialLaneId, relayRecovery })
         } finally { untrack() }
       } catch (error) {
         await relay.close().catch(() => undefined)

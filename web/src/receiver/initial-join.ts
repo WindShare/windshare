@@ -1,6 +1,7 @@
 import { runInitialJoinAttempt, type InitialJoinAttempt } from './connection-attempt/initial'
 import { defaultReconnectBackoff, systemReconnectClock, waitingReconnectBackoff, type ReconnectClock } from './recovery-clock'
-import { isTerminalRecoveryFailure, recoveryBandwidthWait, recoveryRetryAfter } from './recovery-failure'
+import { isTerminalRecoveryFailure, latestRecoveryRetry, recoveryRetry } from './recovery-failure'
+import type { RelayRecovery } from './relay-selection/recovery'
 import { RecoveryWake } from './recovery-wake'
 import type { RecoveryObservation } from './recovery-observation'
 
@@ -13,8 +14,8 @@ export type InitialJoinState =
 type JoinChoice = 'retry' | 'continue'
 
 export class InitialJoinUnavailableError extends Error {
-  constructor(cause: unknown) {
-    super(recoveryBandwidthWait(cause) > 0
+  constructor(cause: unknown, waitingForBandwidth: boolean) {
+    super(waitingForBandwidth
       ? 'The connection timed out while waiting for relay bandwidth.'
       : 'The sender is temporarily unreachable. Retry or continue waiting; the link may still be valid.', { cause })
     this.name = 'InitialJoinUnavailableError'
@@ -62,6 +63,7 @@ export interface InitialJoinOptions {
 
 interface InitialJoinAttemptOptions<T> extends InitialJoinOptions {
   readonly signal: AbortSignal
+  readonly relayRecovery?: Pick<RelayRecovery, 'nextRetry' | 'recordFailure'>
   readonly connect: (attempt: InitialJoinAttempt) => Promise<T>
   readonly close: (value: T) => Promise<void>
 }
@@ -78,6 +80,7 @@ class InitialJoinRecovery<T> {
   #continuous = false
   #attempt = 0
   #failure: unknown
+  #waitingForBandwidth = false
 
   constructor(options: InitialJoinAttemptOptions<T>) {
     this.#options = options
@@ -98,8 +101,8 @@ class InitialJoinRecovery<T> {
 
   async #ensureWindow(): Promise<void> {
     if (this.#continuous || this.#clock.now() < this.#deadline) return
-    if (this.#options.control === undefined) throw new InitialJoinUnavailableError(this.#failure)
-    const bandwidth = recoveryBandwidthWait(this.#failure) > 0
+    if (this.#options.control === undefined) throw new InitialJoinUnavailableError(this.#failure, this.#waitingForBandwidth)
+    const bandwidth = this.#waitingForBandwidth
     this.#observe({ transition: 'waiting', failure: this.#failure, ...(bandwidth && { waitReason: 'bandwidth' }) })
     const choice = await this.#options.control.wait(this.#options.signal, () => {
       this.#publish({ kind: 'paused', reason: bandwidth ? 'bandwidth' : 'unreachable' })
@@ -117,6 +120,7 @@ class InitialJoinRecovery<T> {
       deadline: this.#continuous ? Infinity : this.#deadline,
       parent: this.#options.signal, now: () => this.#clock.now(),
       connect: this.#options.connect, close: this.#options.close,
+      onRelayFailure: (base, failure) => this.#options.relayRecovery?.recordFailure(base, failure),
       onBandwidthWait: milliseconds => {
         this.#publish({ kind: 'waiting', reason: 'bandwidth' })
         this.#observe({ transition: 'waiting', waitReason: 'bandwidth', delayMilliseconds: milliseconds })
@@ -134,14 +138,17 @@ class InitialJoinRecovery<T> {
       throw error
     }
     this.#failure = error
-    const bandwidth = recoveryBandwidthWait(error) > 0
-    const required = recoveryRetryAfter(error)
+    const now = this.#clock.now()
+    const retry = latestRecoveryRetry(this.#options.relayRecovery?.nextRetry(), recoveryRetry(error, now))
+    const bandwidth = retry?.reason === 'bandwidth'
+    this.#waitingForBandwidth = bandwidth
+    const required = Math.max(0, (retry?.retryAt ?? now) - now)
     const delay = this.#continuous ? waitingReconnectBackoff() : defaultReconnectBackoff(this.#attempt - 1)
-    const backoff = this.#continuous ? delay : Math.max(0, Math.min(delay, this.#deadline - this.#clock.now()))
+    const backoff = this.#continuous ? delay : Math.max(0, Math.min(delay, this.#deadline - now))
     const wait = Math.max(required, backoff)
     if (bandwidth) this.#publish({ kind: 'waiting', reason: 'bandwidth' })
     this.#observe({ transition: 'waiting', delayMilliseconds: wait, failure: error,
-      ...(bandwidth && { waitReason: 'bandwidth' }) })
+      waitReason: retry?.reason ?? 'backoff' })
     const { control, signal } = this.#options
     // A retry click cannot bypass the node's capacity or authorization deadline.
     if (required > 0 || control === undefined) await this.#clock.sleep(wait, signal)

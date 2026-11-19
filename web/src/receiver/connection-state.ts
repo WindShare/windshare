@@ -1,6 +1,6 @@
 import { RelayReceiverError } from '../transport/relay/receiver'
 import { RELAY_ERROR } from '../transport/relay/protocol'
-import { RelayEndpointFailure } from './relay-race'
+import { RelayEndpointFailure } from './relay-selection/race'
 import { StaleShareInstanceError } from './session-factory'
 
 export type ReceiverReconnectActivity =

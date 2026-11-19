@@ -1,6 +1,6 @@
 import { RelayPolicyDeniedError, RELAY_POLICY_RETRY_MS } from './relay-admission'
 import { BandwidthWaitError } from '../contracts/capacity'
-import { RelayEndpointFailure } from './relay-race'
+import { RelayEndpointFailure } from './relay-selection/race'
 import { BlockLaneAttemptsError } from '../content/broker'
 import { SessionRuntimeError } from '../session/runtime-types'
 import { RelayReceiverError } from '../transport/relay/receiver'
@@ -44,18 +44,41 @@ export function recoveryBandwidthWait(error: unknown, depth = 0): number {
   return error instanceof Error ? recoveryBandwidthWait(error.cause, depth + 1) : 0
 }
 
-export function recoveryPolicyDenied(error: unknown, depth = 0): boolean {
-  if (depth >= 8) return false
-  if (error instanceof RelayPolicyDeniedError) return true
-  if (error instanceof AggregateError) return error.errors.some(cause => recoveryPolicyDenied(cause, depth + 1))
-  return error instanceof Error && recoveryPolicyDenied(error.cause, depth + 1)
+export interface RecoveryRetry {
+  readonly retryAt: number
+  readonly reason: 'authorization' | 'bandwidth' | 'server'
 }
 
-export function recoveryRetryAfter(error: unknown): number {
-  if (error instanceof RelayPolicyDeniedError) return RELAY_POLICY_RETRY_MS
-  if (error instanceof RelayEndpointFailure) return recoveryRetryAfter(error.cause)
-  if (error instanceof AggregateError) return Math.max(0, ...error.errors.map(recoveryRetryAfter))
-  return Math.max(recoveryBandwidthWait(error), error instanceof RelayReceiverError ? error.relayError?.retryAfterMilliseconds ?? 0 : 0)
+export class RelayCooldownError extends Error {
+  readonly retry: RecoveryRetry
+
+  constructor(retry: RecoveryRetry, cause?: unknown) {
+    super('Relay cooldown is still active', { cause })
+    this.name = 'RelayCooldownError'
+    this.retry = retry
+  }
+}
+
+export function latestRecoveryRetry(first: RecoveryRetry | undefined, second: RecoveryRetry | undefined): RecoveryRetry | undefined {
+  return first === undefined || (second !== undefined && second.retryAt > first.retryAt) ? second : first
+}
+
+export function recoveryRetry(error: unknown, now: number, depth = 0): RecoveryRetry | undefined {
+  // A relay race delegates endpoint-scoped waits to the owner of its candidates.
+  if (depth >= 8 || error instanceof RelayEndpointFailure) return undefined
+  if (error instanceof RelayCooldownError) return error.retry
+  if (error instanceof RelayPolicyDeniedError) return { retryAt: now + RELAY_POLICY_RETRY_MS, reason: 'authorization' }
+  if (error instanceof BandwidthWaitError) return { retryAt: now + error.retryAfterMilliseconds, reason: 'bandwidth' }
+  if (error instanceof AggregateError) {
+    return error.errors.reduce<RecoveryRetry | undefined>(
+      (latest, cause: unknown) => latestRecoveryRetry(latest, recoveryRetry(cause, now, depth + 1)), undefined)
+  }
+  if (!(error instanceof Error)) return undefined
+  const milliseconds = error instanceof RelayReceiverError ? error.relayError?.retryAfterMilliseconds ?? 0 : 0
+  return latestRecoveryRetry(
+    milliseconds > 0 ? { retryAt: now + milliseconds, reason: 'server' } : undefined,
+    recoveryRetry(error.cause, now, depth + 1),
+  )
 }
 
 export function isLaneRecoveryFailure(error: unknown): boolean {

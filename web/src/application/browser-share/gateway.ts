@@ -25,7 +25,7 @@ import { bindLocalOutputFailureProtocolAttempt } from '../../output/diagnostics'
 import { BrowserSessionFactory } from '../../receiver/session-factory'
 import { joinBrowserRelays } from '../../receiver/browser-join'
 import type { InitialJoinOptions } from '../../receiver/initial-join'
-import { receiverRelayBases } from '../../receiver/relay-race'
+import { receiverRelayBases } from '../../receiver/relay-selection/candidates'
 import type { ReceiverPathActivitySnapshot } from '../../receiver/path-activity'
 import type { ConnectivityPolicy } from '../../connectivity/receiver-policy'
 import { ReceiverReconnectSupervisor } from '../../receiver/supervisor'
@@ -361,7 +361,7 @@ export class BrowserReceiverGateway {
         descriptor.shareInstanceId,
       ].join('.')
       sessionFactory = new BrowserSessionFactory({
-        relayBases,
+        relayRecovery: initial.relayRecovery,
         capability,
         descriptor,
         descriptorObject: relay.descriptorObject,
@@ -372,6 +372,7 @@ export class BrowserReceiverGateway {
         initial,
         policy: this.#policy,
         sessionFactory,
+        ...(recovery.clock === undefined ? {} : { clock: recovery.clock }),
         ...(this.#protocolTrace === undefined ? {} : { protocolTrace: this.#protocolTrace }),
         ...gatewayConnectivityOptions(
           this.#offersFactory,

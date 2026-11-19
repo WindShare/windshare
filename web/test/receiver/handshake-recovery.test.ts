@@ -2,17 +2,18 @@ import { createHash, createPrivateKey, sign } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { openShareDescriptor } from '../../src/catalog/records'
 import type { FrameChannel } from '../../src/contracts/channel'
-import { BandwidthWaitError } from '../../src/contracts/capacity'
 import { BrowserSessionFactory } from '../../src/receiver/session-factory'
 import { ReceiverReconnectSupervisor } from '../../src/receiver/supervisor'
 import { systemReconnectClock } from '../../src/receiver/recovery-clock'
 import type { ReceiverConnectionSnapshot } from '../../src/receiver/connection-state'
-import { isTerminalRecoveryFailure } from '../../src/receiver/recovery-failure'
+import { isTerminalRecoveryFailure, recoveryBandwidthWait } from '../../src/receiver/recovery-failure'
 import { SessionHandshakeTimeoutError } from '../../src/session/runtime-types'
 import { SESSION_HANDSHAKE_TIMEOUT_MILLISECONDS } from '../../src/session/runtime'
 import * as relayReceiver from '../../src/transport/relay/receiver'
 import type { RelayReceiverConnection } from '../../src/transport/relay/receiver'
-import { decodeDescriptorDelivery } from '../../src/transport/relay/protocol'
+import { decodeDescriptorDelivery, RELAY_ERROR } from '../../src/transport/relay/protocol'
+import { RelayPolicyDeniedError } from '../../src/receiver/relay-admission'
+import { RelayCandidates } from '../../src/receiver/relay-selection/candidates'
 import { joinBrowserRelays } from '../../src/receiver/browser-join'
 import { InitialJoinControl, type InitialJoinState } from '../../src/receiver/initial-join'
 import type { RecoveryObservation } from '../../src/receiver/recovery-observation'
@@ -178,7 +179,8 @@ describe('initial browser handshake under relay congestion', () => {
     expect(channel.state).toBe('open')
     await vi.advanceTimersByTimeAsync(1)
     expect(channel.state).toBe('closed')
-    expect(fixture.observations.find(event => event.transition === 'attempt_failed')?.failure).toBeInstanceOf(BandwidthWaitError)
+    const failure = fixture.observations.find(event => event.transition === 'attempt_failed')?.failure
+    expect(recoveryBandwidthWait(failure)).toBe(30_000)
     fixture.control.request('retry')
     await vi.advanceTimersByTimeAsync(29_999)
     expect(fixture.dial).toHaveBeenCalledTimes(1)
@@ -192,6 +194,64 @@ describe('initial browser handshake under relay congestion', () => {
 })
 
 describe('production browser handshake recovery', () => {
+  it('retries a starting independent relay within the first window while the official relay cools down', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    const { capability, descriptorObject, descriptor } = await shareFixture()
+    const channel = new HandshakeChannel('valid')
+    const watch = vi.fn((base: string, deny: (reason: Error) => void) => {
+      if (base === 'official') deny(new RelayPolicyDeniedError())
+      return { ready: Promise.resolve(), close() {} }
+    })
+    const dial = vi.spyOn(relayReceiver, 'dialRelayReceiver').mockImplementation(async () => {
+      if (Date.now() < 1_000) throw new relayReceiver.RelayReceiverError('Share is starting', { relayError: {
+        code: RELAY_ERROR.starting, retryAfterMilliseconds: 250,
+      } })
+      return { endpoint: {} as RelayReceiverConnection['endpoint'], relaySessionId: new Uint8Array(8),
+        descriptorObject, channel, close: () => channel.close() }
+    })
+    const parent = new AbortController()
+    const control = new InitialJoinControl()
+    const states: InitialJoinState[] = []
+    const sources = new RelayCandidates(['official', 'independent'], undefined, { watch })
+    const task = joinBrowserRelays(sources, capability, parent.signal, undefined, {
+      control, clock: { now: () => Date.now(), sleep: systemReconnectClock.sleep },
+      onState: state => states.push(state),
+    })
+    const outcome = task.then(joined => ({ joined }), error => ({ error: error as unknown }))
+    try {
+      await vi.advanceTimersByTimeAsync(200)
+      control.request('retry')
+      await vi.advanceTimersByTimeAsync(49)
+      expect(dial).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(dial).toHaveBeenCalledTimes(2)
+
+      await vi.advanceTimersByTimeAsync(1_450)
+      expect(channel.state).toBe('open')
+      expect(dial.mock.calls.every(([base]) => base === 'independent')).toBe(true)
+      expect(states.some(state => state.kind === 'paused')).toBe(false)
+      expect(watch.mock.calls.filter(([base]) => base === 'official')).toHaveLength(1)
+      // Handoff to the connected receiver must carry the already observed cooldown.
+      const result = await outcome
+      if ('error' in result) throw result.error
+      expect(result.joined.relayBase).toBe('independent')
+      const factory = new BrowserSessionFactory({ relayRecovery: result.joined.relayRecovery,
+        capability, descriptor, descriptorObject })
+      try {
+        await expect(factory.attachRelay(result.joined.session, parent.signal, 'official'))
+          .rejects.toMatchObject({ retry: { retryAt: 60_000, reason: 'authorization' } })
+        expect(watch.mock.calls.filter(([base]) => base === 'official')).toHaveLength(1)
+      } finally { factory.close() }
+    } finally {
+      parent.abort()
+      const result = await outcome
+      if ('joined' in result) await result.joined.session.close()
+      await channel.close()
+    }
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it.each(['malformed', 'signature'] as const)('joins through a healthy relay after another supplies %s data', async failure => {
     vi.useFakeTimers()
     const { capability, descriptorObject } = await shareFixture()

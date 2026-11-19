@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
-import { firstUsableRelay, receiverRelayBases, RelayEndpointFailure } from '../../src/receiver/relay-race'
+import { firstUsableRelay, RelayEndpointFailure } from '../../src/receiver/relay-selection/race'
 import { StaleShareInstanceError } from '../../src/receiver/session-factory'
-import { isShareRecoveryFailure } from '../../src/receiver/recovery-failure'
-import { RelayCandidates } from '../../src/receiver/relay-candidates'
+import { isShareRecoveryFailure, isTerminalRecoveryFailure } from '../../src/receiver/recovery-failure'
+import { receiverRelayBases, RelayCandidates } from '../../src/receiver/relay-selection/candidates'
+import { RelayRecovery } from '../../src/receiver/relay-selection/recovery'
+import { RelayPolicyDeniedError } from '../../src/receiver/relay-admission'
+import { RelayProtocolError } from '../../src/transport/relay/protocol'
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -66,6 +69,34 @@ describe('first usable relay', () => {
     await Promise.resolve()
     await Promise.resolve()
     expect(close).toHaveBeenCalledWith('slow-connected')
+  })
+
+  it('keeps a cooling endpoint eligible for future recovery after the remaining endpoint is rejected', async () => {
+    let now = 0
+    const recovery = new RelayRecovery(['official', 'independent'], { now: () => now })
+    const signal = new AbortController().signal
+    const close = async () => undefined
+    const connect = vi.fn(async (base: string) => {
+      if (base === 'independent') {
+        if (now === 0) throw new Error('Independent relay temporarily unavailable')
+        throw new RelayProtocolError('malformed', 'Invalid relay response')
+      }
+      if (now < 60_000) throw new RelayPolicyDeniedError()
+      return base
+    })
+    const outcome = await recovery.race(signal, connect, close).catch((failure: unknown) => failure)
+    expect(isTerminalRecoveryFailure(outcome)).toBe(false)
+    expect(recovery.nextRetry()).toBeUndefined()
+
+    now = 500
+    const nextFailure = await recovery.race(signal, connect, close).catch((failure: unknown) => failure)
+    expect(isTerminalRecoveryFailure(nextFailure)).toBe(false)
+    expect(recovery.nextRetry()).toEqual({ retryAt: 60_000, reason: 'authorization' })
+    expect(connect.mock.calls.map(([base]) => base)).toEqual(['official', 'independent', 'independent'])
+
+    now = 60_000
+    await expect(recovery.race(signal, connect, close)).resolves.toBe('official')
+    expect(connect.mock.calls.map(([base]) => base)).toEqual(['official', 'independent', 'independent', 'official'])
   })
 
   it('allows a failed endpoint without delaying a healthy one and bounds configuration fanout', async () => {

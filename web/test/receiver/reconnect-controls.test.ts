@@ -3,11 +3,14 @@ import { GenerationRecoveryBudget } from '../../src/receiver/generation-recovery
 import type { ReceiverConnectionSnapshot } from '../../src/receiver/connection-state'
 import { systemReconnectClock } from '../../src/receiver/recovery-clock'
 import { ReceiverReconnectSupervisor } from '../../src/receiver/supervisor'
-import type { ProtocolGenerationCore } from '../../src/receiver/session-factory'
+import { BrowserSessionFactory, type ProtocolGenerationCore } from '../../src/receiver/session-factory'
+import { RelayPolicyDeniedError } from '../../src/receiver/relay-admission'
+import { RelayRecovery } from '../../src/receiver/relay-selection/recovery'
+import type { ReceiverSessionRuntime } from '../../src/session/runtime'
 import type { ProtocolTraceEvent } from '../../src/session/diagnostics'
 import { RelayReceiverError } from '../../src/transport/relay/receiver'
 import { RELAY_ERROR } from '../../src/transport/relay/protocol'
-import { core, deferred, descriptor, FakeSession, FakeSessionFactory, TrackedRelay } from './v2-supervisor-fixture'
+import { core, deferred, descriptor, FakeSession, FakeSessionFactory, identity, TrackedRelay } from './v2-supervisor-fixture'
 
 afterEach(() => vi.useRealTimers())
 
@@ -29,6 +32,57 @@ function fixture(budget = new GenerationRecoveryBudget()) {
 }
 
 describe('reconnect control admission', () => {
+  it('rebuilds from the independent relay without waiting for the official relay cooldown', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    const clock = { now: () => Date.now(), sleep: systemReconnectClock.sleep }
+    const independent = 'https://relay.example'
+    const official = 'https://official.example'
+    const share = descriptor()
+    const session = new FakeSession([1])
+    const relay = new TrackedRelay(1)
+    const nextRelay = new TrackedRelay(1)
+    const dial = vi.fn(async (base: string) => {
+      if (base === official) throw new RelayPolicyDeniedError()
+      if (Date.now() < 1_000) throw new RelayReceiverError('Share is starting', { relayError: {
+        code: RELAY_ERROR.starting, retryAfterMilliseconds: 250,
+      } })
+      return nextRelay.connection
+    })
+    const factory = new BrowserSessionFactory({
+      relayRecovery: new RelayRecovery([independent, official], clock),
+      capability: { suite: 2, readSecret: identity(1), pkHash: identity(2),
+        shareIdRaw: new Uint8Array(12), shareId: 'share' },
+      descriptor: share,
+      descriptorObject: relay.connection.descriptorObject,
+      dialRelay: dial,
+      openDescriptor: async () => share,
+      connectSession: async () => new FakeSession([2]) as unknown as ReceiverSessionRuntime,
+    })
+    const supervisor = new ReceiverReconnectSupervisor({
+      descriptor: share, initial: core(session, relay), sessionFactory: factory, clock,
+      policy: 'relay-only', generationBackoffMilliseconds: () => 250,
+    })
+    const states: ReceiverConnectionSnapshot[] = []
+    supervisor.connection.subscribe(state => states.push(state))
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+      session.detach(1)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(states.at(-1)).toEqual({ kind: 'reconnecting', activity: {
+        kind: 'waiting', reason: 'server', retryAt: 250,
+      } })
+      supervisor.requestReconnect()
+      await vi.advanceTimersByTimeAsync(249)
+      expect(dial.mock.calls.map(([base]) => base)).toEqual([official, independent])
+      await vi.advanceTimersByTimeAsync(751)
+      expect(states.at(-1)).toEqual({ kind: 'connected' })
+      expect(supervisor.generationId).toBe(2)
+      expect(dial.mock.calls.filter(([base]) => base === official)).toHaveLength(1)
+    } finally { await supervisor.close() }
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('keeps depleted capacity waiting through manual and online wakes, then reports one real attempt', async () => {
     const budget = new GenerationRecoveryBudget()
     for (let attempt = 0; attempt < 8; attempt += 1) budget.reserve(0).finish(0)

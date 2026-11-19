@@ -7,8 +7,8 @@ import { CborError } from '../../src/protocol/cbor'
 import { TranscriptError } from '../../src/session/transcript'
 import { EnvelopeError } from '../../src/session/envelope'
 import { SessionRuntimeError } from '../../src/session/runtime-types'
-import { isShareRecoveryFailure, isTerminalRecoveryFailure, recoveryRetryAfter } from '../../src/receiver/recovery-failure'
-import { RelayEndpointFailure } from '../../src/receiver/relay-race'
+import { isShareRecoveryFailure, isTerminalRecoveryFailure, recoveryRetry } from '../../src/receiver/recovery-failure'
+import { RelayEndpointFailure } from '../../src/receiver/relay-selection/race'
 
 function relayFailure(code: RelayErrorCode, retryAfterMilliseconds = 0) {
   return new RelayReceiverError('Relay rejection', { relayError: { code, retryAfterMilliseconds } })
@@ -53,10 +53,11 @@ describe('receiver failure scope', () => {
     expect(isShareRecoveryFailure(new Error('Output storage is full'))).toBe(false)
   })
 
-  it('preserves the largest admission retry hint across endpoint wrappers', () => {
-    expect(recoveryRetryAfter(new AggregateError([
-      new RelayEndpointFailure('relay-a', relayFailure(RELAY_ERROR.starting, 100)),
-      relayFailure(RELAY_ERROR.admission, 900),
-    ]))).toBe(900)
+  it('keeps endpoint-scoped hints out of the connection-wide retry deadline', () => {
+    const scoped = new RelayEndpointFailure('relay-a', relayFailure(RELAY_ERROR.starting, 900))
+    expect(recoveryRetry(scoped, 10)).toBeUndefined()
+    expect(recoveryRetry(new AggregateError([scoped, relayFailure(RELAY_ERROR.admission, 100)]), 10)).toEqual({
+      retryAt: 110, reason: 'server',
+    })
   })
 })
