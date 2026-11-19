@@ -20,11 +20,10 @@ const (
 
 type OperationFailure = protocolsession.OperationFailure
 
-// SemanticOutbound keeps sender-control construction inside the lane writer.
-// SendControl must add key 255 and sign with the exact writer-assigned sequence
-// atomically before envelope sealing; bodyWithoutSignature is canonical CBOR.
+// SemanticOutbound keeps operation routing and authentication at the session
+// boundary. SendControl takes a canonical CBOR body.
 type SemanticOutbound interface {
-	SendControl(ctx context.Context, kind protocolsession.MessageKind, operationID protocolsession.OperationID, bodyWithoutSignature []byte) (protocolsession.ResponseSendResult, error)
+	SendControl(ctx context.Context, kind protocolsession.MessageKind, operationID protocolsession.OperationID, body []byte) (protocolsession.ResponseSendResult, error)
 	SendFragment(ctx context.Context, message protocolsession.Message) error
 	SendOperationError(ctx context.Context, operationID protocolsession.OperationID, failure OperationFailure) error
 }

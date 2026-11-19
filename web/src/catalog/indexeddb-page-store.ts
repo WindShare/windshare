@@ -39,9 +39,9 @@ import {
   type CommittedDirectory,
 } from './page-store-contracts'
 
-// Path policy v2 retains destination-specific names. Rebuild earlier caches,
-// including persisted scan failures, rather than reusing their narrower policy.
-const DATABASE_VERSION = 7
+// Version 7 can contain byte counts and commitments derived from signed sender
+// objects. Rebuild the cache so pages and budget charges use the encoded payload.
+const DATABASE_VERSION = 8
 const NODE_OWNER_INDEX = 'by-node-owner'
 const NAME_OWNER_INDEX = 'by-name-owner'
 
