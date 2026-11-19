@@ -1,7 +1,8 @@
 import { message } from '../ui/locale'
 import { networkCopy } from './locales'
 import { request, RequestError } from '../ui/request'
-import type { Enrollment, PolicyField, PolicySnapshot, RelayNode, Report, ReportPage, Restrictions, SettingsChanges, Snapshot, Target } from './model'
+import { decode } from './identity'
+import type { Enrollment, NodeDetails, NodePage, PolicyField, PolicySnapshot, RelayNode, Report, ReportPage, Restrictions, SettingsChanges, Snapshot, Target } from './model'
 
 const messages = {
   credentials: message(networkCopy, 'invalidCredentials'),
@@ -38,6 +39,18 @@ export class AuthorityClient {
       throw error
     }
   }
+  nodes = (after: string, signal: AbortSignal) =>
+    this.read<NodePage>('nodes?after=' + encodeURIComponent(after), signal)
+  node = async (id: string, signal: AbortSignal) => {
+    if (!decode(id, 'node')) return null
+    try {
+      return await this.read<NodeDetails>('nodes/' + encodeURIComponent(id.trim()), signal)
+    } catch (error) {
+      if (error instanceof RequestError && error.code === 'node_not_found') return null
+      throw error
+    }
+  }
+
   reports = (signal: AbortSignal, after?: string) =>
     this.read<ReportPage>(after === undefined ? 'reports' : 'reports?after=' + encodeURIComponent(after), signal)
   report = async (id: string, signal: AbortSignal) => {
@@ -60,7 +73,7 @@ export class AuthorityClient {
     }
   }
   signOut = () => this.write('logout', {})
-  enroll = (node: Enrollment) => this.write<RelayNode>('nodes', node)
+  enroll = (node: Enrollment) => this.write<NodeDetails>('nodes', node)
   policy = (key: number[], field: PolicyField, value: boolean) => this.write<RelayNode>('nodes/policy', { key, change: { field, value } }, 'PUT')
   updateSettings = (changes: SettingsChanges) => this.write<PolicySnapshot>('settings', changes, 'PATCH')
   restrict = (target: Target, blocked: boolean) => this.write<Restrictions>('blocks', { ...target, blocked })

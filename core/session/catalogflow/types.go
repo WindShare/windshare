@@ -87,6 +87,8 @@ func VerifiedFailure(failure DirectoryFailure) VerifiedObject {
 	return VerifiedObject{Failure: &copy}
 }
 
+// ObjectVerifier decodes a payload and checks its request binding after the
+// transport authenticates delivery.
 type ObjectVerifier interface {
 	Verify(context.Context, catalog.ShareInstance, ListRequest, []byte) (VerifiedObject, error)
 }

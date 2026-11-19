@@ -225,12 +225,12 @@ func validateCommittedPage(
 	if err != nil {
 		return err
 	}
-	objectBytes, err := readCatalogObject(filepath.Join(path, fileCatalogObjectsName, fmt.Sprintf("%08x.object", index)))
+	payloadBytes, err := readCatalogObject(filepath.Join(path, fileCatalogPayloadsName, fmt.Sprintf("%08x.object", index)))
 	if err != nil {
 		return err
 	}
-	object, err := NewSealedPageObject(objectBytes)
-	if err != nil || object.Commitment() != page.Commitment() {
+	payload, err := NewPagePayload(payloadBytes)
+	if err != nil || payload.Commitment() != page.Commitment() {
 		return ErrCorruptCatalogStorage
 	}
 	for _, entry := range page.entries {
@@ -248,7 +248,7 @@ func validateCommittedPage(
 		return err
 	}
 	hashCatalogObject(digest, 3, pageBytes)
-	hashCatalogObject(digest, 4, objectBytes)
+	hashCatalogObject(digest, 4, payloadBytes)
 	return nil
 }
 

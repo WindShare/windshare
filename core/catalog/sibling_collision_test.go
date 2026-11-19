@@ -18,7 +18,7 @@ func newTinyRunStore(t *testing.T) *CatalogStore {
 		Backend:       NewMemoryCatalogBackend(),
 		ProcessBudget: generousBudget(t, "process"),
 		ShareBudget:   generousBudget(t, "share"),
-		PageSealer:    semanticTestCommitter{},
+		PageEncoder:   semanticTestCommitter{},
 		SpillFactory:  NewFileSpillFactory(t.TempDir()),
 		// Force every record to flush and merge through external spill runs so
 		// multi-run portable-name collision groups are exercised deterministically.

@@ -43,7 +43,7 @@ fieldset legend { font-size: 1.15rem; font-weight: 610; margin-bottom: 1rem; pad
 .report-entry strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .report-entry small, .section-title time { color: var(--muted); font-size: .81rem; }
 .report-reason { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }
-.report-loading { display: flex; align-items: center; gap: .6rem; }
+.resource-loading { display: flex; align-items: center; gap: .6rem; }
 @container (max-width: 47rem) {
   table, tbody, tbody tr, tbody th { display: block; }
   thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }

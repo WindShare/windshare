@@ -17,7 +17,7 @@ func TestPageCursorStreamsOneGenerationToItsTerminalPage(t *testing.T) {
 	codec := newMemoryObjectCodec()
 	objects := make([][]byte, len(pages))
 	for index, page := range pages {
-		object, err := codec.LoadSealedPage(context.Background(), page)
+		object, err := codec.LoadPagePayload(context.Background(), page)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -243,7 +243,7 @@ func TestPageCursorEnforcesPageAndObjectBoundaries(t *testing.T) {
 	directory := directoryID(t, 81)
 	twoPages := twoPageSnapshot(t, instance, directory, 82, "first", "second").Pages()
 	codec := newMemoryObjectCodec()
-	firstObject, err := codec.LoadSealedPage(context.Background(), twoPages[0])
+	firstObject, err := codec.LoadPagePayload(context.Background(), twoPages[0])
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -9,16 +9,11 @@ import type { FileRevisionDescriptor } from '../../content/records'
 import {
   compareRevisionDescriptors, RevisionEvidenceUnavailableError, sourceMetadataFields, type RevisionComparison,
 } from '../../content/revision-comparison'
-import type { OpenedRevision, RevisionReopenedDuringRecoveryError } from '../../content/session-services'
+import type { OpenedRevision } from '../../content/session-services'
 import { encodeBase64Url, equalBytes } from '../../crypto/bytes'
-import type { IncidentScopeHandle } from '../../diagnostics/incident'
-import type { OutputFileTransaction, VerifiedDurableRanges } from '../output/file'
-import { FaultScope, OutputFaultCode, outputFault } from '../failure/fault'
-import { withOutputSettlementTimeout } from '../settlement/output'
-import type { FileTransferSettlement } from './contract'
+import type { OutputSession, VerifiedDurableRanges } from '../output/file'
 import {
-  FileRevisionChangedError, normalizeFileTransferFailure, normalizedFileTransferFault,
-  type NormalizedFileTransferFailure,
+  FileRevisionChangedError, normalizeFileTransferFailure, type NormalizedFileTransferFailure,
 } from './failures'
 
 /** Validates the untrusted revision adapter result before output or content I/O. */
@@ -88,7 +83,7 @@ function catalogModifiedTimeMatches(
 
 export const FILE_REVISION_READMISSION_DECISIONS = [
   'readmit', 'readmitted', 'observed-change', 'evidence-unavailable',
-  'retry-limit', 'admission-failed', 'settlement-failed', 'canceled',
+  'readmission-unsupported', 'retry-limit', 'admission-failed', 'settlement-failed', 'canceled',
 ] as const
 
 export interface FileRevisionReadmissionObservation {
@@ -108,19 +103,12 @@ export interface FileRevisionReadmission {
   readonly started: number
   readonly paused: VerifiedDurableRanges
   readonly initialDurable: ByteRangeSet
+  readonly beginFile: OutputSession['beginFile']
 }
-
-export const UNCONFIRMED_FILE_SETTLEMENT: FileTransferSettlement = Object.freeze({ kind: 'unconfirmed' })
 
 interface ReadmissionReporting {
   readonly onRevisionReadmission?: (event: FileRevisionReadmissionObservation) => void
   readonly onRecoverableAcknowledged?: (bytes: bigint, transition: 'readmission') => void
-}
-
-interface ReadmissionSettlement extends ReadmissionReporting {
-  readonly outputSettlementTimeoutMilliseconds: number
-  readonly signal: AbortSignal
-  readonly incidentScope?: IncidentScopeHandle
 }
 
 export function observeRevisionReadmission(
@@ -147,54 +135,6 @@ export function observeReadmittedCoverage(
   if (lostNewBytes !== 0n) options.onRecoverableAcknowledged?.(-lostNewBytes, 'readmission')
   observeRevisionReadmission(options, previous.previous, current, compareRevisionDescriptors(previous.previous, current),
     'readmitted', retainedBytes, reusedBytes, previous.started)
-}
-
-export async function settleReopenedFile(
-  options: ReadmissionSettlement, transaction: OutputFileTransaction,
-  error: RevisionReopenedDuringRecoveryError, initialDurable: ByteRangeSet, started: number, retried: boolean,
-): Promise<{
-  readonly settlement: FileTransferSettlement
-  readonly failure?: NormalizedFileTransferFailure
-  readonly retry?: FileRevisionReadmission
-}> {
-  const { previous, current, comparison } = error
-  let paused: VerifiedDurableRanges
-  try {
-    // The iterator and checkpoint scheduler have both drained. Force a durable
-    // cut before releasing the old lease and asking for another revision.
-    paused = await withOutputSettlementTimeout('pause reopened output file',
-      options.outputSettlementTimeoutMilliseconds, () => transaction.pause(error))
-  } catch (reason) {
-    observeRevisionReadmission(options, previous, current, comparison, 'settlement-failed', 0n, 0n, started)
-    return {
-      settlement: UNCONFIRMED_FILE_SETTLEMENT,
-      failure: normalizedFileTransferFault(outputFault(FaultScope.OutputPause, OutputFaultCode.MutationAmbiguous), {
-        stage: 'settlement', error: reason, materializationFailureReason: 'output-write-failed',
-        ...(options.incidentScope === undefined ? {} : { incidentScope: options.incidentScope }),
-      }),
-    }
-  }
-  const retainedBytes = rangeBytes(paused.asRangeSet())
-  const settlement = { kind: 'paused', retainedBytes } as const
-  const decision = readmissionDecision(options.signal, comparison, retried)
-  observeRevisionReadmission(options, previous, current, comparison, decision, retainedBytes, 0n, started)
-  if (decision === 'readmit') {
-    return { settlement, retry: { previous, current, comparison, started, paused, initialDurable } }
-  }
-  return {
-    settlement, failure: normalizeFileTransferFailure(options.signal.aborted ? options.signal.reason : error, {
-      signal: options.signal, ...(options.incidentScope === undefined ? {} : { incidentScope: options.incidentScope }),
-    }),
-  }
-}
-
-function readmissionDecision(
-  signal: AbortSignal, comparison: RevisionComparison, retried: boolean,
-): FileRevisionReadmissionObservation['decision'] {
-  if (signal.aborted) return 'canceled'
-  if (comparison.kind === 'observed-change') return 'observed-change'
-  if (comparison.kind === 'unavailable') return 'evidence-unavailable'
-  return retried ? 'retry-limit' : 'readmit'
 }
 
 export function rangeBytes(ranges: ByteRangeSet): bigint {

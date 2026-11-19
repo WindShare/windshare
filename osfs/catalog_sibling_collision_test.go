@@ -16,20 +16,20 @@ import (
 	diag "github.com/windshare/windshare/core/diagnostics"
 )
 
-type testCatalogSealer struct{}
+type testCatalogEncoder struct{}
 
-func (testCatalogSealer) Commit(input catalog.PageCommitInput) (catalog.PageCommitment, error) {
+func (testCatalogEncoder) Commit(input catalog.PageCommitInput) (catalog.PageCommitment, error) {
 	digest := sha256.Sum256(testPageBytes(input))
 	return catalog.NewPageCommitment(digest[:])
 }
 
-func (testCatalogSealer) Seal(input catalog.PageCommitInput) (catalog.SealedPageObject, error) {
-	return catalog.NewSealedPageObject(testPageBytes(input))
+func (testCatalogEncoder) EncodePage(input catalog.PageCommitInput) (catalog.PagePayload, error) {
+	return catalog.NewPagePayload(testPageBytes(input))
 }
 
-func (testCatalogSealer) SealFailure(record catalog.DirectoryFailureRecord) (catalog.SealedFailureObject, error) {
+func (testCatalogEncoder) EncodeFailure(record catalog.DirectoryFailureRecord) (catalog.FailurePayload, error) {
 	payload := fmt.Appendf(nil, "%x:%x:%x:%d", record.ShareInstance(), record.DirectoryID(), record.AttemptID(), record.Kind())
-	return catalog.NewSealedFailureObject(payload)
+	return catalog.NewFailurePayload(payload)
 }
 
 func testPageBytes(input catalog.PageCommitInput) []byte {
@@ -68,7 +68,7 @@ func commitSourceDirectory(
 		Backend:       catalog.NewMemoryCatalogBackend(),
 		ProcessBudget: process,
 		ShareBudget:   shareBudget,
-		PageSealer:    testCatalogSealer{},
+		PageEncoder:   testCatalogEncoder{},
 		SpillFactory:  catalog.NewFileSpillFactory(t.TempDir()),
 	})
 	if err != nil {

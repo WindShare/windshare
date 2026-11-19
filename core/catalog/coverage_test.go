@@ -328,7 +328,7 @@ func TestScanFailureConstructorsAndAttemptAdmissionAxes(t *testing.T) {
 			share := generousBudget(t, "share")
 			store, err := NewCatalogStore(StoreConfig{
 				ShareInstance: idValue[ShareInstance](1), Backend: NewMemoryCatalogBackend(),
-				ProcessBudget: process, ShareBudget: share, PageSealer: semanticTestCommitter{},
+				ProcessBudget: process, ShareBudget: share, PageEncoder: semanticTestCommitter{},
 				AttemptIDs: generators.attemptIDs, Generations: generators.generations,
 			})
 			if err != nil {
@@ -385,7 +385,7 @@ func TestAttemptFailureReuseConcurrencyAndWorkAdmission(t *testing.T) {
 			var generations byte
 			store, err := NewCatalogStore(StoreConfig{
 				ShareInstance: idValue[ShareInstance](1), Backend: NewMemoryCatalogBackend(),
-				ProcessBudget: process, ShareBudget: share, PageSealer: semanticTestCommitter{}, Clock: clock,
+				ProcessBudget: process, ShareBudget: share, PageEncoder: semanticTestCommitter{}, Clock: clock,
 				AttemptIDs: ScanAttemptIDGeneratorFunc(func() (ScanAttemptID, error) {
 					if !reuseAttempt {
 						attempts++
@@ -484,7 +484,7 @@ func TestStoreRejectsInvalidAndClosedOperations(t *testing.T) {
 	}
 	if _, err := NewCatalogStore(StoreConfig{
 		ShareInstance: idValue[ShareInstance](1), Backend: NewMemoryCatalogBackend(),
-		ProcessBudget: process, ShareBudget: process, PageSealer: semanticTestCommitter{},
+		ProcessBudget: process, ShareBudget: process, PageEncoder: semanticTestCommitter{},
 	}); err == nil {
 		t.Fatal("aliased budgets were accepted")
 	}

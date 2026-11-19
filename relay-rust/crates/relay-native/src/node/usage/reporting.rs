@@ -1,7 +1,8 @@
-use super::super::{Identity, Runtime, access::AuthorityState};
+use super::super::{Runtime, access::AuthorityState};
 use crate::storage::Database;
 use anyhow::{Result, anyhow, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tokio::sync::watch;
@@ -60,7 +61,7 @@ impl Authority {
 pub struct Reporter {
     pub(super) node: Runtime,
     pub(super) store: Database,
-    pub(super) identity: Identity,
+    pub(super) signing_key: SigningKey,
     pub(super) authority: Authority,
     client: reqwest::Client,
 }
@@ -68,7 +69,7 @@ impl Reporter {
     pub fn new(
         node: Runtime,
         store: Database,
-        identity: Identity,
+        signing_key: SigningKey,
         authority: Authority,
     ) -> Result<Self> {
         authority.validate()?;
@@ -80,7 +81,7 @@ impl Reporter {
         Ok(Self {
             node,
             store,
-            identity,
+            signing_key,
             authority,
             client,
         })
@@ -142,7 +143,7 @@ impl Reporter {
         domain: &[u8],
         request: &(impl Serialize + Sync),
     ) -> Result<(SignedReply, bool)> {
-        let signed = trust::sign(domain, &serde_json::to_vec(request)?, &self.identity.key());
+        let signed = trust::sign(domain, &serde_json::to_vec(request)?, &self.signing_key);
         ensure!(signed.len() <= MAX_REPORT_BYTES, "oversized node request");
         let mut response = self
             .client

@@ -90,14 +90,14 @@ func (source *CatalogStoreSource) loadFirstPage(
 	if err != nil {
 		return PageResult{}, err
 	}
-	object, found, err := source.store.FailureObject(ctx, failure.DirectoryID, failure.AttemptID)
+	payload, found, err := source.store.FailurePayload(ctx, failure.DirectoryID, failure.AttemptID)
 	if err != nil {
 		return PageResult{}, err
 	}
 	if !found {
 		return PageResult{}, catalog.ErrCorruptCatalogStorage
 	}
-	return PageResult{Failure: &wireFailure, Payload: object.Bytes()}, nil
+	return PageResult{Failure: &wireFailure, Payload: payload.Bytes()}, nil
 }
 
 func (source *CatalogStoreSource) loadCommittedPage(
@@ -121,14 +121,14 @@ func (source *CatalogStoreSource) loadCommittedPage(
 	if !found {
 		return PageResult{}, ErrPageOutOfRange
 	}
-	object, found, err := source.store.PageObject(ctx, directoryID, committed.Generation(), request.PageIndex())
+	payload, found, err := source.store.PagePayload(ctx, directoryID, committed.Generation(), request.PageIndex())
 	if err != nil {
 		return PageResult{}, err
 	}
-	if !found || object.Commitment() != page.Commitment() {
+	if !found || payload.Commitment() != page.Commitment() {
 		return PageResult{}, catalog.ErrCorruptCatalogStorage
 	}
-	return PageResult{Page: page, Payload: object.Bytes()}, nil
+	return PageResult{Page: page, Payload: payload.Bytes()}, nil
 }
 
 func (source *CatalogStoreSource) translateFailure(failure *catalog.DirectoryFailure) (DirectoryFailure, error) {

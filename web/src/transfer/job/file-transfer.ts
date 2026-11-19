@@ -12,15 +12,15 @@ import {
   type RevisionReader,
 } from '../../content/session-services'
 import {
-  observeReadmittedCoverage, observeRevisionReadmission, settleReopenedFile,
-  UNCONFIRMED_FILE_SETTLEMENT, rangeBytes, releaseRevisionLease, validateOpenedFileRevision,
+  observeReadmittedCoverage, observeRevisionReadmission,
+  rangeBytes, releaseRevisionLease, validateOpenedFileRevision,
   type FileRevisionReadmission, type FileRevisionReadmissionObservation,
 } from './file-authority'
+import { settleReopenedFile, settleTransferError, UNCONFIRMED_FILE_SETTLEMENT } from '../settlement/file'
 import { encodeBase64Url } from '../../crypto/bytes'
 import type { IncidentScopeHandle } from '../../diagnostics/incident'
 import {
   OutputTransactionContractError,
-  retireOutputFileTransaction,
   bindOutputFileTransaction,
   ownOutputFileTransaction,
 } from '../output/transaction'
@@ -53,18 +53,8 @@ import {
   normalizedFileTransferFault,
   type NormalizedFileTransferFailure,
 } from './failures'
-import {
-  BoundaryFaultError,
-  FaultScope,
-  FaultDomain,
-  OutputFaultCode,
-  authorizeFileRetirement,
-  joinFaults,
-  outputFault,
-  promoteFaultScope,
-} from '../failure/fault'
+import { BoundaryFaultError, joinFaults } from '../failure/fault'
 import type { DirectTreeCoordinateContract } from './coordinate/direct-tree'
-import { withOutputSettlementTimeout } from '../settlement/output'
 import type { PerformanceFilePipelineObservation } from '../../diagnostics/performance/performance-runtime-observations'
 
 export class RangeReaderContractError extends Error {
@@ -72,12 +62,6 @@ export class RangeReaderContractError extends Error {
     super(message)
     this.name = 'RangeReaderContractError'
   }
-}
-
-interface SettledFileFailure {
-  readonly failure: NormalizedFileTransferFailure
-  readonly settlement: FileTransferSettlement
-  readonly capacityBlocked?: OutputCapacityBlockedError
 }
 
 export interface FileTransferOptions {
@@ -182,7 +166,7 @@ async function admitFileAttempt(
     options.signal, 'Unable to begin the output file transaction', 'output-write-failed',
     () => previous === undefined
       ? options.output.beginFile(request, options.signal)
-      : options.output.readmitFile!(request, previous.paused, options.signal),
+      : previous.beginFile(request, options.signal),
     () => revisionAdmission.failure,
   )
   // A collaborator can return an invalid binding after acquiring a writer.
@@ -295,7 +279,7 @@ async function settleFileAttemptError(
   // The checkpoint controller can abort the reader to drain it. The caller's
   // signal still decides whether to start another attempt.
   const outcome = failure instanceof RevisionReopenedDuringRecoveryError && attempt.transaction !== undefined &&
-      attempt.initialDurable !== undefined && options.output.readmitFile !== undefined
+      attempt.initialDurable !== undefined && options.output.capabilities.durability !== 'None'
     ? await settleReopenedFile(options, attempt.transaction, failure, attempt.initialDurable, started, previous !== undefined)
     : await settleTransferError(options, attempt.transaction, failure)
   if (previous === undefined || attempt.admitted || outcome.settlement.kind !== 'unconfirmed') return outcome
@@ -349,35 +333,6 @@ async function drainCheckpointFailure(
   return failure
 }
 
-async function settleTransferError(
-  options: FileTransferOptions,
-  transaction: OutputFileTransaction | undefined,
-  error: unknown,
-): Promise<SettledFileFailure> {
-  if (error instanceof OutputCapacityBlockedError && !options.signal.aborted) {
-    // Unwind the write/buffer lease before waiting: parked payload buffers could
-    // otherwise consume the entire budget needed by still-admitted files.
-    try {
-      let settlement = UNCONFIRMED_FILE_SETTLEMENT
-      if (transaction !== undefined) {
-        const durable = await withOutputSettlementTimeout('checkpoint capacity-blocked file',
-          options.outputSettlementTimeoutMilliseconds, () => transaction.pause(error))
-        settlement = Object.freeze({ kind: 'paused', retainedBytes: rangeBytes(durable.asRangeSet()) })
-      }
-      return { capacityBlocked: error, settlement,
-        failure: normalizeFileTransferFailure(error, { stage: 'output_write' }) }
-    } catch (settlementFailure) {
-      return { failure: normalizeFileTransferFailure(settlementFailure, { stage: 'settlement' }),
-        settlement: UNCONFIRMED_FILE_SETTLEMENT }
-    }
-  }
-  return settleFailedFileTransfer(options, transaction,
-    normalizeFileTransferFailure(error, {
-      signal: options.signal,
-      ...(options.incidentScope === undefined ? {} : { incidentScope: options.incidentScope }),
-    }))
-}
-
 async function finishTransferFile(
   options: FileTransferOptions,
   acquired: OpenedRevision | undefined,
@@ -391,138 +346,6 @@ async function finishTransferFile(
     }
   }
   throwTransferOrReleaseFailure(options.incidentScope, primaryFailure, releaseFailure)
-}
-
-function isWholeOutputFault(scope: FaultScope): boolean {
-  return scope === FaultScope.OutputPause || scope === FaultScope.SessionTerminal
-}
-
-async function persistSourceFailure(
-  options: FileTransferOptions,
-  transaction: OutputFileTransaction,
-  failure: Extract<NormalizedFileTransferFailure, { kind: 'fault' }>,
-): Promise<NormalizedFileTransferFailure | undefined> {
-  const fault = failure.fault
-  if (fault.domain !== FaultDomain.Source || transaction.recordSourceFailure === undefined) return
-  try {
-    await withOutputSettlementTimeout('persist source revision failure', options.outputSettlementTimeoutMilliseconds,
-      () => transaction.recordSourceFailure!(fault))
-  } catch (error) {
-    return normalizeFileTransferFailure(error, { stage: 'settlement' })
-  }
-}
-
-async function settleFailedFileTransfer(
-  options: FileTransferOptions,
-  transaction: OutputFileTransaction | undefined,
-  failure: NormalizedFileTransferFailure,
-): Promise<SettledFileFailure> {
-  if (transaction === undefined) return { failure, settlement: UNCONFIRMED_FILE_SETTLEMENT }
-  if (failure.kind === 'canceled') return pauseCanceledFileTransfer(options, transaction, failure)
-  const persistenceFailure = await persistSourceFailure(options, transaction, failure)
-  return {
-    failure: persistenceFailure ?? await settleFileFault(options, transaction, failure),
-    settlement: UNCONFIRMED_FILE_SETTLEMENT,
-  }
-}
-
-async function settleFileFault(
-  options: FileTransferOptions,
-  transaction: OutputFileTransaction,
-  failure: Extract<NormalizedFileTransferFailure, { kind: 'fault' }>,
-): Promise<NormalizedFileTransferFailure> {
-  const authorization = authorizeFileRetirement(failure.fault)
-  if (authorization === undefined) {
-    if (isWholeOutputFault(failure.fault.scope)) return failure
-    const promoted = promoteFaultScope(failure.fault, FaultScope.OutputPause)
-    return normalizedFileTransferFault(promoted, {
-      error: failure.diagnostic,
-      ...(options.incidentScope === undefined
-        ? {}
-        : { incidentScope: options.incidentScope }),
-      stage: 'settlement',
-      materializationFailureReason: failure.materializationFailureReason,
-    })
-  }
-  let disposition: Awaited<ReturnType<OutputFileTransaction['retire']>>
-  try {
-    disposition = await withOutputSettlementTimeout(
-      'retire output file transaction',
-      options.outputSettlementTimeoutMilliseconds,
-      () => retireOutputFileTransaction(transaction, authorization),
-    )
-  } catch (retirementFailure) {
-    normalizeFileTransferFailure(retirementFailure, {
-      ...(options.incidentScope === undefined
-        ? {}
-        : { incidentScope: options.incidentScope }),
-      relation: 'consequence',
-      stage: 'settlement',
-    })
-    return normalizedFileTransferFault(
-      outputFault(FaultScope.OutputPause, OutputFaultCode.MutationAmbiguous),
-      {
-        ...(options.incidentScope === undefined
-          ? {}
-          : { incidentScope: options.incidentScope }),
-        stage: 'settlement',
-        error: failure.diagnostic,
-        materializationFailureReason: failure.materializationFailureReason,
-      },
-    )
-  }
-  return disposition === 'JobOutputCompromised'
-    ? normalizedFileTransferFault(
-        outputFault(FaultScope.OutputPause, OutputFaultCode.MutationAmbiguous),
-        {
-          ...(options.incidentScope === undefined
-            ? {}
-            : { incidentScope: options.incidentScope }),
-          stage: 'settlement',
-          error: failure.diagnostic,
-        materializationFailureReason: failure.materializationFailureReason,
-        },
-      )
-    : failure
-}
-
-async function pauseCanceledFileTransfer(
-  options: FileTransferOptions,
-  transaction: OutputFileTransaction,
-  failure: Extract<NormalizedFileTransferFailure, { kind: 'canceled' }>,
-): Promise<SettledFileFailure> {
-  try {
-    const durable = await withOutputSettlementTimeout(
-      'pause output file transaction',
-      options.outputSettlementTimeoutMilliseconds,
-      () => transaction.pause(failure.diagnostic),
-    )
-    return { failure, settlement: Object.freeze({
-      kind: 'paused', retainedBytes: rangeBytes(durable.asRangeSet()),
-    }) }
-  } catch (pauseFailure) {
-    normalizeFileTransferFailure(pauseFailure, {
-      ...(options.incidentScope === undefined
-        ? {}
-        : { incidentScope: options.incidentScope }),
-      relation: 'consequence',
-      stage: 'settlement',
-    })
-    return {
-      failure: normalizedFileTransferFault(
-        outputFault(FaultScope.OutputPause, OutputFaultCode.MutationAmbiguous),
-        {
-          ...(options.incidentScope === undefined
-            ? {}
-            : { incidentScope: options.incidentScope }),
-          stage: 'settlement',
-          error: pauseFailure,
-          materializationFailureReason: 'output-write-failed',
-        },
-      ),
-      settlement: UNCONFIRMED_FILE_SETTLEMENT,
-    }
-  }
 }
 
 function throwTransferOrReleaseFailure(

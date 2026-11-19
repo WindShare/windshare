@@ -192,6 +192,7 @@ pub struct Session {
 pub enum Fault {
     Invalid,
     ReportNotFound,
+    NodeNotFound,
     InvalidNickname,
     UnsupportedEmail,
     InvalidEmail,

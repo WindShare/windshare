@@ -218,7 +218,7 @@ func TestFileTransactionRejectsPrivateMutationAndMisaddressedFirstPage(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := transaction.PutPage(page, mustTestPageObject(t, page)); err == nil {
+		if err := transaction.PutPage(page, mustTestPagePayload(t, page)); err == nil {
 			t.Fatal("durable page changed its private child record")
 		}
 		if err := transaction.Abort(); err != nil {
@@ -244,7 +244,7 @@ func TestFileTransactionRejectsPrivateMutationAndMisaddressedFirstPage(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := transaction.PutPage(page, mustTestPageObject(t, page)); !errors.Is(err, ErrPageSequence) {
+		if err := transaction.PutPage(page, mustTestPagePayload(t, page)); !errors.Is(err, ErrPageSequence) {
 			t.Fatalf("misaddressed first durable page = %v", err)
 		}
 		if err := transaction.Abort(); err != nil {

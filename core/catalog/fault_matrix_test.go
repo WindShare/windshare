@@ -16,9 +16,9 @@ type commitFaultTransaction struct {
 	aborted         bool
 }
 
-func (t *commitFaultTransaction) PutDirectory(NodeRecord) error               { return t.putDirectoryErr }
-func (t *commitFaultTransaction) PutChild(NodeRecord) error                   { return t.putChildErr }
-func (t *commitFaultTransaction) PutPage(CatalogPage, SealedPageObject) error { return t.putPageErr }
+func (t *commitFaultTransaction) PutDirectory(NodeRecord) error          { return t.putDirectoryErr }
+func (t *commitFaultTransaction) PutChild(NodeRecord) error              { return t.putChildErr }
+func (t *commitFaultTransaction) PutPage(CatalogPage, PagePayload) error { return t.putPageErr }
 func (t *commitFaultTransaction) Prepare(context.Context) (BackendPreparation, error) {
 	if t.prepareErr != nil {
 		return BackendPreparation{}, t.prepareErr
@@ -97,11 +97,11 @@ type failingCommitter struct {
 	err error
 }
 
-func (c failingCommitter) Seal(PageCommitInput) (SealedPageObject, error) {
-	return SealedPageObject{}, c.err
+func (c failingCommitter) EncodePage(PageCommitInput) (PagePayload, error) {
+	return PagePayload{}, c.err
 }
-func (c failingCommitter) SealFailure(DirectoryFailureRecord) (SealedFailureObject, error) {
-	return SealedFailureObject{}, c.err
+func (c failingCommitter) EncodeFailure(DirectoryFailureRecord) (FailurePayload, error) {
+	return FailurePayload{}, c.err
 }
 
 func faultCommitFixture(t *testing.T) (NodeRecord, NodeRecord) {
@@ -121,12 +121,12 @@ func faultCommitFixture(t *testing.T) (NodeRecord, NodeRecord) {
 	return parent, child
 }
 
-func newFaultCommitStore(t *testing.T, backend CatalogBackend, sealer PageSealer) *CatalogStore {
+func newFaultCommitStore(t *testing.T, backend CatalogBackend, encoder PageEncoder) *CatalogStore {
 	t.Helper()
 	store, err := NewCatalogStore(StoreConfig{
 		ShareInstance: idValue[ShareInstance](1), Backend: backend,
 		ProcessBudget: generousBudget(t, "process"), ShareBudget: generousBudget(t, "share"),
-		PageSealer: sealer,
+		PageEncoder: encoder,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -142,14 +142,14 @@ func TestCommitPipelineFaultMatrixAlwaysAborts(t *testing.T) {
 		beginErr error
 		tx       *commitFaultTransaction
 		source   faultNodeSource
-		sealer   PageSealer
+		encoder  PageEncoder
 	}{
 		{name: "begin", beginErr: injected},
 		{name: "put directory", tx: &commitFaultTransaction{putDirectoryErr: injected}},
 		{name: "open source", tx: &commitFaultTransaction{}, source: faultNodeSource{count: 1, openErr: injected}},
 		{name: "read source", tx: &commitFaultTransaction{}, source: faultNodeSource{count: 1, iterator: &faultNodeIterator{nextErr: injected}}},
 		{name: "put child", tx: &commitFaultTransaction{putChildErr: injected}, source: faultNodeSource{count: 1, iterator: &faultNodeIterator{records: []NodeRecord{child}}}},
-		{name: "commit page", tx: &commitFaultTransaction{}, source: faultNodeSource{count: 1, iterator: &faultNodeIterator{records: []NodeRecord{child}}}, sealer: failingCommitter{err: injected}},
+		{name: "commit page", tx: &commitFaultTransaction{}, source: faultNodeSource{count: 1, iterator: &faultNodeIterator{records: []NodeRecord{child}}}, encoder: failingCommitter{err: injected}},
 		{name: "put page", tx: &commitFaultTransaction{putPageErr: injected}, source: faultNodeSource{count: 1, iterator: &faultNodeIterator{records: []NodeRecord{child}}}},
 		{name: "close source", tx: &commitFaultTransaction{}, source: faultNodeSource{count: 1, iterator: &faultNodeIterator{records: []NodeRecord{child}, closeErr: injected}}},
 		{name: "release source", tx: &commitFaultTransaction{}, source: faultNodeSource{count: 1, releaseErr: injected, iterator: &faultNodeIterator{records: []NodeRecord{child}}}},
@@ -166,11 +166,11 @@ func TestCommitPipelineFaultMatrixAlwaysAborts(t *testing.T) {
 			backend := &commitFaultBackend{
 				CatalogBackend: NewMemoryCatalogBackend(), beginErr: test.beginErr, tx: transaction,
 			}
-			sealer := test.sealer
-			if sealer == nil {
-				sealer = semanticTestCommitter{}
+			encoder := test.encoder
+			if encoder == nil {
+				encoder = semanticTestCommitter{}
 			}
-			store := newFaultCommitStore(t, backend, sealer)
+			store := newFaultCommitStore(t, backend, encoder)
 			defer store.Close()
 			source := test.source
 			if source.count == 0 && source.openErr == nil {

@@ -43,7 +43,7 @@ function ReportDetail({ id, ...access }: AccessProps & { id: string }) {
   const report = resource.value
   return <div className="view editor"><BackLink href="#reports">{t.backToReports}</BackLink><h1>{t.shareReport}</h1>
     <ReadError error={resource.error} retry={resource.retry} />
-    {!report && resource.busy && <p className="report-loading" role="status"><Icon name="loader" />{t.loadingReport}</p>}
+    {!report && resource.busy && <p className="resource-loading" role="status"><Icon name="loader" />{t.loadingReport}</p>}
     {report === null && <div className="panel"><EmptyState icon="report" title={t.reportNotFound} /></div>}
     {report && <article className="panel padded">
       <div className="section-title"><h2>{t.reason}</h2><DateStamp millis={report.created_at * 1000} /></div>
@@ -63,7 +63,7 @@ function ReportList({ api, leaving }: { api: AuthorityClient; leaving: () => voi
     <a href="#share-access" className="button secondary"><Icon name="search" size={16} />{t.findShare}</a>
     <a href="#account-access" className="button secondary"><Icon name="user" size={16} />{t.accountRestrictions}</a></div></div>
     <ReadError error={list.error} retry={list.retry} />
-    {!page && list.busy && <p className="report-loading" role="status"><Icon name="loader" />{t.loadingReports}</p>}
+    {!page && list.busy && <p className="resource-loading" role="status"><Icon name="loader" />{t.loadingReports}</p>}
     {page?.reports.length === 0 && <div className="panel"><EmptyState icon="report" title={t.noReports}><p>{t.reportHint}</p></EmptyState></div>}
     {page && page.reports.length > 0 && <ul className="panel report-list">{page.reports.map(item => <li key={encode(item.id)}>
       <a href={'#report/' + encode(item.id)} onClick={leaving}><span className="row-icon"><Icon name="report" size={16} /></span>

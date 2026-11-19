@@ -75,23 +75,23 @@ export class TransferJobSettlement {
   }
 
   async completeWorkers(measure: SelectionMeasure): Promise<TransferJobResult> {
-    const worker: CompletedTransferWorkerSettlement = this.#context.failures.failureCount === 0
+    const execution = this.#requireExecution()
+    const failures = this.#context.failures
+    const deferredReadmission = failures.deferredRevisionReadmission
+    if (execution.planKind === 'direct-tree' && deferredReadmission !== undefined) {
+      this.#context.lifetime.signal.throwIfAborted()
+      // File-local isolation lets the other files finish before the resumable cut.
+      const worker = transferWorkerSettlement('Paused', failures.snapshot())
+      return this.#pauseIncompleteMaterialization(worker, measure, deferredReadmission)
+    }
+    const worker = failures.failureCount === 0
       ? transferWorkerSettlement('Succeeded', EMPTY_TRANSFER_FAILURE_SUMMARY)
-      : transferWorkerSettlement('CompletedWithErrors', this.#context.failures.snapshot())
+      : transferWorkerSettlement('CompletedWithErrors', failures.snapshot())
+    if (execution.planKind !== 'direct-tree' && worker.status !== 'Succeeded') {
+      return this.#pauseIncompleteMaterialization(worker, measure, requireWorkerFailureTrigger(worker))
+    }
     this.#lastWorker = worker
     const summary = this.#context.materializationSummary()
-    const execution = this.#requireExecution()
-    if (execution.planKind !== 'direct-tree' && worker.status !== 'Succeeded') {
-      this.#context.observers()?.materializationFailed(
-        worker.trigger?.materializationFailureReason ?? 'content-read-failed',
-        BigInt(this.#context.progress.completedFiles),
-        this.#context.progress.completedBytes,
-      )
-      const failureTrigger = requireWorkerFailureTrigger(worker)
-      const reason = new ClassifiedTransferFailureError(failureTrigger)
-      const lifecycle = await this.#pause(worker, reason, measure, failureTrigger)
-      return this.#result(worker, lifecycle, measure, reason, failureTrigger)
-    }
     this.#context.progress.beginFinishing()
     this.#context.emitProgress()
     this.#context.observers()?.materializationCompleted(summary)
@@ -219,6 +219,22 @@ export class TransferJobSettlement {
     } finally {
       controller.abort(new DOMException('Plan settlement boundary closed', 'AbortError'))
     }
+  }
+
+  async #pauseIncompleteMaterialization(
+    worker: TransferWorkerSettlement,
+    measure: SelectionMeasure,
+    failureTrigger: ClassifiedTransferFailure,
+  ): Promise<TransferJobResult> {
+    this.#lastWorker = worker
+    this.#context.observers()?.materializationFailed(
+      failureTrigger.materializationFailureReason,
+      BigInt(this.#context.progress.completedFiles),
+      this.#context.progress.completedBytes,
+    )
+    const reason = new ClassifiedTransferFailureError(failureTrigger)
+    const lifecycle = await this.#pause(worker, reason, measure, failureTrigger)
+    return this.#result(worker, lifecycle, measure, reason, failureTrigger)
   }
 
   async #pause(

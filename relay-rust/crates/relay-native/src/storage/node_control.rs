@@ -87,8 +87,8 @@ impl Database {
         Ok(())
     }
 
-    /// A damaged queue head must not prevent later usage from being reported.
-    pub(crate) fn next_usage_batch(&self, issuer: Issuer) -> Result<Option<Batch>> {
+    /// A batch can only be retried by the node that originally recorded it.
+    pub(crate) fn next_usage_batch(&self, issuer: Issuer, node: [u8; 32]) -> Result<Option<Batch>> {
         loop {
             let entry: Option<(Vec<u8>, Vec<u8>)> = self
                 .0
@@ -106,19 +106,31 @@ impl Database {
             };
             // Local, time-independent validation can prove rejection before
             // contacting the authority, whose errors may be transient.
-            let reason = match serde_json::from_slice::<Batch>(&body) {
+            let (reason, batch_node) = match serde_json::from_slice::<Batch>(&body) {
                 Ok(batch) if batch.id.as_slice() != id || batch.issuer != issuer => {
-                    "metadata_mismatch"
+                    ("metadata_mismatch", Some(batch.node))
                 }
-                Ok(batch) if valid_usage_batch(&batch) => return Ok(Some(batch)),
-                Ok(_) => "invalid_usage_batch",
-                Err(_) => "invalid_json",
+                Ok(batch) if !valid_usage_batch(&batch) => {
+                    ("invalid_usage_batch", Some(batch.node))
+                }
+                Ok(batch) if batch.node != node => ("node_identity_mismatch", Some(batch.node)),
+                Ok(batch) => return Ok(Some(batch)),
+                Err(_) => ("invalid_json", None),
             };
-            self.quarantine_usage(issuer, &id, &body, reason)?;
+            if self.quarantine_usage(issuer, &id, &body, reason)? {
+                tracing::error!(event = "usage_batch_quarantined", batch = ?id, ?issuer,
+                    ?batch_node, active_node = ?node, reason);
+            }
         }
     }
 
-    fn quarantine_usage(&self, issuer: Issuer, id: &[u8], body: &[u8], reason: &str) -> Result<()> {
+    fn quarantine_usage(
+        &self,
+        issuer: Issuer,
+        id: &[u8],
+        body: &[u8],
+        reason: &str,
+    ) -> Result<bool> {
         let mut connection = self
             .0
             .connection
@@ -133,13 +145,12 @@ impl Database {
             params![id, issuer.as_slice(), body, reason],
         )?;
         if moved == 0 {
-            return Ok(());
+            return Ok(false);
         }
         transaction.execute("DELETE FROM usage_outbox WHERE id=?1", [id])?;
         transaction.commit()?;
         drop(connection);
-        tracing::error!(event = "usage_batch_quarantined", batch = ?id, ?issuer, reason);
-        Ok(())
+        Ok(true)
     }
 
     pub(crate) fn acknowledge_usage(&self, id: [u8; 16]) -> Result<()> {

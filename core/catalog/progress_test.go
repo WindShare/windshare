@@ -202,7 +202,7 @@ func TestScanProgressObserverFailureIsWaiterLocalAndNeverPersisted(t *testing.T)
 	if failedID != healthy.AttemptID {
 		t.Fatalf("singleflight observers saw different attempts: %x / %x", failedID, healthy.AttemptID)
 	}
-	if _, found, err := store.FailureObject(context.Background(), directory, failedID); err != nil || found {
+	if _, found, err := store.FailurePayload(context.Background(), directory, failedID); err != nil || found {
 		t.Fatalf("observer failure became directory failure authority: found=%v err=%v", found, err)
 	}
 	scansMu.Lock()

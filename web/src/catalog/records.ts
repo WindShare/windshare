@@ -30,7 +30,7 @@ export const CATALOG_IDENTITY_BYTES = 16
 export const CATALOG_COMMITMENT_BYTES = 32
 export const CATALOG_PAGE_ENTRIES = 256
 export const CATALOG_DIRECTORY_ENTRIES = 1_048_576
-export const CATALOG_PAGE_OBJECT_BYTES = 60 << 10
+export const MAX_CATALOG_PAYLOAD_BYTES = 60 << 10
 export const DIRECTORY_ERROR_OBJECT_BYTES = 16 << 10
 export const DESCRIPTOR_OBJECT_BYTES = 16 << 10
 export const MINIMUM_CHUNK_BYTES = 1 << 10
@@ -221,7 +221,7 @@ export async function decodeCatalogPayload(
 ): Promise<CatalogObject> {
   requirePageRequest(request)
   const decoded = decodeCanonicalCborWithSchema(
-    payload, CATALOG_PAGE_OBJECT_BYTES, 'catalog payload', value => {
+    payload, MAX_CATALOG_PAYLOAD_BYTES, 'catalog payload', value => {
       if (!(value instanceof Map)) throw new CborError('Catalog payload is not a record')
       const schema = requireUnsigned(value.get(0), 'catalog payload schema')
       switch (schema) {
@@ -255,7 +255,7 @@ export async function decodeCatalogPayload(
 
 export async function decodeCatalogPage(payload: Uint8Array): Promise<CatalogPage> {
   return commitCatalogPage(decodeCanonicalCborWithSchema(
-    payload, CATALOG_PAGE_OBJECT_BYTES, 'catalog page', decodeCatalogPageFields,
+    payload, MAX_CATALOG_PAYLOAD_BYTES, 'catalog page', decodeCatalogPageFields,
   ), payload)
 }
 

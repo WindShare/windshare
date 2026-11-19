@@ -1,15 +1,16 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { ValidatedForm } from '../ui/ValidatedForm'
-import { useAction } from '../ui/activity'
+import { useAction, useResource } from '../ui/activity'
 import { message } from '../ui/locale'
 import { useCopy, useLocale } from '../ui/use-locale'
+import { sharedCopy } from '../ui/locales'
 import { networkCopy } from './locales'
 import { Confirm } from '../ui/forms'
-import { BackLink, Badge, DateStamp, EmptyState, Notice } from '../ui/layout'
+import { BackLink, Badge, DateStamp, EmptyState, Notice, ReadError } from '../ui/layout'
 import { Icon, type IconName } from '../ui/Icon'
 import type { AuthorityClient } from './api'
 import { encode, requireIdentity } from './identity'
-import { GIB, type LoadReport, type PolicyField, type Publication, type RelayNode, type Zone } from './model'
+import { GIB, type LoadReport, type NodeDetails, type NodePage, type PolicyField, type Publication, type RelayNode, type Zone } from './model'
 
 type Directory = Publication | null | undefined
 
@@ -27,24 +28,23 @@ function ReportTime({ report }: { report: LoadReport }) {
   return report.reported_at == null ? t.noReceiptTime : <DateStamp millis={report.reported_at * 1000} />
 }
 
-function Latest({ report }: { report?: LoadReport }) {
+function Latest({ report }: { report: LoadReport | null }) {
   const t = useCopy(networkCopy)
   if (!report) return <span>{t.awaitingReport}</span>
   return <><ReportTime report={report} /><small>{t.recentLoad(report.load.active_sessions, report.load.forwarded_bytes / GIB)}</small></>
 }
 
-function NodeOverview({ nodes, byKey, directory }: {
-  nodes: RelayNode[]; byKey: ReadonlyMap<string, LoadReport>; directory: Directory
+function NodeOverview({ nodes, complete, directory }: {
+  nodes: NodeDetails[]; complete: boolean; directory: Directory
 }) {
   const { locale } = useLocale()
   const t = networkCopy[locale]
-  const enrolled = nodes.map(node => encode(node.key))
   const published = new Set(directory?.keys)
-  const listed = directory ? enrolled.filter(key => published.has(key)).length : null
+  const listed = directory ? nodes.filter(node => published.has(encode(node.key))).length : null
   const metrics: { icon: IconName; label: string; value: number | null }[] = [
-    { icon: 'server', label: t.enrolledCount, value: enrolled.length },
-    { icon: 'clock', label: t.awaitingReport, value: enrolled.filter(key => !byKey.has(key)).length },
-    { icon: 'book', label: t.listedCount, value: listed },
+    { icon: 'server', label: complete ? t.enrolledCount : t.loadedNodes, value: nodes.length },
+    { icon: 'clock', label: complete ? t.awaitingReport : t.loadedAwaitingReport, value: nodes.filter(node => !node.report).length },
+    { icon: 'book', label: complete ? t.listedCount : t.loadedListed, value: listed },
   ]
   return <dl className="panel node-overview">{metrics.map(({ icon, label, value }) => <div key={icon}>
     <dt><span className="metric-icon"><Icon name={icon} /></span>{label}</dt>
@@ -52,15 +52,18 @@ function NodeOverview({ nodes, byKey, directory }: {
   </div>)}</dl>
 }
 
-export function Nodes({ nodes, reports, directory }: { nodes: RelayNode[]; reports: LoadReport[]; directory: Directory }) {
+export function Nodes({ page, directory, loading, loadMore }: {
+  page: NodePage; directory: Directory; loading: boolean; loadMore: () => void
+}) {
   const t = useCopy(networkCopy)
-  const byKey = new Map(reports.map(item => [item.node, item]))
+  const shared = useCopy(sharedCopy)
+  const { entries: nodes, next_cursor: cursor } = page
   const enroll = <a className="button" href="#enroll"><Icon name="plus" size={17} />{t.enroll}</a>
   return <div className="view"><div className="page-title"><h1 id="node-heading">{t.nodes}</h1>
     {nodes.length > 0 && enroll}</div>
     {nodes.length === 0 ? <div className="panel"><EmptyState icon="network" title={t.noNodes}>
       <p>{t.registerHint}</p>{enroll}</EmptyState></div>
-      : <><NodeOverview nodes={nodes} byKey={byKey} directory={directory} />
+      : <><NodeOverview nodes={nodes} complete={cursor === null} directory={directory} />
         <div className="table-wrap panel" role="region" aria-labelledby="node-heading" tabIndex={0}>
         <table><caption className="sr-only">{t.nodeTable}</caption>
           <thead><tr>{[t.region, t.savedRelayPolicy, t.lastReport, t.directory].map(title => <th scope="col" key={title}>{title}</th>)}</tr></thead>
@@ -72,16 +75,18 @@ export function Nodes({ nodes, reports, directory }: { nodes: RelayNode[]; repor
                 <span>{node.region || t.zones[node.zone]}<small>{t.zones[node.zone]} · <code>{id.slice(0, 8)}</code></small></span></a></th>
               <td data-label={t.savedRelayPolicy}><div><Badge tone={node.enabled ? 'good' : 'warning'}>{node.enabled ? t.enabled : t.paused}</Badge>
                 <small>{node.anonymous ? t.anonymousAllowed : t.accountRequired} · v{node.version}</small></div></td>
-              <td data-label={t.lastReport}><div><Latest report={byKey.get(id)} /></div></td>
+              <td data-label={t.lastReport}><div><Latest report={node.report} /></div></td>
               <td data-label={t.directory}><div><Listing directory={directory} id={id} /></div></td>
             </tr>
           })}</tbody>
         </table>
-      </div></>}
+      </div>
+      {cursor && <div className="actions"><button type="button" className="secondary" disabled={loading}
+        onClick={loadMore}>{loading ? shared.loadingMore : shared.loadMore}</button></div>}</>}
   </div>
 }
 
-export function EnrollNode({ api, saved }: { api: AuthorityClient; saved: (node: RelayNode) => void }) {
+export function EnrollNode({ api, saved }: { api: AuthorityClient; saved: (node: NodeDetails) => void }) {
   const t = useCopy(networkCopy)
   const action = useAction()
   return <div className="view editor"><BackLink href="#nodes">{t.backToNodes}</BackLink><h1>{t.enroll}</h1>
@@ -104,9 +109,26 @@ export function EnrollNode({ api, saved }: { api: AuthorityClient; saved: (node:
     </ValidatedForm></div>
 }
 
-export function NodeDetail({ node, report, directory, api, saved }: {
-  node: RelayNode; report?: LoadReport; directory: Directory; api: AuthorityClient; saved: (node: RelayNode) => void
-}) {
+type NodeDetailActions = { directory: Directory; api: AuthorityClient; saved: (node: RelayNode) => void }
+
+export function LookupNode({ id, api, directory, saved }: NodeDetailActions & { id: string }) {
+  const t = useCopy(networkCopy)
+  const read = useCallback((signal: AbortSignal) => api.node(id, signal), [api, id])
+  const resource = useResource(read)
+  const node = resource.value
+  if (node) return <NodeDetail node={node} api={api} directory={directory} saved={next => {
+    resource.update(previous => previous && { ...previous, ...next })
+    saved(next)
+  }} />
+  return <div className="view"><BackLink href="#nodes">{t.backToNodes}</BackLink><h1>{t.nodeDetails}</h1>
+    <ReadError error={resource.error} retry={resource.retry} />
+    {resource.busy && <p className="resource-loading" role="status"><Icon name="loader" />{t.loadingNode}</p>}
+    {node === null && <div className="panel"><EmptyState icon="server" title={t.nodeNotFound} /></div>}
+  </div>
+}
+
+export function NodeDetail({ node, directory, api, saved }: NodeDetailActions & { node: NodeDetails }) {
+  const { report } = node
   const [confirmPause, setConfirmPause] = useState(false)
   const t = useCopy(networkCopy)
   const action = useAction()

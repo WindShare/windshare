@@ -13,7 +13,7 @@ pub(super) const PUBLIC_BLOCKS_PATH: &str = "/v1/blocks";
 pub struct Context {
     path: String,
     if_none_match: Option<String>,
-    report_after: Option<String>,
+    admin_after: Option<String>,
     method: Method,
     source: String,
     bearer: String,
@@ -32,7 +32,7 @@ impl Context {
             .unwrap_or_default()
             .to_owned();
         let path = request.path();
-        let report_after = if path == "/v1/admin/reports" {
+        let admin_after = if matches!(path.as_str(), "/v1/admin/reports" | "/v1/admin/nodes") {
             request
                 .url()?
                 .query_pairs()
@@ -48,7 +48,7 @@ impl Context {
         Ok(Self {
             path,
             if_none_match,
-            report_after,
+            admin_after,
             method: request.method(),
             source: request
                 .headers()
@@ -231,7 +231,7 @@ fn admin_routes(
 ) -> Result<Response> {
     let Context {
         path,
-        report_after,
+        admin_after,
         method,
         source,
         session,
@@ -275,7 +275,7 @@ fn admin_routes(
             value
         }
         (Method::Get, "/v1/admin/reports") => {
-            let after = report_after.as_deref().map(report_position).transpose()?;
+            let after = admin_after.as_deref().map(report_position).transpose()?;
             let page = authority.reports(&session, after)?;
             let next = page.next.map(|position| {
                 format!(
@@ -295,8 +295,16 @@ fn admin_routes(
                 authority.update_settings(&session, &parse::<SettingsChanges>(bytes)?)?;
             serde_json::json!({"settings": settings, "registration_mode": mode})
         }
+        (Method::Get, "/v1/admin/nodes") => {
+            let after = admin_after.as_deref().map(node_key).transpose()?;
+            serde_json::to_value(authority.nodes(&session, after)?)?
+        }
+        (Method::Get, path) if path.starts_with("/v1/admin/nodes/") => {
+            let key = node_key(&path["/v1/admin/nodes/".len()..])?;
+            serde_json::to_value(authority.node_by_key(&session, &key)?)?
+        }
         (Method::Post, "/v1/admin/nodes") => serde_json::to_value(
-            authority.enroll_node(&session, &parse::<NodeEnrollment>(bytes)?)?,
+            authority.enrolled_node_details(&session, &parse::<NodeEnrollment>(bytes)?)?,
         )?,
         (Method::Put, "/v1/admin/nodes/policy") => {
             let update = parse::<NodePolicyRequest>(bytes)?;
@@ -314,6 +322,19 @@ fn admin_routes(
     };
     Response::from_json(&value).map_err(|error| anyhow::anyhow!("{error}"))
 }
+fn node_key(text: &str) -> Result<[u8; 32]> {
+    if text.len() != 43 {
+        return Err(Fault::Invalid.into());
+    }
+    let key: [u8; 32] = URL_SAFE_NO_PAD
+        .decode(text)
+        .map_err(|_| Fault::Invalid)?
+        .try_into()
+        .map_err(|_| Fault::Invalid)?;
+    ensure!(key != [0; 32], Fault::Invalid);
+    Ok(key)
+}
+
 fn report_id(text: &str) -> Result<[u8; 16]> {
     if text.len() != 22 {
         return Err(Fault::Invalid.into());
@@ -352,7 +373,7 @@ pub fn fault(fault: &Fault) -> Result<Response> {
         | Fault::UnsupportedEmail
         | Fault::EmailCodeRejected => 400,
         Fault::Denied { .. } => 403,
-        Fault::ReportNotFound => 404,
+        Fault::ReportNotFound | Fault::NodeNotFound => 404,
         Fault::RateLimited { .. } | Fault::NicknameCooldown { .. } => 429,
         Fault::Verification { .. } => 428,
         Fault::EmailDeliveryUnavailable => 503,

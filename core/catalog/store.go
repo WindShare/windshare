@@ -13,17 +13,17 @@ import (
 const ScanAttemptLedgerBytes = 96
 
 type CatalogStore struct {
-	shareInstance ShareInstance
-	backend       CatalogBackend
-	processBudget *BudgetAccount
-	shareBudget   *BudgetAccount
-	pageSealer    PageSealer
-	failureSealer FailureSealer
-	spillFactory  SpillFactory
-	sortRunBytes  uint64
-	clock         Clock
-	attemptIDs    ScanAttemptIDGenerator
-	generations   DirectoryGenerationGenerator
+	shareInstance  ShareInstance
+	backend        CatalogBackend
+	processBudget  *BudgetAccount
+	shareBudget    *BudgetAccount
+	pageEncoder    PageEncoder
+	failureEncoder FailureEncoder
+	spillFactory   SpillFactory
+	sortRunBytes   uint64
+	clock          Clock
+	attemptIDs     ScanAttemptIDGenerator
+	generations    DirectoryGenerationGenerator
 
 	commitMu             sync.Mutex
 	mu                   sync.Mutex
@@ -43,12 +43,12 @@ type scanAttemptIdentity struct {
 }
 
 func NewCatalogStore(config StoreConfig) (result *CatalogStore, resultErr error) {
-	if config.FailureSealer == nil {
-		config.FailureSealer, _ = config.PageSealer.(FailureSealer)
+	if config.FailureEncoder == nil {
+		config.FailureEncoder, _ = config.PageEncoder.(FailureEncoder)
 	}
 	if config.ShareInstance.IsZero() || config.Backend == nil || config.ProcessBudget == nil ||
-		config.ShareBudget == nil || config.PageSealer == nil || config.FailureSealer == nil {
-		return nil, errors.New("catalog store requires share identity, backend, budgets, and object sealers")
+		config.ShareBudget == nil || config.PageEncoder == nil || config.FailureEncoder == nil {
+		return nil, errors.New("catalog store requires share identity, backend, budgets, and payload encoders")
 	}
 	if config.ProcessBudget == config.ShareBudget {
 		return nil, errors.New("catalog store process and share budgets must be distinct")
@@ -102,7 +102,7 @@ func NewCatalogStore(config StoreConfig) (result *CatalogStore, resultErr error)
 	store := &CatalogStore{
 		shareInstance: config.ShareInstance, backend: config.Backend,
 		processBudget: config.ProcessBudget, shareBudget: config.ShareBudget,
-		pageSealer: config.PageSealer, failureSealer: config.FailureSealer,
+		pageEncoder: config.PageEncoder, failureEncoder: config.FailureEncoder,
 		spillFactory: config.SpillFactory, sortRunBytes: config.SortRunBytes,
 		clock: config.Clock, attemptIDs: config.AttemptIDs, generations: config.Generations,
 		attempts: make(map[DirectoryID]*scanAttempt), usedAttempts: make(map[scanAttemptIdentity]struct{}),
@@ -148,23 +148,23 @@ func (s *CatalogStore) Page(ctx context.Context, directory DirectoryID, generati
 	return page, found, err
 }
 
-func (s *CatalogStore) PageObject(ctx context.Context, directory DirectoryID, generation DirectoryGeneration, index uint32) (SealedPageObject, bool, error) {
+func (s *CatalogStore) PagePayload(ctx context.Context, directory DirectoryID, generation DirectoryGeneration, index uint32) (PagePayload, bool, error) {
 	if s.isClosed() {
-		return SealedPageObject{}, false, ErrCatalogClosed
+		return PagePayload{}, false, ErrCatalogClosed
 	}
-	object, found, err := s.backend.LoadPageObject(ctx, directory, generation, index)
+	payload, found, err := s.backend.LoadPagePayload(ctx, directory, generation, index)
 	if err != nil || !found {
-		return SealedPageObject{}, found, err
+		return PagePayload{}, found, err
 	}
 	page, pageFound, err := s.backend.LoadPage(ctx, directory, generation, index)
 	if err != nil {
-		return SealedPageObject{}, false, err
+		return PagePayload{}, false, err
 	}
 	if !pageFound || page.ShareInstance() != s.shareInstance || page.DirectoryID() != directory ||
-		page.Generation() != generation || page.PageIndex() != index || object.Commitment() != page.Commitment() {
-		return SealedPageObject{}, false, ErrCorruptCatalogStorage
+		page.Generation() != generation || page.PageIndex() != index || payload.Commitment() != page.Commitment() {
+		return PagePayload{}, false, ErrCorruptCatalogStorage
 	}
-	return object, true, nil
+	return payload, true, nil
 }
 
 func (s *CatalogStore) Node(ctx context.Context, id NodeID) (NodeRecord, bool, error) {

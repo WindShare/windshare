@@ -115,7 +115,10 @@ export interface CatalogDirectoryFixture {
   readonly beforePages?: () => void | Promise<void>
 }
 
-export function catalogFixture(directories: readonly CatalogDirectoryFixture[]): {
+export function catalogFixture(
+  directories: readonly CatalogDirectoryFixture[],
+  shareInstance = identity(1),
+): {
   readonly catalog: CatalogClient
   readonly loads: string[]
   readonly pageReads: string[]
@@ -137,7 +140,7 @@ export function catalogFixture(directories: readonly CatalogDirectoryFixture[]):
       if (fixture === undefined) throw new Error('catalog fixture lost a committed directory')
       await fixture.beforePages?.()
       pageReads.push(encodeBase64Url(directory.directoryId))
-      yield catalogPage(fixture)
+      yield catalogPage(fixture, shareInstance)
     },
   } as unknown as CatalogClient
   return { catalog, loads, pageReads }
@@ -156,12 +159,15 @@ function committedDirectory(fixture: CatalogDirectoryFixture): CommittedDirector
   })
 }
 
-function catalogPage(fixture: CatalogDirectoryFixture): CatalogPage {
+function catalogPage(
+  fixture: CatalogDirectoryFixture,
+  shareInstance: Uint8Array<ArrayBuffer>,
+): CatalogPage {
   const entries = [...fixture.entries]
     .map(entry => Object.freeze({ ...entry, idText: encodeBase64Url(entry.id) }))
     .sort((left, right) => compareUtf8(left.name, right.name))
   return Object.freeze({
-    shareInstance: identity(1),
+    shareInstance: shareInstance.slice(),
     directoryId: fixture.id.slice(),
     directoryIdText: encodeBase64Url(fixture.id),
     generation: (fixture.generation ?? identity(90)).slice(),

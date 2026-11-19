@@ -21,8 +21,8 @@ function validateRevisionReadmission(payload: UnknownRecord): void {
     canonicalIdentity(payload[field], field)
   }
   member(payload.decision, [
-    'readmit', 'readmitted', 'observed-change', 'evidence-unavailable', 'retry-limit',
-    'admission-failed', 'settlement-failed', 'canceled',
+    'readmit', 'readmitted', 'observed-change', 'evidence-unavailable', 'readmission-unsupported',
+    'retry-limit', 'admission-failed', 'settlement-failed', 'canceled',
   ], 'file revision readmission decision')
   member(payload.comparison_reason, [
     'same-revision', 'metadata-agreement', 'saved-ranges-compared', 'context-changed',

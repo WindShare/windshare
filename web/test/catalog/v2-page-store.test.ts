@@ -12,7 +12,7 @@ import {
   type DirectoryFailure,
   CATALOG_DIRECTORY_ENTRIES,
   CATALOG_PAGE_ENTRIES,
-  CATALOG_PAGE_OBJECT_BYTES,
+  MAX_CATALOG_PAYLOAD_BYTES,
 } from '../../src/catalog/records'
 
 function entry(id: number, name: string): CatalogEntry {
@@ -56,7 +56,7 @@ describe('v2 catalog page store', () => {
         { length: CATALOG_PAGE_ENTRIES },
         () => entry(1, 'maximum'),
       )),
-      encodedBytes: CATALOG_PAGE_OBJECT_BYTES,
+      encodedBytes: MAX_CATALOG_PAYLOAD_BYTES,
     })
     expect(maximumPageCharge).toBe(393_216)
     expect(

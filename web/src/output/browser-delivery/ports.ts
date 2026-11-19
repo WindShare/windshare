@@ -23,12 +23,17 @@ export interface BrowserDeliveryStageReader {
   release(): void
 }
 
-export interface BrowserDeliveryStagePort extends PersistentMaterializationPort {
+export type BrowserDeliveryStageDiscard =
+  | Readonly<{ kind: 'checkpointed'; checkpoint: FileCheckpointV2 }>
+  | Readonly<{ kind: 'uncheckpointed'; source: BrowserDeliverySource }>
+
+export interface BrowserDeliveryStagePort {
+  beginFile(request: PersistentFileRequest, capacity: ObjectCapacity): Promise<PersistentFileTransactionPort>
   readCheckpoint(fileId: string): Promise<FileCheckpointV2 | undefined>
   readComplete(checkpoint: FileCheckpointV2): Promise<BrowserDeliveryStageReader>
   removeComplete(checkpoint: FileCheckpointV2): Promise<void>
-  discard(source: BrowserDeliverySource, checkpoint?: FileCheckpointV2): Promise<void>
-  bindCapacity(source: BrowserDeliverySource, capacity: ObjectCapacity): Promise<void>
+  discard(stagedFile: BrowserDeliveryStageDiscard): Promise<void>
+  close(): Promise<void>
 }
 
 export interface BrowserDeliveryReservation {

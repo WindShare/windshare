@@ -4,11 +4,13 @@ export interface RelayNode extends Enrollment { enabled: boolean; anonymous: boo
 export type PolicyField = 'public_relay' | 'anonymous_sharing'
 
 export interface LoadReport {
-  node: string
   created_at: number
   reported_at: number | null
   load: { active_sessions: number; forwarded_bytes: number; admission_refusals: number; wire_bytes: number }
 }
+export interface NodeDetails extends RelayNode { report: LoadReport | null }
+export interface NodePage { entries: NodeDetails[]; next_cursor: string | null }
+
 export interface Publication {
   generation: number; serial: number; expires: number; keys: string[]; digest: string; mirror: string
 }
@@ -35,8 +37,7 @@ export type Target = { kind: 'share' | 'account'; id: number[] }
 export interface Restrictions { version: number; shares: number[][]; accounts: number[][] }
 export interface Snapshot extends PolicySnapshot {
   csrf: string
-  nodes: RelayNode[]
-  load: LoadReport[]
+  node_page: NodePage
   directory: Publication | null
   restrictions: Restrictions
   email_configured: boolean

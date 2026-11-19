@@ -117,9 +117,9 @@ func NewClient(config ClientConfig) (*Client, error) {
 		return nil, errors.New("catalog client page budget exceeds the wire directory limit")
 	}
 	if config.MaxObjectBytes == 0 {
-		config.MaxObjectBytes = catalog.MaxCatalogPageObjectBytes
+		config.MaxObjectBytes = catalog.MaxCatalogPayloadBytes
 	}
-	if config.MaxObjectBytes > catalog.MaxCatalogPageObjectBytes {
+	if config.MaxObjectBytes > catalog.MaxCatalogPayloadBytes {
 		return nil, errors.New("catalog client object budget exceeds the wire object limit")
 	}
 	if config.MaxCacheBytes == 0 {

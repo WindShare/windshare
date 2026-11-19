@@ -11,7 +11,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 )
 
-func TestLongNamesFitSealedPagesAndSurviveRestart(t *testing.T) {
+func TestLongNamesFitPagePayloadsAndSurviveRestart(t *testing.T) {
 	for _, scenario := range []struct {
 		name       string
 		nameBytes  int
@@ -35,7 +35,7 @@ func TestLongNamesFitSealedPagesAndSurviveRestart(t *testing.T) {
 				share, _ := catalog.NewBudgetAccount("share", catalog.DefaultShareBudgetLimits())
 				store, err := catalog.NewCatalogStore(catalog.StoreConfig{
 					ShareInstance: fixture.share, Backend: backend, ProcessBudget: process, ShareBudget: share,
-					PageSealer:   CatalogPayloadEncoder{},
+					PageEncoder:  CatalogPayloadEncoder{},
 					SpillFactory: catalog.NewFileSpillFactory(filepath.Join(disk, "sort")),
 				})
 				if err != nil {
@@ -79,9 +79,9 @@ func TestLongNamesFitSealedPagesAndSurviveRestart(t *testing.T) {
 			before := make([][]byte, committed.PageCount())
 			total := 0
 			for index := range committed.PageCount() {
-				object, found, err := store.PageObject(ctx, directory, generation, index)
-				if err != nil || !found || len(object.Bytes()) > catalog.MaxCatalogPageObjectBytes {
-					t.Fatalf("page %d exceeds the sealed-object budget: found=%v err=%v", index, found, err)
+				object, found, err := store.PagePayload(ctx, directory, generation, index)
+				if err != nil || !found || len(object.Bytes()) > catalog.MaxCatalogPayloadBytes {
+					t.Fatalf("page %d exceeds the payload budget: found=%v err=%v", index, found, err)
 				}
 				before[index] = object.Bytes()
 				request, _ := NewListRequest(directory, &generation, index)
@@ -95,7 +95,7 @@ func TestLongNamesFitSealedPagesAndSurviveRestart(t *testing.T) {
 				t.Fatalf("paged catalog lost entries: got %d", total)
 			}
 			// Reopen through disk metadata: variable page counts must retain the
-			// exact authenticated objects without another scan or seal.
+			// exact committed payloads without another scan or encode.
 			if err := backend.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -106,7 +106,7 @@ func TestLongNamesFitSealedPagesAndSurviveRestart(t *testing.T) {
 				t.Fatalf("recovered geometry changed: found=%v err=%v", found, err)
 			}
 			for index := range committed.PageCount() {
-				object, found, err := recovered.PageObject(ctx, directory, generation, index)
+				object, found, err := recovered.PagePayload(ctx, directory, generation, index)
 				if err != nil || !found || !bytes.Equal(object.Bytes(), before[index]) {
 					t.Fatalf("recovered page %d changed: found=%v err=%v", index, found, err)
 				}

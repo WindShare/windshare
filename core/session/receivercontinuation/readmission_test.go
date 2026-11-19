@@ -3,6 +3,7 @@ package receivercontinuation
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -26,6 +27,13 @@ func (handleBoundSource) RevisionContinuity(catalog.NodeRecord) (content.Revisio
 }
 
 func TestTransferReadmitsDurableRangesAfterSourceReopen(t *testing.T) {
+	t.Run("intact", func(t *testing.T) { testTransferReadmission(t, nil) })
+	t.Run("stage removed", func(t *testing.T) { testTransferReadmission(t, os.Remove) })
+	t.Run("stage replaced", func(t *testing.T) { testTransferReadmission(t, replaceReadmissionStage) })
+}
+
+func testTransferReadmission(t *testing.T, changeStage func(string) error) {
+	t.Helper()
 	f := newFixtureWithSource(t, false, func(source liveshare.FileSource) liveshare.FileSource {
 		return handleBoundSource{source}
 	})
@@ -62,7 +70,7 @@ func TestTransferReadmitsDurableRangesAfterSourceReopen(t *testing.T) {
 		t.Fatal("missing destination reservation")
 	}
 
-	var firstRevision content.FileRevision
+	var firstRevision, offeredRevision content.FileRevision
 	var firstRange content.Range
 	var cutAt time.Time
 	var reconnectedAfter time.Duration
@@ -79,6 +87,16 @@ func TestTransferReadmitsDurableRangesAfterSourceReopen(t *testing.T) {
 			return sink.WriteRange(ctx, offset, data)
 		}))
 		if err != nil {
+			if reopened, ok := err.(*content.RevisionReopenedError); ok {
+				offeredRevision = reopened.Current().FileRevision()
+				staleSink := transfer.RangeSinkFunc(func(context.Context, uint64, []byte) error {
+					t.Error("a stale reader wrote bytes after the revision changed")
+					return transfer.ErrBlockIdentity
+				})
+				if again := continuation.ReadRange(ctx, lease, descriptor, requested, staleSink); again != reopened {
+					t.Errorf("stale reader lost its reopen result: %v", again)
+				}
+			}
 			return err
 		}
 		if cutAt.IsZero() {
@@ -109,12 +127,25 @@ func TestTransferReadmitsDurableRangesAfterSourceReopen(t *testing.T) {
 	}}
 
 	var readmission transfer.RevisionReadmissionTrace
+	var retainedBeforeReopen uint64
+	var stageErr error
 	var settled int
 	tracer := transfer.TransferLifecycleTraceFunc(func(event transfer.TransferLifecycleTrace) {
 		if event.Stage == transfer.TransferFileSettled {
 			settled++
 		}
-		if event.Stage == transfer.TransferFileRevisionReadmission && event.RevisionReadmission.Decision == "readmitted" {
+		if event.Stage != transfer.TransferFileRevisionReadmission {
+			return
+		}
+		switch event.RevisionReadmission.Decision {
+		case "readmit":
+			retainedBeforeReopen = event.RevisionReadmission.Retained
+			// The pause has flushed and released the stage, so external changes
+			// here exercise the next ownership check without racing a writer.
+			if changeStage != nil {
+				stageErr = changeReadmissionStage(root.RootPath, changeStage)
+			}
+		case "readmitted":
 			readmission = event.RevisionReadmission
 		}
 	})
@@ -130,6 +161,28 @@ func TestTransferReadmitsDurableRangesAfterSourceReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := job.Run(ctx)
+	if changeStage != nil {
+		if stageErr != nil {
+			t.Fatal(stageErr)
+		}
+		if retainedBeforeReopen == 0 || retainedBeforeReopen != firstRange.Length() {
+			t.Fatalf("expected a durable prefix before reopening, got %d bytes", retainedBeforeReopen)
+		}
+		if result.Outcome != transfer.DirectTreeOutcomePartial || len(result.Files) != 1 || settled != 1 {
+			t.Fatalf("expected an isolated file failure, outcome=%d files=%+v settlements=%d progress=%+v",
+				result.Outcome, result.Files, settled, result.Progress)
+		}
+		_, reason, blocked := result.Files[0].Settlement.ItemBlock()
+		progress := result.Progress
+		if !blocked || reason != transfer.ItemBlockOwnedObjectUnknown || progress.FileOutcomes.OwnedObjectUnknownFiles != 1 {
+			t.Fatalf("expected a file ownership block, got %+v", result)
+		}
+		if progress.RestartReusableBytes != 0 || progress.VerifiedBytes != 0 || progress.NewlyVerifiedBytes != 0 ||
+			!progress.CountersExact || transferred != retainedBeforeReopen {
+			t.Fatalf("unavailable stage affected counted progress: %+v, transferred=%d", progress, transferred)
+		}
+		return
+	}
 	total := uint64(len(f.payload))
 	if result.Outcome != transfer.DirectTreeOutcomeSuccess ||
 		result.SucceededFiles != 1 || result.Progress.VerifiedBytes != total ||
@@ -137,7 +190,7 @@ func TestTransferReadmitsDurableRangesAfterSourceReopen(t *testing.T) {
 		!result.Progress.CountersExact || settled != 1 {
 		t.Fatalf("result=%+v file settlements=%d", result, settled)
 	}
-	if readmission.Previous != firstRevision || readmission.Current == firstRevision ||
+	if readmission.Previous != firstRevision || readmission.Current == firstRevision || readmission.Current != offeredRevision ||
 		readmission.ComparisonReason != content.ComparisonMetadataAgreement ||
 		readmission.Retained != firstRange.Length() || readmission.Reused != firstRange.Length() ||
 		transferred != total || retriedBytes != 0 || reconnectedAfter <= 0 {
@@ -150,4 +203,39 @@ func TestTransferReadmitsDurableRangesAfterSourceReopen(t *testing.T) {
 	}
 	t.Logf("time to resume=%v, checkpoint readmission=%v, reused=%d bytes, retransmitted=%d bytes",
 		reconnectedAfter, readmission.Elapsed, readmission.Reused, retriedBytes)
+}
+
+func changeReadmissionStage(root string, change func(string) error) error {
+	var stage string
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() && filepath.Ext(path) == ".stage" {
+			if stage != "" {
+				return errors.New("readmission fixture has multiple staged files")
+			}
+			stage = path
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if stage == "" {
+		return errors.New("readmission fixture has no staged file")
+	}
+	return change(stage)
+}
+
+func replaceReadmissionStage(path string) error {
+	// Keep the physical size so the replacement must fail the ownership check.
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if err := os.Rename(path, path+".original"); err != nil {
+		return err
+	}
+	return os.WriteFile(path, make([]byte, info.Size()), 0o600)
 }

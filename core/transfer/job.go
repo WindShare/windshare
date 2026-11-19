@@ -205,6 +205,9 @@ type RevisionClient interface {
 }
 
 type RangeReader interface {
+	// A direct RevisionReopenedError fences reads of the previous descriptor.
+	// When its comparison allows reuse, the same handle owns the current
+	// descriptor for a new output admission until ReleaseRevision.
 	ReadRange(context.Context, RevisionHandle, content.FileRevisionDescriptor, content.Range, RangeSink) error
 }
 
@@ -304,7 +307,7 @@ func NewTransferJob(config TransferJobConfig) (*TransferJob, error) {
 	walkLimits, ok := catalogwalk.NewLimits(
 		uint32(replayPageCapacity),
 		catalog.MaxDirectoryEntries,
-		min(uint64(replayPageCapacity)*(catalog.CatalogPageMemoryOverhead+catalog.MaxCatalogPageObjectBytes), defaultGenerationReplayBytes),
+		min(uint64(replayPageCapacity)*(catalog.CatalogPageMemoryOverhead+catalog.MaxCatalogPayloadBytes), defaultGenerationReplayBytes),
 	)
 	if !ok {
 		return nil, ErrInvalidTransferJob

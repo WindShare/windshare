@@ -121,7 +121,7 @@ func newMemoryObjectCodec() *memoryObjectCodec {
 	return &memoryObjectCodec{objects: make(map[string]VerifiedObject)}
 }
 
-func (c *memoryObjectCodec) LoadSealedPage(_ context.Context, page catalog.CatalogPage) ([]byte, error) {
+func (c *memoryObjectCodec) LoadPagePayload(_ context.Context, page catalog.CatalogPage) ([]byte, error) {
 	key := append([]byte{1}, page.Commitment().Bytes()...)
 	c.mu.Lock()
 	c.objects[string(key)] = VerifiedPage(page)
@@ -129,7 +129,7 @@ func (c *memoryObjectCodec) LoadSealedPage(_ context.Context, page catalog.Catal
 	return key, nil
 }
 
-func (c *memoryObjectCodec) LoadSealedFailure(_ context.Context, failure DirectoryFailure) ([]byte, error) {
+func (c *memoryObjectCodec) LoadFailurePayload(_ context.Context, failure DirectoryFailure) ([]byte, error) {
 	key := append([]byte{2}, failure.AttemptID.Bytes()...)
 	c.mu.Lock()
 	c.objects[string(key)] = VerifiedFailure(failure)
@@ -180,13 +180,13 @@ func (t *serviceTransport) FetchPage(ctx context.Context, request ListRequest) (
 		return nil, err
 	}
 	if result.Failure != nil {
-		return t.codec.LoadSealedFailure(ctx, *result.Failure)
+		return t.codec.LoadFailurePayload(ctx, *result.Failure)
 	}
 	page, found := result.Snapshot.Page(request.PageIndex())
 	if !found {
 		return nil, ErrPageOutOfRange
 	}
-	return t.codec.LoadSealedPage(ctx, page)
+	return t.codec.LoadPagePayload(ctx, page)
 }
 
 func (t *serviceTransport) CallCount() int {

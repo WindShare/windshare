@@ -120,13 +120,13 @@ func newRestartCatalogStore(
 	t *testing.T,
 	share catalog.ShareInstance,
 	backend catalog.CatalogBackend,
-	sealer catalog.PageSealer,
+	encoder catalog.PageEncoder,
 ) *catalog.CatalogStore {
 	t.Helper()
 	process := newRestartBudget(t, "process")
 	shareBudget := newRestartBudget(t, "share")
 	store, err := catalog.NewCatalogStore(catalog.StoreConfig{
-		ShareInstance: share, Backend: backend, ProcessBudget: process, ShareBudget: shareBudget, PageSealer: sealer,
+		ShareInstance: share, Backend: backend, ProcessBudget: process, ShareBudget: shareBudget, PageEncoder: encoder,
 	})
 	if err != nil {
 		t.Fatal(err)

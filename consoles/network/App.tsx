@@ -12,47 +12,25 @@ import { usePage } from '../ui/location'
 import { AuthorityClient } from './api'
 import { useDirectory } from './directory'
 import { encode } from './identity'
-import type { RelayNode, Restrictions, Snapshot } from './model'
-import { EnrollNode, NodeDetail, Nodes } from './nodes'
+import type { NodeDetails, RelayNode, Restrictions, Snapshot } from './model'
+import { EnrollNode, LookupNode, NodeDetail, Nodes } from './nodes'
 import { LookupAccess, Reports } from './restrictions'
 import { usePolicyEditor } from './policy-editor'
 import { PolicySettings } from './settings'
 
-function upsertNode(nodes: RelayNode[], next: RelayNode): RelayNode[] {
-  const key = encode(next.key)
-  const existing = nodes.find(item => encode(item.key) === key)
-  if (existing && existing.version > next.version) return nodes
-  if (existing) return nodes.map(item => item === existing ? next : item)
-  return [...nodes, next]
+function mergeNodeEntries(current: NodeDetails[], received: NodeDetails[]) {
+  const byKey = new Map(current.map(entry => [encode(entry.key), entry]))
+  for (const entry of received) {
+    const key = encode(entry.key)
+    const cached = byKey.get(key)
+    byKey.set(key, cached && cached.version > entry.version ? { ...cached, report: entry.report } : entry)
+  }
+  return [...byKey.values()]
 }
 
-function DashboardView({ api, snapshot, page, id, reports, reportRevision, directory, saveNode, access }: {
-  api: AuthorityClient
-  snapshot: Snapshot
-  page: string
-  id: string | undefined
-  reports: boolean
-  reportRevision: { list: number; detail: number }
-  directory: ReturnType<typeof useDirectory>
-  saveNode: (next: RelayNode) => void
-  access: { api: AuthorityClient; restrictions: Restrictions; saved: (restrictions: Restrictions) => void }
-}) {
-  if (page === 'enroll') return <EnrollNode api={api} saved={saveNode} />
-  const node = page === 'node' ? snapshot.nodes.find(item => encode(item.key) === id) : undefined
-  if (node) {
-    return <NodeDetail key={id} node={node} api={api} saved={saveNode}
-      report={snapshot.load.find(item => item.node === id)} directory={directory} />
-  }
-  if (page === 'account-access' || page === 'share-access') {
-    return <LookupAccess key={page} kind={page === 'account-access' ? 'account' : 'share'} {...access} />
-  }
-  if (reports) return <Reports {...access} revision={reportRevision} selectedId={page === 'report' ? id : undefined} />
-  return <Nodes nodes={snapshot.nodes} reports={snapshot.load} directory={directory} />
-}
-
-function Dashboard({ api, snapshot, update, refresh, refreshing, error }: {
+function Dashboard({ api, snapshot, update, refresh, loadMoreNodes, retry, refreshing, error }: {
   api: AuthorityClient; snapshot: Snapshot; update: (merge: (current: Snapshot) => Snapshot) => void
-  refresh: () => void; refreshing: boolean; error: Message | null
+  refresh: () => void; loadMoreNodes: () => void; retry: () => void; refreshing: boolean; error: Message | null
 }) {
   const t = useCopy(networkCopy)
   const [page, id] = usePage().split('/')
@@ -60,17 +38,52 @@ function Dashboard({ api, snapshot, update, refresh, refreshing, error }: {
   const editor = usePolicyEditor(snapshot.settings)
   const policy = page === 'policy'
   const reports = ['reports', 'report', 'account-access', 'share-access'].includes(page)
-  const saveNode = (next: RelayNode) => update(current => ({ ...current, nodes: upsertNode(current.nodes, next) }))
+  const [reportRevision, setReportRevision] = useState({ list: 0, detail: 0 })
+  const [nodeRevision, setNodeRevision] = useState(0)
+
+  function saveNode(next: RelayNode) {
+    const key = encode(next.key)
+    update(current => ({ ...current, node_page: { ...current.node_page,
+      entries: current.node_page.entries.map(entry => encode(entry.key) === key && next.version >= entry.version
+        ? { ...entry, ...next } : entry),
+    } }))
+  }
+
+  function enrollNode(next: NodeDetails) {
+    update(current => ({ ...current, node_page: { ...current.node_page,
+      entries: mergeNodeEntries(current.node_page.entries, [next]),
+    } }))
+  }
+
   const access = {
     api, restrictions: snapshot.restrictions,
     saved: (restrictions: Restrictions) => update(current => restrictions.version < current.restrictions.version
       ? current : { ...current, restrictions }),
   }
-  const [reportRevision, setReportRevision] = useState({ list: 0, detail: 0 })
+
   function refreshCurrent() {
     refresh()
+    if (page === 'node') setNodeRevision(current => current + 1)
     if (page === 'reports') setReportRevision(current => ({ ...current, list: current.list + 1 }))
     if (page === 'report') setReportRevision(current => ({ ...current, detail: current.detail + 1 }))
+  }
+
+  let view
+  if (policy) {
+    view = <PolicySettings api={api} snapshot={snapshot} editor={editor}
+      saved={({ settings, registration_mode }) => update(current => ({ ...current, settings, registration_mode }))} />
+  } else if (page === 'enroll') {
+    view = <EnrollNode api={api} saved={enrollNode} />
+  } else if (page === 'node') {
+    const cached = snapshot.node_page.entries.find(entry => encode(entry.key) === id)
+    view = cached ? <NodeDetail key={id} node={cached} api={api} saved={saveNode} directory={directory} />
+      : <LookupNode key={id + ':' + nodeRevision} id={id ?? ''} api={api} saved={saveNode} directory={directory} />
+  } else if (page === 'account-access' || page === 'share-access') {
+    view = <LookupAccess key={page} kind={page === 'account-access' ? 'account' : 'share'} {...access} />
+  } else if (reports) {
+    view = <Reports {...access} revision={reportRevision} selectedId={page === 'report' ? id : undefined} />
+  } else {
+    view = <Nodes page={snapshot.node_page} directory={directory} loading={refreshing} loadMore={loadMoreNodes} />
   }
   const refreshLabel = refreshing ? t.refreshing : t.refreshSnapshot
   return <div className="workspace">
@@ -80,11 +93,8 @@ function Dashboard({ api, snapshot, update, refresh, refreshing, error }: {
       { href: '#policy', label: t.policy, icon: 'policy', current: policy },
     ]} action={<button className="quiet" onClick={refreshCurrent} disabled={refreshing} aria-label={refreshLabel} title={refreshLabel}>
       <Icon name={refreshing ? 'loader' : 'refresh'} size={16} /><span className="action-text">{refreshLabel}</span></button>} />
-    <ReadError error={error} retry={refresh} />
-    {policy ? <PolicySettings api={api} snapshot={snapshot} editor={editor}
-      saved={({ settings, registration_mode }) => update(current => ({ ...current, settings, registration_mode }))} />
-      : <DashboardView api={api} snapshot={snapshot} page={page} id={id} reports={reports}
-        reportRevision={reportRevision} directory={directory} saveNode={saveNode} access={access} />}
+    <ReadError error={error} retry={retry} />
+    {view}
   </div>
 }
 
@@ -96,13 +106,24 @@ function ConsoleBody({ api, state, token, clearToken, resetSession }: {
   resetSession: () => void
 }) {
   const t = useCopy(networkCopy)
-  if (state.value === undefined) return <SessionWait error={state.error} retry={state.reload} />
+  if (state.value === undefined) return <SessionWait error={state.error} retry={state.retry} />
   if (state.value === null) {
     return <Login area={t.administrator} username initialize={!!token} cancelSetup={clearToken}
       submit={async (password, name) => { await api.signIn(name, password, token); resetSession() }} />
   }
-  return <Dashboard api={api} snapshot={state.value} refreshing={state.busy} refresh={state.reload} error={state.error}
-    update={merge => state.update(previous => previous && merge(previous))} />
+  const snapshot = state.value
+  function loadMoreNodes() {
+    const cursor = snapshot.node_page.next_cursor
+    if (!cursor) return
+    state.extend(async signal => ({ ...snapshot, node_page: await api.nodes(cursor, signal) }), (current, next) => {
+      if (!current || !next) return next
+      return { ...current, node_page: { ...next.node_page,
+        entries: mergeNodeEntries(current.node_page.entries, next.node_page.entries),
+      } }
+    })
+  }
+  return <Dashboard api={api} snapshot={snapshot} refreshing={state.busy} refresh={state.reload} error={state.error}
+    loadMoreNodes={loadMoreNodes} retry={state.retry} update={merge => state.update(previous => previous && merge(previous))} />
 }
 
 function Console({ api, token, clearToken, resetSession }: {
@@ -113,7 +134,7 @@ function Console({ api, token, clearToken, resetSession }: {
   const t = useCopy(networkCopy)
   const shared = useCopy(sharedCopy)
   return <Frame area={t.title} tools={state.value && <button className="quiet sign-out" aria-label={shared.signOut} title={shared.signOut} disabled={logout.busy}
-    onClick={() => void logout.run(async () => { await api.signOut(); resetSession() })}><Icon name="logout" size={16} /><span>{shared.signOut}</span></button>}>
+    onClick={() => void logout.run(async () => { await api.signOut(); resetSession() })}><Icon name="logout" size={16} /><span className="action-text">{shared.signOut}</span></button>}>
     <Notice feedback={logout.feedback} />
     <ConsoleBody api={api} state={state} token={token} clearToken={clearToken} resetSession={resetSession} />
   </Frame>

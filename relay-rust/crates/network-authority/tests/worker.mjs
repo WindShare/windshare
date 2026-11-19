@@ -100,6 +100,21 @@ const usage = value => nodeRequest('/v1/node/usage',
 const status = () => usage({ ...batch, id: [...randomBytes(16)] });
 const initial = await status();
 assert.equal(initial.kind, 'status');
+const adminGet = { admin: true, method: 'GET' };
+const nodesEndpoint = '/v1/admin/nodes';
+const encodedNodeKey = Buffer.from(node).toString('base64url');
+const nodeDetail = nodesEndpoint + '/' + encodedNodeKey;
+await call(nodeDetail, undefined, { method: 'GET', status: 403 });
+const { value: inspected } = await call(nodeDetail, undefined, adminGet);
+assert.deepEqual(inspected.key, node);
+assert.equal(inspected.version, existing.version);
+assert.deepEqual(inspected.report.load, batch.load);
+const { value: nextNodes } = await call(nodesEndpoint + '?after=' + encodedNodeKey, undefined, adminGet);
+assert(!nextNodes.entries.some(item => Buffer.from(item.key).equals(Buffer.from(node))));
+await call(nodesEndpoint + '?after=invalid', undefined, { ...adminGet, status: 400 });
+const { value: missingNode } = await call(nodesEndpoint + '/' + Buffer.from(randomBytes(32)).toString('base64url'),
+  undefined, { ...adminGet, status: 404 });
+assert.equal(missingNode.kind, 'node_not_found');
 const allowance = initial.entitlements[0].entitlement;
 const day = Math.floor(batch.created_at / 86400);
 const report = {
@@ -120,7 +135,6 @@ const reason = 'Local authority integration probe';
 const { value: { id } } = await call('/v1/reports', { share, reason });
 const reportEndpoint = '/v1/admin/reports';
 const detail = `${reportEndpoint}/${Buffer.from(id).toString('base64url')}`;
-const adminGet = { admin: true, method: 'GET' };
 assert.equal(consoleState.reports, undefined);
 await call(reportEndpoint, undefined, { method: 'GET', status: 403 });
 const { value: reports } = await call(reportEndpoint, undefined, adminGet);
@@ -169,6 +183,6 @@ console.log(JSON.stringify({
   node: Buffer.from(node).toString('base64url'), checks: [
     'one-time initialization', 'session cookies and CORS', 'idempotent registration', 'stable refresh identity',
     'password login', 'concurrent node policy updates', 'idempotent enrollment', 'signed node reports', 'idempotent UTC usage', 'independent revocation',
-    'operator report list and detail', 'account block and restoration', 'public share restrictions',
+    'operator node and report reads', 'account block and restoration', 'public share restrictions',
   ],
 }));

@@ -21,7 +21,7 @@ func (r *jobRun) openSelectedRevision(ctx context.Context, plan plannedFile) (Op
 			return OpenedRevision{}, FailureRevisionOpen, err
 		}
 		attempt.finishWait(ctx, rawOpenErr)
-		return r.finishRevisionOpen(ctx, plan, opened, rawOpenErr)
+		return r.admitOpenedRevision(ctx, plan, opened, rawOpenErr)
 	}
 }
 
@@ -134,7 +134,7 @@ func (attempt *revisionOpenAttempt) stopWait() {
 	}
 }
 
-func (r *jobRun) finishRevisionOpen(
+func (r *jobRun) admitOpenedRevision(
 	ctx context.Context, plan plannedFile, opened OpenedRevision, rawOpenErr error,
 ) (OpenedRevision, FailureStage, error) {
 	if err := normalizeSourceBoundary(ctx, rawOpenErr); err != nil {

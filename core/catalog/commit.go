@@ -370,11 +370,11 @@ func (s *CatalogStore) validateExistingPage(
 	if err != nil {
 		return 0, err
 	}
-	object, objectFound, err := s.backend.LoadPageObject(ctx, directoryID, commit.generation, pageIndex)
+	payload, payloadFound, err := s.backend.LoadPagePayload(ctx, directoryID, commit.generation, pageIndex)
 	if err != nil {
 		return 0, err
 	}
-	if !pageFound || !objectFound || object.Commitment() != page.Commitment() ||
+	if !pageFound || !payloadFound || payload.Commitment() != page.Commitment() ||
 		page.ShareInstance() != s.shareInstance || page.DirectoryID() != directoryID ||
 		page.Generation() != commit.generation || page.PageIndex() != pageIndex {
 		return 0, ErrCorruptCatalogStorage
@@ -429,20 +429,20 @@ type pageStagingState struct {
 func (s *CatalogStore) stageEmptyPage(transaction BackendTransaction, commit DirectoryCommit, sessionBudget *BudgetAccount) error {
 	memory, err := ReserveHierarchy(
 		s.hierarchy(sessionBudget),
-		ResourceUsage{MemoryBytes: CatalogPageMemoryOverhead + MaxCatalogPageObjectBytes},
+		ResourceUsage{MemoryBytes: CatalogPageMemoryOverhead + MaxCatalogPayloadBytes},
 	)
 	if err != nil {
 		return err
 	}
 	defer memory.Release()
-	page, object, err := sealCatalogPage(CatalogPageSpec{
+	page, payload, err := encodeCatalogPagePayload(CatalogPageSpec{
 		ShareInstance: s.shareInstance, DirectoryID: commit.directory.directoryID,
 		Generation: commit.generation, Terminal: true, OmittedCount: commit.omittedCount,
-	}, s.pageSealer)
+	}, s.pageEncoder)
 	if err != nil {
 		return err
 	}
-	return transaction.PutPage(page, object)
+	return transaction.PutPage(page, payload)
 }
 
 func (s *CatalogStore) stageNonEmptyPage(
@@ -457,7 +457,7 @@ func (s *CatalogStore) stageNonEmptyPage(
 ) error {
 	memory, err := ReserveHierarchy(
 		s.hierarchy(sessionBudget),
-		ResourceUsage{MemoryBytes: CatalogPageMemoryOverhead + MaxCatalogPageObjectBytes},
+		ResourceUsage{MemoryBytes: CatalogPageMemoryOverhead + MaxCatalogPayloadBytes},
 	)
 	if err != nil {
 		return err
@@ -473,14 +473,14 @@ func (s *CatalogStore) stageNonEmptyPage(
 	if terminal {
 		omittedCount = commit.omittedCount
 	}
-	page, object, err := sealCatalogPage(CatalogPageSpec{
+	page, payload, err := encodeCatalogPagePayload(CatalogPageSpec{
 		ShareInstance: s.shareInstance, DirectoryID: commit.directory.directoryID, Generation: commit.generation,
 		PageIndex: pageIndex, Previous: state.previous, Entries: entries, Terminal: terminal, OmittedCount: omittedCount,
-	}, s.pageSealer)
+	}, s.pageEncoder)
 	if err != nil {
 		return err
 	}
-	if err := transaction.PutPage(page, object); err != nil {
+	if err := transaction.PutPage(page, payload); err != nil {
 		return err
 	}
 	state.previous = page.Commitment()
@@ -497,11 +497,11 @@ func collectPageEntries(
 	state *pageStagingState,
 ) ([]Entry, error) {
 	entries := make([]Entry, 0, count)
-	// Bounds cover the canonical entry fields and sealed envelope, independent
-	// of native filename limits. Leave room for one maximum-sized next name so
-	// the iterator never needs an unaccounted lookahead record.
-	const pageEnvelopeBudgetBytes, entryEncodingBudgetBytes = 512, 128
-	remainingBytes := MaxCatalogPageObjectBytes - pageEnvelopeBudgetBytes
+	// Budget for the encoded page fields and each entry's fixed fields.
+	// Leave room for one maximum-sized next name so the iterator never needs
+	// an unaccounted lookahead record.
+	const pageEncodingBudgetBytes, entryEncodingBudgetBytes = 512, 128
+	remainingBytes := MaxCatalogPayloadBytes - pageEncodingBudgetBytes
 	for range count {
 		record, ok, err := iterator.Next(ctx)
 		if err != nil {

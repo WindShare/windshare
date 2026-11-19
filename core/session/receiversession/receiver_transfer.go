@@ -462,8 +462,8 @@ func (runtime *Runtime) bindRevisionAccess() error {
 	return runtime.core.AddFinalizer(runtime.releaseOwnedResources)
 }
 
-// Wire leases remain inside the runtime. A job retains this local handle while
-// the reader replaces expiring authorization for its immutable descriptor.
+// The local handle owns one file's wire lease across output attempts. Each
+// range request must still match the descriptor admitted by its own writer.
 type receiverLeaseDependencies struct{ receiverTransferDependencies }
 
 func (dependencies receiverTransferDependencies) OpenRevision(ctx context.Context, file catalog.FileID) (transfer.OpenedRevision, error) {
@@ -485,7 +485,7 @@ func (dependencies receiverTransferDependencies) RecordOutput(bytes uint64) {
 
 func (dependencies receiverTransferDependencies) ReadRange(ctx context.Context, handle transfer.RevisionHandle, descriptor content.FileRevisionDescriptor, requested content.Range, sink transfer.RangeSink) error {
 	err := dependencies.runtime.access.ReadRange(ctx, handle, descriptor, requested, sink)
-	if _, reopened := err.(*content.RevisionReopenedError); reopened && ctx.Err() == nil {
+	if _, reopened := err.(*content.RevisionReopenedError); reopened && ctx.Err() == nil && dependencies.runtime.Lifetime().Err() == nil {
 		return err
 	}
 	if errors.Is(err, revisionaccess.ErrClosed) {

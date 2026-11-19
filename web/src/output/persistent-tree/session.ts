@@ -62,6 +62,8 @@ type PersistentTreeTraceInput = Readonly<{
   Readonly<{ eventName: 'checkpoint'; transition: 'restored' | 'persisted' | 'failed';
       decision?: 'absent' | 'installed' | 'exact' | 'metadata_match' | 'revision_conflict' | 'ownership_conflict' | 'invalid' }>
 
+type PersistentFileObjectAdmission = (ownedObjectId: string) => void | Promise<void>
+
 export class PersistentTreeOutputSession implements PersistentMaterializationPort {
   readonly #tree: PersistentTreeSessionOptions['tree']
   readonly #checkpoints: RecoverableFileCheckpointJournal
@@ -179,7 +181,10 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     return this.#activation
   }
 
-  beginFile(request: PersistentFileRequest): Promise<PersistentFileTransaction> {
+  beginFile(
+    request: PersistentFileRequest,
+    admitSelectedObject?: PersistentFileObjectAdmission,
+  ): Promise<PersistentFileTransaction> {
     let admission: MutationAdmission | undefined
     try {
       admission = this.#mutationAdmissions.enter()
@@ -187,7 +192,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
       const materializationRelativePath = snapshotMaterializationRootRelativePath(
         request.materializationRelativePath,
       )
-      return this.#beginAdmittedFile(request, materializationRelativePath, admission)
+      return this.#beginAdmittedFile(request, materializationRelativePath, admission, admitSelectedObject)
     } catch (error) {
       admission?.leave()
       return Promise.reject(error)
@@ -198,6 +203,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     request: PersistentFileRequest,
     materializationRelativePath: MaterializationRootRelativePath,
     admission: MutationAdmission,
+    admitSelectedObject: PersistentFileObjectAdmission | undefined,
   ): Promise<PersistentFileTransaction> {
     let handedOff = false
     let openedHandle: PersistentTreeFile | undefined
@@ -227,6 +233,9 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
         this.#traceCheckpointDecision(revision.fileId, decision)
         traceRetainedCandidates(this.#diagnostics, decision, revision)
         const checkpoint = selectedCheckpoint(decision)
+        // Storage admission follows checkpoint selection because a reopened source
+        // can reuse an allocation made under an earlier revision.
+        if (admitSelectedObject !== undefined) await admitSelectedObject(checkpoint.ownedObjectId)
         const fileScope = stageScope?.withCorrelation({
           ownedObjectId: checkpoint.ownedObjectId,
           checkpointRecordId: checkpoint.recordId,

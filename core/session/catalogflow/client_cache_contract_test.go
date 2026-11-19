@@ -64,7 +64,7 @@ func TestClientDirectoryLeaseOwnsOnlyItsCacheRetention(t *testing.T) {
 		directory := directoryID(t, seed+1)
 		snapshot := onePageSnapshot(t, instance, directory, seed+2, "leased")
 		codec := newMemoryObjectCodec()
-		object, err := codec.LoadSealedPage(context.Background(), snapshot.Pages()[0])
+		object, err := codec.LoadPagePayload(context.Background(), snapshot.Pages()[0])
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -141,7 +141,7 @@ func TestClientDirectoryFailureLeasePreservesSessionAuthority(t *testing.T) {
 	directory := directoryID(t, 53)
 	failure := mustDirectoryFailure(t, instance, directory, 54, DirectoryCodePermanentIO, false)
 	codec := newMemoryObjectCodec()
-	object, err := codec.LoadSealedFailure(context.Background(), failure)
+	object, err := codec.LoadFailurePayload(context.Background(), failure)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func TestClientCompletedPersistentWaiterWinsCancellation(t *testing.T) {
 	directory := directoryID(t, 57)
 	want := onePageSnapshot(t, instance, directory, 58, "complete")
 	codec := newMemoryObjectCodec()
-	object, err := codec.LoadSealedPage(context.Background(), want.Pages()[0])
+	object, err := codec.LoadPagePayload(context.Background(), want.Pages()[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +262,7 @@ func testClientCanceledAcquireDoesNotStealSurvivingLease(t *testing.T) {
 	directory := directoryID(t, 60)
 	want := onePageSnapshot(t, instance, directory, 61, "shared")
 	codec := newMemoryObjectCodec()
-	object, err := codec.LoadSealedPage(context.Background(), want.Pages()[0])
+	object, err := codec.LoadPagePayload(context.Background(), want.Pages()[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +356,7 @@ func TestClientConfigurationFetchAndCacheFailuresAreBounded(t *testing.T) {
 		"zero share":      {Transport: validTransport, Verifier: validVerifier},
 		"page wire limit": {ShareInstance: instance, Transport: validTransport, Verifier: validVerifier, MaxPagesPerDirectory: catalog.MaxDirectoryEntries + 1},
 		"object wire limit": {ShareInstance: instance, Transport: validTransport, Verifier: validVerifier,
-			MaxObjectBytes: catalog.MaxCatalogPageObjectBytes + 1},
+			MaxObjectBytes: catalog.MaxCatalogPayloadBytes + 1},
 		"negative directories": {ShareInstance: instance, Transport: validTransport, Verifier: validVerifier, MaxDirectories: -1},
 		"concurrent load wire limit": {
 			ShareInstance: instance, Transport: validTransport, Verifier: validVerifier,
@@ -421,7 +421,7 @@ func TestClientConfigurationFetchAndCacheFailuresAreBounded(t *testing.T) {
 
 	snapshot := onePageSnapshot(t, instance, directory, 47, "item")
 	codec := newMemoryObjectCodec()
-	encoded, _ := codec.LoadSealedPage(context.Background(), snapshot.Pages()[0])
+	encoded, _ := codec.LoadPagePayload(context.Background(), snapshot.Pages()[0])
 	cacheLimited, _ := NewClient(ClientConfig{
 		ShareInstance: instance,
 		Transport:     PageTransportFunc(func(context.Context, ListRequest) ([]byte, error) { return encoded, nil }),

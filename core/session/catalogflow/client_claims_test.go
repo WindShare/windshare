@@ -56,7 +56,7 @@ func TestClientBoundsBlockedAndResidentAcquireClaims(t *testing.T) {
 	directory := directoryID(t, 63)
 	want := onePageSnapshot(t, instance, directory, 64, "bounded")
 	codec := newMemoryObjectCodec()
-	object, _ := codec.LoadSealedPage(context.Background(), want.Pages()[0])
+	object, _ := codec.LoadPagePayload(context.Background(), want.Pages()[0])
 	started := make(chan struct{})
 	gate := make(chan struct{})
 	var once sync.Once
@@ -126,7 +126,7 @@ func TestClientBoundsAcquireClaimsAcrossDirectories(t *testing.T) {
 	objects := make(map[catalog.DirectoryID][]byte, len(directories))
 	for index, directory := range directories {
 		snapshot := onePageSnapshot(t, instance, directory, byte(71+index), fmt.Sprintf("file-%d", index))
-		object, err := codec.LoadSealedPage(context.Background(), snapshot.Pages()[0])
+		object, err := codec.LoadPagePayload(context.Background(), snapshot.Pages()[0])
 		if err != nil {
 			t.Fatal(err)
 		}

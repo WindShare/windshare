@@ -56,6 +56,7 @@ export function projectTransferFileOutcome(
   switch (evidence.kind) {
     case 'authenticated-source-drift': return 'source-drift'
     case 'occupied-unbound-destination': return 'destination-collision'
+    case 'deferred-revision-readmission':
     case 'residual-failure': return 'failed'
     case 'checkpoint-decision':
       switch (evidence.decision) {

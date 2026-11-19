@@ -52,7 +52,7 @@ async fn flush_reads_the_clock_after_draining_midnight_usage() {
     let reporter = Reporter::new(
         Runtime::default(),
         store.clone(),
-        Identity::generate().unwrap(),
+        Identity::generate().unwrap().key(),
         Authority {
             url: "http://localhost".into(),
             issuer: URL_SAFE_NO_PAD.encode(issuer),
@@ -76,7 +76,8 @@ async fn flush_reads_the_clock_after_draining_midnight_usage() {
         .await
         .unwrap();
 
-    let batch = store.next_usage_batch(issuer).unwrap().unwrap();
+    let node = reporter.signing_key.verifying_key().to_bytes();
+    let batch = store.next_usage_batch(issuer, node).unwrap().unwrap();
     assert_eq!(batch.created_at, DAY_SECONDS);
     assert_eq!(
         batch.records,
@@ -131,15 +132,20 @@ fn persisted_batches_retain_ids_and_bytes_across_process_restart() {
     drop(store);
     let store = usage_store(&path);
     assert_eq!(
-        store.next_usage_batch([3; 32]).unwrap(),
+        store.next_usage_batch(batch.issuer, batch.node).unwrap(),
         Some(batch.clone())
     );
     store.acknowledge_usage(batch.id).unwrap();
-    assert!(store.next_usage_batch([3; 32]).unwrap().is_none());
+    assert!(
+        store
+            .next_usage_batch(batch.issuer, batch.node)
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
-fn invalid_outbox_entries_are_preserved_without_blocking_the_next_batch() {
+fn unusable_outbox_entries_are_preserved_without_blocking_the_next_batch() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("usage.db");
     let store = usage_store(&path);
@@ -154,8 +160,20 @@ fn invalid_outbox_entries_are_preserved_without_blocking_the_next_batch() {
             .enqueue_usage(&[good.clone(), invalid.clone()])
             .is_err()
     );
-    assert!(store.next_usage_batch(good.issuer).unwrap().is_none());
-    store.enqueue_usage(std::slice::from_ref(&good)).unwrap();
+    assert!(
+        store
+            .next_usage_batch(good.issuer, good.node)
+            .unwrap()
+            .is_none()
+    );
+    let mut old_identity = good.clone();
+    old_identity.id = [4; 16];
+    old_identity.node = [5; 32];
+    old_identity.created_at = DAY_SECONDS - 1;
+    store
+        .enqueue_usage(&[old_identity.clone(), good.clone()])
+        .unwrap();
+    drop(store);
 
     // Seed a pre-fix batch and a damaged row outside the checked enqueue path.
     let entries = [
@@ -177,22 +195,38 @@ fn invalid_outbox_entries_are_preserved_without_blocking_the_next_batch() {
     }
     drop(sql);
 
+    let store = usage_store(&path);
     assert_eq!(
-        store.next_usage_batch(good.issuer).unwrap().as_ref(),
+        store
+            .next_usage_batch(good.issuer, good.node)
+            .unwrap()
+            .as_ref(),
         Some(&good)
     );
     drop(store);
 
     let store = usage_store(&path);
     assert_eq!(
-        store.next_usage_batch(good.issuer).unwrap().as_ref(),
+        store
+            .next_usage_batch(good.issuer, good.node)
+            .unwrap()
+            .as_ref(),
         Some(&good)
     );
     store.acknowledge_usage(good.id).unwrap();
-    assert!(store.next_usage_batch(good.issuer).unwrap().is_none());
+    assert!(
+        store
+            .next_usage_batch(good.issuer, good.node)
+            .unwrap()
+            .is_none()
+    );
 
     let sql = rusqlite::Connection::open(&path).unwrap();
-    for (id, body, reason) in entries {
+    for (id, body, reason) in entries.into_iter().chain([(
+        old_identity.id,
+        serde_json::to_vec(&old_identity).unwrap(),
+        "node_identity_mismatch",
+    )]) {
         let saved: (Issuer, Vec<u8>, i64, String) = sql
             .query_row(
                 "SELECT issuer,body,created_at,reason FROM usage_outbox_quarantine WHERE id=?1",

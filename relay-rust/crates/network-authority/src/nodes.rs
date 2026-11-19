@@ -3,9 +3,13 @@ use crate::{
     store::{key, load, save},
 };
 use anyhow::{Result, ensure};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use windshare_relay_access::usage::Load;
 
 const MAX_REGION_BYTES: usize = 128;
+const NODE_PAGE_SIZE: usize = 1000;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -33,6 +37,26 @@ pub struct Node {
     pub version: u64,
 }
 
+#[derive(Serialize)]
+pub struct NodeDetails {
+    #[serde(flatten)]
+    pub node: Node,
+    pub report: Option<NodeLoadReport>,
+}
+
+#[derive(Serialize)]
+pub struct NodeLoadReport {
+    pub created_at: u64,
+    pub reported_at: Option<u64>,
+    pub load: Load,
+}
+
+#[derive(Serialize)]
+pub struct NodePage {
+    pub entries: Vec<NodeDetails>,
+    pub next_cursor: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(
     tag = "field",
@@ -46,6 +70,95 @@ pub enum NodePolicyChange {
 }
 
 impl<R: Store, E: Environment> Authority<R, E> {
+    /// # Errors
+    /// Requires a live administrator session and readable node records.
+    pub fn nodes(&self, session: &str, after: Option<[u8; 32]>) -> Result<NodePage> {
+        self.require_admin(session)?;
+        self.node_page(after)
+    }
+
+    pub(crate) fn node_page(&self, after: Option<[u8; 32]>) -> Result<NodePage> {
+        let after_node = after.map(|id| key("node", &id));
+        let mut rows =
+            self.store
+                .scan_after("node/", after_node.as_deref(), Some(NODE_PAGE_SIZE + 1))?;
+        let has_more = rows.len() > NODE_PAGE_SIZE;
+        rows.truncate(NODE_PAGE_SIZE);
+
+        // Every load belongs to an enrolled node. The shared key order and cursor
+        // keep the selected nodes' load records in one bounded scan.
+        let after_load = after.map(|id| key("node-load", &id));
+        let loads: BTreeMap<_, _> = self
+            .store
+            .scan_after("node-load/", after_load.as_deref(), Some(rows.len()))?
+            .into_iter()
+            .collect();
+        let entries = rows
+            .into_iter()
+            .map(|(_, value)| {
+                let node: Node = serde_json::from_str(&value)?;
+                let report = loads
+                    .get(&key("node-load", &node.key))
+                    .map(|value| self.node_load(&node.key, value))
+                    .transpose()?;
+                Ok(NodeDetails { node, report })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let next_cursor = entries
+            .last()
+            .filter(|_| has_more)
+            .map(|entry| URL_SAFE_NO_PAD.encode(entry.node.key));
+        tracing::debug!(
+            event = "authority_nodes_listed",
+            continued = after.is_some(),
+            count = entries.len(),
+            has_more
+        );
+        Ok(NodePage {
+            entries,
+            next_cursor,
+        })
+    }
+
+    /// # Errors
+    /// Requires a live administrator session and an existing node.
+    pub fn node_by_key(&self, session: &str, id: &[u8; 32]) -> Result<NodeDetails> {
+        self.require_admin(session)?;
+        let record = key("node", id);
+        let node = load(&self.store, &record)?;
+        tracing::debug!(event = "authority_node_read", node_key = %record, found = node.is_some());
+        self.node_details(node.ok_or(Fault::NodeNotFound)?)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn enrolled_node_details(
+        &mut self,
+        session: &str,
+        enrollment: &NodeEnrollment,
+    ) -> Result<NodeDetails> {
+        let node = self.enroll_node(session, enrollment)?;
+        self.node_details(node)
+    }
+
+    fn node_details(&self, node: Node) -> Result<NodeDetails> {
+        let report = self
+            .store
+            .get(&key("node-load", &node.key))?
+            .map(|value| self.node_load(&node.key, &value))
+            .transpose()?;
+        Ok(NodeDetails { node, report })
+    }
+
+    fn node_load(&self, node: &[u8; 32], value: &str) -> Result<NodeLoadReport> {
+        let (created_at, load_snapshot) = serde_json::from_str(value)?;
+        let reported_at = load(&self.store, &key("node-report", node))?;
+        Ok(NodeLoadReport {
+            created_at,
+            reported_at,
+            load: load_snapshot,
+        })
+    }
+
     /// # Errors
     /// Requires an administrator session, a nonzero public key and a named region.
     pub fn enroll_node(&mut self, session: &str, enrollment: &NodeEnrollment) -> Result<Node> {

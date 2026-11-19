@@ -4,15 +4,15 @@ import { acquireArtifactReader, withArtifactCleanup } from '../origin-private/ex
 import type { NativeObjectFactory } from '../origin-private/native-object/contracts'
 import type { ObjectCapacity } from '../origin-private/object-capacity'
 import { ORIGIN_PRIVATE_RAW_FILE_CONTAINER } from '../origin-private/workspace-root'
-import { OriginPrivateWorkspaceTree, originPrivateRawFileHandleId, rawFileObjectId } from '../origin-private/workspace-tree'
+import { OriginPrivateWorkspaceTree, originPrivateRawFileHandleId } from '../origin-private/workspace-tree'
 import { fileCheckpointDigest, fileCheckpointIsComplete, type FileCheckpointV2 } from '../persistence/checkpoint'
 import { checkpointMatchesNamespace } from '../persistence/journal'
 import { PersistentTreeOutputSession } from '../persistent-tree/session'
 import type { PersistentFileRequest } from '../persistent-tree/contracts'
 import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
 import { readBrowserDeliveryCheckpoint } from './checkpoint-reader'
-import type { BrowserDeliverySource, BrowserSavePolicyV1 } from './model'
-import type { BrowserDeliveryStagePort, BrowserDeliveryStageReader } from './ports'
+import type { BrowserSavePolicyV1 } from './model'
+import type { BrowserDeliveryStageDiscard, BrowserDeliveryStagePort, BrowserDeliveryStageReader } from './ports'
 import { browserDeliveryStagingPath } from './records'
 import { BrowserDeliveryStagingRoot } from './staging-root'
 
@@ -48,12 +48,10 @@ export class BrowserDeliveryStaging implements BrowserDeliveryStagePort {
     } catch (error) { checkpoints.close(); throw error }
   }
 
-  async bindCapacity(source: BrowserDeliverySource, capacity: ObjectCapacity): Promise<void> {
-    this.#root.bindCapacity(await rawFileObjectId(this.#root.operationId, browserDeliveryStagingPath(source.fileId), source), capacity)
+  beginFile(request: PersistentFileRequest, capacity: ObjectCapacity) {
+    return this.#session.beginFile(request, ownedObjectId => this.#root.bindCapacity(ownedObjectId, capacity))
   }
 
-  beginFile(request: PersistentFileRequest) { return this.#session.beginFile(request) }
-  ensureDirectory(path: readonly string[]) { return this.#session.ensureDirectory(path) }
   readCheckpoint(fileId: string) { return readBrowserDeliveryCheckpoint(this.#checkpoints, fileId) }
 
   async readComplete(checkpoint: FileCheckpointV2): Promise<BrowserDeliveryStageReader> {
@@ -71,39 +69,46 @@ export class BrowserDeliveryStaging implements BrowserDeliveryStagePort {
   async removeComplete(checkpoint: FileCheckpointV2): Promise<void> {
     await withArtifactCleanup(this.#root.operationId, async () => {
       await this.#requireComplete(checkpoint)
-      const current = await this.#root.readObject(ORIGIN_PRIVATE_RAW_FILE_CONTAINER, checkpoint.ownedObjectId, 'cleanup')
-      const handleId = originPrivateRawFileHandleId(this.#root.operationId, checkpoint.ownedObjectId)
-      if (current === undefined) {
-        // A persisted cleanup cut permits finishing a crash after deletion but before handle retirement.
-        await this.#checkpoints.deleteHandle(handleId)
-        return
-      }
-      await this.#tree.removeFile(checkpoint.canonicalPath, checkpoint.ownedObjectId)
+      await this.#removeOwnedFile(checkpoint.canonicalPath, checkpoint.ownedObjectId)
     })
   }
 
-  async discard(source: BrowserDeliverySource, checkpoint?: FileCheckpointV2): Promise<void> {
+  async discard(stagedFile: BrowserDeliveryStageDiscard): Promise<void> {
     await withArtifactCleanup(this.#root.operationId, async () => {
-      const objectId = await rawFileObjectId(this.#root.operationId, browserDeliveryStagingPath(source.fileId), source)
-      if (checkpoint !== undefined) {
-        const committed = await this.#checkpoints.readCommitted(checkpoint.recordId)
-        if (!checkpointMatchesNamespace(checkpoint, this.#checkpoints.binding) || checkpoint.ownedObjectId !== objectId ||
-            committed === undefined || fileCheckpointDigest(committed) !== fileCheckpointDigest(checkpoint)) {
-          throw new TypeError('Discard requires the current owned receiving checkpoint')
-        }
+      if (stagedFile.kind === 'checkpointed') {
+        const { checkpoint } = stagedFile
+        await this.#requireCommitted(checkpoint)
+        await this.#removeOwnedFile(checkpoint.canonicalPath, checkpoint.ownedObjectId)
+        return
       }
-      const current = await this.#root.readObject(ORIGIN_PRIVATE_RAW_FILE_CONTAINER, objectId, 'cleanup')
-      if (current === undefined) {
-        await this.#checkpoints.deleteHandle(originPrivateRawFileHandleId(this.#root.operationId, objectId))
-      } else {
-        await this.#tree.removeFile(browserDeliveryStagingPath(source.fileId), objectId)
-      }
+      // The initial allocation may exist before its checkpoint commits.
+      const path = browserDeliveryStagingPath(stagedFile.source.fileId)
+      const ownedObjectId = await this.#tree.proposeFileOwnedObjectId(path, stagedFile.source)
+      await this.#removeOwnedFile(path, ownedObjectId)
     })
+  }
+
+  async #removeOwnedFile(path: readonly string[], ownedObjectId: string): Promise<void> {
+    const current = await this.#root.readObject(ORIGIN_PRIVATE_RAW_FILE_CONTAINER, ownedObjectId, 'cleanup')
+    if (current === undefined) {
+      // A persisted cleanup cut permits finishing a crash after deletion but before handle retirement.
+      await this.#checkpoints.deleteHandle(originPrivateRawFileHandleId(this.#root.operationId, ownedObjectId))
+      return
+    }
+    await this.#tree.removeFile(path, ownedObjectId)
   }
 
   async #requireComplete(checkpoint: FileCheckpointV2): Promise<void> {
-    if (!checkpointMatchesNamespace(checkpoint, this.#checkpoints.binding) || !fileCheckpointIsComplete(checkpoint)) {
+    if (!fileCheckpointIsComplete(checkpoint)) {
       throw new TypeError('Local delivery requires the exact complete staging checkpoint')
+    }
+    await this.#requireCommitted(checkpoint)
+  }
+
+  async #requireCommitted(checkpoint: FileCheckpointV2): Promise<void> {
+    if (!checkpointMatchesNamespace(checkpoint, this.#checkpoints.binding) ||
+        checkpoint.canonicalPath.length !== 1 || checkpoint.canonicalPath[0] !== checkpoint.fileId) {
+      throw new TypeError('Checkpoint does not belong to this staging file')
     }
     const committed = await this.#checkpoints.readCommitted(checkpoint.recordId)
     if (committed === undefined || fileCheckpointDigest(committed) !== fileCheckpointDigest(checkpoint)) {

@@ -2,88 +2,34 @@ package catalogflow
 
 import (
 	"context"
-	"crypto/ed25519"
 	"crypto/sha256"
 	"errors"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/senderauth"
-	"github.com/windshare/windshare/core/senderobject"
 )
-
-type DescriptorObjectConfig struct {
-	PKHash           []byte
-	ShareIDRaw       []byte
-	DescriptorKey    []byte
-	SenderPrivateKey ed25519.PrivateKey
-	Nonce            []byte
-}
-
-func SealDescriptor(descriptor catalog.ShareDescriptor, config DescriptorObjectConfig) ([]byte, error) {
-	plaintext, err := encodeShareDescriptor(descriptor)
-	if err != nil {
-		return nil, err
-	}
-	binding, err := senderobject.NewDescriptorBinding(config.PKHash, config.ShareIDRaw)
-	if err != nil {
-		return nil, err
-	}
-	return senderobject.Seal(binding, config.DescriptorKey, config.SenderPrivateKey, config.Nonce, plaintext)
-}
-
-// OpenedDescriptor keeps the authenticated sender identity with the data it
-// authenticated, so all receiver components can share its checked key.
-type OpenedDescriptor struct {
-	Descriptor catalog.ShareDescriptor
-	Sender     *senderauth.Verifier
-}
-
-func OpenDescriptor(object []byte, pkHash, shareIDRaw, descriptorKey []byte) (OpenedDescriptor, error) {
-	binding, err := senderobject.NewDescriptorBinding(pkHash, shareIDRaw)
-	if err != nil {
-		return OpenedDescriptor{}, err
-	}
-	var opened OpenedDescriptor
-	_, err = senderobject.OpenDescriptorBootstrap(binding, descriptorKey, object, func(plaintext []byte) (*senderauth.Verifier, error) {
-		descriptor, decodeErr := decodeShareDescriptor(plaintext)
-		if decodeErr != nil {
-			return nil, decodeErr
-		}
-		sender, keyErr := senderauth.NewVerifier(ed25519.PublicKey(descriptor.SenderPublicKey()))
-		if keyErr != nil {
-			return nil, keyErr
-		}
-		opened = OpenedDescriptor{Descriptor: descriptor, Sender: sender}
-		return sender, nil
-	})
-	if err != nil {
-		return OpenedDescriptor{}, err
-	}
-	return opened, nil
-}
 
 // CatalogPayloadEncoder freezes canonical catalog bytes as part of committing
 // the directory. Every recipient receives those same bytes in its own session.
 type CatalogPayloadEncoder struct{}
 
-func (CatalogPayloadEncoder) Seal(input catalog.PageCommitInput) (catalog.SealedPageObject, error) {
+func (CatalogPayloadEncoder) EncodePage(input catalog.PageCommitInput) (catalog.PagePayload, error) {
 	payload, err := encodeCatalogPageInput(input)
 	if err != nil {
-		return catalog.SealedPageObject{}, err
+		return catalog.PagePayload{}, err
 	}
-	return catalog.NewSealedPageObject(payload)
+	return catalog.NewPagePayload(payload)
 }
 
-func (CatalogPayloadEncoder) SealFailure(record catalog.DirectoryFailureRecord) (catalog.SealedFailureObject, error) {
+func (CatalogPayloadEncoder) EncodeFailure(record catalog.DirectoryFailureRecord) (catalog.FailurePayload, error) {
 	failure, err := directoryFailureFromCatalogRecord(record)
 	if err != nil {
-		return catalog.SealedFailureObject{}, err
+		return catalog.FailurePayload{}, err
 	}
 	payload, err := EncodeDirectoryFailure(failure)
 	if err != nil {
-		return catalog.SealedFailureObject{}, err
+		return catalog.FailurePayload{}, err
 	}
-	return catalog.NewSealedFailureObject(payload)
+	return catalog.NewFailurePayload(payload)
 }
 
 func directoryFailureFromCatalogRecord(record catalog.DirectoryFailureRecord) (DirectoryFailure, error) {
@@ -126,7 +72,7 @@ func (CatalogPayloadDecoder) Verify(ctx context.Context, share catalog.ShareInst
 	if err := ctx.Err(); err != nil {
 		return VerifiedObject{}, err
 	}
-	if share.IsZero() || len(payload) == 0 || len(payload) > catalog.MaxCatalogPageObjectBytes {
+	if share.IsZero() || len(payload) == 0 || len(payload) > catalog.MaxCatalogPayloadBytes {
 		return VerifiedObject{}, ErrObjectIdentity
 	}
 	var header struct {

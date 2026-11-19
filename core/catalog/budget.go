@@ -360,15 +360,15 @@ func (randomCatalogIdentities) NewDirectoryGeneration() (DirectoryGeneration, er
 }
 
 type StoreConfig struct {
-	ShareInstance ShareInstance
-	Backend       CatalogBackend
-	ProcessBudget *BudgetAccount
-	ShareBudget   *BudgetAccount
-	PageSealer    PageSealer
-	FailureSealer FailureSealer
-	SpillFactory  SpillFactory
-	SortRunBytes  uint64
-	Clock         Clock
-	AttemptIDs    ScanAttemptIDGenerator
-	Generations   DirectoryGenerationGenerator
+	ShareInstance  ShareInstance
+	Backend        CatalogBackend
+	ProcessBudget  *BudgetAccount
+	ShareBudget    *BudgetAccount
+	PageEncoder    PageEncoder
+	FailureEncoder FailureEncoder
+	SpillFactory   SpillFactory
+	SortRunBytes   uint64
+	Clock          Clock
+	AttemptIDs     ScanAttemptIDGenerator
+	Generations    DirectoryGenerationGenerator
 }
