@@ -1,4 +1,5 @@
-import { traceSourceComparison, traceRetainedCandidates } from '../diagnostics/recovery'
+import { traceSourceComparison, traceRetainedCheckpointSource } from '../diagnostics/recovery'
+import type { CheckpointTraceDecision } from '../../diagnostics/trace/checkpoint-payload'
 import { sourceMetadataFields } from '../../content/revision-comparison'
 import { admitCheckpointMetadataReuse } from '../persistence/metadata-reuse'
 import {
@@ -35,7 +36,10 @@ import type {
   RecoverableFileCheckpointJournal,
   SemanticPersistentOutputJournal,
 } from './contracts'
-import { CheckpointLineageDecisionError, DestinationCollisionError, TargetOwnershipUnknownError } from './errors'
+import {
+  CheckpointLineageDecisionError, CheckpointSourceEvidenceUnavailableError,
+  DestinationCollisionError, TargetOwnershipUnknownError,
+} from './errors'
 import { PersistentFileTransaction } from './file-transaction'
 import {
   PersistentInitialClaimCoordinator,
@@ -60,7 +64,7 @@ import { MutationAdmissionBarrier, type MutationAdmission } from './admission-ba
 type PersistentTreeTraceInput = Readonly<{
   eventName: 'output_reservation'; transition: 'acquired' | 'failed' }> |
   Readonly<{ eventName: 'checkpoint'; transition: 'restored' | 'persisted' | 'failed';
-      decision?: 'absent' | 'installed' | 'exact' | 'metadata_match' | 'revision_conflict' | 'ownership_conflict' | 'invalid' }>
+      decision?: CheckpointTraceDecision }>
 
 type PersistentFileObjectAdmission = (ownedObjectId: string) => void | Promise<void>
 
@@ -231,7 +235,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
           request.performancePipeline,
         )
         this.#traceCheckpointDecision(revision.fileId, decision)
-        traceRetainedCandidates(this.#diagnostics, decision, revision)
+        traceRetainedCheckpointSource(this.#diagnostics, decision, revision.fileRevision)
         const checkpoint = selectedCheckpoint(decision)
         // Storage admission follows checkpoint selection because a reopened source
         // can reuse an allocation made under an earlier revision.
@@ -261,7 +265,8 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
         })
         const committed = await admitCheckpointMetadataReuse(recovered, revision, this.#checkpoints, this.#semantic)
         if (recovered.fileRevision !== committed.fileRevision) {
-          traceSourceComparison(this.#diagnostics, recovered, revision, 'accepted')
+          traceSourceComparison(this.#diagnostics, recovered, committed.fileRevision,
+            { kind: 'metadata-agreement', reason: 'metadata-agreement' }, 'accepted')
         }
         const transactionScope = fileScope?.withCorrelation({
           checkpointRecordId: committed.recordId,
@@ -639,10 +644,12 @@ function checkpointTraceTransition(
 
 function checkpointTraceDecision(
   decision: InitialCheckpointCASResult['kind'] | CheckpointLineageDecision['kind'],
-): 'absent' | 'installed' | 'exact' | 'metadata_match' | 'revision_conflict' | 'ownership_conflict' | 'invalid' {
+): CheckpointTraceDecision {
   switch (decision) {
     case 'metadata-match': return 'metadata_match'
     case 'revision-conflict': return 'revision_conflict'
+    case 'reuse-state-blocked': return 'reuse_state_blocked'
+    case 'revision-evidence-unavailable': return 'revision_evidence_unavailable'
     case 'ownership-conflict': return 'ownership_conflict'
     default: return decision
   }
@@ -666,7 +673,10 @@ function selectedCheckpoint(
     case 'exact':
     case 'metadata-match':
       return decision.record
+    case 'revision-evidence-unavailable':
+      throw new CheckpointSourceEvidenceUnavailableError()
     case 'revision-conflict':
+    case 'reuse-state-blocked':
     case 'ownership-conflict':
     case 'invalid':
       throw new CheckpointLineageDecisionError(decision.kind)

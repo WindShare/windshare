@@ -9,12 +9,15 @@ export interface RevisionSourceEvidence {
   readonly sourceMetadata?: string
 }
 
-export type RevisionComparison =
+export type RevisionMetadataComparison =
   | Readonly<{ kind: 'metadata-agreement'; reason: 'same-revision' | 'metadata-agreement' }>
-  | Readonly<{ kind: 'byte-agreement'; reason: 'saved-ranges-compared' }>
-  | Readonly<{ kind: 'observed-change'; reason: 'context-changed' }>
   | Readonly<{ kind: 'observed-change'; reason: 'size-changed' | 'metadata-changed' }>
   | Readonly<{ kind: 'unavailable'; reason: 'metadata-unavailable' }>
+
+export type RevisionComparison =
+  | RevisionMetadataComparison
+  | Readonly<{ kind: 'byte-agreement'; reason: 'saved-ranges-compared' }>
+  | Readonly<{ kind: 'observed-change'; reason: 'context-changed' }>
 
 export class RevisionEvidenceUnavailableError extends Error {
   constructor() {
@@ -26,7 +29,7 @@ export class RevisionEvidenceUnavailableError extends Error {
 /** Callers bind share/file/task independently before consulting source applicability. */
 export function compareRevisionMetadata(
   previous: RevisionSourceEvidence, current: RevisionSourceEvidence,
-): Exclude<RevisionComparison, { reason: 'context-changed' }> {
+): RevisionMetadataComparison {
   if (previous.exactSize !== current.exactSize) return { kind: 'observed-change', reason: 'size-changed' }
   sourceMetadataFields(previous)
   sourceMetadataFields(current)

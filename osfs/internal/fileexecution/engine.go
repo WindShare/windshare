@@ -11,6 +11,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 )
@@ -126,10 +127,7 @@ func (engine *Engine) BeginFile(
 	if !resolution.valid() {
 		return transfer.FileStart{}, joinFailures(ctx, checkpointBindingError(ErrPortContract), closeDestination(destination))
 	}
-	engine.emit(engine.checkpointDecisionTrace(sequence, resolution.Decision(), file.Descriptor().FileID()))
-	if candidate, retained := resolution.Candidate(); retained {
-		engine.traceRetainedSource(candidate, file.Descriptor())
-	}
+	engine.traceCheckpointResolution(sequence, resolution, file.Descriptor())
 	sequence = engine.nextSequence()
 	return engine.beginResolved(ctx, sequence, file, key, destination, resolution)
 }
@@ -155,12 +153,18 @@ func (engine *Engine) beginResolved(
 		actual, _ := record.CheckpointLineageSpec()
 		if !found || !checkpointmodel.SameCheckpointLineageSpec(spec, actual) ||
 			!engine.binding.Matches(record, record.RecordID()) ||
-			!content.CompareRevisionMetadata(record.FileRevision(), record.ExactSize(), record.SourceMetadata(), file.Descriptor()).AllowsReuse() {
+			!content.CompareRevisionMetadata(record.SourceEvidence(), file.Descriptor().SourceEvidence()).AllowsReuse() {
 			return transfer.FileStart{}, joinFailures(ctx, checkpointBindingError(ErrCheckpointBinding), closeDestination(destination))
 		}
 		return engine.beginExisting(ctx, sequence, file, destination, record)
 	case checkpointmodel.CheckpointLineageDecisionAbsent:
 		return engine.beginNew(ctx, sequence, file, key, destination)
+	case checkpointmodel.CheckpointLineageDecisionRevisionEvidenceUnavailable:
+		value, _ := fault.NewSource(fault.ScopeFileLocal, fault.SourceUnavailable)
+		return transfer.FileStart{}, joinFailures(ctx, fault.Wrap(value, ErrCheckpointSourceEvidenceUnavailable), closeDestination(destination))
+	case checkpointmodel.CheckpointLineageDecisionReuseStateBlocked:
+		err := newCheckpointFault(fault.ScopeFileLocal, fault.CheckpointUnsafeInstall, ErrCheckpointReuseState)
+		return transfer.FileStart{}, joinFailures(ctx, err, closeDestination(destination))
 	case checkpointmodel.CheckpointLineageDecisionRevisionConflict,
 		checkpointmodel.CheckpointLineageDecisionOwnershipConflict,
 		checkpointmodel.CheckpointLineageDecisionInvalid:

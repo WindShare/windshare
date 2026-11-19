@@ -130,6 +130,8 @@ func TestRuntimeTraceVocabularyProjectsEveryLifecycleMilestone(t *testing.T) {
 		{checkpointmodel.CheckpointLineageDecisionAbsent, FilesystemCheckpointAbsent},
 		{checkpointmodel.CheckpointLineageDecisionExact, FilesystemCheckpointExact},
 		{checkpointmodel.CheckpointLineageDecisionRevisionConflict, FilesystemCheckpointRevisionConflict},
+		{checkpointmodel.CheckpointLineageDecisionReuseStateBlocked, FilesystemCheckpointReuseStateBlocked},
+		{checkpointmodel.CheckpointLineageDecisionRevisionEvidenceUnavailable, FilesystemCheckpointRevisionEvidenceUnavailable},
 		{checkpointmodel.CheckpointLineageDecisionOwnershipConflict, FilesystemCheckpointOwnershipConflict},
 		{checkpointmodel.CheckpointLineageDecisionInvalid, FilesystemCheckpointInvalid},
 		{0, 0},

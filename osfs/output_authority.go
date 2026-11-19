@@ -360,6 +360,8 @@ const (
 	FilesystemCheckpointOwnershipConflict
 	FilesystemCheckpointInvalid
 	FilesystemCheckpointMetadataMatch
+	FilesystemCheckpointReuseStateBlocked
+	FilesystemCheckpointRevisionEvidenceUnavailable
 )
 
 type FilesystemOutputNativeLockScope uint8

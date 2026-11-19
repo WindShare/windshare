@@ -242,16 +242,18 @@ function normalizeDeclaredOutputFailure(
   error: unknown,
   options: TransferFailureClassificationOptions,
 ): NormalizedFileTransferFailure | undefined {
-  // An explicit outer boundary already owns severity; a cause cannot replace it.
-  if (error instanceof BoundaryFaultError) return undefined
   const declared = findDeclaredOutputFailure(error)
   if (declared === undefined) return undefined
-  const fact = declared.classification.fact
+  const { fact, fault } = declared.classification
   const stage = options.stage ?? failureStage(error)
+  // Source evidence can reject admission before there is any writer to fail.
+  const reason = fault.domain === FaultDomain.Source
+    ? declared.classification.materializationFailureReason
+    : materializationFailureReason(error)
   return normalizedFileTransferClassification(Object.freeze({
-    fault: declared.classification.fault,
+    fault,
     fact: fact.stage === stage ? fact : Object.freeze({ ...fact, stage }),
-    materializationFailureReason: options.materializationFailureReason ?? materializationFailureReason(error),
+    materializationFailureReason: options.materializationFailureReason ?? reason,
   }), options, transferFileOutcomeEvidence(error))
 }
 
@@ -264,8 +266,8 @@ export function transferFileOutcomeEvidence(
         error.fileOutcomeEvidence !== undefined) {
       return error.fileOutcomeEvidence
     }
-    const outputEvidence = declaredOutputFailure(error)?.fileOutcomeEvidence
-    if (outputEvidence !== undefined) return outputEvidence
+    const declared = declaredOutputFailure(error)
+    if (declared?.kind === 'fault' && declared.fileOutcomeEvidence !== undefined) return declared.fileOutcomeEvidence
     if (observedReopenedRevisionChange(error) ||
         error instanceof FileRevisionChangedError ||
         (error instanceof RemoteRevisionError &&
@@ -439,7 +441,9 @@ function catalogTransferFault(error: unknown): Fault | undefined {
   return undefined
 }
 
-function findDeclaredOutputFailure(input: unknown): OutputFailure | undefined {
+export function findDeclaredOutputFailure(input: unknown): OutputFailure | undefined {
+  // An explicit outer boundary already owns severity; a cause cannot replace it.
+  if (input instanceof BoundaryFaultError) return undefined
   let error = input
   for (let depth = 0; depth < MAXIMUM_FAILURE_CAUSE_DEPTH; depth += 1) {
     const declared = declaredOutputFailure(error)

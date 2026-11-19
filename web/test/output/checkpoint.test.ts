@@ -222,7 +222,15 @@ describe('checkpoint lineage decision precedence', () => {
   const otherRevision: CheckpointLineageEvidence = {
     ...exact,
     fileRevision: identity(16, 22),
+    phase: FILE_CHECKPOINT_PHASE_PAUSED,
+    commitState: FILE_CHECKPOINT_COMMIT_VERIFIED,
   }
+  const metadata = identity(32, 61)
+  const known = { ...request, sourceMetadata: metadata }
+  const knownOther = { ...otherRevision, sourceMetadata: metadata }
+  const changedMetadata = { ...knownOther, sourceMetadata: identity(32, 62) }
+  const changedSize = { ...otherRevision, exactSize: 65n }
+  const uncommitted = { ...knownOther, commitState: FILE_CHECKPOINT_COMMIT_CANDIDATE }
   const invalidSize: CheckpointLineageEvidence = { ...exact, exactSize: 65n }
   const otherObject: CheckpointLineageEvidence = {
     ...exact,
@@ -232,16 +240,24 @@ describe('checkpoint lineage decision precedence', () => {
     ['absent', request, [], false, 'absent'],
     ['exact', request, [exact], false, 'exact'],
     ['duplicate observation', request, [exact, exact], false, 'exact'],
-    ['revision conflict', request, [otherRevision], false, 'revision-conflict'],
+    ['observed size change with missing evidence', request, [changedSize], false, 'revision-conflict', 'size-changed'],
+    ['observed metadata change', known, [changedMetadata], false, 'revision-conflict', 'metadata-changed'],
+    ['missing current evidence', request, [knownOther], false, 'revision-evidence-unavailable', 'metadata-unavailable'],
+    ['missing retained evidence', known, [otherRevision], false, 'revision-evidence-unavailable', 'metadata-unavailable'],
+    ['verified metadata match', known, [knownOther], false, 'metadata-match'],
+    ['state blocks reuse', known, [uncommitted], false, 'reuse-state-blocked'],
+    ['state blocks deferral', request, [uncommitted], false, 'reuse-state-blocked'],
+    ['ownership blocks deferral', known, [otherRevision], true, 'ownership-conflict'],
     ['invalid size', request, [invalidSize], false, 'invalid'],
     ['invalid precedes revision', request, [otherRevision, invalidSize], false, 'invalid'],
     ['ownership conflict', request, [exact, otherObject], false, 'ownership-conflict'],
     [
       'revision precedes ownership',
       request,
-      [exact, otherObject, otherRevision],
+      [exact, otherObject, changedSize],
       false,
       'revision-conflict',
+      'size-changed',
     ],
     ['cross-lineage ownership', request, [exact], true, 'ownership-conflict'],
     ['cross-lineage flag cannot occupy absence', request, [], true, 'absent'],
@@ -255,9 +271,11 @@ describe('checkpoint lineage decision precedence', () => {
     ],
   ] as const
 
-  for (const [name, target, evidence, crossConflict, expected] of cases) {
+  for (const [name, target, evidence, crossConflict, expected, reason] of cases) {
     it(name, () => {
-      expect(classifyCheckpointLineage(target, evidence, crossConflict)).toBe(expected)
+      const assessment = classifyCheckpointLineage(target, evidence, crossConflict)
+      expect(assessment.kind).toBe(expected)
+      expect('comparison' in assessment ? assessment.comparison.reason : undefined).toBe(reason)
     })
   }
 })

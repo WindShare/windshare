@@ -76,20 +76,31 @@ func (e RevisionComparisonEvidence) AllowsReuse() bool {
 	return e.Comparison == RevisionComparisonMetadataAgreement || e.Comparison == RevisionComparisonByteAgreement
 }
 
-func CompareRevisionMetadata(previousRevision FileRevision, previousSize uint64, previousMetadata SourceMetadata, current FileRevisionDescriptor) RevisionComparisonEvidence {
-	if previousRevision.IsZero() || current.FileRevision().IsZero() {
+// RevisionSourceEvidence is the part of an authenticated revision retained by output checkpoints.
+type RevisionSourceEvidence struct {
+	FileRevision   FileRevision
+	ExactSize      uint64
+	SourceMetadata SourceMetadata
+}
+
+func (descriptor FileRevisionDescriptor) SourceEvidence() RevisionSourceEvidence {
+	return RevisionSourceEvidence{descriptor.FileRevision(), descriptor.ExactSize(), descriptor.SourceMetadata()}
+}
+
+func CompareRevisionMetadata(previous, current RevisionSourceEvidence) RevisionComparisonEvidence {
+	if previous.FileRevision.IsZero() || current.FileRevision.IsZero() {
 		return RevisionComparisonEvidence{RevisionComparisonUnavailable, ComparisonMetadataUnavailable}
 	}
-	if previousSize != current.ExactSize() {
+	if previous.ExactSize != current.ExactSize {
 		return RevisionComparisonEvidence{RevisionComparisonMismatch, ComparisonSizeChanged}
 	}
-	if !previousMetadata.IsZero() && !current.SourceMetadata().IsZero() && previousMetadata != current.SourceMetadata() {
+	if !previous.SourceMetadata.IsZero() && !current.SourceMetadata.IsZero() && previous.SourceMetadata != current.SourceMetadata {
 		return RevisionComparisonEvidence{RevisionComparisonMismatch, ComparisonMetadataChanged}
 	}
-	if previousRevision == current.FileRevision() {
+	if previous.FileRevision == current.FileRevision {
 		return RevisionComparisonEvidence{RevisionComparisonMetadataAgreement, ComparisonSameRevision}
 	}
-	if previousMetadata.IsZero() || current.SourceMetadata().IsZero() {
+	if previous.SourceMetadata.IsZero() || current.SourceMetadata.IsZero() {
 		return RevisionComparisonEvidence{RevisionComparisonUnavailable, ComparisonMetadataUnavailable}
 	}
 	return RevisionComparisonEvidence{RevisionComparisonMetadataAgreement, ComparisonMetadataAgreement}
@@ -103,7 +114,7 @@ func CompareRevisions(previous, current FileRevisionDescriptor) RevisionComparis
 	if previous.ModifiedTime().Present() && current.ModifiedTime().Present() && previous.ModifiedTime() != current.ModifiedTime() {
 		return RevisionComparisonEvidence{RevisionComparisonMismatch, ComparisonMetadataChanged}
 	}
-	return CompareRevisionMetadata(previous.FileRevision(), previous.ExactSize(), previous.SourceMetadata(), current)
+	return CompareRevisionMetadata(previous.SourceEvidence(), current.SourceEvidence())
 }
 
 type revisionComparisonError struct {

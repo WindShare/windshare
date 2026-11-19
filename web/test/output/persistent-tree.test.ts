@@ -15,7 +15,9 @@ import type {
   OpenedFileRevision,
   PersistentTreeTraceEvent,
 } from '../../src/output/persistent-tree/contracts'
-import { TargetOwnershipUnknownError } from '../../src/output/persistent-tree/errors'
+import {
+  CheckpointLineageDecisionError, CheckpointSourceEvidenceUnavailableError, TargetOwnershipUnknownError,
+} from '../../src/output/persistent-tree/errors'
 import { PersistentTreeOutputSession } from '../../src/output/persistent-tree/session'
 import { identity } from './planning/fixture'
 import {
@@ -433,28 +435,37 @@ describe('persistent initial claim inspection coordination', () => {
 
 describe('persistent DirectoryTree recovery authority', () => {
 
-  it('does not create a replacement when the opened revision changes', async () => {
-    const fixture = await materializationFixture()
+  it.each([
+    [undefined, CheckpointSourceEvidenceUnavailableError, 'metadata-unavailable'],
+    [identity(62, 32), CheckpointLineageDecisionError, 'metadata-changed'],
+  ] as const)('retains the paused checkpoint when reopened with token %s', async (sourceMetadata, errorType, reason) => {
+    const traces: OutputTraceEvent[] = []
+    const fixture = await materializationFixture({
+      backend: 'origin_private',
+      trace: { current: event => { traces.push(event) } },
+    })
+    const path = ['report.bin']
     const first = await fixture.session.beginFile({
-      materializationRelativePath: ['report.bin'],
-      openRevision: async () => revision(1n),
+      materializationRelativePath: path,
+      openRevision: async () => ({ ...revision(2n), sourceMetadata: identity(61, 32) }),
     })
     await first.writeRange(0n, Uint8Array.of(9))
-    await first.commit()
-    await first.close()
-
+    await first.pause()
+    const previous = await fixture.checkpoints.scanCommitted({ direction: 'ascending' })
     await expect(fixture.session.beginFile({
-      materializationRelativePath: ['report.bin'],
+      materializationRelativePath: path,
       openRevision: async () => ({
-        fileId: FILE_ID,
-        fileRevision: NEXT_REVISION,
-        exactSize: 1n,
+        fileId: FILE_ID, fileRevision: NEXT_REVISION, exactSize: 2n,
+        ...(sourceMetadata === undefined ? {} : { sourceMetadata }),
       }),
-    })).rejects.toMatchObject({
-      name: 'CheckpointLineageDecisionError',
-      decision: 'revision-conflict',
-    })
+    })).rejects.toBeInstanceOf(errorType)
+    expect(await fixture.checkpoints.scanCommitted({ direction: 'ascending' })).toEqual(previous)
     expect(fixture.events.filter((event) => event === 'create:report.bin')).toHaveLength(1)
+    expect(traces).toContainEqual(expect.objectContaining({
+      eventName: 'checkpoint',
+      payload: expect.objectContaining({ transition: 'source_comparison', reason, retained_bytes: '1', reused_bytes: '0' }),
+    }))
+    await fixture.session.close()
   })
 
   it('blocks an invalid same-revision size without creating another object', async () => {

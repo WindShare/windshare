@@ -10,6 +10,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
@@ -139,10 +140,14 @@ func newExecutionFixture(t *testing.T, exactSize uint64) executionFixture {
 	}
 }
 
+func resolveTestCheckpoint(decision checkpointmodel.CheckpointLineageDecision, record checkpointmodel.Record) (CheckpointResolution, error) {
+	return ResolveCheckpoint(checkpointmodel.CheckpointLineageAssessment{Decision: decision}, record)
+}
+
 type memoryCheckpointRepository struct {
 	record        checkpointmodel.Record
 	present       bool
-	decision      checkpointmodel.CheckpointLineageDecision
+	assessment    checkpointmodel.CheckpointLineageAssessment
 	stores        []checkpointmodel.Record
 	lookupErr     error
 	storeErr      error
@@ -156,13 +161,13 @@ func (repository *memoryCheckpointRepository) Lookup(
 	if repository.lookupErr != nil {
 		return CheckpointResolution{}, repository.lookupErr
 	}
-	if repository.decision.Valid() && repository.decision != checkpointmodel.CheckpointLineageDecisionExact {
-		return ResolveCheckpoint(repository.decision, checkpointmodel.Record{})
+	if repository.assessment.Valid() && repository.assessment.Decision != checkpointmodel.CheckpointLineageDecisionExact {
+		return ResolveCheckpoint(repository.assessment, checkpointmodel.Record{})
 	}
 	if !repository.present {
-		return ResolveCheckpoint(checkpointmodel.CheckpointLineageDecisionAbsent, checkpointmodel.Record{})
+		return resolveTestCheckpoint(checkpointmodel.CheckpointLineageDecisionAbsent, checkpointmodel.Record{})
 	}
-	return ResolveCheckpoint(checkpointmodel.CheckpointLineageDecisionExact, repository.record)
+	return resolveTestCheckpoint(checkpointmodel.CheckpointLineageDecisionExact, repository.record)
 }
 
 func (repository *memoryCheckpointRepository) InstallInitial(
@@ -177,23 +182,23 @@ func (repository *memoryCheckpointRepository) InstallInitial(
 	}
 	if repository.storeErr != nil {
 		if repository.present {
-			resolution, _ := ResolveCheckpoint(checkpointmodel.CheckpointLineageDecisionExact, repository.record)
+			resolution, _ := resolveTestCheckpoint(checkpointmodel.CheckpointLineageDecisionExact, repository.record)
 			observed, _ := ObserveInitialCheckpoint(resolution, false)
 			return observed, repository.storeErr
 		}
 		return InitialCheckpointObservation{}, repository.storeErr
 	}
-	if repository.decision.Valid() && repository.decision != checkpointmodel.CheckpointLineageDecisionAbsent {
-		resolution, _ := ResolveCheckpoint(repository.decision, checkpointmodel.Record{})
+	if repository.assessment.Valid() && repository.assessment.Decision != checkpointmodel.CheckpointLineageDecisionAbsent {
+		resolution, _ := ResolveCheckpoint(repository.assessment, checkpointmodel.Record{})
 		return ObserveInitialCheckpoint(resolution, false)
 	}
 	if repository.present {
-		resolution, _ := ResolveCheckpoint(checkpointmodel.CheckpointLineageDecisionExact, repository.record)
+		resolution, _ := resolveTestCheckpoint(checkpointmodel.CheckpointLineageDecisionExact, repository.record)
 		return ObserveInitialCheckpoint(resolution, false)
 	}
 	repository.record, repository.present = next, true
 	repository.stores = append(repository.stores, next)
-	resolution, err := ResolveCheckpoint(checkpointmodel.CheckpointLineageDecisionExact, next)
+	resolution, err := resolveTestCheckpoint(checkpointmodel.CheckpointLineageDecisionExact, next)
 	if err != nil {
 		return InitialCheckpointObservation{}, err
 	}
@@ -722,7 +727,13 @@ func TestCheckpointConflictsBlockBeforeDestinationOrObjectObservation(t *testing
 		"invalid":   {checkpointmodel.CheckpointLineageDecisionInvalid, transfer.ItemBlockCheckpointInvalid},
 	} {
 		t.Run(name, func(t *testing.T) {
-			repository := &memoryCheckpointRepository{decision: test.decision}
+			assessment := checkpointmodel.CheckpointLineageAssessment{Decision: test.decision}
+			if test.decision == checkpointmodel.CheckpointLineageDecisionRevisionConflict {
+				assessment.Comparison = content.RevisionComparisonEvidence{
+					Comparison: content.RevisionComparisonMismatch, Reason: content.ComparisonMetadataChanged,
+				}
+			}
+			repository := &memoryCheckpointRepository{assessment: assessment}
 			platform := newMemoryPlatform()
 			destination := &memoryDestination{target: fixture.file.Target(), final: FinalAbsent}
 			var traces []TraceEvent
@@ -743,6 +754,31 @@ func TestCheckpointConflictsBlockBeforeDestinationOrObjectObservation(t *testing
 				t.Fatalf("conflict trace = %+v", traces)
 			}
 		})
+	}
+}
+
+func TestCheckpointEvidenceUnavailableStopsOnlyTheFileBeforeOpeningAnObject(t *testing.T) {
+	fixture := newExecutionFixture(t, 4)
+	repository := &memoryCheckpointRepository{assessment: checkpointmodel.CheckpointLineageAssessment{
+		Decision: checkpointmodel.CheckpointLineageDecisionRevisionEvidenceUnavailable,
+		Comparison: content.RevisionComparisonEvidence{
+			Comparison: content.RevisionComparisonUnavailable, Reason: content.ComparisonMetadataUnavailable,
+		},
+	}}
+	platform := newMemoryPlatform()
+	destination := &memoryDestination{target: fixture.file.Target(), final: FinalAbsent}
+	engine := newFixtureEngine(t, fixture, repository, platform, destination, nil)
+	start, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination)
+	wantFault, _ := fault.NewSource(fault.ScopeFileLocal, fault.SourceUnavailable)
+	gotFault, _ := fault.NormalizeBoundaryError(err).Fault()
+	if !errors.Is(err, ErrCheckpointSourceEvidenceUnavailable) || gotFault != wantFault {
+		t.Fatalf("fault = %v, %v; want %v", gotFault, err, wantFault)
+	}
+	if _, immediate := start.ImmediateSettlement(); immediate {
+		t.Fatal("unavailable evidence was settled as a checkpoint conflict")
+	}
+	if platform.observeCalls != 0 || platform.createCalls != 0 || platform.openCalls != 0 || len(repository.stores) != 0 {
+		t.Fatal("unavailable evidence changed or opened the retained object")
 	}
 }
 

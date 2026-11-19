@@ -204,9 +204,24 @@ func TestClassifyCheckpointLineageFreezesMixedConflictPrecedence(t *testing.T) {
 	revisionB, _ := content.FileRevisionFromBytes(bytes.Repeat([]byte{0x62}, content.IdentityBytes))
 	objectA, _ := ObjectIDFromBytes(bytes.Repeat([]byte{0x71}, sha256.Size))
 	objectB, _ := ObjectIDFromBytes(bytes.Repeat([]byte{0x72}, sha256.Size))
-	request := CheckpointLineageRequest{FileRevision: revisionA, ExactSize: 64}
+	metadataA, _ := content.SourceMetadataFromBytes(bytes.Repeat([]byte{0x51}, sha256.Size))
+	metadataB, _ := content.SourceMetadataFromBytes(bytes.Repeat([]byte{0x52}, sha256.Size))
+	request := CheckpointLineageRequest{FileRevision: revisionA, ExactSize: 64, SourceMetadata: metadataA}
 	exact := CheckpointLineageEvidence{FileRevision: revisionA, ExactSize: 64, OwnedObjectID: objectA}
-	otherRevision := CheckpointLineageEvidence{FileRevision: revisionB, ExactSize: 64, OwnedObjectID: objectA}
+	otherRevision := CheckpointLineageEvidence{
+		FileRevision: revisionB, ExactSize: 64, OwnedObjectID: objectA,
+		SourceMetadata: metadataB, Phase: PhasePaused, CommitState: CommitVerified,
+	}
+	missingCurrent := request
+	missingCurrent.SourceMetadata = content.SourceMetadata{}
+	missingRetained := otherRevision
+	missingRetained.SourceMetadata = content.SourceMetadata{}
+	changedSize := missingRetained
+	changedSize.ExactSize++
+	matching := otherRevision
+	matching.SourceMetadata = metadataA
+	stateBlocked := matching
+	stateBlocked.CommitState = CommitCandidate
 	invalidSize := CheckpointLineageEvidence{FileRevision: revisionA, ExactSize: 65, OwnedObjectID: objectA}
 	otherObject := CheckpointLineageEvidence{FileRevision: revisionA, ExactSize: 64, OwnedObjectID: objectB}
 
@@ -216,29 +231,38 @@ func TestClassifyCheckpointLineageFreezesMixedConflictPrecedence(t *testing.T) {
 		evidence      []CheckpointLineageEvidence
 		crossConflict bool
 		want          CheckpointLineageDecision
+		reason        content.RevisionComparisonReason
 	}{
-		{"absent", request, nil, false, CheckpointLineageDecisionAbsent},
-		{"exact", request, []CheckpointLineageEvidence{exact}, false, CheckpointLineageDecisionExact},
-		{"duplicate physical observation", request, []CheckpointLineageEvidence{exact, exact}, false, CheckpointLineageDecisionExact},
-		{"revision conflict", request, []CheckpointLineageEvidence{otherRevision}, false, CheckpointLineageDecisionRevisionConflict},
-		{"invalid size", request, []CheckpointLineageEvidence{invalidSize}, false, CheckpointLineageDecisionInvalid},
-		{"invalid precedes revision", request, []CheckpointLineageEvidence{otherRevision, invalidSize}, false, CheckpointLineageDecisionInvalid},
-		{"ownership conflict", request, []CheckpointLineageEvidence{exact, otherObject}, false, CheckpointLineageDecisionOwnershipConflict},
-		{"revision precedes ownership", request, []CheckpointLineageEvidence{exact, otherObject, otherRevision}, false, CheckpointLineageDecisionRevisionConflict},
-		{"cross-lineage ownership", request, []CheckpointLineageEvidence{exact}, true, CheckpointLineageDecisionOwnershipConflict},
-		{"cross-lineage flag cannot occupy an absent slot", request, nil, true, CheckpointLineageDecisionAbsent},
-		{"invalid request", CheckpointLineageRequest{}, []CheckpointLineageEvidence{exact}, false, CheckpointLineageDecisionInvalid},
-		{"invalid evidence", request, []CheckpointLineageEvidence{{FileRevision: revisionA, ExactSize: 64}}, false, CheckpointLineageDecisionInvalid},
+		{"absent", request, nil, false, CheckpointLineageDecisionAbsent, ""},
+		{"exact despite missing token", request, []CheckpointLineageEvidence{exact}, false, CheckpointLineageDecisionExact, ""},
+		{"duplicate physical observation", request, []CheckpointLineageEvidence{exact, exact}, false, CheckpointLineageDecisionExact, ""},
+		{"metadata changed", request, []CheckpointLineageEvidence{otherRevision}, false, CheckpointLineageDecisionRevisionConflict, content.ComparisonMetadataChanged},
+		{"size changed with missing tokens", missingCurrent, []CheckpointLineageEvidence{changedSize}, false, CheckpointLineageDecisionRevisionConflict, content.ComparisonSizeChanged},
+		{"missing current evidence", missingCurrent, []CheckpointLineageEvidence{otherRevision}, false, CheckpointLineageDecisionRevisionEvidenceUnavailable, content.ComparisonMetadataUnavailable},
+		{"missing retained evidence", request, []CheckpointLineageEvidence{missingRetained}, false, CheckpointLineageDecisionRevisionEvidenceUnavailable, content.ComparisonMetadataUnavailable},
+		{"metadata match", request, []CheckpointLineageEvidence{matching}, false, CheckpointLineageDecisionMetadataMatch, ""},
+		{"state blocks reuse", request, []CheckpointLineageEvidence{stateBlocked}, false, CheckpointLineageDecisionReuseStateBlocked, ""},
+		{"state blocks deferral", missingCurrent, []CheckpointLineageEvidence{stateBlocked}, false, CheckpointLineageDecisionReuseStateBlocked, ""},
+		{"invalid size", request, []CheckpointLineageEvidence{invalidSize}, false, CheckpointLineageDecisionInvalid, ""},
+		{"invalid precedes revision", request, []CheckpointLineageEvidence{otherRevision, invalidSize}, false, CheckpointLineageDecisionInvalid, ""},
+		{"ownership conflict", request, []CheckpointLineageEvidence{exact, otherObject}, false, CheckpointLineageDecisionOwnershipConflict, ""},
+		{"revision precedes ownership", request, []CheckpointLineageEvidence{exact, otherObject, otherRevision}, false, CheckpointLineageDecisionRevisionConflict, content.ComparisonMetadataChanged},
+		{"ownership blocks deferral", request, []CheckpointLineageEvidence{missingRetained}, true, CheckpointLineageDecisionOwnershipConflict, ""},
+		{"cross-lineage ownership", request, []CheckpointLineageEvidence{exact}, true, CheckpointLineageDecisionOwnershipConflict, ""},
+		{"cross-lineage flag cannot occupy an absent slot", request, nil, true, CheckpointLineageDecisionAbsent, ""},
+		{"invalid request", CheckpointLineageRequest{}, []CheckpointLineageEvidence{exact}, false, CheckpointLineageDecisionInvalid, ""},
+		{"invalid evidence", request, []CheckpointLineageEvidence{{FileRevision: revisionA, ExactSize: 64}}, false, CheckpointLineageDecisionInvalid, ""},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := ClassifyCheckpointLineage(test.request, test.evidence, test.crossConflict); got != test.want {
-				t.Fatalf("decision = %s, want %s", got, test.want)
+			got := ClassifyCheckpointLineage(test.request, test.evidence, test.crossConflict)
+			if !got.Valid() || got.Decision != test.want || got.Comparison.Reason != test.reason {
+				t.Fatalf("assessment = %+v, want %s %s", got, test.want, test.reason)
 			}
 		})
 	}
 
-	for decision := CheckpointLineageDecisionAbsent; decision <= CheckpointLineageDecisionInvalid; decision++ {
+	for decision := CheckpointLineageDecisionAbsent; decision <= CheckpointLineageDecisionRevisionEvidenceUnavailable; decision++ {
 		if !decision.Valid() || decision.String() == "" {
 			t.Fatalf("decision %d is not a closed value", decision)
 		}

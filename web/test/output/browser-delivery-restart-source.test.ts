@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { advanceBrowserDeliveryReceiving, authorizeBrowserDeliveryRestart } from '../../src/output/browser-delivery/lifecycle'
 import { newFileCheckpointV2 } from '../../src/output/persistence/checkpoint'
+import { CheckpointSourceEvidenceUnavailableError, SourceRevisionChangedError } from '../../src/output/persistent-tree/errors'
 import { deliveryEngineFixture } from './browser-delivery-engine-fixture'
 import { deliveryIdentity } from './browser-delivery-fixture'
 
@@ -82,13 +83,16 @@ describe('direct delivery restart across source reopen', () => {
     },
   )
 
-  it.each([undefined, deliveryIdentity(90)])('keeps the saved prefix when source evidence is %s', async sourceMetadata => {
+  it.each([
+    [undefined, CheckpointSourceEvidenceUnavailableError],
+    [deliveryIdentity(90), SourceRevisionChangedError],
+  ] as const)('keeps the saved prefix when source evidence is %s', async (sourceMetadata, errorType) => {
     const { f, previous, current, request, restart } = await pausedDirectFile()
     const session = await f.reopen()
     const before = f.targetCheckpoints.committed(current.fileId)
     const source = { fileId: current.fileId, fileRevision: current.fileRevision, exactSize: current.exactSize,
       ...(sourceMetadata === undefined ? {} : { sourceMetadata }) }
-    await expect(session.beginFile({ ...restart, openRevision: async () => source })).rejects.toThrow(/applicability/)
+    await expect(session.beginFile({ ...restart, openRevision: async () => source })).rejects.toBeInstanceOf(errorType)
     expect(f.targetCheckpoints.committed(current.fileId)).toEqual(before)
     expect(f.repository.files.get(current.fileId)).toMatchObject({ source: previous, state: { kind: 'receiving' } })
     expect(f.targetTree.file(request.materializationRelativePath).snapshot()).toEqual(Uint8Array.of(8))

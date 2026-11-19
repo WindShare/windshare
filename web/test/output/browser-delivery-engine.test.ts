@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { acquireArtifactReader } from '../../src/output/origin-private/export-readers'
+import { CheckpointSourceEvidenceUnavailableError, SourceRevisionChangedError } from '../../src/output/persistent-tree/errors'
 import { deliveryEngineFixture } from './browser-delivery-engine-fixture'
 import { deliveryIdentity } from './browser-delivery-fixture'
 import { deferred } from './persistent-tree-file-fixture'
@@ -122,17 +123,37 @@ describe('browser folder per-file staged delivery', () => {
     await recovered.close()
   })
 
-  it('does not complete incomplete staging offline and preserves revision checks when receiving resumes', async () => {
+  it('distinguishes missing and changed source evidence while preserving the staged checkpoint', async () => {
     const f = await deliveryEngineFixture()
     const request = f.request()
-    const transaction = await f.session.beginFile(request)
+    const source = await request.openRevision()
+    const sourceMetadata = deliveryIdentity(41, 32)
+    const transaction = await f.session.beginFile({
+      ...request, openRevision: async () => ({ ...source, sourceMetadata }),
+    })
     await transaction.writeRange(0n, Uint8Array.of(1, 2))
     await transaction.pause()
     await f.session.close()
     const recovered = await f.reopen()
     await recovered.saveStagedFiles()
     expect(recovered.summary).toMatchObject({ receivingFiles: 1, recoverableBytes: 2n, targetSavedBytes: 0n })
-    await expect(recovered.beginFile({ ...request, openRevision: async () => ({ ...await request.openRevision(), fileRevision: deliveryIdentity(40, 16) }) })).rejects.toThrow(/metadata-unavailable/)
+
+    const opened = { ...source, fileRevision: deliveryIdentity(40, 16) }
+    const before = f.repository.files.get(source.fileId)
+    await expect(recovered.beginFile({ ...request, openRevision: async () => opened }))
+      .rejects.toBeInstanceOf(CheckpointSourceEvidenceUnavailableError)
+    await expect(recovered.beginFile({
+      ...request, openRevision: async () => ({ ...opened, sourceMetadata: deliveryIdentity(42, 32) }),
+    })).rejects.toBeInstanceOf(SourceRevisionChangedError)
+    expect(f.repository.files.get(source.fileId)).toEqual(before)
+
+    const resumed = await recovered.beginFile({
+      ...request, openRevision: async () => ({ ...opened, sourceMetadata }),
+    })
+    expect(resumed.initialDurableRanges).toEqual([{ start: 0n, end: 2n }])
+    await resumed.writeRange(2n, Uint8Array.of(3, 4))
+    await resumed.commit()
+    expect(f.targetTree.file(['nested', 'file-11.bin']).snapshot()).toEqual(Uint8Array.of(1, 2, 3, 4))
     await recovered.close()
   })
 

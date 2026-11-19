@@ -39,7 +39,7 @@ func (value FilesystemOutputRuntimeDecision) DiagnosticName() string {
 	return names[value]
 }
 func (value FilesystemCheckpointDecision) DiagnosticName() string {
-	names := [...]string{"", "absent", "exact", "revision_conflict", "ownership_conflict", "invalid", "metadata_match"}
+	names := [...]string{"", "absent", "exact", "revision_conflict", "ownership_conflict", "invalid", "metadata_match", "reuse_state_blocked", "revision_evidence_unavailable"}
 	if int(value) >= len(names) {
 		return "unknown_" + strconv.FormatUint(uint64(value), 10)
 	}

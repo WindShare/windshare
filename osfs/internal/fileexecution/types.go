@@ -84,40 +84,36 @@ type CheckpointObservation struct {
 // accepted record only for exact/reusable progress. Conflicts retain candidate
 // evidence without granting receiving authority.
 type CheckpointResolution struct {
-	decision checkpointmodel.CheckpointLineageDecision
-	record   checkpointmodel.Record
+	assessment checkpointmodel.CheckpointLineageAssessment
+	record     checkpointmodel.Record
 }
 
 func ResolveCheckpoint(
-	decision checkpointmodel.CheckpointLineageDecision,
+	assessment checkpointmodel.CheckpointLineageAssessment,
 	record checkpointmodel.Record,
 ) (CheckpointResolution, error) {
-	exact := decision == checkpointmodel.CheckpointLineageDecisionExact || decision == checkpointmodel.CheckpointLineageDecisionMetadataMatch
-	if !decision.Valid() || (decision != checkpointmodel.CheckpointLineageDecisionRevisionConflict && exact != record.Valid()) {
+	resolution := CheckpointResolution{assessment: assessment, record: record}
+	if !resolution.valid() {
 		return CheckpointResolution{}, ErrInvalidObservation
 	}
-	return CheckpointResolution{decision: decision, record: record}, nil
+	return resolution, nil
 }
 
 func (resolution CheckpointResolution) Decision() checkpointmodel.CheckpointLineageDecision {
-	return resolution.decision
+	return resolution.assessment.Decision
 }
 
 func (resolution CheckpointResolution) Record() (checkpointmodel.Record, bool) {
-	return resolution.record, (resolution.decision == checkpointmodel.CheckpointLineageDecisionExact || resolution.decision == checkpointmodel.CheckpointLineageDecisionMetadataMatch) &&
-		resolution.record.Valid()
+	return resolution.record, resolution.Decision().SelectsRecord() && resolution.record.Valid()
 }
 
 func (resolution CheckpointResolution) Candidate() (checkpointmodel.Record, bool) {
-	return resolution.record, resolution.decision == checkpointmodel.CheckpointLineageDecisionRevisionConflict && resolution.record.Valid()
+	return resolution.record, resolution.assessment.RetainsSourceEvidence() && resolution.record.Valid()
 }
 
 func (resolution CheckpointResolution) valid() bool {
-	if resolution.decision == checkpointmodel.CheckpointLineageDecisionRevisionConflict {
-		return true
-	}
-	return resolution.decision.Valid() &&
-		(resolution.decision == checkpointmodel.CheckpointLineageDecisionExact || resolution.decision == checkpointmodel.CheckpointLineageDecisionMetadataMatch) == resolution.record.Valid()
+	return resolution.assessment.Valid() && (resolution.assessment.RetainsSourceEvidence() ||
+		resolution.Decision().SelectsRecord() == resolution.record.Valid())
 }
 
 type InitialCheckpointObservation struct {
@@ -129,7 +125,7 @@ func ObserveInitialCheckpoint(
 	resolution CheckpointResolution,
 	installed bool,
 ) (InitialCheckpointObservation, error) {
-	if !resolution.valid() || installed && resolution.decision != checkpointmodel.CheckpointLineageDecisionExact {
+	if !resolution.valid() || installed && resolution.Decision() != checkpointmodel.CheckpointLineageDecisionExact {
 		return InitialCheckpointObservation{}, ErrInvalidObservation
 	}
 	return InitialCheckpointObservation{resolution: resolution, installed: installed}, nil
@@ -143,7 +139,7 @@ func (observation InitialCheckpointObservation) Installed() bool { return observ
 
 func (observation InitialCheckpointObservation) valid() bool {
 	return observation.resolution.valid() &&
-		(!observation.installed || observation.resolution.decision == checkpointmodel.CheckpointLineageDecisionExact)
+		(!observation.installed || observation.resolution.Decision() == checkpointmodel.CheckpointLineageDecisionExact)
 }
 
 func MissingCheckpoint() CheckpointObservation { return CheckpointObservation{} }

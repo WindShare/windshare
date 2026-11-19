@@ -1,3 +1,10 @@
+export const CHECKPOINT_TRACE_DECISIONS = [
+  'absent', 'installed', 'exact', 'metadata_match', 'revision_conflict', 'reuse_state_blocked',
+  'revision_evidence_unavailable', 'ownership_conflict', 'invalid',
+] as const
+
+export type CheckpointTraceDecision = typeof CHECKPOINT_TRACE_DECISIONS[number]
+
 export type CheckpointPayloadV1 =
   | Readonly<{
       backend: 'file_system_access' | 'origin_private'
@@ -16,14 +23,7 @@ export type CheckpointPayloadV1 =
   | Readonly<{
       backend: 'file_system_access' | 'origin_private'
       transition: 'restored' | 'persisted' | 'quarantined' | 'failed'
-      decision?:
-        | 'absent'
-        | 'installed'
-        | 'exact'
-        | 'metadata_match'
-        | 'revision_conflict'
-        | 'ownership_conflict'
-        | 'invalid'
+      decision?: CheckpointTraceDecision
     }>
   | Readonly<{
       backend: 'file_system_access'

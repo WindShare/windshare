@@ -1,7 +1,10 @@
 import { compareRevisionMetadata } from '../../content/revision-comparison'
+import type { OutputDiagnosticsPorts } from '../diagnostics'
+import { traceSourceComparison } from '../diagnostics/recovery'
+import { CheckpointLineageDecisionError, CheckpointSourceEvidenceUnavailableError, SourceRevisionChangedError } from '../persistent-tree/errors'
 import { fileCheckpointReplica } from '../persistence/content'
 import type { PersistentFileRequest, PersistentFileTransactionPort, PersistentMaterializationPort } from '../persistent-tree/contracts'
-import { fileCheckpointIsComplete } from '../persistence/checkpoint'
+import { fileCheckpointIsComplete, type FileCheckpointV2 } from '../persistence/checkpoint'
 import type { BrowserDeliveryRecordV1, BrowserDeliverySource } from './model'
 import { browserDeliveryStagingPath, createBrowserDeliveryRecord, validateBrowserDeliveryRecord } from './records'
 import { BrowserDeliveryLiveProjection } from './retained'
@@ -10,6 +13,7 @@ import type { BrowserDeliveryPlacementDecision, BrowserDeliveryReservation, Brow
 import { BrowserDeliveryEngine, checkpointBytes, type BrowserDeliveryEngineOptions } from './engine'
 
 export interface BrowserDeliveryMaterializationOptions extends Omit<BrowserDeliveryEngineOptions, 'changed' | 'reservation' | 'released' | 'currentRecord'> {
+  readonly diagnostics?: OutputDiagnosticsPorts
   readonly choosePlacement: (source: BrowserDeliverySource) => Promise<BrowserDeliveryPlacementDecision>
   readonly reserveStage: (source: BrowserDeliverySource, retained?: BrowserDeliveryRecordV1) => Promise<BrowserDeliveryReservation | undefined>
   readonly observeReceipt?: (newReceivedBytes: bigint) => void
@@ -105,18 +109,33 @@ export class BrowserDeliveryMaterialization implements PersistentMaterialization
     if (record === undefined) return this.#createRecord(source, materializationRelativePath)
     const expected = createBrowserDeliveryRecord({ policy: this.#options.policy, source, materializationRelativePath,
       placement: record.placement, placementReason: record.placementReason })
-    const comparison = compareRevisionMetadata(record.source, expected.source)
     const reopened = expected.source.fileRevision !== record.source.fileRevision
-    if (comparison.kind !== 'metadata-agreement' ||
-        (reopened && (record.state.kind !== 'receiving' || record.localMutation !== undefined)) ||
+    if ((reopened && record.localMutation !== undefined) ||
         JSON.stringify(expected.source.canonicalPath) !== JSON.stringify(record.source.canonicalPath) ||
         JSON.stringify(expected.materializationRelativePath) !== JSON.stringify(record.materializationRelativePath)) {
-      throw new DOMException('Retained file lacks current-source applicability: ' + comparison.reason, 'InvalidStateError')
+      throw new DOMException('Retained file has a conflicting coordinate or unfinished local mutation', 'InvalidStateError')
     }
     if (record.state.kind === 'discarding' || record.state.kind === 'discarded') {
       throw new DOMException('Discarded staging cannot be received again by the retained operation', 'InvalidStateError')
     }
-    return record
+    const comparison = compareRevisionMetadata(record.source, expected.source)
+    if (!reopened && comparison.kind === 'observed-change') throw new CheckpointLineageDecisionError('invalid')
+    if (reopened && comparison.kind !== 'observed-change' && record.state.kind !== 'receiving') {
+      throw new CheckpointLineageDecisionError('reuse-state-blocked')
+    }
+    if (comparison.kind === 'metadata-agreement') return record
+
+    const { state } = record
+    let checkpoint: FileCheckpointV2 | undefined
+    if ('target' in state) checkpoint = state.target
+    else if ('stage' in state) checkpoint = state.stage
+    else checkpoint = state.checkpoint
+    traceSourceComparison(this.#options.diagnostics, {
+      operationId: record.operationId, fileId: record.fileId, fileRevision: record.source.fileRevision,
+      verifiedRanges: checkpoint?.verifiedRanges ?? [],
+    }, expected.source.fileRevision, comparison, 'retained')
+    if (comparison.kind === 'unavailable') throw new CheckpointSourceEvidenceUnavailableError()
+    throw new SourceRevisionChangedError()
   }
 
   async #createRecord(source: BrowserDeliverySource, materializationRelativePath: readonly string[]): Promise<BrowserDeliveryRecordV1> {

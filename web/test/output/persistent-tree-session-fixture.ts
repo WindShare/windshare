@@ -3,7 +3,6 @@ import {
   FILE_CHECKPOINT_COMMIT_CANDIDATE,
   FILE_CHECKPOINT_COMMIT_VERIFIED,
   FILE_CHECKPOINT_MATERIALIZER_FSA_TREE,
-  classifyCheckpointLineage,
   deriveCheckpointLineageID,
   fileCheckpointIsComplete,
   sameCheckpointLineageSpec,
@@ -14,6 +13,7 @@ import {
 import {
   checkpointMatchesNamespace,
   finalFileCheckpointProof,
+  resolveCheckpointLineage,
   type CheckpointLineageDecision,
   type CheckpointLineageLookupRequest,
   type FileCheckpointJournal,
@@ -285,27 +285,7 @@ export class MemoryCheckpointRepository implements FileCheckpointJournal {
     }
     const records = [...physical.values()].filter(record =>
       sameCheckpointLineageSpec(record, spec))
-    const decision = classifyCheckpointLineage(
-      request,
-      records.map(record => ({
-        fileRevision: record.fileRevision,
-        exactSize: record.exactSize,
-        ownedObjectId: record.ownedObjectId,
-        ...(record.sourceMetadata === undefined ? {} : { sourceMetadata: record.sourceMetadata }),
-        phase: record.phase, commitState: record.commitState,
-      })),
-    )
-    if (decision === 'absent') {
-      return Object.freeze({ kind: 'absent', lineageId: request.lineageId })
-    }
-    if (decision === 'exact' || decision === 'metadata-match') {
-      return Object.freeze({ kind: decision, lineageId: request.lineageId, record: records[0]! })
-    }
-    return Object.freeze({
-      kind: decision,
-      lineageId: request.lineageId,
-      records: Object.freeze(records),
-    })
+    return resolveCheckpointLineage(request, records)
   }
 
   async stageCheckpointUpdate(

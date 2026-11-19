@@ -20,7 +20,7 @@ import {
   createFailureIdentity,
   createReceivedProtocolError,
 } from '../../src/diagnostics/incident'
-import { CheckpointLineageDecisionError } from '../../src/output/persistent-tree/errors'
+import { CheckpointLineageDecisionError, CheckpointSourceEvidenceUnavailableError } from '../../src/output/persistent-tree/errors'
 import type { TransferProgress, TransferTraceEvent } from '../../src/transfer/job'
 import type {
   ProtocolSessionReplacementWaiter,
@@ -75,6 +75,42 @@ class DeferredTransferLane implements BlockLane {
     }
   }
 }
+
+it('finishes siblings before requesting a resumable cut for unavailable checkpoint evidence', async () => {
+  const root = identity(2)
+  const blocked = fileEntry(identity(11), 'blocked.bin', 2n)
+  const sibling = fileEntry(identity(12), 'sibling.bin', 2n)
+  const selection = new SelectionPolicy(true)
+  const catalog = catalogFixture([{ id: root, entries: [blocked, sibling] }])
+  const readers = readerFixture([blocked, sibling])
+  const output = testOutput([], {
+    durability: 'ProcessRestart',
+    failBeginFor: blocked.idText,
+    beginFailure: new CheckpointSourceEvidenceUnavailableError(),
+  })
+  const plans = planAuthorityFixture({ output })
+  const intent = await receiveIntentFixture({ planKind: 'direct-tree', artifactKind: 'directory-tree', selection })
+  const result = await transferJobFixture({
+    catalog: catalog.catalog, selection, intent, plans, revisions: readers.revisions, broker: readers.broker,
+  }).run()
+
+  expect(output.commits).toEqual([sibling.idText])
+  expect(readers.blockRequests).toEqual([sibling.idText])
+  expect(result.worker.status).toBe('Paused')
+  expect(result.worker.fileOutcomes).toMatchObject({ sourceDriftFiles: 0, revisionConflictFiles: 0, failedFiles: 1 })
+  expect(plans.settlements).toEqual([])
+  expect(plans.pauseRequests).toHaveLength(1)
+  expect(plans.pauseRequests[0]).toMatchObject({
+    reason: {
+      classification: {
+        fault: { domain: 'source', scope: 'file-local', code: 'unavailable' },
+        fact: { recoveryDisposition: 'resumable_receive' },
+        materializationFailureReason: 'file-open-failed',
+      },
+    },
+    materialization: { fileCount: 1n, rawBytes: 2n },
+  })
+})
 
 describe('v2 authenticated file transfer', () => {
   it.each([undefined, digestIdentity(71)])('preserves source metadata %s through authenticated admission and output', async sourceMetadata => {

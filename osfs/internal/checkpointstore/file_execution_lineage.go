@@ -155,13 +155,14 @@ func (a *fileExecutionAuthority) removeImage(image checkpointImage) error {
 	a.reclaimedCandidates++
 	return nil
 }
-func (a *fileExecutionAuthority) classify(spec checkpointmodel.CheckpointLineageSpec, request checkpointmodel.CheckpointLineageRequest) (checkpointmodel.CheckpointLineageDecision, checkpointmodel.Record, error) {
+func (a *fileExecutionAuthority) classify(spec checkpointmodel.CheckpointLineageSpec, request checkpointmodel.CheckpointLineageRequest) (checkpointmodel.CheckpointLineageAssessment, checkpointmodel.Record, error) {
+	invalid := checkpointmodel.CheckpointLineageAssessment{Decision: checkpointmodel.CheckpointLineageDecisionInvalid}
 	if err := a.requireSettled(); err != nil {
-		return checkpointmodel.CheckpointLineageDecisionInvalid, checkpointmodel.Record{}, err
+		return invalid, checkpointmodel.Record{}, err
 	}
 	id, err := checkpointmodel.DeriveCheckpointLineageID(spec)
 	if err != nil {
-		return checkpointmodel.CheckpointLineageDecisionInvalid, checkpointmodel.Record{}, err
+		return invalid, checkpointmodel.Record{}, err
 	}
 	r, found := a.physical[checkpointmodel.RecordID(id)]
 	if !found {
@@ -169,16 +170,16 @@ func (a *fileExecutionAuthority) classify(spec checkpointmodel.CheckpointLineage
 	}
 	actual, err := r.CheckpointLineageSpec()
 	if err != nil || !checkpointmodel.SameCheckpointLineageSpec(actual, spec) {
-		return checkpointmodel.CheckpointLineageDecisionInvalid, checkpointmodel.Record{}, checkpointmodel.ErrRecordBinding
+		return invalid, checkpointmodel.Record{}, checkpointmodel.ErrRecordBinding
 	}
-	decision := checkpointmodel.ClassifyCheckpointLineage(request, []checkpointmodel.CheckpointLineageEvidence{{
+	assessment := checkpointmodel.ClassifyCheckpointLineage(request, []checkpointmodel.CheckpointLineageEvidence{{
 		FileRevision: r.FileRevision(), ExactSize: r.ExactSize(), OwnedObjectID: r.OwnedObjectID(),
 		SourceMetadata: r.SourceMetadata(), Phase: r.Phase(), CommitState: r.CommitState(),
 	}}, len(a.objects[r.OwnedObjectID()]) > 1)
-	if decision != checkpointmodel.CheckpointLineageDecisionExact && decision != checkpointmodel.CheckpointLineageDecisionMetadataMatch && decision != checkpointmodel.CheckpointLineageDecisionRevisionConflict {
-		return decision, checkpointmodel.Record{}, nil
+	if assessment.Decision.SelectsRecord() || assessment.RetainsSourceEvidence() {
+		return assessment, r, nil
 	}
-	return decision, r, nil
+	return assessment, checkpointmodel.Record{}, nil
 }
 
 // Inventory is a management operation; ordinary continuation uses exact lookup.
@@ -208,8 +209,8 @@ func (a *fileExecutionAuthority) lineageSnapshot() []FileExecutionLineageSlot {
 	slots := make([]FileExecutionLineageSlot, 0, len(records))
 	for _, r := range records {
 		spec, _ := r.CheckpointLineageSpec()
-		decision, selected, _ := a.classify(spec, checkpointmodel.CheckpointLineageRequest{FileRevision: r.FileRevision(), ExactSize: r.ExactSize()})
-		slots = append(slots, FileExecutionLineageSlot{decision: decision, path: r.CanonicalPath(), records: []checkpointmodel.Record{r}, selected: selected})
+		assessment, selected, _ := a.classify(spec, r.SourceEvidence())
+		slots = append(slots, FileExecutionLineageSlot{decision: assessment.Decision, path: r.CanonicalPath(), records: []checkpointmodel.Record{r}, selected: selected})
 	}
 	return slots
 }

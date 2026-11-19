@@ -3,7 +3,7 @@ import { OriginCapacityDataError } from '../../src/output/origin-private/capacit
 import { NativeOutputInitializationError } from '../../src/output/origin-private/native-object/errors'
 import { CheckpointLineageDecisionError, DestinationCollisionError, SourceRevisionChangedError } from '../../src/output/persistent-tree/errors'
 import { declaredOutputFailure } from '../../src/transfer/failure/output'
-import { normalizeFileTransferFailure, transferFileOutcomeEvidence } from '../../src/transfer/job/failures'
+import { FileOutputError, normalizeFileTransferFailure, transferFileOutcomeEvidence } from '../../src/transfer/job/failures'
 
 describe('output boundary semantics', () => {
   it('retains native exception identity, cause, diagnostic stage and retryability', () => {
@@ -46,9 +46,10 @@ describe('output boundary semantics', () => {
     expect(normalizeFileTransferFailure(collision)).toMatchObject({
       fault: { domain: 'output', scope: 'file-local', code: 'namespace-unsafe' },
     })
-    const wrapped = new Error('file admission failed', { cause: drift })
+    const wrapped = new FileOutputError('file admission failed', 'output-write-failed', drift)
     expect(normalizeFileTransferFailure(wrapped)).toMatchObject({
       fault: { domain: 'source', scope: 'file-local', code: 'revision-changed' },
+      materializationFailureReason: 'source-revision-changed',
     })
     expect(transferFileOutcomeEvidence(wrapped)).toEqual({ kind: 'authenticated-source-drift' })
     expect(transferFileOutcomeEvidence(collision)).toEqual({ kind: 'occupied-unbound-destination' })

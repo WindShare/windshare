@@ -74,6 +74,10 @@ func projectCheckpointDecision(
 		return FilesystemCheckpointExact
 	case outputruntime.FilesystemCheckpointRevisionConflict:
 		return FilesystemCheckpointRevisionConflict
+	case outputruntime.FilesystemCheckpointReuseStateBlocked:
+		return FilesystemCheckpointReuseStateBlocked
+	case outputruntime.FilesystemCheckpointRevisionEvidenceUnavailable:
+		return FilesystemCheckpointRevisionEvidenceUnavailable
 	case outputruntime.FilesystemCheckpointOwnershipConflict:
 		return FilesystemCheckpointOwnershipConflict
 	case outputruntime.FilesystemCheckpointInvalid:

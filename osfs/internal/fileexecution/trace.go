@@ -98,19 +98,21 @@ func (engine *Engine) traceEvent(
 	}
 }
 
-func (engine *Engine) checkpointDecisionTrace(
+func (engine *Engine) traceCheckpointResolution(
 	sequence uint64,
-	decision checkpointmodel.CheckpointLineageDecision,
-	file catalog.FileID,
-) TraceEvent {
+	resolution CheckpointResolution,
+	current content.FileRevisionDescriptor,
+) {
 	outcome := TraceReconciled
-	if decision == checkpointmodel.CheckpointLineageDecisionAbsent {
+	if resolution.Decision() == checkpointmodel.CheckpointLineageDecisionAbsent {
 		outcome = TraceNoChange
 	}
 	event := engine.traceEvent(sequence, TraceCheckpoint, outcome, 0, 0, fault.Fault{})
-	event.Decision = decision
-	event.FileID = file
-	return event
+	event.Decision, event.FileID = resolution.Decision(), current.FileID()
+	engine.emit(event)
+	if previous, retained := resolution.Candidate(); retained {
+		engine.traceRetainedSource(previous, current, resolution.assessment.Comparison.Reason)
+	}
 }
 
 func traceFault(err error) fault.Fault {
@@ -163,10 +165,10 @@ func (transaction *resumablePartialFileTransaction) traceReceipt(err error) {
 		traceOutcomeForError(err), checkpointmodel.PhasePublished, checkpointmodel.PhasePublished, traceFault(err)))
 }
 
-func (engine *Engine) traceRetainedSource(previous checkpointmodel.Record, current content.FileRevisionDescriptor) {
+func (engine *Engine) traceRetainedSource(previous checkpointmodel.Record, current content.FileRevisionDescriptor, reason content.RevisionComparisonReason) {
 	event := engine.traceEvent(engine.nextSequence(), TraceRecoverFile, TraceNoChange, previous.Phase(), previous.Phase(), fault.Fault{})
 	event.FileID, event.PreviousRevision, event.CurrentRevision = current.FileID(), previous.FileRevision(), current.FileRevision()
-	event.RecoveryReason = content.CompareRevisionMetadata(previous.FileRevision(), previous.ExactSize(), previous.SourceMetadata(), current).Reason
+	event.RecoveryReason = reason
 	for _, span := range previous.VerifiedRanges() {
 		event.RetainedBytes += span.Length()
 	}

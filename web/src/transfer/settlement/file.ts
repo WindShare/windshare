@@ -11,14 +11,14 @@ import { retireOutputFileTransaction } from '../output/transaction'
 import { withOutputSettlementTimeout } from './output'
 import type { FileTransferSettlement } from '../job/contract'
 import {
-  normalizeFileTransferFailure, normalizedFileTransferFault, type NormalizedFileTransferFailure,
+  findDeclaredOutputFailure, normalizeFileTransferFailure, normalizedFileTransferFault, type NormalizedFileTransferFailure,
 } from '../job/failures'
 import {
   observeRevisionReadmission, rangeBytes,
   type FileRevisionReadmission, type FileRevisionReadmissionObservation,
 } from '../job/file-authority'
 
-export const UNCONFIRMED_FILE_SETTLEMENT: FileTransferSettlement = Object.freeze({ kind: 'unconfirmed' })
+export const UNCONFIRMED_FILE_SETTLEMENT = Object.freeze({ kind: 'unconfirmed' })
 
 interface FileSettlementOptions {
   readonly output: Pick<OutputSession, 'capabilities' | 'readmitFile'>
@@ -40,7 +40,7 @@ interface SettledFileFailure {
 
 export interface FileContinuationRequired {
   readonly kind: 'continuation-required'
-  readonly settlement: PausedFileSettlement
+  readonly settlement: Extract<FileTransferSettlement, { kind: 'paused' | 'unconfirmed' }>
   readonly failure: FileFault
 }
 
@@ -132,7 +132,7 @@ export async function settleTransferError(
   options: FileSettlementOptions,
   transaction: OutputFileTransaction | undefined,
   error: unknown,
-): Promise<SettledFileFailure> {
+): Promise<SettledFileFailure | FileContinuationRequired> {
   if (error instanceof OutputCapacityBlockedError && !options.signal.aborted) {
     // Release the write lease before waiting so admitted files retain capacity
     // to drain the payload buffers.
@@ -157,7 +157,14 @@ export async function settleTransferError(
     signal: options.signal,
     ...(options.incidentScope === undefined ? {} : { incidentScope: options.incidentScope }),
   })
-  if (transaction === undefined) return { kind: 'failed', failure, settlement: UNCONFIRMED_FILE_SETTLEMENT }
+  if (transaction === undefined) {
+    if (failure.kind === 'fault' && failure.fault.scope === FaultScope.FileLocal &&
+        options.output.capabilities.fileFailureIsolation && options.output.capabilities.durability !== 'None' &&
+        findDeclaredOutputFailure(error)?.kind === 'deferred-file-admission') {
+      return { kind: 'continuation-required', failure, settlement: UNCONFIRMED_FILE_SETTLEMENT }
+    }
+    return { kind: 'failed', failure, settlement: UNCONFIRMED_FILE_SETTLEMENT }
+  }
   if (failure.kind === 'canceled') return pauseCanceledFileTransfer(options, transaction, failure)
   try {
     await persistSourceFailure(options, transaction, failure.fault)

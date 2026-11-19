@@ -5,7 +5,6 @@ import type {
 import {
   FILE_CHECKPOINT_COMMIT_CANDIDATE,
   FILE_CHECKPOINT_COMMIT_VERIFIED,
-  classifyCheckpointLineage,
   deriveCheckpointLineageID,
   fileCheckpointIsComplete,
   sameCheckpointLineageSpec,
@@ -15,6 +14,7 @@ import {
 } from '../../src/output/persistence/checkpoint'
 import {
   finalFileCheckpointProof,
+  resolveCheckpointLineage,
   type CheckpointLineageDecision,
   type CheckpointLineageLookupRequest,
   type CheckpointNamespaceBinding,
@@ -165,25 +165,7 @@ class MemoryCheckpointRepository implements FSASemanticOutputRepository {
     }
     const records = [...physical.values()].filter(record =>
       sameCheckpointLineageSpec(record, spec))
-    const kind = classifyCheckpointLineage(
-      { fileRevision: request.fileRevision, exactSize: request.exactSize },
-      records.map(record => ({
-        fileRevision: record.fileRevision,
-        exactSize: record.exactSize,
-        ownedObjectId: record.ownedObjectId,
-      })),
-    )
-    if (kind === 'absent') {
-      return Object.freeze({ kind, lineageId: request.lineageId })
-    }
-    if (kind === 'exact' || kind === 'metadata-match') {
-      return Object.freeze({ kind, lineageId: request.lineageId, record: records[0]! })
-    }
-    return Object.freeze({
-      kind,
-      lineageId: request.lineageId,
-      records: Object.freeze(records),
-    })
+    return resolveCheckpointLineage(request, records)
   }
 
   async stageCheckpointUpdate(

@@ -129,10 +129,16 @@ const (
 	CheckpointLineageDecisionOwnershipConflict
 	CheckpointLineageDecisionInvalid
 	CheckpointLineageDecisionMetadataMatch
+	CheckpointLineageDecisionReuseStateBlocked
+	CheckpointLineageDecisionRevisionEvidenceUnavailable
 )
 
 func (decision CheckpointLineageDecision) Valid() bool {
-	return decision >= CheckpointLineageDecisionAbsent && decision <= CheckpointLineageDecisionMetadataMatch
+	return decision >= CheckpointLineageDecisionAbsent && decision <= CheckpointLineageDecisionRevisionEvidenceUnavailable
+}
+
+func (decision CheckpointLineageDecision) SelectsRecord() bool {
+	return decision == CheckpointLineageDecisionExact || decision == CheckpointLineageDecisionMetadataMatch
 }
 
 func (decision CheckpointLineageDecision) String() string {
@@ -149,15 +155,44 @@ func (decision CheckpointLineageDecision) String() string {
 		return "invalid"
 	case CheckpointLineageDecisionMetadataMatch:
 		return "metadata-match"
+	case CheckpointLineageDecisionReuseStateBlocked:
+		return "reuse-state-blocked"
+	case CheckpointLineageDecisionRevisionEvidenceUnavailable:
+		return "revision-evidence-unavailable"
 	default:
 		return ""
 	}
 }
 
-type CheckpointLineageRequest struct {
-	FileRevision   content.FileRevision
-	ExactSize      uint64
-	SourceMetadata content.SourceMetadata
+type CheckpointLineageRequest = content.RevisionSourceEvidence
+
+type CheckpointLineageAssessment struct {
+	Decision   CheckpointLineageDecision
+	Comparison content.RevisionComparisonEvidence
+}
+
+func (assessment CheckpointLineageAssessment) Valid() bool {
+	switch assessment.Decision {
+	case CheckpointLineageDecisionRevisionConflict:
+		return assessment.Comparison.Comparison == content.RevisionComparisonMismatch &&
+			(assessment.Comparison.Reason == content.ComparisonSizeChanged || assessment.Comparison.Reason == content.ComparisonMetadataChanged)
+	case CheckpointLineageDecisionRevisionEvidenceUnavailable:
+		return assessment.Comparison.Comparison == content.RevisionComparisonUnavailable &&
+			assessment.Comparison.Reason == content.ComparisonMetadataUnavailable
+	default:
+		return assessment.Decision.Valid() && assessment.Comparison == (content.RevisionComparisonEvidence{})
+	}
+}
+
+func (assessment CheckpointLineageAssessment) RetainsSourceEvidence() bool {
+	return assessment.Decision == CheckpointLineageDecisionRevisionConflict ||
+		assessment.Decision == CheckpointLineageDecisionRevisionEvidenceUnavailable
+}
+
+func (record Record) SourceEvidence() content.RevisionSourceEvidence {
+	return content.RevisionSourceEvidence{
+		FileRevision: record.FileRevision(), ExactSize: record.ExactSize(), SourceMetadata: record.SourceMetadata(),
+	}
 }
 
 type CheckpointLineageEvidence struct {
@@ -169,53 +204,64 @@ type CheckpointLineageEvidence struct {
 	CommitState    CommitState
 }
 
-// ClassifyCheckpointLineage is the single mixed-conflict precedence for startup
-// indexing and atomic create. Invalid same-revision binding wins before revision
-// conflict, which wins before object ownership ambiguity.
+// ClassifyCheckpointLineage shares the admission rule between lookup and atomic
+// create. Missing evidence can defer reuse only where state and ownership allow it.
 func ClassifyCheckpointLineage(
 	request CheckpointLineageRequest,
 	evidence []CheckpointLineageEvidence,
 	crossLineageOwnershipConflict bool,
-) CheckpointLineageDecision {
+) CheckpointLineageAssessment {
+	invalid := CheckpointLineageAssessment{Decision: CheckpointLineageDecisionInvalid}
 	if request.FileRevision.IsZero() {
-		return CheckpointLineageDecisionInvalid
+		return invalid
 	}
 	if len(evidence) == 0 {
-		return CheckpointLineageDecisionAbsent
+		return CheckpointLineageAssessment{Decision: CheckpointLineageDecisionAbsent}
 	}
 
+	var differentRevision, reuseStateBlocked bool
+	var changed, unavailable content.RevisionComparisonEvidence
+	ownershipConflict := crossLineageOwnershipConflict
 	for _, record := range evidence {
 		if record.FileRevision.IsZero() || record.OwnedObjectID.IsZero() {
-			return CheckpointLineageDecisionInvalid
+			return invalid
 		}
-		if record.FileRevision == request.FileRevision && (record.ExactSize != request.ExactSize ||
-			!record.SourceMetadata.IsZero() && !request.SourceMetadata.IsZero() && record.SourceMetadata != request.SourceMetadata) {
-			return CheckpointLineageDecisionInvalid
-		}
-	}
-	metadataMatch := false
-	for _, record := range evidence {
-		if record.FileRevision != request.FileRevision {
-			if request.SourceMetadata.IsZero() || record.SourceMetadata != request.SourceMetadata ||
-				record.ExactSize != request.ExactSize || record.CommitState != CommitVerified ||
-				(record.Phase != PhaseActive && record.Phase != PhasePaused) {
-				return CheckpointLineageDecisionRevisionConflict
+		ownershipConflict = ownershipConflict || record.OwnedObjectID != evidence[0].OwnedObjectID
+		comparison := content.CompareRevisionMetadata(content.RevisionSourceEvidence{
+			FileRevision: record.FileRevision, ExactSize: record.ExactSize, SourceMetadata: record.SourceMetadata,
+		}, request)
+		if record.FileRevision == request.FileRevision {
+			if comparison.Comparison == content.RevisionComparisonMismatch {
+				return invalid
 			}
-			metadataMatch = true
+			continue
 		}
-	}
 
-	firstObject := evidence[0].OwnedObjectID
-	if crossLineageOwnershipConflict {
-		return CheckpointLineageDecisionOwnershipConflict
-	}
-	for _, record := range evidence[1:] {
-		if record.OwnedObjectID != firstObject {
-			return CheckpointLineageDecisionOwnershipConflict
+		differentRevision = true
+		switch comparison.Comparison {
+		case content.RevisionComparisonMismatch:
+			if changed.Reason == "" {
+				changed = comparison
+			}
+		case content.RevisionComparisonUnavailable:
+			unavailable = comparison
+		}
+		if record.CommitState != CommitVerified || (record.Phase != PhaseActive && record.Phase != PhasePaused) {
+			reuseStateBlocked = true
 		}
 	}
-	if metadataMatch {
-		return CheckpointLineageDecisionMetadataMatch
+	switch {
+	case changed.Reason != "":
+		return CheckpointLineageAssessment{CheckpointLineageDecisionRevisionConflict, changed}
+	case reuseStateBlocked:
+		return CheckpointLineageAssessment{Decision: CheckpointLineageDecisionReuseStateBlocked}
+	case ownershipConflict:
+		return CheckpointLineageAssessment{Decision: CheckpointLineageDecisionOwnershipConflict}
+	case unavailable.Reason != "":
+		return CheckpointLineageAssessment{CheckpointLineageDecisionRevisionEvidenceUnavailable, unavailable}
+	case differentRevision:
+		return CheckpointLineageAssessment{Decision: CheckpointLineageDecisionMetadataMatch}
+	default:
+		return CheckpointLineageAssessment{Decision: CheckpointLineageDecisionExact}
 	}
-	return CheckpointLineageDecisionExact
 }

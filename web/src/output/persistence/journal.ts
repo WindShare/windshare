@@ -1,9 +1,11 @@
 import {
   FILE_CHECKPOINT_COMMIT_VERIFIED,
+  classifyCheckpointLineage,
   fileCheckpointDigest,
   fileCheckpointIsComplete,
   validateFileCheckpoint,
   type CheckpointLineageID,
+  type CheckpointSourceRejection,
   type FileCheckpointV2,
 } from './checkpoint'
 import {
@@ -56,21 +58,32 @@ export interface CheckpointLineageLookupRequest {
 export type CheckpointLineageDecision =
   | Readonly<{ kind: 'absent'; lineageId: CheckpointLineageID }>
   | Readonly<{ kind: 'exact' | 'metadata-match'; lineageId: CheckpointLineageID; record: FileCheckpointV2 }>
-  | Readonly<{
-    kind: 'revision-conflict'
-    lineageId: CheckpointLineageID
-    records: readonly FileCheckpointV2[]
-  }>
-  | Readonly<{
-    kind: 'ownership-conflict'
-    lineageId: CheckpointLineageID
-    records: readonly FileCheckpointV2[]
-  }>
-  | Readonly<{
-    kind: 'invalid'
-    lineageId: CheckpointLineageID
-    records: readonly FileCheckpointV2[]
-  }>
+  | (CheckpointSourceRejection<FileCheckpointV2> & Readonly<{ lineageId: CheckpointLineageID }>)
+  | Readonly<{ kind: 'reuse-state-blocked' | 'ownership-conflict' | 'invalid'; lineageId: CheckpointLineageID }>
+
+export function resolveCheckpointLineage(
+  request: CheckpointLineageLookupRequest,
+  records: readonly FileCheckpointV2[],
+  crossLineageOwnershipConflict = false,
+): CheckpointLineageDecision {
+  const { lineageId } = request
+  const assessment = classifyCheckpointLineage(request, records, crossLineageOwnershipConflict)
+  if ('previous' in assessment) {
+    Object.freeze(assessment.comparison)
+    return Object.freeze({ ...assessment, lineageId })
+  }
+
+  const { kind } = assessment
+  if (kind === 'absent') return Object.freeze({ kind, lineageId })
+  if (kind === 'exact' || kind === 'metadata-match') {
+    const [record] = records
+    if (record === undefined || records.length !== 1) {
+      throw new TypeError('checkpoint lineage did not resolve to one physical authority')
+    }
+    return Object.freeze({ kind, lineageId, record })
+  }
+  return Object.freeze({ kind, lineageId })
+}
 
 export type InitialCheckpointCASResult =
   | Readonly<{

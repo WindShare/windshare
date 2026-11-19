@@ -7,7 +7,6 @@ import {
   MAX_CHECKPOINT_RECORDS_PER_OPERATION,
   checkpointIdentityEqual,
   fileCheckpointIsComplete,
-  classifyCheckpointLineage,
   decodeFileCheckpointV2,
   deriveCheckpointLineageID,
   encodeFileCheckpointV2,
@@ -19,6 +18,7 @@ import {
 } from '../../persistence/checkpoint'
 import {
   checkpointMatchesNamespace,
+  resolveCheckpointLineage,
   type CheckpointLineageDecision,
   type CheckpointLineageLookupRequest,
   type CheckpointNamespaceBinding,
@@ -322,24 +322,7 @@ export function classifyCheckpointInventory(
   authority: CheckpointLineageAuthority,
   inventory: IndexedDbCheckpointInventory,
 ): CheckpointLineageDecision {
-  const kind = classifyCheckpointLineage(
-    { fileRevision: authority.fileRevision, exactSize: authority.exactSize, ...sourceMetadataFields(authority) },
-    inventory.lineageRecords,
-    inventory.crossLineageOwnershipConflict,
-  )
-  if (kind === 'absent') return Object.freeze({ kind, lineageId: authority.lineageId })
-  if (kind === 'exact' || kind === 'metadata-match') {
-    const record = inventory.lineageRecords[0]
-    if (record === undefined || inventory.lineageRecords.length !== 1) {
-      throw new TypeError('exact checkpoint lineage did not resolve to one physical authority')
-    }
-    return Object.freeze({ kind, lineageId: authority.lineageId, record })
-  }
-  return Object.freeze({
-    kind,
-    lineageId: authority.lineageId,
-    records: inventory.lineageRecords,
-  })
+  return resolveCheckpointLineage(authority, inventory.lineageRecords, inventory.crossLineageOwnershipConflict)
 }
 
 

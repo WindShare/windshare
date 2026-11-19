@@ -59,7 +59,7 @@ describe('initial claim pipeline authority and backpressure', () => {
     expect(duplicate).toBe(first)
     inspection.resolve()
     await expect(first).resolves.toMatchObject({ kind: 'installed' })
-    await expect(changed).resolves.toMatchObject({ kind: 'revision-conflict' })
+    await expect(changed).resolves.toMatchObject({ kind: 'reuse-state-blocked' })
     await expect(changedSize).resolves.toMatchObject({ kind: 'invalid' })
     expect(fixture.tree.inspectionStarts).toEqual(['same.bin'])
     expect(fixture.checkpoints.installedClaimBatches).toEqual([['same.bin']])

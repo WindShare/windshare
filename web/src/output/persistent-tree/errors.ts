@@ -1,7 +1,9 @@
+import { RevisionEvidenceUnavailableError } from '../../content/revision-comparison'
 import { OUTPUT_FAILURE, type OutputFailureSource } from '../../transfer/failure/output'
 import {
   checkpointLineageFailure,
   destinationCollisionFailure,
+  persistedSourceEvidenceUnavailableFailure,
   persistedSourceRevisionFailure,
 } from '../failure/semantics'
 
@@ -13,6 +15,7 @@ export type PersistentOutputErrorKind =
   | 'output-state'
   | 'owned-object-unknown'
   | 'revision-conflict'
+  | 'reuse-state-blocked'
   | 'source-revision-changed'
   | 'target-ownership-unknown'
 
@@ -55,6 +58,7 @@ export type TargetOwnershipStage =
 
 export type CheckpointBlockDecision =
   | 'revision-conflict'
+  | 'reuse-state-blocked'
   | 'ownership-conflict'
   | 'invalid'
 
@@ -77,6 +81,7 @@ export class CheckpointLineageDecisionError extends PersistentOutputError implem
 function checkpointBlockKind(decision: CheckpointBlockDecision): PersistentOutputErrorKind {
   switch (decision) {
     case 'revision-conflict': return 'revision-conflict'
+    case 'reuse-state-blocked': return 'reuse-state-blocked'
     case 'ownership-conflict': return 'owned-object-unknown'
     case 'invalid': return 'checkpoint-invalid'
   }
@@ -89,6 +94,15 @@ export class DestinationCollisionError extends PersistentOutputError implements 
     super('collision', 'An existing unowned destination blocks this file', options)
     this.name = 'DestinationCollisionError'
     this[OUTPUT_FAILURE] = destinationCollisionFailure()
+  }
+}
+
+export class CheckpointSourceEvidenceUnavailableError extends RevisionEvidenceUnavailableError implements OutputFailureSource {
+  readonly [OUTPUT_FAILURE] = persistedSourceEvidenceUnavailableFailure()
+
+  constructor() {
+    super()
+    this.name = 'CheckpointSourceEvidenceUnavailableError'
   }
 }
 

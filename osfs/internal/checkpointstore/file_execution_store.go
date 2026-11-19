@@ -299,24 +299,24 @@ func (store *FileExecutionStore) Lookup(
 	defer store.authority.mu.Unlock()
 	if _, _, err := store.loadLineageLocked(spec); err != nil {
 		if ErrorCodeFor(err) == ErrorCorruptRecord {
-			return fileexecution.ResolveCheckpoint(checkpointmodel.CheckpointLineageDecisionInvalid, checkpointmodel.Record{})
+			return fileexecution.ResolveCheckpoint(checkpointmodel.CheckpointLineageAssessment{Decision: checkpointmodel.CheckpointLineageDecisionInvalid}, checkpointmodel.Record{})
 		}
 		return fileexecution.CheckpointResolution{}, err
 	}
-	decision, record, err := store.authority.classify(spec, key.CheckpointLineageRequest())
+	assessment, record, err := store.authority.classify(spec, key.CheckpointLineageRequest())
 	if err != nil {
 		err = lineageAuthorityError("classify file checkpoint lineage", err)
 		if ErrorCodeFor(err) == ErrorCorruptRecord {
-			return fileexecution.ResolveCheckpoint(checkpointmodel.CheckpointLineageDecisionInvalid, checkpointmodel.Record{})
+			return fileexecution.ResolveCheckpoint(checkpointmodel.CheckpointLineageAssessment{Decision: checkpointmodel.CheckpointLineageDecisionInvalid}, checkpointmodel.Record{})
 		}
 		return fileexecution.CheckpointResolution{}, err
 	}
-	if decision == checkpointmodel.CheckpointLineageDecisionExact && !checkpointKeyMatchesRecord(key, record) {
+	if assessment.Decision == checkpointmodel.CheckpointLineageDecisionExact && !checkpointKeyMatchesRecord(key, record) {
 		return fileexecution.CheckpointResolution{}, codedError(
 			ErrorCorruptRecord, "lookup file execution checkpoint", checkpointmodel.ErrRecordBinding,
 		)
 	}
-	return fileexecution.ResolveCheckpoint(decision, record)
+	return fileexecution.ResolveCheckpoint(assessment, record)
 }
 
 func (store *FileExecutionStore) InstallInitial(
@@ -348,9 +348,7 @@ func (store *FileExecutionStore) installInitialRecord(
 	if err != nil {
 		return fileexecution.InitialCheckpointObservation{}, err
 	}
-	return store.installInitial(ctx, spec, checkpointmodel.CheckpointLineageRequest{
-		FileRevision: candidate.FileRevision(), ExactSize: candidate.ExactSize(),
-	}, candidate)
+	return store.installInitial(ctx, spec, candidate.SourceEvidence(), candidate)
 }
 
 func (store *FileExecutionStore) installInitial(
@@ -370,12 +368,12 @@ func (store *FileExecutionStore) installInitial(
 	if _, _, err := store.loadLineageLocked(spec); err != nil {
 		return fileexecution.InitialCheckpointObservation{}, err
 	}
-	decision, selected, err := store.authority.classify(spec, request)
+	assessment, selected, err := store.authority.classify(spec, request)
 	if err != nil {
 		return fileexecution.InitialCheckpointObservation{}, initialAuthorityError(err)
 	}
-	if decision != checkpointmodel.CheckpointLineageDecisionAbsent {
-		resolution, resolveErr := fileexecution.ResolveCheckpoint(decision, selected)
+	if assessment.Decision != checkpointmodel.CheckpointLineageDecisionAbsent {
+		resolution, resolveErr := fileexecution.ResolveCheckpoint(assessment, selected)
 		observation, observeErr := fileexecution.ObserveInitialCheckpoint(resolution, false)
 		return observation, errors.Join(resolveErr, observeErr)
 	}
@@ -407,15 +405,15 @@ func (store *FileExecutionStore) installInitial(
 		store.authority.markUnsettled()
 		return fileexecution.InitialCheckpointObservation{}, transferfault.ReduceBoundaryErrors(ctx, err)
 	}
-	decision, selected, err = store.authority.classify(spec, request)
-	if err != nil || decision != checkpointmodel.CheckpointLineageDecisionExact ||
+	assessment, selected, err = store.authority.classify(spec, request)
+	if err != nil || assessment.Decision != checkpointmodel.CheckpointLineageDecisionExact ||
 		selected.RecordID() != candidate.RecordID() {
 		store.authority.markUnsettled()
 		return fileexecution.InitialCheckpointObservation{}, transferfault.ReduceBoundaryErrors(
 			ctx, err, checkpointmodel.ErrRecordBinding,
 		)
 	}
-	resolution, err := fileexecution.ResolveCheckpoint(decision, selected)
+	resolution, err := fileexecution.ResolveCheckpoint(assessment, selected)
 	if err != nil {
 		store.authority.markUnsettled()
 		return fileexecution.InitialCheckpointObservation{}, err
@@ -460,15 +458,13 @@ func (store *FileExecutionStore) Replace(
 	if _, _, err := store.loadLineageLocked(spec); err != nil {
 		return fileexecution.CheckpointObservation{}, err
 	}
-	decision, selected, err := store.authority.classify(spec, checkpointmodel.CheckpointLineageRequest{
-		FileRevision: previous.FileRevision(), ExactSize: previous.ExactSize(),
-	})
+	assessment, selected, err := store.authority.classify(spec, previous.SourceEvidence())
 	if errors.Is(err, errFileExecutionAuthorityUnsettled) {
 		return fileexecution.CheckpointObservation{}, codedError(
 			ErrorStateIO, "replace through unsettled file checkpoint authority", err,
 		)
 	}
-	if err != nil || decision != checkpointmodel.CheckpointLineageDecisionExact ||
+	if err != nil || assessment.Decision != checkpointmodel.CheckpointLineageDecisionExact ||
 		selected.RecordID() != previous.RecordID() {
 		return fileexecution.CheckpointObservation{}, codedError(
 			ErrorUnsafeInstall, "replace conflicted file checkpoint", errors.Join(err, checkpointmodel.ErrRecordBinding),

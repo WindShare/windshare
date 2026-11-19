@@ -36,7 +36,10 @@ export interface OpenBrowserFolderDeliveryOptions {
 
 /** The final FSA lease owns both target mutation and the policy-bound child staging namespace. */
 export async function openBrowserFolderDelivery(input: OpenBrowserFolderDeliveryOptions): Promise<BrowserDeliveryMaterialization> {
-  return openAssembly(input, options => BrowserDeliveryMaterialization.open({ ...options, target: input.target }))
+  return openAssembly(input, options => BrowserDeliveryMaterialization.open({
+    ...options, target: input.target,
+    ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
+  }))
 }
 
 export type OpenBrowserFolderDeliveryCleanupOptions = Omit<OpenBrowserFolderDeliveryOptions, 'target' | 'costs'>

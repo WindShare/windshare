@@ -22,9 +22,9 @@ func (repository *collisionRecoveryRepository) Lookup(
 ) (CheckpointResolution, error) {
 	record, present := repository.records[key.CanonicalPath()]
 	if !present {
-		return ResolveCheckpoint(checkpointmodel.CheckpointLineageDecisionAbsent, checkpointmodel.Record{})
+		return resolveTestCheckpoint(checkpointmodel.CheckpointLineageDecisionAbsent, checkpointmodel.Record{})
 	}
-	return ResolveCheckpoint(checkpointmodel.CheckpointLineageDecisionExact, record)
+	return resolveTestCheckpoint(checkpointmodel.CheckpointLineageDecisionExact, record)
 }
 
 func (repository *collisionRecoveryRepository) InstallInitial(
@@ -35,11 +35,11 @@ func (repository *collisionRecoveryRepository) InstallInitial(
 	path := next.CanonicalPath()
 	current, present := repository.records[path]
 	if present {
-		resolution, _ := ResolveCheckpoint(checkpointmodel.CheckpointLineageDecisionExact, current)
+		resolution, _ := resolveTestCheckpoint(checkpointmodel.CheckpointLineageDecisionExact, current)
 		return ObserveInitialCheckpoint(resolution, false)
 	}
 	repository.records[path] = next
-	resolution, _ := ResolveCheckpoint(checkpointmodel.CheckpointLineageDecisionExact, next)
+	resolution, _ := resolveTestCheckpoint(checkpointmodel.CheckpointLineageDecisionExact, next)
 	return ObserveInitialCheckpoint(resolution, true)
 }
 

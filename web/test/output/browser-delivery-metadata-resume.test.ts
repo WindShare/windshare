@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import {
+  CheckpointSourceEvidenceUnavailableError, SourceRevisionChangedError,
+} from '../../src/output/persistent-tree/errors'
 import { deliveryEngineFixture } from './browser-delivery-engine-fixture'
 import { deliveryIdentity } from './browser-delivery-fixture'
 
@@ -28,7 +31,7 @@ describe('folder delivery metadata recovery', () => {
     expect(f.targetTree.file(original.materializationRelativePath).snapshot())
       .toEqual(Uint8Array.from([7, ...new Array(Number(size - 1n)).fill(8)]))
     await expect(session.beginFile({ ...request, openRevision: async () => ({ ...current, fileRevision: deliveryIdentity(73, 16) }) }))
-      .rejects.toThrow(/applicability/)
+      .rejects.toMatchObject({ decision: 'reuse-state-blocked' })
     expect(f.repository.files.get(source.fileId)?.digest).toBe(historical.digest)
     await session.close()
   })
@@ -57,7 +60,10 @@ describe('folder delivery metadata recovery', () => {
     await recovered.close()
   })
 
-  it.each([undefined, deliveryIdentity(90)])('retains candidates when reopened metadata is %s', async sourceMetadata => {
+  it.each([
+    [undefined, CheckpointSourceEvidenceUnavailableError],
+    [deliveryIdentity(90), SourceRevisionChangedError],
+  ] as const)('retains candidates when reopened metadata is %s', async (sourceMetadata, errorType) => {
     const f = await deliveryEngineFixture()
     const request = f.request()
     const source = { ...await request.openRevision(), sourceMetadata: deliveryIdentity(71) }
@@ -68,7 +74,7 @@ describe('folder delivery metadata recovery', () => {
     await expect(f.session.beginFile({ ...request, openRevision: async () => ({
       fileId: source.fileId, exactSize: source.exactSize, fileRevision: deliveryIdentity(72, 16),
       ...(sourceMetadata === undefined ? {} : { sourceMetadata }),
-    }) })).rejects.toThrow(/applicability/)
+    }) })).rejects.toBeInstanceOf(errorType)
     expect(f.repository.files.get(source.fileId)?.source).toEqual(before.source)
     expect(f.stageTree.file([source.fileId]).snapshot()).toEqual(Uint8Array.of(7))
     await f.session.close()

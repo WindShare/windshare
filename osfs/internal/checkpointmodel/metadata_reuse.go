@@ -11,7 +11,7 @@ import (
 func AdmitMetadataReuse(previous Record, current content.FileRevisionDescriptor) (Record, error) {
 	if !previous.Valid() || previous.FileID() != current.FileID() ||
 		previous.FileRevision() == current.FileRevision() ||
-		!content.CompareRevisionMetadata(previous.FileRevision(), previous.ExactSize(), previous.SourceMetadata(), current).AllowsReuse() {
+		!content.CompareRevisionMetadata(previous.SourceEvidence(), current.SourceEvidence()).AllowsReuse() {
 		return Record{}, ErrRecordBinding
 	}
 	next := previous

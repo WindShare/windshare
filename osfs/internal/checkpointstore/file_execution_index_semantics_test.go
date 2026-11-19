@@ -24,8 +24,8 @@ func TestFileExecutionAuthorityClassifiesPhysicalLineageEvidence(t *testing.T) {
 
 	revision := base.FileRevision()
 	revision[0]++
-	revisionConflict := checkpointRecordVariant(t, base, recordVariant{revision: &revision})
 	invalidSize := base.ExactSize() + 1
+	revisionConflict := checkpointRecordVariant(t, base, recordVariant{revision: &revision, exactSize: &invalidSize})
 	invalid := checkpointRecordVariant(t, base, recordVariant{exactSize: &invalidSize})
 	otherObject := objectIDFixture(t, 0xb8)
 	ownershipConflict := checkpointRecordVariant(t, base, recordVariant{object: &otherObject})
@@ -59,11 +59,12 @@ func TestFileExecutionAuthorityClassifiesPhysicalLineageEvidence(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			decision, selected, err := authority.classify(spec, test.request)
+			assessment, selected, err := authority.classify(spec, test.request)
+			decision := assessment.Decision
 			if err != nil || decision != test.want {
 				t.Fatalf("decision = (%s, %v), want %s", decision, err, test.want)
 			}
-			if (decision == checkpointmodel.CheckpointLineageDecisionExact || decision == checkpointmodel.CheckpointLineageDecisionRevisionConflict) != selected.Valid() {
+			if (decision.SelectsRecord() || assessment.RetainsSourceEvidence()) != selected.Valid() {
 				t.Fatalf("selected record validity = %t for %s", selected.Valid(), decision)
 			}
 		})
@@ -78,11 +79,9 @@ func TestFileExecutionAuthorityClassifiesPhysicalLineageEvidence(t *testing.T) {
 	}
 	for _, record := range []checkpointmodel.Record{base, crossLineage} {
 		spec, _ := record.CheckpointLineageSpec()
-		decision, _, err := authority.classify(spec, checkpointmodel.CheckpointLineageRequest{
-			FileRevision: record.FileRevision(), ExactSize: record.ExactSize(),
-		})
-		if err != nil || decision != checkpointmodel.CheckpointLineageDecisionOwnershipConflict {
-			t.Fatalf("cross-lineage decision = (%s, %v)", decision, err)
+		assessment, _, err := authority.classify(spec, record.SourceEvidence())
+		if err != nil || assessment.Decision != checkpointmodel.CheckpointLineageDecisionOwnershipConflict {
+			t.Fatalf("cross-lineage decision = (%s, %v)", assessment.Decision, err)
 		}
 	}
 }
@@ -300,11 +299,12 @@ func TestRevisionConflictNeverMovesPhysicalVerifiedRanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	spec, _ := first.CheckpointLineageSpec()
-	decision, selected, err := authority.classify(spec, checkpointmodel.CheckpointLineageRequest{FileRevision: second.FileRevision(), ExactSize: second.ExactSize()})
-	if err != nil || decision != checkpointmodel.CheckpointLineageDecisionRevisionConflict || !selected.Valid() {
-		t.Fatalf("conflict granted ranges: %v %v", decision, err)
+	assessment, selected, err := authority.classify(spec, second.SourceEvidence())
+	if err != nil || assessment.Decision != checkpointmodel.CheckpointLineageDecisionRevisionEvidenceUnavailable ||
+		assessment.Comparison.Reason != content.ComparisonMetadataUnavailable || !selected.Valid() {
+		t.Fatalf("unavailable evidence = %+v, %v", assessment, err)
 	}
-	resolution, err := fileexecution.ResolveCheckpoint(decision, selected)
+	resolution, err := fileexecution.ResolveCheckpoint(assessment, selected)
 	if _, accepted := resolution.Record(); err != nil || accepted {
 		t.Fatal("retained candidate granted accepted progress")
 	}

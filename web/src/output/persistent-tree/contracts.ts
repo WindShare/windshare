@@ -5,6 +5,7 @@ import type {
 import type {
   FileCheckpointJournal,
   FinalFileCheckpointProof,
+  InitialCheckpointCASResult,
   PersistentHandleRecord,
   SemanticFileCheckpointJournal,
 } from '../persistence/journal'
@@ -380,7 +381,7 @@ export type PersistentTreeTraceEvent =
       operation_id: string
       file_id: string
       record_id?: string
-      decision: 'absent' | 'installed' | 'exact' | 'metadata-match' | 'revision-conflict' | 'ownership-conflict' | 'invalid'
+      decision: InitialCheckpointCASResult['kind'] | 'absent'
     }>
 
 export type PersistentTreeTrace = (event: PersistentTreeTraceEvent) => void

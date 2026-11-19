@@ -1,5 +1,5 @@
 import { FILE_CHECKPOINT_COMMIT_VERIFIED, FILE_CHECKPOINT_PHASE_ACTIVE, FILE_CHECKPOINT_PHASE_PAUSED } from './checkpoint-lifecycle'
-import { sourceMetadataFields } from '../../content/revision-comparison'
+import { compareRevisionMetadata, sourceMetadataFields, type RevisionMetadataComparison } from '../../content/revision-comparison'
 import { snapshotCatalogPath } from '../../catalog/path-policy'
 import { encodeBase64Url } from '../../crypto/bytes'
 import {
@@ -94,13 +94,21 @@ export function sameCheckpointLineageSpec(
   }
 }
 
-export type CheckpointLineageDecisionKind =
-  | 'absent'
-  | 'exact'
-  | 'metadata-match'
-  | 'revision-conflict'
-  | 'ownership-conflict'
-  | 'invalid'
+export type CheckpointSourceRejection<Evidence extends CheckpointLineageEvidence> =
+  | Readonly<{
+      kind: 'revision-conflict'
+      comparison: Extract<RevisionMetadataComparison, { kind: 'observed-change' }>
+      previous: Evidence
+    }>
+  | Readonly<{
+      kind: 'revision-evidence-unavailable'
+      comparison: Extract<RevisionMetadataComparison, { kind: 'unavailable' }>
+      previous: Evidence
+    }>
+
+type CheckpointLineageAssessment<Evidence extends CheckpointLineageEvidence> =
+  | Readonly<{ kind: 'absent' | 'exact' | 'metadata-match' | 'reuse-state-blocked' | 'ownership-conflict' | 'invalid' }>
+  | CheckpointSourceRejection<Evidence>
 
 export interface CheckpointLineageRequest {
   readonly fileRevision: CheckpointIdentity
@@ -117,34 +125,51 @@ export interface CheckpointLineageEvidence {
   readonly commitState?: number
 }
 
-// This is the only mixed-conflict precedence used by startup lookup and atomic
-// creation: invalid same-revision binding, revision, ownership, exact, absent.
-export function classifyCheckpointLineage(
+// Missing evidence can defer reuse only where checkpoint state and ownership allow it.
+export function classifyCheckpointLineage<Evidence extends CheckpointLineageEvidence>(
   request: CheckpointLineageRequest,
-  evidence: readonly CheckpointLineageEvidence[],
+  evidence: readonly Evidence[],
   crossLineageOwnershipConflict = false,
-): CheckpointLineageDecisionKind {
-  const normalizedRequest = normalizeCheckpointLineageRequest(request)
-  if (normalizedRequest === undefined) return 'invalid'
-  if (evidence.length === 0) return 'absent'
+): CheckpointLineageAssessment<Evidence> {
+  const current = normalizeCheckpointLineageRequest(request)
+  if (current === undefined) return { kind: 'invalid' }
+  if (evidence.length === 0) return { kind: 'absent' }
 
-  const normalizedEvidence = evidence.map(normalizeCheckpointLineageEvidence)
-  if (normalizedEvidence.some((record) => record === undefined)) return 'invalid'
-  const records = normalizedEvidence as readonly NormalizedCheckpointLineageEvidence[]
-  if (records.some((record) =>
-    record.fileRevision === normalizedRequest.fileRevision &&
-    (record.exactSize !== normalizedRequest.exactSize ||
-      (record.sourceMetadata !== undefined && normalizedRequest.sourceMetadata !== undefined &&
-        record.sourceMetadata !== normalizedRequest.sourceMetadata)))) return 'invalid'
-  const different = records.filter(record => record.fileRevision !== normalizedRequest.fileRevision)
-  if (different.some(record => normalizedRequest.sourceMetadata === undefined ||
-      record.sourceMetadata !== normalizedRequest.sourceMetadata || record.exactSize !== normalizedRequest.exactSize ||
-      record.commitState !== FILE_CHECKPOINT_COMMIT_VERIFIED ||
-      (record.phase !== FILE_CHECKPOINT_PHASE_ACTIVE && record.phase !== FILE_CHECKPOINT_PHASE_PAUSED))) return 'revision-conflict'
-  if (crossLineageOwnershipConflict) return 'ownership-conflict'
-  const firstObject = records[0]!.ownedObjectId
-  if (records.some((record) => record.ownedObjectId !== firstObject)) return 'ownership-conflict'
-  return different.length > 0 ? 'metadata-match' : 'exact'
+  let firstObject: string | undefined
+  let ownershipConflict = crossLineageOwnershipConflict
+  let differentRevision = false
+  let reuseStateBlocked = false
+  let changed: CheckpointSourceRejection<Evidence> | undefined
+  let unavailable: CheckpointSourceRejection<Evidence> | undefined
+  for (const previous of evidence) {
+    const record = normalizeCheckpointLineageEvidence(previous)
+    if (record === undefined) return { kind: 'invalid' }
+    firstObject ??= record.ownedObjectId
+    ownershipConflict ||= firstObject !== record.ownedObjectId
+    const comparison = compareRevisionMetadata(record, current)
+    const sameRevision = record.fileRevision === current.fileRevision
+    differentRevision ||= !sameRevision
+    switch (comparison.kind) {
+      case 'observed-change':
+        if (sameRevision) return { kind: 'invalid' }
+        changed ??= { kind: 'revision-conflict', comparison, previous }
+        break
+      case 'unavailable':
+        unavailable ??= { kind: 'revision-evidence-unavailable', comparison, previous }
+        break
+    }
+    reuseStateBlocked ||= !sameRevision && !checkpointStatePermitsMetadataReuse(record)
+  }
+
+  if (changed !== undefined) return changed
+  if (reuseStateBlocked) return { kind: 'reuse-state-blocked' }
+  if (ownershipConflict) return { kind: 'ownership-conflict' }
+  return unavailable ?? { kind: differentRevision ? 'metadata-match' : 'exact' }
+}
+
+function checkpointStatePermitsMetadataReuse(record: NormalizedCheckpointLineageEvidence): boolean {
+  return record.commitState === FILE_CHECKPOINT_COMMIT_VERIFIED &&
+    (record.phase === FILE_CHECKPOINT_PHASE_ACTIVE || record.phase === FILE_CHECKPOINT_PHASE_PAUSED)
 }
 
 function normalizeCheckpointLineageSpec(

@@ -1,4 +1,5 @@
 import { PROJECTION_DISCOVERY_STATES } from '../trace/model'
+import { CHECKPOINT_TRACE_DECISIONS } from '../trace/checkpoint-payload'
 import { isBoundedDiagnosticExceptionProjection, MAX_EXCEPTION_TEXT_BYTES, type DiagnosticExceptionProjection } from '../exception'
 import { deepFreezeJson } from './json'
 import { STORAGE_PERSISTENCE_TRANSITIONS } from '../trace/storage-persistence-payload'
@@ -449,9 +450,7 @@ export function validateCheckpoint(payload: UnknownRecord): void {
     'restored', 'persisted', 'quarantined', 'failed',
   ], 'checkpoint transition')
   if (payload.decision !== undefined) {
-    member(payload.decision, [
-      'absent', 'installed', 'exact', 'metadata_match', 'revision_conflict', 'ownership_conflict', 'invalid',
-    ], 'checkpoint decision')
+    member(payload.decision, CHECKPOINT_TRACE_DECISIONS, 'checkpoint decision')
   }
 }
 

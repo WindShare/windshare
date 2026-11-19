@@ -129,6 +129,10 @@ func runtimeCheckpointDecision(
 		return FilesystemCheckpointExact
 	case checkpointmodel.CheckpointLineageDecisionRevisionConflict:
 		return FilesystemCheckpointRevisionConflict
+	case checkpointmodel.CheckpointLineageDecisionReuseStateBlocked:
+		return FilesystemCheckpointReuseStateBlocked
+	case checkpointmodel.CheckpointLineageDecisionRevisionEvidenceUnavailable:
+		return FilesystemCheckpointRevisionEvidenceUnavailable
 	case checkpointmodel.CheckpointLineageDecisionOwnershipConflict:
 		return FilesystemCheckpointOwnershipConflict
 	case checkpointmodel.CheckpointLineageDecisionInvalid:

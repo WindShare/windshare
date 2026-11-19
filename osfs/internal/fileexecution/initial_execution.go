@@ -37,7 +37,7 @@ func (engine *Engine) beginInitialCheckpoint(
 	if err != nil {
 		return transfer.FileStart{}, joinFailures(ctx, err, closeDestination(destination))
 	}
-	engine.emit(engine.checkpointDecisionTrace(sequence, admission.resolution.Decision(), file.Descriptor().FileID()))
+	engine.traceCheckpointResolution(sequence, admission.resolution, file.Descriptor())
 	sequence = engine.nextSequence()
 	switch admission.kind {
 	case initialCheckpointSelected:

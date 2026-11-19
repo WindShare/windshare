@@ -19,7 +19,7 @@ export {
   classifyCheckpointLineage,
   deriveCheckpointLineageID,
   sameCheckpointLineageSpec,
-  type CheckpointLineageDecisionKind,
+  type CheckpointSourceRejection,
   type CheckpointLineageEvidence,
   type CheckpointLineageID,
   type CheckpointLineageRequest,

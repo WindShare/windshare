@@ -10,6 +10,7 @@ import (
 
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/fault"
 )
 
 func TestOrdinaryResumeAdmitsReopenedMetadataToCurrentRevision(t *testing.T) {
@@ -74,25 +75,30 @@ func testOrdinaryMetadataResume(t *testing.T, metadata content.SourceMetadata) {
 	}
 
 	var events []FilesystemOutputTrace
-	authority, err = NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{RootPath: root,
-		Tracer: FilesystemOutputTraceFunc(func(event FilesystemOutputTrace) { events = append(events, event) }),
-	})
-	if err != nil {
-		t.Fatal(err)
+	reopen := func() {
+		t.Helper()
+		authority, err = NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{RootPath: root,
+			Tracer: FilesystemOutputTraceFunc(func(event FilesystemOutputTrace) { events = append(events, event) }),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		opened := authority
+		t.Cleanup(func() { _ = opened.Close() })
+		if _, err := authority.BindDestination(ctx); err != nil {
+			t.Fatal(err)
+		}
+		lookup, err := authority.LookupActive(ctx, intent.SelectionSpec())
+		if err != nil {
+			t.Fatal(err)
+		}
+		session, err = authority.OpenOperation(ctx, lookup.Operation())
+		if err != nil {
+			t.Fatal(err)
+		}
+		parent = admitRetainedCandidateRoot(t, session, intent, 0x62)
 	}
-	defer authority.Close()
-	if _, err := authority.BindDestination(ctx); err != nil {
-		t.Fatal(err)
-	}
-	lookup, err := authority.LookupActive(ctx, intent.SelectionSpec())
-	if err != nil {
-		t.Fatal(err)
-	}
-	session, err = authority.OpenOperation(ctx, lookup.Operation())
-	if err != nil {
-		t.Fatal(err)
-	}
-	parent = admitRetainedCandidateRoot(t, session, intent, 0x62)
+	reopen()
 	currentRevision := previous.FileRevision()
 	currentRevision[0]++
 	current, err := content.NewFileRevisionDescriptor(previous.ShareInstance(), previous.FileID(), currentRevision, previous.Geometry(), previous.ModifiedTime())
@@ -102,18 +108,21 @@ func testOrdinaryMetadataResume(t *testing.T, metadata content.SourceMetadata) {
 	current = content.BindRevisionMetadata(current, metadata)
 	file = nativeDirectTreeFileWithDescriptor(t, session, intent, current, "resume.bin", parent)
 	start, err = session.BeginFile(ctx, file)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if metadata != previous.SourceMetadata() {
-		settlement, immediate := start.ImmediateSettlement()
-		_, reason, blocked := settlement.ItemBlock()
-		if !immediate || !blocked || reason != transfer.ItemBlockRevisionConflict {
-			t.Fatal("inapplicable source granted receiving authority")
-		}
 		wantReason := content.ComparisonMetadataChanged
 		if metadata.IsZero() {
 			wantReason = content.ComparisonMetadataUnavailable
+			want, _ := fault.NewSource(fault.ScopeFileLocal, fault.SourceUnavailable)
+			got, _ := fault.NormalizeBoundaryError(err).Fault()
+			if got != want {
+				t.Fatalf("metadata unavailable returned %v, want %v", err, want)
+			}
+		} else {
+			settlement, immediate := start.ImmediateSettlement()
+			_, reason, blocked := settlement.ItemBlock()
+			if err != nil || !immediate || !blocked || reason != transfer.ItemBlockRevisionConflict {
+				t.Fatalf("metadata mismatch did not block the revision: %v", err)
+			}
 		}
 		retained := false
 		for _, event := range events {
@@ -129,7 +138,25 @@ func testOrdinaryMetadataResume(t *testing.T, metadata content.SourceMetadata) {
 		if _, err := session.PauseTree(ctx, transfer.JobPauseShutdown); err != nil {
 			t.Fatal(err)
 		}
-		return
+		if !metadata.IsZero() {
+			return
+		}
+		if err := authority.Close(); err != nil {
+			t.Fatal(err)
+		}
+		reopen()
+
+		currentRevision[0]++
+		current, err = content.NewFileRevisionDescriptor(previous.ShareInstance(), previous.FileID(), currentRevision, previous.Geometry(), previous.ModifiedTime())
+		if err != nil {
+			t.Fatal(err)
+		}
+		current = content.BindRevisionMetadata(current, previous.SourceMetadata())
+		file = nativeDirectTreeFileWithDescriptor(t, session, intent, current, "resume.bin", parent)
+		start, err = session.BeginFile(ctx, file)
+	}
+	if err != nil {
+		t.Fatal(err)
 	}
 	tx, progress, ok := start.Transaction()
 	if !ok || len(progress.Ranges().Ranges()) != 1 || progress.Ranges().Ranges()[0].End != 4 {

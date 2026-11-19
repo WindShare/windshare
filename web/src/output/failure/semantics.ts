@@ -15,6 +15,7 @@ import {
 } from '../../transfer/failure/fault'
 import type { TransferFileOutcomeEvidence } from '../../transfer/failure/file-outcome'
 import {
+  declareDeferredFileAdmission,
   declareOutputFailure,
   type OutputFailure,
 } from '../../transfer/failure/output'
@@ -40,16 +41,17 @@ function outputExceptionFailure(
 }
 
 export function checkpointLineageFailure(
-  decision: 'revision-conflict' | 'ownership-conflict' | 'invalid',
+  decision: 'revision-conflict' | 'reuse-state-blocked' | 'ownership-conflict' | 'invalid',
 ): OutputFailure {
   const codes = {
     'revision-conflict': CheckpointFaultCode.UnsafeInstall,
+    'reuse-state-blocked': CheckpointFaultCode.UnsafeInstall,
     'ownership-conflict': CheckpointFaultCode.OwnershipMismatch,
     invalid: CheckpointFaultCode.CorruptRecord,
   } as const
   return persistentFileFailure(
     checkpointFault(FaultScope.FileLocal, codes[decision]),
-    { kind: 'checkpoint-decision', decision },
+    decision === 'reuse-state-blocked' ? { kind: 'residual-failure' } : { kind: 'checkpoint-decision', decision },
   )
 }
 
@@ -61,10 +63,21 @@ export function destinationCollisionFailure(): OutputFailure {
 }
 
 export function persistedSourceRevisionFailure(): OutputFailure {
-  return persistentFileFailure(
-    sourceFault(FaultScope.FileLocal, SourceFaultCode.RevisionChanged),
-    { kind: 'authenticated-source-drift' },
-  )
+  const fault = sourceFault(FaultScope.FileLocal, SourceFaultCode.RevisionChanged)
+  return declareOutputFailure(Object.freeze({
+    fault,
+    fact: faultFailureFact({ fault, stage: 'output_write', recoveryDisposition: 'none' }),
+    materializationFailureReason: 'source-revision-changed',
+  }), { kind: 'authenticated-source-drift' })
+}
+
+export function persistedSourceEvidenceUnavailableFailure(): OutputFailure {
+  const fault = sourceFault(FaultScope.FileLocal, SourceFaultCode.Unavailable)
+  return declareDeferredFileAdmission(Object.freeze({
+    fault,
+    fact: faultFailureFact({ fault, stage: 'output_write', recoveryDisposition: 'resumable_receive' }),
+    materializationFailureReason: 'file-open-failed',
+  }))
 }
 
 function persistentFileFailure(fault: Fault, evidence: TransferFileOutcomeEvidence): OutputFailure {
