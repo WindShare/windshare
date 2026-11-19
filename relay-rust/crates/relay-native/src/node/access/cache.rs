@@ -1,13 +1,13 @@
 use super::Service;
 use anyhow::{Result, anyhow, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use windshare_relay_access::{
     AccountId, Issuer,
     entitlement::{self, Entitlement},
     restrictions::Restrictions,
     trust::{self, Generation, TrustStore},
-    usage::{NodePolicy, RESPONSE_DOMAIN, Reply, SignedReply},
+    usage::{NodePolicy, Reply, SignedReply},
 };
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -107,14 +107,15 @@ impl Service {
         Ok(())
     }
 
-    pub fn reply(
+    pub fn verify_reply<T: DeserializeOwned>(
         &self,
         signed: SignedReply,
         issuer: Issuer,
         node: [u8; 32],
-        batch: [u8; 16],
+        request: [u8; 16],
         now: u64,
-    ) -> Result<Cache> {
+        domain: &[u8],
+    ) -> Result<(Generation, Reply<T>)> {
         let state = self.state.lock().expect("node access state");
         ensure!(state.active_issuers.contains(&issuer), "inactive authority");
         let mut trusted: TrustStore = state.trusted.clone();
@@ -125,38 +126,20 @@ impl Service {
             .accept(generation, now)
             .map_err(|error| anyhow!("authority generation: {error:?}"))?;
         let bytes = URL_SAFE_NO_PAD.decode(signed.body)?;
-        let payload = trust::verify(RESPONSE_DOMAIN, &bytes, &generation.key)
+        let payload = trust::verify(domain, &bytes, &generation.key)
             .map_err(|error| anyhow!("authority signature: {error:?}"))?;
-        let reply: Reply = serde_json::from_slice(payload)?;
+        let reply: Reply<T> = serde_json::from_slice(payload)?;
         ensure!(
             reply.node == node
-                && reply.batch == batch
+                && reply.request == request
                 && reply.issuer == issuer
                 && reply.generation == generation.number,
             "authority response binding"
         );
         ensure!(
-            reply.policy.version > 0
-                && reply.issued_at <= now.saturating_add(trust::CLOCK_SKEW)
-                && reply.entitlements.len() <= windshare_relay_access::usage::MAX_REPORT_RECORDS,
-            "authority response bounds"
+            reply.issued_at <= now.saturating_add(trust::CLOCK_SKEW),
+            "authority response time"
         );
-        ensure!(
-            reply
-                .entitlements
-                .iter()
-                .all(|entry| entry.entitlement.valid_snapshot(reply.issued_at)),
-            "invalid entitlement lifetime"
-        );
-        Ok(Cache {
-            generations: vec![generation],
-            entitlements: reply
-                .entitlements
-                .into_iter()
-                .map(|entry| (issuer, entry.account, entry.entitlement))
-                .collect(),
-            restrictions: vec![(issuer, reply.restrictions)],
-            policies: vec![(issuer, reply.policy)],
-        })
+        Ok((generation, reply))
     }
 }

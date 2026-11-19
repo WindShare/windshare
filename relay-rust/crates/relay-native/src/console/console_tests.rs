@@ -57,6 +57,71 @@ fn admitted(console: &Console, secret: &str) -> bool {
 }
 
 #[test]
+fn revoking_a_credential_makes_room_for_a_new_device() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("node.sqlite");
+    let identity = Identity::generate().unwrap();
+    let console = open(&path, &identity, &Policy::default());
+    let setup = json!({"token":identity.initialization_token(),"password":"development-password"});
+    let session = post(&console, "/api/initialize", &setup, "")
+        .cookie
+        .unwrap();
+    {
+        let mut db = console.0.db.lock().unwrap();
+        let tx = db.transaction().unwrap();
+        for i in 0..windshare_relay_console::MAX_ACTIVE_CREDENTIALS {
+            database::save_key(
+                &tx,
+                &Credential {
+                    id: (i as u128).to_le_bytes(),
+                    principal: [4; 16],
+                    name: "Existing key".into(),
+                    digest: Digest::of(i.to_string().as_bytes()),
+                    created_at: 1,
+                    last_used_at: None,
+                    state: CredentialState::Active,
+                },
+            )
+            .unwrap();
+        }
+        let keys = database::keys(&tx).unwrap();
+        tx.commit().unwrap();
+        drop(db);
+        console.0.access.apply_devices(keys);
+    }
+    let create = |name| {
+        post(
+            &console,
+            "/api/credentials",
+            &json!({"name": name}),
+            &session,
+        )
+    };
+    assert_eq!(
+        create("Over capacity").status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    let id = 1u128.to_le_bytes();
+    assert!(admitted(&console, "1"));
+    assert_eq!(
+        post(
+            &console,
+            "/api/credentials/revoke",
+            &json!({"credential_id":text_id(&id)}),
+            &session
+        )
+        .status,
+        StatusCode::OK
+    );
+    assert!(!admitted(&console, "1"));
+    pair(&console, &session, [25; 32]);
+    assert_eq!(
+        create("Over capacity again").status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+}
+
+#[test]
 fn revocation_survives_reload_and_restart_without_affecting_other_owner_devices() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("node.sqlite");

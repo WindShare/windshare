@@ -1,5 +1,6 @@
 use super::*;
 use ed25519_dalek::SigningKey;
+use windshare_relay_access::Credential;
 use windshare_relay_access::{
     entitlement::{DAY_SECONDS, ENTITLEMENT_LIFETIME},
     trust::Generation,

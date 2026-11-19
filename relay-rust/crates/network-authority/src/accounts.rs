@@ -8,17 +8,14 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use windshare_relay_access::{
     AccountId, CredentialId,
     entitlement::{DAY_SECONDS, ENTITLEMENT_LIFETIME, Entitlement},
-    restrictions::Restrictions,
+    restrictions::Restriction,
     ticket::{TICKET_LIFETIME, Ticket},
 };
 
 impl<R: Store, E: Environment> Authority<R, E> {
-    pub(crate) fn restrictions(&self) -> Result<Restrictions> {
-        Ok(load(&self.store, "restrictions")?.unwrap_or_default())
-    }
     pub(crate) fn ensure_account(&self, id: AccountId) -> Result<Account> {
         ensure!(
-            !self.restrictions()?.accounts.contains(&id),
+            !self.restricted(Restriction::Account(id))?,
             Fault::Denied {
                 reason: "account_blocked".into()
             }
@@ -37,7 +34,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 reason: "credentials".into(),
             })?;
         ensure!(
-            !credential.revoked && !self.restrictions()?.credentials.contains(&credential.id),
+            !credential.revoked && !self.restricted(Restriction::Credential(credential.id))?,
             Fault::Denied {
                 reason: "credential_revoked".into()
             }
@@ -116,11 +113,9 @@ impl<R: Store, E: Environment> Authority<R, E> {
         );
         credential.revoked = true;
         save(&mut self.store, &key("credential", &digest), &credential)?;
-        let mut restrictions = self.restrictions()?;
-        restrictions.credentials.insert(id);
-        restrictions.version += 1;
-        save(&mut self.store, "restrictions", &restrictions)?;
-        tracing::warn!(event="credential_revoked",account=?caller.account,credential=?id,version=restrictions.version);
+        if self.set_restriction(Restriction::Credential(id), true)? {
+            tracing::warn!(event="credential_revoked",account=?caller.account,credential=?id);
+        }
         Ok(())
     }
 }

@@ -27,11 +27,13 @@ pub async fn fetch(request: Request, env: Env, _context: Context) -> Result<Resp
         {
             return Response::error("browser requests require an origin", 403);
         }
-        if request.path() != "/v1/node/usage"
-            && request
-                .headers()
-                .get("Content-Type")?
-                .is_none_or(|value| !value.starts_with("application/json"))
+        if !matches!(
+            request.path().as_str(),
+            "/v1/node/usage" | "/v1/node/restrictions"
+        ) && request
+            .headers()
+            .get("Content-Type")?
+            .is_none_or(|value| !value.starts_with("application/json"))
         {
             return Response::error("JSON required", 415);
         }

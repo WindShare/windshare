@@ -14,7 +14,20 @@ pub trait Store {
     fn delete(&mut self, key: &str) -> Result<()>;
     /// # Errors
     /// Propagates storage read failures.
-    fn scan(&self, prefix: &str, limit: Option<usize>) -> Result<Vec<(String, String)>>;
+    fn scan(&self, prefix: &str, limit: Option<usize>) -> Result<Vec<(String, String)>> {
+        self.scan_after(prefix, None, limit)
+    }
+    /// # Errors
+    /// Propagates storage read failures.
+    fn scan_after(
+        &self,
+        prefix: &str,
+        after: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<Vec<(String, String)>>;
+    /// # Errors
+    /// Propagates storage read or report decoding failures.
+    fn recent_reports(&self, limit: usize) -> Result<Vec<crate::Report>>;
 }
 pub trait Environment {
     fn now(&self) -> u64;

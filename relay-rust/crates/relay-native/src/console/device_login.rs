@@ -58,6 +58,7 @@ impl Console {
             account: grant.account,
         };
         if e.state == EnrollmentState::Pending {
+            super::devices::require_credential_capacity(db)?;
             e.approve(e.id, now).map_err(refusal)?;
             db.execute(
                 "INSERT INTO console_account_bindings(credential,issuer,account) VALUES(?1,?2,?3)",

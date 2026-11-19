@@ -39,11 +39,11 @@ fn node_policy_versions_survive_same_second_changes_and_disabled_reports() {
         .unwrap()
         .account;
     let bytes = batch(&authority, &node, account, 1, 2, 0);
-    assert_eq!(reply(&mut authority, &bytes).policy.version, 1);
+    assert_eq!(status(&mut authority, &bytes).1.version, 1);
     authority
         .set_node_policy(&admin, &key, NodePolicyChange::PublicRelay(false))
         .unwrap();
-    let disabled = reply(&mut authority, &bytes).policy;
+    let disabled = status(&mut authority, &bytes).1;
     assert_eq!(disabled.version, 2);
     assert!(!disabled.enabled);
     let existing = authority
@@ -63,7 +63,7 @@ fn node_policy_versions_survive_same_second_changes_and_disabled_reports() {
     authority
         .set_node_policy(&admin, &key, NodePolicyChange::PublicRelay(true))
         .unwrap();
-    let restored = reply(&mut authority, &bytes).policy;
+    let restored = status(&mut authority, &bytes).1;
     assert_eq!(restored.version, 4);
     assert!(restored.enabled && restored.anonymous);
 }
@@ -129,5 +129,29 @@ fn account_blocks_cover_observed_shares_without_polluting_explicit_share_blocks(
         public(&authority)["shares"],
         serde_json::to_value(vec![[1; 12]]).unwrap()
     );
-    assert_eq!(authority.restrictions().unwrap().shares.len(), 1);
+    assert_eq!(authority.blocks().unwrap().shares.len(), 1);
+}
+
+#[test]
+fn latest_report_is_visible_after_the_console_limit() {
+    let mut authority = fixture();
+    let admin = authority
+        .initialize("once", "once", "admin", "correct horse battery")
+        .unwrap();
+    for i in 0..1000u16 {
+        let report = Report {
+            id: [12; 16],
+            share: [1; 12],
+            reason: "older report".into(),
+            created_at: authority.environment.now - 1,
+        };
+        save(&mut authority.store, &format!("report/{i:04}"), &report).unwrap();
+    }
+    let id = authority
+        .report("source", [2; 12], "new report".into())
+        .unwrap();
+    let console = authority.console(&admin).unwrap();
+    let reports = console["reports"].as_array().unwrap();
+    assert_eq!(reports.len(), 1000);
+    assert_eq!(reports[0]["id"], serde_json::to_value(id).unwrap());
 }

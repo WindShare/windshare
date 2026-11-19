@@ -68,12 +68,41 @@ impl Store for Database {
         ))?;
         Ok(())
     }
-    fn scan(&self, prefix: &str, limit: Option<usize>) -> Result<Vec<(String, String)>> {
+    fn recent_reports(&self, limit: usize) -> Result<Vec<crate::Report>> {
+        api(self.0.exec(
+            "CREATE INDEX IF NOT EXISTS authority_reports_newest
+             ON authority_records (json_extract(value, '$.created_at') DESC, key DESC)
+             WHERE key GLOB 'report/*'",
+            None,
+        ))?;
+        let rows = api(self.0.exec(
+            "SELECT value FROM authority_records WHERE key GLOB 'report/*'
+             ORDER BY json_extract(value, '$.created_at') DESC, key DESC LIMIT ?",
+            Some(vec![i64::try_from(limit)?.into()]),
+        ))?;
+        rows.raw()
+            .map(|row| match api(row)?.as_slice() {
+                [SqlStorageValue::String(value)] => Ok(serde_json::from_str(value)?),
+                _ => Err(anyhow!("invalid report row")),
+            })
+            .collect()
+    }
+    fn scan_after(
+        &self,
+        prefix: &str,
+        after: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<Vec<(String, String)>> {
         let end = format!("{prefix}\u{10ffff}");
+        let query = if after.is_some() {
+            "SELECT key,value FROM authority_records WHERE key>? AND key<? ORDER BY key LIMIT ?"
+        } else {
+            "SELECT key,value FROM authority_records WHERE key>=? AND key<? ORDER BY key LIMIT ?"
+        };
         let cursor = api(self.0.exec(
-            "SELECT key,value FROM authority_records WHERE key>=? AND key<? ORDER BY key LIMIT ?",
+            query,
             Some(vec![
-                prefix.into(),
+                after.unwrap_or(prefix).into(),
                 end.into(),
                 limit.map(i64::try_from).transpose()?.unwrap_or(-1).into(),
             ]),

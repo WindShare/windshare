@@ -1,6 +1,7 @@
 //! Only completed socket writes enter accounting; queues and failed writes are free.
 mod outbox;
 mod reporting;
+mod restriction_sync;
 #[cfg(test)]
 #[path = "usage_tests.rs"]
 mod tests;

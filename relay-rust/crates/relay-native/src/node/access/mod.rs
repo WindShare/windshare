@@ -18,7 +18,7 @@ use std::{
 };
 use tokio::sync::watch;
 use windshare_relay_access::{
-    AccountId, Attribution, Credential, CredentialState, Digest, Issuer, Principal,
+    AccountId, Attribution, CredentialState, Digest, Issuer, Principal,
     entitlement::{self, Allowance, Class, Entitlement},
     restrictions::Restrictions,
     ticket::Ticket,
@@ -40,7 +40,7 @@ struct State {
     trusted: TrustStore,
     active_issuers: std::collections::BTreeSet<Issuer>,
     devices: DeviceKeys,
-    credentials: Vec<Credential>,
+    credentials: devices::CredentialIndex,
     owners: Vec<[u8; 16]>,
     entitlements: BTreeMap<(Issuer, AccountId), Entitlement>,
     restrictions: BTreeMap<Issuer, Restrictions>,
@@ -58,7 +58,7 @@ impl Default for Service {
                 trusted: TrustStore::default(),
                 active_issuers: std::collections::BTreeSet::new(),
                 devices: DeviceKeys::default(),
-                credentials: Vec::new(),
+                credentials: devices::CredentialIndex::default(),
                 owners: Vec::new(),
                 entitlements: BTreeMap::new(),
                 restrictions: BTreeMap::new(),
@@ -102,9 +102,8 @@ impl Service {
         });
         let token_owner = bearer.is_some_and(|token| {
             let digest = Digest::of(token.as_bytes());
-            state.credentials.iter().any(|credential| {
-                credential.digest == digest
-                    && credential.state == CredentialState::Active
+            state.credentials.get(digest).is_some_and(|credential| {
+                credential.state == CredentialState::Active
                     && !state.devices.accounts.contains_key(&credential.id)
                     && state.owners.contains(&credential.principal)
             })
@@ -148,11 +147,7 @@ impl Service {
             None => return RegistrationDecision::Denied,
             Some(token) => {
                 let digest = Digest::of(token.as_bytes());
-                if let Some(credential) = state
-                    .credentials
-                    .iter_mut()
-                    .find(|entry| entry.digest == digest)
-                {
+                if let Some(credential) = state.credentials.get_mut(digest) {
                     let Ok(attribution) = credential.authorize(digest, now.saturating_mul(1000))
                     else {
                         return RegistrationDecision::Denied;
@@ -267,6 +262,15 @@ impl Service {
         changed
     }
 
+    pub fn restriction_version(&self, issuer: Issuer) -> u64 {
+        self.state
+            .lock()
+            .expect("node access state")
+            .restrictions
+            .get(&issuer)
+            .map_or(0, |value| value.version)
+    }
+
     pub fn restrict(&self, issuer: Issuer, next: Restrictions) -> bool {
         let mut state = self.state.lock().expect("node access state");
         let version = next.version;
@@ -373,12 +377,7 @@ impl State {
             _ => None,
         };
         disabled
-            || local_key.is_some_and(|id| {
-                !self
-                    .credentials
-                    .iter()
-                    .any(|entry| entry.id == id && entry.state == CredentialState::Active)
-            })
+            || local_key.is_some_and(|id| !self.credentials.active(id))
             || matches!(attribution, Attribution::Account { issuer, .. } if !self.active_issuers.contains(&issuer))
             || self.restrictions.iter().any(|(issuer, restrictions)| {
                 restrictions.denied(*issuer, *share.as_bytes(), attribution)

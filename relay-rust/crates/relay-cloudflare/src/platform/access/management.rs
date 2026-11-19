@@ -1,10 +1,10 @@
 use super::{
-    AccessObject, Database, Digest, MAX_RECORDS, Refusal, key, parse_id, random, refusal, reply,
-    required, text_id, trace,
+    AccessObject, Database, Digest, Refusal, key, parse_id, random, refusal, reply, required,
+    text_id, trace,
 };
 use serde_json::{Value, json};
 use windshare_relay_access::{Credential, CredentialState, Enrollment, EnrollmentState};
-use windshare_relay_console::{credential_view, service_configuration};
+use windshare_relay_console::{MAX_ACTIVE_CREDENTIALS, credential_view, service_configuration};
 use worker::{Method, Request, Response, Result};
 
 impl AccessObject {
@@ -30,11 +30,7 @@ impl AccessObject {
             ),
             (Method::Post, "/api/logout") => Self::logout(db, req),
             (Method::Get, "/api/credentials") => {
-                let credentials: Vec<_> = db
-                    .list::<Credential>("credential:")?
-                    .iter()
-                    .map(credential_view)
-                    .collect();
+                let credentials: Vec<_> = db.credentials()?.iter().map(credential_view).collect();
                 reply(&json!({"credentials":credentials}), 200)
             }
             (Method::Post, "/api/credentials") => self.create_credential(db, body, now),
@@ -57,7 +53,7 @@ impl AccessObject {
         if name.trim().is_empty() || name.len() > 128 || name.chars().any(char::is_control) {
             return refusal(Refusal::InvalidName);
         }
-        if db.list::<Credential>("credential:")?.len() >= MAX_RECORDS {
+        if db.active_credentials()? >= MAX_ACTIVE_CREDENTIALS {
             return reply(&json!({"error":"credential_capacity"}), 429);
         }
         let access_key = format!("wsak_{}", text_id(&random::<32>()?));
@@ -91,7 +87,7 @@ impl AccessObject {
         if required(body, "user_code")? != enrollment.user_code {
             return refusal(Refusal::AccessDenied);
         }
-        if db.list::<Credential>("credential:")?.len() >= MAX_RECORDS {
+        if db.active_credentials()? >= MAX_ACTIVE_CREDENTIALS {
             return reply(&json!({"error":"credential_capacity"}), 429);
         }
         if let Err(error) = enrollment.approve(random()?, now) {

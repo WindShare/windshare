@@ -1,15 +1,20 @@
-use super::super::{Identity, Runtime};
+use super::super::{Identity, Runtime, access::Cache};
 use crate::storage::Database;
 use anyhow::{Result, anyhow, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use tokio::sync::watch;
 use windshare_relay_access::{
     Issuer, trust,
-    usage::{Batch, MAX_REPORT_BYTES, REPORT_INTERVAL_SECONDS, SignedReply, USAGE_DOMAIN},
+    trust::Generation,
+    usage::{
+        Batch, MAX_REPORT_BYTES, REPORT_INTERVAL_SECONDS, RESPONSE_DOMAIN, Reply, ReportResult,
+        SignedReply, USAGE_DOMAIN,
+    },
 };
 
-const RETRY_SECONDS: u64 = 10;
+pub(super) const RETRY_SECONDS: u64 = 10;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(8);
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -82,6 +87,11 @@ impl Reporter {
     }
 
     pub async fn run(&self) {
+        let (versions, updates) = watch::channel(0);
+        tokio::join!(self.run_reports(&versions), self.sync_restrictions(updates));
+    }
+
+    async fn run_reports(&self, versions: &watch::Sender<u64>) {
         let mut ticks = tokio::time::interval(Duration::from_secs(RETRY_SECONDS));
         ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut next_report = 0;
@@ -94,7 +104,8 @@ impl Reporter {
                     tracing::error!(event="usage_persist_failed", %error);
                 }
                 // A failed old batch never holds up today's zero-byte entitlement refresh.
-                let results: [Result<()>; 2] = tokio::join!(self.refresh(now), self.retry()).into();
+                let results: [Result<()>; 2] =
+                    tokio::join!(self.refresh(now, versions), self.retry()).into();
                 for result in results {
                     if let Err(error) = result {
                         tracing::warn!(event="authority_usage_retry", %error);
@@ -106,16 +117,34 @@ impl Reporter {
         }
     }
 
-    pub(super) async fn upload(&self, batch: Batch, durable: bool) -> Result<()> {
-        let signed = trust::sign(
-            USAGE_DOMAIN,
-            &serde_json::to_vec(&batch)?,
-            &self.identity.key(),
-        );
+    pub(super) async fn report(
+        &self,
+        batch: &Batch,
+    ) -> Result<(Generation, Reply<ReportResult>, bool)> {
+        let (signed, login) = self.post("/v1/node/usage", USAGE_DOMAIN, batch).await?;
+        let (generation, reply) = self.node.access.verify_reply(
+            signed,
+            batch.issuer,
+            batch.node,
+            batch.id,
+            super::super::now().unsigned_abs(),
+            RESPONSE_DOMAIN,
+        )?;
+        Ok((generation, reply, login))
+    }
+
+    pub(super) async fn post(
+        &self,
+        path: &str,
+        domain: &[u8],
+        request: &(impl Serialize + Sync),
+    ) -> Result<(SignedReply, bool)> {
+        let signed = trust::sign(domain, &serde_json::to_vec(request)?, &self.identity.key());
+        ensure!(signed.len() <= MAX_REPORT_BYTES, "oversized node request");
         let mut response = self
             .client
             .post(format!(
-                "{}/v1/node/usage",
+                "{}{path}",
                 self.authority.url.trim_end_matches('/')
             ))
             .header("content-type", "application/octet-stream")
@@ -137,30 +166,14 @@ impl Reporter {
             );
             bytes.extend_from_slice(&chunk);
         }
-        let signed: SignedReply = serde_json::from_slice(&bytes)?;
-        let cache = self.node.access.reply(
-            signed,
-            batch.issuer,
-            batch.node,
-            batch.id,
-            super::super::now().unsigned_abs(),
-        )?;
+        Ok((serde_json::from_slice(&bytes)?, login))
+    }
+
+    pub(super) async fn persist_access(&self, cache: Cache) -> Result<()> {
         let store = self.store.clone();
-        let id = batch.id;
-        // Persist the rollback barriers before activation or acknowledgement.
-        let cache = tokio::task::spawn_blocking(move || -> Result<_> {
-            let cache = store.save_access(cache)?;
-            if durable {
-                store.acknowledge_usage(id)?;
-            }
-            Ok(cache)
-        })
-        .await??;
-        self.node.access.apply_cache(cache)?;
-        self.node.access.observe_device_login(batch.issuer, login);
-        tracing::info!(event="usage_batch_acknowledged", batch=?batch.id, node=?batch.node,
-            records=batch.records.len(), resident_accounts=batch.resident_accounts.len(), durable);
-        Ok(())
+        // Persist the generation rollback barrier before the reply takes effect.
+        let cache = tokio::task::spawn_blocking(move || store.save_access(cache)).await??;
+        self.node.access.apply_cache(cache)
     }
 
     pub async fn shutdown(&self) -> Result<()> {

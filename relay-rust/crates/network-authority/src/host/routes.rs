@@ -160,6 +160,9 @@ pub fn dispatch(
             serde_json::json!({})
         }
         (Method::Post, "/v1/node/usage") => serde_json::to_value(authority.usage(bytes)?)?,
+        (Method::Post, "/v1/node/restrictions") => {
+            serde_json::to_value(authority.restriction_page(bytes)?)?
+        }
         (Method::Get, "/v1/blocks") => authority.public_blocks()?,
         (Method::Post, "/v1/reports") => {
             let report: Report = parse(bytes)?;
@@ -237,7 +240,7 @@ fn admin_routes(
         }
         (Method::Post, "/v1/admin/blocks") => {
             authority.block(&session, parse::<Block>(bytes)?)?;
-            serde_json::to_value(authority.restrictions()?)?
+            serde_json::to_value(authority.blocks()?)?
         }
         _ => return Response::error("not found", 404).map_err(|error| anyhow::anyhow!("{error}")),
     };

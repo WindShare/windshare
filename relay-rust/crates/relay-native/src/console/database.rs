@@ -4,6 +4,8 @@ use hyper::StatusCode;
 use rusqlite::{Connection, OptionalExtension, params};
 use windshare_relay_access::{Credential, Enrollment, EnrollmentState};
 
+const ACTIVE_CREDENTIALS: &str = "json_extract(body, '$.state') = 'Active'";
+
 pub(super) fn initialize(db: &Connection) -> Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS console_owner (id INTEGER PRIMARY KEY CHECK(id=1), password TEXT NOT NULL) STRICT;
         CREATE TABLE IF NOT EXISTS console_sessions (digest BLOB PRIMARY KEY, expires INTEGER NOT NULL) STRICT;
@@ -11,7 +13,20 @@ pub(super) fn initialize(db: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS console_account_bindings (credential BLOB PRIMARY KEY, issuer BLOB NOT NULL, account BLOB NOT NULL) STRICT;
         CREATE TABLE IF NOT EXISTS console_credentials (id BLOB PRIMARY KEY, body TEXT NOT NULL) STRICT;
         CREATE TABLE IF NOT EXISTS console_attempts (scope TEXT PRIMARY KEY, expires INTEGER NOT NULL, attempts INTEGER NOT NULL) STRICT;")?;
+    db.execute_batch(&format!(
+        "CREATE INDEX IF NOT EXISTS console_active_credentials
+         ON console_credentials(id) WHERE {ACTIVE_CREDENTIALS};"
+    ))?;
     Ok(())
+}
+
+pub(super) fn active_credentials(db: &Connection) -> Result<usize> {
+    let count: u32 = db.query_row(
+        &format!("SELECT count(*) FROM console_credentials WHERE {ACTIVE_CREDENTIALS}"),
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(usize::try_from(count)?)
 }
 
 pub(super) fn cleanup(db: &Connection, now: u64) -> Result<()> {

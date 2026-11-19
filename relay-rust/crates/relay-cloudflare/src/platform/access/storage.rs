@@ -3,6 +3,8 @@ use serde::{Serialize, de::DeserializeOwned};
 use windshare_relay_access::{Credential, Digest, Enrollment};
 use worker::{Result, SqlStorage, SqlStorageValue, State};
 
+const CREDENTIAL_ROWS: &str = "key GLOB 'credential:*'";
+const ACTIVE_CREDENTIALS: &str = "json_extract(value, '$.state') = 'Active'";
 const TERMINATION_BATCH_SIZE: i64 = 32;
 pub const TERMINATION_RETRY_MS: u64 = 5_000;
 
@@ -56,6 +58,36 @@ impl Database {
             .map(|row| match row?.as_slice() {
                 [SqlStorageValue::String(value)] => serde_json::from_str(value).map_err(failure),
                 _ => Err(failure("invalid access row")),
+            })
+            .collect()
+    }
+    pub fn active_credentials(&self) -> Result<usize> {
+        self.0.exec(
+            &format!(
+                "CREATE INDEX IF NOT EXISTS access_active_credentials
+                      ON access_entries(key) WHERE {CREDENTIAL_ROWS} AND {ACTIVE_CREDENTIALS}"
+            ),
+            None,
+        )?;
+        let rows = self.0.exec(
+            &format!("SELECT count(*) FROM access_entries WHERE {CREDENTIAL_ROWS} AND {ACTIVE_CREDENTIALS}"),
+            None,
+        )?;
+        match rows.raw().next().transpose()?.as_deref() {
+            Some([SqlStorageValue::Integer(count)]) => usize::try_from(*count).map_err(failure),
+            _ => Err(failure("invalid credential count")),
+        }
+    }
+    pub fn credentials(&self) -> Result<Vec<Credential>> {
+        self.0
+            .exec(
+                &format!("SELECT value FROM access_entries WHERE {CREDENTIAL_ROWS} ORDER BY key"),
+                None,
+            )?
+            .raw()
+            .map(|row| match row?.as_slice() {
+                [SqlStorageValue::String(value)] => serde_json::from_str(value).map_err(failure),
+                _ => Err(failure("invalid credential row")),
             })
             .collect()
     }

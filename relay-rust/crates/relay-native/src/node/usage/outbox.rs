@@ -1,7 +1,13 @@
 use super::{Key, Reporter};
-use anyhow::Result;
+use crate::node::access::Cache;
+use anyhow::{Result, ensure};
 use std::collections::BTreeMap;
-use windshare_relay_access::usage::{Batch, Load, MAX_REPORT_RECORDS, UsageRecord};
+use tokio::sync::watch;
+use windshare_relay_access::usage::{
+    Batch, Load, ReportResult, STATUS_BATCH_ENTRIES, USAGE_BATCH_ENTRIES, UsageRecord,
+};
+
+const _: () = assert!(crate::config::MAX_RESIDENT_SHARES <= STATUS_BATCH_ENTRIES);
 
 impl Reporter {
     pub(super) fn batch(
@@ -49,7 +55,7 @@ impl Reporter {
                 bytes: *bytes,
             })
             .collect();
-        for chunk in records.chunks(MAX_REPORT_RECORDS) {
+        for chunk in records.chunks(USAGE_BATCH_ENTRIES) {
             batches.push(self.batch(chunk.to_vec(), Vec::new(), now)?);
         }
         let store = self.store.clone();
@@ -57,7 +63,7 @@ impl Reporter {
         Ok(())
     }
 
-    pub(super) async fn refresh(&self, now: u64) -> Result<()> {
+    pub(super) async fn refresh(&self, now: u64, versions: &watch::Sender<u64>) -> Result<()> {
         let issuer = self.authority.issuer()?;
         let accounts = self
             .node
@@ -68,16 +74,72 @@ impl Reporter {
             .collect();
         let mut batch = self.batch(Vec::new(), accounts, now)?;
         batch.shares = self.node.access.resident_shares(issuer);
-        self.upload(batch, false).await
+        let (generation, reply, login) = self.report(&batch).await?;
+        let ReportResult::Status {
+            entitlements,
+            restriction_version,
+            policy,
+        } = reply.result
+        else {
+            anyhow::bail!("expected node status");
+        };
+        ensure!(
+            policy.version > 0
+                && entitlements.len() <= STATUS_BATCH_ENTRIES
+                && entitlements.iter().all(|entry| {
+                    entry.entitlement.valid_snapshot(reply.issued_at)
+                        && batch
+                            .resident_accounts
+                            .binary_search(&entry.account)
+                            .is_ok()
+                }),
+            "invalid node status"
+        );
+        self.persist_access(Cache {
+            generations: vec![generation],
+            entitlements: entitlements
+                .into_iter()
+                .map(|entry| (issuer, entry.account, entry.entitlement))
+                .collect(),
+            policies: vec![(issuer, policy)],
+            ..Cache::default()
+        })
+        .await?;
+        versions.send_if_modified(|current| {
+            if restriction_version <= *current {
+                return false;
+            }
+            *current = restriction_version;
+            true
+        });
+        self.node.access.observe_device_login(issuer, login);
+        tracing::debug!(event="authority_status_refreshed", node=?batch.node, batch=?batch.id,
+            restriction_version, policy_version=policy.version);
+        Ok(())
     }
 
     pub(super) async fn retry(&self) -> Result<()> {
         let store = self.store.clone();
         let issuer = self.authority.issuer()?;
         let batch = tokio::task::spawn_blocking(move || store.pending_usage(issuer)).await??;
-        if let Some(batch) = batch {
-            self.upload(batch, true).await?;
-        }
+        let Some(batch) = batch else {
+            return Ok(());
+        };
+        let (generation, reply, _) = self.report(&batch).await?;
+        ensure!(
+            matches!(reply.result, ReportResult::UsageReceived),
+            "expected usage receipt"
+        );
+        self.persist_access(Cache {
+            generations: vec![generation],
+            ..Cache::default()
+        })
+        .await?;
+        let store = self.store.clone();
+        let id = batch.id;
+        tokio::task::spawn_blocking(move || store.acknowledge_usage(id)).await??;
+        tracing::info!(event="usage_batch_acknowledged", batch=?batch.id, node=?batch.node,
+            records=batch.records.len());
         Ok(())
     }
 }

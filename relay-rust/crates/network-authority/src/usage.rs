@@ -4,13 +4,16 @@ use crate::{
 };
 use anyhow::{Result, anyhow, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use windshare_relay_access::{
+    Issuer,
+    restrictions::{self, PageRequest},
     trust,
     usage::{
-        AccountEntitlement, Batch, MAX_REPORT_BYTES, RESPONSE_DOMAIN, Reply, SignedReply,
-        USAGE_DOMAIN,
+        AccountEntitlement, Batch, MAX_REPORT_BYTES, NodePolicy, RESPONSE_DOMAIN, Reply,
+        ReportResult, SignedReply, USAGE_DOMAIN,
     },
 };
 
@@ -18,26 +21,15 @@ impl<R: Store, E: Environment> Authority<R, E> {
     /// # Errors
     /// Refuses unauthenticated nodes, conflicting batch IDs, invalid records or storage failures.
     pub fn usage(&mut self, signed: &[u8]) -> Result<SignedReply> {
+        let batch: Batch = parse_signed(signed)?;
+        let now = self.environment.now();
         ensure!(
-            (64..=MAX_REPORT_BYTES).contains(&signed.len()),
+            batch.valid() && batch.created_at <= now + trust::CLOCK_SKEW,
             Fault::Invalid
         );
-        let batch: Batch = serde_json::from_slice(&signed[..signed.len() - 64])?;
-        ensure!(
-            batch.valid()
-                && batch.issuer == self.signing.generation.issuer
-                && batch.created_at <= self.environment.now() + trust::CLOCK_SKEW,
-            Fault::Invalid
-        );
-        let node =
-            load::<Node>(&self.store, &key("node", &batch.node))?.ok_or_else(|| Fault::Denied {
-                reason: "node_unregistered".into(),
-            })?;
-        trust::verify(USAGE_DOMAIN, signed, &node.key).map_err(|_| Fault::Denied {
-            reason: "node_signature".into(),
-        })?;
-        // Validate the complete batch before any charge: expected admission
-        // refusals commit limiter state in the host transaction.
+        let node = self.authenticate_node(batch.issuer, batch.node, USAGE_DOMAIN, signed)?;
+        // Expected admission refusals commit limiter state in the host transaction.
+        // Validate all referenced accounts before writing anything for this report.
         for account in batch
             .records
             .iter()
@@ -49,6 +41,93 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 Fault::Invalid
             );
         }
+
+        let result = if batch.records.is_empty() {
+            self.remember_shares(&batch.shares)?;
+            self.status(&batch, &node)?
+        } else {
+            self.charge_usage(&batch, signed)?;
+            ReportResult::UsageReceived
+        };
+        self.record_load(&batch, now)?;
+        self.sign_reply(RESPONSE_DOMAIN, batch.node, batch.id, now, result)
+    }
+
+    /// # Errors
+    /// Requires a valid signature from a registered node and readable restrictions.
+    pub fn restriction_page(&self, signed: &[u8]) -> Result<SignedReply> {
+        let request: PageRequest = parse_signed(signed)?;
+        ensure!(request.id != [0; 16], Fault::Invalid);
+        self.authenticate_node(
+            request.issuer,
+            request.node,
+            restrictions::REQUEST_DOMAIN,
+            signed,
+        )?;
+        let result = self.restriction_page_at(request.version, request.after)?;
+        self.sign_reply(
+            restrictions::RESPONSE_DOMAIN,
+            request.node,
+            request.id,
+            self.environment.now(),
+            result,
+        )
+    }
+
+    fn authenticate_node(
+        &self,
+        issuer: Issuer,
+        node: [u8; 32],
+        domain: &[u8],
+        signed: &[u8],
+    ) -> Result<Node> {
+        ensure!(issuer == self.signing.generation.issuer, Fault::Invalid);
+        let node =
+            load::<Node>(&self.store, &key("node", &node))?.ok_or_else(|| Fault::Denied {
+                reason: "node_unregistered".into(),
+            })?;
+        trust::verify(domain, signed, &node.key).map_err(|_| Fault::Denied {
+            reason: "node_signature".into(),
+        })?;
+        Ok(node)
+    }
+
+    fn sign_reply(
+        &self,
+        domain: &[u8],
+        node: [u8; 32],
+        request: [u8; 16],
+        now: u64,
+        result: impl Serialize,
+    ) -> Result<SignedReply> {
+        let reply = Reply {
+            request,
+            node,
+            issuer: self.signing.generation.issuer,
+            generation: self.signing.generation.number,
+            issued_at: now,
+            result,
+        };
+        let response = SignedReply {
+            certificate: self.signing.certificate.clone(),
+            body: URL_SAFE_NO_PAD.encode(trust::sign(
+                domain,
+                &serde_json::to_vec(&reply)?,
+                &self.signing.key,
+            )),
+        };
+        // Certificate and signed body are base64url, so the JSON envelope adds only fixed overhead.
+        let bytes = response.body.len()
+            + response.certificate.len()
+            + br#"{"certificate":"","body":""}"#.len();
+        ensure!(
+            bytes <= MAX_REPORT_BYTES,
+            "oversized signed authority response"
+        );
+        Ok(response)
+    }
+
+    fn charge_usage(&mut self, batch: &Batch, signed: &[u8]) -> Result<()> {
         let receipt = format!(
             "{}/{}",
             key("batch", &batch.node),
@@ -60,9 +139,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
             previous.is_none_or(|previous| previous == digest),
             Fault::Invalid
         );
-        // Empty refreshes do not need a permanent deduplication record. Byte batches
-        // keep their IDs indefinitely so delayed retries cannot charge twice.
-        if previous.is_none() && !batch.records.is_empty() {
+        if previous.is_none() {
             for record in &batch.records {
                 let usage_key = format!("{}/{}", key("usage", &record.account), record.day);
                 let used = load::<u64>(&self.store, &usage_key)?.unwrap_or(0);
@@ -74,17 +151,17 @@ impl<R: Store, E: Environment> Authority<R, E> {
                         .ok_or_else(|| anyhow!("usage overflow"))?,
                 )?;
             }
+            // Keep batch receipts so delayed retries cannot charge twice.
             save(&mut self.store, &receipt, &digest)?;
         }
-        self.remember_shares(&batch.shares)?;
-        self.record_load(&batch)?;
-        let accounts: BTreeSet<_> = batch
-            .resident_accounts
-            .iter()
-            .copied()
-            .chain(batch.records.iter().map(|record| record.account))
-            .collect();
-        let mut entitlements = Vec::new();
+        tracing::info!(event="node_usage_applied",node=?batch.node,batch=?batch.id,records=batch.records.len(),
+            duplicate=previous.is_some());
+        Ok(())
+    }
+
+    fn status(&mut self, batch: &Batch, node: &Node) -> Result<ReportResult> {
+        let accounts: BTreeSet<_> = batch.resident_accounts.iter().copied().collect();
+        let mut entitlements = Vec::with_capacity(accounts.len());
         for account in accounts {
             if load::<Account>(&self.store, &key("account", &account))?.is_some() {
                 entitlements.push(AccountEntitlement {
@@ -93,38 +170,19 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 });
             }
         }
-        let reply = Reply {
-            batch: batch.id,
-            node: batch.node,
-            issuer: batch.issuer,
-            generation: self.signing.generation.number,
-            issued_at: self.environment.now(),
+        Ok(ReportResult::Status {
             entitlements,
-            restrictions: self.restrictions()?,
-            policy: windshare_relay_access::usage::NodePolicy {
+            restriction_version: self.restriction_version()?,
+            policy: NodePolicy {
                 version: node.version,
                 enabled: node.enabled,
                 anonymous: node.anonymous,
             },
-        };
-        tracing::info!(event="node_usage_applied",node=?batch.node,batch=?batch.id,records=batch.records.len(),
-            duplicate=previous.is_some(),restriction_version=reply.restrictions.version);
-        Ok(SignedReply {
-            certificate: self.signing.certificate.clone(),
-            body: URL_SAFE_NO_PAD.encode(trust::sign(
-                RESPONSE_DOMAIN,
-                &serde_json::to_vec(&reply)?,
-                &self.signing.key,
-            )),
         })
     }
 
-    fn record_load(&mut self, batch: &Batch) -> Result<()> {
-        save(
-            &mut self.store,
-            &key("node-report", &batch.node),
-            &self.environment.now(),
-        )?;
+    fn record_load(&mut self, batch: &Batch, now: u64) -> Result<()> {
+        save(&mut self.store, &key("node-report", &batch.node), &now)?;
         let load_key = key("node-load", &batch.node);
         let previous_load =
             load::<(u64, windshare_relay_access::usage::Load)>(&self.store, &load_key)?;
@@ -133,4 +191,15 @@ impl<R: Store, E: Environment> Authority<R, E> {
         }
         Ok(())
     }
+}
+
+fn parse_signed<T: DeserializeOwned>(signed: &[u8]) -> Result<T> {
+    const SIGNATURE_BYTES: usize = 64;
+    ensure!(
+        (SIGNATURE_BYTES..=MAX_REPORT_BYTES).contains(&signed.len()),
+        Fault::Invalid
+    );
+    Ok(serde_json::from_slice(
+        &signed[..signed.len() - SIGNATURE_BYTES],
+    )?)
 }

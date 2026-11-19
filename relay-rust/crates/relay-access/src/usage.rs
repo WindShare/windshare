@@ -1,13 +1,17 @@
 //! Authority traffic records are transport-neutral and never contain content metadata.
-use crate::{AccountId, Issuer, entitlement::Entitlement, restrictions::Restrictions};
+use crate::{AccountId, Issuer, entitlement::Entitlement};
 use alloc::{string::String, vec::Vec};
 use serde::{Deserialize, Serialize};
 
 pub const REPORT_INTERVAL_SECONDS: u64 = 60;
-pub const MAX_REPORT_RECORDS: usize = 4096;
+// Accept previously queued batches while keeping new batches within the wire limit
+// even when all IDs, days and byte counts use their longest JSON representation.
+const MAX_REPORT_RECORDS: usize = 4096;
+pub const USAGE_BATCH_ENTRIES: usize = 2048;
+pub const STATUS_BATCH_ENTRIES: usize = 1024;
 pub const MAX_REPORT_BYTES: usize = 512 * 1024;
 pub const USAGE_DOMAIN: &[u8] = b"windshare/node-usage/v1\0";
-pub const RESPONSE_DOMAIN: &[u8] = b"windshare/authority-response/v1\0";
+pub const RESPONSE_DOMAIN: &[u8] = b"windshare/authority-response/v2\0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -52,8 +56,10 @@ impl Batch {
             && self.node != [0; 32]
             && self.issuer != [0; 32]
             && self.records.len() <= MAX_REPORT_RECORDS
-            && self.resident_accounts.len() <= MAX_REPORT_RECORDS
-            && self.shares.len() <= MAX_REPORT_RECORDS
+            && self.resident_accounts.len() <= STATUS_BATCH_ENTRIES
+            && self.shares.len() <= STATUS_BATCH_ENTRIES
+            && (self.records.is_empty()
+                || (self.resident_accounts.is_empty() && self.shares.is_empty()))
             && self
                 .shares
                 .iter()
@@ -88,15 +94,24 @@ pub struct NodePolicy {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Reply {
-    pub batch: [u8; 16],
+pub struct Reply<T> {
+    pub request: [u8; 16],
     pub node: [u8; 32],
     pub issuer: Issuer,
     pub generation: u64,
     pub issued_at: u64,
-    pub entitlements: Vec<AccountEntitlement>,
-    pub restrictions: Restrictions,
-    pub policy: NodePolicy,
+    pub result: T,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ReportResult {
+    UsageReceived,
+    Status {
+        entitlements: Vec<AccountEntitlement>,
+        restriction_version: u64,
+        policy: NodePolicy,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

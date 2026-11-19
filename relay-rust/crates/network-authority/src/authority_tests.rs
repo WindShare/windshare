@@ -7,6 +7,8 @@ mod device_login;
 mod governance;
 #[path = "profile_tests.rs"]
 mod profile;
+#[path = "restriction_sync_tests.rs"]
+mod restriction_sync;
 use crate::store::{key, load, save};
 use anyhow::Result;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -16,7 +18,7 @@ use windshare_relay_access::{
     entitlement::{DAY_SECONDS, ENTITLEMENT_LIFETIME},
     ticket::Ticket,
     trust::{self, Generation, TrustStore},
-    usage::{Batch, Load, RESPONSE_DOMAIN, Reply, USAGE_DOMAIN, UsageRecord},
+    usage::{Batch, Load, RESPONSE_DOMAIN, Reply, ReportResult, USAGE_DOMAIN, UsageRecord},
 };
 
 #[derive(Clone, Default)]
@@ -33,13 +35,33 @@ impl Store for Memory {
         self.0.remove(key);
         Ok(())
     }
-    fn scan(&self, prefix: &str, limit: Option<usize>) -> Result<Vec<(String, String)>> {
+    fn scan_after(
+        &self,
+        prefix: &str,
+        after: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<Vec<(String, String)>> {
         Ok(self
             .0
             .iter()
-            .filter(|(key, _)| key.starts_with(prefix))
+            .filter(|(key, _)| {
+                key.starts_with(prefix) && after.is_none_or(|after| key.as_str() > after)
+            })
             .take(limit.unwrap_or(usize::MAX))
             .map(|(key, value)| (key.clone(), value.clone()))
+            .collect())
+    }
+    fn recent_reports(&self, limit: usize) -> Result<Vec<Report>> {
+        let mut reports = self
+            .scan("report/", None)?
+            .into_iter()
+            .map(|(key, value)| Ok((key, serde_json::from_str::<Report>(&value)?)))
+            .collect::<Result<Vec<_>>>()?;
+        reports.sort_by(|(key_a, a), (key_b, b)| (b.created_at, key_b).cmp(&(a.created_at, key_a)));
+        Ok(reports
+            .into_iter()
+            .take(limit)
+            .map(|(_, report)| report)
             .collect())
     }
 }
@@ -137,7 +159,7 @@ fn batch(
                 bytes,
             }]
         },
-        resident_accounts: vec![account],
+        resident_accounts: if bytes == 0 { vec![account] } else { vec![] },
         shares: vec![],
         load: Load {
             active_sessions: 1,
@@ -148,14 +170,34 @@ fn batch(
     };
     trust::sign(USAGE_DOMAIN, &serde_json::to_vec(&batch).unwrap(), node)
 }
-fn reply(authority: &mut Authority<Memory, Clock>, bytes: &[u8]) -> Reply {
+fn reply(authority: &mut Authority<Memory, Clock>, bytes: &[u8]) -> ReportResult {
     let response = authority.usage(bytes).unwrap();
     let body = URL_SAFE_NO_PAD.decode(response.body).unwrap();
-    serde_json::from_slice(
+    serde_json::from_slice::<Reply<ReportResult>>(
         trust::verify(RESPONSE_DOMAIN, &body, &authority.signing.generation.key).unwrap(),
     )
     .unwrap()
+    .result
 }
+
+fn status(
+    authority: &mut Authority<Memory, Clock>,
+    bytes: &[u8],
+) -> (
+    Vec<windshare_relay_access::usage::AccountEntitlement>,
+    windshare_relay_access::usage::NodePolicy,
+) {
+    let ReportResult::Status {
+        entitlements,
+        policy,
+        ..
+    } = reply(authority, bytes)
+    else {
+        panic!("expected status");
+    };
+    (entitlements, policy)
+}
+
 #[test]
 fn setup_retry_reuses_principal_and_refresh_reuses_credential() {
     let mut authority = fixture();
@@ -205,11 +247,19 @@ fn late_reports_charge_the_original_day_and_restart_retries_do_not_double_charge
     };
     save(&mut authority.store, "settings", &settings).unwrap();
     let report = batch(&authority, &node, session.account, 1, 1, 700);
-    let first = reply(&mut authority, &report);
-    assert_eq!(first.entitlements[0].entitlement.remaining_bytes, 1000);
+    assert!(matches!(
+        reply(&mut authority, &report),
+        ReportResult::UsageReceived
+    ));
+    let refresh = batch(&authority, &node, session.account, 2, 2, 0);
+    let (before, _) = status(&mut authority, &refresh);
+    assert_eq!(before[0].entitlement.remaining_bytes, 1000);
     let store = authority.store.clone();
     authority = Authority::new(store, authority.environment, authority.signing).unwrap();
-    let retry = reply(&mut authority, &report);
+    assert!(matches!(
+        reply(&mut authority, &report),
+        ReportResult::UsageReceived
+    ));
     assert_eq!(
         load::<u64>(
             &authority.store,
@@ -218,22 +268,18 @@ fn late_reports_charge_the_original_day_and_restart_retries_do_not_double_charge
         .unwrap(),
         Some(700)
     );
-    assert!(retry.entitlements[0].entitlement.version > first.entitlements[0].entitlement.version);
-    let current = batch(&authority, &node, session.account, 2, 2, 300);
-    assert_eq!(
-        reply(&mut authority, &current).entitlements[0]
-            .entitlement
-            .remaining_bytes,
-        700
-    );
+    let current = batch(&authority, &node, session.account, 3, 2, 300);
+    assert!(matches!(
+        reply(&mut authority, &current),
+        ReportResult::UsageReceived
+    ));
+    let (current, _) = status(&mut authority, &refresh);
+    assert_eq!(current[0].entitlement.remaining_bytes, 700);
+    assert!(current[0].entitlement.version > before[0].entitlement.version);
     authority.environment.now += ENTITLEMENT_LIFETIME - 1;
-    let refresh = batch(&authority, &node, session.account, 3, 2, 0);
-    assert!(
-        reply(&mut authority, &refresh).entitlements[0]
-            .entitlement
-            .valid_until
-            > retry.entitlements[0].entitlement.valid_until
-    );
+    let refresh = batch(&authority, &node, session.account, 4, 2, 0);
+    let (fresh, _) = status(&mut authority, &refresh);
+    assert!(fresh[0].entitlement.valid_until > current[0].entitlement.valid_until);
 }
 #[test]
 fn credential_revocation_preserves_siblings_and_is_not_reset_by_new_days() {
@@ -266,10 +312,8 @@ fn credential_revocation_preserves_siblings_and_is_not_reset_by_new_days() {
     assert!(authority.refresh(&URL_SAFE_NO_PAD.encode([1; 32])).is_ok());
     assert!(
         authority
-            .restrictions()
+            .restricted(windshare_relay_access::restrictions::Restriction::Credential(second.id))
             .unwrap()
-            .credentials
-            .contains(&second.id)
     );
 }
 #[test]

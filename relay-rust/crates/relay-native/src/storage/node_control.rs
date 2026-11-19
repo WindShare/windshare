@@ -1,31 +1,49 @@
 use super::Database;
 use crate::node::access::Cache;
 use anyhow::{Result, anyhow};
-use rusqlite::{OptionalExtension, params};
-use windshare_relay_access::usage::Batch;
+use rusqlite::{Connection, OptionalExtension, params};
+use windshare_relay_access::{Issuer, restrictions::Restrictions, usage::Batch};
 
 impl Database {
     pub(crate) fn initialize_control(&self) -> Result<Cache> {
-        let connection = self
+        let mut connection = self
             .0
             .connection
             .lock()
             .map_err(|_| anyhow!("database lock"))?;
         connection.execute_batch("CREATE TABLE IF NOT EXISTS usage_outbox(
             id BLOB PRIMARY KEY, issuer BLOB NOT NULL, body BLOB NOT NULL, created_at INTEGER NOT NULL) STRICT;
-            CREATE TABLE IF NOT EXISTS access_cache(singleton INTEGER PRIMARY KEY CHECK(singleton=1), body BLOB NOT NULL) STRICT;")?;
-        let bytes: Option<Vec<u8>> = connection
-            .query_row(
-                "SELECT body FROM access_cache WHERE singleton=1",
-                [],
-                |row| row.get(0),
-            )
-            .optional()?;
+            CREATE TABLE IF NOT EXISTS access_cache(singleton INTEGER PRIMARY KEY CHECK(singleton=1), body BLOB NOT NULL) STRICT;
+            CREATE TABLE IF NOT EXISTS access_restrictions(issuer BLOB PRIMARY KEY, version BLOB NOT NULL, body BLOB NOT NULL) STRICT;")?;
+        let transaction = connection.transaction()?;
+        let mut cache = read_cache(&transaction)?;
+        if !cache.restrictions.is_empty() {
+            for (issuer, restrictions) in std::mem::take(&mut cache.restrictions) {
+                write_restrictions(
+                    &transaction,
+                    issuer,
+                    restrictions.version,
+                    &serde_json::to_vec(&restrictions)?,
+                )?;
+            }
+            write_cache(&transaction, &cache)?;
+        }
+        {
+            let mut statement =
+                transaction.prepare("SELECT issuer,body FROM access_restrictions")?;
+            let rows = statement.query_map([], |row| {
+                Ok((row.get::<_, Issuer>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })?;
+            for row in rows {
+                let (issuer, body) = row?;
+                cache
+                    .restrictions
+                    .push((issuer, serde_json::from_slice(&body)?));
+            }
+        }
+        transaction.commit()?;
         drop(connection);
-        bytes.map_or_else(
-            || Ok(Cache::default()),
-            |bytes| Ok(serde_json::from_slice(&bytes)?),
-        )
+        Ok(cache)
     }
 
     pub(crate) fn save_access(&self, next: Cache) -> Result<Cache> {
@@ -35,23 +53,26 @@ impl Database {
             .lock()
             .map_err(|_| anyhow!("database lock"))?;
         let transaction = connection.transaction()?;
-        let bytes: Option<Vec<u8>> = transaction
-            .query_row(
-                "SELECT body FROM access_cache WHERE singleton=1",
-                [],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let mut cache: Cache = bytes.map_or_else(
-            || Ok(Cache::default()),
-            |bytes| serde_json::from_slice(&bytes),
-        )?;
+        let mut cache = read_cache(&transaction)?;
         cache.merge(next)?;
-        transaction.execute("INSERT INTO access_cache VALUES(1,?1) ON CONFLICT(singleton) DO UPDATE SET body=excluded.body",
-            [serde_json::to_vec(&cache)?])?;
+        write_cache(&transaction, &cache)?;
         transaction.commit()?;
         drop(connection);
         Ok(cache)
+    }
+
+    pub(crate) fn save_restrictions(
+        &self,
+        issuer: Issuer,
+        restrictions: &Restrictions,
+    ) -> Result<()> {
+        let bytes = serde_json::to_vec(restrictions)?;
+        let connection = self
+            .0
+            .connection
+            .lock()
+            .map_err(|_| anyhow!("database lock"))?;
+        write_restrictions(&connection, issuer, restrictions.version, &bytes)
     }
 
     pub(crate) fn enqueue_usage(&self, batches: &[Batch]) -> Result<()> {
@@ -104,4 +125,40 @@ impl Database {
             .execute("DELETE FROM usage_outbox WHERE id=?1", [id.as_slice()])?;
         Ok(())
     }
+}
+
+fn read_cache(connection: &Connection) -> Result<Cache> {
+    let bytes: Option<Vec<u8>> = connection
+        .query_row(
+            "SELECT body FROM access_cache WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    bytes.map_or_else(
+        || Ok(Cache::default()),
+        |bytes| Ok(serde_json::from_slice(&bytes)?),
+    )
+}
+
+fn write_cache(connection: &Connection, cache: &Cache) -> Result<()> {
+    connection.execute("INSERT INTO access_cache VALUES(1,?1) ON CONFLICT(singleton) DO UPDATE SET body=excluded.body",
+        [serde_json::to_vec(cache)?])?;
+    Ok(())
+}
+
+fn write_restrictions(
+    connection: &Connection,
+    issuer: Issuer,
+    version: u64,
+    body: &[u8],
+) -> Result<()> {
+    // Big-endian bytes preserve the unsigned protocol version's order in SQLite.
+    connection.execute(
+        "INSERT INTO access_restrictions VALUES(?1,?2,?3)
+         ON CONFLICT(issuer) DO UPDATE SET version=excluded.version,body=excluded.body
+         WHERE excluded.version > access_restrictions.version",
+        params![issuer, version.to_be_bytes(), body],
+    )?;
+    Ok(())
 }

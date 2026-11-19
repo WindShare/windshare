@@ -6,13 +6,12 @@ use windshare_relay_access::{
     Credential, CredentialState, Enrollment, EnrollmentState, Poll, Refusal,
 };
 use windshare_relay_console::{
-    MAX_RECORDS, claimed_key, credential_view, enrollment_response, service_configuration, text_id,
-    user_code,
+    MAX_ACTIVE_CREDENTIALS, MAX_RECORDS, claimed_key, credential_view, enrollment_response,
+    service_configuration, text_id, user_code,
 };
 
-fn available(db: &Connection) -> Result<()> {
-    let count: u32 = db.query_row("SELECT count(*) FROM console_credentials", [], |r| r.get(0))?;
-    if usize::try_from(count)? >= MAX_RECORDS {
+pub(super) fn require_credential_capacity(db: &Connection) -> Result<()> {
+    if database::active_credentials(db)? >= MAX_ACTIVE_CREDENTIALS {
         return Err(Rejected(StatusCode::TOO_MANY_REQUESTS, "credential_capacity", 0).into());
     }
     Ok(())
@@ -125,7 +124,7 @@ impl Console {
                             return Err(refusal(Refusal::AccessDenied).into());
                         }
                     } else {
-                        available(db)?;
+                        require_credential_capacity(db)?;
                         database::save_key(
                             db,
                             &issue(
@@ -198,7 +197,7 @@ impl Console {
                 if field(body, "user_code")? != e.user_code {
                     return Err(refusal(Refusal::AccessDenied).into());
                 }
-                available(db)?;
+                require_credential_capacity(db)?;
                 e.approve(random()?, now).map_err(refusal)?;
                 database::save_enrollment(db, &e)?;
                 tracing::info!(event="enrollment_approved",enrollment_id=%text_id(&e.id));
@@ -213,7 +212,7 @@ impl Console {
                 {
                     return Err(refusal(Refusal::InvalidName).into());
                 }
-                available(db)?;
+                require_credential_capacity(db)?;
                 let key = format!("wsak_{}", text_id(&random::<32>()?));
                 let c = issue(random()?, random()?, name.to_owned(), &key, now);
                 database::save_key(db, &c)?;

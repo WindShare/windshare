@@ -1,22 +1,13 @@
 use crate::{
     Authority, Environment, Store,
+    restriction_store::BlockList,
     store::{key, load, save},
 };
 use anyhow::{Result, anyhow};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
-use windshare_relay_access::{trust, usage::ShareAttribution};
-
-#[derive(Default, Serialize, Deserialize)]
-struct Snapshot {
-    version: u64,
-    shares: BTreeSet<[u8; 12]>,
-    accounts: BTreeSet<[u8; 16]>,
-}
+use windshare_relay_access::{restrictions::Restriction, trust, usage::ShareAttribution};
 impl<R: Store, E: Environment> Authority<R, E> {
     pub(crate) fn remember_shares(&mut self, shares: &[ShareAttribution]) -> Result<()> {
-        let restrictions = self.restrictions()?;
         let mut changed = false;
         for entry in shares {
             let record = format!(
@@ -29,7 +20,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 // Remembering the association makes a later account block effective
                 // at web entrypoints without querying authority for every transfer.
                 save(&mut self.store, &record, &entry.share)?;
-                changed |= restrictions.accounts.contains(&entry.account);
+                changed |= self.restricted(Restriction::Account(entry.account))?;
             }
         }
         if changed {
@@ -39,8 +30,8 @@ impl<R: Store, E: Environment> Authority<R, E> {
     }
 
     pub(crate) fn update_public_blocks(&mut self) -> Result<()> {
-        let restrictions = self.restrictions()?;
-        let current = load::<Snapshot>(&self.store, "public-blocks")?.unwrap_or_default();
+        let restrictions = self.blocks()?;
+        let current = load::<BlockList>(&self.store, "public-blocks")?.unwrap_or_default();
         let mut shares = restrictions.shares;
         for account in &restrictions.accounts {
             let prefix = format!("{}/", key("attribution", account));
@@ -49,7 +40,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
             }
         }
         if shares != current.shares || restrictions.accounts != current.accounts {
-            let next = Snapshot {
+            let next = BlockList {
                 version: current
                     .version
                     .checked_add(1)
@@ -65,7 +56,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
     /// # Errors
     /// Propagates failure to load or sign the public restriction snapshot.
     pub fn public_blocks(&self) -> Result<serde_json::Value> {
-        let snapshot = load::<Snapshot>(&self.store, "public-blocks")?.unwrap_or_default();
+        let snapshot = load::<BlockList>(&self.store, "public-blocks")?.unwrap_or_default();
         let payload = serde_json::to_vec(&serde_json::json!({
             "version": snapshot.version, "shares": snapshot.shares,
             "accounts": snapshot.accounts, "issued_at": self.environment.now(),

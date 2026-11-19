@@ -11,6 +11,7 @@ mod nodes;
 mod profile;
 mod public_blocks;
 mod registration;
+mod restriction_store;
 mod signing;
 #[cfg(any(test, target_arch = "wasm32"))]
 mod source;
@@ -18,7 +19,7 @@ mod store;
 mod usage;
 use anyhow::Result;
 pub use challenges::EmailDelivery;
-pub use governance::Block;
+pub use governance::{Block, Report};
 pub use model::*;
 pub use nodes::{Node, NodeEnrollment, NodePolicyChange, Zone};
 pub use profile::{EmailVerification, Mailbox};
@@ -35,6 +36,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
     /// Configuration cannot move the certified signing generation backwards.
     pub fn new(mut store: R, environment: E, signing: Signing) -> Result<Self> {
         signing.activate(&mut store, environment.now())?;
+        restriction_store::migrate(&mut store)?;
         Ok(Self {
             store,
             environment,

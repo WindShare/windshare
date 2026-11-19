@@ -76,25 +76,34 @@ const onlineSeed = (await readFile(join(dirname(trustFile), 'online-1.seed'), 'u
 const onlineKey = createPublicKey(createPrivateKey({ key: Buffer.concat([
   Buffer.from('302e020100300506032b657004220420', 'hex'), Buffer.from(onlineSeed, 'base64url'),
 ]), type: 'pkcs8', format: 'der' }));
-async function usage(value) {
+async function nodeRequest(path, requestDomain, responseDomain, value) {
   const body = Buffer.from(JSON.stringify(value));
-  const signature = sign(null, Buffer.concat([Buffer.from('windshare/node-usage/v1\0'), body]), privateKey);
-  const reply = (await call('/v1/node/usage', Buffer.concat([body, signature]))).value;
+  const signature = sign(null, Buffer.concat([Buffer.from(requestDomain), body]), privateKey);
+  const reply = (await call(path, Buffer.concat([body, signature]))).value;
   const envelope = Buffer.from(reply.body, 'base64url');
-  assert(verify(null, Buffer.concat([Buffer.from('windshare/authority-response/v1\0'), envelope.subarray(0, -64)]),
+  assert(verify(null, Buffer.concat([Buffer.from(responseDomain), envelope.subarray(0, -64)]),
     onlineKey, envelope.subarray(-64)));
-  return JSON.parse(envelope.subarray(0, -64));
+  const decoded = JSON.parse(envelope.subarray(0, -64));
+  assert.deepEqual(decoded.request, value.id);
+  return decoded.result;
 }
-const initial = await usage(batch);
+const usage = value => nodeRequest('/v1/node/usage',
+  'windshare/node-usage/v1\0', 'windshare/authority-response/v2\0', value);
+const status = () => usage({ ...batch, id: [...randomBytes(16)] });
+const initial = await status();
+assert.equal(initial.kind, 'status');
 const allowance = initial.entitlements[0].entitlement;
 const day = Math.floor(batch.created_at / 86400);
-batch.records = [{ account: first.account, day, bytes: 12345 }];
-const charged = await usage(batch);
-assert.equal(charged.entitlements[0].entitlement.remaining_bytes, allowance.remaining_bytes - 12345);
-const retried = await usage(batch);
-assert.equal(retried.entitlements[0].entitlement.remaining_bytes, charged.entitlements[0].entitlement.remaining_bytes);
-const oldDay = await usage({ ...batch, id: [...randomBytes(16)], records: [{ account: first.account, day: day - 1, bytes: 6789 }] });
-assert.equal(oldDay.entitlements[0].entitlement.remaining_bytes, charged.entitlements[0].entitlement.remaining_bytes);
+const report = {
+  ...batch, resident_accounts: [], records: [{ account: first.account, day, bytes: 12345 }],
+};
+assert.deepEqual(await usage(report), { kind: 'usage_received' });
+const remaining = (await status()).entitlements[0].entitlement.remaining_bytes;
+assert.equal(remaining, allowance.remaining_bytes - 12345);
+assert.deepEqual(await usage(report), { kind: 'usage_received' });
+assert.deepEqual(await usage({ ...report, id: [...randomBytes(16)], records: [{ account: first.account, day: day - 1, bytes: 6789 }] }),
+  { kind: 'usage_received' });
+assert.equal((await status()).entitlements[0].entitlement.remaining_bytes, remaining);
 await call('/v1/accounts/credentials/revoke', { credential: first.credential }, { secret: second.credential_secret });
 await call('/v1/accounts/ticket', {}, { secret, status: 403 });
 await call('/v1/accounts/ticket', {}, { secret: second.credential_secret });
@@ -102,10 +111,17 @@ const share = [...randomBytes(12)];
 await call('/v1/reports', { share, reason: 'Local authority integration probe' });
 await call('/v1/admin/blocks', { kind: 'account', id: first.account, blocked: true }, { admin: true });
 await call('/v1/accounts/ticket', {}, { secret: second.credential_secret, status: 403 });
-const blocked = await usage({ ...batch, id: [...randomBytes(16)], records: [] });
-assert(blocked.restrictions.accounts.some(account => Buffer.from(account).equals(Buffer.from(first.account))));
-assert(blocked.restrictions.credentials.some(credential => Buffer.from(credential).equals(Buffer.from(first.credential))));
+const blocked = await status();
+const requestPage = version => nodeRequest('/v1/node/restrictions',
+  'windshare/node-restrictions/v1\0', 'windshare/restriction-page/v1\0',
+  { id: [...randomBytes(16)], node, issuer: batch.issuer, version, after: null });
+const page = await requestPage(blocked.restriction_version);
+assert.equal(page.kind, 'page');
+assert(page.entries.some(entry => entry.kind === 'account' && Buffer.from(entry.id).equals(Buffer.from(first.account))));
+assert(page.entries.some(entry => entry.kind === 'credential' && Buffer.from(entry.id).equals(Buffer.from(first.credential))));
 await call('/v1/admin/blocks', { kind: 'account', id: first.account, blocked: false }, { admin: true });
+assert.deepEqual(await requestPage(blocked.restriction_version),
+  { kind: 'superseded', version: blocked.restriction_version + 1 });
 await call('/v1/accounts/ticket', {}, { secret: second.credential_secret });
 await call('/v1/accounts/ticket', {}, { secret, status: 403 });
 await call('/v1/admin/blocks', { kind: 'share', id: share, blocked: true }, { admin: true });

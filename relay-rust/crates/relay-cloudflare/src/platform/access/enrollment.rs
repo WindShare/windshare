@@ -98,6 +98,9 @@ impl AccessObject {
                 } else if matches!(enrollment.state, EnrollmentState::Installed { .. }) {
                     return refusal(Refusal::AccessDenied);
                 } else {
+                    if db.active_credentials()? >= windshare_relay_console::MAX_ACTIVE_CREDENTIALS {
+                        return reply(&json!({"error":"credential_capacity"}), 429);
+                    }
                     let principal = Self::principal(db)?;
                     db.save_credential(&Credential {
                         id: credential,

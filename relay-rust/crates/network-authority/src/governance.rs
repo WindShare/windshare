@@ -4,6 +4,7 @@ use crate::{
 };
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
+use windshare_relay_access::restrictions::Restriction;
 
 const MAX_REPORT_REASON: usize = 2000;
 const MAX_CONSOLE_ROWS: usize = 1000;
@@ -49,30 +50,21 @@ impl<R: Store, E: Environment> Authority<R, E> {
     /// Requires a live administrator session and a nonzero target identity.
     pub fn block(&mut self, session: &str, block: Block) -> Result<()> {
         self.require_admin(session)?;
-        let mut restrictions = self.restrictions()?;
-        match block {
+        let (entry, blocked) = match block {
             Block::Share { id, blocked } => {
                 ensure!(id != [0; 12], Fault::Invalid);
-                if blocked {
-                    restrictions.shares.insert(id);
-                } else {
-                    restrictions.shares.remove(&id);
-                }
-                tracing::warn!(event="share_block_changed",share=?id,blocked);
+                (Restriction::Share(id), blocked)
             }
             Block::Account { id, blocked } => {
                 ensure!(id != [0; 16], Fault::Invalid);
-                if blocked {
-                    restrictions.accounts.insert(id);
-                } else {
-                    restrictions.accounts.remove(&id);
-                }
-                tracing::warn!(event="account_block_changed",account=?id,blocked);
+                (Restriction::Account(id), blocked)
             }
+        };
+        if self.set_restriction(entry, blocked)? {
+            tracing::warn!(event = "access_block_changed", ?entry, blocked);
+            self.update_public_blocks()?;
         }
-        restrictions.version += 1;
-        save(&mut self.store, "restrictions", &restrictions)?;
-        self.update_public_blocks()
+        Ok(())
     }
     /// # Errors
     /// Refuses malformed or rate-limited reports and storage failures.
@@ -113,8 +105,8 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 let node=key.trim_start_matches("node-load/");
                 let reported_at=crate::store::load::<u64>(&self.store,&format!("node-report/{node}"))?;
                 Ok(serde_json::json!({"node":node,"created_at":created_at,"reported_at":reported_at,"load":load}))
-            }).collect::<Result<Vec<_>>>()?,"reports":read("report/")?,
-            "restrictions":self.restrictions()?}),
+            }).collect::<Result<Vec<_>>>()?,"reports":self.store.recent_reports(MAX_CONSOLE_ROWS)?,
+            "restrictions":self.blocks()?}),
         )
     }
 }
