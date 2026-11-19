@@ -96,14 +96,14 @@ type RevisionReadmissionTrace struct {
 }
 
 func (r *jobRun) traceFileRevisionRetry(
-	plan plannedFile, previous, current content.FileRevisionDescriptor, decision string,
-	comparison content.RevisionComparisonEvidence, retained, reused uint64, started time.Time,
+	plan plannedFile, reopened *content.RevisionReopenedError, decision string,
+	retained, reused uint64, started time.Time,
 ) {
 	r.job.trace(TransferLifecycleTrace{
 		Stage: TransferFileRevisionReadmission, OutputSessionID: r.output.SessionID(), FileID: plan.file,
 		RevisionReadmission: RevisionReadmissionTrace{
-			Previous: previous.FileRevision(), Current: current.FileRevision(), Decision: decision,
-			ComparisonReason: comparison.Reason, Retained: retained, Reused: reused, Elapsed: time.Since(started),
+			Previous: reopened.Previous().FileRevision(), Current: reopened.Current().FileRevision(), Decision: decision,
+			ComparisonReason: reopened.Comparison().Reason, Retained: retained, Reused: reused, Elapsed: time.Since(started),
 		},
 	})
 }

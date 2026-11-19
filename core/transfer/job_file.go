@@ -13,25 +13,20 @@ func (r *jobRun) transferPlannedFile(ctx context.Context, plan plannedFile) erro
 	if handled, err := r.skipDeliveredFile(ctx, plan); handled || err != nil {
 		return err
 	}
+	opened, stage, err := r.openSelectedRevision(ctx, plan)
 	var retry *fileRevisionRetry
 	for {
-		opened, stage, err := r.openSelectedRevision(ctx, plan)
 		if err != nil {
 			return r.rejectFileAdmission(plan, retry, stage, err)
-		}
-		if retry != nil {
-			retry.current = opened.Descriptor
-			retry.comparison = content.CompareRevisions(retry.previous, opened.Descriptor)
-			if !retry.comparison.AllowsReuse() {
-				r.releaseRevision(ctx, plan, opened.Handle)
-				err := normalizeSourceBoundary(ctx, content.NewRevisionReopenedError(retry.previous, opened.Descriptor))
-				return r.rejectFileAdmission(plan, retry, FailureRevisionIdentity, err)
-			}
 		}
 		retry, err = r.transferFileAttempt(ctx, plan, opened, retry)
 		if retry == nil {
 			return err
 		}
+		// The paused transaction handed back the same handle with its already
+		// acquired revision. Recheck the catalog before opening the new output.
+		opened.Descriptor = retry.reopened.Current()
+		opened, stage, err = r.admitOpenedRevision(ctx, plan, opened, nil)
 	}
 }
 
@@ -68,7 +63,7 @@ func (r *jobRun) transferFileAttempt(
 			}
 			r.admitFileCoverage(retry, checkpoint.Ranges(), 0, recovered)
 		} else if retry != nil {
-			r.traceFileRevisionRetry(plan, retry.previous, opened.Descriptor, "admission-blocked", retry.comparison, retry.progress.persistedBytes, 0, retry.started)
+			r.traceFileRevisionRetry(plan, retry.reopened, "admission-blocked", retry.progress.persistedBytes, 0, retry.started)
 		}
 		r.traceFileLifecycle(TransferFileAdmitted, plan, nil)
 		return nil, r.handleImmediateSettlement(ctx, plan, opened, settlement)
@@ -96,7 +91,7 @@ func (r *jobRun) transferFileAttempt(
 	r.admitFileCoverage(retry, fileProgress.initial, fileProgress.persistedBytes, recovered)
 	if retry != nil {
 		reused := overlapBytes(fileProgress.initial, retry.progress.trusted.Ranges())
-		r.traceFileRevisionRetry(plan, retry.previous, opened.Descriptor, "readmitted", retry.comparison, retry.progress.persistedBytes, reused, retry.started)
+		r.traceFileRevisionRetry(plan, retry.reopened, "readmitted", retry.progress.persistedBytes, reused, retry.started)
 	}
 	r.traceFileLifecycle(TransferFileAdmitted, plan, nil)
 	completed, err := r.transferMissingRanges(ctx, plan, opened, transaction, &fileProgress)
@@ -181,11 +176,10 @@ func (r *jobRun) handleImmediateSettlement(
 // A single readmission covers a routine reconnect without keeping a changing
 // file at the head of the queue or repeatedly opening its output writer.
 type fileRevisionRetry struct {
-	previous, current content.FileRevisionDescriptor
-	comparison        content.RevisionComparisonEvidence
-	progress          fileTransferProgress
-	settlement        FileSettlement
-	started           time.Time
+	reopened   *content.RevisionReopenedError
+	progress   fileTransferProgress
+	settlement FileSettlement
+	started    time.Time
 }
 
 func (r *jobRun) settleReopenedRevision(
@@ -214,19 +208,19 @@ func (r *jobRun) settleReopenedRevision(
 		reason, decision = FilePauseRevisionReopened, "readmit"
 	}
 	// The range reader has drained before returning, and no output call remains
-	// active. Pause forces a durable cut of the old attempt before the next open.
-	settlement, err := r.pauseFileTransaction(ctx, plan, opened, transaction, reason, progress)
+	// active. A durable pause is required before handing the lease to a new writer.
+	settlement, err := r.pauseFileTransaction(ctx, plan, transaction, reason, progress)
 	if err != nil {
 		decision = "settlement-failed"
 	}
-	r.traceFileRevisionRetry(plan, opened.Descriptor, reopened.Current(), decision, comparison, progress.persistedBytes, 0, started)
+	r.traceFileRevisionRetry(plan, reopened, decision, progress.persistedBytes, 0, started)
 	if err == nil && settlement.Kind() == FilePaused && reason == FilePauseRevisionReopened {
 		return &fileRevisionRetry{
-			previous: opened.Descriptor, current: reopened.Current(), comparison: comparison,
-			progress: *progress, settlement: settlement, started: started,
+			reopened: reopened, progress: *progress, settlement: settlement, started: started,
 		}, nil
 	}
 
+	r.releaseRevision(ctx, plan, opened.Handle)
 	r.recordFileFailure(FileJobFailure{
 		FileID: plan.file, Path: plan.failurePath(), Stage: FailureBlockTransfer, Cause: cause,
 		Settlement: settlement, SettlementFailure: err,
@@ -249,8 +243,7 @@ func (r *jobRun) rejectFileAdmission(plan plannedFile, retry *fileRevisionRetry,
 	if retry != nil {
 		failure.Settlement = retry.settlement
 		r.job.progress.acceptFileSettlement(retry.settlement, plan.expectedSize)
-		r.traceFileRevisionRetry(plan, retry.previous, retry.current, "admission-failed",
-			retry.comparison, retry.progress.persistedBytes, 0, retry.started)
+		r.traceFileRevisionRetry(plan, retry.reopened, "admission-failed", retry.progress.persistedBytes, 0, retry.started)
 		r.traceFileSettlement(plan, retry.settlement, nil)
 	}
 	if retry != nil || !policy.jobTerminal() || stage == FailureFileOutput {

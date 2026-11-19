@@ -558,6 +558,9 @@ func (r *jobRun) readRequestedRange(ctx context.Context, plan plannedFile, opene
 		// This typed result precedes fault normalization because it is a request
 		// to settle and readmit a file, with evidence needed by that transition.
 		if reopened, ok := rawErr.(*content.RevisionReopenedError); ok {
+			if reopened == nil || reopened.Previous() != opened.Descriptor {
+				return buffered, normalizeSourceBoundary(ctx, ErrBlockIdentity)
+			}
 			return buffered, reopened
 		}
 		return buffered, normalizeSourceBoundary(ctx, rawErr)

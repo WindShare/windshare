@@ -61,27 +61,52 @@ func TestLateOrMalformedOpenCannotLeakWireLease(t *testing.T) {
 	}
 }
 
-func TestReplacementCleanupFailureIsReturnedWithCurrentLeaseStillOwned(t *testing.T) {
+func TestReplacementCleanupDeadlineIsReportedWhenTheHandleIsReleased(t *testing.T) {
 	reader, source, opened := fixture(t)
-	failure := errors.New("release transport failure")
 	source.release = func(id content.LeaseID) error {
 		if id[0] == 1 {
-			return failure
+			return context.DeadlineExceeded
 		}
 		return nil
 	}
-	source.read = func(context.Context, content.LeaseID, content.Range, transfer.RangeSink) error {
-		return content.ErrLeaseExpired
+	source.read = func(ctx context.Context, id content.LeaseID, requested content.Range, sink transfer.RangeSink) error {
+		if id[0] == 1 {
+			return content.ErrLeaseExpired
+		}
+		return sink.WriteRange(ctx, requested.Offset, make([]byte, requested.Length()))
 	}
-	err := reader.ReadRange(context.Background(), opened.Handle, opened.Descriptor, content.Range{End: 6}, transfer.RangeSinkFunc(func(context.Context, uint64, []byte) error { return nil }))
-	if !errors.Is(err, failure) {
+	sink := transfer.RangeSinkFunc(func(context.Context, uint64, []byte) error { return nil })
+	if err := reader.ReadRange(t.Context(), opened.Handle, opened.Descriptor, content.Range{End: 6}, sink); err != nil {
 		t.Fatal(err)
 	}
-	if err := reader.ReleaseRevision(context.Background(), opened.Handle); err != nil {
+	if err := reader.ReleaseRevision(t.Context(), opened.Handle); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal(err)
 	}
 	if len(source.released) != 2 || source.released[1][0] != 2 {
 		t.Fatal(source.released)
+	}
+}
+
+func TestCallerCancellationDuringReplacementCleanupWins(t *testing.T) {
+	reader, source, opened := fixture(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	source.read = func(context.Context, content.LeaseID, content.Range, transfer.RangeSink) error {
+		return content.ErrLeaseExpired
+	}
+	source.release = func(id content.LeaseID) error {
+		if id[0] == 1 {
+			cancel()
+			return context.DeadlineExceeded
+		}
+		return nil
+	}
+	sink := transfer.RangeSinkFunc(func(context.Context, uint64, []byte) error { return nil })
+	if err := reader.ReadRange(ctx, opened.Handle, opened.Descriptor, content.Range{End: 6}, sink); err != context.Canceled {
+		t.Fatalf("read ended with %v", err)
+	}
+	if err := reader.ReleaseRevision(t.Context(), opened.Handle); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("release diagnostic = %v", err)
 	}
 }
 

@@ -62,7 +62,7 @@ func TestTransferReadmitsDurableRangesAfterSourceReopen(t *testing.T) {
 		t.Fatal("missing destination reservation")
 	}
 
-	var firstRevision content.FileRevision
+	var firstRevision, offeredRevision content.FileRevision
 	var firstRange content.Range
 	var cutAt time.Time
 	var reconnectedAfter time.Duration
@@ -79,6 +79,16 @@ func TestTransferReadmitsDurableRangesAfterSourceReopen(t *testing.T) {
 			return sink.WriteRange(ctx, offset, data)
 		}))
 		if err != nil {
+			if reopened, ok := err.(*content.RevisionReopenedError); ok {
+				offeredRevision = reopened.Current().FileRevision()
+				staleSink := transfer.RangeSinkFunc(func(context.Context, uint64, []byte) error {
+					t.Error("a stale reader wrote bytes after the revision changed")
+					return transfer.ErrBlockIdentity
+				})
+				if again := continuation.ReadRange(ctx, lease, descriptor, requested, staleSink); again != reopened {
+					t.Errorf("stale reader lost its reopen result: %v", again)
+				}
+			}
 			return err
 		}
 		if cutAt.IsZero() {
@@ -137,7 +147,7 @@ func TestTransferReadmitsDurableRangesAfterSourceReopen(t *testing.T) {
 		!result.Progress.CountersExact || settled != 1 {
 		t.Fatalf("result=%+v file settlements=%d", result, settled)
 	}
-	if readmission.Previous != firstRevision || readmission.Current == firstRevision ||
+	if readmission.Previous != firstRevision || readmission.Current == firstRevision || readmission.Current != offeredRevision ||
 		readmission.ComparisonReason != content.ComparisonMetadataAgreement ||
 		readmission.Retained != firstRange.Length() || readmission.Reused != firstRange.Length() ||
 		transferred != total || retriedBytes != 0 || reconnectedAfter <= 0 {

@@ -46,11 +46,13 @@ type Reader struct {
 }
 
 type binding struct {
-	gate    chan struct{}
-	ctx     context.Context
-	cancel  context.CancelFunc
-	lease   Lease
-	failure error
+	gate       chan struct{}
+	ctx        context.Context
+	cancel     context.CancelFunc
+	lease      Lease
+	reopened   *content.RevisionReopenedError
+	failure    error
+	cleanupErr error
 }
 
 func New(ctx context.Context, source Source) *Reader {
@@ -116,11 +118,14 @@ func (r *Reader) ReadRange(ctx context.Context, handle transfer.RevisionHandle, 
 	if err := b.ctx.Err(); err != nil {
 		return err
 	}
+	if b.lease.Descriptor != descriptor {
+		if b.reopened != nil && descriptor == b.reopened.Previous() {
+			return b.reopened
+		}
+		return transfer.ErrBlockIdentity
+	}
 	if b.failure != nil {
 		return b.failure
-	}
-	if b.lease.Descriptor != descriptor {
-		return transfer.ErrBlockIdentity
 	}
 	if sink == nil || requested.Offset >= requested.End || requested.End > descriptor.ExactSize() {
 		return transfer.ErrInvalidDemand
@@ -152,8 +157,12 @@ func (r *Reader) ReadRange(ctx context.Context, handle transfer.RevisionHandle, 
 		if replaced && replacedAt == remaining.next {
 			return err
 		}
-		if err := r.replace(ctx, b); err != nil {
+		replacementErr := r.replace(ctx, b)
+		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if replacementErr != nil {
+			return replacementErr
 		}
 		replacedAt, replaced = remaining.next, true
 	}
@@ -169,21 +178,27 @@ func (r *Reader) replace(ctx context.Context, b *binding) error {
 		b.failure = transfer.ErrRevisionIdentity
 		return b.failure
 	}
-	if next.Descriptor != b.lease.Descriptor {
-		b.failure = content.NewRevisionReopenedError(b.lease.Descriptor, next.Descriptor)
-		if cleanupErr := r.release(ctx, next.LeaseID); cleanupErr != nil {
-			b.failure = errors.Join(b.failure, cleanupErr)
-		}
-		return b.failure
-	}
-	if err = ctx.Err(); err != nil {
-		return errors.Join(err, r.release(ctx, next.LeaseID))
+	if err := ctx.Err(); err != nil {
+		b.recordCleanup(r.release(ctx, next.LeaseID))
+		return err
 	}
 	previous := b.lease
+	var readErr error
+	if next.Descriptor != previous.Descriptor {
+		reopened := content.NewRevisionReopenedError(previous.Descriptor, next.Descriptor)
+		if !reopened.Comparison().AllowsReuse() {
+			b.failure = reopened
+			b.recordCleanup(r.release(ctx, next.LeaseID))
+			return reopened
+		}
+		b.reopened = reopened
+		readErr = reopened
+	}
+	// The handle owns the replacement while the output settles the old attempt.
+	// Releasing the last lease can retire the sender's stable source.
 	b.lease = next
-	// Publish the verified replacement before relinquishing the old capability;
-	// clean release of the last lease can retire the sender's stable source.
-	return r.release(ctx, previous.LeaseID)
+	b.recordCleanup(r.release(ctx, previous.LeaseID))
+	return readErr
 }
 
 func (r *Reader) ReleaseRevision(ctx context.Context, handle transfer.RevisionHandle) error {
@@ -204,7 +219,15 @@ func (r *Reader) ReleaseRevision(ctx context.Context, handle transfer.RevisionHa
 		return err
 	}
 	defer b.unlock()
-	return r.release(cleanup, b.lease.LeaseID)
+	return errors.Join(b.cleanupErr, r.release(cleanup, b.lease.LeaseID))
+}
+
+// A download can replace many leases. Keep the first unconfirmed release for
+// the owner's cleanup report without growing state or overriding a read result.
+func (b *binding) recordCleanup(err error) {
+	if b.cleanupErr == nil {
+		b.cleanupErr = err
+	}
 }
 
 func (r *Reader) Stop() {
