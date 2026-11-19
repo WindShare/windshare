@@ -2,7 +2,7 @@ import { ContentAllocation, demandBytes, orderedContentLanes, type ContentAssign
 import type { BlockReceivePermit } from './receive-window'
 import { RESCUE_POLL_MILLISECONDS, type DispatchPurpose, type RescueReason } from './exploration'
 import type { DeliveryEstimate } from './completion'
-import type { SamplingOutcome } from './sampling'
+import { LaneCapacityBackoff, type ContentAdmissionOutcome } from './capacity-backoff'
 
 const PRIORITIES = ['preview', 'download', 'prefetch'] as const
 const PRIORITY_AGING_MILLISECONDS = 1000
@@ -18,7 +18,7 @@ export type ContentAdmission = {
   readonly permit: BlockReceivePermit
   readonly started: number
   readonly expected: DeliveryEstimate
-  close(outcome: SamplingOutcome): void
+  close(outcome: ContentAdmissionOutcome): void
 } & (
   | { readonly purpose: Exclude<DispatchPurpose, 'rescue'>; readonly rescueReason?: never }
   | { readonly purpose: 'rescue'; readonly rescueReason: RescueReason }
@@ -42,7 +42,7 @@ export class ContentAdmissions {
   readonly #now: () => number
   readonly #pending = new Set<PendingAdmission>()
   readonly #allocation = new ContentAllocation()
-  readonly #capacityUntil = new WeakMap<ContentLane, number>()
+  readonly #bandwidth = new WeakMap<ContentLane, LaneCapacityBackoff>()
   #scheduled = false
   #deadline: ReturnType<typeof setTimeout> | undefined
 
@@ -51,9 +51,9 @@ export class ContentAdmissions {
     this.#now = now
   }
 
-  deferCapacity(lane: ContentLane, milliseconds: number): void {
-    this.#capacityUntil.set(lane, Math.max(this.#capacityUntil.get(lane) ?? 0, this.#now() + milliseconds))
-    this.wake()
+  removeLane(lane: ContentLane): void {
+    this.#bandwidth.get(lane)?.close()
+    this.#bandwidth.delete(lane)
   }
 
   request(work: ContentWork, signal: AbortSignal, eligible: (lane: ContentLane) => boolean): Promise<ContentAdmission> {
@@ -134,12 +134,8 @@ export class ContentAdmissions {
   }
 
   #nextCapacityDeadline(): number {
-    const now = this.#now()
     let at = Infinity
-    for (const lane of this.#lanes()) {
-      const until = this.#capacityUntil.get(lane) ?? 0
-      if (until > now) at = Math.min(at, until)
-    }
+    for (const lane of this.#lanes()) at = Math.min(at, this.#bandwidth.get(lane)?.deadline() ?? Infinity)
     return at
   }
 
@@ -151,7 +147,9 @@ export class ContentAdmissions {
 
   #select(): ContentSelection<PendingAdmission> {
     const now = this.#now()
-    const lanes = this.#lanes().filter(lane => now >= (this.#capacityUntil.get(lane) ?? 0))
+    const lanes = this.#lanes()
+    const readiness = (lane: ContentLane) => this.#bandwidth.get(lane)?.readiness(now, lane.inflight) ?? 'ready'
+    const ready = lanes.filter(lane => readiness(lane) === 'ready')
     const candidates = [...this.#pending].filter(item => item.capacity === undefined || item.capacity.readiness() === 'ready').sort((a, b) => {
       const agedA = now - a.queuedAt >= PRIORITY_AGING_MILLISECONDS
       const agedB = now - b.queuedAt >= PRIORITY_AGING_MILLISECONDS
@@ -164,13 +162,25 @@ export class ContentAdmissions {
     // into a long, irrevocable duplicate.
     for (const work of candidates) {
       if (work.intent.kind !== 'rescue') continue
-      const lane = orderedContentLanes(lanes, work).find(work.intent.eligible)
+      const lane = orderedContentLanes(ready, work).find(work.intent.eligible)
       if (lane === undefined || !lane.receive.available) continue
       const reason = work.intent.decide(lane)
       if (reason !== undefined) return { kind: 'dispatch', assignment: { work, lane, purpose: 'rescue', reason } }
     }
-    return this.#allocation.select(candidates.filter(work => work.intent.kind === 'content'), lanes, now,
-      (lane, work) => work.intent.kind === 'content' && work.intent.eligible(lane))
+    const content = candidates.filter(work => work.intent.kind === 'content')
+    const selection = this.#allocation.select(content, ready, now, (lane, work) => work.intent.eligible(lane))
+    if (selection.kind === 'dispatch' || content.length === 0) return selection
+
+    // Use recovery for work with no normal path. A healthy lane can be briefly
+    // out of receive credit, and waiting for that credit preserves its frontier.
+    const recoverable = lanes.filter(lane => readiness(lane) === 'recoverable')
+    if (recoverable.length === 0) return selection
+    for (const work of content) {
+      if (ready.some(lane => work.routes.allows(lane.route) && work.intent.eligible(lane))) continue
+      const lane = orderedContentLanes(recoverable, work).find(lane => lane.receive.available && work.intent.eligible(lane))
+      if (lane !== undefined) return { kind: 'dispatch', assignment: { work, lane, purpose: 'capacity-recovery' } }
+    }
+    return selection
   }
 
   demand(): { queuedBytes: number; queuedBlocks: number; networkWaitingBytes: number; capacityWaitingBytes: number } {
@@ -196,6 +206,14 @@ export class ContentAdmissions {
       if (work.capacity !== undefined && release === undefined) return false
       permit = lane.receive.tryAcquire(bytes, work.queuedAt)
       if (permit === undefined) { release?.(); return false }
+      const recovery = purpose === 'capacity-recovery'
+      const available = this.#bandwidth.get(lane)?.start(this.#now(), lane.inflight, recovery) ?? !recovery
+      if (!available) {
+        permit.close()
+        release?.()
+        this.wake()
+        return false
+      }
       this.#pending.delete(work)
       work.cleanup()
       this.#allocation.started(work, purpose, this.#now())
@@ -207,6 +225,16 @@ export class ContentAdmissions {
       this.#reject(work, error)
     }
     return true
+  }
+
+  #settleCapacity(lane: ContentLane, outcome: ContentAdmissionOutcome, now: number): void {
+    let backoff = this.#bandwidth.get(lane)
+    if (backoff === undefined) {
+      if (typeof outcome === 'string' || !this.#lanes().includes(lane)) return
+      backoff = new LaneCapacityBackoff(() => this.wake())
+      this.#bandwidth.set(lane, backoff)
+    }
+    backoff.settle(outcome, now)
   }
 
   #begin(
@@ -228,8 +256,10 @@ export class ContentAdmissions {
         if (closed) return
         closed = true
         lane.inflight--
-        lane.performance.complete(this.#now(), bytes, outcome === 'completed')
-        if (purpose !== 'rescue') lane.sampling.settled(bytes, this.#now(), outcome)
+        const now = this.#now()
+        this.#settleCapacity(lane, outcome, now)
+        lane.performance.complete(now, bytes, outcome === 'completed')
+        if (purpose !== 'rescue') lane.sampling.settled(bytes, now, typeof outcome === 'string' ? outcome : 'cancelled')
         this.#allocation.completed(work)
         permit.close()
         release?.()

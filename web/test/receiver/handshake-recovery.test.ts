@@ -38,7 +38,7 @@ class HandshakeChannel implements FrameChannel {
   readonly frames: ReadableStream<Uint8Array>
   readonly helloSent = deferred<void>()
   state: FrameChannel['state'] = 'open'
-  capacityWaitMilliseconds = 0
+  readonly capacityPressure = { remainingMilliseconds: 0, cleared: false, subscribeClearance: () => () => undefined }
   #clientHello!: Uint8Array
   #controller!: ReadableStreamDefaultController<Uint8Array>
   readonly #response: Response
@@ -133,7 +133,7 @@ describe('initial browser handshake under relay congestion', () => {
     const channels = { queued: new HandshakeChannel('silent'), alternate: new HandshakeChannel('silent') }
     const fixture = await initialJoinFixture(channels)
     await Promise.all(Object.values(channels).map(channel => channel.helloSent.promise))
-    channels.queued.capacityWaitMilliseconds = 15_000
+    channels.queued.capacityPressure.remainingMilliseconds = 15_000
 
     await vi.advanceTimersByTimeAsync(20_000)
     expect(fixture.states.at(-1)).toEqual({ kind: 'waiting', reason: 'bandwidth' })
@@ -173,7 +173,7 @@ describe('initial browser handshake under relay congestion', () => {
     await vi.advanceTimersByTimeAsync(5_000)
     allowDial.resolve()
     await channel.helloSent.promise
-    channel.capacityWaitMilliseconds = 15_000
+    channel.capacityPressure.remainingMilliseconds = 15_000
 
     await vi.advanceTimersByTimeAsync(24_999)
     expect(channel.state).toBe('open')

@@ -1,3 +1,5 @@
+import type { CapacityPressure } from './capacity'
+
 export const MIN_FRAME_BYTES = 1
 export const MAX_FRAME_BYTES = 65_536
 
@@ -14,8 +16,8 @@ export type ChannelState = 'connecting' | 'open' | 'closed'
  */
 export interface FrameChannel {
   readonly state: ChannelState
-  /** Remaining advisory pressure lease, independent of authority and liveness. */
-  readonly capacityWaitMilliseconds?: number
+  /** Advisory flow pressure, independent of authority and liveness. */
+  readonly capacityPressure?: CapacityPressure
 
   /**
    * Aborts once the channel can no longer accept application sends. Accepted

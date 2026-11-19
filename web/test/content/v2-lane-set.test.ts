@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { BandwidthWaitError } from '../../src/contracts/capacity'
+import { BandwidthWaitError, capacityWaitFailure, MINIMUM_BANDWIDTH_RETRY_MILLISECONDS } from '../../src/contracts/capacity'
 import { FileGeometry } from '../../src/content/geometry'
 import {
   BlockDispatchSequenceAuthority,
@@ -9,11 +9,16 @@ import {
   type BlockDemand,
   type BlockDispatchObservation,
   type BlockLane,
+  type BlockReadObserver,
   type BlockRouteObservation,
 } from '../../src/content/lane-set'
 import type { BlockRecord, FileRevisionDescriptor } from '../../src/content/records'
 import type { BlockRouteEligibility } from '../../src/content/route-policy'
 import { SessionRuntimeError } from '../../src/session/runtime-types'
+import { OpaqueRelayFrameChannel } from '../../src/transport/relay/receiver/channel'
+import { DEFAULT_RELAY_RECEIVE_CAPACITY } from '../../src/transport/relay/receiver/capacity'
+import { deferred } from '../session/v2-send-fixture'
+import { FakeSocket, relaySessionId } from '../transport/relay-receiver-fixture'
 
 const ALL_ROUTES: BlockRouteEligibility = Object.freeze({
   active: true,
@@ -104,6 +109,12 @@ class ImmediateLane implements BlockLane {
   }
 }
 
+function reportPressure(socket: FakeSocket, direction: 0 | 1, milliseconds: number): void {
+  const notice = Uint8Array.of(0x57, 0x53, 0x32, 0x5a, 2, direction, 0, 0, ...relaySessionId, 0, 0, 0, 0)
+  new DataView(notice.buffer).setUint32(16, milliseconds)
+  socket.message(notice)
+}
+
 afterEach(() => vi.useRealTimers())
 
 describe('v2 receiver LaneSet', () => {
@@ -127,6 +138,127 @@ describe('v2 receiver LaneSet', () => {
     lanes.add(new ImmediateLane(2), 'direct')
     await expect(result).resolves.toMatchObject({ data: Uint8Array.of(2) })
     lanes.close()
+  })
+
+  it('admits one recovery block after both relay directions clear and resumes after authentication', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    const socket = new FakeSocket(false)
+    const channel = new OpaqueRelayFrameChannel(socket, relaySessionId, DEFAULT_RELAY_RECEIVE_CAPACITY)
+    const scheduled = vi.fn()
+    const lanes = new LaneSet({ onBlockScheduled: scheduled })
+    const finishProbe = deferred<void>()
+    const healthy = new ImmediateLane(1)
+    let calls = 0
+    lanes.add({
+      id: healthy.id,
+      async fetchBlock(input: BlockDemand, _signal: AbortSignal, observer?: BlockReadObserver) {
+        calls++
+        if (calls === 1) throw capacityWaitFailure(channel, new Error('fragment inactivity'))
+        if (calls === 2) {
+          observer?.received(1)
+          await finishProbe.promise
+        }
+        return healthy.fetchBlock(input)
+      },
+    }, 'application-relay')
+    reportPressure(socket, 0, 15_000)
+    reportPressure(socket, 1, 15_000)
+    const signal = new AbortController().signal
+    const downloads = [lanes.fetch(demand(0n), ALL_ROUTES, signal), lanes.fetch(demand(1n), ALL_ROUTES, signal)]
+    try {
+      await vi.advanceTimersByTimeAsync(1_000)
+      reportPressure(socket, 1, 0)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(calls).toBe(1)
+      reportPressure(socket, 0, 0)
+      reportPressure(socket, 0, 15_000)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(calls).toBe(1)
+      reportPressure(socket, 0, 0)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(calls).toBe(2)
+      expect(scheduled).toHaveBeenLastCalledWith(expect.objectContaining({ purpose: 'capacity-recovery' }))
+
+      reportPressure(socket, 0, 0)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(calls).toBe(2)
+      finishProbe.resolve()
+      await expect(Promise.all(downloads)).resolves.toHaveLength(2)
+      expect(calls).toBe(3)
+      expect(scheduled).toHaveBeenLastCalledWith(expect.objectContaining({ purpose: 'content' }))
+    } finally {
+      finishProbe.resolve()
+      lanes.close()
+      await Promise.allSettled(downloads)
+      await channel.close()
+    }
+  })
+
+  it('keeps work on a healthy direct lane while its receive credit is occupied', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    const socket = new FakeSocket(false)
+    const channel = new OpaqueRelayFrameChannel(socket, relaySessionId, DEFAULT_RELAY_RECEIVE_CAPACITY)
+    const lanes = new LaneSet()
+    const relayFetch = vi.fn(async () => { throw capacityWaitFailure(channel, new Error('fragment inactivity')) })
+    const direct = new DeferredLane(2)
+    lanes.add({ id: 1, fetchBlock: relayFetch }, 'application-relay')
+    reportPressure(socket, 1, 15_000)
+    const signal = new AbortController().signal
+    const downloads = [lanes.fetch(demand(0n), ALL_ROUTES, signal), lanes.fetch(demand(1n), ALL_ROUTES, signal)]
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+      lanes.add(direct, 'direct')
+      await vi.advanceTimersByTimeAsync(0)
+      reportPressure(socket, 1, 0)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(relayFetch).toHaveBeenCalledTimes(1)
+      expect(direct.calls).toHaveLength(1)
+      direct.resolve(0)
+      await vi.advanceTimersByTimeAsync(0)
+      expect([...direct.calls].sort()).toEqual([0n, 1n])
+      direct.resolve(1)
+      await Promise.all(downloads)
+    } finally {
+      lanes.close()
+      for (const index of direct.calls.keys()) direct.resolve(index)
+      await Promise.allSettled(downloads)
+      await channel.close()
+    }
+  })
+
+  it('uses clearance received before the wait registers and preserves backoff after a failed probe', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    const socket = new FakeSocket(false)
+    const channel = new OpaqueRelayFrameChannel(socket, relaySessionId, DEFAULT_RELAY_RECEIVE_CAPACITY)
+    const lanes = new LaneSet()
+    const healthy = new ImmediateLane(1)
+    let calls = 0
+    lanes.add({ id: healthy.id, fetchBlock: async input => {
+      calls++
+      if (calls <= 2) {
+        reportPressure(socket, 1, 15_000)
+        const failure = capacityWaitFailure(channel, new Error('fragment inactivity'))
+        // Block cancellation can yield after classification but before the admission settles.
+        if (calls === 1) reportPressure(socket, 1, 0)
+        throw failure
+      }
+      return healthy.fetchBlock(input)
+    } }, 'application-relay')
+    const result = lanes.fetch(demand(0n), ALL_ROUTES, new AbortController().signal)
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+      expect(calls).toBe(2)
+      reportPressure(socket, 1, 0)
+      await vi.advanceTimersByTimeAsync(MINIMUM_BANDWIDTH_RETRY_MILLISECONDS - 1)
+      expect(calls).toBe(2)
+      await vi.advanceTimersByTimeAsync(1)
+      await expect(result).resolves.toMatchObject({ data: Uint8Array.of(1) })
+      expect(calls).toBe(3)
+    } finally {
+      lanes.close()
+      await Promise.allSettled([result])
+      await channel.close()
+    }
   })
 
   it('cancels a bandwidth wait and releases its timer', async () => {

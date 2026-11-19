@@ -5,6 +5,7 @@ import { LanePerformance } from './scheduling/performance'
 import { LaneSampling, type SamplingEvidence, type SamplingOutcome } from './scheduling/sampling'
 import { BlockReceiveWindow, type BlockReceiveAdmission } from './scheduling/receive-window'
 import { ContentAdmissions, type ContentAdmission } from './scheduling/admission'
+import type { ContentAdmissionOutcome } from './scheduling/capacity-backoff'
 import { LaneRequests, type RequestSchedulingObservation } from './scheduling/requests'
 import { orderedContentLanes, demandBytes, type ContentLane, type ContentWork } from './scheduling/selection'
 import { LaneRescues, rescueDecision, type RescueReason, type DispatchPurpose } from './scheduling/exploration'
@@ -179,6 +180,7 @@ export class LaneSet {
     const state = this.#lanes.get(laneId)
     if (state?.laneEpoch !== laneEpoch) return
     state.unsubscribeReceive()
+    this.#admissions.removeLane(state)
     this.#lanes.delete(laneId)
     this.#draining.set(laneId, state)
     this.requests.remove(laneId, laneEpoch)
@@ -189,6 +191,7 @@ export class LaneSet {
     const state = this.#lanes.get(laneId) ?? this.#draining.get(laneId)
     if (state !== undefined) {
       state.unsubscribeReceive()
+      this.#admissions.removeLane(state)
       this.#retired.add(state)
       this.#releaseRetired(state)
     }
@@ -413,7 +416,7 @@ export class LaneSet {
     const bytes = demandBytes(demand)
     const releaseAttempt = this.#attemptLifetimes.begin(demand.leaseId)
     this.#activeFetches.set(state, (this.#activeFetches.get(state) ?? 0) + 1)
-    let outcome: SamplingOutcome = 'cancelled'
+    let outcome: ContentAdmissionOutcome = 'cancelled'
     let received = 0
     try {
       signal.throwIfAborted()
@@ -455,8 +458,7 @@ export class LaneSet {
       outcome = attemptOutcome(signal)
       if (!signal.aborted && error instanceof BandwidthWaitError) {
         attempts.waiting(state)
-        this.#admissions.deferCapacity(state, error.retryAfterMilliseconds)
-        outcome = 'cancelled'
+        outcome = error
       } else if (!signal.aborted && isRetryableLaneFailure(error)) {
         state.failed = true
         attempts.failed(state)
@@ -501,6 +503,7 @@ export class LaneSet {
     this.#lifetime.abort(new Error('LaneSet is closed'))
     for (const state of new Set([...this.#lanes.values(), ...this.#draining.values(), ...this.#retired])) {
       state.unsubscribeReceive()
+      this.#admissions.removeLane(state)
       state.lane.close?.()
     }
     this.#lanes.clear()

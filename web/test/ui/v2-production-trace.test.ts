@@ -41,7 +41,7 @@ it('exports scheduling decisions with session, lane, block, and completion estim
   const composition = productionComposition()
   composition.runtime.enable()
   const source = createProtocolTraceSource(composition.trace)
-  const purposes = ['content', 'probe', 'sample', 'rescue'] as const
+  const purposes = ['content', 'probe', 'sample', 'rescue', 'capacity-recovery'] as const
   for (const purpose of purposes) {
     const event = {
       eventName: 'content_scheduling' as const,

@@ -5,7 +5,7 @@ export const MINIMUM_RESCUE_MILLISECONDS = 10
 export const RESCUE_POLL_MILLISECONDS = 10
 const HEDGE_DELAY_FACTOR = 2
 export const MAXIMUM_SUPPLEMENTS = 2
-export type DispatchPurpose = 'content' | 'probe' | 'sample' | 'rescue'
+export type DispatchPurpose = 'content' | 'probe' | 'sample' | 'rescue' | 'capacity-recovery'
 
 export function isExploratoryDispatch(purpose: DispatchPurpose): boolean {
   return purpose === 'probe' || purpose === 'sample'

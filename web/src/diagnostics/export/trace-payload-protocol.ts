@@ -550,7 +550,7 @@ export function validateContentScheduling(payload: UnknownRecord): void {
   decimalFields(payload, ['dispatch_sequence', 'block_index', 'pending_bytes'], 'content scheduling')
   canonicalIdentity(payload.file_id, 'content scheduling file')
   member(payload.route, ['application-relay', 'direct', 'turn'], 'content scheduling route')
-  member(payload.purpose, ['content', 'probe', 'sample', 'rescue'], 'content scheduling purpose')
+  member(payload.purpose, ['content', 'probe', 'sample', 'rescue', 'capacity-recovery'], 'content scheduling purpose')
   if (payload.delivery_evidence !== undefined) {
     member(payload.delivery_evidence, ['unknown', 'recent', 'stale'], 'content delivery evidence')
   }

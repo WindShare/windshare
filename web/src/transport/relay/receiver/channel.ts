@@ -1,5 +1,5 @@
 import type { ChannelState, Frame, FrameChannel } from '../../../contracts/channel'
-import { capacityWaitFailure } from '../../../contracts/capacity'
+import { capacityWaitFailure, type CapacityPressure } from '../../../contracts/capacity'
 import { CAPACITY_WAIT_MAGIC, decodeCapacityWait } from '../capacity-wait-codec'
 import { equalBytes } from '../../../crypto/bytes'
 import { decodeOpaqueRoute, encodeOpaqueRoute } from '../protocol'
@@ -9,6 +9,7 @@ import type { ReceiveLedgerEvent } from '../../../contracts/relay-delivery-obser
 import { RelayHeartbeat, type RelayHeartbeatTrace } from '../heartbeat'
 import { ReceiverCredit } from '../receiver-credit'
 import { RelayReceiveBuffer } from './receive-buffer'
+import { RelayCapacityPressure } from './capacity-pressure'
 import {
   RelayReceiverError, RELAY_HEARTBEAT_CLOSE_CODE, RELAY_PROTOCOL_CLOSE_CODE,
   WEBSOCKET_CLOSING, WEBSOCKET_CLOSED, awaitSocketClose, decodeRelayErrorIfPresent,
@@ -32,7 +33,8 @@ export class OpaqueRelayFrameChannel implements FrameChannel {
   #closeTask: Promise<void> | undefined
   #feedbackTask: Promise<void> | undefined
   #feedbackRequested = false
-  readonly #capacityUntil = [0, 0]
+  readonly #capacityPressure = new RelayCapacityPressure()
+  readonly capacityPressure: CapacityPressure = this.#capacityPressure
 
   constructor(socket: WebSocketPort, relaySessionId: Uint8Array, capacity: RelayReceiveCapacity,
     heartbeatTrace?: (event: RelayHeartbeatTrace) => void, receiveTrace?: (event: ReceiveLedgerEvent) => void) {
@@ -49,10 +51,6 @@ export class OpaqueRelayFrameChannel implements FrameChannel {
     socket.addEventListener('close', this.#onClose)
     socket.addEventListener('error', this.#onError)
     this.#heartbeat = new RelayHeartbeat(socket, error => this.#fail(error, RELAY_HEARTBEAT_CLOSE_CODE, 'relay heartbeat failed'), heartbeatTrace)
-  }
-
-  get capacityWaitMilliseconds(): number {
-    return Math.max(0, ...this.#capacityUntil.map(until => until - performance.now()))
   }
 
   get unavailable(): AbortSignal { return this.#lifetime.signal }
@@ -133,7 +131,7 @@ export class OpaqueRelayFrameChannel implements FrameChannel {
       if (!equalBytes(wait.relaySessionId, this.#relaySessionId)) {
         throw new RelayReceiverError('Relay reported capacity for another session')
       }
-      this.#capacityUntil[wait.direction] = performance.now() + wait.milliseconds
+      this.#capacityPressure.update(wait.direction, wait.milliseconds)
       return
     }
     const relayError = decodeRelayErrorIfPresent(encoded)
@@ -228,6 +226,7 @@ export class OpaqueRelayFrameChannel implements FrameChannel {
     this.#lifetime.abort(reason)
     this.#socketLifetime.abort(reason)
     this.#heartbeat.close()
+    this.#capacityPressure.close()
     this.#socket.removeEventListener('message', this.#onMessage)
     this.#socket.removeEventListener('close', this.#onClose)
     this.#socket.removeEventListener('error', this.#onError)

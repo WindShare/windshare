@@ -39,7 +39,7 @@ export async function runInitialJoinAttempt<T>(options: AttemptOptions<T>): Prom
   function congestedHandshakes(): { relayBase: string; milliseconds: number }[] {
     const congested = []
     for (const [channel, handshake] of handshakes) {
-      const milliseconds = channel.capacityWaitMilliseconds ?? 0
+      const milliseconds = channel.capacityPressure?.remainingMilliseconds ?? 0
       if (!handshake.signal.aborted && channel.state === 'open' && milliseconds > 0) {
         congested.push({ relayBase: handshake.relayBase, milliseconds })
       }
