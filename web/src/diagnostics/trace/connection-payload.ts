@@ -17,15 +17,17 @@ export interface ConnectionTracePayloads {
     version?: number
     failure_detail?: string
   }>
-  readonly network_directory: Readonly<{
-    operation_id: string
+  readonly network_directory: Readonly<{ operation_id: string } & ({
     mirror: string
     transition: 'accepted' | 'rejected'
     generation?: number
     serial?: number
     trusted_until_ms?: number
     failure_detail?: string
-  }>
+  } | {
+    transition: 'storage_fallback'
+    failure_detail: string
+  })>
   readonly connection_recovery: Readonly<{
     generation_id: string
     share_id?: string

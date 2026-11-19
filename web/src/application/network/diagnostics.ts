@@ -20,6 +20,13 @@ export function networkObserver(trace: DomainTraceSource<TraceEventObservationV2
   return event => {
     const observer = trace.current
     if (!observer) return
+    if (event.transition === 'storage_fallback') {
+      observer(observation('network_directory', {
+        operation_id: event.operationId, transition: event.transition,
+        failure_detail: formatDiagnosticText(event.failure).slice(0, 2048),
+      }))
+      return
+    }
     observer(observation('network_directory', {
       operation_id: event.operationId, mirror: event.mirror.slice(0, 2048), transition: event.transition,
       ...(event.generation === undefined ? {} : { generation: event.generation }),

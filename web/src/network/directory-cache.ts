@@ -10,6 +10,12 @@ export interface DirectoryCache {
   commit(snapshot: NetworkSnapshot): Promise<void>
 }
 
+interface LoadedDirectoryCache {
+  readonly cache: DirectoryCache
+  readonly record: DirectoryRecord | undefined
+  readonly storageDenial?: DOMException
+}
+
 function nextRecord(previous: DirectoryRecord | undefined, snapshot: NetworkSnapshot): DirectoryRecord {
   rejectRollback(previous?.cursor, snapshot.cursor)
   const aliases: Record<string, string> = { ...previous?.aliases }
@@ -37,6 +43,22 @@ const STORE = 'trust'
 export class BrowserDirectoryCache implements DirectoryCache {
   readonly #key: string[]
   constructor(network: string) { this.#key = ['directory', network] }
+
+  static async initialize(network: string): Promise<LoadedDirectoryCache> {
+    if (!('indexedDB' in globalThis)) return { cache: new MemoryDirectoryCache(), record: undefined }
+
+    const cache = new BrowserDirectoryCache(network)
+    let db: IDBDatabase
+    try {
+      db = await cache.#open()
+    } catch (failure) {
+      if (!(failure instanceof DOMException && failure.name === 'SecurityError')) throw failure
+      // This page has no access to durable trust history, just like a browser without IndexedDB.
+      return { cache: new MemoryDirectoryCache(), record: undefined, storageDenial: failure }
+    }
+    return { cache, record: await cache.#loadAndClose(db) }
+  }
+
   async #open(): Promise<IDBDatabase> {
     return new Promise((resolve, reject) => {
       let blocked = false
@@ -49,7 +71,10 @@ export class BrowserDirectoryCache implements DirectoryCache {
   }
 
   async load(): Promise<DirectoryRecord | undefined> {
-    const db = await this.#open()
+    return this.#loadAndClose(await this.#open())
+  }
+
+  async #loadAndClose(db: IDBDatabase): Promise<DirectoryRecord | undefined> {
     try {
       return await new Promise((resolve, reject) => {
         const tx = db.transaction(STORE, 'readonly'), request = tx.objectStore(STORE).get(this.#key)

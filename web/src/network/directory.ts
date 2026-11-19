@@ -1,4 +1,4 @@
-import { BrowserDirectoryCache, MemoryDirectoryCache, type DirectoryCache } from './directory-cache'
+import { BrowserDirectoryCache, type DirectoryCache } from './directory-cache'
 import { MAXIMUM_ENVELOPE_BYTES, rejectRollback, usableDirectory, verifyDirectory, type NetworkRoot, type NetworkSnapshot } from './node-directory'
 
 const REFRESH_TIMEOUT_MS = 6_000
@@ -8,7 +8,7 @@ const MINIMUM_BACKOFF_MS = 30_000
 const MAXIMUM_BACKOFF_MS = 30 * 60 * 1000
 const MIRRORS_PER_REFRESH = 3
 
-export interface DirectoryObservation {
+export type DirectoryObservation = {
   readonly operationId: string
   readonly transition: 'accepted' | 'rejected'
   readonly mirror: string
@@ -16,6 +16,10 @@ export interface DirectoryObservation {
   readonly serial?: number
   readonly trustedUntil?: number
   readonly failure?: unknown
+} | {
+  readonly operationId: string
+  readonly transition: 'storage_fallback'
+  readonly failure: DOMException
 }
 export interface NetworkDirectoryOptions {
   readonly network: string
@@ -32,7 +36,7 @@ export interface NetworkDirectoryOptions {
 
 export class NetworkDirectory {
   readonly #options: NetworkDirectoryOptions
-  readonly #cache: DirectoryCache
+  readonly #initialized: Promise<DirectoryCache>
   readonly #now: () => number
   readonly #lifetime = new AbortController()
   readonly ready: Promise<void>
@@ -46,16 +50,20 @@ export class NetworkDirectory {
   constructor(options: NetworkDirectoryOptions) {
     if (options.mirrors.length > 8) throw new TypeError('Too many network mirrors')
     this.#options = options
-    this.#cache = options.cache ?? (!('indexedDB' in globalThis) ? new MemoryDirectoryCache() : new BrowserDirectoryCache(options.network))
     this.#now = options.now ?? Date.now
-    this.ready = this.#initialize()
+    this.#initialized = this.#initialize()
+    this.ready = this.#initialized.then(() => undefined)
     this.ready.then(() => this.refresh()).catch(() => undefined)
   }
 
   get snapshot(): NetworkSnapshot | undefined { return usableDirectory(this.#snapshot, this.#now()) ? this.#snapshot : undefined }
 
-  async #initialize(): Promise<void> {
-    const record = await this.#cache.load()
+  async #initialize(): Promise<DirectoryCache> {
+    const provided = this.#options.cache
+    const { cache, record, storageDenial } = provided
+      ? { cache: provided, record: await provided.load(), storageDenial: undefined }
+      : await BrowserDirectoryCache.initialize(this.#options.network)
+    if (storageDenial) this.#observe({ operationId: 'directory-initialize', transition: 'storage_fallback', failure: storageDenial })
     if (record) {
       const cached = await verifyDirectory(record.envelope, this.#options.network, this.#options.roots)
       if (cached.cursor.generation !== record.cursor.generation || cached.cursor.serial !== record.cursor.serial || cached.cursor.digest !== record.cursor.digest) throw new Error('Network cache history mismatch')
@@ -65,22 +73,23 @@ export class NetworkDirectory {
       const embedded = await verifyDirectory(this.#options.embedded, this.#options.network, this.#options.roots)
       const current = this.#snapshot?.cursor
       if (!current || embedded.cursor.generation > current.generation || embedded.cursor.generation === current.generation && embedded.cursor.serial >= current.serial) {
-        await this.#cache.commit(embedded)
+        await cache.commit(embedded)
         this.#snapshot = embedded
       }
     }
+    return cache
   }
 
   async refresh(): Promise<void> {
-    await this.ready
+    const cache = await this.#initialized
     this.#lifetime.signal.throwIfAborted()
     if (this.#pending) return this.#pending
     if (this.#failures > 0 && this.#now() < this.#retryAt) throw new Error('Network refresh is in backoff')
-    this.#pending = this.#refresh().finally(() => { this.#pending = undefined })
+    this.#pending = this.#refresh(cache).finally(() => { this.#pending = undefined })
     return this.#pending
   }
 
-  async #refresh(): Promise<void> {
+  async #refresh(cache: DirectoryCache): Promise<void> {
     const operationId = `directory-refresh-${++this.#refreshSequence}`
     const overall = AbortSignal.any([this.#lifetime.signal, AbortSignal.timeout(REFRESH_TIMEOUT_MS)])
     const mirrors = [...this.#options.mirrors]
@@ -96,7 +105,7 @@ export class NetworkDirectory {
         overall.throwIfAborted()
         if (!usableDirectory(next, this.#now())) throw new Error('Network directory expired')
         rejectRollback(this.#snapshot?.cursor, next.cursor)
-        await this.#cache.commit(next)
+        await cache.commit(next)
         this.#snapshot = next
         this.#failures = 0
         this.#schedule(REFRESH_INTERVAL_MS)

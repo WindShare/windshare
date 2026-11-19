@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { resolveLinkRelays } from '../../src/application/network/resolve'
+import { encodeSuite02CapabilityKey } from '../../src/crypto/suite02-link'
 import { MemoryDirectoryCache } from '../../src/network/directory-cache'
-import { NetworkDirectory } from '../../src/network/directory'
+import { NetworkDirectory, type DirectoryObservation } from '../../src/network/directory'
 import { rejectRollback, usableDirectory, verifyDirectory, type NetworkRoot } from '../../src/network/node-directory'
 
 const vectors = JSON.parse(readFileSync(new URL('../../../testdata/network/directory.json', import.meta.url), 'utf8')) as {
@@ -54,6 +56,40 @@ describe('root-authorized network directory', () => {
     expect(calls).toEqual(['https://ws.ourworld.top/.well-known/windshare-network', 'https://mirror.example/directory'])
     expect(observations).toEqual(['rejected', 'accepted'])
     expect(directory.snapshot!.cursor.generation).toBe(2)
+  })
+  it('resolves an alias-only link and keeps refreshing when IndexedDB access is denied', async () => {
+    const key = await encodeSuite02CapabilityKey(new Uint8Array(16), new Uint8Array(16))
+    const denial = new DOMException('Storage access denied', 'SecurityError')
+    const open = vi.fn(() => { throw denial })
+    vi.stubGlobal('indexedDB', { open })
+    const observations: DirectoryObservation[] = []
+    const fetch = vi.fn(async () => new Response(envelope('new_generation')))
+    const directory = new NetworkDirectory({ network: vectors.network, roots: vectors.roots, embedded: envelope('valid'),
+      mirrors: ['https://mirror.example/directory'], now: () => now, fetch, observe: value => observations.push(value),
+    })
+    directories.push(directory)
+
+    const candidates = resolveLinkRelays({ ...key, relays: [], nodeAliases: ['jp1'] }, directory)
+    await expect(candidates.all()).resolves.toEqual(['https://jp1.example'])
+    await directory.refresh()
+    expect(directory.snapshot?.cursor.generation).toBe(2)
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(fetch).toHaveBeenCalled()
+    expect(observations[0]).toMatchObject({ transition: 'storage_fallback', failure: denial })
+  })
+  it('preserves a database open failure without an explicit storage policy denial', async () => {
+    const failure = new DOMException('Failed to open the backing store', 'UnknownError')
+    vi.stubGlobal('indexedDB', { open: () => { throw failure } })
+    const fetch = vi.fn()
+    const directory = new NetworkDirectory({ network: vectors.network, roots: vectors.roots, embedded: envelope('valid'),
+      mirrors: ['https://mirror.example/directory'], now: () => now, fetch,
+    })
+    directories.push(directory)
+
+    await expect(directory.ready).rejects.toBe(failure)
+    await expect(directory.refresh()).rejects.toBe(failure)
+    expect(directory.snapshot).toBeUndefined()
+    expect(fetch).not.toHaveBeenCalled()
   })
   it('keeps an expired higher generation instead of reviving an older release seed', async () => {
     const cache = new MemoryDirectoryCache()
