@@ -17,69 +17,44 @@ const session = (directory, files, config = build) => ({
   open_files: files, diagnostic_files: files,
 })
 const range = { start: { line: 2, character: 4 }, end: { line: 2, character: 5 } }
-const capabilities = { executeCommandProvider: { commands: ['gopls.diagnose_files', 'gopls.views'] } }
+const capabilities = { executeCommandProvider: { commands: ['gopls.diagnose_files'] } }
 
-test('one session submits every file beyond Windows argv limits and awaits final diagnosis', async () => {
+test('one session diagnoses all files in a single pass beyond Windows argv limits', async () => {
   const files = Array.from({ length: 1400 }, (_, i) => `long/path with spaces/文件-${i}.go`)
   assert.ok(files.join(' ').length > 32767)
-  const calls = []
-  let release
+  const opened = []
+  const requests = []
+  const diagnosing = Promise.withResolvers()
+  const pending = Promise.withResolvers()
   let finished = false
-  const pending = new Promise((done) => { release = done })
-  const connection = {
-    async request(method, params) {
-      calls.push({ method, params })
-      if (method === 'initialize') return { capabilities }
-      if (params.command === 'gopls.views') return [{ ID: 'native' }]
-      return params.arguments[0].Files.length === files.length ? pending : null
-    },
-    async notify(method, params) { calls.push({ method, params }) },
-  }
-  const run = diagnose(connection, {
-    root, files, batchSize: files.length, log: () => {}, read: async () => 'package fixture\n',
-  })
-    .then(() => { finished = true })
-  while (calls.at(-1)?.params?.arguments?.[0]?.Files?.length !== files.length) {
-    await new Promise(setImmediate)
-  }
-  assert.equal(finished, false)
-  const opened = calls.filter(({ method }) => method === 'textDocument/didOpen')
-  assert.equal(opened.length, files.length)
-  assert.deepEqual(calls.at(-1).params.arguments[0].Files, opened.map(({ params }) => params.textDocument.uri))
-  assert.equal(opened[0].params.textDocument.text, 'package fixture\n')
-  release(null)
-  await run
-  assert.equal(finished, true)
-})
-
-test('fixed configurations bound open files and diagnose before every close', async () => {
-  const files = Array.from({ length: 14 }, (_, i) => `file-${i}.go`)
-  const active = new Set()
-  const diagnosed = new Set()
-  let maxOpen = 0
   const connection = {
     async request(method, params) {
       if (method === 'initialize') return { capabilities }
-      assert.equal(params.command, 'gopls.diagnose_files')
-      for (const uri of params.arguments[0].Files) {
-        assert.ok(active.has(uri))
-        diagnosed.add(uri)
-      }
-      return null
+      requests.push({ method, params })
+      diagnosing.resolve()
+      return pending.promise
     },
     async notify(method, params) {
-      if (method === 'textDocument/didOpen') active.add(params.textDocument.uri)
-      if (method === 'textDocument/didClose') {
-        assert.ok(diagnosed.has(params.textDocument.uri))
-        active.delete(params.textDocument.uri)
-      }
-      maxOpen = Math.max(maxOpen, active.size)
+      if (method === 'initialized') return
+      assert.equal(method, 'textDocument/didOpen')
+      opened.push(params.textDocument)
     },
   }
-  await diagnose(connection, { root, files, batchSize: 3, read: async () => '', log: () => {} })
-  assert.equal(diagnosed.size, files.length)
-  assert.ok(maxOpen <= 3)
-  assert.equal(active.size, 0)
+  const run = diagnose(connection, {
+    root, files, log: () => {}, read: async () => 'package fixture\n',
+  }).then(() => { finished = true })
+  await Promise.race([diagnosing.promise, run])
+  assert.equal(finished, false)
+  assert.equal(opened.length, files.length)
+  assert.equal(opened[0].text, 'package fixture\n')
+  assert.deepEqual(requests, [{
+    method: 'workspace/executeCommand',
+    params: { command: 'gopls.diagnose_files', arguments: [{ Files: opened.map(({ uri }) => uri) }] },
+  }])
+  pending.resolve(null)
+  await run
+  assert.equal(finished, true)
+  assert.equal(requests.length, 1)
 })
 
 test('missing command support and unreadable sources fail instead of checking a partial set', async () => {
@@ -220,12 +195,11 @@ function fakeServer(mode, hooks = {}) {
   }
   child.kill = () => { stop(1); return true }
   const server = new LspConnection(child.stdin, child.stdout, {
-    onRequest(method, params) {
+    onRequest(method) {
       if (method === 'initialize') {
         if (mode === 'crash') queueMicrotask(() => stop(2))
         return { result: { capabilities } }
       }
-      if (params?.command === 'gopls.views') return { result: [{ ID: 'native' }] }
       if (method === 'shutdown' && mode === 'shutdown-error') {
         return { error: { code: -1, message: 'cannot shut down' } }
       }

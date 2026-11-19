@@ -30,6 +30,8 @@ test('real gopls diagnoses fixed foreign profiles, siblings, and persisted-flag 
     [`foreign/native_${native.goos}.go`]: 'package foreign\n\nvar _ = nativeOnly\n',
     'ambient/default.go': '//go:build !probe\n\npackage ambient\n\nvar Number int = "wrong type"\n',
     'ambient/tagged.go': '//go:build probe\n\npackage ambient\n\nvar Number int = 42\n',
+    'hints/first.go': 'package hints\nimport "maps"\nfunc First(m map[int]int) { for key := range maps.Keys(m) { println(key) } }\n',
+    'hints/second.go': 'package hints\nimport "maps"\nfunc Second(m map[int]int) { for value := range maps.Values(m) { println(value) } }\n',
   }
   for (const [file, content] of Object.entries(sources)) {
     const path = join(root, file)
@@ -66,5 +68,14 @@ test('real gopls diagnoses fixed foreign profiles, siblings, and persisted-flag 
       } else assert.deepEqual(diagnostics, [])
     })
   }
+  await t.test('one diagnostic pass publishes hints for every selected file', async () => {
+    const files = ['hints/first.go', 'hints/second.go']
+    const diagnostics = await checkFiles({ root, files, build: native, timeoutMs: 60_000 })
+    for (const file of files) {
+      const uri = pathToFileURL(join(root, file)).href
+      assert.ok(diagnostics.some((item) => item.uri === uri && item.severity === 4 &&
+        item.source === 'maprange'), JSON.stringify(diagnostics))
+    }
+  })
   assert.equal(await readFile(goenv, 'utf8'), persisted)
 })

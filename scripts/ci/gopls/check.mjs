@@ -7,13 +7,11 @@ import { buildEnvironment } from './environment.mjs'
 import { clientHandlers, compareDiagnostics, diagnosticKey, DOCUMENT_VERSION } from './diagnostics.mjs'
 
 const DIAGNOSE_COMMAND = 'gopls.diagnose_files'
-// Bound snapshots and open-file analyses without maintaining an entire module's overlays.
-const MAX_OPEN_BATCH_FILES = 8
 const ANALYSIS_TIMEOUT_MS = 15 * 60 * 1000
 const SHUTDOWN_TIMEOUT_MS = 30_000
 
 export async function diagnose(connection, {
-  root, files, log, read = readFile, batchSize = MAX_OPEN_BATCH_FILES,
+  root, files, log, read = readFile,
 }) {
   const initialized = await connection.request('initialize', {
     processId: process.pid,
@@ -36,34 +34,24 @@ export async function diagnose(connection, {
     // LSP also permits a plain version string.
   }
   log('initialized', { files: files.length, server: initialized.serverInfo?.name ?? null, version })
-  let submitted = 0
-  let batch = []
-  const flush = async () => {
-    if (batch.length === 0) return
-    // Explicit completion preserves hints before close; neither idle time nor
-    // the first publication is an analysis barrier.
-    await connection.request('workspace/executeCommand', {
-      command: DIAGNOSE_COMMAND, arguments: [{ Files: batch }],
-    })
-    for (const uri of batch) {
-      await connection.notify('textDocument/didClose', { textDocument: { uri } })
-    }
-    log('batch_complete', { files: submitted, total: files.length })
-    batch = []
-  }
+  // gopls diagnoses the full build view on each request and recomputes views
+  // on open and close. Keep the selected files open through the owned server's
+  // shutdown so one diagnostic pass can publish hints for the whole session.
+  log('opening_files', { files: files.length })
+  const uris = []
   for (const file of files) {
-    if (batch.length === 0) log('opening_batch', { completed: submitted, total: files.length })
     const path = resolve(root, file)
     const uri = pathToFileURL(path).href
     await connection.notify('textDocument/didOpen', {
       textDocument: { uri, languageId: 'go', version: DOCUMENT_VERSION, text: await read(path, 'utf8') },
     })
-    submitted++
-    batch.push(uri)
-    if (batch.length === batchSize) await flush()
+    uris.push(uri)
   }
-  await flush()
-  log('analysis_complete', { files: submitted })
+  log('diagnosing_files', { files: uris.length })
+  await connection.request('workspace/executeCommand', {
+    command: DIAGNOSE_COMMAND, arguments: [{ Files: uris }],
+  })
+  log('analysis_complete', { files: uris.length })
 }
 
 // Build configuration and diagnostic scope travel together. Sequential owned

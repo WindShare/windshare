@@ -124,8 +124,33 @@ jobs:
         run: make workflow-lint
       - name: Lint Go source
         run: make lint
+      # Refresh the shared index weekly so new package entries can be published
+      # without producing an archive for every commit.
+      - name: Resolve gopls analysis cache key
+        id: gopls-cache-key
+        shell: bash
+        run: |
+          binary_hash="$(sha256sum "$(command -v gopls)" | cut -d ' ' -f 1)"
+          prefix="gopls-analysis-v1-$RUNNER_OS-$RUNNER_ARCH-$binary_hash"
+          echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+          echo "key=$prefix-$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+      - name: Restore gopls analysis cache
+        id: gopls-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/gopls-cache/gopls
+          key: ${{ steps.gopls-cache-key.outputs.key }}
+          restore-keys: ${{ steps.gopls-cache-key.outputs.prefix }}-
       - name: Check Go language-server diagnostics
+        env:
+          GOPLSCACHE: ${{ runner.temp }}/gopls-cache
         run: make gopls
+      - name: Save gopls analysis cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.gopls-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/gopls-cache/gopls
+          key: ${{ steps.gopls-cache.outputs.cache-primary-key }}
 
   go-non-core:
     name: Non-core Go packages
