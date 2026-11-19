@@ -43,16 +43,32 @@ impl ProofKind {
 
 pub enum EmailOwner {
     Registration(RegistrationAttempt),
+    // Released clients (v0.1.3) send their setup secret only with the code, so the
+    // challenge id returned to the requester binds the proof instead.
+    ReleasedRegistration,
     Account(AccountId),
 }
 
 impl EmailOwner {
-    fn key(&self) -> String {
+    fn key(&self, challenge: &str) -> String {
         match self {
             Self::Registration(attempt) => ProofKind::Email.registration_key(*attempt),
-            Self::Account(id) => key("account-email-proof", id),
+            Self::ReleasedRegistration => released_registration_email_key(challenge),
+            Self::Account(id) => account_email_key(id),
         }
     }
+}
+
+fn account_email_key(id: &AccountId) -> String {
+    key("account-email-proof", id)
+}
+
+// The domain prefix keeps a challenge digest distinct from a setup secret digest.
+fn released_registration_email_key(challenge: &str) -> String {
+    key(
+        ProofKind::Email.registration_prefix(),
+        &digest(&format!("challenge/{challenge}")),
+    )
 }
 
 #[derive(Serialize, Deserialize)]
@@ -144,10 +160,10 @@ impl EmailDelivery {
     /// # Errors
     /// Only a successful provider delivery should replace the previously usable code.
     pub fn accepted(self, store: &mut impl Store, now: u64) -> Result<Challenge> {
-        if matches!(self.owner, EmailOwner::Registration(_)) {
+        if !matches!(self.owner, EmailOwner::Account(_)) {
             store.prune_registration_proofs(ProofKind::Email, now)?;
         }
-        save(store, &self.owner.key(), &self.proof)?;
+        save(store, &self.owner.key(&self.proof.id), &self.proof)?;
         tracing::info!(event = "email_verification_delivered", challenge = %self.proof.id);
         Ok(self.proof.into_challenge())
     }
@@ -200,9 +216,9 @@ impl<R: Store, E: Environment> Authority<R, E> {
         address: &str,
     ) -> Result<EmailDelivery> {
         self.throttle(source, "email-source", EMAIL_BURST, EMAIL_REFILL_SECONDS)?;
-        if let EmailOwner::Account(_) = owner {
+        if let EmailOwner::Account(id) = &owner {
             self.throttle(
-                &owner.key(),
+                &account_email_key(id),
                 "email-account",
                 EMAIL_BURST,
                 EMAIL_REFILL_SECONDS,
@@ -232,7 +248,13 @@ impl<R: Store, E: Environment> Authority<R, E> {
             id.len() <= MAX_CHALLENGE_ID_BYTES && solution.len() <= MAX_SOLUTION_BYTES,
             Fault::Invalid
         );
-        self.redeem_proof(&kind.registration_key(attempt), solution, |proof| {
+        let redemption = self.redeem_proof(&kind.registration_key(attempt), solution, |proof| {
+            proof.id == id && proof.method.kind() == kind
+        })?;
+        if kind != ProofKind::Email || !matches!(redemption, ProofRedemption::Unavailable) {
+            return Ok(redemption);
+        }
+        self.redeem_proof(&released_registration_email_key(id), solution, |proof| {
             proof.id == id && proof.method.kind() == kind
         })
     }
@@ -244,7 +266,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
         id: &str,
         code: &str,
     ) -> Result<()> {
-        let storage_key = EmailOwner::Account(account).key();
+        let storage_key = account_email_key(&account);
         let result = self.redeem_proof(&storage_key, code, |proof| {
             proof.id == id && matches!(&proof.method, ProofMethod::Email { address: target, .. } if target == address)
         })?;

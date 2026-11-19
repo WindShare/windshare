@@ -41,8 +41,9 @@ test('the Worker isolates registration email challenges while tracking retries',
   const worker = await mf.getWorker('authority');
   let cookie = '';
   let csrf = '';
-  async function call(path, body, { status = 200, method = 'POST', admin = false } = {}) {
+  async function call(path, body, { status = 200, method = 'POST', admin = false, source } = {}) {
     const headers = { 'Content-Type': 'application/json', Origin: 'https://localhost' };
+    if (source) headers['CF-Connecting-IP'] = source;
     if (admin) Object.assign(headers, { Cookie: cookie, 'X-CSRF-Token': csrf });
     const response = await worker.fetch('https://localhost' + path,
       { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -94,4 +95,17 @@ test('the Worker isolates registration email challenges while tracking retries',
   assert.equal((await register(first.challenge.id, 'typo', 428)).challenge.id, '');
   assert.equal((await register(second.challenge.id, second.code)).profile.email, 'alice@qq.com');
   assert.equal((await register(other.challenge.id, other.code, 200, otherSecret)).profile.email, 'bob@qq.com');
+
+  // Released clients (v0.1.3) request the email without their setup secret and
+  // then register with the delivered challenge id and code.
+  const released = { source: '198.51.100.7' };
+  const releasedSecret = randomBytes(32).toString('base64url');
+  const releasedRegister = (challenge, solution, status = 200) => call('/v1/accounts',
+    { client_secret: releasedSecret, challenge, solution }, { ...released, status });
+  assert.equal((await releasedRegister(null, null, 428)).value.challenge.id, '');
+  const legacy = (await call('/v1/accounts/email', { email: 'carol@qq.com' }, released)).value;
+  assert.equal(delivered.to, 'carol@qq.com');
+  const legacyCode = delivered.text.match(/Verification code: (\S+)/)[1];
+  assert.deepEqual((await releasedRegister(legacy.id, 'typo', 428)).value, { kind: 'verification', challenge: legacy });
+  assert.equal((await releasedRegister(legacy.id, legacyCode)).value.profile.email, 'carol@qq.com');
 });

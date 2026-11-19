@@ -166,6 +166,49 @@ fn mistyped_registration_email_code_keeps_its_challenge_until_attempts_run_out()
 }
 
 #[test]
+fn released_clients_redeem_registration_email_by_challenge() {
+    let mut authority = fixture();
+    let mut settings = authority.settings().unwrap();
+    settings.registration = RegistrationPolicy::Email;
+    save(&mut authority.store, "settings", &settings).unwrap();
+    let address = Mailbox::parse("carol@qq.com").unwrap();
+    // v0.1.3 requests the code without its setup secret.
+    let released = EmailVerification::Registration {
+        client_secret: None,
+    };
+    let (delivered, code) = authority
+        .deliver_email("source", released, &address)
+        .unwrap();
+    let mut proof = registration(10);
+    proof.challenge = Some(delivered.id.clone());
+    proof.solution = Some("mistyped".into());
+    match authority
+        .register("source", proof.clone())
+        .unwrap_err()
+        .downcast::<Fault>()
+        .unwrap()
+    {
+        Fault::Verification { challenge } => assert_eq!(challenge.id, delivered.id),
+        other => panic!("expected a verification prompt, got {other:?}"),
+    }
+    // A challenge for one setup secret is not reachable through the released binding.
+    let (bound, bound_code) = authority
+        .deliver_email(
+            "other-source",
+            registration_email(&registration(11)),
+            &address,
+        )
+        .unwrap();
+    let mut other = proof.clone();
+    other.challenge = Some(bound.id);
+    other.solution = Some(bound_code);
+    assert!(authority.register("other-source", other).is_err());
+    proof.solution = Some(code);
+    let session = authority.register("source", proof).unwrap();
+    assert_eq!(session.profile.email.as_deref(), Some("carol@qq.com"));
+}
+
+#[test]
 fn the_last_work_registration_reuses_its_challenge_and_creates_a_profile_without_email() {
     let mut authority = fixture();
     let settings = Settings {

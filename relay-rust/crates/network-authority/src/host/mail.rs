@@ -37,7 +37,9 @@ struct ProfileEmail {
 #[serde(deny_unknown_fields)]
 struct RegistrationEmail {
     email: String,
-    client_secret: String,
+    // Released clients (v0.1.3) request a code before sending their setup secret.
+    #[serde(default)]
+    client_secret: Option<String>,
 }
 fn parse_request(
     bytes: &[u8],
