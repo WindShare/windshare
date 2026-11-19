@@ -30,12 +30,11 @@ Publish `windshare-network.json` as `/.well-known/windshare-network` on both
 frontends and as a GitHub release asset. Keep the embedded snapshot current in client
 releases. Cache expiry disables directory use for new work without stopping transfers.
 
-For local zero-configuration sharing, run `make development-build` from this
-checkout. The [development profile](development/README.md) contains its own public
-roots and signed history; the CLI, desktop and Web select it explicitly without
-changing the production manifest. Outputs and persistent test state belong in
-`.windshare-dev/`; local development private keys may stay in the ignored `.secret/`.
-Ordinary rebuilds need no signing keys.
+To verify first-run sharing, create a fresh settings file containing `{"profiles":[]}`
+and point `WINDSHARE_CONFIG` at it. Share a test file with `go run ./cmd/wind share <file>`
+or from `make desktop`. Open the link in a fresh browser profile and compare the
+download with the source. This smoke check uses the official frontend and live
+relay nodes. For local relay and browser work, run `dev.ps1`.
 
 Public STUN fallbacks: the existing Google endpoint,
 [Cloudflare](https://developers.cloudflare.com/realtime/turn/), and

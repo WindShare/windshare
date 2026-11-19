@@ -106,7 +106,6 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 │   ├── network/                  Signed network manifests, history, and Caddy templates
 │   └── wsrelay/                  Native relay container image
 └── scripts/
-    ├── build/                    Development network multi-target build script
     ├── ci/                       CI gates, validation tooling, and release certification
     ├── deploy/                   Native relay, network authority, and Cloudflare deployment
     ├── install/                  CLI installers and Windows network setup

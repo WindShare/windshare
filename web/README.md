@@ -26,6 +26,7 @@ See [`docs/protocol.md`](../docs/protocol.md), [`docs/browser-downloads.md`](../
 ## Development
 
 Install Web dependencies (`pnpm -C web install --frozen-lockfile`) and Playwright runtimes outside the gates.
+On Windows, run `.\dev.ps1` from the repository root to start Vite and a local relay.
 
 ```sh
 pnpm -C web dev

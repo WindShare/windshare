@@ -21,7 +21,6 @@ Make targets build [`cmd/windshare-host`](../cmd/windshare-host/) (`c-shared`) a
 | Command | Behavior |
 |---|---|
 | `make desktop-package` | Builds a signed Windows identity package, Explorer DLL, executable, Go library, icons and current-user installer under `dist/desktop`; verifies the relocated host ([`package.mjs`](package.mjs)). |
-| `make development-build` | Builds CLI, desktop, and Web against the [development network](../deploy/network/development/README.md). |
 | `make desktop-preview DESKTOP_CARGO_ARGS='--features motion-profile'` | Writes CPU `layout`/`prepaint`/`paint`, presentation-interval, and share-phase CSV samples (not GPU completion timing) to `windshare-motion-<pid>.csv` in the OS temp dir or `WINDSHARE_MOTION_PROFILE` ([`profiling/mod.rs`](crates/windshare-desktop/src/profiling/mod.rs)). |
 | `make desktop-check`, `make sloc` | Runs Rust formatting, Clippy, desktop/host ABI tests, build checks, and source-size limits. |
 

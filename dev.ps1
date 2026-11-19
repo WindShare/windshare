@@ -5,9 +5,11 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = $PSScriptRoot
+$developmentDirectory = Join-Path $repositoryRoot '.windshare-dev'
 $relayAddress = '127.0.0.1:8484'
-$frontendUri = 'http://localhost:38384'
-$publicRelayBaseUrl = 'ws://localhost:38384'
+$frontend = [Uri]'http://localhost:38384'
+$frontendUri = $frontend.GetLeftPart([UriPartial]::Authority)
+$publicRelayBaseUrl = "ws://$($frontend.Authority)"
 $relayHealthUri = "$frontendUri/healthz"
 $readinessTimeout = [TimeSpan]::FromSeconds(60)
 $readinessPollInterval = [TimeSpan]::FromMilliseconds(200)
@@ -149,25 +151,36 @@ if (-not (Test-Path -LiteralPath $viteCommand -PathType Leaf)) {
 $services = @()
 $exitCode = 0
 try {
-    $relayStateDirectory = Join-Path $repositoryRoot '.windshare-dev'
+    # Keep the node identity and database together under the node's configuration.
+    $relayStateDirectory = Join-Path $developmentDirectory 'relay'
     [IO.Directory]::CreateDirectory($relayStateDirectory) | Out-Null
+    $relayConfigPath = Join-Path $relayStateDirectory 'node.json'
+    $relayConfig = @{
+        listen = $relayAddress
+        database = 'relay.sqlite'
+        identity_file = 'identity.json'
+        endpoint = "$publicRelayBaseUrl/v2/ws"
+        origins = @{ kind = 'allowlist'; origins = @($frontendUri) }
+        stun = @{ udp_addresses = @(); admin_address = $null }
+        node = @{ services = @{ relay = $true; stun = $false } }
+    }
+    [IO.File]::WriteAllText($relayConfigPath, ($relayConfig | ConvertTo-Json -Depth 5))
+
+    $relayManifestPath = Join-Path $repositoryRoot 'relay-rust/Cargo.toml'
+    $relayTargetDirectory = Join-Path $developmentDirectory 'target'
     # Complete compilation before starting the service readiness deadline.
-    & $rustup run stable cargo build --locked --manifest-path relay-rust/Cargo.toml `
-        --package windshare-relay-native --bin relay-native --target-dir .windshare-dev/target
+    & $rustup run stable cargo build --locked --manifest-path $relayManifestPath `
+        --package windshare-relay-native --bin relay-native --target-dir $relayTargetDirectory
     if ($LASTEXITCODE -ne 0) { throw 'Native relay build failed.' }
     $services += Start-LocalService `
         -Name 'relay' `
         -FilePath $rustup `
         -ArgumentList @(
             'run', 'stable', 'cargo', 'run', '--locked',
-            '--manifest-path', 'relay-rust/Cargo.toml',
+            '--manifest-path', ('"{0}"' -f $relayManifestPath),
             '--package', 'windshare-relay-native', '--bin', 'relay-native',
-            '--target-dir', '.windshare-dev/target', '--',
-            '--database', '".windshare-dev/relay.sqlite"',
-            '--listen', $relayAddress,
-            '--public-endpoint', "$publicRelayBaseUrl/v2/ws",
-            '--allow-localhost',
-            '--stun-udp', '""'
+            '--target-dir', ('"{0}"' -f $relayTargetDirectory),
+            '--', '--config', ('"{0}"' -f $relayConfigPath)
         )
     $services += Start-LocalService `
         -Name 'frontend' `
@@ -180,9 +193,9 @@ try {
             '--mode',
             'windshare-local',
             '--host',
-            'localhost',
+            $frontend.Host,
             '--port',
-            '38384',
+            [string]$frontend.Port,
             '--strictPort'
         )
 

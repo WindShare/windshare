@@ -23,11 +23,11 @@ export function desktopArtifacts(messages) {
   return { executable, hostDirectory: output, ...(shell ? { shell } : {}) };
 }
 
-export async function buildDesktop(command, { cwd, env } = {}) {
+export async function buildDesktop(command) {
   if (!hostLibrary) throw new Error('Unsupported desktop platform');
   if (!command.length) throw new Error('Expected a Cargo build command');
   const build = spawnSync(command[0], [...command.slice(1), '--message-format=json-render-diagnostics'], {
-    cwd, env, stdio: ['inherit', 'pipe', 'inherit'], encoding: 'utf8', maxBuffer: MAX_CARGO_OUTPUT_BYTES,
+    stdio: ['inherit', 'pipe', 'inherit'], encoding: 'utf8', maxBuffer: MAX_CARGO_OUTPUT_BYTES,
   });
   if (build.error) throw build.error;
   const messages = build.stdout.split(/\r?\n/u).filter(Boolean).map(line => JSON.parse(line));
