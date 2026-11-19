@@ -142,7 +142,7 @@ impl Governor {
 
     fn pump(&self) {
         let mut state = self.state.lock().expect("governor");
-        state.pump(&self.access);
+        state.grant_pending(&self.access, |_, wake| wake.notify_one());
     }
 }
 
@@ -158,7 +158,7 @@ impl State {
         }
     }
 
-    fn pump(&mut self, access: &Service) {
+    fn grant_pending(&mut self, access: &Service, mut on_grant: impl FnMut(u64, &Notify)) {
         let available = self.pacing.replenish(Instant::now());
         let second = super::now().unsigned_abs();
         if self.classified != second {
@@ -179,7 +179,7 @@ impl State {
             let next = queue.front().copied();
             let lane = self.lanes.get_mut(&id).expect("scheduled lane");
             lane.granted = true;
-            lane.wake.notify_one();
+            on_grant(id, &lane.wake);
             if let Some(next) = next {
                 let demand = self.demand(next, access);
                 assert!(self.scheduler.request(session, demand));
@@ -205,8 +205,16 @@ impl LaneLease {
             let demand = state.demand(self.id, &self.governor.access);
             assert!(state.scheduler.request(session, demand));
         }
-        state.pump(&self.governor.access);
-        state.lanes.get(&self.id).is_some_and(|lane| lane.granted)
+        // The active caller can take its grant directly. Other lanes may be waiting.
+        let mut granted = false;
+        state.grant_pending(&self.governor.access, |id, wake| {
+            if id == self.id {
+                granted = true;
+            } else {
+                wake.notify_one();
+            }
+        });
+        granted
     }
 
     pub fn submitted(&self) {

@@ -1,10 +1,17 @@
 use super::*;
 use crate::{
+    Database,
     config::limits,
     environment::Trace,
+    node::{
+        Runtime, Settings,
+        governor::{Governor, LaneLease},
+    },
     test_support::{Fixture, connection},
 };
-use std::collections::VecDeque;
+use futures_util::FutureExt;
+use std::{collections::VecDeque, time::Duration};
+use tokio::sync::Notify;
 use windshare_relay_core::{
     flow::Counts,
     identifiers::RelaySessionId,
@@ -166,6 +173,85 @@ impl Scenario {
             self.fixture.now(false),
         )
     }
+}
+
+#[test]
+fn synchronous_bandwidth_grant_does_not_wake_the_share() {
+    let mut scenario = Scenario::new();
+    let (mut outbox, _writer, _) = channel(connection(3), Runtime::default());
+    let wake = Arc::new(Notify::new());
+    outbox.set_wake(Arc::clone(&wake));
+
+    scenario.queue(&mut outbox, 1);
+    assert_eq!(scenario.submit(&mut outbox).unwrap().refusal, None);
+    assert!(wake.notified().now_or_never().is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn synchronous_bandwidth_grant_still_wakes_the_other_waiting_direction() {
+    let scenario = Scenario::new();
+    let reverse = scenario
+        .relay
+        .delivery_flows()
+        .find(|flow| flow.direction() == Direction::ToSender)
+        .unwrap();
+    let max_frame = u64::from(OpaqueHeader::MAX_ENCODED_BYTES);
+    let (_directory, governor) = paced_governor(&scenario, max_frame);
+    let (waiting, waiting_wake) = register_lane(&governor, scenario.flow);
+    let (active, active_wake) = register_lane(&governor, reverse);
+
+    assert!(waiting.ready(max_frame));
+    waiting.submitted();
+    let _ = waiting_wake.notified().now_or_never();
+    let frame = max_frame / 2;
+    assert!(!waiting.ready(frame));
+    tokio::time::advance(Duration::from_secs(1)).await;
+
+    assert!(active.ready(frame));
+    assert!(waiting_wake.notified().now_or_never().is_some());
+    assert!(waiting.ready(frame));
+    assert!(active_wake.notified().now_or_never().is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn paced_bandwidth_grant_wakes_the_waiter() {
+    let scenario = Scenario::new();
+    let frame = u64::from(OpaqueHeader::MAX_ENCODED_BYTES);
+    let (_directory, governor) = paced_governor(&scenario, frame);
+    let (waiting, wake) = register_lane(&governor, scenario.flow);
+
+    assert!(waiting.ready(frame));
+    waiting.submitted();
+    let _ = wake.notified().now_or_never();
+    assert!(!waiting.ready(frame));
+
+    tokio::select! {
+        () = governor.run() => panic!("governor stopped with a waiting lane"),
+        result = tokio::time::timeout(Duration::from_secs(2), wake.notified()) => result.unwrap(),
+    }
+    assert!(waiting.ready(frame));
+}
+
+fn paced_governor(scenario: &Scenario, rate: u64) -> (tempfile::TempDir, Governor) {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Database::open(
+        &directory.path().join("node.sqlite"),
+        scenario.flow.session().relay(),
+    )
+    .unwrap();
+    let settings = Settings {
+        capacity_bytes_per_second: Some(rate),
+        ..Settings::default()
+    };
+    (directory, Runtime::new(settings, store).unwrap().governor)
+}
+
+fn register_lane(governor: &Governor, flow: FlowKey) -> (LaneLease, Arc<Notify>) {
+    let wake = Arc::new(Notify::new());
+    let lease = governor
+        .register(flow, Attribution::Anonymous, Arc::clone(&wake))
+        .unwrap();
+    (lease, wake)
 }
 
 #[tokio::test]
