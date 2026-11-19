@@ -7,6 +7,9 @@ import { BoundaryFaultError, FaultScope, SourceFaultCode, sourceFault } from '..
 import { SelectionPolicy } from '../../../src/catalog/selection'
 import { createProgressiveWorkspaceExecution } from '../../../src/output/execution/progressive-workspace-execution'
 import { createProgressiveZipOutput } from '../../../src/output/progressive-zip/output'
+import {
+  snapshotLogicalArtifactPath, snapshotMaterializationRootRelativePath, snapshotSourceAuthenticationPath,
+} from '../../../src/transfer/job/coordinate/direct-tree'
 import { catalogFixture, digestIdentity, directoryEntry, fileEntry, identity, identityText, planAuthorityFixture, readerFixture,
   receiveIntentFixture, transferJobFixture } from '../../transfer/v2-job-fixture'
 import { ZipReader, Uint8ArrayReader, Uint8ArrayWriter } from '@zip.js/zip.js'
@@ -398,7 +401,107 @@ describe('progressive native ZIP missing-file results', () => {
   })
 })
 
-describe('progressive native ZIP archive', () => {
+describe('progressive ZIP readmission', () => {
+  it('publishes a complete ZIP after readmitting a reopened file in the same job', async () => {
+    const file = fileEntry(identity(16), 'reopened.bin', 4n)
+    const selection = new SelectionPolicy(true)
+    const intent = await receiveIntentFixture({ planKind: 'workspace-then-publish', artifactKind: 'zip-archive', selection })
+    const f = fixture(new MemoryStore(), new MemoryIO(), undefined, intent.operationId)
+    const archive = await f.open()
+    const execution = await createProgressiveWorkspaceExecution({
+      archive, intent, outputIdentity: { backend: 'native-zip', outputSessionId: 'readmission-session' },
+      settlement: {
+        pause: async () => { throw new Error('Matching source metadata should let the active ZIP finish') },
+        settle: async () => ({
+          kind: 'waiting-to-save', operationId: intent.operationId,
+          receiveIntentDigest: intent.digest, generation: 2n, packageDigest: 'package',
+        }),
+      },
+    })
+    const plans = planAuthorityFixture()
+    plans.openWorkspaceZip = async () => ({ kind: 'accepted', execution })
+    const readers = readerFixture([file])
+    const reopened = { fileRevision: identity(72), fileRevisionText: identityText(72) }
+    const reopenedLease = identity(82)
+    const ranges: { start: bigint; end: bigint }[] = []
+    const result = await transferJobFixture({
+      catalog: catalogFixture([{ id: identity(2), entries: [file] }]).catalog,
+      selection, intent, plans,
+      revisions: { open: async (id, signal) => {
+        const opened = await readers.revisions.open(id, signal)
+        const descriptor = { ...opened.descriptor, sourceMetadata: digestIdentity(71) }
+        if (readers.revisionRequests.length > 1) {
+          return { ...opened, descriptor: { ...descriptor, ...reopened }, leaseId: reopenedLease }
+        }
+        return { ...opened, descriptor, release: async () => {
+          await opened.release()
+          // An unrelated directory checkpoint can advance the archive generation between attempts.
+          await archive.pinDirectory(identityText(18), identityText(19), ['sibling'])
+        } }
+      } },
+      broker: { readRange: async function* (descriptor, lease, range) {
+        ranges.push(range)
+        if (descriptor.fileRevisionText === reopened.fileRevisionText) {
+          expect(lease).toEqual(reopenedLease)
+          yield { offset: range.start, data: Uint8Array.of(3, 4) }
+          return
+        }
+        yield { offset: 0n, data: Uint8Array.of(1, 2) }
+        throw new RevisionReopenedDuringRecoveryError(descriptor, { ...descriptor, ...reopened })
+      } },
+    }).run()
+
+    expect(result.worker).toMatchObject({ status: 'Succeeded', failureCount: 0 })
+    expect(result.lifecycle.kind).toBe('waiting-to-save')
+    expect(ranges).toEqual([{ start: 0n, end: 4n }, { start: 2n, end: 4n }])
+    expect(readers.revisionRequests).toEqual([file.idText, file.idText])
+    expect(archive.state.contentWarning).toBeUndefined()
+    expect((await archive.committedEntry(`file:${file.idText}`)).revision?.fileRevision).toBe(reopened.fileRevisionText)
+    const reader = new ZipReader(new Uint8ArrayReader(f.io.data))
+    const entries = (await reader.getEntries()).filter(entry => !entry.directory)
+    expect(entries.map(entry => entry.filename)).toEqual(['windshare/reopened.bin'])
+    expect(await entries[0]!.getData!(new Uint8ArrayWriter(), { checkSignature: true })).toEqual(Uint8Array.of(1, 2, 3, 4))
+    await reader.close()
+  })
+
+  it('rejects a paused cut after the same entry advances', async () => {
+    const selection = new SelectionPolicy(true)
+    const intent = await receiveIntentFixture({ planKind: 'workspace-then-publish', artifactKind: 'zip-archive', selection })
+    const f = fixture(new MemoryStore(), new MemoryIO(), undefined, intent.operationId)
+    const archive = await f.open()
+    const { output, directories } = await createProgressiveZipOutput({
+      archive, intent, identity: { backend: 'native-zip', outputSessionId: 'readmission-session' },
+    })
+    const signal = new AbortController().signal
+    const root = snapshotMaterializationRootRelativePath(['windshare'])
+    const parentAdmission = await directories.admitDirectory({
+      directory: { directoryId: identityText(2), generation: identityText(3), path: root },
+      sourceAuthenticationPath: snapshotSourceAuthenticationPath([]),
+      logicalArtifactPath: snapshotLogicalArtifactPath(root),
+    }, signal)
+    const file = { shareInstance: intent.shareInstance, fileId: identityText(16) }
+    const openRevision = vi.fn(async () => ({ ...file, fileRevision: identityText(71), exactSize: 6n }))
+    const path = [...root, 'file.bin']
+    const request = {
+      source: file, expectedSize: 6n, parentAdmission, openRevision,
+      sourceAuthenticationPath: snapshotSourceAuthenticationPath(['file.bin']),
+      logicalArtifactPath: snapshotLogicalArtifactPath(path),
+      materializationRelativePath: snapshotMaterializationRootRelativePath(path),
+    }
+    const first = await output.beginFile(request, signal)
+    await first.transaction.writeRange(0n, Uint8Array.of(1, 2), signal)
+    const paused = await first.transaction.pause('first cut')
+    const second = await output.beginFile(request, signal)
+    await second.transaction.writeRange(2n, Uint8Array.of(3, 4), signal)
+    await second.transaction.pause('second cut')
+    const committed = archive.state
+
+    await expect(output.readmitFile!(request, paused, signal)).rejects.toThrow('Committed ZIP entry ranges differ')
+    expect(openRevision).toHaveBeenCalledTimes(2)
+    expect(archive.state).toBe(committed)
+    await archive.close()
+  })
+
   it('admits saved ZIP ranges to a reopened revision without copying the archive', async () => {
     const f = fixture()
     const archive = await f.open()
@@ -425,7 +528,9 @@ describe('progressive native ZIP archive', () => {
     expect((await restored.committedEntry('a')).ranges).toEqual(previous.ranges)
     expect((await restored.committedEntry('a')).revision?.fileRevision).toBe('reopened')
   })
+})
 
+describe('progressive native ZIP archive', () => {
   it('receives through the production OutputSession adapter with authenticated directory and revision ports', async () => {
     const file = fileEntry(identity(14), 'file.bin', 6n)
     const selection = new SelectionPolicy(true)

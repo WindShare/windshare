@@ -31,7 +31,7 @@ ZIP entry modified times are written in the receiving browser's local time zone,
 
 - **Live indicators**: Displays received/reused bytes, completed or saved files, and transfer speed. Exact totals and percentages depend on completed item discovery; remaining time also requires a sufficiently stable transfer rate.
 - **Details panel**: Displays task summaries, failure information, elapsed time, and recovery information where available.
-- **Partial ZIP results**: If selected files cannot be opened and the received entries form a usable ZIP, it still downloads automatically. Downloads marks it as partial; Details retains the missing count and example filenames after reload.
+- **Incomplete workspace ZIPs** remain available to continue. Details retains the missing count and example filenames after reload.
 - **Downloads hub**: Access active and retained download tasks in this browser from the share page or home screen.
 
 ## Pause, Resume & Recovery
@@ -44,7 +44,7 @@ Keep the original page open during an active download outage. Reconnection conti
 - **Pause**: Saves progress supported by the chosen method and cancels that download's pending network wait. Reconnection does not resume a paused download; choose **Resume** when ready. Wait for pausing to finish before leaving the page. Remote lease cleanup runs independently after local settlement and shared-read safety; a delayed cleanup reply does not keep the download pausing.
 - **Stop**: Ends receiving and cancels that download's recovery. For folder downloads, incomplete browser staging is removed while saved files remain; complete staged files can still be saved locally. Failed cleanup can be retried.
 - **Page closure or crash recovery**: Reopen the original link to recover supported downloads from the last verified checkpoint, which may lag behind received bytes. Keep destination files unchanged and site data intact; continuing may require renewed destination permission. The browser fallback must start again after a reload.
-- **Source reopen**: A running file download can retry once on reopen when source metadata agrees. It saves the old attempt, checks the local object and checkpoint generation, and requests the missing ranges under a fresh lease. Changed or unavailable evidence leaves candidate ranges saved for recovery. Metadata agreement can miss edits that preserve size and modification evidence. Direct ZIP checks the saved member prefix and archive integrity as a whole.
+- If a source **reopens with a new revision**, folder and browser workspace downloads can retry the file once when metadata agrees. They reuse saved ranges and fetch the remainder under a fresh lease. Metadata agreement can miss edits that preserve size and modification evidence. Direct ZIP pauses when a reopen changes the revision. Choose **Resume** to verify the saved archive prefix and continue.
 - **Save partial ZIP**: Available for retained browser-workspace ZIP tasks with completed files when the browser supports a file save picker. Exports complete files as a separate ZIP while keeping the task available for continuation.
 - **Verify saved ZIP**: For Direct ZIP tasks requiring completion verification after an interrupted write session, verifies the saved archive locally.
 

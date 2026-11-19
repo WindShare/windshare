@@ -36,9 +36,9 @@ Keep candidate ranges, accepted progress and persisted recovery evidence distinc
 
 ### 4. Continue reopened files in the same task
 
-For same-revision reconnects, keep downloading missing ranges. When a source reopens with a new revision and matching metadata, the file-transfer workflow stops and drains reads and writes from the old attempt, then persists reusable progress. Retry the file within the same task and share using the existing checkpoint admission and a live lease for the authenticated current revision. Bound retries per file and honor user pause and cancellation. Keep discovery incremental and checkpoints batched. Use metadata comparison and existing local integrity checks for the automatic path.
+For same-revision reconnects, keep downloading missing ranges. When a source reopens with a new revision and matching metadata, outputs with independent file checkpoints drain the old attempt and persist reusable progress. Retry the file within the same task and share using the existing checkpoint admission and a live lease for the authenticated current revision. Bound retries per file and honor user pause and cancellation. Keep discovery incremental and checkpoints batched. Use metadata comparison and existing local integrity checks for the automatic path.
 
-Reconcile progress from admitted ranges and record the file outcome once. Preserve historical deliveries and local output authority. Report observed metadata changes separately from unavailable evidence and retain ordinary file candidates when admission fails. Direct ZIP follows its existing whole-prefix admission and member rollback rules. Trace task and file IDs, old and current revisions, the decision reason and reused or retained bytes.
+Reconcile progress from admitted ranges and record the file outcome once. Preserve historical deliveries and local output authority. Report observed metadata changes separately from unavailable evidence and retain ordinary file candidates when admission fails. Direct ZIP pauses when a source reopens with a different revision. User-initiated resume applies its whole-prefix admission and member rollback rules. Trace task and file IDs, old and current revisions, the decision reason and reused or retained bytes.
 
 ## Deferred saved-range comparison
 
