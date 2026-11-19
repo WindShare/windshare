@@ -415,12 +415,11 @@ export function validateFinalOutputAgainstCheckpoint(
   }
 }
 
-function createFinalFileProof(
+export function materializationFinalProofId(
   binding: MaterializationLedgerBindingV1,
-  finalOutput: VerifiedFinalOutputFile,
-  checkpoint: FinalFileCheckpointReference,
-): MaterializationFinalFileProofV1 {
-  const proofId = materializationRecordDigest(canonicalRecord(
+  checkpointRecordId: string,
+): string {
+  return materializationRecordDigest(canonicalRecord(
     LEDGER_PROOF_ID_DOMAIN,
     MATERIALIZATION_LEDGER_SCHEMA_VERSION,
     [
@@ -430,12 +429,20 @@ function createFinalFileProof(
         'ledger binding digest',
       )),
       canonicalFrame(canonicalIdentity(
-        checkpoint.recordId,
+        checkpointRecordId,
         FILE_CHECKPOINT_ID_BYTES,
         'checkpoint record ID',
       )),
     ],
   ))
+}
+
+function createFinalFileProof(
+  binding: MaterializationLedgerBindingV1,
+  finalOutput: VerifiedFinalOutputFile,
+  checkpoint: FinalFileCheckpointReference,
+): MaterializationFinalFileProofV1 {
+  const proofId = materializationFinalProofId(binding, checkpoint.recordId)
   const canonicalBytes = canonicalRecord(LEDGER_PROOF_DOMAIN, MATERIALIZATION_LEDGER_SCHEMA_VERSION, [
     canonicalFrame(canonicalIdentity(
       binding.ledgerBindingDigest,

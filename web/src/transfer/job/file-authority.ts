@@ -13,7 +13,7 @@ import type { OpenedRevision, RevisionReopenedDuringRecoveryError } from '../../
 import { encodeBase64Url, equalBytes } from '../../crypto/bytes'
 import type { IncidentScopeHandle } from '../../diagnostics/incident'
 import type { OutputFileTransaction, VerifiedDurableRanges } from '../output/file'
-import { FaultScope, OutputFaultCode, outputFault } from '../failure/fault'
+import { FaultScope, OutputFaultCode, SourceFaultCode, outputFault, sourceFault } from '../failure/fault'
 import { withOutputSettlementTimeout } from '../settlement/output'
 import type { FileTransferSettlement } from './contract'
 import {
@@ -180,6 +180,17 @@ export async function settleReopenedFile(
   observeRevisionReadmission(options, previous, current, comparison, decision, retainedBytes, 0n, started)
   if (decision === 'readmit') {
     return { settlement, retry: { previous, current, comparison, started, paused, initialDurable } }
+  }
+  if (decision === 'retry-limit' && !options.signal.aborted) {
+    return {
+      settlement,
+      failure: normalizedFileTransferFault(sourceFault(FaultScope.FileLocal, SourceFaultCode.Unavailable), {
+        error,
+        recoveryDisposition: 'resumable_receive',
+        fileOutcomeEvidence: { kind: 'deferred-revision-readmission' },
+        ...(options.incidentScope === undefined ? {} : { incidentScope: options.incidentScope }),
+      }),
+    }
   }
   return {
     settlement, failure: normalizeFileTransferFailure(options.signal.aborted ? options.signal.reason : error, {

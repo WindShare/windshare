@@ -20,7 +20,11 @@ import {
   recordOutputException,
   type OutputDiagnosticsPorts,
 } from '../diagnostics'
-import { createFinalizedFileMaterializationRecords } from '../materialization-ledger/journal'
+import {
+  createFinalizedFileMaterializationRecords,
+  materializationFinalProofId,
+  validateFinalOutputAgainstCheckpoint,
+} from '../materialization-ledger/journal'
 import type { MaterializationLedgerBindingV1 } from '../materialization-ledger/model'
 import {
   FILE_CHECKPOINT_COMMIT_CANDIDATE,
@@ -528,25 +532,24 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
     checkpoint: FileCheckpointV2,
   ): Promise<PersistentFinalFileCommit | undefined> {
     if (this.#semantic === undefined || this.#ledgerBinding === undefined) return undefined
-    const finalOutput = new VerifiedFinalOutputFile(
-      this.#ownership,
-      this.#source,
-      this.revision.exactSize,
-    )
-    const records = await createFinalizedFileMaterializationRecords({
-      binding: this.#ledgerBinding,
-      finalOutput,
-      finalCheckpoint: checkpoint,
-    })
     const persisted = await this.#semantic.readMaterializationFinalProof(
       this.#ledgerBinding,
-      records.finalProof.proofId,
+      materializationFinalProofId(this.#ledgerBinding, checkpoint.recordId),
     )
-    if (persisted?.proofDigest !== records.finalProof.proofDigest) return undefined
+    if (persisted === undefined) return undefined
+    if (persisted.checkpoint.recordId !== checkpoint.recordId ||
+        persisted.checkpoint.recordDigest !== checkpoint.checksum ||
+        persisted.checkpoint.checkpointGeneration !== checkpoint.checkpointGeneration) {
+      throw new TargetOwnershipUnknownError('commit', checkpoint.operationId)
+    }
+    validateFinalOutputAgainstCheckpoint(persisted.finalOutput, checkpoint)
+    // The durable proof belongs to the same owned checkpoint across attempts.
+    // Present it to the active job under its current output session.
+    const checkpointProof = finalFileCheckpointProof(checkpoint)
     return Object.freeze({
-      ...finalFileCheckpointProof(checkpoint),
-      checkpointProof: finalFileCheckpointProof(checkpoint),
-      finalOutput,
+      ...checkpointProof,
+      checkpointProof,
+      finalOutput: new VerifiedFinalOutputFile(this.#ownership, this.#source, this.revision.exactSize),
     })
   }
 
