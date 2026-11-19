@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
@@ -78,6 +79,48 @@ func TestFreshRegistrationReadsTicketAfterWaitingForAnAttemptSlot(t *testing.T) 
 	calls, _ := dialer.Snapshot()
 	if len(calls) != 1 || calls[0].Dial.Header.Get("Authorization") != "Bearer refreshed-ticket" {
 		t.Fatal("first registration used a ticket from before the slot wait")
+	}
+}
+
+func TestAccessUnavailableRetriesTheSamePublicationWithRefreshedTicket(t *testing.T) {
+	const retryAfter = time.Second
+	source := &changingAuthorization{
+		value: Authorization{State: AuthorizationReady, Bearer: "old-ticket"}, changed: make(chan struct{}),
+	}
+	clock := newSenderRelayTestClock()
+	clock.wait = func(ctx context.Context, _ time.Duration) error {
+		source.set(Authorization{State: AuthorizationReady, Bearer: "refreshed-ticket"})
+		return ctx.Err()
+	}
+	attempts := 0
+	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
+		attempts++
+		if attempts == 1 {
+			return Connection{}, &relayv2.RelayError{Code: v2.ErrorAccessUnavailable, RetryAfter: retryAfter}
+		}
+		return NewConnection(&senderRelayTestEndpoint{}), nil
+	}}
+	config := newSenderRelayTestConfig(t, nil, dialer, clock)
+	config.Candidate.Authorization = source
+	lifecycle, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(lifecycle.StopRecovery)
+	if err := lifecycle.WaitReady(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	calls, _ := dialer.Snapshot()
+	if len(calls) != 2 {
+		t.Fatalf("registration attempts = %d, want 2", len(calls))
+	}
+	for index, bearer := range []string{"Bearer old-ticket", "Bearer refreshed-ticket"} {
+		if calls[index].Init != config.Fresh || calls[index].Dial.Header.Get("Authorization") != bearer {
+			t.Fatalf("attempt %d changed the publication or missed the current ticket", index+1)
+		}
+	}
+	if waits := clock.Waits(); len(waits) != 1 || waits[0] != retryAfter {
+		t.Fatalf("recovery waits = %v, want [%v]", waits, retryAfter)
 	}
 }
 

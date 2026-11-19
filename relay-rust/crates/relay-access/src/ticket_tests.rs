@@ -70,11 +70,11 @@ fn signed_identity_rejects_corruption_wrong_issuer_expiry_and_wrong_audience() {
     let signed = ticket.issue(generation, &key).unwrap();
     assert_eq!(
         Ticket::verify(&signed, &TrustStore::default(), NOW),
-        Err(Error::Untrusted)
+        Err(VerificationError::Invalid(Error::Untrusted))
     );
     assert_eq!(
         Ticket::verify(&signed, &trust, ticket.expires_at),
-        Err(Error::Expired)
+        Err(VerificationError::Invalid(Error::Expired))
     );
     let mut payload = ticket.encode();
     let offset = payload
@@ -84,7 +84,7 @@ fn signed_identity_rejects_corruption_wrong_issuer_expiry_and_wrong_audience() {
     payload[offset] = b'x';
     assert_eq!(
         Ticket::verify(&trust::sign(TICKET_DOMAIN, &payload, &key), &trust, NOW),
-        Err(Error::Encoding)
+        Err(VerificationError::Invalid(Error::Encoding))
     );
 }
 
@@ -114,7 +114,11 @@ fn certified_generations_reject_rollback_equivocation_and_excess_lifetime() {
     );
     assert_eq!(
         Ticket::verify(&ticket.issue(generation, &key).unwrap(), &trust, NOW),
-        Err(Error::Rollback)
+        Err(VerificationError::GenerationMismatch {
+            issuer: generation.issuer,
+            presented_generation: generation.number,
+            installed_generation: second.number,
+        })
     );
     assert_eq!(
         Generation {
@@ -167,7 +171,7 @@ fn ticket_rejects_noncanonical_encoding_and_unbounded_entitlements() {
     payload.splice(1..2, [24, 1]);
     assert_eq!(
         Ticket::verify(&trust::sign(TICKET_DOMAIN, &payload, &key), &trust, NOW),
-        Err(Error::Encoding)
+        Err(VerificationError::Invalid(Error::Encoding))
     );
     let invalid = Ticket {
         entitlement: Entitlement {
@@ -177,4 +181,16 @@ fn ticket_rejects_noncanonical_encoding_and_unbounded_entitlements() {
         ..ticket
     };
     assert_eq!(invalid.issue(generation, &key), Err(Error::Lifetime));
+}
+
+#[test]
+fn malformed_key_ids_are_invalid_even_for_a_different_generation() {
+    let (_, key, _, ticket, trust) = fixture();
+    for key_id in [0, u64::MAX] {
+        let payload = Ticket { key_id, ..ticket }.encode();
+        assert_eq!(
+            Ticket::verify(&trust::sign(TICKET_DOMAIN, &payload, &key), &trust, NOW),
+            Err(VerificationError::Invalid(Error::Lifetime))
+        );
+    }
 }

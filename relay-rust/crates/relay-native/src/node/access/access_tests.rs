@@ -173,31 +173,80 @@ fn old_tickets_do_not_revive_allowance_or_revoked_credentials() {
 }
 
 #[test]
-fn verified_ticket_expires_and_cannot_survive_signing_key_rotation() {
+fn registration_retries_generation_mismatches_and_revalidates_cached_proof() {
     let (service, ticket, key, generation, _) = identity();
-    let mut bearer = Bearer::new(&URL_SAFE_NO_PAD.encode(ticket.issue(generation, &key).unwrap()));
+    let previous_token = URL_SAFE_NO_PAD.encode(ticket.issue(generation, &key).unwrap());
+    let mut previous_bearer = Bearer::new(&previous_token);
     assert_eq!(
-        service.admission_priority(share(1), Some(&mut bearer), NOW),
+        service.admission_priority(share(1), Some(&mut previous_bearer), NOW),
         AdmissionPriority::Authenticated
     );
     assert!(matches!(
-        service.authorize(share(1), Some(&bearer), ticket.expires_at),
+        service.authorize(share(1), Some(&previous_bearer), ticket.expires_at),
         RegistrationDecision::Denied
     ));
 
-    let replacement = SigningKey::from_bytes(&[5; 32]);
+    let next_key = SigningKey::from_bytes(&[8; 32]);
+    let next_generation = Generation {
+        number: generation.number + 1,
+        key: next_key.verifying_key().to_bytes(),
+        ..generation
+    };
+    let next_ticket = Ticket {
+        key_id: next_generation.number,
+        ..ticket
+    };
+    let next_token = URL_SAFE_NO_PAD.encode(next_ticket.issue(next_generation, &next_key).unwrap());
+    let mut next_bearer = Bearer::new(&next_token);
+    assert_eq!(
+        service.admission_priority(share(1), Some(&mut next_bearer), NOW),
+        AdmissionPriority::Anonymous
+    );
+    assert!(matches!(
+        service.authorize(share(1), Some(&next_bearer), NOW),
+        RegistrationDecision::Unavailable
+    ));
+    assert!(matches!(
+        service.authorize(share(1), Some(&next_bearer), next_ticket.expires_at),
+        RegistrationDecision::Denied
+    ));
+
+    let mut restrictions = Restrictions {
+        version: 1,
+        ..Restrictions::default()
+    };
+    restrictions.shares.insert(*share(2).as_bytes());
+    assert!(service.restrict(ticket.issuer, restrictions));
+    assert!(matches!(
+        service.authorize(share(2), Some(&next_bearer), NOW),
+        RegistrationDecision::Denied
+    ));
+
+    service.apply_authority(next_generation.into()).unwrap();
+    for stale_bearer in [previous_bearer, Bearer::new(&previous_token)] {
+        assert!(matches!(
+            service.authorize(share(1), Some(&stale_bearer), NOW + 1),
+            RegistrationDecision::Unavailable
+        ));
+    }
+    assert!(matches!(
+        service.authorize(share(1), Some(&next_bearer), NOW + 1),
+        RegistrationDecision::Granted(attribution) if attribution == ticket.attribution()
+    ));
+
+    service.set_controller(Some(ticket.issuer));
     service
-        .apply_authority(
-            Generation {
-                number: generation.number + 1,
-                key: replacement.verifying_key().to_bytes(),
-                ..generation
-            }
-            .into(),
-        )
+        .apply_authority(AuthorityState {
+            generation: next_generation,
+            policy: Some(windshare_relay_access::usage::NodePolicy {
+                version: 1,
+                enabled: false,
+                anonymous: false,
+            }),
+        })
         .unwrap();
     assert!(matches!(
-        service.authorize(share(1), Some(&bearer), NOW + 1),
+        service.authorize(share(1), Some(&Bearer::new(&previous_token)), NOW + 1),
         RegistrationDecision::Denied
     ));
 }
@@ -205,7 +254,20 @@ fn verified_ticket_expires_and_cannot_survive_signing_key_rotation() {
 #[test]
 fn removing_an_issuer_disables_new_admission_and_preserves_generation_high_water() {
     let (service, ticket, key, generation, mut policy) = identity();
-    let token = Bearer::new(&URL_SAFE_NO_PAD.encode(ticket.issue(generation, &key).unwrap()));
+    let mut token = Bearer::new(&URL_SAFE_NO_PAD.encode(ticket.issue(generation, &key).unwrap()));
+    assert_eq!(
+        service.admission_priority(share(1), Some(&mut token), NOW),
+        AdmissionPriority::Authenticated
+    );
+    service
+        .apply_authority(
+            Generation {
+                number: generation.number + 1,
+                ..generation
+            }
+            .into(),
+        )
+        .unwrap();
     policy.trusted_issuers.clear();
     service.configure(policy).unwrap();
     assert!(matches!(

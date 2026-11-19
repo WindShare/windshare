@@ -4,7 +4,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use std::sync::Arc;
 use windshare_relay_access::{
     Attribution, Digest,
-    ticket::{MAX_TICKET_BYTES, Ticket, VerifiedTicket},
+    ticket::{MAX_TICKET_BYTES, Ticket, VerificationError, VerifiedTicket},
     trust::Error,
 };
 use windshare_relay_core::{access::RegistrationDecision, identifiers::ShareId};
@@ -39,24 +39,35 @@ impl Bearer {
         }
     }
 
-    fn ticket_proof(&self, access: &Service, now: u64) -> Option<Arc<VerifiedTicket>> {
+    fn ticket_proof(
+        &self,
+        access: &Service,
+        now: u64,
+    ) -> Result<Arc<VerifiedTicket>, VerificationError> {
         match &self.ticket {
-            TicketEvidence::Absent => None,
-            TicketEvidence::Verified(ticket) => Some(Arc::clone(ticket)),
+            TicketEvidence::Absent => Err(Error::Encoding.into()),
+            TicketEvidence::Verified(ticket) => Ok(Arc::clone(ticket)),
             TicketEvidence::Unverified(encoded) => {
-                let signed = URL_SAFE_NO_PAD.decode(encoded.as_bytes()).ok()?;
-                VerifiedTicket::verify_with(&signed, now, |issuer, number| {
+                let signed = URL_SAFE_NO_PAD
+                    .decode(encoded.as_bytes())
+                    .map_err(|_| Error::Encoding)?;
+                VerifiedTicket::verify_with(&signed, now, |issuer| {
                     let state = access.state.lock().expect("node access state");
-                    if !state.active_issuers.contains(&issuer) {
-                        return Err(Error::Untrusted);
+                    if state.active_issuers.contains(&issuer) {
+                        state.authorities.trusted.generation(issuer)
+                    } else {
+                        None
                     }
-                    state.authorities.trusted.current(issuer, number, now)
                 })
-                .ok()
                 .map(Arc::new)
             }
         }
     }
+}
+
+enum AdmissionRefusal {
+    Denied,
+    Ticket(VerificationError),
 }
 
 enum AuthorizedIdentity<'a> {
@@ -93,7 +104,7 @@ impl Service {
         let Some(bearer) = bearer else {
             return AdmissionPriority::Anonymous;
         };
-        let Some(proof) = bearer.ticket_proof(self, now) else {
+        let Ok(proof) = bearer.ticket_proof(self, now) else {
             return AdmissionPriority::Anonymous;
         };
 
@@ -102,8 +113,8 @@ impl Service {
             .known_priority(share, Some(bearer))
             .unwrap_or_else(|| {
                 if state
-                    .authorized_identity(share, Some(bearer), Some(&proof), now)
-                    .is_some()
+                    .authorized_identity(share, Some(bearer), Some(Ok(proof.as_ref())), now)
+                    .is_ok()
                 {
                     AdmissionPriority::Authenticated
                 } else {
@@ -123,10 +134,15 @@ impl Service {
         now: u64,
     ) -> RegistrationDecision {
         // A previously untrusted signing generation may have become available since upgrade.
-        let proof = bearer.and_then(|bearer| bearer.ticket_proof(self, now));
+        let proof = bearer.map(|bearer| bearer.ticket_proof(self, now));
+        let proof = proof
+            .as_ref()
+            .map(|result| result.as_deref().map_err(|error| *error));
         let mut state = self.state.lock().expect("node access state");
-        let Some(identity) = state.authorized_identity(share, bearer, proof.as_deref(), now) else {
-            return RegistrationDecision::Denied;
+        let identity = match state.authorized_identity(share, bearer, proof, now) {
+            Ok(identity) => identity,
+            Err(AdmissionRefusal::Denied) => return RegistrationDecision::Denied,
+            Err(AdmissionRefusal::Ticket(error)) => return state.ticket_refusal(share, error),
         };
         let attribution = identity.attribution();
         match identity {
@@ -173,23 +189,67 @@ impl State {
         &self,
         share: ShareId,
         bearer: Option<&Bearer>,
-        proof: Option<&VerifiedTicket>,
+        proof: Option<Result<&VerifiedTicket, VerificationError>>,
         now: u64,
-    ) -> Option<AuthorizedIdentity<'_>> {
+    ) -> Result<AuthorizedIdentity<'_>, AdmissionRefusal> {
         let identity = match bearer {
             None if self.anonymous() => AuthorizedIdentity::Anonymous,
-            None => return None,
-            Some(bearer) => match self.credentials.get(bearer.digest) {
-                Some(entry) => AuthorizedIdentity::Local {
-                    attribution: self.local_attribution(entry)?,
-                    entry,
-                },
-                None => {
-                    AuthorizedIdentity::Ticket(proof?.current(&self.authorities.trusted, now).ok()?)
+            None => return Err(AdmissionRefusal::Denied),
+            Some(bearer) => {
+                if let Some(entry) = self.credentials.get(bearer.digest) {
+                    AuthorizedIdentity::Local {
+                        attribution: self
+                            .local_attribution(entry)
+                            .ok_or(AdmissionRefusal::Denied)?,
+                        entry,
+                    }
+                } else {
+                    let ticket = proof
+                        .ok_or(AdmissionRefusal::Denied)?
+                        .and_then(|proof| proof.current(&self.authorities.trusted, now))
+                        .map_err(AdmissionRefusal::Ticket)?;
+                    AuthorizedIdentity::Ticket(ticket)
                 }
-            },
+            }
         };
-        (!self.denied(share, identity.attribution())).then_some(identity)
+        (!self.denied(share, identity.attribution()))
+            .then_some(identity)
+            .ok_or(AdmissionRefusal::Denied)
+    }
+
+    fn ticket_refusal(&self, share: ShareId, error: VerificationError) -> RegistrationDecision {
+        let VerificationError::GenerationMismatch {
+            issuer,
+            presented_generation,
+            installed_generation,
+        } = error
+        else {
+            return RegistrationDecision::Denied;
+        };
+        if !self.active_issuers.contains(&issuer)
+            || self.disabled_controller() == Some(issuer)
+            || self
+                .restrictions
+                .values()
+                .any(|restrictions| restrictions.shares.contains(share.as_bytes()))
+        {
+            return RegistrationDecision::Denied;
+        }
+
+        let direction = if presented_generation > installed_generation {
+            "ticket_ahead"
+        } else {
+            "ticket_behind"
+        };
+        tracing::debug!(
+            event = "ticket_generation_mismatch",
+            ?share,
+            ?issuer,
+            presented_generation,
+            installed_generation,
+            direction,
+        );
+        RegistrationDecision::Unavailable
     }
 
     fn local_attribution(&self, entry: &CredentialEntry) -> Option<Attribution> {

@@ -49,8 +49,7 @@ impl Generation {
             expires_at: input.uint()?,
         };
         input.end()?;
-        if value.number == 0
-            || value.number > (1u64 << 53) - 1
+        if !Self::valid_number(value.number)
             || value.issuer == [0; 32]
             || value.expires_at <= value.not_before
             || value.expires_at - value.not_before > MAX_CERTIFICATE_LIFETIME
@@ -79,6 +78,11 @@ impl Generation {
             return Err(Error::Untrusted);
         }
         Ok(generation)
+    }
+
+    pub(crate) const fn valid_number(number: u64) -> bool {
+        const MAX_GENERATION_NUMBER: u64 = (1 << 53) - 1;
+        number != 0 && number <= MAX_GENERATION_NUMBER
     }
 
     pub const fn usable(self, now: u64) -> bool {
@@ -118,19 +122,6 @@ impl TrustStore {
         }
         self.generations.insert(generation.issuer, generation);
         Ok(())
-    }
-
-    /// # Errors
-    /// Only the current, unexpired signing generation can authenticate new admissions.
-    pub fn current(&self, issuer: Issuer, number: u64, now: u64) -> Result<Generation, Error> {
-        let generation = self.generation(issuer).ok_or(Error::Untrusted)?;
-        if generation.number != number {
-            return Err(Error::Rollback);
-        }
-        if !generation.usable(now) {
-            return Err(Error::Expired);
-        }
-        Ok(generation)
     }
 }
 

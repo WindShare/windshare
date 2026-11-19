@@ -77,12 +77,11 @@ impl Service {
     }
 
     pub fn public_enabled(&self) -> bool {
-        let state = self.state.lock().expect("node access state");
-        state
-            .controller
-            .filter(|issuer| state.active_issuers.contains(issuer))
-            .and_then(|issuer| state.authorities.policies.get(&issuer))
-            .is_none_or(|policy| policy.enabled)
+        self.state
+            .lock()
+            .expect("node access state")
+            .disabled_controller()
+            .is_none()
     }
 
     pub fn anonymous(&self) -> bool {
@@ -259,23 +258,24 @@ impl State {
             })
     }
 
+    fn disabled_controller(&self) -> Option<Issuer> {
+        self.controller.filter(|issuer| {
+            self.active_issuers.contains(issuer)
+                && self
+                    .authorities
+                    .policies
+                    .get(issuer)
+                    .is_some_and(|policy| !policy.enabled)
+        })
+    }
+
     fn denied(&self, share: ShareId, attribution: Attribution) -> bool {
         let disabled = self
-            .controller
-            .filter(|issuer| self.active_issuers.contains(issuer))
-            .and_then(|issuer| {
-                self.authorities
-                    .policies
-                    .get(&issuer)
-                    .map(|policy| (issuer, policy))
-            })
-            .is_some_and(|(controller, policy)| {
-                !policy.enabled
-                    && match attribution {
-                        Attribution::Anonymous => true,
-                        Attribution::Account { issuer, .. } => issuer == controller,
-                        Attribution::Credential { .. } => false,
-                    }
+            .disabled_controller()
+            .is_some_and(|controller| match attribution {
+                Attribution::Anonymous => true,
+                Attribution::Account { issuer, .. } => issuer == controller,
+                Attribution::Credential { .. } => false,
             });
         let local_key = match attribution {
             Attribution::Credential { credential, .. } => Some(credential),
