@@ -92,13 +92,11 @@ async function openAssembly<T>(
     // Most folder members stay direct; merely offering automatic recovery must not
     // allocate an OPFS namespace or open a Worker for every small-file task.
     const staging: BrowserDeliveryStagePort = {
-      beginFile: async request => (await openStage()).beginFile(request),
-      ensureDirectory: async path => (await openStage()).ensureDirectory(path),
+      beginFile: async (request, capacity) => (await openStage()).beginFile(request, capacity),
       readCheckpoint: async fileId => (await openStage()).readCheckpoint(fileId),
       readComplete: async checkpoint => (await openStage()).readComplete(checkpoint),
       removeComplete: async checkpoint => (await openStage()).removeComplete(checkpoint),
-      discard: async (source, checkpoint) => (await openStage()).discard(source, checkpoint),
-      bindCapacity: async (source, objectCapacity) => (await openStage()).bindCapacity(source, objectCapacity),
+      discard: async stagedFile => (await openStage()).discard(stagedFile),
       close: async () => { await stage?.close() },
     }
     return await open({ policy, repository,

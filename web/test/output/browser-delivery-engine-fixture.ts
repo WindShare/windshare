@@ -1,6 +1,6 @@
 import { BrowserDeliveryMaterialization, type BrowserDeliveryMaterializationOptions } from '../../src/output/browser-delivery/session'
 import { advanceBrowserDeliveryRecord, assertBrowserDeliveryTransition, authorizeBrowserDeliveryRestart } from '../../src/output/browser-delivery/lifecycle'
-import { browserDeliveryStagingPath, validateBrowserDeliveryRecord } from '../../src/output/browser-delivery/records'
+import { validateBrowserDeliveryRecord } from '../../src/output/browser-delivery/records'
 import type { BrowserDeliveryRecordV1, BrowserSavePolicyV1 } from '../../src/output/browser-delivery/model'
 import type { BrowserDeliveryRepository, BrowserDeliveryFileScan } from '../../src/output/browser-delivery/repository'
 import type { BrowserDeliveryReservation, BrowserDeliveryStagePort, BrowserDeliveryTargetPort } from '../../src/output/browser-delivery/ports'
@@ -101,9 +101,7 @@ export async function deliveryEngineFixture(overrides: Partial<Pick<BrowserDeliv
   })
   const stage: BrowserDeliveryStagePort = {
     beginFile: request => stageSession.beginFile(request),
-    ensureDirectory: path => stageSession.ensureDirectory(path),
     readCheckpoint: fileId => readBrowserDeliveryCheckpoint(stageCheckpoints, fileId),
-    bindCapacity: async () => undefined,
     readComplete: async checkpoint => {
       const reader = await acquireArtifactReader(policy.staging!.operationId)
       const file = stageTree.file(checkpoint.canonicalPath)
@@ -114,11 +112,14 @@ export async function deliveryEngineFixture(overrides: Partial<Pick<BrowserDeliv
       events.push('delete-stage')
       if (await stageTree.openFile(checkpoint.canonicalPath, checkpoint.ownedObjectId) !== undefined) await stageTree.removeFile(checkpoint.canonicalPath, checkpoint.ownedObjectId)
     }),
-    discard: async (source, checkpoint) => withArtifactCleanup(policy.staging!.operationId, async () => {
+    discard: async stagedFile => withArtifactCleanup(policy.staging!.operationId, async () => {
       if (deleteFailure) { deleteFailure = false; throw new Error('delete failure') }
       events.push('delete-stage')
-      if (checkpoint !== undefined && await stageTree.openFile(browserDeliveryStagingPath(source.fileId), checkpoint.ownedObjectId) !== undefined) {
-        await stageTree.removeFile(browserDeliveryStagingPath(source.fileId), checkpoint.ownedObjectId)
+      if (stagedFile.kind === 'checkpointed') {
+        const { canonicalPath, ownedObjectId } = stagedFile.checkpoint
+        if (await stageTree.openFile(canonicalPath, ownedObjectId) !== undefined) {
+          await stageTree.removeFile(canonicalPath, ownedObjectId)
+        }
       }
     }),
     close: () => stageSession.close(),

@@ -73,8 +73,10 @@ describe('browser delivery Stop disposition', () => {
     barrier.release()
     await writing
     await stopping
-    expect(discard).toHaveBeenCalledWith(expect.objectContaining({ fileId: FILE_ID }),
-      expect.objectContaining({ verifiedRanges: [{ start: 0n, end: 2n }] }))
+    expect(discard).toHaveBeenCalledWith({
+      kind: 'checkpointed',
+      checkpoint: expect.objectContaining({ fileId: FILE_ID, verifiedRanges: [{ start: 0n, end: 2n }] }),
+    })
     expect(f.phases.get(FILE_ID)).toBe('released')
   })
 

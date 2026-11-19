@@ -179,8 +179,10 @@ export class BrowserDeliveryMaterialization implements PersistentMaterialization
       if (record.state.kind === 'restart-authorized') record = await this.#engine.completeRestart(record.fileId)
       if (record.placement === 'staged' && record.state.kind === 'receiving') {
         const reservation = await this.#reservation(record)
-        await this.#stage().bindCapacity(source, reservation.objectCapacity)
-        receiving = await this.#stage().beginFile({ ...openedRequest, materializationRelativePath: browserDeliveryStagingPath(record.fileId), recovery: { pausedFile: 'preserve' } })
+        receiving = await this.#stage().beginFile({
+          ...openedRequest, materializationRelativePath: browserDeliveryStagingPath(record.fileId),
+          recovery: { pausedFile: 'preserve' },
+        }, reservation.objectCapacity)
       } else if (record.placement === 'direct') receiving = target
       record = await this.#recordSourceAdmission(record, source)
       const transaction = new BrowserDeliveryFileTransaction({ record, request: openedRequest, target, ...(receiving === undefined ? {} : { receiving }),

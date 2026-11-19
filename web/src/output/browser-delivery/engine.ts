@@ -266,7 +266,9 @@ export class BrowserDeliveryEngine {
       record = await this.#advance(record, { kind: 'discarding', ...(checkpoint === undefined ? {} : { checkpoint }) })
     }
     this.#emit(record, 'discard-started')
-    await this.#stage().discard(record.source, checkpoint)
+    await this.#stage().discard(checkpoint === undefined
+      ? { kind: 'uncheckpointed', source: record.source }
+      : { kind: 'checkpointed', checkpoint })
     await (await this.#options.reservation(record)).releaseDiscarded()
     this.#options.released?.(record.fileId)
     const discarded = await this.#advance(record, { kind: 'discarded' })
