@@ -151,10 +151,7 @@ impl NetworkAuthority {
             return unavailable();
         }
         let challenge = storage::transaction(&self.state, move || {
-            if !profile_change {
-                database.prune_registration_email_proofs(environment.now())?;
-            }
-            delivery.accepted(&mut database)
+            delivery.accepted(&mut database, environment.now())
         })
         .map_err(failure)?;
         if profile_change {

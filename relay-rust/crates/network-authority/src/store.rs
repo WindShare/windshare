@@ -12,6 +12,11 @@ pub trait Store {
     /// # Errors
     /// Propagates storage write failures.
     fn delete(&mut self, key: &str) -> Result<()>;
+    /// Reclaims a bounded batch from the pending registration proof records.
+    ///
+    /// # Errors
+    /// Propagates storage write failures.
+    fn prune_registration_proofs(&mut self, kind: crate::ProofKind, now: u64) -> Result<()>;
     /// # Errors
     /// Propagates storage read failures.
     fn scan(&self, prefix: &str, limit: Option<usize>) -> Result<Vec<(String, String)>> {

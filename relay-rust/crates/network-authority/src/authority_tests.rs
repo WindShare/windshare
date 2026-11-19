@@ -9,6 +9,8 @@ mod governance;
 mod profile;
 #[path = "restriction_sync_tests.rs"]
 mod restriction_sync;
+#[path = "work_registration_tests.rs"]
+mod work_registration;
 use crate::store::{key, load, save};
 use anyhow::Result;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -37,6 +39,19 @@ impl Store for Memory {
     }
     fn delete(&mut self, key: &str) -> Result<()> {
         self.records.remove(key);
+        Ok(())
+    }
+    fn prune_registration_proofs(&mut self, kind: ProofKind, now: u64) -> Result<()> {
+        let prefix = format!("{}/", kind.registration_prefix());
+        for (key, value) in self.scan(&prefix, None)? {
+            let proof: serde_json::Value = serde_json::from_str(&value)?;
+            if proof["expires_at"]
+                .as_u64()
+                .is_some_and(|expiry| expiry <= now)
+            {
+                self.delete(&key)?;
+            }
+        }
         Ok(())
     }
     fn scan_after(
@@ -153,7 +168,10 @@ impl Authority<Memory, Clock> {
     ) -> Result<(Challenge, String)> {
         let delivery = self.prepare_email(source, verification, address)?;
         let code = delivery.code().to_owned();
-        Ok((delivery.accepted(&mut self.store)?, code))
+        Ok((
+            delivery.accepted(&mut self.store, self.environment.now())?,
+            code,
+        ))
     }
 }
 fn batch(

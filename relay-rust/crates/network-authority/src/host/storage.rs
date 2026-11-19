@@ -1,4 +1,4 @@
-use crate::{Store, challenges::REGISTRATION_EMAIL_PROOF_PREFIX};
+use crate::{ProofKind, Store};
 use anyhow::{Result, anyhow};
 use std::{cell::RefCell, rc::Rc};
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
@@ -16,32 +16,6 @@ impl Database {
         let database = Self(state.storage().sql());
         api(database.0.exec("CREATE TABLE IF NOT EXISTS authority_records(key TEXT PRIMARY KEY,value TEXT NOT NULL) STRICT",None))?;
         Ok(database)
-    }
-
-    pub fn prune_registration_email_proofs(&self, now: u64) -> Result<()> {
-        let registration_email = format!("key GLOB '{REGISTRATION_EMAIL_PROOF_PREFIX}/*'");
-        let expiry = "json_extract(value, '$.expires_at')";
-        // Only registration email traffic creates these rows. Reclaim a bounded
-        // batch on successful delivery to keep abandoned attempts from accumulating.
-        api(self.0.exec(
-            &format!(
-                "CREATE INDEX IF NOT EXISTS registration_email_expiry ON authority_records ({expiry}) WHERE {registration_email}"
-            ),
-            None,
-        ))?;
-        api(self.0.exec(
-            &format!(
-                "DELETE FROM authority_records WHERE key IN (
-                    SELECT key FROM authority_records WHERE {registration_email} AND {expiry} <= ?
-                    ORDER BY {expiry} LIMIT ?
-                )"
-            ),
-            Some(vec![
-                i64::try_from(now)?.into(),
-                EXPIRED_PROOF_BATCH_SIZE.into(),
-            ]),
-        ))?;
-        Ok(())
     }
 }
 impl Store for Database {
@@ -65,6 +39,35 @@ impl Store for Database {
         api(self.0.exec(
             "DELETE FROM authority_records WHERE key=?",
             Some(vec![key.into()]),
+        ))?;
+        Ok(())
+    }
+    fn prune_registration_proofs(&mut self, kind: ProofKind, now: u64) -> Result<()> {
+        const EXPIRY: &str = "json_extract(value, '$.expires_at')";
+        let index = match kind {
+            ProofKind::Work => "registration_work_expiry",
+            ProofKind::Email => "registration_email_expiry",
+        };
+        let proof_keys = format!("key GLOB '{}/*'", kind.registration_prefix());
+        // Reclaim expired proof rows as new ones arrive, with bounded work per issuance.
+        api(self.0.exec(
+            &format!(
+                "CREATE INDEX IF NOT EXISTS {index} ON authority_records ({EXPIRY}) WHERE {proof_keys}"
+            ),
+            None,
+        ))?;
+        api(self.0.exec(
+            &format!(
+                "DELETE FROM authority_records WHERE key IN (
+                    SELECT key FROM authority_records INDEXED BY {index}
+                    WHERE {proof_keys} AND {EXPIRY} <= ?
+                    ORDER BY {EXPIRY} LIMIT ?
+                )"
+            ),
+            Some(vec![
+                i64::try_from(now)?.into(),
+                EXPIRED_PROOF_BATCH_SIZE.into(),
+            ]),
         ))?;
         Ok(())
     }
