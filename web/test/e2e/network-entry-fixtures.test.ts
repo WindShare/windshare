@@ -183,23 +183,15 @@ describe('direct weekly network fixtures', () => {
     const listeners = new Set<(route: PeerPathRoute) => void>()
     let pathRoute: PeerPathRoute = 'direct'
     const peer: PeerChannel = {
-      state: 'open',
-    unavailable: new AbortController().signal,
-      frames: new ReadableStream<Uint8Array>({ start: (controller) => controller.close() }),
-      opened: Promise.resolve(),
-      done: Promise.resolve(),
-      reason: undefined,
+      ...recoveryPeer(),
       get pathRoute() { return pathRoute },
       subscribePathRoute(listener) {
         listeners.add(listener)
         return () => { listeners.delete(listener) }
       },
-      send: async () => undefined,
-      sendTerminal: async () => undefined,
-      close: async () => undefined,
     }
-    const harness = new PagePeerRecoveryHarness({ publish: async () => undefined }, true)
-    const gated = harness.wrap(peer)
+    const harness = new PagePeerRecoveryHarness({ publish: async () => undefined })
+    const gated = harness.wrap(peer, [1])
     expect(gated).not.toBe(peer)
     expect(gated.pathRoute).toBe('direct')
 
@@ -217,6 +209,43 @@ describe('direct weekly network fixtures', () => {
       await gated.close()
     }
     expect(listeners.size).toBe(0)
+  })
+
+  it('holds the actual replacement response after earlier channels close before admission', async () => {
+    const log = new NetworkEventLog()
+    const harness = new PagePeerRecoveryHarness({ publish: async (event) => { log.accept(event) } })
+    const response = Uint8Array.of(1)
+    const first = harness.wrap(recoveryPeer(response), [1])
+    const firstRead = expect(first.frames.getReader().read()).rejects.toMatchObject({ name: 'AbortError' })
+    const start = await log.waitFor(
+      'admission-response-gated',
+      (event) => event.observation.release === 'attempt-timeout',
+      'initial response',
+    )
+    expect(start.observation.attemptIdBytes).toEqual([1])
+    await first.close()
+    await firstRead
+
+    const lane = { laneId: 2, laneEpoch: 2, route: 'direct' } as const
+    const active = recoveryPeer(undefined, () => harness.observeDetachment(lane))
+    expect(harness.wrap(active, [2])).toBe(active)
+    await harness.detachCurrentPeer()
+    await harness.wrap(recoveryPeer(), [3]).close()
+    await harness.wrap(recoveryPeer(), [4]).close()
+
+    const replacement = harness.wrap(recoveryPeer(response), [5])
+    const reader = replacement.frames.getReader()
+    const received = reader.read()
+    const held = await log.waitFor(
+      'admission-response-gated',
+      (event) => event.observation.release === 'page-controlled',
+      'replacement response',
+    )
+    expect(held.observation.attemptIdBytes).toEqual([5])
+    harness.releaseAdmission()
+    await expect(received).resolves.toEqual({ done: false, value: response })
+    reader.releaseLock()
+    await replacement.close()
   })
 
   it('accepts only the owned TURN readiness identity and loopback endpoint', () => {
@@ -345,3 +374,23 @@ describe('direct weekly network fixtures', () => {
     expect(log.snapshot()).toEqual([])
   })
 })
+
+function recoveryPeer(frame?: Uint8Array, onClose?: () => void): PeerChannel {
+  return {
+    state: 'open',
+    unavailable: new AbortController().signal,
+    frames: new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        if (frame !== undefined) controller.enqueue(frame)
+        controller.close()
+      },
+    }),
+    opened: Promise.resolve(),
+    done: Promise.resolve(),
+    reason: undefined,
+    pathRoute: 'direct',
+    send: async () => undefined,
+    sendTerminal: async () => undefined,
+    close: async () => { onClose?.() },
+  }
+}

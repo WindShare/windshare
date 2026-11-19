@@ -1,6 +1,7 @@
 import { BrowserReceiverGateway } from '../../src/application/browser-share/gateway'
 import type { FrozenSelectionPolicy } from '../../src/catalog/selection'
 import { BrowserOfferChannelFactory } from '../../src/connectivity/peer-offer'
+import { SessionSignalingRoute } from '../../src/connectivity/session-signaling'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import { bindReceiveIntent } from '../../src/output/planning/binding'
 import type { EnvironmentOffers, ResolvedArtifactAction } from '../../src/output/planning/contracts'
@@ -89,10 +90,12 @@ export function startHotSwitchPageTransfer(input: HotSwitchPageTransferRuntimeIn
   const relayCut = new RelayCutEvidence(bridge)
   const peerRelease = new OneShotRelease()
   const outputFence = new OutputFence(input.peerRecovery !== undefined)
-  const peerHarness = new PagePeerRecoveryHarness(bridge, input.peerRecovery !== undefined)
+  const peerHarness = input.peerRecovery === undefined ? undefined : new PagePeerRecoveryHarness(bridge)
   hotSwitchWindow.__windshareAdvanceHotSwitchOutput = () => outputFence.advance()
-  hotSwitchWindow.__windshareDetachHotSwitchPeer = () => peerHarness.detachCurrentPeer()
-  hotSwitchWindow.__windshareReleaseHotSwitchAdmission = () => peerHarness.releaseAdmission()
+  if (peerHarness !== undefined) {
+    hotSwitchWindow.__windshareDetachHotSwitchPeer = () => peerHarness.detachCurrentPeer()
+    hotSwitchWindow.__windshareReleaseHotSwitchAdmission = () => peerHarness.releaseAdmission()
+  }
   hotSwitchWindow.__windshareReleaseHotSwitchOutput = () => outputFence.release()
   hotSwitchWindow.__windshareSealHotSwitchRelayCut = () => relayCut.seal()
 
@@ -121,7 +124,7 @@ async function runTransfer(
   relayCut: RelayCutEvidence,
   peerRelease: OneShotRelease,
   outputFence: OutputFence,
-  peerHarness: PagePeerRecoveryHarness,
+  peerHarness: PagePeerRecoveryHarness | undefined,
   markRuntimeTerminalPublished: () => void,
 ): Promise<void> {
   let joined: JoinedReceiver | undefined
@@ -399,7 +402,7 @@ function createGateway(
   bridge: EvidenceBridge,
   relayCut: RelayCutEvidence,
   peerRelease: OneShotRelease,
-  peerHarness: PagePeerRecoveryHarness,
+  peerHarness: PagePeerRecoveryHarness | undefined,
 ): BrowserReceiverGateway {
   const realOffers = new BrowserOfferChannelFactory({
     configuration: input.rtcConfiguration,
@@ -410,13 +413,18 @@ function createGateway(
       signal: AbortSignal,
       observer?: Parameters<typeof realOffers.offer>[2],
     ) => {
-      const peer = input.peerRecovery === undefined
-        ? (await Promise.all([
-            realOffers.offer(route, signal, observer),
-            peerRelease.waitUntilReleased(signal),
-          ]))[0]
-        : await realOffers.offer(route, signal, observer)
-      return peerHarness.wrap(peer)
+      if (peerHarness === undefined) {
+        const [peer] = await Promise.all([
+          realOffers.offer(route, signal, observer),
+          peerRelease.waitUntilReleased(signal),
+        ])
+        return peer
+      }
+      if (!(route instanceof SessionSignalingRoute)) {
+        throw new TypeError('Recovery fixture requires authenticated session signaling')
+      }
+      const peer = await realOffers.offer(route, signal, observer)
+      return peerHarness.wrap(peer, [...route.binding.attemptId])
     },
   }
   return new BrowserReceiverGateway({
@@ -450,7 +458,7 @@ function createGateway(
     onContentLaneAdmitted: (observation) => relayCut.admit(observation),
     onContentLaneDetached: (observation) => {
       relayCut.detach(observation)
-      peerHarness.observeDetachment(observation)
+      peerHarness?.observeDetachment(observation)
     },
   })
 }

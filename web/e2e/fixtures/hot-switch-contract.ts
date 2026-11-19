@@ -101,7 +101,7 @@ export type HotSwitchPeerRecoveryEvidence = RecoveryBridgePayload<PeerRecoveryTr
 }>
 
 export interface HotSwitchAdmissionGateObservation {
-  readonly offerOrdinal: number
+  readonly attemptIdBytes: readonly number[]
   readonly release: 'attempt-timeout' | 'page-controlled'
 }
 
