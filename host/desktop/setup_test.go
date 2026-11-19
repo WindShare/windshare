@@ -11,7 +11,7 @@ import (
 )
 
 func setupRequest() Request {
-	return Request{Command: "configure", OperationID: "operation", Setup: &SetupInput{ID: "setup:1", RelayURL: "https://chosen.example", FrontURL: "https://front.example"}}
+	return Request{Command: "configure", OperationID: "operation", Setup: &SetupInput{ID: "setup:1", RelayURL: "https://chosen.example", RelayOperation: relaysetup.AddProfile, FrontURL: "https://front.example"}}
 }
 
 func TestSetupResumesOnlyWaitingIntentAndPreservesExplicitChoice(t *testing.T) {

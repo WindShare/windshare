@@ -105,11 +105,13 @@ impl Share {
                 ShareState::AwaitingAuthorization | ShareState::Failed
             )
         {
-            return (
-                Text::AuthorizationRequired,
-                Icon::Settings,
-                Action::ConfigureShare(self.id),
-            );
+            let (label, icon) = match &self.authorization {
+                Some(windshare_host::ShareAuthorization::SelfHosted { .. }) => {
+                    (Text::ApproveDevice, Icon::Shield)
+                }
+                _ => (Text::AuthorizationRequired, Icon::Settings),
+            };
+            return (label, icon, Action::ConfigureShare(self.id));
         }
         match self.source {
             ShareSource::Preview => {

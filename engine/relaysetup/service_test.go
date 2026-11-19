@@ -89,8 +89,8 @@ func TestOrdinaryAdditionPreservesSelectionAndFrontend(t *testing.T) {
 	if err != nil || len(result.ActiveRelays) != 0 {
 		t.Fatalf("ordinary addition replaced an explicit empty selection: %+v %v", result, err)
 	}
-	if _, err = service.Run(t.Context(), Request{URL: "https://open.example", Operation: PrivateOnboarding}, nil); err != nil {
-		t.Fatal("open relay cannot be added anonymously", err)
+	if _, err = service.Run(t.Context(), Request{URL: "https://open.example", Operation: AuthorizeDevice}, nil); err == nil || !strings.Contains(err.Error(), "does not support device pairing") {
+		t.Fatal("explicit authorization did not require pairing support", err)
 	}
 }
 
@@ -178,7 +178,7 @@ func TestPrivateEnrollmentResumesClaimedInstallationWithoutChangingSelectionsEar
 			now = now.Add(delay)
 			return nil
 		}}
-	request := Request{URL: "https://private.example", DeviceName: "Laptop", Operation: PrivateOnboarding}
+	request := Request{URL: "https://private.example", DeviceName: "Laptop", Operation: AuthorizeDevice}
 	var login *ServiceLogin
 	if _, err := New(dependencies).Run(t.Context(), request, func(event Progress) {
 		if event.Stage == "approval_required" {

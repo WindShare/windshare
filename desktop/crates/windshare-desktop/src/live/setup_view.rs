@@ -59,7 +59,7 @@ impl Desktop {
                     );
                 }
             }
-            SetupPage::ConnectRelay => {
+            SetupPage::Relay(_) => {
                 let blocked = locked || !setup.can_configure(operation);
                 panel = panel.child(self.connect_relay_fields(theme, id, blocked, busy, cx));
             }
@@ -116,7 +116,7 @@ impl Desktop {
                     .child(
                         Self::button(
                             "connect-relay",
-                            locale.text(Text::ConnectRelay),
+                            locale.text(form.page.title()),
                             Icon::Link,
                             ButtonStyle::Primary,
                             Action::SaveSharingSetup(id),

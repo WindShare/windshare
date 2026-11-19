@@ -77,7 +77,7 @@ func (store *recoveryStore) observe(saved Snapshot) {
 	}
 	store.recovery = Recovery{RelayURL: pending.RelayURL, OperationID: pending.OperationID}
 	switch {
-	case !sameRelay(pending.RelayURL, store.request.URL) || pending.Operation != store.request.Operation:
+	case !pending.matches(store.request):
 		store.recovery.Action = RecoveryBlocked
 	case pending.phase.stage() == (cancelling{}).stage():
 		store.recovery.Action = RecoveryRetryCancel

@@ -50,7 +50,7 @@ func (setup nativeSetup) run(ctx context.Context, input SetupInput, progress fun
 		return result, nil
 	}
 	installed, err := setup.service.Run(ctx, relaysetup.Request{
-		URL: input.RelayURL, Operation: relaysetup.PrivateOnboarding, AccessKey: input.AccessKey,
+		URL: input.RelayURL, Operation: input.RelayOperation, AccessKey: input.AccessKey,
 		DeviceName: relaysetup.DefaultDeviceName("WindShare desktop"), NoBrowser: true,
 	}, progress)
 	if err == nil {

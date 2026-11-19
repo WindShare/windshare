@@ -23,7 +23,7 @@ func pendingCredential(now time.Time) Snapshot {
 }
 
 func TestImportDuringApprovalCannotBeOverwrittenByCheckpointsOrInstallation(t *testing.T) {
-	for _, operation := range []Operation{AddProfile, PrivateOnboarding} {
+	for _, operation := range []Operation{AddProfile, AuthorizeDevice} {
 		t.Run(string(operation), func(t *testing.T) {
 			settings := relayconfig.FileStore{Path: filepath.Join(t.TempDir(), "config.json")}
 			store := FileStore{Settings: settings}

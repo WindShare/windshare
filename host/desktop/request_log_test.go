@@ -29,7 +29,7 @@ func TestControlLogsExcludeCredentialsFromAcceptedAndRejectedRequests(t *testing
 		}
 		return SetupResult{RelayURL: setup.RelayURL}, errors.New("setup rejected access key " + setup.AccessKey)
 	}
-	setup := SetupInput{ID: "relay-setup", RelayURL: relay, AccessKey: key, FrontURL: "invalid frontend"}
+	setup := SetupInput{ID: "relay-setup", RelayURL: relay, RelayOperation: relaysetup.AddProfile, AccessKey: key, FrontURL: "invalid frontend"}
 	reply := a.execute(Request{ID: "invalid-setup", Command: "configure", Setup: &setup})
 	if reply.Error == nil {
 		t.Fatal("invalid frontend was accepted")

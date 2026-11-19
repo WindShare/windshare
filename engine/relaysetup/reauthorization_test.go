@@ -13,7 +13,7 @@ import (
 )
 
 func TestReauthorizationCommitsCredentialAndDetectsConcurrentCredentialImport(t *testing.T) {
-	for _, operation := range []Operation{AddProfile, PrivateOnboarding} {
+	for _, operation := range []Operation{AddProfile, AuthorizeDevice} {
 		for _, scenario := range []string{"replace-credential", "concurrent-credential-import"} {
 			t.Run(string(operation)+"/"+scenario, func(t *testing.T) {
 				const address = "https://private.example"

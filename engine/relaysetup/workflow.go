@@ -22,7 +22,7 @@ func (run *workflow) emit(progress func(Progress), event Progress) {
 	}
 }
 func (run *workflow) execute(ctx context.Context, request Request, progress func(Progress)) (Result, error) {
-	if request.Operation != AddProfile && request.Operation != PrivateOnboarding {
+	if request.Operation != AddProfile && request.Operation != AuthorizeDevice {
 		return Result{}, errors.New("unknown relay setup operation")
 	}
 	if err := ctx.Err(); err != nil {
@@ -33,7 +33,7 @@ func (run *workflow) execute(ctx context.Context, request Request, progress func
 		return Result{}, err
 	}
 	if saved.Pending != nil {
-		if !sameRelay(saved.Pending.RelayURL, request.URL) || saved.Pending.Operation != request.Operation {
+		if !saved.Pending.matches(request) {
 			return Result{}, ErrPendingSetup
 		}
 		return run.continueEnrollment(ctx, saved, progress, request.NoBrowser)
@@ -46,7 +46,7 @@ func (run *workflow) execute(ctx context.Context, request Request, progress func
 		return Result{}, err
 	}
 	candidate := relayprofile.Candidate{PublicURL: discovery.RelayURL, ConsoleURL: discovery.ConsoleURL, OfferedFrontend: discovery.OfferedFrontend}
-	if discovery.Access == "open" && (request.Operation == AddProfile || discovery.ConsoleURL == "") {
+	if discovery.Access == "open" && request.Operation == AddProfile {
 		return run.install(ctx, saved.SettingsRevision(), candidate)
 	}
 	if discovery.ConsoleURL == "" {

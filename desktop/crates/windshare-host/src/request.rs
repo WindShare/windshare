@@ -42,6 +42,8 @@ pub enum Command {
 pub struct SetupInput {
     pub id: String,
     pub relay_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relay_operation: Option<crate::RelayOperation>,
     pub front_url: String,
     pub access_key: String,
     pub preference: Option<crate::PreferenceEdit>,

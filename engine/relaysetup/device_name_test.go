@@ -15,7 +15,7 @@ import (
 // Invalid input must leave durable storage readable, including when JSON would
 // otherwise replace invalid UTF-8 and expand a name beyond the byte limit.
 func TestRestrictedSetupRejectsInvalidDeviceNameBeforeEnrollment(t *testing.T) {
-	for _, operation := range []Operation{AddProfile, PrivateOnboarding} {
+	for _, operation := range []Operation{AddProfile, AuthorizeDevice} {
 		for _, test := range []struct{ name, input string }{
 			{"empty", ""},
 			{"blank", "   "},

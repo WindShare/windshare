@@ -120,7 +120,7 @@ func TestSetupTransportCancellationRetainsResumableEnrollment(t *testing.T) {
 						t.Error(err)
 					}
 				})
-				request := Request{URL: relayURL, DeviceName: "Laptop", Operation: PrivateOnboarding}
+				request := Request{URL: relayURL, DeviceName: "Laptop", Operation: AuthorizeDevice}
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				var runErr error

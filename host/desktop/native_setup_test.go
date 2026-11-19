@@ -10,6 +10,7 @@ import (
 
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relayprofile"
+	"github.com/windshare/windshare/engine/relaysetup"
 )
 
 func TestNativeSetupPreservesSavedRelaySelectionAndDisabledDefaults(t *testing.T) {
@@ -38,7 +39,7 @@ func TestNativeSetupPreservesSavedRelaySelectionAndDisabledDefaults(t *testing.T
 				})
 			}))
 			defer server.Close()
-			if _, err := newNativeSetup(store).run(t.Context(), SetupInput{RelayURL: server.URL}, nil); err != nil {
+			if _, err := newNativeSetup(store).run(t.Context(), SetupInput{RelayURL: server.URL, RelayOperation: relaysetup.AddProfile}, nil); err != nil {
 				t.Fatal(err)
 			}
 			saved, err := store.Load()

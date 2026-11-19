@@ -73,6 +73,12 @@ type PendingSetup struct {
 	phase setupPhase
 }
 
+func (pending *PendingSetup) matches(request Request) bool {
+	// Both entry points can reach the same enrollment. An explicit key import
+	// must never continue an approval instead of installing the supplied key.
+	return request.AccessKey == "" && sameRelay(pending.RelayURL, request.URL)
+}
+
 func (pending *PendingSetup) enrollment() enrollment {
 	switch phase := pending.phase.(type) {
 	case awaiting:
@@ -104,7 +110,7 @@ func (pending *PendingSetup) validate() error {
 		len(pending.OperationID) > maximumOperationIDBytes || strings.ContainsFunc(pending.OperationID, func(c rune) bool {
 		return (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' && c != '_'
 	}) ||
-		(pending.Operation != AddProfile && pending.Operation != PrivateOnboarding) ||
+		(pending.Operation != AddProfile && pending.Operation != AuthorizeDevice) ||
 		ValidateDeviceName(pending.DeviceName) != nil {
 		return invalid
 	}

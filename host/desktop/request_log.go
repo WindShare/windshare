@@ -52,6 +52,7 @@ func (a *Application) logSetupResult(event string) {
 		"setup_id": setup.ID, "operation_id": setup.OperationID,
 		"relay_origin": endpointOrigin(setup.RelayURL), "state": setup.State, "stage": setup.Stage,
 		"frontend_saved": setup.FrontendSaved, "relay_saved": setup.RelaySaved, "recovery": setup.Recovery,
+		"relay_operation": setup.RelayOperation,
 	}
 	if setup.Error != nil {
 		fields["error_code"] = setup.Error.Code

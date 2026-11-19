@@ -10,7 +10,8 @@ mod request;
 mod setup;
 pub use model::ShareAuthorization;
 pub use setup::{
-    PreferenceEdit, RelayMode, RelayPreferences, SavedRelay, Setup, SetupContext, SetupRecovery,
+    PreferenceEdit, RelayMode, RelayOperation, RelayPreferences, SavedRelay, Setup, SetupContext,
+    SetupRecovery,
 };
 
 #[cfg(test)]
@@ -178,9 +179,10 @@ impl Controller {
         )
     }
 
-    pub fn connect_relay(
+    pub fn setup_relay(
         &self,
         operation_id: &str,
+        relay_operation: RelayOperation,
         relay_url: String,
         access_key: String,
     ) -> Option<String> {
@@ -188,6 +190,7 @@ impl Controller {
             operation_id,
             request::SetupInput {
                 relay_url,
+                relay_operation: Some(relay_operation),
                 access_key,
                 ..Default::default()
             },

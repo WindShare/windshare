@@ -55,7 +55,7 @@ func (app *App) runRelay(ctx context.Context, args []string) int {
 func (app *App) parseRelaySetupRequest(operation string, args []string) (engine.RelaySetupRequest, requestParseOutcome) {
 	request := engine.RelaySetupRequest{Operation: relaysetup.AddProfile}
 	if operation == "onboard" {
-		request.Operation = relaysetup.PrivateOnboarding
+		request.Operation = relaysetup.AuthorizeDevice
 	}
 	flags := app.newFlagSet("relay " + operation)
 	if operation == "add" {

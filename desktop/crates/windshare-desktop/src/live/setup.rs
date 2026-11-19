@@ -5,13 +5,13 @@ use crate::{
     model::{Overlay, ShareSource},
 };
 use gpui::{Entity, Focusable, Subscription, Window, prelude::*};
-use windshare_host::{Model, PreferenceEdit, Setup, ShareAuthorization};
+use windshare_host::{Model, PreferenceEdit, RelayOperation, Setup, ShareAuthorization};
 use windshare_ui::{Input, InputEvent};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SetupPage {
     Selection,
-    ConnectRelay,
+    Relay(RelayOperation),
     ReceiverSite,
 }
 
@@ -19,7 +19,8 @@ impl SetupPage {
     pub const fn title(self) -> Text {
         match self {
             Self::Selection => Text::ChooseRelays,
-            Self::ConnectRelay => Text::ConnectRelay,
+            Self::Relay(RelayOperation::AddProfile) => Text::ConnectRelay,
+            Self::Relay(RelayOperation::AuthorizeDevice) => Text::ApproveDevice,
             Self::ReceiverSite => Text::ReceiverSite,
         }
     }
@@ -170,15 +171,38 @@ impl Desktop {
             return;
         }
         self.open_sharing_setup(Some(id), window, cx);
-        if let Some(ShareAuthorization::SelfHosted { relay_url }) = authorization
-            && let Runtime::Native(session) = &self.runtime
-            && !session.model.setup.unfinished()
-        {
-            self.edit_setup_page(SetupPage::ConnectRelay, window, cx);
-            self.setup_form
-                .relay
-                .update(cx, |input, cx| input.set_value(relay_url, cx));
+        if let Some(ShareAuthorization::SelfHosted { relay_url }) = authorization {
+            self.authorize_relay(relay_url, window, cx);
         }
+    }
+
+    pub(super) fn authorize_relay(
+        &mut self,
+        relay_url: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(Overlay::SharingSetup(id)) = self.overlays.last().map(|frame| &frame.content)
+        else {
+            return;
+        };
+        let Runtime::Native(session) = &self.runtime else {
+            return;
+        };
+        if self.setup_form.pending.is_some() || session.model.setup.unfinished() {
+            return;
+        }
+        let id = *id;
+        self.edit_setup_page(
+            SetupPage::Relay(RelayOperation::AuthorizeDevice),
+            window,
+            cx,
+        );
+        self.setup_form
+            .relay
+            .update(cx, |input, cx| input.set_value(relay_url, cx));
+        self.save_sharing_setup(id, cx);
+        cx.notify();
     }
 
     pub fn open_sharing_setup(
@@ -207,8 +231,11 @@ impl Desktop {
             self.setup_form
                 .access_key
                 .update(cx, |input, cx| input.set_value("", cx));
-            if let Some(context) = current.filter(|context| !context.relay_url.is_empty()) {
-                self.setup_form.page = SetupPage::ConnectRelay;
+            if let Some(context) = current
+                && let Some(relay_operation) = context.relay_operation
+                && !context.relay_url.is_empty()
+            {
+                self.setup_form.page = SetupPage::Relay(relay_operation);
                 self.setup_form.relay.update(cx, |input, cx| {
                     input.set_value(context.relay_url.clone(), cx);
                 });
@@ -236,7 +263,7 @@ impl Desktop {
             .update(cx, |input, cx| input.set_value("", cx));
         let focus = match page {
             SetupPage::Selection => self.overlays.last().map(|frame| frame.scope.clone()),
-            SetupPage::ConnectRelay => {
+            SetupPage::Relay(_) => {
                 form.relay.update(cx, |input, cx| input.set_value("", cx));
                 Some(form.relay.read(cx).focus_handle(cx))
             }
@@ -291,13 +318,14 @@ impl Desktop {
         let form = &self.setup_form;
         let id = match form.page {
             SetupPage::Selection => return,
-            SetupPage::ConnectRelay => {
+            SetupPage::Relay(relay_operation) => {
                 let relay = form.relay.read(cx).value().trim();
                 if relay.is_empty() {
                     return;
                 }
-                session.controller.connect_relay(
+                session.controller.setup_relay(
                     operation,
+                    relay_operation,
                     relay.into(),
                     form.access_key.read(cx).value().trim().into(),
                 )

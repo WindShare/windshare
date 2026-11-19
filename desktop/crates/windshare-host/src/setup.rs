@@ -56,8 +56,18 @@ pub struct SetupContext {
     pub frontend_saved: bool,
     #[serde(default)]
     pub relay_url: String,
+    pub relay_operation: Option<RelayOperation>,
     #[serde(default)]
     pub relay_saved: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, serde::Serialize, PartialEq, Eq)]
+pub enum RelayOperation {
+    #[serde(rename = "add")]
+    AddProfile,
+    // The enrollment checkpoint uses this wire value for device authorization.
+    #[serde(rename = "private-onboarding")]
+    AuthorizeDevice,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]

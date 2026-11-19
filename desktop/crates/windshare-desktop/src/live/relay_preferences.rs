@@ -5,7 +5,7 @@ use crate::{
     model::{Action, Overlay},
 };
 use gpui::{Div, ElementId, KeyDownEvent, Role, Toggled, prelude::*, px};
-use windshare_host::{PreferenceEdit, RelayMode, RelayPreferences};
+use windshare_host::{PreferenceEdit, RelayMode, RelayOperation, RelayPreferences};
 use windshare_ui::{Button, ButtonStyle, Icon, Theme, Tone, column, icon, row};
 
 impl Desktop {
@@ -73,7 +73,7 @@ impl Desktop {
                         locale.text(Text::AddRelay),
                         Icon::Plus,
                         ButtonStyle::Secondary,
-                        Action::SetupPage(SetupPage::ConnectRelay),
+                        Action::SetupPage(SetupPage::Relay(RelayOperation::AddProfile)),
                         cx,
                     )
                     .compact()
@@ -94,13 +94,7 @@ impl Desktop {
             list = list.child(theme.caption(locale.text(Text::RelaySlotsFull)));
         }
         list = list.children(prefs.relays.iter().enumerate().map(|(index, relay)| {
-            Self::saved_relay(
-                theme,
-                relay,
-                index,
-                busy || !relay.enabled && prefs.at_capacity,
-                cx,
-            )
+            Self::saved_relay(theme, relay, index, busy, prefs.at_capacity, cx)
         }));
         column()
             .gap(px(20.))
@@ -158,7 +152,8 @@ impl Desktop {
         theme: Theme,
         relay: &windshare_host::SavedRelay,
         index: usize,
-        disabled: bool,
+        busy: bool,
+        at_capacity: bool,
         cx: &Context<Self>,
     ) -> Div {
         let locale = language(cx);
@@ -175,16 +170,28 @@ impl Desktop {
                 PreferenceEdit::Enable(relay.url.clone()),
             )
         };
-        let mut actions = row().gap(px(6.));
+        let mut actions = row().gap(px(6.)).flex_wrap().justify_end();
         if let Some(url) = relay.console_url.clone() {
-            actions = actions.child(
-                Button::new(("relay-console", index), "")
-                    .icon(Icon::External)
-                    .compact()
-                    .style(ButtonStyle::Ghost)
-                    .tooltip(locale.text(Text::ManageRelay))
-                    .on_press(move |(), _, cx| cx.open_url(&url)),
-            );
+            let relay_url = relay.url.clone();
+            actions = actions
+                .child(
+                    Button::new(("authorize-relay", index), locale.text(Text::ApproveDevice))
+                        .icon(Icon::Shield)
+                        .compact()
+                        .style(ButtonStyle::Ghost)
+                        .disabled(busy)
+                        .on_press(cx.listener(move |this, (), window, cx| {
+                            this.authorize_relay(relay_url.clone(), window, cx);
+                        })),
+                )
+                .child(
+                    Button::new(("relay-console", index), "")
+                        .icon(Icon::External)
+                        .compact()
+                        .style(ButtonStyle::Ghost)
+                        .tooltip(locale.text(Text::ManageRelay))
+                        .on_press(move |(), _, cx| cx.open_url(&url)),
+                );
         }
         row()
             .gap(px(10.))
@@ -212,7 +219,7 @@ impl Desktop {
                         edit,
                         cx,
                     )
-                    .disabled(disabled),
+                    .disabled(busy || !relay.enabled && at_capacity),
                 ),
             )
     }

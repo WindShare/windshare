@@ -126,7 +126,7 @@ func TestRelaySetupOptionsAreInterleaved(t *testing.T) {
 				request, outcome := app.parseRelaySetupRequest(operation, args)
 				wantOperation := relaysetup.AddProfile
 				if operation == "onboard" {
-					wantOperation = relaysetup.PrivateOnboarding
+					wantOperation = relaysetup.AuthorizeDevice
 				}
 				if outcome != requestParseReady || request.URL != relayURL ||
 					request.DeviceName != "device" || !request.NoBrowser || request.Operation != wantOperation {

@@ -11,11 +11,12 @@ import (
 )
 
 type SetupInput struct {
-	ID         string                      `json:"id"`
-	RelayURL   string                      `json:"relay_url"`
-	FrontURL   string                      `json:"front_url"`
-	AccessKey  string                      `json:"access_key,omitempty"`
-	Preference *relayconfig.PreferenceEdit `json:"preference,omitempty"`
+	ID             string                      `json:"id"`
+	RelayURL       string                      `json:"relay_url"`
+	FrontURL       string                      `json:"front_url"`
+	AccessKey      string                      `json:"access_key,omitempty"`
+	RelayOperation relaysetup.Operation        `json:"relay_operation,omitempty"`
+	Preference     *relayconfig.PreferenceEdit `json:"preference,omitempty"`
 }
 
 type SetupView struct {
@@ -23,6 +24,7 @@ type SetupView struct {
 	ID              string                    `json:"id,omitempty"`
 	OperationID     string                    `json:"operation_id,omitempty"`
 	RelayURL        string                    `json:"relay_url,omitempty"`
+	RelayOperation  relaysetup.Operation      `json:"relay_operation,omitempty"`
 	Stage           string                    `json:"stage,omitempty"`
 	VerificationURL string                    `json:"verification_url,omitempty"`
 	ServiceLogin    *relaysetup.ServiceLogin  `json:"service_login,omitempty"`
@@ -75,8 +77,15 @@ func (a *Application) configure(request Request) error {
 			return errors.New("creation operation has finished")
 		}
 	}
-	if input.Preference != nil && (input.RelayURL != "" || input.FrontURL != "") || input.AccessKey != "" && input.RelayURL == "" {
+	if input.Preference != nil && (input.RelayURL != "" || input.FrontURL != "") {
 		return errors.New("invalid sharing settings request")
+	}
+	if input.RelayURL == "" {
+		if input.RelayOperation != "" || input.AccessKey != "" {
+			return errors.New("relay operation and access key require a relay URL")
+		}
+	} else if input.RelayOperation != relaysetup.AddProfile && input.RelayOperation != relaysetup.AuthorizeDevice {
+		return errors.New("invalid relay setup operation")
 	}
 	if input.Preference == nil && input.RelayURL == "" && input.FrontURL == "" {
 		return errors.New("enter a relay or frontend URL")
@@ -88,7 +97,10 @@ func (a *Application) configure(request Request) error {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a.interruptSetup = cancel
-	a.setup = SetupView{State: "running", ID: input.ID, OperationID: request.OperationID, RelayURL: input.RelayURL}
+	a.setup = SetupView{
+		State: "running", ID: input.ID, OperationID: request.OperationID,
+		RelayURL: input.RelayURL, RelayOperation: input.RelayOperation,
+	}
 	a.setupRequests[input.ID] = setupCommand{input: *input, operationID: request.OperationID}
 	a.work.Add(1)
 	go a.runSetup(ctx, *input)
