@@ -131,8 +131,7 @@ func (service *Service) submitRegistration(ctx context.Context, record Record, p
 		return nil, err
 	}
 	challenge := failure.Challenge
-	validMode := challenge.validWork() || challenge.Mode == emailChallenge && challenge.Bits <= maximumWorkBits
-	if !validMode || !service.acceptsChallengeExpiry(challenge.ExpiresAt) {
+	if !service.acceptsRegistrationPrompt(challenge, proof) {
 		return nil, errInvalidRegistrationChallenge
 	}
 	if err := service.saveProof(ctx, record, &Proof{Challenge: challenge}); err != nil {
@@ -140,6 +139,20 @@ func (service *Service) submitRegistration(ctx context.Context, record Record, p
 	}
 	slog.Debug("account_registration_challenge_received", "challenge_id", challenge.ID, "mode", challenge.Mode, "expires_at", challenge.ExpiresAt)
 	return &challenge, nil
+}
+
+func (service *Service) acceptsRegistrationPrompt(challenge Challenge, submitted *Proof) bool {
+	if challenge.Mode == emailChallenge && challenge.ID != "" {
+		// Only the email endpoint issues a code. A registration reply can echo that
+		// challenge, even if its original deadline has passed on the local clock.
+		return submitted != nil && submitted.Solution != "" && challenge == submitted.Challenge
+	}
+	return (challenge.validWork() || challenge.Mode == emailChallenge && challenge.Bits == 0) &&
+		service.acceptsChallengeExpiry(challenge.ExpiresAt)
+}
+
+func (challenge Challenge) hasEmailCode(now time.Time) bool {
+	return challenge.Mode == emailChallenge && challenge.ID != "" && challenge.ExpiresAt > uint64(now.Unix())
 }
 
 // The authority stamps expiry with its own clock, which can run ahead of the client.

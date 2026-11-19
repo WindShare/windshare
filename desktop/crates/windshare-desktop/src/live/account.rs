@@ -69,18 +69,6 @@ impl AccountPage {
             _ => (Self::Overview, Text::ViewAccount),
         }
     }
-
-    /// Registration keeps a mistyped code's challenge (the code is still pending), so only
-    /// an expired, used-up or replaced code needs a new email. Profile verification cannot
-    /// tell these apart, so it keeps the general wording.
-    pub(super) const fn email_code_rejection(self, email_code_pending: bool) -> Text {
-        match self {
-            Self::Email(EmailPurpose::Registration, EmailStep::Code) if email_code_pending => {
-                Text::EmailCodeIncorrect
-            }
-            _ => Text::EmailCodeRejected,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -486,7 +474,3 @@ impl Desktop {
         };
     }
 }
-
-#[cfg(test)]
-#[path = "account_tests.rs"]
-mod tests;

@@ -69,11 +69,12 @@ func New(config Config) (*Service, error) {
 		return service, nil
 	}
 	service.adoptLocked(record)
-	if record.Denial != "" {
+	switch {
+	case record.Denial != "":
 		service.state, service.reason = Denied, record.Denial
-	} else if service.validTicket(record) {
+	case service.validTicket(record):
 		service.state = Ready
-	} else if record.Credential == nil && record.Proof != nil {
+	case record.Credential == nil && record.Proof != nil:
 		service.state = record.Proof.Challenge.requiredState()
 	}
 	return service, nil
@@ -139,8 +140,8 @@ func (service *Service) Snapshot() (Snapshot, <-chan struct{}) {
 		ValidUntil: time.Unix(int64(service.record.Entitlement.ValidUntil), 0), RetryAt: service.retryAt,
 		RegistrationPermille: service.registrationPermille, Reason: service.reason}
 	// Email admission first returns an empty challenge. Only a delivered code has an ID.
-	if proof := service.record.Proof; proof != nil && proof.Challenge.Mode == "email" {
-		value.EmailCodePending = proof.Challenge.ID != "" && proof.Challenge.ExpiresAt > uint64(now.Unix())
+	if proof := service.record.Proof; proof != nil {
+		value.EmailCodePending = proof.Challenge.hasEmailCode(now)
 	}
 	if credential := service.record.Credential; credential != nil {
 		value.Account = base64.RawURLEncoding.EncodeToString(credential.Account[:])

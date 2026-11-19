@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/windshare/windshare/core/serviceauthority"
 )
@@ -139,25 +140,53 @@ func TestVerifyEmailReturnsRegistrationOutcome(t *testing.T) {
 	}
 }
 
-// The authority answers a mistyped registration code with the still-live challenge
-// that was submitted; any other prompt means the delivered code can no longer be used.
-func TestMistypedEmailCodeKeepsDeliveredChallenge(t *testing.T) {
+func TestVerifyEmailDistinguishesRetryFromReplacement(t *testing.T) {
 	for _, test := range []struct {
-		name   string
-		prompt func(delivered Challenge) Challenge
-		want   error
+		name     string
+		prompt   func(Challenge) Challenge
+		replyLag time.Duration
+		want     error
+		wantCode string
+		pending  bool
 	}{
-		{name: "same challenge", prompt: func(delivered Challenge) Challenge { return delivered }, want: errEmailCodeIncorrect},
-		{name: "id-less prompt", prompt: func(delivered Challenge) Challenge {
-			return Challenge{Mode: "email", ExpiresAt: delivered.ExpiresAt + 60}
-		}, want: errEmailCodeRejected},
-		{name: "another challenge", prompt: func(delivered Challenge) Challenge {
-			return Challenge{ID: "other", Mode: "email", ExpiresAt: delivered.ExpiresAt}
-		}, want: errEmailCodeRejected},
+		{
+			name: "same challenge", want: errEmailCodeIncorrect,
+			wantCode: "email_code_incorrect", pending: true,
+		},
+		{
+			name:     "local deadline crossed while waiting for the same challenge",
+			replyLag: time.Second, want: errEmailCodeRejected, wantCode: "email_code_rejected",
+		},
+		{
+			name: "id-less prompt", prompt: func(delivered Challenge) Challenge {
+				return Challenge{Mode: emailChallenge, ExpiresAt: delivered.ExpiresAt + 60}
+			},
+			want: errEmailCodeRejected, wantCode: "email_code_rejected",
+		},
+		{
+			name: "undelivered challenge", prompt: func(delivered Challenge) Challenge {
+				delivered.ID = "other"
+				return delivered
+			},
+			want: errInvalidRegistrationChallenge, wantCode: "account_operation_failed", pending: true,
+		},
+		{
+			name: "changed expiry on the same ID", prompt: func(delivered Challenge) Challenge {
+				delivered.ExpiresAt++
+				return delivered
+			},
+			want: errInvalidRegistrationChallenge, wantCode: "account_operation_failed", pending: true,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			config, session := accountFixture(t)
-			delivered := Challenge{ID: "delivered", Mode: "email", ExpiresAt: uint64(config.Now().Unix()) + 600}
+			now := config.Now()
+			config.Now = func() time.Time { return now }
+			delivered := Challenge{ID: "delivered", Mode: emailChallenge, ExpiresAt: uint64(now.Unix()) + 1}
+			prompt := delivered
+			if test.prompt != nil {
+				prompt = test.prompt(delivered)
+			}
 			config.Store = &MemoryStore{record: Record{SetupSecret: session.Secret, Proof: &Proof{Challenge: delivered}}}
 			var submitted []string
 			config.Client = clientFunc(func(request *http.Request) (*http.Response, error) {
@@ -166,35 +195,39 @@ func TestMistypedEmailCodeKeepsDeliveredChallenge(t *testing.T) {
 					return nil, fmt.Errorf("unexpected registration request %s %+v: %v", request.URL.Path, input, err)
 				}
 				submitted = append(submitted, input.Solution)
-				if input.Solution != "code" {
-					return accountReply(t, http.StatusPreconditionRequired, fault{Kind: "verification", Challenge: test.prompt(delivered)}), nil
+				if input.Solution == "code" {
+					return accountReply(t, http.StatusOK, session), nil
 				}
-				return accountReply(t, http.StatusOK, session), nil
+				now = now.Add(test.replyLag)
+				return accountReply(t, http.StatusPreconditionRequired, fault{Kind: "verification", Challenge: prompt}), nil
 			})
 			service := testService(t, config)
-			if err := service.VerifyEmail(t.Context(), "mistyped"); !errors.Is(err, test.want) || CommandErrorCode(err) != "email_code_rejected" {
-				t.Fatalf("mistyped code: %v, want %v", err, test.want)
-			}
-			// A background registration pass must not resubmit the wrong code.
-			if err := service.Register(t.Context()); err != nil {
-				t.Fatalf("background registration: %v", err)
+			if err := service.VerifyEmail(t.Context(), "mistyped"); !errors.Is(err, test.want) || CommandErrorCode(err) != test.wantCode {
+				t.Fatalf("mistyped code: %v (%s), want %v (%s)", err, CommandErrorCode(err), test.want, test.wantCode)
 			}
 			record, err := service.load(t.Context())
 			if err != nil {
 				t.Fatal(err)
 			}
-			if wantProof := (Proof{Challenge: test.prompt(delivered)}); record.Proof == nil || *record.Proof != wantProof {
+			wantProof := Proof{Challenge: prompt}
+			if test.want == errInvalidRegistrationChallenge {
+				wantProof.Challenge = delivered
+			}
+			if record.Proof == nil || *record.Proof != wantProof {
 				t.Fatalf("saved proof = %+v, want %+v", record.Proof, wantProof)
 			}
-			snapshot, _ := service.Snapshot()
-			if snapshot.State != EmailRequired || snapshot.EmailCodePending != (record.Proof.Challenge.ID != "") {
+			if snapshot, _ := service.Snapshot(); snapshot.State != EmailRequired || snapshot.EmailCodePending != test.pending {
 				t.Fatalf("after a mistyped code: %+v", snapshot)
 			}
+			if len(submitted) != 1 {
+				t.Fatalf("submissions = %q", submitted)
+			}
 			if test.want != errEmailCodeIncorrect {
-				if len(submitted) != 1 {
-					t.Fatalf("submissions = %q", submitted)
-				}
 				return
+			}
+			// An account setup pass must not resubmit the wrong code.
+			if err := service.Register(t.Context()); err != nil {
+				t.Fatalf("account setup: %v", err)
 			}
 			if err := service.VerifyEmail(t.Context(), "code"); err != nil {
 				t.Fatalf("corrected code: %v", err)

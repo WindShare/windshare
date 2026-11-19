@@ -63,9 +63,9 @@ impl Proof {
         self.expires_at > now && self.attempts < MAX_ATTEMPTS
     }
 
-    fn challenge(&self) -> Challenge {
+    fn into_challenge(self) -> Challenge {
         Challenge {
-            id: self.id.clone(),
+            id: self.id,
             mode: self.method.mode(),
             bits: match self.method {
                 ProofMethod::Work { bits } => bits,
@@ -94,9 +94,11 @@ impl Proof {
     }
 }
 
-pub enum Verified {
-    Work,
-    Email(String),
+pub(crate) enum ProofRedemption {
+    WorkVerified,
+    EmailVerified(String),
+    Retry(Challenge),
+    Unavailable,
 }
 
 pub struct EmailDelivery {
@@ -120,7 +122,7 @@ impl EmailDelivery {
         let key = self.owner.key();
         save(store, &key, &self.proof)?;
         tracing::info!(event="email_verification_delivered", owner=key, challenge=%self.proof.id);
-        Ok(self.proof.challenge())
+        Ok(self.proof.into_challenge())
     }
 }
 
@@ -140,11 +142,11 @@ impl<R: Store, E: Environment> Authority<R, E> {
             && matches!(proof.method, ProofMethod::Work { bits: expected } if expected == bits)
             && proof.live(self.environment.now())
         {
-            return Ok(proof.challenge());
+            return Ok(proof.into_challenge());
         }
         let proof = self.new_proof(ProofMethod::Work { bits })?;
         save(&mut self.store, &owner.key(), &proof)?;
-        Ok(proof.challenge())
+        Ok(proof.into_challenge())
     }
 
     pub(crate) fn issue_email_code(
@@ -178,32 +180,17 @@ impl<R: Store, E: Environment> Authority<R, E> {
         mode: RegistrationMode,
         id: Option<&str>,
         solution: Option<&str>,
-    ) -> Result<Option<Verified>> {
+    ) -> Result<ProofRedemption> {
         let (Some(id), Some(solution)) = (id, solution) else {
-            return Ok(None);
+            return Ok(ProofRedemption::Unavailable);
         };
         ensure!(
             id.len() <= MAX_CHALLENGE_ID_BYTES && solution.len() <= MAX_SOLUTION_BYTES,
             Fault::Invalid
         );
-        let owner = Owner::Registration(source);
-        let current = |proof: &Proof| proof.method.mode() == mode && proof.id == id;
-        let verified = self.redeem_proof(&owner, solution, current)?;
-        // A mistyped email code leaves its challenge redeemable. Prompt with that same
-        // challenge rather than an id-less one, so the client keeps the delivered email.
-        // Every client already handles this 428 shape; the attempt above is already saved.
-        if verified.is_none()
-            && mode == RegistrationMode::Email
-            && let Some(proof) = load::<Proof>(&self.store, &owner.key())?
-            && current(&proof)
-            && proof.live(self.environment.now())
-        {
-            return Err(Fault::Verification {
-                challenge: proof.challenge(),
-            }
-            .into());
-        }
-        Ok(verified)
+        self.redeem_proof(&Owner::Registration(source), solution, |proof| {
+            proof.method.mode() == mode && proof.id == id
+        })
     }
 
     pub(crate) fn verify_mailbox(
@@ -217,7 +204,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
             proof.id == id && matches!(&proof.method, ProofMethod::Email { address: target, .. } if target == address)
         })?;
         ensure!(
-            matches!(result, Some(Verified::Email(_))),
+            matches!(result, ProofRedemption::EmailVerified(_)),
             Fault::EmailCodeRejected
         );
         Ok(())
@@ -228,24 +215,30 @@ impl<R: Store, E: Environment> Authority<R, E> {
         owner: &Owner,
         solution: &str,
         matches: impl FnOnce(&Proof) -> bool,
-    ) -> Result<Option<Verified>> {
+    ) -> Result<ProofRedemption> {
         let storage_key = owner.key();
         let Some(mut proof) = load::<Proof>(&self.store, &storage_key)? else {
-            return Ok(None);
+            return Ok(ProofRedemption::Unavailable);
         };
-        if !matches(&proof) || !proof.live(self.environment.now()) {
-            return Ok(None);
+        let now = self.environment.now();
+        if !matches(&proof) || !proof.live(now) {
+            return Ok(ProofRedemption::Unavailable);
         }
         if solution.len() > MAX_SOLUTION_BYTES || !proof.accepts(solution) {
             proof.attempts += 1;
             tracing::info!(event = "verification_code_rejected", challenge = %proof.id, attempts = proof.attempts);
             save(&mut self.store, &storage_key, &proof)?;
-            return Ok(None);
+            // The rejected attempt counts before the proof can be offered for another try.
+            return Ok(if proof.live(now) {
+                ProofRedemption::Retry(proof.into_challenge())
+            } else {
+                ProofRedemption::Unavailable
+            });
         }
         self.store.delete(&storage_key)?;
-        Ok(Some(match proof.method {
-            ProofMethod::Work { .. } => Verified::Work,
-            ProofMethod::Email { address, .. } => Verified::Email(address),
-        }))
+        Ok(match proof.method {
+            ProofMethod::Work { .. } => ProofRedemption::WorkVerified,
+            ProofMethod::Email { address, .. } => ProofRedemption::EmailVerified(address),
+        })
     }
 }

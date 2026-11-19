@@ -12,7 +12,12 @@ on:
       - consoles/tsconfig.json
       - consoles/package.json
       - consoles/pnpm-lock.yaml
+      - relay-rust/Cargo.*
+      - relay-rust/rust-toolchain.toml
+      - relay-rust/.cargo/**
+      - relay-rust/crates/relay-access/**
       - relay-rust/crates/network-authority/**
+      - relay-rust/crates/relay-cloudflare/package-lock.json
       - .github/workflows/network-authority.yml
   push:
     branches: [main]
@@ -48,6 +53,32 @@ jobs:
     uses: ./.github/workflows/console-bundle.yml
     with:
       app: network
+  registration:
+    name: Verify registration Worker
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: rustup target add wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: relay-rust -> .target
+      - name: Install pinned Worker tools
+        run: |
+          cargo install worker-build --version 0.8.7 --locked
+          npm ci --prefix relay-rust/crates/relay-cloudflare
+      - name: Verify email registration across Worker transactions
+        working-directory: relay-rust/crates/network-authority
+        run: |
+          worker-build --dev --locked
+          node --test tests/registration-email.test.mjs
+
   deploy:
     needs: console
     if: >-

@@ -16,10 +16,12 @@ var (
 
 // CommandErrorCode lets interactive clients localize a recovery action without parsing authority messages.
 func CommandErrorCode(err error) string {
-	if errors.Is(err, errEmailCodeRejected) || errors.Is(err, errEmailCodeIncorrect) {
+	switch {
+	case errors.Is(err, errEmailCodeIncorrect):
+		return "email_code_incorrect"
+	case errors.Is(err, errEmailCodeRejected):
 		return "email_code_rejected"
-	}
-	if errors.Is(err, ErrSuperseded) {
+	case errors.Is(err, ErrSuperseded):
 		return "account_changed"
 	}
 	if remote, ok := errors.AsType[*fault](err); ok {
@@ -157,15 +159,15 @@ func (service *Service) VerifyEmail(ctx context.Context, code string) error {
 	if err != nil || challenge == nil {
 		return err
 	}
-	if challenge.Mode == emailChallenge && challenge.ID == proof.Challenge.ID {
-		// The authority prompted with the challenge we submitted: the code was wrong but is
-		// still live. submitRegistration saved it without the code, so nothing resubmits it.
-		service.transition(EmailRequired, "", time.Time{})
-		return errEmailCodeIncorrect
+	if *challenge != proof.Challenge {
+		slog.Debug("account_email_verification_challenge_replaced", "challenge_id", proof.Challenge.ID, "next_mode", challenge.Mode)
 	}
-	slog.Debug("account_email_verification_challenge_replaced", "challenge_id", proof.Challenge.ID, "next_mode", challenge.Mode)
 	service.transition(challenge.requiredState(), "", time.Time{})
-	if challenge.Mode == "email" {
+	if challenge.Mode == emailChallenge {
+		// A reply can cross the locally visible deadline while the authority still accepts the code.
+		if *challenge == proof.Challenge && challenge.hasEmailCode(service.config.Now()) {
+			return errEmailCodeIncorrect
+		}
 		return errEmailCodeRejected
 	}
 	return errors.New("registration requirements changed; retry account setup")
