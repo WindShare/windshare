@@ -160,7 +160,7 @@ func (l *link) readLoop() {
 	for {
 		messageType, encoded, err := l.socket.Read(l.ctx)
 		if err != nil {
-			l.stop(err)
+			l.stop(socketFailure(err))
 			return
 		}
 		if err := l.receive(messageType, encoded); err != nil {
@@ -235,7 +235,7 @@ func (l *link) writeLoop() {
 		// the relay from seeing this client alive.
 		if probe, ok := l.takeProbe(); ok {
 			if err := l.socket.Write(l.ctx, websocket.MessageBinary, probe); err != nil {
-				l.stop(err)
+				l.stop(socketFailure(err))
 				return
 			}
 			continue
@@ -247,7 +247,7 @@ func (l *link) writeLoop() {
 		}
 		if encoded != nil {
 			if err := l.socket.Write(l.ctx, websocket.MessageBinary, encoded); err != nil {
-				l.stop(err)
+				l.stop(socketFailure(err))
 				return
 			}
 			if settled != (v2.RelaySessionID{}) {
@@ -263,7 +263,7 @@ func (l *link) writeLoop() {
 			err := l.socket.Write(l.ctx, websocket.MessageBinary, request.data)
 			l.resolveRequest(request, err, true)
 			if err != nil {
-				l.stop(err)
+				l.stop(socketFailure(err))
 				return
 			}
 			continue

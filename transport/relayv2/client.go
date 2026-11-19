@@ -64,7 +64,7 @@ func (options DialOptions) dial(ctx context.Context, target string) (_ BinarySoc
 		response.Request != nil && response.Request.Response == nil {
 		err = fmt.Errorf("%w: %w", errUpgradeNotFound, err)
 	}
-	return socket, err
+	return socket, dialFailure(err)
 }
 
 type RegistrationStats struct {
@@ -119,7 +119,7 @@ func DialSender(ctx context.Context, config SenderConfig) (_ *SenderConnection, 
 	}
 	socket, err := config.Dial.dial(ctx, endpoint.DialURL)
 	if err != nil {
-		return nil, &RegistrationNotSentError{Cause: senderUpgradeFailure(config.RelayBaseURL, err)}
+		return nil, &RegistrationNotSentError{Cause: upgradeFailure(config.RelayBaseURL, err)}
 	}
 	socket.SetReadLimit(registrationReadLimit)
 	admissionStarted := time.Now()
@@ -131,7 +131,7 @@ func DialSender(ctx context.Context, config SenderConfig) (_ *SenderConnection, 
 	stats := RegistrationStats{}
 	fail := func(cause error) (*SenderConnection, error) {
 		_ = socket.Close(websocket.StatusProtocolError, "")
-		return nil, cause
+		return nil, socketFailure(cause)
 	}
 	init := v2.DeliveryRegisterInit{Registration: config.Init, ReceiveCapacity: capacity}
 	initBytes, _ := init.MarshalBinary()
@@ -293,11 +293,11 @@ func DialReceiver(ctx context.Context, config ReceiverConfig) (*ReceiverConnecti
 	}
 	socket, err := config.Dial.dial(ctx, endpoint.DialURL)
 	if err != nil {
-		return nil, err
+		return nil, upgradeFailure(config.RelayBaseURL, err)
 	}
 	fail := func(cause error) (*ReceiverConnection, error) {
 		_ = socket.Close(websocket.StatusProtocolError, "")
-		return nil, cause
+		return nil, socketFailure(cause)
 	}
 	socket.SetReadLimit(registrationReadLimit)
 	if err := socket.Write(ctx, websocket.MessageBinary, joinBytes); err != nil {
@@ -399,15 +399,18 @@ func Stop(ctx context.Context, config StopConfig) error {
 	}
 	socket, err := config.Dial.dial(ctx, endpoint.DialURL)
 	if err != nil {
-		return err
+		return upgradeFailure(config.RelayBaseURL, err)
 	}
 	defer func() { _ = socket.Close(websocket.StatusNormalClosure, "") }()
 	if err := socket.Write(ctx, websocket.MessageBinary, initBytes); err != nil {
-		return err
+		return socketFailure(err)
 	}
 	messageType, challengeBytes, err := socket.Read(ctx)
-	if err != nil || messageType != websocket.MessageBinary {
-		return errors.Join(ErrProtocol, err)
+	if err != nil {
+		return socketFailure(err)
+	}
+	if messageType != websocket.MessageBinary {
+		return ErrProtocol
 	}
 	if relayErr := parseRelayError(challengeBytes); relayErr != nil {
 		return relayErr
@@ -422,11 +425,14 @@ func Stop(ctx context.Context, config StopConfig) error {
 	}
 	proofBytes, _ := proof.MarshalBinary()
 	if err := socket.Write(ctx, websocket.MessageBinary, proofBytes); err != nil {
-		return err
+		return socketFailure(err)
 	}
 	messageType, stoppedBytes, err := socket.Read(ctx)
-	if err != nil || messageType != websocket.MessageBinary {
-		return errors.Join(ErrProtocol, err)
+	if err != nil {
+		return socketFailure(err)
+	}
+	if messageType != websocket.MessageBinary {
+		return ErrProtocol
 	}
 	if relayErr := parseRelayError(stoppedBytes); relayErr != nil {
 		return relayErr

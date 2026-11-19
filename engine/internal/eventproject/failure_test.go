@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"syscall"
@@ -389,6 +390,58 @@ func TestSenderWebSocketDialFailureIsRelayTransport(t *testing.T) {
 				t.Fatalf("ClassifyError(%v) = %+v,%t; want relay transport", err, failure, present)
 			}
 		})
+	}
+}
+
+func TestHTTPUpgradeRejectionIsRelayTransport(t *testing.T) {
+	for _, status := range []int{http.StatusForbidden, http.StatusInternalServerError, http.StatusBadGateway} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, "nope", status)
+			}))
+			t.Cleanup(server.Close)
+			_, _, err := websocket.Dial(t.Context(), "ws"+server.URL[4:]+v2.WebSocketPath, nil) //nolint:bodyclose
+			if err == nil {
+				t.Fatal("expected upgrade rejection")
+			}
+			wrapped := &relayv2.RegistrationNotSentError{Cause: &relayv2.WebSocketDialError{Cause: err}}
+			failure, present := ClassifyError(fmt.Errorf("register: %w", wrapped))
+			if !present || failure.Code() != appobs.FailureRelayTransport {
+				t.Fatalf("ClassifyError(%v) = %+v,%t; want relay transport", wrapped, failure, present)
+			}
+			if strings.Contains(fmt.Sprintf("%#v", failure), "nope") || strings.Contains(fmt.Sprintf("%#v", failure), "101") {
+				t.Fatalf("safe failure retained provider text: %#v", failure)
+			}
+		})
+	}
+}
+
+func TestHandshakeCloseIsRelayClosed(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		connection, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+		if err != nil {
+			return
+		}
+		_ = connection.Close(websocket.StatusNormalClosure, "bye")
+	}))
+	t.Cleanup(server.Close)
+	socket, _, err := websocket.Dial(t.Context(), "ws"+server.URL[4:]+v2.WebSocketPath, nil) //nolint:bodyclose
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = socket.Close(websocket.StatusNormalClosure, "") })
+	_, _, readErr := socket.Read(t.Context())
+	if readErr == nil {
+		t.Fatal("expected close after handshake")
+	}
+	for _, cause := range []error{&relayv2.SocketError{Cause: readErr}, fmt.Errorf("register: %w", &relayv2.SocketError{Cause: readErr})} {
+		failure, present := ClassifyError(cause)
+		if !present || failure.Code() != appobs.FailureRelayClosed {
+			t.Fatalf("ClassifyError(%v) = %+v,%t; want relay closed", cause, failure, present)
+		}
+		if strings.Contains(fmt.Sprintf("%#v", failure), "bye") {
+			t.Fatalf("safe failure retained close reason: %#v", failure)
+		}
 	}
 }
 

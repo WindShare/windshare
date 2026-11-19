@@ -149,6 +149,17 @@ func classifyDirectError(cause error) (appobs.Failure, bool) {
 	if route, ok := cause.(*relayv2.WebSocketRouteError); ok {
 		return appobs.NewRelayRouteFailure(route.BaseHint), true
 	}
+	// Handshake and post-handshake socket failures are identified only by the
+	// transport. Their causes may be untyped library errors, so classify the
+	// typed boundary rather than unwrapping into unexpected.
+	//nolint:errorlint
+	if _, ok := cause.(*relayv2.WebSocketDialError); ok {
+		return mustFailure(appobs.FailureRelayTransport), true
+	}
+	//nolint:errorlint
+	if _, ok := cause.(*relayv2.SocketError); ok {
+		return mustFailure(appobs.FailureRelayClosed), true
+	}
 	if exactError(cause, share.ErrInvalidChunkSize) || exactError(cause, relayprofile.ErrCandidatesRequired) {
 		return mustFailure(appobs.FailureInvalidInput), true
 	}
