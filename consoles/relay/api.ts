@@ -18,7 +18,7 @@ export interface Credential {
   last_used_at: number | null
   revoked: boolean
 }
-export interface ServiceConfiguration { url: string; access_key: string }
+export interface ServiceCredential { url: string; access_key: string }
 export interface TurnStatus {
   ready: boolean
   enabled: boolean
@@ -66,7 +66,7 @@ export class RelayClient {
   enrollments = async (signal: AbortSignal) => (await this.call<{ enrollments: Enrollment[] }>('enrollments', undefined, signal)).enrollments
   approve = (device: Enrollment) => this.call('enrollments/approve', { enrollment_id: device.enrollment_id, user_code: device.user_code })
   credentials = async (signal: AbortSignal) => (await this.call<{ credentials: Credential[] }>('credentials', undefined, signal)).credentials
-  createKey = async (name: string) => (await this.call<{ configuration: ServiceConfiguration }>('credentials', { name })).configuration
+  createKey = async (name: string) => (await this.call<{ configuration: ServiceCredential }>('credentials', { name })).configuration
   revoke = (id: string, stop: boolean) => this.call('credentials/revoke', { credential_id: id, terminate_shares: stop })
   turnStatus = (signal: AbortSignal) => this.call<TurnStatus>('turn/status', undefined, signal)
   setTurn = (enabled: boolean) => this.call<TurnStatus>('turn/settings', { enabled })

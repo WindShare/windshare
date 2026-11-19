@@ -9,7 +9,7 @@ import { Confirm } from '../ui/forms'
 import { BackLink, Badge, DateStamp, EmptyState, Notice, ReadError } from '../ui/layout'
 import { FocusPage } from '../ui/FocusPage'
 import { Icon } from '../ui/Icon'
-import type { Capabilities, Credential, RelayClient, ServiceConfiguration } from './api'
+import type { Capabilities, Credential, RelayClient, ServiceCredential } from './api'
 
 function markCredentialRevoked(items: Credential[], credentialId: string): Credential[] {
   return items.map(item => item.credential_id === credentialId ? { ...item, revoked: true } : item)
@@ -66,25 +66,26 @@ export function Credentials({ api, capabilities }: { api: RelayClient; capabilit
 
 export function ServiceKey({ api }: { api: RelayClient }) {
   const t = useCopy(relayCopy)
-  const [configuration, setConfiguration] = useState<ServiceConfiguration | null>(null)
+  const [credential, setCredential] = useState<ServiceCredential | null>(null)
   const action = useAction()
-  return <FocusPage icon={configuration ? 'check' : 'key'} label={t.access} title={configuration ? t.keyCreated : t.createServiceKey}>
-    {configuration
-      ? <><p className="lead">{t.copyNow}</p>
-        <dl className="facts"><dt>{t.relayAddress}</dt><dd><code>{configuration.url}</code></dd>
-          <dt>{t.accessKey}</dt><dd><code>{configuration.access_key}</code></dd></dl>
+  return <FocusPage icon={credential ? 'check' : 'key'} label={t.access} title={credential ? t.keyCreated : t.createServiceKey}>
+    {credential
+      ? <><p className="lead">{t.keyShownOnce}</p>
+        <dl className="facts"><dt>{t.relayAddress}</dt><dd><code>{credential.url}</code></dd>
+          <dt>{t.accessKey}</dt><dd><code>{credential.access_key}</code></dd></dl>
         <button disabled={action.busy} onClick={() => void action.run(async () => {
           try {
-            await navigator.clipboard.writeText(JSON.stringify(configuration, null, 2))
+            await navigator.clipboard.writeText(JSON.stringify(credential, null, 2))
           } catch {
             throw new MessageError(message(relayCopy, 'copyFailed'))
           }
-          return message(relayCopy, 'configCopied')
-        })}><Icon name="copy" size={16} />{t.copyConfig}</button></>
+          return message(relayCopy, 'relayCredentialCopied')
+        })}><Icon name="copy" size={16} />{t.copyRelayCredential}</button>
+        <p>{t.installWithCLI}<br /><code>{'wind relay add <url> --access-key <key>'}</code></p></>
       : <ValidatedForm className="stack" onSubmit={event => {
         event.preventDefault()
         const name = String(new FormData(event.currentTarget).get('name')).trim()
-        void action.run(async () => setConfiguration(await api.createKey(name)))
+        void action.run(async () => setCredential(await api.createKey(name)))
       }}>
         <div className="field"><label htmlFor="key-name">{t.credentialName}</label>
           <input id="key-name" name="name" maxLength={128} required /></div>
