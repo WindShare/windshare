@@ -36,6 +36,7 @@ fn snapshot(revision: u64, shares: Vec<Share>) -> Snapshot {
         setup: Setup::Idle,
         preferences: crate::RelayPreferences::default(),
         account: None,
+        sender_trace: crate::SenderTrace::Off,
     }
 }
 
@@ -67,6 +68,7 @@ fn snapshots_cannot_move_backwards_or_cross_host_sessions() {
         setup: Setup::Idle,
         preferences: crate::RelayPreferences::default(),
         account: None,
+        sender_trace: crate::SenderTrace::Off,
     });
     assert_eq!(model.revision, 5);
     assert_eq!(

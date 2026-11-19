@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/account"
 	"github.com/windshare/windshare/engine/relayconfig"
@@ -56,7 +55,7 @@ type dependencies struct {
 	setup           func(context.Context, SetupInput, func(relaysetup.Progress)) (SetupResult, error)
 	cancelSetup     func(context.Context, string) error
 	log             func(string, any)
-	diagnostics     diagnostics.Sink
+	senderTrace     *senderTrace
 }
 
 type operationPhase interface{ operationPhase() }
@@ -155,6 +154,8 @@ func (a *Application) execute(request Request) Message {
 	defer a.mu.Unlock()
 	var err error
 	switch request.Command {
+	case "set_sender_trace":
+		err = a.setSenderTrace(request)
 	case "reload_account_selection":
 		err = a.requestAccountReload(request.ID)
 	case "account":

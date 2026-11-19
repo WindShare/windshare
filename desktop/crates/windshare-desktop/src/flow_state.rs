@@ -4,7 +4,7 @@ use crate::{
         ShareAnimation,
         whirl::{Wind, seconds_between},
     },
-    sharing::Perch,
+    sharing::{LinkKind, Perch},
 };
 use std::time::{Duration, Instant};
 use windshare_ui::{Icon, Tone};
@@ -13,8 +13,19 @@ pub const COPY_FEEDBACK_MS: u64 = 2400;
 #[derive(Clone, Copy)]
 pub enum CopyFeedback {
     Idle,
-    Copied { share_id: usize, revision: usize },
+    Copied {
+        share_id: usize,
+        kind: LinkKind,
+        revision: usize,
+    },
 }
+
+impl CopyFeedback {
+    pub fn matches(self, id: usize, link_kind: LinkKind) -> bool {
+        matches!(self, Self::Copied { share_id, kind, .. } if share_id == id && kind == link_kind)
+    }
+}
+
 pub const RECEIVE_OPEN_MS: u64 = 1000;
 pub const RECEIVE_SAVE_MS: u64 = 2400;
 

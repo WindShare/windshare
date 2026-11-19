@@ -1,7 +1,6 @@
-use super::{ShareLink, qr_slot::QR_FRAME_SIDE};
+use super::{LinkKind, ShareLink, qr_slot::QR_FRAME_SIDE};
 use crate::{
     desktop::Desktop,
-    flow_state::CopyFeedback,
     localization::{Text, language},
     model::{Action, Overlay, Share},
 };
@@ -24,8 +23,7 @@ impl Desktop {
         link: Option<&ShareLink>,
         cx: &Context<Self>,
     ) -> Button {
-        let copied =
-            matches!(self.copy_feedback, CopyFeedback::Copied { share_id, .. } if share_id == id);
+        let copied = self.copy_feedback.matches(id, LinkKind::Standard);
         Self::button(
             ("copy-share-link", id),
             language(cx).text(if copied { Text::Copied } else { Text::CopyLink }),

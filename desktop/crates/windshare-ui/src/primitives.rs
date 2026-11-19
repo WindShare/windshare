@@ -104,7 +104,7 @@ impl Theme {
         div().w_full().h(px(1.)).bg(self.border()).flex_shrink_0()
     }
 
-    pub fn toggle(self, id: impl Into<ElementId>, checked: bool) -> Stateful<Div> {
+    pub fn toggle(self, id: impl Into<ElementId>, checked: bool, enabled: bool) -> Stateful<Div> {
         row()
             .id(id)
             .role(Role::Switch)
@@ -117,13 +117,24 @@ impl Theme {
             .h(px(21.))
             .px(px(3.))
             .rounded_full()
-            .cursor_pointer()
             .bg(self.switch_track(checked))
             .when(checked, gpui::Styled::justify_end)
-            .focusable()
-            .tab_index(0)
-            .focus_visible(|s| s.border_2().border_color(self.focus_ring()))
-            .hover(|s| s.opacity(0.85))
+            .when(!enabled, |el| el.opacity(0.45).cursor_not_allowed())
+            .when(enabled, |el| {
+                el.cursor_pointer()
+                    .focusable()
+                    .tab_index(0)
+                    .focus_visible(|s| {
+                        s.shadow(vec![gpui::BoxShadow {
+                            color: self.focus_ring(),
+                            offset: gpui::point(px(0.), px(0.)),
+                            blur_radius: px(0.),
+                            spread_radius: px(2.),
+                            inset: false,
+                        }])
+                    })
+                    .hover(|s| s.opacity(0.85))
+            })
             .child(
                 div()
                     .size(px(15.))

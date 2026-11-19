@@ -1,4 +1,5 @@
 mod appearance;
+mod diagnostics;
 mod share_animation;
 mod share_animation_view;
 mod view;

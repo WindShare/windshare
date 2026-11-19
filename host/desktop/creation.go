@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/adapters/filesystem"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relayprofile"
@@ -97,6 +98,9 @@ func (a *Application) admit(op *operation) {
 func (a *Application) admitAfter(op *operation, previous <-chan struct{}) {
 	ctx, cancel := context.WithCancel(context.Background())
 	op.phase, op.cancel = admission{}, cancel
+	// The admission intent fixes the capture interval. A queued or retried
+	// connection cannot join a later recording by keeping an old sink.
+	trace := a.deps.senderTrace.captureSink()
 	a.work.Go(func() {
 		if previous != nil {
 			select {
@@ -106,11 +110,11 @@ func (a *Application) admitAfter(op *operation, previous <-chan struct{}) {
 				return
 			}
 		}
-		a.runAdmission(ctx, op)
+		a.runAdmission(ctx, op, trace)
 	})
 }
 
-func (a *Application) runAdmission(ctx context.Context, op *operation) {
+func (a *Application) runAdmission(ctx context.Context, op *operation, trace diagnostics.Sink) {
 	// TURN configuration is engine-wide. Serialize admission without blocking
 	// control requests, and allow queued selections to be cancelled immediately.
 	select {
@@ -120,10 +124,10 @@ func (a *Application) runAdmission(ctx context.Context, op *operation) {
 		a.completeAdmission(ctx, op, terminal{})
 		return
 	}
-	a.completeAdmission(ctx, op, a.prepareAdmission(ctx, op))
+	a.completeAdmission(ctx, op, a.prepareAdmission(ctx, op, trace))
 }
 
-func (a *Application) prepareAdmission(ctx context.Context, op *operation) operationPhase {
+func (a *Application) prepareAdmission(ctx context.Context, op *operation, trace diagnostics.Sink) operationPhase {
 	config, err := a.deps.load()
 	if err != nil {
 		return configurationBlocked("settings_unavailable", err)
@@ -142,7 +146,7 @@ func (a *Application) prepareAdmission(ctx context.Context, op *operation) opera
 		return terminal{}
 	}
 	task, err := a.deps.start(ctx, engine.ShareRequest{
-		Source: filesystem.ShareSource(op.paths), RelayIntent: intent, Frontend: config.FrontURL, Diagnostics: a.deps.diagnostics,
+		Source: filesystem.ShareSource(op.paths), RelayIntent: intent, Frontend: config.FrontURL, Diagnostics: trace,
 	})
 	if task != nil {
 		return running{task: task, frontURL: config.FrontURL, selectedRelays: intent.Mode() != relayprofile.Planned}

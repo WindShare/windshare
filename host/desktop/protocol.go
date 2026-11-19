@@ -25,6 +25,7 @@ type Request struct {
 	SetupID            string        `json:"setup_id,omitempty"`
 	Account            *AccountInput `json:"account,omitempty"`
 	AccountViewVisible *bool         `json:"account_view_visible,omitempty"`
+	SenderTrace        *bool         `json:"sender_trace,omitempty"`
 }
 
 type Failure struct {
@@ -95,12 +96,21 @@ type Completion struct {
 	CleanupError string     `json:"cleanup_error,omitempty"`
 }
 
+type SenderTraceState string
+
+const (
+	SenderTraceUnavailable SenderTraceState = "unavailable"
+	SenderTraceOff         SenderTraceState = "off"
+	SenderTraceOn          SenderTraceState = "on"
+)
+
 type Snapshot struct {
 	SessionID   string                  `json:"session_id"`
 	Revision    uint64                  `json:"revision"`
 	Shares      []Share                 `json:"shares"`
 	Preferences relayconfig.Preferences `json:"preferences"`
 	Setup       SetupView               `json:"setup"`
+	SenderTrace SenderTraceState        `json:"sender_trace"`
 	Account     *AccountView            `json:"account,omitempty"`
 }
 

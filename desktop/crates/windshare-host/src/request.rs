@@ -8,6 +8,9 @@ mod tests;
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum Command {
     Preferences,
+    SetSenderTrace {
+        sender_trace: bool,
+    },
     ReloadAccountSelection,
     SetAccountView {
         account_view_visible: bool,
@@ -104,6 +107,10 @@ impl Command {
         let mut fields = CommandLog::default();
         let command = match self {
             Self::Preferences => "preferences",
+            Self::SetSenderTrace { sender_trace } => {
+                fields.action = Some(if *sender_trace { "enable" } else { "disable" });
+                "set_sender_trace"
+            }
             Self::ReloadAccountSelection => "reload_account_selection",
             Self::SetAccountView {
                 account_view_visible,

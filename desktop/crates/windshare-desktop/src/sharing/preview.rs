@@ -3,7 +3,7 @@ use crate::{
     flow_state::SampleBundle,
     live::Runtime,
     model::{Share, ShareAge, ShareSource, ShareState},
-    sharing::{LinkDisclosure, ShareLink},
+    sharing::{LinkDisclosure, SharePublication},
 };
 use gpui::{Context, Window};
 
@@ -54,7 +54,7 @@ impl Desktop {
                 if !matches!(share.state, ShareState::Preparing) {
                     return;
                 }
-                share.link = Some(ShareLink::preview(operation));
+                share.link = Some(SharePublication::preview(operation));
                 share.state = ShareState::Live { viewers: Some(0) };
                 tracing::info!(event = "share.ready", operation, preview = true);
                 cx.notify();

@@ -58,6 +58,23 @@ func (a *Application) logRequestResult(request Request, rejection *Failure) {
 	a.deps.log("host.request_result", fields)
 }
 
+func (a *Application) logShareState(share Share) {
+	// The control snapshot contains the read key and selected files. Support
+	// logs only need the lifecycle fields and identities used for correlation.
+	fields := map[string]any{
+		"operation_id": share.OperationID, "task_id": share.TaskID,
+		"state": share.State, "startup": share.Startup, "blocking": share.Blocking,
+	}
+	if share.Error != nil {
+		fields["error_code"] = share.Error.Code
+	}
+	if share.Result != nil {
+		fields["outcome"] = share.Result.Outcome
+		fields["stop_reason"] = share.Result.StopReason
+	}
+	a.deps.log("host.share_state", fields)
+}
+
 func (a *Application) logSetupResult(event string) {
 	setup := a.setup
 	fields := map[string]any{

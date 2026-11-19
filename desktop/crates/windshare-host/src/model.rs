@@ -1,5 +1,6 @@
 use crate::Setup;
 use serde::Deserialize;
+use std::path::PathBuf;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Snapshot {
@@ -11,6 +12,25 @@ pub struct Snapshot {
     #[serde(default)]
     pub preferences: crate::RelayPreferences,
     pub account: Option<crate::AccountView>,
+    #[serde(default)]
+    pub sender_trace: SenderTrace,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SenderTrace {
+    #[default]
+    Unavailable,
+    Off,
+    On,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SenderTraceChange {
+    #[default]
+    Idle,
+    Applying,
+    Failed,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -235,11 +255,14 @@ impl Operation {
 pub struct Model {
     pub connection: Connection,
     pub session_id: Option<String>,
+    pub log_directory: Option<PathBuf>,
     pub revision: u64,
     pub operations: Vec<Operation>,
     pub command_error: Option<String>,
     pub(crate) rejected_setup: Option<(String, Failure)>,
     pub(crate) rejected_account: Option<(String, Failure)>,
+    pub sender_trace: SenderTrace,
+    pub sender_trace_change: SenderTraceChange,
     pub setup: Setup,
     pub preferences: crate::RelayPreferences,
     pub account: Option<crate::AccountView>,
@@ -250,11 +273,14 @@ impl Default for Model {
         Self {
             connection: Connection::Starting,
             session_id: None,
+            log_directory: None,
             revision: 0,
             operations: Vec::new(),
             command_error: None,
             rejected_setup: None,
             rejected_account: None,
+            sender_trace: SenderTrace::Unavailable,
+            sender_trace_change: SenderTraceChange::Idle,
             setup: Setup::Idle,
             preferences: crate::RelayPreferences::default(),
             account: None,
@@ -312,6 +338,7 @@ impl Model {
         self.setup = snapshot.setup;
         self.preferences = snapshot.preferences;
         self.account = snapshot.account;
+        self.sender_trace = snapshot.sender_trace;
         // A full snapshot replaces accepted state, but cannot erase unsent local
         // intents whose commands have not yet reached the host.
         self.operations.retain(|operation| {

@@ -30,8 +30,8 @@ pub fn check_host() -> anyhow::Result<()> {
 
 pub use model::{
     BlockingReason, Completion, Connection, CreationBlock, Failure, Model, Operation,
-    OperationState, Outcome, RecoveryAction, RelayStatus, SelectedRoot, Selection, Share,
-    ShareState, Snapshot, Startup, StopReason,
+    OperationState, Outcome, RecoveryAction, RelayStatus, SelectedRoot, Selection, SenderTrace,
+    SenderTraceChange, Share, ShareState, Snapshot, Startup, StopReason,
 };
 
 use request::Command;
@@ -124,17 +124,18 @@ impl Controller {
         let _ = self.updates.recv().await;
     }
 
+    fn enqueue(&self, command: Command) -> Result<(), String> {
+        if self.shared.closing.load(Ordering::Acquire) {
+            return Err("WindShare is closing".into());
+        }
+        command.validate()?;
+        self.commands
+            .try_send(command)
+            .map_err(|error| error.to_string())
+    }
+
     fn command(&self, command: Command) -> bool {
-        let error = if self.shared.closing.load(Ordering::Acquire) {
-            Some("WindShare is closing".into())
-        } else {
-            command.validate().err().or_else(|| {
-                self.commands
-                    .try_send(command)
-                    .err()
-                    .map(|error| error.to_string())
-            })
-        };
+        let error = self.enqueue(command).err();
         let queued = error.is_none();
         self.shared.update(|model| model.command_error = error);
         let _ = self.shared.wake.notify();
@@ -186,6 +187,31 @@ impl Controller {
 
     pub fn refresh_preferences(&self) {
         self.command(Command::Preferences);
+    }
+
+    pub fn set_sender_trace(&self, enabled: bool) {
+        self.shared.update(|model| {
+            if model.connection != Connection::Connected
+                || model.sender_trace == SenderTrace::Unavailable
+                || model.sender_trace_change == SenderTraceChange::Applying
+                || enabled == (model.sender_trace == SenderTrace::On)
+            {
+                return;
+            }
+            // Keep the model lock until the pending state is installed so an
+            // acknowledgement cannot arrive first and leave the control stuck.
+            model.sender_trace_change = match self.enqueue(Command::SetSenderTrace {
+                sender_trace: enabled,
+            }) {
+                Ok(()) => SenderTraceChange::Applying,
+                Err(error) => {
+                    tracing::warn!(event = "desktop.sender_trace_queue_failed",
+                        session_id = ?model.session_id, enabled, %error);
+                    SenderTraceChange::Failed
+                }
+            };
+        });
+        let _ = self.shared.wake.notify();
     }
 
     pub fn edit_preference(&self, operation_id: &str, edit: PreferenceEdit) -> Option<String> {

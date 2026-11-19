@@ -1,31 +1,41 @@
 use gpui::SharedString;
+use std::cell::OnceCell;
 use windshare_ui::{QrCodeError, QrCodeImage};
+
+const BROWSER_TRACE_QUERY: &str = "trace=1";
 
 const PREVIEW_ORIGIN: &str = "https://windshare.example";
 const PREVIEW_SHARE_ID: &str = "tVW-68OSeLBZTpU-";
 const PREVIEW_KEY: &str = "AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E";
 const PREVIEW_RELAY_QUERY: &str = "r=https%3A%2F%2Frelay.example.com%3A8443";
 
-/// Display elision is a view concern: copying and encoding always use this entire value.
-#[derive(Clone)]
-pub struct ShareLink {
-    url: SharedString,
-    qr: Result<QrCodeImage, QrCodeError>,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkKind {
+    Standard,
+    Diagnostic,
 }
 
-impl ShareLink {
+#[derive(Clone)]
+pub struct SharePublication {
+    standard: ShareLink,
+    diagnostic: OnceCell<Option<ShareLink>>,
+}
+
+impl SharePublication {
     pub fn new(url: impl Into<SharedString>) -> Self {
-        let url = url.into();
-        let qr = QrCodeImage::encode(&url);
-        Self { url, qr }
+        Self {
+            standard: ShareLink::new(url.into()),
+            diagnostic: OnceCell::new(),
+        }
     }
 
     pub fn preview(id: usize) -> Self {
         // The public identity from core/testvectors/v2-identity.json is a fixture, not a
         // new cryptographic implementation. A preview-only frontend path distinguishes samples.
-        let link = Self::new(format!(
+        let publication = Self::new(format!(
             "{PREVIEW_ORIGIN}/s/preview-{id}/{PREVIEW_SHARE_ID}?{PREVIEW_RELAY_QUERY}#{PREVIEW_KEY}"
         ));
+        let link = &publication.standard;
         match &link.qr {
             Ok(code) => tracing::info!(
                 event = "share.qr_prepared",
@@ -43,7 +53,37 @@ impl ShareLink {
                 %error,
             ),
         }
-        link
+        publication
+    }
+
+    pub fn matches(&self, url: &str) -> bool {
+        self.standard.url.as_ref() == url
+    }
+
+    pub fn link(&self, kind: LinkKind) -> Option<&ShareLink> {
+        match kind {
+            LinkKind::Standard => Some(&self.standard),
+            LinkKind::Diagnostic => self
+                .diagnostic
+                .get_or_init(|| {
+                    browser_trace_url(&self.standard.url).map(|url| ShareLink::new(url.into()))
+                })
+                .as_ref(),
+        }
+    }
+}
+
+/// Display elision is a view concern: copying and encoding always use this entire value.
+#[derive(Clone)]
+pub struct ShareLink {
+    url: SharedString,
+    qr: Result<QrCodeImage, QrCodeError>,
+}
+
+impl ShareLink {
+    fn new(url: SharedString) -> Self {
+        let qr = QrCodeImage::encode(&url);
+        Self { url, qr }
     }
 
     pub fn url(&self) -> SharedString {
@@ -53,6 +93,18 @@ impl ShareLink {
     pub fn qr(&self) -> Result<&QrCodeImage, QrCodeError> {
         self.qr.as_ref().map_err(|error| *error)
     }
+}
+
+fn browser_trace_url(url: &str) -> Option<String> {
+    // Preserve the relay spelling and keep the decryption key in the fragment
+    // so generating a diagnostic link cannot change its sharing capability.
+    let (page, key) = url.split_once('#')?;
+    let separator = match page.split_once('?') {
+        Some((_, "")) => "",
+        Some(_) => "&",
+        None => "?",
+    };
+    Some(format!("{page}{separator}{BROWSER_TRACE_QUERY}#{key}"))
 }
 
 #[derive(Clone, Copy, Default)]
@@ -75,3 +127,7 @@ impl LinkDisclosure {
         };
     }
 }
+
+#[cfg(test)]
+#[path = "link_tests.rs"]
+mod tests;

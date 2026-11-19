@@ -22,7 +22,7 @@ func TestShareStateLogsOnlyChangedSharesWhenInsertionShiftsOrder(t *testing.T) {
 			a := newApplication("session", dependencies{
 				log: func(event string, value any) {
 					if event == "host.share_state" {
-						logged = append(logged, value.(Share).OperationID)
+						logged = append(logged, value.(map[string]any)["operation_id"].(string))
 					}
 				},
 			})

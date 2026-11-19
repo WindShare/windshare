@@ -6,6 +6,7 @@ use crate::{
         ReceiveFlow, SampleBundle, ShareFlow,
     },
     model::{Action, Overlay, Page, ShareState, TransferState},
+    sharing::LinkKind,
 };
 use gpui::{BorrowAppContext, ClipboardItem, Context, Focusable, Window};
 use std::time::Duration;
@@ -64,8 +65,14 @@ impl Desktop {
             Action::Detail(id) => self.open_overlay(Overlay::Detail(id), window, cx),
             Action::Help => self.open_overlay(Overlay::Help, window, cx),
             Action::Close => self.close_overlay(window, cx),
-            Action::CopyLink(id) => self.copy_link(id, cx),
+            Action::CopyLink(id) => self.copy_link(id, LinkKind::Standard, cx),
             Action::ToggleLink(id) => self.toggle_link(id),
+            Action::OpenShareDiagnostics(id) => {
+                self.open_overlay(Overlay::ShareDiagnostics(id), window, cx);
+            }
+            Action::CopyDiagnosticLink(id) => self.copy_link(id, LinkKind::Diagnostic, cx),
+            Action::SetSenderTrace(enabled) => self.set_sender_trace(enabled),
+            Action::OpenLogs => self.open_logs(cx),
             Action::EnlargeQr(id) => self.enlarge_qr(id, window, cx),
             Action::StopShare(id) => self.stop_native_share(id),
             Action::ShareAgain(id) => {
@@ -151,35 +158,48 @@ impl Desktop {
         self.focus_task(window, cx);
     }
 
-    fn copy_link(&mut self, id: usize, cx: &mut Context<Self>) {
+    fn copy_link(&mut self, id: usize, kind: LinkKind, cx: &mut Context<Self>) {
         let Some(share) = self.shares.iter().find(|share| share.id == id) else {
             return;
         };
-        let Some(link) = share.usable_link() else {
+        let Some(link) = share.link_for(kind) else {
             return;
         };
         cx.write_to_clipboard(ClipboardItem::new_string(link.url().to_string()));
         let revision = self.next_operation();
         self.copy_feedback = CopyFeedback::Copied {
             share_id: id,
+            kind,
             revision,
         };
-        let inline_feedback = (self.page == Page::Share
-            && self.overlays.is_empty()
-            && matches!(self.share_flow, ShareFlow::Running(run) if run.share_id == id))
-            || self.overlays.last().is_some_and(
-                |frame| matches!(frame.content, Overlay::Detail(share_id) if share_id == id),
-            );
+        let overlay = self.overlays.last().map(|frame| &frame.content);
+        let inline_feedback = match (kind, overlay) {
+            (LinkKind::Diagnostic, Some(Overlay::ShareDiagnostics(share_id)))
+            | (LinkKind::Standard, Some(Overlay::Detail(share_id))) => *share_id == id,
+            (LinkKind::Standard, None) => {
+                self.page == Page::Share
+                    && matches!(self.share_flow, ShareFlow::Running(run) if run.share_id == id)
+            }
+            _ => false,
+        };
         // The result button acknowledges its own action; other surfaces still
         // need a toast because they have no inline confirmation.
         if !inline_feedback {
-            self.notify(Text::LinkCopied, cx);
+            self.notify(
+                if kind == LinkKind::Diagnostic {
+                    Text::DiagnosticLinkCopied
+                } else {
+                    Text::LinkCopied
+                },
+                cx,
+            );
         }
         tracing::info!(
             event = "share.link_copied",
             session = std::process::id(),
             operation = revision,
             share_id = id,
+            link_kind = ?kind,
             inline_feedback
         );
         cx.spawn(async move |view, cx| {

@@ -55,7 +55,8 @@ func Start() (*Host, error) {
 	if err == nil {
 		log, err = logstore.Open(directory, sessionID)
 	}
-	if err != nil {
+	logAvailable := err == nil
+	if !logAvailable {
 		_, _ = fmt.Fprintf(os.Stderr, "host.log_unavailable session_id=%s error=%v\n", sessionID, err)
 		log = logstore.Disabled(sessionID, err)
 	}
@@ -94,16 +95,18 @@ func Start() (*Host, error) {
 	if accounts := application.Accounts(); accounts != nil {
 		deps.accounts = accounts
 	}
-	if os.Getenv("WINDSHARE_TRACE") == "1" {
+	if logAvailable {
 		host.diagnostics, err = diagnostics.NewStream(diagnosticCapacity, nil)
 		if err != nil {
 			_ = application.Close(context.Background())
 			_ = log.Close()
 			return nil, err
 		}
-		deps.diagnostics = host.diagnostics.Sink()
+		deps.senderTrace = &senderTrace{stream: host.diagnostics}
+		deps.senderTrace.setEnabled(os.Getenv("WINDSHARE_TRACE") == "1")
 		go host.recordDiagnostics()
 	} else {
+		directory = ""
 		close(host.diagnosticDone)
 	}
 	host.app = newApplication(sessionID, deps)

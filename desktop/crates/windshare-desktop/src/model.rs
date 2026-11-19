@@ -2,7 +2,7 @@ mod share;
 pub use share::{Share, ShareSource, ShareState};
 
 use crate::localization::{Language, LanguageChoice, Text};
-use crate::sharing::ShareLink;
+use crate::sharing::SharePublication;
 use windshare_ui::{Icon, Tone};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,6 +67,7 @@ pub struct Transfer {
 pub enum Overlay {
     Detail(usize),
     ShareQr(usize),
+    ShareDiagnostics(usize),
     Help,
     SharingSetup(SharingSetupTarget),
     Account,
@@ -104,6 +105,10 @@ pub enum Action {
     Detail(usize),
     CopyLink(usize),
     ToggleLink(usize),
+    OpenShareDiagnostics(usize),
+    CopyDiagnosticLink(usize),
+    SetSenderTrace(bool),
+    OpenLogs,
     EnlargeQr(usize),
     ToggleShare(usize),
     StopShare(usize),
@@ -135,7 +140,7 @@ pub fn demo_shares() -> Vec<Share> {
         Share {
             id: 1,
             source: ShareSource::Preview,
-            link: Some(ShareLink::preview(1)),
+            link: Some(SharePublication::preview(1)),
             error: None,
             authorization: None,
             relay_status: None,
@@ -150,7 +155,7 @@ pub fn demo_shares() -> Vec<Share> {
         Share {
             id: 2,
             source: ShareSource::Preview,
-            link: Some(ShareLink::preview(2)),
+            link: Some(SharePublication::preview(2)),
             error: None,
             authorization: None,
             relay_status: None,
@@ -165,7 +170,7 @@ pub fn demo_shares() -> Vec<Share> {
         Share {
             id: 3,
             source: ShareSource::Preview,
-            link: Some(ShareLink::preview(3)),
+            link: Some(SharePublication::preview(3)),
             error: None,
             authorization: None,
             relay_status: None,

@@ -1,4 +1,5 @@
 mod detail;
+mod diagnostics;
 mod intro;
 mod link;
 mod link_views;
@@ -9,7 +10,7 @@ mod result;
 
 pub use detail::{detail_width, enlarged_qr_side};
 pub use intro::{IntroAnchors, Perch};
-pub use link::{LinkDisclosure, ShareLink};
+pub use link::{LinkDisclosure, LinkKind, ShareLink, SharePublication};
 
 use crate::{
     desktop::Desktop,

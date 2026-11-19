@@ -1,6 +1,6 @@
 use crate::request::{Command, Request};
 use crate::{
-    Connection, Shared, Snapshot,
+    Connection, SenderTraceChange, Shared, Snapshot,
     abi::{Endpoint, Host},
 };
 use anyhow::{Context as _, Result, bail};
@@ -76,7 +76,11 @@ pub fn run(shared: &Shared, commands: &Receiver<Command>) -> Result<()> {
     let host = Host::start().context("start local engine host")?;
     tracing::info!(event = "desktop.host_started", session_id = %host.endpoint.session_id,
         log_directory = %host.endpoint.log_directory);
-    shared.update(|model| model.session_id = Some(host.endpoint.session_id.clone()));
+    shared.update(|model| {
+        model.session_id = Some(host.endpoint.session_id.clone());
+        model.log_directory = (!host.endpoint.log_directory.is_empty())
+            .then(|| host.endpoint.log_directory.as_str().into());
+    });
     let mut sequence = 0_u64;
     let mut pending = BTreeMap::new();
     while !shared.closing.load(Ordering::Acquire) {
@@ -220,8 +224,15 @@ fn receive(shared: &Shared, pending: &mut BTreeMap<u64, Request>, text: &str) ->
         return Ok(());
     }
     shared.update(|model| {
-        if let Some(error) = message.error {
-            match acknowledged.map(|request| request.command) {
+        let command = acknowledged.map(|request| request.command);
+        if matches!(command, Some(Command::SetSenderTrace { .. })) {
+            model.sender_trace_change = if message.error.is_some() {
+                SenderTraceChange::Failed
+            } else {
+                SenderTraceChange::Idle
+            };
+        } else if let Some(error) = message.error {
+            match command {
                 Some(
                     Command::Create { operation_id, .. } | Command::Repeat { operation_id, .. },
                 ) => {

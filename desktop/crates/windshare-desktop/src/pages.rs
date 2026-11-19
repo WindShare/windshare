@@ -3,7 +3,7 @@ use crate::{
     desktop::Desktop,
     model::{Action, Page},
 };
-use gpui::{Div, KeyDownEvent, prelude::*, px};
+use gpui::{Div, prelude::*, px};
 use windshare_ui::{Button, ButtonStyle, Icon, Theme, Tone, column, row};
 
 impl Desktop {
@@ -52,36 +52,18 @@ impl Desktop {
                                             .child(theme.heading(title, 17.))
                                             .child(theme.caption(detail)),
                                     )
-                                    .child(
-                                        theme
-                                            .toggle(("setting", index), self.settings[index])
-                                            .aria_label(title)
-                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                this.dispatch(
-                                                    Action::ToggleSetting(index),
-                                                    window,
-                                                    cx,
-                                                );
-                                            }))
-                                            .on_key_down(cx.listener(
-                                                move |this, event: &KeyDownEvent, window, cx| {
-                                                    if matches!(
-                                                        event.keystroke.key.as_str(),
-                                                        "enter" | "space"
-                                                    ) {
-                                                        cx.stop_propagation();
-                                                        this.dispatch(
-                                                            Action::ToggleSetting(index),
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    }
-                                                },
-                                            )),
-                                    )
+                                    .child(Self::setting_switch(
+                                        theme,
+                                        ("setting", index),
+                                        title,
+                                        self.settings[index],
+                                        Some(Action::ToggleSetting(index)),
+                                        cx,
+                                    ))
                             }),
                     ),
             )
+            .when_some(self.diagnostics_card(theme, cx), gpui::ParentElement::child)
             .when(self.runtime.is_preview(), |el| {
                 el.child(Self::component_preview(theme, cx))
             })

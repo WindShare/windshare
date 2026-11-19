@@ -1,6 +1,7 @@
 package diagnostics
 
 import (
+	"sync/atomic"
 	"time"
 
 	"github.com/windshare/windshare/core/observationstream"
@@ -12,6 +13,7 @@ type Sink struct {
 	producer observationstream.Producer[Record]
 	scope    Scope
 	now      func() time.Time
+	stopped  *atomic.Bool
 }
 
 type Stream struct {
@@ -32,11 +34,24 @@ func NewStream(capacity observationstream.Capacity, now func() time.Time) (*Stre
 func (stream *Stream) Sink() Sink             { return stream.sink }
 func (stream *Stream) Records() <-chan Record { return stream.records }
 
+// Capture gives one recording interval its own revocable sink. Stopping it
+// leaves already queued records available and never reactivates old producers
+// when another capture starts on the shared stream.
+func (stream *Stream) Capture() (Sink, func()) {
+	stopped := new(atomic.Bool)
+	sink := stream.Sink()
+	sink.stopped = stopped
+	return sink, func() { stopped.Store(true) }
+}
+
 // Close belongs to the host, after its engines stop. One task cannot close a
 // shared recorder or wait for a detached consumer.
 func (stream *Stream) Close() observationstream.Completion { return stream.sink.producer.Complete() }
 
-func (sink Sink) Enabled() bool { return !sink.producer.IsZero() }
+func (sink Sink) Enabled() bool {
+	return !sink.producer.IsZero() && (sink.stopped == nil || !sink.stopped.Load())
+}
+
 func (sink Sink) Bind(scope Scope) Sink {
 	if scope.EngineID != "" {
 		sink.scope.EngineID = scope.EngineID

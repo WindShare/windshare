@@ -115,16 +115,23 @@ impl Desktop {
                             .child(theme.caption(locale.text(Text::KeepOpenToReceive))),
                     )
                     .child(
-                        Self::button(
-                            "detail-toggle",
-                            locale.text(share.control().0),
-                            share.control().1,
-                            ButtonStyle::Quiet,
-                            share.control().2,
-                            cx,
-                        )
-                        .compact()
-                        .disabled(matches!(share.state, ShareState::Stopping)),
+                        row()
+                            .gap(px(8.))
+                            .when(link.is_some(), |el| {
+                                el.child(Self::share_diagnostics_button(id, cx))
+                            })
+                            .child(
+                                Self::button(
+                                    "detail-toggle",
+                                    locale.text(share.control().0),
+                                    share.control().1,
+                                    ButtonStyle::Quiet,
+                                    share.control().2,
+                                    cx,
+                                )
+                                .compact()
+                                .disabled(matches!(share.state, ShareState::Stopping)),
+                            ),
                     ),
             )
     }

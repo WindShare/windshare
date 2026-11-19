@@ -53,6 +53,12 @@ Content race losers report `receiver_ended / superseded`; peer stops may retain 
 These ordinary ends produce no failure warning. Real protocol or cleanup faults remain `receiver_failed`,
 even during a local stop. For peer stops, correlate with `receiver_termination.local_stop_reason`.
 
+## Desktop Diagnostics
+
+In a live share, open **Diagnostics** in the footer. Copy the diagnostic link or scan its QR code to start recording in the recipient’s browser. Use **Copy link** on the share card for everyday sharing.
+
+Use **Preferences → Diagnostics** to turn on **Sender trace** before starting a share. Turning it off ends sender capture and keeps the logs already recorded. **Open folder** reveals the rotating desktop and host logs.
+
 ## Browser Diagnostics
 
 ### Capturing an Issue

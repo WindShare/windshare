@@ -1,9 +1,19 @@
 mod segments;
 
-use std::io::{self, Write};
+use std::{
+    io::{self, Write},
+    path::{Path, PathBuf},
+    sync::OnceLock,
+};
 use tracing_appender::non_blocking::{ErrorCounter, WorkerGuard};
 
 const LOG_QUEUE_CAPACITY: usize = 1024;
+
+static DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn directory() -> Option<&'static Path> {
+    DIRECTORY.get().map(PathBuf::as_path)
+}
 
 pub struct Logging {
     worker: Option<WorkerGuard>,
@@ -54,7 +64,12 @@ impl Write for Writer {
 pub fn start() -> Logging {
     let file = dirs::cache_dir()
         .ok_or_else(|| io::Error::other("user cache directory unavailable"))
-        .and_then(|directory| segments::Segments::open(directory.join("WindShare").join("logs")));
+        .and_then(|cache| {
+            let directory = cache.join("WindShare").join("logs");
+            let segments = segments::Segments::open(directory.clone())?;
+            let _ = DIRECTORY.set(directory);
+            Ok(segments)
+        });
     let writer = match file {
         Ok(file) => Writer::File(file),
         Err(error) => {

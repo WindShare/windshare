@@ -1,6 +1,6 @@
 use crate::{
     model::{Share, ShareAge, ShareContents, ShareState},
-    sharing::ShareLink,
+    sharing::SharePublication,
 };
 use std::time::{Duration, SystemTime};
 use windshare_host::{Operation, OperationState, Outcome, SelectedRoot, ShareState as HostState};
@@ -53,14 +53,12 @@ pub fn update_share(share: &mut Share, operation: &Operation) {
         }
         if task.url.is_empty() {
             share.link = None;
-        }
-        if !task.url.is_empty()
-            && share
-                .link
-                .as_ref()
-                .is_none_or(|link| link.url().as_ref() != task.url)
+        } else if share
+            .link
+            .as_ref()
+            .is_none_or(|link| !link.matches(&task.url))
         {
-            share.link = Some(ShareLink::new(task.url.clone()));
+            share.link = Some(SharePublication::new(task.url.clone()));
         }
         share.relay_status = task
             .relay

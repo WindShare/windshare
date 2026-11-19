@@ -22,6 +22,9 @@ func TestHostReadinessAndJoinedShutdownAreIndependentOfConfiguration(t *testing.
 	firstHost := host
 	t.Cleanup(func() { _ = firstHost.Close() })
 	firstToken := host.Endpoint.Token
+	if host.app.snapshot().SenderTrace != SenderTraceOn {
+		t.Fatal("the startup environment did not arm sender trace")
+	}
 	host.app.execute(createRequest())
 	view := awaitShare(t, host.app, "operation", func(s Share) bool { return s.State == AwaitingConfiguration })
 	if view.Error == nil || view.Error.Code != "settings_unavailable" {
@@ -95,6 +98,9 @@ func TestUnavailableLogStorageDoesNotPreventSharingHostStartup(t *testing.T) {
 	}
 	if host.Endpoint.Address == "" {
 		t.Fatal("logging failure prevented control readiness")
+	}
+	if host.Endpoint.LogDirectory != "" || host.app.snapshot().SenderTrace != SenderTraceUnavailable {
+		t.Fatal("host advertised tracing without log storage")
 	}
 	if err := host.Close(); err != nil {
 		t.Fatal(err)

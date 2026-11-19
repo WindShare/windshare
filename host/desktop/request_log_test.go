@@ -86,6 +86,10 @@ func TestControlLogsExcludeCredentialsFromAcceptedAndRejectedRequests(t *testing
 		t.Fatal("account operation was accepted without an account service")
 	}
 	a.work.Wait()
+	a.logShareState(Share{
+		OperationID: "share-fixture", URL: "https://example.test/s/sample#share-key-fixture",
+		Selection: &Selection{Root: &SelectedRoot{Name: "private-file-fixture"}}, State: Sharing,
+	})
 	if err := log.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +102,7 @@ func TestControlLogsExcludeCredentialsFromAcceptedAndRejectedRequests(t *testing
 		t.Fatal(err)
 	}
 	body := string(data)
-	for _, secret := range []string{key, password, "password-fixture", "private-path", "query-fixture", "fragment-fixture"} {
+	for _, secret := range []string{key, password, "password-fixture", "private-path", "query-fixture", "fragment-fixture", "share-key-fixture", "private-file-fixture"} {
 		if strings.Contains(body, secret) {
 			t.Fatalf("log contains credential-bearing input %q", secret)
 		}
@@ -108,6 +112,7 @@ func TestControlLogsExcludeCredentialsFromAcceptedAndRejectedRequests(t *testing
 		{`"event":"host.request_result"`, `"request_id":"accepted-setup"`, `"setup_id":"relay-setup"`, `"accepted":true`, `"relay_origin":"https://relay.example:8443"`},
 		{`"event":"host.request_result"`, `"request_id":"account-login"`, `"operation_id":"account-operation"`, `"action":"login"`, `"accepted":false`},
 		{`"event":"host.setup_completed"`, `"setup_id":"relay-setup"`, `"state":"failed"`, `"error_code":"setup_failed"`},
+		{`"event":"host.share_state"`, `"operation_id":"share-fixture"`, `"state":"sharing"`},
 	} {
 		found := false
 		for line := range strings.SplitSeq(body, "\n") {

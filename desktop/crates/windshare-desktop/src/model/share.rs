@@ -1,7 +1,7 @@
 use super::{Action, ShareAge, ShareContents};
 use crate::{
     localization::{Language, Text},
-    sharing::ShareLink,
+    sharing::{LinkKind, ShareLink, SharePublication},
 };
 use windshare_ui::{Icon, Tone};
 
@@ -30,7 +30,7 @@ pub struct Share {
     pub id: usize,
     pub source: ShareSource,
     pub name: String,
-    pub link: Option<ShareLink>,
+    pub link: Option<SharePublication>,
     pub contents: ShareContents,
     pub size: Option<String>,
     pub age: ShareAge,
@@ -63,7 +63,14 @@ impl Share {
     }
 
     pub fn usable_link(&self) -> Option<&ShareLink> {
-        self.link.as_ref().filter(|_| self.live())
+        self.link_for(LinkKind::Standard)
+    }
+
+    pub fn link_for(&self, kind: LinkKind) -> Option<&ShareLink> {
+        self.link
+            .as_ref()
+            .filter(|_| self.live())
+            .and_then(|publication| publication.link(kind))
     }
 
     pub fn description(&self, locale: Language) -> String {

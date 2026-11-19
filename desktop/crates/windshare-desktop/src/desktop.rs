@@ -10,7 +10,7 @@ use crate::{
 };
 use gpui::{
     Animation, AnimationExt, App, AppContext, ElementId, Entity, FocusHandle, Focusable,
-    KeyDownEvent, Subscription, Window, ease_out_quint, prelude::*, px,
+    KeyDownEvent, SharedString, Stateful, Subscription, Window, ease_out_quint, prelude::*, px,
 };
 use std::time::Duration;
 use windshare_ui::InputEvent;
@@ -154,6 +154,25 @@ impl Desktop {
             .style(style)
             .on_press(cx.listener(move |this, (), window, cx| this.dispatch(action, window, cx)))
     }
+    pub fn setting_switch(
+        theme: Theme,
+        id: impl Into<ElementId>,
+        label: impl Into<SharedString>,
+        checked: bool,
+        action: Option<Action>,
+        cx: &Context<Self>,
+    ) -> Stateful<gpui::Div> {
+        theme
+            .toggle(id, checked, action.is_some())
+            .aria_label(label)
+            .when_some(action, |control, action| {
+                control.on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.dispatch(action, window, cx);
+                }))
+            })
+    }
+
     pub fn notify(&mut self, message: Text, cx: &mut Context<Self>) {
         if !self.settings[0] {
             return;
