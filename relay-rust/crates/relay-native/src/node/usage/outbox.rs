@@ -19,7 +19,7 @@ impl Reporter {
         Ok(Batch {
             id: super::super::identity::random()?,
             issuer: self.authority.issuer()?,
-            node: self.identity.key().verifying_key().to_bytes(),
+            node: self.signing_key.verifying_key().to_bytes(),
             created_at,
             records,
             resident_accounts,
@@ -114,7 +114,9 @@ impl Reporter {
     pub(super) async fn retry(&self) -> Result<()> {
         let store = self.store.clone();
         let issuer = self.authority.issuer()?;
-        let batch = tokio::task::spawn_blocking(move || store.next_usage_batch(issuer)).await??;
+        let node = self.signing_key.verifying_key().to_bytes();
+        let batch =
+            tokio::task::spawn_blocking(move || store.next_usage_batch(issuer, node)).await??;
         let Some(batch) = batch else {
             return Ok(());
         };

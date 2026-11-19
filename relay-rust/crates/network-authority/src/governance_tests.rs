@@ -272,3 +272,87 @@ fn reports_remain_reachable_beyond_the_old_console_limit() {
     assert!(authority.reports("", None).is_err());
     assert!(authority.console(&admin).unwrap().get("reports").is_none());
 }
+
+#[test]
+fn node_details_and_load_remain_reachable_beyond_the_console_page() {
+    let mut authority = fixture();
+    let admin = authority
+        .initialize("once", "once", "admin", "correct horse battery")
+        .unwrap();
+    for i in 1..=1001u16 {
+        let mut id = [0; 32];
+        id[..2].copy_from_slice(&i.to_be_bytes());
+        authority
+            .enroll_node(
+                &admin,
+                &NodeEnrollment {
+                    key: id,
+                    zone: Zone::Global,
+                    region: "local".into(),
+                },
+            )
+            .unwrap();
+    }
+
+    let snapshot = authority.console(&admin).unwrap();
+    let first = &snapshot["node_page"];
+    assert_eq!(first["entries"].as_array().unwrap().len(), 1000);
+    let cursor: [u8; 32] = URL_SAFE_NO_PAD
+        .decode(first["next_cursor"].as_str().unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let mut last = [0; 32];
+    last[0] = 255;
+    // Insert a key that sorts after every seeded node's encoded public key.
+    authority
+        .enroll_node(
+            &admin,
+            &NodeEnrollment {
+                key: last,
+                zone: Zone::Cn,
+                region: "additional".into(),
+            },
+        )
+        .unwrap();
+    let now = authority.environment.now;
+    let load = Load {
+        active_sessions: 4,
+        wire_bytes: 20,
+        forwarded_bytes: 17,
+        admission_refusals: 1,
+    };
+    save(
+        &mut authority.store,
+        &key("node-load", &last),
+        &(now - 1, &load),
+    )
+    .unwrap();
+    save(&mut authority.store, &key("node-report", &last), &now).unwrap();
+
+    let next = authority.nodes(&admin, Some(cursor)).unwrap();
+    assert_eq!(next.entries.len(), 2);
+    assert!(next.next_cursor.is_none());
+    let row = next
+        .entries
+        .iter()
+        .find(|entry| entry.node.key == last)
+        .unwrap();
+    let detail = authority.node_by_key(&admin, &last).unwrap();
+    let report = detail.report.unwrap();
+    assert_eq!(detail.node.zone, Zone::Cn);
+    assert_eq!(report.created_at, now - 1);
+    assert_eq!(report.reported_at, Some(now));
+    assert_eq!(report.load.forwarded_bytes, load.forwarded_bytes);
+    assert_eq!(row.report.as_ref().unwrap().reported_at, report.reported_at);
+    assert!(authority.nodes("", None).is_err());
+    assert!(authority.node_by_key("", &last).is_err());
+    assert!(matches!(
+        authority
+            .node_by_key(&admin, &[99; 32])
+            .err()
+            .unwrap()
+            .downcast_ref(),
+        Some(Fault::NodeNotFound)
+    ));
+}

@@ -52,17 +52,18 @@ impl Runtime {
         let Some(authority) = state.settings.authority.clone() else {
             return Ok(None);
         };
-        let identity = state
+        let signing_key = state
             .identity
-            .clone()
-            .ok_or_else(|| anyhow!("authority requires a node identity"))?;
+            .as_ref()
+            .ok_or_else(|| anyhow!("authority requires a node identity"))?
+            .key();
         let store = state
             .control
             .clone()
             .ok_or_else(|| anyhow!("authority requires persistent storage"))?;
         drop(state);
         drop(writer);
-        Reporter::new(self.clone(), store, identity, authority).map(Some)
+        Reporter::new(self.clone(), store, signing_key, authority).map(Some)
     }
 
     pub(crate) fn descriptor(&self, endpoint: &crate::Endpoint) -> Result<serde_json::Value> {

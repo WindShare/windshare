@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use windshare_relay_access::restrictions::Restriction;
 
 const MAX_REPORT_REASON: usize = 2000;
-const MAX_CONSOLE_ROWS: usize = 1000;
+const MAX_CONSOLE_REVIEWS: usize = 1000;
 const REPORT_PAGE_SIZE: usize = 50;
 #[derive(Clone, Copy, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -156,13 +156,12 @@ impl<R: Store, E: Environment> Authority<R, E> {
     /// Requires a live administrator session and readable persistent records.
     pub fn console(&self, session: &str) -> Result<serde_json::Value> {
         self.require_admin(session)?;
-        let read = |prefix| -> Result<Vec<serde_json::Value>> {
-            self.store
-                .scan(prefix, Some(MAX_CONSOLE_ROWS))?
-                .into_iter()
-                .map(|(_, value)| Ok(serde_json::from_str(&value)?))
-                .collect()
-        };
+        let reviews = self
+            .store
+            .scan("review/", Some(MAX_CONSOLE_REVIEWS))?
+            .into_iter()
+            .map(|(_, value)| serde_json::from_str::<serde_json::Value>(&value))
+            .collect::<Result<Vec<_>, _>>()?;
         let settings = self.settings()?;
         let account_count = self.account_count()?;
         let email_configured = self.environment.registration_email_configured();
@@ -170,12 +169,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
         Ok(
             serde_json::json!({"settings":settings,"account_count":account_count,
             "registration_mode":registration_mode,"email_configured":email_configured,
-            "reviews":read("review/")?,"nodes":read("node/")?,"load":self.store.scan("node-load/", Some(MAX_CONSOLE_ROWS))?.into_iter().map(|(key,value)| {
-                let (created_at, load): (u64, windshare_relay_access::usage::Load) = serde_json::from_str(&value)?;
-                let node=key.trim_start_matches("node-load/");
-                let reported_at=crate::store::load::<u64>(&self.store,&format!("node-report/{node}"))?;
-                Ok(serde_json::json!({"node":node,"created_at":created_at,"reported_at":reported_at,"load":load}))
-            }).collect::<Result<Vec<_>>>()?,
+            "reviews":reviews,"node_page":self.node_page(None)?,
             "restrictions":self.blocks()?}),
         )
     }

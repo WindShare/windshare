@@ -90,7 +90,7 @@ impl Reporter {
         let request = PageRequest {
             id: super::super::identity::random()?,
             issuer,
-            node: self.identity.key().verifying_key().to_bytes(),
+            node: self.signing_key.verifying_key().to_bytes(),
             version,
             after,
         };

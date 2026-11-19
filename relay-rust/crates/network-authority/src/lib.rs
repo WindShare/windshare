@@ -21,7 +21,9 @@ use anyhow::Result;
 pub use challenges::{EmailDelivery, ProofKind};
 pub use governance::{Block, Report, ReportPage, ReportPosition};
 pub use model::*;
-pub use nodes::{Node, NodeEnrollment, NodePolicyChange, Zone};
+pub use nodes::{
+    Node, NodeDetails, NodeEnrollment, NodeLoadReport, NodePage, NodePolicyChange, Zone,
+};
 pub use profile::{EmailVerification, Mailbox};
 pub use signing::Signing;
 pub use store::{Environment, Store};
