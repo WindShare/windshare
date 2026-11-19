@@ -1,6 +1,7 @@
 use crate::{
     Authority, Challenge, Environment, Fault, Rate, RegistrationMode, Store,
-    challenges::{CHALLENGE_SECONDS, ProofRedemption},
+    challenges::{CHALLENGE_SECONDS, ProofRedemption, RegistrationProofOwner},
+    registration::RegistrationAttempt,
     store::{key, load, save},
 };
 use anyhow::Result;
@@ -19,6 +20,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
     pub(crate) fn creation_admission(
         &mut self,
         source: &str,
+        attempt: RegistrationAttempt,
         challenge: Option<&str>,
         solution: Option<&str>,
     ) -> Result<Option<String>> {
@@ -56,10 +58,13 @@ impl<R: Store, E: Environment> Authority<R, E> {
         } else {
             settings.registration
         };
-        let email = if mode == RegistrationMode::Automatic {
-            None
-        } else {
-            match self.registration_proof(source_id, mode, challenge, solution)? {
+        let owner = match mode {
+            RegistrationMode::Automatic => None,
+            RegistrationMode::ProofOfWork => Some(RegistrationProofOwner::Work(source_id)),
+            RegistrationMode::Email => Some(RegistrationProofOwner::Email(attempt)),
+        };
+        let email = if let Some(owner) = owner {
+            match self.registration_proof(owner, challenge, solution)? {
                 ProofRedemption::WorkVerified => None,
                 ProofRedemption::EmailVerified(address) => Some(address),
                 ProofRedemption::Retry(challenge) if mode == RegistrationMode::Email => {
@@ -80,6 +85,8 @@ impl<R: Store, E: Environment> Authority<R, E> {
                     return Err(Fault::Verification { challenge }.into());
                 }
             }
+        } else {
+            None
         };
         local.credit -= 1;
         global.credit -= 1;

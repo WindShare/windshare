@@ -18,7 +18,8 @@ import (
 // The authority stamps expiry from its own clock. A client a few seconds behind
 // must still accept fresh challenges, or email registration can never begin.
 func TestFreshChallengesSurviveLocalClockBehindAuthority(t *testing.T) {
-	config, _ := accountFixture(t)
+	config, session := accountFixture(t)
+	config.Store = &MemoryStore{record: Record{SetupSecret: session.Secret}}
 	authorityNow := uint64(config.Now().Unix()) + 3
 	var expiresAt atomic.Uint64
 	expiresAt.Store(authorityNow + 15*60)
@@ -30,6 +31,12 @@ func TestFreshChallengesSurviveLocalClockBehindAuthority(t *testing.T) {
 			status = http.StatusPreconditionRequired
 			body = map[string]any{"kind": "verification", "challenge": Challenge{Mode: "email", ExpiresAt: expiresAt.Load()}}
 		case "/v1/accounts/email":
+			var input struct {
+				ClientSecret string `json:"client_secret"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&input); err != nil || input.ClientSecret != session.Secret {
+				return nil, errors.New("registration email request did not use the setup secret")
+			}
 			status, body = http.StatusOK, Challenge{ID: "email-challenge", Mode: "email", ExpiresAt: expiresAt.Load()}
 		default:
 			err := fmt.Errorf("unexpected route %s", request.URL.Path)

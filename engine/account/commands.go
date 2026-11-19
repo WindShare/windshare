@@ -114,8 +114,9 @@ func (service *Service) RequestEmail(ctx context.Context, email string) error {
 	}
 	var challenge Challenge
 	if err := service.callWithTimeout(ctx, "/v1/accounts/email", "", struct {
-		Email string `json:"email"`
-	}{email}, &challenge, EmailRequestTimeout); err != nil {
+		Email        string `json:"email"`
+		ClientSecret string `json:"client_secret"`
+	}{Email: email, ClientSecret: previous.SetupSecret}, &challenge, EmailRequestTimeout); err != nil {
 		return err
 	}
 	if !service.validEmailChallenge(challenge) {

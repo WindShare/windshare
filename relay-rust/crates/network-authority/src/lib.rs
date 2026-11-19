@@ -21,7 +21,7 @@ pub use challenges::EmailDelivery;
 pub use governance::Block;
 pub use model::*;
 pub use nodes::{Node, NodeEnrollment, NodePolicyChange, Zone};
-pub use profile::Mailbox;
+pub use profile::{EmailVerification, Mailbox};
 pub use signing::Signing;
 pub use store::{Environment, Store};
 

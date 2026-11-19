@@ -1,6 +1,6 @@
 use crate::{
     Authority, Challenge, Environment, Fault, RegistrationMode, Store,
-    registration::digest,
+    registration::{RegistrationAttempt, digest},
     store::{key, load, save},
 };
 use anyhow::{Result, ensure};
@@ -15,19 +15,27 @@ const MAX_SOLUTION_BYTES: usize = 128;
 const MAX_CHALLENGE_ID_BYTES: usize = 64;
 const EMAIL_BURST: u64 = 3;
 const EMAIL_REFILL_SECONDS: u64 = 60;
+const WORK_PROOF_PREFIX: &str = "registration-proof";
+pub const REGISTRATION_EMAIL_PROOF_PREFIX: &str = "registration-email-proof";
 
-pub enum Owner {
-    Registration([u8; 32]),
+pub enum EmailOwner {
+    Registration(RegistrationAttempt),
     Account(AccountId),
 }
 
-impl Owner {
+impl EmailOwner {
     fn key(&self) -> String {
         match self {
-            Self::Registration(source) => key("registration-proof", source),
+            Self::Registration(attempt) => key(REGISTRATION_EMAIL_PROOF_PREFIX, attempt.digest()),
             Self::Account(id) => key("account-email-proof", id),
         }
     }
+}
+
+#[derive(Clone, Copy)]
+pub enum RegistrationProofOwner {
+    Work([u8; 32]),
+    Email(RegistrationAttempt),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -102,7 +110,7 @@ pub enum ProofRedemption {
 }
 
 pub struct EmailDelivery {
-    owner: Owner,
+    owner: EmailOwner,
     proof: Proof,
     code: String,
 }
@@ -121,7 +129,7 @@ impl EmailDelivery {
     pub fn accepted(self, store: &mut impl Store) -> Result<Challenge> {
         let key = self.owner.key();
         save(store, &key, &self.proof)?;
-        tracing::info!(event="email_verification_delivered", owner=key, challenge=%self.proof.id);
+        tracing::info!(event = "email_verification_delivered", challenge = %self.proof.id);
         Ok(self.proof.into_challenge())
     }
 }
@@ -137,26 +145,26 @@ impl<R: Store, E: Environment> Authority<R, E> {
     }
 
     pub(crate) fn work_challenge(&mut self, source: [u8; 32], bits: u8) -> Result<Challenge> {
-        let owner = Owner::Registration(source);
-        if let Some(proof) = load::<Proof>(&self.store, &owner.key())?
+        let storage_key = key(WORK_PROOF_PREFIX, &source);
+        if let Some(proof) = load::<Proof>(&self.store, &storage_key)?
             && matches!(proof.method, ProofMethod::Work { bits: expected } if expected == bits)
             && proof.live(self.environment.now())
         {
             return Ok(proof.into_challenge());
         }
         let proof = self.new_proof(ProofMethod::Work { bits })?;
-        save(&mut self.store, &owner.key(), &proof)?;
+        save(&mut self.store, &storage_key, &proof)?;
         Ok(proof.into_challenge())
     }
 
     pub(crate) fn issue_email_code(
         &mut self,
         source: &str,
-        owner: Owner,
+        owner: EmailOwner,
         address: &str,
     ) -> Result<EmailDelivery> {
         self.throttle(source, "email-source", EMAIL_BURST, EMAIL_REFILL_SECONDS)?;
-        if let Owner::Account(_) = owner {
+        if let EmailOwner::Account(_) = owner {
             self.throttle(
                 &owner.key(),
                 "email-account",
@@ -170,14 +178,13 @@ impl<R: Store, E: Environment> Authority<R, E> {
             code_digest: digest(&code),
         };
         let proof = self.new_proof(method)?;
-        tracing::info!(event = "email_verification_requested", challenge = %proof.id, owner = owner.key());
+        tracing::info!(event = "email_verification_requested", challenge = %proof.id);
         Ok(EmailDelivery { owner, proof, code })
     }
 
     pub(crate) fn registration_proof(
         &mut self,
-        source: [u8; 32],
-        mode: RegistrationMode,
+        owner: RegistrationProofOwner,
         id: Option<&str>,
         solution: Option<&str>,
     ) -> Result<ProofRedemption> {
@@ -188,8 +195,18 @@ impl<R: Store, E: Environment> Authority<R, E> {
             id.len() <= MAX_CHALLENGE_ID_BYTES && solution.len() <= MAX_SOLUTION_BYTES,
             Fault::Invalid
         );
-        self.redeem_proof(&Owner::Registration(source), solution, |proof| {
-            proof.method.mode() == mode && proof.id == id
+        let (storage_key, mode) = match owner {
+            RegistrationProofOwner::Work(source) => (
+                key(WORK_PROOF_PREFIX, &source),
+                RegistrationMode::ProofOfWork,
+            ),
+            RegistrationProofOwner::Email(attempt) => (
+                EmailOwner::Registration(attempt).key(),
+                RegistrationMode::Email,
+            ),
+        };
+        self.redeem_proof(&storage_key, solution, |proof| {
+            proof.id == id && proof.method.mode() == mode
         })
     }
 
@@ -200,7 +217,8 @@ impl<R: Store, E: Environment> Authority<R, E> {
         id: &str,
         code: &str,
     ) -> Result<()> {
-        let result = self.redeem_proof(&Owner::Account(account), code, |proof| {
+        let storage_key = EmailOwner::Account(account).key();
+        let result = self.redeem_proof(&storage_key, code, |proof| {
             proof.id == id && matches!(&proof.method, ProofMethod::Email { address: target, .. } if target == address)
         })?;
         ensure!(
@@ -212,12 +230,11 @@ impl<R: Store, E: Environment> Authority<R, E> {
 
     fn redeem_proof(
         &mut self,
-        owner: &Owner,
+        storage_key: &str,
         solution: &str,
         matches: impl FnOnce(&Proof) -> bool,
     ) -> Result<ProofRedemption> {
-        let storage_key = owner.key();
-        let Some(mut proof) = load::<Proof>(&self.store, &storage_key)? else {
+        let Some(mut proof) = load::<Proof>(&self.store, storage_key)? else {
             return Ok(ProofRedemption::Unavailable);
         };
         let now = self.environment.now();
@@ -227,7 +244,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
         if solution.len() > MAX_SOLUTION_BYTES || !proof.accepts(solution) {
             proof.attempts += 1;
             tracing::info!(event = "verification_code_rejected", challenge = %proof.id, attempts = proof.attempts);
-            save(&mut self.store, &storage_key, &proof)?;
+            save(&mut self.store, storage_key, &proof)?;
             // The rejected attempt counts before the proof can be offered for another try.
             return Ok(if proof.live(now) {
                 ProofRedemption::Retry(proof.into_challenge())
@@ -235,7 +252,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 ProofRedemption::Unavailable
             });
         }
-        self.store.delete(&storage_key)?;
+        self.store.delete(storage_key)?;
         Ok(match proof.method {
             ProofMethod::Work { .. } => ProofRedemption::WorkVerified,
             ProofMethod::Email { address, .. } => ProofRedemption::EmailVerified(address),

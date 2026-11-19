@@ -2,7 +2,10 @@ use super::{
     Clock, NetworkAuthority, failure,
     storage::{self, Database},
 };
-use crate::{Authority, Fault, Mailbox, Signing, challenges::CHALLENGE_SECONDS};
+use crate::{
+    Authority, EmailVerification, Environment, Fault, Mailbox, Signing,
+    challenges::CHALLENGE_SECONDS,
+};
 use serde::Deserialize;
 use worker::{
     AbortSignal, Fetch, Method, Request, RequestInit, RequestRedirect, Response, Result, web_sys,
@@ -12,9 +15,35 @@ const DELIVERY_TIMEOUT_MS: u32 = 15_000;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Email {
+struct ProfileEmail {
     email: String,
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RegistrationEmail {
+    email: String,
+    client_secret: String,
+}
+fn parse_request(
+    bytes: &[u8],
+    bearer: Option<String>,
+) -> std::result::Result<(Mailbox, EmailVerification), Fault> {
+    let (address, verification) = if let Some(bearer) = bearer {
+        let input: ProfileEmail = serde_json::from_slice(bytes).map_err(|_| Fault::InvalidEmail)?;
+        (input.email, EmailVerification::Profile { bearer })
+    } else {
+        let input: RegistrationEmail = serde_json::from_slice(bytes).map_err(|_| Fault::Invalid)?;
+        (
+            input.email,
+            EmailVerification::Registration {
+                client_secret: input.client_secret,
+            },
+        )
+    };
+    Ok((Mailbox::parse(&address)?, verification))
+}
+
 fn unavailable() -> Result<Response> {
     super::routes::fault(&Fault::EmailDeliveryUnavailable).map_err(failure)
 }
@@ -28,11 +57,8 @@ impl NetworkAuthority {
         if request.method() != Method::Post {
             return Response::error("POST required", 405);
         }
-        let Ok(input) = serde_json::from_slice::<Email>(bytes) else {
-            return super::routes::fault(&Fault::InvalidEmail).map_err(failure);
-        };
-        let email = match Mailbox::parse(&input.email) {
-            Ok(mailbox) => mailbox,
+        let (email, verification) = match parse_request(bytes, bearer) {
+            Ok(input) => input,
             Err(fault) => return super::routes::fault(&fault).map_err(failure),
         };
         let (Ok(url), Ok(token)) = (
@@ -46,7 +72,7 @@ impl NetworkAuthority {
             return unavailable();
         }
         let recipient = email.as_str().to_owned();
-        let profile_change = bearer.is_some();
+        let profile_change = matches!(&verification, EmailVerification::Profile { .. });
         let source = request
             .headers()
             .get("X-Authority-Source")?
@@ -62,7 +88,7 @@ impl NetworkAuthority {
         let outcome = storage::transaction(&self.state, move || {
             let mut authority = Authority::new(admission_store, Clock, signing)?;
             // Expected admission refusals commit their limiter state.
-            match authority.prepare_email(&source, bearer.as_deref(), &email) {
+            match authority.prepare_email(&source, verification, &email) {
                 Ok(value) => Ok(Ok(value)),
                 Err(error) if error.downcast_ref::<Fault>().is_some() => Ok(Err(error)),
                 Err(error) => Err(error),
@@ -114,8 +140,13 @@ impl NetworkAuthority {
             );
             return unavailable();
         }
-        let challenge = storage::transaction(&self.state, move || delivery.accepted(&mut database))
-            .map_err(failure)?;
+        let challenge = storage::transaction(&self.state, move || {
+            if !profile_change {
+                database.prune_registration_email_proofs(Clock.now())?;
+            }
+            delivery.accepted(&mut database)
+        })
+        .map_err(failure)?;
         if profile_change {
             Response::from_json(&serde_json::json!({"address":recipient,"challenge":challenge}))
         } else {

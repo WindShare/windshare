@@ -1,8 +1,10 @@
-use crate::Store;
+use crate::{Store, challenges::REGISTRATION_EMAIL_PROOF_PREFIX};
 use anyhow::{Result, anyhow};
 use std::{cell::RefCell, rc::Rc};
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use worker::{SqlStorage, SqlStorageValue, State};
+
+const EXPIRED_PROOF_BATCH_SIZE: i64 = 64;
 
 #[derive(Clone)]
 pub struct Database(SqlStorage);
@@ -14,6 +16,32 @@ impl Database {
         let database = Self(state.storage().sql());
         api(database.0.exec("CREATE TABLE IF NOT EXISTS authority_records(key TEXT PRIMARY KEY,value TEXT NOT NULL) STRICT",None))?;
         Ok(database)
+    }
+
+    pub fn prune_registration_email_proofs(&self, now: u64) -> Result<()> {
+        let registration_email = format!("key GLOB '{REGISTRATION_EMAIL_PROOF_PREFIX}/*'");
+        let expiry = "json_extract(value, '$.expires_at')";
+        // Only registration email traffic creates these rows. Reclaim a bounded
+        // batch on successful delivery to keep abandoned attempts from accumulating.
+        api(self.0.exec(
+            &format!(
+                "CREATE INDEX IF NOT EXISTS registration_email_expiry ON authority_records ({expiry}) WHERE {registration_email}"
+            ),
+            None,
+        ))?;
+        api(self.0.exec(
+            &format!(
+                "DELETE FROM authority_records WHERE key IN (
+                    SELECT key FROM authority_records WHERE {registration_email} AND {expiry} <= ?
+                    ORDER BY {expiry} LIMIT ?
+                )"
+            ),
+            Some(vec![
+                i64::try_from(now)?.into(),
+                EXPIRED_PROOF_BATCH_SIZE.into(),
+            ]),
+        ))?;
+        Ok(())
     }
 }
 impl Store for Database {

@@ -87,7 +87,7 @@ fn only_the_current_code_for_the_target_account_and_new_mailbox_can_replace_emai
     let next = || Mailbox::parse("alice@163.com").unwrap();
     let send = |authority: &mut Authority<Memory, Clock>, source: &str, email: Mailbox| {
         authority
-            .deliver_email(source, Some(&first), &email)
+            .deliver_email(source, profile_email(&first), &email)
             .unwrap()
     };
     let code = send(&mut authority, "one", original());
@@ -138,14 +138,16 @@ fn registration_codes_cannot_edit_profiles_and_expired_or_exhausted_codes_cannot
     let secret = registration(1).client_secret;
     authority.register("one", registration(1)).unwrap();
     let address = || Mailbox::parse("alice@gmail.com").unwrap();
-    let admission = authority.deliver_email("one", None, &address()).unwrap();
+    let admission = authority
+        .deliver_email("one", registration_email(&registration(2)), &address())
+        .unwrap();
     assert!(
         authority
             .confirm_email(&secret, address(), &admission.0.id, &admission.1)
             .is_err()
     );
     let expired = authority
-        .deliver_email("one", Some(&secret), &address())
+        .deliver_email("one", profile_email(&secret), &address())
         .unwrap();
     authority.environment.now = expired.0.expires_at;
     assert!(
@@ -154,7 +156,7 @@ fn registration_codes_cannot_edit_profiles_and_expired_or_exhausted_codes_cannot
             .is_err()
     );
     let code = authority
-        .deliver_email("one", Some(&secret), &address())
+        .deliver_email("one", profile_email(&secret), &address())
         .unwrap();
     for _ in 0..5 {
         assert!(
@@ -172,7 +174,7 @@ fn registration_codes_cannot_edit_profiles_and_expired_or_exhausted_codes_cannot
     authority.revoke_credential(&secret, id).unwrap();
     assert!(
         authority
-            .deliver_email("one", Some(&secret), &address())
+            .deliver_email("one", profile_email(&secret), &address())
             .is_err()
     );
     assert!(authority.set_nickname(&secret, "wind").is_err());

@@ -73,7 +73,11 @@ fn email_requires_delivered_secret_and_password_setup_keeps_account_identity() {
     let request = registration(7);
     assert!(authority.register("source", request.clone()).is_err());
     let (challenge, secret) = authority
-        .deliver_email("source", None, &Mailbox::parse("alice@qq.com").unwrap())
+        .deliver_email(
+            "source",
+            registration_email(&request),
+            &Mailbox::parse("alice@qq.com").unwrap(),
+        )
         .unwrap();
     let mut proof = request.clone();
     proof.challenge = Some(challenge.id);
@@ -98,8 +102,10 @@ fn mistyped_registration_email_code_keeps_its_challenge_until_attempts_run_out()
     settings.registration = RegistrationMode::Email;
     save(&mut authority.store, "settings", &settings).unwrap();
     let address = Mailbox::parse("alice@qq.com").unwrap();
-    let (delivered, code) = authority.deliver_email("source", None, &address).unwrap();
     let mut proof = registration(8);
+    let (delivered, code) = authority
+        .deliver_email("source", registration_email(&proof), &address)
+        .unwrap();
     proof.challenge = Some(delivered.id.clone());
     proof.solution = Some("mistyped".into());
     let prompt = |authority: &mut Authority<Memory, Clock>, proof: &Registration| match authority
@@ -128,7 +134,9 @@ fn mistyped_registration_email_code_keeps_its_challenge_until_attempts_run_out()
     assert_eq!(prompt(&mut authority, &proof).id, "");
 
     // Unknown ids and expired challenges keep the id-less prompt too.
-    let (delivered, code) = authority.deliver_email("source", None, &address).unwrap();
+    let (delivered, code) = authority
+        .deliver_email("source", registration_email(&proof), &address)
+        .unwrap();
     proof.challenge = Some("unknown".into());
     proof.solution = Some("mistyped".into());
     assert_eq!(prompt(&mut authority, &proof).id, "");
@@ -138,10 +146,10 @@ fn mistyped_registration_email_code_keeps_its_challenge_until_attempts_run_out()
     let session = authority.register("source", proof.clone()).unwrap();
     assert_eq!(session.profile.email.as_deref(), Some("alice@qq.com"));
 
-    let (delivered, _) = authority
-        .deliver_email("other-source", None, &address)
-        .unwrap();
     proof.client_secret = registration(9).client_secret;
+    let (delivered, _) = authority
+        .deliver_email("other-source", registration_email(&proof), &address)
+        .unwrap();
     proof.challenge = Some(delivered.id.clone());
     proof.solution = Some("mistyped".into());
     authority.environment.now = delivered.expires_at;

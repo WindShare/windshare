@@ -1,7 +1,7 @@
 use crate::{
     Account, Authority, EmailDelivery, Environment, Fault, Nickname, Profile, Store,
-    challenges::Owner,
-    registration::digest,
+    challenges::EmailOwner,
+    registration::RegistrationAttempt,
     store::{key, save},
 };
 use anyhow::{Result, anyhow, ensure};
@@ -38,6 +38,11 @@ const PROVIDER_DOMAINS: &[&str] = &[
     "proton.me",
     "protonmail.com",
 ];
+
+pub enum EmailVerification {
+    Registration { client_secret: String },
+    Profile { bearer: String },
+}
 
 pub struct Mailbox(String);
 
@@ -113,12 +118,16 @@ impl<R: Store, E: Environment> Authority<R, E> {
     pub fn prepare_email(
         &mut self,
         source: &str,
-        bearer: Option<&str>,
+        verification: EmailVerification,
         address: &Mailbox,
     ) -> Result<EmailDelivery> {
-        let owner = match bearer {
-            Some(secret) => Owner::Account(self.authenticate(secret)?.1.id),
-            None => Owner::Registration(digest(source)),
+        let owner = match verification {
+            EmailVerification::Registration { client_secret } => {
+                EmailOwner::Registration(RegistrationAttempt::from_secret(&client_secret)?)
+            }
+            EmailVerification::Profile { bearer } => {
+                EmailOwner::Account(self.authenticate(&bearer)?.1.id)
+            }
         };
         self.issue_email_code(source, owner, address.as_str())
     }

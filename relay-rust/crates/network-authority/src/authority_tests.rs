@@ -91,14 +91,26 @@ fn registration(secret: u8) -> Registration {
     }
 }
 
+fn registration_email(request: &Registration) -> EmailVerification {
+    EmailVerification::Registration {
+        client_secret: request.client_secret.clone(),
+    }
+}
+
+fn profile_email(bearer: &str) -> EmailVerification {
+    EmailVerification::Profile {
+        bearer: bearer.into(),
+    }
+}
+
 impl Authority<Memory, Clock> {
     fn deliver_email(
         &mut self,
         source: &str,
-        bearer: Option<&str>,
+        verification: EmailVerification,
         address: &Mailbox,
     ) -> Result<(Challenge, String)> {
-        let delivery = self.prepare_email(source, bearer, address)?;
+        let delivery = self.prepare_email(source, verification, address)?;
         let code = delivery.code().to_owned();
         Ok((delivery.accepted(&mut self.store)?, code))
     }

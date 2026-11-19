@@ -13,6 +13,26 @@ use sha2::{Digest, Sha256};
 const MIN_PASSWORD: usize = 12;
 const MAX_PASSWORD: usize = 256;
 const MAX_USERNAME: usize = 64;
+const CLIENT_SECRET_BYTES: usize = 32;
+
+#[derive(Clone, Copy)]
+pub struct RegistrationAttempt([u8; 32]);
+
+impl RegistrationAttempt {
+    pub(crate) fn from_secret(secret: &str) -> Result<Self> {
+        ensure!(
+            URL_SAFE_NO_PAD
+                .decode(secret)
+                .is_ok_and(|bytes| bytes.len() == CLIENT_SECRET_BYTES),
+            Fault::Invalid
+        );
+        Ok(Self(digest(secret)))
+    }
+
+    pub(crate) const fn digest(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
 
 pub fn digest(secret: &str) -> [u8; 32] {
     Sha256::digest(secret.as_bytes()).into()
@@ -53,20 +73,10 @@ impl<R: Store, E: Environment> Authority<R, E> {
     /// # Errors
     /// Refuses invalid or restricted creation requests; retries preserve existing credentials.
     pub fn register(&mut self, source: &str, request: Registration) -> Result<Session> {
-        ensure!(
-            URL_SAFE_NO_PAD
-                .decode(&request.client_secret)
-                .is_ok_and(|bytes| bytes.len() == 32),
-            Fault::Invalid
-        );
+        let attempt = RegistrationAttempt::from_secret(&request.client_secret)?;
         // Persisted client entropy makes a lost setup response safe to retry without
         // creating another principal or spending another creation-rate token.
-        if load::<Credential>(
-            &self.store,
-            &key("credential", &digest(&request.client_secret)),
-        )?
-        .is_some()
-        {
+        if load::<Credential>(&self.store, &key("credential", attempt.digest()))?.is_some() {
             return self.refresh(&request.client_secret);
         }
         let name = request.username.as_deref().map(username).transpose()?;
@@ -87,6 +97,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
         }
         let email = self.creation_admission(
             source,
+            attempt,
             request.challenge.as_deref(),
             request.solution.as_deref(),
         )?;

@@ -12,7 +12,7 @@ const crate = fileURLToPath(new URL('../', import.meta.url));
 const { Miniflare, Log, LogLevel, convertV4MiniflareOptions } =
   createRequire(new URL('../../relay-cloudflare/package.json', import.meta.url))('miniflare');
 
-test('the Worker keeps a mistyped registration email code until its attempts run out', async t => {
+test('the Worker isolates registration email challenges while tracking retries', async t => {
   const keys = await mkdtemp(join(tmpdir(), 'windshare-registration-test-'));
   t.after(() => rm(keys, { recursive: true, force: true }));
   execFileSync('cargo', ['run', '--quiet', '--locked', '--bin', 'network-authority-keys', '--', keys, '1'], { cwd: crate });
@@ -58,23 +58,32 @@ test('the Worker keeps a mistyped registration email code until its attempts run
   await call('/v1/admin/settings', { ...console.settings, registration: 'email' }, { method: 'PUT', admin: true });
 
   const secret = randomBytes(32).toString('base64url');
-  const register = async (challenge, solution, status) =>
-    (await call('/v1/accounts', { client_secret: secret, challenge, solution }, { status })).value;
-  const email = async () => {
-    const challenge = (await call('/v1/accounts/email', { email: 'alice@qq.com' })).value;
+  const otherSecret = randomBytes(32).toString('base64url');
+  const register = async (challenge, solution, status, clientSecret = secret) =>
+    (await call('/v1/accounts', { client_secret: clientSecret, challenge, solution }, { status })).value;
+  const email = async (address, clientSecret = secret) => {
+    const challenge = (await call('/v1/accounts/email', { email: address, client_secret: clientSecret })).value;
+    assert.equal(delivered.to, address);
     return { challenge, code: delivered.text.match(/Verification code: (\S+)/)[1] };
   };
-  // Each request is its own Durable Object transaction, so the attempts must persist.
-  const first = await email();
+
+  const first = await email('alice@qq.com');
+  // Both attempts share the Worker's local source and must keep their own codes.
+  const other = await email('bob@qq.com', otherSecret);
+  assert.equal((await register(other.challenge.id, other.code, 428)).challenge.id, '');
   assert.equal((await register('unknown', 'typo', 428)).challenge.id, '');
+
+  // Each retry is its own Durable Object transaction, so the attempts must persist.
   for (let attempt = 1; attempt < 5; attempt++) {
     assert.deepEqual(await register(first.challenge.id, 'typo', 428), { kind: 'verification', challenge: first.challenge });
   }
   assert.equal((await register(first.challenge.id, 'typo', 428)).challenge.id, '');
   assert.equal((await register(first.challenge.id, first.code, 428)).challenge.id, '');
 
-  const second = await email();
+  const second = await email('alice@qq.com');
+  assert.equal((await call('/v1/accounts/email', { email: 'bob@qq.com', client_secret: otherSecret }, { status: 429 })).value.kind, 'rate_limited');
   assert.deepEqual(await register(second.challenge.id, 'typo', 428), { kind: 'verification', challenge: second.challenge });
   assert.equal((await register(first.challenge.id, 'typo', 428)).challenge.id, '');
   assert.equal((await register(second.challenge.id, second.code)).profile.email, 'alice@qq.com');
+  assert.equal((await register(other.challenge.id, other.code, 200, otherSecret)).profile.email, 'bob@qq.com');
 });
