@@ -151,7 +151,10 @@ export async function createProgressiveZipOutput(input: {
               finish()
               return new VerifiedFinalOutputFile(ownership, revision, revision.exactSize)
             },
-            recordSourceFailure: fault => archive.markRevisionFailure(entryId, fault.code),
+            recordSourceFailure: async fault => {
+              await archive.markRevisionFailure(entryId, fault.code)
+              recordMissingFile(missingFiles, entryId, request.logicalArtifactPath, fault)
+            },
             retire: async () => {
               finish()
               return archive.failed ? 'JobOutputCompromised' : 'FileIsolated'

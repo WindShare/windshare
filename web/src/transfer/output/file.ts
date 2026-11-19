@@ -43,6 +43,7 @@ const OUTPUT_CATALOG_IDENTITY_BYTES = 16
 export interface OutputCapabilities {
   readonly durability: DurabilityLevel
   readonly randomWrite: boolean
+  /** Settling one failed file can leave the output session usable for other files. */
   readonly fileFailureIsolation: boolean
   readonly modificationTime: boolean
 }
@@ -174,7 +175,7 @@ export interface OutputFileTransaction {
     signal: AbortSignal,
   ): Promise<AutomaticCheckpointResult>
   commit(signal: AbortSignal): Promise<VerifiedFinalOutputFile>
-  /** Persist source failure facts without granting authority to delete retained bytes. */
+  /** Persist source failure facts even after pause. The retained bytes remain owned by the old revision. */
   recordSourceFailure?(fault: SourceFault): Promise<void>
   /** A streaming backend may still retire a failed member when no bytes were emitted. */
   retire(reason: unknown): Promise<FileRetirementDisposition>

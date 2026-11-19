@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import { encodeBase64Url } from '../../../src/crypto/bytes'
 import { RevisionEvidenceUnavailableError } from '../../../src/content/revision-comparison'
+import { RevisionReopenedDuringRecoveryError } from '../../../src/content/session-services'
 import { deferred, manualSettlementDeadline } from '../../transfer/settlement-deadline'
 import { BoundaryFaultError, FaultScope, SourceFaultCode, sourceFault } from '../../../src/transfer/failure/fault'
 import { SelectionPolicy } from '../../../src/catalog/selection'
 import { createProgressiveWorkspaceExecution } from '../../../src/output/execution/progressive-workspace-execution'
 import { createProgressiveZipOutput } from '../../../src/output/progressive-zip/output'
-import { catalogFixture, directoryEntry, fileEntry, identity, planAuthorityFixture, readerFixture,
+import { catalogFixture, digestIdentity, directoryEntry, fileEntry, identity, identityText, planAuthorityFixture, readerFixture,
   receiveIntentFixture, transferJobFixture } from '../../transfer/v2-job-fixture'
 import { ZipReader, Uint8ArrayReader, Uint8ArrayWriter } from '@zip.js/zip.js'
 import { ProgressiveZipArchive, type ZipObjectCapacity } from '../../../src/output/progressive-zip/archive'
@@ -323,6 +324,78 @@ describe('progressive native ZIP missing-file results', () => {
     await reader.close()
   })
 
+  it.each([
+    { outcome: 'continues with healthy ZIP entries', failFlush: false },
+    { outcome: 'pauses the ZIP if the file checkpoint fails', failFlush: true },
+  ])('$outcome after a source change during a file read', async ({ failFlush }) => {
+    const changed = fileEntry(identity(16), 'changed.bin', 6n)
+    const healthy = fileEntry(identity(17), 'healthy.bin', 4n)
+    const selection = new SelectionPolicy(true)
+    const intent = await receiveIntentFixture({ planKind: 'workspace-then-publish', artifactKind: 'zip-archive', selection })
+    const f = fixture(new MemoryStore(), new MemoryIO(), undefined, intent.operationId)
+    const archive = await f.open()
+    const execution = await createProgressiveWorkspaceExecution({
+      archive, intent, outputIdentity: { backend: 'native-zip', outputSessionId: 'changed-source-session' },
+      settlement: {
+        pause: async (request, { checkpoint }) => ({
+          operationId: intent.operationId, receiveIntentDigest: intent.digest, generation: 2n,
+          kind: 'resumable-receive', payloadKind: 'workspace-archive',
+          objectId: checkpoint.object.objectId, checkpointGeneration: checkpoint.generation,
+          occupiedBytes: checkpoint.physicalLength, discoveryComplete: checkpoint.discoveryComplete,
+          completedFileCount: request.materialization.fileCount, completedBytes: request.materialization.rawBytes,
+        }),
+        settle: async () => { throw new Error('Incomplete ZIP must not publish') },
+      },
+    })
+    const plans = planAuthorityFixture()
+    plans.openWorkspaceZip = async () => ({ kind: 'accepted', execution })
+    const catalog = catalogFixture([{ id: identity(2), entries: [changed, healthy] }])
+    const readers = readerFixture([changed, healthy])
+    const received = Uint8Array.of(1, 2)
+    const result = await transferJobFixture({
+      catalog: catalog.catalog, selection, intent, plans, maximumConcurrentFiles: 1,
+      revisions: { open: async (id, signal) => {
+        const opened = await readers.revisions.open(id, signal)
+        return { ...opened, descriptor: { ...opened.descriptor, sourceMetadata: digestIdentity(71) } }
+      } },
+      broker: { readRange: async function* (descriptor, lease, range, request) {
+        if (descriptor.fileIdText === healthy.idText) {
+          yield* readers.broker.readRange(descriptor, lease, range, request)
+          return
+        }
+        yield { offset: 0n, data: received }
+        f.io.failFlush = failFlush
+        throw new RevisionReopenedDuringRecoveryError(descriptor, {
+          ...descriptor, fileRevision: identity(72), fileRevisionText: identityText(72), sourceMetadata: digestIdentity(73),
+        })
+      } },
+    }).run()
+
+    if (failFlush) {
+      expect(result.worker.status).toBe('Paused')
+      expect(archive.failed).toBe(true)
+      expect(readers.revisionRequests).toEqual([changed.idText])
+      expect(readers.blockRequests).toEqual([])
+      return
+    }
+    expect(readers.revisionRequests).toEqual([changed.idText, healthy.idText])
+    expect(readers.blockRequests).toEqual([healthy.idText])
+    expect(result.worker).toMatchObject({ status: 'CompletedWithErrors', failureCount: 1 })
+    expect(result.lifecycle).toMatchObject({ kind: 'resumable-receive', completedFileCount: 1n, discoveryComplete: true })
+    expect(archive.state.contentWarning).toEqual({
+      kind: 'partial-zip', completedFileCount: 1n, selectedFileCount: 2n,
+      missingFiles: [{ path: ['windshare', changed.name], reason: 'source-changed' }],
+    })
+    const entry = await archive.committedEntry(`file:${changed.idText}`)
+    expect(entry).toMatchObject({ revisionFailure: SourceFaultCode.RevisionChanged, ranges: [{ start: 0n, end: 2n }] })
+    const offset = Number(entry.zipLayout!.payloadOffset)
+    expect(f.io.data.slice(offset, offset + received.length)).toEqual(received)
+    const completeFiles = []
+    for await (const { entry } of archive.completeEntries()) {
+      if (entry.kind === 'file') completeFiles.push(entry.path)
+    }
+    expect(completeFiles).toEqual([['windshare', healthy.name]])
+  })
 })
 
 describe('progressive native ZIP archive', () => {
