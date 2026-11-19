@@ -1,13 +1,13 @@
 package relayv2
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net/http"
 
 	"github.com/windshare/windshare/core/networkendpoint"
 )
-
-var errUpgradeNotFound = errors.New("WebSocket upgrade returned HTTP 404")
 
 // WebSocketRouteError identifies an observed missing route for a candidate that
 // could have been copied from the full WebSocket endpoint.
@@ -22,11 +22,32 @@ func (err *WebSocketRouteError) Error() string {
 
 func (err *WebSocketRouteError) Unwrap() error { return err.cause }
 
-func senderUpgradeFailure(address string, cause error) error {
-	if errors.Is(cause, errUpgradeNotFound) {
+// WebSocketDialError identifies a failure to establish a relay WebSocket.
+// The original error remains available to diagnostics through Unwrap.
+type WebSocketDialError struct {
+	Cause error
+}
+
+func (err *WebSocketDialError) Error() string { return "WebSocket upgrade failed" }
+
+func (err *WebSocketDialError) Unwrap() error {
+	if err == nil {
+		return nil
+	}
+	return err.Cause
+}
+
+func dialFailure(address string, response *http.Response, err error) error {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	// Only a direct 404 can diagnose the supplied address, and retiring the
+	// candidate requires a plausible base hint. A 404 during an outage may recover.
+	if response != nil && response.StatusCode == http.StatusNotFound &&
+		response.Request != nil && response.Request.Response == nil {
 		if hint, ok := networkendpoint.WebSocketBaseHint(address); ok {
-			return &WebSocketRouteError{BaseHint: hint, cause: cause}
+			return &WebSocketRouteError{BaseHint: hint, cause: err}
 		}
 	}
-	return cause
+	return &WebSocketDialError{Cause: err}
 }

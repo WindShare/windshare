@@ -160,7 +160,7 @@ func (l *link) readLoop() {
 	for {
 		messageType, encoded, err := l.socket.Read(l.ctx)
 		if err != nil {
-			l.stop(err)
+			l.stop(socketFailure(err))
 			return
 		}
 		if err := l.receive(messageType, encoded); err != nil {
@@ -234,7 +234,7 @@ func (l *link) writeLoop() {
 		// Probes bypass credit waits: a blocked content window must not keep
 		// the relay from seeing this client alive.
 		if probe, ok := l.takeProbe(); ok {
-			if err := l.socket.Write(l.ctx, websocket.MessageBinary, probe); err != nil {
+			if err := writeBinary(l.ctx, l.socket, probe); err != nil {
 				l.stop(err)
 				return
 			}
@@ -246,7 +246,7 @@ func (l *link) writeLoop() {
 			return
 		}
 		if encoded != nil {
-			if err := l.socket.Write(l.ctx, websocket.MessageBinary, encoded); err != nil {
+			if err := writeBinary(l.ctx, l.socket, encoded); err != nil {
 				l.stop(err)
 				return
 			}
@@ -260,7 +260,7 @@ func (l *link) writeLoop() {
 		// consuming peer from starving this connection's opposite direction.
 		request, ok := l.takeRequest()
 		if ok {
-			err := l.socket.Write(l.ctx, websocket.MessageBinary, request.data)
+			err := writeBinary(l.ctx, l.socket, request.data)
 			l.resolveRequest(request, err, true)
 			if err != nil {
 				l.stop(err)

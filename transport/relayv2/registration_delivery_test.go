@@ -2,6 +2,7 @@ package relayv2
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"net/http"
 	"testing"
@@ -63,7 +64,7 @@ func TestSenderRegistrationWriteAndAcknowledgementFailuresRemainUncertain(t *tes
 				SenderPrivateKey: fixture.privateKey, Descriptor: fixture.descriptor,
 				Dial: DialOptions{SocketDialer: func(context.Context, string, http.Header) (BinarySocket, error) {
 					if failWrite {
-						return registrationWriteFailureSocket{BinarySocket: socket, cause: cause}, nil
+						return writeFailureSocket{BinarySocket: socket, cause: cause}, nil
 					}
 					return socket, nil
 				}},
@@ -77,12 +78,40 @@ func TestSenderRegistrationWriteAndAcknowledgementFailuresRemainUncertain(t *tes
 	}
 }
 
-type registrationWriteFailureSocket struct {
+func TestSenderRegistrationKeepsValidationFailuresDistinctFromSocketFailures(t *testing.T) {
+	fixture := newClientFixture(t)
+	for _, tt := range []struct {
+		name     string
+		purpose  v2.ChallengePurpose
+		key      ed25519.PrivateKey
+		cause    error
+		protocol bool
+	}{
+		{"wrong challenge purpose", v2.ChallengeStop, fixture.privateKey, v2.ErrPurpose, true},
+		{"wrong sender key", v2.ChallengeRegister, ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)), v2.ErrProof, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			socket := newScriptedSocket()
+			socket.respond(challengeFrame(t, tt.purpose))
+			_, err := DialSender(t.Context(), SenderConfig{
+				RelayBaseURL:     "https://relay.example",
+				Init:             fixture.fresh,
+				SenderPrivateKey: tt.key,
+				Descriptor:       fixture.descriptor,
+				Dial:             DialOptions{SocketDialer: socket.dial},
+			})
+			if !errors.Is(err, tt.cause) || errors.Is(err, ErrProtocol) != tt.protocol || errors.Is(err, ErrClosed) {
+				t.Fatalf("registration error = %v, want cause %v, protocol=%t", err, tt.cause, tt.protocol)
+			}
+		})
+	}
+}
+
+type writeFailureSocket struct {
 	BinarySocket
 	cause error
 }
 
-func (socket registrationWriteFailureSocket) Write(context.Context, websocket.MessageType, []byte) error {
-	// A transport can fail after a partial write; its error cannot prove absence.
+func (socket writeFailureSocket) Write(context.Context, websocket.MessageType, []byte) error {
 	return socket.cause
 }
