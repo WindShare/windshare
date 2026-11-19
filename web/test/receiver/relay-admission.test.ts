@@ -14,13 +14,18 @@ async function connection(): Promise<RelayReceiverConnection> {
     close,
   }
 }
-function policy() {
+function policy(ready = Promise.resolve()) {
   let denied = false
   const listeners = new Set<() => void>()
   const admission: RelayAdmission = {
-    prepare: async () => undefined,
-    refusal: base => denied && base === 'official' ? new RelayPolicyDeniedError() : undefined,
-    observe: listener => { listeners.add(listener); return () => { listeners.delete(listener) } },
+    watch: (base, deny) => {
+      const enforce = () => {
+        if (denied && base === 'official') deny(new RelayPolicyDeniedError())
+      }
+      listeners.add(enforce)
+      enforce()
+      return { ready, close: () => { listeners.delete(enforce) } }
+    },
   }
   return { admission, listeners, block: () => { denied = true; [...listeners].forEach(listener => listener()) } }
 }
@@ -53,10 +58,9 @@ describe('relay policy lifetime', () => {
     expect(scope.listeners.size).toBe(0)
   })
   it('cancels local cache preparation without dialing or retaining a policy listener', async () => {
-    const scope = policy(), cancel = new AbortController()
-    const admission = { ...scope.admission, prepare: () => new Promise<void>(() => undefined) }
+    const scope = policy(new Promise<void>(() => undefined)), cancel = new AbortController()
     const dial = vi.fn(connection)
-    const task = admittedRelay(admission, 'official', cancel.signal, dial)
+    const task = admittedRelay(scope.admission, 'official', cancel.signal, dial)
     cancel.abort(new Error('stopped'))
     await expect(task).rejects.toThrow('stopped')
     expect(dial).not.toHaveBeenCalled()

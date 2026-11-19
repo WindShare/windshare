@@ -18,12 +18,13 @@ export class AuthorityBlockFeed {
   readonly #cache: BlockCache
   readonly #lifetime = new AbortController()
   readonly #listeners = new Set<() => void>()
-  readonly ready: Promise<void>
+  #ready: Promise<void> | undefined
   #snapshot: BlockSnapshot | undefined
   #pendingCursor: BlockCursor | undefined
   readonly #pendingDenials = new Set<string>()
   #timer: ReturnType<typeof setTimeout> | undefined
   #pending: Promise<void> | undefined
+  #refreshAt = 0
   #sequence = 0
 
   constructor(options: FeedOptions) {
@@ -31,13 +32,19 @@ export class AuthorityBlockFeed {
     if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.hostname.endsWith('.workers.dev')) throw new TypeError('Invalid authority endpoint')
     this.#options = options
     this.#cache = options.cache ?? (!('indexedDB' in globalThis) ? new MemoryBlockCache() : new BrowserBlockCache(options.root))
-    this.ready = this.#load().catch(failure => this.#observe({ operationId: 'authority-cache', transition: 'rejected', endpoint: options.url, failure }))
-    void this.ready.then(() => this.refresh())
+  }
+  get ready(): Promise<void> {
+    this.#ready ??= this.#load().catch(failure => this.#observe({ operationId: 'authority-cache', transition: 'rejected', endpoint: this.#options.url, failure }))
+    return this.#ready
   }
   blocked(share: string): boolean { return this.#pendingDenials.has(share) || (this.#snapshot?.shares.has(share) ?? false) }
   observe(listener: () => void): () => void {
     this.#listeners.add(listener)
-    return () => { this.#listeners.delete(listener) }
+    this.#schedule()
+    return () => {
+      this.#listeners.delete(listener)
+      if (!this.#listeners.size) this.#clearTimer()
+    }
   }
   async #load(): Promise<void> {
     const cached = await this.#cache.load()
@@ -56,8 +63,28 @@ export class AuthorityBlockFeed {
     if (!this.#lifetime.signal.aborted) for (const listener of this.#listeners) listener()
   }
   refresh(): Promise<void> {
-    this.#pending ??= this.#refresh().finally(() => { this.#pending = undefined })
+    if (!this.#pending) {
+      this.#clearTimer()
+      // A refresh started by an official dial can finish even if cached policy rejects that dial.
+      this.#pending = this.#refresh().finally(() => {
+        this.#pending = undefined
+        this.#refreshAt = performance.now() + REFRESH_INTERVAL_MS
+        this.#schedule()
+      })
+    }
     return this.#pending
+  }
+  #schedule(): void {
+    if (this.#lifetime.signal.aborted || !this.#listeners.size || this.#pending || this.#timer !== undefined) return
+    // Keep the same cadence across quick reconnects and losing parallel dials.
+    const delay = this.#refreshAt - performance.now()
+    if (delay <= 0) void this.refresh()
+    else this.#timer = setTimeout(() => { void this.refresh() }, delay)
+  }
+  #clearTimer(): void {
+    if (this.#timer === undefined) return
+    clearTimeout(this.#timer)
+    this.#timer = undefined
   }
   async #refresh(): Promise<void> {
     await this.ready
@@ -96,11 +123,6 @@ export class AuthorityBlockFeed {
       this.#observe({ operationId, transition: 'rejected', endpoint: mirror, failure })
       // Another tab may have committed a newer revision during our request.
       await this.#load().catch(() => undefined)
-    } finally {
-      if (!this.#lifetime.signal.aborted) {
-        if (this.#timer !== undefined) clearTimeout(this.#timer)
-        this.#timer = setTimeout(() => { void this.refresh() }, REFRESH_INTERVAL_MS)
-      }
     }
   }
   #observe(event: AuthorityObservation): void {
@@ -108,7 +130,7 @@ export class AuthorityBlockFeed {
   }
   close(): void {
     this.#lifetime.abort()
-    if (this.#timer !== undefined) clearTimeout(this.#timer)
+    this.#clearTimer()
     this.#listeners.clear()
   }
 }

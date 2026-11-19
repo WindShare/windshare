@@ -8,9 +8,12 @@ export class RelayPolicyDeniedError extends Error {
   }
 }
 export interface RelayAdmission {
-  prepare(base: string): Promise<void>
-  refusal(base: string): Error | undefined
-  observe(listener: () => void): () => void
+  watch(base: string, deny: (reason: Error) => void): RelayAdmissionWatch
+}
+
+interface RelayAdmissionWatch {
+  readonly ready: Promise<void>
+  close(): void
 }
 
 function prepareAdmission(pending: Promise<void>, signal: AbortSignal): Promise<void> {
@@ -29,22 +32,22 @@ export async function admittedRelay(
 ): Promise<RelayReceiverConnection> {
   parent.throwIfAborted()
   if (!admission) return dial(parent)
-  await prepareAdmission(admission.prepare(base), parent)
-  parent.throwIfAborted()
-  const initial = admission.refusal(base)
-  if (initial) throw initial
   const lifetime = new AbortController()
   let relay: RelayReceiverConnection | undefined
-  const abort = () => lifetime.abort(parent.reason)
-  const stop = admission.observe(() => {
-    const refusal = admission.refusal(base)
-    if (!refusal) return
+  const watch = admission.watch(base, refusal => {
     lifetime.abort(refusal)
     void relay?.close().catch(() => undefined)
   })
+  const stop = () => {
+    lifetime.signal.removeEventListener('abort', stop)
+    watch.close()
+  }
+  lifetime.signal.addEventListener('abort', stop, { once: true })
+  const abort = () => lifetime.abort(parent.reason)
   parent.addEventListener('abort', abort, { once: true })
   if (parent.aborted) abort()
   try {
+    await prepareAdmission(watch.ready, lifetime.signal)
     lifetime.signal.throwIfAborted()
     relay = await dial(lifetime.signal)
     if (lifetime.signal.aborted) {

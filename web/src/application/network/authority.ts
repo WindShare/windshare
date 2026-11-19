@@ -3,6 +3,8 @@ import { canonicalRelayIdentity } from '../../network/relay-endpoint'
 import type { NetworkDirectory } from '../../network/directory'
 import { RelayPolicyDeniedError, type RelayAdmission } from '../../receiver/relay-admission'
 
+type RelayDirectory = Pick<NetworkDirectory, 'ready' | 'snapshot' | 'observeSnapshot'>
+
 export class OfficialRelayAuthority {
   readonly #feed: AuthorityBlockFeed
   readonly #url: string
@@ -10,18 +12,38 @@ export class OfficialRelayAuthority {
     this.#url = config.url
     this.#feed = new AuthorityBlockFeed({ ...config, ...(observe ? { observe } : {}) })
   }
-  admission(share: string, directory: NetworkDirectory): RelayAdmission {
-    // Snapshot public identity only. The capability's read secret never enters
-    // the authority client, policy cache or manual report URL.
-    const official = (base: string) => directory.snapshot?.nodes.some(node =>
-      node.identity === canonicalRelayIdentity(base)) ?? false
+  admission(share: string, directory: RelayDirectory): RelayAdmission {
+    // The capability's read secret never enters the authority client, policy cache or report URL.
     return {
-      prepare: async base => {
-        await directory.ready.catch(() => undefined)
-        if (official(base)) await this.#feed.ready
+      watch: (base, deny) => {
+        const identity = canonicalRelayIdentity(base)
+        let stopFeed: (() => void) | undefined
+        let closed = false
+        const enforce = () => {
+          if (this.#feed.blocked(share)) deny(new RelayPolicyDeniedError())
+        }
+        const classify = () => {
+          if (closed || stopFeed || !directory.snapshot?.nodes.some(node => node.identity === identity)) return
+          // An explicit endpoint may first become known while a mirror is refreshing.
+          // Once identified, keep the connection under policy for its lifetime.
+          stopFeed = this.#feed.observe(enforce)
+          enforce()
+        }
+        const stopDirectory = directory.observeSnapshot(classify)
+        const ready = directory.ready.catch(() => undefined).then(() => {
+          classify()
+          if (stopFeed) return this.#feed.ready
+        })
+        return {
+          ready,
+          close: () => {
+            if (closed) return
+            closed = true
+            stopDirectory()
+            stopFeed?.()
+          },
+        }
       },
-      refusal: base => official(base) && this.#feed.blocked(share) ? new RelayPolicyDeniedError() : undefined,
-      observe: listener => this.#feed.observe(listener),
     }
   }
   reportURL(share: string): string {

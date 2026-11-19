@@ -39,6 +39,7 @@ export class NetworkDirectory {
   readonly #initialized: Promise<DirectoryCache>
   readonly #now: () => number
   readonly #lifetime = new AbortController()
+  readonly #snapshotListeners = new Set<() => void>()
   readonly ready: Promise<void>
   #snapshot: NetworkSnapshot | undefined
   #pending: Promise<void> | undefined
@@ -57,6 +58,11 @@ export class NetworkDirectory {
   }
 
   get snapshot(): NetworkSnapshot | undefined { return usableDirectory(this.#snapshot, this.#now()) ? this.#snapshot : undefined }
+
+  observeSnapshot(listener: () => void): () => void {
+    this.#snapshotListeners.add(listener)
+    return () => { this.#snapshotListeners.delete(listener) }
+  }
 
   async #initialize(): Promise<DirectoryCache> {
     const provided = this.#options.cache
@@ -106,10 +112,7 @@ export class NetworkDirectory {
         if (!usableDirectory(next, this.#now())) throw new Error('Network directory expired')
         rejectRollback(this.#snapshot?.cursor, next.cursor)
         await cache.commit(next)
-        this.#snapshot = next
-        this.#failures = 0
-        this.#schedule(REFRESH_INTERVAL_MS)
-        this.#observe({ operationId, transition: 'accepted', mirror, generation: next.cursor.generation, serial: next.cursor.serial, trustedUntil: next.trustedUntil })
+        this.#accept(next, operationId, mirror)
         return
       } catch (failure) {
         last = failure
@@ -124,6 +127,16 @@ export class NetworkDirectory {
     throw last
   }
 
+  #accept(snapshot: NetworkSnapshot, operationId: string, mirror: string): void {
+    this.#snapshot = snapshot
+    this.#failures = 0
+    this.#schedule(REFRESH_INTERVAL_MS)
+    this.#observe({ operationId, transition: 'accepted', mirror, generation: snapshot.cursor.generation, serial: snapshot.cursor.serial, trustedUntil: snapshot.trustedUntil })
+    for (const listener of this.#snapshotListeners) {
+      try { listener() } catch { /* Consumers cannot revoke a committed directory. */ }
+    }
+  }
+
   #observe(event: DirectoryObservation): void {
     try { this.#options.observe?.(event) } catch { /* Diagnostics cannot revoke a committed trust update. */ }
   }
@@ -136,6 +149,7 @@ export class NetworkDirectory {
   close(): void {
     this.#lifetime.abort()
     if (this.#timer !== undefined) clearTimeout(this.#timer)
+    this.#snapshotListeners.clear()
   }
 }
 
