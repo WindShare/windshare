@@ -189,14 +189,19 @@ impl<R: Store, E: Environment> Authority<R, E> {
         let owner = Owner::Registration(source);
         let current = |proof: &Proof| proof.method.mode() == mode && proof.id == id;
         let verified = self.redeem_proof(&owner, solution, current)?;
-        // A mistyped email code leaves its challenge redeemable. Say so, as profile
-        // verification does, instead of prompting for an email the client already has.
+        // A mistyped email code leaves its challenge redeemable. Prompt with that same
+        // challenge rather than an id-less one, so the client keeps the delivered email.
+        // Every client already handles this 428 shape; the attempt above is already saved.
         if verified.is_none()
             && mode == RegistrationMode::Email
-            && load::<Proof>(&self.store, &owner.key())?
-                .is_some_and(|proof| current(&proof) && proof.live(self.environment.now()))
+            && let Some(proof) = load::<Proof>(&self.store, &owner.key())?
+            && current(&proof)
+            && proof.live(self.environment.now())
         {
-            return Err(Fault::EmailCodeRejected.into());
+            return Err(Fault::Verification {
+                challenge: proof.challenge(),
+            }
+            .into());
         }
         Ok(verified)
     }

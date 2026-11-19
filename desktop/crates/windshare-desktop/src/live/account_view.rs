@@ -172,7 +172,10 @@ impl Desktop {
                         "email_delivery_unavailable" => Text::EmailDeliveryUnavailable,
                         "account_changed" => Text::AccountChanged,
                         "account_denied" => Text::AccountDenied,
-                        "email_code_rejected" => self.account_form.page.email_code_rejection(view),
+                        "email_code_rejected" => self
+                            .account_form
+                            .page
+                            .email_code_rejection(view.status.email_code_pending),
                         "rate_limited" => Text::AccountRateLimited,
                         "invalid_account_input" => Text::InvalidAccountInput,
                         "account_service_unreachable" => Text::AccountUnavailable,

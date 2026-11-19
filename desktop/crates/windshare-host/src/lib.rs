@@ -1,8 +1,7 @@
 mod abi;
 mod account;
 pub use account::{
-    AccountCommand, AccountOutcome, AccountProfile, AccountState, AccountStatus, AccountView,
-    Allowance,
+    AccountCommand, AccountOutcome, AccountState, AccountStatus, AccountView, Allowance,
 };
 mod admission;
 mod connection;

@@ -10,7 +10,7 @@ import (
 
 var (
 	errEmailCodeRejected = errors.New("verification code is invalid or expired; request a new verification email")
-	// errEmailCodeIncorrect reports a mistyped code whose challenge the authority kept for another attempt.
+	// errEmailCodeIncorrect reports a mistyped code whose still-live challenge the authority returned for another attempt.
 	errEmailCodeIncorrect = errors.New("verification code is incorrect; check it and try again")
 )
 
@@ -154,12 +154,14 @@ func (service *Service) VerifyEmail(ctx context.Context, code string) error {
 	proof := *previous.Proof
 	proof.Solution = code
 	challenge, err := service.submitRegistration(ctx, previous, &proof)
-	if remote, ok := errors.AsType[*fault](err); ok && remote.Kind == "email_code_rejected" {
-		// The authority kept the delivered challenge, so the saved proof stays for another attempt.
-		return errEmailCodeIncorrect
-	}
 	if err != nil || challenge == nil {
 		return err
+	}
+	if challenge.Mode == emailChallenge && challenge.ID == proof.Challenge.ID {
+		// The authority prompted with the challenge we submitted: the code was wrong but is
+		// still live. submitRegistration saved it without the code, so nothing resubmits it.
+		service.transition(EmailRequired, "", time.Time{})
+		return errEmailCodeIncorrect
 	}
 	slog.Debug("account_email_verification_challenge_replaced", "challenge_id", proof.Challenge.ID, "next_mode", challenge.Mode)
 	service.transition(challenge.requiredState(), "", time.Time{})
