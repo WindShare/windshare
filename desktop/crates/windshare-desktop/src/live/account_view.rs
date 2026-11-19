@@ -15,10 +15,10 @@ use windshare_ui::{ButtonStyle, Icon, Input, Theme, Tone, column, row};
 fn status(view: &AccountView, locale: Language) -> String {
     let value = &view.status;
     let text = match value.state {
-        AccountState::PendingSetup if !value.account.is_empty() => Text::AccountRefreshing,
         AccountState::PendingSetup | AccountState::RegistrationRequired => Text::AccountDormant,
         AccountState::Registering { .. } => Text::AccountSetup,
         AccountState::EmailRequired => Text::AccountEmailNeeded,
+        AccountState::RefreshRequired => Text::AccountRefreshRequired,
         AccountState::Refreshing => Text::AccountRefreshing,
         AccountState::TemporarilyUnavailable => Text::AccountUnavailable,
         AccountState::Denied => Text::AccountDenied,

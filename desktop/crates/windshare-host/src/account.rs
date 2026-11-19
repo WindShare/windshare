@@ -111,6 +111,7 @@ pub enum AccountState {
     },
     EmailRequired,
     Ready,
+    RefreshRequired,
     Refreshing,
     TemporarilyUnavailable,
     Denied,

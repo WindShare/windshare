@@ -376,11 +376,15 @@ impl Desktop {
             return;
         };
         let page = AccountPage::entry(view).0;
+        let needs_sync = page == AccountPage::Overview && !view.status.active;
         self.open_overlay(Overlay::Account, window, cx);
         if self.account_form.pending.is_none()
             && !(page == AccountPage::Registration && self.account_form.page() == page)
         {
             self.set_account_page(page, window, cx);
+        }
+        if needs_sync && let Runtime::Native(session) = &self.runtime {
+            session.controller.start_account_sync();
         }
     }
 

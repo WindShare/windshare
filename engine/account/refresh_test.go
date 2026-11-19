@@ -10,6 +10,104 @@ import (
 	"time"
 )
 
+func TestOpeningExistingAccountRenewsExpiredTicketAndPreservesBackoff(t *testing.T) {
+	config, initial := accountFixture(t)
+	synctest.Test(t, func(t *testing.T) {
+		issuedAt, start := config.Now(), time.Now()
+		config.Now = func() time.Time { return issuedAt.Add(time.Since(start)) }
+		config.Store = &MemoryStore{record: cachedRecord(initial)}
+		release := make(chan struct{})
+		var requests atomic.Int32
+		config.Client = clientFunc(func(request *http.Request) (*http.Response, error) {
+			if request.URL.Path != "/v1/accounts/ticket" {
+				t.Errorf("unexpected route %s", request.URL.Path)
+			}
+			requests.Add(1)
+			select {
+			case <-release:
+			case <-request.Context().Done():
+				return nil, request.Context().Err()
+			}
+			return accountReply(t, http.StatusTooManyRequests, fault{
+				Kind: "rate_limited", RetryAfter: uint64(RefreshInterval.Seconds()),
+			}), nil
+		})
+
+		idle := testService(t, config)
+		time.Sleep(time.Unix(int64(initial.ExpiresAt), 0).Sub(issuedAt))
+		service := testService(t, config)
+		for _, candidate := range []*Service{idle, service} {
+			snapshot, _ := candidate.Snapshot()
+			if snapshot.State != RefreshRequired || snapshot.Active || snapshot.Account == "" {
+				t.Fatalf("expired cached ticket should be waiting for renewal: %+v", snapshot)
+			}
+		}
+		if got := requests.Load(); got != 0 {
+			t.Fatalf("reading expired account sent %d requests", got)
+		}
+
+		service.StartRenewal()
+		service.StartRenewal()
+		synctest.Wait()
+		snapshot, _ := service.Snapshot()
+		if got := requests.Load(); got != 1 || !snapshot.Active || snapshot.State != Refreshing {
+			t.Fatalf("renewal in flight: requests=%d snapshot=%+v", got, snapshot)
+		}
+
+		close(release)
+		synctest.Wait()
+		snapshot, _ = service.Snapshot()
+		if snapshot.State != Unavailable || !snapshot.RetryAt.After(config.Now()) {
+			t.Fatalf("failed renewal did not publish a retry deadline: %+v", snapshot)
+		}
+
+		service.StartRenewal()
+		time.Sleep(PollInterval)
+		synctest.Wait()
+		if got := requests.Load(); got != 1 {
+			t.Fatalf("reopening bypassed refresh backoff: %d requests", got)
+		}
+	})
+}
+
+func TestRenewalDoesNotSetUpAnAccountWhenTheStoreIsCleared(t *testing.T) {
+	config, initial := accountFixture(t)
+	synctest.Test(t, func(t *testing.T) {
+		config.Store = &MemoryStore{record: cachedRecord(initial)}
+		var requests atomic.Int32
+		config.Client = clientFunc(func(request *http.Request) (*http.Response, error) {
+			if request.URL.Path != "/v1/accounts" {
+				t.Errorf("unexpected route %s", request.URL.Path)
+			}
+			requests.Add(1)
+			return accountReply(t, http.StatusServiceUnavailable, fault{}), nil
+		})
+		service := testService(t, config)
+		service.StartRenewal()
+		synctest.Wait()
+		if _, err := config.Store.Update(t.Context(), func(Record) (Record, error) { return Record{}, nil }); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(PollInterval)
+		synctest.Wait()
+		snapshot, _ := service.Snapshot()
+		if got := requests.Load(); got != 0 || snapshot.State != Pending || snapshot.Account != "" {
+			t.Fatalf("renewal should only observe an empty store: requests=%d snapshot=%+v", got, snapshot)
+		}
+		empty := testService(t, config)
+		empty.StartRenewal()
+		if snapshot, _ := empty.Snapshot(); snapshot.Active {
+			t.Fatal("opened an account worker without a saved account")
+		}
+
+		service.Start()
+		synctest.Wait()
+		if got := requests.Load(); got != 1 {
+			t.Fatalf("official use did not wake the existing worker for setup: %d requests", got)
+		}
+	})
+}
+
 func TestSharedTicketSatisfiesBackgroundRefresh(t *testing.T) {
 	config, initial := accountFixture(t)
 	data, err := os.ReadFile("../../testdata/network/authority.json")

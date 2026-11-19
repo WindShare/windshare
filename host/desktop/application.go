@@ -30,6 +30,7 @@ type shareTask interface {
 
 type accountService interface {
 	Snapshot() (account.Snapshot, <-chan struct{})
+	StartRenewal()
 	Retry()
 	Register(context.Context) error
 	Login(context.Context, string, string) error
@@ -151,6 +152,8 @@ func (a *Application) execute(request Request) Message {
 	switch request.Command {
 	case "account":
 		err = a.accountCommand(request)
+	case "start_account_sync":
+		err = a.startAccountSync()
 	case "create":
 		err = a.create(request)
 	case "repeat":

@@ -68,6 +68,7 @@ messages! {
     AccountRequestAnother => ("Request a new code", "重新获取验证码"),
     EnterExistingCode => ("Enter a code I already have", "输入已有验证码"),
     BackToAccount => ("Back to account", "返回账号"),
+    AccountRefreshRequired => ("Official relay access needs renewal.", "官方中转授权待更新。"),
     AccountRefreshing => ("Refreshing official relay access…", "正在更新官方中转授权…"),
     AccountUnavailable => ("The official relay account service is unavailable.", "官方中转账号服务暂时无法连接。"),
     AccountDenied => ("This device was denied access to the official relay.", "这台设备的官方中转授权已被拒绝。"),

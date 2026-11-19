@@ -92,12 +92,20 @@ func (service *Service) usableTicket(record Record, now time.Time) (serviceautho
 	if record.Credential == nil || record.Denial != "" {
 		return serviceauthority.Ticket{}, false
 	}
+	ticket, err := service.verifyTicket(record, now.Add(TicketMargin))
+	return ticket, err == nil && record.ownsTicket(ticket)
+}
+
+func (service *Service) verifyTicket(record Record, now time.Time) (serviceauthority.Ticket, error) {
 	generation, err := serviceauthority.VerifyGeneration(record.Certificate, service.config.Root)
 	if err != nil {
-		return serviceauthority.Ticket{}, false
+		return serviceauthority.Ticket{}, err
 	}
-	ticket, err := serviceauthority.VerifyTicket(record.Ticket, generation, now.Add(TicketMargin))
-	return ticket, err == nil && ticket.Account == record.Credential.Account && ticket.Credential == record.Credential.ID
+	return serviceauthority.VerifyTicket(record.Ticket, generation, now)
+}
+
+func (record Record) ownsTicket(ticket serviceauthority.Ticket) bool {
+	return record.Credential != nil && ticket.Account == record.Credential.Account && ticket.Credential == record.Credential.ID
 }
 
 func sameIdentity(a, b Record) bool {

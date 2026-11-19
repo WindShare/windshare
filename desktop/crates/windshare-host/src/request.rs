@@ -8,6 +8,7 @@ mod tests;
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum Command {
     Preferences,
+    StartAccountSync,
     Account {
         operation_id: String,
         account: crate::AccountCommand,
@@ -93,6 +94,7 @@ impl Command {
         let mut fields = CommandLog::default();
         let command = match self {
             Self::Preferences => "preferences",
+            Self::StartAccountSync => "start_account_sync",
             Self::Account {
                 operation_id,
                 account,

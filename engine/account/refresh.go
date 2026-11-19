@@ -8,6 +8,49 @@ import (
 	"time"
 )
 
+type refreshScope uint8
+
+const (
+	refreshInactive refreshScope = iota
+	refreshExisting
+	refreshWithSetup
+)
+
+func (service *Service) startRefreshLocked(scope refreshScope) {
+	previous := service.refreshScope
+	if service.ctx.Err() != nil || scope <= previous {
+		return
+	}
+	service.refreshScope = scope
+	slog.Debug("account_refresh_activated", "automatic_setup", scope == refreshWithSetup, "worker_started", previous == refreshInactive)
+	if previous == refreshInactive {
+		service.notifyLocked()
+		service.workers.Go(service.run)
+	} else {
+		// A share may need setup after the renewal worker found the store empty.
+		service.wakeRefreshLocked()
+	}
+}
+
+func (service *Service) wakeRefreshLocked() {
+	select {
+	case service.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (service *Service) refreshRequest() (refreshScope, bool) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	select {
+	case <-service.wake:
+	default:
+	}
+	requested := service.retryRequested
+	service.retryRequested = false
+	return service.refreshScope, requested
+}
+
 type refreshSchedule struct {
 	observed Record
 	next     time.Time
@@ -16,25 +59,20 @@ type refreshSchedule struct {
 
 func (service *Service) run() {
 	schedule := refreshSchedule{retry: MinimumRetry}
-	requested := false
 	for service.lockOperation(service.ctx) == nil {
-		// A retry can already be queued when the worker starts or the timer fires.
-		select {
-		case <-service.wake:
-			requested = true
-		default:
-		}
-		service.pollLocked(service.ctx, &schedule, requested)
+		service.pollLocked(service.ctx, &schedule)
 		<-service.operation
-		requested = false
-		timer := time.NewTimer(min(PollInterval, max(MinimumRetry, schedule.next.Sub(service.config.Now()))))
+		delay := PollInterval
+		if !schedule.next.IsZero() {
+			delay = min(PollInterval, max(MinimumRetry, schedule.next.Sub(service.config.Now())))
+		}
+		timer := time.NewTimer(delay)
 		select {
 		case <-service.ctx.Done():
 			timer.Stop()
 			return
 		case <-service.wake:
 			timer.Stop()
-			requested = true
 		case <-timer.C:
 		}
 	}
@@ -42,9 +80,21 @@ func (service *Service) run() {
 
 // The command lock spans the failure transition so a late poll cannot
 // replace a newer interactive registration state.
-func (service *Service) pollLocked(ctx context.Context, schedule *refreshSchedule, requested bool) {
-	record, err := service.syncRecord(ctx)
+func (service *Service) pollLocked(ctx context.Context, schedule *refreshSchedule) {
+	scope, requested := service.refreshRequest()
+	read := service.load
+	if scope == refreshWithSetup {
+		read = service.loadOrInitialize
+	}
+	record, err := service.syncSelection(ctx, read, nil)
 	if err == nil {
+		if scope == refreshExisting && record.Credential == nil {
+			if !schedule.next.IsZero() {
+				service.transition(Pending, "", time.Time{})
+			}
+			*schedule = refreshSchedule{retry: MinimumRetry}
+			return
+		}
 		now := service.config.Now()
 		service.observeRefresh(schedule, record, now)
 		if !requested && now.Before(schedule.next) {

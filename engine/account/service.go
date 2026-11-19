@@ -11,8 +11,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/windshare/windshare/core/serviceauthority"
 )
 
 var ErrNotConfigured = errors.New("official account service is not configured")
@@ -26,7 +24,7 @@ type Service struct {
 	operation            chan struct{}
 	local                chan struct{}
 	record               Record
-	active               bool
+	refreshScope         refreshScope
 	unconfirmedShares    map[*ShareAuthorization]struct{}
 	credentials          map[[16]byte]*credentialSession
 	credentialDenials    map[[16]byte]string
@@ -37,7 +35,7 @@ type Service struct {
 	retryAt              time.Time
 	changed              chan struct{}
 	wake                 chan struct{}
-	start                sync.Once
+	retryRequested       bool
 	workers              sync.WaitGroup
 	nodes                map[string]*nodeState
 }
@@ -76,7 +74,9 @@ func New(config Config) (*Service, error) {
 		service.state, service.reason = Denied, record.Denial
 	case service.validTicket(record):
 		service.state = Ready
-	case record.Credential == nil && record.Proof != nil:
+	case record.Credential != nil:
+		service.state = RefreshRequired
+	case record.Proof != nil:
 		service.state = record.Proof.Challenge.requiredState()
 	}
 	return service, nil
@@ -101,20 +101,23 @@ func acquire(ctx context.Context, gate chan<- struct{}) error {
 	}
 }
 
+// Start enables account maintenance and automatic setup for official use.
 func (service *Service) Start() {
 	if service == nil {
 		return
 	}
-	service.start.Do(func() {
-		service.mu.Lock()
-		defer service.mu.Unlock()
-		if service.ctx.Err() != nil {
-			return
-		}
-		service.active = true
-		service.notifyLocked()
-		service.workers.Go(service.run)
-	})
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	service.startRefreshLocked(refreshWithSetup)
+}
+
+// StartRenewal lets the account page keep an existing account current.
+func (service *Service) StartRenewal() {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if service.record.Credential != nil && service.record.Denial == "" {
+		service.startRefreshLocked(refreshExisting)
+	}
 }
 
 func (service *Service) Close() {
@@ -131,11 +134,11 @@ func (service *Service) Retry() {
 	if service == nil {
 		return
 	}
-	select {
-	case service.wake <- struct{}{}:
-	default:
-	}
-	service.Start()
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	service.startRefreshLocked(refreshWithSetup)
+	service.retryRequested = true
+	service.wakeRefreshLocked()
 }
 
 func (service *Service) notifyLocked() {
@@ -147,7 +150,7 @@ func (service *Service) Snapshot() (Snapshot, <-chan struct{}) {
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	now := service.config.Now()
-	value := Snapshot{Active: service.active, State: service.state, Allowance: service.record.Entitlement.Allowance(now),
+	value := Snapshot{Active: service.refreshScope != refreshInactive, State: service.state, Allowance: service.record.Entitlement.Allowance(now),
 		RemainingBytes: service.record.Entitlement.RemainingBytes, ResetAt: service.record.Entitlement.ResetAt(),
 		ValidUntil: time.Unix(int64(service.record.Entitlement.ValidUntil), 0), RetryAt: service.retryAt,
 		RegistrationPermille: service.registrationPermille, Reason: service.reason}
@@ -155,7 +158,8 @@ func (service *Service) Snapshot() (Snapshot, <-chan struct{}) {
 	if proof := service.record.Proof; proof != nil {
 		value.EmailCodePending = proof.Challenge.hasEmailCode(now)
 	}
-	if credential := service.record.Credential; credential != nil {
+	credential := service.record.Credential
+	if credential != nil {
 		value.Account = base64.RawURLEncoding.EncodeToString(credential.Account[:])
 		value.Credential = base64.RawURLEncoding.EncodeToString(credential.ID[:])
 		value.Username = credential.Username
@@ -164,9 +168,20 @@ func (service *Service) Snapshot() (Snapshot, <-chan struct{}) {
 			value.PendingEmail = pending
 		}
 	}
-	if generation, err := serviceauthority.VerifyGeneration(service.record.Certificate, service.config.Root); err == nil {
-		if ticket, err := serviceauthority.VerifyTicket(service.record.Ticket, generation, now); err == nil {
-			value.TicketExpires = time.Unix(int64(ticket.ExpiresAt), 0)
+	ticket, err := service.verifyTicket(service.record, now)
+	if err == nil {
+		value.TicketExpires = time.Unix(int64(ticket.ExpiresAt), 0)
+	}
+	// Cached authorization can age without a worker transition.
+	switch value.State {
+	case Pending, Ready, RefreshRequired:
+		switch {
+		case credential == nil:
+			value.State = Pending
+		case service.record.ownsTicket(ticket) && value.TicketExpires.After(now.Add(TicketMargin)):
+			value.State = Ready
+		default:
+			value.State = RefreshRequired
 		}
 	}
 	return value, service.changed

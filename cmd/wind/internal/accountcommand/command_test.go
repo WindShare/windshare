@@ -119,7 +119,7 @@ func TestAccountCommandsRejectInvalidInputBeforeMutation(t *testing.T) {
 }
 
 func TestAccountRetryHonorsCancellationAndExplicitDenial(t *testing.T) {
-	for _, state := range []account.State{account.Pending, account.Registering, account.Refreshing, account.Unavailable, account.Denied} {
+	for _, state := range []account.State{account.Pending, account.Registering, account.RefreshRequired, account.Refreshing, account.Unavailable, account.Denied} {
 		t.Run(string(state), func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -149,7 +149,7 @@ func TestAccountStatusAndErrors(t *testing.T) {
 	if code := (Runner{Output: output}).Run(context.Background(), nil); code != ResultFailure {
 		t.Fatal("unconfigured service accepted")
 	}
-	service := &commandService{value: account.Snapshot{State: account.Pending, Account: "account", Credential: "credential"}}
+	service := &commandService{value: account.Snapshot{State: account.RefreshRequired, Account: "account", Credential: "credential"}}
 	var encoded bytes.Buffer
 	runner := Runner{Service: service, Output: output, JSONOutput: &encoded}
 	if code := runner.Run(context.Background(), []string{"status", "--json"}); code != ResultOK {

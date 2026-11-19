@@ -11,6 +11,7 @@ import (
 
 type controlledAccount struct {
 	started  chan struct{}
+	renewals int
 	changed  chan struct{}
 	calls    atomic.Int32
 	finished atomic.Bool
@@ -19,6 +20,7 @@ type controlledAccount struct {
 func (service *controlledAccount) Snapshot() (account.Snapshot, <-chan struct{}) {
 	return account.Snapshot{State: account.Pending}, service.changed
 }
+func (service *controlledAccount) StartRenewal()          { service.renewals++ }
 func (*controlledAccount) Retry()                         {}
 func (*controlledAccount) Register(context.Context) error { return nil }
 func (service *controlledAccount) Login(ctx context.Context, _, _ string) error {
@@ -37,6 +39,22 @@ func (*controlledAccount) ConfirmProfileEmail(context.Context, string, string, s
 func (*controlledAccount) RequestEmail(context.Context, string) error       { return nil }
 func (*controlledAccount) VerifyEmail(context.Context, string) error        { return nil }
 func (*controlledAccount) RevokeCredential(context.Context, [16]byte) error { return nil }
+
+func TestAccountSyncStartsRenewalWithoutAnInteractiveOperation(t *testing.T) {
+	service := &controlledAccount{changed: make(chan struct{})}
+	app := newApplication("test", dependencies{
+		accounts: service, log: func(string, any) {}, close: func(context.Context) error { return nil },
+	})
+	t.Cleanup(func() { _ = app.close() })
+
+	if result := app.execute(Request{Command: "list"}); result.Error != nil || service.renewals != 0 {
+		t.Fatal("reading a snapshot started account renewal")
+	}
+	result := app.execute(Request{ID: "1", Command: "start_account_sync"})
+	if result.Error != nil || service.renewals != 1 || result.Snapshot.Account.Operation != nil {
+		t.Fatalf("account sync was not accepted independently of the form: %+v", result)
+	}
+}
 
 // The desktop may only observe the final snapshot, including when two submissions have the same outcome.
 func TestAccountCompletionIdentifiesItsSubmission(t *testing.T) {

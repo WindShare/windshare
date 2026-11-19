@@ -46,6 +46,7 @@ const (
 	Registering          State = "registering"
 	EmailRequired        State = "email_required"
 	Ready                State = "ready"
+	RefreshRequired      State = "refresh_required"
 	Refreshing           State = "refreshing"
 	Unavailable          State = "temporarily_unavailable"
 	Denied               State = "denied"

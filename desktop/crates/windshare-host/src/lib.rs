@@ -144,6 +144,10 @@ impl Controller {
         format!("{kind}:{sequence}")
     }
 
+    pub fn start_account_sync(&self) {
+        self.command(Command::StartAccountSync);
+    }
+
     pub fn account(&self, account: AccountCommand) -> Option<String> {
         let id = self.operation_id("account");
         self.command(Command::Account {

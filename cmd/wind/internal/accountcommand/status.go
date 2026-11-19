@@ -25,6 +25,8 @@ func Describe(value account.Snapshot) string {
 			return "To create an official relay account, run wind account register."
 		}
 		return "Setting up official-service access…"
+	case account.RefreshRequired:
+		return "Official-service access needs renewal. Run wind account retry to renew now."
 	case account.Refreshing:
 		return "Refreshing account access…"
 	case account.Unavailable:

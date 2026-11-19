@@ -72,6 +72,17 @@ func (a *Application) watchAccount() {
 		}
 	})
 }
+func (a *Application) startAccountSync() error {
+	if a.closing {
+		return engine.ErrClosed
+	}
+	if a.deps.accounts == nil {
+		return account.ErrNotConfigured
+	}
+	a.deps.accounts.StartRenewal()
+	return nil
+}
+
 func (a *Application) accountCommand(request Request) error {
 	if a.closing {
 		return engine.ErrClosed
