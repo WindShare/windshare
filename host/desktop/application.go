@@ -147,9 +147,6 @@ func (a *Application) execute(request Request) Message {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if request.Command != "list" && request.Command != "query" && request.Command != "account" {
-		a.deps.log("host.request", request)
-	}
 	var err error
 	switch request.Command {
 	case "account":
@@ -179,7 +176,11 @@ func (a *Application) execute(request Request) Message {
 	reply := Message{Version: ProtocolVersion, ID: request.ID}
 	if err != nil {
 		reply.Error = failure("request_rejected", err)
-	} else {
+	}
+	if request.Command != "list" && request.Command != "query" {
+		a.logRequestResult(request, reply.Error)
+	}
+	if err == nil {
 		snapshot := a.snapshotLocked()
 		reply.Snapshot = &snapshot
 	}

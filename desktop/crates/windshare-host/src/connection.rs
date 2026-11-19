@@ -148,8 +148,7 @@ fn pump(
                 id: sequence.to_string(),
                 command,
             };
-            tracing::info!(event = "desktop.host_request", session_id = %endpoint.session_id,
-                request_id = %request.id, command = ?request.command);
+            request.log_submission(&endpoint.session_id);
             // Numeric ordering preserves command order when reconnecting after
             // the tenth request; a lost reply reuses the original operation.
             pending.insert(*sequence, request);

@@ -105,7 +105,6 @@ func (a *Application) accountCommand(request Request) error {
 	view.Operation = &AccountOperation{ID: request.OperationID, State: "running"}
 	a.accountView = &view
 	input := *request.Account
-	a.deps.log("host.account_operation", map[string]string{"request_id": request.ID, "operation_id": request.OperationID, "action": input.Action})
 	a.work.Go(func() {
 		err := a.runAccountCommand(input)
 		a.mu.Lock()
@@ -117,7 +116,11 @@ func (a *Application) accountCommand(request Request) error {
 			result.State, result.Error = "failed", failure(account.CommandErrorCode(err), err)
 		}
 		a.accountView.Operation = result
-		a.deps.log("host.account_completed", map[string]string{"operation_id": request.OperationID, "action": input.Action, "state": result.State})
+		fields := map[string]string{"operation_id": request.OperationID, "action": input.Action, "state": result.State}
+		if result.Error != nil {
+			fields["error_code"] = result.Error.Code
+		}
+		a.deps.log("host.account_completed", fields)
 		a.snapshotLocked()
 	})
 	return nil

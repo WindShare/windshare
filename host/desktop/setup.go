@@ -143,7 +143,7 @@ func (a *Application) runSetup(ctx context.Context, input SetupInput) {
 	} else {
 		a.setup.State = "finished"
 	}
-	a.deps.log("host.setup_completed", a.setup)
+	a.logSetupResult("host.setup_completed")
 	if err == nil {
 		for _, pending := range a.operations {
 			if waitingForAdmission(pending.phase) {

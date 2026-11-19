@@ -123,7 +123,7 @@ pub enum Allowance {
     Stale,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum AccountCommand {
     Register,
@@ -158,4 +158,21 @@ pub enum AccountCommand {
     Revoke {
         credential: String,
     },
+}
+
+impl AccountCommand {
+    pub(crate) const fn action(&self) -> &'static str {
+        match self {
+            Self::Register => "register",
+            Self::Retry => "retry",
+            Self::Login { .. } => "login",
+            Self::Password { .. } => "password",
+            Self::Nickname { .. } => "nickname",
+            Self::RequestProfileEmail { .. } => "request_profile_email",
+            Self::ConfirmProfileEmail { .. } => "confirm_profile_email",
+            Self::Email { .. } => "email",
+            Self::Verify { .. } => "verify",
+            Self::Revoke { .. } => "revoke",
+        }
+    }
 }

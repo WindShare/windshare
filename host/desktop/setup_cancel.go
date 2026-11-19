@@ -65,6 +65,6 @@ func (a *Application) finishSetupCancellation() {
 		a.setup.Recovery = relaysetup.RecoveryRetryCancel
 		a.setup.Error = failure("setup_cancel_failed", err)
 	}
-	a.deps.log("host.setup_cancelled", a.setup)
+	a.logSetupResult("host.setup_cancelled")
 	a.snapshotLocked()
 }
