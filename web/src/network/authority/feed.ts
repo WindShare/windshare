@@ -1,11 +1,11 @@
 import { concatBytes } from '../../crypto/bytes'
-import { BrowserBlockCache, MemoryBlockCache, type BlockCache } from './cache'
+import { BlockCacheAccessDeniedError, BrowserBlockCache, MemoryBlockCache, type BlockCache } from './cache'
 import { freshBlocks, MAX_BLOCK_ENVELOPE_BYTES, rejectBlockRollback, verifyBlocks, type BlockCursor, type BlockSnapshot } from './blocks'
 
 const REFRESH_INTERVAL_MS = 60_000
 const REFRESH_TIMEOUT_MS = 8_000
 export interface AuthorityObservation {
-  readonly operationId: string; readonly transition: 'accepted' | 'rejected'; readonly endpoint: string
+  readonly operationId: string; readonly transition: 'accepted' | 'rejected' | 'storage_fallback'; readonly endpoint: string
   readonly generation?: number; readonly version?: number; readonly failure?: unknown
 }
 export interface AuthorityConfig { readonly url: string; readonly root: string }
@@ -15,7 +15,7 @@ interface FeedOptions extends AuthorityConfig {
 }
 export class AuthorityBlockFeed {
   readonly #options: FeedOptions
-  readonly #cache: BlockCache
+  #cache: BlockCache
   readonly #lifetime = new AbortController()
   readonly #listeners = new Set<() => void>()
   #ready: Promise<void> | undefined
@@ -34,7 +34,13 @@ export class AuthorityBlockFeed {
     this.#cache = options.cache ?? (!('indexedDB' in globalThis) ? new MemoryBlockCache() : new BrowserBlockCache(options.root))
   }
   get ready(): Promise<void> {
-    this.#ready ??= this.#load().catch(failure => this.#observe({ operationId: 'authority-cache', transition: 'rejected', endpoint: this.#options.url, failure }))
+    this.#ready ??= this.#load().catch((failure: unknown) => {
+      const denied = this.#options.cache === undefined && failure instanceof BlockCacheAccessDeniedError
+      // The first open decides whether the page has access to shared revision history.
+      if (denied) this.#cache = new MemoryBlockCache()
+      this.#observe({ operationId: 'authority-cache', transition: denied ? 'storage_fallback' : 'rejected',
+        endpoint: this.#options.url, failure })
+    })
     return this.#ready
   }
   blocked(share: string): boolean { return this.#pendingDenials.has(share) || (this.#snapshot?.shares.has(share) ?? false) }

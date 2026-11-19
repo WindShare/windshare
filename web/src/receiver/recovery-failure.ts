@@ -59,6 +59,16 @@ export class RelayCooldownError extends Error {
   }
 }
 
+export class AllRelaysRestrictedError extends Error {
+  readonly retry: RecoveryRetry
+
+  constructor(retryAt: number, cause: unknown) {
+    super('Official relay access is restricted for this share', { cause })
+    this.name = 'AllRelaysRestrictedError'
+    this.retry = { retryAt, reason: 'authorization' }
+  }
+}
+
 export function latestRecoveryRetry(first: RecoveryRetry | undefined, second: RecoveryRetry | undefined): RecoveryRetry | undefined {
   return first === undefined || (second !== undefined && second.retryAt > first.retryAt) ? second : first
 }
@@ -66,7 +76,7 @@ export function latestRecoveryRetry(first: RecoveryRetry | undefined, second: Re
 export function recoveryRetry(error: unknown, now: number, depth = 0): RecoveryRetry | undefined {
   // A relay race delegates endpoint-scoped waits to the owner of its candidates.
   if (depth >= 8 || error instanceof RelayEndpointFailure) return undefined
-  if (error instanceof RelayCooldownError) return error.retry
+  if (error instanceof RelayCooldownError || error instanceof AllRelaysRestrictedError) return error.retry
   if (error instanceof RelayPolicyDeniedError) return { retryAt: now + RELAY_POLICY_RETRY_MS, reason: 'authorization' }
   if (error instanceof BandwidthWaitError) return { retryAt: now + error.retryAfterMilliseconds, reason: 'bandwidth' }
   if (error instanceof AggregateError) {

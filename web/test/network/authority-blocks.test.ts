@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import fixture from '../../../testdata/network/authority.json'
 import { concatBytes, decodeBase64Url, encodeBase64Url } from '../../src/crypto/bytes'
@@ -112,6 +112,56 @@ describe('official authority blocks', () => {
       expect(feed.blocked(shareId)).toBe(false)
     } finally { feed.close() }
   })
+  it('uses a page-local revision barrier when the initial IndexedDB open is denied', async () => {
+    const open = vi.fn(() => { throw new DOMException('Storage denied', 'SecurityError') })
+    vi.stubGlobal('indexedDB', { open })
+    let response = envelope(3)
+    const observe = vi.fn()
+    const feed = new AuthorityBlockFeed({
+      url: 'https://authority.example', root: fixture.root, now: () => fixture.now * 1000,
+      request: async () => new Response(response), observe,
+    })
+    try {
+      await feed.refresh()
+      expect(feed.blocked(shareId)).toBe(true)
+      response = envelope(4, [])
+      await feed.refresh()
+      expect(feed.blocked(shareId)).toBe(false)
+      response = envelope(3)
+      await feed.refresh()
+      expect(feed.blocked(shareId)).toBe(false)
+      expect(open).toHaveBeenCalledTimes(1)
+      expect(observe).toHaveBeenCalledWith(expect.objectContaining({
+        operationId: 'authority-cache', transition: 'storage_fallback',
+      }))
+      expect(observe).toHaveBeenLastCalledWith(expect.objectContaining({ transition: 'rejected' }))
+    } finally {
+      feed.close()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('keeps the shared revision barrier after other IndexedDB open failures', async () => {
+    const open = vi.fn(() => { throw new DOMException('Storage unavailable', 'InvalidStateError') })
+    vi.stubGlobal('indexedDB', { open })
+    let response = envelope(3)
+    const feed = new AuthorityBlockFeed({
+      url: 'https://authority.example', root: fixture.root, now: () => fixture.now * 1000,
+      request: async () => new Response(response),
+    })
+    try {
+      await feed.refresh()
+      expect(feed.blocked(shareId)).toBe(true)
+      response = envelope(4, [])
+      await feed.refresh()
+      expect(feed.blocked(shareId)).toBe(true)
+      expect(open.mock.calls.length).toBeGreaterThan(1)
+    } finally {
+      feed.close()
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('reuses verified bytes while still adopting a newer revision from another tab', async () => {
     const shared = new MemoryBlockCache()
     const original = envelope(1, [])

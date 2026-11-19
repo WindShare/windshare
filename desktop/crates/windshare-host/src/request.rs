@@ -8,6 +8,7 @@ mod tests;
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum Command {
     Preferences,
+    ReloadAccountSelection,
     SetAccountView {
         account_view_visible: bool,
     },
@@ -103,6 +104,7 @@ impl Command {
         let mut fields = CommandLog::default();
         let command = match self {
             Self::Preferences => "preferences",
+            Self::ReloadAccountSelection => "reload_account_selection",
             Self::SetAccountView {
                 account_view_visible,
             } => {

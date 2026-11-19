@@ -2,6 +2,7 @@ import type { Page } from '@playwright/test'
 
 import type { PeerChannel, PeerPathRoute } from '../../src/connectivity/peer-channel'
 import type {
+  HotSwitchAdmissionGateObservation,
   HotSwitchLaneObservation,
   HotSwitchPageEvent,
   HotSwitchRecoveryControl,
@@ -105,8 +106,7 @@ class AdmissionGatedPeerChannel implements PeerChannel {
 
   constructor(
     channel: PeerChannel,
-    release: OneShotRelease,
-    onGated: () => Promise<void>,
+    holdAdmission: (signal: AbortSignal) => Promise<void>,
   ) {
     this.#channel = channel
     this.opened = channel.opened
@@ -116,8 +116,7 @@ class AdmissionGatedPeerChannel implements PeerChannel {
       transform: async (frame, controller) => {
         if (firstInbound) {
           firstInbound = false
-          await onGated()
-          await release.waitUntilReleased(this.#gateAbort.signal)
+          await holdAdmission(this.#gateAbort.signal)
           this.#gatePassed = true
         }
         controller.enqueue(frame)
@@ -162,38 +161,41 @@ class AdmissionGatedPeerChannel implements PeerChannel {
 
 export class PagePeerRecoveryHarness {
   readonly #bridge: PageRecoveryEventBridge
-  readonly #enabled: boolean
   readonly #detachmentWaiters: Array<() => void> = []
   #currentPeer: PeerChannel | undefined
   #manualAdmissionRelease: OneShotRelease | undefined
-  #offerOrdinal = 0
+  #nextAdmissionGate: HotSwitchAdmissionGateObservation['release'] | undefined = 'attempt-timeout'
 
-  constructor(bridge: PageRecoveryEventBridge, enabled: boolean) {
+  constructor(bridge: PageRecoveryEventBridge) {
     this.#bridge = bridge
-    this.#enabled = enabled
   }
 
-  wrap(peer: PeerChannel): PeerChannel {
-    this.#offerOrdinal += 1
-    const offerOrdinal = this.#offerOrdinal
-    const gated = this.#enabled && (offerOrdinal === 1 || offerOrdinal === 3)
-    if (!gated) {
-      this.#currentPeer = peer
-      return peer
-    }
-    const release = new OneShotRelease()
-    const releaseAuthority = offerOrdinal === 1 ? 'attempt-timeout' : 'page-controlled'
-    if (releaseAuthority === 'page-controlled') this.#manualAdmissionRelease = release
-    const wrapped = new AdmissionGatedPeerChannel(
+  wrap(peer: PeerChannel, attemptIdBytes: readonly number[]): PeerChannel {
+    const gate = this.#nextAdmissionGate
+    this.#currentPeer = gate === undefined ? peer : new AdmissionGatedPeerChannel(
       peer,
-      release,
-      () => this.#bridge.publish({
-        kind: 'admission-response-gated',
-        observation: { offerOrdinal, release: releaseAuthority },
-      }),
+      (signal) => this.#holdAdmission({ attemptIdBytes, release: gate }, signal),
     )
-    this.#currentPeer = wrapped
-    return wrapped
+    return this.#currentPeer
+  }
+
+  async #holdAdmission(
+    observation: HotSwitchAdmissionGateObservation,
+    signal: AbortSignal,
+  ): Promise<void> {
+    signal.throwIfAborted()
+    if (this.#nextAdmissionGate !== observation.release) return
+    // An opened channel can fail before admission. Keep the gate armed until
+    // there is a response to hold and report the identity of that attempt.
+    this.#nextAdmissionGate = undefined
+    const release = new OneShotRelease()
+    if (observation.release === 'page-controlled') this.#manualAdmissionRelease = release
+    try {
+      await this.#bridge.publish({ kind: 'admission-response-gated', observation })
+      await release.waitUntilReleased(signal)
+    } finally {
+      if (this.#manualAdmissionRelease === release) this.#manualAdmissionRelease = undefined
+    }
   }
 
   observeDetachment(observation: HotSwitchLaneObservation): void {
@@ -202,9 +204,10 @@ export class PagePeerRecoveryHarness {
   }
 
   async detachCurrentPeer(): Promise<void> {
-    if (!this.#enabled || this.#currentPeer === undefined) {
+    if (this.#currentPeer === undefined) {
       throw new Error('No controlled peer is available for detachment')
     }
+    this.#nextAdmissionGate = 'page-controlled'
     const detached = new Promise<void>((resolve) => this.#detachmentWaiters.push(resolve))
     await this.#currentPeer.close()
     await detached

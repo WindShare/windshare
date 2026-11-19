@@ -59,7 +59,7 @@ func New(config Config) (*Service, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	service := &Service{operation: make(chan struct{}, 1), local: make(chan struct{}, 1),
-		config: config, ctx: ctx, cancel: cancel, state: Pending,
+		config: config, ctx: ctx, cancel: cancel,
 		changed: make(chan struct{}), wake: make(chan struct{}, 1), nodes: make(map[string]*nodeState)}
 	defer service.workers.Go(service.run)
 	cacheContext, cancelCache := context.WithTimeout(ctx, CacheLoadTimeout)
@@ -70,16 +70,6 @@ func New(config Config) (*Service, error) {
 		return service, nil
 	}
 	service.adoptLocked(record)
-	switch {
-	case record.Denial != "":
-		service.state, service.reason = Denied, record.Denial
-	case service.validTicket(record):
-		service.state = Ready
-	case record.Credential != nil:
-		service.state = RefreshRequired
-	case record.Proof != nil:
-		service.state = record.Proof.Challenge.requiredState()
-	}
 	return service, nil
 }
 
@@ -175,8 +165,14 @@ func (service *Service) Snapshot() (Snapshot, <-chan struct{}) {
 	return value, service.changed
 }
 
-func (service *Service) transition(state State, reason string, retry time.Time) {
+func (service *Service) transition(record Record, state State, reason string, retry time.Time) {
 	service.mu.Lock()
+	// A local read can adopt a new selection while an authority request is in flight.
+	if !sameIdentity(service.record, record) {
+		service.mu.Unlock()
+		slog.Debug("account_state_transition_superseded", "state", state)
+		return
+	}
 	previous := service.state
 	if service.record.Denial != "" {
 		state, reason = Denied, service.record.Denial

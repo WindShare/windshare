@@ -52,12 +52,12 @@ func (service *Service) Register(ctx context.Context) (err error) {
 	}
 	if record.Credential != nil {
 		if service.validTicket(record) {
-			service.transition(Ready, "", service.config.Now().Add(RefreshInterval))
+			service.transition(record, Ready, "", service.config.Now().Add(RefreshInterval))
 			return nil
 		}
 		return ErrSuperseded
 	}
-	service.transition(Registering, "", time.Time{})
+	service.transition(record, Registering, "", time.Time{})
 	defer func() {
 		if err != nil {
 			var challengeID string
@@ -65,7 +65,7 @@ func (service *Service) Register(ctx context.Context) (err error) {
 				challengeID = record.Proof.Challenge.ID
 			}
 			slog.Warn("account_registration_failed", "challenge_id", challengeID, "error", err)
-			service.transition(RegistrationRequired, "", time.Time{})
+			service.transition(record, RegistrationRequired, "", time.Time{})
 		}
 	}()
 	record.Proof, err = service.pendingRegistration(ctx, record)
@@ -74,7 +74,7 @@ func (service *Service) Register(ctx context.Context) (err error) {
 	}
 	proof := *record.Proof
 	if proof.Challenge.Mode == emailChallenge {
-		service.transition(EmailRequired, "", time.Time{})
+		service.transition(record, EmailRequired, "", time.Time{})
 		return nil
 	}
 	if !proof.Challenge.validWork() {
@@ -99,7 +99,7 @@ func (service *Service) Register(ctx context.Context) (err error) {
 		return err
 	}
 	if challenge.Mode == emailChallenge {
-		service.transition(EmailRequired, "", time.Time{})
+		service.transition(record, EmailRequired, "", time.Time{})
 		return nil
 	}
 	// A changed policy or source can invalidate completed work. Let the user retry

@@ -294,8 +294,12 @@ impl AccountForm {
             self.pending = None;
         }
         match &mut self.page {
-            AccountScreen::Registration if !view.status.account.is_empty() => {
+            AccountScreen::Registration | AccountScreen::Email(EmailPurpose::Registration, _)
+                if !view.status.account.is_empty() =>
+            {
                 self.page = AccountScreen::Overview;
+                self.feedback = None;
+                self.clear_secrets(cx);
             }
             AccountScreen::Registration if view.status.state == AccountState::EmailRequired => {
                 self.page = EmailPurpose::Registration.entry(view);
@@ -372,10 +376,14 @@ impl Desktop {
     }
 
     pub fn open_account(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(view) = self.account_view() else {
+        let Runtime::Native(session) = &self.runtime else {
+            return;
+        };
+        let Some(view) = session.model.account.as_ref() else {
             return;
         };
         let page = AccountPage::entry(view).0;
+        session.controller.reload_account_selection();
         self.open_overlay(Overlay::Account, window, cx);
         if self.account_form.pending.is_none()
             && !(page == AccountPage::Registration && self.account_form.page() == page)

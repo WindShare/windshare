@@ -4,6 +4,9 @@ import { RelayReceiverError } from '../../src/transport/relay/receiver'
 import { RELAY_ERROR } from '../../src/transport/relay/protocol'
 import { SenderObjectError } from '../../src/crypto/sender-object'
 import { RecoveryWake } from '../../src/receiver/recovery-wake'
+import { RelayCandidates } from '../../src/receiver/relay-selection/candidates'
+import { RelayRecovery } from '../../src/receiver/relay-selection/recovery'
+import { RelayPolicyDeniedError, RELAY_POLICY_RETRY_MS } from '../../src/receiver/relay-admission'
 import { systemReconnectClock } from '../../src/receiver/recovery-clock'
 
 afterEach(() => vi.useRealTimers())
@@ -52,6 +55,43 @@ describe('initial receiver waiting', () => {
     expect(result).toBe('authenticated-session')
     expect(states.filter(state => state.kind === 'paused')).toHaveLength(1)
     expect(states).toContainEqual({ kind: 'waiting', reason: 'sender' })
+  })
+
+  it('reports an official relay restriction immediately and allows retry after the cooldown', async () => {
+    vi.useFakeTimers()
+    const clock = { now: () => Date.now(), sleep: systemReconnectClock.sleep }
+    const control = new InitialJoinControl()
+    const lifetime = new AbortController()
+    const candidates = new RelayCandidates(['official-a'], Promise.resolve(['official-b']))
+    const relayRecovery = new RelayRecovery(candidates, clock)
+    const states: InitialJoinState[] = []
+    let restricted = true
+    const dial = vi.fn(async () => {
+      if (restricted) throw new RelayPolicyDeniedError()
+      return 'authenticated-session'
+    })
+    const close = async () => undefined
+    const task = runInitialJoin({
+      clock, control, signal: lifetime.signal, relayRecovery, close,
+      connect: attempt => relayRecovery.race(attempt.signal, dial, close),
+      onState: state => states.push(state),
+    }).catch((failure: unknown) => failure)
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+      expect(states.at(-1)).toEqual({ kind: 'waiting', reason: 'authorization' })
+      control.request('retry')
+      await vi.advanceTimersByTimeAsync(RELAY_POLICY_RETRY_MS - 1)
+      expect(dial).toHaveBeenCalledTimes(candidates.bases.length)
+      expect(states.at(-1)).toEqual({ kind: 'waiting', reason: 'authorization' })
+      await vi.advanceTimersByTimeAsync(1)
+      expect(states.at(-1)).toEqual({ kind: 'paused', reason: 'authorization' })
+      restricted = false
+      control.request('retry')
+      await expect(task).resolves.toBe('authenticated-session')
+    } finally {
+      lifetime.abort()
+      await task
+    }
   })
 
   it('cancels paused join ownership without another dial', async () => {

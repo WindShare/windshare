@@ -87,32 +87,33 @@ test('recovers authenticated Chromium peer traffic without interrupting relay', 
       separateKey: share.key,
     })
 
-    const firstStarted = await events.waitFor(
-      'attempt',
-      (event) => event.evidence.stage === 'started' &&
-        event.evidence.sessionAttemptOrdinal === 1,
-      'first peer attempt',
+    const activationWave = await events.waitFor(
+      'recovery',
+      (event) => event.evidence.stage === 'wave-started' && event.evidence.trigger === 'activation',
+      'activation recovery wave',
     )
+    requireRecoveryStage(activationWave, 'wave-started')
     const firstRelayDispatch = await events.waitFor(
       'dispatch',
       (event) => event.observation.route === 'application-relay',
-      'relay dispatch while first peer admission is pending',
+      'relay dispatch while peer admission is pending',
     )
-    await events.waitFor(
+    const timeoutGate = await events.waitFor(
       'admission-response-gated',
-      (event) => event.observation.offerOrdinal === 1 &&
-        event.observation.release === 'attempt-timeout',
-      'first authenticated admission response gate',
+      (event) => event.observation.release === 'attempt-timeout',
+      'first admission response gate',
     )
-    const firstFailed = await events.waitFor(
+    const timedOutAttempt = await events.waitFor(
       'attempt',
       (event) => event.evidence.stage === 'failed' &&
-        sameIdentityBytes(event.evidence.attemptIdBytes, firstStarted.evidence.attemptIdBytes),
-      'first admission timeout',
+        sameIdentityBytes(event.evidence.attemptIdBytes, timeoutGate.observation.attemptIdBytes),
+      'gated admission timeout',
     )
-    requireAttemptStage(firstFailed, 'failed')
-    expect(firstFailed.evidence).toMatchObject({
-      peerPathIdBytes: firstStarted.evidence.peerPathIdBytes,
+    requireAttemptStage(timedOutAttempt, 'failed')
+    expect(timedOutAttempt.evidence).toMatchObject({
+      protocolSessionIdBytes: activationWave.evidence.protocolSessionIdBytes,
+      peerPathIdBytes: activationWave.evidence.peerPathIdBytes,
+      waveOrdinal: activationWave.evidence.waveOrdinal,
       failureScope: 'attempt-transient',
       typedErrorCode: 'peer-timeout',
       failure: {
@@ -120,19 +121,19 @@ test('recovers authenticated Chromium peer traffic without interrupting relay', 
         phase: 'admission',
         reason: 'admission-timeout',
       },
-    } satisfies Partial<typeof firstFailed.evidence>)
-    expect(eventPosition(events, firstStarted)).toBeLessThan(
+    } satisfies Partial<typeof timedOutAttempt.evidence>)
+    expect(eventPosition(events, activationWave)).toBeLessThan(
       eventPosition(events, firstRelayDispatch),
     )
     expect(eventPosition(events, firstRelayDispatch)).toBeLessThan(
-      eventPosition(events, firstFailed),
+      eventPosition(events, timedOutAttempt),
     )
 
     const retryDecision = await events.waitFor(
       'recovery',
       (event) => event.evidence.stage === 'retry-decided' &&
         event.evidence.attemptIdBytes !== undefined &&
-        sameIdentityBytes(event.evidence.attemptIdBytes, firstStarted.evidence.attemptIdBytes),
+        sameIdentityBytes(event.evidence.attemptIdBytes, timeoutGate.observation.attemptIdBytes),
       'retry decision for the gated admission',
     )
     const replacement = await events.waitFor(
@@ -140,7 +141,7 @@ test('recovers authenticated Chromium peer traffic without interrupting relay', 
       (event) => event.evidence.stage === 'attempt-replaced' &&
         sameIdentityBytes(
           event.evidence.previousAttemptIdBytes,
-          firstStarted.evidence.attemptIdBytes,
+          timeoutGate.observation.attemptIdBytes,
         ),
       'fresh replacement attempt',
     )
@@ -150,25 +151,20 @@ test('recovers authenticated Chromium peer traffic without interrupting relay', 
       decision: 'retry-attempt',
       reason: 'local-transient',
     })
-    expect(replacement.evidence.attemptIdBytes).not.toEqual(
-      firstStarted.evidence.attemptIdBytes,
-    )
+    expect(replacement.evidence.attemptIdBytes).toEqual(expect.any(Array))
+    expect(replacement.evidence.attemptIdBytes).not.toEqual(timeoutGate.observation.attemptIdBytes)
 
     const recoveredAttempt = await events.waitFor(
       'attempt',
       (event) => event.evidence.stage === 'admitted' &&
-        replacement.evidence.attemptIdBytes !== undefined &&
-        sameIdentityBytes(event.evidence.attemptIdBytes, replacement.evidence.attemptIdBytes),
+        event.evidence.waveOrdinal === activationWave.evidence.waveOrdinal &&
+        event.evidence.sessionAttemptOrdinal > timedOutAttempt.evidence.sessionAttemptOrdinal &&
+        sameIdentityBytes(event.evidence.peerPathIdBytes, timedOutAttempt.evidence.peerPathIdBytes),
       'authenticated replacement admission',
     )
     requireAttemptStage(recoveredAttempt, 'admitted')
-    expect(recoveredAttempt.evidence).toMatchObject({
-      protocolSessionIdBytes: firstStarted.evidence.protocolSessionIdBytes,
-      peerPathIdBytes: firstStarted.evidence.peerPathIdBytes,
-      waveOrdinal: firstStarted.evidence.waveOrdinal,
-      waveAttemptOrdinal: 2,
-      sessionAttemptOrdinal: 2,
-    })
+    expect(recoveredAttempt.evidence.protocolSessionIdBytes).toEqual(timedOutAttempt.evidence.protocolSessionIdBytes)
+    expect(recoveredAttempt.evidence.attemptIdBytes).not.toEqual(timeoutGate.observation.attemptIdBytes)
     const recoveredAttemptLane = requireEvidenceLane(recoveredAttempt.evidence)
     const recoveredLane = await events.waitFor(
       'lane-admitted',
@@ -219,41 +215,34 @@ test('recovers authenticated Chromium peer traffic without interrupting relay', 
       laneId: recoveredLane.observation.laneId,
       laneEpoch: recoveredLane.observation.laneEpoch,
     })
-    expect(detachmentWave.evidence.waveOrdinal).toBeGreaterThan(firstStarted.evidence.waveOrdinal)
+    expect(detachmentWave.evidence.waveOrdinal).toBeGreaterThan(activationWave.evidence.waveOrdinal)
     expect(eventPosition(events, detachedLane)).toBeLessThan(eventPosition(events, detached))
 
-    const detachmentAttempt = await events.waitFor(
-      'attempt',
-      (event) => event.evidence.stage === 'started' &&
-        event.evidence.waveOrdinal === detachmentWave.evidence.waveOrdinal,
-      'detachment replacement attempt',
-    )
-    expect(detachmentAttempt.evidence).toMatchObject({
-      protocolSessionIdBytes: firstStarted.evidence.protocolSessionIdBytes,
-      peerPathIdBytes: firstStarted.evidence.peerPathIdBytes,
-      sessionAttemptOrdinal: 3,
-      waveAttemptOrdinal: 1,
-    })
-    expect(detachmentAttempt.evidence.attemptIdBytes).not.toEqual(
-      recoveredAttempt.evidence.attemptIdBytes,
-    )
-    await events.waitFor(
+    const detachmentGate = await events.waitFor(
       'admission-response-gated',
-      (event) => event.observation.offerOrdinal === 3 &&
-        event.observation.release === 'page-controlled',
+      (event) => event.observation.release === 'page-controlled',
       'detachment admission response gate',
     )
     const requestedLogicalLane = await events.waitFor(
       'attempt',
       (event) => event.evidence.stage === 'grant-requested' &&
+        event.evidence.waveOrdinal === detachmentWave.evidence.waveOrdinal &&
         sameIdentityBytes(
           event.evidence.attemptIdBytes,
-          detachmentAttempt.evidence.attemptIdBytes,
+          detachmentGate.observation.attemptIdBytes,
         ),
       'detachment lane-grant request',
     )
     requireAttemptStage(requestedLogicalLane, 'grant-requested')
-    expect(requestedLogicalLane.evidence.requestedLaneId).toBe(recoveredLane.observation.laneId)
+    expect(requestedLogicalLane.evidence).toMatchObject({
+      protocolSessionIdBytes: recoveredAttempt.evidence.protocolSessionIdBytes,
+      peerPathIdBytes: recoveredAttempt.evidence.peerPathIdBytes,
+      requestedLaneId: recoveredLane.observation.laneId,
+    })
+    expect(requestedLogicalLane.evidence.attemptIdBytes).not.toEqual(recoveredAttempt.evidence.attemptIdBytes)
+    expect(requestedLogicalLane.evidence.sessionAttemptOrdinal).toBeGreaterThan(
+      recoveredAttempt.evidence.sessionAttemptOrdinal,
+    )
 
     const detachmentRelayBoundary = events.latestDispatchSequence()
     await advancePageOutput(page)
@@ -263,7 +252,7 @@ test('recovers authenticated Chromium peer traffic without interrupting relay', 
         event.observation.dispatchSequence > detachmentRelayBoundary,
       'relay dispatch during detachment recovery',
     )
-    expect(eventPosition(events, detachmentAttempt)).toBeLessThan(
+    expect(eventPosition(events, detachmentGate)).toBeLessThan(
       eventPosition(events, relayDuringDetachment),
     )
 
@@ -273,7 +262,7 @@ test('recovers authenticated Chromium peer traffic without interrupting relay', 
       (event) => event.evidence.stage === 'admitted' &&
         sameIdentityBytes(
           event.evidence.attemptIdBytes,
-          detachmentAttempt.evidence.attemptIdBytes,
+          detachmentGate.observation.attemptIdBytes,
         ),
       'peer readoption after detachment',
     )

@@ -32,6 +32,7 @@ type shareTask interface {
 
 type accountService interface {
 	Snapshot() (account.Snapshot, <-chan struct{})
+	ReloadSelection(context.Context) error
 	ObserveAccount() func()
 	RefreshOnce(context.Context) (account.RefreshOutcome, error)
 	Register(context.Context) error
@@ -117,6 +118,7 @@ type Application struct {
 	accountContext  context.Context
 	cancelAccount   context.CancelFunc
 	accountView     *AccountView
+	accountReloads  chan string
 	accountRequests map[string][32]byte
 }
 
@@ -153,6 +155,8 @@ func (a *Application) execute(request Request) Message {
 	defer a.mu.Unlock()
 	var err error
 	switch request.Command {
+	case "reload_account_selection":
+		err = a.requestAccountReload(request.ID)
 	case "account":
 		err = a.accountCommand(request)
 	case "create":

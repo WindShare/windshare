@@ -12,7 +12,7 @@ export interface ConnectionTracePayloads {
   readonly authority_blocks: Readonly<{
     operation_id: string
     endpoint: string
-    transition: 'accepted' | 'rejected'
+    transition: 'accepted' | 'rejected' | 'storage_fallback'
     generation?: number
     version?: number
     failure_detail?: string

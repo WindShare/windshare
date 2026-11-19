@@ -5,12 +5,115 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/core/serviceauthority"
 )
+
+func TestReloadSelectionAdoptsSharedLogin(t *testing.T) {
+	config, issued := accountFixture(t)
+	config.Store = FileStore{Path: filepath.Join(t.TempDir(), "account.json")}
+	_, err := config.Store.Update(t.Context(), func(Record) (Record, error) {
+		return Record{
+			SetupSecret: issued.Secret,
+			Proof: &Proof{Challenge: Challenge{
+				ID: "email-code", Mode: emailChallenge, ExpiresAt: uint64(config.Now().Add(time.Minute).Unix()),
+			}},
+		}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	config.Client = clientFunc(func(request *http.Request) (*http.Response, error) {
+		t.Errorf("local account selection contacted the authority: %s", request.URL.Path)
+		return nil, context.Canceled
+	})
+	desktop := testService(t, config)
+	stale, changed := desktop.Snapshot()
+	if stale.State != EmailRequired || !stale.EmailCodePending || stale.Account != "" {
+		t.Fatalf("expected a pending email on desktop: %+v", stale)
+	}
+
+	config.Client = clientFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path != "/v1/accounts/login" {
+			t.Errorf("unexpected CLI authority request: %s", request.URL.Path)
+		}
+		return accountReply(t, http.StatusOK, issued), nil
+	})
+	cli := testService(t, config)
+	if err := cli.Login(t.Context(), "alice", "fixture-password"); err != nil {
+		t.Fatal(err)
+	}
+	if before, _ := desktop.Snapshot(); before != stale {
+		t.Fatalf("idle desktop tracked an external login before reloading: %+v", before)
+	}
+
+	if err := desktop.ReloadSelection(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-changed:
+	default:
+		t.Fatal("the new selection was not published to observers")
+	}
+	snapshot, _ := desktop.Snapshot()
+	selected, _ := cli.Snapshot()
+	if snapshot.Account == "" || snapshot.Account != selected.Account || snapshot.State != Ready ||
+		snapshot.EmailCodePending || snapshot.Active {
+		t.Fatalf("the local login should replace email setup without starting renewal: %+v", snapshot)
+	}
+}
+
+func TestReloadSelectionDiscardsOldRegistrationFailure(t *testing.T) {
+	config, issued := accountFixture(t)
+	synctest.Test(t, func(t *testing.T) {
+		reply := make(chan struct{})
+		oldFailure := errors.New("registration request failed")
+		config.Client = clientFunc(func(request *http.Request) (*http.Response, error) {
+			if request.URL.Path != "/v1/accounts" {
+				t.Errorf("unexpected desktop authority request: %s", request.URL.Path)
+			}
+			select {
+			case <-reply:
+				return nil, oldFailure
+			case <-request.Context().Done():
+				return nil, request.Context().Err()
+			}
+		})
+		desktop := testService(t, config)
+		config.Client = clientFunc(func(*http.Request) (*http.Response, error) {
+			return accountReply(t, http.StatusOK, issued), nil
+		})
+		cli := testService(t, config)
+
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		result := make(chan error, 1)
+		go func() { result <- desktop.Register(ctx) }()
+		synctest.Wait()
+		if snapshot, _ := desktop.Snapshot(); snapshot.State != Registering {
+			t.Fatalf("registration should still be in flight: %+v", snapshot)
+		}
+		if err := cli.Login(t.Context(), "alice", "fixture-password"); err != nil {
+			t.Fatal(err)
+		}
+		if err := desktop.ReloadSelection(t.Context()); err != nil {
+			t.Fatalf("local reload waited for registration: %v", err)
+		}
+		close(reply)
+		if err := <-result; !errors.Is(err, oldFailure) {
+			t.Fatalf("registration outcome: %v", err)
+		}
+		if snapshot, _ := desktop.Snapshot(); snapshot.State != Ready || snapshot.Account == "" || snapshot.RegistrationPermille != 0 {
+			t.Fatalf("obsolete registration replaced the selected account state: %+v", snapshot)
+		}
+	})
+}
 
 type rejectingDenialStore struct{ record Record }
 

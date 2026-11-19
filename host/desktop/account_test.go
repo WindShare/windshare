@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/engine/account"
@@ -15,10 +16,14 @@ type controlledAccount struct {
 	changed  chan struct{}
 	calls    atomic.Int32
 	finished atomic.Bool
+	reload   func(context.Context) error
 }
 
 func (service *controlledAccount) Snapshot() (account.Snapshot, <-chan struct{}) {
 	return account.Snapshot{State: account.Pending}, service.changed
+}
+func (service *controlledAccount) ReloadSelection(ctx context.Context) error {
+	return service.reload(ctx)
 }
 func (service *controlledAccount) ObserveAccount() func() {
 	service.renewals++
@@ -44,6 +49,47 @@ func (*controlledAccount) ConfirmProfileEmail(context.Context, string, string, s
 func (*controlledAccount) RequestEmail(context.Context, string) error       { return nil }
 func (*controlledAccount) VerifyEmail(context.Context, string) error        { return nil }
 func (*controlledAccount) RevokeCredential(context.Context, [16]byte) error { return nil }
+
+func TestAccountSelectionReloadCoalescesOpenings(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		release := make(chan struct{})
+		var reloads atomic.Int32
+		service := &controlledAccount{changed: make(chan struct{}), reload: func(ctx context.Context) error {
+			reloads.Add(1)
+			select {
+			case <-release:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}}
+		app := newApplication("test", dependencies{
+			accounts: service, log: func(string, any) {}, close: func(context.Context) error { return nil },
+		})
+		t.Cleanup(func() { _ = app.close() })
+
+		request := Request{ID: "open", Command: "reload_account_selection"}
+		if reply := app.execute(request); reply.Error != nil || reply.Snapshot.Account.Operation != nil {
+			t.Fatalf("opening the account should not submit an account operation: %+v", reply)
+		}
+		synctest.Wait()
+		if reloads.Load() != 1 {
+			t.Fatal("account selection reload did not start")
+		}
+
+		for _, id := range []string{"reopen", "reopen-again"} {
+			request.ID = id
+			if reply := app.execute(request); reply.Error != nil {
+				t.Fatalf("reopening the account was rejected: %+v", reply)
+			}
+		}
+		close(release)
+		synctest.Wait()
+		if reloads.Load() != 2 || service.renewals != 0 {
+			t.Fatalf("want one queued reload and no renewal, got %d reloads and %d renewals", reloads.Load(), service.renewals)
+		}
+	})
+}
 
 func TestAccountViewRenewalFollowsItsControlSubscription(t *testing.T) {
 	service := &controlledAccount{changed: make(chan struct{})}
