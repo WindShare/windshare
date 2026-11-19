@@ -66,7 +66,7 @@ func (r *jobRun) pauseFailedFile(
 	policy := lifecyclePolicyFor(cause)
 	isolatedOutputFailure := policy.outputCanContinueAfterFileSettlement(r.output.Capabilities())
 	isolatedSourceFailure := policy.sourceFileLocal() && !policy.jobTerminal()
-	settlement, settlementErr := r.pauseFileTransaction(ctx, plan, transaction, filePauseReason(cause), progress)
+	settlement, settlementErr := r.pauseFileTransaction(ctx, transaction, filePauseReason(cause), progress)
 	r.releaseRevision(ctx, plan, opened.Handle)
 	if settlementErr == nil {
 		r.job.progress.acceptFileSettlement(settlement, plan.expectedSize)
@@ -90,7 +90,7 @@ func (r *jobRun) pauseFailedFile(
 }
 
 func (r *jobRun) pauseFileTransaction(
-	ctx context.Context, plan plannedFile, transaction FileTransaction,
+	ctx context.Context, transaction FileTransaction,
 	reason FilePauseReason, progress *fileTransferProgress,
 ) (FileSettlement, error) {
 	settleContext, cancel := r.job.newSettlementContext(ctx)

@@ -69,35 +69,8 @@ func (engine *Engine) beginExisting(
 	if err := recovery.commitCandidate(ctx, owned, final); err != nil {
 		return recovery.failStart(ctx, err)
 	}
-	if recovery.record.FileRevision() != file.Descriptor().FileRevision() {
-		if final.Condition() != FinalAbsent && final.Condition() != FinalCollision {
-			return recovery.failStart(ctx, bindingError(ErrTargetOwnershipUnknown))
-		}
-		if owned.Condition() != OwnedReady {
-			// A durable record can outlive its stage. Settle the affected file
-			// before moving any checkpoint coverage to the new revision.
-			return recovery.start(ctx, RecoveryDecision{action: RecoveryReturnOwnershipBlocked})
-		}
-		previous := recovery.record
-		next, err := checkpointmodel.AdmitMetadataReuse(previous, file.Descriptor())
-		if err != nil {
-			return recovery.failStart(ctx, err)
-		}
-		if _, err := engine.storeRecord(ctx, &previous, next); err != nil {
-			return recovery.failStart(ctx, err)
-		}
-		recovery.record = next
-		recovery.binding, err = outputBinding(file.Target(), next)
-		if err != nil {
-			return recovery.failStart(ctx, err)
-		}
-		event := engine.traceEvent(sequence, TraceRecoverFile, TraceReconciled, previous.Phase(), next.Phase(), fault.Fault{})
-		event.FileID, event.PreviousRevision, event.CurrentRevision = next.FileID(), previous.FileRevision(), next.FileRevision()
-		event.RecoveryReason = content.ComparisonMetadataAgreement
-		for _, span := range next.VerifiedRanges() {
-			event.ReusedBytes += span.Length()
-		}
-		engine.emit(event)
+	if start, settled, err := recovery.reconcileRevision(ctx, sequence, owned, final); settled {
+		return start, err
 	}
 	decision, err := ReduceRecovery(recovery.record, owned, final)
 	if err != nil {
@@ -108,6 +81,52 @@ func (engine *Engine) beginExisting(
 		recovery.record.Phase(), recovery.record.Phase(), fault.Fault{},
 	))
 	return recovery.start(ctx, decision)
+}
+
+func (recovery *existingFileRecovery) reconcileRevision(
+	ctx context.Context,
+	sequence uint64,
+	owned OwnedObservation,
+	final FinalObservation,
+) (transfer.FileStart, bool, error) {
+	if recovery.record.FileRevision() == recovery.file.Descriptor().FileRevision() {
+		return transfer.FileStart{}, false, nil
+	}
+	if final.Condition() != FinalAbsent && final.Condition() != FinalCollision {
+		start, err := recovery.failStart(ctx, bindingError(ErrTargetOwnershipUnknown))
+		return start, true, err
+	}
+	if owned.Condition() != OwnedReady {
+		// A durable record can outlive its stage. Settle the affected file
+		// before moving any checkpoint coverage to the new revision.
+		start, err := recovery.start(ctx, RecoveryDecision{action: RecoveryReturnOwnershipBlocked})
+		return start, true, err
+	}
+	previous := recovery.record
+	next, err := checkpointmodel.AdmitMetadataReuse(previous, recovery.file.Descriptor())
+	if err != nil {
+		start, failErr := recovery.failStart(ctx, err)
+		return start, true, failErr
+	}
+	if _, err := recovery.engine.storeRecord(ctx, &previous, next); err != nil {
+		start, failErr := recovery.failStart(ctx, err)
+		return start, true, failErr
+	}
+	binding, err := outputBinding(recovery.file.Target(), next)
+	if err != nil {
+		start, failErr := recovery.failStart(ctx, err)
+		return start, true, failErr
+	}
+	recovery.record = next
+	recovery.binding = binding
+	event := recovery.engine.traceEvent(sequence, TraceRecoverFile, TraceReconciled, previous.Phase(), next.Phase(), fault.Fault{})
+	event.FileID, event.PreviousRevision, event.CurrentRevision = next.FileID(), previous.FileRevision(), next.FileRevision()
+	event.RecoveryReason = content.ComparisonMetadataAgreement
+	for _, span := range next.VerifiedRanges() {
+		event.ReusedBytes += span.Length()
+	}
+	recovery.engine.emit(event)
+	return transfer.FileStart{}, false, nil
 }
 
 func existingRecordWritable(record checkpointmodel.Record) bool {

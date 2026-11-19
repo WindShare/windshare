@@ -246,7 +246,7 @@ func (table *OperationTable) observeAdmissionLocked(
 
 	active, found := table.active[operationID]
 	if !found {
-		if table.dropsRetiredPeerLocked(direction, message) {
+		if table.dropsRetiredPeerLocked(message) {
 			return OperationDrop, nil, nil
 		}
 		disposition, err := table.beginOperation(operationID, direction, message)

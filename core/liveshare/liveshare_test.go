@@ -17,7 +17,6 @@ import (
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/internal/testoutputroot"
 	"github.com/windshare/windshare/core/link"
-	"github.com/windshare/windshare/core/senderauth"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
 	sendersession "github.com/windshare/windshare/core/session/sendersession"
@@ -430,13 +429,4 @@ func (reader *budgetReader) Read(destination []byte) (int, error) {
 		return count, io.ErrUnexpectedEOF
 	}
 	return count, nil
-}
-
-func checkedSender(t testing.TB, publicKey []byte) *senderauth.Verifier {
-	t.Helper()
-	sender, err := senderauth.NewVerifier(publicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return sender
 }

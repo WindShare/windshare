@@ -93,9 +93,8 @@ func TestCatalogTransportRejectsHostileOperationResponses(t *testing.T) {
 
 	runCatalogTransportSynctest(t, "malformed progress semantic is session failure", func(t *testing.T) {
 		harness := newBlockedCatalogFetch(t, context.Background())
-		enqueueCallResponse(harness.call, signedPeerOperationControl(
-			t, harness.receiver, harness.fixture.senderConfig.SenderPrivateKey,
-			protocolsession.MessageScanProgress, harness.call.ID(), []byte{1},
+		enqueueCallResponse(harness.call, peerOperationControl(
+			t, protocolsession.MessageScanProgress, harness.call.ID(), []byte{1},
 		))
 		err := harness.wait()
 		assertSessionFailure(t, err)
@@ -112,9 +111,8 @@ func TestCatalogTransportRejectsHostileOperationResponses(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		progress := signedPeerOperationControl(
-			t, harness.receiver, harness.fixture.senderConfig.SenderPrivateKey,
-			protocolsession.MessageScanProgress, harness.call.ID(), semantic,
+		progress := peerOperationControl(
+			t, protocolsession.MessageScanProgress, harness.call.ID(), semantic,
 		)
 		enqueueCallResponse(harness.call, progress)
 		enqueueCallResponse(harness.call, progress)
@@ -151,9 +149,8 @@ func TestCatalogTransportRejectsHostileOperationResponses(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		enqueueCallResponse(harness.call, signedPeerOperationControl(
-			t, harness.receiver, harness.fixture.senderConfig.SenderPrivateKey,
-			protocolsession.MessageOperationError, harness.call.ID(), semantic,
+		enqueueCallResponse(harness.call, peerOperationControl(
+			t, protocolsession.MessageOperationError, harness.call.ID(), semantic,
 		))
 		err = harness.wait()
 		var remote RemoteOperationError

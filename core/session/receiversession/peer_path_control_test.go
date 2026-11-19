@@ -1,9 +1,7 @@
 package receiversession
 
 import (
-	"bytes"
 	"context"
-	"crypto/ed25519"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"testing"
 )
@@ -15,8 +13,7 @@ func TestKnownPeerSessionFailureSealsUnsafeAuthority(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{3}, ed25519.SeedSize))
-		message := signedPeerOperationControl(t, &Runtime{core: fixture.runtime}, key, protocolsession.MessageOperationError, fixture.operation.OperationID(), semantic)
+		message := peerOperationControl(t, protocolsession.MessageOperationError, fixture.operation.OperationID(), semantic)
 		enqueueCallResponse(fixture.call, message)
 		terminal := requireReceiverPeerTermination(t, fixture.operation.Receive(context.Background()))
 		if !fixture.operation.OwnsTermination(terminal) {

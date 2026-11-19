@@ -173,20 +173,35 @@ func (service *AddressedSenderService) Serve(
 	if err != nil {
 		return nil, fmt.Errorf("load addressed catalog page: %w", err)
 	}
-	if failure := result.failure; failure != nil {
-		if !result.page.IsZero() || failure.record.ShareInstance != service.share ||
-			failure.record.DirectoryID != request.DirectoryID() {
-			return nil, ErrObjectIdentity
-		}
-		if _, pinned := request.Generation(); request.PageIndex() != 0 || pinned {
-			return nil, ErrGenerationMismatch
-		}
-		expected, err := EncodeDirectoryFailure(failure.record)
-		if err != nil || !bytes.Equal(failure.payload, expected) {
-			return nil, errors.Join(catalog.ErrCorruptCatalogStorage, err)
-		}
-		return expected, nil
+	if result.failure != nil {
+		return service.authenticateDirectoryFailure(request, result)
 	}
+	return service.authenticateCatalogPage(request, result)
+}
+
+func (service *AddressedSenderService) authenticateDirectoryFailure(
+	request ListRequest,
+	result PageResult,
+) ([]byte, error) {
+	failure := result.failure
+	if !result.page.IsZero() || failure.record.ShareInstance != service.share ||
+		failure.record.DirectoryID != request.DirectoryID() {
+		return nil, ErrObjectIdentity
+	}
+	if _, pinned := request.Generation(); request.PageIndex() != 0 || pinned {
+		return nil, ErrGenerationMismatch
+	}
+	expected, err := EncodeDirectoryFailure(failure.record)
+	if err != nil || !bytes.Equal(failure.payload, expected) {
+		return nil, errors.Join(catalog.ErrCorruptCatalogStorage, err)
+	}
+	return expected, nil
+}
+
+func (service *AddressedSenderService) authenticateCatalogPage(
+	request ListRequest,
+	result PageResult,
+) ([]byte, error) {
 	address := result.page.Address()
 	if result.page.IsZero() || address.ShareInstance != service.share || address.DirectoryID != request.DirectoryID() ||
 		address.PageIndex != request.PageIndex() {

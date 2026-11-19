@@ -3,7 +3,6 @@ package receiversession
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"github.com/windshare/windshare/core/content"
@@ -315,9 +314,8 @@ func TestReceiverPeerOperationRejectsMalformedAndCrossScopeFinals(t *testing.T) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		enqueueCallResponse(operation.call, signedPeerOperationControl(
-			t, receiver, fixture.senderConfig.SenderPrivateKey,
-			protocolsession.MessageOperationError, operation.call.ID(), semantic,
+		enqueueCallResponse(operation.call, peerOperationControl(
+			t, protocolsession.MessageOperationError, operation.call.ID(), semantic,
 		))
 		termination := requireReceiverPeerTermination(t, operation.Receive(context.Background()))
 		assertReceiverPeerTermination(
@@ -549,10 +547,8 @@ func openTestPeerOperation(t *testing.T, receiver *Runtime) *PeerOperation {
 	return operation
 }
 
-func signedPeerOperationControl(
+func peerOperationControl(
 	t *testing.T,
-	receiver *Runtime,
-	privateKey ed25519.PrivateKey,
 	kind protocolsession.MessageKind,
 	operationID protocolsession.OperationID,
 	semantic []byte,

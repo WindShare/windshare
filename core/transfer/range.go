@@ -429,7 +429,7 @@ func (r *jobRun) transferRequestedRange(
 		err = bufferedErr
 	}
 	if err != nil {
-		if _, reopened := err.(*content.RevisionReopenedError); reopened {
+		if _, reopened := errors.AsType[*content.RevisionReopenedError](err); reopened {
 			return false, err
 		}
 		policy := lifecyclePolicyFor(err)
@@ -557,7 +557,7 @@ func (r *jobRun) readRequestedRange(ctx context.Context, plan plannedFile, opene
 		attempt.finishWait(ctx, rawErr)
 		// This typed result precedes fault normalization because it is a request
 		// to settle and readmit a file, with evidence needed by that transition.
-		if reopened, ok := rawErr.(*content.RevisionReopenedError); ok {
+		if reopened, ok := errors.AsType[*content.RevisionReopenedError](rawErr); ok {
 			if reopened == nil || reopened.Previous() != opened.Descriptor {
 				return buffered, normalizeSourceBoundary(ctx, ErrBlockIdentity)
 			}

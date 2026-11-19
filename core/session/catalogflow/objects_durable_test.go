@@ -12,7 +12,6 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/link"
-	"github.com/windshare/windshare/core/senderauth"
 	"github.com/windshare/windshare/core/senderobject"
 )
 
@@ -517,13 +516,4 @@ func mustCBOR(t *testing.T, mode cborMarshaler, value any) []byte {
 func mustRawCBOR(t *testing.T, value any) []byte {
 	t.Helper()
 	return mustCBOR(t, catalogWireEnc, value)
-}
-
-func checkedSender(t testing.TB, publicKey []byte) *senderauth.Verifier {
-	t.Helper()
-	sender, err := senderauth.NewVerifier(publicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return sender
 }

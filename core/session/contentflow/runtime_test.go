@@ -16,7 +16,6 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
-	"github.com/windshare/windshare/core/senderauth"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -925,13 +924,4 @@ func TestBlockHandlerKeepsRevisionFailuresOutOfTheBlockErrorDomain(t *testing.T)
 	case <-time.After(time.Second):
 		t.Fatal("unknown lease produced no operation error")
 	}
-}
-
-func checkedSender(t testing.TB, publicKey []byte) *senderauth.Verifier {
-	t.Helper()
-	sender, err := senderauth.NewVerifier(publicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return sender
 }

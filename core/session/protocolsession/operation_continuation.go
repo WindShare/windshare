@@ -487,7 +487,7 @@ func (table *OperationTable) validatePeerAttemptLocked(authority *operationAutho
 	return err
 }
 
-func (table *OperationTable) dropsRetiredPeerLocked(direction Direction, message Message) bool {
+func (table *OperationTable) dropsRetiredPeerLocked(message Message) bool {
 	binding, tracked, err := table.peerContinuationBinding(message)
 	if err != nil || !tracked {
 		return false

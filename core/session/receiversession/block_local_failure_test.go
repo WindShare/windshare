@@ -19,8 +19,6 @@ import (
 	"time"
 )
 
-const localFailureTestReadSecretByte = byte(5)
-
 type blockFailureOpener struct {
 	RecordDecoder
 	err error

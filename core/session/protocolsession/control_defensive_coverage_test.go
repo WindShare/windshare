@@ -47,26 +47,3 @@ func TestControlSemanticDecodersRejectCanonicalSchemaViolations(t *testing.T) {
 		})
 	}
 }
-
-func largestControlSemanticAcceptedBy(t *testing.T, accept func([]byte) error) []byte {
-	t.Helper()
-	low, high := 0, MaxEnvelopePlaintextBytes
-	var largest []byte
-	for low <= high {
-		middle := low + (high-low)/2
-		semantic, err := EncodeBody(make([]byte, middle))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := accept(semantic); err == nil {
-			largest = semantic
-			low = middle + 1
-		} else {
-			high = middle - 1
-		}
-	}
-	if largest == nil {
-		t.Fatal("no canonical byte-string semantic body fit the control wrapper")
-	}
-	return largest
-}

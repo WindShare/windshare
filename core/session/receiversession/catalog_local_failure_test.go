@@ -2,7 +2,6 @@ package receiversession
 
 import (
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"github.com/windshare/windshare/core/catalog"
 
@@ -123,13 +122,12 @@ func TestCatalogLocalFailuresCancelExactOperationAndPreserveSibling(t *testing.T
 						// Malformed signed CBOR is normally rejected before routing. This
 						// white-box admission isolates the transport decoder's local-failure
 						// cleanup while the request itself still enters through the public API.
-						deliverInjectedReceiverMessage(t, pair.receiver, signedPeerOperationControl(
-							t, pair.receiver, fixture.senderConfig.SenderPrivateKey,
-							protocolsession.MessageScanProgress, operation.call.ID(), body,
+						deliverInjectedReceiverMessage(t, pair.receiver, peerOperationControl(
+							t, protocolsession.MessageScanProgress, operation.call.ID(), body,
 						))
 						continue
 					}
-					sendInjectedCatalogProgress(t, pair.receiver, fixture.senderConfig.SenderPrivateKey, operation.call.ID(), body)
+					sendInjectedCatalogProgress(t, pair.receiver, operation.call.ID(), body)
 				}
 				select {
 				case err := <-result:
@@ -180,12 +178,11 @@ func encodeCatalogProgress(
 func sendInjectedCatalogProgress(
 	t *testing.T,
 	receiver *Runtime,
-	privateKey ed25519.PrivateKey,
 	operationID protocolsession.OperationID,
 	body []byte,
 ) {
 	t.Helper()
-	message := signedPeerOperationControl(t, receiver, privateKey, protocolsession.MessageScanProgress, operationID, body)
+	message := peerOperationControl(t, protocolsession.MessageScanProgress, operationID, body)
 	deliverInjectedReceiverMessage(t, receiver, message)
 }
 

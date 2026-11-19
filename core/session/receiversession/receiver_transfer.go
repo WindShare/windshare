@@ -485,7 +485,7 @@ func (dependencies receiverTransferDependencies) RecordOutput(bytes uint64) {
 
 func (dependencies receiverTransferDependencies) ReadRange(ctx context.Context, handle transfer.RevisionHandle, descriptor content.FileRevisionDescriptor, requested content.Range, sink transfer.RangeSink) error {
 	err := dependencies.runtime.access.ReadRange(ctx, handle, descriptor, requested, sink)
-	if _, reopened := err.(*content.RevisionReopenedError); reopened && ctx.Err() == nil && dependencies.runtime.Lifetime().Err() == nil {
+	if _, reopened := errors.AsType[*content.RevisionReopenedError](err); reopened && ctx.Err() == nil && dependencies.runtime.Lifetime().Err() == nil {
 		return err
 	}
 	if errors.Is(err, revisionaccess.ErrClosed) {

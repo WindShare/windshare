@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/senderauth"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -185,13 +184,4 @@ func peerVectorBytes(first byte, count int) []byte {
 		result[index] = first + byte(index)
 	}
 	return result
-}
-
-func checkedSender(t testing.TB, publicKey []byte) *senderauth.Verifier {
-	t.Helper()
-	sender, err := senderauth.NewVerifier(publicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return sender
 }

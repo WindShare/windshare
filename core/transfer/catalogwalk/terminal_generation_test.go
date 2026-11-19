@@ -342,15 +342,6 @@ func mustWalkLimits(
 	return limits
 }
 
-func walkCommitment(seed byte) catalog.PageCommitment {
-	raw := make([]byte, catalog.PageCommitmentBytes)
-	for index := range raw {
-		raw[index] = seed
-	}
-	value, _ := catalog.NewPageCommitment(raw)
-	return value
-}
-
 func walkID[T ~[catalog.IdentityBytes]byte](seed byte) T {
 	var value T
 	for index := range value {

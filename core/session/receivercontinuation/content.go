@@ -78,6 +78,37 @@ func (s *Session) ReadRange(ctx context.Context, lease transfer.RevisionHandle, 
 	}
 	binding.mu.Lock()
 	defer binding.mu.Unlock()
+	if err := binding.validateRead(ctx, descriptor); err != nil {
+		return err
+	}
+	remaining := &remainingSink{target: sink, missing: []content.Range{requested}}
+	for {
+		runtime := s.Runtime()
+		if err := binding.refresh(ctx, runtime, descriptor); err != nil {
+			retry, retryErr := s.recoverRefreshFailure(ctx, runtime, err)
+			if !retry {
+				return retryErr
+			}
+			continue
+		}
+		dependencies, err := runtime.TransferDependencies()
+		if err != nil {
+			return err
+		}
+		if err = readRemainingRanges(ctx, dependencies, binding.opened.Handle, descriptor, remaining); err == nil {
+			return nil
+		}
+		if !runtime.AwaitPathRetirement(ctx) {
+			binding.recordReopened(err)
+			return err
+		}
+		if err = s.recoverContent(ctx, runtime); err != nil {
+			return err
+		}
+	}
+}
+
+func (binding *revisionLease) validateRead(ctx context.Context, descriptor content.FileRevisionDescriptor) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -87,44 +118,45 @@ func (s *Session) ReadRange(ctx context.Context, lease transfer.RevisionHandle, 
 	if binding.opened.Descriptor != descriptor {
 		return transfer.ErrBlockIdentity
 	}
-	remaining := &remainingSink{target: sink, missing: []content.Range{requested}}
-	for {
-		runtime := s.Runtime()
-		if err := binding.refresh(ctx, runtime, descriptor); err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if runtime.AwaitPathRetirement(ctx) {
-				if err = s.recoverContent(ctx, runtime); err == nil {
-					continue
-				}
-			}
+	return nil
+}
+
+func (s *Session) recoverRefreshFailure(ctx context.Context, runtime *receiversession.Runtime, err error) (bool, error) {
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+	if !runtime.AwaitPathRetirement(ctx) {
+		return false, err
+	}
+	if err = s.recoverContent(ctx, runtime); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func readRemainingRanges(
+	ctx context.Context,
+	dependencies receiversession.TransferDependencies,
+	handle transfer.RevisionHandle,
+	descriptor content.FileRevisionDescriptor,
+	remaining *remainingSink,
+) error {
+	for _, part := range remaining.ranges() {
+		if err := dependencies.ReadRange(ctx, handle, descriptor, part, remaining); err != nil {
 			return err
 		}
-		dependencies, err := runtime.TransferDependencies()
-		if err != nil {
-			return err
-		}
-		for _, part := range remaining.ranges() {
-			if err = dependencies.ReadRange(ctx, binding.opened.Handle, descriptor, part, remaining); err != nil {
-				break
-			}
-		}
-		if err == nil {
-			return nil
-		}
-		if !runtime.AwaitPathRetirement(ctx) {
-			if reopened, ok := err.(*content.RevisionReopenedError); ok {
-				binding.reopened = reopened
-				if reopened.Comparison().AllowsReuse() {
-					binding.opened.Descriptor = reopened.Current()
-				}
-			}
-			return err
-		}
-		if err = s.recoverContent(ctx, runtime); err != nil {
-			return err
-		}
+	}
+	return nil
+}
+
+func (binding *revisionLease) recordReopened(err error) {
+	reopened, ok := errors.AsType[*content.RevisionReopenedError](err)
+	if !ok {
+		return
+	}
+	binding.reopened = reopened
+	if reopened.Comparison().AllowsReuse() {
+		binding.opened.Descriptor = reopened.Current()
 	}
 }
 

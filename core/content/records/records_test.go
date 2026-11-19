@@ -9,7 +9,6 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
-	"github.com/windshare/windshare/core/senderauth"
 )
 
 type recordFixture struct {
@@ -191,13 +190,4 @@ func flowBytes(value byte) []byte {
 	result := make([]byte, 16)
 	result[0] = value
 	return result
-}
-
-func checkedSender(t testing.TB, publicKey []byte) *senderauth.Verifier {
-	t.Helper()
-	sender, err := senderauth.NewVerifier(publicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return sender
 }

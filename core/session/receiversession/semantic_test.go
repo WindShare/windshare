@@ -139,7 +139,3 @@ type semanticTestOpener struct {
 func (opener semanticTestOpener) Open([]byte) (protocolsession.OpenedEnvelope, error) {
 	return opener.opened, nil
 }
-
-func id16Share(value byte) [16]byte {
-	return id16[[16]byte](value)
-}

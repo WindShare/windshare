@@ -113,6 +113,13 @@ func (r *Reader) ReadRange(ctx context.Context, handle transfer.RevisionHandle, 
 		return err
 	}
 	defer b.unlock()
+	if err := b.validateRead(descriptor, requested, sink); err != nil {
+		return err
+	}
+	return r.readBindingRange(ctx, b, descriptor, requested, sink)
+}
+
+func (b *binding) validateRead(descriptor content.FileRevisionDescriptor, requested content.Range, sink transfer.RangeSink) error {
 	// Linked-context cancellation is delivered asynchronously; the binding's
 	// owner remains the synchronous admission fence for queued reads.
 	if err := b.ctx.Err(); err != nil {
@@ -130,6 +137,10 @@ func (r *Reader) ReadRange(ctx context.Context, handle transfer.RevisionHandle, 
 	if sink == nil || requested.Offset >= requested.End || requested.End > descriptor.ExactSize() {
 		return transfer.ErrInvalidDemand
 	}
+	return nil
+}
+
+func (r *Reader) readBindingRange(ctx context.Context, b *binding, descriptor content.FileRevisionDescriptor, requested content.Range, sink transfer.RangeSink) error {
 	remaining := &progressSink{target: sink, next: requested.Offset, end: requested.End}
 	replacedAt, replaced := uint64(0), false
 	for remaining.next < requested.End {

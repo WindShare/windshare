@@ -49,30 +49,7 @@ func (r *jobRun) transferFileAttempt(
 		return nil, r.rejectFileAdmission(plan, retry, FailureFileOutput, err)
 	}
 	if settlement, immediate := start.ImmediateSettlement(); immediate {
-		if err := validateImmediateFileSettlement(target, settlement); err != nil {
-			contractFailure := outputContractFault(err)
-			r.traceFileLifecycle(TransferFileAdmitted, plan, contractFailure)
-			return nil, r.rejectImmediateSettlement(ctx, plan, opened, settlement, contractFailure)
-		}
-		if checkpoint, ok := settlement.VerifiedProgress(); ok {
-			recovered, exact := rangeSetByteCount(checkpoint.Ranges())
-			if !exact || recovered > plan.expectedSize {
-				contractFailure := outputContractFault(ErrOutputContract)
-				r.traceFileLifecycle(TransferFileAdmitted, plan, contractFailure)
-				return nil, r.rejectImmediateSettlement(ctx, plan, opened, settlement, contractFailure)
-			}
-			r.reconcileFileCoverage(retry, checkpoint.Ranges(), 0, recovered)
-		} else if retry != nil {
-			if _, reason, blocked := settlement.ItemBlock(); blocked &&
-				(reason == ItemBlockOwnedObjectUnknown || reason == ItemBlockOwnershipUnknown) {
-				// The pause proved durable coverage at the time. The new
-				// ownership result withdraws it for this file alone.
-				r.reconcileFileCoverage(retry, content.RangeSet{}, 0, 0)
-			}
-			r.traceFileRevisionRetry(plan, retry.reopened, "admission-blocked", retry.progress.persistedBytes, 0, retry.started)
-		}
-		r.traceFileLifecycle(TransferFileAdmitted, plan, nil)
-		return nil, r.handleImmediateSettlement(ctx, plan, opened, settlement)
+		return nil, r.admitImmediateSettlement(ctx, plan, opened, target, settlement, retry)
 	}
 	transaction, durable, transactional := start.Transaction()
 	if !transactional || !start.valid() {
@@ -101,13 +78,60 @@ func (r *jobRun) transferFileAttempt(
 	}
 	r.traceFileLifecycle(TransferFileAdmitted, plan, nil)
 	completed, err := r.transferMissingRanges(ctx, plan, opened, transaction, &fileProgress)
-	if reopened, ok := err.(*content.RevisionReopenedError); ok {
+	if reopened, ok := errors.AsType[*content.RevisionReopenedError](err); ok {
 		return r.settleReopenedRevision(ctx, plan, opened, transaction, &fileProgress, reopened, retry != nil)
 	}
 	if err != nil || !completed {
 		return nil, err
 	}
 	return nil, r.commitTransferredFile(ctx, plan, opened, transaction, &fileProgress)
+}
+
+func (r *jobRun) admitImmediateSettlement(
+	ctx context.Context,
+	plan plannedFile,
+	opened OpenedRevision,
+	target FileMaterializationTarget,
+	settlement FileSettlement,
+	retry *fileRevisionRetry,
+) error {
+	if err := validateImmediateFileSettlement(target, settlement); err != nil {
+		contractFailure := outputContractFault(err)
+		r.traceFileLifecycle(TransferFileAdmitted, plan, contractFailure)
+		return r.rejectImmediateSettlement(ctx, plan, opened, settlement, contractFailure)
+	}
+	if err := r.reconcileImmediateSettlementCoverage(plan, settlement, retry); err != nil {
+		r.traceFileLifecycle(TransferFileAdmitted, plan, err)
+		return r.rejectImmediateSettlement(ctx, plan, opened, settlement, err)
+	}
+	r.traceFileLifecycle(TransferFileAdmitted, plan, nil)
+	return r.handleImmediateSettlement(ctx, plan, opened, settlement)
+}
+
+func (r *jobRun) reconcileImmediateSettlementCoverage(
+	plan plannedFile,
+	settlement FileSettlement,
+	retry *fileRevisionRetry,
+) error {
+	if checkpoint, ok := settlement.VerifiedProgress(); ok {
+		recovered, exact := rangeSetByteCount(checkpoint.Ranges())
+		if !exact || recovered > plan.expectedSize {
+			return outputContractFault(ErrOutputContract)
+		}
+		r.reconcileFileCoverage(retry, checkpoint.Ranges(), 0, recovered)
+		return nil
+	}
+	if retry == nil {
+		return nil
+	}
+	if _, reason, blocked := settlement.ItemBlock(); blocked &&
+		(reason == ItemBlockOwnedObjectUnknown || reason == ItemBlockOwnershipUnknown) {
+		// The pause proved durable coverage at the time. The new
+		// ownership result withdraws it for this file alone.
+		r.reconcileFileCoverage(retry, content.RangeSet{}, 0, 0)
+	}
+	r.traceFileRevisionRetry(plan, retry.reopened, "admission-blocked", retry.progress.persistedBytes, 0, retry.started)
+	return nil
 }
 
 func (r *jobRun) rejectUnstartedFile(
@@ -215,7 +239,7 @@ func (r *jobRun) settleReopenedRevision(
 	}
 	// The range reader has drained before returning, and no output call remains
 	// active. A durable pause is required before handing the lease to a new writer.
-	settlement, err := r.pauseFileTransaction(ctx, plan, transaction, reason, progress)
+	settlement, err := r.pauseFileTransaction(ctx, transaction, reason, progress)
 	if err != nil {
 		decision = "settlement-failed"
 	}

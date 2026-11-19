@@ -463,15 +463,6 @@ func mustWriterControl(t *testing.T, kind MessageKind, operationID *OperationID)
 	return mustMessage(t, kind, operationID, map[uint64]any{0: uint64(1), 1: uint64(2)})
 }
 
-func mustPlaintext(t *testing.T, message Message) []byte {
-	t.Helper()
-	plaintext, err := EncodeMessage(message)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return plaintext
-}
-
 func (p *passthroughSealer) String() string { return fmt.Sprintf("sequence=%d", p.next) }
 
 func checkedSender(t testing.TB, publicKey []byte) *senderauth.Verifier {
