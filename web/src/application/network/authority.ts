@@ -3,7 +3,7 @@ import { canonicalRelayIdentity } from '../../network/relay-endpoint'
 import type { NetworkDirectory } from '../../network/directory'
 import { RelayPolicyDeniedError, type RelayAdmission } from '../../receiver/relay-admission'
 
-type RelayDirectory = Pick<NetworkDirectory, 'ready' | 'snapshot' | 'observeSnapshot'>
+type RelayDirectory = Pick<NetworkDirectory, 'snapshot' | 'observeSnapshot'>
 
 export class OfficialRelayAuthority {
   readonly #feed: AuthorityBlockFeed
@@ -24,18 +24,15 @@ export class OfficialRelayAuthority {
         }
         const classify = () => {
           if (closed || stopFeed || !directory.snapshot?.nodes.some(node => node.identity === identity)) return
-          // An explicit endpoint may first become known while a mirror is refreshing.
-          // Once identified, keep the connection under policy for its lifetime.
+          // Membership can arrive after dialing starts. Keep confirmed membership
+          // for the lifetime of this connection, even if the directory changes.
           stopFeed = this.#feed.observe(enforce)
           enforce()
         }
         const stopDirectory = directory.observeSnapshot(classify)
-        const ready = directory.ready.catch(() => undefined).then(() => {
-          classify()
-          if (stopFeed) return this.#feed.ready
-        })
+        classify()
         return {
-          ready,
+          beforeDial: stopFeed ? this.#feed.ready : undefined,
           close: () => {
             if (closed) return
             closed = true

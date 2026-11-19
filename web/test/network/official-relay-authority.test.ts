@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fixture from '../../../testdata/network/authority.json'
+import directoryVectors from '../../../testdata/network/directory.json'
 import { OfficialRelayAuthority } from '../../src/application/network/authority'
+import { NetworkDirectory } from '../../src/network/directory'
+import { MemoryDirectoryCache } from '../../src/network/directory-cache'
 import type { NetworkSnapshot } from '../../src/network/node-directory'
 
 const api = 'https://authority.example'
@@ -21,7 +24,6 @@ function directory(initial?: NetworkSnapshot) {
   let current = initial
   const listeners = new Set<() => void>()
   return {
-    ready: Promise.resolve(),
     get snapshot() { return current },
     observeSnapshot(listener: () => void) {
       listeners.add(listener)
@@ -53,7 +55,7 @@ describe('official relay policy demand', () => {
   it('leaves the feed idle without an official dial, including report links and self-hosted dials', async () => {
     authority.reportURL(share)
     const independent = authority.admission(share, directory(snapshot)).watch(independentRelay, vi.fn())
-    await independent.ready
+    expect(independent.beforeDial).toBeUndefined()
     await vi.advanceTimersByTimeAsync(120_000)
     expect(request).not.toHaveBeenCalled()
     independent.close()
@@ -64,9 +66,12 @@ describe('official relay policy demand', () => {
     let respond!: (response: Response) => void
     request.mockImplementationOnce(() => new Promise(resolve => { respond = resolve }))
     const independent = admission.watch(independentRelay, vi.fn())
-    const official = admission.watch('wss://OFFICIAL.example:443/v2/ws', vi.fn())
+    const official = admission.watch('wss://OFFICIAL.example:443/', vi.fn())
     const parallel = admission.watch(officialRelay, vi.fn())
-    await Promise.all([official.ready, parallel.ready, independent.ready])
+    expect(official.beforeDial).toBeInstanceOf(Promise)
+    expect(parallel.beforeDial).toBe(official.beforeDial)
+    expect(independent.beforeDial).toBeUndefined()
+    await official.beforeDial
     expect(request).toHaveBeenCalledExactlyOnceWith(`${api}/v1/blocks`, expect.anything())
     respond(new Response(null, { status: 503 }))
     await vi.advanceTimersByTimeAsync(0)
@@ -77,23 +82,58 @@ describe('official relay policy demand', () => {
     parallel.close()
 
     const retry = admission.watch(officialRelay, vi.fn())
-    await retry.ready
+    await retry.beforeDial
     retry.close()
     await vi.advanceTimersByTimeAsync(120_000)
     expect(request).toHaveBeenCalledTimes(2)
 
     const resumed = admission.watch(officialRelay, vi.fn())
-    await resumed.ready
+    await resumed.beforeDial
     await vi.advanceTimersByTimeAsync(0)
     expect(request).toHaveBeenCalledTimes(3)
     resumed.close()
     independent.close()
   })
 
+  it('uses the initialized directory to classify an endpoint without holding its dial', async () => {
+    const cache = new MemoryDirectoryCache()
+    let finishLoad!: () => void
+    const load = new Promise<undefined>(resolve => { finishLoad = () => resolve(undefined) })
+    const source = new NetworkDirectory({
+      network: directoryVectors.network,
+      roots: directoryVectors.roots,
+      embedded: JSON.stringify(directoryVectors.entries.find(entry => entry.name === 'valid')!.envelope),
+      cache: { load: () => load, commit: value => cache.commit(value) },
+      mirrors: [],
+      now: () => Date.parse(directoryVectors.now),
+    })
+    const admission = authority.admission(share, source)
+    const independent = admission.watch(independentRelay, vi.fn())
+    const official = admission.watch('https://jp1.example', vi.fn())
+    try {
+      expect(independent.beforeDial).toBeUndefined()
+      expect(official.beforeDial).toBeUndefined()
+      expect(request).not.toHaveBeenCalled()
+
+      finishLoad()
+      await source.ready
+      await vi.advanceTimersByTimeAsync(0)
+      expect(request).toHaveBeenCalledExactlyOnceWith(`${api}/v1/blocks`, expect.anything())
+
+      official.close()
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(request).toHaveBeenCalledTimes(1)
+    } finally {
+      official.close()
+      independent.close()
+      source.close()
+    }
+  })
+
   it('starts policy for an already connected endpoint discovered by a later directory refresh', async () => {
     const source = directory()
     const watch = authority.admission(share, source).watch(officialRelay, vi.fn())
-    await watch.ready
+    expect(watch.beforeDial).toBeUndefined()
     await vi.advanceTimersByTimeAsync(0)
     expect(request).not.toHaveBeenCalled()
 

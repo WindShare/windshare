@@ -70,18 +70,25 @@ export class NetworkDirectory {
       ? { cache: provided, record: await provided.load(), storageDenial: undefined }
       : await BrowserDirectoryCache.initialize(this.#options.network)
     if (storageDenial) this.#observe({ operationId: 'directory-initialize', transition: 'storage_fallback', failure: storageDenial })
+    let snapshot: NetworkSnapshot | undefined
     if (record) {
       const cached = await verifyDirectory(record.envelope, this.#options.network, this.#options.roots)
       if (cached.cursor.generation !== record.cursor.generation || cached.cursor.serial !== record.cursor.serial || cached.cursor.digest !== record.cursor.digest) throw new Error('Network cache history mismatch')
-      this.#snapshot = cached
+      snapshot = cached
     }
-    if (this.#options.embedded) {
-      const embedded = await verifyDirectory(this.#options.embedded, this.#options.network, this.#options.roots)
-      const current = this.#snapshot?.cursor
-      if (!current || embedded.cursor.generation > current.generation || embedded.cursor.generation === current.generation && embedded.cursor.serial >= current.serial) {
-        await cache.commit(embedded)
-        this.#snapshot = embedded
+    try {
+      if (this.#options.embedded) {
+        const embedded = await verifyDirectory(this.#options.embedded, this.#options.network, this.#options.roots)
+        const current = snapshot?.cursor
+        if (!current || embedded.cursor.generation > current.generation || embedded.cursor.generation === current.generation && embedded.cursor.serial >= current.serial) {
+          await cache.commit(embedded)
+          snapshot = embedded
+        }
       }
+    } finally {
+      // Consumers keep confirmed membership for an entire connection. Publish
+      // once the release seed has been checked against the durable snapshot.
+      if (snapshot) this.#publishSnapshot(snapshot)
     }
     return cache
   }
@@ -128,10 +135,14 @@ export class NetworkDirectory {
   }
 
   #accept(snapshot: NetworkSnapshot, operationId: string, mirror: string): void {
-    this.#snapshot = snapshot
     this.#failures = 0
     this.#schedule(REFRESH_INTERVAL_MS)
+    this.#publishSnapshot(snapshot)
     this.#observe({ operationId, transition: 'accepted', mirror, generation: snapshot.cursor.generation, serial: snapshot.cursor.serial, trustedUntil: snapshot.trustedUntil })
+  }
+
+  #publishSnapshot(snapshot: NetworkSnapshot): void {
+    this.#snapshot = snapshot
     for (const listener of this.#snapshotListeners) {
       try { listener() } catch { /* Consumers cannot revoke a committed directory. */ }
     }

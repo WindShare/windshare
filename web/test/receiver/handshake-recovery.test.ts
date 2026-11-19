@@ -201,7 +201,7 @@ describe('production browser handshake recovery', () => {
     const channel = new HandshakeChannel('valid')
     const watch = vi.fn((base: string, deny: (reason: Error) => void) => {
       if (base === 'official') deny(new RelayPolicyDeniedError())
-      return { ready: Promise.resolve(), close() {} }
+      return { beforeDial: undefined, close() {} }
     })
     const dial = vi.spyOn(relayReceiver, 'dialRelayReceiver').mockImplementation(async () => {
       if (Date.now() < 1_000) throw new relayReceiver.RelayReceiverError('Share is starting', { relayError: {

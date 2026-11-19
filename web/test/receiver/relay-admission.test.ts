@@ -14,7 +14,7 @@ async function connection(): Promise<RelayReceiverConnection> {
     close,
   }
 }
-function policy(ready = Promise.resolve()) {
+function policy(beforeDial?: Promise<void>) {
   let denied = false
   const listeners = new Set<() => void>()
   const admission: RelayAdmission = {
@@ -24,7 +24,7 @@ function policy(ready = Promise.resolve()) {
       }
       listeners.add(enforce)
       enforce()
-      return { ready, close: () => { listeners.delete(enforce) } }
+      return { beforeDial, close: () => { listeners.delete(enforce) } }
     },
   }
   return { admission, listeners, block: () => { denied = true; [...listeners].forEach(listener => listener()) } }
@@ -47,10 +47,9 @@ describe('relay policy lifetime', () => {
     const scope = policy(), relay = await connection()
     let resolve!: (value: RelayReceiverConnection) => void
     const pending = new Promise<RelayReceiverConnection>(done => { resolve = done })
-    let started!: () => void
-    const ready = new Promise<void>(done => { started = done })
-    const task = admittedRelay(scope.admission, 'official', new AbortController().signal, async () => { started(); return pending })
-    await ready
+    const dial = vi.fn(() => pending)
+    const task = admittedRelay(scope.admission, 'official', new AbortController().signal, dial)
+    expect(dial).toHaveBeenCalledTimes(1)
     scope.block()
     resolve(relay)
     await expect(task).rejects.toBeInstanceOf(RelayPolicyDeniedError)

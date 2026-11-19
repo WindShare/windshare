@@ -57,8 +57,21 @@ describe('root-authorized network directory', () => {
     await Promise.all([directory.refresh(), directory.refresh()])
     expect(calls).toEqual(['https://ws.ourworld.top/.well-known/windshare-network', 'https://mirror.example/directory'])
     expect(observations).toEqual(['rejected', 'accepted'])
-    expect(publishedGenerations).toEqual([2])
+    expect(publishedGenerations).toEqual([1, 2])
     expect(directory.snapshot!.cursor.generation).toBe(2)
+  })
+  it('publishes only the authoritative initial snapshot when the release seed supersedes the cache', async () => {
+    const cache = new MemoryDirectoryCache()
+    await cache.commit(await verify('valid'))
+    const directory = new NetworkDirectory({ network: vectors.network, roots: vectors.roots, embedded: envelope('new_generation'),
+      mirrors: [], now: () => now, cache,
+    })
+    directories.push(directory)
+    const publishedGenerations: number[] = []
+    directory.observeSnapshot(() => publishedGenerations.push(directory.snapshot!.cursor.generation))
+
+    await directory.ready
+    expect(publishedGenerations).toEqual([2])
   })
   it('resolves an alias-only link and keeps refreshing when IndexedDB access is denied', async () => {
     const key = await encodeSuite02CapabilityKey(new Uint8Array(16), new Uint8Array(16))

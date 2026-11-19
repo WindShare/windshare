@@ -12,7 +12,7 @@ export interface RelayAdmission {
 }
 
 interface RelayAdmissionWatch {
-  readonly ready: Promise<void>
+  readonly beforeDial: Promise<void> | undefined
   close(): void
 }
 
@@ -47,7 +47,7 @@ export async function admittedRelay(
   parent.addEventListener('abort', abort, { once: true })
   if (parent.aborted) abort()
   try {
-    await prepareAdmission(watch.ready, lifetime.signal)
+    if (watch.beforeDial) await prepareAdmission(watch.beforeDial, lifetime.signal)
     lifetime.signal.throwIfAborted()
     relay = await dial(lifetime.signal)
     if (lifetime.signal.aborted) {
