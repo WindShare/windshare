@@ -55,10 +55,21 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: Read Go version from go.mod
+        id: go-toolchain
+        shell: bash
+        run: |
+          version="$(awk '$1 == "go" { print $2; exit }' go.mod)"
+          printf 'version=%s\n' "${version:?missing Go version in go.mod}" >> "$GITHUB_OUTPUT"
+      # setup-go caches build outputs and modules separately from the SDK.
+      - name: Cache Go toolchain
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.tool_cache }}/go/${{ steps.go-toolchain.outputs.version }}
+          key: go-sdk-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-toolchain.outputs.version }}
       - uses: actions/setup-go@v7
         with:
-          go-version: stable
-          check-latest: true
+          go-version: ${{ steps.go-toolchain.outputs.version }}
           cache-dependency-path: go.sum
       - name: Verify native output and recovery
         shell: bash
@@ -81,25 +92,22 @@ jobs:
           workspaces: relay-rust -> .target
           cache-bin: false
           cmd-format: rustup run stable {0}
-      - name: Verify CLI file, folder, and process-restart downloads
+      - name: Build native CLI and relay
         shell: bash
         run: |
           set -euo pipefail
           go build -o "$RUNNER_TEMP/wind-native" ./cmd/wind
+          file "$RUNNER_TEMP/wind-native"
           rustup run stable cargo build --manifest-path relay-rust/Cargo.toml --locked \
             -p windshare-relay-native --bin relay-native
+      - name: Verify CLI file, folder, and process-restart downloads
+        shell: bash
+        run: |
+          set -euo pipefail
           python3 scripts/ci/native-output/macos/cli.py \
             --wind "$RUNNER_TEMP/wind-native" --relay "$CARGO_TARGET_DIR/debug/relay-native" \
             --evidence "$RUNNER_TEMP/native-output-evidence" \
             2>&1 | tee "$RUNNER_TEMP/native-output-evidence/cli.log"
-      - name: Build Darwin CLI architectures
-        shell: bash
-        run: |
-          set -euo pipefail
-          for arch in arm64 amd64; do
-            GOARCH="$arch" go build -o "$RUNNER_TEMP/wind-$arch" ./cmd/wind
-            file "$RUNNER_TEMP/wind-$arch"
-          done
       - name: Preserve native evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
