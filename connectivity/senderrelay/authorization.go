@@ -8,10 +8,10 @@ import (
 	"github.com/windshare/windshare/core/serviceauthority"
 )
 
-// AuthorizationSource is consulted for fresh registration and performs no
-// network I/O. A waiting result and its change signal describe one revision.
+// AuthorizationSource reserves authorization for one fresh registration. Waiting
+// results describe the revision to watch and hold no reservation or dial slot.
 type AuthorizationSource interface {
-	RegistrationAuthorization() Authorization
+	ReserveRegistrationAuthorization() Authorization
 }
 
 type AuthorizationState = serviceauthority.AdmissionState
@@ -20,6 +20,7 @@ type Authorization = serviceauthority.RegistrationAuthorization
 const (
 	AuthorizationReady              = serviceauthority.AdmissionReady
 	AuthorizationPendingSetup       = serviceauthority.AdmissionPendingSetup
+	AuthorizationPendingAttribution = serviceauthority.AdmissionPendingAttribution
 	AuthorizationExpired            = serviceauthority.AdmissionExpired
 	AuthorizationTemporaryFailure   = serviceauthority.AdmissionTemporaryFailure
 	AuthorizationDenied             = serviceauthority.AdmissionDenied
@@ -28,7 +29,7 @@ const (
 
 type StaticKey string
 
-func (key StaticKey) RegistrationAuthorization() Authorization {
+func (key StaticKey) ReserveRegistrationAuthorization() Authorization {
 	return Authorization{State: AuthorizationReady, Bearer: string(key)}
 }
 
@@ -54,66 +55,70 @@ func validBearer(token string) bool {
 	return true
 }
 
-func (candidate Candidate) authorization() Authorization {
+func (candidate Candidate) reserveAuthorization() Authorization {
 	if candidate.Authorization == nil {
-		return StaticKey("").RegistrationAuthorization()
+		return StaticKey("").ReserveRegistrationAuthorization()
 	}
-	return candidate.Authorization.RegistrationAuthorization()
+	return candidate.Authorization.ReserveRegistrationAuthorization()
 }
 
 func (lifecycle *Lifecycle) acquireRegistrationAttempt(ctx context.Context, resume bool, attempt uint32) (AttemptPermit, Authorization, error) {
+	var announced AuthorizationState
 	for {
 		permit, err := lifecycle.beginAttempt(ctx)
 		if err != nil || resume {
 			return permit, Authorization{}, err
 		}
 		// A candidate can wait for a slot longer than a ticket is valid.
-		authorization := lifecycle.config.Candidate.authorization()
+		authorization := lifecycle.config.Candidate.reserveAuthorization()
 		if authorization.State == AuthorizationReady && validBearer(authorization.Bearer) {
+			if announced != 0 {
+				lifecycle.showAuthorizationWait(false)
+			}
 			return permit, authorization, nil
 		}
-		// Setup must leave capacity available to other paths.
 		if permit != nil {
 			permit.Release()
 		}
 		if authorization.State == AuthorizationReady {
+			authorization.Reservation.Finish(serviceauthority.RegistrationNotSent)
 			return nil, Authorization{}, ErrCandidate
 		}
-		if err := lifecycle.waitAuthorization(ctx, attempt, authorization); err != nil {
+		if announced != authorization.State {
+			lifecycle.observeAuthorizationWait(attempt, authorization)
+			announced = authorization.State
+		}
+		// Allow another route to dial while account or attribution state changes.
+		if err := lifecycle.waitAuthorization(ctx, authorization); err != nil {
 			return nil, Authorization{}, err
 		}
 	}
 }
 
-func (lifecycle *Lifecycle) waitAuthorization(ctx context.Context, attempt uint32, authorization Authorization) error {
-	var announced AuthorizationState
-	for authorization.State != AuthorizationReady {
-		failure := &AuthorizationError{State: authorization.State, Cause: authorization.Cause}
-		if announced != authorization.State {
-			lifecycle.showAuthorizationWait(authorization.State == AuthorizationUserActionRequired)
-			lifecycle.observeRecoveryAttempt(Attempt{ShareInstance: lifecycle.config.Fresh.ShareInstance,
-				Number: attempt, State: AttemptAuthorization, Authorization: authorization.State,
-				Failure: failure, Terminal: authorization.State == AuthorizationDenied})
-			announced = authorization.State
+func (lifecycle *Lifecycle) observeAuthorizationWait(attempt uint32, authorization Authorization) {
+	lifecycle.showAuthorizationWait(authorization.State == AuthorizationUserActionRequired)
+	lifecycle.observeRecoveryAttempt(Attempt{ShareInstance: lifecycle.config.Fresh.ShareInstance,
+		Number: attempt, State: AttemptAuthorization, Authorization: authorization.State,
+		Failure:  &AuthorizationError{State: authorization.State, Cause: authorization.Cause},
+		Terminal: authorization.State == AuthorizationDenied})
+}
+
+func (lifecycle *Lifecycle) waitAuthorization(ctx context.Context, authorization Authorization) error {
+	switch authorization.State {
+	case AuthorizationDenied:
+		return &AuthorizationError{State: authorization.State, Cause: authorization.Cause}
+	case AuthorizationPendingSetup, AuthorizationPendingAttribution, AuthorizationExpired, AuthorizationTemporaryFailure, AuthorizationUserActionRequired:
+		if authorization.Changed == nil {
+			return errors.Join(ErrCandidate, errors.New("authorization source has no change signal"))
 		}
-		switch authorization.State {
-		case AuthorizationDenied:
-			return failure
-		case AuthorizationPendingSetup, AuthorizationExpired, AuthorizationTemporaryFailure, AuthorizationUserActionRequired:
-			if authorization.Changed == nil {
-				return errors.Join(ErrCandidate, errors.New("authorization source has no change signal"))
-			}
-		default:
-			return ErrCandidate
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-authorization.Changed:
-		case <-lifecycle.wake:
-		}
-		authorization = lifecycle.config.Candidate.authorization()
+	default:
+		return ErrCandidate
 	}
-	lifecycle.showAuthorizationWait(false)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-authorization.Changed:
+	case <-lifecycle.wake:
+	}
 	return nil
 }

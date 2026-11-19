@@ -69,21 +69,19 @@ func TestCachedTicketDoesNotWaitForAuthorityAndBlockedAccountNeverBecomesAnonymo
 	share := service.NewShareAuthorization(t.Context())
 	defer share.Close()
 	source := &Source{share: share, address: "https://node.example"}
-	if authorization := source.RegistrationAuthorization(); authorization.State != serviceauthority.AdmissionReady || authorization.Bearer != response.Ticket {
-		t.Fatal(authorization.State)
-	}
+	requireBearer(t, source, response.Ticket)
 	service.mu.Lock()
 	service.nodes[source.address] = &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)}
 	service.rememberDenialLocked(service.record, "account_blocked")
 	service.mu.Unlock()
-	if authorization := source.RegistrationAuthorization(); authorization.State != serviceauthority.AdmissionDenied || authorization.Bearer != "" {
+	if authorization := source.ReserveRegistrationAuthorization(); authorization.State != serviceauthority.AdmissionDenied || authorization.Bearer != "" {
 		t.Fatal("blocked account fell back to anonymous")
 	}
 	service.mu.Lock()
 	service.issuedLocked(cachedRecord(response))
 	service.mu.Unlock()
 	service.config.ResolveNode = func(string) (Node, bool) { return Node{}, false }
-	if source.RegistrationAuthorization().State != serviceauthority.AdmissionDenied {
+	if source.ReserveRegistrationAuthorization().State != serviceauthority.AdmissionDenied {
 		t.Fatal("ticket sent to removed official node")
 	}
 }
@@ -94,22 +92,20 @@ func TestAnonymousAdmissionDuringSetupRequiresFreshSignedNodePolicy(t *testing.T
 	share := service.NewShareAuthorization(t.Context())
 	defer share.Close()
 	source := &Source{share: share, address: "https://node.example"}
-	if source.RegistrationAuthorization().State != serviceauthority.AdmissionPendingSetup {
+	if source.ReserveRegistrationAuthorization().State != serviceauthority.AdmissionPendingSetup {
 		t.Fatal("unknown anonymous policy was assumed")
 	}
 	service.transition(RegistrationRequired, "", time.Time{})
-	if got := source.RegistrationAuthorization().State; got != serviceauthority.AdmissionUserActionRequired {
+	if got := source.ReserveRegistrationAuthorization().State; got != serviceauthority.AdmissionUserActionRequired {
 		t.Fatalf("manual registration authorization = %v", got)
 	}
 	service.transition(Pending, "", time.Time{})
 	service.nodes[source.address] = &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now()}
-	if source.RegistrationAuthorization().State != serviceauthority.AdmissionPendingSetup {
+	if source.ReserveRegistrationAuthorization().State != serviceauthority.AdmissionPendingSetup {
 		t.Fatal("expired policy permitted anonymous admission")
 	}
 	service.nodes[source.address].expires = config.Now().Add(time.Minute)
-	if source.RegistrationAuthorization().State != serviceauthority.AdmissionReady {
-		t.Fatal("usable anonymous admission waited for setup")
-	}
+	requireBearer(t, source, "")
 }
 
 func TestRegistrationRetriesReusePersistedEntropyAndRefreshKeepsCredential(t *testing.T) {

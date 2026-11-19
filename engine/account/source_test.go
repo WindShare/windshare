@@ -91,7 +91,7 @@ func TestShareWaitsForConfirmedSelectionAfterLocalReadFailure(t *testing.T) {
 	share := service.NewShareAuthorization(t.Context())
 	defer share.Close()
 	source := &Source{share: share, address: "primary"}
-	waiting := source.RegistrationAuthorization()
+	waiting := source.ReserveRegistrationAuthorization()
 	if waiting.State != serviceauthority.AdmissionTemporaryFailure || waiting.Bearer != "" || !errors.Is(waiting.Cause, failure) {
 		t.Fatalf("share did not wait for a confirmed identity: %+v", waiting)
 	}

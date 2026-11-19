@@ -37,9 +37,7 @@ func TestDenialSurvivesFailedWriteAndCacheReload(t *testing.T) {
 	share := service.NewShareAuthorization(t.Context())
 	defer share.Close()
 	source := &Source{share: share, address: "node"}
-	if got := source.RegistrationAuthorization(); got.State != serviceauthority.AdmissionReady {
-		t.Fatal(got.State, got.Cause)
-	}
+	requireBearer(t, source, response.Ticket)
 	if _, err := service.RefreshOnce(t.Context()); err == nil || !strings.Contains(err.Error(), "disk full") {
 		t.Fatalf("failed persistence: %v", err)
 	}
@@ -50,7 +48,7 @@ func TestDenialSurvivesFailedWriteAndCacheReload(t *testing.T) {
 	newShare := service.NewShareAuthorization(t.Context())
 	defer newShare.Close()
 	for _, source := range []*Source{source, {share: newShare, address: "node"}} {
-		if got := source.RegistrationAuthorization(); got.State != serviceauthority.AdmissionDenied || got.Bearer != "" {
+		if got := source.ReserveRegistrationAuthorization(); got.State != serviceauthority.AdmissionDenied || got.Bearer != "" {
 			t.Fatalf("denial lost: %+v", got)
 		}
 	}
@@ -80,9 +78,7 @@ func TestAdoptionUpdatesRetainedCredentialBeforeLoginChanges(t *testing.T) {
 	share := service.NewShareAuthorization(t.Context())
 	defer share.Close()
 	source := &Source{share: share, address: "node"}
-	if got := source.RegistrationAuthorization(); got.State != serviceauthority.AdmissionReady {
-		t.Fatal(got.State, got.Cause)
-	}
+	requireBearer(t, source, response.Ticket)
 	service.mu.Lock()
 	record := cloneRecord(service.record)
 	record.Ticket = "fresh-ticket"

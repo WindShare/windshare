@@ -3,8 +3,10 @@ package senderrelay
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
+	"github.com/windshare/windshare/core/serviceauthority"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 )
@@ -201,10 +203,17 @@ func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, res
 	})
 	// Delivery uncertainty survives later failures: a lost acknowledgement can
 	// leave a registration that must be resumed and permanently revoked on stop.
+	delivery := serviceauthority.RegistrationNotSent
 	if _, notSent := errors.AsType[*relayv2.RegistrationNotSentError](err); !notSent {
+		delivery = serviceauthority.RegistrationMayHaveBeenSent
 		lifecycle.mayHaveRegistered = true
 		lifecycle.resumeNext = true
 	}
+	if authorization.Reservation != nil && delivery == serviceauthority.RegistrationNotSent {
+		slog.DebugContext(recovery, "share_attribution_attempt_unsent",
+			"share_instance_id", attempt.ShareInstance, "attempt", attempt.Number, "anonymous", authorization.Bearer == "")
+	}
+	authorization.Reservation.Finish(delivery)
 	if err == nil {
 		err = dialContext.Err()
 	}

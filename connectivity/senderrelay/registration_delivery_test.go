@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/windshare/windshare/core/serviceauthority"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 )
@@ -69,14 +70,15 @@ func TestInitialMissingWebSocketRouteRetiresOnlyThisLifecycle(t *testing.T) {
 	}
 }
 
-func TestCleanupUsesDeliveryResultIndependentlyOfObservations(t *testing.T) {
+func TestAttributionAndCleanupUseDeliveryResultIndependentlyOfObservations(t *testing.T) {
 	for _, notSent := range []bool{true, false} {
 		t.Run(fmt.Sprintf("notSent=%t", notSent), func(t *testing.T) {
 			ctx, stop := context.WithCancel(t.Context())
 			defer stop()
-			clock := newSenderRelayTestClock()
-			clock.wait = func(context.Context, time.Duration) error { stop(); return context.Canceled }
 			dialer := &senderRelayTestDialer{dial: func(_ context.Context, config relayv2.SenderConfig) (Connection, error) {
+				// Cancellation can replace the returned error, but the raw delivery
+				// result still owns attribution and cleanup.
+				stop()
 				failure := errors.New("connection lost")
 				if notSent {
 					// Optional diagnostic events are deliberately absent.
@@ -87,11 +89,25 @@ func TestCleanupUsesDeliveryResultIndependentlyOfObservations(t *testing.T) {
 				config.Dial.ObserveStage(relayv2.DialStage{Stage: relayv2.DialStageWebSocket, Failure: failure})
 				return Connection{}, failure
 			}}
-			lifecycle := newSenderRelayTestLifecycle(t, nil, dialer, clock)
+			var deliveries []serviceauthority.RegistrationDelivery
+			config := newSenderRelayTestConfig(t, nil, dialer, nil)
+			config.Candidate.Authorization = authorizationFunc(func() Authorization {
+				return Authorization{State: AuthorizationReady, Reservation: func(delivery serviceauthority.RegistrationDelivery) {
+					deliveries = append(deliveries, delivery)
+				}}
+			})
+			lifecycle, err := New(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lifecycle.StopRecovery()
 			if err := lifecycle.WaitReady(ctx); !errors.Is(err, context.Canceled) {
 				t.Fatalf("startup wait = %v", err)
 			}
-			err := lifecycle.Cleanup(ctx)
+			if len(deliveries) != 1 || (deliveries[0] == serviceauthority.RegistrationNotSent) != notSent {
+				t.Fatalf("registration delivery = %v, want unsent=%t", deliveries, notSent)
+			}
+			err = lifecycle.Cleanup(ctx)
 			if notSent && err != nil || !notSent && !errors.Is(err, context.Canceled) {
 				t.Fatalf("cleanup = %v, notSent=%t", err, notSent)
 			}

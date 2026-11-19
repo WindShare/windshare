@@ -13,7 +13,7 @@ import (
 
 type authorizationFunc func() Authorization
 
-func (source authorizationFunc) RegistrationAuthorization() Authorization { return source() }
+func (source authorizationFunc) ReserveRegistrationAuthorization() Authorization { return source() }
 
 func TestCandidateValidationDoesNotSelectDynamicAuthorization(t *testing.T) {
 	config := newSenderRelayTestConfig(t, nil, nil, nil)
@@ -87,7 +87,7 @@ type changingAuthorization struct {
 	changed chan struct{}
 }
 
-func (source *changingAuthorization) RegistrationAuthorization() Authorization {
+func (source *changingAuthorization) ReserveRegistrationAuthorization() Authorization {
 	source.mu.Lock()
 	defer source.mu.Unlock()
 	value := source.value

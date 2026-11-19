@@ -37,7 +37,7 @@ func TestCandidateRejectsAmbiguousAddressesAndInvalidHeaderValues(t *testing.T) 
 		t.Fatalf("public addresses=%v error=%v", urls, err)
 	}
 	encoded, err := json.Marshal(candidate)
-	if err != nil || strings.Contains(string(encoded), candidate.authorization().Bearer) {
+	if err != nil || strings.Contains(string(encoded), candidate.reserveAuthorization().Bearer) {
 		t.Fatal("generic candidate serialization exposed registration authority")
 	}
 }
@@ -53,7 +53,7 @@ func TestRegistrationCredentialCannotFollowRedirect(t *testing.T) {
 	}))
 	config := newSenderRelayTestConfig(t, nil, nil, nil)
 	config.Candidate = Candidate{PublicURL: "https://relay.example", Authorization: StaticKey("bound-token")}
-	dial := registrationDialOptions(0, false, config.Candidate.authorization())
+	dial := registrationDialOptions(0, false, config.Candidate.reserveAuthorization())
 	dial.HTTPClient.Transport = server.Client().Transport
 	_, err := relayv2.DialSender(t.Context(), relayv2.SenderConfig{
 		RelayBaseURL: config.Candidate.PublicURL, Init: config.Fresh, SenderPrivateKey: config.PrivateKey,

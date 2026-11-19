@@ -54,7 +54,7 @@ func TestInitialPublicationUncertaintyKeepsOriginalCredentialsAndDescriptor(t *t
 				t.Fatal("republish changed descriptor bytes")
 			}
 			for _, attempt := range configs {
-				wantAuthorization := "Bearer " + config.Candidate.authorization().Bearer
+				wantAuthorization := "Bearer " + config.Candidate.reserveAuthorization().Bearer
 				if attempt.Init.Mode == v2.RegistrationResume {
 					wantAuthorization = ""
 				}

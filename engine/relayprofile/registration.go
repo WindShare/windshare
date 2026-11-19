@@ -6,7 +6,7 @@ import (
 )
 
 type AuthorizationSource interface {
-	RegistrationAuthorization() serviceauthority.RegistrationAuthorization
+	ReserveRegistrationAuthorization() serviceauthority.RegistrationAuthorization
 }
 
 type Registration struct {

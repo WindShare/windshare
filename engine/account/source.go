@@ -17,11 +17,17 @@ const (
 	attributionClosed
 )
 
+type attributionReservation struct {
+	identity shareAttribution
+	inFlight int
+}
+
 // ShareAuthorization owns the identity shared by all official relay registrations
 // in one share. Its state and credential references are guarded by Service.mu.
 type ShareAuthorization struct {
 	service      *Service
 	attribution  shareAttribution
+	reservation  *attributionReservation
 	credential   *credentialSession
 	selectionErr error
 }
@@ -62,6 +68,7 @@ func (share *ShareAuthorization) Close() {
 	defer service.mu.Unlock()
 	if share.attribution != attributionClosed {
 		share.attribution = attributionClosed
+		share.reservation = nil
 		delete(service.unconfirmedShares, share)
 		share.releaseCredentialLocked()
 		service.notifyLocked()
@@ -82,7 +89,7 @@ func (share *ShareAuthorization) Source(address string) *Source {
 	return &Source{share: share, address: address}
 }
 
-func (source *Source) RegistrationAuthorization() serviceauthority.RegistrationAuthorization {
+func (source *Source) ReserveRegistrationAuthorization() serviceauthority.RegistrationAuthorization {
 	if source == nil {
 		return serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionReady}
 	}
@@ -111,7 +118,56 @@ func (source *Source) RegistrationAuthorization() serviceauthority.RegistrationA
 			State: serviceauthority.AdmissionTemporaryFailure, Changed: service.changed, Cause: share.selectionErr,
 		}
 	}
-	return source.selectAuthorizationLocked(node)
+	authorization := source.selectAuthorizationLocked(node)
+	if authorization.State == serviceauthority.AdmissionReady && share.attribution == attributionPending {
+		authorization.Reservation = share.reserveAttributionLocked(authorization.Bearer)
+	}
+	return authorization
+}
+
+func (share *ShareAuthorization) reserveAttributionLocked(bearer string) serviceauthority.RegistrationReservation {
+	service := share.service
+	if share.reservation == nil {
+		identity := attributionAnonymous
+		if bearer != "" {
+			identity = attributionAccount
+			if share.credential == nil {
+				share.credential = service.retainCredentialLocked(service.record)
+			}
+		}
+		share.reservation = &attributionReservation{identity: identity}
+		if identity == attributionAnonymous {
+			service.notifyLocked()
+		}
+	}
+	reservation := share.reservation
+	reservation.inFlight++
+	finished := false
+	return func(delivery serviceauthority.RegistrationDelivery) {
+		service.mu.Lock()
+		defer service.mu.Unlock()
+		if finished || share.reservation != reservation {
+			return
+		}
+		finished = true
+		reservation.inFlight--
+		if delivery == serviceauthority.RegistrationNotSent {
+			if reservation.inFlight == 0 {
+				share.reservation = nil
+				service.notifyLocked()
+			}
+			return
+		}
+
+		// An acknowledgement can be lost after admission. Keep later attempts
+		// on the same attribution as any registration the relay could retain.
+		share.attribution = reservation.identity
+		share.reservation = nil
+		if share.attribution == attributionAnonymous {
+			share.releaseCredentialLocked()
+			service.notifyLocked()
+		}
+	}
 }
 
 func (source *Source) selectAuthorizationLocked(node Node) serviceauthority.RegistrationAuthorization {
@@ -125,26 +181,27 @@ func (source *Source) selectAuthorizationLocked(node Node) serviceauthority.Regi
 	if record.Denial != "" {
 		return deniedAuthorization(record.Denial)
 	}
-	if service.validTicket(record) && service.currentGenerationLocked(record) {
-		if share.attribution == attributionPending {
-			if share.credential == nil {
-				share.credential = service.retainCredentialLocked(record)
-			}
-			share.attribution = attributionAccount
+	identity := share.attribution
+	if share.reservation != nil {
+		identity = share.reservation.identity
+	}
+	if identity == attributionAnonymous {
+		if source.permitsAnonymousLocked(node) {
+			return serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionReady}
 		}
+		// Only an anonymous-capable node can join this reservation. A ticket
+		// becoming available cannot replace the identity of an in-flight dial.
+		return serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionPendingAttribution, Changed: service.changed}
+	}
+	if service.validTicket(record) && service.currentGenerationLocked(record) {
 		return serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionReady, Bearer: record.Ticket}
 	}
-	if share.attribution == attributionPending && source.permitsAnonymousLocked(node) {
-		// Commit before returning a usable authorization so concurrent nodes
-		// cannot send different identities, even if one reply is lost.
-		share.attribution = attributionAnonymous
-		share.releaseCredentialLocked()
-		service.notifyLocked()
+	if identity == attributionPending && source.permitsAnonymousLocked(node) {
 		return serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionReady}
 	}
 	authorization := serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionPendingSetup, Changed: service.changed}
 	switch {
-	case share.attribution == attributionAccount || share.credential != nil && !sameIdentity(record, service.record):
+	case identity == attributionAccount || share.credential != nil && !sameIdentity(record, service.record):
 		service.refreshCredentialLocked(share.credential)
 		authorization.State = serviceauthority.AdmissionExpired
 	case service.state == Unavailable:

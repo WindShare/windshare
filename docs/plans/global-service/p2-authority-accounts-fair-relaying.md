@@ -36,9 +36,10 @@ Account admission and fair relaying enable mainland service and public promotion
   retain selected files and continue the pending share automatically once authorized. When device
   verification is required, wait for the user to create the account in Settings or with
   `wind account register`. Show estimated progress during that attempt. A share retains its selected
-  credential while pending and commits one attribution, account or anonymous, before any official
-  registration can be sent. All official candidates reuse it for the share's lifetime. Login selects
-  the account for new shares. A share still waiting for its first identity can complete setup.
+  credential while pending. Parallel official attempts reserve one attribution, account or anonymous.
+  Once any registration may have been sent, official candidates reuse that attribution for the share's
+  lifetime. If every attempt finishes before sending, the share can select again. Login selects the
+  account for new shares.
   `senderrelay.Candidate`'s static `AccessKey` becomes a registration-authorization source, either a
   static key or a ticket provider, defined as an interface in `senderrelay`.
 - Authorization outcomes distinguish pending setup, refreshable ticket expiry, temporary service

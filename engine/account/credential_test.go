@@ -47,7 +47,7 @@ func TestShareAttributionSurvivesLoginAcrossOfficialNodes(t *testing.T) {
 	if _, retained := service.credentials[first.Credential]; retained {
 		t.Fatal("old credential outlived its shares")
 	}
-	if got := (&Source{share: published, address: "backup"}).RegistrationAuthorization(); got.State != serviceauthority.AdmissionDenied {
+	if got := (&Source{share: published, address: "backup"}).ReserveRegistrationAuthorization(); got.State != serviceauthority.AdmissionDenied {
 		t.Fatal("closed share acquired authorization", got.State)
 	}
 }
@@ -61,7 +61,7 @@ func TestAnonymousShareKeepsAttributionWhenSetupFinishes(t *testing.T) {
 	defer waiting.Close()
 	primary := &Source{share: anonymous, address: "primary"}
 	backup := &Source{share: anonymous, address: "backup"}
-	pending := backup.RegistrationAuthorization()
+	pending := backup.ReserveRegistrationAuthorization()
 	if pending.State != serviceauthority.AdmissionPendingSetup {
 		t.Fatal(pending.State)
 	}
@@ -82,10 +82,16 @@ func TestAnonymousShareKeepsAttributionWhenSetupFinishes(t *testing.T) {
 
 func requireBearer(t *testing.T, source *Source, want string) {
 	t.Helper()
-	got := source.RegistrationAuthorization()
+	reserveBearer(t, source, want).Reservation.Finish(serviceauthority.RegistrationMayHaveBeenSent)
+}
+
+func reserveBearer(t *testing.T, source *Source, want string) serviceauthority.RegistrationAuthorization {
+	t.Helper()
+	got := source.ReserveRegistrationAuthorization()
 	if got.State != serviceauthority.AdmissionReady || got.Bearer != want {
 		t.Fatalf("%s did not receive the intended authorization (state %s, cause %v)", source.address, got.State.Name(), got.Cause)
 	}
+	return got
 }
 
 func otherAccount(t *testing.T, config Config, first session) session {
@@ -132,7 +138,7 @@ func TestOldPublicationRefreshCannotReplaceNewShareAccount(t *testing.T) {
 	share.credential.record.Ticket = ""
 	service.adoptLocked(Record{SetupSecret: "new-selection"})
 	service.mu.Unlock()
-	pending := backup.RegistrationAuthorization()
+	pending := backup.ReserveRegistrationAuthorization()
 	if pending.State != serviceauthority.AdmissionExpired {
 		t.Fatal(pending.State)
 	}
@@ -162,7 +168,7 @@ func TestUnreadableAccountCacheDoesNotBlockEngineOrAssumeAnonymous(t *testing.T)
 	share := service.NewShareAuthorization(t.Context())
 	defer share.Close()
 	source := &Source{share: share, address: "node"}
-	if source.RegistrationAuthorization().State != serviceauthority.AdmissionTemporaryFailure {
+	if source.ReserveRegistrationAuthorization().State != serviceauthority.AdmissionTemporaryFailure {
 		t.Fatal("unknown local denial was discarded")
 	}
 }
