@@ -225,6 +225,13 @@ impl Controller {
         });
     }
 
+    pub fn switch_relay(&self, operation_id: &str, relay_url: &str) -> bool {
+        self.command(Command::SwitchRelay {
+            operation_id: operation_id.into(),
+            relay_url: relay_url.into(),
+        })
+    }
+
     /// # Panics
     /// Panics if the application model mutex is poisoned.
     pub fn begin_shutdown(&self) {

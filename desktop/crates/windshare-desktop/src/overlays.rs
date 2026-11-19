@@ -63,10 +63,10 @@ impl Desktop {
                     }),
                 self.share_qr_detail(theme, *id, window, cx),
             ),
-            Overlay::SharingSetup(id) => (
+            Overlay::SharingSetup(target) => (
                 locale.text(self.setup_form.page.title()),
                 DEFAULT_OVERLAY_WIDTH,
-                self.sharing_setup(theme, *id, cx),
+                self.sharing_setup(theme, *target, cx),
             ),
             Overlay::Account => (
                 locale.text(self.account_title()),

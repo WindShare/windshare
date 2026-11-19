@@ -103,7 +103,7 @@ func (source *changingAuthorization) set(value Authorization) {
 }
 
 func TestAuthorizationCompletionWakesOriginalPublicationOutsideHandshake(t *testing.T) {
-	for _, state := range []AuthorizationState{AuthorizationPendingSetup, AuthorizationExpired, AuthorizationTemporaryFailure} {
+	for _, state := range []AuthorizationState{AuthorizationPendingSetup, AuthorizationExpired, AuthorizationTemporaryFailure, AuthorizationUserActionRequired} {
 		source := &changingAuthorization{value: Authorization{State: state}, changed: make(chan struct{})}
 		endpoint := &senderRelayTestEndpoint{accept: func(context.Context) (*relayv2.Channel, error) { return nil, nil }}
 		dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) { return NewConnection(endpoint), nil }}
@@ -119,6 +119,8 @@ func TestAuthorizationCompletionWakesOriginalPublicationOutsideHandshake(t *test
 		if err != nil {
 			t.Fatal(err)
 		}
+		statuses := make(chan RegistrationState, 4)
+		lifecycle.ObserveRegistration(func(state RegistrationState) { statuses <- state })
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		done := make(chan error, 1)
 		go func() { done <- lifecycle.WaitReady(ctx) }()
@@ -129,6 +131,19 @@ func TestAuthorizationCompletionWakesOriginalPublicationOutsideHandshake(t *test
 			}
 		case <-ctx.Done():
 			t.Fatal(ctx.Err())
+		}
+		if got := <-statuses; got != RegistrationPending {
+			t.Fatal(got)
+		}
+		if state == AuthorizationUserActionRequired {
+			select {
+			case got := <-statuses:
+				if got != RegistrationNeedsUserAuthorization {
+					t.Fatal(got)
+				}
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
 		}
 		calls, _ := dialer.Snapshot()
 		if len(calls) != 0 {

@@ -143,10 +143,11 @@ func (r *testRelays) WaitReady(ctx context.Context) error {
 	return r.waitErr
 }
 func (*testRelays) ReadyRelayURL() string { return "https://relay.example" }
-func (*testRelays) ObserveAvailability(observe func(relayset.SenderAvailability)) {
-	observe(relayset.SenderAvailability{Available: 1, Total: 1, EverReady: true})
+func (*testRelays) Status() relayset.SenderStatus {
+	return relayset.SenderStatus{Availability: relayset.SenderAvailability{Available: 1, Total: 1, EverReady: true}}
 }
-func (*testRelays) Wake() {}
+func (r *testRelays) ObserveStatus(observe func(relayset.SenderStatus)) { observe(r.Status()) }
+func (*testRelays) Wake()                                               {}
 func (r *testRelays) StopRecovery() {
 	r.once.Do(func() { r.step("recovery_stopped"); close(r.stopped) })
 }

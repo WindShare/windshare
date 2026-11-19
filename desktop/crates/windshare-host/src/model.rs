@@ -273,6 +273,18 @@ impl Model {
             .map(|(_, error)| error)
     }
 
+    pub fn waits_for_official_authorization(&self, operation_id: &str) -> bool {
+        self.operations
+            .iter()
+            .find(|operation| operation.id == operation_id)
+            .and_then(Operation::share)
+            .is_some_and(|share| {
+                share.state == ShareState::AwaitingAuthorization
+                    && !share.task_id.is_empty()
+                    && share.authorization == Some(ShareAuthorization::Official)
+            })
+    }
+
     pub fn has_unfinished_work(&self) -> bool {
         self.account.as_ref().is_some_and(crate::AccountView::busy)
             || self.setup.unfinished()

@@ -68,9 +68,25 @@ pub enum Overlay {
     Detail(usize),
     ShareQr(usize),
     Help,
-    SharingSetup(Option<usize>),
+    SharingSetup(SharingSetupTarget),
     Account,
 }
+#[derive(Clone, Copy, Debug)]
+pub enum SharingSetupTarget {
+    Defaults,
+    RecoverShare(usize),
+    SwitchRelay(usize),
+}
+
+impl SharingSetupTarget {
+    pub const fn share_id(self) -> Option<usize> {
+        match self {
+            Self::Defaults => None,
+            Self::RecoverShare(id) | Self::SwitchRelay(id) => Some(id),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum Action {
     Navigate(Page),

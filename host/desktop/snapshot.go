@@ -82,6 +82,8 @@ func projectTask(view *Share, current running) {
 	view.Authorization = state.Authorization
 	view.TaskID, view.State = string(current.task.ID()), Preparing
 	switch state.Startup {
+	case engine.ShareAwaitingAuthorization:
+		view.State = AwaitingAuthorization
 	case engine.ShareReadyReached:
 		view.Startup, view.State = "ready", Sharing
 		frontend := state.Ready.Frontend

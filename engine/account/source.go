@@ -151,6 +151,8 @@ func (source *Source) selectAuthorizationLocked(node Node) serviceauthority.Regi
 		authorization.State, authorization.Cause = serviceauthority.AdmissionTemporaryFailure, errors.New(service.reason)
 	case record.Credential != nil:
 		authorization.State = serviceauthority.AdmissionExpired
+	case service.state == RegistrationRequired || service.state == EmailRequired:
+		authorization.State = serviceauthority.AdmissionUserActionRequired
 	}
 	return authorization
 }

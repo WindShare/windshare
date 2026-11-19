@@ -122,17 +122,21 @@ func (s *activeShare) start(ctx, resourceContext context.Context, request Reques
 	if s.relays == nil {
 		return task.FailureLocal, ErrConfiguration
 	}
-	if source, ok := s.relays.(interface {
-		Availability() relayset.SenderAvailability
+	if status, ok := s.relays.(interface {
+		Status() relayset.SenderStatus
+		ObserveStatus(func(relayset.SenderStatus))
 	}); ok {
-		d.Controller.bindAvailability(source.Availability)
-	}
-	if observed, ok := s.relays.(interface {
-		ObserveAvailability(func(relayset.SenderAvailability))
-	}); ok {
-		observed.ObserveAvailability(func(value relayset.SenderAvailability) {
-			d.Control.NotifyStateChanged()
-			o.emit(Observation{RelayAvailability: &value})
+		d.Controller.bindRelayStatus(status.Status)
+		var previous relayset.SenderStatus
+		status.ObserveStatus(func(value relayset.SenderStatus) {
+			if value != previous {
+				d.Control.NotifyStateChanged()
+			}
+			if value.Availability != previous.Availability {
+				availability := value.Availability
+				o.emit(Observation{RelayAvailability: &availability})
+			}
+			previous = value
 		})
 	}
 	s.networkDone = make(chan struct{})
@@ -174,15 +178,17 @@ func (s *activeShare) start(ctx, resourceContext context.Context, request Reques
 	// Admission belongs to the share lifetime, so callers need no presentation
 	// acknowledgement to make a returned capability usable.
 	s.server = startSessionServer(resourceContext, s.factory, s.relays, o)
-	s.ready = true
-	o.emit(Observation{Milestone: ShareReady})
 	registrations := relayset.SenderRegistrations{Admitted: []string{s.relays.ReadyRelayURL()}}
 	if source, ok := s.relays.(interface {
 		Registrations() relayset.SenderRegistrations
 	}); ok {
 		registrations = source.Registrations()
 	}
-	d.Controller.publish(Ready{Capability: s.prepared.Capability(), SelectedRootSummary: s.prepared.SelectedRootSummary(), RelayEndpoint: endpoint, Registrations: registrations})
+	if !d.Controller.publish(Ready{Capability: s.prepared.Capability(), SelectedRootSummary: s.prepared.SelectedRootSummary(), RelayEndpoint: endpoint, Registrations: registrations}) {
+		return task.FailureNone, context.Cause(ctx)
+	}
+	s.ready = true
+	o.emit(Observation{Milestone: ShareReady})
 	d.Control.NotifyStateChanged()
 	// Optional warming follows readiness and retains its own bounded background
 	// work. A slow scan or a caller that never displays the link cannot hold Ready.

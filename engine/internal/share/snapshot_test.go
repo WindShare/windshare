@@ -12,15 +12,15 @@ func TestSnapshotQueriesDoNotDependOnObservationDelivery(t *testing.T) {
 	if _, _, settled := controller.Startup(); settled {
 		t.Fatal("premature startup completion")
 	}
-	current := relayset.SenderAvailability{Total: 2, Available: 1, EverReady: true}
-	controller.bindAvailability(func() relayset.SenderAvailability { return current })
-	first, ok := controller.Availability()
-	if !ok || first.Available != 1 {
+	current := relayset.SenderStatus{Availability: relayset.SenderAvailability{Total: 2, Available: 1, EverReady: true}}
+	controller.bindRelayStatus(func() relayset.SenderStatus { return current })
+	first, ok := controller.RelayStatus()
+	if !ok || first.Availability.Available != 1 {
 		t.Fatal("current availability missing")
 	}
-	current.Available = 0
-	second, _ := controller.Availability()
-	if second.Available != 0 || !second.EverReady {
+	current.Availability.Available = 0
+	second, _ := controller.RelayStatus()
+	if second.Availability.Available != 0 || !second.Availability.EverReady {
 		t.Fatal("availability confused with retained readiness")
 	}
 	failure := errors.New("preparation failed")
@@ -28,9 +28,9 @@ func TestSnapshotQueriesDoNotDependOnObservationDelivery(t *testing.T) {
 	if _, err, settled := controller.Startup(); !settled || !errors.Is(err, failure) {
 		t.Fatal("startup failure not retained")
 	}
-	current.Available = 2
-	frozen, _ := controller.Availability()
-	if frozen.Available != 0 {
+	current.Availability.Available = 2
+	frozen, _ := controller.RelayStatus()
+	if frozen.Availability.Available != 0 {
 		t.Fatal("terminal snapshot retained live relay owner")
 	}
 }

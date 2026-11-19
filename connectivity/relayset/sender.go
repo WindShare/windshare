@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
@@ -17,7 +18,7 @@ var ErrConfig = errors.New("invalid sender relay set configuration")
 
 type SenderEndpoint interface {
 	WaitReady(context.Context) error
-	SetAvailabilityObserver(func(bool))
+	ObserveRegistration(func(senderrelay.RegistrationState))
 	Wake()
 	Accept(context.Context) (*relayv2.Channel, error)
 	StopRecovery()
@@ -32,10 +33,9 @@ type Sender struct {
 	endpoints             []SenderEndpoint
 	pendingRegistrations  int
 	registrationErrors    []*RegistrationFailure
-	current               map[string]bool
-	terminal              map[string]bool
+	routes                map[string]routeRegistration
 	stopping              bool
-	observer              func(SenderAvailability)
+	observer              func(SenderStatus)
 	everReady             bool
 	firstReady            string
 	ready                 chan struct{}
@@ -60,9 +60,9 @@ func NewSender(parent context.Context, urls []string, dial SenderFactory) (*Send
 	}
 	ctx, cancel := context.WithCancel(parent)
 	set := &Sender{ctx: ctx, cancel: cancel, pendingRegistrations: len(urls), ready: make(chan struct{}),
-		incoming: make(chan *relayv2.Channel, len(urls)), cleanupDone: make(chan struct{}), current: make(map[string]bool, len(urls)), terminal: make(map[string]bool, len(urls))}
+		incoming: make(chan *relayv2.Channel, len(urls)), cleanupDone: make(chan struct{}), routes: make(map[string]routeRegistration, len(urls))}
 	for _, url := range urls {
-		set.current[url] = false
+		set.routes[url] = routeRegistration{}
 	}
 	for _, url := range urls {
 		set.workers.Add(1)
@@ -83,7 +83,9 @@ func (s *Sender) run(url string, dial SenderFactory) {
 		err = ErrConfig
 	}
 	if err == nil {
-		endpoint.SetAvailabilityObserver(func(available bool) { s.setAvailable(url, available) })
+		endpoint.ObserveRegistration(func(state senderrelay.RegistrationState) {
+			s.setRegistration(url, routeRegistration{state: state})
+		})
 		err = endpoint.WaitReady(s.ctx)
 	}
 	s.mu.Lock()
@@ -100,17 +102,17 @@ func (s *Sender) run(url string, dial SenderFactory) {
 	}
 	s.mu.Unlock()
 	if endpoint == nil || err != nil {
-		s.endpointEnded(url)
+		s.setRegistration(url, routeRegistration{terminal: true})
 		return
 	}
 	for {
 		channel, err := endpoint.Accept(s.ctx)
 		if err != nil {
-			s.endpointEnded(url)
+			s.setRegistration(url, routeRegistration{terminal: true})
 			return
 		}
 		if channel == nil {
-			s.endpointEnded(url)
+			s.setRegistration(url, routeRegistration{terminal: true})
 			return
 		}
 		select {
@@ -119,69 +121,6 @@ func (s *Sender) run(url string, dial SenderFactory) {
 			_ = channel.Close()
 			return
 		}
-	}
-}
-
-// SenderAvailability describes only admission through relays. Existing direct
-// transfers have independent lifetimes and must never be inferred from this count.
-type SenderAvailability struct {
-	Available uint32
-	Total     uint32
-	EverReady bool
-	Terminal  uint32
-}
-
-// Availability reads the owner's current state even when observations were dropped.
-func (s *Sender) Availability() SenderAvailability {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.availabilityLocked()
-}
-
-func (s *Sender) availabilityLocked() SenderAvailability {
-	state := SenderAvailability{Total: uint32(len(s.current)), EverReady: s.everReady}
-	for _, available := range s.current {
-		if available {
-			state.Available++
-		}
-	}
-	for _, terminal := range s.terminal {
-		if terminal {
-			state.Terminal++
-		}
-	}
-	return state
-}
-
-func (s *Sender) setAvailable(url string, available bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.current[url] == available {
-		return
-	}
-	s.current[url] = available
-	s.everReady = s.everReady || available
-	if !s.stopping && s.ctx.Err() == nil && s.observer != nil {
-		s.observer(s.availabilityLocked())
-	}
-}
-
-func (s *Sender) endpointEnded(url string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.current[url] = false
-	s.terminal[url] = true
-	if !s.stopping && s.ctx.Err() == nil && s.observer != nil {
-		s.observer(s.availabilityLocked())
-	}
-}
-
-func (s *Sender) ObserveAvailability(observer func(SenderAvailability)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.observer = observer
-	if observer != nil {
-		observer(s.availabilityLocked())
 	}
 }
 
@@ -211,8 +150,8 @@ func (s *Sender) Registrations() SenderRegistrations {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var snapshot SenderRegistrations
-	for url, admitted := range s.current {
-		if admitted {
+	for url, registration := range s.routes {
+		if registration.state == senderrelay.RegistrationAvailable {
 			snapshot.Admitted = append(snapshot.Admitted, url)
 		}
 	}

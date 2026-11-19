@@ -34,7 +34,9 @@ type readyEndpoint struct {
 	completed atomic.Bool
 }
 
-func (*readyEndpoint) SetAvailabilityObserver(observe func(bool)) { observe(true) }
+func (*readyEndpoint) ObserveRegistration(observe func(senderrelay.RegistrationState)) {
+	observe(senderrelay.RegistrationAvailable)
+}
 func (e *readyEndpoint) CompleteObservations() relayv2.LifecycleObservationCompletion {
 	e.completed.Store(true)
 	return relayv2.LifecycleObservationCompletion{}

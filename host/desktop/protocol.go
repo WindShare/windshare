@@ -19,6 +19,7 @@ type Request struct {
 	OperationID       string        `json:"operation_id,omitempty"`
 	TaskID            string        `json:"task_id,omitempty"`
 	Relays            []string      `json:"relays,omitempty"`
+	RelayURL          string        `json:"relay_url,omitempty"`
 	Paths             []string      `json:"paths,omitempty"`
 	Setup             *SetupInput   `json:"setup,omitempty"`
 	SetupID           string        `json:"setup_id,omitempty"`
@@ -107,7 +108,13 @@ func (s Snapshot) active() bool {
 		return true
 	}
 	for _, share := range s.Shares {
-		if share.State != Finished && share.State != AwaitingConfiguration && share.State != AwaitingNetwork && share.State != AwaitingAuthorization {
+		switch share.State {
+		case Finished, AwaitingConfiguration, AwaitingNetwork:
+		case AwaitingAuthorization:
+			if share.TaskID != "" {
+				return true
+			}
+		default:
 			return true
 		}
 	}

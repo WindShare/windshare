@@ -33,6 +33,8 @@ func (a *Application) logRequestResult(request Request, rejection *Failure) {
 		if request.Account != nil {
 			fields.Action = request.Account.Action
 		}
+	case "switch_relay":
+		fields.RelayOrigin = endpointOrigin(request.RelayURL)
 	case "configure":
 		if request.Setup != nil {
 			fields.SetupID = request.Setup.ID

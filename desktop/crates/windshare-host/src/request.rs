@@ -37,6 +37,10 @@ pub enum Command {
     Resume {
         operation_id: String,
     },
+    SwitchRelay {
+        operation_id: String,
+        relay_url: String,
+    },
 }
 
 #[derive(Default, Serialize)]
@@ -143,6 +147,10 @@ impl Command {
             Self::Resume { operation_id } => {
                 fields.operation_id = Some(operation_id);
                 "resume"
+            }
+            Self::SwitchRelay { operation_id, .. } => {
+                fields.operation_id = Some(operation_id);
+                "switch_relay"
             }
         };
         CommandLog { command, ..fields }

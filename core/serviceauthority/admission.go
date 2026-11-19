@@ -8,6 +8,7 @@ const (
 	AdmissionExpired
 	AdmissionTemporaryFailure
 	AdmissionDenied
+	AdmissionUserActionRequired
 )
 
 func (state AdmissionState) Name() string {
@@ -22,6 +23,8 @@ func (state AdmissionState) Name() string {
 		return "temporarily_unavailable"
 	case AdmissionDenied:
 		return "denied"
+	case AdmissionUserActionRequired:
+		return "user_action_required"
 	default:
 		return ""
 	}

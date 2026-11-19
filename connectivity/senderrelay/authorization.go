@@ -18,11 +18,12 @@ type AuthorizationState = serviceauthority.AdmissionState
 type Authorization = serviceauthority.RegistrationAuthorization
 
 const (
-	AuthorizationReady            = serviceauthority.AdmissionReady
-	AuthorizationPendingSetup     = serviceauthority.AdmissionPendingSetup
-	AuthorizationExpired          = serviceauthority.AdmissionExpired
-	AuthorizationTemporaryFailure = serviceauthority.AdmissionTemporaryFailure
-	AuthorizationDenied           = serviceauthority.AdmissionDenied
+	AuthorizationReady              = serviceauthority.AdmissionReady
+	AuthorizationPendingSetup       = serviceauthority.AdmissionPendingSetup
+	AuthorizationExpired            = serviceauthority.AdmissionExpired
+	AuthorizationTemporaryFailure   = serviceauthority.AdmissionTemporaryFailure
+	AuthorizationDenied             = serviceauthority.AdmissionDenied
+	AuthorizationUserActionRequired = serviceauthority.AdmissionUserActionRequired
 )
 
 type StaticKey string
@@ -89,6 +90,7 @@ func (lifecycle *Lifecycle) waitAuthorization(ctx context.Context, attempt uint3
 	for authorization.State != AuthorizationReady {
 		failure := &AuthorizationError{State: authorization.State, Cause: authorization.Cause}
 		if announced != authorization.State {
+			lifecycle.showAuthorizationWait(authorization.State == AuthorizationUserActionRequired)
 			lifecycle.observeRecoveryAttempt(Attempt{ShareInstance: lifecycle.config.Fresh.ShareInstance,
 				Number: attempt, State: AttemptAuthorization, Authorization: authorization.State,
 				Failure: failure, Terminal: authorization.State == AuthorizationDenied})
@@ -97,7 +99,7 @@ func (lifecycle *Lifecycle) waitAuthorization(ctx context.Context, attempt uint3
 		switch authorization.State {
 		case AuthorizationDenied:
 			return failure
-		case AuthorizationPendingSetup, AuthorizationExpired, AuthorizationTemporaryFailure:
+		case AuthorizationPendingSetup, AuthorizationExpired, AuthorizationTemporaryFailure, AuthorizationUserActionRequired:
 			if authorization.Changed == nil {
 				return errors.Join(ErrCandidate, errors.New("authorization source has no change signal"))
 			}
@@ -112,5 +114,6 @@ func (lifecycle *Lifecycle) waitAuthorization(ctx context.Context, attempt uint3
 		}
 		authorization = lifecycle.config.Candidate.authorization()
 	}
+	lifecycle.showAuthorizationWait(false)
 	return nil
 }

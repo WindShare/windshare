@@ -2,7 +2,7 @@ use super::Runtime;
 use crate::{
     desktop::Desktop,
     localization::{Text, language},
-    model::{Overlay, ShareSource},
+    model::{Overlay, ShareSource, SharingSetupTarget},
 };
 use gpui::{Entity, Focusable, Subscription, Window, prelude::*};
 use windshare_host::{Model, PreferenceEdit, RelayOperation, Setup, ShareAuthorization};
@@ -52,9 +52,9 @@ impl SetupForm {
                 cx.subscribe(input, |this, _, event, cx| {
                     if matches!(event, InputEvent::Submit)
                         && let Some(frame) = this.overlays.last()
-                        && let Overlay::SharingSetup(id) = frame.content
+                        && let Overlay::SharingSetup(target) = frame.content
                     {
-                        this.save_sharing_setup(id, cx);
+                        this.save_sharing_setup(target.share_id(), cx);
                     }
                     cx.notify();
                 })
@@ -110,11 +110,15 @@ impl SetupForm {
                             .relays
                             .iter()
                             .any(|relay| relay.url == context.relay_url && relay.enabled);
-                        Some(Ok(if enabled {
-                            Text::RelayConnected
-                        } else {
-                            Text::RelaySavedInactive
-                        }))
+                        Some(Ok(
+                            if model.waits_for_official_authorization(&context.operation_id) {
+                                Text::RelaySaved
+                            } else if enabled {
+                                Text::RelayConnected
+                            } else {
+                                Text::RelaySavedInactive
+                            },
+                        ))
                     } else {
                         None
                     }
@@ -182,7 +186,7 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(Overlay::SharingSetup(id)) = self.overlays.last().map(|frame| &frame.content)
+        let Some(Overlay::SharingSetup(target)) = self.overlays.last().map(|frame| &frame.content)
         else {
             return;
         };
@@ -192,7 +196,7 @@ impl Desktop {
         if self.setup_form.pending.is_some() || session.model.setup.unfinished() {
             return;
         }
-        let id = *id;
+        let id = target.share_id();
         self.edit_setup_page(
             SetupPage::Relay(RelayOperation::AuthorizeDevice),
             window,
@@ -225,6 +229,13 @@ impl Desktop {
             session.model.setup.unfinished()
                 && (operation.is_empty() || context.operation_id == operation)
         });
+        let target = id.map_or(SharingSetupTarget::Defaults, |id| {
+            if session.model.waits_for_official_authorization(operation) {
+                SharingSetupTarget::SwitchRelay(id)
+            } else {
+                SharingSetupTarget::RecoverShare(id)
+            }
+        });
         if self.setup_form.pending.is_none() {
             self.setup_form.feedback = None;
             self.setup_form.page = SetupPage::Selection;
@@ -241,7 +252,7 @@ impl Desktop {
                 });
             }
         }
-        self.open_overlay(Overlay::SharingSetup(id), window, cx);
+        self.open_overlay(Overlay::SharingSetup(target), window, cx);
     }
 
     pub fn edit_setup_page(
@@ -342,6 +353,21 @@ impl Desktop {
         };
         self.setup_form.pending = id;
         self.setup_form.feedback = None;
+    }
+
+    pub(super) fn switch_share_relay(
+        &mut self,
+        id: usize,
+        relay_url: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Runtime::Native(session) = &self.runtime
+            && let Some(id) = self.native_operation(id)
+            && session.controller.switch_relay(id, relay_url)
+        {
+            self.close_overlay(window, cx);
+        }
     }
 
     pub fn resume_native_share(&self, id: usize) {

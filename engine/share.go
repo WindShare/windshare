@@ -116,4 +116,10 @@ func (current *ShareTask) Ready(ctx context.Context) (ShareReady, error) {
 		FrozenCandidates: slices.Clone(decision.Candidates), InitialAdmissions: slices.Clone(value.Registrations.Admitted), Frontend: current.selection.Frontend, Decision: decision}, nil
 }
 
+// CancelBeforeReady reserves cancellation of an unpublished attempt. Once a
+// link is ready, only the ordinary share stop operation can withdraw it.
+func (current *ShareTask) CancelBeforeReady() bool {
+	return current.controller.CancelBeforeReady(current.Cancel)
+}
+
 func (current *ShareTask) StopShare() { current.current.Stop(task.ShareStopped) }

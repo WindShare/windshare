@@ -66,27 +66,36 @@ type Attempt struct {
 	Authorization AuthorizationState
 }
 
+type RegistrationState uint8
+
+const (
+	RegistrationPending RegistrationState = iota
+	RegistrationNeedsUserAuthorization
+	RegistrationAvailable
+)
+
 type Lifecycle struct {
 	mu         sync.Mutex
 	recoveryMu sync.Mutex
 	acceptMu   sync.Mutex
 
-	config            Config
-	resume            v2.RegisterInit
-	stopID            v2.StopID
-	connection        Connection
-	recoveryContext   context.Context
-	cancelRecovery    context.CancelFunc
-	stopping          bool
-	cleanupOnce       sync.Once
-	cleanupErr        error
-	retiredCompletion relayv2.LifecycleObservationCompletion
-	resumeNext        bool
-	terminalErr       error
-	generation        uint64
-	wake              chan struct{}
-	availability      func(bool)
-	mayHaveRegistered bool
+	config              Config
+	resume              v2.RegisterInit
+	stopID              v2.StopID
+	connection          Connection
+	recoveryContext     context.Context
+	cancelRecovery      context.CancelFunc
+	stopping            bool
+	cleanupOnce         sync.Once
+	cleanupErr          error
+	retiredCompletion   relayv2.LifecycleObservationCompletion
+	resumeNext          bool
+	terminalErr         error
+	generation          uint64
+	wake                chan struct{}
+	registration        RegistrationState
+	observeRegistration func(RegistrationState)
+	mayHaveRegistered   bool
 }
 
 func New(config Config) (*Lifecycle, error) {
@@ -135,6 +144,7 @@ func New(config Config) (*Lifecycle, error) {
 	lifecycle.connection = lifecycle.trackObservationConnection(connection)
 	if connection.valid() {
 		lifecycle.generation = 1
+		lifecycle.registration = RegistrationAvailable
 	}
 	return lifecycle, nil
 }
@@ -186,15 +196,38 @@ func (lifecycle *Lifecycle) WaitReady(ctx context.Context) error {
 	return lifecycle.recoverOwned(ctx)
 }
 
-// SetAvailabilityObserver installs the aggregate ingress observer before startup.
-// It reports the current state immediately, so a fast initial connection is not lost.
-func (lifecycle *Lifecycle) SetAvailabilityObserver(observer func(bool)) {
+// ObserveRegistration provides the current route state even when diagnostic
+// observations are disabled or dropped. The callback must not reenter Lifecycle.
+func (lifecycle *Lifecycle) ObserveRegistration(observer func(RegistrationState)) {
 	lifecycle.mu.Lock()
 	defer lifecycle.mu.Unlock()
-	lifecycle.availability = observer
+	lifecycle.observeRegistration = observer
 	if observer != nil {
-		observer(lifecycle.connection.valid() && !lifecycle.stopping)
+		observer(lifecycle.registration)
 	}
+}
+
+func (lifecycle *Lifecycle) setRegistrationLocked(state RegistrationState) {
+	if lifecycle.registration == state {
+		return
+	}
+	lifecycle.registration = state
+	if lifecycle.observeRegistration != nil {
+		lifecycle.observeRegistration(state)
+	}
+}
+
+func (lifecycle *Lifecycle) showAuthorizationWait(required bool) {
+	lifecycle.mu.Lock()
+	defer lifecycle.mu.Unlock()
+	if lifecycle.stopping {
+		return
+	}
+	state := RegistrationPending
+	if required {
+		state = RegistrationNeedsUserAuthorization
+	}
+	lifecycle.setRegistrationLocked(state)
 }
 
 // Wake coalesces network/resume notifications into the single recovery owner.
@@ -222,9 +255,7 @@ func (lifecycle *Lifecycle) detachForRecovery() (Connection, error) {
 	}
 	old := lifecycle.connection
 	lifecycle.connection = Connection{}
-	if lifecycle.availability != nil {
-		lifecycle.availability(false)
-	}
+	lifecycle.setRegistrationLocked(RegistrationPending)
 	return old, nil
 }
 
@@ -246,9 +277,7 @@ func (lifecycle *Lifecycle) installRecovered(
 	}
 	lifecycle.connection = connection
 	lifecycle.generation++
-	if lifecycle.availability != nil {
-		lifecycle.availability(true)
-	}
+	lifecycle.setRegistrationLocked(RegistrationAvailable)
 	return nil
 }
 
@@ -286,9 +315,7 @@ func (lifecycle *Lifecycle) StopRecovery() {
 	if !lifecycle.stopping {
 		lifecycle.stopping = true
 		lifecycle.cancelRecovery()
-		if lifecycle.availability != nil {
-			lifecycle.availability(false)
-		}
+		lifecycle.setRegistrationLocked(RegistrationPending)
 	}
 	lifecycle.mu.Unlock()
 }

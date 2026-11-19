@@ -46,7 +46,7 @@ func (a *Application) registerOperation(id string, paths, relays []string, sourc
 		return nil, errors.New("operation_id must contain 1–128 bytes")
 	}
 	if previous, ok := a.operations[id]; ok {
-		if previous.paths != nil && (!slices.Equal(previous.paths, paths) || !slices.Equal(previous.relays, relays) || previous.sourceOperationID != sourceID) {
+		if previous.paths != nil && (!slices.Equal(previous.paths, paths) || !slices.Equal(previous.requestedRelays, relays) || previous.sourceOperationID != sourceID) {
 			return nil, errors.New("operation_id already belongs to another selection")
 		}
 		return nil, nil
@@ -57,7 +57,8 @@ func (a *Application) registerOperation(id string, paths, relays []string, sourc
 	if len(a.operations) >= maximumOperations {
 		return nil, errors.New("application operation limit reached; restart after stopping shares")
 	}
-	op := &operation{id: id, paths: slices.Clone(paths), relays: slices.Clone(relays), sourceOperationID: sourceID, createdAt: time.Now()}
+	relays = slices.Clone(relays)
+	op := &operation{id: id, paths: slices.Clone(paths), requestedRelays: relays, relayOverride: relays, sourceOperationID: sourceID, createdAt: time.Now()}
 	a.operations[op.id] = op
 	return op, nil
 }
@@ -83,9 +84,21 @@ func (a *Application) resume(id string) error {
 }
 
 func (a *Application) admit(op *operation) {
+	a.admitAfter(op, nil)
+}
+
+func (a *Application) admitAfter(op *operation, previous <-chan struct{}) {
 	ctx, cancel := context.WithCancel(context.Background())
 	op.phase, op.cancel = admission{}, cancel
 	a.work.Go(func() {
+		if previous != nil {
+			select {
+			case <-previous:
+			case <-ctx.Done():
+				a.completeAdmission(ctx, op, terminal{})
+				return
+			}
+		}
 		a.runAdmission(ctx, op)
 	})
 }
@@ -108,7 +121,7 @@ func (a *Application) prepareAdmission(ctx context.Context, op *operation) opera
 	if err != nil {
 		return configurationBlocked("settings_unavailable", err)
 	}
-	intent, err := relayconfig.ShareIntent(config, op.relays)
+	intent, err := relayconfig.ShareIntent(config, op.relayOverride)
 	if err == nil && config.FrontURL != "" {
 		err = relayconfig.ValidateFrontURL(config.FrontURL)
 	}

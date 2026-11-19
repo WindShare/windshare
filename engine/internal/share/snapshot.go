@@ -12,18 +12,18 @@ func (c *Controller) Startup() (Ready, error, bool) {
 	}
 }
 
-func (c *Controller) bindAvailability(read func() relayset.SenderAvailability) {
+func (c *Controller) bindRelayStatus(read func() relayset.SenderStatus) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.availability, c.hasAvailability = read, true
+	c.relayStatus, c.hasRelayStatus = read, true
 }
 
-// Availability reads the relay owner, not its lossy observation stream.
-func (c *Controller) Availability() (relayset.SenderAvailability, bool) {
+// RelayStatus reads the relay owner independently of observation delivery.
+func (c *Controller) RelayStatus() (relayset.SenderStatus, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.availability != nil {
-		return c.availability(), true
+	if c.relayStatus != nil {
+		return c.relayStatus(), true
 	}
-	return c.finalAvailability, c.hasAvailability
+	return c.finalRelayStatus, c.hasRelayStatus
 }

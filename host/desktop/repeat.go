@@ -15,7 +15,7 @@ func (a *Application) repeat(request Request) error {
 	if view.State != Finished {
 		return errors.New("stop the existing share before sharing again")
 	}
-	op, err := a.registerOperation(request.OperationID, source.paths, source.relays, source.id)
+	op, err := a.registerOperation(request.OperationID, source.paths, source.relayOverride, source.id)
 	if err != nil || op == nil {
 		return err
 	}

@@ -16,21 +16,34 @@ import (
 )
 
 type fakeShare struct {
+	id       engine.TaskID
 	mu       sync.Mutex
 	state    engine.ShareSnapshot
 	events   chan engine.Observation
 	changed  chan struct{}
+	done     chan struct{}
 	reason   engine.StopReason
 	finished bool
 }
 
-func (f *fakeShare) ID() engine.TaskID                       { return "engine:1" }
+func (f *fakeShare) ID() engine.TaskID                       { return f.id }
 func (f *fakeShare) Snapshot() engine.ShareSnapshot          { f.mu.Lock(); defer f.mu.Unlock(); return f.state }
 func (f *fakeShare) Changes() <-chan struct{}                { f.mu.Lock(); defer f.mu.Unlock(); return f.changed }
+func (f *fakeShare) Done() <-chan struct{}                   { return f.done }
 func (f *fakeShare) Observations() <-chan engine.Observation { return f.events }
 func (f *fakeShare) Cancel()                                 { f.stop(engine.Cancelled) }
-func (f *fakeShare) StopShare()                              { f.stop(engine.ShareStopped) }
-func (f *fakeShare) signal()                                 { close(f.changed); f.changed = make(chan struct{}) }
+func (f *fakeShare) CancelBeforeReady() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.state.Startup == engine.ShareReadyReached || f.reason != engine.NoStop || f.finished {
+		return false
+	}
+	f.reason, f.state.State = engine.Cancelled, engine.TaskStopping
+	f.signal()
+	return true
+}
+func (f *fakeShare) StopShare() { f.stop(engine.ShareStopped) }
+func (f *fakeShare) signal()    { close(f.changed); f.changed = make(chan struct{}) }
 func (f *fakeShare) stop(reason engine.StopReason) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -63,6 +76,7 @@ func (f *fakeShare) finish() {
 	}
 	f.state.Result = &engine.TaskResult[engine.ShareResult]{StopReason: f.reason, Outcome: outcome}
 	close(f.events)
+	close(f.done)
 	f.signal()
 }
 
@@ -72,7 +86,7 @@ func configured() relayconfig.Config {
 }
 func fixture(t *testing.T) (*Application, *fakeShare, *atomic.Int32) {
 	t.Helper()
-	task := &fakeShare{state: engine.ShareSnapshot{State: engine.TaskRunning}, events: make(chan engine.Observation, 1), changed: make(chan struct{})}
+	task := &fakeShare{id: "engine:1", state: engine.ShareSnapshot{State: engine.TaskRunning}, events: make(chan engine.Observation, 1), changed: make(chan struct{}), done: make(chan struct{})}
 	starts := &atomic.Int32{}
 	a := newApplication("session", dependencies{
 		start:       func(context.Context, engine.ShareRequest) (shareTask, error) { starts.Add(1); return task, nil },

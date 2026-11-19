@@ -172,7 +172,11 @@ func TestCurrentAvailabilityClearsDuringRecoveryAndReturnsOnAcknowledgement(t *t
 	}}, newSenderRelayTestClock())
 	var mu sync.Mutex
 	var states []bool
-	lifecycle.SetAvailabilityObserver(func(available bool) { mu.Lock(); states = append(states, available); mu.Unlock() })
+	lifecycle.ObserveRegistration(func(state RegistrationState) {
+		mu.Lock()
+		states = append(states, state == RegistrationAvailable)
+		mu.Unlock()
+	})
 	done := make(chan error, 1)
 	go func() { _, err := lifecycle.Accept(t.Context()); done <- err }()
 	senderRelayAwaitSignal(t, dialStarted, "replacement dial")

@@ -11,14 +11,14 @@ import (
 // Controller retains the first service-ready result independently of diagnostic
 // delivery and caller presentation. Closing readyDone publishes immutable state.
 type Controller struct {
-	mu                sync.Mutex
-	availability      func() relayset.SenderAvailability
-	finalAvailability relayset.SenderAvailability
-	hasAvailability   bool
-	ready             Ready
-	readyErr          error
-	readyDone         chan struct{}
-	readyOnce         sync.Once
+	mu               sync.Mutex
+	relayStatus      func() relayset.SenderStatus
+	finalRelayStatus relayset.SenderStatus
+	hasRelayStatus   bool
+	ready            Ready
+	readyErr         error
+	readyDone        chan struct{}
+	readyOnce        sync.Once
 }
 
 func NewController() *Controller {
@@ -46,18 +46,34 @@ func cloneReady(ready Ready) Ready {
 	return ready
 }
 
-func (c *Controller) publish(ready Ready) {
+func (c *Controller) publish(ready Ready) bool {
+	published := false
 	c.readyOnce.Do(func() {
+		published = true
 		c.ready = cloneReady(ready)
 		close(c.readyDone)
 	})
+	return published
+}
+
+// CancelBeforeReady arbitrates a replacement against the first publication.
+// The old task can still be joined normally after its startup is withdrawn.
+func (c *Controller) CancelBeforeReady(cancel func()) bool {
+	cancelled := false
+	c.readyOnce.Do(func() {
+		cancelled = true
+		cancel()
+		c.readyErr = context.Canceled
+		close(c.readyDone)
+	})
+	return cancelled
 }
 
 func (c *Controller) finish(err error) {
 	c.mu.Lock()
-	if c.availability != nil {
-		c.finalAvailability = c.availability()
-		c.availability = nil
+	if c.relayStatus != nil {
+		c.finalRelayStatus = c.relayStatus()
+		c.relayStatus = nil
 	}
 	c.mu.Unlock()
 	c.readyOnce.Do(func() {

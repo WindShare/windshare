@@ -13,8 +13,7 @@ impl Desktop {
         let Runtime::Native(session) = &self.runtime else {
             return;
         };
-        let Some(Overlay::SharingSetup(share_id)) =
-            self.overlays.last().map(|frame| &frame.content)
+        let Some(Overlay::SharingSetup(target)) = self.overlays.last().map(|frame| &frame.content)
         else {
             return;
         };
@@ -24,9 +23,9 @@ impl Desktop {
         {
             return;
         }
-        let operation = match share_id {
+        let operation = match target.share_id() {
             Some(id) => {
-                let Some(op) = self.native_operation(*id) else {
+                let Some(op) = self.native_operation(id) else {
                     return;
                 };
                 op
@@ -56,6 +55,7 @@ impl Desktop {
     pub(super) fn relay_preferences(
         theme: Theme,
         prefs: &RelayPreferences,
+        switch_share: Option<usize>,
         busy: bool,
         cx: &Context<Self>,
     ) -> Div {
@@ -79,22 +79,34 @@ impl Desktop {
                     .disabled(busy),
                 ),
         );
-        if prefs.relays.is_empty() && prefs.mode == RelayMode::Automatic {
+        if prefs.relays.is_empty() && (switch_share.is_some() || prefs.mode == RelayMode::Automatic)
+        {
             list = list.child(theme.caption(locale.text(Text::NoCustomRelays)));
         }
-        if !enabled && prefs.mode == RelayMode::Selected {
+        if switch_share.is_none() && !enabled && prefs.mode == RelayMode::Selected {
             list = list.child(
                 theme
                     .caption(locale.text(Text::NoEnabledRelays))
                     .text_color(Tone::Peach.text(theme)),
             );
         }
-        if prefs.at_capacity {
+        if switch_share.is_none() && prefs.at_capacity {
             list = list.child(theme.caption(locale.text(Text::RelaySlotsFull)));
         }
         list = list.children(prefs.relays.iter().enumerate().map(|(index, relay)| {
-            Self::saved_relay(theme, relay, index, busy, prefs.at_capacity, cx)
+            Self::saved_relay(
+                theme,
+                relay,
+                index,
+                switch_share,
+                busy,
+                prefs.at_capacity,
+                cx,
+            )
         }));
+        if switch_share.is_some() {
+            return list;
+        }
         column()
             .gap(px(20.))
             .child(
@@ -151,24 +163,48 @@ impl Desktop {
         theme: Theme,
         relay: &windshare_host::SavedRelay,
         index: usize,
+        switch_share: Option<usize>,
         busy: bool,
         at_capacity: bool,
         cx: &Context<Self>,
     ) -> Div {
         let locale = language(cx);
-        let (label, symbol, edit) = if relay.enabled {
-            (
-                Text::DisableRelay,
-                Icon::Pause,
-                PreferenceEdit::Disable(relay.url.clone()),
-            )
-        } else {
-            (
-                Text::EnableRelay,
-                Icon::Play,
-                PreferenceEdit::Enable(relay.url.clone()),
-            )
-        };
+        let choice = switch_share.map_or_else(
+            || {
+                let (label, symbol, edit) = if relay.enabled {
+                    (
+                        Text::DisableRelay,
+                        Icon::Pause,
+                        PreferenceEdit::Disable(relay.url.clone()),
+                    )
+                } else {
+                    (
+                        Text::EnableRelay,
+                        Icon::Play,
+                        PreferenceEdit::Enable(relay.url.clone()),
+                    )
+                };
+                Self::preference_button(
+                    ("relay-toggle", index),
+                    locale.text(label),
+                    symbol,
+                    edit,
+                    cx,
+                )
+                .disabled(busy || !relay.enabled && at_capacity)
+            },
+            |id| {
+                let url = relay.url.clone();
+                Button::new(("use-relay", index), locale.text(Text::UseRelayForShare))
+                    .icon(Icon::Arrow)
+                    .compact()
+                    .style(ButtonStyle::Secondary)
+                    .disabled(busy)
+                    .on_press(cx.listener(move |this, (), window, cx| {
+                        this.switch_share_relay(id, &url, window, cx);
+                    }))
+            },
+        );
         let mut actions = row().gap(px(6.)).flex_wrap().justify_end();
         if let Some(url) = relay.console_url.clone() {
             let relay_url = relay.url.clone();
@@ -197,11 +233,13 @@ impl Desktop {
             .pt(px(10.))
             .border_t_1()
             .border_color(theme.border())
-            .child(theme.dot(if relay.enabled {
-                Tone::Mint
-            } else {
-                Tone::Neutral
-            }))
+            .when(switch_share.is_none(), |row| {
+                row.child(theme.dot(if relay.enabled {
+                    Tone::Mint
+                } else {
+                    Tone::Neutral
+                }))
+            })
             .child(
                 theme
                     .label(relay.url.clone(), 14.)
@@ -209,18 +247,7 @@ impl Desktop {
                     .min_w_0()
                     .line_clamp(2),
             )
-            .child(
-                actions.child(
-                    Self::preference_button(
-                        ("relay-toggle", index),
-                        locale.text(label),
-                        symbol,
-                        edit,
-                        cx,
-                    )
-                    .disabled(busy || !relay.enabled && at_capacity),
-                ),
-            )
+            .child(actions.child(choice))
     }
 
     fn relay_mode_option(

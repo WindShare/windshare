@@ -2,19 +2,25 @@ use super::{Runtime, SetupPage};
 use crate::{
     desktop::Desktop,
     localization::{Text, language},
-    model::Action,
+    model::{Action, SharingSetupTarget},
 };
 use gpui::{Div, prelude::*, px};
 use windshare_host::{PreferenceEdit, RelayPreferences};
 use windshare_ui::{ButtonStyle, Icon, Theme, Tone, column, row};
 
 impl Desktop {
-    pub fn sharing_setup(&self, theme: Theme, id: Option<usize>, cx: &Context<Self>) -> Div {
+    pub fn sharing_setup(
+        &self,
+        theme: Theme,
+        target: SharingSetupTarget,
+        cx: &Context<Self>,
+    ) -> Div {
         let Runtime::Native(session) = &self.runtime else {
             return column();
         };
         let locale = language(cx);
         let setup = &session.model.setup;
+        let id = target.share_id();
         let operation = id.and_then(|id| self.native_operation(id)).unwrap_or("");
         if let Some(progress) = self.setup_return(theme, operation, cx) {
             return progress;
@@ -24,6 +30,10 @@ impl Desktop {
         let locked = form.pending.is_some() || self.runtime.selection_disabled();
         let busy = locked || setup.unfinished();
         let share = id.and_then(|id| self.shares.iter().find(|share| share.id == id));
+        let switch_share = match target {
+            SharingSetupTarget::SwitchRelay(id) => Some(id),
+            _ => None,
+        };
         let mut panel = column().gap(px(18.)).when_some(share, |panel, share| {
             panel.child(
                 row()
@@ -44,8 +54,17 @@ impl Desktop {
         }
         match form.page {
             SetupPage::Selection => {
-                panel = panel.child(Self::relay_preferences(theme, prefs, busy, cx));
-                if let Some(share) = share.filter(|share| !share.finished() && !share.live()) {
+                panel = panel.child(Self::relay_preferences(
+                    theme,
+                    prefs,
+                    switch_share,
+                    busy || switch_share.is_some()
+                        && !session.model.waits_for_official_authorization(operation),
+                    cx,
+                ));
+                if switch_share.is_none()
+                    && let Some(share) = share.filter(|share| !share.finished() && !share.live())
+                {
                     panel = panel.child(
                         Self::button(
                             "use-saved-sharing-settings",

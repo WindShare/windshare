@@ -10,6 +10,7 @@ type ShareStartupState uint8
 
 const (
 	SharePreparing ShareStartupState = iota
+	ShareAwaitingAuthorization
 	ShareReadyReached
 	ShareStartupFailed
 )
@@ -29,6 +30,7 @@ type ShareSnapshot struct {
 
 func (current *ShareTask) Snapshot() ShareSnapshot {
 	var snapshot ShareSnapshot
+	status, hasStatus := current.controller.RelayStatus()
 	_, err, settled := current.controller.Startup()
 	if settled {
 		snapshot.Startup = ShareStartupFailed
@@ -41,8 +43,12 @@ func (current *ShareTask) Snapshot() ShareSnapshot {
 				snapshot.Ready = ready
 			}
 		}
+	} else if status.AuthorizationRequired {
+		snapshot.Startup = ShareAwaitingAuthorization
+		snapshot.Authorization = &ShareAuthorization{Kind: ShareOfficialAuthorization}
 	}
-	if value, ok := current.controller.Availability(); ok {
+	if hasStatus {
+		value := status.Availability
 		available, err := appobs.NewRelayAvailability(value.Available, value.Total, value.Terminal, value.EverReady)
 		if err == nil {
 			snapshot.RelayAvailability = &available

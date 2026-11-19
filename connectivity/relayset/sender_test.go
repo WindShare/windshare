@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
@@ -21,9 +22,11 @@ type endpoint struct {
 func newEndpoint() *endpoint {
 	return &endpoint{inbound: make(chan *relayv2.Channel, 1), failed: make(chan struct{})}
 }
-func (e *endpoint) WaitReady(context.Context) error             { return nil }
-func (e *endpoint) SetAvailabilityObserver(observer func(bool)) { observer(true) }
-func (e *endpoint) Wake()                                       {}
+func (e *endpoint) WaitReady(context.Context) error { return nil }
+func (e *endpoint) ObserveRegistration(observer func(senderrelay.RegistrationState)) {
+	observer(senderrelay.RegistrationAvailable)
+}
+func (e *endpoint) Wake() {}
 func (e *endpoint) Accept(ctx context.Context) (*relayv2.Channel, error) {
 	select {
 	case channel := <-e.inbound:

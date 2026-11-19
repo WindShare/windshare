@@ -3,6 +3,7 @@ package share
 import (
 	"bytes"
 	"context"
+	"errors"
 	"slices"
 	"testing"
 
@@ -34,5 +35,34 @@ func TestReadinessRetainsCapabilityOwnershipAcrossProviderAndCallerMutation(t *t
 	if !bytes.Equal(second.Capability.ReadSecret, []byte{1, 2}) || !bytes.Equal(second.Capability.PKHash, []byte{3, 4}) ||
 		!slices.Equal(second.Capability.Relays, []string{"https://relay.example"}) {
 		t.Fatal("consumer mutation changed retained readiness")
+	}
+}
+
+func TestPublicationAndPreReadyCancellationSettleStartupOnce(t *testing.T) {
+	controller := NewController()
+	start := make(chan struct{})
+	published, cancelled := make(chan bool, 1), make(chan bool, 1)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go func() {
+		<-start
+		published <- controller.publish(Ready{})
+	}()
+	go func() {
+		<-start
+		cancelled <- controller.CancelBeforeReady(cancel)
+	}()
+	close(start)
+
+	didPublish, didCancel := <-published, <-cancelled
+	if didPublish == didCancel {
+		t.Fatal("publication and cancellation must have exactly one winner")
+	}
+	_, err := controller.Ready(t.Context())
+	if didPublish && (err != nil || ctx.Err() != nil) {
+		t.Fatal("a published share was withdrawn", err)
+	}
+	if didCancel && (!errors.Is(err, context.Canceled) || ctx.Err() != context.Canceled) {
+		t.Fatal("a withdrawn attempt remained publishable", err)
 	}
 }

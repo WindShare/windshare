@@ -23,8 +23,10 @@ type shareTask interface {
 	ID() engine.TaskID
 	Snapshot() engine.ShareSnapshot
 	Changes() <-chan struct{}
+	Done() <-chan struct{}
 	Observations() <-chan engine.Observation
 	Cancel()
+	CancelBeforeReady() bool
 	StopShare()
 }
 
@@ -88,7 +90,8 @@ type operation struct {
 	id                string
 	sourceOperationID string
 	paths             []string
-	relays            []string
+	requestedRelays   []string
+	relayOverride     []string
 	createdAt         time.Time
 	phase             operationPhase
 	cancel            context.CancelFunc
@@ -164,6 +167,8 @@ func (a *Application) execute(request Request) Message {
 		err = a.cancelSetupRequest(request.SetupID)
 	case "resume":
 		err = a.resume(request.OperationID)
+	case "switch_relay":
+		err = a.switchRelay(request.OperationID, request.RelayURL)
 	case "cancel":
 		err = a.cancel(request.OperationID)
 	case "stop":
