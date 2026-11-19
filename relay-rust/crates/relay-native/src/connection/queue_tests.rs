@@ -7,7 +7,8 @@ use crate::{
 use std::collections::VecDeque;
 use windshare_relay_core::{
     flow::Counts,
-    sessions::{OpaqueHeader, SessionKey},
+    identifiers::RelaySessionId,
+    sessions::{Direction, OpaqueHeader, SessionKey},
     share::{Control, Input, Output, Responsibility, Restore, WorkResult},
 };
 
@@ -294,8 +295,17 @@ fn queue_rejects_mismatched_payload_and_destination() {
 }
 
 #[tokio::test]
-async fn control_capacity_includes_in_flight_and_probe_coalesces_separately() {
+async fn control_and_capacity_notice_budgets_are_independent_of_each_other_and_probes() {
     let (outbox, mut writer, _) = channel(connection(3), crate::node::Runtime::default());
+    let notice = CapacityWait {
+        session: RelaySessionId::new(1_u64.to_be_bytes()).unwrap(),
+        direction: Direction::ToReceiver,
+        milliseconds: 1,
+    };
+    for _ in 0..CAPACITY_NOTICE_QUEUE_FRAMES {
+        outbox.capacity_wait(notice).unwrap();
+    }
+    assert!(outbox.capacity_wait(notice).is_err());
     for _ in 0..CONTROL_QUEUE_FRAMES {
         outbox.control(vec![1]).unwrap();
     }
@@ -304,6 +314,11 @@ async fn control_capacity_includes_in_flight_and_probe_coalesces_separately() {
     outbox.probe(vec![1]).unwrap();
     outbox.probe(vec![2]).unwrap();
     assert_eq!(*outbox.probe.borrow(), Some(vec![2]));
+    for _ in 0..CAPACITY_NOTICE_QUEUE_FRAMES {
+        assert_eq!(writer.recv().await.unwrap(), notice.encode().unwrap());
+    }
+    assert!(outbox.control(vec![1]).is_err());
+    outbox.capacity_wait(notice).unwrap();
     assert_eq!(writer.recv().await.unwrap(), [1]);
     outbox.control(vec![3]).unwrap();
 }

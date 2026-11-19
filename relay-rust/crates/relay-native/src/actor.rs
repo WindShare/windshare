@@ -133,7 +133,7 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
             let scheduling = Arc::clone(&self.scheduling);
             let step = tokio::select! {
                 _ = capacity_tick.tick(), if !self.ports.is_empty() => {
-                    self.report_capacity()?;
+                    self.report_capacity();
                     continue;
                 }
                 () = scheduling.notified() => {

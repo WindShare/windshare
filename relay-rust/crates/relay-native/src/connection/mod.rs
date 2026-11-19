@@ -4,8 +4,8 @@
 //! bytes to the writer, while the caller exclusively owns the share kernel.
 
 use crate::config::{
-    CONTROL_QUEUE_FRAMES, DATA_QUEUE_BYTES, DATA_QUEUE_FRAMES, MAX_CONTROL_BYTES,
-    SUBMITTED_DATA_BYTES, SUBMITTED_DATA_FRAMES,
+    CAPACITY_NOTICE_QUEUE_FRAMES, CONTROL_QUEUE_FRAMES, DATA_QUEUE_BYTES, DATA_QUEUE_FRAMES,
+    MAX_CONTROL_BYTES, SUBMITTED_DATA_BYTES, SUBMITTED_DATA_FRAMES,
 };
 use crate::node::Runtime;
 use anyhow::{Result, ensure};
@@ -18,6 +18,7 @@ use windshare_relay_core::{
     flow::{Counts, FlowKey, ReceivedFrame},
     lifecycle::ConnectionRef,
     observation::Observer,
+    sessions::CapacityWait,
     share::{RelayStep, ShareRelay, Submission},
 };
 
@@ -54,6 +55,7 @@ pub struct Outbox {
     probe: watch::Sender<Option<Vec<u8>>>,
     closure: watch::Sender<Closure>,
     control_slots: Arc<Semaphore>,
+    capacity_notice_slots: Arc<Semaphore>,
     data_slots: Arc<Semaphore>,
     data_bytes: Arc<Semaphore>,
 }
@@ -62,7 +64,8 @@ pub fn channel(
     connection: ConnectionRef,
     node: Runtime,
 ) -> (Outbox, Writer, watch::Receiver<Closure>) {
-    let (ordered, incoming) = mpsc::channel(CONTROL_QUEUE_FRAMES + SUBMITTED_DATA_FRAMES);
+    let ordered_slots = CONTROL_QUEUE_FRAMES + CAPACITY_NOTICE_QUEUE_FRAMES + SUBMITTED_DATA_FRAMES;
+    let (ordered, incoming) = mpsc::channel(ordered_slots);
     let (probe, probes) = watch::channel(None);
     let (closure, closing) = watch::channel(Closure::Open);
     let outbox = Outbox {
@@ -79,6 +82,7 @@ pub fn channel(
         probe,
         closure,
         control_slots: Arc::new(Semaphore::new(CONTROL_QUEUE_FRAMES)),
+        capacity_notice_slots: Arc::new(Semaphore::new(CAPACITY_NOTICE_QUEUE_FRAMES)),
         data_slots: Arc::new(Semaphore::new(SUBMITTED_DATA_FRAMES)),
         data_bytes: Arc::new(Semaphore::new(SUBMITTED_DATA_BYTES)),
     };
@@ -207,6 +211,19 @@ impl Outbox {
         let slot = Arc::clone(&self.control_slots).try_acquire_owned()?;
         self.ordered
             .try_send(writer::Frame::new(bytes, slot, None, None))?;
+        Ok(())
+    }
+
+    /// Congestion is short-lived advice. Its own slots preserve the capacity for
+    /// required protocol controls while keeping notices in wire order.
+    pub fn capacity_wait(&self, notice: CapacityWait) -> Result<()> {
+        let slot = Arc::clone(&self.capacity_notice_slots).try_acquire_owned()?;
+        self.ordered.try_send(writer::Frame::new(
+            notice.encode()?.to_vec(),
+            slot,
+            None,
+            None,
+        ))?;
         Ok(())
     }
 

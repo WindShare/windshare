@@ -4,6 +4,7 @@ use windshare_relay_core::{
     descriptor_upload::DescriptorUpload,
     flow::{Counts, DeliveryConsumed, SettlementAck, SettlementNotice},
     identifiers::RelaySessionId,
+    sessions::MAX_OPAQUE_CIPHERTEXT_BYTES,
 };
 
 async fn published() -> Harness {
@@ -13,10 +14,7 @@ async fn published() -> Harness {
     host
 }
 
-async fn joined(host: &mut Harness, id: u64) -> (Writer, RelaySessionId) {
-    // The vector declares 16 frames: 14 ordinary plus this flow's startup
-    // allowance, leaving one protected startup slot for a later receiver.
-    const INITIAL_GRANTED_FRAMES: u64 = 15;
+async fn join(host: &Harness, id: u64) -> (Writer, RelaySessionId) {
     let (port, mut receiver, _) =
         crate::connection::channel(connection(id), crate::node::Runtime::default());
     host.tx
@@ -38,6 +36,14 @@ async fn joined(host: &mut Harness, id: u64) -> (Writer, RelaySessionId) {
         DescriptorUpload::decode(&upload).unwrap().object()
     );
     let session = RelaySessionId::new(descriptor[8..16].try_into().unwrap()).unwrap();
+    (receiver, session)
+}
+
+async fn joined(host: &mut Harness, id: u64) -> (Writer, RelaySessionId) {
+    // The vector declares 16 frames: 14 ordinary plus this flow's startup
+    // allowance, leaving one protected startup slot for a later receiver.
+    const INITIAL_GRANTED_FRAMES: u64 = 15;
+    let (mut receiver, session) = join(host, id).await;
     for writer in [&mut receiver, &mut host.sender] {
         let mut frames = 0;
         for _ in 0..2 {
@@ -51,10 +57,14 @@ async fn joined(host: &mut Harness, id: u64) -> (Writer, RelaySessionId) {
 }
 
 fn opaque(session: RelaySessionId) -> Vec<u8> {
+    opaque_with_ciphertext_len(session, 1)
+}
+
+fn opaque_with_ciphertext_len(session: RelaySessionId, length: u32) -> Vec<u8> {
     let mut bytes = b"WS2O\x02\0\0\0".to_vec();
     bytes.extend_from_slice(session.as_bytes());
-    bytes.extend_from_slice(&1_u32.to_be_bytes());
-    bytes.push(7);
+    bytes.extend_from_slice(&length.to_be_bytes());
+    bytes.resize(bytes.len() + length as usize, 7);
     bytes
 }
 
@@ -226,6 +236,90 @@ async fn receiver_loss_discards_late_data_and_admission_without_closing_shared_c
         "session loss must not persist owner detachment"
     );
     drop(host);
+}
+
+#[tokio::test]
+async fn full_capacity_notice_budget_preserves_settlement_and_sibling_delivery() {
+    use crate::config::{CAPACITY_NOTICE_QUEUE_FRAMES, SUBMITTED_DATA_FRAMES};
+
+    let mut host = published().await;
+    let (mut healthy, healthy_session) = joined(&mut host, 3).await;
+    let mut slow = Vec::new();
+    for index in 0..=CAPACITY_NOTICE_QUEUE_FRAMES {
+        let id = 4 + index as u64;
+        let (receiver, session) = join(&host, id).await;
+        let request = opaque_with_ciphertext_len(session, MAX_OPAQUE_CIPHERTEXT_BYTES);
+        host.tx
+            .send(Event::Frame(connection(id), request.clone()))
+            .await
+            .unwrap();
+        loop {
+            let frame = read(&mut host.sender).await;
+            if frame == request {
+                break;
+            }
+            assert!(frame.starts_with(b"WS2W"));
+        }
+        // A full-sized request returns both the frame and byte startup allowance
+        // after consumption, leaving room for the next receiver to join.
+        let consumed =
+            DeliveryConsumed::new(session, Counts::new(1, request.len() as u64)).unwrap();
+        host.tx
+            .send(Event::Control(connection(1), consumed.encode().to_vec()))
+            .await
+            .unwrap();
+        slow.push((connection(id), receiver, session));
+    }
+
+    tokio::time::pause();
+    // Each slow writer keeps one accepted frame waiting behind its submitted prefix.
+    for (_, _, session) in &slow {
+        for _ in 0..=SUBMITTED_DATA_FRAMES {
+            host.tx
+                .send(Event::Frame(connection(1), opaque(*session)))
+                .await
+                .unwrap();
+        }
+    }
+    let healthy_frame = opaque(healthy_session);
+    host.tx
+        .send(Event::Frame(connection(1), healthy_frame.clone()))
+        .await
+        .unwrap();
+    assert_eq!(read(&mut healthy).await, healthy_frame);
+    tokio::time::advance(Duration::from_secs(2)).await;
+
+    // Observe the reporting tick at every receiver while the sender stays blocked.
+    for (_, receiver, session) in &mut slow {
+        loop {
+            let frame = read(receiver).await;
+            if frame.starts_with(b"WS2Z") {
+                assert_eq!(&frame[8..16], session.as_bytes());
+                break;
+            }
+            assert!(frame.starts_with(b"WS2W") || frame == opaque(*session));
+        }
+    }
+
+    let (retired_connection, _, retired_session) = &slow[0];
+    host.tx
+        .send(Event::Disconnected(*retired_connection))
+        .await
+        .unwrap();
+    host.tx
+        .send(Event::Frame(connection(1), healthy_frame.clone()))
+        .await
+        .unwrap();
+
+    // The actor must process the disconnect before this payload, with no writer
+    // release at the shared sender to make room for the required settlement.
+    assert_eq!(read(&mut healthy).await, healthy_frame);
+    for _ in 0..CAPACITY_NOTICE_QUEUE_FRAMES {
+        assert!(read(&mut host.sender).await.starts_with(b"WS2Z"));
+    }
+    let notice = SettlementNotice::decode(&read(&mut host.sender).await).unwrap();
+    assert_eq!(notice.session(), *retired_session);
+    assert!(host.sender.try_recv().is_err());
 }
 
 #[tokio::test]
