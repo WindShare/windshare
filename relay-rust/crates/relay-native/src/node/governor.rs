@@ -1,5 +1,8 @@
 //! Node-wide pacing, with one fair scheduling identity for both session directions.
+mod pacing;
+
 use super::access::Service;
+use pacing::Pacing;
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::{Arc, Mutex},
@@ -15,7 +18,6 @@ use windshare_relay_core::{flow::FlowKey, sessions::SessionKey};
 const TICK: Duration = Duration::from_millis(5);
 const MAX_SESSIONS: usize = crate::config::MAX_RESIDENT_SHARES * 64;
 const MAX_FRAME: u64 = windshare_relay_core::sessions::OpaqueHeader::MAX_ENCODED_BYTES as u64;
-const NANOS_PER_SECOND: u128 = 1_000_000_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 struct Key([u8; 12], [u8; 16], u64);
@@ -45,10 +47,7 @@ struct State {
     references: BTreeMap<Key, usize>,
     lanes: BTreeMap<u64, Lane>,
     sequence: u64,
-    rate: Option<u64>,
-    credit: u64,
-    fraction: u128,
-    updated: Instant,
+    pacing: Pacing,
     classified: u64,
 }
 
@@ -73,10 +72,7 @@ impl Governor {
                 references: BTreeMap::new(),
                 lanes: BTreeMap::new(),
                 sequence: 0,
-                rate: None,
-                credit: MAX_FRAME,
-                fraction: 0,
-                updated: Instant::now(),
+                pacing: Pacing::default(),
                 classified: 0,
             })),
             access,
@@ -85,11 +81,7 @@ impl Governor {
 
     pub fn configure(&self, bytes_per_second: Option<u64>) {
         let mut state = self.state.lock().expect("governor");
-        if state.rate != bytes_per_second {
-            state.rate = bytes_per_second;
-            state.credit = state.credit.min(MAX_FRAME);
-            state.fraction = 0;
-            state.updated = Instant::now();
+        if state.pacing.configure(bytes_per_second, Instant::now()) {
             drop(state);
             tracing::info!(event = "governor_capacity_changed", ?bytes_per_second);
         }
@@ -154,22 +146,7 @@ impl State {
     }
 
     fn pump(&mut self, access: &Service) {
-        let now = Instant::now();
-        if let Some(rate) = self.rate {
-            let accrued = now
-                .duration_since(self.updated)
-                .as_nanos()
-                .saturating_mul(u128::from(rate))
-                + self.fraction;
-            self.credit = self
-                .credit
-                .saturating_add(u64::try_from(accrued / NANOS_PER_SECOND).unwrap_or(u64::MAX))
-                .min(MAX_FRAME);
-            self.fraction = accrued % NANOS_PER_SECOND;
-        } else {
-            self.credit = u64::MAX;
-        }
-        self.updated = now;
+        let available = self.pacing.replenish(Instant::now());
         let second = super::now().unsigned_abs();
         if self.classified != second {
             for lane in self.lanes.values() {
@@ -180,8 +157,9 @@ impl State {
             }
             self.classified = second;
         }
-        while let Some((session, bytes)) = self.scheduler.next(self.credit) {
-            self.credit -= bytes;
+        let mut remaining = available;
+        while let Some((session, bytes)) = self.scheduler.next(remaining) {
+            remaining -= bytes;
             let queue = self.queues.get_mut(&session).expect("scheduled session");
             let id = queue.pop_front().expect("scheduled lane");
             let next = queue.front().copied();
@@ -193,6 +171,7 @@ impl State {
                 assert!(self.scheduler.request(session, demand));
             }
         }
+        self.pacing.charge(available - remaining);
     }
 }
 
