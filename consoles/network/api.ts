@@ -1,7 +1,7 @@
 import { message } from '../ui/locale'
 import { networkCopy } from './locales'
 import { request, RequestError } from '../ui/request'
-import type { Enrollment, PolicyField, RelayNode, Restrictions, Settings, Snapshot, Target } from './model'
+import type { Enrollment, PolicyField, RelayNode, Report, ReportPage, Restrictions, Settings, Snapshot, Target } from './model'
 
 const messages = {
   credentials: message(networkCopy, 'invalidCredentials'),
@@ -30,6 +30,25 @@ export class AuthorityClient {
       data: token ? { username, password, token } : { username, password }, messages,
     })
   }
+  private async read<T>(route: string, signal: AbortSignal) {
+    try {
+      return await request<T>('/v1/admin/' + route, { signal, messages })
+    } catch (error) {
+      if (!signal.aborted && error instanceof RequestError && error.code === 'administrator_session') this.expired()
+      throw error
+    }
+  }
+  reports = (signal: AbortSignal, after?: string) =>
+    this.read<ReportPage>(after === undefined ? 'reports' : 'reports?after=' + encodeURIComponent(after), signal)
+  report = async (id: string, signal: AbortSignal) => {
+    try {
+      return await this.read<Report>('reports/' + encodeURIComponent(id), signal)
+    } catch (error) {
+      if (error instanceof RequestError && error.code === 'report_not_found') return null
+      throw error
+    }
+  }
+
   private async write<T>(route: string, data: unknown, method = 'POST') {
     try {
       return await request<T>('/v1/admin/' + route, {

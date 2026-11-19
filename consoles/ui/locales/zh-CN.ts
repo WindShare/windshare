@@ -29,6 +29,8 @@ export const zhCN = {
   cancel: '取消',
   signOut: '退出登录',
   refresh: '刷新',
+  loadMore: '加载更多',
+  loadingMore: '正在加载…',
   requestFailed: '请求失败，请重试。',
   unreachable: '无法连接到服务，请检查网络连接后重试。',
 } satisfies typeof en

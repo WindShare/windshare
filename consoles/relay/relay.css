@@ -18,7 +18,8 @@
 .credential-table tr + tr > * { border-top: 1px solid var(--line); }
 .credential-name { gap: .8rem; max-width: 25rem; overflow-wrap: anywhere; font-size: .97rem; font-weight: 610; }
 .credential-name .row-icon { background: var(--lilac); color: var(--lilac-ink); }
-.credential-used { color: var(--muted); font-size: .87rem; }
+.credential-used, .credential-status time { color: var(--muted); font-size: .87rem; }
+.credential-pagination { display: flex; justify-content: center; padding: 1rem; border-top: 1px solid var(--line); }
 .credential-table .credential-action { text-align: end; }
 .credential-action button { font-size: .85rem; }
 .mobile-label { display: none; }
@@ -42,7 +43,7 @@
   .credential-table tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name status" "used action"; align-items: center; gap: .25rem .6rem; padding: .9rem 1.1rem .65rem; border-top: 1px solid var(--line); }
   .credential-table tbody tr > :is(th, td) { padding: 0; border: 0; }
   .credential-table tbody th { grid-area: name; }
-  .credential-status { grid-area: status; justify-self: end; }
+  .credential-status { grid-area: status; justify-self: end; font-size: .81rem; text-align: end; }
   .credential-used { grid-area: used; font-size: .81rem; }
   .credential-action { grid-area: action; }
   .credential-action button { padding-inline: .25rem; }

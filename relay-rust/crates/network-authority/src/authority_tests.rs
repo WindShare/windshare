@@ -55,7 +55,8 @@ impl Store for Memory {
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect())
     }
-    fn recent_reports(&self, limit: usize) -> Result<Vec<Report>> {
+    fn reports_after(&self, after: Option<ReportPosition>, limit: usize) -> Result<Vec<Report>> {
+        let after = after.map(|position| (position.created_at, key("report", &position.id)));
         let mut reports = self
             .scan("report/", None)?
             .into_iter()
@@ -64,6 +65,11 @@ impl Store for Memory {
         reports.sort_by(|(key_a, a), (key_b, b)| (b.created_at, key_b).cmp(&(a.created_at, key_a)));
         Ok(reports
             .into_iter()
+            .filter(|(key, report)| {
+                after
+                    .as_ref()
+                    .is_none_or(|(time, id)| (report.created_at, key) < (*time, id))
+            })
             .take(limit)
             .map(|(_, report)| report)
             .collect())

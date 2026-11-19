@@ -19,7 +19,7 @@ mod store;
 mod usage;
 use anyhow::Result;
 pub use challenges::EmailDelivery;
-pub use governance::{Block, Report};
+pub use governance::{Block, Report, ReportPage, ReportPosition};
 pub use model::*;
 pub use nodes::{Node, NodeEnrollment, NodePolicyChange, Zone};
 pub use profile::{EmailVerification, Mailbox};

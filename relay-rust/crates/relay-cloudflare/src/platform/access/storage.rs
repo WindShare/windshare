@@ -1,10 +1,14 @@
 use super::{failure, text_id};
 use serde::{Serialize, de::DeserializeOwned};
 use windshare_relay_access::{Credential, Digest, Enrollment};
+use windshare_relay_console::credentials::{
+    CREDENTIAL_HISTORY_PAGE_SIZE, RevokedCredentialPosition,
+};
 use worker::{Result, SqlStorage, SqlStorageValue, State};
 
 const CREDENTIAL_ROWS: &str = "key GLOB 'credential:*'";
 const ACTIVE_CREDENTIALS: &str = "json_extract(value, '$.state') = 'Active'";
+const REVOKED_AT: &str = "json_extract(value, '$.state.Revoked.at')";
 const TERMINATION_BATCH_SIZE: i64 = 32;
 pub const TERMINATION_RETRY_MS: u64 = 5_000;
 
@@ -61,7 +65,7 @@ impl Database {
             })
             .collect()
     }
-    pub fn active_credentials(&self) -> Result<usize> {
+    fn ensure_active_index(&self) -> Result<()> {
         self.0.exec(
             &format!(
                 "CREATE INDEX IF NOT EXISTS access_active_credentials
@@ -69,8 +73,12 @@ impl Database {
             ),
             None,
         )?;
+        Ok(())
+    }
+    pub fn active_credentials(&self) -> Result<usize> {
+        self.ensure_active_index()?;
         let rows = self.0.exec(
-            &format!("SELECT count(*) FROM access_entries WHERE {CREDENTIAL_ROWS} AND {ACTIVE_CREDENTIALS}"),
+            &format!("SELECT count(*) FROM access_entries INDEXED BY access_active_credentials WHERE {CREDENTIAL_ROWS} AND {ACTIVE_CREDENTIALS}"),
             None,
         )?;
         match rows.raw().next().transpose()?.as_deref() {
@@ -78,12 +86,67 @@ impl Database {
             _ => Err(failure("invalid credential count")),
         }
     }
-    pub fn credentials(&self) -> Result<Vec<Credential>> {
+    pub fn list_active_credentials(&self) -> Result<Vec<Credential>> {
+        self.ensure_active_index()?;
+        self.read_credentials(
+            &format!(
+                "SELECT value FROM access_entries INDEXED BY access_active_credentials
+                WHERE {CREDENTIAL_ROWS} AND {ACTIVE_CREDENTIALS} ORDER BY key"
+            ),
+            vec![],
+        )
+    }
+    pub fn revoked_credentials(
+        &self,
+        after: Option<&RevokedCredentialPosition>,
+    ) -> Result<Vec<Credential>> {
+        let revoked = format!("{CREDENTIAL_ROWS} AND {REVOKED_AT} IS NOT NULL");
+        self.0.exec(
+            &format!(
+                "CREATE INDEX IF NOT EXISTS access_revoked_credentials
+                ON access_entries ({REVOKED_AT} DESC, key DESC) WHERE {revoked}"
+            ),
+            None,
+        )?;
+        let read = |filter: &str, order: &str, mut args: Vec<SqlStorageValue>, limit: usize| {
+            args.push(i64::try_from(limit).map_err(failure)?.into());
+            self.read_credentials(
+                &format!(
+                    "SELECT value FROM access_entries INDEXED BY access_revoked_credentials
+                    WHERE {revoked} {filter} ORDER BY {order} LIMIT ?"
+                ),
+                args,
+            )
+        };
+        let limit = CREDENTIAL_HISTORY_PAGE_SIZE + 1;
+        let order = format!("{REVOKED_AT} DESC, key DESC");
+        let Some(after) = after else {
+            return read("", &order, vec![], limit);
+        };
+        // Separate ranges keep a page bounded even when many revocations share a timestamp.
+        let time = i64::try_from(after.revoked_at()).map_err(failure)?;
+        let mut credentials = read(
+            &format!("AND {REVOKED_AT} = ? AND key < ?"),
+            "key DESC",
+            vec![
+                time.into(),
+                format!("credential:{}", text_id(&after.credential_id())).into(),
+            ],
+            limit,
+        )?;
+        if credentials.len() < limit {
+            credentials.extend(read(
+                &format!("AND {REVOKED_AT} < ?"),
+                &order,
+                vec![time.into()],
+                limit - credentials.len(),
+            )?);
+        }
+        Ok(credentials)
+    }
+    fn read_credentials(&self, query: &str, args: Vec<SqlStorageValue>) -> Result<Vec<Credential>> {
         self.0
-            .exec(
-                &format!("SELECT value FROM access_entries WHERE {CREDENTIAL_ROWS} ORDER BY key"),
-                None,
-            )?
+            .exec(query, Some(args))?
             .raw()
             .map(|row| match row?.as_slice() {
                 [SqlStorageValue::String(value)] => serde_json::from_str(value).map_err(failure),

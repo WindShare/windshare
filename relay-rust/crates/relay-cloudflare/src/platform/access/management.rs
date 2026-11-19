@@ -4,7 +4,11 @@ use super::{
 };
 use serde_json::{Value, json};
 use windshare_relay_access::{Credential, CredentialState, Enrollment, EnrollmentState};
-use windshare_relay_console::{MAX_ACTIVE_CREDENTIALS, credential_view, service_configuration};
+use windshare_relay_console::{
+    MAX_ACTIVE_CREDENTIALS, credential_view,
+    credentials::{RevokedCredentialPosition, credential_history},
+    service_configuration,
+};
 use worker::{Method, Request, Response, Result};
 
 impl AccessObject {
@@ -30,8 +34,31 @@ impl AccessObject {
             ),
             (Method::Post, "/api/logout") => Self::logout(db, req),
             (Method::Get, "/api/credentials") => {
-                let credentials: Vec<_> = db.credentials()?.iter().map(credential_view).collect();
+                let credentials: Vec<_> = db
+                    .list_active_credentials()?
+                    .iter()
+                    .map(credential_view)
+                    .collect();
                 reply(&json!({"credentials":credentials}), 200)
+            }
+            (Method::Get, "/api/credentials/revoked") => {
+                let cursor = req
+                    .url()?
+                    .query_pairs()
+                    .find_map(|(name, value)| (name == "after").then(|| value.into_owned()));
+                let after = match cursor.as_deref() {
+                    None => None,
+                    Some(cursor) => match RevokedCredentialPosition::parse(cursor) {
+                        Some(position) => Some(position),
+                        None => return reply(&json!({"error":"invalid_cursor"}), 400),
+                    },
+                };
+                let page = credential_history(db.revoked_credentials(after.as_ref())?);
+                trace(
+                    "credential_history_listed",
+                    &json!({"continued":after.is_some(),"has_more":!page["next_cursor"].is_null()}),
+                );
+                reply(&page, 200)
             }
             (Method::Post, "/api/credentials") => self.create_credential(db, body, now),
             (Method::Post, "/api/credentials/revoke") => Self::revoke(db, body, now),

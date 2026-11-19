@@ -115,7 +115,22 @@ await call('/v1/accounts/credentials/revoke', { credential: first.credential }, 
 await call('/v1/accounts/ticket', {}, { secret, status: 403 });
 await call('/v1/accounts/ticket', {}, { secret: second.credential_secret });
 const share = [...randomBytes(12)];
-await call('/v1/reports', { share, reason: 'Local authority integration probe' });
+const reason = 'Local authority integration probe';
+const { value: { id } } = await call('/v1/reports', { share, reason });
+const reportEndpoint = '/v1/admin/reports';
+const detail = `${reportEndpoint}/${Buffer.from(id).toString('base64url')}`;
+const adminGet = { admin: true, method: 'GET' };
+assert.equal(consoleState.reports, undefined);
+await call(reportEndpoint, undefined, { method: 'GET', status: 403 });
+const { value: reports } = await call(reportEndpoint, undefined, adminGet);
+const filed = reports.reports.find(item => Buffer.from(item.id).equals(Buffer.from(id)));
+assert.deepEqual(filed?.share, share);
+assert.equal(filed.reason, reason);
+assert.deepEqual((await call(detail, undefined, adminGet)).value, filed);
+const continued = await call(`${reportEndpoint}?after=${filed.created_at}.${Buffer.from(id).toString('base64url')}`, undefined, adminGet);
+assert(!continued.value.reports.some(item => Buffer.from(item.id).equals(Buffer.from(id))));
+await call(reportEndpoint + '?after=invalid', undefined, { ...adminGet, status: 400 });
+await call(`${reportEndpoint}/${Buffer.from(randomBytes(16)).toString('base64url')}`, undefined, { ...adminGet, status: 404 });
 await call('/v1/admin/blocks', { kind: 'account', id: first.account, blocked: true }, { admin: true });
 await call('/v1/accounts/ticket', {}, { secret: second.credential_secret, status: 403 });
 const blocked = await status();
@@ -143,6 +158,6 @@ console.log(JSON.stringify({
   node: Buffer.from(node).toString('base64url'), checks: [
     'one-time initialization', 'session cookies and CORS', 'idempotent registration', 'stable refresh identity',
     'password login', 'concurrent node policy updates', 'idempotent enrollment', 'signed node reports', 'idempotent UTC usage', 'independent revocation',
-    'account block and restoration', 'public share restrictions',
+    'operator report list and detail', 'account block and restoration', 'public share restrictions',
   ],
 }));

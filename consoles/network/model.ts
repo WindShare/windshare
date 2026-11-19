@@ -22,6 +22,7 @@ export interface Settings {
 }
 export interface Rate { burst: number; refill_seconds: number }
 export interface Report { id: number[]; share: number[]; reason: string; created_at: number }
+export interface ReportPage { reports: Report[]; next_cursor: string | null }
 export type Target = { kind: 'share' | 'account'; id: number[] }
 export interface Restrictions { version: number; shares: number[][]; accounts: number[][] }
 export interface Snapshot {
@@ -29,7 +30,6 @@ export interface Snapshot {
   nodes: RelayNode[]
   load: LoadReport[]
   directory: Publication | null
-  reports: Report[]
   restrictions: Restrictions
   settings: Settings
   email_configured: boolean

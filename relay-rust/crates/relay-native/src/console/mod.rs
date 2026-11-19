@@ -165,11 +165,14 @@ impl Console {
     fn dispatch(
         &self,
         method: &Method,
-        path: &str,
+        path_and_query: &str,
         body: &Value,
         session: &str,
         now: u64,
     ) -> Result<Reply> {
+        let (path, query) = path_and_query
+            .split_once('?')
+            .unwrap_or((path_and_query, ""));
         let mut db = self
             .0
             .db
@@ -189,7 +192,7 @@ impl Console {
             (&Method::GET, "/api/session") => Ok(Reply::ok(
                 json!({"authenticated":true,"capabilities":{"revocation_stops_shares":true}}),
             )),
-            _ => self.manage(&tx, method, path, body, now),
+            _ => self.manage(&tx, method, path, query, body, now),
         };
         let reply = match result {
             Ok(reply) => reply,

@@ -133,25 +133,49 @@ fn account_blocks_cover_observed_shares_without_polluting_explicit_share_blocks(
 }
 
 #[test]
-fn latest_report_is_visible_after_the_console_limit() {
+fn reports_remain_reachable_beyond_the_old_console_limit() {
     let mut authority = fixture();
     let admin = authority
         .initialize("once", "once", "admin", "correct horse battery")
         .unwrap();
-    for i in 0..1000u16 {
+    let now = authority.environment.now;
+    for i in 0..1000u128 {
+        let id = i.to_be_bytes();
         let report = Report {
-            id: [12; 16],
+            id,
             share: [1; 12],
             reason: "older report".into(),
-            created_at: authority.environment.now - 1,
+            created_at: now - 1 - u64::from(i == 0),
         };
-        save(&mut authority.store, &format!("report/{i:04}"), &report).unwrap();
+        save(&mut authority.store, &key("report", &id), &report).unwrap();
     }
-    let id = authority
+    let latest = authority
         .report("source", [2; 12], "new report".into())
         .unwrap();
-    let console = authority.console(&admin).unwrap();
-    let reports = console["reports"].as_array().unwrap();
-    assert_eq!(reports.len(), 1000);
-    assert_eq!(reports[0]["id"], serde_json::to_value(id).unwrap());
+    let oldest = [0; 16];
+    let mut page = authority.reports(&admin, None).unwrap();
+    assert_eq!(page.reports.len(), 50);
+    assert_eq!(page.reports[0].id, latest);
+    let mut seen = std::collections::BTreeSet::new();
+    loop {
+        for report in page.reports {
+            assert!(seen.insert(report.id));
+        }
+        let Some(next) = page.next else { break };
+        page = authority.reports(&admin, Some(next)).unwrap();
+    }
+    assert_eq!(seen.len(), 1001);
+    assert!(seen.contains(&oldest));
+    assert_eq!(authority.report_by_id(&admin, oldest).unwrap().id, oldest);
+    assert!(matches!(
+        authority
+            .report_by_id(&admin, [255; 16])
+            .err()
+            .unwrap()
+            .downcast_ref(),
+        Some(Fault::ReportNotFound)
+    ));
+    assert!(authority.report_by_id("", oldest).is_err());
+    assert!(authority.reports("", None).is_err());
+    assert!(authority.console(&admin).unwrap().get("reports").is_none());
 }

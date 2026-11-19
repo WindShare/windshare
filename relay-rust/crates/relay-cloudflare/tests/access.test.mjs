@@ -56,6 +56,7 @@ test('SQLite access authority survives restart, approval retry, cancellation and
     const page = await consoleWorker.fetch(origin + '/');
     assert.match(page.headers.get('Content-Security-Policy'), /frame-ancestors 'none'/);
     await request('credentials', undefined, 401);
+    await request('credentials/revoked', undefined, 401);
     await request('login', { password }, 403);
     const login = await request('login', { password }, 200, false, { Origin: origin });
     cookie = login.response.headers.get('Set-Cookie').split(';')[0];
@@ -111,8 +112,17 @@ test('SQLite access authority survives restart, approval retry, cancellation and
     const rotated = await request('login', { password: 'rotated-local-access-password' }, 200, false, { Origin: origin });
     cookie = rotated.response.headers.get('Set-Cookie').split(';')[0];
     const { data: list } = await request('credentials', undefined, 200, true);
-    assert.equal(list.credentials.length, 2);
-    assert.equal(list.credentials.find(item => item.credential_id === credential.credential_id).revoked, true);
+    assert.deepEqual(list.credentials.map(item => item.credential_id), [manual.credential.credential_id]);
+    assert.equal(list.credentials[0].revoked_at, null);
+    const { data: history } = await request('credentials/revoked', undefined, 200, true);
+    assert.equal(history.next_cursor, null);
+    const [revoked] = history.credentials;
+    assert.equal(revoked.credential_id, credential.credential_id);
+    assert(Number.isSafeInteger(revoked.revoked_at));
+    const { data: after } = await request(
+      `credentials/revoked?after=${revoked.revoked_at}.${revoked.credential_id}`, undefined, 200, true);
+    assert.deepEqual(after, { credentials: [], next_cursor: null });
+    await request('credentials/revoked?after=invalid', undefined, 400, true);
     const newAuthority = (await mf.getBindings('relay')).ACCESS.getByName('authority');
     const preserved = await newAuthority.fetch('https://internal/internal/authorize', {
       method: 'POST', body: JSON.stringify({ digest: digest(manual.access_key), share_id: encode(randomBytes(12)), operation_id: 'after-rotation' }),
@@ -122,6 +132,46 @@ test('SQLite access authority survives restart, approval retry, cancellation and
   } finally {
     await mf.dispose();
   }
+});
+
+test('credential history pages across timestamp ties without loading revoked rows as active', async t => {
+  const mf = new Miniflare(options(password, origin, 'https://127.0.0.1', true));
+  t.after(() => mf.dispose());
+  const consoleWorker = await mf.getWorker('console');
+  const login = await consoleWorker.fetch(origin + '/api/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin },
+    body: JSON.stringify({ password }),
+  });
+  assert.equal(login.status, 200);
+  const cookie = login.headers.get('Set-Cookie').split(';')[0];
+  const get = async path => {
+    const response = await consoleWorker.fetch(origin + path, { headers: { Cookie: cookie } });
+    assert.equal(response.status, 200, await response.clone().text());
+    return response.json();
+  };
+  const entries = Array.from({ length: 52 }, (_, offset) => {
+    const bytes = Buffer.alloc(16, offset);
+    return {
+      key: 'credential:' + encode(bytes),
+      value: { id: [...bytes], principal: [...bytes], name: 'Revoked', digest: Array(32).fill(0),
+        created_at: 1, last_used_at: null, state: { Revoked: { at: offset === 0 ? 2 : 3 } } },
+    };
+  });
+  const authority = (await mf.getBindings('relay')).ACCESS.getByName('authority');
+  const seeded = await authority.fetch('https://internal/__test/revoked-credentials', {
+    method: 'POST', body: JSON.stringify(entries),
+  });
+  assert.equal(seeded.status, 200);
+  assert.deepEqual((await get('/api/credentials')).credentials, []);
+  const first = await get('/api/credentials/revoked');
+  assert.equal(first.credentials.length, 50);
+  assert(first.credentials.every(entry => entry.revoked_at === 3));
+  assert(first.next_cursor);
+  const second = await get('/api/credentials/revoked?after=' + encodeURIComponent(first.next_cursor));
+  assert.equal(second.next_cursor, null);
+  assert.deepEqual(second.credentials.map(entry => entry.revoked_at), [3, 2]);
+  const seen = [...first.credentials, ...second.credentials].map(entry => 'credential:' + entry.credential_id);
+  assert.deepEqual(new Set(seen), new Set(entries.map(entry => entry.key)));
 });
 
 test('production Go protocol clients observe revocation and durable administrative termination', { timeout: 60_000 }, async () => {

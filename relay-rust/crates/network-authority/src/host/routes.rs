@@ -1,5 +1,7 @@
 use super::{WorkerEnvironment, failure, storage::Database};
-use crate::{Authority, Block, Fault, Mailbox, NodeEnrollment, NodePolicyChange, Settings};
+use crate::{
+    Authority, Block, Fault, Mailbox, NodeEnrollment, NodePolicyChange, ReportPosition, Settings,
+};
 use anyhow::{Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
@@ -7,6 +9,7 @@ use worker::{Env, Method, Request, Response};
 
 pub struct Context {
     path: String,
+    report_after: Option<String>,
     method: Method,
     source: String,
     bearer: String,
@@ -24,8 +27,18 @@ impl Context {
             .find_map(|part| part.trim().strip_prefix("authority_session="))
             .unwrap_or_default()
             .to_owned();
+        let path = request.path();
+        let report_after = if path == "/v1/admin/reports" {
+            request
+                .url()?
+                .query_pairs()
+                .find_map(|(name, value)| (name == "after").then(|| value.into_owned()))
+        } else {
+            None
+        };
         Ok(Self {
-            path: request.path(),
+            path,
+            report_after,
             method: request.method(),
             source: request
                 .headers()
@@ -177,6 +190,7 @@ fn admin_routes(
 ) -> Result<Response> {
     let Context {
         path,
+        report_after,
         method,
         source,
         session,
@@ -219,6 +233,22 @@ fn admin_routes(
             value["directory"] = directory.into();
             value
         }
+        (Method::Get, "/v1/admin/reports") => {
+            let after = report_after.as_deref().map(report_position).transpose()?;
+            let page = authority.reports(&session, after)?;
+            let next = page.next.map(|position| {
+                format!(
+                    "{}.{}",
+                    position.created_at,
+                    URL_SAFE_NO_PAD.encode(position.id)
+                )
+            });
+            serde_json::json!({ "reports": page.reports, "next_cursor": next })
+        }
+        (Method::Get, path) if path.starts_with("/v1/admin/reports/") => {
+            let id = report_id(&path["/v1/admin/reports/".len()..])?;
+            serde_json::to_value(authority.report_by_id(&session, id)?)?
+        }
         (Method::Put, "/v1/admin/settings") => {
             let mode = authority.set_settings(&session, &parse::<Settings>(bytes)?)?;
             serde_json::json!({"registration_mode": mode})
@@ -242,6 +272,29 @@ fn admin_routes(
     };
     Response::from_json(&value).map_err(|error| anyhow::anyhow!("{error}"))
 }
+fn report_id(text: &str) -> Result<[u8; 16]> {
+    if text.len() != 22 {
+        return Err(Fault::Invalid.into());
+    }
+    URL_SAFE_NO_PAD
+        .decode(text)
+        .map_err(|_| Fault::Invalid)?
+        .try_into()
+        .map_err(|_| Fault::Invalid.into())
+}
+
+fn report_position(text: &str) -> Result<ReportPosition> {
+    let (time, id) = text.split_once('.').ok_or(Fault::Invalid)?;
+    Ok(ReportPosition {
+        created_at: time
+            .parse::<i64>()
+            .ok()
+            .and_then(|time| u64::try_from(time).ok())
+            .ok_or(Fault::Invalid)?,
+        id: report_id(id)?,
+    })
+}
+
 fn signed_in(session: &str) -> Result<Response> {
     let mut response =
         Response::from_json(&serde_json::json!({"csrf":csrf(session)})).map_err(failure)?;
@@ -257,6 +310,7 @@ pub fn fault(fault: &Fault) -> Result<Response> {
         | Fault::UnsupportedEmail
         | Fault::EmailCodeRejected => 400,
         Fault::Denied { .. } => 403,
+        Fault::ReportNotFound => 404,
         Fault::RateLimited { .. } | Fault::NicknameCooldown { .. } => 429,
         Fault::Verification { .. } => 428,
         Fault::EmailDeliveryUnavailable => 503,

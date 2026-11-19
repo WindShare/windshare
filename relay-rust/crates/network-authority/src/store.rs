@@ -27,7 +27,11 @@ pub trait Store {
     ) -> Result<Vec<(String, String)>>;
     /// # Errors
     /// Propagates storage read or report decoding failures.
-    fn recent_reports(&self, limit: usize) -> Result<Vec<crate::Report>>;
+    fn reports_after(
+        &self,
+        after: Option<crate::ReportPosition>,
+        limit: usize,
+    ) -> Result<Vec<crate::Report>>;
 }
 pub trait Environment {
     fn now(&self) -> u64;

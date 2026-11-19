@@ -6,8 +6,9 @@ use windshare_relay_access::{
     Credential, CredentialState, Enrollment, EnrollmentState, Poll, Refusal,
 };
 use windshare_relay_console::{
-    MAX_ACTIVE_CREDENTIALS, MAX_RECORDS, claimed_key, credential_view, enrollment_response,
-    service_configuration, text_id, user_code,
+    MAX_ACTIVE_CREDENTIALS, MAX_RECORDS, claimed_key, credential_view,
+    credentials::{CREDENTIAL_HISTORY_PAGE_SIZE, RevokedCredentialPosition, credential_history},
+    enrollment_response, service_configuration, text_id, user_code,
 };
 
 pub(super) fn require_credential_capacity(db: &Connection) -> Result<()> {
@@ -100,9 +101,7 @@ impl Console {
                     if self
                         .0
                         .access
-                        .credential_inventory()
-                        .iter()
-                        .any(|c| c.id == credential && c.state != CredentialState::Active)
+                        .has_credential(credential, |state| state != CredentialState::Active)
                     {
                         return Err(refusal(Refusal::AccessDenied).into());
                     }
@@ -117,9 +116,7 @@ impl Console {
                         if !self
                             .0
                             .access
-                            .credential_inventory()
-                            .iter()
-                            .any(|c| c.id == credential && c.state == CredentialState::Active)
+                            .has_credential(credential, |state| state == CredentialState::Active)
                         {
                             return Err(refusal(Refusal::AccessDenied).into());
                         }
@@ -154,13 +151,7 @@ impl Console {
     }
 
     fn revoke(&self, db: &Connection, id: [u8; 16], now: u64) -> Result<bool> {
-        let Some(mut c) = self
-            .0
-            .access
-            .credential_inventory()
-            .into_iter()
-            .find(|c| c.id == id)
-        else {
+        let Some(mut c) = self.0.access.credential_by_id(id) else {
             return Ok(false);
         };
         c.revoke(now);
@@ -174,6 +165,7 @@ impl Console {
         db: &Connection,
         method: &Method,
         path: &str,
+        query: &str,
         body: &Value,
         now: u64,
     ) -> Result<Reply> {
@@ -204,7 +196,30 @@ impl Console {
                 json!({"ok":true})
             }
             (&Method::GET, "/api/credentials") => {
-                json!({"credentials":self.0.access.credential_inventory().iter().map(credential_view).collect::<Vec<_>>()})
+                json!({"credentials":self.0.access.active_credentials().iter().map(credential_view).collect::<Vec<_>>()})
+            }
+            (&Method::GET, "/api/credentials/revoked") => {
+                let cursor = url::form_urlencoded::parse(query.as_bytes())
+                    .find_map(|(name, value)| (name == "after").then_some(value));
+                let after = cursor
+                    .as_deref()
+                    .map(|cursor| {
+                        RevokedCredentialPosition::parse(cursor)
+                            .map(|position| (position.revoked_at(), position.credential_id()))
+                            .ok_or(Rejected(StatusCode::BAD_REQUEST, "invalid_cursor", 0))
+                    })
+                    .transpose()?;
+                let page = credential_history(
+                    self.0
+                        .access
+                        .revoked_credentials(after, CREDENTIAL_HISTORY_PAGE_SIZE + 1),
+                );
+                tracing::debug!(
+                    event = "credential_history_listed",
+                    continued = after.is_some(),
+                    has_more = !page["next_cursor"].is_null()
+                );
+                page
             }
             (&Method::POST, "/api/credentials") => {
                 let name = field(body, "name")?;

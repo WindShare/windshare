@@ -68,24 +68,60 @@ impl Store for Database {
         ))?;
         Ok(())
     }
-    fn recent_reports(&self, limit: usize) -> Result<Vec<crate::Report>> {
+    fn reports_after(
+        &self,
+        after: Option<crate::ReportPosition>,
+        limit: usize,
+    ) -> Result<Vec<crate::Report>> {
+        const CREATED_AT: &str = "json_extract(value, '$.created_at')";
         api(self.0.exec(
-            "CREATE INDEX IF NOT EXISTS authority_reports_newest
-             ON authority_records (json_extract(value, '$.created_at') DESC, key DESC)
-             WHERE key GLOB 'report/*'",
+            &format!(
+                "CREATE INDEX IF NOT EXISTS authority_reports_newest
+             ON authority_records ({CREATED_AT} DESC, key DESC) WHERE key GLOB 'report/*'"
+            ),
             None,
         ))?;
-        let rows = api(self.0.exec(
-            "SELECT value FROM authority_records WHERE key GLOB 'report/*'
-             ORDER BY json_extract(value, '$.created_at') DESC, key DESC LIMIT ?",
-            Some(vec![i64::try_from(limit)?.into()]),
-        ))?;
-        rows.raw()
-            .map(|row| match api(row)?.as_slice() {
-                [SqlStorageValue::String(value)] => Ok(serde_json::from_str(value)?),
-                _ => Err(anyhow!("invalid report row")),
-            })
-            .collect()
+        let read = |filter: &str,
+                    order: &str,
+                    mut args: Vec<SqlStorageValue>,
+                    limit: usize|
+         -> Result<Vec<crate::Report>> {
+            args.push(i64::try_from(limit)?.into());
+            let rows = api(self.0.exec(
+                &format!(
+                    "SELECT value FROM authority_records INDEXED BY authority_reports_newest
+                 WHERE key GLOB 'report/*' {filter} ORDER BY {order} LIMIT ?"
+                ),
+                Some(args),
+            ))?;
+            rows.raw()
+                .map(|row| match api(row)?.as_slice() {
+                    [SqlStorageValue::String(value)] => Ok(serde_json::from_str(value)?),
+                    _ => Err(anyhow!("invalid report row")),
+                })
+                .collect()
+        };
+        let order = format!("{CREATED_AT} DESC, key DESC");
+        let Some(after) = after else {
+            return read("", &order, vec![], limit);
+        };
+        // Two index ranges let SQLite seek past both timestamp and ID ties.
+        let time = i64::try_from(after.created_at)?;
+        let mut reports = read(
+            &format!("AND {CREATED_AT} = ? AND key < ?"),
+            "key DESC",
+            vec![time.into(), crate::store::key("report", &after.id).into()],
+            limit,
+        )?;
+        if reports.len() < limit {
+            reports.extend(read(
+                &format!("AND {CREATED_AT} < ?"),
+                &order,
+                vec![time.into()],
+                limit - reports.len(),
+            )?);
+        }
+        Ok(reports)
     }
     fn scan_after(
         &self,

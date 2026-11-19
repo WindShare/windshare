@@ -27,6 +27,8 @@ export const en = {
   cancel: 'Cancel',
   signOut: 'Sign out',
   refresh: 'Refresh',
+  loadMore: 'Load more',
+  loadingMore: 'Loading more…',
   requestFailed: 'The request failed. Please try again.',
   unreachable: 'Could not reach the service. Check your connection and try again.',
 }

@@ -16,8 +16,9 @@ export interface Credential {
   credential_id: string
   name: string
   last_used_at: number | null
-  revoked: boolean
+  revoked_at: number | null
 }
+export interface CredentialPage { credentials: Credential[]; next_cursor: string | null }
 export interface ServiceCredential { url: string; access_key: string }
 export interface TurnStatus {
   ready: boolean
@@ -65,7 +66,13 @@ export class RelayClient {
   signOut = () => this.call('logout', {})
   enrollments = async (signal: AbortSignal) => (await this.call<{ enrollments: Enrollment[] }>('enrollments', undefined, signal)).enrollments
   approve = (device: Enrollment) => this.call('enrollments/approve', { enrollment_id: device.enrollment_id, user_code: device.user_code })
-  credentials = async (signal: AbortSignal) => (await this.call<{ credentials: Credential[] }>('credentials', undefined, signal)).credentials
+  activeCredentials = async (signal: AbortSignal): Promise<CredentialPage> => ({
+    ...await this.call<{ credentials: Credential[] }>('credentials', undefined, signal),
+    next_cursor: null,
+  })
+  revokedCredentials = (signal: AbortSignal, after?: string) => this.call<CredentialPage>(
+    after === undefined ? 'credentials/revoked' : 'credentials/revoked?after=' + encodeURIComponent(after), undefined, signal,
+  )
   createKey = async (name: string) => (await this.call<{ configuration: ServiceCredential }>('credentials', { name })).configuration
   revoke = (id: string, stop: boolean) => this.call('credentials/revoke', { credential_id: id, terminate_shares: stop })
   turnStatus = (signal: AbortSignal) => this.call<TurnStatus>('turn/status', undefined, signal)

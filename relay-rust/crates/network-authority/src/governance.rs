@@ -8,6 +8,7 @@ use windshare_relay_access::restrictions::Restriction;
 
 const MAX_REPORT_REASON: usize = 2000;
 const MAX_CONSOLE_ROWS: usize = 1000;
+const REPORT_PAGE_SIZE: usize = 50;
 #[derive(Clone, Copy, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Block {
@@ -20,6 +21,26 @@ pub struct Report {
     pub share: [u8; 12],
     pub reason: String,
     pub created_at: u64,
+}
+
+#[derive(Clone, Copy)]
+pub struct ReportPosition {
+    pub created_at: u64,
+    pub id: [u8; 16],
+}
+
+impl From<&Report> for ReportPosition {
+    fn from(report: &Report) -> Self {
+        Self {
+            created_at: report.created_at,
+            id: report.id,
+        }
+    }
+}
+
+pub struct ReportPage {
+    pub reports: Vec<Report>,
+    pub next: Option<ReportPosition>,
 }
 
 impl<R: Store, E: Environment> Authority<R, E> {
@@ -86,6 +107,36 @@ impl<R: Store, E: Environment> Authority<R, E> {
         Ok(id)
     }
     /// # Errors
+    /// Requires a live administrator session and readable report records.
+    pub fn reports(&self, session: &str, after: Option<ReportPosition>) -> Result<ReportPage> {
+        self.require_admin(session)?;
+        let mut reports = self.store.reports_after(after, REPORT_PAGE_SIZE + 1)?;
+        let has_more = reports.len() > REPORT_PAGE_SIZE;
+        reports.truncate(REPORT_PAGE_SIZE);
+        let next = reports
+            .last()
+            .filter(|_| has_more)
+            .map(ReportPosition::from);
+        tracing::debug!(
+            event = "authority_reports_listed",
+            continued = after.is_some(),
+            count = reports.len(),
+            has_more
+        );
+        Ok(ReportPage { reports, next })
+    }
+
+    /// # Errors
+    /// Requires a live administrator session and an existing report.
+    pub fn report_by_id(&self, session: &str, id: [u8; 16]) -> Result<Report> {
+        self.require_admin(session)?;
+        let record = key("report", &id);
+        let report = crate::store::load(&self.store, &record)?;
+        tracing::debug!(event = "authority_report_read", report_key = %record, found = report.is_some());
+        report.ok_or_else(|| Fault::ReportNotFound.into())
+    }
+
+    /// # Errors
     /// Requires a live administrator session and readable persistent records.
     pub fn console(&self, session: &str) -> Result<serde_json::Value> {
         self.require_admin(session)?;
@@ -108,7 +159,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 let node=key.trim_start_matches("node-load/");
                 let reported_at=crate::store::load::<u64>(&self.store,&format!("node-report/{node}"))?;
                 Ok(serde_json::json!({"node":node,"created_at":created_at,"reported_at":reported_at,"load":load}))
-            }).collect::<Result<Vec<_>>>()?,"reports":self.store.recent_reports(MAX_CONSOLE_ROWS)?,
+            }).collect::<Result<Vec<_>>>()?,
             "restrictions":self.blocks()?}),
         )
     }

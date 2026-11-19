@@ -141,6 +141,7 @@ pub struct Session {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Fault {
     Invalid,
+    ReportNotFound,
     InvalidNickname,
     UnsupportedEmail,
     InvalidEmail,

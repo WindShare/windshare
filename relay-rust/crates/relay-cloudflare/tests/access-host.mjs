@@ -27,6 +27,15 @@ export class AccessObject extends DurableObject {
       }
       return new Response('ok');
     }
+    if (path === '/__test/revoked-credentials' && request.method === 'POST') {
+      const entries = await request.json();
+      this.ctx.storage.transactionSync(() => {
+        for (const { key, value } of entries) {
+          this.ctx.storage.sql.exec('INSERT INTO access_entries (key,value) VALUES (?,?)', key, JSON.stringify(value));
+        }
+      });
+      return new Response('ok');
+    }
     if (path === '/__test/turn-leases') {
       if (request.method === 'POST') {
         const leases = await request.json();

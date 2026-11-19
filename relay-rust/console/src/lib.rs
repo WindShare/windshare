@@ -3,6 +3,8 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::{Value, json};
 use windshare_relay_access::{Credential, CredentialState, Digest, Enrollment, POLL_INTERVAL_MS};
 
+pub mod credentials;
+
 pub const POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 pub const MAX_BODY_BYTES: usize = 4096;
 pub const MAX_RECORDS: usize = 1000;
@@ -48,8 +50,12 @@ pub fn enrollment_response(e: &Enrollment, origin: &str) -> Value {
 }
 
 pub fn credential_view(c: &Credential) -> Value {
+    let revoked_at = match c.state {
+        CredentialState::Active => None,
+        CredentialState::Revoked { at } => Some(at),
+    };
     json!({"credential_id":text_id(&c.id),"principal_id":text_id(&c.principal),"name":c.name,
-        "created_at":c.created_at,"last_used_at":c.last_used_at,"revoked":matches!(c.state,CredentialState::Revoked{..})})
+        "created_at":c.created_at,"last_used_at":c.last_used_at,"revoked_at":revoked_at})
 }
 
 pub fn service_configuration(relay: &str, access_key: &str) -> Value {

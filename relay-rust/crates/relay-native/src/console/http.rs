@@ -108,11 +108,15 @@ impl Console {
             .unwrap_or("")
             .to_owned();
         let console = self.clone();
-        let path = path.to_owned();
+        let path_and_query = parts
+            .uri
+            .path_and_query()
+            .map_or(path, |value| value.as_str())
+            .to_owned();
         let result = tokio::task::spawn_blocking(move || {
             console.dispatch(
                 &parts.method,
-                &path,
+                &path_and_query,
                 &value,
                 &session,
                 u64::try_from(

@@ -2,7 +2,9 @@ use super::*;
 use crate::node::access::Policy;
 use std::path::Path;
 use windshare_relay_access::{Credential, CredentialState};
-use windshare_relay_console::text_id;
+use windshare_relay_console::{
+    MAX_ACTIVE_CREDENTIALS, credentials::CREDENTIAL_HISTORY_PAGE_SIZE, text_id,
+};
 use windshare_relay_core::{access::RegistrationDecision, identifiers::ShareId};
 
 fn open(path: &Path, identity: &Identity, policy: &Policy) -> Console {
@@ -69,7 +71,12 @@ fn revoking_a_credential_makes_room_for_a_new_device() {
     {
         let mut db = console.0.db.lock().unwrap();
         let tx = db.transaction().unwrap();
-        for i in 0..windshare_relay_console::MAX_ACTIVE_CREDENTIALS {
+        for i in 0..=MAX_ACTIVE_CREDENTIALS + CREDENTIAL_HISTORY_PAGE_SIZE {
+            let state = match i.cmp(&MAX_ACTIVE_CREDENTIALS) {
+                std::cmp::Ordering::Less => CredentialState::Active,
+                std::cmp::Ordering::Equal => CredentialState::Revoked { at: 1 },
+                std::cmp::Ordering::Greater => CredentialState::Revoked { at: 2 },
+            };
             database::save_key(
                 &tx,
                 &Credential {
@@ -79,7 +86,7 @@ fn revoking_a_credential_makes_room_for_a_new_device() {
                     digest: Digest::of(i.to_string().as_bytes()),
                     created_at: 1,
                     last_used_at: None,
-                    state: CredentialState::Active,
+                    state,
                 },
             )
             .unwrap();
@@ -89,6 +96,31 @@ fn revoking_a_credential_makes_room_for_a_new_device() {
         drop(db);
         console.0.access.apply_devices(keys);
     }
+    let get = |path: &str| {
+        console
+            .dispatch(&Method::GET, path, &json!({}), &session, 100)
+            .unwrap()
+    };
+    let active = get("/api/credentials");
+    let active = active.body["credentials"].as_array().unwrap();
+    assert_eq!(active.len(), MAX_ACTIVE_CREDENTIALS);
+    assert!(active.iter().all(|entry| entry["revoked_at"].is_null()));
+    let page = get("/api/credentials/revoked");
+    assert_eq!(page.status, StatusCode::OK);
+    let history = page.body["credentials"].as_array().unwrap();
+    assert_eq!(history.len(), CREDENTIAL_HISTORY_PAGE_SIZE);
+    assert!(history.iter().all(|entry| entry["revoked_at"] == 2));
+    let cursor = page.body["next_cursor"].as_str().unwrap();
+    let next = get(&format!("/api/credentials/revoked?after={cursor}"));
+    let older = next.body["credentials"].as_array().unwrap();
+    assert_eq!(older.len(), 1);
+    assert_eq!(older[0]["revoked_at"], 1);
+    assert!(next.body["next_cursor"].is_null());
+    assert_eq!(
+        get("/api/credentials/revoked?after=invalid").status,
+        StatusCode::BAD_REQUEST
+    );
+
     let create = |name| {
         post(
             &console,
@@ -152,7 +184,7 @@ fn revocation_survives_reload_and_restart_without_affecting_other_owner_devices(
     );
     let first = pair(&console, &session, [1; 32]);
     let second = pair(&console, &session, [2; 32]);
-    let inventory = console.0.access.credential_inventory();
+    let inventory = console.0.access.active_credentials();
     let device = |key: &str| {
         inventory
             .iter()

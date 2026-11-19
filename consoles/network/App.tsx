@@ -26,12 +26,13 @@ function upsertNode(nodes: RelayNode[], next: RelayNode): RelayNode[] {
   return [...nodes, next]
 }
 
-function DashboardView({ api, snapshot, page, id, reports, directory, saveNode, access }: {
+function DashboardView({ api, snapshot, page, id, reports, reportRevision, directory, saveNode, access }: {
   api: AuthorityClient
   snapshot: Snapshot
   page: string
   id: string | undefined
   reports: boolean
+  reportRevision: { list: number; detail: number }
   directory: ReturnType<typeof useDirectory>
   saveNode: (next: RelayNode) => void
   access: { api: AuthorityClient; restrictions: Restrictions; saved: (restrictions: Restrictions) => void }
@@ -45,7 +46,7 @@ function DashboardView({ api, snapshot, page, id, reports, directory, saveNode, 
   if (page === 'account-access' || page === 'share-access') {
     return <LookupAccess key={page} kind={page === 'account-access' ? 'account' : 'share'} {...access} />
   }
-  if (reports) return <Reports {...access} reports={snapshot.reports} selectedId={page === 'report' ? id : undefined} />
+  if (reports) return <Reports {...access} revision={reportRevision} selectedId={page === 'report' ? id : undefined} />
   return <Nodes nodes={snapshot.nodes} reports={snapshot.load} directory={directory} />
 }
 
@@ -65,19 +66,25 @@ function Dashboard({ api, snapshot, update, refresh, refreshing, error }: {
     saved: (restrictions: Restrictions) => update(current => restrictions.version < current.restrictions.version
       ? current : { ...current, restrictions }),
   }
+  const [reportRevision, setReportRevision] = useState({ list: 0, detail: 0 })
+  function refreshCurrent() {
+    refresh()
+    if (page === 'reports') setReportRevision(current => ({ ...current, list: current.list + 1 }))
+    if (page === 'report') setReportRevision(current => ({ ...current, detail: current.detail + 1 }))
+  }
   const refreshLabel = refreshing ? t.refreshing : t.refreshSnapshot
   return <div className="workspace">
     <WorkspaceNav label={t.management} destinations={[
       { href: '#nodes', label: t.nodes, icon: 'server', current: !reports && !policy },
       { href: '#reports', label: t.reports, icon: 'report', current: reports },
       { href: '#policy', label: t.policy, icon: 'policy', current: policy },
-    ]} action={<button className="quiet" onClick={refresh} disabled={refreshing} aria-label={refreshLabel} title={refreshLabel}>
+    ]} action={<button className="quiet" onClick={refreshCurrent} disabled={refreshing} aria-label={refreshLabel} title={refreshLabel}>
       <Icon name={refreshing ? 'loader' : 'refresh'} size={16} /><span className="action-text">{refreshLabel}</span></button>} />
     <ReadError error={error} retry={refresh} />
     {policy ? <PolicySettings api={api} snapshot={snapshot} editor={editor}
       saved={(settings, registration_mode) => update(current => ({ ...current, settings, registration_mode }))} />
       : <DashboardView api={api} snapshot={snapshot} page={page} id={id} reports={reports}
-        directory={directory} saveNode={saveNode} access={access} />}
+        reportRevision={reportRevision} directory={directory} saveNode={saveNode} access={access} />}
   </div>
 }
 

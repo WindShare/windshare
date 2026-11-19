@@ -35,7 +35,7 @@ fn manual_export_is_scoped_to_one_relay_and_public_inventory_excludes_its_secret
         credential_view(&credential),
         json!({
             "credential_id":text_id(&credential.id),"principal_id":text_id(&credential.principal),
-            "name":"Build host","created_at":12,"last_used_at":null,"revoked":true,
+            "name":"Build host","created_at":12,"last_used_at":null,"revoked_at":14,
         })
     );
     assert_eq!(

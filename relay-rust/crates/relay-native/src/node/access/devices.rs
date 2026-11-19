@@ -1,5 +1,5 @@
 use super::{Service, State};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, ops::Bound};
 use windshare_relay_access::{
     AccountId, Credential, CredentialId, CredentialState, Digest, Issuer, trust::Generation,
 };
@@ -21,6 +21,8 @@ pub(super) struct CredentialIndex {
     entries: Vec<Credential>,
     by_id: BTreeMap<CredentialId, usize>,
     by_digest: BTreeMap<[u8; 32], usize>,
+    active_entries: Vec<usize>,
+    revoked_entries: BTreeMap<(u64, CredentialId), usize>,
 }
 
 impl CredentialIndex {
@@ -31,10 +33,30 @@ impl CredentialIndex {
         self.entries.push(credential);
     }
 
+    fn by_id(&self, id: CredentialId) -> Option<&Credential> {
+        self.by_id.get(&id).map(|&index| &self.entries[index])
+    }
+
     pub(super) fn active(&self, id: CredentialId) -> bool {
-        self.by_id
-            .get(&id)
-            .is_some_and(|&index| self.entries[index].state == CredentialState::Active)
+        self.by_id(id)
+            .is_some_and(|credential| credential.state == CredentialState::Active)
+    }
+
+    fn active_inventory(&self) -> impl Iterator<Item = &Credential> {
+        self.active_entries
+            .iter()
+            .map(|&entry| &self.entries[entry])
+    }
+
+    fn revoked_before(
+        &self,
+        after: Option<(u64, CredentialId)>,
+    ) -> impl Iterator<Item = &Credential> {
+        let before = after.map_or(Bound::Unbounded, Bound::Excluded);
+        self.revoked_entries
+            .range((Bound::Unbounded, before))
+            .rev()
+            .map(|(_, &entry)| &self.entries[entry])
     }
 
     pub(super) fn get(&self, digest: Digest) -> Option<&Credential> {
@@ -83,13 +105,49 @@ impl Service {
         self.changes.send_modify(|version| *version += 1);
     }
 
-    pub(crate) fn credential_inventory(&self) -> Vec<Credential> {
+    pub(crate) fn credential_by_id(&self, id: CredentialId) -> Option<Credential> {
+        self.state
+            .lock()
+            .expect("node access state")
+            .credentials
+            .by_id(id)
+            .cloned()
+    }
+    pub(crate) fn has_credential(
+        &self,
+        id: CredentialId,
+        matches_state: impl Fn(CredentialState) -> bool,
+    ) -> bool {
         self.state
             .lock()
             .expect("node access state")
             .credentials
             .entries
-            .clone()
+            .iter()
+            .any(|credential| credential.id == id && matches_state(credential.state))
+    }
+    pub(crate) fn active_credentials(&self) -> Vec<Credential> {
+        self.state
+            .lock()
+            .expect("node access state")
+            .credentials
+            .active_inventory()
+            .cloned()
+            .collect()
+    }
+    pub(crate) fn revoked_credentials(
+        &self,
+        after: Option<(u64, CredentialId)>,
+        limit: usize,
+    ) -> Vec<Credential> {
+        self.state
+            .lock()
+            .expect("node access state")
+            .credentials
+            .revoked_before(after)
+            .take(limit)
+            .cloned()
+            .collect()
     }
 }
 
@@ -112,9 +170,15 @@ impl State {
                 self.credentials.insert(device.clone());
             }
         }
-        for c in &mut self.credentials.entries {
+        // Index the effective inventory only after applying persisted revocations to policy credentials.
+        for (entry, c) in self.credentials.entries.iter_mut().enumerate() {
             if let Some(&index) = previous.by_id.get(&c.id) {
                 c.last_used_at = c.last_used_at.max(previous.entries[index].last_used_at);
+            }
+            if let CredentialState::Revoked { at } = c.state {
+                self.credentials.revoked_entries.insert((at, c.id), entry);
+            } else {
+                self.credentials.active_entries.push(entry);
             }
         }
     }

@@ -2,44 +2,56 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Message } from './locale'
 import { messageOf } from './request'
 
-export function useResource<T>(read: (signal: AbortSignal) => Promise<T>) {
+type Read<T> = (signal: AbortSignal) => Promise<T>
+
+export function useResource<T>(read: Read<T>) {
   const active = useRef<AbortController | null>(null)
+  const failed = useRef<{ read: Read<T>; merge?: (previous: T, next: T) => T } | null>(null)
   const [value, setValue] = useState<T>()
   const [error, setError] = useState<Message | null>(null)
   const [busy, setBusy] = useState(true)
-  const start = useCallback(() => {
+  const start = useCallback((readValue: Read<T>, merge?: (previous: T, next: T) => T) => {
     active.current?.abort()
+    failed.current = null
     const controller = new AbortController()
     active.current = controller
-    void read(controller.signal).then(result => {
+    void readValue(controller.signal).then(result => {
       if (!controller.signal.aborted) {
-        setValue(result)
+        setValue(previous => previous === undefined || !merge ? result : merge(previous, result))
         setError(null)
       }
     }).catch(reason => {
-      if (!controller.signal.aborted) setError(messageOf(reason))
+      if (!controller.signal.aborted) {
+        failed.current = { read: readValue, merge }
+        setError(messageOf(reason))
+      }
     }).finally(() => {
       if (!controller.signal.aborted) setBusy(false)
     })
-  }, [read])
-  const reload = useCallback(() => {
+  }, [])
+  function run(operation: () => void) {
     setBusy(true)
     setError(null)
-    start()
-  }, [start])
+    operation()
+  }
+  const reload = useCallback(() => run(() => start(read)), [read, start])
+  const retry = () => run(() => start(failed.current?.read ?? read, failed.current?.merge))
+  const extend = (readMore: Read<T>, merge: (previous: T, next: T) => T) =>
+    run(() => start(readMore, merge))
   useEffect(() => {
-    start()
+    start(read)
     return () => active.current?.abort()
-  }, [start])
+  }, [read, start])
 
   // A read started before a committed write must never overwrite the receipt.
   function update(merge: (previous: T) => T) {
     active.current?.abort()
+    failed.current = null
     setValue(previous => previous === undefined ? previous : merge(previous))
     setBusy(false)
     setError(null)
   }
-  return { value, busy, error, reload, update }
+  return { value, busy, error, reload, retry, extend, update }
 }
 
 export interface Feedback {
