@@ -21,7 +21,9 @@ a { color: var(--accent); text-underline-offset: .2em; }
 code, .code-input, .pair-code strong { font-family: var(--mono); }
 code { overflow-wrap: anywhere; font-size: .93em; }
 .icon { display: inline-block; flex: none; vertical-align: middle; }
-:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 0; }
+:where(a:not(.button)):focus-visible { outline-offset: 3px; }
+.panel:focus-visible { outline-offset: -1px; }
 main:focus, h1[tabindex="-1"]:focus { outline: 0; }
 [hidden] { display: none !important; }
 .sr-only, .skip:not(:focus) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

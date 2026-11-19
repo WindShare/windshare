@@ -9,6 +9,7 @@ button:enabled:hover, .button:hover { background: var(--accent-hover); }
 button:disabled { cursor: default; opacity: .56; }
 button.secondary, .button.secondary { background: var(--paper); border-color: var(--line); color: var(--ink); }
 button.secondary:enabled:hover, .button.secondary:hover { border-color: var(--control-border); background: var(--surface-hover); }
+:is(button, .button).secondary:focus-visible { outline-offset: -1px; }
 button.quiet { background: transparent; color: var(--muted); padding-inline: .7rem; }
 button.quiet:enabled:hover { color: var(--ink); background: var(--surface-muted); }
 button.danger-text { color: var(--danger); }
@@ -27,11 +28,18 @@ label, legend { font-size: .9rem; font-weight: 560; }
 input:hover, select:hover, textarea:hover { border-color: var(--muted); }
 input::placeholder, textarea::placeholder { color: var(--muted); }
 input:user-invalid, textarea:user-invalid { border-color: var(--danger); }
+/* Paint over the field border so focus stays visible even in forced colors. */
+:is(input:not([type="checkbox"], [type="radio"]), select, textarea):focus {
+  outline: 2px solid var(--focus);
+  outline-offset: -1px;
+}
+:is(input, textarea):user-invalid:focus { outline-color: var(--danger); }
 select { cursor: pointer; }
 textarea { resize: vertical; line-height: 1.55; }
 .password { position: relative; }
 .password input { padding-inline-end: 3.1rem; }
 .password .reveal { position: absolute; inset: 1px 1px 1px auto; min-height: 0; width: 2.75rem; padding: 0; }
+.password .reveal:focus-visible { outline-offset: -2px; }
 fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
 .check { display: flex; gap: .65rem; align-items: baseline; padding-block: .45rem; font-weight: 500; }
 input:is([type="checkbox"], [type="radio"]) { accent-color: var(--accent); }
