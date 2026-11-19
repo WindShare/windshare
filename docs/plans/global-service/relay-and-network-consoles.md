@@ -41,7 +41,7 @@ CLI 和桌面按引擎结果显示节点是否启用、当前策略和分享域�
 
 首批官方节点上线时，运营者登记签名描述中的节点公钥，在节点配置 Authority 上报地址和受信签发者，再签发含这些 `relay` 节点的目录快照。候选客户端内置该快照、目录信任根及 Authority 地址和根公钥。用新安装的候选客户端完成一次账号中转传输，确认用量上报后，公开发布同一份快照和客户端。[节点接入](../../../relay-rust/crates/network-authority/README.md#enroll-and-publish) · [网络发布配置](../../../deploy/network/README.md)
 
-后台分别显示登记情况和最近上报时间，“已收录”以已发布签名目录中的节点公钥及版本为准。后台一键扩容留到 P3。仅对已知使用同一受信目录的接收页生成节点别名，其他接收页使用明确的中转地址。[P3 扩容流程](global-network.md#p3--console-onboarding-and-fleet-automation) · [分享链接生成](../../../engine/internal/networkruntime/resolve.go)
+后台分别显示登记情况和最近上报时间，“已收录”以已发布签名目录中的节点公钥及版本为准。后台一键扩容留到 P3。仅对已知使用同一受信目录的接收页生成节点别名，其他接收页使用明确的中转地址。[P3 扩容流程](p3-console-onboarding-fleet-automation.md) · [分享链接生成](../../../engine/internal/networkruntime/resolve.go)
 
 ### 3. 原生节点复用网页授权，管理页随二进制交付
 
