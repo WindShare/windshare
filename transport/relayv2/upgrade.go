@@ -4,11 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 
 	"github.com/windshare/windshare/core/networkendpoint"
 )
-
-var errUpgradeNotFound = errors.New("WebSocket upgrade returned HTTP 404")
 
 // WebSocketRouteError identifies an observed missing route for a candidate that
 // could have been copied from the full WebSocket endpoint.
@@ -23,9 +22,8 @@ func (err *WebSocketRouteError) Error() string {
 
 func (err *WebSocketRouteError) Unwrap() error { return err.cause }
 
-// WebSocketDialError is a handshake or HTTP upgrade failure that is not a
-// missing route. Its text is safe: the library status and response body are
-// retained only as the unwrapped cause for diagnostics and errors.Is.
+// WebSocketDialError identifies a failure to establish a relay WebSocket.
+// The original error remains available to diagnostics through Unwrap.
 type WebSocketDialError struct {
 	Cause error
 }
@@ -39,55 +37,17 @@ func (err *WebSocketDialError) Unwrap() error {
 	return err.Cause
 }
 
-// SocketError is a connection-level close or I/O failure after the WebSocket
-// is established. The public text stays the closed-transport sentinel; the
-// library close frame is unwrapped only for errors.Is.
-type SocketError struct {
-	Cause error
-}
-
-func (err *SocketError) Error() string { return ErrClosed.Error() }
-
-func (err *SocketError) Unwrap() []error {
-	if err == nil {
-		return nil
+func dialFailure(address string, response *http.Response, err error) error {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
 	}
-	return []error{ErrClosed, err.Cause}
-}
-
-func upgradeFailure(address string, cause error) error {
-	if errors.Is(cause, errUpgradeNotFound) {
+	// Only a direct 404 can diagnose the supplied address, and retiring the
+	// candidate requires a plausible base hint. A 404 during an outage may recover.
+	if response != nil && response.StatusCode == http.StatusNotFound &&
+		response.Request != nil && response.Request.Response == nil {
 		if hint, ok := networkendpoint.WebSocketBaseHint(address); ok {
-			return &WebSocketRouteError{BaseHint: hint, cause: cause}
+			return &WebSocketRouteError{BaseHint: hint, cause: err}
 		}
 	}
-	return cause
-}
-
-func dialFailure(err error) error {
-	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
-		errors.Is(err, errUpgradeNotFound) {
-		return err
-	}
 	return &WebSocketDialError{Cause: err}
-}
-
-func socketFailure(err error) error {
-	if err == nil || retainedSocketCause(err) {
-		return err
-	}
-	return &SocketError{Cause: err}
-}
-
-func retainedSocketCause(err error) bool {
-	switch {
-	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded),
-		errors.Is(err, ErrProtocol), errors.Is(err, ErrClosed), errors.Is(err, ErrFrameBounds),
-		errors.Is(err, ErrIngressOverflow), errors.Is(err, ErrEgressOverflow),
-		errors.Is(err, ErrSessionRetired):
-		return true
-	}
-	var relayErr *RelayError
-	var socketErr *SocketError
-	return errors.As(err, &relayErr) || errors.As(err, &socketErr)
 }

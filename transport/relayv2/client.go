@@ -33,16 +33,7 @@ type DialOptions struct {
 	ObserveStage func(DialStage)
 }
 
-// BinarySocket is the narrow WebSocket surface owned by this protocol
-// consumer. A coder WebSocket satisfies it directly.
-type BinarySocket interface {
-	Read(context.Context) (websocket.MessageType, []byte, error)
-	Write(context.Context, websocket.MessageType, []byte) error
-	Close(websocket.StatusCode, string) error
-	SetReadLimit(int64)
-}
-
-func (options DialOptions) dial(ctx context.Context, target string) (_ BinarySocket, failure error) {
+func (options DialOptions) dial(ctx context.Context, target, relayBaseURL string) (_ BinarySocket, failure error) {
 	started := time.Now()
 	if options.ObserveStage != nil {
 		defer func() {
@@ -51,20 +42,15 @@ func (options DialOptions) dial(ctx context.Context, target string) (_ BinarySoc
 		ctx = traceDial(ctx, options.ObserveStage)
 	}
 	if options.SocketDialer != nil {
-		return options.SocketDialer(ctx, target, options.Header.Clone())
+		socket, err := options.SocketDialer(ctx, target, options.Header.Clone())
+		return socket, dialFailure(relayBaseURL, nil, err)
 	}
 	// coder/websocket owns the handshake response body on every outcome, so
 	// closing it here would violate the dialer's transport ownership contract.
 	socket, response, err := websocket.Dial(ctx, target, &websocket.DialOptions{ //nolint:bodyclose
 		HTTPClient: options.HTTPClient, HTTPHeader: options.Header,
 	})
-	// A redirected response describes a different route and cannot diagnose
-	// the address the user supplied.
-	if err != nil && response != nil && response.StatusCode == http.StatusNotFound &&
-		response.Request != nil && response.Request.Response == nil {
-		err = fmt.Errorf("%w: %w", errUpgradeNotFound, err)
-	}
-	return socket, dialFailure(err)
+	return socket, dialFailure(relayBaseURL, response, err)
 }
 
 type RegistrationStats struct {
@@ -117,9 +103,9 @@ func DialSender(ctx context.Context, config SenderConfig) (_ *SenderConnection, 
 	if err != nil {
 		return nil, &RegistrationNotSentError{Cause: err}
 	}
-	socket, err := config.Dial.dial(ctx, endpoint.DialURL)
+	socket, err := config.Dial.dial(ctx, endpoint.DialURL, config.RelayBaseURL)
 	if err != nil {
-		return nil, &RegistrationNotSentError{Cause: upgradeFailure(config.RelayBaseURL, err)}
+		return nil, &RegistrationNotSentError{Cause: err}
 	}
 	socket.SetReadLimit(registrationReadLimit)
 	admissionStarted := time.Now()
@@ -131,7 +117,7 @@ func DialSender(ctx context.Context, config SenderConfig) (_ *SenderConnection, 
 	stats := RegistrationStats{}
 	fail := func(cause error) (*SenderConnection, error) {
 		_ = socket.Close(websocket.StatusProtocolError, "")
-		return nil, socketFailure(cause)
+		return nil, cause
 	}
 	init := v2.DeliveryRegisterInit{Registration: config.Init, ReceiveCapacity: capacity}
 	initBytes, _ := init.MarshalBinary()
@@ -159,6 +145,9 @@ func DialSender(ctx context.Context, config SenderConfig) (_ *SenderConnection, 
 		return fail(ErrProtocol)
 	}
 	proof, err := v2.NewDeliveryRegisterProof(init, challenge, endpoint.Identity, config.SenderPrivateKey)
+	if errors.Is(err, v2.ErrPurpose) {
+		return fail(errors.Join(ErrProtocol, err))
+	}
 	if err != nil {
 		return fail(err)
 	}
@@ -291,24 +280,21 @@ func DialReceiver(ctx context.Context, config ReceiverConfig) (*ReceiverConnecti
 	if err != nil {
 		return nil, err
 	}
-	socket, err := config.Dial.dial(ctx, endpoint.DialURL)
+	socket, err := config.Dial.dial(ctx, endpoint.DialURL, config.RelayBaseURL)
 	if err != nil {
-		return nil, upgradeFailure(config.RelayBaseURL, err)
+		return nil, err
 	}
 	fail := func(cause error) (*ReceiverConnection, error) {
 		_ = socket.Close(websocket.StatusProtocolError, "")
-		return nil, socketFailure(cause)
+		return nil, cause
 	}
 	socket.SetReadLimit(registrationReadLimit)
-	if err := socket.Write(ctx, websocket.MessageBinary, joinBytes); err != nil {
+	if err := writeBinary(ctx, socket, joinBytes); err != nil {
 		return fail(err)
 	}
-	messageType, response, err := socket.Read(ctx)
+	response, err := readBinary(ctx, socket)
 	if err != nil {
 		return fail(err)
-	}
-	if messageType != websocket.MessageBinary {
-		return fail(ErrProtocol)
 	}
 	if relayErr := parseRelayError(response); relayErr != nil {
 		return fail(relayErr)
@@ -397,20 +383,17 @@ func Stop(ctx context.Context, config StopConfig) error {
 	if err != nil || len(config.SenderPrivateKey) != ed25519.PrivateKeySize {
 		return ErrProtocol
 	}
-	socket, err := config.Dial.dial(ctx, endpoint.DialURL)
+	socket, err := config.Dial.dial(ctx, endpoint.DialURL, config.RelayBaseURL)
 	if err != nil {
-		return upgradeFailure(config.RelayBaseURL, err)
+		return err
 	}
 	defer func() { _ = socket.Close(websocket.StatusNormalClosure, "") }()
-	if err := socket.Write(ctx, websocket.MessageBinary, initBytes); err != nil {
-		return socketFailure(err)
+	if err := writeBinary(ctx, socket, initBytes); err != nil {
+		return err
 	}
-	messageType, challengeBytes, err := socket.Read(ctx)
+	challengeBytes, err := readBinary(ctx, socket)
 	if err != nil {
-		return socketFailure(err)
-	}
-	if messageType != websocket.MessageBinary {
-		return ErrProtocol
+		return err
 	}
 	if relayErr := parseRelayError(challengeBytes); relayErr != nil {
 		return relayErr
@@ -424,15 +407,12 @@ func Stop(ctx context.Context, config StopConfig) error {
 		return err
 	}
 	proofBytes, _ := proof.MarshalBinary()
-	if err := socket.Write(ctx, websocket.MessageBinary, proofBytes); err != nil {
-		return socketFailure(err)
+	if err := writeBinary(ctx, socket, proofBytes); err != nil {
+		return err
 	}
-	messageType, stoppedBytes, err := socket.Read(ctx)
+	stoppedBytes, err := readBinary(ctx, socket)
 	if err != nil {
-		return socketFailure(err)
-	}
-	if messageType != websocket.MessageBinary {
-		return ErrProtocol
+		return err
 	}
 	if relayErr := parseRelayError(stoppedBytes); relayErr != nil {
 		return relayErr
@@ -471,7 +451,7 @@ func parseRelayError(encoded []byte) error {
 }
 
 func writeRegistration(ctx context.Context, socket BinarySocket, encoded []byte, stats *RegistrationStats) error {
-	if err := socket.Write(ctx, websocket.MessageBinary, encoded); err != nil {
+	if err := writeBinary(ctx, socket, encoded); err != nil {
 		return err
 	}
 	stats.BytesSent += uint64(len(encoded))
@@ -479,12 +459,9 @@ func writeRegistration(ctx context.Context, socket BinarySocket, encoded []byte,
 }
 
 func readRegistration(ctx context.Context, socket BinarySocket, stats *RegistrationStats) ([]byte, error) {
-	messageType, encoded, err := socket.Read(ctx)
+	encoded, err := readBinary(ctx, socket)
 	if err != nil {
 		return nil, err
-	}
-	if messageType != websocket.MessageBinary {
-		return nil, ErrProtocol
 	}
 	stats.BytesReceived += uint64(len(encoded))
 	return encoded, nil

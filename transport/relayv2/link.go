@@ -234,8 +234,8 @@ func (l *link) writeLoop() {
 		// Probes bypass credit waits: a blocked content window must not keep
 		// the relay from seeing this client alive.
 		if probe, ok := l.takeProbe(); ok {
-			if err := l.socket.Write(l.ctx, websocket.MessageBinary, probe); err != nil {
-				l.stop(socketFailure(err))
+			if err := writeBinary(l.ctx, l.socket, probe); err != nil {
+				l.stop(err)
 				return
 			}
 			continue
@@ -246,8 +246,8 @@ func (l *link) writeLoop() {
 			return
 		}
 		if encoded != nil {
-			if err := l.socket.Write(l.ctx, websocket.MessageBinary, encoded); err != nil {
-				l.stop(socketFailure(err))
+			if err := writeBinary(l.ctx, l.socket, encoded); err != nil {
+				l.stop(err)
 				return
 			}
 			if settled != (v2.RelaySessionID{}) {
@@ -260,10 +260,10 @@ func (l *link) writeLoop() {
 		// consuming peer from starving this connection's opposite direction.
 		request, ok := l.takeRequest()
 		if ok {
-			err := l.socket.Write(l.ctx, websocket.MessageBinary, request.data)
+			err := writeBinary(l.ctx, l.socket, request.data)
 			l.resolveRequest(request, err, true)
 			if err != nil {
-				l.stop(socketFailure(err))
+				l.stop(err)
 				return
 			}
 			continue

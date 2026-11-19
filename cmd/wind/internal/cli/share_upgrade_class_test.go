@@ -26,6 +26,7 @@ func TestShareVerboseUpgradeFailuresAreRelayUnavailable(t *testing.T) {
 		{"forbidden upgrade", func(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "nope", http.StatusForbidden)
 		}},
+		{"missing upgrade at relay base", http.NotFound},
 		{"close after handshake", func(w http.ResponseWriter, r *http.Request) {
 			connection, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 			if err != nil {

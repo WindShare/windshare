@@ -14,7 +14,7 @@ import (
 
 func TestDialWrapsHTTPUpgradeRejection(t *testing.T) {
 	fixture := newClientFixture(t)
-	for _, status := range []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUpgradeRequired, http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable} {
+	for _, status := range []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUpgradeRequired, http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "nope", status)
