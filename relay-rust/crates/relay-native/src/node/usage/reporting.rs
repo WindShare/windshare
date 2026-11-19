@@ -100,12 +100,12 @@ impl Reporter {
             let now = super::super::now().unsigned_abs();
             if now >= next_report {
                 next_report = now.saturating_add(REPORT_INTERVAL_SECONDS);
-                if let Err(error) = self.flush(now).await {
+                if let Err(error) = self.flush(super::super::now).await {
                     tracing::error!(event="usage_persist_failed", %error);
                 }
                 // A failed old batch never holds up today's zero-byte entitlement refresh.
                 let results: [Result<()>; 2] =
-                    tokio::join!(self.refresh(now, versions), self.retry()).into();
+                    tokio::join!(self.refresh(versions), self.retry()).into();
                 for result in results {
                     if let Err(error) = result {
                         tracing::warn!(event="authority_usage_retry", %error);
@@ -177,6 +177,6 @@ impl Reporter {
     }
 
     pub async fn shutdown(&self) -> Result<()> {
-        self.flush(super::super::now().unsigned_abs()).await
+        self.flush(super::super::now).await
     }
 }

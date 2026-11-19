@@ -10,18 +10,18 @@ use windshare_relay_access::usage::{
 const _: () = assert!(crate::config::MAX_RESIDENT_SHARES <= STATUS_BATCH_ENTRIES);
 
 impl Reporter {
-    pub(super) fn batch(
+    fn batch(
         &self,
         records: Vec<UsageRecord>,
         resident_accounts: Vec<[u8; 16]>,
-        now: u64,
+        created_at: u64,
     ) -> Result<Batch> {
         let load = self.node.snapshot();
         Ok(Batch {
             id: super::super::identity::random()?,
             issuer: self.authority.issuer()?,
             node: self.identity.key().verifying_key().to_bytes(),
-            created_at: now,
+            created_at,
             records,
             resident_accounts,
             shares: Vec::new(),
@@ -34,16 +34,18 @@ impl Reporter {
         })
     }
 
-    pub(super) async fn flush(&self, now: u64) -> Result<()> {
+    pub(super) async fn flush(&self, clock: impl FnOnce() -> i64) -> Result<()> {
         let records = self.node.usage.drain();
-        let result = self.persist(&records, now).await;
+        // The scheduling tick can precede a concurrent write across UTC midnight.
+        let created_at = clock().unsigned_abs();
+        let result = self.persist(&records, created_at).await;
         if result.is_err() {
             self.node.usage.restore(records);
         }
         result
     }
 
-    async fn persist(&self, records: &BTreeMap<Key, u64>, now: u64) -> Result<()> {
+    async fn persist(&self, records: &BTreeMap<Key, u64>, created_at: u64) -> Result<()> {
         let issuer = self.authority.issuer()?;
         let mut batches = Vec::new();
         let records: Vec<_> = records
@@ -56,14 +58,14 @@ impl Reporter {
             })
             .collect();
         for chunk in records.chunks(USAGE_BATCH_ENTRIES) {
-            batches.push(self.batch(chunk.to_vec(), Vec::new(), now)?);
+            batches.push(self.batch(chunk.to_vec(), Vec::new(), created_at)?);
         }
         let store = self.store.clone();
         tokio::task::spawn_blocking(move || store.enqueue_usage(&batches)).await??;
         Ok(())
     }
 
-    pub(super) async fn refresh(&self, now: u64, versions: &watch::Sender<u64>) -> Result<()> {
+    pub(super) async fn refresh(&self, versions: &watch::Sender<u64>) -> Result<()> {
         let issuer = self.authority.issuer()?;
         let accounts = self
             .node
@@ -72,7 +74,7 @@ impl Reporter {
             .into_iter()
             .filter_map(|(i, a)| (i == issuer).then_some(a))
             .collect();
-        let mut batch = self.batch(Vec::new(), accounts, now)?;
+        let mut batch = self.batch(Vec::new(), accounts, super::super::now().unsigned_abs())?;
         batch.shares = self.node.access.resident_shares(issuer);
         let (generation, reply, login) = self.report(&batch).await?;
         let ReportResult::Status {
@@ -121,7 +123,7 @@ impl Reporter {
     pub(super) async fn retry(&self) -> Result<()> {
         let store = self.store.clone();
         let issuer = self.authority.issuer()?;
-        let batch = tokio::task::spawn_blocking(move || store.pending_usage(issuer)).await??;
+        let batch = tokio::task::spawn_blocking(move || store.next_usage_batch(issuer)).await??;
         let Some(batch) = batch else {
             return Ok(());
         };

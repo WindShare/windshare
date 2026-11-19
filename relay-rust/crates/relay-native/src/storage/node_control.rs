@@ -1,6 +1,6 @@
 use super::Database;
 use crate::node::access::Cache;
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, ensure};
 use rusqlite::{Connection, OptionalExtension, params};
 use windshare_relay_access::{Issuer, restrictions::Restrictions, usage::Batch};
 
@@ -13,6 +13,9 @@ impl Database {
             .map_err(|_| anyhow!("database lock"))?;
         connection.execute_batch("CREATE TABLE IF NOT EXISTS usage_outbox(
             id BLOB PRIMARY KEY, issuer BLOB NOT NULL, body BLOB NOT NULL, created_at INTEGER NOT NULL) STRICT;
+            CREATE TABLE IF NOT EXISTS usage_outbox_quarantine(
+             id BLOB PRIMARY KEY, issuer BLOB NOT NULL, body BLOB NOT NULL, created_at INTEGER NOT NULL,
+             reason TEXT NOT NULL) STRICT;
             CREATE TABLE IF NOT EXISTS access_cache(singleton INTEGER PRIMARY KEY CHECK(singleton=1), body BLOB NOT NULL) STRICT;
             CREATE TABLE IF NOT EXISTS access_restrictions(issuer BLOB PRIMARY KEY, version BLOB NOT NULL, body BLOB NOT NULL) STRICT;")?;
         let transaction = connection.transaction()?;
@@ -76,6 +79,13 @@ impl Database {
     }
 
     pub(crate) fn enqueue_usage(&self, batches: &[Batch]) -> Result<()> {
+        for batch in batches {
+            ensure!(
+                valid_usage_batch(batch),
+                "invalid usage batch {:?}",
+                batch.id
+            );
+        }
         let mut connection = self
             .0
             .connection
@@ -98,23 +108,59 @@ impl Database {
         Ok(())
     }
 
-    pub(crate) fn pending_usage(&self, issuer: [u8; 32]) -> Result<Option<Batch>> {
-        let connection = self
+    /// A damaged queue head must not prevent later usage from being reported.
+    pub(crate) fn next_usage_batch(&self, issuer: Issuer) -> Result<Option<Batch>> {
+        loop {
+            let entry: Option<(Vec<u8>, Vec<u8>)> = self
+                .0
+                .connection
+                .lock()
+                .map_err(|_| anyhow!("database lock"))?
+                .query_row(
+                    "SELECT id,body FROM usage_outbox WHERE issuer=?1 ORDER BY created_at,id LIMIT 1",
+                    [issuer.as_slice()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            let Some((id, body)) = entry else {
+                return Ok(None);
+            };
+            // Local, time-independent validation can prove rejection before
+            // contacting the authority, whose errors may be transient.
+            let reason = match serde_json::from_slice::<Batch>(&body) {
+                Ok(batch) if batch.id.as_slice() != id || batch.issuer != issuer => {
+                    "metadata_mismatch"
+                }
+                Ok(batch) if valid_usage_batch(&batch) => return Ok(Some(batch)),
+                Ok(_) => "invalid_usage_batch",
+                Err(_) => "invalid_json",
+            };
+            self.quarantine_usage(issuer, &id, &body, reason)?;
+        }
+    }
+
+    fn quarantine_usage(&self, issuer: Issuer, id: &[u8], body: &[u8], reason: &str) -> Result<()> {
+        let mut connection = self
             .0
             .connection
             .lock()
             .map_err(|_| anyhow!("database lock"))?;
-        let bytes: Option<Vec<u8>> = connection
-            .query_row(
-                "SELECT body FROM usage_outbox WHERE issuer=?1 ORDER BY created_at,id LIMIT 1",
-                [issuer.as_slice()],
-                |row| row.get(0),
-            )
-            .optional()?;
+        let transaction = connection.transaction()?;
+        // Keep the original bytes for accounting recovery, even if they cannot be decoded.
+        let moved = transaction.execute(
+            "INSERT INTO usage_outbox_quarantine (id,issuer,body,created_at,reason)
+             SELECT id,issuer,body,created_at,?4 FROM usage_outbox
+             WHERE id=?1 AND issuer=?2 AND body=?3",
+            params![id, issuer.as_slice(), body, reason],
+        )?;
+        if moved == 0 {
+            return Ok(());
+        }
+        transaction.execute("DELETE FROM usage_outbox WHERE id=?1", [id])?;
+        transaction.commit()?;
         drop(connection);
-        bytes
-            .map(|bytes| Ok(serde_json::from_slice(&bytes)?))
-            .transpose()
+        tracing::error!(event = "usage_batch_quarantined", batch = ?id, ?issuer, reason);
+        Ok(())
     }
 
     pub(crate) fn acknowledge_usage(&self, id: [u8; 16]) -> Result<()> {
@@ -125,6 +171,10 @@ impl Database {
             .execute("DELETE FROM usage_outbox WHERE id=?1", [id.as_slice()])?;
         Ok(())
     }
+}
+
+fn valid_usage_batch(batch: &Batch) -> bool {
+    !batch.records.is_empty() && batch.valid()
 }
 
 fn read_cache(connection: &Connection) -> Result<Cache> {
