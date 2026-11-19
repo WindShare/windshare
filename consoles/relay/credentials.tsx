@@ -1,24 +1,37 @@
-import { useState } from 'react'
-import { ValidatedForm } from '../ui/ValidatedForm'
-import { useAction, useResource } from '../ui/activity'
-import { message, MessageError } from '../ui/locale'
+import { useEffect, useRef, useState } from 'react'
+import { useAction, useResource, type Feedback } from '../ui/activity'
+import { message } from '../ui/locale'
 import { useCopy } from '../ui/use-locale'
 import { sharedCopy } from '../ui/locales'
 import { relayCopy } from './locales'
 import { Confirm } from '../ui/forms'
-import { BackLink, Badge, DateStamp, EmptyState, Notice, ReadError } from '../ui/layout'
-import { FocusPage } from '../ui/FocusPage'
+import { Badge, DateStamp, EmptyState, Notice, ReadError } from '../ui/layout'
 import { Icon } from '../ui/Icon'
-import type { Capabilities, Credential, RelayClient, ServiceCredential } from './api'
+import type { Capabilities, Credential, RelayClient } from './api'
+import { ServiceKeyEntry } from './service-key'
+import type { ServiceKeyPhase } from './use-service-key-creation'
 
 function markCredentialRevoked(items: Credential[], credentialId: string): Credential[] {
   return items.map(item => item.credential_id === credentialId ? { ...item, revoked: true } : item)
 }
 
-export function Credentials({ api, capabilities }: { api: RelayClient; capabilities: Capabilities }) {
+export function Credentials({ api, capabilities, keyPhase, keyFeedback }: {
+  api: RelayClient
+  capabilities: Capabilities
+  keyPhase: ServiceKeyPhase
+  keyFeedback: Feedback | null
+}) {
   const t = useCopy(relayCopy)
   const shared = useCopy(sharedCopy)
   const list = useResource(api.credentials)
+  const { reload } = list
+  const keyWasReady = useRef(keyPhase === 'ready')
+  useEffect(() => {
+    const keyReady = keyPhase === 'ready'
+    // A read started after returning to the list can finish before creation commits.
+    if (keyReady && !keyWasReady.current) reload()
+    keyWasReady.current = keyReady
+  }, [keyPhase, reload])
   const action = useAction()
   const [selected, setSelected] = useState<Credential | null>(null)
   const [stop, setStop] = useState(false)
@@ -36,8 +49,8 @@ export function Credentials({ api, capabilities }: { api: RelayClient; capabilit
     <div className="section-title"><h2 id="credentials-title">{t.credentials}</h2>
       <div className="actions"><button className="quiet icon-button" aria-label={shared.refresh} title={shared.refresh}
         disabled={list.busy} onClick={list.reload}><Icon name={list.busy ? 'loader' : 'refresh'} size={17} /></button>
-        <a className="button secondary" href="#service-key"><Icon name="plus" size={16} />{t.createServiceKey}</a></div></div>
-    <Notice feedback={action.feedback} /><ReadError error={list.error} retry={list.reload} />
+        <ServiceKeyEntry phase={keyPhase} /></div></div>
+    <Notice feedback={keyFeedback} /><Notice feedback={action.feedback} /><ReadError error={list.error} retry={list.reload} />
     {list.value === undefined && list.busy && <p className="pending" role="status"><Icon name="loader" />{t.loadingCredentials}</p>}
     {list.value?.length === 0 && <EmptyState icon="key" title={t.noCredentials}><p>{t.grantAccess}</p></EmptyState>}
     {!!list.value?.length && <table className="credential-table" aria-labelledby="credentials-title">
@@ -62,35 +75,4 @@ export function Credentials({ api, capabilities }: { api: RelayClient; capabilit
             onChange={event => setStop(event.target.checked)} />{t.stopExisting}</label></>}
     </Confirm>}
   </section>
-}
-
-export function ServiceKey({ api }: { api: RelayClient }) {
-  const t = useCopy(relayCopy)
-  const [credential, setCredential] = useState<ServiceCredential | null>(null)
-  const action = useAction()
-  return <FocusPage icon={credential ? 'check' : 'key'} label={t.access} title={credential ? t.keyCreated : t.createServiceKey}>
-    {credential
-      ? <><p className="lead">{t.keyShownOnce}</p>
-        <dl className="facts"><dt>{t.relayAddress}</dt><dd><code>{credential.url}</code></dd>
-          <dt>{t.accessKey}</dt><dd><code>{credential.access_key}</code></dd></dl>
-        <button disabled={action.busy} onClick={() => void action.run(async () => {
-          try {
-            await navigator.clipboard.writeText(JSON.stringify(credential, null, 2))
-          } catch {
-            throw new MessageError(message(relayCopy, 'copyFailed'))
-          }
-          return message(relayCopy, 'relayCredentialCopied')
-        })}><Icon name="copy" size={16} />{t.copyRelayCredential}</button>
-        <p>{t.installWithCLI}<br /><code>{'wind relay add <url> --access-key <key>'}</code></p></>
-      : <ValidatedForm className="stack" onSubmit={event => {
-        event.preventDefault()
-        const name = String(new FormData(event.currentTarget).get('name')).trim()
-        void action.run(async () => setCredential(await api.createKey(name)))
-      }}>
-        <div className="field"><label htmlFor="key-name">{t.credentialName}</label>
-          <input id="key-name" name="name" maxLength={128} required /></div>
-        <button disabled={action.busy}>{action.busy ? t.creating : t.createKey}</button>
-      </ValidatedForm>}
-    <Notice feedback={action.feedback} /><BackLink href="/">{t.backToAccess}</BackLink>
-  </FocusPage>
 }

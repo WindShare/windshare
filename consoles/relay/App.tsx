@@ -10,7 +10,9 @@ import { sharedCopy } from '../ui/locales'
 import { relayCopy } from './locales'
 import { usePage } from '../ui/location'
 import { RelayClient, type Capabilities } from './api'
-import { Credentials, ServiceKey } from './credentials'
+import { Credentials } from './credentials'
+import { ServiceKey } from './service-key'
+import { useServiceKeyCreation } from './use-service-key-creation'
 import { CodeEntry, Pairing } from './pairing'
 import { ManagedTurn } from './turn'
 
@@ -25,13 +27,15 @@ function RelayContent({ api, session, capabilities, code, token, clearToken, res
 }) {
   const t = useCopy(relayCopy)
   const page = usePage()
+  // The signed-in console owns delivery of the key across route changes.
+  const keyCreation = useServiceKeyCreation(api)
   if (capabilities === undefined) return <SessionWait error={session.error} retry={session.reload} />
   if (capabilities === null) {
     return <Login area={code ? t.pairing : t.owner} initialize={!!token} cancelSetup={clearToken}
       submit={async password => { await api.signIn(password, token); resetSession() }} />
   }
   if (code) return <Pairing api={api} code={code} />
-  if (page === 'service-key') return <ServiceKey api={api} />
+  if (page === 'service-key') return <ServiceKey creation={keyCreation} />
   const turn = page === 'turn' && capabilities.managed_turn === true
   return <div className="workspace">
     {capabilities.managed_turn && <WorkspaceNav label={t.management} destinations={[
@@ -41,7 +45,8 @@ function RelayContent({ api, session, capabilities, code, token, clearToken, res
     {turn
       ? <ManagedTurn api={api} />
       : <div className="view"><div className="page-title"><h1>{t.access}</h1></div>
-        <CodeEntry /><Credentials api={api} capabilities={capabilities} /></div>}
+        <CodeEntry /><Credentials api={api} capabilities={capabilities} keyPhase={keyCreation.state.phase}
+          keyFeedback={keyCreation.feedback} /></div>}
   </div>
 }
 
