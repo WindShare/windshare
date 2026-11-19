@@ -34,7 +34,7 @@ func Run(ctx context.Context, request Request, dependencies Dependencies) task.C
 	o := newObservations(d.Control, request)
 	resourceContext, cancelResources := context.WithCancel(context.WithoutCancel(ctx))
 	active := &activeShare{dependencies: d, observations: o, cancelResources: cancelResources}
-	class, operationErr := active.start(ctx, resourceContext, request)
+	class, operationErr := active.run(ctx, resourceContext, request)
 	cleanupClass, cleanupErr := active.close()
 	settlement := settleShareLifecycle(shareTriggerAfterServe(context.Cause(ctx), operationErr), context.Cause(ctx), operationErr, cleanupErr)
 	runErr := settlement.serve.failure
@@ -75,7 +75,7 @@ type activeShare struct {
 	ready           bool
 }
 
-func (s *activeShare) start(ctx, resourceContext context.Context, request Request) (task.FailureClass, error) {
+func (s *activeShare) run(ctx, resourceContext context.Context, request Request) (task.FailureClass, error) {
 	d, o := s.dependencies, s.observations
 	if request.ChunkSize != 0 && !catalog.ValidChunkSize(request.ChunkSize) {
 		return task.FailureUsage, fmt.Errorf("%w: %d; use 0 for the default or a power of two from %d to %d bytes",
@@ -147,6 +147,11 @@ func (s *activeShare) start(ctx, resourceContext context.Context, request Reques
 	if err := s.relays.WaitReady(ctx); err != nil {
 		return task.FailureNetwork, err
 	}
+	return s.serve(ctx, resourceContext)
+}
+
+func (s *activeShare) serve(ctx, resourceContext context.Context) (task.FailureClass, error) {
+	d, o := s.dependencies, s.observations
 	endpoint, err := v2.NormalizeRelayEndpoint(s.relays.ReadyRelayURL())
 	if err != nil {
 		return task.FailureLocal, err
