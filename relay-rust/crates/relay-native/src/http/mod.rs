@@ -9,6 +9,7 @@ use crate::{
     config::{Endpoint, HTTP_REQUEST_TIMEOUT},
     connection::{Admission, Capacity},
     environment::{Environment, NativeEnvironment},
+    node::access::Bearer,
 };
 use anyhow::Result;
 use http_body_util::Full;
@@ -155,7 +156,7 @@ impl RequestService<'_> {
                 return reply(StatusCode::BAD_REQUEST, "invalid proxy source identity\n");
             }
         };
-        let bearer = match request
+        let mut bearer = match request
             .headers()
             .get_all(hyper::header::AUTHORIZATION)
             .iter()
@@ -173,7 +174,7 @@ impl RequestService<'_> {
                         && value.len() <= 4096
                         && value.bytes().all(|byte| (b'!'..=b'~').contains(&byte)) =>
                 {
-                    Some(value.to_owned())
+                    Some(Bearer::new(value))
                 }
                 _ => return reply(StatusCode::BAD_REQUEST, "invalid authorization header\n"),
             },
@@ -185,9 +186,9 @@ impl RequestService<'_> {
                 source,
                 self.connection,
                 self.ingress.environment.now(),
-                self.ingress.node.access.priority(
+                self.ingress.node.access.admission_priority(
                     share,
-                    bearer.as_deref(),
+                    bearer.as_mut(),
                     self.ingress.environment.now().0 / 1000,
                 ),
             )

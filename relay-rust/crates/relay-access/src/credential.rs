@@ -42,19 +42,24 @@ pub enum Refusal {
 }
 
 impl Credential {
+    pub fn active_attribution(&self) -> Option<Attribution> {
+        (self.state == CredentialState::Active).then_some(Attribution::Credential {
+            principal: self.principal,
+            credential: self.id,
+        })
+    }
+
     /// Admission is checked for each fresh registration, never cached on a socket.
     ///
     /// # Errors
     /// A revoked or mismatched credential cannot mint a new grant.
     pub fn authorize(&mut self, digest: Digest, now: u64) -> Result<Attribution, Refusal> {
-        if self.digest != digest || self.state != CredentialState::Active {
+        if self.digest != digest {
             return Err(Refusal::AccessDenied);
         }
+        let attribution = self.active_attribution().ok_or(Refusal::AccessDenied)?;
         self.last_used_at = Some(now);
-        Ok(Attribution::Credential {
-            principal: self.principal,
-            credential: self.id,
-        })
+        Ok(attribution)
     }
 
     pub fn revoke(&mut self, now: u64) {

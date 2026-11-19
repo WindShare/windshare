@@ -1,7 +1,7 @@
 use super::{Actor, Event, Frozen, Generation, Recovery, Runtime, read};
 use crate::{
     connection::{self, Writer},
-    node::access::{AuthorityState, Policy, TrustedIssuer},
+    node::access::{AuthorityState, Bearer, Policy, TrustedIssuer},
     storage::Database,
     test_support::{Fixture, connection as reference, socket_admission},
 };
@@ -61,7 +61,13 @@ async fn with_sender(
     )));
     let admission = socket_admission();
     if let Some(bearer) = bearer {
-        admission.set_bearer(bearer.to_owned());
+        let mut bearer = Bearer::new(bearer);
+        node.access.admission_priority(
+            fixture.identity().share,
+            Some(&mut bearer),
+            fixture.now(false).0 / 1000,
+        );
+        admission.set_bearer(bearer);
     }
     let (port, writer, _) = connection::channel(reference(1), node.clone());
     tx.send(Event::Connected(

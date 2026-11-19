@@ -1,5 +1,6 @@
 //! Global and source capacity stay with every task that can retain socket resources.
 use super::ConnectionLimits;
+use crate::node::access::Bearer;
 use anyhow::{Result, anyhow};
 use std::{
     collections::BTreeMap,
@@ -87,7 +88,7 @@ pub struct Admission {
     source: IpAddr,
     connection: ConnectionRef,
     slot: Mutex<Slot>,
-    bearer: OnceLock<String>,
+    bearer: OnceLock<Bearer>,
 }
 
 impl Capacity {
@@ -206,11 +207,11 @@ impl Admission {
         self.priority
     }
 
-    pub fn set_bearer(&self, bearer: String) {
+    pub(crate) fn set_bearer(&self, bearer: Bearer) {
         let _ = self.bearer.set(bearer);
     }
-    pub fn bearer(&self) -> Option<&str> {
-        self.bearer.get().map(String::as_str)
+    pub(crate) fn bearer(&self) -> Option<&Bearer> {
+        self.bearer.get()
     }
     pub const fn source(&self) -> IpAddr {
         self.source

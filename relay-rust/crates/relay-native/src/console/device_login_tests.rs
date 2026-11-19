@@ -1,5 +1,5 @@
 use super::*;
-use crate::node::access::{AuthorityState, Policy, TrustedIssuer};
+use crate::node::access::{AuthorityState, Bearer, Policy, TrustedIssuer};
 use ed25519_dalek::SigningKey;
 use windshare_relay_access::{
     Attribution,
@@ -53,6 +53,13 @@ fn open_console(
         Some("https://service.example/device")
     );
     console
+}
+
+fn admitted_as(console: &Console, share: ShareId, key: &Bearer, account: Attribution) -> bool {
+    matches!(
+        console.0.access.authorize(share, Some(key), 11),
+        RegistrationDecision::Granted(attribution) if attribution == account
+    )
 }
 
 #[test]
@@ -110,10 +117,8 @@ fn service_approval_installs_an_account_key_and_node_revocation_survives_restart
         );
     }
     let claim = json!({"enrollment_id":req.body["enrollment_id"],"claim_secret":text_id(&secret)});
-    let key = post("/api/enrollments/claim", &claim).body["access_key"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    let claimed = post("/api/enrollments/claim", &claim);
+    let key = Bearer::new(claimed.body["access_key"].as_str().unwrap());
     assert_eq!(
         post("/api/enrollments/installed", &claim).status,
         StatusCode::OK
@@ -124,11 +129,10 @@ fn service_approval_installs_an_account_key_and_node_revocation_survives_restart
         credential: invite.enrollment,
     };
     let share = ShareId::new([1; 12]).unwrap();
+    assert!(admitted_as(&console, share, &key, attribution));
     drop(console);
     let restored = setup();
-    assert!(
-        matches!(restored.0.access.authorize(share,Some(&key),11),RegistrationDecision::Granted(a) if a==attribution)
-    );
+    assert!(admitted_as(&restored, share, &key, attribution));
     let admin = restored
         .dispatch(
             &Method::POST,

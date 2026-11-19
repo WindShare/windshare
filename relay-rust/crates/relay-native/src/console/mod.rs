@@ -139,7 +139,7 @@ impl Console {
         let origin = url.origin().ascii_serialization();
         let db = store.console_connection()?;
         database::initialize(&db)?;
-        access.apply_devices(database::keys(&db)?);
+        access.restore_devices(database::keys(&db)?);
         let token = identity.initialization_token();
         if !sessions::initialized(&db)? {
             println!(
@@ -178,21 +178,21 @@ impl Console {
             .db
             .lock()
             .map_err(|_| anyhow!("console store poisoned"))?;
-        let tx = db.transaction()?;
-        database::cleanup(&tx, now)?;
+        let mut tx = database::Management::begin(&mut db)?;
+        database::cleanup(&tx.db, now)?;
         let result = match (method, path) {
-            (&Method::POST, "/api/initialize") => self.initialize(&tx, body, now),
-            (&Method::POST, "/api/login") => Self::login(&tx, body, now),
-            (&Method::POST, "/api/enrollments/account") => self.approve_account(&tx, body, now),
-            (&Method::POST, path) if claimant(path) => self.device(&tx, path, body, now),
-            _ if !sessions::authenticated(&tx, session, now)? => {
+            (&Method::POST, "/api/initialize") => self.initialize(&tx.db, body, now),
+            (&Method::POST, "/api/login") => Self::login(&tx.db, body, now),
+            (&Method::POST, "/api/enrollments/account") => self.approve_account(&tx.db, body, now),
+            (&Method::POST, path) if claimant(path) => self.device(&mut tx, path, body, now),
+            _ if !sessions::authenticated(&tx.db, session, now)? => {
                 Err(Rejected(StatusCode::UNAUTHORIZED, "login_required", 0).into())
             }
-            (&Method::POST, "/api/logout") => Self::logout(&tx, session),
+            (&Method::POST, "/api/logout") => Self::logout(&tx.db, session),
             (&Method::GET, "/api/session") => Ok(Reply::ok(
                 json!({"authenticated":true,"capabilities":{"revocation_stops_shares":true}}),
             )),
-            _ => self.manage(&tx, method, path, query, body, now),
+            _ => self.manage(&mut tx, method, path, query, body, now),
         };
         let reply = match result {
             Ok(reply) => reply,
@@ -207,21 +207,11 @@ impl Console {
                 }
             }
         };
-        let changed = reply.status.is_success()
-            && *method == Method::POST
-            && matches!(
-                path,
-                "/api/enrollments/installed"
-                    | "/api/enrollments/cancel"
-                    | "/api/credentials"
-                    | "/api/credentials/revoke"
-            );
-        let keys = changed.then(|| database::keys(&tx)).transpose()?;
-        tx.commit()?;
-        // Serialize publication with the durable write so concurrent management
-        // requests cannot restore an older access snapshot after revocation.
-        if let Some(keys) = keys {
-            self.0.access.apply_devices(keys);
+        // Hold the database guard through publication so runtime order matches durable order.
+        if let Some(credential) = tx.commit()? {
+            let id = credential.key.id;
+            self.0.access.apply_device(credential);
+            tracing::debug!(event = "device_credential_published", credential_id = ?id);
         }
         drop(db);
         tracing::debug!(event="node_console_request",path,status=reply.status.as_u16(),credential_id=?body.get("credential_id"),enrollment_id=?body.get("enrollment_id"));

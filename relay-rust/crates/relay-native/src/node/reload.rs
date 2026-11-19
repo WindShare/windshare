@@ -10,11 +10,11 @@ use windshare_relay_access::{Issuer, trust::Generation};
 const SETTINGS_INTERVAL: Duration = Duration::from_secs(1);
 const SUMMARY_INTERVAL: Duration = Duration::from_secs(60);
 
-struct PreparedSettings {
+struct PreparedSettings<'a> {
     settings: Settings,
     budget: Option<BudgetRecord>,
     controller: Option<Issuer>,
-    access: Option<PreparedPolicy>,
+    access: Option<PreparedPolicy<'a>>,
 }
 
 impl Runtime {
@@ -96,7 +96,7 @@ impl Runtime {
         Ok(())
     }
 
-    fn publish_settings(&self, prepared: PreparedSettings, timestamp: i64) {
+    fn publish_settings(&self, prepared: PreparedSettings<'_>, timestamp: i64) {
         let PreparedSettings {
             settings,
             budget,
@@ -105,7 +105,7 @@ impl Runtime {
         } = prepared;
         let mut state = self.state.lock().expect("node state");
         let changed = state.settings != settings;
-        let access_changed =
+        let publication =
             self.governor
                 .publish_capacity(settings.capacity_bytes_per_second, || {
                     if let Some(record) = budget {
@@ -121,9 +121,9 @@ impl Runtime {
                         state.budget_revision += 1;
                     }
                     state.settings = settings;
-                    let access_changed = self.access.publish_policy(controller, access);
+                    let publication = self.access.publish_policy(controller, access);
                     self.refresh_availability(&mut state, timestamp);
-                    access_changed
+                    publication
                 });
         if changed {
             tracing::info!(
@@ -133,11 +133,11 @@ impl Runtime {
                 capacity_bytes_per_second = state.settings.capacity_bytes_per_second,
                 relay_enabled = state.settings.services.relay,
                 stun_enabled = state.settings.services.stun,
-                access_changed,
+                access_changed = publication.changed,
             );
         }
         drop(state);
-        if access_changed {
+        if publication.changed {
             self.access.notify_policy_changed();
         }
     }

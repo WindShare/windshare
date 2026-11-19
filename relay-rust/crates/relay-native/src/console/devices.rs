@@ -73,11 +73,12 @@ impl Console {
 
     pub(super) fn device(
         &self,
-        db: &Connection,
+        tx: &mut database::Management<'_>,
         path: &str,
         body: &Value,
         now: u64,
     ) -> Result<Reply> {
+        let db = &tx.db;
         if path == "/api/enrollments" {
             return self.enroll(db, body, now);
         }
@@ -122,17 +123,15 @@ impl Console {
                         }
                     } else {
                         require_credential_capacity(db)?;
-                        database::save_key(
-                            db,
-                            &issue(
-                                credential,
-                                database::binding(db, &credential)?
-                                    .map_or(self.0.owner, |binding| binding.account),
-                                e.device_name.clone(),
-                                &key,
-                                now,
-                            ),
-                        )?;
+                        let principal = database::binding(db, &credential)?
+                            .map_or(self.0.owner, |binding| binding.account);
+                        tx.save_credential(issue(
+                            credential,
+                            principal,
+                            e.device_name.clone(),
+                            &key,
+                            now,
+                        ))?;
                         tracing::info!(event="enrollment_installed",enrollment_id=%text_id(&eid),credential_id=%text_id(&credential));
                     }
                 }
@@ -140,35 +139,38 @@ impl Console {
             }
             "/api/enrollments/cancel" => {
                 if let Some(id) = e.cancel(claimant).map_err(refusal)? {
-                    self.revoke(db, id, now)?;
+                    self.revoke(tx, id, now)?;
                 }
                 json!({"ok":true})
             }
             _ => return Err(super::invalid().into()),
         };
-        database::save_enrollment(db, &e)?;
+        database::save_enrollment(&tx.db, &e)?;
         Ok(Reply::ok(reply))
     }
 
-    fn revoke(&self, db: &Connection, id: [u8; 16], now: u64) -> Result<bool> {
-        let Some(mut c) = self.0.access.credential_by_id(id) else {
+    fn revoke(&self, tx: &mut database::Management<'_>, id: [u8; 16], now: u64) -> Result<bool> {
+        let Some(mut key) = self.0.access.credential_by_id(id) else {
             return Ok(false);
         };
-        c.revoke(now);
-        database::save_key(db, &c)?;
-        tracing::info!(event="node_credential_revoked",credential_id=%text_id(&id),principal_id=%text_id(&c.principal));
+        key.revoke(now);
+        let principal = key.principal;
+        if tx.save_credential(key)? {
+            tracing::info!(event="node_credential_revoked",credential_id=%text_id(&id),principal_id=%text_id(&principal));
+        }
         Ok(true)
     }
 
     pub(super) fn manage(
         &self,
-        db: &Connection,
+        tx: &mut database::Management<'_>,
         method: &Method,
         path: &str,
         query: &str,
         body: &Value,
         now: u64,
     ) -> Result<Reply> {
+        let db = &tx.db;
         let value = match (method, path) {
             (&Method::GET, "/api/enrollments") => {
                 let mut statement = db.prepare(
@@ -230,7 +232,7 @@ impl Console {
                 require_credential_capacity(db)?;
                 let key = format!("wsak_{}", text_id(&random::<32>()?));
                 let c = issue(random()?, random()?, name.to_owned(), &key, now);
-                database::save_key(db, &c)?;
+                tx.save_credential(c.clone())?;
                 tracing::info!(event="service_key_created",credential_id=%text_id(&c.id));
                 return Ok(Reply {
                     status: StatusCode::CREATED,
@@ -240,7 +242,7 @@ impl Console {
                 });
             }
             (&Method::POST, "/api/credentials/revoke") => {
-                if !self.revoke(db, id(body, "credential_id")?, now)? {
+                if !self.revoke(tx, id(body, "credential_id")?, now)? {
                     return Err(Rejected(StatusCode::NOT_FOUND, "not_found", 0).into());
                 }
                 json!({"ok":true})

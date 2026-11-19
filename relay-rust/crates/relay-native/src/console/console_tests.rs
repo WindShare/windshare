@@ -1,5 +1,5 @@
 use super::*;
-use crate::node::access::Policy;
+use crate::node::access::{Bearer, Policy};
 use std::path::Path;
 use windshare_relay_access::{Credential, CredentialState};
 use windshare_relay_console::{
@@ -23,6 +23,16 @@ fn post(console: &Console, path: &str, body: &Value, session: &str) -> Reply {
         .unwrap()
 }
 
+fn revoke(console: &Console, session: &str, id: [u8; 16]) -> StatusCode {
+    post(
+        console,
+        "/api/credentials/revoke",
+        &json!({"credential_id":text_id(&id)}),
+        session,
+    )
+    .status
+}
+
 fn pair(console: &Console, session: &str, secret: [u8; 32]) -> String {
     let req = post(
         console,
@@ -38,22 +48,22 @@ fn pair(console: &Console, session: &str, secret: [u8; 32]) -> String {
     let credential = post(console, "/api/enrollments/claim", &claim, "");
     let key = credential.body["access_key"].as_str().unwrap();
     assert!(!admitted(console, key));
-    for _ in 0..2 {
-        assert_eq!(
-            post(console, "/api/enrollments/installed", &claim, "").status,
-            StatusCode::OK
-        );
-    }
+    let install = || post(console, "/api/enrollments/installed", &claim, "").status;
+    assert_eq!(install(), StatusCode::OK);
     assert!(admitted(console, key));
+    let changes = console.0.access.changes();
+    assert_eq!(install(), StatusCode::OK);
+    assert!(!changes.has_changed().unwrap());
     key.to_owned()
 }
 
 fn admitted(console: &Console, secret: &str) -> bool {
     matches!(
-        console
-            .0
-            .access
-            .authorize(ShareId::new([1; 12]).unwrap(), Some(secret), 100),
+        console.0.access.authorize(
+            ShareId::new([1; 12]).unwrap(),
+            Some(&Bearer::new(secret)),
+            100
+        ),
         RegistrationDecision::Granted(_)
     )
 }
@@ -94,7 +104,7 @@ fn revoking_a_credential_makes_room_for_a_new_device() {
         let keys = database::keys(&tx).unwrap();
         tx.commit().unwrap();
         drop(db);
-        console.0.access.apply_devices(keys);
+        console.0.access.restore_devices(keys);
     }
     let get = |path: &str| {
         console
@@ -135,17 +145,11 @@ fn revoking_a_credential_makes_room_for_a_new_device() {
     );
     let id = 1u128.to_le_bytes();
     assert!(admitted(&console, "1"));
-    assert_eq!(
-        post(
-            &console,
-            "/api/credentials/revoke",
-            &json!({"credential_id":text_id(&id)}),
-            &session
-        )
-        .status,
-        StatusCode::OK
-    );
+    assert_eq!(revoke(&console, &session, id), StatusCode::OK);
     assert!(!admitted(&console, "1"));
+    let changes = console.0.access.changes();
+    assert_eq!(revoke(&console, &session, id), StatusCode::OK);
+    assert!(!changes.has_changed().unwrap());
     pair(&console, &session, [25; 32]);
     assert_eq!(
         create("Over capacity again").status,
@@ -216,16 +220,7 @@ fn revocation_survives_reload_and_restart_without_affecting_other_owner_devices(
         text_id(&device(&first).principal)
     );
     for id in [device(&first).id, configured.id] {
-        assert_eq!(
-            post(
-                &console,
-                "/api/credentials/revoke",
-                &json!({"credential_id":text_id(&id)}),
-                &session
-            )
-            .status,
-            StatusCode::OK
-        );
+        assert_eq!(revoke(&console, &session, id), StatusCode::OK);
     }
     policy.credentials[0].id = [7; 16];
     console.0.access.configure(policy.clone()).unwrap();

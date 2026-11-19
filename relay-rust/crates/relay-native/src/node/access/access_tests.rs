@@ -1,10 +1,14 @@
 use super::*;
+use crate::connection::AdmissionPriority;
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::SigningKey;
-use windshare_relay_access::Credential;
 use windshare_relay_access::{
+    Credential, CredentialState, Digest,
     entitlement::{DAY_SECONDS, ENTITLEMENT_LIFETIME},
+    ticket::Ticket,
     trust::Generation,
 };
+use windshare_relay_core::access::RegistrationDecision;
 
 #[test]
 fn newer_policy_revokes_forwarding_and_older_reports_cannot_restore_it() {
@@ -78,7 +82,7 @@ fn share(value: u8) -> ShareId {
 #[test]
 fn offline_tickets_share_a_resident_limit_and_reconnect_reuses_it() {
     let (service, ticket, key, generation, _) = identity();
-    let token = URL_SAFE_NO_PAD.encode(ticket.issue(generation, &key).unwrap());
+    let token = Bearer::new(&URL_SAFE_NO_PAD.encode(ticket.issue(generation, &key).unwrap()));
     let RegistrationDecision::Granted(attribution) = service.authorize(share(1), Some(&token), NOW)
     else {
         panic!("valid ticket refused");
@@ -103,8 +107,13 @@ fn offline_tickets_share_a_resident_limit_and_reconnect_reuses_it() {
 #[test]
 fn old_tickets_do_not_revive_allowance_or_revoked_credentials() {
     let (service, ticket, key, generation, _) = identity();
-    let token = URL_SAFE_NO_PAD.encode(ticket.issue(generation, &key).unwrap());
+    let mut token = Bearer::new(&URL_SAFE_NO_PAD.encode(ticket.issue(generation, &key).unwrap()));
     let attribution = ticket.attribution();
+    assert_eq!(
+        service.admission_priority(share(1), Some(&mut token), NOW),
+        AdmissionPriority::Authenticated
+    );
+    assert_eq!(service.class(attribution, NOW).1, Some(Allowance::Stale));
     assert!(matches!(
         service.authorize(share(1), Some(&token), NOW),
         RegistrationDecision::Granted(_)
@@ -164,9 +173,39 @@ fn old_tickets_do_not_revive_allowance_or_revoked_credentials() {
 }
 
 #[test]
+fn verified_ticket_expires_and_cannot_survive_signing_key_rotation() {
+    let (service, ticket, key, generation, _) = identity();
+    let mut bearer = Bearer::new(&URL_SAFE_NO_PAD.encode(ticket.issue(generation, &key).unwrap()));
+    assert_eq!(
+        service.admission_priority(share(1), Some(&mut bearer), NOW),
+        AdmissionPriority::Authenticated
+    );
+    assert!(matches!(
+        service.authorize(share(1), Some(&bearer), ticket.expires_at),
+        RegistrationDecision::Denied
+    ));
+
+    let replacement = SigningKey::from_bytes(&[5; 32]);
+    service
+        .apply_authority(
+            Generation {
+                number: generation.number + 1,
+                key: replacement.verifying_key().to_bytes(),
+                ..generation
+            }
+            .into(),
+        )
+        .unwrap();
+    assert!(matches!(
+        service.authorize(share(1), Some(&bearer), NOW + 1),
+        RegistrationDecision::Denied
+    ));
+}
+
+#[test]
 fn removing_an_issuer_disables_new_admission_and_preserves_generation_high_water() {
     let (service, ticket, key, generation, mut policy) = identity();
-    let token = URL_SAFE_NO_PAD.encode(ticket.issue(generation, &key).unwrap());
+    let token = Bearer::new(&URL_SAFE_NO_PAD.encode(ticket.issue(generation, &key).unwrap()));
     policy.trusted_issuers.clear();
     service.configure(policy).unwrap();
     assert!(matches!(
@@ -178,7 +217,7 @@ fn removing_an_issuer_disables_new_admission_and_preserves_generation_high_water
         RegistrationDecision::Denied
     ));
     assert!(matches!(
-        service.authorize(share(1), Some("invalid"), NOW),
+        service.authorize(share(1), Some(&Bearer::new("invalid")), NOW),
         RegistrationDecision::Denied
     ));
 }
@@ -208,12 +247,24 @@ fn local_owner_capacity_is_preserved_when_public_residency_is_full() {
         service.reserve(share(2), Attribution::Anonymous),
         Err(RegistrationDecision::Unavailable)
     ));
-    let RegistrationDecision::Granted(owner) =
-        service.authorize(share(2), Some("owner-secret"), NOW)
+    let mut token = Bearer::new("owner-secret");
+    assert_eq!(
+        service.admission_priority(share(2), Some(&mut token), NOW),
+        AdmissionPriority::Owner
+    );
+    assert_eq!(
+        service.credential_by_id([2; 16]).unwrap().last_used_at,
+        None
+    );
+    let RegistrationDecision::Granted(owner) = service.authorize(share(2), Some(&token), NOW)
     else {
         panic!("owner refused");
     };
     let _owner = service.reserve(share(2), owner).unwrap();
+    assert_eq!(
+        service.credential_by_id([2; 16]).unwrap().last_used_at,
+        Some(NOW * 1000)
+    );
     assert_eq!(service.class(owner, NOW).0, Class::Owner);
     drop(public);
     assert!(service.allowed(share(2), owner));

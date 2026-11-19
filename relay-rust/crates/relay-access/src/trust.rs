@@ -94,8 +94,8 @@ pub struct TrustStore {
 }
 
 impl TrustStore {
-    pub fn generations(&self) -> Vec<Generation> {
-        self.generations.values().copied().collect()
+    pub fn generation(&self, issuer: Issuer) -> Option<Generation> {
+        self.generations.get(&issuer).copied()
     }
     /// # Errors
     /// Refuses expired generations, rollback and same-generation key replacement.
@@ -123,14 +123,14 @@ impl TrustStore {
     /// # Errors
     /// Only the current, unexpired signing generation can authenticate new admissions.
     pub fn current(&self, issuer: Issuer, number: u64, now: u64) -> Result<Generation, Error> {
-        let generation = self.generations.get(&issuer).ok_or(Error::Untrusted)?;
+        let generation = self.generation(issuer).ok_or(Error::Untrusted)?;
         if generation.number != number {
             return Err(Error::Rollback);
         }
         if !generation.usable(now) {
             return Err(Error::Expired);
         }
-        Ok(*generation)
+        Ok(generation)
     }
 }
 

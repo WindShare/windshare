@@ -110,20 +110,65 @@ impl Ticket {
     /// # Errors
     /// Rejects noncanonical, tampered, expired or untrusted tickets.
     pub fn verify(signed: &[u8], trusted: &TrustStore, now: u64) -> Result<Self, Error> {
+        VerifiedTicket::verify_with(signed, now, |issuer, number| {
+            trusted.current(issuer, number, now)
+        })
+        .map(|verified| verified.ticket)
+    }
+
+    const fn check_lifetime(self, generation: Generation, now: u64) -> Result<(), Error> {
+        if !generation.usable(now)
+            || self.issued_at < generation.not_before
+            || self.expires_at > generation.expires_at
+            || now.saturating_add(trust::CLOCK_SKEW) < self.issued_at
+            || now >= self.expires_at
+        {
+            return Err(Error::Expired);
+        }
+        Ok(())
+    }
+}
+
+/// Signature evidence tied to the exact certified generation. A later admission
+/// must still consult the live trust store and node policy.
+pub struct VerifiedTicket {
+    ticket: Ticket,
+    generation: Generation,
+}
+
+impl VerifiedTicket {
+    /// Selects one signing generation before performing signature verification.
+    ///
+    /// # Errors
+    /// Rejects a malformed ticket, an invalid signature or an unusable generation.
+    pub fn verify_with(
+        signed: &[u8],
+        now: u64,
+        signing_generation: impl FnOnce(Issuer, u64) -> Result<Generation, Error>,
+    ) -> Result<Self, Error> {
         if signed.len() > MAX_TICKET_BYTES {
             return Err(Error::Encoding);
         }
         let length = signed.len().checked_sub(64).ok_or(Error::Encoding)?;
-        let ticket = Self::decode(&signed[..length])?;
-        let generation = trusted.current(ticket.issuer, ticket.key_id, now)?;
-        trust::verify(TICKET_DOMAIN, signed, &generation.key)?;
-        if ticket.issued_at < generation.not_before
-            || ticket.expires_at > generation.expires_at
-            || now.saturating_add(trust::CLOCK_SKEW) < ticket.issued_at
-            || now >= ticket.expires_at
-        {
-            return Err(Error::Expired);
+        let ticket = Ticket::decode(&signed[..length])?;
+        let generation = signing_generation(ticket.issuer, ticket.key_id)?;
+        if (generation.issuer, generation.number) != (ticket.issuer, ticket.key_id) {
+            return Err(Error::Untrusted);
         }
+        trust::verify(TICKET_DOMAIN, signed, &generation.key)?;
+        ticket.check_lifetime(generation, now)?;
+        Ok(Self { ticket, generation })
+    }
+
+    /// # Errors
+    /// Rejects evidence whose ticket or signing generation is no longer current.
+    pub fn current(&self, trusted: &TrustStore, now: u64) -> Result<Ticket, Error> {
+        let ticket = self.ticket;
+        let generation = trusted.current(ticket.issuer, ticket.key_id, now)?;
+        if self.generation != generation {
+            return Err(Error::Untrusted);
+        }
+        ticket.check_lifetime(generation, now)?;
         Ok(ticket)
     }
 }

@@ -7,7 +7,7 @@ use crate::config::{
     CAPACITY_NOTICE_QUEUE_FRAMES, CONTROL_QUEUE_FRAMES, DATA_QUEUE_BYTES, DATA_QUEUE_FRAMES,
     MAX_CONTROL_BYTES, SUBMITTED_DATA_BYTES, SUBMITTED_DATA_FRAMES,
 };
-use crate::node::Runtime;
+use crate::node::{Runtime, access::Bearer};
 use anyhow::{Result, ensure};
 use std::sync::Arc;
 use windshare_relay_access::Attribution;
@@ -42,7 +42,7 @@ pub enum Closure {
 /// A share actor's exclusive owner of one destination's unsubmitted payloads.
 /// Dropping it aborts the connection; orderly terminal replies use `finish`.
 pub struct Outbox {
-    bearer: Option<String>,
+    bearer: Option<Bearer>,
     source: Option<std::net::IpAddr>,
     connection: ConnectionRef,
     pending: pending::Queues,
@@ -92,12 +92,12 @@ impl Outbox {
         self.wake = wake;
     }
     pub fn with_admission(mut self, admission: &Admission) -> Self {
-        self.bearer = admission.bearer().map(str::to_owned);
+        self.bearer = admission.bearer().cloned();
         self.source = Some(admission.source());
         self
     }
-    pub fn bearer(&self) -> Option<&str> {
-        self.bearer.as_deref()
+    pub(crate) const fn bearer(&self) -> Option<&Bearer> {
+        self.bearer.as_ref()
     }
     pub const fn source(&self) -> Option<std::net::IpAddr> {
         self.source

@@ -1,8 +1,11 @@
-use super::{AuthorityState, Service, control::Authorities};
+use super::{AuthorityState, CredentialIndex, DeviceKeys, Service, control::Authorities};
 use anyhow::{Result, anyhow, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::{
+    collections::BTreeSet,
+    sync::{Arc, MutexGuard},
+};
 use windshare_relay_access::{Credential, Issuer, trust::Generation};
 
 const DEFAULT_PRINCIPAL_SHARES: usize = 16;
@@ -63,60 +66,94 @@ impl Policy {
     }
 }
 
-pub(in crate::node) struct PreparedPolicy {
-    policy: Policy,
+struct PolicyState {
+    policy: Arc<Policy>,
     authorities: Authorities,
     active_issuers: BTreeSet<Issuer>,
+    credentials: Arc<CredentialIndex>,
+}
+
+pub(in crate::node) struct PreparedPolicy<'a> {
+    next: PolicyState,
+    // A console write cannot supersede the device input between preparation and publication.
+    _credential_writer: MutexGuard<'a, DeviceKeys>,
+}
+
+pub(in crate::node) struct PolicyPublication {
+    pub changed: bool,
+    // The caller publishes inside the node/governor transaction. Free the old index afterward.
+    _retired: Option<PolicyState>,
 }
 
 impl Service {
     pub(in crate::node) fn policy_matches(&self, policy: &Policy) -> bool {
-        self.state.lock().expect("node access state").policy == *policy
+        let current = Arc::clone(&self.state.lock().expect("node access state").policy);
+        current.as_ref() == policy
     }
 
     pub(in crate::node) fn prepare_policy(
         &self,
         policy: Policy,
         records: Vec<AuthorityState>,
-    ) -> Result<PreparedPolicy> {
-        let mut authorities = self
-            .state
-            .lock()
-            .map_err(|_| anyhow!("node access state poisoned"))?
-            .authorities
-            .clone();
+    ) -> Result<PreparedPolicy<'_>> {
+        let devices = self.devices.lock().expect("credential writer");
+        let (mut authorities, current, previous) = {
+            let state = self.state.lock().expect("node access state");
+            (
+                state.authorities.clone(),
+                Arc::clone(&state.policy),
+                Arc::clone(&state.credentials),
+            )
+        };
         let mut active_issuers = BTreeSet::new();
         for record in records {
             active_issuers.insert(record.generation.issuer);
             authorities.apply(record)?;
         }
+        let credentials = if current.credentials == policy.credentials {
+            previous
+        } else {
+            Arc::new(CredentialIndex::build(
+                &policy.credentials,
+                &devices,
+                &previous,
+            ))
+        };
         Ok(PreparedPolicy {
-            policy,
-            authorities,
-            active_issuers,
+            next: PolicyState {
+                policy: Arc::new(policy),
+                authorities,
+                active_issuers,
+                credentials,
+            },
+            _credential_writer: devices,
         })
     }
 
     pub(in crate::node) fn publish_policy(
         &self,
         controller: Option<Issuer>,
-        prepared: Option<PreparedPolicy>,
-    ) -> bool {
+        prepared: Option<PreparedPolicy<'_>>,
+    ) -> PolicyPublication {
         let mut state = self.state.lock().expect("node access state");
         let controller_changed = state.controller != controller;
         state.controller = controller;
-
-        if let Some(prepared) = prepared {
-            state.authorities = prepared.authorities;
-            state.active_issuers = prepared.active_issuers;
-            state.owners.clone_from(&prepared.policy.owner_principals);
-            state.policy = prepared.policy;
-            state.rebuild_credentials();
-        } else {
-            return controller_changed;
-        }
+        let Some(mut prepared) = prepared else {
+            return PolicyPublication {
+                changed: controller_changed,
+                _retired: None,
+            };
+        };
+        std::mem::swap(&mut state.policy, &mut prepared.next.policy);
+        std::mem::swap(&mut state.authorities, &mut prepared.next.authorities);
+        std::mem::swap(&mut state.active_issuers, &mut prepared.next.active_issuers);
+        std::mem::swap(&mut state.credentials, &mut prepared.next.credentials);
         drop(state);
-        true
+
+        PolicyPublication {
+            changed: true,
+            _retired: Some(prepared.next),
+        }
     }
 
     pub(in crate::node) fn notify_policy_changed(&self) {

@@ -71,11 +71,7 @@ impl Authorities {
     pub(super) fn apply(&mut self, authority: AuthorityState) -> Result<bool> {
         let generation = authority.generation;
         let issuer = generation.issuer;
-        let previous = self
-            .trusted
-            .generations()
-            .into_iter()
-            .find(|entry| entry.issuer == issuer);
+        let previous = self.trusted.generation(issuer);
         if previous.is_none_or(|entry| generation.number >= entry.number) {
             self.trusted
                 .remember(generation)
