@@ -92,6 +92,55 @@ fn email_requires_delivered_secret_and_password_setup_keeps_account_identity() {
 }
 
 #[test]
+fn mistyped_registration_email_code_keeps_its_challenge_until_attempts_run_out() {
+    let mut authority = fixture();
+    let mut settings = authority.settings().unwrap();
+    settings.registration = RegistrationMode::Email;
+    save(&mut authority.store, "settings", &settings).unwrap();
+    let (challenge, code) = authority
+        .deliver_email("source", None, &Mailbox::parse("alice@qq.com").unwrap())
+        .unwrap();
+    let mut proof = registration(8);
+    proof.challenge = Some(challenge.id);
+    proof.solution = Some("mistyped".into());
+    let fault = |authority: &mut Authority<Memory, Clock>, proof: &Registration| {
+        authority
+            .register("source", proof.clone())
+            .unwrap_err()
+            .downcast::<Fault>()
+            .unwrap()
+    };
+    // Clients keep the delivered challenge only when told the code itself was wrong.
+    for _ in 0..4 {
+        assert!(matches!(
+            fault(&mut authority, &proof),
+            Fault::EmailCodeRejected
+        ));
+    }
+    assert!(matches!(
+        fault(&mut authority, &proof),
+        Fault::Verification { challenge } if challenge.id.is_empty()
+    ));
+    proof.solution = Some(code);
+    assert!(matches!(
+        fault(&mut authority, &proof),
+        Fault::Verification { .. }
+    ));
+    let (challenge, code) = authority
+        .deliver_email("source", None, &Mailbox::parse("alice@qq.com").unwrap())
+        .unwrap();
+    proof.challenge = Some(challenge.id);
+    proof.solution = Some("mistyped".into());
+    assert!(matches!(
+        fault(&mut authority, &proof),
+        Fault::EmailCodeRejected
+    ));
+    proof.solution = Some(code);
+    let session = authority.register("source", proof).unwrap();
+    assert_eq!(session.profile.email.as_deref(), Some("alice@qq.com"));
+}
+
+#[test]
 fn retrying_work_registration_reuses_its_challenge_and_creates_a_profile_without_email() {
     let mut authority = fixture();
     let settings = Settings {

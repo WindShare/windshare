@@ -186,9 +186,19 @@ impl<R: Store, E: Environment> Authority<R, E> {
             id.len() <= MAX_CHALLENGE_ID_BYTES && solution.len() <= MAX_SOLUTION_BYTES,
             Fault::Invalid
         );
-        self.redeem_proof(&Owner::Registration(source), solution, |proof| {
-            proof.method.mode() == mode && proof.id == id
-        })
+        let owner = Owner::Registration(source);
+        let current = |proof: &Proof| proof.method.mode() == mode && proof.id == id;
+        let verified = self.redeem_proof(&owner, solution, current)?;
+        // A mistyped email code leaves its challenge redeemable. Say so, as profile
+        // verification does, instead of prompting for an email the client already has.
+        if verified.is_none()
+            && mode == RegistrationMode::Email
+            && load::<Proof>(&self.store, &owner.key())?
+                .is_some_and(|proof| current(&proof) && proof.live(self.environment.now()))
+        {
+            return Err(Fault::EmailCodeRejected.into());
+        }
+        Ok(verified)
     }
 
     pub(crate) fn verify_mailbox(

@@ -139,6 +139,36 @@ func TestVerifyEmailReturnsRegistrationOutcome(t *testing.T) {
 	}
 }
 
+// The authority keeps a mistyped registration code's challenge for another attempt.
+func TestMistypedEmailCodeKeepsDeliveredChallenge(t *testing.T) {
+	config, session := accountFixture(t)
+	delivered := Challenge{ID: "delivered", Mode: "email", ExpiresAt: uint64(config.Now().Unix()) + 600}
+	config.Store = &MemoryStore{record: Record{SetupSecret: session.Secret, Proof: &Proof{Challenge: delivered}}}
+	config.Client = clientFunc(func(request *http.Request) (*http.Response, error) {
+		var input struct{ Challenge, Solution string }
+		if err := json.NewDecoder(request.Body).Decode(&input); err != nil || request.URL.Path != "/v1/accounts" || input.Challenge != delivered.ID {
+			return nil, fmt.Errorf("unexpected registration request %s %+v: %v", request.URL.Path, input, err)
+		}
+		if input.Solution != "code" {
+			return accountReply(t, http.StatusBadRequest, fault{Kind: "email_code_rejected"}), nil
+		}
+		return accountReply(t, http.StatusOK, session), nil
+	})
+	service := testService(t, config)
+	if err := service.VerifyEmail(t.Context(), "mistyped"); !errors.Is(err, errEmailCodeRejected) || CommandErrorCode(err) != "email_code_rejected" {
+		t.Fatalf("mistyped code: %v", err)
+	}
+	if snapshot, _ := service.Snapshot(); snapshot.State != EmailRequired || !snapshot.EmailCodePending {
+		t.Fatalf("mistyped code discarded the delivered challenge: %+v", snapshot)
+	}
+	if err := service.VerifyEmail(t.Context(), "code"); err != nil {
+		t.Fatalf("corrected code: %v", err)
+	}
+	if snapshot, _ := service.Snapshot(); snapshot.State != Ready {
+		t.Fatalf("corrected code did not register: %s", snapshot.State)
+	}
+}
+
 // Pins the accepted expiry window to (now, now + 15 min + ClockSkew] on both
 // the registration and the email-request path.
 func TestChallengeExpiryBoundaries(t *testing.T) {

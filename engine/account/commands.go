@@ -150,6 +150,10 @@ func (service *Service) VerifyEmail(ctx context.Context, code string) error {
 	proof := *previous.Proof
 	proof.Solution = code
 	challenge, err := service.submitRegistration(ctx, previous, &proof)
+	if remote, ok := errors.AsType[*fault](err); ok && remote.Kind == "email_code_rejected" {
+		// The authority kept the delivered challenge, so the saved proof stays for another attempt.
+		return errEmailCodeRejected
+	}
 	if err != nil || challenge == nil {
 		return err
 	}
