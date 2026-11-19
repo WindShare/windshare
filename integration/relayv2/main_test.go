@@ -42,7 +42,7 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func prepareRelaySuite(t *testing.T) {
+func prepareRelaySuite(t testing.TB) {
 	t.Helper()
 	// Keep short tests and filtered behavior tests independent of Rust tooling.
 	relaySuite.Do(func() { relaySuite.err = buildRelaySuite() })

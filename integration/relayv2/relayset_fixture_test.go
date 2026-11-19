@@ -45,7 +45,7 @@ func startRelaysetScenario(t *testing.T, count int) (context.Context, *testscena
 	return ctx, trace, urls
 }
 
-func startNativeRelays(t *testing.T, count int) (*testscenario.Trace, []string) {
+func startNativeRelays(t testing.TB, count int) (*testscenario.Trace, []string) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("native relay scenarios belong to the long integration gate")

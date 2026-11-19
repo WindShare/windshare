@@ -2,6 +2,7 @@ package perfevidence
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -171,7 +172,21 @@ func TestWorkloadSelectionIsValidatedAndCloned(t *testing.T) {
 	if _, err := SelectWorkloads([]string{"ready-scaling", "ready-scaling"}); err == nil {
 		t.Fatal("duplicate workload was accepted")
 	}
-	if len(WorkloadIDs()) != len(DefaultWorkloads()) {
-		t.Fatal("workload ID inventory is incomplete")
+	const optIn = "native-receive-continuation"
+	if !slices.Contains(WorkloadIDs(), optIn) {
+		t.Fatal("native receive continuation is missing from the list")
+	}
+	all, err := SelectWorkloads(WorkloadIDs())
+	if err != nil || len(all) != len(WorkloadIDs()) {
+		t.Fatalf("unexpected workload inventory: %d, err = %v", len(all), err)
+	}
+	defaults, err := SelectWorkloads(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, workload := range defaults {
+		if workload.ID == optIn {
+			t.Fatal("native receive continuation requires explicit selection")
+		}
 	}
 }

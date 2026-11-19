@@ -22,7 +22,7 @@ var relayTraceOutput struct {
 	err  error
 }
 
-func startRelayScenario(t *testing.T, scenario string) (*testscenario.Trace, testrun.Identity) {
+func startRelayScenario(t testing.TB, scenario string) (*testscenario.Trace, testrun.Identity) {
 	t.Helper()
 	run, err := testrun.PackageRun()
 	if err != nil {

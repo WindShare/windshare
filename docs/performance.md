@@ -57,6 +57,28 @@ latency. Use `BenchmarkOpenBlock` in `./core/content/records` to measure the
 canonical block decoder separately. The authenticated envelope path is measured by the
 native and browser content workloads below.
 
+## Native receive continuation
+
+Run the opt-in workload with Go and stable Rust installed. It uses the native integration
+fixture's loopback relay and real filesystem output.
+
+```powershell
+go -C internal/perfevidence run ./cmd/perfevidence -workloads native-receive-continuation -samples 3 > native-receive.json
+```
+
+Both scenarios transfer the same deterministic 16 MiB file with a fresh receiver and destination.
+`uninterrupted` measures published file bytes per second from job start to publication.
+`reopened` retires the handle and cuts the relay connection after the first accepted range.
+It measures the time from the cut to the first authenticated payload accepted by the range sink,
+the checkpoint bytes readmitted, and the received prefix bytes delivered again. The byte count
+covers application payload, with the cut placed between ranges to avoid in-flight fragments.
+Every iteration verifies the published file.
+
+For a before/after comparison, run the same workload from both revisions with the test harness
+present in each checkout. Save each report with its `git rev-parse HEAD` and keep the toolchain,
+relay build profile, and output volume fixed. Compare the median `MB/s` from `uninterrupted`
+and the three recovery metrics from `reopened`.
+
 ## Progressive discovery
 
 The sender publishes a NodeID hash index with each immutable directory generation. Budgeted

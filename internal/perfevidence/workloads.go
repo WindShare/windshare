@@ -6,14 +6,15 @@ import (
 )
 
 const (
-	defaultBenchTime        = "1s"
-	fixedDiskIterations     = "20x"
-	fixedTransferIterations = "20x"
-	fixedCatalogIterations  = "1x"
-	pionFrameBytes          = 64 << 10
-	pionLowWaterBytes       = 256 << 10
-	pionHighWaterBytes      = 1 << 20
-	pionSendAdmissionBytes  = pionHighWaterBytes - 1
+	defaultBenchTime             = "1s"
+	fixedDiskIterations          = "20x"
+	fixedTransferIterations      = "20x"
+	fixedCatalogIterations       = "1x"
+	fixedNativeReceiveIterations = "3x"
+	pionFrameBytes               = 64 << 10
+	pionLowWaterBytes            = 256 << 10
+	pionHighWaterBytes           = 1 << 20
+	pionSendAdmissionBytes       = pionHighWaterBytes - 1
 	// A send admitted below high-water can add one complete frame before the
 	// next bufferedAmount observation, but no additional frame may be admitted.
 	pionMaximumAdmittedPeakBytes = pionSendAdmissionBytes + pionFrameBytes
@@ -36,10 +37,10 @@ func DefaultWorkloads() []Workload {
 }
 
 func SelectWorkloads(requested []string) ([]Workload, error) {
-	available := DefaultWorkloads()
 	if len(requested) == 0 {
-		return available, nil
+		return DefaultWorkloads(), nil
 	}
+	available := registeredWorkloads()
 	byID := make(map[string]Workload, len(available))
 	for _, workload := range available {
 		byID[workload.ID] = workload
@@ -60,8 +61,14 @@ func SelectWorkloads(requested []string) ([]Workload, error) {
 	return selected, nil
 }
 
+func registeredWorkloads() []Workload {
+	// The native path starts a Rust relay and verified filesystem output. Keep
+	// the default report usable with the Go toolchain alone.
+	return append(DefaultWorkloads(), nativeReceiveWorkload())
+}
+
 func WorkloadIDs() []string {
-	workloads := DefaultWorkloads()
+	workloads := registeredWorkloads()
 	ids := make([]string, len(workloads))
 	for index, workload := range workloads {
 		ids[index] = workload.ID
@@ -208,6 +215,18 @@ func pionTransferWorkload() Workload {
 		ID: "pion-chunk-transfer", ModuleDir: ".", Package: "./transport/webrtc",
 		Benchmark: "BenchmarkPionChunkTransfer", BenchTime: defaultBenchTime, Contracts: contracts,
 		HardOracles: oracles,
+	}
+}
+
+func nativeReceiveWorkload() Workload {
+	const benchmark = "BenchmarkNativeReceiveContinuation"
+	return Workload{
+		ID: "native-receive-continuation", ModuleDir: ".", Package: "./integration/relayv2",
+		Benchmark: benchmark, BenchTime: fixedNativeReceiveIterations,
+		Contracts: []BenchmarkContract{
+			contract(benchmark+"/uninterrupted", "MB/s"),
+			contract(benchmark+"/reopened", "resume-ms/op", "reused-B/op", "redownloaded-B/op"),
+		},
 	}
 }
 
