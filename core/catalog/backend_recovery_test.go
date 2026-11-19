@@ -76,7 +76,7 @@ func stageBackendGeneration(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := transaction.PutPage(page, mustTestPageObject(t, page)); err != nil {
+	if err := transaction.PutPage(page, mustTestPagePayload(t, page)); err != nil {
 		t.Fatal(err)
 	}
 	return transaction
@@ -536,12 +536,12 @@ func TestFileBackendRecoveryRejectsSemanticAndPhysicalCorruption(t *testing.T) {
 			}
 		},
 		"missing page object": func(t *testing.T, path string, _ *FileCatalogBackend, _ fileCatalogMeta) {
-			if err := os.Remove(filepath.Join(path, fileCatalogObjectsName, "00000000.object")); err != nil {
+			if err := os.Remove(filepath.Join(path, fileCatalogPayloadsName, "00000000.object")); err != nil {
 				t.Fatal(err)
 			}
 		},
 		"conflicting page object": func(t *testing.T, path string, _ *FileCatalogBackend, _ fileCatalogMeta) {
-			objectPath := filepath.Join(path, fileCatalogObjectsName, "00000000.object")
+			objectPath := filepath.Join(path, fileCatalogPayloadsName, "00000000.object")
 			object, err := os.ReadFile(objectPath)
 			if err != nil {
 				t.Fatal(err)
@@ -680,7 +680,7 @@ func TestFileBackendLoadRejectsCorruptMetadataPageAndNodeStream(t *testing.T) {
 	if err := os.WriteFile(pagePath, originalPage, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	objectPath := filepath.Join(path, fileCatalogObjectsName, "00000000.object")
+	objectPath := filepath.Join(path, fileCatalogPayloadsName, "00000000.object")
 	originalObject, err := os.ReadFile(objectPath)
 	if err != nil {
 		t.Fatal(err)
@@ -690,7 +690,7 @@ func TestFileBackendLoadRejectsCorruptMetadataPageAndNodeStream(t *testing.T) {
 	if err := os.WriteFile(objectPath, conflictingObject, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := backend.LoadPageObject(context.Background(), directory, generation, 0); !errors.Is(err, ErrCorruptCatalogStorage) {
+	if _, _, err := backend.LoadPagePayload(context.Background(), directory, generation, 0); !errors.Is(err, ErrCorruptCatalogStorage) {
 		t.Fatalf("conflicting page object = %v", err)
 	}
 	if err := os.WriteFile(objectPath, originalObject, 0o600); err != nil {

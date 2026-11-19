@@ -31,10 +31,10 @@ func TestReceivedDescriptorAndPageFunctionAdapters(t *testing.T) {
 	if commitment[0] != 1 || !errors.Is(err, sentinel) {
 		t.Fatalf("commit adapter = %x, %v", commitment, err)
 	}
-	sealed, _ := NewSealedPageObject([]byte("sealed"))
-	sealer := PageSealerFunc(func(PageCommitInput) (SealedPageObject, error) { return sealed, nil })
-	result, err := sealer.Seal(PageCommitInput{})
-	if err != nil || result.EstimatedMemoryBytes() != uint64(len("sealed")) {
+	payload, _ := NewPagePayload([]byte("payload"))
+	encoder := PageEncoderFunc(func(PageCommitInput) (PagePayload, error) { return payload, nil })
+	result, err := encoder.EncodePage(PageCommitInput{})
+	if err != nil || result.EstimatedMemoryBytes() != uint64(len("payload")) {
 		t.Fatalf("seal adapter = %+v, %v", result, err)
 	}
 }

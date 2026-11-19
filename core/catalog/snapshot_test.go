@@ -16,11 +16,11 @@ func (semanticTestCommitter) Commit(input PageCommitInput) (PageCommitment, erro
 	return NewPageCommitment(digest[:])
 }
 
-func (semanticTestCommitter) Seal(input PageCommitInput) (SealedPageObject, error) {
-	return NewSealedPageObject(semanticTestPageBytes(input))
+func (semanticTestCommitter) EncodePage(input PageCommitInput) (PagePayload, error) {
+	return NewPagePayload(semanticTestPageBytes(input))
 }
 
-func (semanticTestCommitter) SealFailure(record DirectoryFailureRecord) (SealedFailureObject, error) {
+func (semanticTestCommitter) EncodeFailure(record DirectoryFailureRecord) (FailurePayload, error) {
 	var encoded bytes.Buffer
 	_, _ = encoded.Write(record.ShareInstance().Bytes())
 	_, _ = encoded.Write(record.DirectoryID().Bytes())
@@ -31,7 +31,7 @@ func (semanticTestCommitter) SealFailure(record DirectoryFailureRecord) (SealedF
 	var retry [8]byte
 	binary.BigEndian.PutUint64(retry[:], uint64(record.RetryAfter()/time.Millisecond))
 	_, _ = encoded.Write(retry[:])
-	return NewSealedFailureObject(encoded.Bytes())
+	return NewFailurePayload(encoded.Bytes())
 }
 
 func semanticTestPageBytes(input PageCommitInput) []byte {
@@ -53,9 +53,9 @@ func semanticTestPageBytes(input PageCommitInput) []byte {
 	return encoded.Bytes()
 }
 
-func mustTestPageObject(t *testing.T, page CatalogPage) SealedPageObject {
+func mustTestPagePayload(t *testing.T, page CatalogPage) PagePayload {
 	t.Helper()
-	object, err := semanticTestCommitter{}.Seal(PageCommitInput{
+	object, err := semanticTestCommitter{}.EncodePage(PageCommitInput{
 		ShareInstance: page.ShareInstance(), DirectoryID: page.DirectoryID(), Generation: page.Generation(),
 		PageIndex: page.PageIndex(), Previous: page.Previous(), Entries: page.Entries(),
 		Terminal: page.Terminal(), OmittedCount: page.OmittedCount(),

@@ -15,7 +15,7 @@ func TestClientBindsVerificationAndResponseToExactPageRequest(t *testing.T) {
 	snapshot := twoPageSnapshot(t, instance, directory, 92, "a", "b")
 	firstPage := snapshot.Pages()[0]
 	codec := newMemoryObjectCodec()
-	firstObject, err := codec.LoadSealedPage(context.Background(), firstPage)
+	firstObject, err := codec.LoadPagePayload(context.Background(), firstPage)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,11 +97,11 @@ func TestClientCachesAuthenticatedFailureUntilExplicitRetryCooldown(t *testing.T
 	failure := mustDirectoryFailure(t, instance, directory, 95, DirectoryCodeTransientIO, true)
 	snapshot := onePageSnapshot(t, instance, directory, 96, "recovered")
 	codec := newMemoryObjectCodec()
-	failureObject, err := codec.LoadSealedFailure(context.Background(), failure)
+	failurePayload, err := codec.LoadFailurePayload(context.Background(), failure)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pageObject, err := codec.LoadSealedPage(context.Background(), snapshot.Pages()[0])
+	pagePayload, err := codec.LoadPagePayload(context.Background(), snapshot.Pages()[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,9 +110,9 @@ func TestClientCachesAuthenticatedFailureUntilExplicitRetryCooldown(t *testing.T
 	transport := PageTransportFunc(func(context.Context, ListRequest) ([]byte, error) {
 		calls++
 		if calls == 1 {
-			return append([]byte(nil), failureObject...), nil
+			return append([]byte(nil), failurePayload...), nil
 		}
-		return append([]byte(nil), pageObject...), nil
+		return append([]byte(nil), pagePayload...), nil
 	})
 	client, err := NewClient(ClientConfig{
 		ShareInstance: instance,
@@ -147,7 +147,7 @@ func TestClientCachesAuthenticatedFailureUntilExplicitRetryCooldown(t *testing.T
 		ShareInstance: instance,
 		Transport: PageTransportFunc(func(context.Context, ListRequest) ([]byte, error) {
 			replayedAttempts++
-			return append([]byte(nil), failureObject...), nil
+			return append([]byte(nil), failurePayload...), nil
 		}),
 		Verifier: codec,
 		Now:      func() time.Time { return now },
@@ -173,11 +173,11 @@ func TestClientAcquirePreservesRetryableFailureCooldownAfterRelease(t *testing.T
 	failure := mustDirectoryFailure(t, instance, directory, 122, DirectoryCodeTransientIO, true)
 	snapshot := onePageSnapshot(t, instance, directory, 123, "recovered")
 	codec := newMemoryObjectCodec()
-	failureObject, err := codec.LoadSealedFailure(context.Background(), failure)
+	failurePayload, err := codec.LoadFailurePayload(context.Background(), failure)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pageObject, err := codec.LoadSealedPage(context.Background(), snapshot.Pages()[0])
+	pagePayload, err := codec.LoadPagePayload(context.Background(), snapshot.Pages()[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,9 +188,9 @@ func TestClientAcquirePreservesRetryableFailureCooldownAfterRelease(t *testing.T
 		Transport: PageTransportFunc(func(context.Context, ListRequest) ([]byte, error) {
 			calls++
 			if calls == 1 {
-				return append([]byte(nil), failureObject...), nil
+				return append([]byte(nil), failurePayload...), nil
 			}
-			return append([]byte(nil), pageObject...), nil
+			return append([]byte(nil), pagePayload...), nil
 		}),
 		Verifier: codec,
 		Now:      func() time.Time { return now },
@@ -225,8 +225,8 @@ func TestClientRetryDoesNotEvictOlderLeasedFailure(t *testing.T) {
 	failure := mustDirectoryFailure(t, instance, directory, 126, DirectoryCodeTransientIO, true)
 	snapshot := onePageSnapshot(t, instance, directory, 127, "recovered")
 	codec := newMemoryObjectCodec()
-	failureObject, _ := codec.LoadSealedFailure(context.Background(), failure)
-	pageObject, _ := codec.LoadSealedPage(context.Background(), snapshot.Pages()[0])
+	failurePayload, _ := codec.LoadFailurePayload(context.Background(), failure)
+	pagePayload, _ := codec.LoadPagePayload(context.Background(), snapshot.Pages()[0])
 	now := time.Unix(1_700_000_300, 0)
 	var calls int
 	client, err := NewClient(ClientConfig{
@@ -234,9 +234,9 @@ func TestClientRetryDoesNotEvictOlderLeasedFailure(t *testing.T) {
 		Transport: PageTransportFunc(func(context.Context, ListRequest) ([]byte, error) {
 			calls++
 			if calls == 1 {
-				return append([]byte(nil), failureObject...), nil
+				return append([]byte(nil), failurePayload...), nil
 			}
-			return append([]byte(nil), pageObject...), nil
+			return append([]byte(nil), pagePayload...), nil
 		}),
 		Verifier: codec, Now: func() time.Time { return now }, MaxDirectories: 1,
 	})
@@ -271,8 +271,8 @@ func TestClientAcquireRetryTransfersPersistentFailureOwnership(t *testing.T) {
 	failure := mustDirectoryFailure(t, instance, directory, 132, DirectoryCodeTransientIO, true)
 	snapshot := onePageSnapshot(t, instance, directory, 133, "recovered")
 	codec := newMemoryObjectCodec()
-	failureObject, _ := codec.LoadSealedFailure(context.Background(), failure)
-	pageObject, _ := codec.LoadSealedPage(context.Background(), snapshot.Pages()[0])
+	failurePayload, _ := codec.LoadFailurePayload(context.Background(), failure)
+	pagePayload, _ := codec.LoadPagePayload(context.Background(), snapshot.Pages()[0])
 	now := time.Unix(1_700_000_400, 0)
 	var calls int
 	client, err := NewClient(ClientConfig{
@@ -280,9 +280,9 @@ func TestClientAcquireRetryTransfersPersistentFailureOwnership(t *testing.T) {
 		Transport: PageTransportFunc(func(context.Context, ListRequest) ([]byte, error) {
 			calls++
 			if calls == 1 {
-				return append([]byte(nil), failureObject...), nil
+				return append([]byte(nil), failurePayload...), nil
 			}
-			return append([]byte(nil), pageObject...), nil
+			return append([]byte(nil), pagePayload...), nil
 		}),
 		Verifier: codec, Now: func() time.Time { return now },
 	})
@@ -311,7 +311,7 @@ func TestClientRetryTransportFailurePreservesAuthenticatedFailure(t *testing.T) 
 	directory := directoryID(t, 111)
 	failure := mustDirectoryFailure(t, instance, directory, 112, DirectoryCodeTransientIO, true)
 	codec := newMemoryObjectCodec()
-	failureObject, err := codec.LoadSealedFailure(context.Background(), failure)
+	failurePayload, err := codec.LoadFailurePayload(context.Background(), failure)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +323,7 @@ func TestClientRetryTransportFailurePreservesAuthenticatedFailure(t *testing.T) 
 		Transport: PageTransportFunc(func(context.Context, ListRequest) ([]byte, error) {
 			calls++
 			if calls == 1 {
-				return append([]byte(nil), failureObject...), nil
+				return append([]byte(nil), failurePayload...), nil
 			}
 			return nil, transportErr
 		}),

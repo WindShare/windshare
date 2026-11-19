@@ -197,7 +197,7 @@ func TestMemoryBackendRejectsInvalidTransactionLifecycles(t *testing.T) {
 	if err := tx.PutChild(NodeRecord{}); err == nil {
 		t.Fatal("invalid child was staged")
 	}
-	if err := tx.PutPage(CatalogPage{}, SealedPageObject{}); err == nil {
+	if err := tx.PutPage(CatalogPage{}, PagePayload{}); err == nil {
 		t.Fatal("invalid page was staged")
 	}
 	if _, err := tx.Prepare(context.Background()); err == nil {

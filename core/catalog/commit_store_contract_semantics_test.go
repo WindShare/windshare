@@ -8,12 +8,12 @@ import (
 
 type contractReadBackend struct {
 	CatalogBackend
-	recover        func(context.Context) (ResourceUsage, error)
-	replayFailures func(context.Context, func(DirectoryFailureRecord, bool) error) error
-	loadDirectory  func(context.Context, DirectoryID) (CommittedDirectory, bool, error)
-	loadPage       func(context.Context, DirectoryID, DirectoryGeneration, uint32) (CatalogPage, bool, error)
-	loadPageObject func(context.Context, DirectoryID, DirectoryGeneration, uint32) (SealedPageObject, bool, error)
-	loadNode       func(context.Context, NodeID) (NodeRecord, bool, error)
+	recover         func(context.Context) (ResourceUsage, error)
+	replayFailures  func(context.Context, func(DirectoryFailureRecord, bool) error) error
+	loadDirectory   func(context.Context, DirectoryID) (CommittedDirectory, bool, error)
+	loadPage        func(context.Context, DirectoryID, DirectoryGeneration, uint32) (CatalogPage, bool, error)
+	loadPagePayload func(context.Context, DirectoryID, DirectoryGeneration, uint32) (PagePayload, bool, error)
+	loadNode        func(context.Context, NodeID) (NodeRecord, bool, error)
 }
 
 func (b contractReadBackend) Recover(ctx context.Context) (ResourceUsage, error) {
@@ -44,11 +44,11 @@ func (b contractReadBackend) LoadPage(ctx context.Context, directory DirectoryID
 	return b.CatalogBackend.LoadPage(ctx, directory, generation, index)
 }
 
-func (b contractReadBackend) LoadPageObject(ctx context.Context, directory DirectoryID, generation DirectoryGeneration, index uint32) (SealedPageObject, bool, error) {
-	if b.loadPageObject != nil {
-		return b.loadPageObject(ctx, directory, generation, index)
+func (b contractReadBackend) LoadPagePayload(ctx context.Context, directory DirectoryID, generation DirectoryGeneration, index uint32) (PagePayload, bool, error) {
+	if b.loadPagePayload != nil {
+		return b.loadPagePayload(ctx, directory, generation, index)
 	}
-	return b.CatalogBackend.LoadPageObject(ctx, directory, generation, index)
+	return b.CatalogBackend.LoadPagePayload(ctx, directory, generation, index)
 }
 
 func (b contractReadBackend) LoadNode(ctx context.Context, id NodeID) (NodeRecord, bool, error) {
@@ -223,8 +223,8 @@ func TestExistingCommitReplayValidatesEveryDurableBinding(t *testing.T) {
 		},
 		{
 			name: "page object read failure", backend: contractReadBackend{CatalogBackend: backend,
-				loadPageObject: func(context.Context, DirectoryID, DirectoryGeneration, uint32) (SealedPageObject, bool, error) {
-					return SealedPageObject{}, false, injected
+				loadPagePayload: func(context.Context, DirectoryID, DirectoryGeneration, uint32) (PagePayload, bool, error) {
+					return PagePayload{}, false, injected
 				}},
 			commit: commit, existing: existing, want: injected,
 		},
@@ -303,7 +303,7 @@ func TestCatalogReadAPIsRejectBackendIdentitySubstitution(t *testing.T) {
 	injected := errors.New("injected page read failure")
 	directory := idValue[DirectoryID](217)
 	generation := idValue[DirectoryGeneration](218)
-	object, err := NewSealedPageObject([]byte("object"))
+	object, err := NewPagePayload([]byte("object"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,14 +327,14 @@ func TestCatalogReadAPIsRejectBackendIdentitySubstitution(t *testing.T) {
 	}
 
 	store.backend = contractReadBackend{CatalogBackend: backend,
-		loadPageObject: func(context.Context, DirectoryID, DirectoryGeneration, uint32) (SealedPageObject, bool, error) {
+		loadPagePayload: func(context.Context, DirectoryID, DirectoryGeneration, uint32) (PagePayload, bool, error) {
 			return object, true, nil
 		},
 		loadPage: func(context.Context, DirectoryID, DirectoryGeneration, uint32) (CatalogPage, bool, error) {
 			return CatalogPage{}, false, injected
 		},
 	}
-	if _, _, err := store.PageObject(context.Background(), directory, generation, 0); !errors.Is(err, injected) {
+	if _, _, err := store.PagePayload(context.Background(), directory, generation, 0); !errors.Is(err, injected) {
 		t.Fatalf("page-object authority read error = %v", err)
 	}
 
@@ -370,7 +370,7 @@ func contractStoreConfig(t *testing.T, backend CatalogBackend, spill SpillFactor
 	return StoreConfig{
 		ShareInstance: idValue[ShareInstance](230), Backend: backend,
 		ProcessBudget: generousBudget(t, "contract-process"), ShareBudget: generousBudget(t, "contract-share"),
-		PageSealer: semanticTestCommitter{}, SpillFactory: spill,
+		PageEncoder: semanticTestCommitter{}, SpillFactory: spill,
 	}
 }
 

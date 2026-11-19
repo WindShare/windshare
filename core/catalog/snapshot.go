@@ -11,10 +11,10 @@ import (
 )
 
 const (
-	MaxCatalogPageEntries     = 256
-	MaxCatalogPageObjectBytes = 60 << 10
-	MaxDirectoryEntries       = 1_048_576
-	PageCommitmentBytes       = 32
+	MaxCatalogPageEntries  = 256
+	MaxCatalogPayloadBytes = 60 << 10
+	MaxDirectoryEntries    = 1_048_576
+	PageCommitmentBytes    = 32
 	// These charges deliberately exceed the current Go struct headers so a
 	// receiver budget bounds decoded catalog state, not merely compact wire bytes.
 	CatalogPageMemoryOverhead       = 192
@@ -31,10 +31,9 @@ var (
 
 type PageCommitment [PageCommitmentBytes]byte
 
-// SealedPageObject is the exact transport-neutral sender object committed for a
-// page. Catalog backends persist it opaquely in the same transaction as the
-// semantic page; crypto remains owned by the consumer-provided PageSealer.
-type SealedPageObject struct {
+// PagePayload carries the encoded bytes committed alongside a catalog page.
+// The commitment lets the backend check that replay uses those exact bytes.
+type PagePayload struct {
 	encoded    []byte
 	commitment PageCommitment
 }
@@ -141,20 +140,20 @@ func NewSyntheticRootCommit(spec SyntheticRootCommitSpec) (DirectoryCommit, erro
 	}, nil
 }
 
-func NewSealedPageObject(encoded []byte) (SealedPageObject, error) {
-	if len(encoded) == 0 || len(encoded) > MaxCatalogPageObjectBytes {
-		return SealedPageObject{}, fmt.Errorf("catalog sealed page object has invalid length %d", len(encoded))
+func NewPagePayload(encoded []byte) (PagePayload, error) {
+	if len(encoded) == 0 || len(encoded) > MaxCatalogPayloadBytes {
+		return PagePayload{}, fmt.Errorf("catalog page payload has invalid length %d", len(encoded))
 	}
 	digest := sha256.Sum256(encoded)
-	return SealedPageObject{
+	return PagePayload{
 		encoded: append([]byte(nil), encoded...), commitment: PageCommitment(digest),
 	}, nil
 }
 
-func (o SealedPageObject) Bytes() []byte                { return append([]byte(nil), o.encoded...) }
-func (o SealedPageObject) Commitment() PageCommitment   { return o.commitment }
-func (o SealedPageObject) IsZero() bool                 { return len(o.encoded) == 0 }
-func (o SealedPageObject) EstimatedMemoryBytes() uint64 { return uint64(len(o.encoded)) }
+func (o PagePayload) Bytes() []byte                { return append([]byte(nil), o.encoded...) }
+func (o PagePayload) Commitment() PageCommitment   { return o.commitment }
+func (o PagePayload) IsZero() bool                 { return len(o.encoded) == 0 }
+func (o PagePayload) EstimatedMemoryBytes() uint64 { return uint64(len(o.encoded)) }
 
 func NewPageCommitment(raw []byte) (PageCommitment, error) {
 	if len(raw) != PageCommitmentBytes {
@@ -195,15 +194,15 @@ func (function PageCommitterFunc) Commit(input PageCommitInput) (PageCommitment,
 	return function(input)
 }
 
-// PageSealer encodes immutable page payloads. Catalog owns atomic
+// PageEncoder encodes immutable page payloads. Catalog owns atomic
 // persistence and replay of the returned bytes, but never interprets them.
-type PageSealer interface {
-	Seal(PageCommitInput) (SealedPageObject, error)
+type PageEncoder interface {
+	EncodePage(PageCommitInput) (PagePayload, error)
 }
 
-type PageSealerFunc func(PageCommitInput) (SealedPageObject, error)
+type PageEncoderFunc func(PageCommitInput) (PagePayload, error)
 
-func (function PageSealerFunc) Seal(input PageCommitInput) (SealedPageObject, error) {
+func (function PageEncoderFunc) EncodePage(input PageCommitInput) (PagePayload, error) {
 	return function(input)
 }
 
@@ -245,23 +244,23 @@ func NewCatalogPage(spec CatalogPageSpec, committer PageCommitter) (CatalogPage,
 	return catalogPageWithCommitment(spec, entries, commitment)
 }
 
-func sealCatalogPage(spec CatalogPageSpec, sealer PageSealer) (CatalogPage, SealedPageObject, error) {
+func encodeCatalogPagePayload(spec CatalogPageSpec, encoder PageEncoder) (CatalogPage, PagePayload, error) {
 	entries, input, err := prepareCatalogPage(spec)
 	if err != nil {
-		return CatalogPage{}, SealedPageObject{}, err
+		return CatalogPage{}, PagePayload{}, err
 	}
-	if sealer == nil {
-		return CatalogPage{}, SealedPageObject{}, errors.New("catalog page requires a page sealer")
+	if encoder == nil {
+		return CatalogPage{}, PagePayload{}, errors.New("catalog page requires a page encoder")
 	}
-	object, err := sealer.Seal(input)
+	payload, err := encoder.EncodePage(input)
 	if err != nil {
-		return CatalogPage{}, SealedPageObject{}, fmt.Errorf("seal catalog page: %w", err)
+		return CatalogPage{}, PagePayload{}, fmt.Errorf("encode catalog page: %w", err)
 	}
-	if object.IsZero() || object.Commitment().IsZero() {
-		return CatalogPage{}, SealedPageObject{}, errors.New("catalog page sealer returned an empty object")
+	if payload.IsZero() || payload.Commitment().IsZero() {
+		return CatalogPage{}, PagePayload{}, errors.New("catalog page encoder returned an empty payload")
 	}
-	page, err := catalogPageWithCommitment(spec, entries, object.Commitment())
-	return page, object, err
+	page, err := catalogPageWithCommitment(spec, entries, payload.Commitment())
+	return page, payload, err
 }
 
 func prepareCatalogPage(spec CatalogPageSpec) ([]Entry, PageCommitInput, error) {

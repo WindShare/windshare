@@ -22,7 +22,7 @@ type fileCatalogTransaction struct {
 	meter           ResourceMeter
 	path            string
 	pagesPath       string
-	objectsPath     string
+	payloadsPath    string
 	children        *os.File
 	directoryRecord NodeRecord
 	pending         []NodeRecord
@@ -148,14 +148,14 @@ func (t *fileCatalogTransaction) PutChild(record NodeRecord) error {
 	return nil
 }
 
-func (t *fileCatalogTransaction) PutPage(page CatalogPage, object SealedPageObject) (resultErr error) {
+func (t *fileCatalogTransaction) PutPage(page CatalogPage, payload PagePayload) (resultErr error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if err := t.ensureOpen(); err != nil {
 		return err
 	}
 	if t.prepared || page.DirectoryID() != t.directory || page.Generation() != t.generation ||
-		len(t.pending) != len(page.entries) || object.IsZero() || object.Commitment() != page.Commitment() {
+		len(t.pending) != len(page.entries) || payload.IsZero() || payload.Commitment() != page.Commitment() {
 		return errors.New("catalog transaction page does not match its target or private records")
 	}
 	for index, record := range t.pending {
@@ -181,9 +181,9 @@ func (t *fileCatalogTransaction) PutPage(page CatalogPage, object SealedPageObje
 	if err := t.stage(path, encoded, FileFaultStagePage); err != nil {
 		return err
 	}
-	objectBytes := object.Bytes()
-	objectPath := filepath.Join(t.objectsPath, fmt.Sprintf("%08x.object", page.pageIndex))
-	if err := t.stage(objectPath, objectBytes, FileFaultStagePageObject); err != nil {
+	payloadBytes := payload.Bytes()
+	payloadPath := filepath.Join(t.payloadsPath, fmt.Sprintf("%08x.object", page.pageIndex))
+	if err := t.stage(payloadPath, payloadBytes, FileFaultStagePagePayload); err != nil {
 		return err
 	}
 	if err := t.meter.Release(ResourceUsage{MemoryBytes: t.pendingMemory}); err != nil {
@@ -192,7 +192,7 @@ func (t *fileCatalogTransaction) PutPage(page CatalogPage, object SealedPageObje
 	t.pendingMemory = 0
 	t.pending = t.pending[:0]
 	hashCatalogObject(t.digest, 3, encoded)
-	hashCatalogObject(t.digest, 4, objectBytes)
+	hashCatalogObject(t.digest, 4, payloadBytes)
 	return nil
 }
 
@@ -346,7 +346,7 @@ func (t *fileCatalogTransaction) Publish(ctx context.Context) (CommittedDirector
 	// No reader can observe target while the backend write lock is held. That
 	// lets a failed parent-directory sync roll the rename back without exposing a
 	// generation which the caller was told had failed.
-	for _, path := range []string{t.pagesPath, t.objectsPath, t.path} {
+	for _, path := range []string{t.pagesPath, t.payloadsPath, t.path} {
 		if err := syncCatalogDirectory(path); err != nil {
 			return CommittedDirectory{}, fmt.Errorf("sync catalog transaction directory: %w", err)
 		}

@@ -18,7 +18,7 @@ const (
 	failureMetaBodyBytes = 152
 	failureMetaBytes     = failureMetaBodyBytes + sha256.Size
 	failureMetaName      = "failure.meta"
-	failureObjectName    = "failure.object"
+	failurePayloadName   = "failure.object"
 	failureStorageSchema = uint16(1)
 
 	failureDirectoryReadBatch = 128
@@ -27,10 +27,10 @@ const (
 var failureMagic = [4]byte{'W', 'S', 'F', '3'}
 
 type fileFailureMeta struct {
-	record     DirectoryFailureRecord
-	commitment [sha256.Size]byte
-	objectSize uint64
-	spillBytes uint64
+	record      DirectoryFailureRecord
+	commitment  [sha256.Size]byte
+	payloadSize uint64
+	spillBytes  uint64
 }
 
 func encodeFileFailureMeta(meta fileFailureMeta) []byte {
@@ -47,7 +47,7 @@ func encodeFileFailureMeta(meta fileFailureMeta) []byte {
 		encoded[89] = 1
 		binary.BigEndian.PutUint64(encoded[96:104], uint64(meta.record.retryAfter/time.Millisecond))
 	}
-	binary.BigEndian.PutUint64(encoded[104:112], meta.objectSize)
+	binary.BigEndian.PutUint64(encoded[104:112], meta.payloadSize)
 	copy(encoded[112:144], meta.commitment[:])
 	binary.BigEndian.PutUint64(encoded[144:152], meta.spillBytes)
 	checksum := sha256.Sum256(encoded[:failureMetaBodyBytes])
@@ -88,11 +88,11 @@ func decodeFileFailureMeta(encoded []byte) (fileFailureMeta, error) {
 	} else if retryable != 0 || retryMilliseconds != 0 {
 		return fileFailureMeta{}, ErrCorruptCatalogStorage
 	}
-	meta.objectSize = binary.BigEndian.Uint64(encoded[104:112])
+	meta.payloadSize = binary.BigEndian.Uint64(encoded[104:112])
 	copy(meta.commitment[:], encoded[112:144])
 	meta.spillBytes = binary.BigEndian.Uint64(encoded[144:152])
-	if err := meta.record.valid(); err != nil || meta.objectSize == 0 ||
-		meta.objectSize > MaxCatalogPageObjectBytes || meta.spillBytes != failureMetaBytes+meta.objectSize {
+	if err := meta.record.valid(); err != nil || meta.payloadSize == 0 ||
+		meta.payloadSize > MaxCatalogPayloadBytes || meta.spillBytes != failureMetaBytes+meta.payloadSize {
 		return fileFailureMeta{}, ErrCorruptCatalogStorage
 	}
 	return meta, nil
@@ -105,14 +105,14 @@ func (b *FileCatalogBackend) failurePath(directory DirectoryID, attempt ScanAtte
 func (b *FileCatalogBackend) CommitFailure(
 	ctx context.Context,
 	record DirectoryFailureRecord,
-	object SealedFailureObject,
+	payload FailurePayload,
 	meter ResourceMeter,
 	prepare func(ResourceUsage) error,
 ) (FailurePreparation, error) {
 	if err := ctx.Err(); err != nil {
 		return FailurePreparation{}, err
 	}
-	if err := record.valid(); err != nil || object.IsZero() || meter == nil || prepare == nil || record.share != b.share {
+	if err := record.valid(); err != nil || payload.IsZero() || meter == nil || prepare == nil || record.share != b.share {
 		return FailurePreparation{}, errors.Join(errors.New("catalog failure commit is invalid"), err)
 	}
 	b.mu.Lock()
@@ -120,7 +120,7 @@ func (b *FileCatalogBackend) CommitFailure(
 	if b.closed {
 		return FailurePreparation{}, ErrCatalogClosed
 	}
-	existing, handled, err := b.prepareExistingFailureLocked(record, object)
+	existing, handled, err := b.prepareExistingFailureLocked(record, payload)
 	if err != nil {
 		return FailurePreparation{}, err
 	}
@@ -130,7 +130,7 @@ func (b *FileCatalogBackend) CommitFailure(
 	if err := b.requireFailurePredecessorLocked(record); err != nil {
 		return FailurePreparation{}, err
 	}
-	transactionPath, meta, err := b.stageFailureLocked(record, object, meter)
+	transactionPath, meta, err := b.stageFailureLocked(record, payload, meter)
 	if err != nil {
 		return FailurePreparation{}, err
 	}
@@ -162,13 +162,13 @@ func (b *FileCatalogBackend) CommitFailure(
 
 func (b *FileCatalogBackend) prepareExistingFailureLocked(
 	record DirectoryFailureRecord,
-	object SealedFailureObject,
+	payload FailurePayload,
 ) (FailurePreparation, bool, error) {
 	existing, found, err := b.loadFailureLocked(record.directory, record.attempt)
 	if err != nil || !found {
 		return FailurePreparation{}, false, err
 	}
-	if existing.record != record || existing.commitment != object.commitment {
+	if existing.record != record || existing.commitment != payload.commitment {
 		return FailurePreparation{}, false, ErrGenerationConflict
 	}
 	return FailurePreparation{Record: record, Existing: true}, true, nil
@@ -191,7 +191,7 @@ func (b *FileCatalogBackend) requireFailurePredecessorLocked(record DirectoryFai
 
 func (b *FileCatalogBackend) stageFailureLocked(
 	record DirectoryFailureRecord,
-	object SealedFailureObject,
+	payload FailurePayload,
 	meter ResourceMeter,
 ) (path string, meta fileFailureMeta, resultErr error) {
 	if b.faults != nil {
@@ -210,13 +210,13 @@ func (b *FileCatalogBackend) stageFailureLocked(
 		}
 	}()
 	meta = fileFailureMeta{
-		record: record, commitment: object.commitment, objectSize: uint64(len(object.encoded)),
-		spillBytes: failureMetaBytes + uint64(len(object.encoded)),
+		record: record, commitment: payload.commitment, payloadSize: uint64(len(payload.encoded)),
+		spillBytes: failureMetaBytes + uint64(len(payload.encoded)),
 	}
 	if err := stageFailureFile(filepath.Join(path, failureMetaName), encodeFileFailureMeta(meta), meter); err != nil {
 		return "", fileFailureMeta{}, err
 	}
-	if err := stageFailureFile(filepath.Join(path, failureObjectName), object.Bytes(), meter); err != nil {
+	if err := stageFailureFile(filepath.Join(path, failurePayloadName), payload.Bytes(), meter); err != nil {
 		return "", fileFailureMeta{}, err
 	}
 	if err := syncCatalogDirectory(path); err != nil {
@@ -288,32 +288,32 @@ func stageFailureFile(path string, encoded []byte, meter ResourceMeter) error {
 	return file.Close()
 }
 
-func (b *FileCatalogBackend) LoadFailureObject(
+func (b *FileCatalogBackend) LoadFailurePayload(
 	ctx context.Context,
 	directory DirectoryID,
 	attempt ScanAttemptID,
-) (SealedFailureObject, bool, error) {
+) (FailurePayload, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return SealedFailureObject{}, false, err
+		return FailurePayload{}, false, err
 	}
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	if b.closed {
-		return SealedFailureObject{}, false, ErrCatalogClosed
+		return FailurePayload{}, false, ErrCatalogClosed
 	}
 	meta, found, err := b.loadFailureLocked(directory, attempt)
 	if err != nil || !found {
-		return SealedFailureObject{}, found, err
+		return FailurePayload{}, found, err
 	}
-	encoded, err := readCatalogObject(filepath.Join(b.failurePath(directory, attempt), failureObjectName))
+	encoded, err := readCatalogObject(filepath.Join(b.failurePath(directory, attempt), failurePayloadName))
 	if err != nil {
-		return SealedFailureObject{}, false, err
+		return FailurePayload{}, false, err
 	}
-	object, err := NewSealedFailureObject(encoded)
-	if err != nil || object.commitment != meta.commitment {
-		return SealedFailureObject{}, false, ErrCorruptCatalogStorage
+	payload, err := NewFailurePayload(encoded)
+	if err != nil || payload.commitment != meta.commitment {
+		return FailurePayload{}, false, ErrCorruptCatalogStorage
 	}
-	return object, true, nil
+	return payload, true, nil
 }
 
 func (b *FileCatalogBackend) ReplayFailures(ctx context.Context, yield func(DirectoryFailureRecord, bool) error) error {
@@ -394,8 +394,8 @@ func (b *FileCatalogBackend) loadFailureLocked(
 	if err != nil || meta.record.share != b.share || meta.record.directory != directory || meta.record.attempt != attempt {
 		return fileFailureMeta{}, false, ErrCorruptCatalogStorage
 	}
-	objectBytes, err := readCatalogObject(filepath.Join(path, failureObjectName))
-	if err != nil || uint64(len(objectBytes)) != meta.objectSize || sha256.Sum256(objectBytes) != meta.commitment {
+	payloadBytes, err := readCatalogObject(filepath.Join(path, failurePayloadName))
+	if err != nil || uint64(len(payloadBytes)) != meta.payloadSize || sha256.Sum256(payloadBytes) != meta.commitment {
 		return fileFailureMeta{}, false, ErrCorruptCatalogStorage
 	}
 	size, err := directoryTreeBytes(path)

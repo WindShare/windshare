@@ -100,7 +100,7 @@ func TestMemoryTransactionRejectsOrderingMeterAndLifecycleFaults(t *testing.T) {
 		}
 		transaction, meter := newTransaction(t)
 		page := makePage(t, nil)
-		if err := transaction.PutPage(page, mustTestPageObject(t, page)); err == nil {
+		if err := transaction.PutPage(page, mustTestPagePayload(t, page)); err == nil {
 			t.Fatal("page without private record alignment succeeded")
 		}
 		_ = transaction.Abort()
@@ -109,7 +109,7 @@ func TestMemoryTransactionRejectsOrderingMeterAndLifecycleFaults(t *testing.T) {
 		transaction, meter = newTransaction(t)
 		other, _ := scannedFile(t, 104, "other", 1).nodeRecord(directoryID)
 		page = makePage(t, []Entry{other.Entry()})
-		if err := transaction.PutPage(page, mustTestPageObject(t, page)); err == nil {
+		if err := transaction.PutPage(page, mustTestPagePayload(t, page)); err == nil {
 			t.Fatal("page changed its private record")
 		}
 		_ = transaction.Abort()
@@ -126,7 +126,7 @@ func TestMemoryTransactionRejectsOrderingMeterAndLifecycleFaults(t *testing.T) {
 				failConsumeAt: fault.consumeAt, failReleaseAt: fault.releaseAt, err: injected,
 			}
 			page = makePage(t, []Entry{child.Entry()})
-			if err := transaction.PutPage(page, mustTestPageObject(t, page)); !errors.Is(err, injected) {
+			if err := transaction.PutPage(page, mustTestPagePayload(t, page)); !errors.Is(err, injected) {
 				t.Fatalf("page meter fault %+v = %v", fault, err)
 			}
 			_ = transaction.Abort()
@@ -165,7 +165,7 @@ func TestMemoryTransactionRejectsOrderingMeterAndLifecycleFaults(t *testing.T) {
 		if err := transaction.PutChild(child); err == nil {
 			t.Fatal("finished memory transaction accepted a child")
 		}
-		if err := transaction.PutPage(CatalogPage{}, SealedPageObject{}); err == nil {
+		if err := transaction.PutPage(CatalogPage{}, PagePayload{}); err == nil {
 			t.Fatal("finished memory transaction accepted a page")
 		}
 		if _, err := transaction.Prepare(context.Background()); err == nil {

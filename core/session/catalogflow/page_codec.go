@@ -127,8 +127,8 @@ func encodeCatalogPage(page catalog.CatalogPage) ([]byte, error) {
 	})
 }
 
-// EncodeCatalogPageInput lets a PageCommitter seal the exact page bytes before
-// NewCatalogPage stores the resulting full-object digest as its commitment.
+// The page bytes exclude their own commitment so their digest can become the
+// commitment referenced by the next page.
 func encodeCatalogPageInput(input catalog.PageCommitInput) ([]byte, error) {
 	return encodeCatalogPageFields(input)
 }

@@ -12,7 +12,7 @@ import type {
 import {
   decodeCatalogPayload,
   CATALOG_DIRECTORY_ENTRIES,
-  CATALOG_PAGE_OBJECT_BYTES,
+  MAX_CATALOG_PAYLOAD_BYTES,
 } from './records'
 import {
   CatalogPageStoreError,
@@ -340,25 +340,25 @@ export class CatalogClient {
     readonly opened: Awaited<ReturnType<typeof decodeCatalogPayload>>
     readonly spoolBytes: number
   }> {
-    const object = await this.#operations.fetchPage(
+    const payload = await this.#operations.fetchPage(
       request,
       signal,
       (progress) => this.#publishScanProgress(progress),
     )
     signal.throwIfAborted()
-    const spoolBytes = previousSpoolBytes + object.byteLength
+    const spoolBytes = previousSpoolBytes + payload.byteLength
     if (
-      object.byteLength === 0 ||
-      object.byteLength > CATALOG_PAGE_OBJECT_BYTES ||
+      payload.byteLength === 0 ||
+      payload.byteLength > MAX_CATALOG_PAYLOAD_BYTES ||
       spoolBytes > MAXIMUM_CATALOG_SPOOL_BYTES
     ) {
       return this.#failProtocol(catalogFailure(new CatalogClientError(
-        'Catalog object exceeded its spool admission',
-      ), { invariant: 'spool-budget', actualObjectBytes: object.byteLength, maximumObjectBytes: CATALOG_PAGE_OBJECT_BYTES,
+        'Catalog payload exceeded its spool admission',
+      ), { invariant: 'spool-budget', actualObjectBytes: payload.byteLength, maximumObjectBytes: MAX_CATALOG_PAYLOAD_BYTES,
         actualSpoolBytes: spoolBytes, maximumSpoolBytes: MAXIMUM_CATALOG_SPOOL_BYTES, directoryId: encodeBase64Url(request.directoryId), pageIndex: request.pageIndex }))
     }
     try {
-      const opened = await decodeCatalogPayload(object, this.#descriptor, request)
+      const opened = await decodeCatalogPayload(payload, this.#descriptor, request)
       signal.throwIfAborted()
       return {
         opened,

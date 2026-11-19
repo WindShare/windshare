@@ -307,7 +307,7 @@ func NewTransferJob(config TransferJobConfig) (*TransferJob, error) {
 	walkLimits, ok := catalogwalk.NewLimits(
 		uint32(replayPageCapacity),
 		catalog.MaxDirectoryEntries,
-		min(uint64(replayPageCapacity)*(catalog.CatalogPageMemoryOverhead+catalog.MaxCatalogPageObjectBytes), defaultGenerationReplayBytes),
+		min(uint64(replayPageCapacity)*(catalog.CatalogPageMemoryOverhead+catalog.MaxCatalogPayloadBytes), defaultGenerationReplayBytes),
 	)
 	if !ok {
 		return nil, ErrInvalidTransferJob

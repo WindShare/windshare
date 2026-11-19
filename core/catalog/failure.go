@@ -81,51 +81,53 @@ func (r DirectoryFailureRecord) valid() error {
 	return nil
 }
 
-type SealedFailureObject struct {
+// FailurePayload carries the bytes committed with a directory scan failure.
+// Its digest lets the backend check payload integrity on replay.
+type FailurePayload struct {
 	encoded    []byte
 	commitment [sha256.Size]byte
 }
 
-func NewSealedFailureObject(encoded []byte) (SealedFailureObject, error) {
-	if len(encoded) == 0 || len(encoded) > MaxCatalogPageObjectBytes {
-		return SealedFailureObject{}, fmt.Errorf("catalog sealed failure object has invalid length %d", len(encoded))
+func NewFailurePayload(encoded []byte) (FailurePayload, error) {
+	if len(encoded) == 0 || len(encoded) > MaxCatalogPayloadBytes {
+		return FailurePayload{}, fmt.Errorf("catalog failure payload has invalid length %d", len(encoded))
 	}
-	return SealedFailureObject{encoded: append([]byte(nil), encoded...), commitment: sha256.Sum256(encoded)}, nil
+	return FailurePayload{encoded: append([]byte(nil), encoded...), commitment: sha256.Sum256(encoded)}, nil
 }
 
-func (o SealedFailureObject) Bytes() []byte { return append([]byte(nil), o.encoded...) }
-func (o SealedFailureObject) IsZero() bool  { return len(o.encoded) == 0 }
+func (o FailurePayload) Bytes() []byte { return append([]byte(nil), o.encoded...) }
+func (o FailurePayload) IsZero() bool  { return len(o.encoded) == 0 }
 
-type FailureSealer interface {
-	SealFailure(DirectoryFailureRecord) (SealedFailureObject, error)
+type FailureEncoder interface {
+	EncodeFailure(DirectoryFailureRecord) (FailurePayload, error)
 }
 
-type FailureSealerFunc func(DirectoryFailureRecord) (SealedFailureObject, error)
+type FailureEncoderFunc func(DirectoryFailureRecord) (FailurePayload, error)
 
-func (function FailureSealerFunc) SealFailure(record DirectoryFailureRecord) (SealedFailureObject, error) {
+func (function FailureEncoderFunc) EncodeFailure(record DirectoryFailureRecord) (FailurePayload, error) {
 	return function(record)
 }
 
 type memoryFailure struct {
-	record DirectoryFailureRecord
-	object []byte
-	usage  ResourceUsage
+	record  DirectoryFailureRecord
+	payload []byte
+	usage   ResourceUsage
 }
 
 func (b *MemoryCatalogBackend) CommitFailure(
 	ctx context.Context,
 	record DirectoryFailureRecord,
-	object SealedFailureObject,
+	payload FailurePayload,
 	meter ResourceMeter,
 	prepare func(ResourceUsage) error,
 ) (FailurePreparation, error) {
 	if err := ctx.Err(); err != nil {
 		return FailurePreparation{}, err
 	}
-	if err := record.valid(); err != nil || object.IsZero() || meter == nil || prepare == nil {
+	if err := record.valid(); err != nil || payload.IsZero() || meter == nil || prepare == nil {
 		return FailurePreparation{}, errors.Join(errors.New("catalog failure commit is invalid"), err)
 	}
-	charge := ResourceUsage{MemoryBytes: memoryObjectOverhead*2 + uint64(len(object.encoded))}
+	charge := ResourceUsage{MemoryBytes: memoryObjectOverhead*2 + uint64(len(payload.encoded))}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.closed {
@@ -133,8 +135,8 @@ func (b *MemoryCatalogBackend) CommitFailure(
 	}
 	attempts := b.failures[record.directory]
 	if existing, found := attempts[record.attempt]; found {
-		candidate := sha256.Sum256(existing.object)
-		if existing.record != record || candidate != object.commitment {
+		candidate := sha256.Sum256(existing.payload)
+		if existing.record != record || candidate != payload.commitment {
 			return FailurePreparation{}, ErrGenerationConflict
 		}
 		return FailurePreparation{Record: record, Existing: true}, nil
@@ -160,29 +162,29 @@ func (b *MemoryCatalogBackend) CommitFailure(
 		attempts = make(map[ScanAttemptID]memoryFailure)
 		b.failures[record.directory] = attempts
 	}
-	attempts[record.attempt] = memoryFailure{record: record, object: object.Bytes(), usage: charge}
+	attempts[record.attempt] = memoryFailure{record: record, payload: payload.Bytes(), usage: charge}
 	return FailurePreparation{Record: record, Usage: charge}, nil
 }
 
-func (b *MemoryCatalogBackend) LoadFailureObject(
+func (b *MemoryCatalogBackend) LoadFailurePayload(
 	ctx context.Context,
 	directory DirectoryID,
 	attempt ScanAttemptID,
-) (SealedFailureObject, bool, error) {
+) (FailurePayload, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return SealedFailureObject{}, false, err
+		return FailurePayload{}, false, err
 	}
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	if b.closed {
-		return SealedFailureObject{}, false, ErrCatalogClosed
+		return FailurePayload{}, false, ErrCatalogClosed
 	}
 	failure, found := b.failures[directory][attempt]
 	if !found {
-		return SealedFailureObject{}, false, nil
+		return FailurePayload{}, false, nil
 	}
-	object, err := NewSealedFailureObject(failure.object)
-	return object, err == nil, err
+	payload, err := NewFailurePayload(failure.payload)
+	return payload, err == nil, err
 }
 
 func (b *MemoryCatalogBackend) ReplayFailures(ctx context.Context, yield func(DirectoryFailureRecord, bool) error) error {
@@ -322,17 +324,17 @@ func (s *CatalogStore) persistAttemptFailure(
 	if err != nil {
 		return nil, err
 	}
-	if err := attempt.resources.Consume(ResourceUsage{MemoryBytes: MaxCatalogPageObjectBytes}); err != nil {
+	if err := attempt.resources.Consume(ResourceUsage{MemoryBytes: MaxCatalogPayloadBytes}); err != nil {
 		return nil, err
 	}
-	object, sealErr := s.failureSealer.SealFailure(record)
-	releaseErr := attempt.resources.Release(ResourceUsage{MemoryBytes: MaxCatalogPageObjectBytes})
-	if err := errors.Join(sealErr, releaseErr); err != nil {
+	payload, encodeErr := s.failureEncoder.EncodeFailure(record)
+	releaseErr := attempt.resources.Release(ResourceUsage{MemoryBytes: MaxCatalogPayloadBytes})
+	if err := errors.Join(encodeErr, releaseErr); err != nil {
 		return nil, err
 	}
 	var retained *BudgetReservation
 	prepared, err := s.backend.CommitFailure(
-		attempt.ctx, record, object, attempt.resources,
+		attempt.ctx, record, payload, attempt.resources,
 		func(usage ResourceUsage) error {
 			var retainErr error
 			retained, retainErr = attempt.resources.retain(usage, session)
@@ -389,25 +391,25 @@ func directoryFailureFromRecord(record DirectoryFailureRecord, cause error) *Dir
 	}
 }
 
-func (s *CatalogStore) FailureObject(
+func (s *CatalogStore) FailurePayload(
 	ctx context.Context,
 	directory DirectoryID,
 	attempt ScanAttemptID,
-) (SealedFailureObject, bool, error) {
+) (FailurePayload, bool, error) {
 	if s.isClosed() {
-		return SealedFailureObject{}, false, ErrCatalogClosed
+		return FailurePayload{}, false, ErrCatalogClosed
 	}
-	object, found, err := s.backend.LoadFailureObject(ctx, directory, attempt)
+	payload, found, err := s.backend.LoadFailurePayload(ctx, directory, attempt)
 	if err != nil || !found {
-		return SealedFailureObject{}, found, err
+		return FailurePayload{}, found, err
 	}
 	s.mu.Lock()
 	_, known := s.usedAttempts[scanAttemptIdentity{directory: directory, attempt: attempt}]
 	s.mu.Unlock()
 	if !known {
-		return SealedFailureObject{}, false, ErrCorruptCatalogStorage
+		return FailurePayload{}, false, ErrCorruptCatalogStorage
 	}
-	return object, true, nil
+	return payload, true, nil
 }
 
 func (s *CatalogStore) completeFailedAttemptLocked(attempt *scanAttempt, resultErr error) {

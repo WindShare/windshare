@@ -93,18 +93,18 @@ func TestFailureRecordValidationAndClassificationRejectAmbiguousAuthority(t *tes
 			}
 		})
 	}
-	if _, err := NewSealedFailureObject(nil); err == nil {
-		t.Fatal("empty sealed failure object was accepted")
+	if _, err := NewFailurePayload(nil); err == nil {
+		t.Fatal("empty failure payload was accepted")
 	}
-	if _, err := NewSealedFailureObject(make([]byte, MaxCatalogPageObjectBytes+1)); err == nil {
-		t.Fatal("oversized sealed failure object was accepted")
+	if _, err := NewFailurePayload(make([]byte, MaxCatalogPayloadBytes+1)); err == nil {
+		t.Fatal("oversized failure payload was accepted")
 	}
-	wantSealErr := errors.New("seal failed")
-	sealer := FailureSealerFunc(func(DirectoryFailureRecord) (SealedFailureObject, error) {
-		return SealedFailureObject{}, wantSealErr
+	wantEncodeErr := errors.New("encode failed")
+	encoder := FailureEncoderFunc(func(DirectoryFailureRecord) (FailurePayload, error) {
+		return FailurePayload{}, wantEncodeErr
 	})
-	if _, err := sealer.SealFailure(valid); !errors.Is(err, wantSealErr) {
-		t.Fatalf("failure sealer function = %v", err)
+	if _, err := encoder.EncodeFailure(valid); !errors.Is(err, wantEncodeErr) {
+		t.Fatalf("failure encoder function = %v", err)
 	}
 
 	for cause, want := range map[error]FailureKind{
@@ -160,7 +160,7 @@ func failureRecordWithLink(t *testing.T, attempt, generation, previous byte) Dir
 func TestMemoryFailureBackendIdempotencyReplayCancellationAndCorruption(t *testing.T) {
 	backend := NewMemoryCatalogBackend()
 	record := testFailureRecord(t, 30, 40, ScanAttemptID{}, FailureKindPermanentIO)
-	object, _ := NewSealedFailureObject([]byte("failure-a"))
+	object, _ := NewFailurePayload([]byte("failure-a"))
 	meter := &failureTestMeter{}
 	prepareCalls := 0
 	prepare := func(ResourceUsage) error { prepareCalls++; return nil }
@@ -173,7 +173,7 @@ func TestMemoryFailureBackendIdempotencyReplayCancellationAndCorruption(t *testi
 	if err != nil || !prepared.Existing || prepareCalls != 1 {
 		t.Fatalf("idempotent memory failure commit = %+v err=%v calls=%d", prepared, err, prepareCalls)
 	}
-	different, _ := NewSealedFailureObject([]byte("failure-b"))
+	different, _ := NewFailurePayload([]byte("failure-b"))
 	if _, err := backend.CommitFailure(context.Background(), record, different, meter, prepare); !errors.Is(err, ErrGenerationConflict) {
 		t.Fatalf("conflicting failure object = %v", err)
 	}
@@ -199,14 +199,14 @@ func TestMemoryFailureBackendIdempotencyReplayCancellationAndCorruption(t *testi
 	}); err == nil {
 		t.Fatal("memory prepare failure was ignored")
 	}
-	loaded, found, err := backend.LoadFailureObject(context.Background(), record.directory, record.attempt)
+	loaded, found, err := backend.LoadFailurePayload(context.Background(), record.directory, record.attempt)
 	if err != nil || !found || string(loaded.Bytes()) != "failure-a" {
 		t.Fatalf("loaded memory failure = %q found=%v err=%v", loaded.Bytes(), found, err)
 	}
-	if _, found, err := backend.LoadFailureObject(context.Background(), record.directory, idValue[ScanAttemptID](77)); err != nil || found {
+	if _, found, err := backend.LoadFailurePayload(context.Background(), record.directory, idValue[ScanAttemptID](77)); err != nil || found {
 		t.Fatalf("missing memory failure = found=%v err=%v", found, err)
 	}
-	if _, _, err := backend.LoadFailureObject(cancelled, record.directory, record.attempt); !errors.Is(err, context.Canceled) {
+	if _, _, err := backend.LoadFailurePayload(cancelled, record.directory, record.attempt); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled memory failure load = %v", err)
 	}
 	active := 0
@@ -253,7 +253,7 @@ func TestMemoryFailureBackendIdempotencyReplayCancellationAndCorruption(t *testi
 	backend.mu.Lock()
 	otherRoot := testFailureRecord(t, 33, 43, ScanAttemptID{}, FailureKindPermanentIO)
 	backend.failures[record.directory][otherRoot.attempt] = memoryFailure{
-		record: otherRoot, object: []byte("other"), usage: ResourceUsage{MemoryBytes: 1},
+		record: otherRoot, payload: []byte("other"), usage: ResourceUsage{MemoryBytes: 1},
 	}
 	backend.mu.Unlock()
 	if err := backend.ReplayFailures(context.Background(), func(DirectoryFailureRecord, bool) error { return nil }); !errors.Is(err, ErrCorruptCatalogStorage) {
@@ -264,16 +264,16 @@ func TestMemoryFailureBackendIdempotencyReplayCancellationAndCorruption(t *testi
 	backend.mu.Unlock()
 	backend.mu.Lock()
 	corrupt := backend.failures[record.directory][record.attempt]
-	corrupt.object = nil
+	corrupt.payload = nil
 	backend.failures[record.directory][record.attempt] = corrupt
 	backend.mu.Unlock()
-	if _, _, err := backend.LoadFailureObject(context.Background(), record.directory, record.attempt); err == nil {
+	if _, _, err := backend.LoadFailurePayload(context.Background(), record.directory, record.attempt); err == nil {
 		t.Fatal("corrupt memory failure object was accepted")
 	}
 	if err := backend.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := backend.LoadFailureObject(context.Background(), record.directory, record.attempt); !errors.Is(err, ErrCatalogClosed) {
+	if _, _, err := backend.LoadFailurePayload(context.Background(), record.directory, record.attempt); !errors.Is(err, ErrCatalogClosed) {
 		t.Fatalf("closed memory failure load = %v", err)
 	}
 	if err := backend.ReplayFailures(context.Background(), func(DirectoryFailureRecord, bool) error { return nil }); !errors.Is(err, ErrCatalogClosed) {
@@ -289,9 +289,9 @@ func TestMemoryFailureBackendIdempotencyReplayCancellationAndCorruption(t *testi
 
 func TestFailureMetadataChecksumBindsEveryAuthorityField(t *testing.T) {
 	record := testFailureRecord(t, 50, 60, ScanAttemptID{}, FailureKindTransientIO)
-	object, _ := NewSealedFailureObject([]byte("opaque failure"))
+	object, _ := NewFailurePayload([]byte("opaque failure"))
 	valid := encodeFileFailureMeta(fileFailureMeta{
-		record: record, commitment: object.commitment, objectSize: uint64(len(object.encoded)),
+		record: record, commitment: object.commitment, payloadSize: uint64(len(object.encoded)),
 		spillBytes: failureMetaBytes + uint64(len(object.encoded)),
 	})
 	if _, err := decodeFileFailureMeta(valid); err != nil {
@@ -366,7 +366,7 @@ func TestFileFailureBackendIdempotencyConflictAndClosedState(t *testing.T) {
 		t.Fatal(err)
 	}
 	record := testFailureRecord(t, 70, 80, ScanAttemptID{}, FailureKindPermanentIO)
-	object, _ := NewSealedFailureObject([]byte("durable failure"))
+	object, _ := NewFailurePayload([]byte("durable failure"))
 	meter := &failureTestMeter{}
 	prepareCalls := 0
 	prepare := func(ResourceUsage) error { prepareCalls++; return nil }
@@ -378,11 +378,11 @@ func TestFileFailureBackendIdempotencyConflictAndClosedState(t *testing.T) {
 	if err != nil || !prepared.Existing || prepareCalls != 1 {
 		t.Fatalf("idempotent file failure commit = %+v err=%v", prepared, err)
 	}
-	conflict, _ := NewSealedFailureObject([]byte("other durable failure"))
+	conflict, _ := NewFailurePayload([]byte("other durable failure"))
 	if _, err := backend.CommitFailure(context.Background(), record, conflict, meter, prepare); !errors.Is(err, ErrGenerationConflict) {
 		t.Fatalf("conflicting durable failure = %v", err)
 	}
-	loaded, found, err := backend.LoadFailureObject(context.Background(), record.directory, record.attempt)
+	loaded, found, err := backend.LoadFailurePayload(context.Background(), record.directory, record.attempt)
 	if err != nil || !found || string(loaded.Bytes()) != "durable failure" {
 		t.Fatalf("loaded durable failure = %q found=%v err=%v", loaded.Bytes(), found, err)
 	}
@@ -394,10 +394,10 @@ func TestFileFailureBackendIdempotencyConflictAndClosedState(t *testing.T) {
 	if _, err := backend.CommitFailure(cancelled, record, object, meter, prepare); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled file commit = %v", err)
 	}
-	if _, found, err := backend.LoadFailureObject(context.Background(), record.directory, idValue[ScanAttemptID](99)); err != nil || found {
+	if _, found, err := backend.LoadFailurePayload(context.Background(), record.directory, idValue[ScanAttemptID](99)); err != nil || found {
 		t.Fatalf("missing file failure = found=%v err=%v", found, err)
 	}
-	if _, _, err := backend.LoadFailureObject(cancelled, record.directory, record.attempt); !errors.Is(err, context.Canceled) {
+	if _, _, err := backend.LoadFailurePayload(cancelled, record.directory, record.attempt); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled file failure load = %v", err)
 	}
 	wantYieldErr := errors.New("yield failed")
@@ -443,7 +443,7 @@ func TestFileFailureBackendIdempotencyConflictAndClosedState(t *testing.T) {
 	if err := backend.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := backend.LoadFailureObject(context.Background(), record.directory, record.attempt); !errors.Is(err, ErrCatalogClosed) {
+	if _, _, err := backend.LoadFailurePayload(context.Background(), record.directory, record.attempt); !errors.Is(err, ErrCatalogClosed) {
 		t.Fatalf("closed file failure load = %v", err)
 	}
 	if _, err := backend.CommitFailure(context.Background(), record, object, meter, prepare); !errors.Is(err, ErrCatalogClosed) {
@@ -480,7 +480,7 @@ func TestFailureRecoveryVisitorsPropagateCancellationAndConsumerErrors(t *testin
 		t.Fatal(err)
 	}
 	record := testFailureRecord(t, 90, 91, ScanAttemptID{}, FailureKindPermanentIO)
-	object, _ := NewSealedFailureObject([]byte("visitor failure"))
+	object, _ := NewFailurePayload([]byte("visitor failure"))
 	if _, err := backend.CommitFailure(
 		context.Background(), record, object, &failureTestMeter{}, func(ResourceUsage) error { return nil },
 	); err != nil {
@@ -511,10 +511,10 @@ func TestFailureRecoveryVisitorsPropagateCancellationAndConsumerErrors(t *testin
 	}
 }
 
-func TestCatalogStoreFailureObjectRequiresPublishedAttemptAuthority(t *testing.T) {
+func TestCatalogStoreFailurePayloadRequiresPublishedAttemptAuthority(t *testing.T) {
 	backend := NewMemoryCatalogBackend()
 	record := testFailureRecord(t, 100, 101, ScanAttemptID{}, FailureKindPermanentIO)
-	object, _ := NewSealedFailureObject([]byte("orphan failure"))
+	object, _ := NewFailurePayload([]byte("orphan failure"))
 	if _, err := backend.CommitFailure(
 		context.Background(), record, object, &failureTestMeter{}, func(ResourceUsage) error { return nil },
 	); err != nil {
@@ -523,27 +523,27 @@ func TestCatalogStoreFailureObjectRequiresPublishedAttemptAuthority(t *testing.T
 	store := &CatalogStore{
 		backend: backend, usedAttempts: make(map[scanAttemptIdentity]struct{}),
 	}
-	if _, _, err := store.FailureObject(context.Background(), record.directory, record.attempt); !errors.Is(err, ErrCorruptCatalogStorage) {
+	if _, _, err := store.FailurePayload(context.Background(), record.directory, record.attempt); !errors.Is(err, ErrCorruptCatalogStorage) {
 		t.Fatalf("unpublished attempt object = %v", err)
 	}
 	identity := scanAttemptIdentity{directory: record.directory, attempt: record.attempt}
 	store.usedAttempts[identity] = struct{}{}
-	loaded, found, err := store.FailureObject(context.Background(), record.directory, record.attempt)
+	loaded, found, err := store.FailurePayload(context.Background(), record.directory, record.attempt)
 	if err != nil || !found || string(loaded.Bytes()) != "orphan failure" {
 		t.Fatalf("published attempt object = %q found=%v err=%v", loaded.Bytes(), found, err)
 	}
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, _, err := store.FailureObject(cancelled, record.directory, record.attempt); !errors.Is(err, context.Canceled) {
+	if _, _, err := store.FailurePayload(cancelled, record.directory, record.attempt); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled store failure object = %v", err)
 	}
-	if _, found, err := store.FailureObject(
+	if _, found, err := store.FailurePayload(
 		context.Background(), record.directory, idValue[ScanAttemptID](102),
 	); err != nil || found {
 		t.Fatalf("missing store failure object = found=%v err=%v", found, err)
 	}
 	store.closed = true
-	if _, _, err := store.FailureObject(context.Background(), record.directory, record.attempt); !errors.Is(err, ErrCatalogClosed) {
+	if _, _, err := store.FailurePayload(context.Background(), record.directory, record.attempt); !errors.Is(err, ErrCatalogClosed) {
 		t.Fatalf("closed store failure object = %v", err)
 	}
 }
@@ -595,7 +595,7 @@ func TestFileFailureNamespaceHelpersRollbackEveryUnpublishedRename(t *testing.T)
 	originalStagingDir := backend.stagingDir
 	backend.stagingDir = filepath.Join(root, "missing-staging-parent", "transactions")
 	record := testFailureRecord(t, 111, 112, ScanAttemptID{}, FailureKindPermanentIO)
-	object, _ := NewSealedFailureObject([]byte("staging"))
+	object, _ := NewFailurePayload([]byte("staging"))
 	if _, _, err := backend.stageFailureLocked(record, object, &failureTestMeter{}); err == nil {
 		t.Fatal("missing staging namespace was accepted")
 	}
@@ -635,9 +635,9 @@ func TestFileFailureRecoveryStreamsBeyondOneDirectoryBatch(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		object, _ := NewSealedFailureObject([]byte{byte(index), byte(index >> 8), 1})
+		object, _ := NewFailurePayload([]byte{byte(index), byte(index >> 8), 1})
 		meta := fileFailureMeta{
-			record: record, commitment: object.commitment, objectSize: uint64(len(object.encoded)),
+			record: record, commitment: object.commitment, payloadSize: uint64(len(object.encoded)),
 			spillBytes: failureMetaBytes + uint64(len(object.encoded)),
 		}
 		attemptPath := backend.failurePath(directory, attempt)
@@ -647,7 +647,7 @@ func TestFileFailureRecoveryStreamsBeyondOneDirectoryBatch(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(attemptPath, failureMetaName), encodeFileFailureMeta(meta), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(attemptPath, failureObjectName), object.Bytes(), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(attemptPath, failurePayloadName), object.Bytes(), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		previous = attempt
@@ -665,7 +665,7 @@ func TestFileFailureRecoveryStreamsBeyondOneDirectoryBatch(t *testing.T) {
 	}
 }
 
-func TestCatalogStorePageObjectRejectsMissingAndMismatchedAuthority(t *testing.T) {
+func TestCatalogStorePagePayloadRejectsMissingAndMismatchedAuthority(t *testing.T) {
 	backend := NewMemoryCatalogBackend()
 	store, _, _ := newStore(t, backend, nil)
 	session := generousBudget(t, "page-object-session")
@@ -678,17 +678,17 @@ func TestCatalogStorePageObjectRejectsMissingAndMismatchedAuthority(t *testing.T
 	if err != nil || !found {
 		t.Fatalf("committed root = %+v found=%v err=%v", committed, found, err)
 	}
-	if _, found, err := store.PageObject(
+	if _, found, err := store.PagePayload(
 		context.Background(), root, idValue[DirectoryGeneration](124), 0,
 	); err != nil || found {
 		t.Fatalf("missing generation object = found=%v err=%v", found, err)
 	}
 	backend.mu.Lock()
 	directory := backend.directories[root]
-	directory.pageObjects[0] = []byte("different committed object")
+	directory.pagePayloads[0] = []byte("different committed object")
 	backend.directories[root] = directory
 	backend.mu.Unlock()
-	if _, _, err := store.PageObject(
+	if _, _, err := store.PagePayload(
 		context.Background(), root, committed.Generation(), 0,
 	); !errors.Is(err, ErrCorruptCatalogStorage) {
 		t.Fatalf("mismatched page object = %v", err)
@@ -696,7 +696,7 @@ func TestCatalogStorePageObjectRejectsMissingAndMismatchedAuthority(t *testing.T
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.PageObject(
+	if _, _, err := store.PagePayload(
 		context.Background(), root, committed.Generation(), 0,
 	); !errors.Is(err, ErrCatalogClosed) {
 		t.Fatalf("closed page object lookup = %v", err)

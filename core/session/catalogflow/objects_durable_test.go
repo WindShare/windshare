@@ -272,7 +272,7 @@ func TestCommittedFailurePayloadSurvivesRestart(t *testing.T) {
 	var attempts atomic.Uint32
 	store, err := catalog.NewCatalogStore(catalog.StoreConfig{
 		ShareInstance: fixture.share, Backend: backend, ProcessBudget: process, ShareBudget: shareBudget,
-		PageSealer: objects, SpillFactory: catalog.NewFileSpillFactory(filepath.Join(rootPath, "sort")),
+		PageEncoder: objects, SpillFactory: catalog.NewFileSpillFactory(filepath.Join(rootPath, "sort")),
 		AttemptIDs: catalog.ScanAttemptIDGeneratorFunc(func() (catalog.ScanAttemptID, error) {
 			return scanAttemptID(t, byte(130+attempts.Add(1))), nil
 		}),
@@ -295,7 +295,7 @@ func TestCommittedFailurePayloadSurvivesRestart(t *testing.T) {
 	if !errors.As(firstErr, &firstFailure) {
 		t.Fatalf("first failure = %v", firstErr)
 	}
-	firstObject, found, err := store.FailureObject(context.Background(), firstDirectory, firstFailure.AttemptID)
+	firstObject, found, err := store.FailurePayload(context.Background(), firstDirectory, firstFailure.AttemptID)
 	if err != nil || !found {
 		t.Fatalf("first durable object: found=%v err=%v", found, err)
 	}
@@ -318,7 +318,7 @@ func TestCommittedFailurePayloadSurvivesRestart(t *testing.T) {
 	}
 	recovered, err := catalog.NewCatalogStore(catalog.StoreConfig{
 		ShareInstance: fixture.share, Backend: recoveredBackend,
-		ProcessBudget: recoveredProcess, ShareBudget: recoveredShare, PageSealer: restartObjects,
+		ProcessBudget: recoveredProcess, ShareBudget: recoveredShare, PageEncoder: restartObjects,
 		SpillFactory: catalog.NewFileSpillFactory(filepath.Join(rootPath, "sort")),
 	})
 	if err != nil {
@@ -512,10 +512,10 @@ func TestHostileCatalogObjectsAndWireFieldsFailClosed(t *testing.T) {
 	}
 }
 
-func catalogPageForSealedObject(
+func catalogPageForPayload(
 	t *testing.T,
 	input catalog.PageCommitInput,
-	object catalog.SealedPageObject,
+	object catalog.PagePayload,
 ) catalog.CatalogPage {
 	t.Helper()
 	page, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{

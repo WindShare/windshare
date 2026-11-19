@@ -15,18 +15,18 @@ import (
 
 var errInjectedCatalogStorageCapacity = errors.New("injected catalog storage capacity failure")
 
-type failureSealerProbe struct {
+type failureEncoderProbe struct {
 	calls    atomic.Int32
-	delegate FailureSealer
+	delegate FailureEncoder
 	err      error
 }
 
-func (p *failureSealerProbe) SealFailure(record DirectoryFailureRecord) (SealedFailureObject, error) {
+func (p *failureEncoderProbe) EncodeFailure(record DirectoryFailureRecord) (FailurePayload, error) {
 	p.calls.Add(1)
 	if p.err != nil {
-		return SealedFailureObject{}, p.err
+		return FailurePayload{}, p.err
 	}
-	return p.delegate.SealFailure(record)
+	return p.delegate.EncodeFailure(record)
 }
 
 func openFailureStore(
@@ -36,7 +36,7 @@ func openFailureStore(
 	clock Clock,
 	attempts ScanAttemptIDGenerator,
 	generations DirectoryGenerationGenerator,
-	sealer FailureSealer,
+	encoder FailureEncoder,
 	faults FileBackendFaults,
 ) (*CatalogStore, *FileCatalogBackend) {
 	t.Helper()
@@ -46,13 +46,13 @@ func openFailureStore(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sealer == nil {
-		sealer = semanticTestCommitter{}
+	if encoder == nil {
+		encoder = semanticTestCommitter{}
 	}
 	store, err := NewCatalogStore(StoreConfig{
 		ShareInstance: idValue[ShareInstance](1), Backend: backend,
-		ProcessBudget: process, ShareBudget: share, PageSealer: semanticTestCommitter{},
-		FailureSealer: sealer, SpillFactory: NewFileSpillFactory(filepath.Join(root, "sort")),
+		ProcessBudget: process, ShareBudget: share, PageEncoder: semanticTestCommitter{},
+		FailureEncoder: encoder, SpillFactory: NewFileSpillFactory(filepath.Join(root, "sort")),
 		Clock: clock, AttemptIDs: attempts, Generations: generations,
 	})
 	if err != nil {
@@ -79,7 +79,7 @@ func TestPermanentFailureReplaysExactObjectAndBudgetAfterRestart(t *testing.T) {
 	if !errors.As(scanErr, &first) || first.Kind != FailureKindPermanentIO || scans.Load() != 1 {
 		t.Fatalf("first failure = %v scans=%d", scanErr, scans.Load())
 	}
-	firstObject, found, err := store.FailureObject(context.Background(), directory, first.AttemptID)
+	firstObject, found, err := store.FailurePayload(context.Background(), directory, first.AttemptID)
 	if err != nil || !found {
 		t.Fatalf("first failure object: found=%v err=%v", found, err)
 	}
@@ -91,9 +91,9 @@ func TestPermanentFailureReplaysExactObjectAndBudgetAfterRestart(t *testing.T) {
 	recoveredProcess := generousBudget(t, "recovered-process")
 	recoveredShare := generousBudget(t, "recovered-share")
 	recoveredSession := generousBudget(t, "recovered-session")
-	sealProbe := &failureSealerProbe{err: errors.New("replay attempted to reseal")}
+	encodeProbe := &failureEncoderProbe{err: errors.New("replay attempted to re-encode")}
 	recovered, _ := openFailureStore(
-		t, rootPath, recoveredProcess, recoveredShare, nil, nil, nil, sealProbe, nil,
+		t, rootPath, recoveredProcess, recoveredShare, nil, nil, nil, encodeProbe, nil,
 	)
 	defer recovered.Close()
 	defer store.Close()
@@ -106,12 +106,12 @@ func TestPermanentFailureReplaysExactObjectAndBudgetAfterRestart(t *testing.T) {
 	if !errors.As(replayErr, &replay) || replay.AttemptID != first.AttemptID || replay.Kind != first.Kind {
 		t.Fatalf("replayed failure = %v", replayErr)
 	}
-	replayedObject, found, err := recovered.FailureObject(context.Background(), directory, replay.AttemptID)
+	replayedObject, found, err := recovered.FailurePayload(context.Background(), directory, replay.AttemptID)
 	if err != nil || !found || !bytes.Equal(firstObject.Bytes(), replayedObject.Bytes()) {
 		t.Fatalf("replayed object changed: found=%v err=%v", found, err)
 	}
-	if sealProbe.calls.Load() != 0 {
-		t.Fatalf("replay resealed failure %d times", sealProbe.calls.Load())
+	if encodeProbe.calls.Load() != 0 {
+		t.Fatalf("replay re-encoded failure %d times", encodeProbe.calls.Load())
 	}
 	if got := recoveredShare.Snapshot().Used; got != wantUsage {
 		t.Fatalf("recovered failure usage = %+v want %+v", got, wantUsage)
@@ -143,7 +143,7 @@ func TestTransientFailureCooldownAndAttemptChainSurviveRestarts(t *testing.T) {
 	if !errors.As(firstErr, &first) || first.AttemptID != attemptA {
 		t.Fatalf("first transient failure = %v", firstErr)
 	}
-	objectA, found, err := store.FailureObject(context.Background(), directory, attemptA)
+	objectA, found, err := store.FailurePayload(context.Background(), directory, attemptA)
 	if err != nil || !found {
 		t.Fatalf("attempt A object: found=%v err=%v", found, err)
 	}
@@ -154,11 +154,11 @@ func TestTransientFailureCooldownAndAttemptChainSurviveRestarts(t *testing.T) {
 	clockB := &fakeClock{now: time.Unix(200, 0)}
 	attemptB := idValue[ScanAttemptID](46)
 	generationB := idValue[DirectoryGeneration](47)
-	sealB := &failureSealerProbe{delegate: semanticTestCommitter{}}
+	encodeB := &failureEncoderProbe{delegate: semanticTestCommitter{}}
 	recoveredB, backendB := openFailureStore(
 		t, rootPath, generousBudget(t, "process-b"), generousBudget(t, "share-b"), clockB,
 		ScanAttemptIDGeneratorFunc(func() (ScanAttemptID, error) { return attemptB, nil }),
-		DirectoryGenerationGeneratorFunc(func() (DirectoryGeneration, error) { return generationB, nil }), sealB, nil,
+		DirectoryGenerationGeneratorFunc(func() (DirectoryGeneration, error) { return generationB, nil }), encodeB, nil,
 	)
 	sessionB := generousBudget(t, "session-b")
 	var scansB atomic.Int32
@@ -179,10 +179,10 @@ func TestTransientFailureCooldownAndAttemptChainSurviveRestarts(t *testing.T) {
 	}
 	_, secondErr := recoveredB.ListChildren(context.Background(), directory, sessionB, ScanOptions{Retry: true}, scannerB)
 	var second *DirectoryFailure
-	if !errors.As(secondErr, &second) || second.AttemptID != attemptB || scansB.Load() != 1 || sealB.calls.Load() != 1 {
-		t.Fatalf("explicit retry = %v scans=%d seals=%d", secondErr, scansB.Load(), sealB.calls.Load())
+	if !errors.As(secondErr, &second) || second.AttemptID != attemptB || scansB.Load() != 1 || encodeB.calls.Load() != 1 {
+		t.Fatalf("explicit retry = %v scans=%d encodes=%d", secondErr, scansB.Load(), encodeB.calls.Load())
 	}
-	objectB, found, err := recoveredB.FailureObject(context.Background(), directory, attemptB)
+	objectB, found, err := recoveredB.FailurePayload(context.Background(), directory, attemptB)
 	if err != nil || !found {
 		t.Fatalf("attempt B object: found=%v err=%v", found, err)
 	}
@@ -191,19 +191,19 @@ func TestTransientFailureCooldownAndAttemptChainSurviveRestarts(t *testing.T) {
 	}
 
 	clockC := &fakeClock{now: time.Unix(300, 0)}
-	sealC := &failureSealerProbe{err: errors.New("rejected retry attempted to seal")}
+	encodeC := &failureEncoderProbe{err: errors.New("rejected retry attempted to encode")}
 	recoveredC, _ := openFailureStore(
 		t, rootPath, generousBudget(t, "process-c"), generousBudget(t, "share-c"), clockC,
 		ScanAttemptIDGeneratorFunc(func() (ScanAttemptID, error) { return attemptA, nil }),
 		DirectoryGenerationGeneratorFunc(func() (DirectoryGeneration, error) {
 			return idValue[DirectoryGeneration](48), nil
-		}), sealC, nil,
+		}), encodeC, nil,
 	)
 	defer recoveredC.Close()
 	defer recoveredB.Close()
 	defer store.Close()
 	for attempt, want := range map[ScanAttemptID][]byte{attemptA: objectA.Bytes(), attemptB: objectB.Bytes()} {
-		object, found, err := recoveredC.FailureObject(context.Background(), directory, attempt)
+		object, found, err := recoveredC.FailurePayload(context.Background(), directory, attempt)
 		if err != nil || !found || !bytes.Equal(object.Bytes(), want) {
 			t.Fatalf("recovered attempt %x changed: found=%v err=%v", attempt, found, err)
 		}
@@ -218,8 +218,8 @@ func TestTransientFailureCooldownAndAttemptChainSurviveRestarts(t *testing.T) {
 	}
 	_, activeErr := recoveredC.ListChildren(context.Background(), directory, generousBudget(t, "session-c-replay"), ScanOptions{}, never)
 	var active *DirectoryFailure
-	if !errors.As(activeErr, &active) || active.AttemptID != attemptB || sealC.calls.Load() != 0 {
-		t.Fatalf("rejected reuse discarded B authority: %v seals=%d", activeErr, sealC.calls.Load())
+	if !errors.As(activeErr, &active) || active.AttemptID != attemptB || encodeC.calls.Load() != 0 {
+		t.Fatalf("rejected reuse discarded B authority: %v encodes=%d", activeErr, encodeC.calls.Load())
 	}
 }
 
@@ -290,7 +290,7 @@ func TestFailureRecoveryRejectsCorruptObjectsMetadataAndChains(t *testing.T) {
 		mutate func(t *testing.T, root, failurePath string)
 	}{
 		{name: "object", mutate: func(t *testing.T, _, failurePath string) {
-			path := filepath.Join(failurePath, failureObjectName)
+			path := filepath.Join(failurePath, failurePayloadName)
 			encoded, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatal(err)
@@ -312,7 +312,7 @@ func TestFailureRecoveryRejectsCorruptObjectsMetadataAndChains(t *testing.T) {
 			}
 		}},
 		{name: "missing object", mutate: func(t *testing.T, _, failurePath string) {
-			if err := os.Remove(filepath.Join(failurePath, failureObjectName)); err != nil {
+			if err := os.Remove(filepath.Join(failurePath, failurePayloadName)); err != nil {
 				t.Fatal(err)
 			}
 		}},
@@ -369,7 +369,7 @@ func TestFailureRecoveryRejectsCorruptObjectsMetadataAndChains(t *testing.T) {
 			_, err = NewCatalogStore(StoreConfig{
 				ShareInstance: idValue[ShareInstance](1), Backend: corruptBackend,
 				ProcessBudget: generousBudget(t, "rp"), ShareBudget: generousBudget(t, "rs"),
-				PageSealer: semanticTestCommitter{},
+				PageEncoder: semanticTestCommitter{},
 			})
 			if !errors.Is(err, ErrCorruptCatalogStorage) {
 				t.Fatalf("corrupt failure authority was accepted: %v", err)

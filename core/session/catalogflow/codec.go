@@ -16,7 +16,7 @@ const (
 	directoryFailureSchema = uint64(2)
 )
 
-var ErrCatalogCodec = errors.New("catalog flow object is malformed")
+var ErrCatalogCodec = errors.New("catalog flow payload is malformed")
 
 var catalogFlowEnc = func() cbor.EncMode {
 	mode, err := cbor.CoreDetEncOptions().EncMode()
@@ -41,11 +41,11 @@ var catalogFlowDec = func() cbor.DecMode {
 	return mode
 }()
 
-func EncodeCatalogResult(object []byte) ([]byte, error) {
-	if len(object) == 0 || len(object) > catalog.MaxCatalogPageObjectBytes {
+func EncodeCatalogResult(payload []byte) ([]byte, error) {
+	if len(payload) == 0 || len(payload) > catalog.MaxCatalogPayloadBytes {
 		return nil, ErrCatalogCodec
 	}
-	return catalogFlowEnc.Marshal(map[uint64]any{0: catalogControlSchema, 1: bytes.Clone(object)})
+	return catalogFlowEnc.Marshal(map[uint64]any{0: catalogControlSchema, 1: bytes.Clone(payload)})
 }
 
 func DecodeCatalogResult(encoded []byte) ([]byte, error) {
@@ -54,17 +54,17 @@ func DecodeCatalogResult(encoded []byte) ([]byte, error) {
 		return nil, err
 	}
 	schema, schemaErr := catalogUint(fields[0])
-	var object []byte
-	objectErr := catalogFlowDec.Unmarshal(fields[1], &object)
-	if schemaErr != nil || schema != catalogControlSchema || objectErr != nil ||
-		len(object) == 0 || len(object) > catalog.MaxCatalogPageObjectBytes {
+	var payload []byte
+	payloadErr := catalogFlowDec.Unmarshal(fields[1], &payload)
+	if schemaErr != nil || schema != catalogControlSchema || payloadErr != nil ||
+		len(payload) == 0 || len(payload) > catalog.MaxCatalogPayloadBytes {
 		return nil, ErrCatalogCodec
 	}
-	canonical, _ := EncodeCatalogResult(object)
+	canonical, _ := EncodeCatalogResult(payload)
 	if !bytes.Equal(canonical, encoded) {
 		return nil, ErrCatalogCodec
 	}
-	return bytes.Clone(object), nil
+	return bytes.Clone(payload), nil
 }
 
 func EncodeDirectoryFailure(failure DirectoryFailure) ([]byte, error) {

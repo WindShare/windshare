@@ -2,7 +2,7 @@ import { CatalogPageStoreError } from './page-store-contracts'
 import { waitForIndexedDbTransaction } from './indexeddb-transaction'
 import {
   CATALOG_PAGE_ENTRIES,
-  CATALOG_PAGE_OBJECT_BYTES,
+  MAX_CATALOG_PAYLOAD_BYTES,
   type CatalogPage,
 } from './records'
 
@@ -76,7 +76,7 @@ export function catalogPageMetadataCharge(page: CatalogPage): number {
   if (
     !Number.isSafeInteger(page.encodedBytes) ||
     page.encodedBytes <= 0 ||
-    page.encodedBytes > CATALOG_PAGE_OBJECT_BYTES ||
+    page.encodedBytes > MAX_CATALOG_PAYLOAD_BYTES ||
     page.entries.length > CATALOG_PAGE_ENTRIES
   ) {
     throw new CatalogPageStoreError('local-storage', 'Catalog page has an invalid durable footprint')

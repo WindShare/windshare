@@ -1,5 +1,4 @@
-// Package catalogflow provides the progressive LIST_CHILDREN service and client
-// above an authenticated protocol session. It never reads a FrameChannel and
-// never interprets local paths; transport and sender-object authentication are
-// injected at its two narrow boundaries.
+// Package catalogflow handles the share descriptor and progressive LIST_CHILDREN.
+// The sender can commit catalog payloads once because the protocol session
+// authenticates delivery separately for each receiver.
 package catalogflow

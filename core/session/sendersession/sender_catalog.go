@@ -149,11 +149,11 @@ func (handler *catalogHandler) serve(
 	if err != nil {
 		return err
 	}
-	object, err := handler.service.Serve(ctx, request, handler.progressObserver(ctx, operationID))
+	payload, err := handler.service.Serve(ctx, request, handler.progressObserver(ctx, operationID))
 	if err != nil {
 		return err
 	}
-	result, err := catalogflow.EncodeCatalogResult(object)
+	result, err := catalogflow.EncodeCatalogResult(payload)
 	if err != nil {
 		return err
 	}

@@ -157,7 +157,7 @@ func newSyntheticCapacityFixture(t *testing.T, fileCount uint64) *syntheticCapac
 	if err != nil {
 		t.Fatal(err)
 	}
-	sealedCatalog := catalogflow.CatalogPayloadEncoder{}
+	catalogEncoder := catalogflow.CatalogPayloadEncoder{}
 	processBudget, err := catalog.NewBudgetAccount("synthetic-capacity-process", catalog.DefaultProcessBudgetLimits())
 	if err != nil {
 		t.Fatal(err)
@@ -172,7 +172,7 @@ func newSyntheticCapacityFixture(t *testing.T, fileCount uint64) *syntheticCapac
 	}
 	catalogStore, err := catalog.NewCatalogStore(catalog.StoreConfig{
 		ShareInstance: share, Backend: catalog.NewMemoryCatalogBackend(),
-		ProcessBudget: processBudget, ShareBudget: shareBudget, PageSealer: sealedCatalog,
+		ProcessBudget: processBudget, ShareBudget: shareBudget, PageEncoder: catalogEncoder,
 	})
 	if err != nil {
 		t.Fatal(err)
