@@ -89,25 +89,18 @@ func (runner Runner) execute(ctx context.Context, args []string) error {
 			return runner.wait(ctx)
 		}
 	case "login", "password":
-		if len(args) == 2 || len(args) == 3 && args[2] == "--password-stdin" {
-			var accountID string
-			if args[0] == "password" {
-				// Password entry can block while another process switches accounts.
-				snapshot, _ := runner.Service.Snapshot()
-				if snapshot.Account == "" {
-					return errors.New("account setup is still pending")
-				}
-				accountID = snapshot.Account
-			}
-			password, err := runner.password(ctx, len(args) == 3)
-			if err != nil {
-				return err
-			}
-			if args[0] == "login" {
-				return runner.Service.Login(ctx, args[1], password)
-			}
-			return runner.Service.SetPassword(ctx, accountID, args[1], password)
+		if len(args) != 2 && (len(args) != 3 || args[2] != "--password-stdin") {
+			break
 		}
+		username, stdin := args[1], len(args) == 3
+		if args[0] == "password" {
+			return runner.setPassword(ctx, username, stdin)
+		}
+		password, err := runner.password(ctx, stdin)
+		if err != nil {
+			return err
+		}
+		return runner.Service.Login(ctx, username, password)
 	case "email":
 		if len(args) == 2 {
 			return runner.Service.RequestEmail(ctx, args[1])
@@ -161,6 +154,19 @@ func (runner Runner) register(ctx context.Context) error {
 		case <-changed:
 		}
 	}
+}
+
+func (runner Runner) setPassword(ctx context.Context, username string, stdin bool) error {
+	// Bind the update to the current account before password entry can block.
+	snapshot, _ := runner.Service.Snapshot()
+	if snapshot.Account == "" {
+		return errors.New("account setup is still pending")
+	}
+	password, err := runner.password(ctx, stdin)
+	if err != nil {
+		return err
+	}
+	return runner.Service.SetPassword(ctx, snapshot.Account, username, password)
 }
 
 func (runner Runner) password(ctx context.Context, stdin bool) (string, error) {
