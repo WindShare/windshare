@@ -25,6 +25,7 @@ impl AssetSource for Assets {
             }
             "plus" => r#"<path d="M12 5v14M5 12h14"/>"#,
             "arrow" => r#"<path d="M4 12h15m-6-6 6 6-6 6"/>"#,
+            "arrow-left" => r#"<path d="M20 12H5m6-6-6 6 6 6"/>"#,
             "arrow-up-right" => r#"<path d="M6 18 18 6M6 6h12v12"/>"#,
             "chevron" => r#"<path d="m8 5 7 7-7 7"/>"#,
             "chevron-down" => r#"<path d="m5 9 7 7 7-7"/>"#,
@@ -46,6 +47,13 @@ impl AssetSource for Assets {
             }
             "shield" => {
                 r#"<path d="m12 2 8 3v7c0 5-8 10-8 10S4 17 4 12V5Z"/><path d="m8 11 3 3 5-5"/>"#
+            }
+            "user" => {
+                r#"<circle cx="12" cy="8" r="3.5"/><path d="M5 20v-1a5 5 0 0 1 5-5h4a5 5 0 0 1 5 5v1"/>"#
+            }
+            "pencil" => r#"<path d="m4 16 12-12a2.8 2.8 0 0 1 4 4L8 20l-5 1Zm10-10 4 4"/>"#,
+            "mail" => {
+                r#"<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 8 9 6 9-6"/>"#
             }
             "globe" => {
                 r#"<circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/>"#

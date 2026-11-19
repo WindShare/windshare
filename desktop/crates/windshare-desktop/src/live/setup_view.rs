@@ -219,7 +219,7 @@ impl Desktop {
         Self::button(
             "back-to-relays",
             language(cx).text(Text::BackToRelays),
-            Icon::List,
+            Icon::ArrowLeft,
             ButtonStyle::Quiet,
             Action::SetupPage(SetupPage::Selection),
             cx,

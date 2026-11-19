@@ -93,7 +93,7 @@ impl Desktop {
             Self::button(
                 "open-account",
                 locale.text(AccountPage::entry(view).1),
-                Icon::Shield,
+                Icon::User,
                 ButtonStyle::Secondary,
                 Action::OpenAccount,
                 cx,
@@ -133,7 +133,7 @@ impl Desktop {
                     Self::button(
                         "account-attention",
                         locale.text(AccountPage::entry(view).1),
-                        Icon::Shield,
+                        Icon::User,
                         ButtonStyle::Quiet,
                         Action::OpenAccount,
                         cx,
@@ -244,14 +244,14 @@ impl Desktop {
             .child(
                 row()
                     .gap(px(14.))
-                    .child(theme.icon_tile(Icon::Shield, Tone::Mint, 44.))
+                    .child(theme.icon_tile(Icon::User, Tone::Mint, 44.))
                     .child(summary)
                     .when(view.can_edit_profile(), |row| {
                         row.child(
                             Self::button(
                                 "account-nickname",
                                 locale.text(AccountPage::Nickname(()).title(view)),
-                                Icon::Sliders,
+                                Icon::Pencil,
                                 ButtonStyle::Quiet,
                                 Action::Account(AccountAction::Open(AccountPage::Nickname(()))),
                                 cx,
@@ -275,7 +275,7 @@ impl Desktop {
                     Self::button(
                         "account-profile-email",
                         locale.text(page.title(view)),
-                        Icon::Chevron,
+                        Icon::Mail,
                         ButtonStyle::Secondary,
                         Action::Account(AccountAction::Open(page)),
                         cx,
@@ -426,6 +426,10 @@ impl Desktop {
     fn account_editor_actions(&self, view: &AccountView, submit: Text, cx: &Context<Self>) -> Div {
         let form = &self.account_form;
         let locale = language(cx);
+        let submit_icon = match submit {
+            Text::SaveSettings | Text::AccountVerify => Icon::Check,
+            _ => Icon::Arrow,
+        };
         let mut actions = row().gap(px(8.)).flex_wrap().child(
             Self::button(
                 "account-submit",
@@ -434,7 +438,7 @@ impl Desktop {
                 } else {
                     submit
                 }),
-                Icon::Arrow,
+                submit_icon,
                 ButtonStyle::Primary,
                 Action::Account(AccountAction::Submit),
                 cx,
@@ -477,13 +481,13 @@ impl Desktop {
             | AccountPage::Email(EmailPurpose::Profile(()), _)
                 if !view.status.account.is_empty() =>
             {
-                (Text::BackToAccount, AccountPage::Overview, Icon::Shield)
+                (Text::BackToAccount, AccountPage::Overview, Icon::ArrowLeft)
             }
             AccountPage::Email(EmailPurpose::Registration, _) => {
                 (Text::LoginExisting, AccountPage::Login, Icon::Arrow)
             }
             AccountPage::Login if view.status.account.is_empty() => {
-                (Text::SetUpAccount, AccountPage::entry(view).0, Icon::Shield)
+                (Text::SetUpAccount, AccountPage::entry(view).0, Icon::User)
             }
             _ => return None,
         };
