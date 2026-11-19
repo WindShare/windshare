@@ -1,4 +1,4 @@
-use super::super::{Identity, Runtime, access::Cache};
+use super::super::{Identity, Runtime, access::AuthorityState};
 use crate::storage::Database;
 use anyhow::{Result, anyhow, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -9,8 +9,8 @@ use windshare_relay_access::{
     Issuer, trust,
     trust::Generation,
     usage::{
-        Batch, MAX_REPORT_BYTES, REPORT_INTERVAL_SECONDS, RESPONSE_DOMAIN, Reply, ReportResult,
-        SignedReply, USAGE_DOMAIN,
+        AccountEntitlement, Batch, MAX_REPORT_BYTES, NodePolicy, REPORT_INTERVAL_SECONDS,
+        RESPONSE_DOMAIN, Reply, ReportResult, SignedReply, USAGE_DOMAIN,
     },
 };
 
@@ -104,12 +104,15 @@ impl Reporter {
                     tracing::error!(event="usage_persist_failed", %error);
                 }
                 // A failed old batch never holds up today's zero-byte entitlement refresh.
-                let results: [Result<()>; 2] =
-                    tokio::join!(self.refresh(versions), self.retry()).into();
-                for result in results {
+                let (refresh, retry, prune) =
+                    tokio::join!(self.refresh(versions), self.retry(), self.prune_quotas(now));
+                for result in [refresh, retry] {
                     if let Err(error) = result {
                         tracing::warn!(event="authority_usage_retry", %error);
                     }
+                }
+                if let Err(error) = prune {
+                    tracing::warn!(event="access_quota_prune_failed", %error);
                 }
             } else if let Err(error) = self.retry().await {
                 tracing::warn!(event="authority_usage_retry", %error);
@@ -169,11 +172,38 @@ impl Reporter {
         Ok((serde_json::from_slice(&bytes)?, login))
     }
 
-    pub(super) async fn persist_access(&self, cache: Cache) -> Result<()> {
+    pub(super) async fn persist_generation(&self, generation: Generation) -> Result<()> {
         let store = self.store.clone();
         // Persist the generation rollback barrier before the reply takes effect.
-        let cache = tokio::task::spawn_blocking(move || store.save_access(cache)).await??;
-        self.node.access.apply_cache(cache)
+        let authority =
+            tokio::task::spawn_blocking(move || store.save_authority(generation)).await??;
+        self.node.access.apply_authority(authority)
+    }
+
+    pub(super) async fn persist_status(
+        &self,
+        generation: Generation,
+        policy: NodePolicy,
+        entitlements: Vec<AccountEntitlement>,
+    ) -> Result<()> {
+        let store = self.store.clone();
+        let authority = AuthorityState {
+            generation,
+            policy: Some(policy),
+        };
+        let update = tokio::task::spawn_blocking(move || {
+            store.save_status(authority, entitlements, super::super::now().unsigned_abs())
+        })
+        .await??;
+        self.node
+            .access
+            .apply_access_update(update, super::super::now().unsigned_abs())
+    }
+
+    async fn prune_quotas(&self, now: u64) -> Result<()> {
+        let store = self.store.clone();
+        tokio::task::spawn_blocking(move || store.prune_quotas(now)).await??;
+        Ok(())
     }
 
     pub async fn shutdown(&self) -> Result<()> {

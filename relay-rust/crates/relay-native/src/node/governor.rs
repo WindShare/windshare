@@ -149,6 +149,7 @@ impl State {
         let available = self.pacing.replenish(Instant::now());
         let second = super::now().unsigned_abs();
         if self.classified != second {
+            access.expire_quotas(second);
             for lane in self.lanes.values() {
                 self.scheduler.reclassify(
                     lane.attribution.principal(lane.session.0),

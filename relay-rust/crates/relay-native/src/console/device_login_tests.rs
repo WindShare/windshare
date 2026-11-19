@@ -1,5 +1,5 @@
 use super::*;
-use crate::node::access::{Cache, Policy, TrustedIssuer};
+use crate::node::access::{AuthorityState, Policy, TrustedIssuer};
 use ed25519_dalek::SigningKey;
 use windshare_relay_access::{
     Attribution,
@@ -34,16 +34,13 @@ fn open_console(
         .unwrap();
     access.set_controller(Some(generation.issuer));
     access
-        .apply_cache(Cache {
-            policies: vec![(
-                generation.issuer,
-                NodePolicy {
-                    version: 1,
-                    enabled: true,
-                    anonymous: false,
-                },
-            )],
-            ..Cache::default()
+        .apply_authority(AuthorityState {
+            generation,
+            policy: Some(NodePolicy {
+                version: 1,
+                enabled: true,
+                anonymous: false,
+            }),
         })
         .unwrap();
     let console = Console::open(endpoint, db, access.clone(), identity, Some(service))

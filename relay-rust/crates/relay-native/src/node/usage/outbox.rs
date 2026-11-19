@@ -1,5 +1,4 @@
 use super::{Key, Reporter};
-use crate::node::access::Cache;
 use anyhow::{Result, ensure};
 use std::collections::BTreeMap;
 use tokio::sync::watch;
@@ -97,16 +96,8 @@ impl Reporter {
                 }),
             "invalid node status"
         );
-        self.persist_access(Cache {
-            generations: vec![generation],
-            entitlements: entitlements
-                .into_iter()
-                .map(|entry| (issuer, entry.account, entry.entitlement))
-                .collect(),
-            policies: vec![(issuer, policy)],
-            ..Cache::default()
-        })
-        .await?;
+        self.persist_status(generation, policy, entitlements)
+            .await?;
         versions.send_if_modified(|current| {
             if restriction_version <= *current {
                 return false;
@@ -132,11 +123,7 @@ impl Reporter {
             matches!(reply.result, ReportResult::UsageReceived),
             "expected usage receipt"
         );
-        self.persist_access(Cache {
-            generations: vec![generation],
-            ..Cache::default()
-        })
-        .await?;
+        self.persist_generation(generation).await?;
         let store = self.store.clone();
         let id = batch.id;
         tokio::task::spawn_blocking(move || store.acknowledge_usage(id)).await??;

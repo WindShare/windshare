@@ -1,14 +1,17 @@
 //! Local admission and entitlement decisions; authority I/O never enters a share actor.
-mod cache;
+mod control;
 mod devices;
 mod policy;
-pub(crate) use cache::Cache;
+mod quota;
+pub(crate) use control::{AccessSnapshot, AccessUpdate, AuthorityState};
 pub(crate) use devices::{BoundAccount, DeviceKeys};
 mod residency;
 #[cfg(test)]
 #[path = "access_tests.rs"]
 mod tests;
 pub use policy::{Policy, TrustedIssuer};
+use quota::Quotas;
+pub(crate) use quota::{AccountKey, Grant, Quota};
 pub(crate) use residency::Residency;
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -19,7 +22,7 @@ use std::{
 use tokio::sync::watch;
 use windshare_relay_access::{
     AccountId, Attribution, CredentialState, Digest, Issuer, Principal,
-    entitlement::{self, Allowance, Class, Entitlement},
+    entitlement::{Allowance, Class, DAY_SECONDS, Entitlement},
     restrictions::Restrictions,
     ticket::Ticket,
     trust::TrustStore,
@@ -42,7 +45,7 @@ struct State {
     devices: DeviceKeys,
     credentials: devices::CredentialIndex,
     owners: Vec<[u8; 16]>,
-    entitlements: BTreeMap<(Issuer, AccountId), Entitlement>,
+    quotas: Quotas,
     restrictions: BTreeMap<Issuer, Restrictions>,
     residents: BTreeMap<ShareId, (Attribution, usize)>,
 }
@@ -60,7 +63,7 @@ impl Default for Service {
                 devices: DeviceKeys::default(),
                 credentials: devices::CredentialIndex::default(),
                 owners: Vec::new(),
-                entitlements: BTreeMap::new(),
+                quotas: Quotas::default(),
                 restrictions: BTreeMap::new(),
                 residents: BTreeMap::new(),
             })),
@@ -173,16 +176,11 @@ impl Service {
                     if !state.active_issuers.contains(&ticket.issuer) {
                         return RegistrationDecision::Denied;
                     }
-                    let cached = state
-                        .entitlements
-                        .get(&(ticket.issuer, ticket.account))
-                        .copied();
-                    let mut next = cached;
-                    if entitlement::advance(&mut next, ticket.entitlement) {
-                        state
-                            .entitlements
-                            .insert((ticket.issuer, ticket.account), ticket.entitlement);
-                    }
+                    state.quotas.advance(
+                        (ticket.issuer, ticket.account),
+                        Quota::from_snapshot(ticket.entitlement, now),
+                        now,
+                    );
                     ticket.attribution()
                 }
             }
@@ -228,10 +226,7 @@ impl Service {
             Attribution::Account {
                 issuer, account, ..
             } => {
-                let allowance = state
-                    .entitlements
-                    .get(&(issuer, account))
-                    .map_or(Allowance::Stale, |entitlement| entitlement.allowance(now));
+                let allowance = state.quotas.allowance((issuer, account), now);
                 (Entitlement::class(allowance), Some(allowance))
             }
         };
@@ -239,14 +234,13 @@ impl Service {
         result
     }
 
-    pub fn refresh(&self, issuer: Issuer, account: AccountId, next: Entitlement) -> bool {
-        let mut state = self.state.lock().expect("node access state");
-        let mut previous = state.entitlements.get(&(issuer, account)).copied();
-        let changed = entitlement::advance(&mut previous, next);
-        if changed {
-            state.entitlements.insert((issuer, account), next);
-        }
-        drop(state);
+    pub fn refresh(&self, issuer: Issuer, account: AccountId, next: Entitlement, now: u64) -> bool {
+        let changed = self
+            .state
+            .lock()
+            .expect("node access state")
+            .quotas
+            .advance((issuer, account), Quota::from_snapshot(next, now), now);
         if changed {
             self.changes.send_modify(|version| *version += 1);
             tracing::info!(
@@ -260,6 +254,19 @@ impl Service {
             );
         }
         changed
+    }
+
+    pub(super) fn expire_quotas(&self, now: u64) {
+        let day = now / DAY_SECONDS;
+        let pruned = self
+            .state
+            .lock()
+            .expect("node access state")
+            .quotas
+            .retire_before(day, now);
+        if pruned != 0 {
+            tracing::debug!(event = "runtime_quotas_pruned", day, pruned);
+        }
     }
 
     pub fn restriction_version(&self, issuer: Issuer) -> u64 {

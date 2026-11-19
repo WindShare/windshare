@@ -108,7 +108,9 @@ impl Runtime {
     }
 
     pub(crate) fn configure(&self, settings: Settings, store: Database) -> Result<()> {
-        self.access.apply_cache(store.initialize_control()?)?;
+        let access_now = now().unsigned_abs();
+        self.access
+            .restore_access(store.initialize_control(access_now)?, access_now)?;
         self.state
             .lock()
             .map_err(|_| anyhow!("node state"))?

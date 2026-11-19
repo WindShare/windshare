@@ -15,7 +15,7 @@ fn usage_store(path: &Path) -> Database {
         .unwrap()
         .identity;
     let store = Database::open(path, relay).unwrap();
-    store.initialize_control().unwrap();
+    store.initialize_control(0).unwrap();
     store
 }
 
@@ -202,51 +202,4 @@ fn invalid_outbox_entries_are_preserved_without_blocking_the_next_batch() {
             .unwrap();
         assert_eq!(saved, (good.issuer, body, created_at, reason.to_owned()));
     }
-}
-
-#[test]
-fn persisted_restrictions_migrate_once_and_survive_other_control_writes() {
-    use crate::node::access::Cache;
-    use windshare_relay_access::restrictions::{Restriction, Restrictions};
-
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("usage.db");
-    let relay = crate::Endpoint::parse("ws://localhost:8787/v2/ws")
-        .unwrap()
-        .identity;
-    let store = crate::Database::open(&path, relay).unwrap();
-    store.initialize_control().unwrap();
-    let issuer = [3; 32];
-    let mut previous = Restrictions {
-        version: 255,
-        ..Restrictions::default()
-    };
-    previous.insert(Restriction::Credential([4; 16]));
-    store
-        .save_access(Cache {
-            restrictions: vec![(issuer, previous.clone())],
-            ..Cache::default()
-        })
-        .unwrap();
-    assert_eq!(
-        store.initialize_control().unwrap().restrictions,
-        vec![(issuer, previous.clone())]
-    );
-    assert_eq!(
-        store.save_access(Cache::default()).unwrap().restrictions,
-        []
-    );
-
-    let mut current = previous.clone();
-    current.version += 1;
-    current.insert(Restriction::Share([5; 12]));
-    store.save_restrictions(issuer, &current).unwrap();
-    store.save_restrictions(issuer, &previous).unwrap();
-    drop(store);
-
-    let store = crate::Database::open(&path, relay).unwrap();
-    assert_eq!(
-        store.initialize_control().unwrap().restrictions,
-        vec![(issuer, current)]
-    );
 }

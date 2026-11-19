@@ -1,5 +1,4 @@
 use super::{Reporter, reporting::RETRY_SECONDS};
-use crate::node::access::Cache;
 use anyhow::{Result, ensure};
 use std::time::Duration;
 use tokio::sync::watch;
@@ -119,11 +118,7 @@ impl Reporter {
         generation: Generation,
         snapshot: Restrictions,
     ) -> Result<()> {
-        self.persist_access(Cache {
-            generations: vec![generation],
-            ..Cache::default()
-        })
-        .await?;
+        self.persist_generation(generation).await?;
         let store = self.store.clone();
         let snapshot = tokio::task::spawn_blocking(move || {
             store.save_restrictions(issuer, &snapshot)?;

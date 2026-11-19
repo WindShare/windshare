@@ -63,7 +63,7 @@ impl Runtime {
             return Ok(());
         }
         if let Some(store) = store {
-            let mut cache = super::access::Cache::default();
+            let mut generations = Vec::with_capacity(policy.trusted_issuers.len());
             for issuer in &policy.trusted_issuers {
                 let root = URL_SAFE_NO_PAD
                     .decode(&issuer.root)?
@@ -72,12 +72,13 @@ impl Runtime {
                 let generation =
                     Generation::verify(&URL_SAFE_NO_PAD.decode(&issuer.certificate)?, root)
                         .map_err(|error| anyhow!("issuer certificate: {error:?}"))?;
-                cache.generations.push(generation);
+                generations.push(generation);
             }
             // SQLite merges monotonically, so an old bootstrap certificate cannot
             // undo a generation learned from an authenticated authority response.
-            let cache = store.save_access(cache)?;
-            self.access.apply_cache(cache)?;
+            for authority in store.save_authorities(generations)? {
+                self.access.apply_authority(authority)?;
+            }
         }
         self.access.configure(policy)
     }

@@ -8,29 +8,26 @@ use windshare_relay_access::{
 
 #[test]
 fn newer_policy_revokes_forwarding_and_older_reports_cannot_restore_it() {
-    let (service, ticket, _, _, _) = identity();
+    let (service, ticket, _, generation, _) = identity();
     service.set_controller(Some(ticket.issuer));
-    let policy = |version, enabled| cache::Cache {
-        policies: vec![(
-            ticket.issuer,
-            windshare_relay_access::usage::NodePolicy {
-                version,
-                enabled,
-                anonymous: true,
-            },
-        )],
-        ..cache::Cache::default()
+    let policy = |version, enabled| AuthorityState {
+        generation,
+        policy: Some(windshare_relay_access::usage::NodePolicy {
+            version,
+            enabled,
+            anonymous: true,
+        }),
     };
-    service.apply_cache(policy(1, true)).unwrap();
+    service.apply_authority(policy(1, true)).unwrap();
     assert!(service.allowed(share(1), ticket.attribution()));
     assert!(service.anonymous());
-    service.apply_cache(policy(2, false)).unwrap();
-    service.apply_cache(policy(1, true)).unwrap();
+    service.apply_authority(policy(2, false)).unwrap();
+    service.apply_authority(policy(1, true)).unwrap();
     assert!(!service.public_enabled());
     assert!(!service.anonymous());
     assert!(!service.allowed(share(1), ticket.attribution()));
     assert!(!service.allowed(share(1), Attribution::Anonymous));
-    service.apply_cache(policy(3, true)).unwrap();
+    service.apply_authority(policy(3, true)).unwrap();
     assert!(service.allowed(share(1), ticket.attribution()));
 }
 
@@ -114,10 +111,11 @@ fn old_tickets_do_not_revive_allowance_or_revoked_credentials() {
     ));
     let spent = Entitlement {
         version: 2,
+        valid_until: NOW + 1,
         remaining_bytes: 0,
         ..ticket.entitlement
     };
-    assert!(service.refresh(ticket.issuer, ticket.account, spent));
+    assert!(service.refresh(ticket.issuer, ticket.account, spent, NOW));
     assert!(matches!(
         service.authorize(share(1), Some(&token), NOW),
         RegistrationDecision::Granted(_)
@@ -126,8 +124,13 @@ fn old_tickets_do_not_revive_allowance_or_revoked_credentials() {
         service.class(attribution, NOW),
         (Class::Lowest, Some(Allowance::Spent))
     );
+    service.expire_quotas(spent.valid_until);
+    assert!(matches!(
+        service.authorize(share(1), Some(&token), spent.valid_until),
+        RegistrationDecision::Granted(_)
+    ));
     assert_eq!(
-        service.class(attribution, NOW + ENTITLEMENT_LIFETIME),
+        service.class(attribution, spent.valid_until),
         (Class::Lowest, Some(Allowance::Stale))
     );
     let mut restrictions = Restrictions {
@@ -147,7 +150,8 @@ fn old_tickets_do_not_revive_allowance_or_revoked_credentials() {
         Entitlement {
             version: 3,
             ..ticket.entitlement
-        }
+        },
+        NOW,
     ));
     assert!(!service.allowed(share(1), attribution));
     assert!(!service.restrict(

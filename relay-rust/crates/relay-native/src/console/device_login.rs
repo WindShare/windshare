@@ -83,7 +83,7 @@ impl Console {
         }
         self.0
             .access
-            .refresh(grant.issuer, grant.account, grant.entitlement);
+            .refresh(grant.issuer, grant.account, grant.entitlement, now / 1000);
         Ok(Reply::ok(json!({"ok":true})))
     }
 }
