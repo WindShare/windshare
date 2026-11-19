@@ -21,10 +21,10 @@ Account admission and fair relaying enable mainland service and public promotion
   trusted issuers. P4 adds contribution budgets.
 - Register node keys with the authority manually and keep P1's local directory signing. Existing
   TLS ingress, certificate renewal, health checks, and the install helper remain the deployment path.
-- Accounts on the authority: start with automatic registration (users may set a username and
-  password). The console can switch to proof-of-work (about 15 seconds of CPU, with progress) or
-  email verification and set PoW difficulty. The 1,000 and 4,000 account milestones prompt operator
-  review only; counts do not switch modes automatically.
+- Accounts on the authority: by default the first 1,000 accounts register automatically. The next
+  3,000 require proof of work (about 15 seconds of CPU, with progress). Later accounts require email
+  verification when mail delivery is configured; otherwise proof of work continues. Operators can
+  select a fixed registration mode or return to the account-count policy and set PoW difficulty.
 - Registration admission: per-source and global creation-rate limits with generous burst allowance
   and automatic recovery. Repeated source bursts may require PoW or email verification. These
   controls apply to new account creation, independently of existing accounts and transfers.

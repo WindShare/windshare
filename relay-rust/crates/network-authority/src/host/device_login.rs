@@ -1,4 +1,4 @@
-use super::{Clock, failure, storage::Database};
+use super::{WorkerEnvironment, failure, storage::Database};
 use crate::{Authority, Fault};
 use anyhow::Result;
 use serde::Deserialize;
@@ -18,7 +18,7 @@ struct Login {
 }
 
 pub(super) fn handle(
-    authority: &mut Authority<Database, Clock>,
+    authority: &mut Authority<Database, WorkerEnvironment>,
     path: &str,
     source: &str,
     cookie: &str,

@@ -1,5 +1,6 @@
 use crate::{
-    Account, Authority, Credential, Environment, Fault, Profile, Registration, Session, Store,
+    Account, Authority, Credential, Environment, Fault, Profile, Registration, RegistrationPolicy,
+    Session, Store,
     store::{key, load, save},
 };
 use anyhow::{Result, ensure};
@@ -14,6 +15,7 @@ const MIN_PASSWORD: usize = 12;
 const MAX_PASSWORD: usize = 256;
 const MAX_USERNAME: usize = 64;
 const CLIENT_SECRET_BYTES: usize = 32;
+const ACCOUNT_COUNT_KEY: &str = "account-count";
 
 #[derive(Clone, Copy)]
 pub struct RegistrationAttempt([u8; 32]);
@@ -70,6 +72,10 @@ pub fn username(name: &str) -> Result<String> {
 }
 
 impl<R: Store, E: Environment> Authority<R, E> {
+    pub(crate) fn account_count(&self) -> Result<u64> {
+        Ok(load(&self.store, ACCOUNT_COUNT_KEY)?.unwrap_or(0))
+    }
+
     /// # Errors
     /// Refuses invalid or restricted creation requests; retries preserve existing credentials.
     pub fn register(&mut self, source: &str, request: Registration) -> Result<Session> {
@@ -95,12 +101,9 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 Fault::Invalid
             );
         }
-        let email = self.creation_admission(
-            source,
-            attempt,
-            request.challenge.as_deref(),
-            request.solution.as_deref(),
-        )?;
+        let settings = self.settings()?;
+        let account_count = self.account_count()?;
+        let email = self.creation_admission(source, attempt, &request, &settings, account_count)?;
         // Creation admission precedes expensive password hashing, so refused
         // requests cannot spend unbounded CPU while bypassing the creation limiter.
         let id = self.environment.random()?;
@@ -125,15 +128,17 @@ impl<R: Store, E: Environment> Authority<R, E> {
             save(&mut self.store, &format!("username/{name}"), &id)?;
         }
         save(&mut self.store, &key("account", &id), &account)?;
-        let count = load::<u64>(&self.store, "account-count")?.unwrap_or(0) + 1;
-        save(&mut self.store, "account-count", &count)?;
-        if matches!(count, 1000 | 4000) {
+        let count = account_count + 1;
+        save(&mut self.store, ACCOUNT_COUNT_KEY, &count)?;
+        if RegistrationPolicy::is_milestone(count) {
             save(
                 &mut self.store,
                 &format!("review/{count}"),
                 &self.environment.now(),
             )?;
-            tracing::warn!(event = "account_milestone_review", count);
+            let email_configured = self.environment.registration_email_configured();
+            tracing::info!(event = "account_registration_milestone", count, policy = ?settings.registration,
+                next_mode = ?settings.registration.mode(count, email_configured), email_configured);
         }
         tracing::info!(event="account_created",account=?id,source,count);
         self.new_credential(id, request.client_secret)

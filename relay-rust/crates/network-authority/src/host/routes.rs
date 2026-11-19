@@ -1,4 +1,4 @@
-use super::{Clock, failure, storage::Database};
+use super::{WorkerEnvironment, failure, storage::Database};
 use crate::{Authority, Block, Fault, Mailbox, NodeEnrollment, NodePolicyChange, Settings};
 use anyhow::{Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -14,7 +14,6 @@ pub struct Context {
     device_session: String,
     csrf: String,
     initialization: String,
-    email: bool,
     directory: Option<serde_json::Value>,
 }
 impl Context {
@@ -47,8 +46,6 @@ impl Context {
                 .var("DIRECTORY_PUBLICATION")
                 .ok()
                 .and_then(|v| serde_json::from_str(&v.to_string()).ok()),
-            email: env.var("EMAIL_WEBHOOK_URL").is_ok()
-                && env.secret("EMAIL_WEBHOOK_TOKEN").is_ok(),
         })
     }
 }
@@ -105,7 +102,7 @@ pub fn csrf(session: &str) -> String {
 }
 
 pub fn dispatch(
-    authority: &mut Authority<Database, Clock>,
+    authority: &mut Authority<Database, WorkerEnvironment>,
     context: Context,
     bytes: &[u8],
 ) -> Result<Response> {
@@ -174,7 +171,7 @@ pub fn dispatch(
 }
 
 fn admin_routes(
-    authority: &mut Authority<Database, Clock>,
+    authority: &mut Authority<Database, WorkerEnvironment>,
     context: Context,
     bytes: &[u8],
 ) -> Result<Response> {
@@ -185,7 +182,6 @@ fn admin_routes(
         session,
         csrf: provided,
         initialization,
-        email,
         directory,
         ..
     } = context;
@@ -220,13 +216,12 @@ fn admin_routes(
         (Method::Get, "/v1/admin/console") => {
             let mut value = authority.console(&session)?;
             value["csrf"] = csrf(&session).into();
-            value["email_configured"] = email.into();
             value["directory"] = directory.into();
             value
         }
         (Method::Put, "/v1/admin/settings") => {
-            authority.set_settings(&session, &parse::<Settings>(bytes)?, email)?;
-            serde_json::json!({})
+            let mode = authority.set_settings(&session, &parse::<Settings>(bytes)?)?;
+            serde_json::json!({"registration_mode": mode})
         }
         (Method::Post, "/v1/admin/nodes") => serde_json::to_value(
             authority.enroll_node(&session, &parse::<NodeEnrollment>(bytes)?)?,

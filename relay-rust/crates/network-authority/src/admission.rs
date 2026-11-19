@@ -1,5 +1,6 @@
 use crate::{
-    Authority, Challenge, Environment, Fault, Rate, RegistrationMode, Store,
+    Authority, Challenge, Environment, Fault, Rate, Registration, RegistrationMode, Settings,
+    Store,
     challenges::{CHALLENGE_SECONDS, ProofRedemption, RegistrationProofOwner},
     registration::RegistrationAttempt,
     store::{key, load, save},
@@ -21,10 +22,10 @@ impl<R: Store, E: Environment> Authority<R, E> {
         &mut self,
         source: &str,
         attempt: RegistrationAttempt,
-        challenge: Option<&str>,
-        solution: Option<&str>,
+        request: &Registration,
+        settings: &Settings,
+        account_count: u64,
     ) -> Result<Option<String>> {
-        let settings = self.settings()?;
         let now = self.environment.now();
         let source_id: [u8; 32] = Sha256::digest(source.as_bytes()).into();
         let source_key = key("creation-source", &source_id);
@@ -51,12 +52,16 @@ impl<R: Store, E: Environment> Authority<R, E> {
             }
             .into());
         }
-        let mode = if settings.registration == RegistrationMode::Automatic
+        let policy_mode = settings.registration.mode(
+            account_count,
+            self.environment.registration_email_configured(),
+        );
+        let mode = if policy_mode == RegistrationMode::Automatic
             && local.bursts >= SOURCE_BURSTS_FOR_WORK
         {
             RegistrationMode::ProofOfWork
         } else {
-            settings.registration
+            policy_mode
         };
         let owner = match mode {
             RegistrationMode::Automatic => None,
@@ -64,7 +69,11 @@ impl<R: Store, E: Environment> Authority<R, E> {
             RegistrationMode::Email => Some(RegistrationProofOwner::Email(attempt)),
         };
         let email = if let Some(owner) = owner {
-            match self.registration_proof(owner, challenge, solution)? {
+            match self.registration_proof(
+                owner,
+                request.challenge.as_deref(),
+                request.solution.as_deref(),
+            )? {
                 ProofRedemption::WorkVerified => None,
                 ProofRedemption::EmailVerified(address) => Some(address),
                 ProofRedemption::Retry(challenge) if mode == RegistrationMode::Email => {

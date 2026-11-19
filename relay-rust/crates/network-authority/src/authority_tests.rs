@@ -72,11 +72,16 @@ impl Store for Memory {
 struct Clock {
     now: u64,
     next: u8,
+    registration_email_configured: bool,
 }
 impl Environment for Clock {
     fn now(&self) -> u64 {
         self.now
     }
+    fn registration_email_configured(&self) -> bool {
+        self.registration_email_configured
+    }
+
     fn random<const N: usize>(&mut self) -> Result<[u8; N]> {
         self.next += 1;
         Ok([self.next; N])
@@ -105,6 +110,7 @@ fn fixture() -> Authority<Memory, Clock> {
         Clock {
             now: DAY_SECONDS * 2,
             next: 10,
+            registration_email_configured: false,
         },
         signing_fixture(1),
     )
@@ -324,9 +330,10 @@ fn credential_revocation_preserves_siblings_and_is_not_reset_by_new_days() {
     );
 }
 #[test]
-fn creation_bursts_do_not_limit_existing_accounts_and_milestones_do_not_change_modes() {
+fn creation_bursts_do_not_limit_existing_accounts_and_a_fixed_mode_survives_a_milestone() {
     let mut authority = fixture();
     let settings = Settings {
+        registration: RegistrationPolicy::Automatic,
         source_rate: Rate {
             burst: 1,
             refill_seconds: 60,
@@ -338,7 +345,7 @@ fn creation_bursts_do_not_limit_existing_accounts_and_milestones_do_not_change_m
     authority.register("source", registration(1)).unwrap();
     assert_eq!(
         authority.settings().unwrap().registration,
-        RegistrationMode::Automatic
+        RegistrationPolicy::Automatic
     );
     assert!(authority.store.get("review/1000").unwrap().is_some());
     assert!(
@@ -351,6 +358,33 @@ fn creation_bursts_do_not_limit_existing_accounts_and_milestones_do_not_change_m
     assert!(authority.refresh(&URL_SAFE_NO_PAD.encode([1; 32])).is_ok());
     authority.environment.now += 60;
     assert!(authority.register("source", registration(2)).is_ok());
+}
+#[test]
+fn new_account_requirements_follow_milestones_and_available_email_delivery() {
+    let mut authority = fixture();
+    save(&mut authority.store, "account-count", &999u64).unwrap();
+    let first = authority.register("source", registration(1)).unwrap();
+    assert_eq!(authority.account_count().unwrap(), 1_000);
+
+    let attempt = |expected, authority: &mut Authority<Memory, Clock>| {
+        let error = authority.register("source", registration(2)).unwrap_err();
+        let Fault::Verification { challenge } = error.downcast::<Fault>().unwrap() else {
+            panic!("expected a registration challenge");
+        };
+        assert_eq!(challenge.mode, expected);
+    };
+    attempt(RegistrationMode::ProofOfWork, &mut authority);
+    assert_eq!(authority.account_count().unwrap(), 1_000);
+
+    save(&mut authority.store, "account-count", &4_000u64).unwrap();
+    attempt(RegistrationMode::ProofOfWork, &mut authority);
+    authority.environment.registration_email_configured = true;
+    attempt(RegistrationMode::Email, &mut authority);
+    assert_eq!(authority.account_count().unwrap(), 4_000);
+
+    let retry = authority.register("source", registration(1)).unwrap();
+    assert_eq!(retry.credential, first.credential);
+    assert_eq!(authority.account_count().unwrap(), 4_000);
 }
 #[test]
 fn signing_activation_writes_only_when_generation_changes() {

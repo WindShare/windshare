@@ -1,4 +1,4 @@
-import { formValues, settingsFromDraft, type Draft, type usePolicyEditor } from './policy-editor'
+import { configuresWorkDifficulty, formValues, settingsFromDraft, type Draft, type usePolicyEditor } from './policy-editor'
 import { ValidatedForm } from '../ui/ValidatedForm'
 import { message, MessageError } from '../ui/locale'
 import { useLocale } from '../ui/use-locale'
@@ -6,18 +6,19 @@ import { networkCopy } from './locales'
 import { Notice } from '../ui/layout'
 import { Icon } from '../ui/Icon'
 import type { AuthorityClient } from './api'
-import { GIB, type Settings, type Snapshot } from './model'
+import { GIB, type RegistrationMode, type Settings, type Snapshot } from './model'
 
 type NumberField = Exclude<keyof Draft, 'mode'>
 
 export function PolicySettings({ snapshot, api, saved, editor }: {
   editor: ReturnType<typeof usePolicyEditor>
-  snapshot: Snapshot; api: AuthorityClient; saved: (settings: Settings) => void
+  snapshot: Snapshot; api: AuthorityClient; saved: (settings: Settings, mode: RegistrationMode) => void
 }) {
   const { locale } = useLocale()
   const t = networkCopy[locale]
   const { draft, setDraft, action } = editor
   const value = draft ?? formValues(snapshot.settings)
+  const modes = { automatic: t.automatic, proof_of_work: t.proofOfWork, email: t.verifyEmail }
   function field(key: NumberField, label: string, min: number, max?: number) {
     return <div className="field"><label htmlFor={key}>{label}</label><input id={key} type="number" required min={min}
       step={key === 'gib' ? 'any' : 1} max={max ?? (key === 'gib' ? Number.MAX_SAFE_INTEGER / GIB : Number.MAX_SAFE_INTEGER)} value={value[key]}
@@ -32,8 +33,8 @@ export function PolicySettings({ snapshot, api, saved, editor }: {
       void action.run(async () => {
         const settings = settingsFromDraft(value, snapshot.settings)
         if (!Number.isSafeInteger(settings.daily_bytes) || settings.daily_bytes <= 0) throw new MessageError(message(networkCopy, 'invalidAllowance'))
-        await api.settings(settings)
-        saved(settings)
+        const { registration_mode } = await api.settings(settings)
+        saved(settings, registration_mode)
         setDraft(null)
         return message(networkCopy, 'settingsSaved')
       })
@@ -42,11 +43,13 @@ export function PolicySettings({ snapshot, api, saved, editor }: {
           <div className="field"><label htmlFor="registration">{t.registrationMethod}</label>
             <select id="registration" value={value.mode}
               onChange={event => setDraft({ ...value, mode: event.target.value as Settings['registration'] })}>
+              <option value="by_account_count">{t.byAccountCount}</option>
               <option value="automatic">{t.automatic}</option><option value="proof_of_work">{t.proofOfWork}</option>
               <option value="email" disabled={!snapshot.email_configured}>
                 {snapshot.email_configured ? t.verifyEmail : t.mailRequired}</option>
             </select></div>
-          {value.mode === 'proof_of_work' && field('bits', t.difficulty, 16, 30)}
+          <p className="muted">{t.defaultRegistrationMode(modes[snapshot.registration_mode])}</p>
+          {configuresWorkDifficulty(value.mode) && field('bits', t.difficulty, 16, 30)}
           {field('gib', t.allowance, 1 / GIB)}
         </fieldset>
         <fieldset className="rate-grid"><legend>{t.rateLimits}</legend>

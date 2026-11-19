@@ -1,5 +1,5 @@
 use super::{
-    Clock, NetworkAuthority, failure,
+    NetworkAuthority, WorkerEnvironment, failure,
     storage::{self, Database},
 };
 use crate::{
@@ -8,10 +8,24 @@ use crate::{
 };
 use serde::Deserialize;
 use worker::{
-    AbortSignal, Fetch, Method, Request, RequestInit, RequestRedirect, Response, Result, web_sys,
+    AbortSignal, Env, Fetch, Method, Request, RequestInit, RequestRedirect, Response, Result,
+    web_sys,
 };
 
 const DELIVERY_TIMEOUT_MS: u32 = 15_000;
+
+pub(super) struct Webhook {
+    url: url::Url,
+    token: String,
+}
+
+impl Webhook {
+    pub(super) fn configured(env: &Env) -> Option<Self> {
+        let url = url::Url::parse(&env.var("EMAIL_WEBHOOK_URL").ok()?.to_string()).ok()?;
+        let token = env.secret("EMAIL_WEBHOOK_TOKEN").ok()?.to_string();
+        (url.scheme() == "https" && !token.trim().is_empty()).then_some(Self { url, token })
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -61,16 +75,9 @@ impl NetworkAuthority {
             Ok(input) => input,
             Err(fault) => return super::routes::fault(&fault).map_err(failure),
         };
-        let (Ok(url), Ok(token)) = (
-            self.env.var("EMAIL_WEBHOOK_URL"),
-            self.env.secret("EMAIL_WEBHOOK_TOKEN"),
-        ) else {
+        let Some(Webhook { url, token }) = Webhook::configured(&self.env) else {
             return unavailable();
         };
-        let url = url.to_string();
-        if !url.starts_with("https://") {
-            return unavailable();
-        }
         let recipient = email.as_str().to_owned();
         let profile_change = matches!(&verification, EmailVerification::Profile { .. });
         let source = request
@@ -85,8 +92,11 @@ impl NetworkAuthority {
             &self.env.secret("AUTHORITY_SIGNING_SEED")?.to_string(),
         )
         .map_err(failure)?;
+        let environment = WorkerEnvironment {
+            registration_email_configured: true,
+        };
         let outcome = storage::transaction(&self.state, move || {
-            let mut authority = Authority::new(admission_store, Clock, signing)?;
+            let mut authority = Authority::new(admission_store, environment, signing)?;
             // Expected admission refusals commit their limiter state.
             match authority.prepare_email(&source, verification, &email) {
                 Ok(value) => Ok(Ok(value)),
@@ -111,7 +121,7 @@ impl NetworkAuthority {
         })
         .to_string();
         let mut request = Request::new_with_init(
-            &url,
+            url.as_str(),
             RequestInit::new()
                 .with_method(Method::Post)
                 // Workers exposes redirects in manual mode so only the configured provider receives the bearer.
@@ -142,7 +152,7 @@ impl NetworkAuthority {
         }
         let challenge = storage::transaction(&self.state, move || {
             if !profile_change {
-                database.prune_registration_email_proofs(Clock.now())?;
+                database.prune_registration_email_proofs(environment.now())?;
             }
             delivery.accepted(&mut database)
         })

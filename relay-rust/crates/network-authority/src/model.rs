@@ -6,6 +6,8 @@ use windshare_relay_access::{
 
 // Approximately 16 seconds at the native client's measured 16M attempts/s.
 const DEFAULT_POW_BITS: u8 = 28;
+const AUTOMATIC_ACCOUNT_LIMIT: u64 = 1_000;
+const WORK_ACCOUNT_LIMIT: u64 = 4_000;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -13,6 +15,36 @@ pub enum RegistrationMode {
     Automatic,
     ProofOfWork,
     Email,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RegistrationPolicy {
+    ByAccountCount,
+    Automatic,
+    ProofOfWork,
+    Email,
+}
+
+impl RegistrationPolicy {
+    pub(crate) const fn is_milestone(count: u64) -> bool {
+        matches!(count, AUTOMATIC_ACCOUNT_LIMIT | WORK_ACCOUNT_LIMIT)
+    }
+
+    pub(crate) const fn mode(self, account_count: u64, email_configured: bool) -> RegistrationMode {
+        match self {
+            Self::ByAccountCount if account_count < AUTOMATIC_ACCOUNT_LIMIT => {
+                RegistrationMode::Automatic
+            }
+            Self::ByAccountCount if account_count >= WORK_ACCOUNT_LIMIT && email_configured => {
+                RegistrationMode::Email
+            }
+            // A deployment without email can still accept new accounts at the final milestone.
+            Self::ByAccountCount | Self::ProofOfWork => RegistrationMode::ProofOfWork,
+            Self::Automatic => RegistrationMode::Automatic,
+            Self::Email => RegistrationMode::Email,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -24,7 +56,7 @@ pub struct Rate {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
-    pub registration: RegistrationMode,
+    pub registration: RegistrationPolicy,
     pub pow_bits: u8,
     pub daily_bytes: u64,
     pub source_rate: Rate,
@@ -33,7 +65,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            registration: RegistrationMode::Automatic,
+            registration: RegistrationPolicy::ByAccountCount,
             pow_bits: DEFAULT_POW_BITS,
             daily_bytes: DEFAULT_DAILY_BYTES,
             source_rate: Rate {

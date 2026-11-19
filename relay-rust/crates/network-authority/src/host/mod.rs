@@ -16,11 +16,19 @@ const MAX_REQUEST_BYTES: usize = windshare_relay_access::usage::MAX_REPORT_BYTES
 fn failure(error: impl std::fmt::Display) -> worker::Error {
     worker::Error::RustError(error.to_string())
 }
-struct Clock;
-impl Environment for Clock {
+#[derive(Clone, Copy)]
+struct WorkerEnvironment {
+    registration_email_configured: bool,
+}
+
+impl Environment for WorkerEnvironment {
     fn now(&self) -> u64 {
         worker::Date::now().as_millis() / 1000
     }
+    fn registration_email_configured(&self) -> bool {
+        self.registration_email_configured
+    }
+
     fn random<const N: usize>(&mut self) -> anyhow::Result<[u8; N]> {
         let mut bytes = [0; N];
         getrandom::fill(&mut bytes).map_err(|error| anyhow::anyhow!("{error}"))?;
@@ -60,6 +68,9 @@ impl DurableObject for NetworkAuthority {
         let database = Database::open(&self.state).map_err(failure)?;
         let env = self.env.clone();
         let context = routes::Context::new(&request, &env)?;
+        let environment = WorkerEnvironment {
+            registration_email_configured: mail::Webhook::configured(&env).is_some(),
+        };
         let result = storage::transaction(&self.state, move || {
             let signing = Signing::load(
                 &env.var("AUTHORITY_ROOT")?.to_string(),
@@ -67,7 +78,7 @@ impl DurableObject for NetworkAuthority {
                 &env.secret("AUTHORITY_SIGNING_SEED")?.to_string(),
             )
             .map_err(|error| anyhow::anyhow!("{error}"))?;
-            let mut authority = Authority::new(database, Clock, signing)?;
+            let mut authority = Authority::new(database, environment, signing)?;
             match routes::dispatch(&mut authority, context, &bytes) {
                 Ok(response) => Ok(response),
                 Err(error) => {

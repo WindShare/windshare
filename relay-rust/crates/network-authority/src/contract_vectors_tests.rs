@@ -68,7 +68,7 @@ fn account_contract_vectors_match_go_and_browser() {
 fn email_requires_delivered_secret_and_password_setup_keeps_account_identity() {
     let mut authority = fixture();
     let mut settings = authority.settings().unwrap();
-    settings.registration = RegistrationMode::Email;
+    settings.registration = RegistrationPolicy::Email;
     save(&mut authority.store, "settings", &settings).unwrap();
     let request = registration(7);
     assert!(authority.register("source", request.clone()).is_err());
@@ -99,7 +99,7 @@ fn email_requires_delivered_secret_and_password_setup_keeps_account_identity() {
 fn mistyped_registration_email_code_keeps_its_challenge_until_attempts_run_out() {
     let mut authority = fixture();
     let mut settings = authority.settings().unwrap();
-    settings.registration = RegistrationMode::Email;
+    settings.registration = RegistrationPolicy::Email;
     save(&mut authority.store, "settings", &settings).unwrap();
     let address = Mailbox::parse("alice@qq.com").unwrap();
     let mut proof = registration(8);
@@ -162,14 +162,15 @@ fn mistyped_registration_email_code_keeps_its_challenge_until_attempts_run_out()
 }
 
 #[test]
-fn retrying_work_registration_reuses_its_challenge_and_creates_a_profile_without_email() {
+fn the_last_work_registration_reuses_its_challenge_and_creates_a_profile_without_email() {
     let mut authority = fixture();
     let settings = Settings {
-        registration: RegistrationMode::ProofOfWork,
         pow_bits: 4,
         ..Settings::default()
     };
     save(&mut authority.store, "settings", &settings).unwrap();
+    save(&mut authority.store, "account-count", &3_999u64).unwrap();
+    authority.environment.registration_email_configured = true;
     let mut request = registration(9);
     let pending = |error: anyhow::Error| match error.downcast::<Fault>().unwrap() {
         Fault::Verification { challenge } => challenge,
@@ -193,4 +194,5 @@ fn retrying_work_registration_reuses_its_challenge_and_creates_a_profile_without
     request.solution = Some(solution);
     let registered = authority.register("source", request).unwrap();
     assert_eq!(registered.profile, Profile::default());
+    assert_eq!(authority.account_count().unwrap(), 4_000);
 }

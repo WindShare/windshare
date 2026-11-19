@@ -12,8 +12,9 @@ export interface LoadReport {
 export interface Publication {
   generation: number; serial: number; expires: number; keys: string[]; digest: string; mirror: string
 }
+export type RegistrationMode = 'automatic' | 'proof_of_work' | 'email'
 export interface Settings {
-  registration: 'automatic' | 'proof_of_work' | 'email'
+  registration: 'by_account_count' | RegistrationMode
   pow_bits: number
   daily_bytes: number
   source_rate: Rate
@@ -32,6 +33,7 @@ export interface Snapshot {
   restrictions: Restrictions
   settings: Settings
   email_configured: boolean
+  registration_mode: RegistrationMode
   account_count: number
   reviews: number[]
 }

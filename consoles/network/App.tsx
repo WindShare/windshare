@@ -74,7 +74,8 @@ function Dashboard({ api, snapshot, update, refresh, refreshing, error }: {
     ]} action={<button className="quiet" onClick={refresh} disabled={refreshing} aria-label={refreshLabel} title={refreshLabel}>
       <Icon name={refreshing ? 'loader' : 'refresh'} size={16} /><span className="action-text">{refreshLabel}</span></button>} />
     <ReadError error={error} retry={refresh} />
-    {policy ? <PolicySettings api={api} snapshot={snapshot} editor={editor} saved={settings => update(current => ({ ...current, settings }))} />
+    {policy ? <PolicySettings api={api} snapshot={snapshot} editor={editor}
+      saved={(settings, registration_mode) => update(current => ({ ...current, settings, registration_mode }))} />
       : <DashboardView api={api} snapshot={snapshot} page={page} id={id} reports={reports}
         directory={directory} saveNode={saveNode} access={access} />}
   </div>

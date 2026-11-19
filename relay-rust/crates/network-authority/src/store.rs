@@ -31,6 +31,7 @@ pub trait Store {
 }
 pub trait Environment {
     fn now(&self) -> u64;
+    fn registration_email_configured(&self) -> bool;
     /// # Errors
     /// Fails if cryptographic entropy is unavailable.
     fn random<const N: usize>(&mut self) -> Result<[u8; N]>;

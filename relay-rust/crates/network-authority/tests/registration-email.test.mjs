@@ -55,7 +55,10 @@ test('the Worker isolates registration email challenges while tracking retries',
   cookie = initialized.response.headers.get('set-cookie').split(';')[0];
   const console = (await call('/v1/admin/console', undefined, { method: 'GET', admin: true })).value;
   csrf = console.csrf;
-  await call('/v1/admin/settings', { ...console.settings, registration: 'email' }, { method: 'PUT', admin: true });
+  assert.equal(console.settings.registration, 'by_account_count');
+  assert.equal(console.registration_mode, 'automatic');
+  const override = await call('/v1/admin/settings', { ...console.settings, registration: 'email' }, { method: 'PUT', admin: true });
+  assert.equal(override.value.registration_mode, 'email');
 
   const secret = randomBytes(32).toString('base64url');
   const otherSecret = randomBytes(32).toString('base64url');

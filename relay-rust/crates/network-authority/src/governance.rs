@@ -1,6 +1,6 @@
 use crate::{
-    Authority, Environment, Fault, RegistrationMode, Settings, Store,
-    store::{key, load, save},
+    Authority, Environment, Fault, RegistrationMode, RegistrationPolicy, Settings, Store,
+    store::{key, save},
 };
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -25,13 +25,9 @@ pub struct Report {
 impl<R: Store, E: Environment> Authority<R, E> {
     /// # Errors
     /// Requires a live administrator session and a valid registration policy.
-    pub fn set_settings(
-        &mut self,
-        session: &str,
-        settings: &Settings,
-        email_configured: bool,
-    ) -> Result<()> {
+    pub fn set_settings(&mut self, session: &str, settings: &Settings) -> Result<RegistrationMode> {
         self.require_admin(session)?;
+        let email_configured = self.environment.registration_email_configured();
         ensure!(
             (16..=30).contains(&settings.pow_bits)
                 && settings.daily_bytes > 0
@@ -39,12 +35,14 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 && settings.source_rate.refill_seconds > 0
                 && settings.global_rate.burst > 0
                 && settings.global_rate.refill_seconds > 0
-                && (settings.registration != RegistrationMode::Email || email_configured),
+                && (settings.registration != RegistrationPolicy::Email || email_configured),
             Fault::Invalid
         );
+        let account_count = self.account_count()?;
+        let mode = settings.registration.mode(account_count, email_configured);
         save(&mut self.store, "settings", settings)?;
-        tracing::info!(event="authority_policy_changed",mode=?settings.registration,pow_bits=settings.pow_bits);
-        Ok(())
+        tracing::info!(event="authority_policy_changed",policy=?settings.registration,?mode,account_count,pow_bits=settings.pow_bits);
+        Ok(mode)
     }
     /// # Errors
     /// Requires a live administrator session and a nonzero target identity.
@@ -98,8 +96,13 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 .map(|(_, value)| Ok(serde_json::from_str(&value)?))
                 .collect()
         };
+        let settings = self.settings()?;
+        let account_count = self.account_count()?;
+        let email_configured = self.environment.registration_email_configured();
+        let registration_mode = settings.registration.mode(account_count, email_configured);
         Ok(
-            serde_json::json!({"settings":self.settings()?,"account_count":load::<u64>(&self.store,"account-count")?.unwrap_or(0),
+            serde_json::json!({"settings":settings,"account_count":account_count,
+            "registration_mode":registration_mode,"email_configured":email_configured,
             "reviews":read("review/")?,"nodes":read("node/")?,"load":self.store.scan("node-load/", Some(MAX_CONSOLE_ROWS))?.into_iter().map(|(key,value)| {
                 let (created_at, load): (u64, windshare_relay_access::usage::Load) = serde_json::from_str(&value)?;
                 let node=key.trim_start_matches("node-load/");

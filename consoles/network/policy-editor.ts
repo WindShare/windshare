@@ -11,11 +11,14 @@ export function formValues(value: Settings) {
 }
 export type Draft = ReturnType<typeof formValues>
 
+export function configuresWorkDifficulty(mode: Settings['registration']) {
+  return mode === 'by_account_count' || mode === 'proof_of_work'
+}
+
 export function settingsFromDraft(draft: Draft, previous: Settings): Settings {
   return {
     registration: draft.mode,
-    // Automatic registration can still require proof of work for bursty sources.
-    pow_bits: draft.mode === 'proof_of_work' ? Number(draft.bits) : previous.pow_bits,
+    pow_bits: configuresWorkDifficulty(draft.mode) ? Number(draft.bits) : previous.pow_bits,
     daily_bytes: Math.round(Number(draft.gib) * GIB),
     source_rate: { burst: Number(draft.sourceBurst), refill_seconds: Number(draft.sourceRefill) },
     global_rate: { burst: Number(draft.globalBurst), refill_seconds: Number(draft.globalRefill) },

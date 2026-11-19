@@ -43,6 +43,6 @@ export class AuthorityClient {
   signOut = () => this.write('logout', {})
   enroll = (node: Enrollment) => this.write<RelayNode>('nodes', node)
   policy = (key: number[], field: PolicyField, value: boolean) => this.write<RelayNode>('nodes/policy', { key, change: { field, value } }, 'PUT')
-  settings = (value: Settings) => this.write('settings', value, 'PUT')
+  settings = (value: Settings) => this.write<Pick<Snapshot, 'registration_mode'>>('settings', value, 'PUT')
   restrict = (target: Target, blocked: boolean) => this.write<Restrictions>('blocks', { ...target, blocked })
 }
