@@ -1,5 +1,5 @@
 name: Set up headless Playwright browsers
-description: Install headless browser runtimes with bounded Ubuntu mirror recovery.
+description: Install headless browsers and prepare any required system dependencies.
 
 inputs:
   browsers:
@@ -9,21 +9,11 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Install browser system dependencies
+    - name: Set up headless browser runtimes
       shell: bash
       env:
         PLAYWRIGHT_BROWSERS: ${{ inputs.browsers }}
         BROWSER_SETUP_DIRECTORY: ${{ github.action_path }}
       run: |
         read -r -a browsers <<< "$PLAYWRIGHT_BROWSERS"
-        bash "$BROWSER_SETUP_DIRECTORY/install-dependencies.sh" "${browsers[@]}"
-    - name: Install headless browser runtimes
-      shell: bash
-      env:
-        PLAYWRIGHT_BROWSERS: ${{ inputs.browsers }}
-      run: |
-        read -r -a browsers <<< "$PLAYWRIGHT_BROWSERS"
-        readonly BROWSER_DOWNLOAD_TIMEOUT_SECONDS=180
-        readonly BROWSER_DOWNLOAD_KILL_GRACE_SECONDS=10
-        timeout --kill-after="${BROWSER_DOWNLOAD_KILL_GRACE_SECONDS}s" "${BROWSER_DOWNLOAD_TIMEOUT_SECONDS}s" \
-          pnpm -C web exec playwright install --only-shell "${browsers[@]}"
+        bash "$BROWSER_SETUP_DIRECTORY/setup.sh" "${browsers[@]}"

@@ -1,11 +1,43 @@
 #!/usr/bin/env bash
 set -euo pipefail
-source "$(dirname "$0")/install-dependencies.sh"
+source "$(dirname "$0")/setup.sh"
 
 fail() {
   echo "browser setup contract: $*" >&2
   exit 1
 }
+
+run_setup_case() (
+  local label="$1" download_status="$2" first_probe_status="$3" expected_status="$4" expected_events="$5"
+  shift 5
+  local events=() probes=0 status=0
+
+  install_headless_browsers() {
+    events+=("download($*)")
+    return "$download_status"
+  }
+  probe_chromium() {
+    events+=(probe)
+    probes=$((probes + 1))
+    if (( probes == 1 )); then return "$first_probe_status"; fi
+    return 0
+  }
+  install_browser_dependencies() {
+    events+=("apt($*)")
+  }
+
+  setup_browsers "$@" || status=$?
+  [[ "$status" == "$expected_status" ]] || fail "$label: expected exit $expected_status, got $status"
+  [[ "${events[*]}" == "$expected_events" ]] || fail "$label: unexpected events: ${events[*]}"
+  printf 'PASS: %s\n' "$label"
+)
+
+run_setup_case 'launchable Chromium bypasses APT' 0 0 0 'download(chromium) probe' chromium
+run_setup_case 'Chromium recovers missing libraries and verifies launch' 0 1 0 \
+  'download(chromium) probe apt(chromium) probe' chromium
+run_setup_case 'failed browser download stops Chromium setup' 124 0 124 'download(chromium)' chromium
+run_setup_case 'cross-browser setup installs media dependencies before download' 0 0 0 \
+  'apt(firefox webkit) download(firefox webkit)' firefox webkit
 
 run_recovery_case() (
   local label="$1" simulated_primary_exit="$2" simulated_recovery_exit="$3" simulated_fallback_exit="$4"
