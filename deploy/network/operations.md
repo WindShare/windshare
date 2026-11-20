@@ -2,8 +2,8 @@
 
 The link host is **ws.ourworld.top**; **windshare.cc** is the backup entry.
 Use an independent frontend Worker and the same web build on mainland servers.
-Only hosts whose administrators are all trusted may serve the frontend or installers.
-Node-only hosts must not receive frontend TLS keys, DNS credentials, signing keys, or
+Only hosts whose administrators are all trusted may serve the frontend, API ingress, or installers.
+Node-only hosts must not receive frontend or API TLS keys, DNS credentials, signing keys, or
 authority credentials; their own TLS certificate covers only their node hostname.
 Keep account IDs, host inventories, and deployment status in local `*_gitignore`
 records. Private keys and API credentials stay outside the checkout.
@@ -21,10 +21,13 @@ records. Private keys and API credentials stay outside the checkout.
    Provision only the required custom hostnames; budget alerts do not cap usage.
 2. Reuse the host's TLS ingress. Import `/etc/caddy/sites/windshare.caddy` on each
    mainland host; `Caddyfile.template` shows the configuration with a DNS-01 certificate.
-   Set `WINDSHARE_NODE_HOST` when rendering its node hostname. Alternatively render
-   `nginx.conf.template` with `envsubst '${NODE_HOST} ${FRONTEND_TLS_DIR} ${NODE_TLS_DIR}'`.
+   Set `WINDSHARE_NODE_HOST` when rendering its node hostname. On trusted mainland API
+   ingress hosts, also import `authority.Caddyfile.template` after DNS-01 issuance.
+   Alternatively render `nginx.conf.template` with
+   `envsubst '${NODE_HOST} ${FRONTEND_TLS_DIR} ${NODE_TLS_DIR}'` and, for API ingress,
+   `nginx-authority.conf.template` with `envsubst '${API_TLS_DIR}'`.
    Each TLS directory contains `fullchain.pem` and `privkey.pem`. Hosts without the
-   frontend role use `nginx-node.conf.template`, rendering only `${NODE_HOST}`.
+   frontend or API ingress role use `nginx-node.conf.template`, rendering only `${NODE_HOST}`.
 3. Create a `windshare-network` system user, install each `wsrelay` under
    `/opt/windshare-network/releases/`, and point `current` to the selected release.
    Install `windshare-network.service` and the complete node configuration at
@@ -57,13 +60,18 @@ Save the filled policy as `alidns-renewal-policy_gitignore.json`. The permission
 scope is the DNS zone, not an individual TXT record. Store `Ali_Key` and `Ali_Secret` in
 `/etc/windshare-network/credentials/alidns.env` (root-owned, 0600).
 
-Issue with `--server letsencrypt --dns dns_ali --keylength ec-256 -d ws.ourworld.top`,
-using the home/config paths above. Install the full chain and key into
-`/etc/windshare-network/tls/{fullchain,privkey}.pem` (root:caddy, 0640). Register
-`caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile && systemctl reload caddy`
-as the `acme.sh --install-cert --reloadcmd`. Install and enable
+Issue each split-line host separately with
+`--server letsencrypt --dns dns_ali --keylength ec-256 -d <host>` (`ws.ourworld.top`,
+and `api.ourworld.top` on trusted mainland API ingress hosts), using the home/config
+paths above. Install each host's full chain and key into
+`/etc/windshare-network/tls/<host>/{fullchain,privkey}.pem` (directories `0750`,
+files `0640`, `root:caddy`, or the Nginx group when using Nginx) so every DNS-01
+target stays under the single `ReadWritePaths` root in `windshare-cert-renewal.service`.
+Register `caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile && systemctl reload caddy`
+(or `/usr/local/libexec/windshare-reload-nginx` for Nginx) as each host's
+`acme.sh --install-cert --reloadcmd`. Install and enable
 `windshare-cert-renewal.timer`; it checks daily and follows the CA renewal window.
-Exercise DNS issuance, challenge cleanup, Caddy reload, and the scheduled service
+Exercise DNS issuance, challenge cleanup, ingress reload, and the scheduled service
 before enabling split DNS. Each renewal server needs its source IP authorized.
 
 For node-only Nginx hosts, install pinned lego 5.5.2 at `/opt/windshare-acme/lego-5.5.2`.

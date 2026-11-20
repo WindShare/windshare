@@ -32,8 +32,8 @@ Provision `api.ourworld.top` as a Cloudflare SaaS custom hostname on `windshare.
 using the existing zone fallback. The helper installs its exact Worker route and the
 origin custom domain. See [Cloudflare routing](https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/start/advanced-settings/worker-as-origin/).
 Mainland DNS points to trusted API ingress hosts; use the
-[ingress templates](../../../deploy/network/authority.Caddyfile.template) and DNS-01
-certificate renewal. Pass their outbound IPs in `--trusted-proxy-ips` so the Worker
+[ingress templates](../../../deploy/network/authority.Caddyfile.template) and
+[DNS-01 certificate renewal](../../../deploy/network/operations.md#certificate-renewal). Pass their outbound IPs in `--trusted-proxy-ips` so the Worker
 can apply source limits to original clients.
 
 For email registration and account email changes, set variable `EMAIL_WEBHOOK_URL` and secret `EMAIL_WEBHOOK_TOKEN` in the same environment.

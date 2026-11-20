@@ -1,6 +1,6 @@
 # Reuse the existing TLS ingress. Split-line link hosts need independently renewed DNS-01 certificates.
 ws.ourworld.top {
-    tls /etc/windshare-network/tls/fullchain.pem /etc/windshare-network/tls/privkey.pem
+    tls /etc/windshare-network/tls/ws.ourworld.top/fullchain.pem /etc/windshare-network/tls/ws.ourworld.top/privkey.pem
     root * /srv/windshare/current/web
     encode gzip
     header X-Content-Type-Options nosniff
