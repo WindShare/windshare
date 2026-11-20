@@ -96,7 +96,7 @@ func (h *nodeHealth) RecordAttempt(identity string, started, generation uint64, 
 	case senderrelay.AttemptSucceeded, senderrelay.AttemptParked:
 		// A concurrent success clears soft avoidance but cannot revoke an
 		// explicit HTTP deadline received by another registration.
-		entry = healthEntry{Observation: relayplan.Observation{ServerRetryAt: entry.ServerRetryAt}, decayAnchor: entry.ServerRetryAt}
+		entry = healthEntry{ServerRetryAt: entry.ServerRetryAt, decayAnchor: entry.ServerRetryAt}
 		entry.Admitted, entry.Duration = true, attempt.HandshakeDuration
 	case senderrelay.AttemptFailed:
 		reason := failureReason(attempt.Failure)
