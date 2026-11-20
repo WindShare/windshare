@@ -2,6 +2,12 @@ import { useEffect, useState } from 'react'
 import { PortalIcon } from '../PortalIcon'
 import { PORTAL_LINKS } from '../navigation'
 import { usePortalCopy, type PortalMessageKey } from '../locales/use-portal-copy'
+import {
+  detectVisitorEnvironment,
+  formatDownloadAction,
+  getReleaseDownloads,
+  selectRecommendedAsset,
+} from './release-downloads'
 
 const SHARE_COMMAND = 'wind share ./My-Project-Folder'
 const COPY_FEEDBACK_MS = 2400
@@ -16,6 +22,13 @@ const COPY_MESSAGES: Record<CopyStatus, PortalMessageKey> = {
 export function ShareGuide() {
   const t = usePortalCopy()
   const [status, setStatus] = useState<CopyStatus>('idle')
+  const releaseDownloads = getReleaseDownloads()
+  const cliDownload = releaseDownloads === undefined
+    ? undefined
+    : selectRecommendedAsset(releaseDownloads, detectVisitorEnvironment(), {
+        preferredKind: 'cli',
+        allowOtherKind: false,
+      })
   useEffect(() => {
     if (status !== 'copied') return
     const timer = window.setTimeout(() => setStatus('idle'), COPY_FEEDBACK_MS)
@@ -38,9 +51,16 @@ export function ShareGuide() {
         <h2>{t.shareTitle}</h2>
         <p>{t.shareDescription}</p>
       </div>
-      <a href={PORTAL_LINKS.installation} target="_blank" rel="noopener noreferrer" className="portal-text-link">
-        {t.installGuide}<PortalIcon name="arrow" size={16} />
-      </a>
+      <div className="portal-share-actions">
+        {cliDownload !== undefined && (
+          <a href={cliDownload.href} download={cliDownload.filename} className="portal-text-link portal-share-download">
+            <PortalIcon name="download" size={15} /><span>{formatDownloadAction(t, cliDownload)}</span>
+          </a>
+        )}
+        <a href={PORTAL_LINKS.installation} target="_blank" rel="noopener noreferrer" className="portal-text-link">
+          <span>{t.installGuide}</span><PortalIcon name="arrow" size={16} />
+        </a>
+      </div>
       <div className="portal-command">
         <div className="portal-command-heading"><span>{t.terminalLabel}</span>
           <button type="button" className="portal-btn-copy" onClick={() => { void copy() }} disabled={status === 'copying'}>

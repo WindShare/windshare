@@ -70,14 +70,17 @@ test('SaaS link hostname requires validated TLS and refuses another Worker route
   await assert.rejects(deployFrontend({ inputs, cloudflare, deploy }), /route must belong/);
   assert.deepEqual(frontendConfig(inputs).routes[1], { pattern: 'ws.ourworld.top/*', zone_id: inputs.route.zoneId });
 });
-test('frontend serves assets, refuses absent directory and redirects only installer paths', async () => {
+test('frontend serves assets, refuses absent directory and redirects only versioned installer paths', async () => {
   const env = { ASSETS: { fetch: async () => new Response('page', { headers: { 'Content-Type': 'text/html' } }) } };
   assert.equal((await worker.fetch(new Request('https://ws.ourworld.top/share'), env)).status, 200);
   assert.equal((await worker.fetch(new Request('https://ws.ourworld.top/.well-known/windshare-network'), env)).status, 503);
-  const download = await worker.fetch(new Request('https://ws.ourworld.top/downloads/latest/wind-windows-amd64.zip'), env);
-  assert.equal(download.headers.get('Location'), 'https://github.com/WindShare/windshare/releases/latest/download/wind-windows-amd64.zip');
-  assert.equal((await worker.fetch(new Request('https://ws.ourworld.top/downloads/latest/https:%2F%2Fevil'), env)).status, 404);
-  assert.equal((await worker.fetch(new Request('https://ws.ourworld.top/downloads/latest/a.zip', { method: 'POST' }), env)).status, 405);
+  const download = await worker.fetch(new Request('https://ws.ourworld.top/downloads/v0.1.3/windshare-v0.1.3-windows-amd64.zip'), env);
+  assert.equal(download.status, 302);
+  assert.equal(download.headers.get('Location'), 'https://github.com/WindShare/windshare/releases/download/v0.1.3/windshare-v0.1.3-windows-amd64.zip');
+  assert.equal((await worker.fetch(new Request('https://ws.ourworld.top/downloads/'), env)).status, 404);
+  assert.equal((await worker.fetch(new Request('https://ws.ourworld.top/downloads/latest/windshare-v0.1.3-windows-amd64.zip'), env)).status, 404);
+  assert.equal((await worker.fetch(new Request('https://ws.ourworld.top/downloads/v0.1.3/https:%2F%2Fevil'), env)).status, 404);
+  assert.equal((await worker.fetch(new Request('https://ws.ourworld.top/downloads/v0.1.3/windshare-v0.1.3-windows-amd64.zip', { method: 'POST' }), env)).status, 405);
 });
 
 test('signed directory mirrors are readable from self-hosted frontends', async () => {
