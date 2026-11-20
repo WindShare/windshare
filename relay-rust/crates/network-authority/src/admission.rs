@@ -80,6 +80,10 @@ impl CreationAdmission {
         self.mode
     }
 
+    pub(crate) fn source_bucket(&self) -> &str {
+        &self.source_key
+    }
+
     pub(crate) const fn verified_email(&self) -> Option<(&str, &str)> {
         match &self.proof {
             Some(proof) => proof.verified_email(),
@@ -201,7 +205,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
             tracing::debug!(
                 event = "registration_rate_limited",
                 attempt = %attempt.fingerprint(),
-                source,
+                source_bucket = %source_key,
                 reason,
                 bursts = local.bursts,
                 retry_after,
@@ -236,7 +240,11 @@ impl<R: Store, E: Environment> Authority<R, E> {
                     ProofCheck::Accepted(proof) => Some(proof),
                     ProofCheck::Retry(challenge) if kind == ProofKind::Email => {
                         return Err(verification_required(
-                            attempt, source, mode, escalated, challenge,
+                            attempt,
+                            &source_key,
+                            mode,
+                            escalated,
+                            challenge,
                         ));
                     }
                     ProofCheck::Retry(_) | ProofCheck::Unavailable => {
@@ -252,7 +260,11 @@ impl<R: Store, E: Environment> Authority<R, E> {
                             }
                         };
                         return Err(verification_required(
-                            attempt, source, mode, escalated, challenge,
+                            attempt,
+                            &source_key,
+                            mode,
+                            escalated,
+                            challenge,
                         ));
                     }
                 }
@@ -309,7 +321,7 @@ const fn creation_rate_reason(local_empty: bool, global_empty: bool) -> &'static
 
 fn verification_required(
     attempt: RegistrationAttempt,
-    source: &str,
+    source_bucket: &str,
     mode: RegistrationMode,
     escalated: bool,
     challenge: Challenge,
@@ -317,7 +329,7 @@ fn verification_required(
     tracing::debug!(
         event = "registration_verification_required",
         attempt = %attempt.fingerprint(),
-        source,
+        source_bucket,
         ?mode,
         reason = if escalated { "source_burst" } else { "policy" },
     );

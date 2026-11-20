@@ -207,17 +207,19 @@ impl<R: Store, E: Environment> Authority<R, E> {
             // Passwordless email verification recovers the existing account with a
             // new device credential so reinstalls work while keeping one allowance
             // and block state per canonical mailbox.
+            let source_bucket = admission.source_bucket().to_owned();
             admission.consume(&mut self.store)?;
             let account = self.ensure_account(existing_id)?;
             tracing::info!(
                 event = "account_recovered_by_email",
                 attempt = %attempt.fingerprint(),
                 account = ?account.id,
-                source,
+                source_bucket = %source_bucket,
                 ?mode,
             );
             return self.new_credential(account.id, request.client_secret);
         }
+        let source_bucket = admission.source_bucket().to_owned();
         let verified_email = admission.consume(&mut self.store)?;
         let id = self.environment.random()?;
         anyhow::ensure!(id != [0; 16], "account ID generator returned zero");
@@ -261,7 +263,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
             event = "account_created",
             attempt = %attempt.fingerprint(),
             account = ?id,
-            source,
+            source_bucket = %source_bucket,
             ?mode,
             count,
         );

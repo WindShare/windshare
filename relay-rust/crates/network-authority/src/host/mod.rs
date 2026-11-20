@@ -117,7 +117,7 @@ impl DurableObject for NetworkAuthority {
         match result {
             Ok(response) => Ok(response),
             Err(error) => {
-                worker::console_error!("authority_request_failed: {}", error);
+                tracing::error!(event = "authority_request_failed", %error);
                 Response::error("authority temporarily unavailable", 503)
             }
         }

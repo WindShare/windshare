@@ -216,6 +216,9 @@ fn registration_traces_record_attempt_fingerprint_and_rate_limit_escalation() {
         assert!(authority.register("src-a", registration(2)).is_err());
     });
 
+    let serialized_first = format!("{events:?}");
+    assert!(!serialized_first.contains("src-a"));
+
     let created = events_named(&events, "account_created");
     assert_eq!(created.len(), 1);
     let attempt = created[0]["fields"]["attempt"].as_str().unwrap();
@@ -223,12 +226,14 @@ fn registration_traces_record_attempt_fingerprint_and_rate_limit_escalation() {
     assert_ne!(attempt, raw_secret);
     assert_ne!(attempt, raw_digest);
     assert_eq!(created[0]["fields"]["mode"], "Automatic");
-    assert_eq!(created[0]["fields"]["source"], "src-a");
+    let source_bucket = created[0]["fields"]["source_bucket"].as_str().unwrap();
+    assert!(source_bucket.starts_with("creation-source/"));
 
     let rate_limited = events_named(&events, "registration_rate_limited");
     assert_eq!(rate_limited.len(), 2);
     assert_eq!(rate_limited[0]["fields"]["reason"], "source_rate_limited");
     assert_eq!(rate_limited[0]["fields"]["bursts"], 1);
+    assert_eq!(rate_limited[0]["fields"]["source_bucket"], source_bucket);
     assert_eq!(
         rate_limited[0]["fields"]["attempt"],
         rate_limited[1]["fields"]["attempt"]
@@ -261,6 +266,10 @@ fn registration_traces_record_attempt_fingerprint_and_rate_limit_escalation() {
         assert!(authority.register("src-a", registration(3)).is_err());
     });
 
+    let serialized_second = format!("{events:?}");
+    assert!(!serialized_second.contains("src-a"));
+    assert!(!serialized_second.contains("src-b"));
+
     let limited = events_named(&events, "registration_rate_limited");
     assert!(
         limited
@@ -275,7 +284,9 @@ fn registration_traces_record_attempt_fingerprint_and_rate_limit_escalation() {
 
     let verification = events_named(&events, "registration_verification_required");
     assert!(verification.iter().any(|e| {
-        e["fields"]["mode"] == "ProofOfWork" && e["fields"]["reason"] == "source_burst"
+        e["fields"]["mode"] == "ProofOfWork"
+            && e["fields"]["reason"] == "source_burst"
+            && e["fields"]["source_bucket"] == source_bucket
     }));
 }
 
@@ -325,14 +336,20 @@ fn email_registration_and_recovery_traces_record_mode_and_attempt() {
             )
             .unwrap();
     });
+    let serialized_email = format!("{events:?}");
+    assert!(!serialized_email.contains("src-email"));
+
     let verification = events_named(&events, "registration_verification_required");
     assert_eq!(verification.len(), 1);
     assert_eq!(verification[0]["fields"]["mode"], "Email");
     assert_eq!(verification[0]["fields"]["reason"], "policy");
+    let email_source_bucket = verification[0]["fields"]["source_bucket"].as_str().unwrap();
+    assert!(email_source_bucket.starts_with("creation-source/"));
 
     let recovered = events_named(&events, "account_recovered_by_email");
     assert_eq!(recovered.len(), 1);
     assert_eq!(recovered[0]["fields"]["mode"], "Email");
+    assert_eq!(recovered[0]["fields"]["source_bucket"], email_source_bucket);
     assert_ne!(recovered[0]["fields"]["attempt"].as_str().unwrap(), "");
 }
 
