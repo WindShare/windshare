@@ -53,6 +53,7 @@ import {
   isPristinePreObjectCandidate,
   openPersistentSelectedFile,
   PersistentDirectoryLedgerCoordinator,
+  resolveCompletedPersistentRevision,
 } from './materialization-authority'
 import {
   captureCheckpointFailureFacts,
@@ -81,6 +82,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
   readonly #recreatablePreObjectCandidates = new Set<string>()
   readonly #initialClaims: PersistentInitialClaimCoordinator | undefined
   #needsAttentionReported = false
+  #hasCommittedCheckpoints = false
   #activated = false
   #activation: Promise<void> | undefined
   #closed = false
@@ -142,6 +144,8 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
           options.checkpoints.binding.operationId,
         )
       }
+      const existing = await options.checkpoints.scanCommitted({ direction: 'ascending', limit: 1 })
+      session.#hasCommittedCheckpoints = existing.records.length > 0
       return session
     } catch (error) {
       recordOutputException(options.diagnostics?.failures?.outputReservation, error)
@@ -213,9 +217,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     let openedHandle: PersistentTreeFile | undefined
     let stageScope: PersistentOutputStageScope | undefined
     try {
-      // Awaiting authenticated source authority before local planning prevents both
-      // checkpoint reservations and namespace placeholders for unopened revisions.
-      const revision = snapshotOpenedRevision(await request.openRevision())
+      const revision = await this.#resolveFileRevision(request, materializationRelativePath)
       // Source failures retain their protocol attribution; only local materialization
       // can produce checkpoint evidence.
       try {
@@ -303,6 +305,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
             admission.leave()
             transactionScope?.retireFileEvidence()
           },
+          onCommitted: () => { this.#hasCommittedCheckpoints = true },
           onOwnershipUnknown: () => this.#reportLegacyNeedsAttention(),
           ...(transactionScope === undefined ? {} : { stageScope: transactionScope }),
           ...(this.#diagnostics === undefined
@@ -315,9 +318,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
         handedOff = true
         return transaction
       } catch (error) {
-        recordOutputException(this.#diagnostics?.failures?.checkpoint, error)
-        this.#trace({ eventName: 'checkpoint', transition: 'failed' })
-        if (error instanceof TargetOwnershipUnknownError) this.#reportLegacyNeedsAttention()
+        this.#recordCheckpointFailure(error)
         throw error
       }
     } finally {
@@ -328,6 +329,36 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
         }
       }
     }
+  }
+
+  async #resolveFileRevision(
+    request: PersistentFileRequest,
+    path: MaterializationRootRelativePath,
+  ): Promise<OpenedFileRevision> {
+    if (this.#hasCommittedCheckpoints) {
+      try {
+        const completed = await resolveCompletedPersistentRevision({
+          request,
+          path,
+          checkpoints: this.#checkpoints,
+          ...(this.#semantic === undefined ? {} : { semantic: this.#semantic }),
+          ...(this.#ledgerBinding === undefined ? {} : { ledgerBinding: this.#ledgerBinding }),
+        })
+        if (completed !== undefined) return completed
+      } catch (error) {
+        this.#recordCheckpointFailure(error)
+        throw error
+      }
+    }
+    // Awaiting authenticated source authority before local planning prevents both
+    // checkpoint reservations and namespace placeholders for unopened revisions.
+    return snapshotOpenedRevision(await request.openRevision())
+  }
+
+  #recordCheckpointFailure(error: unknown): void {
+    recordOutputException(this.#diagnostics?.failures?.checkpoint, error)
+    this.#trace({ eventName: 'checkpoint', transition: 'failed' })
+    if (error instanceof TargetOwnershipUnknownError) this.#reportLegacyNeedsAttention()
   }
 
   ensureDirectory(

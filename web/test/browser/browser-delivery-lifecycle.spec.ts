@@ -33,8 +33,10 @@ for (const preference of ['direct', 'automatic'] as const) {
     }, { path: REOPEN_PROBE, fixture: first.fixture })
     expect(resumed).toMatchObject({
       reads: [{ name: 'payload.bin', offset: 4 }],
+      siblingOpens: 0,
       lifecycle: 'published', worker: 'Succeeded',
       stagedBytesBefore: preference === 'automatic' ? '4' : '0',
+      siblingBytes: [7, 8],
       payloadBytes: [1, 2, 3, 4, 5, 6],
     })
   })

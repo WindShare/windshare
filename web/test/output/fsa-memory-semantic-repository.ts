@@ -218,6 +218,10 @@ class MemoryCheckpointRepository implements FSASemanticOutputRepository {
   }
 
   async commitDurableCut(previous: FileCheckpointV2, durable: FileCheckpointV2): Promise<void> {
+    if (previous.fileRevision !== durable.fileRevision &&
+        [...this.#store.proofs.values()].some(proof => proof.recordId === previous.recordId)) {
+      throw new DOMException('metadata reuse cannot replace a historical delivery', 'InvalidStateError')
+    }
     this.#replaceCommitted(previous, durable)
   }
 

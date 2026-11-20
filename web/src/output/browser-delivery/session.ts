@@ -97,10 +97,26 @@ export class BrowserDeliveryMaterialization implements PersistentMaterialization
 
   async #beginFile(request: PersistentFileRequest): Promise<PersistentFileTransactionPort> {
     if (request.sourceAuthenticationPath === undefined) throw new TypeError('Browser delivery requires the authenticated source coordinate')
+    const completed = await this.#tryCompleteRecord(request)
+    if (completed !== undefined) return this.#openReceiving(completed, completed.source, request)
     const revision = await request.openRevision()
     const source: BrowserDeliverySource = { ...revision, canonicalPath: request.sourceAuthenticationPath }
     const record = await this.#selectRecord(source, request.materializationRelativePath)
     return this.#openReceiving(record, source, request)
+  }
+
+  // Locally completed files keep their authenticated historical revision so folder resume
+  // neither reopens source handles nor attempts metadata reuse against finished deliveries.
+  async #tryCompleteRecord(request: PersistentFileRequest): Promise<BrowserDeliveryRecordV1 | undefined> {
+    if (request.requireRevisionOpen || request.fileId === undefined || !this.#records.has(request.fileId)) return undefined
+    const record = await this.#engine.reconcile(request.fileId)
+    if (!isLocallyCompleteDeliveryState(record.state) || record.localMutation !== undefined) return undefined
+    if (JSON.stringify(request.sourceAuthenticationPath) !== JSON.stringify(record.source.canonicalPath) ||
+        JSON.stringify(request.materializationRelativePath) !== JSON.stringify(record.materializationRelativePath) ||
+        (request.expectedSize !== undefined && request.expectedSize !== record.source.exactSize)) {
+      return undefined
+    }
+    return record
   }
 
   async #selectRecord(source: BrowserDeliverySource, materializationRelativePath: readonly string[]): Promise<BrowserDeliveryRecordV1> {
@@ -170,7 +186,11 @@ export class BrowserDeliveryMaterialization implements PersistentMaterialization
 
   async #openReceiving(record: BrowserDeliveryRecordV1, source: BrowserDeliverySource, request: PersistentFileRequest): Promise<PersistentFileTransactionPort> {
     const openedSource = source
-    const openedRequest: PersistentFileRequest = { ...request, sourceAuthenticationPath: openedSource.canonicalPath, materializationRelativePath: record.materializationRelativePath, openRevision: async () => openedSource }
+    const openedRequest: PersistentFileRequest = {
+      ...request, fileId: openedSource.fileId, expectedSize: openedSource.exactSize,
+      sourceAuthenticationPath: openedSource.canonicalPath, materializationRelativePath: record.materializationRelativePath,
+      requireRevisionOpen: true, openRevision: async () => openedSource,
+    }
     let target: PersistentFileTransactionPort | undefined
     let receiving: PersistentFileTransactionPort | undefined
     try {
@@ -180,8 +200,11 @@ export class BrowserDeliveryMaterialization implements PersistentMaterialization
       // beginFile reserves an owned empty entry; FSA does not open its writable until
       // the first write. This prebinds final identity without allocating a target copy.
       let targetRequest = openedRequest
-      if (record.placement === 'staged') targetRequest = { ...openedRequest, recovery: { pausedFile: 'preserve' } }
-      else if (record.state.kind === 'restart-authorized') targetRequest = { ...openedRequest, recovery: { pausedFile: 'restart-owned-file' } }
+      if (record.placement === 'staged' || isLocallyCompleteDeliveryState(record.state)) {
+        targetRequest = { ...openedRequest, recovery: { pausedFile: 'preserve' } }
+      } else if (record.state.kind === 'restart-authorized') {
+        targetRequest = { ...openedRequest, recovery: { pausedFile: 'restart-owned-file' } }
+      }
       target = record.placement === 'direct'
         ? await this.#options.target.beginDirectFile(targetRequest, {
           currentRecord: () => this.#records.get(record.fileId) ?? record,
@@ -503,4 +526,9 @@ class BrowserDeliveryFileTransaction implements PersistentFileTransactionPort {
     const next = this.#tail.catch(() => undefined).then(work); this.#tail = next; return next
   }
   #finish(): void { this.#settled = true; this.#options.release(this) }
+}
+
+function isLocallyCompleteDeliveryState(state: BrowserDeliveryRecordV1['state']): boolean {
+  return state.kind === 'staged-complete' || state.kind === 'copying' ||
+    state.kind === 'target-saved' || state.kind === 'cleanup-pending' || state.kind === 'cleaned'
 }

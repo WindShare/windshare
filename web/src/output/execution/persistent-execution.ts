@@ -1,3 +1,4 @@
+import { byteRange } from '../../content/geometry'
 import { sourceMetadataFields } from '../../content/revision-comparison'
 import type { FinalFileCheckpointProof } from '../persistence/journal'
 import {
@@ -427,7 +428,7 @@ class PersistentMaterializationOutput implements OutputSession {
   }
 
   beginFile(input: OutputFileRequest, signal: AbortSignal): Promise<BeginOutputFileResult> {
-    return this.#beginFile(snapshotOutputFileRequest(input, this.#directTreeCoordinates), this.#recovery, signal)
+    return this.#beginFile(snapshotOutputFileRequest(input, this.#directTreeCoordinates), this.#recovery, false, signal)
   }
 
   async readmitFile(input: OutputFileRequest, paused: VerifiedDurableRanges, signal: AbortSignal): Promise<BeginOutputFileResult> {
@@ -441,11 +442,12 @@ class PersistentMaterializationOutput implements OutputSession {
         !samePath(paused.ownership.canonicalPath, request.materializationRelativePath)) {
       throw new TypeError('paused attempt does not belong to this output file')
     }
-    return this.#beginFile(request, { pausedFile: 'preserve' }, signal)
+    return this.#beginFile(request, { pausedFile: 'preserve' }, true, signal)
   }
 
   async #beginFile(
-    request: OutputFileRequest, recovery: PersistentExecutionRecoveryPolicy, signal: AbortSignal,
+    request: OutputFileRequest, recovery: PersistentExecutionRecoveryPolicy,
+    requireRevisionOpen: boolean, signal: AbortSignal,
   ): Promise<BeginOutputFileResult> {
     signal.throwIfAborted()
     const automaticCheckpointAdmission = this.#automaticCheckpointAdmission?.enrollFile(
@@ -462,11 +464,14 @@ class PersistentMaterializationOutput implements OutputSession {
     let opened: OpenedOutputRevision | undefined
     try {
       const transaction = await this.#materialization.beginFile({
+        fileId: request.source.fileId,
+        expectedSize: request.expectedSize,
         sourceAuthenticationPath: request.sourceAuthenticationPath,
         materializationRelativePath: request.materializationRelativePath,
         shareInstance: request.source.shareInstance,
         outputSession: this.identity,
         recovery,
+        ...(requireRevisionOpen ? { requireRevisionOpen: true } : {}),
         ...(automaticCheckpointAdmission === undefined
           ? {}
           : { automaticCheckpointAdmission }),
@@ -509,38 +514,56 @@ class PersistentMaterializationOutput implements OutputSession {
       })
       // Return the opened transaction even if cancellation won the storage
       // race so its owner can settle and drain it.
-      if (!callbackInvoked || opened === undefined) {
-        throw new TypeError('persistent materializer bypassed authenticated revision authority')
-      }
-      requireMatchingPersistentRevision(opened, transaction)
-      const ownership: OutputFileOwnership = Object.freeze({
-        ...this.identity,
-        canonicalPath: request.materializationRelativePath,
-        ownedFileIdentity: transaction.ownedObjectId,
-      })
-      const durableRanges = verifiedPersistentRanges(
-        ownership,
-        opened,
-        transaction.initialDurableRanges,
-        transaction.contentReplica,
-      )
-      return Object.freeze({
-        revision: opened,
-        durableRanges,
-        ...(transaction.checkpointPolicy === undefined ? {} : { checkpoint: {
-          objectId: transaction.checkpointObjectId ?? transaction.ownedObjectId,
-          policy: transaction.checkpointPolicy,
-        } }),
-        transaction: new PersistentOutputTransaction({
-          transaction,
-          revision: opened,
+      try {
+        if (callbackInvoked && opened === undefined) {
+          throw new TypeError('persistent materializer bypassed authenticated revision authority')
+        }
+        const resolvedRevision = opened ?? snapshotOpenedOutputRevision({
+          shareInstance: request.source.shareInstance,
+          fileId: transaction.revision.fileId,
+          fileRevision: transaction.revision.fileRevision,
+          ...sourceMetadataFields(transaction.revision),
+          exactSize: transaction.revision.exactSize,
+        })
+        requireMatchingOpenedRevision(request, resolvedRevision)
+        requireMatchingPersistentRevision(resolvedRevision, transaction)
+        const ownership: OutputFileOwnership = Object.freeze({
+          ...this.identity,
+          canonicalPath: request.materializationRelativePath,
+          ownedFileIdentity: transaction.ownedObjectId,
+        })
+        const durableRanges = verifiedPersistentRanges(
           ownership,
-          checkpointNamespace: this.#checkpointNamespace,
-          isolated: this.capabilities.fileFailureIsolation,
-          releaseMutation: () => mutation?.release(),
-          recordProof: proof => this.#recordFile(proof),
-        }),
-      })
+          resolvedRevision,
+          transaction.initialDurableRanges,
+          transaction.contentReplica,
+        )
+        // Only a complete durable local copy may omit openRevision, matching TransferJob's contract.
+        if (!callbackInvoked && (requireRevisionOpen || this.capabilities.durability === 'None' ||
+            !durableRanges.covers(byteRange(0n, resolvedRevision.exactSize)))) {
+          throw new TypeError('persistent materializer bypassed authenticated revision authority')
+        }
+        return Object.freeze({
+          revision: resolvedRevision,
+          durableRanges,
+          ...(transaction.checkpointPolicy === undefined ? {} : { checkpoint: {
+            objectId: transaction.checkpointObjectId ?? transaction.ownedObjectId,
+            policy: transaction.checkpointPolicy,
+          } }),
+          transaction: new PersistentOutputTransaction({
+            transaction,
+            revision: resolvedRevision,
+            ownership,
+            checkpointNamespace: this.#checkpointNamespace,
+            isolated: this.capabilities.fileFailureIsolation,
+            releaseMutation: () => mutation?.release(),
+            recordProof: proof => this.#recordFile(proof),
+          }),
+        })
+      } catch (error) {
+        await transaction.retire(error).catch(() => undefined)
+        throw error
+      }
     } catch (error) {
       automaticCheckpointAdmission?.retire('unused')
       mutation?.release()

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   CheckpointSourceEvidenceUnavailableError, SourceRevisionChangedError,
 } from '../../src/output/persistent-tree/errors'
@@ -30,10 +30,47 @@ describe('folder delivery metadata recovery', () => {
     expect(historical.source.fileRevision).toBe(current.fileRevision)
     expect(f.targetTree.file(original.materializationRelativePath).snapshot())
       .toEqual(Uint8Array.from([7, ...new Array(Number(size - 1n)).fill(8)]))
-    await expect(session.beginFile({ ...request, openRevision: async () => ({ ...current, fileRevision: deliveryIdentity(73, 16) }) }))
+
+    // Folder resume revisits completed siblings locally without reopening source handles or mutating history.
+    const reopenedSource = vi.fn(async () => ({ ...current, fileRevision: deliveryIdentity(73, 16) }))
+    const revisited = await session.beginFile({ ...request, openRevision: reopenedSource })
+    expect(reopenedSource).not.toHaveBeenCalled()
+    expect(revisited.ownedObjectId).toBe(owned)
+    expect(revisited.revision.fileRevision).toBe(current.fileRevision)
+    expect(revisited.initialDurableRanges).toEqual([{ start: 0n, end: size }])
+    const proof = await revisited.commit()
+    expect(proof.fileRevision).toBe(current.fileRevision)
+    expect(f.repository.files.get(source.fileId)?.digest).toBe(historical.digest)
+
+    // Forced readmission still cannot rebind a completed historical delivery to a new revision.
+    await expect(session.beginFile({ ...request, requireRevisionOpen: true, openRevision: reopenedSource }))
       .rejects.toMatchObject({ decision: 'reuse-state-blocked' })
+    expect(reopenedSource).toHaveBeenCalledTimes(1)
     expect(f.repository.files.get(source.fileId)?.digest).toBe(historical.digest)
     await session.close()
+  })
+
+  it('delivers a complete staged sibling locally on resume without reopening its source', async () => {
+    const f = await deliveryEngineFixture()
+    const request = f.request(11, 4n)
+    const source = { ...await request.openRevision(), sourceMetadata: deliveryIdentity(71) }
+    const first = await f.session.beginFile({ ...request, openRevision: async () => source })
+    await first.writeRange(0n, Uint8Array.of(3, 4, 5, 6))
+    f.onTargetWrite(async () => { throw new DOMException('destination paused', 'AbortError') })
+    await expect(first.commit()).rejects.toThrow('destination paused')
+    await f.session.close()
+
+    f.onTargetWrite(undefined)
+    const reopened = await f.reopen()
+    const openRevision = vi.fn(async () => ({ ...source, fileRevision: deliveryIdentity(74, 16) }))
+    const resumed = await reopened.beginFile({ ...request, openRevision })
+    expect(openRevision).not.toHaveBeenCalled()
+    expect(resumed.revision.fileRevision).toBe(source.fileRevision)
+    expect(resumed.initialDurableRanges).toEqual([{ start: 0n, end: 4n }])
+    const proof = await resumed.commit()
+    expect(proof.fileRevision).toBe(source.fileRevision)
+    expect(f.targetTree.file(request.materializationRelativePath).snapshot()).toEqual(Uint8Array.of(3, 4, 5, 6))
+    await reopened.close()
   })
 
   it('reconciles storage admission after the delivery journal commit was interrupted', async () => {

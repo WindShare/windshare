@@ -3,6 +3,7 @@ import { materializationFixture, revision, FILE_ID } from './persistent-tree-ses
 import { identity } from './planning/fixture'
 import { encodeFileCheckpointV2, decodeFileCheckpointV2 } from '../../src/output/persistence/checkpoint'
 import { admitCheckpointMetadataReuse } from '../../src/output/persistence/metadata-reuse'
+import { PersistentTreeOutputSession } from '../../src/output/persistent-tree/session'
 import { preservingRecoveryPolicy } from './persistent-tree-file-fixture'
 
 const sourceMetadata = identity(71, 32)
@@ -84,5 +85,35 @@ describe('metadata resume admission', () => {
     await expect(admitCheckpointMetadataReuse(delivered, current, f.checkpoints, f.checkpoints))
       .rejects.toThrow('historical delivery')
     expect(f.checkpoints.committed(FILE_ID)).toEqual(delivered)
+  })
+
+  it.each([0n, 6n])('short-circuits a completed %s-byte file on reopen without calling openRevision or bumping generation', async size => {
+    const f = await materializationFixture()
+    const initial = { ...revision(size), sourceMetadata }
+    const first = await f.session.beginFile({
+      fileId: FILE_ID, expectedSize: size, materializationRelativePath: path,
+      openRevision: async () => initial,
+    })
+    if (size > 0n) await first.writeRange(0n, Uint8Array.of(1, 2, 3, 4, 5, 6))
+    const initialCommit = await first.commit()
+    const delivered = f.checkpoints.committed(FILE_ID)
+    await f.session.close()
+
+    const reopened = await PersistentTreeOutputSession.open({
+      tree: f.tree, checkpoints: f.checkpoints, semantic: f.checkpoints,
+    })
+    const openRevision = vi.fn(async () => ({ ...initial, fileRevision: current.fileRevision }))
+    const revisited = await reopened.beginFile({
+      fileId: FILE_ID, expectedSize: size, materializationRelativePath: path,
+      openRevision,
+    })
+    expect(openRevision).not.toHaveBeenCalled()
+    expect(revisited.revision.fileRevision).toBe(initial.fileRevision)
+    expect(revisited.initialDurableRanges).toEqual(size === 0n ? [] : [{ start: 0n, end: size }])
+    const commit = await revisited.commit()
+    expect(commit.checkpointGeneration).toBe(initialCommit.checkpointGeneration)
+    expect(commit.recordDigest).toBe(initialCommit.recordDigest)
+    expect(f.checkpoints.committed(FILE_ID)).toEqual(delivered)
+    await reopened.close()
   })
 })

@@ -5,7 +5,9 @@ import type { BrowserDeliveryRecordV1, BrowserSavePolicyV1 } from '../../src/out
 import type { BrowserDeliveryRepository, BrowserDeliveryFileScan } from '../../src/output/browser-delivery/repository'
 import type { BrowserDeliveryReservation, BrowserDeliveryStagePort, BrowserDeliveryTargetPort } from '../../src/output/browser-delivery/ports'
 import { readBrowserDeliveryCheckpoint } from '../../src/output/browser-delivery/checkpoint-reader'
+import { validateDirectCheckpointProof } from '../../src/output/browser-delivery/final-proof'
 import { verifyStagedDeliveryTarget } from '../../src/output/browser-delivery/target-content'
+import { finalFileCheckpointProof, type FinalFileCheckpointProof } from '../../src/output/persistence/journal'
 import { PersistentTreeOutputSession } from '../../src/output/persistent-tree/session'
 import type { PersistentFileRequest } from '../../src/output/persistent-tree/contracts'
 import { acquireArtifactReader, withArtifactCleanup } from '../../src/output/origin-private/export-readers'
@@ -47,9 +49,15 @@ export class DeliveryMemoryRepository implements BrowserDeliveryRepository {
     await this.replaceFile(previous, next)
     return next
   }
-  async finalizeDirect(previous: BrowserDeliveryRecordV1, proof: import('../../src/output/persistence/journal').FinalFileCheckpointProof) {
+  async finalizeDirect(previous: BrowserDeliveryRecordV1, proof: FinalFileCheckpointProof) {
     const checkpoint = await this.readFinalCheckpoint(proof.recordId)
     if (checkpoint === undefined) throw new Error('target proof missing')
+    validateDirectCheckpointProof(proof, checkpoint)
+    if (previous.placement === 'direct' && previous.state.kind === 'cleaned') {
+      validateDirectCheckpointProof(finalFileCheckpointProof(previous.state.target), checkpoint)
+      if (this.files.get(previous.fileId)?.digest !== previous.digest) throw new Error('stale journal')
+      return previous
+    }
     const saved = advanceBrowserDeliveryRecord(this.policy, previous, { kind: 'target-saved', target: checkpoint })
     await this.replaceFile(previous, saved)
     const cleaned = advanceBrowserDeliveryRecord(this.policy, saved, { kind: 'cleaned', target: checkpoint })
@@ -162,6 +170,8 @@ export async function deliveryEngineFixture(overrides: Partial<Pick<BrowserDeliv
   }
   const session = await reopen()
   const request = (id = 11, size = 4n, path = ['nested', `file-${id}.bin`]): PersistentFileRequest => ({
+    fileId: deliveryIdentity(id, 16),
+    expectedSize: size,
     sourceAuthenticationPath: path,
     materializationRelativePath: path,
     openRevision: async () => ({ fileId: deliveryIdentity(id, 16), fileRevision: deliveryIdentity(22, 16), exactSize: size }),

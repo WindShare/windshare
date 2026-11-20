@@ -300,8 +300,9 @@ export class BrowserDeliveryEngine {
   }
 
   #openTarget(record: BrowserDeliveryRecordV1, request?: PersistentFileRequest): Promise<PersistentFileTransactionPort> {
-    return this.#options.target.beginFile({ ...request, sourceAuthenticationPath: record.source.canonicalPath, materializationRelativePath: record.materializationRelativePath,
-      recovery: { pausedFile: 'restart-owned-file' },
+    return this.#options.target.beginFile({ ...request, fileId: record.fileId, expectedSize: record.source.exactSize,
+      sourceAuthenticationPath: record.source.canonicalPath, materializationRelativePath: record.materializationRelativePath,
+      recovery: { pausedFile: 'restart-owned-file' }, requireRevisionOpen: true,
       openRevision: async () => record.source })
   }
 

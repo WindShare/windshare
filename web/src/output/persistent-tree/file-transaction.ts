@@ -93,6 +93,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
   readonly #automaticCheckpointAdmission: AutomaticCheckpointFileAdmission | undefined
   readonly #preservingWriterCapacity: PreservingWriterCapacityAuthority | undefined
   readonly #onClose: (transaction: PersistentFileTransaction) => void
+  readonly #onCommitted: () => void
   readonly #onOwnershipUnknown: (error: TargetOwnershipUnknownError) => void
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
   readonly #stageScope: PersistentOutputStageScope | undefined
@@ -120,6 +121,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
     automaticCheckpointAdmission?: AutomaticCheckpointFileAdmission
     preservingWriterCapacity?: PreservingWriterCapacityAuthority
     onClose?: (transaction: PersistentFileTransaction) => void
+    onCommitted?: () => void
     onOwnershipUnknown?: (error: TargetOwnershipUnknownError) => void
     diagnostics?: OutputDiagnosticsPorts
     stageScope?: PersistentOutputStageScope
@@ -144,6 +146,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
     this.#automaticCheckpointAdmission = input.automaticCheckpointAdmission
     this.#preservingWriterCapacity = input.preservingWriterCapacity
     this.#onClose = input.onClose ?? (() => undefined)
+    this.#onCommitted = input.onCommitted ?? (() => undefined)
     this.#onOwnershipUnknown = input.onOwnershipUnknown ?? (() => undefined)
     this.#diagnostics = input.diagnostics
     this.#stageScope = input.stageScope
@@ -643,6 +646,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
     this.#state = 'committed'
     this.#automaticCheckpointAdmission?.retire('file-committed')
     this.#releaseWriterCapacity('writer-closed')
+    this.#onCommitted()
     this.#release()
     this.#checkpointObservation.observeFinal(this.#checkpoint.verifiedRanges, this.revision.exactSize)
     this.#trace({ eventName: 'output_write', transition: 'transaction_committed' })

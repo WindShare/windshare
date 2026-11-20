@@ -17,8 +17,11 @@ export async function admitCheckpointMetadataReuse(
     throw new TypeError('Saved ranges lack current-source applicability')
   }
   if (previous.fileRevision === current.fileRevision) return previous
-  if (semantic === undefined && fileCheckpointIsComplete(previous)) {
-    throw new TypeError('Complete checkpoints require separate delivery-history authority')
+  // Completed local bytes already have immutable historical authority; never rebind
+  // them to a reopened revision even when source metadata agrees.
+  if (fileCheckpointIsComplete(previous) &&
+      (semantic === undefined || previous.exactSize > 0n || previous.checkpointGeneration > 0n)) {
+    throw new TypeError('Metadata reuse cannot replace a historical delivery')
   }
   const next = newFileCheckpointV2({
     ...previous, fileRevision: current.fileRevision, reusedFrom: previous.fileRevision,

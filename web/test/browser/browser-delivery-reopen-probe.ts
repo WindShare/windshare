@@ -36,6 +36,7 @@ const SIBLING_BYTES = Uint8Array.of(7, 8)
 const PAYLOAD = fileEntry(identity(80), 'payload.bin', BigInt(PAYLOAD_BYTES.length))
 const SIBLING = fileEntry(identity(81), 'sibling.bin', BigInt(SIBLING_BYTES.length))
 const PAYLOAD_REVISIONS = [51, 52, 53] as const
+const SIBLING_REVISIONS = [61, 62] as const
 const SOURCE_METADATA = digestIdentity(61)
 
 interface ReopenedFolderFixture {
@@ -94,9 +95,10 @@ export async function continueReopenedFolder(fixture: ReopenedFolderFixture) {
     const continuation = await inventory.act(retained, 'continue', SIGNAL)
     if (continuation.kind !== 'receive-continuation') throw new Error('Continue did not reopen the folder download')
     try {
-      const { result, reads } = await runFolderTransfer(continuation.runtime, 'stable')
-      return { reads, lifecycle: result.lifecycle.kind, worker: result.worker.status,
+      const { result, reads, siblingOpens } = await runFolderTransfer(continuation.runtime, 'stable')
+      return { reads, siblingOpens, lifecycle: result.lifecycle.kind, worker: result.worker.status,
         stagedBytesBefore: retained.browserDelivery?.stagedBytes.toString(),
+        siblingBytes: await savedBytes(fixture, SIBLING.name),
         payloadBytes: await savedBytes(fixture, PAYLOAD.name) }
     } finally { await continuation.runtime.detach() }
   } finally { inventory.close() }
@@ -113,6 +115,7 @@ async function runFolderTransfer(runtime: BoundReceiveOperation, source: 'reopen
     shareInstanceId: intent.shareInstance, fileRevision: identity(seed), fileRevisionText: identityText(seed),
     sourceMetadata: SOURCE_METADATA }))
   let payloadOpens = 0
+  let siblingOpens = 0
   const reads: { name: string; offset: number }[] = []
   const decisions: { decision: string; retained: string; reused: string }[] = []
   const job = new TransferJob({
@@ -132,7 +135,13 @@ async function runFolderTransfer(runtime: BoundReceiveOperation, source: 'reopen
         const descriptor = source === 'stable' ? revisions.at(-1)! : revisions[payloadOpens++]!
         return { ...opened, descriptor }
       }
-      return { ...opened, descriptor: { ...opened.descriptor, shareInstance, shareInstanceId: intent.shareInstance } }
+      siblingOpens += 1
+      const siblingSeed = source === 'stable' ? SIBLING_REVISIONS[1] : SIBLING_REVISIONS[0]
+      return { ...opened, descriptor: {
+        ...opened.descriptor, shareInstance, shareInstanceId: intent.shareInstance,
+        fileRevision: identity(siblingSeed), fileRevisionText: identityText(siblingSeed),
+        sourceMetadata: SOURCE_METADATA,
+      } }
     } },
     broker: { readRange: async function* (revision, _lease, range) {
       const payload = revision.fileIdText === PAYLOAD.idText
@@ -151,7 +160,7 @@ async function runFolderTransfer(runtime: BoundReceiveOperation, source: 'reopen
       }
     } },
   })
-  return { result: await job.run(), reads, decisions }
+  return { result: await job.run(), reads, decisions, siblingOpens }
 }
 
 async function pinTinyStagedPlacement(intent: ReceiveIntent) {
