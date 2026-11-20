@@ -19,6 +19,9 @@ func ProjectReceiveResult(input engine.TaskCompletion[engine.ReceiveResult]) (cl
 	case engine.OutcomePaused:
 		status = clievent.ResultPaused
 	}
+	if input.Outcome != engine.OutcomeSuccess && input.Value.Recovery.ShareStopped() {
+		status = clievent.ResultStopped
+	}
 	exit := projectApplicationFailureClass(input.FailureClass)
 	drift := clievent.DriftNone
 	if input.FailureClass == engine.FailureSourceDrift {

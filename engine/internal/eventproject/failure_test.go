@@ -18,6 +18,7 @@ import (
 	"github.com/windshare/windshare/connectivity/v2peer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	networkruntime "github.com/windshare/windshare/engine/internal/networkruntime"
+	"github.com/windshare/windshare/engine/internal/receive"
 	"github.com/windshare/windshare/engine/networkdirectory"
 	appobs "github.com/windshare/windshare/engine/observation"
 	"github.com/windshare/windshare/engine/relayprofile"
@@ -27,16 +28,18 @@ import (
 	wsrtc "github.com/windshare/windshare/transport/webrtc"
 )
 
-// A stopped share is a deliberate sender decision. Its relay is healthy, so the
-// safe message must not tell the receiver that the relay itself is unavailable.
-func TestStoppedShareIsNotReportedAsRelayUnavailable(t *testing.T) {
+func TestStopsKeepTheirScopeInProjectedFailures(t *testing.T) {
 	stopped, ok := ProjectRelayErrorCode(v2.ErrorStopped)
 	if !ok {
 		t.Fatal("stopped relay code is unmapped")
 	}
 	key, ok := stopped.MessageKey()
-	if !ok || key != appobs.MessageShareStopped {
-		t.Fatalf("stopped share message key = %v,%t; want %v", key, ok, appobs.MessageShareStopped)
+	if !ok || key != appobs.MessageRelayStopped || stopped.Code() != appobs.FailureRelayStopped {
+		t.Fatalf("relay stop = %+v with message key %v", stopped, key)
+	}
+	midTransfer, ok := projectReceiveFailure(receive.Failure{Code: receive.FailureShareStopped})
+	if key, _ := midTransfer.MessageKey(); !ok || midTransfer.Code() != appobs.FailureShareStopped || key != appobs.MessageShareStopped {
+		t.Fatalf("share stop = %+v with message key %v", midTransfer, key)
 	}
 	for _, code := range []v2.ErrorCode{v2.ErrorStarting, v2.ErrorAdmission} {
 		unavailable, ok := ProjectRelayErrorCode(code)

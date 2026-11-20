@@ -7,9 +7,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/relayset"
+	"github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/engine/internal/task"
+	v2 "github.com/windshare/windshare/relay/protocol/v2"
+	"github.com/windshare/windshare/transport/relayv2"
 )
 
 type opaqueCanaryError struct{ value string }
@@ -179,5 +184,124 @@ func successfulJobResult(t *testing.T) transfer.JobResult {
 			FileOutcomes: transfer.FileOutcomeSummary{DownloadedFiles: 1, ResumedFiles: 1},
 			Discovery:    transfer.DiscoveryComplete, CountersExact: true,
 		},
+	}
+}
+
+func peerSessionTerminalError(t *testing.T, code uint16) error {
+	t.Helper()
+	body, err := protocolsession.EncodeSessionTerminal(protocolsession.SessionTerminal{Code: code, Message: "Sender closed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := protocolsession.NewMessage(protocolsession.MessageSessionTerminal, nil, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fmt.Errorf("pump failed: %w", protocolsession.NewPeerSessionTerminalError(message))
+}
+
+func TestReceiveSettlementSeparatesStopEvidenceFromPrimaryFailure(t *testing.T) {
+	sessionTerminal, err := transferfault.NewSession(transferfault.ScopeSessionTerminal, transferfault.SessionTransport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputPause, err := transferfault.NewSession(transferfault.ScopeOutputPause, transferfault.SessionTransport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputContract, err := transferfault.NewOutput(transferfault.ScopeOutputPause, transferfault.OutputContract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceDrift, err := transferfault.NewSource(transferfault.ScopeFileLocal, transferfault.SourceRevisionChanged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputIO, err := transferfault.NewOutput(transferfault.ScopeOutputPause, transferfault.OutputStateIO)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerStop := peerSessionTerminalError(t, session.SessionStoppedCode)
+	tests := []struct {
+		name      string
+		mutate    func(*SettlementInput)
+		wantStop  ShareStopSource
+		wantCode  FailureCode
+		wantFault transferfault.Fault
+	}{
+		{"sender terminal", func(input *SettlementInput) {
+			input.RuntimeError = peerStop
+		}, ShareStopSender, FailureShareStopped, transferfault.Fault{}},
+		{"aggregate relay stop during an output pause", func(input *SettlementInput) {
+			input.Result.TerminationFault = outputPause
+			input.Result.TerminationCause = relayset.ErrReceiverShareStopped
+		}, ShareStopRelays, FailureShareStopped, transferfault.Fault{}},
+		{"sender stop surfacing as a dependency contract", func(input *SettlementInput) {
+			input.Result.TerminationFault = transferfault.DependencyContractFault()
+			input.RuntimeError = peerStop
+		}, ShareStopSender, FailureShareStopped, transferfault.Fault{}},
+		{"output contract keeps precedence", func(input *SettlementInput) {
+			input.Result.SettlementFault = outputContract
+			input.RuntimeError = peerStop
+		}, ShareStopSender, 0, outputContract},
+		{"output interruption keeps precedence", func(input *SettlementInput) {
+			input.Result.TerminationFault = outputIO
+			input.ConnectionError = relayset.ErrReceiverShareStopped
+		}, ShareStopRelays, 0, outputIO},
+		{"source drift keeps precedence", func(input *SettlementInput) {
+			input.Result.SourceDriftFault = sourceDrift
+			input.RuntimeError = peerStop
+		}, ShareStopSender, 0, sourceDrift},
+		{"one stopped relay", func(input *SettlementInput) {
+			input.ConnectionError = &relayv2.RelayError{Code: v2.ErrorStopped}
+		}, ShareStopUnconfirmed, 0, sessionTerminal},
+		{"other peer terminal", func(input *SettlementInput) {
+			input.RuntimeError = peerSessionTerminalError(t, protocolsession.SessionTerminalCodeLast-1)
+		}, ShareStopUnconfirmed, 0, sessionTerminal},
+		{"transport failure", func(input *SettlementInput) {
+			input.RuntimeError = opaqueCanaryError{"relay-token-canary"}
+		}, ShareStopUnconfirmed, 0, sessionTerminal},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := SettlementInput{Result: successfulJobResult(t)}
+			input.Result.Outcome = transfer.DirectTreeOutcomePaused
+			input.Result.TerminationFault = sessionTerminal
+			test.mutate(&input)
+			result, err := Settle(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			failure, ok := errors.AsType[Failure](result.Err)
+			if !ok || failure.Code != test.wantCode || failure.Fault != test.wantFault {
+				t.Fatalf("failure = %+v, want code %d fault %v", failure, test.wantCode, test.wantFault)
+			}
+			wantRetry := test.wantStop == ShareStopUnconfirmed
+			recovery := result.Value.Recovery
+			if recovery.ShareStop != test.wantStop || recovery.Retryable() != wantRetry ||
+				(result.Outcome == task.OutcomePaused) != wantRetry {
+				t.Fatalf("recovery = %+v outcome=%d, want stop %v retryable %t", recovery, result.Outcome, test.wantStop, wantRetry)
+			}
+			if input.RuntimeError != nil && !errors.Is(result.Err, input.RuntimeError) {
+				t.Fatal("settlement dropped the diagnostic runtime cause")
+			}
+		})
+	}
+}
+
+func TestPreparationFailureAfterConfirmedRelayStop(t *testing.T) {
+	cause := fmt.Errorf("join: %w", relayset.ErrReceiverShareStopped)
+	cleanupErr := errors.New("lease release failed")
+	for _, cleanup := range []error{nil, cleanupErr} {
+		completed := settlePreparationFailure(stepNetworkFailure, Failure{Cause: cause}, nil, cleanup)
+		failure, ok := errors.AsType[Failure](completed.Err)
+		if recovery := completed.Value.Recovery; !ok || recovery.ShareStop != ShareStopRelays ||
+			recovery.Retryable() || !errors.Is(completed.Err, cause) {
+			t.Fatalf("settled preparation = %+v", completed)
+		}
+		if cleanup == nil && failure.Code != FailureShareStopped ||
+			cleanup != nil && (!errors.Is(failure, cleanup) || completed.Value.Recovery.Reason != RecoveryNeedsInspection) {
+			t.Fatalf("primary failure = %+v, cleanup=%v", failure, cleanup)
+		}
 	}
 }

@@ -5,13 +5,14 @@ import (
 	"testing"
 )
 
-func TestOrdinaryLifecycleUsesExactlyFivePersistentStates(t *testing.T) {
+func TestOrdinaryLifecycleUsesClosedPersistentStates(t *testing.T) {
 	states := []OrdinaryOperationLifecycle{
 		OrdinaryOperationActive,
 		OrdinaryOperationNeedsAttention,
 		OrdinaryOperationCompleted,
 		OrdinaryOperationDiscarded,
 		OrdinaryOperationCleanupPending,
+		OrdinaryOperationShareStopped,
 	}
 	for _, state := range states {
 		if !state.Valid() || state.String() == "" {
@@ -22,11 +23,12 @@ func TestOrdinaryLifecycleUsesExactlyFivePersistentStates(t *testing.T) {
 		OrdinaryReasonCleanupUncertain.String() != "cleanup-uncertain" {
 		t.Fatal("stable ordinary lifecycle vocabulary drifted")
 	}
-	if OrdinaryOperationLifecycle(0).Valid() || OrdinaryOperationLifecycle(6).Valid() {
+	if OrdinaryOperationLifecycle(0).Valid() || (OrdinaryOperationShareStopped + 1).Valid() {
 		t.Fatal("ordinary lifecycle is an open union")
 	}
 	if !OrdinaryOperationActive.ParticipatesInActiveLookup() ||
 		!OrdinaryOperationNeedsAttention.ParticipatesInActiveLookup() ||
+		!OrdinaryOperationShareStopped.ParticipatesInActiveLookup() ||
 		OrdinaryOperationCompleted.ParticipatesInActiveLookup() ||
 		OrdinaryOperationDiscarded.ParticipatesInActiveLookup() ||
 		OrdinaryOperationCleanupPending.ParticipatesInActiveLookup() {

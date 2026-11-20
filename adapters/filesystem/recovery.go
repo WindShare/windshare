@@ -113,6 +113,8 @@ func projectOperationState(state osfs.ResumeOperationState) (recovery.OperationS
 		return recovery.OperationIncomplete, nil
 	case osfs.ResumeOperationResumable:
 		return recovery.OperationResumable, nil
+	case osfs.ResumeOperationShareStopped:
+		return recovery.OperationShareStopped, nil
 	case osfs.ResumeOperationCleanupPending:
 		return recovery.OperationCleanupPending, nil
 	case osfs.ResumeOperationRecoveryUnavailable, osfs.ResumeOperationNeedsAttention:

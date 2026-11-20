@@ -203,6 +203,8 @@ func classifyDirectError(cause error) (appobs.Failure, bool) {
 		return mustFailure(appobs.FailureRelayNotFound), true
 	case exactError(cause, relayset.ErrReceiverWaitExpired):
 		return mustFailure(appobs.FailureDeadline), true
+	case exactError(cause, relayset.ErrReceiverShareStopped):
+		return mustFailure(appobs.FailureShareStopped), true
 	case exactError(cause, relayset.ErrReceiverShareChanged), exactError(cause, relayset.ErrReceiverAuthentication):
 		return mustFailure(appobs.FailureSessionProtocol), true
 	case exactError(cause, relayv2.ErrFrameBounds), exactError(cause, relayv2.ErrProtocol):
@@ -363,6 +365,8 @@ func ReceiveFailureCode(code receive.FailureCode) (appobs.FailureCode, bool) {
 		return appobs.FailurePeerSignaling, true
 	case receive.FailurePeerStopped:
 		return appobs.FailurePeerStopped, true
+	case receive.FailureShareStopped:
+		return appobs.FailureShareStopped, true
 	default:
 		return 0, false
 	}

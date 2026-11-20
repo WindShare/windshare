@@ -11,6 +11,7 @@ import (
 )
 
 var ErrContract = errors.New("receive output authority violated its contract")
+var ErrShareStopped = errors.New("retained output belongs to a stopped share")
 
 type Mode uint8
 
@@ -37,8 +38,9 @@ const (
 // Operation couples immutable intent with the authority that can open it.
 // It does not expose a filesystem path or a provider-specific operation handle.
 type OperationControl interface {
-	// CanStartAttempt reports released output resources, not whether replaying a failed request is useful.
-	CanStartAttempt() bool
+	// Idle reports whether this binding still owns the operation between output sessions.
+	Idle() bool
+	RecordShareStopped(context.Context) error
 	Discard(context.Context) error
 }
 

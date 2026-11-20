@@ -11,6 +11,7 @@ import (
 type ReceivePause = receive.Pause
 type ReceiveRecoveryAction = receive.RecoveryAction
 type ReceiveRecoveryReason = receive.RecoveryReason
+type ReceiveShareStopSource = receive.ShareStopSource
 type ReceiveRecoveryOutcome = receive.RecoveryOutcome
 type ReceiveProgressRetention = receive.ProgressRetention
 
@@ -26,6 +27,10 @@ const (
 	ReceiveRecoverySourceOmitted    = receive.RecoverySourceOmitted
 	ReceiveRecoveryInvalidRequest   = receive.RecoveryInvalidRequest
 	ReceiveRecoveryNeedsInspection  = receive.RecoveryNeedsInspection
+	ReceiveShareStopUnconfirmed     = receive.ShareStopUnconfirmed
+	ReceiveShareStopSender          = receive.ShareStopSender
+	ReceiveShareStopRelays          = receive.ShareStopRelays
+	ReceiveShareStopRecorded        = receive.ShareStopRecorded
 	ReceiveRetentionNone            = receive.RetentionNone
 	ReceiveRetentionCheckpoints     = receive.RetentionCheckpoints
 	ReceiveRetentionLiveReleased    = receive.RetentionLiveReleased

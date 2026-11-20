@@ -61,7 +61,7 @@ wind get <link> [-o <directory>] [--only <path>]... [--redownload] [--key <key>]
 ```
 
 - Joins the share, resolves the selected catalog paths (`--only`, repeatable), and writes the result under `-o` (default `.`). Paths are relative, slash-separated, case-sensitive, and start with the shared file or folder name (`d/a.txt` when sharing `d`); a trailing directory slash and equivalent Unicode forms are normalized, and repeated paths are ignored. A bare link uses `--key` or prompts for the key on stdin.
-- Terminal result states are `success`, `partial`, `paused`, and `failed`. Source omissions produce `partial` with a nonzero exit status; published files remain complete. The sender reports sampled skipped names and reasons, including missing permissions and sibling names that match ignoring letter case or Unicode form. A skipped directory excludes its whole subtree. Fix source access or names and share again; retrying the same link does not restore omitted items.
+- Terminal result states are `success`, `partial`, `paused`, `stopped`, and `failed`. Source omissions produce `partial` with a nonzero exit status; published files remain complete. The sender reports sampled skipped names and reasons, including missing permissions and sibling names that match ignoring letter case or Unicode form. A skipped directory excludes its whole subtree. Fix source access or names and share again; retrying the same link does not restore omitted items.
 
 | Selection | Saved as |
 |---|---|
@@ -88,6 +88,7 @@ wind resume discard -o <directory> --item <N>
 - Recoverable interactive failures offer retry, discard, or exit. Retry keeps the operation and verified ranges. `--only` paths the share does not contain are listed as typed (up to 20), and the run exits with status 2; correct them and run again. Completed files and saved partials remain intact. Ctrl+C exits; unattended runs report retained progress and the appropriate next step without prompting.
 - `get --redownload` starts a separate task in a collision-safe destination. The original task and its automatic continuation remain intact; `resume retry --operation <id>` selects either task.
 - Delivered files stay completed within a task even after being moved or deleted. Saved partials resume only when their source revision matches. Checkpoints survive normal exit; a crash may lose the latest unsaved ranges. See [native output](native-output.md).
+- When a share has stopped, ask for a new link. Progress saved under the original link appears as `share-stopped` once the receiver confirms the stop while it owns the operation. Interactive downloads can discard unfinished output or leave it for `resume discard`.
 - `resume list` shows recovery state and blocked items. Capability loss keeps existing operations visible as `needs-attention` with `recovery-unavailable`.
 - `resume discard` re-lists the inventory and confirms the selected operation before removing proven-owned unfinished state. Published and unrecognized files remain.
 

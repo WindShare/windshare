@@ -141,8 +141,11 @@ func TestLibraryRuntimeHasNoImplicitInfrastructure(t *testing.T) {
 		t.Fatal(err)
 	}
 	known, expand, err := r.Resolve(link.Link{Relays: []string{"https://explicit.example"}, NodeAliases: []string{"jp1"}})
-	if err != nil || len(known) != 1 || expand != nil {
+	if err != nil || len(known) != 1 || expand == nil {
 		t.Fatal(known, err)
+	}
+	if _, err := expand(t.Context()); !errors.Is(err, ErrUnavailable) {
+		t.Fatal(err)
 	}
 }
 

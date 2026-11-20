@@ -357,7 +357,7 @@ func validateOrdinaryRecordTransition(
 	for _, event := range []checkpointmodel.OrdinaryLifecycleEvent{
 		checkpointmodel.OrdinaryLifecycleContinue, checkpointmodel.OrdinaryLifecycleRequireAttention,
 		checkpointmodel.OrdinaryLifecycleComplete, checkpointmodel.OrdinaryLifecycleDiscard,
-		checkpointmodel.OrdinaryLifecycleCleanupFailed,
+		checkpointmodel.OrdinaryLifecycleCleanupFailed, checkpointmodel.OrdinaryLifecycleStopShare,
 	} {
 		state, reason, err := checkpointmodel.ReduceOrdinaryOperationLifecycle(previous.Lifecycle(), event, next.ClosedReason())
 		if err == nil && state == next.Lifecycle() && reason == next.ClosedReason() {

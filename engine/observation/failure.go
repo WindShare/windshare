@@ -95,6 +95,7 @@ const (
 	FailureOutputRecoveryUnavailable
 	FailureRetainedOutputMissing
 	FailureRelayRouteNotFound
+	FailureShareStopped
 )
 
 type failureDefinition struct {
@@ -110,6 +111,8 @@ func (code FailureCode) definition() (failureDefinition, bool) {
 		return relayFailureDefinition(code)
 	case code == FailureRelayRouteNotFound:
 		return failureDefinition{"relay_route_not_found", MessageRelayRouteNotFound}, true
+	case code == FailureShareStopped:
+		return failureDefinition{"share_stopped", MessageShareStopped}, true
 	case code >= FailurePeerNegotiation && code <= FailurePeerProtocol:
 		return peerFailureDefinition(code)
 	case code >= FailureSourceUnavailable && code <= FailureSessionDependencyContract:
@@ -175,7 +178,7 @@ func relayFailureDefinition(code FailureCode) (failureDefinition, bool) {
 	case FailureRelayAdmission:
 		return failureDefinition{"relay_admission", MessageRelayUnavailable}, true
 	case FailureRelayStopped:
-		return failureDefinition{"relay_stopped", MessageShareStopped}, true
+		return failureDefinition{"relay_stopped", MessageRelayStopped}, true
 	case FailureRelayProtocol:
 		return failureDefinition{"relay_protocol", MessageRelayUnavailable}, true
 	case FailureRelayClosed:

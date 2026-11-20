@@ -13,7 +13,7 @@ func TestClosedEnumRegistriesNameEveryDeclaredValue(t *testing.T) {
 	}{
 		{"command", int(CommandShare), int(CommandGet), func(value int) (string, bool) { return Command(value).Name() }},
 		{"exit", int(ExitSuccess), int(ExitDrift), func(value int) (string, bool) { return ExitCode(value).Name() }},
-		{"result", int(ResultSuccess), int(ResultFailed), func(value int) (string, bool) { return ResultStatus(value).Name() }},
+		{"result", int(ResultSuccess), int(ResultStopped), func(value int) (string, bool) { return ResultStatus(value).Name() }},
 		{"drift", int(DriftNone), int(DriftSource), func(value int) (string, bool) { return DriftReason(value).Name() }},
 		{"trace incomplete", int(TraceIncompleteLifecycleDrop), int(TraceIncompleteRejectionEvidence), func(value int) (string, bool) { return TraceIncompleteCause(value).Name() }},
 	}

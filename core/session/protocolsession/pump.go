@@ -42,10 +42,23 @@ type PeerSessionTerminalError struct {
 	message Message
 }
 
+// NewPeerSessionTerminalError records the authenticated terminal the peer sent.
+func NewPeerSessionTerminalError(message Message) *PeerSessionTerminalError {
+	return &PeerSessionTerminalError{message: message}
+}
+
 func (terminal *PeerSessionTerminalError) Error() string { return ErrPeerSessionTerminal.Error() }
 func (terminal *PeerSessionTerminalError) Unwrap() error { return ErrPeerSessionTerminal }
 func (terminal *PeerSessionTerminalError) Message() Message {
 	return terminal.message
+}
+
+// Terminal decodes the code and message the peer sent in its terminal.
+func (terminal *PeerSessionTerminalError) Terminal() (SessionTerminal, error) {
+	if terminal == nil || terminal.message.Kind() != MessageSessionTerminal {
+		return SessionTerminal{}, ErrInvalidSessionTerminal
+	}
+	return DecodeSessionTerminal(terminal.message.Body())
 }
 
 type ProtocolPump struct {
@@ -135,7 +148,7 @@ func (pump *ProtocolPump) acceptFrame(ctx context.Context, frame framechannel.Fr
 		return pump.rejectLocally(fmt.Errorf("%w: %w", ErrInboundRejected, err))
 	}
 	if disposition == OperationSessionTerminal {
-		return &PeerSessionTerminalError{message: message}
+		return NewPeerSessionTerminalError(message)
 	}
 	return nil
 }

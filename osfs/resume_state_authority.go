@@ -21,6 +21,7 @@ const (
 	ResumeOperationNeedsAttention
 	ResumeOperationDiscarded
 	ResumeOperationRecoveryUnavailable
+	ResumeOperationShareStopped
 )
 
 func (state ResumeOperationState) String() string {

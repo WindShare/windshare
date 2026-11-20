@@ -22,6 +22,7 @@ const (
 	ReceiveFailurePeerProtocol                  = receive.FailurePeerProtocol
 	ReceiveFailurePeerSignaling                 = receive.FailurePeerSignaling
 	ReceiveFailurePeerStopped                   = receive.FailurePeerStopped
+	ReceiveFailureShareStopped                  = receive.FailureShareStopped
 
 	ReceiveLocalStopNone                  = receive.ReceiverLocalStopNone
 	ReceiveLocalStopCaller                = receive.ReceiverLocalStopCaller

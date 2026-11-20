@@ -113,11 +113,17 @@ func (a *App) reportReceiveRecovery(result engine.ReceiveResult, selection recei
 	recovery := result.Recovery
 	switch recovery.Retention {
 	case engine.ReceiveRetentionCheckpoints:
-		a.writeCompleteLine("Saved partials: %d bytes. Previously delivered: %d files (%d bytes).", result.Transfer.Progress.RestartReusableBytes, result.Transfer.Progress.FileOutcomes.PreviouslyPublishedFiles, result.Transfer.Progress.PreviouslyPublishedBytes)
+		if !recovery.ShareStopped() {
+			a.writeCompleteLine("Saved partials: %d bytes. Previously delivered: %d files (%d bytes).", result.Transfer.Progress.RestartReusableBytes, result.Transfer.Progress.FileOutcomes.PreviouslyPublishedFiles, result.Transfer.Progress.PreviouslyPublishedBytes)
+		}
 	case engine.ReceiveRetentionLiveReleased:
 		a.writeCompleteLine("Download stopped; unfinished progress could not be retained after exit.")
 	case engine.ReceiveRetentionDiscarded:
 		a.writeCompleteLine("Unfinished owned output was discarded; completed files were kept.")
+		return
+	}
+	if recovery.ShareStopped() {
+		a.reportStoppedReceiveRecovery(result)
 		return
 	}
 	switch recovery.Reason {
@@ -129,10 +135,22 @@ func (a *App) reportReceiveRecovery(result engine.ReceiveResult, selection recei
 	case engine.ReceiveRecoveryNeedsInspection:
 		a.writeCompleteLine("Inspect the reported failure before retrying.")
 	default:
-		if recovery.Retention == engine.ReceiveRetentionCheckpoints && recovery.Reason.Retryable() {
+		if recovery.Retention == engine.ReceiveRetentionCheckpoints && recovery.Retryable() {
 			a.writeCompleteLine("Retry with wind resume retry -o <original-directory> --operation %x and the same link and selection.", result.Operation.Bytes())
 		}
 	}
+}
+
+func (a *App) reportStoppedReceiveRecovery(result engine.ReceiveResult) {
+	if result.Recovery.Reason == engine.ReceiveRecoveryNeedsInspection {
+		a.writeCompleteLine("The share has stopped. Inspect the reported failure before removing saved progress.")
+		return
+	}
+	if result.Recovery.Retention != engine.ReceiveRetentionCheckpoints || result.Operation.IsZero() {
+		return
+	}
+	a.writeCompleteLine("Look for operation ID %x in wind resume list -o <original-directory>.", result.Operation.Bytes())
+	a.writeCompleteLine("To remove its unfinished output, run wind resume discard -o <original-directory> --item <N> in an interactive terminal.")
 }
 
 // maxReportedMissingSelections keeps a long mistyped selection from flooding
@@ -212,36 +230,44 @@ func (a *App) receivePauseHandler() func(context.Context, engine.ReceivePause) (
 	}
 	reader := bufio.NewReader(a.Stdin)
 	return func(ctx context.Context, pause engine.ReceivePause) (engine.ReceiveRecoveryAction, error) {
-		reason := "a transfer or output failure"
-		switch pause.Reason {
-		case engine.ReceiveRecoveryCollision:
-			reason = "a destination collision; move the conflicting entry before retrying"
-		case engine.ReceiveRecoveryOwnershipUnknown:
-			reason = "blocked output ownership; unknown objects will remain untouched"
-		case engine.ReceiveRecoveryRevisionChanged:
-			reason = "a changed source revision; prior verified progress remains isolated"
-		}
+		return a.promptReceiveRecovery(ctx, reader, pause)
+	}
+}
+
+func (a *App) promptReceiveRecovery(ctx context.Context, reader *bufio.Reader, pause engine.ReceivePause) (engine.ReceiveRecoveryAction, error) {
+	reason := "a transfer or output failure"
+	switch pause.Recovery.Reason {
+	case engine.ReceiveRecoveryCollision:
+		reason = "a destination collision; move the conflicting entry before retrying"
+	case engine.ReceiveRecoveryOwnershipUnknown:
+		reason = "blocked output ownership; unknown objects will remain untouched"
+	case engine.ReceiveRecoveryRevisionChanged:
+		reason = "a changed source revision; prior verified progress remains isolated"
+	}
+	if pause.Recovery.ShareStopped() {
+		a.writeCompleteLine("Download stopped. The share has ended. Discard unfinished output or keep it for manual cleanup.")
+	} else {
 		a.writeCompleteLine("Download paused: %s. Saved partials: %d bytes. Previously delivered: %d files (%d bytes).", reason, pause.Transfer.Progress.RestartReusableBytes, pause.Transfer.Progress.FileOutcomes.PreviouslyPublishedFiles, pause.Transfer.Progress.PreviouslyPublishedBytes)
-		a.reportBlockedReceiveItems(pause.Transfer)
-		if pause.Mode == engine.OutputLiveOnly {
-			a.writeCompleteLine("Exit releases unfinished progress on this destination.")
+	}
+	a.reportBlockedReceiveItems(pause.Transfer)
+	if pause.Recovery.Retention == engine.ReceiveRetentionLiveReleased {
+		a.writeCompleteLine("Exit releases unfinished progress on this destination.")
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return engine.ReceiveRecoveryExit, err
 		}
-		for {
-			if err := ctx.Err(); err != nil {
-				return engine.ReceiveRecoveryExit, err
+		choices, keys := receiveRecoveryChoices(pause)
+		a.writeCompleteLine("Choose %s [%s]:", choices, keys)
+		line, err := commandinput.ReadLine(ctx, reader)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return engine.ReceiveRecoveryExit, nil
 			}
-			choices, keys := receiveRecoveryChoices(pause)
-			a.writeCompleteLine("Choose %s [%s]:", choices, keys)
-			line, err := commandinput.ReadLine(ctx, reader)
-			if err != nil {
-				if errors.Is(err, io.EOF) {
-					return engine.ReceiveRecoveryExit, nil
-				}
-				return engine.ReceiveRecoveryExit, err
-			}
-			if action, allowed := parseReceiveRecoveryAction(pause, line); allowed {
-				return action, nil
-			}
+			return engine.ReceiveRecoveryExit, err
+		}
+		if action, allowed := parseReceiveRecoveryAction(pause, line); allowed {
+			return action, nil
 		}
 	}
 }

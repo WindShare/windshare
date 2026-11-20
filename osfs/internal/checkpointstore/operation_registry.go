@@ -63,10 +63,11 @@ const (
 	ActiveLookupAlreadyRunning
 	ActiveLookupNeedsAttention
 	ActiveLookupAmbiguous
+	ActiveLookupShareStopped
 )
 
 func (state ActiveLookupState) Valid() bool {
-	return state >= ActiveLookupNone && state <= ActiveLookupAmbiguous
+	return state >= ActiveLookupNone && state <= ActiveLookupShareStopped
 }
 
 type ActiveLookup struct {
@@ -411,6 +412,9 @@ func (registry *OperationRegistry) LookupOperation(operation receivecontract.Ope
 
 func (registry *OperationRegistry) lookupOperationRecord(record checkpointmodel.OrdinaryOperationRecord) (ActiveLookup, error) {
 	operation := record.OperationID()
+	if record.Lifecycle() == checkpointmodel.OrdinaryOperationShareStopped {
+		return ActiveLookup{state: ActiveLookupShareStopped, record: record}, nil
+	}
 	if record.Lifecycle() == checkpointmodel.OrdinaryOperationNeedsAttention {
 		proof, proofErr := registry.recoveryProof(record)
 		if proofErr != nil {

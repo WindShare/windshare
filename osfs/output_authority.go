@@ -534,8 +534,17 @@ func (operation FilesystemOutputOperation) ExecutionMode() FilesystemOutputExecu
 	return FilesystemOutputExecutionMode{mode: operation.operation.ExecutionMode()}
 }
 
-func (operation FilesystemOutputOperation) CanStartAttempt() bool {
-	return operation.operation != nil && operation.operation.CanStartAttempt()
+var ErrFilesystemOutputShareStopped = outputruntime.ErrOutputShareStopped
+
+func (operation FilesystemOutputOperation) Idle() bool {
+	return operation.operation != nil && operation.operation.Idle()
+}
+
+func (operation FilesystemOutputOperation) RecordShareStopped(ctx context.Context) error {
+	if operation.operation == nil {
+		return transfer.ErrInvalidOutputBinding
+	}
+	return operation.operation.RecordShareStopped(ctx)
 }
 
 func (operation FilesystemOutputOperation) Discard(ctx context.Context) error {

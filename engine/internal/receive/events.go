@@ -31,6 +31,7 @@ const (
 	FailurePeerProtocol
 	FailurePeerSignaling
 	FailurePeerStopped
+	FailureShareStopped
 )
 
 type ReceiverLocalStopReason uint8

@@ -19,10 +19,11 @@ const (
 	OperationResumable
 	OperationCleanupPending
 	OperationNeedsAttention
+	OperationShareStopped
 )
 
 func (state OperationState) Valid() bool {
-	return state >= OperationIncomplete && state <= OperationNeedsAttention
+	return state >= OperationIncomplete && state <= OperationShareStopped
 }
 
 func (state OperationState) String() string {
@@ -35,6 +36,8 @@ func (state OperationState) String() string {
 		return "cleanup-pending"
 	case OperationNeedsAttention:
 		return "operation-needs-attention"
+	case OperationShareStopped:
+		return "share-stopped"
 	default:
 		return ""
 	}

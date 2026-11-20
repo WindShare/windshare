@@ -18,6 +18,8 @@ func formatTransferResult(result clievent.TransferResult, symbols Symbols) []ter
 		headline = statusLine(symbols.Warning, withDrift("Download finished partially in "+elapsed, result.Drift()), terminalcanvas.StyleWarning)
 	case clievent.ResultPaused:
 		headline = statusLine(symbols.Paused, withDrift("Download paused after "+elapsed, result.Drift()), terminalcanvas.StyleWarning)
+	case clievent.ResultStopped:
+		headline = statusLine(symbols.Warning, "Download stopped after "+elapsed, terminalcanvas.StyleWarning)
 	default:
 		headline = statusLine(symbols.Failure, withDrift("Download failed after "+elapsed, result.Drift()), terminalcanvas.StyleError)
 	}
@@ -63,7 +65,11 @@ func formatOutcomeSummary(result clievent.TransferResult, separator string) stri
 		parts = append(parts, resultCount(result, outcomes.ResumedFiles)+" resumed")
 	}
 	if outcomes.PausedFiles != 0 {
-		parts = append(parts, resultCount(result, outcomes.PausedFiles)+" paused")
+		label := " paused"
+		if result.Status() == clievent.ResultStopped {
+			label = " unfinished"
+		}
+		parts = append(parts, resultCount(result, outcomes.PausedFiles)+label)
 	}
 	if outcomes.CollisionFiles != 0 {
 		parts = append(parts, countedResultNoun(result, outcomes.CollisionFiles, "collision", "collisions"))

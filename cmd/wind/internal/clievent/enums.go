@@ -63,6 +63,7 @@ const (
 	ResultPartial
 	ResultPaused
 	ResultFailed
+	ResultStopped
 )
 
 func (value ResultStatus) Name() (string, bool) {
@@ -75,6 +76,8 @@ func (value ResultStatus) Name() (string, bool) {
 		return "paused", true
 	case ResultFailed:
 		return "failed", true
+	case ResultStopped:
+		return "stopped", true
 	default:
 		return "", false
 	}
