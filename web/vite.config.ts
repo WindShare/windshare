@@ -10,6 +10,7 @@ const LOCAL_DEVELOPMENT_MODE = 'windshare-local'
 const LOCAL_RELAY_PROXY_TARGET = 'http://127.0.0.1:8484'
 const RELAY_WEBSOCKET_PATH = '/v2/ws'
 const RELAY_HEALTH_PATH = '/healthz'
+const RELAY_DISCOVERY_PATH_PATTERN = '^/\\.well-known/windshare$'
 
 interface PackageMetadata {
   readonly version: string
@@ -44,6 +45,10 @@ export default defineConfig(({ command, mode }) => {
                 ws: true,
               },
               [RELAY_HEALTH_PATH]: {
+                target: LOCAL_RELAY_PROXY_TARGET,
+              },
+              // Exact match keeps node discovery separate from /.well-known/windshare-network.
+              [RELAY_DISCOVERY_PATH_PATTERN]: {
                 target: LOCAL_RELAY_PROXY_TARGET,
               },
             },
