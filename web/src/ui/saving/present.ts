@@ -1,8 +1,9 @@
 import type { ArtifactOffers } from '../../output/model/artifacts/offers'
 import type { OfferedArtifactChoice } from '../../output/model/artifacts/choices'
+import type { BrowserRecoveryPreference } from '../../output/model/browser-delivery'
 import type { SavingActionPresentation, SavingChoice, SavingOutcome, SavingOutcomeKind, SavingPresentationTransition } from './model'
 
-const DESKTOP_GUIDANCE = 'Use the WindShare desktop receiver: install WindShare, then run wind get with this share link to save outside browser storage limits.'
+const DESKTOP_GUIDANCE = 'Too large for browser saving. Install WindShare and run wind get with this share link.'
 
 /** Eligibility and route ranking are supplied by the planner, never inferred from browser identity. */
 export function presentSavingActions(input: Readonly<{
@@ -22,12 +23,19 @@ export function presentSavingActions(input: Readonly<{
   const disabledReason = input.disabledReason ?? null
   const primary = savingChoice(primaryOffer, disabledReason, input.actionLabel)
   const alternatives = groupOutcomes(choices, offers, disabledReason)
+  const totalChoiceCount = alternatives.reduce((count, group) => count + 1 + group.alternatives.length, 0)
   let reason: string = offers.zip?.recommendation.reason ?? 'eligible-route'
   if (primary.outcome === 'original-file') reason = 'original-file-default'
   if (primary.outcome === 'folder') reason = 'hierarchy-preserving-default'
   const recommendation = zipRecommendation(primary, offers.zip)
   return Object.freeze({
-    primary, alternatives, disabledReason, retry: false, desktopGuidance: null, recommendation,
+    primary,
+    alternatives,
+    hasAlternatives: totalChoiceCount > 1,
+    disabledReason,
+    retry: false,
+    desktopGuidance: null,
+    recommendation,
     transition: transition(offers, primary, reason),
   })
 }
@@ -35,10 +43,10 @@ export function presentSavingActions(input: Readonly<{
 function zipRecommendation(primary: SavingChoice, zip: Extract<ArtifactOffers, { kind: 'artifact-actions' }>['zip']): string | null {
   if (primary.outcome !== 'zip' || zip === null) return null
   if (zip.recommendation.reason === 'workspace-within-discovered-budget') {
-    return 'You can start now. Known ZIP content fits browser staging; more discoveries may change the recommendation.'
+    return 'You can start now. Still discovering files — the recommended option may update.'
   }
   return zip.recommendation.kind === 'no-recommendation' && zip.recommendation.reason !== 'only-one-route-available'
-    ? 'You can start now. The space comparison is not settled; another saving method remains available in Other ways to save.' : null
+    ? 'You can start now. Another ZIP option is available if needed.' : null
 }
 
 function groupOutcomes(
@@ -63,7 +71,8 @@ function groupOutcomes(
       alternatives.unshift(savingChoice(primary, disabledReason, undefined, 'direct'))
     }
     result.push(Object.freeze({
-      kind, label: outcomeLabel(kind),
+      kind,
+      label: outcomeLabel(kind),
       primary: savingChoice(primary, disabledReason),
       alternatives: Object.freeze(alternatives),
     }))
@@ -71,79 +80,115 @@ function groupOutcomes(
   return Object.freeze(result)
 }
 
-function savingChoice(offered: OfferedArtifactChoice, disabledReason: string | null, actionLabel?: string,
-  recoveryPreference: import('../../output/model/browser-delivery').BrowserRecoveryPreference = 'automatic'): SavingChoice {
+function savingChoice(
+  offered: OfferedArtifactChoice,
+  disabledReason: string | null,
+  actionLabel?: string,
+  recoveryPreference: BrowserRecoveryPreference = 'automatic',
+): SavingChoice {
   const kind = outcome(offered)
-  const descriptions: Record<SavingOutcomeKind, string> = {
-    'original-file': 'Keeps the original file and format.',
-    folder: 'Keeps the selected files and their folder hierarchy.',
-    zip: 'Creates one ZIP containing the selected files, without compression.',
-  }
-  const description = descriptions[kind]
-  const consequences = routeConsequences(offered, recoveryPreference)
-  if (kind === 'zip') consequences.unshift('The result is a ZIP package. It is usable only after closing and verification finish.')
+  const copy = routeCopy(offered, kind, recoveryPreference)
   return Object.freeze({
     offered,
     ...(offered.route.kind === 'direct-tree' ? { recoveryPreference } : {}),
     label: actionLabel ?? (recoveryPreference === 'direct' ? 'Write directly to folder' : choiceLabel(offered)),
     outcome: kind,
-    description,
-    consequences: Object.freeze(consequences),
+    summary: copy.summary,
+    badges: Object.freeze(copy.badges),
+    notes: Object.freeze(copy.notes),
     disabledReason,
   })
 }
 
 function choiceLabel(offered: OfferedArtifactChoice): string {
   switch (outcome(offered)) {
-    case 'original-file': return 'Download original'
-    case 'folder': return 'Save to folder'
+    case 'original-file':
+      return offered.route.kind === 'workspace-then-publish' ? 'Resumable download' : 'Download original'
+    case 'folder':
+      return 'Save to folder'
     case 'zip':
-      if (offered.route.kind === 'direct-resumable-zip') return 'Save ZIP to a folder'
-      return offered.route.kind === 'workspace-then-publish' ? 'Receive ZIP, then save' : 'Download ZIP'
+      if (offered.route.kind === 'direct-resumable-zip') return 'Save ZIP to folder'
+      return offered.route.kind === 'workspace-then-publish' ? 'Download as ZIP' : 'Quick ZIP download'
   }
 }
 
-function routeConsequences(offered: OfferedArtifactChoice,
-  recoveryPreference: import('../../output/model/browser-delivery').BrowserRecoveryPreference): string[] {
+function routeCopy(
+  offered: OfferedArtifactChoice,
+  kind: SavingOutcomeKind,
+  recoveryPreference: BrowserRecoveryPreference,
+): Readonly<{ summary: string; badges: string[]; notes: string[] }> {
   switch (offered.route.kind) {
     case 'direct-tree':
-      if (recoveryPreference === 'automatic' && offered.route.target.kind === 'fsa-parent-directory') return [
-        'Choose a folder once. Small files save directly; larger or slower files may first use browser storage to retain progress.',
-        'Each staged file is copied to your folder as soon as it is received, then its browser copy is removed. Allow space for both during copying.',
-        'Files are ready to use after saving to the folder finishes. Wait for Pause to finish before leaving; recovery uses the last verified checkpoint.',
-        'Browser storage availability determines which files can be staged. Clearing this site’s data removes staged progress.',
-      ]
-      return [
-        'Choose a folder now. Completed files become visible as they arrive; this task will not stage files in browser storage.',
-        'Wait for Pause to finish before leaving. A successful pause saves received progress.',
-        ...(offered.route.target.kind === 'fsa-parent-directory' ? [
-          'Automatic progress saving is limited to avoid repeated copying. Closing or crashing the browser may lose most progress in a large unfinished file; completed files remain saved.',
-          'Checkpointing or resuming a partially written file may copy its saved prefix and need extra temporary destination space.',
-        ] : ['After an unexpected exit, resume uses the last verified checkpoint.']),
-      ]
+      if (recoveryPreference === 'automatic' && offered.route.target.kind === 'fsa-parent-directory') {
+        return {
+          summary: 'Pick a folder on your device. Keeps the folder layout and supports pause and resume.',
+          badges: ['Keeps folders', 'Resumable'],
+          notes: [
+            'Larger files may stage in browser storage briefly while downloading, then move into your folder.',
+            'Wait for Pause to finish before closing the tab. Clearing site data removes unfinished progress.',
+          ],
+        }
+      }
+      return {
+        summary: offered.route.target.kind === 'fsa-parent-directory'
+          ? 'Writes straight to your folder without browser temp storage. Uses less temporary space.'
+          : 'Saves directly to your chosen folder with its original layout and resume support.',
+        badges: offered.route.target.kind === 'fsa-parent-directory'
+          ? ['Keeps folders', 'Less temp space']
+          : ['Keeps folders', 'Resumable'],
+        notes: offered.route.target.kind === 'fsa-parent-directory'
+          ? [
+              'Wait for Pause to finish before leaving. Closing or crashing mid-file may lose progress on an unfinished large file; completed files stay saved.',
+              'Resuming a partially written file may temporarily use extra space in your folder.',
+            ]
+          : ['Wait for Pause to finish before leaving. Unexpected exits resume from the last verified checkpoint.'],
+      }
     case 'direct-resumable-zip':
-      return [
-        'Choose a folder now. An unfinished ZIP is visible while downloading; keep it in place and unchanged.',
-        'Wait for Pause to finish before leaving. After closing or crashing the browser, only verified checkpoint bytes can resume; automatic progress saving may stop to limit copying.',
-        'Continuing may copy the existing ZIP and need temporary space as large as its committed length.',
-      ]
+      return {
+        summary: 'Writes one uncompressed ZIP directly into a folder you pick. Keep the unfinished file untouched until done.',
+        badges: ['Single ZIP', 'Resumable', 'Less browser storage'],
+        notes: [
+          'The ZIP becomes usable once the download finishes and verifies.',
+          'Wait for Pause to finish before leaving. Resuming may temporarily need extra space in the folder.',
+        ],
+      }
     case 'workspace-then-publish':
-      return [
-        'Suited to long-running downloads: browser storage keeps recoverable progress while receiving.',
-        'Saving the finished result copies it to your destination. Allow time for the copy and enough space for both the retained result and the export.',
-        'Saves progress regularly during receiving. Wait for Pause to finish before leaving; after an unexpected exit, resume uses the last verified checkpoint.',
-        offered.route.publicationTarget.kind === 'browser-handoff'
-          ? 'The browser download starts automatically when allowed. If it does not start, choose Save; the retained copy stays available.'
-          : 'The retained result is published to the authorized destination after receiving finishes.',
-        'Clearing this site’s data removes retained progress and results.',
-      ]
+      if (kind === 'zip') {
+        return {
+          summary: 'Downloads all files reliably in browser storage first, then saves one uncompressed ZIP.',
+          badges: ['Best for large files', 'Resumable', 'Single ZIP'],
+          notes: [
+            'The ZIP becomes usable once packaging finishes. Exporting requires space for the finished copy.',
+            'Clearing site data removes unfinished progress and retained downloads.',
+          ],
+        }
+      }
+      return {
+        summary: 'Saves progress in browser storage as it downloads, then exports the finished file.',
+        badges: ['Best for large files', 'Resumable'],
+        notes: [
+          'Safer for slow or long downloads. Exporting the finished file copies it to your destination.',
+          'Clearing site data removes unfinished progress and retained downloads.',
+        ],
+      }
     case 'portable-handoff':
-      return [
-        'Checks the complete result fits before receiving. The browser download starts automatically when allowed; otherwise choose Save.',
-        'Interrupted progress does not survive a page reload. Keep this page open until the browser download starts.',
-      ]
+      return kind === 'zip'
+        ? {
+            summary: 'Downloads one uncompressed ZIP directly in your browser. Keep this tab open until it finishes.',
+            badges: ['Quick', 'Single ZIP', 'Not resumable'],
+            notes: ['Refreshing or closing the tab cancels the download.'],
+          }
+        : {
+            summary: 'Downloads directly via your browser. Keep this tab open until it finishes.',
+            badges: ['Quick', 'Not resumable'],
+            notes: ['Refreshing or closing the tab cancels the download.'],
+          }
     case 'direct-atomic':
-      return ['The complete result is committed to the authorized destination. An interrupted transfer must start again.']
+      return {
+        summary: 'Saves directly to the location you choose. Must restart if interrupted.',
+        badges: ['Not resumable'],
+        notes: ['An interrupted transfer does not keep partial progress.'],
+      }
   }
 }
 
@@ -154,7 +199,7 @@ function outcome(offered: OfferedArtifactChoice): SavingOutcomeKind {
 
 function outcomeLabel(kind: SavingOutcomeKind): string {
   if (kind === 'original-file') return 'Original file'
-  return kind === 'folder' ? 'Files in a folder' : 'ZIP package'
+  return kind === 'folder' ? 'Files in a folder' : 'ZIP archive'
 }
 
 function consequenceIdentity(choice: OfferedArtifactChoice): string {
@@ -180,6 +225,7 @@ function unavailable(input: Readonly<{
   return Object.freeze({
     primary: null,
     alternatives: Object.freeze([]),
+    hasAlternatives: false,
     disabledReason: input.disabledReason ?? copy,
     retry: reason === 'retry-confirmation',
     desktopGuidance: offers?.kind === 'no-safe-destination' ? DESKTOP_GUIDANCE : null,
@@ -190,11 +236,11 @@ function unavailable(input: Readonly<{
 
 function unavailableDescription(offers: ArtifactOffers | null): string {
   if (offers?.kind === 'selection-empty') return 'Select items to download'
-  if (offers?.kind === 'retry-confirmation') return 'Could not confirm the selection. Retry to keep the authenticated progress already found.'
-  if (offers?.kind !== 'no-safe-destination') return 'Confirming the selected content…'
-  if (offers.reason === 'workspace-limit-exceeded') return 'This selection exceeds available browser storage. Free space or choose a smaller selection.'
-  if (offers.reason === 'portable-limit-exceeded') return 'This selection is too large for the available browser download method.'
-  return 'This browser has no eligible saving method for the selected result.'
+  if (offers?.kind === 'retry-confirmation') return 'Could not confirm the selection. Try again.'
+  if (offers?.kind !== 'no-safe-destination') return 'Preparing download options…'
+  if (offers.reason === 'workspace-limit-exceeded') return 'Not enough browser storage for this selection. Free space or select fewer items.'
+  if (offers.reason === 'portable-limit-exceeded') return 'This selection is too large for direct browser download.'
+  return 'This browser cannot save the selected items.'
 }
 
 function transition(offers: ArtifactOffers | null, primary: SavingChoice | null, reason: string): SavingPresentationTransition {

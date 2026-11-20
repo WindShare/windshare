@@ -14,6 +14,8 @@ const page = (entries: BrowsePage['entries'], facts: Partial<BrowsePage> = {}): 
 describe('authenticated share identity and selection draft', () => {
   it('uses authenticated whole-root count and omissions rather than one visible row', () => {
     expect(shareIdentityFromRoot(page([photo]), 'share')).toMatchObject({ kind: 'photo', name: photo.name })
+    expect(shareIdentityFromRoot(page([{ ...photo, expectedSize: 65n * 1024n * 1024n }]), 'share')).toMatchObject({ kind: 'file', name: photo.name })
+    expect(shareIdentityFromRoot(page([{ ...photo, name: 'archive.7z' }]), 'share')).toMatchObject({ kind: 'file', name: 'archive.7z' })
     expect(shareIdentityFromRoot(page([photo], { entryCount: 2, pageCount: 2 }), 'share').kind).toBe('browser')
     expect(shareIdentityFromRoot(page([photo], { omittedCount: 1n }), 'share').kind).toBe('browser')
     expect(shareIdentityFromRoot(page([folder]), 'share')).toMatchObject({

@@ -38,15 +38,13 @@ test('browses a catalog directory across authenticated pages', async ({ page }) 
     const pagination = explorer.getByRole('navigation', { name: 'Directory pages', exact: true })
     const previous = pagination.getByRole('button', { name: 'Previous', exact: true })
     const next = pagination.getByRole('button', { name: 'Next', exact: true })
-    const firstFile = contents.getByRole('button', { name: fileName(0), exact: true })
-    const lastFile = contents.getByRole('button', { name: fileName(FINAL_FILE_INDEX), exact: true })
+    const firstFile = contents.getByText(fileName(0), { exact: true })
+    const lastFile = contents.getByText(fileName(FINAL_FILE_INDEX), { exact: true })
 
     await expect(pagination.getByText('Page 1 of 2', { exact: true })).toBeVisible()
     await expect(contents.getByRole('listitem')).toHaveCount(CATALOG_PAGE_ENTRIES)
     await expect(firstFile).toBeVisible()
-    await expect(contents.getByRole('button', {
-      name: fileName(CATALOG_PAGE_ENTRIES - 1), exact: true,
-    })).toBeVisible()
+    await expect(contents.getByText(fileName(CATALOG_PAGE_ENTRIES - 1), { exact: true })).toBeVisible()
     await expect(lastFile).toHaveCount(0)
     await expect(previous).toBeDisabled()
 

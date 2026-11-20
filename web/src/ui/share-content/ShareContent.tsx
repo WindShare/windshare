@@ -2,8 +2,9 @@ import type { ComponentProps } from 'react'
 import type { ReceiverSnapshot, ShareIdentity } from '../model'
 import { formatBytes } from '../progress-presentation'
 import { Explorer } from './Explorer'
+import { fileDisplayInfo } from './file-presentation'
 import { MediaPreview, type PreviewActions } from './MediaPreview'
-import { ReceiverIcon, type ReceiverIconName } from '../receiver-presentation/ReceiverIcon'
+import { ReceiverIcon } from '../receiver-presentation/ReceiverIcon'
 
 function SingleFile({ share, preview, actions, openPreview }: {
   readonly share: Exclude<ShareIdentity, { kind: 'browser' }>
@@ -11,17 +12,44 @@ function SingleFile({ share, preview, actions, openPreview }: {
   readonly actions: PreviewActions
   readonly openPreview: (id: string, invoker: HTMLButtonElement) => void
 }) {
-  const kind = { photo: 'Photo', video: 'Video', file: 'File' }[share.kind]
-  const icons: Readonly<Record<typeof share.kind, ReceiverIconName>> = { photo: 'image', video: 'video', file: 'file' }
+  const display = fileDisplayInfo(share.file.name)
+  const size = share.file.expectedSize === undefined ? 'Size unknown' : formatBytes(share.file.expectedSize)
+  const previewable = share.kind === 'photo' || share.kind === 'video'
+
+  if (!previewable && preview.state === 'idle') {
+    return <section className="single-file single-file-static" aria-label="Shared file">
+      <div className="single-file-card">
+        <div className={`single-file-emblem entry-icon-${display.icon}`}>
+          <ReceiverIcon name={display.icon} className="single-file-emblem-icon" />
+        </div>
+        <div className="single-file-summary">
+          <div className="single-file-meta-row">
+            <span className="single-file-size">{size}</span>
+            <span className="single-file-dot" aria-hidden="true">·</span>
+            <span className="single-file-type">{display.typeLabel}</span>
+          </div>
+          {display.badge !== null && <span className="single-file-ext">{display.badge}</span>}
+        </div>
+      </div>
+    </section>
+  }
+
   return <section className={`single-file single-file-${share.kind}`} aria-label="Shared file">
-    <p className="single-file-metadata">{share.file.expectedSize === undefined ? 'Size unknown' : formatBytes(share.file.expectedSize)}
-      {' · '}{kind}</p>
-    {preview.state === 'idle' ? <div className="single-file-placeholder">
-      <ReceiverIcon name={icons[share.kind]} className="single-file-icon" />
-      <button type="button" onClick={event => openPreview(share.file.id, event.currentTarget)}>
-        {share.kind === 'video' ? 'Preview a frame' : 'Preview'}
-      </button>
-    </div> : <MediaPreview preview={preview} actions={actions} inline />}
+    <div className="single-file-stage">
+      <div className="single-file-stage-bar">
+        <p className="single-file-metadata">{size}{' · '}{display.typeLabel}</p>
+      </div>
+      {preview.state === 'idle' ? <div className="single-file-placeholder">
+        <div className={`single-file-emblem entry-icon-${display.icon}`}>
+          <ReceiverIcon name={display.icon} className="single-file-emblem-icon" />
+        </div>
+        <button type="button" className="preview-trigger-action"
+          onClick={event => openPreview(share.file.id, event.currentTarget)}>
+          <ReceiverIcon name={share.kind === 'video' ? 'play' : 'eye'} />
+          {share.kind === 'video' ? 'Preview a frame' : 'Preview'}
+        </button>
+      </div> : <MediaPreview preview={preview} actions={actions} inline />}
+    </div>
   </section>
 }
 

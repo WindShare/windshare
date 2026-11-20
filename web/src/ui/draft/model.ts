@@ -1,5 +1,6 @@
 import { SelectionPolicy } from '../../catalog/selection'
 import type { BrowseDirectory, BrowsePage } from '../../application/browser-share/gateway'
+import { filePreviewCapability } from '../../preview/capability'
 import type { SelectionDraft, ShareIdentity } from '../model'
 
 export const EMPTY_SELECTION_DRAFT: SelectionDraft = Object.freeze({
@@ -45,9 +46,10 @@ function itemCount(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? '' : 's'}`
 }
 
-function filePresentationKind(name: string): 'photo' | 'video' | 'file' {
-  if (/\.(png|jpe?g|webp)$/i.test(name)) return 'photo'
-  if (/\.mp4$/i.test(name)) return 'video'
+function filePresentationKind(name: string, expectedSize?: bigint): 'photo' | 'video' | 'file' {
+  const capability = filePreviewCapability(name, expectedSize)
+  if (capability === 'image') return 'photo'
+  if (capability === 'video') return 'video'
   return 'file'
 }
 
@@ -55,7 +57,7 @@ export function shareIdentityFromRoot(page: BrowsePage, shareInstance: string): 
   const sole = page.entryCount === 1 && page.omittedCount === 0n && page.entries.length === 1
     ? page.entries[0] : undefined
   if (sole?.kind === 'file') {
-    const kind = filePresentationKind(sole.name)
+    const kind = filePresentationKind(sole.name, sole.expectedSize)
     return Object.freeze({ kind, shareInstance, name: sole.name,
       file: Object.freeze({ id: sole.idText, kind: 'file', name: sole.name,
         expectedSize: sole.expectedSize, selection: 'selected' }) })

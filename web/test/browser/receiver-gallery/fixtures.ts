@@ -19,11 +19,12 @@ export const ROOT_ROWS: readonly BrowseRow[] = [
   })),
 ]
 
-export const LONG_NAME = '????????? ? ' + 'UnbrokenProjectName'.repeat(7) + '.txt'
+export const LONG_NAME = '????????? ? ' + 'UnbrokenProjectName'.repeat(7) + '.png'
 
 const CATALOG_PAGE_ENTRY_LIMIT = 256
 export const FULL_DIRECTORY_ROWS: readonly BrowseRow[] = Array.from({ length: CATALOG_PAGE_ENTRY_LIMIT }, (_, index) => ({
-  id: 'full-item-' + index, kind: 'file', name: 'Document ' + (index + 1) + '.txt',
+  id: 'full-item-' + index, kind: 'file',
+  name: index === CATALOG_PAGE_ENTRY_LIMIT - 1 ? 'Photo ' + (index + 1) + '.png' : 'Document ' + (index + 1) + '.txt',
   expectedSize: 16_384n, selection: 'unselected',
 }))
 

@@ -48,24 +48,31 @@ export function TaskActionButton({ action, perform, primary = false, busy = fals
   </div>
 }
 
-export function TaskCard({ task, actions, onDetails, detailsRef, busy = false }: {
+export function TaskCard({ task, actions, onDetails, detailsRef, busy = false, showTimestamp = false }: {
   readonly task: TaskPresentation
   readonly actions: TaskViewActions
   readonly onDetails: (invoker: HTMLButtonElement) => void
   readonly detailsRef?: Ref<HTMLButtonElement>
   readonly busy?: boolean
+  readonly showTimestamp?: boolean
 }) {
   const rate = useReceiveRate(task)
+  const hasMeta = task.destinationLabel !== null || task.elapsedMilliseconds !== null || (showTimestamp && task.createdAtMilliseconds !== null)
   return <section className={`task-card task-tone-${task.tone}`} aria-label={`Download: ${task.objectLabel}`}
     data-task-stage={task.stage} data-operation-id={task.operationId}>
     <div className="task-summary">
-      <div className="task-identity"><strong title={task.objectLabel}>{task.objectLabel}</strong>
-        <span className="task-stage" role="status" aria-live="polite">
-          <ReceiverIcon name={STAGE_ICONS[task.stage]} />{task.headline}
-        </span>
-        {task.destinationLabel !== null && <small>{task.destinationLabel}</small>}
-        {task.elapsedMilliseconds !== null && <small title={ELAPSED_DESCRIPTION}>Elapsed: {formatElapsedTime(task.elapsedMilliseconds)}</small>}
-        {task.createdAtMilliseconds !== null && <small><time dateTime={new Date(task.createdAtMilliseconds).toISOString()}>{new Date(task.createdAtMilliseconds).toLocaleString()}</time></small>}
+      <div className="task-identity">
+        <div className="task-identity-header">
+          <strong title={task.objectLabel}>{task.objectLabel}</strong>
+          <span className="task-stage" role="status" aria-live="polite">
+            <ReceiverIcon name={STAGE_ICONS[task.stage]} />{task.headline}
+          </span>
+        </div>
+        {hasMeta && <div className="task-meta-line">
+          {task.destinationLabel !== null && <small>{task.destinationLabel}</small>}
+          {task.elapsedMilliseconds !== null && <small title={ELAPSED_DESCRIPTION}>Elapsed: {formatElapsedTime(task.elapsedMilliseconds)}</small>}
+          {showTimestamp && task.createdAtMilliseconds !== null && <small><time dateTime={new Date(task.createdAtMilliseconds).toISOString()}>{new Date(task.createdAtMilliseconds).toLocaleString()}</time></small>}
+        </div>}
       </div>
       <div className="task-actions">
         {task.primaryAction !== null && <TaskActionButton action={task.primaryAction}

@@ -8,7 +8,7 @@ export function ConnectionDetails({ status, path }: {
   readonly path: ReceiverPathActivitySnapshot
 }) {
   return <div className="connection-details">
-    <p>Your files and filenames are encrypted between you and the sender. Relays carry encrypted data.</p>
+    <p className="connection-privacy-note">End-to-end encrypted — files and filenames stay private between you and the sender.</p>
     <dl><dt>Share connection</dt><dd>{status}</dd><dt>Content path</dt>
       <dd>{presentReceiverPathActivity(path) ?? 'No data received recently.'}</dd></dl>
     <DownloadChannels path={path} />

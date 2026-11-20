@@ -8,8 +8,9 @@ export interface SavingChoice {
   readonly offered: OfferedArtifactChoice
   readonly label: string
   readonly outcome: SavingOutcomeKind
-  readonly description: string
-  readonly consequences: readonly string[]
+  readonly summary: string
+  readonly badges: readonly string[]
+  readonly notes: readonly string[]
   readonly disabledReason: string | null
 }
 
@@ -32,6 +33,7 @@ export interface SavingPresentationTransition {
 export interface SavingActionPresentation {
   readonly primary: SavingChoice | null
   readonly alternatives: readonly SavingOutcome[]
+  readonly hasAlternatives: boolean
   readonly disabledReason: string | null
   readonly retry: boolean
   readonly desktopGuidance: string | null

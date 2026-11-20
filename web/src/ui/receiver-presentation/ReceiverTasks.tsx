@@ -25,6 +25,17 @@ export function ReceiverDownloads({ controller, open, onOpenChange, ...entry }: 
   return <TaskDownloads tasks={snapshot.tasks} snapshot={snapshot} controller={controller} open={open} onOpenChange={onOpenChange} {...entry} />
 }
 
+function downloadHeading(
+  share: ReturnType<ReceiverController['presentation']['task']['getSnapshot']>['share'],
+  draft: ReturnType<ReceiverController['presentation']['task']['getSnapshot']>['draft'],
+  singleResult: boolean,
+): string {
+  if (singleResult) return 'Download again'
+  if (share !== null && share.kind !== 'browser') return 'Ready to download'
+  if (draft.mode === 'selection') return draft.empty ? 'Nothing selected' : draft.summary
+  return draft.label
+}
+
 export function ReceiverTasks({ controller, openDownloads }: { readonly controller: ReceiverController; readonly openDownloads: () => void }) {
   const source = controller.presentation.task
   const snapshot = useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot)
@@ -36,6 +47,7 @@ export function ReceiverTasks({ controller, openDownloads }: { readonly controll
   const singleResult = share !== null && share.kind !== 'browser' &&
     (current?.stage === 'saved' || current?.stage === 'handed-to-browser') && snapshot.output.activationPresentation === null
   const actionLabel = singleResult ? 'Download from sender again' : downloadScopeLabel(share, snapshot.draft)
+  const scopeLabel = downloadHeading(share, snapshot.draft, singleResult)
   const saving = presentSavingActions({
     offers: snapshot.output.offers, actionLabel,
     disabledReason: snapshot.draft.empty ? 'Select items to download' : snapshot.startAdmission.reason,
@@ -48,7 +60,8 @@ export function ReceiverTasks({ controller, openDownloads }: { readonly controll
   const savingControls = <SavingControls model={saving} activation={snapshot.output.activationPresentation}
     currentTaskContext={current !== null && !snapshot.draft.empty && !snapshot.startAdmission.allowed && snapshot.startAdmission.reason !== null
       ? { operationId: current.operationId, reason: snapshot.startAdmission.reason } : null}
-    actionLabel={actionLabel} choose={choice => controller.chooseArtifact(choice.offered.choice.choiceId, choice.recoveryPreference)}
+    actionLabel={actionLabel} scopeLabel={scopeLabel}
+    choose={choice => controller.chooseArtifact(choice.offered.choice.choiceId, choice.recoveryPreference)}
     retry={() => controller.retryOutputConfirmation()} cancel={() => controller.cancelPreparing()}
     onIntent={action => controller.recordExperienceIntent(action)} />
   return <>
@@ -69,7 +82,7 @@ export function ReceiverTasks({ controller, openDownloads }: { readonly controll
       <TaskDetails task={current} actions={actions} busy={snapshot.retained.pending !== null}>
         <TaskSourceDetails operationId={current.operationId} snapshot={snapshot} controller={controller} />
         {controller.canRetainCurrentOperation && <div className="retained-handoff">
-          <p>Keep this paused task in Downloads to continue later or save its complete received files.</p>
+          <p>Keep this paused download in Downloads to resume later or save completed files.</p>
           <button type="button" onClick={async () => {
             if (await controller.retainCurrentOperation()) { closeDetails(); openDownloads() }
           }}>Keep progress in Downloads</button>

@@ -131,7 +131,7 @@ export function joiningReceiverSnapshot(snapshot: ReceiverSnapshot): ReceiverSna
   return Object.freeze({
     ...snapshot,
     phase: 'joining',
-    status: 'Authenticating the share descriptor?',
+    status: 'Connecting to the share…',
     pathActivity: { lanes: [] },
     error: null,
     rows: Object.freeze([]),
@@ -206,7 +206,7 @@ export function initialReceiverSnapshot(): ReceiverSnapshot {
     activeReceiveOperationId: null,
     taskDisplay: null,
     phase: 'awaiting-key',
-    status: 'Waiting for the capability key.',
+    status: 'Enter a share key to open.',
     pathActivity: { lanes: [] },
     error: null,
     rows: Object.freeze([]),

@@ -29,25 +29,28 @@ export function ReceiverHeading({ controller }: { readonly controller: ReceiverC
         <h1 title={share?.name}>{share?.name ?? (snapshot.phase === 'awaiting-key' ? 'Open your share' : 'Shared files')}</h1>
         <div className="share-metadata">
           <button className={`connection-status connection-${snapshot.connection.kind}`} type="button" onClick={event => openDetails(event.currentTarget)}>
-            <ReceiverIcon name="connection" />{label}
-            {snapshot.pathActivity.lanes.length > 0 && <span>· {connectedChannelCount(snapshot.pathActivity)}</span>}
+            <span className="connection-dot" aria-hidden="true" />
+            <span>{label}</span>
+            {snapshot.pathActivity.lanes.length > 0 && <span className="connection-channels">· {connectedChannelCount(snapshot.pathActivity)}</span>}
           </button>
           <button className="encryption-note" type="button" onClick={event => openDetails(event.currentTarget)}>
             <ReceiverIcon name="lock" />Encrypted
           </button>
         </div>
       </div>
-      <ReceiverFold compact={share?.kind === 'photo' || share?.kind === 'video'} />
+      <ReceiverFold compact />
     </div>
     {snapshot.error !== null && <div className="share-error" role="alert">{snapshot.error} <DiagnosticsEntry label="Export diagnostics" /></div>}
     {snapshot.phase === 'awaiting-key' && <KeyForm controller={controller} />}
     {share === null && breadcrumbs.length === 0 && snapshot.phase === 'joining' && <div className="share-loading">
       <p role="status">{snapshot.status}</p>
-      {snapshot.connection.kind === 'idle' && snapshot.connection.join?.kind === 'paused' && <>
-        <button type="button" onClick={() => controller.requestReconnect()}>Retry now</button>
-        <button type="button" onClick={() => controller.continueJoinWaiting()}>Continue waiting</button>
-      </>}
-      <button type="button" onClick={() => controller.cancelJoin()}>Cancel</button>
+      <div className="share-loading-actions">
+        {snapshot.connection.kind === 'idle' && snapshot.connection.join?.kind === 'paused' && <>
+          <button type="button" className="primary-action" onClick={() => controller.requestReconnect()}>Retry now</button>
+          <button type="button" onClick={() => controller.continueJoinWaiting()}>Continue waiting</button>
+        </>}
+        <button type="button" onClick={() => controller.cancelJoin()}>Cancel</button>
+      </div>
     </div>}
     {snapshot.connection.kind === 'reconnecting' && <ConnectionRecovery activity={snapshot.connection.activity} retry={() => controller.requestReconnect()} />}
     {details && <DetailSheet title="Encryption and connection" onClose={closeDetails} returnFocus={invoker}>
@@ -66,10 +69,12 @@ function KeyForm({ controller }: { readonly controller: ReceiverController }) {
     controller.submitKey(key)
   }
   return <form className="key-form" onSubmit={submit}>
-    <label htmlFor="capability-key">Separate key</label>
-    <p id="key-help">Paste the key or the complete WindShare link to open this share.</p>
-    <div className="key-entry"><input id="capability-key" name="capability-key" type="password"
-      autoComplete="off" spellCheck={false} aria-describedby="key-help" required autoFocus />
-      <button className="primary-action" type="submit">Open share</button></div>
+    <label htmlFor="capability-key">Share key</label>
+    <p id="key-help">Paste the key or full WindShare link to open this share.</p>
+    <div className="key-entry">
+      <input id="capability-key" name="capability-key" type="password"
+        autoComplete="off" spellCheck={false} aria-describedby="key-help" required autoFocus />
+      <button className="primary-action" type="submit">Open share</button>
+    </div>
   </form>
 }

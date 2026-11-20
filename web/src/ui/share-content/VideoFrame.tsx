@@ -103,7 +103,7 @@ export function VideoFrame({ preview, actions }: {
         onPointerCancel={cancelDrag}
         onLostPointerCapture={cancelDrag} />
       {preview.failure === null
-        ? <p className="preview-seek-hint">Choose a moment to preview. Download the video to play it.</p>
+        ? <p className="preview-seek-hint">Scrub to preview frames · Download for full playback.</p>
         : <div className="preview-seek-failure">
           <p role="alert">{preview.failure}</p>
         </div>}

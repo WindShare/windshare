@@ -23,25 +23,25 @@ function renderSaving(model: SavingActionPresentation, currentTaskContext: typeo
 }
 
 describe('saving decision placement beside a current task', () => {
-  it('keeps an occupied draft concise and restores every route cost before commitment is available', async () => {
+  it('keeps an occupied draft concise and restores the route summary when available', async () => {
     const offers = await folderOffers()
     const occupied = presentSavingActions({ offers, disabledReason: TASK_ADMISSION.reason })
-    const cost = occupied.primary!.consequences[1]!
+    const summary = occupied.primary!.summary
     const html = renderSaving(occupied, TASK_ADMISSION)
     expect(html).toContain(TASK_ADMISSION.reason)
-    expect(html).not.toContain(cost)
-    expect(occupied.alternatives.flatMap(outcome => outcome.primary.consequences)).toContain(cost)
+    expect(html).not.toContain(summary)
+    expect(occupied.alternatives.flatMap(outcome => outcome.primary.summary)).toContain(summary)
 
     const available = presentSavingActions({ offers })
-    expect(renderSaving(available, null)).toContain(cost)
-    // A stale presentation context must never suppress costs for an enabled saving action.
-    expect(renderSaving(available, TASK_ADMISSION)).toContain(cost)
+    expect(renderSaving(available, null)).toContain(summary)
+    // A stale presentation context must never suppress the summary for an enabled saving action.
+    expect(renderSaving(available, TASK_ADMISSION)).toContain(summary)
   })
 
   it('keeps limitations actionable when no eligible saving route exists', async () => {
     const offers = await folderOffers()
     const unsupported: SavingActionPresentation = {
-      ...presentSavingActions({ offers }), primary: null, alternatives: [],
+      ...presentSavingActions({ offers }), primary: null, alternatives: [], hasAlternatives: false,
       disabledReason: 'This result cannot be saved in this browser.',
       desktopGuidance: 'Use the WindShare desktop receiver.',
     }
@@ -50,10 +50,10 @@ describe('saving decision placement beside a current task', () => {
     expect(html).toContain(unsupported.desktopGuidance)
   })
 
-  it('keeps empty selection guidance at its disabled action even while a task remains active', async () => {
+  it('keeps empty selection guidance at its disabled action without dumping route details', async () => {
     const model = presentSavingActions({ offers: await folderOffers(), disabledReason: 'Select items to download' })
     const html = renderSaving(model, null)
     expect(html).toContain('Select items to download')
-    expect(html).toContain(model.primary!.consequences[1]!)
+    expect(html).not.toContain(model.primary!.summary)
   })
 })

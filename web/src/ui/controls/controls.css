@@ -1,52 +1,60 @@
 :where(.receiver-shell, .detail-sheet) button {
-  min-height: 40px;
+  min-height: 38px;
   border: 1px solid var(--receiver-rule);
-  border-radius: 4px;
+  border-radius: var(--receiver-radius-control, 8px);
   background: var(--receiver-paper);
   color: var(--receiver-ink);
-  padding: 8px 13px;
+  padding: 7px 14px;
   font: inherit;
   font-size: .875rem;
+  font-weight: 500;
   line-height: 1.4;
   cursor: pointer;
-  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, box-shadow 140ms ease;
 }
 :where(.receiver-shell, .detail-sheet) button:hover:not(:disabled) {
   background: var(--receiver-wash);
-  border-color: var(--receiver-accent);
+  border-color: color-mix(in srgb, var(--receiver-accent) 45%, var(--receiver-rule));
 }
 :where(.receiver-shell, .detail-sheet) button.primary-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  min-height: 46px;
-  padding: 12px 18px;
+  gap: 8px;
+  min-height: 42px;
+  padding: 10px 18px;
   background: var(--receiver-accent);
   color: var(--receiver-on-accent);
   border-color: transparent;
-  font-size: .8125rem;
+  font-size: .875rem;
   font-weight: 600;
 }
 :where(.receiver-shell, .detail-sheet) button.primary-action:hover:not(:disabled) {
   background: var(--receiver-accent-hover);
+  border-color: transparent;
 }
 :where(.receiver-shell, .detail-sheet) button.danger-action {
   color: var(--receiver-error);
+  border-color: color-mix(in srgb, var(--receiver-error) 55%, var(--receiver-rule));
+}
+:where(.receiver-shell, .detail-sheet) button.danger-action:hover:not(:disabled) {
+  background: var(--receiver-error-wash);
   border-color: var(--receiver-error);
 }
 :where(.receiver-shell, .detail-sheet) button.quiet-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
+  gap: 6px;
   background: transparent;
   border-color: transparent;
-  padding-inline: 4px;
+  color: var(--receiver-muted);
+  padding-inline: 8px;
+  font-weight: 500;
 }
 :where(.receiver-shell, .detail-sheet) button.quiet-action:hover:not(:disabled) {
   color: var(--receiver-accent);
-  background: transparent;
+  background: var(--receiver-wash);
   border-color: transparent;
 }
 :where(.receiver-shell, .detail-sheet) button:disabled {
@@ -57,7 +65,7 @@
 }
 :where(.receiver-shell, .detail-sheet) :is(button, input, a, summary, [tabindex]):focus-visible {
   outline: 2px solid var(--receiver-accent);
-  outline-offset: 3px;
+  outline-offset: 2px;
 }
 :where(.receiver-shell, .detail-sheet) input {
   color: var(--receiver-ink);
@@ -67,18 +75,20 @@
 .attention-count {
   display: inline-grid;
   place-items: center;
-  border-radius: 20px;
+  border-radius: 999px;
   min-width: 20px;
   height: 20px;
+  padding-inline: 5px;
   background: #e5a53d;
   color: #312408;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 .receiver-icon {
   display: inline-block;
-  width: 18px;
-  height: 18px;
+  width: 17px;
+  height: 17px;
   flex: none;
   vertical-align: middle;
 }

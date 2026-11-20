@@ -79,7 +79,7 @@ test('Jade content and task actions reflow at narrow widths, large text and shor
     await expect(contents.locator('.explorer-row')).toHaveCount(256)
     await contents.focus()
     await page.keyboard.press('Control+End')
-    await expect(page.getByRole('button', { name: 'Document 256.txt', exact: true })).toBeInViewport()
+    await expect(page.getByRole('button', { name: 'Photo 256.png', exact: true })).toBeInViewport()
     const pause = page.locator(CURRENT_TASK).getByRole('button', { name: 'Pause', exact: true })
     await pause.scrollIntoViewIfNeeded()
     await expect(pause).toBeInViewport()

@@ -1,7 +1,9 @@
 import { useEffect, useRef } from 'react'
 import type { BrowseRow, Breadcrumb, ReceiverSnapshot } from '../model'
+import { canPreviewFile } from '../../preview/capability'
 import { formatBytes } from '../progress-presentation'
-import { ReceiverIcon, type ReceiverIconName } from '../receiver-presentation/ReceiverIcon'
+import { fileDisplayInfo } from './file-presentation'
+import { ReceiverIcon } from '../receiver-presentation/ReceiverIcon'
 
 export interface ExplorerActions {
   readonly openDirectory: (id: string) => void
@@ -30,15 +32,19 @@ function entrySize(row: BrowseRow): string {
   return row.expectedSize === undefined ? 'Size unknown' : formatBytes(row.expectedSize)
 }
 
-const IMAGE_FILENAME = /\.(?:avif|gif|heic|heif|jpe?g|png|svg|webp)$/iu
-const VIDEO_FILENAME = /\.(?:m4v|mkv|mov|mp4|webm)$/iu
-
-function entryIcon(row: BrowseRow): ReceiverIconName {
-  if (row.kind === 'directory') return 'folder'
-  // Filename decoration never grants preview support or establishes a media type.
-  if (IMAGE_FILENAME.test(row.name)) return 'image'
-  if (VIDEO_FILENAME.test(row.name)) return 'video'
-  return 'file'
+function EntryContent({ row }: { readonly row: BrowseRow }) {
+  const icon = row.kind === 'directory' ? 'folder' : fileDisplayInfo(row.name).icon
+  return <>
+    <span className={`entry-icon-badge entry-icon-${icon}`}>
+      <ReceiverIcon name={icon} className="entry-icon" />
+    </span>
+    <span className="entry-label">
+      <span className="entry-filename">{row.name}</span>
+      <span className="entry-mobile-meta">
+        {row.kind === 'directory' ? 'Folder' : entrySize(row)}
+      </span>
+    </span>
+  </>
 }
 
 export function Explorer({ rows, breadcrumbs, pageIndex, pageCount, omittedCount, browse, draft, actions }: {
@@ -61,40 +67,57 @@ export function Explorer({ rows, breadcrumbs, pageIndex, pageCount, omittedCount
             onClick={() => actions.openBreadcrumb(index)}>{crumb.name}</button>
         </span>)}
       </nav>
-      <button className="quiet-action selection-mode-action" type="button" onClick={draft.mode === 'selection' ? actions.exitSelection : actions.enterSelection}>
+      <button className={`quiet-action selection-mode-action${draft.mode === 'selection' ? ' selection-mode-active' : ''}`}
+        type="button" onClick={draft.mode === 'selection' ? actions.exitSelection : actions.enterSelection}>
         <ReceiverIcon name={draft.mode === 'selection' ? 'check' : 'select'} />
         {draft.mode === 'selection' ? 'Done selecting' : 'Select items'}
       </button>
     </div>
-    {draft.mode === 'selection' && <div className="selection-toolbar">
-      <p>{draft.summary}</p>
-      <div><button type="button" onClick={actions.selectPage}>Select this page</button>
-        <button type="button" onClick={actions.clearSelection} disabled={draft.empty}>Clear selection</button></div>
-    </div>}
-    {browse.kind === 'loading' && <p className="directory-notice" role="status">{browse.status || 'Loading this folder…'}</p>}
-    {browse.error !== null && <div className="directory-notice directory-error" role="alert">
-      <p>{browse.error}</p><button type="button" onClick={actions.retry}>Retry directory</button>
-    </div>}
-    {rows.length === 0 && browse.kind === 'ready' && <p className="directory-empty">
-      {omittedCount > 0n ? 'No items are available in this folder.' : 'This folder is empty.'}
-    </p>}
-    {rows.length > 0 && <ul className="explorer-list" tabIndex={0} aria-label="Folder contents">
-        {rows.map(row => <li key={row.id} className="explorer-row"
-          data-selection={draft.mode === 'selection' ? row.selection : 'unselected'}>
-          <SelectionCheckbox row={row} active={draft.mode === 'selection'} toggle={() => actions.toggle(row.id)} />
-          <button type="button" className="entry-name" title={row.name} aria-label={row.name}
-            onClick={event => row.kind === 'directory' ? actions.openDirectory(row.id) : actions.preview(row.id, event.currentTarget)}>
-            <ReceiverIcon name={entryIcon(row)} className="entry-icon" />
-            <span className="entry-label"><span className="entry-filename">{row.name}</span>
-              <span className="entry-type">{row.kind === 'directory' ? 'Folder' : 'File'}
-                {row.kind === 'file' && <span className="entry-mobile-size"> · {entrySize(row)}</span>}
-              </span></span>
-          </button>
-          <span className="entry-metadata">{row.kind === 'directory' ? '—' : entrySize(row)}</span>
-          <span className="entry-action-hint" aria-hidden="true">{row.kind === 'directory' ? 'Open' : 'Preview'}</span>
-        </li>)}
+    <div className="explorer-card">
+      {draft.mode === 'selection' && <div className="selection-toolbar">
+        <p>{draft.summary}</p>
+        <div>
+          <button type="button" onClick={actions.selectPage}>Select this page</button>
+          <button type="button" onClick={actions.clearSelection} disabled={draft.empty}>Clear selection</button>
+        </div>
+      </div>}
+      {browse.kind === 'loading' && <p className="directory-notice" role="status">{browse.status || 'Loading this folder…'}</p>}
+      {browse.error !== null && <div className="directory-notice directory-error" role="alert">
+        <p>{browse.error}</p><button type="button" onClick={actions.retry}>Retry directory</button>
+      </div>}
+      {rows.length === 0 && browse.kind === 'ready' && <p className="directory-empty">
+        {omittedCount > 0n ? 'No items are available in this folder.' : 'This folder is empty.'}
+      </p>}
+      {rows.length > 0 && <ul className="explorer-list" tabIndex={0} aria-label="Folder contents">
+        {rows.map(row => {
+          const isDirectory = row.kind === 'directory'
+          const previewable = !isDirectory && canPreviewFile(row.name, row.expectedSize)
+          return <li key={row.id} className={`explorer-row${isDirectory || previewable ? ' explorer-row-interactive' : ''}`}
+            data-selection={draft.mode === 'selection' ? row.selection : 'unselected'}>
+            <SelectionCheckbox row={row} active={draft.mode === 'selection'} toggle={() => actions.toggle(row.id)} />
+            {isDirectory || previewable ? (
+              <button type="button" className="entry-name" title={row.name} aria-label={row.name}
+                onClick={event => isDirectory ? actions.openDirectory(row.id) : actions.preview(row.id, event.currentTarget)}>
+                <EntryContent row={row} />
+              </button>
+            ) : (
+              <div className="entry-name entry-name-static" title={row.name}>
+                <EntryContent row={row} />
+              </div>
+            )}
+            <span className="entry-metadata">{isDirectory ? 'Folder' : entrySize(row)}</span>
+            <span className={`entry-action-hint${previewable ? ' entry-action-preview' : ''}${isDirectory ? ' entry-action-folder' : ''}`}
+              aria-hidden="true">
+              {isDirectory && <>Open<ReceiverIcon name="chevron-right" /></>}
+              {previewable && <><ReceiverIcon name="eye" />Preview</>}
+            </span>
+          </li>
+        })}
       </ul>}
-    {omittedCount > 0n && <p className="directory-notice">{omittedCount.toString()} source items were not included. A skipped folder counts as one item, including all of its contents. Available items can still be downloaded; ask the sender to check the skipped names and reasons.</p>}
+    </div>
+    {omittedCount > 0n && <p className="directory-notice directory-omitted">
+      {omittedCount.toString()} {omittedCount === 1n ? 'item couldn’t be shared and was' : 'items couldn’t be shared and were'} skipped. Available items can still be downloaded.
+    </p>}
     {pageCount > 1 && <nav className="directory-pagination" aria-label="Directory pages">
       <button type="button" disabled={pageIndex === 0} onClick={() => actions.showPage(pageIndex - 1)}><ReceiverIcon name="chevron-left" />Previous</button>
       <span>Page {pageIndex + 1} of {pageCount}</span>

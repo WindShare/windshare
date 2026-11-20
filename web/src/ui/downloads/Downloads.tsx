@@ -46,7 +46,7 @@ export function Downloads({ tasks, actions, loading, error, busy, details, entry
     {entryDescription !== undefined && <span id={descriptionId} hidden>{entryDescription}</span>}
     {open && <DetailSheet title={selected?.objectLabel ?? 'Downloads'} onClose={close} returnFocus={entryButton}
       returnLabel="Close downloads" className="downloads-sheet"
-      {...(selected === undefined ? { subtitle: 'Tasks and saved records in this browser.' } : {})}
+      {...(selected === undefined ? { subtitle: 'Saved progress and history in this browser.' } : {})}
       navigation={selected === undefined ? undefined : <button ref={backButton} className="quiet-action downloads-back" type="button"
         onClick={() => { onIntent('close-download-task-details'); setExpanded(null) }}><ReceiverIcon name="chevron-left" />All downloads</button>}>
       {selected !== undefined ?
@@ -59,16 +59,14 @@ export function Downloads({ tasks, actions, loading, error, busy, details, entry
             <p>No downloads yet.</p><p>Downloads you start here will appear in this browser.</p>
           </div>}
           <div className="downloads-list">{tasks.map(task =>
-            <TaskCard key={task.operationId} task={task} actions={actions} busy={busy}
+            <TaskCard key={task.operationId} task={task} actions={actions} busy={busy} showTimestamp
               detailsRef={element => {
                 if (element === null) detailsButtons.current.delete(task.operationId)
                 else detailsButtons.current.set(task.operationId, element)
               }}
               onDetails={() => { onIntent('open-download-task-details'); setExpanded(task.operationId) }} />)}</div>
-          {tasks.length > 0 && <details className="storage-details"><summary>About retained downloads</summary>
-            <p>Retained data stays in this browser. Clearing this site’s data removes it.
-              Save important results promptly; the browser may remove unprotected data when space is low.</p>
-            <p>Files already exported are separate from this history. Partial ZIP export keeps the original task available to continue.</p>
+          {tasks.length > 0 && <details className="storage-details"><summary>About saved progress</summary>
+            <p>Unfinished downloads stay in this browser and are cleared if you clear site data. Files you already exported remain on your device.</p>
           </details>}
         </div>}
     </DetailSheet>}

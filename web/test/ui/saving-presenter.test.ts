@@ -23,19 +23,30 @@ describe('saving action presenter over eligible offers', () => {
     const result = presentSavingActions({ offers })
     expect(result.primary).toMatchObject({ outcome: 'original-file', label: 'Download original' })
     expect(result.primary?.offered.route.kind).toBe('portable-handoff')
+    expect(result.hasAlternatives).toBe(true)
     expect(result.alternatives.map(group => group.kind)).toEqual(['original-file', 'folder'])
     expect(result.alternatives[1]?.primary.recoveryPreference).toBe('automatic')
-    expect(result.alternatives[1]?.primary.consequences.join(' ')).toContain('Choose a folder once')
+    expect(result.alternatives[1]?.primary.badges).toContain('Resumable')
     const direct = result.alternatives[1]?.alternatives.find(choice => choice.recoveryPreference === 'direct')
-    expect(direct?.consequences.join(' ')).toContain('copy its saved prefix')
+    expect(direct?.recoveryPreference).toBe('direct')
     expect(direct?.offered.choice.choiceId).toBe(result.alternatives[1]?.primary.offered.choice.choiceId)
     if (offers.kind === 'artifact-actions') expect(result.primary?.offered).toBe(offers.primary)
+  })
+
+  it('hides alternatives trigger when only a single saving option exists', async () => {
+    const offers = await offerArtifacts(
+      projection(await selection(), singleFileProof(), 128n), COMPLETE_DISCOVERY,
+      environment({ targets: [handoffTarget()], portable: portableOffer() }),
+    )
+    const result = presentSavingActions({ offers })
+    expect(result.primary?.outcome).toBe('original-file')
+    expect(result.hasAlternatives).toBe(false)
   })
 
   it.each([
     { target: fsaTarget, copyLimited: true },
     { target: nativeTarget, copyLimited: false },
-  ])('separates successful pause from copy-limited crash recovery: $copyLimited', async ({ target, copyLimited }) => {
+  ])('distinguishes direct FSA recovery caveats from native targets: $copyLimited', async ({ target, copyLimited }) => {
     const offers = await offerArtifacts(
       projection(await selection(), treeProof(), 1n), COMPLETE_DISCOVERY,
       environment({ targets: [target()] }),
@@ -44,10 +55,9 @@ describe('saving action presenter over eligible offers', () => {
     const choice = copyLimited
       ? model.alternatives.find(group => group.kind === 'folder')!.alternatives.find(candidate => candidate.recoveryPreference === 'direct')!
       : model.primary!
-    const copy = choice.consequences.join(' ')
-    expect(copy).toContain('Wait for Pause to finish')
-    expect(copy.includes('may lose most progress')).toBe(copyLimited)
-    expect(copy.includes('copy its saved prefix')).toBe(copyLimited)
+    const notes = choice.notes.join(' ')
+    expect(notes).toContain('Pause')
+    expect(notes.includes('lose progress')).toBe(copyLimited)
   })
 
   it('keeps original-file default at large sizes when eligible instead of guessing browser capability', async () => {
@@ -57,8 +67,8 @@ describe('saving action presenter over eligible offers', () => {
     )
     const result = presentSavingActions({ offers })
     expect(result.primary?.outcome).toBe('original-file')
-    expect(result.primary?.consequences.join(' ')).toContain('last verified checkpoint')
-    expect(result.primary?.consequences.join(' ')).not.toContain('may lose most progress')
+    expect(result.primary?.badges).toContain('Resumable')
+    expect(result.primary?.notes.join(' ')).not.toContain('lose progress')
   })
 
   it('defaults to hierarchy-preserving folder output and keeps ZIP format change explicit', async () => {
@@ -69,7 +79,7 @@ describe('saving action presenter over eligible offers', () => {
     const result = presentSavingActions({ offers, actionLabel: 'Download this folder' })
     expect(result.primary?.outcome).toBe('folder')
     expect(result.primary?.label).toBe('Download this folder')
-    expect(result.alternatives.find(group => group.kind === 'zip')?.primary.consequences[0]).toContain('ZIP package')
+    expect(result.alternatives.find(group => group.kind === 'zip')?.primary.summary).toContain('ZIP')
   })
 
   it('keeps progressive ZIP enabled when exact comparison is unknown and follows existing ZIP ranking', async () => {
@@ -85,6 +95,7 @@ describe('saving action presenter over eligible offers', () => {
     expect(result.primary?.outcome).toBe('zip')
     expect(result.primary?.disabledReason).toBeNull()
     expect(result.recommendation).toContain('start now')
+    expect(result.hasAlternatives).toBe(true)
     expect(result.alternatives).toHaveLength(1)
     expect(result.alternatives[0]?.alternatives).toHaveLength(1)
     if (offers.kind === 'artifact-actions') expect(result.primary?.offered.choice.choiceId).toBe(offers.zip?.primary.choice.choiceId)
@@ -94,7 +105,7 @@ describe('saving action presenter over eligible offers', () => {
     const spec = await selection()
     const empty = await offerArtifacts(projection(spec, { kind: 'none' }), COMPLETE_DISCOVERY, environment({ targets: [] }))
     expect(presentSavingActions({ offers: empty })).toMatchObject({
-      primary: null, disabledReason: 'Select items to download',
+      primary: null, disabledReason: 'Select items to download', hasAlternatives: false,
     })
     const offers = await offerArtifacts(
       projection(spec, treeProof(), 1n), COMPLETE_DISCOVERY,
