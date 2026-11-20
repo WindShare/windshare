@@ -9,16 +9,22 @@ import (
 	"time"
 )
 
-type capacityEvidence struct{ remaining time.Duration }
+type capacityEvidence struct {
+	remaining time.Duration
+	cleared   bool
+	clearance chan struct{}
+}
 
-func (evidence *capacityEvidence) CapacityWait() time.Duration { return evidence.remaining }
+func (evidence *capacityEvidence) CapacityWait() time.Duration        { return evidence.remaining }
+func (evidence *capacityEvidence) CapacityCleared() bool              { return evidence.cleared }
+func (evidence *capacityEvidence) CapacityClearance() <-chan struct{} { return evidence.clearance }
 
 func TestCapacityEvidencePreservesFailureIdentityAndExpires(t *testing.T) {
 	evidence := &capacityEvidence{remaining: 15 * time.Second}
 	deadline := fmt.Errorf("content progress: %w", context.DeadlineExceeded)
 	classified := ClassifyDeadline(evidence, deadline)
 	wait, ok := errors.AsType[*BandwidthWaitError](classified)
-	if !ok || wait.RetryAfter != evidence.remaining || !errors.Is(classified, context.DeadlineExceeded) {
+	if !ok || wait.RetryAfter != evidence.remaining || wait.Pressure != evidence || !errors.Is(classified, context.DeadlineExceeded) {
 		t.Fatalf("capacity evidence lost deadline or recovery delay: %v", classified)
 	}
 	if wait.Error() != "relay bandwidth is busy: "+deadline.Error() {

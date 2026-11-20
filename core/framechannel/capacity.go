@@ -6,13 +6,19 @@ import (
 	"time"
 )
 
-// CapacityPressure is optional transport evidence. Its bounded lifetime and
-// independent heartbeat preserve failure detection while recovery backs off.
-type CapacityPressure interface{ CapacityWait() time.Duration }
+// CapacityPressure is optional transport evidence. Its bounded lifetime,
+// explicit clearance, and independent heartbeat preserve failure detection
+// while recovery backs off and resumes as soon as the relay clears pressure.
+type CapacityPressure interface {
+	CapacityWait() time.Duration
+	CapacityCleared() bool
+	CapacityClearance() <-chan struct{}
+}
 
 type BandwidthWaitError struct {
 	Cause      error
 	RetryAfter time.Duration
+	Pressure   CapacityPressure
 }
 
 func (err *BandwidthWaitError) Error() string { return "relay bandwidth is busy: " + err.Cause.Error() }
@@ -29,7 +35,7 @@ func WithCapacityWait(channel any, cause error) error {
 	}
 	if pressure, ok := channel.(CapacityPressure); ok {
 		if delay := pressure.CapacityWait(); delay > 0 {
-			return &BandwidthWaitError{Cause: cause, RetryAfter: delay}
+			return &BandwidthWaitError{Cause: cause, RetryAfter: delay, Pressure: pressure}
 		}
 	}
 	return cause

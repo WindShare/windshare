@@ -187,12 +187,14 @@ func (l *link) settleTerminal(
 }
 
 type Channel struct {
-	id            v2.RelaySessionID
-	link          *link
-	recv          chan framechannel.Frame
-	receive       *receiveFlow
-	announced     bool
-	capacityUntil [2]time.Time
+	id                v2.RelaySessionID
+	link              *link
+	recv              chan framechannel.Frame
+	receive           *receiveFlow
+	announced         bool
+	capacityUntil     [2]time.Time
+	capacityCleared   bool
+	capacityClearance chan struct{}
 
 	mu             sync.Mutex
 	state          framechannel.ChannelState

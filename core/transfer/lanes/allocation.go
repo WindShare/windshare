@@ -136,7 +136,7 @@ func comparePending(left, right *pendingAdmission, now time.Time) int {
 func (s *Set) allocateOneLocked(pending *pendingAdmission, now time.Time) {
 	pending.blocked, pending.probeAt, pending.capacityChanged = CapacityNetwork, time.Time{}, nil
 	remaining := MaxDemandAttempts - len(pending.attempted)
-	ordered, suspended := s.eligiblePendingLanesLocked(pending)
+	ordered, suspended := s.eligiblePendingLanesLocked(pending, true)
 	if remaining <= 0 || (len(ordered) == 0 && !suspended) {
 		pending.exhausted, pending.done = true, true
 		return
@@ -187,7 +187,8 @@ func priorityRank(priority WorkPriority) int {
 	}
 }
 
-func (s *Set) eligiblePendingLanesLocked(pending *pendingAdmission) ([]*laneState, bool) {
+func (s *Set) eligiblePendingLanesLocked(pending *pendingAdmission, allowRecovery bool) ([]*laneState, bool) {
+	now := s.now()
 	ordered := make([]*laneState, 0, len(s.lanes))
 	suspended := len(s.routeSupplies) != 0
 	for laneID, hold := range s.contentSuspensions {
@@ -208,10 +209,11 @@ func (s *Set) eligiblePendingLanesLocked(pending *pendingAdmission) ([]*laneStat
 			suspended = true
 			continue
 		}
-		if s.now().Before(state.capacityWaitUntil) {
+		ready, recoverable, deadline := state.capacity.readiness(now, state.inflight)
+		if !ready && (!allowRecovery || !recoverable) {
 			suspended = true
-			if pending.probeAt.IsZero() || state.capacityWaitUntil.Before(pending.probeAt) {
-				pending.probeAt = state.capacityWaitUntil
+			if !deadline.IsZero() && (pending.probeAt.IsZero() || deadline.Before(pending.probeAt)) {
+				pending.probeAt = deadline
 			}
 			continue
 		}
@@ -254,7 +256,7 @@ func (s *Set) pendingCandidateLocked(pending *pendingAdmission, ordered []*laneS
 	if primary.receive.Load(now).Evidence == lanescheduling.DeliveryRecent && active > 0 &&
 		(pending.order.Distance > 0 || (pending.order.Priority != Preview && active > 1)) {
 		for _, candidate := range ordered[1:] {
-			if candidate.failures == 0 && candidate.receive.Available() && candidate.performance.PendingBytes == 0 &&
+			if candidate.capacity.kind == capacityReady && candidate.failures == 0 && candidate.receive.Available() && candidate.performance.PendingBytes == 0 &&
 				candidate.sampling.Available(blockDemandBytes(pending.request.Demand), now) && s.exploration.Available(lanescheduling.Sample, now) {
 				return candidate, lanescheduling.Sample
 			}
@@ -286,7 +288,7 @@ func (s *Set) pendingCandidateLocked(pending *pendingAdmission, ordered []*laneS
 func (s *Set) probeCandidateLocked(pending *pendingAdmission, ordered []*laneState, now time.Time) *laneState {
 	var probe *laneState
 	for _, other := range ordered {
-		if other.failures != 0 || !other.receive.Available() || other.performance.PendingBytes != 0 {
+		if other.capacity.kind != capacityReady || other.failures != 0 || !other.receive.Available() || other.performance.PendingBytes != 0 {
 			continue
 		}
 		due := maxTime(s.exploration.NextProbe(), other.performance.LastAttempt.Add(lanescheduling.ProbeInterval))

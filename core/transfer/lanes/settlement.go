@@ -143,6 +143,7 @@ func (s *Set) retireLaneLocked(state *laneState) *SettlementSummary {
 		return nil
 	}
 	state.retired = true
+	state.capacity.reset()
 	return s.settleLaneLocked(state)
 }
 
