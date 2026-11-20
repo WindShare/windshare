@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { ValidatedForm } from '../ui/ValidatedForm'
 import { useAction, useResource } from '../ui/activity'
 import { BackLink, Badge, DateStamp, EmptyState, Notice, ReadError } from '../ui/layout'
@@ -6,9 +6,10 @@ import { Icon } from '../ui/Icon'
 import { message, MessageError } from '../ui/locale'
 import { useCopy } from '../ui/use-locale'
 import { sharedCopy } from '../ui/locales'
+import { useListNavigation } from './list-navigation'
 import { networkCopy } from './locales'
 import type { AuthorityClient } from './api'
-import { encode, requireIdentity } from './identity'
+import { directlyRestricted, encode, requireIdentity } from './identity'
 import type { Restrictions, Target } from './model'
 
 export interface AccessProps {
@@ -17,12 +18,9 @@ export interface AccessProps {
   saved: (value: Restrictions) => void
 }
 
-export function DirectRestriction({ target, api, restrictions, saved }: AccessProps & { target: Target }) {
+export function DirectRestriction({ target, api, saved, blocked }: Pick<AccessProps, 'api' | 'saved'> & { target: Target; blocked: boolean }) {
   const t = useCopy(networkCopy)
   const action = useAction()
-  const id = encode(target.id)
-  const direct = target.kind === 'account' ? restrictions.accounts : restrictions.shares
-  const blocked = direct.some(value => encode(value) === id)
   const actionLabel = blocked ? t.removeRestriction : t.restrictRelay
   return <div className="restriction"><div className="setting-row">
     <div><h3>{target.kind === 'account' ? t.directAccount : t.directShare}</h3>
@@ -48,7 +46,8 @@ function ReportDetail({ id, ...access }: AccessProps & { id: string }) {
     {report && <article className="panel padded">
       <div className="section-title"><h2>{t.reason}</h2><DateStamp millis={report.created_at * 1000} /></div>
       <p className="report-reason">{report.reason}</p><dl className="facts"><dt>{t.shareId}</dt><dd><code>{encode(report.share)}</code></dd></dl>
-      <DirectRestriction key={encode(report.share)} {...access} target={{ kind: 'share', id: report.share }} />
+      <DirectRestriction key={encode(report.share)} {...access} target={{ kind: 'share', id: report.share }}
+        blocked={directlyRestricted(access.restrictions, { kind: 'share', id: report.share })} />
     </article>}
   </div>
 }
@@ -82,24 +81,10 @@ function ReportList({ leaving, ...access }: AccessProps & { leaving: () => void 
 export function Reports({ selectedId, revision, ...access }: AccessProps & {
   selectedId?: string; revision: { list: number; detail: number }
 }) {
-  const showList = selectedId === undefined
-  const [visitedList, setVisitedList] = useState(showList)
-  const scroll = useRef<number | null>(null)
-  // Keep the fetched pages only after the list has been opened, including while reading a report.
-  if (showList && !visitedList) setVisitedList(true)
-  useEffect(() => {
-    if (!showList || scroll.current === null) return
-    const top = scroll.current
-    const frame = requestAnimationFrame(() => {
-      scroll.current = null
-      window.scrollTo(0, top)
-    })
-    return () => cancelAnimationFrame(frame)
-  }, [showList])
+  const { visitedList, leaving } = useListNavigation(selectedId === undefined)
   return <>
     {selectedId !== undefined && <ReportDetail key={selectedId + ':' + revision.detail} {...access} id={selectedId} />}
-    {visitedList && <div key="report-list" hidden={!showList}><ReportList key={revision.list} {...access}
-      leaving={() => { scroll.current = window.scrollY }} /></div>}
+    {visitedList && <div hidden={selectedId !== undefined}><ReportList key={revision.list} {...access} leaving={leaving} /></div>}
   </>
 }
 
@@ -117,7 +102,7 @@ export function LookupShare(access: AccessProps) {
       <Notice feedback={lookup.feedback} /><div><button>{t.lookupShare}</button></div>
     </ValidatedForm>
     {target && <section className="panel padded"><code>{encode(target.id)}</code>
-      <DirectRestriction key={encode(target.id)} {...access} target={target} /></section>}
+      <DirectRestriction key={encode(target.id)} {...access} target={target} blocked={directlyRestricted(access.restrictions, target)} /></section>}
     <RestrictionList kind="share" {...access} />
   </div>
 }

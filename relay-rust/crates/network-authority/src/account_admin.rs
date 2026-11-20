@@ -46,6 +46,7 @@ pub struct AccountDetails {
     pub daily_limit_bytes: u64,
     pub remaining_bytes: u64,
     pub restricted: bool,
+    pub restriction_version: u64,
     pub entitlement_version: u64,
     pub recent_usage: Vec<DailyUsage>,
     pub has_older_usage: bool,
@@ -63,7 +64,7 @@ pub fn index_key(created_at: u64, id: &AccountId) -> String {
 
 fn account_id(text: &str) -> Option<AccountId> {
     let mut id = AccountId::default();
-    (URL_SAFE_NO_PAD.decode_slice(text, &mut id).ok()? == id.len()).then_some(id)
+    (URL_SAFE_NO_PAD.decode_slice(text, &mut id).ok()? == id.len() && id != [0; 16]).then_some(id)
 }
 
 fn after_key(cursor: &str) -> Result<String> {
@@ -126,17 +127,24 @@ impl<R: Store, E: Environment> Authority<R, E> {
         let query = query.trim();
         ensure!(!query.is_empty(), Fault::Invalid);
         let today = self.environment.now() / DAY_SECONDS;
-        if let Some(id) = account_id(query)
+        let (lookup_kind, account) = if let Some(id) = account_id(query)
             && let Some(account) = load(&self.store, &key("account", &id))?
         {
-            return self.account_summary(account, today);
-        }
-        // A username may itself be the canonical encoding of a different, unused ID.
-        let name = username(query).map_err(|_| Fault::AccountNotFound)?;
-        let id: AccountId =
-            load(&self.store, &format!("username/{name}"))?.ok_or(Fault::AccountNotFound)?;
-        let account = load(&self.store, &key("account", &id))?.ok_or(Fault::AccountNotFound)?;
-        self.account_summary(account, today)
+            ("id", Some(account))
+        } else if let Ok(name) = username(query)
+            && let Some(id) = load::<AccountId>(&self.store, &format!("username/{name}"))?
+        {
+            // A username can encode a different, unused account ID.
+            ("username", load(&self.store, &key("account", &id))?)
+        } else {
+            ("miss", None)
+        };
+        tracing::debug!(
+            event = "authority_account_lookup",
+            lookup_kind,
+            found = account.is_some()
+        );
+        self.account_summary(account.ok_or(Fault::AccountNotFound)?, today)
     }
 
     /// # Errors
@@ -170,6 +178,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
             daily_limit_bytes,
             remaining_bytes,
             restricted,
+            restriction_version: self.restriction_version()?,
             entitlement_version,
             recent_usage,
             has_older_usage,

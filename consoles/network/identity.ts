@@ -1,3 +1,4 @@
+import type { Restrictions, Target } from './model'
 import { message, MessageError } from '../ui/locale'
 import { identityErrors } from './locales/identity'
 
@@ -18,8 +19,19 @@ export function decode(text: string, kind: IdentityKind): number[] | null {
   return null
 }
 
+export function accountFromFragment(fragment: string): number[] | null {
+  try { return decode(decodeURIComponent(fragment), 'account') }
+  catch { return null }
+}
+
 export function requireIdentity(text: string, kind: IdentityKind): number[] {
   const bytes = decode(text, kind)
   if (!bytes) throw new MessageError(message(identityErrors, kind))
   return bytes
+}
+
+export function directlyRestricted(restrictions: Restrictions, target: Target) {
+  const entries = target.kind === 'account' ? restrictions.accounts : restrictions.shares
+  const id = encode(target.id)
+  return entries.some(value => encode(value) === id)
 }

@@ -17,6 +17,7 @@ export const en = {
   copyFailed: 'Copy failed. Select the ID to copy it manually.',
   account: 'Account',
   queryAccount: 'Account ID or username',
+  manageIdRestriction: 'Manage restrictions for this ID',
   accountNotFound: 'Account not found.',
   registeredAt: 'Registered',
   dailyAllowance: 'Daily allowance per account',

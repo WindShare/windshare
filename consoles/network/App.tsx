@@ -14,7 +14,7 @@ import { useDirectory } from './directory'
 import { encode } from './identity'
 import type { NodeDetails, RelayNode, Restrictions, Snapshot } from './model'
 import { EnrollNode, LookupNode, NodeDetail, Nodes } from './nodes'
-import { AccountDetail, Accounts } from './accounts'
+import { Accounts } from './accounts'
 import { LookupShare, Reports } from './restrictions'
 import { usePolicyEditor } from './policy-editor'
 import { PolicySettings } from './settings'
@@ -40,7 +40,7 @@ function Dashboard({ api, snapshot, update, refresh, loadMoreNodes, retry, refre
   const policy = page === 'policy'
   const accounts = page === 'accounts' || page === 'account'
   const reports = ['reports', 'report', 'share-access'].includes(page)
-  const [accountRevision, setAccountRevision] = useState(0)
+  const [accountRevision, setAccountRevision] = useState({ list: 0, detail: 0 })
   const [reportRevision, setReportRevision] = useState({ list: 0, detail: 0 })
   const [nodeRevision, setNodeRevision] = useState(0)
 
@@ -66,7 +66,8 @@ function Dashboard({ api, snapshot, update, refresh, loadMoreNodes, retry, refre
 
   function refreshCurrent() {
     refresh()
-    if (accounts) setAccountRevision(current => current + 1)
+    if (page === 'accounts') setAccountRevision(current => ({ ...current, list: current.list + 1 }))
+    if (page === 'account') setAccountRevision(current => ({ ...current, detail: current.detail + 1 }))
     if (page === 'node') setNodeRevision(current => current + 1)
     if (page === 'reports') setReportRevision(current => ({ ...current, list: current.list + 1 }))
     if (page === 'report') setReportRevision(current => ({ ...current, detail: current.detail + 1 }))
@@ -82,10 +83,8 @@ function Dashboard({ api, snapshot, update, refresh, loadMoreNodes, retry, refre
     const cached = snapshot.node_page.entries.find(entry => encode(entry.key) === id)
     view = cached ? <NodeDetail key={id} node={cached} api={api} saved={saveNode} directory={directory} />
       : <LookupNode key={id + ':' + nodeRevision} id={id ?? ''} api={api} saved={saveNode} directory={directory} />
-  } else if (page === 'accounts') {
-    view = <Accounts key={accountRevision} api={api} snapshot={snapshot} />
-  } else if (page === 'account') {
-    view = <AccountDetail key={id + ':' + accountRevision} {...access} id={id ?? ''} />
+  } else if (accounts) {
+    view = <Accounts {...access} snapshot={snapshot} revision={accountRevision} refresh={refresh} selectedId={page === 'account' ? id ?? '' : undefined} />
   } else if (page === 'share-access') {
     view = <LookupShare {...access} />
   } else if (reports) {

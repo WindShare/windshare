@@ -207,6 +207,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
         }
         let verified_email = admission.consume(&mut self.store)?;
         let id = self.environment.random()?;
+        anyhow::ensure!(id != [0; 16], "account ID generator returned zero");
         let account = Account {
             id,
             created_at: self.environment.now(),

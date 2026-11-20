@@ -18,6 +18,7 @@ export const zhCN = {
   copyFailed: '复制失败，请选中 ID 手动复制。',
   account: '账号',
   queryAccount: '账号 ID 或用户名',
+  manageIdRestriction: '管理此 ID 的限制',
   accountNotFound: '找不到此账号。',
   registeredAt: '注册时间',
   dailyAllowance: '单账号每日额度',

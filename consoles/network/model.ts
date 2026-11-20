@@ -27,6 +27,7 @@ export interface AccountDetails extends AccountSummary {
   daily_limit_bytes: number
   remaining_bytes: number
   restricted: boolean
+  restriction_version: number
   entitlement_version: number
   recent_usage: DailyUsage[]
   has_older_usage: boolean

@@ -30,6 +30,7 @@ fn reads_require_a_session_before_validating_any_admin_input() {
         "",
         "broken",
         "1.bad",
+        "1.AAAAAAAAAAAAAAAAAAAAAA",
         "-1.AAAAAAAAAAAAAAAAAAAAAA",
         "1.AAAAAAAAAAAAAAAAAAAAAB",
     ] {
@@ -214,6 +215,10 @@ fn blocked_account_diagnostics_are_read_only_numeric_and_bounded() {
         (110, 220, 100, 0)
     );
     assert_eq!(details.entitlement_version, session.entitlement.version);
+    assert_eq!(
+        details.restriction_version,
+        authority.restriction_version().unwrap()
+    );
     assert_eq!(
         details
             .recent_usage
