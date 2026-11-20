@@ -331,3 +331,60 @@ fn local_owner_capacity_is_preserved_when_public_residency_is_full() {
     drop(public);
     assert!(service.allowed(share(2), owner));
 }
+
+#[test]
+fn owner_can_use_all_reserved_shares_beyond_per_principal_limit() {
+    let service = Service::default();
+    let owner_credential = Credential {
+        principal: [1; 16],
+        id: [2; 16],
+        name: "owner".into(),
+        digest: Digest::of(b"owner-secret"),
+        created_at: NOW,
+        last_used_at: None,
+        state: CredentialState::Active,
+    };
+    let guest_credential = Credential {
+        principal: [3; 16],
+        id: [4; 16],
+        name: "guest".into(),
+        digest: Digest::of(b"guest-secret"),
+        created_at: NOW,
+        last_used_at: None,
+        state: CredentialState::Active,
+    };
+    let default_policy = Policy::default();
+    let owner_reserve = default_policy.owner_reserved_shares;
+    let per_principal = default_policy.shares_per_principal;
+    assert!(owner_reserve > per_principal);
+    service
+        .configure(Policy {
+            owner_principals: vec![owner_credential.principal],
+            credentials: vec![owner_credential, guest_credential],
+            ..default_policy
+        })
+        .unwrap();
+
+    let owner = Attribution::Credential {
+        principal: [1; 16],
+        credential: [2; 16],
+    };
+    let guest = Attribution::Credential {
+        principal: [3; 16],
+        credential: [4; 16],
+    };
+    let mut owner_shares = Vec::with_capacity(owner_reserve);
+    for index in 1..=u8::try_from(owner_reserve).unwrap() {
+        owner_shares.push(service.reserve(share(index), owner).unwrap());
+    }
+    let mut guest_shares = Vec::with_capacity(per_principal);
+    for index in 1..=u8::try_from(per_principal).unwrap() {
+        guest_shares.push(service.reserve(share(100 + index), guest).unwrap());
+    }
+    assert!(matches!(
+        service.reserve(share(200), guest),
+        Err(RegistrationDecision::Unavailable(_))
+    ));
+    drop(guest_shares);
+    drop(owner_shares);
+}

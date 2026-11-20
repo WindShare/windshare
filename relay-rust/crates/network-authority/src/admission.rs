@@ -194,14 +194,17 @@ impl<R: Store, E: Environment> Authority<R, E> {
         {
             local.bursts = 0;
         }
-        if local.bucket.credit == 0 || global.credit == 0 {
-            let reason = creation_rate_reason(local.bucket.credit == 0, global.credit == 0);
-            let retry_after = settings
-                .source_rate
-                .refill_seconds
-                .max(settings.global_rate.refill_seconds);
-            local.bursts = local.bursts.saturating_add(1);
-            save(&mut self.store, &source_key, &local)?;
+        let local_wait = local.bucket.retry_after(&settings.source_rate, now);
+        let global_wait = global.retry_after(&settings.global_rate, now);
+        let retry_after = local_wait.max(global_wait);
+        if retry_after > 0 {
+            let reason = creation_rate_reason(local_wait > 0, global_wait > 0);
+            if local_wait > 0 {
+                // Global backpressure must not push an innocent source into PoW
+                // or allocate per-source storage during a network-wide spike.
+                local.bursts = local.bursts.saturating_add(1);
+                save(&mut self.store, &source_key, &local)?;
+            }
             tracing::debug!(
                 event = "registration_rate_limited",
                 attempt = %attempt.fingerprint(),

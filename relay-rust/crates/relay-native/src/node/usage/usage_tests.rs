@@ -237,3 +237,274 @@ fn unusable_outbox_entries_are_preserved_without_blocking_the_next_batch() {
         assert_eq!(saved, (good.issuer, body, created_at, reason.to_owned()));
     }
 }
+
+struct FakeAuthority {
+    root: ed25519_dalek::SigningKey,
+    signing: ed25519_dalek::SigningKey,
+    generation: windshare_relay_access::trust::Generation,
+    certificate: String,
+    daily_limit: u64,
+    fail_usage: bool,
+    restriction_version: u64,
+    used_bytes: u64,
+    entitlement_version: u64,
+    order: Vec<&'static str>,
+}
+
+impl FakeAuthority {
+    fn new(now: u64, daily_limit: u64, fail_usage: bool) -> Self {
+        use windshare_relay_access::trust::Generation;
+        let root = ed25519_dalek::SigningKey::from_bytes(&[11; 32]);
+        let signing = ed25519_dalek::SigningKey::from_bytes(&[12; 32]);
+        let generation = Generation {
+            issuer: root.verifying_key().to_bytes(),
+            number: 1,
+            key: signing.verifying_key().to_bytes(),
+            not_before: now.saturating_sub(60),
+            expires_at: now.saturating_add(DAY_SECONDS),
+        };
+        let certificate = URL_SAFE_NO_PAD.encode(generation.certify(&root).unwrap());
+        Self {
+            root,
+            signing,
+            generation,
+            certificate,
+            daily_limit,
+            fail_usage,
+            restriction_version: 3,
+            used_bytes: 0,
+            entitlement_version: 0,
+            order: Vec::new(),
+        }
+    }
+
+    fn handle(&mut self, body: &[u8], now: u64) -> Option<Vec<u8>> {
+        use windshare_relay_access::{
+            entitlement::{ENTITLEMENT_LIFETIME, Entitlement},
+            trust,
+            usage::{
+                AccountEntitlement, NodePolicy, RESPONSE_DOMAIN, Reply, ReportResult, SignedReply,
+            },
+        };
+        let batch: Batch = serde_json::from_slice(&body[..body.len() - 64]).unwrap();
+        let result = if batch.records.is_empty() {
+            self.order.push("status");
+            let day = now / DAY_SECONDS;
+            let remaining = self.daily_limit.saturating_sub(self.used_bytes);
+            let entitlements = batch
+                .resident_accounts
+                .iter()
+                .map(|&account| {
+                    self.entitlement_version += 1;
+                    AccountEntitlement {
+                        account,
+                        entitlement: Entitlement {
+                            version: self.entitlement_version,
+                            day,
+                            valid_until: now
+                                .saturating_add(ENTITLEMENT_LIFETIME)
+                                .min((day + 1) * DAY_SECONDS),
+                            remaining_bytes: remaining,
+                        },
+                    }
+                })
+                .collect();
+            ReportResult::Status {
+                entitlements,
+                restriction_version: self.restriction_version,
+                policy: NodePolicy {
+                    version: 1,
+                    enabled: true,
+                    anonymous: true,
+                },
+            }
+        } else {
+            self.order.push("usage");
+            if self.fail_usage {
+                return None;
+            }
+            for record in &batch.records {
+                self.used_bytes = self.used_bytes.saturating_add(record.bytes);
+            }
+            ReportResult::UsageReceived
+        };
+        let reply = Reply {
+            request: batch.id,
+            node: batch.node,
+            issuer: self.generation.issuer,
+            generation: self.generation.number,
+            issued_at: now,
+            result,
+        };
+        let signed = SignedReply {
+            certificate: self.certificate.clone(),
+            body: URL_SAFE_NO_PAD.encode(trust::sign(
+                RESPONSE_DOMAIN,
+                &serde_json::to_vec(&reply).unwrap(),
+                &self.signing,
+            )),
+        };
+        Some(serde_json::to_vec(&signed).unwrap())
+    }
+}
+
+async fn spawn_fake_authority(
+    state: Arc<Mutex<FakeAuthority>>,
+) -> (String, tokio::task::JoinHandle<()>) {
+    use http_body_util::{BodyExt, Full};
+    use hyper::{Response, StatusCode, body::Bytes, server::conn::http1, service::service_fn};
+    use hyper_util::rt::TokioIo;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let state = Arc::clone(&state);
+            tokio::spawn(async move {
+                let service = service_fn(move |request: hyper::Request<hyper::body::Incoming>| {
+                    let state = Arc::clone(&state);
+                    async move {
+                        let bytes = request.into_body().collect().await.unwrap().to_bytes();
+                        let now = crate::node::now().unsigned_abs();
+                        let payload = state.lock().unwrap().handle(&bytes, now);
+                        let response = payload.map_or_else(
+                            || {
+                                Response::builder()
+                                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                    .body(Full::new(Bytes::new()))
+                                    .unwrap()
+                            },
+                            |json| {
+                                Response::builder()
+                                    .status(StatusCode::OK)
+                                    .header("content-type", "application/json")
+                                    .body(Full::new(Bytes::from(json)))
+                                    .unwrap()
+                            },
+                        );
+                        Ok::<_, hyper::Error>(response)
+                    }
+                });
+                let _ = http1::Builder::new()
+                    .serve_connection(TokioIo::new(stream), service)
+                    .await;
+            });
+        }
+    });
+    (url, task)
+}
+
+fn cycle_reporter(
+    directory: &Path,
+    authority: &FakeAuthority,
+    url: String,
+) -> (Reporter, Database, Attribution) {
+    use crate::node::{
+        Settings,
+        access::{Policy, TrustedIssuer},
+    };
+    let issuer = authority.root.verifying_key().to_bytes();
+    let relay = Endpoint::parse("ws://localhost:8787/v2/ws")
+        .unwrap()
+        .identity;
+    let store = Database::open(&directory.join("cycle.db"), relay).unwrap();
+    let settings = Settings {
+        access: Policy {
+            trusted_issuers: vec![TrustedIssuer {
+                root: URL_SAFE_NO_PAD.encode(issuer),
+                certificate: authority.certificate.clone(),
+            }],
+            ..Policy::default()
+        },
+        ..Settings::default()
+    };
+    let node = Runtime::new(settings, store.clone()).unwrap();
+    let reporter = Reporter::new(
+        node,
+        store.clone(),
+        Identity::generate().unwrap().key(),
+        Authority {
+            url,
+            issuer: URL_SAFE_NO_PAD.encode(issuer),
+        },
+    )
+    .unwrap();
+    let attribution = Attribution::Account {
+        issuer,
+        account: [9; 16],
+        credential: [10; 16],
+    };
+    (reporter, store, attribution)
+}
+
+#[tokio::test]
+async fn report_cycle_submits_usage_before_refreshing_entitlements() {
+    use windshare_relay_access::entitlement::{Allowance, Class};
+    use windshare_relay_core::identifiers::ShareId;
+
+    let now = crate::node::now().unsigned_abs();
+    let state = Arc::new(Mutex::new(FakeAuthority::new(now, 100, false)));
+    let (url, server) = spawn_fake_authority(Arc::clone(&state)).await;
+    let directory = tempfile::tempdir().unwrap();
+    let (reporter, store, attribution) = {
+        let authority = state.lock().unwrap();
+        cycle_reporter(directory.path(), &authority, url)
+    };
+    let _resident = reporter
+        .node
+        .access
+        .reserve(ShareId::new([7; 12]).unwrap(), attribution)
+        .unwrap();
+    reporter.node.usage.record(attribution, 100, now);
+
+    let (versions, updates) = tokio::sync::watch::channel(0);
+    reporter.run_report_cycle(&versions, now).await;
+    server.abort();
+
+    let order = state.lock().unwrap().order.clone();
+    assert_eq!(order, vec!["usage", "status"]);
+    assert_eq!(
+        reporter.node.access.class(attribution, now),
+        (Class::Lowest, Some(Allowance::Spent))
+    );
+    assert_eq!(*updates.borrow(), 3);
+    let issuer = reporter.authority.issuer().unwrap();
+    let node = reporter.signing_key.verifying_key().to_bytes();
+    assert!(store.next_usage_batch(issuer, node).unwrap().is_none());
+}
+
+#[tokio::test]
+async fn report_cycle_still_refreshes_status_when_usage_retry_fails() {
+    use windshare_relay_access::entitlement::{Allowance, Class};
+    use windshare_relay_core::identifiers::ShareId;
+
+    let now = crate::node::now().unsigned_abs();
+    let state = Arc::new(Mutex::new(FakeAuthority::new(now, 100, true)));
+    let (url, server) = spawn_fake_authority(Arc::clone(&state)).await;
+    let directory = tempfile::tempdir().unwrap();
+    let (reporter, store, attribution) = {
+        let authority = state.lock().unwrap();
+        cycle_reporter(directory.path(), &authority, url)
+    };
+    let _resident = reporter
+        .node
+        .access
+        .reserve(ShareId::new([8; 12]).unwrap(), attribution)
+        .unwrap();
+    reporter.node.usage.record(attribution, 50, now);
+
+    let (versions, updates) = tokio::sync::watch::channel(0);
+    reporter.run_report_cycle(&versions, now).await;
+    server.abort();
+
+    let order = state.lock().unwrap().order.clone();
+    assert_eq!(order, vec!["usage", "status"]);
+    assert_eq!(
+        reporter.node.access.class(attribution, now),
+        (Class::Standard, Some(Allowance::Available))
+    );
+    assert_eq!(*updates.borrow(), 3);
+    let issuer = reporter.authority.issuer().unwrap();
+    let node = reporter.signing_key.verifying_key().to_bytes();
+    assert!(store.next_usage_batch(issuer, node).unwrap().is_some());
+}
