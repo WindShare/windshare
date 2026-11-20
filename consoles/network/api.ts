@@ -2,12 +2,13 @@ import { message } from '../ui/locale'
 import { networkCopy } from './locales'
 import { request, RequestError } from '../ui/request'
 import { decode } from './identity'
-import type { Enrollment, NodeDetails, NodePage, PolicyField, PolicySnapshot, RelayNode, Report, ReportPage, Restrictions, SettingsChanges, Snapshot, Target } from './model'
+import type { AccountDetails, AccountPage, AccountSummary, Enrollment, NodeDetails, NodePage, PolicyField, PolicySnapshot, RelayNode, Report, ReportPage, Restrictions, SettingsChanges, Snapshot, Target } from './model'
 
 const messages = {
   credentials: message(networkCopy, 'invalidCredentials'),
   initialization_consumed: message(networkCopy, 'setupLinkUsed'),
   rate_limited: message(networkCopy, 'rateLimited'),
+  account_not_found: message(networkCopy, 'accountNotFound'),
   invalid: message(networkCopy, 'invalidValues'),
   csrf: message(networkCopy, 'sessionChanged'),
 }
@@ -47,6 +48,20 @@ export class AuthorityClient {
       return await this.read<NodeDetails>('nodes/' + encodeURIComponent(id.trim()), signal)
     } catch (error) {
       if (error instanceof RequestError && error.code === 'node_not_found') return null
+      throw error
+    }
+  }
+
+  accounts = (signal: AbortSignal, after?: string) =>
+    this.read<AccountPage>(after === undefined ? 'accounts' : 'accounts?after=' + encodeURIComponent(after), signal)
+  lookupAccount = (query: string, signal: AbortSignal) =>
+    this.read<AccountSummary>('accounts/lookup?q=' + encodeURIComponent(query), signal)
+  account = async (id: string, signal: AbortSignal) => {
+    if (!decode(id, 'account')) return null
+    try {
+      return await this.read<AccountDetails>('accounts/' + encodeURIComponent(id), signal)
+    } catch (error) {
+      if (error instanceof RequestError && error.code === 'account_not_found') return null
       throw error
     }
   }

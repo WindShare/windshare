@@ -14,7 +14,8 @@ import { useDirectory } from './directory'
 import { encode } from './identity'
 import type { NodeDetails, RelayNode, Restrictions, Snapshot } from './model'
 import { EnrollNode, LookupNode, NodeDetail, Nodes } from './nodes'
-import { LookupAccess, Reports } from './restrictions'
+import { AccountDetail, Accounts } from './accounts'
+import { LookupShare, Reports } from './restrictions'
 import { usePolicyEditor } from './policy-editor'
 import { PolicySettings } from './settings'
 
@@ -37,7 +38,9 @@ function Dashboard({ api, snapshot, update, refresh, loadMoreNodes, retry, refre
   const directory = useDirectory(snapshot.directory)
   const editor = usePolicyEditor(snapshot.settings)
   const policy = page === 'policy'
-  const reports = ['reports', 'report', 'account-access', 'share-access'].includes(page)
+  const accounts = page === 'accounts' || page === 'account'
+  const reports = ['reports', 'report', 'share-access'].includes(page)
+  const [accountRevision, setAccountRevision] = useState(0)
   const [reportRevision, setReportRevision] = useState({ list: 0, detail: 0 })
   const [nodeRevision, setNodeRevision] = useState(0)
 
@@ -63,6 +66,7 @@ function Dashboard({ api, snapshot, update, refresh, loadMoreNodes, retry, refre
 
   function refreshCurrent() {
     refresh()
+    if (accounts) setAccountRevision(current => current + 1)
     if (page === 'node') setNodeRevision(current => current + 1)
     if (page === 'reports') setReportRevision(current => ({ ...current, list: current.list + 1 }))
     if (page === 'report') setReportRevision(current => ({ ...current, detail: current.detail + 1 }))
@@ -78,8 +82,12 @@ function Dashboard({ api, snapshot, update, refresh, loadMoreNodes, retry, refre
     const cached = snapshot.node_page.entries.find(entry => encode(entry.key) === id)
     view = cached ? <NodeDetail key={id} node={cached} api={api} saved={saveNode} directory={directory} />
       : <LookupNode key={id + ':' + nodeRevision} id={id ?? ''} api={api} saved={saveNode} directory={directory} />
-  } else if (page === 'account-access' || page === 'share-access') {
-    view = <LookupAccess key={page} kind={page === 'account-access' ? 'account' : 'share'} {...access} />
+  } else if (page === 'accounts') {
+    view = <Accounts key={accountRevision} api={api} snapshot={snapshot} />
+  } else if (page === 'account') {
+    view = <AccountDetail key={id + ':' + accountRevision} {...access} id={id ?? ''} />
+  } else if (page === 'share-access') {
+    view = <LookupShare {...access} />
   } else if (reports) {
     view = <Reports {...access} revision={reportRevision} selectedId={page === 'report' ? id : undefined} />
   } else {
@@ -88,7 +96,8 @@ function Dashboard({ api, snapshot, update, refresh, loadMoreNodes, retry, refre
   const refreshLabel = refreshing ? t.refreshing : t.refreshSnapshot
   return <div className="workspace">
     <WorkspaceNav label={t.management} destinations={[
-      { href: '#nodes', label: t.nodes, icon: 'server', current: !reports && !policy },
+      { href: '#nodes', label: t.nodes, icon: 'server', current: !reports && !policy && !accounts },
+      { href: '#accounts', label: t.accounts, icon: 'user', current: accounts },
       { href: '#reports', label: t.reports, icon: 'report', current: reports },
       { href: '#policy', label: t.policy, icon: 'policy', current: policy },
     ]} action={<button className="quiet" onClick={refreshCurrent} disabled={refreshing} aria-label={refreshLabel} title={refreshLabel}>
