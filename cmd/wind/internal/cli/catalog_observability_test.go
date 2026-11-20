@@ -129,7 +129,7 @@ func TestShareTraceCapturesEngineDirectoryAndFrontendDiagnostics(t *testing.T) {
 		t.Fatal(err)
 	}
 	var sawDirInit, sawFrontend, sawPlan bool
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
 		if line == "" {
 			continue
 		}
