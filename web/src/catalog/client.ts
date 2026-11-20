@@ -18,6 +18,7 @@ import {
   CatalogPageStoreError,
   type CachedDirectoryFailure,
   type CatalogPageStore,
+  type CatalogPageStoreScope,
   type CommittedDirectory,
 } from './page-store'
 
@@ -450,7 +451,7 @@ export class CatalogClient {
       signal.throwIfAborted()
       if (cachedFailure !== undefined) this.#admitRetry(cachedFailure, explicitRetry)
       return this.#loadRemote(directoryId, directoryIdText, signal)
-    })
+    }, this.#store.coordinationScope)
   }
 
   #admitRetry(cached: CachedDirectoryFailure, explicitRetry: boolean): void {
@@ -556,9 +557,12 @@ export async function withCatalogLoadLock<T>(
   identity: string,
   signal: AbortSignal,
   operation: () => Promise<T>,
+  scope: CatalogPageStoreScope = 'cross-context',
 ): Promise<T> {
   signal.throwIfAborted()
-  if (typeof navigator !== 'undefined' && navigator.locks !== undefined) {
+  // Page-local stores are never shared across tabs; skipping Web Locks avoids
+  // both unnecessary cross-tab contention and SecurityError when storage is denied.
+  if (scope === 'cross-context' && typeof navigator !== 'undefined' && navigator.locks !== undefined) {
     return navigator.locks.request(identity, { mode: 'exclusive', signal }, operation)
   }
   const previous = PROCESS_CATALOG_LOAD_TAILS.get(identity) ?? Promise.resolve()

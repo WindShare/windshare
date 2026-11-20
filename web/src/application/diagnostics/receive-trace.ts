@@ -1,9 +1,12 @@
 import type { FailureEvidenceHistoryPort } from '../../diagnostics/failure/history'
 import { projectDiagnosticException } from '../../diagnostics/exception'
 import { unclassifiedFailureFact, type FailureCorrelation } from '../../diagnostics/incident/fact'
+import { CONNECTION_TRACE_TEXT_MAX_CHARACTERS } from '../../diagnostics/trace/connection-payload'
+import { formatDiagnosticText } from '../../security/diagnostic-formatter'
 import { projectProtocolTraceEvent } from './protocol-trace'
 export { projectProtocolTraceEvent } from './protocol-trace'
 import { correlatedObservation, decimal, observation, requiredCorrelation, snake } from '../../diagnostics/export/trace-observation'
+import type { CatalogStorageObservation } from '../browser-share/gateway'
 import type {
   ConnectivityTraceEvent,
   ConnectivityTraceSource,
@@ -56,6 +59,21 @@ export function createConnectivityTraceSource(
   trace: BrowserTraceSource,
 ): ConnectivityTraceSource {
   return adaptTraceSource(trace, projectConnectivityTraceEvent)
+}
+
+export function createCatalogStorageObserver(
+  trace: BrowserTraceSource,
+): (event: CatalogStorageObservation) => void {
+  return event => {
+    trace.current?.(observation('catalog_storage', {
+      share_instance_id: event.shareInstanceId.slice(0, CONNECTION_TRACE_TEXT_MAX_CHARACTERS),
+      transition: event.transition,
+      reason: snake(event.reason),
+      ...(event.failure === undefined ? {} : {
+        failure_detail: formatDiagnosticText(event.failure).slice(0, CONNECTION_TRACE_TEXT_MAX_CHARACTERS),
+      }),
+    }))
+  }
 }
 
 export function projectReceiverTraceEvent(

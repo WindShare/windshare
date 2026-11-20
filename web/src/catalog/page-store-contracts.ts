@@ -22,7 +22,11 @@ export interface CachedDirectoryFailure {
   readonly retryAtMilliseconds: number | null
 }
 
+export type CatalogPageStoreScope = 'cross-context' | 'process'
+
 export interface CatalogPageStore {
+  /** Whether committed and staged state is shared across browser contexts or confined to this page. */
+  readonly coordinationScope: CatalogPageStoreScope
   loadDirectory(directoryIdText: string): Promise<CommittedDirectory | undefined>
   loadFailure(directoryIdText: string): Promise<CachedDirectoryFailure | undefined>
   loadPage(directory: CommittedDirectory, pageIndex: number): Promise<CatalogPage | undefined>

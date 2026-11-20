@@ -1,9 +1,13 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   catalogPageMetadataCharge,
-  MemoryCatalogPageStore,
+  CatalogPageStoreError,
   DEFAULT_CATALOG_CACHE_BUDGET_LIMITS,
+  DEFAULT_MEMORY_CATALOG_CACHE_BUDGET_LIMITS,
+  IndexedDbCatalogPageStore,
+  MemoryCatalogPageStore,
+  openCatalogPageStore,
   type CommittedDirectory,
 } from '../../src/catalog/page-store'
 import {
@@ -175,6 +179,148 @@ describe('v2 catalog page store', () => {
       name: 'CatalogPageStoreError',
       kind: 'local-storage',
     })
+  })
+
+  it('enforces bounded in-memory budgets and reclaims charges on abort, failure, and eviction', async () => {
+    const first = page(0, 'first', [entry(1, 'alpha')])
+    const singlePageBytes = catalogPageMetadataCharge(first)
+    const store = new MemoryCatalogPageStore({
+      maxEntries: 2,
+      maxMetadataBytes: singlePageBytes * 2,
+    })
+    expect(store.coordinationScope).toBe('process')
+    expect(DEFAULT_MEMORY_CATALOG_CACHE_BUDGET_LIMITS.maxMetadataBytes)
+      .toBeLessThan(DEFAULT_CATALOG_CACHE_BUDGET_LIMITS.metadataBytesPerShare)
+
+    await store.stage(first)
+    await store.stage(page(0, 'second', [entry(2, 'beta')]))
+
+    // Exceeding the entry/byte budget rejects atomically without claiming node or name ownership.
+    await expect(store.stage(page(0, 'third', [entry(3, 'gamma')])))
+      .rejects.toMatchObject({
+        name: 'CatalogPageStoreError',
+        kind: 'resource-limit',
+        resourceScope: 'share',
+      })
+
+    await store.abort('second')
+    await expect(store.stage(page(0, 'third', [entry(3, 'gamma')]))).resolves.toBeUndefined()
+
+    await store.storeFailure({
+      failure: directoryFailure('third', false),
+      retryAtMilliseconds: null,
+    })
+    await expect(store.stage(page(0, 'fourth', [entry(4, 'delta')]))).resolves.toBeUndefined()
+
+    await store.evictShare()
+    await expect(store.stage(first)).resolves.toBeUndefined()
+    expect(() => new MemoryCatalogPageStore({ maxEntries: 0, maxMetadataBytes: singlePageBytes }))
+      .toThrow(CatalogPageStoreError)
+  })
+})
+
+describe('catalog page store browser fallback policy', () => {
+  const originalIndexedDb = Object.getOwnPropertyDescriptor(globalThis, 'indexedDB')
+  const originalLocks = Object.getOwnPropertyDescriptor(globalThis.navigator, 'locks')
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    if (originalIndexedDb === undefined) {
+      delete (globalThis as { indexedDB?: unknown }).indexedDB
+    } else {
+      Object.defineProperty(globalThis, 'indexedDB', originalIndexedDb)
+    }
+    if (originalLocks === undefined) {
+      delete (globalThis.navigator as { locks?: unknown }).locks
+    } else {
+      Object.defineProperty(globalThis.navigator, 'locks', originalLocks)
+    }
+  })
+
+  it('falls back to a bounded process-local store when browser storage APIs are absent', async () => {
+    vi.stubGlobal('indexedDB', undefined)
+
+    const opened = await openCatalogPageStore('share-instance')
+
+    expect(opened.mode).toBe('memory')
+    expect(opened.store).toBeInstanceOf(MemoryCatalogPageStore)
+    expect(opened.store.coordinationScope).toBe('process')
+    expect(opened.fallback).toEqual({ reason: 'storage-unavailable' })
+    opened.store.close()
+  })
+
+  it('falls back with storage-denied when reading the indexedDB getter throws SecurityError', async () => {
+    const denial = new DOMException('Storage access denied', 'SecurityError')
+    Object.defineProperty(globalThis, 'indexedDB', {
+      configurable: true,
+      get() { throw denial },
+    })
+
+    const opened = await openCatalogPageStore('share-instance')
+
+    expect(opened.mode).toBe('memory')
+    expect(opened.store).toBeInstanceOf(MemoryCatalogPageStore)
+    expect(opened.fallback).toEqual({ reason: 'storage-denied', failure: denial })
+    opened.store.close()
+  })
+
+  it('falls back with storage-denied when Web Locks or IndexedDB rejects with SecurityError', async () => {
+    const lockDenial = new DOMException('Locks denied by storage policy', 'SecurityError')
+    vi.stubGlobal('indexedDB', { open: vi.fn() })
+    Object.defineProperty(globalThis.navigator, 'locks', {
+      configurable: true,
+      value: { request: vi.fn(async () => { throw lockDenial }) },
+    })
+
+    const fromLock = await openCatalogPageStore('share-instance')
+    expect(fromLock.mode).toBe('memory')
+    expect(fromLock.fallback).toEqual({ reason: 'storage-denied', failure: lockDenial })
+
+    const idbDenial = new DOMException('IndexedDB denied by storage policy', 'SecurityError')
+    const released = vi.fn()
+    Object.defineProperty(globalThis.navigator, 'locks', {
+      configurable: true,
+      value: {
+        request: vi.fn(async (_name: string, _options: unknown, callback: () => Promise<void>) => {
+          try {
+            return await callback()
+          } finally {
+            released()
+          }
+        }),
+      },
+    })
+    vi.stubGlobal('indexedDB', { open: vi.fn(() => { throw idbDenial }) })
+
+    const fromIdb = await openCatalogPageStore('share-instance')
+    expect(fromIdb.mode).toBe('memory')
+    expect(fromIdb.fallback).toEqual({ reason: 'storage-denied', failure: idbDenial })
+    expect(released).toHaveBeenCalledOnce()
+  })
+
+  it('preserves non-policy storage errors and invalid identity arguments without falling back', async () => {
+    const unknownFailure = new DOMException('Backing store failed to open', 'UnknownError')
+    const invalidStateFailure = new DOMException('Database state invalid', 'InvalidStateError')
+    const blockedFailure = new CatalogPageStoreError('local-storage', 'Catalog database upgrade is blocked')
+
+    await expect(openCatalogPageStore('')).rejects.toThrow(TypeError)
+    await expect(openCatalogPageStore('share-instance', {
+      openIndexedDb: async () => { throw unknownFailure },
+    })).rejects.toBe(unknownFailure)
+    await expect(openCatalogPageStore('share-instance', {
+      openIndexedDb: async () => { throw invalidStateFailure },
+    })).rejects.toBe(invalidStateFailure)
+    await expect(openCatalogPageStore('share-instance', {
+      openIndexedDb: async () => { throw blockedFailure },
+    })).rejects.toBe(blockedFailure)
+
+    const durableStore = Object.create(IndexedDbCatalogPageStore.prototype) as IndexedDbCatalogPageStore
+    const opened = await openCatalogPageStore('share-instance', {
+      openIndexedDb: async () => durableStore,
+    })
+    expect(opened.mode).toBe('indexeddb')
+    expect(opened.store).toBe(durableStore)
+    expect(opened.fallback).toBeUndefined()
   })
 })
 

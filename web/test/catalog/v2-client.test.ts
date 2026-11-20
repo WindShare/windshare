@@ -1,5 +1,5 @@
 import { createEd25519Verifier } from '../../src/crypto/ed25519'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import {
   CatalogClient,
@@ -370,6 +370,35 @@ describe('v2 catalog multi-receiver ownership', () => {
     expect(observed).toEqual([0x50])
     client.close()
   })
+
+  it('skips navigator.locks when backed by a process-local store even if Web Locks denies access', async () => {
+    const fixture = catalogVectorFixture()
+    const request = vi.fn(async () => {
+      throw new DOMException('Access to the Locks API is denied in this context', 'SecurityError')
+    })
+    const originalLocks = Object.getOwnPropertyDescriptor(globalThis.navigator, 'locks')
+    Object.defineProperty(globalThis.navigator, 'locks', {
+      configurable: true,
+      value: { request },
+    })
+    const client = new CatalogClient({
+      descriptor: fixture.descriptor,
+      operations: { fetchPage: async () => fixture.catalogPayload },
+      store: new MemoryCatalogPageStore(),
+    })
+    try {
+      const committed = await client.loadDirectory(fixture.directoryId)
+      expect(committed.pageCount).toBe(1)
+      expect(request).not.toHaveBeenCalled()
+    } finally {
+      client.close()
+      if (originalLocks === undefined) {
+        delete (globalThis.navigator as { locks?: unknown }).locks
+      } else {
+        Object.defineProperty(globalThis.navigator, 'locks', originalLocks)
+      }
+    }
+  })
 })
 
 function catalogVectorFixture(): {
@@ -404,6 +433,7 @@ function catalogVectorFixture(): {
 }
 
 class ObservedCatalogStore implements CatalogPageStore {
+  readonly coordinationScope = 'process' as const
   readonly #inner = new MemoryCatalogPageStore()
   readonly #stageGate: Promise<void> | undefined
   readonly #stageFailure: unknown

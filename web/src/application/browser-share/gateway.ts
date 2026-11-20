@@ -3,7 +3,11 @@ import {
   CatalogClient,
   type CatalogScanProgressListener,
 } from '../../catalog/client'
-import { IndexedDbCatalogPageStore } from '../../catalog/page-store'
+import {
+  openCatalogPageStore,
+  type CatalogPageStore,
+  type CatalogPageStoreFallbackReason,
+} from '../../catalog/page-store'
 import { type CatalogEntry, type ShareDescriptor } from '../../catalog/records'
 import {
   SelectionPolicy,
@@ -289,6 +293,13 @@ export class JoinedBrowserShare {
   }
 }
 
+export interface CatalogStorageObservation {
+  readonly shareInstanceId: string
+  readonly transition: 'storage_fallback'
+  readonly reason: CatalogPageStoreFallbackReason
+  readonly failure?: unknown
+}
+
 export interface BrowserReceiverGatewayOptions {
   readonly network?: Pick<BuiltinNetwork, 'resolve' | 'icePool'>
   readonly relayBases?: readonly string[]
@@ -298,6 +309,7 @@ export interface BrowserReceiverGatewayOptions {
   readonly protocolTrace?: ProtocolTraceSource
   readonly connectivityTrace?: ConnectivityTraceSource
   readonly peerRecovery?: PeerRecoveryDependencies
+  readonly onCatalogStorageFallback?: (observation: CatalogStorageObservation) => void
   readonly onBlockDispatched?: (observation: BlockDispatchObservation) => void
   readonly onBlockFetched?: (observation: BlockRouteObservation) => void
   readonly onContentLaneAdmitted?: (observation: ContentLaneAdmissionObservation) => void
@@ -313,6 +325,7 @@ export class BrowserReceiverGateway {
   readonly #protocolTrace: ProtocolTraceSource | undefined
   readonly #connectivityTrace: ConnectivityTraceSource | undefined
   readonly #peerRecovery: PeerRecoveryDependencies | undefined
+  readonly #onCatalogStorageFallback: ((observation: CatalogStorageObservation) => void) | undefined
   readonly #onBlockDispatched: ((observation: BlockDispatchObservation) => void) | undefined
   readonly #onBlockFetched: ((observation: BlockRouteObservation) => void) | undefined
   readonly #onContentLaneAdmitted: (
@@ -331,6 +344,7 @@ export class BrowserReceiverGateway {
     this.#protocolTrace = options.protocolTrace
     this.#connectivityTrace = options.connectivityTrace
     this.#peerRecovery = { ...options.peerRecovery, endpoints: options.peerRecovery?.endpoints ?? this.#network.icePool }
+    this.#onCatalogStorageFallback = options.onCatalogStorageFallback
     this.#onBlockDispatched = options.onBlockDispatched
     this.#onBlockFetched = options.onBlockFetched
     this.#onContentLaneAdmitted = options.onContentLaneAdmitted
@@ -342,6 +356,7 @@ export class BrowserReceiverGateway {
     let capability: Suite02CapabilityLink | undefined
     let relay: RelayReceiverConnection | undefined
     let session: ReceiverSessionRuntime | undefined
+    let store: CatalogPageStore | undefined
     let catalog: CatalogClient | undefined
     let supervisor: ReceiverReconnectSupervisor | undefined
     let sessionFactory: BrowserSessionFactory | undefined
@@ -385,7 +400,7 @@ export class BrowserReceiverGateway {
           this.#onContentLaneDetached,
         ),
       })
-      const store = await IndexedDbCatalogPageStore.open(recoveryIdentity)
+      store = await this.#openCatalogStore(recoveryIdentity, descriptor.shareInstanceId)
       catalog = new CatalogClient({
         descriptor,
         operations: supervisor.catalogOperations,
@@ -401,7 +416,7 @@ export class BrowserReceiverGateway {
       })
     } catch (error) {
       try {
-        catalog?.close()
+        (catalog ?? store)?.close()
       } catch {
         // The join failure remains the actionable cause; all other resources are
         // still closed below so a failed storage close cannot interrupt cleanup.
@@ -416,6 +431,25 @@ export class BrowserReceiverGateway {
     } finally {
       capability?.readSecret.fill(0)
     }
+  }
+
+  async #openCatalogStore(
+    recoveryIdentity: string,
+    shareInstanceId: string,
+  ): Promise<CatalogPageStore> {
+    const opened = await openCatalogPageStore(recoveryIdentity)
+    if (opened.fallback === undefined) return opened.store
+    try {
+      this.#onCatalogStorageFallback?.(Object.freeze({
+        shareInstanceId,
+        transition: 'storage_fallback',
+        reason: opened.fallback.reason,
+        ...(opened.fallback.failure === undefined ? {} : { failure: opened.fallback.failure }),
+      }))
+    } catch {
+      // Storage fallback observability cannot prevent joining with the memory store.
+    }
+    return opened.store
   }
 }
 

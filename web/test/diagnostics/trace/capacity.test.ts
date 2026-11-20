@@ -54,6 +54,7 @@ describe('trace frozen contract', () => {
       'join_transition',
       'network_directory',
       'authority_blocks',
+      'catalog_storage',
       'receiver_experience',
       'browse_transition',
       'preview_transition',

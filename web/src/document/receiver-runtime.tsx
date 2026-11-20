@@ -6,7 +6,7 @@ import { createLazyBrowserDirectZipComposition } from '../application/browser-re
 import { BrowserReceiverGateway } from '../application/browser-share/gateway'
 import { BuiltinNetwork } from '../application/network/builtin'
 import { networkObserver, authorityObserver } from '../application/network/diagnostics'
-import { createConnectivityTraceSource, createOutputTraceSource, createProtocolTraceSource, createReceiverTraceSource } from '../application/diagnostics/receive-trace'
+import { createCatalogStorageObserver, createConnectivityTraceSource, createOutputTraceSource, createProtocolTraceSource, createReceiverTraceSource } from '../application/diagnostics/receive-trace'
 import { ReceiverController } from '../ui/controller'
 import { ReceiverApp } from '../ui/ReceiverApp'
 import { ReceiverDownloads } from '../ui/receiver-presentation/ReceiverTasks'
@@ -22,6 +22,7 @@ export function createReceiverRuntime(windowPort: Window, diagnosticOwner: Docum
   const controller = new ReceiverController(new BrowserReceiverGateway({
     network, protocolTrace: createProtocolTraceSource(diagnostics.trace, diagnostics.failures),
     connectivityTrace: createConnectivityTraceSource(diagnostics.trace),
+    onCatalogStorageFallback: createCatalogStorageObserver(diagnostics.trace),
   }), {
     receive, trace: createReceiverTraceSource(diagnostics.trace), incidents: diagnostics.incidents,
   })

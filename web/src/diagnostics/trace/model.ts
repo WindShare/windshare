@@ -54,6 +54,7 @@ export const TRACE_EVENT_NAMES_V2 = Object.freeze([
   'join_transition',
   'network_directory',
   'authority_blocks',
+  'catalog_storage',
   'receiver_experience',
   'browse_transition',
   'preview_transition',

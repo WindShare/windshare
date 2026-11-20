@@ -83,6 +83,7 @@ interface StoredPage extends CatalogBudgetedPageRecord {
 }
 
 export class IndexedDbCatalogPageStore implements CatalogPageStore {
+  readonly coordinationScope = 'cross-context' as const
   readonly #database: IDBDatabase
   readonly #shareInstanceId: string
   readonly #databaseName: string
@@ -466,7 +467,14 @@ export class IndexedDbCatalogPageStore implements CatalogPageStore {
 }
 
 async function openDatabase(name: string): Promise<IDBDatabase> {
-  const request = indexedDB.open(name, DATABASE_VERSION)
+  if (!('indexedDB' in globalThis)) {
+    throw new CatalogPageStoreError('local-storage', 'IndexedDB catalog page store is unavailable')
+  }
+  const factory = globalThis.indexedDB
+  if (factory === undefined || factory === null || typeof factory.open !== 'function') {
+    throw new CatalogPageStoreError('local-storage', 'IndexedDB catalog page store is unavailable')
+  }
+  const request = factory.open(name, DATABASE_VERSION)
   request.addEventListener('upgradeneeded', () => {
     const database = request.result
     // Catalog ownership is security authority. A version change resets the

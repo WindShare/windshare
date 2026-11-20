@@ -28,6 +28,12 @@ export interface ConnectionTracePayloads {
     transition: 'storage_fallback'
     failure_detail: string
   })>
+  readonly catalog_storage: Readonly<{
+    share_instance_id: string
+    transition: 'storage_fallback'
+    reason: 'storage_unavailable' | 'storage_denied'
+    failure_detail?: string
+  }>
   readonly connection_recovery: Readonly<{
     generation_id: string
     share_id?: string
