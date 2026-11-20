@@ -67,6 +67,8 @@ client and check the account's usage before publishing that snapshot and client.
 The console controls registration mode/difficulty, source/global creation rates,
 daily allowance, node admission, and share/account blocks. Account milestones at
 1,000 and 4,000 request review without changing registration mode.
+Use **Accounts** to find an account by ID or username and inspect its daily usage
+and attributed shares. **Reports** lists active account and share restrictions.
 
 Tickets last 12 hours; entitlements last five minutes and apply to one UTC day.
 Usage retries preserve batch IDs and accounting days across restarts. Current

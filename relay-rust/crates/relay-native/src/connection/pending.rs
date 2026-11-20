@@ -1,3 +1,4 @@
+use super::write_window::{WritePermit, WriteWindow};
 use crate::node::governor::{Governor, LaneLease};
 use anyhow::{Result, anyhow, ensure};
 use std::{collections::VecDeque, sync::Arc, time::Duration};
@@ -25,16 +26,20 @@ struct Flow {
 
 #[derive(Default)]
 pub(super) struct Queues {
+    wake: Arc<Notify>,
+    pub(super) window: Arc<WriteWindow>,
     flows: Vec<Flow>,
     frames: usize,
-    cursor: usize,
 }
 
 impl Queues {
+    pub fn set_wake(&mut self, wake: Arc<Notify>) {
+        self.wake = wake;
+    }
+
     pub const fn len(&self) -> usize {
         self.frames
     }
-    #[cfg(test)]
     pub const fn is_empty(&self) -> bool {
         self.frames == 0
     }
@@ -44,7 +49,6 @@ impl Queues {
         pending: Pending,
         governor: &Governor,
         attribution: Attribution,
-        wake: &Arc<Notify>,
     ) -> Result<()> {
         let key = pending.receipt.flow();
         let index = self.flows.iter().position(|flow| flow.key == key);
@@ -56,7 +60,12 @@ impl Queues {
                 "session queue limit"
             );
             let scheduling = governor
-                .register(key, attribution, Arc::clone(wake))
+                .register(
+                    key,
+                    attribution,
+                    Arc::clone(&self.wake),
+                    Arc::clone(&self.window),
+                )
                 .ok_or_else(|| anyhow!("node session scheduling capacity"))?;
             self.flows.push(Flow {
                 key,
@@ -75,28 +84,20 @@ impl Queues {
         Ok(())
     }
 
-    pub fn try_pop<T>(
-        &mut self,
-        mut reserve: impl FnMut(usize) -> Option<T>,
-    ) -> Option<(Pending, T)> {
-        for offset in 0..self.flows.len() {
-            let index = (self.cursor + offset) % self.flows.len();
-            let Some(head) = self.flows[index].queue.front() else {
-                continue;
-            };
-            let size = head.bytes.len();
-            let Some(permit) = reserve(size) else {
-                continue;
-            };
-            if self.flows[index].scheduling.try_take(size as u64) {
-                let flow = &mut self.flows[index];
-                let head = flow.queue.pop_front().expect("scheduled head");
-                self.frames -= 1;
-                self.cursor = (index + 1) % self.flows.len();
-                return Some((head, permit));
-            }
-        }
-        None
+    pub fn take(&mut self, governor: &Governor) -> Option<(Pending, WritePermit)> {
+        let (index, permit) = governor.take(
+            &self.window,
+            self.flows.iter().map(|flow| {
+                (
+                    &flow.scheduling,
+                    flow.queue.iter().map(|frame| frame.bytes.len() as u64),
+                )
+            }),
+        )?;
+        let flow = &mut self.flows[index];
+        let head = flow.queue.pop_front().expect("scheduled head");
+        self.frames -= 1;
+        Some((head, permit))
     }
 
     pub fn discard(&mut self, key: FlowKey) -> usize {

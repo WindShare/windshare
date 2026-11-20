@@ -11,6 +11,30 @@ export interface LoadReport {
 export interface NodeDetails extends RelayNode { report: LoadReport | null }
 export interface NodePage { entries: NodeDetails[]; next_cursor: string | null }
 
+export interface AccountSummary {
+  id: number[]
+  created_at: number
+  username: string | null
+  nickname: string | null
+  email: string | null
+  has_password: boolean
+  today_bytes: number
+}
+export interface AccountPage { today_day: number; entries: AccountSummary[]; next_cursor: string | null }
+export interface DailyUsage { day: number; bytes: number }
+export interface AccountDetails extends AccountSummary {
+  today_day: number
+  daily_limit_bytes: number
+  remaining_bytes: number
+  restricted: boolean
+  restriction_version: number
+  entitlement_version: number
+  recent_usage: DailyUsage[]
+  has_older_usage: boolean
+  shares: number[][]
+  has_more_shares: boolean
+}
+
 export interface Publication {
   generation: number; serial: number; expires: number; keys: string[]; digest: string; mirror: string
 }

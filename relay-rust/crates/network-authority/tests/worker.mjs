@@ -110,6 +110,17 @@ const status = () => usage({ ...batch, id: [...randomBytes(16)] });
 const initial = await status();
 assert.equal(initial.kind, 'status');
 const adminGet = { admin: true, method: 'GET' };
+const accountsEndpoint = '/v1/admin/accounts';
+const accountId = Buffer.from(first.account).toString('base64url');
+const accountDetail = accountsEndpoint + '/' + accountId;
+await call(accountsEndpoint + '?after=invalid', undefined, { method: 'GET', status: 403 });
+const { value: accounts } = await call(accountsEndpoint, undefined, adminGet);
+const registered = accounts.entries.find(entry => Buffer.from(entry.id).equals(Buffer.from(first.account)));
+assert.equal(registered?.username, username);
+const { value: foundAccount } = await call(accountsEndpoint + '/lookup?q=' + username, undefined, adminGet);
+assert.deepEqual(foundAccount, registered);
+await call(accountsEndpoint + '/lookup?q=', undefined, { ...adminGet, status: 400 });
+await call(accountsEndpoint + '/' + Buffer.alloc(16).toString('base64url'), undefined, { ...adminGet, status: 400 });
 const nodesEndpoint = '/v1/admin/nodes';
 const encodedNodeKey = Buffer.from(node).toString('base64url');
 const nodeDetail = nodesEndpoint + '/' + encodedNodeKey;
@@ -158,6 +169,10 @@ await call(`${reportEndpoint}/${Buffer.from(randomBytes(16)).toString('base64url
 await call('/v1/admin/blocks', { kind: 'account', id: first.account, blocked: true }, { admin: true });
 await call('/v1/accounts/ticket', {}, { secret: second.credential_secret, status: 403 });
 const blocked = await status();
+const { value: account } = await call(accountDetail, undefined, adminGet);
+assert(account.restricted && account.has_password);
+assert.equal(account.restriction_version, blocked.restriction_version);
+assert.deepEqual(account.recent_usage.find(entry => entry.day === day), { day, bytes: 12345 });
 const requestPage = version => nodeRequest('/v1/node/restrictions',
   'windshare/node-restrictions/v1\0', 'windshare/restriction-page/v1\0',
   { id: [...randomBytes(16)], node, issuer: batch.issuer, version, after: null });
@@ -192,6 +207,6 @@ console.log(JSON.stringify({
   node: Buffer.from(node).toString('base64url'), checks: [
     'one-time initialization', 'session cookies and CORS', 'idempotent registration', 'stable refresh identity',
     'password login', 'concurrent node policy updates', 'idempotent enrollment', 'signed node reports', 'idempotent UTC usage', 'independent revocation',
-    'operator node and report reads', 'account block and restoration', 'public share restrictions',
+    'operator account, node and report reads', 'account block and restoration', 'public share restrictions',
   ],
 }));

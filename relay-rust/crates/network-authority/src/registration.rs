@@ -207,6 +207,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
         }
         let verified_email = admission.consume(&mut self.store)?;
         let id = self.environment.random()?;
+        anyhow::ensure!(id != [0; 16], "account ID generator returned zero");
         let account = Account {
             id,
             created_at: self.environment.now(),
@@ -226,6 +227,11 @@ impl<R: Store, E: Environment> Authority<R, E> {
             save(&mut self.store, &format!("username/{name}"), &id)?;
         }
         save(&mut self.store, &key("account", &id), &account)?;
+        // Entitlement refreshes rewrite the account, but registration order is immutable.
+        self.store.put(
+            &crate::account_admin::index_key(account.created_at, &id),
+            "",
+        )?;
         let count = account_count + 1;
         save(&mut self.store, ACCOUNT_COUNT_KEY, &count)?;
         if RegistrationPolicy::is_milestone(count) {

@@ -194,6 +194,7 @@ pub enum Fault {
     Invalid,
     ReportNotFound,
     NodeNotFound,
+    AccountNotFound,
     InvalidNickname,
     UnsupportedEmail,
     InvalidEmail,

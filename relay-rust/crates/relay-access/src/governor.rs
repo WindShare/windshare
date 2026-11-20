@@ -267,12 +267,26 @@ impl<K: Copy + Ord> Scheduler<K> {
     }
 
     pub fn next(&mut self, reserve: impl FnOnce(Class, u64) -> bool) -> Option<(K, u64)> {
+        self.try_next(|_, class, bytes| reserve(class, bytes).then_some(()).ok_or(()))
+            .ok()
+            .flatten()
+            .map(|(session, bytes, ())| (session, bytes))
+    }
+
+    /// A host can attach physical writer capacity to the selected frame.
+    ///
+    /// # Errors
+    /// A refused reservation leaves all service tags and queue heads intact.
+    pub fn try_next<P, E>(
+        &mut self,
+        reserve: impl FnOnce(K, Class, u64) -> Result<P, E>,
+    ) -> Result<Option<(K, u64, P)>, E> {
         // Select before testing packet size so small packets cannot starve a
         // larger head while pacing credit accumulates.
-        let candidate = self.select()?;
-        if !reserve(candidate.class, candidate.bytes) {
-            return None;
-        }
+        let Some(candidate) = self.select() else {
+            return Ok(None);
+        };
+        let permit = reserve(candidate.session, candidate.class, candidate.bytes)?;
         let account = self
             .principals
             .get_mut(&candidate.principal)
@@ -313,7 +327,7 @@ impl<K: Copy + Ord> Scheduler<K> {
         }
 
         self.pending -= 1;
-        Some((candidate.session, candidate.bytes))
+        Ok(Some((candidate.session, candidate.bytes, permit)))
     }
 
     pub fn withdraw(&mut self, session: K) {

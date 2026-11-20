@@ -28,9 +28,16 @@ struct Scenario {
 
 impl Scenario {
     fn new() -> Self {
+        Self::with_incarnation(9)
+    }
+
+    fn with_incarnation(incarnation: u8) -> Self {
         let fixture = Fixture::new();
+        let mut identity = fixture.identity();
+        identity.incarnation =
+            windshare_relay_core::lifecycle::Incarnation::new([incarnation; 16]).unwrap();
         let (mut relay, _) = ShareRelay::restore(
-            fixture.identity(),
+            identity,
             limits(),
             &Restore::restarted(None, Responsibility::Released { previous: None }),
             Trace,
@@ -197,19 +204,19 @@ async fn synchronous_bandwidth_grant_still_wakes_the_other_waiting_direction() {
         .unwrap();
     let max_frame = u64::from(OpaqueHeader::MAX_ENCODED_BYTES);
     let (_directory, governor) = paced_governor(&scenario, max_frame);
-    let (waiting, waiting_wake) = register_lane(&governor, scenario.flow);
-    let (active, active_wake) = register_lane(&governor, reverse);
+    let waiting = TestLane::new(&governor, scenario.flow);
+    let active = TestLane::new(&governor, reverse);
 
-    assert!(waiting.try_take(max_frame));
-    let _ = waiting_wake.notified().now_or_never();
+    assert!(waiting.take(max_frame));
+    let _ = waiting.wake.notified().now_or_never();
     let frame = max_frame / 2;
-    assert!(!waiting.try_take(frame));
+    assert!(!waiting.take(frame));
     tokio::time::advance(Duration::from_secs(1)).await;
 
-    assert!(active.try_take(frame));
-    assert!(waiting_wake.notified().now_or_never().is_some());
-    assert!(waiting.try_take(frame));
-    assert!(active_wake.notified().now_or_never().is_none());
+    assert!(active.take(frame));
+    assert!(waiting.wake.notified().now_or_never().is_some());
+    assert!(waiting.take(frame));
+    assert!(active.wake.notified().now_or_never().is_none());
 }
 
 #[tokio::test(start_paused = true)]
@@ -217,17 +224,17 @@ async fn paced_bandwidth_grant_wakes_the_waiter() {
     let scenario = Scenario::new();
     let frame = u64::from(OpaqueHeader::MAX_ENCODED_BYTES);
     let (_directory, governor) = paced_governor(&scenario, frame);
-    let (waiting, wake) = register_lane(&governor, scenario.flow);
+    let waiting = TestLane::new(&governor, scenario.flow);
 
-    assert!(waiting.try_take(frame));
-    let _ = wake.notified().now_or_never();
-    assert!(!waiting.try_take(frame));
+    assert!(waiting.take(frame));
+    let _ = waiting.wake.notified().now_or_never();
+    assert!(!waiting.take(frame));
 
     tokio::select! {
         () = governor.run() => panic!("governor stopped with a waiting lane"),
-        result = tokio::time::timeout(Duration::from_secs(2), wake.notified()) => result.unwrap(),
+        result = tokio::time::timeout(Duration::from_secs(2), waiting.wake.notified()) => result.unwrap(),
     }
-    assert!(waiting.try_take(frame));
+    assert!(waiting.take(frame));
 }
 
 fn paced_governor(scenario: &Scenario, rate: u64) -> (tempfile::TempDir, Governor) {
@@ -244,12 +251,41 @@ fn paced_governor(scenario: &Scenario, rate: u64) -> (tempfile::TempDir, Governo
     (directory, Runtime::new(settings, store).unwrap().governor)
 }
 
-fn register_lane(governor: &Governor, flow: FlowKey) -> (LaneLease, Arc<Notify>) {
-    let wake = Arc::new(Notify::new());
-    let lease = governor
-        .register(flow, Attribution::Anonymous, Arc::clone(&wake))
-        .unwrap();
-    (lease, wake)
+struct TestLane {
+    governor: Governor,
+    lease: LaneLease,
+    window: Arc<write_window::WriteWindow>,
+    wake: Arc<Notify>,
+}
+
+impl TestLane {
+    fn new(governor: &Governor, flow: FlowKey) -> Self {
+        let window = Arc::default();
+        let wake = Arc::default();
+        let lease = governor
+            .register(
+                flow,
+                Attribution::Anonymous,
+                Arc::clone(&wake),
+                Arc::clone(&window),
+            )
+            .unwrap();
+        Self {
+            governor: governor.clone(),
+            lease,
+            window,
+            wake,
+        }
+    }
+
+    fn take(&self, size: u64) -> bool {
+        self.governor
+            .take(
+                &self.window,
+                std::iter::once((&self.lease, std::iter::once(size))),
+            )
+            .is_some()
+    }
 }
 
 #[tokio::test]
@@ -444,12 +480,15 @@ fn byte_reservation_failure_does_not_consume_a_frame_slot_or_commit() {
     let mut scenario = Scenario::new();
     let (mut outbox, _writer, _) = channel(connection(3), crate::node::Runtime::default());
     scenario.queue(&mut outbox, 1);
-    let held = Arc::clone(&outbox.data_bytes)
-        .try_acquire_many_owned(u32::try_from(SUBMITTED_DATA_BYTES - 20).unwrap())
+    let held = Arc::clone(&outbox.pending.window.bytes)
+        .try_acquire_many_owned(u32::try_from(crate::config::SUBMITTED_DATA_BYTES - 20).unwrap())
         .unwrap();
     assert!(scenario.submit(&mut outbox).is_none());
     assert_eq!(outbox.pending.len(), 1);
-    assert_eq!(outbox.data_slots.available_permits(), SUBMITTED_DATA_FRAMES);
+    assert_eq!(
+        outbox.pending.window.frames.available_permits(),
+        SUBMITTED_DATA_FRAMES
+    );
     assert_eq!(
         scenario
             .relay
@@ -461,3 +500,5 @@ fn byte_reservation_failure_does_not_consume_a_frame_slot_or_commit() {
     drop(held);
     assert_eq!(scenario.submit(&mut outbox).unwrap().refusal, None);
 }
+#[path = "fairness_tests.rs"]
+mod fairness;

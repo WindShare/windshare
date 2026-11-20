@@ -1,4 +1,5 @@
 //! Account and traffic policy stays synchronous and independent of the Worker host.
+mod account_admin;
 mod accounts;
 mod administrator;
 mod admission;
@@ -18,6 +19,7 @@ mod signing;
 mod source;
 mod store;
 mod usage;
+pub use account_admin::{AccountDetails, AccountPage, AccountSummary, DailyUsage};
 use anyhow::Result;
 pub use challenges::{EmailDelivery, ProofKind};
 #[cfg(any(test, target_arch = "wasm32"))]

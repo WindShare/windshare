@@ -76,13 +76,16 @@ impl<R: Store, E: Environment> Authority<R, E> {
             certificate: self.signing.certificate.clone(),
         })
     }
+    pub(crate) fn daily_usage_bytes(&self, id: &AccountId, day: u64) -> Result<u64> {
+        Ok(load(&self.store, &format!("{}/{day}", key("usage", id)))?.unwrap_or(0))
+    }
+
     pub(crate) fn entitlement(&mut self, id: AccountId) -> Result<Entitlement> {
         let mut account =
             load::<Account>(&self.store, &key("account", &id))?.ok_or(Fault::Invalid)?;
         let now = self.environment.now();
         let day = now / DAY_SECONDS;
-        let used =
-            load::<u64>(&self.store, &format!("{}/{}", key("usage", &id), day))?.unwrap_or(0);
+        let used = self.daily_usage_bytes(&id, day)?;
         account.version = account
             .version
             .checked_add(1)

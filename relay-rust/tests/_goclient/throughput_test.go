@@ -44,6 +44,24 @@ func BenchmarkNativeRelayThroughput(b *testing.B) {
 	}
 }
 
+// Wait for delivery of each signaling frame so pipelining cannot hide latency.
+func BenchmarkNativeRelaySignalingLatency(b *testing.B) {
+	binaryPath := os.Getenv("WINDSHARE_RELAY_BENCH_BINARY")
+	if binaryPath == "" {
+		b.Skip("set WINDSHARE_RELAY_BENCH_BINARY to a release relay-native binary")
+	}
+	pair, _ := benchmarkPair(b, binaryPath)
+	payload := make([]byte, 2<<10)
+	b.ResetTimer()
+	for ordinal := range b.N {
+		binary.BigEndian.PutUint64(payload, uint64(ordinal))
+		if err := pair.sender.Send(b.Context(), payload); err != nil {
+			b.Fatal(err)
+		}
+		takeRuntime(b.Context(), pair.receiver.Channel(), payload)
+	}
+}
+
 type throughputSocket struct {
 	*websocket.Conn
 	feedback *atomic.Uint64

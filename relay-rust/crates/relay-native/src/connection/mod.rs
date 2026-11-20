@@ -5,7 +5,7 @@
 
 use crate::config::{
     CAPACITY_NOTICE_QUEUE_FRAMES, CONTROL_QUEUE_FRAMES, DATA_QUEUE_BYTES, DATA_QUEUE_FRAMES,
-    MAX_CONTROL_BYTES, SUBMITTED_DATA_BYTES, SUBMITTED_DATA_FRAMES,
+    MAX_CONTROL_BYTES, SUBMITTED_DATA_FRAMES,
 };
 use crate::node::{Runtime, access::Bearer};
 use anyhow::{Result, ensure};
@@ -28,6 +28,8 @@ pub use admission::{Admission, AdmissionPriority, Capacity};
 pub use limits::ConnectionLimits;
 mod runtime;
 mod transport;
+mod write_window;
+pub use write_window::{WritePermit, WriteWindow};
 mod writer;
 pub use runtime::{run, stopped};
 pub use writer::Writer;
@@ -47,7 +49,6 @@ pub struct Outbox {
     connection: ConnectionRef,
     pending: pending::Queues,
     node: Runtime,
-    wake: Arc<tokio::sync::Notify>,
     pending_bytes: usize,
     pending_limit: Counts,
     ordered: mpsc::Sender<writer::Frame>,
@@ -55,8 +56,6 @@ pub struct Outbox {
     closure: watch::Sender<Closure>,
     control_slots: Arc<Semaphore>,
     capacity_notice_slots: Arc<Semaphore>,
-    data_slots: Arc<Semaphore>,
-    data_bytes: Arc<Semaphore>,
 }
 
 pub fn channel(
@@ -73,7 +72,6 @@ pub fn channel(
         connection,
         pending: pending::Queues::default(),
         node,
-        wake: Arc::new(tokio::sync::Notify::new()),
         pending_bytes: 0,
         pending_limit: Counts::new(DATA_QUEUE_FRAMES as u64, DATA_QUEUE_BYTES as u64),
         ordered,
@@ -81,15 +79,13 @@ pub fn channel(
         closure,
         control_slots: Arc::new(Semaphore::new(CONTROL_QUEUE_FRAMES)),
         capacity_notice_slots: Arc::new(Semaphore::new(CAPACITY_NOTICE_QUEUE_FRAMES)),
-        data_slots: Arc::new(Semaphore::new(SUBMITTED_DATA_FRAMES)),
-        data_bytes: Arc::new(Semaphore::new(SUBMITTED_DATA_BYTES)),
     };
     (outbox, Writer::new(incoming, probes), closing)
 }
 
 impl Outbox {
     pub fn set_wake(&mut self, wake: Arc<tokio::sync::Notify>) {
-        self.wake = wake;
+        self.pending.set_wake(wake);
     }
     pub fn with_admission(mut self, admission: &Admission) -> Self {
         self.bearer = admission.bearer().cloned();
@@ -140,7 +136,6 @@ impl Outbox {
             },
             &self.node.governor,
             attribution,
-            &self.wake,
         )?;
         self.pending_bytes += length;
         Ok(())
@@ -154,14 +149,11 @@ impl Outbox {
         now: UnixMillis,
         attribution: Attribution,
     ) -> Option<RelayStep> {
-        let slot = Arc::clone(&self.data_slots).try_acquire_owned().ok()?;
+        if self.pending.is_empty() {
+            return None;
+        }
         let reserved = self.ordered.try_reserve().ok()?;
-        let (pending, bytes) = self.pending.try_pop(|size| {
-            let size = u32::try_from(size).ok()?;
-            Arc::clone(&self.data_bytes)
-                .try_acquire_many_owned(size)
-                .ok()
-        })?;
+        let (pending, permit) = self.pending.take(&self.node.governor)?;
         self.pending_bytes -= pending.bytes.len();
         // This bounded mailbox is the host handoff, not a cached permit. Anything
         // inside it is already charged as submitted and may outlive revocation.
@@ -173,8 +165,8 @@ impl Outbox {
                     reserved.send(
                         writer::Frame::new(
                             pending.bytes.into_vec(),
-                            slot,
-                            Some(bytes),
+                            permit.slot,
+                            Some(permit.bytes),
                             Some(pending.receipt.flow().session()),
                         )
                         .attributed(attribution),

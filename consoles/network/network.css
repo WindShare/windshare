@@ -44,6 +44,17 @@ fieldset legend { font-size: 1.15rem; font-weight: 610; margin-bottom: 1rem; pad
 .report-entry small, .section-title time { color: var(--muted); font-size: .81rem; }
 .report-reason { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }
 .resource-loading { display: flex; align-items: center; gap: .6rem; }
+.account-search, .identity-list li, .usage-days > div { display: flex; align-items: center; gap: .75rem; }
+.account-search input { flex: 1; min-width: 0; }
+.account-search button { flex-shrink: 0; }
+.identity-list { list-style: none; padding: 0; margin: 0; max-height: 24rem; overflow: auto; }
+.identity-list li, .usage-days > div { justify-content: space-between; padding: .65rem 0; }
+.identity-list li { flex-wrap: wrap; }
+.identity-list li + li, .usage-days > div + div { border-top: 1px solid var(--line); }
+.identity-list code { overflow-wrap: anywhere; }
+.identity-list button { font-size: .83rem; }
+.usage-days { max-height: 17rem; overflow: auto; border-top: 1px solid var(--line); font-size: .87rem; }
+.byte-value { white-space: nowrap; font-variant-numeric: tabular-nums; }
 @container (max-width: 47rem) {
   table, tbody, tbody tr, tbody th { display: block; }
   thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
