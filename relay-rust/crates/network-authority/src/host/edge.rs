@@ -4,6 +4,9 @@ use worker::{Context, Env, Method, Request, Response, Result, event};
 const POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 #[event(fetch)]
 pub async fn fetch(request: Request, env: Env, _context: Context) -> Result<Response> {
+    if request.path().starts_with("/internal/") {
+        return Response::error("not found", 404);
+    }
     let usage_report = request.method() == Method::Post && request.path() == "/v1/node/usage";
     let public_blocks =
         request.method() == Method::Get && request.path() == super::routes::PUBLIC_BLOCKS_PATH;
@@ -39,7 +42,11 @@ pub async fn fetch(request: Request, env: Env, _context: Context) -> Result<Resp
         {
             return Response::error("JSON required", 415);
         }
-        forward(request, &env).await?
+        if super::passwords::handles(&request.method(), &request.path()) {
+            super::passwords::handle(request, &env).await?
+        } else {
+            forward(request, &env).await?
+        }
     };
     // Durable Object fetch responses have immutable headers; preserve the body
     // and cookies while taking ownership of the edge response policy.
@@ -103,14 +110,17 @@ fn asset(body: &str, kind: &str) -> Result<Response> {
     response.headers_mut().set("Content-Type", kind)?;
     Ok(response)
 }
-async fn forward(request: Request, env: &Env) -> Result<Response> {
+pub(super) fn source_for_request(request: &Request, env: &Env) -> Result<String> {
     let peer = request.headers().get("CF-Connecting-IP")?;
     let forwarded = request.headers().get("X-Windshare-Source-Ip")?;
     let trusted = env
         .var("TRUSTED_PROXY_IPS")
         .map_or_else(|_| String::new(), |value| value.to_string());
-    let source = crate::source::source_key(peer.as_deref(), forwarded.as_deref(), &trusted)
-        .map_err(super::failure)?;
+    crate::source::source_key(peer.as_deref(), forwarded.as_deref(), &trusted)
+        .map_err(super::failure)
+}
+async fn forward(request: Request, env: &Env) -> Result<Response> {
+    let source = source_for_request(&request, env)?;
     let mut request = request.clone_mut()?;
     request.headers_mut()?.set("X-Authority-Source", &source)?;
     env.durable_object("AUTHORITY")?

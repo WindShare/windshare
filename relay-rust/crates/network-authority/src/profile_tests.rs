@@ -24,10 +24,12 @@ fn nickname_deadline_follows_the_account_across_logins_and_restarts() {
     authority.environment.now += 1;
     assert_eq!(authority.set_nickname(&secret, "春风 🌱").unwrap(), profile);
     let login = authority
-        .set_password(&secret, "alice", "correct horse battery")
+        .set_password("source", &secret, "alice", "correct horse battery")
         .unwrap();
     assert_eq!(login.profile, profile);
-    let sibling = authority.login("alice", "correct horse battery").unwrap();
+    let sibling = authority
+        .login("source", "alice", "correct horse battery")
+        .unwrap();
     assert_eq!(first.account, sibling.account);
     let sibling_secret = sibling.credential_secret.unwrap();
     authority = Authority::new(authority.store, authority.environment, authority.signing).unwrap();

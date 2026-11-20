@@ -91,10 +91,17 @@ fn email_requires_delivered_secret_and_password_setup_keeps_account_identity() {
     let session = authority.register("source", proof).unwrap();
     assert_eq!(session.profile.email.as_deref(), Some("alice@qq.com"));
     let updated = authority
-        .set_password(&request.client_secret, "Alice", "correct horse battery")
+        .set_password(
+            "source",
+            &request.client_secret,
+            "Alice",
+            "correct horse battery",
+        )
         .unwrap();
     assert_eq!(updated.account, session.account);
-    let sibling = authority.login("alice", "correct horse battery").unwrap();
+    let sibling = authority
+        .login("source", "alice", "correct horse battery")
+        .unwrap();
     assert_eq!(sibling.account, session.account);
     assert_ne!(sibling.credential, session.credential);
 }

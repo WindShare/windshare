@@ -1,7 +1,6 @@
 use crate::{
-    Authority, Challenge, Environment, Fault, Rate, Registration, RegistrationMode, Settings,
-    Store,
-    challenges::{CHALLENGE_SECONDS, ProofKind, ProofRedemption},
+    Authority, Challenge, Environment, Fault, Rate, RegistrationMode, Settings, Store,
+    challenges::{AcceptedProof, CHALLENGE_SECONDS, ProofCheck, ProofKind},
     registration::RegistrationAttempt,
     store::{key, load, save},
 };
@@ -13,6 +12,12 @@ const SOURCE_BURSTS_FOR_WORK: u64 = 2;
 const WORK_ISSUANCE_HEADROOM: u64 = 4;
 const GLOBAL_CREATION_KEY: &str = "creation-global";
 const GLOBAL_WORK_ISSUANCE_KEY: &str = "work-issuance-global";
+
+#[derive(Clone, Copy)]
+pub struct AdmissionProof<'a> {
+    pub challenge: Option<&'a str>,
+    pub solution: Option<&'a str>,
+}
 
 #[derive(Serialize, Deserialize)]
 struct TokenBucket {
@@ -62,15 +67,102 @@ struct SourceCreation {
     bursts: u64,
 }
 
+pub struct CreationAdmission {
+    source_key: String,
+    source: SourceCreation,
+    global: TokenBucket,
+    proof: Option<AcceptedProof>,
+}
+
+impl CreationAdmission {
+    pub(crate) fn consume(mut self, store: &mut impl Store) -> Result<Option<String>> {
+        self.source.bucket.credit -= 1;
+        self.global.credit -= 1;
+        save(store, &self.source_key, &self.source)?;
+        save(store, GLOBAL_CREATION_KEY, &self.global)?;
+        self.proof
+            .map(|proof| proof.consume(store))
+            .transpose()
+            .map(Option::flatten)
+    }
+}
+
+pub fn throttle_key(scope: &str, identity: &[u8]) -> String {
+    key(&format!("throttle/{scope}"), &Sha256::digest(identity))
+}
+
 impl<R: Store, E: Environment> Authority<R, E> {
+    pub(crate) fn check_throttle(&self, scope: &str, identity: &[u8], rate: &Rate) -> Result<()> {
+        let now = self.environment.now();
+        let bucket = TokenBucket::load(&self.store, &throttle_key(scope, identity), rate, now)?;
+        let retry_after = bucket.retry_after(rate, now);
+        if retry_after > 0 {
+            tracing::debug!(event = "authority_throttled", scope, retry_after);
+            return Err(Fault::RateLimited { retry_after }.into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn throttle(
+        &mut self,
+        source: &str,
+        scope: &str,
+        burst: u64,
+        refill_seconds: u64,
+    ) -> Result<()> {
+        self.throttle_all([(
+            scope,
+            throttle_key(scope, source.as_bytes()),
+            Rate {
+                burst,
+                refill_seconds,
+            },
+        )])
+    }
+
+    pub(crate) fn throttle_all<const N: usize>(
+        &mut self,
+        limits: [(&str, String, Rate); N],
+    ) -> Result<()> {
+        let now = self.environment.now();
+        let mut buckets = Vec::with_capacity(N);
+        let mut retry_after = 0;
+        let mut blocking_scope = "";
+        for (scope, key, rate) in limits {
+            let bucket = TokenBucket::load(&self.store, &key, &rate, now)?;
+            let wait = bucket.retry_after(&rate, now);
+            if wait > retry_after {
+                retry_after = wait;
+                blocking_scope = scope;
+            }
+            buckets.push((key, bucket));
+        }
+        if retry_after > 0 {
+            tracing::debug!(
+                event = "authority_throttled",
+                scope = blocking_scope,
+                retry_after
+            );
+            return Err(Fault::RateLimited { retry_after }.into());
+        }
+        // Source, account and global limits are independent; spend from all only
+        // when every bucket admits the operation so global backpressure never
+        // drains an innocent caller's local budget.
+        for (key, mut bucket) in buckets {
+            bucket.credit -= 1;
+            save(&mut self.store, &key, &bucket)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn creation_admission(
         &mut self,
         source: &str,
         attempt: RegistrationAttempt,
-        request: &Registration,
+        proof: AdmissionProof<'_>,
         settings: &Settings,
         account_count: u64,
-    ) -> Result<Option<String>> {
+    ) -> Result<CreationAdmission> {
         let now = self.environment.now();
         let source_id: [u8; 32] = Sha256::digest(source.as_bytes()).into();
         let source_key = key("creation-source", &source_id);
@@ -79,7 +171,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 bucket: TokenBucket::new(&settings.source_rate, now),
                 bursts: 0,
             });
-        let mut global =
+        let global =
             TokenBucket::load(&self.store, GLOBAL_CREATION_KEY, &settings.global_rate, now)?;
         if local.bucket.refill(&settings.source_rate, now)
             && local.bucket.credit == settings.source_rate.burst
@@ -113,19 +205,13 @@ impl<R: Store, E: Environment> Authority<R, E> {
             RegistrationMode::ProofOfWork => Some(ProofKind::Work),
             RegistrationMode::Email => Some(ProofKind::Email),
         };
-        let email = if let Some(kind) = kind {
-            match self.registration_proof(
-                attempt,
-                kind,
-                request.challenge.as_deref(),
-                request.solution.as_deref(),
-            )? {
-                ProofRedemption::WorkVerified => None,
-                ProofRedemption::EmailVerified(address) => Some(address),
-                ProofRedemption::Retry(challenge) if kind == ProofKind::Email => {
+        let proof = if let Some(kind) = kind {
+            match self.check_registration_proof(attempt, kind, proof.challenge, proof.solution)? {
+                ProofCheck::Accepted(proof) => Some(proof),
+                ProofCheck::Retry(challenge) if kind == ProofKind::Email => {
                     return Err(Fault::Verification { challenge }.into());
                 }
-                ProofRedemption::Retry(_) | ProofRedemption::Unavailable => {
+                ProofCheck::Retry(_) | ProofCheck::Unavailable => {
                     let challenge = match kind {
                         ProofKind::Email => Challenge {
                             id: String::new(),
@@ -141,11 +227,12 @@ impl<R: Store, E: Environment> Authority<R, E> {
         } else {
             None
         };
-        local.bucket.credit -= 1;
-        global.credit -= 1;
-        save(&mut self.store, &source_key, &local)?;
-        save(&mut self.store, GLOBAL_CREATION_KEY, &global)?;
-        Ok(email)
+        Ok(CreationAdmission {
+            source_key,
+            source: local,
+            global,
+            proof,
+        })
     }
 
     pub(crate) fn charge_work_issuance(

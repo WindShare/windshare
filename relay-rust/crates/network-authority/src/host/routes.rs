@@ -1,7 +1,7 @@
 use super::{WorkerEnvironment, failure, storage::Database};
 use crate::{
-    Authority, Block, Fault, Mailbox, NodeEnrollment, NodePolicyChange, ReportPosition,
-    SettingsChanges, public_blocks::PublicBlockFeed,
+    Authority, Block, Fault, Mailbox, NodeEnrollment, NodePolicyChange, Registration,
+    ReportPosition, SettingsChanges, public_blocks::PublicBlockFeed,
 };
 use anyhow::{Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -11,16 +11,16 @@ use worker::{Env, Method, Request, Response};
 pub(super) const PUBLIC_BLOCKS_PATH: &str = "/v1/blocks";
 
 pub struct Context {
-    path: String,
+    pub(super) path: String,
     if_none_match: Option<String>,
     admin_after: Option<String>,
-    method: Method,
-    source: String,
-    bearer: String,
+    pub(super) method: Method,
+    pub(super) source: String,
+    pub(super) bearer: String,
     session: String,
     device_session: String,
     csrf: String,
-    initialization: String,
+    pub(super) initialization: String,
     directory: Option<serde_json::Value>,
 }
 impl Context {
@@ -92,17 +92,6 @@ struct ConfirmEmail {
     code: String,
 }
 #[derive(Deserialize)]
-struct Login {
-    username: String,
-    password: String,
-}
-#[derive(Deserialize)]
-struct Initialize {
-    token: String,
-    username: String,
-    password: String,
-}
-#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NodePolicyRequest {
     key: [u8; 32],
@@ -117,7 +106,7 @@ struct Report {
     share: [u8; 12],
     reason: String,
 }
-fn parse<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
+pub(super) fn parse<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
     serde_json::from_slice(bytes).map_err(|_| Fault::Invalid.into())
 }
 pub fn csrf(session: &str) -> String {
@@ -130,6 +119,9 @@ pub fn dispatch(
     bytes: &[u8],
     public_blocks: &mut PublicBlockFeed,
 ) -> Result<Response> {
+    if context.path.starts_with("/internal/") {
+        return super::internal_routes::dispatch(authority, context, bytes);
+    }
     if context.path.starts_with("/v1/admin/") {
         return admin_routes(authority, context, bytes);
     }
@@ -155,25 +147,19 @@ fn api_routes(
     } = context;
     let value = match (method, path.as_str()) {
         (Method::Post, "/v1/device/preview" | "/v1/device/approve") => {
-            return super::device_login::handle(authority, &path, &source, &device_session, bytes);
+            return super::device_login::handle(authority, &path, &device_session, bytes);
         }
         (Method::Post, "/v1/accounts") => {
-            serde_json::to_value(authority.register(&source, parse(bytes)?)?)?
+            let request: Registration = parse(bytes)?;
+            // Password registrations must hash on the stateless edge Worker and enter
+            // through /internal/accounts/register/commit.
+            ensure!(
+                request.username.is_none() && request.password.is_none(),
+                Fault::Invalid
+            );
+            serde_json::to_value(authority.register(&source, request)?)?
         }
         (Method::Post, "/v1/accounts/ticket") => serde_json::to_value(authority.refresh(&bearer)?)?,
-        (Method::Post, "/v1/accounts/login") => {
-            authority.throttle(&source, "account-login", 10, 60)?;
-            let login: Login = parse(bytes)?;
-            serde_json::to_value(authority.login(&login.username, &login.password)?)?
-        }
-        (Method::Post, "/v1/accounts/password") => {
-            let login: Login = parse(bytes)?;
-            serde_json::to_value(authority.set_password(
-                &bearer,
-                &login.username,
-                &login.password,
-            )?)?
-        }
         (Method::Post, "/v1/accounts/profile/nickname") => {
             let input: SetNickname = parse(bytes)?;
             serde_json::to_value(authority.set_nickname(&bearer, &input.nickname)?)?
@@ -233,15 +219,12 @@ fn admin_routes(
         path,
         admin_after,
         method,
-        source,
         session,
         csrf: provided,
-        initialization,
         directory,
         ..
     } = context;
-    if method != Method::Get && !matches!(path.as_str(), "/v1/admin/initialize" | "/v1/admin/login")
-    {
+    if method != Method::Get {
         ensure!(!session.is_empty(), Fault::administrator_session_required());
         ensure!(
             provided == csrf(&session),
@@ -251,19 +234,6 @@ fn admin_routes(
         );
     }
     let value = match (method, path.as_str()) {
-        (Method::Post, "/v1/admin/initialize") => {
-            let value: Initialize = parse(bytes)?;
-            return signed_in(&authority.initialize(
-                &value.token,
-                &initialization,
-                &value.username,
-                &value.password,
-            )?);
-        }
-        (Method::Post, "/v1/admin/login") => {
-            let value: Login = parse(bytes)?;
-            return signed_in(&authority.admin_login(&source, &value.username, &value.password)?);
-        }
         (Method::Post, "/v1/admin/logout") => {
             authority.logout(&session)?;
             return signed_in("");
@@ -358,7 +328,7 @@ fn report_position(text: &str) -> Result<ReportPosition> {
     })
 }
 
-fn signed_in(session: &str) -> Result<Response> {
+pub(super) fn signed_in(session: &str) -> Result<Response> {
     let mut response =
         Response::from_json(&serde_json::json!({"csrf":csrf(session)})).map_err(failure)?;
     response.headers_mut().set("Set-Cookie",&format!("authority_session={session}; HttpOnly; Secure; SameSite=Strict; Path=/v1/admin; Max-Age={}",

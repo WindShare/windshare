@@ -5,6 +5,8 @@ mod contract_vectors;
 mod device_login;
 #[path = "governance_tests.rs"]
 mod governance;
+#[path = "password_flow_tests.rs"]
+mod password_flow;
 #[path = "profile_tests.rs"]
 mod profile;
 #[path = "restriction_sync_tests.rs"]
@@ -172,6 +174,102 @@ impl Authority<Memory, Clock> {
             delivery.accepted(&mut self.store, self.environment.now())?,
             code,
         ))
+    }
+
+    fn hash_password(&mut self, password: &str) -> Result<HashedPassword> {
+        let salt = self.environment.random::<PASSWORD_SALT_BYTES>()?;
+        HashedPassword::hash(password, &salt)
+    }
+
+    fn initialize(
+        &mut self,
+        provided: &str,
+        expected: &str,
+        name: &str,
+        password: &str,
+    ) -> Result<String> {
+        self.prepare_initialization(provided, expected, name, password.len())?;
+        let hashed = self.hash_password(password)?;
+        self.complete_initialization(provided, expected, name, hashed)
+    }
+
+    fn admin_login(&mut self, source: &str, name: &str, password: &str) -> Result<String> {
+        let verifier = self.begin_admin_login(source, name)?;
+        anyhow::ensure!(
+            verifier.verify(password),
+            Fault::Denied {
+                reason: "credentials".into(),
+            }
+        );
+        self.complete_admin_login(verifier.fingerprint())
+    }
+
+    fn register_with_password(
+        &mut self,
+        source: &str,
+        mut request: Registration,
+        name: &str,
+        password: &str,
+    ) -> Result<Session> {
+        let prepare = PasswordRegistrationPrepare {
+            client_secret: request.client_secret.clone(),
+            challenge: request.challenge.clone(),
+            solution: request.solution.clone(),
+            username: name.into(),
+            password_len: password.len(),
+        };
+        match self.prepare_password_registration(source, &prepare)? {
+            PasswordRegistrationPreparation::Existing { session } => Ok(*session),
+            PasswordRegistrationPreparation::Ready => {
+                request.username = Some(name.into());
+                request.password = Some(self.hash_password(password)?);
+                self.register(source, request)
+            }
+        }
+    }
+
+    fn login(&mut self, source: &str, name: &str, password: &str) -> Result<Session> {
+        let challenge = self.begin_account_login(source, name)?;
+        anyhow::ensure!(
+            challenge.password.verify(password),
+            Fault::Denied {
+                reason: "credentials".into(),
+            }
+        );
+        self.complete_account_login(challenge.account, challenge.password.fingerprint())
+    }
+
+    fn set_password(
+        &mut self,
+        source: &str,
+        secret: &str,
+        name: &str,
+        password: &str,
+    ) -> Result<Session> {
+        let prepared = self.prepare_password_change(source, secret, name, password.len())?;
+        let hashed = self.hash_password(password)?;
+        self.commit_password_change(secret, name, hashed, prepared.previous_verifier_digest)
+    }
+
+    fn device_sign_in(
+        &mut self,
+        source: &str,
+        invitation: &str,
+        name: &str,
+        password: &str,
+    ) -> Result<DeviceApproval> {
+        let challenge = self.begin_device_sign_in(source, invitation, name)?;
+        anyhow::ensure!(
+            challenge.password.verify(password),
+            Fault::Denied {
+                reason: "credentials".into(),
+            }
+        );
+        self.complete_device_sign_in(
+            invitation,
+            challenge.account,
+            challenge.password.fingerprint(),
+        )
     }
 }
 fn batch(

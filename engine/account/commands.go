@@ -33,6 +33,8 @@ func CommandErrorCode(err error) string {
 				return "invalid_credentials"
 			case "username_taken":
 				return "username_taken"
+			case "credentials_changed":
+				return "account_changed"
 			}
 			return "account_denied"
 		case "invalid":

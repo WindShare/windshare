@@ -135,11 +135,30 @@ impl Proof {
     }
 }
 
-pub enum ProofRedemption {
-    WorkVerified,
-    EmailVerified(String),
+pub enum ProofCheck {
+    Accepted(AcceptedProof),
     Retry(Challenge),
     Unavailable,
+}
+
+pub struct AcceptedProof {
+    storage_key: String,
+    proof: Proof,
+}
+
+impl AcceptedProof {
+    pub(crate) fn consume(self, store: &mut impl Store) -> Result<Option<String>> {
+        store.delete(&self.storage_key)?;
+        tracing::debug!(
+            event = "verification_proof_redeemed",
+            challenge_fingerprint = %self.proof.challenge_fingerprint(),
+            mode = ?self.proof.method.kind().mode()
+        );
+        Ok(match self.proof.method {
+            ProofMethod::Work { .. } => None,
+            ProofMethod::Email { address, .. } => Some(address),
+        })
+    }
 }
 
 pub struct EmailDelivery {
@@ -244,21 +263,21 @@ impl<R: Store, E: Environment> Authority<R, E> {
         Ok(EmailDelivery { owner, proof, code })
     }
 
-    pub(crate) fn registration_proof(
+    pub(crate) fn check_registration_proof(
         &mut self,
         attempt: RegistrationAttempt,
         kind: ProofKind,
         id: Option<&str>,
         solution: Option<&str>,
-    ) -> Result<ProofRedemption> {
+    ) -> Result<ProofCheck> {
         let (Some(id), Some(solution)) = (id, solution) else {
-            return Ok(ProofRedemption::Unavailable);
+            return Ok(ProofCheck::Unavailable);
         };
         ensure!(
             id.len() <= MAX_CHALLENGE_ID_BYTES && solution.len() <= MAX_SOLUTION_BYTES,
             Fault::Invalid
         );
-        self.redeem_proof(&kind.registration_key(attempt), solution, |proof| {
+        self.check_proof(kind.registration_key(attempt), solution, |proof| {
             proof.id == id && proof.method.kind() == kind
         })
     }
@@ -270,29 +289,28 @@ impl<R: Store, E: Environment> Authority<R, E> {
         id: &str,
         code: &str,
     ) -> Result<()> {
-        let storage_key = account_email_key(&account);
-        let result = self.redeem_proof(&storage_key, code, |proof| {
+        let checked = self.check_proof(account_email_key(&account), code, |proof| {
             proof.id == id && matches!(&proof.method, ProofMethod::Email { address: target, .. } if target == address)
         })?;
-        ensure!(
-            matches!(result, ProofRedemption::EmailVerified(_)),
-            Fault::EmailCodeRejected
-        );
+        let ProofCheck::Accepted(proof) = checked else {
+            return Err(Fault::EmailCodeRejected.into());
+        };
+        proof.consume(&mut self.store)?;
         Ok(())
     }
 
-    fn redeem_proof(
+    fn check_proof(
         &mut self,
-        storage_key: &str,
+        storage_key: String,
         solution: &str,
         matches: impl FnOnce(&Proof) -> bool,
-    ) -> Result<ProofRedemption> {
-        let Some(mut proof) = load::<Proof>(&self.store, storage_key)? else {
-            return Ok(ProofRedemption::Unavailable);
+    ) -> Result<ProofCheck> {
+        let Some(mut proof) = load::<Proof>(&self.store, &storage_key)? else {
+            return Ok(ProofCheck::Unavailable);
         };
         let now = self.environment.now();
         if !matches(&proof) || !proof.live(now) {
-            return Ok(ProofRedemption::Unavailable);
+            return Ok(ProofCheck::Unavailable);
         }
         if solution.len() > MAX_SOLUTION_BYTES || !proof.accepts(solution) {
             proof.attempts += 1;
@@ -302,23 +320,14 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 mode = ?proof.method.kind().mode(),
                 attempts = proof.attempts
             );
-            save(&mut self.store, storage_key, &proof)?;
+            save(&mut self.store, &storage_key, &proof)?;
             // The rejected attempt counts before the proof can be offered for another try.
             return Ok(if proof.live(now) {
-                ProofRedemption::Retry(proof.into_challenge())
+                ProofCheck::Retry(proof.into_challenge())
             } else {
-                ProofRedemption::Unavailable
+                ProofCheck::Unavailable
             });
         }
-        self.store.delete(storage_key)?;
-        tracing::debug!(
-            event = "verification_proof_redeemed",
-            challenge_fingerprint = %proof.challenge_fingerprint(),
-            mode = ?proof.method.kind().mode()
-        );
-        Ok(match proof.method {
-            ProofMethod::Work { .. } => ProofRedemption::WorkVerified,
-            ProofMethod::Email { address, .. } => ProofRedemption::EmailVerified(address),
-        })
+        Ok(ProofCheck::Accepted(AcceptedProof { storage_key, proof }))
     }
 }

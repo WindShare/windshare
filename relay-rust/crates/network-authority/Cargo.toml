@@ -10,7 +10,6 @@ description = "Official network account, admission and traffic authority"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-url = "2"
 windshare-relay-access = { path = "../relay-access" }
 anyhow = "1"
 base64 = "0.23.1"
@@ -21,10 +20,14 @@ ed25519-dalek = { version = "3.0.0", default-features = false, features = ["allo
 argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
 tracing = "0.1"
 
+[dev-dependencies]
+url = "2"
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 getrandom = "0.4"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+url = "2"
 worker = "=0.8.7"
 futures-util = "0.3"
 getrandom = { version = "0.4", features = ["wasm_js"] }

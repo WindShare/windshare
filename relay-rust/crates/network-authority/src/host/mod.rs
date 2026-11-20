@@ -4,7 +4,9 @@
 )]
 mod device_login;
 mod edge;
+mod internal_routes;
 mod mail;
+mod passwords;
 mod routes;
 mod storage;
 use crate::{Authority, Environment, Fault, Signing, public_blocks::PublicBlockFeed};
@@ -16,6 +18,20 @@ use worker::{DurableObject, Env, Method, Request, Response, Result, State, durab
 const MAX_REQUEST_BYTES: usize = windshare_relay_access::usage::MAX_REPORT_BYTES;
 fn failure(error: impl std::fmt::Display) -> worker::Error {
     worker::Error::RustError(error.to_string())
+}
+
+async fn read_body(request: &mut Request) -> Result<Option<Vec<u8>>> {
+    let mut bytes = Vec::new();
+    if let Ok(mut stream) = request.stream() {
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            if bytes.len() + chunk.len() > MAX_REQUEST_BYTES {
+                return Ok(None);
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+    }
+    Ok(Some(bytes))
 }
 #[derive(Clone, Copy)]
 struct WorkerEnvironment {
@@ -51,18 +67,13 @@ impl DurableObject for NetworkAuthority {
         }
     }
     async fn fetch(&self, mut request: Request) -> Result<Response> {
-        let mut bytes = Vec::new();
-        if request.method() != Method::Get
-            && let Ok(mut stream) = request.stream()
-        {
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk?;
-                if bytes.len() + chunk.len() > MAX_REQUEST_BYTES {
-                    return Response::error("request too large", 413);
-                }
-                bytes.extend_from_slice(&chunk);
-            }
-        }
+        let bytes = if request.method() == Method::Get {
+            Vec::new()
+        } else if let Some(bytes) = read_body(&mut request).await? {
+            bytes
+        } else {
+            return Response::error("request too large", 413);
+        };
         match request.path().as_str() {
             "/v1/accounts/email" => return self.email(&request, &bytes, None).await,
             "/v1/accounts/profile/email" => {

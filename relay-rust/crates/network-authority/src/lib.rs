@@ -8,6 +8,7 @@ mod device_login;
 mod governance;
 mod model;
 mod nodes;
+mod password;
 mod profile;
 mod public_blocks;
 mod registration;
@@ -19,10 +20,17 @@ mod store;
 mod usage;
 use anyhow::Result;
 pub use challenges::{EmailDelivery, ProofKind};
+#[cfg(any(test, target_arch = "wasm32"))]
+pub use device_login::DeviceApproval;
 pub use governance::{Block, Report, ReportPage, ReportPosition};
 pub use model::*;
 pub use nodes::{
     Node, NodeDetails, NodeEnrollment, NodeLoadReport, NodePage, NodePolicyChange, Zone,
+};
+pub use password::{
+    HashedPassword, PASSWORD_SALT_BYTES, PasswordChallenge, PasswordChangePreparation,
+    PasswordRegistrationPreparation, PasswordRegistrationPrepare, valid_login_password_length,
+    valid_password_length,
 };
 pub use profile::{EmailVerification, Mailbox};
 pub use signing::Signing;

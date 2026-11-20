@@ -73,11 +73,11 @@ jobs:
         run: |
           cargo install worker-build --version 0.8.7 --locked
           npm ci --prefix relay-rust/crates/relay-cloudflare
-      - name: Verify email registration across Worker transactions
+      - name: Verify Worker registration, mail, and edge password flows
         working-directory: relay-rust/crates/network-authority
         run: |
           worker-build --dev --locked
-          node --test tests/registration-email.test.mjs
+          node --test tests/mail.test.mjs tests/registration-email.test.mjs tests/password-edge.test.mjs
 
   deploy:
     needs: console

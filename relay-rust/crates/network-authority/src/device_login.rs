@@ -1,12 +1,12 @@
 use crate::{
-    Account, Authority, Environment, Fault, Node, Store,
-    registration::digest,
+    Account, Authority, Environment, Fault, HashedPassword, Node, PasswordChallenge, Store,
     store::{key, load},
 };
 use anyhow::{Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use windshare_relay_access::{
+    AccountId,
     device_login::{Approval, Invitation},
     trust,
 };
@@ -21,9 +21,16 @@ struct BrowserSession {
     expires: u64,
 }
 
-fn session_domain(password_hash: &str) -> Vec<u8> {
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeviceApproval {
+    pub origin: String,
+    pub approval: String,
+    pub session: String,
+}
+
+fn session_domain(password: &HashedPassword) -> Vec<u8> {
     // A password change invalidates browser consent without publishing a password verifier in the cookie.
-    [SESSION_DOMAIN, digest(password_hash).as_slice()].concat()
+    [SESSION_DOMAIN, password.fingerprint().as_slice()].concat()
 }
 
 impl<R: Store, E: Environment> Authority<R, E> {
@@ -69,7 +76,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
         let session: BrowserSession = serde_json::from_slice(payload).ok()?;
         let account = self.ensure_account(session.account).ok()?;
         trust::verify(
-            &session_domain(account.password.as_deref()?),
+            &session_domain(account.password.as_ref()?),
             &signed,
             &self.signing.generation.key,
         )
@@ -77,27 +84,54 @@ impl<R: Store, E: Environment> Authority<R, E> {
         (session.expires > self.environment.now()).then_some(account)
     }
 
+    /// Validates the device invitation and account login limits before the edge
+    /// Worker runs Argon2.
+    ///
     /// # Errors
-    /// Password checks are rate limited. The browser cookie can only approve devices through this service.
-    pub fn device_sign_in(
+    /// Refuses invalid invitations, disabled nodes, rate-limited callers or unknown accounts.
+    pub fn begin_device_sign_in(
         &mut self,
         source: &str,
+        invitation: &str,
         name: &str,
-        password: &str,
-    ) -> Result<(Account, String)> {
-        self.throttle(source, "account-login", 10, 60)?;
-        let account = self.password_account(name, password)?;
+    ) -> Result<PasswordChallenge> {
+        self.device_invitation(invitation)?;
+        self.begin_account_login(source, name)
+    }
+
+    /// Re-verifies the invitation and account verifier after edge password
+    /// matching, then issues both the browser consent cookie and device receipt.
+    ///
+    /// # Errors
+    /// Refuses expired invitations, disabled nodes, blocked accounts or stale verifiers.
+    pub fn complete_device_sign_in(
+        &mut self,
+        invitation: &str,
+        account_id: AccountId,
+        password_digest: [u8; 32],
+    ) -> Result<DeviceApproval> {
+        let invite = self.device_invitation(invitation)?;
+        let account = self.verified_account(account_id, password_digest)?;
+        let session = self.sign_browser_session(&account)?;
+        let approval = self.approve_device(&invite, &account)?;
+        Ok(DeviceApproval {
+            origin: invite.origin,
+            approval,
+            session,
+        })
+    }
+
+    fn sign_browser_session(&self, account: &Account) -> Result<String> {
         let session = BrowserSession {
             account: account.id,
             expires: (self.environment.now() + SESSION_SECONDS)
                 .min(self.signing.generation.expires_at),
         };
-        let token = URL_SAFE_NO_PAD.encode(trust::sign(
-            &session_domain(account.password.as_deref().ok_or(Fault::Invalid)?),
+        Ok(URL_SAFE_NO_PAD.encode(trust::sign(
+            &session_domain(account.password.as_ref().ok_or(Fault::Invalid)?),
             &serde_json::to_vec(&session)?,
             &self.signing.key,
-        ));
-        Ok((account, token))
+        )))
     }
 
     /// # Errors

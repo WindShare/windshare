@@ -1,6 +1,6 @@
 use super::{WorkerEnvironment, failure, storage::Database};
 use crate::{Authority, Fault};
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use serde::Deserialize;
 use worker::Response;
 
@@ -8,19 +8,13 @@ pub(super) const COOKIE: &str = "windshare_service_login=";
 #[derive(Deserialize)]
 struct Request {
     invitation: String,
-    login: Option<Login>,
+    login: Option<serde_json::Value>,
     username: Option<String>,
-}
-#[derive(Deserialize)]
-struct Login {
-    username: String,
-    password: String,
 }
 
 pub(super) fn handle(
     authority: &mut Authority<Database, WorkerEnvironment>,
     path: &str,
-    source: &str,
     cookie: &str,
     bytes: &[u8],
 ) -> Result<Response> {
@@ -36,32 +30,30 @@ pub(super) fn handle(
         });
         return Ok(Response::from_json(&preview).map_err(failure)?);
     }
-    let (account, session) = if let Some(login) = body.login {
-        let (account, session) =
-            authority.device_sign_in(source, &login.username, &login.password)?;
-        (account, Some(session))
-    } else {
-        (
-            current
-                .filter(|account| account.username.is_some() && account.username == body.username)
-                .ok_or_else(|| Fault::Denied {
-                    reason: "session_changed".into(),
-                })?,
-            None,
-        )
-    };
+    // Password logins are verified on the stateless edge Worker via /internal/device/login/*.
+    ensure!(body.login.is_none(), Fault::Invalid);
+    let account = current
+        .filter(|account| account.username.is_some() && account.username == body.username)
+        .ok_or_else(|| Fault::Denied {
+            reason: "session_changed".into(),
+        })?;
     let approval = authority.approve_device(&invite, &account)?;
-    let mut response =
+    Ok(
         Response::from_json(&serde_json::json!({"origin":invite.origin,"approval":approval}))
+            .map_err(failure)?,
+    )
+}
+
+pub(super) fn cookie_response(origin: &str, approval: &str, session: &str) -> Result<Response> {
+    let mut response =
+        Response::from_json(&serde_json::json!({"origin":origin,"approval":approval}))
             .map_err(failure)?;
-    if let Some(session) = session {
-        response
-            .headers_mut()
-            .set(
-                "Set-Cookie",
-                &format!("{COOKIE}{session}; HttpOnly; Secure; SameSite=Strict; Path=/v1/device"),
-            )
-            .map_err(failure)?;
-    }
+    response
+        .headers_mut()
+        .set(
+            "Set-Cookie",
+            &format!("{COOKIE}{session}; HttpOnly; Secure; SameSite=Strict; Path=/v1/device"),
+        )
+        .map_err(failure)?;
     Ok(response)
 }
