@@ -368,9 +368,7 @@ func (s *Set) finish(
 }
 
 func (s *Set) watchCapacityClearanceLocked(clearance <-chan struct{}, stop <-chan struct{}) {
-	s.watchers.Add(1)
-	go func() {
-		defer s.watchers.Done()
+	s.watchers.Go(func() {
 		select {
 		case <-clearance:
 			s.mu.Lock()
@@ -381,7 +379,7 @@ func (s *Set) watchCapacityClearanceLocked(clearance <-chan struct{}, stop <-cha
 		case <-stop:
 		case <-s.lifecycle.Done():
 		}
-	}()
+	})
 }
 
 func (state *laneState) recordFailure(canceled bool) {
