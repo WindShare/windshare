@@ -433,6 +433,7 @@ comparison measurements; relay usage is not a P2P failure rate.
 | Hong Kong optimized line (CN2 GIA or CMI) | Cross-border legs limit relayed transfers at evening peak | A `global` node that mainland networks reach well |
 | Receiver-suggested relays | Joined transfers are limited by the link relays' distance or capacity | Over an existing E2E path, ask the sender to publish on an allowed node near the receiver; extend P1's bounded membership beyond the published set for that receiver. Cannot repair first-join failure; not required for launch |
 | Cross-border quality in planning | Vantage-point data shows cross-border quality differs widely between nodes | The planner weighs measured cross-border quality, not only RTT from the sender |
+| Cold-start exit hint | More than four `>=50 Mbps` relay nodes and measured slow cross-region first connects | Non-blocking edge hint in planned desktop mode; normalize `region` values (`zone=cn, region=as` in mainland) |
 | Official TURN | Measured transfers where WebRTC over TURN would beat the application relays | coturn on purchased nodes; the authority issues short-lived credentials to ticket holders, delegated through the existing `TURN_CONTROL` `Grant` |
 | Relay-to-relay forwarding | P2P fails and no relay is reachable by both sides | Directed forwarding for that case only |
 
