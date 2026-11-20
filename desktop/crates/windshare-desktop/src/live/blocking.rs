@@ -59,7 +59,7 @@ impl Desktop {
         let account = self.account_view().filter(|_| official);
         let (label, action) = match (official, account) {
             (_, Some(view)) => (
-                super::account::AccountPage::entry(view).1,
+                crate::account::AccountPage::entry(view).1,
                 Action::ConfigureShare(share.id),
             ),
             (true, None) => (Text::ChooseRelays, Action::ChooseShareRelays(share.id)),

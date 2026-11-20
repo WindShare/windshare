@@ -1,5 +1,6 @@
 #![cfg_attr(all(target_os = "windows", not(test)), windows_subsystem = "windows")]
 
+mod account;
 mod artwork;
 mod commands;
 mod desktop;
@@ -10,6 +11,7 @@ mod localization;
 mod logging;
 mod model;
 mod motion;
+mod network;
 mod overlays;
 mod pages;
 mod preferences;

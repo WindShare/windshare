@@ -1,4 +1,3 @@
-mod account;
 mod appearance;
 mod diagnostics;
 mod share_animation;

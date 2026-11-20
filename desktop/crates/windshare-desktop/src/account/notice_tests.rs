@@ -1,6 +1,7 @@
 use super::*;
 use crate::model::{ShareAge, ShareContents, ShareSource};
 use windshare_host::AccountProfile;
+use windshare_ui::{Icon, Tone};
 
 fn account_status(active: bool, state: AccountState, allowance: Allowance) -> AccountStatus {
     AccountStatus {

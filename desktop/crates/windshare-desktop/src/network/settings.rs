@@ -1,10 +1,14 @@
-use super::{Runtime, SetupPage, relay_preferences::MAX_ACTIVE_RELAYS};
+use super::{
+    MAX_ACTIVE_RELAYS, SetupPage,
+    relay_preferences::{relay_actions_drawer, relay_actions_toggle, relay_mode_option},
+};
 use crate::{
     desktop::Desktop,
+    live::Runtime,
     localization::{Text, language},
-    model::{Action, Overlay},
+    model::Overlay,
 };
-use gpui::{Div, FontWeight, prelude::*, px};
+use gpui::{Context, Div, ElementId, FontWeight, prelude::*, px};
 use std::collections::BTreeSet;
 use windshare_host::{PreferenceEdit, RelayMode, RelayOperation, RelayPreferences, SavedRelay};
 use windshare_ui::{Button, ButtonStyle, FONT, Icon, Theme, Tone, column, row};
@@ -51,6 +55,14 @@ impl Desktop {
         (prefs.mode == RelayMode::Selected && !enabled).then_some(Tone::Peach)
     }
 
+    pub(super) fn network_settings_busy(&self) -> bool {
+        let setup_unfinished = match &self.runtime {
+            Runtime::Native(session) => session.model.setup.unfinished(),
+            Runtime::Preview(_) => false,
+        };
+        self.setup.pending.is_some() || setup_unfinished || self.runtime.selection_disabled()
+    }
+
     pub fn network_settings_page(&self, theme: Theme, compact: bool, cx: &Context<Self>) -> Div {
         let prefs = self.relay_preferences_view();
         let busy = self.network_settings_busy();
@@ -61,12 +73,19 @@ impl Desktop {
             .child(Self::receiver_site_card(theme, prefs, busy, cx))
     }
 
-    pub(super) fn network_settings_busy(&self) -> bool {
-        let setup_unfinished = match &self.runtime {
-            Runtime::Native(session) => session.model.setup.unfinished(),
-            Runtime::Preview(_) => false,
-        };
-        self.setup_form.pending.is_some() || setup_unfinished || self.runtime.selection_disabled()
+    fn preference_button(
+        id: impl Into<ElementId>,
+        label: &'static str,
+        symbol: Icon,
+        edit: PreferenceEdit,
+        cx: &Context<Self>,
+    ) -> Button {
+        Button::new(id, label)
+            .icon(symbol)
+            .compact()
+            .on_press(cx.listener(move |this, (), window, cx| {
+                this.apply_preference(edit.clone(), window, cx);
+            }))
     }
 
     fn relay_mode_card(
@@ -98,20 +117,22 @@ impl Desktop {
                     .id("relay-modes")
                     .role(gpui::Role::RadioGroup)
                     .aria_label(locale.text(Text::RelayChoice))
-                    .child(Self::relay_mode_option(
+                    .child(relay_mode_option(
                         theme,
                         prefs,
                         RelayMode::Automatic,
                         busy,
                         !compact,
+                        |this, cx| this.apply_mode(RelayMode::Automatic, cx),
                         cx,
                     ))
-                    .child(Self::relay_mode_option(
+                    .child(relay_mode_option(
                         theme,
                         prefs,
                         RelayMode::Selected,
                         busy,
                         !compact,
+                        |this, cx| this.apply_mode(RelayMode::Selected, cx),
                         cx,
                     )),
             )
@@ -155,20 +176,23 @@ impl Desktop {
                             )),
                     )
                     .child(
-                        Self::button(
-                            "add-relay",
-                            locale.text(Text::AddRelay),
-                            Icon::Plus,
-                            if needs_relay {
+                        Button::new("add-relay", locale.text(Text::AddRelay))
+                            .icon(Icon::Plus)
+                            .style(if needs_relay {
                                 ButtonStyle::Primary
                             } else {
                                 ButtonStyle::Secondary
-                            },
-                            Action::OpenSetupModal(SetupPage::Relay(RelayOperation::AddProfile)),
-                            cx,
-                        )
-                        .compact()
-                        .disabled(busy),
+                            })
+                            .compact()
+                            .disabled(busy)
+                            .on_press(cx.listener(|this, (), window, cx| {
+                                this.open_setup_modal(
+                                    SetupPage::Relay(RelayOperation::AddProfile),
+                                    window,
+                                    cx,
+                                );
+                                cx.notify();
+                            })),
                     ),
             );
         if needs_relay {
@@ -225,7 +249,7 @@ impl Desktop {
         let setup_modal_open = self
             .overlays
             .last()
-            .is_some_and(|frame| matches!(frame.content, Overlay::SharingSetup(_)));
+            .is_some_and(|frame| matches!(frame.content, Overlay::SharingSetup(..)));
         if setup_modal_open || !setup.unfinished() {
             return None;
         }
@@ -249,19 +273,17 @@ impl Desktop {
         let setup_modal_open = self
             .overlays
             .last()
-            .is_some_and(|frame| matches!(frame.content, Overlay::SharingSetup(_)));
+            .is_some_and(|frame| matches!(frame.content, Overlay::SharingSetup(..)));
         if setup_modal_open {
             return None;
         }
         let locale = language(cx);
-        if let Some(feedback) = &self.setup_form.feedback {
-            let (message, tone) = match feedback {
-                Ok(label) => (locale.text(*label).to_owned(), Tone::Mint),
-                Err(error) => (error.clone(), Tone::Rose),
-            };
-            return Some(theme.caption(message).text_color(tone.text(theme)));
-        }
-        None
+        let feedback = self.setup.feedback.as_ref()?;
+        let (message, tone) = match feedback {
+            Ok(label) => (locale.text(*label).to_owned(), Tone::Mint),
+            Err(error) => (error.clone(), Tone::Rose),
+        };
+        Some(theme.caption(message).text_color(tone.text(theme)))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -276,7 +298,7 @@ impl Desktop {
         cx: &Context<Self>,
     ) -> Div {
         let can_toggle = !busy && (relay.enabled || !at_capacity);
-        let expanded = self.setup_form.expanded_relay.as_deref() == Some(relay.url.as_str());
+        let expanded = self.setup.expanded_relay.as_deref() == Some(relay.url.as_str());
         let toggle_edit = if relay.enabled {
             PreferenceEdit::Disable(relay.url.clone())
         } else {
@@ -286,18 +308,27 @@ impl Desktop {
             .toggle(("relay-switch", index), relay.enabled, can_toggle)
             .aria_label(relay.url.clone())
             .when(can_toggle, |control| {
-                control.on_click(cx.listener(move |this, _, _, cx| {
+                control.on_click(cx.listener(move |this, _, window, cx| {
                     cx.stop_propagation();
-                    this.apply_preference(toggle_edit.clone(), cx);
+                    this.apply_preference(toggle_edit.clone(), window, cx);
                 }))
             });
+        let toggle_url = relay.url.clone();
         let trailing = row()
             .gap(px(10.))
-            .child(Self::relay_actions_toggle(
+            .child(relay_actions_toggle(
                 index,
-                relay.url.clone(),
                 expanded,
                 busy,
+                move |this: &mut Self, cx| {
+                    this.setup.expanded_relay =
+                        if this.setup.expanded_relay.as_deref() == Some(toggle_url.as_str()) {
+                            None
+                        } else {
+                            Some(toggle_url.clone())
+                        };
+                    cx.notify();
+                },
                 cx,
             ))
             .child(toggle);
@@ -326,7 +357,22 @@ impl Desktop {
                     .child(trailing),
             )
             .when(expanded, |col| {
-                col.child(self.relay_actions_drawer(theme, relay, index, busy, cx))
+                let reauth_url = relay.url.clone();
+                let remove_url = relay.url.clone();
+                col.child(relay_actions_drawer(
+                    theme,
+                    relay,
+                    index,
+                    busy,
+                    self.runtime.is_preview(),
+                    move |this: &mut Self, window, cx| {
+                        this.confirm_reauthorize_relay(reauth_url.clone(), window, cx);
+                    },
+                    move |this: &mut Self, window, cx| {
+                        this.confirm_remove_relay(remove_url.clone(), window, cx);
+                    },
+                    cx,
+                ))
             })
     }
 
@@ -358,16 +404,15 @@ impl Desktop {
             );
         }
         header_actions = header_actions.child(
-            Self::button(
-                "edit-receiver-site",
-                locale.text(Text::ChangeWebsite),
-                Icon::Pencil,
-                ButtonStyle::Secondary,
-                Action::OpenSetupModal(SetupPage::ReceiverSite),
-                cx,
-            )
-            .compact()
-            .disabled(busy),
+            Button::new("edit-receiver-site", locale.text(Text::ChangeWebsite))
+                .icon(Icon::Pencil)
+                .style(ButtonStyle::Secondary)
+                .compact()
+                .disabled(busy)
+                .on_press(cx.listener(|this, (), window, cx| {
+                    this.open_setup_modal(SetupPage::ReceiverSite, window, cx);
+                    cx.notify();
+                })),
         );
         // Elevate the default chip against the inset strip so it stays legible in both themes.
         let status_chip = if prefs.custom_frontend {

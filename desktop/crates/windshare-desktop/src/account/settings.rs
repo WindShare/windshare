@@ -1,12 +1,17 @@
+use super::{
+    AccountPage, EmailPurpose, account_status_summary, dialog_view::account_feedback_banner,
+    registration::registration_panel_view,
+};
 use crate::{
     desktop::Desktop,
-    live::{AccountAction, AccountPage, EmailPurpose, byte_size, setting_row},
+    live::byte_size,
     localization::{Language, Text, language},
-    model::Action,
+    model::{Page, SettingsSection},
+    network::setting_row,
 };
-use gpui::{Div, FontWeight, prelude::*, px};
+use gpui::{App, Context, Div, FontWeight, prelude::*, px};
 use windshare_host::{AccountState, AccountView, Allowance};
-use windshare_ui::{ButtonStyle, FONT, Icon, Theme, Tone, column, row};
+use windshare_ui::{Button, ButtonStyle, FONT, Icon, Theme, Tone, column, row};
 
 const AVATAR_SIZE: f32 = 46.;
 const CARD_ICON_SIZE: f32 = 36.;
@@ -58,6 +63,98 @@ fn avatar_initial(view: &AccountView) -> Option<String> {
     Some(first.to_uppercase().collect())
 }
 
+pub(super) fn account_identity_view(
+    theme: Theme,
+    view: &AccountView,
+    nickname_button: Button,
+    copy_uid_button: Button,
+    cx: &App,
+) -> Div {
+    let locale = language(cx);
+    let locked_until = view.nickname_locked_until();
+    let (badge_label, badge_tone) = status_badge(view);
+    let avatar = avatar_initial(view).map_or_else(
+        || theme.icon_tile(Icon::User, Tone::Mint, AVATAR_SIZE),
+        |initial| theme.avatar(&initial, Tone::Mint, AVATAR_SIZE),
+    );
+    let show_handle = view.status.profile.nickname.is_some() && !view.status.username.is_empty();
+    let meta = match (show_handle, locked_until) {
+        (true, Some(at)) => Some(format!(
+            "@{} · {}",
+            view.status.username,
+            locale.nickname_next_change(at)
+        )),
+        (true, None) => Some(format!("@{}", view.status.username)),
+        (false, Some(at)) => Some(locale.nickname_next_change(at)),
+        (false, None) => None,
+    };
+    column()
+        .gap(px(16.))
+        .child(
+            row()
+                .gap(px(14.))
+                .child(avatar)
+                .child(
+                    column()
+                        .flex_1()
+                        .min_w_0()
+                        .gap(px(4.))
+                        .child(
+                            row()
+                                .flex_wrap()
+                                .gap(px(10.))
+                                .child(theme.heading(display_title(view, locale), 20.))
+                                .child(theme.badge(locale.text(badge_label), badge_tone)),
+                        )
+                        .when_some(meta, |col, text| col.child(theme.caption(text))),
+                )
+                .when(view.can_edit_profile(), |header| {
+                    header.child(nickname_button)
+                }),
+        )
+        .child(account_uid_strip(
+            theme,
+            &view.status.account,
+            copy_uid_button,
+            cx,
+        ))
+}
+
+fn account_uid_strip(theme: Theme, account_id: &str, copy_button: Button, cx: &App) -> Div {
+    let locale = language(cx);
+    row()
+        .justify_between()
+        .gap(px(12.))
+        .px(px(14.))
+        .py(px(8.))
+        .rounded(px(12.))
+        .bg(theme.inset())
+        .border_1()
+        .border_color(theme.border().opacity(0.6))
+        .child(
+            row()
+                .flex_1()
+                .min_w_0()
+                .gap(px(10.))
+                .child(
+                    theme
+                        .label(locale.text(Text::AccountUid), 12.)
+                        .font_family(FONT)
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme.muted_text()),
+                )
+                .child(
+                    theme
+                        .label(account_id.to_owned(), 14.)
+                        .font_family(FONT)
+                        .flex_1()
+                        .min_w_0()
+                        .truncate(),
+                ),
+        )
+        .child(copy_button.min_width(px(UID_COPY_MIN_WIDTH)))
+}
+
 impl Desktop {
     pub(crate) fn account_attention_tone(&self) -> Option<Tone> {
         let view = self.account_view()?;
@@ -83,14 +180,37 @@ impl Desktop {
             .child(self.account_identity_card(theme, view, cx))
             .child(self.account_allowance_card(theme, view, cx))
             .child(self.account_security_card(theme, view, cx))
-            .when_some(self.account_feedback_banner(theme, cx), |col, banner| {
-                col.child(banner)
-            })
+            .when_some(
+                account_feedback_banner(
+                    self.account.feedback.as_ref(),
+                    AccountPage::Overview,
+                    theme,
+                    cx,
+                ),
+                gpui::ParentElement::child,
+            )
+    }
+
+    fn account_modal_button(
+        id: &'static str,
+        label: Text,
+        symbol: Icon,
+        style: ButtonStyle,
+        page: AccountPage,
+        cx: &Context<Self>,
+    ) -> Button {
+        Button::new(id, language(cx).text(label))
+            .icon(symbol)
+            .style(style)
+            .on_press(cx.listener(move |this, (), window, cx| {
+                this.open_account_modal(page, window, cx);
+                cx.notify();
+            }))
     }
 
     fn account_onboarding_page(&self, theme: Theme, view: &AccountView, cx: &Context<Self>) -> Div {
         let locale = language(cx);
-        let busy = self.account_form.busy(view);
+        let busy = self.account.busy(view);
         let body = if view.status.state == AccountState::EmailRequired {
             let email_page = EmailPurpose::Registration.entry(view);
             column()
@@ -113,30 +233,53 @@ impl Desktop {
                         .flex_wrap()
                         .gap(px(8.))
                         .child(
-                            Self::button(
+                            Self::account_modal_button(
                                 "verify-registration-email",
-                                locale.text(Text::AccountEmail),
+                                Text::AccountEmail,
                                 Icon::Shield,
                                 ButtonStyle::Primary,
-                                Action::OpenAccountModal(email_page),
+                                email_page,
                                 cx,
                             )
                             .disabled(busy),
                         )
                         .child(
-                            Self::button(
+                            Self::account_modal_button(
                                 "onboarding-login",
-                                locale.text(Text::LoginExisting),
+                                Text::LoginExisting,
                                 Icon::Lock,
                                 ButtonStyle::Quiet,
-                                Action::OpenAccountModal(AccountPage::Login),
+                                AccountPage::Login,
                                 cx,
                             )
                             .disabled(busy),
                         ),
                 )
         } else {
-            self.registration_panel(theme, view, cx)
+            let visible = self.page == Page::Settings
+                && self.settings_section == SettingsSection::Account
+                && self.overlays.is_empty();
+            let create = Button::new(
+                "create-account",
+                locale.text(if matches!(self.account.feedback, Some(Err(_))) {
+                    Text::RetryConnection
+                } else {
+                    Text::CreateAccount
+                }),
+            )
+            .icon(Icon::Arrow)
+            .style(ButtonStyle::Primary)
+            .disabled(!self.account.can_register(view))
+            .on_press(cx.listener(|this, (), _, cx| this.register_account(cx)));
+            let login = Self::account_modal_button(
+                "registration-login",
+                Text::LoginExisting,
+                Icon::Lock,
+                ButtonStyle::Quiet,
+                AccountPage::Login,
+                cx,
+            );
+            registration_panel_view(theme, view, busy, visible, create, login, cx)
         };
         column().gap(px(SECTION_GAP)).child(
             theme
@@ -145,137 +288,57 @@ impl Desktop {
                 .py(px(CARD_PADDING_Y))
                 .gap(px(18.))
                 .child(body)
-                .when_some(self.account_feedback_banner(theme, cx), |card, banner| {
-                    card.child(banner)
-                }),
+                .when_some(
+                    account_feedback_banner(
+                        self.account.feedback.as_ref(),
+                        AccountPage::Registration,
+                        theme,
+                        cx,
+                    ),
+                    gpui::ParentElement::child,
+                ),
         )
     }
 
-    pub(crate) fn account_identity_content(
-        &self,
-        theme: Theme,
-        view: &AccountView,
-        cx: &Context<Self>,
-    ) -> Div {
-        let locale = language(cx);
-        let busy = self.account_form.busy(view);
-        let locked_until = view.nickname_locked_until();
-        let (badge_label, badge_tone) = status_badge(view);
-        let avatar = avatar_initial(view).map_or_else(
-            || theme.icon_tile(Icon::User, Tone::Mint, AVATAR_SIZE),
-            |initial| theme.avatar(&initial, Tone::Mint, AVATAR_SIZE),
-        );
-        let show_handle =
-            view.status.profile.nickname.is_some() && !view.status.username.is_empty();
-        let meta = match (show_handle, locked_until) {
-            (true, Some(at)) => Some(format!(
-                "@{} · {}",
-                view.status.username,
-                locale.nickname_next_change(at)
-            )),
-            (true, None) => Some(format!("@{}", view.status.username)),
-            (false, Some(at)) => Some(locale.nickname_next_change(at)),
-            (false, None) => None,
-        };
-        column()
-            .gap(px(16.))
-            .child(
-                row()
-                    .gap(px(14.))
-                    .child(avatar)
-                    .child(
-                        column()
-                            .flex_1()
-                            .min_w_0()
-                            .gap(px(4.))
-                            .child(
-                                row()
-                                    .flex_wrap()
-                                    .gap(px(10.))
-                                    .child(theme.heading(display_title(view, locale), 20.))
-                                    .child(theme.badge(locale.text(badge_label), badge_tone)),
-                            )
-                            .when_some(meta, |col, text| col.child(theme.caption(text))),
-                    )
-                    .when(view.can_edit_profile(), |header| {
-                        header.child(
-                            Self::button(
-                                "account-nickname",
-                                locale.text(AccountPage::Nickname(()).title(view)),
-                                Icon::Pencil,
-                                ButtonStyle::Secondary,
-                                Action::OpenAccountModal(AccountPage::Nickname(())),
-                                cx,
-                            )
-                            .compact()
-                            .disabled(busy || locked_until.is_some()),
-                        )
-                    }),
-            )
-            .child(self.account_uid_strip(theme, &view.status.account, cx))
-    }
-
     fn account_identity_card(&self, theme: Theme, view: &AccountView, cx: &Context<Self>) -> Div {
+        let locale = language(cx);
+        let busy = self.account.busy(view);
+        let locked = view.nickname_locked_until().is_some();
+        let nickname = Self::account_modal_button(
+            "account-nickname",
+            AccountPage::Nickname(()).title(view),
+            Icon::Pencil,
+            ButtonStyle::Secondary,
+            AccountPage::Nickname(()),
+            cx,
+        )
+        .compact()
+        .disabled(busy || locked);
+        let uid_copied = self.copy_feedback.is_account_uid();
+        let copy = Button::new(
+            "copy-account-uid",
+            locale.text(if uid_copied {
+                Text::Copied
+            } else {
+                Text::CopyUid
+            }),
+        )
+        .icon(if uid_copied { Icon::Check } else { Icon::Copy })
+        .style(if uid_copied {
+            ButtonStyle::Tinted(Tone::Mint)
+        } else {
+            ButtonStyle::Secondary
+        })
+        .compact()
+        .on_press(cx.listener(|this, (), _, cx| {
+            this.copy_account_uid(cx);
+            cx.notify();
+        }));
         theme
             .card()
             .px(px(CARD_PADDING_X))
             .py(px(CARD_PADDING_Y))
-            .child(self.account_identity_content(theme, view, cx))
-    }
-
-    fn account_uid_strip(&self, theme: Theme, account_id: &str, cx: &Context<Self>) -> Div {
-        let locale = language(cx);
-        let uid_copied = self.copy_feedback.is_account_uid();
-        row()
-            .justify_between()
-            .gap(px(12.))
-            .px(px(14.))
-            .py(px(8.))
-            .rounded(px(12.))
-            .bg(theme.inset())
-            .border_1()
-            .border_color(theme.border().opacity(0.6))
-            .child(
-                row()
-                    .flex_1()
-                    .min_w_0()
-                    .gap(px(10.))
-                    .child(
-                        theme
-                            .label(locale.text(Text::AccountUid), 12.)
-                            .font_family(FONT)
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.muted_text()),
-                    )
-                    .child(
-                        theme
-                            .label(account_id.to_owned(), 14.)
-                            .font_family(FONT)
-                            .flex_1()
-                            .min_w_0()
-                            .truncate(),
-                    ),
-            )
-            .child(
-                Self::button(
-                    "copy-account-uid",
-                    locale.text(if uid_copied {
-                        Text::Copied
-                    } else {
-                        Text::CopyUid
-                    }),
-                    if uid_copied { Icon::Check } else { Icon::Copy },
-                    if uid_copied {
-                        ButtonStyle::Tinted(Tone::Mint)
-                    } else {
-                        ButtonStyle::Secondary
-                    },
-                    Action::CopyAccountUid,
-                    cx,
-                )
-                .compact()
-                .min_width(px(UID_COPY_MIN_WIDTH)),
-            )
+            .child(account_identity_view(theme, view, nickname, copy, cx))
     }
 
     fn account_allowance_card(&self, theme: Theme, view: &AccountView, cx: &Context<Self>) -> Div {
@@ -314,7 +377,7 @@ impl Desktop {
 
     fn account_allowance_body(&self, theme: Theme, view: &AccountView, cx: &Context<Self>) -> Div {
         let locale = language(cx);
-        let busy = self.account_form.busy(view);
+        let busy = self.account.busy(view);
         match view.status.state {
             AccountState::Ready if view.status.allowance == Allowance::Available => row()
                 .flex_wrap()
@@ -346,12 +409,12 @@ impl Desktop {
                         .text_color(Tone::Peach.text(theme)),
                 )
                 .child(
-                    Self::button(
+                    Self::account_modal_button(
                         "verify-account",
-                        locale.text(Text::AccountEmail),
+                        Text::AccountEmail,
                         Icon::Shield,
                         ButtonStyle::Primary,
-                        Action::OpenAccountModal(EmailPurpose::Registration.entry(view)),
+                        EmailPurpose::Registration.entry(view),
                         cx,
                     )
                     .compact()
@@ -372,20 +435,16 @@ impl Desktop {
                     .gap(px(12.))
                     .child(
                         theme
-                            .caption(Self::account_status_summary(view, locale))
+                            .caption(account_status_summary(view, locale))
                             .text_color(text_tone),
                     )
                     .child(
-                        Self::button(
-                            "refresh-account",
-                            locale.text(Text::RetryConnection),
-                            Icon::Refresh,
-                            ButtonStyle::Secondary,
-                            Action::Account(AccountAction::Refresh),
-                            cx,
-                        )
-                        .compact()
-                        .disabled(busy),
+                        Button::new("retry-account", locale.text(Text::RetryConnection))
+                            .icon(Icon::Refresh)
+                            .style(ButtonStyle::Secondary)
+                            .compact()
+                            .disabled(busy)
+                            .on_press(cx.listener(|this, (), _, cx| this.refresh_account(cx))),
                     )
             }
         }
@@ -393,7 +452,7 @@ impl Desktop {
 
     fn account_security_card(&self, theme: Theme, view: &AccountView, cx: &Context<Self>) -> Div {
         let locale = language(cx);
-        let busy = self.account_form.busy(view);
+        let busy = self.account.busy(view);
         let credentials_detail = if view.status.username.is_empty() {
             locale.text(Text::AccountPasswordDetail).to_owned()
         } else {
@@ -413,12 +472,12 @@ impl Desktop {
                         theme,
                         locale.text(Text::AccountCredentials),
                         credentials_detail,
-                        Self::button(
+                        Self::account_modal_button(
                             "set-account-login",
-                            locale.text(AccountPage::Credentials(()).title(view)),
+                            AccountPage::Credentials(()).title(view),
                             Icon::Lock,
                             ButtonStyle::Secondary,
-                            Action::OpenAccountModal(AccountPage::Credentials(())),
+                            AccountPage::Credentials(()),
                             cx,
                         )
                         .disabled(busy),
@@ -432,12 +491,12 @@ impl Desktop {
             theme,
             locale.text(switch_label),
             locale.text(Text::SwitchAccountDetail).to_owned(),
-            Self::button(
+            Self::account_modal_button(
                 "switch-account",
-                locale.text(switch_label),
+                switch_label,
                 Icon::Arrow,
                 ButtonStyle::Quiet,
-                Action::OpenAccountModal(AccountPage::Login),
+                AccountPage::Login,
                 cx,
             )
             .disabled(busy),
@@ -509,12 +568,12 @@ impl Desktop {
                     }),
             )
             .child(
-                Self::button(
+                Self::account_modal_button(
                     "account-profile-email",
-                    locale.text(email_button_label),
+                    email_button_label,
                     Icon::Mail,
                     ButtonStyle::Secondary,
-                    Action::OpenAccountModal(email_page),
+                    email_page,
                     cx,
                 )
                 .compact()
