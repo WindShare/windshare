@@ -64,9 +64,12 @@ client and check the account's usage before publishing that snapshot and client.
 
 ## Operations
 
-The console controls registration mode/difficulty, source/global creation rates,
-daily allowance, node admission, and share/account blocks. Account milestones at
-1,000 and 4,000 request review without changing registration mode.
+The console controls registration policy/difficulty, source/global creation rates,
+daily allowance, node admission, and share/account blocks. Under the default
+`by_account_count` policy, new accounts switch from automatic to proof of work
+after 1,000 accounts and to email verification after 4,000 when mail delivery
+is configured (otherwise staying on proof of work); selecting a fixed mode keeps
+it unchanged. Both milestones prompt a capacity review.
 Use **Accounts** to find an account by ID or username and inspect its daily usage
 and attributed shares. **Reports** lists active account and share restrictions.
 
