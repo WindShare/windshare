@@ -4,7 +4,6 @@ import (
 	"container/list"
 	"context"
 	"errors"
-	"slices"
 	"sync"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -54,13 +53,13 @@ func NewBlockCacheKey(descriptor content.FileRevisionDescriptor, index uint64) (
 	}, nil
 }
 
+// cachedBlock holds an immutable encoded block payload alongside the RecordID
+// committed when that payload entered the cache. Storing payload as a string
+// makes cache hits and inflight fan-out zero-copy while preventing in-package
+// callers from mutating shared bytes.
 type cachedBlock struct {
-	payload  []byte
+	payload  string
 	recordID records.RecordID
-}
-
-func (block cachedBlock) clone() cachedBlock {
-	return cachedBlock{payload: slices.Clone(block.payload), recordID: block.recordID}
 }
 
 type cacheEntry struct {
@@ -111,7 +110,10 @@ func NewSharedBlockCache(share catalog.ShareInstance, maxBytes uint64, process *
 
 func (c *SharedBlockCache) Get(ctx context.Context, key BlockCacheKey, load func(context.Context) ([]byte, error)) ([]byte, error) {
 	block, err := c.get(ctx, key, load)
-	return block.payload, err
+	if err != nil {
+		return nil, err
+	}
+	return []byte(block.payload), nil
 }
 
 func (c *SharedBlockCache) get(ctx context.Context, key BlockCacheKey, load func(context.Context) ([]byte, error)) (cachedBlock, error) {
@@ -132,7 +134,7 @@ func (c *SharedBlockCache) get(ctx context.Context, key BlockCacheKey, load func
 	}
 	if element := c.entries[key]; element != nil {
 		c.lru.MoveToFront(element)
-		block := element.Value.(*cacheEntry).block.clone()
+		block := element.Value.(*cacheEntry).block
 		c.mu.Unlock()
 		return block, nil
 	}
@@ -193,7 +195,7 @@ func (c *SharedBlockCache) watchRevision(
 func (c *SharedBlockCache) await(ctx context.Context, key BlockCacheKey, call *cacheCall) (cachedBlock, error) {
 	select {
 	case <-call.done:
-		return call.block.clone(), call.err
+		return call.block, call.err
 	case <-ctx.Done():
 		c.mu.Lock()
 		if c.inflight[key] == call && !call.completed {
@@ -216,8 +218,8 @@ func (c *SharedBlockCache) runLoad(key BlockCacheKey, call *cacheCall, load func
 		if len(payload) == 0 {
 			err = errors.New("block loader returned an empty payload")
 		} else {
-			block.payload = slices.Clone(payload)
-			block.recordID = records.RecordIDFromObject(block.payload)
+			block.recordID = records.RecordIDFromObject(payload)
+			block.payload = string(payload)
 		}
 	}
 	c.mu.Lock()

@@ -46,7 +46,7 @@ func FragmentRecord(operationID protocolsession.OperationID, object []byte) ([]p
 	return fragmentRecord(operationID, records.RecordIDFromObject(object), object)
 }
 
-func fragmentRecord(operationID protocolsession.OperationID, recordID records.RecordID, object []byte) ([]protocolsession.Message, error) {
+func fragmentRecord[T ~[]byte | ~string](operationID protocolsession.OperationID, recordID records.RecordID, object T) ([]protocolsession.Message, error) {
 	if operationID.IsZero() || recordID.IsZero() || len(object) == 0 || len(object) > records.MaxBlockRecordObjectBytes {
 		return nil, ErrFragmentMalformed
 	}
@@ -58,7 +58,7 @@ func fragmentRecord(operationID protocolsession.OperationID, recordID records.Re
 	for index := range count {
 		start := index * MaxFragmentPayloadBytes
 		end := min(start+MaxFragmentPayloadBytes, len(object))
-		plaintext := make([]byte, FragmentHeaderBytes, FragmentHeaderBytes+end-start)
+		plaintext := make([]byte, FragmentHeaderBytes+end-start)
 		plaintext[0] = FragmentCodecVersion
 		plaintext[1] = byte(protocolsession.MessageBlockFragment)
 		if index == count-1 {
@@ -70,7 +70,7 @@ func fragmentRecord(operationID protocolsession.OperationID, recordID records.Re
 		binary.BigEndian.PutUint32(plaintext[40:44], uint32(count))
 		binary.BigEndian.PutUint32(plaintext[44:48], uint32(len(object)))
 		binary.BigEndian.PutUint32(plaintext[48:52], uint32(end-start))
-		plaintext = append(plaintext, object[start:end]...)
+		copy(plaintext[FragmentHeaderBytes:], object[start:end])
 		message, err := protocolsession.DecodeMessage(plaintext)
 		if err != nil {
 			return nil, fmt.Errorf("build block fragment %d: %w", index, err)
