@@ -150,6 +150,19 @@ func (a *Application) execute(request Request) Message {
 		reply.Snapshot = &snapshot
 		return reply
 	}
+	var loadedPreferences *relayconfig.Preferences
+	var loadErr error
+	if request.Command == "switch_relay" {
+		// Load saved relays outside mu so validation uses current disk state
+		// without blocking committed snapshot reads on filesystem I/O.
+		settings, err := a.deps.load()
+		if err != nil {
+			loadErr = err
+		} else {
+			preferences := settings.Preferences(a.deps.defaultFrontend)
+			loadedPreferences = &preferences
+		}
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	var err error
@@ -173,7 +186,7 @@ func (a *Application) execute(request Request) Message {
 	case "use_saved_settings":
 		err = a.resume(request.OperationID, resumeWithSavedSettings)
 	case "switch_relay":
-		err = a.switchRelay(request.OperationID, request.RelayURL)
+		err = a.switchRelay(request.OperationID, request.RelayURL, loadedPreferences, loadErr)
 	case "cancel":
 		err = a.cancel(request.OperationID)
 	case "stop":
