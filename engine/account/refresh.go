@@ -328,7 +328,7 @@ func (service *Service) failure(record Record, err error, delay time.Duration) t
 			state, delay = Denied, MaximumRetry
 		}
 		if remote.Kind == "rate_limited" {
-			delay = max(delay, time.Duration(min(remote.RetryAfter, 3600))*time.Second)
+			delay = max(delay, time.Duration(min(remote.RetryAfter, maxRateLimitSeconds))*time.Second)
 		}
 	}
 	service.transition(record, state, reason, service.config.Now().Add(delay))

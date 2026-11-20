@@ -39,7 +39,14 @@ type AuthorizationError struct {
 }
 
 func (err *AuthorizationError) Error() string {
-	return fmt.Sprintf("registration authorization %d: %v", err.State, err.Cause)
+	state := err.State.Name()
+	if state == "" {
+		state = fmt.Sprintf("unknown(%d)", err.State)
+	}
+	if err.Cause == nil {
+		return "registration authorization " + state
+	}
+	return fmt.Sprintf("registration authorization %s: %v", state, err.Cause)
 }
 func (err *AuthorizationError) Unwrap() error { return err.Cause }
 

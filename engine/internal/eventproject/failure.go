@@ -11,6 +11,7 @@ import (
 	time "time"
 
 	relayset "github.com/windshare/windshare/connectivity/relayset"
+	senderrelay "github.com/windshare/windshare/connectivity/senderrelay"
 	catalog "github.com/windshare/windshare/core/catalog"
 	transfer "github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
@@ -174,14 +175,20 @@ func classifyDirectError(cause error) (appobs.Failure, bool) {
 		if !mapped {
 			return appobs.Failure{}, false
 		}
-		if (relayFailure.Code == v2.ErrorStarting || relayFailure.Code == v2.ErrorAdmission) &&
-			relayFailure.RetryAfter > 0 {
+		if (relayFailure.Code == v2.ErrorStarting || relayFailure.Code == v2.ErrorAdmission ||
+			relayFailure.Code == v2.ErrorAccessUnavailable) && relayFailure.RetryAfter > 0 {
 			millis := uint64(relayFailure.RetryAfter / time.Millisecond)
 			if retryable, err := appobs.NewRetryableFailure(failure.Code(), millis); err == nil {
 				return retryable, true
 			}
 		}
 		return failure, true
+	}
+	// Only a direct authorization outcome crosses the observation boundary;
+	// its underlying cause may carry raw provider or authority text.
+	//nolint:errorlint
+	if authFailure, ok := cause.(*senderrelay.AuthorizationError); ok && authFailure != nil {
+		return projectAuthorizationError(authFailure.State)
 	}
 	// The trusted concrete boundary must be direct for the same reason as relay
 	// faults; traversal of wrappers is limited to the audited types above.
@@ -293,10 +300,28 @@ func ProjectRelayErrorCode(code v2.ErrorCode) (appobs.Failure, bool) {
 		projected = appobs.FailureRelayAdmission
 	case v2.ErrorStopped:
 		projected = appobs.FailureRelayStopped
+	case v2.ErrorResumeStale:
+		projected = appobs.FailureRelayResumeStale
+	case v2.ErrorAccessDenied:
+		projected = appobs.FailureRelayAccessDenied
+	case v2.ErrorAccessUnavailable:
+		projected = appobs.FailureRelayAccessUnavailable
 	default:
 		return appobs.Failure{}, false
 	}
 	return mustFailure(projected), true
+}
+
+func projectAuthorizationError(state senderrelay.AuthorizationState) (appobs.Failure, bool) {
+	switch state {
+	case senderrelay.AuthorizationDenied, senderrelay.AuthorizationUserActionRequired:
+		return mustFailure(appobs.FailureRelayAccessDenied), true
+	case senderrelay.AuthorizationPendingSetup, senderrelay.AuthorizationPendingAttribution,
+		senderrelay.AuthorizationExpired, senderrelay.AuthorizationTemporaryFailure:
+		return mustFailure(appobs.FailureRelayAccessUnavailable), true
+	default:
+		return appobs.Failure{}, false
+	}
 }
 
 func ProjectTransferInterruption(value transfer.TransferInterruption) (appobs.Failure, bool) {

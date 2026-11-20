@@ -224,4 +224,10 @@ func TestKnownAuthorizationDenialDoesNotDialOrFallBack(t *testing.T) {
 	if err := lifecycle.WaitReady(t.Context()); !errors.As(err, &denied) || denied.State != AuthorizationDenied {
 		t.Fatal(err)
 	}
+	if got := denied.Error(); got != "registration authorization denied: account_blocked" {
+		t.Fatalf("AuthorizationError.Error() = %q", got)
+	}
+	if got := (&AuthorizationError{State: AuthorizationDenied}).Error(); got != "registration authorization denied" {
+		t.Fatalf("cause-less AuthorizationError.Error() = %q", got)
+	}
 }

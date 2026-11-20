@@ -10,7 +10,9 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
@@ -171,4 +173,177 @@ func TestUnreadableAccountCacheDoesNotBlockEngineOrAssumeAnonymous(t *testing.T)
 	if source.ReserveRegistrationAuthorization().State != serviceauthority.AdmissionTemporaryFailure {
 		t.Fatal("unknown local denial was discarded")
 	}
+}
+
+func TestRetainedCredentialRetriesAfterTransientFailureWithoutStalling(t *testing.T) {
+	config, response := accountFixture(t)
+	synctest.Test(t, func(t *testing.T) {
+		issuedAt, start := config.Now(), time.Now()
+		config.Now = func() time.Time { return issuedAt.Add(time.Since(start)) }
+		config.Store = &MemoryStore{record: cachedRecord(response)}
+		var attempts atomic.Int32
+		config.Client = clientFunc(func(request *http.Request) (*http.Response, error) {
+			if request.URL.Path != "/v1/accounts/ticket" {
+				t.Errorf("unexpected path %s", request.URL.Path)
+			}
+			if attempts.Add(1) == 1 {
+				return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: io.NopCloser(strings.NewReader(""))}, nil
+			}
+			body, _ := json.Marshal(response)
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(body)))}, nil
+		})
+		service := testService(t, config)
+		share := service.NewShareAuthorization(t.Context())
+		defer share.Close()
+		primary := &Source{share: share, address: "primary"}
+		backup := &Source{share: share, address: "backup"}
+		requireBearer(t, primary, response.Ticket)
+
+		service.mu.Lock()
+		share.credential.record.Ticket = ""
+		service.adoptLocked(Record{SetupSecret: "new-selection"})
+		service.mu.Unlock()
+
+		first := backup.ReserveRegistrationAuthorization()
+		if first.State != serviceauthority.AdmissionExpired {
+			t.Fatalf("state = %s, want expired", first.State.Name())
+		}
+		synctest.Wait()
+		if got := attempts.Load(); got != 1 {
+			t.Fatalf("initial attempts = %d, want 1", got)
+		}
+		// Polling during backoff must not launch a duplicate request or stall past the deadline.
+		duringBackoff := backup.ReserveRegistrationAuthorization()
+		if duringBackoff.State != serviceauthority.AdmissionExpired || attempts.Load() != 1 {
+			t.Fatalf("backoff state=%s attempts=%d", duringBackoff.State.Name(), attempts.Load())
+		}
+		select {
+		case <-duringBackoff.Changed:
+			t.Fatal("woke before retry backoff elapsed")
+		default:
+		}
+
+		time.Sleep(MinimumRetry)
+		synctest.Wait()
+		select {
+		case <-duringBackoff.Changed:
+		default:
+			t.Fatal("backoff expiry did not wake waiting publication")
+		}
+
+		retry := backup.ReserveRegistrationAuthorization()
+		if retry.State != serviceauthority.AdmissionExpired {
+			t.Fatalf("retry state = %s, want expired while refreshing", retry.State.Name())
+		}
+		synctest.Wait()
+		select {
+		case <-retry.Changed:
+		default:
+			t.Fatal("successful retry did not wake waiting publication")
+		}
+		if got := attempts.Load(); got != 2 {
+			t.Fatalf("total attempts = %d, want 2", got)
+		}
+		requireBearer(t, backup, response.Ticket)
+	})
+}
+
+func TestRetainedCredentialBackoffHonorsRateLimitAndReleasesOnClose(t *testing.T) {
+	config, response := accountFixture(t)
+	synctest.Test(t, func(t *testing.T) {
+		issuedAt, start := config.Now(), time.Now()
+		config.Now = func() time.Time { return issuedAt.Add(time.Since(start)) }
+		config.Store = &MemoryStore{record: cachedRecord(response)}
+		var attempts atomic.Int32
+		config.Client = clientFunc(func(*http.Request) (*http.Response, error) {
+			attempts.Add(1)
+			body, _ := json.Marshal(fault{Kind: "rate_limited", RetryAfter: 10})
+			return &http.Response{StatusCode: http.StatusTooManyRequests, Body: io.NopCloser(strings.NewReader(string(body)))}, nil
+		})
+		service, err := New(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		share := service.NewShareAuthorization(t.Context())
+		backup := &Source{share: share, address: "backup"}
+
+		service.mu.Lock()
+		share.credential.record.Ticket = ""
+		service.adoptLocked(Record{SetupSecret: "new-selection"})
+		service.mu.Unlock()
+
+		waiting := backup.ReserveRegistrationAuthorization()
+		if waiting.State != serviceauthority.AdmissionExpired {
+			t.Fatalf("state = %s, want expired", waiting.State.Name())
+		}
+		synctest.Wait()
+		time.Sleep(5 * time.Second)
+		synctest.Wait()
+		select {
+		case <-waiting.Changed:
+			t.Fatal("woke before rate-limit Retry-After elapsed")
+		default:
+		}
+		if got := attempts.Load(); got != 1 {
+			t.Fatalf("attempts during Retry-After = %d, want 1", got)
+		}
+
+		// Releasing the last share must interrupt backoff immediately so Close cannot block on it.
+		share.Close()
+		closed := make(chan struct{})
+		go func() {
+			service.Close()
+			close(closed)
+		}()
+		synctest.Wait()
+		select {
+		case <-closed:
+		default:
+			t.Fatal("service.Close waited for released credential backoff")
+		}
+	})
+}
+
+func TestRetainedCredentialDenialStopsRetries(t *testing.T) {
+	config, response := accountFixture(t)
+	synctest.Test(t, func(t *testing.T) {
+		issuedAt, start := config.Now(), time.Now()
+		config.Now = func() time.Time { return issuedAt.Add(time.Since(start)) }
+		config.Store = &MemoryStore{record: cachedRecord(response)}
+		var attempts atomic.Int32
+		config.Client = clientFunc(func(*http.Request) (*http.Response, error) {
+			attempts.Add(1)
+			body, _ := json.Marshal(fault{Kind: "denied", Reason: "credential_revoked"})
+			return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader(string(body)))}, nil
+		})
+		service := testService(t, config)
+		share := service.NewShareAuthorization(t.Context())
+		defer share.Close()
+		backup := &Source{share: share, address: "backup"}
+
+		service.mu.Lock()
+		share.credential.record.Ticket = ""
+		service.adoptLocked(Record{SetupSecret: "new-selection"})
+		service.mu.Unlock()
+
+		waiting := backup.ReserveRegistrationAuthorization()
+		if waiting.State != serviceauthority.AdmissionExpired {
+			t.Fatalf("state = %s, want expired", waiting.State.Name())
+		}
+		synctest.Wait()
+		select {
+		case <-waiting.Changed:
+		default:
+			t.Fatal("denial did not wake waiting publication")
+		}
+		denied := backup.ReserveRegistrationAuthorization()
+		if denied.State != serviceauthority.AdmissionDenied {
+			t.Fatalf("state after denial = %s, want denied", denied.State.Name())
+		}
+		time.Sleep(2 * MaximumRetry)
+		synctest.Wait()
+		if got := attempts.Load(); got != 1 {
+			t.Fatalf("denied credential retried: %d attempts", got)
+		}
+	})
 }

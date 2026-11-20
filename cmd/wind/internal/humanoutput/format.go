@@ -169,6 +169,8 @@ func failureMessage(failure appobs.Failure) string {
 		}
 	case appobs.MessageRelayRouteNotFound:
 		message = relayconfig.RelayRouteGuidance(failure.RelayBaseHint())
+	case appobs.MessageRelayAccessDenied:
+		message = "Relay access was denied. Check your account or relay authorization."
 	case appobs.MessageRelayRejected:
 		message = "The relay rejected the request."
 	case appobs.MessageRelayUnavailable:

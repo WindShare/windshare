@@ -15,6 +15,8 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/windshare/windshare/adapters/filesystem"
+	"github.com/windshare/windshare/connectivity/relayset"
+	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	networkruntime "github.com/windshare/windshare/engine/internal/networkruntime"
@@ -57,7 +59,8 @@ func TestEveryRelayAndPeerCodeHasAnExplicitSafeMapping(t *testing.T) {
 		v2.ErrorMalformed, v2.ErrorUnsupportedMode, v2.ErrorShareIDCollision,
 		v2.ErrorAlreadyRegistered, v2.ErrorChallengeExpired, v2.ErrorInvalidProof,
 		v2.ErrorDescriptorInvalid, v2.ErrorNotFound, v2.ErrorStarting,
-		v2.ErrorAdmission, v2.ErrorStopped,
+		v2.ErrorAdmission, v2.ErrorStopped, v2.ErrorResumeStale,
+		v2.ErrorAccessDenied, v2.ErrorAccessUnavailable,
 	}
 	for _, code := range relayCodes {
 		failure, ok := ProjectRelayErrorCode(code)
@@ -65,7 +68,7 @@ func TestEveryRelayAndPeerCodeHasAnExplicitSafeMapping(t *testing.T) {
 			t.Fatalf("relay code %d mapping = %+v,%t", code, failure, ok)
 		}
 	}
-	if _, ok := ProjectRelayErrorCode(v2.ErrorStopped + 1); ok {
+	if _, ok := ProjectRelayErrorCode(v2.ErrorAccessUnavailable + 1); ok {
 		t.Fatal("mapped unknown relay code")
 	}
 
@@ -309,6 +312,16 @@ func TestRawProviderTextTerminatesAtFailureProjection(t *testing.T) {
 		{errors.Join(networkruntime.ErrUnavailable, opaqueCanaryError{secret}), appobs.FailureNetworkUnavailable},
 		{fmt.Errorf("start share: %w", errors.Join(networkruntime.ErrUnavailable, opaqueCanaryError{secret})), appobs.FailureNetworkUnavailable},
 		{relayprofile.ErrCandidatesRequired, appobs.FailureInvalidInput},
+		{&relayv2.RelayError{Code: v2.ErrorAccessDenied}, appobs.FailureRelayAccessDenied},
+		{&relayv2.RelayError{Code: v2.ErrorAccessUnavailable}, appobs.FailureRelayAccessUnavailable},
+		{&relayv2.RelayError{Code: v2.ErrorResumeStale}, appobs.FailureRelayResumeStale},
+		{&relayset.RegistrationFailure{URL: secret, Cause: &relayv2.RelayError{Code: v2.ErrorAccessDenied}}, appobs.FailureRelayAccessDenied},
+		{&senderrelay.AuthorizationError{State: senderrelay.AuthorizationDenied, Cause: opaqueCanaryError{secret}}, appobs.FailureRelayAccessDenied},
+		{&senderrelay.AuthorizationError{State: senderrelay.AuthorizationDenied, Cause: hostileAsError{}}, appobs.FailureRelayAccessDenied},
+		{&relayset.RegistrationFailure{URL: secret, Cause: &senderrelay.AuthorizationError{State: senderrelay.AuthorizationDenied, Cause: opaqueCanaryError{secret}}}, appobs.FailureRelayAccessDenied},
+		{&senderrelay.AuthorizationError{State: senderrelay.AuthorizationUserActionRequired, Cause: opaqueCanaryError{secret}}, appobs.FailureRelayAccessDenied},
+		{&senderrelay.AuthorizationError{State: senderrelay.AuthorizationTemporaryFailure, Cause: opaqueCanaryError{secret}}, appobs.FailureRelayAccessUnavailable},
+		{&senderrelay.AuthorizationError{State: 0, Cause: opaqueCanaryError{secret}}, appobs.FailureUnexpected},
 	}
 	for _, test := range tests {
 		failure, present := ClassifyError(test.name)
@@ -324,12 +337,24 @@ func TestRawProviderTextTerminatesAtFailureProjection(t *testing.T) {
 			t.Fatalf("safe failure retained provider text: %s", projected)
 		}
 	}
-	retry, present := ClassifyError(&relayv2.RelayError{Code: v2.ErrorStarting, RetryAfter: 1500 * time.Millisecond})
-	if !present || retry.Code() != appobs.FailureRelayStarting {
-		t.Fatalf("retry classification = %+v,%t", retry, present)
+	for _, test := range []struct {
+		code v2.ErrorCode
+		want appobs.FailureCode
+	}{
+		{v2.ErrorStarting, appobs.FailureRelayStarting},
+		{v2.ErrorAccessUnavailable, appobs.FailureRelayAccessUnavailable},
+	} {
+		retry, present := ClassifyError(&relayv2.RelayError{Code: test.code, RetryAfter: 1500 * time.Millisecond})
+		if !present || retry.Code() != test.want {
+			t.Fatalf("retry classification for %d = %+v,%t", test.code, retry, present)
+		}
+		if millis, ok := retry.RetryAfterMillis(); !ok || millis != 1500 {
+			t.Fatalf("retry context for %d = %d,%t", test.code, millis, ok)
+		}
 	}
-	if millis, ok := retry.RetryAfterMillis(); !ok || millis != 1500 {
-		t.Fatalf("retry context = %d,%t", millis, ok)
+	denied, _ := ClassifyError(&relayv2.RelayError{Code: v2.ErrorAccessDenied})
+	if key, ok := denied.MessageKey(); !ok || key != appobs.MessageRelayAccessDenied {
+		t.Fatalf("access denied message key = %v,%t; want %v", key, ok, appobs.MessageRelayAccessDenied)
 	}
 	joined, present := ClassifyError(errors.Join(opaqueCanaryError{secret}, relayv2.ErrClosed))
 	if !present || joined.Code() != appobs.FailureRelayClosed {

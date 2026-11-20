@@ -19,6 +19,7 @@ const (
 	MinimumRetry        = time.Second
 	MaximumRetry        = time.Minute
 	TicketMargin        = time.Minute
+	maxRateLimitSeconds = 3600
 )
 
 type HTTPClient interface {

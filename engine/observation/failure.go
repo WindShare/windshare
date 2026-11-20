@@ -35,6 +35,9 @@ const (
 	FailureRelayStarting
 	FailureRelayAdmission
 	FailureRelayStopped
+	FailureRelayResumeStale
+	FailureRelayAccessDenied
+	FailureRelayAccessUnavailable
 	FailureRelayProtocol
 	FailureRelayClosed
 	FailureRelayOverflow
@@ -179,6 +182,12 @@ func relayFailureDefinition(code FailureCode) (failureDefinition, bool) {
 		return failureDefinition{"relay_admission", MessageRelayUnavailable}, true
 	case FailureRelayStopped:
 		return failureDefinition{"relay_stopped", MessageRelayStopped}, true
+	case FailureRelayResumeStale:
+		return failureDefinition{"relay_resume_stale", MessageRelayRejected}, true
+	case FailureRelayAccessDenied:
+		return failureDefinition{"relay_access_denied", MessageRelayAccessDenied}, true
+	case FailureRelayAccessUnavailable:
+		return failureDefinition{"relay_access_unavailable", MessageRelayUnavailable}, true
 	case FailureRelayProtocol:
 		return failureDefinition{"relay_protocol", MessageRelayUnavailable}, true
 	case FailureRelayClosed:
@@ -480,10 +489,13 @@ func NewFaultFailure(code FailureCode, context FaultContext) (Failure, error) {
 	return failure, nil
 }
 
+func retryableRelayFailureCode(code FailureCode) bool {
+	return code == FailureRelayStarting || code == FailureRelayAdmission || code == FailureRelayAccessUnavailable
+}
+
 func NewRetryableFailure(code FailureCode, retryAfterMillis uint64) (Failure, error) {
 	failure, err := NewFailure(code)
-	if err != nil || retryAfterMillis == 0 ||
-		code != FailureRelayStarting && code != FailureRelayAdmission {
+	if err != nil || retryAfterMillis == 0 || !retryableRelayFailureCode(code) {
 		return Failure{}, ErrInvalidFailure
 	}
 	failure.retryAfterMillis, failure.hasRetryAfter = retryAfterMillis, true
@@ -534,8 +546,7 @@ func (failure Failure) Valid() bool {
 			return false
 		}
 	}
-	if failure.hasRetryAfter && (failure.retryAfterMillis == 0 ||
-		failure.code != FailureRelayStarting && failure.code != FailureRelayAdmission) {
+	if failure.hasRetryAfter && (failure.retryAfterMillis == 0 || !retryableRelayFailureCode(failure.code)) {
 		return false
 	}
 	return true

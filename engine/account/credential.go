@@ -2,6 +2,7 @@ package account
 
 import (
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/windshare/windshare/core/serviceauthority"
@@ -11,7 +12,8 @@ type credentialSession struct {
 	record     Record
 	references uint32
 	refreshing bool
-	retryAt    time.Time
+	retry      time.Duration
+	released   chan struct{}
 }
 
 func (service *Service) retainCredentialLocked(record Record) *credentialSession {
@@ -24,7 +26,10 @@ func (service *Service) retainCredentialLocked(record Record) *credentialSession
 	id := record.Credential.ID
 	current := service.credentials[id]
 	if current == nil {
-		current = &credentialSession{record: cloneRecord(service.withDenialLocked(record))}
+		current = &credentialSession{
+			record:   cloneRecord(service.withDenialLocked(record)),
+			released: make(chan struct{}),
+		}
 		service.credentials[id] = current
 	}
 	current.references++
@@ -39,6 +44,9 @@ func (share *ShareAuthorization) releaseCredentialLocked() {
 	share.credential = nil
 	current.references--
 	if current.references == 0 {
+		if current.released != nil {
+			close(current.released)
+		}
 		delete(share.service.credentials, current.record.Credential.ID)
 	}
 }
@@ -56,44 +64,95 @@ func (service *Service) currentGenerationLocked(record Record) bool {
 }
 
 func (service *Service) refreshCredentialLocked(current *credentialSession) {
-	if current == nil || current.refreshing || service.ctx.Err() != nil ||
-		service.config.Now().Before(current.retryAt) {
+	if current == nil || current.refreshing || current.references == 0 || service.ctx.Err() != nil {
 		return
 	}
 	current.refreshing = true
 	config := service.config
 	config.Store = &MemoryStore{record: cloneRecord(current.record)}
 	service.workers.Go(func() {
-		record, err := service.refreshRetained(config)
-		if err == nil {
-			err = service.lockLocal(service.ctx)
-			if err == nil {
-				defer func() { <-service.local }()
-				record, err = service.persistRetained(record)
-			}
-		}
-		service.mu.Lock()
-		defer service.mu.Unlock()
-		if err == nil && !service.currentGenerationLocked(record) {
-			err = serviceauthority.ErrSignature
-		}
-		current.refreshing = false
-		current.retryAt = service.config.Now().Add(MaximumRetry)
-		if err == nil {
-			service.clearIssuedDenialLocked(record)
-			service.record.Certificate = record.Certificate
-			if sameIdentity(service.record, record) {
-				service.adoptLocked(record)
-			}
-			current.record = service.withDenialLocked(record)
-		} else {
-			var failure *fault
-			if errors.As(err, &failure) && failure.Kind == "denied" {
-				service.rememberDenialLocked(current.record, failure.Reason)
-			}
-		}
-		service.notifyLocked()
+		service.runCredentialRefresh(current, config)
 	})
+}
+
+func (service *Service) runCredentialRefresh(current *credentialSession, config Config) {
+	delay := service.executeCredentialRefresh(current, config)
+	if delay <= 0 {
+		return
+	}
+	// Hold refreshing across the backoff window and signal on expiry so waiting
+	// shares re-enter authorization without spinning or stalling indefinitely.
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-service.ctx.Done():
+	case <-current.released:
+	case <-timer.C:
+	}
+	service.mu.Lock()
+	current.refreshing = false
+	if current.references > 0 && service.ctx.Err() == nil {
+		service.notifyLocked()
+	}
+	service.mu.Unlock()
+}
+
+func (service *Service) executeCredentialRefresh(current *credentialSession, config Config) time.Duration {
+	record, err := service.refreshRetained(config)
+	if err == nil {
+		err = service.lockLocal(service.ctx)
+		if err == nil {
+			defer func() { <-service.local }()
+			record, err = service.persistRetained(record)
+		}
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	return service.applyCredentialRefreshLocked(current, record, err)
+}
+
+func (service *Service) applyCredentialRefreshLocked(current *credentialSession, record Record, err error) time.Duration {
+	if err == nil && !service.currentGenerationLocked(record) {
+		err = serviceauthority.ErrSignature
+	}
+	if err == nil {
+		service.clearIssuedDenialLocked(record)
+		service.record.Certificate = record.Certificate
+		if sameIdentity(service.record, record) {
+			service.adoptLocked(record)
+		}
+		current.record = service.withDenialLocked(record)
+		if current.record.Denial != "" || service.validTicket(current.record) {
+			current.refreshing = false
+			current.retry = 0
+			service.notifyLocked()
+			return 0
+		}
+	} else if failure, ok := errors.AsType[*fault](err); ok && failure.Kind == "denied" {
+		service.rememberDenialLocked(current.record, failure.Reason)
+		current.refreshing = false
+		current.retry = 0
+		return 0
+	}
+	if current.references == 0 || service.ctx.Err() != nil || current.record.Denial != "" ||
+		service.validTicket(current.record) && service.currentGenerationLocked(current.record) {
+		current.refreshing = false
+		current.retry = 0
+		return 0
+	}
+	delay := current.nextRetryDelay(err)
+	slog.Debug("account_retained_credential_refresh_backoff",
+		"credential", current.record.Credential.ID, "retry_in", delay, "error", err)
+	return delay
+}
+
+func (current *credentialSession) nextRetryDelay(err error) time.Duration {
+	delay := max(current.retry, MinimumRetry)
+	current.retry = min(delay*2, MaximumRetry)
+	if remote, ok := errors.AsType[*fault](err); ok && remote.Kind == "rate_limited" {
+		delay = max(delay, time.Duration(min(remote.RetryAfter, maxRateLimitSeconds))*time.Second)
+	}
+	return delay
 }
 
 func (service *Service) refreshRetained(config Config) (Record, error) {
@@ -105,7 +164,10 @@ func (service *Service) refreshRetained(config Config) (Record, error) {
 	if _, err := isolated.RefreshOnce(service.ctx); err != nil {
 		return Record{}, err
 	}
-	return isolated.record, nil
+	isolated.mu.Lock()
+	record := cloneRecord(isolated.record)
+	isolated.mu.Unlock()
+	return record, nil
 }
 
 func (service *Service) persistRetained(record Record) (Record, error) {

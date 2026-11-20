@@ -92,15 +92,19 @@ func TestFailureContextCannotBeAttachedToTheWrongSemanticCode(t *testing.T) {
 		t.Fatal("accepted fault context on non-fault code")
 	}
 
-	retry, err := NewRetryableFailure(FailureRelayStarting, 1250)
-	if err != nil || !retry.Valid() {
-		t.Fatalf("valid retry failure rejected: %+v err=%v", retry, err)
+	for _, code := range []FailureCode{FailureRelayStarting, FailureRelayAdmission, FailureRelayAccessUnavailable} {
+		retry, err := NewRetryableFailure(code, 1250)
+		if err != nil || !retry.Valid() {
+			t.Fatalf("valid retry failure %d rejected: %+v err=%v", code, retry, err)
+		}
+		if millis, ok := retry.RetryAfterMillis(); !ok || millis != 1250 {
+			t.Fatalf("retry context for %d = %d,%t", code, millis, ok)
+		}
 	}
-	if millis, ok := retry.RetryAfterMillis(); !ok || millis != 1250 {
-		t.Fatalf("retry context = %d,%t", millis, ok)
-	}
-	if _, err := NewRetryableFailure(FailureRelayStopped, 1); err == nil {
-		t.Fatal("accepted retry context for non-retryable relay code")
+	for _, code := range []FailureCode{FailureRelayStopped, FailureRelayAccessDenied, FailureRelayResumeStale} {
+		if _, err := NewRetryableFailure(code, 1); err == nil {
+			t.Fatalf("accepted retry context for non-retryable relay code %d", code)
+		}
 	}
 }
 
