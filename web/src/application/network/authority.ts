@@ -2,8 +2,14 @@ import { AuthorityBlockFeed, type AuthorityConfig, type AuthorityObservation } f
 import { canonicalRelayIdentity } from '../../network/relay-endpoint'
 import type { NetworkDirectory } from '../../network/directory'
 import { RelayPolicyDeniedError, type RelayAdmission } from '../../receiver/relay-admission'
+import type { RelayCandidates } from '../../receiver/relay-selection/candidates'
 
 type RelayDirectory = Pick<NetworkDirectory, 'snapshot' | 'observeSnapshot'>
+type RelayCandidateStream = Pick<RelayCandidates, 'observe'>
+
+function directoryHasRelay(directory: RelayDirectory, identity: string): boolean {
+  return directory.snapshot?.nodes.some(node => node.identity === identity) ?? false
+}
 
 export class OfficialRelayAuthority {
   readonly #feed: AuthorityBlockFeed
@@ -23,7 +29,7 @@ export class OfficialRelayAuthority {
           if (this.#feed.blocked(share)) deny(new RelayPolicyDeniedError())
         }
         const classify = () => {
-          if (closed || stopFeed || !directory.snapshot?.nodes.some(node => node.identity === identity)) return
+          if (closed || stopFeed || !directoryHasRelay(directory, identity)) return
           // Membership can arrive after dialing starts. Keep confirmed membership
           // for the lifetime of this connection, even if the directory changes.
           stopFeed = this.#feed.observe(enforce)
@@ -42,6 +48,37 @@ export class OfficialRelayAuthority {
         }
       },
     }
+  }
+  watchReport(
+    share: string,
+    candidates: RelayCandidateStream,
+    directory: RelayDirectory,
+    onAvailable: (url: string) => void,
+  ): () => void {
+    let identities: readonly string[] = []
+    let closed = false
+    let stopCandidates: (() => void) | undefined
+    const stop = () => {
+      if (closed) return
+      closed = true
+      stopDirectory()
+      stopCandidates?.()
+    }
+    const classify = () => {
+      if (closed || !identities.some(identity => directoryHasRelay(directory, identity))) return
+      // Keep the report link once official membership is confirmed for this share,
+      // matching admission so directory churn cannot hide reporting mid-session.
+      stop()
+      onAvailable(this.reportURL(share))
+    }
+    const stopDirectory = directory.observeSnapshot(classify)
+    const unsubscribeCandidates = candidates.observe(bases => {
+      identities = bases.map(canonicalRelayIdentity)
+      classify()
+    })
+    if (closed) unsubscribeCandidates()
+    else stopCandidates = unsubscribeCandidates
+    return stop
   }
   reportURL(share: string): string {
     const url = new URL('/report', this.#url)
